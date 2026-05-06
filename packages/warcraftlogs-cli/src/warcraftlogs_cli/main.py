@@ -2734,8 +2734,11 @@ def _report_json_payload(report: dict[str, Any], *, field: str) -> dict[str, Any
 
 def _report_table_entries(report: dict[str, Any]) -> list[dict[str, Any]]:
     table = report.get("table") if isinstance(report.get("table"), dict) else {}
-    entries = table.get("entries") if isinstance(table.get("entries"), list) else []
-    return [row for row in entries if isinstance(row, dict)]
+    container = table.get("data") if isinstance(table.get("data"), dict) else table
+    rows = container.get("entries")
+    if not isinstance(rows, list):
+        rows = container.get("auras") if isinstance(container.get("auras"), list) else []
+    return [row for row in rows if isinstance(row, dict)]
 
 
 def _report_master_data_payload(report: dict[str, Any]) -> dict[str, Any]:
@@ -2891,6 +2894,7 @@ def _report_encounter_aura_summary_payload(
     rows_out: list[dict[str, Any]] = []
     for entry in _report_table_entries(table_report):
         source_id = entry.get("id") if isinstance(entry.get("id"), int) else None
+        reported_total_uptime = entry.get("totalUptime") if isinstance(entry.get("totalUptime"), (int, float)) else entry.get("totalTime")
         rows_out.append(
             {
                 "source": _named_actor(
@@ -2903,13 +2907,16 @@ def _report_encounter_aura_summary_payload(
                 "reported_total": entry.get("total"),
                 "reported_active_time": entry.get("activeTime"),
                 "reported_total_time": entry.get("totalTime"),
+                "reported_total_uptime": reported_total_uptime,
+                "reported_total_uses": entry.get("totalUses"),
                 "reported_bands": entry.get("bands"),
                 "raw_entry": entry,
             }
         )
     rows_out.sort(
         key=lambda row: (
-            -(float(row["reported_total"]) if isinstance(row.get("reported_total"), (int, float)) else float("-inf")),
+            -(float(row["reported_total_uptime"]) if isinstance(row.get("reported_total_uptime"), (int, float)) else
+              float(row["reported_total"]) if isinstance(row.get("reported_total"), (int, float)) else float("-inf")),
             str(((row.get("source") or {}).get("name") or "")),
         )
     )

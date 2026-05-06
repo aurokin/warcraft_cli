@@ -3372,6 +3372,98 @@ def test_warcraftlogs_report_encounter_damage_target_summary_returns_typed_rows(
     assert payload["damage_summary"]["rows"][0]["target"]["identity_contract"]["status"] == "canonical"
 
 
+def test_warcraftlogs_report_encounter_damage_source_summary_handles_live_wrapped_table_shape(monkeypatch) -> None:
+    """Live WCL responses wrap the table payload as {table: {data: {entries: [...]}}}.
+
+    Older fixtures used {table: {entries: [...]}} (no data wrapper), which is the shape the parser
+    historically accepted. This regression test ensures the wrapped live shape returns rows.
+    """
+
+    class _LiveShapeClient(_FakeWarcraftLogsClient):
+        def report_table(self, *, code: str, allow_unlisted: bool = False, options) -> dict[str, object]:  # noqa: ANN001
+            assert options.data_type == "DamageDone"
+            return {
+                "code": code,
+                "title": "Live Report",
+                "zone": {"id": 46, "name": "VS / DR / MQD"},
+                "table": {
+                    "data": {
+                        "entries": [
+                            {"id": 9, "name": "Auropower", "total": 45791437},
+                            {"id": 1, "name": "Sherway", "total": 34685070},
+                        ],
+                        "totalTime": 380087,
+                        "logVersion": 17,
+                        "gameVersion": 1,
+                    }
+                },
+            }
+
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _LiveShapeClient())
+
+    result = runner.invoke(
+        warcraftlogs_app,
+        ["report-encounter-damage-source-summary", "abcd1234", "--fight-id", "1"],
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["damage_summary"]["entry_count"] == 2
+    assert payload["damage_summary"]["rows"][0]["source"]["name"] == "Auropower"
+    assert payload["damage_summary"]["rows"][0]["reported_total"] == 45791437
+
+
+def test_warcraftlogs_report_encounter_aura_summary_handles_live_auras_shape(monkeypatch) -> None:
+    """Live WCL Buffs queries put rows under table.data.auras with totalUptime instead of total."""
+
+    class _AurasShapeClient(_FakeWarcraftLogsClient):
+        def report_table(self, *, code: str, allow_unlisted: bool = False, options) -> dict[str, object]:  # noqa: ANN001
+            assert options.data_type == "Buffs"
+            return {
+                "code": code,
+                "title": "Live Report",
+                "zone": {"id": 46, "name": "VS / DR / MQD"},
+                "table": {
+                    "data": {
+                        "auras": [
+                            {
+                                "id": 9,
+                                "name": "Auropower",
+                                "guid": 247018116,
+                                "totalUptime": 372,
+                                "totalUses": 3,
+                                "bands": [{"startTime": 1769575, "endTime": 1769929}],
+                            },
+                        ],
+                        "totalTime": 380087,
+                        "logVersion": 17,
+                        "gameVersion": 1,
+                    }
+                },
+            }
+
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _AurasShapeClient())
+
+    result = runner.invoke(
+        warcraftlogs_app,
+        [
+            "report-encounter-aura-summary",
+            "abcd1234",
+            "--fight-id",
+            "1",
+            "--ability-id",
+            "378081",
+        ],
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["aura_summary"]["entry_count"] == 1
+    row = payload["aura_summary"]["rows"][0]
+    assert row["source"]["name"] == "Auropower"
+    assert row["reported_total_uptime"] == 372
+    assert row["reported_total_uses"] == 3
+    assert row["reported_bands"][0]["startTime"] == 1769575
+
+
 def test_warcraftlogs_report_events_requires_scope(monkeypatch) -> None:
     monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _FakeWarcraftLogsClient())
 
