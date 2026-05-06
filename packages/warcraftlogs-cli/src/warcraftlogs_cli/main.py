@@ -5381,7 +5381,7 @@ def report_events(
     ctx: typer.Context,
     code: str,
     ability_id: float | None = typer.Option(None, "--ability-id", help="Optional ability game ID filter."),
-    data_type: str | None = typer.Option(None, "--data-type", help="Optional event data type."),
+    data_type: str | None = typer.Option(None, "--data-type", help="Event data type (e.g. casts, damage-done, healing). Strongly recommended; without it Warcraft Logs returns events.data: null even on valid scoped slices."),
     difficulty: int | None = typer.Option(None, "--difficulty", help="Optional difficulty ID filter."),
     encounter_id: int | None = typer.Option(None, "--encounter-id", help="Optional encounter ID filter."),
     end_time: float | None = typer.Option(None, "--end-time", help="Optional event-range end timestamp."),
@@ -5433,32 +5433,38 @@ def report_events(
     finally:
         client.close()
     result_payload = _report_events_payload(payload)
-    _emit(
-        ctx,
-        {
-            "ok": True,
-            "provider": "warcraftlogs",
-            "query": _report_filter_query_payload(
-                ability_id=ability_id,
-                data_type=normalized_data_type,
-                difficulty=difficulty,
-                encounter_id=encounter_id,
-                end_time=end_time,
-                fight_ids=fight_id,
-                filter_expression=filter_expression,
-                hostility_type=normalized_hostility_type,
-                kill_type=normalized_kill_type,
-                limit=limit,
-                source_id=source_id,
-                start_time=start_time,
-                target_id=target_id,
-                translate=translate,
-                view_by=None,
-                wipe_cutoff=None,
-            ),
-            **result_payload,
-        },
-    )
+    notes: list[str] = []
+    if result_payload.get("events") is None and normalized_data_type is None:
+        notes.append(
+            "events.data is null. Warcraft Logs requires --data-type "
+            "(e.g. casts, damage-done, healing) for non-null event slices."
+        )
+    emitted: dict[str, Any] = {
+        "ok": True,
+        "provider": "warcraftlogs",
+        "query": _report_filter_query_payload(
+            ability_id=ability_id,
+            data_type=normalized_data_type,
+            difficulty=difficulty,
+            encounter_id=encounter_id,
+            end_time=end_time,
+            fight_ids=fight_id,
+            filter_expression=filter_expression,
+            hostility_type=normalized_hostility_type,
+            kill_type=normalized_kill_type,
+            limit=limit,
+            source_id=source_id,
+            start_time=start_time,
+            target_id=target_id,
+            translate=translate,
+            view_by=None,
+            wipe_cutoff=None,
+        ),
+        **result_payload,
+    }
+    if notes:
+        emitted["notes"] = notes
+    _emit(ctx, emitted)
 
 
 @app.command("report-table")

@@ -3383,6 +3383,52 @@ def test_warcraftlogs_report_events_requires_scope(monkeypatch) -> None:
     assert payload["error"]["code"] == "missing_scope"
 
 
+def test_warcraftlogs_report_events_hints_when_data_type_missing_returns_null_events(monkeypatch) -> None:
+    class _NullEventsClient(_FakeWarcraftLogsClient):
+        def report_events(self, *, code: str, allow_unlisted: bool = False, options) -> dict[str, object]:  # noqa: ANN001
+            assert options.data_type is None
+            return {
+                "code": code,
+                "title": "Some Report",
+                "zone": {"id": 38, "name": "Manaforge Omega"},
+                "events": {"data": None, "nextPageTimestamp": None},
+            }
+
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _NullEventsClient())
+
+    result = runner.invoke(warcraftlogs_app, ["report-events", "abcd1234", "--fight-id", "1"])
+    assert result.exit_code == 0
+
+    payload = json.loads(result.output)
+    assert payload["events"] is None
+    assert "notes" in payload
+    assert any("--data-type" in note for note in payload["notes"])
+
+
+def test_warcraftlogs_report_events_omits_hint_when_data_type_supplied(monkeypatch) -> None:
+    class _CastsNullClient(_FakeWarcraftLogsClient):
+        def report_events(self, *, code: str, allow_unlisted: bool = False, options) -> dict[str, object]:  # noqa: ANN001
+            assert options.data_type == "Casts"
+            return {
+                "code": code,
+                "title": "Some Report",
+                "zone": {"id": 38, "name": "Manaforge Omega"},
+                "events": {"data": None, "nextPageTimestamp": None},
+            }
+
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _CastsNullClient())
+
+    result = runner.invoke(
+        warcraftlogs_app,
+        ["report-events", "abcd1234", "--fight-id", "1", "--data-type", "casts"],
+    )
+    assert result.exit_code == 0
+
+    payload = json.loads(result.output)
+    assert payload["events"] is None
+    assert "notes" not in payload
+
+
 def test_warcraftlogs_character_rankings_surfaces_provider_permission_errors(monkeypatch) -> None:
     class _PermissionClient(_FakeWarcraftLogsClient):
         def character_rankings(
