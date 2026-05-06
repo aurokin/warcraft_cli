@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "wowhead-cli"
-version = "0.1.0"
+version = "0.2.0"
 description = "Agent-first CLI for querying Wowhead"
 readme = "../../README.md"
 requires-python = ">=3.12"
