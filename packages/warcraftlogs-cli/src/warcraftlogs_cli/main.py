@@ -213,31 +213,78 @@ def _saved_user_token_ready(state: dict[str, Any]) -> bool:
 
 
 REQUIRED_USER_SCOPE = "view-user-profile"
+PRIVATE_REPORTS_SCOPE = "view-private-reports"
 
 
 def _missing_view_user_profile_warning() -> str:
     return (
         f"Saved token is missing the {REQUIRED_USER_SCOPE!r} scope; "
-        "private and guild-only reports will return 'permission denied'. "
-        "Re-run `warcraftlogs auth login --scope view-user-profile ...`."
+        "user-endpoint queries (currentUser, user guilds, claimed characters) will fail. "
+        f"Re-run `warcraftlogs auth login --scope {REQUIRED_USER_SCOPE} ...`."
     )
 
 
-def _scope_breakdown(*, granted_scope: Any, requested_scopes: Any) -> dict[str, Any]:
+def _missing_view_private_reports_warning() -> str:
+    return (
+        f"Saved token is missing the {PRIVATE_REPORTS_SCOPE!r} scope; "
+        "private and guild-stealth reports will return 'permission denied'. "
+        f"Re-run `warcraftlogs auth login --scope {REQUIRED_USER_SCOPE} --scope {PRIVATE_REPORTS_SCOPE} ...`."
+    )
+
+
+def _decode_jwt_scopes(access_token: Any) -> list[str]:
+    if not isinstance(access_token, str):
+        return []
+    parts = access_token.split(".")
+    if len(parts) < 2:
+        return []
+    body = parts[1]
+    pad = "=" * (-len(body) % 4)
+    try:
+        decoded = base64.urlsafe_b64decode(body + pad)
+        payload = json.loads(decoded)
+    except (ValueError, json.JSONDecodeError):
+        return []
+    if not isinstance(payload, dict):
+        return []
+    raw = payload.get("scopes")
+    if isinstance(raw, list):
+        return [str(item) for item in raw if isinstance(item, str) and item.strip()]
+    if isinstance(raw, str) and raw.strip():
+        return [item for item in raw.replace(",", " ").split() if item]
+    return []
+
+
+def _scope_breakdown(
+    *,
+    granted_scope: Any,
+    requested_scopes: Any,
+    access_token: Any = None,
+) -> dict[str, Any]:
     granted: list[str] = []
     if isinstance(granted_scope, str) and granted_scope.strip():
         granted = [item for item in granted_scope.replace(",", " ").split() if item]
     elif isinstance(granted_scope, list):
         granted = [str(item) for item in granted_scope if isinstance(item, str) and item.strip()]
+    if not granted:
+        granted = _decode_jwt_scopes(access_token)
     requested: list[str] = []
     if isinstance(requested_scopes, list):
         requested = [str(item) for item in requested_scopes if isinstance(item, str) and item.strip()]
     has_view_user_profile = REQUIRED_USER_SCOPE in granted
+    has_view_private_reports = PRIVATE_REPORTS_SCOPE in granted
+    if not has_view_user_profile:
+        warning = _missing_view_user_profile_warning()
+    elif not has_view_private_reports:
+        warning = _missing_view_private_reports_warning()
+    else:
+        warning = None
     return {
         "granted": granted,
         "requested": requested,
         "has_view_user_profile": has_view_user_profile,
-        "warning": None if has_view_user_profile else _missing_view_user_profile_warning(),
+        "has_view_private_reports": has_view_private_reports,
+        "warning": warning,
     }
 
 
@@ -246,11 +293,13 @@ def _saved_user_token_scope_summary() -> dict[str, Any]:
     breakdown = _scope_breakdown(
         granted_scope=payload.get("scope"),
         requested_scopes=payload.get("requested_scopes"),
+        access_token=payload.get("access_token"),
     )
     return {
         "granted": breakdown["granted"],
         "requested": breakdown["requested"],
         "has_view_user_profile": breakdown["has_view_user_profile"],
+        "has_view_private_reports": breakdown["has_view_private_reports"],
     }
 
 
@@ -352,7 +401,13 @@ def _user_api_access_payload(state: dict[str, Any], *, runtime_access: dict[str,
     if _saved_user_token_ready(state):
         auth_mode = state.get("auth_mode")
         scopes = _saved_user_token_scope_summary()
-        scope_warning = None if scopes["has_view_user_profile"] else _missing_view_user_profile_warning()
+        scope_warning: str | None
+        if not scopes["has_view_user_profile"]:
+            scope_warning = _missing_view_user_profile_warning()
+        elif not scopes["has_view_private_reports"]:
+            scope_warning = _missing_view_private_reports_warning()
+        else:
+            scope_warning = None
         if not live:
             return {
                 "ready": True,
@@ -3239,6 +3294,7 @@ def auth_token(ctx: typer.Context) -> None:
     scopes = _scope_breakdown(
         granted_scope=payload.get("scope"),
         requested_scopes=payload.get("requested_scopes"),
+        access_token=payload.get("access_token"),
     )
     scope_warning = scopes["warning"] if _saved_user_token_ready(state) else None
     _emit(
@@ -3254,6 +3310,7 @@ def auth_token(ctx: typer.Context) -> None:
                     "granted": scopes["granted"],
                     "requested": scopes["requested"],
                     "has_view_user_profile": scopes["has_view_user_profile"],
+                    "has_view_private_reports": scopes["has_view_private_reports"],
                 },
                 "scope_warning": scope_warning,
             },
@@ -3267,7 +3324,7 @@ def auth_login(
     redirect_uri: str = typer.Option(..., "--redirect-uri", help="Registered redirect URI for the Warcraft Logs OAuth client."),
     code: str | None = typer.Option(None, "--code", help="Authorization code returned by the redirect callback."),
     state: str | None = typer.Option(None, "--state", help="State value returned by the redirect callback."),
-    scope: list[str] = typer.Option([], "--scope", help="OAuth scope (use view-user-profile for private/guild reports). Repeatable."),
+    scope: list[str] = typer.Option([], "--scope", help="OAuth scope. Use view-user-profile for currentUser/user data and view-private-reports for private/guild-stealth reports. Repeatable."),
 ) -> None:
     if not code:
         client = _client(ctx)
@@ -3332,6 +3389,7 @@ def auth_login(
     scopes = _scope_breakdown(
         granted_scope=token_summary.get("scope"),
         requested_scopes=token_summary.get("requested_scopes"),
+        access_token=token_summary.get("access_token"),
     )
     _emit(
         ctx,
@@ -3352,6 +3410,7 @@ def auth_login(
                 "granted": scopes["granted"],
                 "requested": scopes["requested"],
                 "has_view_user_profile": scopes["has_view_user_profile"],
+                "has_view_private_reports": scopes["has_view_private_reports"],
             },
             "scope_warning": scopes["warning"],
         },
@@ -3364,7 +3423,7 @@ def auth_pkce_login(
     redirect_uri: str = typer.Option(..., "--redirect-uri", help="Registered redirect URI for the Warcraft Logs OAuth client."),
     code: str | None = typer.Option(None, "--code", help="Authorization code returned by the redirect callback."),
     state: str | None = typer.Option(None, "--state", help="State value returned by the redirect callback."),
-    scope: list[str] = typer.Option([], "--scope", help="OAuth scope (use view-user-profile for private/guild reports). Repeatable."),
+    scope: list[str] = typer.Option([], "--scope", help="OAuth scope. Use view-user-profile for currentUser/user data and view-private-reports for private/guild-stealth reports. Repeatable."),
 ) -> None:
     if not code:
         client = _client(ctx)
@@ -3439,6 +3498,7 @@ def auth_pkce_login(
     scopes = _scope_breakdown(
         granted_scope=token_summary.get("scope"),
         requested_scopes=token_summary.get("requested_scopes"),
+        access_token=token_summary.get("access_token"),
     )
     _emit(
         ctx,
@@ -3459,6 +3519,7 @@ def auth_pkce_login(
                 "granted": scopes["granted"],
                 "requested": scopes["requested"],
                 "has_view_user_profile": scopes["has_view_user_profile"],
+                "has_view_private_reports": scopes["has_view_private_reports"],
             },
             "scope_warning": scopes["warning"],
         },

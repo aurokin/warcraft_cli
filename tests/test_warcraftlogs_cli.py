@@ -1,9 +1,16 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 import time
 from pathlib import Path
+
+
+def _build_jwt_with_scopes(scopes: list[str]) -> str:
+    header = base64.urlsafe_b64encode(json.dumps({"alg": "RS256", "typ": "JWT"}).encode()).rstrip(b"=").decode()
+    body = base64.urlsafe_b64encode(json.dumps({"scopes": scopes}).encode()).rstrip(b"=").decode()
+    return f"{header}.{body}.signature"
 
 import httpx
 import pytest
@@ -1902,7 +1909,8 @@ def test_warcraftlogs_auth_whoami_uses_user_endpoint_client(monkeypatch) -> None
     assert payload["user"]["name"] == "Auro"
 
 
-def test_warcraftlogs_auth_whoami_requires_saved_user_token_not_client_credentials(monkeypatch) -> None:
+def test_warcraftlogs_auth_whoami_requires_saved_user_token_not_client_credentials(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state-home"))
     monkeypatch.setattr(
         "warcraftlogs_cli.client.load_warcraftlogs_auth_config",
         lambda start_dir=None: type(
@@ -3929,7 +3937,38 @@ def test_warcraftlogs_auth_status_flags_missing_view_user_profile_scope(monkeypa
     assert "view-user-profile" in user_api["scope_warning"]
 
 
-def test_warcraftlogs_auth_status_no_scope_warning_when_view_user_profile_present(monkeypatch, tmp_path) -> None:
+def test_warcraftlogs_auth_status_no_scope_warning_when_both_scopes_present(monkeypatch, tmp_path) -> None:
+    state_dir = tmp_path / "state-home" / "warcraft" / "providers"
+    state_dir.mkdir(parents=True)
+    state_file = state_dir / "warcraftlogs.json"
+    state_file.write_text(
+        json.dumps(
+            {
+                "auth_mode": "authorization_code",
+                "access_token": "tok",
+                "expires_at": time.time() + 3600,
+                "scope": "view-user-profile view-private-reports",
+                "requested_scopes": ["view-user-profile", "view-private-reports"],
+            }
+        )
+    )
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state-home"))
+    monkeypatch.setattr("warcraftlogs_cli.main.WarcraftLogsClient", _FakeWarcraftLogsClient)
+    monkeypatch.setattr(
+        "warcraftlogs_cli.main.load_warcraftlogs_auth_config",
+        lambda: type("Auth", (), {"configured": True, "env_file": "/tmp/.env.local"})(),
+    )
+
+    result = runner.invoke(warcraftlogs_app, ["auth", "status"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    user_api = payload["auth"]["user_api_access"]
+    assert user_api["scopes"]["has_view_user_profile"] is True
+    assert user_api["scopes"]["has_view_private_reports"] is True
+    assert user_api["scope_warning"] is None
+
+
+def test_warcraftlogs_auth_status_warns_when_only_view_user_profile_present(monkeypatch, tmp_path) -> None:
     state_dir = tmp_path / "state-home" / "warcraft" / "providers"
     state_dir.mkdir(parents=True)
     state_file = state_dir / "warcraftlogs.json"
@@ -3956,7 +3995,8 @@ def test_warcraftlogs_auth_status_no_scope_warning_when_view_user_profile_presen
     payload = json.loads(result.stdout)
     user_api = payload["auth"]["user_api_access"]
     assert user_api["scopes"]["has_view_user_profile"] is True
-    assert user_api["scope_warning"] is None
+    assert user_api["scopes"]["has_view_private_reports"] is False
+    assert "view-private-reports" in user_api["scope_warning"]
 
 
 def test_warcraftlogs_auth_login_token_exchange_surfaces_scope_warning_when_requested_empty(monkeypatch, tmp_path) -> None:
@@ -3999,7 +4039,7 @@ def test_warcraftlogs_auth_login_token_exchange_surfaces_scope_warning_when_requ
     assert "view-user-profile" in payload["scope_warning"]
 
 
-def test_warcraftlogs_auth_pkce_login_token_exchange_clears_warning_when_view_user_profile_granted(monkeypatch, tmp_path) -> None:
+def test_warcraftlogs_auth_pkce_login_token_exchange_clears_warning_when_both_scopes_granted(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state-home"))
     state_file = tmp_path / "state-home" / "warcraft" / "providers" / "warcraftlogs.json"
     state_file.parent.mkdir(parents=True)
@@ -4010,7 +4050,7 @@ def test_warcraftlogs_auth_pkce_login_token_exchange_clears_warning_when_view_us
                 "pending_state": "pending-state-456",
                 "redirect_uri": "http://127.0.0.1:8787/callback",
                 "code_verifier": "verifier-123",
-                "requested_scopes": ["view-user-profile"],
+                "requested_scopes": ["view-user-profile", "view-private-reports"],
             }
         )
     )
@@ -4022,7 +4062,7 @@ def test_warcraftlogs_auth_pkce_login_token_exchange_clears_warning_when_view_us
                 "access_token": "pkce-token",
                 "refresh_token": "pkce-refresh",
                 "token_type": "Bearer",
-                "scope": "view-user-profile",
+                "scope": "view-user-profile view-private-reports",
                 "expires_in": 3600,
             }
 
@@ -4046,9 +4086,10 @@ def test_warcraftlogs_auth_pkce_login_token_exchange_clears_warning_when_view_us
 
     payload = json.loads(result.stdout)
     assert payload["step"] == "token_exchanged"
-    assert payload["scopes"]["granted"] == ["view-user-profile"]
-    assert payload["scopes"]["requested"] == ["view-user-profile"]
+    assert payload["scopes"]["granted"] == ["view-user-profile", "view-private-reports"]
+    assert payload["scopes"]["requested"] == ["view-user-profile", "view-private-reports"]
     assert payload["scopes"]["has_view_user_profile"] is True
+    assert payload["scopes"]["has_view_private_reports"] is True
     assert payload["scope_warning"] is None
 
 
@@ -4062,8 +4103,8 @@ def test_warcraftlogs_auth_token_includes_scope_breakdown(monkeypatch, tmp_path)
                 "auth_mode": "pkce",
                 "access_token": "tok",
                 "expires_at": time.time() + 3600,
-                "scope": "view-user-profile",
-                "requested_scopes": ["view-user-profile"],
+                "scope": "view-user-profile view-private-reports",
+                "requested_scopes": ["view-user-profile", "view-private-reports"],
             }
         )
     )
@@ -4073,8 +4114,9 @@ def test_warcraftlogs_auth_token_includes_scope_breakdown(monkeypatch, tmp_path)
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["token"]["endpoint_family"] == "user"
-    assert payload["token"]["scopes"]["granted"] == ["view-user-profile"]
+    assert payload["token"]["scopes"]["granted"] == ["view-user-profile", "view-private-reports"]
     assert payload["token"]["scopes"]["has_view_user_profile"] is True
+    assert payload["token"]["scopes"]["has_view_private_reports"] is True
     assert payload["token"]["scope_warning"] is None
 
 
@@ -4101,6 +4143,108 @@ def test_warcraftlogs_auth_token_warns_when_view_user_profile_missing(monkeypatc
     assert payload["token"]["scopes"]["granted"] == []
     assert payload["token"]["scopes"]["has_view_user_profile"] is False
     assert "view-user-profile" in payload["token"]["scope_warning"]
+
+
+def test_warcraftlogs_auth_token_decodes_scopes_from_jwt_when_top_level_omitted(monkeypatch, tmp_path) -> None:
+    state_dir = tmp_path / "state-home" / "warcraft" / "providers"
+    state_dir.mkdir(parents=True)
+    state_file = state_dir / "warcraftlogs.json"
+    state_file.write_text(
+        json.dumps(
+            {
+                "auth_mode": "authorization_code",
+                "access_token": _build_jwt_with_scopes(["view-user-profile", "view-private-reports"]),
+                "expires_at": time.time() + 3600,
+                "scope": None,
+                "requested_scopes": ["view-user-profile", "view-private-reports"],
+            }
+        )
+    )
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state-home"))
+
+    result = runner.invoke(warcraftlogs_app, ["auth", "token"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["token"]["scopes"]["granted"] == ["view-user-profile", "view-private-reports"]
+    assert payload["token"]["scopes"]["has_view_user_profile"] is True
+    assert payload["token"]["scopes"]["has_view_private_reports"] is True
+    assert payload["token"]["scope_warning"] is None
+
+
+def test_warcraftlogs_auth_token_warns_when_only_view_user_profile_in_jwt(monkeypatch, tmp_path) -> None:
+    state_dir = tmp_path / "state-home" / "warcraft" / "providers"
+    state_dir.mkdir(parents=True)
+    state_file = state_dir / "warcraftlogs.json"
+    state_file.write_text(
+        json.dumps(
+            {
+                "auth_mode": "authorization_code",
+                "access_token": _build_jwt_with_scopes(["view-user-profile"]),
+                "expires_at": time.time() + 3600,
+                "scope": None,
+                "requested_scopes": ["view-user-profile"],
+            }
+        )
+    )
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state-home"))
+
+    result = runner.invoke(warcraftlogs_app, ["auth", "token"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["token"]["scopes"]["has_view_user_profile"] is True
+    assert payload["token"]["scopes"]["has_view_private_reports"] is False
+    assert "view-private-reports" in payload["token"]["scope_warning"]
+
+
+def test_warcraftlogs_auth_login_token_exchange_decodes_jwt_scopes(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state-home"))
+    state_file = tmp_path / "state-home" / "warcraft" / "providers" / "warcraftlogs.json"
+    state_file.parent.mkdir(parents=True)
+    state_file.write_text(
+        json.dumps(
+            {
+                "pending_auth_mode": "authorization_code",
+                "pending_state": "pending-state-jwt",
+                "redirect_uri": "http://127.0.0.1:8787/callback",
+                "requested_scopes": ["view-user-profile", "view-private-reports"],
+            }
+        )
+    )
+
+    jwt_token = _build_jwt_with_scopes(["view-user-profile", "view-private-reports"])
+
+    class _JwtFakeClient(_FakeWarcraftLogsClient):
+        def exchange_authorization_code(self, *, code: str, redirect_uri: str) -> dict[str, object]:
+            return {
+                "access_token": jwt_token,
+                "refresh_token": "r",
+                "token_type": "Bearer",
+                "scope": None,
+                "expires_in": 3600,
+            }
+
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _JwtFakeClient())
+    monkeypatch.setattr("warcraftlogs_cli.main.time.time", lambda: 1000.0)
+
+    result = runner.invoke(
+        warcraftlogs_app,
+        [
+            "auth",
+            "login",
+            "--redirect-uri",
+            "http://127.0.0.1:8787/callback",
+            "--code",
+            "code-jwt",
+            "--state",
+            "pending-state-jwt",
+        ],
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["scopes"]["granted"] == ["view-user-profile", "view-private-reports"]
+    assert payload["scopes"]["has_view_user_profile"] is True
+    assert payload["scopes"]["has_view_private_reports"] is True
+    assert payload["scope_warning"] is None
 
 
 def test_warcraftlogs_auth_token_survives_corrupt_state_file(monkeypatch, tmp_path) -> None:
