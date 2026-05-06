@@ -4115,6 +4115,32 @@ def test_warcraftlogs_auth_token_survives_corrupt_state_file(monkeypatch, tmp_pa
     assert payload["token"]["endpoint_family"] == "client"
     assert payload["token"]["scopes"]["granted"] == []
     assert payload["token"]["scopes"]["has_view_user_profile"] is False
+    assert payload["token"]["scope_warning"] is None
+
+
+def test_warcraftlogs_auth_token_no_warning_without_saved_user_token(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state-home"))
+
+    result = runner.invoke(warcraftlogs_app, ["auth", "token"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["token"]["active_mode"] == "client_credentials"
+    assert payload["token"]["scopes"]["granted"] == []
+    assert payload["token"]["scope_warning"] is None
+
+
+def test_warcraftlogs_auth_token_no_warning_for_client_credentials_only_state(monkeypatch, tmp_path) -> None:
+    state_dir = tmp_path / "state-home" / "warcraft" / "providers"
+    state_dir.mkdir(parents=True)
+    (state_dir / "warcraftlogs.json").write_text(
+        json.dumps({"auth_mode": "client_credentials", "access_token": "client-tok"})
+    )
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state-home"))
+
+    result = runner.invoke(warcraftlogs_app, ["auth", "token"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["token"]["scope_warning"] is None
 
 
 def test_warcraftlogs_client_has_user_token_survives_corrupt_state_file(monkeypatch, tmp_path) -> None:

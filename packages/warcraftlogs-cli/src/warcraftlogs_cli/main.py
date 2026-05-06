@@ -3240,6 +3240,7 @@ def auth_token(ctx: typer.Context) -> None:
         granted_scope=payload.get("scope"),
         requested_scopes=payload.get("requested_scopes"),
     )
+    scope_warning = scopes["warning"] if _saved_user_token_ready(state) else None
     _emit(
         ctx,
         {
@@ -3254,7 +3255,7 @@ def auth_token(ctx: typer.Context) -> None:
                     "requested": scopes["requested"],
                     "has_view_user_profile": scopes["has_view_user_profile"],
                 },
-                "scope_warning": scopes["warning"],
+                "scope_warning": scope_warning,
             },
         },
     )
