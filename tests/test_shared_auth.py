@@ -63,6 +63,23 @@ def test_load_provider_auth_state_returns_dict_payload(tmp_path: Path) -> None:
     assert payload == {"auth_mode": "pkce", "access_token": "token"}
 
 
+def test_load_provider_auth_state_returns_none_for_malformed_json(tmp_path: Path) -> None:
+    state_file = tmp_path / "warcraftlogs.json"
+    state_file.write_text("{not-valid-json")
+
+    assert load_provider_auth_state("warcraftlogs", path=state_file) is None
+
+
+def test_load_provider_auth_state_returns_none_for_unreadable_file(tmp_path: Path) -> None:
+    state_file = tmp_path / "warcraftlogs.json"
+    state_file.write_text(json.dumps({"auth_mode": "pkce"}))
+    state_file.chmod(0o000)
+    try:
+        assert load_provider_auth_state("warcraftlogs", path=state_file) is None
+    finally:
+        state_file.chmod(0o600)
+
+
 def test_save_and_delete_provider_auth_state_round_trip(tmp_path: Path) -> None:
     state_file = tmp_path / "warcraftlogs.json"
 

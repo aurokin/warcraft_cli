@@ -428,6 +428,9 @@ Important scope boundary:
   - user guilds
   - user characters
   - some claimed/private character data
+- private/guild-stealth reports also require this scope; without it `userData.currentUser` resolves to null and `reportData.report(...)` returns "permission denied" even when the authenticated user can see the report in their browser
+- `warcraftlogs auth login` and `warcraftlogs auth pkce-login` accept `--scope view-user-profile` and that flag is required for any workflow that needs private-report visibility
+- once a user token is saved, the CLI routes every GraphQL call through `/api/v2/user`; before that, calls go to `/api/v2/client` with client credentials and only see public data
 
 ### Race and Live Competition Surface
 

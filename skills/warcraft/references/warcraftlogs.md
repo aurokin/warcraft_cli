@@ -179,4 +179,6 @@ Best fits:
   - first run prints the authorize URL and saves pending state locally
   - second run exchanges the returned `code` and `state`
 - `warcraftlogs auth whoami` is the clearest verification that a saved user token actually works against the private user endpoint
-- add `--scope view-user-profile` when you want a token that can access current-user profile fields
+- always pass `--scope view-user-profile` when running `auth login` or `auth pkce-login`; without it the saved token can authenticate but cannot read private/guild reports or `userData.currentUser`, and report queries fall back to anonymous client-credentials access
+- once a saved user token exists, every `warcraftlogs` command routes its GraphQL through `/api/v2/user` automatically, so private-report visibility is gated entirely on the saved token's scopes — verify with `warcraftlogs auth status` or `warcraftlogs auth token` (look for `scopes.has_view_user_profile`)
+- the token-exchange step of `auth login` and `auth pkce-login` reports `scopes.granted`, `scopes.requested`, `scopes.has_view_user_profile`, and a `scope_warning` so a missing `view-user-profile` is visible immediately

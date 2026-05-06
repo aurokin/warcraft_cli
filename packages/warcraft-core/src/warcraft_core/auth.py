@@ -12,7 +12,10 @@ def load_provider_auth_state(provider: str, *, path: str | Path | None = None) -
     state_path = Path(path).expanduser() if path is not None else provider_state_path(provider)
     if not state_path.is_file():
         return None
-    payload = json.loads(state_path.read_text())
+    try:
+        payload = json.loads(state_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
     if not isinstance(payload, dict):
         return None
     return payload

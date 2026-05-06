@@ -212,6 +212,48 @@ def _saved_user_token_ready(state: dict[str, Any]) -> bool:
     )
 
 
+REQUIRED_USER_SCOPE = "view-user-profile"
+
+
+def _missing_view_user_profile_warning() -> str:
+    return (
+        f"Saved token is missing the {REQUIRED_USER_SCOPE!r} scope; "
+        "private and guild-only reports will return 'permission denied'. "
+        "Re-run `warcraftlogs auth login --scope view-user-profile ...`."
+    )
+
+
+def _scope_breakdown(*, granted_scope: Any, requested_scopes: Any) -> dict[str, Any]:
+    granted: list[str] = []
+    if isinstance(granted_scope, str) and granted_scope.strip():
+        granted = [item for item in granted_scope.replace(",", " ").split() if item]
+    elif isinstance(granted_scope, list):
+        granted = [str(item) for item in granted_scope if isinstance(item, str) and item.strip()]
+    requested: list[str] = []
+    if isinstance(requested_scopes, list):
+        requested = [str(item) for item in requested_scopes if isinstance(item, str) and item.strip()]
+    has_view_user_profile = REQUIRED_USER_SCOPE in granted
+    return {
+        "granted": granted,
+        "requested": requested,
+        "has_view_user_profile": has_view_user_profile,
+        "warning": None if has_view_user_profile else _missing_view_user_profile_warning(),
+    }
+
+
+def _saved_user_token_scope_summary() -> dict[str, Any]:
+    payload = load_provider_auth_state("warcraftlogs") or {}
+    breakdown = _scope_breakdown(
+        granted_scope=payload.get("scope"),
+        requested_scopes=payload.get("requested_scopes"),
+    )
+    return {
+        "granted": breakdown["granted"],
+        "requested": breakdown["requested"],
+        "has_view_user_profile": breakdown["has_view_user_profile"],
+    }
+
+
 def _runtime_error_message(message: str) -> str:
     return message.replace("WOWHEAD_", "WARCRAFTLOGS_")
 
@@ -309,6 +351,8 @@ def _user_api_access_payload(state: dict[str, Any], *, runtime_access: dict[str,
         }
     if _saved_user_token_ready(state):
         auth_mode = state.get("auth_mode")
+        scopes = _saved_user_token_scope_summary()
+        scope_warning = None if scopes["has_view_user_profile"] else _missing_view_user_profile_warning()
         if not live:
             return {
                 "ready": True,
@@ -316,6 +360,8 @@ def _user_api_access_payload(state: dict[str, Any], *, runtime_access: dict[str,
                 "validation": "skipped",
                 "probe": "current_user",
                 "live_validated": False,
+                "scopes": scopes,
+                "scope_warning": scope_warning,
             }
         client: WarcraftLogsClient | None = None
         try:
@@ -329,14 +375,19 @@ def _user_api_access_payload(state: dict[str, Any], *, runtime_access: dict[str,
                 "message": exc.message,
                 "validation": "live",
                 "probe": "current_user",
+                "scopes": scopes,
+                "scope_warning": scope_warning,
             }
         except Exception as exc:  # noqa: BLE001
-            return _probe_failed_payload(
+            failure = _probe_failed_payload(
                 mode=str(auth_mode) if isinstance(auth_mode, str) else None,
                 validation="live",
                 probe="current_user",
                 message=str(exc),
             )
+            failure["scopes"] = scopes
+            failure["scope_warning"] = scope_warning
+            return failure
         finally:
             if client is not None:
                 client.close()
@@ -346,6 +397,8 @@ def _user_api_access_payload(state: dict[str, Any], *, runtime_access: dict[str,
             "validation": "live",
             "probe": "current_user",
             "live_validated": True,
+            "scopes": scopes,
+            "scope_warning": scope_warning,
         }
     return {
         "ready": False,
@@ -3182,6 +3235,12 @@ def auth_client(ctx: typer.Context) -> None:
 @auth_app.command("token")
 def auth_token(ctx: typer.Context) -> None:
     state = provider_auth_status("warcraftlogs")
+    payload = load_provider_auth_state("warcraftlogs") or {}
+    scopes = _scope_breakdown(
+        granted_scope=payload.get("scope"),
+        requested_scopes=payload.get("requested_scopes"),
+    )
+    scope_warning = scopes["warning"] if _saved_user_token_ready(state) else None
     _emit(
         ctx,
         {
@@ -3191,6 +3250,12 @@ def auth_token(ctx: typer.Context) -> None:
                 "active_mode": _active_auth_mode_from_state(state),
                 "endpoint_family": _endpoint_family_from_state(state),
                 "state": state,
+                "scopes": {
+                    "granted": scopes["granted"],
+                    "requested": scopes["requested"],
+                    "has_view_user_profile": scopes["has_view_user_profile"],
+                },
+                "scope_warning": scope_warning,
             },
         },
     )
@@ -3202,7 +3267,7 @@ def auth_login(
     redirect_uri: str = typer.Option(..., "--redirect-uri", help="Registered redirect URI for the Warcraft Logs OAuth client."),
     code: str | None = typer.Option(None, "--code", help="Authorization code returned by the redirect callback."),
     state: str | None = typer.Option(None, "--state", help="State value returned by the redirect callback."),
-    scope: list[str] = typer.Option([], "--scope", help="Optional scope to request. Repeat as needed."),
+    scope: list[str] = typer.Option([], "--scope", help="OAuth scope (use view-user-profile for private/guild reports). Repeatable."),
 ) -> None:
     if not code:
         client = _client(ctx)
@@ -3264,6 +3329,10 @@ def auth_login(
     if isinstance(pending.get("requested_scopes"), list):
         token_summary["requested_scopes"] = pending.get("requested_scopes")
     saved_path = save_provider_auth_state("warcraftlogs", token_summary)
+    scopes = _scope_breakdown(
+        granted_scope=token_summary.get("scope"),
+        requested_scopes=token_summary.get("requested_scopes"),
+    )
     _emit(
         ctx,
         {
@@ -3279,6 +3348,12 @@ def auth_login(
                 "expires_at": token_summary.get("expires_at"),
                 "has_refresh_token": bool(token_summary.get("refresh_token")),
             },
+            "scopes": {
+                "granted": scopes["granted"],
+                "requested": scopes["requested"],
+                "has_view_user_profile": scopes["has_view_user_profile"],
+            },
+            "scope_warning": scopes["warning"],
         },
     )
 
@@ -3289,7 +3364,7 @@ def auth_pkce_login(
     redirect_uri: str = typer.Option(..., "--redirect-uri", help="Registered redirect URI for the Warcraft Logs OAuth client."),
     code: str | None = typer.Option(None, "--code", help="Authorization code returned by the redirect callback."),
     state: str | None = typer.Option(None, "--state", help="State value returned by the redirect callback."),
-    scope: list[str] = typer.Option([], "--scope", help="Optional scope to request. Repeat as needed."),
+    scope: list[str] = typer.Option([], "--scope", help="OAuth scope (use view-user-profile for private/guild reports). Repeatable."),
 ) -> None:
     if not code:
         client = _client(ctx)
@@ -3361,6 +3436,10 @@ def auth_pkce_login(
     if isinstance(pending.get("requested_scopes"), list):
         token_summary["requested_scopes"] = pending.get("requested_scopes")
     saved_path = save_provider_auth_state("warcraftlogs", token_summary)
+    scopes = _scope_breakdown(
+        granted_scope=token_summary.get("scope"),
+        requested_scopes=token_summary.get("requested_scopes"),
+    )
     _emit(
         ctx,
         {
@@ -3376,6 +3455,12 @@ def auth_pkce_login(
                 "expires_at": token_summary.get("expires_at"),
                 "has_refresh_token": bool(token_summary.get("refresh_token")),
             },
+            "scopes": {
+                "granted": scopes["granted"],
+                "requested": scopes["requested"],
+                "has_view_user_profile": scopes["has_view_user_profile"],
+            },
+            "scope_warning": scopes["warning"],
         },
     )
 

@@ -3760,3 +3760,480 @@ def test_warcraftlogs_report_fights_requires_public_auth_not_generic_missing_aut
 
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "missing_public_auth"
+
+
+def test_warcraftlogs_client_has_user_token_returns_false_when_state_missing(monkeypatch) -> None:
+    monkeypatch.setattr("warcraftlogs_cli.client.load_provider_auth_state", lambda provider: None)
+    client = WarcraftLogsClient.__new__(WarcraftLogsClient)
+    assert client._has_user_token() is False
+
+
+def test_warcraftlogs_client_has_user_token_returns_false_for_client_credentials_state(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "warcraftlogs_cli.client.load_provider_auth_state",
+        lambda provider: {"auth_mode": "client_credentials", "access_token": "ignored"},
+    )
+    client = WarcraftLogsClient.__new__(WarcraftLogsClient)
+    assert client._has_user_token() is False
+
+
+def test_warcraftlogs_client_has_user_token_returns_false_when_expired(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "warcraftlogs_cli.client.load_provider_auth_state",
+        lambda provider: {
+            "auth_mode": "authorization_code",
+            "access_token": "tok",
+            "expires_at": time.time() - 1,
+        },
+    )
+    client = WarcraftLogsClient.__new__(WarcraftLogsClient)
+    assert client._has_user_token() is False
+
+
+def test_warcraftlogs_client_has_user_token_returns_true_for_valid_user_token(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "warcraftlogs_cli.client.load_provider_auth_state",
+        lambda provider: {
+            "auth_mode": "pkce",
+            "access_token": "tok",
+            "expires_at": time.time() + 3600,
+        },
+    )
+    client = WarcraftLogsClient.__new__(WarcraftLogsClient)
+    assert client._has_user_token() is True
+
+
+def test_warcraftlogs_client_graphql_routes_through_user_endpoint_when_authenticated(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "warcraftlogs_cli.client.load_provider_auth_state",
+        lambda provider: {
+            "auth_mode": "pkce",
+            "access_token": "user-token",
+            "expires_at": time.time() + 3600,
+        },
+    )
+    client = WarcraftLogsClient.__new__(WarcraftLogsClient)
+    captured: dict[str, object] = {}
+
+    def _fake_user(*, operation_name, query, variables, namespace, ttl_seconds, use_cache=True):
+        captured["operation_name"] = operation_name
+        captured["namespace"] = namespace
+        captured["ttl_seconds"] = ttl_seconds
+        captured["use_cache"] = use_cache
+        return {"ok": True}
+
+    def _fail_client(**_kwargs):
+        raise AssertionError("client endpoint must not be hit when a user token is saved")
+
+    client._graphql_user = _fake_user
+    monkeypatch.setattr(client, "_token", _fail_client)
+
+    payload = client._graphql(
+        operation_name="OpName",
+        query="query Q { x }",
+        variables={"a": 1},
+        namespace="ns",
+        ttl_seconds=42,
+    )
+
+    assert payload == {"ok": True}
+    assert captured["operation_name"] == "OpName"
+    assert captured["namespace"] == "ns"
+    assert captured["ttl_seconds"] == 42
+    assert captured["use_cache"] is True
+
+
+def test_warcraftlogs_client_graphql_uses_client_endpoint_without_user_token(monkeypatch) -> None:
+    monkeypatch.setattr("warcraftlogs_cli.client.load_provider_auth_state", lambda provider: None)
+    client = WarcraftLogsClient.__new__(WarcraftLogsClient)
+    client._site = RETAIL_PROFILE
+    client._cache_store = None
+    client._retry_attempts = 1
+    client._http_client = None
+    client._timeout_seconds = 5.0
+    client._access_token = "client-token"
+    client._token_expires_at = time.time() + 3600
+
+    def _fail_user(**_kwargs):
+        raise AssertionError("user endpoint must not be hit without a saved user token")
+
+    client._graphql_user = _fail_user
+
+    captured: dict[str, object] = {}
+
+    class _Resp:
+        def json(self) -> dict[str, object]:
+            return {"data": {"ok": True}}
+
+    def _fake_request(http_client, url, **kwargs):
+        captured["url"] = url
+        captured["headers"] = kwargs.get("headers")
+        return _Resp()
+
+    monkeypatch.setattr("warcraftlogs_cli.client.request_with_retries", _fake_request)
+
+    payload = client._graphql(
+        operation_name="OpName",
+        query="query Q { x }",
+        variables=None,
+        namespace="ns",
+        ttl_seconds=42,
+    )
+
+    assert payload == {"ok": True}
+    assert captured["url"] == RETAIL_PROFILE.api_url
+    assert captured["headers"]["Authorization"] == "Bearer client-token"
+
+
+def test_warcraftlogs_client_graphql_user_and_client_caches_do_not_collide() -> None:
+    client = WarcraftLogsClient.__new__(WarcraftLogsClient)
+    client._site = RETAIL_PROFILE
+
+    common = {
+        "operation_name": "OpName",
+        "query": "query Q { x }",
+        "variables": {"a": 1},
+    }
+    user_key = client._cache_key("ns", {"endpoint": "user", **common})
+    client_key = client._cache_key("ns", {"endpoint": "client", **common})
+    assert user_key != client_key
+
+
+def test_warcraftlogs_auth_status_flags_missing_view_user_profile_scope(monkeypatch, tmp_path) -> None:
+    state_dir = tmp_path / "state-home" / "warcraft" / "providers"
+    state_dir.mkdir(parents=True)
+    state_file = state_dir / "warcraftlogs.json"
+    state_file.write_text(
+        json.dumps(
+            {
+                "auth_mode": "authorization_code",
+                "access_token": "tok",
+                "expires_at": time.time() + 3600,
+                "scope": "",
+                "requested_scopes": [],
+            }
+        )
+    )
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state-home"))
+    monkeypatch.setattr("warcraftlogs_cli.main.WarcraftLogsClient", _FakeWarcraftLogsClient)
+    monkeypatch.setattr(
+        "warcraftlogs_cli.main.load_warcraftlogs_auth_config",
+        lambda: type("Auth", (), {"configured": True, "env_file": "/tmp/.env.local"})(),
+    )
+
+    result = runner.invoke(warcraftlogs_app, ["auth", "status"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    user_api = payload["auth"]["user_api_access"]
+    assert user_api["scopes"]["has_view_user_profile"] is False
+    assert "view-user-profile" in user_api["scope_warning"]
+
+
+def test_warcraftlogs_auth_status_no_scope_warning_when_view_user_profile_present(monkeypatch, tmp_path) -> None:
+    state_dir = tmp_path / "state-home" / "warcraft" / "providers"
+    state_dir.mkdir(parents=True)
+    state_file = state_dir / "warcraftlogs.json"
+    state_file.write_text(
+        json.dumps(
+            {
+                "auth_mode": "authorization_code",
+                "access_token": "tok",
+                "expires_at": time.time() + 3600,
+                "scope": "view-user-profile",
+                "requested_scopes": ["view-user-profile"],
+            }
+        )
+    )
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state-home"))
+    monkeypatch.setattr("warcraftlogs_cli.main.WarcraftLogsClient", _FakeWarcraftLogsClient)
+    monkeypatch.setattr(
+        "warcraftlogs_cli.main.load_warcraftlogs_auth_config",
+        lambda: type("Auth", (), {"configured": True, "env_file": "/tmp/.env.local"})(),
+    )
+
+    result = runner.invoke(warcraftlogs_app, ["auth", "status"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    user_api = payload["auth"]["user_api_access"]
+    assert user_api["scopes"]["has_view_user_profile"] is True
+    assert user_api["scope_warning"] is None
+
+
+def test_warcraftlogs_auth_login_token_exchange_surfaces_scope_warning_when_requested_empty(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state-home"))
+    state_file = tmp_path / "state-home" / "warcraft" / "providers" / "warcraftlogs.json"
+    state_file.parent.mkdir(parents=True)
+    state_file.write_text(
+        json.dumps(
+            {
+                "pending_auth_mode": "authorization_code",
+                "pending_state": "pending-state-123",
+                "redirect_uri": "http://127.0.0.1:8787/callback",
+                "requested_scopes": [],
+            }
+        )
+    )
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _FakeWarcraftLogsClient())
+    monkeypatch.setattr("warcraftlogs_cli.main.time.time", lambda: 1000.0)
+
+    result = runner.invoke(
+        warcraftlogs_app,
+        [
+            "auth",
+            "login",
+            "--redirect-uri",
+            "http://127.0.0.1:8787/callback",
+            "--code",
+            "code-123",
+            "--state",
+            "pending-state-123",
+        ],
+    )
+    assert result.exit_code == 0
+
+    payload = json.loads(result.stdout)
+    assert payload["step"] == "token_exchanged"
+    assert payload["scopes"]["granted"] == ["reports"]
+    assert payload["scopes"]["requested"] == []
+    assert payload["scopes"]["has_view_user_profile"] is False
+    assert "view-user-profile" in payload["scope_warning"]
+
+
+def test_warcraftlogs_auth_pkce_login_token_exchange_clears_warning_when_view_user_profile_granted(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state-home"))
+    state_file = tmp_path / "state-home" / "warcraft" / "providers" / "warcraftlogs.json"
+    state_file.parent.mkdir(parents=True)
+    state_file.write_text(
+        json.dumps(
+            {
+                "pending_auth_mode": "pkce",
+                "pending_state": "pending-state-456",
+                "redirect_uri": "http://127.0.0.1:8787/callback",
+                "code_verifier": "verifier-123",
+                "requested_scopes": ["view-user-profile"],
+            }
+        )
+    )
+
+    class _ScopedFakeClient(_FakeWarcraftLogsClient):
+        def exchange_pkce_code(self, *, code: str, redirect_uri: str, code_verifier: str) -> dict[str, object]:
+            assert code == "code-456"
+            return {
+                "access_token": "pkce-token",
+                "refresh_token": "pkce-refresh",
+                "token_type": "Bearer",
+                "scope": "view-user-profile",
+                "expires_in": 3600,
+            }
+
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _ScopedFakeClient())
+    monkeypatch.setattr("warcraftlogs_cli.main.time.time", lambda: 1000.0)
+
+    result = runner.invoke(
+        warcraftlogs_app,
+        [
+            "auth",
+            "pkce-login",
+            "--redirect-uri",
+            "http://127.0.0.1:8787/callback",
+            "--code",
+            "code-456",
+            "--state",
+            "pending-state-456",
+        ],
+    )
+    assert result.exit_code == 0
+
+    payload = json.loads(result.stdout)
+    assert payload["step"] == "token_exchanged"
+    assert payload["scopes"]["granted"] == ["view-user-profile"]
+    assert payload["scopes"]["requested"] == ["view-user-profile"]
+    assert payload["scopes"]["has_view_user_profile"] is True
+    assert payload["scope_warning"] is None
+
+
+def test_warcraftlogs_auth_token_includes_scope_breakdown(monkeypatch, tmp_path) -> None:
+    state_dir = tmp_path / "state-home" / "warcraft" / "providers"
+    state_dir.mkdir(parents=True)
+    state_file = state_dir / "warcraftlogs.json"
+    state_file.write_text(
+        json.dumps(
+            {
+                "auth_mode": "pkce",
+                "access_token": "tok",
+                "expires_at": time.time() + 3600,
+                "scope": "view-user-profile",
+                "requested_scopes": ["view-user-profile"],
+            }
+        )
+    )
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state-home"))
+
+    result = runner.invoke(warcraftlogs_app, ["auth", "token"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["token"]["endpoint_family"] == "user"
+    assert payload["token"]["scopes"]["granted"] == ["view-user-profile"]
+    assert payload["token"]["scopes"]["has_view_user_profile"] is True
+    assert payload["token"]["scope_warning"] is None
+
+
+def test_warcraftlogs_auth_token_warns_when_view_user_profile_missing(monkeypatch, tmp_path) -> None:
+    state_dir = tmp_path / "state-home" / "warcraft" / "providers"
+    state_dir.mkdir(parents=True)
+    state_file = state_dir / "warcraftlogs.json"
+    state_file.write_text(
+        json.dumps(
+            {
+                "auth_mode": "authorization_code",
+                "access_token": "tok",
+                "expires_at": time.time() + 3600,
+                "scope": None,
+                "requested_scopes": [],
+            }
+        )
+    )
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state-home"))
+
+    result = runner.invoke(warcraftlogs_app, ["auth", "token"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["token"]["scopes"]["granted"] == []
+    assert payload["token"]["scopes"]["has_view_user_profile"] is False
+    assert "view-user-profile" in payload["token"]["scope_warning"]
+
+
+def test_warcraftlogs_auth_token_survives_corrupt_state_file(monkeypatch, tmp_path) -> None:
+    state_dir = tmp_path / "state-home" / "warcraft" / "providers"
+    state_dir.mkdir(parents=True)
+    (state_dir / "warcraftlogs.json").write_text("{not-valid-json")
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state-home"))
+
+    result = runner.invoke(warcraftlogs_app, ["auth", "token"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["token"]["endpoint_family"] == "client"
+    assert payload["token"]["scopes"]["granted"] == []
+    assert payload["token"]["scopes"]["has_view_user_profile"] is False
+    assert payload["token"]["scope_warning"] is None
+
+
+def test_warcraftlogs_auth_token_no_warning_without_saved_user_token(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state-home"))
+
+    result = runner.invoke(warcraftlogs_app, ["auth", "token"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["token"]["active_mode"] == "client_credentials"
+    assert payload["token"]["scopes"]["granted"] == []
+    assert payload["token"]["scope_warning"] is None
+
+
+def test_warcraftlogs_auth_token_no_warning_for_client_credentials_only_state(monkeypatch, tmp_path) -> None:
+    state_dir = tmp_path / "state-home" / "warcraft" / "providers"
+    state_dir.mkdir(parents=True)
+    (state_dir / "warcraftlogs.json").write_text(
+        json.dumps({"auth_mode": "client_credentials", "access_token": "client-tok"})
+    )
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state-home"))
+
+    result = runner.invoke(warcraftlogs_app, ["auth", "token"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["token"]["scope_warning"] is None
+
+
+def test_warcraftlogs_client_has_user_token_survives_corrupt_state_file(monkeypatch, tmp_path) -> None:
+    state_dir = tmp_path / "state-home" / "warcraft" / "providers"
+    state_dir.mkdir(parents=True)
+    (state_dir / "warcraftlogs.json").write_text("{not-valid-json")
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state-home"))
+
+    client = WarcraftLogsClient.__new__(WarcraftLogsClient)
+    assert client._has_user_token() is False
+
+
+def test_warcraftlogs_client_rate_limit_always_uses_client_endpoint(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "warcraftlogs_cli.client.load_provider_auth_state",
+        lambda provider: {
+            "auth_mode": "pkce",
+            "access_token": "user-token",
+            "expires_at": time.time() + 3600,
+        },
+    )
+    client = WarcraftLogsClient.__new__(WarcraftLogsClient)
+    client._site = RETAIL_PROFILE
+    client._cache_store = None
+    client._retry_attempts = 1
+    client._http_client = None
+    client._timeout_seconds = 5.0
+    client._access_token = "client-token"
+    client._token_expires_at = time.time() + 3600
+
+    def _fail_user(**_kwargs):
+        raise AssertionError("rate_limit must not route through the user endpoint")
+
+    client._graphql_user = _fail_user
+
+    captured: dict[str, object] = {}
+
+    class _Resp:
+        def json(self) -> dict[str, object]:
+            return {"data": {"rateLimitData": {"limitPerHour": 100, "pointsSpentThisHour": 1, "pointsResetIn": 60}}}
+
+    def _fake_request(http_client, url, **kwargs):
+        captured["url"] = url
+        captured["headers"] = kwargs.get("headers")
+        return _Resp()
+
+    monkeypatch.setattr("warcraftlogs_cli.client.request_with_retries", _fake_request)
+
+    payload = client.rate_limit()
+
+    assert payload["limitPerHour"] == 100
+    assert captured["url"] == RETAIL_PROFILE.api_url
+    assert captured["headers"]["Authorization"] == "Bearer client-token"
+
+
+def test_warcraftlogs_client_probe_live_public_api_always_uses_client_endpoint(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "warcraftlogs_cli.client.load_provider_auth_state",
+        lambda provider: {
+            "auth_mode": "pkce",
+            "access_token": "user-token",
+            "expires_at": time.time() + 3600,
+        },
+    )
+    client = WarcraftLogsClient.__new__(WarcraftLogsClient)
+    client._site = RETAIL_PROFILE
+    client._cache_store = None
+    client._retry_attempts = 1
+    client._http_client = None
+    client._timeout_seconds = 5.0
+    client._access_token = "client-token"
+    client._token_expires_at = time.time() + 3600
+
+    def _fail_user(**_kwargs):
+        raise AssertionError("probe_live_public_api must not route through the user endpoint")
+
+    client._graphql_user = _fail_user
+
+    captured: dict[str, object] = {}
+
+    class _Resp:
+        def json(self) -> dict[str, object]:
+            return {"data": {"rateLimitData": {"limitPerHour": 100, "pointsSpentThisHour": 1, "pointsResetIn": 60}}}
+
+    def _fake_request(http_client, url, **kwargs):
+        captured["url"] = url
+        captured["headers"] = kwargs.get("headers")
+        return _Resp()
+
+    monkeypatch.setattr("warcraftlogs_cli.client.request_with_retries", _fake_request)
+
+    payload = client.probe_live_public_api()
+
+    assert payload["limitPerHour"] == 100
+    assert captured["url"] == RETAIL_PROFILE.api_url
+    assert captured["headers"]["Authorization"] == "Bearer client-token"
