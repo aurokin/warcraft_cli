@@ -1467,8 +1467,9 @@ class WarcraftLogsClient:
         namespace: str,
         ttl_seconds: int,
         use_cache: bool = True,
+        force_client: bool = False,
     ) -> dict[str, Any]:
-        if self._has_user_token():
+        if not force_client and self._has_user_token():
             return self._graphql_user(
                 operation_name=operation_name,
                 query=query,
@@ -1609,6 +1610,7 @@ class WarcraftLogsClient:
             variables=None,
             namespace="rate_limit",
             ttl_seconds=60,
+            force_client=True,
         )
         payload = data.get("rateLimitData")
         if not isinstance(payload, dict):
@@ -1623,6 +1625,7 @@ class WarcraftLogsClient:
             namespace="rate_limit",
             ttl_seconds=60,
             use_cache=False,
+            force_client=True,
         )
         payload = data.get("rateLimitData")
         if not isinstance(payload, dict):

@@ -4125,3 +4125,89 @@ def test_warcraftlogs_client_has_user_token_survives_corrupt_state_file(monkeypa
 
     client = WarcraftLogsClient.__new__(WarcraftLogsClient)
     assert client._has_user_token() is False
+
+
+def test_warcraftlogs_client_rate_limit_always_uses_client_endpoint(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "warcraftlogs_cli.client.load_provider_auth_state",
+        lambda provider: {
+            "auth_mode": "pkce",
+            "access_token": "user-token",
+            "expires_at": time.time() + 3600,
+        },
+    )
+    client = WarcraftLogsClient.__new__(WarcraftLogsClient)
+    client._site = RETAIL_PROFILE
+    client._cache_store = None
+    client._retry_attempts = 1
+    client._http_client = None
+    client._timeout_seconds = 5.0
+    client._access_token = "client-token"
+    client._token_expires_at = time.time() + 3600
+
+    def _fail_user(**_kwargs):
+        raise AssertionError("rate_limit must not route through the user endpoint")
+
+    client._graphql_user = _fail_user
+
+    captured: dict[str, object] = {}
+
+    class _Resp:
+        def json(self) -> dict[str, object]:
+            return {"data": {"rateLimitData": {"limitPerHour": 100, "pointsSpentThisHour": 1, "pointsResetIn": 60}}}
+
+    def _fake_request(http_client, url, **kwargs):
+        captured["url"] = url
+        captured["headers"] = kwargs.get("headers")
+        return _Resp()
+
+    monkeypatch.setattr("warcraftlogs_cli.client.request_with_retries", _fake_request)
+
+    payload = client.rate_limit()
+
+    assert payload["limitPerHour"] == 100
+    assert captured["url"] == RETAIL_PROFILE.api_url
+    assert captured["headers"]["Authorization"] == "Bearer client-token"
+
+
+def test_warcraftlogs_client_probe_live_public_api_always_uses_client_endpoint(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "warcraftlogs_cli.client.load_provider_auth_state",
+        lambda provider: {
+            "auth_mode": "pkce",
+            "access_token": "user-token",
+            "expires_at": time.time() + 3600,
+        },
+    )
+    client = WarcraftLogsClient.__new__(WarcraftLogsClient)
+    client._site = RETAIL_PROFILE
+    client._cache_store = None
+    client._retry_attempts = 1
+    client._http_client = None
+    client._timeout_seconds = 5.0
+    client._access_token = "client-token"
+    client._token_expires_at = time.time() + 3600
+
+    def _fail_user(**_kwargs):
+        raise AssertionError("probe_live_public_api must not route through the user endpoint")
+
+    client._graphql_user = _fail_user
+
+    captured: dict[str, object] = {}
+
+    class _Resp:
+        def json(self) -> dict[str, object]:
+            return {"data": {"rateLimitData": {"limitPerHour": 100, "pointsSpentThisHour": 1, "pointsResetIn": 60}}}
+
+    def _fake_request(http_client, url, **kwargs):
+        captured["url"] = url
+        captured["headers"] = kwargs.get("headers")
+        return _Resp()
+
+    monkeypatch.setattr("warcraftlogs_cli.client.request_with_retries", _fake_request)
+
+    payload = client.probe_live_public_api()
+
+    assert payload["limitPerHour"] == 100
+    assert captured["url"] == RETAIL_PROFILE.api_url
+    assert captured["headers"]["Authorization"] == "Bearer client-token"
