@@ -79,6 +79,15 @@ def _emit(ctx: typer.Context, payload: dict[str, Any], *, err: bool = False) -> 
     emit(payload, pretty=_cfg(ctx).pretty, err=err)
 
 
+def _with_warnings(payload: dict[str, Any], client: Any) -> dict[str, Any]:
+    warnings = list(getattr(client, "last_warnings", []) or [])
+    if not warnings:
+        return payload
+    notes = list(payload.get("notes") or [])
+    notes.extend(f"warcraft logs returned partial errors: {w.get('message', '')}" for w in warnings if isinstance(w, dict))
+    return {**payload, "notes": notes, "graphql_warnings": warnings}
+
+
 def _fail(ctx: typer.Context, code: str, message: str, *, status: int = 1) -> None:
     _emit(ctx, {"ok": False, "error": {"code": code, "message": message}}, err=True)
     raise typer.Exit(status)
@@ -3932,20 +3941,23 @@ def guild_attendance(
         client.close()
     _emit(
         ctx,
-        {
-            "ok": True,
-            "provider": "warcraftlogs",
-            "query": {
-                "region": region,
-                "realm": realm,
-                "name": name,
-                "guild_tag_id": guild_tag_id,
-                "limit": limit,
-                "page": page,
-                "zone_id": zone_id,
+        _with_warnings(
+            {
+                "ok": True,
+                "provider": "warcraftlogs",
+                "query": {
+                    "region": region,
+                    "realm": realm,
+                    "name": name,
+                    "guild_tag_id": guild_tag_id,
+                    "limit": limit,
+                    "page": page,
+                    "zone_id": zone_id,
+                },
+                "guild_attendance": _guild_attendance_payload(payload),
             },
-            "guild_attendance": _guild_attendance_payload(payload),
-        },
+            client,
+        ),
     )
 
 
@@ -4002,22 +4014,25 @@ def character_rankings(
         client.close()
     _emit(
         ctx,
-        {
-            "ok": True,
-            "provider": "warcraftlogs",
-            "query": {
-                "region": region,
-                "realm": realm,
-                "name": name,
-                "zone_id": zone_id,
-                "difficulty": difficulty,
-                "metric": metric,
-                "size": size,
-                "spec_name": spec_name,
-                "top": top,
+        _with_warnings(
+            {
+                "ok": True,
+                "provider": "warcraftlogs",
+                "query": {
+                    "region": region,
+                    "realm": realm,
+                    "name": name,
+                    "zone_id": zone_id,
+                    "difficulty": difficulty,
+                    "metric": metric,
+                    "size": size,
+                    "spec_name": spec_name,
+                    "top": top,
+                },
+                "character_rankings": _character_rankings_payload(payload, top=top),
             },
-            "character_rankings": _character_rankings_payload(payload, top=top),
-        },
+            client,
+        ),
     )
 
 
