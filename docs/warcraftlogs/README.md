@@ -422,14 +422,11 @@ Confirmed from `UserData` and `User`:
   - claimed characters
 
 Important scope boundary:
-- several fields explicitly require user authentication with the `view-user-profile` scope
-- examples include:
-  - `Guild.currentUserRank`
-  - user guilds
-  - user characters
-  - some claimed/private character data
-- private/guild-stealth reports also require this scope; without it `userData.currentUser` resolves to null and `reportData.report(...)` returns "permission denied" even when the authenticated user can see the report in their browser
-- `warcraftlogs auth login` and `warcraftlogs auth pkce-login` accept `--scope view-user-profile` and that flag is required for any workflow that needs private-report visibility
+- Warcraft Logs distinguishes two user-facing OAuth scopes that the CLI cares about:
+  - `view-user-profile`: required for `userData.currentUser` and any field that depends on the authenticated user identity (`Guild.currentUserRank`, user guilds, claimed characters, etc.); without it the user endpoint resolves `currentUser` to `null`
+  - `view-private-reports`: additionally required for `reportData.report(...)` on any private or guild-stealth report; without it the user endpoint returns `"The user did not grant your application permission to view this report."` even when the authenticated user can see the report in their browser
+- both `warcraftlogs auth login` and `warcraftlogs auth pkce-login` accept repeated `--scope` flags. For full private-report access pass both: `--scope view-user-profile --scope view-private-reports`
+- WCL does not echo the granted scope set in the OAuth token response (`token.scope` is `null`); the CLI parses the granted scopes out of the JWT body's `scopes` claim instead, and surfaces a separate warning when `view-private-reports` is missing
 - once a user token is saved, the CLI routes every GraphQL call through `/api/v2/user`; before that, calls go to `/api/v2/client` with client credentials and only see public data
 
 ### Race and Live Competition Surface
