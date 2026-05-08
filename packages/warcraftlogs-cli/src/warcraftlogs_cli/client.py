@@ -176,6 +176,44 @@ query Encounter($id: Int!) {
 """
 
 _GRAPHQL_ENUM_LITERAL_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+GRAPHQL_WARNINGS_KEY = "__warcraftlogs_warnings__"
+
+
+def _prune_null_variables(variables: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(variables, dict):
+        return {}
+    return {key: value for key, value in variables.items() if value is not None}
+
+
+def _normalize_graphql_error(error: Any) -> dict[str, Any]:
+    if not isinstance(error, dict):
+        return {"message": str(error)}
+    payload: dict[str, Any] = {}
+    message = error.get("message")
+    if isinstance(message, str):
+        payload["message"] = message
+    path = error.get("path")
+    if isinstance(path, list):
+        payload["path"] = list(path)
+    locations = error.get("locations")
+    if isinstance(locations, list):
+        payload["locations"] = list(locations)
+    extensions = error.get("extensions")
+    if isinstance(extensions, dict):
+        payload["extensions"] = dict(extensions)
+    return payload
+
+
+def _response_has_useful_value(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, dict):
+        return any(_response_has_useful_value(item) for item in value.values())
+    if isinstance(value, list):
+        if not value:
+            return True
+        return any(_response_has_useful_value(item) for item in value)
+    return True
 
 def _encounter_rankings_request(*, encounter_id: int, options: EncounterRankingsOptions) -> tuple[str, dict[str, Any]]:
     variables: dict[str, Any] = {"id": encounter_id}
@@ -463,7 +501,6 @@ query GuildAttendance($name: String!, $serverSlug: String!, $serverRegion: Strin
           zone {
             id
             name
-            frozen
           }
           players {
             name
@@ -1172,6 +1209,7 @@ class WarcraftLogsClient:
         self._guild_ttl = guild_ttl
         self._static_ttl = static_ttl
         self._report_ttl = report_ttl
+        self._last_warnings: list[dict[str, Any]] = []
 
     def close(self) -> None:
         if self._http_client is not None:
@@ -1196,7 +1234,11 @@ class WarcraftLogsClient:
     def _read_cache(self, key: str) -> Any | None:
         if self._cache_store is None:
             return None
-        return self._cache_store.get(key)
+        cached = self._cache_store.get(key)
+        if isinstance(cached, dict):
+            warnings = cached.get(GRAPHQL_WARNINGS_KEY)
+            self._last_warnings = list(warnings) if isinstance(warnings, list) else []
+        return cached
 
     def _write_cache(self, key: str, payload: Any, *, ttl_seconds: int) -> None:
         if self._cache_store is None:
@@ -1323,6 +1365,10 @@ class WarcraftLogsClient:
         return self._site
 
     @property
+    def last_warnings(self) -> list[dict[str, Any]]:
+        return list(self._last_warnings)
+
+    @property
     def client_id(self) -> str:
         return self._client_id
 
@@ -1384,11 +1430,12 @@ class WarcraftLogsClient:
         ttl_seconds: int,
         use_cache: bool = True,
     ) -> dict[str, Any]:
+        request_variables = _prune_null_variables(variables)
         cache_payload = {
             "endpoint": "user",
             "operation_name": operation_name,
             "query": query,
-            "variables": variables or {},
+            "variables": request_variables,
         }
         cache_key = self._cache_key(namespace, cache_payload)
         if use_cache:
@@ -1407,20 +1454,10 @@ class WarcraftLogsClient:
             json={
                 "operationName": operation_name,
                 "query": query,
-                "variables": variables or {},
+                "variables": request_variables,
             },
         )
-        payload = response.json()
-        if not isinstance(payload, dict):
-            raise WarcraftLogsClientError("invalid_response", f"Unexpected Warcraft Logs user response shape for {operation_name}.")
-        errors = payload.get("errors")
-        if isinstance(errors, list) and errors:
-            first = errors[0]
-            message = first.get("message") if isinstance(first, dict) else None
-            raise WarcraftLogsClientError("graphql_error", message or f"Warcraft Logs returned GraphQL errors for {operation_name}.")
-        data = payload.get("data")
-        if not isinstance(data, dict):
-            raise WarcraftLogsClientError("invalid_response", f"Warcraft Logs returned no user data for {operation_name}.")
+        data = self._consume_graphql_response(response.json(), operation_name=operation_name, endpoint="user")
         if use_cache:
             self._write_cache(cache_key, data, ttl_seconds=ttl_seconds)
         return data
@@ -1458,6 +1495,44 @@ class WarcraftLogsClient:
             raise WarcraftLogsClientError("not_found", "Warcraft Logs did not return the current user for the saved token.")
         return current_user
 
+    def _consume_graphql_response(
+        self,
+        payload: Any,
+        *,
+        operation_name: str,
+        endpoint: str,
+    ) -> dict[str, Any]:
+        if not isinstance(payload, dict):
+            label = "user " if endpoint == "user" else ""
+            raise WarcraftLogsClientError(
+                "invalid_response",
+                f"Unexpected Warcraft Logs {label}response shape for {operation_name}.",
+            )
+        errors = payload.get("errors")
+        data = payload.get("data")
+        has_data_dict = isinstance(data, dict) and bool(data)
+        has_useful_data = has_data_dict and _response_has_useful_value(data)
+        has_errors = isinstance(errors, list) and bool(errors)
+        if has_errors and not has_useful_data:
+            first = errors[0]
+            message = first.get("message") if isinstance(first, dict) else None
+            raise WarcraftLogsClientError(
+                "graphql_error",
+                message or f"Warcraft Logs returned GraphQL errors for {operation_name}.",
+            )
+        if not has_data_dict:
+            label = "user " if endpoint == "user" else ""
+            raise WarcraftLogsClientError(
+                "invalid_response",
+                f"Warcraft Logs returned no {label}data for {operation_name}.",
+            )
+        if has_errors:
+            warnings = [_normalize_graphql_error(error) for error in errors]
+            self._last_warnings = warnings
+            return {**data, GRAPHQL_WARNINGS_KEY: warnings}
+        self._last_warnings = []
+        return data
+
     def _graphql(
         self,
         *,
@@ -1478,11 +1553,12 @@ class WarcraftLogsClient:
                 ttl_seconds=ttl_seconds,
                 use_cache=use_cache,
             )
+        request_variables = _prune_null_variables(variables)
         cache_payload = {
             "endpoint": "client",
             "operation_name": operation_name,
             "query": query,
-            "variables": variables or {},
+            "variables": request_variables,
         }
         cache_key = self._cache_key(namespace, cache_payload)
         if use_cache:
@@ -1501,20 +1577,10 @@ class WarcraftLogsClient:
             json={
                 "operationName": operation_name,
                 "query": query,
-                "variables": variables or {},
+                "variables": request_variables,
             },
         )
-        payload = response.json()
-        if not isinstance(payload, dict):
-            raise WarcraftLogsClientError("invalid_response", f"Unexpected Warcraft Logs response shape for {operation_name}.")
-        errors = payload.get("errors")
-        if isinstance(errors, list) and errors:
-            first = errors[0]
-            message = first.get("message") if isinstance(first, dict) else None
-            raise WarcraftLogsClientError("graphql_error", message or f"Warcraft Logs returned GraphQL errors for {operation_name}.")
-        data = payload.get("data")
-        if not isinstance(data, dict):
-            raise WarcraftLogsClientError("invalid_response", f"Warcraft Logs returned no data for {operation_name}.")
+        data = self._consume_graphql_response(response.json(), operation_name=operation_name, endpoint="client")
         if use_cache:
             self._write_cache(cache_key, data, ttl_seconds=ttl_seconds)
         return data

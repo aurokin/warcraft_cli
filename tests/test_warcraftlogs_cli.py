@@ -17,10 +17,12 @@ import pytest
 from typer.testing import CliRunner
 from warcraftlogs_cli.client import (
     EncounterRankingsOptions,
+    GRAPHQL_WARNINGS_KEY,
     RETAIL_PROFILE,
     WarcraftLogsClient,
     WarcraftLogsClientError,
     _encounter_rankings_request,
+    _prune_null_variables,
     load_warcraftlogs_auth_config,
 )
 from warcraftlogs_cli.main import app as warcraftlogs_app
@@ -3566,6 +3568,116 @@ def test_warcraftlogs_character_rankings_surfaces_provider_permission_errors(mon
     assert payload["character_rankings"]["rankings"] == []
 
 
+def test_warcraftlogs_guild_attendance_surfaces_partial_warnings_as_notes(monkeypatch) -> None:
+    class _WarningClient(_FakeWarcraftLogsClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.last_warnings = [{"message": "Cannot return null for non-nullable field Zone.frozen"}]
+
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _WarningClient())
+
+    result = runner.invoke(
+        warcraftlogs_app,
+        [
+            "guild-attendance",
+            "us",
+            "illidan",
+            "Liquid",
+            "--guild-tag-id",
+            "5",
+            "--limit",
+            "2",
+            "--zone-id",
+            "38",
+        ],
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["graphql_warnings"][0]["message"].startswith("Cannot return null")
+    assert any("partial errors" in note for note in payload["notes"])
+
+
+def test_warcraftlogs_emit_helper_folds_client_warnings_into_payload() -> None:
+    from warcraftlogs_cli import main as wcl_main
+
+    class _WarningClient:
+        last_warnings = [{"message": "internal server error", "path": ["report", "table"]}]
+
+    captured: dict[str, object] = {}
+    original_emit = wcl_main.emit
+
+    def _capture(payload, *, pretty=False, err=False):
+        captured["payload"] = payload
+
+    wcl_main.emit = _capture
+    try:
+        ctx = type("Ctx", (), {"obj": wcl_main.RuntimeConfig()})()
+        wcl_main._emit(ctx, {"ok": True, "kind": "x"}, client=_WarningClient())
+    finally:
+        wcl_main.emit = original_emit
+
+    payload = captured["payload"]
+    assert payload["ok"] is True
+    assert payload["graphql_warnings"][0]["message"] == "internal server error"
+    assert any("partial errors" in note for note in payload["notes"])
+
+
+def test_warcraftlogs_emit_helper_passes_payload_through_when_no_warnings() -> None:
+    from warcraftlogs_cli import main as wcl_main
+
+    class _CleanClient:
+        last_warnings: list[dict] = []
+
+    captured: dict[str, object] = {}
+    original_emit = wcl_main.emit
+
+    def _capture(payload, *, pretty=False, err=False):
+        captured["payload"] = payload
+
+    wcl_main.emit = _capture
+    try:
+        ctx = type("Ctx", (), {"obj": wcl_main.RuntimeConfig()})()
+        wcl_main._emit(ctx, {"ok": True, "kind": "x"}, client=_CleanClient())
+    finally:
+        wcl_main.emit = original_emit
+
+    payload = captured["payload"]
+    assert payload == {"ok": True, "kind": "x"}
+
+
+def test_warcraftlogs_character_rankings_surfaces_partial_warnings_as_notes(monkeypatch) -> None:
+    class _WarningClient(_FakeWarcraftLogsClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.last_warnings = [{"message": "Internal server error on rankings"}]
+
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _WarningClient())
+
+    result = runner.invoke(
+        warcraftlogs_app,
+        [
+            "character-rankings",
+            "us",
+            "illidan",
+            "Roguecane",
+            "--zone-id",
+            "38",
+            "--difficulty",
+            "5",
+            "--metric",
+            "dps",
+            "--size",
+            "20",
+            "--spec-name",
+            "assassination",
+        ],
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["graphql_warnings"][0]["message"] == "Internal server error on rankings"
+    assert any("partial errors" in note for note in payload["notes"])
+
+
 def test_warcraftlogs_auth_prefers_local_env_before_xdg_provider_env(monkeypatch, tmp_path) -> None:
     repo_env = tmp_path / ".env.local"
     repo_env.write_text("WARCRAFTLOGS_CLIENT_ID=repo-id\nWARCRAFTLOGS_CLIENT_SECRET=repo-secret\n")
@@ -3987,6 +4099,250 @@ def test_warcraftlogs_client_graphql_routes_through_user_endpoint_when_authentic
     assert captured["namespace"] == "ns"
     assert captured["ttl_seconds"] == 42
     assert captured["use_cache"] is True
+
+
+def test_warcraftlogs_client_prune_null_variables_drops_none_values() -> None:
+    assert _prune_null_variables({"a": 1, "b": None, "c": "x", "d": None}) == {"a": 1, "c": "x"}
+    assert _prune_null_variables(None) == {}
+    assert _prune_null_variables({}) == {}
+
+
+def test_warcraftlogs_client_graphql_omits_null_variables_in_request_body(monkeypatch) -> None:
+    monkeypatch.setattr("warcraftlogs_cli.client.load_provider_auth_state", lambda provider: None)
+    client = WarcraftLogsClient.__new__(WarcraftLogsClient)
+    client._site = RETAIL_PROFILE
+    client._cache_store = None
+    client._retry_attempts = 1
+    client._http_client = None
+    client._timeout_seconds = 5.0
+    client._access_token = "client-token"
+    client._token_expires_at = time.time() + 3600
+
+    captured: dict[str, object] = {}
+
+    class _Resp:
+        def json(self) -> dict[str, object]:
+            return {"data": {"ok": True}}
+
+    def _fake_request(http_client, url, **kwargs):
+        captured["json"] = kwargs.get("json")
+        return _Resp()
+
+    monkeypatch.setattr("warcraftlogs_cli.client.request_with_retries", _fake_request)
+
+    client._graphql(
+        operation_name="OpName",
+        query="query Q($a:Int,$b:String){x}",
+        variables={"a": 1, "b": None, "c": "value"},
+        namespace="ns",
+        ttl_seconds=42,
+    )
+
+    sent_vars = captured["json"]["variables"]
+    assert sent_vars == {"a": 1, "c": "value"}
+    assert "b" not in sent_vars
+
+
+def test_warcraftlogs_client_graphql_returns_data_with_warnings_on_partial_errors(monkeypatch) -> None:
+    monkeypatch.setattr("warcraftlogs_cli.client.load_provider_auth_state", lambda provider: None)
+    client = WarcraftLogsClient.__new__(WarcraftLogsClient)
+    client._site = RETAIL_PROFILE
+    client._cache_store = None
+    client._retry_attempts = 1
+    client._http_client = None
+    client._timeout_seconds = 5.0
+    client._access_token = "client-token"
+    client._token_expires_at = time.time() + 3600
+
+    class _Resp:
+        def json(self) -> dict[str, object]:
+            return {
+                "data": {"guildData": {"guild": {"id": 1031, "name": "gn"}}},
+                "errors": [
+                    {
+                        "message": "Internal server error",
+                        "path": ["guildData", "guild", "attendance", "data", 0, "zone", "frozen"],
+                        "locations": [{"line": 1, "column": 256}],
+                    }
+                ],
+            }
+
+    monkeypatch.setattr("warcraftlogs_cli.client.request_with_retries", lambda *a, **k: _Resp())
+
+    payload = client._graphql(
+        operation_name="OpName",
+        query="query Q { x }",
+        variables=None,
+        namespace="ns",
+        ttl_seconds=42,
+    )
+
+    assert payload["guildData"]["guild"]["id"] == 1031
+    warnings = payload[GRAPHQL_WARNINGS_KEY]
+    assert isinstance(warnings, list) and len(warnings) == 1
+    assert warnings[0]["message"] == "Internal server error"
+    assert warnings[0]["path"] == ["guildData", "guild", "attendance", "data", 0, "zone", "frozen"]
+
+
+def test_warcraftlogs_client_graphql_raises_when_errors_and_no_data(monkeypatch) -> None:
+    monkeypatch.setattr("warcraftlogs_cli.client.load_provider_auth_state", lambda provider: None)
+    client = WarcraftLogsClient.__new__(WarcraftLogsClient)
+    client._site = RETAIL_PROFILE
+    client._cache_store = None
+    client._retry_attempts = 1
+    client._http_client = None
+    client._timeout_seconds = 5.0
+    client._access_token = "client-token"
+    client._token_expires_at = time.time() + 3600
+
+    class _Resp:
+        def json(self) -> dict[str, object]:
+            return {
+                "data": None,
+                "errors": [{"message": "GraphQL syntax error"}],
+            }
+
+    monkeypatch.setattr("warcraftlogs_cli.client.request_with_retries", lambda *a, **k: _Resp())
+
+    with pytest.raises(WarcraftLogsClientError) as exc_info:
+        client._graphql(
+            operation_name="OpName",
+            query="query Q { x }",
+            variables=None,
+            namespace="ns",
+            ttl_seconds=42,
+        )
+
+    assert exc_info.value.code == "graphql_error"
+    assert "GraphQL syntax error" in exc_info.value.message
+
+
+def test_warcraftlogs_client_graphql_raises_when_errors_and_nested_data_all_null(monkeypatch) -> None:
+    monkeypatch.setattr("warcraftlogs_cli.client.load_provider_auth_state", lambda provider: None)
+    client = WarcraftLogsClient.__new__(WarcraftLogsClient)
+    client._site = RETAIL_PROFILE
+    client._cache_store = None
+    client._retry_attempts = 1
+    client._http_client = None
+    client._timeout_seconds = 5.0
+    client._access_token = "client-token"
+    client._token_expires_at = time.time() + 3600
+
+    class _Resp:
+        def json(self) -> dict[str, object]:
+            return {
+                "data": {"characterData": {"character": None}},
+                "errors": [{"message": "Internal server error"}],
+            }
+
+    monkeypatch.setattr("warcraftlogs_cli.client.request_with_retries", lambda *a, **k: _Resp())
+
+    with pytest.raises(WarcraftLogsClientError) as exc_info:
+        client._graphql(
+            operation_name="OpName",
+            query="query Q { x }",
+            variables=None,
+            namespace="ns",
+            ttl_seconds=42,
+        )
+
+    assert exc_info.value.code == "graphql_error"
+    assert "Internal server error" in exc_info.value.message
+
+
+def test_warcraftlogs_client_graphql_keeps_partial_data_when_only_field_is_empty_list(monkeypatch) -> None:
+    monkeypatch.setattr("warcraftlogs_cli.client.load_provider_auth_state", lambda provider: None)
+    client = WarcraftLogsClient.__new__(WarcraftLogsClient)
+    client._site = RETAIL_PROFILE
+    client._cache_store = None
+    client._retry_attempts = 1
+    client._http_client = None
+    client._timeout_seconds = 5.0
+    client._access_token = "client-token"
+    client._token_expires_at = time.time() + 3600
+
+    class _Resp:
+        def json(self) -> dict[str, object]:
+            return {
+                "data": {"reportData": {"reports": {"data": [], "total": 0}}},
+                "errors": [{"message": "rate limited subselection"}],
+            }
+
+    monkeypatch.setattr("warcraftlogs_cli.client.request_with_retries", lambda *a, **k: _Resp())
+
+    payload = client._graphql(
+        operation_name="OpName",
+        query="query Q { x }",
+        variables=None,
+        namespace="ns",
+        ttl_seconds=42,
+    )
+    assert payload["reportData"]["reports"]["data"] == []
+    assert payload[GRAPHQL_WARNINGS_KEY][0]["message"] == "rate limited subselection"
+
+
+def test_warcraftlogs_client_graphql_keeps_partial_data_when_some_leaves_populated(monkeypatch) -> None:
+    monkeypatch.setattr("warcraftlogs_cli.client.load_provider_auth_state", lambda provider: None)
+    client = WarcraftLogsClient.__new__(WarcraftLogsClient)
+    client._site = RETAIL_PROFILE
+    client._cache_store = None
+    client._retry_attempts = 1
+    client._http_client = None
+    client._timeout_seconds = 5.0
+    client._access_token = "client-token"
+    client._token_expires_at = time.time() + 3600
+
+    class _Resp:
+        def json(self) -> dict[str, object]:
+            return {
+                "data": {"characterData": {"character": {"id": 77, "encounterRankings": None}}},
+                "errors": [{"message": "rankings unavailable"}],
+            }
+
+    monkeypatch.setattr("warcraftlogs_cli.client.request_with_retries", lambda *a, **k: _Resp())
+
+    payload = client._graphql(
+        operation_name="OpName",
+        query="query Q { x }",
+        variables=None,
+        namespace="ns",
+        ttl_seconds=42,
+    )
+    assert payload["characterData"]["character"]["id"] == 77
+    assert payload[GRAPHQL_WARNINGS_KEY][0]["message"] == "rankings unavailable"
+
+
+def test_warcraftlogs_client_graphql_raises_when_errors_and_data_fields_all_null(monkeypatch) -> None:
+    monkeypatch.setattr("warcraftlogs_cli.client.load_provider_auth_state", lambda provider: None)
+    client = WarcraftLogsClient.__new__(WarcraftLogsClient)
+    client._site = RETAIL_PROFILE
+    client._cache_store = None
+    client._retry_attempts = 1
+    client._http_client = None
+    client._timeout_seconds = 5.0
+    client._access_token = "client-token"
+    client._token_expires_at = time.time() + 3600
+
+    class _Resp:
+        def json(self) -> dict[str, object]:
+            return {
+                "data": {"characterData": None},
+                "errors": [{"message": "Internal server error"}],
+            }
+
+    monkeypatch.setattr("warcraftlogs_cli.client.request_with_retries", lambda *a, **k: _Resp())
+
+    with pytest.raises(WarcraftLogsClientError) as exc_info:
+        client._graphql(
+            operation_name="OpName",
+            query="query Q { x }",
+            variables=None,
+            namespace="ns",
+            ttl_seconds=42,
+        )
+
+    assert exc_info.value.code == "graphql_error"
+    assert "Internal server error" in exc_info.value.message
 
 
 def test_warcraftlogs_client_graphql_uses_client_endpoint_without_user_token(monkeypatch) -> None:
