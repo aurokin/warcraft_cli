@@ -1498,16 +1498,17 @@ class WarcraftLogsClient:
             )
         errors = payload.get("errors")
         data = payload.get("data")
-        has_data = isinstance(data, dict) and bool(data)
+        has_data_dict = isinstance(data, dict) and bool(data)
+        has_useful_data = has_data_dict and any(value is not None for value in data.values())
         has_errors = isinstance(errors, list) and bool(errors)
-        if has_errors and not has_data:
+        if has_errors and not has_useful_data:
             first = errors[0]
             message = first.get("message") if isinstance(first, dict) else None
             raise WarcraftLogsClientError(
                 "graphql_error",
                 message or f"Warcraft Logs returned GraphQL errors for {operation_name}.",
             )
-        if not has_data:
+        if not has_data_dict:
             label = "user " if endpoint == "user" else ""
             raise WarcraftLogsClientError(
                 "invalid_response",
