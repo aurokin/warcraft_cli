@@ -210,6 +210,8 @@ def _response_has_useful_value(value: Any) -> bool:
     if isinstance(value, dict):
         return any(_response_has_useful_value(item) for item in value.values())
     if isinstance(value, list):
+        if not value:
+            return True
         return any(_response_has_useful_value(item) for item in value)
     return True
 
