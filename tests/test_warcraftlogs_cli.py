@@ -4217,6 +4217,70 @@ def test_warcraftlogs_client_graphql_raises_when_errors_and_no_data(monkeypatch)
     assert "GraphQL syntax error" in exc_info.value.message
 
 
+def test_warcraftlogs_client_graphql_raises_when_errors_and_nested_data_all_null(monkeypatch) -> None:
+    monkeypatch.setattr("warcraftlogs_cli.client.load_provider_auth_state", lambda provider: None)
+    client = WarcraftLogsClient.__new__(WarcraftLogsClient)
+    client._site = RETAIL_PROFILE
+    client._cache_store = None
+    client._retry_attempts = 1
+    client._http_client = None
+    client._timeout_seconds = 5.0
+    client._access_token = "client-token"
+    client._token_expires_at = time.time() + 3600
+
+    class _Resp:
+        def json(self) -> dict[str, object]:
+            return {
+                "data": {"characterData": {"character": None}},
+                "errors": [{"message": "Internal server error"}],
+            }
+
+    monkeypatch.setattr("warcraftlogs_cli.client.request_with_retries", lambda *a, **k: _Resp())
+
+    with pytest.raises(WarcraftLogsClientError) as exc_info:
+        client._graphql(
+            operation_name="OpName",
+            query="query Q { x }",
+            variables=None,
+            namespace="ns",
+            ttl_seconds=42,
+        )
+
+    assert exc_info.value.code == "graphql_error"
+    assert "Internal server error" in exc_info.value.message
+
+
+def test_warcraftlogs_client_graphql_keeps_partial_data_when_some_leaves_populated(monkeypatch) -> None:
+    monkeypatch.setattr("warcraftlogs_cli.client.load_provider_auth_state", lambda provider: None)
+    client = WarcraftLogsClient.__new__(WarcraftLogsClient)
+    client._site = RETAIL_PROFILE
+    client._cache_store = None
+    client._retry_attempts = 1
+    client._http_client = None
+    client._timeout_seconds = 5.0
+    client._access_token = "client-token"
+    client._token_expires_at = time.time() + 3600
+
+    class _Resp:
+        def json(self) -> dict[str, object]:
+            return {
+                "data": {"characterData": {"character": {"id": 77, "encounterRankings": None}}},
+                "errors": [{"message": "rankings unavailable"}],
+            }
+
+    monkeypatch.setattr("warcraftlogs_cli.client.request_with_retries", lambda *a, **k: _Resp())
+
+    payload = client._graphql(
+        operation_name="OpName",
+        query="query Q { x }",
+        variables=None,
+        namespace="ns",
+        ttl_seconds=42,
+    )
+    assert payload["characterData"]["character"]["id"] == 77
+    assert payload[GRAPHQL_WARNINGS_KEY][0]["message"] == "rankings unavailable"
+
+
 def test_warcraftlogs_client_graphql_raises_when_errors_and_data_fields_all_null(monkeypatch) -> None:
     monkeypatch.setattr("warcraftlogs_cli.client.load_provider_auth_state", lambda provider: None)
     client = WarcraftLogsClient.__new__(WarcraftLogsClient)

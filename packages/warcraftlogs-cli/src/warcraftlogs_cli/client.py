@@ -203,6 +203,16 @@ def _normalize_graphql_error(error: Any) -> dict[str, Any]:
         payload["extensions"] = dict(extensions)
     return payload
 
+
+def _response_has_useful_value(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, dict):
+        return any(_response_has_useful_value(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_response_has_useful_value(item) for item in value)
+    return True
+
 def _encounter_rankings_request(*, encounter_id: int, options: EncounterRankingsOptions) -> tuple[str, dict[str, Any]]:
     variables: dict[str, Any] = {"id": encounter_id}
     optional_variable_lines: list[str] = []
@@ -1499,7 +1509,7 @@ class WarcraftLogsClient:
         errors = payload.get("errors")
         data = payload.get("data")
         has_data_dict = isinstance(data, dict) and bool(data)
-        has_useful_data = has_data_dict and any(value is not None for value in data.values())
+        has_useful_data = has_data_dict and _response_has_useful_value(data)
         has_errors = isinstance(errors, list) and bool(errors)
         if has_errors and not has_useful_data:
             first = errors[0]
