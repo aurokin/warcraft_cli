@@ -75,7 +75,9 @@ def _cfg(ctx: typer.Context) -> RuntimeConfig:
     return RuntimeConfig()
 
 
-def _emit(ctx: typer.Context, payload: dict[str, Any], *, err: bool = False) -> None:
+def _emit(ctx: typer.Context, payload: dict[str, Any], *, err: bool = False, client: Any = None) -> None:
+    if client is not None:
+        payload = _with_warnings(payload, client)
     emit(payload, pretty=_cfg(ctx).pretty, err=err)
 
 
@@ -3378,6 +3380,7 @@ def auth_login(
                 "requested_scopes": scopes,
                 "state_path": str(saved_path),
             },
+            client=client,
         )
         return
 
@@ -3430,6 +3433,7 @@ def auth_login(
             },
             "scope_warning": scopes["warning"],
         },
+        client=client,
     )
 
 
@@ -3484,6 +3488,7 @@ def auth_pkce_login(
                 "requested_scopes": scopes,
                 "state_path": str(saved_path),
             },
+            client=client,
         )
         return
 
@@ -3539,6 +3544,7 @@ def auth_pkce_login(
             },
             "scope_warning": scopes["warning"],
         },
+        client=client,
     )
 
 
@@ -3580,6 +3586,7 @@ def auth_whoami(ctx: typer.Context) -> None:
                 "avatar": payload.get("avatar"),
             },
         },
+        client=client,
     )
 
 
@@ -3604,6 +3611,7 @@ def rate_limit(ctx: typer.Context) -> None:
                 "points_reset_in": payload.get("pointsResetIn"),
             },
         },
+        client=client,
     )
 
 
@@ -3618,7 +3626,7 @@ def regions(ctx: typer.Context) -> None:
     finally:
         client.close()
     regions_payload = [_region_payload(region) for region in rows]
-    _emit(ctx, {"ok": True, "provider": "warcraftlogs", "count": len(regions_payload), "regions": regions_payload})
+    _emit(ctx, {"ok": True, "provider": "warcraftlogs", "count": len(regions_payload), "regions": regions_payload}, client=client)
 
 
 @app.command("expansions")
@@ -3632,7 +3640,7 @@ def expansions(ctx: typer.Context) -> None:
     finally:
         client.close()
     expansions_payload = [_expansion_payload(row) for row in rows]
-    _emit(ctx, {"ok": True, "provider": "warcraftlogs", "count": len(expansions_payload), "expansions": expansions_payload})
+    _emit(ctx, {"ok": True, "provider": "warcraftlogs", "count": len(expansions_payload), "expansions": expansions_payload}, client=client)
 
 
 @app.command("server")
@@ -3649,7 +3657,7 @@ def server(
         return
     finally:
         client.close()
-    _emit(ctx, {"ok": True, "provider": "warcraftlogs", "server": _server_payload(payload)})
+    _emit(ctx, {"ok": True, "provider": "warcraftlogs", "server": _server_payload(payload)}, client=client)
 
 
 @app.command("zones")
@@ -3675,6 +3683,7 @@ def zones(
             "count": len(zones_payload),
             "zones": zones_payload,
         },
+        client=client,
     )
 
 
@@ -3688,7 +3697,7 @@ def zone(ctx: typer.Context, zone_id: int) -> None:
         return
     finally:
         client.close()
-    _emit(ctx, {"ok": True, "provider": "warcraftlogs", "zone": _zone_payload(payload)})
+    _emit(ctx, {"ok": True, "provider": "warcraftlogs", "zone": _zone_payload(payload)}, client=client)
 
 
 @app.command("encounter")
@@ -3717,6 +3726,7 @@ def encounter(ctx: typer.Context, encounter_id: int) -> None:
                 source="encounter",
             ),
         },
+        client=client,
     )
 
 
@@ -3822,6 +3832,7 @@ def encounter_rankings(
             },
             top=top,
         ),
+        client=client,
     )
 
 
@@ -3849,6 +3860,7 @@ def guild(
             "query": {"region": region, "realm": realm, "name": name, "zone_id": zone_id},
             "guild": _guild_payload(payload),
         },
+        client=client,
     )
 
 
@@ -3878,6 +3890,7 @@ def guild_rankings(
             "query": {"region": region, "realm": realm, "name": name, "zone_id": zone_id, "size": size, "difficulty": difficulty},
             "guild_rankings": _guild_rankings_payload(payload),
         },
+        client=client,
     )
 
 
@@ -3909,6 +3922,7 @@ def guild_members(
                 "Guild roster queries only work for games where Warcraft Logs can verify guild membership.",
             ],
         },
+        client=client,
     )
 
 
@@ -3941,23 +3955,21 @@ def guild_attendance(
         client.close()
     _emit(
         ctx,
-        _with_warnings(
-            {
-                "ok": True,
-                "provider": "warcraftlogs",
-                "query": {
-                    "region": region,
-                    "realm": realm,
-                    "name": name,
-                    "guild_tag_id": guild_tag_id,
-                    "limit": limit,
-                    "page": page,
-                    "zone_id": zone_id,
-                },
-                "guild_attendance": _guild_attendance_payload(payload),
+        {
+            "ok": True,
+            "provider": "warcraftlogs",
+            "query": {
+                "region": region,
+                "realm": realm,
+                "name": name,
+                "guild_tag_id": guild_tag_id,
+                "limit": limit,
+                "page": page,
+                "zone_id": zone_id,
             },
-            client,
-        ),
+            "guild_attendance": _guild_attendance_payload(payload),
+        },
+        client=client,
     )
 
 
@@ -3979,6 +3991,7 @@ def character(ctx: typer.Context, region: str, realm: str, name: str) -> None:
             "query": {"region": region, "realm": realm, "name": name},
             "character": _character_payload(payload),
         },
+        client=client,
     )
 
 
@@ -4014,25 +4027,23 @@ def character_rankings(
         client.close()
     _emit(
         ctx,
-        _with_warnings(
-            {
-                "ok": True,
-                "provider": "warcraftlogs",
-                "query": {
-                    "region": region,
-                    "realm": realm,
-                    "name": name,
-                    "zone_id": zone_id,
-                    "difficulty": difficulty,
-                    "metric": metric,
-                    "size": size,
-                    "spec_name": spec_name,
-                    "top": top,
-                },
-                "character_rankings": _character_rankings_payload(payload, top=top),
+        {
+            "ok": True,
+            "provider": "warcraftlogs",
+            "query": {
+                "region": region,
+                "realm": realm,
+                "name": name,
+                "zone_id": zone_id,
+                "difficulty": difficulty,
+                "metric": metric,
+                "size": size,
+                "spec_name": spec_name,
+                "top": top,
             },
-            client,
-        ),
+            "character_rankings": _character_rankings_payload(payload, top=top),
+        },
+        client=client,
     )
 
 
@@ -4057,6 +4068,7 @@ def report(
             "provider": "warcraftlogs",
             "report": _report_payload(payload),
         },
+        client=client,
     )
 
 
@@ -4111,6 +4123,7 @@ def reports(
             "count": len(report_payload["reports"]),
             **report_payload,
         },
+        client=client,
     )
 
 
@@ -4166,6 +4179,7 @@ def guild_reports(
             "count": len(report_payload["reports"]),
             **report_payload,
         },
+        client=client,
     )
 
 
@@ -4284,6 +4298,7 @@ def boss_kills(
             ),
             top=top,
         ),
+        client=client,
     )
 
 
@@ -4360,6 +4375,7 @@ def top_kills(
             ),
             top=top,
         ),
+        client=client,
     )
 
 
@@ -4455,6 +4471,7 @@ def boss_spec_usage(
             ),
             top=top,
         ),
+        client=client,
     )
 
 
@@ -4536,6 +4553,7 @@ def ability_usage_summary(
             preview_limit=preview_limit,
             event_limit=event_limit,
         ),
+        client=client,
     )
 
 
@@ -4611,6 +4629,7 @@ def comp_samples(
             ),
             top=top,
         ),
+        client=client,
     )
 
 
@@ -4643,6 +4662,7 @@ def report_encounter(
             "kind": "report_encounter",
             **_encounter_summary_payload(ref=ref, report=report, fight=fight, encounter=encounter),
         },
+        client=client,
     )
 
 
@@ -4697,6 +4717,7 @@ def report_encounter_players(
                 fight_id=fight.get("id") if isinstance(fight.get("id"), int) else None,
             ),
         },
+        client=client,
     )
 
 
@@ -4784,6 +4805,7 @@ def report_player_talents(
             "talent_transport_packet": transport_packet,
             "written_packet_path": written_packet_path,
         },
+        client=client,
     )
 
 
@@ -4856,6 +4878,7 @@ def report_encounter_casts(
                 preview_limit=preview_limit,
             ),
         },
+        client=client,
     )
 
 
@@ -4916,6 +4939,7 @@ def report_encounter_buffs(
             **_encounter_summary_payload(ref=ref, report=report, fight=fight, encounter=encounter),
             **_report_json_payload(payload, field="table"),
         },
+        client=client,
     )
 
 
@@ -4981,6 +5005,7 @@ def report_encounter_aura_summary(
                 ability_id=ability_id,
             ),
         },
+        client=client,
     )
 
 
@@ -5103,6 +5128,7 @@ def report_encounter_aura_compare(
                 ),
             },
         },
+        client=client,
     )
 
 
@@ -5167,6 +5193,7 @@ def report_encounter_damage_source_summary(
                 master_report=master_report,
             ),
         },
+        client=client,
     )
 
 
@@ -5231,6 +5258,7 @@ def report_encounter_damage_target_summary(
                 master_report=master_report,
             ),
         },
+        client=client,
     )
 
 
@@ -5291,6 +5319,7 @@ def report_encounter_damage_breakdown(
             **_encounter_summary_payload(ref=ref, report=report, fight=fight, encounter=encounter),
             **_report_json_payload(payload, field="table"),
         },
+        client=client,
     )
 
 
@@ -5366,6 +5395,7 @@ def kill_time_distribution(
             ),
             bucket_seconds=bucket_seconds,
         ),
+        client=client,
     )
 
 
@@ -5395,6 +5425,7 @@ def report_fights(
             "count": len(fights),
             "fights": [_fight_payload(fight) for fight in fights if isinstance(fight, dict)],
         },
+        client=client,
     )
 
 
@@ -5486,7 +5517,7 @@ def report_events(
     }
     if notes:
         emitted["notes"] = notes
-    _emit(ctx, emitted)
+    _emit(ctx, emitted, client=client)
 
 
 @app.command("report-table")
@@ -5566,6 +5597,7 @@ def report_table(
             ),
             **result_payload,
         },
+        client=client,
     )
 
 
@@ -5646,6 +5678,7 @@ def report_graph(
             ),
             **result_payload,
         },
+        client=client,
     )
 
 
@@ -5680,6 +5713,7 @@ def report_master_data(
             "query": {"actor_type": actor_type, "actor_sub_type": actor_sub_type, "translate": translate},
             **_report_master_data_payload(payload),
         },
+        client=client,
     )
 
 
@@ -5741,6 +5775,7 @@ def report_player_details(
                 fight_id=fight_id[0] if fight_id and len(fight_id) == 1 else None,
             ),
         },
+        client=client,
     )
 
 
@@ -5789,6 +5824,7 @@ def report_rankings(
             },
             **_report_rankings_payload(payload),
         },
+        client=client,
     )
 
 

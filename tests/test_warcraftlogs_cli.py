@@ -3597,6 +3597,54 @@ def test_warcraftlogs_guild_attendance_surfaces_partial_warnings_as_notes(monkey
     assert any("partial errors" in note for note in payload["notes"])
 
 
+def test_warcraftlogs_emit_helper_folds_client_warnings_into_payload() -> None:
+    from warcraftlogs_cli import main as wcl_main
+
+    class _WarningClient:
+        last_warnings = [{"message": "internal server error", "path": ["report", "table"]}]
+
+    captured: dict[str, object] = {}
+    original_emit = wcl_main.emit
+
+    def _capture(payload, *, pretty=False, err=False):
+        captured["payload"] = payload
+
+    wcl_main.emit = _capture
+    try:
+        ctx = type("Ctx", (), {"obj": wcl_main.RuntimeConfig()})()
+        wcl_main._emit(ctx, {"ok": True, "kind": "x"}, client=_WarningClient())
+    finally:
+        wcl_main.emit = original_emit
+
+    payload = captured["payload"]
+    assert payload["ok"] is True
+    assert payload["graphql_warnings"][0]["message"] == "internal server error"
+    assert any("partial errors" in note for note in payload["notes"])
+
+
+def test_warcraftlogs_emit_helper_passes_payload_through_when_no_warnings() -> None:
+    from warcraftlogs_cli import main as wcl_main
+
+    class _CleanClient:
+        last_warnings: list[dict] = []
+
+    captured: dict[str, object] = {}
+    original_emit = wcl_main.emit
+
+    def _capture(payload, *, pretty=False, err=False):
+        captured["payload"] = payload
+
+    wcl_main.emit = _capture
+    try:
+        ctx = type("Ctx", (), {"obj": wcl_main.RuntimeConfig()})()
+        wcl_main._emit(ctx, {"ok": True, "kind": "x"}, client=_CleanClient())
+    finally:
+        wcl_main.emit = original_emit
+
+    payload = captured["payload"]
+    assert payload == {"ok": True, "kind": "x"}
+
+
 def test_warcraftlogs_character_rankings_surfaces_partial_warnings_as_notes(monkeypatch) -> None:
     class _WarningClient(_FakeWarcraftLogsClient):
         def __init__(self) -> None:
