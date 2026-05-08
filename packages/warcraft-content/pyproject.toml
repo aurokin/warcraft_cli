@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "warcraft-content-cli"
-version = "0.2.0"
+version = "0.3.0"
 description = "Shared content and storage helpers for the Warcraft CLI monorepo"
 readme = "../../README.md"
 requires-python = ">=3.12"
