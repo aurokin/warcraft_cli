@@ -2,6 +2,8 @@
 
 Warcraft data CLI monorepo.
 
+See [CHANGELOG.md](CHANGELOG.md) for what shipped in each release.
+
 ## Principles
 
 - These CLIs exist to give agents a comprehensive World of Warcraft toolset across guides, reference content, rankings, logs, and local simulation workflows.

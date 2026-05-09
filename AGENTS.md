@@ -48,3 +48,8 @@ Co-Authored-By: OpenAI Codex <noreply@openai.com>
 
 ## Local Skills
 - Use the `warcraft` skill for root wrapper and provider-routing work. See `skills/warcraft/SKILL.md`.
+
+## Releases
+- `CHANGELOG.md` at the repo root is the source of truth for shipped changes.
+- Add user-visible changes (new flags, output shape changes, fixed bugs, removed commands) to `## [Unreleased]` in the same PR that ships them.
+- Release flow lives in `docs/RELEASE.md`. Use `make release VERSION=X.Y.Z` to bump every `pyproject.toml` together.

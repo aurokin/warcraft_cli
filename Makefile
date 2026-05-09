@@ -25,7 +25,7 @@ LIVE_TEST_ENV := \
 	WARCRAFTLOGS_LIVE_TESTS=1 \
 	WARCRAFT_WRAPPER_LIVE_TESTS=1
 
-.PHONY: dev-deploy dev-deploy-no-link worktree-env test test-live fmt-check lint lint-all complexity typecheck coverage deadcode run
+.PHONY: dev-deploy dev-deploy-no-link worktree-env test test-live fmt-check lint lint-all complexity typecheck coverage deadcode run release
 
 dev-deploy:
 	./scripts/dev_deploy.sh
@@ -85,3 +85,18 @@ run:
 		exit 2; \
 	fi
 	$(WOWHEAD) $(ARGS)
+
+release:
+	@if [ -z "$(VERSION)" ]; then \
+		echo 'Usage: make release VERSION=X.Y.Z'; \
+		exit 2; \
+	fi
+	$(PYTHON) scripts/bump_version.py $(VERSION)
+	@echo ""
+	@echo "Next steps:"
+	@echo "  1. Move [Unreleased] content into [$(VERSION)] - $$(date -u +%Y-%m-%d) in CHANGELOG.md"
+	@echo "  2. Update the compare links at the bottom of CHANGELOG.md"
+	@echo "  3. git diff && git add CHANGELOG.md pyproject.toml packages/*/pyproject.toml"
+	@echo "  4. git commit -m 'Release v$(VERSION)' && git push"
+	@echo "  5. git tag v$(VERSION) && git push origin v$(VERSION)"
+	@echo "  6. gh release create v$(VERSION) --notes-file <changelog-section>"

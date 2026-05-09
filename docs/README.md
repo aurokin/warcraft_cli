@@ -18,6 +18,7 @@ Documentation ownership:
 - root docs:
   - [ROADMAP.md](ROADMAP.md)
   - [USAGE.md](USAGE.md)
+  - [RELEASE.md](RELEASE.md)
   - this file
 
 ## Start Here
@@ -67,3 +68,8 @@ Documentation ownership:
 - [USAGE.md](USAGE.md)
 - [wowhead/ACCESS_METHODS.md](wowhead/ACCESS_METHODS.md)
 - [wowhead/EXPANSION_RESEARCH.md](wowhead/EXPANSION_RESEARCH.md)
+
+## Releases
+
+- [../CHANGELOG.md](../CHANGELOG.md)
+- [RELEASE.md](RELEASE.md)
