@@ -1530,6 +1530,56 @@ def _encounter_cast_rows_payload(*, report: dict[str, Any], fight: dict[str, Any
     }
 
 
+def _buff_aura_payload(
+    entry: dict[str, Any],
+    *,
+    ability_index: dict[int, dict[str, Any]],
+    ability_id: int | None,
+) -> dict[str, Any]:
+    # Two row shapes: aura-aggregate rows (table.data.auras) carry their own `guid`/`name`;
+    # actor-scoped rows under an --ability-id filter (table.data.entries) carry the actor name
+    # in `name` and no `guid` — the aura there is the requested filter, not the row.
+    aura_guid = entry.get("guid") if isinstance(entry.get("guid"), int) else None
+    if aura_guid is not None:
+        aura_name = entry.get("name") if isinstance(entry.get("name"), str) else None
+        ability_meta = ability_index.get(aura_guid)
+        return {
+            "game_id": aura_guid,
+            "name": aura_name,
+            "type": ability_meta.get("type") if isinstance(ability_meta, dict) else None,
+            "icon": ability_meta.get("icon") if isinstance(ability_meta, dict) else None,
+            "identity_contract": ability_identity_payload(
+                game_id=aura_guid,
+                name=aura_name,
+                provider="warcraftlogs",
+                source="report_encounter_buffs",
+            ),
+        }
+    if ability_id is not None:
+        return _named_ability(ability_index, ability_id, source="report_encounter_buffs") or {
+            "game_id": ability_id,
+            "name": f"ability:{ability_id}",
+            "identity_contract": ability_identity_payload(
+                game_id=ability_id,
+                name=f"ability:{ability_id}",
+                provider="warcraftlogs",
+                source="report_encounter_buffs",
+                notes=["ability id was requested explicitly but no matching master-data ability row was found"],
+            ),
+        }
+    return {
+        "game_id": None,
+        "name": None,
+        "identity_contract": ability_identity_payload(
+            game_id=None,
+            name=None,
+            provider="warcraftlogs",
+            source="report_encounter_buffs",
+            notes=["row carried no aura identity; pass --ability-id to scope to a specific aura"],
+        ),
+    }
+
+
 def _encounter_buff_rows_payload(
     *,
     report: dict[str, Any],
@@ -1538,6 +1588,7 @@ def _encounter_buff_rows_payload(
     master_report: dict[str, Any],
     preview_limit: int,
     view_by: str | None,
+    ability_id: int | None,
 ) -> dict[str, Any]:
     actor_index, ability_index = _master_data_indexes(master_report)
     report_code = report.get("code") if isinstance(report.get("code"), str) else None
@@ -1571,21 +1622,7 @@ def _encounter_buff_rows_payload(
                     notes=["row is not actor-scoped; pass --ability-id (or use report-encounter-aura-summary) to get per-actor rows"],
                 ),
             }
-        aura_guid = entry.get("guid") if isinstance(entry.get("guid"), int) else None
-        aura_name = entry.get("name") if isinstance(entry.get("name"), str) else None
-        ability_meta = ability_index.get(aura_guid) if aura_guid is not None else None
-        aura_payload: dict[str, Any] = {
-            "game_id": aura_guid,
-            "name": aura_name,
-            "type": ability_meta.get("type") if isinstance(ability_meta, dict) else None,
-            "icon": ability_meta.get("icon") if isinstance(ability_meta, dict) else None,
-            "identity_contract": ability_identity_payload(
-                game_id=aura_guid,
-                name=aura_name,
-                provider="warcraftlogs",
-                source="report_encounter_buffs",
-            ),
-        }
+        aura_payload = _buff_aura_payload(entry, ability_index=ability_index, ability_id=ability_id)
         reported_total_uptime = (
             entry.get("totalUptime")
             if isinstance(entry.get("totalUptime"), (int, float))
@@ -5018,7 +5055,9 @@ def report_encounter_buffs(
             window_end_ms=window_end_ms,
         )
         table_report = client.report_table(code=ref.code, allow_unlisted=allow_unlisted, options=options)
-        master_report = client.report_master_data(code=ref.code, allow_unlisted=allow_unlisted, actor_type="Player")
+        # Unfiltered actor master data: buff targets (and `--view-by target`) can be pets or NPCs,
+        # which an actor_type="Player" fetch would drop, degrading their identities to `actor:<id>`.
+        master_report = client.report_master_data(code=ref.code, allow_unlisted=allow_unlisted)
     except WarcraftLogsClientError as exc:
         _handle_client_error(ctx, exc)
         return
@@ -5042,6 +5081,7 @@ def report_encounter_buffs(
                 master_report=master_report,
                 preview_limit=preview_limit,
                 view_by=normalized_view_by,
+                ability_id=int(ability_id) if ability_id is not None else None,
             ),
         },
         client=client,

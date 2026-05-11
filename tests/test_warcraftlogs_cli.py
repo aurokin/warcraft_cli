@@ -876,19 +876,19 @@ class _FakeWarcraftLogsClient:
                 if options.start_time is not None or options.end_time is not None:
                     assert options.start_time == 110000.0
                     assert options.end_time == 150000.0
+                # Live WCL Buffs queries without --ability-id return per-aura aggregate rows under
+                # table.data.auras: no actor `id`, `name` is the aura, `guid` is the spell game ID.
                 auras = [
                     {
-                        "id": 9,
-                        "name": "Auropower",
-                        "guid": 247018116,
+                        "name": "Holy Shock",
+                        "guid": 20473,
                         "totalUptime": 372,
                         "totalUses": 3,
                         "bands": [{"startTime": 110000, "endTime": 150000}],
                     },
                     {
-                        "id": 1,
-                        "name": "Sherway",
-                        "guid": 247018117,
+                        "name": "Judgment",
+                        "guid": 57795,
                         "totalUptime": 250,
                         "totalUses": 2,
                         "bands": [{"startTime": 115000, "endTime": 145000}],
@@ -3287,9 +3287,13 @@ def test_warcraftlogs_report_encounter_buffs_summarizes_buff_rows(monkeypatch) -
     assert payload["buffs"]["view_by"] == "Source"
     assert len(payload["buffs"]["preview"]) == 2
     top_row = payload["buffs"]["preview"][0]
-    assert top_row["source"]["name"] == "Auropower"
-    assert top_row["aura"]["name"] == "Auropower"
-    assert top_row["aura"]["game_id"] == 247018116
+    # aura-aggregate rows are not actor-scoped: source is a uniform placeholder, aura comes from the row
+    assert top_row["source"]["id"] is None
+    assert top_row["source"]["name"] is None
+    assert "identity_contract" in top_row["source"]
+    assert top_row["aura"]["name"] == "Holy Shock"
+    assert top_row["aura"]["game_id"] == 20473
+    assert top_row["aura"]["type"] == "Holy"
     assert top_row["reported_total_uptime"] == 372
     assert top_row["reported_total_uses"] == 3
     assert top_row["reported_bands"][0]["startTime"] == 110000
@@ -3340,15 +3344,38 @@ def test_warcraftlogs_report_encounter_buffs_populates_identity_contracts(monkey
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     top_row = payload["buffs"]["preview"][0]
-    source_contract = top_row["source"]["identity_contract"]
-    assert source_contract["status"] == "canonical"
-    assert source_contract["scope"]["report_code"] == "abcd1234"
-    assert source_contract["scope"]["fight_id"] == 1
-    assert source_contract["source"] == {"provider": "warcraftlogs", "source": "report_encounter_buffs"}
+    # Aura-aggregate row: aura identity is canonical (game_id from the row), source carries an
+    # identity contract that explains why it has no actor scope.
     aura_contract = top_row["aura"]["identity_contract"]
     assert aura_contract["status"] == "canonical"
-    assert aura_contract["identity"]["game_id"] == 247018116
+    assert aura_contract["identity"]["game_id"] == 20473
     assert aura_contract["source"] == {"provider": "warcraftlogs", "source": "report_encounter_buffs"}
+    source_contract = top_row["source"]["identity_contract"]
+    assert source_contract["kind"] == "report_actor_identity"
+    assert source_contract["source"] == {"provider": "warcraftlogs", "source": "report_encounter_buffs"}
+    assert any("--ability-id" in note for note in source_contract["notes"])
+
+
+def test_warcraftlogs_report_encounter_buffs_derives_aura_from_ability_filter(monkeypatch) -> None:
+    """With --ability-id the rows are actor-scoped (no per-row guid); the aura is the filter."""
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _FakeWarcraftLogsClient())
+
+    result = runner.invoke(
+        warcraftlogs_app,
+        ["report-encounter-buffs", "abcd1234", "--fight-id", "1", "--ability-id", "20473"],
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["query"]["ability_id"] == 20473.0
+    assert payload["buffs"]["total"] == 2
+    top_row = payload["buffs"]["preview"][0]
+    # actor-scoped row -> real source identity
+    assert top_row["source"]["name"] == "Auropower"
+    assert top_row["source"]["identity_contract"]["status"] == "canonical"
+    # row carries no `guid`; aura identity is derived from the --ability-id filter, not the actor name
+    assert top_row["aura"]["game_id"] == 20473
+    assert top_row["aura"]["name"] == "Holy Shock"
+    assert top_row["aura"]["identity_contract"]["status"] == "canonical"
 
 
 def test_warcraftlogs_report_encounter_buffs_handles_live_auras_shape(monkeypatch) -> None:
@@ -3365,9 +3392,8 @@ def test_warcraftlogs_report_encounter_buffs_handles_live_auras_shape(monkeypatc
                     "data": {
                         "auras": [
                             {
-                                "id": 9,
-                                "name": "Auropower",
-                                "guid": 247018116,
+                                "name": "Berserker Stance",
+                                "guid": 386196,
                                 "totalUptime": 372,
                                 "totalUses": 3,
                                 "bands": [{"startTime": 1769575, "endTime": 1769929}],
@@ -3390,8 +3416,10 @@ def test_warcraftlogs_report_encounter_buffs_handles_live_auras_shape(monkeypatc
     payload = json.loads(result.stdout)
     assert payload["buffs"]["total"] == 1
     row = payload["buffs"]["preview"][0]
-    assert row["source"]["name"] == "Auropower"
-    assert row["aura"]["game_id"] == 247018116
+    assert row["source"]["id"] is None
+    assert "identity_contract" in row["source"]
+    assert row["aura"]["name"] == "Berserker Stance"
+    assert row["aura"]["game_id"] == 386196
     assert row["reported_total_uptime"] == 372
     assert row["reported_total_uses"] == 3
     assert row["reported_bands"][0]["startTime"] == 1769575
