@@ -1546,17 +1546,31 @@ def _encounter_buff_rows_payload(
     rows_out: list[dict[str, Any]] = []
     for entry in _report_table_entries(table_report):
         actor_id = entry.get("id") if isinstance(entry.get("id"), int) else None
-        actor_payload = (
-            _named_actor(
+        if actor_id is not None:
+            actor_payload = _named_actor(
                 actor_index,
                 actor_id,
                 report_code=report_code,
                 fight_id=selected_fight_id,
                 source="report_encounter_buffs",
             )
-            if actor_id is not None
-            else {"id": None, "name": entry.get("name")}
-        )
+        else:
+            # Live WCL returns per-aura aggregate rows (id=null, name=aura) when no --ability-id
+            # is set — there is no source/target actor to attach. Emit a placeholder that keeps
+            # the row shape uniform and makes the missing actor scope explicit.
+            actor_payload = {
+                "id": None,
+                "name": None,
+                "identity_contract": report_actor_identity_payload(
+                    report_code=report_code,
+                    fight_id=selected_fight_id,
+                    actor_id=None,
+                    name=None,
+                    provider="warcraftlogs",
+                    source="report_encounter_buffs",
+                    notes=["row is not actor-scoped; pass --ability-id (or use report-encounter-aura-summary) to get per-actor rows"],
+                ),
+            }
         aura_guid = entry.get("guid") if isinstance(entry.get("guid"), int) else None
         aura_name = entry.get("name") if isinstance(entry.get("name"), str) else None
         ability_meta = ability_index.get(aura_guid) if aura_guid is not None else None
