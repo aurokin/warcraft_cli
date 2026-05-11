@@ -1530,6 +1530,85 @@ def _encounter_cast_rows_payload(*, report: dict[str, Any], fight: dict[str, Any
     }
 
 
+def _encounter_buff_rows_payload(
+    *,
+    report: dict[str, Any],
+    fight: dict[str, Any],
+    table_report: dict[str, Any],
+    master_report: dict[str, Any],
+    preview_limit: int,
+    view_by: str | None,
+) -> dict[str, Any]:
+    actor_index, ability_index = _master_data_indexes(master_report)
+    report_code = report.get("code") if isinstance(report.get("code"), str) else None
+    selected_fight_id = fight.get("id") if isinstance(fight.get("id"), int) else None
+    actor_field = "target" if isinstance(view_by, str) and view_by.lower() == "target" else "source"
+    rows_out: list[dict[str, Any]] = []
+    for entry in _report_table_entries(table_report):
+        actor_id = entry.get("id") if isinstance(entry.get("id"), int) else None
+        actor_payload = (
+            _named_actor(
+                actor_index,
+                actor_id,
+                report_code=report_code,
+                fight_id=selected_fight_id,
+                source="report_encounter_buffs",
+            )
+            if actor_id is not None
+            else {"id": None, "name": entry.get("name")}
+        )
+        aura_guid = entry.get("guid") if isinstance(entry.get("guid"), int) else None
+        aura_name = entry.get("name") if isinstance(entry.get("name"), str) else None
+        ability_meta = ability_index.get(aura_guid) if aura_guid is not None else None
+        aura_payload: dict[str, Any] = {
+            "game_id": aura_guid,
+            "name": aura_name,
+            "type": ability_meta.get("type") if isinstance(ability_meta, dict) else None,
+            "icon": ability_meta.get("icon") if isinstance(ability_meta, dict) else None,
+            "identity_contract": ability_identity_payload(
+                game_id=aura_guid,
+                name=aura_name,
+                provider="warcraftlogs",
+                source="report_encounter_buffs",
+            ),
+        }
+        reported_total_uptime = (
+            entry.get("totalUptime")
+            if isinstance(entry.get("totalUptime"), (int, float))
+            else entry.get("totalTime")
+        )
+        rows_out.append(
+            {
+                actor_field: actor_payload,
+                "aura": aura_payload,
+                "reported_total_uptime": reported_total_uptime,
+                "reported_total_uses": entry.get("totalUses"),
+                "reported_bands": entry.get("bands"),
+                "reported_total": entry.get("total"),
+                "reported_active_time": entry.get("activeTime"),
+                "reported_total_time": entry.get("totalTime"),
+            }
+        )
+    rows_out.sort(
+        key=lambda row: (
+            -(float(row["reported_total_uptime"]) if isinstance(row.get("reported_total_uptime"), (int, float)) else float("-inf")),
+            str(((row.get(actor_field) or {}).get("name") or "")),
+        )
+    )
+    total = len(rows_out)
+    preview = rows_out[:preview_limit]
+    return {
+        "report": _report_brief_payload(report),
+        "fight": _fight_payload(fight),
+        "buffs": {
+            "total": total,
+            "preview": preview,
+            "preview_truncated": total > preview_limit,
+            "view_by": view_by,
+        },
+    }
+
+
 def _normalize_match_text(value: str | None) -> str:
     if not value:
         return ""
@@ -4893,6 +4972,7 @@ def report_encounter_buffs(
     hostility_type: str | None = typer.Option(None, "--hostility-type", help="Optional hostility filter."),
     view_by: str | None = typer.Option("source", "--view-by", help="Optional table view grouping."),
     wipe_cutoff: int | None = typer.Option(None, "--wipe-cutoff", help="Optional wipe cutoff."),
+    preview_limit: int = typer.Option(20, "--preview-limit", min=1, max=200, help="Maximum preview buff rows to return."),
     window_start_ms: float | None = typer.Option(None, "--window-start-ms", help="Optional encounter-relative start offset in milliseconds."),
     window_end_ms: float | None = typer.Option(None, "--window-end-ms", help="Optional encounter-relative end offset in milliseconds."),
     translate: bool | None = typer.Option(None, "--translate/--no-translate", help="Optional translation toggle."),
@@ -4923,7 +5003,8 @@ def report_encounter_buffs(
             window_start_ms=window_start_ms,
             window_end_ms=window_end_ms,
         )
-        payload = client.report_table(code=ref.code, allow_unlisted=allow_unlisted, options=options)
+        table_report = client.report_table(code=ref.code, allow_unlisted=allow_unlisted, options=options)
+        master_report = client.report_master_data(code=ref.code, allow_unlisted=allow_unlisted, actor_type="Player")
     except WarcraftLogsClientError as exc:
         _handle_client_error(ctx, exc)
         return
@@ -4935,9 +5016,19 @@ def report_encounter_buffs(
             "ok": True,
             "provider": "warcraftlogs",
             "kind": "report_encounter_buffs",
-            "query": query,
+            "query": {
+                "preview_limit": preview_limit,
+                **query,
+            },
             **_encounter_summary_payload(ref=ref, report=report, fight=fight, encounter=encounter),
-            **_report_json_payload(payload, field="table"),
+            **_encounter_buff_rows_payload(
+                report=report,
+                fight=fight,
+                table_report=table_report,
+                master_report=master_report,
+                preview_limit=preview_limit,
+                view_by=normalized_view_by,
+            ),
         },
         client=client,
     )

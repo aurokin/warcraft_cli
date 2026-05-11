@@ -871,9 +871,35 @@ class _FakeWarcraftLogsClient:
                     "zone": {"id": 38, "name": "Manaforge Omega"},
                     "table": {"entries": entries},
                 }
-            if options.start_time is not None or options.end_time is not None:
-                assert options.start_time == 110000.0
-                assert options.end_time == 150000.0
+            if options.data_type == "Buffs":
+                assert options.view_by in {"Source", "Target"}
+                if options.start_time is not None or options.end_time is not None:
+                    assert options.start_time == 110000.0
+                    assert options.end_time == 150000.0
+                auras = [
+                    {
+                        "id": 9,
+                        "name": "Auropower",
+                        "guid": 247018116,
+                        "totalUptime": 372,
+                        "totalUses": 3,
+                        "bands": [{"startTime": 110000, "endTime": 150000}],
+                    },
+                    {
+                        "id": 1,
+                        "name": "Sherway",
+                        "guid": 247018117,
+                        "totalUptime": 250,
+                        "totalUses": 2,
+                        "bands": [{"startTime": 115000, "endTime": 145000}],
+                    },
+                ]
+                return {
+                    "code": "abcd1234",
+                    "title": "Manaforge Omega - Liquid",
+                    "zone": {"id": 38, "name": "Manaforge Omega"},
+                    "table": {"data": {"auras": auras}},
+                }
             entries = [{"name": "Auropower", "total": 123456 if options.data_type == "DamageDone" else 98.7}]
         else:
             assert allow_unlisted is True
@@ -3233,7 +3259,7 @@ def test_warcraftlogs_report_encounter_window_rejects_inverted_range(monkeypatch
     assert payload["error"]["code"] == "invalid_query"
 
 
-def test_warcraftlogs_report_encounter_buffs_scopes_table_query(monkeypatch) -> None:
+def test_warcraftlogs_report_encounter_buffs_summarizes_buff_rows(monkeypatch) -> None:
     monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _FakeWarcraftLogsClient())
 
     result = runner.invoke(
@@ -3253,9 +3279,122 @@ def test_warcraftlogs_report_encounter_buffs_scopes_table_query(monkeypatch) -> 
     payload = json.loads(result.stdout)
     assert payload["kind"] == "report_encounter_buffs"
     assert payload["query"]["data_type"] == "Buffs"
+    assert payload["query"]["preview_limit"] == 20
     assert payload["query"]["start_time"] == 110000.0
     assert payload["query"]["end_time"] == 150000.0
-    assert payload["table"]["entries"][0]["total"] == 98.7
+    assert payload["buffs"]["total"] == 2
+    assert payload["buffs"]["preview_truncated"] is False
+    assert payload["buffs"]["view_by"] == "Source"
+    assert len(payload["buffs"]["preview"]) == 2
+    top_row = payload["buffs"]["preview"][0]
+    assert top_row["source"]["name"] == "Auropower"
+    assert top_row["aura"]["name"] == "Auropower"
+    assert top_row["aura"]["game_id"] == 247018116
+    assert top_row["reported_total_uptime"] == 372
+    assert top_row["reported_total_uses"] == 3
+    assert top_row["reported_bands"][0]["startTime"] == 110000
+
+
+def test_warcraftlogs_report_encounter_buffs_honors_preview_limit(monkeypatch) -> None:
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _FakeWarcraftLogsClient())
+
+    result = runner.invoke(
+        warcraftlogs_app,
+        [
+            "report-encounter-buffs",
+            "abcd1234",
+            "--fight-id",
+            "1",
+            "--window-start-ms",
+            "10000",
+            "--window-end-ms",
+            "50000",
+            "--preview-limit",
+            "1",
+        ],
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["query"]["preview_limit"] == 1
+    assert payload["buffs"]["total"] == 2
+    assert payload["buffs"]["preview_truncated"] is True
+    assert len(payload["buffs"]["preview"]) == 1
+
+
+def test_warcraftlogs_report_encounter_buffs_populates_identity_contracts(monkeypatch) -> None:
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _FakeWarcraftLogsClient())
+
+    result = runner.invoke(
+        warcraftlogs_app,
+        [
+            "report-encounter-buffs",
+            "abcd1234",
+            "--fight-id",
+            "1",
+            "--window-start-ms",
+            "10000",
+            "--window-end-ms",
+            "50000",
+        ],
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    top_row = payload["buffs"]["preview"][0]
+    source_contract = top_row["source"]["identity_contract"]
+    assert source_contract["status"] == "canonical"
+    assert source_contract["scope"]["report_code"] == "abcd1234"
+    assert source_contract["scope"]["fight_id"] == 1
+    assert source_contract["source"] == {"provider": "warcraftlogs", "source": "report_encounter_buffs"}
+    aura_contract = top_row["aura"]["identity_contract"]
+    assert aura_contract["status"] == "canonical"
+    assert aura_contract["identity"]["game_id"] == 247018116
+    assert aura_contract["source"] == {"provider": "warcraftlogs", "source": "report_encounter_buffs"}
+
+
+def test_warcraftlogs_report_encounter_buffs_handles_live_auras_shape(monkeypatch) -> None:
+    """Live WCL Buffs queries put rows under table.data.auras with totalUptime instead of total."""
+
+    class _AurasShapeClient(_FakeWarcraftLogsClient):
+        def report_table(self, *, code: str, allow_unlisted: bool = False, options) -> dict[str, object]:  # noqa: ANN001
+            assert options.data_type == "Buffs"
+            return {
+                "code": code,
+                "title": "Live Report",
+                "zone": {"id": 46, "name": "VS / DR / MQD"},
+                "table": {
+                    "data": {
+                        "auras": [
+                            {
+                                "id": 9,
+                                "name": "Auropower",
+                                "guid": 247018116,
+                                "totalUptime": 372,
+                                "totalUses": 3,
+                                "bands": [{"startTime": 1769575, "endTime": 1769929}],
+                            },
+                        ],
+                        "totalTime": 380087,
+                        "logVersion": 17,
+                        "gameVersion": 1,
+                    }
+                },
+            }
+
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _AurasShapeClient())
+
+    result = runner.invoke(
+        warcraftlogs_app,
+        ["report-encounter-buffs", "abcd1234", "--fight-id", "1"],
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["buffs"]["total"] == 1
+    row = payload["buffs"]["preview"][0]
+    assert row["source"]["name"] == "Auropower"
+    assert row["aura"]["game_id"] == 247018116
+    assert row["reported_total_uptime"] == 372
+    assert row["reported_total_uses"] == 3
+    assert row["reported_bands"][0]["startTime"] == 1769575
 
 
 def test_warcraftlogs_report_encounter_aura_summary_returns_typed_rows(monkeypatch) -> None:
