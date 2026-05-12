@@ -113,7 +113,7 @@ Best fits:
   - `warcraftlogs report-encounter 'https://www.warcraftlogs.com/reports/<code>#fight=47'`
   - `warcraftlogs report-encounter-players 'https://www.warcraftlogs.com/reports/<code>#fight=47'`
   - `warcraftlogs report-encounter-casts 'https://www.warcraftlogs.com/reports/<code>#fight=47' --preview-limit 20`
-  - `warcraftlogs report-encounter-buffs 'https://www.warcraftlogs.com/reports/<code>#fight=47' --view-by source`
+  - `warcraftlogs report-encounter-buffs 'https://www.warcraftlogs.com/reports/<code>#fight=47' --view-by source --preview-limit 20`
   - `warcraftlogs report-encounter-aura-summary 'https://www.warcraftlogs.com/reports/<code>#fight=47' --ability-id 20473 --window-start-ms 30000 --window-end-ms 90000`
   - `warcraftlogs report-encounter-aura-compare 'https://www.warcraftlogs.com/reports/<code>#fight=47' --ability-id 20473 --left-window-start-ms 30000 --left-window-end-ms 90000 --right-window-start-ms 90000 --right-window-end-ms 150000`
   - `warcraftlogs report-encounter-damage-source-summary 'https://www.warcraftlogs.com/reports/<code>#fight=47' --window-start-ms 30000 --window-end-ms 90000`
@@ -147,6 +147,7 @@ Best fits:
   - `--window-start-ms`
   - `--window-end-ms`
 - `report-encounter-casts` also includes additive `by_target` and `by_source_target` summaries for target-scoped cast analysis inside the selected fight/window
+- `report-encounter-buffs` returns typed `buffs.preview` rows with per-row `source` (or `target` when `--view-by target`), `aura` (with identity contract), and reported buff-table fields (`reported_total_uptime`, `reported_total_uses`, `reported_bands`); use `--preview-limit` to bound the row count and `buffs.preview_truncated` to detect truncation
 - `report-encounter-aura-summary` is the narrower aura workflow: it requires one explicit `--ability-id` and returns typed source rows with preserved reported buff-table fields for that selected fight/window
 - `report-encounter-aura-compare` is stricter still: same report, same fight, same aura, and two fully explicit windows; use it when you want typed per-source deltas without pretending two different pulls or scopes are directly comparable
 - `report-encounter-damage-source-summary` is the equivalent narrow damage workflow for source-grouped damage rows; use it when you want typed source identities without depending on the broader raw breakdown payload alone

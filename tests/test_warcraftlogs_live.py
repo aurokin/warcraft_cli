@@ -205,6 +205,55 @@ def test_live_warcraftlogs_report_encounter_contracts() -> None:
 
 
 @pytest.mark.live
+def test_live_warcraftlogs_report_encounter_buffs_preview_contract() -> None:
+    """Guards the typed buffs-preview shape against WCL field-name drift.
+
+    The reported_* fields are direct passthroughs of WCL's auras row schema (totalUptime,
+    totalUses, bands.startTime/endTime). If WCL renames any of them, the typed contract
+    fails this test fast instead of silently emitting null fields in production.
+    """
+    _require_warcraftlogs_auth()
+    code, fight_id = _public_raid_report()
+    report_url = f"https://www.warcraftlogs.com/reports/{code}#fight={fight_id}"
+
+    payload = _payload_for([
+        "report-encounter-buffs", report_url,
+        "--view-by", "source",
+        "--preview-limit", "5",
+    ])
+
+    assert payload["provider"] == "warcraftlogs"
+    assert payload["kind"] == "report_encounter_buffs"
+    assert payload["reference"]["code"] == code
+    assert payload["reference"]["fight_id"] == fight_id
+    assert payload["query"]["data_type"] == "Buffs"
+    assert payload["query"]["preview_limit"] == 5
+
+    buffs = payload["buffs"]
+    assert isinstance(buffs["total"], int)
+    assert isinstance(buffs["preview_truncated"], bool)
+    assert isinstance(buffs["preview"], list)
+    assert len(buffs["preview"]) <= 5
+    assert buffs["preview_truncated"] == (buffs["total"] > 5)
+
+    if buffs["total"] > 0:
+        row = buffs["preview"][0]
+        assert "source" in row
+        assert row["source"]["identity_contract"]["source"]["provider"] == "warcraftlogs"
+        assert row["aura"]["identity_contract"]["source"]["provider"] == "warcraftlogs"
+        assert isinstance(row["aura"]["game_id"], int)
+        assert isinstance(row["aura"]["name"], str)
+        # Direct passthroughs of the live WCL auras-row field names — these are what could drift.
+        assert "reported_total_uptime" in row
+        assert "reported_total_uses" in row
+        assert "reported_bands" in row
+        if isinstance(row["reported_bands"], list) and row["reported_bands"]:
+            band = row["reported_bands"][0]
+            assert "startTime" in band
+            assert "endTime" in band
+
+
+@pytest.mark.live
 def test_live_warcraftlogs_report_detail_contracts() -> None:
     _require_warcraftlogs_auth()
     code, fight_id = _public_raid_report()

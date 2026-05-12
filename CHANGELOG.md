@@ -10,6 +10,8 @@ Add user-visible changes to `[Unreleased]` in the same PR that ships them. See [
 
 ### Added
 
+- `report-encounter-buffs` now returns a typed `buffs.preview` payload with per-row `source` (or `target` when `--view-by target`), `aura` (with identity contract), and reported buff-table fields (`reported_total_uptime`, `reported_total_uses`, `reported_bands`), parallel to `report-encounter-casts`. New `--preview-limit` flag (default 20, max 200) bounds the preview length; `buffs.total` and `buffs.preview_truncated` mirror the casts contract so agents can compose follow-ups against either sibling command without learning two output shapes.
+
 ### Changed
 
 ### Fixed
