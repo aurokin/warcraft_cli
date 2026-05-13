@@ -46,6 +46,7 @@ Best fits:
   - `warcraftlogs report-table <code> --data-type damage-done --fight-id ...`
   - `warcraftlogs report-graph <code> --data-type damage-done --fight-id ...`
   - `warcraftlogs report-rankings <code> --fight-id ... --player-metric dps`
+  - `warcraftlogs graphql --query <query|@path|->`
   - `warcraftlogs report-encounter <report-url-or-code>`
   - `warcraftlogs report-encounter-players <report-url-or-code>`
   - `warcraftlogs report-encounter-casts <report-url-or-code>`
@@ -126,6 +127,8 @@ Best fits:
   - `warcraftlogs report-table <code> --data-type damage-done --fight-id 47`
   - `warcraftlogs report-graph <code> --data-type damage-done --fight-id 47`
   - `warcraftlogs report-rankings <code> --fight-id 47 --player-metric dps --timeframe historical --compare rankings`
+  - `warcraftlogs graphql --query 'query Report($code: String!) { reportData { report(code: $code) { code title } } }' --report-code <code>`
+  - `warcraftlogs graphql --query @./query.graphql --variables-json '{"code":"<code>"}' --operation-name Report`
 - sampled cross-report analytics:
   - `warcraftlogs boss-kills --zone-id 38 --boss-id 3012 --difficulty 5 --top 10`
   - `warcraftlogs top-kills --zone-id 38 --boss-name Dimensius --difficulty 5 --top 5`
@@ -164,6 +167,11 @@ Best fits:
   - malformed or incomplete talent-tree rows fail with `missing_talent_tree` instead of emitting a partial packet
 - `report-fights` is still the stable broad fight-list surface; use it to get fight IDs first, then move to `report-player-details`, `report-events`, `report-table`, or `report-graph` for deeper filtered analysis
 - `report-table` and `report-graph` accept user-friendly enum filters like `damage-done` and normalize them for the API
+- `graphql` is the raw official API escape hatch for queries not covered by typed commands; it keeps auth routing, partial-error warnings, and the standard JSON envelope
+- `graphql --query` accepts literal query text, `@path`, or `-` for stdin; use `--introspect` when the next step needs schema discovery
+- `graphql` variables can come from `--variables-json` or repeatable `--var key=value`; `--var` wins on conflicts and values are JSON-coerced when possible
+- `graphql` scoping helpers inject only declared variables: `--report-code` -> `code`, `--fight-id` -> `fightID` or `fightIDs`, `--encounter-id` -> `encounterID`, `--start-time` -> `startTime`, `--end-time` -> `endTime`, `--difficulty` -> `difficulty`, `--zone-id` -> `zoneID`, `--source-id` -> `sourceID`, `--target-id` -> `targetID`, `--ability-id` -> `abilityID`, and `--allow-unlisted` -> `allowUnlisted=true`
+- `graphql --endpoint auto` uses saved user auth when available, `--endpoint client` forces client credentials, and `--endpoint user` forces saved user auth; `--cache-ttl` is opt-in for client-endpoint queries and user-endpoint raw queries are not cached
 - `report-events` intentionally requires a narrowed slice such as `--fight-id`, `--encounter-id`, `--start-time`, or `--end-time`
 - `report-events` can still return `events: null` for some valid report slices; use it as a typed event-query surface, not a guarantee of non-empty data
 - `report-rankings` can legitimately return zero rows for a valid public report slice

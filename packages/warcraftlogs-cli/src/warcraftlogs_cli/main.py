@@ -6,6 +6,7 @@ import json
 import re
 import secrets
 import shlex
+import sys
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -37,6 +38,7 @@ from warcraft_core.paths import provider_state_path
 from warcraft_core.wow_normalization import normalize_region
 
 from warcraftlogs_cli.client import (
+    GRAPHQL_WARNINGS_KEY,
     RETAIL_PROFILE,
     EncounterRankingsOptions,
     ReportFilterOptions,
@@ -54,6 +56,112 @@ app.add_typer(auth_app, name="auth")
 
 FIGHT_ID_OPTION = typer.Option(None, "--fight-id", help="Optional fight ID filter. Repeat as needed.")
 REPORT_CODE_PATTERN = re.compile(r"^(?=.*[A-Za-z])(?=.*\d)[A-Za-z0-9]{8,32}$")
+RAW_GRAPHQL_VAR_OPTION = typer.Option(
+    [],
+    "--var",
+    help="GraphQL variable in key=value form. Value is JSON-coerced when possible.",
+)
+GRAPHQL_VARIABLE_DECLARATION_PATTERN = re.compile(
+    r"\$(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*:\s*(?P<type>\[[^\]]+\]!?|[A-Za-z_][A-Za-z0-9_]*!?)"
+)
+GRAPHQL_OPERATION_NAME_PATTERN = re.compile(
+    r"\b(?P<kind>query|mutation|subscription)\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)",
+    re.MULTILINE,
+)
+
+WARCRAFTLOGS_INTROSPECTION_QUERY = """
+query IntrospectionQuery {
+  __schema {
+    queryType { name }
+    mutationType { name }
+    subscriptionType { name }
+    types {
+      ...FullType
+    }
+    directives {
+      name
+      description
+      locations
+      args {
+        ...InputValue
+      }
+    }
+  }
+}
+
+fragment FullType on __Type {
+  kind
+  name
+  description
+  fields(includeDeprecated: true) {
+    name
+    description
+    args {
+      ...InputValue
+    }
+    type {
+      ...TypeRef
+    }
+    isDeprecated
+    deprecationReason
+  }
+  inputFields {
+    ...InputValue
+  }
+  interfaces {
+    ...TypeRef
+  }
+  enumValues(includeDeprecated: true) {
+    name
+    description
+    isDeprecated
+    deprecationReason
+  }
+  possibleTypes {
+    ...TypeRef
+  }
+}
+
+fragment InputValue on __InputValue {
+  name
+  description
+  type { ...TypeRef }
+  defaultValue
+}
+
+fragment TypeRef on __Type {
+  kind
+  name
+  ofType {
+    kind
+    name
+    ofType {
+      kind
+      name
+      ofType {
+        kind
+        name
+        ofType {
+          kind
+          name
+          ofType {
+            kind
+            name
+            ofType {
+              kind
+              name
+              ofType {
+                kind
+                name
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+"""
 
 
 @dataclass(slots=True)
@@ -93,6 +201,173 @@ def _with_warnings(payload: dict[str, Any], client: Any) -> dict[str, Any]:
 def _fail(ctx: typer.Context, code: str, message: str, *, status: int = 1) -> None:
     _emit(ctx, {"ok": False, "error": {"code": code, "message": message}}, err=True)
     raise typer.Exit(status)
+
+
+def _load_graphql_query(ctx: typer.Context, query: str | None, *, introspect: bool) -> str:
+    if introspect:
+        return WARCRAFTLOGS_INTROSPECTION_QUERY
+    if query is None or not query.strip():
+        _fail(ctx, "missing_query", "warcraftlogs graphql requires --query unless --introspect is set.")
+    if query == "-":
+        loaded = sys.stdin.read()
+    elif query.startswith("@"):
+        path_text = query[1:]
+        if not path_text:
+            _fail(ctx, "invalid_query", "--query @path requires a non-empty path.")
+        path = Path(path_text).expanduser()
+        try:
+            loaded = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            _fail(ctx, "invalid_query", f"Could not read GraphQL query file {str(path)!r}: {exc}")
+    else:
+        loaded = query
+    if not loaded.strip():
+        _fail(ctx, "invalid_query", "GraphQL query text must not be empty.")
+    return loaded
+
+
+def _json_coerced_var_value(raw: str) -> Any:
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return raw
+
+
+def _parse_graphql_variables_json(ctx: typer.Context, variables_json: str | None) -> dict[str, Any]:
+    if variables_json is None or not variables_json.strip():
+        return {}
+    try:
+        parsed = json.loads(variables_json)
+    except json.JSONDecodeError as exc:
+        _fail(ctx, "invalid_variables", f"--variables-json must be valid JSON: {exc.msg}.")
+    if not isinstance(parsed, dict):
+        _fail(ctx, "invalid_variables", "--variables-json must decode to a JSON object.")
+    return dict(parsed)
+
+
+def _parse_graphql_var_options(ctx: typer.Context, raw_vars: list[str]) -> dict[str, Any]:
+    variables: dict[str, Any] = {}
+    for raw in raw_vars:
+        key, separator, value = raw.partition("=")
+        if not separator or not key.strip():
+            _fail(ctx, "invalid_variables", "--var values must use key=value form.")
+        variables[key.strip()] = _json_coerced_var_value(value)
+    return variables
+
+
+def _graphql_balanced_parenthesized_block(text: str, start: int) -> str | None:
+    if start >= len(text) or text[start] != "(":
+        return None
+    depth = 0
+    index = start
+    in_string = False
+    in_block_string = False
+    escaped = False
+    while index < len(text):
+        if in_block_string:
+            if text.startswith('"""', index):
+                in_block_string = False
+                index += 3
+                continue
+            index += 1
+            continue
+        char = text[index]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            index += 1
+            continue
+        if text.startswith('"""', index):
+            in_block_string = True
+            index += 3
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth == 0:
+                return text[start : index + 1]
+        index += 1
+    return None
+
+
+def _graphql_position_in_line_comment(text: str, position: int) -> bool:
+    line_start = text.rfind("\n", 0, position) + 1
+    comment_start = text.find("#", line_start, position)
+    return comment_start != -1
+
+
+def _selected_graphql_operation_variables(query: str, operation_name: str) -> str:
+    for match in GRAPHQL_OPERATION_NAME_PATTERN.finditer(query):
+        if _graphql_position_in_line_comment(query, match.start()):
+            continue
+        if match.group("name") != operation_name:
+            continue
+        index = match.end()
+        while index < len(query) and query[index].isspace():
+            index += 1
+        return _graphql_balanced_parenthesized_block(query, index) or ""
+    return ""
+
+
+def _declared_graphql_variables(query: str, *, operation_name: str | None = None) -> dict[str, str]:
+    signature = _selected_graphql_operation_variables(query, operation_name) if operation_name else query
+    return {match.group("name"): match.group("type") for match in GRAPHQL_VARIABLE_DECLARATION_PATTERN.finditer(signature)}
+
+
+def _graphql_variable_is_list(graphql_type: str | None) -> bool:
+    return isinstance(graphql_type, str) and graphql_type.strip().startswith("[")
+
+
+def _inject_graphql_scope_helpers(
+    variables: dict[str, Any],
+    *,
+    declared_variables: dict[str, str],
+    report_code: str | None,
+    fight_ids: list[int] | None,
+    encounter_id: int | None,
+    start_time: float | None,
+    end_time: float | None,
+    difficulty: int | None,
+    zone_id: int | None,
+    source_id: int | None,
+    target_id: int | None,
+    ability_id: int | None,
+    allow_unlisted: bool,
+) -> dict[str, Any]:
+    merged = dict(variables)
+
+    def inject(name: str, value: Any) -> None:
+        if name in declared_variables and name not in merged and value is not None:
+            merged[name] = value
+
+    inject("code", report_code)
+    if fight_ids:
+        if "fightIDs" in declared_variables and "fightIDs" not in merged:
+            merged["fightIDs"] = list(fight_ids)
+        elif "fightID" in declared_variables and "fightID" not in merged:
+            merged["fightID"] = fight_ids[0]
+    inject("encounterID", encounter_id)
+    inject("startTime", start_time)
+    inject("endTime", end_time)
+    inject("difficulty", difficulty)
+    inject("zoneID", zone_id)
+    inject("sourceID", source_id)
+    inject("targetID", target_id)
+    inject("abilityID", ability_id)
+    if allow_unlisted:
+        inject("allowUnlisted", True)
+
+    for name, graphql_type in declared_variables.items():
+        if name in merged and name == "fightIDs" and _graphql_variable_is_list(graphql_type) and isinstance(merged[name], int):
+            merged[name] = [merged[name]]
+    return merged
 
 
 def _validated_transport_packet(ctx: typer.Context, packet: Any, *, command_name: str) -> dict[str, Any]:
@@ -5572,6 +5847,86 @@ def report_fights(
         },
         client=client,
     )
+
+
+@app.command("graphql")
+def graphql(
+    ctx: typer.Context,
+    query_text: str | None = typer.Option(None, "--query", help="GraphQL operation text, @path, or - for stdin."),
+    raw_var: list[str] = RAW_GRAPHQL_VAR_OPTION,
+    variables_json: str | None = typer.Option(None, "--variables-json", help="JSON object of GraphQL variables."),
+    operation_name: str | None = typer.Option(None, "--operation-name", help="Optional GraphQL operation name."),
+    endpoint: str = typer.Option("auto", "--endpoint", help="Endpoint family: auto, client, or user."),
+    cache_ttl: int = typer.Option(0, "--cache-ttl", min=0, help="Opt-in cache TTL in seconds. Defaults to 0/off."),
+    introspect: bool = typer.Option(False, "--introspect", help="Run a GraphQL introspection query."),
+    allow_unlisted: bool = typer.Option(
+        False,
+        "--allow-unlisted",
+        help="Inject allowUnlisted=true when the query declares $allowUnlisted.",
+    ),
+    report_code: str | None = typer.Option(None, "--report-code", help="Inject report code into declared $code variables."),
+    fight_id: list[int] | None = FIGHT_ID_OPTION,
+    encounter_id: int | None = typer.Option(None, "--encounter-id", help="Inject declared $encounterID variables."),
+    start_time: float | None = typer.Option(None, "--start-time", help="Inject declared $startTime variables."),
+    end_time: float | None = typer.Option(None, "--end-time", help="Inject declared $endTime variables."),
+    difficulty: int | None = typer.Option(None, "--difficulty", help="Inject declared $difficulty variables."),
+    zone_id: int | None = typer.Option(None, "--zone-id", help="Inject declared $zoneID variables."),
+    source_id: int | None = typer.Option(None, "--source-id", help="Inject declared $sourceID variables."),
+    target_id: int | None = typer.Option(None, "--target-id", help="Inject declared $targetID variables."),
+    ability_id: int | None = typer.Option(None, "--ability-id", help="Inject declared $abilityID variables."),
+) -> None:
+    query = _load_graphql_query(ctx, query_text, introspect=introspect)
+    effective_operation_name = "IntrospectionQuery" if introspect else operation_name
+    variables = _parse_graphql_variables_json(ctx, variables_json)
+    variables.update(_parse_graphql_var_options(ctx, raw_var))
+    variables = _inject_graphql_scope_helpers(
+        variables,
+        declared_variables=_declared_graphql_variables(query, operation_name=effective_operation_name),
+        report_code=report_code,
+        fight_ids=fight_id,
+        encounter_id=encounter_id,
+        start_time=start_time,
+        end_time=end_time,
+        difficulty=difficulty,
+        zone_id=zone_id,
+        source_id=source_id,
+        target_id=target_id,
+        ability_id=ability_id,
+        allow_unlisted=allow_unlisted,
+    )
+    client = _client(ctx)
+    try:
+        payload, effective_endpoint = client.raw_graphql(
+            operation_name=effective_operation_name,
+            query=query,
+            variables=variables,
+            endpoint=endpoint,
+            cache_ttl_seconds=cache_ttl,
+        )
+    except WarcraftLogsClientError as exc:
+        _handle_client_error(ctx, exc)
+        return
+    finally:
+        client.close()
+    data = dict(payload) if isinstance(payload, dict) else payload
+    if isinstance(data, dict):
+        data.pop(GRAPHQL_WARNINGS_KEY, None)
+    emitted: dict[str, Any] = {
+        "ok": True,
+        "provider": "warcraftlogs",
+        "query": {
+            "operation_name": effective_operation_name,
+            "variables": variables,
+            "endpoint": effective_endpoint,
+            "requested_endpoint": endpoint,
+            "cache_ttl_seconds": cache_ttl,
+        },
+    }
+    if introspect:
+        emitted["introspection"] = data.get("__schema") if isinstance(data, dict) else None
+    else:
+        emitted["data"] = data
+    _emit(ctx, emitted, client=client)
 
 
 @app.command("report-events")

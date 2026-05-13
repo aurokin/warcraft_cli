@@ -6,6 +6,7 @@ Build `warcraftlogs` as an official API-first provider for Warcraft Logs using t
 
 Repo-wide product philosophy lives in [PRODUCT_PRINCIPLES.md](../foundation/PRODUCT_PRINCIPLES.md).
 Repo-wide analytics and comparison safety rules live in [SAFE_ANALYTICS_RULES.md](../foundation/SAFE_ANALYTICS_RULES.md).
+Scoping conventions live in [SCOPING.md](SCOPING.md).
 This file tracks Warcraft Logs-specific implementation state, boundaries, and current gaps.
 
 The CLI should become the fastest trustworthy path for:
@@ -69,6 +70,7 @@ Implemented today:
   - `warcraftlogs report-table`
   - `warcraftlogs report-graph`
   - `warcraftlogs report-rankings`
+  - `warcraftlogs graphql`
   - `warcraftlogs report-encounter`
   - `warcraftlogs report-encounter-players`
   - `warcraftlogs report-encounter-casts`
@@ -528,6 +530,7 @@ Ranking support should include:
 - `warcraftlogs report-table <code>`
 - `warcraftlogs report-graph <code>`
 - `warcraftlogs report-rankings <code>`
+- `warcraftlogs graphql --query <query|@path|->`
 - `warcraftlogs report-player-details <code>`
 - `warcraftlogs report-player-talents <report-url-or-code> --fight-id <id> --actor-id <id>`
 - `warcraftlogs report-master-data <code>`
@@ -542,6 +545,8 @@ These commands should support:
 - pagination via `nextPageTimestamp`
 - translation toggle
 - low-bandwidth toggles when the user does not need actor/ability expansion
+
+Use `warcraftlogs graphql` when an official GraphQL query is needed before a typed command exists. It preserves the same auth routing, cache opt-in, partial-error warnings, and JSON envelope as typed commands; see [SCOPING.md](SCOPING.md#raw-graphql) for variable and helper rules.
 
 Current talent-transport lane:
 - `report-player-talents` is intentionally narrow:

@@ -3690,6 +3690,323 @@ def test_warcraftlogs_report_events_omits_hint_when_data_type_supplied(monkeypat
     assert "notes" not in payload
 
 
+def test_warcraftlogs_graphql_merges_explicit_vars_and_declared_scope_helpers(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class _RawGraphQLClient(_FakeWarcraftLogsClient):
+        def raw_graphql(self, *, operation_name, query, variables, endpoint="auto", cache_ttl_seconds=0):  # noqa: ANN001
+            captured["operation_name"] = operation_name
+            captured["query"] = query
+            captured["variables"] = variables
+            captured["endpoint"] = endpoint
+            captured["cache_ttl_seconds"] = cache_ttl_seconds
+            return {"reportData": {"report": {"code": variables["code"]}}}, "client"
+
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _RawGraphQLClient())
+
+    result = runner.invoke(
+        warcraftlogs_app,
+        [
+            "graphql",
+            "--query",
+            "query Report($code: String!, $fightIDs: [Int], $difficulty: Int, $sourceID: Int, $abilityID: Int) "
+            "{ reportData { report(code: $code) { code } } }",
+            "--operation-name",
+            "Report",
+            "--variables-json",
+            '{"code": "explicit", "difficulty": 4}',
+            "--var",
+            "difficulty=5",
+            "--report-code",
+            "helpercode",
+            "--fight-id",
+            "7",
+            "--fight-id",
+            "8",
+            "--source-id",
+            "123",
+            "--target-id",
+            "456",
+            "--ability-id",
+            "789",
+            "--endpoint",
+            "client",
+            "--cache-ttl",
+            "30",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["data"]["reportData"]["report"]["code"] == "explicit"
+    assert captured["operation_name"] == "Report"
+    assert captured["endpoint"] == "client"
+    assert captured["cache_ttl_seconds"] == 30
+    assert captured["variables"] == {
+        "code": "explicit",
+        "difficulty": 5,
+        "fightIDs": [7, 8],
+        "sourceID": 123,
+        "abilityID": 789,
+    }
+    assert "targetID" not in captured["variables"]
+    assert payload["query"]["variables"] == captured["variables"]
+
+
+def test_warcraftlogs_graphql_preserves_explicit_null_variables(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class _RawGraphQLClient(_FakeWarcraftLogsClient):
+        def raw_graphql(self, *, operation_name, query, variables, endpoint="auto", cache_ttl_seconds=0):  # noqa: ANN001
+            captured["variables"] = variables
+            return {"ok": True}, "client"
+
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _RawGraphQLClient())
+
+    result = runner.invoke(
+        warcraftlogs_app,
+        [
+            "graphql",
+            "--query",
+            "query Nullable($foo: String, $bar: Int, $baz: Boolean) { rateLimitData { limitPerHour } }",
+            "--variables-json",
+            '{"foo": null, "bar": 1}',
+            "--var",
+            "baz=null",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["variables"] == {"foo": None, "bar": 1, "baz": None}
+    assert json.loads(result.output)["query"]["variables"] == {"foo": None, "bar": 1, "baz": None}
+
+
+def test_warcraftlogs_graphql_scopes_helpers_to_selected_operation(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class _RawGraphQLClient(_FakeWarcraftLogsClient):
+        def raw_graphql(self, *, operation_name, query, variables, endpoint="auto", cache_ttl_seconds=0):  # noqa: ANN001
+            captured["operation_name"] = operation_name
+            captured["variables"] = variables
+            return {"ok": True}, "client"
+
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _RawGraphQLClient())
+
+    query = (
+        "query ListFightQuery($code: String!, $fightIDs: [Int]) { reportData { report(code: $code) { code } } }\n"
+        "query SingleFightQuery($code: String!, $fightID: Int!) { reportData { report(code: $code) { code } } }"
+    )
+
+    result = runner.invoke(
+        warcraftlogs_app,
+        [
+            "graphql",
+            "--query",
+            query,
+            "--operation-name",
+            "SingleFightQuery",
+            "--report-code",
+            "abcd1234",
+            "--fight-id",
+            "7",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["operation_name"] == "SingleFightQuery"
+    assert captured["variables"] == {"code": "abcd1234", "fightID": 7}
+
+
+def test_warcraftlogs_graphql_scopes_list_helpers_to_selected_operation(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class _RawGraphQLClient(_FakeWarcraftLogsClient):
+        def raw_graphql(self, *, operation_name, query, variables, endpoint="auto", cache_ttl_seconds=0):  # noqa: ANN001
+            captured["operation_name"] = operation_name
+            captured["variables"] = variables
+            return {"ok": True}, "client"
+
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _RawGraphQLClient())
+
+    query = (
+        "query SingleFightQuery($code: String!, $fightID: Int!) { reportData { report(code: $code) { code } } }\n"
+        "query ListFightQuery($code: String!, $fightIDs: [Int]) { reportData { report(code: $code) { code } } }"
+    )
+
+    result = runner.invoke(
+        warcraftlogs_app,
+        [
+            "graphql",
+            "--query",
+            query,
+            "--operation-name",
+            "ListFightQuery",
+            "--report-code",
+            "abcd1234",
+            "--fight-id",
+            "7",
+            "--fight-id",
+            "8",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["operation_name"] == "ListFightQuery"
+    assert captured["variables"] == {"code": "abcd1234", "fightIDs": [7, 8]}
+
+
+def test_warcraftlogs_graphql_detects_variables_after_object_defaults(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class _RawGraphQLClient(_FakeWarcraftLogsClient):
+        def raw_graphql(self, *, operation_name, query, variables, endpoint="auto", cache_ttl_seconds=0):  # noqa: ANN001
+            captured["operation_name"] = operation_name
+            captured["variables"] = variables
+            return {"ok": True}, "client"
+
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _RawGraphQLClient())
+
+    query = (
+        'query ReportWithDefault($filter: ReportFilter = {term: "a)b", nested: {enabled: true}}, '
+        "$code: String!, $fightID: Int!) { reportData { report(code: $code) { code } } }"
+    )
+
+    result = runner.invoke(
+        warcraftlogs_app,
+        [
+            "graphql",
+            "--query",
+            query,
+            "--operation-name",
+            "ReportWithDefault",
+            "--report-code",
+            "abcd1234",
+            "--fight-id",
+            "7",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["operation_name"] == "ReportWithDefault"
+    assert captured["variables"] == {"code": "abcd1234", "fightID": 7}
+
+
+def test_warcraftlogs_graphql_ignores_commented_operation_names(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class _RawGraphQLClient(_FakeWarcraftLogsClient):
+        def raw_graphql(self, *, operation_name, query, variables, endpoint="auto", cache_ttl_seconds=0):  # noqa: ANN001
+            captured["operation_name"] = operation_name
+            captured["variables"] = variables
+            return {"ok": True}, "client"
+
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _RawGraphQLClient())
+
+    query = (
+        "# query Report\n"
+        "# This comment should not shadow the operation below.\n"
+        "query Report($code: String!, $fightID: Int!) { reportData { report(code: $code) { code } } }"
+    )
+
+    result = runner.invoke(
+        warcraftlogs_app,
+        [
+            "graphql",
+            "--query",
+            query,
+            "--operation-name",
+            "Report",
+            "--report-code",
+            "abcd1234",
+            "--fight-id",
+            "7",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["operation_name"] == "Report"
+    assert captured["variables"] == {"code": "abcd1234", "fightID": 7}
+
+
+def test_warcraftlogs_graphql_loads_query_from_file(monkeypatch, tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+    query_path = tmp_path / "report.graphql"
+    query_path.write_text("query FromFile { rateLimitData { limitPerHour } }", encoding="utf-8")
+
+    class _RawGraphQLClient(_FakeWarcraftLogsClient):
+        def raw_graphql(self, *, operation_name, query, variables, endpoint="auto", cache_ttl_seconds=0):  # noqa: ANN001
+            captured["query"] = query
+            return {"rateLimitData": {"limitPerHour": 3600}}, "client"
+
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _RawGraphQLClient())
+
+    result = runner.invoke(warcraftlogs_app, ["graphql", "--query", f"@{query_path}"])
+
+    assert result.exit_code == 0
+    assert captured["query"] == "query FromFile { rateLimitData { limitPerHour } }"
+    assert json.loads(result.output)["data"]["rateLimitData"]["limitPerHour"] == 3600
+
+
+def test_warcraftlogs_graphql_loads_query_from_stdin(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class _RawGraphQLClient(_FakeWarcraftLogsClient):
+        def raw_graphql(self, *, operation_name, query, variables, endpoint="auto", cache_ttl_seconds=0):  # noqa: ANN001
+            captured["query"] = query
+            return {"ok": True}, "client"
+
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _RawGraphQLClient())
+
+    result = runner.invoke(warcraftlogs_app, ["graphql", "--query", "-"], input="query FromStdin { rateLimitData { pointsResetIn } }")
+
+    assert result.exit_code == 0
+    assert captured["query"] == "query FromStdin { rateLimitData { pointsResetIn } }"
+
+
+def test_warcraftlogs_graphql_introspection_uses_named_operation(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class _RawGraphQLClient(_FakeWarcraftLogsClient):
+        def raw_graphql(self, *, operation_name, query, variables, endpoint="auto", cache_ttl_seconds=0):  # noqa: ANN001
+            captured["operation_name"] = operation_name
+            captured["query"] = query
+            return {"__schema": {"queryType": {"name": "Query"}}}, "client"
+
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _RawGraphQLClient())
+
+    result = runner.invoke(warcraftlogs_app, ["graphql", "--introspect"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert captured["operation_name"] == "IntrospectionQuery"
+    assert "__schema" in captured["query"]
+    assert payload["introspection"]["queryType"]["name"] == "Query"
+    assert "data" not in payload
+
+
+def test_warcraftlogs_graphql_surfaces_partial_warnings(monkeypatch) -> None:
+    class _WarningGraphQLClient(_FakeWarcraftLogsClient):
+        @property
+        def last_warnings(self):  # noqa: ANN201
+            return [{"message": "partial report path failed", "path": ["reportData", "report", "table"]}]
+
+        def raw_graphql(self, *, operation_name, query, variables, endpoint="auto", cache_ttl_seconds=0):  # noqa: ANN001
+            return {
+                "reportData": {"report": {"code": "abcd1234"}},
+                GRAPHQL_WARNINGS_KEY: self.last_warnings,
+            }, "client"
+
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _WarningGraphQLClient())
+
+    result = runner.invoke(warcraftlogs_app, ["graphql", "--query", "query Q { reportData { reports { total } } }"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["data"] == {"reportData": {"report": {"code": "abcd1234"}}}
+    assert payload["graphql_warnings"][0]["message"] == "partial report path failed"
+    assert payload["notes"][0].startswith("warcraft logs returned partial errors")
+
+
 def test_warcraftlogs_character_rankings_surfaces_provider_permission_errors(monkeypatch) -> None:
     class _PermissionClient(_FakeWarcraftLogsClient):
         def character_rankings(
@@ -4266,6 +4583,294 @@ def test_warcraftlogs_client_graphql_routes_through_user_endpoint_when_authentic
     assert captured["namespace"] == "ns"
     assert captured["ttl_seconds"] == 42
     assert captured["use_cache"] is True
+
+
+def test_warcraftlogs_client_raw_graphql_controls_endpoint_and_cache(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "warcraftlogs_cli.client.load_provider_auth_state",
+        lambda provider: {
+            "auth_mode": "pkce",
+            "access_token": "user-token",
+            "expires_at": time.time() + 3600,
+        },
+    )
+    client = WarcraftLogsClient.__new__(WarcraftLogsClient)
+    captured: dict[str, object] = {}
+
+    def _fake_raw_request(**kwargs):
+        captured.update(kwargs)
+        return {"ok": True} if kwargs["endpoint"] == "client" else {"user": True}
+
+    client._raw_graphql_request = _fake_raw_request
+
+    payload, endpoint = client.raw_graphql(
+        operation_name=None,
+        query="query Q { x }",
+        variables={"a": 1},
+        endpoint="client",
+    )
+
+    assert payload == {"ok": True}
+    assert endpoint == "client"
+    assert captured["endpoint"] == "client"
+    assert captured["use_cache"] is False
+    assert captured["ttl_seconds"] == 0
+
+    captured.clear()
+    payload, endpoint = client.raw_graphql(
+        operation_name="Q",
+        query="query Q { x }",
+        variables=None,
+        endpoint="user",
+        cache_ttl_seconds=99,
+    )
+
+    assert payload == {"user": True}
+    assert endpoint == "user"
+    assert captured["operation_name"] == "Q"
+    assert captured["endpoint"] == "user"
+    assert captured["use_cache"] is False
+    assert captured["ttl_seconds"] == 99
+
+    captured.clear()
+    payload, endpoint = client.raw_graphql(
+        operation_name="Q",
+        query="query Q { x }",
+        variables=None,
+        endpoint="auto",
+    )
+
+    assert payload == {"user": True}
+    assert endpoint == "user"
+    assert captured["endpoint"] == "user"
+    assert captured["use_cache"] is False
+
+
+def test_warcraftlogs_client_raw_graphql_preserves_null_variables_on_wire(monkeypatch) -> None:
+    monkeypatch.setattr("warcraftlogs_cli.client.load_provider_auth_state", lambda provider: None)
+    client = WarcraftLogsClient.__new__(WarcraftLogsClient)
+    client._site = RETAIL_PROFILE
+    client._cache_store = None
+    client._retry_attempts = 1
+    client._http_client = None
+    client._timeout_seconds = 5.0
+    client._access_token = "client-token"
+    client._token_expires_at = time.time() + 3600
+
+    captured: dict[str, object] = {}
+
+    class _Resp:
+        def json(self) -> dict[str, object]:
+            return {"data": {"ok": True}}
+
+    def _fake_request(http_client, url, **kwargs):
+        captured["json"] = kwargs.get("json")
+        return _Resp()
+
+    monkeypatch.setattr("warcraftlogs_cli.client.request_with_retries", _fake_request)
+
+    payload, endpoint = client.raw_graphql(
+        operation_name="Nullable",
+        query="query Nullable($foo: String) { x }",
+        variables={"foo": None},
+        endpoint="client",
+    )
+
+    assert payload == {"ok": True}
+    assert endpoint == "client"
+    assert captured["json"]["variables"] == {"foo": None}
+
+
+def test_warcraftlogs_client_raw_graphql_accepts_empty_data(monkeypatch) -> None:
+    monkeypatch.setattr("warcraftlogs_cli.client.load_provider_auth_state", lambda provider: None)
+    client = WarcraftLogsClient.__new__(WarcraftLogsClient)
+    client._site = RETAIL_PROFILE
+    client._cache_store = None
+    client._retry_attempts = 1
+    client._http_client = None
+    client._timeout_seconds = 5.0
+    client._access_token = "client-token"
+    client._token_expires_at = time.time() + 3600
+
+    class _Resp:
+        def json(self) -> dict[str, object]:
+            return {"data": {}}
+
+    monkeypatch.setattr("warcraftlogs_cli.client.request_with_retries", lambda *a, **k: _Resp())
+
+    payload, _endpoint = client.raw_graphql(
+        operation_name="Empty",
+        query="query Empty { x @include(if: false) }",
+        variables=None,
+        endpoint="client",
+    )
+
+    assert payload == {}
+
+
+def test_warcraftlogs_client_raw_graphql_accepts_null_only_data_with_warnings(monkeypatch) -> None:
+    monkeypatch.setattr("warcraftlogs_cli.client.load_provider_auth_state", lambda provider: None)
+    client = WarcraftLogsClient.__new__(WarcraftLogsClient)
+    client._site = RETAIL_PROFILE
+    client._cache_store = None
+    client._retry_attempts = 1
+    client._http_client = None
+    client._timeout_seconds = 5.0
+    client._access_token = "client-token"
+    client._token_expires_at = time.time() + 3600
+
+    class _Resp:
+        def json(self) -> dict[str, object]:
+            return {
+                "data": {"reportData": {"report": None}},
+                "errors": [{"message": "report not visible", "path": ["reportData", "report"]}],
+            }
+
+    monkeypatch.setattr("warcraftlogs_cli.client.request_with_retries", lambda *a, **k: _Resp())
+
+    payload, _endpoint = client.raw_graphql(
+        operation_name="NullOnly",
+        query="query NullOnly { reportData { report(code: \"x\") { code } } }",
+        variables=None,
+        endpoint="client",
+    )
+
+    assert payload["reportData"]["report"] is None
+    assert payload[GRAPHQL_WARNINGS_KEY][0]["message"] == "report not visible"
+
+
+def test_warcraftlogs_client_raw_graphql_raises_when_errors_and_data_null(monkeypatch) -> None:
+    monkeypatch.setattr("warcraftlogs_cli.client.load_provider_auth_state", lambda provider: None)
+    client = WarcraftLogsClient.__new__(WarcraftLogsClient)
+    client._site = RETAIL_PROFILE
+    client._cache_store = None
+    client._retry_attempts = 1
+    client._http_client = None
+    client._timeout_seconds = 5.0
+    client._access_token = "client-token"
+    client._token_expires_at = time.time() + 3600
+
+    class _Resp:
+        def json(self) -> dict[str, object]:
+            return {
+                "data": None,
+                "errors": [{"message": "permission denied"}],
+            }
+
+    monkeypatch.setattr("warcraftlogs_cli.client.request_with_retries", lambda *a, **k: _Resp())
+
+    with pytest.raises(WarcraftLogsClientError) as exc_info:
+        client.raw_graphql(
+            operation_name="Failed",
+            query="query Failed { x }",
+            variables=None,
+            endpoint="client",
+        )
+
+    assert exc_info.value.code == "graphql_error"
+    assert "permission denied" in exc_info.value.message
+
+
+def test_warcraftlogs_client_raw_graphql_cache_miss_still_requests_and_writes(monkeypatch) -> None:
+    monkeypatch.setattr("warcraftlogs_cli.client.load_provider_auth_state", lambda provider: None)
+    client = WarcraftLogsClient.__new__(WarcraftLogsClient)
+    client._site = RETAIL_PROFILE
+    client._retry_attempts = 1
+    client._http_client = None
+    client._timeout_seconds = 5.0
+    client._access_token = "client-token"
+    client._token_expires_at = time.time() + 3600
+
+    captured: dict[str, object] = {"requests": 0}
+
+    class _CacheStore:
+        def get(self, key):
+            captured["read_key"] = key
+            return None
+
+        def set(self, key, payload, *, ttl_seconds):
+            captured["write_key"] = key
+            captured["cached_payload"] = payload
+            captured["ttl_seconds"] = ttl_seconds
+
+    class _Resp:
+        def json(self) -> dict[str, object]:
+            return {"data": {"ok": True}}
+
+    def _fake_request(http_client, url, **kwargs):
+        captured["requests"] += 1
+        return _Resp()
+
+    client._cache_store = _CacheStore()
+    monkeypatch.setattr("warcraftlogs_cli.client.request_with_retries", _fake_request)
+
+    payload, endpoint = client.raw_graphql(
+        operation_name="Cached",
+        query="query Cached { x }",
+        variables=None,
+        endpoint="client",
+        cache_ttl_seconds=60,
+    )
+
+    assert payload == {"ok": True}
+    assert endpoint == "client"
+    assert captured["requests"] == 1
+    assert captured["read_key"] == captured["write_key"]
+    assert captured["cached_payload"] == {"ok": True}
+    assert captured["ttl_seconds"] == 60
+
+
+def test_warcraftlogs_client_raw_graphql_does_not_cache_user_endpoint(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "warcraftlogs_cli.client.load_provider_auth_state",
+        lambda provider: {
+            "auth_mode": "pkce",
+            "access_token": "user-token",
+            "expires_at": time.time() + 3600,
+        },
+    )
+    client = WarcraftLogsClient.__new__(WarcraftLogsClient)
+    client._site = RETAIL_PROFILE
+    client._retry_attempts = 1
+    client._http_client = None
+    client._timeout_seconds = 5.0
+    client._cache_store = object()
+
+    captured: dict[str, object] = {"requests": 0}
+
+    class _Resp:
+        def json(self) -> dict[str, object]:
+            return {"data": {"userData": {"currentUser": {"id": 1}}}}
+
+    def _fail_cache_read(key):
+        raise AssertionError("user endpoint raw queries must not read shared raw cache")
+
+    def _fail_cache_write(key, payload, *, ttl_seconds):
+        raise AssertionError("user endpoint raw queries must not write shared raw cache")
+
+    def _fake_request(http_client, url, **kwargs):
+        captured["requests"] += 1
+        captured["url"] = url
+        captured["headers"] = kwargs["headers"]
+        return _Resp()
+
+    monkeypatch.setattr(client, "_read_raw_cache", _fail_cache_read)
+    monkeypatch.setattr(client, "_write_cache", _fail_cache_write)
+    monkeypatch.setattr("warcraftlogs_cli.client.request_with_retries", _fake_request)
+
+    payload, endpoint = client.raw_graphql(
+        operation_name="CurrentUser",
+        query="query CurrentUser { userData { currentUser { id } } }",
+        variables=None,
+        endpoint="user",
+        cache_ttl_seconds=60,
+    )
+
+    assert payload == {"userData": {"currentUser": {"id": 1}}}
+    assert endpoint == "user"
+    assert captured["requests"] == 1
+    assert captured["url"] == RETAIL_PROFILE.user_api_url
+    assert captured["headers"]["Authorization"] == "Bearer user-token"
 
 
 def test_warcraftlogs_client_prune_null_variables_drops_none_values() -> None:

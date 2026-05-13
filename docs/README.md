@@ -56,6 +56,7 @@ Documentation ownership:
 - [wowprogress/README.md](wowprogress/README.md)
 - [warcraft-wiki/README.md](warcraft-wiki/README.md)
 - [warcraftlogs/README.md](warcraftlogs/README.md)
+- [warcraftlogs/SCOPING.md](warcraftlogs/SCOPING.md)
 - [simc/README.md](simc/README.md)
 - [blizzard-api/README.md](blizzard-api/README.md)
 - [undermine-exchange/README.md](undermine-exchange/README.md)

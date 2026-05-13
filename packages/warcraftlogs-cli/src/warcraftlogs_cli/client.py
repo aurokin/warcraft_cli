@@ -177,6 +177,7 @@ query Encounter($id: Int!) {
 
 _GRAPHQL_ENUM_LITERAL_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 GRAPHQL_WARNINGS_KEY = "__warcraftlogs_warnings__"
+_CACHE_MISS = object()
 
 
 def _prune_null_variables(variables: dict[str, Any] | None) -> dict[str, Any]:
@@ -1240,6 +1241,17 @@ class WarcraftLogsClient:
             self._last_warnings = list(warnings) if isinstance(warnings, list) else []
         return cached
 
+    def _read_raw_cache(self, key: str) -> Any:
+        if self._cache_store is None:
+            return _CACHE_MISS
+        cached = self._cache_store.get(key)
+        if cached is None:
+            return _CACHE_MISS
+        if isinstance(cached, dict):
+            warnings = cached.get(GRAPHQL_WARNINGS_KEY)
+            self._last_warnings = list(warnings) if isinstance(warnings, list) else []
+        return cached
+
     def _write_cache(self, key: str, payload: Any, *, ttl_seconds: int) -> None:
         if self._cache_store is None:
             return
@@ -1423,7 +1435,7 @@ class WarcraftLogsClient:
     def _graphql_user(
         self,
         *,
-        operation_name: str,
+        operation_name: str | None,
         query: str,
         variables: dict[str, Any] | None,
         namespace: str,
@@ -1499,7 +1511,7 @@ class WarcraftLogsClient:
         self,
         payload: Any,
         *,
-        operation_name: str,
+        operation_name: str | None,
         endpoint: str,
     ) -> dict[str, Any]:
         if not isinstance(payload, dict):
@@ -1533,10 +1545,98 @@ class WarcraftLogsClient:
         self._last_warnings = []
         return data
 
+    def _consume_raw_graphql_response(
+        self,
+        payload: Any,
+        *,
+        operation_name: str | None,
+        endpoint: str,
+    ) -> dict[str, Any] | None:
+        if not isinstance(payload, dict):
+            label = "user " if endpoint == "user" else ""
+            raise WarcraftLogsClientError(
+                "invalid_response",
+                f"Unexpected Warcraft Logs {label}response shape for {operation_name}.",
+            )
+        errors = payload.get("errors")
+        data = payload.get("data")
+        has_errors = isinstance(errors, list) and bool(errors)
+        if "data" not in payload and has_errors:
+            first = errors[0]
+            message = first.get("message") if isinstance(first, dict) else None
+            raise WarcraftLogsClientError(
+                "graphql_error",
+                message or f"Warcraft Logs returned GraphQL errors for {operation_name}.",
+            )
+        if "data" not in payload:
+            label = "user " if endpoint == "user" else ""
+            raise WarcraftLogsClientError(
+                "invalid_response",
+                f"Warcraft Logs returned no {label}data for {operation_name}.",
+            )
+        if has_errors:
+            if data is None:
+                first = errors[0]
+                message = first.get("message") if isinstance(first, dict) else None
+                raise WarcraftLogsClientError(
+                    "graphql_error",
+                    message or f"Warcraft Logs returned GraphQL errors for {operation_name}.",
+                )
+            warnings = [_normalize_graphql_error(error) for error in errors]
+            self._last_warnings = warnings
+            return {**data, GRAPHQL_WARNINGS_KEY: warnings} if isinstance(data, dict) else data
+        self._last_warnings = []
+        return data
+
+    def _raw_graphql_request(
+        self,
+        *,
+        operation_name: str | None,
+        query: str,
+        variables: dict[str, Any] | None,
+        endpoint: str,
+        namespace: str,
+        ttl_seconds: int,
+        use_cache: bool,
+    ) -> dict[str, Any] | None:
+        use_cache = use_cache and endpoint != "user"
+        cache_payload = {
+            "endpoint": endpoint,
+            "operation_name": operation_name,
+            "query": query,
+            "variables": variables or {},
+        }
+        cache_key = self._cache_key(namespace, cache_payload)
+        if use_cache:
+            cached = self._read_raw_cache(cache_key)
+            if cached is not _CACHE_MISS:
+                return cached
+        url = self._site.user_api_url if endpoint == "user" else self._site.api_url
+        token = self._user_token() if endpoint == "user" else self._token()
+        response = request_with_retries(
+            self._client(),
+            url,
+            method="POST",
+            retry_attempts=self._retry_attempts,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "operationName": operation_name,
+                "query": query,
+                "variables": variables or {},
+            },
+        )
+        data = self._consume_raw_graphql_response(response.json(), operation_name=operation_name, endpoint=endpoint)
+        if use_cache:
+            self._write_cache(cache_key, data, ttl_seconds=ttl_seconds)
+        return data
+
     def _graphql(
         self,
         *,
-        operation_name: str,
+        operation_name: str | None,
         query: str,
         variables: dict[str, Any] | None,
         namespace: str,
@@ -1584,6 +1684,59 @@ class WarcraftLogsClient:
         if use_cache:
             self._write_cache(cache_key, data, ttl_seconds=ttl_seconds)
         return data
+
+    def raw_graphql(
+        self,
+        *,
+        operation_name: str | None,
+        query: str,
+        variables: dict[str, Any] | None,
+        endpoint: str = "auto",
+        cache_ttl_seconds: int = 0,
+    ) -> tuple[dict[str, Any] | None, str]:
+        use_cache = cache_ttl_seconds > 0
+        ttl_seconds = max(0, cache_ttl_seconds)
+        if endpoint == "user":
+            return (
+                self._raw_graphql_request(
+                    operation_name=operation_name,
+                    query=query,
+                    variables=variables,
+                    endpoint="user",
+                    namespace="raw_graphql",
+                    ttl_seconds=ttl_seconds,
+                    use_cache=False,
+                ),
+                "user",
+            )
+        if endpoint == "client":
+            return (
+                self._raw_graphql_request(
+                    operation_name=operation_name,
+                    query=query,
+                    variables=variables,
+                    endpoint="client",
+                    namespace="raw_graphql",
+                    ttl_seconds=ttl_seconds,
+                    use_cache=use_cache,
+                ),
+                "client",
+            )
+        if endpoint != "auto":
+            raise WarcraftLogsClientError("invalid_argument", "endpoint must be one of: auto, client, user.")
+        effective_endpoint = "user" if self._has_user_token() else "client"
+        return (
+            self._raw_graphql_request(
+                operation_name=operation_name,
+                query=query,
+                variables=variables,
+                endpoint=effective_endpoint,
+                namespace="raw_graphql",
+                ttl_seconds=ttl_seconds,
+                use_cache=use_cache and effective_endpoint != "user",
+            ),
+            effective_endpoint,
+        )
 
     def _report_query_variables(self, *, code: str, allow_unlisted: bool, options: ReportFilterOptions) -> dict[str, Any]:
         return {

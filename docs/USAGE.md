@@ -546,6 +546,9 @@ warcraftlogs report-events abcdefgh --fight-id 47 --limit 100
 warcraftlogs report-table abcdefgh --data-type damage-done --fight-id 47
 warcraftlogs report-graph abcdefgh --data-type damage-done --fight-id 47
 warcraftlogs report-rankings abcdefgh --fight-id 47 --player-metric dps --timeframe historical --compare rankings
+warcraftlogs graphql --query 'query Report($code: String!) { reportData { report(code: $code) { code title } } }' --report-code abcdefgh
+warcraftlogs graphql --query @./query.graphql --variables-json '{"code":"abcdefgh"}' --operation-name Report
+warcraftlogs graphql --introspect
 warcraftlogs report-encounter 'https://www.warcraftlogs.com/reports/abcdefgh#fight=47'
 warcraftlogs report-encounter-players 'https://www.warcraftlogs.com/reports/abcdefgh#fight=47'
 warcraftlogs report-encounter-casts 'https://www.warcraftlogs.com/reports/abcdefgh#fight=47' --preview-limit 20
@@ -644,6 +647,14 @@ EOF
 - `report-master-data` exposes report actor and ability catalogs, which is often the most useful companion surface for deeper report analysis
 - `report-table` and `report-graph` accept friendly enum-like filters such as `damage-done` and normalize them to the official GraphQL enum values
 - `report-rankings` exposes the official report rankings JSON with typed query metadata
+- `graphql` runs raw official GraphQL through the same auth, endpoint routing, cache opt-in, and partial-error envelope as typed commands:
+  - `--query` accepts literal text, `@path`, or `-` for stdin
+  - `--variables-json` accepts a JSON object, while repeatable `--var key=value` JSON-coerces individual values and wins on conflicts
+  - scoping helpers such as `--report-code`, `--fight-id`, `--encounter-id`, `--zone-id`, `--source-id`, `--target-id`, and `--ability-id` inject only variables declared by the operation
+  - `--endpoint auto` uses saved user auth when available, `--endpoint client` forces public client credentials, and `--endpoint user` forces saved user auth
+  - `--cache-ttl` defaults to `0` and is opt-in for client-endpoint queries; user-endpoint raw queries are not cached
+  - `--introspect` returns the provider schema introspection payload
+  - full scoping rules live in [docs/warcraftlogs/SCOPING.md](warcraftlogs/SCOPING.md)
 - `report-encounter`, `report-encounter-players`, `report-encounter-casts`, `report-encounter-buffs`, and `report-encounter-damage-breakdown` are the first deep encounter-analysis slice:
   - they accept either a report code plus `--fight-id`
   - or a Warcraft Logs report URL with a numeric `#fight=...` fragment
