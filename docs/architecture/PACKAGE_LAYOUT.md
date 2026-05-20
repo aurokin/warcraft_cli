@@ -13,7 +13,7 @@ It is the concrete companion to:
 Use:
 - a root developer workspace
 - sibling branch worktrees for parallel work
-- one `pyproject.toml` per package
+- one `pyproject.toml` per independently installable package
 - lightweight root scripts, docs, and shared tooling only
 
 This gives us:
@@ -47,7 +47,7 @@ Current examples:
 
 Future service packages should keep the same package-to-command alignment.
 
-## Current Directory Shape
+## Current Source Directory Shape
 
 Current high-level layout:
 
@@ -70,12 +70,14 @@ Current high-level layout:
 
 ## Per-Package Structure
 
-Each package should be independently buildable and follow the same basic shape:
+Each independently installable package should be independently buildable and follow the same basic shape:
 
 - `pyproject.toml`
 - `README.md` if package-specific docs are needed
 - `src/<package_name>/`
 - `tests/`
+
+Provider source directories that still ship through the root package should follow the same source layout until they are split into package-local `pyproject.toml` projects.
 
 Shared packages should not expose unrelated CLI entrypoints.
 

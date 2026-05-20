@@ -31,7 +31,8 @@ Support both:
 
 That means:
 - `warcraft` should be the umbrella package
-- `wowhead`, `method`, `icy-veins`, `raiderio`, `warcraft-wiki`, `wowprogress`, `simc`, and `warcraftlogs` should also be independently installable
+- `wowhead`, `method`, `icy-veins`, `raiderio`, `warcraft-wiki`, `wowprogress`, and `simc` are independently installable provider packages
+- `warcraftlogs` currently has a provider source directory and command surface that ship through the root package; it should gain a package-local `pyproject.toml` before being documented as independently installable
 - candidate providers enter this list when they gain a package and command surface
 
 ### Wrapper Model
@@ -181,7 +182,7 @@ Use one release pipeline for the monorepo for now.
 
 That does not require one combined CLI. It only means release management stays centralized until there is a reason to split it.
 
-## Current Layout
+## Current Source Layout
 
 The current high-level layout includes:
 
