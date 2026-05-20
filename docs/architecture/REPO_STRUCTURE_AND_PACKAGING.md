@@ -50,11 +50,9 @@ It should not:
 
 ### Backward Compatibility
 
-The current `wowhead` release should be tagged before the migration starts.
+The monorepo migration has shipped, so user-facing command contracts and documented output shapes are the compatibility boundary.
 
-After that:
-- the old implementation does not need to remain frozen internally
-- the end state does need to reach at least feature parity for `wowhead`
+Internal package layout can continue to evolve when needed, but provider commands should preserve shipped behavior unless the change is documented and reflected in the changelog.
 
 ## Language Policy
 
@@ -126,7 +124,7 @@ Not allowed:
 
 ## Auth Policy
 
-Auth is not required for the initial implementation phase, but the structure should be planned now.
+Auth is provider-scoped. Some providers remain unauthenticated, while OAuth-backed providers such as Warcraft Logs use the shared auth primitives described in [Auth Architecture](AUTH_ARCHITECTURE.md).
 
 Preferred order:
 - OS keychain when available
@@ -167,7 +165,7 @@ Use the shared directory only for data that is actually shared. Do not use it as
 
 ## Platform Policy
 
-Plan Linux first.
+Keep Linux support primary.
 
 Cross-platform support can come later, but the structure should avoid making Linux-first assumptions impossible to revisit.
 
@@ -179,9 +177,9 @@ Use one release pipeline for the monorepo for now.
 
 That does not require one combined CLI. It only means release management stays centralized until there is a reason to split it.
 
-## Recommended Initial Layout
+## Current Layout
 
-A good initial target is:
+The current high-level layout includes:
 
 - `packages/warcraft-core/`
 - `packages/warcraft-api/`
@@ -196,7 +194,7 @@ A good initial target is:
 - `packages/warcraftlogs-cli/`
 - `skills/warcraft/`
 
-Service-specific root skills can be added later if they prove useful. For now, the root `warcraft` skill should use progressive disclosure and route agents to the right service plan and CLI.
+Service-specific root skills can be added later if they prove useful. For now, the root `warcraft` skill should use progressive disclosure and route agents to the right service docs and CLI.
 
 ## Questions This Doc Resolves
 

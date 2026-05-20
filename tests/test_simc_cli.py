@@ -88,6 +88,25 @@ def test_simc_repo_reports_and_updates_resolution(monkeypatch, tmp_path: Path) -
     assert payload["resolution"]["source"] == "config"
 
 
+def test_simc_repo_reports_unset_resolution(monkeypatch, tmp_path: Path) -> None:
+    config_home = tmp_path / "config"
+    data_home = tmp_path / "data"
+    managed = data_home / "warcraft" / "simc" / "repo"
+
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+    monkeypatch.setenv("XDG_DATA_HOME", str(data_home))
+    monkeypatch.delenv("SIMC_REPO_ROOT", raising=False)
+
+    result = runner.invoke(simc_app, ["repo"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["resolution"]["root"] == str(managed.resolve())
+    assert payload["resolution"]["source"] == "unset"
+    assert payload["resolution"]["configured_root"] is None
+    assert payload["resolution"]["managed_root"] == str(managed.resolve())
+    assert payload["resolution"]["managed_exists"] is False
+
+
 def test_simc_checkout_reports_managed_checkout(monkeypatch, tmp_path: Path) -> None:
     managed = tmp_path / "managed"
 
@@ -3256,9 +3275,13 @@ def test_simc_sim_reads_stdin_and_respects_overrides(monkeypatch, tmp_path: Path
     assert payload["run_settings"]["max_time"] == 180
 
 
-@pytest.mark.skipif(not Path("/home/auro/code/simc/build/simc").exists(), reason="local simc binary not available")
-def test_simc_version_reads_local_binary() -> None:
-    result = runner.invoke(simc_app, ["version"])
+def test_simc_version_reads_explicit_repo_binary(tmp_path: Path) -> None:
+    binary = tmp_path / "build" / "simc"
+    binary.parent.mkdir()
+    binary.write_text("#!/bin/sh\necho 'SimulationCraft 1201-test'\n")
+    binary.chmod(0o755)
+
+    result = runner.invoke(simc_app, ["--repo-root", str(tmp_path), "version"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert str(payload["version"]).startswith("SimulationCraft")

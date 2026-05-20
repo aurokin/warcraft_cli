@@ -44,9 +44,9 @@ Examples:
 - `raidbots-cli` -> `raidbots`
 - `warcraftlogs-cli` -> `warcraftlogs`
 
-## Target Directory Shape
+## Current Directory Shape
 
-Recommended initial layout:
+Current high-level layout:
 
 - `packages/warcraft-core/`
 - `packages/warcraft-api/`
@@ -119,25 +119,18 @@ Within those roots, prefer:
 - `shared/`
 - one directory per service
 
-## Milestone Mapping
+## Current Service Set
 
-Milestone 1:
-- `warcraft-core`
-- `warcraft-api`
-- `warcraft-content`
-- `warcraft-cli`
-- `wowhead-cli`
-- `method-cli` with stubbed commands
+The current package set includes the umbrella wrapper, shared libraries, and service-facing packages for:
+- `wowhead`
+- `method`
+- `icy-veins`
+- `raiderio`
+- `simc`
+- `raidbots`
+- `warcraftlogs`
 
-Milestone 2:
-- real `method-cli`
-
-Later milestones:
-- `icy-veins-cli`
-- `raiderio-cli`
-- `simc-cli`
-- `raidbots-cli`
-- `warcraftlogs-cli`
+Completed rollout milestones are archived under [history/](history/README.md). Open engineering backlog items live in Linear.
 
 ## Rules
 

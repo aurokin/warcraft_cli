@@ -35,7 +35,7 @@ Documentation ownership:
 - [foundation/IDENTITY_CONTRACT.md](foundation/IDENTITY_CONTRACT.md)
 - [foundation/WRAPPER_PROVIDER_CONTRACT.md](foundation/WRAPPER_PROVIDER_CONTRACT.md)
 
-## Architecture And Shared Planning
+## Architecture And Shared References
 
 - [ROADMAP.md](ROADMAP.md) — sequencing and near-term priorities
 - [architecture/README.md](architecture/README.md) — progressive index
@@ -44,7 +44,7 @@ Documentation ownership:
 - [architecture/AUTH_ARCHITECTURE.md](architecture/AUTH_ARCHITECTURE.md)
 - [architecture/EXPANSION_FILTERING.md](architecture/EXPANSION_FILTERING.md)
 - [architecture/LINTING_AND_COMPLEXITY.md](architecture/LINTING_AND_COMPLEXITY.md)
-- [architecture/history/](architecture/history/) — completed milestones
+- [architecture/history/README.md](architecture/history/README.md) — completed milestones
 
 Engineering backlog: [Linear — Warcraft CLI](https://linear.app/aurokin/project/warcraft-cli-a9a133da0d88).
 

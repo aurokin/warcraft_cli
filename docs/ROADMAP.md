@@ -7,6 +7,7 @@ Use other docs for stable reference material:
 - analytics and comparison safety rules: [SAFE_ANALYTICS_RULES.md](foundation/SAFE_ANALYTICS_RULES.md)
 - shared identity semantics: [IDENTITY_CONTRACT.md](foundation/IDENTITY_CONTRACT.md)
 - wrapper boundary: [WRAPPER_PROVIDER_CONTRACT.md](foundation/WRAPPER_PROVIDER_CONTRACT.md)
+- architecture and package boundaries: [architecture/README.md](architecture/README.md)
 - provider-specific behavior and boundaries: `docs/<cli>/README.md`
 
 ## Goal
@@ -145,8 +146,10 @@ Revisit only when the current wrapper, official API, and evidence-oriented analy
 
 ## Sequencing Rules
 
-- Keep roadmap items here.
+- Keep roadmap sequencing here.
+- Keep open engineering backlog items in [Linear — Warcraft CLI](https://linear.app/aurokin/project/warcraft-cli-a9a133da0d88).
 - Keep repo-wide rules out of this file unless they directly affect sequencing.
+- Keep stable architecture and package-boundary reference in [architecture/README.md](architecture/README.md).
 - Keep provider behavior, current boundaries, and command-specific detail in the provider CLI docs.
 - Only extract shared code after a second provider proves the abstraction is real.
 - Prefer feature delivery, reliability, and trust metadata over broadening auth-heavy surfaces too early.
@@ -165,4 +168,4 @@ Revisit only when the current wrapper, official API, and evidence-oriented analy
 - each provider remains independently runnable and testable
 - shared code stays genuinely shared
 - the wrapper improves discovery without erasing provenance
-- roadmap work stays here, while stable rules and provider behavior stay in their own docs
+- roadmap sequencing stays here, while open backlog, stable rules, and provider behavior stay in their own systems or docs

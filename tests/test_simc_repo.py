@@ -70,6 +70,23 @@ def test_resolve_repo_root_prefers_config_then_managed(monkeypatch, tmp_path: Pa
     assert resolution.root == managed.resolve()
 
 
+def test_resolve_repo_root_reports_unset_when_managed_missing(monkeypatch, tmp_path: Path) -> None:
+    config_home = tmp_path / "config"
+    data_home = tmp_path / "data"
+    managed = data_home / "warcraft" / "simc" / "repo"
+
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+    monkeypatch.setenv("XDG_DATA_HOME", str(data_home))
+    monkeypatch.delenv("SIMC_REPO_ROOT", raising=False)
+
+    resolution = resolve_repo_root()
+    assert resolution.source == "unset"
+    assert resolution.root == managed.resolve()
+    assert resolution.configured_root is None
+    assert resolution.managed_root == managed.resolve()
+    assert resolution.managed_exists is False
+
+
 def test_resolve_repo_root_env_overrides_config(monkeypatch, tmp_path: Path) -> None:
     config_home = tmp_path / "config"
     data_home = tmp_path / "data"
