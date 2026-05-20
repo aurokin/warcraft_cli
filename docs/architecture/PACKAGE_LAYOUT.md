@@ -33,16 +33,19 @@ Keep the current alignment pattern:
 - package project names end in `-cli` when they are service-facing CLI packages
 - command names stay short and service-oriented
 
-Examples:
-- `warcraft-core-cli` -> shared package, no end-user command
+Current examples:
+- `warcraft-core` -> shared package, no end-user command
 - `warcraft` -> umbrella command
 - `wowhead-cli` -> `wowhead`
 - `method-cli` -> `method`
 - `icy-veins-cli` -> `icy-veins`
 - `raiderio-cli` -> `raiderio`
+- `warcraft-wiki-cli` -> `warcraft-wiki`
+- `wowprogress-cli` -> `wowprogress`
 - `simc-cli` -> `simc`
-- `raidbots-cli` -> `raidbots`
 - `warcraftlogs-cli` -> `warcraftlogs`
+
+Future service packages should keep the same package-to-command alignment.
 
 ## Current Directory Shape
 
@@ -56,8 +59,9 @@ Current high-level layout:
 - `packages/method-cli/`
 - `packages/icy-veins-cli/`
 - `packages/raiderio-cli/`
+- `packages/warcraft-wiki-cli/`
+- `packages/wowprogress-cli/`
 - `packages/simc-cli/`
-- `packages/raidbots-cli/`
 - `packages/warcraftlogs-cli/`
 - `skills/warcraft/`
 - `docs/`
@@ -126,8 +130,9 @@ The current package set includes the umbrella wrapper, shared libraries, and ser
 - `method`
 - `icy-veins`
 - `raiderio`
+- `warcraft-wiki`
+- `wowprogress`
 - `simc`
-- `raidbots`
 - `warcraftlogs`
 
 Completed rollout milestones are archived under [history/](history/README.md). Open engineering backlog items live in Linear.

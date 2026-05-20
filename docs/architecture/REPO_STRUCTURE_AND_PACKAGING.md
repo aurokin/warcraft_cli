@@ -31,7 +31,8 @@ Support both:
 
 That means:
 - `warcraft` should be the umbrella package
-- `wowhead`, `method`, `icy-veins`, `raiderio`, `simc`, `raidbots`, and `warcraftlogs` should also be independently installable
+- `wowhead`, `method`, `icy-veins`, `raiderio`, `warcraft-wiki`, `wowprogress`, `simc`, and `warcraftlogs` should also be independently installable
+- candidate providers enter this list when they gain a package and command surface
 
 ### Wrapper Model
 
@@ -108,6 +109,8 @@ Examples:
 - `wowhead` owns Wowhead entity/page parsing
 - `method` owns Method guide parsing
 - `raiderio` owns Raider.IO endpoint and profile logic
+- `warcraft-wiki` owns MediaWiki-backed reference lookups
+- `wowprogress` owns WowProgress ranking/profile lookups
 - `simc` owns local repo/build/run orchestration
 - `warcraftlogs` owns GraphQL query catalogs and auth scope handling
 
@@ -157,8 +160,9 @@ High-level shape:
 - `method/`
 - `icy-veins/`
 - `raiderio/`
+- `warcraft-wiki/`
+- `wowprogress/`
 - `simc/`
-- `raidbots/`
 - `warcraftlogs/`
 
 Use the shared directory only for data that is actually shared. Do not use it as a dumping ground.
@@ -189,8 +193,9 @@ The current high-level layout includes:
 - `packages/method-cli/`
 - `packages/icy-veins-cli/`
 - `packages/raiderio-cli/`
+- `packages/warcraft-wiki-cli/`
+- `packages/wowprogress-cli/`
 - `packages/simc-cli/`
-- `packages/raidbots-cli/`
 - `packages/warcraftlogs-cli/`
 - `skills/warcraft/`
 
