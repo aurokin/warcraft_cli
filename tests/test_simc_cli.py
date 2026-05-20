@@ -75,7 +75,6 @@ def test_simc_repo_reports_and_updates_resolution(monkeypatch, tmp_path: Path) -
                 "configured_root": target.resolve(),
                 "managed_root": tmp_path / "managed",
                 "managed_exists": False,
-                "legacy_root": Path("/tmp/legacy"),
             },
         )(),
     )
@@ -108,7 +107,6 @@ def test_simc_checkout_reports_managed_checkout(monkeypatch, tmp_path: Path) -> 
                 "configured_root": None,
                 "managed_root": managed,
                 "managed_exists": True,
-                "legacy_root": Path("/tmp/legacy"),
             },
         )(),
     )

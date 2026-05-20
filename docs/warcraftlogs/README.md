@@ -131,7 +131,7 @@ What changed in the research baseline:
 
 This means `warcraftlogs` should be planned as an official integration first, with scraping treated only as a fallback for unsupported site workflows.
 
-Shared auth direction for this provider is defined in [AUTH_ARCHITECTURE_PLAN.md](../architecture/AUTH_ARCHITECTURE_PLAN.md). `warcraftlogs` is one of the two providers that should define the shared OAuth-oriented auth architecture.
+Shared auth direction for this provider is defined in [AUTH_ARCHITECTURE.md](../architecture/AUTH_ARCHITECTURE.md). `warcraftlogs` is one of the two providers that should define the shared OAuth-oriented auth architecture.
 
 ## Known Gaps And Deferred Coverage
 

@@ -77,7 +77,7 @@ Sim submission has no sanctioned programmatic path:
 - the Discord bot proves a machine-accessible submission path exists internally, but it is not exposed for external use
 - reverse-engineering internal endpoints would be fragile, likely against ToS, and could break at any time
 
-Shared auth direction is defined in [AUTH_ARCHITECTURE_PLAN.md](../architecture/AUTH_ARCHITECTURE_PLAN.md). `raidbots` should be treated as a likely future session/workflow auth consumer, not as a primary driver of the shared OAuth architecture.
+Shared auth direction is defined in [AUTH_ARCHITECTURE.md](../architecture/AUTH_ARCHITECTURE.md). `raidbots` should be treated as a likely future session/workflow auth consumer, not as a primary driver of the shared OAuth architecture.
 
 ## CLI Shape
 

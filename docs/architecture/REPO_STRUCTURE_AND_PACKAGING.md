@@ -208,11 +208,12 @@ Service-specific root skills can be added later if they prove useful. For now, t
 - Should Python remain the default? Yes.
 - Is Python the language for all services? Yes.
 
-## Linked Planning Docs
+## Linked Docs
 
 - [Roadmap](../ROADMAP.md)
+- [Architecture index](README.md)
 - [Package Layout](PACKAGE_LAYOUT.md)
-- [Migration Checklist](MIGRATION_CHECKLIST.md)
+- [Monorepo migration (completed)](history/MONOREPO_MIGRATION.md)
 - [Wrapper Provider Contract](../foundation/WRAPPER_PROVIDER_CONTRACT.md)
 - [Warcraft wrapper CLI doc](../warcraft/README.md)
 - [Warcraft Logs CLI doc](../warcraftlogs/README.md)

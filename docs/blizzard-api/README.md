@@ -24,7 +24,7 @@ This should be treated as an official authenticated API service:
 - model region and namespace explicitly
 - cache within policy and respect the official access model
 
-Shared auth direction for this provider is defined in [AUTH_ARCHITECTURE_PLAN.md](../architecture/AUTH_ARCHITECTURE_PLAN.md). `blizzard-api` should be the second validation point for the shared OAuth-oriented auth architecture after `warcraftlogs`.
+Shared auth direction for this provider is defined in [AUTH_ARCHITECTURE.md](../architecture/AUTH_ARCHITECTURE.md). `blizzard-api` should be the second validation point for the shared OAuth-oriented auth architecture after `warcraftlogs`.
 
 ## Likely CLI Shape
 
