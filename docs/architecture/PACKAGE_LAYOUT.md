@@ -13,7 +13,7 @@ It is the concrete companion to:
 Use:
 - a root developer workspace
 - sibling branch worktrees for parallel work
-- one `pyproject.toml` per package
+- one `pyproject.toml` per independently installable package
 - lightweight root scripts, docs, and shared tooling only
 
 This gives us:
@@ -33,20 +33,23 @@ Keep the current alignment pattern:
 - package project names end in `-cli` when they are service-facing CLI packages
 - command names stay short and service-oriented
 
-Examples:
-- `warcraft-core-cli` -> shared package, no end-user command
+Current examples:
+- `warcraft-core` -> shared package, no end-user command
 - `warcraft` -> umbrella command
 - `wowhead-cli` -> `wowhead`
 - `method-cli` -> `method`
 - `icy-veins-cli` -> `icy-veins`
 - `raiderio-cli` -> `raiderio`
+- `warcraft-wiki-cli` -> `warcraft-wiki`
+- `wowprogress-cli` -> `wowprogress`
 - `simc-cli` -> `simc`
-- `raidbots-cli` -> `raidbots`
 - `warcraftlogs-cli` -> `warcraftlogs`
 
-## Target Directory Shape
+Future service packages should keep the same package-to-command alignment.
 
-Recommended initial layout:
+## Current Source Directory Shape
+
+Current high-level layout:
 
 - `packages/warcraft-core/`
 - `packages/warcraft-api/`
@@ -56,8 +59,9 @@ Recommended initial layout:
 - `packages/method-cli/`
 - `packages/icy-veins-cli/`
 - `packages/raiderio-cli/`
+- `packages/warcraft-wiki-cli/`
+- `packages/wowprogress-cli/`
 - `packages/simc-cli/`
-- `packages/raidbots-cli/`
 - `packages/warcraftlogs-cli/`
 - `skills/warcraft/`
 - `docs/`
@@ -66,12 +70,14 @@ Recommended initial layout:
 
 ## Per-Package Structure
 
-Each package should be independently buildable and follow the same basic shape:
+Each independently installable package should be independently buildable and follow the same basic shape:
 
 - `pyproject.toml`
 - `README.md` if package-specific docs are needed
 - `src/<package_name>/`
 - `tests/`
+
+Provider source directories that still ship through the root package should follow the same source layout until they are split into package-local `pyproject.toml` projects.
 
 Shared packages should not expose unrelated CLI entrypoints.
 
@@ -119,25 +125,19 @@ Within those roots, prefer:
 - `shared/`
 - one directory per service
 
-## Milestone Mapping
+## Current Service Set
 
-Milestone 1:
-- `warcraft-core`
-- `warcraft-api`
-- `warcraft-content`
-- `warcraft-cli`
-- `wowhead-cli`
-- `method-cli` with stubbed commands
+The current package set includes the umbrella wrapper, shared libraries, and service-facing packages for:
+- `wowhead`
+- `method`
+- `icy-veins`
+- `raiderio`
+- `warcraft-wiki`
+- `wowprogress`
+- `simc`
+- `warcraftlogs`
 
-Milestone 2:
-- real `method-cli`
-
-Later milestones:
-- `icy-veins-cli`
-- `raiderio-cli`
-- `simc-cli`
-- `raidbots-cli`
-- `warcraftlogs-cli`
+Completed rollout milestones are archived under [history/](history/README.md). Open engineering backlog items live in Linear.
 
 ## Rules
 

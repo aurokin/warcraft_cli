@@ -617,7 +617,6 @@ def doctor(ctx: typer.Context) -> None:
                 "configured_root": str(resolution.configured_root) if resolution.configured_root else None,
                 "managed_root": str(resolution.managed_root),
                 "managed_exists": resolution.managed_exists,
-                "legacy_root": str(resolution.legacy_root),
             },
             "repo": repo,
         },
@@ -663,7 +662,6 @@ def repo_command(
                 "configured_root": str(resolution.configured_root) if resolution.configured_root else None,
                 "managed_root": str(resolution.managed_root),
                 "managed_exists": resolution.managed_exists,
-                "legacy_root": str(resolution.legacy_root),
             },
         },
     )
@@ -713,7 +711,15 @@ def resolve(
     limit: int = typer.Option(5, "--limit", min=1, max=50, help="Unused in phase 1."),
 ) -> None:
     del limit
-    _emit(ctx, _coming_soon_payload(query=query, suggested_command="simc decode-build --apl-path /home/auro/code/simc/ActionPriorityLists/default/monk_mistweaver.simc"))
+    paths = _repo_paths(ctx)
+    example_apl = paths.apl_default / "monk_mistweaver.simc"
+    _emit(
+        ctx,
+        _coming_soon_payload(
+            query=query,
+            suggested_command=f"simc decode-build --apl-path {example_apl}",
+        ),
+    )
 
 
 @app.command("version")

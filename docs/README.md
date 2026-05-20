@@ -13,7 +13,7 @@ Documentation ownership:
 ## Folder Layout
 
 - `foundation/`: repo-wide principles and shared contracts
-- `architecture/`: packaging, migration, auth, and other shared design docs
+- `architecture/`: packaging, auth, expansion filtering, linting, and completed-work history
 - `warcraft/`, `wowhead/`, `method/`, `icy-veins/`, `raiderio/`, `wowprogress/`, `warcraft-wiki/`, `warcraftlogs/`, `simc/`, `blizzard-api/`, `raidbots/`, `undermine-exchange/`, `raidplan/`, `curseforge/`: CLI-specific docs
 - root docs:
   - [ROADMAP.md](ROADMAP.md)
@@ -35,16 +35,18 @@ Documentation ownership:
 - [foundation/IDENTITY_CONTRACT.md](foundation/IDENTITY_CONTRACT.md)
 - [foundation/WRAPPER_PROVIDER_CONTRACT.md](foundation/WRAPPER_PROVIDER_CONTRACT.md)
 
-## Architecture And Shared Planning
+## Architecture And Shared References
 
-- [ROADMAP.md](ROADMAP.md)
+- [ROADMAP.md](ROADMAP.md) — sequencing and near-term priorities
+- [architecture/README.md](architecture/README.md) — progressive index
 - [architecture/REPO_STRUCTURE_AND_PACKAGING.md](architecture/REPO_STRUCTURE_AND_PACKAGING.md)
 - [architecture/PACKAGE_LAYOUT.md](architecture/PACKAGE_LAYOUT.md)
-- [architecture/AUTH_ARCHITECTURE_PLAN.md](architecture/AUTH_ARCHITECTURE_PLAN.md)
-- [architecture/EXPANSION_FILTERING_PLAN.md](architecture/EXPANSION_FILTERING_PLAN.md)
-- [architecture/MIGRATION_CHECKLIST.md](architecture/MIGRATION_CHECKLIST.md)
-- [architecture/LINTING_AND_COMPLEXITY_PLAN.md](architecture/LINTING_AND_COMPLEXITY_PLAN.md)
-- [architecture/WARCRAFTLOGS_ENCOUNTER_RANKINGS_PLAN.md](architecture/WARCRAFTLOGS_ENCOUNTER_RANKINGS_PLAN.md)
+- [architecture/AUTH_ARCHITECTURE.md](architecture/AUTH_ARCHITECTURE.md)
+- [architecture/EXPANSION_FILTERING.md](architecture/EXPANSION_FILTERING.md)
+- [architecture/LINTING_AND_COMPLEXITY.md](architecture/LINTING_AND_COMPLEXITY.md)
+- [architecture/history/README.md](architecture/history/README.md) — completed milestones
+
+Engineering backlog: [Linear — Warcraft CLI](https://linear.app/aurokin/project/warcraft-cli-a9a133da0d88).
 
 ## Provider CLI Docs
 
@@ -58,11 +60,11 @@ Documentation ownership:
 - [warcraftlogs/README.md](warcraftlogs/README.md)
 - [warcraftlogs/SCOPING.md](warcraftlogs/SCOPING.md)
 - [simc/README.md](simc/README.md)
-- [blizzard-api/README.md](blizzard-api/README.md)
-- [undermine-exchange/README.md](undermine-exchange/README.md)
-- [raidplan/README.md](raidplan/README.md)
-- [curseforge/README.md](curseforge/README.md)
-- [raidbots/README.md](raidbots/README.md)
+- [blizzard-api/README.md](blizzard-api/README.md) *(planned — no CLI package yet)*
+- [undermine-exchange/README.md](undermine-exchange/README.md) *(planned)*
+- [raidplan/README.md](raidplan/README.md) *(planned)*
+- [curseforge/README.md](curseforge/README.md) *(planned)*
+- [raidbots/README.md](raidbots/README.md) *(planned)*
 
 ## Usage And Research
 

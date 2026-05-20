@@ -15,6 +15,9 @@ Add user-visible changes to `[Unreleased]` in the same PR that ships them. See [
 
 ### Changed
 
+- Architecture docs use progressive disclosure: active reference under `docs/architecture/`, completed milestones under `docs/architecture/history/`. Open engineering work moved to Linear (Warcraft CLI project).
+- `simc` repo resolution no longer falls back to a machine-specific default path; unset installs use the managed checkout path with `source: unset` until `simc checkout` or `--set-root`.
+
 ### Fixed
 
 ### Removed

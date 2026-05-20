@@ -758,7 +758,7 @@ simc build
 ```
 
 SimulationCraft behavior:
-- `doctor` reports repo path, git status, binary presence, phase capability state, and repo-resolution source
+- `doctor` reports repo path, git status, binary presence, phase capability state, and repo-resolution source (`cli_override`, `env`, `config`, `managed`, or `unset`)
 - `repo` shows the active repo-resolution path and can persist or clear an explicit repo root
 - `checkout` performs an optional CLI-managed checkout or update under the XDG data root
 - `version` probes the local `simc` binary and extracts the printed SimulationCraft version line
@@ -843,7 +843,7 @@ SimulationCraft behavior:
 - `run` executes the local `simc` binary against a profile and returns bounded stdout/stderr previews
 - `sync` and `build` are conservative local repo helpers; `sync` skips dirty worktrees unless `--allow-dirty` is set
 - `search` and `resolve` exist for wrapper-contract stability, but return structured `coming_soon` payloads until SimC discovery is implemented
-- repo resolution supports both explicit path configuration and a CLI-managed checkout fallback
+- repo resolution supports CLI overrides, `SIMC_REPO_ROOT`, persisted config, a CLI-managed checkout, and a clean-install `unset` state that points at the managed path before checkout
 
 ## Output Conventions
 
@@ -865,7 +865,7 @@ SimulationCraft behavior:
   - `mount` resolves through underlying item pages
   - `battle-pet` resolves through underlying NPC pages
 
-See [WOWHEAD_EXPANSION_RESEARCH.md](wowhead/EXPANSION_RESEARCH.md) for the routing and `dataEnv` findings behind this behavior.
+See [wowhead/EXPANSION_RESEARCH.md](wowhead/EXPANSION_RESEARCH.md) for the routing and `dataEnv` findings behind this behavior.
 
 ## Entity Retrieval
 
@@ -1026,5 +1026,5 @@ Cache cleanup and compact inspection:
 ## Related Docs
 
 - [ROADMAP.md](ROADMAP.md)
-- [WOWHEAD_ACCESS_METHODS.md](wowhead/ACCESS_METHODS.md)
-- [WOWHEAD_EXPANSION_RESEARCH.md](wowhead/EXPANSION_RESEARCH.md)
+- [wowhead/ACCESS_METHODS.md](wowhead/ACCESS_METHODS.md)
+- [wowhead/EXPANSION_RESEARCH.md](wowhead/EXPANSION_RESEARCH.md)

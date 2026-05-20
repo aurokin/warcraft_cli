@@ -8,7 +8,6 @@ from pathlib import Path
 
 from warcraft_core.paths import provider_config_root, provider_data_root
 
-LEGACY_DEFAULT_REPO = Path("/home/auro/code/simc")
 SIMC_REPO_URL = "https://github.com/simulationcraft/simc.git"
 
 
@@ -31,7 +30,6 @@ class RepoResolution:
     configured_root: Path | None
     managed_root: Path
     managed_exists: bool
-    legacy_root: Path
 
 
 @dataclass(slots=True)
@@ -88,9 +86,7 @@ def default_repo_root() -> Path:
     if configured_root is not None:
         return configured_root
     managed_root = managed_repo_root()
-    if managed_root.exists():
-        return managed_root
-    return LEGACY_DEFAULT_REPO
+    return managed_root
 
 
 def resolve_repo_root(root: str | Path | None = None) -> RepoResolution:
@@ -111,8 +107,8 @@ def resolve_repo_root(root: str | Path | None = None) -> RepoResolution:
         selected = managed_root
         source = "managed"
     else:
-        selected = LEGACY_DEFAULT_REPO
-        source = "legacy_default"
+        selected = managed_root
+        source = "unset"
     return RepoResolution(
         root=selected.resolve(),
         source=source,
@@ -120,7 +116,6 @@ def resolve_repo_root(root: str | Path | None = None) -> RepoResolution:
         configured_root=configured_root.resolve() if configured_root is not None else None,
         managed_root=managed_root.resolve(),
         managed_exists=managed_exists,
-        legacy_root=LEGACY_DEFAULT_REPO.resolve(),
     )
 
 

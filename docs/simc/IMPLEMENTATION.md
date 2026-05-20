@@ -81,7 +81,7 @@ Primary source:
 
 Responsibilities:
 - discover local SimulationCraft checkout
-- resolve repo source precedence across CLI override, env, config, managed checkout, and legacy fallback
+- resolve repo source precedence across CLI override, env, config, and managed checkout (`unset` until `simc checkout` or `--set-root`)
 - resolve important repo paths
 - validate required directories
 - validate binary presence
