@@ -1548,6 +1548,8 @@ def test_warcraftlogs_auth_status_reports_shared_state_summary(monkeypatch) -> N
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
+    assert "command" not in payload
+    assert "deprecated_keys" not in payload
     assert payload["auth"]["configured"] is True
     assert payload["auth"]["client_credentials_configured"] is True
     assert payload["auth"]["state"]["exists"] is True
