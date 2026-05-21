@@ -66,10 +66,10 @@ def test_live_warcraft_search_retail_filter_is_not_same_as_unfiltered_search() -
         "icy-veins",
         "raiderio",
         "warcraftlogs",
+        "warcraft-wiki",
         "wowprogress",
     }
-    assert {row["provider"] for row in payload["excluded_providers"]} == {"warcraft-wiki", "simc"}
-    assert all(row["provider"] != "warcraft-wiki" for row in payload["results"])
+    assert {row["provider"] for row in payload["excluded_providers"]} == {"simc"}
 
 
 @pytest.mark.live

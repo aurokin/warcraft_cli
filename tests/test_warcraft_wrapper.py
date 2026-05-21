@@ -343,8 +343,9 @@ def test_warcraft_doctor_reports_ready_and_stubbed_providers() -> None:
     assert providers["method"]["expansion_support"]["review_status"] == "reviewed"
     assert providers["warcraftlogs"]["expansion_support"]["mode"] == "fixed"
     assert providers["warcraftlogs"]["expansion_support"]["review_status"] == "reviewed"
-    assert providers["warcraft-wiki"]["expansion_support"]["mode"] == "none"
-    assert providers["warcraft-wiki"]["expansion_support"]["review_status"] == "deferred"
+    assert providers["warcraft-wiki"]["expansion_support"]["mode"] == "fixed"
+    assert providers["warcraft-wiki"]["expansion_support"]["review_status"] == "reviewed"
+    assert providers["warcraft-wiki"]["expansion_support"]["supported_expansions"] == ["retail"]
     assert providers["method"]["details"]["capabilities"]["guide"] == "ready"
     assert providers["icy-veins"]["details"]["capabilities"]["guide"] == "ready"
     assert providers["raiderio"]["details"]["capabilities"]["search"] == "ready"
@@ -390,12 +391,10 @@ def test_warcraft_doctor_reports_retail_filter_state() -> None:
         "icy-veins",
         "raiderio",
         "warcraftlogs",
+        "warcraft-wiki",
         "wowprogress",
     }
-    assert {row["provider"] for row in payload["excluded_providers"]} == {
-        "warcraft-wiki",
-        "simc",
-    }
+    assert {row["provider"] for row in payload["excluded_providers"]} == {"simc"}
 
 
 def test_warcraft_doctor_reports_worktree_runtime(monkeypatch, tmp_path) -> None:
@@ -1630,7 +1629,7 @@ def test_warcraft_search_expansion_filter_excludes_nonmatching_providers(monkeyp
     }
     excluded = {row["provider"]: row["expansion_support"]["exclusion_reason"] for row in payload["excluded_providers"]}
     assert excluded["method"] == "provider_fixed_to_other_expansion"
-    assert excluded["warcraft-wiki"] == "provider_has_no_expansion_support"
+    assert excluded["warcraft-wiki"] == "provider_fixed_to_other_expansion"
 
 
 def test_warcraft_search_compact_expansion_debug(monkeypatch) -> None:
@@ -1697,7 +1696,7 @@ def test_warcraft_search_retail_filter_keeps_fixed_retail_providers_and_excludes
     monkeypatch.setattr("raiderio_cli.main.RaiderIOClient.search", lambda self, *, term, kind=None: {"matches": []})
     monkeypatch.setattr(
         "warcraft_wiki_cli.main.WarcraftWikiClient.search_articles",
-        lambda self, query, limit: (_ for _ in ()).throw(AssertionError("warcraft-wiki should be excluded under explicit retail filtering")),
+        lambda self, query, limit: [{"title": "Mistweaver Monk", "pageid": 1}],
     )
     monkeypatch.setattr("wowprogress_cli.main.WowProgressClient.probe_search_route", lambda self, *, region, realm, name, obj_type: None)
 
@@ -1713,9 +1712,10 @@ def test_warcraft_search_retail_filter_keeps_fixed_retail_providers_and_excludes
         "icy-veins",
         "raiderio",
         "warcraftlogs",
+        "warcraft-wiki",
         "wowprogress",
     }
-    assert {row["provider"] for row in payload["excluded_providers"]} == {"warcraft-wiki", "simc"}
+    assert {row["provider"] for row in payload["excluded_providers"]} == {"simc"}
     results = {row["provider"] for row in payload["results"]}
     assert {"method", "icy-veins"} & results
 
@@ -1730,7 +1730,7 @@ def test_warcraft_resolve_retail_filter_keeps_fixed_retail_profile_provider(monk
     )
     monkeypatch.setattr(
         "warcraft_wiki_cli.main.WarcraftWikiClient.search_articles",
-        lambda self, query, limit: (_ for _ in ()).throw(AssertionError("warcraft-wiki should be excluded under explicit retail filtering")),
+        lambda self, query, limit: [],
     )
     monkeypatch.setattr(
         "wowprogress_cli.main.WowProgressClient.probe_search_route",
@@ -1761,9 +1761,10 @@ def test_warcraft_resolve_retail_filter_keeps_fixed_retail_profile_provider(monk
         "icy-veins",
         "raiderio",
         "warcraftlogs",
+        "warcraft-wiki",
         "wowprogress",
     }
-    assert {row["provider"] for row in payload["excluded_providers"]} == {"warcraft-wiki", "simc"}
+    assert {row["provider"] for row in payload["excluded_providers"]} == {"simc"}
 
 
 def test_warcraft_search_prefers_profile_provider_for_structured_guild_queries(monkeypatch) -> None:

@@ -23,7 +23,7 @@ When a caller requests a specific game version, the wrapper must not silently mi
 | `icy-veins` | `fixed` | `retail` | |
 | `raiderio` | `fixed` | `retail` | |
 | `wowprogress` | `fixed` | `retail` | |
-| `warcraft-wiki` | `none` | — | Deferred until policy exists |
+| `warcraft-wiki` | `fixed` | `retail` | Reference content; wrapper excludes non-retail until classic routing exists |
 | `simc` | `none` | — | Local analysis versioning differs |
 | `warcraftlogs` | retail-first | phase 1 `retail` | Classic/fresh site mapping deferred |
 
@@ -50,9 +50,9 @@ Without `--expansion`, cross-provider fanout behaves as before.
 
 ## Open Work
 
-- Finish per-provider expansion policy review
-- Promote providers when they gain real non-retail support
+- Promote `simc` when wrapper search/resolve can version local analysis inputs safely
 - Warcraft Logs classic/fresh site-profile mapping when wrapper vocabulary is ready
+- Optional: per-expansion wiki routing when classic/fresh article policy is defined
 
 ## Related
 
