@@ -18,6 +18,7 @@ Static quality tooling and how to use it for refactors. Open phase 2–3 work: L
 | Phase | Status |
 |-------|--------|
 | 1 — Tooling targets in Makefile | **Complete** |
+| 1b — CI: `make lint` + `make typecheck` on PRs (`.github/workflows/ci.yml`) | **Complete** |
 | 2 — Backlog from reports (complexity, duplication, dead code, boundaries) | **Open** — track in Linear |
 | 3 — Refactor slices per provider | **Open** |
 
