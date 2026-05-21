@@ -75,6 +75,7 @@ EXPANSION_PREFIXES = frozenset(
 @dataclass(slots=True)
 class RuntimeConfig:
     pretty: bool = False
+    stream: bool = False
     expansion: ExpansionProfile = field(default_factory=lambda: resolve_expansion(None))
     normalize_canonical_to_expansion: bool = False
     compact: bool = False
@@ -570,6 +571,41 @@ def _filter_payload_fields(payload: dict[str, Any], *, fields: tuple[str, ...]) 
     return filtered
 
 
+def _stream_rows(payload: dict[str, Any]) -> tuple[str, list[Any]] | None:
+    for key in ("results", "comments"):
+        rows = payload.get(key)
+        if isinstance(rows, list) and rows:
+            return key, rows
+    linked = payload.get("linked_entities")
+    if isinstance(linked, dict):
+        items = linked.get("items")
+        if isinstance(items, list) and items:
+            return "linked_entities.items", items
+    return None
+
+
+def _emit_jsonl(ctx: typer.Context, payload: dict[str, Any], *, err: bool = False) -> None:
+    from wowhead_cli.output import to_json
+
+    spec = _stream_rows(payload)
+    if spec is None:
+        emit(payload, pretty=_cfg(ctx).pretty, err=err)
+        return
+
+    field, rows = spec
+    header = dict(payload)
+    if field == "linked_entities.items":
+        linked = dict(header.get("linked_entities") or {})
+        linked["items"] = []
+        header["linked_entities"] = linked
+    else:
+        header[field] = []
+    header["stream"] = {"field": field, "count": len(rows)}
+    typer.echo(to_json(header, pretty=False), err=err)
+    for row in rows:
+        typer.echo(to_json({"record": row}, pretty=False), err=err)
+
+
 def _emit(ctx: typer.Context, payload: dict[str, Any], *, err: bool = False) -> None:
     cfg = _cfg(ctx)
     rendered: dict[str, Any] = payload
@@ -577,7 +613,54 @@ def _emit(ctx: typer.Context, payload: dict[str, Any], *, err: bool = False) -> 
         rendered = _compact_value(rendered, max_chars=280)
     if cfg.fields:
         rendered = _filter_payload_fields(rendered, fields=cfg.fields)
+    if cfg.stream:
+        _emit_jsonl(ctx, rendered, err=err)
+        return
     emit(rendered, pretty=cfg.pretty, err=err)
+
+
+def _hydrate_missing_comment_replies(
+    client: WowheadClient,
+    selected: list[dict[str, Any]],
+    *,
+    max_concurrency: int,
+) -> int:
+    from concurrent.futures import ThreadPoolExecutor
+
+    pending: list[tuple[dict[str, Any], int]] = []
+    for row in selected:
+        if not isinstance(row, dict):
+            continue
+        comment_id = row.get("id")
+        expected = row.get("nreplies")
+        current = row.get("replies")
+        if not isinstance(comment_id, int) or not isinstance(expected, int):
+            continue
+        current_count = len(current) if isinstance(current, list) else 0
+        if expected <= current_count:
+            continue
+        pending.append((row, comment_id))
+
+    if not pending:
+        return 0
+
+    workers = max(1, min(max_concurrency, len(pending)))
+    hydrated = 0
+
+    def _fetch(item: tuple[dict[str, Any], int]) -> tuple[dict[str, Any], list[Any] | None]:
+        row, comment_id = item
+        try:
+            return row, client.comment_replies(comment_id)
+        except httpx.HTTPError:
+            return row, None
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        for row, replies in pool.map(_fetch, pending):
+            if replies is None:
+                continue
+            row["replies"] = replies
+            hydrated += 1
+    return hydrated
 
 
 def _normalize_link_name(value: Any, *, entity_type: str | None) -> str | None:
@@ -4313,6 +4396,11 @@ def cli(
         "--fields",
         help="Return only selected fields (dot paths). Repeat or pass comma-separated values.",
     ),
+    stream: bool = typer.Option(
+        False,
+        "--stream",
+        help="Emit large result arrays as JSONL (header line plus one record per row).",
+    ),
 ) -> None:
     try:
         profile = resolve_expansion(expansion)
@@ -4320,6 +4408,7 @@ def cli(
         raise typer.BadParameter(str(exc), param_hint="--expansion") from exc
     ctx.obj = RuntimeConfig(
         pretty=pretty,
+        stream=stream,
         expansion=profile,
         normalize_canonical_to_expansion=normalize_canonical_to_expansion,
         compact=compact,
@@ -6280,6 +6369,13 @@ def comments(
         "--hydrate-missing-replies/--no-hydrate-missing-replies",
         help="Fetch missing replies via /comment/show-replies when embedded data is incomplete.",
     ),
+    max_concurrency: int = typer.Option(
+        4,
+        "--max-concurrency",
+        min=1,
+        max=16,
+        help="Maximum parallel reply hydration requests when --hydrate-missing-replies is enabled.",
+    ),
     linked_entity_preview_limit: int = typer.Option(
         5,
         "--linked-entity-preview-limit",
@@ -6330,22 +6426,11 @@ def comments(
 
     hydrated_count = 0
     if hydrate_missing_replies and include_replies:
-        for row in selected:
-            if not isinstance(row, dict):
-                continue
-            comment_id = row.get("id")
-            expected = row.get("nreplies")
-            current = row.get("replies")
-            if not isinstance(comment_id, int) or not isinstance(expected, int):
-                continue
-            current_count = len(current) if isinstance(current, list) else 0
-            if expected <= current_count:
-                continue
-            try:
-                row["replies"] = client.comment_replies(comment_id)
-                hydrated_count += 1
-            except httpx.HTTPError:
-                continue
+        hydrated_count = _hydrate_missing_comment_replies(
+            client,
+            selected,
+            max_concurrency=max_concurrency,
+        )
 
     normalized = normalize_comments(
         selected,
@@ -6367,6 +6452,7 @@ def comments(
             "min_rating": min_rating,
             "include_replies": include_replies,
             "hydrate_missing_replies": hydrate_missing_replies,
+            "max_concurrency": max_concurrency,
         },
         "counts": {
             "embedded_comments": len(raw_comments),

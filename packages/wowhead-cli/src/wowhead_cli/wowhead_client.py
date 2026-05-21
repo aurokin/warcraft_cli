@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 from pathlib import Path
@@ -107,6 +108,8 @@ class WowheadClient:
         self._cache_dir = cache_settings.cache_dir
         self._cache_ttls = cache_settings.ttls
         self._cache_store = build_cache_store(cache_settings) if self._cache_enabled else None
+        self._session_json_cache: dict[str, Any] = {}
+        self._session_text_cache: dict[str, str] = {}
         self.expansion = expansion if isinstance(expansion, ExpansionProfile) else resolve_expansion(expansion)
 
     def __enter__(self) -> WowheadClient:
@@ -228,16 +231,22 @@ class WowheadClient:
         cache_ttl_seconds: int | None = None,
         cache_namespace: str = "json",
     ) -> Any:
+        session_key = self._cache_key(cache_namespace, url, params)
+        if session_key in self._session_json_cache:
+            return copy.deepcopy(self._session_json_cache[session_key])
+
         cache_key = None
         if cache_ttl_seconds and cache_ttl_seconds > 0:
-            cache_key = self._cache_key(cache_namespace, url, params)
+            cache_key = session_key
             cached = self._read_cache(cache_key)
             if cached is not None:
-                return cached
+                self._session_json_cache[session_key] = cached
+                return copy.deepcopy(cached)
 
         response = self._request_with_retries(url, params=params)
         payload = response.json()
 
+        self._session_json_cache[session_key] = payload
         if cache_key is not None:
             self._write_cache(cache_key, payload, ttl_seconds=cache_ttl_seconds)
         return payload
@@ -250,16 +259,22 @@ class WowheadClient:
         cache_ttl_seconds: int | None = None,
         cache_namespace: str = "text",
     ) -> str:
+        session_key = self._cache_key(cache_namespace, url, params)
+        if session_key in self._session_text_cache:
+            return self._session_text_cache[session_key]
+
         cache_key = None
         if cache_ttl_seconds and cache_ttl_seconds > 0:
-            cache_key = self._cache_key(cache_namespace, url, params)
+            cache_key = session_key
             cached = self._read_cache(cache_key)
             if isinstance(cached, str):
+                self._session_text_cache[session_key] = cached
                 return cached
 
         response = self._request_with_retries(url, params=params)
         payload = response.text
 
+        self._session_text_cache[session_key] = payload
         if cache_key is not None:
             self._write_cache(cache_key, payload, ttl_seconds=cache_ttl_seconds)
         return payload
