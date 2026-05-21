@@ -195,10 +195,11 @@ def _emit(
         payload = _with_warnings(payload, client)
     if not err and payload.get("ok") is not False:
         from warcraftlogs_cli.payload_envelope import apply_payload_envelope
+        from warcraftlogs_cli.payload_keys_registry import ALL_COMMANDS
 
         ctx_command = getattr(ctx, "command", None)
         command_name = command or (ctx_command.name if ctx_command is not None else None)
-        if command_name:
+        if command_name in ALL_COMMANDS:
             payload = apply_payload_envelope(command_name, payload)
     emit(payload, pretty=_cfg(ctx).pretty, err=err)
 

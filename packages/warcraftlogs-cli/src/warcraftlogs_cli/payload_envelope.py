@@ -86,37 +86,6 @@ def canonical_key_for_command(command: str) -> str:
     return command_to_canonical_key(command)
 
 
-def legacy_primary_key_for_command(command: str) -> str | None:
-    legacy = LEGACY_PRIMARY_KEYS.get(command)
-    if legacy is None:
-        canonical = canonical_key_for_command(command)
-        return canonical if canonical in _ALREADY_ALIGNED else None
-    return legacy
-
-
-_ALREADY_ALIGNED = frozenset(
-    {
-        "doctor",
-        "rate_limit",
-        "regions",
-        "expansions",
-        "server",
-        "zones",
-        "zone",
-        "encounter",
-        "guild",
-        "guild_rankings",
-        "guild_members",
-        "guild_attendance",
-        "character",
-        "character_rankings",
-        "report",
-        "reports",
-        "report_fights",
-    }
-)
-
-
 def documented_payload_keys() -> list[tuple[str, str, str | None]]:
     """Return (command, canonical_key, legacy_primary_key) for docs and tests."""
     from warcraftlogs_cli.payload_keys_registry import ALL_COMMANDS
