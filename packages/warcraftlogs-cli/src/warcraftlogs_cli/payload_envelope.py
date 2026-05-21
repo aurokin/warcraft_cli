@@ -78,12 +78,8 @@ ENCOUNTER_COMMANDS = frozenset(
 )
 
 
-def command_to_canonical_key(command: str) -> str:
-    return command.replace("-", "_")
-
-
 def canonical_key_for_command(command: str) -> str:
-    return command_to_canonical_key(command)
+    return command.replace("-", "_")
 
 
 def documented_payload_keys() -> list[tuple[str, str, str | None]]:
@@ -100,7 +96,12 @@ def documented_payload_keys() -> list[tuple[str, str, str | None]]:
     return rows
 
 
-def _encounter_envelope_body(payload: dict[str, Any], *, legacy_primary: str) -> dict[str, Any]:
+def _encounter_envelope_body(
+    payload: dict[str, Any],
+    *,
+    legacy_primary: str,
+    canonical_key: str,
+) -> dict[str, Any]:
     body: dict[str, Any] = {}
     for key in ENCOUNTER_SCOPE_KEYS:
         if key in payload:
@@ -108,9 +109,7 @@ def _encounter_envelope_body(payload: dict[str, Any], *, legacy_primary: str) ->
     if legacy_primary in payload:
         body[legacy_primary] = copy.deepcopy(payload[legacy_primary])
     for key, value in payload.items():
-        if key in META_KEYS or key in ENCOUNTER_SCOPE_KEYS or key == legacy_primary:
-            continue
-        if key == command_to_canonical_key(""):  # pragma: no cover
+        if key in META_KEYS or key in ENCOUNTER_SCOPE_KEYS or key in {legacy_primary, canonical_key}:
             continue
         body[key] = copy.deepcopy(value)
     return body
@@ -138,7 +137,7 @@ def apply_payload_envelope(command: str, payload: dict[str, Any]) -> dict[str, A
         return out
 
     if command in ENCOUNTER_COMMANDS and legacy_primary:
-        body = _encounter_envelope_body(out, legacy_primary=legacy_primary)
+        body = _encounter_envelope_body(out, legacy_primary=legacy_primary, canonical_key=canonical)
         out[canonical] = body
         if legacy_primary != canonical:
             deprecated.append(legacy_primary)
