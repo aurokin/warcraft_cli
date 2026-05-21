@@ -2,6 +2,12 @@
 
 Breakage detection for Wowhead CLI surfaces (AUR-359).
 
+## Performance flags
+
+- `--stream` on `wowhead` emits a JSONL header line plus one `record` line per row for `search.results`, `comments`, or `entity-page` linked entities.
+- `--max-concurrency` on `comments --hydrate-missing-replies` caps parallel reply fetches (default 4).
+- The HTTP client dedupes identical in-flight URL requests within a single command invocation.
+
 ## Local checks
 
 ```bash
