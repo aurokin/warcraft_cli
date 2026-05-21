@@ -10,6 +10,7 @@ Add user-visible changes to `[Unreleased]` in the same PR that ships them. See [
 
 ### Added
 
+- GitHub Actions CI (`.github/workflows/ci.yml`) runs `make lint` and `make typecheck` on pull requests and pushes to `main`.
 - `warcraftlogs graphql` now provides a raw official GraphQL passthrough with literal/file/stdin query input, JSON variables, declared-variable scoping helpers, explicit endpoint selection, opt-in caching, introspection, and the same `graphql_warnings` envelope used by typed Warcraft Logs commands.
 - `report-encounter-buffs` now returns a typed `buffs.preview` payload with per-row `source` (or `target` when `--view-by target`), `aura` (with identity contract), and reported buff-table fields (`reported_total_uptime`, `reported_total_uses`, `reported_bands`), parallel to `report-encounter-casts`. New `--preview-limit` flag (default 20, max 200) bounds the preview length; `buffs.total` and `buffs.preview_truncated` mirror the casts contract so agents can compose follow-ups against either sibling command without learning two output shapes.
 
