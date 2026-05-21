@@ -8,6 +8,7 @@ Repo-wide product philosophy lives in [PRODUCT_PRINCIPLES.md](../foundation/PROD
 Repo-wide analytics and comparison safety rules live in [SAFE_ANALYTICS_RULES.md](../foundation/SAFE_ANALYTICS_RULES.md).
 Scoping conventions live in [SCOPING.md](SCOPING.md).
 Payload envelope keys live in [PAYLOAD_KEYS.md](PAYLOAD_KEYS.md).
+Live command matrix workflow lives in [LIVE_MATRIX.md](LIVE_MATRIX.md).
 This file tracks Warcraft Logs-specific implementation state, boundaries, and current gaps.
 
 The CLI should become the fastest trustworthy path for:
