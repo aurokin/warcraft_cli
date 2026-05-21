@@ -132,7 +132,10 @@ def test_live_warcraftlogs_command_matrix(case: MatrixCase, live_matrix_context:
     assert payload["provider"] == "warcraftlogs"
 
     if case.command == "auth":
-        assert case.nonempty_leaf in payload
+        if case.case_id == "auth-status":
+            assert payload["auth"]["configured"] is True
+        else:
+            assert case.nonempty_leaf in payload
         return
 
     assert payload.get("command") == case.command

@@ -448,6 +448,14 @@ def matrix_cases() -> tuple[MatrixCase, ...]:
             "graphql",
         ),
         MatrixCase(
+            "auth-status",
+            "auth",
+            "auth",
+            AuthRequirement.CLIENT,
+            _static(["auth", "status", "--no-live"]),
+            "auth",
+        ),
+        MatrixCase(
             "auth-whoami",
             "auth",
             "auth",
