@@ -106,7 +106,10 @@ def _auth_skip(case: MatrixCase) -> None:
 
 def _assert_nonempty(payload: dict[str, Any], *, canonical_key: str, leaf: str) -> None:
     body = payload[canonical_key]
-    value: Any = body.get(leaf) if isinstance(body, dict) and leaf in body else body
+    if isinstance(body, dict):
+        value: Any = body.get(leaf, body)
+    else:
+        value = body
     if isinstance(value, list):
         assert value, f"expected non-empty list at {canonical_key}.{leaf}"
     elif isinstance(value, dict):
