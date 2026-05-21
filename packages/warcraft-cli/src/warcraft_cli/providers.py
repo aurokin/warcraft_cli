@@ -54,7 +54,7 @@ PROVIDERS: tuple[ProviderRegistration, ...] = (
             "resolve": "ready",
         },
         app=wowhead_app,
-        doctor_args=("cache-inspect", "--summary", "--hide-zero"),
+        doctor_args=("doctor", "--no-live"),
     ),
     ProviderRegistration(
         name="method",

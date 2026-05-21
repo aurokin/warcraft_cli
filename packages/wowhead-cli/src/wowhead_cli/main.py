@@ -4327,6 +4327,28 @@ def cli(
     )
 
 
+@app.command("doctor")
+def doctor(
+    ctx: typer.Context,
+    no_live: bool = typer.Option(
+        False,
+        "--no-live",
+        help="Skip live Wowhead endpoint probes and report cache/runtime readiness only.",
+    ),
+) -> None:
+    from wowhead_cli.doctor import build_doctor_payload
+
+    cfg = _cfg(ctx)
+    try:
+        settings = load_cache_settings_from_env()
+    except ValueError as exc:
+        _fail(ctx, "invalid_cache_config", str(exc))
+        return
+    cache_payload = _cache_settings_payload(settings)
+    payload = build_doctor_payload(cfg.expansion, live=not no_live, cache=cache_payload)
+    _emit(ctx, payload)
+
+
 @app.command("expansions")
 def expansions(ctx: typer.Context) -> None:
     profiles = list_profiles()
