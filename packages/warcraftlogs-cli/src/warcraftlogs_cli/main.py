@@ -183,9 +183,23 @@ def _cfg(ctx: typer.Context) -> RuntimeConfig:
     return RuntimeConfig()
 
 
-def _emit(ctx: typer.Context, payload: dict[str, Any], *, err: bool = False, client: Any = None) -> None:
+def _emit(
+    ctx: typer.Context,
+    payload: dict[str, Any],
+    *,
+    err: bool = False,
+    client: Any = None,
+    command: str | None = None,
+) -> None:
     if client is not None:
         payload = _with_warnings(payload, client)
+    if not err and payload.get("ok") is not False:
+        from warcraftlogs_cli.payload_envelope import apply_payload_envelope
+
+        ctx_command = getattr(ctx, "command", None)
+        command_name = command or (ctx_command.name if ctx_command is not None else None)
+        if command_name:
+            payload = apply_payload_envelope(command_name, payload)
     emit(payload, pretty=_cfg(ctx).pretty, err=err)
 
 

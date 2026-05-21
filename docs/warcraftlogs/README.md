@@ -7,6 +7,7 @@ Build `warcraftlogs` as an official API-first provider for Warcraft Logs using t
 Repo-wide product philosophy lives in [PRODUCT_PRINCIPLES.md](../foundation/PRODUCT_PRINCIPLES.md).
 Repo-wide analytics and comparison safety rules live in [SAFE_ANALYTICS_RULES.md](../foundation/SAFE_ANALYTICS_RULES.md).
 Scoping conventions live in [SCOPING.md](SCOPING.md).
+Payload envelope keys live in [PAYLOAD_KEYS.md](PAYLOAD_KEYS.md).
 This file tracks Warcraft Logs-specific implementation state, boundaries, and current gaps.
 
 The CLI should become the fastest trustworthy path for:
