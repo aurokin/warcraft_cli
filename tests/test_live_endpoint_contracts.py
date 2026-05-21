@@ -46,13 +46,34 @@ def _http_get_json(
     params: dict[str, Any] | None = None,
     attempts: int = 3,
 ) -> Any:
+    payload, _health = _http_get_json_with_health(url, params=params, attempts=attempts)
+    return payload
+
+
+def _http_get_json_with_health(
+    url: str,
+    *,
+    params: dict[str, Any] | None = None,
+    attempts: int = 3,
+) -> tuple[Any, dict[str, Any]]:
     last_exc: Exception | None = None
     for attempt in range(1, attempts + 1):
+        started = time.perf_counter()
         try:
             with httpx.Client(timeout=20.0, follow_redirects=True) as client:
                 response = client.get(url, params=params)
+                latency_ms = (time.perf_counter() - started) * 1000
                 response.raise_for_status()
-                return response.json()
+                health = {
+                    "status_code": response.status_code,
+                    "latency_ms": round(latency_ms, 1),
+                    "latency_bucket": "fast"
+                    if latency_ms < 500
+                    else "moderate"
+                    if latency_ms < 2000
+                    else "slow",
+                }
+                return response.json(), health
         except Exception as exc:  # noqa: BLE001
             last_exc = exc
             if attempt < attempts:
@@ -106,8 +127,10 @@ def test_live_search_endpoint_contract(profile_key: str) -> None:
     _require_live()
     profile = next(profile for profile in list_profiles() if profile.key == profile_key)
     url = build_search_suggestions_url(profile)
-    payload = _http_get_json(url, params={"q": QUERY})
+    payload, health = _http_get_json_with_health(url, params={"q": QUERY})
 
+    assert health["status_code"] == 200
+    assert health["latency_bucket"] in {"fast", "moderate", "slow"}
     assert isinstance(payload, dict)
     assert payload.get("search") == QUERY
     results = payload.get("results")
