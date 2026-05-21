@@ -30,6 +30,7 @@ LIVE_TEST_ENV_BY_FILE = {
     "test_warcraft_wiki_live.py": "WARCRAFT_WIKI_LIVE_TESTS",
     "test_warcraft_wrapper_live.py": "WARCRAFT_WRAPPER_LIVE_TESTS",
     "test_warcraftlogs_live.py": "WARCRAFTLOGS_LIVE_TESTS",
+    "test_live_command_matrix.py": "WARCRAFTLOGS_LIVE_TESTS",
     "test_wowprogress_live.py": "WOWPROGRESS_LIVE_TESTS",
 }
 

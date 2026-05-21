@@ -25,7 +25,7 @@ LIVE_TEST_ENV := \
 	WARCRAFTLOGS_LIVE_TESTS=1 \
 	WARCRAFT_WRAPPER_LIVE_TESTS=1
 
-.PHONY: dev-deploy dev-deploy-no-link worktree-env test test-live fmt-check lint lint-all complexity typecheck coverage deadcode run release
+.PHONY: dev-deploy dev-deploy-no-link worktree-env test test-live test-live-matrix fmt-check lint lint-all complexity typecheck coverage deadcode run release
 
 dev-deploy:
 	./scripts/dev_deploy.sh
@@ -41,6 +41,9 @@ test:
 
 test-live:
 	$(LIVE_TEST_ENV) $(PYTEST) -q -m live
+
+test-live-matrix:
+	WARCRAFTLOGS_LIVE_TESTS=1 $(PYTEST) -q -m live tests/test_live_command_matrix.py
 
 fmt-check:
 	$(PYTHON) -m compileall -q packages

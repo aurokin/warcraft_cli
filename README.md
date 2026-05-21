@@ -104,6 +104,7 @@ RAIDERIO_LIVE_TESTS=1 pytest -q -m live tests/test_raiderio_live.py
 WARCRAFT_WIKI_LIVE_TESTS=1 pytest -q -m live tests/test_warcraft_wiki_live.py
 WOWPROGRESS_LIVE_TESTS=1 pytest -q -m live tests/test_wowprogress_live.py
 WARCRAFTLOGS_LIVE_TESTS=1 pytest -q -m live tests/test_warcraftlogs_live.py
+make test-live-matrix
 WARCRAFT_WRAPPER_LIVE_TESTS=1 pytest -q -m live tests/test_warcraft_wrapper_live.py
 ```
 
