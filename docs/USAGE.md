@@ -234,6 +234,8 @@ wowhead --expansion ptr --normalize-canonical-to-expansion entity-page item 1901
 wowhead entity-page item 19019 --max-links 100
 wowhead comments item 19019 --limit 30 --sort rating
 wowhead compare item:19019 item:19351 --comment-sample 2
+wowhead compare --preset gear item:19019 item:19351
+wowhead compare --preset quest quest:7786 quest:7787
 wowhead expansions
 ```
 
@@ -983,6 +985,7 @@ The flattened `top` list prefers merged linked-entity rows over duplicate raw ga
 - linked-entity overlap and unique sets
 - comment context
 - canonical citation links
+- `--preset gear|quest|spell` to tune comparable fields, link limits, and comment sampling (explicit flags override preset defaults)
 
 Generated overlap and unique linked-entity rows use a single canonical `url`.
 
