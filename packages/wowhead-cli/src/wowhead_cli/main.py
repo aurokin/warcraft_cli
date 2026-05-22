@@ -22,6 +22,7 @@ from warcraft_core.output import (
     shape_payload,
 )
 from warcraft_content.guide_analysis import extract_section_chunk_analysis_surfaces
+from wowhead_cli.citation_pack import citation_pack_from_compare, citation_pack_from_entity
 from wowhead_cli.compare_presets import resolve_compare_options
 from wowhead_cli.cache import (
     clear_file_cache,
@@ -87,6 +88,7 @@ class RuntimeConfig:
     normalize_canonical_to_expansion: bool = False
     output: OutputOptions = field(default_factory=OutputOptions)
     diagnostics: DiagnosticsCollector = field(default_factory=DiagnosticsCollector)
+    citation_pack: bool = False
 
 
 @dataclass(slots=True)
@@ -543,8 +545,22 @@ def _emit_jsonl(ctx: typer.Context, payload: dict[str, Any], *, err: bool = Fals
         typer.echo(to_json({"record": row}, pretty=False), err=err)
 
 
+def _attach_citation_pack(payload: dict[str, Any], *, enabled: bool) -> dict[str, Any]:
+    if not enabled or payload.get("ok") is False:
+        return payload
+    if "comparison" in payload and isinstance(payload.get("entities"), list):
+        payload = dict(payload)
+        payload["citation_pack"] = citation_pack_from_compare(payload)
+        return payload
+    if isinstance(payload.get("entity"), dict):
+        payload = dict(payload)
+        payload["citation_pack"] = citation_pack_from_entity(payload)
+    return payload
+
+
 def _emit(ctx: typer.Context, payload: dict[str, Any], *, err: bool = False) -> None:
     cfg = _cfg(ctx)
+    payload = _attach_citation_pack(payload, enabled=cfg.citation_pack)
     try:
         rendered = shape_payload(payload, cfg.output, diagnostics=cfg.diagnostics)
     except OutputProjectionError as exc:
@@ -4338,6 +4354,11 @@ def cli(
         "--stream",
         help="Emit large result arrays as JSONL (header line plus one record per row).",
     ),
+    citation_pack: bool = typer.Option(
+        False,
+        "--citation-pack",
+        help="Attach a deterministic citation_pack with source URLs and per-claim anchors.",
+    ),
     profile: str | None = typer.Option(
         None,
         "--profile",
@@ -4376,6 +4397,7 @@ def cli(
         expansion=expansion_profile,
         normalize_canonical_to_expansion=normalize_canonical_to_expansion,
         output=output,
+        citation_pack=citation_pack,
     )
 
 
