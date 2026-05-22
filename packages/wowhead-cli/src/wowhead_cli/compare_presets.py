@@ -71,7 +71,7 @@ def resolve_compare_preset(name: str | None) -> ComparePreset:
         return DEFAULT_COMPARE_PRESET
     key = name.strip().lower()
     if key not in COMPARE_PRESETS:
-        supported = ", ".join(sorted(key for key in COMPARE_PRESETS if key != "default"))
+        supported = ", ".join(sorted(preset_key for preset_key in COMPARE_PRESETS if preset_key != "default"))
         raise ValueError(f"--preset must be one of: {supported}")
     return COMPARE_PRESETS[key]
 

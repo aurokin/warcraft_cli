@@ -515,12 +515,12 @@ def _truncate_text(value: Any, *, max_chars: int) -> str | None:
 def _stream_rows(payload: dict[str, Any]) -> tuple[str, list[Any]] | None:
     for key in ("results", "comments"):
         rows = payload.get(key)
-        if isinstance(rows, list) and rows:
+        if isinstance(rows, list):
             return key, rows
     linked = payload.get("linked_entities")
     if isinstance(linked, dict):
         items = linked.get("items")
-        if isinstance(items, list) and items:
+        if isinstance(items, list):
             return "linked_entities.items", items
     return None
 

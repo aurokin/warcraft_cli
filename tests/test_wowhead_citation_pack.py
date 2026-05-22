@@ -31,6 +31,9 @@ def test_citation_pack_from_entity_collects_page_and_comment_anchors() -> None:
     claims = {row["claim"] for row in pack["anchors"]}
     assert "tooltip.name" in claims
     assert "comments.top[0].body" in claims
+    comment_anchor = next(row for row in pack["anchors"] if row["claim"] == "comments.top[0].body")
+    assert comment_anchor["url"] == "https://www.wowhead.com/item=19019#comments:id=1"
+    assert comment_anchor["url"].count("#") == 1
 
 
 def test_entity_command_can_emit_citation_pack(monkeypatch) -> None:
