@@ -64,6 +64,13 @@ def test_shape_payload_attaches_diagnostics_block() -> None:
     assert payload["diagnostics"]["timings_ms"]["search"] == 12.5
 
 
+def test_shape_payload_omits_diagnostics_outside_debug_profile() -> None:
+    collector = DiagnosticsCollector(request_count=2, cache_hits=1)
+    collector.set_timing("search", 12.5)
+    payload = shape_payload({"ok": True}, resolve_output_options(profile="agent"), diagnostics=collector)
+    assert "diagnostics" not in payload
+
+
 def test_resolve_output_options_rejects_unknown_profile() -> None:
     with pytest.raises(ValueError, match="agent, human, debug"):
         resolve_output_options(profile="verbose")

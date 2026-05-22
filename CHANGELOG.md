@@ -34,6 +34,13 @@ Add user-visible changes to `[Unreleased]` in the same PR that ships them. See [
 
 ### Fixed
 
+- Review remediation: WowProgress `WowProgressClient` re-export on `main` (runtime import from `context`).
+- Wowhead `--stream` emits a JSONL header when row arrays are empty; session JSON cache returns deep copies on fresh fetches.
+- Wowhead citation pack avoids doubling URL fragments when comment anchors already include `#`.
+- Output shaping only attaches `diagnostics` when `--profile debug` (not merely when a collector has values).
+- Warcraft Logs live matrix: required `--ability-id`, aura compare windows, and `--actor-id` for player talents; per-test skips instead of module-wide fixture skips.
+- Live Wowhead CI matrix uses precise `pytest -k` filters so `classic` does not match `mop-classic`.
+
 ### Removed
 
 ### Deprecated

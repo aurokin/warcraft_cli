@@ -249,7 +249,7 @@ class WowheadClient:
         self._session_json_cache[session_key] = payload
         if cache_key is not None:
             self._write_cache(cache_key, payload, ttl_seconds=cache_ttl_seconds)
-        return payload
+        return copy.deepcopy(payload)
 
     def _get_text(
         self,

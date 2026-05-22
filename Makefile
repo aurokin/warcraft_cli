@@ -27,7 +27,7 @@ LIVE_TEST_ENV := \
 
 IMPORT_LINTER := $(VENV)/bin/lint-imports
 
-.PHONY: dev-deploy dev-deploy-no-link worktree-env test test-live test-live-matrix fmt-check lint lint-boundaries lint-all complexity typecheck coverage deadcode run release
+.PHONY: dev-deploy dev-deploy-no-link worktree-env test test-live test-live-matrix fmt-check lint lint-boundaries lint-all complexity typecheck coverage deadcode run release review-comments request-pr-reviews
 
 dev-deploy:
 	./scripts/dev_deploy.sh
@@ -46,6 +46,14 @@ test-live:
 
 test-live-matrix:
 	WARCRAFTLOGS_LIVE_TESTS=1 $(PYTEST) -q -m live tests/test_live_command_matrix.py
+
+review-comments:
+	@test -n "$(PR)" || (echo "Set PR=<number> (e.g. make review-comments PR=42)" >&2; exit 1)
+	./scripts/pr_review_comments.sh "$(PR)"
+
+request-pr-reviews:
+	@test -n "$(PR)" || (echo "Set PR=<number> (e.g. make request-pr-reviews PR=42)" >&2; exit 1)
+	./scripts/request_pr_reviews.sh "$(PR)"
 
 fmt-check:
 	$(PYTHON) -m compileall -q packages

@@ -26,9 +26,11 @@ def _add_claim(
         "url": url.strip(),
     }
     if isinstance(anchor, str) and anchor.strip():
-        entry["anchor"] = anchor.strip()
-        if "#" in anchor:
-            entry["url"] = f"{url.strip()}{anchor.strip()}"
+        fragment = anchor.strip()
+        entry["anchor"] = fragment
+        if fragment.startswith("#"):
+            base_url = url.strip().split("#", 1)[0]
+            entry["url"] = f"{base_url}{fragment}"
     anchors.append(entry)
 
 

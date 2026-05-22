@@ -209,7 +209,7 @@ def shape_payload(
         rendered = compact_value(rendered, max_chars=options.compact_max_chars)
     if options.fields:
         rendered = filter_payload_fields(rendered, fields=options.fields, strict=options.fields_strict)
-    if options.include_diagnostics or (diagnostics is not None and diagnostics.has_values()):
+    if options.include_diagnostics:
         rendered = attach_diagnostics(rendered, diagnostics)
     return rendered
 

@@ -31,14 +31,21 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        expansion:
-          - retail
-          - classic
-          - wotlk
-          - cata
-          - mop-classic
-          - ptr
-          - tbc
+        include:
+          - expansion: retail
+            pytest_k: retail
+          - expansion: classic
+            pytest_k: "classic and not mop"
+          - expansion: wotlk
+            pytest_k: wotlk
+          - expansion: cata
+            pytest_k: cata
+          - expansion: mop-classic
+            pytest_k: mop-classic
+          - expansion: ptr
+            pytest_k: ptr
+          - expansion: tbc
+            pytest_k: tbc
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -59,8 +66,33 @@ jobs:
           WOWHEAD_LIVE_TESTS: "1"
         run: |
           .venv/bin/pytest -q \
-            tests/test_live_endpoint_contracts.py -k "${{ matrix.expansion }}" \
-            tests/test_live_integration.py -k "${{ matrix.expansion }}"
+            tests/test_live_endpoint_contracts.py -k "${{ matrix.pytest_k }}" \
+            tests/test_live_integration.py -k "${{ matrix.pytest_k }}"
+
+  live-integration-global:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m venv .venv
+          .venv/bin/pip install -e ".[dev]"
+
+      - name: Live Wowhead integration (expansion-agnostic contracts)
+        env:
+          WOWHEAD_LIVE_TESTS: "1"
+        run: |
+          .venv/bin/pytest -q tests/test_live_integration.py \
+            -k "not (retail or classic or wotlk or cata or mop-classic or ptr or tbc)"
 
   live-parser-canaries:
     runs-on: ubuntu-latest

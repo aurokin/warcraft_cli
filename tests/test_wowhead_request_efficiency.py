@@ -12,6 +12,21 @@ from wowhead_cli.wowhead_client import WowheadClient
 runner = CliRunner()
 
 
+def test_wowhead_client_get_json_returns_deepcopy_from_session_cache(monkeypatch) -> None:
+    def fake_request(self, url: str, *, params=None):  # noqa: ANN001
+        response = MagicMock()
+        response.json.return_value = {"search": "x", "results": [{"id": 1}]}
+        return response
+
+    monkeypatch.setattr(WowheadClient, "_request_with_retries", fake_request)
+    client = WowheadClient(cache_enabled=False)
+    first = client._get_json("https://example.test/search", cache_namespace="json")
+    first["results"][0]["id"] = 99
+    second = client._get_json("https://example.test/search", cache_namespace="json")
+    client.close()
+    assert second["results"][0]["id"] == 1
+
+
 def test_wowhead_client_dedupes_session_json_requests(monkeypatch) -> None:
     calls: list[str] = []
 
@@ -27,6 +42,25 @@ def test_wowhead_client_dedupes_session_json_requests(monkeypatch) -> None:
     client.search_suggestions("thunderfury")
     client.close()
     assert len(calls) == 1
+
+
+def test_wowhead_search_stream_emits_jsonl_header_when_results_empty(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "wowhead_cli.wowhead_client.WowheadClient.search_suggestions",
+        lambda self, query: {"search": query, "results": []},
+    )
+    monkeypatch.setattr(
+        "wowhead_cli.main._normalize_search_results",
+        lambda results, *, query, expansion: results,
+    )
+
+    result = runner.invoke(app, ["--stream", "search", "thunderfury", "--limit", "10"])
+    assert result.exit_code == 0
+    lines = [line for line in result.stdout.splitlines() if line.strip()]
+    assert len(lines) == 1
+    header = json.loads(lines[0])
+    assert header["stream"] == {"field": "results", "count": 0}
+    assert header["results"] == []
 
 
 def test_wowhead_search_stream_emits_jsonl_header_and_records(monkeypatch) -> None:

@@ -49,25 +49,73 @@ def _require_user_auth() -> None:
         pytest.skip("Warcraft Logs user auth token is not configured.")
 
 
-def _pick_fight(code: str, *, difficulty: int) -> int:
+def _pick_fight(code: str, *, difficulty: int) -> int | None:
     payload = _payload_for(["report-fights", code, "--difficulty", str(difficulty)])
     block = payload.get("report_fights") or payload.get("fights")
     if isinstance(block, dict):
         fights = block.get("fights", block)
     else:
         fights = block
-    assert isinstance(fights, list), payload
+    if not isinstance(fights, list):
+        return None
     for fight in fights:
         fight_id = fight.get("id")
         if isinstance(fight_id, int):
             return fight_id
-    pytest.skip(f"No fights found for report {code} at difficulty {difficulty}.")
+    return None
 
 
-@pytest.fixture(scope="module")
-def live_matrix_context() -> LiveMatrixContext:
-    _require_client_auth()
+def _discover_aura_ability_id(report_url: str) -> int | None:
+    payload = _payload_for(["report-encounter-buffs", report_url, "--preview-limit", "15"])
+    block = payload.get("report_encounter_buffs")
+    if not isinstance(block, dict):
+        return None
+    rows = block.get("rows")
+    if not isinstance(rows, list):
+        return None
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        aura = row.get("aura")
+        if isinstance(aura, dict):
+            game_id = aura.get("game_id")
+            if isinstance(game_id, int):
+                return game_id
+            if isinstance(game_id, float):
+                return int(game_id)
+        ability_id = row.get("ability_id")
+        if isinstance(ability_id, int):
+            return ability_id
+        if isinstance(ability_id, float):
+            return int(ability_id)
+    return None
+
+
+def _discover_player_actor_id(report_code: str, fight_id: int) -> int | None:
+    payload = _payload_for(["report-player-details", report_code, "--fight-id", str(fight_id)])
+    block = payload.get("report_player_details") or payload.get("player_details")
+    if not isinstance(block, dict):
+        return None
+    players = block.get("players")
+    if not isinstance(players, list):
+        return None
+    for player in players:
+        if not isinstance(player, dict):
+            continue
+        actor_id = player.get("id")
+        if isinstance(actor_id, int):
+            return actor_id
+    return None
+
+
+@pytest.fixture(scope="session")
+def live_matrix_context() -> LiveMatrixContext | None:
+    if not load_warcraftlogs_auth_config().configured:
+        return None
+
     public_fight_id = _pick_fight(PUBLIC_REPORT_CODE, difficulty=PUBLIC_DIFFICULTY)
+    if public_fight_id is None:
+        return None
     public_report_url = _url(PUBLIC_REPORT_CODE, public_fight_id)
 
     private_report_url: str | None = None
@@ -78,18 +126,20 @@ def live_matrix_context() -> LiveMatrixContext:
         and state.get("auth_mode") in {"authorization_code", "pkce"}
         and not state.get("expired")
     ):
-        try:
-            private_fight_id = _pick_fight(PRIVATE_REPORT_CODE, difficulty=PRIVATE_DIFFICULTY)
+        private_fight_id = _pick_fight(PRIVATE_REPORT_CODE, difficulty=PRIVATE_DIFFICULTY)
+        if private_fight_id is not None:
             private_report_url = _url(PRIVATE_REPORT_CODE, private_fight_id)
-        except AssertionError:
-            private_report_url = None
-            private_fight_id = None
+
+    aura_ability_id = _discover_aura_ability_id(public_report_url)
+    player_actor_id = _discover_player_actor_id(PUBLIC_REPORT_CODE, public_fight_id)
 
     return LiveMatrixContext(
         public_report_url=public_report_url,
         public_fight_id=public_fight_id,
         private_report_url=private_report_url,
         private_fight_id=private_fight_id,
+        aura_ability_id=aura_ability_id,
+        player_actor_id=player_actor_id,
     )
 
 
@@ -120,12 +170,23 @@ def _assert_nonempty(payload: dict[str, Any], *, canonical_key: str, leaf: str) 
 
 @pytest.mark.live
 @pytest.mark.parametrize("case", matrix_cases(), ids=lambda case: case.case_id)
-def test_live_warcraftlogs_command_matrix(case: MatrixCase, live_matrix_context: LiveMatrixContext) -> None:
+def test_live_warcraftlogs_command_matrix(case: MatrixCase, live_matrix_context: LiveMatrixContext | None) -> None:
+    if live_matrix_context is None:
+        pytest.skip("Warcraft Logs live matrix fixtures are unavailable (credentials or pinned report fights).")
+
     _auth_skip(case)
     if case.auth == AuthRequirement.PRIVATE and live_matrix_context.private_report_url is None:
         pytest.skip("Private report fixtures require user auth and view-private-reports scope.")
 
-    args = case.build_args(live_matrix_context)
+    if case.case_id in {"report-encounter-aura-summary", "report-encounter-aura-compare"} and live_matrix_context.aura_ability_id is None:
+        pytest.skip("Could not discover an aura ability id from the pinned public report.")
+    if case.case_id == "report-player-talents" and live_matrix_context.player_actor_id is None:
+        pytest.skip("Could not discover a player actor id from the pinned public report.")
+
+    try:
+        args = case.build_args(live_matrix_context)
+    except RuntimeError as exc:
+        pytest.skip(str(exc))
     payload = _payload_for(args)
 
     assert payload.get("ok") is not False

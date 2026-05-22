@@ -15,6 +15,7 @@ from wowprogress_cli.analytics import (
 )
 from wowprogress_cli.client import (
     DEFAULT_IMPERSONATE,
+    WowProgressClient,
     WowProgressClientError,
     load_wowprogress_cache_settings_from_env,
 )

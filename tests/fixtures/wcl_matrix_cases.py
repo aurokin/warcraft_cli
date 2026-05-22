@@ -33,6 +33,8 @@ class LiveMatrixContext:
     public_fight_id: int
     private_report_url: str | None
     private_fight_id: int | None
+    aura_ability_id: int | None = None
+    player_actor_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -59,6 +61,40 @@ def _with_url(args: list[str]) -> Callable[[LiveMatrixContext], list[str]]:
         for part in args:
             if part == "{url}":
                 out.append(ctx.public_report_url)
+            else:
+                out.append(part)
+        return out
+
+    return builder
+
+
+def _with_player_scope(args: list[str]) -> Callable[[LiveMatrixContext], list[str]]:
+    def builder(ctx: LiveMatrixContext) -> list[str]:
+        if ctx.player_actor_id is None:
+            raise RuntimeError("player actor id unavailable for live matrix")
+        out: list[str] = []
+        for part in args:
+            if part == "{url}":
+                out.append(ctx.public_report_url)
+            elif part == "{actor-id}":
+                out.append(str(ctx.player_actor_id))
+            else:
+                out.append(part)
+        return out
+
+    return builder
+
+
+def _with_aura_scope(args: list[str]) -> Callable[[LiveMatrixContext], list[str]]:
+    def builder(ctx: LiveMatrixContext) -> list[str]:
+        if ctx.aura_ability_id is None:
+            raise RuntimeError("aura ability id unavailable for live matrix")
+        out: list[str] = []
+        for part in args:
+            if part == "{url}":
+                out.append(ctx.public_report_url)
+            elif part == "{ability-id}":
+                out.append(str(ctx.aura_ability_id))
             else:
                 out.append(part)
         return out
@@ -294,24 +330,50 @@ def matrix_cases() -> tuple[MatrixCase, ...]:
             "report-encounter-aura-summary",
             "report_encounter_aura_summary",
             AuthRequirement.CLIENT,
-            _with_url(["report-encounter-aura-summary", "{url}"]),
-            "report_encounter_aura_summary",
+            _with_aura_scope(
+                [
+                    "report-encounter-aura-summary",
+                    "{url}",
+                    "--ability-id",
+                    "{ability-id}",
+                    "--window-start-ms",
+                    "10000",
+                    "--window-end-ms",
+                    "50000",
+                ]
+            ),
+            "aura_summary",
         ),
         MatrixCase(
             "report-encounter-aura-compare",
             "report-encounter-aura-compare",
             "report_encounter_aura_compare",
             AuthRequirement.CLIENT,
-            _with_url(["report-encounter-aura-compare", "{url}"]),
-            "report_encounter_aura_compare",
+            _with_aura_scope(
+                [
+                    "report-encounter-aura-compare",
+                    "{url}",
+                    "--ability-id",
+                    "{ability-id}",
+                    "--left-window-start-ms",
+                    "10000",
+                    "--left-window-end-ms",
+                    "50000",
+                    "--right-window-start-ms",
+                    "50000",
+                    "--right-window-end-ms",
+                    "90000",
+                ]
+            ),
+            "comparison",
         ),
         MatrixCase(
             "report-player-talents",
             "report-player-talents",
             "report_player_talents",
             AuthRequirement.CLIENT,
-            _with_url(["report-player-talents", "{url}"]),
-            "report_player_talents",
+            _with_player_scope(["report-player-talents", "{url}", "--actor-id", "{actor-id}"]),
+            "talent_transport_packet",
         ),
         MatrixCase(
             "report-encounter-damage-source-summary",
