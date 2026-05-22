@@ -233,6 +233,7 @@ wowhead --fields entity.name,entity.page_url,tooltip.summary,linked_entities ent
 wowhead --expansion ptr --normalize-canonical-to-expansion entity-page item 19019
 wowhead entity-page item 19019 --max-links 100
 wowhead comments item 19019 --limit 30 --sort rating
+wowhead comments item 19019 --insights --author alice --keyword fire --min-replies 1 --date-from 2024-01-01
 wowhead compare item:19019 item:19351 --comment-sample 2
 wowhead compare --preset gear item:19019 item:19351
 wowhead compare --preset quest quest:7786 quest:7787
@@ -879,6 +880,7 @@ See [wowhead/EXPANSION_RESEARCH.md](wowhead/EXPANSION_RESEARCH.md) for the routi
 - `entity` is the compact main retrieval command.
 - `entity-page` is the richer page exploration command.
 - `comments` is the comment-focused command.
+- `comments` supports richer filters (`--date-from`, `--date-to`, `--min-replies`, `--author`, `--keyword`) and `--insights` for sample-backed freshness, near-duplicate groups, and cited top insights (no sentiment scores).
 
 Regular `entity`, `guide`, and `comments` responses include a lightweight `linked_entities` preview with:
 - basic records

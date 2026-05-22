@@ -23,6 +23,7 @@ from warcraft_core.output import (
 )
 from warcraft_content.guide_analysis import extract_section_chunk_analysis_surfaces
 from wowhead_cli.citation_pack import citation_pack_from_compare, citation_pack_from_entity
+from wowhead_cli.comments_intelligence import build_comments_intelligence, filter_raw_comments
 from wowhead_cli.linked_graph import build_linked_graph_payload, normalize_relation_option
 from wowhead_cli.compare_presets import resolve_compare_options
 from wowhead_cli.cache import (
@@ -6369,6 +6370,44 @@ def comments(
         max=50,
         help="Maximum linked entities to include as a lightweight preview. Set to 0 to disable.",
     ),
+    date_from: str | None = typer.Option(
+        None,
+        "--date-from",
+        help="Retain comments on or after this ISO date (YYYY-MM-DD or full timestamp).",
+    ),
+    date_to: str | None = typer.Option(
+        None,
+        "--date-to",
+        help="Retain comments on or before this ISO date (YYYY-MM-DD or full timestamp).",
+    ),
+    min_replies: int | None = typer.Option(
+        None,
+        "--min-replies",
+        min=0,
+        help="Retain only comments with at least this many replies.",
+    ),
+    author: str | None = typer.Option(
+        None,
+        "--author",
+        help="Retain only comments whose author contains this substring (case-insensitive).",
+    ),
+    keyword: list[str] | None = typer.Option(
+        None,
+        "--keyword",
+        help="Retain only comments whose body contains every keyword. Repeatable or comma-separated.",
+    ),
+    insights: bool = typer.Option(
+        False,
+        "--insights",
+        help="Attach deterministic comment intelligence (freshness, near-duplicates, cited top insights).",
+    ),
+    insight_limit: int = typer.Option(
+        5,
+        "--insight-limit",
+        min=1,
+        max=10,
+        help="Maximum insight rows when --insights is enabled.",
+    ),
 ) -> None:
     if sort not in {"newest", "oldest", "rating"}:
         _fail(ctx, "invalid_argument", "sort must be one of: newest, oldest, rating.")
@@ -6399,6 +6438,8 @@ def comments(
     except ValueError as exc:
         _fail(ctx, "parse_error", str(exc))
 
+    embedded_total = len(raw_comments)
+
     if min_rating is not None:
         filtered: list[dict[str, Any]] = []
         for row in raw_comments:
@@ -6406,6 +6447,19 @@ def comments(
             if isinstance(rating, int) and rating >= min_rating:
                 filtered.append(row)
         raw_comments = filtered
+
+    keyword_values: list[str] = []
+    for raw in keyword or []:
+        keyword_values.extend(part.strip() for part in raw.split(",") if part.strip())
+
+    raw_comments, filter_metadata = filter_raw_comments(
+        raw_comments,
+        date_from=date_from,
+        date_to=date_to,
+        min_replies=min_replies,
+        author=author,
+        keywords=tuple(keyword_values),
+    )
 
     raw_comments = sort_comments(raw_comments, sort)
     selected = raw_comments[:limit]
@@ -6436,12 +6490,20 @@ def comments(
             "limit": limit,
             "sort": sort,
             "min_rating": min_rating,
+            "date_from": date_from,
+            "date_to": date_to,
+            "min_replies": min_replies,
+            "author": author,
+            "keywords": keyword_values,
             "include_replies": include_replies,
             "hydrate_missing_replies": hydrate_missing_replies,
             "max_concurrency": max_concurrency,
+            "insights": insights,
+            "insight_limit": insight_limit,
         },
         "counts": {
-            "embedded_comments": len(raw_comments),
+            "embedded_comments": embedded_total,
+            "filtered_comments": len(raw_comments),
             "returned_comments": len(normalized),
             "hydrated_reply_threads": hydrated_count,
         },
@@ -6459,6 +6521,14 @@ def comments(
             entity_id=plan.page_entity_id,
             preview_limit=linked_entity_preview_limit,
             fetch_more_command_builder=lambda count: _entity_page_fetch_more_command(entity_type, entity_id, count),
+        )
+    if insights:
+        payload["intelligence"] = build_comments_intelligence(
+            page_url=canonical_url,
+            embedded_total=embedded_total,
+            filtered_comments=raw_comments,
+            filters=filter_metadata,
+            insight_limit=insight_limit,
         )
     _emit(ctx, payload)
 
