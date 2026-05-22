@@ -30,3 +30,6 @@ jobs:
 
       - name: Mypy (shared packages)
         run: make typecheck
+
+      - name: Import boundaries
+        run: make lint-boundaries

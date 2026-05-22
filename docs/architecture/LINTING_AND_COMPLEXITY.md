@@ -19,6 +19,7 @@ Static quality tooling and how to use it for refactors. Open phase 2–3 work: L
 |-------|--------|
 | 1 — Tooling targets in Makefile | **Complete** |
 | 1b — CI: `make lint` + `make typecheck` on PRs (`.github/workflows/ci.yml`) | **Complete** |
+| 1c — Import boundaries: `make lint-boundaries` (`import-linter`, `.importlinter`) | **Complete** |
 | 2 — Backlog from reports (complexity, duplication, dead code, boundaries) | **Open** — track in Linear |
 | 3 — Refactor slices per provider | **Open** |
 
@@ -27,7 +28,7 @@ Static quality tooling and how to use it for refactors. Open phase 2–3 work: L
 - Highest-complexity functions (especially SimC talent/branch and large CLI handlers)
 - Duplicated filter/sampling code (Raider.IO, WowProgress)
 - Dead code after provider iteration (verify with `make deadcode`)
-- `import-linter` package boundary contracts (not yet added)
+- Additional `import-linter` contracts as packages split (see `.importlinter`)
 - Per-provider Ruff cleanup via `lint-all`, one package per PR
 
 ## Phase 3 Refactor Rules

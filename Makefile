@@ -25,7 +25,9 @@ LIVE_TEST_ENV := \
 	WARCRAFTLOGS_LIVE_TESTS=1 \
 	WARCRAFT_WRAPPER_LIVE_TESTS=1
 
-.PHONY: dev-deploy dev-deploy-no-link worktree-env test test-live test-live-matrix fmt-check lint lint-all complexity typecheck coverage deadcode run release
+IMPORT_LINTER := $(VENV)/bin/lint-imports
+
+.PHONY: dev-deploy dev-deploy-no-link worktree-env test test-live test-live-matrix fmt-check lint lint-boundaries lint-all complexity typecheck coverage deadcode run release
 
 dev-deploy:
 	./scripts/dev_deploy.sh
@@ -50,6 +52,9 @@ fmt-check:
 
 lint:
 	$(RUFF) check $(LINT_PATHS)
+
+lint-boundaries:
+	$(IMPORT_LINTER)
 
 lint-all:
 	@status=0; \
