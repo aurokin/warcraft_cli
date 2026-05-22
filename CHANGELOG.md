@@ -13,6 +13,7 @@ Add user-visible changes to `[Unreleased]` in the same PR that ships them. See [
 - Shared output ergonomics in `warcraft_core.output`: field projection, `--fields-strict`, `--compact-max-chars`, output profiles (`agent|human|debug`), and `DiagnosticsCollector` for `diagnostics` metadata.
 - Wowhead global flags: `--profile`, `--fields-strict`, and `--compact-max-chars` (wired through the shared output layer).
 - Wowhead `compare --preset gear|quest|spell` presets for field diffs, link limits, and comment sampling defaults.
+- Wowhead `--citation-pack` and shared `warcraft_core.citations` builder for deterministic source URLs and per-claim anchors.
 - GitHub Actions CI (`.github/workflows/ci.yml`) runs `make lint` and `make typecheck` on pull requests and pushes to `main`.
 - Warcraft Logs live command matrix: `tests/fixtures/live_matrix.py`, `tests/test_live_command_matrix.py`, and `make test-live-matrix` (see `docs/warcraftlogs/LIVE_MATRIX.md`).
 - Wrapper expansion policy review: `warcraft-wiki` is `fixed` to `retail` (phase 3 complete; `simc` remains deferred).

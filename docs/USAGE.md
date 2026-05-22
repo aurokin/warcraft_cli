@@ -858,6 +858,7 @@ SimulationCraft behavior:
 - Use `--compact` to truncate long string fields such as tooltip HTML blobs.
 - Use `--compact-max-chars` to tune truncation length (default `280`).
 - Use `--profile agent|human|debug` for output presets (`human` = pretty JSON, `debug` = pretty JSON plus a `diagnostics` block when present).
+- Use `--citation-pack` on Wowhead commands to attach a deterministic `citation_pack` with source URLs and per-claim anchors (`entity`, `compare`, and similar payloads).
 - Wrapper responses preserve provider provenance instead of flattening everything into a fake universal schema.
 
 ## Expansion And Routing
