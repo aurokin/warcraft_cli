@@ -7,11 +7,11 @@ from typing import Any
 from urllib.parse import urlencode, urlparse
 
 from curl_cffi import requests
-
 from warcraft_api.cache import CacheSettings, CacheTTLConfig, build_cache_store, load_prefixed_cache_settings_from_env
 from warcraft_api.http import DEFAULT_RETRY_ATTEMPTS, RETRYABLE_STATUS_CODES, backoff_seconds
-from warcraft_core.wow_normalization import normalize_name, normalize_region, primary_realm_slug, realm_slug_variants
 from warcraft_content.paths import provider_cache_root
+from warcraft_core.wow_normalization import normalize_name, normalize_region, primary_realm_slug, realm_slug_variants
+
 from wowprogress_cli.page_parser import (
     WOWPROGRESS_BASE_URL,
     character_url,
