@@ -22,6 +22,7 @@ from warcraft_core.output import (
     shape_payload,
 )
 from warcraft_content.guide_analysis import extract_section_chunk_analysis_surfaces
+from wowhead_cli.compare_presets import resolve_compare_options
 from wowhead_cli.cache import (
     clear_file_cache,
     clear_redis_cache,
@@ -6446,49 +6447,68 @@ def compare(
         ...,
         help="Entity references in <type>:<id> form. Example: item:19019 item:19351",
     ),
-    max_links_per_entity: int = typer.Option(
-        150,
+    preset: str | None = typer.Option(
+        None,
+        "--preset",
+        help="Comparison preset: gear, quest, or spell (tunes field diffs, link limits, and comment sampling).",
+    ),
+    max_links_per_entity: int | None = typer.Option(
+        None,
         "--max-links-per-entity",
         min=1,
         max=2000,
         help="Maximum linked entities to parse per entity.",
     ),
-    max_shared_links: int = typer.Option(
-        80,
+    max_shared_links: int | None = typer.Option(
+        None,
         "--max-shared-links",
         min=1,
         max=2000,
         help="Maximum shared linked entities to include in output.",
     ),
-    max_unique_links: int = typer.Option(
-        120,
+    max_unique_links: int | None = typer.Option(
+        None,
         "--max-unique-links",
         min=1,
         max=5000,
         help="Maximum unique linked entities to include per compared entity.",
     ),
-    comment_sample: int = typer.Option(
-        3,
+    comment_sample: int | None = typer.Option(
+        None,
         "--comment-sample",
         min=0,
         max=20,
         help="Top comments to include per entity (sorted by rating).",
     ),
-    comment_chars: int = typer.Option(
-        320,
+    comment_chars: int | None = typer.Option(
+        None,
         "--comment-chars",
         min=60,
         max=2000,
         help="Maximum characters for each sampled comment body.",
     ),
-    include_gatherer: bool = typer.Option(
-        True,
+    include_gatherer: bool | None = typer.Option(
+        None,
         "--include-gatherer/--no-include-gatherer",
         help="Include linked entities from WH.Gatherer.addData payloads.",
     ),
 ) -> None:
     if len(entities) < 2:
         _fail(ctx, "invalid_argument", "compare requires at least two entity references.")
+
+    try:
+        options = resolve_compare_options(
+            preset=preset,
+            max_links_per_entity=max_links_per_entity,
+            max_shared_links=max_shared_links,
+            max_unique_links=max_unique_links,
+            comment_sample=comment_sample,
+            comment_chars=comment_chars,
+            include_gatherer=include_gatherer,
+        )
+    except ValueError as exc:
+        _fail(ctx, "invalid_argument", str(exc))
+        return
 
     parsed_refs: list[tuple[str, int, str]] = []
     for token in entities:
@@ -6527,13 +6547,13 @@ def compare(
         )
 
         links = extract_linked_entities_from_href(html, source_url=canonical_url)
-        if include_gatherer:
+        if options.include_gatherer:
             links = links + extract_gatherer_entities(html, source_url=canonical_url)
         deduped_links = _dedupe_links(
             links,
             entity_type=entity_type,
             entity_id=entity_id,
-            max_links=max_links_per_entity,
+            max_links=options.max_links_per_entity,
         )
 
         raw_comments: list[dict[str, Any]] = []
@@ -6542,10 +6562,10 @@ def compare(
         except ValueError:
             raw_comments = []
         sampled_comments: list[dict[str, Any]] = []
-        if comment_sample > 0 and raw_comments:
+        if options.comment_sample > 0 and raw_comments:
             ranked = sort_comments(raw_comments, "rating")
             sampled_norm = normalize_comments(
-                ranked[:comment_sample],
+                ranked[:options.comment_sample],
                 page_url=canonical_url,
                 include_replies=False,
             )
@@ -6556,7 +6576,7 @@ def compare(
                         "user": row.get("user"),
                         "rating": row.get("rating"),
                         "date": row.get("date"),
-                        "body": _truncate_text(row.get("body"), max_chars=comment_chars),
+                        "body": _truncate_text(row.get("body"), max_chars=options.comment_chars),
                         "citation_url": row.get("citation_url"),
                     }
                 )
@@ -6582,14 +6602,22 @@ def compare(
         "expansion": cfg.expansion.key,
         "normalize_canonical_to_expansion": cfg.normalize_canonical_to_expansion,
         "inputs": refs_in_order,
+        "preset": {
+            "key": options.preset.key,
+            "label": options.preset.label,
+            "comparable_fields": list(options.comparable_fields),
+        },
         "comparison": {
-            "fields": _comparison_field_diffs(entity_records, comparable_fields=["name", "quality", "icon", "title"]),
+            "fields": _comparison_field_diffs(
+                entity_records,
+                comparable_fields=list(options.comparable_fields),
+            ),
             "linked_entities": _comparison_linked_entities_summary(
                 refs_in_order=refs_in_order,
                 entity_link_sets=entity_link_sets,
                 expansion=cfg.expansion,
-                max_shared_links=max_shared_links,
-                max_unique_links=max_unique_links,
+                max_shared_links=options.max_shared_links,
+                max_unique_links=options.max_unique_links,
             ),
         },
         "entities": entity_records,
