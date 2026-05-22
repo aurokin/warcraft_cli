@@ -852,7 +852,10 @@ SimulationCraft behavior:
 - Successful responses omit `ok`.
 - Structured failures return `ok: false` with an `error` object.
 - Use `--fields` to project only selected dot-paths from the JSON payload.
+- Use `--fields-strict` to fail when a requested `--fields` path is missing.
 - Use `--compact` to truncate long string fields such as tooltip HTML blobs.
+- Use `--compact-max-chars` to tune truncation length (default `280`).
+- Use `--profile agent|human|debug` for output presets (`human` = pretty JSON, `debug` = pretty JSON plus a `diagnostics` block when present).
 - Wrapper responses preserve provider provenance instead of flattening everything into a fake universal schema.
 
 ## Expansion And Routing
