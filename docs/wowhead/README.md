@@ -38,6 +38,7 @@ Implemented now:
 - `entity-page`
 - `comments`
 - `compare`
+- `linked-graph`
 - `guide`
 - `guide-full`
 - `guide-export`

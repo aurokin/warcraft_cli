@@ -236,6 +236,7 @@ wowhead comments item 19019 --limit 30 --sort rating
 wowhead compare item:19019 item:19351 --comment-sample 2
 wowhead compare --preset gear item:19019 item:19351
 wowhead compare --preset quest quest:7786 quest:7787
+wowhead linked-graph item 19019 --depth 1 --relation npc,quest
 wowhead expansions
 ```
 
