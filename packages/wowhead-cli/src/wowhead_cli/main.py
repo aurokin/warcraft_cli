@@ -23,6 +23,7 @@ from warcraft_core.output import (
 )
 from warcraft_content.guide_analysis import extract_section_chunk_analysis_surfaces
 from wowhead_cli.citation_pack import citation_pack_from_compare, citation_pack_from_entity
+from wowhead_cli.linked_graph import build_linked_graph_payload, normalize_relation_option
 from wowhead_cli.compare_presets import resolve_compare_options
 from wowhead_cli.cache import (
     clear_file_cache,
@@ -6645,6 +6646,59 @@ def compare(
         "entities": entity_records,
     }
     _emit(ctx, payload)
+
+
+@app.command("linked-graph")
+def linked_graph(
+    ctx: typer.Context,
+    entity_type: str = typer.Argument(..., help="Root Wowhead entity type. Example: item, quest, npc."),
+    entity_id: int = typer.Argument(..., help="Root Wowhead entity id."),
+    depth: int = typer.Option(1, "--depth", min=1, max=2, help="Traversal depth (1 = direct links, 2 = one additional hop)."),
+    relation: list[str] | None = typer.Option(
+        None,
+        "--relation",
+        help="Retain only edges whose target entity type matches. Repeatable or comma-separated.",
+    ),
+    limit: int = typer.Option(50, "--limit", min=1, max=500, help="Maximum graph nodes to retain."),
+    max_fetches: int = typer.Option(10, "--max-fetches", min=1, max=50, help="Maximum entity pages to fetch while traversing."),
+    include_gatherer: bool = typer.Option(
+        True,
+        "--include-gatherer/--no-include-gatherer",
+        help="Include gatherer-linked entities when parsing pages.",
+    ),
+) -> None:
+    cfg = _cfg(ctx)
+    client = _client(ctx)
+    root_url = entity_url(entity_type, entity_id, expansion=cfg.expansion)
+
+    def fetch_page(page_type: str, page_id: int) -> tuple[str, dict[str, str | None]]:
+        return _fetch_entity_page(ctx, client, page_type, page_id)
+
+    try:
+        payload = build_linked_graph_payload(
+            root_type=entity_type,
+            root_id=entity_id,
+            root_url=root_url,
+            fetch_page=fetch_page,
+            depth=depth,
+            relation_filter=normalize_relation_option(relation),
+            node_limit=limit,
+            max_fetches=max_fetches,
+            include_gatherer=include_gatherer,
+        )
+    except ValueError as exc:
+        _fail(ctx, "invalid_argument", str(exc))
+        return
+
+    _emit(
+        ctx,
+        {
+            "provider": "wowhead",
+            "kind": "linked_graph",
+            "expansion": cfg.expansion.key,
+            **payload,
+        },
+    )
 
 
 def run() -> None:
