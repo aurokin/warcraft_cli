@@ -14,6 +14,13 @@ import httpx
 import typer
 
 from warcraft_core.identity import build_identity_payload, build_reference_transport_packet_payload, validate_talent_transport_packet
+from warcraft_core.output import (
+    DiagnosticsCollector,
+    OutputOptions,
+    OutputProjectionError,
+    resolve_output_options,
+    shape_payload,
+)
 from warcraft_content.guide_analysis import extract_section_chunk_analysis_surfaces
 from wowhead_cli.cache import (
     clear_file_cache,
@@ -74,12 +81,11 @@ EXPANSION_PREFIXES = frozenset(
 
 @dataclass(slots=True)
 class RuntimeConfig:
-    pretty: bool = False
     stream: bool = False
     expansion: ExpansionProfile = field(default_factory=lambda: resolve_expansion(None))
     normalize_canonical_to_expansion: bool = False
-    compact: bool = False
-    fields: tuple[str, ...] = ()
+    output: OutputOptions = field(default_factory=OutputOptions)
+    diagnostics: DiagnosticsCollector = field(default_factory=DiagnosticsCollector)
 
 
 @dataclass(slots=True)
@@ -210,7 +216,8 @@ def _fail(ctx: typer.Context, code: str, message: str, *, status: int = 1) -> No
             "message": message,
         },
     }
-    _emit(ctx, payload, err=True)
+    cfg = _cfg(ctx)
+    emit(payload, pretty=cfg.output.pretty, err=True)
     raise typer.Exit(status)
 
 
@@ -500,77 +507,6 @@ def _truncate_text(value: Any, *, max_chars: int) -> str | None:
     return text[: max_chars - 3].rstrip() + "..."
 
 
-def _truncate_string(value: str, *, max_chars: int) -> str:
-    if len(value) <= max_chars:
-        return value
-    return value[: max_chars - 3] + "..."
-
-
-def _compact_value(value: Any, *, max_chars: int) -> Any:
-    if isinstance(value, str):
-        return _truncate_string(value, max_chars=max_chars)
-    if isinstance(value, list):
-        return [_compact_value(row, max_chars=max_chars) for row in value]
-    if isinstance(value, dict):
-        return {key: _compact_value(val, max_chars=max_chars) for key, val in value.items()}
-    return value
-
-
-def _normalize_field_paths(values: list[str]) -> tuple[str, ...]:
-    normalized: list[str] = []
-    seen: set[str] = set()
-    for raw in values:
-        for candidate in raw.split(","):
-            path = candidate.strip()
-            if not path:
-                continue
-            if path in seen:
-                continue
-            seen.add(path)
-            normalized.append(path)
-    return tuple(normalized)
-
-
-def _extract_dict_path(payload: dict[str, Any], path: str) -> tuple[bool, Any]:
-    current: Any = payload
-    for key in path.split("."):
-        if not isinstance(current, dict):
-            return False, None
-        if key not in current:
-            return False, None
-        current = current[key]
-    return True, current
-
-
-def _assign_dict_path(target: dict[str, Any], path: str, value: Any) -> None:
-    keys = [key for key in path.split(".") if key]
-    if not keys:
-        return
-    cursor = target
-    for key in keys[:-1]:
-        existing = cursor.get(key)
-        if not isinstance(existing, dict):
-            existing = {}
-            cursor[key] = existing
-        cursor = existing
-    cursor[keys[-1]] = value
-
-
-def _filter_payload_fields(payload: dict[str, Any], *, fields: tuple[str, ...]) -> dict[str, Any]:
-    if not fields:
-        return payload
-    filtered: dict[str, Any] = {}
-    if payload.get("ok") is False:
-        filtered["ok"] = payload["ok"]
-    if payload.get("ok") is False and "error" in payload:
-        filtered["error"] = payload["error"]
-    for path in fields:
-        found, value = _extract_dict_path(payload, path)
-        if found:
-            _assign_dict_path(filtered, path, value)
-    return filtered
-
-
 def _stream_rows(payload: dict[str, Any]) -> tuple[str, list[Any]] | None:
     for key in ("results", "comments"):
         rows = payload.get(key)
@@ -589,7 +525,7 @@ def _emit_jsonl(ctx: typer.Context, payload: dict[str, Any], *, err: bool = Fals
 
     spec = _stream_rows(payload)
     if spec is None:
-        emit(payload, pretty=_cfg(ctx).pretty, err=err)
+        emit(payload, pretty=_cfg(ctx).output.pretty, err=err)
         return
 
     field, rows = spec
@@ -608,15 +544,15 @@ def _emit_jsonl(ctx: typer.Context, payload: dict[str, Any], *, err: bool = Fals
 
 def _emit(ctx: typer.Context, payload: dict[str, Any], *, err: bool = False) -> None:
     cfg = _cfg(ctx)
-    rendered: dict[str, Any] = payload
-    if cfg.compact:
-        rendered = _compact_value(rendered, max_chars=280)
-    if cfg.fields:
-        rendered = _filter_payload_fields(rendered, fields=cfg.fields)
+    try:
+        rendered = shape_payload(payload, cfg.output, diagnostics=cfg.diagnostics)
+    except OutputProjectionError as exc:
+        _fail(ctx, "missing_fields", str(exc))
+        return
     if cfg.stream:
         _emit_jsonl(ctx, rendered, err=err)
         return
-    emit(rendered, pretty=cfg.pretty, err=err)
+    emit(rendered, pretty=cfg.output.pretty, err=err)
 
 
 def _hydrate_missing_comment_replies(
@@ -4401,18 +4337,44 @@ def cli(
         "--stream",
         help="Emit large result arrays as JSONL (header line plus one record per row).",
     ),
+    profile: str | None = typer.Option(
+        None,
+        "--profile",
+        help="Output profile preset: agent (default compact JSON), human (pretty JSON), debug (pretty JSON + diagnostics).",
+    ),
+    fields_strict: bool = typer.Option(
+        False,
+        "--fields-strict",
+        help="Fail when a requested --fields dot-path is missing from the payload.",
+    ),
+    compact_max_chars: int = typer.Option(
+        280,
+        "--compact-max-chars",
+        min=40,
+        max=10_000,
+        help="Maximum string length before --compact truncation adds an ellipsis.",
+    ),
 ) -> None:
     try:
-        profile = resolve_expansion(expansion)
+        expansion_profile = resolve_expansion(expansion)
     except ValueError as exc:
         raise typer.BadParameter(str(exc), param_hint="--expansion") from exc
+    try:
+        output = resolve_output_options(
+            profile=profile,
+            pretty=pretty,
+            compact=compact,
+            compact_max_chars=compact_max_chars,
+            fields=fields,
+            fields_strict=fields_strict,
+        )
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc), param_hint="--profile") from exc
     ctx.obj = RuntimeConfig(
-        pretty=pretty,
         stream=stream,
-        expansion=profile,
+        expansion=expansion_profile,
         normalize_canonical_to_expansion=normalize_canonical_to_expansion,
-        compact=compact,
-        fields=_normalize_field_paths(fields),
+        output=output,
     )
 
 
