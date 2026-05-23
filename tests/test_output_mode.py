@@ -4,7 +4,6 @@ import json
 from pathlib import Path
 
 from typer.testing import CliRunner
-
 from wowhead_cli.cache import FileCacheStore
 from wowhead_cli.main import app
 
@@ -60,6 +59,7 @@ def test_search_results_include_ranking_metadata(monkeypatch) -> None:
     assert payload["results"][0]["ranking"]["score"] > 0
     assert "match_reasons" in payload["results"][0]["ranking"]
 
+
 def test_search_results_include_follow_up_metadata(monkeypatch) -> None:
     def fake_search(self, query: str):  # noqa: ANN001
         return {
@@ -76,7 +76,6 @@ def test_search_results_include_follow_up_metadata(monkeypatch) -> None:
     payload = json.loads(result.stdout)
     assert payload["results"][0]["follow_up"]["recommended_surface"] == "entity"
     assert payload["results"][0]["follow_up"]["recommended_command"] == "wowhead entity item 19019"
-
 
 
 def test_compact_flag_truncates_long_string_fields(monkeypatch) -> None:
@@ -246,7 +245,6 @@ def test_cache_inspect_summary_hides_zero_value_fields(tmp_path: Path, monkeypat
     assert "namespaces" not in payload["stats"]
 
 
-
 def test_cache_repair_reports_and_prunes_legacy_unscoped_entries(tmp_path: Path, monkeypatch) -> None:
     cache_dir = tmp_path / "cache"
     cache_dir.mkdir(parents=True)
@@ -339,7 +337,6 @@ def test_cache_inspect_can_request_redis_prefix_visibility(monkeypatch) -> None:
     assert payload["stats"]["prefix_visibility"]["prefixes"][1]["prefix"] == "other_app"
 
 
-
 def test_cache_clear_can_remove_expired_entries_by_namespace(tmp_path: Path, monkeypatch) -> None:
     cache_dir = tmp_path / "cache"
     store = FileCacheStore(cache_dir)
@@ -359,7 +356,6 @@ def test_cache_clear_can_remove_expired_entries_by_namespace(tmp_path: Path, mon
     payload = json.loads(result.stdout)
     assert payload["removed"] == {"total": 1, "namespaces": {"entity_response": 1}}
     assert payload["remaining"]["totals"] == {"total": 2, "active": 2, "expired": 0, "invalid": 0}
-
 
 
 def test_invalid_cache_config_returns_structured_error(monkeypatch) -> None:

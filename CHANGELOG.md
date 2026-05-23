@@ -31,6 +31,8 @@ Add user-visible changes to `[Unreleased]` in the same PR that ships them. See [
 
 ### Changed
 
+- Full-repo Ruff cleanup: `make lint` now covers `packages/`, `tests/`, and `scripts/` (Typer `B008` allowed on provider `main.py`; long fixture strings in tests use `E501` ignore). `make lint-all` is an alias.
+- Complexity: split `validate_talent_transport_packet` validation into focused helpers in `warcraft_core.identity`.
 - WowProgress CLI: split the monolithic `main.py` into `context`, `identity`, `search`, and `analytics` modules; `main.py` now holds Typer wiring and command handlers only.
 - Warcraft Logs typed commands emit a canonical command-based top-level envelope key (for example `boss_kills`, `report_encounter_buffs`). Legacy primary keys remain dual-emitted for one minor with `deprecated_keys` metadata. See `docs/warcraftlogs/PAYLOAD_KEYS.md`.
 - Architecture docs use progressive disclosure: active reference under `docs/architecture/`, completed milestones under `docs/architecture/history/`. Open engineering work moved to Linear (Warcraft CLI project).

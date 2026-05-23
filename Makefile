@@ -13,8 +13,8 @@ RAIDERIO := $(VENV)/bin/raiderio
 WARCRAFT_WIKI := $(VENV)/bin/warcraft-wiki
 WOWPROGRESS := $(VENV)/bin/wowprogress
 SIMC := $(VENV)/bin/simc
-LINT_PATHS := packages/warcraft-core packages/warcraft-api packages/warcraft-content
-LINT_ALL_PATHS := packages tests scripts
+LINT_PATHS := packages tests scripts
+LINT_ALL_PATHS := $(LINT_PATHS)
 LIVE_TEST_ENV := \
 	WOWHEAD_LIVE_TESTS=1 \
 	METHOD_LIVE_TESTS=1 \
@@ -62,14 +62,7 @@ lint:
 lint-boundaries:
 	$(IMPORT_LINTER)
 
-lint-all:
-	@status=0; \
-	$(RUFF) check $(LINT_ALL_PATHS) || status=$$?; \
-	if [ $$status -eq 1 ]; then \
-		echo "lint-all is report-only: keeping the existing full-repo Ruff backlog visible without failing the target."; \
-	elif [ $$status -ne 0 ]; then \
-		exit $$status; \
-	fi
+lint-all: lint
 
 complexity:
 	$(PYTHON) -m radon cc packages -s -a

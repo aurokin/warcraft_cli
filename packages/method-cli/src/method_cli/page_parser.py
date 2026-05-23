@@ -300,7 +300,8 @@ def parse_guide_page(html: str, *, source_url: str) -> dict[str, Any]:
     canonical_url = urljoin(METHOD_BASE_URL, canonical_url)
     guide_slug, section_slug = guide_ref_parts(canonical_url)
     content_family = classify_guide_family(guide_slug)
-    page_title = clean_text(_meta_content(soup, property="og:title")) or clean_text(soup.title.get_text(" ", strip=True) if soup.title else None)
+    page_title = clean_text(_meta_content(soup, property="og:title")) or clean_text(
+        soup.title.get_text(" ", strip=True) if soup.title else None)
     description = _meta_content(soup, name="description")
     navigation = _extract_navigation(soup, current_url=canonical_url)
     active_nav = next((item for item in navigation if item["active"]), None)

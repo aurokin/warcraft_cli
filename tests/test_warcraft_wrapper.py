@@ -134,7 +134,6 @@ class _EndToEndWarcraftLogsClient:
         }
 
 
-
 def _patch_simc_describe_pipeline(
     monkeypatch,
     *,
@@ -1563,7 +1562,8 @@ def test_warcraft_search_sorts_results_globally_by_ranking(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         "icy_veins_cli.main.IcyVeinsClient.sitemap_guides",
-        lambda self: [{"slug": "frost-death-knight-pve-dps-guide", "name": "Frost Death Knight PvE DPS Guide", "url": "https://www.icy-veins.com/wow/frost-death-knight-pve-dps-guide"}],
+        lambda self: [{"slug": "frost-death-knight-pve-dps-guide", "name": "Frost Death Knight PvE DPS Guide",
+                       "url": "https://www.icy-veins.com/wow/frost-death-knight-pve-dps-guide"}],
     )
     monkeypatch.setattr("raiderio_cli.main.RaiderIOClient.search", lambda self, *, term, kind=None: {"matches": []})
     monkeypatch.setattr("warcraft_wiki_cli.main.WarcraftWikiClient.search_articles", lambda self, query, limit: (0, []))
@@ -1591,7 +1591,8 @@ def test_warcraft_search_expansion_filter_excludes_nonmatching_providers(monkeyp
         }
 
     monkeypatch.setattr("wowhead_cli.main.WowheadClient.search_suggestions", fake_wowhead_search)
-    monkeypatch.setattr("method_cli.main.MethodClient.sitemap_guides", lambda self: (_ for _ in ()).throw(AssertionError("method should be excluded")))
+    monkeypatch.setattr("method_cli.main.MethodClient.sitemap_guides", lambda self: (
+        _ for _ in ()).throw(AssertionError("method should be excluded")))
     monkeypatch.setattr(
         "icy_veins_cli.main.IcyVeinsClient.sitemap_guides",
         lambda self: (_ for _ in ()).throw(AssertionError("icy-veins should be excluded")),
@@ -1647,11 +1648,16 @@ def test_warcraft_search_compact_expansion_debug(monkeypatch) -> None:
         }
 
     monkeypatch.setattr("wowhead_cli.main.WowheadClient.search_suggestions", fake_wowhead_search)
-    monkeypatch.setattr("method_cli.main.MethodClient.sitemap_guides", lambda self: (_ for _ in ()).throw(AssertionError("method should be excluded")))
-    monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.sitemap_guides", lambda self: (_ for _ in ()).throw(AssertionError("icy-veins should be excluded")))
-    monkeypatch.setattr("raiderio_cli.main.RaiderIOClient.search", lambda self, *, term, kind=None: (_ for _ in ()).throw(AssertionError("raiderio should be excluded")))
-    monkeypatch.setattr("warcraft_wiki_cli.main.WarcraftWikiClient.search_articles", lambda self, query, limit: (_ for _ in ()).throw(AssertionError("warcraft-wiki should be excluded")))
-    monkeypatch.setattr("wowprogress_cli.main.WowProgressClient.probe_search_route", lambda self, *, region, realm, name, obj_type: (_ for _ in ()).throw(AssertionError("wowprogress should be excluded")))
+    monkeypatch.setattr("method_cli.main.MethodClient.sitemap_guides", lambda self: (
+        _ for _ in ()).throw(AssertionError("method should be excluded")))
+    monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.sitemap_guides", lambda self: (
+        _ for _ in ()).throw(AssertionError("icy-veins should be excluded")))
+    monkeypatch.setattr("raiderio_cli.main.RaiderIOClient.search", lambda self, *, term,
+                        kind=None: (_ for _ in ()).throw(AssertionError("raiderio should be excluded")))
+    monkeypatch.setattr("warcraft_wiki_cli.main.WarcraftWikiClient.search_articles", lambda self, query,
+                        limit: (_ for _ in ()).throw(AssertionError("warcraft-wiki should be excluded")))
+    monkeypatch.setattr("wowprogress_cli.main.WowProgressClient.probe_search_route", lambda self, *, region, realm,
+                        name, obj_type: (_ for _ in ()).throw(AssertionError("wowprogress should be excluded")))
 
     result = runner.invoke(
         warcraft_app,
@@ -1691,7 +1697,8 @@ def test_warcraft_search_retail_filter_keeps_fixed_retail_providers_and_excludes
     )
     monkeypatch.setattr(
         "icy_veins_cli.main.IcyVeinsClient.sitemap_guides",
-        lambda self: [{"slug": "mistweaver-monk-pve-healing-guide", "name": "Mistweaver Monk PvE Healing Guide", "url": "https://www.icy-veins.com/wow/mistweaver-monk-pve-healing-guide"}],
+        lambda self: [{"slug": "mistweaver-monk-pve-healing-guide", "name": "Mistweaver Monk PvE Healing Guide",
+                       "url": "https://www.icy-veins.com/wow/mistweaver-monk-pve-healing-guide"}],
     )
     monkeypatch.setattr("raiderio_cli.main.RaiderIOClient.search", lambda self, *, term, kind=None: {"matches": []})
     monkeypatch.setattr(
@@ -1869,12 +1876,14 @@ def test_warcraft_resolve_prefers_stronger_later_provider(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         "icy_veins_cli.main.IcyVeinsClient.sitemap_guides",
-        lambda self: [{"slug": "mistweaver-monk-pve-healing-guide", "name": "Mistweaver Monk PvE Healing Guide", "url": "https://www.icy-veins.com/wow/mistweaver-monk-pve-healing-guide"}],
+        lambda self: [{"slug": "mistweaver-monk-pve-healing-guide", "name": "Mistweaver Monk PvE Healing Guide",
+                       "url": "https://www.icy-veins.com/wow/mistweaver-monk-pve-healing-guide"}],
     )
     monkeypatch.setattr("raiderio_cli.main.RaiderIOClient.search", lambda self, *, term, kind=None: {"matches": []})
     monkeypatch.setattr(
         "warcraft_wiki_cli.main.WarcraftWikiClient.search_articles",
-        lambda self, query, limit: (1, [{"title": "Mistweaver Monk", "pageid": 1, "snippet": "Reference page", "url": "https://warcraft.wiki.gg/wiki/Mistweaver_Monk"}]),
+        lambda self, query, limit: (1, [{"title": "Mistweaver Monk", "pageid": 1, "snippet": "Reference page",
+                                    "url": "https://warcraft.wiki.gg/wiki/Mistweaver_Monk"}]),
     )
 
     result = runner.invoke(warcraft_app, ["resolve", "mistweaver monk guide"])
@@ -1892,8 +1901,10 @@ def test_warcraft_resolve_expansion_filter_blocks_retail_only_resolution(monkeyp
         "wowhead_cli.main.WowheadClient.search_suggestions",
         lambda self, query: {"search": query, "results": []},
     )
-    monkeypatch.setattr("method_cli.main.MethodClient.sitemap_guides", lambda self: (_ for _ in ()).throw(AssertionError("method should be excluded")))
-    monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.sitemap_guides", lambda self: (_ for _ in ()).throw(AssertionError("icy-veins should be excluded")))
+    monkeypatch.setattr("method_cli.main.MethodClient.sitemap_guides", lambda self: (
+        _ for _ in ()).throw(AssertionError("method should be excluded")))
+    monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.sitemap_guides", lambda self: (
+        _ for _ in ()).throw(AssertionError("icy-veins should be excluded")))
     monkeypatch.setattr(
         "raiderio_cli.main.RaiderIOClient.search",
         lambda self, *, term, kind=None: (_ for _ in ()).throw(AssertionError("raiderio should be excluded")),
@@ -1929,11 +1940,16 @@ def test_warcraft_resolve_expansion_filter_blocks_retail_only_resolution(monkeyp
 
 def test_warcraft_resolve_expansion_debug(monkeypatch) -> None:
     monkeypatch.setattr("wowhead_cli.main.WowheadClient.search_suggestions", lambda self, query: {"search": query, "results": []})
-    monkeypatch.setattr("method_cli.main.MethodClient.sitemap_guides", lambda self: (_ for _ in ()).throw(AssertionError("method should be excluded")))
-    monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.sitemap_guides", lambda self: (_ for _ in ()).throw(AssertionError("icy-veins should be excluded")))
-    monkeypatch.setattr("raiderio_cli.main.RaiderIOClient.search", lambda self, *, term, kind=None: (_ for _ in ()).throw(AssertionError("raiderio should be excluded")))
-    monkeypatch.setattr("warcraft_wiki_cli.main.WarcraftWikiClient.search_articles", lambda self, query, limit: (_ for _ in ()).throw(AssertionError("warcraft-wiki should be excluded")))
-    monkeypatch.setattr("wowprogress_cli.main.WowProgressClient.probe_search_route", lambda self, *, region, realm, name, obj_type: (_ for _ in ()).throw(AssertionError("wowprogress should be excluded")))
+    monkeypatch.setattr("method_cli.main.MethodClient.sitemap_guides", lambda self: (
+        _ for _ in ()).throw(AssertionError("method should be excluded")))
+    monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.sitemap_guides", lambda self: (
+        _ for _ in ()).throw(AssertionError("icy-veins should be excluded")))
+    monkeypatch.setattr("raiderio_cli.main.RaiderIOClient.search", lambda self, *, term,
+                        kind=None: (_ for _ in ()).throw(AssertionError("raiderio should be excluded")))
+    monkeypatch.setattr("warcraft_wiki_cli.main.WarcraftWikiClient.search_articles", lambda self, query,
+                        limit: (_ for _ in ()).throw(AssertionError("warcraft-wiki should be excluded")))
+    monkeypatch.setattr("wowprogress_cli.main.WowProgressClient.probe_search_route", lambda self, *, region, realm,
+                        name, obj_type: (_ for _ in ()).throw(AssertionError("wowprogress should be excluded")))
 
     result = runner.invoke(
         warcraft_app,
@@ -2282,11 +2298,13 @@ def test_warcraft_passthrough_to_simc(monkeypatch, tmp_path) -> None:
 
     monkeypatch.setattr(
         "simc_cli.main.run_profile",
-        lambda paths, profile_path, simc_args: type("Result", (), {"command": [str(paths.build_simc), str(profile_path)], "returncode": 0, "stdout": "Iterations: 1\n", "stderr": ""})(),
+        lambda paths, profile_path, simc_args: type("Result", (), {"command": [str(paths.build_simc), str(
+            profile_path)], "returncode": 0, "stdout": "Iterations: 1\n", "stderr": ""})(),
     )
     monkeypatch.setattr(
         "simc_cli.main.binary_version",
-        lambda paths: type("VersionInfo", (), {"binary_path": paths.build_simc, "available": True, "version_line": "SimulationCraft 1201", "returncode": 1})(),
+        lambda paths: type("VersionInfo", (), {"binary_path": paths.build_simc, "available": True,
+                           "version_line": "SimulationCraft 1201", "returncode": 1})(),
     )
 
     result = runner.invoke(warcraft_app, ["simc", "run", str(profile)])
@@ -2360,7 +2378,8 @@ def test_warcraft_packet_handoff_from_warcraftlogs_to_simc(monkeypatch, tmp_path
             type("Ref", (), {"code": "abcd1234", "fight_id": 1, "source_url": None})(),
             {"code": "abcd1234", "title": "Test Report", "startTime": 1, "endTime": 2},
             {"id": 1, "encounterID": 3012, "name": "Dimensius", "kill": True, "difficulty": 5, "startTime": 0, "endTime": 1},
-            {"id": 3012, "journalID": 3001, "name": "Dimensius", "zone": {"id": 38, "name": "Nerub-ar Palace", "expansion": {"id": 10, "name": "Retail"}}},
+            {"id": 3012, "journalID": 3001, "name": "Dimensius", "zone": {
+                "id": 38, "name": "Nerub-ar Palace", "expansion": {"id": 10, "name": "Retail"}}},
         ),
     )
     monkeypatch.setattr(
@@ -2665,7 +2684,8 @@ def test_warcraft_talent_packet_passes_allow_unlisted_to_warcraftlogs(monkeypatc
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["route"]["allow_unlisted"] is True
-    assert calls == [("warcraftlogs", ["report-player-talents", "abcd1234", "--actor-id", "9", "--fight-id", "1", "--allow-unlisted"], None)]
+    assert calls == [("warcraftlogs", ["report-player-talents", "abcd1234",
+                      "--actor-id", "9", "--fight-id", "1", "--allow-unlisted"], None)]
 
 
 def test_warcraft_talent_packet_routes_scheme_less_warcraftlogs_report_ref(monkeypatch) -> None:
@@ -3093,7 +3113,6 @@ def test_warcraft_talent_packet_rejects_path_containing_talent_calc_segment() ->
     assert payload["error"]["message"] == "talent-calc reference must be a Wowhead talent-calc path or class/spec ref."
 
 
-
 def test_warcraft_talent_packet_fails_when_provider_omits_packet(monkeypatch) -> None:
     def fake_provider_invoke(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, object]:
         assert provider == "wowhead"
@@ -3111,7 +3130,6 @@ def test_warcraft_talent_packet_fails_when_provider_omits_packet(monkeypatch) ->
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "missing_transport_packet"
     assert payload["route"] == {"kind": "wowhead_talent_calc", "provider": "wowhead"}
-
 
 
 def test_warcraft_talent_packet_preserves_wowhead_invalid_transport_packet_error(monkeypatch) -> None:
@@ -3139,7 +3157,6 @@ def test_warcraft_talent_packet_preserves_wowhead_invalid_transport_packet_error
     assert payload["error"]["message"] == "wowhead talent-calc-packet produced an invalid talent transport packet: invalid test packet"
     assert payload["route"] == {"kind": "wowhead_talent_calc", "provider": "wowhead"}
     assert payload["provider_result"]["provider"] == "wowhead"
-
 
 
 def test_warcraft_talent_packet_preserves_warcraftlogs_invalid_transport_packet_error(monkeypatch) -> None:
@@ -3258,7 +3275,6 @@ def test_warcraft_talent_packet_preserves_ok_false_provider_errors(monkeypatch) 
     assert payload["route"] == {"kind": "wowhead_talent_calc", "provider": "wowhead"}
 
 
-
 def test_warcraft_talent_packet_rejects_malformed_packet_status(tmp_path: Path) -> None:
     packet_path = tmp_path / "mismatched-status.json"
     packet_path.write_text(
@@ -3282,7 +3298,6 @@ def test_warcraft_talent_packet_rejects_malformed_packet_status(tmp_path: Path) 
     assert "does not match packet contents" in payload["error"]["message"]
 
 
-
 def test_warcraft_talent_packet_rejects_malformed_transport_forms(tmp_path: Path) -> None:
     packet_path = tmp_path / "bad-forms.json"
     packet_path.write_text(
@@ -3304,7 +3319,6 @@ def test_warcraft_talent_packet_rejects_malformed_transport_forms(tmp_path: Path
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "invalid_transport_packet"
     assert "simc_split_talents" in payload["error"]["message"]
-
 
 
 def test_warcraft_talent_packet_rejects_invalid_provider_packet(monkeypatch) -> None:
@@ -3335,7 +3349,6 @@ def test_warcraft_talent_packet_rejects_invalid_provider_packet(monkeypatch) -> 
     assert payload["error"]["code"] == "invalid_transport_packet"
     assert payload["route"] == {"kind": "wowhead_talent_calc", "provider": "wowhead"}
     assert payload["provider_result"]["provider"] == "wowhead"
-
 
 
 def test_warcraft_talent_packet_rejects_invalid_upgraded_packet(monkeypatch, tmp_path: Path) -> None:
@@ -3518,7 +3531,6 @@ def test_warcraft_talent_packet_rejects_successful_validate_without_updated_pack
     assert payload["provider_result"]["provider"] == "simc"
 
 
-
 def test_warcraft_talent_describe_preserves_wowhead_invalid_transport_packet_error(monkeypatch) -> None:
     def fake_provider_invoke(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, object]:
         assert provider == "wowhead"
@@ -3544,7 +3556,6 @@ def test_warcraft_talent_describe_preserves_wowhead_invalid_transport_packet_err
     assert payload["error"]["message"] == "wowhead talent-calc-packet produced an invalid talent transport packet: invalid test packet"
     assert payload["route"] == {"kind": "wowhead_talent_calc", "provider": "wowhead"}
     assert payload["provider_result"]["provider"] == "wowhead"
-
 
 
 def test_warcraft_talent_describe_preserves_warcraftlogs_invalid_transport_packet_error(monkeypatch) -> None:
@@ -3610,7 +3621,6 @@ def test_warcraft_talent_describe_preserves_warcraftlogs_not_found(monkeypatch) 
         "fight_id": 1,
         "allow_unlisted": False,
     }
-
 
 
 def test_warcraft_talent_describe_reports_simc_failure(monkeypatch, tmp_path: Path) -> None:
@@ -4318,7 +4328,6 @@ def test_warcraft_talent_describe_routes_expansion_prefixed_class_spec_wowhead_r
     )
 
 
-
 def test_warcraft_talent_describe_routes_warcraftlogs_and_upgrades(monkeypatch) -> None:
     provider_calls: list[tuple[str, list[str]]] = []
     simc_calls: list[dict[str, object]] = []
@@ -4534,7 +4543,6 @@ def test_warcraft_talent_describe_routes_scheme_less_warcraftlogs_report_ref(mon
     assert provider_calls[1][0] == "simc"
 
 
-
 def test_warcraft_talent_describe_uses_packet_file_and_can_write_output(monkeypatch, tmp_path: Path) -> None:
     packet_path = tmp_path / "exact-packet.json"
     out_path = tmp_path / "described-packet.json"
@@ -4640,7 +4648,6 @@ def test_warcraft_talent_describe_skips_auto_upgrade_for_unknown_packet_file(mon
     assert [row["command"] for row in simc_calls] == ["describe-build"]
 
 
-
 def test_warcraft_talent_packet_preserves_wowhead_provider_packet(monkeypatch) -> None:
     _disable_wowhead_page_fetch(monkeypatch)
 
@@ -4669,7 +4676,6 @@ def test_warcraft_talent_packet_out_matches_wowhead_provider_file(monkeypatch, t
     assert wrapper_result.exit_code == 0
 
     assert direct_path.read_text() == wrapper_path.read_text()
-
 
 
 def test_warcraft_talent_packet_preserves_warcraftlogs_provider_packet(monkeypatch) -> None:
@@ -4757,7 +4763,6 @@ def test_warcraft_talent_packet_out_matches_warcraftlogs_provider_file(monkeypat
     assert direct_path.read_text() == wrapper_path.read_text()
 
 
-
 def test_warcraft_talent_describe_packet_out_matches_wowhead_provider_file(monkeypatch, tmp_path: Path) -> None:
     direct_path = tmp_path / "wowhead-direct.json"
     wrapper_path = tmp_path / "wowhead-described.json"
@@ -4780,7 +4785,6 @@ def test_warcraft_talent_describe_packet_out_matches_wowhead_provider_file(monke
     assert wrapper_result.exit_code == 0
 
     assert direct_path.read_text() == wrapper_path.read_text()
-
 
 
 def test_warcraft_talent_describe_packet_out_changes_after_validation_upgrade(monkeypatch, tmp_path: Path) -> None:
@@ -4831,7 +4835,8 @@ def test_warcraft_talent_describe_packet_out_changes_after_validation_upgrade(mo
     assert direct_result.exit_code == 0
     wrapper_result = runner.invoke(
         warcraft_app,
-        ["talent-describe", "abcd1234", "--fight-id", "1", "--actor-id", "9", "--apl-path", str(apl_path), "--packet-out", str(wrapper_path)],
+        ["talent-describe", "abcd1234", "--fight-id", "1", "--actor-id", "9",
+            "--apl-path", str(apl_path), "--packet-out", str(wrapper_path)],
     )
     assert wrapper_result.exit_code == 0
     wrapper_payload = json.loads(wrapper_result.stdout)
@@ -4891,7 +4896,6 @@ def test_warcraft_talent_packet_file_reuse_stays_exact_without_validation(monkey
     assert describe_payload["upgrade_attempted"] is False
     assert source_path.read_text() == routed_path.read_text()
     assert source_path.read_text() == described_path.read_text()
-
 
 
 def test_warcraft_talent_packet_file_reuse_upgrades_raw_packet_consistently(monkeypatch, tmp_path: Path) -> None:
@@ -5007,7 +5011,6 @@ def test_warcraft_talent_round_trip_wowhead_packet_to_describe(monkeypatch, tmp_
     assert transport_packet["transport_form"] == "wowhead_talent_calc_url"
     assert transport_packet["transport_status"] == "exact"
     assert transport_packet["path"] == str(packet_path.resolve())
-
 
 
 def test_warcraft_talent_round_trip_warcraftlogs_packet_to_describe(monkeypatch, tmp_path: Path) -> None:

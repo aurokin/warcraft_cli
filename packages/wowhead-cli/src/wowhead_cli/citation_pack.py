@@ -88,7 +88,7 @@ def citation_pack_from_entity(payload: dict[str, Any]) -> dict[str, Any]:
                 _add_source(sources, key="comments", url=citation_url if isinstance(citation_url, str) else page_url, kind="comments")
             fragment = None
             if isinstance(citation_url, str) and "#" in citation_url:
-                fragment = citation_url[citation_url.index("#") :]
+                fragment = citation_url[citation_url.index("#"):]
             if isinstance(row.get("body"), str):
                 _add_claim(
                     anchors,
@@ -144,7 +144,8 @@ def citation_pack_from_compare(payload: dict[str, Any]) -> dict[str, Any]:
             if not isinstance(row, dict):
                 continue
             url = row.get("url")
-            _add_source(sources, key=f"comparison.linked_entities.{bucket}[{index}]", url=url if isinstance(url, str) else None, kind="linked_entity")
+            _add_source(sources, key=f"comparison.linked_entities.{bucket}[{index}]",
+                        url=url if isinstance(url, str) else None, kind="linked_entity")
     for ref, rows in sorted((linked.get("unique_by_entity") or {}).items()):
         if not isinstance(rows, list):
             continue
@@ -164,7 +165,7 @@ def citation_pack_from_compare(payload: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(field_row, dict):
             continue
         values = field_row.get("values") if isinstance(field_row.get("values"), dict) else {}
-        for ref, value in sorted(values.items()):
+        for ref, _value in sorted(values.items()):
             entity_row = next((row for row in entities if isinstance(row, dict) and row.get("ref") == ref), None)
             page_url = None
             if isinstance(entity_row, dict):

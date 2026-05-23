@@ -58,4 +58,3 @@ def test_payload_keys_doc_exists_and_matches_registry() -> None:
     text = doc_path.read_text(encoding="utf-8")
     for command in ALL_COMMANDS:
         assert f"`{command}`" in text
-

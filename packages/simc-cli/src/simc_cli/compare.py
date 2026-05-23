@@ -1,17 +1,18 @@
 from __future__ import annotations
 
-from collections import Counter
-from dataclasses import dataclass
 import hashlib
 import json
 import tempfile
+from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+from warcraft_core.paths import provider_data_root
 
 from simc_cli.build_input import BuildSpec, build_profile_text
 from simc_cli.repo import RepoPaths
 from simc_cli.run import CommandResult, repo_git_status, run_profile
-from warcraft_core.paths import provider_data_root
 
 
 @dataclass(slots=True)
@@ -100,7 +101,8 @@ def compare_apl_variants(
     base_profile = build_variant_profile(harness_path, base_apl_path, label=base_label, out_dir=compare_dir)
     profiles: list[tuple[str, Path, Path]] = [(base_label, Path(base_apl_path).expanduser().resolve(), base_profile)]
     for label, apl_path in variant_specs:
-        profiles.append((label, Path(apl_path).expanduser().resolve(), build_variant_profile(harness_path, apl_path, label=label, out_dir=compare_dir)))
+        profiles.append((label, Path(apl_path).expanduser().resolve(), build_variant_profile(
+            harness_path, apl_path, label=label, out_dir=compare_dir)))
 
     validations: list[dict[str, Any]] = []
     if validate_first:
@@ -120,7 +122,8 @@ def compare_apl_variants(
                 raise RuntimeError(f"Validation failed for {label}: {validation.result.stderr.strip() or validation.result.stdout.strip()}")
 
     summaries = [
-        _simulate_variant(paths, label=label, apl_path=apl_path, profile_path=profile_path, iterations=iterations, threads=threads, out_dir=compare_dir)
+        _simulate_variant(paths, label=label, apl_path=apl_path, profile_path=profile_path,
+                          iterations=iterations, threads=threads, out_dir=compare_dir)
         for label, apl_path, profile_path in profiles
     ]
     base = summaries[0]
@@ -152,8 +155,16 @@ def variant_report_payload(report: dict[str, Any]) -> dict[str, Any]:
             {
                 "label": row.get("label"),
                 "dps": row.get("dps"),
-                "delta_vs_base": 0.0 if base and row.get("label") == base.get("label") else _comparison_delta_for(row.get("label"), comparisons),
-                "percent_vs_base": 0.0 if base and row.get("label") == base.get("label") else _comparison_percent_for(row.get("label"), comparisons),
+                "delta_vs_base": (
+                    0.0
+                    if base and row.get("label") == base.get("label")
+                    else _comparison_delta_for(row.get("label"), comparisons)
+                ),
+                "percent_vs_base": (
+                    0.0
+                    if base and row.get("label") == base.get("label")
+                    else _comparison_percent_for(row.get("label"), comparisons)
+                ),
             }
             for row in ranking
         ],

@@ -4,15 +4,16 @@ import hashlib
 from typing import Any
 
 import httpx
-
-from icy_veins_cli.page_parser import guide_ref_parts, guide_url, parse_guide_page, parse_sitemap_guides
 from warcraft_api.cache import CacheSettings, CacheTTLConfig, build_cache_store, load_prefixed_cache_settings_from_env
 from warcraft_api.http import DEFAULT_RETRY_ATTEMPTS, request_with_retries
 from warcraft_content.paths import provider_cache_root
 
+from icy_veins_cli.page_parser import guide_ref_parts, guide_url, parse_guide_page, parse_sitemap_guides
+
 ICY_VEINS_BASE_URL = "https://www.icy-veins.com"
 ICY_VEINS_SITEMAP_URL = f"{ICY_VEINS_BASE_URL}/sitemap.xml"
 DEFAULT_CACHE_DIR = provider_cache_root("icy-veins") / "http"
+
 
 def load_icy_veins_cache_settings_from_env() -> tuple[CacheSettings, int, int]:
     settings = load_prefixed_cache_settings_from_env(
@@ -62,7 +63,7 @@ class IcyVeinsClient:
         return self._http_client
 
     def _cache_key(self, namespace: str, url: str) -> str:
-        raw = f"{namespace}|{url}".encode("utf-8")
+        raw = f"{namespace}|{url}".encode()
         return f"{namespace}:{hashlib.sha256(raw).hexdigest()}"
 
     def _read_cache(self, key: str) -> Any | None:

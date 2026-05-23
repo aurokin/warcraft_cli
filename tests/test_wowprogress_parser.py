@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from wowprogress_cli.page_parser import parse_character_page, parse_guild_page, parse_pve_leaderboard_page
 
-
 GUILD_HTML = """
 <html>
   <body>

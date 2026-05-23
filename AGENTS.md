@@ -11,8 +11,8 @@
 - Provider live tests: set the suite flag and pass the matching file, for example `WOWHEAD_LIVE_TESTS=1 pytest -q -m live tests/test_live_integration.py tests/test_live_endpoint_contracts.py`
 - Branch-local deploy: `make dev-deploy-no-link`
 - Deliberate relink of `~/.local/bin` to the current checkout: `make dev-deploy`
-- Lint: `make lint`
-- Full lint report: `make lint-all` (report-only; surfaces the full-repo Ruff backlog without failing)
+- Lint: `make lint` (full repo: `packages/`, `tests/`, `scripts/`)
+- Lint alias: `make lint-all`
 - Complexity report: `make complexity`
 - Type check: `make typecheck`
 - Coverage: `make coverage` (uses `pytest-cov` when available, otherwise falls back to stdlib `trace` coverage)

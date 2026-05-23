@@ -6,19 +6,13 @@ import os
 import time
 from pathlib import Path
 
-
-def _build_jwt_with_scopes(scopes: list[str]) -> str:
-    header = base64.urlsafe_b64encode(json.dumps({"alg": "RS256", "typ": "JWT"}).encode()).rstrip(b"=").decode()
-    body = base64.urlsafe_b64encode(json.dumps({"scopes": scopes}).encode()).rstrip(b"=").decode()
-    return f"{header}.{body}.signature"
-
 import httpx
 import pytest
 from typer.testing import CliRunner
 from warcraftlogs_cli.client import (
-    EncounterRankingsOptions,
     GRAPHQL_WARNINGS_KEY,
     RETAIL_PROFILE,
+    EncounterRankingsOptions,
     WarcraftLogsClient,
     WarcraftLogsClientError,
     _encounter_rankings_request,
@@ -26,6 +20,13 @@ from warcraftlogs_cli.client import (
     load_warcraftlogs_auth_config,
 )
 from warcraftlogs_cli.main import app as warcraftlogs_app
+
+
+def _build_jwt_with_scopes(scopes: list[str]) -> str:
+    header = base64.urlsafe_b64encode(json.dumps({"alg": "RS256", "typ": "JWT"}).encode()).rstrip(b"=").decode()
+    body = base64.urlsafe_b64encode(json.dumps({"scopes": scopes}).encode()).rstrip(b"=").decode()
+    return f"{header}.{body}.signature"
+
 
 runner = CliRunner()
 
@@ -3081,12 +3082,12 @@ def test_warcraftlogs_report_player_talents_emits_validated_split_transport(monk
                     "hero_talents": "117176:1",
                 }
             },
-                "validation": {
-                    "status": "validated",
-                    "source": "simc_trait_data_round_trip",
-                    "actor_class": "paladin",
-                    "spec": "retribution",
-                },
+            "validation": {
+                "status": "validated",
+                "source": "simc_trait_data_round_trip",
+                "actor_class": "paladin",
+                "spec": "retribution",
+            },
         },
     )
 
@@ -3114,12 +3115,12 @@ def test_warcraftlogs_report_player_talents_can_write_transport_packet(monkeypat
                     "hero_talents": None,
                 }
             },
-                "validation": {
-                    "status": "validated",
-                    "source": "simc_trait_data_round_trip",
-                    "actor_class": "paladin",
-                    "spec": "retribution",
-                },
+            "validation": {
+                "status": "validated",
+                "source": "simc_trait_data_round_trip",
+                "actor_class": "paladin",
+                "spec": "retribution",
+            },
         },
     )
 
@@ -3149,12 +3150,12 @@ def test_warcraftlogs_report_player_talents_normalizes_write_failure(monkeypatch
                     "class_talents": "103324:1",
                 }
             },
-                "validation": {
-                    "status": "validated",
-                    "source": "simc_trait_data_round_trip",
-                    "actor_class": "paladin",
-                    "spec": "retribution",
-                },
+            "validation": {
+                "status": "validated",
+                "source": "simc_trait_data_round_trip",
+                "actor_class": "paladin",
+                "spec": "retribution",
+            },
         },
     )
 

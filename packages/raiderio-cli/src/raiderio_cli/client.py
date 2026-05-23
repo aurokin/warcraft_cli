@@ -5,7 +5,6 @@ import json
 from typing import Any
 
 import httpx
-
 from warcraft_api.cache import CacheSettings, CacheTTLConfig, build_cache_store, load_prefixed_cache_settings_from_env
 from warcraft_api.http import DEFAULT_RETRY_ATTEMPTS, request_with_retries
 from warcraft_content.paths import provider_cache_root

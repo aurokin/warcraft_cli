@@ -6,7 +6,6 @@ from typing import Any
 
 import httpx
 import pytest
-
 from wowhead_cli.expansion_profiles import (
     build_comment_replies_url,
     build_entity_url,

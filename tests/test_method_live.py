@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import pytest
-from typer.testing import CliRunner
-
 from article_provider_testkit import error_payload, payload_for_live, require_live
 from method_cli.main import app
+from typer.testing import CliRunner
 
 pytestmark = pytest.mark.live
 

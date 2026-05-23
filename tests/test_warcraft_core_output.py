@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import pytest
-
 from warcraft_core.output import (
     DiagnosticsCollector,
     OutputProjectionError,

@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 
 from typer.testing import CliRunner
-
 from wowhead_cli.citation_pack import citation_pack_from_entity
 from wowhead_cli.main import app
 

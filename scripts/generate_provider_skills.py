@@ -5,7 +5,6 @@ import argparse
 from dataclasses import dataclass
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WARCRAFT_REFERENCES_DIR = REPO_ROOT / "skills" / "warcraft" / "references"
 DEFAULT_OUTPUT_DIR = REPO_ROOT / ".generated-skills"

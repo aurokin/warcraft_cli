@@ -7,8 +7,8 @@ Static quality tooling and how to use it for refactors. DX slice (AUR-366) is co
 | Target | Purpose |
 |--------|---------|
 | `make check` | Lint + typecheck + import boundaries + `test-fast` (local pre-push) |
-| `make lint` | Ruff on shared packages (`warcraft-core`, `warcraft-api`, `warcraft-content`) — **must pass** |
-| `make lint-all` | Full-repo Ruff report (~500+ issues) — report-only, does not fail |
+| `make lint` | Ruff on `packages/`, `tests/`, `scripts/` — **must pass** |
+| `make lint-all` | Alias of `make lint` |
 | `make lint-boundaries` | `import-linter` package boundaries (`.importlinter`) |
 | `make test-fast` | `pytest -q -m "not live"` — default CI unit suite |
 | `make complexity` | Radon CC + maintainability index on `packages/` |
@@ -26,8 +26,8 @@ Static quality tooling and how to use it for refactors. DX slice (AUR-366) is co
 | 1 — Tooling targets in Makefile | **Complete** |
 | 1b — CI: lint + typecheck + boundaries + non-live tests | **Complete** |
 | 1c — Pre-commit, `make check`, fixture catalog/maintenance docs, cache benchmark | **Complete** |
-| 2 — Backlog from reports (complexity, duplication, dead code, full-repo Ruff) | **Open** — optional |
-| 3 — Refactor slices per provider | **Open** — optional |
+| 2 — Full-repo Ruff (`make lint` on `packages`, `tests`, `scripts`) | **Complete** |
+| 3 — Complexity refactors (ongoing; largest CLI `main.py` modules remain) | **In progress** |
 
 Contract fixtures: [CONTRACT_TEST_CATALOG.md](CONTRACT_TEST_CATALOG.md), [FIXTURE_MAINTENANCE.md](FIXTURE_MAINTENANCE.md).
 

@@ -307,7 +307,7 @@ def _graphql_balanced_parenthesized_block(text: str, start: int) -> str | None:
         elif char == ")":
             depth -= 1
             if depth == 0:
-                return text[start : index + 1]
+                return text[start: index + 1]
         index += 1
     return None
 
@@ -1468,7 +1468,8 @@ def _report_reference_payload(ref: ReportReference) -> dict[str, Any]:
     return {"code": ref.code, "fight_id": ref.fight_id, "source_url": ref.source_url}
 
 
-def _encounter_summary_payload(*, ref: ReportReference, report: dict[str, Any], fight: dict[str, Any], encounter: dict[str, Any] | None) -> dict[str, Any]:
+def _encounter_summary_payload(*, ref: ReportReference, report: dict[str, Any],
+                               fight: dict[str, Any], encounter: dict[str, Any] | None) -> dict[str, Any]:
     encounter_payload = None
     encounter_identity = encounter_identity_payload(
         encounter_id=fight.get("encounterID") if isinstance(fight.get("encounterID"), int) else None,
@@ -1512,8 +1513,10 @@ def _encounter_window_bounds(
     fight_start = fight.get("startTime")
     if (window_start_ms is not None or window_end_ms is not None) and not isinstance(fight_start, (int, float)):
         _fail(ctx, "invalid_response", "Selected fight did not include a start timestamp for encounter windowing.")
-    absolute_start = float(fight_start) + float(window_start_ms) if window_start_ms is not None and isinstance(fight_start, (int, float)) else None
-    absolute_end = float(fight_start) + float(window_end_ms) if window_end_ms is not None and isinstance(fight_start, (int, float)) else None
+    absolute_start = float(fight_start) + \
+        float(window_start_ms) if window_start_ms is not None and isinstance(fight_start, (int, float)) else None
+    absolute_end = float(fight_start) + \
+        float(window_end_ms) if window_end_ms is not None and isinstance(fight_start, (int, float)) else None
     if absolute_start is not None and absolute_end is not None and absolute_end < absolute_start:
         _fail(ctx, "invalid_query", "--window-end-ms must be greater than or equal to --window-start-ms.")
     return absolute_start, absolute_end
@@ -1679,7 +1682,8 @@ def _event_id(value: Any) -> int | None:
     return int(value) if isinstance(value, (int, float)) else None
 
 
-def _encounter_cast_rows_payload(*, report: dict[str, Any], fight: dict[str, Any], events_report: dict[str, Any], master_report: dict[str, Any], preview_limit: int) -> dict[str, Any]:
+def _encounter_cast_rows_payload(*, report: dict[str, Any], fight: dict[str, Any], events_report: dict[str,
+                                 Any], master_report: dict[str, Any], preview_limit: int) -> dict[str, Any]:
     actor_index, ability_index = _master_data_indexes(master_report)
     paginator = events_report.get("events") if isinstance(events_report.get("events"), dict) else {}
     rows = paginator.get("data") if isinstance(paginator.get("data"), list) else []
@@ -1933,7 +1937,7 @@ def _encounter_buff_rows_payload(
     rows_out.sort(
         key=lambda row: (
             -(float(row["reported_total_uptime"]) if isinstance(row.get("reported_total_uptime"), (int, float)) else float("-inf")),
-            str(((row.get(actor_field) or {}).get("name") or "")),
+            str((row.get(actor_field) or {}).get("name") or ""),
         )
     )
     total = len(rows_out)
@@ -2399,7 +2403,8 @@ def _duration_bucket_rows(values: list[float], *, bucket_seconds: int) -> list[d
     return rows
 
 
-def _boss_kill_row(*, report: dict[str, Any], fight: dict[str, Any], matching_players: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+def _boss_kill_row(*, report: dict[str, Any], fight: dict[str, Any],
+                   matching_players: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     duration_ms = _fight_duration_ms(fight)
     return {
         "report": _report_brief_payload(report),
@@ -2491,7 +2496,8 @@ def _collect_boss_kill_rows(
     matched_boss_kill_count = 0
 
     for report in finished_reports:
-        fights_payload = client.report_fights(code=str(report.get("code") or ""), difficulty=difficulty, allow_unlisted=False, ttl_override=client._guild_ttl)
+        fights_payload = client.report_fights(code=str(report.get("code") or ""), difficulty=difficulty,
+                                              allow_unlisted=False, ttl_override=client._guild_ttl)
         fights = fights_payload.get("fights") if isinstance(fights_payload.get("fights"), list) else []
         for fight in fights:
             if not isinstance(fight, dict):
@@ -2533,7 +2539,7 @@ def _collect_boss_kill_rows(
         key=lambda row: (
             row.get("duration_ms") if isinstance(row.get("duration_ms"), (int, float)) else float("inf"),
             str((row.get("report") or {}).get("code") or ""),
-            int(((row.get("fight") or {}).get("id") or 0)),
+            int((row.get("fight") or {}).get("id") or 0),
         )
     )
 
@@ -2581,7 +2587,8 @@ def _boss_kills_payload(
     }
 
 
-def _kill_time_distribution_payload(*, rows: list[dict[str, Any]], sample: dict[str, Any], query: dict[str, Any], bucket_seconds: int) -> dict[str, Any]:
+def _kill_time_distribution_payload(*, rows: list[dict[str, Any]], sample: dict[str, Any],
+                                    query: dict[str, Any], bucket_seconds: int) -> dict[str, Any]:
     durations = [
         float(duration)
         for duration in (row.get("duration_seconds") for row in rows)
@@ -2622,8 +2629,8 @@ def _boss_spec_usage_payload(
     sampled_player_rows = 0
 
     for row in rows:
-        code = str(((row.get("report") or {}).get("code") or ""))
-        fight_id = int(((row.get("fight") or {}).get("id") or 0))
+        code = str((row.get("report") or {}).get("code") or "")
+        fight_id = int((row.get("fight") or {}).get("id") or 0)
         player_rows = row.get("player_details") if isinstance(row.get("player_details"), list) else []
         seen_specs_for_fight: set[tuple[str, str]] = set()
         for player in player_rows:
@@ -2814,8 +2821,8 @@ def _comp_samples_payload(
     sampled_player_count = 0
 
     for row in rows:
-        report_code = str(((row.get("report") or {}).get("code") or ""))
-        fight_id = int(((row.get("fight") or {}).get("id") or 0))
+        report_code = str((row.get("report") or {}).get("code") or "")
+        fight_id = int((row.get("fight") or {}).get("id") or 0)
         player_details = row.get("player_details") if isinstance(row.get("player_details"), dict) else {}
         players = player_details.get("players") if isinstance(player_details.get("players"), list) else []
         sampled_player_count += len([player for player in players if isinstance(player, dict)])
@@ -3275,7 +3282,8 @@ def _player_detail_actor_payload(actor: dict[str, Any], *, report_code: str | No
     }
 
 
-def _report_player_details_payload(report: dict[str, Any], *, report_code: str | None = None, fight_id: int | None = None) -> dict[str, Any]:
+def _report_player_details_payload(report: dict[str, Any], *, report_code: str |
+                                   None = None, fight_id: int | None = None) -> dict[str, Any]:
     details = report.get("playerDetails") if isinstance(report.get("playerDetails"), dict) else {}
     data = details.get("data") if isinstance(details.get("data"), dict) else {}
     role_data = data.get("playerDetails") if isinstance(data.get("playerDetails"), dict) else data
@@ -3348,7 +3356,7 @@ def _report_encounter_aura_summary_payload(
         key=lambda row: (
             -(float(row["reported_total_uptime"]) if isinstance(row.get("reported_total_uptime"), (int, float)) else
               float(row["reported_total"]) if isinstance(row.get("reported_total"), (int, float)) else float("-inf")),
-            str(((row.get("source") or {}).get("name") or "")),
+            str((row.get("source") or {}).get("name") or ""),
         )
     )
     return {
@@ -3399,7 +3407,7 @@ def _report_encounter_damage_source_summary_payload(
     rows_out.sort(
         key=lambda row: (
             -(float(row["reported_total"]) if isinstance(row.get("reported_total"), (int, float)) else float("-inf")),
-            str(((row.get("source") or {}).get("name") or "")),
+            str((row.get("source") or {}).get("name") or ""),
         )
     )
     return {
@@ -3438,7 +3446,7 @@ def _report_encounter_damage_target_summary_payload(
     rows_out.sort(
         key=lambda row: (
             -(float(row["reported_total"]) if isinstance(row.get("reported_total"), (int, float)) else float("-inf")),
-            str(((row.get("target") or {}).get("name") or "")),
+            str((row.get("target") or {}).get("name") or ""),
         )
     )
     return {
@@ -3477,7 +3485,11 @@ def _aura_compare_rows(
                 "source": (
                     left.get("source")
                     if isinstance(left, dict) and isinstance(left.get("source"), dict)
-                    else (right.get("source") if isinstance(right, dict) and isinstance(right.get("source"), dict) else {"id": key[0], "name": key[1]})
+                    else (
+                        right.get("source")
+                        if isinstance(right, dict) and isinstance(right.get("source"), dict)
+                        else {"id": key[0], "name": key[1]}
+                    )
                 ),
                 "left_reported_total": left_total,
                 "right_reported_total": right_total,
@@ -3500,7 +3512,7 @@ def _aura_compare_rows(
     compared.sort(
         key=lambda row: (
             -abs(float(row["reported_total_delta"])) if isinstance(row.get("reported_total_delta"), (int, float)) else -1.0,
-            str(((row.get("source") or {}).get("name") or "")),
+            str((row.get("source") or {}).get("name") or ""),
         )
     )
     return compared
@@ -3595,7 +3607,8 @@ def main(
 def search(
     ctx: typer.Context,
     query: str = typer.Argument(..., help="Explicit Warcraft Logs report URL or report code."),
-    limit: int = typer.Option(5, "--limit", min=1, max=50, help="Accepted for wrapper compatibility; explicit report discovery returns at most one result."),
+    limit: int = typer.Option(5, "--limit", min=1, max=50,
+                              help="Accepted for wrapper compatibility; explicit report discovery returns at most one result."),
 ) -> None:
     del limit
     _emit(ctx, _report_search_payload(query, ref=_explicit_report_reference(query)))
@@ -3605,7 +3618,8 @@ def search(
 def resolve(
     ctx: typer.Context,
     query: str = typer.Argument(..., help="Explicit Warcraft Logs report URL or report code."),
-    limit: int = typer.Option(5, "--limit", min=1, max=50, help="Accepted for wrapper compatibility; explicit report resolution returns at most one match."),
+    limit: int = typer.Option(5, "--limit", min=1, max=50,
+                              help="Accepted for wrapper compatibility; explicit report resolution returns at most one match."),
 ) -> None:
     del limit
     _emit(ctx, _report_resolve_payload(query, ref=_explicit_report_reference(query)))
@@ -3762,7 +3776,14 @@ def auth_login(
     redirect_uri: str = typer.Option(..., "--redirect-uri", help="Registered redirect URI for the Warcraft Logs OAuth client."),
     code: str | None = typer.Option(None, "--code", help="Authorization code returned by the redirect callback."),
     state: str | None = typer.Option(None, "--state", help="State value returned by the redirect callback."),
-    scope: list[str] = typer.Option([], "--scope", help="OAuth scope. Use view-user-profile for currentUser/user data and view-private-reports for private/guild-stealth reports. Repeatable."),
+    scope: list[str] = typer.Option(
+        [],
+        "--scope",
+        help=(
+            "OAuth scope. Use view-user-profile for currentUser/user data and "
+            "view-private-reports for private/guild-stealth reports. Repeatable."
+        ),
+    ),
 ) -> None:
     if not code:
         client = _client(ctx)
@@ -3863,7 +3884,14 @@ def auth_pkce_login(
     redirect_uri: str = typer.Option(..., "--redirect-uri", help="Registered redirect URI for the Warcraft Logs OAuth client."),
     code: str | None = typer.Option(None, "--code", help="Authorization code returned by the redirect callback."),
     state: str | None = typer.Option(None, "--state", help="State value returned by the redirect callback."),
-    scope: list[str] = typer.Option([], "--scope", help="OAuth scope. Use view-user-profile for currentUser/user data and view-private-reports for private/guild-stealth reports. Repeatable."),
+    scope: list[str] = typer.Option(
+        [],
+        "--scope",
+        help=(
+            "OAuth scope. Use view-user-profile for currentUser/user data and "
+            "view-private-reports for private/guild-stealth reports. Repeatable."
+        ),
+    ),
 ) -> None:
     if not code:
         client = _client(ctx)
@@ -3916,7 +3944,11 @@ def auth_pkce_login(
     expected_state = pending.get("pending_state")
     code_verifier = pending.get("code_verifier")
     if not isinstance(code_verifier, str) or not code_verifier:
-        _fail(ctx, "missing_code_verifier", "Missing pending PKCE verifier. Re-run `warcraftlogs auth pkce-login --redirect-uri ...` first.")
+        _fail(
+            ctx,
+            "missing_code_verifier",
+            "Missing pending PKCE verifier. Re-run `warcraftlogs auth pkce-login --redirect-uri ...` first.",
+        )
     if isinstance(expected_state, str) and expected_state and not state:
         _fail(ctx, "missing_state", "Missing callback state. Re-run the PKCE login URL step and provide the returned state value.")
     if isinstance(expected_state, str) and expected_state and state and state != expected_state:
@@ -4910,7 +4942,8 @@ def ability_usage_summary(
     ),
     kill_time_min: float | None = typer.Option(None, "--kill-time-min", help="Optional minimum kill time in seconds."),
     kill_time_max: float | None = typer.Option(None, "--kill-time-max", help="Optional maximum kill time in seconds."),
-    preview_limit: int = typer.Option(10, "--preview-limit", min=1, max=100, help="Maximum sampled kill rows to include in the preview payload."),
+    preview_limit: int = typer.Option(10, "--preview-limit", min=1, max=100,
+                                      help="Maximum sampled kill rows to include in the preview payload."),
     event_limit: int = typer.Option(200, "--event-limit", min=1, max=5000, help="Maximum cast events to request per sampled kill."),
     report_pages: int = typer.Option(1, "--report-pages", min=1, max=10, help="How many report-list pages to sample."),
     reports_per_page: int = typer.Option(25, "--reports-per-page", min=1, max=100, help="Reports to fetch per sampled page."),
@@ -5057,7 +5090,8 @@ def comp_samples(
 def report_encounter(
     ctx: typer.Context,
     reference: str,
-    fight_id: int | None = typer.Option(None, "--fight-id", help="Override or supply a fight ID when the report reference does not include one."),
+    fight_id: int | None = typer.Option(
+        None, "--fight-id", help="Override or supply a fight ID when the report reference does not include one."),
     allow_unlisted: bool = typer.Option(False, "--allow-unlisted", help="Allow lookup of unlisted reports."),
 ) -> None:
     client = _client(ctx)
@@ -5090,7 +5124,8 @@ def report_encounter(
 def report_encounter_players(
     ctx: typer.Context,
     reference: str,
-    fight_id: int | None = typer.Option(None, "--fight-id", help="Override or supply a fight ID when the report reference does not include one."),
+    fight_id: int | None = typer.Option(
+        None, "--fight-id", help="Override or supply a fight ID when the report reference does not include one."),
     include_combatant_info: bool | None = typer.Option(
         None,
         "--include-combatant-info/--no-include-combatant-info",
@@ -5146,7 +5181,8 @@ def report_player_talents(
     ctx: typer.Context,
     reference: str,
     actor_id: int = typer.Option(..., "--actor-id", help="Report-local actor ID scoped to the selected fight."),
-    fight_id: int | None = typer.Option(None, "--fight-id", help="Override or supply a fight ID when the report reference does not include one."),
+    fight_id: int | None = typer.Option(
+        None, "--fight-id", help="Override or supply a fight ID when the report reference does not include one."),
     allow_unlisted: bool = typer.Option(False, "--allow-unlisted", help="Allow lookup of unlisted reports."),
     out: str | None = typer.Option(None, "--out", help="Optional path to write the scoped talent transport packet JSON."),
 ) -> None:
@@ -5233,14 +5269,16 @@ def report_player_talents(
 def report_encounter_casts(
     ctx: typer.Context,
     reference: str,
-    fight_id: int | None = typer.Option(None, "--fight-id", help="Override or supply a fight ID when the report reference does not include one."),
+    fight_id: int | None = typer.Option(
+        None, "--fight-id", help="Override or supply a fight ID when the report reference does not include one."),
     source_id: int | None = typer.Option(None, "--source-id", help="Optional source actor filter."),
     target_id: int | None = typer.Option(None, "--target-id", help="Optional target actor filter."),
     ability_id: float | None = typer.Option(None, "--ability-id", help="Optional ability game ID filter."),
     hostility_type: str | None = typer.Option(None, "--hostility-type", help="Optional hostility filter."),
     limit: int = typer.Option(200, "--limit", min=1, max=10000, help="Maximum cast events to request from Warcraft Logs."),
     preview_limit: int = typer.Option(20, "--preview-limit", min=1, max=200, help="Maximum preview cast rows to return."),
-    window_start_ms: float | None = typer.Option(None, "--window-start-ms", help="Optional encounter-relative start offset in milliseconds."),
+    window_start_ms: float | None = typer.Option(
+        None, "--window-start-ms", help="Optional encounter-relative start offset in milliseconds."),
     window_end_ms: float | None = typer.Option(None, "--window-end-ms", help="Optional encounter-relative end offset in milliseconds."),
     translate: bool | None = typer.Option(None, "--translate/--no-translate", help="Optional translation toggle."),
     allow_unlisted: bool = typer.Option(False, "--allow-unlisted", help="Allow lookup of unlisted reports."),
@@ -5306,7 +5344,8 @@ def report_encounter_casts(
 def report_encounter_buffs(
     ctx: typer.Context,
     reference: str,
-    fight_id: int | None = typer.Option(None, "--fight-id", help="Override or supply a fight ID when the report reference does not include one."),
+    fight_id: int | None = typer.Option(
+        None, "--fight-id", help="Override or supply a fight ID when the report reference does not include one."),
     source_id: int | None = typer.Option(None, "--source-id", help="Optional source actor filter."),
     target_id: int | None = typer.Option(None, "--target-id", help="Optional target actor filter."),
     ability_id: float | None = typer.Option(None, "--ability-id", help="Optional ability game ID filter."),
@@ -5314,7 +5353,8 @@ def report_encounter_buffs(
     view_by: str | None = typer.Option("source", "--view-by", help="Optional table view grouping."),
     wipe_cutoff: int | None = typer.Option(None, "--wipe-cutoff", help="Optional wipe cutoff."),
     preview_limit: int = typer.Option(20, "--preview-limit", min=1, max=200, help="Maximum preview buff rows to return."),
-    window_start_ms: float | None = typer.Option(None, "--window-start-ms", help="Optional encounter-relative start offset in milliseconds."),
+    window_start_ms: float | None = typer.Option(
+        None, "--window-start-ms", help="Optional encounter-relative start offset in milliseconds."),
     window_end_ms: float | None = typer.Option(None, "--window-end-ms", help="Optional encounter-relative end offset in milliseconds."),
     translate: bool | None = typer.Option(None, "--translate/--no-translate", help="Optional translation toggle."),
     allow_unlisted: bool = typer.Option(False, "--allow-unlisted", help="Allow lookup of unlisted reports."),
@@ -5383,12 +5423,14 @@ def report_encounter_aura_summary(
     ctx: typer.Context,
     reference: str,
     ability_id: int = typer.Option(..., "--ability-id", help="Required aura ability game ID."),
-    fight_id: int | None = typer.Option(None, "--fight-id", help="Override or supply a fight ID when the report reference does not include one."),
+    fight_id: int | None = typer.Option(
+        None, "--fight-id", help="Override or supply a fight ID when the report reference does not include one."),
     source_id: int | None = typer.Option(None, "--source-id", help="Optional source actor filter."),
     target_id: int | None = typer.Option(None, "--target-id", help="Optional target actor filter."),
     hostility_type: str | None = typer.Option(None, "--hostility-type", help="Optional hostility filter."),
     wipe_cutoff: int | None = typer.Option(None, "--wipe-cutoff", help="Optional wipe cutoff."),
-    window_start_ms: float | None = typer.Option(None, "--window-start-ms", help="Optional encounter-relative start offset in milliseconds."),
+    window_start_ms: float | None = typer.Option(
+        None, "--window-start-ms", help="Optional encounter-relative start offset in milliseconds."),
     window_end_ms: float | None = typer.Option(None, "--window-end-ms", help="Optional encounter-relative end offset in milliseconds."),
     translate: bool | None = typer.Option(None, "--translate/--no-translate", help="Optional translation toggle."),
     allow_unlisted: bool = typer.Option(False, "--allow-unlisted", help="Allow lookup of unlisted reports."),
@@ -5449,11 +5491,16 @@ def report_encounter_aura_compare(
     ctx: typer.Context,
     reference: str,
     ability_id: int = typer.Option(..., "--ability-id", help="Required aura ability game ID."),
-    fight_id: int | None = typer.Option(None, "--fight-id", help="Override or supply a fight ID when the report reference does not include one."),
-    left_window_start_ms: float | None = typer.Option(None, "--left-window-start-ms", help="Encounter-relative start offset for the left comparison window."),
-    left_window_end_ms: float | None = typer.Option(None, "--left-window-end-ms", help="Encounter-relative end offset for the left comparison window."),
-    right_window_start_ms: float | None = typer.Option(None, "--right-window-start-ms", help="Encounter-relative start offset for the right comparison window."),
-    right_window_end_ms: float | None = typer.Option(None, "--right-window-end-ms", help="Encounter-relative end offset for the right comparison window."),
+    fight_id: int | None = typer.Option(
+        None, "--fight-id", help="Override or supply a fight ID when the report reference does not include one."),
+    left_window_start_ms: float | None = typer.Option(
+        None, "--left-window-start-ms", help="Encounter-relative start offset for the left comparison window."),
+    left_window_end_ms: float | None = typer.Option(
+        None, "--left-window-end-ms", help="Encounter-relative end offset for the left comparison window."),
+    right_window_start_ms: float | None = typer.Option(
+        None, "--right-window-start-ms", help="Encounter-relative start offset for the right comparison window."),
+    right_window_end_ms: float | None = typer.Option(
+        None, "--right-window-end-ms", help="Encounter-relative end offset for the right comparison window."),
     left_label: str = typer.Option("left", "--left-label", help="Label for the left comparison window."),
     right_label: str = typer.Option("right", "--right-label", help="Label for the right comparison window."),
     source_id: int | None = typer.Option(None, "--source-id", help="Optional source actor filter applied to both windows."),
@@ -5558,8 +5605,10 @@ def report_encounter_aura_compare(
             "comparison": {
                 "matching_rule": "same_report_same_fight_same_ability_explicit_windows",
                 "rows": _aura_compare_rows(
-                    left_rows=(left_payload.get("aura_summary") or {}).get("rows") if isinstance(left_payload.get("aura_summary"), dict) else [],
-                    right_rows=(right_payload.get("aura_summary") or {}).get("rows") if isinstance(right_payload.get("aura_summary"), dict) else [],
+                    left_rows=(left_payload.get("aura_summary") or {}).get(
+                        "rows") if isinstance(left_payload.get("aura_summary"), dict) else [],
+                    right_rows=(right_payload.get("aura_summary") or {}).get(
+                        "rows") if isinstance(right_payload.get("aura_summary"), dict) else [],
                 ),
             },
         },
@@ -5571,13 +5620,15 @@ def report_encounter_aura_compare(
 def report_encounter_damage_source_summary(
     ctx: typer.Context,
     reference: str,
-    fight_id: int | None = typer.Option(None, "--fight-id", help="Override or supply a fight ID when the report reference does not include one."),
+    fight_id: int | None = typer.Option(
+        None, "--fight-id", help="Override or supply a fight ID when the report reference does not include one."),
     source_id: int | None = typer.Option(None, "--source-id", help="Optional source actor filter."),
     target_id: int | None = typer.Option(None, "--target-id", help="Optional target actor filter."),
     ability_id: float | None = typer.Option(None, "--ability-id", help="Optional ability game ID filter."),
     hostility_type: str | None = typer.Option(None, "--hostility-type", help="Optional hostility filter."),
     wipe_cutoff: int | None = typer.Option(None, "--wipe-cutoff", help="Optional wipe cutoff."),
-    window_start_ms: float | None = typer.Option(None, "--window-start-ms", help="Optional encounter-relative start offset in milliseconds."),
+    window_start_ms: float | None = typer.Option(
+        None, "--window-start-ms", help="Optional encounter-relative start offset in milliseconds."),
     window_end_ms: float | None = typer.Option(None, "--window-end-ms", help="Optional encounter-relative end offset in milliseconds."),
     translate: bool | None = typer.Option(None, "--translate/--no-translate", help="Optional translation toggle."),
     allow_unlisted: bool = typer.Option(False, "--allow-unlisted", help="Allow lookup of unlisted reports."),
@@ -5636,13 +5687,15 @@ def report_encounter_damage_source_summary(
 def report_encounter_damage_target_summary(
     ctx: typer.Context,
     reference: str,
-    fight_id: int | None = typer.Option(None, "--fight-id", help="Override or supply a fight ID when the report reference does not include one."),
+    fight_id: int | None = typer.Option(
+        None, "--fight-id", help="Override or supply a fight ID when the report reference does not include one."),
     source_id: int | None = typer.Option(None, "--source-id", help="Optional source actor filter."),
     target_id: int | None = typer.Option(None, "--target-id", help="Optional target actor filter."),
     ability_id: float | None = typer.Option(None, "--ability-id", help="Optional ability game ID filter."),
     hostility_type: str | None = typer.Option(None, "--hostility-type", help="Optional hostility filter."),
     wipe_cutoff: int | None = typer.Option(None, "--wipe-cutoff", help="Optional wipe cutoff."),
-    window_start_ms: float | None = typer.Option(None, "--window-start-ms", help="Optional encounter-relative start offset in milliseconds."),
+    window_start_ms: float | None = typer.Option(
+        None, "--window-start-ms", help="Optional encounter-relative start offset in milliseconds."),
     window_end_ms: float | None = typer.Option(None, "--window-end-ms", help="Optional encounter-relative end offset in milliseconds."),
     translate: bool | None = typer.Option(None, "--translate/--no-translate", help="Optional translation toggle."),
     allow_unlisted: bool = typer.Option(False, "--allow-unlisted", help="Allow lookup of unlisted reports."),
@@ -5701,14 +5754,16 @@ def report_encounter_damage_target_summary(
 def report_encounter_damage_breakdown(
     ctx: typer.Context,
     reference: str,
-    fight_id: int | None = typer.Option(None, "--fight-id", help="Override or supply a fight ID when the report reference does not include one."),
+    fight_id: int | None = typer.Option(
+        None, "--fight-id", help="Override or supply a fight ID when the report reference does not include one."),
     source_id: int | None = typer.Option(None, "--source-id", help="Optional source actor filter."),
     target_id: int | None = typer.Option(None, "--target-id", help="Optional target actor filter."),
     ability_id: float | None = typer.Option(None, "--ability-id", help="Optional ability game ID filter."),
     hostility_type: str | None = typer.Option(None, "--hostility-type", help="Optional hostility filter."),
     view_by: str | None = typer.Option("source", "--view-by", help="Optional table view grouping."),
     wipe_cutoff: int | None = typer.Option(None, "--wipe-cutoff", help="Optional wipe cutoff."),
-    window_start_ms: float | None = typer.Option(None, "--window-start-ms", help="Optional encounter-relative start offset in milliseconds."),
+    window_start_ms: float | None = typer.Option(
+        None, "--window-start-ms", help="Optional encounter-relative start offset in milliseconds."),
     window_end_ms: float | None = typer.Option(None, "--window-end-ms", help="Optional encounter-relative end offset in milliseconds."),
     translate: bool | None = typer.Option(None, "--translate/--no-translate", help="Optional translation toggle."),
     allow_unlisted: bool = typer.Option(False, "--allow-unlisted", help="Allow lookup of unlisted reports."),
@@ -5949,7 +6004,14 @@ def report_events(
     ctx: typer.Context,
     code: str,
     ability_id: float | None = typer.Option(None, "--ability-id", help="Optional ability game ID filter."),
-    data_type: str | None = typer.Option(None, "--data-type", help="Event data type (e.g. casts, damage-done, healing). Strongly recommended; without it Warcraft Logs returns events.data: null even on valid scoped slices."),
+    data_type: str | None = typer.Option(
+        None,
+        "--data-type",
+        help=(
+            "Event data type (e.g. casts, damage-done, healing). Strongly recommended; "
+            "without it Warcraft Logs returns events.data: null even on valid scoped slices."
+        ),
+    ),
     difficulty: int | None = typer.Option(None, "--difficulty", help="Optional difficulty ID filter."),
     encounter_id: int | None = typer.Option(None, "--encounter-id", help="Optional encounter ID filter."),
     end_time: float | None = typer.Option(None, "--end-time", help="Optional event-range end timestamp."),

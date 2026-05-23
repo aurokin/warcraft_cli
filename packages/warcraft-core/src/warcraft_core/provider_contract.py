@@ -372,7 +372,7 @@ def synthetic_search_candidates(query: str) -> list[dict[str, Any]]:
         return []
     realm: str | None = None
     region_index = ordered_tokens.index(region)
-    trailing = ordered_tokens[region_index + 1 :]
+    trailing = ordered_tokens[region_index + 1:]
     if trailing and trailing[0] not in {"leaderboard", "pve"}:
         realm = trailing[0]
     command = f"wowprogress leaderboard pve {region}"

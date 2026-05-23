@@ -12,7 +12,8 @@ def test_build_citation_pack_dedupes_and_sorts() -> None:
         ],
         anchors=[
             {"claim": "tooltip.name", "source_key": "page", "url": "https://example/page"},
-            {"claim": "comments.top[0].body", "source_key": "comments", "url": "https://example/page#comments:id=1", "anchor": "#comments:id=1"},
+            {"claim": "comments.top[0].body", "source_key": "comments",
+                "url": "https://example/page#comments:id=1", "anchor": "#comments:id=1"},
         ],
     )
     assert pack["source_count"] == 2

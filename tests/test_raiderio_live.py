@@ -3,9 +3,8 @@ from __future__ import annotations
 import json
 
 import pytest
-from typer.testing import CliRunner
-
 from raiderio_cli.main import app
+from typer.testing import CliRunner
 
 runner = CliRunner()
 
@@ -72,7 +71,8 @@ def test_live_raiderio_threshold_mythic_plus_runs_contract() -> None:
 
 @pytest.mark.live
 def test_live_raiderio_filtered_sample_contract() -> None:
-    payload = _payload_for(["sample", "mythic-plus-runs", "--pages", "1", "--limit", "20", "--level-min", "20", "--contains-role", "healer"])
+    payload = _payload_for(["sample", "mythic-plus-runs", "--pages", "1", "--limit",
+                           "20", "--level-min", "20", "--contains-role", "healer"])
 
     assert payload["kind"] == "mythic_plus_runs_sample"
     assert payload["query"]["filters"]["level_min"] == 20

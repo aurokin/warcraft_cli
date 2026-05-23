@@ -1,23 +1,31 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from statistics import median
 from typing import Any
 
 import httpx
 import typer
-
-from raiderio_cli.client import RaiderIOClient, load_raiderio_cache_settings_from_env
 from warcraft_core.analytics import (
     categorical_distribution as _categorical_distribution,
+)
+from warcraft_core.analytics import (
     count_map as _count_map,
+)
+from warcraft_core.analytics import (
     distribution_response as _distribution_response,
+)
+from warcraft_core.analytics import (
     numeric_distribution as _numeric_distribution,
+)
+from warcraft_core.analytics import (
     numeric_summary as _numeric_summary,
 )
 from warcraft_core.output import emit
 from warcraft_core.wow_normalization import normalize_name, normalize_region, primary_realm_slug
+
+from raiderio_cli.client import RaiderIOClient, load_raiderio_cache_settings_from_env
 
 app = typer.Typer(add_completion=False, help="Raider.IO profile and leaderboard CLI.")
 sample_app = typer.Typer(add_completion=False, help="Sample-backed Raider.IO analytics primitives.")
@@ -54,7 +62,7 @@ def _client(ctx: typer.Context) -> RaiderIOClient:
         return RaiderIOClient()
     except ValueError as exc:
         _fail(ctx, "invalid_cache_config", str(exc))
-        raise AssertionError("unreachable")
+        raise AssertionError("unreachable") from None
 
 
 def _handle_http_error(ctx: typer.Context, exc: httpx.HTTPStatusError) -> None:
@@ -492,7 +500,7 @@ def _candidate_dedupe_key(row: dict[str, Any]) -> tuple[str, str | None, str | N
 
 
 def _candidate_ranking_score(row: dict[str, Any]) -> int:
-    return int((((row.get("ranking") or {}).get("score")) or 0))
+    return int(((row.get("ranking") or {}).get("score")) or 0)
 
 
 def _dedupe_search_candidates(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -668,7 +676,7 @@ def _sample_mythic_plus_runs(
         if len(runs) >= limit:
             break
     return runs, {
-        "sampled_at": datetime.now(timezone.utc).isoformat(),
+        "sampled_at": datetime.now(UTC).isoformat(),
         "season": effective_season,
         "pages_requested": pages,
         "pages_fetched": pages_fetched,
@@ -699,9 +707,7 @@ def _metric_meets_bounds(value: Any, *, minimum: float | None, maximum: float | 
     numeric_value = float(value)
     if minimum is not None and numeric_value < minimum:
         return False
-    if maximum is not None and numeric_value > maximum:
-        return False
-    return True
+    return not (maximum is not None and numeric_value > maximum)
 
 
 def _roster_field_values(
@@ -1191,10 +1197,7 @@ def _player_distribution_payload(
 def _nearest_threshold_rows(metric: str, target: float, runs: list[dict[str, Any]], *, limit: int) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for run in runs:
-        if metric == "score":
-            raw_value = run.get("score")
-        else:
-            raw_value = run.get("mythic_level")
+        raw_value = run.get("score") if metric == "score" else run.get("mythic_level")
         if not isinstance(raw_value, (int, float)):
             continue
         rows.append(
@@ -1214,7 +1217,8 @@ def _nearest_threshold_rows(metric: str, target: float, runs: list[dict[str, Any
     return rows[:limit]
 
 
-def _threshold_payload(metric: str, target: float, runs: list[dict[str, Any]], *, meta: dict[str, Any], query: dict[str, Any], nearest_limit: int) -> dict[str, Any]:
+def _threshold_payload(metric: str, target: float, runs: list[dict[str, Any]], *,
+                       meta: dict[str, Any], query: dict[str, Any], nearest_limit: int) -> dict[str, Any]:
     nearest = _nearest_threshold_rows(metric, target, runs, limit=nearest_limit)
     if metric == "score":
         estimate_metric = "mythic_level"
@@ -1440,7 +1444,8 @@ def character(
     scores = payload.get("mythic_plus_scores_by_season") if isinstance(payload.get("mythic_plus_scores_by_season"), list) else []
     current_scores = scores[0] if scores else {}
     current_score_value = (((current_scores.get("scores") or {}).get("all")) if isinstance(current_scores, dict) else None)
-    current_score_color = (((current_scores.get("segments") or {}).get("all") or {}).get("color")) if isinstance(current_scores, dict) else None
+    current_score_color = (((current_scores.get("segments") or {}).get("all") or {}).get("color")
+                           ) if isinstance(current_scores, dict) else None
     guild = payload.get("guild") if isinstance(payload.get("guild"), dict) else None
     _emit(
         ctx,
@@ -1581,10 +1586,14 @@ def sample_mythic_plus_runs(
     level_max: int | None = typer.Option(None, "--level-max", min=0, help="Retain only runs at or below this Mythic+ level."),
     score_min: float | None = typer.Option(None, "--score-min", help="Retain only runs at or above this sampled run score."),
     score_max: float | None = typer.Option(None, "--score-max", help="Retain only runs at or below this sampled run score."),
-    contains_role: list[str] | None = typer.Option(None, "--contains-role", help="Retain only runs containing at least one roster role. Repeatable."),
-    contains_class: list[str] | None = typer.Option(None, "--contains-class", help="Retain only runs containing at least one class slug or name. Repeatable."),
-    contains_spec: list[str] | None = typer.Option(None, "--contains-spec", help="Retain only runs containing at least one spec slug or name. Repeatable."),
-    player_region: list[str] | None = typer.Option(None, "--player-region", help="Retain only runs containing at least one player from the given region. Repeatable."),
+    contains_role: list[str] | None = typer.Option(
+        None, "--contains-role", help="Retain only runs containing at least one roster role. Repeatable."),
+    contains_class: list[str] | None = typer.Option(
+        None, "--contains-class", help="Retain only runs containing at least one class slug or name. Repeatable."),
+    contains_spec: list[str] | None = typer.Option(
+        None, "--contains-spec", help="Retain only runs containing at least one spec slug or name. Repeatable."),
+    player_region: list[str] | None = typer.Option(
+        None, "--player-region", help="Retain only runs containing at least one player from the given region. Repeatable."),
 ) -> None:
     try:
         with _client(ctx) as client:
@@ -1665,10 +1674,14 @@ def sample_mythic_plus_players(
     level_max: int | None = typer.Option(None, "--level-max", min=0, help="Retain only runs at or below this Mythic+ level."),
     score_min: float | None = typer.Option(None, "--score-min", help="Retain only runs at or above this sampled run score."),
     score_max: float | None = typer.Option(None, "--score-max", help="Retain only runs at or below this sampled run score."),
-    contains_role: list[str] | None = typer.Option(None, "--contains-role", help="Retain only runs containing at least one roster role. Repeatable."),
-    contains_class: list[str] | None = typer.Option(None, "--contains-class", help="Retain only runs containing at least one class slug or name. Repeatable."),
-    contains_spec: list[str] | None = typer.Option(None, "--contains-spec", help="Retain only runs containing at least one spec slug or name. Repeatable."),
-    player_region: list[str] | None = typer.Option(None, "--player-region", help="Retain only runs containing at least one player from the given region. Repeatable."),
+    contains_role: list[str] | None = typer.Option(
+        None, "--contains-role", help="Retain only runs containing at least one roster role. Repeatable."),
+    contains_class: list[str] | None = typer.Option(
+        None, "--contains-class", help="Retain only runs containing at least one class slug or name. Repeatable."),
+    contains_spec: list[str] | None = typer.Option(
+        None, "--contains-spec", help="Retain only runs containing at least one spec slug or name. Repeatable."),
+    player_region: list[str] | None = typer.Option(
+        None, "--player-region", help="Retain only runs containing at least one player from the given region. Repeatable."),
 ) -> None:
     try:
         with _client(ctx) as client:
@@ -1748,13 +1761,22 @@ def distribution_mythic_plus_runs(
     level_max: int | None = typer.Option(None, "--level-max", min=0, help="Retain only runs at or below this Mythic+ level."),
     score_min: float | None = typer.Option(None, "--score-min", help="Retain only runs at or above this sampled run score."),
     score_max: float | None = typer.Option(None, "--score-max", help="Retain only runs at or below this sampled run score."),
-    contains_role: list[str] | None = typer.Option(None, "--contains-role", help="Retain only runs containing at least one roster role. Repeatable."),
-    contains_class: list[str] | None = typer.Option(None, "--contains-class", help="Retain only runs containing at least one class slug or name. Repeatable."),
-    contains_spec: list[str] | None = typer.Option(None, "--contains-spec", help="Retain only runs containing at least one spec slug or name. Repeatable."),
-    player_region: list[str] | None = typer.Option(None, "--player-region", help="Retain only runs containing at least one player from the given region. Repeatable."),
+    contains_role: list[str] | None = typer.Option(
+        None, "--contains-role", help="Retain only runs containing at least one roster role. Repeatable."),
+    contains_class: list[str] | None = typer.Option(
+        None, "--contains-class", help="Retain only runs containing at least one class slug or name. Repeatable."),
+    contains_spec: list[str] | None = typer.Option(
+        None, "--contains-spec", help="Retain only runs containing at least one spec slug or name. Repeatable."),
+    player_region: list[str] | None = typer.Option(
+        None, "--player-region", help="Retain only runs containing at least one player from the given region. Repeatable."),
 ) -> None:
     if metric not in {"mythic_level", "dungeon", "role", "player_region", "class", "spec", "composition", "class_composition"}:
-        _fail(ctx, "invalid_query", "--metric must be one of: mythic_level, dungeon, role, player_region, class, spec, composition, class_composition")
+        _fail(
+            ctx,
+            "invalid_query",
+            "--metric must be one of: mythic_level, dungeon, role, player_region, "
+            "class, spec, composition, class_composition",
+        )
         return
     try:
         with _client(ctx) as client:
@@ -1807,7 +1829,8 @@ def distribution_mythic_plus_runs(
 @distribution_app.command("mythic-plus-players")
 def distribution_mythic_plus_players(
     ctx: typer.Context,
-    metric: str = typer.Option("appearance_count", "--metric", help="Distribution metric: appearance_count, top_mythic_level, class, spec, role, or player_region."),
+    metric: str = typer.Option("appearance_count", "--metric",
+                               help="Distribution metric: appearance_count, top_mythic_level, class, spec, role, or player_region."),
     season: str = typer.Option("", "--season", help="Season slug. Defaults to Raider.IO current default season."),
     region: str = typer.Option("world", "--region", help="Region slug such as world, us, or eu."),
     dungeon: str = typer.Option("all", "--dungeon", help="Dungeon slug or all."),
@@ -1820,10 +1843,14 @@ def distribution_mythic_plus_players(
     level_max: int | None = typer.Option(None, "--level-max", min=0, help="Retain only runs at or below this Mythic+ level."),
     score_min: float | None = typer.Option(None, "--score-min", help="Retain only runs at or above this sampled run score."),
     score_max: float | None = typer.Option(None, "--score-max", help="Retain only runs at or below this sampled run score."),
-    contains_role: list[str] | None = typer.Option(None, "--contains-role", help="Retain only runs containing at least one roster role. Repeatable."),
-    contains_class: list[str] | None = typer.Option(None, "--contains-class", help="Retain only runs containing at least one class slug or name. Repeatable."),
-    contains_spec: list[str] | None = typer.Option(None, "--contains-spec", help="Retain only runs containing at least one spec slug or name. Repeatable."),
-    player_region: list[str] | None = typer.Option(None, "--player-region", help="Retain only runs containing at least one player from the given region. Repeatable."),
+    contains_role: list[str] | None = typer.Option(
+        None, "--contains-role", help="Retain only runs containing at least one roster role. Repeatable."),
+    contains_class: list[str] | None = typer.Option(
+        None, "--contains-class", help="Retain only runs containing at least one class slug or name. Repeatable."),
+    contains_spec: list[str] | None = typer.Option(
+        None, "--contains-spec", help="Retain only runs containing at least one spec slug or name. Repeatable."),
+    player_region: list[str] | None = typer.Option(
+        None, "--player-region", help="Retain only runs containing at least one player from the given region. Repeatable."),
 ) -> None:
     if metric not in {"appearance_count", "top_mythic_level", "class", "spec", "role", "player_region"}:
         _fail(ctx, "invalid_query", "--metric must be one of: appearance_count, top_mythic_level, class, spec, role, player_region")
@@ -1903,10 +1930,14 @@ def threshold_mythic_plus_runs(
     level_max: int | None = typer.Option(None, "--level-max", min=0, help="Retain only runs at or below this Mythic+ level."),
     score_min: float | None = typer.Option(None, "--score-min", help="Retain only runs at or above this sampled run score."),
     score_max: float | None = typer.Option(None, "--score-max", help="Retain only runs at or below this sampled run score."),
-    contains_role: list[str] | None = typer.Option(None, "--contains-role", help="Retain only runs containing at least one roster role. Repeatable."),
-    contains_class: list[str] | None = typer.Option(None, "--contains-class", help="Retain only runs containing at least one class slug or name. Repeatable."),
-    contains_spec: list[str] | None = typer.Option(None, "--contains-spec", help="Retain only runs containing at least one spec slug or name. Repeatable."),
-    player_region: list[str] | None = typer.Option(None, "--player-region", help="Retain only runs containing at least one player from the given region. Repeatable."),
+    contains_role: list[str] | None = typer.Option(
+        None, "--contains-role", help="Retain only runs containing at least one roster role. Repeatable."),
+    contains_class: list[str] | None = typer.Option(
+        None, "--contains-class", help="Retain only runs containing at least one class slug or name. Repeatable."),
+    contains_spec: list[str] | None = typer.Option(
+        None, "--contains-spec", help="Retain only runs containing at least one spec slug or name. Repeatable."),
+    player_region: list[str] | None = typer.Option(
+        None, "--player-region", help="Retain only runs containing at least one player from the given region. Repeatable."),
 ) -> None:
     if metric not in {"score", "mythic_level"}:
         _fail(ctx, "invalid_query", "--metric must be one of: score, mythic_level")

@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 
 from typer.testing import CliRunner
-
 from warcraft_wiki_cli.client import WarcraftWikiAPIError
 from warcraft_wiki_cli.main import (
     _score_text_match,
@@ -12,6 +11,8 @@ from warcraft_wiki_cli.main import (
     _typed_direct_article_result,
     _typed_search_match,
     _typed_search_queries,
+)
+from warcraft_wiki_cli.main import (
     app as warcraft_wiki_app,
 )
 
@@ -38,8 +39,10 @@ def _page_payload() -> dict[str, object]:
         "navigation": {
             "count": 2,
             "items": [
-                {"title": "API systems", "url": "https://warcraft.wiki.gg/wiki/World_of_Warcraft_API#API_systems", "section_slug": "API_systems", "active": True, "ordinal": 1},
-                {"title": "Object APIs", "url": "https://warcraft.wiki.gg/wiki/World_of_Warcraft_API#Object_APIs", "section_slug": "Object_APIs", "active": True, "ordinal": 2},
+                {"title": "API systems", "url": "https://warcraft.wiki.gg/wiki/World_of_Warcraft_API#API_systems",
+                    "section_slug": "API_systems", "active": True, "ordinal": 1},
+                {"title": "Object APIs", "url": "https://warcraft.wiki.gg/wiki/World_of_Warcraft_API#Object_APIs",
+                    "section_slug": "Object_APIs", "active": True, "ordinal": 2},
             ],
         },
         "article_content": {
@@ -147,7 +150,8 @@ def test_warcraft_wiki_search_and_resolve(monkeypatch) -> None:
         lambda self, query, limit: (
             2,
             [
-                {"title": "World of Warcraft API", "pageid": 1, "snippet": "API systems and FrameXML.", "url": "https://warcraft.wiki.gg/wiki/World_of_Warcraft_API"},
+                {"title": "World of Warcraft API", "pageid": 1, "snippet": "API systems and FrameXML.",
+                    "url": "https://warcraft.wiki.gg/wiki/World_of_Warcraft_API"},
                 {"title": "API", "pageid": 2, "snippet": "General API page.", "url": "https://warcraft.wiki.gg/wiki/API"},
             ],
         ),
@@ -294,8 +298,10 @@ def test_warcraft_wiki_api_and_event_commands(monkeypatch) -> None:
         lambda self, query, limit: (
             2,
             [
-                {"title": "API CreateFrame", "pageid": 1, "snippet": "Creates a Frame object.", "url": "https://warcraft.wiki.gg/wiki/API_CreateFrame"},
-                {"title": "UIHANDLER OnKeyDown", "pageid": 2, "snippet": "Fires when a key is pressed.", "url": "https://warcraft.wiki.gg/wiki/UIHANDLER_OnKeyDown"},
+                {"title": "API CreateFrame", "pageid": 1, "snippet": "Creates a Frame object.",
+                    "url": "https://warcraft.wiki.gg/wiki/API_CreateFrame"},
+                {"title": "UIHANDLER OnKeyDown", "pageid": 2, "snippet": "Fires when a key is pressed.",
+                    "url": "https://warcraft.wiki.gg/wiki/UIHANDLER_OnKeyDown"},
             ],
         ),
     )
@@ -435,9 +441,12 @@ def test_warcraft_wiki_search_prefers_api_page_for_function_query(monkeypatch) -
         lambda self, query, limit: (
             3,
             [
-                {"title": "API CreateFrame", "pageid": 1, "snippet": "Creates a Frame object.", "url": "https://warcraft.wiki.gg/wiki/API_CreateFrame"},
-                {"title": "Widget script handlers", "pageid": 2, "snippet": "OnClick and OnKeyDown handlers.", "url": "https://warcraft.wiki.gg/wiki/Widget_script_handlers"},
-                {"title": "Create a WoW AddOn in 15 Minutes", "pageid": 3, "snippet": "AddOn tutorial.", "url": "https://warcraft.wiki.gg/wiki/Create_a_WoW_AddOn_in_15_Minutes"},
+                {"title": "API CreateFrame", "pageid": 1, "snippet": "Creates a Frame object.",
+                    "url": "https://warcraft.wiki.gg/wiki/API_CreateFrame"},
+                {"title": "Widget script handlers", "pageid": 2, "snippet": "OnClick and OnKeyDown handlers.",
+                    "url": "https://warcraft.wiki.gg/wiki/Widget_script_handlers"},
+                {"title": "Create a WoW AddOn in 15 Minutes", "pageid": 3, "snippet": "AddOn tutorial.",
+                    "url": "https://warcraft.wiki.gg/wiki/Create_a_WoW_AddOn_in_15_Minutes"},
             ],
         ),
     )
@@ -457,8 +466,10 @@ def test_warcraft_wiki_search_prefers_api_changes_page_for_patch_query(monkeypat
         lambda self, query, limit: (
             3,
             [
-                {"title": "API change summaries/Historical", "pageid": 1, "snippet": "Summary of older API changes.", "url": "https://warcraft.wiki.gg/wiki/API_change_summaries/Historical"},
-                {"title": "Patch 2.1.0/API changes", "pageid": 2, "snippet": "Changes in patch 2.1.0.", "url": "https://warcraft.wiki.gg/wiki/Patch_2.1.0/API_changes"},
+                {"title": "API change summaries/Historical", "pageid": 1, "snippet": "Summary of older API changes.",
+                    "url": "https://warcraft.wiki.gg/wiki/API_change_summaries/Historical"},
+                {"title": "Patch 2.1.0/API changes", "pageid": 2, "snippet": "Changes in patch 2.1.0.",
+                    "url": "https://warcraft.wiki.gg/wiki/Patch_2.1.0/API_changes"},
                 {"title": "Hyperlinks", "pageid": 3, "snippet": "Programming reference.", "url": "https://warcraft.wiki.gg/wiki/Hyperlinks"},
             ],
         ),
@@ -479,9 +490,12 @@ def test_warcraft_wiki_search_prefers_handler_page_for_handler_query(monkeypatch
         lambda self, query, limit: (
             3,
             [
-                {"title": "Widget script handlers", "pageid": 1, "snippet": "OnClick and OnKeyDown handlers.", "url": "https://warcraft.wiki.gg/wiki/Widget_script_handlers"},
-                {"title": "UIHANDLER OnKeyDown", "pageid": 2, "snippet": "Fires when a key is pressed.", "url": "https://warcraft.wiki.gg/wiki/UIHANDLER_OnKeyDown"},
-                {"title": "OnUpdate", "pageid": 3, "snippet": "Widget update handler.", "url": "https://warcraft.wiki.gg/wiki/UIHANDLER_OnUpdate"},
+                {"title": "Widget script handlers", "pageid": 1, "snippet": "OnClick and OnKeyDown handlers.",
+                    "url": "https://warcraft.wiki.gg/wiki/Widget_script_handlers"},
+                {"title": "UIHANDLER OnKeyDown", "pageid": 2, "snippet": "Fires when a key is pressed.",
+                    "url": "https://warcraft.wiki.gg/wiki/UIHANDLER_OnKeyDown"},
+                {"title": "OnUpdate", "pageid": 3, "snippet": "Widget update handler.",
+                    "url": "https://warcraft.wiki.gg/wiki/UIHANDLER_OnUpdate"},
             ],
         ),
     )
@@ -503,7 +517,8 @@ def test_warcraft_wiki_search_prefers_system_reference_for_system_query(monkeypa
             [
                 {"title": "Renown", "pageid": 1, "snippet": "Reputation-like progression system.", "url": "https://warcraft.wiki.gg/wiki/Renown"},
                 {"title": "Expansion", "pageid": 2, "snippet": "Game expansion overview.", "url": "https://warcraft.wiki.gg/wiki/Expansion"},
-                {"title": "World of Warcraft API", "pageid": 3, "snippet": "Programming reference.", "url": "https://warcraft.wiki.gg/wiki/World_of_Warcraft_API"},
+                {"title": "World of Warcraft API", "pageid": 3, "snippet": "Programming reference.",
+                    "url": "https://warcraft.wiki.gg/wiki/World_of_Warcraft_API"},
             ],
         ),
     )
@@ -546,7 +561,8 @@ def test_warcraft_wiki_search_keeps_trailing_guide_term(monkeypatch) -> None:
         return (
             1,
             [
-                {"title": "Mistweaver Monk PvE Healing Guide", "pageid": 1, "snippet": "Guide page.", "url": "https://warcraft.wiki.gg/wiki/Mistweaver_Monk_PvE_Healing_Guide"},
+                {"title": "Mistweaver Monk PvE Healing Guide", "pageid": 1, "snippet": "Guide page.",
+                    "url": "https://warcraft.wiki.gg/wiki/Mistweaver_Monk_PvE_Healing_Guide"},
             ],
         )
 
@@ -567,8 +583,10 @@ def test_warcraft_wiki_resolve_prefers_lore_result_after_hint_cleanup(monkeypatc
         lambda self, query, limit: (
             2,
             [
-                {"title": "Jaina Proudmoore", "pageid": 1, "snippet": "Leader of the Kirin Tor.", "url": "https://warcraft.wiki.gg/wiki/Jaina_Proudmoore"},
-                {"title": "Jaina Proudmoore: Tides of War", "pageid": 2, "snippet": "Novel.", "url": "https://warcraft.wiki.gg/wiki/Jaina_Proudmoore:_Tides_of_War"},
+                {"title": "Jaina Proudmoore", "pageid": 1, "snippet": "Leader of the Kirin Tor.",
+                    "url": "https://warcraft.wiki.gg/wiki/Jaina_Proudmoore"},
+                {"title": "Jaina Proudmoore: Tides of War", "pageid": 2, "snippet": "Novel.",
+                    "url": "https://warcraft.wiki.gg/wiki/Jaina_Proudmoore:_Tides_of_War"},
             ],
         ),
     )
@@ -589,7 +607,8 @@ def test_warcraft_wiki_search_excludes_zone_hint_terms(monkeypatch) -> None:
         lambda self, query, limit: (
             2,
             [
-                {"title": "Elwynn Forest", "pageid": 1, "snippet": "Alliance starting zone in the Eastern Kingdoms.", "url": "https://warcraft.wiki.gg/wiki/Elwynn_Forest"},
+                {"title": "Elwynn Forest", "pageid": 1, "snippet": "Alliance starting zone in the Eastern Kingdoms.",
+                    "url": "https://warcraft.wiki.gg/wiki/Elwynn_Forest"},
                 {"title": "Elwyn", "pageid": 2, "snippet": "Separate article.", "url": "https://warcraft.wiki.gg/wiki/Elwyn"},
             ],
         ),
@@ -611,9 +630,11 @@ def test_warcraft_wiki_search_prefers_programming_howto_for_addon_query(monkeypa
         lambda self, query, limit: (
             3,
             [
-                {"title": "Create a WoW AddOn in 15 Minutes", "pageid": 1, "snippet": "This guide describes how to make a simple HelloWorld addon.", "url": "https://warcraft.wiki.gg/wiki/Create_a_WoW_AddOn_in_15_Minutes"},
+                {"title": "Create a WoW AddOn in 15 Minutes", "pageid": 1, "snippet": "This guide describes how to make a simple HelloWorld addon.",
+                    "url": "https://warcraft.wiki.gg/wiki/Create_a_WoW_AddOn_in_15_Minutes"},
                 {"title": "Druid", "pageid": 2, "snippet": "A shapeshifting class.", "url": "https://warcraft.wiki.gg/wiki/Druid"},
-                {"title": "World of Warcraft API", "pageid": 3, "snippet": "Programming reference.", "url": "https://warcraft.wiki.gg/wiki/World_of_Warcraft_API"},
+                {"title": "World of Warcraft API", "pageid": 3, "snippet": "Programming reference.",
+                    "url": "https://warcraft.wiki.gg/wiki/World_of_Warcraft_API"},
             ],
         ),
     )
@@ -635,7 +656,8 @@ def test_warcraft_wiki_search_prefers_specific_programming_guide_title(monkeypat
             [
                 {"title": "HOWTOs", "pageid": 1, "snippet": "Programming howto index.", "url": "https://warcraft.wiki.gg/wiki/HOWTOs"},
                 {"title": "User interface", "pageid": 2, "snippet": "General UI page.", "url": "https://warcraft.wiki.gg/wiki/User_interface"},
-                {"title": "User interface customization guide", "pageid": 3, "snippet": "Customize the WoW user interface.", "url": "https://warcraft.wiki.gg/wiki/User_interface_customization_guide"},
+                {"title": "User interface customization guide", "pageid": 3, "snippet": "Customize the WoW user interface.",
+                    "url": "https://warcraft.wiki.gg/wiki/User_interface_customization_guide"},
             ],
         ),
     )
@@ -702,8 +724,10 @@ def test_warcraft_wiki_search_excludes_expansion_hint_terms(monkeypatch) -> None
         lambda self, query, limit: (
             3,
             [
-                {"title": "Legion Invasions", "pageid": 1, "snippet": "Legion world events.", "url": "https://warcraft.wiki.gg/wiki/Legion_Invasions"},
-                {"title": "World of Warcraft: Legion", "pageid": 2, "snippet": "The sixth WoW expansion.", "url": "https://warcraft.wiki.gg/wiki/World_of_Warcraft:_Legion"},
+                {"title": "Legion Invasions", "pageid": 1, "snippet": "Legion world events.",
+                    "url": "https://warcraft.wiki.gg/wiki/Legion_Invasions"},
+                {"title": "World of Warcraft: Legion", "pageid": 2, "snippet": "The sixth WoW expansion.",
+                    "url": "https://warcraft.wiki.gg/wiki/World_of_Warcraft:_Legion"},
                 {"title": "Burning Legion", "pageid": 3, "snippet": "Demonic army.", "url": "https://warcraft.wiki.gg/wiki/Burning_Legion"},
             ],
         ),

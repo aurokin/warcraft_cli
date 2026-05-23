@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 
 from typer.testing import CliRunner
-
 from wowhead_cli.linked_graph import build_linked_graph_payload
 from wowhead_cli.main import app
 

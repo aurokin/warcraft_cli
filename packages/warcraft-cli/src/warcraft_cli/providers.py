@@ -66,7 +66,10 @@ PROVIDERS: tuple[ProviderRegistration, ...] = (
         expansion_mode="fixed",
         supported_expansions=("retail",),
         expansion_review_status="reviewed",
-        expansion_policy_note="Current supported live guide/article families are retail-focused and do not expose reliable non-retail routing.",
+        expansion_policy_note=(
+            "Current supported live guide/article families are retail-focused "
+            "and do not expose reliable non-retail routing."
+        ),
         wrapper_capabilities={
             "doctor": "ready",
             "search": "ready",
@@ -85,7 +88,10 @@ PROVIDERS: tuple[ProviderRegistration, ...] = (
         expansion_mode="fixed",
         supported_expansions=("retail",),
         expansion_review_status="reviewed",
-        expansion_policy_note="Current supported guide families are retail-focused and do not provide a reliable wrapper-level non-retail split.",
+        expansion_policy_note=(
+            "Current supported guide families are retail-focused "
+            "and do not provide a reliable wrapper-level non-retail split."
+        ),
         wrapper_capabilities={
             "doctor": "ready",
             "search": "ready",
@@ -104,7 +110,10 @@ PROVIDERS: tuple[ProviderRegistration, ...] = (
         expansion_mode="fixed",
         supported_expansions=("retail",),
         expansion_review_status="reviewed",
-        expansion_policy_note="Current provider surface is retail-first profile and leaderboard data; non-retail semantics are not part of the supported contract.",
+        expansion_policy_note=(
+            "Current provider surface is retail-first profile and leaderboard data; "
+            "non-retail semantics are not part of the supported contract."
+        ),
         wrapper_capabilities={
             "doctor": "ready",
             "search": "ready",
@@ -123,7 +132,10 @@ PROVIDERS: tuple[ProviderRegistration, ...] = (
         expansion_mode="fixed",
         supported_expansions=("retail",),
         expansion_review_status="reviewed",
-        expansion_policy_note="Current supported Warcraft Logs routing is retail-only and discovery is intentionally limited to explicit report references.",
+        expansion_policy_note=(
+            "Current supported Warcraft Logs routing is retail-only "
+            "and discovery is intentionally limited to explicit report references."
+        ),
         wrapper_capabilities={
             "doctor": "ready",
             "search": "ready_explicit_report_only",
@@ -142,7 +154,10 @@ PROVIDERS: tuple[ProviderRegistration, ...] = (
         expansion_mode="fixed",
         supported_expansions=("retail",),
         expansion_review_status="reviewed",
-        expansion_policy_note="Reference articles are expansion-agnostic, but wrapper fanout treats warcraft-wiki as retail-only until explicit classic/fresh routing exists.",
+        expansion_policy_note=(
+            "Reference articles are expansion-agnostic, but wrapper fanout treats warcraft-wiki "
+            "as retail-only until explicit classic/fresh routing exists."
+        ),
         wrapper_capabilities={
             "doctor": "ready",
             "search": "ready",
@@ -156,12 +171,18 @@ PROVIDERS: tuple[ProviderRegistration, ...] = (
         command="wowprogress",
         language="python",
         status="partial",
-        description="WowProgress rankings provider with structured search, conservative resolve, guild, character, and PvE leaderboard lookups.",
+        description=(
+            "WowProgress rankings provider with structured search, conservative resolve, "
+            "guild, character, and PvE leaderboard lookups."
+        ),
         auth_required=False,
         expansion_mode="fixed",
         supported_expansions=("retail",),
         expansion_review_status="reviewed",
-        expansion_policy_note="Current supported guild, character, and PvE leaderboard surfaces are retail-focused and should stay fixed to retail for now.",
+        expansion_policy_note=(
+            "Current supported guild, character, and PvE leaderboard surfaces are retail-focused "
+            "and should stay fixed to retail for now."
+        ),
         wrapper_capabilities={
             "doctor": "ready",
             "search": "ready",
@@ -180,7 +201,10 @@ PROVIDERS: tuple[ProviderRegistration, ...] = (
         expansion_mode="none",
         supported_expansions=(),
         expansion_review_status="deferred",
-        expansion_policy_note="Local repo analysis is versioned differently from wrapper content providers and should not join expansion fanout yet.",
+        expansion_policy_note=(
+            "Local repo analysis is versioned differently from wrapper content providers "
+            "and should not join expansion fanout yet."
+        ),
         wrapper_capabilities={
             "doctor": "ready",
             "search": "coming_soon",

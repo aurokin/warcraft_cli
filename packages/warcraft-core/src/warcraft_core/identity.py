@@ -548,9 +548,7 @@ def refresh_talent_transport_packet(
     return validate_talent_transport_packet(refreshed)
 
 
-def validate_talent_transport_packet(packet: Any) -> dict[str, Any]:
-    if not isinstance(packet, dict):
-        raise ValueError("Talent transport packet must be a JSON object.")
+def _talent_transport_envelope(packet: dict[str, Any]) -> tuple[str, dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
     if packet.get("kind") != "talent_transport_packet":
         raise ValueError(f"Unsupported talent transport packet kind: {packet.get('kind')!r}")
 
@@ -573,7 +571,14 @@ def validate_talent_transport_packet(packet: Any) -> dict[str, Any]:
     scope = packet.get("scope")
     if not isinstance(scope, dict):
         raise ValueError("Talent transport packet scope must be an object.")
+    return transport_status, build_identity, transport_forms, raw_evidence, validation
 
+
+def _validate_talent_transport_exact_forms(
+    transport_forms: dict[str, Any],
+    *,
+    build_identity: dict[str, Any],
+) -> dict[str, str | None] | None:
     wowhead_ref = transport_forms.get("wowhead_talent_calc_url")
     parsed_wowhead_ref: dict[str, str | None] | None = None
     if wowhead_ref is not None:
@@ -607,46 +612,71 @@ def validate_talent_transport_packet(packet: Any) -> dict[str, Any]:
             "Talent transport packet exact transport forms must agree when both "
             "wowhead_talent_calc_url and wow_talent_export are present."
         )
+    return parsed_wowhead_ref
 
+
+def _validate_talent_transport_simc_split_forms(
+    transport_forms: dict[str, Any],
+    *,
+    build_identity: dict[str, Any],
+    validation: dict[str, Any],
+    parsed_wowhead_ref: dict[str, str | None] | None,
+) -> None:
     split = transport_forms.get("simc_split_talents")
-    if split is not None:
-        if not isinstance(split, dict):
-            raise ValueError("Talent transport packet simc_split_talents must be an object.")
-        for key in ("class_talents", "spec_talents", "hero_talents"):
-            if key not in split or split.get(key) is None:
-                continue
-            value = split.get(key)
-            if not (isinstance(value, str) and value.strip()):
-                raise ValueError(
-                    f"Talent transport packet simc_split_talents.{key} must be a non-empty string when present."
-                )
-        if not any(
-            isinstance(value := split.get(key), str) and bool(value.strip())
-            for key in ("class_talents", "spec_talents", "hero_talents")
-        ):
+    if split is None:
+        return
+    if not isinstance(split, dict):
+        raise ValueError("Talent transport packet simc_split_talents must be an object.")
+    for key in ("class_talents", "spec_talents", "hero_talents"):
+        if key not in split or split.get(key) is None:
+            continue
+        value = split.get(key)
+        if not (isinstance(value, str) and value.strip()):
             raise ValueError(
-                "Talent transport packet simc_split_talents must include at least one non-empty class/spec/hero string."
+                f"Talent transport packet simc_split_talents.{key} must be a non-empty string when present."
             )
-        if parsed_wowhead_ref is not None or (isinstance(wow_export, str) and wow_export.strip()):
-            raise ValueError(
-                "Talent transport packet must not mix exact transport forms with simc_split_talents."
-            )
-        if validation.get("status") == "validated":
-            packet_actor_class, packet_spec = _packet_class_spec_identity(build_identity)
-            if packet_actor_class is None or packet_spec is None:
-                raise ValueError(
-                    "Validated simc_split_talents packets must include build_identity.class_spec_identity.identity."
-                )
-            validated_actor_class, validated_spec = _validated_class_spec_identity(validation)
-            if validated_actor_class is None or validated_spec is None:
-                raise ValueError(
-                    "Validated simc_split_talents packets must include validation.actor_class and validation.spec."
-                )
-            if (packet_actor_class, packet_spec) != (validated_actor_class, validated_spec):
-                raise ValueError(
-                    "Validated simc_split_talents packets must keep build_identity.class_spec_identity.identity aligned "
-                    "with validation.actor_class/spec."
-                )
+    if not any(
+        isinstance(value := split.get(key), str) and bool(value.strip())
+        for key in ("class_talents", "spec_talents", "hero_talents")
+    ):
+        raise ValueError(
+            "Talent transport packet simc_split_talents must include at least one non-empty class/spec/hero string."
+        )
+    wow_export = transport_forms.get("wow_talent_export")
+    if parsed_wowhead_ref is not None or (isinstance(wow_export, str) and wow_export.strip()):
+        raise ValueError(
+            "Talent transport packet must not mix exact transport forms with simc_split_talents."
+        )
+    if validation.get("status") != "validated":
+        return
+    packet_actor_class, packet_spec = _packet_class_spec_identity(build_identity)
+    if packet_actor_class is None or packet_spec is None:
+        raise ValueError(
+            "Validated simc_split_talents packets must include build_identity.class_spec_identity.identity."
+        )
+    validated_actor_class, validated_spec = _validated_class_spec_identity(validation)
+    if validated_actor_class is None or validated_spec is None:
+        raise ValueError(
+            "Validated simc_split_talents packets must include validation.actor_class and validation.spec."
+        )
+    if (packet_actor_class, packet_spec) != (validated_actor_class, validated_spec):
+        raise ValueError(
+            "Validated simc_split_talents packets must keep build_identity.class_spec_identity.identity aligned "
+            "with validation.actor_class/spec."
+        )
+
+
+def validate_talent_transport_packet(packet: Any) -> dict[str, Any]:
+    if not isinstance(packet, dict):
+        raise ValueError("Talent transport packet must be a JSON object.")
+    transport_status, build_identity, transport_forms, raw_evidence, validation = _talent_transport_envelope(packet)
+    parsed_wowhead_ref = _validate_talent_transport_exact_forms(transport_forms, build_identity=build_identity)
+    _validate_talent_transport_simc_split_forms(
+        transport_forms,
+        build_identity=build_identity,
+        validation=validation,
+        parsed_wowhead_ref=parsed_wowhead_ref,
+    )
 
     expected_status = _talent_transport_status(
         transport_forms=transport_forms,

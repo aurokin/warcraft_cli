@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import pytest
-from typer.testing import CliRunner
-
 from article_provider_testkit import payload_for_live, require_live
+from typer.testing import CliRunner
 from wowprogress_cli.main import app
 
 pytestmark = pytest.mark.live

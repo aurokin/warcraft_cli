@@ -67,6 +67,10 @@ select = [
 [tool.ruff.lint.per-file-ignores]
 "tests/*.py" = [
   "B011",
+  "E501",
+]
+"packages/**/main.py" = [
+  "B008",
 ]
 
 [tool.mypy]
