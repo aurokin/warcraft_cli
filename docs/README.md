@@ -5,6 +5,7 @@ Use this directory as a map, not a dumping ground.
 Documentation ownership:
 - Repo-wide product philosophy and representative workflows belong in [foundation/PRODUCT_PRINCIPLES.md](foundation/PRODUCT_PRINCIPLES.md).
 - Repo-wide analytics and comparison safety rules belong in [foundation/SAFE_ANALYTICS_RULES.md](foundation/SAFE_ANALYTICS_RULES.md).
+- Repo-wide operational boundaries (rate limits, logging, failure response) belong in [foundation/OPERATIONAL_BOUNDARIES.md](foundation/OPERATIONAL_BOUNDARIES.md).
 - Shared cross-provider contracts belong in focused contract docs such as [foundation/IDENTITY_CONTRACT.md](foundation/IDENTITY_CONTRACT.md) and [foundation/WRAPPER_PROVIDER_CONTRACT.md](foundation/WRAPPER_PROVIDER_CONTRACT.md).
 - [ROADMAP.md](ROADMAP.md) tracks sequencing, current status, and near-term repo priorities.
 - [USAGE.md](USAGE.md) is the detailed command and behavior reference.
@@ -32,6 +33,7 @@ Documentation ownership:
 
 - [foundation/PRODUCT_PRINCIPLES.md](foundation/PRODUCT_PRINCIPLES.md)
 - [foundation/SAFE_ANALYTICS_RULES.md](foundation/SAFE_ANALYTICS_RULES.md)
+- [foundation/OPERATIONAL_BOUNDARIES.md](foundation/OPERATIONAL_BOUNDARIES.md)
 - [foundation/IDENTITY_CONTRACT.md](foundation/IDENTITY_CONTRACT.md)
 - [foundation/WRAPPER_PROVIDER_CONTRACT.md](foundation/WRAPPER_PROVIDER_CONTRACT.md)
 

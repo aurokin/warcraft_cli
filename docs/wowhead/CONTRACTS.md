@@ -2,6 +2,8 @@
 
 Breakage detection for Wowhead CLI surfaces (AUR-359).
 
+Operational guidance (rate limits, logging, failure response): [../foundation/OPERATIONAL_BOUNDARIES.md](../foundation/OPERATIONAL_BOUNDARIES.md).
+
 ## Performance flags
 
 - `--stream` on `wowhead` emits a JSONL header line plus one `record` line per row for `search.results`, `comments`, or `entity-page` linked entities.

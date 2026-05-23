@@ -10,6 +10,7 @@ Add user-visible changes to `[Unreleased]` in the same PR that ships them. See [
 
 ### Added
 
+- Operational boundaries doc: [docs/foundation/OPERATIONAL_BOUNDARIES.md](docs/foundation/OPERATIONAL_BOUNDARIES.md) (rate limits, User-Agent posture, robots/respectful use, log redaction, failure-mode playbook).
 - Wowhead additive normalization for `item` on `entity` and `entity-page`: `schema_version`, `normalized.item` with per-field provenance (`docs/wowhead/NORMALIZATION.md`).
 - Wowhead URL expansion detection: `detect_expansion_from_url`, `--url` on `entity` / `entity-page`, auto-detect on `search` when `--expansion` is omitted, `expansion-detect` command, and `expansion_url_policy` in `wowhead doctor`.
 - Shared output ergonomics in `warcraft_core.output`: field projection, `--fields-strict`, `--compact-max-chars`, output profiles (`agent|human|debug`), and `DiagnosticsCollector` for `diagnostics` metadata.
