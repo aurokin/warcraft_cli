@@ -10,6 +10,7 @@ Add user-visible changes to `[Unreleased]` in the same PR that ships them. See [
 
 ### Added
 
+- Wowhead URL expansion detection: `detect_expansion_from_url`, `--url` on `entity` / `entity-page`, auto-detect on `search` when `--expansion` is omitted, `expansion-detect` command, and `expansion_url_policy` in `wowhead doctor`.
 - Shared output ergonomics in `warcraft_core.output`: field projection, `--fields-strict`, `--compact-max-chars`, output profiles (`agent|human|debug`), and `DiagnosticsCollector` for `diagnostics` metadata.
 - Wowhead global flags: `--profile`, `--fields-strict`, and `--compact-max-chars` (wired through the shared output layer).
 - Wowhead `compare --preset gear|quest|spell` presets for field diffs, link limits, and comment sampling defaults.
