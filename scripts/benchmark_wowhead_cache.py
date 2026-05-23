@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 import tempfile
 import time
@@ -15,8 +14,7 @@ from wowhead_cli.wowhead_client import WowheadClient
 
 
 def _run(query: str, *, cache_dir: Path) -> tuple[float, float]:
-    os.environ["WARCRAFT_CACHE_DIR"] = str(cache_dir)
-    client = WowheadClient(cache_enabled=True)
+    client = WowheadClient(cache_enabled=True, cache_dir=cache_dir, cache_backend="file")
     try:
         start = time.perf_counter()
         client.search_suggestions(query)

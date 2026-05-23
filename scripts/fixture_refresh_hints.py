@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import os
+from urllib.parse import quote
 
 from wowhead_cli.expansion_profiles import (
     build_comment_replies_url,
@@ -24,7 +25,7 @@ def main() -> int:
 
     profile = resolve_expansion(args.expansion)
     print(f"# Refresh hints for expansion={profile.key} item={args.item_id}")
-    print(f"search_url={build_search_suggestions_url(profile)}?q={args.query}")
+    print(f"search_url={build_search_suggestions_url(profile)}?q={quote(args.query)}")
     print(f"tooltip_url={build_tooltip_url(profile, 'item', args.item_id)}")
     print(f"entity_url={build_entity_url(profile, 'item', args.item_id)}")
     print(f"comment_replies_url={build_comment_replies_url(profile)}")
