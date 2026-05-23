@@ -45,6 +45,10 @@ These rules apply across providers when the repo returns derived, compared, samp
 - Evidence artifacts must have explicit freshness and inspectable provenance.
 - Do not hide live-vs-finished differences behind one shared cache path.
 
+## Operational Boundaries
+
+For rate limiting, User-Agent posture, logging redaction, and the failure-mode playbook when endpoints or parsers break, see [OPERATIONAL_BOUNDARIES.md](OPERATIONAL_BOUNDARIES.md).
+
 ## Escalation Rule
 
 - Stop generalizing when the next step would require provider-interpretive semantics instead of source-backed semantics.
