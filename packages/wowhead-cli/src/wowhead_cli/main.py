@@ -2301,6 +2301,8 @@ def _build_entity_payload(
         linked_entity_preview_limit=linked_entity_preview_limit,
     )
     if isinstance(cached_payload, dict):
+        if "normalized" in cached_payload:
+            return cached_payload
         return attach_entity_normalization(
             cached_payload,
             entity_type=entity_type,

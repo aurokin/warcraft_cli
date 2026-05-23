@@ -11,8 +11,8 @@ from typer.testing import CliRunner
 from tests.fixtures.wowhead_output_schemas import (
     COMMENTS_KEYS,
     COMPARE_KEYS,
-    ENTITY_KEYS,
-    ENTITY_PAGE_KEYS,
+    ENTITY_ITEM_KEYS,
+    ENTITY_PAGE_ITEM_KEYS,
     SEARCH_KEYS,
 )
 from wowhead_cli.main import app
@@ -85,12 +85,12 @@ def test_wowhead_schema_snapshots_for_recorded_expansion(monkeypatch: pytest.Mon
     _assert_schema(search, required=SEARCH_KEYS, label="search")
 
     entity = json.loads(runner.invoke(app, ["--expansion", expansion_key, "entity", "item", "19019"]).stdout)
-    _assert_schema(entity, required=ENTITY_KEYS, label="entity")
+    _assert_schema(entity, required=ENTITY_ITEM_KEYS, label="entity")
 
     page = json.loads(
         runner.invoke(app, ["--expansion", expansion_key, "entity-page", "item", "19019", "--max-links", "3"]).stdout
     )
-    _assert_schema(page, required=ENTITY_PAGE_KEYS, label="entity-page")
+    _assert_schema(page, required=ENTITY_PAGE_ITEM_KEYS, label="entity-page")
 
     comments = json.loads(
         runner.invoke(

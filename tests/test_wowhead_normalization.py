@@ -88,6 +88,34 @@ def test_entity_page_emits_page_backed_normalization(monkeypatch) -> None:
     assert payload["normalized"]["item"]["name"]["provenance"]["source"] == "page"
 
 
+def test_cached_entity_payload_preserves_existing_normalization(monkeypatch) -> None:
+    cached = {
+        "expansion": "retail",
+        "entity": {"type": "item", "id": 19019, "name": "Thunderfury"},
+        "tooltip": {"quality": 5},
+        "schema_version": ENTITY_PAYLOAD_SCHEMA_VERSION,
+        "normalized": {
+            "item": {
+                "page_title": {"value": "Page Title", "provenance": {"source": "page"}},
+            }
+        },
+    }
+
+    class FakeClient:
+        def get_cached_entity_response(self, **kwargs):  # noqa: ANN003
+            return cached
+
+        def set_cached_entity_response(self, *args, **kwargs):  # noqa: ANN003
+            return None
+
+    monkeypatch.setattr("wowhead_cli.main._client", lambda ctx: FakeClient())
+
+    result = runner.invoke(app, ["entity", "item", "19019", "--no-include-comments"])
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert payload["normalized"]["item"]["page_title"]["value"] == "Page Title"
+
+
 def test_attach_entity_page_normalization() -> None:
     payload = attach_entity_page_normalization(
         {"entity": {"type": "item", "id": 1}, "page": {"title": "Foo"}},
