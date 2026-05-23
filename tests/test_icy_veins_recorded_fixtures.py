@@ -3,7 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
 from article_provider_testkit import load_fixture_text
 from icy_veins_cli.page_parser import parse_guide_page
 

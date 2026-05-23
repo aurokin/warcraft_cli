@@ -9,6 +9,7 @@ from urllib.parse import urlencode
 
 import httpx
 from warcraft_api.http import DEFAULT_RETRY_ATTEMPTS, request_with_retries
+
 from wowhead_cli.cache import (
     DEFAULT_HTTP_CACHE_DIR,
     CacheSettings,
@@ -36,6 +37,7 @@ NETHER_BASE_URL = "https://nether.wowhead.com"
 
 DEFAULT_CACHE_DIR = DEFAULT_HTTP_CACHE_DIR
 ENTITY_RESPONSE_CACHE_VERSION = 1
+
 
 class WowheadClient:
     def __init__(
@@ -142,7 +144,7 @@ class WowheadClient:
 
     def _cache_key(self, namespace: str, url: str, params: dict[str, Any] | None) -> str:
         encoded = urlencode(sorted(params.items()), doseq=True) if params else ""
-        raw = f"{namespace}|{url}|{encoded}".encode("utf-8")
+        raw = f"{namespace}|{url}|{encoded}".encode()
         return f"{namespace}:{hashlib.sha256(raw).hexdigest()}"
 
     def _entity_response_cache_key(

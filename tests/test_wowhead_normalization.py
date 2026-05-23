@@ -4,7 +4,7 @@ import json
 from unittest.mock import MagicMock
 
 from typer.testing import CliRunner
-
+from wowhead_cli.main import app
 from wowhead_cli.normalization import (
     ENTITY_PAGE_PAYLOAD_SCHEMA_VERSION,
     ENTITY_PAYLOAD_SCHEMA_VERSION,
@@ -12,7 +12,6 @@ from wowhead_cli.normalization import (
     attach_entity_page_normalization,
     build_normalized_item,
 )
-from wowhead_cli.main import app
 
 runner = CliRunner()
 

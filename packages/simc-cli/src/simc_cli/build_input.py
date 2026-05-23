@@ -10,6 +10,8 @@ from typing import Any
 
 from warcraft_core.identity import (
     parse_wowhead_talent_calc_ref as parse_shared_wowhead_talent_calc_ref,
+)
+from warcraft_core.identity import (
     validate_talent_transport_packet,
 )
 
@@ -100,7 +102,8 @@ def _validated_packet_identity(packet: dict[str, Any]) -> tuple[str | None, str 
     validation = packet.get("validation")
     if not isinstance(validation, dict) or validation.get("status") != "validated":
         return None, None
-    validated_actor_class = _normalize_actor_class(validation.get("actor_class")) if isinstance(validation.get("actor_class"), str) else None
+    validated_actor_class = _normalize_actor_class(validation.get(
+        "actor_class")) if isinstance(validation.get("actor_class"), str) else None
     validated_spec = _normalize_spec_name(validation.get("spec")) if isinstance(validation.get("spec"), str) else None
     if actor_class and spec and actor_class == validated_actor_class and spec == validated_spec:
         return actor_class, spec
@@ -527,7 +530,8 @@ def load_build_spec(
             spec_talents=spec_talents,
             hero_talents=hero_talents,
         ),
-        source_notes=["command-line build options"] if any([talents, class_talents, spec_talents, hero_talents, actor_class, spec_name]) else [],
+        source_notes=["command-line build options"] if any([talents, class_talents,
+                                                           spec_talents, hero_talents, actor_class, spec_name]) else [],
     )
 
     from_profile = BuildSpec()

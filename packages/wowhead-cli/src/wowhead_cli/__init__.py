@@ -1,2 +1,1 @@
 """wowhead_cli package."""
-

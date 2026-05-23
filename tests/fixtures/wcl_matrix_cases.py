@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
-from typing import Callable
 
 from tests.fixtures.live_matrix import (
     CHARACTER_NAME,
@@ -12,7 +12,6 @@ from tests.fixtures.live_matrix import (
     GUILD_NAME,
     GUILD_REALM,
     GUILD_REGION,
-    PRIVATE_DIFFICULTY,
     PRIVATE_REPORT_CODE,
     PUBLIC_DIFFICULTY,
     PUBLIC_REPORT_CODE,

@@ -3,7 +3,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from simc_cli.branch import IntentExplanation, explain_intent, is_helper_decision, summarize_branches, summarize_intent, summarize_list_decisions
+from simc_cli.branch import (
+    IntentExplanation,
+    explain_intent,
+    is_helper_decision,
+    summarize_branches,
+    summarize_intent,
+    summarize_list_decisions,
+)
 from simc_cli.prune import PruneContext
 from simc_cli.sim import FirstCastResult, run_first_casts, summarize_first_casts
 
@@ -99,7 +106,8 @@ def build_analysis_packet(
     )
 
 
-def recommended_next_steps(start_list: str, focus_list: str, has_unresolved_branches: bool, has_runtime_sensitive_priorities: bool) -> list[str]:
+def recommended_next_steps(start_list: str, focus_list: str, has_unresolved_branches: bool,
+                           has_runtime_sensitive_priorities: bool) -> list[str]:
     steps: list[str] = []
     steps.append(f"run priority on `{focus_list}` with the exact talent string before summarizing the rotation")
     if has_unresolved_branches:

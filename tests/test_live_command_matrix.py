@@ -52,10 +52,7 @@ def _require_user_auth() -> None:
 def _pick_fight(code: str, *, difficulty: int) -> int | None:
     payload = _payload_for(["report-fights", code, "--difficulty", str(difficulty)])
     block = payload.get("report_fights") or payload.get("fights")
-    if isinstance(block, dict):
-        fights = block.get("fights", block)
-    else:
-        fights = block
+    fights = block.get("fights", block) if isinstance(block, dict) else block
     if not isinstance(fights, list):
         return None
     for fight in fights:
@@ -146,10 +143,7 @@ def live_matrix_context() -> LiveMatrixContext | None:
 def _auth_skip(case: MatrixCase) -> None:
     if case.auth == AuthRequirement.CLIENT:
         _require_client_auth()
-    elif case.auth == AuthRequirement.USER:
-        _require_client_auth()
-        _require_user_auth()
-    elif case.auth == AuthRequirement.PRIVATE:
+    elif case.auth == AuthRequirement.USER or case.auth == AuthRequirement.PRIVATE:
         _require_client_auth()
         _require_user_auth()
 

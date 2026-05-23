@@ -37,9 +37,8 @@ def _client(ctx: typer.Context):
         return WowProgressClient()
     except ValueError as exc:
         _fail(ctx, "invalid_cache_config", str(exc))
-        raise AssertionError("unreachable")
+        raise AssertionError("unreachable") from None
 
 
 def _handle_client_error(ctx: typer.Context, exc: WowProgressClientError) -> None:
     _fail(ctx, exc.code, exc.message)
-

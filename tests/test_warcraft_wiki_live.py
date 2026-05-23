@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import pytest
-from typer.testing import CliRunner
-
 from article_provider_testkit import payload_for_live, require_live
+from typer.testing import CliRunner
 from warcraft_wiki_cli.main import app
 
 pytestmark = pytest.mark.live
@@ -193,7 +192,8 @@ def test_live_warcraft_wiki_zone_query_cleanup_and_article_contract() -> None:
 
 def test_live_warcraft_wiki_guide_query_cleanup_and_article_contract() -> None:
     require_live("Warcraft Wiki")
-    resolve_payload = payload_for_live(runner, app, ["resolve", "guide interface customization", "--limit", "10"], provider_name="Warcraft Wiki")
+    resolve_payload = payload_for_live(runner, app, ["resolve", "guide interface customization",
+                                       "--limit", "10"], provider_name="Warcraft Wiki")
     assert resolve_payload["search_query"] == "interface customization"
     assert resolve_payload["excluded_terms"] == ["guide"]
     assert resolve_payload["resolved"] is True

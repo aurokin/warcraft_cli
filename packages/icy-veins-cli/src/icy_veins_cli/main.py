@@ -201,7 +201,7 @@ def _client(ctx: typer.Context) -> IcyVeinsClient:
         return IcyVeinsClient()
     except ValueError as exc:
         _fail(ctx, "invalid_cache_config", str(exc))
-        raise AssertionError("unreachable")
+        raise AssertionError("unreachable") from None
 
 
 def _normalize_query(query: str) -> str:
@@ -342,6 +342,7 @@ def _score_text_match(query: str, candidate: str, *, slug: str) -> tuple[int, li
         score -= len(penalty_terms) * 3
     return score, reasons
 
+
 def _search_results(client: IcyVeinsClient, query: str, *, limit: int) -> tuple[str, list[dict[str, Any]], int, dict[str, Any] | None]:
     normalized_query = _normalize_query(query)
     scope_hint = _unsupported_scope_hint(normalized_query)
@@ -441,11 +442,11 @@ def _ensure_supported_guide_ref(ctx: typer.Context, guide_ref: str) -> tuple[str
         slug = _guide_ref_slug(guide_ref)
     except ValueError as exc:
         _fail(ctx, "invalid_guide_ref", str(exc))
-        raise AssertionError("unreachable")
+        raise AssertionError("unreachable") from None
     content_family = classify_guide_slug(slug)
     if content_family is None:
         _fail(ctx, "invalid_guide_ref", f"Unsupported Icy Veins guide reference: {guide_ref}")
-        raise AssertionError("unreachable")
+        raise AssertionError("unreachable") from None
     return slug, content_family
 
 
@@ -457,7 +458,7 @@ def _fetch_supported_guide_page(ctx: typer.Context, client: IcyVeinsClient, guid
         if exc.response.status_code == 404:
             _fail(ctx, "invalid_guide_ref", f"Guide not found: {guide_ref}")
         _fail(ctx, "upstream_fetch_failed", f"Icy Veins request failed with status {exc.response.status_code}")
-        raise AssertionError("unreachable")
+        raise AssertionError("unreachable") from None
 
 
 def _fetch_guide_pages(client: IcyVeinsClient, guide_ref: str) -> dict[str, Any]:
@@ -673,7 +674,7 @@ def guide_full(ctx: typer.Context, guide_ref: str = typer.Argument(..., help="Gu
             if exc.response.status_code == 404:
                 _fail(ctx, "invalid_guide_ref", f"Guide not found: {guide_ref}")
             _fail(ctx, "upstream_fetch_failed", f"Icy Veins request failed with status {exc.response.status_code}")
-            raise AssertionError("unreachable")
+            raise AssertionError("unreachable") from None
     _emit(ctx, payload)
 
 
@@ -692,7 +693,7 @@ def guide_export(
             if exc.response.status_code == 404:
                 _fail(ctx, "invalid_guide_ref", f"Guide not found: {guide_ref}")
             _fail(ctx, "upstream_fetch_failed", f"Icy Veins request failed with status {exc.response.status_code}")
-            raise AssertionError("unreachable")
+            raise AssertionError("unreachable") from None
     manifest = write_article_bundle(payload, provider="icy-veins", export_dir=export_dir)
     _emit(
         ctx,
@@ -715,7 +716,10 @@ def guide_query(
     kind: list[str] | None = typer.Option(
         None,
         "--kind",
-        help="Kinds to search. Repeat for multiple values. Defaults to sections,navigation,linked_entities,build_references,analysis_surfaces.",
+        help=(
+            "Kinds to search. Repeat for multiple values. "
+            "Defaults to sections,navigation,linked_entities,build_references,analysis_surfaces."
+        ),
     ),
     section_title: str | None = typer.Option(None, "--section-title", help="Restrict section matches to a title substring."),
 ) -> None:

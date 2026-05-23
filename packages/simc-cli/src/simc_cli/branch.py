@@ -343,7 +343,8 @@ def compare_branch_summaries(left: BranchSummary, right: BranchSummary) -> Branc
     )
 
 
-def attach_focus_comparison(comparison: BranchComparison, apl_path, left_context: PruneContext, right_context: PruneContext, max_changes: int = 8) -> BranchComparison:
+def attach_focus_comparison(comparison: BranchComparison, apl_path, left_context: PruneContext,
+                            right_context: PruneContext, max_changes: int = 8) -> BranchComparison:
     left_decisions = summarize_list_decisions(apl_path, left_context, comparison.left_focus_list)
     right_decisions = summarize_list_decisions(apl_path, right_context, comparison.right_focus_list)
     left_preview = [format_list_decision(decision) for decision in left_decisions[:max_changes]]
@@ -423,7 +424,8 @@ def format_list_decision(decision: ListDecision) -> str:
     return f"L{decision.line_no} {decision.action_label}: {decision.status} ({decision.reason})"
 
 
-def _trace_list(grouped, list_name: str, context: PruneContext, lines: list[TraceLine], depth: int, max_depth: int, visited: list[str]) -> None:
+def _trace_list(grouped, list_name: str, context: PruneContext,
+                lines: list[TraceLine], depth: int, max_depth: int, visited: list[str]) -> None:
     if depth > max_depth:
         lines.append(TraceLine(depth=depth, text=f"[{list_name}] max depth reached"))
         return

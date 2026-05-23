@@ -49,7 +49,8 @@ ASSIGNMENT_RE_TEMPLATE = r"""\bvar\s+{name}\s*="""
 GATHERER_RE = re.compile(r"""WH\.Gatherer\.addData\(\s*(?P<dtype>\d+)\s*,\s*(?P<tree>\d+)\s*,\s*""")
 SCRIPT_ID_TEMPLATE = r"""<script\b[^>]*\bid=["']{script_id}["'][^>]*>(?P<body>.*?)</script>"""
 GUIDE_HEADING_RE = re.compile(r"""\[(?P<tag>h[1-6])\b[^\]]*\](?P<body>.*?)\[/\1\]""", re.IGNORECASE | re.DOTALL)
-WOWHEAD_URL_TAG_RE = re.compile(r"""\[url(?:=(?P<url1>[^\]]+)|\s+guide=(?P<guide_id>\d+))\](?P<label>.*?)\[/url\]""", re.IGNORECASE | re.DOTALL)
+WOWHEAD_URL_TAG_RE = re.compile(
+    r"""\[url(?:=(?P<url1>[^\]]+)|\s+guide=(?P<guide_id>\d+))\](?P<label>.*?)\[/url\]""", re.IGNORECASE | re.DOTALL)
 INLINE_TAG_RE = re.compile(r"""\[[^\]]+\]""")
 HTML_TAG_RE = re.compile(r"""<[^>]+>""")
 JSON_LD_RE = re.compile(
@@ -121,7 +122,7 @@ def extract_listview_data(html_text: str, listview_id: str) -> list[dict[str, An
         object_start = html_text.find("{", index)
         if object_start < 0:
             raise ValueError(f"Listview object for {listview_id!r} not found.")
-        window = html_text[object_start : object_start + 4096]
+        window = html_text[object_start: object_start + 4096]
         if id_marker not in window:
             start = index + len(marker)
             continue

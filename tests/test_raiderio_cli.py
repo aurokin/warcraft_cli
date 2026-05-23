@@ -3,24 +3,25 @@ from __future__ import annotations
 import json
 
 import httpx
-from typer.testing import CliRunner
-
 from raiderio_cli.main import (
     _candidate_dedupe_key,
     _dedupe_search_candidates,
     _distribution_values,
     _match_reasons,
     _numeric_summary,
+    _player_distribution_values,
     _player_sample_summary,
     _player_snapshots,
-    _player_distribution_values,
     _ranking_roster_entry,
     _resolve_candidate_is_confident,
     _resolve_confidence_label,
     _run_matches_filters,
     _search_result_candidate,
+)
+from raiderio_cli.main import (
     app as raiderio_app,
 )
+from typer.testing import CliRunner
 
 runner = CliRunner()
 
@@ -239,7 +240,8 @@ def test_raiderio_numeric_and_player_sample_helpers() -> None:
             "score": 321.4,
             "completed_at": "2026-03-10T00:00:00+00:00",
             "roster": [
-                {"name": "Alpha", "realm": "illidan", "region": "us", "role": "tank", "class_slug": "warrior", "spec_slug": "protection-warrior"},
+                {"name": "Alpha", "realm": "illidan", "region": "us", "role": "tank",
+                    "class_slug": "warrior", "spec_slug": "protection-warrior"},
                 {"name": "Bravo", "realm": "illidan", "region": "us", "role": "healer", "class_slug": "priest", "spec_slug": "holy-priest"},
             ],
         },
@@ -249,7 +251,8 @@ def test_raiderio_numeric_and_player_sample_helpers() -> None:
             "score": 333.0,
             "completed_at": "2026-03-11T00:00:00+00:00",
             "roster": [
-                {"name": "Alpha", "realm": "illidan", "region": "us", "role": "tank", "class_slug": "warrior", "spec_slug": "protection-warrior"},
+                {"name": "Alpha", "realm": "illidan", "region": "us", "role": "tank",
+                    "class_slug": "warrior", "spec_slug": "protection-warrior"},
                 {"name": "Charlie", "realm": "tichondrius", "region": "us", "role": "dps", "class_slug": "mage", "spec_slug": "arcane-mage"},
             ],
         },
@@ -260,7 +263,8 @@ def test_raiderio_numeric_and_player_sample_helpers() -> None:
         runs=runs,
         meta={"sampled_at": "2026-03-12T00:00:00+00:00", "season": "season-tww-2", "pages_requested": 1, "pages_fetched": 1},
         filtering={"contains_class": ["warrior"]},
-        player_sampling={"player_limit": 10, "source_player_count": 3, "returned_player_count": 3, "excluded_player_count": 0, "truncated": False},
+        player_sampling={"player_limit": 10, "source_player_count": 3,
+                         "returned_player_count": 3, "excluded_player_count": 0, "truncated": False},
     )
     assert _numeric_summary([17, 18]) == {"min": 17, "max": 18, "average": 17.5, "median": 17.5}
     assert summary["unique_class_count"] == 3

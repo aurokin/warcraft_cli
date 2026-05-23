@@ -351,7 +351,8 @@ def test_parse_guide_page_extracts_navigation_toc_sections_and_links() -> None:
     assert ("spell", 116670) in linked
     assert ("page", "mistweaver-monk-pve-healing-stat-priority") in linked
     assert payload["build_references"][0]["build_code"] == "ABC123"
-    assert payload["build_references"][0]["build_identity"]["class_spec_identity"]["identity"] == {"actor_class": "monk", "spec": "mistweaver"}
+    assert payload["build_references"][0]["build_identity"]["class_spec_identity"]["identity"] == {
+        "actor_class": "monk", "spec": "mistweaver"}
 
 
 def test_classify_guide_slug_distinguishes_supported_families() -> None:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 
 from simc_cli.apl import AplEntry
 
@@ -10,7 +10,7 @@ TOKEN_RE = re.compile(r"\s*(>=|<=|!=|=|<|>|\(|\)|!|&|\||[A-Za-z0-9_.-]+)")
 COMPARISON_RE = re.compile(r"^([A-Za-z0-9_.]+)\s*(>=|<=|!=|=|<|>)\s*([A-Za-z0-9_.-]+)$")
 
 
-class TruthValue(str, Enum):
+class TruthValue(StrEnum):
     TRUE = "eligible"
     FALSE = "dead"
     UNKNOWN = "unknown"

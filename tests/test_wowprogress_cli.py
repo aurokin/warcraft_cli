@@ -4,7 +4,6 @@ import json
 
 import pytest
 from typer.testing import CliRunner
-
 from warcraft_core.analytics import numeric_summary as _numeric_summary
 from wowprogress_cli.analytics import (
     _guild_profile_distribution_values,
@@ -878,8 +877,10 @@ def test_wowprogress_distribution_pve_guild_profiles(monkeypatch) -> None:
             "leaderboard": {"kind": "pve", "title": "US Mythic Progress", "region": "us", "realm": None, "active_raid": "Manaforge Omega", "page_url": "https://www.wowprogress.com/pve/us"},
             "count": 2,
             "entries": [
-                {"rank": 1, "guild_name": "Liquid", "guild_url": "https://www.wowprogress.com/guild/us/illidan/Liquid", "realm": "US-Illidan", "progress": "8/8 (M)"},
-                {"rank": 2, "guild_name": "Echo", "guild_url": "https://www.wowprogress.com/guild/eu/tarren-mill/Echo", "realm": "EU-Tarren Mill", "progress": "7/8 (M)"},
+                {"rank": 1, "guild_name": "Liquid", "guild_url": "https://www.wowprogress.com/guild/us/illidan/Liquid",
+                    "realm": "US-Illidan", "progress": "8/8 (M)"},
+                {"rank": 2, "guild_name": "Echo", "guild_url": "https://www.wowprogress.com/guild/eu/tarren-mill/Echo",
+                    "realm": "EU-Tarren Mill", "progress": "7/8 (M)"},
             ],
             "citations": {"page": "https://www.wowprogress.com/pve/us"},
         }
@@ -915,9 +916,12 @@ def test_wowprogress_threshold_pve_guild_profiles(monkeypatch) -> None:
             "leaderboard": {"kind": "pve", "title": "US Mythic Progress", "region": "us", "realm": None, "active_raid": "Manaforge Omega", "page_url": "https://www.wowprogress.com/pve/us"},
             "count": 3,
             "entries": [
-                {"rank": 1, "guild_name": "Liquid", "guild_url": "https://www.wowprogress.com/guild/us/illidan/Liquid", "realm": "US-Illidan", "progress": "8/8 (M)"},
-                {"rank": 2, "guild_name": "Echo", "guild_url": "https://www.wowprogress.com/guild/eu/tarren-mill/Echo", "realm": "EU-Tarren Mill", "progress": "8/8 (M)"},
-                {"rank": 40, "guild_name": "Method", "guild_url": "https://www.wowprogress.com/guild/eu/twisting-nether/Method", "realm": "EU-Twisting Nether", "progress": "7/8 (M)"},
+                {"rank": 1, "guild_name": "Liquid", "guild_url": "https://www.wowprogress.com/guild/us/illidan/Liquid",
+                    "realm": "US-Illidan", "progress": "8/8 (M)"},
+                {"rank": 2, "guild_name": "Echo", "guild_url": "https://www.wowprogress.com/guild/eu/tarren-mill/Echo",
+                    "realm": "EU-Tarren Mill", "progress": "8/8 (M)"},
+                {"rank": 40, "guild_name": "Method", "guild_url": "https://www.wowprogress.com/guild/eu/twisting-nether/Method",
+                    "realm": "EU-Twisting Nether", "progress": "7/8 (M)"},
             ],
             "citations": {"page": "https://www.wowprogress.com/pve/us"},
         }
@@ -960,8 +964,10 @@ def test_wowprogress_sample_pve_guild_profiles_filters(monkeypatch) -> None:
             "leaderboard": {"kind": "pve", "title": "US Mythic Progress", "region": "us", "realm": None, "active_raid": "Manaforge Omega", "page_url": "https://www.wowprogress.com/pve/us"},
             "count": 2,
             "entries": [
-                {"rank": 1, "guild_name": "Liquid", "guild_url": "https://www.wowprogress.com/guild/us/illidan/Liquid", "realm": "US-Illidan", "progress": "8/8 (M)"},
-                {"rank": 2, "guild_name": "Echo", "guild_url": "https://www.wowprogress.com/guild/eu/tarren-mill/Echo", "realm": "EU-Tarren Mill", "progress": "8/8 (M)"},
+                {"rank": 1, "guild_name": "Liquid", "guild_url": "https://www.wowprogress.com/guild/us/illidan/Liquid",
+                    "realm": "US-Illidan", "progress": "8/8 (M)"},
+                {"rank": 2, "guild_name": "Echo", "guild_url": "https://www.wowprogress.com/guild/eu/tarren-mill/Echo",
+                    "realm": "EU-Tarren Mill", "progress": "8/8 (M)"},
             ],
             "citations": {"page": "https://www.wowprogress.com/pve/us"},
         }
@@ -988,7 +994,8 @@ def test_wowprogress_sample_pve_guild_profiles_filters(monkeypatch) -> None:
     monkeypatch.setattr("wowprogress_cli.main.WowProgressClient.fetch_guild_page_url", fake_guild_url)
     result = runner.invoke(
         wowprogress_app,
-        ["sample", "pve-guild-profiles", "--region", "us", "--limit", "10", "--faction", "horde", "--world-rank-max", "10", "--encounter", "dimensius-the-all-devouring"],
+        ["sample", "pve-guild-profiles", "--region", "us", "--limit", "10", "--faction",
+            "horde", "--world-rank-max", "10", "--encounter", "dimensius-the-all-devouring"],
     )
     assert result.exit_code == 0
 
@@ -1006,8 +1013,10 @@ def test_wowprogress_distribution_pve_guild_profiles_filters(monkeypatch) -> Non
             "leaderboard": {"kind": "pve", "title": "US Mythic Progress", "region": "us", "realm": None, "active_raid": "Manaforge Omega", "page_url": "https://www.wowprogress.com/pve/us"},
             "count": 2,
             "entries": [
-                {"rank": 1, "guild_name": "Liquid", "guild_url": "https://www.wowprogress.com/guild/us/illidan/Liquid", "realm": "US-Illidan", "progress": "8/8 (M)"},
-                {"rank": 2, "guild_name": "Echo", "guild_url": "https://www.wowprogress.com/guild/eu/tarren-mill/Echo", "realm": "EU-Tarren Mill", "progress": "7/8 (M)"},
+                {"rank": 1, "guild_name": "Liquid", "guild_url": "https://www.wowprogress.com/guild/us/illidan/Liquid",
+                    "realm": "US-Illidan", "progress": "8/8 (M)"},
+                {"rank": 2, "guild_name": "Echo", "guild_url": "https://www.wowprogress.com/guild/eu/tarren-mill/Echo",
+                    "realm": "EU-Tarren Mill", "progress": "7/8 (M)"},
             ],
             "citations": {"page": "https://www.wowprogress.com/pve/us"},
         }
@@ -1041,7 +1050,8 @@ def test_wowprogress_threshold_pve_guild_profiles_filters_to_empty(monkeypatch) 
             "leaderboard": {"kind": "pve", "title": "US Mythic Progress", "region": "us", "realm": None, "active_raid": "Manaforge Omega", "page_url": "https://www.wowprogress.com/pve/us"},
             "count": 1,
             "entries": [
-                {"rank": 1, "guild_name": "Liquid", "guild_url": "https://www.wowprogress.com/guild/us/illidan/Liquid", "realm": "US-Illidan", "progress": "8/8 (M)"},
+                {"rank": 1, "guild_name": "Liquid", "guild_url": "https://www.wowprogress.com/guild/us/illidan/Liquid",
+                    "realm": "US-Illidan", "progress": "8/8 (M)"},
             ],
             "citations": {"page": "https://www.wowprogress.com/pve/us"},
         }
@@ -1075,7 +1085,8 @@ def test_wowprogress_sample_pve_guild_profiles_reports_missing_urls(monkeypatch)
             "leaderboard": {"kind": "pve", "title": "US Mythic Progress", "region": "us", "realm": None, "active_raid": "Manaforge Omega", "page_url": "https://www.wowprogress.com/pve/us"},
             "count": 2,
             "entries": [
-                {"rank": 1, "guild_name": "Liquid", "guild_url": "https://www.wowprogress.com/guild/us/illidan/Liquid", "realm": "US-Illidan", "progress": "8/8 (M)"},
+                {"rank": 1, "guild_name": "Liquid", "guild_url": "https://www.wowprogress.com/guild/us/illidan/Liquid",
+                    "realm": "US-Illidan", "progress": "8/8 (M)"},
                 {"rank": 2, "guild_name": "Unknown", "guild_url": None, "realm": "US-Illidan", "progress": "7/8 (M)"},
             ],
             "citations": {"page": "https://www.wowprogress.com/pve/us"},

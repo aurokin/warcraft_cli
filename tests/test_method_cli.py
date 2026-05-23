@@ -150,7 +150,8 @@ def _error_payload(result) -> dict[str, object]:
 def test_parse_sitemap_guides_filters_intro_pages() -> None:
     guides = parse_sitemap_guides(SITEMAP_XML)
     assert guides == [
-        {"slug": "midnight-alchemy-profession-guide", "name": "Midnight Alchemy Profession Guide", "url": "https://www.method.gg/guides/midnight-alchemy-profession-guide"},
+        {"slug": "midnight-alchemy-profession-guide", "name": "Midnight Alchemy Profession Guide",
+            "url": "https://www.method.gg/guides/midnight-alchemy-profession-guide"},
         {"slug": "mistweaver-monk", "name": "Mistweaver Monk", "url": "https://www.method.gg/guides/mistweaver-monk"},
         {"slug": "restoration-shaman", "name": "Restoration Shaman", "url": "https://www.method.gg/guides/restoration-shaman"},
         {"slug": "tier-list", "name": "Tier List", "url": "https://www.method.gg/guides/tier-list"},
@@ -168,7 +169,8 @@ def test_parse_guide_page_extracts_sections_navigation_and_links() -> None:
     assert payload["linked_entities"][0]["type"] == "spell"
     assert payload["linked_entities"][0]["id"] == 116670
     assert payload["build_references"][0]["build_code"] == "ABC123"
-    assert payload["build_references"][0]["build_identity"]["class_spec_identity"]["identity"] == {"actor_class": "monk", "spec": "mistweaver"}
+    assert payload["build_references"][0]["build_identity"]["class_spec_identity"]["identity"] == {
+        "actor_class": "monk", "spec": "mistweaver"}
 
 
 def test_parse_guide_page_supports_metadata_and_article_fallback_selectors() -> None:
@@ -307,7 +309,8 @@ def test_method_guide_export_and_query(monkeypatch, tmp_path: Path) -> None:
     assert analysis_query_payload["count"] == 1
     assert analysis_query_payload["top"][0]["surface_tags"] == ["builds_talents", "talent_recommendations"]
 
-    section_query = runner.invoke(app, ["guide-query", str(export_dir), "mistweaver", "--kind", "sections", "--section-title", "introduction"])
+    section_query = runner.invoke(app, ["guide-query", str(export_dir), "mistweaver",
+                                  "--kind", "sections", "--section-title", "introduction"])
     assert section_query.exit_code == 0
     section_payload = json.loads(section_query.stdout)
     assert section_payload["match_counts"]["sections"] >= 1

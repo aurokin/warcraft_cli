@@ -141,7 +141,8 @@ def _guild_profile_world_ranks(entries: list[dict[str, Any]]) -> list[int]:
     ]
 
 
-def _guild_profile_sample_summary(entries: list[dict[str, Any]], *, meta: dict[str, Any], filtering: dict[str, Any] | None = None) -> dict[str, Any]:
+def _guild_profile_sample_summary(entries: list[dict[str, Any]], *, meta: dict[str, Any],
+                                  filtering: dict[str, Any] | None = None) -> dict[str, Any]:
     item_levels = [float(entry["item_level_average"]) for entry in entries if isinstance(entry.get("item_level_average"), (int, float))]
     return {
         "sampled_at": meta["sampled_at"],
@@ -179,9 +180,7 @@ def _metric_within_bounds(value: Any, *, minimum: float | None, maximum: float |
     numeric_value = float(value)
     if minimum is not None and numeric_value < minimum:
         return False
-    if maximum is not None and numeric_value > maximum:
-        return False
-    return True
+    return not (maximum is not None and numeric_value > maximum)
 
 
 def _normalized_encounter_values(entry: dict[str, Any]) -> set[str]:
@@ -241,9 +240,7 @@ def _guild_profile_matches_filters(
         return False
     if not _metric_within_bounds(entry.get("item_level_average"), minimum=item_level_min, maximum=item_level_max):
         return False
-    if encounter and not any(value in _normalized_encounter_values(entry) for value in encounter):
-        return False
-    return True
+    return not (encounter and not any(value in _normalized_encounter_values(entry) for value in encounter))
 
 
 def _filter_guild_profiles(
@@ -348,7 +345,14 @@ def _guild_profile_distribution_values(metric: str, entries: list[dict[str, Any]
     return values, unit, True
 
 
-def _guild_profile_distribution_payload(metric: str, entries: list[dict[str, Any]], *, meta: dict[str, Any], query: dict[str, Any], filtering: dict[str, Any] | None = None) -> dict[str, Any]:
+def _guild_profile_distribution_payload(
+    metric: str,
+    entries: list[dict[str, Any]],
+    *,
+    meta: dict[str, Any],
+    query: dict[str, Any],
+    filtering: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     sample = _guild_profile_sample_summary(entries, meta=meta, filtering=filtering)
     values, unit, numeric = _guild_profile_distribution_values(metric, entries)
     distribution = (
@@ -460,10 +464,7 @@ def _guild_profile_threshold_payload(
 def _nearest_threshold_rows(metric: str, target: float, entries: list[dict[str, Any]], *, limit: int) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for entry in entries:
-        if metric == "rank":
-            raw_value = entry.get("rank")
-        else:
-            raw_value = entry.get("bosses_killed")
+        raw_value = entry.get("rank") if metric == "rank" else entry.get("bosses_killed")
         if not isinstance(raw_value, (int, float)):
             continue
         rows.append(
@@ -483,12 +484,16 @@ def _nearest_threshold_rows(metric: str, target: float, entries: list[dict[str, 
     return rows[:limit]
 
 
-def _threshold_payload(metric: str, target: float, entries: list[dict[str, Any]], *, meta: dict[str, Any], query: dict[str, Any], nearest_limit: int) -> dict[str, Any]:
+def _threshold_payload(metric: str, target: float, entries: list[dict[str, Any]], *,
+                       meta: dict[str, Any], query: dict[str, Any], nearest_limit: int) -> dict[str, Any]:
     nearest = _nearest_threshold_rows(metric, target, entries, limit=nearest_limit)
     if metric == "rank":
         estimate_metric = "bosses_killed"
         estimate_values = [int(row["entry"]["bosses_killed"]) for row in nearest if isinstance(row["entry"].get("bosses_killed"), int)]
-        caveat = "This estimates raid-progression states near a sampled WowProgress leaderboard rank, not a universal guild-performance threshold."
+        caveat = (
+            "This estimates raid-progression states near a sampled WowProgress leaderboard rank, "
+            "not a universal guild-performance threshold."
+        )
     else:
         estimate_metric = "rank"
         estimate_values = [int(row["entry"]["rank"]) for row in nearest if isinstance(row["entry"].get("rank"), int)]
@@ -559,5 +564,3 @@ def _load_pve_guild_profile_sample(
         "limit": limit,
     }
     return entries, meta, leaderboard, query
-
-

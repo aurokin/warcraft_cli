@@ -100,7 +100,7 @@ def _specialization_identity(enum_name: str) -> tuple[str, str] | None:
         prefix = f"{class_enum_name}_"
         if not enum_name.startswith(prefix):
             continue
-        spec_name = enum_name[len(prefix) :]
+        spec_name = enum_name[len(prefix):]
         if not spec_name:
             return None
         normalized_spec = normalize_spec_name(spec_name.replace("_", " "))

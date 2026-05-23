@@ -4,7 +4,6 @@ import json
 
 import pytest
 from typer.testing import CliRunner
-
 from wowhead_cli.compare_presets import resolve_compare_options, resolve_compare_preset
 from wowhead_cli.main import app
 

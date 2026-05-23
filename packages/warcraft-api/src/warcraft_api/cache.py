@@ -439,7 +439,7 @@ def inspect_redis_cache(
         }
     namespaces: dict[str, int] = {}
     for key in keys:
-        raw = key[len(prefix) + 1 :] if key.startswith(f"{prefix}:") else key
+        raw = key[len(prefix) + 1:] if key.startswith(f"{prefix}:") else key
         namespace = raw.split(":", 1)[0] if raw else "cache"
         namespaces[namespace] = namespaces.get(namespace, 0) + 1
     summary = {
@@ -498,7 +498,7 @@ def clear_redis_cache(
             if key in seen:
                 continue
             seen.add(key)
-            raw = key[len(prefix) + 1 :] if key.startswith(f"{prefix}:") else key
+            raw = key[len(prefix) + 1:] if key.startswith(f"{prefix}:") else key
             namespace = raw.split(":", 1)[0] if raw else "cache"
             deleted = delete(key)
             if deleted:

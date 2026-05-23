@@ -9,7 +9,8 @@ FIXTURE_DIR = Path(__file__).parent / "fixtures" / "method"
 
 
 def test_recorded_class_guide_fixture_contract() -> None:
-    payload = parse_guide_page(load_fixture_text(FIXTURE_DIR, "class_guide.html"), source_url="https://www.method.gg/guides/mistweaver-monk")
+    payload = parse_guide_page(load_fixture_text(FIXTURE_DIR, "class_guide.html"),
+                               source_url="https://www.method.gg/guides/mistweaver-monk")
 
     assert payload["guide"]["slug"] == "mistweaver-monk"
     assert payload["guide"]["content_family"] == "class_guide"

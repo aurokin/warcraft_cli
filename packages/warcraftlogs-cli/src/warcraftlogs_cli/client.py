@@ -216,6 +216,7 @@ def _response_has_useful_value(value: Any) -> bool:
         return any(_response_has_useful_value(item) for item in value)
     return True
 
+
 def _encounter_rankings_request(*, encounter_id: int, options: EncounterRankingsOptions) -> tuple[str, dict[str, Any]]:
     variables: dict[str, Any] = {"id": encounter_id}
     optional_variable_lines: list[str] = []
@@ -280,6 +281,7 @@ query EncounterRankings(
 }}
 """
     return query, variables
+
 
 GUILD_QUERY = """
 query Guild($name: String!, $serverSlug: String!, $serverRegion: String!, $zoneId: Int) {
@@ -474,7 +476,15 @@ query GuildMembers($name: String!, $serverSlug: String!, $serverRegion: String!,
 """
 
 GUILD_ATTENDANCE_QUERY = """
-query GuildAttendance($name: String!, $serverSlug: String!, $serverRegion: String!, $guildTagID: Int, $limit: Int, $page: Int, $zoneID: Int) {
+query GuildAttendance(
+  $name: String!,
+  $serverSlug: String!,
+  $serverRegion: String!,
+  $guildTagID: Int,
+  $limit: Int,
+  $page: Int,
+  $zoneID: Int,
+) {
   guildData {
     guild(name: $name, serverSlug: $serverSlug, serverRegion: $serverRegion) {
       id
@@ -1386,11 +1396,25 @@ class WarcraftLogsClient:
 
     def authorization_code_url(self, *, redirect_uri: str, state: str) -> str:
         self._require_client_credentials()
-        return f"{self._site.oauth_authorize_url}?{urlencode({'client_id': self._client_id, 'state': state, 'redirect_uri': redirect_uri, 'response_type': 'code'})}"
+        params = {
+            "client_id": self._client_id,
+            "state": state,
+            "redirect_uri": redirect_uri,
+            "response_type": "code",
+        }
+        return f"{self._site.oauth_authorize_url}?{urlencode(params)}"
 
     def pkce_code_url(self, *, redirect_uri: str, state: str, code_challenge: str) -> str:
         self._require_client_credentials()
-        return f"{self._site.oauth_authorize_url}?{urlencode({'client_id': self._client_id, 'code_challenge': code_challenge, 'code_challenge_method': 'S256', 'state': state, 'redirect_uri': redirect_uri, 'response_type': 'code'})}"
+        params = {
+            "client_id": self._client_id,
+            "code_challenge": code_challenge,
+            "code_challenge_method": "S256",
+            "state": state,
+            "redirect_uri": redirect_uri,
+            "response_type": "code",
+        }
+        return f"{self._site.oauth_authorize_url}?{urlencode(params)}"
 
     def exchange_authorization_code(self, *, code: str, redirect_uri: str) -> dict[str, Any]:
         self._require_client_credentials()

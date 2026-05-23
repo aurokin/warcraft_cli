@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import pytest
 import typer
-
 from warcraft_content.article_provider_cli import (
     build_article_resolve_response,
     build_article_search_response,

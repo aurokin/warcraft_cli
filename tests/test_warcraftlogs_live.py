@@ -151,7 +151,8 @@ def test_live_warcraftlogs_reports_contract() -> None:
 def test_live_warcraftlogs_boss_kills_contract() -> None:
     _require_warcraftlogs_auth()
     payload = _payload_for(
-        ["boss-kills", "--zone-id", "38", "--boss-id", "3012", "--difficulty", "5", "--top", "3", "--report-pages", "1", "--reports-per-page", "5"]
+        ["boss-kills", "--zone-id", "38", "--boss-id", "3012", "--difficulty",
+            "5", "--top", "3", "--report-pages", "1", "--reports-per-page", "5"]
     )
 
     assert payload["provider"] == "warcraftlogs"
@@ -166,7 +167,8 @@ def test_live_warcraftlogs_boss_kills_contract() -> None:
 def test_live_warcraftlogs_boss_spec_usage_contract() -> None:
     _require_warcraftlogs_auth()
     payload = _payload_for(
-        ["boss-spec-usage", "--zone-id", "38", "--boss-id", "3012", "--difficulty", "5", "--top", "5", "--report-pages", "1", "--reports-per-page", "5"]
+        ["boss-spec-usage", "--zone-id", "38", "--boss-id", "3012", "--difficulty",
+            "5", "--top", "5", "--report-pages", "1", "--reports-per-page", "5"]
     )
 
     assert payload["provider"] == "warcraftlogs"
@@ -291,7 +293,8 @@ def test_live_warcraftlogs_report_detail_contracts() -> None:
     assert "graph" in graph_payload
 
     rankings_payload = _payload_for(
-        ["report-rankings", code, "--fight-id", str(fight_id), "--player-metric", "dps", "--timeframe", "historical", "--compare", "rankings"]
+        ["report-rankings", code, "--fight-id", str(fight_id), "--player-metric", "dps",
+         "--timeframe", "historical", "--compare", "rankings"]
     )
     assert rankings_payload["provider"] == "warcraftlogs"
     assert rankings_payload["report"]["code"] == code

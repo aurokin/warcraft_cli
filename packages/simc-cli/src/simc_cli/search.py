@@ -30,7 +30,8 @@ def _rg_files(needle: str, base: Path, pattern: str) -> list[Path]:
 
 
 def _run_rg(pattern: str, paths: list[Path]) -> list[SearchHit]:
-    proc = subprocess.run(["rg", "-n", "--no-heading", pattern, *[str(path) for path in paths if path.exists()]], capture_output=True, text=True, check=False)
+    proc = subprocess.run(["rg", "-n", "--no-heading", pattern, *[str(path)
+                          for path in paths if path.exists()]], capture_output=True, text=True, check=False)
     hits: list[SearchHit] = []
     for line in proc.stdout.splitlines():
         file_name, line_no, text = line.split(":", 2)

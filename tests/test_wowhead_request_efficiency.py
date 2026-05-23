@@ -3,9 +3,7 @@ from __future__ import annotations
 import json
 from unittest.mock import MagicMock
 
-import pytest
 from typer.testing import CliRunner
-
 from wowhead_cli.main import app
 from wowhead_cli.wowhead_client import WowheadClient
 
@@ -105,7 +103,8 @@ def test_wowhead_comments_hydration_uses_concurrency(monkeypatch) -> None:
             {"canonical_url": "https://www.wowhead.com/item=1", "title": "T"},
         ),
     )
-    monkeypatch.setattr("wowhead_cli.main._resolve_page_fetch_target", lambda *args, **kwargs: MagicMock(page_entity_type="item", page_entity_id=1))
+    monkeypatch.setattr("wowhead_cli.main._resolve_page_fetch_target", lambda *args, **
+                        kwargs: MagicMock(page_entity_type="item", page_entity_id=1))
 
     result = runner.invoke(
         app,

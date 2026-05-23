@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
+from wowhead_cli.main import app
 
 from tests.fixtures.wowhead_output_schemas import (
     COMMENTS_KEYS,
@@ -15,7 +16,6 @@ from tests.fixtures.wowhead_output_schemas import (
     ENTITY_PAGE_ITEM_KEYS,
     SEARCH_KEYS,
 )
-from wowhead_cli.main import app
 
 runner = CliRunner()
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "expansion_recorded.json"

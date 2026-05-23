@@ -31,8 +31,10 @@ def _method_like_payload() -> dict[str, object]:
         "navigation": {
             "count": 2,
             "items": [
-                {"title": "Introduction", "url": "https://www.method.gg/guides/mistweaver-monk", "section_slug": "introduction", "active": True, "ordinal": 1},
-                {"title": "Talents", "url": "https://www.method.gg/guides/mistweaver-monk/talents", "section_slug": "talents", "active": False, "ordinal": 2},
+                {"title": "Introduction", "url": "https://www.method.gg/guides/mistweaver-monk",
+                    "section_slug": "introduction", "active": True, "ordinal": 1},
+                {"title": "Talents", "url": "https://www.method.gg/guides/mistweaver-monk/talents",
+                    "section_slug": "talents", "active": False, "ordinal": 2},
             ],
         },
         "pages": [
@@ -78,7 +80,8 @@ def _method_like_payload() -> dict[str, object]:
         "linked_entities": {
             "count": 1,
             "items": [
-                {"type": "spell", "id": 388020, "name": "Tea of Serenity", "url": "https://www.wowhead.com/spell=388020/tea-of-serenity", "source_urls": ["https://www.method.gg/guides/mistweaver-monk/talents"]},
+                {"type": "spell", "id": 388020, "name": "Tea of Serenity", "url": "https://www.wowhead.com/spell=388020/tea-of-serenity",
+                    "source_urls": ["https://www.method.gg/guides/mistweaver-monk/talents"]},
             ],
         },
         "build_references": {
@@ -146,9 +149,12 @@ def _icy_like_payload() -> dict[str, object]:
         "navigation": {
             "count": 3,
             "items": [
-                {"title": "Mistweaver Monk Guide", "url": "https://www.icy-veins.com/wow/mistweaver-monk-pve-healing-guide", "section_slug": "intro", "active": True, "ordinal": 1},
-                {"title": "Builds and Talents", "url": "https://www.icy-veins.com/wow/mistweaver-monk-pve-healing-spec-builds-talents", "section_slug": "builds-and-talents", "active": False, "ordinal": 2},
-                {"title": "Rotation, Cooldowns, and Abilities", "url": "https://www.icy-veins.com/wow/mistweaver-monk-pve-healing-rotation-cooldowns-abilities", "section_slug": "rotation-cooldowns-and-abilities", "active": False, "ordinal": 3},
+                {"title": "Mistweaver Monk Guide", "url": "https://www.icy-veins.com/wow/mistweaver-monk-pve-healing-guide",
+                    "section_slug": "intro", "active": True, "ordinal": 1},
+                {"title": "Builds and Talents", "url": "https://www.icy-veins.com/wow/mistweaver-monk-pve-healing-spec-builds-talents",
+                    "section_slug": "builds-and-talents", "active": False, "ordinal": 2},
+                {"title": "Rotation, Cooldowns, and Abilities", "url": "https://www.icy-veins.com/wow/mistweaver-monk-pve-healing-rotation-cooldowns-abilities",
+                    "section_slug": "rotation-cooldowns-and-abilities", "active": False, "ordinal": 3},
             ],
         },
         "pages": [
@@ -175,7 +181,8 @@ def _icy_like_payload() -> dict[str, object]:
         "linked_entities": {
             "count": 1,
             "items": [
-                {"type": "page", "id": 1, "name": "Builds and Talents", "url": "https://www.icy-veins.com/wow/mistweaver-monk-pve-healing-spec-builds-talents", "source_urls": ["https://www.icy-veins.com/wow/mistweaver-monk-pve-healing-guide"]},
+                {"type": "page", "id": 1, "name": "Builds and Talents", "url": "https://www.icy-veins.com/wow/mistweaver-monk-pve-healing-spec-builds-talents",
+                    "source_urls": ["https://www.icy-veins.com/wow/mistweaver-monk-pve-healing-guide"]},
             ],
         },
         "build_references": {
@@ -260,7 +267,8 @@ def _wowhead_like_payload() -> dict[str, object]:
         "linked_entities": {
             "count": 1,
             "items": [
-                {"type": "spell", "id": 49020, "name": "Obliterate", "url": "https://www.wowhead.com/spell=49020/obliterate", "source_urls": ["https://www.wowhead.com/guide/classes/death-knight/frost/overview-pve-dps"]},
+                {"type": "spell", "id": 49020, "name": "Obliterate", "url": "https://www.wowhead.com/spell=49020/obliterate",
+                    "source_urls": ["https://www.wowhead.com/guide/classes/death-knight/frost/overview-pve-dps"]},
             ],
         },
         "build_references": {
@@ -339,7 +347,8 @@ def test_write_and_query_article_bundle_for_method_shape(tmp_path: Path) -> None
     build_result = query_article_bundle(bundle, query="abc123 mistweaver", limit=5, kinds={"build_references"}, section_title_filter=None)
     assert build_result["match_counts"]["build_references"] == 1
     assert build_result["matches"]["build_references"][0]["build_code"] == "ABC123"
-    analysis_result = query_article_bundle(bundle, query="talent recommendations", limit=5, kinds={"analysis_surfaces"}, section_title_filter=None)
+    analysis_result = query_article_bundle(bundle, query="talent recommendations", limit=5,
+                                           kinds={"analysis_surfaces"}, section_title_filter=None)
     assert analysis_result["match_counts"]["analysis_surfaces"] == 1
     assert analysis_result["matches"]["analysis_surfaces"][0]["surface_tags"] == ["builds_talents", "talent_recommendations"]
 
@@ -357,7 +366,8 @@ def test_write_and_query_article_bundle_for_icy_shape(tmp_path: Path) -> None:
         "analysis_surfaces": 1,
     }
     bundle = load_article_bundle(export_dir)
-    result = query_article_bundle(bundle, query="builds talents", limit=5, kinds={"navigation", "linked_entities"}, section_title_filter=None)
+    result = query_article_bundle(bundle, query="builds talents", limit=5, kinds={
+                                  "navigation", "linked_entities"}, section_title_filter=None)
     assert result["match_counts"]["navigation"] >= 1
     assert result["matches"]["navigation"][0]["title"] == "Builds and Talents"
 
@@ -375,7 +385,8 @@ def test_write_article_bundle_supports_article_resource_key(tmp_path: Path) -> N
         "navigation": {
             "count": 1,
             "items": [
-                {"title": "API systems", "url": "https://warcraft.wiki.gg/wiki/World_of_Warcraft_API#API_systems", "section_slug": "API_systems", "active": True, "ordinal": 1},
+                {"title": "API systems", "url": "https://warcraft.wiki.gg/wiki/World_of_Warcraft_API#API_systems",
+                    "section_slug": "API_systems", "active": True, "ordinal": 1},
             ],
         },
         "pages": [
@@ -402,7 +413,8 @@ def test_write_article_bundle_supports_article_resource_key(tmp_path: Path) -> N
         "linked_entities": {
             "count": 1,
             "items": [
-                {"type": "wiki_article", "id": "UIOBJECT_Frame", "name": "UIOBJECT Frame", "url": "https://warcraft.wiki.gg/wiki/UIOBJECT_Frame", "source_urls": ["https://warcraft.wiki.gg/wiki/World_of_Warcraft_API"]},
+                {"type": "wiki_article", "id": "UIOBJECT_Frame", "name": "UIOBJECT Frame",
+                    "url": "https://warcraft.wiki.gg/wiki/UIOBJECT_Frame", "source_urls": ["https://warcraft.wiki.gg/wiki/World_of_Warcraft_API"]},
             ],
         },
         "build_references": {
@@ -489,7 +501,8 @@ def test_compare_article_bundles_preserves_additive_surface_and_build_evidence(t
     overview_row = next(row for row in comparison["analysis_surface_tags"]["items"] if row["tag"] == "overview")
     assert overview_row["bundle_count"] == 2
     assert {row["provider"] for row in overview_row["bundles"]} == {"icy-veins", "wowhead"}
-    assert any(row["keys"] == ["builds_talents", "talent_recommendations"] for row in comparison["analysis_surface_tags"]["unique_by_bundle"])
+    assert any(row["keys"] == ["builds_talents", "talent_recommendations"]
+               for row in comparison["analysis_surface_tags"]["unique_by_bundle"])
     build_row = comparison["build_references"]["items"][0]
     assert build_row["build_code"] == "ABC123"
     assert build_row["bundle_count"] == 2

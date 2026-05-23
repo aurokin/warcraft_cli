@@ -1,18 +1,19 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
 import json
 import math
-import shlex
-from pathlib import Path
 import re
-from typing import Any, Callable
+import shlex
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
 from urllib.parse import urljoin, urlparse
 
 import httpx
 import typer
-
+from warcraft_content.guide_analysis import extract_section_chunk_analysis_surfaces
 from warcraft_core.identity import build_identity_payload, build_reference_transport_packet_payload, validate_talent_transport_packet
 from warcraft_core.output import (
     DiagnosticsCollector,
@@ -21,11 +22,7 @@ from warcraft_core.output import (
     resolve_output_options,
     shape_payload,
 )
-from warcraft_content.guide_analysis import extract_section_chunk_analysis_surfaces
-from wowhead_cli.citation_pack import citation_pack_from_compare, citation_pack_from_entity
-from wowhead_cli.comments_intelligence import build_comments_intelligence, filter_raw_comments
-from wowhead_cli.linked_graph import build_linked_graph_payload, normalize_relation_option
-from wowhead_cli.compare_presets import resolve_compare_options
+
 from wowhead_cli.cache import (
     clear_file_cache,
     clear_redis_cache,
@@ -34,13 +31,15 @@ from wowhead_cli.cache import (
     load_cache_settings_from_env,
     repair_file_cache,
 )
+from wowhead_cli.citation_pack import citation_pack_from_compare, citation_pack_from_entity
+from wowhead_cli.comments_intelligence import build_comments_intelligence, filter_raw_comments
+from wowhead_cli.compare_presets import resolve_compare_options
 from wowhead_cli.entity_types import (
     DEFAULT_HYDRATE_ENTITY_TYPES,
     HYDRATABLE_ENTITY_TYPES,
     RESOLVE_ENTITY_TYPES,
     SEARCH_TYPE_HINTS,
 )
-from wowhead_cli.normalization import attach_entity_normalization, attach_entity_page_normalization
 from wowhead_cli.expansion_profiles import (
     ExpansionProfile,
     detect_expansion_from_url,
@@ -49,6 +48,8 @@ from wowhead_cli.expansion_profiles import (
     parse_entity_from_wowhead_url,
     resolve_expansion,
 )
+from wowhead_cli.linked_graph import build_linked_graph_payload, normalize_relation_option
+from wowhead_cli.normalization import attach_entity_normalization, attach_entity_page_normalization
 from wowhead_cli.output import emit
 from wowhead_cli.page_parser import (
     clean_markup_text,
@@ -57,9 +58,9 @@ from wowhead_cli.page_parser import (
     extract_guide_rating,
     extract_guide_section_chunks,
     extract_guide_sections,
-    extract_linked_entities_from_href,
     extract_json_ld,
     extract_json_script,
+    extract_linked_entities_from_href,
     extract_listview_data,
     extract_markup_by_target,
     extract_markup_urls,
@@ -220,7 +221,7 @@ def _client(ctx: typer.Context) -> WowheadClient:
         return WowheadClient(expansion=cfg.expansion)
     except ValueError as exc:
         _fail(ctx, "invalid_cache_config", str(exc))
-        raise AssertionError("unreachable")
+        raise AssertionError("unreachable") from None
 
 
 def _fail(ctx: typer.Context, code: str, message: str, *, status: int = 1) -> None:
@@ -241,7 +242,7 @@ def _validated_transport_packet(ctx: typer.Context, packet: Any, *, command_name
         return validate_talent_transport_packet(packet)
     except ValueError as exc:
         _fail(ctx, "invalid_transport_packet", f"{command_name} produced an invalid talent transport packet: {exc}")
-        raise AssertionError("unreachable")
+        raise AssertionError("unreachable") from None
 
 
 def _load_cache_settings_or_fail(ctx: typer.Context):
@@ -249,7 +250,7 @@ def _load_cache_settings_or_fail(ctx: typer.Context):
         return load_cache_settings_from_env()
     except ValueError as exc:
         _fail(ctx, "invalid_cache_config", str(exc))
-        raise AssertionError("unreachable")
+        raise AssertionError("unreachable") from None
 
 
 def _normalize_cache_namespaces(values: list[str]) -> tuple[str, ...]:
@@ -544,10 +545,7 @@ def _resolve_guide_lookup_input(
         return guide_url(relative_id, expansion=expansion), relative_id
 
     root_segment = normalized.split("/", 1)[0]
-    if root_segment in EXPANSION_PREFIXES:
-        lookup_url = f"{WOWHEAD_BASE_URL}/{normalized}"
-    else:
-        lookup_url = f"{expansion.wowhead_base}/{normalized}"
+    lookup_url = f"{WOWHEAD_BASE_URL}/{normalized}" if root_segment in EXPANSION_PREFIXES else f"{expansion.wowhead_base}/{normalized}"
     guide_id = _extract_guide_id_from_path(f"/{normalized}")
     return lookup_url, guide_id
 
@@ -767,14 +765,14 @@ def _merge_link_records(existing: dict[str, Any], candidate: dict[str, Any], *, 
     elif existing_name is not None:
         merged["name"] = existing_name
 
-    for field in (
+    for link_field in (
         "url",
         "citation_url",
         "source_url",
         "gatherer_data_type",
     ):
-        if merged.get(field) in (None, "") and candidate.get(field) not in (None, ""):
-            merged[field] = candidate[field]
+        if merged.get(link_field) in (None, "") and candidate.get(link_field) not in (None, ""):
+            merged[link_field] = candidate[link_field]
 
     source_urls: list[str] = []
     for value in (merged.get("source_url"), candidate.get("source_url")):
@@ -943,7 +941,7 @@ def _strip_leading_entity_name(text: str, *, entity_name: str | None) -> str:
         return text
     if not text.startswith(entity_name):
         return text
-    remainder = text[len(entity_name) :].lstrip(" :-")
+    remainder = text[len(entity_name):].lstrip(" :-")
     return remainder.strip() or text
 
 
@@ -1186,7 +1184,7 @@ def _write_optional_text_file(path: Path, value: Any) -> bool:
 
 
 def _iso_now_utc() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def _hydrate_guide_linked_entities(
@@ -1518,7 +1516,11 @@ def _normalize_search_results(
             "type_id": row.get("type"),
             "type_name": row.get("typeName"),
             "entity_type": entity_type,
-            "url": _search_result_url(entity_type=entity_type, entity_id=entity_id if isinstance(entity_id, int) else None, expansion=expansion),
+            "url": _search_result_url(
+                entity_type=entity_type,
+                entity_id=entity_id if isinstance(entity_id, int) else None,
+                expansion=expansion,
+            ),
             "ranking": {
                 "score": search_score,
                 "match_reasons": match_reasons,
@@ -2216,17 +2218,17 @@ def _comparison_entity_record(
 
 def _comparison_field_diffs(entity_records: list[dict[str, Any]], *, comparable_fields: list[str]) -> dict[str, Any]:
     field_diffs: dict[str, Any] = {}
-    for field in comparable_fields:
+    for field_name in comparable_fields:
         values: dict[str, Any] = {}
         for row in entity_records:
             ref = row.get("ref")
             if not isinstance(ref, str):
                 continue
             summary = row.get("summary")
-            value = summary.get(field) if isinstance(summary, dict) else None
+            value = summary.get(field_name) if isinstance(summary, dict) else None
             values[ref] = value
         unique_values = {repr(v) for v in values.values()}
-        field_diffs[field] = {
+        field_diffs[field_name] = {
             "all_equal": len(unique_values) <= 1,
             "values": values,
         }
@@ -2473,10 +2475,7 @@ def _fetch_guide_page(
 
     try:
         default_lookup = guide_url(guide_id, expansion=client.expansion) if guide_id is not None else None
-        if guide_id is not None and lookup_url == default_lookup:
-            html = client.guide_page_html(guide_id)
-        else:
-            html = client.page_html(lookup_url)
+        html = client.guide_page_html(guide_id) if guide_id is not None and lookup_url == default_lookup else client.page_html(lookup_url)
     except httpx.HTTPStatusError as exc:
         _fail(ctx, "http_error", f"Wowhead returned HTTP {exc.response.status_code}")
     except httpx.HTTPError as exc:
@@ -2696,8 +2695,8 @@ def _parse_iso8601_utc(value: Any) -> datetime | None:
     except ValueError:
         return None
     if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
 
 
 def _parse_date_bound(value: str | None, *, end_of_day: bool) -> datetime | None:
@@ -2710,8 +2709,8 @@ def _parse_date_bound(value: str | None, *, end_of_day: bool) -> datetime | None
         except ValueError:
             return None
         if end_of_day:
-            return datetime.combine(parsed_date, datetime.max.time(), tzinfo=timezone.utc)
-        return datetime.combine(parsed_date, datetime.min.time(), tzinfo=timezone.utc)
+            return datetime.combine(parsed_date, datetime.max.time(), tzinfo=UTC)
+        return datetime.combine(parsed_date, datetime.min.time(), tzinfo=UTC)
     parsed = _parse_iso8601_utc(raw)
     if parsed is None:
         return None
@@ -3133,16 +3132,16 @@ def _load_talent_calc_context(
         state = _parse_talent_calc_state(state_url)
     except ValueError as exc:
         _fail(ctx, "invalid_tool_ref", str(exc))
-        raise AssertionError("unreachable")
+        raise AssertionError("unreachable") from None
     client = _client(ctx)
     try:
         html = client.page_html(state_url)
     except httpx.HTTPStatusError as exc:
         _fail(ctx, "http_error", f"Wowhead returned HTTP {exc.response.status_code}")
-        raise AssertionError("unreachable")
+        raise AssertionError("unreachable") from None
     except httpx.HTTPError as exc:
         _fail(ctx, "network_error", str(exc))
-        raise AssertionError("unreachable")
+        raise AssertionError("unreachable") from None
     metadata = parse_page_metadata(html, fallback_url=state_url)
     page_url = _absolute_wowhead_url(metadata.get("canonical_url"), fallback=state_url) or state_url
     listed_builds = _extract_talent_calc_listed_builds(html, limit=listed_build_limit)
@@ -3160,7 +3159,7 @@ def _base_talent_calc_payload(
         state = _parse_talent_calc_state(state_url)
     except ValueError as exc:
         _fail(ctx, "invalid_tool_ref", str(exc))
-        raise AssertionError("unreachable")
+        raise AssertionError("unreachable") from None
     return {
         "expansion": str(state.get("expansion") or cfg.expansion.key),
         "tool": {
@@ -3208,12 +3207,12 @@ def _enrich_talent_calc_payload_with_page_data(
     except httpx.HTTPStatusError as exc:
         if fail_on_fetch_error:
             _fail(ctx, "http_error", f"Wowhead returned HTTP {exc.response.status_code}")
-            raise AssertionError("unreachable")
+            raise AssertionError("unreachable") from None
         return payload
     except httpx.HTTPError as exc:
         if fail_on_fetch_error:
             _fail(ctx, "network_error", str(exc))
-            raise AssertionError("unreachable")
+            raise AssertionError("unreachable") from None
         return payload
     metadata = parse_page_metadata(html, fallback_url=state_url)
     page_url = _absolute_wowhead_url(metadata.get("canonical_url"), fallback=state_url) or state_url
@@ -3418,7 +3417,7 @@ def _normalize_blue_topic_ref(ref: str, *, expansion: ExpansionProfile) -> str:
 
 
 def _guide_bundle_is_fresh(manifest: dict[str, Any], *, max_age_hours: int) -> bool:
-    cutoff = datetime.now(timezone.utc)
+    cutoff = datetime.now(UTC)
     exported_at = _parse_iso8601_utc(manifest.get("exported_at"))
     if exported_at is None:
         return False
@@ -3441,7 +3440,7 @@ def _is_stored_at_fresh(stored_at: Any, *, max_age_hours: int) -> bool:
     parsed = _parse_iso8601_utc(stored_at)
     if parsed is None:
         return False
-    age_seconds = (datetime.now(timezone.utc) - parsed).total_seconds()
+    age_seconds = (datetime.now(UTC) - parsed).total_seconds()
     return age_seconds <= max_age_hours * 3600
 
 
@@ -3530,7 +3529,7 @@ def _bundle_hydration_summary(manifest: dict[str, Any], *, counts: dict[str, Any
 
 
 def _bundle_freshness_summary(manifest: dict[str, Any], *, max_age_hours: int) -> dict[str, Any]:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     exported_at_raw = manifest.get("exported_at")
     exported_at = _parse_iso8601_utc(exported_at_raw if isinstance(exported_at_raw, str) else None)
     hydration = manifest.get("hydration")
@@ -4005,11 +4004,27 @@ def _guide_bundle_inspection_payload(
     }
     if isinstance(entities_manifest, dict):
         payload["entities_manifest"] = {
-            "count": entities_manifest.get("count") if isinstance(entities_manifest.get("count"), int) else observed_counts["hydrated_entities"],
-            "hydrated_at": entities_manifest.get("hydrated_at") if isinstance(entities_manifest.get("hydrated_at"), str) else None,
-            "counts_by_type": entities_manifest.get("counts_by_type") if isinstance(entities_manifest.get("counts_by_type"), dict) else {},
-            "counts_by_storage_source": entities_manifest.get("counts_by_storage_source") if isinstance(entities_manifest.get("counts_by_storage_source"), dict) else {},
-    }
+            "count": (
+                entities_manifest.get("count")
+                if isinstance(entities_manifest.get("count"), int)
+                else observed_counts["hydrated_entities"]
+            ),
+            "hydrated_at": (
+                entities_manifest.get("hydrated_at")
+                if isinstance(entities_manifest.get("hydrated_at"), str)
+                else None
+            ),
+            "counts_by_type": (
+                entities_manifest.get("counts_by_type")
+                if isinstance(entities_manifest.get("counts_by_type"), dict)
+                else {}
+            ),
+            "counts_by_storage_source": (
+                entities_manifest.get("counts_by_storage_source")
+                if isinstance(entities_manifest.get("counts_by_storage_source"), dict)
+                else {}
+            ),
+        }
     return payload
 
 
@@ -5229,9 +5244,7 @@ def _guide_row_matches_filters(
     patch_value = row.get("patch")
     if patch_min is not None and (not isinstance(patch_value, int) or patch_value < patch_min):
         return False
-    if patch_max is not None and (not isinstance(patch_value, int) or patch_value > patch_max):
-        return False
-    return True
+    return not (patch_max is not None and (not isinstance(patch_value, int) or patch_value > patch_max))
 
 
 def _filtered_guide_category_rows(
@@ -5451,7 +5464,7 @@ def talent_calc_packet(
     payload = _base_talent_calc_payload(ctx, ref=ref)
     if not payload["tool"].get("has_build_code"):
         _fail(ctx, "invalid_tool_ref", "talent-calc packet refs must include an explicit build code.")
-        raise AssertionError("unreachable")
+        raise AssertionError("unreachable") from None
     payload = _enrich_talent_calc_payload_with_page_data(
         ctx,
         payload,
@@ -5479,7 +5492,7 @@ def talent_calc_packet(
             written_packet_path = str(output_path)
         except OSError as exc:
             _fail(ctx, "transport_packet_write_failed", f"Failed to write talent transport packet: {exc}")
-            raise AssertionError("unreachable")
+            raise AssertionError("unreachable") from None
     _emit(
         ctx,
         {
@@ -5827,7 +5840,11 @@ def guide_export(
     hydrate_type: list[str] = typer.Option(
         [],
         "--hydrate-type",
-        help="Restrict hydrated linked entity types. Repeat or pass comma-separated values from: achievement, battle-pet, currency, faction, item, mount, npc, object, pet, quest, recipe, spell, transmog-set, zone. Defaults to spell,item,npc when hydration is enabled.",
+        help=(
+            "Restrict hydrated linked entity types. Repeat or pass comma-separated values from: "
+            "achievement, battle-pet, currency, faction, item, mount, npc, object, pet, quest, "
+            "recipe, spell, transmog-set, zone. Defaults to spell,item,npc when hydration is enabled."
+        ),
     ),
     hydrate_limit: int = typer.Option(
         100,
@@ -5887,7 +5904,10 @@ def guide_query(
     kind: list[str] = typer.Option(
         [],
         "--kind",
-        help="Restrict search kinds. Repeat or pass comma-separated values from: sections, analysis_surfaces, navigation, linked_entities, gatherer_entities, comments.",
+        help=(
+            "Restrict search kinds. Repeat or pass comma-separated values from: sections, "
+            "analysis_surfaces, navigation, linked_entities, gatherer_entities, comments."
+        ),
     ),
     section_title: str | None = typer.Option(
         None,
@@ -5967,7 +5987,10 @@ def guide_bundle_query(
     kind: list[str] = typer.Option(
         [],
         "--kind",
-        help="Restrict search kinds. Repeat or pass comma-separated values from: sections, analysis_surfaces, navigation, linked_entities, gatherer_entities, comments.",
+        help=(
+            "Restrict search kinds. Repeat or pass comma-separated values from: sections, "
+            "analysis_surfaces, navigation, linked_entities, gatherer_entities, comments."
+        ),
     ),
     section_title: str | None = typer.Option(
         None,

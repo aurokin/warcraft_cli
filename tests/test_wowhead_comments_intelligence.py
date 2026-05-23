@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 
 from typer.testing import CliRunner
-
 from wowhead_cli.comments_intelligence import (
     build_comments_intelligence,
     detect_near_duplicate_groups,

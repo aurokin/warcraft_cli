@@ -23,6 +23,8 @@ from wowprogress_cli.context import RuntimeConfig, _client, _emit, _fail, _handl
 from wowprogress_cli.identity import _guild_history_tier_row, _guild_ranks_row, _normalized_identity
 from wowprogress_cli.search import _resolve_payload, _search_candidates
 
+WowProgressClient = WowProgressClient  # re-export for tests and stable import surface
+
 app = typer.Typer(add_completion=False, help="WowProgress rankings and profile CLI.")
 sample_app = typer.Typer(add_completion=False, help="Sample-backed WowProgress analytics primitives.")
 distribution_app = typer.Typer(add_completion=False, help="Derived distributions built from WowProgress samples.")
@@ -323,12 +325,18 @@ def sample_pve_guild_profiles(
     realm: str | None = typer.Option(None, "--realm", help="Optional realm slug to narrow the PvE leaderboard."),
     limit: int = typer.Option(10, "--limit", min=1, max=25, help="Maximum top leaderboard guild profiles to fetch."),
     faction: list[str] | None = typer.Option(None, "--faction", help="Retain only guild profiles matching the given faction. Repeatable."),
-    difficulty: list[str] | None = typer.Option(None, "--difficulty", help="Retain only guild profiles matching the given progression difficulty. Repeatable."),
-    world_rank_min: int | None = typer.Option(None, "--world-rank-min", min=1, help="Retain only guild profiles at or above this world rank."),
-    world_rank_max: int | None = typer.Option(None, "--world-rank-max", min=1, help="Retain only guild profiles at or below this world rank."),
-    item_level_min: float | None = typer.Option(None, "--item-level-min", help="Retain only guild profiles at or above this average item level."),
-    item_level_max: float | None = typer.Option(None, "--item-level-max", help="Retain only guild profiles at or below this average item level."),
-    encounter: list[str] | None = typer.Option(None, "--encounter", help="Retain only guild profiles containing the given encounter name. Repeatable."),
+    difficulty: list[str] | None = typer.Option(
+        None, "--difficulty", help="Retain only guild profiles matching the given progression difficulty. Repeatable."),
+    world_rank_min: int | None = typer.Option(None, "--world-rank-min", min=1,
+                                              help="Retain only guild profiles at or above this world rank."),
+    world_rank_max: int | None = typer.Option(None, "--world-rank-max", min=1,
+                                              help="Retain only guild profiles at or below this world rank."),
+    item_level_min: float | None = typer.Option(
+        None, "--item-level-min", help="Retain only guild profiles at or above this average item level."),
+    item_level_max: float | None = typer.Option(
+        None, "--item-level-max", help="Retain only guild profiles at or below this average item level."),
+    encounter: list[str] | None = typer.Option(
+        None, "--encounter", help="Retain only guild profiles containing the given encounter name. Repeatable."),
 ) -> None:
     try:
         with _client(ctx) as client:
@@ -380,17 +388,24 @@ def sample_pve_guild_profiles(
 @distribution_app.command("pve-guild-profiles")
 def distribution_pve_guild_profiles(
     ctx: typer.Context,
-    metric: str = typer.Option("progress", "--metric", help="Distribution metric: progress, faction, item_level_average, world_rank, encounter."),
+    metric: str = typer.Option("progress", "--metric",
+                               help="Distribution metric: progress, faction, item_level_average, world_rank, encounter."),
     region: str = typer.Option(..., "--region", help="Region slug such as world, us, or eu."),
     realm: str | None = typer.Option(None, "--realm", help="Optional realm slug to narrow the PvE leaderboard."),
     limit: int = typer.Option(10, "--limit", min=1, max=25, help="Maximum top leaderboard guild profiles to fetch."),
     faction: list[str] | None = typer.Option(None, "--faction", help="Retain only guild profiles matching the given faction. Repeatable."),
-    difficulty: list[str] | None = typer.Option(None, "--difficulty", help="Retain only guild profiles matching the given progression difficulty. Repeatable."),
-    world_rank_min: int | None = typer.Option(None, "--world-rank-min", min=1, help="Retain only guild profiles at or above this world rank."),
-    world_rank_max: int | None = typer.Option(None, "--world-rank-max", min=1, help="Retain only guild profiles at or below this world rank."),
-    item_level_min: float | None = typer.Option(None, "--item-level-min", help="Retain only guild profiles at or above this average item level."),
-    item_level_max: float | None = typer.Option(None, "--item-level-max", help="Retain only guild profiles at or below this average item level."),
-    encounter: list[str] | None = typer.Option(None, "--encounter", help="Retain only guild profiles containing the given encounter name. Repeatable."),
+    difficulty: list[str] | None = typer.Option(
+        None, "--difficulty", help="Retain only guild profiles matching the given progression difficulty. Repeatable."),
+    world_rank_min: int | None = typer.Option(None, "--world-rank-min", min=1,
+                                              help="Retain only guild profiles at or above this world rank."),
+    world_rank_max: int | None = typer.Option(None, "--world-rank-max", min=1,
+                                              help="Retain only guild profiles at or below this world rank."),
+    item_level_min: float | None = typer.Option(
+        None, "--item-level-min", help="Retain only guild profiles at or above this average item level."),
+    item_level_max: float | None = typer.Option(
+        None, "--item-level-max", help="Retain only guild profiles at or below this average item level."),
+    encounter: list[str] | None = typer.Option(
+        None, "--encounter", help="Retain only guild profiles containing the given encounter name. Repeatable."),
 ) -> None:
     if metric not in {"progress", "faction", "item_level_average", "world_rank", "encounter"}:
         _fail(ctx, "invalid_query", "--metric must be one of: progress, faction, item_level_average, world_rank, encounter")
@@ -444,12 +459,18 @@ def threshold_pve_guild_profiles(
     limit: int = typer.Option(10, "--limit", min=1, max=25, help="Maximum top leaderboard guild profiles to fetch."),
     nearest: int = typer.Option(5, "--nearest", min=1, max=25, help="Maximum nearby guild profiles to include in the threshold estimate."),
     faction: list[str] | None = typer.Option(None, "--faction", help="Retain only guild profiles matching the given faction. Repeatable."),
-    difficulty: list[str] | None = typer.Option(None, "--difficulty", help="Retain only guild profiles matching the given progression difficulty. Repeatable."),
-    world_rank_min: int | None = typer.Option(None, "--world-rank-min", min=1, help="Retain only guild profiles at or above this world rank."),
-    world_rank_max: int | None = typer.Option(None, "--world-rank-max", min=1, help="Retain only guild profiles at or below this world rank."),
-    item_level_min: float | None = typer.Option(None, "--item-level-min", help="Retain only guild profiles at or above this average item level."),
-    item_level_max: float | None = typer.Option(None, "--item-level-max", help="Retain only guild profiles at or below this average item level."),
-    encounter: list[str] | None = typer.Option(None, "--encounter", help="Retain only guild profiles containing the given encounter name. Repeatable."),
+    difficulty: list[str] | None = typer.Option(
+        None, "--difficulty", help="Retain only guild profiles matching the given progression difficulty. Repeatable."),
+    world_rank_min: int | None = typer.Option(None, "--world-rank-min", min=1,
+                                              help="Retain only guild profiles at or above this world rank."),
+    world_rank_max: int | None = typer.Option(None, "--world-rank-max", min=1,
+                                              help="Retain only guild profiles at or below this world rank."),
+    item_level_min: float | None = typer.Option(
+        None, "--item-level-min", help="Retain only guild profiles at or above this average item level."),
+    item_level_max: float | None = typer.Option(
+        None, "--item-level-max", help="Retain only guild profiles at or below this average item level."),
+    encounter: list[str] | None = typer.Option(
+        None, "--encounter", help="Retain only guild profiles containing the given encounter name. Repeatable."),
 ) -> None:
     if metric not in {"world_rank", "item_level_average"}:
         _fail(ctx, "invalid_query", "--metric must be one of: world_rank, item_level_average")

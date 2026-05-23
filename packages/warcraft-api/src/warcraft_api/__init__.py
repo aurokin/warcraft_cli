@@ -1,2 +1,1 @@
 """Shared Warcraft API utilities."""
-

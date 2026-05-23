@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
 import re
+from datetime import UTC, datetime
 from statistics import median
 from typing import Any
 
@@ -20,7 +20,7 @@ def _parse_comment_timestamp(value: Any) -> datetime | None:
 def _parse_boundary_timestamp(value: str, *, end_of_day: bool) -> datetime:
     parsed = datetime.fromisoformat(value)
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
+        parsed = parsed.replace(tzinfo=UTC)
     if end_of_day and len(value.strip()) <= 10:
         return parsed.replace(hour=23, minute=59, second=59, microsecond=999999)
     return parsed
@@ -53,12 +53,10 @@ def filter_raw_comments(
                 continue
 
         timestamp = _parse_comment_timestamp(row.get("date"))
-        if boundary_from is not None:
-            if timestamp is None or timestamp < boundary_from:
-                continue
-        if boundary_to is not None:
-            if timestamp is None or timestamp > boundary_to:
-                continue
+        if boundary_from is not None and (timestamp is None or timestamp < boundary_from):
+            continue
+        if boundary_to is not None and (timestamp is None or timestamp > boundary_to):
+            continue
 
         if keyword_needles:
             body = str(row.get("body") or "").lower()
@@ -183,7 +181,7 @@ def build_comment_insights(
         comments,
         key=lambda row: (
             int(row.get("rating") or 0) if isinstance(row.get("rating"), int) else 0,
-            _parse_comment_timestamp(row.get("date")) or datetime.min.replace(tzinfo=timezone.utc),
+            _parse_comment_timestamp(row.get("date")) or datetime.min.replace(tzinfo=UTC),
         ),
     )
     insights.append(
@@ -214,7 +212,7 @@ def build_comment_insights(
             )
         )
 
-    newest = max(comments, key=lambda row: _parse_comment_timestamp(row.get("date")) or datetime.min.replace(tzinfo=timezone.utc))
+    newest = max(comments, key=lambda row: _parse_comment_timestamp(row.get("date")) or datetime.min.replace(tzinfo=UTC))
     if newest.get("id") not in seen_ids:
         insights.append(
             _insight_row(
@@ -236,7 +234,7 @@ def build_comments_intelligence(
     filters: dict[str, Any],
     insight_limit: int,
 ) -> dict[str, Any]:
-    sampled_at = datetime.now(timezone.utc)
+    sampled_at = datetime.now(UTC)
     return {
         "sample": {
             "embedded_total": embedded_total,

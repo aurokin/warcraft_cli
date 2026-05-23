@@ -8,9 +8,10 @@ import sys
 import trace
 from pathlib import Path
 
+import pytest
+
 os.environ.setdefault("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "1")
 
-import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_INCLUDE_DIRS = (
@@ -84,7 +85,7 @@ def _print_summary(rows: list[tuple[str, int, int, float]]) -> None:
     print("Coverage fallback: stdlib trace")
     print(f"Overall: {total_hits}/{total_lines} lines -> {overall_percent:.1f}%")
     print("lines   cov%   path")
-    for path, line_count, hit_count, percent in rows:
+    for path, line_count, _hit_count, percent in rows:
         print(f"{line_count:5d}   {percent:5.1f}%   {path}")
 
 

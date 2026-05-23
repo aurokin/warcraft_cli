@@ -32,7 +32,10 @@ def _structured_search_hint(query: str) -> dict[str, Any]:
         "count": 0,
         "results": [],
         "truncated": False,
-        "message": "WowProgress search expects structured queries like 'us illidan Liquid', 'guild us illidan Liquid', or 'character us illidan Imonthegcd'.",
+        "message": (
+            "WowProgress search expects structured queries like 'us illidan Liquid', "
+            "'guild us illidan Liquid', or 'character us illidan Imonthegcd'."
+        ),
         "suggested_queries": [
             "us illidan Liquid",
             "guild us illidan Liquid",
@@ -460,7 +463,7 @@ def _search_candidates(ctx: typer.Context, query: str, *, limit: int) -> dict[st
             )
     except WowProgressClientError as exc:
         _handle_client_error(ctx, exc)
-        raise AssertionError("unreachable")
+        raise AssertionError("unreachable") from None
     message = None if candidates else "WowProgress did not resolve that structured guild or character query."
     payload = _search_payload(
         query=query,
@@ -474,7 +477,10 @@ def _search_candidates(ctx: typer.Context, query: str, *, limit: int) -> dict[st
         payload["excluded_terms"] = excluded_terms
         payload["normalization_hint"] = {
             "code": "excluded_query_terms",
-            "message": "Trailing query terms were excluded to keep the WowProgress lookup on a supported structured guild or character route.",
+            "message": (
+                "Trailing query terms were excluded to keep the WowProgress lookup "
+                "on a supported structured guild or character route."
+            ),
         }
     if query_candidates:
         payload["normalized_candidates"] = [
@@ -486,4 +492,3 @@ def _search_candidates(ctx: typer.Context, query: str, *, limit: int) -> dict[st
             for realm, name in query_candidates
         ]
     return payload
-

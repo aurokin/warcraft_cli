@@ -6,8 +6,6 @@ import time
 
 import httpx
 import pytest
-
-from tests.fixtures.wowhead_canaries import PARSER_CANARIES, ParserCanary
 from wowhead_cli.expansion_profiles import build_entity_url, resolve_expansion
 from wowhead_cli.page_parser import (
     extract_comments_dataset,
@@ -15,6 +13,8 @@ from wowhead_cli.page_parser import (
     parse_page_meta_json,
     parse_page_metadata,
 )
+
+from tests.fixtures.wowhead_canaries import PARSER_CANARIES, ParserCanary
 
 pytestmark = pytest.mark.live
 

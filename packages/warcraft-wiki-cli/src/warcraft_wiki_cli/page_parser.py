@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from dataclasses import dataclass
-from html import unescape
 from typing import Any
 from urllib.parse import quote, unquote, urljoin, urlparse
 

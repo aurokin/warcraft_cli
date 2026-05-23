@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
 from simc_cli.main import app as simc_app
 from simc_cli.repo import RepoPaths
 from typer.testing import CliRunner
@@ -112,7 +111,8 @@ def test_simc_checkout_reports_managed_checkout(monkeypatch, tmp_path: Path) -> 
 
     monkeypatch.setattr(
         "simc_cli.main.checkout_managed_repo",
-        lambda: type("Checkout", (), {"status": "cloned", "root": managed, "repo_url": "https://github.com/simulationcraft/simc.git", "commands": [["git", "clone"]]})(),
+        lambda: type("Checkout", (), {"status": "cloned", "root": managed,
+                     "repo_url": "https://github.com/simulationcraft/simc.git", "commands": [["git", "clone"]]})(),
     )
     monkeypatch.setattr(
         "simc_cli.main._repo_resolution",
@@ -140,7 +140,8 @@ def test_simc_checkout_reports_managed_checkout(monkeypatch, tmp_path: Path) -> 
 def test_simc_version_uses_binary_probe(monkeypatch) -> None:
     monkeypatch.setattr(
         "simc_cli.main.binary_version",
-        lambda paths: type("VersionInfo", (), {"binary_path": Path("/tmp/simc"), "available": True, "version_line": "SimulationCraft 1201", "returncode": 1})(),
+        lambda paths: type("VersionInfo", (), {"binary_path": Path("/tmp/simc"), "available": True,
+                           "version_line": "SimulationCraft 1201", "returncode": 1})(),
     )
     result = runner.invoke(simc_app, ["version"])
     assert result.exit_code == 0
@@ -652,7 +653,7 @@ def test_simc_identify_build_rejects_build_packet_with_override_inputs(tmp_path:
     assert result.exit_code == 1
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "invalid_build_packet"
-    assert "Cannot combine --build-packet with other explicit build input options." == payload["error"]["message"]
+    assert payload["error"]["message"] == "Cannot combine --build-packet with other explicit build input options."
 
 
 def test_simc_identify_build_rejects_buildless_wowhead_talent_calc_url() -> None:
@@ -815,7 +816,8 @@ def test_simc_validate_talent_transport_rejects_build_packet_with_talent_rows(tm
 def test_simc_validate_talent_transport_rejects_out_without_build_packet() -> None:
     result = runner.invoke(
         simc_app,
-        ["validate-talent-transport", "--actor-class", "druid", "--spec", "balance", "--talent-row", "103324:82244:1", "--out", "./tmp/validated-packet.json"],
+        ["validate-talent-transport", "--actor-class", "druid", "--spec", "balance",
+            "--talent-row", "103324:82244:1", "--out", "./tmp/validated-packet.json"],
     )
     assert result.exit_code == 1
     payload = json.loads(result.stderr)
@@ -1645,7 +1647,8 @@ def test_simc_describe_build_summarizes_st_and_aoe(monkeypatch, tmp_path: Path) 
     )()
 
     def _resolve_prune_context(_paths, _apl, _values, targets):
-        context = type("Context", (), {"targets": targets, "enabled_talents": {"void_ray", "world_killer"}, "disabled_talents": set(), "talent_sources": {"void_ray": "spec"}})()
+        context = type("Context", (), {"targets": targets, "enabled_talents": {"void_ray", "world_killer"},
+                       "disabled_talents": set(), "talent_sources": {"void_ray": "spec"}})()
         return context, resolution
 
     monkeypatch.setattr("simc_cli.main._resolve_prune_context", _resolve_prune_context)
@@ -1658,12 +1661,16 @@ def test_simc_describe_build_summarizes_st_and_aoe(monkeypatch, tmp_path: Path) 
                 "dispatch_certainty": "guaranteed",
                 "branch_summary": {"start_list": start_list, "guaranteed_dispatch": "melee_combo", "guaranteed_dispatch_line": 4, "guaranteed_dispatch_reason": "no condition", "dead_branches": [], "unresolved_branches": [], "shadowed_lines": []},
                 "active_priority": [
-                    {"action": "metamorphosis", "line_no": 1, "target_list": None, "status": "guaranteed", "reason": "no condition", "text": "metamorphosis"},
-                    {"action": "void_ray", "line_no": 2, "target_list": None, "status": "possible", "reason": "depends on runtime-only state", "text": "void_ray"},
-                    {"action": "collapsing_star", "line_no": 3, "target_list": None, "status": "guaranteed", "reason": "no condition", "text": "collapsing_star"},
+                    {"action": "metamorphosis", "line_no": 1, "target_list": None,
+                        "status": "guaranteed", "reason": "no condition", "text": "metamorphosis"},
+                    {"action": "void_ray", "line_no": 2, "target_list": None, "status": "possible",
+                        "reason": "depends on runtime-only state", "text": "void_ray"},
+                    {"action": "collapsing_star", "line_no": 3, "target_list": None,
+                        "status": "guaranteed", "reason": "no condition", "text": "collapsing_star"},
                 ],
                 "inactive_talent_branches": [
-                    {"action": "the_hunt", "line_no": 7, "target_list": None, "status": "dead", "reason": "talent.the_hunt.enabled is false", "text": "the_hunt"}
+                    {"action": "the_hunt", "line_no": 7, "target_list": None, "status": "dead",
+                        "reason": "talent.the_hunt.enabled is false", "text": "the_hunt"}
                 ],
                 "explained_intent": {"setup": ["setup"], "helpers": [], "burst": ["burst"], "priorities": ["priority"]},
                 "runtime_sensitive": [{"action": "void_ray", "line_no": 2, "target_list": None, "status": "possible", "reason": "depends on runtime-only state", "text": "void_ray"}],
@@ -1674,12 +1681,16 @@ def test_simc_describe_build_summarizes_st_and_aoe(monkeypatch, tmp_path: Path) 
             "dispatch_certainty": "guaranteed",
             "branch_summary": {"start_list": start_list, "guaranteed_dispatch": "aoe", "guaranteed_dispatch_line": 8, "guaranteed_dispatch_reason": "active_enemies>1", "dead_branches": [], "unresolved_branches": [], "shadowed_lines": []},
             "active_priority": [
-                {"action": "metamorphosis", "line_no": 1, "target_list": None, "status": "guaranteed", "reason": "no condition", "text": "metamorphosis"},
-                {"action": "soul_immolation", "line_no": 5, "target_list": None, "status": "guaranteed", "reason": "no condition", "text": "soul_immolation"},
-                {"action": "collapsing_star", "line_no": 6, "target_list": None, "status": "guaranteed", "reason": "no condition", "text": "collapsing_star"},
+                {"action": "metamorphosis", "line_no": 1, "target_list": None,
+                    "status": "guaranteed", "reason": "no condition", "text": "metamorphosis"},
+                {"action": "soul_immolation", "line_no": 5, "target_list": None,
+                    "status": "guaranteed", "reason": "no condition", "text": "soul_immolation"},
+                {"action": "collapsing_star", "line_no": 6, "target_list": None,
+                    "status": "guaranteed", "reason": "no condition", "text": "collapsing_star"},
             ],
             "inactive_talent_branches": [
-                {"action": "devourers_bite", "line_no": 9, "target_list": None, "status": "dead", "reason": "talent.devourers_bite.enabled is false", "text": "devourers_bite"}
+                {"action": "devourers_bite", "line_no": 9, "target_list": None, "status": "dead",
+                    "reason": "talent.devourers_bite.enabled is false", "text": "devourers_bite"}
             ],
             "explained_intent": {"setup": ["setup"], "helpers": [], "burst": ["burst"], "priorities": ["priority"]},
             "runtime_sensitive": [],
@@ -1841,7 +1852,8 @@ def test_simc_describe_build_uses_validated_split_packet_identity(monkeypatch, t
 
     def fake_resolve_prune_context(_paths, _apl, option_values, targets):  # noqa: ANN001
         assert option_values["build_packet"] == str(packet_path)
-        context = type("Context", (), {"targets": targets, "enabled_talents": {"mind_blast"}, "disabled_talents": set(), "talent_sources": {}})()
+        context = type("Context", (), {"targets": targets, "enabled_talents": {
+                       "mind_blast"}, "disabled_talents": set(), "talent_sources": {}})()
         return context, resolution
 
     monkeypatch.setattr("simc_cli.main._resolve_prune_context", fake_resolve_prune_context)
@@ -2684,7 +2696,8 @@ def test_simc_build_harness_compare_report_and_verify_clean(monkeypatch, tmp_pat
     )
     build_result = runner.invoke(
         simc_app,
-        ["build-harness", "--actor-class", "warlock", "--spec", "demonology", "--talents", "ABC123", "--out", str(harness_path), "--line", "hero_talents=2"],
+        ["build-harness", "--actor-class", "warlock", "--spec", "demonology", "--talents",
+            "ABC123", "--out", str(harness_path), "--line", "hero_talents=2"],
     )
     assert build_result.exit_code == 0
     build_payload = json.loads(build_result.stdout)
@@ -2727,7 +2740,8 @@ def test_simc_build_harness_compare_report_and_verify_clean(monkeypatch, tmp_pat
     monkeypatch.setattr("simc_cli.main.compare_apl_variants", lambda *args, **kwargs: compare_payload)
     compare_result = runner.invoke(
         simc_app,
-        ["compare-apls", str(harness_path), "--base-apl", str(apl), "--variant", f"wowhead={apl}", "--report-out", str(tmp_path / "report.json")],
+        ["compare-apls", str(harness_path), "--base-apl", str(apl), "--variant",
+         f"wowhead={apl}", "--report-out", str(tmp_path / "report.json")],
     )
     assert compare_result.exit_code == 0
     compare_stdout = json.loads(compare_result.stdout)
@@ -2846,7 +2860,8 @@ def test_simc_apl_prune_branch_trace_and_intent(monkeypatch, tmp_path: Path) -> 
     monkeypatch.setattr(
         "simc_cli.main._resolve_prune_context",
         lambda paths, apl_path, option_values, targets: (
-            type("Context", (), {"enabled_talents": {"mass_disintegrate"}, "disabled_talents": set(), "targets": targets, "talent_sources": {"mass_disintegrate": "spec"}})(),
+            type("Context", (), {"enabled_talents": {"mass_disintegrate"}, "disabled_talents": set(),
+                 "targets": targets, "talent_sources": {"mass_disintegrate": "spec"}})(),
             type("Resolution", (), {"actor_class": "evoker", "spec": "devastation", "source_notes": ["decoded via /tmp/simc"]})(),
         ),
     )
@@ -3117,11 +3132,13 @@ def test_simc_run_surfaces_failure_with_preview(monkeypatch, tmp_path: Path) -> 
     profile.write_text('monk="example"\n')
     monkeypatch.setattr(
         "simc_cli.main.run_profile",
-        lambda paths, profile_path, simc_args: type("Result", (), {"command": [str(paths.build_simc), str(profile_path)], "returncode": 1, "stdout": "", "stderr": "bad profile\n"})(),
+        lambda paths, profile_path, simc_args: type("Result", (), {"command": [str(paths.build_simc), str(
+            profile_path)], "returncode": 1, "stdout": "", "stderr": "bad profile\n"})(),
     )
     monkeypatch.setattr(
         "simc_cli.main.binary_version",
-        lambda paths: type("VersionInfo", (), {"binary_path": paths.build_simc, "available": True, "version_line": "SimulationCraft 1201", "returncode": 1})(),
+        lambda paths: type("VersionInfo", (), {"binary_path": paths.build_simc, "available": True,
+                           "version_line": "SimulationCraft 1201", "returncode": 1})(),
     )
     result = runner.invoke(simc_app, ["run", str(profile)])
     assert result.exit_code == 1
@@ -3260,7 +3277,8 @@ def test_simc_sim_reads_stdin_and_respects_overrides(monkeypatch, tmp_path: Path
     monkeypatch.setattr("simc_cli.main.run_profile", _run)
     result = runner.invoke(
         simc_app,
-        ["sim", "-", "--preset", "high-accuracy", "--iterations", "6000", "--max-time", "180", "--fight-style", "HecticAddCleave", "--targets", "5", "--threads", "4", "--vary-combat-length", "0.1"],
+        ["sim", "-", "--preset", "high-accuracy", "--iterations", "6000", "--max-time", "180", "--fight-style",
+            "HecticAddCleave", "--targets", "5", "--threads", "4", "--vary-combat-length", "0.1"],
         input='paladin="stdin-example"\n',
     )
     assert result.exit_code == 0

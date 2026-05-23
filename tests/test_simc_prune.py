@@ -30,7 +30,8 @@ def test_explanation_includes_talent_source() -> None:
         talent_sources={"mass_disintegrate": "hero"},
     )
     outcome = evaluate_condition_outcome("active_enemies>=3&talent.mass_disintegrate", context)
-    assert explanation_for_condition("active_enemies>=3&talent.mass_disintegrate", context, outcome) == "active_enemies=3; talent.mass_disintegrate=true [hero]"
+    assert explanation_for_condition("active_enemies>=3&talent.mass_disintegrate", context,
+                                     outcome) == "active_enemies=3; talent.mass_disintegrate=true [hero]"
 
 
 def test_prune_entries_marks_unconditional_action_as_eligible() -> None:

@@ -4,7 +4,6 @@ import json
 
 import pytest
 from typer.testing import CliRunner
-
 from warcraft_cli.main import app
 
 runner = CliRunner()

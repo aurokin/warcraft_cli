@@ -7,7 +7,6 @@ from typing import Any
 
 import pytest
 from typer.testing import CliRunner
-
 from wowhead_cli.expansion_profiles import resolve_expansion
 from wowhead_cli.main import app
 

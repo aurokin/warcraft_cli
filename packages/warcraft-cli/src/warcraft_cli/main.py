@@ -1392,7 +1392,8 @@ def search(
     query: str = typer.Argument(..., help="Search across available providers."),
     limit: int = typer.Option(5, "--limit", min=1, max=50, help="Maximum provider-local results to request."),
     compact: bool = typer.Option(False, "--compact", help="Return a smaller wrapper payload with compact candidates."),
-    ranking_debug: bool = typer.Option(False, "--ranking-debug", help="Include compact wrapper ranking summaries for the returned candidates."),
+    ranking_debug: bool = typer.Option(
+        False, "--ranking-debug", help="Include compact wrapper ranking summaries for the returned candidates."),
     expansion_debug: bool = typer.Option(
         False,
         "--expansion-debug",
@@ -1546,7 +1547,8 @@ def resolve(
         "providers": [] if compact else providers,
     }
     if ranking_debug:
-        payload["ranking_debug"] = [compact_resolve_match(row[1]) for row in resolved_candidates[:limit] if compact_resolve_match(row[1]) is not None]
+        payload["ranking_debug"] = [compact_resolve_match(row[1])
+                                    for row in resolved_candidates[:limit] if compact_resolve_match(row[1]) is not None]
     if expansion_debug:
         payload["expansion_debug"] = expansion_support_snapshot(requested_expansion=requested_expansion)
     _emit(
@@ -2023,7 +2025,10 @@ def talent_packet(
     ctx: typer.Context,
     source: str = typer.Argument(
         ...,
-        help="Explicit Wowhead talent-calc ref with build code, explicit Warcraft Logs report ref with --actor-id, or a talent transport packet JSON path.",
+        help=(
+            "Explicit Wowhead talent-calc ref with build code, explicit Warcraft Logs report ref "
+            "with --actor-id, or a talent transport packet JSON path."
+        ),
     ),
     actor_id: int | None = typer.Option(None, "--actor-id", help="Required for Warcraft Logs report sources; report-local actor ID."),
     fight_id: int | None = typer.Option(None, "--fight-id", help="Optional explicit fight id for Warcraft Logs report sources."),
@@ -2088,7 +2093,10 @@ def talent_describe(
     ctx: typer.Context,
     source: str = typer.Argument(
         ...,
-        help="Explicit Wowhead talent-calc ref with build code, explicit Warcraft Logs report ref with --actor-id, or a talent transport packet JSON path.",
+        help=(
+            "Explicit Wowhead talent-calc ref with build code, explicit Warcraft Logs report ref "
+            "with --actor-id, or a talent transport packet JSON path."
+        ),
     ),
     actor_id: int | None = typer.Option(None, "--actor-id", help="Required for Warcraft Logs report sources; report-local actor ID."),
     fight_id: int | None = typer.Option(None, "--fight-id", help="Optional explicit fight id for Warcraft Logs report sources."),

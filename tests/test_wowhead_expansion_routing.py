@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 import json
-from unittest.mock import MagicMock
 
 from typer.testing import CliRunner
-
 from wowhead_cli.expansion_profiles import detect_expansion_from_url, parse_entity_from_wowhead_url
 from wowhead_cli.main import app
 

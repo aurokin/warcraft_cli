@@ -177,7 +177,7 @@ def _parse_guild_encounters(table: Tag) -> list[dict[str, Any]]:
     data_rows = [cells for cells in rows[1:] if len(cells) >= 7]
     if not data_rows:
         direct_cells = [child for child in table.children if isinstance(child, Tag) and child.name == "td" and child.get("colspan") is None]
-        data_rows = [direct_cells[index : index + 7] for index in range(0, len(direct_cells), 7) if len(direct_cells[index : index + 7]) == 7]
+        data_rows = [direct_cells[index: index + 7] for index in range(0, len(direct_cells), 7) if len(direct_cells[index: index + 7]) == 7]
     encounters: list[dict[str, Any]] = []
     for cells in data_rows:
         detail_link = cells[0].find("a", href=True)
@@ -221,7 +221,8 @@ def parse_guild_page(html: str, *, url: str, region: str, realm: str, name: str)
     realm_link = _find_link_after(heading, r"^/pve/")
     armory_link = _find_link_after(heading, r"(battle\.net|worldofwarcraft\.com)")
     history_links = _guild_history_links(soup, current_url=url)
-    progress_table = next((table for table in soup.find_all("table") if "Progress:" in table.get_text(" ", strip=True) and "Item Level:" in table.get_text(" ", strip=True)), None)
+    progress_table = next((table for table in soup.find_all("table") if "Progress:" in table.get_text(
+        " ", strip=True) and "Item Level:" in table.get_text(" ", strip=True)), None)
     progress, item_level = _parse_progress_table(progress_table) if progress_table is not None else ({}, {})
     current_history = next((link for link in history_links if link.get("current")), None)
     if current_history is not None:

@@ -34,7 +34,23 @@ app = typer.Typer(add_completion=False, help="Method.gg guide CLI.")
 
 SEARCH_TYPE_NAME = "Guide"
 FAMILY_QUERY_KEYWORDS = {
-    "profession_guide": {"profession", "professions", "alchemy", "blacksmithing", "enchanting", "engineering", "herbalism", "inscription", "jewelcrafting", "leatherworking", "mining", "skinning", "tailoring", "fishing", "cooking"},
+    "profession_guide": {
+        "profession",
+        "professions",
+        "alchemy",
+        "blacksmithing",
+        "enchanting",
+        "engineering",
+        "herbalism",
+        "inscription",
+        "jewelcrafting",
+        "leatherworking",
+        "mining",
+        "skinning",
+        "tailoring",
+        "fishing",
+        "cooking",
+    },
     "delve_guide": {"delve", "delves"},
     "reputation_guide": {"renown", "reputation"},
 }
@@ -87,7 +103,7 @@ def _client(ctx: typer.Context) -> MethodClient:
         return MethodClient()
     except ValueError as exc:
         _fail(ctx, "invalid_cache_config", str(exc))
-        raise AssertionError("unreachable")
+        raise AssertionError("unreachable") from None
 
 
 def _guide_ref_parts_or_fail(ctx: typer.Context, guide_ref: str) -> tuple[str, str | None]:
@@ -95,7 +111,7 @@ def _guide_ref_parts_or_fail(ctx: typer.Context, guide_ref: str) -> tuple[str, s
         return guide_ref_parts(guide_ref)
     except ValueError as exc:
         _fail(ctx, "invalid_guide_ref", str(exc))
-        raise AssertionError("unreachable")
+        raise AssertionError("unreachable") from None
 
 
 def _fetch_guide_page_or_fail(ctx: typer.Context, client: MethodClient, guide_ref: str) -> dict[str, Any]:
@@ -103,7 +119,7 @@ def _fetch_guide_page_or_fail(ctx: typer.Context, client: MethodClient, guide_re
         payload = client.fetch_guide_page(guide_ref)
     except ValueError as exc:
         _fail(ctx, "invalid_guide_ref", str(exc))
-        raise AssertionError("unreachable")
+        raise AssertionError("unreachable") from None
     if payload["guide"].get("supported_surface") is False:
         _fail(
             ctx,
@@ -114,7 +130,7 @@ def _fetch_guide_page_or_fail(ctx: typer.Context, client: MethodClient, guide_re
                 content_family=payload["guide"].get("content_family"),
             ),
         )
-        raise AssertionError("unreachable")
+        raise AssertionError("unreachable") from None
     return payload
 
 
@@ -123,7 +139,7 @@ def _fetch_guide_pages_or_fail(ctx: typer.Context, client: MethodClient, guide_r
         payload = _fetch_guide_pages(client, guide_ref)
     except ValueError as exc:
         _fail(ctx, "invalid_guide_ref", str(exc))
-        raise AssertionError("unreachable")
+        raise AssertionError("unreachable") from None
     if payload["guide"].get("supported_surface") is False:
         _fail(
             ctx,
@@ -134,7 +150,7 @@ def _fetch_guide_pages_or_fail(ctx: typer.Context, client: MethodClient, guide_r
                 content_family=payload["guide"].get("content_family"),
             ),
         )
-        raise AssertionError("unreachable")
+        raise AssertionError("unreachable") from None
     return payload
 
 
@@ -192,6 +208,7 @@ def _unsupported_scope_hint(query: str) -> dict[str, Any] | None:
                 "message": config["message"],
             }
     return None
+
 
 def _search_results(client: MethodClient, query: str, *, limit: int) -> tuple[str, list[dict[str, Any]], int]:
     normalized_query = _normalize_query(query)
@@ -285,6 +302,7 @@ def _build_guide_summary(page_payload: dict[str, Any]) -> dict[str, Any]:
             "page": guide["page_url"],
         },
     }
+
 
 def _fetch_guide_pages(client: MethodClient, guide_ref: str) -> dict[str, Any]:
     initial = client.fetch_guide_page(guide_ref)
@@ -496,7 +514,10 @@ def guide_query(
     kind: list[str] = typer.Option(
         [],
         "--kind",
-        help="Restrict search kinds. Repeat or pass comma-separated values from: sections, navigation, linked_entities, build_references, analysis_surfaces.",
+        help=(
+            "Restrict search kinds. Repeat or pass comma-separated values from: "
+            "sections, navigation, linked_entities, build_references, analysis_surfaces."
+        ),
     ),
     section_title: str | None = typer.Option(
         None,

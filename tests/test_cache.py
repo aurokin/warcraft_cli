@@ -4,7 +4,6 @@ import json
 from pathlib import Path
 
 import pytest
-
 from wowhead_cli.cache import (
     CacheTTLConfig,
     FileCacheStore,
@@ -140,7 +139,6 @@ def test_repair_file_cache_prunes_legacy_unscoped_entries(tmp_path: Path, monkey
     assert namespaced_path.exists() is True
 
 
-
 def test_clear_file_cache_supports_namespace_and_expired_only(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -161,7 +159,6 @@ def test_clear_file_cache_supports_namespace_and_expired_only(
     assert summary["totals"] == {"active": 2, "expired": 0, "invalid": 0, "total": 2}
     assert summary["namespaces"]["entity_response"] == {"active": 1, "expired": 0, "invalid": 0, "total": 1}
     assert summary["namespaces"]["search_suggestions"] == {"total": 1, "active": 1, "expired": 0, "invalid": 0}
-
 
 
 def test_inspect_and_clear_redis_cache_support_prefix_and_namespaces() -> None:
@@ -245,7 +242,6 @@ def test_inspect_and_clear_redis_cache_support_prefix_and_namespaces() -> None:
         "wowhead_cli:entity_response:b",
         "wowhead_cli:entity_response:c",
     ]
-
 
 
 def test_load_cache_settings_from_env_supports_redis_and_ttl_overrides(

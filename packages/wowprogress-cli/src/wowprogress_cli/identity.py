@@ -96,4 +96,3 @@ def _leaderboard_entry_snapshot(entry: dict[str, Any]) -> dict[str, Any]:
         "boss_count": progress["boss_count"],
         "difficulty": progress["difficulty"],
     }
-

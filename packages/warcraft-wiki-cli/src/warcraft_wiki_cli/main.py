@@ -1,13 +1,11 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
-import re
 from typing import Any
 
-import httpx
 import typer
-
 from warcraft_content.article_bundle import (
     default_article_export_dir,
     load_article_bundle,
@@ -20,6 +18,7 @@ from warcraft_content.article_discovery import (
     article_search_payload,
 )
 from warcraft_core.output import emit
+
 from warcraft_wiki_cli.client import WarcraftWikiAPIError, WarcraftWikiClient, load_warcraft_wiki_cache_settings_from_env
 from warcraft_wiki_cli.page_parser import article_slug, classify_article_family, normalize_article_ref
 
@@ -81,7 +80,7 @@ def _client(ctx: typer.Context) -> WarcraftWikiClient:
         return WarcraftWikiClient()
     except ValueError as exc:
         _fail(ctx, "invalid_cache_config", str(exc))
-        raise AssertionError("unreachable")
+        raise AssertionError("unreachable") from None
 
 
 def _handle_api_error(ctx: typer.Context, exc: WarcraftWikiAPIError) -> None:
@@ -103,7 +102,8 @@ def _normalize_query(query: str) -> tuple[str, list[str]]:
         if head in QUERY_FAMILY_HINT_TERMS:
             excluded_terms.append(kept_terms.pop(0))
             continue
-        if head in CONDITIONAL_FAMILY_HINT_TERMS and len(kept_terms) >= 2 and not (head in {"zone", "zones"} and kept_terms[1] == "scaling"):
+        if head in CONDITIONAL_FAMILY_HINT_TERMS and len(kept_terms) >= 2 and not (
+                head in {"zone", "zones"} and kept_terms[1] == "scaling"):
             excluded_terms.append(kept_terms.pop(0))
             continue
         break

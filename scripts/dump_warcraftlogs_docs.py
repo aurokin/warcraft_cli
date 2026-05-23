@@ -8,7 +8,6 @@ import subprocess
 from pathlib import Path
 from urllib.parse import urlparse
 
-
 DEFAULT_OUT_DIR = Path("research/warcraftlogs-docs")
 DEFAULT_SITE = "retail"
 SITE_BASE_URLS = {
@@ -83,7 +82,8 @@ def _page_dump() -> dict[str, object]:
     output = _run_playwright(
         [
             "eval",
-            "() => ({title: document.title, url: location.href, text: document.body.innerText, html_lang: document.documentElement.lang || null})",
+            "() => ({title: document.title, url: location.href, text: document.body.innerText, "
+            "html_lang: document.documentElement.lang || null})",
         ]
     )
     payload = _extract_result_json(output)
@@ -97,7 +97,9 @@ def _graphql_links(base_url: str) -> list[str]:
     output = _run_playwright(
         [
             "eval",
-            f"() => Array.from(document.querySelectorAll(\"a[href]\"), a => a.href).filter(h => h.startsWith(\"{graphql_prefix}\")).filter((h, i, arr) => arr.indexOf(h) === i)",
+            "() => Array.from(document.querySelectorAll(\"a[href]\"), a => a.href)"
+            f".filter(h => h.startsWith(\"{graphql_prefix}\"))"
+            ".filter((h, i, arr) => arr.indexOf(h) === i)",
         ]
     )
     payload = _extract_result_json(output)

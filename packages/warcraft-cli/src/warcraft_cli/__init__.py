@@ -1,2 +1,1 @@
 """warcraft_cli package."""
-

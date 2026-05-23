@@ -781,13 +781,15 @@ def test_identify_build_probes_supported_specs(tmp_path: Path) -> None:
     )
     build_spec = BuildSpec(talents="ABC123", source_kind="wow_talent_export")
 
-    with patch("simc_cli.build_input.supported_specs", return_value=[("monk", "mistweaver"), ("demonhunter", "devourer")]):
-        with patch("simc_cli.build_input.decode_build") as mocked_decode:
-            mocked_decode.side_effect = [
-                RuntimeError("failed"),
-                type("Resolution", (), {"enabled_talents": {"void_ray"}})(),
-            ]
-            identified, identity = identify_build(repo, build_spec)
+    with (
+        patch("simc_cli.build_input.supported_specs", return_value=[("monk", "mistweaver"), ("demonhunter", "devourer")]),
+        patch("simc_cli.build_input.decode_build") as mocked_decode,
+    ):
+        mocked_decode.side_effect = [
+            RuntimeError("failed"),
+            type("Resolution", (), {"enabled_talents": {"void_ray"}})(),
+        ]
+        identified, identity = identify_build(repo, build_spec)
 
     assert identified.actor_class == "demonhunter"
     assert identified.spec == "devourer"
@@ -816,13 +818,15 @@ def test_identify_build_probes_simc_split_talent_packets_instead_of_trusting_pac
         source_notes=["talent transport packet"],
     )
 
-    with patch("simc_cli.build_input.supported_specs", return_value=[("monk", "mistweaver"), ("druid", "balance")]):
-        with patch("simc_cli.build_input.decode_build") as mocked_decode:
-            mocked_decode.side_effect = [
-                RuntimeError("failed"),
-                type("Resolution", (), {"enabled_talents": {"stellar_flare"}})(),
-            ]
-            identified, identity = identify_build(repo, build_spec)
+    with (
+        patch("simc_cli.build_input.supported_specs", return_value=[("monk", "mistweaver"), ("druid", "balance")]),
+        patch("simc_cli.build_input.decode_build") as mocked_decode,
+    ):
+        mocked_decode.side_effect = [
+            RuntimeError("failed"),
+            type("Resolution", (), {"enabled_talents": {"stellar_flare"}})(),
+        ]
+        identified, identity = identify_build(repo, build_spec)
 
     assert identified.actor_class == "druid"
     assert identified.spec == "balance"
@@ -843,9 +847,11 @@ def test_identify_build_returns_none_when_probe_finds_no_matches(tmp_path: Path)
     )
     build_spec = BuildSpec(talents="ABC123", source_kind="wow_talent_export")
 
-    with patch("simc_cli.build_input.supported_specs", return_value=[("monk", "mistweaver"), ("demonhunter", "devourer")]):
-        with patch("simc_cli.build_input.decode_build", side_effect=RuntimeError("failed")):
-            identified, identity = identify_build(repo, build_spec)
+    with (
+        patch("simc_cli.build_input.supported_specs", return_value=[("monk", "mistweaver"), ("demonhunter", "devourer")]),
+        patch("simc_cli.build_input.decode_build", side_effect=RuntimeError("failed")),
+    ):
+        identified, identity = identify_build(repo, build_spec)
 
     assert identified.actor_class is None
     assert identified.spec is None
@@ -865,13 +871,15 @@ def test_identify_build_reports_ambiguous_probe_matches(tmp_path: Path) -> None:
     )
     build_spec = BuildSpec(talents="ABC123", source_kind="wow_talent_export")
 
-    with patch("simc_cli.build_input.supported_specs", return_value=[("monk", "mistweaver"), ("demonhunter", "devourer")]):
-        with patch("simc_cli.build_input.decode_build") as mocked_decode:
-            mocked_decode.side_effect = [
-                type("Resolution", (), {"enabled_talents": {"ancient_teachings"}})(),
-                type("Resolution", (), {"enabled_talents": {"void_ray"}})(),
-            ]
-            identified, identity = identify_build(repo, build_spec)
+    with (
+        patch("simc_cli.build_input.supported_specs", return_value=[("monk", "mistweaver"), ("demonhunter", "devourer")]),
+        patch("simc_cli.build_input.decode_build") as mocked_decode,
+    ):
+        mocked_decode.side_effect = [
+            type("Resolution", (), {"enabled_talents": {"ancient_teachings"}})(),
+            type("Resolution", (), {"enabled_talents": {"void_ray"}})(),
+        ]
+        identified, identity = identify_build(repo, build_spec)
 
     assert identified.actor_class is None
     assert identified.spec is None
@@ -899,9 +907,11 @@ def test_identify_build_does_not_echo_unverified_packet_identity_when_probe_fail
         transport_status="exact",
     )
 
-    with patch("simc_cli.build_input.supported_specs", return_value=[("priest", "shadow"), ("druid", "balance")]):
-        with patch("simc_cli.build_input.decode_build", side_effect=RuntimeError("failed")):
-            identified, identity = identify_build(repo, build_spec)
+    with (
+        patch("simc_cli.build_input.supported_specs", return_value=[("priest", "shadow"), ("druid", "balance")]),
+        patch("simc_cli.build_input.decode_build", side_effect=RuntimeError("failed")),
+    ):
+        identified, identity = identify_build(repo, build_spec)
 
     assert identified.actor_class is None
     assert identified.spec is None
@@ -931,12 +941,14 @@ def test_identify_build_preserves_apl_inferred_scope_for_wow_export_probe(tmp_pa
         transport_status="exact",
     )
 
-    with patch("simc_cli.build_input.supported_specs", return_value=[("priest", "shadow"), ("druid", "balance")]):
-        with patch("simc_cli.build_input.decode_build") as mocked_decode:
-            mocked_decode.side_effect = [
-                type("Resolution", (), {"enabled_talents": {"mind_blast"}})(),
-            ]
-            identified, identity = identify_build(repo, build_spec)
+    with (
+        patch("simc_cli.build_input.supported_specs", return_value=[("priest", "shadow"), ("druid", "balance")]),
+        patch("simc_cli.build_input.decode_build") as mocked_decode,
+    ):
+        mocked_decode.side_effect = [
+            type("Resolution", (), {"enabled_talents": {"mind_blast"}})(),
+        ]
+        identified, identity = identify_build(repo, build_spec)
 
     assert identified.actor_class == "priest"
     assert identified.spec == "shadow"

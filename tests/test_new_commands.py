@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
 import json
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import httpx
 import typer
 from typer.testing import CliRunner
-
+from wowhead_cli.expansion_profiles import resolve_expansion
 from wowhead_cli.main import (
     _comparison_entity_record,
     _comparison_field_diffs,
@@ -18,13 +18,13 @@ from wowhead_cli.main import (
     _exact_match_score,
     _filtered_guide_category_rows,
     _guide_comment_matches,
+    _guide_export_manifest,
     _guide_gatherer_matches,
     _guide_linked_entity_matches,
     _guide_navigation_matches,
-    _guide_export_manifest,
     _guide_query_top_matches,
-    _guide_section_matches,
     _guide_row_matches_filters,
+    _guide_section_matches,
     _guides_payload,
     _is_filtered_high_confidence,
     _is_high_confidence_exact_match,
@@ -39,7 +39,6 @@ from wowhead_cli.main import (
     _write_guide_export_assets,
     app,
 )
-from wowhead_cli.expansion_profiles import resolve_expansion
 from wowhead_cli.wowhead_client import WowheadClient
 
 runner = CliRunner()
@@ -370,6 +369,7 @@ SAMPLE_BLUE_TOPIC_HTML = """
 </html>
 """
 
+
 def _write_bundle_fixture(
     root: Path,
     *,
@@ -386,7 +386,7 @@ def _write_bundle_fixture(
 ) -> Path:
     bundle_dir = root / dir_name
     bundle_dir.mkdir(parents=True)
-    now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    now = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
     sections = sections or []
     analysis_surfaces = analysis_surfaces or []
@@ -459,7 +459,6 @@ def _write_bundle_fixture(
     }
     (bundle_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
     return bundle_dir
-
 
 
 def test_entity_page_command_returns_links_with_citations(monkeypatch) -> None:
@@ -1319,7 +1318,6 @@ def test_search_reranks_exact_name_match_ahead_of_noisy_popular_result(monkeypat
     assert payload["results"][0]["ranking"]["score"] > payload["results"][1]["ranking"]["score"]
 
 
-
 def test_search_type_hint_promotes_guides_for_guide_queries(monkeypatch) -> None:
     def fake_search(self, query: str):  # noqa: ANN001
         return {
@@ -1349,7 +1347,6 @@ def test_search_type_hint_promotes_guides_for_guide_queries(monkeypatch) -> None
     payload = json.loads(result.stdout)
     assert [row["entity_type"] for row in payload["results"]] == ["guide", "item"]
     assert "type_hint" in payload["results"][0]["ranking"]["match_reasons"]
-
 
 
 def test_search_pet_result_includes_pet_url(monkeypatch) -> None:
@@ -1393,7 +1390,6 @@ def test_resolve_returns_high_confidence_match_and_next_command(monkeypatch) -> 
     assert payload["fallback_search_command"] is None
 
 
-
 def test_resolve_falls_back_to_search_when_query_is_ambiguous(monkeypatch) -> None:
     def fake_search(self, query: str):  # noqa: ANN001
         return {
@@ -1415,7 +1411,6 @@ def test_resolve_falls_back_to_search_when_query_is_ambiguous(monkeypatch) -> No
     assert payload["fallback_search_command"] == "wowhead search frost"
     assert payload["count"] == 2
     assert len(payload["candidates"]) == 2
-
 
 
 def test_resolve_entity_type_filter_can_make_guide_resolution_confident(monkeypatch) -> None:
@@ -1444,6 +1439,7 @@ def test_resolve_entity_type_filter_can_make_guide_resolution_confident(monkeypa
     assert payload["confidence"] == "high"
     assert payload["match"]["entity_type"] == "guide"
     assert payload["next_command"] == "wowhead --expansion wotlk guide 3143"
+
 
 def test_search_results_include_follow_up_guidance(monkeypatch) -> None:
     def fake_search(self, query: str):  # noqa: ANN001
@@ -1692,8 +1688,8 @@ def test_guide_row_matches_filters_and_filtered_rows() -> None:
     assert _guide_row_matches_filters(
         normalized_row,
         selected_authors=("khazakdk",),
-        parsed_updated_after=datetime(2026, 2, 1, tzinfo=timezone.utc),
-        parsed_updated_before=datetime(2026, 3, 1, tzinfo=timezone.utc),
+        parsed_updated_after=datetime(2026, 2, 1, tzinfo=UTC),
+        parsed_updated_before=datetime(2026, 3, 1, tzinfo=UTC),
         patch_min=120000,
         patch_max=120001,
     ) is True
@@ -1714,8 +1710,8 @@ def test_guide_row_matches_filters_and_filtered_rows() -> None:
         ],
         query_text="death knight",
         selected_authors=("khazakdk",),
-        parsed_updated_after=datetime(2026, 2, 1, tzinfo=timezone.utc),
-        parsed_updated_before=datetime(2026, 3, 1, tzinfo=timezone.utc),
+        parsed_updated_after=datetime(2026, 2, 1, tzinfo=UTC),
+        parsed_updated_before=datetime(2026, 3, 1, tzinfo=UTC),
         patch_min=120000,
         patch_max=120001,
         sort_by="relevance",
@@ -1734,7 +1730,7 @@ def test_guides_payload_builds_expected_filters_and_facets() -> None:
         query="death knight",
         sort_by="relevance",
         selected_authors=("khazakdk",),
-        parsed_updated_after=datetime(2026, 2, 1, tzinfo=timezone.utc),
+        parsed_updated_after=datetime(2026, 2, 1, tzinfo=UTC),
         parsed_updated_before=None,
         patch_min=120001,
         patch_max=None,
@@ -1844,7 +1840,6 @@ def test_write_guide_export_assets_and_manifest_helpers(tmp_path: Path) -> None:
     assert manifest["hydration"]["source_counts"]["entity_cache"] == 1
 
 
-
 def test_resolve_comment_intent_uses_comment_surface_without_hurting_match_quality(monkeypatch) -> None:
     def fake_search(self, query: str):  # noqa: ANN001
         assert query == "fairbreeze favors"
@@ -1868,7 +1863,6 @@ def test_resolve_comment_intent_uses_comment_surface_without_hurting_match_quali
     assert payload["next_command"] == "wowhead comments quest 86739"
 
 
-
 def test_resolve_relation_intent_uses_entity_page_surface(monkeypatch) -> None:
     def fake_search(self, query: str):  # noqa: ANN001
         assert query == "thunderfury"
@@ -1890,7 +1884,6 @@ def test_resolve_relation_intent_uses_entity_page_surface(monkeypatch) -> None:
     assert payload["match"]["entity_type"] == "item"
     assert payload["match"]["follow_up"]["recommended_surface"] == "entity-page"
     assert payload["next_command"] == "wowhead entity-page item 19019"
-
 
 
 def test_resolve_guide_relation_intent_uses_guide_full(monkeypatch) -> None:
@@ -1918,7 +1911,6 @@ def test_resolve_guide_relation_intent_uses_guide_full(monkeypatch) -> None:
     assert payload["match"]["entity_type"] == "guide"
     assert payload["match"]["follow_up"]["recommended_surface"] == "guide-full"
     assert payload["next_command"] == "wowhead guide-full 3143"
-
 
 
 def test_guide_command_supports_id_lookup(monkeypatch) -> None:
@@ -2256,7 +2248,7 @@ def test_guide_bundle_refresh_skips_fresh_bundle_with_default_max_age(tmp_path: 
     root = tmp_path / "wowhead_exports"
     bundle_dir = root / "guide-3143-frost"
     bundle_dir.mkdir(parents=True)
-    now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    now = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
     (bundle_dir / "manifest.json").write_text(
         json.dumps(
@@ -2353,7 +2345,7 @@ def test_guide_bundle_refresh_updates_stale_bundle_and_reuses_manifest_settings(
 
     manifest_path = export_dir / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    stale = (datetime.now(timezone.utc) - timedelta(hours=48)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    stale = (datetime.now(UTC) - timedelta(hours=48)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     manifest["exported_at"] = stale
     manifest["guide_fetched_at"] = stale
     manifest["hydration"]["hydrated_at"] = stale
@@ -2424,8 +2416,8 @@ def test_guide_bundle_refresh_rehydrates_only_stale_hydrated_entities(
 
     tooltip_calls.clear()
 
-    stale = (datetime.now(timezone.utc) - timedelta(hours=48)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-    fresh = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    stale = (datetime.now(UTC) - timedelta(hours=48)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    fresh = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
     manifest_path = export_dir / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -2690,8 +2682,8 @@ def test_guide_bundle_list_discovers_exported_bundles(tmp_path) -> None:
     corpus_a.mkdir(parents=True)
     corpus_b.mkdir(parents=True)
     junk.mkdir(parents=True)
-    fresh = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-    stale = (datetime.now(timezone.utc) - timedelta(hours=48)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    fresh = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    stale = (datetime.now(UTC) - timedelta(hours=48)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
     (corpus_a / "manifest.json").write_text(
         json.dumps(
@@ -2815,7 +2807,7 @@ def test_guide_bundle_list_uses_root_index_when_available(monkeypatch, tmp_path:
     root = tmp_path / "wowhead_exports"
     bundle_dir = root / "guide-3143-frost"
     bundle_dir.mkdir(parents=True)
-    now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    now = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
     (bundle_dir / "manifest.json").write_text(
         json.dumps({"guide": {"id": 3143}}),
@@ -2886,7 +2878,7 @@ def test_guide_bundle_search_returns_ranked_matches_and_follow_up_commands(tmp_p
     arcane = root / "guide-42-arcane"
     frost.mkdir(parents=True)
     arcane.mkdir(parents=True)
-    now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    now = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
     for bundle_dir, guide_id, title, expansion in [
         (frost, 3143, "Frost Death Knight DPS Guide - Midnight", "retail"),
@@ -2955,7 +2947,7 @@ def test_guide_bundle_search_uses_root_index_when_available(monkeypatch, tmp_pat
     root = tmp_path / "wowhead_exports"
     bundle_dir = root / "guide-3143-frost"
     bundle_dir.mkdir(parents=True)
-    now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    now = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
     (bundle_dir / "manifest.json").write_text(json.dumps({"guide": {"id": 3143}}), encoding="utf-8")
     (root / "index.json").write_text(
@@ -3088,7 +3080,6 @@ def test_guide_bundle_query_returns_cross_bundle_matches(tmp_path: Path) -> None
     assert payload["top"][0]["bundle"]["guide_id"] == 3143
 
 
-
 def test_guide_bundle_query_uses_filters_and_root_index(monkeypatch, tmp_path: Path) -> None:
     root = tmp_path / "wowhead_exports"
     frost = _write_bundle_fixture(
@@ -3125,7 +3116,7 @@ def test_guide_bundle_query_uses_filters_and_root_index(monkeypatch, tmp_path: P
             }
         ],
     )
-    now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    now = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     (root / "index.json").write_text(
         json.dumps(
             {
@@ -3229,7 +3220,6 @@ def test_guide_bundle_query_uses_filters_and_root_index(monkeypatch, tmp_path: P
     assert set(payload["top"][0]["sources"]) == {"href", "gatherer"}
 
 
-
 def test_guide_bundle_inspect_reports_counts_and_index_status(tmp_path: Path) -> None:
     root = tmp_path / "wowhead_exports"
     bundle_dir = _write_bundle_fixture(
@@ -3326,7 +3316,6 @@ def test_guide_bundle_inspect_reports_counts_and_index_status(tmp_path: Path) ->
     assert summary_payload["count_mismatches"] == []
 
 
-
 def test_guide_bundle_inspect_reports_missing_files_and_invalid_index(tmp_path: Path) -> None:
     root = tmp_path / "wowhead_exports"
     bundle_dir = _write_bundle_fixture(
@@ -3358,7 +3347,6 @@ def test_guide_bundle_inspect_reports_missing_files_and_invalid_index(tmp_path: 
     assert payload["index"]["valid"] is False
 
 
-
 def test_guide_bundle_index_rebuild_rewrites_invalid_index(tmp_path: Path) -> None:
     root = tmp_path / "wowhead_exports"
     _write_bundle_fixture(
@@ -3386,7 +3374,6 @@ def test_guide_bundle_index_rebuild_rewrites_invalid_index(tmp_path: Path) -> No
     rebuilt_index = json.loads((root / "index.json").read_text(encoding="utf-8"))
     assert rebuilt_index["count"] == 2
     assert {row["guide_id"] for row in rebuilt_index["bundles"]} == {42, 3143}
-
 
 
 def test_entity_respects_expansion_flag(monkeypatch) -> None:
