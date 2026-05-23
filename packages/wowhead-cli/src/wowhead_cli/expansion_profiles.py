@@ -124,7 +124,7 @@ for _profile in _PROFILES:
         _LEGACY_HOST_TO_PROFILE[_host] = _profile
 
 _ENTITY_PATH_RE = re.compile(
-    r"""^/(?:(?:[a-z]{2}(?:-[A-Z]{2})?|[a-z0-9-]+)/)?(?P<etype>[a-z-]+)=(?P<eid>\d+)""",
+    r"""^/(?:(?:[a-z]{2}(?:-[A-Z]{2})?|[a-z0-9-]+)/)*(?P<etype>[a-z-]+)=(?P<eid>\d+)""",
 )
 
 
@@ -203,18 +203,15 @@ def normalize_wowhead_url(raw: str) -> str | None:
     return text
 
 
+def _is_wowhead_host(hostname: str) -> bool:
+    host = hostname.lower()
+    return host == "wowhead.com" or host.endswith(".wowhead.com")
+
+
 def _profile_for_hostname(hostname: str) -> ExpansionProfile | None:
     host = hostname.lower()
-    if host in _LEGACY_HOST_TO_PROFILE:
+    if host in _LEGACY_HOST_TO_PROFILE and host not in {"wowhead.com", "www.wowhead.com"}:
         return _LEGACY_HOST_TO_PROFILE[host]
-    if host == "nether.wowhead.com":
-        return _BY_KEY["retail"]
-    if host in {"wowhead.com", "www.wowhead.com"}:
-        return _BY_KEY["retail"]
-    if host.endswith(".wowhead.com"):
-        legacy_host = host
-        if legacy_host in _LEGACY_HOST_TO_PROFILE:
-            return _LEGACY_HOST_TO_PROFILE[legacy_host]
     return None
 
 
@@ -236,11 +233,11 @@ def detect_expansion_from_url(raw: str) -> ExpansionProfile | None:
         return None
     parsed = urlparse(normalized)
     host = (parsed.hostname or "").lower()
-    if not host.endswith("wowhead.com") and host != "wowhead.com":
+    if not _is_wowhead_host(host):
         return None
 
     legacy = _profile_for_hostname(host)
-    if legacy is not None and host not in {"wowhead.com", "www.wowhead.com", "nether.wowhead.com"}:
+    if legacy is not None:
         return legacy
 
     return _profile_for_path_prefix(parsed.path)

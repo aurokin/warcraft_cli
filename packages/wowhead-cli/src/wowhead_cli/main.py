@@ -4740,8 +4740,9 @@ def search(
         help="Maximum number of results to return.",
     ),
 ) -> None:
-    cfg = _apply_url_expansion(ctx, query)
-    client = WowheadClient(expansion=cfg.expansion)
+    _apply_url_expansion(ctx, query)
+    client = _client(ctx)
+    cfg = _cfg(ctx)
     search_query_text = _search_query_for_ranking(query)
     try:
         response = client.search_suggestions(search_query_text)
@@ -6721,9 +6722,26 @@ def compare(
         _fail(ctx, "invalid_argument", str(exc))
         return
 
+    cfg = _cfg(ctx)
+    if not cfg.expansion_explicit:
+        detected_keys: list[str] = []
+        for token in entities:
+            profile = detect_expansion_from_url(token)
+            if profile is not None:
+                detected_keys.append(profile.key)
+        unique_keys = sorted(set(detected_keys))
+        if len(unique_keys) > 1:
+            _fail(
+                ctx,
+                "invalid_argument",
+                "Compare references span multiple expansions; pass explicit --expansion.",
+            )
+            return
+        if len(unique_keys) == 1:
+            _apply_url_expansion(ctx, entities[0])
+
     parsed_refs: list[tuple[str, int, str]] = []
     for token in entities:
-        _apply_url_expansion(ctx, token)
         try:
             entity_type, entity_id = _parse_entity_ref_token(token)
         except ValueError as exc:

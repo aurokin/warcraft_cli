@@ -20,6 +20,32 @@ def test_detect_expansion_from_url_path_and_legacy_subdomain() -> None:
 
 def test_parse_entity_from_wowhead_url() -> None:
     assert parse_entity_from_wowhead_url("https://www.wowhead.com/wotlk/item=19019/thunderfury") == ("item", 19019)
+    assert parse_entity_from_wowhead_url("https://www.wowhead.com/wotlk/fr/item=19019/thunderfury") == ("item", 19019)
+
+
+def test_detect_expansion_rejects_non_wowhead_hosts() -> None:
+    assert detect_expansion_from_url("https://evilwowhead.com/item=19019") is None
+
+
+def test_compare_rejects_mixed_expansion_urls(monkeypatch) -> None:
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.tooltip", lambda *args, **kwargs: {"name": "A"})
+    monkeypatch.setattr(
+        "wowhead_cli.main._fetch_entity_page",
+        lambda *args, **kwargs: ("<html></html>", {"canonical_url": "https://example.test", "title": "T"}),
+    )
+    result = runner.invoke(
+        app,
+        [
+            "compare",
+            "https://www.wowhead.com/wotlk/item=1",
+            "https://www.wowhead.com/classic/item=2",
+            "--comment-sample",
+            "0",
+            "--max-links-per-entity",
+            "1",
+        ],
+    )
+    assert result.exit_code != 0
 
 
 def test_search_auto_detects_expansion_from_entity_url(monkeypatch) -> None:
