@@ -5,25 +5,27 @@ import json
 import pytest
 from typer.testing import CliRunner
 
-from wowprogress_cli.client import WowProgressClient, WowProgressClientError
-from wowprogress_cli.main import (
-    _candidate_from_probe,
+from warcraft_core.analytics import numeric_summary as _numeric_summary
+from wowprogress_cli.analytics import (
     _guild_profile_distribution_values,
-    _distinct_result_kinds,
     _guild_profile_matches_filters,
     _guild_profile_sample_summary,
     _guild_profile_threshold_estimate,
+    _normalized_encounter_values,
+    _sample_summary,
+)
+from wowprogress_cli.client import WowProgressClient, WowProgressClientError
+from wowprogress_cli.main import app as wowprogress_app
+from wowprogress_cli.search import (
+    _candidate_from_probe,
+    _distinct_result_kinds,
     _has_follow_up_command,
     _is_ambiguous_untyped_result,
     _meets_score_confidence,
-    _numeric_summary,
-    _normalized_encounter_values,
     _resolve_confidence_label,
     _resolve_is_confident,
-    _sample_summary,
     _score_match,
     _sorted_search_candidates,
-    app as wowprogress_app,
 )
 
 runner = CliRunner()

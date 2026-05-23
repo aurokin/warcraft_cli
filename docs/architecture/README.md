@@ -13,6 +13,8 @@ Progressive index for repo structure, shared design, and completed work. Sequenc
 - [AUTH_ARCHITECTURE.md](AUTH_ARCHITECTURE.md) — shared auth classes, rollout status, provider posture
 - [EXPANSION_FILTERING.md](EXPANSION_FILTERING.md) — wrapper `--expansion` behavior and provider modes
 - [LINTING_AND_COMPLEXITY.md](LINTING_AND_COMPLEXITY.md) — static quality tooling and refactor signals
+- [CONTRACT_TEST_CATALOG.md](CONTRACT_TEST_CATALOG.md) — pinned parser/matrix/schema contract inputs
+- [FIXTURE_MAINTENANCE.md](FIXTURE_MAINTENANCE.md) — how to refresh recorded and live fixtures
 
 ## Completed Work (History)
 

@@ -35,6 +35,10 @@ LIVE_TEST_ENV_BY_FILE = {
     "test_wowprogress_live.py": "WOWPROGRESS_LIVE_TESTS",
 }
 
+TESTS_DIR = str(ROOT / "tests")
+if TESTS_DIR not in sys.path:
+    sys.path.insert(0, TESTS_DIR)
+
 for package_src in reversed(PACKAGE_SRC_DIRS):
     path_str = str(package_src)
     if path_str not in sys.path:

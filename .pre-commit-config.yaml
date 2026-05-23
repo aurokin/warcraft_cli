@@ -1,0 +1,31 @@
+# Optional local hooks — install with: make pre-commit-install
+# CI enforces the same checks via .github/workflows/ci.yml
+
+minimum_pre_commit_version: "3.5.0"
+
+default_language_version:
+  python: python3.12
+
+repos:
+  - repo: local
+    hooks:
+      - id: ruff-shared-packages
+        name: ruff (shared packages)
+        entry: make lint
+        language: system
+        pass_filenames: false
+      - id: mypy-shared-packages
+        name: mypy (shared packages)
+        entry: make typecheck
+        language: system
+        pass_filenames: false
+      - id: import-linter-boundaries
+        name: import-linter boundaries
+        entry: make lint-boundaries
+        language: system
+        pass_filenames: false
+      - id: compileall-packages
+        name: compileall packages
+        entry: make fmt-check
+        language: system
+        pass_filenames: false

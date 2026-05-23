@@ -26,8 +26,9 @@ LIVE_TEST_ENV := \
 	WARCRAFT_WRAPPER_LIVE_TESTS=1
 
 IMPORT_LINTER := $(VENV)/bin/lint-imports
+PRE_COMMIT := $(VENV)/bin/pre-commit
 
-.PHONY: dev-deploy dev-deploy-no-link worktree-env test test-live test-live-matrix fmt-check lint lint-boundaries lint-all complexity typecheck coverage deadcode run release
+.PHONY: dev-deploy dev-deploy-no-link worktree-env test test-fast test-live test-live-matrix check fmt-check lint lint-boundaries lint-all complexity typecheck coverage deadcode pre-commit-install benchmark-cache fixture-refresh-hints run release
 
 dev-deploy:
 	./scripts/dev_deploy.sh
@@ -40,6 +41,11 @@ worktree-env:
 
 test:
 	$(PYTEST) -q
+
+test-fast:
+	$(PYTEST) -q -m "not live"
+
+check: lint typecheck lint-boundaries test-fast
 
 test-live:
 	$(LIVE_TEST_ENV) $(PYTEST) -q -m live
@@ -86,6 +92,15 @@ coverage:
 
 deadcode:
 	$(VULTURE) packages scripts tests --min-confidence 80
+
+pre-commit-install:
+	$(PRE_COMMIT) install
+
+benchmark-cache:
+	$(PYTHON) scripts/benchmark_wowhead_cache.py $(ARGS)
+
+fixture-refresh-hints:
+	$(PYTHON) scripts/fixture_refresh_hints.py $(ARGS)
 
 run:
 	@if [ -z "$(ARGS)" ]; then \

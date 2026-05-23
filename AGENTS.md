@@ -4,8 +4,10 @@
 - Use `pip` with the local venv.
 - Install: `pip install -e '.[dev]'`
 - Redis extras: `pip install -e '.[dev,redis]'`
-- Fast tests: `pytest -q`
+- Fast tests: `pytest -q` or `make test-fast` (excludes `live` marker)
+- Local CI parity: `make check` (lint + typecheck + boundaries + test-fast)
 - Live tests: `make test-live`
+- Optional pre-commit: `make pre-commit-install`
 - Provider live tests: set the suite flag and pass the matching file, for example `WOWHEAD_LIVE_TESTS=1 pytest -q -m live tests/test_live_integration.py tests/test_live_endpoint_contracts.py`
 - Branch-local deploy: `make dev-deploy-no-link`
 - Deliberate relink of `~/.local/bin` to the current checkout: `make dev-deploy`

@@ -10,6 +10,7 @@ Add user-visible changes to `[Unreleased]` in the same PR that ships them. See [
 
 ### Added
 
+- Developer tooling (AUR-366): `make check`, `make test-fast`, CI non-live unit tests, optional `.pre-commit-config.yaml`, `make benchmark-cache`, `make fixture-refresh-hints`, and architecture docs for contract fixtures ([CONTRACT_TEST_CATALOG.md](docs/architecture/CONTRACT_TEST_CATALOG.md), [FIXTURE_MAINTENANCE.md](docs/architecture/FIXTURE_MAINTENANCE.md)).
 - Operational boundaries doc: [docs/foundation/OPERATIONAL_BOUNDARIES.md](docs/foundation/OPERATIONAL_BOUNDARIES.md) (rate limits, User-Agent posture, robots/respectful use, log redaction, failure-mode playbook).
 - Wowhead additive normalization for `item` on `entity` and `entity-page`: `schema_version`, `normalized.item` with per-field provenance (`docs/wowhead/NORMALIZATION.md`).
 - Wowhead URL expansion detection: `detect_expansion_from_url`, `--url` on `entity` / `entity-page`, auto-detect on `search` when `--expansion` is omitted, `expansion-detect` command, and `expansion_url_policy` in `wowhead doctor`.
@@ -19,7 +20,7 @@ Add user-visible changes to `[Unreleased]` in the same PR that ships them. See [
 - Wowhead `--citation-pack` and shared `warcraft_core.citations` builder for deterministic source URLs and per-claim anchors.
 - Wowhead `linked-graph` command for depth-limited linked-entity traversal with `--relation` type filters.
 - Wowhead `comments` intelligence: date/author/keyword/reply filters plus `--insights` for freshness, near-duplicate detection, and cited deterministic insights.
-- GitHub Actions CI (`.github/workflows/ci.yml`) runs `make lint` and `make typecheck` on pull requests and pushes to `main`.
+- GitHub Actions CI (`.github/workflows/ci.yml`) runs `make lint`, `make typecheck`, `make lint-boundaries`, and `make test-fast` on pull requests and pushes to `main`.
 - Warcraft Logs live command matrix: `tests/fixtures/live_matrix.py`, `tests/test_live_command_matrix.py`, and `make test-live-matrix` (see `docs/warcraftlogs/LIVE_MATRIX.md`).
 - Wrapper expansion policy review: `warcraft-wiki` is `fixed` to `retail` (phase 3 complete; `simc` remains deferred).
 - Wowhead contract hardening: `wowhead doctor`, parser canaries (`tests/fixtures/wowhead_canaries.py`), schema snapshot tests, and expanded `.github/workflows/live-wowhead-contracts.yml` matrix jobs.
