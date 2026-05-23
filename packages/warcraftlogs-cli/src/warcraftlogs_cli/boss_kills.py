@@ -246,6 +246,7 @@ def _scan_finished_reports_for_boss_kills(
                 continue
             if _kill_duration_in_bounds(fight, kill_time_min=kill_time_min, kill_time_max=kill_time_max) is None:
                 continue
+            matched_boss_kill_count += 1
             matching_players = _matching_players_for_fight(
                 client,
                 report=report,
@@ -255,7 +256,6 @@ def _scan_finished_reports_for_boss_kills(
             )
             if spec_name and matching_players is None:
                 continue
-            matched_boss_kill_count += 1
             boss_kills.append(
                 boss_kill_row(
                     report=report,
