@@ -1,27 +1,35 @@
 # Linting And Complexity
 
-Static quality tooling and how to use it for refactors. Open phase 2–3 work: Linear [AUR-366](https://linear.app/aurokin/issue/AUR-366/monorepo-tooling-ci-and-developer-experience).
+Static quality tooling and how to use it for refactors. DX slice (AUR-366) is complete; phase 2–3 refactors remain optional backlog.
 
 ## Commands
 
 | Target | Purpose |
 |--------|---------|
+| `make check` | Lint + typecheck + import boundaries + `test-fast` (local pre-push) |
 | `make lint` | Ruff on shared packages (`warcraft-core`, `warcraft-api`, `warcraft-content`) — **must pass** |
 | `make lint-all` | Full-repo Ruff report (~500+ issues) — report-only, does not fail |
+| `make lint-boundaries` | `import-linter` package boundaries (`.importlinter`) |
+| `make test-fast` | `pytest -q -m "not live"` — default CI unit suite |
 | `make complexity` | Radon CC + maintainability index on `packages/` |
 | `make typecheck` | Mypy on shared packages |
 | `make coverage` | Shared-package coverage (`pytest-cov` or stdlib `trace` fallback) |
 | `make deadcode` | Vulture report (review before deleting) |
+| `make pre-commit-install` | Install optional local hooks (`.pre-commit-config.yaml`) |
+| `make benchmark-cache` | Cold vs warm Wowhead search timing (`scripts/benchmark_wowhead_cache.py`) |
+| `make fixture-refresh-hints` | URLs/commands to refresh `expansion_recorded.json` |
 
 ## Rollout Status
 
 | Phase | Status |
 |-------|--------|
 | 1 — Tooling targets in Makefile | **Complete** |
-| 1b — CI: `make lint` + `make typecheck` on PRs (`.github/workflows/ci.yml`) | **Complete** |
-| 1c — Import boundaries: `make lint-boundaries` (`import-linter`, `.importlinter`) | **Complete** |
-| 2 — Backlog from reports (complexity, duplication, dead code, boundaries) | **Open** — track in Linear |
-| 3 — Refactor slices per provider | **Open** |
+| 1b — CI: lint + typecheck + boundaries + non-live tests | **Complete** |
+| 1c — Pre-commit, `make check`, fixture catalog/maintenance docs, cache benchmark | **Complete** |
+| 2 — Backlog from reports (complexity, duplication, dead code, full-repo Ruff) | **Open** — optional |
+| 3 — Refactor slices per provider | **Open** — optional |
+
+Contract fixtures: [CONTRACT_TEST_CATALOG.md](CONTRACT_TEST_CATALOG.md), [FIXTURE_MAINTENANCE.md](FIXTURE_MAINTENANCE.md).
 
 ## Phase 2 Backlog (From Reports)
 
