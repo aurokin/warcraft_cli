@@ -40,7 +40,14 @@ from wowhead_cli.entity_types import (
     RESOLVE_ENTITY_TYPES,
     SEARCH_TYPE_HINTS,
 )
-from wowhead_cli.expansion_profiles import ExpansionProfile, list_profiles, resolve_expansion
+from wowhead_cli.expansion_profiles import (
+    ExpansionProfile,
+    detect_expansion_from_url,
+    expansion_url_policy_issues,
+    list_profiles,
+    parse_entity_from_wowhead_url,
+    resolve_expansion,
+)
 from wowhead_cli.output import emit
 from wowhead_cli.page_parser import (
     clean_markup_text,
@@ -87,6 +94,8 @@ EXPANSION_PREFIXES = frozenset(
 class RuntimeConfig:
     stream: bool = False
     expansion: ExpansionProfile = field(default_factory=lambda: resolve_expansion(None))
+    expansion_explicit: bool = False
+    expansion_source: str = "default"
     normalize_canonical_to_expansion: bool = False
     output: OutputOptions = field(default_factory=OutputOptions)
     diagnostics: DiagnosticsCollector = field(default_factory=DiagnosticsCollector)
@@ -416,9 +425,48 @@ def _build_tooltip_from_page_metadata(metadata: dict[str, str | None]) -> tuple[
     return title if isinstance(title, str) and title.strip() else None, payload
 
 
+def _apply_url_expansion(ctx: typer.Context, url_hint: str | None) -> RuntimeConfig:
+    cfg = _cfg(ctx)
+    if cfg.expansion_explicit or not url_hint:
+        return cfg
+    detected = detect_expansion_from_url(url_hint)
+    if detected is None or detected.key == cfg.expansion.key:
+        return cfg
+    updated = RuntimeConfig(
+        stream=cfg.stream,
+        expansion=detected,
+        expansion_explicit=cfg.expansion_explicit,
+        expansion_source="url",
+        normalize_canonical_to_expansion=cfg.normalize_canonical_to_expansion,
+        output=cfg.output,
+        diagnostics=cfg.diagnostics,
+        citation_pack=cfg.citation_pack,
+    )
+    ctx.obj = updated
+    return updated
+
+
+def _search_query_for_ranking(query: str) -> str:
+    entity = parse_entity_from_wowhead_url(query)
+    if entity is not None:
+        entity_type, entity_id = entity
+        return f"{entity_type} {entity_id}"
+    return _search_ranking_query(query)
+
+
+def _expansion_policy_notes(cfg: RuntimeConfig, *urls: str | None) -> list[str]:
+    notes: list[str] = []
+    for url in urls:
+        notes.extend(expansion_url_policy_issues(url, profile=cfg.expansion))
+    return notes
+
+
 def _parse_entity_ref_token(token: str) -> tuple[str, int]:
+    entity = parse_entity_from_wowhead_url(token)
+    if entity is not None:
+        return entity
     if ":" not in token:
-        raise ValueError(f"Invalid entity reference {token!r}. Expected <type>:<id>.")
+        raise ValueError(f"Invalid entity reference {token!r}. Expected <type>:<id> or a Wowhead entity URL.")
     entity_type, entity_id_raw = token.split(":", 1)
     if not entity_type:
         raise ValueError(f"Invalid entity reference {token!r}. Missing type.")
@@ -2298,6 +2346,7 @@ def _build_entity_payload(
 
     payload = {
         "expansion": cfg.expansion.key,
+        "expansion_source": cfg.expansion_source,
         "entity": {
             "type": entity_type,
             "id": entity_id,
@@ -2305,6 +2354,9 @@ def _build_entity_payload(
             "page_url": page_url,
         },
     }
+    policy_notes = _expansion_policy_notes(cfg, page_url, canonical)
+    if policy_notes:
+        payload["notes"] = policy_notes
     if tooltip_payload:
         payload["tooltip"] = tooltip_payload
     if comments_citations is not None:
@@ -4331,10 +4383,11 @@ def cli(
         "--pretty",
         help="Pretty-print JSON for human reading. Default output is compact JSON.",
     ),
-    expansion: str = typer.Option(
-        "retail",
+    expansion: str | None = typer.Option(
+        None,
         "--expansion",
-        help="Expansion profile key/alias (for example: retail, classic, tbc, wotlk, cata, mop-classic, ptr).",
+        help="Expansion profile key/alias (for example: retail, classic, tbc, wotlk, cata, mop-classic, ptr). "
+        "When omitted, defaults to retail but may auto-detect from a Wowhead URL in supported commands.",
     ),
     normalize_canonical_to_expansion: bool = typer.Option(
         False,
@@ -4380,7 +4433,14 @@ def cli(
     ),
 ) -> None:
     try:
-        expansion_profile = resolve_expansion(expansion)
+        if expansion is None:
+            expansion_profile = resolve_expansion(None)
+            expansion_explicit = False
+            expansion_source = "default"
+        else:
+            expansion_profile = resolve_expansion(expansion)
+            expansion_explicit = True
+            expansion_source = "flag"
     except ValueError as exc:
         raise typer.BadParameter(str(exc), param_hint="--expansion") from exc
     try:
@@ -4397,6 +4457,8 @@ def cli(
     ctx.obj = RuntimeConfig(
         stream=stream,
         expansion=expansion_profile,
+        expansion_explicit=expansion_explicit,
+        expansion_source=expansion_source,
         normalize_canonical_to_expansion=normalize_canonical_to_expansion,
         output=output,
         citation_pack=citation_pack,
@@ -4422,6 +4484,26 @@ def doctor(
         return
     cache_payload = _cache_settings_payload(settings)
     payload = build_doctor_payload(cfg.expansion, live=not no_live, cache=cache_payload)
+    _emit(ctx, payload)
+
+
+@app.command("expansion-detect")
+def expansion_detect(
+    ctx: typer.Context,
+    url: str = typer.Argument(..., help="Wowhead URL to inspect."),
+) -> None:
+    profile = detect_expansion_from_url(url)
+    entity = parse_entity_from_wowhead_url(url)
+    payload: dict[str, Any] = {
+        "url": url,
+        "detected_expansion": profile.key if profile is not None else None,
+        "entity": {"type": entity[0], "id": entity[1]} if entity is not None else None,
+    }
+    cfg = _cfg(ctx)
+    if profile is not None:
+        payload["matches_selected_expansion"] = profile.key == cfg.expansion.key
+        payload["selected_expansion"] = cfg.expansion.key
+        payload["selected_expansion_explicit"] = cfg.expansion_explicit
     _emit(ctx, payload)
 
 
@@ -4658,9 +4740,10 @@ def search(
         help="Maximum number of results to return.",
     ),
 ) -> None:
-    cfg = _cfg(ctx)
+    _apply_url_expansion(ctx, query)
     client = _client(ctx)
-    search_query_text = _search_ranking_query(query)
+    cfg = _cfg(ctx)
+    search_query_text = _search_query_for_ranking(query)
     try:
         response = client.search_suggestions(search_query_text)
     except httpx.HTTPStatusError as exc:
@@ -4680,10 +4763,14 @@ def search(
         "query": query,
         "search_query": search_query_text,
         "expansion": cfg.expansion.key,
+        "expansion_source": cfg.expansion_source,
         "search_url": search_url(search_query_text, expansion=cfg.expansion),
         "count": len(normalized),
         "results": normalized[:limit],
     }
+    policy_notes = _expansion_policy_notes(cfg, search_url(search_query_text, expansion=cfg.expansion))
+    if policy_notes:
+        payload["notes"] = policy_notes
     _emit(ctx, payload)
 
 
@@ -6202,6 +6289,11 @@ def entity(
     ctx: typer.Context,
     entity_type: str = typer.Argument(..., help="Wowhead entity type. Example: item, quest, npc."),
     entity_id: int = typer.Argument(..., help="Wowhead entity id."),
+    url: str | None = typer.Option(
+        None,
+        "--url",
+        help="Wowhead entity page URL. Overrides type/id and auto-selects expansion when --expansion is omitted.",
+    ),
     data_env: int | None = typer.Option(
         None,
         "--data-env",
@@ -6225,12 +6317,21 @@ def entity(
         help="Maximum linked entities to include as a lightweight preview. Set to 0 to disable.",
     ),
 ) -> None:
+    resolved_type = entity_type
+    resolved_id = entity_id
+    if url is not None:
+        _apply_url_expansion(ctx, url)
+        parsed = parse_entity_from_wowhead_url(url)
+        if parsed is None:
+            _fail(ctx, "invalid_argument", f"Could not parse entity from URL {url!r}.")
+            return
+        resolved_type, resolved_id = parsed
     client = _client(ctx)
     payload = _build_entity_payload(
         ctx,
         client,
-        entity_type=entity_type,
-        entity_id=entity_id,
+        entity_type=resolved_type,
+        entity_id=resolved_id,
         data_env=data_env,
         include_comments=include_comments,
         include_all_comments=include_all_comments,
@@ -6244,6 +6345,11 @@ def entity_page(
     ctx: typer.Context,
     entity_type: str = typer.Argument(..., help="Wowhead entity type. Example: item, quest, npc."),
     entity_id: int = typer.Argument(..., help="Wowhead entity id."),
+    url: str | None = typer.Option(
+        None,
+        "--url",
+        help="Wowhead entity page URL. Overrides type/id and auto-selects expansion when --expansion is omitted.",
+    ),
     max_links: int = typer.Option(
         200,
         "--max-links",
@@ -6257,13 +6363,22 @@ def entity_page(
         help="Include linked entities discovered from WH.Gatherer.addData payloads.",
     ),
 ) -> None:
+    resolved_type = entity_type
+    resolved_id = entity_id
+    if url is not None:
+        _apply_url_expansion(ctx, url)
+        parsed = parse_entity_from_wowhead_url(url)
+        if parsed is None:
+            _fail(ctx, "invalid_argument", f"Could not parse entity from URL {url!r}.")
+            return
+        resolved_type, resolved_id = parsed
     cfg = _cfg(ctx)
     client = _client(ctx)
     plan = _resolve_page_fetch_target(
         ctx,
         client,
-        entity_type=entity_type,
-        entity_id=entity_id,
+        entity_type=resolved_type,
+        entity_id=resolved_id,
     )
     html, metadata = _fetch_entity_page(ctx, client, plan.page_entity_type, plan.page_entity_id)
 
@@ -6294,10 +6409,11 @@ def entity_page(
 
     payload: dict[str, Any] = {
         "expansion": cfg.expansion.key,
+        "expansion_source": cfg.expansion_source,
         "normalize_canonical_to_expansion": cfg.normalize_canonical_to_expansion,
         "entity": {
-            "type": entity_type,
-            "id": entity_id,
+            "type": resolved_type,
+            "id": resolved_id,
             "page_url": canonical_url,
         },
         "page": {
@@ -6314,6 +6430,9 @@ def entity_page(
             "comments": f"{canonical_url}#comments",
         },
     }
+    policy_notes = _expansion_policy_notes(cfg, canonical_url, raw_canonical)
+    if policy_notes:
+        payload["notes"] = policy_notes
     if isinstance(page_meta_json, dict):
         payload["page_meta"] = {
             "page": page_meta_json.get("page"),
@@ -6602,6 +6721,24 @@ def compare(
     except ValueError as exc:
         _fail(ctx, "invalid_argument", str(exc))
         return
+
+    cfg = _cfg(ctx)
+    if not cfg.expansion_explicit:
+        detected_keys: list[str] = []
+        for token in entities:
+            profile = detect_expansion_from_url(token)
+            if profile is not None:
+                detected_keys.append(profile.key)
+        unique_keys = sorted(set(detected_keys))
+        if len(unique_keys) > 1:
+            _fail(
+                ctx,
+                "invalid_argument",
+                "Compare references span multiple expansions; pass explicit --expansion.",
+            )
+            return
+        if len(unique_keys) == 1:
+            _apply_url_expansion(ctx, entities[0])
 
     parsed_refs: list[tuple[str, int, str]] = []
     for token in entities:

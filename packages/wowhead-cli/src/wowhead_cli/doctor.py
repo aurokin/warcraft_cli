@@ -12,6 +12,8 @@ from wowhead_cli.expansion_profiles import (
     build_entity_url,
     build_search_suggestions_url,
     build_tooltip_url,
+    detect_expansion_from_url,
+    url_matches_expansion_profile,
 )
 from wowhead_cli.page_parser import (
     extract_comments_dataset,
@@ -134,6 +136,24 @@ def _probe_entity_page(profile: ExpansionProfile, *, timeout_seconds: float) -> 
         return _probe_result(ok=False, latency_ms=latency_ms, error=str(exc))
 
 
+def _expansion_url_policy(profile: ExpansionProfile) -> dict[str, Any]:
+    samples = [build_entity_url(profile, DOCTOR_ENTITY_TYPE, DOCTOR_ENTITY_ID)]
+    if profile.legacy_subdomains:
+        samples.append(f"https://{profile.legacy_subdomains[0]}/{DOCTOR_ENTITY_TYPE}={DOCTOR_ENTITY_ID}")
+    checks: list[dict[str, Any]] = []
+    for sample_url in samples:
+        detected = detect_expansion_from_url(sample_url)
+        checks.append(
+            {
+                "url": sample_url,
+                "detected_expansion": detected.key if detected is not None else None,
+                "matches_selected_profile": url_matches_expansion_profile(sample_url, profile),
+            }
+        )
+    ok = all(row["matches_selected_profile"] for row in checks)
+    return {"ok": ok, "checks": checks}
+
+
 def build_doctor_payload(
     profile: ExpansionProfile,
     *,
@@ -177,4 +197,5 @@ def build_doctor_payload(
         "cache": cache,
         "endpoints": endpoints,
         "failed_probes": failures,
+        "expansion_url_policy": _expansion_url_policy(profile),
     }

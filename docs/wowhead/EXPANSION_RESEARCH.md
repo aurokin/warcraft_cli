@@ -46,6 +46,15 @@ From `data.pageMeta` on entity pages:
 - Comment reply endpoint is prefix-aware:
   - `https://www.wowhead.com/<prefix>/comment/show-replies?id=<commentId>`
 
+## URL expansion detection (AUR-362)
+
+- `detect_expansion_from_url(url)` infers a profile from legacy subdomains (`classic.wowhead.com`, …) or path prefixes (`/wotlk/...`).
+- `parse_entity_from_wowhead_url(url)` extracts `(entity_type, entity_id)` from entity page URLs.
+- When `--expansion` is **omitted**, `search` auto-detects from a Wowhead URL query; `entity` / `entity-page` accept `--url` to override type/id and auto-detect expansion.
+- Explicit `--expansion <key>` always wins over URL detection.
+- Payloads may include `expansion_source` (`default`, `flag`, `url`) and `notes` when emitted URLs disagree with the selected profile.
+- `wowhead doctor` reports `expansion_url_policy` checks for built sample URLs.
+
 ## Current Implementation State
 
 - Expansion profiles are now codified in `src/wowhead_cli/expansion_profiles.py`.
