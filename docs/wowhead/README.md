@@ -4,6 +4,7 @@ Companion docs in this folder:
 - [ACCESS_METHODS.md](ACCESS_METHODS.md)
 - [CONTRACTS.md](CONTRACTS.md)
 - [EXPANSION_RESEARCH.md](EXPANSION_RESEARCH.md)
+- [NORMALIZATION.md](NORMALIZATION.md)
 
 ## Role In The Monorepo
 

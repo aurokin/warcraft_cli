@@ -40,6 +40,7 @@ from wowhead_cli.entity_types import (
     RESOLVE_ENTITY_TYPES,
     SEARCH_TYPE_HINTS,
 )
+from wowhead_cli.normalization import attach_entity_normalization, attach_entity_page_normalization
 from wowhead_cli.expansion_profiles import (
     ExpansionProfile,
     detect_expansion_from_url,
@@ -1005,6 +1006,19 @@ def _build_tooltip_summary(text: str, *, entity_name: str | None, max_chars: int
     if " " in clipped:
         clipped = clipped.rsplit(" ", 1)[0]
     return clipped.rstrip(" ,;:-") + "..."
+
+
+def _tooltip_block_for_normalization(payload: dict[str, Any]) -> dict[str, Any] | None:
+    tooltip = payload.get("tooltip")
+    if not isinstance(tooltip, dict):
+        return None
+    merged = dict(tooltip)
+    entity = payload.get("entity")
+    if isinstance(entity, dict):
+        name = entity.get("name")
+        if isinstance(name, str) and name.strip():
+            merged.setdefault("name", name.strip())
+    return merged
 
 
 def _normalize_tooltip_payload(tooltip: dict[str, Any]) -> tuple[str | None, dict[str, Any]]:
@@ -2287,7 +2301,13 @@ def _build_entity_payload(
         linked_entity_preview_limit=linked_entity_preview_limit,
     )
     if isinstance(cached_payload, dict):
-        return cached_payload
+        if "normalized" in cached_payload:
+            return cached_payload
+        return attach_entity_normalization(
+            cached_payload,
+            entity_type=entity_type,
+            tooltip=_tooltip_block_for_normalization(cached_payload),
+        )
 
     plan = _build_entity_access_plan(entity_type, entity_id)
     tooltip: dict[str, Any] = {}
@@ -2374,6 +2394,13 @@ def _build_entity_payload(
         payload["linked_entities"] = linked_entities_payload
     if comments_payload is not None:
         payload["comments"] = comments_payload
+
+    payload = attach_entity_normalization(
+        payload,
+        entity_type=entity_type,
+        tooltip=tooltip,
+        page=metadata,
+    )
 
     client.set_cached_entity_response(
         payload,
@@ -6440,6 +6467,15 @@ def entity_page(
             "available_data_envs": page_meta_json.get("availableDataEnvs"),
             "env_domain": page_meta_json.get("envDomain"),
         }
+    payload = attach_entity_page_normalization(
+        payload,
+        entity_type=resolved_type,
+        page={
+            "title": metadata.get("title"),
+            "description": metadata.get("description"),
+            "canonical_url": metadata.get("canonical_url"),
+        },
+    )
     _emit(ctx, payload)
 
 
