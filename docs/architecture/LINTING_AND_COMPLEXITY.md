@@ -27,7 +27,7 @@ Static quality tooling and how to use it for refactors. DX slice (AUR-366) is co
 | 1b — CI: lint + typecheck + boundaries + non-live tests | **Complete** |
 | 1c — Pre-commit, `make check`, fixture catalog/maintenance docs, cache benchmark | **Complete** |
 | 2 — Full-repo Ruff (`make lint` on `packages`, `tests`, `scripts`) | **Complete** |
-| 3 — Complexity refactors (ongoing; largest CLI `main.py` modules remain) | **In progress** |
+| 3 — Complexity refactors (ongoing; wowhead/simc/warcraft `main.py` remain) | **In progress** — warcraftlogs boss-kill slice shipped |
 
 Contract fixtures: [CONTRACT_TEST_CATALOG.md](CONTRACT_TEST_CATALOG.md), [FIXTURE_MAINTENANCE.md](FIXTURE_MAINTENANCE.md).
 

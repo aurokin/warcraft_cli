@@ -9,7 +9,6 @@ import shlex
 import sys
 import time
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
@@ -37,6 +36,21 @@ from warcraft_core.output import emit
 from warcraft_core.paths import provider_state_path
 from warcraft_core.wow_normalization import normalize_region
 
+from warcraftlogs_cli.boss_kills import (
+    boss_kills_payload as _boss_kills_payload,
+)
+from warcraftlogs_cli.boss_kills import (
+    collect_boss_kill_rows as _collect_boss_kill_rows,
+)
+from warcraftlogs_cli.boss_kills import (
+    kill_time_distribution_payload as _kill_time_distribution_payload,
+)
+from warcraftlogs_cli.boss_kills import (
+    sampled_cross_report_citations as _sampled_cross_report_citations,
+)
+from warcraftlogs_cli.boss_kills import (
+    sampled_cross_report_freshness as _sampled_cross_report_freshness,
+)
 from warcraftlogs_cli.client import (
     GRAPHQL_WARNINGS_KEY,
     RETAIL_PROFILE,
@@ -48,6 +62,36 @@ from warcraftlogs_cli.client import (
     WarcraftLogsClientError,
     load_warcraftlogs_auth_config,
     warcraftlogs_provider_env_path,
+)
+from warcraftlogs_cli.report_payloads import (
+    fight_payload as _fight_payload,
+)
+from warcraftlogs_cli.report_payloads import (
+    region_payload as _region_payload,
+)
+from warcraftlogs_cli.report_payloads import (
+    report_brief_payload as _report_brief_payload,
+)
+from warcraftlogs_cli.report_payloads import (
+    report_payload as _report_payload,
+)
+from warcraftlogs_cli.report_payloads import (
+    report_url as _report_url,
+)
+from warcraftlogs_cli.report_payloads import (
+    server_payload as _server_payload,
+)
+from warcraftlogs_cli.sampling_utils import (
+    boss_matches as _boss_matches,
+)
+from warcraftlogs_cli.sampling_utils import (
+    normalize_match_text as _normalize_match_text,
+)
+from warcraftlogs_cli.sampling_utils import (
+    report_is_finished as _report_is_finished,
+)
+from warcraftlogs_cli.sampling_utils import (
+    sampled_spec_filter_notes as _sampled_spec_filter_notes,
 )
 
 app = typer.Typer(add_completion=False, help="Warcraft Logs official API CLI.")
@@ -392,9 +436,6 @@ def _validated_transport_packet(ctx: typer.Context, packet: Any, *, command_name
         _fail(ctx, "invalid_transport_packet", f"{command_name} produced an invalid talent transport packet: {exc}")
         raise AssertionError("unreachable") from exc
 
-
-def _utc_now_z() -> str:
-    return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def _normalize_graphql_enum(value: str | None) -> str | None:
@@ -908,33 +949,6 @@ def _doctor_payload(*, live: bool) -> dict[str, Any]:
     }
 
 
-def _region_payload(region: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "id": region.get("id"),
-        "name": region.get("name"),
-        "compact_name": region.get("compactName"),
-        "slug": normalize_region(str(region.get("slug", ""))),
-    }
-
-
-def _server_payload(server: dict[str, Any]) -> dict[str, Any]:
-    region = server.get("region") if isinstance(server.get("region"), dict) else {}
-    subregion = server.get("subregion") if isinstance(server.get("subregion"), dict) else {}
-    return {
-        "id": server.get("id"),
-        "name": server.get("name"),
-        "normalized_name": server.get("normalizedName"),
-        "slug": server.get("slug"),
-        "region": _region_payload(region) if region else None,
-        "subregion": {
-            "id": subregion.get("id"),
-            "name": subregion.get("name"),
-        }
-        if subregion
-        else None,
-        "connected_realm_id": server.get("connectedRealmID"),
-        "season_id": server.get("seasonID"),
-    }
 
 
 def _zone_payload(zone: dict[str, Any]) -> dict[str, Any]:
@@ -1183,15 +1197,6 @@ def _guild_attendance_payload(guild: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _archive_status_payload(value: dict[str, Any] | None) -> dict[str, Any] | None:
-    if not isinstance(value, dict):
-        return None
-    return {
-        "is_archived": value.get("isArchived"),
-        "is_accessible": value.get("isAccessible"),
-        "archive_date": value.get("archiveDate"),
-    }
-
 
 def _character_payload(character: dict[str, Any]) -> dict[str, Any]:
     faction = character.get("faction") if isinstance(character.get("faction"), dict) else {}
@@ -1223,45 +1228,7 @@ def _character_payload(character: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _report_payload(report: dict[str, Any]) -> dict[str, Any]:
-    zone = report.get("zone") if isinstance(report.get("zone"), dict) else {}
-    guild = report.get("guild") if isinstance(report.get("guild"), dict) else {}
-    return {
-        "code": report.get("code"),
-        "title": report.get("title"),
-        "start_time": report.get("startTime"),
-        "end_time": report.get("endTime"),
-        "visibility": report.get("visibility"),
-        "archive_status": _archive_status_payload(report.get("archiveStatus")),
-        "segments": report.get("segments"),
-        "exported_segments": report.get("exportedSegments"),
-        "zone": {"id": zone.get("id"), "name": zone.get("name")} if zone else None,
-        "guild": {
-            "id": guild.get("id"),
-            "name": guild.get("name"),
-            "server": _server_payload(guild.get("server")) if isinstance(guild.get("server"), dict) else None,
-        }
-        if guild
-        else None,
-    }
 
-
-def _report_brief_payload(report: dict[str, Any]) -> dict[str, Any]:
-    zone = report.get("zone") if isinstance(report.get("zone"), dict) else {}
-    return {
-        "code": report.get("code"),
-        "title": report.get("title"),
-        "zone": {"id": zone.get("id"), "name": zone.get("name")} if zone else None,
-    }
-
-
-def _report_url(code: str | None, *, fight_id: int | None = None) -> str | None:
-    if not isinstance(code, str) or not code.strip():
-        return None
-    base = f"https://www.warcraftlogs.com/reports/{code}"
-    if isinstance(fight_id, int):
-        return f"{base}#fight={fight_id}"
-    return base
 
 
 def _report_discovery_hint(query: str) -> dict[str, Any]:
@@ -1290,22 +1257,6 @@ def _report_discovery_hint(query: str) -> dict[str, Any]:
         ],
     }
 
-
-def _fight_payload(fight: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "id": fight.get("id"),
-        "name": fight.get("name"),
-        "encounter_id": fight.get("encounterID"),
-        "difficulty": fight.get("difficulty"),
-        "kill": fight.get("kill"),
-        "complete_raid": fight.get("completeRaid"),
-        "start_time": fight.get("startTime"),
-        "end_time": fight.get("endTime"),
-        "fight_percentage": fight.get("fightPercentage"),
-        "boss_percentage": fight.get("bossPercentage"),
-        "average_item_level": fight.get("averageItemLevel"),
-        "size": fight.get("size"),
-    }
 
 
 def _parse_report_reference(reference: str, *, explicit_fight_id: int | None) -> ReportReference:
@@ -1954,38 +1905,8 @@ def _encounter_buff_rows_payload(
     }
 
 
-def _normalize_match_text(value: str | None) -> str:
-    if not value:
-        return ""
-    return re.sub(r"[^a-z0-9]+", "", value.lower())
 
 
-def _report_is_finished(report: dict[str, Any]) -> bool:
-    end_time = report.get("endTime")
-    return isinstance(end_time, (int, float)) and float(end_time) > 0
-
-
-def _fight_duration_ms(fight: dict[str, Any]) -> float | None:
-    start_time = fight.get("startTime")
-    end_time = fight.get("endTime")
-    if not isinstance(start_time, (int, float)) or not isinstance(end_time, (int, float)):
-        return None
-    duration = float(end_time) - float(start_time)
-    if duration <= 0:
-        return None
-    return duration
-
-
-def _boss_matches(fight: dict[str, Any], *, boss_id: int | None, boss_name: str | None) -> bool:
-    if boss_id is not None and fight.get("encounterID") != boss_id:
-        return False
-    if boss_name is None:
-        return True
-    actual = _normalize_match_text(str(fight.get("name") or ""))
-    query = _normalize_match_text(boss_name)
-    if not query:
-        return True
-    return query in actual or actual in query
 
 
 def _resolve_encounter(
@@ -2217,47 +2138,7 @@ def _encounter_rankings_payload(
     }
 
 
-def _sampled_spec_filter_notes(spec_name: str | None) -> list[str]:
-    if not spec_name:
-        return []
-    return [
-        (
-            "spec_name filters sampled fights by matching participant specs before aggregation; "
-            "these results are not a global spec ranking leaderboard"
-        )
-    ]
 
-
-def _player_spec_matches(actor: dict[str, Any], spec_name: str) -> bool:
-    wanted = _normalize_match_text(spec_name)
-    for spec in actor.get("specs") if isinstance(actor.get("specs"), list) else []:
-        if not isinstance(spec, dict):
-            continue
-        if _normalize_match_text(str(spec.get("spec") or "")) == wanted:
-            return True
-    return False
-
-
-def _matching_spec_players(report: dict[str, Any], *, spec_name: str) -> list[dict[str, Any]]:
-    details = _report_player_details_payload(report)["player_details"]["roles"]
-    matches: list[dict[str, Any]] = []
-    for role, rows in details.items():
-        for row in rows:
-            if _player_spec_matches(row, spec_name):
-                matches.append(
-                    {
-                        "name": row.get("name"),
-                        "id": row.get("id"),
-                        "role": role,
-                        "type": row.get("type"),
-                        "matching_specs": [
-                            spec
-                            for spec in (row.get("specs") if isinstance(row.get("specs"), list) else [])
-                            if _normalize_match_text(str(spec.get("spec") or "")) == _normalize_match_text(spec_name)
-                        ],
-                    }
-                )
-    return matches
 
 
 def _all_player_detail_rows(report: dict[str, Any]) -> list[dict[str, Any]]:
@@ -2381,241 +2262,11 @@ def _player_talent_transport_packet(
     )
 
 
-def _duration_bucket_rows(values: list[float], *, bucket_seconds: int) -> list[dict[str, Any]]:
-    if not values:
-        return []
-    counts: dict[int, int] = {}
-    for value in values:
-        bucket_start = int(value // bucket_seconds) * bucket_seconds
-        counts[bucket_start] = counts.get(bucket_start, 0) + 1
-    rows = []
-    total = len(values)
-    for bucket_start, count in sorted(counts.items()):
-        bucket_end = bucket_start + bucket_seconds
-        rows.append(
-            {
-                "start_seconds": bucket_start,
-                "end_seconds": bucket_end,
-                "count": count,
-                "percent": round((count / total) * 100, 2),
-            }
-        )
-    return rows
 
 
-def _boss_kill_row(*, report: dict[str, Any], fight: dict[str, Any],
-                   matching_players: list[dict[str, Any]] | None = None) -> dict[str, Any]:
-    duration_ms = _fight_duration_ms(fight)
-    return {
-        "report": _report_brief_payload(report),
-        "report_finished": _report_is_finished(report),
-        "guild": _report_payload(report).get("guild"),
-        "fight": _fight_payload(fight),
-        "duration_ms": duration_ms,
-        "duration_seconds": round(duration_ms / 1000, 2) if duration_ms is not None else None,
-        "matching_players": matching_players or [],
-    }
 
 
-def _sampled_cross_report_freshness() -> dict[str, Any]:
-    return {
-        "sampled_at": _utc_now_z(),
-        "cache_ttl_seconds": None,
-    }
 
-
-def _sampled_cross_report_citations(rows: list[dict[str, Any]], *, limit: int = 20) -> dict[str, Any]:
-    sample_reports: list[dict[str, Any]] = []
-    seen: set[tuple[str, int | None]] = set()
-    for row in rows:
-        report = row.get("report") if isinstance(row.get("report"), dict) else {}
-        fight = row.get("fight") if isinstance(row.get("fight"), dict) else {}
-        report_code = report.get("code") if isinstance(report.get("code"), str) else None
-        fight_id = fight.get("id") if isinstance(fight.get("id"), int) else None
-        if report_code is None:
-            continue
-        key = (report_code, fight_id)
-        if key in seen:
-            continue
-        seen.add(key)
-        sample_reports.append(
-            {
-                "report_code": report_code,
-                "fight_id": fight_id,
-                "report_url": _report_url(report_code, fight_id=fight_id),
-            }
-        )
-        if len(sample_reports) >= limit:
-            break
-    return {
-        "sample_reports": sample_reports,
-    }
-
-
-def _collect_boss_kill_rows(
-    *,
-    client: WarcraftLogsClient,
-    zone_id: int,
-    boss_id: int | None,
-    boss_name: str | None,
-    difficulty: int | None,
-    spec_name: str | None,
-    kill_time_min: float | None,
-    kill_time_max: float | None,
-    report_pages: int,
-    reports_per_page: int,
-    start_time: float | None,
-    end_time: float | None,
-    guild_region: str | None,
-    guild_realm: str | None,
-    guild_name: str | None,
-) -> dict[str, Any]:
-    report_rows: list[dict[str, Any]] = []
-    for page in range(1, report_pages + 1):
-        pagination = client.reports(
-            guild_region=guild_region,
-            guild_realm=guild_realm,
-            guild_name=guild_name,
-            limit=reports_per_page,
-            page=page,
-            start_time=start_time,
-            end_time=end_time,
-            zone_id=zone_id,
-            game_zone_id=None,
-        )
-        page_rows = pagination.get("data") if isinstance(pagination.get("data"), list) else []
-        report_rows.extend([row for row in page_rows if isinstance(row, dict)])
-        if not pagination.get("has_more_pages"):
-            break
-
-    live_reports = [row for row in report_rows if not _report_is_finished(row)]
-    finished_reports = [row for row in report_rows if _report_is_finished(row)]
-
-    boss_kills: list[dict[str, Any]] = []
-    scanned_fight_count = 0
-    matched_boss_kill_count = 0
-
-    for report in finished_reports:
-        fights_payload = client.report_fights(code=str(report.get("code") or ""), difficulty=difficulty,
-                                              allow_unlisted=False, ttl_override=client._guild_ttl)
-        fights = fights_payload.get("fights") if isinstance(fights_payload.get("fights"), list) else []
-        for fight in fights:
-            if not isinstance(fight, dict):
-                continue
-            scanned_fight_count += 1
-            if not fight.get("kill"):
-                continue
-            if not _boss_matches(fight, boss_id=boss_id, boss_name=boss_name):
-                continue
-            duration_ms = _fight_duration_ms(fight)
-            if duration_ms is None:
-                continue
-            duration_seconds = duration_ms / 1000
-            if kill_time_min is not None and duration_seconds < kill_time_min:
-                continue
-            if kill_time_max is not None and duration_seconds > kill_time_max:
-                continue
-            matched_boss_kill_count += 1
-            matching_players: list[dict[str, Any]] = []
-            if spec_name:
-                details_report = client.report_player_details(
-                    code=str(report.get("code") or ""),
-                    allow_unlisted=False,
-                    options=ReportPlayerDetailsOptions(
-                        difficulty=difficulty,
-                        encounter_id=fight.get("encounterID") if isinstance(fight.get("encounterID"), int) else None,
-                        fight_ids=[int(fight["id"])] if isinstance(fight.get("id"), int) else None,
-                        include_combatant_info=True,
-                        kill_type="Kills",
-                    ),
-                    ttl_override=client._guild_ttl,
-                )
-                matching_players = _matching_spec_players(details_report, spec_name=spec_name)
-                if not matching_players:
-                    continue
-            boss_kills.append(_boss_kill_row(report=report, fight=fight, matching_players=matching_players))
-
-    boss_kills.sort(
-        key=lambda row: (
-            row.get("duration_ms") if isinstance(row.get("duration_ms"), (int, float)) else float("inf"),
-            str((row.get("report") or {}).get("code") or ""),
-            int((row.get("fight") or {}).get("id") or 0),
-        )
-    )
-
-    return {
-        "rows": boss_kills,
-        "sample": {
-            "source_report_count": len(report_rows),
-            "finished_report_count": len(finished_reports),
-            "skipped_live_report_count": len(live_reports),
-            "scanned_fight_count": scanned_fight_count,
-            "matched_boss_kill_count": matched_boss_kill_count,
-        },
-    }
-
-
-def _boss_kills_payload(
-    *,
-    kind: str,
-    rows: list[dict[str, Any]],
-    sample: dict[str, Any],
-    query: dict[str, Any],
-    top: int,
-) -> dict[str, Any]:
-    returned = rows[:top]
-    return {
-        "ok": True,
-        "provider": "warcraftlogs",
-        "kind": kind,
-        "ranking_basis": "sampled_fastest_kills",
-        "matching_rule": "sampled_zone_reports_filtered_by_optional_boss_difficulty_spec_and_kill_time",
-        "query": query,
-        "notes": _sampled_spec_filter_notes(query.get("spec_name") if isinstance(query, dict) else None),
-        "freshness": _sampled_cross_report_freshness(),
-        "citations": _sampled_cross_report_citations(rows),
-        "sample": {
-            **sample,
-            "filtered_kill_count": len(rows),
-            "returned_kill_count": len(returned),
-            "excluded_kill_count": max(0, len(rows) - len(returned)),
-            "truncated": len(rows) > top,
-            "stable_source_only": True,
-        },
-        "count": len(returned),
-        "kills": returned,
-    }
-
-
-def _kill_time_distribution_payload(*, rows: list[dict[str, Any]], sample: dict[str, Any],
-                                    query: dict[str, Any], bucket_seconds: int) -> dict[str, Any]:
-    durations = [
-        float(duration)
-        for duration in (row.get("duration_seconds") for row in rows)
-        if isinstance(duration, (int, float))
-    ]
-    return {
-        "ok": True,
-        "provider": "warcraftlogs",
-        "kind": "kill_time_distribution",
-        "matching_rule": "sampled_zone_reports_filtered_by_optional_boss_difficulty_spec_and_kill_time",
-        "query": query,
-        "notes": _sampled_spec_filter_notes(query.get("spec_name") if isinstance(query, dict) else None),
-        "freshness": _sampled_cross_report_freshness(),
-        "citations": _sampled_cross_report_citations(rows),
-        "sample": {
-            **sample,
-            "filtered_kill_count": len(rows),
-            "stable_source_only": True,
-        },
-        "distribution": {
-            "unit": "seconds",
-            "bucket_seconds": bucket_seconds,
-            "statistics": numeric_summary(durations),
-            "rows": _duration_bucket_rows(durations, bucket_seconds=bucket_seconds),
-        },
-        "fastest_kills_preview": rows[: min(5, len(rows))],
-    }
 
 
 def _boss_spec_usage_payload(
