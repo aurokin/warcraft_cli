@@ -19,7 +19,6 @@ Documentation ownership:
   - [ROADMAP.md](ROADMAP.md)
   - [USAGE.md](USAGE.md)
   - [RELEASE.md](RELEASE.md)
-  - [REVIEW.md](REVIEW.md)
   - this file
 
 ## Start Here

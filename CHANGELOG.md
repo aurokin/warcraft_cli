@@ -43,6 +43,8 @@ Add user-visible changes to `[Unreleased]` in the same PR that ships them. See [
 
 ### Removed
 
+- PR review helper scripts and `make review-comments` / `make request-pr-reviews` (session-only workflow; use `gh pr comment` directly when needed).
+
 ### Deprecated
 
 ## [0.3.0] - 2026-05-08
