@@ -1,14 +1,14 @@
 # Roadmap
 
-This file is the sequencing document for the repo.
+Sequencing and status for the repo. **Open engineering work lives in [Linear — Warcraft CLI](https://linear.app/aurokin/project/warcraft-cli-a9a133da0d88)** — not duplicated here.
 
-Use other docs for stable reference material:
+Stable reference material:
 - product philosophy: [PRODUCT_PRINCIPLES.md](foundation/PRODUCT_PRINCIPLES.md)
 - analytics and comparison safety rules: [SAFE_ANALYTICS_RULES.md](foundation/SAFE_ANALYTICS_RULES.md)
 - shared identity semantics: [IDENTITY_CONTRACT.md](foundation/IDENTITY_CONTRACT.md)
 - wrapper boundary: [WRAPPER_PROVIDER_CONTRACT.md](foundation/WRAPPER_PROVIDER_CONTRACT.md)
 - architecture and package boundaries: [architecture/README.md](architecture/README.md)
-- provider-specific behavior and boundaries: `docs/<cli>/README.md`
+- provider-specific behavior: `docs/<cli>/README.md`
 
 ## Goal
 
@@ -36,121 +36,58 @@ Validated shared systems:
 - ranking policy for wrapper discovery
 - sample-backed analytics direction for profile and leaderboard providers
 - worktree-local data/cache isolation with shared config/state credentials
+- DX: `make check`, CI lint/typecheck/boundaries/tests, full-repo Ruff, contract fixture catalog
 
-## Now
+## Priority Order
 
-Highest-value work:
-1. Continue tightening the root wrapper.
-   - improve `warcraftlogs` routing beyond explicit report references
-   - keep wrapper `doctor`, search, resolve, passthrough, and ranking policy aligned with actual provider capability
-   - preserve provider registration status instead of overstating readiness
-2. Continue shared identity and cross-provider handoff work.
-   - class/spec/build identity
-   - encounter identity
-   - ability identity
-   - report-actor identity
-   - guide/build/log crosswalks only where the source contract allows them
-3. Continue comparison and evidence surfaces.
-   - additive guide comparison
-   - exact-build handoff into `simc`
-   - consistent freshness, citations, and scope metadata for sampled, merged, cached, and derived outputs
-4. Continue safe Warcraft Logs growth.
-   - explicit-scope encounter primitives
-   - sampled cohort analytics
-   - deeper report/detail coverage where the public contract is stable
-   - user-auth expansion only after the public/report contract is tighter
+Work in this order unless a dependency or incident says otherwise:
 
-Recently completed:
-- worktree-local data/cache isolation with shared config/state credentials
-- removal of the repo-owned stable deploy, rollback, skill export, and worktree creation workflow
+| Priority | Issue | Theme |
+|----------|-------|--------|
+| Hygiene (optional) | [AUR-382](https://linear.app/aurokin/issue/AUR-382) | Phase 3 complexity refactors (E/F extractions) |
+| 1 | [AUR-384](https://linear.app/aurokin/issue/AUR-384) | Wrapper routing, doctor, provider registration |
+| 2 | [AUR-385](https://linear.app/aurokin/issue/AUR-385) | Shared identity and cross-provider handoffs |
+| 3 | [AUR-386](https://linear.app/aurokin/issue/AUR-386) | Guide comparison, evidence metadata, SimC handoff |
+| 4 | [AUR-387](https://linear.app/aurokin/issue/AUR-387) | WCL character-rankings, report coverage, explicit-scope analytics |
+| 5 | [AUR-388](https://linear.app/aurokin/issue/AUR-388) | WCL finished-report caching and derived-output trust metadata |
+| 6 | [AUR-389](https://linear.app/aurokin/issue/AUR-389) | Expansion filtering deferred (simc, WCL classic/fresh) |
+| 7 | [AUR-390](https://linear.app/aurokin/issue/AUR-390) | Blizzard API provider bootstrap |
+| 8 | [AUR-391](https://linear.app/aurokin/issue/AUR-391) / [AUR-392](https://linear.app/aurokin/issue/AUR-392) | Raider.IO and WowProgress analytics depth |
+| 9 | [AUR-393](https://linear.app/aurokin/issue/AUR-393) | Raidbots report consumption and SimC handoff |
+| — | [AUR-394](https://linear.app/aurokin/issue/AUR-394) | Wowhead scoped-extraction policy (track, don’t expand blindly) |
+| — | [AUR-395](https://linear.app/aurokin/issue/AUR-395) | Later provider candidates (undermine, raidplan, curseforge) |
 
-Operational note:
-- worktree creation and trunk hygiene are owned outside this repo by `worktrunk`
+Refactors (AUR-382) can run in parallel with product work when they are behavior-preserving extractions; prefer product issues above when choosing the next PR.
 
-## Provider Priorities
+## Provider Docs
 
-### Warcraft Logs
+Command behavior and boundaries stay in provider READMEs — use Linear issues above for *what to build next*:
 
-Near-term:
-- better wrapper routing
-- stronger public `character-rankings` reliability
-- broader report-detail coverage where the API contract is stable
-- deeper explicit-scope analytics before any broader segmentation work
-- finished-report caching and derived-output trust metadata
+| Provider | Doc |
+|----------|-----|
+| Warcraft Logs | [warcraftlogs/README.md](warcraftlogs/README.md) |
+| Blizzard API | [blizzard-api/README.md](blizzard-api/README.md) |
+| Raider.IO | [raiderio/README.md](raiderio/README.md) |
+| WowProgress | [wowprogress/README.md](wowprogress/README.md) |
+| Wowhead | [wowhead/README.md](wowhead/README.md) |
+| Raidbots | [raidbots/README.md](raidbots/README.md) |
+| Wrapper | [warcraft/README.md](warcraft/README.md) |
 
-Deferred:
-- wave and phase segmentation
-- classic/fresh site-profile routing
-- wrapper-level user-auth routing
+## Recently Completed
 
-See [warcraftlogs/README.md](warcraftlogs/README.md).
+Tracked in Linear (Done) and `CHANGELOG.md` `[Unreleased]`:
 
-### Blizzard API
+- FUTURE_TASKS migration (Wowhead, monorepo ergonomics, expansion filtering phase 3)
+- AUR-366 DX tooling, CI, Ruff phase 2; warcraftlogs boss-kills slice (PR #31)
+- WCL payload key parity, live command matrix, graphql passthrough, typed buff previews
+- Worktree-local data/cache isolation; removal of repo-owned deploy/skill-export workflow
 
-Next major provider when auth-heavy official data is the priority.
-
-Focus:
-- canonical game-data and profile workflows
-- OAuth architecture validation alongside `warcraftlogs`
-- region and namespace-aware API patterns
-
-See [blizzard-api/README.md](blizzard-api/README.md).
-
-### Raider.IO
-
-Continue:
-- deeper sample-backed analytics
-- clearer season-aware leaderboard workflows
-- richer normalized run/profile snapshots where the source supports them
-
-See [raiderio/README.md](raiderio/README.md).
-
-### WowProgress
-
-Continue:
-- deeper sample-backed analytics
-- easier guild snapshot/history/rank workflows
-- reliability and normalization improvements around ranking/profile slices
-
-See [wowprogress/README.md](wowprogress/README.md).
-
-### Wowhead
-
-Maintain the current boundary:
-- continue only on straightforward structured extraction
-- do not push `dressing-room` or `profiler` into reverse-engineering work without an explicit product decision
-
-See [wowhead/README.md](wowhead/README.md).
-
-### Raidbots
-
-Workflow-oriented companion to `simc`, not a driver of shared auth or canonical gameplay truth.
-
-There is no public API for sim submission. The viable path is report consumption and local bridging:
-- fetch and parse completed reports (public, stable)
-- extract SimC input from reports and hand off to local `simc` analysis
-- generate ready-to-paste SimC input locally as the handoff to Raidbots cloud execution
-
-Submission automation is deferred indefinitely unless Raidbots exposes a sanctioned API.
-
-See [raidbots/README.md](raidbots/README.md).
-
-## Later
-
-Lower-priority provider candidates:
-- `undermine-exchange`
-- `raidplan`
-- `curseforge`
-
-Revisit only when the current wrapper, official API, and evidence-oriented analytics work is in a stronger place.
+Operational note: worktree creation and trunk hygiene are owned outside this repo by `worktrunk`.
 
 ## Sequencing Rules
 
-- Keep roadmap sequencing here.
-- Keep open engineering backlog items in [Linear — Warcraft CLI](https://linear.app/aurokin/project/warcraft-cli-a9a133da0d88).
-- Keep repo-wide rules out of this file unless they directly affect sequencing.
-- Keep stable architecture and package-boundary reference in [architecture/README.md](architecture/README.md).
-- Keep provider behavior, current boundaries, and command-specific detail in the provider CLI docs.
+- Keep **priority order** and status narrative here; keep **open tasks** in Linear.
+- Keep repo-wide rules in foundation/architecture docs unless they directly affect sequencing.
 - Only extract shared code after a second provider proves the abstraction is real.
 - Prefer feature delivery, reliability, and trust metadata over broadening auth-heavy surfaces too early.
 
@@ -168,4 +105,4 @@ Revisit only when the current wrapper, official API, and evidence-oriented analy
 - each provider remains independently runnable and testable
 - shared code stays genuinely shared
 - the wrapper improves discovery without erasing provenance
-- roadmap sequencing stays here, while open backlog, stable rules, and provider behavior stay in their own systems or docs
+- roadmap sequencing stays here; open backlog stays in Linear; stable rules and provider behavior stay in their own docs

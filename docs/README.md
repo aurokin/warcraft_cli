@@ -7,7 +7,7 @@ Documentation ownership:
 - Repo-wide analytics and comparison safety rules belong in [foundation/SAFE_ANALYTICS_RULES.md](foundation/SAFE_ANALYTICS_RULES.md).
 - Repo-wide operational boundaries (rate limits, logging, failure response) belong in [foundation/OPERATIONAL_BOUNDARIES.md](foundation/OPERATIONAL_BOUNDARIES.md).
 - Shared cross-provider contracts belong in focused contract docs such as [foundation/IDENTITY_CONTRACT.md](foundation/IDENTITY_CONTRACT.md) and [foundation/WRAPPER_PROVIDER_CONTRACT.md](foundation/WRAPPER_PROVIDER_CONTRACT.md).
-- [ROADMAP.md](ROADMAP.md) tracks sequencing, current status, and near-term repo priorities.
+- [ROADMAP.md](ROADMAP.md) tracks sequencing, current status, and priority order; open work is in [Linear — Warcraft CLI](https://linear.app/aurokin/project/warcraft-cli-a9a133da0d88).
 - [USAGE.md](USAGE.md) is the detailed command and behavior reference.
 - Each CLI has its own folder under `docs/` with a `README.md` entrypoint.
 
@@ -39,7 +39,7 @@ Documentation ownership:
 
 ## Architecture And Shared References
 
-- [ROADMAP.md](ROADMAP.md) — sequencing and near-term priorities
+- [ROADMAP.md](ROADMAP.md) — sequencing and priority order (open work in Linear)
 - [architecture/README.md](architecture/README.md) — progressive index
 - [architecture/REPO_STRUCTURE_AND_PACKAGING.md](architecture/REPO_STRUCTURE_AND_PACKAGING.md)
 - [architecture/PACKAGE_LAYOUT.md](architecture/PACKAGE_LAYOUT.md)
