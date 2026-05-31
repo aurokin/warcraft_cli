@@ -299,6 +299,23 @@ def test_simc_handoff_shell_quotes_untrusted_talents() -> None:
     assert "touch" not in tokens  # the injected command never becomes its own token
 
 
+def test_classify_recognizes_underscore_class_tokens() -> None:
+    # SimC's addon/profiles use the no-underscore actor form (deathknight=), but death_knight=
+    # / demon_hunter= are documented, SimC-accepted manual-creation keywords a report could
+    # carry. Both must classify as a quick sim and emit the handoff with the canonical class.
+    text = 'death_knight="Main"\nspec=frost\ntalents=CYG\n'
+    classification = classify_simc_input(text)
+    assert classification["actor_class"] == "deathknight"
+    assert classification["sim_type_guess"] == "quick_sim"
+    decode = next(
+        c["command"]
+        for c in simc_handoff(text, classification)["suggested_simc_commands"]
+        if c["command"].startswith("simc decode-build")
+    )
+    assert "--actor-class deathknight" in decode
+    assert classify_simc_input('demon_hunter="Alt"\nspec=havoc\n')["actor_class"] == "demonhunter"
+
+
 def test_simc_handoff_describe_build_flags_apl_requirement() -> None:
     # describe-build (unlike decode-build) needs a default/explicit APL, so the suggestion
     # must surface that an agent won't otherwise know it can fail with not_found.

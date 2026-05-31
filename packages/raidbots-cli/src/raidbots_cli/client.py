@@ -33,7 +33,10 @@ def resolve_report_id(value: str) -> str:
     # surface; all fetches are then rebuilt from the configured (env-overridable) base + path
     # templates. We deliberately do NOT honor an arbitrary host from a URL input — that keeps
     # the fetch target trusted/configured (avoids SSRF to arbitrary hosts) and matches the
-    # documented contract. Base/suffix env overrides cover live Raidbots URL drift.
+    # documented contract (docs/raidbots/README.md: input is a bare ID or a `/report/{ID}` URL).
+    # Env overrides adapt the *fetch* URLs to live drift with no code change; URL-*input* parsing
+    # stays pinned to the public `/report/{ID}` shape, and a bare ID is always accepted — so URL
+    # drift never blocks resolution (paste the ID). By design, not an oversight.
     candidate = (value or "").strip()
     if not candidate:
         raise InvalidReportReference("Report reference is empty.")

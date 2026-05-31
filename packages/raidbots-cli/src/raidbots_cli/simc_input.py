@@ -60,11 +60,21 @@ def _scalar_assignments(lines: list[str]) -> dict[str, str]:
     return values
 
 
+def _normalize_class_token(value: str) -> str:
+    # SimC accepts both the addon/profile actor form (`deathknight`) and the documented
+    # manual-creation keyword form (`death_knight`); collapse to the canonical no-underscore
+    # form so either is recognized. Mirrors simc-cli's _normalize_actor_class.
+    return re.sub(r"[^a-z0-9]", "", value.lower())
+
+
 def _find_actor(lines: list[str]) -> tuple[str | None, str | None]:
     for line in lines:
         match = _ACTOR_RE.match(line)
-        if match and match.group(1) in _WOW_CLASSES:
-            return match.group(1), match.group(2).strip()
+        if not match:
+            continue
+        actor_class = _normalize_class_token(match.group(1))
+        if actor_class in _WOW_CLASSES:
+            return actor_class, match.group(2).strip()
     return None, None
 
 
