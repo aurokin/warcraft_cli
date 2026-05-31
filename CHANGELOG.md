@@ -10,6 +10,7 @@ Add user-visible changes to `[Unreleased]` in the same PR that ships them. See [
 
 ### Added
 
+- Raidbots provider CLI (AUR-393): new `raidbots` command for report consumption and local SimC handoff. `raidbots doctor`, `raidbots inspect-report <url-or-id>` (`--no-raw`), `raidbots input <url-or-id>`, and `raidbots explain-input` (`--text`/`--file`/stdin). Parses SimC `json2` reports (quick-sim actor + metrics, or ranked profilesets for Top Gear/Droptimizer), emits freshness/citations/scope, and produces ready-to-paste SimC input with suggested local `simc` commands. No submission automation (no sanctioned Raidbots API) and no cross-provider import — handoff is by emitted commands. Routed through the wrapper as `warcraft raidbots …`; report URLs are env-overridable (`RAIDBOTS_BASE_URL`, `RAIDBOTS_*_PATH_TEMPLATE`). See `docs/raidbots/README.md`.
 - Developer tooling (AUR-366): `make check`, `make test-fast`, CI non-live unit tests, optional `.pre-commit-config.yaml`, `make benchmark-cache`, `make fixture-refresh-hints`, and architecture docs for contract fixtures ([CONTRACT_TEST_CATALOG.md](docs/architecture/CONTRACT_TEST_CATALOG.md), [FIXTURE_MAINTENANCE.md](docs/architecture/FIXTURE_MAINTENANCE.md)).
 - Operational boundaries doc: [docs/foundation/OPERATIONAL_BOUNDARIES.md](docs/foundation/OPERATIONAL_BOUNDARIES.md) (rate limits, User-Agent posture, robots/respectful use, log redaction, failure-mode playbook).
 - Wowhead additive normalization for `item` on `entity` and `entity-page`: `schema_version`, `normalized.item` with per-field provenance (`docs/wowhead/NORMALIZATION.md`).
@@ -31,6 +32,7 @@ Add user-visible changes to `[Unreleased]` in the same PR that ships them. See [
 
 ### Changed
 
+- Complexity (AUR-382, behavior-preserving): cleared every Radon **E/F** hotspot and the named **D** targets via helper extraction — `warcraft_content.article_bundle` query/compare, the wrapper `guide-compare-query` and guide→simc handoff handlers, `wowhead_cli.citation_pack` builders, five warcraftlogs analytics payload helpers, and the simc `build_input` / `modify-build` paths. No output shapes changed. Added a `citation_pack_from_compare` snapshot test and a `modify-build` swap-decode abort regression test. `radon cc -n E packages/` is now empty.
 - Warcraft Logs: extract sampled boss-kill analytics into `boss_kills.py`, `report_payloads.py`, and `sampling_utils.py`; `collect_boss_kill_rows` complexity **E (32) → A (5)**.
 - Full-repo Ruff cleanup: `make lint` now covers `packages/`, `tests/`, and `scripts/` (Typer `B008` allowed on provider `main.py`; long fixture strings in tests use `E501` ignore). `make lint-all` is an alias.
 - Complexity: split `validate_talent_transport_packet` validation into focused helpers in `warcraft_core.identity`.

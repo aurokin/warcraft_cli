@@ -187,6 +187,80 @@ def _query_score(query: str, text: str) -> int:
     return score
 
 
+def _section_haystack(row: dict[str, Any]) -> str:
+    title = str(row.get("title") or "")
+    return f"{title} {row.get('text') or ''}"
+
+
+def _navigation_haystack(row: dict[str, Any]) -> str:
+    return f"{row.get('title') or ''} {row.get('section_slug') or ''}"
+
+
+def _linked_entity_haystack(row: dict[str, Any]) -> str:
+    return f"{row.get('name') or ''} {row.get('type') or ''} {row.get('id') or ''}"
+
+
+def _build_reference_haystack(row: dict[str, Any]) -> str:
+    build_identity = row.get("build_identity") or {}
+    class_spec_identity = build_identity.get("class_spec_identity") or {}
+    identity = class_spec_identity.get("identity") or {}
+    return " ".join(
+        part
+        for part in (
+            str(row.get("label") or ""),
+            str(row.get("build_code") or ""),
+            str(row.get("url") or ""),
+            str(identity.get("actor_class") or ""),
+            str(identity.get("spec") or ""),
+        )
+        if part
+    )
+
+
+def _analysis_surface_haystack(row: dict[str, Any]) -> str:
+    return " ".join(
+        part
+        for part in (
+            " ".join(str(tag) for tag in row.get("surface_tags") or []),
+            str(row.get("section_title") or ""),
+            str(row.get("page_title") or ""),
+            str(row.get("content_family") or ""),
+            str(row.get("text_preview") or ""),
+        )
+        if part
+    )
+
+
+def _section_title_predicate(normalized_filter: str | None):
+    if not normalized_filter:
+        return None
+
+    def predicate(row: dict[str, Any]) -> bool:
+        title = str(row.get("title") or "")
+        return normalized_filter in title.lower()
+
+    return predicate
+
+
+def _collect_kind_matches(
+    rows: list[dict[str, Any]],
+    *,
+    kind: str,
+    query: str,
+    haystack_fn,
+    predicate=None,
+) -> list[dict[str, Any]]:
+    matches: list[dict[str, Any]] = []
+    for row in rows:
+        if predicate is not None and not predicate(row):
+            continue
+        score = _query_score(query, haystack_fn(row))
+        if score <= 0:
+            continue
+        matches.append({"kind": kind, "score": score, **row})
+    return matches
+
+
 def query_article_bundle(
     bundle: dict[str, Any],
     *,
@@ -205,66 +279,41 @@ def query_article_bundle(
         "analysis_surfaces": [],
     }
     if "sections" in kinds:
-        for row in bundle["sections"]:
-            title = str(row.get("title") or "")
-            if normalized_section_title_filter and normalized_section_title_filter not in title.lower():
-                continue
-            haystack = f"{title} {row.get('text') or ''}"
-            score = _query_score(normalized_query, haystack)
-            if score <= 0:
-                continue
-            results_by_kind["sections"].append({"kind": "section", "score": score, **row})
+        results_by_kind["sections"] = _collect_kind_matches(
+            bundle["sections"],
+            kind="section",
+            query=normalized_query,
+            haystack_fn=_section_haystack,
+            predicate=_section_title_predicate(normalized_section_title_filter),
+        )
     if "navigation" in kinds:
-        for row in bundle["navigation"]:
-            haystack = f"{row.get('title') or ''} {row.get('section_slug') or ''}"
-            score = _query_score(normalized_query, haystack)
-            if score <= 0:
-                continue
-            results_by_kind["navigation"].append({"kind": "navigation", "score": score, **row})
+        results_by_kind["navigation"] = _collect_kind_matches(
+            bundle["navigation"],
+            kind="navigation",
+            query=normalized_query,
+            haystack_fn=_navigation_haystack,
+        )
     if "linked_entities" in kinds:
-        for row in bundle["linked_entities"]:
-            haystack = f"{row.get('name') or ''} {row.get('type') or ''} {row.get('id') or ''}"
-            score = _query_score(normalized_query, haystack)
-            if score <= 0:
-                continue
-            results_by_kind["linked_entities"].append({"kind": "linked_entity", "score": score, **row})
+        results_by_kind["linked_entities"] = _collect_kind_matches(
+            bundle["linked_entities"],
+            kind="linked_entity",
+            query=normalized_query,
+            haystack_fn=_linked_entity_haystack,
+        )
     if "build_references" in kinds:
-        for row in bundle["build_references"]:
-            build_identity = row.get("build_identity") or {}
-            class_spec_identity = build_identity.get("class_spec_identity") or {}
-            identity = class_spec_identity.get("identity") or {}
-            haystack = " ".join(
-                part
-                for part in (
-                    str(row.get("label") or ""),
-                    str(row.get("build_code") or ""),
-                    str(row.get("url") or ""),
-                    str(identity.get("actor_class") or ""),
-                    str(identity.get("spec") or ""),
-                )
-                if part
-            )
-            score = _query_score(normalized_query, haystack)
-            if score <= 0:
-                continue
-            results_by_kind["build_references"].append({"kind": "build_reference", "score": score, **row})
+        results_by_kind["build_references"] = _collect_kind_matches(
+            bundle["build_references"],
+            kind="build_reference",
+            query=normalized_query,
+            haystack_fn=_build_reference_haystack,
+        )
     if "analysis_surfaces" in kinds:
-        for row in bundle["analysis_surfaces"]:
-            haystack = " ".join(
-                part
-                for part in (
-                    " ".join(str(tag) for tag in row.get("surface_tags") or []),
-                    str(row.get("section_title") or ""),
-                    str(row.get("page_title") or ""),
-                    str(row.get("content_family") or ""),
-                    str(row.get("text_preview") or ""),
-                )
-                if part
-            )
-            score = _query_score(normalized_query, haystack)
-            if score <= 0:
-                continue
-            results_by_kind["analysis_surfaces"].append({"kind": "analysis_surface", "score": score, **row})
+        results_by_kind["analysis_surfaces"] = _collect_kind_matches(
+            bundle["analysis_surfaces"],
+            kind="analysis_surface",
+            query=normalized_query,
+            haystack_fn=_analysis_surface_haystack,
+        )
     for rows in results_by_kind.values():
         rows.sort(key=lambda row: (-row["score"], str(row.get("title") or row.get("name") or "")))
     top: list[dict[str, Any]] = []
@@ -450,18 +499,17 @@ def _comparison_unique_rows(
     return rows
 
 
-def compare_article_bundles(bundle_inputs: list[tuple[Path, dict[str, Any]]]) -> dict[str, Any]:
-    if len(bundle_inputs) < 2:
-        raise ValueError("compare_article_bundles requires at least two bundles")
-
-    bundle_descriptors = [_bundle_descriptor(bundle, path=path) for path, bundle in bundle_inputs]
-    bundle_paths = [str(path) for path, _bundle in bundle_inputs]
-
+def _collect_bundle_evidence(
+    bundle_inputs: list[tuple[Path, dict[str, Any]]],
+) -> tuple[
+    dict[str, dict[str, list[dict[str, Any]]]],
+    dict[str, dict[str, list[dict[str, Any]]]],
+    dict[tuple[str, str, str, str], dict[str, list[dict[str, Any]]]],
+]:
     section_evidence: dict[str, dict[str, list[dict[str, Any]]]] = {}
     tag_evidence: dict[str, dict[str, list[dict[str, Any]]]] = {}
     build_evidence: dict[tuple[str, str, str, str], dict[str, list[dict[str, Any]]]] = {}
-
-    for (path, bundle), _bundle_info in zip(bundle_inputs, bundle_descriptors, strict=True):
+    for path, bundle in bundle_inputs:
         bundle_path = str(path)
         for row in bundle.get("sections") or []:
             if not isinstance(row, dict):
@@ -481,17 +529,24 @@ def compare_article_bundles(bundle_inputs: list[tuple[Path, dict[str, Any]]]) ->
             if not isinstance(row, dict):
                 continue
             build_evidence.setdefault(_build_reference_key(row), {}).setdefault(bundle_path, []).append(row)
+    return section_evidence, tag_evidence, build_evidence
 
-    analysis_rows: list[dict[str, Any]] = []
-    analysis_membership: dict[str, set[str]] = {}
+
+def _build_analysis_surface_rows(
+    tag_evidence: dict[str, dict[str, list[dict[str, Any]]]],
+    bundle_descriptors: list[dict[str, Any]],
+    total: int,
+) -> tuple[list[dict[str, Any]], dict[str, set[str]]]:
+    rows: list[dict[str, Any]] = []
+    membership: dict[str, set[str]] = {}
     for tag, bundle_rows in sorted(tag_evidence.items()):
         members = set(bundle_rows)
-        analysis_membership[tag] = members
-        analysis_rows.append(
+        membership[tag] = members
+        rows.append(
             {
                 "tag": tag,
                 "bundle_count": len(members),
-                "shared_across_all_bundles": len(members) == len(bundle_inputs),
+                "shared_across_all_bundles": len(members) == total,
                 "bundles": [
                     _surface_bundle_entry(bundle_info, bundle_rows[str(bundle_info["path"])])
                     for bundle_info in bundle_descriptors
@@ -499,26 +554,33 @@ def compare_article_bundles(bundle_inputs: list[tuple[Path, dict[str, Any]]]) ->
                 ],
             }
         )
+    return rows, membership
 
-    section_rows: list[dict[str, Any]] = []
-    section_membership: dict[str, set[str]] = {}
+
+def _build_section_evidence_rows(
+    section_evidence: dict[str, dict[str, list[dict[str, Any]]]],
+    bundle_descriptors: list[dict[str, Any]],
+    total: int,
+) -> tuple[list[dict[str, Any]], dict[str, set[str]]]:
+    rows: list[dict[str, Any]] = []
+    membership: dict[str, set[str]] = {}
     for title_key, bundle_rows in sorted(section_evidence.items()):
         members = set(bundle_rows)
-        section_membership[title_key] = members
+        membership[title_key] = members
         title_variants = _unique_strings(
             [
                 row.get("title")
-                for rows in bundle_rows.values()
-                for row in rows
+                for rows_for_bundle in bundle_rows.values()
+                for row in rows_for_bundle
                 if isinstance(row, dict)
             ]
         )
-        section_rows.append(
+        rows.append(
             {
                 "section_title_key": title_key,
                 "title_variants": title_variants,
                 "bundle_count": len(members),
-                "shared_across_all_bundles": len(members) == len(bundle_inputs),
+                "shared_across_all_bundles": len(members) == total,
                 "bundles": [
                     _section_bundle_entry(bundle_info, bundle_rows[str(bundle_info["path"])])
                     for bundle_info in bundle_descriptors
@@ -526,19 +588,26 @@ def compare_article_bundles(bundle_inputs: list[tuple[Path, dict[str, Any]]]) ->
                 ],
             }
         )
+    return rows, membership
 
-    build_rows: list[dict[str, Any]] = []
-    build_membership: dict[str, set[str]] = {}
+
+def _build_build_reference_rows(
+    build_evidence: dict[tuple[str, str, str, str], dict[str, list[dict[str, Any]]]],
+    bundle_descriptors: list[dict[str, Any]],
+    total: int,
+) -> tuple[list[dict[str, Any]], dict[str, set[str]]]:
+    rows: list[dict[str, Any]] = []
+    membership: dict[str, set[str]] = {}
     for key, bundle_rows in sorted(build_evidence.items()):
         members = set(bundle_rows)
         string_key = "::".join(key)
-        build_membership[string_key] = members
+        membership[string_key] = members
         identity = _build_reference_identity(next(iter(next(iter(bundle_rows.values())))))
-        build_rows.append(
+        rows.append(
             {
                 "reference_key": string_key,
                 "bundle_count": len(members),
-                "shared_across_all_bundles": len(members) == len(bundle_inputs),
+                "shared_across_all_bundles": len(members) == total,
                 "actor_class": identity.get("actor_class"),
                 "spec": identity.get("spec"),
                 "build_code": identity.get("build_code"),
@@ -550,6 +619,21 @@ def compare_article_bundles(bundle_inputs: list[tuple[Path, dict[str, Any]]]) ->
                 ],
             }
         )
+    return rows, membership
+
+
+def compare_article_bundles(bundle_inputs: list[tuple[Path, dict[str, Any]]]) -> dict[str, Any]:
+    if len(bundle_inputs) < 2:
+        raise ValueError("compare_article_bundles requires at least two bundles")
+
+    bundle_descriptors = [_bundle_descriptor(bundle, path=path) for path, bundle in bundle_inputs]
+    bundle_paths = [str(path) for path, _bundle in bundle_inputs]
+    total = len(bundle_inputs)
+
+    section_evidence, tag_evidence, build_evidence = _collect_bundle_evidence(bundle_inputs)
+    analysis_rows, analysis_membership = _build_analysis_surface_rows(tag_evidence, bundle_descriptors, total)
+    section_rows, section_membership = _build_section_evidence_rows(section_evidence, bundle_descriptors, total)
+    build_rows, build_membership = _build_build_reference_rows(build_evidence, bundle_descriptors, total)
 
     return {
         "kind": "guide_bundle_comparison",

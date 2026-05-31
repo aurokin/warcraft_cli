@@ -3,24 +3,22 @@ requires = ["hatchling>=1.24.0"]
 build-backend = "hatchling.build"
 
 [project]
-name = "warcraft-cli"
+name = "raidbots-cli"
 version = "0.3.0"
-description = "Umbrella Warcraft CLI"
+description = "Agent-first CLI for consuming Raidbots reports and bridging to local SimC"
 readme = "../../README.md"
 requires-python = ">=3.12"
 dependencies = [
-  "icy-veins-cli>=0.1.0",
+  "httpx>=0.28.1,<1.0.0",
   "orjson>=3.10.16,<4.0.0",
   "typer>=0.12.5,<1.0.0",
-  "method-cli>=0.1.0",
-  "raidbots-cli>=0.1.0",
+  "warcraft-api-cli>=0.1.0",
   "warcraft-content-cli>=0.1.0",
   "warcraft-core-cli>=0.1.0",
-  "wowhead-cli>=0.1.0",
 ]
 
 [project.scripts]
-warcraft = "warcraft_cli.main:run"
+raidbots = "raidbots_cli.main:run"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/warcraft_cli"]
+packages = ["src/raidbots_cli"]
