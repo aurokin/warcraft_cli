@@ -328,6 +328,14 @@ def test_resolve_report_id_honors_overridden_path_template() -> None:
     assert resolve_report_id("https://www.raidbots.com/simbot/report/zzz999", template) == "zzz999"
 
 
+def test_classify_recognizes_space_padded_copy_directive() -> None:
+    # SimC tolerates whitespace around `=`; a space-padded copy= directive still marks a
+    # multi-profile (Top Gear / Droptimizer) run, like the unspaced form.
+    classification = classify_simc_input('mage="Main"\nspec=frost\ncopy = alt\n')
+    assert classification["copy_count"] == 1
+    assert classification["sim_type_guess"] == "top_gear_or_droptimizer"
+
+
 def test_classify_recognizes_space_padded_talents() -> None:
     # SimC permits whitespace around `=`; talents detection must match _scalar_assignments/_find_actor
     # so a space-padded talents line still drives the decode/describe handoff.

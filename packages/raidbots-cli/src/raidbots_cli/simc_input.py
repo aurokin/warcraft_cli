@@ -97,7 +97,7 @@ def classify_simc_input(text: str) -> dict[str, Any]:
 
     actor_class, actor_name = _find_actor(lines)
     profileset_names = _profileset_names(lines)
-    copy_count = sum(1 for line in lines if line.startswith("copy="))
+    copy_count = sum(1 for line in lines if "=" in line and line.split("=", 1)[0].strip() == "copy")
     options = {key: assignments[key] for key in _OPTION_KEYS if key in assignments}
 
     if profileset_names or copy_count:
