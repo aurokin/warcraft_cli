@@ -41,6 +41,7 @@ Use `warcraft` first when the caller does not already know which provider they n
 | `wowprogress` | progression, rankings, guild/profile analytics | `warcraft guild ...`, `warcraft wowprogress guild ...`, `warcraft wowprogress sample ...` |
 | `warcraftlogs` | official raid-log API, world metadata, guild/character/report lookups | `warcraftlogs doctor`, `warcraftlogs guild ...`, `warcraftlogs report-fights ...` |
 | `simc` | local SimulationCraft inspection, exact-build priority analysis, APL comparison, and runs | `warcraft simc doctor`, `warcraft simc priority ...`, `warcraft simc compare-apls ...` |
+| `raidbots` | reading shared Raidbots reports and bridging their SimC input to local `simc` | `warcraft raidbots inspect-report <url-or-id>`, `warcraft raidbots input <url-or-id>`, `warcraft raidbots explain-input` |
 
 ## Routing Rules
 
@@ -79,6 +80,7 @@ Use `warcraft` first when the caller does not already know which provider they n
 - `wowprogress`: see `references/wowprogress.md`
 - `warcraftlogs`: see `references/warcraftlogs.md`
 - `simc`: see `references/simc.md`
+- `raidbots`: see `references/raidbots.md`
 
 ## Notes
 
