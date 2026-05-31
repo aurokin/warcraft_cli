@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 import typer
 from icy_veins_cli.main import app as icy_veins_app
 from method_cli.main import app as method_app
+from raidbots_cli.main import app as raidbots_app
 from raiderio_cli.main import app as raiderio_app
 from simc_cli.main import app as simc_app
 from typer.main import get_command
@@ -2340,6 +2341,14 @@ def wowprogress_passthrough(ctx: typer.Context) -> None:
 )
 def simc_passthrough(ctx: typer.Context) -> None:
     _invoke_sub_app(simc_app, args=_passthrough_args(ctx, provider_name="simc"), prog_name="simc")
+
+
+@app.command(
+    "raidbots",
+    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
+)
+def raidbots_passthrough(ctx: typer.Context) -> None:
+    _invoke_sub_app(raidbots_app, args=_passthrough_args(ctx, provider_name="raidbots"), prog_name="raidbots")
 
 
 def run() -> None:
