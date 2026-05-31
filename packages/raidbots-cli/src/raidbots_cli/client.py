@@ -37,6 +37,11 @@ def resolve_report_id(value: str, report_path_template: str = DEFAULT_REPORT_PAT
     candidate = (value or "").strip()
     if not candidate:
         raise InvalidReportReference("Report reference is empty.")
+    # Require a prefix longer than "/": a root-level or empty prefix (e.g. a pathological
+    # "/{id}" template — not how Raidbots structures report URLs) is too ambiguous to anchor on
+    # and would mis-extract the first path segment of ANY URL, so it deliberately falls through
+    # to the /report/{ID} + bare-ID paths below. Real templates carry a specific prefix
+    # (default "/simbot/report/"). Do not relax this guard without restoring that mis-extraction.
     prefix = report_path_template.split("{id}", 1)[0]
     if len(prefix) > 1:
         templated = re.search(re.escape(prefix) + r"([A-Za-z0-9_-]+)", candidate)
