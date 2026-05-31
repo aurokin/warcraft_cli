@@ -34,19 +34,28 @@ def _add_claim(
     anchors.append(entry)
 
 
-def citation_pack_from_entity(payload: dict[str, Any]) -> dict[str, Any]:
-    sources: list[dict[str, Any]] = []
-    anchors: list[dict[str, Any]] = []
-
+def _entity_page_url(payload: dict[str, Any]) -> str | None:
     entity = payload.get("entity") if isinstance(payload.get("entity"), dict) else {}
-    page_url = str(entity.get("page_url") or "").strip() or None
-    _add_source(sources, key="page", url=page_url, kind="page")
+    return str(entity.get("page_url") or "").strip() or None
 
+
+def _collect_entity_page_and_citation_sources(
+    sources: list[dict[str, Any]],
+    payload: dict[str, Any],
+    page_url: str | None,
+) -> None:
+    _add_source(sources, key="page", url=page_url, kind="page")
     citations = payload.get("citations") if isinstance(payload.get("citations"), dict) else {}
     for label, url in sorted(citations.items()):
         if isinstance(url, str) and url.strip():
             _add_source(sources, key=f"citations.{label}", url=url, kind=label)
 
+
+def _collect_tooltip_summary_claims(
+    anchors: list[dict[str, Any]],
+    payload: dict[str, Any],
+    page_url: str | None,
+) -> None:
     tooltip = payload.get("tooltip") if isinstance(payload.get("tooltip"), dict) else {}
     for field in ("name", "quality", "icon"):
         value = tooltip.get(field)
@@ -59,6 +68,12 @@ def citation_pack_from_entity(payload: dict[str, Any]) -> dict[str, Any]:
         if value is not None and page_url:
             _add_claim(anchors, claim=f"summary.{field}", source_key="page", url=page_url)
 
+
+def _collect_linked_entity_citations(
+    sources: list[dict[str, Any]],
+    anchors: list[dict[str, Any]],
+    payload: dict[str, Any],
+) -> None:
     linked = payload.get("linked_entities") if isinstance(payload.get("linked_entities"), dict) else {}
     items = linked.get("items") if isinstance(linked.get("items"), list) else []
     for index, row in enumerate(items):
@@ -76,6 +91,13 @@ def citation_pack_from_entity(payload: dict[str, Any]) -> dict[str, Any]:
                 url=link_url,
             )
 
+
+def _collect_comment_citations(
+    sources: list[dict[str, Any]],
+    anchors: list[dict[str, Any]],
+    payload: dict[str, Any],
+    page_url: str | None,
+) -> None:
     comments = payload.get("comments") if isinstance(payload.get("comments"), dict) else {}
     for bucket in ("top", "items"):
         rows = comments.get(bucket) if isinstance(comments.get(bucket), list) else []
@@ -98,14 +120,25 @@ def citation_pack_from_entity(payload: dict[str, Any]) -> dict[str, Any]:
                     anchor=fragment,
                 )
 
-    return build_citation_pack(sources=sources, anchors=anchors)
 
-
-def citation_pack_from_compare(payload: dict[str, Any]) -> dict[str, Any]:
+def citation_pack_from_entity(payload: dict[str, Any]) -> dict[str, Any]:
     sources: list[dict[str, Any]] = []
     anchors: list[dict[str, Any]] = []
 
-    entities = payload.get("entities") if isinstance(payload.get("entities"), list) else []
+    page_url = _entity_page_url(payload)
+    _collect_entity_page_and_citation_sources(sources, payload, page_url)
+    _collect_tooltip_summary_claims(anchors, payload, page_url)
+    _collect_linked_entity_citations(sources, anchors, payload)
+    _collect_comment_citations(sources, anchors, payload, page_url)
+
+    return build_citation_pack(sources=sources, anchors=anchors)
+
+
+def _merge_entity_citation_packs(
+    sources: list[dict[str, Any]],
+    anchors: list[dict[str, Any]],
+    entities: list[Any],
+) -> None:
     for entity_row in entities:
         if not isinstance(entity_row, dict):
             continue
@@ -136,7 +169,11 @@ def citation_pack_from_compare(payload: dict[str, Any]) -> dict[str, Any]:
                 }
             )
 
-    comparison = payload.get("comparison") if isinstance(payload.get("comparison"), dict) else {}
+
+def _collect_comparison_linked_entity_sources(
+    sources: list[dict[str, Any]],
+    comparison: dict[str, Any],
+) -> None:
     linked = comparison.get("linked_entities") if isinstance(comparison.get("linked_entities"), dict) else {}
     for bucket in ("shared_items",):
         rows = linked.get(bucket) if isinstance(linked.get(bucket), list) else []
@@ -160,6 +197,12 @@ def citation_pack_from_compare(payload: dict[str, Any]) -> dict[str, Any]:
                 kind="linked_entity",
             )
 
+
+def _collect_comparison_field_claims(
+    anchors: list[dict[str, Any]],
+    comparison: dict[str, Any],
+    entities: list[Any],
+) -> None:
     fields = comparison.get("fields") if isinstance(comparison.get("fields"), dict) else {}
     for field_name, field_row in sorted(fields.items()):
         if not isinstance(field_row, dict):
@@ -177,5 +220,17 @@ def citation_pack_from_compare(payload: dict[str, Any]) -> dict[str, Any]:
                 source_key=f"{ref}.page",
                 url=page_url if isinstance(page_url, str) else None,
             )
+
+
+def citation_pack_from_compare(payload: dict[str, Any]) -> dict[str, Any]:
+    sources: list[dict[str, Any]] = []
+    anchors: list[dict[str, Any]] = []
+
+    entities = payload.get("entities") if isinstance(payload.get("entities"), list) else []
+    _merge_entity_citation_packs(sources, anchors, entities)
+
+    comparison = payload.get("comparison") if isinstance(payload.get("comparison"), dict) else {}
+    _collect_comparison_linked_entity_sources(sources, comparison)
+    _collect_comparison_field_claims(anchors, comparison, entities)
 
     return build_citation_pack(sources=sources, anchors=anchors)
