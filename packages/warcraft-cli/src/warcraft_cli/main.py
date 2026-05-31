@@ -399,6 +399,214 @@ def _unique_non_empty_strings(values: list[Any]) -> list[str]:
     return rows
 
 
+def _resolve_handoff_build_code(reference: dict[str, Any], build_url: str) -> str | None:
+    build_code = reference.get("build_code")
+    parsed_ref = parse_wowhead_talent_calc_ref(build_url)
+    if not isinstance(build_code, str) or not build_code.strip():
+        build_code = parsed_ref.get("build_code") if isinstance(parsed_ref, dict) else None
+    if not isinstance(build_code, str) or not build_code.strip():
+        return None
+    return build_code
+
+
+def _build_handoff_transport_packet(
+    build_url: str,
+    normalized_reference: dict[str, Any],
+    sources: list[Any],
+) -> Any:
+    return build_reference_transport_packet_payload(
+        ref=build_url,
+        provider="warcraft",
+        source="guide_build_reference_handoff",
+        label=normalized_reference.get("label") if isinstance(normalized_reference.get("label"), str) else None,
+        source_urls=_unique_non_empty_strings(
+            [
+                url
+                for source_row in sources
+                if isinstance(source_row, dict)
+                for url in (source_row.get("source_urls") or [])
+            ]
+        ),
+        notes=[
+            "exact build reference came from exported guide bundles",
+            "transport packet preserves the same explicit wowhead ref used for simc handoff",
+        ],
+        scope={"type": "guide_build_reference_handoff"},
+    )
+
+
+def _invoke_simc_for_handoff(
+    build_input_args: list[str],
+    *,
+    decode: bool,
+    apl_path: str | None,
+    expansion: str | None,
+) -> dict[str, Any | None]:
+    identify_result = provider_invoke("simc", ["identify-build", *build_input_args], expansion=expansion)
+    decode_result = (
+        provider_invoke("simc", ["decode-build", *build_input_args], expansion=expansion)
+        if decode
+        else None
+    )
+    describe_result = (
+        provider_invoke(
+            "simc",
+            ["describe-build", "--apl-path", apl_path, *build_input_args],
+            expansion=expansion,
+        )
+        if isinstance(apl_path, str) and apl_path.strip()
+        else None
+    )
+    identify_result = _normalize_simc_transport_packet_path(identify_result, stable_packet_path=None)
+    decode_result = (
+        _normalize_simc_transport_packet_path(decode_result, stable_packet_path=None)
+        if isinstance(decode_result, dict)
+        else None
+    )
+    describe_result = (
+        _normalize_simc_transport_packet_path(describe_result, stable_packet_path=None)
+        if isinstance(describe_result, dict)
+        else None
+    )
+    return {"identify": identify_result, "decode": decode_result, "describe": describe_result}
+
+
+def _handoff_evidence_section(sources: list[Any]) -> dict[str, Any]:
+    return {
+        "explicit_build_reference_only": True,
+        "source_count": len([item for item in sources if isinstance(item, dict)]),
+        "provider_count": len(
+            {
+                provider
+                for provider in (
+                    source_row.get("provider") if isinstance(source_row, dict) else None
+                    for source_row in sources
+                )
+                if isinstance(provider, str) and provider
+            }
+        ),
+        "providers": _unique_non_empty_strings(
+            [source_row.get("provider") for source_row in sources if isinstance(source_row, dict)]
+        ),
+        "bundle_paths": _unique_non_empty_strings(
+            [source_row.get("bundle_path") for source_row in sources if isinstance(source_row, dict)]
+        ),
+        "source_urls": _unique_non_empty_strings(
+            [
+                url
+                for source_row in sources
+                if isinstance(source_row, dict)
+                for url in (source_row.get("source_urls") or [])
+            ]
+        ),
+    }
+
+
+def _handoff_simc_section(simc_results: dict[str, Any | None]) -> dict[str, Any]:
+    identify_result = simc_results["identify"]
+    decode_result = simc_results["decode"]
+    describe_result = simc_results["describe"]
+    return {
+        "identify": {
+            "exit_code": identify_result.get("exit_code"),
+            "payload": identify_result.get("payload"),
+        },
+        "decode": (
+            {"exit_code": decode_result.get("exit_code"), "payload": decode_result.get("payload")}
+            if isinstance(decode_result, dict)
+            else None
+        ),
+        "describe": (
+            {"exit_code": describe_result.get("exit_code"), "payload": describe_result.get("payload")}
+            if isinstance(describe_result, dict)
+            else None
+        ),
+    }
+
+
+def _build_simc_handoff_row(
+    row: dict[str, Any],
+    *,
+    decode: bool,
+    apl_path: str | None,
+    expansion: str | None,
+) -> dict[str, Any] | None:
+    reference = row.get("reference") if isinstance(row.get("reference"), dict) else {}
+    build_url = reference.get("url")
+    if not isinstance(build_url, str) or not build_url.strip():
+        return None
+    build_code = _resolve_handoff_build_code(reference, build_url)
+    if build_code is None:
+        return None
+    normalized_reference = dict(reference)
+    normalized_reference["build_code"] = build_code
+    sources = row.get("sources") if isinstance(row.get("sources"), list) else []
+    transport_packet = _build_handoff_transport_packet(build_url, normalized_reference, sources)
+    packet_path: Path | None = None
+    build_input_args = ["--build-text", build_url]
+    if isinstance(transport_packet, dict):
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            suffix=".json",
+            prefix="guide-build-packet-",
+            delete=False,
+        ) as handle:
+            json.dump(transport_packet, handle, indent=2)
+            handle.write("\n")
+            packet_path = Path(handle.name).resolve()
+        build_input_args = ["--build-packet", str(packet_path)]
+    try:
+        simc_results = _invoke_simc_for_handoff(
+            build_input_args, decode=decode, apl_path=apl_path, expansion=expansion
+        )
+    finally:
+        packet_path.unlink(missing_ok=True) if packet_path is not None else None
+    return {
+        "reference": normalized_reference,
+        "talent_transport_packet": transport_packet,
+        "sources": sources,
+        "evidence": _handoff_evidence_section(sources),
+        "simc": _handoff_simc_section(simc_results),
+    }
+
+
+def _count_simc_handoff_successes(build_rows: list[dict[str, Any]]) -> tuple[int, int, int]:
+    def _success(section_key: str) -> int:
+        return len(
+            [
+                row
+                for row in build_rows
+                if isinstance(((row.get("simc") or {}).get(section_key)), dict)
+                and ((row.get("simc") or {}).get(section_key) or {}).get("exit_code") == 0
+            ]
+        )
+
+    return _success("identify"), _success("decode"), _success("describe")
+
+
+def _handoff_citations(
+    selected_rows: list[dict[str, Any]],
+    bundle_inputs: list[tuple[Path, dict[str, Any]]],
+) -> dict[str, Any]:
+    return {
+        "bundle_paths": [str(path) for path, _bundle in bundle_inputs],
+        "build_reference_urls": _unique_non_empty_strings(
+            [((row.get("reference") or {}).get("url")) for row in selected_rows if isinstance(row, dict)]
+        ),
+        "source_urls": _unique_non_empty_strings(
+            [
+                url
+                for row in selected_rows
+                if isinstance(row, dict)
+                for source_row in (row.get("sources") or [])
+                if isinstance(source_row, dict)
+                for url in (source_row.get("source_urls") or [])
+            ]
+        ),
+    }
+
+
 def _guide_builds_simc_payload(
     *,
     source_path: Path,
@@ -422,170 +630,12 @@ def _guide_builds_simc_payload(
         }
     )
     for row in selected_rows:
-        reference = row.get("reference") if isinstance(row.get("reference"), dict) else {}
-        build_url = reference.get("url")
-        if not isinstance(build_url, str) or not build_url.strip():
-            continue
-        build_code = reference.get("build_code")
-        parsed_ref = parse_wowhead_talent_calc_ref(build_url)
-        if not isinstance(build_code, str) or not build_code.strip():
-            build_code = parsed_ref.get("build_code") if isinstance(parsed_ref, dict) else None
-        if not isinstance(build_code, str) or not build_code.strip():
-            continue
-        normalized_reference = dict(reference)
-        normalized_reference["build_code"] = build_code
-        sources = row.get("sources") if isinstance(row.get("sources"), list) else []
-        transport_packet = build_reference_transport_packet_payload(
-            ref=build_url,
-            provider="warcraft",
-            source="guide_build_reference_handoff",
-            label=normalized_reference.get("label") if isinstance(normalized_reference.get("label"), str) else None,
-            source_urls=_unique_non_empty_strings(
-                [
-                    url
-                    for source_row in sources
-                    if isinstance(source_row, dict)
-                    for url in (source_row.get("source_urls") or [])
-                ]
-            ),
-            notes=[
-                "exact build reference came from exported guide bundles",
-                "transport packet preserves the same explicit wowhead ref used for simc handoff",
-            ],
-            scope={"type": "guide_build_reference_handoff"},
-        )
-        packet_path: Path | None = None
-        build_input_args = ["--build-text", build_url]
-        if isinstance(transport_packet, dict):
-            with tempfile.NamedTemporaryFile(
-                mode="w",
-                encoding="utf-8",
-                suffix=".json",
-                prefix="guide-build-packet-",
-                delete=False,
-            ) as handle:
-                json.dump(transport_packet, handle, indent=2)
-                handle.write("\n")
-                packet_path = Path(handle.name).resolve()
-            build_input_args = ["--build-packet", str(packet_path)]
-        try:
-            identify_result = provider_invoke("simc", ["identify-build", *build_input_args], expansion=expansion)
-            decode_result = (
-                provider_invoke("simc", ["decode-build", *build_input_args], expansion=expansion)
-                if decode
-                else None
-            )
-            describe_result = (
-                provider_invoke(
-                    "simc",
-                    ["describe-build", "--apl-path", apl_path, *build_input_args],
-                    expansion=expansion,
-                )
-                if isinstance(apl_path, str) and apl_path.strip()
-                else None
-            )
-            identify_result = _normalize_simc_transport_packet_path(identify_result, stable_packet_path=None)
-            decode_result = (
-                _normalize_simc_transport_packet_path(decode_result, stable_packet_path=None)
-                if isinstance(decode_result, dict)
-                else None
-            )
-            describe_result = (
-                _normalize_simc_transport_packet_path(describe_result, stable_packet_path=None)
-                if isinstance(describe_result, dict)
-                else None
-            )
-        finally:
-            packet_path.unlink(missing_ok=True) if packet_path is not None else None
-        build_rows.append(
-            {
-                "reference": normalized_reference,
-                "talent_transport_packet": transport_packet,
-                "sources": sources,
-                "evidence": {
-                    "explicit_build_reference_only": True,
-                    "source_count": len([item for item in sources if isinstance(item, dict)]),
-                    "provider_count": len(
-                        {
-                            provider
-                            for provider in (
-                                source_row.get("provider") if isinstance(source_row, dict) else None
-                                for source_row in sources
-                            )
-                            if isinstance(provider, str) and provider
-                        }
-                    ),
-                    "providers": _unique_non_empty_strings(
-                        [
-                            source_row.get("provider")
-                            for source_row in sources
-                            if isinstance(source_row, dict)
-                        ]
-                    ),
-                    "bundle_paths": _unique_non_empty_strings(
-                        [
-                            source_row.get("bundle_path")
-                            for source_row in sources
-                            if isinstance(source_row, dict)
-                        ]
-                    ),
-                    "source_urls": _unique_non_empty_strings(
-                        [
-                            url
-                            for source_row in sources
-                            if isinstance(source_row, dict)
-                            for url in (source_row.get("source_urls") or [])
-                        ]
-                    ),
-                },
-                "simc": {
-                    "identify": {
-                        "exit_code": identify_result.get("exit_code"),
-                        "payload": identify_result.get("payload"),
-                    },
-                    "decode": (
-                        {
-                            "exit_code": decode_result.get("exit_code"),
-                            "payload": decode_result.get("payload"),
-                        }
-                        if isinstance(decode_result, dict)
-                        else None
-                    ),
-                    "describe": (
-                        {
-                            "exit_code": describe_result.get("exit_code"),
-                            "payload": describe_result.get("payload"),
-                        }
-                        if isinstance(describe_result, dict)
-                        else None
-                    ),
-                },
-            }
-        )
+        build_row = _build_simc_handoff_row(row, decode=decode, apl_path=apl_path, expansion=expansion)
+        if build_row is not None:
+            build_rows.append(build_row)
 
-    identify_success_count = len(
-        [
-            row
-            for row in build_rows
-            if isinstance(((row.get("simc") or {}).get("identify")), dict)
-            and ((row.get("simc") or {}).get("identify") or {}).get("exit_code") == 0
-        ]
-    )
-    decode_success_count = len(
-        [
-            row
-            for row in build_rows
-            if isinstance(((row.get("simc") or {}).get("decode")), dict)
-            and ((row.get("simc") or {}).get("decode") or {}).get("exit_code") == 0
-        ]
-    )
-    describe_success_count = len(
-        [
-            row
-            for row in build_rows
-            if isinstance(((row.get("simc") or {}).get("describe")), dict)
-            and ((row.get("simc") or {}).get("describe") or {}).get("exit_code") == 0
-        ]
+    identify_success_count, decode_success_count, describe_success_count = _count_simc_handoff_successes(
+        build_rows
     )
     return {
         "provider": "warcraft",
@@ -602,22 +652,7 @@ def _guide_builds_simc_payload(
             "source_providers": source_providers,
         },
         "freshness": _guide_build_handoff_freshness(source_kind, source_manifest),
-        "citations": {
-            "bundle_paths": [str(path) for path, _bundle in bundle_inputs],
-            "build_reference_urls": _unique_non_empty_strings(
-                [((row.get("reference") or {}).get("url")) for row in selected_rows if isinstance(row, dict)]
-            ),
-            "source_urls": _unique_non_empty_strings(
-                [
-                    url
-                    for row in selected_rows
-                    if isinstance(row, dict)
-                    for source_row in (row.get("sources") or [])
-                    if isinstance(source_row, dict)
-                    for url in (source_row.get("source_urls") or [])
-                ]
-            ),
-        },
+        "citations": _handoff_citations(selected_rows, bundle_inputs),
         "bundle_count": len(bundle_inputs),
         "build_reference_count": len(handoff_rows),
         "truncated": len(handoff_rows) > len(selected_rows),
@@ -1727,6 +1762,154 @@ def guide_compare(
     _emit(payload, pretty=_pretty(ctx))
 
 
+def _resolve_guide_compare_candidate(
+    provider_name: str,
+    query: str,
+    *,
+    limit: int,
+    expansion: str | None,
+) -> tuple[dict[str, Any] | None, str | None, dict[str, Any] | None, dict[str, Any] | None]:
+    resolved = provider_resolve(provider_name, query, limit=limit, expansion=expansion)
+    candidate, candidate_reason = _resolved_guide_match(
+        provider_name,
+        resolved.get("payload") if isinstance(resolved, dict) else None,
+    )
+    search_payload: dict[str, Any] | None = None
+    if candidate is None:
+        searched = provider_search(provider_name, query, limit=limit, expansion=expansion)
+        search_payload = searched.get("payload") if isinstance(searched, dict) else None
+        fallback_candidate, fallback_reason = _search_fallback_guide_match(provider_name, search_payload)
+        if fallback_candidate is not None:
+            candidate = fallback_candidate
+            candidate_reason = None
+        else:
+            candidate_reason = fallback_reason if fallback_reason is not None else candidate_reason
+    resolve_payload = resolved.get("payload") if isinstance(resolved, dict) else None
+    return candidate, candidate_reason, resolve_payload, search_payload
+
+
+def _process_guide_compare_provider(
+    provider_name: str,
+    *,
+    query: str,
+    requested_expansion: str | None,
+    limit: int,
+    max_age_hours: int,
+    force_refresh: bool,
+    orchestration_root: Path,
+    manifest_by_provider: dict[str, dict[str, Any]],
+) -> tuple[dict[str, Any], tuple[Path, dict[str, Any]] | None]:
+    registration = get_provider(provider_name)
+    exclusion_reason = provider_expansion_exclusion_reason(
+        registration,
+        requested_expansion=requested_expansion,
+    )
+    if exclusion_reason is not None:
+        return {
+            "provider": provider_name,
+            "status": "skipped",
+            "reason": exclusion_reason,
+            "expansion_support": provider_expansion_support(
+                registration,
+                requested_expansion=requested_expansion,
+            ),
+        }, None
+
+    candidate, candidate_reason, resolve_payload, search_payload = _resolve_guide_compare_candidate(
+        provider_name,
+        query,
+        limit=limit,
+        expansion=requested_expansion,
+    )
+    if candidate is None:
+        return {
+            "provider": provider_name,
+            "status": "skipped",
+            "reason": candidate_reason,
+            "resolve": resolve_payload,
+            "search": search_payload,
+        }, None
+
+    export_dir = orchestration_root / provider_name
+    existing_row = manifest_by_provider.get(provider_name)
+    existing_freshness = (
+        _guide_compare_freshness(existing_row.get("exported_at"), max_age_hours=max_age_hours)
+        if isinstance(existing_row, dict)
+        else {"status": "stale", "reason": "missing_manifest_row", "age_hours": None, "max_age_hours": max_age_hours}
+    )
+    same_candidate = (
+        isinstance(existing_row, dict)
+        and str(existing_row.get("candidate_ref") or "") == str(candidate["ref"])
+        and str(existing_row.get("bundle_path") or "") == str(export_dir)
+    )
+    can_reuse = (
+        not force_refresh
+        and same_candidate
+        and existing_freshness.get("status") == "fresh"
+        and export_dir.exists()
+    )
+    if can_reuse:
+        try:
+            bundle = load_article_bundle(export_dir)
+        except (ValueError, OSError) as exc:
+            return {
+                "provider": provider_name,
+                "status": "error",
+                "reason": "invalid_exported_bundle",
+                "candidate": candidate,
+                "bundle_path": str(export_dir),
+                "freshness": existing_freshness,
+                "error": str(exc),
+            }, None
+        return {
+            "provider": provider_name,
+            "status": "reused",
+            "candidate": candidate,
+            "bundle_path": str(export_dir),
+            "freshness": existing_freshness,
+            "exported_at": existing_row.get("exported_at") if isinstance(existing_row, dict) else None,
+        }, (export_dir, bundle)
+
+    export_result = provider_invoke(
+        provider_name,
+        ["guide-export", candidate["ref"], "--out", str(export_dir)],
+        expansion=requested_expansion,
+    )
+    if export_result.get("exit_code") != 0:
+        return {
+            "provider": provider_name,
+            "status": "error",
+            "reason": "guide_export_failed",
+            "candidate": candidate,
+            "bundle_path": str(export_dir),
+            "freshness": existing_freshness,
+            "export": export_result.get("payload"),
+        }, None
+    try:
+        bundle = load_article_bundle(export_dir)
+    except (ValueError, OSError) as exc:
+        return {
+            "provider": provider_name,
+            "status": "error",
+            "reason": "invalid_exported_bundle",
+            "candidate": candidate,
+            "bundle_path": str(export_dir),
+            "freshness": existing_freshness,
+            "error": str(exc),
+        }, None
+
+    exported_at = _iso_now_utc()
+    return {
+        "provider": provider_name,
+        "status": "exported",
+        "candidate": candidate,
+        "bundle_path": str(export_dir),
+        "freshness": _guide_compare_freshness(exported_at, max_age_hours=max_age_hours),
+        "exported_at": exported_at,
+        "export": export_result.get("payload"),
+    }, (export_dir, bundle)
+
+
 @app.command("guide-compare-query")
 def guide_compare_query(
     ctx: typer.Context,
@@ -1816,157 +1999,19 @@ def guide_compare_query(
     bundle_inputs: list[tuple[Path, dict[str, Any]]] = []
 
     for provider_name in selected_providers:
-        registration = get_provider(provider_name)
-        exclusion_reason = provider_expansion_exclusion_reason(
-            registration,
+        provider_row, bundle_input = _process_guide_compare_provider(
+            provider_name,
+            query=query,
             requested_expansion=requested_expansion,
-        )
-        if exclusion_reason is not None:
-            provider_rows.append(
-                {
-                    "provider": provider_name,
-                    "status": "skipped",
-                    "reason": exclusion_reason,
-                    "expansion_support": provider_expansion_support(
-                        registration,
-                        requested_expansion=requested_expansion,
-                    ),
-                }
-            )
-            continue
-
-        resolved = provider_resolve(
-            provider_name,
-            query,
             limit=limit,
-            expansion=requested_expansion,
+            max_age_hours=max_age_hours,
+            force_refresh=force_refresh,
+            orchestration_root=orchestration_root,
+            manifest_by_provider=manifest_by_provider,
         )
-        candidate, candidate_reason = _resolved_guide_match(
-            provider_name,
-            resolved.get("payload") if isinstance(resolved, dict) else None,
-        )
-        search_payload: dict[str, Any] | None = None
-        if candidate is None:
-            searched = provider_search(
-                provider_name,
-                query,
-                limit=limit,
-                expansion=requested_expansion,
-            )
-            search_payload = searched.get("payload") if isinstance(searched, dict) else None
-            fallback_candidate, fallback_reason = _search_fallback_guide_match(
-                provider_name,
-                search_payload,
-            )
-            if fallback_candidate is not None:
-                candidate = fallback_candidate
-                candidate_reason = None
-            else:
-                candidate_reason = fallback_reason if fallback_reason is not None else candidate_reason
-        if candidate is None:
-            provider_rows.append(
-                {
-                    "provider": provider_name,
-                    "status": "skipped",
-                    "reason": candidate_reason,
-                    "resolve": resolved.get("payload") if isinstance(resolved, dict) else None,
-                    "search": search_payload,
-                }
-            )
-            continue
-
-        export_dir = orchestration_root / provider_name
-        existing_row = manifest_by_provider.get(provider_name)
-        existing_freshness = (
-            _guide_compare_freshness(existing_row.get("exported_at"), max_age_hours=max_age_hours)
-            if isinstance(existing_row, dict)
-            else {"status": "stale", "reason": "missing_manifest_row", "age_hours": None, "max_age_hours": max_age_hours}
-        )
-        same_candidate = (
-            isinstance(existing_row, dict)
-            and str(existing_row.get("candidate_ref") or "") == str(candidate["ref"])
-            and str(existing_row.get("bundle_path") or "") == str(export_dir)
-        )
-        can_reuse = (
-            not force_refresh
-            and same_candidate
-            and existing_freshness.get("status") == "fresh"
-            and export_dir.exists()
-        )
-        if can_reuse:
-            try:
-                bundle_inputs.append((export_dir, load_article_bundle(export_dir)))
-            except (ValueError, OSError) as exc:
-                provider_rows.append(
-                    {
-                        "provider": provider_name,
-                        "status": "error",
-                        "reason": "invalid_exported_bundle",
-                        "candidate": candidate,
-                        "bundle_path": str(export_dir),
-                        "freshness": existing_freshness,
-                        "error": str(exc),
-                    }
-                )
-                continue
-            provider_rows.append(
-                {
-                    "provider": provider_name,
-                    "status": "reused",
-                    "candidate": candidate,
-                    "bundle_path": str(export_dir),
-                    "freshness": existing_freshness,
-                    "exported_at": existing_row.get("exported_at") if isinstance(existing_row, dict) else None,
-                }
-            )
-            continue
-
-        export_result = provider_invoke(
-            provider_name,
-            ["guide-export", candidate["ref"], "--out", str(export_dir)],
-            expansion=requested_expansion,
-        )
-        if export_result.get("exit_code") != 0:
-            provider_rows.append(
-                {
-                    "provider": provider_name,
-                    "status": "error",
-                    "reason": "guide_export_failed",
-                    "candidate": candidate,
-                    "bundle_path": str(export_dir),
-                    "freshness": existing_freshness,
-                    "export": export_result.get("payload"),
-                }
-            )
-            continue
-        try:
-            bundle_inputs.append((export_dir, load_article_bundle(export_dir)))
-        except (ValueError, OSError) as exc:
-            provider_rows.append(
-                {
-                    "provider": provider_name,
-                    "status": "error",
-                    "reason": "invalid_exported_bundle",
-                    "candidate": candidate,
-                    "bundle_path": str(export_dir),
-                    "freshness": existing_freshness,
-                    "error": str(exc),
-                }
-            )
-            continue
-
-        exported_at = _iso_now_utc()
-        provider_rows.append(
-            {
-                "provider": provider_name,
-                "status": "exported",
-                "candidate": candidate,
-                "bundle_path": str(export_dir),
-                "freshness": _guide_compare_freshness(exported_at, max_age_hours=max_age_hours),
-                "exported_at": exported_at,
-                "export": export_result.get("payload"),
-            }
-        )
+        provider_rows.append(provider_row)
+        if bundle_input is not None:
+            bundle_inputs.append(bundle_input)
 
     payload: dict[str, Any] = {
         "provider": "warcraft",
