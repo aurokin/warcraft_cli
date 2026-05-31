@@ -2602,6 +2602,39 @@ def test_simc_modify_build_fails_on_bad_add_format(monkeypatch) -> None:
     assert payload["error"]["code"] == "invalid_add"
 
 
+def test_simc_modify_build_aborts_when_swap_tree_decode_fails(monkeypatch) -> None:
+    # Regression: a failing --swap-*-tree-from source must abort the command via
+    # _fail (typer.Exit) even when --add/--remove are also present — it must NOT
+    # fall through to encode/emit a modified build.
+    base_res = _fake_resolution()
+    decode_calls = {"n": 0}
+
+    def fake_decode(p, s):  # noqa: ANN001
+        decode_calls["n"] += 1
+        if decode_calls["n"] == 1:
+            return base_res
+        raise ValueError("swap source is undecodable")
+
+    monkeypatch.setattr(
+        "simc_cli.main._load_identified_build_spec",
+        lambda *a, **kw: (_fake_build_spec(), _fake_identity()),
+    )
+    monkeypatch.setattr("simc_cli.main.load_build_spec", lambda **kw: _fake_build_spec())
+    monkeypatch.setattr("simc_cli.main.decode_build", fake_decode)
+    monkeypatch.setattr("simc_cli.main.encode_build", lambda p, s: "LEAKED_EXPORT")
+
+    result = runner.invoke(simc_app, [
+        "modify-build", "--talents", "BASE",
+        "--swap-class-tree-from", "REF", "--add", "forestwalk:2",
+    ])
+    assert result.exit_code == 1
+    payload = json.loads(result.stderr)
+    assert payload["error"]["code"] == "decode_failed"
+    # No modified build may be encoded or emitted after the swap decode failure.
+    assert "LEAKED_EXPORT" not in result.stdout
+    assert result.stdout.strip() == ""
+
+
 def test_simc_modify_build_rejects_buildless_wowhead_talent_calc_url() -> None:
     result = runner.invoke(
         simc_app,

@@ -2749,6 +2749,7 @@ def _resolve_modify_tree_entries(
         try:
             swap_resolution = decode_build(paths, swap_spec)
         except (FileNotFoundError, RuntimeError, ValueError) as exc:
+            # _fail raises typer.Exit, so the command aborts here; the return is unreachable.
             _fail(ctx, "decode_failed", f"Failed to decode {tree_name} tree source: {exc}")
             return None, None, None
         entries_str = tree_entries_string(swap_resolution.talents_by_tree.get(tree_name, []))
@@ -2803,6 +2804,7 @@ def _build_modify_overrides(
                 f"Cannot resolve talent to remove: '{token}'. "
                 "Use an entry ID or a name from the base build."
             )
+            # _fail raises typer.Exit; the return is unreachable defensive code.
             _fail(ctx, "unknown_talent", msg)
             return overrides
         modifications.append(f"remove:{token}")
