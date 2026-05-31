@@ -21,6 +21,7 @@ PACKAGE_SRC_DIRS = (
     ROOT / "packages" / "simc-cli" / "src",
     ROOT / "packages" / "warcraftlogs-cli" / "src",
     ROOT / "packages" / "raidbots-cli" / "src",
+    ROOT / "packages" / "blizzard-api-cli" / "src",
 )
 LIVE_TEST_ENV_BY_FILE = {
     "test_icy_veins_live.py": "ICY_VEINS_LIVE_TESTS",

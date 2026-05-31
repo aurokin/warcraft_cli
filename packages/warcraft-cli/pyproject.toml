@@ -9,6 +9,7 @@ description = "Umbrella Warcraft CLI"
 readme = "../../README.md"
 requires-python = ">=3.12"
 dependencies = [
+  "blizzard-api-cli>=0.1.0",
   "icy-veins-cli>=0.1.0",
   "orjson>=3.10.16,<4.0.0",
   "typer>=0.12.5,<1.0.0",

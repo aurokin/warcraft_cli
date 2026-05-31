@@ -6,7 +6,7 @@ VENV_DIR="$ROOT_DIR/.venv"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 LINK_BIN=true
 ALLOW_LINK_BIN="${WARCRAFT_ALLOW_LINK_BIN:-}"
-BIN_NAMES="${WARCRAFT_BIN_NAMES:-warcraft wowhead method icy-veins raiderio warcraft-wiki wowprogress simc warcraftlogs raidbots}"
+BIN_NAMES="${WARCRAFT_BIN_NAMES:-warcraft wowhead method icy-veins raiderio warcraft-wiki wowprogress simc warcraftlogs raidbots blizzard}"
 
 while (($#)); do
   case "$1" in

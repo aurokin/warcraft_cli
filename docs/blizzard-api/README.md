@@ -44,6 +44,23 @@ The first useful slice should stay narrower than that:
 - one game-data lookup
 - one profile lookup
 
+## Implemented (scaffold)
+
+The first slice (AUR-390) ships the package, wrapper registration, and `doctor` only:
+
+- `blizzard doctor` — reports install state, auth posture, a deferred region block, and honest capability metadata.
+- Routed through the wrapper as `warcraft blizzard doctor`.
+- Auth is OAuth client-credentials. Credentials are discovered in this order (matching `warcraftlogs`):
+  1. repo `.env.local`
+  2. `~/.config/warcraft/providers/blizzard-api.env`
+  3. process environment
+
+  Set `BLIZZARD_CLIENT_ID` and `BLIZZARD_CLIENT_SECRET`. `doctor` reports whether credentials are configured and where they came from; it never prints the secret. Token/state persistence uses `warcraft_core.auth` at `~/.local/state/warcraft/providers/blizzard-api.json`.
+- Region is region/namespace-aware by design but **routing is deferred**: `doctor` surfaces `BLIZZARD_REGION` if set, but no endpoint uses it yet.
+- The wrapper registers `blizzard-api` with `expansion_mode=none` (deferred) so it does not join expansion fanout until endpoint routing exists.
+
+Deferred to a follow-up: the live OAuth token exchange, one Game Data + one Profile endpoint, region/namespace routing, and contract fixtures.
+
 ## What Can Reuse Shared Code
 
 - shared HTTP infrastructure
