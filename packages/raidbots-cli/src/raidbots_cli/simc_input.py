@@ -155,6 +155,9 @@ def simc_handoff(text: str, classification: dict[str, Any]) -> dict[str, Any]:
             {
                 "purpose": "Summarize the build's APL and active talents.",
                 "command": f"simc describe-build {identity} --talents {talents_arg}",
+                # Unlike decode-build, describe-build needs an APL: without --apl-path it resolves the
+                # default <class>_<spec> APL from a checked-out SimC repo and fails (not_found) if absent.
+                "requires": "a checked-out SimC repo (run `simc doctor`), or pass --apl-path explicitly.",
             }
         )
 

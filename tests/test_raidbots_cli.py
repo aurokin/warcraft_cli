@@ -299,6 +299,18 @@ def test_simc_handoff_shell_quotes_untrusted_talents() -> None:
     assert "touch" not in tokens  # the injected command never becomes its own token
 
 
+def test_simc_handoff_describe_build_flags_apl_requirement() -> None:
+    # describe-build (unlike decode-build) needs a default/explicit APL, so the suggestion
+    # must surface that an agent won't otherwise know it can fail with not_found.
+    text = 'mage="Main"\nspec=frost\ntalents=CYG\n'
+    handoff = simc_handoff(text, classify_simc_input(text))
+    commands = handoff["suggested_simc_commands"]
+    describe = next(c for c in commands if c["command"].startswith("simc describe-build"))
+    decode = next(c for c in commands if c["command"].startswith("simc decode-build"))
+    assert "apl" in describe["requires"].lower()
+    assert "requires" not in decode  # decode-build is self-sufficient
+
+
 def test_simc_handoff_omits_decode_without_class_and_spec() -> None:
     # An advanced/raw input with a talents line but no actor declaration cannot resolve
     # class/spec, so only the full-profile run is suggested.
