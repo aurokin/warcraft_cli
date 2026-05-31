@@ -98,8 +98,6 @@ def classify_simc_input(text: str) -> dict[str, Any]:
     actor_class, actor_name = _find_actor(lines)
     profileset_names = _profileset_names(lines)
     copy_count = sum(1 for line in lines if line.startswith("copy="))
-    talents_lines = [line for line in lines if line.startswith("talents=")]
-    split_talent_lines = [line for line in lines if any(line.startswith(f"{key}=") for key in _SPLIT_TALENT_KEYS)]
     options = {key: assignments[key] for key in _OPTION_KEYS if key in assignments}
 
     if profileset_names or copy_count:
@@ -116,15 +114,18 @@ def classify_simc_input(text: str) -> dict[str, Any]:
         "spec": assignments.get("spec"),
         "profileset_count": len(profileset_names),
         "copy_count": copy_count,
-        "talents_present": bool(talents_lines or split_talent_lines),
+        "talents_present": "talents" in assignments or any(key in assignments for key in _SPLIT_TALENT_KEYS),
         "options": options,
     }
 
 
 def _talents_value(text: str) -> str | None:
+    # Split on the first `=` and strip the key so `talents = CYG` (space-padded, valid SimC)
+    # is recognized like `talents=CYG`, consistent with _scalar_assignments / _find_actor.
     for line in _iter_clean_lines(text):
-        if line.startswith("talents="):
-            value = line.partition("=")[2].strip()
+        key, sep, value = line.partition("=")
+        if sep and key.strip() == "talents":
+            value = value.strip()
             return value or None
     return None
 
@@ -132,11 +133,12 @@ def _talents_value(text: str) -> str | None:
 def _split_talents(text: str) -> dict[str, str]:
     found: dict[str, str] = {}
     for line in _iter_clean_lines(text):
-        for key in _SPLIT_TALENT_KEYS:
-            if key not in found and line.startswith(f"{key}="):
-                value = line.partition("=")[2].strip()
-                if value:
-                    found[key] = value
+        key, sep, value = line.partition("=")
+        key = key.strip()
+        if sep and key in _SPLIT_TALENT_KEYS and key not in found:
+            value = value.strip()
+            if value:
+                found[key] = value
     return found
 
 

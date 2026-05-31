@@ -73,7 +73,9 @@ def _handle_request_error(ctx: typer.Context, exc: httpx.RequestError) -> None:
 
 def _resolve_report_id_or_fail(ctx: typer.Context, reference: str) -> str:
     try:
-        return resolve_report_id(reference)
+        # Pass the configured (env-overridable) report path template so URL input parsing
+        # round-trips the report URLs this CLI emits even when the template is overridden.
+        return resolve_report_id(reference, load_raidbots_urls_from_env().report_path_template)
     except InvalidReportReference as exc:
         _fail(ctx, "invalid_report", str(exc))
         raise AssertionError("unreachable") from None

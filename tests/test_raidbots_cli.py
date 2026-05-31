@@ -134,6 +134,25 @@ def test_parse_report_empty_profilesets_stays_multi_profile() -> None:
     assert "metrics" not in parsed
 
 
+def test_parse_report_empty_list_profilesets_stays_multi_profile() -> None:
+    # The bare list form `"profilesets": []` is still a multi-profile run with zero results;
+    # presence of the key (not its emptiness) determines the kind. players[0] here is the
+    # baseline template, not a user actor, so it must not be reported as a quick sim.
+    report = {
+        "version": "1130-01",
+        "sim": {
+            "options": {},
+            "statistics": {},
+            "players": [{"name": "Baseline", "specialization": "Frost Mage"}],
+            "profilesets": [],
+        },
+    }
+    parsed = parse_report(report, report_id="emptylist")
+    assert parsed["kind"] == "multi_profile"
+    assert parsed["profilesets"]["result_count"] == 0
+    assert "metrics" not in parsed
+
+
 def test_parse_report_profilesets_name_row_mapping() -> None:
     report = {
         "version": "1130-01",
@@ -297,6 +316,32 @@ def test_simc_handoff_shell_quotes_untrusted_talents() -> None:
     tokens = shlex.split(decode)
     assert tokens[tokens.index("--talents") + 1] == malicious
     assert "touch" not in tokens  # the injected command never becomes its own token
+
+
+def test_resolve_report_id_honors_overridden_path_template() -> None:
+    # Under a template override that drops `/report/`, the CLI must round-trip the report URLs
+    # it now emits (doctor/citations), not just bare IDs. The documented `/report/{ID}` surface
+    # still resolves regardless, and a bare ID is always drift-proof.
+    template = "/sim/{id}"
+    assert resolve_report_id("https://www.raidbots.com/sim/abc123XYZ", template) == "abc123XYZ"
+    assert resolve_report_id("abc123XYZ", template) == "abc123XYZ"
+    assert resolve_report_id("https://www.raidbots.com/simbot/report/zzz999", template) == "zzz999"
+
+
+def test_classify_recognizes_space_padded_talents() -> None:
+    # SimC permits whitespace around `=`; talents detection must match _scalar_assignments/_find_actor
+    # so a space-padded talents line still drives the decode/describe handoff.
+    text = 'mage = "Main"\nspec = frost\ntalents = CYG\n'
+    classification = classify_simc_input(text)
+    assert classification["actor_class"] == "mage"
+    assert classification["spec"] == "frost"
+    assert classification["talents_present"] is True
+    decode = next(
+        c["command"]
+        for c in simc_handoff(text, classification)["suggested_simc_commands"]
+        if c["command"].startswith("simc decode-build")
+    )
+    assert "--talents CYG" in decode
 
 
 def test_simc_handoff_emits_split_talent_flags() -> None:

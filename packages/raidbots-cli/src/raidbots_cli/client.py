@@ -28,18 +28,20 @@ class InvalidReportReference(ValueError):
     """Raised when a report URL or ID cannot be parsed into a report ID."""
 
 
-def resolve_report_id(value: str) -> str:
-    # Report references are normalized to a bare ID against the documented `/report/{ID}`
-    # surface; all fetches are then rebuilt from the configured (env-overridable) base + path
-    # templates. We deliberately do NOT honor an arbitrary host from a URL input — that keeps
-    # the fetch target trusted/configured (avoids SSRF to arbitrary hosts) and matches the
-    # documented contract (docs/raidbots/README.md: input is a bare ID or a `/report/{ID}` URL).
-    # Env overrides adapt the *fetch* URLs to live drift with no code change; URL-*input* parsing
-    # stays pinned to the public `/report/{ID}` shape, and a bare ID is always accepted — so URL
-    # drift never blocks resolution (paste the ID). By design, not an oversight.
+def resolve_report_id(value: str, report_path_template: str = DEFAULT_REPORT_PATH_TEMPLATE) -> str:
+    # Normalize a report reference to a bare ID. We try, in order: (1) the literal path prefix of
+    # the configured (env-overridable) report path template, so an override also updates URL-INPUT
+    # parsing and the CLI round-trips the report URLs it emits (doctor/citations) under any
+    # template; (2) the documented public `/report/{ID}` surface; (3) a bare ID (always drift-proof).
+    # The URL host is deliberately ignored — fetches rebuild from the configured base (SSRF-safe).
     candidate = (value or "").strip()
     if not candidate:
         raise InvalidReportReference("Report reference is empty.")
+    prefix = report_path_template.split("{id}", 1)[0]
+    if len(prefix) > 1:
+        templated = re.search(re.escape(prefix) + r"([A-Za-z0-9_-]+)", candidate)
+        if templated:
+            return templated.group(1)
     match = _REPORT_ID_RE.search(candidate)
     if match:
         return match.group(1)

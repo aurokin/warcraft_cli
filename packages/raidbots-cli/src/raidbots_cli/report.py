@@ -135,12 +135,11 @@ def _profileset_metric(profilesets: Any) -> str | None:
 
 
 def _has_profilesets(profilesets: Any) -> bool:
-    # Presence-based: a non-empty profilesets container means this was a multi-profile run
-    # (Top Gear / Droptimizer). Quick sims never emit `sim.profilesets` at all, so even an
-    # empty `results` list must not be misclassified as a quick sim off players[0].
-    if isinstance(profilesets, dict):
-        return bool(profilesets)
-    return isinstance(profilesets, list) and bool(profilesets)
+    # Presence-based: if `sim.profilesets` is present as a container at all, this was a
+    # multi-profile run (Top Gear / Droptimizer). Quick sims never emit `sim.profilesets`, so
+    # even an empty list/dict must route to multi_profile, not be misread as a quick sim off
+    # players[0] (which in a multi-profile run is the baseline template, not a user actor).
+    return isinstance(profilesets, (dict, list))
 
 
 def _simbot_metadata(report: dict[str, Any]) -> dict[str, Any]:
