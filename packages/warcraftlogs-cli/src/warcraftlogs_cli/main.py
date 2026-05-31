@@ -1909,29 +1909,35 @@ def _encounter_buff_rows_payload(
 
 
 
-def _resolve_encounter(
+def _resolve_encounter_by_id(
     ctx: typer.Context,
     *,
     client: WarcraftLogsClient,
     zone_id: int,
-    boss_id: int | None,
+    boss_id: int,
     boss_name: str | None,
+    encounters: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    zone = client.zone(zone_id=zone_id)
-    encounters = [row for row in (zone.get("encounters") if isinstance(zone.get("encounters"), list) else []) if isinstance(row, dict)]
+    zone_match = next((row for row in encounters if row.get("id") == boss_id), None)
+    if zone_match is None:
+        _fail(ctx, "not_found", f"Encounter {boss_id} was not found in zone {zone_id}.")
+    if boss_name and not _boss_matches(zone_match, boss_id=None, boss_name=boss_name):
+        _fail(ctx, "boss_scope_mismatch", f"Encounter {boss_id} in zone {zone_id} does not match boss name {boss_name!r}.")
+    encounter = client.encounter(encounter_id=boss_id)
+    encounter_zone = encounter.get("zone") if isinstance(encounter.get("zone"), dict) else {}
+    if encounter_zone.get("id") != zone_id:
+        _fail(ctx, "boss_scope_mismatch", f"Encounter {boss_id} does not belong to zone {zone_id}.")
+    return encounter
 
-    if boss_id is not None:
-        zone_match = next((row for row in encounters if row.get("id") == boss_id), None)
-        if zone_match is None:
-            _fail(ctx, "not_found", f"Encounter {boss_id} was not found in zone {zone_id}.")
-        if boss_name and not _boss_matches(zone_match, boss_id=None, boss_name=boss_name):
-            _fail(ctx, "boss_scope_mismatch", f"Encounter {boss_id} in zone {zone_id} does not match boss name {boss_name!r}.")
-        encounter = client.encounter(encounter_id=boss_id)
-        encounter_zone = encounter.get("zone") if isinstance(encounter.get("zone"), dict) else {}
-        if encounter_zone.get("id") != zone_id:
-            _fail(ctx, "boss_scope_mismatch", f"Encounter {boss_id} does not belong to zone {zone_id}.")
-        return encounter
 
+def _resolve_encounter_by_name(
+    ctx: typer.Context,
+    *,
+    client: WarcraftLogsClient,
+    zone_id: int,
+    boss_name: str | None,
+    encounters: list[dict[str, Any]],
+) -> dict[str, Any]:
     query = _normalize_match_text(boss_name)
     if not query:
         _fail(ctx, "missing_boss", "Provide --boss-id or --boss-name.")
@@ -1948,6 +1954,25 @@ def _resolve_encounter(
     if not isinstance(encounter_id, int):
         _fail(ctx, "invalid_provider_payload", f"Encounter rows for zone {zone_id} did not include a stable encounter id.")
     return client.encounter(encounter_id=encounter_id)
+
+
+def _resolve_encounter(
+    ctx: typer.Context,
+    *,
+    client: WarcraftLogsClient,
+    zone_id: int,
+    boss_id: int | None,
+    boss_name: str | None,
+) -> dict[str, Any]:
+    zone = client.zone(zone_id=zone_id)
+    encounters = [row for row in (zone.get("encounters") if isinstance(zone.get("encounters"), list) else []) if isinstance(row, dict)]
+    if boss_id is not None:
+        return _resolve_encounter_by_id(
+            ctx, client=client, zone_id=zone_id, boss_id=boss_id, boss_name=boss_name, encounters=encounters
+        )
+    return _resolve_encounter_by_name(
+        ctx, client=client, zone_id=zone_id, boss_name=boss_name, encounters=encounters
+    )
 
 
 def _encounter_rankings_rows(value: Any) -> list[dict[str, Any]]:
@@ -1999,73 +2024,37 @@ def _encounter_ranking_other_players_count(row: dict[str, Any]) -> int:
     return 0
 
 
+def _first_non_empty_str(*values: Any) -> str | None:
+    for value in values:
+        if isinstance(value, str) and value.strip():
+            return value
+    return None
+
+
+def _first_int(*values: Any) -> int | None:
+    for value in values:
+        if isinstance(value, int):
+            return value
+    return None
+
+
 def _encounter_ranking_row_payload(row: dict[str, Any], *, page: int, row_index: int) -> dict[str, Any]:
     report = row.get("report") if isinstance(row.get("report"), dict) else {}
     server = row.get("server") if isinstance(row.get("server"), dict) else {}
     guild = row.get("guild") if isinstance(row.get("guild"), dict) else {}
     class_name = row.get("className") if isinstance(row.get("className"), str) else row.get("class")
     spec_name = row.get("spec") if isinstance(row.get("spec"), str) else row.get("specName")
-    report_code = next(
-        (
-            value
-            for value in (
-                row.get("reportCode"),
-                row.get("reportID"),
-                row.get("code"),
-                report.get("code"),
-            )
-            if isinstance(value, str) and value.strip()
-        ),
-        None,
+    report_code = _first_non_empty_str(
+        row.get("reportCode"), row.get("reportID"), row.get("code"), report.get("code")
     )
-    fight_id = next(
-        (
-            value
-            for value in (
-                row.get("fightID"),
-                row.get("fightId"),
-                report.get("fightID"),
-                report.get("fightId"),
-            )
-            if isinstance(value, int)
-        ),
-        None,
+    fight_id = _first_int(
+        row.get("fightID"), row.get("fightId"), report.get("fightID"), report.get("fightId")
     )
     return {
         "name": row.get("name"),
-        "server_name": next(
-            (
-                value
-                for value in (
-                    row.get("serverName"),
-                    server.get("name"),
-                )
-                if isinstance(value, str) and value.strip()
-            ),
-            None,
-        ),
-        "server_region": next(
-            (
-                value
-                for value in (
-                    row.get("serverRegion"),
-                    server.get("region"),
-                )
-                if isinstance(value, str) and value.strip()
-            ),
-            None,
-        ),
-        "guild_name": next(
-            (
-                value
-                for value in (
-                    row.get("guildName"),
-                    guild.get("name"),
-                )
-                if isinstance(value, str) and value.strip()
-            ),
-            None,
-        ),
+        "server_name": _first_non_empty_str(row.get("serverName"), server.get("name")),
+        "server_region": _first_non_empty_str(row.get("serverRegion"), server.get("region")),
+        "guild_name": _first_non_empty_str(row.get("guildName"), guild.get("name")),
         "class_name": class_name,
         "spec_name": spec_name,
         "class_spec_identity": class_spec_identity_payload(
@@ -2269,21 +2258,16 @@ def _player_talent_transport_packet(
 
 
 
-def _boss_spec_usage_payload(
-    *,
+def _accumulate_boss_spec_counts(
     rows: list[dict[str, Any]],
-    sample: dict[str, Any],
-    query: dict[str, Any],
-    top: int,
-) -> dict[str, Any]:
+) -> tuple[dict[tuple[str, str], dict[str, Any]], int]:
     spec_counts: dict[tuple[str, str], dict[str, Any]] = {}
     sampled_player_rows = 0
-
     for row in rows:
         code = str((row.get("report") or {}).get("code") or "")
         fight_id = int((row.get("fight") or {}).get("id") or 0)
         player_rows = row.get("player_details") if isinstance(row.get("player_details"), list) else []
-        seen_specs_for_fight: set[tuple[str, str]] = set()
+        seen_specs_for_fight: set[tuple[str, int, str, str]] = set()
         for player in player_rows:
             if not isinstance(player, dict):
                 continue
@@ -2315,6 +2299,17 @@ def _boss_spec_usage_payload(
                     entry["kill_presence_count"] += 1
                     if len(entry["sample_fights"]) < 3:
                         entry["sample_fights"].append({"report_code": code, "fight_id": fight_id})
+    return spec_counts, sampled_player_rows
+
+
+def _boss_spec_usage_payload(
+    *,
+    rows: list[dict[str, Any]],
+    sample: dict[str, Any],
+    query: dict[str, Any],
+    top: int,
+) -> dict[str, Any]:
+    spec_counts, sampled_player_rows = _accumulate_boss_spec_counts(rows)
 
     normalized_rows = sorted(
         [
@@ -2460,17 +2455,66 @@ def _collect_comp_sample_rows(
     }
 
 
-def _comp_samples_payload(
+def _record_comp_class_presence(
+    class_presence: dict[str, dict[str, Any]],
+    class_rows: list[Any],
     *,
+    report_code: str,
+    fight_id: int,
+) -> None:
+    seen_classes: set[str] = set()
+    for class_row in class_rows:
+        if not isinstance(class_row, dict):
+            continue
+        class_name = str(class_row.get("class_name") or "").strip()
+        if not class_name:
+            continue
+        count = int(class_row.get("count") or 0)
+        entry = class_presence.setdefault(
+            class_name,
+            {
+                "class_name": class_name,
+                "appearance_count": 0,
+                "kill_presence_count": 0,
+                "sample_fights": [],
+            },
+        )
+        entry["appearance_count"] += count if count > 0 else 1
+        if class_name not in seen_classes:
+            seen_classes.add(class_name)
+            entry["kill_presence_count"] += 1
+            if len(entry["sample_fights"]) < 3:
+                entry["sample_fights"].append({"report_code": report_code, "fight_id": fight_id})
+
+
+def _record_comp_signature(
+    signature_counts: dict[str, dict[str, Any]],
+    class_signature: Any,
+    *,
+    report_code: str,
+    fight_id: int,
+) -> None:
+    if not (isinstance(class_signature, str) and class_signature):
+        return
+    signature_entry = signature_counts.setdefault(
+        class_signature,
+        {
+            "class_signature": class_signature,
+            "kill_count": 0,
+            "sample_fights": [],
+        },
+    )
+    signature_entry["kill_count"] += 1
+    if len(signature_entry["sample_fights"]) < 3:
+        signature_entry["sample_fights"].append({"report_code": report_code, "fight_id": fight_id})
+
+
+def _accumulate_comp_presence(
     rows: list[dict[str, Any]],
-    sample: dict[str, Any],
-    query: dict[str, Any],
-    top: int,
-) -> dict[str, Any]:
+) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]], int]:
     class_presence: dict[str, dict[str, Any]] = {}
     signature_counts: dict[str, dict[str, Any]] = {}
     sampled_player_count = 0
-
     for row in rows:
         report_code = str((row.get("report") or {}).get("code") or "")
         fight_id = int((row.get("fight") or {}).get("id") or 0)
@@ -2479,42 +2523,21 @@ def _comp_samples_payload(
         sampled_player_count += len([player for player in players if isinstance(player, dict)])
         composition = row.get("composition") if isinstance(row.get("composition"), dict) else {}
         class_rows = composition.get("class_counts") if isinstance(composition.get("class_counts"), list) else []
-        seen_classes: set[str] = set()
-        for class_row in class_rows:
-            if not isinstance(class_row, dict):
-                continue
-            class_name = str(class_row.get("class_name") or "").strip()
-            if not class_name:
-                continue
-            count = int(class_row.get("count") or 0)
-            entry = class_presence.setdefault(
-                class_name,
-                {
-                    "class_name": class_name,
-                    "appearance_count": 0,
-                    "kill_presence_count": 0,
-                    "sample_fights": [],
-                },
-            )
-            entry["appearance_count"] += count if count > 0 else 1
-            if class_name not in seen_classes:
-                seen_classes.add(class_name)
-                entry["kill_presence_count"] += 1
-                if len(entry["sample_fights"]) < 3:
-                    entry["sample_fights"].append({"report_code": report_code, "fight_id": fight_id})
-        class_signature = composition.get("class_signature")
-        if isinstance(class_signature, str) and class_signature:
-            signature_entry = signature_counts.setdefault(
-                class_signature,
-                {
-                    "class_signature": class_signature,
-                    "kill_count": 0,
-                    "sample_fights": [],
-                },
-            )
-            signature_entry["kill_count"] += 1
-            if len(signature_entry["sample_fights"]) < 3:
-                signature_entry["sample_fights"].append({"report_code": report_code, "fight_id": fight_id})
+        _record_comp_class_presence(class_presence, class_rows, report_code=report_code, fight_id=fight_id)
+        _record_comp_signature(
+            signature_counts, composition.get("class_signature"), report_code=report_code, fight_id=fight_id
+        )
+    return class_presence, signature_counts, sampled_player_count
+
+
+def _comp_samples_payload(
+    *,
+    rows: list[dict[str, Any]],
+    sample: dict[str, Any],
+    query: dict[str, Any],
+    top: int,
+) -> dict[str, Any]:
+    class_presence, signature_counts, sampled_player_count = _accumulate_comp_presence(rows)
 
     normalized_class_rows = sorted(
         [
@@ -3120,46 +3143,49 @@ def _aura_compare_rows(
         source_name = str(source.get("name") or "")
         return source_id, source_name
 
-    left_index = {_row_key(row): row for row in left_rows if isinstance(row, dict)}
-    right_index = {_row_key(row): row for row in right_rows if isinstance(row, dict)}
-    combined_keys = sorted(set(left_index) | set(right_index), key=lambda item: (str(item[1]).lower(), item[0] or 0))
-    compared: list[dict[str, Any]] = []
-    for key in combined_keys:
-        left = left_index.get(key)
-        right = right_index.get(key)
+    def _compare_row(
+        key: tuple[int | None, str],
+        left: dict[str, Any] | None,
+        right: dict[str, Any] | None,
+    ) -> dict[str, Any]:
         left_total = left.get("reported_total") if isinstance(left, dict) else None
         right_total = right.get("reported_total") if isinstance(right, dict) else None
         left_active = left.get("reported_active_time") if isinstance(left, dict) else None
         right_active = right.get("reported_active_time") if isinstance(right, dict) else None
-        compared.append(
-            {
-                "source": (
-                    left.get("source")
-                    if isinstance(left, dict) and isinstance(left.get("source"), dict)
-                    else (
-                        right.get("source")
-                        if isinstance(right, dict) and isinstance(right.get("source"), dict)
-                        else {"id": key[0], "name": key[1]}
-                    )
-                ),
-                "left_reported_total": left_total,
-                "right_reported_total": right_total,
-                "reported_total_delta": (
-                    round(float(right_total) - float(left_total), 2)
-                    if isinstance(left_total, (int, float)) and isinstance(right_total, (int, float))
-                    else None
-                ),
-                "left_reported_active_time": left_active,
-                "right_reported_active_time": right_active,
-                "reported_active_time_delta": (
-                    int(right_active) - int(left_active)
-                    if isinstance(left_active, (int, float)) and isinstance(right_active, (int, float))
-                    else None
-                ),
-                "left_row": left,
-                "right_row": right,
-            }
-        )
+        return {
+            "source": (
+                left.get("source")
+                if isinstance(left, dict) and isinstance(left.get("source"), dict)
+                else (
+                    right.get("source")
+                    if isinstance(right, dict) and isinstance(right.get("source"), dict)
+                    else {"id": key[0], "name": key[1]}
+                )
+            ),
+            "left_reported_total": left_total,
+            "right_reported_total": right_total,
+            "reported_total_delta": (
+                round(float(right_total) - float(left_total), 2)
+                if isinstance(left_total, (int, float)) and isinstance(right_total, (int, float))
+                else None
+            ),
+            "left_reported_active_time": left_active,
+            "right_reported_active_time": right_active,
+            "reported_active_time_delta": (
+                int(right_active) - int(left_active)
+                if isinstance(left_active, (int, float)) and isinstance(right_active, (int, float))
+                else None
+            ),
+            "left_row": left,
+            "right_row": right,
+        }
+
+    left_index = {_row_key(row): row for row in left_rows if isinstance(row, dict)}
+    right_index = {_row_key(row): row for row in right_rows if isinstance(row, dict)}
+    combined_keys = sorted(set(left_index) | set(right_index), key=lambda item: (str(item[1]).lower(), item[0] or 0))
+    compared: list[dict[str, Any]] = [
+        _compare_row(key, left_index.get(key), right_index.get(key)) for key in combined_keys
+    ]
     compared.sort(
         key=lambda row: (
             -abs(float(row["reported_total_delta"])) if isinstance(row.get("reported_total_delta"), (int, float)) else -1.0,
