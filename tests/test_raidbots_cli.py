@@ -299,6 +299,35 @@ def test_simc_handoff_shell_quotes_untrusted_talents() -> None:
     assert "touch" not in tokens  # the injected command never becomes its own token
 
 
+def test_simc_handoff_emits_split_talent_flags() -> None:
+    # A profile using the split talent keys (no combined talents= line) must still produce the
+    # decode/describe handoff, carrying each split string via its own flag. simc-cli treats this
+    # form as first-class and simc decode-build/describe-build accept --class/spec/hero-talents.
+    text = 'warrior="Main"\nspec=fury\nclass_talents=CIEAAAA\nspec_talents=DAEAAAA\nhero_talents=EAEAAAA\n'
+    classification = classify_simc_input(text)
+    assert classification["talents_present"] is True
+    commands = [c["command"] for c in simc_handoff(text, classification)["suggested_simc_commands"]]
+    decode = next(c for c in commands if c.startswith("simc decode-build"))
+    assert "--class-talents CIEAAAA" in decode
+    assert "--spec-talents DAEAAAA" in decode
+    assert "--hero-talents EAEAAAA" in decode
+    assert decode.count("--talents ") == 0  # no combined flag when only split keys are present
+    assert any(c.startswith("simc describe-build") for c in commands)
+
+
+def test_simc_handoff_prefers_combined_talents_over_split() -> None:
+    # When both a combined talents= line and split keys are present, the combined form wins
+    # (it is the canonical addon-export shape); split flags are not also appended.
+    text = 'mage="Main"\nspec=frost\ntalents=CYG\nclass_talents=IGNOREDD\n'
+    decode = next(
+        c["command"]
+        for c in simc_handoff(text, classify_simc_input(text))["suggested_simc_commands"]
+        if c["command"].startswith("simc decode-build")
+    )
+    assert "--talents CYG" in decode
+    assert "--class-talents" not in decode
+
+
 def test_classify_strips_trailing_inline_comments() -> None:
     # SimC allows trailing `# ...` comments; they must not leak into the actor match or the
     # spec/talents values (which would corrupt the suggested decode/describe commands).

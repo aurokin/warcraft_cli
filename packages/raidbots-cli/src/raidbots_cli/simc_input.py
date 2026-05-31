@@ -36,6 +36,7 @@ _OPTION_KEYS = (
     "max_time",
     "calculate_scale_factors",
 )
+_SPLIT_TALENT_KEYS = ("class_talents", "spec_talents", "hero_talents")
 
 
 def _iter_clean_lines(text: str) -> list[str]:
@@ -98,6 +99,7 @@ def classify_simc_input(text: str) -> dict[str, Any]:
     profileset_names = _profileset_names(lines)
     copy_count = sum(1 for line in lines if line.startswith("copy="))
     talents_lines = [line for line in lines if line.startswith("talents=")]
+    split_talent_lines = [line for line in lines if any(line.startswith(f"{key}=") for key in _SPLIT_TALENT_KEYS)]
     options = {key: assignments[key] for key in _OPTION_KEYS if key in assignments}
 
     if profileset_names or copy_count:
@@ -114,7 +116,7 @@ def classify_simc_input(text: str) -> dict[str, Any]:
         "spec": assignments.get("spec"),
         "profileset_count": len(profileset_names),
         "copy_count": copy_count,
-        "talents_present": bool(talents_lines),
+        "talents_present": bool(talents_lines or split_talent_lines),
         "options": options,
     }
 
@@ -125,6 +127,17 @@ def _talents_value(text: str) -> str | None:
             value = line.partition("=")[2].strip()
             return value or None
     return None
+
+
+def _split_talents(text: str) -> dict[str, str]:
+    found: dict[str, str] = {}
+    for line in _iter_clean_lines(text):
+        for key in _SPLIT_TALENT_KEYS:
+            if key not in found and line.startswith(f"{key}="):
+                value = line.partition("=")[2].strip()
+                if value:
+                    found[key] = value
+    return found
 
 
 _SIM_TYPE_EXPLANATIONS = {
@@ -150,24 +163,34 @@ def simc_handoff(text: str, classification: dict[str, Any]) -> dict[str, Any]:
         }
     ]
     talents = _talents_value(text)
+    split_talents = _split_talents(text)
     actor_class = classification.get("actor_class")
     spec = classification.get("spec")
     # A bare SimC talent code cannot resolve class/spec on its own, so only suggest the
     # talent-decode commands when both are known, and pass them explicitly. shlex.quote keeps
-    # the (untrusted, report-sourced) values shell-safe.
-    if talents and actor_class and spec:
+    # the (untrusted, report-sourced) values shell-safe. Prefer the combined `talents=` line;
+    # fall back to the split class/spec/hero keys (the form edited/saved profiles use) so the
+    # decode/describe handoff still fires. simc decode-build/describe-build accept both forms.
+    if talents:
+        talents_flags = f"--talents {shlex.quote(talents)}"
+    else:
+        talents_flags = " ".join(
+            f"--{key.replace('_', '-')} {shlex.quote(split_talents[key])}"
+            for key in _SPLIT_TALENT_KEYS
+            if key in split_talents
+        )
+    if talents_flags and actor_class and spec:
         identity = f"--actor-class {shlex.quote(str(actor_class))} --spec {shlex.quote(str(spec))}"
-        talents_arg = shlex.quote(talents)
         commands.append(
             {
                 "purpose": "Decode the talent loadout.",
-                "command": f"simc decode-build {identity} --talents {talents_arg}",
+                "command": f"simc decode-build {identity} {talents_flags}",
             }
         )
         commands.append(
             {
                 "purpose": "Summarize the build's APL and active talents.",
-                "command": f"simc describe-build {identity} --talents {talents_arg}",
+                "command": f"simc describe-build {identity} {talents_flags}",
                 # Unlike decode-build, describe-build needs an APL: without --apl-path it resolves the
                 # default <class>_<spec> APL from a checked-out SimC repo and fails (not_found) if absent.
                 "requires": "a checked-out SimC repo (run `simc doctor`), or pass --apl-path explicitly.",
