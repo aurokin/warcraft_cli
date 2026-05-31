@@ -1,5 +1,28 @@
 # Raidbots CLI
 
+## Commands (shipped)
+
+Report consumption (Tier 1) and local SimC bridging (Tier 2) are implemented. Submission (Tier 3) is deferred.
+Run via `raidbots …` directly or `warcraft raidbots …` through the wrapper. `<url-or-id>` accepts a bare report
+ID or any URL containing `/report/{ID}`.
+
+| Command | Purpose |
+|---|---|
+| `raidbots doctor` | Status, capabilities, cache config, and the live URL templates. |
+| `raidbots inspect-report <url-or-id>` | Fetch + parse a report's `data.json` into a kind-aware summary (quick-sim actor + metrics, or ranked profilesets for Top Gear/Droptimizer) with freshness/citations/scope. Pass `--no-raw` to omit the raw payload (recommended for large multi-profile reports). |
+| `raidbots input <url-or-id>` | Fetch the report's SimC input and emit it plus a handoff: classification and suggested local `simc` commands. |
+| `raidbots explain-input` | Classify SimC addon/profile text locally (`--text`, `--file`, or stdin) and explain what Raidbots would do with it. No network. |
+
+Errors map to a shared envelope: `invalid_report`, `not_found`, `rate_limited`, `invalid_query`, `upstream_error`.
+
+Report URLs are env-overridable so a live URL change needs no code change: `RAIDBOTS_BASE_URL`,
+`RAIDBOTS_REPORT_PATH_TEMPLATE`, `RAIDBOTS_DATA_PATH_TEMPLATE`, `RAIDBOTS_INPUT_PATH_TEMPLATE` (each `{id}`-templated).
+Cache TTL: `RAIDBOTS_REPORT_CACHE_TTL_SECONDS` (default 24h; completed reports are immutable).
+
+**Handoff posture:** raidbots never imports `simc` and never runs SimC. To analyze locally, run the suggested
+`simc sim -` / `simc decode-build` / `simc describe-build` commands; to run on the Raidbots cloud, paste the
+emitted input into raidbots.com.
+
 ## Why Raidbots Should Be Staged Carefully
 
 `raidbots` is popular and useful, but it should not be planned like a normal public data API.
@@ -81,19 +104,19 @@ Shared auth direction is defined in [AUTH_ARCHITECTURE.md](../architecture/AUTH_
 
 ## CLI Shape
 
-### Tier 1: Report Consumption
+### Tier 1: Report Consumption — shipped
 
-High feasibility. Public, stable, no auth required.
+Public, stable, no auth required. See [Commands](#commands-shipped) above.
 
-- `raidbots inspect-report <url-or-id>` — fetch and parse a completed report's JSON/HTML, present structured results
-- `raidbots input <url-or-id>` — extract the SimC input that was used, hand off to `simc` for deeper analysis
+- `raidbots inspect-report <url-or-id>` — fetch and parse a completed report's JSON, present structured results
+- `raidbots input <url-or-id>` — extract the SimC input that was used, hand off to local `simc`
 
-### Tier 2: Local Bridging
+### Tier 2: Local Bridging — shipped
 
-High feasibility. Builds on existing `simc` primitives.
+Builds on existing `simc` primitives.
 
-- `raidbots explain-input` — take SimC addon text and explain what Raidbots would do with it (entirely local using `simc decode-build`, `simc describe-build`)
-- crosswalk between `simc` local analysis and Raidbots report results
+- `raidbots explain-input` — take SimC addon text and explain what Raidbots would do with it (entirely local; suggests `simc decode-build` / `simc describe-build`)
+- crosswalk between `simc` local analysis and Raidbots report results — deferred; the no-import handoff (emitted input + suggested `simc` commands) covers the common case, and a future wrapper command can do a full crosswalk
 
 ### Tier 3: Submission (Deferred)
 
@@ -125,11 +148,11 @@ It should not drive the first round of shared abstractions.
 - any future submission workflow
 - any session/cookie/browser constraints
 
-## First Useful Slice
+## First Useful Slice — shipped
 
-1. fetch and parse a known Raidbots report by URL or ID
-2. extract and display the SimC input from that report
-3. bridge the report back into local `simc` analysis (decode the build, explain the APL, compare against local checkout)
+1. fetch and parse a known Raidbots report by URL or ID — `raidbots inspect-report`
+2. extract and display the SimC input from that report — `raidbots input`
+3. bridge the report back into local `simc` analysis — the handoff emits the input plus suggested `simc decode-build` / `describe-build` / `sim` commands (a full local-vs-report crosswalk is deferred)
 
 This gives agents immediate value: a user shares a Raidbots link, the agent can pull it apart, explain what was simulated, and continue the conversation with local `simc` tools.
 

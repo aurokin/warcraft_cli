@@ -20,12 +20,14 @@ PACKAGE_SRC_DIRS = (
     ROOT / "packages" / "wowprogress-cli" / "src",
     ROOT / "packages" / "simc-cli" / "src",
     ROOT / "packages" / "warcraftlogs-cli" / "src",
+    ROOT / "packages" / "raidbots-cli" / "src",
 )
 LIVE_TEST_ENV_BY_FILE = {
     "test_icy_veins_live.py": "ICY_VEINS_LIVE_TESTS",
     "test_live_endpoint_contracts.py": "WOWHEAD_LIVE_TESTS",
     "test_live_integration.py": "WOWHEAD_LIVE_TESTS",
     "test_method_live.py": "METHOD_LIVE_TESTS",
+    "test_raidbots_live.py": "RAIDBOTS_LIVE_TESTS",
     "test_raiderio_live.py": "RAIDERIO_LIVE_TESTS",
     "test_warcraft_wiki_live.py": "WARCRAFT_WIKI_LIVE_TESTS",
     "test_warcraft_wrapper_live.py": "WARCRAFT_WRAPPER_LIVE_TESTS",

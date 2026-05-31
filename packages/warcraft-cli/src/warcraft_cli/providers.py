@@ -6,6 +6,7 @@ from typing import Any
 
 from icy_veins_cli.main import app as icy_veins_app
 from method_cli.main import app as method_app
+from raidbots_cli.main import app as raidbots_app
 from raiderio_cli.main import app as raiderio_app
 from simc_cli.main import app as simc_app
 from typer.testing import CliRunner
@@ -211,6 +212,31 @@ PROVIDERS: tuple[ProviderRegistration, ...] = (
             "resolve": "coming_soon",
         },
         app=simc_app,
+        doctor_args=("doctor",),
+    ),
+    ProviderRegistration(
+        name="raidbots",
+        command="raidbots",
+        language="python",
+        status="partial",
+        description="Raidbots report consumption provider: parse public reports and bridge SimC input to local simc.",
+        auth_required=False,
+        expansion_mode="fixed",
+        supported_expansions=("retail",),
+        expansion_review_status="reviewed",
+        expansion_policy_note=(
+            "Raidbots reports are retail-focused SimulationCraft runs; "
+            "report consumption stays fixed to retail."
+        ),
+        wrapper_capabilities={
+            "doctor": "ready",
+            "search": "not_supported",
+            "resolve": "not_supported",
+            "inspect_report": "ready",
+            "input": "ready",
+            "explain_input": "ready",
+        },
+        app=raidbots_app,
         doctor_args=("doctor",),
     ),
 )
