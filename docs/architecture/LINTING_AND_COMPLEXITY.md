@@ -27,9 +27,10 @@ Static quality tooling and how to use it for refactors. DX slice (AUR-366) is co
 | 1b — CI: lint + typecheck + boundaries + non-live tests | **Complete** |
 | 1c — Pre-commit, `make check`, fixture catalog/maintenance docs, cache benchmark | **Complete** |
 | 2 — Full-repo Ruff (`make lint` on `packages`, `tests`, `scripts`) | **Complete** |
-| 3 — Complexity refactors (ongoing; wowhead/simc/warcraft `main.py` remain) | **In progress** — warcraftlogs boss-kill slice shipped |
+| 3 — Complexity refactors (E/F hotspots + selected D) | **Complete** (AUR-382) — repo has zero E/F functions |
 
-Contract fixtures: [CONTRACT_TEST_CATALOG.md](CONTRACT_TEST_CATALOG.md), [FIXTURE_MAINTENANCE.md](FIXTURE_MAINTENANCE.md).
+Verify with `radon cc -n E packages/` (expect no output). Contract fixtures:
+[CONTRACT_TEST_CATALOG.md](CONTRACT_TEST_CATALOG.md), [FIXTURE_MAINTENANCE.md](FIXTURE_MAINTENANCE.md).
 
 ## Phase 2 Backlog (From Reports)
 
@@ -48,6 +49,11 @@ Contract fixtures: [CONTRACT_TEST_CATALOG.md](CONTRACT_TEST_CATALOG.md), [FIXTUR
 ## Known Hotspots
 
 Large `main.py` entry modules: `wowhead`, `warcraftlogs`, `simc`, `warcraft` wrapper, `raiderio`, `wowprogress`.
+
+Phase 3 (AUR-382) cleared every E/F function. The few D-rated functions left are
+deliberately scoped out as behavior-sensitive and not analytics-payload builders:
+`warcraftlogs auth_pkce_login` (OAuth flow) and `simc validate_talent_transport_command`.
+Touch those only with a dedicated, well-tested change — not a mechanical extraction.
 
 ## Success Criteria
 

@@ -31,6 +31,7 @@ Add user-visible changes to `[Unreleased]` in the same PR that ships them. See [
 
 ### Changed
 
+- Complexity (AUR-382, behavior-preserving): cleared every Radon **E/F** hotspot and the named **D** targets via helper extraction — `warcraft_content.article_bundle` query/compare, the wrapper `guide-compare-query` and guide→simc handoff handlers, `wowhead_cli.citation_pack` builders, five warcraftlogs analytics payload helpers, and the simc `build_input` / `modify-build` paths. No output shapes changed. Added a `citation_pack_from_compare` snapshot test and a `modify-build` swap-decode abort regression test. `radon cc -n E packages/` is now empty.
 - Warcraft Logs: extract sampled boss-kill analytics into `boss_kills.py`, `report_payloads.py`, and `sampling_utils.py`; `collect_boss_kill_rows` complexity **E (32) → A (5)**.
 - Full-repo Ruff cleanup: `make lint` now covers `packages/`, `tests/`, and `scripts/` (Typer `B008` allowed on provider `main.py`; long fixture strings in tests use `E501` ignore). `make lint-all` is an alias.
 - Complexity: split `validate_talent_transport_packet` validation into focused helpers in `warcraft_core.identity`.
