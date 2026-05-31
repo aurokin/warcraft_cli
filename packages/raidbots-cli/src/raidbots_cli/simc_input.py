@@ -41,8 +41,11 @@ _OPTION_KEYS = (
 def _iter_clean_lines(text: str) -> list[str]:
     lines: list[str] = []
     for raw in (text or "").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#"):
+        # SimC treats `#` as a comment delimiter anywhere on a line; strip trailing inline
+        # comments (and drop comment-only/blank lines) so values like `spec=frost # note`
+        # don't carry the comment into classification. Mirrors simc-cli's build-text parsing.
+        line = raw.split("#", 1)[0].strip()
+        if not line:
             continue
         lines.append(line)
     return lines

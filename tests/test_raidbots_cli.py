@@ -299,6 +299,24 @@ def test_simc_handoff_shell_quotes_untrusted_talents() -> None:
     assert "touch" not in tokens  # the injected command never becomes its own token
 
 
+def test_classify_strips_trailing_inline_comments() -> None:
+    # SimC allows trailing `# ...` comments; they must not leak into the actor match or the
+    # spec/talents values (which would corrupt the suggested decode/describe commands).
+    text = 'mage="Main" # my actor\nspec=frost # cleave\ntalents=CYG # raid build\n'
+    classification = classify_simc_input(text)
+    assert classification["actor_class"] == "mage"
+    assert classification["spec"] == "frost"
+    assert classification["sim_type_guess"] == "quick_sim"
+    decode = next(
+        c["command"]
+        for c in simc_handoff(text, classification)["suggested_simc_commands"]
+        if c["command"].startswith("simc decode-build")
+    )
+    assert "--spec frost" in decode
+    assert "--talents CYG" in decode
+    assert "#" not in decode
+
+
 def test_classify_recognizes_underscore_class_tokens() -> None:
     # SimC's addon/profiles use the no-underscore actor form (deathknight=), but death_knight=
     # / demon_hunter= are documented, SimC-accepted manual-creation keywords a report could
