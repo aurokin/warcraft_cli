@@ -8,6 +8,7 @@ from typing import Any, NoReturn
 from urllib.parse import urlparse
 
 import typer
+from blizzard_api_cli.main import app as blizzard_app
 from icy_veins_cli.main import app as icy_veins_app
 from method_cli.main import app as method_app
 from raidbots_cli.main import app as raidbots_app
@@ -2394,6 +2395,14 @@ def simc_passthrough(ctx: typer.Context) -> None:
 )
 def raidbots_passthrough(ctx: typer.Context) -> None:
     _invoke_sub_app(raidbots_app, args=_passthrough_args(ctx, provider_name="raidbots"), prog_name="raidbots")
+
+
+@app.command(
+    "blizzard",
+    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
+)
+def blizzard_passthrough(ctx: typer.Context) -> None:
+    _invoke_sub_app(blizzard_app, args=_passthrough_args(ctx, provider_name="blizzard-api"), prog_name="blizzard")
 
 
 def run() -> None:

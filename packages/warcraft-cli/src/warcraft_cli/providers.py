@@ -4,6 +4,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
+from blizzard_api_cli.main import app as blizzard_app
 from icy_veins_cli.main import app as icy_veins_app
 from method_cli.main import app as method_app
 from raidbots_cli.main import app as raidbots_app
@@ -237,6 +238,33 @@ PROVIDERS: tuple[ProviderRegistration, ...] = (
             "explain_input": "ready",
         },
         app=raidbots_app,
+        doctor_args=("doctor",),
+    ),
+    ProviderRegistration(
+        name="blizzard-api",
+        command="blizzard",
+        language="python",
+        status="partial",
+        description="Official Blizzard Battle.net WoW API provider (scaffold): doctor + auth posture; endpoints pending.",
+        auth_required=True,
+        # expansion_mode="none" mirrors simc: until region/namespace routing exists there is no honest
+        # expansion to advertise. A side effect (shared with simc) is that `warcraft --expansion <x>
+        # blizzard ...` is rejected by the wrapper passthrough; plain `warcraft blizzard ...` works.
+        # Relaxing expansion-pinned passthrough for none-expansion providers is wrapper-wide policy
+        # (AUR-384/AUR-389), not part of this provider scaffold.
+        expansion_mode="none",
+        supported_expansions=(),
+        expansion_review_status="deferred",
+        expansion_policy_note=(
+            "Region- and namespace-aware routing is not implemented yet; "
+            "expansion classification is deferred until the Game Data/Profile endpoint slice lands."
+        ),
+        wrapper_capabilities={
+            "doctor": "ready",
+            "search": "coming_soon",
+            "resolve": "coming_soon",
+        },
+        app=blizzard_app,
         doctor_args=("doctor",),
     ),
 )

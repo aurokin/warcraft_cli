@@ -1,0 +1,20 @@
+[build-system]
+requires = ["hatchling>=1.24.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "blizzard-api-cli"
+version = "0.3.0"
+description = "Agent-first CLI for the official Blizzard Battle.net World of Warcraft API (scaffold + doctor)"
+readme = "../../README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "typer>=0.12.5,<1.0.0",
+  "warcraft-core-cli>=0.1.0",
+]
+
+[project.scripts]
+blizzard = "blizzard_api_cli.main:run"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/blizzard_api_cli"]
