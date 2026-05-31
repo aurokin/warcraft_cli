@@ -175,6 +175,9 @@ def _collect_comparison_linked_entity_sources(
     comparison: dict[str, Any],
 ) -> None:
     linked = comparison.get("linked_entities") if isinstance(comparison.get("linked_entities"), dict) else {}
+    # Two linked-entity shapes are emitted: list-shaped buckets (only shared_items today) here,
+    # and the dict-shaped unique_by_entity (ref -> rows) in the loop just below — the latter is
+    # NOT dropped. Behavior is byte-identical to the pre-extraction builder.
     for bucket in ("shared_items",):
         rows = linked.get(bucket) if isinstance(linked.get(bucket), list) else []
         for index, row in enumerate(rows):
