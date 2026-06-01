@@ -38,6 +38,14 @@ from wowhead_cli.expansion_profiles import resolve_expansion
 from wowhead_cli.main import app as wowhead_app
 from wowprogress_cli.main import app as wowprogress_app
 
+from warcraft_cli.crosswalk import (
+    actor_lookup_identity,
+    actor_spec_ambiguous,
+    distinct_actor_targets,
+    find_report_actors,
+    reconcile_class_spec,
+    report_actor_names,
+)
 from warcraft_cli.guild import guild_merge_payload, normalized_identity, raiderio_guild_summary, wowprogress_guild_summary
 from warcraft_cli.providers import (
     expansion_filtered_providers,
@@ -1700,6 +1708,183 @@ def guild_ranks(
             "tiers": history,
             "citations": payload.get("citations"),
             "provider_payload": payload,
+        },
+        pretty=_pretty(ctx),
+    )
+
+
+_ACTOR_PROFILE_JOIN_RULE = "soft match on region + realm + character name; not a canonical cross-provider actor id"
+
+
+@app.command("actor-profile")
+def actor_profile(
+    ctx: typer.Context,
+    code: str = typer.Argument(..., help="Warcraft Logs report code."),
+    name: str = typer.Argument(..., help="Character (actor) name within the report."),
+    fight_id: int | None = typer.Option(None, "--fight-id", help="Narrow to one fight (makes the log actor identity canonical)."),
+    region: str | None = typer.Option(None, "--region", help="Override the actor region for the Raider.IO lookup."),
+    allow_unlisted: bool = typer.Option(False, "--allow-unlisted", help="Allow lookup of unlisted Warcraft Logs reports."),
+) -> None:
+    """Cross-walk a Warcraft Logs report actor to a Raider.IO profile (log actor -> profile handoff)."""
+    requested_expansion = _requested_expansion(ctx)
+    query: dict[str, Any] = {"report_code": code, "actor_name": name, "fight_id": fight_id}
+    wcl_args = ["report-player-details", code]
+    if fight_id is not None:
+        wcl_args += ["--fight-id", str(fight_id)]
+    if allow_unlisted:
+        wcl_args.append("--allow-unlisted")
+    log_result = _provider_payload_result("warcraftlogs", wcl_args, expansion=requested_expansion)
+    if log_result.get("status") != "ok":
+        _emit(
+            {
+                "ok": False,
+                "provider": "warcraft",
+                "kind": "actor_profile_crosswalk",
+                "query": query,
+                "error": {
+                    "code": "warcraftlogs_lookup_failed",
+                    "message": "Warcraft Logs report lookup failed.",
+                    "source": log_result.get("error"),
+                },
+            },
+            pretty=_pretty(ctx),
+            err=True,
+        )
+        raise typer.Exit(1)
+    log_payload = log_result.get("payload") if isinstance(log_result.get("payload"), dict) else {}
+    matches = find_report_actors(log_payload, name)
+    if not matches:
+        _emit(
+            {
+                "ok": False,
+                "provider": "warcraft",
+                "kind": "actor_profile_crosswalk",
+                "query": query,
+                "error": {
+                    "code": "actor_not_found",
+                    "message": f"No actor named {name!r} in report {code!r}.",
+                    "available_actors": report_actor_names(log_payload),
+                },
+            },
+            pretty=_pretty(ctx),
+            err=True,
+        )
+        raise typer.Exit(1)
+    targets = distinct_actor_targets(matches)
+    if len(targets) > 1:
+        _emit(
+            {
+                "ok": False,
+                "provider": "warcraft",
+                "kind": "actor_profile_crosswalk",
+                "query": query,
+                "error": {
+                    "code": "ambiguous_actor",
+                    "message": (
+                        f"Report {code!r} has {len(targets)} characters named {name!r} on "
+                        "different realms/regions; cannot pick one safely."
+                    ),
+                    "candidates": targets,
+                    "hint": (
+                        "Narrow to a single fight with --fight-id, or query the realm directly "
+                        "with 'raiderio character <region> <realm> <name>'."
+                    ),
+                },
+            },
+            pretty=_pretty(ctx),
+            err=True,
+        )
+        raise typer.Exit(1)
+    if actor_spec_ambiguous(matches):
+        _emit(
+            {
+                "ok": False,
+                "provider": "warcraft",
+                "kind": "actor_profile_crosswalk",
+                "query": query,
+                "error": {
+                    "code": "ambiguous_actor_spec",
+                    "message": (
+                        f"Actor {name!r} appears in report {code!r} with more than one class/spec "
+                        "across fights; cannot pick one to reconcile."
+                    ),
+                    "hint": "Narrow to a single fight with --fight-id so the actor resolves to one spec.",
+                },
+            },
+            pretty=_pretty(ctx),
+            err=True,
+        )
+        raise typer.Exit(1)
+    actor = matches[0]
+    log_side = {
+        "status": "ok",
+        "role": actor.get("role"),
+        "server": actor.get("server"),
+        "region": actor.get("region"),
+        "class_spec_identity": actor.get("class_spec_identity"),
+        "report_actor_identity": actor.get("identity_contract"),
+    }
+    lookup = actor_lookup_identity(actor, region_override=region)
+    if not lookup["ok"]:
+        missing = lookup["missing"]
+        hint = (
+            "Re-run with --region <slug> to enable the Raider.IO profile lookup."
+            if missing == "region"
+            else f"The report actor is missing its {missing}; the Raider.IO profile lookup cannot proceed."
+        )
+        _emit(
+            {
+                "ok": False,
+                "provider": "warcraft",
+                "kind": "actor_profile_crosswalk",
+                "query": query,
+                "error": {"code": f"actor_{missing}_unknown", "missing_field": missing, "hint": hint},
+                "sources": {"warcraftlogs": log_side},
+            },
+            pretty=_pretty(ctx),
+            err=True,
+        )
+        raise typer.Exit(1)
+    identity = lookup["identity"]
+    query.update(identity)
+    profile_result = _provider_payload_result(
+        "raiderio",
+        ["character", identity["region"], identity["realm"], identity["name"]],
+        expansion=requested_expansion,
+    )
+    if profile_result.get("status") != "ok":
+        _emit(
+            {
+                "ok": False,
+                "provider": "warcraft",
+                "kind": "actor_profile_crosswalk",
+                "query": query,
+                "error": {"code": "profile_lookup_failed", "source": profile_result.get("error")},
+                "sources": {"warcraftlogs": log_side, "raiderio": {"status": "error", "error": profile_result.get("error")}},
+            },
+            pretty=_pretty(ctx),
+            err=True,
+        )
+        raise typer.Exit(1)
+    profile_payload = profile_result.get("payload") if isinstance(profile_result.get("payload"), dict) else {}
+    character = profile_payload.get("character") if isinstance(profile_payload.get("character"), dict) else {}
+    profile_identity = character.get("class_spec_identity")
+    _emit(
+        {
+            "ok": True,
+            "provider": "warcraft",
+            "kind": "actor_profile_crosswalk",
+            "query": query,
+            "join_rule": _ACTOR_PROFILE_JOIN_RULE,
+            "sources": {
+                "warcraftlogs": log_side,
+                "raiderio": {
+                    "status": "ok",
+                    "class_spec_identity": profile_identity,
+                    "profile_url": character.get("profile_url"),
+                },
+            },
+            "reconciliation": reconcile_class_spec(actor.get("class_spec_identity"), profile_identity),
         },
         pretty=_pretty(ctx),
     )
