@@ -22,6 +22,7 @@ from warcraft_core.analytics import (
 from warcraft_core.analytics import (
     numeric_summary as _numeric_summary,
 )
+from warcraft_core.identity import class_spec_identity_payload
 from warcraft_core.output import emit
 from warcraft_core.wow_normalization import normalize_name, normalize_region, primary_realm_slug
 
@@ -1447,6 +1448,13 @@ def character(
     current_score_color = (((current_scores.get("segments") or {}).get("all") or {}).get("color")
                            ) if isinstance(current_scores, dict) else None
     guild = payload.get("guild") if isinstance(payload.get("guild"), dict) else None
+    class_value = payload.get("class")
+    spec_value = payload.get("active_spec_name")
+    actor_class = class_value if isinstance(class_value, str) and class_value.strip() else None
+    active_spec = spec_value if isinstance(spec_value, str) and spec_value.strip() else None
+    # Only the fully-resolved (class + spec) profile is a high-confidence identity; partial or
+    # missing source data must not advertise high confidence to downstream handoff ranking.
+    identity_confidence = "high" if actor_class and active_spec else "none"
     _emit(
         ctx,
         {
@@ -1455,8 +1463,15 @@ def character(
                 "region": payload.get("region"),
                 "realm": payload.get("realm"),
                 "race": payload.get("race"),
-                "class_name": payload.get("class"),
-                "active_spec_name": payload.get("active_spec_name"),
+                "class_name": class_value,
+                "active_spec_name": spec_value,
+                "class_spec_identity": class_spec_identity_payload(
+                    actor_class=actor_class,
+                    spec=active_spec,
+                    provider="raiderio",
+                    source="character_profile",
+                    confidence=identity_confidence,
+                ),
                 "faction": payload.get("faction"),
                 "profile_url": payload.get("profile_url"),
                 "thumbnail_url": payload.get("thumbnail_url"),

@@ -467,6 +467,38 @@ def test_raiderio_character_summary(monkeypatch) -> None:
     assert payload["guild"]["name"] == "Liquid"
     assert payload["mythic_plus"]["current_score"] == 1234.5
     assert payload["raiding"]["progression"][0]["raid_slug"] == "tier-mn-1"
+    # Raw class/spec strings stay intact alongside the additive normalized identity.
+    assert payload["character"]["class_name"] == "Rogue"
+    assert payload["character"]["active_spec_name"] == "Subtlety"
+    identity = payload["character"]["class_spec_identity"]
+    assert identity["kind"] == "class_spec_identity"
+    assert identity["status"] == "normalized"
+    assert identity["identity"] == {"actor_class": "rogue", "spec": "subtlety"}
+    assert identity["confidence"] == "high"
+    assert identity["source"] == {"provider": "raiderio", "source": "character_profile"}
+
+
+def test_raiderio_character_identity_degrades_when_class_and_spec_missing(monkeypatch) -> None:
+    def fake_profile(self, *, region: str, realm: str, name: str, fields: str = ""):  # noqa: ANN001
+        return {
+            "name": "Roguecane",
+            "region": "us",
+            "realm": "Illidan",
+            "profile_url": "https://raider.io/characters/us/illidan/Roguecane",
+        }
+
+    monkeypatch.setattr("raiderio_cli.main.RaiderIOClient.character_profile_variants", fake_profile)
+    result = runner.invoke(raiderio_app, ["character", "us", "illidan", "Roguecane"])
+    assert result.exit_code == 0
+
+    payload = json.loads(result.stdout)
+    assert payload["character"]["class_name"] is None
+    assert payload["character"]["active_spec_name"] is None
+    identity = payload["character"]["class_spec_identity"]
+    assert identity["status"] == "unknown"
+    assert identity["identity"] == {"actor_class": None, "spec": None}
+    # Missing source data must not advertise high confidence.
+    assert identity["confidence"] == "none"
 
 
 def test_raiderio_guild_summary(monkeypatch) -> None:
