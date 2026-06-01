@@ -46,6 +46,7 @@ Add user-visible changes to `[Unreleased]` in the same PR that ships them. See [
 
 ### Fixed
 
+- Wrapper packaging gap (AUR-456): `warcraft-cli` imports 10 provider apps at module load but declared only 5 as runtime deps, so a standalone `pip install warcraft-cli` (outside the `warcraft` umbrella wheel) would `ModuleNotFoundError`. Declared the missing distributions (`raiderio-cli`, `simc-cli`, `warcraft-wiki-cli`, `wowprogress-cli`, `warcraftlogs-cli`) and added a static packaging-consistency test (`tests/test_warcraft_cli_packaging.py`) so the gap cannot silently reappear. Also gave `warcraftlogs-cli` its first `pyproject.toml` (it was source-only); it declares `simc-cli` to formalize the existing import-linter-sanctioned `warcraftlogs_cli.main -> simc_cli.talent_transport` edge (relocating that shared symbol to drop the provider→provider dep is a follow-up).
 - Review remediation: WowProgress `WowProgressClient` re-export on `main` (runtime import from `context`).
 - Wowhead `--stream` emits a JSONL header when row arrays are empty; session JSON cache returns deep copies on fresh fetches.
 - Wowhead citation pack avoids doubling URL fragments when comment anchors already include `#`.
