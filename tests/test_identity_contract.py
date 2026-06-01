@@ -55,6 +55,43 @@ def test_encounter_and_ability_identity_only_become_canonical_with_stable_ids() 
     assert canonical_ability["status"] == "canonical"
 
 
+def test_encounter_identity_emit_shape_covers_normalized_and_unknown() -> None:
+    normalized = encounter_identity_payload(
+        encounter_id=None,
+        name="Dimensius, the All-Devouring",
+        zone_id=44,
+        provider="warcraftlogs",
+        source="report_encounter",
+    )
+    assert normalized["kind"] == "encounter_identity"
+    assert normalized["status"] == "normalized"
+    assert normalized["identity"] == {
+        "encounter_id": None,
+        "journal_id": None,
+        "zone_id": 44,
+        "normalized_name": "dimensius-the-all-devouring",
+    }
+    assert normalized["source"] == {"provider": "warcraftlogs", "source": "report_encounter"}
+    assert normalized["notes"] == []
+
+    unknown = encounter_identity_payload(encounter_id=None)
+    assert unknown["kind"] == "encounter_identity"
+    assert unknown["status"] == "unknown"
+    assert unknown["identity"] == {"encounter_id": None, "journal_id": None, "zone_id": None, "normalized_name": None}
+
+
+def test_ability_identity_emit_shape_covers_game_id_and_unknown() -> None:
+    by_game_id = ability_identity_payload(game_id=12345, name="Avenging Wrath")
+    assert by_game_id["kind"] == "ability_identity"
+    assert by_game_id["status"] == "canonical"
+    assert by_game_id["identity"] == {"spell_id": None, "game_id": 12345, "normalized_name": "avenging_wrath"}
+
+    unknown = ability_identity_payload()
+    assert unknown["kind"] == "ability_identity"
+    assert unknown["status"] == "unknown"
+    assert unknown["identity"] == {"spell_id": None, "game_id": None, "normalized_name": None}
+
+
 def test_report_actor_identity_is_only_canonical_inside_local_report_scope() -> None:
     scoped = report_actor_identity_payload(
         report_code="abcd1234",

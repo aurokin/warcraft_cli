@@ -128,6 +128,46 @@ At minimum:
 - unit tests for status selection and ambiguity handling
 - provider tests for any payload that embeds the shared identity contract
 
+## Provider Coverage
+
+Which providers emit which shared identity payloads today (✓ = emitted; – = not emitted). This is
+the auditable record of "documented contracts per identity type"; keep it current when a provider
+starts or stops emitting a contract.
+
+| Provider | Class/Spec | Encounter | Ability | Report-Actor | Build |
+| --- | --- | --- | --- | --- | --- |
+| warcraftlogs | ✓ | ✓ | ✓ | ✓ | – |
+| raiderio | ✓ (`character`) | – | – | – | – |
+| wowhead | – | – | – | – | ✓ (talent-calc) |
+| simc | – | – | – | – | ✓ |
+| method | – | – | – | – | ✓ (embedded talent-calc refs) |
+| icy-veins | – | – | – | – | ✓ (embedded talent-calc refs) |
+| raidbots | – | – | – | – | – |
+| wowprogress | – | – | – | – | – |
+| warcraft-wiki | – | – | – | – | – |
+| blizzard-api | – | – | – | – | – |
+
+Notes:
+- `raidbots` and `wowprogress` already expose raw class/spec on some surfaces but do not yet wrap it
+  in the shared contract — additive normalization follow-ups, not contract changes.
+- `blizzard-api` emits no identity because it is a doctor/auth scaffold with no entity output yet;
+  Blizzard-sourced class/spec, encounter (journal), and ability (spell-id) identity are gated on the
+  Game Data/Profile endpoints (tracked under AUR-455).
+
+## Demonstrated Handoffs
+
+End-to-end cross-provider handoffs that ship today, where one provider's output feeds another's
+input or lookup:
+
+- **Guide → SimC build:** `warcraft guide-builds-simc` (and `guide-compare --simc-build-handoff`)
+  extracts build references from content-provider guides and produces talent transport packets that
+  `simc` consumes.
+- **Log actor → profile:** `warcraft actor-profile <report-code> <actor-name>` resolves a Warcraft
+  Logs report actor (`report_player_details`) and cross-walks it to a Raider.IO `character` profile,
+  emitting both `class_spec_identity` blocks side by side with an agree/conflict reconciliation. The
+  join is a soft match on region + realm + character name — explicitly **not** a canonical
+  cross-provider actor id (see Report Actor and Current Scope).
+
 ## Current Scope
 
 The current shared module intentionally covers only:
