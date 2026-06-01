@@ -8,6 +8,7 @@ import typer
 from method_cli.main import app as method_app
 from typer.testing import CliRunner
 from warcraft_cli.main import app as warcraft_app
+from warcraft_cli.providers import PROVIDERS, get_provider
 from warcraft_content.article_bundle import write_article_bundle
 from warcraftlogs_cli.main import app as warcraftlogs_app
 from wowhead_cli.main import app as wowhead_app
@@ -362,6 +363,98 @@ def test_warcraft_doctor_reports_ready_and_stubbed_providers() -> None:
     assert providers["blizzard-api"]["expansion_support"]["mode"] == "none"
     assert providers["blizzard-api"]["wrapper_surfaces"]["search"]["status"] == "coming_soon"
     assert providers["blizzard-api"]["details"]["capabilities"]["doctor"] == "ready"
+
+
+def _provider_doctor_capabilities(registration) -> dict[str, str]:  # noqa: ANN001
+    """Invoke a provider CLI's own doctor and return its reported capabilities map."""
+    result = runner.invoke(registration.app, list(registration.doctor_args))
+    assert result.exit_code == 0, f"{registration.name} doctor exited {result.exit_code}"
+    payload = json.loads(result.stdout)
+    capabilities = payload.get("capabilities")
+    assert isinstance(capabilities, dict), f"{registration.name} doctor emitted no capabilities map"
+    return capabilities
+
+
+def test_wrapper_capabilities_match_each_cli_doctor_for_search_and_resolve() -> None:
+    # Registry-vs-CLI parity: the wrapper must never advertise a search/resolve
+    # surface more capable than the provider CLI itself reports. (The `doctor`
+    # surface is intentionally excluded: only warcraftlogs/simc/blizzard-api emit
+    # a `doctor` capability key, so it is not a parity surface.)
+    overstated = {"coming_soon", "not_supported", "ready_explicit_report_only"}
+    assert len(PROVIDERS) == 10
+    for registration in PROVIDERS:
+        capabilities = _provider_doctor_capabilities(registration)
+        for surface in ("search", "resolve"):
+            wrapper_status = registration.wrapper_capabilities[surface]
+            cli_status = capabilities.get(surface)
+            assert cli_status is not None, f"{registration.name} doctor missing `{surface}` capability"
+            assert wrapper_status == cli_status, (
+                f"{registration.name} wrapper advertises {surface}={wrapper_status!r} "
+                f"but the CLI reports {cli_status!r}"
+            )
+            if wrapper_status == "ready":
+                assert cli_status not in overstated, (
+                    f"{registration.name} overstates {surface} as ready while the CLI reports {cli_status!r}"
+                )
+
+
+def _stub_non_warcraftlogs_fanout(monkeypatch) -> None:  # noqa: ANN001
+    """Run the real warcraftlogs search/resolve; return empty payloads for everyone else."""
+    import warcraft_cli.main as wrapper_main
+
+    real_search = wrapper_main.provider_search
+    real_resolve = wrapper_main.provider_resolve
+
+    def only_wcl_search(provider: str, query: str, *, limit: int = 5, expansion=None):  # noqa: ANN001, ANN202
+        if provider == "warcraftlogs":
+            return real_search(provider, query, limit=limit, expansion=expansion)
+        return {"provider": provider, "exit_code": 0, "payload": {"provider": provider, "count": 0, "results": []}}
+
+    def only_wcl_resolve(provider: str, query: str, *, limit: int = 5, expansion=None):  # noqa: ANN001, ANN202
+        if provider == "warcraftlogs":
+            return real_resolve(provider, query, limit=limit, expansion=expansion)
+        return {"provider": provider, "exit_code": 0, "payload": {"provider": provider, "resolved": False, "match": None}}
+
+    monkeypatch.setattr("warcraft_cli.main.provider_search", only_wcl_search)
+    monkeypatch.setattr("warcraft_cli.main.provider_resolve", only_wcl_resolve)
+
+
+def test_warcraft_search_keeps_warcraftlogs_as_explicit_report_only_discovery_hint(monkeypatch) -> None:
+    _stub_non_warcraftlogs_fanout(monkeypatch)
+    # "Liquid" is a guild name, not a report code (REPORT_CODE_PATTERN needs a digit),
+    # so warcraftlogs must return its structured discovery hint, not a fabricated match.
+    result = runner.invoke(warcraft_app, ["search", "Liquid"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+
+    assert get_provider("warcraftlogs").wrapper_capabilities["search"] == "ready_explicit_report_only"
+    assert "warcraftlogs" in payload["included_providers"]
+    assert "warcraftlogs" not in {row["provider"] for row in payload["excluded_providers"]}
+
+    wcl = {row["provider"]: row for row in payload["providers"]}["warcraftlogs"]["payload"]
+    assert wcl["count"] == 0
+    assert "explicit report URL or a bare report code" in wcl["message"]
+    assert wcl["supported_inputs"]
+    assert wcl["suggested_commands"]
+    # Never surface a fabricated resolved match for a non-report query.
+    assert all(row["provider"] != "warcraftlogs" for row in payload["results"])
+
+
+def test_warcraft_resolve_never_fabricates_a_warcraftlogs_match_for_non_report_query(monkeypatch) -> None:
+    _stub_non_warcraftlogs_fanout(monkeypatch)
+    result = runner.invoke(warcraft_app, ["resolve", "Liquid"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+
+    assert "warcraftlogs" in payload["included_providers"]
+    wcl = {row["provider"]: row for row in payload["providers"]}["warcraftlogs"]["payload"]
+    assert wcl["resolved"] is False
+    assert wcl["match"] is None
+    assert wcl["supported_inputs"]
+    assert wcl["suggested_commands"]
+    # The wrapper must not resolve to warcraftlogs off a non-report query.
+    assert payload["provider"] != "warcraftlogs"
+    assert payload["resolved"] is False
 
 
 def test_warcraft_doctor_reports_expansion_filtering_state() -> None:

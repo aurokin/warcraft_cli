@@ -269,7 +269,9 @@ Current state:
 - `warcraft-wiki` is ready
 - `wowprogress` is ready for structured search, conservative resolve, and direct phase-1 retrieval
 - `simc` is ready for direct local repo workflows plus readonly APL inspection, conservative reasoning, comparison, analysis packets, and runtime timing helpers, with `search` and `resolve` intentionally returning structured `coming_soon` payloads
-- `warcraftlogs` is ready for explicit report-scoped wrapper routing with retail-only OAuth client-credentials auth, typed world metadata, guild, character, and report commands, plus conservative wrapper `search` and `resolve` limited to explicit report references
+- `warcraftlogs` is ready for explicit report-scoped wrapper routing with retail-only OAuth client-credentials auth, typed world metadata, guild, character, and report commands. Wrapper `search`/`resolve` are intentionally limited to explicit report references (URL or a bare report code) and advertised as `ready_explicit_report_only`: a non-report query keeps `warcraftlogs` in the fanout but returns a structured discovery hint (`count: 0`, `resolved: false`, `message`, `supported_inputs`, `suggested_commands`) rather than a fabricated match
+- `raidbots` is ready for report consumption (`inspect-report`, `input`, `explain-input`) and local SimC handoff; `search`/`resolve` are `not_supported` (report-driven provider, no discovery surface)
+- `blizzard-api` is registered as a scaffold: `doctor` is ready (install state + OAuth client-credentials auth posture); `search`/`resolve`/`game_data`/`profile` are `coming_soon` until the Game Data/Profile endpoint slice lands. Registered with `expansion_mode=none` (no honest expansion to advertise until region/namespace routing exists)
 
 ## Documentation Rule
 
