@@ -478,6 +478,53 @@ def test_warcraft_doctor_reports_expansion_filtering_state() -> None:
     }
 
 
+def test_warcraft_passthrough_relaxes_none_expansion_provider_with_advisory() -> None:
+    # blizzard-api is expansion_mode=none: a wrapper --expansion has no semantics to honor,
+    # so the command is passed through unchanged with an advisory note (relax-to-passthrough),
+    # not rejected with exit 1.
+    result = runner.invoke(warcraft_app, ["--expansion", "wotlk", "blizzard", "doctor"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    # provider payload preserved verbatim
+    assert payload["ok"] is True
+    assert payload["provider"] == "blizzard-api"
+    assert payload["capabilities"]["doctor"] == "ready"
+    # additive advisory note
+    assert payload["expansion_filter"] == "passthrough_no_expansion_semantics"
+    assert payload["expansion_advisory"]["requested_expansion"] == "wotlk"
+    assert payload["expansion_advisory"]["provider_expansion_mode"] == "none"
+
+
+def test_warcraft_passthrough_relaxes_none_expansion_simc() -> None:
+    # Use `simc doctor` (fully offline, deterministic) rather than `simc version`, which
+    # depends on a built SimC binary that CI does not provide.
+    result = runner.invoke(warcraft_app, ["--expansion", "wotlk", "simc", "doctor"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["provider"] == "simc"
+    assert payload["capabilities"]["doctor"] == "ready"
+    assert payload["expansion_filter"] == "passthrough_no_expansion_semantics"
+    assert payload["expansion_advisory"]["provider_expansion_mode"] == "none"
+
+
+def test_warcraft_passthrough_rejects_fixed_provider_expansion_mismatch() -> None:
+    # Fixed/profiled providers asked for an unsupported expansion are a genuine mismatch
+    # and still hard-error (only none-expansion providers relax to passthrough).
+    result = runner.invoke(warcraft_app, ["--expansion", "wotlk", "method", "search", "foo"])
+    assert result.exit_code == 1
+    payload = json.loads(result.stderr)
+    assert payload["error"]["code"] == "unsupported_provider_expansion"
+    assert payload["provider"] == "method"
+
+
+def test_warcraft_passthrough_without_expansion_has_no_advisory() -> None:
+    result = runner.invoke(warcraft_app, ["blizzard", "doctor"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert "expansion_filter" not in payload
+    assert "expansion_advisory" not in payload
+
+
 def test_warcraft_doctor_reports_retail_filter_state() -> None:
     result = runner.invoke(warcraft_app, ["--expansion", "retail", "doctor"])
     assert result.exit_code == 0

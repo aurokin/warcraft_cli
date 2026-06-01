@@ -211,3 +211,20 @@ def test_resolve_payload_sort_key_prefers_resolved_then_confidence_then_wrapper_
 
     assert ordered[0][0] == "icy-veins"
     assert ordered[-1][0] == "wowhead"
+
+
+def test_none_expansion_providers_report_no_expansion_support_reason() -> None:
+    # The none-expansion providers (simc, blizzard-api) underpin the wrapper's
+    # relax-to-passthrough rule (AUR-496): asking them for an expansion yields
+    # `provider_has_no_expansion_support` because there is no expansion semantics
+    # to violate, so the proxy passes the command through with an advisory note.
+    from warcraft_cli.providers import PROVIDERS, get_provider, provider_expansion_exclusion_reason
+
+    none_expansion = {registration.name for registration in PROVIDERS if registration.expansion_mode == "none"}
+    assert none_expansion == {"simc", "blizzard-api"}
+    for provider_name in sorted(none_expansion):
+        registration = get_provider(provider_name)
+        assert (
+            provider_expansion_exclusion_reason(registration, requested_expansion="wotlk")
+            == "provider_has_no_expansion_support"
+        )

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import io
 import json
 import tempfile
+from contextlib import redirect_stderr, redirect_stdout
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, NoReturn
@@ -76,10 +78,15 @@ def _emit(payload: Any, *, pretty: bool, err: bool = False) -> None:
 def _invoke_sub_app(sub_app: typer.Typer, *, args: list[str], prog_name: str) -> None:
     command = get_command(sub_app)
     try:
-        command.main(args=args, prog_name=prog_name, standalone_mode=False)
+        # standalone_mode=False makes click *return* the exit code for typer.Exit/click.Exit
+        # rather than calling sys.exit, so a provider's `raise typer.Exit(1)` would otherwise
+        # be silently swallowed to exit 0. Re-raise it so passthrough propagates failures.
+        exit_code = command.main(args=args, prog_name=prog_name, standalone_mode=False)
     except SystemExit as exc:
         code = exc.code if isinstance(exc.code, int) else 1
         raise typer.Exit(code) from exc
+    if isinstance(exit_code, int) and exit_code != 0:
+        raise typer.Exit(exit_code)
 
 
 @app.callback()
@@ -117,35 +124,62 @@ def _requested_expansion(ctx: typer.Context) -> str | None:
     return None
 
 
+def _expansion_passthrough_advisory(ctx: typer.Context, *, provider_name: str) -> dict[str, Any] | None:
+    """Decide expansion policy for a ``warcraft <provider> ...`` proxy.
+
+    Returns ``None`` for a normal passthrough (no expansion requested, or the provider
+    supports it). For a provider with ``expansion_mode == "none"`` requested with an
+    expansion it returns an advisory dict (relax-to-passthrough): the provider has no
+    expansion semantics to honor, so the command runs unchanged with the note attached.
+    For a ``fixed``/``profiled`` provider asked for an unsupported expansion this is a
+    genuine mismatch — it emits ``unsupported_provider_expansion`` and exits 1.
+    """
+    requested_expansion = _requested_expansion(ctx)
+    if requested_expansion is None:
+        return None
+    registration = get_provider(provider_name)
+    reason = provider_expansion_exclusion_reason(registration, requested_expansion=requested_expansion)
+    if reason is None:
+        return None
+    if registration.expansion_mode == "none":
+        return {
+            "expansion_filter": "passthrough_no_expansion_semantics",
+            "requested_expansion": requested_expansion,
+            "provider_expansion_mode": "none",
+            "note": (
+                f"Provider {provider_name!r} has no expansion semantics (expansion_mode=none); "
+                f"the wrapper --expansion {requested_expansion!r} flag was not applied and the "
+                "command was passed through unchanged."
+            ),
+        }
+    _emit(
+        {
+            "ok": False,
+            "error": {
+                "code": "unsupported_provider_expansion",
+                "message": (
+                    f"Provider {provider_name!r} does not support wrapper expansion "
+                    f"{requested_expansion!r}."
+                ),
+            },
+            "provider": provider_name,
+            "requested_expansion": requested_expansion,
+            "expansion_support": provider_expansion_support(
+                registration,
+                requested_expansion=requested_expansion,
+            ),
+        },
+        pretty=_pretty(ctx),
+        err=True,
+    )
+    raise typer.Exit(1)
+
+
 def _passthrough_args(ctx: typer.Context, *, provider_name: str) -> list[str]:
     args = list(ctx.args)
     requested_expansion = _requested_expansion(ctx)
     if requested_expansion is None:
         return args
-    registration = get_provider(provider_name)
-    reason = provider_expansion_exclusion_reason(registration, requested_expansion=requested_expansion)
-    if reason is not None:
-        _emit(
-            {
-                "ok": False,
-                "error": {
-                    "code": "unsupported_provider_expansion",
-                    "message": (
-                        f"Provider {provider_name!r} does not support wrapper expansion "
-                        f"{requested_expansion!r}."
-                    ),
-                },
-                "provider": provider_name,
-                "requested_expansion": requested_expansion,
-                "expansion_support": provider_expansion_support(
-                    registration,
-                    requested_expansion=requested_expansion,
-                ),
-            },
-            pretty=_pretty(ctx),
-            err=True,
-        )
-        raise typer.Exit(1)
     if provider_name == "wowhead":
         if "--expansion" in args:
             _emit(
@@ -164,6 +198,63 @@ def _passthrough_args(ctx: typer.Context, *, provider_name: str) -> list[str]:
             raise typer.Exit(1)
         return ["--expansion", requested_expansion, *args]
     return args
+
+
+def _run_passthrough(ctx: typer.Context, sub_app: typer.Typer, *, provider_name: str, prog_name: str) -> None:
+    """Proxy ``warcraft <provider> ...`` to a provider CLI, applying expansion policy.
+
+    Normal case: invoke the sub-app directly so its payload reaches stdout untouched.
+    none-expansion relax case: capture the provider payload and attach the advisory note
+    as an additive sibling key (provider payload preserved), then re-emit.
+    """
+    advisory = _expansion_passthrough_advisory(ctx, provider_name=provider_name)
+    args = _passthrough_args(ctx, provider_name=provider_name)
+    if advisory is None:
+        _invoke_sub_app(sub_app, args=args, prog_name=prog_name)
+        return
+    # The provider emits its payload to stdout (ok) or stderr (error). Capture both so the
+    # advisory note can be attached regardless of which stream carried the JSON payload.
+    # This buffers the provider's output instead of streaming it; that only affects the
+    # unusual `warcraft --expansion <key> <none-provider> ...` combination (expansion has no
+    # meaning for a none-expansion provider) and is the cost of annotating the payload.
+    out_buf, err_buf = io.StringIO(), io.StringIO()
+    exit_code = 0
+    try:
+        with redirect_stdout(out_buf), redirect_stderr(err_buf):
+            _invoke_sub_app(sub_app, args=args, prog_name=prog_name)
+    except typer.Exit as exc:
+        exit_code = exc.exit_code if isinstance(exc.exit_code, int) else 1
+    out_text, err_text = out_buf.getvalue(), err_buf.getvalue()
+    out_json, err_json = _parse_json_object(out_text), _parse_json_object(err_text)
+    if out_json is not None:
+        _emit(_with_expansion_advisory(out_json, advisory), pretty=_pretty(ctx))
+    elif err_json is not None:
+        _emit(_with_expansion_advisory(err_json, advisory), pretty=_pretty(ctx), err=True)
+    else:
+        # Non-JSON provider output (e.g. --help text): surface the advisory on its own so the
+        # relax is never silent, then pass the raw output through below.
+        _emit(advisory, pretty=_pretty(ctx), err=True)
+    # Preserve any non-payload stream content verbatim (provenance is never hidden).
+    if out_json is None and out_text:
+        typer.echo(out_text, nl=False)
+    if err_json is None and err_text:
+        typer.echo(err_text, nl=False, err=True)
+    if exit_code:
+        raise typer.Exit(exit_code)
+
+
+def _parse_json_object(text: str) -> dict[str, Any] | None:
+    try:
+        value = json.loads(text.strip())
+    except (json.JSONDecodeError, ValueError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _with_expansion_advisory(payload: dict[str, Any], advisory: dict[str, Any]) -> dict[str, Any]:
+    annotated = {**payload, "expansion_advisory": advisory}
+    annotated.setdefault("expansion_filter", advisory["expansion_filter"])
+    return annotated
 
 
 def _slugify_path_fragment(value: str) -> str:
@@ -2503,7 +2594,7 @@ def guide_builds_simc(
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
 )
 def wowhead_passthrough(ctx: typer.Context) -> None:
-    _invoke_sub_app(wowhead_app, args=_passthrough_args(ctx, provider_name="wowhead"), prog_name="wowhead")
+    _run_passthrough(ctx, wowhead_app, provider_name="wowhead", prog_name="wowhead")
 
 
 @app.command(
@@ -2511,7 +2602,7 @@ def wowhead_passthrough(ctx: typer.Context) -> None:
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
 )
 def icy_veins_passthrough(ctx: typer.Context) -> None:
-    _invoke_sub_app(icy_veins_app, args=_passthrough_args(ctx, provider_name="icy-veins"), prog_name="icy-veins")
+    _run_passthrough(ctx, icy_veins_app, provider_name="icy-veins", prog_name="icy-veins")
 
 
 @app.command(
@@ -2519,7 +2610,7 @@ def icy_veins_passthrough(ctx: typer.Context) -> None:
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
 )
 def method_passthrough(ctx: typer.Context) -> None:
-    _invoke_sub_app(method_app, args=_passthrough_args(ctx, provider_name="method"), prog_name="method")
+    _run_passthrough(ctx, method_app, provider_name="method", prog_name="method")
 
 
 @app.command(
@@ -2527,7 +2618,7 @@ def method_passthrough(ctx: typer.Context) -> None:
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
 )
 def raiderio_passthrough(ctx: typer.Context) -> None:
-    _invoke_sub_app(raiderio_app, args=_passthrough_args(ctx, provider_name="raiderio"), prog_name="raiderio")
+    _run_passthrough(ctx, raiderio_app, provider_name="raiderio", prog_name="raiderio")
 
 
 @app.command(
@@ -2535,11 +2626,7 @@ def raiderio_passthrough(ctx: typer.Context) -> None:
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
 )
 def warcraftlogs_passthrough(ctx: typer.Context) -> None:
-    _invoke_sub_app(
-        warcraftlogs_app,
-        args=_passthrough_args(ctx, provider_name="warcraftlogs"),
-        prog_name="warcraftlogs",
-    )
+    _run_passthrough(ctx, warcraftlogs_app, provider_name="warcraftlogs", prog_name="warcraftlogs")
 
 
 @app.command(
@@ -2547,11 +2634,7 @@ def warcraftlogs_passthrough(ctx: typer.Context) -> None:
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
 )
 def warcraft_wiki_passthrough(ctx: typer.Context) -> None:
-    _invoke_sub_app(
-        warcraft_wiki_app,
-        args=_passthrough_args(ctx, provider_name="warcraft-wiki"),
-        prog_name="warcraft-wiki",
-    )
+    _run_passthrough(ctx, warcraft_wiki_app, provider_name="warcraft-wiki", prog_name="warcraft-wiki")
 
 
 @app.command(
@@ -2559,11 +2642,7 @@ def warcraft_wiki_passthrough(ctx: typer.Context) -> None:
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
 )
 def wowprogress_passthrough(ctx: typer.Context) -> None:
-    _invoke_sub_app(
-        wowprogress_app,
-        args=_passthrough_args(ctx, provider_name="wowprogress"),
-        prog_name="wowprogress",
-    )
+    _run_passthrough(ctx, wowprogress_app, provider_name="wowprogress", prog_name="wowprogress")
 
 
 @app.command(
@@ -2571,7 +2650,7 @@ def wowprogress_passthrough(ctx: typer.Context) -> None:
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
 )
 def simc_passthrough(ctx: typer.Context) -> None:
-    _invoke_sub_app(simc_app, args=_passthrough_args(ctx, provider_name="simc"), prog_name="simc")
+    _run_passthrough(ctx, simc_app, provider_name="simc", prog_name="simc")
 
 
 @app.command(
@@ -2579,7 +2658,7 @@ def simc_passthrough(ctx: typer.Context) -> None:
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
 )
 def raidbots_passthrough(ctx: typer.Context) -> None:
-    _invoke_sub_app(raidbots_app, args=_passthrough_args(ctx, provider_name="raidbots"), prog_name="raidbots")
+    _run_passthrough(ctx, raidbots_app, provider_name="raidbots", prog_name="raidbots")
 
 
 @app.command(
@@ -2587,7 +2666,7 @@ def raidbots_passthrough(ctx: typer.Context) -> None:
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
 )
 def blizzard_passthrough(ctx: typer.Context) -> None:
-    _invoke_sub_app(blizzard_app, args=_passthrough_args(ctx, provider_name="blizzard-api"), prog_name="blizzard")
+    _run_passthrough(ctx, blizzard_app, provider_name="blizzard-api", prog_name="blizzard")
 
 
 def run() -> None:
