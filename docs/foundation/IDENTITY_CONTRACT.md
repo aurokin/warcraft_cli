@@ -157,8 +157,9 @@ Notes:
   (`encounter_id: null`).
 - `method`/`icy-veins` ability identity is `canonical` (the Wowhead spell id is already in the link);
   it is emitted only on `spell` linked-entity rows, leaving other entity types unchanged.
-- `blizzard-api` emits no identity because Blizzard-sourced class/spec, encounter (journal), and
-  ability (spell-id) identity are gated on the Game Data/Profile endpoints (tracked under AUR-455).
+- `blizzard-api` emits no identity yet. The Game Data/Profile endpoints shipped (AUR-455), but
+  wiring Blizzard-sourced class/spec, encounter (journal), and ability (spell-id) identity onto them
+  is deferred follow-up work, not yet scheduled.
 
 ## Demonstrated Handoffs
 

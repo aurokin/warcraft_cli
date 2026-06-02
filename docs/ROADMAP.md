@@ -55,7 +55,8 @@ Work in this order unless a dependency or incident says otherwise:
 | 8 | [AUR-391](https://linear.app/aurokin/issue/AUR-391) / [AUR-392](https://linear.app/aurokin/issue/AUR-392) | Raider.IO and WowProgress analytics depth |
 | 9 | [AUR-393](https://linear.app/aurokin/issue/AUR-393) | Raidbots report consumption and SimC handoff |
 | — | [AUR-394](https://linear.app/aurokin/issue/AUR-394) | Wowhead scoped-extraction policy (track, don’t expand blindly) |
-| — | [AUR-395](https://linear.app/aurokin/issue/AUR-395) | Later provider candidates (undermine, raidplan, curseforge) |
+| — | [AUR-395](https://linear.app/aurokin/issue/AUR-395) | Provider candidate decisions — CurseForge **GO** (→ AUR-499), Undermine + RaidPlan **DEFER** |
+| 10 | [AUR-499](https://linear.app/aurokin/issue/AUR-499) | CurseForge provider scaffold (doctor + addon lookup) |
 
 Refactors (AUR-382) can run in parallel with product work when they are behavior-preserving extractions; prefer product issues above when choosing the next PR.
 

@@ -24,12 +24,10 @@ Shipped milestones and design decisions that should not be mistaken for open pla
 - [history/MONOREPO_MIGRATION.md](history/MONOREPO_MIGRATION.md) — initial monorepo extraction and Method rollout
 - [history/ENCOUNTER_RANKINGS.md](history/ENCOUNTER_RANKINGS.md) — Warcraft Logs `encounter-rankings` vs sampled boss analytics
 
-## Future Providers (Docs Only)
+## Provider Candidate Decisions (Docs Only)
 
-These folders document intent only; no CLI package exists yet:
+These folders hold go/no-go decision docs; no CLI package exists yet:
 
-- [../blizzard-api/README.md](../blizzard-api/README.md)
-- [../raidbots/README.md](../raidbots/README.md)
-- [../undermine-exchange/README.md](../undermine-exchange/README.md)
-- [../raidplan/README.md](../raidplan/README.md)
-- [../curseforge/README.md](../curseforge/README.md)
+- [../curseforge/README.md](../curseforge/README.md) — **GO** (scaffold tracked in [AUR-499](https://linear.app/aurokin/issue/AUR-499))
+- [../undermine-exchange/README.md](../undermine-exchange/README.md) — **DEFER**
+- [../raidplan/README.md](../raidplan/README.md) — **DEFER**
