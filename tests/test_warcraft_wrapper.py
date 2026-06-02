@@ -43,6 +43,10 @@ def _simc_build_input_summary(args: list[str]) -> dict[str, object]:
 
 
 class _EndToEndWarcraftLogsClient:
+    _finished_report_ttl = 86400
+    _report_ttl = 60
+    _cache_store = object()  # non-None: provenance emits cache-on TTLs
+
     def close(self) -> None:
         return None
 
@@ -2541,6 +2545,10 @@ def test_warcraft_packet_handoff_from_warcraftlogs_to_simc(monkeypatch, tmp_path
     validated_packet_path = tmp_path / "validated-packet.json"
 
     class _PacketClient:
+        _finished_report_ttl = 86400
+        _report_ttl = 60
+        _cache_store = object()  # non-None: provenance emits cache-on TTLs
+
         def report_player_details(self, **kwargs):  # noqa: ANN003, ANN201
             return {}
 

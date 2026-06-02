@@ -5,6 +5,7 @@ import json
 import os
 import re
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlencode
@@ -17,6 +18,8 @@ from warcraft_core.auth import load_provider_auth_state, save_provider_auth_stat
 from warcraft_core.env import find_env_file, load_env_file, load_explicit_env_file
 from warcraft_core.paths import provider_env_path
 from warcraft_core.wow_normalization import normalize_name, normalize_region, primary_realm_slug
+
+from warcraftlogs_cli.sampling_utils import report_is_finished
 
 DEFAULT_CACHE_DIR = provider_cache_root("warcraftlogs") / "http"
 CLIENT_CREDENTIALS_STATE_PROVIDER = "warcraftlogs-client-credentials"
@@ -751,6 +754,7 @@ query ReportFights($code: String!, $difficulty: Int, $allowUnlisted: Boolean) {
     report(code: $code, allowUnlisted: $allowUnlisted) {
       code
       title
+      endTime
       zone {
         id
         name
@@ -797,6 +801,7 @@ query ReportEvents(
     report(code: $code, allowUnlisted: $allowUnlisted) {
       code
       title
+      endTime
       zone {
         id
         name
@@ -849,6 +854,7 @@ query ReportTable(
     report(code: $code, allowUnlisted: $allowUnlisted) {
       code
       title
+      endTime
       zone {
         id
         name
@@ -899,6 +905,7 @@ query ReportGraph(
     report(code: $code, allowUnlisted: $allowUnlisted) {
       code
       title
+      endTime
       zone {
         id
         name
@@ -937,6 +944,7 @@ query ReportMasterData(
     report(code: $code, allowUnlisted: $allowUnlisted) {
       code
       title
+      endTime
       zone {
         id
         name
@@ -984,6 +992,7 @@ query ReportPlayerDetails(
     report(code: $code, allowUnlisted: $allowUnlisted) {
       code
       title
+      endTime
       zone {
         id
         name
@@ -1018,6 +1027,7 @@ query ReportRankings(
     report(code: $code, allowUnlisted: $allowUnlisted) {
       code
       title
+      endTime
       zone {
         id
         name
@@ -1168,7 +1178,7 @@ def load_warcraftlogs_auth_config(*, start_dir: str | None = None) -> WarcraftLo
     )
 
 
-def load_warcraftlogs_cache_settings_from_env() -> tuple[CacheSettings, int, int, int, int]:
+def load_warcraftlogs_cache_settings_from_env() -> tuple[CacheSettings, int, int, int, int, int]:
     settings = load_prefixed_cache_settings_from_env(
         env_prefix="WARCRAFTLOGS",
         default_cache_dir=DEFAULT_CACHE_DIR,
@@ -1178,12 +1188,14 @@ def load_warcraftlogs_cache_settings_from_env() -> tuple[CacheSettings, int, int
             entity_page_html=300,
             guide_page_html=21600,
             page_html=60,
+            report_finished=86400,
         ),
         ttl_env_overrides={
             "search_suggestions": "WARCRAFTLOGS_METADATA_CACHE_TTL_SECONDS",
             "entity_page_html": "WARCRAFTLOGS_GUILD_CACHE_TTL_SECONDS",
             "guide_page_html": "WARCRAFTLOGS_STATIC_CACHE_TTL_SECONDS",
             "page_html": "WARCRAFTLOGS_REPORT_CACHE_TTL_SECONDS",
+            "report_finished": "WARCRAFTLOGS_FINISHED_REPORT_CACHE_TTL_SECONDS",
         },
     )
     return (
@@ -1192,6 +1204,7 @@ def load_warcraftlogs_cache_settings_from_env() -> tuple[CacheSettings, int, int
         settings.ttls.entity_page_html,
         settings.ttls.guide_page_html,
         settings.ttls.page_html,
+        settings.ttls.report_finished,
     )
 
 
@@ -1213,13 +1226,14 @@ class WarcraftLogsClient:
         self._credential_hint = auth.env_file or str(find_env_file() or ".env.local")
         self._access_token: str | None = None
         self._token_expires_at = 0.0
-        settings, metadata_ttl, guild_ttl, static_ttl, report_ttl = load_warcraftlogs_cache_settings_from_env()
+        settings, metadata_ttl, guild_ttl, static_ttl, report_ttl, finished_report_ttl = load_warcraftlogs_cache_settings_from_env()
         self._cache_settings = settings
         self._cache_store = build_cache_store(settings) if settings.enabled else None
         self._metadata_ttl = metadata_ttl
         self._guild_ttl = guild_ttl
         self._static_ttl = static_ttl
         self._report_ttl = report_ttl
+        self._finished_report_ttl = finished_report_ttl
         self._last_warnings: list[dict[str, Any]] = []
 
     def close(self) -> None:
@@ -1465,6 +1479,7 @@ class WarcraftLogsClient:
         namespace: str,
         ttl_seconds: int,
         use_cache: bool = True,
+        ttl_resolver: Callable[[dict[str, Any]], int] | None = None,
     ) -> dict[str, Any]:
         request_variables = _prune_null_variables(variables)
         cache_payload = {
@@ -1495,7 +1510,8 @@ class WarcraftLogsClient:
         )
         data = self._consume_graphql_response(response.json(), operation_name=operation_name, endpoint="user")
         if use_cache:
-            self._write_cache(cache_key, data, ttl_seconds=ttl_seconds)
+            write_ttl = ttl_resolver(data) if ttl_resolver is not None else ttl_seconds
+            self._write_cache(cache_key, data, ttl_seconds=write_ttl)
         return data
 
     def current_user(self) -> dict[str, Any]:
@@ -1667,6 +1683,7 @@ class WarcraftLogsClient:
         ttl_seconds: int,
         use_cache: bool = True,
         force_client: bool = False,
+        ttl_resolver: Callable[[dict[str, Any]], int] | None = None,
     ) -> dict[str, Any]:
         if not force_client and self._has_user_token():
             return self._graphql_user(
@@ -1676,6 +1693,7 @@ class WarcraftLogsClient:
                 namespace=namespace,
                 ttl_seconds=ttl_seconds,
                 use_cache=use_cache,
+                ttl_resolver=ttl_resolver,
             )
         request_variables = _prune_null_variables(variables)
         cache_payload = {
@@ -1706,7 +1724,8 @@ class WarcraftLogsClient:
         )
         data = self._consume_graphql_response(response.json(), operation_name=operation_name, endpoint="client")
         if use_cache:
-            self._write_cache(cache_key, data, ttl_seconds=ttl_seconds)
+            write_ttl = ttl_resolver(data) if ttl_resolver is not None else ttl_seconds
+            self._write_cache(cache_key, data, ttl_seconds=write_ttl)
         return data
 
     def raw_graphql(
@@ -1822,6 +1841,35 @@ class WarcraftLogsClient:
             "timeframe": options.timeframe,
         }
 
+    def _report_finish_ttl_resolver(self, *, ttl_override: int | None = None) -> Callable[[dict[str, Any]], int]:
+        """Resolve the cache TTL from a report response's finish state.
+
+        Finished reports (``endTime > 0``) use the finished TTL (or an explicit
+        ``ttl_override``); live/unknown reports use the short report TTL so a live
+        report is never stored under the finished TTL. By design ``ttl_override``
+        scopes the *finished* TTL only — it is the "how long to keep this finished
+        report" knob for the sampling path; live reports always fall back to the
+        short live TTL regardless of ``ttl_override`` (it is not a cache-bypass flag).
+
+        Tradeoff (accepted): the cache *key* is finish-state-agnostic, so a report
+        fetched while live (cached for the short report TTL) can still be served from
+        that live entry for up to ``self._report_ttl`` seconds after it finishes. We
+        deliberately cache live reports (per the AUR-388 spec decision) rather than
+        no-cache them; the short live TTL bounds the staleness window and finished WoW
+        logs are immutable thereafter. See docs/warcraftlogs/CACHING.md.
+        """
+        finished_ttl = ttl_override if ttl_override is not None else self._finished_report_ttl
+        live_ttl = self._report_ttl
+
+        def resolver(data: dict[str, Any]) -> int:
+            report_data = data.get("reportData") if isinstance(data, dict) else None
+            report = report_data.get("report") if isinstance(report_data, dict) else None
+            if isinstance(report, dict) and report_is_finished(report):
+                return finished_ttl
+            return live_ttl
+
+        return resolver
+
     def _report_lookup(
         self,
         *,
@@ -1832,13 +1880,20 @@ class WarcraftLogsClient:
         allow_unlisted: bool,
         variables: dict[str, Any],
         ttl_override: int | None = None,
+        finish_state_ttl: bool = True,
     ) -> dict[str, Any]:
+        # Most report-detail payloads (fights/events/tables/graphs/master-data/player-details)
+        # are immutable once the report finishes, so they key on finish state and earn the long
+        # finished TTL. Callers with population-relative or otherwise mutable output (rankings)
+        # pass finish_state_ttl=False to stay on the short live TTL.
+        ttl_resolver = self._report_finish_ttl_resolver(ttl_override=ttl_override) if finish_state_ttl else None
         data = self._graphql(
             operation_name=operation_name,
             query=query,
             variables=variables,
             namespace=namespace,
-            ttl_seconds=ttl_override if ttl_override is not None else self._report_ttl,
+            ttl_seconds=self._report_ttl,
+            ttl_resolver=ttl_resolver,
         )
         report_data = data.get("reportData")
         report = report_data.get("report") if isinstance(report_data, dict) else None
@@ -2162,6 +2217,7 @@ class WarcraftLogsClient:
             variables={"code": code.strip(), "allowUnlisted": allow_unlisted},
             namespace="report",
             ttl_seconds=self._report_ttl,
+            ttl_resolver=self._report_finish_ttl_resolver(),
         )
         report_data = data.get("reportData")
         report = report_data.get("report") if isinstance(report_data, dict) else None
@@ -2304,4 +2360,7 @@ class WarcraftLogsClient:
             code=code,
             allow_unlisted=allow_unlisted,
             variables=self._report_rankings_variables(code=code, allow_unlisted=allow_unlisted, options=options),
+            # Rankings are population-relative percentiles that Warcraft Logs keeps recomputing
+            # after a log finishes, so they must NOT inherit the long finished-report TTL.
+            finish_state_ttl=False,
         )

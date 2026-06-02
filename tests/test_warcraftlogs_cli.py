@@ -13,6 +13,7 @@ from warcraftlogs_cli.client import (
     GRAPHQL_WARNINGS_KEY,
     RETAIL_PROFILE,
     EncounterRankingsOptions,
+    ReportRankingsOptions,
     WarcraftLogsClient,
     WarcraftLogsClientError,
     _encounter_rankings_request,
@@ -35,6 +36,11 @@ class _FakeWarcraftLogsClient:
     def __init__(self) -> None:
         self.closed = False
         self._guild_ttl = 300
+        self._report_ttl = 60
+        self._finished_report_ttl = 86400
+        # Non-None cache store: provenance emits the cache-on TTLs (real client uses None to
+        # signal a disabled cache backend; see _emitted_finished_report_ttl).
+        self._cache_store = object()
 
     def close(self) -> None:
         self.closed = True
@@ -2400,7 +2406,15 @@ def test_warcraftlogs_spec_kill_samples_labels_participant_cohort(monkeypatch) -
     assert payload["sample"]["truncated"] is False
     assert payload["sample"]["truncation_order"] == "fastest_kill_duration_ascending"
     assert payload["sample"]["stable_source_only"] is True
-    assert payload["freshness"]["cache_ttl_seconds"] is None
+    assert payload["freshness"]["cache_ttl_seconds"] == 86400
+    assert payload["cache_provenance"] == {
+        "finished": True,
+        "live": False,
+        "cache_ttl_seconds": 86400,
+        "source": "sampled_finished_reports",
+    }
+    assert payload["sample_scope"]["ranking_basis"] == "spec_filtered_participant_kill_samples"
+    assert payload["sample_scope"]["filters"]["spec_name"] == "Retribution"
     assert len(payload["citations"]["sample_reports"]) == 1
     assert payload["kills"][0]["matching_players"][0]["name"] == "Auropower"
 
@@ -2860,7 +2874,10 @@ def test_warcraftlogs_ability_usage_summary_returns_sampled_cast_summary(monkeyp
     assert payload["kind"] == "ability_usage_summary"
     assert payload["query"]["ability_id"] == 20473
     assert payload["freshness"]["sampled_at"].endswith("Z")
-    assert payload["freshness"]["cache_ttl_seconds"] is None
+    assert payload["freshness"]["cache_ttl_seconds"] == 86400
+    assert payload["cache_provenance"]["finished"] is True
+    assert payload["cache_provenance"]["cache_ttl_seconds"] == 86400
+    assert payload["sample_scope"]["ranking_basis"] == "sampled_fastest_kills"
     assert payload["citations"]["sample_reports"] == [
         {
             "report_code": "abcd1234",
@@ -2899,7 +2916,9 @@ def test_warcraftlogs_comp_samples_returns_sampled_rosters_and_class_presence(mo
     payload = json.loads(result.stdout)
     assert payload["kind"] == "comp_samples"
     assert payload["freshness"]["sampled_at"].endswith("Z")
-    assert payload["freshness"]["cache_ttl_seconds"] is None
+    assert payload["freshness"]["cache_ttl_seconds"] == 86400
+    assert payload["cache_provenance"]["cache_ttl_seconds"] == 86400
+    assert payload["sample_scope"]["ranking_basis"] == "sampled_fastest_kills"
     assert payload["citations"]["sample_reports"][0]["report_url"] == "https://www.warcraftlogs.com/reports/abcd1234#fight=1"
     assert payload["sample"]["filtered_kill_count"] == 1
     assert payload["sample"]["sampled_player_count"] == 2
@@ -4619,6 +4638,192 @@ def test_warcraftlogs_client_live_public_probe_does_not_write_shared_cache(monke
     assert writes == []
 
 
+def _configure_public_auth(monkeypatch) -> None:  # noqa: ANN001
+    monkeypatch.setattr(
+        "warcraftlogs_cli.client.load_warcraftlogs_auth_config",
+        lambda start_dir=None: type(
+            "Auth",
+            (),
+            {
+                "configured": True,
+                "client_id": "client-id",
+                "client_secret": "client-secret",
+                "env_file": "/tmp/.env.local",
+            },
+        )(),
+    )
+
+
+def _report_fights_response(*, end_time: int) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "data": {
+                "reportData": {
+                    "report": {
+                        "code": "abcd1234",
+                        "title": "T",
+                        "endTime": end_time,
+                        "zone": {"id": 1, "name": "Z"},
+                        "fights": [{"id": 1, "name": "Boss", "encounterID": 3012, "kill": True}],
+                    }
+                }
+            }
+        },
+        request=httpx.Request("POST", "https://example/api/v2/client"),
+    )
+
+
+def _capture_report_fights_ttl(monkeypatch, *, end_time: int) -> int:  # noqa: ANN001
+    _configure_public_auth(monkeypatch)
+
+    def _fake_request(client, url, *, method="GET", data=None, auth=None, retry_attempts=1, **kwargs):  # noqa: ANN001
+        del client, retry_attempts, kwargs, auth, data
+        if url.endswith("/oauth/token"):
+            return httpx.Response(200, json={"access_token": "tok", "expires_in": 3600}, request=httpx.Request("POST", url))
+        assert url.endswith("/api/v2/client")
+        return _report_fights_response(end_time=end_time)
+
+    monkeypatch.setattr("warcraftlogs_cli.client.request_with_retries", _fake_request)
+
+    writes: list[tuple[str, object, int]] = []
+    client = WarcraftLogsClient()
+    monkeypatch.setattr(client, "_has_user_token", lambda: False)
+    monkeypatch.setattr(client, "_read_cache", lambda key: None)
+    monkeypatch.setattr(
+        client,
+        "_write_cache",
+        lambda key, payload, *, ttl_seconds: writes.append((key, payload, ttl_seconds)),
+    )
+    try:
+        client.report_fights(code="abcd1234", difficulty=None)
+    finally:
+        client.close()
+    assert len(writes) == 1
+    return writes[0][2]
+
+
+def test_warcraftlogs_finished_report_cached_under_finished_ttl(monkeypatch) -> None:
+    assert _capture_report_fights_ttl(monkeypatch, end_time=999999) == 86400
+
+
+def test_warcraftlogs_live_report_never_cached_under_finished_ttl(monkeypatch) -> None:
+    # A live (in-progress) report has endTime == 0 and must keep the short report TTL.
+    assert _capture_report_fights_ttl(monkeypatch, end_time=0) == 60
+
+
+def test_warcraftlogs_finished_report_ttl_env_default_and_override(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "warcraftlogs_cli.client.load_warcraftlogs_auth_config",
+        lambda start_dir=None: type("Auth", (), {"configured": False, "client_id": "", "client_secret": "", "env_file": None})(),
+    )
+    monkeypatch.delenv("WARCRAFTLOGS_FINISHED_REPORT_CACHE_TTL_SECONDS", raising=False)
+    default_client = WarcraftLogsClient()
+    try:
+        assert default_client._finished_report_ttl == 86400
+    finally:
+        default_client.close()
+
+    monkeypatch.setenv("WARCRAFTLOGS_FINISHED_REPORT_CACHE_TTL_SECONDS", "120")
+    override_client = WarcraftLogsClient()
+    try:
+        assert override_client._finished_report_ttl == 120
+    finally:
+        override_client.close()
+
+
+def test_warcraftlogs_user_endpoint_write_honors_finish_state_resolver(monkeypatch) -> None:
+    # The user endpoint has its own cache-write site; it must also key TTL on finish state.
+    _configure_public_auth(monkeypatch)
+
+    def _fake_request(client, url, *, method="GET", data=None, auth=None, retry_attempts=1, **kwargs):  # noqa: ANN001
+        del client, retry_attempts, kwargs, auth, data, method
+        assert url.endswith("/api/v2/user")
+        return _report_fights_response(end_time=999999)
+
+    monkeypatch.setattr("warcraftlogs_cli.client.request_with_retries", _fake_request)
+
+    writes: list[tuple[str, object, int]] = []
+    client = WarcraftLogsClient()
+    monkeypatch.setattr(client, "_user_token", lambda: "user-token")
+    monkeypatch.setattr(client, "_read_cache", lambda key: None)
+    monkeypatch.setattr(
+        client,
+        "_write_cache",
+        lambda key, payload, *, ttl_seconds: writes.append((key, payload, ttl_seconds)),
+    )
+    try:
+        client._graphql_user(
+            operation_name="ReportFights",
+            query="query {}",
+            variables={"code": "abcd1234"},
+            namespace="report_fights",
+            ttl_seconds=client._report_ttl,
+            ttl_resolver=client._report_finish_ttl_resolver(),
+        )
+    finally:
+        client.close()
+    assert [ttl for _, _, ttl in writes] == [86400]
+
+
+def test_warcraftlogs_report_encounter_emits_cache_provenance(monkeypatch) -> None:
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _FakeWarcraftLogsClient())
+
+    result = runner.invoke(warcraftlogs_app, ["report-encounter", "abcd1234", "--fight-id", "1"])
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    provenance = payload["report_encounter"]["cache_provenance"]
+    # The pinned fake report has endTime > 0 (finished).
+    assert provenance["finished"] is True
+    assert provenance["live"] is False
+    assert provenance["cache_ttl_seconds"] == 86400
+    assert provenance["source"] == "report_detail"
+
+
+def test_warcraftlogs_report_rankings_never_cached_under_finished_ttl(monkeypatch) -> None:
+    # Rankings are population-relative percentiles that keep changing after the log finishes,
+    # so even a finished report must stay on the short report TTL (not the 24h finished TTL).
+    _configure_public_auth(monkeypatch)
+
+    def _fake_request(client, url, *, method="GET", data=None, auth=None, retry_attempts=1, **kwargs):  # noqa: ANN001
+        del client, retry_attempts, kwargs, auth, data, method
+        if url.endswith("/oauth/token"):
+            return httpx.Response(200, json={"access_token": "tok", "expires_in": 3600}, request=httpx.Request("POST", url))
+        return _report_fights_response(end_time=999999)
+
+    monkeypatch.setattr("warcraftlogs_cli.client.request_with_retries", _fake_request)
+
+    writes: list[tuple[str, object, int]] = []
+    client = WarcraftLogsClient()
+    monkeypatch.setattr(client, "_has_user_token", lambda: False)
+    monkeypatch.setattr(client, "_read_cache", lambda key: None)
+    monkeypatch.setattr(
+        client,
+        "_write_cache",
+        lambda key, payload, *, ttl_seconds: writes.append((key, payload, ttl_seconds)),
+    )
+    try:
+        client.report_rankings(code="abcd1234", options=ReportRankingsOptions())
+    finally:
+        client.close()
+    assert [ttl for _, _, ttl in writes] == [60]
+
+
+def test_warcraftlogs_emitted_ttl_is_null_when_cache_disabled(monkeypatch) -> None:
+    # In cache-off deployments (WARCRAFTLOGS_CACHE_BACKEND=none) nothing is stored, so the
+    # emitted provenance/freshness TTL must be null rather than claiming a finished TTL.
+    from warcraftlogs_cli.main import _emitted_finished_report_ttl, _emitted_report_ttl
+
+    enabled = _FakeWarcraftLogsClient()
+    assert _emitted_finished_report_ttl(enabled) == 86400
+    assert _emitted_report_ttl(enabled) == 60
+
+    disabled = _FakeWarcraftLogsClient()
+    disabled._cache_store = None
+    assert _emitted_finished_report_ttl(disabled) is None
+    assert _emitted_report_ttl(disabled) is None
+
+
 def test_warcraftlogs_report_fights_requires_public_auth_not_generic_missing_auth(monkeypatch) -> None:
     monkeypatch.setattr(
         "warcraftlogs_cli.client.load_warcraftlogs_auth_config",
@@ -4695,7 +4900,7 @@ def test_warcraftlogs_client_graphql_routes_through_user_endpoint_when_authentic
     client = WarcraftLogsClient.__new__(WarcraftLogsClient)
     captured: dict[str, object] = {}
 
-    def _fake_user(*, operation_name, query, variables, namespace, ttl_seconds, use_cache=True):
+    def _fake_user(*, operation_name, query, variables, namespace, ttl_seconds, use_cache=True, ttl_resolver=None):
         captured["operation_name"] = operation_name
         captured["namespace"] = namespace
         captured["ttl_seconds"] = ttl_seconds
