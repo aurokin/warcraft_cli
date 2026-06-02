@@ -46,14 +46,23 @@ def test_doctor_reports_scaffold_auth_and_capabilities() -> None:
     assert auth["lookup_order"][0] == ".env.local"
     assert auth["lookup_order"][-1] == "environment"
     assert auth["state_path"].endswith("providers/blizzard-api.json")
+    # The client-credentials token cache lives under a distinct provider key and is surfaced too.
+    assert auth["token_cache_path"].endswith("providers/blizzard-api-client-credentials.json")
+    assert auth["token_cache"]["has_access_token"] is False
     capabilities = payload["capabilities"]
     assert capabilities["doctor"] == "ready"
     assert capabilities["search"] == "coming_soon"
     assert capabilities["resolve"] == "coming_soon"
-    assert capabilities["game_data"] == "coming_soon"
-    assert capabilities["profile"] == "coming_soon"
-    assert payload["region"]["routing"] == "deferred"
-    assert payload["region"]["configured"] is None
+    assert capabilities["game_data"] == "ready"
+    assert capabilities["profile"] == "ready"
+    region = payload["region"]
+    assert region["routing"] == "ready"
+    assert region["configured"] is None
+    assert region["default"] == "us"
+    assert region["supported_regions"] == ["us", "eu", "kr", "tw", "cn"]
+    # Routing is honored but the concrete hosts/namespaces are pending one-time live confirmation.
+    assert region["verification"]["retail"] == "pending_live_confirmation"
+    assert "pending one-time live confirmation" in region["verification"]["note"]
     assert payload["notes"]
 
 

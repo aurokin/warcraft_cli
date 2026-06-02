@@ -245,24 +245,28 @@ PROVIDERS: tuple[ProviderRegistration, ...] = (
         command="blizzard",
         language="python",
         status="partial",
-        description="Official Blizzard Battle.net WoW API provider (scaffold): doctor + auth posture; endpoints pending.",
+        description="Official Blizzard Battle.net WoW API provider: doctor + auth, Game Data (realm, item) and Profile (character) reads.",
         auth_required=True,
-        # expansion_mode="none" mirrors simc: until region/namespace routing exists there is no honest
+        # expansion_mode="none" mirrors simc: Blizzard routes by region + namespace class
+        # (dynamic/static/profile), which is not the wrapper's expansion axis, so there is no honest
         # expansion to advertise. A side effect (shared with simc) is that `warcraft --expansion <x>
         # blizzard ...` is rejected by the wrapper passthrough; plain `warcraft blizzard ...` works.
         # Relaxing expansion-pinned passthrough for none-expansion providers is wrapper-wide policy
-        # (AUR-384/AUR-389), not part of this provider scaffold.
+        # (AUR-384/AUR-389), not part of this provider.
         expansion_mode="none",
         supported_expansions=(),
-        expansion_review_status="deferred",
+        expansion_review_status="reviewed",
         expansion_policy_note=(
-            "Region- and namespace-aware routing is not implemented yet; "
-            "expansion classification is deferred until the Game Data/Profile endpoint slice lands."
+            "Region- and namespace-aware routing is honored by the Game Data/Profile commands, but "
+            "Blizzard's region/namespace model is not the wrapper's expansion axis, so this provider "
+            "stays out of expansion fanout (expansion_mode='none')."
         ),
         wrapper_capabilities={
             "doctor": "ready",
             "search": "coming_soon",
             "resolve": "coming_soon",
+            "game_data": "ready",
+            "profile": "ready",
         },
         app=blizzard_app,
         doctor_args=("doctor",),
