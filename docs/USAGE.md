@@ -470,6 +470,8 @@ wowprogress search "guild us illidan Liquid"
 wowprogress resolve "character us illidan Imonthegcd"
 wowprogress guild-history us "Mal'Ganis" gn
 wowprogress guild-ranks us "Mal'Ganis" gn
+wowprogress guild-snapshot us illidan Liquid
+wowprogress history-trajectory us "Mal'Ganis" gn
 wowprogress guild us illidan Liquid
 wowprogress character us illidan Imonthegcd
 wowprogress leaderboard pve us --limit 10
@@ -495,6 +497,8 @@ WowProgress phase-1 behavior:
 - `guild` returns a compact guild profile with progression, item-level rank context, and encounter history
 - `guild-history` walks the guild's historical tier pages and returns a per-tier progression timeline with final rank snapshots
 - `guild-ranks` returns the condensed per-tier final-rank view for questions like "final ranks across tiers"
+- `guild-snapshot` derives the current guild state (progression, item-level rank context, and per-tier rank series) from a single guild-history traversal, with no extra guild-page fetch in the command layer
+- `history-trajectory` returns the oldest-to-newest tier timeline with `delta_vs_previous` rank/item-level movement; deltas compare consecutive tiers, which are different raids/difficulties, so they describe movement rather than a normalized metric
 - `character` returns a compact character profile with item-level, SimDPS, and PvE raid-history context
 - `leaderboard pve` returns the current PvE progression leaderboard for a region, optionally narrowed to a realm
 - `sample pve-leaderboard` returns a top-slice leaderboard sample with explicit sampling metadata for the requested row cap and returned entry count
