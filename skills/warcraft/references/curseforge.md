@@ -26,8 +26,10 @@
 - a numeric argument is treated as a mod id and validated to be a WoW project; a non-numeric
   argument is matched to the exact addon slug, so a near-miss returns `addon_not_found` rather than
   the wrong addon
-- changelog is best-effort: when a file exposes none it is `null`, and a failed fetch becomes an
-  explicit `{file_id, error}` marker — the lookup still returns metadata + files
+- changelog is best-effort: it is top-level `null` only when the addon has no files; otherwise an
+  object for the newest file with its changelog `body` (`null` when that file exposes no notes) and
+  `source_url`, or an explicit `{file_id, error}` marker on a failed fetch — the lookup still returns
+  metadata + files. Detect empty notes via `changelog.body`, not `changelog is null`.
 - every payload carries `provenance` (mod id, slug, resolved-by, source URLs) and
   `provenance.verified: false` — endpoints/shapes follow the documented public CurseForge API but
   are pending a one-time live confirmation, so treat results as best-effort until verified

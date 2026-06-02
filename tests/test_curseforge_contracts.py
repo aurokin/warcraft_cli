@@ -201,6 +201,28 @@ def test_changelog_best_effort_error_marker_on_http_failure(monkeypatch: pytest.
     assert payload["data"]["metadata"]["id"] == 3358
 
 
+def test_changelog_empty_body_keeps_object_form_with_null_body(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A successful changelog fetch whose `data` is null/absent (the file exposes no notes) keeps the
+    # object form {file_id, source_url, body: null} — it must NOT collapse to a top-level null, which is
+    # reserved for "addon has no files". Callers detect empty notes via changelog.body, not
+    # `changelog is None`, and a successful (if empty) fetch still records its source url in provenance.
+    def _fake(client: Any, url: str, *, method: str = "GET", **kwargs: Any) -> _FakeResponse:
+        if "/changelog" in url:
+            return _FakeResponse({"data": None}, url)
+        return _FakeResponse(_fixture_for_url(url), url)
+
+    monkeypatch.setattr(client_module, "request_with_retries", _fake)
+    result = runner.invoke(app, ["addon", "3358"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    changelog = payload["data"]["changelog"]
+    assert changelog is not None
+    assert changelog["file_id"] == 5001
+    assert changelog["body"] is None
+    assert "source_url" in changelog
+    assert "changelog" in payload["provenance"]["source_urls"]
+
+
 def test_changelog_best_effort_marker_on_network_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     # A post-retry network failure on the changelog endpoint also degrades to a marker, not a crash.
     def _fake(client: Any, url: str, *, method: str = "GET", **kwargs: Any) -> _FakeResponse:

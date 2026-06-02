@@ -27,9 +27,12 @@ addon-lookup workflow:
   project via `gameId`; otherwise a `gameId=1` slug search whose result is matched to the exact slug
   client-side so an ignored/renamed filter can never bind the wrong mod), then returns
   `data.metadata` (the raw CurseForge mod record), `data.latest_files` (the mod's `latestFiles`), and
-  `data.changelog` for the newest file. Changelog is best-effort: `null` when the addon has no files,
-  or an explicit `{file_id, error}` marker if that one request fails — neither fails the whole lookup,
-  and a failed fetch is never silently reported as "no changelog".
+  `data.changelog` for the newest file. Changelog is best-effort: top-level `null` only when the addon
+  has no files; otherwise an object keyed by `file_id` carrying the changelog `body` (the changelog
+  HTML, or `null` when that file exposes no notes) plus its `source_url`, or an explicit
+  `{file_id, error}` marker if that one request fails. None of these fail the whole lookup, and a
+  failed fetch is never silently reported as "no changelog" — detect empty notes via `changelog.body`,
+  not `changelog is null` (which means "no file to fetch").
 - Each command returns `{ok, provider, command, kind, query, provenance, data}` on success and
   `{ok:false, ..., error:{code, message}}` with a nonzero exit on failure (never a traceback).
   Error codes: `missing_api_key`, `addon_not_found`, `http_error`, `network_error`,

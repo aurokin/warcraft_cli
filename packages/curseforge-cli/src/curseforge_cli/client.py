@@ -167,6 +167,12 @@ class CurseForgeClient:
         # silently flattened to a null body that looks like "no changelog".
         if body is not None and not isinstance(body, str):
             return {"file_id": file_id, "error": {"code": "invalid_response", "message": "changelog data was not a string."}}
+        # A successful fetch always keeps the object form (file_id + source_url) even when the file
+        # exposes no notes (`body: null`). Top-level `changelog is None` is reserved for "no file to
+        # fetch"; an empty `body` means "checked this file, it has none" — kept distinct on purpose so a
+        # successful-but-empty fetch is never conflated with "addon has no files", and so it stays
+        # consistent with the error-marker form above (a failed fetch must not return *more* structure
+        # than a successful one). Callers detect empty notes via `changelog.body`, not `changelog is None`.
         return {
             "file_id": file_id,
             "source_url": result["source_url"],
