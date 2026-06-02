@@ -408,6 +408,21 @@ def test_wrapper_capabilities_match_each_cli_doctor_for_search_and_resolve() -> 
                 )
 
 
+def test_every_provider_live_file_is_registered_for_its_own_flag() -> None:
+    # Each `test_<provider>_live.py` must declare its <PROVIDER>_LIVE_TESTS gate in conftest's
+    # LIVE_TEST_ENV_BY_FILE. Otherwise the collection hook falls back to WOWHEAD_LIVE_TESTS, so the
+    # advertised `<FLAG>=1 pytest -m live tests/test_<provider>_live.py` silently skips unless the
+    # unrelated Wowhead flag is also set (regression originally caught on the blizzard live suite).
+    import conftest
+
+    disk = {path.name for path in (Path(__file__).parent).glob("test_*_live.py")}
+    unregistered = sorted(disk - set(conftest.LIVE_TEST_ENV_BY_FILE))
+    assert not unregistered, (
+        "provider live files missing from LIVE_TEST_ENV_BY_FILE (they would fall back to "
+        f"WOWHEAD_LIVE_TESTS): {unregistered}"
+    )
+
+
 def _stub_non_warcraftlogs_fanout(monkeypatch) -> None:  # noqa: ANN001
     """Run the real warcraftlogs search/resolve; return empty payloads for everyone else."""
     import warcraft_cli.main as wrapper_main

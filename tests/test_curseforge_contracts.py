@@ -331,3 +331,17 @@ def test_numeric_id_rejects_non_wow_mod(monkeypatch: pytest.MonkeyPatch) -> None
     assert result.exit_code == 1
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "addon_not_found"
+
+
+def test_numeric_id_missing_gameid_is_invalid_response(monkeypatch: pytest.MonkeyPatch) -> None:
+    # gameId is the only WoW signal for a numeric id (provenance hardcodes game_id=1). An absent or
+    # non-int gameId means we cannot confirm WoW, so refuse with invalid_response rather than label a
+    # malformed record as a WoW addon.
+    def _fake(client: Any, url: str, *, method: str = "GET", **kwargs: Any) -> _FakeResponse:
+        return _FakeResponse({"data": {"id": 12345, "slug": "no-game-id-mod"}}, url)
+
+    monkeypatch.setattr(client_module, "request_with_retries", _fake)
+    result = runner.invoke(app, ["addon", "12345"])
+    assert result.exit_code == 1
+    payload = json.loads(result.stderr)
+    assert payload["error"]["code"] == "invalid_response"

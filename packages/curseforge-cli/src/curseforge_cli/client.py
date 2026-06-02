@@ -189,10 +189,18 @@ class CurseForgeClient:
                 raise CurseForgeClientError("addon_not_found", f"CurseForge has no WoW addon with mod id {mod_id}.") from exc
             raise
         metadata = self._data_object(mod_result["payload"], context="mod")
-        # Numeric CurseForge ids are global across games; reject a mod that belongs to another game so a
-        # non-WoW id can't be returned as a WoW addon while provenance claims gameId=1.
+        # Numeric CurseForge ids are global across games, and provenance hardcodes game_id=1, so gameId
+        # is the only signal that the resolved record is actually a WoW addon (the slug path also lands
+        # here after re-fetching the full mod). An absent or non-int gameId means we cannot confirm WoW
+        # — treat it as schema drift (invalid_response) rather than emit ok:true claiming game_id=1,
+        # mirroring the non-string changelog body. A present int that isn't WoW is a real miss.
         game_id = metadata.get("gameId")
-        if isinstance(game_id, int) and game_id != WOW_GAME_ID:
+        if not isinstance(game_id, int):
+            raise CurseForgeClientError(
+                "invalid_response",
+                f"CurseForge mod {mod_id} response had no integer gameId to confirm it is a WoW addon.",
+            )
+        if game_id != WOW_GAME_ID:
             raise CurseForgeClientError(
                 "addon_not_found",
                 f"CurseForge mod {mod_id} is not a World of Warcraft addon (gameId={game_id}).",

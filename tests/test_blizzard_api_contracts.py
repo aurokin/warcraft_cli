@@ -165,6 +165,18 @@ def test_unsupported_game_version_rejected(monkeypatch: pytest.MonkeyPatch) -> N
     assert payload["error"]["code"] == "unsupported_game_version"
 
 
+def test_classic_conflicts_with_explicit_retail(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Contradictory flags must error, not silently route to classic: --classic and an explicit
+    # --game-version retail cannot both be honored.
+    _install_recorder(monkeypatch)
+    result = runner.invoke(app, ["realm", "illidan", "--game-version", "retail", "--classic"])
+    assert result.exit_code == 1
+    payload = json.loads(result.stderr)
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "unsupported_game_version"
+    assert "conflicts" in payload["error"]["message"]
+
+
 def test_missing_credentials_error(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("BLIZZARD_CLIENT_ID", raising=False)
     monkeypatch.delenv("BLIZZARD_CLIENT_SECRET", raising=False)

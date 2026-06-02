@@ -25,6 +25,7 @@ PACKAGE_SRC_DIRS = (
     ROOT / "packages" / "curseforge-cli" / "src",
 )
 LIVE_TEST_ENV_BY_FILE = {
+    "test_blizzard_api_live.py": "BLIZZARD_LIVE_TESTS",
     "test_curseforge_live.py": "CURSEFORGE_LIVE_TESTS",
     "test_icy_veins_live.py": "ICY_VEINS_LIVE_TESTS",
     "test_live_endpoint_contracts.py": "WOWHEAD_LIVE_TESTS",

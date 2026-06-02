@@ -78,14 +78,17 @@ def _oauth_token_url(region: str) -> str:
 
 def resolve_game_version(*, game_version: str | None, classic: bool) -> str:
     """Reconcile the --game-version option and the --classic shorthand into one token."""
+    explicit = game_version is not None and game_version.strip() != ""
     resolved = (game_version or "retail").strip().lower()
-    if classic and resolved not in ("retail", "classic"):
-        # --classic is a shorthand for --game-version classic; combining it with an unsupported
-        # explicit version is surfaced under the documented unsupported_game_version code.
+    if classic and explicit and resolved != "classic":
+        # --classic is shorthand for --game-version classic. Pairing it with any *other* explicit
+        # version — including the retail default spelled out, or a deferred era/SoD string — is a
+        # contradiction we refuse rather than silently letting --classic win the routing. (--classic
+        # alone leaves game_version=None, so explicit is False and the shorthand still works.)
         raise BlizzardClientError(
             "unsupported_game_version",
-            f"--classic conflicts with --game-version {resolved!r}; classic-era / Season of "
-            "Discovery namespaces are deferred pending a live spike.",
+            f"--classic conflicts with --game-version {resolved!r}; pass only one "
+            "(--classic is shorthand for --game-version classic).",
         )
     if classic:
         resolved = "classic"
