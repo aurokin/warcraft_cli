@@ -51,6 +51,9 @@ from warcraftlogs_cli.boss_kills import (
 from warcraftlogs_cli.boss_kills import (
     sampled_cross_report_freshness as _sampled_cross_report_freshness,
 )
+from warcraftlogs_cli.boss_kills import (
+    spec_filtered_kill_samples_payload as _spec_filtered_kill_samples_payload,
+)
 from warcraftlogs_cli.client import (
     GRAPHQL_WARNINGS_KEY,
     RETAIL_PROFILE,
@@ -3202,6 +3205,23 @@ def _character_rankings_payload(character: dict[str, Any], *, top: int) -> dict[
     rankings_error = rankings.get("error") if isinstance(rankings.get("error"), str) else None
     all_stars = rankings.get("allStars") if isinstance(rankings.get("allStars"), list) else []
     ranking_rows = rankings.get("rankings") if isinstance(rankings.get("rankings"), list) else []
+    all_star_specs = [
+        row.get("spec")
+        for row in all_stars
+        if isinstance(row, dict) and isinstance(row.get("spec"), str) and row.get("spec")
+    ]
+    unique_specs = list(dict.fromkeys(all_star_specs))
+    source_character_identity = class_spec_identity_payload(
+        actor_class=None,
+        spec=unique_specs[0] if len(unique_specs) == 1 else None,
+        provider="warcraftlogs",
+        source="character_rankings",
+        candidates=[(None, spec) for spec in unique_specs] if len(unique_specs) > 1 else None,
+        notes=[
+            "warcraftlogs character-rankings exposes class only as an internal classID enum; "
+            "class name is not normalized here"
+        ],
+    )
     return {
         "id": character.get("id"),
         "canonical_id": character.get("canonicalID"),
@@ -3252,6 +3272,18 @@ def _character_rankings_payload(character: dict[str, Any], *, top: int) -> dict[
             for row in ranking_rows[:top]
             if isinstance(row, dict)
         ],
+        "trust": {
+            "ranking_basis": "public_character_zone_rankings",
+            "scope": {
+                "zone": rankings.get("zone"),
+                "difficulty": rankings.get("difficulty"),
+                "metric": rankings.get("metric"),
+                "partition": rankings.get("partition"),
+                "size": rankings.get("size"),
+            },
+            "freshness": _sampled_cross_report_freshness(),
+            "source_character_identity": source_character_identity,
+        },
         "raw": rankings,
     }
 
@@ -4354,6 +4386,11 @@ def _require_boss_scope(ctx: typer.Context, *, boss_id: int | None, boss_name: s
         _fail(ctx, "missing_boss", "Provide --boss-id or --boss-name for cross-report boss analytics.")
 
 
+def _require_spec_scope(ctx: typer.Context, *, spec_name: str | None) -> None:
+    if not spec_name:
+        _fail(ctx, "missing_spec", "Provide --spec-name to build a spec-filtered participant kill cohort.")
+
+
 @app.command("boss-kills")
 def boss_kills(
     ctx: typer.Context,
@@ -4483,6 +4520,83 @@ def top_kills(
         ctx,
         _boss_kills_payload(
             kind="top_kills",
+            rows=analytics["rows"],
+            sample=analytics["sample"],
+            query=_cross_report_query(
+                zone_id=zone_id,
+                boss_id=boss_id,
+                boss_name=boss_name,
+                difficulty=difficulty,
+                spec_name=spec_name,
+                kill_time_min=kill_time_min,
+                kill_time_max=kill_time_max,
+                top=top,
+                report_pages=report_pages,
+                reports_per_page=reports_per_page,
+                start_time=start_time,
+                end_time=end_time,
+                guild_region=guild_region,
+                guild_realm=guild_realm,
+                guild_name=guild_name,
+            ),
+            top=top,
+        ),
+        client=client,
+    )
+
+
+@app.command("spec-kill-samples")
+def spec_kill_samples(
+    ctx: typer.Context,
+    zone_id: int = typer.Option(..., "--zone-id", help="Warcraft Logs zone ID to sample reports from."),
+    spec_name: str | None = typer.Option(
+        None,
+        "--spec-name",
+        help="Required participant spec slug. Sampled kills are filtered to fights containing this spec.",
+    ),
+    boss_id: int | None = typer.Option(None, "--boss-id", help="Encounter ID to match."),
+    boss_name: str | None = typer.Option(None, "--boss-name", help="Boss name to match within sampled fights."),
+    difficulty: int | None = typer.Option(None, "--difficulty", help="Optional difficulty ID filter."),
+    kill_time_min: float | None = typer.Option(None, "--kill-time-min", help="Optional minimum kill time in seconds."),
+    kill_time_max: float | None = typer.Option(None, "--kill-time-max", help="Optional maximum kill time in seconds."),
+    top: int = typer.Option(10, "--top", min=1, max=100, help="Maximum returned kill rows after ranking."),
+    report_pages: int = typer.Option(1, "--report-pages", min=1, max=10, help="How many report-list pages to sample."),
+    reports_per_page: int = typer.Option(25, "--reports-per-page", min=1, max=100, help="Reports to fetch per sampled page."),
+    start_time: float | None = typer.Option(None, "--start-time", help="Optional report-range start time in milliseconds."),
+    end_time: float | None = typer.Option(None, "--end-time", help="Optional report-range end time in milliseconds."),
+    guild_region: str | None = typer.Option(None, "--guild-region", help="Optional guild-region scope for report discovery."),
+    guild_realm: str | None = typer.Option(None, "--guild-realm", help="Optional guild-realm scope for report discovery."),
+    guild_name: str | None = typer.Option(None, "--guild-name", help="Optional guild-name scope for report discovery."),
+) -> None:
+    _require_boss_scope(ctx, boss_id=boss_id, boss_name=boss_name)
+    _require_spec_scope(ctx, spec_name=spec_name)
+    client = _client(ctx)
+    try:
+        analytics = _collect_boss_kill_rows(
+            client=client,
+            zone_id=zone_id,
+            boss_id=boss_id,
+            boss_name=boss_name,
+            difficulty=difficulty,
+            spec_name=spec_name,
+            kill_time_min=kill_time_min,
+            kill_time_max=kill_time_max,
+            report_pages=report_pages,
+            reports_per_page=reports_per_page,
+            start_time=start_time,
+            end_time=end_time,
+            guild_region=guild_region,
+            guild_realm=guild_realm,
+            guild_name=guild_name,
+        )
+    except WarcraftLogsClientError as exc:
+        _handle_client_error(ctx, exc)
+        return
+    finally:
+        client.close()
+    _emit(
+        ctx,
+        _spec_filtered_kill_samples_payload(
             rows=analytics["rows"],
             sample=analytics["sample"],
             query=_cross_report_query(

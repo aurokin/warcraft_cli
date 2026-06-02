@@ -2160,6 +2160,17 @@ def test_warcraftlogs_guild_character_and_report_commands(monkeypatch) -> None:
     character_rankings_payload = json.loads(character_rankings_result.stdout)
     assert character_rankings_payload["character_rankings"]["summary"]["best_performance_average"] == 85.4
     assert character_rankings_payload["character_rankings"]["rankings"][0]["encounter"]["name"] == "Dimensius"
+    trust = character_rankings_payload["character_rankings"]["trust"]
+    assert trust["ranking_basis"] == "public_character_zone_rankings"
+    assert trust["scope"] == {"zone": 38, "difficulty": 5, "metric": "dps", "partition": 1, "size": 20}
+    assert trust["freshness"]["cache_ttl_seconds"] is None
+    assert isinstance(trust["freshness"]["sampled_at"], str)
+    source_identity = trust["source_character_identity"]
+    assert source_identity["kind"] == "class_spec_identity"
+    # Single all-stars spec ("Assassination") -> normalized; class name is unavailable from WCL here.
+    assert source_identity["status"] == "normalized"
+    assert source_identity["identity"]["actor_class"] is None
+    assert source_identity["identity"]["spec"] == "assassination"
 
     report_result = runner.invoke(warcraftlogs_app, ["report", "abcd1234", "--allow-unlisted"])
     assert report_result.exit_code == 0
@@ -2345,6 +2356,130 @@ def test_warcraftlogs_boss_kills_samples_finished_reports_and_filters_by_spec(mo
     assert payload["kills"][0]["fight"]["encounter_id"] == 3012
     assert payload["kills"][0]["duration_seconds"] == 100.0
     assert payload["kills"][0]["matching_players"][0]["name"] == "Auropower"
+
+
+def test_warcraftlogs_spec_kill_samples_labels_participant_cohort(monkeypatch) -> None:
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _FakeWarcraftLogsClient())
+
+    result = runner.invoke(
+        warcraftlogs_app,
+        [
+            "spec-kill-samples",
+            "--zone-id",
+            "38",
+            "--boss-id",
+            "3012",
+            "--difficulty",
+            "5",
+            "--spec-name",
+            "Retribution",
+            "--top",
+            "5",
+            "--report-pages",
+            "1",
+            "--reports-per-page",
+            "10",
+        ],
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["kind"] == "spec_filtered_kill_samples"
+    assert payload["cohort"] == "spec_filtered_participant_kill_cohort"
+    assert payload["ranking_basis"] == "spec_filtered_participant_kill_samples"
+    # Canonical envelope key mirrors the kills list; legacy `kills` is dual-emitted + deprecated.
+    assert payload["spec_kill_samples"] == payload["kills"]
+    assert "kills" in payload["deprecated_keys"]
+    # Explicitly labeled as a participant cohort, not a leaderboard.
+    assert any("not a spec ranking leaderboard" in note for note in payload["notes"])
+    assert payload["sample"]["spec_name"] == "Retribution"
+    assert payload["sample"]["sample_size"] == 1
+    assert payload["sample"]["matching_participant_count"] == 1
+    assert payload["sample"]["filtered_kill_count"] == 1
+    assert payload["sample"]["returned_kill_count"] == 1
+    assert payload["sample"]["excluded_kill_count"] == 0
+    assert payload["sample"]["truncated"] is False
+    assert payload["sample"]["truncation_order"] == "fastest_kill_duration_ascending"
+    assert payload["sample"]["stable_source_only"] is True
+    assert payload["freshness"]["cache_ttl_seconds"] is None
+    assert len(payload["citations"]["sample_reports"]) == 1
+    assert payload["kills"][0]["matching_players"][0]["name"] == "Auropower"
+
+
+def test_warcraftlogs_spec_kill_samples_empty_cohort_is_ok(monkeypatch) -> None:
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _FakeWarcraftLogsClient())
+
+    result = runner.invoke(
+        warcraftlogs_app,
+        [
+            "spec-kill-samples",
+            "--zone-id",
+            "38",
+            "--boss-id",
+            "3012",
+            "--difficulty",
+            "5",
+            "--spec-name",
+            "Frost",
+            "--report-pages",
+            "1",
+            "--reports-per-page",
+            "10",
+        ],
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is True
+    assert payload["count"] == 0
+    assert payload["spec_kill_samples"] == []
+    assert payload["sample"]["sample_size"] == 0
+    assert payload["sample"]["matching_participant_count"] == 0
+    assert payload["sample"]["filtered_kill_count"] == 0
+
+
+def test_spec_filtered_kill_samples_payload_surfaces_truncation_bias() -> None:
+    from warcraftlogs_cli.boss_kills import spec_filtered_kill_samples_payload
+
+    # Rows arrive duration-sorted (fastest first) from collect_boss_kill_rows.
+    rows = [
+        {
+            "report": {"code": f"code{i}"},
+            "fight": {"id": i},
+            "duration_seconds": float(100 + i),
+            "matching_players": [{"name": f"P{i}"}],
+        }
+        for i in range(5)
+    ]
+    payload = spec_filtered_kill_samples_payload(
+        rows=rows,
+        sample={"source_report_count": 5, "finished_report_count": 5},
+        query={"spec_name": "balance"},
+        top=2,
+    )
+    sample = payload["sample"]
+    # sample_size is the FULL matching cohort, not the returned head.
+    assert sample["sample_size"] == 5
+    assert sample["filtered_kill_count"] == 5
+    assert sample["returned_kill_count"] == 2
+    assert sample["excluded_kill_count"] == 3
+    assert sample["matching_participant_count"] == 5
+    assert sample["truncated"] is True
+    assert sample["truncation_order"] == "fastest_kill_duration_ascending"
+    assert payload["count"] == 2
+    # When truncated, the returned head is explicitly flagged as a fastest-kill subset.
+    assert any("not a representative random sample" in note for note in payload["notes"])
+
+
+def test_warcraftlogs_spec_kill_samples_requires_spec_name(monkeypatch) -> None:
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _FakeWarcraftLogsClient())
+
+    result = runner.invoke(
+        warcraftlogs_app,
+        ["spec-kill-samples", "--zone-id", "38", "--boss-id", "3012"],
+    )
+    assert result.exit_code == 1
+    payload = json.loads(result.stderr)
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "missing_spec"
 
 
 def test_warcraftlogs_top_kills_reports_truncation(monkeypatch) -> None:

@@ -261,6 +261,15 @@ def matrix_cases() -> tuple[MatrixCase, ...]:
             "top_kills",
         ),
         MatrixCase(
+            "spec-kill-samples",
+            "spec-kill-samples",
+            "spec_kill_samples",
+            AuthRequirement.CLIENT,
+            # A small sampled cohort may legitimately be empty; assert envelope shape only.
+            _static(["spec-kill-samples", *sampled, "--spec-name", "balance"]),
+            None,
+        ),
+        MatrixCase(
             "boss-spec-usage",
             "boss-spec-usage",
             "boss_spec_usage",

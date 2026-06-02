@@ -26,6 +26,7 @@ LEGACY_PRIMARY_KEYS: dict[str, str] = {
     "guild-reports": "reports",
     "boss-kills": "kills",
     "top-kills": "kills",
+    "spec-kill-samples": "kills",
     "boss-spec-usage": "spec_usage",
     "ability-usage-summary": "usage",
     "comp-samples": "kills",

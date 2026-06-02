@@ -25,6 +25,20 @@ def test_apply_payload_envelope_dual_emits_boss_kills() -> None:
     assert "kills" in out["deprecated_keys"]
 
 
+def test_apply_payload_envelope_dual_emits_spec_kill_samples() -> None:
+    payload = {
+        "ok": True,
+        "provider": "warcraftlogs",
+        "kind": "spec_filtered_kill_samples",
+        "kills": [{"id": 1}],
+    }
+    out = apply_payload_envelope("spec-kill-samples", payload)
+    assert out["command"] == "spec-kill-samples"
+    assert out["spec_kill_samples"] == [{"id": 1}]
+    assert out["kills"] == [{"id": 1}]
+    assert "kills" in out["deprecated_keys"]
+
+
 def test_apply_payload_envelope_encounter_rankings() -> None:
     payload = {
         "ok": True,

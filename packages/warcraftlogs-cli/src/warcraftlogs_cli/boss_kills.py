@@ -359,6 +359,65 @@ def boss_kills_payload(
     }
 
 
+def spec_filtered_kill_samples_payload(
+    *,
+    rows: list[dict[str, Any]],
+    sample: dict[str, Any],
+    query: dict[str, Any],
+    top: int,
+) -> dict[str, Any]:
+    # `rows` arrive sorted by ascending kill duration (shared collect_boss_kill_rows path),
+    # so the returned head is the fastest qualifying kills. `sample_size` is the FULL matching
+    # cohort, not the returned slice, and the truncation order is surfaced so consumers do not
+    # mistake a fastest-kill head for a representative random sample.
+    returned = rows[:top]
+    spec_name = query.get("spec_name") if isinstance(query, dict) else None
+    truncated = len(rows) > top
+    matching_participant_count = sum(
+        len(row.get("matching_players") or [])
+        for row in rows
+        if isinstance(row, dict)
+    )
+    notes = [
+        *sampled_spec_filter_notes(spec_name),
+        (
+            "rows are sampled kills that contained at least one participant of the requested spec; "
+            "this is a participant cohort, not a spec ranking leaderboard"
+        ),
+    ]
+    if truncated:
+        notes.append(
+            "returned kills are the fastest qualifying kills (ascending duration); slower kills in "
+            "the cohort are excluded by --top, so the returned subset is not a representative random sample"
+        )
+    return {
+        "ok": True,
+        "provider": "warcraftlogs",
+        "kind": "spec_filtered_kill_samples",
+        "cohort": "spec_filtered_participant_kill_cohort",
+        "ranking_basis": "spec_filtered_participant_kill_samples",
+        "matching_rule": "sampled_zone_reports_filtered_to_kills_containing_the_requested_participant_spec",
+        "query": query,
+        "notes": notes,
+        "freshness": sampled_cross_report_freshness(),
+        "citations": sampled_cross_report_citations(rows),
+        "sample": {
+            **sample,
+            "spec_name": spec_name,
+            "sample_size": len(rows),
+            "matching_participant_count": matching_participant_count,
+            "filtered_kill_count": len(rows),
+            "returned_kill_count": len(returned),
+            "excluded_kill_count": max(0, len(rows) - len(returned)),
+            "truncated": truncated,
+            "truncation_order": "fastest_kill_duration_ascending",
+            "stable_source_only": True,
+        },
+        "count": len(returned),
+        "kills": returned,
+    }
+
+
 def kill_time_distribution_payload(
     *,
     rows: list[dict[str, Any]],

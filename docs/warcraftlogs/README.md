@@ -138,7 +138,7 @@ Shared auth direction for this provider is defined in [AUTH_ARCHITECTURE.md](../
 ## Known Gaps And Deferred Coverage
 
 Highest-value next implementation slices:
-- make `character-rankings` more reliable across public characters before treating it as fully validated
+- `character-rankings` now carries a trust block (`ranking_basis`, resolved scope echo, freshness, and a source-character `class_spec_identity`) alongside the preserved `raw` passthrough; continue validating it across more public characters before treating it as fully validated
 - deepen report workflows beyond the current phase-1 slice:
   - safer event pagination patterns once `events(...)` can be validated more broadly
   - additional report detail surfaces after the current player/events/table/graph/ranking slice is proven
@@ -146,10 +146,10 @@ Highest-value next implementation slices:
   - current shipped slice covers encounter identity plus typed player/cast/buff/aura/aura-compare/damage-source/damage-target/damage summaries
   - next: wave and phase summaries so agents do not have to derive unstable segments from raw timestamps
 - continue the multi-report analytics slice beyond the current sampled cohort commands:
-  - current shipped slice covers `boss-kills`, `top-kills`, `kill-time-distribution`, `boss-spec-usage`, `comp-samples`, and `ability-usage-summary`
+  - current shipped slice covers `boss-kills`, `top-kills`, `spec-kill-samples`, `kill-time-distribution`, `boss-spec-usage`, `comp-samples`, and `ability-usage-summary`
   - those sampled commands now also expose freshness and citation metadata for the sampled report cohort
+  - `spec-kill-samples` is a labeled spec-filtered participant kill cohort (requires `--spec-name`), with `sample_size`, exclusion/truncation counts, freshness, and citations; it is explicitly not a spec ranking leaderboard
   - stronger top-kill discovery semantics beyond sampled fastest kills
-  - spec-filtered kill samples
   - kill-time-bounded report cohorts
   - deeper cross-report composition summaries beyond the current sampled class-presence/signature layer
 
@@ -157,9 +157,10 @@ Current rankings split:
 - `encounter-rankings` is the official encounter leaderboard surface for boss/class/spec ranking questions
   - normalized row `rank` values are derived from page order when the provider omits explicit per-row rank fields
   - normalized pagination counts are page-scoped because Warcraft Logs does not currently return a stable global total for this surface
-- `character-rankings` remains the character-centric rankings surface
-- `boss-kills`, `top-kills`, `kill-time-distribution`, `boss-spec-usage`, `comp-samples`, and `ability-usage-summary` remain sampled cross-report analytics
+- `character-rankings` remains the character-centric rankings surface and now exposes a `trust` block (basis, scope echo, freshness, source-character identity)
+- `boss-kills`, `top-kills`, `spec-kill-samples`, `kill-time-distribution`, `boss-spec-usage`, `comp-samples`, and `ability-usage-summary` remain sampled cross-report analytics
 - on those sampled commands, `--spec-name` filters sampled kills by matching participant specs before aggregation; it does not turn the query into a spec ranking leaderboard
+- `spec-kill-samples` requires `--spec-name` and returns that filter as an explicit participant cohort with sample-size/exclusion/truncation accounting
 
 After that:
 - user-auth plumbing
@@ -714,6 +715,7 @@ The agent should not be expected to:
 
 - `warcraftlogs top-kills`
 - `warcraftlogs boss-kills`
+- `warcraftlogs spec-kill-samples`
 - `warcraftlogs boss-spec-usage`
 - `warcraftlogs kill-time-distribution`
 - `warcraftlogs comp-samples`
