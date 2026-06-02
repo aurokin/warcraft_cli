@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+
+def _iso_now_utc() -> str:
+    return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def default_article_export_root(provider: str, *, cwd: Path | None = None) -> Path:
@@ -117,6 +122,8 @@ def write_article_bundle(
     manifest = {
         "export_version": 1,
         "provider": provider,
+        # Freshness anchor for downstream wrapper handoff/compare metadata (AUR-386).
+        "exported_at": _iso_now_utc(),
         "resource_key": resource_key,
         "page_resource_key": normalized_page_resource_key,
         "content_key": content_key,
@@ -363,6 +370,7 @@ def _bundle_descriptor(bundle: dict[str, Any], *, path: Path) -> dict[str, Any]:
         "path": str(path),
         "title": _bundle_title(bundle),
         "resource_key": manifest.get("resource_key"),
+        "exported_at": manifest.get("exported_at"),
         "counts": counts,
     }
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
 
 from icy_veins_cli.main import _resolve_is_confident, _resolve_search_payload, _score_family_match, app
@@ -604,6 +605,8 @@ def test_icy_veins_guide_export_and_query(monkeypatch, tmp_path: Path) -> None:
     export_payload = json.loads(export_result.stdout)
     assert export_payload["counts"]["pages"] == 3
     assert (export_dir / "manifest.json").exists()
+    manifest = json.loads((export_dir / "manifest.json").read_text())
+    assert datetime.fromisoformat(manifest["exported_at"].replace("Z", "+00:00")).tzinfo is not None
     assert (export_dir / "pages" / "mistweaver-monk-pve-healing-guide.html").exists()
 
     query_result = runner.invoke(app, ["guide-query", str(export_dir), "vivify", "--kind", "linked_entities"])

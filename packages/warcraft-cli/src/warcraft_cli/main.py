@@ -325,11 +325,89 @@ def _guide_build_handoff_freshness(source_kind: str, source_manifest: dict[str, 
             "sampled_at": parsed_updated_at.replace(microsecond=0).isoformat().replace("+00:00", "Z"),
             "cache_ttl_seconds": None,
         }
+    exported_at = source_manifest.get("exported_at") if isinstance(source_manifest, dict) else None
+    parsed_exported_at = _parse_iso8601_utc(exported_at)
+    if parsed_exported_at is None:
+        return {
+            "status": "unknown",
+            "reason": "bundle_manifest_has_no_export_timestamp",
+            "sampled_at": None,
+            "cache_ttl_seconds": None,
+        }
     return {
-        "status": "unknown",
-        "reason": "bundle_manifest_has_no_export_timestamp",
-        "sampled_at": None,
+        "status": "known",
+        "reason": "bundle_manifest_exported_at",
+        "sampled_at": parsed_exported_at.replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         "cache_ttl_seconds": None,
+    }
+
+
+def _guide_compare_freshness_rollup(
+    bundle_freshness: list[dict[str, Any]],
+    *,
+    max_age_hours: int,
+) -> dict[str, Any]:
+    statuses = [row["freshness"]["status"] for row in bundle_freshness]
+    ages = [
+        row["freshness"]["age_hours"]
+        for row in bundle_freshness
+        if isinstance(row["freshness"].get("age_hours"), (int, float))
+    ]
+    if not bundle_freshness:
+        status = "unknown"
+    elif all(status == "fresh" for status in statuses):
+        status = "fresh"
+    else:
+        status = "stale"
+    return {
+        "status": status,
+        "max_age_hours": max_age_hours,
+        "bundle_count": len(bundle_freshness),
+        "fresh_count": sum(1 for status_value in statuses if status_value == "fresh"),
+        "stale_count": sum(1 for status_value in statuses if status_value == "stale"),
+        "oldest_age_hours": max(ages) if ages else None,
+        "newest_age_hours": min(ages) if ages else None,
+    }
+
+
+def _guide_comparison_packet(
+    bundle_inputs: list[tuple[Path, dict[str, Any]]],
+    *,
+    max_age_hours: int,
+) -> dict[str, Any]:
+    """Build the guide-bundle comparison object with additive freshness + scope evidence.
+
+    Shared by `guide-compare` and `guide-compare-query` so both emit the same comparison
+    packet (raw evidence + `freshness` rollup + `comparison_evidence`).
+    """
+    comparison = compare_article_bundles(bundle_inputs)
+    bundle_descriptors = [
+        descriptor for descriptor in (comparison.get("bundles") or []) if isinstance(descriptor, dict)
+    ]
+    bundle_freshness = [
+        {
+            "provider": descriptor.get("provider"),
+            "path": descriptor.get("path"),
+            "exported_at": descriptor.get("exported_at"),
+            "freshness": _guide_compare_freshness(descriptor.get("exported_at"), max_age_hours=max_age_hours),
+        }
+        for descriptor in bundle_descriptors
+    ]
+    freshness_rollup = _guide_compare_freshness_rollup(bundle_freshness, max_age_hours=max_age_hours)
+    return {
+        **comparison,
+        "freshness": freshness_rollup,
+        "comparison_evidence": {
+            "compared_bundle_count": comparison.get("compared_bundle_count"),
+            "providers": [descriptor.get("provider") for descriptor in bundle_descriptors],
+            "matching_rules": {
+                "section_evidence": comparison.get("section_evidence", {}).get("matching_rule"),
+                "analysis_surface_tags": "exact_normalized_tag",
+                "build_references": "exact_build_reference_key",
+            },
+            "freshness": freshness_rollup,
+            "bundle_freshness": bundle_freshness,
+        },
     }
 
 
@@ -1985,6 +2063,13 @@ def actor_profile(
 def guide_compare(
     ctx: typer.Context,
     bundles: list[Path] = GUIDE_COMPARE_BUNDLES_ARGUMENT,
+    max_age_hours: int = typer.Option(
+        24,
+        "--max-age-hours",
+        min=1,
+        max=24 * 30,
+        help="Freshness threshold (hours) for each compared bundle's exported_at.",
+    ),
 ) -> None:
     if len(bundles) < 2:
         _emit(
@@ -2035,7 +2120,7 @@ def guide_compare(
 
     payload = {
         "provider": "warcraft",
-        **compare_article_bundles(bundle_inputs),
+        **_guide_comparison_packet(bundle_inputs, max_age_hours=max_age_hours),
     }
     _emit(payload, pretty=_pretty(ctx))
 
@@ -2176,7 +2261,11 @@ def _process_guide_compare_provider(
             "error": str(exc),
         }, None
 
-    exported_at = _iso_now_utc()
+    # Source exported_at from the bundle manifest write_article_bundle just stamped, so the
+    # orchestration row, the reuse check, and _guide_comparison_packet all read one timestamp
+    # (they cannot disagree on freshness). Fall back to now only for legacy timestamp-less bundles.
+    bundle_manifest = bundle.get("manifest") if isinstance(bundle.get("manifest"), dict) else {}
+    exported_at = bundle_manifest.get("exported_at") or _iso_now_utc()
     return {
         "provider": provider_name,
         "status": "exported",
@@ -2315,7 +2404,7 @@ def guide_compare_query(
     if len(bundle_inputs) >= 2:
         payload["comparison"] = {
             "provider": "warcraft",
-            **compare_article_bundles(bundle_inputs),
+            **_guide_comparison_packet(bundle_inputs, max_age_hours=max_age_hours),
         }
         include_simc_build_handoff = simc_build_handoff or (
             isinstance(simc_apl_path, str) and bool(simc_apl_path.strip())

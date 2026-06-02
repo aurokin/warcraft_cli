@@ -689,6 +689,18 @@ def test_warcraft_guide_compare_returns_cross_provider_bundle_packet(tmp_path: P
     assert payload["build_references"]["shared"] == [
         "monk::mistweaver::ABC123::https://www.wowhead.com/talent-calc/monk/mistweaver/ABC123"
     ]
+    # AUR-386: additive freshness + scope/evidence metadata; existing keys preserved.
+    assert payload["citations"]["bundle_paths"]  # preserved
+    assert payload["freshness"]["status"] == "fresh"
+    assert payload["freshness"]["bundle_count"] == 2
+    assert payload["freshness"]["fresh_count"] == 2
+    evidence = payload["comparison_evidence"]
+    assert evidence["compared_bundle_count"] == 2
+    assert evidence["providers"] == ["method", "icy-veins"]
+    assert evidence["matching_rules"]["section_evidence"] == "exact_normalized_section_title"
+    assert evidence["freshness"]["status"] == "fresh"
+    assert len(evidence["bundle_freshness"]) == 2
+    assert all(row["freshness"]["status"] == "fresh" for row in evidence["bundle_freshness"])
 
 
 def test_warcraft_guide_compare_query_orchestrates_resolve_export_and_compare(
@@ -762,6 +774,11 @@ def test_warcraft_guide_compare_query_orchestrates_resolve_export_and_compare(
     assert payload["exported_bundle_count"] == 2
     assert payload["comparison"]["kind"] == "guide_bundle_comparison"
     assert payload["comparison"]["compared_bundle_count"] == 2
+    # AUR-386: guide-compare-query's embedded comparison carries the same freshness + evidence
+    # packet as the direct guide-compare command (shared builder).
+    assert payload["comparison"]["freshness"]["status"] in {"fresh", "stale", "unknown"}
+    assert "comparison_evidence" in payload["comparison"]
+    assert payload["comparison"]["comparison_evidence"]["compared_bundle_count"] == 2
     assert all(row["status"] == "exported" for row in payload["provider_results"])
     assert {row["candidate"]["selection_source"] for row in payload["provider_results"]} == {"resolve"}
 
@@ -1278,8 +1295,10 @@ def test_warcraft_guide_builds_simc_reads_bundle_build_refs(monkeypatch, tmp_pat
     assert payload["kind"] == "guide_builds_simc_handoff"
     assert payload["source"]["kind"] == "bundle"
     assert payload["provenance"]["explicit_build_reference_only"] is True
-    assert payload["freshness"]["status"] == "unknown"
-    assert payload["freshness"]["reason"] == "bundle_manifest_has_no_export_timestamp"
+    # write_article_bundle now stamps exported_at, so the single-bundle handoff has a real anchor (AUR-386).
+    assert payload["freshness"]["status"] == "known"
+    assert payload["freshness"]["reason"] == "bundle_manifest_exported_at"
+    assert payload["freshness"]["sampled_at"] is not None
     assert payload["citations"]["build_reference_urls"] == ["https://www.wowhead.com/talent-calc/monk/mistweaver/ABC123"]
     assert payload["build_reference_count"] == 1
     assert payload["summary"]["returned_build_count"] == 1

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
 
 from method_cli.main import app
@@ -289,6 +290,8 @@ def test_method_guide_export_and_query(monkeypatch, tmp_path: Path) -> None:
     export_payload = json.loads(export_result.stdout)
     assert export_payload["counts"]["pages"] == 2
     assert (export_dir / "manifest.json").exists()
+    manifest = json.loads((export_dir / "manifest.json").read_text())
+    assert datetime.fromisoformat(manifest["exported_at"].replace("Z", "+00:00")).tzinfo is not None
     assert (export_dir / "pages" / "talents.html").exists()
 
     query_result = runner.invoke(app, ["guide-query", str(export_dir), "tea serenity", "--kind", "linked_entities"])
