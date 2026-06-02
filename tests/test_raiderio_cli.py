@@ -42,6 +42,7 @@ def test_raiderio_doctor_reports_phase_one_capabilities() -> None:
     assert payload["capabilities"]["distribution_mythic_plus_runs"] == "ready"
     assert payload["capabilities"]["distribution_mythic_plus_players"] == "ready"
     assert payload["capabilities"]["threshold_mythic_plus_runs"] == "ready"
+    assert payload["capabilities"]["mythic_plus_leaderboard"] == "ready"
 
 
 def test_raiderio_search_returns_ranked_matches(monkeypatch) -> None:
@@ -1462,3 +1463,169 @@ def test_raiderio_http_error_maps_to_structured_error(monkeypatch) -> None:
     payload = json.loads(result.stderr)
     assert payload["ok"] is False
     assert payload["error"]["code"] == "not_found"
+
+
+def _leaderboard_rows(page: int) -> list[dict]:
+    rows = {
+        0: [
+            {
+                "rank": 1,
+                "score": 580.0,
+                "run": {
+                    "keystone_run_id": 2001,
+                    "season": "season-tww-3",
+                    "mythic_level": 26,
+                    "completed_at": "2026-01-21T18:27:09.000Z",
+                    "dungeon": {"name": "The Dawnbreaker", "slug": "the-dawnbreaker"},
+                    "weekly_modifiers": [{"slug": "tyrannical"}],
+                    "roster": [
+                        {"character": {"name": "Cotti", "realm": {"slug": "tarren-mill"}, "region": {"slug": "eu"}}, "role": "dps"},
+                    ],
+                },
+            },
+            {
+                "rank": 2,
+                "score": 575.0,
+                "run": {
+                    "keystone_run_id": 2002,
+                    "season": "season-tww-3",
+                    "mythic_level": 25,
+                    "completed_at": "2026-01-21T18:30:09.000Z",
+                    "dungeon": {"name": "Operation: Floodgate", "slug": "operation-floodgate"},
+                    "weekly_modifiers": [{"slug": "tyrannical"}],
+                    "roster": [
+                        {"character": {"name": "Meowtide", "realm": {"slug": "sylvanas"}, "region": {"slug": "eu"}}, "role": "healer"},
+                    ],
+                },
+            },
+        ],
+    }
+    return rows.get(page, [])
+
+
+def test_raiderio_leaderboard_mythic_plus(monkeypatch) -> None:
+    def fake_runs(self, *, season: str | None, region: str, dungeon: str, affixes: str | None, page: int):  # noqa: ANN001
+        return {
+            "season": "season-tww-3",
+            "leaderboard_url": f"https://raider.io/mythic-plus-runs/season-tww-3/{region}/{dungeon}/{page}",
+            "rankings": _leaderboard_rows(page),
+        }
+
+    monkeypatch.setattr("raiderio_cli.main.RaiderIOClient.mythic_plus_runs", fake_runs)
+    result = runner.invoke(raiderio_app, ["leaderboard", "mythic-plus", "--season", "current", "--region", "us", "--dungeon", "all", "--limit", "20"])
+    assert result.exit_code == 0, result.output
+
+    payload = json.loads(result.stdout)
+    assert payload["provider"] == "raiderio"
+    assert payload["kind"] == "mythic_plus_leaderboard"
+    assert payload["query"]["resolved_season"] == "season-tww-3"
+    assert payload["query"]["region"] == "us"
+    assert payload["query"]["limit"] == 20
+    assert payload["count"] == 2
+    assert len(payload["runs"]) == 2
+    assert payload["runs"][0]["rank"] == 1
+    assert payload["sample"]["requested_limit"] == 20
+    assert payload["sample"]["returned_run_count"] == 2
+    assert payload["sample"]["pages_fetched"] == 1
+    assert payload["sample"]["limit_reached"] is False  # provider returned fewer than --limit
+    assert payload["freshness"]["sampled_at"]
+    assert payload["freshness"]["cache_ttl_seconds"] >= 1
+    assert len(payload["citations"]["leaderboard_urls"]) >= 1
+
+
+def test_raiderio_leaderboard_paginates_for_limit(monkeypatch) -> None:
+    # --limit beyond one page must fetch more pages, not silently return one page of rows.
+    def fake_runs(self, *, season: str | None, region: str, dungeon: str, affixes: str | None, page: int):  # noqa: ANN001
+        # 20 unique rows per page (the real Raider.IO page size), pages 0 and 1 populated.
+        rankings = []
+        if page in (0, 1):
+            base = page * 20
+            for i in range(20):
+                rank = base + i + 1
+                rankings.append({
+                    "rank": rank,
+                    "score": 600.0 - rank,
+                    "run": {
+                        "keystone_run_id": 9000 + rank,
+                        "season": "season-tww-3",
+                        "mythic_level": 25,
+                        "completed_at": "2026-01-21T18:27:09.000Z",
+                        "dungeon": {"name": "The Dawnbreaker", "slug": "the-dawnbreaker"},
+                        "weekly_modifiers": [{"slug": "tyrannical"}],
+                        "roster": [{"character": {"name": f"P{rank}", "realm": {"slug": "r"}, "region": {"slug": "us"}}, "role": "dps"}],
+                    },
+                })
+        return {
+            "season": "season-tww-3",
+            "leaderboard_url": f"https://raider.io/mythic-plus-runs/season-tww-3/us/all/{page}",
+            "rankings": rankings,
+        }
+
+    monkeypatch.setattr("raiderio_cli.main.RaiderIOClient.mythic_plus_runs", fake_runs)
+    result = runner.invoke(raiderio_app, ["leaderboard", "mythic-plus", "--region", "us", "--limit", "40"])
+    assert result.exit_code == 0, result.output
+
+    payload = json.loads(result.stdout)
+    assert payload["count"] == 40
+    assert payload["sample"]["pages_fetched"] == 2
+    assert payload["sample"]["limit_reached"] is True
+    assert len(payload["citations"]["leaderboard_urls"]) == 2
+
+
+def test_raiderio_leaderboard_season_current_omits_season_param(monkeypatch) -> None:
+    # --season current must resolve to None (omit the param so the API uses its default season),
+    # and the payload echoes the season recovered from the API response.
+    captured: dict[str, object] = {}
+
+    def fake_runs(self, *, season: str | None, region: str, dungeon: str, affixes: str | None, page: int):  # noqa: ANN001
+        captured["season"] = season
+        return {
+            "season": "season-tww-3",
+            "leaderboard_url": "https://raider.io/mythic-plus-runs/season-tww-3/world/all/0",
+            "rankings": _leaderboard_rows(0),
+        }
+
+    monkeypatch.setattr("raiderio_cli.main.RaiderIOClient.mythic_plus_runs", fake_runs)
+    result = runner.invoke(raiderio_app, ["leaderboard", "mythic-plus", "--season", "current"])
+    assert result.exit_code == 0, result.output
+
+    assert captured["season"] is None  # 'current' -> None
+    payload = json.loads(result.stdout)
+    assert payload["query"]["resolved_season"] == "season-tww-3"
+
+
+def test_raiderio_sample_surfaces_resolved_season(monkeypatch) -> None:
+    # AC3: analytics commands surface resolved_season recovered from the API response.
+    def fake_runs(self, *, season: str | None, region: str, dungeon: str, affixes: str | None, page: int):  # noqa: ANN001
+        return {
+            "season": "season-tww-3",
+            "leaderboard_url": "https://raider.io/mythic-plus-runs/season-tww-3/world/all/0",
+            "rankings": _leaderboard_rows(0),
+        }
+
+    monkeypatch.setattr("raiderio_cli.main.RaiderIOClient.mythic_plus_runs", fake_runs)
+    result = runner.invoke(raiderio_app, ["sample", "mythic-plus-runs", "--season", "current", "--limit", "2"])
+    assert result.exit_code == 0, result.output
+
+    payload = json.loads(result.stdout)
+    assert payload["query"]["resolved_season"] == "season-tww-3"
+
+
+def test_raiderio_leaderboard_empty_runs_degrades_cleanly(monkeypatch) -> None:
+    # Empty rankings: no IndexError; citations still carry the season-scoped leaderboard URL.
+    def fake_runs(self, *, season: str | None, region: str, dungeon: str, affixes: str | None, page: int):  # noqa: ANN001
+        return {
+            "season": "season-tww-3",
+            "leaderboard_url": "https://raider.io/mythic-plus-runs/season-tww-3/world/all/0",
+            "rankings": [],
+        }
+
+    monkeypatch.setattr("raiderio_cli.main.RaiderIOClient.mythic_plus_runs", fake_runs)
+    result = runner.invoke(raiderio_app, ["leaderboard", "mythic-plus"])
+    assert result.exit_code == 0, result.output
+
+    payload = json.loads(result.stdout)
+    assert payload["count"] == 0
+    assert payload["runs"] == []
+    assert payload["query"]["resolved_season"] == "season-tww-3"
+    assert len(payload["citations"]["leaderboard_urls"]) >= 1

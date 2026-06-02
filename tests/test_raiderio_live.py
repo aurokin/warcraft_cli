@@ -99,3 +99,16 @@ def test_live_raiderio_distribution_mythic_plus_players_contract() -> None:
     assert payload["metric"] == "class"
     assert payload["distribution"]["unit"] == "player_class_tags"
     assert len(payload["distribution"]["rows"]) >= 1
+
+
+@pytest.mark.live
+def test_live_raiderio_leaderboard_mythic_plus_contract() -> None:
+    payload = _payload_for(["leaderboard", "mythic-plus", "--season", "current", "--region", "us", "--dungeon", "all", "--limit", "20"])
+
+    assert payload["kind"] == "mythic_plus_leaderboard"
+    assert payload["query"]["resolved_season"]  # current resolves to a concrete season slug
+    assert payload["count"] >= 1
+    assert len(payload["runs"]) >= 1
+    assert payload["freshness"]["sampled_at"]
+    assert payload["freshness"]["cache_ttl_seconds"] >= 1
+    assert len(payload["citations"]["leaderboard_urls"]) >= 1
