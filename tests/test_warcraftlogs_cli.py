@@ -1188,6 +1188,7 @@ def test_warcraftlogs_doctor_reports_phase_one_capabilities(monkeypatch) -> None
     assert payload["capabilities"]["search"] == "ready_explicit_report_only"
     assert payload["capabilities"]["resolve"] == "ready_explicit_report_only"
     assert payload["capabilities"]["report_fights"] == "ready"
+    assert payload["capabilities"]["spec_kill_samples"] == "ready"
     assert payload["capabilities"]["boss_spec_usage"] == "ready"
     assert payload["capabilities"]["comp_samples"] == "ready"
     assert payload["capabilities"]["ability_usage_summary"] == "ready"

@@ -928,6 +928,7 @@ def _doctor_payload(*, live: bool) -> dict[str, Any]:
             "guild_rankings": _public_capability_status(public_api_access),
             "boss_kills": _public_capability_status(public_api_access),
             "top_kills": _public_capability_status(public_api_access),
+            "spec_kill_samples": _public_capability_status(public_api_access),
             "kill_time_distribution": _public_capability_status(public_api_access),
             "boss_spec_usage": _public_capability_status(public_api_access),
             "comp_samples": _public_capability_status(public_api_access),
