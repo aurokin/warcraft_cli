@@ -161,6 +161,13 @@ def test_parse_guild_page() -> None:
     assert payload["item_level"]["ranks"] == {"world": "9026", "region": "4149", "realm": "238"}
     assert payload["encounters"]["items"][0]["encounter"] == "Dimensius, the All-Devouring"
     assert payload["encounters"]["items"][0]["video_count"] == 2
+    # Encounter rows carry an additive name-only (normalized) encounter identity.
+    encounter_identity = payload["encounters"]["items"][0]["encounter_identity"]
+    assert encounter_identity["kind"] == "encounter_identity"
+    assert encounter_identity["status"] == "normalized"
+    assert encounter_identity["identity"]["encounter_id"] is None
+    assert encounter_identity["identity"]["normalized_name"] == "dimensius-the-all-devouring"
+    assert encounter_identity["source"] == {"provider": "wowprogress", "source": "guild_encounter_row"}
     assert payload["history_links"][0]["tier_key"] == "tier34"
     assert payload["history_links"][0]["raid"] == "Liberation of Undermine"
     assert payload["history_links"][0]["current"] is True
@@ -182,8 +189,46 @@ def test_parse_character_page() -> None:
     assert payload["item_level"]["ranks"] == {"world": None, "region": "n/a", "realm": "6246"}
     assert payload["sim_dps"]["value"] == 6089532.23
     assert payload["sim_dps"]["ranks"] == {"world": None, "region": "236", "realm": "35"}
+    # spec is sourced from the SimDPS table (Fix 1: field-level coverage for the identity input).
+    assert payload["sim_dps"]["spec"] == "Arcane"
+    # Class is free-text parsed and spec comes from SimDPS, so identity is normalized w/o confidence.
+    identity = payload["character"]["class_spec_identity"]
+    assert identity["kind"] == "class_spec_identity"
+    assert identity["status"] == "normalized"
+    assert identity["confidence"] == "none"
+    assert identity["identity"] == {"actor_class": "mage", "spec": "arcane"}
+    assert identity["source"] == {"provider": "wowprogress", "source": "character_page"}
     assert payload["pve"]["score"] == 750000.0
     assert payload["pve"]["raids"][0]["raid"] == "Manaforge Omega"
+
+
+def test_parse_character_summary_keeps_two_word_classes() -> None:
+    payload = parse_character_page(
+        "<html><body><h1>Voidy</h1><div>Void Elf Death Knight 80</div></body></html>",
+        url="https://www.wowprogress.com/character/us/illidan/Voidy",
+        region="us",
+        realm="illidan",
+        name="Voidy",
+    )
+    # Two-word class must not truncate to the trailing token ("Knight").
+    assert payload["character"]["class_name"] == "Death Knight"
+    assert payload["character"]["race"] == "Void Elf"
+    assert payload["character"]["class_spec_identity"]["identity"]["actor_class"] == "deathknight"
+
+
+def test_parse_character_page_identity_degrades_without_class() -> None:
+    payload = parse_character_page(
+        "<html><body><h1>Nobody</h1></body></html>",
+        url="https://www.wowprogress.com/character/us/illidan/Nobody",
+        region="us",
+        realm="illidan",
+        name="Nobody",
+    )
+    assert payload["character"]["class_name"] is None
+    assert payload["sim_dps"] == {}
+    identity = payload["character"]["class_spec_identity"]
+    assert identity["status"] == "unknown"
+    assert identity["identity"] == {"actor_class": None, "spec": None}
 
 
 def test_parse_pve_leaderboard_page() -> None:

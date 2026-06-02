@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from warcraft_core.identity import class_spec_identity_payload
+
 # Raidbots `data.json` is standard SimC `json2` output (top-level `version`/`sim`)
 # with Raidbots metadata added under `simbot`. We cannot import simc_cli (provider
 # CLIs must stay independent), so the small defensive json2 helpers below mirror
@@ -49,11 +51,25 @@ def _game_version(options: dict[str, Any]) -> str | None:
 
 def _actor_summary(player: dict[str, Any]) -> dict[str, Any]:
     talents = player.get("talents")
+    actor_class = str(player.get("class")) if player.get("class") is not None else None
+    spec = str(player.get("specialization")) if player.get("specialization") is not None else None
+    # Gate confidence on non-whitespace content (the payload normalizes via _clean_text), so a
+    # whitespace-only field never advertises high confidence over a null normalized value.
+    both_present = bool(actor_class and actor_class.strip() and spec and spec.strip())
     return {
         "name": str(player.get("name")) if player.get("name") is not None else None,
-        "spec": str(player.get("specialization")) if player.get("specialization") is not None else None,
+        "spec": spec,
         "role": str(player.get("role")) if player.get("role") is not None else None,
-        "class": str(player.get("class")) if player.get("class") is not None else None,
+        "class": actor_class,
+        # The sim report explicitly declares class + specialization, so a resolved pair is a strong
+        # source-backed (high-confidence) identity; status stays normalized per the contract.
+        "class_spec_identity": class_spec_identity_payload(
+            actor_class=actor_class,
+            spec=spec,
+            provider="raidbots",
+            source="simbot_report",
+            confidence="high" if both_present else "none",
+        ),
         "level": player.get("level"),
         "race": str(player.get("race")) if player.get("race") is not None else None,
         "talents_present": bool(talents),

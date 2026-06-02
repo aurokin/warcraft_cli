@@ -253,6 +253,21 @@ def _structured_match_reasons(
     )
 
 
+def _raiderio_class_spec_identity(class_name: Any, spec_name: Any, *, source: str) -> dict[str, Any]:
+    # Additive normalized class/spec sibling, mirroring the `character` command: only a fully
+    # resolved class+spec pair claims high confidence; class-only/partial degrades to none.
+    actor_class = class_name if isinstance(class_name, str) and class_name.strip() else None
+    spec = spec_name if isinstance(spec_name, str) and spec_name.strip() else None
+    confidence = "high" if actor_class and spec else "none"
+    return class_spec_identity_payload(
+        actor_class=actor_class,
+        spec=spec,
+        provider="raiderio",
+        source=source,
+        confidence=confidence,
+    )
+
+
 def _candidate_from_character_profile(
     *,
     query: str,
@@ -284,6 +299,9 @@ def _candidate_from_character_profile(
         "faction": payload.get("faction"),
         "class_name": payload.get("class"),
         "active_spec_name": payload.get("active_spec_name"),
+        "class_spec_identity": _raiderio_class_spec_identity(
+            payload.get("class"), payload.get("active_spec_name"), source="resolve_character_profile"
+        ),
         "profile_url": payload.get("profile_url"),
         "ranking": {
             "score": score,
@@ -457,7 +475,7 @@ def _search_result_candidate(row: dict[str, Any], *, query: str, type_hint: str 
     )
     path = data.get("path")
     profile_url = f"https://raider.io{path}" if isinstance(path, str) and path.startswith("/") else None
-    return {
+    candidate: dict[str, Any] = {
         "provider": "raiderio",
         "kind": kind,
         "id": data.get("id"),
@@ -477,6 +495,13 @@ def _search_result_candidate(row: dict[str, Any], *, query: str, type_hint: str 
         },
         "follow_up": _follow_up_for_match(kind, region, realm, name),
     }
+    # Guild candidates have no actor class/spec, so identity is character-only (class-only here:
+    # search rows expose class but not spec).
+    if kind == "character":
+        candidate["class_spec_identity"] = _raiderio_class_spec_identity(
+            class_row.get("name"), None, source="search_result"
+        )
+    return candidate
 
 
 def _search_result_candidates(
@@ -599,6 +624,9 @@ def _ranking_roster_entry(entry: dict[str, Any]) -> dict[str, Any]:
         "class_slug": class_row.get("slug"),
         "spec_name": spec_row.get("name"),
         "spec_slug": spec_row.get("slug"),
+        "class_spec_identity": _raiderio_class_spec_identity(
+            class_row.get("name"), spec_row.get("name"), source="ranking_roster"
+        ),
         "profile_url": f"https://raider.io{path}" if isinstance(path, str) and path.startswith("/") else None,
         "role": entry.get("role"),
     }
@@ -1566,6 +1594,11 @@ def guild(
                     "realm": ((row.get("character") or {}).get("realm") if isinstance(row, dict) else None),
                     "class_name": ((row.get("character") or {}).get("class") if isinstance(row, dict) else None),
                     "active_spec_name": ((row.get("character") or {}).get("active_spec_name") if isinstance(row, dict) else None),
+                    "class_spec_identity": _raiderio_class_spec_identity(
+                        (row.get("character") or {}).get("class"),
+                        (row.get("character") or {}).get("active_spec_name"),
+                        source="guild_roster_preview",
+                    ),
                 }
                 for row in members[:10]
                 if isinstance(row, dict)

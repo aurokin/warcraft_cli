@@ -351,6 +351,14 @@ def test_parse_guide_page_extracts_navigation_toc_sections_and_links() -> None:
     linked = {(row["type"], row["id"]) for row in payload["linked_entities"]}
     assert ("spell", 116670) in linked
     assert ("page", "mistweaver-monk-pve-healing-stat-priority") in linked
+    rows_by_key = {(row["type"], row["id"]): row for row in payload["linked_entities"]}
+    spell_identity = rows_by_key[("spell", 116670)]["ability_identity"]
+    assert spell_identity["kind"] == "ability_identity"
+    assert spell_identity["status"] == "canonical"
+    assert spell_identity["identity"]["spell_id"] == 116670
+    assert spell_identity["source"] == {"provider": "icy-veins", "source": "guide_linked_entity"}
+    # Non-spell entity rows (icy-veins internal page refs) are unchanged.
+    assert "ability_identity" not in rows_by_key[("page", "mistweaver-monk-pve-healing-stat-priority")]
     assert payload["build_references"][0]["build_code"] == "ABC123"
     assert payload["build_references"][0]["build_identity"]["class_spec_identity"]["identity"] == {
         "actor_class": "monk", "spec": "mistweaver"}

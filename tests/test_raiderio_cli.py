@@ -5,6 +5,7 @@ import json
 import httpx
 from raiderio_cli.main import (
     _candidate_dedupe_key,
+    _candidate_from_character_profile,
     _dedupe_search_candidates,
     _distribution_values,
     _match_reasons,
@@ -175,6 +176,92 @@ def test_raiderio_ranking_roster_entry_builds_profile_summary() -> None:
     assert entry["name"] == "Cotti"
     assert entry["spec_slug"] == "balance"
     assert entry["profile_url"] == "https://raider.io/characters/eu/tarren-mill/Cotti"
+    # Raw class/spec preserved alongside the additive normalized identity (high when both resolve).
+    assert entry["class_name"] == "Druid"
+    assert entry["spec_name"] == "Balance"
+    identity = entry["class_spec_identity"]
+    assert identity["kind"] == "class_spec_identity"
+    assert identity["status"] == "normalized"
+    assert identity["confidence"] == "high"
+    assert identity["identity"] == {"actor_class": "druid", "spec": "balance"}
+    assert identity["source"] == {"provider": "raiderio", "source": "ranking_roster"}
+
+
+def test_raiderio_ranking_roster_entry_identity_degrades_without_spec() -> None:
+    entry = _ranking_roster_entry(
+        {
+            "character": {
+                "name": "Cotti",
+                "realm": {"slug": "tarren-mill"},
+                "region": {"slug": "eu"},
+                "class": {"name": "Druid", "slug": "druid"},
+                "spec": {},
+                "path": "/characters/eu/tarren-mill/Cotti",
+            },
+            "role": "dps",
+        }
+    )
+    identity = entry["class_spec_identity"]
+    assert identity["status"] == "normalized"
+    assert identity["confidence"] == "none"
+    assert identity["identity"] == {"actor_class": "druid", "spec": None}
+
+
+def test_raiderio_search_character_emits_identity_guild_does_not() -> None:
+    character = _search_result_candidate(
+        {
+            "type": "character",
+            "name": "Imonthegcd",
+            "data": {
+                "id": 7,
+                "name": "Imonthegcd",
+                "class": {"name": "Mage", "slug": "mage"},
+                "region": {"slug": "us", "name": "United States"},
+                "realm": {"slug": "illidan", "name": "Illidan"},
+                "path": "/characters/us/illidan/Imonthegcd",
+            },
+        },
+        query="us illidan Imonthegcd",
+        type_hint="character",
+    )
+    assert character is not None
+    assert character["class_name"] == "Mage"
+    identity = character["class_spec_identity"]
+    # Search results expose class but no spec -> class-only normalized, confidence none.
+    assert identity["status"] == "normalized"
+    assert identity["confidence"] == "none"
+    assert identity["identity"] == {"actor_class": "mage", "spec": None}
+    assert identity["source"] == {"provider": "raiderio", "source": "search_result"}
+
+    guild = _search_result_candidate(
+        {
+            "type": "guild",
+            "name": "Liquid",
+            "data": {"id": 1, "name": "Liquid", "region": {"slug": "us"}, "realm": {"slug": "illidan"}},
+        },
+        query="Liquid guild",
+        type_hint="guild",
+    )
+    assert guild is not None
+    assert "class_spec_identity" not in guild
+
+
+def test_raiderio_candidate_from_profile_emits_identity() -> None:
+    candidate = _candidate_from_character_profile(
+        query="us illidan Roguecane",
+        type_hint="character",
+        payload={"name": "Roguecane", "region": "us", "realm": "illidan", "class": "Rogue", "active_spec_name": "Subtlety"},
+        query_region="us",
+        query_realm="illidan",
+        query_name="Roguecane",
+    )
+    assert candidate["class_name"] == "Rogue"
+    assert candidate["active_spec_name"] == "Subtlety"
+    identity = candidate["class_spec_identity"]
+    assert identity["status"] == "normalized"
+    assert identity["confidence"] == "high"
+    assert identity["identity"] == {"actor_class": "rogue", "spec": "subtlety"}
+    assert identity["source"] == {"provider": "raiderio", "source": "resolve_character_profile"}
 
 
 def test_raiderio_distribution_values_cover_numeric_and_composition_metrics() -> None:
@@ -541,6 +628,13 @@ def test_raiderio_guild_summary(monkeypatch) -> None:
     assert payload["guild"]["member_count"] == 2
     assert payload["raiding"]["rankings"][0]["raid_slug"] == "tier-mn-1"
     assert payload["roster_preview"][0]["name"] == "Roguecane"
+    # Roster preview rows carry the additive normalized identity alongside raw class/spec.
+    assert payload["roster_preview"][0]["class_name"] == "Rogue"
+    roster_identity = payload["roster_preview"][0]["class_spec_identity"]
+    assert roster_identity["status"] == "normalized"
+    assert roster_identity["confidence"] == "high"
+    assert roster_identity["identity"] == {"actor_class": "rogue", "spec": "subtlety"}
+    assert roster_identity["source"] == {"provider": "raiderio", "source": "guild_roster_preview"}
 
 
 def test_raiderio_mythic_plus_runs_summary(monkeypatch) -> None:

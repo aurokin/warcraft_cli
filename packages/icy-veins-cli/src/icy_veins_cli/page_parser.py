@@ -7,7 +7,7 @@ from typing import Any
 from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup, Tag
-from warcraft_core.identity import build_reference_payload
+from warcraft_core.identity import ability_identity_payload, build_reference_payload
 
 ICY_VEINS_BASE_URL = "https://www.icy-veins.com"
 WOWHEAD_LINK_RE = re.compile(
@@ -417,16 +417,33 @@ def _extract_linked_entities(article: Tag, *, source_url: str) -> list[dict[str,
             continue
         record = items.get(key)
         if record is None:
-            items[key] = {
+            row: dict[str, Any] = {
                 "type": entity_type,
                 "id": entity_id,
                 "name": name,
                 "url": url,
                 "source_url": source_url,
             }
+            # Spell links carry a Wowhead spell id, so they get a canonical ability identity.
+            # Other entity types (item/npc/page/...) are left unchanged.
+            if entity_type == "spell" and isinstance(entity_id, int):
+                row["ability_identity"] = ability_identity_payload(
+                    spell_id=entity_id,
+                    name=name or None,
+                    provider="icy-veins",
+                    source="guide_linked_entity",
+                )
+            items[key] = row
             continue
         if not record.get("name") and name:
             record["name"] = name
+            if entity_type == "spell" and isinstance(entity_id, int) and isinstance(record.get("ability_identity"), dict):
+                record["ability_identity"] = ability_identity_payload(
+                    spell_id=entity_id,
+                    name=name or None,
+                    provider="icy-veins",
+                    source="guide_linked_entity",
+                )
     return sorted(items.values(), key=lambda row: (row["type"], str(row["id"])))
 
 

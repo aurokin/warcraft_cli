@@ -137,22 +137,28 @@ starts or stops emitting a contract.
 | Provider | Class/Spec | Encounter | Ability | Report-Actor | Build |
 | --- | --- | --- | --- | --- | --- |
 | warcraftlogs | ✓ | ✓ | ✓ | ✓ | – |
-| raiderio | ✓ (`character`) | – | – | – | – |
+| raiderio | ✓ (`character`, rankings, search, guild roster) | – | – | – | – |
 | wowhead | – | – | – | – | ✓ (talent-calc) |
 | simc | – | – | – | – | ✓ |
-| method | – | – | – | – | ✓ (embedded talent-calc refs) |
-| icy-veins | – | – | – | – | ✓ (embedded talent-calc refs) |
-| raidbots | – | – | – | – | – |
-| wowprogress | – | – | – | – | – |
+| method | – | – | ✓ (embedded spell refs) | – | ✓ (embedded talent-calc refs) |
+| icy-veins | – | – | ✓ (embedded spell refs) | – | ✓ (embedded talent-calc refs) |
+| raidbots | ✓ (`inspect-report` actors) | – | – | – | – |
+| wowprogress | ✓ (`character`) | ✓ (guild encounter rows) | – | – | – |
 | warcraft-wiki | – | – | – | – | – |
 | blizzard-api | – | – | – | – | – |
 
 Notes:
-- `raidbots` and `wowprogress` already expose raw class/spec on some surfaces but do not yet wrap it
-  in the shared contract — additive normalization follow-ups, not contract changes.
-- `blizzard-api` emits no identity because it is a doctor/auth scaffold with no entity output yet;
-  Blizzard-sourced class/spec, encounter (journal), and ability (spell-id) identity are gated on the
-  Game Data/Profile endpoints (tracked under AUR-455).
+- `raiderio` class/spec identity is always `normalized` (never `canonical`); `confidence` is `high`
+  only when both class and spec resolve, else `none` (search rows are class-only).
+- `raidbots` class/spec comes from the sim report's explicit `class`/`specialization` fields →
+  `high` confidence when both present.
+- `wowprogress` class/spec is `normalized` with `confidence: none` — class is parsed from free header
+  text and the spec (when present) is sourced from the SimDPS table; encounter identity is name-only
+  (`encounter_id: null`).
+- `method`/`icy-veins` ability identity is `canonical` (the Wowhead spell id is already in the link);
+  it is emitted only on `spell` linked-entity rows, leaving other entity types unchanged.
+- `blizzard-api` emits no identity because Blizzard-sourced class/spec, encounter (journal), and
+  ability (spell-id) identity are gated on the Game Data/Profile endpoints (tracked under AUR-455).
 
 ## Demonstrated Handoffs
 
