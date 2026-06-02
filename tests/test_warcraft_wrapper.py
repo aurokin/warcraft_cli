@@ -331,7 +331,7 @@ def test_warcraft_doctor_reports_ready_and_stubbed_providers() -> None:
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["wrapper"]["provider_count"] == 10
+    assert payload["wrapper"]["provider_count"] == 11
     providers = {row["provider"]: row for row in payload["providers"]}
     assert providers["wowhead"]["status"] == "ready"
     assert providers["method"]["status"] == "ready"
@@ -367,6 +367,12 @@ def test_warcraft_doctor_reports_ready_and_stubbed_providers() -> None:
     assert providers["blizzard-api"]["expansion_support"]["mode"] == "none"
     assert providers["blizzard-api"]["wrapper_surfaces"]["search"]["status"] == "coming_soon"
     assert providers["blizzard-api"]["details"]["capabilities"]["doctor"] == "ready"
+    assert providers["curseforge"]["status"] == "partial"
+    assert providers["curseforge"]["auth"]["required"] is True
+    assert providers["curseforge"]["auth"]["flow"] == "api_key"
+    assert providers["curseforge"]["expansion_support"]["mode"] == "none"
+    assert providers["curseforge"]["wrapper_surfaces"]["search"]["status"] == "coming_soon"
+    assert providers["curseforge"]["details"]["capabilities"]["addon"] == "ready"
 
 
 def _provider_doctor_capabilities(registration) -> dict[str, str]:  # noqa: ANN001
@@ -385,7 +391,7 @@ def test_wrapper_capabilities_match_each_cli_doctor_for_search_and_resolve() -> 
     # surface is intentionally excluded: only warcraftlogs/simc/blizzard-api emit
     # a `doctor` capability key, so it is not a parity surface.)
     overstated = {"coming_soon", "not_supported", "ready_explicit_report_only"}
-    assert len(PROVIDERS) == 10
+    assert len(PROVIDERS) == 11
     for registration in PROVIDERS:
         capabilities = _provider_doctor_capabilities(registration)
         for surface in ("search", "resolve"):
@@ -479,6 +485,7 @@ def test_warcraft_doctor_reports_expansion_filtering_state() -> None:
         "simc",
         "raidbots",
         "blizzard-api",
+        "curseforge",
     }
 
 
@@ -546,7 +553,7 @@ def test_warcraft_doctor_reports_retail_filter_state() -> None:
         "wowprogress",
         "raidbots",
     }
-    assert {row["provider"] for row in payload["excluded_providers"]} == {"simc", "blizzard-api"}
+    assert {row["provider"] for row in payload["excluded_providers"]} == {"simc", "blizzard-api", "curseforge"}
 
 
 def test_warcraft_doctor_reports_worktree_runtime(monkeypatch, tmp_path) -> None:
@@ -627,7 +634,7 @@ def test_warcraft_search_fans_out_across_providers(monkeypatch) -> None:
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["provider_count"] == 10
+    assert payload["provider_count"] == 11
     assert payload["count"] == 1
     assert payload["results"][0]["provider"] == "wowhead"
     providers = {row["provider"]: row for row in payload["providers"]}
@@ -647,6 +654,8 @@ def test_warcraft_search_fans_out_across_providers(monkeypatch) -> None:
     assert excluded["raidbots"]["surface_support"]["status"] == "not_supported"
     assert "blizzard-api" not in providers
     assert excluded["blizzard-api"]["surface_support"]["status"] == "coming_soon"
+    assert "curseforge" not in providers
+    assert excluded["curseforge"]["surface_support"]["status"] == "coming_soon"
     assert providers["wowhead"]["payload"]["results"][0]["name"] == "Thunderfury"
 
 
@@ -1805,6 +1814,7 @@ def test_warcraft_search_expansion_filter_excludes_nonmatching_providers(monkeyp
         "simc",
         "raidbots",
         "blizzard-api",
+        "curseforge",
     }
     excluded = {row["provider"]: row["expansion_support"]["exclusion_reason"] for row in payload["excluded_providers"]}
     assert excluded["method"] == "provider_fixed_to_other_expansion"
@@ -1900,7 +1910,7 @@ def test_warcraft_search_retail_filter_keeps_fixed_retail_providers_and_excludes
         "warcraft-wiki",
         "wowprogress",
     }
-    assert {row["provider"] for row in payload["excluded_providers"]} == {"simc", "raidbots", "blizzard-api"}
+    assert {row["provider"] for row in payload["excluded_providers"]} == {"simc", "raidbots", "blizzard-api", "curseforge"}
     results = {row["provider"] for row in payload["results"]}
     assert {"method", "icy-veins"} & results
 
@@ -1949,7 +1959,7 @@ def test_warcraft_resolve_retail_filter_keeps_fixed_retail_profile_provider(monk
         "warcraft-wiki",
         "wowprogress",
     }
-    assert {row["provider"] for row in payload["excluded_providers"]} == {"simc", "raidbots", "blizzard-api"}
+    assert {row["provider"] for row in payload["excluded_providers"]} == {"simc", "raidbots", "blizzard-api", "curseforge"}
 
 
 def test_warcraft_search_prefers_profile_provider_for_structured_guild_queries(monkeypatch) -> None:
@@ -2115,6 +2125,7 @@ def test_warcraft_resolve_expansion_filter_blocks_retail_only_resolution(monkeyp
         "simc",
         "raidbots",
         "blizzard-api",
+        "curseforge",
     }
 
 

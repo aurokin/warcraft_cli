@@ -28,6 +28,8 @@ Shipped milestones and design decisions that should not be mistaken for open pla
 
 These folders hold go/no-go decision docs; no CLI package exists yet:
 
-- [../curseforge/README.md](../curseforge/README.md) — **GO** (scaffold tracked in [AUR-499](https://linear.app/aurokin/issue/AUR-499))
 - [../undermine-exchange/README.md](../undermine-exchange/README.md) — **DEFER**
 - [../raidplan/README.md](../raidplan/README.md) — **DEFER**
+
+CurseForge graduated from candidate to a shipped scaffold (GO, [AUR-499](https://linear.app/aurokin/issue/AUR-499));
+see [../curseforge/README.md](../curseforge/README.md).

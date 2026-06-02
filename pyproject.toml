@@ -44,6 +44,7 @@ simc = "simc_cli.main:run"
 warcraftlogs = "warcraftlogs_cli.main:run"
 raidbots = "raidbots_cli.main:run"
 blizzard = "blizzard_api_cli.main:run"
+curseforge = "curseforge_cli.main:run"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -77,12 +78,16 @@ select = [
 
 [tool.mypy]
 python_version = "3.12"
+# `files` intentionally lists only the shared packages: provider CLIs (wowhead, raiderio,
+# blizzard-api, curseforge, …) are deliberately NOT type-checked by `make typecheck` — they are on
+# `mypy_path` so the shared packages resolve, but adding any one provider here would single it out
+# and diverge from the repo-wide convention. Revisit as a separate, all-providers decision if desired.
 files = [
   "packages/warcraft-core/src/warcraft_core",
   "packages/warcraft-api/src/warcraft_api",
   "packages/warcraft-content/src/warcraft_content",
 ]
-mypy_path = "packages/warcraft-core/src:packages/warcraft-api/src:packages/warcraft-content/src:packages/warcraft-cli/src:packages/wowhead-cli/src:packages/method-cli/src:packages/icy-veins-cli/src:packages/raiderio-cli/src:packages/warcraft-wiki-cli/src:packages/wowprogress-cli/src:packages/simc-cli/src:packages/warcraftlogs-cli/src:packages/raidbots-cli/src:packages/blizzard-api-cli/src"
+mypy_path = "packages/warcraft-core/src:packages/warcraft-api/src:packages/warcraft-content/src:packages/warcraft-cli/src:packages/wowhead-cli/src:packages/method-cli/src:packages/icy-veins-cli/src:packages/raiderio-cli/src:packages/warcraft-wiki-cli/src:packages/wowprogress-cli/src:packages/simc-cli/src:packages/warcraftlogs-cli/src:packages/raidbots-cli/src:packages/blizzard-api-cli/src:packages/curseforge-cli/src"
 check_untyped_defs = true
 ignore_missing_imports = true
 no_implicit_optional = true
@@ -108,4 +113,5 @@ packages = [
   "packages/warcraftlogs-cli/src/warcraftlogs_cli",
   "packages/raidbots-cli/src/raidbots_cli",
   "packages/blizzard-api-cli/src/blizzard_api_cli",
+  "packages/curseforge-cli/src/curseforge_cli",
 ]

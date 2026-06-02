@@ -1,0 +1,17 @@
+{
+  "data": [
+    {
+      "id": 3358,
+      "gameId": 1,
+      "name": "Deadly Boss Mods (DBM)",
+      "slug": "deadly-boss-mods",
+      "summary": "Boss encounter warnings and timers."
+    }
+  ],
+  "pagination": {
+    "index": 0,
+    "pageSize": 50,
+    "resultCount": 1,
+    "totalCount": 1
+  }
+}

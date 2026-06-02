@@ -67,9 +67,9 @@ Engineering backlog: [Linear — Warcraft CLI](https://linear.app/aurokin/projec
 - [simc/README.md](simc/README.md)
 - [raidbots/README.md](raidbots/README.md)
 - [blizzard-api/README.md](blizzard-api/README.md)
+- [curseforge/README.md](curseforge/README.md)
 - [undermine-exchange/README.md](undermine-exchange/README.md) *(candidate — DEFER)*
 - [raidplan/README.md](raidplan/README.md) *(candidate — DEFER)*
-- [curseforge/README.md](curseforge/README.md) *(candidate — GO, scaffold in [AUR-499](https://linear.app/aurokin/issue/AUR-499))*
 
 ## Usage And Research
 

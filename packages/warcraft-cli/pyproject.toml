@@ -10,6 +10,7 @@ readme = "../../README.md"
 requires-python = ">=3.12"
 dependencies = [
   "blizzard-api-cli>=0.1.0",
+  "curseforge-cli>=0.1.0",
   "icy-veins-cli>=0.1.0",
   "method-cli>=0.1.0",
   "orjson>=3.10.16,<4.0.0",

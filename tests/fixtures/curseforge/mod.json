@@ -1,0 +1,46 @@
+{
+  "data": {
+    "id": 3358,
+    "gameId": 1,
+    "name": "Deadly Boss Mods (DBM)",
+    "slug": "deadly-boss-mods",
+    "summary": "Boss encounter warnings and timers.",
+    "status": 4,
+    "downloadCount": 123456789,
+    "links": {
+      "websiteUrl": "https://www.curseforge.com/wow/addons/deadly-boss-mods",
+      "wikiUrl": "",
+      "issuesUrl": "",
+      "sourceUrl": ""
+    },
+    "categories": [
+      {"id": 16, "name": "Boss Encounters", "slug": "boss-encounters"}
+    ],
+    "authors": [
+      {"id": 1, "name": "MysticalOS", "url": "https://www.curseforge.com/members/mysticalos"}
+    ],
+    "dateCreated": "2008-01-01T00:00:00Z",
+    "dateModified": "2026-05-01T12:00:00Z",
+    "dateReleased": "2026-05-01T12:00:00Z",
+    "latestFiles": [
+      {
+        "id": 4900,
+        "displayName": "DBM 11.0.9",
+        "fileName": "DBM-Core-11.0.9.zip",
+        "releaseType": 1,
+        "fileDate": "2026-04-01T10:00:00Z",
+        "gameVersions": ["11.0.7"],
+        "downloadUrl": "https://edge.forgecdn.net/files/4900/1/DBM-Core-11.0.9.zip"
+      },
+      {
+        "id": 5001,
+        "displayName": "DBM 11.1.0",
+        "fileName": "DBM-Core-11.1.0.zip",
+        "releaseType": 1,
+        "fileDate": "2026-05-01T10:00:00Z",
+        "gameVersions": ["11.1.0"],
+        "downloadUrl": "https://edge.forgecdn.net/files/5001/1/DBM-Core-11.1.0.zip"
+      }
+    ]
+  }
+}

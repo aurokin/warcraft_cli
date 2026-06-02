@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 
 import typer
 from blizzard_api_cli.main import app as blizzard_app
+from curseforge_cli.main import app as curseforge_app
 from icy_veins_cli.main import app as icy_veins_app
 from method_cli.main import app as method_app
 from raidbots_cli.main import app as raidbots_app
@@ -2756,6 +2757,14 @@ def raidbots_passthrough(ctx: typer.Context) -> None:
 )
 def blizzard_passthrough(ctx: typer.Context) -> None:
     _run_passthrough(ctx, blizzard_app, provider_name="blizzard-api", prog_name="blizzard")
+
+
+@app.command(
+    "curseforge",
+    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
+)
+def curseforge_passthrough(ctx: typer.Context) -> None:
+    _run_passthrough(ctx, curseforge_app, provider_name="curseforge", prog_name="curseforge")
 
 
 def run() -> None:
