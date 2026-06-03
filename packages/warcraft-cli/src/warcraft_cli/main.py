@@ -2262,9 +2262,16 @@ def _process_guide_compare_provider(
             "error": str(exc),
         }, None
 
-    # Source exported_at from the bundle manifest write_article_bundle just stamped, so the
-    # orchestration row, the reuse check, and _guide_comparison_packet all read one timestamp
-    # (they cannot disagree on freshness). Fall back to now only for legacy timestamp-less bundles.
+    # exported_at comes from the manifest the provider's guide-export just stamped, so the
+    # orchestration row, the reuse check, and _guide_comparison_packet share one timestamp (they
+    # cannot disagree on freshness). The `or _iso_now_utc()` is an unreachable safety net, NOT a
+    # freshness fabricator: every guide-compare provider stamps exported_at on export (wowhead via
+    # _guide_export_manifest, method/icy-veins via write_article_bundle), and this branch runs only
+    # after guide-export above re-wrote the bundle now — so "now" would reflect a real just-happened
+    # export, never a stale reuse. A timestamp-less bundle is also never *reused*: the reuse gate
+    # requires freshness "fresh" and _guide_compare_freshness(None) is always "stale", which forces a
+    # re-export (re-stamping a real anchor). So a bundle lacking a real anchor cannot be stamped here
+    # and then treated as freshly exported on a later run.
     bundle_manifest = bundle.get("manifest") if isinstance(bundle.get("manifest"), dict) else {}
     exported_at = bundle_manifest.get("exported_at") or _iso_now_utc()
     return {
