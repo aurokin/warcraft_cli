@@ -43,13 +43,15 @@ Returned actors, abilities, encounters, and talent packets use the shared identi
 
 ## Cross-Report Sampling Scope
 
-Sampled analytics commands such as `boss-kills`, `top-kills`, `kill-time-distribution`, `boss-spec-usage`, `comp-samples`, and `ability-usage-summary` operate on bounded report cohorts. Their scope flags are part of the trust contract:
+Sampled analytics commands such as `boss-kills`, `top-kills`, `spec-kill-samples`, `kill-time-distribution`, `boss-spec-usage`, `comp-samples`, and `ability-usage-summary` operate on bounded report cohorts. Their scope flags are part of the trust contract:
 
 - guild filters: `--guild-region`, `--guild-realm`, `--guild-name`
 - report budget: `--report-pages`, `--reports-per-page`
 - time filters: `--start-time`, `--end-time`
 - encounter filters: `--zone-id`, `--boss-id`, `--boss-name`, `--difficulty`
 - participant filter: `--spec-name` keeps sampled kills that include that spec; it is not a spec leaderboard
+
+`spec-kill-samples` requires `--spec-name` (alongside boss scope): it returns the participant filter as an explicit, labeled cohort (`cohort: spec_filtered_participant_kill_cohort`) rather than as an optional refinement of `boss-kills`.
 
 Keep sample size, exclusions, truncation, freshness, and citations with any downstream analysis.
 

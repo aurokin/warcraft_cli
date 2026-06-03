@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+import httpx
 import typer
 from warcraft_core.auth import provider_auth_status
 from warcraft_core.output import emit
@@ -14,8 +16,15 @@ from blizzard_api_cli.auth import (
     blizzard_provider_env_path,
     load_blizzard_auth_config,
 )
+from blizzard_api_cli.client import (
+    CLIENT_CREDENTIALS_STATE_PROVIDER,
+    SUPPORTED_REGIONS,
+    BlizzardClient,
+    BlizzardClientError,
+    verification_note,
+)
 
-app = typer.Typer(add_completion=False, help="Official Blizzard Battle.net World of Warcraft API CLI (scaffold + doctor).")
+app = typer.Typer(add_completion=False, help="Official Blizzard Battle.net World of Warcraft API CLI.")
 
 
 @dataclass(slots=True)
@@ -55,17 +64,28 @@ def _auth_payload(auth: BlizzardAuthConfig) -> dict[str, Any]:
         "lookup_order": [".env.local", blizzard_provider_env_path(), "environment"],
         "state": state,
         "state_path": str(provider_state_path(PROVIDER)),
+        # The client-credentials flow caches its token under a distinct provider key, so surface that
+        # cache here too — otherwise doctor would report "no token" even after a successful command.
+        "token_cache": provider_auth_status(CLIENT_CREDENTIALS_STATE_PROVIDER),
+        "token_cache_path": str(provider_state_path(CLIENT_CREDENTIALS_STATE_PROVIDER)),
     }
 
 
 def _region_payload(auth: BlizzardAuthConfig) -> dict[str, Any]:
-    # Region/namespace routing lands with the Game Data/Profile endpoint slice. The scaffold only
-    # surfaces a configured region (discovered through the same env-file precedence as credentials)
-    # so doctor stays honest about what is wired, rather than implying retail/classic routing yet.
+    # Region/namespace routing is honored by the Game Data/Profile commands. The hosts, OAuth token
+    # URL, and namespace strings follow documented Blizzard API conventions but have not been
+    # confirmed against live endpoints in this environment, so verification stays explicit.
     return {
         "configured": auth.region,
-        "routing": "deferred",
-        "note": "Region- and namespace-aware endpoint routing is implemented with the Game Data/Profile slice (deferred).",
+        "default": "us",
+        "supported_regions": list(SUPPORTED_REGIONS),
+        "namespace_classes": ["dynamic", "static", "profile"],
+        "routing": "ready",
+        "verification": {
+            "retail": "pending_live_confirmation",
+            "classic": "pending_live_confirmation",
+            "note": verification_note(),
+        },
     }
 
 
@@ -87,15 +107,186 @@ def doctor(ctx: typer.Context) -> None:
                 "doctor": "ready",
                 "search": "coming_soon",
                 "resolve": "coming_soon",
-                "game_data": "coming_soon",
-                "profile": "coming_soon",
+                "game_data": "ready",
+                "profile": "ready",
             },
             "notes": [
-                "Scaffold slice: doctor and auth posture only. Game Data and Profile endpoints are not implemented yet.",
+                "Game Data (realm, item) and Profile (character) commands ship with live OAuth "
+                "client-credentials auth and region/namespace routing.",
+                verification_note(),
                 "Second OAuth validation point for the shared auth architecture (phase 3, docs/architecture/AUTH_ARCHITECTURE.md).",
             ],
         },
     )
+
+
+_REGION_OPTION = typer.Option(None, "--region", "-r", help="Blizzard region (us, eu, kr, tw, cn). Defaults to BLIZZARD_REGION or us.")
+_CLASSIC_OPTION = typer.Option(False, "--classic", help="Shorthand for --game-version classic (classic namespaces are best-effort).")
+_GAME_VERSION_OPTION = typer.Option(None, "--game-version", help="Game version to route: retail (default) or classic.")
+_LOCALE_OPTION = typer.Option(None, "--locale", help="Locale passed through to Blizzard (default en_US). Not validated.")
+
+
+def _error_payload(command: str, exc: Exception) -> dict[str, Any]:
+    if isinstance(exc, BlizzardClientError):
+        code, message = exc.code, exc.message
+    elif isinstance(exc, httpx.HTTPStatusError):
+        status = exc.response.status_code
+        code = "http_error"
+        message = f"Blizzard API returned HTTP {status} for {exc.request.url}."
+    else:  # httpx.RequestError (timeouts, connection failures) after retries are exhausted.
+        code = "network_error"
+        message = f"Blizzard API request failed: {exc}."
+    return {
+        "ok": False,
+        "provider": PROVIDER,
+        "command": command,
+        "error": {"code": code, "message": message},
+    }
+
+
+def _success_payload(command: str, kind: str, query: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
+    routing = result["routing"]
+    return {
+        "ok": True,
+        "provider": PROVIDER,
+        "command": command,
+        "kind": kind,
+        "query": query,
+        "provenance": {
+            "region": routing.region,
+            "namespace": routing.namespace,
+            "namespace_class": routing.namespace_class,
+            "game_version": routing.game_version,
+            "locale": routing.locale,
+            "source_url": result["source_url"],
+            "verified": False,
+            "verification_note": verification_note(),
+        },
+        "data": result["payload"],
+    }
+
+
+def _run_command(
+    ctx: typer.Context,
+    command: str,
+    kind: str,
+    query: dict[str, Any],
+    call: Callable[[BlizzardClient], dict[str, Any]],
+) -> None:
+    client = BlizzardClient()
+    try:
+        result = call(client)
+    except (BlizzardClientError, httpx.HTTPError) as exc:
+        _emit(ctx, _error_payload(command, exc), err=True)
+        raise typer.Exit(1) from exc
+    finally:
+        client.close()
+    _emit(ctx, _success_payload(command, kind, query, result))
+
+
+@app.command("realm")
+def realm(
+    ctx: typer.Context,
+    slug: str = typer.Argument(..., help="Realm slug, e.g. illidan."),
+    region: str | None = _REGION_OPTION,
+    classic: bool = _CLASSIC_OPTION,
+    game_version: str | None = _GAME_VERSION_OPTION,
+    locale: str | None = _LOCALE_OPTION,
+) -> None:
+    """Fetch a connected-realm-class realm record from the dynamic Game Data namespace."""
+    query = {"slug": slug, "region": region, "game_version": game_version, "classic": classic, "locale": locale}
+    _run_command(
+        ctx,
+        "realm",
+        "realm",
+        query,
+        lambda client: client.fetch_realm(slug, region=region, game_version=game_version, classic=classic, locale=locale),
+    )
+
+
+@app.command("item")
+def item(
+    ctx: typer.Context,
+    item_id: int = typer.Argument(..., help="Numeric item id, e.g. 19019."),
+    region: str | None = _REGION_OPTION,
+    classic: bool = _CLASSIC_OPTION,
+    game_version: str | None = _GAME_VERSION_OPTION,
+    locale: str | None = _LOCALE_OPTION,
+) -> None:
+    """Fetch an item record from the static Game Data namespace."""
+    query = {"item_id": item_id, "region": region, "game_version": game_version, "classic": classic, "locale": locale}
+    _run_command(
+        ctx,
+        "item",
+        "item",
+        query,
+        lambda client: client.fetch_item(item_id, region=region, game_version=game_version, classic=classic, locale=locale),
+    )
+
+
+@app.command("character")
+def character(
+    ctx: typer.Context,
+    realm_slug: str = typer.Argument(..., help="Realm slug, e.g. illidan."),
+    name: str = typer.Argument(..., help="Character name."),
+    region: str | None = _REGION_OPTION,
+    classic: bool = _CLASSIC_OPTION,
+    game_version: str | None = _GAME_VERSION_OPTION,
+    locale: str | None = _LOCALE_OPTION,
+) -> None:
+    """Fetch a character profile from the profile namespace (retail only)."""
+    query = {"realm": realm_slug, "name": name, "region": region, "game_version": game_version, "classic": classic, "locale": locale}
+    _run_command(
+        ctx,
+        "character",
+        "character",
+        query,
+        lambda client: client.fetch_character(realm_slug, name, region=region, game_version=game_version, classic=classic, locale=locale),
+    )
+
+
+def _coming_soon_payload(command: str, query: str) -> dict[str, Any]:
+    # doctor advertises search/resolve as coming_soon; define them as structured stubs (mirroring
+    # simc's coming_soon commands) so a caller probing the advertised surface gets a JSON envelope
+    # with an explicit coming_soon flag instead of Click's generic "No such command" error.
+    return {
+        "ok": True,
+        "provider": PROVIDER,
+        "command": command,
+        "kind": "coming_soon",
+        "query": {"query": query},
+        "coming_soon": True,
+        "results": [],
+        "resolved": False,
+        "match": None,
+        "message": (
+            f"blizzard {command} is not implemented yet; use the explicit Game Data / Profile reads. "
+            "Try `blizzard realm <slug>`, `blizzard item <id>`, or `blizzard character <realm> <name>`."
+        ),
+        "suggested_command": "blizzard realm illidan",
+    }
+
+
+@app.command("search")
+def search(
+    ctx: typer.Context,
+    query: str = typer.Argument(..., help="Free-text query. Discovery search is not implemented yet."),
+    limit: int = typer.Option(5, "--limit", min=1, max=50, help="Unused until blizzard search ships."),
+) -> None:
+    """Coming soon: free-text discovery search is not implemented yet."""
+    del limit
+    _emit(ctx, _coming_soon_payload("search", query))
+
+
+@app.command("resolve")
+def resolve(
+    ctx: typer.Context,
+    query: str = typer.Argument(..., help="Free-text query. Conservative resolution is not implemented yet."),
+    limit: int = typer.Option(5, "--limit", min=1, max=50, help="Unused until blizzard resolve ships."),
+) -> None:
+    """Coming soon: conservative resolution is not implemented yet."""
+    del limit
+    _emit(ctx, _coming_soon_payload("resolve", query))
 
 
 def run() -> None:

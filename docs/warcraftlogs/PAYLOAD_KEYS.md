@@ -29,6 +29,7 @@ top level. Prefer the canonical key; `deprecated_keys` lists legacy aliases pres
 | `guild-reports` | `guild_reports` | `reports` |
 | `boss-kills` | `boss_kills` | `kills` |
 | `top-kills` | `top_kills` | `kills` |
+| `spec-kill-samples` | `spec_kill_samples` | `kills` |
 | `boss-spec-usage` | `boss_spec_usage` | `spec_usage` |
 | `ability-usage-summary` | `ability_usage_summary` | `usage` |
 | `comp-samples` | `comp_samples` | `kills` |

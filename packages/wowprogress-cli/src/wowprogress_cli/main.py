@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import typer
 
 from wowprogress_cli.analytics import (
@@ -8,6 +10,7 @@ from wowprogress_cli.analytics import (
     _guild_profile_distribution_payload,
     _guild_profile_sample_summary,
     _guild_profile_threshold_payload,
+    _history_trajectory_rows,
     _load_pve_guild_profile_sample,
     _load_pve_leaderboard_sample,
     _sample_summary,
@@ -73,6 +76,8 @@ def doctor(ctx: typer.Context) -> None:
                 "guild": "ready",
                 "guild_history": "ready",
                 "guild_ranks": "ready",
+                "guild_snapshot": "ready",
+                "history_trajectory": "ready",
                 "character": "ready",
                 "leaderboard": "ready",
                 "sample_pve_leaderboard": "ready",
@@ -184,6 +189,93 @@ def guild_ranks(
             "count": len(history),
             "tiers": [_guild_ranks_row(row) for row in history if isinstance(row, dict)],
             "citations": payload.get("citations"),
+        },
+    )
+
+
+def _guild_freshness(client: WowProgressClient) -> dict[str, object]:
+    # cache_ttl_seconds is null when caching is disabled (WOWPROGRESS_CACHE_BACKEND=none) so the
+    # block never claims a TTL that is not actually applied.
+    return {
+        "sampled_at": datetime.now(UTC).isoformat(),
+        "cache_ttl_seconds": client.guild_page_ttl_seconds if client.cache_enabled else None,
+    }
+
+
+@app.command("guild-snapshot")
+def guild_snapshot(
+    ctx: typer.Context,
+    region: str = typer.Argument(..., help="Region slug such as us or eu."),
+    realm: str = typer.Argument(..., help="Realm slug or title."),
+    name: str = typer.Argument(..., help="Guild name."),
+) -> None:
+    """Single normalized snapshot: current progress + ranks + item level + encounter summary,
+    plus a per-tier rank series. Built from one guild-history traversal (no extra guild-page fetch
+    in the command layer)."""
+    normalized = _normalized_identity(region, realm, name)
+    try:
+        with _client(ctx) as client:
+            payload = client.fetch_guild_history(**normalized)
+            freshness = _guild_freshness(client)
+    except WowProgressClientError as exc:
+        _handle_client_error(ctx, exc)
+        return
+    history = payload.get("history") if isinstance(payload.get("history"), list) else []
+    rows = [row for row in history if isinstance(row, dict)]
+    _emit(
+        ctx,
+        {
+            "provider": "wowprogress",
+            "kind": "guild_snapshot",
+            "query": normalized,
+            "guild": payload.get("guild"),
+            "progress": payload.get("current_progress"),
+            # Current-state values from the main guild page (survive an empty history series).
+            "item_level": payload.get("current_item_level"),
+            "encounters": payload.get("current_encounters"),
+            "rank_series": [_guild_ranks_row(row) for row in rows],
+            "citations": payload.get("citations"),
+            "freshness": freshness,
+        },
+    )
+
+
+@app.command("history-trajectory")
+def history_trajectory(
+    ctx: typer.Context,
+    region: str = typer.Argument(..., help="Region slug such as us or eu."),
+    realm: str = typer.Argument(..., help="Realm slug or title."),
+    name: str = typer.Argument(..., help="Guild name."),
+) -> None:
+    """Per-tier rank + item-level trajectory (oldest -> newest) with tier-over-tier deltas."""
+    normalized = _normalized_identity(region, realm, name)
+    try:
+        with _client(ctx) as client:
+            payload = client.fetch_guild_history(**normalized)
+            freshness = _guild_freshness(client)
+    except WowProgressClientError as exc:
+        _handle_client_error(ctx, exc)
+        return
+    history = payload.get("history") if isinstance(payload.get("history"), list) else []
+    tiers = _history_trajectory_rows(history)
+    _emit(
+        ctx,
+        {
+            "provider": "wowprogress",
+            "kind": "history_trajectory",
+            "query": normalized,
+            "guild": payload.get("guild"),
+            "count": len(tiers),
+            "tiers": tiers,
+            "notes": [
+                "Each tier row is the guild's final-for-tier snapshot (source-native WowProgress tier "
+                "pages), not a live or in-progress value.",
+                "delta_vs_previous compares consecutive tiers, which are different raids/difficulties; "
+                "treat it as descriptive movement, not a normalized skill metric. A rank is 'improved' "
+                "when its world/region/realm number is lower (better).",
+            ],
+            "citations": payload.get("citations"),
+            "freshness": freshness,
         },
     )
 

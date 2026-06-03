@@ -7,7 +7,7 @@ import httpx
 import pytest
 from raidbots_cli.client import InvalidReportReference, resolve_report_id
 from raidbots_cli.main import app
-from raidbots_cli.report import parse_report
+from raidbots_cli.report import _actor_summary, parse_report
 from raidbots_cli.simc_input import classify_simc_input, simc_handoff
 from typer.testing import CliRunner
 
@@ -96,6 +96,13 @@ def test_parse_report_quick_sim_extracts_actor_and_metrics() -> None:
     assert parsed["kind"] == "quick_sim"
     assert parsed["actor"]["name"] == "Frostmage"
     assert parsed["actor"]["spec"] == "Frost Mage"
+    assert parsed["actor"]["class"] == "mage"
+    identity = parsed["actor"]["class_spec_identity"]
+    assert identity["kind"] == "class_spec_identity"
+    assert identity["status"] == "normalized"
+    assert identity["confidence"] == "high"
+    assert identity["identity"] == {"actor_class": "mage", "spec": "frost_mage"}
+    assert identity["source"] == {"provider": "raidbots", "source": "simbot_report"}
     assert parsed["actor"]["talents_present"] is True
     assert parsed["metrics"]["dps"] == 1234567.8
     assert parsed["game_version"] == "11.1.0"
@@ -103,6 +110,24 @@ def test_parse_report_quick_sim_extracts_actor_and_metrics() -> None:
     assert parsed["run_settings"]["iterations_completed"] == 10000
     assert parsed["run_settings"]["stop_reason"] == "target_error_requested"
     assert "profilesets" not in parsed
+
+
+def test_actor_summary_identity_degrades_without_class_and_spec() -> None:
+    summary = _actor_summary({"name": "Mystery"})
+    assert summary["class"] is None
+    assert summary["spec"] is None
+    identity = summary["class_spec_identity"]
+    assert identity["status"] == "unknown"
+    assert identity["confidence"] == "none"
+    assert identity["identity"] == {"actor_class": None, "spec": None}
+
+
+def test_actor_summary_whitespace_class_does_not_claim_high_confidence() -> None:
+    summary = _actor_summary({"name": "Blanky", "class": "   ", "specialization": "Frost Mage"})
+    identity = summary["class_spec_identity"]
+    # A whitespace-only class normalizes to null, so confidence must not be high.
+    assert identity["identity"]["actor_class"] is None
+    assert identity["confidence"] == "none"
 
 
 def test_parse_report_multi_profile_ranks_results_and_omits_metrics() -> None:

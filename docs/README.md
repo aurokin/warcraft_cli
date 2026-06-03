@@ -63,12 +63,13 @@ Engineering backlog: [Linear — Warcraft CLI](https://linear.app/aurokin/projec
 - [warcraft-wiki/README.md](warcraft-wiki/README.md)
 - [warcraftlogs/README.md](warcraftlogs/README.md)
 - [warcraftlogs/SCOPING.md](warcraftlogs/SCOPING.md)
+- [warcraftlogs/CACHING.md](warcraftlogs/CACHING.md)
 - [simc/README.md](simc/README.md)
 - [raidbots/README.md](raidbots/README.md)
-- [blizzard-api/README.md](blizzard-api/README.md) *(planned — no CLI package yet)*
-- [undermine-exchange/README.md](undermine-exchange/README.md) *(planned)*
-- [raidplan/README.md](raidplan/README.md) *(planned)*
-- [curseforge/README.md](curseforge/README.md) *(planned)*
+- [blizzard-api/README.md](blizzard-api/README.md)
+- [curseforge/README.md](curseforge/README.md)
+- [undermine-exchange/README.md](undermine-exchange/README.md) *(candidate — DEFER)*
+- [raidplan/README.md](raidplan/README.md) *(candidate — DEFER)*
 
 ## Usage And Research
 

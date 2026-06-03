@@ -8,6 +8,13 @@ from warcraft_core.auth import provider_auth_status
 from warcraftlogs_cli.client import load_warcraftlogs_auth_config
 from warcraftlogs_cli.main import app
 
+from tests.fixtures.live_matrix import (
+    CHARACTER_NAME,
+    GUILD_REALM,
+    GUILD_REGION,
+    ZONE_ID,
+)
+
 runner = CliRunner()
 
 
@@ -301,6 +308,63 @@ def test_live_warcraftlogs_report_detail_contracts() -> None:
     assert rankings_payload["query"]["compare"] == "Rankings"
     assert rankings_payload["query"]["timeframe"] == "Historical"
     assert "rankings" in rankings_payload
+
+
+@pytest.mark.live
+def test_live_warcraftlogs_character_rankings_trust_block() -> None:
+    _require_warcraftlogs_auth()
+
+    payload = _payload_for(
+        ["character-rankings", GUILD_REGION, GUILD_REALM, CHARACTER_NAME, "--zone-id", str(ZONE_ID)]
+    )
+    assert payload["provider"] == "warcraftlogs"
+    rankings = payload["character_rankings"]
+    trust = rankings["trust"]
+    assert trust["ranking_basis"] == "public_character_zone_rankings"
+    assert set(trust["scope"]) == {"zone", "difficulty", "metric", "partition", "size"}
+    assert isinstance(trust["freshness"]["sampled_at"], str) and trust["freshness"]["sampled_at"]
+    source_identity = trust["source_character_identity"]
+    assert source_identity["kind"] == "class_spec_identity"
+    assert source_identity["source"] == {"provider": "warcraftlogs", "source": "character_rankings"}
+    # Clean path: a public character with logs returns either a summary or an explicit error,
+    # never both. `raw` passthrough is always preserved.
+    assert "raw" in rankings
+    if rankings.get("error") is None:
+        assert rankings["summary"] is not None
+
+
+@pytest.mark.live
+def test_live_warcraftlogs_spec_kill_samples_cohort_contract() -> None:
+    _require_warcraftlogs_auth()
+
+    payload = _payload_for(
+        [
+            "spec-kill-samples",
+            "--zone-id",
+            str(ZONE_ID),
+            "--boss-id",
+            "3129",
+            "--difficulty",
+            "4",
+            "--spec-name",
+            "balance",
+            "--top",
+            "3",
+            "--report-pages",
+            "1",
+            "--reports-per-page",
+            "5",
+        ]
+    )
+    assert payload["provider"] == "warcraftlogs"
+    assert payload["kind"] == "spec_filtered_kill_samples"
+    assert payload["cohort"] == "spec_filtered_participant_kill_cohort"
+    assert payload["sample"]["spec_name"] == "balance"
+    assert "spec_kill_samples" in payload
+    # sample_size is the full matching cohort; the returned slice is bounded by --top.
+    assert payload["sample"]["returned_kill_count"] == len(payload["spec_kill_samples"])
+    assert payload["sample"]["sample_size"] >= payload["sample"]["returned_kill_count"]
+    assert any("not a spec ranking leaderboard" in note for note in payload["notes"])
 
 
 @pytest.mark.live

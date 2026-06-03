@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
 
 from method_cli.main import app
@@ -168,9 +169,30 @@ def test_parse_guide_page_extracts_sections_navigation_and_links() -> None:
     assert payload["article"]["sections"][0]["title"] == "Introduction"
     assert payload["linked_entities"][0]["type"] == "spell"
     assert payload["linked_entities"][0]["id"] == 116670
+    spell_identity = payload["linked_entities"][0]["ability_identity"]
+    assert spell_identity["kind"] == "ability_identity"
+    assert spell_identity["status"] == "canonical"
+    assert spell_identity["identity"]["spell_id"] == 116670
+    assert spell_identity["identity"]["normalized_name"] == "vivify"
+    assert spell_identity["source"] == {"provider": "method", "source": "guide_linked_entity"}
     assert payload["build_references"][0]["build_code"] == "ABC123"
     assert payload["build_references"][0]["build_identity"]["class_spec_identity"]["identity"] == {
         "actor_class": "monk", "spec": "mistweaver"}
+
+
+def test_linked_entities_ability_identity_only_on_spell_rows() -> None:
+    html = """
+    <html><body><article class="guide-main-content">
+      <div class="guide-section-title"><h2>Gear</h2></div>
+      <p>Use <a href="https://www.wowhead.com/spell=116670/vivify">Vivify</a> and
+         equip <a href="https://www.wowhead.com/item=12345/trinket">Trinket</a>.</p>
+    </article></body></html>
+    """
+    payload = parse_guide_page(html, source_url="https://www.method.gg/guides/mistweaver-monk")
+    by_type = {row["type"]: row for row in payload["linked_entities"]}
+    assert "ability_identity" in by_type["spell"]
+    # Non-spell entity rows are unchanged (no ability_identity key).
+    assert "ability_identity" not in by_type["item"]
 
 
 def test_parse_guide_page_supports_metadata_and_article_fallback_selectors() -> None:
@@ -289,6 +311,8 @@ def test_method_guide_export_and_query(monkeypatch, tmp_path: Path) -> None:
     export_payload = json.loads(export_result.stdout)
     assert export_payload["counts"]["pages"] == 2
     assert (export_dir / "manifest.json").exists()
+    manifest = json.loads((export_dir / "manifest.json").read_text())
+    assert datetime.fromisoformat(manifest["exported_at"].replace("Z", "+00:00")).tzinfo is not None
     assert (export_dir / "pages" / "talents.html").exists()
 
     query_result = runner.invoke(app, ["guide-query", str(export_dir), "tea serenity", "--kind", "linked_entities"])

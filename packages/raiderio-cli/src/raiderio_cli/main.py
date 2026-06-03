@@ -32,9 +32,11 @@ app = typer.Typer(add_completion=False, help="Raider.IO profile and leaderboard 
 sample_app = typer.Typer(add_completion=False, help="Sample-backed Raider.IO analytics primitives.")
 distribution_app = typer.Typer(add_completion=False, help="Derived distributions built from Raider.IO samples.")
 threshold_app = typer.Typer(add_completion=False, help="Threshold-style estimates derived from sampled Raider.IO runs.")
+leaderboard_app = typer.Typer(add_completion=False, help="Season-scoped Raider.IO leaderboard views.")
 app.add_typer(sample_app, name="sample")
 app.add_typer(distribution_app, name="distribution")
 app.add_typer(threshold_app, name="threshold")
+app.add_typer(leaderboard_app, name="leaderboard")
 
 
 @dataclass(slots=True)
@@ -251,6 +253,21 @@ def _structured_match_reasons(
     )
 
 
+def _raiderio_class_spec_identity(class_name: Any, spec_name: Any, *, source: str) -> dict[str, Any]:
+    # Additive normalized class/spec sibling, mirroring the `character` command: only a fully
+    # resolved class+spec pair claims high confidence; class-only/partial degrades to none.
+    actor_class = class_name if isinstance(class_name, str) and class_name.strip() else None
+    spec = spec_name if isinstance(spec_name, str) and spec_name.strip() else None
+    confidence = "high" if actor_class and spec else "none"
+    return class_spec_identity_payload(
+        actor_class=actor_class,
+        spec=spec,
+        provider="raiderio",
+        source=source,
+        confidence=confidence,
+    )
+
+
 def _candidate_from_character_profile(
     *,
     query: str,
@@ -282,6 +299,9 @@ def _candidate_from_character_profile(
         "faction": payload.get("faction"),
         "class_name": payload.get("class"),
         "active_spec_name": payload.get("active_spec_name"),
+        "class_spec_identity": _raiderio_class_spec_identity(
+            payload.get("class"), payload.get("active_spec_name"), source="resolve_character_profile"
+        ),
         "profile_url": payload.get("profile_url"),
         "ranking": {
             "score": score,
@@ -455,7 +475,7 @@ def _search_result_candidate(row: dict[str, Any], *, query: str, type_hint: str 
     )
     path = data.get("path")
     profile_url = f"https://raider.io{path}" if isinstance(path, str) and path.startswith("/") else None
-    return {
+    candidate: dict[str, Any] = {
         "provider": "raiderio",
         "kind": kind,
         "id": data.get("id"),
@@ -475,6 +495,13 @@ def _search_result_candidate(row: dict[str, Any], *, query: str, type_hint: str 
         },
         "follow_up": _follow_up_for_match(kind, region, realm, name),
     }
+    # Guild candidates have no actor class/spec, so identity is character-only (class-only here:
+    # search rows expose class but not spec).
+    if kind == "character":
+        candidate["class_spec_identity"] = _raiderio_class_spec_identity(
+            class_row.get("name"), None, source="search_result"
+        )
+    return candidate
 
 
 def _search_result_candidates(
@@ -597,6 +624,9 @@ def _ranking_roster_entry(entry: dict[str, Any]) -> dict[str, Any]:
         "class_slug": class_row.get("slug"),
         "spec_name": spec_row.get("name"),
         "spec_slug": spec_row.get("slug"),
+        "class_spec_identity": _raiderio_class_spec_identity(
+            class_row.get("name"), spec_row.get("name"), source="ranking_roster"
+        ),
         "profile_url": f"https://raider.io{path}" if isinstance(path, str) and path.startswith("/") else None,
         "role": entry.get("role"),
     }
@@ -627,6 +657,31 @@ def _run_snapshot(row: dict[str, Any]) -> dict[str, Any]:
     snapshot["keystone_time_ms"] = run.get("keystone_time_ms")
     snapshot["num_chests"] = run.get("num_chests")
     return snapshot
+
+
+# Raider.IO returns a fixed 20 runs per page for /mythic-plus/runs. Used to derive how many
+# pages a leaderboard must fetch to satisfy --limit; the emitted counts state the actual result
+# so a short provider response is never a silent cap.
+_RAIDERIO_RUNS_PAGE_SIZE = 20
+_RAIDERIO_RUNS_MAX_PAGES = 10
+
+
+def _leaderboard_pages_for_limit(limit: int) -> int:
+    pages = -(-limit // _RAIDERIO_RUNS_PAGE_SIZE)  # ceil division
+    return max(1, min(_RAIDERIO_RUNS_MAX_PAGES, pages))
+
+
+def _resolve_season_input(season: str) -> str | None:
+    """Map the ``--season`` option to a Raider.IO season request parameter.
+
+    Empty or the ``current`` keyword (case-insensitive) resolve to ``None`` so the request
+    omits the ``season`` param and the API applies its current default season; the effective
+    slug is then recovered from the response. Any other value is an explicit season slug.
+    """
+    normalized = season.strip().lower()
+    if not normalized or normalized == "current":
+        return None
+    return season.strip()
 
 
 def _sample_mythic_plus_runs(
@@ -1326,6 +1381,7 @@ def doctor(ctx: typer.Context) -> None:
                 "distribution_mythic_plus_runs": "ready",
                 "distribution_mythic_plus_players": "ready",
                 "threshold_mythic_plus_runs": "ready",
+                "mythic_plus_leaderboard": "ready",
             },
             "cache": {
                 "enabled": settings.enabled,
@@ -1538,6 +1594,11 @@ def guild(
                     "realm": ((row.get("character") or {}).get("realm") if isinstance(row, dict) else None),
                     "class_name": ((row.get("character") or {}).get("class") if isinstance(row, dict) else None),
                     "active_spec_name": ((row.get("character") or {}).get("active_spec_name") if isinstance(row, dict) else None),
+                    "class_spec_identity": _raiderio_class_spec_identity(
+                        (row.get("character") or {}).get("class"),
+                        (row.get("character") or {}).get("active_spec_name"),
+                        source="guild_roster_preview",
+                    ),
                 }
                 for row in members[:10]
                 if isinstance(row, dict)
@@ -1561,7 +1622,7 @@ def mythic_plus_runs(
     try:
         with _client(ctx) as client:
             payload = client.mythic_plus_runs(
-                season=season or None,
+                season=_resolve_season_input(season),
                 region=region,
                 dungeon=dungeon,
                 affixes=affixes or None,
@@ -1576,6 +1637,7 @@ def mythic_plus_runs(
         {
             "query": {
                 "season": payload.get("season") or season or None,
+                "resolved_season": payload.get("season") or _resolve_season_input(season),
                 "region": payload.get("region") or region,
                 "dungeon": payload.get("dungeon") or dungeon,
                 "affixes": affixes or None,
@@ -1583,6 +1645,69 @@ def mythic_plus_runs(
             },
             "count": len(rankings),
             "runs": [_ranking_run_summary(row) for row in rankings],
+        },
+    )
+
+
+@leaderboard_app.command("mythic-plus")
+def leaderboard_mythic_plus(
+    ctx: typer.Context,
+    season: str = typer.Option("", "--season", help="Season slug, or 'current' for the Raider.IO current default season."),
+    region: str = typer.Option("world", "--region", help="Region slug such as world, us, or eu."),
+    dungeon: str = typer.Option("all", "--dungeon", help="Dungeon slug or all."),
+    affixes: str = typer.Option("", "--affixes", help="Affix slug, fortified, tyrannical, current, or all."),
+    page: int = typer.Option(0, "--page", min=0, help="Page of rankings to request."),
+    limit: int = typer.Option(20, "--limit", min=1, max=200, help="Maximum leaderboard rows to return."),
+) -> None:
+    """Season-scoped Mythic+ run leaderboard (top runs for a region/dungeon).
+
+    A thin view over the same sampled-run primitive used by ``sample`` / ``distribution`` —
+    emits the explicit ``resolved_season`` plus sampled freshness and leaderboard citations so
+    the rows are provenance-safe. It fetches as many ranking pages as ``--limit`` requires and
+    reports returned-vs-requested counts so a short provider response is explicit, not a silent cap.
+    """
+    pages = _leaderboard_pages_for_limit(limit)
+    try:
+        with _client(ctx) as client:
+            runs, meta = _sample_mythic_plus_runs(
+                client,
+                season=_resolve_season_input(season),
+                region=region,
+                dungeon=dungeon,
+                affixes=affixes or None,
+                page=page,
+                pages=pages,
+                limit=limit,
+            )
+    except httpx.HTTPStatusError as exc:
+        _handle_http_error(ctx, exc)
+        return
+    _emit(
+        ctx,
+        {
+            "provider": "raiderio",
+            "kind": "mythic_plus_leaderboard",
+            "query": {
+                "season": meta.get("season") or season or None,
+                "resolved_season": meta.get("season") or _resolve_season_input(season),
+                "region": region,
+                "dungeon": dungeon,
+                "affixes": affixes or None,
+                "page": page,
+                "limit": limit,
+            },
+            "count": len(runs),
+            "sample": {
+                "requested_limit": limit,
+                "returned_run_count": len(runs),
+                "pages_requested": meta["pages_requested"],
+                "pages_fetched": meta["pages_fetched"],
+                # False => the provider ran out of ranked runs before --limit (not a silent cap).
+                "limit_reached": len(runs) >= limit,
+            },
+            "runs": runs,
+            "freshness": _freshness_payload(meta),
+            "citations": _citations_payload(meta),
         },
     )
 
@@ -1614,7 +1739,7 @@ def sample_mythic_plus_runs(
         with _client(ctx) as client:
             runs, meta, filtering = _load_filtered_runs(
                 client,
-                season=season or None,
+                season=_resolve_season_input(season),
                 region=region,
                 dungeon=dungeon,
                 affixes=affixes or None,
@@ -1635,6 +1760,7 @@ def sample_mythic_plus_runs(
         return
     query = {
         "season": meta.get("season") or season or None,
+        "resolved_season": meta.get("season") or _resolve_season_input(season),
         "region": region,
         "dungeon": dungeon,
         "affixes": affixes or None,
@@ -1702,7 +1828,7 @@ def sample_mythic_plus_players(
         with _client(ctx) as client:
             runs, meta, filtering = _load_filtered_runs(
                 client,
-                season=season or None,
+                season=_resolve_season_input(season),
                 region=region,
                 dungeon=dungeon,
                 affixes=affixes or None,
@@ -1724,6 +1850,7 @@ def sample_mythic_plus_players(
     players, player_sampling = _limit_player_snapshots(_player_snapshots(runs), player_limit=player_limit)
     query = {
         "season": meta.get("season") or season or None,
+        "resolved_season": meta.get("season") or _resolve_season_input(season),
         "region": region,
         "dungeon": dungeon,
         "affixes": affixes or None,
@@ -1797,7 +1924,7 @@ def distribution_mythic_plus_runs(
         with _client(ctx) as client:
             runs, meta, filtering = _load_filtered_runs(
                 client,
-                season=season or None,
+                season=_resolve_season_input(season),
                 region=region,
                 dungeon=dungeon,
                 affixes=affixes or None,
@@ -1818,6 +1945,7 @@ def distribution_mythic_plus_runs(
         return
     query = {
         "season": meta.get("season") or season or None,
+        "resolved_season": meta.get("season") or _resolve_season_input(season),
         "region": region,
         "dungeon": dungeon,
         "affixes": affixes or None,
@@ -1874,7 +2002,7 @@ def distribution_mythic_plus_players(
         with _client(ctx) as client:
             runs, meta, filtering = _load_filtered_runs(
                 client,
-                season=season or None,
+                season=_resolve_season_input(season),
                 region=region,
                 dungeon=dungeon,
                 affixes=affixes or None,
@@ -1896,6 +2024,7 @@ def distribution_mythic_plus_players(
     players, player_sampling = _limit_player_snapshots(_player_snapshots(runs), player_limit=player_limit)
     query = {
         "season": meta.get("season") or season or None,
+        "resolved_season": meta.get("season") or _resolve_season_input(season),
         "region": region,
         "dungeon": dungeon,
         "affixes": affixes or None,
@@ -1961,7 +2090,7 @@ def threshold_mythic_plus_runs(
         with _client(ctx) as client:
             runs, meta, filtering = _load_filtered_runs(
                 client,
-                season=season or None,
+                season=_resolve_season_input(season),
                 region=region,
                 dungeon=dungeon,
                 affixes=affixes or None,
@@ -1982,6 +2111,7 @@ def threshold_mythic_plus_runs(
         return
     query = {
         "season": meta.get("season") or season or None,
+        "resolved_season": meta.get("season") or _resolve_season_input(season),
         "region": region,
         "dungeon": dungeon,
         "affixes": affixes or None,

@@ -1,0 +1,15 @@
+{
+  "_links": {"self": {"href": "https://us.api.blizzard.com/data/wow/item/19019?namespace=static-us"}},
+  "id": 19019,
+  "name": "Thunderfury, Blessed Blade of the Windseeker",
+  "quality": {"type": "LEGENDARY", "name": "Legendary"},
+  "level": 80,
+  "required_level": 60,
+  "item_class": {"name": "Weapon", "id": 2},
+  "item_subclass": {"name": "Sword", "id": 7},
+  "inventory_type": {"type": "ONE_HAND", "name": "One-Hand"},
+  "purchase_price": 0,
+  "sell_price": 252551,
+  "is_equippable": true,
+  "is_stackable": false
+}

@@ -12,6 +12,7 @@ from warcraft_api.http import DEFAULT_RETRY_ATTEMPTS, RETRYABLE_STATUS_CODES, ba
 from warcraft_content.paths import provider_cache_root
 from warcraft_core.wow_normalization import normalize_name, normalize_region, primary_realm_slug, realm_slug_variants
 
+from wowprogress_cli.identity import _progress_snapshot
 from wowprogress_cli.page_parser import (
     WOWPROGRESS_BASE_URL,
     character_url,
@@ -257,6 +258,14 @@ class WowProgressClient:
     def pve_leaderboard_ttl_seconds(self) -> int:
         return self._leaderboard_ttl
 
+    @property
+    def guild_page_ttl_seconds(self) -> int:
+        return self._guild_ttl
+
+    @property
+    def cache_enabled(self) -> bool:
+        return self._cache_store is not None
+
     def probe_search_route(self, *, region: str, realm: str, name: str, obj_type: str) -> dict[str, Any] | None:
         if obj_type not in {"char", "guild"}:
             raise WowProgressClientError("invalid_query", "WowProgress search probe supports only char or guild.")
@@ -318,7 +327,8 @@ class WowProgressClient:
                     "progress_ranks": progress.get("ranks"),
                     "bosses_killed": bosses_killed,
                     "boss_count": boss_count,
-                    "difficulty": progress_summary,
+                    # Parsed difficulty token (e.g. "M"), not the full "8/8 (M)" summary string.
+                    "difficulty": _progress_snapshot(progress_summary)["difficulty"],
                     "item_level_average": item_level.get("average"),
                     "item_level_ranks": item_level.get("ranks"),
                     "first_kill_at": items[-1].get("first_kill_at") if items else None,
@@ -332,6 +342,10 @@ class WowProgressClient:
             "kind": "guild_history",
             "guild": payload.get("guild"),
             "current_progress": payload.get("progress"),
+            # Current-state item level + encounters from the main guild page, so consumers (e.g.
+            # guild-snapshot) keep them even when history_links is empty/incomplete.
+            "current_item_level": payload.get("item_level"),
+            "current_encounters": payload.get("encounters"),
             "history": tiers,
             "citations": {
                 "page": ((payload.get("citations") or {}).get("page") if isinstance(payload.get("citations"), dict) else None),

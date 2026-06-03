@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from blizzard_api_cli.main import app as blizzard_app
+from curseforge_cli.main import app as curseforge_app
 from icy_veins_cli.main import app as icy_veins_app
 from method_cli.main import app as method_app
 from raidbots_cli.main import app as raidbots_app
@@ -245,26 +246,59 @@ PROVIDERS: tuple[ProviderRegistration, ...] = (
         command="blizzard",
         language="python",
         status="partial",
-        description="Official Blizzard Battle.net WoW API provider (scaffold): doctor + auth posture; endpoints pending.",
+        description="Official Blizzard Battle.net WoW API provider: doctor + auth, Game Data (realm, item) and Profile (character) reads.",
         auth_required=True,
-        # expansion_mode="none" mirrors simc: until region/namespace routing exists there is no honest
+        # expansion_mode="none" mirrors simc: Blizzard routes by region + namespace class
+        # (dynamic/static/profile), which is not the wrapper's expansion axis, so there is no honest
         # expansion to advertise. A side effect (shared with simc) is that `warcraft --expansion <x>
         # blizzard ...` is rejected by the wrapper passthrough; plain `warcraft blizzard ...` works.
         # Relaxing expansion-pinned passthrough for none-expansion providers is wrapper-wide policy
-        # (AUR-384/AUR-389), not part of this provider scaffold.
+        # (AUR-384/AUR-389), not part of this provider.
         expansion_mode="none",
         supported_expansions=(),
-        expansion_review_status="deferred",
+        expansion_review_status="reviewed",
         expansion_policy_note=(
-            "Region- and namespace-aware routing is not implemented yet; "
-            "expansion classification is deferred until the Game Data/Profile endpoint slice lands."
+            "Region- and namespace-aware routing is honored by the Game Data/Profile commands, but "
+            "Blizzard's region/namespace model is not the wrapper's expansion axis, so this provider "
+            "stays out of expansion fanout (expansion_mode='none')."
         ),
         wrapper_capabilities={
             "doctor": "ready",
             "search": "coming_soon",
             "resolve": "coming_soon",
+            "game_data": "ready",
+            "profile": "ready",
         },
         app=blizzard_app,
+        doctor_args=("doctor",),
+    ),
+    ProviderRegistration(
+        name="curseforge",
+        command="curseforge",
+        language="python",
+        status="partial",
+        description="CurseForge addon provider: doctor + addon lookup (metadata, latest files, changelog) over the public CurseForge API.",
+        auth_required=True,
+        # expansion_mode="none" mirrors blizzard-api/simc: addon game-version compatibility lives
+        # inside individual file records, not the wrapper's expansion axis, so there is no honest
+        # expansion to advertise. As with those providers, `warcraft --expansion <x> curseforge ...`
+        # is rejected by the wrapper passthrough (relaxed to passthrough per AUR-384/AUR-389 policy),
+        # while plain `warcraft curseforge ...` works.
+        expansion_mode="none",
+        supported_expansions=(),
+        expansion_review_status="reviewed",
+        expansion_policy_note=(
+            "CurseForge addon metadata is not tied to the wrapper's expansion axis (game-version "
+            "compatibility lives inside addon file records), so this provider stays out of expansion "
+            "fanout (expansion_mode='none')."
+        ),
+        wrapper_capabilities={
+            "doctor": "ready",
+            "search": "coming_soon",
+            "resolve": "coming_soon",
+            "addon": "ready",
+        },
+        app=curseforge_app,
         doctor_args=("doctor",),
     ),
 )

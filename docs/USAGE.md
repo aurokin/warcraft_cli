@@ -97,13 +97,14 @@ warcraft simc first-cast <simc-root>/profiles/MID1/MID1_Monk_Windwalker.simc tig
 - `warcraft guild` is a first-class merged guild workflow that normalizes region/realm/name input, preserves the provider-native Raider.IO and WowProgress payloads under each source, and reports explicit source disagreements as an additive wrapper layer.
 - `warcraft guild-history` and `warcraft guild-ranks` currently route through the WowProgress provider surface and preserve the wrapped provider payload alongside the wrapper summary.
 - `warcraft guide-compare` compares exported guide bundles across providers using raw section evidence, additive `analysis_surfaces`, and explicit `build_references`, while preserving provider provenance and source citations instead of flattening the guides into one fake summary
+- `guide-compare` also emits a top-level `freshness` rollup and a `comparison_evidence` block (compared bundle count, providers, matching rules, and per-bundle freshness from each bundle's `exported_at`); `--max-age-hours` (default `24`) sets the per-bundle freshness threshold. Method/Icy Veins/Warcraft Wiki bundles carry an `exported_at` timestamp in their manifest; older bundles without it degrade to `stale`/`missing_exported_at` rather than failing
 - `warcraft guide-compare-query` conservatively resolves one guide per supported provider, exports those bundles locally, and then runs the same comparison packet over the exported evidence
 - when `guide-compare-query` cannot get a guide from provider `resolve`, it may fall back to provider `search`, but only when the top guide result has a strong enough score and a clearly decisive lead over the alternatives; weak or ambiguous guide search results are skipped instead of exported
 - `guide-compare-query` writes an orchestration manifest under the output root and reuses existing bundles only when the same guide ref is still selected and the recorded export age is within `--max-age-hours`; use `--force-refresh` to bypass reuse
 - `guide-compare-query --simc-build-handoff` adds an explicit guide-build-to-`simc` evidence block derived only from exported `build_references`; use `--simc-apl-path` when you also want exact-build `simc describe-build` output in the same packet
 - `warcraft guide-builds-simc` reads explicit embedded guide build references from one exported guide bundle or a `guide-compare-query` output root, dedupes them, and hands those exact build refs to `simc identify-build` plus optional `simc decode-build`
 - `warcraft guide-builds-simc --apl-path <apl>` also runs `simc describe-build` for each explicit build ref so the handoff can include exact-build APL-backed detail without inferring claims from guide prose
-- `guide-builds-simc` also includes explicit provenance, citations, and source freshness metadata for the handoff packet so agents can tell whether the build evidence came from one bundle or a fresher orchestration root
+- `guide-builds-simc` also includes explicit provenance, citations, and source freshness metadata for the handoff packet so agents can tell whether the build evidence came from one bundle or a fresher orchestration root; for a single bundle the freshness `status` is now `known` (anchored on the bundle's `exported_at`) rather than `unknown` when the manifest carries an export timestamp
 - each handed-off guide build now also carries an exact `talent_transport_packet`, so explicit Wowhead build refs and raw Warcraft Logs talent trees can travel through the same packet contract
 - `warcraft talent-packet` is the wrapper-level packet router:
   - explicit Wowhead talent-calc refs with build codes route to `wowhead talent-calc-packet`
@@ -469,6 +470,8 @@ wowprogress search "guild us illidan Liquid"
 wowprogress resolve "character us illidan Imonthegcd"
 wowprogress guild-history us "Mal'Ganis" gn
 wowprogress guild-ranks us "Mal'Ganis" gn
+wowprogress guild-snapshot us illidan Liquid
+wowprogress history-trajectory us "Mal'Ganis" gn
 wowprogress guild us illidan Liquid
 wowprogress character us illidan Imonthegcd
 wowprogress leaderboard pve us --limit 10
@@ -494,6 +497,8 @@ WowProgress phase-1 behavior:
 - `guild` returns a compact guild profile with progression, item-level rank context, and encounter history
 - `guild-history` walks the guild's historical tier pages and returns a per-tier progression timeline with final rank snapshots
 - `guild-ranks` returns the condensed per-tier final-rank view for questions like "final ranks across tiers"
+- `guild-snapshot` derives the current guild state (progression, item-level rank context, and per-tier rank series) from a single guild-history traversal, with no extra guild-page fetch in the command layer
+- `history-trajectory` returns the oldest-to-newest tier timeline with `delta_vs_previous` rank/item-level movement; deltas compare consecutive tiers, which are different raids/difficulties, so they describe movement rather than a normalized metric
 - `character` returns a compact character profile with item-level, SimDPS, and PvE raid-history context
 - `leaderboard pve` returns the current PvE progression leaderboard for a region, optionally narrowed to a realm
 - `sample pve-leaderboard` returns a top-slice leaderboard sample with explicit sampling metadata for the requested row cap and returned entry count

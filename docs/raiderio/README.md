@@ -16,6 +16,7 @@ Current command surface:
 - `raiderio distribution mythic-plus-runs`
 - `raiderio distribution mythic-plus-players`
 - `raiderio threshold mythic-plus-runs`
+- `raiderio leaderboard mythic-plus`
 
 Current quality notes:
 - structured `region realm name` queries now use direct profile probes before falling back to the weaker site search route
@@ -27,7 +28,9 @@ Current quality notes:
 - filtered outputs preserve source-run counts and excluded-run counts so narrower slices stay provenance-safe
 - deduped player snapshots now exist on top of sampled runs, so agents can work with participant-level appearance and class/spec slices instead of only raw run rows
 - player-snapshot analytics now report truncation explicitly when `--player-limit` cuts the deduped participant set
-- leaderboard, broader Mythic+ surfaces, and richer profile workflows are still later-phase work
+- a thin season-scoped `leaderboard mythic-plus` view now exists over the same sampled-run primitive, with explicit `resolved_season`, sampled freshness, and leaderboard citations
+- every Mythic+ analytics command echoes an explicit `resolved_season` in its `query` block; `--season current` (or empty) resolves to the Raider.IO current default season and the effective slug is recovered from the API response
+- broader Mythic+ surfaces and richer profile workflows are still later-phase work
 
 ## Next Quality Direction
 
@@ -186,14 +189,16 @@ Good candidates:
 - `raiderio threshold ...`
 
 Current implemented subset:
+- `raiderio leaderboard mythic-plus`
 - `raiderio sample mythic-plus-runs`
 - `raiderio distribution mythic-plus-runs`
 - `raiderio threshold mythic-plus-runs`
 
-Possible examples:
+Examples (match shipped command shapes):
+- `raiderio leaderboard mythic-plus --season current --region us --dungeon all --limit 20`
 - `raiderio sample mythic-plus-runs --region us --limit 100`
-- `raiderio distribution score --season current`
-- `raiderio threshold score-to-level --score 3000`
+- `raiderio distribution mythic-plus-runs --metric mythic_level --season current`
+- `raiderio threshold mythic-plus-runs --metric score --value 3000`
 
 The exact names matter less than keeping the outputs:
 - structured

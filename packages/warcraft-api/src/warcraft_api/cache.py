@@ -25,6 +25,8 @@ class CacheTTLConfig:
     page_html: int = 3600
     comment_replies: int = 1800
     entity_response: int = 3600
+    # Warcraft Logs finished-report TTL (24h). Other providers leave this at the default.
+    report_finished: int = 86400
 
 
 @dataclass(frozen=True, slots=True)

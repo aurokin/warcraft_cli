@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import io
 import json
 import tempfile
+from contextlib import redirect_stderr, redirect_stdout
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, NoReturn
@@ -9,6 +11,7 @@ from urllib.parse import urlparse
 
 import typer
 from blizzard_api_cli.main import app as blizzard_app
+from curseforge_cli.main import app as curseforge_app
 from icy_veins_cli.main import app as icy_veins_app
 from method_cli.main import app as method_app
 from raidbots_cli.main import app as raidbots_app
@@ -76,10 +79,15 @@ def _emit(payload: Any, *, pretty: bool, err: bool = False) -> None:
 def _invoke_sub_app(sub_app: typer.Typer, *, args: list[str], prog_name: str) -> None:
     command = get_command(sub_app)
     try:
-        command.main(args=args, prog_name=prog_name, standalone_mode=False)
+        # standalone_mode=False makes click *return* the exit code for typer.Exit/click.Exit
+        # rather than calling sys.exit, so a provider's `raise typer.Exit(1)` would otherwise
+        # be silently swallowed to exit 0. Re-raise it so passthrough propagates failures.
+        exit_code = command.main(args=args, prog_name=prog_name, standalone_mode=False)
     except SystemExit as exc:
         code = exc.code if isinstance(exc.code, int) else 1
         raise typer.Exit(code) from exc
+    if isinstance(exit_code, int) and exit_code != 0:
+        raise typer.Exit(exit_code)
 
 
 @app.callback()
@@ -117,35 +125,62 @@ def _requested_expansion(ctx: typer.Context) -> str | None:
     return None
 
 
+def _expansion_passthrough_advisory(ctx: typer.Context, *, provider_name: str) -> dict[str, Any] | None:
+    """Decide expansion policy for a ``warcraft <provider> ...`` proxy.
+
+    Returns ``None`` for a normal passthrough (no expansion requested, or the provider
+    supports it). For a provider with ``expansion_mode == "none"`` requested with an
+    expansion it returns an advisory dict (relax-to-passthrough): the provider has no
+    expansion semantics to honor, so the command runs unchanged with the note attached.
+    For a ``fixed``/``profiled`` provider asked for an unsupported expansion this is a
+    genuine mismatch — it emits ``unsupported_provider_expansion`` and exits 1.
+    """
+    requested_expansion = _requested_expansion(ctx)
+    if requested_expansion is None:
+        return None
+    registration = get_provider(provider_name)
+    reason = provider_expansion_exclusion_reason(registration, requested_expansion=requested_expansion)
+    if reason is None:
+        return None
+    if registration.expansion_mode == "none":
+        return {
+            "expansion_filter": "passthrough_no_expansion_semantics",
+            "requested_expansion": requested_expansion,
+            "provider_expansion_mode": "none",
+            "note": (
+                f"Provider {provider_name!r} has no expansion semantics (expansion_mode=none); "
+                f"the wrapper --expansion {requested_expansion!r} flag was not applied and the "
+                "command was passed through unchanged."
+            ),
+        }
+    _emit(
+        {
+            "ok": False,
+            "error": {
+                "code": "unsupported_provider_expansion",
+                "message": (
+                    f"Provider {provider_name!r} does not support wrapper expansion "
+                    f"{requested_expansion!r}."
+                ),
+            },
+            "provider": provider_name,
+            "requested_expansion": requested_expansion,
+            "expansion_support": provider_expansion_support(
+                registration,
+                requested_expansion=requested_expansion,
+            ),
+        },
+        pretty=_pretty(ctx),
+        err=True,
+    )
+    raise typer.Exit(1)
+
+
 def _passthrough_args(ctx: typer.Context, *, provider_name: str) -> list[str]:
     args = list(ctx.args)
     requested_expansion = _requested_expansion(ctx)
     if requested_expansion is None:
         return args
-    registration = get_provider(provider_name)
-    reason = provider_expansion_exclusion_reason(registration, requested_expansion=requested_expansion)
-    if reason is not None:
-        _emit(
-            {
-                "ok": False,
-                "error": {
-                    "code": "unsupported_provider_expansion",
-                    "message": (
-                        f"Provider {provider_name!r} does not support wrapper expansion "
-                        f"{requested_expansion!r}."
-                    ),
-                },
-                "provider": provider_name,
-                "requested_expansion": requested_expansion,
-                "expansion_support": provider_expansion_support(
-                    registration,
-                    requested_expansion=requested_expansion,
-                ),
-            },
-            pretty=_pretty(ctx),
-            err=True,
-        )
-        raise typer.Exit(1)
     if provider_name == "wowhead":
         if "--expansion" in args:
             _emit(
@@ -164,6 +199,68 @@ def _passthrough_args(ctx: typer.Context, *, provider_name: str) -> list[str]:
             raise typer.Exit(1)
         return ["--expansion", requested_expansion, *args]
     return args
+
+
+def _run_passthrough(ctx: typer.Context, sub_app: typer.Typer, *, provider_name: str, prog_name: str) -> None:
+    """Proxy ``warcraft <provider> ...`` to a provider CLI, applying expansion policy.
+
+    Normal case: invoke the sub-app directly so its payload reaches stdout untouched.
+    none-expansion relax case: capture the provider payload and attach the advisory note
+    as an additive sibling key (provider payload preserved), then re-emit.
+    """
+    advisory = _expansion_passthrough_advisory(ctx, provider_name=provider_name)
+    args = _passthrough_args(ctx, provider_name=provider_name)
+    if advisory is None:
+        _invoke_sub_app(sub_app, args=args, prog_name=prog_name)
+        return
+    # The provider emits its payload to stdout (ok) or stderr (error). Capture both so the
+    # advisory note can be attached regardless of which stream carried the JSON payload.
+    # This buffers instead of streaming, but only on the explicit `warcraft --expansion <key>
+    # <none-provider> ...` combination — normal `warcraft <provider> ...` returns at the
+    # advisory-is-None branch above and streams untouched. There is no incremental streaming to
+    # lose here regardless: provider commands emit a single JSON envelope all at once, and
+    # attaching the advisory as an additive sibling key requires the whole payload to parse it,
+    # so the buffer just holds that one envelope momentarily (non-JSON output like --help is
+    # small and handled by the passthrough branch below). The buffering is intrinsic to the
+    # annotate-the-payload feature, not an incidental regression of normal simc/report workflows.
+    out_buf, err_buf = io.StringIO(), io.StringIO()
+    exit_code = 0
+    try:
+        with redirect_stdout(out_buf), redirect_stderr(err_buf):
+            _invoke_sub_app(sub_app, args=args, prog_name=prog_name)
+    except typer.Exit as exc:
+        exit_code = exc.exit_code if isinstance(exc.exit_code, int) else 1
+    out_text, err_text = out_buf.getvalue(), err_buf.getvalue()
+    out_json, err_json = _parse_json_object(out_text), _parse_json_object(err_text)
+    if out_json is not None:
+        _emit(_with_expansion_advisory(out_json, advisory), pretty=_pretty(ctx))
+    elif err_json is not None:
+        _emit(_with_expansion_advisory(err_json, advisory), pretty=_pretty(ctx), err=True)
+    else:
+        # Non-JSON provider output (e.g. --help text): surface the advisory on its own so the
+        # relax is never silent, then pass the raw output through below.
+        _emit(advisory, pretty=_pretty(ctx), err=True)
+    # Preserve any non-payload stream content verbatim (provenance is never hidden).
+    if out_json is None and out_text:
+        typer.echo(out_text, nl=False)
+    if err_json is None and err_text:
+        typer.echo(err_text, nl=False, err=True)
+    if exit_code:
+        raise typer.Exit(exit_code)
+
+
+def _parse_json_object(text: str) -> dict[str, Any] | None:
+    try:
+        value = json.loads(text.strip())
+    except (json.JSONDecodeError, ValueError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _with_expansion_advisory(payload: dict[str, Any], advisory: dict[str, Any]) -> dict[str, Any]:
+    annotated = {**payload, "expansion_advisory": advisory}
+    annotated.setdefault("expansion_filter", advisory["expansion_filter"])
+    return annotated
 
 
 def _slugify_path_fragment(value: str) -> str:
@@ -234,11 +331,89 @@ def _guide_build_handoff_freshness(source_kind: str, source_manifest: dict[str, 
             "sampled_at": parsed_updated_at.replace(microsecond=0).isoformat().replace("+00:00", "Z"),
             "cache_ttl_seconds": None,
         }
+    exported_at = source_manifest.get("exported_at") if isinstance(source_manifest, dict) else None
+    parsed_exported_at = _parse_iso8601_utc(exported_at)
+    if parsed_exported_at is None:
+        return {
+            "status": "unknown",
+            "reason": "bundle_manifest_has_no_export_timestamp",
+            "sampled_at": None,
+            "cache_ttl_seconds": None,
+        }
     return {
-        "status": "unknown",
-        "reason": "bundle_manifest_has_no_export_timestamp",
-        "sampled_at": None,
+        "status": "known",
+        "reason": "bundle_manifest_exported_at",
+        "sampled_at": parsed_exported_at.replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         "cache_ttl_seconds": None,
+    }
+
+
+def _guide_compare_freshness_rollup(
+    bundle_freshness: list[dict[str, Any]],
+    *,
+    max_age_hours: int,
+) -> dict[str, Any]:
+    statuses = [row["freshness"]["status"] for row in bundle_freshness]
+    ages = [
+        row["freshness"]["age_hours"]
+        for row in bundle_freshness
+        if isinstance(row["freshness"].get("age_hours"), (int, float))
+    ]
+    if not bundle_freshness:
+        status = "unknown"
+    elif all(status == "fresh" for status in statuses):
+        status = "fresh"
+    else:
+        status = "stale"
+    return {
+        "status": status,
+        "max_age_hours": max_age_hours,
+        "bundle_count": len(bundle_freshness),
+        "fresh_count": sum(1 for status_value in statuses if status_value == "fresh"),
+        "stale_count": sum(1 for status_value in statuses if status_value == "stale"),
+        "oldest_age_hours": max(ages) if ages else None,
+        "newest_age_hours": min(ages) if ages else None,
+    }
+
+
+def _guide_comparison_packet(
+    bundle_inputs: list[tuple[Path, dict[str, Any]]],
+    *,
+    max_age_hours: int,
+) -> dict[str, Any]:
+    """Build the guide-bundle comparison object with additive freshness + scope evidence.
+
+    Shared by `guide-compare` and `guide-compare-query` so both emit the same comparison
+    packet (raw evidence + `freshness` rollup + `comparison_evidence`).
+    """
+    comparison = compare_article_bundles(bundle_inputs)
+    bundle_descriptors = [
+        descriptor for descriptor in (comparison.get("bundles") or []) if isinstance(descriptor, dict)
+    ]
+    bundle_freshness = [
+        {
+            "provider": descriptor.get("provider"),
+            "path": descriptor.get("path"),
+            "exported_at": descriptor.get("exported_at"),
+            "freshness": _guide_compare_freshness(descriptor.get("exported_at"), max_age_hours=max_age_hours),
+        }
+        for descriptor in bundle_descriptors
+    ]
+    freshness_rollup = _guide_compare_freshness_rollup(bundle_freshness, max_age_hours=max_age_hours)
+    return {
+        **comparison,
+        "freshness": freshness_rollup,
+        "comparison_evidence": {
+            "compared_bundle_count": comparison.get("compared_bundle_count"),
+            "providers": [descriptor.get("provider") for descriptor in bundle_descriptors],
+            "matching_rules": {
+                "section_evidence": comparison.get("section_evidence", {}).get("matching_rule"),
+                "analysis_surface_tags": "exact_normalized_tag",
+                "build_references": "exact_build_reference_key",
+            },
+            "freshness": freshness_rollup,
+            "bundle_freshness": bundle_freshness,
+        },
     }
 
 
@@ -1894,6 +2069,13 @@ def actor_profile(
 def guide_compare(
     ctx: typer.Context,
     bundles: list[Path] = GUIDE_COMPARE_BUNDLES_ARGUMENT,
+    max_age_hours: int = typer.Option(
+        24,
+        "--max-age-hours",
+        min=1,
+        max=24 * 30,
+        help="Freshness threshold (hours) for each compared bundle's exported_at.",
+    ),
 ) -> None:
     if len(bundles) < 2:
         _emit(
@@ -1944,7 +2126,7 @@ def guide_compare(
 
     payload = {
         "provider": "warcraft",
-        **compare_article_bundles(bundle_inputs),
+        **_guide_comparison_packet(bundle_inputs, max_age_hours=max_age_hours),
     }
     _emit(payload, pretty=_pretty(ctx))
 
@@ -2085,7 +2267,18 @@ def _process_guide_compare_provider(
             "error": str(exc),
         }, None
 
-    exported_at = _iso_now_utc()
+    # exported_at comes from the manifest the provider's guide-export just stamped, so the
+    # orchestration row, the reuse check, and _guide_comparison_packet share one timestamp (they
+    # cannot disagree on freshness). The `or _iso_now_utc()` is an unreachable safety net, NOT a
+    # freshness fabricator: every guide-compare provider stamps exported_at on export (wowhead via
+    # _guide_export_manifest, method/icy-veins via write_article_bundle), and this branch runs only
+    # after guide-export above re-wrote the bundle now — so "now" would reflect a real just-happened
+    # export, never a stale reuse. A timestamp-less bundle is also never *reused*: the reuse gate
+    # requires freshness "fresh" and _guide_compare_freshness(None) is always "stale", which forces a
+    # re-export (re-stamping a real anchor). So a bundle lacking a real anchor cannot be stamped here
+    # and then treated as freshly exported on a later run.
+    bundle_manifest = bundle.get("manifest") if isinstance(bundle.get("manifest"), dict) else {}
+    exported_at = bundle_manifest.get("exported_at") or _iso_now_utc()
     return {
         "provider": provider_name,
         "status": "exported",
@@ -2224,7 +2417,7 @@ def guide_compare_query(
     if len(bundle_inputs) >= 2:
         payload["comparison"] = {
             "provider": "warcraft",
-            **compare_article_bundles(bundle_inputs),
+            **_guide_comparison_packet(bundle_inputs, max_age_hours=max_age_hours),
         }
         include_simc_build_handoff = simc_build_handoff or (
             isinstance(simc_apl_path, str) and bool(simc_apl_path.strip())
@@ -2503,7 +2696,7 @@ def guide_builds_simc(
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
 )
 def wowhead_passthrough(ctx: typer.Context) -> None:
-    _invoke_sub_app(wowhead_app, args=_passthrough_args(ctx, provider_name="wowhead"), prog_name="wowhead")
+    _run_passthrough(ctx, wowhead_app, provider_name="wowhead", prog_name="wowhead")
 
 
 @app.command(
@@ -2511,7 +2704,7 @@ def wowhead_passthrough(ctx: typer.Context) -> None:
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
 )
 def icy_veins_passthrough(ctx: typer.Context) -> None:
-    _invoke_sub_app(icy_veins_app, args=_passthrough_args(ctx, provider_name="icy-veins"), prog_name="icy-veins")
+    _run_passthrough(ctx, icy_veins_app, provider_name="icy-veins", prog_name="icy-veins")
 
 
 @app.command(
@@ -2519,7 +2712,7 @@ def icy_veins_passthrough(ctx: typer.Context) -> None:
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
 )
 def method_passthrough(ctx: typer.Context) -> None:
-    _invoke_sub_app(method_app, args=_passthrough_args(ctx, provider_name="method"), prog_name="method")
+    _run_passthrough(ctx, method_app, provider_name="method", prog_name="method")
 
 
 @app.command(
@@ -2527,7 +2720,7 @@ def method_passthrough(ctx: typer.Context) -> None:
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
 )
 def raiderio_passthrough(ctx: typer.Context) -> None:
-    _invoke_sub_app(raiderio_app, args=_passthrough_args(ctx, provider_name="raiderio"), prog_name="raiderio")
+    _run_passthrough(ctx, raiderio_app, provider_name="raiderio", prog_name="raiderio")
 
 
 @app.command(
@@ -2535,11 +2728,7 @@ def raiderio_passthrough(ctx: typer.Context) -> None:
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
 )
 def warcraftlogs_passthrough(ctx: typer.Context) -> None:
-    _invoke_sub_app(
-        warcraftlogs_app,
-        args=_passthrough_args(ctx, provider_name="warcraftlogs"),
-        prog_name="warcraftlogs",
-    )
+    _run_passthrough(ctx, warcraftlogs_app, provider_name="warcraftlogs", prog_name="warcraftlogs")
 
 
 @app.command(
@@ -2547,11 +2736,7 @@ def warcraftlogs_passthrough(ctx: typer.Context) -> None:
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
 )
 def warcraft_wiki_passthrough(ctx: typer.Context) -> None:
-    _invoke_sub_app(
-        warcraft_wiki_app,
-        args=_passthrough_args(ctx, provider_name="warcraft-wiki"),
-        prog_name="warcraft-wiki",
-    )
+    _run_passthrough(ctx, warcraft_wiki_app, provider_name="warcraft-wiki", prog_name="warcraft-wiki")
 
 
 @app.command(
@@ -2559,11 +2744,7 @@ def warcraft_wiki_passthrough(ctx: typer.Context) -> None:
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
 )
 def wowprogress_passthrough(ctx: typer.Context) -> None:
-    _invoke_sub_app(
-        wowprogress_app,
-        args=_passthrough_args(ctx, provider_name="wowprogress"),
-        prog_name="wowprogress",
-    )
+    _run_passthrough(ctx, wowprogress_app, provider_name="wowprogress", prog_name="wowprogress")
 
 
 @app.command(
@@ -2571,7 +2752,7 @@ def wowprogress_passthrough(ctx: typer.Context) -> None:
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
 )
 def simc_passthrough(ctx: typer.Context) -> None:
-    _invoke_sub_app(simc_app, args=_passthrough_args(ctx, provider_name="simc"), prog_name="simc")
+    _run_passthrough(ctx, simc_app, provider_name="simc", prog_name="simc")
 
 
 @app.command(
@@ -2579,7 +2760,7 @@ def simc_passthrough(ctx: typer.Context) -> None:
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
 )
 def raidbots_passthrough(ctx: typer.Context) -> None:
-    _invoke_sub_app(raidbots_app, args=_passthrough_args(ctx, provider_name="raidbots"), prog_name="raidbots")
+    _run_passthrough(ctx, raidbots_app, provider_name="raidbots", prog_name="raidbots")
 
 
 @app.command(
@@ -2587,7 +2768,15 @@ def raidbots_passthrough(ctx: typer.Context) -> None:
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
 )
 def blizzard_passthrough(ctx: typer.Context) -> None:
-    _invoke_sub_app(blizzard_app, args=_passthrough_args(ctx, provider_name="blizzard-api"), prog_name="blizzard")
+    _run_passthrough(ctx, blizzard_app, provider_name="blizzard-api", prog_name="blizzard")
+
+
+@app.command(
+    "curseforge",
+    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
+)
+def curseforge_passthrough(ctx: typer.Context) -> None:
+    _run_passthrough(ctx, curseforge_app, provider_name="curseforge", prog_name="curseforge")
 
 
 def run() -> None:

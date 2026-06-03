@@ -42,6 +42,8 @@ Use `warcraft` first when the caller does not already know which provider they n
 | `warcraftlogs` | official raid-log API, world metadata, guild/character/report lookups | `warcraftlogs doctor`, `warcraftlogs guild ...`, `warcraftlogs report-fights ...` |
 | `simc` | local SimulationCraft inspection, exact-build priority analysis, APL comparison, and runs | `warcraft simc doctor`, `warcraft simc priority ...`, `warcraft simc compare-apls ...` |
 | `raidbots` | reading shared Raidbots reports and bridging their SimC input to local `simc` | `warcraft raidbots inspect-report <url-or-id>`, `warcraft raidbots input <url-or-id>`, `warcraft raidbots explain-input` |
+| `blizzard` | official Battle.net Game Data (realm, item) and Profile (character) reads | `warcraft blizzard doctor`, `warcraft blizzard realm ...`, `warcraft blizzard character ...` |
+| `curseforge` | World of Warcraft addon lookup: metadata, latest files, changelog | `warcraft curseforge doctor`, `warcraft curseforge addon <slug-or-id>` |
 
 ## Routing Rules
 
@@ -81,6 +83,8 @@ Use `warcraft` first when the caller does not already know which provider they n
 - `warcraftlogs`: see `references/warcraftlogs.md`
 - `simc`: see `references/simc.md`
 - `raidbots`: see `references/raidbots.md`
+- `blizzard`: see `references/blizzard-api.md`
+- `curseforge`: see `references/curseforge.md`
 
 ## Notes
 

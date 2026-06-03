@@ -44,22 +44,44 @@ The first useful slice should stay narrower than that:
 - one game-data lookup
 - one profile lookup
 
-## Implemented (scaffold)
+## Implemented
 
-The first slice (AUR-390) ships the package, wrapper registration, and `doctor` only:
+The scaffold slice (AUR-390) shipped the package, wrapper registration, and `doctor`. AUR-455 adds
+live OAuth and the first read commands:
 
-- `blizzard doctor` — reports install state, auth posture, a deferred region block, and honest capability metadata.
-- Routed through the wrapper as `warcraft blizzard doctor`.
-- Auth is OAuth client-credentials. Credentials are discovered in this order (matching `warcraftlogs`):
+- `blizzard doctor` — reports install state, auth posture, the region/routing block, and capability
+  metadata (`game_data` and `profile` are `ready`; `search`/`resolve` stay `coming_soon`).
+- `blizzard realm <slug>` — dynamic Game Data namespace (`/data/wow/realm/{slug}`).
+- `blizzard item <id>` — static Game Data namespace (`/data/wow/item/{id}`).
+- `blizzard character <realm> <name>` — profile namespace (`/profile/wow/character/{realm}/{name}`),
+  retail only.
+- Each command returns `{ok, provider, command, kind, query, provenance, data}` on success and
+  `{ok:false, ..., error:{code, message}}` with a nonzero exit on failure (never a traceback). With
+  no credentials they return `missing_client_credentials`.
+- Region routing: `--region` (default `BLIZZARD_REGION`, else `us`; supports `us`/`eu`/`kr`/`tw`/`cn`,
+  with aliases like `na`). `--game-version retail|classic` (or the `--classic` shorthand) selects the
+  namespace class infix. `--locale` passes through (default `en_US`, not validated).
+
+  Auth is OAuth client-credentials, discovered in this order (matching `warcraftlogs`):
   1. repo `.env.local`
   2. `~/.config/warcraft/providers/blizzard-api.env`
   3. process environment
 
-  Set `BLIZZARD_CLIENT_ID` and `BLIZZARD_CLIENT_SECRET`. `doctor` reports whether credentials are configured and where they came from; it never prints the secret. Token/state persistence uses `warcraft_core.auth` at `~/.local/state/warcraft/providers/blizzard-api.json`.
-- Region is region/namespace-aware by design but **routing is deferred**: `doctor` surfaces `BLIZZARD_REGION` if set, but no endpoint uses it yet.
-- The wrapper registers `blizzard-api` with `expansion_mode=none` (deferred) so it does not join expansion fanout until endpoint routing exists.
+  Set `BLIZZARD_CLIENT_ID` and `BLIZZARD_CLIENT_SECRET`. The token is fetched once and cached in
+  shared state at `~/.local/state/warcraft/providers/blizzard-api-client-credentials.json`, keyed by
+  `sha256(region, id, secret)` and reused until ~60s before expiry. `doctor` never prints the secret.
+- The wrapper registers `blizzard-api` with `expansion_mode=none`: Blizzard's region/namespace model
+  is not the wrapper's expansion axis, so it stays out of expansion fanout.
 
-Deferred to a follow-up: the live OAuth token exchange, one Game Data + one Profile endpoint, region/namespace routing, and contract fixtures.
+> **Pending one-time live confirmation.** The endpoint hosts, OAuth token URL, and namespace strings
+> follow documented Blizzard API conventions but have **not** been confirmed against live endpoints in
+> this repo. `doctor` carries this under `region.verification`, and every command payload carries
+> `provenance.verified: false`. Run
+> `BLIZZARD_LIVE_TESTS=1 pytest -q -m live tests/test_blizzard_api_live.py` with real credentials to
+> confirm them. CN endpoints are especially unconfirmed; classic namespace strings are best-effort.
+
+Deferred: shared identity payloads (AUR-458); `search`/`resolve`; classic-era / Season-of-Discovery
+namespaces (`classic1x`); auction-house / connected-realm / spell surfaces; user-auth flows.
 
 ## What Can Reuse Shared Code
 

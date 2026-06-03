@@ -22,8 +22,11 @@ PACKAGE_SRC_DIRS = (
     ROOT / "packages" / "warcraftlogs-cli" / "src",
     ROOT / "packages" / "raidbots-cli" / "src",
     ROOT / "packages" / "blizzard-api-cli" / "src",
+    ROOT / "packages" / "curseforge-cli" / "src",
 )
 LIVE_TEST_ENV_BY_FILE = {
+    "test_blizzard_api_live.py": "BLIZZARD_LIVE_TESTS",
+    "test_curseforge_live.py": "CURSEFORGE_LIVE_TESTS",
     "test_icy_veins_live.py": "ICY_VEINS_LIVE_TESTS",
     "test_live_endpoint_contracts.py": "WOWHEAD_LIVE_TESTS",
     "test_live_integration.py": "WOWHEAD_LIVE_TESTS",

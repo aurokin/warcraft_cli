@@ -22,7 +22,7 @@ from warcraft_core.analytics import (
 )
 
 from wowprogress_cli.client import WowProgressClient
-from wowprogress_cli.identity import _leaderboard_entry_snapshot, _progress_snapshot
+from wowprogress_cli.identity import _guild_history_tier_row, _leaderboard_entry_snapshot, _progress_snapshot
 
 
 def _sample_pve_leaderboard(
@@ -204,9 +204,8 @@ def _citations_payload(meta: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _world_rank_value(entry: dict[str, Any]) -> int | None:
-    progress_ranks = entry.get("progress_ranks") if isinstance(entry.get("progress_ranks"), dict) else {}
-    raw = progress_ranks.get("world")
+def _rank_to_int(raw: Any) -> int | None:
+    """Parse a WowProgress rank value (int, ``"19"``, or comma-grouped ``"1,234"``) to int."""
     if isinstance(raw, int):
         return raw
     if isinstance(raw, str):
@@ -214,6 +213,11 @@ def _world_rank_value(entry: dict[str, Any]) -> int | None:
         if cleaned.isdigit():
             return int(cleaned)
     return None
+
+
+def _world_rank_value(entry: dict[str, Any]) -> int | None:
+    progress_ranks = entry.get("progress_ranks") if isinstance(entry.get("progress_ranks"), dict) else {}
+    return _rank_to_int(progress_ranks.get("world"))
 
 
 def _guild_profile_matches_filters(
@@ -564,3 +568,83 @@ def _load_pve_guild_profile_sample(
         "limit": limit,
     }
     return entries, meta, leaderboard, query
+
+
+# --- guild history trajectory ---------------------------------------------------------------
+
+def _tier_sort_key(tier: dict[str, Any]) -> int:
+    """Numeric suffix of a ``tierNN`` key for chronological ordering (higher = more recent)."""
+    key = str(tier.get("tier_key") or "")
+    suffix = key.removeprefix("tier")
+    return int(suffix) if suffix.isdigit() else -1
+
+
+def _sort_history_tiers(tier_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Normalize raw history rows and order them oldest -> newest by tier number.
+
+    Tiers without a numeric ``tierNN`` key sort first (source order preserved among them) so the
+    delta chain stays stable for unexpected fixtures.
+    """
+    normalized = [_guild_history_tier_row(row) for row in tier_rows if isinstance(row, dict)]
+    return sorted(normalized, key=_tier_sort_key)
+
+
+def _rank_change(previous: dict[str, Any] | None, current: dict[str, Any]) -> dict[str, Any]:
+    """Per-axis world/region/realm rank change vs the previous tier.
+
+    Ranks are "lower is better"; ``improved`` is True when the rank number decreased. Any axis with a
+    non-numeric value on either side yields ``delta``/``improved`` of None.
+    """
+    prev_ranks = (previous or {}).get("final_ranks") if isinstance((previous or {}).get("final_ranks"), dict) else {}
+    cur_ranks = current.get("final_ranks") if isinstance(current.get("final_ranks"), dict) else {}
+    change: dict[str, Any] = {}
+    for axis in ("world", "region", "realm"):
+        before = _rank_to_int((prev_ranks or {}).get(axis))
+        after = _rank_to_int((cur_ranks or {}).get(axis))
+        if before is None or after is None:
+            change[axis] = {"from": before, "to": after, "delta": None, "improved": None}
+        else:
+            delta = after - before
+            change[axis] = {"from": before, "to": after, "delta": delta, "improved": delta < 0}
+    return change
+
+
+def _item_level_change(previous: dict[str, Any] | None, current: dict[str, Any]) -> dict[str, Any]:
+    before = (previous or {}).get("item_level_average")
+    after = current.get("item_level_average")
+    if isinstance(before, (int, float)) and isinstance(after, (int, float)):
+        return {"from": before, "to": after, "delta": round(float(after) - float(before), 2)}
+    return {"from": before, "to": after, "delta": None}
+
+
+def _trajectory_row(previous: dict[str, Any] | None, current: dict[str, Any]) -> dict[str, Any]:
+    delta = None
+    if previous is not None:
+        delta = {
+            "previous_tier_key": previous.get("tier_key"),
+            "previous_raid": previous.get("raid"),
+            "rank_change": _rank_change(previous, current),
+            "item_level_change": _item_level_change(previous, current),
+        }
+    return {
+        "tier_key": current.get("tier_key"),
+        "raid": current.get("raid"),
+        "difficulty": current.get("difficulty"),
+        "current": current.get("current"),
+        "progress": current.get("progress"),
+        "final_ranks": current.get("final_ranks"),
+        "item_level_average": current.get("item_level_average"),
+        "page_url": current.get("page_url"),
+        "delta_vs_previous": delta,
+    }
+
+
+def _history_trajectory_rows(tier_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Tier-over-tier trajectory (oldest -> newest), each row carrying its delta vs the prior tier."""
+    ordered = _sort_history_tiers(tier_rows)
+    rows: list[dict[str, Any]] = []
+    previous: dict[str, Any] | None = None
+    for tier in ordered:
+        rows.append(_trajectory_row(previous, tier))
+        previous = tier
+    return rows

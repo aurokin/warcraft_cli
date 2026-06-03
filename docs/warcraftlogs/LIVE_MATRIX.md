@@ -24,6 +24,9 @@ Each matrix row invokes one CLI invocation and asserts:
 - `command` and the canonical envelope key from `docs/warcraftlogs/PAYLOAD_KEYS.md`
 - Non-empty payload data where the fixture should return rows
 
+Sampled-cohort cases (for example `spec-kill-samples`) assert envelope shape only: a small
+spec-filtered sample can legitimately be empty, so they declare no non-empty leaf.
+
 The matrix is separate from `make test-live` so it can be throttled or scheduled without running every provider live suite.
 
 ## CI

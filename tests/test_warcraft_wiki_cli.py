@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 
 from typer.testing import CliRunner
 from warcraft_wiki_cli.client import WarcraftWikiAPIError
@@ -277,6 +278,8 @@ def test_warcraft_wiki_article_and_export(monkeypatch, tmp_path) -> None:
     export_payload = json.loads(export_result.stdout)
     assert export_payload["article"]["slug"] == "world-of-warcraft-api"
     assert export_payload["counts"]["sections"] == 1
+    manifest = json.loads((export_dir / "manifest.json").read_text())
+    assert datetime.fromisoformat(manifest["exported_at"].replace("Z", "+00:00")).tzinfo is not None
 
     article_full_result = runner.invoke(warcraft_wiki_app, ["article-full", "World of Warcraft API"])
     assert article_full_result.exit_code == 0

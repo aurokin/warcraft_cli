@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 
 from warcraft_content.article_bundle import (
@@ -333,6 +334,10 @@ def test_write_and_query_article_bundle_for_method_shape(tmp_path: Path) -> None
         "analysis_surfaces": 1,
     }
     assert manifest["files"]["page_files_json"] == "page-files.json"
+    # AUR-386: bundles carry a parseable ISO-8601 UTC freshness anchor (export_version unchanged).
+    assert manifest["export_version"] == 1
+    exported_at = datetime.fromisoformat(manifest["exported_at"].replace("Z", "+00:00"))
+    assert exported_at.tzinfo is not None
     bundle = load_article_bundle(export_dir)
     assert bundle["page_files"][0]["section_slug"] == "introduction"
     result = query_article_bundle(

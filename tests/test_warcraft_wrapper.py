@@ -8,6 +8,7 @@ import typer
 from method_cli.main import app as method_app
 from typer.testing import CliRunner
 from warcraft_cli.main import app as warcraft_app
+from warcraft_cli.providers import PROVIDERS, get_provider
 from warcraft_content.article_bundle import write_article_bundle
 from warcraftlogs_cli.main import app as warcraftlogs_app
 from wowhead_cli.main import app as wowhead_app
@@ -42,6 +43,10 @@ def _simc_build_input_summary(args: list[str]) -> dict[str, object]:
 
 
 class _EndToEndWarcraftLogsClient:
+    _finished_report_ttl = 86400
+    _report_ttl = 60
+    _cache_store = object()  # non-None: provenance emits cache-on TTLs
+
     def close(self) -> None:
         return None
 
@@ -326,7 +331,7 @@ def test_warcraft_doctor_reports_ready_and_stubbed_providers() -> None:
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["wrapper"]["provider_count"] == 10
+    assert payload["wrapper"]["provider_count"] == 11
     providers = {row["provider"]: row for row in payload["providers"]}
     assert providers["wowhead"]["status"] == "ready"
     assert providers["method"]["status"] == "ready"
@@ -362,6 +367,139 @@ def test_warcraft_doctor_reports_ready_and_stubbed_providers() -> None:
     assert providers["blizzard-api"]["expansion_support"]["mode"] == "none"
     assert providers["blizzard-api"]["wrapper_surfaces"]["search"]["status"] == "coming_soon"
     assert providers["blizzard-api"]["details"]["capabilities"]["doctor"] == "ready"
+    assert providers["curseforge"]["status"] == "partial"
+    assert providers["curseforge"]["auth"]["required"] is True
+    assert providers["curseforge"]["auth"]["flow"] == "api_key"
+    assert providers["curseforge"]["expansion_support"]["mode"] == "none"
+    assert providers["curseforge"]["wrapper_surfaces"]["search"]["status"] == "coming_soon"
+    assert providers["curseforge"]["details"]["capabilities"]["addon"] == "ready"
+
+
+def _provider_doctor_capabilities(registration) -> dict[str, str]:  # noqa: ANN001
+    """Invoke a provider CLI's own doctor and return its reported capabilities map."""
+    result = runner.invoke(registration.app, list(registration.doctor_args))
+    assert result.exit_code == 0, f"{registration.name} doctor exited {result.exit_code}"
+    payload = json.loads(result.stdout)
+    capabilities = payload.get("capabilities")
+    assert isinstance(capabilities, dict), f"{registration.name} doctor emitted no capabilities map"
+    return capabilities
+
+
+def test_wrapper_capabilities_match_each_cli_doctor_for_search_and_resolve() -> None:
+    # Registry-vs-CLI parity: the wrapper must never advertise a search/resolve
+    # surface more capable than the provider CLI itself reports. (The `doctor`
+    # surface is intentionally excluded: only warcraftlogs/simc/blizzard-api emit
+    # a `doctor` capability key, so it is not a parity surface.)
+    overstated = {"coming_soon", "not_supported", "ready_explicit_report_only"}
+    assert len(PROVIDERS) == 11
+    for registration in PROVIDERS:
+        capabilities = _provider_doctor_capabilities(registration)
+        for surface in ("search", "resolve"):
+            wrapper_status = registration.wrapper_capabilities[surface]
+            cli_status = capabilities.get(surface)
+            assert cli_status is not None, f"{registration.name} doctor missing `{surface}` capability"
+            assert wrapper_status == cli_status, (
+                f"{registration.name} wrapper advertises {surface}={wrapper_status!r} "
+                f"but the CLI reports {cli_status!r}"
+            )
+            if wrapper_status == "ready":
+                assert cli_status not in overstated, (
+                    f"{registration.name} overstates {surface} as ready while the CLI reports {cli_status!r}"
+                )
+
+
+def test_every_provider_live_file_is_registered_for_its_own_flag() -> None:
+    # Each `test_<provider>_live.py` must declare its <PROVIDER>_LIVE_TESTS gate in conftest's
+    # LIVE_TEST_ENV_BY_FILE. Otherwise the collection hook falls back to WOWHEAD_LIVE_TESTS, so the
+    # advertised `<FLAG>=1 pytest -m live tests/test_<provider>_live.py` silently skips unless the
+    # unrelated Wowhead flag is also set (regression originally caught on the blizzard live suite).
+    import conftest
+
+    disk = {path.name for path in (Path(__file__).parent).glob("test_*_live.py")}
+    unregistered = sorted(disk - set(conftest.LIVE_TEST_ENV_BY_FILE))
+    assert not unregistered, (
+        "provider live files missing from LIVE_TEST_ENV_BY_FILE (they would fall back to "
+        f"WOWHEAD_LIVE_TESTS): {unregistered}"
+    )
+
+
+def test_coming_soon_surfaces_emit_structured_stub_not_click_error() -> None:
+    # If a provider's own doctor advertises search/resolve as coming_soon, that command must exist
+    # and emit a structured coming_soon envelope (exit 0), never Click's "No such command" (exit 2).
+    # Regression originally caught on curseforge + blizzard-api search/resolve; simc is the precedent.
+    for registration in PROVIDERS:
+        capabilities = _provider_doctor_capabilities(registration)
+        for surface in ("search", "resolve"):
+            if capabilities.get(surface) != "coming_soon":
+                continue
+            result = runner.invoke(registration.app, [surface, "probe-query"])
+            assert result.exit_code == 0, (
+                f"{registration.name} advertises {surface}=coming_soon but `{surface}` exited "
+                f"{result.exit_code} (Click 'No such command'?): {result.stdout or result.stderr}"
+            )
+            payload = json.loads(result.stdout)
+            assert payload.get("coming_soon") is True, (
+                f"{registration.name} {surface} did not emit a structured coming_soon stub"
+            )
+
+
+def _stub_non_warcraftlogs_fanout(monkeypatch) -> None:  # noqa: ANN001
+    """Run the real warcraftlogs search/resolve; return empty payloads for everyone else."""
+    import warcraft_cli.main as wrapper_main
+
+    real_search = wrapper_main.provider_search
+    real_resolve = wrapper_main.provider_resolve
+
+    def only_wcl_search(provider: str, query: str, *, limit: int = 5, expansion=None):  # noqa: ANN001, ANN202
+        if provider == "warcraftlogs":
+            return real_search(provider, query, limit=limit, expansion=expansion)
+        return {"provider": provider, "exit_code": 0, "payload": {"provider": provider, "count": 0, "results": []}}
+
+    def only_wcl_resolve(provider: str, query: str, *, limit: int = 5, expansion=None):  # noqa: ANN001, ANN202
+        if provider == "warcraftlogs":
+            return real_resolve(provider, query, limit=limit, expansion=expansion)
+        return {"provider": provider, "exit_code": 0, "payload": {"provider": provider, "resolved": False, "match": None}}
+
+    monkeypatch.setattr("warcraft_cli.main.provider_search", only_wcl_search)
+    monkeypatch.setattr("warcraft_cli.main.provider_resolve", only_wcl_resolve)
+
+
+def test_warcraft_search_keeps_warcraftlogs_as_explicit_report_only_discovery_hint(monkeypatch) -> None:
+    _stub_non_warcraftlogs_fanout(monkeypatch)
+    # "Liquid" is a guild name, not a report code (REPORT_CODE_PATTERN needs a digit),
+    # so warcraftlogs must return its structured discovery hint, not a fabricated match.
+    result = runner.invoke(warcraft_app, ["search", "Liquid"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+
+    assert get_provider("warcraftlogs").wrapper_capabilities["search"] == "ready_explicit_report_only"
+    assert "warcraftlogs" in payload["included_providers"]
+    assert "warcraftlogs" not in {row["provider"] for row in payload["excluded_providers"]}
+
+    wcl = {row["provider"]: row for row in payload["providers"]}["warcraftlogs"]["payload"]
+    assert wcl["count"] == 0
+    assert "explicit report URL or a bare report code" in wcl["message"]
+    assert wcl["supported_inputs"]
+    assert wcl["suggested_commands"]
+    # Never surface a fabricated resolved match for a non-report query.
+    assert all(row["provider"] != "warcraftlogs" for row in payload["results"])
+
+
+def test_warcraft_resolve_never_fabricates_a_warcraftlogs_match_for_non_report_query(monkeypatch) -> None:
+    _stub_non_warcraftlogs_fanout(monkeypatch)
+    result = runner.invoke(warcraft_app, ["resolve", "Liquid"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+
+    assert "warcraftlogs" in payload["included_providers"]
+    wcl = {row["provider"]: row for row in payload["providers"]}["warcraftlogs"]["payload"]
+    assert wcl["resolved"] is False
+    assert wcl["match"] is None
+    assert wcl["supported_inputs"]
+    assert wcl["suggested_commands"]
+    # The wrapper must not resolve to warcraftlogs off a non-report query.
+    assert payload["provider"] != "warcraftlogs"
+    assert payload["resolved"] is False
 
 
 def test_warcraft_doctor_reports_expansion_filtering_state() -> None:
@@ -382,7 +520,55 @@ def test_warcraft_doctor_reports_expansion_filtering_state() -> None:
         "simc",
         "raidbots",
         "blizzard-api",
+        "curseforge",
     }
+
+
+def test_warcraft_passthrough_relaxes_none_expansion_provider_with_advisory() -> None:
+    # blizzard-api is expansion_mode=none: a wrapper --expansion has no semantics to honor,
+    # so the command is passed through unchanged with an advisory note (relax-to-passthrough),
+    # not rejected with exit 1.
+    result = runner.invoke(warcraft_app, ["--expansion", "wotlk", "blizzard", "doctor"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    # provider payload preserved verbatim
+    assert payload["ok"] is True
+    assert payload["provider"] == "blizzard-api"
+    assert payload["capabilities"]["doctor"] == "ready"
+    # additive advisory note
+    assert payload["expansion_filter"] == "passthrough_no_expansion_semantics"
+    assert payload["expansion_advisory"]["requested_expansion"] == "wotlk"
+    assert payload["expansion_advisory"]["provider_expansion_mode"] == "none"
+
+
+def test_warcraft_passthrough_relaxes_none_expansion_simc() -> None:
+    # Use `simc doctor` (fully offline, deterministic) rather than `simc version`, which
+    # depends on a built SimC binary that CI does not provide.
+    result = runner.invoke(warcraft_app, ["--expansion", "wotlk", "simc", "doctor"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["provider"] == "simc"
+    assert payload["capabilities"]["doctor"] == "ready"
+    assert payload["expansion_filter"] == "passthrough_no_expansion_semantics"
+    assert payload["expansion_advisory"]["provider_expansion_mode"] == "none"
+
+
+def test_warcraft_passthrough_rejects_fixed_provider_expansion_mismatch() -> None:
+    # Fixed/profiled providers asked for an unsupported expansion are a genuine mismatch
+    # and still hard-error (only none-expansion providers relax to passthrough).
+    result = runner.invoke(warcraft_app, ["--expansion", "wotlk", "method", "search", "foo"])
+    assert result.exit_code == 1
+    payload = json.loads(result.stderr)
+    assert payload["error"]["code"] == "unsupported_provider_expansion"
+    assert payload["provider"] == "method"
+
+
+def test_warcraft_passthrough_without_expansion_has_no_advisory() -> None:
+    result = runner.invoke(warcraft_app, ["blizzard", "doctor"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert "expansion_filter" not in payload
+    assert "expansion_advisory" not in payload
 
 
 def test_warcraft_doctor_reports_retail_filter_state() -> None:
@@ -402,7 +588,7 @@ def test_warcraft_doctor_reports_retail_filter_state() -> None:
         "wowprogress",
         "raidbots",
     }
-    assert {row["provider"] for row in payload["excluded_providers"]} == {"simc", "blizzard-api"}
+    assert {row["provider"] for row in payload["excluded_providers"]} == {"simc", "blizzard-api", "curseforge"}
 
 
 def test_warcraft_doctor_reports_worktree_runtime(monkeypatch, tmp_path) -> None:
@@ -483,7 +669,7 @@ def test_warcraft_search_fans_out_across_providers(monkeypatch) -> None:
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["provider_count"] == 10
+    assert payload["provider_count"] == 11
     assert payload["count"] == 1
     assert payload["results"][0]["provider"] == "wowhead"
     providers = {row["provider"]: row for row in payload["providers"]}
@@ -503,6 +689,8 @@ def test_warcraft_search_fans_out_across_providers(monkeypatch) -> None:
     assert excluded["raidbots"]["surface_support"]["status"] == "not_supported"
     assert "blizzard-api" not in providers
     assert excluded["blizzard-api"]["surface_support"]["status"] == "coming_soon"
+    assert "curseforge" not in providers
+    assert excluded["curseforge"]["surface_support"]["status"] == "coming_soon"
     assert providers["wowhead"]["payload"]["results"][0]["name"] == "Thunderfury"
 
 
@@ -549,6 +737,18 @@ def test_warcraft_guide_compare_returns_cross_provider_bundle_packet(tmp_path: P
     assert payload["build_references"]["shared"] == [
         "monk::mistweaver::ABC123::https://www.wowhead.com/talent-calc/monk/mistweaver/ABC123"
     ]
+    # AUR-386: additive freshness + scope/evidence metadata; existing keys preserved.
+    assert payload["citations"]["bundle_paths"]  # preserved
+    assert payload["freshness"]["status"] == "fresh"
+    assert payload["freshness"]["bundle_count"] == 2
+    assert payload["freshness"]["fresh_count"] == 2
+    evidence = payload["comparison_evidence"]
+    assert evidence["compared_bundle_count"] == 2
+    assert evidence["providers"] == ["method", "icy-veins"]
+    assert evidence["matching_rules"]["section_evidence"] == "exact_normalized_section_title"
+    assert evidence["freshness"]["status"] == "fresh"
+    assert len(evidence["bundle_freshness"]) == 2
+    assert all(row["freshness"]["status"] == "fresh" for row in evidence["bundle_freshness"])
 
 
 def test_warcraft_guide_compare_query_orchestrates_resolve_export_and_compare(
@@ -622,6 +822,11 @@ def test_warcraft_guide_compare_query_orchestrates_resolve_export_and_compare(
     assert payload["exported_bundle_count"] == 2
     assert payload["comparison"]["kind"] == "guide_bundle_comparison"
     assert payload["comparison"]["compared_bundle_count"] == 2
+    # AUR-386: guide-compare-query's embedded comparison carries the same freshness + evidence
+    # packet as the direct guide-compare command (shared builder).
+    assert payload["comparison"]["freshness"]["status"] in {"fresh", "stale", "unknown"}
+    assert "comparison_evidence" in payload["comparison"]
+    assert payload["comparison"]["comparison_evidence"]["compared_bundle_count"] == 2
     assert all(row["status"] == "exported" for row in payload["provider_results"])
     assert {row["candidate"]["selection_source"] for row in payload["provider_results"]} == {"resolve"}
 
@@ -1138,8 +1343,10 @@ def test_warcraft_guide_builds_simc_reads_bundle_build_refs(monkeypatch, tmp_pat
     assert payload["kind"] == "guide_builds_simc_handoff"
     assert payload["source"]["kind"] == "bundle"
     assert payload["provenance"]["explicit_build_reference_only"] is True
-    assert payload["freshness"]["status"] == "unknown"
-    assert payload["freshness"]["reason"] == "bundle_manifest_has_no_export_timestamp"
+    # write_article_bundle now stamps exported_at, so the single-bundle handoff has a real anchor (AUR-386).
+    assert payload["freshness"]["status"] == "known"
+    assert payload["freshness"]["reason"] == "bundle_manifest_exported_at"
+    assert payload["freshness"]["sampled_at"] is not None
     assert payload["citations"]["build_reference_urls"] == ["https://www.wowhead.com/talent-calc/monk/mistweaver/ABC123"]
     assert payload["build_reference_count"] == 1
     assert payload["summary"]["returned_build_count"] == 1
@@ -1642,6 +1849,7 @@ def test_warcraft_search_expansion_filter_excludes_nonmatching_providers(monkeyp
         "simc",
         "raidbots",
         "blizzard-api",
+        "curseforge",
     }
     excluded = {row["provider"]: row["expansion_support"]["exclusion_reason"] for row in payload["excluded_providers"]}
     assert excluded["method"] == "provider_fixed_to_other_expansion"
@@ -1737,7 +1945,7 @@ def test_warcraft_search_retail_filter_keeps_fixed_retail_providers_and_excludes
         "warcraft-wiki",
         "wowprogress",
     }
-    assert {row["provider"] for row in payload["excluded_providers"]} == {"simc", "raidbots", "blizzard-api"}
+    assert {row["provider"] for row in payload["excluded_providers"]} == {"simc", "raidbots", "blizzard-api", "curseforge"}
     results = {row["provider"] for row in payload["results"]}
     assert {"method", "icy-veins"} & results
 
@@ -1786,7 +1994,7 @@ def test_warcraft_resolve_retail_filter_keeps_fixed_retail_profile_provider(monk
         "warcraft-wiki",
         "wowprogress",
     }
-    assert {row["provider"] for row in payload["excluded_providers"]} == {"simc", "raidbots", "blizzard-api"}
+    assert {row["provider"] for row in payload["excluded_providers"]} == {"simc", "raidbots", "blizzard-api", "curseforge"}
 
 
 def test_warcraft_search_prefers_profile_provider_for_structured_guild_queries(monkeypatch) -> None:
@@ -1952,6 +2160,7 @@ def test_warcraft_resolve_expansion_filter_blocks_retail_only_resolution(monkeyp
         "simc",
         "raidbots",
         "blizzard-api",
+        "curseforge",
     }
 
 
@@ -2382,6 +2591,10 @@ def test_warcraft_packet_handoff_from_warcraftlogs_to_simc(monkeypatch, tmp_path
     validated_packet_path = tmp_path / "validated-packet.json"
 
     class _PacketClient:
+        _finished_report_ttl = 86400
+        _report_ttl = 60
+        _cache_store = object()  # non-None: provenance emits cache-on TTLs
+
         def report_player_details(self, **kwargs):  # noqa: ANN003, ANN201
             return {}
 

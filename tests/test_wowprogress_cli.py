@@ -61,6 +61,8 @@ def test_wowprogress_doctor_reports_phase_one_capabilities() -> None:
     assert payload["transport"]["mode"] == "browser_fingerprint_http"
     assert payload["capabilities"]["guild"] == "ready"
     assert payload["capabilities"]["guild_history"] == "ready"
+    assert payload["capabilities"]["guild_snapshot"] == "ready"
+    assert payload["capabilities"]["history_trajectory"] == "ready"
     assert payload["capabilities"]["search"] == "ready"
     assert payload["capabilities"]["sample_pve_leaderboard"] == "ready"
 
@@ -373,6 +375,140 @@ def test_wowprogress_guild_history_and_ranks_commands(monkeypatch) -> None:
     ranks = json.loads(ranks_result.stdout)
     assert ranks["kind"] == "guild_ranks"
     assert ranks["tiers"][0]["final_ranks"]["realm"] == "2"
+
+
+def test_wowprogress_fetch_guild_history_difficulty_token(monkeypatch) -> None:
+    # Regression (AUR-392): raw history rows must carry the parsed difficulty token ("M"),
+    # not the full "8/8 (M)" summary string; malformed/empty progress yields None.
+    def fake_variants(self, *, region, realm, name):  # noqa: ANN001
+        return {
+            "guild": {"name": name, "region": region, "realm": realm},
+            "progress": {"summary": "8/8 (M)", "ranks": {"world": "19"}},
+            "history_links": [
+                {"tier_key": "tier34", "raid": "Liberation of Undermine", "page_url": "https://wp/t34", "current": True},
+                {"tier_key": "tier33", "raid": "Nerub-ar Palace", "page_url": "https://wp/t33", "current": False},
+            ],
+            "citations": {"page": "https://wp/guild"},
+        }
+
+    def fake_page_url(self, url):  # noqa: ANN001
+        if url.endswith("t34"):
+            return {
+                "progress": {"summary": "8/8 (M)", "ranks": {"world": "19", "region": "6", "realm": "2"}},
+                "item_level": {"average": 732.1, "ranks": {"world": "1"}},
+                "encounters": {"count": 8, "items": [{"first_kill_at": "Mar 10, 2025 03:35"}]},
+            }
+        return {"progress": {"summary": "", "ranks": {}}, "item_level": {}, "encounters": {"count": 0, "items": []}}
+
+    monkeypatch.setattr(WowProgressClient, "fetch_guild_page_variants", fake_variants)
+    monkeypatch.setattr(WowProgressClient, "fetch_guild_page_url", fake_page_url)
+    client = WowProgressClient()
+    result = client.fetch_guild_history(region="us", realm="mal-ganis", name="gn")
+
+    assert result["history"][0]["difficulty"] == "M"
+    assert result["history"][0]["progress"] == "8/8 (M)"  # raw summary preserved separately
+    assert result["history"][1]["difficulty"] is None  # malformed/empty progress -> None token
+
+
+def _snapshot_history_payload() -> dict:
+    return {
+        "provider": "wowprogress",
+        "kind": "guild_history",
+        "guild": {"name": "gn", "region": "us", "realm": "Mal'Ganis"},
+        "current_progress": {"summary": "8/8 (M)", "ranks": {"world": "19", "region": "6", "realm": "2"}},
+        "current_item_level": {"average": 732.1, "group_size": "M", "ranks": {"world": "1", "region": "1", "realm": "1"}},
+        "current_encounters": {"count": 8, "items": [{"first_kill_at": "Mar 10, 2025"}]},
+        "history": [
+            {
+                "tier_key": "tier34", "raid": "Liberation of Undermine", "current": True,
+                "progress": "8/8 (M)", "progress_ranks": {"world": "19", "region": "6", "realm": "2"},
+                "item_level_average": 732.1, "item_level_ranks": {"world": "1", "region": "1", "realm": "1"},
+                "encounter_count": 8, "encounters": [{"first_kill_at": "Mar 10, 2025"}],
+                "page_url": "https://wp/guild/rating.tier34",
+            },
+            {
+                "tier_key": "tier33", "raid": "Nerub-ar Palace", "current": False,
+                "progress": "8/8 (M)", "progress_ranks": {"world": "31", "region": "9", "realm": "3"},
+                "item_level_average": 489.0, "item_level_ranks": {"world": "5"},
+                "encounter_count": 8, "encounters": [{"first_kill_at": "Aug 20, 2024"}],
+                "page_url": "https://wp/guild/rating.tier33",
+            },
+        ],
+        "citations": {"page": "https://wp/guild"},
+    }
+
+
+def test_wowprogress_guild_snapshot_command(monkeypatch) -> None:
+    monkeypatch.setattr("wowprogress_cli.main.WowProgressClient.fetch_guild_history", lambda self, **kwargs: _snapshot_history_payload())
+    result = runner.invoke(wowprogress_app, ["guild-snapshot", "us", "Mal'Ganis", "gn"])
+    assert result.exit_code == 0, result.output
+
+    payload = json.loads(result.stdout)
+    assert payload["provider"] == "wowprogress"
+    assert payload["kind"] == "guild_snapshot"
+    assert payload["query"] == {"region": "us", "realm": "mal-ganis", "name": "gn"}
+    assert payload["progress"]["ranks"]["world"] == "19"
+    assert payload["item_level"]["average"] == 732.1  # guild-page shape {average, group_size, ranks}
+    assert payload["encounters"]["count"] == 8
+    assert len(payload["rank_series"]) == 2
+    assert payload["citations"]["page"] == "https://wp/guild"
+    assert payload["freshness"]["sampled_at"]
+    assert payload["freshness"]["cache_ttl_seconds"] >= 1
+
+
+def test_wowprogress_history_trajectory_command(monkeypatch) -> None:
+    monkeypatch.setattr("wowprogress_cli.main.WowProgressClient.fetch_guild_history", lambda self, **kwargs: _snapshot_history_payload())
+    result = runner.invoke(wowprogress_app, ["history-trajectory", "us", "Mal'Ganis", "gn"])
+    assert result.exit_code == 0, result.output
+
+    payload = json.loads(result.stdout)
+    assert payload["kind"] == "history_trajectory"
+    assert payload["count"] == 2
+    # Ordered oldest -> newest: tier33 first (no delta), tier34 second (delta vs tier33).
+    first, second = payload["tiers"]
+    assert first["tier_key"] == "tier33"
+    assert first["delta_vs_previous"] is None
+    assert first["page_url"] == "https://wp/guild/rating.tier33"
+    assert second["tier_key"] == "tier34"
+    delta = second["delta_vs_previous"]
+    assert delta["previous_tier_key"] == "tier33"
+    # World rank 31 -> 19 is a numerically lower (better) rank => improved.
+    assert delta["rank_change"]["world"] == {"from": 31, "to": 19, "delta": -12, "improved": True}
+    assert delta["item_level_change"]["delta"] == 243.1
+    assert len(payload["notes"]) >= 2
+    assert any("different raids" in note for note in payload["notes"])
+
+
+def test_wowprogress_guild_snapshot_empty_history_keeps_current_state(monkeypatch) -> None:
+    # Empty history series, but the main guild page still has current item level / encounters:
+    # the snapshot must keep them (regression for the single-fetch derivation losing current state).
+    empty = {
+        "provider": "wowprogress", "kind": "guild_history", "guild": {"name": "gn"},
+        "current_progress": {"summary": "8/8 (M)", "ranks": {"world": "19"}},
+        "current_item_level": {"average": 489.0, "group_size": "M", "ranks": {"world": "5"}},
+        "current_encounters": {"count": 8, "items": []},
+        "history": [], "citations": {"page": "https://wp/guild"},
+    }
+    monkeypatch.setattr("wowprogress_cli.main.WowProgressClient.fetch_guild_history", lambda self, **kwargs: empty)
+
+    snap = json.loads(runner.invoke(wowprogress_app, ["guild-snapshot", "us", "Mal'Ganis", "gn"]).stdout)
+    assert snap["kind"] == "guild_snapshot"
+    assert snap["rank_series"] == []
+    assert snap["item_level"]["average"] == 489.0  # retained despite empty history
+    assert snap["encounters"]["count"] == 8
+
+    traj = json.loads(runner.invoke(wowprogress_app, ["history-trajectory", "us", "Mal'Ganis", "gn"]).stdout)
+    assert traj["count"] == 0
+    assert traj["tiers"] == []
+
+
+def test_wowprogress_history_trajectory_single_tier(monkeypatch) -> None:
+    one = _snapshot_history_payload()
+    one["history"] = one["history"][:1]  # only tier34
+    monkeypatch.setattr("wowprogress_cli.main.WowProgressClient.fetch_guild_history", lambda self, **kwargs: one)
+    payload = json.loads(runner.invoke(wowprogress_app, ["history-trajectory", "us", "Mal'Ganis", "gn"]).stdout)
+    assert payload["count"] == 1
+    assert payload["tiers"][0]["delta_vs_previous"] is None
 
 
 def test_wowprogress_search_normalizes_multi_word_realm(monkeypatch) -> None:

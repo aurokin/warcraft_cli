@@ -79,10 +79,51 @@ def boss_kill_row(
     }
 
 
-def sampled_cross_report_freshness() -> dict[str, Any]:
+def sampled_cross_report_freshness(cache_ttl_seconds: int | None = None) -> dict[str, Any]:
     return {
         "sampled_at": utc_now_z(),
-        "cache_ttl_seconds": None,
+        "cache_ttl_seconds": cache_ttl_seconds,
+    }
+
+
+def sampled_cache_provenance(cache_ttl_seconds: int | None) -> dict[str, Any]:
+    """Cache provenance for a sampled cohort.
+
+    Sampling discovers reports and excludes live ones before scanning, so the
+    cohort is always finished reports cached under the finished-report TTL.
+
+    Caveat: within the short live→finished cache window (see docs/warcraftlogs/CACHING.md),
+    a per-report detail fetch can transiently serve a still-cached live entry. The cohort
+    intent is finished reports; the window is bounded by the short report TTL.
+    """
+    return {
+        "finished": True,
+        "live": False,
+        "cache_ttl_seconds": cache_ttl_seconds,
+        "source": "sampled_finished_reports",
+    }
+
+
+def sampled_sample_scope(
+    *,
+    ranking_basis: str,
+    query: dict[str, Any],
+    returned: int,
+    excluded: int,
+    truncated: bool,
+) -> dict[str, Any]:
+    """Consolidated scope block: ranking basis + cohort filters + returned/excluded counts.
+
+    ``filters`` is a copy of the full ``query`` already emitted on the payload — every
+    cohort-shaping input (boss/zone/difficulty/spec/kill-time, guild scope, time window,
+    report-page budget) is preserved so two runs with different scope never look identical.
+    """
+    return {
+        "ranking_basis": ranking_basis,
+        "filters": dict(query) if isinstance(query, dict) else {},
+        "returned": returned,
+        "excluded": excluded,
+        "truncated": truncated,
     }
 
 
@@ -205,7 +246,7 @@ def _matching_players_for_fight(
             include_combatant_info=True,
             kill_type="Kills",
         ),
-        ttl_override=client._guild_ttl,
+        ttl_override=client._finished_report_ttl,
     )
     matching_players = matching_spec_players(details_report, spec_name=spec_name)
     if not matching_players:
@@ -233,7 +274,7 @@ def _scan_finished_reports_for_boss_kills(
             code=str(report.get("code") or ""),
             difficulty=difficulty,
             allow_unlisted=False,
-            ttl_override=client._guild_ttl,
+            ttl_override=client._finished_report_ttl,
         )
         fights = fights_payload.get("fights") if isinstance(fights_payload.get("fights"), list) else []
         for fight in fights:
@@ -334,8 +375,11 @@ def boss_kills_payload(
     sample: dict[str, Any],
     query: dict[str, Any],
     top: int,
+    cache_ttl_seconds: int | None = None,
 ) -> dict[str, Any]:
     returned = rows[:top]
+    excluded = max(0, len(rows) - len(returned))
+    truncated = len(rows) > top
     return {
         "ok": True,
         "provider": "warcraftlogs",
@@ -344,14 +388,90 @@ def boss_kills_payload(
         "matching_rule": "sampled_zone_reports_filtered_by_optional_boss_difficulty_spec_and_kill_time",
         "query": query,
         "notes": sampled_spec_filter_notes(query.get("spec_name") if isinstance(query, dict) else None),
-        "freshness": sampled_cross_report_freshness(),
+        "freshness": sampled_cross_report_freshness(cache_ttl_seconds),
+        "cache_provenance": sampled_cache_provenance(cache_ttl_seconds),
+        "sample_scope": sampled_sample_scope(
+            ranking_basis="sampled_fastest_kills",
+            query=query,
+            returned=len(returned),
+            excluded=excluded,
+            truncated=truncated,
+        ),
         "citations": sampled_cross_report_citations(rows),
         "sample": {
             **sample,
             "filtered_kill_count": len(rows),
             "returned_kill_count": len(returned),
+            "excluded_kill_count": excluded,
+            "truncated": truncated,
+            "stable_source_only": True,
+        },
+        "count": len(returned),
+        "kills": returned,
+    }
+
+
+def spec_filtered_kill_samples_payload(
+    *,
+    rows: list[dict[str, Any]],
+    sample: dict[str, Any],
+    query: dict[str, Any],
+    top: int,
+    cache_ttl_seconds: int | None = None,
+) -> dict[str, Any]:
+    # `rows` arrive sorted by ascending kill duration (shared collect_boss_kill_rows path),
+    # so the returned head is the fastest qualifying kills. `sample_size` is the FULL matching
+    # cohort, not the returned slice, and the truncation order is surfaced so consumers do not
+    # mistake a fastest-kill head for a representative random sample.
+    returned = rows[:top]
+    spec_name = query.get("spec_name") if isinstance(query, dict) else None
+    truncated = len(rows) > top
+    matching_participant_count = sum(
+        len(row.get("matching_players") or [])
+        for row in rows
+        if isinstance(row, dict)
+    )
+    notes = [
+        *sampled_spec_filter_notes(spec_name),
+        (
+            "rows are sampled kills that contained at least one participant of the requested spec; "
+            "this is a participant cohort, not a spec ranking leaderboard"
+        ),
+    ]
+    if truncated:
+        notes.append(
+            "returned kills are the fastest qualifying kills (ascending duration); slower kills in "
+            "the cohort are excluded by --top, so the returned subset is not a representative random sample"
+        )
+    return {
+        "ok": True,
+        "provider": "warcraftlogs",
+        "kind": "spec_filtered_kill_samples",
+        "cohort": "spec_filtered_participant_kill_cohort",
+        "ranking_basis": "spec_filtered_participant_kill_samples",
+        "matching_rule": "sampled_zone_reports_filtered_to_kills_containing_the_requested_participant_spec",
+        "query": query,
+        "notes": notes,
+        "freshness": sampled_cross_report_freshness(cache_ttl_seconds),
+        "cache_provenance": sampled_cache_provenance(cache_ttl_seconds),
+        "sample_scope": sampled_sample_scope(
+            ranking_basis="spec_filtered_participant_kill_samples",
+            query=query,
+            returned=len(returned),
+            excluded=max(0, len(rows) - len(returned)),
+            truncated=truncated,
+        ),
+        "citations": sampled_cross_report_citations(rows),
+        "sample": {
+            **sample,
+            "spec_name": spec_name,
+            "sample_size": len(rows),
+            "matching_participant_count": matching_participant_count,
+            "filtered_kill_count": len(rows),
+            "returned_kill_count": len(returned),
             "excluded_kill_count": max(0, len(rows) - len(returned)),
-            "truncated": len(rows) > top,
+            "truncated": truncated,
+            "truncation_order": "fastest_kill_duration_ascending",
             "stable_source_only": True,
         },
         "count": len(returned),
@@ -365,6 +485,7 @@ def kill_time_distribution_payload(
     sample: dict[str, Any],
     query: dict[str, Any],
     bucket_seconds: int,
+    cache_ttl_seconds: int | None = None,
 ) -> dict[str, Any]:
     durations = [
         float(duration)
@@ -375,10 +496,19 @@ def kill_time_distribution_payload(
         "ok": True,
         "provider": "warcraftlogs",
         "kind": "kill_time_distribution",
+        "ranking_basis": "sampled_kill_time_distribution",
         "matching_rule": "sampled_zone_reports_filtered_by_optional_boss_difficulty_spec_and_kill_time",
         "query": query,
         "notes": sampled_spec_filter_notes(query.get("spec_name") if isinstance(query, dict) else None),
-        "freshness": sampled_cross_report_freshness(),
+        "freshness": sampled_cross_report_freshness(cache_ttl_seconds),
+        "cache_provenance": sampled_cache_provenance(cache_ttl_seconds),
+        "sample_scope": sampled_sample_scope(
+            ranking_basis="sampled_kill_time_distribution",
+            query=query,
+            returned=len(rows),
+            excluded=0,
+            truncated=False,
+        ),
         "citations": sampled_cross_report_citations(rows),
         "sample": {
             **sample,

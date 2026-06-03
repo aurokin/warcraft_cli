@@ -22,6 +22,29 @@ def report_is_finished(report: dict[str, Any]) -> bool:
     return isinstance(end_time, (int, float)) and float(end_time) > 0
 
 
+def report_cache_provenance(
+    report: dict[str, Any],
+    *,
+    finished_ttl: int | None,
+    live_ttl: int | None,
+    source: str,
+) -> dict[str, Any]:
+    """Describe the applied report cache TTL keyed on finish state.
+
+    Finished reports (``endTime > 0``) are cached under ``finished_ttl``; live
+    reports under the short ``live_ttl`` and are flagged ``live: True``. Either TTL
+    may be ``None`` when caching is disabled, in which case ``cache_ttl_seconds`` is
+    ``null`` (nothing is stored).
+    """
+    finished = report_is_finished(report)
+    return {
+        "finished": finished,
+        "live": not finished,
+        "cache_ttl_seconds": finished_ttl if finished else live_ttl,
+        "source": source,
+    }
+
+
 def fight_duration_ms(fight: dict[str, Any]) -> float | None:
     start_time = fight.get("startTime")
     end_time = fight.get("endTime")

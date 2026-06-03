@@ -78,6 +78,30 @@ def test_live_wowprogress_guild_history_contract() -> None:
     assert payload["tiers"][0]["final_ranks"] is not None
 
 
+def test_live_wowprogress_guild_snapshot_contract() -> None:
+    require_live("WowProgress")
+    payload = payload_for_live(runner, app, ["guild-snapshot", "na", "Illidan", "Liquid"], provider_name="WowProgress")
+
+    assert payload["kind"] == "guild_snapshot"
+    assert payload["guild"]["name"] == "Liquid"
+    assert payload["progress"]["ranks"]["world"] is not None
+    assert payload["item_level"]["average"] is not None  # guild-page item_level shape
+    assert len(payload["rank_series"]) >= 1
+    assert payload["freshness"]["cache_ttl_seconds"] >= 1
+
+
+def test_live_wowprogress_history_trajectory_contract() -> None:
+    require_live("WowProgress")
+    payload = payload_for_live(runner, app, ["history-trajectory", "us", "Mal'Ganis", "gn"], provider_name="WowProgress")
+
+    assert payload["kind"] == "history_trajectory"
+    assert payload["count"] >= 1
+    assert payload["tiers"][0]["page_url"]
+    # The difficulty token must be a short code (e.g. "M"), not a "N/N (...)" summary string.
+    assert all((t["difficulty"] is None or len(str(t["difficulty"])) <= 3) for t in payload["tiers"])
+    assert any("different raids" in note for note in payload["notes"])
+
+
 def test_live_wowprogress_character_contract() -> None:
     require_live("WowProgress")
     payload = payload_for_live(runner, app, ["character", "us", "illidan", "Imonthegcd"], provider_name="WowProgress")

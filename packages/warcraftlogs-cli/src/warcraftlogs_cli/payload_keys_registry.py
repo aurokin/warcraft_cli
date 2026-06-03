@@ -25,6 +25,7 @@ ALL_COMMANDS: tuple[str, ...] = (
     "guild-reports",
     "boss-kills",
     "top-kills",
+    "spec-kill-samples",
     "boss-spec-usage",
     "ability-usage-summary",
     "comp-samples",

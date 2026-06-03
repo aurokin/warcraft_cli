@@ -5,6 +5,7 @@ from typing import Any
 from urllib.parse import quote, urljoin
 
 from bs4 import BeautifulSoup, Tag
+from warcraft_core.identity import class_spec_identity_payload, encounter_identity_payload
 
 WOWPROGRESS_BASE_URL = "https://www.wowprogress.com"
 
@@ -203,6 +204,14 @@ def _parse_guild_encounters(table: Tag) -> list[dict[str, Any]]:
                 "detail_url": _absolute_url(detail_link["href"]),
                 "video_count": len(video_links),
                 "video_urls": video_links,
+                # WowProgress exposes only the encounter name (no stable encounter/journal id),
+                # so identity is name-only -> normalized.
+                "encounter_identity": encounter_identity_payload(
+                    encounter_id=None,
+                    name=encounter_name,
+                    provider="wowprogress",
+                    source="guild_encounter_row",
+                ),
             }
         )
     return encounters
@@ -252,13 +261,27 @@ def parse_guild_page(html: str, *, url: str, region: str, realm: str, name: str)
     }
 
 
+# WoW has exactly two two-word classes; every other class is a single token. Without this the
+# trailing token alone is taken as the class ("Death Knight" -> "Knight", "Demon Hunter" -> "Hunter"),
+# which also leaked the wrong token into the raw class_name field.
+_TWO_WORD_CLASSES = {("death", "knight"), ("demon", "hunter")}
+
+
 def _parse_character_summary(text: str) -> tuple[str | None, str | None, int | None]:
+    # _clean_text always returns a str (empty for whitespace-only input), so .split() is safe and a
+    # summary-less page yields [] -> the unknown (None, None, None) tuple rather than raising.
     tokens = _clean_text(text).split()
     if len(tokens) < 3:
         return None, None, None
     level = int(tokens[-1]) if tokens[-1].isdigit() else None
-    class_name = tokens[-2].title() if level is not None and len(tokens) >= 2 else None
-    race = " ".join(tokens[:-2]).title() if level is not None and len(tokens) >= 3 else None
+    if level is None:
+        return None, None, None
+    if len(tokens) >= 4 and (tokens[-3].lower(), tokens[-2].lower()) in _TWO_WORD_CLASSES:
+        class_name = f"{tokens[-3]} {tokens[-2]}".title()
+        race = " ".join(tokens[:-3]).title()
+    else:
+        class_name = tokens[-2].title()
+        race = " ".join(tokens[:-2]).title()
     return race or None, class_name or None, level
 
 
@@ -351,6 +374,8 @@ def parse_character_page(html: str, *, url: str, region: str, realm: str, name: 
     pve_heading = next((h for h in soup.find_all("h2") if _clean_text(h.get_text(" ", strip=True)).startswith("PvE Score:")), None)
     pve_match = re.search(r"PvE Score:\s*([0-9.]+)", _clean_text(pve_heading.get_text(" ", strip=True)) if pve_heading is not None else "")
     raids = _parse_character_raid_tables(soup)
+    sim_dps = _parse_character_metric_table(sim_dps_table, "SimDPS:") if sim_dps_table is not None else {}
+    sim_dps_spec = sim_dps.get("spec") if isinstance(sim_dps, dict) else None
     return {
         "character": {
             "name": character_name,
@@ -363,6 +388,15 @@ def parse_character_page(html: str, *, url: str, region: str, realm: str, name: 
             "level": level,
             "page_url": url,
             "armory_url": armory_link.get("href") if armory_link is not None else None,
+            # Class is parsed from free header text and the spec (when present) comes from the
+            # SimDPS table, so this is normalized-without-confidence rather than a source-backed pair.
+            "class_spec_identity": class_spec_identity_payload(
+                actor_class=class_name,
+                spec=sim_dps_spec,
+                provider="wowprogress",
+                source="character_page",
+                confidence="none",
+            ),
         },
         "profile": {
             "languages": _extract_detail_field(detail_block, "Languages:"),
@@ -372,7 +406,7 @@ def parse_character_page(html: str, *, url: str, region: str, realm: str, name: 
             "specs_playing": _extract_detail_field(detail_block, "Specs playing:"),
         },
         "item_level": _parse_character_metric_table(item_level_table, "Item Level:") if item_level_table is not None else {},
-        "sim_dps": _parse_character_metric_table(sim_dps_table, "SimDPS:") if sim_dps_table is not None else {},
+        "sim_dps": sim_dps,
         "pve": {
             "score": float(pve_match.group(1)) if pve_match else None,
             "raids": raids,

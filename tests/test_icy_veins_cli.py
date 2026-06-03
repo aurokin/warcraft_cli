@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
 
 from icy_veins_cli.main import _resolve_is_confident, _resolve_search_payload, _score_family_match, app
@@ -350,6 +351,14 @@ def test_parse_guide_page_extracts_navigation_toc_sections_and_links() -> None:
     linked = {(row["type"], row["id"]) for row in payload["linked_entities"]}
     assert ("spell", 116670) in linked
     assert ("page", "mistweaver-monk-pve-healing-stat-priority") in linked
+    rows_by_key = {(row["type"], row["id"]): row for row in payload["linked_entities"]}
+    spell_identity = rows_by_key[("spell", 116670)]["ability_identity"]
+    assert spell_identity["kind"] == "ability_identity"
+    assert spell_identity["status"] == "canonical"
+    assert spell_identity["identity"]["spell_id"] == 116670
+    assert spell_identity["source"] == {"provider": "icy-veins", "source": "guide_linked_entity"}
+    # Non-spell entity rows (icy-veins internal page refs) are unchanged.
+    assert "ability_identity" not in rows_by_key[("page", "mistweaver-monk-pve-healing-stat-priority")]
     assert payload["build_references"][0]["build_code"] == "ABC123"
     assert payload["build_references"][0]["build_identity"]["class_spec_identity"]["identity"] == {
         "actor_class": "monk", "spec": "mistweaver"}
@@ -604,6 +613,8 @@ def test_icy_veins_guide_export_and_query(monkeypatch, tmp_path: Path) -> None:
     export_payload = json.loads(export_result.stdout)
     assert export_payload["counts"]["pages"] == 3
     assert (export_dir / "manifest.json").exists()
+    manifest = json.loads((export_dir / "manifest.json").read_text())
+    assert datetime.fromisoformat(manifest["exported_at"].replace("Z", "+00:00")).tzinfo is not None
     assert (export_dir / "pages" / "mistweaver-monk-pve-healing-guide.html").exists()
 
     query_result = runner.invoke(app, ["guide-query", str(export_dir), "vivify", "--kind", "linked_entities"])

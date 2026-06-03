@@ -9,6 +9,7 @@ Repo-wide analytics and comparison safety rules live in [SAFE_ANALYTICS_RULES.md
 Scoping conventions live in [SCOPING.md](SCOPING.md).
 Payload envelope keys live in [PAYLOAD_KEYS.md](PAYLOAD_KEYS.md).
 Live command matrix workflow lives in [LIVE_MATRIX.md](LIVE_MATRIX.md).
+Caching contract and derived-output trust fields live in [CACHING.md](CACHING.md).
 This file tracks Warcraft Logs-specific implementation state, boundaries, and current gaps.
 
 The CLI should become the fastest trustworthy path for:
@@ -138,7 +139,7 @@ Shared auth direction for this provider is defined in [AUTH_ARCHITECTURE.md](../
 ## Known Gaps And Deferred Coverage
 
 Highest-value next implementation slices:
-- make `character-rankings` more reliable across public characters before treating it as fully validated
+- `character-rankings` now carries a trust block (`ranking_basis`, resolved scope echo, freshness, and a source-character `class_spec_identity`) alongside the preserved `raw` passthrough; continue validating it across more public characters before treating it as fully validated
 - deepen report workflows beyond the current phase-1 slice:
   - safer event pagination patterns once `events(...)` can be validated more broadly
   - additional report detail surfaces after the current player/events/table/graph/ranking slice is proven
@@ -146,10 +147,10 @@ Highest-value next implementation slices:
   - current shipped slice covers encounter identity plus typed player/cast/buff/aura/aura-compare/damage-source/damage-target/damage summaries
   - next: wave and phase summaries so agents do not have to derive unstable segments from raw timestamps
 - continue the multi-report analytics slice beyond the current sampled cohort commands:
-  - current shipped slice covers `boss-kills`, `top-kills`, `kill-time-distribution`, `boss-spec-usage`, `comp-samples`, and `ability-usage-summary`
+  - current shipped slice covers `boss-kills`, `top-kills`, `spec-kill-samples`, `kill-time-distribution`, `boss-spec-usage`, `comp-samples`, and `ability-usage-summary`
   - those sampled commands now also expose freshness and citation metadata for the sampled report cohort
+  - `spec-kill-samples` is a labeled spec-filtered participant kill cohort (requires `--spec-name`), with `sample_size`, exclusion/truncation counts, freshness, and citations; it is explicitly not a spec ranking leaderboard
   - stronger top-kill discovery semantics beyond sampled fastest kills
-  - spec-filtered kill samples
   - kill-time-bounded report cohorts
   - deeper cross-report composition summaries beyond the current sampled class-presence/signature layer
 
@@ -157,9 +158,10 @@ Current rankings split:
 - `encounter-rankings` is the official encounter leaderboard surface for boss/class/spec ranking questions
   - normalized row `rank` values are derived from page order when the provider omits explicit per-row rank fields
   - normalized pagination counts are page-scoped because Warcraft Logs does not currently return a stable global total for this surface
-- `character-rankings` remains the character-centric rankings surface
-- `boss-kills`, `top-kills`, `kill-time-distribution`, `boss-spec-usage`, `comp-samples`, and `ability-usage-summary` remain sampled cross-report analytics
+- `character-rankings` remains the character-centric rankings surface and now exposes a `trust` block (basis, scope echo, freshness, source-character identity)
+- `boss-kills`, `top-kills`, `spec-kill-samples`, `kill-time-distribution`, `boss-spec-usage`, `comp-samples`, and `ability-usage-summary` remain sampled cross-report analytics
 - on those sampled commands, `--spec-name` filters sampled kills by matching participant specs before aggregation; it does not turn the query into a spec ranking leaderboard
+- `spec-kill-samples` requires `--spec-name` and returns that filter as an explicit participant cohort with sample-size/exclusion/truncation accounting
 
 After that:
 - user-auth plumbing
@@ -714,6 +716,7 @@ The agent should not be expected to:
 
 - `warcraftlogs top-kills`
 - `warcraftlogs boss-kills`
+- `warcraftlogs spec-kill-samples`
 - `warcraftlogs boss-spec-usage`
 - `warcraftlogs kill-time-distribution`
 - `warcraftlogs comp-samples`
@@ -772,61 +775,18 @@ This order keeps the first cross-report layer simple:
 
 ### Caching Policy
 
-Caching should be a first-class part of the `warcraftlogs` contract.
+Caching is a first-class part of the `warcraftlogs` contract. The shipped cache key, the
+finished-vs-live report TTL rule, per-family TTLs, and the derived-output trust fields
+(`cache_provenance`, `freshness.cache_ttl_seconds`, `sample_scope`) are documented in
+[CACHING.md](CACHING.md).
 
-The important split is:
-- finished reports and frozen metadata are good cache targets
-- live logs are not
-
-#### Safe Cache Targets
-
-These should be cached aggressively:
-- `gameData`
-- `worldData`
-- expansions, regions, servers, zones, encounters
-- finished report metadata
-- finished fight lists
-- finished encounter-scoped summaries
-- finished cross-report cohorts derived from stable report/fight rows
-
-These should use moderate TTLs or conditional refresh:
-- public report listings
-- guild report history
-- rankings or top-kill cohort discovery
-
-These should not be cached as stable results:
-- live reports
-- live event streams
-- in-progress fight windows
-- race/live competition surfaces while they are actively changing
-
-#### Report-Finish Policy
-
-The CLI should treat a report as cache-safe only when it is clearly finished.
-
-Planned signals:
-- report has a stable end time
-- the report is not currently live or updating
-- no command in the chain requested a live-only view
-
-If a report is live:
-- return fresh data
-- avoid storing it as a stable reusable cache artifact
-- surface `live: true` or equivalent metadata in the payload
-
-#### Analytics Cache Principles
-
-For both encounter and cross-report analytics:
-- cache the normalized intermediate slices when they are derived from finished reports
-- keep cache keys tied to:
-  - report code
-  - fight id
-  - boss/zone filters
-  - actor/spec filters
-  - time-window filters
-  - ranking basis
-- expose freshness and cache provenance in the output
-- never hide live-vs-finished differences behind one shared cache path
+Key points:
+- Report detail is keyed on finish state (`endTime > 0` → 24h finished TTL; live → 60s); a
+  live report is never stored under the finished TTL and is marked `live: true`.
+- Static `gameData`/`worldData`/zone/encounter metadata caches aggressively; report listings,
+  rankings, and cohort discovery stay on short TTLs.
+- Encounter and sampled analytics expose `cache_provenance` so live-vs-finished differences
+  are never hidden behind one shared cache path.
 
 ### Report Listing Workflows
 
@@ -915,21 +875,10 @@ we should build on the shared Warcraft normalization layer instead of introducin
 
 ## Caching and Freshness
 
-Caching should be explicit and data-family-aware.
-
-Recommended policy:
-- `gameData`: cache aggressively
-- `worldData`: cache aggressively, especially frozen zone metadata
-- guild/character snapshots: short to medium TTL
-- rankings: short TTL
-- reports and report-derived views: medium TTL unless explicitly bypassed
-- race data: very short TTL
-- rate-limit data: very short TTL
-
-The CLI should expose freshness in output because:
-- ranking data is not frozen
-- report event/table/graph data is not frozen
-- race data is explicitly unstable during active races
+Caching is explicit and data-family-aware. The full shipped contract — cache key, per-family
+TTLs, the finished-vs-live report rule, and the derived-output trust fields — lives in
+[CACHING.md](CACHING.md). Freshness is surfaced in output because ranking data, report
+event/table/graph data, and race data are not frozen.
 
 ## Testing Strategy
 

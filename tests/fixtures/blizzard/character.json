@@ -1,0 +1,16 @@
+{
+  "_links": {"self": {"href": "https://us.api.blizzard.com/profile/wow/character/illidan/imonthegcd?namespace=profile-us"}},
+  "id": 123456789,
+  "name": "Imonthegcd",
+  "gender": {"type": "MALE", "name": "Male"},
+  "faction": {"type": "HORDE", "name": "Horde"},
+  "race": {"name": "Orc", "id": 2},
+  "character_class": {"name": "Warrior", "id": 1},
+  "active_spec": {"name": "Fury", "id": 72},
+  "realm": {"name": "Illidan", "id": 57, "slug": "illidan"},
+  "level": 80,
+  "achievement_points": 14230,
+  "last_login_timestamp": 1733000000000,
+  "average_item_level": 639,
+  "equipped_item_level": 636
+}

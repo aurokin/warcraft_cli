@@ -38,6 +38,19 @@ Runner: `tests/test_live_command_matrix.py` (`make test-live-matrix`)
 | `ZONE_ID` / `ENCOUNTER_PLEXUS` | 44 / 3129 | Manaforge Omega sampled analytics scope |
 | `GUILD_*` | us / malganis / gn | Guild search and profile commands |
 
+## Blizzard API contracts
+
+Source: `tests/fixtures/blizzard/{realm,item,character}.json`  
+Runner: `tests/test_blizzard_api_contracts.py` (offline; monkeypatches `request_with_retries`)  
+Live runner: `tests/test_blizzard_api_live.py` (`BLIZZARD_LIVE_TESTS=1`, skipped without credentials)
+
+The offline contract tests serve token payloads for `/token` POSTs and fixtures for API GETs, and
+cover the success envelope + provenance, per-region/namespace routing (`dynamic`/`static`/`profile`,
+retail + `--classic`), the `missing_client_credentials` / `unsupported_region` /
+`unsupported_game_version` / `classic_profile_unsupported` / `http_error` / `network_error` /
+`invalid_response` error envelopes, and single-token reuse across both in-memory and shared-state
+caches. The live runner is the one-time spike that confirms the documented hosts + namespace strings.
+
 ## Schema snapshot keys
 
 Source: `tests/fixtures/wowhead_output_schemas.py`  

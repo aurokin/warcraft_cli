@@ -46,10 +46,19 @@ from warcraftlogs_cli.boss_kills import (
     kill_time_distribution_payload as _kill_time_distribution_payload,
 )
 from warcraftlogs_cli.boss_kills import (
+    sampled_cache_provenance as _sampled_cache_provenance,
+)
+from warcraftlogs_cli.boss_kills import (
     sampled_cross_report_citations as _sampled_cross_report_citations,
 )
 from warcraftlogs_cli.boss_kills import (
     sampled_cross_report_freshness as _sampled_cross_report_freshness,
+)
+from warcraftlogs_cli.boss_kills import (
+    sampled_sample_scope as _sampled_sample_scope,
+)
+from warcraftlogs_cli.boss_kills import (
+    spec_filtered_kill_samples_payload as _spec_filtered_kill_samples_payload,
 )
 from warcraftlogs_cli.client import (
     GRAPHQL_WARNINGS_KEY,
@@ -86,6 +95,9 @@ from warcraftlogs_cli.sampling_utils import (
 )
 from warcraftlogs_cli.sampling_utils import (
     normalize_match_text as _normalize_match_text,
+)
+from warcraftlogs_cli.sampling_utils import (
+    report_cache_provenance as _report_cache_provenance,
 )
 from warcraftlogs_cli.sampling_utils import (
     report_is_finished as _report_is_finished,
@@ -916,6 +928,7 @@ def _doctor_payload(*, live: bool) -> dict[str, Any]:
             "guild_rankings": _public_capability_status(public_api_access),
             "boss_kills": _public_capability_status(public_api_access),
             "top_kills": _public_capability_status(public_api_access),
+            "spec_kill_samples": _public_capability_status(public_api_access),
             "kill_time_distribution": _public_capability_status(public_api_access),
             "boss_spec_usage": _public_capability_status(public_api_access),
             "comp_samples": _public_capability_status(public_api_access),
@@ -1419,8 +1432,23 @@ def _report_reference_payload(ref: ReportReference) -> dict[str, Any]:
     return {"code": ref.code, "fight_id": ref.fight_id, "source_url": ref.source_url}
 
 
+def _emitted_finished_report_ttl(client: WarcraftLogsClient) -> int | None:
+    """Finished-report TTL as it should appear in emitted provenance/freshness.
+
+    Returns ``None`` when caching is disabled (``WARCRAFTLOGS_CACHE_BACKEND=none|off|disabled``),
+    so the trust metadata never claims a TTL for data that is never stored.
+    """
+    return client._finished_report_ttl if client._cache_store is not None else None
+
+
+def _emitted_report_ttl(client: WarcraftLogsClient) -> int | None:
+    """Short report TTL as it should appear in emitted provenance; ``None`` when caching is off."""
+    return client._report_ttl if client._cache_store is not None else None
+
+
 def _encounter_summary_payload(*, ref: ReportReference, report: dict[str, Any],
-                               fight: dict[str, Any], encounter: dict[str, Any] | None) -> dict[str, Any]:
+                               fight: dict[str, Any], encounter: dict[str, Any] | None,
+                               finished_report_ttl: int | None = 86400, report_ttl: int | None = 60) -> dict[str, Any]:
     encounter_payload = None
     encounter_identity = encounter_identity_payload(
         encounter_id=fight.get("encounterID") if isinstance(fight.get("encounterID"), int) else None,
@@ -1451,6 +1479,18 @@ def _encounter_summary_payload(*, ref: ReportReference, report: dict[str, Any],
             "cache_safe": _report_is_finished(report),
             "live": not _report_is_finished(report),
         },
+        # cache_provenance describes the *report's* finish state, resolved from the report
+        # metadata lookup (client.report(); REPORT_QUERY selects report-level endTime). It is a
+        # property of the log, not a per-namespace cache-entry audit: an encounter command may
+        # also return data from other namespaces (report_fights/report_player_details/...), and
+        # during the bounded live->finished window (<= the live TTL) those entries can briefly
+        # disagree with the report's resolved finish state. See docs/warcraftlogs/CACHING.md.
+        "cache_provenance": _report_cache_provenance(
+            report,
+            finished_ttl=finished_report_ttl,
+            live_ttl=report_ttl,
+            source="report_detail",
+        ),
     }
 
 
@@ -2308,6 +2348,7 @@ def _boss_spec_usage_payload(
     sample: dict[str, Any],
     query: dict[str, Any],
     top: int,
+    cache_ttl_seconds: int | None = None,
 ) -> dict[str, Any]:
     spec_counts, sampled_player_rows = _accumulate_boss_spec_counts(rows)
 
@@ -2334,7 +2375,15 @@ def _boss_spec_usage_payload(
         "matching_rule": "spec_presence_across_sampled_finished_kills_with_player_details",
         "query": query,
         "notes": _sampled_spec_filter_notes(query.get("spec_name") if isinstance(query, dict) else None),
-        "freshness": _sampled_cross_report_freshness(),
+        "freshness": _sampled_cross_report_freshness(cache_ttl_seconds),
+        "cache_provenance": _sampled_cache_provenance(cache_ttl_seconds),
+        "sample_scope": _sampled_sample_scope(
+            ranking_basis="sampled_finished_kill_cohort_spec_presence",
+            query=query,
+            returned=len(returned),
+            excluded=max(0, len(normalized_rows) - len(returned)),
+            truncated=len(normalized_rows) > top,
+        ),
         "citations": _sampled_cross_report_citations(rows),
         "sample": {
             **sample,
@@ -2446,7 +2495,7 @@ def _collect_comp_sample_rows(
                 include_combatant_info=True,
                 kill_type="Kills",
             ),
-            ttl_override=client._guild_ttl,
+            ttl_override=client._finished_report_ttl,
         )
         composed_rows.append(_composition_sample_row(row, details_report=details_report))
     return {
@@ -2536,6 +2585,7 @@ def _comp_samples_payload(
     sample: dict[str, Any],
     query: dict[str, Any],
     top: int,
+    cache_ttl_seconds: int | None = None,
 ) -> dict[str, Any]:
     class_presence, signature_counts, sampled_player_count = _accumulate_comp_presence(rows)
 
@@ -2562,7 +2612,15 @@ def _comp_samples_payload(
         "matching_rule": "class_roster_composition_across_sampled_finished_kills_with_player_details",
         "query": query,
         "notes": _sampled_spec_filter_notes(query.get("spec_name") if isinstance(query, dict) else None),
-        "freshness": _sampled_cross_report_freshness(),
+        "freshness": _sampled_cross_report_freshness(cache_ttl_seconds),
+        "cache_provenance": _sampled_cache_provenance(cache_ttl_seconds),
+        "sample_scope": _sampled_sample_scope(
+            ranking_basis="sampled_fastest_kills",
+            query=query,
+            returned=len(returned),
+            excluded=max(0, len(rows) - len(returned)),
+            truncated=len(rows) > top,
+        ),
         "citations": _sampled_cross_report_citations(rows),
         "sample": {
             **sample,
@@ -2708,6 +2766,7 @@ def _ability_usage_summary_payload(
     ability: dict[str, Any],
     preview_limit: int,
     event_limit: int,
+    cache_ttl_seconds: int | None = None,
 ) -> dict[str, Any]:
     cast_counts = [
         int(casts.get("count"))
@@ -2716,19 +2775,31 @@ def _ability_usage_summary_payload(
     ]
     used_counts = [count for count in cast_counts if count > 0]
     preview = rows[:preview_limit]
+    # The emitted `query` block widens the caller's query with the event/preview limits;
+    # sample_scope.filters must project from the SAME widened query so the two cannot drift
+    # (the contract in docs/warcraftlogs/CACHING.md).
+    scoped_query = {
+        **query,
+        "event_limit": event_limit,
+        "preview_limit": preview_limit,
+    }
     return {
         "ok": True,
         "provider": "warcraftlogs",
         "kind": "ability_usage_summary",
         "ranking_basis": "sampled_fastest_kills",
         "matching_rule": "ability_casts_across_sampled_finished_kills_with_event_limit",
-        "query": {
-            **query,
-            "event_limit": event_limit,
-            "preview_limit": preview_limit,
-        },
+        "query": scoped_query,
         "notes": _sampled_spec_filter_notes(query.get("spec_name") if isinstance(query, dict) else None),
-        "freshness": _sampled_cross_report_freshness(),
+        "freshness": _sampled_cross_report_freshness(cache_ttl_seconds),
+        "cache_provenance": _sampled_cache_provenance(cache_ttl_seconds),
+        "sample_scope": _sampled_sample_scope(
+            ranking_basis="sampled_fastest_kills",
+            query=scoped_query,
+            returned=len(preview),
+            excluded=max(0, len(rows) - len(preview)),
+            truncated=len(rows) > preview_limit,
+        ),
         "citations": _sampled_cross_report_citations(rows),
         "sample": {
             **sample,
@@ -3202,6 +3273,23 @@ def _character_rankings_payload(character: dict[str, Any], *, top: int) -> dict[
     rankings_error = rankings.get("error") if isinstance(rankings.get("error"), str) else None
     all_stars = rankings.get("allStars") if isinstance(rankings.get("allStars"), list) else []
     ranking_rows = rankings.get("rankings") if isinstance(rankings.get("rankings"), list) else []
+    all_star_specs = [
+        row.get("spec")
+        for row in all_stars
+        if isinstance(row, dict) and isinstance(row.get("spec"), str) and row.get("spec")
+    ]
+    unique_specs = list(dict.fromkeys(all_star_specs))
+    source_character_identity = class_spec_identity_payload(
+        actor_class=None,
+        spec=unique_specs[0] if len(unique_specs) == 1 else None,
+        provider="warcraftlogs",
+        source="character_rankings",
+        candidates=[(None, spec) for spec in unique_specs] if len(unique_specs) > 1 else None,
+        notes=[
+            "warcraftlogs character-rankings exposes class only as an internal classID enum; "
+            "class name is not normalized here"
+        ],
+    )
     return {
         "id": character.get("id"),
         "canonical_id": character.get("canonicalID"),
@@ -3252,6 +3340,18 @@ def _character_rankings_payload(character: dict[str, Any], *, top: int) -> dict[
             for row in ranking_rows[:top]
             if isinstance(row, dict)
         ],
+        "trust": {
+            "ranking_basis": "public_character_zone_rankings",
+            "scope": {
+                "zone": rankings.get("zone"),
+                "difficulty": rankings.get("difficulty"),
+                "metric": rankings.get("metric"),
+                "partition": rankings.get("partition"),
+                "size": rankings.get("size"),
+            },
+            "freshness": _sampled_cross_report_freshness(),
+            "source_character_identity": source_character_identity,
+        },
         "raw": rankings,
     }
 
@@ -4354,6 +4454,11 @@ def _require_boss_scope(ctx: typer.Context, *, boss_id: int | None, boss_name: s
         _fail(ctx, "missing_boss", "Provide --boss-id or --boss-name for cross-report boss analytics.")
 
 
+def _require_spec_scope(ctx: typer.Context, *, spec_name: str | None) -> None:
+    if not spec_name:
+        _fail(ctx, "missing_spec", "Provide --spec-name to build a spec-filtered participant kill cohort.")
+
+
 @app.command("boss-kills")
 def boss_kills(
     ctx: typer.Context,
@@ -4405,6 +4510,7 @@ def boss_kills(
     _emit(
         ctx,
         _boss_kills_payload(
+            cache_ttl_seconds=_emitted_finished_report_ttl(client),
             kind="boss_kills",
             rows=analytics["rows"],
             sample=analytics["sample"],
@@ -4482,7 +4588,86 @@ def top_kills(
     _emit(
         ctx,
         _boss_kills_payload(
+            cache_ttl_seconds=_emitted_finished_report_ttl(client),
             kind="top_kills",
+            rows=analytics["rows"],
+            sample=analytics["sample"],
+            query=_cross_report_query(
+                zone_id=zone_id,
+                boss_id=boss_id,
+                boss_name=boss_name,
+                difficulty=difficulty,
+                spec_name=spec_name,
+                kill_time_min=kill_time_min,
+                kill_time_max=kill_time_max,
+                top=top,
+                report_pages=report_pages,
+                reports_per_page=reports_per_page,
+                start_time=start_time,
+                end_time=end_time,
+                guild_region=guild_region,
+                guild_realm=guild_realm,
+                guild_name=guild_name,
+            ),
+            top=top,
+        ),
+        client=client,
+    )
+
+
+@app.command("spec-kill-samples")
+def spec_kill_samples(
+    ctx: typer.Context,
+    zone_id: int = typer.Option(..., "--zone-id", help="Warcraft Logs zone ID to sample reports from."),
+    spec_name: str | None = typer.Option(
+        None,
+        "--spec-name",
+        help="Required participant spec slug. Sampled kills are filtered to fights containing this spec.",
+    ),
+    boss_id: int | None = typer.Option(None, "--boss-id", help="Encounter ID to match."),
+    boss_name: str | None = typer.Option(None, "--boss-name", help="Boss name to match within sampled fights."),
+    difficulty: int | None = typer.Option(None, "--difficulty", help="Optional difficulty ID filter."),
+    kill_time_min: float | None = typer.Option(None, "--kill-time-min", help="Optional minimum kill time in seconds."),
+    kill_time_max: float | None = typer.Option(None, "--kill-time-max", help="Optional maximum kill time in seconds."),
+    top: int = typer.Option(10, "--top", min=1, max=100, help="Maximum returned kill rows after ranking."),
+    report_pages: int = typer.Option(1, "--report-pages", min=1, max=10, help="How many report-list pages to sample."),
+    reports_per_page: int = typer.Option(25, "--reports-per-page", min=1, max=100, help="Reports to fetch per sampled page."),
+    start_time: float | None = typer.Option(None, "--start-time", help="Optional report-range start time in milliseconds."),
+    end_time: float | None = typer.Option(None, "--end-time", help="Optional report-range end time in milliseconds."),
+    guild_region: str | None = typer.Option(None, "--guild-region", help="Optional guild-region scope for report discovery."),
+    guild_realm: str | None = typer.Option(None, "--guild-realm", help="Optional guild-realm scope for report discovery."),
+    guild_name: str | None = typer.Option(None, "--guild-name", help="Optional guild-name scope for report discovery."),
+) -> None:
+    _require_boss_scope(ctx, boss_id=boss_id, boss_name=boss_name)
+    _require_spec_scope(ctx, spec_name=spec_name)
+    client = _client(ctx)
+    try:
+        analytics = _collect_boss_kill_rows(
+            client=client,
+            zone_id=zone_id,
+            boss_id=boss_id,
+            boss_name=boss_name,
+            difficulty=difficulty,
+            spec_name=spec_name,
+            kill_time_min=kill_time_min,
+            kill_time_max=kill_time_max,
+            report_pages=report_pages,
+            reports_per_page=reports_per_page,
+            start_time=start_time,
+            end_time=end_time,
+            guild_region=guild_region,
+            guild_realm=guild_realm,
+            guild_name=guild_name,
+        )
+    except WarcraftLogsClientError as exc:
+        _handle_client_error(ctx, exc)
+        return
+    finally:
+        client.close()
+    _emit(
+        ctx,
+        _spec_filtered_kill_samples_payload(
+            cache_ttl_seconds=_emitted_finished_report_ttl(client),
             rows=analytics["rows"],
             sample=analytics["sample"],
             query=_cross_report_query(
@@ -4568,7 +4753,7 @@ def boss_spec_usage(
                     include_combatant_info=True,
                     kill_type="Kills",
                 ),
-                ttl_override=client._guild_ttl,
+                ttl_override=client._finished_report_ttl,
             )
             enriched_rows.append({**row, "player_details": _all_player_detail_rows(detail_report)})
     except WarcraftLogsClientError as exc:
@@ -4579,6 +4764,7 @@ def boss_spec_usage(
     _emit(
         ctx,
         _boss_spec_usage_payload(
+            cache_ttl_seconds=_emitted_finished_report_ttl(client),
             rows=enriched_rows,
             sample=analytics["sample"],
             query=_cross_report_query(
@@ -4660,6 +4846,7 @@ def ability_usage_summary(
     _emit(
         ctx,
         _ability_usage_summary_payload(
+            cache_ttl_seconds=_emitted_finished_report_ttl(client),
             rows=analytics["rows"],
             sample=analytics["sample"],
             query={
@@ -4738,6 +4925,7 @@ def comp_samples(
     _emit(
         ctx,
         _comp_samples_payload(
+            cache_ttl_seconds=_emitted_finished_report_ttl(client),
             rows=analytics["rows"],
             sample=analytics["sample"],
             query=_cross_report_query(
@@ -4791,7 +4979,14 @@ def report_encounter(
             "ok": True,
             "provider": "warcraftlogs",
             "kind": "report_encounter",
-            **_encounter_summary_payload(ref=ref, report=report, fight=fight, encounter=encounter),
+            **_encounter_summary_payload(
+                ref=ref,
+                report=report,
+                fight=fight,
+                encounter=encounter,
+                finished_report_ttl=_emitted_finished_report_ttl(client),
+                report_ttl=_emitted_report_ttl(client),
+            ),
         },
         client=client,
     )
@@ -4842,7 +5037,14 @@ def report_encounter_players(
             "ok": True,
             "provider": "warcraftlogs",
             "kind": "report_encounter_players",
-            **_encounter_summary_payload(ref=ref, report=report, fight=fight, encounter=encounter),
+            **_encounter_summary_payload(
+                ref=ref,
+                report=report,
+                fight=fight,
+                encounter=encounter,
+                finished_report_ttl=_emitted_finished_report_ttl(client),
+                report_ttl=_emitted_report_ttl(client),
+            ),
             **_report_player_details_payload(
                 payload,
                 report_code=ref.code,
@@ -4933,7 +5135,14 @@ def report_player_talents(
             "ok": True,
             "provider": "warcraftlogs",
             "kind": "report_player_talents",
-            **_encounter_summary_payload(ref=ref, report=report, fight=fight, encounter=encounter),
+            **_encounter_summary_payload(
+                ref=ref,
+                report=report,
+                fight=fight,
+                encounter=encounter,
+                finished_report_ttl=_emitted_finished_report_ttl(client),
+                report_ttl=_emitted_report_ttl(client),
+            ),
             "player": actor,
             "talent_transport_packet": transport_packet,
             "written_packet_path": written_packet_path,
@@ -5004,7 +5213,14 @@ def report_encounter_casts(
                 "preview_limit": preview_limit,
                 **query,
             },
-            **_encounter_summary_payload(ref=ref, report=report, fight=fight, encounter=encounter),
+            **_encounter_summary_payload(
+                ref=ref,
+                report=report,
+                fight=fight,
+                encounter=encounter,
+                finished_report_ttl=_emitted_finished_report_ttl(client),
+                report_ttl=_emitted_report_ttl(client),
+            ),
             **_encounter_cast_rows_payload(
                 report=report,
                 fight=fight,
@@ -5080,7 +5296,14 @@ def report_encounter_buffs(
                 "preview_limit": preview_limit,
                 **query,
             },
-            **_encounter_summary_payload(ref=ref, report=report, fight=fight, encounter=encounter),
+            **_encounter_summary_payload(
+                ref=ref,
+                report=report,
+                fight=fight,
+                encounter=encounter,
+                finished_report_ttl=_emitted_finished_report_ttl(client),
+                report_ttl=_emitted_report_ttl(client),
+            ),
             **_encounter_buff_rows_payload(
                 report=report,
                 fight=fight,
@@ -5150,7 +5373,14 @@ def report_encounter_aura_summary(
             "provider": "warcraftlogs",
             "kind": "report_encounter_aura_summary",
             "query": query,
-            **_encounter_summary_payload(ref=ref, report=report, fight=fight, encounter=encounter),
+            **_encounter_summary_payload(
+                ref=ref,
+                report=report,
+                fight=fight,
+                encounter=encounter,
+                finished_report_ttl=_emitted_finished_report_ttl(client),
+                report_ttl=_emitted_report_ttl(client),
+            ),
             **_report_encounter_aura_summary_payload(
                 report=report,
                 fight=fight,
@@ -5265,7 +5495,14 @@ def report_encounter_aura_compare(
                 "translate": translate,
                 "wipe_cutoff": wipe_cutoff,
             },
-            **_encounter_summary_payload(ref=ref, report=report, fight=fight, encounter=encounter),
+            **_encounter_summary_payload(
+                ref=ref,
+                report=report,
+                fight=fight,
+                encounter=encounter,
+                finished_report_ttl=_emitted_finished_report_ttl(client),
+                report_ttl=_emitted_report_ttl(client),
+            ),
             "aura": left_payload.get("aura"),
             "windows": [
                 {
@@ -5348,7 +5585,14 @@ def report_encounter_damage_source_summary(
             "provider": "warcraftlogs",
             "kind": "report_encounter_damage_source_summary",
             "query": query,
-            **_encounter_summary_payload(ref=ref, report=report, fight=fight, encounter=encounter),
+            **_encounter_summary_payload(
+                ref=ref,
+                report=report,
+                fight=fight,
+                encounter=encounter,
+                finished_report_ttl=_emitted_finished_report_ttl(client),
+                report_ttl=_emitted_report_ttl(client),
+            ),
             **_report_encounter_damage_source_summary_payload(
                 report=report,
                 fight=fight,
@@ -5415,7 +5659,14 @@ def report_encounter_damage_target_summary(
             "provider": "warcraftlogs",
             "kind": "report_encounter_damage_target_summary",
             "query": query,
-            **_encounter_summary_payload(ref=ref, report=report, fight=fight, encounter=encounter),
+            **_encounter_summary_payload(
+                ref=ref,
+                report=report,
+                fight=fight,
+                encounter=encounter,
+                finished_report_ttl=_emitted_finished_report_ttl(client),
+                report_ttl=_emitted_report_ttl(client),
+            ),
             **_report_encounter_damage_target_summary_payload(
                 report=report,
                 fight=fight,
@@ -5483,7 +5734,14 @@ def report_encounter_damage_breakdown(
             "provider": "warcraftlogs",
             "kind": "report_encounter_damage_breakdown",
             "query": query,
-            **_encounter_summary_payload(ref=ref, report=report, fight=fight, encounter=encounter),
+            **_encounter_summary_payload(
+                ref=ref,
+                report=report,
+                fight=fight,
+                encounter=encounter,
+                finished_report_ttl=_emitted_finished_report_ttl(client),
+                report_ttl=_emitted_report_ttl(client),
+            ),
             **_report_json_payload(payload, field="table"),
         },
         client=client,
@@ -5541,6 +5799,7 @@ def kill_time_distribution(
     _emit(
         ctx,
         _kill_time_distribution_payload(
+            cache_ttl_seconds=_emitted_finished_report_ttl(client),
             rows=analytics["rows"],
             sample=analytics["sample"],
             query=_cross_report_query(

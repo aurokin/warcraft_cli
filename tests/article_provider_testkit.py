@@ -10,6 +10,8 @@ import pytest
 from typer.testing import CliRunner
 
 PROVIDER_LIVE_ENV = {
+    "Blizzard": "BLIZZARD_LIVE_TESTS",
+    "CurseForge": "CURSEFORGE_LIVE_TESTS",
     "Icy Veins": "ICY_VEINS_LIVE_TESTS",
     "Method": "METHOD_LIVE_TESTS",
     "Warcraft Wiki": "WARCRAFT_WIKI_LIVE_TESTS",

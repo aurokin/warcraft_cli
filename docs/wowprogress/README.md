@@ -11,6 +11,8 @@ Current command surface:
 - `wowprogress guild`
 - `wowprogress guild-history`
 - `wowprogress guild-ranks`
+- `wowprogress guild-snapshot`
+- `wowprogress history-trajectory`
 - `wowprogress character`
 - `wowprogress leaderboard`
 - `wowprogress sample`
@@ -31,6 +33,9 @@ Current quality notes:
 - guild-profile analytics now support explicit post-sample filtering for faction, difficulty, world rank, item level, and encounter slices
 - guild history across tiers is now a first-class surface, built from the public `rating.tierNN` guild pages instead of forcing agents to scrape raw HTML manually
 - direct guild and character lookups now use shared normalization for region, realm, and name input, including common realm variants like `Mal'Ganis` and `area 52`
+- `guild-snapshot` composes current progress, world/region/realm ranks, item level, encounter summary, and a per-tier rank series into one provider-local payload with citations and freshness (no duplicate page fetch)
+- `history-trajectory` reports tier-over-tier rank and item-level deltas (each tier carrying its `page_url`), with an explicit `improved` flag and a caveat that consecutive tiers are different raids/difficulties — descriptive movement, not a normalized metric
+- raw `guild-history` rows now carry the parsed difficulty token (e.g. `M`) instead of the full `8/8 (M)` summary string
 
 ## Why Add It
 
@@ -68,6 +73,8 @@ This is now treated as a rankings/profile service using browser-fingerprint HTTP
 - `wowprogress guild <region> <realm> <name>`
 - `wowprogress guild-history <region> <realm> <name>`
 - `wowprogress guild-ranks <region> <realm> <name>`
+- `wowprogress guild-snapshot <region> <realm> <name>`
+- `wowprogress history-trajectory <region> <realm> <name>`
 - `wowprogress character <region> <realm> <name>`
 - `wowprogress leaderboard pve <region> [--realm <realm>]`
 - `wowprogress sample pve-leaderboard --region <region> [--realm <realm>]`
