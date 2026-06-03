@@ -333,6 +333,20 @@ def test_numeric_id_rejects_non_wow_mod(monkeypatch: pytest.MonkeyPatch) -> None
     assert payload["error"]["code"] == "addon_not_found"
 
 
+@pytest.mark.parametrize("command", ["search", "resolve"])
+def test_coming_soon_commands_emit_structured_stub(command: str) -> None:
+    # doctor advertises search/resolve as coming_soon, so the commands must exist and emit a
+    # structured coming_soon envelope (not Click's "No such command") when a caller probes them.
+    result = runner.invoke(app, [command, "dbm"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is True
+    assert payload["provider"] == "curseforge"
+    assert payload["command"] == command
+    assert payload["kind"] == "coming_soon"
+    assert payload["coming_soon"] is True
+
+
 def test_numeric_id_missing_gameid_is_invalid_response(monkeypatch: pytest.MonkeyPatch) -> None:
     # gameId is the only WoW signal for a numeric id (provenance hardcodes game_id=1). An absent or
     # non-int gameId means we cannot confirm WoW, so refuse with invalid_response rather than label a

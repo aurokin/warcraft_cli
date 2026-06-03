@@ -423,6 +423,26 @@ def test_every_provider_live_file_is_registered_for_its_own_flag() -> None:
     )
 
 
+def test_coming_soon_surfaces_emit_structured_stub_not_click_error() -> None:
+    # If a provider's own doctor advertises search/resolve as coming_soon, that command must exist
+    # and emit a structured coming_soon envelope (exit 0), never Click's "No such command" (exit 2).
+    # Regression originally caught on curseforge + blizzard-api search/resolve; simc is the precedent.
+    for registration in PROVIDERS:
+        capabilities = _provider_doctor_capabilities(registration)
+        for surface in ("search", "resolve"):
+            if capabilities.get(surface) != "coming_soon":
+                continue
+            result = runner.invoke(registration.app, [surface, "probe-query"])
+            assert result.exit_code == 0, (
+                f"{registration.name} advertises {surface}=coming_soon but `{surface}` exited "
+                f"{result.exit_code} (Click 'No such command'?): {result.stdout or result.stderr}"
+            )
+            payload = json.loads(result.stdout)
+            assert payload.get("coming_soon") is True, (
+                f"{registration.name} {surface} did not emit a structured coming_soon stub"
+            )
+
+
 def _stub_non_warcraftlogs_fanout(monkeypatch) -> None:  # noqa: ANN001
     """Run the real warcraftlogs search/resolve; return empty payloads for everyone else."""
     import warcraft_cli.main as wrapper_main

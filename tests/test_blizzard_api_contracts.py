@@ -165,6 +165,20 @@ def test_unsupported_game_version_rejected(monkeypatch: pytest.MonkeyPatch) -> N
     assert payload["error"]["code"] == "unsupported_game_version"
 
 
+@pytest.mark.parametrize("command", ["search", "resolve"])
+def test_coming_soon_commands_emit_structured_stub(command: str) -> None:
+    # doctor advertises search/resolve as coming_soon, so the commands must exist and emit a
+    # structured coming_soon envelope (not Click's "No such command") when a caller probes them.
+    result = runner.invoke(app, [command, "illidan"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is True
+    assert payload["provider"] == "blizzard-api"
+    assert payload["command"] == command
+    assert payload["kind"] == "coming_soon"
+    assert payload["coming_soon"] is True
+
+
 def test_classic_conflicts_with_explicit_retail(monkeypatch: pytest.MonkeyPatch) -> None:
     # Contradictory flags must error, not silently route to classic: --classic and an explicit
     # --game-version retail cannot both be honored.

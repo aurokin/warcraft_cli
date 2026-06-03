@@ -155,6 +155,50 @@ def addon(
     _run_command(ctx, "addon", "addon", query, lambda client: client.fetch_addon(slug_or_id))
 
 
+def _coming_soon_payload(command: str, query: str) -> dict[str, Any]:
+    # doctor advertises search/resolve as coming_soon; define them as structured stubs (mirroring
+    # simc's coming_soon commands) so a caller probing the advertised surface gets a JSON envelope
+    # with an explicit coming_soon flag instead of Click's generic "No such command" error.
+    return {
+        "ok": True,
+        "provider": PROVIDER,
+        "command": command,
+        "kind": "coming_soon",
+        "query": {"query": query},
+        "coming_soon": True,
+        "results": [],
+        "resolved": False,
+        "match": None,
+        "message": (
+            f"curseforge {command} is not implemented yet; addon lookup by slug or mod id is the "
+            "first slice. Use `curseforge addon <slug-or-id>`."
+        ),
+        "suggested_command": "curseforge addon deadly-boss-mods",
+    }
+
+
+@app.command("search")
+def search(
+    ctx: typer.Context,
+    query: str = typer.Argument(..., help="Free-text query. Addon discovery search is not implemented yet."),
+    limit: int = typer.Option(5, "--limit", min=1, max=50, help="Unused until curseforge search ships."),
+) -> None:
+    """Coming soon: structured addon discovery search is not implemented yet."""
+    del limit
+    _emit(ctx, _coming_soon_payload("search", query))
+
+
+@app.command("resolve")
+def resolve(
+    ctx: typer.Context,
+    query: str = typer.Argument(..., help="Free-text query. Conservative resolution is not implemented yet."),
+    limit: int = typer.Option(5, "--limit", min=1, max=50, help="Unused until curseforge resolve ships."),
+) -> None:
+    """Coming soon: conservative single-addon resolution is not implemented yet."""
+    del limit
+    _emit(ctx, _coming_soon_payload("resolve", query))
+
+
 def run() -> None:
     app()
 

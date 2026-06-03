@@ -245,6 +245,50 @@ def character(
     )
 
 
+def _coming_soon_payload(command: str, query: str) -> dict[str, Any]:
+    # doctor advertises search/resolve as coming_soon; define them as structured stubs (mirroring
+    # simc's coming_soon commands) so a caller probing the advertised surface gets a JSON envelope
+    # with an explicit coming_soon flag instead of Click's generic "No such command" error.
+    return {
+        "ok": True,
+        "provider": PROVIDER,
+        "command": command,
+        "kind": "coming_soon",
+        "query": {"query": query},
+        "coming_soon": True,
+        "results": [],
+        "resolved": False,
+        "match": None,
+        "message": (
+            f"blizzard {command} is not implemented yet; use the explicit Game Data / Profile reads. "
+            "Try `blizzard realm <slug>`, `blizzard item <id>`, or `blizzard character <realm> <name>`."
+        ),
+        "suggested_command": "blizzard realm illidan",
+    }
+
+
+@app.command("search")
+def search(
+    ctx: typer.Context,
+    query: str = typer.Argument(..., help="Free-text query. Discovery search is not implemented yet."),
+    limit: int = typer.Option(5, "--limit", min=1, max=50, help="Unused until blizzard search ships."),
+) -> None:
+    """Coming soon: free-text discovery search is not implemented yet."""
+    del limit
+    _emit(ctx, _coming_soon_payload("search", query))
+
+
+@app.command("resolve")
+def resolve(
+    ctx: typer.Context,
+    query: str = typer.Argument(..., help="Free-text query. Conservative resolution is not implemented yet."),
+    limit: int = typer.Option(5, "--limit", min=1, max=50, help="Unused until blizzard resolve ships."),
+) -> None:
+    """Coming soon: conservative resolution is not implemented yet."""
+    del limit
+    _emit(ctx, _coming_soon_payload("resolve", query))
+
+
 def run() -> None:
     app()
 
