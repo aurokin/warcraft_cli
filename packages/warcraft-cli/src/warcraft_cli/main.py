@@ -215,9 +215,14 @@ def _run_passthrough(ctx: typer.Context, sub_app: typer.Typer, *, provider_name:
         return
     # The provider emits its payload to stdout (ok) or stderr (error). Capture both so the
     # advisory note can be attached regardless of which stream carried the JSON payload.
-    # This buffers the provider's output instead of streaming it; that only affects the
-    # unusual `warcraft --expansion <key> <none-provider> ...` combination (expansion has no
-    # meaning for a none-expansion provider) and is the cost of annotating the payload.
+    # This buffers instead of streaming, but only on the explicit `warcraft --expansion <key>
+    # <none-provider> ...` combination — normal `warcraft <provider> ...` returns at the
+    # advisory-is-None branch above and streams untouched. There is no incremental streaming to
+    # lose here regardless: provider commands emit a single JSON envelope all at once, and
+    # attaching the advisory as an additive sibling key requires the whole payload to parse it,
+    # so the buffer just holds that one envelope momentarily (non-JSON output like --help is
+    # small and handled by the passthrough branch below). The buffering is intrinsic to the
+    # annotate-the-payload feature, not an incidental regression of normal simc/report workflows.
     out_buf, err_buf = io.StringIO(), io.StringIO()
     exit_code = 0
     try:
