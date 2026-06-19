@@ -25,8 +25,9 @@ PACKAGE_SRC_DIRS = (
     ROOT / "packages" / "curseforge-cli" / "src",
     ROOT / "packages" / "lorrgs-cli" / "src",
 )
-LIVE_TEST_ENV_BY_FILE = {
+LIVE_TEST_ENV_BY_FILE: dict[str, str | tuple[str, ...]] = {
     "test_blizzard_api_live.py": "BLIZZARD_LIVE_TESTS",
+    "test_cooldown_packet_live.py": ("LORRGS_LIVE_TESTS", "WARCRAFTLOGS_LIVE_TESTS"),
     "test_curseforge_live.py": "CURSEFORGE_LIVE_TESTS",
     "test_icy_veins_live.py": "ICY_VEINS_LIVE_TESTS",
     "test_live_endpoint_contracts.py": "WOWHEAD_LIVE_TESTS",
@@ -62,9 +63,10 @@ def _env_enabled(name: str) -> bool:
     return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _live_env_for_item(item: pytest.Item) -> str:
+def _live_env_for_item(item: pytest.Item) -> tuple[str, ...]:
     file_name = Path(str(item.path)).name
-    return LIVE_TEST_ENV_BY_FILE.get(file_name, "WOWHEAD_LIVE_TESTS")
+    env_names = LIVE_TEST_ENV_BY_FILE.get(file_name, "WOWHEAD_LIVE_TESTS")
+    return (env_names,) if isinstance(env_names, str) else env_names
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
@@ -72,6 +74,8 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
     for item in items:
         if item.get_closest_marker("live") is None:
             continue
-        env_name = _live_env_for_item(item)
-        if not _env_enabled(env_name):
-            item.add_marker(pytest.mark.skip(reason=f"Set {env_name}=1 to run this live test."))
+        env_names = _live_env_for_item(item)
+        missing = [env_name for env_name in env_names if not _env_enabled(env_name)]
+        if missing:
+            requested = " and ".join(f"{env_name}=1" for env_name in missing)
+            item.add_marker(pytest.mark.skip(reason=f"Set {requested} to run this live test."))
