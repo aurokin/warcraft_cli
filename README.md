@@ -64,6 +64,10 @@ If `wowhead` is not found, add `~/.local/bin` to your `PATH`.
 - [`wowprogress`](docs/wowprogress/README.md): rankings and profile workflows
 - [`warcraftlogs`](docs/warcraftlogs/README.md): official log/report workflows
 - [`simc`](docs/simc/README.md): local SimulationCraft inspection and analysis workflows
+- [`raidbots`](docs/raidbots/README.md): public report consumption and SimC input handoff
+- [`blizzard`](docs/blizzard-api/README.md): official Battle.net Game Data and Profile reads
+- [`curseforge`](docs/curseforge/README.md): addon metadata, latest files, and changelog workflows
+- [`lorrgs`](docs/lorrgs/README.md): top-parse cooldown timelines, composition rankings, and report overview handoffs
 
 ## Quick Start
 
@@ -77,7 +81,7 @@ warcraftlogs report-encounter abcd1234 --fight-id 3
 simc analysis-packet <simc-root>/ActionPriorityLists/default/monk_mistweaver.simc --targets 1
 ```
 
-Use `warcraft` when the source is unclear. Use `wowhead`, `method`, `icy-veins`, `raiderio`, `warcraft-wiki`, `wowprogress`, `warcraftlogs`, or `simc` directly once you know the provider you need.
+Use `warcraft` when the source is unclear. Use `wowhead`, `method`, `icy-veins`, `raiderio`, `warcraft-wiki`, `wowprogress`, `warcraftlogs`, `simc`, `raidbots`, `blizzard`, `curseforge`, or `lorrgs` directly once you know the provider you need.
 
 ## Docs
 
@@ -104,6 +108,8 @@ RAIDERIO_LIVE_TESTS=1 pytest -q -m live tests/test_raiderio_live.py
 WARCRAFT_WIKI_LIVE_TESTS=1 pytest -q -m live tests/test_warcraft_wiki_live.py
 WOWPROGRESS_LIVE_TESTS=1 pytest -q -m live tests/test_wowprogress_live.py
 WARCRAFTLOGS_LIVE_TESTS=1 pytest -q -m live tests/test_warcraftlogs_live.py
+RAIDBOTS_LIVE_TESTS=1 pytest -q -m live tests/test_raidbots_live.py
+LORRGS_LIVE_TESTS=1 pytest -q -m live tests/test_lorrgs_live.py
 make test-live-matrix
 WARCRAFT_WRAPPER_LIVE_TESTS=1 pytest -q -m live tests/test_warcraft_wrapper_live.py
 ```

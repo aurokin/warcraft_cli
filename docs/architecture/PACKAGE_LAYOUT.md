@@ -63,6 +63,10 @@ Current high-level layout:
 - `packages/wowprogress-cli/`
 - `packages/simc-cli/`
 - `packages/warcraftlogs-cli/`
+- `packages/raidbots-cli/`
+- `packages/blizzard-api-cli/`
+- `packages/curseforge-cli/`
+- `packages/lorrgs-cli/`
 - `skills/warcraft/`
 - `docs/`
 - `scripts/`

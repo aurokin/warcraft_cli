@@ -7,6 +7,7 @@ from typing import Any
 from blizzard_api_cli.main import app as blizzard_app
 from curseforge_cli.main import app as curseforge_app
 from icy_veins_cli.main import app as icy_veins_app
+from lorrgs_cli.main import app as lorrgs_app
 from method_cli.main import app as method_app
 from raidbots_cli.main import app as raidbots_app
 from raiderio_cli.main import app as raiderio_app
@@ -299,6 +300,37 @@ PROVIDERS: tuple[ProviderRegistration, ...] = (
             "addon": "ready",
         },
         app=curseforge_app,
+        doctor_args=("doctor",),
+    ),
+    ProviderRegistration(
+        name="lorrgs",
+        command="lorrgs",
+        language="python",
+        status="partial",
+        description=(
+            "Lorrgs public API provider: cooldown timeline rankings by spec/boss, composition rankings, "
+            "report overview handoffs, and static class/spec/boss/spell metadata."
+        ),
+        auth_required=False,
+        expansion_mode="fixed",
+        supported_expansions=("retail",),
+        expansion_review_status="reviewed",
+        expansion_policy_note=(
+            "Lorrgs data is current retail Warcraft Logs-derived raid ranking data and does not expose "
+            "a classic/fresh selector, so wrapper expansion fanout treats it as retail-only."
+        ),
+        wrapper_capabilities={
+            "doctor": "ready",
+            "search": "ready",
+            "resolve": "ready",
+            "spec_ranking": "ready",
+            "comp_ranking": "ready",
+            "report_overview": "ready",
+            "season": "ready",
+            "current_season": "ready",
+            "metadata": "ready",
+        },
+        app=lorrgs_app,
         doctor_args=("doctor",),
     ),
 )

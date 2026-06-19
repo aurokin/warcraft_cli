@@ -13,8 +13,9 @@ It is not the place where service-specific logic should live. Its job is to help
 
 - `warcraft search`: fan out to service-specific search providers where that is practical. Each registered provider advertises a `search`/`resolve` capability that matches its own `doctor` (a parity test enforces this). Providers whose surface is not `ready` are reported under `excluded_providers` rather than queried. `warcraftlogs` is `ready_explicit_report_only`: it stays in the fanout but returns a structured discovery hint (`count: 0`, `message`, `supported_inputs`, `suggested_commands`) for any non-report query instead of a fabricated match.
 - `warcraft resolve`: conservatively pick the best service and next command; it never resolves to a provider that reported `resolved: false` (e.g. a non-report `warcraftlogs` query).
-- `warcraft <service> ...`: proxy through to any registered provider — `wowhead`, `method`, `icy-veins`, `raiderio`, `warcraft-wiki`, `wowprogress`, `simc`, `raidbots`, `warcraftlogs`, or `blizzard`.
+- `warcraft <service> ...`: proxy through to any registered provider — `wowhead`, `method`, `icy-veins`, `raiderio`, `warcraft-wiki`, `wowprogress`, `simc`, `raidbots`, `warcraftlogs`, `blizzard`, `curseforge`, or `lorrgs`.
 - `warcraft doctor`: surface accurate per-provider capability, expansion mode/review status, and auth posture (the registry metadata is kept in lockstep with each CLI's own `doctor`).
+- `warcraft cooldown-packet`: compose Lorrgs phase/cooldown context with Warcraft Logs actor cast events for user-specific phase cooldown analysis.
 - expose shared inspection commands only when the concept is truly shared across services
 - when it exposes a merged shared workflow, keep provider-native payloads accessible and layer wrapper comparisons on top instead of replacing the sources
 

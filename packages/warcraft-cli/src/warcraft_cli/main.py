@@ -13,6 +13,8 @@ import typer
 from blizzard_api_cli.main import app as blizzard_app
 from curseforge_cli.main import app as curseforge_app
 from icy_veins_cli.main import app as icy_veins_app
+from lorrgs_cli.main import app as lorrgs_app
+from lorrgs_cli.search import parse_report_reference as parse_lorrgs_report_reference
 from method_cli.main import app as method_app
 from raidbots_cli.main import app as raidbots_app
 from raiderio_cli.main import app as raiderio_app
@@ -41,6 +43,18 @@ from wowhead_cli.expansion_profiles import resolve_expansion
 from wowhead_cli.main import app as wowhead_app
 from wowprogress_cli.main import app as wowprogress_app
 
+from warcraft_cli.cooldown_packet import (
+    build_phase_windows,
+    normalize_lorrgs_casts,
+    normalize_warcraftlogs_actor_casts,
+    raw_phase_markers,
+    selected_phase_window,
+    source_command,
+    spell_catalog,
+    spell_summary,
+    top_parse_samples,
+    tracked_spell_ids,
+)
 from warcraft_cli.crosswalk import (
     actor_lookup_identity,
     actor_spec_ambiguous,
@@ -504,6 +518,173 @@ def _provider_payload_result(
         "payload": payload,
         "exit_code": result.get("exit_code"),
     }
+
+
+def _fail_cooldown_packet(
+    ctx: typer.Context,
+    *,
+    code: str,
+    message: str,
+    query: dict[str, Any],
+    details: dict[str, Any] | None = None,
+) -> NoReturn:
+    error = {"code": code, "message": message}
+    if details:
+        error.update(details)
+    _emit(
+        {
+            "ok": False,
+            "provider": "warcraft",
+            "kind": "cooldown_packet",
+            "query": query,
+            "error": error,
+        },
+        pretty=_pretty(ctx),
+        err=True,
+    )
+    raise typer.Exit(1)
+
+
+def _cooldown_provider_payload(
+    ctx: typer.Context,
+    provider: str,
+    args: list[str],
+    *,
+    query: dict[str, Any],
+    error_code: str,
+    error_message: str,
+    required: bool = True,
+) -> dict[str, Any] | None:
+    result = _provider_payload_result(provider, args, expansion=_requested_expansion(ctx))
+    if result.get("status") == "ok":
+        return result
+    if not required:
+        return result
+    _fail_cooldown_packet(
+        ctx,
+        code=error_code,
+        message=error_message,
+        query=query,
+        details={"source": result.get("error"), "provider": provider},
+    )
+
+
+def _provider_source(provider_result: dict[str, Any] | None, *, command: str, args: list[str]) -> dict[str, Any]:
+    raw_payload = provider_result.get("payload") if isinstance(provider_result, dict) else None
+    payload: dict[str, Any] = raw_payload if isinstance(raw_payload, dict) else {}
+    raw_provenance = payload.get("provenance")
+    provenance: dict[str, Any] = raw_provenance if isinstance(raw_provenance, dict) else {}
+    raw_report = payload.get("report")
+    report: dict[str, Any] = raw_report if isinstance(raw_report, dict) else {}
+    return {
+        "provider": provider_result.get("provider") if isinstance(provider_result, dict) else None,
+        "status": provider_result.get("status") if isinstance(provider_result, dict) else "not_requested",
+        "command": source_command(command, args),
+        "source_url": provenance.get("source_url"),
+        "report": report or None,
+        "error": provider_result.get("error") if isinstance(provider_result, dict) else None,
+    }
+
+
+def _lorrgs_payload_data(provider_result: dict[str, Any] | None) -> dict[str, Any]:
+    raw_payload = provider_result.get("payload") if isinstance(provider_result, dict) else None
+    payload: dict[str, Any] = raw_payload if isinstance(raw_payload, dict) else {}
+    raw_data = payload.get("data")
+    return raw_data if isinstance(raw_data, dict) else {}
+
+
+def _find_lorrgs_fight(data: dict[str, Any], fight_id: int) -> dict[str, Any] | None:
+    raw_fights = data.get("fights")
+    fights: list[Any] = raw_fights if isinstance(raw_fights, list) else []
+    for fight in fights:
+        if isinstance(fight, dict) and fight.get("fight_id") == fight_id:
+            return fight
+    return fights[0] if len(fights) == 1 and isinstance(fights[0], dict) else None
+
+
+def _available_lorrgs_players(fight: dict[str, Any]) -> list[dict[str, Any]]:
+    raw_players = fight.get("players")
+    players: list[Any] = raw_players if isinstance(raw_players, list) else []
+    available = []
+    for player in players:
+        if not isinstance(player, dict):
+            continue
+        available.append(
+            {
+                "name": player.get("name"),
+                "source_id": player.get("source_id"),
+                "spec_slug": player.get("spec_slug"),
+                "class_slug": player.get("class_slug"),
+            }
+        )
+    return available
+
+
+def _resolve_lorrgs_player(
+    fight: dict[str, Any],
+    *,
+    actor_id: int | None,
+    actor_name: str | None,
+) -> tuple[dict[str, Any] | None, str | None]:
+    raw_players = fight.get("players")
+    players = [player for player in raw_players if isinstance(player, dict)] if isinstance(raw_players, list) else []
+    if actor_id is not None:
+        for player in players:
+            if _cooldown_int(player.get("source_id")) == actor_id:
+                return player, None
+        return None, "actor_id_not_found"
+    if actor_name is not None and actor_name.strip():
+        normalized_name = actor_name.strip().casefold()
+        matches = [
+            player
+            for player in players
+            if isinstance(player.get("name"), str) and str(player["name"]).casefold() == normalized_name
+        ]
+        if len(matches) == 1:
+            return matches[0], None
+        if len(matches) > 1:
+            return None, "ambiguous_actor_name"
+        return None, "actor_name_not_found"
+    return None, "missing_actor"
+
+
+def _find_warcraftlogs_fight(provider_result: dict[str, Any] | None, fight_id: int) -> dict[str, Any] | None:
+    raw_payload = provider_result.get("payload") if isinstance(provider_result, dict) else None
+    payload: dict[str, Any] = raw_payload if isinstance(raw_payload, dict) else {}
+    raw_fights = payload.get("fights")
+    fights: list[Any] = raw_fights if isinstance(raw_fights, list) else []
+    for fight in fights:
+        if isinstance(fight, dict) and fight.get("id") == fight_id:
+            return fight
+    return None
+
+
+def _phase_deaths(deaths: Any, *, window: dict[str, Any] | None) -> dict[str, Any]:
+    raw = deaths if isinstance(deaths, list) else []
+    selected = []
+    for death in raw:
+        if not isinstance(death, dict):
+            continue
+        timestamp = _cooldown_int(death.get("ts")) or _cooldown_int(death.get("timestamp"))
+        if timestamp is None or window is None:
+            continue
+        start_ms = _cooldown_int(window.get("start_ms"))
+        end_ms = _cooldown_int(window.get("end_ms"))
+        if start_ms is not None and end_ms is not None and start_ms <= timestamp < end_ms:
+            selected.append(death)
+    return {"count": len(raw), "raw": raw, "selected_phase_count": len(selected), "selected_phase": selected}
+
+
+def _cooldown_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str) and value.strip().lstrip("-").isdigit():
+        return int(value)
+    return None
 
 
 def _load_guide_build_source(source_path: Path) -> tuple[str, list[tuple[Path, dict[str, Any]]], dict[str, Any] | None]:
@@ -2065,6 +2246,356 @@ def actor_profile(
     )
 
 
+@app.command("cooldown-packet")
+def cooldown_packet(
+    ctx: typer.Context,
+    report_ref: str = typer.Argument(..., help="Warcraft Logs report URL/code or Lorrgs user_report URL."),
+    fight_id: int | None = typer.Option(None, "--fight-id", help="Fight id. Defaults to fight=<id> from the URL."),
+    actor_id: int | None = typer.Option(None, "--actor-id", help="Report-local source/actor id for the player to analyze."),
+    actor_name: str | None = typer.Option(
+        None,
+        "--actor-name",
+        help="Player name within the selected fight, used when --actor-id is omitted.",
+    ),
+    phase: int = typer.Option(..., "--phase", min=1, help="One-based phase index to analyze, e.g. --phase 2 for P2."),
+    spec_slug: str | None = typer.Option(None, "--spec-slug", help="Override Lorrgs spec slug, e.g. mage-frost."),
+    boss_slug: str | None = typer.Option(None, "--boss-slug", help="Override Lorrgs boss slug, e.g. lura."),
+    difficulty: str = typer.Option("mythic", "--difficulty", help="Difficulty for the Lorrgs top-parse comparison."),
+    metric: str | None = typer.Option(None, "--metric", help="Optional Lorrgs ranking metric, e.g. dps or hps."),
+    sample_limit: int = typer.Option(5, "--sample-limit", min=0, max=20, help="Top-parse samples to include; 0 disables comparison."),
+    event_limit: int = typer.Option(5000, "--event-limit", min=1, max=10000, help="Warcraft Logs cast events to request."),
+    spell_id: list[int] | None = typer.Option(
+        None,
+        "--spell-id",
+        help="Restrict tracked cooldown spell ids. Repeatable. Defaults to Lorrgs query/show spells for the spec.",
+    ),
+    allow_unlisted: bool = typer.Option(False, "--allow-unlisted", help="Allow lookup of unlisted Warcraft Logs reports."),
+) -> None:
+    """Build an evidence packet for phase-scoped cooldown analysis."""
+    parsed_ref = parse_lorrgs_report_reference(report_ref)
+    query: dict[str, Any] = {
+        "report_ref": report_ref,
+        "fight_id": fight_id,
+        "actor_id": actor_id,
+        "actor_name": actor_name,
+        "phase": phase,
+        "spec_slug": spec_slug,
+        "boss_slug": boss_slug,
+        "difficulty": difficulty,
+        "metric": metric,
+        "sample_limit": sample_limit,
+        "event_limit": event_limit,
+        "spell_ids": spell_id or [],
+        "allow_unlisted": allow_unlisted,
+    }
+    if parsed_ref is None:
+        _fail_cooldown_packet(
+            ctx,
+            code="invalid_report_ref",
+            message="Expected a Warcraft Logs report URL, Lorrgs user_report URL, or mixed alphanumeric report code.",
+            query=query,
+        )
+    report_code = parsed_ref.code
+    resolved_fight_id = fight_id or parsed_ref.fight_id
+    if resolved_fight_id is None:
+        _fail_cooldown_packet(
+            ctx,
+            code="missing_fight",
+            message="Pass --fight-id or provide a report URL containing fight=<id>.",
+            query={**query, "report_code": report_code},
+        )
+    query.update(
+        {
+            "report_code": report_code,
+            "fight_id": resolved_fight_id,
+            "report_type": parsed_ref.report_type,
+        }
+    )
+
+    lorrgs_fight_args = ["user-report-fights", report_ref, "--fight", str(resolved_fight_id)]
+    if parsed_ref.report_type:
+        lorrgs_fight_args += ["--type", parsed_ref.report_type]
+    lorrgs_result = _cooldown_provider_payload(
+        ctx,
+        "lorrgs",
+        lorrgs_fight_args,
+        query=query,
+        error_code="lorrgs_fight_lookup_failed",
+        error_message="Lorrgs cached fight lookup failed.",
+    )
+    lorrgs_fight = _find_lorrgs_fight(_lorrgs_payload_data(lorrgs_result), resolved_fight_id)
+    if lorrgs_fight is None:
+        _fail_cooldown_packet(
+            ctx,
+            code="lorrgs_fight_not_found",
+            message="Lorrgs did not return the selected fight.",
+            query=query,
+        )
+
+    player, player_error = _resolve_lorrgs_player(lorrgs_fight, actor_id=actor_id, actor_name=actor_name)
+    if player is None:
+        _fail_cooldown_packet(
+            ctx,
+            code=player_error or "actor_not_found",
+            message="Could not resolve the selected player in the Lorrgs fight payload.",
+            query=query,
+            details={"available_players": _available_lorrgs_players(lorrgs_fight)},
+        )
+    resolved_actor_id = _cooldown_int(player.get("source_id"))
+    if resolved_actor_id is None:
+        _fail_cooldown_packet(
+            ctx,
+            code="actor_id_missing",
+            message="The selected player did not include a report-local source id.",
+            query=query,
+            details={"player": player},
+        )
+    resolved_spec_slug = spec_slug or (player.get("spec_slug") if isinstance(player.get("spec_slug"), str) else None)
+    if resolved_spec_slug is None:
+        _fail_cooldown_packet(
+            ctx,
+            code="spec_slug_missing",
+            message="The selected player did not include a Lorrgs spec slug. Pass --spec-slug.",
+            query={**query, "actor_id": resolved_actor_id},
+            details={"player": player},
+        )
+    raw_boss = lorrgs_fight.get("boss")
+    boss: dict[str, Any] = raw_boss if isinstance(raw_boss, dict) else {}
+    resolved_boss_slug = boss_slug or (boss.get("boss_slug") if isinstance(boss.get("boss_slug"), str) else None)
+    query.update(
+        {
+            "actor_id": resolved_actor_id,
+            "actor_name": player.get("name"),
+            "spec_slug": resolved_spec_slug,
+            "boss_slug": resolved_boss_slug,
+        }
+    )
+
+    raw_phases = lorrgs_fight.get("phases")
+    lorrgs_phases: list[Any] = raw_phases if isinstance(raw_phases, list) else []
+    phase_windows = build_phase_windows(
+        lorrgs_phases,
+        lorrgs_fight.get("duration"),
+    )
+    selected_window = selected_phase_window(phase_windows, phase)
+    if selected_window is None:
+        _fail_cooldown_packet(
+            ctx,
+            code="phase_not_found",
+            message="The selected phase index is not present in the Lorrgs phase markers.",
+            query=query,
+            details={"phase_windows": phase_windows, "raw_phase_markers": raw_phase_markers(lorrgs_phases)},
+        )
+
+    spec_spells_args = ["spec-spells", resolved_spec_slug]
+    spec_spells_result = _cooldown_provider_payload(
+        ctx,
+        "lorrgs",
+        spec_spells_args,
+        query=query,
+        error_code="lorrgs_spec_spells_failed",
+        error_message="Lorrgs spec spell metadata lookup failed.",
+    )
+    spec_spells_payload = spec_spells_result.get("payload") if isinstance(spec_spells_result, dict) else None
+    cooldown_catalog = spell_catalog(spec_spells_payload if isinstance(spec_spells_payload, dict) else {})
+    tracked_ids = tracked_spell_ids(cooldown_catalog, spell_id)
+    if not tracked_ids:
+        _fail_cooldown_packet(
+            ctx,
+            code="no_tracked_spells",
+            message="No tracked cooldown spell ids were available. Pass --spell-id or choose a spec with Lorrgs spell metadata.",
+            query=query,
+        )
+
+    boss_spells_args: list[str] | None = ["boss-spells", resolved_boss_slug] if resolved_boss_slug else None
+    boss_spells_result = (
+        _cooldown_provider_payload(
+            ctx,
+            "lorrgs",
+            boss_spells_args,
+            query=query,
+            error_code="lorrgs_boss_spells_failed",
+            error_message="Lorrgs boss spell metadata lookup failed.",
+            required=False,
+        )
+        if boss_spells_args is not None
+        else None
+    )
+    boss_spells_payload = boss_spells_result.get("payload") if isinstance(boss_spells_result, dict) else None
+    boss_catalog = spell_catalog(boss_spells_payload if isinstance(boss_spells_payload, dict) else {})
+
+    wcl_fights_args = ["report-fights", report_code]
+    if allow_unlisted:
+        wcl_fights_args.append("--allow-unlisted")
+    wcl_fights_result = _cooldown_provider_payload(
+        ctx,
+        "warcraftlogs",
+        wcl_fights_args,
+        query=query,
+        error_code="warcraftlogs_fights_failed",
+        error_message="Warcraft Logs fight lookup failed.",
+    )
+    wcl_fight = _find_warcraftlogs_fight(wcl_fights_result, resolved_fight_id)
+    fight_start_time_ms = _cooldown_int(wcl_fight.get("start_time") if isinstance(wcl_fight, dict) else None)
+    if fight_start_time_ms is None:
+        _fail_cooldown_packet(
+            ctx,
+            code="fight_start_missing",
+            message="Warcraft Logs did not return a fight start timestamp for relative event conversion.",
+            query=query,
+            details={"fight": wcl_fight or {}},
+        )
+
+    events_args = [
+        "report-events",
+        report_code,
+        "--fight-id",
+        str(resolved_fight_id),
+        "--source-id",
+        str(resolved_actor_id),
+        "--data-type",
+        "casts",
+        "--limit",
+        str(event_limit),
+    ]
+    if allow_unlisted:
+        events_args.append("--allow-unlisted")
+    events_result = _cooldown_provider_payload(
+        ctx,
+        "warcraftlogs",
+        events_args,
+        query=query,
+        error_code="warcraftlogs_events_failed",
+        error_message="Warcraft Logs cast-event lookup failed.",
+    )
+    raw_events_payload = events_result.get("payload") if isinstance(events_result, dict) else None
+    events_payload: dict[str, Any] = raw_events_payload if isinstance(raw_events_payload, dict) else {}
+    player_casts = normalize_warcraftlogs_actor_casts(
+        events_payload,
+        fight_start_time_ms=fight_start_time_ms,
+        catalog=cooldown_catalog,
+        spell_ids=tracked_ids,
+        window=selected_window,
+    )
+
+    ranking_args: list[str] | None = None
+    ranking_result: dict[str, Any] | None = None
+    if sample_limit > 0 and resolved_boss_slug:
+        ranking_args = ["spec-ranking", resolved_spec_slug, resolved_boss_slug, "--difficulty", difficulty]
+        if metric:
+            ranking_args += ["--metric", metric]
+        ranking_result = _cooldown_provider_payload(
+            ctx,
+            "lorrgs",
+            ranking_args,
+            query=query,
+            error_code="lorrgs_spec_ranking_failed",
+            error_message="Lorrgs top-parse ranking lookup failed.",
+            required=False,
+        )
+    ranking_payload = (
+        ranking_result.get("payload")
+        if isinstance(ranking_result, dict) and ranking_result.get("status") == "ok" and isinstance(ranking_result.get("payload"), dict)
+        else None
+    )
+    comparison = top_parse_samples(
+        ranking_payload,
+        phase=phase,
+        sample_limit=sample_limit,
+        spell_catalog=cooldown_catalog,
+        boss_catalog=boss_catalog,
+        spell_ids=tracked_ids,
+    )
+
+    raw_player_casts = player.get("casts")
+    lorrgs_player_casts: list[Any] = raw_player_casts if isinstance(raw_player_casts, list) else []
+    tracked_spell_summaries = [spell_summary(spell_id_value, catalog=cooldown_catalog) for spell_id_value in sorted(tracked_ids)]
+    source_refs = {
+        "lorrgs_user_report_fights": _provider_source(lorrgs_result, command="lorrgs", args=lorrgs_fight_args),
+        "lorrgs_spec_spells": _provider_source(spec_spells_result, command="lorrgs", args=spec_spells_args),
+        "lorrgs_boss_spells": _provider_source(boss_spells_result, command="lorrgs", args=boss_spells_args or []),
+        "warcraftlogs_report_fights": _provider_source(wcl_fights_result, command="warcraftlogs", args=wcl_fights_args),
+        "warcraftlogs_report_events": _provider_source(events_result, command="warcraftlogs", args=events_args),
+        "lorrgs_spec_ranking": _provider_source(ranking_result, command="lorrgs", args=ranking_args or []),
+    }
+    notes = [
+        "Phase windows are derived from Lorrgs/Warcraft Logs phase transition markers; labels are one-based P1/P2/etc.",
+        "Player casts come from Warcraft Logs cast events so cached Lorrgs user reports do not need per-player timeline generation.",
+        "Top-parse samples are comparison evidence, not universal cooldown recommendations.",
+    ]
+    if player_casts.get("next_page_timestamp") is not None:
+        notes.append("Warcraft Logs returned next_page_timestamp; increase --event-limit or paginate before treating counts as complete.")
+    if not lorrgs_player_casts:
+        notes.append(
+            "Cached Lorrgs user-report data did not include player cooldown casts for this actor; "
+            "Warcraft Logs events fill that gap."
+        )
+    if isinstance(ranking_result, dict) and ranking_result.get("status") == "error":
+        notes.append("Lorrgs top-parse comparison was unavailable; inspect sources.lorrgs_spec_ranking.error for details.")
+
+    raw_boss_casts = boss.get("casts")
+    boss_casts: list[Any] = raw_boss_casts if isinstance(raw_boss_casts, list) else []
+    _emit(
+        {
+            "ok": True,
+            "provider": "warcraft",
+            "kind": "cooldown_packet",
+            "query": query,
+            "report_url": f"https://www.warcraftlogs.com/reports/{report_code}#fight={resolved_fight_id}",
+            "phase": {
+                "selected": selected_window,
+                "windows": phase_windows,
+                "raw_markers": raw_phase_markers(lorrgs_phases),
+            },
+            "fight": {
+                "lorrgs": {
+                    "fight_id": lorrgs_fight.get("fight_id"),
+                    "duration_ms": lorrgs_fight.get("duration"),
+                    "difficulty": lorrgs_fight.get("difficulty"),
+                    "kill": lorrgs_fight.get("kill"),
+                    "percent": lorrgs_fight.get("percent"),
+                    "start_time": lorrgs_fight.get("start_time"),
+                },
+                "warcraftlogs": wcl_fight,
+            },
+            "player": {
+                "name": player.get("name"),
+                "source_id": resolved_actor_id,
+                "spec_slug": resolved_spec_slug,
+                "class_slug": player.get("class_slug"),
+                "total": player.get("total"),
+                "deaths": _phase_deaths(player.get("deaths"), window=selected_window),
+            },
+            "boss": {
+                "boss_slug": resolved_boss_slug,
+                "selected_phase_casts": normalize_lorrgs_casts(
+                    boss_casts,
+                    catalog=boss_catalog,
+                    window=selected_window,
+                ),
+            },
+            "cooldowns": {
+                "tracked_spell_count": len(tracked_ids),
+                "tracked_spells": tracked_spell_summaries,
+                "player_casts": player_casts,
+                "lorrgs_cached_player_timeline": {
+                    "raw_cast_count": len(lorrgs_player_casts),
+                    "selected_phase_casts": normalize_lorrgs_casts(
+                        lorrgs_player_casts,
+                        catalog=cooldown_catalog,
+                        window=selected_window,
+                        spell_ids=tracked_ids,
+                    ),
+                },
+            },
+            "comparison": comparison,
+            "sources": source_refs,
+            "notes": notes,
+        },
+        pretty=_pretty(ctx),
+    )
+
+
 @app.command("guide-compare")
 def guide_compare(
     ctx: typer.Context,
@@ -2777,6 +3308,14 @@ def blizzard_passthrough(ctx: typer.Context) -> None:
 )
 def curseforge_passthrough(ctx: typer.Context) -> None:
     _run_passthrough(ctx, curseforge_app, provider_name="curseforge", prog_name="curseforge")
+
+
+@app.command(
+    "lorrgs",
+    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
+)
+def lorrgs_passthrough(ctx: typer.Context) -> None:
+    _run_passthrough(ctx, lorrgs_app, provider_name="lorrgs", prog_name="lorrgs")
 
 
 def run() -> None:

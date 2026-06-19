@@ -23,6 +23,7 @@ Use `warcraft` first when the caller does not already know which provider they n
 - Cross-provider guide evidence:
   - `warcraft talent-packet <source>`
   - `warcraft talent-describe <source> --apl-path <apl>`
+  - `warcraft cooldown-packet <warcraftlogs-report-url> --actor-id <source-id> --phase <n>`
   - `warcraft guide-compare <bundle-a> <bundle-b>`
   - `warcraft guide-compare-query "<guide query>"`
   - `warcraft guide-compare-query "<guide query>" --simc-build-handoff --simc-apl-path <apl>`
@@ -44,6 +45,7 @@ Use `warcraft` first when the caller does not already know which provider they n
 | `raidbots` | reading shared Raidbots reports and bridging their SimC input to local `simc` | `warcraft raidbots inspect-report <url-or-id>`, `warcraft raidbots input <url-or-id>`, `warcraft raidbots explain-input` |
 | `blizzard` | official Battle.net Game Data (realm, item) and Profile (character) reads | `warcraft blizzard doctor`, `warcraft blizzard realm ...`, `warcraft blizzard character ...` |
 | `curseforge` | World of Warcraft addon lookup: metadata, latest files, changelog | `warcraft curseforge doctor`, `warcraft curseforge addon <slug-or-id>` |
+| `lorrgs` | top-parse cooldown timelines, composition rankings, report overview handoffs, and static spec/boss/spell metadata | `warcraft lorrgs resolve ...`, `warcraft lorrgs spec-ranking ...` |
 
 ## Routing Rules
 
@@ -57,6 +59,9 @@ Use `warcraft` first when the caller does not already know which provider they n
 - `guide-compare-query` should reuse prior orchestrated bundles only through explicit freshness rules like `--max-age-hours` and `--force-refresh`, not through invisible cache-like behavior.
 - Use `warcraft talent-packet` when the source is already an explicit build ref, scoped log actor, or packet file and you want the wrapper to route it into the shared transport contract.
 - Use `warcraft talent-describe` when you want that same routed packet handed directly into `simc describe-build` without manually chaining commands.
+- Use `warcraft cooldown-packet` for player-specific log questions like "how can I improve my
+  cooldowns in P2"; it joins Lorrgs phase/spell/top-parse context with exact Warcraft Logs cast
+  events for the selected actor and keeps both sources visible.
 - Typical packet flow:
   - `warcraftlogs report-player-talents <report> --fight-id <id> --actor-id <id> --out ./tmp/actor-packet.json`
   - `simc validate-talent-transport --build-packet ./tmp/actor-packet.json --out ./tmp/actor-packet-validated.json`
@@ -85,6 +90,7 @@ Use `warcraft` first when the caller does not already know which provider they n
 - `raidbots`: see `references/raidbots.md`
 - `blizzard`: see `references/blizzard-api.md`
 - `curseforge`: see `references/curseforge.md`
+- `lorrgs`: see `references/lorrgs.md`
 
 ## Notes
 

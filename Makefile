@@ -13,6 +13,7 @@ RAIDERIO := $(VENV)/bin/raiderio
 WARCRAFT_WIKI := $(VENV)/bin/warcraft-wiki
 WOWPROGRESS := $(VENV)/bin/wowprogress
 SIMC := $(VENV)/bin/simc
+LORRGS := $(VENV)/bin/lorrgs
 LINT_PATHS := packages tests scripts
 LINT_ALL_PATHS := $(LINT_PATHS)
 LIVE_TEST_ENV := \
@@ -24,6 +25,7 @@ LIVE_TEST_ENV := \
 	WOWPROGRESS_LIVE_TESTS=1 \
 	WARCRAFTLOGS_LIVE_TESTS=1 \
 	RAIDBOTS_LIVE_TESTS=1 \
+	LORRGS_LIVE_TESTS=1 \
 	WARCRAFT_WRAPPER_LIVE_TESTS=1
 
 IMPORT_LINTER := $(VENV)/bin/lint-imports

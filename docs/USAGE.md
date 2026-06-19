@@ -61,6 +61,7 @@ warcraft warcraft-wiki event "OnKeyDown"
 warcraft wowprogress guild us illidan Liquid
 warcraft wowprogress leaderboard pve us --limit 10
 warcraft resolve "https://www.warcraftlogs.com/reports/abcd1234#fight=3"
+warcraft cooldown-packet "https://www.warcraftlogs.com/reports/abcd1234#fight=3" --actor-id 1234 --phase 2
 warcraft warcraftlogs resolve "https://www.warcraftlogs.com/reports/abcd1234#fight=3"
 warcraftlogs doctor
 warcraftlogs auth status
@@ -75,6 +76,12 @@ warcraft simc apl-lists <simc-root>/ActionPriorityLists/default/monk_mistweaver.
 warcraft simc apl-intent <simc-root>/ActionPriorityLists/default/monk_mistweaver.simc --targets 1
 warcraft simc analysis-packet <simc-root>/ActionPriorityLists/default/monk_mistweaver.simc --targets 1
 warcraft simc first-cast <simc-root>/profiles/MID1/MID1_Monk_Windwalker.simc tiger_palm --seeds 1 --max-time 20
+warcraft lorrgs specs
+warcraft lorrgs bosses
+warcraft lorrgs resolve "https://www.warcraftlogs.com/reports/bG3xDYPqKjLm8XaR?fight=22&type=damage-done"
+warcraft lorrgs report-overview "https://www.warcraftlogs.com/reports/bG3xDYPqKjLm8XaR?fight=22&type=damage-done"
+warcraft lorrgs spec-ranking mage-frost chimaerus-the-undreamt-god
+warcraft lorrgs comp-ranking chimaerus-the-undreamt-god --limit 10
 ```
 
 ## Wrapper Conventions
@@ -94,6 +101,13 @@ warcraft simc first-cast <simc-root>/profiles/MID1/MID1_Monk_Windwalker.simc tig
 - `warcraftlogs` is a phase-1 official API provider with retail-only OAuth client-credentials auth plus typed world metadata, guild, character, and report lookups.
 - `warcraftlogs` is wired into wrapper `doctor`, passthrough, and conservative wrapper `search` / `resolve`.
 - wrapper discovery for `warcraftlogs` is intentionally narrow: only explicit report URLs and bare mixed-alphanumeric report codes resolve through the wrapper.
+- `lorrgs` is a no-auth Lorrgs public API provider for top-parse cooldown timelines, composition rankings, static spec/boss/spell metadata, and Warcraft Logs report overview handoffs; wrapper `search`/`resolve` understand Lorrgs URLs, Warcraft Logs report URLs, bare report codes, and spec/boss text.
+- `lorrgs` is fixed to retail for wrapper expansion eligibility because it exposes current Warcraft Logs-derived raid ranking data and has no classic/fresh selector.
+- `warcraft cooldown-packet` is the cross-provider packet for user-specific phase cooldown questions:
+  - it uses cached Lorrgs user-report fight data for phase markers, boss casts, boss/spec slugs, and player source ids
+  - it uses Warcraft Logs `report-events --data-type casts` for the selected player's exact cast timestamps
+  - it uses Lorrgs `spec-spells`, `boss-spells`, and optional `spec-ranking` samples to label cooldowns and compare top-parse phase timing
+  - it emits phase windows, selected-phase player casts, selected-phase boss casts, tracked spell metadata, top-parse samples, source commands, and notes; it does not synthesize strategy advice
 - `warcraft guild` is a first-class merged guild workflow that normalizes region/realm/name input, preserves the provider-native Raider.IO and WowProgress payloads under each source, and reports explicit source disagreements as an additive wrapper layer.
 - `warcraft guild-history` and `warcraft guild-ranks` currently route through the WowProgress provider surface and preserve the wrapped provider payload alongside the wrapper summary.
 - `warcraft guide-compare` compares exported guide bundles across providers using raw section evidence, additive `analysis_surfaces`, and explicit `build_references`, while preserving provider provenance and source citations instead of flattening the guides into one fake summary
@@ -515,6 +529,52 @@ WowProgress phase-1 behavior:
 - filtered guild-profile analytics preserve source and excluded profile counts so narrower slices stay explicit
 - `distribution` and `threshold` stay sample-backed and caveated rather than pretending to answer higher-level questions directly
 - WowProgress search is intentionally structured instead of broad free text because the site-native search surface is heavily constrained and less reliable than direct route resolution
+
+## Lorrgs Commands
+
+```bash
+lorrgs doctor
+lorrgs search "frost mage chimaerus"
+lorrgs resolve "frost mage chimaerus"
+lorrgs resolve "https://www.warcraftlogs.com/reports/bG3xDYPqKjLm8XaR?fight=22&type=damage-done"
+lorrgs specs
+lorrgs bosses
+lorrgs current-season
+lorrgs spec mage-frost
+lorrgs boss chimaerus-the-undreamt-god
+lorrgs spec-spells mage-frost
+lorrgs boss-spells chimaerus-the-undreamt-god
+lorrgs spec-ranking mage-frost chimaerus-the-undreamt-god
+lorrgs spec-ranking-info mage-frost chimaerus-the-undreamt-god
+lorrgs comp-ranking chimaerus-the-undreamt-god --limit 10
+lorrgs comp-ranking chimaerus-the-undreamt-god --role 'heal>=4' --spec 'mage-frost>=1'
+lorrgs report-overview "https://www.warcraftlogs.com/reports/bG3xDYPqKjLm8XaR?fight=22&type=damage-done"
+lorrgs user-report <report-id-or-url>
+lorrgs user-report-fights <report-id-or-url> --fight 2.4 --player 1.5 --type damage-done
+```
+
+Lorrgs behavior:
+- `doctor` reports no-auth public API posture, endpoint metadata, and capability state
+- `search` accepts Lorrgs ranking URLs, Warcraft Logs report URLs, bare mixed-alphanumeric report codes, and free text containing a spec and boss; results include `follow_up.command`
+- `resolve` picks a conservative Lorrgs next command, such as `lorrgs spec-ranking ...` or `lorrgs report-overview <report-id>`
+- `spec-ranking` returns Lorrgs' raw top-parse cooldown timeline data: reports, fights, players,
+  casts, boss casts, phases, timestamps, and source report ids
+- for a player-specific question like "how can I improve my cooldowns in P2", prefer
+  `warcraft cooldown-packet <report-url> --actor-id <source-id> --phase 2`; it combines Lorrgs
+  phase/spell/top-parse context with exact Warcraft Logs cast events for the selected player
+- `spec-ranking-info` fetches the same ranking metadata without the large report list
+- `comp-ranking` returns Lorrgs encounter composition rows and accepts repeatable `--role` and
+  `--spec` filter expressions plus kill-time bounds in seconds
+- `current-season` / `season <slug>` expose Lorrgs' season-to-raid partition metadata, matching the
+  UI's `current` season lookup
+- `report-overview` accepts a Warcraft Logs URL, Lorrgs user-report URL, or bare report code and fetches Lorrgs report metadata without queueing fight/player timeline work
+- static metadata commands (`specs`, `bosses`, `roles`, `classes`, `zones`, spell commands) should be
+  used to discover exact Lorrgs slugs before calling ranking commands
+- `user-report` and `user-report-fights` read already-cached Lorrgs user-report records only; `user-report-fights` preserves `type=<value>` from report URLs or accepts `--type`; the CLI intentionally does not expose queued load/dirty endpoints
+- payloads preserve Lorrgs provenance (`source_url`, API host, site URL) and mark upstream sources as
+  Warcraft Logs data plus Wowhead tooltips
+- the CLI does not synthesize cooldown strategy; treat top-parse timings as evidence to inspect, not
+  a universal recommendation for every raid group
 
 ## Warcraft Logs Commands
 

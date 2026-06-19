@@ -15,7 +15,7 @@ Documentation ownership:
 
 - `foundation/`: repo-wide principles and shared contracts
 - `architecture/`: packaging, auth, expansion filtering, linting, and completed-work history
-- `warcraft/`, `wowhead/`, `method/`, `icy-veins/`, `raiderio/`, `wowprogress/`, `warcraft-wiki/`, `warcraftlogs/`, `simc/`, `blizzard-api/`, `raidbots/`, `undermine-exchange/`, `raidplan/`, `curseforge/`: CLI-specific docs
+- `warcraft/`, `wowhead/`, `method/`, `icy-veins/`, `raiderio/`, `wowprogress/`, `warcraft-wiki/`, `warcraftlogs/`, `simc/`, `blizzard-api/`, `raidbots/`, `curseforge/`, `lorrgs/`, `undermine-exchange/`, `raidplan/`: CLI-specific docs
 - root docs:
   - [ROADMAP.md](ROADMAP.md)
   - [USAGE.md](USAGE.md)
@@ -68,6 +68,7 @@ Engineering backlog: [Linear — Warcraft CLI](https://linear.app/aurokin/projec
 - [raidbots/README.md](raidbots/README.md)
 - [blizzard-api/README.md](blizzard-api/README.md)
 - [curseforge/README.md](curseforge/README.md)
+- [lorrgs/README.md](lorrgs/README.md)
 - [undermine-exchange/README.md](undermine-exchange/README.md) *(candidate — DEFER)*
 - [raidplan/README.md](raidplan/README.md) *(candidate — DEFER)*
 

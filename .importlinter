@@ -14,6 +14,7 @@ root_packages =
   raidbots_cli
   blizzard_api_cli
   curseforge_cli
+  lorrgs_cli
   warcraft_cli
 
 [importlinter:contract:providers-independent]
@@ -31,6 +32,7 @@ modules =
   raidbots_cli
   blizzard_api_cli
   curseforge_cli
+  lorrgs_cli
 ignore_imports =
   warcraftlogs_cli.main -> simc_cli.talent_transport
 
@@ -39,7 +41,7 @@ name = Shared core layering and wrapper on top
 type = layers
 layers =
   warcraft_cli
-  wowhead_cli | method_cli | icy_veins_cli | raiderio_cli | warcraft_wiki_cli | wowprogress_cli | simc_cli | warcraftlogs_cli | raidbots_cli | blizzard_api_cli | curseforge_cli
+  wowhead_cli | method_cli | icy_veins_cli | raiderio_cli | warcraft_wiki_cli | wowprogress_cli | simc_cli | warcraftlogs_cli | raidbots_cli | blizzard_api_cli | curseforge_cli | lorrgs_cli
   warcraft_api | warcraft_content
   warcraft_core
 ignore_imports =

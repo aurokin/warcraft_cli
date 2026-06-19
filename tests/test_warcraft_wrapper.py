@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import httpx
+import pytest
 import typer
 from method_cli.main import app as method_app
 from typer.testing import CliRunner
@@ -14,6 +15,19 @@ from warcraftlogs_cli.main import app as warcraftlogs_app
 from wowhead_cli.main import app as wowhead_app
 
 runner = CliRunner()
+
+
+@pytest.fixture(autouse=True)
+def _stub_lorrgs_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep wrapper fanout tests offline while Lorrgs search/resolve are wrapper-ready."""
+    monkeypatch.setattr(
+        "lorrgs_cli.client.LorrgsClient.specs",
+        lambda self: {"payload": {"specs": []}, "source_url": "test://lorrgs/specs"},
+    )
+    monkeypatch.setattr(
+        "lorrgs_cli.client.LorrgsClient.bosses",
+        lambda self: {"payload": {"bosses": []}, "source_url": "test://lorrgs/bosses"},
+    )
 
 
 def _disable_wowhead_page_fetch(monkeypatch) -> None:  # noqa: ANN001
@@ -331,7 +345,7 @@ def test_warcraft_doctor_reports_ready_and_stubbed_providers() -> None:
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["wrapper"]["provider_count"] == 11
+    assert payload["wrapper"]["provider_count"] == 12
     providers = {row["provider"]: row for row in payload["providers"]}
     assert providers["wowhead"]["status"] == "ready"
     assert providers["method"]["status"] == "ready"
@@ -373,6 +387,15 @@ def test_warcraft_doctor_reports_ready_and_stubbed_providers() -> None:
     assert providers["curseforge"]["expansion_support"]["mode"] == "none"
     assert providers["curseforge"]["wrapper_surfaces"]["search"]["status"] == "coming_soon"
     assert providers["curseforge"]["details"]["capabilities"]["addon"] == "ready"
+    assert providers["lorrgs"]["status"] == "partial"
+    assert providers["lorrgs"]["auth"]["required"] is False
+    assert providers["lorrgs"]["expansion_support"]["mode"] == "fixed"
+    assert providers["lorrgs"]["expansion_support"]["supported_expansions"] == ["retail"]
+    assert providers["lorrgs"]["wrapper_surfaces"]["search"]["status"] == "ready"
+    assert providers["lorrgs"]["wrapper_surfaces"]["resolve"]["status"] == "ready"
+    assert providers["lorrgs"]["details"]["capabilities"]["spec_ranking"] == "ready"
+    assert providers["lorrgs"]["details"]["capabilities"]["report_overview"] == "ready"
+    assert providers["lorrgs"]["details"]["capabilities"]["current_season"] == "ready"
 
 
 def _provider_doctor_capabilities(registration) -> dict[str, str]:  # noqa: ANN001
@@ -391,7 +414,7 @@ def test_wrapper_capabilities_match_each_cli_doctor_for_search_and_resolve() -> 
     # surface is intentionally excluded: only warcraftlogs/simc/blizzard-api emit
     # a `doctor` capability key, so it is not a parity surface.)
     overstated = {"coming_soon", "not_supported", "ready_explicit_report_only"}
-    assert len(PROVIDERS) == 11
+    assert len(PROVIDERS) == 12
     for registration in PROVIDERS:
         capabilities = _provider_doctor_capabilities(registration)
         for surface in ("search", "resolve"):
@@ -521,6 +544,7 @@ def test_warcraft_doctor_reports_expansion_filtering_state() -> None:
         "raidbots",
         "blizzard-api",
         "curseforge",
+        "lorrgs",
     }
 
 
@@ -587,6 +611,7 @@ def test_warcraft_doctor_reports_retail_filter_state() -> None:
         "warcraft-wiki",
         "wowprogress",
         "raidbots",
+        "lorrgs",
     }
     assert {row["provider"] for row in payload["excluded_providers"]} == {"simc", "blizzard-api", "curseforge"}
 
@@ -669,7 +694,7 @@ def test_warcraft_search_fans_out_across_providers(monkeypatch) -> None:
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["provider_count"] == 11
+    assert payload["provider_count"] == 12
     assert payload["count"] == 1
     assert payload["results"][0]["provider"] == "wowhead"
     providers = {row["provider"]: row for row in payload["providers"]}
@@ -691,6 +716,7 @@ def test_warcraft_search_fans_out_across_providers(monkeypatch) -> None:
     assert excluded["blizzard-api"]["surface_support"]["status"] == "coming_soon"
     assert "curseforge" not in providers
     assert excluded["curseforge"]["surface_support"]["status"] == "coming_soon"
+    assert providers["lorrgs"]["payload"]["count"] == 0
     assert providers["wowhead"]["payload"]["results"][0]["name"] == "Thunderfury"
 
 
@@ -1850,6 +1876,7 @@ def test_warcraft_search_expansion_filter_excludes_nonmatching_providers(monkeyp
         "raidbots",
         "blizzard-api",
         "curseforge",
+        "lorrgs",
     }
     excluded = {row["provider"]: row["expansion_support"]["exclusion_reason"] for row in payload["excluded_providers"]}
     assert excluded["method"] == "provider_fixed_to_other_expansion"
@@ -1944,8 +1971,14 @@ def test_warcraft_search_retail_filter_keeps_fixed_retail_providers_and_excludes
         "warcraftlogs",
         "warcraft-wiki",
         "wowprogress",
+        "lorrgs",
     }
-    assert {row["provider"] for row in payload["excluded_providers"]} == {"simc", "raidbots", "blizzard-api", "curseforge"}
+    assert {row["provider"] for row in payload["excluded_providers"]} == {
+        "simc",
+        "raidbots",
+        "blizzard-api",
+        "curseforge",
+    }
     results = {row["provider"] for row in payload["results"]}
     assert {"method", "icy-veins"} & results
 
@@ -1993,8 +2026,14 @@ def test_warcraft_resolve_retail_filter_keeps_fixed_retail_profile_provider(monk
         "warcraftlogs",
         "warcraft-wiki",
         "wowprogress",
+        "lorrgs",
     }
-    assert {row["provider"] for row in payload["excluded_providers"]} == {"simc", "raidbots", "blizzard-api", "curseforge"}
+    assert {row["provider"] for row in payload["excluded_providers"]} == {
+        "simc",
+        "raidbots",
+        "blizzard-api",
+        "curseforge",
+    }
 
 
 def test_warcraft_search_prefers_profile_provider_for_structured_guild_queries(monkeypatch) -> None:
@@ -2161,6 +2200,7 @@ def test_warcraft_resolve_expansion_filter_blocks_retail_only_resolution(monkeyp
         "raidbots",
         "blizzard-api",
         "curseforge",
+        "lorrgs",
     }
 
 
@@ -2348,6 +2388,271 @@ def test_warcraft_resolve_can_select_warcraftlogs_for_explicit_report_reference(
     assert payload["provider"] == "warcraftlogs"
     assert payload["next_command"] == "warcraftlogs report-encounter abcd1234 --fight-id 3"
     assert payload["match"]["wrapper_ranking"]["provider_family"] == "logs"
+
+
+def test_cooldown_packet_combines_lorrgs_phase_data_with_warcraftlogs_casts(monkeypatch) -> None:
+    calls: list[tuple[str, list[str]]] = []
+
+    def fake_provider_invoke(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, object]:
+        calls.append((provider, args))
+        if provider == "lorrgs" and args[:1] == ["user-report-fights"]:
+            return {
+                "provider": provider,
+                "exit_code": 0,
+                "payload": {
+                    "ok": True,
+                    "provenance": {"source_url": "test://lorrgs/user-report-fights"},
+                    "data": {
+                        "fights": [
+                            {
+                                "fight_id": 22,
+                                "duration": 5000,
+                                "difficulty": 5,
+                                "kill": True,
+                                "percent": 0,
+                                "start_time": "2026-06-18T00:00:00Z",
+                                "phases": [{"ts": 1000}, {"ts": 3000}],
+                                "boss": {"boss_slug": "lura", "casts": [{"id": 900001, "ts": 1500, "c": 1}]},
+                                "players": [
+                                    {
+                                        "name": "Buikia",
+                                        "source_id": 89,
+                                        "class_slug": "warrior",
+                                        "spec_slug": "warrior-protection",
+                                        "total": 80591,
+                                        "deaths": [],
+                                    }
+                                ],
+                            }
+                        ]
+                    },
+                },
+                "stdout": "",
+            }
+        if provider == "lorrgs" and args == ["spec-spells", "warrior-protection"]:
+            return {
+                "provider": provider,
+                "exit_code": 0,
+                "payload": {
+                    "ok": True,
+                    "provenance": {"source_url": "test://lorrgs/spec-spells"},
+                    "data": {
+                        "107574": {
+                            "spell_id": 107574,
+                            "name": "Avatar",
+                            "event_type": "cast",
+                            "spell_type": "warrior",
+                            "cooldown": 90,
+                            "duration": 20,
+                            "query": True,
+                            "show": False,
+                            "tags": [],
+                            "wowhead_data": "spell=107574",
+                        },
+                        "1160": {
+                            "spell_id": 1160,
+                            "name": "Demoralizing Shout",
+                            "event_type": "cast",
+                            "spell_type": "warrior-protection",
+                            "cooldown": 45,
+                            "duration": 8,
+                            "query": True,
+                            "show": False,
+                            "tags": ["tank"],
+                            "wowhead_data": "spell=1160",
+                        },
+                    },
+                },
+                "stdout": "",
+            }
+        if provider == "lorrgs" and args == ["boss-spells", "lura"]:
+            return {
+                "provider": provider,
+                "exit_code": 0,
+                "payload": {
+                    "ok": True,
+                    "provenance": {"source_url": "test://lorrgs/boss-spells"},
+                    "data": {
+                        "900001": {
+                            "spell_id": 900001,
+                            "name": "Boss Event",
+                            "duration": 3,
+                            "cooldown": 0,
+                            "query": False,
+                            "show": True,
+                        }
+                    },
+                },
+                "stdout": "",
+            }
+        if provider == "warcraftlogs" and args[:1] == ["report-fights"]:
+            return {
+                "provider": provider,
+                "exit_code": 0,
+                "payload": {
+                    "ok": True,
+                    "report": {"code": "abcd1234", "title": "Test Report"},
+                    "fights": [{"id": 22, "start_time": 100000, "end_time": 105000, "encounter_id": 3183, "kill": True}],
+                },
+                "stdout": "",
+            }
+        if provider == "warcraftlogs" and args[:1] == ["report-events"]:
+            return {
+                "provider": provider,
+                "exit_code": 0,
+                "payload": {
+                    "ok": True,
+                    "report": {"code": "abcd1234", "title": "Test Report"},
+                    "next_page_timestamp": None,
+                    "events": [
+                        {"timestamp": 100500, "sourceID": 89, "abilityGameID": 107574, "targetID": -1, "type": "cast"},
+                        {"timestamp": 101500, "sourceID": 89, "abilityGameID": 107574, "targetID": -1, "type": "cast"},
+                        {"timestamp": 102500, "sourceID": 89, "abilityGameID": 1160, "targetID": -1, "type": "cast"},
+                        {"timestamp": 103500, "sourceID": 89, "abilityGameID": 1160, "targetID": -1, "type": "cast"},
+                    ],
+                },
+                "stdout": "",
+            }
+        if provider == "lorrgs" and args[:3] == ["spec-ranking", "warrior-protection", "lura"]:
+            return {
+                "provider": provider,
+                "exit_code": 0,
+                "payload": {
+                    "ok": True,
+                    "provenance": {"source_url": "test://lorrgs/spec-ranking"},
+                    "data": {
+                        "reports": [
+                            {
+                                "report_id": "toplog",
+                                "region": "US",
+                                "fights": [
+                                    {
+                                        "fight_id": 1,
+                                        "duration": 6000,
+                                        "phases": [{"ts": 1200}, {"ts": 3500}],
+                                        "boss": {"boss_slug": "lura", "casts": [{"id": 900001, "ts": 1400, "c": 1}]},
+                                        "players": [
+                                            {
+                                                "name": "Topwar",
+                                                "source_id": 7,
+                                                "spec_slug": "warrior-protection",
+                                                "total": 100000,
+                                                "casts": [
+                                                    {"id": 107574, "ts": 1500, "c": 1},
+                                                    {"id": 1160, "ts": 3600, "c": 1},
+                                                ],
+                                            }
+                                        ],
+                                    }
+                                ],
+                            },
+                            {
+                                "report_id": "toplog-missing-phase",
+                                "region": "EU",
+                                "fights": [
+                                    {
+                                        "fight_id": 2,
+                                        "duration": 6000,
+                                        "phases": [],
+                                        "boss": {"boss_slug": "lura", "casts": [{"id": 900001, "ts": 1400, "c": 1}]},
+                                        "players": [
+                                            {
+                                                "name": "NoPhase",
+                                                "source_id": 8,
+                                                "spec_slug": "warrior-protection",
+                                                "total": 99000,
+                                                "casts": [{"id": 107574, "ts": 1500, "c": 1}],
+                                            }
+                                        ],
+                                    }
+                                ],
+                            }
+                        ]
+                    },
+                },
+                "stdout": "",
+            }
+        raise AssertionError((provider, args, expansion))
+
+    monkeypatch.setattr("warcraft_cli.main.provider_invoke", fake_provider_invoke)
+
+    result = runner.invoke(
+        warcraft_app,
+        [
+            "cooldown-packet",
+            "https://www.warcraftlogs.com/reports/abcd1234?fight=22&type=damage-done",
+            "--actor-id",
+            "89",
+            "--phase",
+            "2",
+            "--sample-limit",
+            "2",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert payload["kind"] == "cooldown_packet"
+    assert payload["query"]["report_code"] == "abcd1234"
+    assert payload["query"]["report_type"] == "damage-done"
+    assert payload["query"]["spec_slug"] == "warrior-protection"
+    assert payload["query"]["boss_slug"] == "lura"
+    assert payload["phase"]["selected"]["label"] == "P2"
+    assert payload["phase"]["selected"]["start_ms"] == 1000
+    assert payload["phase"]["selected"]["end_ms"] == 3000
+    assert [cast["spell"]["name"] for cast in payload["cooldowns"]["player_casts"]["selected_phase_casts"]] == [
+        "Avatar",
+        "Demoralizing Shout",
+    ]
+    assert payload["cooldowns"]["player_casts"]["tracked_cast_count"] == 4
+    assert payload["boss"]["selected_phase_casts"][0]["spell"]["name"] == "Boss Event"
+    assert payload["comparison"]["sample_count"] == 2
+    assert payload["comparison"]["samples"][0]["selected_phase_casts"][0]["spell"]["name"] == "Avatar"
+    assert payload["comparison"]["samples"][0]["phase_available"] is True
+    assert payload["comparison"]["samples"][1]["phase_available"] is False
+    assert payload["comparison"]["samples"][1]["selected_phase_casts"] == []
+    assert payload["comparison"]["selected_phase_spell_frequency"][0]["spell"]["name"] == "Avatar"
+    assert ("lorrgs", ["user-report-fights", "https://www.warcraftlogs.com/reports/abcd1234?fight=22&type=damage-done", "--fight", "22", "--type", "damage-done"]) in calls
+    assert ("warcraftlogs", ["report-events", "abcd1234", "--fight-id", "22", "--source-id", "89", "--data-type", "casts", "--limit", "5000"]) in calls
+
+
+def test_cooldown_packet_can_resolve_actor_name_and_reports_missing_actor(monkeypatch) -> None:
+    def fake_provider_invoke(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, object]:
+        assert provider == "lorrgs"
+        assert args[:1] == ["user-report-fights"]
+        return {
+            "provider": provider,
+            "exit_code": 0,
+            "payload": {
+                "ok": True,
+                "data": {
+                    "fights": [
+                        {
+                            "fight_id": 22,
+                            "duration": 5000,
+                            "phases": [{"ts": 1000}],
+                            "boss": {"boss_slug": "lura"},
+                            "players": [{"name": "Buikia", "source_id": 89, "spec_slug": "warrior-protection"}],
+                        }
+                    ]
+                },
+            },
+            "stdout": "",
+        }
+
+    monkeypatch.setattr("warcraft_cli.main.provider_invoke", fake_provider_invoke)
+
+    result = runner.invoke(
+        warcraft_app,
+        ["cooldown-packet", "abcd1234", "--fight-id", "22", "--actor-name", "Missing", "--phase", "2"],
+    )
+
+    assert result.exit_code == 1
+    payload = json.loads(result.stderr)
+    assert payload["error"]["code"] == "actor_name_not_found"
+    assert payload["error"]["available_players"] == [
+        {"name": "Buikia", "source_id": 89, "spec_slug": "warrior-protection", "class_slug": None}
+    ]
 
 
 def test_warcraft_resolve_compact_and_ranking_debug(monkeypatch) -> None:

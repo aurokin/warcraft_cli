@@ -18,6 +18,7 @@ DEFAULT_WRAPPER_RANKING_POLICY: dict[str, Any] = {
         "warcraftlogs": "logs",
         "warcraft-wiki": "reference",
         "wowprogress": "profile",
+        "lorrgs": "logs",
         "simc": "local_tool",
     },
     "known_region_terms": ["us", "eu", "kr", "tw", "cn", "world"],
@@ -95,7 +96,7 @@ DEFAULT_WRAPPER_RANKING_POLICY: dict[str, Any] = {
     "intent_provider_boosts": {
         "guild_profile": {"wowprogress": 10, "raiderio": -4},
         "character_profile": {"raiderio": 28, "wowprogress": -14},
-        "log_analysis": {"warcraftlogs": 28},
+        "log_analysis": {"warcraftlogs": 28, "lorrgs": 18},
         "structured_profile": {"wowprogress": 4, "raiderio": 2},
     },
     "intent_kind_boosts": {
@@ -115,7 +116,7 @@ DEFAULT_WRAPPER_RANKING_POLICY: dict[str, Any] = {
         },
         "guild_profile": {"guild": 24, "leaderboard": 18},
         "character_profile": {"character": 24, "mythic_plus_runs": 12},
-        "log_analysis": {"report": 24, "report_encounter": 28},
+        "log_analysis": {"report": 24, "report_encounter": 28, "report_overview": 20, "spec_ranking": 26, "comp_ranking": 20},
         "structured_profile": {"guild": 20, "character": 20},
         "simc": {"analysis": 16, "apl": 20, "decode_build": 18, "inspect": 12, "run": 10},
     },
@@ -127,6 +128,7 @@ DEFAULT_WRAPPER_RANKING_POLICY: dict[str, Any] = {
         "warcraftlogs": {"report": 12, "report_encounter": 16},
         "warcraft-wiki": {"article": 8},
         "wowprogress": {"character": 0, "guild": 12, "leaderboard": 8},
+        "lorrgs": {"report_overview": 10, "spec_ranking": 14, "comp_ranking": 10},
         "simc": {"analysis": 8, "apl": 10, "decode_build": 10, "inspect": 8, "run": 8},
     },
 }

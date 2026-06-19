@@ -148,6 +148,7 @@ Current likely examples:
 - `raiderio` -> `retail`
 - `warcraftlogs` -> `retail`
 - `wowprogress` -> `retail`
+- `lorrgs` -> `retail`
 
 ### `none`
 
@@ -273,6 +274,7 @@ Current state:
 - `raidbots` is ready for report consumption (`inspect-report`, `input`, `explain-input`) and local SimC handoff; `search`/`resolve` are `not_supported` (report-driven provider, no discovery surface)
 - `blizzard-api` is ready for official Game Data and Profile reads over OAuth client-credentials auth: `doctor` reports install state, auth posture, and the region/routing block; `game_data` and `profile` are ready (`realm`/`item`/`character` read commands), while `search`/`resolve` stay `coming_soon` until a discovery surface lands. Registered with `expansion_mode=none` (Blizzard's region/namespace model is not the wrapper's expansion axis)
 - `curseforge` is a scaffold for the public CurseForge addon API (`x-api-key` auth, `CURSEFORGE_API_KEY`): `doctor` and `addon` are ready (`curseforge addon <slug|id>` returns the addon metadata, latest files, and the newest file's changelog), while `search`/`resolve` stay `coming_soon`. Registered with `expansion_mode=none` (addon game-version compatibility lives inside file records, not the wrapper's expansion axis). Host/endpoints/response shapes follow the documented public CurseForge Core API and are pending one-time live confirmation (`provenance.verified=false`; run `CURSEFORGE_LIVE_TESTS=1`)
+- `lorrgs` is ready for no-auth public Lorrgs reads: static spec/boss/spell metadata, top-parse spec rankings, composition rankings, report overview handoffs, and conservative `search`/`resolve` for Lorrgs URLs, Warcraft Logs report URLs, bare report codes, and spec/boss text. Registered with `expansion_mode=fixed` / `supported_expansions=["retail"]`
 
 ## Documentation Rule
 

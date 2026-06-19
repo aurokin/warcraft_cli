@@ -23,7 +23,7 @@ Grow the repo as a Warcraft data monorepo with:
 Working now:
 - shared packages: `warcraft-core`, `warcraft-api`, `warcraft-content`
 - root wrapper: `warcraft`
-- provider CLIs: `wowhead`, `method`, `icy-veins`, `raiderio`, `warcraft-wiki`, `wowprogress`, `warcraftlogs`, `simc`
+- provider CLIs: `wowhead`, `method`, `icy-veins`, `raiderio`, `warcraft-wiki`, `wowprogress`, `warcraftlogs`, `simc`, `raidbots`, `blizzard`, `curseforge`, `lorrgs`
 - root `warcraft` skill
 
 Validated shared systems:
@@ -72,6 +72,8 @@ Command behavior and boundaries stay in provider READMEs — use Linear issues a
 | WowProgress | [wowprogress/README.md](wowprogress/README.md) |
 | Wowhead | [wowhead/README.md](wowhead/README.md) |
 | Raidbots | [raidbots/README.md](raidbots/README.md) |
+| CurseForge | [curseforge/README.md](curseforge/README.md) |
+| Lorrgs | [lorrgs/README.md](lorrgs/README.md) |
 | Wrapper | [warcraft/README.md](warcraft/README.md) |
 
 ## Recently Completed

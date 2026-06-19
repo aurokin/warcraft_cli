@@ -198,6 +198,10 @@ The current high-level layout includes:
 - `packages/wowprogress-cli/`
 - `packages/simc-cli/`
 - `packages/warcraftlogs-cli/`
+- `packages/raidbots-cli/`
+- `packages/blizzard-api-cli/`
+- `packages/curseforge-cli/`
+- `packages/lorrgs-cli/`
 - `skills/warcraft/`
 
 Service-specific root skills can be added later if they prove useful. For now, the root `warcraft` skill should use progressive disclosure and route agents to the right service docs and CLI.
