@@ -10,6 +10,18 @@ Add user-visible changes to `[Unreleased]` in the same PR that ships them. See [
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Removed
+
+### Deprecated
+
+## [0.4.0] - 2026-06-23
+
+### Added
+
 - Lorrgs provider: new no-auth `lorrgs` command for the public Lorrgs API (`https://api2.lorrgs.io/api/*`) after a user requested support for `lorrgs.io`. Ships `doctor`; static metadata commands (`roles`, `classes`, `specs`, `spec`, `spec-spells`, `zones`, `zone`, `zone-bosses`, `bosses`, `boss`, `boss-spells`, `spell`, `trinkets`); season metadata commands (`current-season`, `season <slug>`); ranking commands `spec-ranking <spec-slug> <boss-slug>` and `spec-ranking-info <spec-slug> <boss-slug>` for top-parse cooldown timelines; `comp-ranking <boss-slug>` with repeatable `--role`/`--spec` filters and kill-time bounds; `search` / `resolve` for Lorrgs ranking URLs, Warcraft Logs report URLs, bare mixed-alphanumeric report codes, and free text spec/boss queries; `report-overview <report-id-or-url>` for report metadata without queueing fight/player timeline work; and cached-only `user-report` / `user-report-fights` reads. Browser-driving the public Lorrgs page showed the UI preserves `type=damage-done` on `/user_reports/<id>/fights`, so `user-report-fights` now preserves `type` from report URLs and accepts `--type`. Each command emits `{ok, provider, command, kind, query, provenance, data}` on success, with provenance carrying the exact `source_url`, API host, site URL, and upstream source posture (`warcraftlogs`, Wowhead tooltips), and `{ok:false, ..., error:{code, message}}` with a nonzero exit (never a traceback) for `not_found`, `invalid_query`, `rate_limited`, `http_error`, `network_error`, and `invalid_response`. Routed through the wrapper as `warcraft lorrgs ...` with `search`/`resolve` ready, `expansion_mode=fixed`, and `supported_expansions=["retail"]`. The CLI intentionally does not expose Lorrgs queued load/dirty endpoints. Live public API coverage is gated by `LORRGS_LIVE_TESTS=1 pytest -q -m live tests/test_lorrgs_live.py`, including the user-provided Warcraft Logs URL `https://www.warcraftlogs.com/reports/bG3xDYPqKjLm8XaR?fight=22&type=damage-done`. See `docs/lorrgs/README.md`.
 - Wrapper cooldown evidence packet: new `warcraft cooldown-packet <warcraftlogs-report-url-or-code> --actor-id <source-id> --phase <n>` composes cached Lorrgs report fight data (phase markers, boss casts, boss/spec slugs, player source ids), Lorrgs spell metadata and optional top-parse `spec-ranking` samples, and Warcraft Logs `report-events --data-type casts` for exact player cast timestamps. The packet emits selected phase windows, player cooldown casts in the phase, boss casts, tracked spell metadata, top-parse comparison samples, source commands/provenance, and caveats. It is intentionally evidence-only, not a synthesized cooldown recommendation.
 - CurseForge provider scaffold (AUR-499): new `curseforge` command for the public CurseForge addon API, decided GO in AUR-395. First slice ships `curseforge doctor` (install state, `api_key` auth posture for `CURSEFORGE_API_KEY` discovered via `.env.local` → `~/.config/warcraft/providers/curseforge.env` → environment, and capability metadata — `doctor`/`addon` ready, `search`/`resolve` `coming_soon`) and `curseforge addon <slug-or-id>` — resolves the addon (numeric → mod id, else a `gameId=1` slug search) and returns `data.metadata` (raw CurseForge mod record), `data.latest_files` (the mod's `latestFiles`), and `data.changelog` (the newest file's changelog, best-effort: top-level `null` only when the addon has no files; otherwise an object with the file's `body` — `null` when that file exposes no notes — plus `source_url`, or a `{file_id, error}` marker on a failed fetch, never failing the lookup). Each command emits `{ok, provider, command, kind, query, provenance, data}` on success — provenance carries `game_id`/`mod_id`/`slug`/`resolved_by`/`source_urls` — and `{ok:false, ..., error:{code, message}}` with a nonzero exit (never a traceback) for `missing_api_key`, `addon_not_found`, `http_error`, `network_error`, and `invalid_response`. Routed through the wrapper as `warcraft curseforge …` with `expansion_mode=none` (addon game-version compatibility lives inside file records, not the wrapper's expansion axis). **The host, endpoints, and response shapes follow the documented public CurseForge Core API but are pending one-time live confirmation** — every command payload carries `provenance.verified: false`; run `CURSEFORGE_LIVE_TESTS=1 pytest -q -m live tests/test_curseforge_live.py` with a real `CURSEFORGE_API_KEY` to confirm them. See `docs/curseforge/README.md`. Deferred: dependency graph / game-version compatibility / file-download workflows. `search`/`resolve` are not implemented yet but exist as structured `coming_soon` stubs (a JSON envelope with `coming_soon: true` and a `suggested_command`, not a Click "No such command" error), matching the surface `doctor` advertises.
@@ -131,6 +143,7 @@ warcraftlogs auth login \
 
 Existing tokens issued without `view-user-profile` continue to work for public queries; `auth status` reports the missing scope.
 
-[Unreleased]: https://github.com/aurokin/warcraft_cli/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/aurokin/warcraft_cli/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/aurokin/warcraft_cli/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/aurokin/warcraft_cli/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/aurokin/warcraft_cli/releases/tag/v0.2.0

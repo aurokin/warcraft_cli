@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "warcraft-core-cli"
-version = "0.3.0"
+version = "0.4.0"
 description = "Shared core utilities for the Warcraft CLI monorepo"
 readme = "../../README.md"
 requires-python = ">=3.12"
