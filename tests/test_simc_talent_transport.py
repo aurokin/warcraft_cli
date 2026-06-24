@@ -2,8 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from simc_cli.build_input import BuildResolution
-from simc_cli.talent_transport import _decoded_talent, validate_talent_tree_transport
+from warcraft_core.talent_transport import BuildResolution, _decoded_talent, validate_talent_tree_transport
 
 
 def _write_fake_generated_repo(root: Path) -> None:
@@ -37,9 +36,9 @@ def _write_fake_generated_repo(root: Path) -> None:
 def test_validate_talent_tree_transport_builds_validated_split_forms(monkeypatch, tmp_path: Path) -> None:
     _write_fake_generated_repo(tmp_path)
 
-    monkeypatch.setattr("simc_cli.talent_transport.encode_build", lambda repo, build_spec: "ENCODED123")
+    monkeypatch.setattr("warcraft_core.talent_transport.encode_build", lambda repo, build_spec: "ENCODED123")
     monkeypatch.setattr(
-        "simc_cli.talent_transport.decode_build",
+        "warcraft_core.talent_transport.decode_build",
         lambda repo, build_spec: BuildResolution(
             actor_class="druid",
             spec="balance",
@@ -164,9 +163,9 @@ def test_validate_talent_tree_transport_supports_specs_with_underscores(monkeypa
         "} };\n"
     )
 
-    monkeypatch.setattr("simc_cli.talent_transport.encode_build", lambda repo, build_spec: "XYZ987")
+    monkeypatch.setattr("warcraft_core.talent_transport.encode_build", lambda repo, build_spec: "XYZ987")
     monkeypatch.setattr(
-        "simc_cli.talent_transport.decode_build",
+        "warcraft_core.talent_transport.decode_build",
         lambda repo, build_spec: BuildResolution(
             actor_class="hunter",
             spec="beast_mastery",
@@ -213,9 +212,9 @@ def test_validate_talent_tree_transport_supports_multiword_class_enums(monkeypat
         "} };\n"
     )
 
-    monkeypatch.setattr("simc_cli.talent_transport.encode_build", lambda repo, build_spec: "DK123")
+    monkeypatch.setattr("warcraft_core.talent_transport.encode_build", lambda repo, build_spec: "DK123")
     monkeypatch.setattr(
-        "simc_cli.talent_transport.decode_build",
+        "warcraft_core.talent_transport.decode_build",
         lambda repo, build_spec: BuildResolution(
             actor_class="deathknight",
             spec="blood",
@@ -261,9 +260,9 @@ def test_validate_talent_tree_transport_parses_single_line_generated_files(monke
         ' } };'
     )
 
-    monkeypatch.setattr("simc_cli.talent_transport.encode_build", lambda repo, build_spec: "DK123")
+    monkeypatch.setattr("warcraft_core.talent_transport.encode_build", lambda repo, build_spec: "DK123")
     monkeypatch.setattr(
-        "simc_cli.talent_transport.decode_build",
+        "warcraft_core.talent_transport.decode_build",
         lambda repo, build_spec: BuildResolution(
             actor_class="deathknight",
             spec="blood",

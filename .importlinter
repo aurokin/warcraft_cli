@@ -33,8 +33,6 @@ modules =
   blizzard_api_cli
   curseforge_cli
   lorrgs_cli
-ignore_imports =
-  warcraftlogs_cli.main -> simc_cli.talent_transport
 
 [importlinter:contract:package-layers]
 name = Shared core layering and wrapper on top
@@ -44,5 +42,3 @@ layers =
   wowhead_cli | method_cli | icy_veins_cli | raiderio_cli | warcraft_wiki_cli | wowprogress_cli | simc_cli | warcraftlogs_cli | raidbots_cli | blizzard_api_cli | curseforge_cli | lorrgs_cli
   warcraft_api | warcraft_content
   warcraft_core
-ignore_imports =
-  warcraftlogs_cli.main -> simc_cli.talent_transport

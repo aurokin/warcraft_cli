@@ -14,7 +14,6 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 import typer
-from simc_cli.talent_transport import validate_talent_tree_transport
 from warcraft_core.analytics import numeric_summary
 from warcraft_core.auth import (
     delete_provider_auth_state,
@@ -34,6 +33,7 @@ from warcraft_core.identity import (
 )
 from warcraft_core.output import emit
 from warcraft_core.paths import provider_state_path
+from warcraft_core.talent_transport import validate_talent_tree_transport
 from warcraft_core.wow_normalization import normalize_region
 
 from warcraftlogs_cli.boss_kills import (

@@ -14,6 +14,8 @@ Add user-visible changes to `[Unreleased]` in the same PR that ships them. See [
 
 ### Fixed
 
+- Warcraft Logs no longer depends on `simc-cli` at runtime for talent-tree transport validation. The shared `validate_talent_tree_transport` helper now lives in `warcraft_core`, with `simc_cli.talent_transport` kept as a compatibility re-export, and the provider-to-provider import-linter exception was removed (AUR-501).
+
 ### Removed
 
 ### Deprecated

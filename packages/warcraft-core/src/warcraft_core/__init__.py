@@ -18,6 +18,7 @@ from warcraft_core.identity import (
     talent_transport_packet_payload,
     validate_talent_transport_packet,
 )
+from warcraft_core.talent_transport import validate_talent_tree_transport
 
 __all__ = [
     "ability_identity_payload",
@@ -38,4 +39,5 @@ __all__ = [
     "report_actor_identity_payload",
     "talent_transport_packet_payload",
     "validate_talent_transport_packet",
+    "validate_talent_tree_transport",
 ]

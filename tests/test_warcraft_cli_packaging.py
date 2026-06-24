@@ -69,9 +69,7 @@ def test_warcraftlogs_cli_pyproject_declares_console_script_and_deps() -> None:
     assert data["project"]["scripts"]["warcraftlogs"] == "warcraftlogs_cli.main:run"
 
     deps = _dependency_names(pyproject)
-    # The warcraftlogs.main -> simc_cli.talent_transport edge is the single
-    # import-linter ``ignore_imports`` exception; declare it as a real dep.
-    assert "simc-cli" in deps
+    assert "simc-cli" not in deps
     assert {
         "typer",
         "httpx",
