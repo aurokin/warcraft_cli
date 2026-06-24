@@ -78,10 +78,10 @@ def report_brief_payload(report: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def report_url(code: str | None, *, fight_id: int | None = None) -> str | None:
+def report_url(code: str | None, *, fight_id: int | None = None, root_url: str = "https://www.warcraftlogs.com") -> str | None:
     if not isinstance(code, str) or not code.strip():
         return None
-    base = f"https://www.warcraftlogs.com/reports/{code}"
+    base = f"{root_url.rstrip('/')}/reports/{code}"
     if isinstance(fight_id, int):
         return f"{base}#fight={fight_id}"
     return base

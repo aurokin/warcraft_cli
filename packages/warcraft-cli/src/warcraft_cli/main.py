@@ -39,7 +39,6 @@ from warcraft_core.provider_contract import (
 )
 from warcraft_wiki_cli.main import app as warcraft_wiki_app
 from warcraftlogs_cli.main import app as warcraftlogs_app
-from wowhead_cli.expansion_profiles import resolve_expansion
 from wowhead_cli.main import app as wowhead_app
 from wowprogress_cli.main import app as wowprogress_app
 
@@ -70,11 +69,13 @@ from warcraft_cli.providers import (
     get_provider,
     global_doctor_payload,
     list_providers,
+    provider_expansion_args,
     provider_expansion_exclusion_reason,
     provider_expansion_support,
     provider_invoke,
     provider_resolve,
     provider_search,
+    resolve_wrapper_expansion_key,
     surface_filtered_providers,
 )
 
@@ -117,7 +118,7 @@ def main_callback(
     requested_expansion: str | None = None
     if expansion is not None:
         try:
-            requested_expansion = resolve_expansion(expansion).key
+            requested_expansion = resolve_wrapper_expansion_key(expansion)
         except ValueError as exc:
             raise typer.BadParameter(str(exc), param_hint="--expansion") from exc
     ctx.obj = {"pretty": pretty, "requested_expansion": requested_expansion}
@@ -190,19 +191,32 @@ def _expansion_passthrough_advisory(ctx: typer.Context, *, provider_name: str) -
     raise typer.Exit(1)
 
 
+def _has_option(args: list[str], flags: set[str]) -> bool:
+    return any(arg in flags or any(arg.startswith(f"{flag}=") for flag in flags) for arg in args)
+
+
 def _passthrough_args(ctx: typer.Context, *, provider_name: str) -> list[str]:
     args = list(ctx.args)
     requested_expansion = _requested_expansion(ctx)
     if requested_expansion is None:
         return args
-    if provider_name == "wowhead":
-        if "--expansion" in args:
+    registration = get_provider(provider_name)
+    if provider_expansion_exclusion_reason(registration, requested_expansion=requested_expansion) is not None:
+        return args
+    expansion_args = provider_expansion_args(registration, requested_expansion)
+    if expansion_args:
+        duplicate_flags = {"--expansion"} if provider_name == "wowhead" else {"--site"}
+        if _has_option(args, duplicate_flags):
+            flag_text = " or ".join(sorted(duplicate_flags))
             _emit(
                 {
                     "ok": False,
                     "error": {
                         "code": "duplicate_expansion_argument",
-                        "message": "Do not pass both warcraft --expansion and wowhead --expansion in the same command.",
+                        "message": (
+                            f"Do not pass both warcraft --expansion and provider-level {flag_text} "
+                            "in the same command."
+                        ),
                     },
                     "provider": provider_name,
                     "requested_expansion": requested_expansion,
@@ -211,7 +225,7 @@ def _passthrough_args(ctx: typer.Context, *, provider_name: str) -> list[str]:
                 err=True,
             )
             raise typer.Exit(1)
-        return ["--expansion", requested_expansion, *args]
+        return [*expansion_args, *args]
     return args
 
 

@@ -118,11 +118,10 @@ Implemented today:
 
 Current intentional boundary:
 - wrapped plus standalone, but wrapper discovery is still intentionally narrow
-- retail/main site profile only
+- site-profile selection is explicit: `--site retail|classic|fresh`
 - public data surface first, with only limited user-endpoint verification via `warcraftlogs auth whoami`
-- typed fields only; no raw GraphQL passthrough
+- typed command surface plus raw `graphql` passthrough for explicitly scoped official GraphQL queries
 - no wrapper-level user-auth routing yet
-- no classic/fresh site-profile routing yet
 
 What changed in the research baseline:
 - we now have a local rendered docs dump under `research/warcraftlogs-docs/`
@@ -166,7 +165,6 @@ Current rankings split:
 After that:
 - user-auth plumbing
 - wrapper integration
-- future site-profile routing for `classic` and `fresh`
 
 ## Site Variant Research
 
@@ -188,54 +186,32 @@ This is an important architectural result:
 - they should become site profiles inside one `warcraftlogs` provider
 - the split is operational and product-scoped, not schema-scoped
 
-## Variant Strategy
+## Site Profile Contract
 
-Recommended long-term provider shape:
-- one provider: `warcraftlogs`
-- future site profiles:
-  - `retail`
-  - `classic`
-  - `fresh`
+The provider has one CLI package, `warcraftlogs`, with three site profiles:
 
-The provider should eventually route:
-- base site URL
-- OAuth endpoints
-- GraphQL endpoint root
-- provider policy metadata
+| Site profile | Host |
+| --- | --- |
+| `retail` | `www.warcraftlogs.com` |
+| `classic` | `classic.warcraftlogs.com` |
+| `fresh` | `fresh.warcraftlogs.com` |
 
-through a site-profile layer rather than command duplication.
+The `--site` global flag routes the base site URL, OAuth authorize/token endpoints, public GraphQL endpoint, and user GraphQL endpoint through the selected profile:
 
-## Expansion Filter Planning
+```bash
+warcraftlogs --site classic auth client
+warcraftlogs --site fresh expansions
+```
 
-This provider needs explicit wrapper-expansion planning before it is added to `warcraft`.
+The wrapper maps expansion keys to these site profiles before invoking Warcraft Logs:
 
-Recommended policy:
-- phase 1:
-  - retail-only implementation
-  - if routed through `warcraft`, classify as `fixed` to `retail`
-- phase 2:
-  - keep retail-only wrapper behavior
-- phase 3:
-  - add `classic` and `fresh` site profiles
-  - reclassify `warcraftlogs` from `fixed retail` to `profiled`
+| Wrapper expansion key | `warcraftlogs --site` |
+| --- | --- |
+| `retail` | `retail` |
+| `classic`, `tbc`, `wotlk`, `cata`, `mop-classic` | `classic` |
+| `fresh` | `fresh` |
 
-Important consequence:
-- the current wrapper expansion vocabulary is still mostly wowhead-shaped
-- `classic-fresh` is not currently a first-class wrapper expansion key
-- we should not pretend the existing wrapper expansion keys already cover all Warcraft Logs site variants cleanly
-
-So phase 3 must include:
-- site-profile routing in `warcraftlogs`
-- wrapper expansion vocabulary review
-- explicit mapping from wrapper expansion keys to Warcraft Logs site profiles
-- provider registry metadata updates in the `warcraft` wrapper
-
-Current planning direction:
-- `retail` -> `www.warcraftlogs.com`
-- classic-family wrapper keys -> `classic.warcraftlogs.com`
-- `classic-fresh` or equivalent future wrapper key -> `fresh.warcraftlogs.com`
-
-This mapping is still a planning target, not an implemented contract.
+`ptr`, `beta`, and `classic-ptr` are not mapped to Warcraft Logs. They are rejected rather than coerced.
 
 ## Official Access Model
 
@@ -983,16 +959,16 @@ Instead:
 3. optional raw GraphQL / saved query workflows
 4. report-component exploration if justified
 
-### Phase 6: Variant-Aware Site Profiles
+### Phase 6: Variant-Aware Site Profiles (Shipped)
 
-1. add site-profile routing for:
+1. site-profile routing for:
    - retail
    - classic
    - fresh
-2. verify auth and GraphQL endpoint behavior per site profile
-3. decide the wrapper expansion-key mapping needed for classic/fresh
-4. update wrapper provider metadata so `warcraft --expansion ...` can include Warcraft Logs honestly
-5. add live tests for site-profile selection and wrapper expansion behavior
+2. auth/token and GraphQL endpoint behavior verified per site profile
+3. wrapper expansion-key mapping is explicit (`fresh` is first-class)
+4. wrapper provider metadata is `profiled`
+5. live tests cover site-profile selection and schema/OAuth access
 
 ## What Can Reuse Shared Code
 

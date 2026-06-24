@@ -65,11 +65,11 @@ Best fits:
 
 ## Current Boundaries
 
-- current support is retail/main site only
+- site profile selection is explicit: `warcraftlogs --site retail|classic|fresh ...`
 - public OAuth client credentials are the default auth mode
 - manual user-auth groundwork now exists for authorization-code and PKCE exchange, plus saved user-token verification via `warcraftlogs auth whoami`
 - current surface works both standalone and through the root `warcraft` wrapper, but wrapper discovery is still intentionally narrow
-- current commands use typed payloads, not raw GraphQL passthrough
+- commands use typed payloads when available, with `graphql` as a raw official API escape hatch for explicitly scoped queries
 
 ## Inputs
 
@@ -90,6 +90,10 @@ Best fits:
 
 - guild snapshot:
   - `warcraftlogs guild us illidan Liquid`
+- Classic/Fresh site profile:
+  - `warcraftlogs --site classic guild us mankrik <guild>`
+  - `warcraftlogs --site fresh expansions`
+  - `warcraft --expansion fresh warcraftlogs auth client`
 - guild progress in a specific zone:
   - `warcraftlogs guild us illidan Liquid --zone-id 38`
 - guild rankings in a specific zone:

@@ -69,7 +69,10 @@ from warcraftlogs_cli.client import (
     ReportRankingsOptions,
     WarcraftLogsClient,
     WarcraftLogsClientError,
+    WarcraftLogsSiteProfile,
     load_warcraftlogs_auth_config,
+    resolve_site_profile,
+    saved_user_token_site_key,
     warcraftlogs_provider_env_path,
 )
 from warcraftlogs_cli.report_payloads import (
@@ -223,6 +226,7 @@ fragment TypeRef on __Type {
 @dataclass(slots=True)
 class RuntimeConfig:
     pretty: bool = False
+    site_profile: WarcraftLogsSiteProfile = RETAIL_PROFILE
 
 
 @dataclass(frozen=True, slots=True)
@@ -548,7 +552,7 @@ def _normalize_encounter_ranking_spec_name(value: str | None) -> str | None:
 
 def _client(ctx: typer.Context) -> WarcraftLogsClient:
     try:
-        return WarcraftLogsClient()
+        return WarcraftLogsClient(site=_cfg(ctx).site_profile)
     except Exception as exc:  # noqa: BLE001
         _fail(ctx, "invalid_runtime_config", _runtime_error_message(str(exc)))
         raise AssertionError("unreachable") from exc
@@ -558,11 +562,39 @@ def _handle_client_error(ctx: typer.Context, exc: WarcraftLogsClientError) -> No
     _fail(ctx, exc.code, exc.message)
 
 
-def _saved_user_token_ready(state: dict[str, Any]) -> bool:
-    return bool(
+def _saved_user_token_ready(state: dict[str, Any], *, site: WarcraftLogsSiteProfile | None = None) -> bool:
+    ready = bool(
         state.get("has_access_token")
         and state.get("auth_mode") in {"authorization_code", "pkce"}
         and not state.get("expired")
+    )
+    if not ready or site is None:
+        return ready
+    return _saved_user_token_matches_site(site, state=state)
+
+
+def _saved_provider_auth_payload(state: dict[str, Any] | None = None) -> dict[str, Any]:
+    state_path = state.get("path") if state is not None else None
+    if isinstance(state_path, str) and state_path.strip():
+        payload = load_provider_auth_state("warcraftlogs", path=state_path)
+    else:
+        payload = load_provider_auth_state("warcraftlogs")
+    return payload or {}
+
+
+def _saved_user_token_site_key(state: dict[str, Any] | None = None) -> str:
+    payload = _saved_provider_auth_payload(state)
+    return saved_user_token_site_key(payload)
+
+
+def _saved_user_token_matches_site(site: WarcraftLogsSiteProfile, *, state: dict[str, Any] | None = None) -> bool:
+    return _saved_user_token_site_key(state) == site.key
+
+
+def _site_profile_mismatch_message(*, token_site: str, selected_site: WarcraftLogsSiteProfile) -> str:
+    return (
+        f"Saved Warcraft Logs user token is for site profile {token_site!r}, not {selected_site.key!r}. "
+        f"Re-run `warcraftlogs --site {selected_site.key} auth login` for user-endpoint requests on this site."
     )
 
 
@@ -642,8 +674,8 @@ def _scope_breakdown(
     }
 
 
-def _saved_user_token_scope_summary() -> dict[str, Any]:
-    payload = load_provider_auth_state("warcraftlogs") or {}
+def _saved_user_token_scope_summary(state: dict[str, Any] | None = None) -> dict[str, Any]:
+    payload = _saved_provider_auth_payload(state)
     breakdown = _scope_breakdown(
         granted_scope=payload.get("scope"),
         requested_scopes=payload.get("requested_scopes"),
@@ -672,9 +704,19 @@ def _probe_failed_payload(*, mode: str | None, validation: str, probe: str, mess
     }
 
 
-def _runtime_access_payload() -> dict[str, Any]:
+def _site_profile_payload(site: WarcraftLogsSiteProfile) -> dict[str, Any]:
+    return {
+        "key": site.key,
+        "label": site.label,
+        "root_url": site.root_url,
+        "api_url": site.api_url,
+        "user_api_url": site.user_api_url,
+    }
+
+
+def _runtime_access_payload(site: WarcraftLogsSiteProfile) -> dict[str, Any]:
     try:
-        client = WarcraftLogsClient()
+        client = WarcraftLogsClient(site=site)
     except Exception as exc:  # noqa: BLE001
         return {
             "ready": False,
@@ -687,7 +729,13 @@ def _runtime_access_payload() -> dict[str, Any]:
     }
 
 
-def _public_api_access_payload(*, auth_configured: bool, runtime_access: dict[str, Any], live: bool) -> dict[str, Any]:
+def _public_api_access_payload(
+    *,
+    auth_configured: bool,
+    runtime_access: dict[str, Any],
+    live: bool,
+    site: WarcraftLogsSiteProfile,
+) -> dict[str, Any]:
     if not runtime_access["ready"]:
         return {
             "ready": False,
@@ -707,7 +755,7 @@ def _public_api_access_payload(*, auth_configured: bool, runtime_access: dict[st
             }
         client: WarcraftLogsClient | None = None
         try:
-            client = WarcraftLogsClient()
+            client = WarcraftLogsClient(site=site)
             client.probe_live_public_api()
         except WarcraftLogsClientError as exc:
             return {
@@ -743,7 +791,13 @@ def _public_api_access_payload(*, auth_configured: bool, runtime_access: dict[st
     }
 
 
-def _user_api_access_payload(state: dict[str, Any], *, runtime_access: dict[str, Any], live: bool) -> dict[str, Any]:
+def _user_api_access_payload(
+    state: dict[str, Any],
+    *,
+    runtime_access: dict[str, Any],
+    live: bool,
+    site: WarcraftLogsSiteProfile,
+) -> dict[str, Any]:
     if not runtime_access["ready"]:
         return {
             "ready": False,
@@ -754,7 +808,7 @@ def _user_api_access_payload(state: dict[str, Any], *, runtime_access: dict[str,
         }
     if _saved_user_token_ready(state):
         auth_mode = state.get("auth_mode")
-        scopes = _saved_user_token_scope_summary()
+        scopes = _saved_user_token_scope_summary(state)
         scope_warning: str | None
         if not scopes["has_view_user_profile"]:
             scope_warning = _missing_view_user_profile_warning()
@@ -762,6 +816,19 @@ def _user_api_access_payload(state: dict[str, Any], *, runtime_access: dict[str,
             scope_warning = _missing_view_private_reports_warning()
         else:
             scope_warning = None
+        token_site = _saved_user_token_site_key(state)
+        if token_site != site.key:
+            return {
+                "ready": False,
+                "mode": auth_mode,
+                "reason": "site_profile_mismatch",
+                "message": _site_profile_mismatch_message(token_site=token_site, selected_site=site),
+                "validation": "local",
+                "selected_site_profile": site.key,
+                "token_site_profile": token_site,
+                "scopes": scopes,
+                "scope_warning": scope_warning,
+            }
         if not live:
             return {
                 "ready": True,
@@ -774,7 +841,7 @@ def _user_api_access_payload(state: dict[str, Any], *, runtime_access: dict[str,
             }
         client: WarcraftLogsClient | None = None
         try:
-            client = WarcraftLogsClient()
+            client = WarcraftLogsClient(site=site)
             client.probe_live_user_api()
         except WarcraftLogsClientError as exc:
             return {
@@ -825,6 +892,8 @@ def _user_auth_capability(*, auth_configured: bool, runtime_access: dict[str, An
         return "invalid_runtime_config"
     if reason in {"auth_failed", "probe_failed", "skipped_no_live_probe"}:
         return reason
+    if reason == "site_profile_mismatch":
+        return reason
     if auth_configured:
         return "ready_manual_exchange"
     return "requires_client_credentials"
@@ -862,46 +931,35 @@ def _public_capability_status(public_api_access: dict[str, Any]) -> str:
     )
 
 
-def _doctor_payload(*, live: bool) -> dict[str, Any]:
+def _doctor_payload(*, live: bool, site: WarcraftLogsSiteProfile) -> dict[str, Any]:
     auth = load_warcraftlogs_auth_config()
     credential_source = auth.env_file if auth.env_file is not None else ("environment" if auth.configured else None)
     state = provider_auth_status("warcraftlogs")
-    runtime_access = _runtime_access_payload()
+    runtime_access = _runtime_access_payload(site)
     public_api_access = _public_api_access_payload(
         auth_configured=auth.configured,
         runtime_access=runtime_access,
         live=live,
+        site=site,
     )
     user_api_access = _user_api_access_payload(
         state,
         runtime_access=runtime_access,
         live=live,
+        site=site,
     )
     return {
         "ok": True,
         "provider": "warcraftlogs",
         "status": "ready",
-        "site_profile": {
-            "key": RETAIL_PROFILE.key,
-            "label": RETAIL_PROFILE.label,
-            "root_url": RETAIL_PROFILE.root_url,
-            "api_url": RETAIL_PROFILE.api_url,
-        },
+        "site_profile": _site_profile_payload(site),
         "auth": {
             "required": True,
             "configured": auth.configured,
             "client_credentials_configured": auth.configured,
             "flow": "oauth_client_credentials",
-            "active_mode": (
-                state.get("auth_mode")
-                if state.get("has_access_token") and isinstance(state.get("auth_mode"), str)
-                else "client_credentials"
-            ),
-            "endpoint_family": (
-                "user"
-                if state.get("has_access_token") and state.get("auth_mode") in {"authorization_code", "pkce"}
-                else "client"
-            ),
+            "active_mode": _active_auth_mode_from_state(state, site=site),
+            "endpoint_family": _endpoint_family_from_state(state, site=site),
             "credential_source": credential_source,
             "lookup_order": [".env.local", warcraftlogs_provider_env_path(), "environment"],
             "state": state,
@@ -1244,7 +1302,14 @@ def _character_payload(character: dict[str, Any]) -> dict[str, Any]:
 
 
 
-def _report_discovery_hint(query: str) -> dict[str, Any]:
+def _warcraftlogs_command_prefix(site: WarcraftLogsSiteProfile) -> str:
+    if site.key == RETAIL_PROFILE.key:
+        return "warcraftlogs"
+    return f"warcraftlogs --site {shlex.quote(site.key)}"
+
+
+def _report_discovery_hint(query: str, *, site: WarcraftLogsSiteProfile) -> dict[str, Any]:
+    command_prefix = _warcraftlogs_command_prefix(site)
     return {
         "provider": "warcraftlogs",
         "query": query,
@@ -1261,12 +1326,12 @@ def _report_discovery_hint(query: str) -> dict[str, Any]:
             "Use an explicit report URL or a bare report code."
         ),
         "supported_inputs": [
-            "https://www.warcraftlogs.com/reports/<code>#fight=<id>",
+            f"{site.root_url}/reports/<code>#fight=<id>",
             "<report_code>",
         ],
         "suggested_commands": [
-            "warcraftlogs report <report_code>",
-            "warcraftlogs report-encounter <report_code> --fight-id <id>",
+            f"{command_prefix} report <report_code>",
+            f"{command_prefix} report-encounter <report_code> --fight-id <id>",
         ],
     }
 
@@ -1314,16 +1379,17 @@ def _explicit_report_reference(query: str) -> ReportReference | None:
     return ref
 
 
-def _report_discovery_candidate(ref: ReportReference) -> dict[str, Any]:
+def _report_discovery_candidate(ref: ReportReference, *, site: WarcraftLogsSiteProfile) -> dict[str, Any]:
     quoted_reference = shlex.quote(ref.code)
+    command_prefix = _warcraftlogs_command_prefix(site)
     if ref.fight_id is None:
         kind = "report"
-        next_command = f"warcraftlogs report {quoted_reference}"
+        next_command = f"{command_prefix} report {quoted_reference}"
         score = 92
         reasons = ["explicit_report_reference", "report_code"]
     else:
         kind = "report_encounter"
-        next_command = f"warcraftlogs report-encounter {quoted_reference} --fight-id {ref.fight_id}"
+        next_command = f"{command_prefix} report-encounter {quoted_reference} --fight-id {ref.fight_id}"
         score = 96
         reasons = ["explicit_report_reference", "fight_scope_present"]
     return {
@@ -1342,10 +1408,10 @@ def _report_discovery_candidate(ref: ReportReference) -> dict[str, Any]:
     }
 
 
-def _report_search_payload(query: str, *, ref: ReportReference | None) -> dict[str, Any]:
+def _report_search_payload(query: str, *, ref: ReportReference | None, site: WarcraftLogsSiteProfile) -> dict[str, Any]:
     if ref is None:
-        return _report_discovery_hint(query)
-    candidate = _report_discovery_candidate(ref)
+        return _report_discovery_hint(query, site=site)
+    candidate = _report_discovery_candidate(ref, site=site)
     return {
         "provider": "warcraftlogs",
         "query": query,
@@ -1358,9 +1424,9 @@ def _report_search_payload(query: str, *, ref: ReportReference | None) -> dict[s
     }
 
 
-def _report_resolve_payload(query: str, *, ref: ReportReference | None) -> dict[str, Any]:
+def _report_resolve_payload(query: str, *, ref: ReportReference | None, site: WarcraftLogsSiteProfile) -> dict[str, Any]:
     if ref is None:
-        hint = _report_discovery_hint(query)
+        hint = _report_discovery_hint(query, site=site)
         return {
             "provider": "warcraftlogs",
             "query": query,
@@ -1374,7 +1440,7 @@ def _report_resolve_payload(query: str, *, ref: ReportReference | None) -> dict[
             "supported_inputs": hint["supported_inputs"],
             "suggested_commands": hint["suggested_commands"],
         }
-    candidate = _report_discovery_candidate(ref)
+    candidate = _report_discovery_candidate(ref, site=site)
     follow_up = candidate["follow_up"]
     return {
         "provider": "warcraftlogs",
@@ -2078,7 +2144,13 @@ def _first_int(*values: Any) -> int | None:
     return None
 
 
-def _encounter_ranking_row_payload(row: dict[str, Any], *, page: int, row_index: int) -> dict[str, Any]:
+def _encounter_ranking_row_payload(
+    row: dict[str, Any],
+    *,
+    page: int,
+    row_index: int,
+    site: WarcraftLogsSiteProfile,
+) -> dict[str, Any]:
     report = row.get("report") if isinstance(row.get("report"), dict) else {}
     server = row.get("server") if isinstance(row.get("server"), dict) else {}
     guild = row.get("guild") if isinstance(row.get("guild"), dict) else {}
@@ -2117,7 +2189,7 @@ def _encounter_ranking_row_payload(row: dict[str, Any], *, page: int, row_index:
         "start_time": row.get("startTime") if row.get("startTime") is not None else report.get("startTime"),
         "report_code": report_code,
         "fight_id": fight_id,
-        "report_url": _report_url(report_code, fight_id=fight_id),
+        "report_url": _report_url(report_code, fight_id=fight_id, root_url=site.root_url),
         "has_combatant_info": _encounter_ranking_has_combatant_info(row),
         "other_players_count": _encounter_ranking_other_players_count(row),
     }
@@ -2129,12 +2201,13 @@ def _encounter_rankings_payload(
     rankings: Any,
     query: dict[str, Any],
     top: int,
+    site: WarcraftLogsSiteProfile,
 ) -> dict[str, Any]:
     page = rankings.get("page") if isinstance(rankings, dict) and isinstance(rankings.get("page"), int) else query.get("page")
     if not isinstance(page, int) or page < 1:
         page = 1
     normalized_rows = [
-        _encounter_ranking_row_payload(row, page=page, row_index=row_index)
+        _encounter_ranking_row_payload(row, page=page, row_index=row_index, site=site)
         for row_index, row in enumerate(_encounter_rankings_rows(rankings))
     ]
     returned = normalized_rows[:top]
@@ -2349,6 +2422,7 @@ def _boss_spec_usage_payload(
     query: dict[str, Any],
     top: int,
     cache_ttl_seconds: int | None = None,
+    root_url: str = "https://www.warcraftlogs.com",
 ) -> dict[str, Any]:
     spec_counts, sampled_player_rows = _accumulate_boss_spec_counts(rows)
 
@@ -2384,7 +2458,7 @@ def _boss_spec_usage_payload(
             excluded=max(0, len(normalized_rows) - len(returned)),
             truncated=len(normalized_rows) > top,
         ),
-        "citations": _sampled_cross_report_citations(rows),
+        "citations": _sampled_cross_report_citations(rows, root_url=root_url),
         "sample": {
             **sample,
             "filtered_kill_count": len(rows),
@@ -2586,6 +2660,7 @@ def _comp_samples_payload(
     query: dict[str, Any],
     top: int,
     cache_ttl_seconds: int | None = None,
+    root_url: str = "https://www.warcraftlogs.com",
 ) -> dict[str, Any]:
     class_presence, signature_counts, sampled_player_count = _accumulate_comp_presence(rows)
 
@@ -2621,7 +2696,7 @@ def _comp_samples_payload(
             excluded=max(0, len(rows) - len(returned)),
             truncated=len(rows) > top,
         ),
-        "citations": _sampled_cross_report_citations(rows),
+        "citations": _sampled_cross_report_citations(rows, root_url=root_url),
         "sample": {
             **sample,
             "filtered_kill_count": len(rows),
@@ -2767,6 +2842,7 @@ def _ability_usage_summary_payload(
     preview_limit: int,
     event_limit: int,
     cache_ttl_seconds: int | None = None,
+    root_url: str = "https://www.warcraftlogs.com",
 ) -> dict[str, Any]:
     cast_counts = [
         int(casts.get("count"))
@@ -2800,7 +2876,7 @@ def _ability_usage_summary_payload(
             excluded=max(0, len(rows) - len(preview)),
             truncated=len(rows) > preview_limit,
         ),
-        "citations": _sampled_cross_report_citations(rows),
+        "citations": _sampled_cross_report_citations(rows, root_url=root_url),
         "sample": {
             **sample,
             "filtered_kill_count": len(rows),
@@ -3376,8 +3452,17 @@ def _reports_payload(pagination: dict[str, Any]) -> dict[str, Any]:
 def main(
     ctx: typer.Context,
     pretty: bool = typer.Option(False, "--pretty", help="Pretty-print JSON output."),
+    site: str = typer.Option(
+        "retail",
+        "--site",
+        help="Warcraft Logs site profile: retail, classic, or fresh.",
+    ),
 ) -> None:
-    ctx.obj = RuntimeConfig(pretty=pretty)
+    try:
+        site_profile = resolve_site_profile(site)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc), param_hint="--site") from exc
+    ctx.obj = RuntimeConfig(pretty=pretty, site_profile=site_profile)
 
 
 @app.command("search")
@@ -3388,7 +3473,7 @@ def search(
                               help="Accepted for wrapper compatibility; explicit report discovery returns at most one result."),
 ) -> None:
     del limit
-    _emit(ctx, _report_search_payload(query, ref=_explicit_report_reference(query)))
+    _emit(ctx, _report_search_payload(query, ref=_explicit_report_reference(query), site=_cfg(ctx).site_profile))
 
 
 @app.command("resolve")
@@ -3399,7 +3484,7 @@ def resolve(
                               help="Accepted for wrapper compatibility; explicit report resolution returns at most one match."),
 ) -> None:
     del limit
-    _emit(ctx, _report_resolve_payload(query, ref=_explicit_report_reference(query)))
+    _emit(ctx, _report_resolve_payload(query, ref=_explicit_report_reference(query), site=_cfg(ctx).site_profile))
 
 
 @app.command("doctor")
@@ -3407,7 +3492,7 @@ def doctor(
     ctx: typer.Context,
     no_live: bool = typer.Option(False, "--no-live", help="Skip live Warcraft Logs auth probes and report local/runtime readiness only."),
 ) -> None:
-    _emit(ctx, _doctor_payload(live=not no_live))
+    _emit(ctx, _doctor_payload(live=not no_live, site=_cfg(ctx).site_profile))
 
 
 def _random_state_token() -> str:
@@ -3437,14 +3522,35 @@ def _token_payload_summary(payload: dict[str, Any], *, auth_mode: str, redirect_
     }
 
 
-def _active_auth_mode_from_state(state: dict[str, Any]) -> str:
-    if state.get("has_access_token") and isinstance(state.get("auth_mode"), str):
-        return str(state["auth_mode"])
+def _validate_pending_site_profile(ctx: typer.Context, pending: dict[str, Any]) -> None:
+    pending_site = pending.get("site_profile")
+    selected_site = _cfg(ctx).site_profile.key
+    if isinstance(pending_site, str) and pending_site and pending_site != selected_site:
+        _fail(
+            ctx,
+            "site_profile_mismatch",
+            (
+                "Callback site profile did not match the pending authorization flow. "
+                f"Re-run the callback command with `--site {pending_site}`."
+            ),
+        )
+
+
+def _active_auth_mode_from_state(state: dict[str, Any], *, site: WarcraftLogsSiteProfile | None = None) -> str:
+    auth_mode = state.get("auth_mode")
+    if state.get("has_access_token") and isinstance(auth_mode, str):
+        if site is not None and auth_mode in {"authorization_code", "pkce"} and not _saved_user_token_matches_site(site, state=state):
+            return "client_credentials"
+        return auth_mode
     return "client_credentials"
 
 
-def _endpoint_family_from_state(state: dict[str, Any]) -> str:
-    if state.get("has_access_token") and state.get("auth_mode") in {"authorization_code", "pkce"}:
+def _endpoint_family_from_state(state: dict[str, Any], *, site: WarcraftLogsSiteProfile | None = None) -> str:
+    if (
+        state.get("has_access_token")
+        and state.get("auth_mode") in {"authorization_code", "pkce"}
+        and (site is None or _saved_user_token_matches_site(site, state=state))
+    ):
         return "user"
     return "client"
 
@@ -3454,19 +3560,22 @@ def auth_status(
     ctx: typer.Context,
     no_live: bool = typer.Option(False, "--no-live", help="Skip live Warcraft Logs auth probes and report local/runtime readiness only."),
 ) -> None:
+    site = _cfg(ctx).site_profile
     auth = load_warcraftlogs_auth_config()
     credential_source = auth.env_file if auth.env_file is not None else ("environment" if auth.configured else None)
     state = provider_auth_status("warcraftlogs")
-    runtime_access = _runtime_access_payload()
+    runtime_access = _runtime_access_payload(site)
     public_api_access = _public_api_access_payload(
         auth_configured=auth.configured,
         runtime_access=runtime_access,
         live=not no_live,
+        site=site,
     )
     user_api_access = _user_api_access_payload(
         state,
         runtime_access=runtime_access,
         live=not no_live,
+        site=site,
     )
     _emit(
         ctx,
@@ -3477,8 +3586,9 @@ def auth_status(
                 "configured": auth.configured,
                 "client_credentials_configured": auth.configured,
                 "flow": "oauth_client_credentials",
-                "active_mode": _active_auth_mode_from_state(state),
-                "endpoint_family": _endpoint_family_from_state(state),
+                "site_profile": _site_profile_payload(site),
+                "active_mode": _active_auth_mode_from_state(state, site=site),
+                "endpoint_family": _endpoint_family_from_state(state, site=site),
                 "credential_source": credential_source,
                 "lookup_order": [".env.local", warcraftlogs_provider_env_path(), "environment"],
                 "state": state,
@@ -3493,6 +3603,7 @@ def auth_status(
 
 @auth_app.command("client")
 def auth_client(ctx: typer.Context) -> None:
+    site = _cfg(ctx).site_profile
     auth = load_warcraftlogs_auth_config()
     credential_source = auth.env_file if auth.env_file is not None else ("environment" if auth.configured else None)
     client_id = auth.client_id or ""
@@ -3506,11 +3617,12 @@ def auth_client(ctx: typer.Context) -> None:
                 "configured": auth.configured,
                 "credential_source": credential_source,
                 "client_id": display_client_id or None,
-                "site_profile": RETAIL_PROFILE.key,
-                "authorize_url": RETAIL_PROFILE.oauth_authorize_url,
-                "token_url": RETAIL_PROFILE.oauth_token_url,
-                "client_api_url": RETAIL_PROFILE.api_url,
-                "user_api_url": RETAIL_PROFILE.user_api_url,
+                "site_profile": site.key,
+                "site": _site_profile_payload(site),
+                "authorize_url": site.oauth_authorize_url,
+                "token_url": site.oauth_token_url,
+                "client_api_url": site.api_url,
+                "user_api_url": site.user_api_url,
             },
         },
     )
@@ -3518,22 +3630,23 @@ def auth_client(ctx: typer.Context) -> None:
 
 @auth_app.command("token")
 def auth_token(ctx: typer.Context) -> None:
+    site = _cfg(ctx).site_profile
     state = provider_auth_status("warcraftlogs")
-    payload = load_provider_auth_state("warcraftlogs") or {}
+    payload = _saved_provider_auth_payload(state)
     scopes = _scope_breakdown(
         granted_scope=payload.get("scope"),
         requested_scopes=payload.get("requested_scopes"),
         access_token=payload.get("access_token"),
     )
-    scope_warning = scopes["warning"] if _saved_user_token_ready(state) else None
+    scope_warning = scopes["warning"] if _saved_user_token_ready(state, site=site) else None
     _emit(
         ctx,
         {
             "ok": True,
             "provider": "warcraftlogs",
             "token": {
-                "active_mode": _active_auth_mode_from_state(state),
-                "endpoint_family": _endpoint_family_from_state(state),
+                "active_mode": _active_auth_mode_from_state(state, site=site),
+                "endpoint_family": _endpoint_family_from_state(state, site=site),
                 "state": state,
                 "scopes": {
                     "granted": scopes["granted"],
@@ -3578,6 +3691,7 @@ def auth_login(
                     "pending_state": pending_state,
                     "redirect_uri": redirect_uri,
                     "requested_scopes": scopes,
+                    "site_profile": client.site.key,
                 },
             )
         except WarcraftLogsClientError as exc:
@@ -3596,6 +3710,7 @@ def auth_login(
                 "redirect_uri": redirect_uri,
                 "state": pending_state,
                 "requested_scopes": scopes,
+                "site_profile": _site_profile_payload(client.site),
                 "state_path": str(saved_path),
             },
             client=client,
@@ -3603,6 +3718,7 @@ def auth_login(
         return
 
     pending = load_provider_auth_state("warcraftlogs") or {}
+    _validate_pending_site_profile(ctx, pending)
     expected_state = pending.get("pending_state")
     if isinstance(expected_state, str) and expected_state and not state:
         _fail(ctx, "missing_state", "Missing callback state. Re-run the login URL step and provide the returned state value.")
@@ -3620,6 +3736,7 @@ def auth_login(
     finally:
         client.close()
     token_summary = _token_payload_summary(payload, auth_mode="authorization_code", redirect_uri=redirect_uri)
+    token_summary["site_profile"] = _cfg(ctx).site_profile.key
     if isinstance(pending.get("requested_scopes"), list):
         token_summary["requested_scopes"] = pending.get("requested_scopes")
     saved_path = save_provider_auth_state("warcraftlogs", token_summary)
@@ -3636,6 +3753,7 @@ def auth_login(
             "mode": "authorization_code",
             "step": "token_exchanged",
             "endpoint_family": "user",
+            "site_profile": _site_profile_payload(_cfg(ctx).site_profile),
             "state_path": str(saved_path),
             "token": {
                 "token_type": token_summary.get("token_type"),
@@ -3693,6 +3811,7 @@ def auth_pkce_login(
                     "redirect_uri": redirect_uri,
                     "code_verifier": code_verifier,
                     "requested_scopes": scopes,
+                    "site_profile": client.site.key,
                 },
             )
         except WarcraftLogsClientError as exc:
@@ -3711,6 +3830,7 @@ def auth_pkce_login(
                 "redirect_uri": redirect_uri,
                 "state": pending_state,
                 "requested_scopes": scopes,
+                "site_profile": _site_profile_payload(client.site),
                 "state_path": str(saved_path),
             },
             client=client,
@@ -3718,6 +3838,7 @@ def auth_pkce_login(
         return
 
     pending = load_provider_auth_state("warcraftlogs") or {}
+    _validate_pending_site_profile(ctx, pending)
     expected_state = pending.get("pending_state")
     code_verifier = pending.get("code_verifier")
     if not isinstance(code_verifier, str) or not code_verifier:
@@ -3742,6 +3863,7 @@ def auth_pkce_login(
     finally:
         client.close()
     token_summary = _token_payload_summary(payload, auth_mode="pkce", redirect_uri=redirect_uri)
+    token_summary["site_profile"] = _cfg(ctx).site_profile.key
     if isinstance(pending.get("requested_scopes"), list):
         token_summary["requested_scopes"] = pending.get("requested_scopes")
     saved_path = save_provider_auth_state("warcraftlogs", token_summary)
@@ -3758,6 +3880,7 @@ def auth_pkce_login(
             "mode": "pkce",
             "step": "token_exchanged",
             "endpoint_family": "user",
+            "site_profile": _site_profile_payload(_cfg(ctx).site_profile),
             "state_path": str(saved_path),
             "token": {
                 "token_type": token_summary.get("token_type"),
@@ -4060,6 +4183,7 @@ def encounter_rankings(
                 "top": top,
             },
             top=top,
+            site=client.site,
         ),
         client=client,
     )
@@ -4532,6 +4656,7 @@ def boss_kills(
                 guild_name=guild_name,
             ),
             top=top,
+            root_url=client.site.root_url,
         ),
         client=client,
     )
@@ -4610,6 +4735,7 @@ def top_kills(
                 guild_name=guild_name,
             ),
             top=top,
+            root_url=client.site.root_url,
         ),
         client=client,
     )
@@ -4688,6 +4814,7 @@ def spec_kill_samples(
                 guild_name=guild_name,
             ),
             top=top,
+            root_url=client.site.root_url,
         ),
         client=client,
     )
@@ -4785,6 +4912,7 @@ def boss_spec_usage(
                 guild_name=guild_name,
             ),
             top=top,
+            root_url=client.site.root_url,
         ),
         client=client,
     )
@@ -4869,6 +4997,7 @@ def ability_usage_summary(
             ability=analytics["ability"],
             preview_limit=preview_limit,
             event_limit=event_limit,
+            root_url=client.site.root_url,
         ),
         client=client,
     )
@@ -4946,6 +5075,7 @@ def comp_samples(
                 guild_name=guild_name,
             ),
             top=top,
+            root_url=client.site.root_url,
         ),
         client=client,
     )
@@ -5820,6 +5950,7 @@ def kill_time_distribution(
                 guild_name=guild_name,
             ),
             bucket_seconds=bucket_seconds,
+            root_url=client.site.root_url,
         ),
         client=client,
     )

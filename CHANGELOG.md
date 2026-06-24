@@ -10,6 +10,8 @@ Add user-visible changes to `[Unreleased]` in the same PR that ships them. See [
 
 ### Added
 
+- Warcraft Logs site profiles (AUR-497): `warcraftlogs --site retail|classic|fresh ...` now routes OAuth authorize/token endpoints and public/user GraphQL endpoints through the selected Warcraft Logs host (`www`, `classic`, or `fresh`). The wrapper now treats `warcraftlogs` as `expansion_mode=profiled`: `warcraft --expansion retail warcraftlogs ...` selects `--site retail`, classic-family keys (`classic`, `tbc`, `wotlk`, `cata`, `mop-classic`) select `--site classic`, and the new wrapper expansion key `fresh` selects `--site fresh`. `ptr`, `beta`, and `classic-ptr` remain unsupported for Warcraft Logs and are rejected instead of coerced. Live coverage verifies token exchange and GraphQL schema access for all three site profiles when `WARCRAFTLOGS_LIVE_TESTS=1` and credentials are configured.
+
 ### Changed
 
 ### Fixed

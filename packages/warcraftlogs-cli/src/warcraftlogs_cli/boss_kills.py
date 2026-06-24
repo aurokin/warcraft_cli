@@ -127,7 +127,12 @@ def sampled_sample_scope(
     }
 
 
-def sampled_cross_report_citations(rows: list[dict[str, Any]], *, limit: int = 20) -> dict[str, Any]:
+def sampled_cross_report_citations(
+    rows: list[dict[str, Any]],
+    *,
+    limit: int = 20,
+    root_url: str = "https://www.warcraftlogs.com",
+) -> dict[str, Any]:
     sample_reports: list[dict[str, Any]] = []
     seen: set[tuple[str, int | None]] = set()
     for row in rows:
@@ -145,7 +150,7 @@ def sampled_cross_report_citations(rows: list[dict[str, Any]], *, limit: int = 2
             {
                 "report_code": report_code,
                 "fight_id": fight_id,
-                "report_url": report_url(report_code, fight_id=fight_id),
+                "report_url": report_url(report_code, fight_id=fight_id, root_url=root_url),
             }
         )
         if len(sample_reports) >= limit:
@@ -376,6 +381,7 @@ def boss_kills_payload(
     query: dict[str, Any],
     top: int,
     cache_ttl_seconds: int | None = None,
+    root_url: str = "https://www.warcraftlogs.com",
 ) -> dict[str, Any]:
     returned = rows[:top]
     excluded = max(0, len(rows) - len(returned))
@@ -397,7 +403,7 @@ def boss_kills_payload(
             excluded=excluded,
             truncated=truncated,
         ),
-        "citations": sampled_cross_report_citations(rows),
+        "citations": sampled_cross_report_citations(rows, root_url=root_url),
         "sample": {
             **sample,
             "filtered_kill_count": len(rows),
@@ -418,6 +424,7 @@ def spec_filtered_kill_samples_payload(
     query: dict[str, Any],
     top: int,
     cache_ttl_seconds: int | None = None,
+    root_url: str = "https://www.warcraftlogs.com",
 ) -> dict[str, Any]:
     # `rows` arrive sorted by ascending kill duration (shared collect_boss_kill_rows path),
     # so the returned head is the fastest qualifying kills. `sample_size` is the FULL matching
@@ -461,7 +468,7 @@ def spec_filtered_kill_samples_payload(
             excluded=max(0, len(rows) - len(returned)),
             truncated=truncated,
         ),
-        "citations": sampled_cross_report_citations(rows),
+        "citations": sampled_cross_report_citations(rows, root_url=root_url),
         "sample": {
             **sample,
             "spec_name": spec_name,
@@ -486,6 +493,7 @@ def kill_time_distribution_payload(
     query: dict[str, Any],
     bucket_seconds: int,
     cache_ttl_seconds: int | None = None,
+    root_url: str = "https://www.warcraftlogs.com",
 ) -> dict[str, Any]:
     durations = [
         float(duration)
@@ -509,7 +517,7 @@ def kill_time_distribution_payload(
             excluded=0,
             truncated=False,
         ),
-        "citations": sampled_cross_report_citations(rows),
+        "citations": sampled_cross_report_citations(rows, root_url=root_url),
         "sample": {
             **sample,
             "filtered_kill_count": len(rows),

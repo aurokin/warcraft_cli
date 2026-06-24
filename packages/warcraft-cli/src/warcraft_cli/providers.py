@@ -16,11 +16,47 @@ from typer.testing import CliRunner
 from warcraft_content.paths import cache_root, config_root, data_root, state_root, worktree_runtime_details
 from warcraft_wiki_cli.main import app as warcraft_wiki_app
 from warcraftlogs_cli.main import app as warcraftlogs_app
-from wowhead_cli.expansion_profiles import list_profiles
+from wowhead_cli.expansion_profiles import list_profiles, normalize_expansion_key, resolve_expansion
 from wowhead_cli.main import app as wowhead_app
 from wowprogress_cli.main import app as wowprogress_app
 
 runner = CliRunner()
+WOWHEAD_EXPANSION_KEYS: tuple[str, ...] = tuple(profile.key for profile in list_profiles())
+WARCRAFTLOGS_CLASSIC_EXPANSIONS: tuple[str, ...] = ("classic", "tbc", "wotlk", "cata", "mop-classic")
+WARCRAFTLOGS_SUPPORTED_EXPANSIONS: tuple[str, ...] = ("retail", *WARCRAFTLOGS_CLASSIC_EXPANSIONS, "fresh")
+WRAPPER_EXTRA_EXPANSION_ALIASES: dict[str, str] = {
+    "fresh": "fresh",
+    "classic-fresh": "fresh",
+    "classicfresh": "fresh",
+    "anniversary": "fresh",
+    "classic-anniversary": "fresh",
+}
+
+
+def list_wrapper_expansion_keys() -> tuple[str, ...]:
+    return (*WOWHEAD_EXPANSION_KEYS, "fresh")
+
+
+def resolve_wrapper_expansion_key(value: str | None) -> str:
+    try:
+        return resolve_expansion(value).key
+    except ValueError:
+        normalized = normalize_expansion_key(value or "")
+        key = WRAPPER_EXTRA_EXPANSION_ALIASES.get(normalized)
+        if key is not None:
+            return key
+        options = ", ".join(list_wrapper_expansion_keys())
+        raise ValueError(f"Unknown expansion {value!r}. Supported: {options}") from None
+
+
+def warcraftlogs_site_for_expansion(expansion: str) -> str:
+    if expansion == "retail":
+        return "retail"
+    if expansion in WARCRAFTLOGS_CLASSIC_EXPANSIONS:
+        return "classic"
+    if expansion == "fresh":
+        return "fresh"
+    raise ValueError(f"Expansion {expansion!r} does not map to a Warcraft Logs site profile.")
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,7 +85,7 @@ PROVIDERS: tuple[ProviderRegistration, ...] = (
         description="Structured Wowhead provider with live search, resolve, and retrieval commands.",
         auth_required=False,
         expansion_mode="profiled",
-        supported_expansions=tuple(profile.key for profile in list_profiles()),
+        supported_expansions=WOWHEAD_EXPANSION_KEYS,
         expansion_review_status="reviewed",
         expansion_policy_note="Provider has first-class expansion profiles and real version-specific routing.",
         wrapper_capabilities={
@@ -133,12 +169,13 @@ PROVIDERS: tuple[ProviderRegistration, ...] = (
         status="partial",
         description="Warcraft Logs API provider with explicit report discovery plus guild, character, and report analytics commands.",
         auth_required=True,
-        expansion_mode="fixed",
-        supported_expansions=("retail",),
+        expansion_mode="profiled",
+        supported_expansions=WARCRAFTLOGS_SUPPORTED_EXPANSIONS,
         expansion_review_status="reviewed",
         expansion_policy_note=(
-            "Current supported Warcraft Logs routing is retail-only "
-            "and discovery is intentionally limited to explicit report references."
+            "Warcraft Logs has first-class site profiles: retail routes to www.warcraftlogs.com, "
+            "classic-family keys route to classic.warcraftlogs.com, and fresh routes to "
+            "fresh.warcraftlogs.com. Discovery remains intentionally limited to explicit report references."
         ),
         wrapper_capabilities={
             "doctor": "ready",
@@ -482,11 +519,42 @@ def surface_filtered_providers(
     return included, excluded
 
 
+def provider_expansion_args(registration: ProviderRegistration, expansion: str | None) -> list[str]:
+    if expansion is None:
+        return []
+    if registration.name == "wowhead":
+        return ["--expansion", expansion]
+    if registration.name == "warcraftlogs":
+        return ["--site", warcraftlogs_site_for_expansion(expansion)]
+    return []
+
+
+def _unsupported_expansion_payload(registration: ProviderRegistration, expansion: str) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "error": {
+            "code": "unsupported_provider_expansion",
+            "message": f"Provider {registration.name!r} does not support wrapper expansion {expansion!r}.",
+        },
+        "provider": registration.name,
+        "requested_expansion": expansion,
+        "expansion_support": provider_expansion_support(registration, requested_expansion=expansion),
+    }
+
+
 def provider_search(provider: str, query: str, *, limit: int = 5, expansion: str | None = None) -> dict[str, Any]:
     registration = get_provider(provider)
-    args = ["search", query, "--limit", str(limit)]
-    if expansion is not None and registration.name == "wowhead":
-        args = ["--expansion", expansion, *args]
+    if (
+        expansion is not None
+        and registration.expansion_mode != "none"
+        and provider_expansion_exclusion_reason(registration, requested_expansion=expansion) is not None
+    ):
+        return {
+            "provider": provider,
+            "exit_code": 1,
+            "payload": _unsupported_expansion_payload(registration, expansion),
+        }
+    args = [*provider_expansion_args(registration, expansion), "search", query, "--limit", str(limit)]
     code, payload, _stdout = _invoke_provider_app(registration.app, args)
     return {
         "provider": provider,
@@ -497,9 +565,17 @@ def provider_search(provider: str, query: str, *, limit: int = 5, expansion: str
 
 def provider_resolve(provider: str, query: str, *, limit: int = 5, expansion: str | None = None) -> dict[str, Any]:
     registration = get_provider(provider)
-    args = ["resolve", query, "--limit", str(limit)]
-    if expansion is not None and registration.name == "wowhead":
-        args = ["--expansion", expansion, *args]
+    if (
+        expansion is not None
+        and registration.expansion_mode != "none"
+        and provider_expansion_exclusion_reason(registration, requested_expansion=expansion) is not None
+    ):
+        return {
+            "provider": provider,
+            "exit_code": 1,
+            "payload": _unsupported_expansion_payload(registration, expansion),
+        }
+    args = [*provider_expansion_args(registration, expansion), "resolve", query, "--limit", str(limit)]
     code, payload, _stdout = _invoke_provider_app(registration.app, args)
     return {
         "provider": provider,
@@ -510,9 +586,18 @@ def provider_resolve(provider: str, query: str, *, limit: int = 5, expansion: st
 
 def provider_invoke(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, Any]:
     registration = get_provider(provider)
-    normalized_args = list(args)
-    if expansion is not None and registration.name == "wowhead":
-        normalized_args = ["--expansion", expansion, *normalized_args]
+    if (
+        expansion is not None
+        and registration.expansion_mode != "none"
+        and provider_expansion_exclusion_reason(registration, requested_expansion=expansion) is not None
+    ):
+        return {
+            "provider": provider,
+            "exit_code": 1,
+            "payload": _unsupported_expansion_payload(registration, expansion),
+            "stdout": "",
+        }
+    normalized_args = [*provider_expansion_args(registration, expansion), *args]
     code, payload, stdout = _invoke_provider_app(registration.app, normalized_args)
     return {
         "provider": provider,
@@ -524,7 +609,10 @@ def provider_invoke(provider: str, args: list[str], *, expansion: str | None = N
 
 def provider_doctor(provider: str, *, requested_expansion: str | None = None) -> dict[str, Any]:
     registration = get_provider(provider)
-    code, payload, _stdout = _invoke_provider_app(registration.app, list(registration.doctor_args))
+    expansion_args: list[str] = []
+    if provider_expansion_exclusion_reason(registration, requested_expansion=requested_expansion) is None:
+        expansion_args = provider_expansion_args(registration, requested_expansion)
+    code, payload, _stdout = _invoke_provider_app(registration.app, [*expansion_args, *registration.doctor_args])
     installed = payload is not None or code == 0
     auth_details = payload.get("auth") if isinstance(payload, dict) and isinstance(payload.get("auth"), dict) else None
     return {

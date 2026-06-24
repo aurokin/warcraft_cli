@@ -1067,6 +1067,69 @@ RETAIL_PROFILE = WarcraftLogsSiteProfile(
     user_api_url="https://www.warcraftlogs.com/api/v2/user",
 )
 
+CLASSIC_PROFILE = WarcraftLogsSiteProfile(
+    key="classic",
+    label="Classic",
+    root_url="https://classic.warcraftlogs.com",
+    oauth_authorize_url="https://classic.warcraftlogs.com/oauth/authorize",
+    oauth_token_url="https://classic.warcraftlogs.com/oauth/token",
+    api_url="https://classic.warcraftlogs.com/api/v2/client",
+    user_api_url="https://classic.warcraftlogs.com/api/v2/user",
+)
+
+FRESH_PROFILE = WarcraftLogsSiteProfile(
+    key="fresh",
+    label="Classic Fresh / Anniversary",
+    root_url="https://fresh.warcraftlogs.com",
+    oauth_authorize_url="https://fresh.warcraftlogs.com/oauth/authorize",
+    oauth_token_url="https://fresh.warcraftlogs.com/oauth/token",
+    api_url="https://fresh.warcraftlogs.com/api/v2/client",
+    user_api_url="https://fresh.warcraftlogs.com/api/v2/user",
+)
+
+_SITE_PROFILES: tuple[WarcraftLogsSiteProfile, ...] = (RETAIL_PROFILE, CLASSIC_PROFILE, FRESH_PROFILE)
+_SITE_PROFILES_BY_KEY = {profile.key: profile for profile in _SITE_PROFILES}
+_SITE_PROFILE_ALIASES = {
+    "main": "retail",
+    "www": "retail",
+    "live": "retail",
+    "classic-era": "classic",
+    "classic-fresh": "fresh",
+    "classicfresh": "fresh",
+    "anniversary": "fresh",
+    "classic-anniversary": "fresh",
+}
+
+
+def list_site_profiles() -> tuple[WarcraftLogsSiteProfile, ...]:
+    return _SITE_PROFILES
+
+
+def normalize_site_profile_key(value: str) -> str:
+    return value.strip().lower().replace("_", "-")
+
+
+def resolve_site_profile(value: str | None) -> WarcraftLogsSiteProfile:
+    if value is None or value.strip() == "":
+        return RETAIL_PROFILE
+    normalized = normalize_site_profile_key(value)
+    key = _SITE_PROFILE_ALIASES.get(normalized, normalized)
+    profile = _SITE_PROFILES_BY_KEY.get(key)
+    if profile is None:
+        options = ", ".join(profile.key for profile in _SITE_PROFILES)
+        raise ValueError(f"Unknown Warcraft Logs site profile {value!r}. Supported: {options}")
+    return profile
+
+
+def saved_user_token_site_key(payload: dict[str, Any]) -> str:
+    raw_site = payload.get("site_profile")
+    if not isinstance(raw_site, str) or not raw_site.strip():
+        return RETAIL_PROFILE.key
+    try:
+        return resolve_site_profile(raw_site).key
+    except ValueError:
+        return normalize_site_profile_key(raw_site)
+
 
 @dataclass(frozen=True, slots=True)
 class WarcraftLogsAuthConfig:
@@ -1382,6 +1445,16 @@ class WarcraftLogsClient:
             raise WarcraftLogsClientError("missing_user_auth", "Saved Warcraft Logs auth state does not include an access token.")
         if isinstance(expires_at, (int, float)) and time.time() >= float(expires_at):
             raise WarcraftLogsClientError("user_token_expired", "Saved Warcraft Logs user token has expired. Re-run the auth flow.")
+        token_site = saved_user_token_site_key(payload)
+        selected_site = getattr(self, "_site", RETAIL_PROFILE)
+        if token_site != selected_site.key:
+            raise WarcraftLogsClientError(
+                "site_profile_mismatch",
+                (
+                    f"Saved Warcraft Logs user token is for site profile {token_site!r}, not {selected_site.key!r}. "
+                    f"Re-run `warcraftlogs --site {selected_site.key} auth login` for user-endpoint requests on this site."
+                ),
+            )
         return token
 
     def _has_user_token(self) -> bool:
@@ -1394,7 +1467,9 @@ class WarcraftLogsClient:
         if not isinstance(token, str) or not token.strip():
             return False
         expires_at = payload.get("expires_at")
-        return not (isinstance(expires_at, (int, float)) and time.time() >= float(expires_at))
+        if isinstance(expires_at, (int, float)) and time.time() >= float(expires_at):
+            return False
+        return saved_user_token_site_key(payload) == getattr(self, "_site", RETAIL_PROFILE).key
 
     @property
     def site(self) -> WarcraftLogsSiteProfile:

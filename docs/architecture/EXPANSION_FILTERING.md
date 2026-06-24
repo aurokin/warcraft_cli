@@ -25,7 +25,7 @@ When a caller requests a specific game version, the wrapper must not silently mi
 | `wowprogress` | `fixed` | `retail` | |
 | `warcraft-wiki` | `fixed` | `retail` | Reference content; wrapper excludes non-retail until classic routing exists |
 | `simc` | `none` | — | Local analysis versioning differs; proxy relaxes to passthrough (see Phase 4) |
-| `warcraftlogs` | `fixed` | `retail` | Classic/fresh site mapping deferred (AUR-389) |
+| `warcraftlogs` | `profiled` | `retail`, classic family, `fresh` | Site-profile routing: retail -> `www`, classic-family -> `classic`, `fresh` -> `fresh` |
 | `raidbots` | `fixed` | `retail` | Report consumption; retail SimC runs |
 | `blizzard-api` | `none` | — | Region/namespace routing deferred; proxy relaxes to passthrough (see Phase 4) |
 
@@ -58,9 +58,9 @@ A provider is promoted toward `profiled` only when all of the following hold; un
 
 `none` → `fixed` is the intermediate step: declare a single honest supported expansion (usually `retail`) once the provider's scope is confirmed, before any multi-expansion (`profiled`) routing is attempted.
 
-### (ii) Wrapper-key → Warcraft Logs site-profile mapping (target design; routing deferred to AUR-389)
+### (ii) Wrapper-key -> Warcraft Logs site-profile mapping
 
-When `warcraftlogs` is promoted from `fixed`/`retail` toward expansion-aware routing, the wrapper expansion keys map to Warcraft Logs site profiles as follows. This table is the contract a future slice implements; the mapping is **not yet wired** (WCL stays `fixed`/`retail` today).
+`warcraftlogs` is expansion-profiled through a site-profile selector. The wrapper maps supported expansion keys to `warcraftlogs --site <profile>` before invoking the provider.
 
 | Wrapper key | WCL site profile | Host |
 | --- | --- | --- |
@@ -70,6 +70,7 @@ When `warcraftlogs` is promoted from `fixed`/`retail` toward expansion-aware rou
 | `wotlk` | classic (WotLK) | `classic.warcraftlogs.com` |
 | `cata` | classic (Cataclysm) | `classic.warcraftlogs.com` |
 | `mop-classic` | classic (MoP) | `classic.warcraftlogs.com` |
+| `fresh` | fresh (Classic Fresh / Anniversary) | `fresh.warcraftlogs.com` |
 | `ptr` / `beta` / `classic-ptr` | — (unmapped) | rejected, not coerced |
 
 ### (iii) none-expansion passthrough rule
@@ -90,8 +91,7 @@ This applies only to `none` providers. `fixed`/`profiled` providers asked for an
 
 ## Open Work
 
-- Promote `simc` when wrapper search/resolve can version local analysis inputs safely
-- Warcraft Logs classic/fresh site-profile mapping when wrapper vocabulary is ready
+- Promote `simc` when upstream exposes a real non-retail game-version surface
 - Optional: per-expansion wiki routing when classic/fresh article policy is defined
 
 ## Related

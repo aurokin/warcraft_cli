@@ -28,12 +28,11 @@ def test_live_warcraft_search_expansion_filter_only_uses_supported_providers() -
 
     assert payload["requested_expansion"] == "wotlk"
     assert payload["expansion_filter_active"] is True
-    assert payload["included_providers"] == ["wowhead"]
+    assert payload["included_providers"] == ["wowhead", "warcraftlogs"]
     assert {row["provider"] for row in payload["excluded_providers"]} == {
         "method",
         "icy-veins",
         "raiderio",
-        "warcraftlogs",
         "warcraft-wiki",
         "wowprogress",
         "simc",
@@ -51,7 +50,7 @@ def test_live_warcraft_resolve_expansion_filter_does_not_resolve_to_retail_only_
 
     assert payload["requested_expansion"] == "wotlk"
     assert payload["expansion_filter_active"] is True
-    assert payload["included_providers"] == ["wowhead"]
+    assert payload["included_providers"] == ["wowhead", "warcraftlogs"]
     assert payload["provider"] in {None, "wowhead"}
     assert payload["provider"] != "wowprogress"
     assert payload["provider"] != "raiderio"

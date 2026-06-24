@@ -359,8 +359,17 @@ def test_warcraft_doctor_reports_ready_and_stubbed_providers() -> None:
     assert providers["wowhead"]["expansion_support"]["review_status"] == "reviewed"
     assert providers["method"]["expansion_support"]["mode"] == "fixed"
     assert providers["method"]["expansion_support"]["review_status"] == "reviewed"
-    assert providers["warcraftlogs"]["expansion_support"]["mode"] == "fixed"
+    assert providers["warcraftlogs"]["expansion_support"]["mode"] == "profiled"
     assert providers["warcraftlogs"]["expansion_support"]["review_status"] == "reviewed"
+    assert providers["warcraftlogs"]["expansion_support"]["supported_expansions"] == [
+        "retail",
+        "classic",
+        "tbc",
+        "wotlk",
+        "cata",
+        "mop-classic",
+        "fresh",
+    ]
     assert providers["warcraft-wiki"]["expansion_support"]["mode"] == "fixed"
     assert providers["warcraft-wiki"]["expansion_support"]["review_status"] == "reviewed"
     assert providers["warcraft-wiki"]["expansion_support"]["supported_expansions"] == ["retail"]
@@ -532,12 +541,13 @@ def test_warcraft_doctor_reports_expansion_filtering_state() -> None:
     payload = json.loads(result.stdout)
     assert payload["wrapper"]["requested_expansion"] == "wotlk"
     assert payload["wrapper"]["expansion_filter_active"] is True
-    assert payload["included_providers"] == ["wowhead"]
+    assert payload["included_providers"] == ["wowhead", "warcraftlogs"]
+    providers = {row["provider"]: row for row in payload["providers"]}
+    assert providers["warcraftlogs"]["details"]["site_profile"]["key"] == "classic"
     assert {row["provider"] for row in payload["excluded_providers"]} == {
         "method",
         "icy-veins",
         "raiderio",
-        "warcraftlogs",
         "warcraft-wiki",
         "wowprogress",
         "simc",
@@ -563,6 +573,57 @@ def test_warcraft_passthrough_relaxes_none_expansion_provider_with_advisory() ->
     assert payload["expansion_filter"] == "passthrough_no_expansion_semantics"
     assert payload["expansion_advisory"]["requested_expansion"] == "wotlk"
     assert payload["expansion_advisory"]["provider_expansion_mode"] == "none"
+
+
+def test_warcraft_passthrough_maps_warcraftlogs_expansion_to_site_profile() -> None:
+    result = runner.invoke(warcraft_app, ["--expansion", "wotlk", "warcraftlogs", "auth", "client"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["provider"] == "warcraftlogs"
+    assert payload["client"]["site_profile"] == "classic"
+    assert payload["client"]["client_api_url"] == "https://classic.warcraftlogs.com/api/v2/client"
+
+
+def test_warcraft_passthrough_maps_fresh_to_warcraftlogs_fresh_site_profile() -> None:
+    result = runner.invoke(warcraft_app, ["--expansion", "fresh", "warcraftlogs", "auth", "client"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["provider"] == "warcraftlogs"
+    assert payload["client"]["site_profile"] == "fresh"
+    assert payload["client"]["client_api_url"] == "https://fresh.warcraftlogs.com/api/v2/client"
+
+
+def test_warcraft_passthrough_rejects_unsupported_warcraftlogs_expansion() -> None:
+    result = runner.invoke(warcraft_app, ["--expansion", "ptr", "warcraftlogs", "auth", "client"])
+    assert result.exit_code == 1
+    payload = json.loads(result.stderr)
+    assert payload["error"]["code"] == "unsupported_provider_expansion"
+    assert payload["provider"] == "warcraftlogs"
+    assert payload["requested_expansion"] == "ptr"
+
+
+def test_warcraft_passthrough_rejects_duplicate_warcraftlogs_site_selector() -> None:
+    result = runner.invoke(warcraft_app, ["--expansion", "wotlk", "warcraftlogs", "--site", "retail", "auth", "client"])
+    assert result.exit_code == 1
+    payload = json.loads(result.stderr)
+    assert payload["error"]["code"] == "duplicate_expansion_argument"
+    assert payload["provider"] == "warcraftlogs"
+
+
+def test_warcraft_passthrough_rejects_duplicate_warcraftlogs_site_selector_equals_form() -> None:
+    result = runner.invoke(warcraft_app, ["--expansion", "wotlk", "warcraftlogs", "--site=retail", "auth", "client"])
+    assert result.exit_code == 1
+    payload = json.loads(result.stderr)
+    assert payload["error"]["code"] == "duplicate_expansion_argument"
+    assert payload["provider"] == "warcraftlogs"
+
+
+def test_warcraft_passthrough_rejects_fresh_for_wowhead() -> None:
+    result = runner.invoke(warcraft_app, ["--expansion", "fresh", "wowhead", "search", "thunderfury"])
+    assert result.exit_code == 1
+    payload = json.loads(result.stderr)
+    assert payload["error"]["code"] == "unsupported_provider_expansion"
+    assert payload["provider"] == "wowhead"
 
 
 def test_warcraft_passthrough_relaxes_none_expansion_simc() -> None:
@@ -614,6 +675,18 @@ def test_warcraft_doctor_reports_retail_filter_state() -> None:
         "lorrgs",
     }
     assert {row["provider"] for row in payload["excluded_providers"]} == {"simc", "blizzard-api", "curseforge"}
+
+
+def test_warcraft_doctor_handles_ptr_filter_without_warcraftlogs_site_translation() -> None:
+    result = runner.invoke(warcraft_app, ["--expansion", "ptr", "doctor"])
+    assert result.exit_code == 0
+
+    payload = json.loads(result.stdout)
+    providers = {row["provider"]: row for row in payload["providers"]}
+    assert providers["warcraftlogs"]["expansion_support"]["allowed"] is False
+    assert providers["warcraftlogs"]["expansion_support"]["exclusion_reason"] == "provider_does_not_support_requested_expansion"
+    assert providers["warcraftlogs"]["details"]["site_profile"]["key"] == "retail"
+    assert "warcraftlogs" not in payload["included_providers"]
 
 
 def test_warcraft_doctor_reports_worktree_runtime(monkeypatch, tmp_path) -> None:
@@ -1862,14 +1935,13 @@ def test_warcraft_search_expansion_filter_excludes_nonmatching_providers(monkeyp
     payload = json.loads(result.stdout)
     assert payload["requested_expansion"] == "wotlk"
     assert payload["expansion_filter_active"] is True
-    assert payload["included_providers"] == ["wowhead"]
+    assert payload["included_providers"] == ["wowhead", "warcraftlogs"]
     assert payload["results"][0]["provider"] == "wowhead"
     assert payload["results"][0]["provider_expansion"]["mode"] == "profiled"
     assert {row["provider"] for row in payload["excluded_providers"]} == {
         "method",
         "icy-veins",
         "raiderio",
-        "warcraftlogs",
         "warcraft-wiki",
         "wowprogress",
         "simc",
@@ -2188,12 +2260,11 @@ def test_warcraft_resolve_expansion_filter_blocks_retail_only_resolution(monkeyp
     assert payload["expansion_filter_active"] is True
     assert payload["resolved"] is False
     assert payload["provider"] is None
-    assert payload["included_providers"] == ["wowhead"]
+    assert payload["included_providers"] == ["wowhead", "warcraftlogs"]
     assert {row["provider"] for row in payload["excluded_providers"]} == {
         "method",
         "icy-veins",
         "raiderio",
-        "warcraftlogs",
         "warcraft-wiki",
         "wowprogress",
         "simc",
@@ -2388,6 +2459,18 @@ def test_warcraft_resolve_can_select_warcraftlogs_for_explicit_report_reference(
     assert payload["provider"] == "warcraftlogs"
     assert payload["next_command"] == "warcraftlogs report-encounter abcd1234 --fight-id 3"
     assert payload["match"]["wrapper_ranking"]["provider_family"] == "logs"
+
+
+def test_warcraft_resolve_preserves_warcraftlogs_site_follow_up_for_expansion(monkeypatch) -> None:
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.search_suggestions", lambda self, query: {"search": query, "results": []})
+
+    result = runner.invoke(warcraft_app, ["--expansion", "wotlk", "resolve", "https://classic.warcraftlogs.com/reports/abcd1234#fight=3"])
+    assert result.exit_code == 0
+
+    payload = json.loads(result.stdout)
+    assert payload["resolved"] is True
+    assert payload["provider"] == "warcraftlogs"
+    assert payload["next_command"] == "warcraftlogs --site classic report-encounter abcd1234 --fight-id 3"
 
 
 def test_cooldown_packet_combines_lorrgs_phase_data_with_warcraftlogs_casts(monkeypatch) -> None:

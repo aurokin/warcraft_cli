@@ -10,6 +10,8 @@ import httpx
 import pytest
 from typer.testing import CliRunner
 from warcraftlogs_cli.client import (
+    CLASSIC_PROFILE,
+    FRESH_PROFILE,
     GRAPHQL_WARNINGS_KEY,
     RETAIL_PROFILE,
     EncounterRankingsOptions,
@@ -19,6 +21,7 @@ from warcraftlogs_cli.client import (
     _encounter_rankings_request,
     _prune_null_variables,
     load_warcraftlogs_auth_config,
+    resolve_site_profile,
 )
 from warcraftlogs_cli.main import app as warcraftlogs_app
 
@@ -33,7 +36,8 @@ runner = CliRunner()
 
 
 class _FakeWarcraftLogsClient:
-    def __init__(self) -> None:
+    def __init__(self, *, site=RETAIL_PROFILE) -> None:  # noqa: ANN001
+        self._site = site
         self.closed = False
         self._guild_ttl = 300
         self._report_ttl = 60
@@ -44,6 +48,10 @@ class _FakeWarcraftLogsClient:
 
     def close(self) -> None:
         self.closed = True
+
+    @property
+    def site(self):  # noqa: ANN201
+        return self._site
 
     def authorization_code_url(self, *, redirect_uri: str, state: str) -> str:
         return f"https://www.warcraftlogs.com/oauth/authorize?redirect_uri={redirect_uri}&state={state}&response_type=code"
@@ -1103,6 +1111,20 @@ def test_warcraftlogs_client_cache_key_includes_dynamic_query_text() -> None:
     assert logs_key != speed_key
 
 
+def test_warcraftlogs_site_profile_resolution_and_cache_scope() -> None:
+    assert resolve_site_profile(None) == RETAIL_PROFILE
+    assert resolve_site_profile("classic").api_url == "https://classic.warcraftlogs.com/api/v2/client"
+    assert resolve_site_profile("classic-fresh") == FRESH_PROFILE
+
+    retail_client = WarcraftLogsClient.__new__(WarcraftLogsClient)
+    retail_client._site = RETAIL_PROFILE
+    classic_client = WarcraftLogsClient.__new__(WarcraftLogsClient)
+    classic_client._site = CLASSIC_PROFILE
+
+    payload = {"operation_name": "RateLimit", "query": "query RateLimit { rateLimitData { limitPerHour } }", "variables": {}}
+    assert retail_client._cache_key("rate_limit", payload) != classic_client._cache_key("rate_limit", payload)
+
+
 def test_warcraftlogs_client_encounter_rankings_preserves_display_name_filters() -> None:
     captured: dict[str, object] = {}
     client = WarcraftLogsClient.__new__(WarcraftLogsClient)
@@ -1173,6 +1195,7 @@ def test_warcraftlogs_doctor_reports_phase_one_capabilities(monkeypatch) -> None
     payload = json.loads(result.stdout)
     assert payload["provider"] == "warcraftlogs"
     assert payload["status"] == "ready"
+    assert payload["site_profile"]["key"] == "retail"
     assert payload["auth"]["configured"] is True
     assert payload["auth"]["client_credentials_configured"] is True
     assert payload["auth"]["credential_source"] == "/tmp/.env.local"
@@ -1199,6 +1222,36 @@ def test_warcraftlogs_doctor_reports_phase_one_capabilities(monkeypatch) -> None
     assert payload["capabilities"]["report_encounter_damage_target_summary"] == "ready"
     assert payload["capabilities"]["report_encounter_damage_breakdown"] == "ready"
     assert payload["capabilities"]["user_auth"] == "ready_manual_exchange"
+
+
+def test_warcraftlogs_doctor_uses_selected_site_profile(monkeypatch) -> None:
+    monkeypatch.setattr("warcraftlogs_cli.main.WarcraftLogsClient", _FakeWarcraftLogsClient)
+    monkeypatch.setattr(
+        "warcraftlogs_cli.main.load_warcraftlogs_auth_config",
+        lambda: type("Auth", (), {"configured": True, "env_file": "/tmp/.env.local"})(),
+    )
+    monkeypatch.setattr(
+        "warcraftlogs_cli.main.provider_auth_status",
+        lambda provider: {
+            "path": "/tmp/state/warcraftlogs.json",
+            "exists": False,
+            "readable": False,
+            "valid_json": False,
+            "auth_mode": None,
+            "has_access_token": False,
+            "has_refresh_token": False,
+            "expires_at": None,
+            "expired": None,
+        },
+    )
+
+    result = runner.invoke(warcraftlogs_app, ["--site", "fresh", "doctor", "--no-live"])
+    assert result.exit_code == 0
+
+    payload = json.loads(result.stdout)
+    assert payload["site_profile"]["key"] == "fresh"
+    assert payload["site_profile"]["api_url"] == "https://fresh.warcraftlogs.com/api/v2/client"
+    assert payload["auth"]["public_api_access"]["validation"] == "skipped"
 
 
 def test_warcraftlogs_doctor_reports_saved_user_token_runtime_access(monkeypatch) -> None:
@@ -1403,7 +1456,7 @@ def test_warcraftlogs_doctor_reports_invalid_runtime_config(monkeypatch) -> None
     )
 
     class _BrokenClient:
-        def __init__(self) -> None:
+        def __init__(self, **_kwargs: object) -> None:
             raise ValueError("WOWHEAD_REDIS_URL is required when WOWHEAD_CACHE_BACKEND=redis.")
 
     monkeypatch.setattr("warcraftlogs_cli.main.WarcraftLogsClient", _BrokenClient)
@@ -1443,7 +1496,7 @@ def test_warcraftlogs_doctor_reports_invalid_runtime_config_for_saved_user_token
     )
 
     class _BrokenClient:
-        def __init__(self) -> None:
+        def __init__(self, **_kwargs: object) -> None:
             raise ValueError("WOWHEAD_REDIS_URL is required when WOWHEAD_CACHE_BACKEND=redis.")
 
     monkeypatch.setattr("warcraftlogs_cli.main.WarcraftLogsClient", _BrokenClient)
@@ -1480,7 +1533,7 @@ def test_warcraftlogs_doctor_prioritizes_invalid_runtime_config_without_credenti
     )
 
     class _BrokenClient:
-        def __init__(self) -> None:
+        def __init__(self, **_kwargs: object) -> None:
             raise ValueError("WOWHEAD_REDIS_URL is required when WOWHEAD_CACHE_BACKEND=redis.")
 
     monkeypatch.setattr("warcraftlogs_cli.main.WarcraftLogsClient", _BrokenClient)
@@ -1508,6 +1561,14 @@ def test_warcraftlogs_search_matches_explicit_report_reference() -> None:
     assert payload["results"][0]["follow_up"]["command"] == "warcraftlogs report-encounter abcd1234 --fight-id 3"
 
 
+def test_warcraftlogs_search_includes_selected_site_in_follow_up() -> None:
+    result = runner.invoke(warcraftlogs_app, ["--site", "classic", "search", "abcd1234"])
+    assert result.exit_code == 0
+
+    payload = json.loads(result.stdout)
+    assert payload["results"][0]["follow_up"]["command"] == "warcraftlogs --site classic report abcd1234"
+
+
 def test_warcraftlogs_resolve_requires_explicit_report_reference() -> None:
     result = runner.invoke(warcraftlogs_app, ["resolve", "liquid mythic report"])
     assert result.exit_code == 0
@@ -1529,6 +1590,15 @@ def test_warcraftlogs_resolve_matches_bare_report_code() -> None:
     assert payload["confidence"] == "medium"
     assert payload["match"]["kind"] == "report"
     assert payload["next_command"] == "warcraftlogs report abcd1234"
+
+
+def test_warcraftlogs_resolve_includes_selected_site_in_next_command() -> None:
+    result = runner.invoke(warcraftlogs_app, ["--site", "fresh", "resolve", "https://fresh.warcraftlogs.com/reports/abcd1234#fight=3"])
+    assert result.exit_code == 0
+
+    payload = json.loads(result.stdout)
+    assert payload["next_command"] == "warcraftlogs --site fresh report-encounter abcd1234 --fight-id 3"
+    assert payload["match"]["follow_up"]["command"] == "warcraftlogs --site fresh report-encounter abcd1234 --fight-id 3"
 
 
 def test_warcraftlogs_auth_status_reports_shared_state_summary(monkeypatch) -> None:
@@ -1568,6 +1638,56 @@ def test_warcraftlogs_auth_status_reports_shared_state_summary(monkeypatch) -> N
     assert payload["auth"]["user_api_access"]["validation"] == "live"
     assert payload["auth"]["grants"]["client_credentials"] == "ready"
     assert payload["auth"]["grants"]["pkce"] == "ready_manual_exchange"
+
+
+def test_warcraftlogs_auth_status_marks_site_mismatched_user_token_unready(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state-home"))
+    state_file = tmp_path / "state-home" / "warcraft" / "providers" / "warcraftlogs.json"
+    state_file.parent.mkdir(parents=True)
+    state_file.write_text(
+        json.dumps(
+            {
+                "auth_mode": "pkce",
+                "access_token": "tok",
+                "refresh_token": "refresh",
+                "expires_at": time.time() + 3600,
+                "site_profile": "retail",
+            }
+        )
+    )
+    monkeypatch.setattr("warcraftlogs_cli.main.WarcraftLogsClient", _FakeWarcraftLogsClient)
+    monkeypatch.setattr(
+        "warcraftlogs_cli.main.load_warcraftlogs_auth_config",
+        lambda: type("Auth", (), {"configured": True, "env_file": "/tmp/.env.local"})(),
+    )
+
+    result = runner.invoke(warcraftlogs_app, ["--site", "classic", "auth", "status", "--no-live"])
+    assert result.exit_code == 0
+
+    payload = json.loads(result.stdout)
+    assert payload["auth"]["active_mode"] == "client_credentials"
+    assert payload["auth"]["endpoint_family"] == "client"
+    assert payload["auth"]["user_api_access"]["ready"] is False
+    assert payload["auth"]["user_api_access"]["reason"] == "site_profile_mismatch"
+    assert payload["auth"]["user_api_access"]["token_site_profile"] == "retail"
+    assert payload["auth"]["user_api_access"]["selected_site_profile"] == "classic"
+
+
+def test_warcraftlogs_auth_client_reports_selected_site(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "warcraftlogs_cli.main.load_warcraftlogs_auth_config",
+        lambda: type("Auth", (), {"configured": True, "env_file": "/tmp/.env.local", "client_id": "client-123456"})(),
+    )
+
+    result = runner.invoke(warcraftlogs_app, ["--site", "classic", "auth", "client"])
+    assert result.exit_code == 0
+
+    payload = json.loads(result.stdout)
+    assert payload["client"]["site_profile"] == "classic"
+    assert payload["client"]["authorize_url"] == "https://classic.warcraftlogs.com/oauth/authorize"
+    assert payload["client"]["token_url"] == "https://classic.warcraftlogs.com/oauth/token"
+    assert payload["client"]["client_api_url"] == "https://classic.warcraftlogs.com/api/v2/client"
+    assert payload["client"]["user_api_url"] == "https://classic.warcraftlogs.com/api/v2/user"
 
 
 def test_warcraftlogs_auth_status_reports_grants_blocked_without_client_credentials(monkeypatch) -> None:
@@ -1732,7 +1852,7 @@ def test_warcraftlogs_auth_status_reports_invalid_runtime_config(monkeypatch) ->
     )
 
     class _BrokenClient:
-        def __init__(self) -> None:
+        def __init__(self, **_kwargs: object) -> None:
             raise ValueError("WOWHEAD_REDIS_URL is required when WOWHEAD_CACHE_BACKEND=redis.")
 
     monkeypatch.setattr("warcraftlogs_cli.main.WarcraftLogsClient", _BrokenClient)
@@ -1774,7 +1894,7 @@ def test_warcraftlogs_auth_status_prioritizes_invalid_runtime_config_without_cre
     )
 
     class _BrokenClient:
-        def __init__(self) -> None:
+        def __init__(self, **_kwargs: object) -> None:
             raise ValueError("WOWHEAD_REDIS_URL is required when WOWHEAD_CACHE_BACKEND=redis.")
 
     monkeypatch.setattr("warcraftlogs_cli.main.WarcraftLogsClient", _BrokenClient)
@@ -1973,7 +2093,7 @@ def test_warcraftlogs_auth_whoami_requires_saved_user_token_not_client_credentia
 
 def test_warcraftlogs_auth_whoami_reports_invalid_runtime_config_cleanly(monkeypatch) -> None:
     class _BrokenClient:
-        def __init__(self) -> None:
+        def __init__(self, **_kwargs: object) -> None:
             raise ValueError("WOWHEAD_REDIS_URL is required when WOWHEAD_CACHE_BACKEND=redis.")
 
     monkeypatch.setattr("warcraftlogs_cli.main.WarcraftLogsClient", _BrokenClient)
@@ -2660,6 +2780,56 @@ def test_warcraftlogs_encounter_rankings_returns_real_ranking_rows(monkeypatch) 
     assert payload["rankings"]["rows"][0]["class_spec_identity"]["identity"] == {"actor_class": "druid", "spec": "balance"}
 
 
+def test_warcraftlogs_encounter_rankings_uses_selected_site_for_report_urls(monkeypatch) -> None:
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _FakeWarcraftLogsClient(site=CLASSIC_PROFILE))
+
+    result = runner.invoke(
+        warcraftlogs_app,
+        [
+            "--site",
+            "classic",
+            "encounter-rankings",
+            "--zone-id",
+            "38",
+            "--boss-name",
+            "Dimensius",
+            "--bracket",
+            "1",
+            "--difficulty",
+            "5",
+            "--class-name",
+            "Druid",
+            "--spec-name",
+            "Balance",
+            "--metric",
+            "dps",
+            "--page",
+            "1",
+            "--partition",
+            "2",
+            "--size",
+            "20",
+            "--server-region",
+            "us",
+            "--server-slug",
+            "illidan",
+            "--leaderboard",
+            "logs-only",
+            "--hard-mode-level",
+            "no-hard-mode",
+            "--filter",
+            "duration>120",
+            "--include-combatant-info",
+            "--include-other-players",
+            "--top",
+            "1",
+        ],
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["rankings"]["rows"][0]["report_url"] == "https://classic.warcraftlogs.com/reports/abcd1234#fight=1"
+
+
 def test_warcraftlogs_encounter_rankings_normalizes_slug_filters(monkeypatch) -> None:
     monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _FakeWarcraftLogsClient())
 
@@ -2894,6 +3064,30 @@ def test_warcraftlogs_ability_usage_summary_returns_sampled_cast_summary(monkeyp
     assert payload["kills_preview"][0]["casts"]["count"] == 2
     assert payload["kills_preview"][0]["casts"]["sources"][0]["count"] == 2
     assert payload["kills_preview"][0]["casts"]["sources"][0]["source"]["name"] == "Auropower"
+
+
+def test_warcraftlogs_sampled_citations_use_selected_site_for_report_urls(monkeypatch) -> None:
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _FakeWarcraftLogsClient(site=FRESH_PROFILE))
+
+    result = runner.invoke(
+        warcraftlogs_app,
+        [
+            "--site",
+            "fresh",
+            "ability-usage-summary",
+            "--zone-id",
+            "38",
+            "--boss-id",
+            "3012",
+            "--difficulty",
+            "5",
+            "--ability-id",
+            "20473",
+        ],
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["citations"]["sample_reports"][0]["report_url"] == "https://fresh.warcraftlogs.com/reports/abcd1234#fight=1"
 
 
 def test_warcraftlogs_comp_samples_returns_sampled_rosters_and_class_presence(monkeypatch) -> None:
@@ -4889,6 +5083,41 @@ def test_warcraftlogs_client_has_user_token_returns_true_for_valid_user_token(mo
     assert client._has_user_token() is True
 
 
+def test_warcraftlogs_client_has_user_token_returns_false_for_site_mismatch(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "warcraftlogs_cli.client.load_provider_auth_state",
+        lambda provider: {
+            "auth_mode": "pkce",
+            "access_token": "tok",
+            "expires_at": time.time() + 3600,
+            "site_profile": "retail",
+        },
+    )
+    client = WarcraftLogsClient.__new__(WarcraftLogsClient)
+    client._site = CLASSIC_PROFILE
+    assert client._has_user_token() is False
+
+
+def test_warcraftlogs_client_user_token_rejects_site_mismatch(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "warcraftlogs_cli.client.load_provider_auth_state",
+        lambda provider: {
+            "auth_mode": "authorization_code",
+            "access_token": "tok",
+            "expires_at": time.time() + 3600,
+            "site_profile": "retail",
+        },
+    )
+    client = WarcraftLogsClient.__new__(WarcraftLogsClient)
+    client._site = CLASSIC_PROFILE
+
+    with pytest.raises(WarcraftLogsClientError) as exc_info:
+        client._user_token()
+
+    assert exc_info.value.code == "site_profile_mismatch"
+    assert "--site classic" in exc_info.value.message
+
+
 def test_warcraftlogs_client_graphql_routes_through_user_endpoint_when_authenticated(monkeypatch) -> None:
     monkeypatch.setattr(
         "warcraftlogs_cli.client.load_provider_auth_state",
@@ -4927,6 +5156,51 @@ def test_warcraftlogs_client_graphql_routes_through_user_endpoint_when_authentic
     assert captured["namespace"] == "ns"
     assert captured["ttl_seconds"] == 42
     assert captured["use_cache"] is True
+
+
+def test_warcraftlogs_client_graphql_uses_client_endpoint_for_site_mismatched_user_token(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "warcraftlogs_cli.client.load_provider_auth_state",
+        lambda provider: {
+            "auth_mode": "pkce",
+            "access_token": "user-token",
+            "expires_at": time.time() + 3600,
+            "site_profile": "retail",
+        },
+    )
+    client = WarcraftLogsClient.__new__(WarcraftLogsClient)
+    client._site = CLASSIC_PROFILE
+    client._cache_store = None
+    client._retry_attempts = 1
+    client._last_warnings = []
+    client._token = lambda: "client-token"  # type: ignore[method-assign]
+    client._client = lambda: object()  # type: ignore[method-assign]
+    captured: dict[str, object] = {}
+
+    class _Resp:
+        def json(self) -> dict[str, object]:
+            return {"data": {"ok": True}}
+
+    def _fake_request(_http_client: object, url: str, **kwargs: object) -> _Resp:
+        captured["url"] = url
+        captured["headers"] = kwargs.get("headers")
+        return _Resp()
+
+    monkeypatch.setattr("warcraftlogs_cli.client.request_with_retries", _fake_request)
+
+    payload = client._graphql(
+        operation_name="OpName",
+        query="query Q { x }",
+        variables={"a": 1},
+        namespace="ns",
+        ttl_seconds=42,
+    )
+
+    assert payload == {"ok": True}
+    assert captured["url"] == CLASSIC_PROFILE.api_url
+    headers = captured["headers"]
+    assert isinstance(headers, dict)
+    assert headers["Authorization"] == "Bearer client-token"
 
 
 def test_warcraftlogs_client_raw_graphql_controls_endpoint_and_cache(monkeypatch) -> None:

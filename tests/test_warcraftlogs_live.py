@@ -79,6 +79,38 @@ def test_live_warcraftlogs_auth_metadata_contract() -> None:
 
 
 @pytest.mark.live
+@pytest.mark.parametrize(
+    ("site_key", "host"),
+    [
+        ("retail", "www.warcraftlogs.com"),
+        ("classic", "classic.warcraftlogs.com"),
+        ("fresh", "fresh.warcraftlogs.com"),
+    ],
+)
+def test_live_warcraftlogs_site_profile_oauth_and_schema_contract(site_key: str, host: str) -> None:
+    _require_warcraftlogs_auth()
+
+    client_payload = _payload_for(["--site", site_key, "auth", "client"])
+    assert client_payload["client"]["client_api_url"] == f"https://{host}/api/v2/client"
+    assert client_payload["client"]["token_url"] == f"https://{host}/oauth/token"
+
+    payload = _payload_for(
+        [
+            "--site",
+            site_key,
+            "graphql",
+            "--endpoint",
+            "client",
+            "--introspect",
+        ]
+    )
+    schema = payload["introspection"]
+    assert schema["queryType"]["name"] == "Query"
+    assert isinstance(schema["types"], list)
+    assert len(schema["types"]) >= 100
+
+
+@pytest.mark.live
 def test_live_warcraftlogs_server_contract() -> None:
     _require_warcraftlogs_auth()
     payload = _payload_for(["server", "us", "illidan"])
