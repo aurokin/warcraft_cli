@@ -1,6 +1,6 @@
 # Releases
 
-The workspace ships under one version. Every `pyproject.toml` in the repo (root + 11 packages) bumps together, and `CHANGELOG.md` at the repo root is the source of truth for what shipped.
+The workspace ships under one version. Every `pyproject.toml` in the repo (root + packages) bumps together, and `CHANGELOG.md` at the repo root is the source of truth for what shipped.
 
 ## During Normal Development
 
@@ -24,7 +24,7 @@ Internal refactors, doc-only edits, and test-only changes don't need a changelog
    make release VERSION=X.Y.Z
    ```
 
-   This runs `scripts/bump_version.py`, which validates the new version is semver, errors if the current versions across the workspace disagree, and rewrites all 12 files in place. It does not stage or commit.
+   This runs `scripts/bump_version.py`, which validates the new version is semver, errors if the current versions across the workspace disagree, and rewrites every workspace `pyproject.toml` in place. It does not stage or commit.
 4. **Review and commit.**
 
    ```bash
