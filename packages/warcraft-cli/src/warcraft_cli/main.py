@@ -1864,7 +1864,10 @@ def resolve(
         "included_provider_count": len(included_registrations),
         "excluded_provider_count": len(excluded_providers),
         "resolved": best_payload is not None,
-        "provider": best_provider,
+        # `provider` is the envelope identity and must be a string: the selected provider when one
+        # matched, otherwise the wrapper itself. `selected_provider` is the nullable selection.
+        "provider": best_provider or "warcraft",
+        "selected_provider": best_provider,
         "match": match,
         "next_command": best_payload.get("next_command") if isinstance(best_payload, dict) else None,
         "confidence": best_payload.get("confidence") if isinstance(best_payload, dict) else None,

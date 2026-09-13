@@ -13,6 +13,7 @@ from typer.testing import CliRunner
 from warcraft_cli.main import app as warcraft_app
 from warcraft_cli.providers import PROVIDERS, get_provider
 from warcraft_content.article_bundle import write_article_bundle
+from warcraft_core.envelope import envelope_violations
 from warcraftlogs_cli.main import app as warcraftlogs_app
 from wowhead_cli.main import app as wowhead_app
 
@@ -2829,7 +2830,9 @@ def test_warcraft_resolve_does_not_fabricate_synthetic_wowprogress_leaderboard_r
 
     payload = json.loads(result.stdout)
     assert payload["resolved"] is False
-    assert payload["provider"] is None
+    assert payload["selected_provider"] is None
+    assert payload["provider"] == "warcraft"
+    assert envelope_violations(payload) == []
     assert payload["next_command"] is None
     assert payload["match"] is None
 

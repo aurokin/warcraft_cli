@@ -52,7 +52,8 @@ Every command's flags are listed in [docs/reference/warcraft.md](../reference/wa
 - `warcraft search` — fan out to every search-ready provider and rank the merged candidates. Each
   provider row carries `ok` and `error`, so a failed provider is distinguishable from an empty result.
 - `warcraft resolve` — pick the single best match plus its follow-up command; never resolves to a
-  provider that reported `resolved: false`.
+  provider that reported `resolved: false`. `selected_provider` is the match's provider or `null`;
+  `provider` mirrors it when resolved and is `warcraft` when nothing matched.
 - `warcraft guild` / `guild-history` / `guild-ranks` — merge one guild identity across raiderio and
   wowprogress, with citations.
 - `warcraft actor-profile` — cross-walk a Warcraft Logs report actor to a Raider.IO profile.
