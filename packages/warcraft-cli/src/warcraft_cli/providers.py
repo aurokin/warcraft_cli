@@ -1,62 +1,102 @@
+"""The single place the wrapper imports provider packages.
+
+Every ``warcraft`` composite command reaches a provider through this registry: the pure
+``PROVIDER`` surfaces for search/resolve/doctor, and the provider Typer app for passthrough and
+for the commands that have no surface method yet. No other ``warcraft_cli`` module imports a
+provider package.
+"""
+
 from __future__ import annotations
 
+import io
 import json
-from dataclasses import dataclass
-from typing import Any
+from collections.abc import Callable, Mapping
+from contextlib import redirect_stderr, redirect_stdout
+from dataclasses import dataclass, field
+from typing import Any, Literal
 
+import click
+import typer
 from blizzard_api_cli.main import app as blizzard_app
+from blizzard_api_cli.provider import PROVIDER as blizzard_provider
 from curseforge_cli.main import app as curseforge_app
+from curseforge_cli.provider import PROVIDER as curseforge_provider
 from icy_veins_cli.main import app as icy_veins_app
+from icy_veins_cli.provider import PROVIDER as icy_veins_provider
 from lorrgs_cli.main import app as lorrgs_app
+from lorrgs_cli.provider import PROVIDER as lorrgs_provider
+from lorrgs_cli.search import parse_report_reference as parse_lorrgs_report_reference
 from method_cli.main import app as method_app
+from method_cli.provider import PROVIDER as method_provider
 from raidbots_cli.main import app as raidbots_app
+from raidbots_cli.provider import PROVIDER as raidbots_provider
 from raiderio_cli.main import app as raiderio_app
+from raiderio_cli.provider import PROVIDER as raiderio_provider
 from simc_cli.main import app as simc_app
-from typer.testing import CliRunner
-from warcraft_content.paths import cache_root, config_root, data_root, state_root, worktree_runtime_details
+from simc_cli.provider import PROVIDER as simc_provider
+from warcraft_core.cli import error_envelope_for
+from warcraft_core.envelope import ENVELOPE_KEYS, SCHEMA_VERSION, error_envelope
+from warcraft_core.exit_codes import EXIT_GENERIC, EXIT_USAGE, exit_code_for
+from warcraft_core.expansions import expansion_keys, list_expansions, resolve_expansion, warcraftlogs_site_for_expansion
+from warcraft_core.paths import cache_root, config_root, data_root, state_root, worktree_runtime_details
+from warcraft_core.provider import ProviderSurface
 from warcraft_wiki_cli.main import app as warcraft_wiki_app
+from warcraft_wiki_cli.provider import PROVIDER as warcraft_wiki_provider
 from warcraftlogs_cli.main import app as warcraftlogs_app
-from wowhead_cli.expansion_profiles import list_profiles, normalize_expansion_key, resolve_expansion
+from warcraftlogs_cli.provider import PROVIDER as warcraftlogs_provider
 from wowhead_cli.main import app as wowhead_app
+from wowhead_cli.provider import PROVIDER as wowhead_provider
 from wowprogress_cli.main import app as wowprogress_app
+from wowprogress_cli.provider import PROVIDER as wowprogress_provider
 
-runner = CliRunner()
-WOWHEAD_EXPANSION_KEYS: tuple[str, ...] = tuple(profile.key for profile in list_profiles())
-WARCRAFTLOGS_CLASSIC_EXPANSIONS: tuple[str, ...] = ("classic", "tbc", "wotlk", "cata", "mop-classic")
-WARCRAFTLOGS_SUPPORTED_EXPANSIONS: tuple[str, ...] = ("retail", *WARCRAFTLOGS_CLASSIC_EXPANSIONS, "fresh")
-WRAPPER_EXTRA_EXPANSION_ALIASES: dict[str, str] = {
-    "fresh": "fresh",
-    "classic-fresh": "fresh",
-    "classicfresh": "fresh",
-    "anniversary": "fresh",
-    "classic-anniversary": "fresh",
-}
+__all__ = [
+    "PROVIDERS",
+    "wrapper_envelope",
+    "ProviderRegistration",
+    "expansion_filtered_providers",
+    "expansion_support_snapshot",
+    "get_provider",
+    "global_doctor_payload",
+    "invoke_provider_command",
+    "list_providers",
+    "list_wrapper_expansion_keys",
+    "parse_lorrgs_report_reference",
+    "provider_doctor",
+    "provider_expansion_args",
+    "provider_expansion_exclusion_reason",
+    "provider_expansion_options",
+    "provider_expansion_support",
+    "provider_invoke",
+    "provider_resolve",
+    "provider_search",
+    "provider_supports_surface",
+    "provider_tiers",
+    "provider_surface_status",
+    "provider_surface_support",
+    "resolve_wrapper_expansion_key",
+    "surface_filtered_providers",
+    "warcraftlogs_site_for_expansion",
+]
+
+WOWHEAD_SUPPORTED_EXPANSIONS: tuple[str, ...] = tuple(
+    expansion.key for expansion in list_expansions() if expansion.wowhead_path_prefix is not None
+)
+WARCRAFTLOGS_SUPPORTED_EXPANSIONS: tuple[str, ...] = tuple(
+    expansion.key for expansion in list_expansions() if expansion.warcraftlogs_site is not None
+)
 
 
 def list_wrapper_expansion_keys() -> tuple[str, ...]:
-    return (*WOWHEAD_EXPANSION_KEYS, "fresh")
+    return expansion_keys()
 
 
 def resolve_wrapper_expansion_key(value: str | None) -> str:
-    try:
-        return resolve_expansion(value).key
-    except ValueError:
-        normalized = normalize_expansion_key(value or "")
-        key = WRAPPER_EXTRA_EXPANSION_ALIASES.get(normalized)
-        if key is not None:
-            return key
-        options = ", ".join(list_wrapper_expansion_keys())
-        raise ValueError(f"Unknown expansion {value!r}. Supported: {options}") from None
+    return resolve_expansion(value).key
 
 
-def warcraftlogs_site_for_expansion(expansion: str) -> str:
-    if expansion == "retail":
-        return "retail"
-    if expansion in WARCRAFTLOGS_CLASSIC_EXPANSIONS:
-        return "classic"
-    if expansion == "fresh":
-        return "fresh"
-    raise ValueError(f"Expansion {expansion!r} does not map to a Warcraft Logs site profile.")
+# Readiness of one wrapper surface for one provider, as advertised by `warcraft doctor`.
+SurfaceStatus = Literal["ready", "ready_explicit_report_only", "coming_soon", "not_supported"]
+ProviderTier = Literal["core", "supported", "experimental"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,9 +111,18 @@ class ProviderRegistration:
     supported_expansions: tuple[str, ...]
     expansion_review_status: str
     expansion_policy_note: str
-    wrapper_capabilities: dict[str, str]
-    app: Any
+    wrapper_capabilities: dict[str, SurfaceStatus]
+    # Pure in-process surface (search/resolve/doctor); the wrapper never shells out to a binary.
+    surface: ProviderSurface
+    # Support level agents should expect. See docs/warcraft/README.md.
+    tier: ProviderTier
+    # Keyword name the surface takes for the wrapper's --expansion value, when it takes one at all.
+    expansion_option: str | None
+    app: typer.Typer
+    # Argument vector for `<provider> doctor`, used by the registry/CLI parity tests.
     doctor_args: tuple[str, ...]
+    # Extra keyword arguments for surface.doctor(), e.g. skipping wowhead's live probes.
+    doctor_options: dict[str, Any] = field(default_factory=dict)
 
 
 PROVIDERS: tuple[ProviderRegistration, ...] = (
@@ -85,7 +134,7 @@ PROVIDERS: tuple[ProviderRegistration, ...] = (
         description="Structured Wowhead provider with live search, resolve, and retrieval commands.",
         auth_required=False,
         expansion_mode="profiled",
-        supported_expansions=WOWHEAD_EXPANSION_KEYS,
+        supported_expansions=WOWHEAD_SUPPORTED_EXPANSIONS,
         expansion_review_status="reviewed",
         expansion_policy_note="Provider has first-class expansion profiles and real version-specific routing.",
         wrapper_capabilities={
@@ -93,8 +142,12 @@ PROVIDERS: tuple[ProviderRegistration, ...] = (
             "search": "ready",
             "resolve": "ready",
         },
+        surface=wowhead_provider,
+        tier="core",
+        expansion_option="expansion",
         app=wowhead_app,
         doctor_args=("doctor", "--no-live"),
+        doctor_options={"live": False},
     ),
     ProviderRegistration(
         name="method",
@@ -115,6 +168,9 @@ PROVIDERS: tuple[ProviderRegistration, ...] = (
             "search": "ready",
             "resolve": "ready",
         },
+        surface=method_provider,
+        tier="supported",
+        expansion_option=None,
         app=method_app,
         doctor_args=("doctor",),
     ),
@@ -137,6 +193,9 @@ PROVIDERS: tuple[ProviderRegistration, ...] = (
             "search": "ready",
             "resolve": "ready",
         },
+        surface=icy_veins_provider,
+        tier="supported",
+        expansion_option=None,
         app=icy_veins_app,
         doctor_args=("doctor",),
     ),
@@ -159,6 +218,9 @@ PROVIDERS: tuple[ProviderRegistration, ...] = (
             "search": "ready",
             "resolve": "ready",
         },
+        surface=raiderio_provider,
+        tier="supported",
+        expansion_option=None,
         app=raiderio_app,
         doctor_args=("doctor",),
     ),
@@ -182,8 +244,12 @@ PROVIDERS: tuple[ProviderRegistration, ...] = (
             "search": "ready_explicit_report_only",
             "resolve": "ready_explicit_report_only",
         },
+        surface=warcraftlogs_provider,
+        tier="core",
+        expansion_option="site",
         app=warcraftlogs_app,
-        doctor_args=("doctor",),
+        doctor_args=("doctor", "--no-live"),
+        doctor_options={"live": False},
     ),
     ProviderRegistration(
         name="warcraft-wiki",
@@ -204,6 +270,9 @@ PROVIDERS: tuple[ProviderRegistration, ...] = (
             "search": "ready",
             "resolve": "ready",
         },
+        surface=warcraft_wiki_provider,
+        tier="supported",
+        expansion_option=None,
         app=warcraft_wiki_app,
         doctor_args=("doctor",),
     ),
@@ -229,6 +298,9 @@ PROVIDERS: tuple[ProviderRegistration, ...] = (
             "search": "ready",
             "resolve": "ready",
         },
+        surface=wowprogress_provider,
+        tier="supported",
+        expansion_option=None,
         app=wowprogress_app,
         doctor_args=("doctor",),
     ),
@@ -251,6 +323,9 @@ PROVIDERS: tuple[ProviderRegistration, ...] = (
             "search": "coming_soon",
             "resolve": "coming_soon",
         },
+        surface=simc_provider,
+        tier="core",
+        expansion_option=None,
         app=simc_app,
         doctor_args=("doctor",),
     ),
@@ -276,6 +351,9 @@ PROVIDERS: tuple[ProviderRegistration, ...] = (
             "input": "ready",
             "explain_input": "ready",
         },
+        surface=raidbots_provider,
+        tier="experimental",
+        expansion_option=None,
         app=raidbots_app,
         doctor_args=("doctor",),
     ),
@@ -307,6 +385,9 @@ PROVIDERS: tuple[ProviderRegistration, ...] = (
             "game_data": "ready",
             "profile": "ready",
         },
+        surface=blizzard_provider,
+        tier="experimental",
+        expansion_option=None,
         app=blizzard_app,
         doctor_args=("doctor",),
     ),
@@ -336,6 +417,9 @@ PROVIDERS: tuple[ProviderRegistration, ...] = (
             "resolve": "coming_soon",
             "addon": "ready",
         },
+        surface=curseforge_provider,
+        tier="experimental",
+        expansion_option=None,
         app=curseforge_app,
         doctor_args=("doctor",),
     ),
@@ -367,6 +451,9 @@ PROVIDERS: tuple[ProviderRegistration, ...] = (
             "current_season": "ready",
             "metadata": "ready",
         },
+        surface=lorrgs_provider,
+        tier="experimental",
+        expansion_option=None,
         app=lorrgs_app,
         doctor_args=("doctor",),
     ),
@@ -459,22 +546,6 @@ def expansion_support_snapshot(*, requested_expansion: str | None) -> list[dict[
     ]
 
 
-def _invoke_provider_app(app: Any, args: list[str]) -> tuple[int, dict[str, Any] | None, str]:
-    result = runner.invoke(app, args)
-    payload: dict[str, Any] | None = None
-    for raw in (result.stdout.strip(), getattr(result, "stderr", "").strip(), result.output.strip()):
-        if not raw:
-            continue
-        try:
-            maybe_payload = json.loads(raw)
-        except json.JSONDecodeError:
-            maybe_payload = None
-        if isinstance(maybe_payload, dict):
-            payload = maybe_payload
-            break
-    return result.exit_code, payload, result.output
-
-
 def provider_surface_status(registration: ProviderRegistration, surface: str) -> str:
     return registration.wrapper_capabilities.get(surface, "unsupported")
 
@@ -519,14 +590,34 @@ def surface_filtered_providers(
     return included, excluded
 
 
+def provider_expansion_options(registration: ProviderRegistration, expansion: str | None) -> dict[str, str]:
+    """Keyword arguments that pin a pure surface call to the wrapper's requested expansion."""
+    option = registration.expansion_option
+    if expansion is None or option is None:
+        return {}
+    if option == "site":
+        return {option: warcraftlogs_site_for_expansion(expansion)}
+    return {option: expansion}
+
+
 def provider_expansion_args(registration: ProviderRegistration, expansion: str | None) -> list[str]:
-    if expansion is None:
-        return []
-    if registration.name == "wowhead":
-        return ["--expansion", expansion]
-    if registration.name == "warcraftlogs":
-        return ["--site", warcraftlogs_site_for_expansion(expansion)]
-    return []
+    """The same pin as ``provider_expansion_options``, in provider CLI flag form for passthrough."""
+    return [arg for key, value in provider_expansion_options(registration, expansion).items() for arg in (f"--{key}", value)]
+
+
+def _unsupported_expansion_result(registration: ProviderRegistration, expansion: str | None) -> dict[str, Any] | None:
+    """Early return for a provider that cannot honour the requested expansion; ``None`` means proceed."""
+    if (
+        expansion is None
+        or registration.expansion_mode == "none"
+        or provider_expansion_exclusion_reason(registration, requested_expansion=expansion) is None
+    ):
+        return None
+    return {
+        "provider": registration.name,
+        "exit_code": 1,
+        "payload": _unsupported_expansion_payload(registration, expansion),
+    }
 
 
 def _unsupported_expansion_payload(registration: ProviderRegistration, expansion: str) -> dict[str, Any]:
@@ -542,63 +633,147 @@ def _unsupported_expansion_payload(registration: ProviderRegistration, expansion
     }
 
 
+def wrapper_envelope(command: str, payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Fill the envelope keys a wrapper-built payload lacks; keys already present are never overridden.
+
+    Wrapper payloads historically carried only some envelope keys (``ok``, ``provider``, ``kind``);
+    the rest of their keys stay at the top level (deprecated dual-emit) and are copied into ``data``
+    on success. Provider envelopes passed through are complete and come back unchanged.
+    """
+    ok = payload.get("ok", "error" not in payload)
+    legacy = {key: value for key, value in payload.items() if key not in ENVELOPE_KEYS}
+    defaults: dict[str, Any] = {
+        "ok": ok,
+        "provider": "warcraft",
+        "command": command,
+        "kind": "error" if ok is False else command,
+        "schema_version": SCHEMA_VERSION,
+        "query": None,
+        "provenance": {},
+        "data": legacy if ok else {},
+    }
+    return {**defaults, **payload}
+
+
+def _flat_payload(envelope: dict[str, Any]) -> dict[str, Any]:
+    """Envelope with its ``data`` body also flattened at the top level, the shape the CLIs print.
+
+    Wrapper composites read legacy keys (``results``, ``resolved``, ``match``, ``auth``) directly,
+    and providers differ in whether their surface dual-emits them; flattening here keeps one shape.
+    """
+    data = envelope.get("data")
+    if not isinstance(data, dict):
+        return dict(envelope)
+    return {**data, **envelope}
+
+
+def _call_surface(provider: str, command: str, call: Callable[..., Any], *args: Any, **kwargs: Any) -> tuple[int, dict[str, Any]]:
+    """Run one pure surface method, returning ``(exit_code, flat payload)`` and never raising."""
+    try:
+        envelope = call(*args, **kwargs)
+    except Exception as exc:
+        failure, exit_code = error_envelope_for(provider, command, exc)
+        return exit_code, dict(failure)
+    payload = _flat_payload(dict(envelope))
+    if payload.get("ok") is False:
+        error = payload.get("error")
+        code = error.get("code") if isinstance(error, dict) else None
+        return exit_code_for(code) if isinstance(code, str) else EXIT_GENERIC, payload
+    return 0, payload
+
+
 def provider_search(provider: str, query: str, *, limit: int = 5, expansion: str | None = None) -> dict[str, Any]:
     registration = get_provider(provider)
-    if (
-        expansion is not None
-        and registration.expansion_mode != "none"
-        and provider_expansion_exclusion_reason(registration, requested_expansion=expansion) is not None
-    ):
-        return {
-            "provider": provider,
-            "exit_code": 1,
-            "payload": _unsupported_expansion_payload(registration, expansion),
-        }
-    args = [*provider_expansion_args(registration, expansion), "search", query, "--limit", str(limit)]
-    code, payload, _stdout = _invoke_provider_app(registration.app, args)
-    return {
-        "provider": provider,
-        "exit_code": code,
-        "payload": payload,
-    }
+    unsupported = _unsupported_expansion_result(registration, expansion)
+    if unsupported is not None:
+        return unsupported
+    code, payload = _call_surface(
+        provider,
+        "search",
+        registration.surface.search,
+        query,
+        limit=limit,
+        **provider_expansion_options(registration, expansion),
+    )
+    return {"provider": provider, "exit_code": code, "payload": payload}
 
 
 def provider_resolve(provider: str, query: str, *, limit: int = 5, expansion: str | None = None) -> dict[str, Any]:
     registration = get_provider(provider)
-    if (
-        expansion is not None
-        and registration.expansion_mode != "none"
-        and provider_expansion_exclusion_reason(registration, requested_expansion=expansion) is not None
-    ):
-        return {
-            "provider": provider,
-            "exit_code": 1,
-            "payload": _unsupported_expansion_payload(registration, expansion),
-        }
-    args = [*provider_expansion_args(registration, expansion), "resolve", query, "--limit", str(limit)]
-    code, payload, _stdout = _invoke_provider_app(registration.app, args)
-    return {
-        "provider": provider,
-        "exit_code": code,
-        "payload": payload,
-    }
+    unsupported = _unsupported_expansion_result(registration, expansion)
+    if unsupported is not None:
+        return unsupported
+    code, payload = _call_surface(
+        provider,
+        "resolve",
+        registration.surface.resolve,
+        query,
+        limit=limit,
+        **provider_expansion_options(registration, expansion),
+    )
+    return {"provider": provider, "exit_code": code, "payload": payload}
+
+
+def _capture_command(app: typer.Typer, args: list[str], *, prog_name: str) -> tuple[int, dict[str, Any] | None, str]:
+    """Run a provider Typer app in-process, capturing its exit code, JSON payload, and raw output."""
+    command = typer.main.get_command(app)
+    out, err = io.StringIO(), io.StringIO()
+    exit_code = 0
+    failure: dict[str, Any] | None = None
+    try:
+        with redirect_stdout(out), redirect_stderr(err):
+            returned = command.main(args=args, prog_name=prog_name, standalone_mode=False)
+        if isinstance(returned, int):
+            exit_code = returned
+    except click.ClickException as exc:
+        # standalone_mode=False raises usage errors instead of printing them.
+        exit_code = EXIT_USAGE
+        failure = dict(error_envelope(provider=prog_name, command=prog_name, code="usage_error", message=exc.format_message()))
+    except SystemExit as exc:
+        exit_code = exc.code if isinstance(exc.code, int) else EXIT_GENERIC
+    except Exception as exc:
+        # A provider crash must reach the agent as an envelope, never a traceback.
+        envelope, exit_code = error_envelope_for(prog_name, prog_name, exc)
+        failure = dict(envelope)
+    text = out.getvalue() + err.getvalue()
+    if failure is not None:
+        return exit_code, failure, text
+    return exit_code, _first_json_object(out.getvalue()) or _first_json_object(err.getvalue()), text
+
+
+def _first_json_object(text: str) -> dict[str, Any] | None:
+    raw = text.strip()
+    if not raw:
+        return None
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def invoke_provider_command(app: typer.Typer, *, args: list[str], prog_name: str) -> None:
+    """Run a provider Typer app with its output streaming straight through to the caller's stdout."""
+    command = typer.main.get_command(app)
+    try:
+        # standalone_mode=False makes click *return* the exit code for typer.Exit/click.Exit
+        # rather than calling sys.exit, so a provider's `raise typer.Exit(1)` would otherwise
+        # be silently swallowed to exit 0. Re-raise it so passthrough propagates failures.
+        exit_code = command.main(args=args, prog_name=prog_name, standalone_mode=False)
+    except SystemExit as exc:
+        code = exc.code if isinstance(exc.code, int) else 1
+        raise typer.Exit(code) from exc
+    if isinstance(exit_code, int) and exit_code != 0:
+        raise typer.Exit(exit_code)
 
 
 def provider_invoke(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, Any]:
     registration = get_provider(provider)
-    if (
-        expansion is not None
-        and registration.expansion_mode != "none"
-        and provider_expansion_exclusion_reason(registration, requested_expansion=expansion) is not None
-    ):
-        return {
-            "provider": provider,
-            "exit_code": 1,
-            "payload": _unsupported_expansion_payload(registration, expansion),
-            "stdout": "",
-        }
+    unsupported = _unsupported_expansion_result(registration, expansion)
+    if unsupported is not None:
+        return {**unsupported, "stdout": ""}
     normalized_args = [*provider_expansion_args(registration, expansion), *args]
-    code, payload, stdout = _invoke_provider_app(registration.app, normalized_args)
+    code, payload, stdout = _capture_command(registration.app, normalized_args, prog_name=registration.command)
     return {
         "provider": provider,
         "exit_code": code,
@@ -609,18 +784,26 @@ def provider_invoke(provider: str, args: list[str], *, expansion: str | None = N
 
 def provider_doctor(provider: str, *, requested_expansion: str | None = None) -> dict[str, Any]:
     registration = get_provider(provider)
-    expansion_args: list[str] = []
+    expansion_options: dict[str, str] = {}
     if provider_expansion_exclusion_reason(registration, requested_expansion=requested_expansion) is None:
-        expansion_args = provider_expansion_args(registration, requested_expansion)
-    code, payload, _stdout = _invoke_provider_app(registration.app, [*expansion_args, *registration.doctor_args])
-    installed = payload is not None or code == 0
-    auth_details = payload.get("auth") if isinstance(payload, dict) and isinstance(payload.get("auth"), dict) else None
+        expansion_options = provider_expansion_options(registration, requested_expansion)
+    code, payload = _call_surface(
+        provider,
+        "doctor",
+        registration.surface.doctor,
+        **registration.doctor_options,
+        **expansion_options,
+    )
+    raw_auth = payload.get("auth")
+    auth_details = raw_auth if isinstance(raw_auth, dict) else None
     return {
         "provider": registration.name,
         "status": registration.status if code == 0 else "error",
         "command": registration.command,
         "language": registration.language,
-        "installed": installed,
+        "tier": registration.tier,
+        # The provider package imported, so the surface is always reachable in-process.
+        "installed": True,
         "invocation_mode": "python_entrypoint",
         "auth": auth_details
         or {
@@ -636,13 +819,21 @@ def provider_doctor(provider: str, *, requested_expansion: str | None = None) ->
     }
 
 
+def provider_tiers() -> dict[str, list[str]]:
+    """Provider names grouped by support tier, in registry order."""
+    tiers: dict[str, list[str]] = {"core": [], "supported": [], "experimental": []}
+    for registration in PROVIDERS:
+        tiers[registration.tier].append(registration.name)
+    return tiers
+
+
 def global_doctor_payload(*, requested_expansion: str | None = None) -> dict[str, Any]:
     included, excluded = expansion_filtered_providers(requested_expansion=requested_expansion)
     return {
         "wrapper": {
             "provider_count": len(PROVIDERS),
             "python_first": True,
-            "shell_fallback": True,
+            "tiers": provider_tiers(),
             "requested_expansion": requested_expansion,
             "expansion_filter_active": requested_expansion is not None,
             "included_provider_count": len(included),

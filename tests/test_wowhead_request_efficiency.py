@@ -48,7 +48,7 @@ def test_wowhead_search_stream_emits_jsonl_header_when_results_empty(monkeypatch
         lambda self, query: {"search": query, "results": []},
     )
     monkeypatch.setattr(
-        "wowhead_cli.main._normalize_search_results",
+        "wowhead_cli.provider.normalize_search_results",
         lambda results, *, query, expansion: results,
     )
 
@@ -73,7 +73,7 @@ def test_wowhead_search_stream_emits_jsonl_header_and_records(monkeypatch) -> No
         },
     )
     monkeypatch.setattr(
-        "wowhead_cli.main._normalize_search_results",
+        "wowhead_cli.provider.normalize_search_results",
         lambda results, *, query, expansion: results,
     )
 

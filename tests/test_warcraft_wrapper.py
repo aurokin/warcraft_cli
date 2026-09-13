@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import ast
 import json
 from pathlib import Path
 
 import httpx
 import pytest
 import typer
+import warcraft_cli
 from method_cli.main import app as method_app
 from typer.testing import CliRunner
 from warcraft_cli.main import app as warcraft_app
@@ -27,6 +29,28 @@ def _stub_lorrgs_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "lorrgs_cli.client.LorrgsClient.bosses",
         lambda self: {"payload": {"bosses": []}, "source_url": "test://lorrgs/bosses"},
+    )
+
+
+def _stub_raiderio_profile_lookups(monkeypatch: pytest.MonkeyPatch, *, character: dict | None = None) -> None:
+    """Structured `region realm name` queries make raiderio fetch profiles; answer 404 (no match)
+    unless a fake character profile is supplied."""
+
+    def not_found(self, *, region: str, realm: str, name: str, fields: str | None = None):  # noqa: ANN001, ANN202
+        request = httpx.Request("GET", "https://raider.io/api/v1/profile")
+        raise httpx.HTTPStatusError("not found", request=request, response=httpx.Response(404, request=request))
+
+    def fake_character(self, *, region: str, realm: str, name: str, fields: str | None = None):  # noqa: ANN001, ANN202
+        return dict(character) if character is not None else not_found(self, region=region, realm=realm, name=name)
+
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.character_profile_variants", fake_character)
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.guild_profile_variants", not_found)
+
+
+def _stub_wowprogress_search_probe(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "wowprogress_cli.main.WowProgressClient.probe_search_route",
+        lambda self, *, region, realm, name, obj_type: None,
     )
 
 
@@ -760,7 +784,7 @@ def test_warcraft_search_fans_out_across_providers(monkeypatch) -> None:
         lambda self: [{"slug": "mistweaver-monk", "name": "Mistweaver Monk", "url": "https://www.method.gg/guides/mistweaver-monk"}],
     )
     monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.sitemap_guides", lambda self: [])
-    monkeypatch.setattr("raiderio_cli.main.RaiderIOClient.search", lambda self, *, term, kind=None: {"matches": []})
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.search", lambda self, *, term, kind=None: {"matches": []})
     monkeypatch.setattr("warcraft_wiki_cli.main.WarcraftWikiClient.search_articles", lambda self, query, limit: (0, []))
     monkeypatch.setattr("wowhead_cli.main.WowheadClient.search_suggestions", fake_search)
     result = runner.invoke(warcraft_app, ["search", "thunderfury", "--limit", "3"])
@@ -1858,9 +1882,13 @@ def test_warcraft_guide_compare_query_fails_when_too_few_guides_export(
     icy_row = next(row for row in payload["provider_results"] if row["provider"] == "icy-veins")
     assert icy_row["status"] == "skipped"
     assert icy_row["reason"] == "search_top_guide_score_too_low:25"
+    # A failed run must not leave a manifest behind for the next run to reuse.
+    assert payload["manifest"] is None
+    assert not (tmp_path / "orchestrated" / "manifest.json").exists()
 
 
 def test_warcraft_search_sorts_results_globally_by_ranking(monkeypatch) -> None:
+    _stub_wowprogress_search_probe(monkeypatch)
     def fake_wowhead_search(self, query: str):  # noqa: ANN001
         return {
             "search": query,
@@ -1884,7 +1912,7 @@ def test_warcraft_search_sorts_results_globally_by_ranking(monkeypatch) -> None:
         lambda self: [{"slug": "frost-death-knight-pve-dps-guide", "name": "Frost Death Knight PvE DPS Guide",
                        "url": "https://www.icy-veins.com/wow/frost-death-knight-pve-dps-guide"}],
     )
-    monkeypatch.setattr("raiderio_cli.main.RaiderIOClient.search", lambda self, *, term, kind=None: {"matches": []})
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.search", lambda self, *, term, kind=None: {"matches": []})
     monkeypatch.setattr("warcraft_wiki_cli.main.WarcraftWikiClient.search_articles", lambda self, query, limit: (0, []))
 
     result = runner.invoke(warcraft_app, ["search", "mistweaver monk guide", "--limit", "5"])
@@ -1917,7 +1945,7 @@ def test_warcraft_search_expansion_filter_excludes_nonmatching_providers(monkeyp
         lambda self: (_ for _ in ()).throw(AssertionError("icy-veins should be excluded")),
     )
     monkeypatch.setattr(
-        "raiderio_cli.main.RaiderIOClient.search",
+        "raiderio_cli.client.RaiderIOClient.search",
         lambda self, *, term, kind=None: (_ for _ in ()).throw(AssertionError("raiderio should be excluded")),
     )
     monkeypatch.setattr(
@@ -1974,7 +2002,7 @@ def test_warcraft_search_compact_expansion_debug(monkeypatch) -> None:
         _ for _ in ()).throw(AssertionError("method should be excluded")))
     monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.sitemap_guides", lambda self: (
         _ for _ in ()).throw(AssertionError("icy-veins should be excluded")))
-    monkeypatch.setattr("raiderio_cli.main.RaiderIOClient.search", lambda self, *, term,
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.search", lambda self, *, term,
                         kind=None: (_ for _ in ()).throw(AssertionError("raiderio should be excluded")))
     monkeypatch.setattr("warcraft_wiki_cli.main.WarcraftWikiClient.search_articles", lambda self, query,
                         limit: (_ for _ in ()).throw(AssertionError("warcraft-wiki should be excluded")))
@@ -2022,7 +2050,7 @@ def test_warcraft_search_retail_filter_keeps_fixed_retail_providers_and_excludes
         lambda self: [{"slug": "mistweaver-monk-pve-healing-guide", "name": "Mistweaver Monk PvE Healing Guide",
                        "url": "https://www.icy-veins.com/wow/mistweaver-monk-pve-healing-guide"}],
     )
-    monkeypatch.setattr("raiderio_cli.main.RaiderIOClient.search", lambda self, *, term, kind=None: {"matches": []})
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.search", lambda self, *, term, kind=None: {"matches": []})
     monkeypatch.setattr(
         "warcraft_wiki_cli.main.WarcraftWikiClient.search_articles",
         lambda self, query, limit: [{"title": "Mistweaver Monk", "pageid": 1}],
@@ -2056,11 +2084,12 @@ def test_warcraft_search_retail_filter_keeps_fixed_retail_providers_and_excludes
 
 
 def test_warcraft_resolve_retail_filter_keeps_fixed_retail_profile_provider(monkeypatch) -> None:
+    _stub_raiderio_profile_lookups(monkeypatch)
     monkeypatch.setattr("wowhead_cli.main.WowheadClient.search_suggestions", lambda self, query: {"search": query, "results": []})
     monkeypatch.setattr("method_cli.main.MethodClient.sitemap_guides", lambda self: [])
     monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.sitemap_guides", lambda self: [])
     monkeypatch.setattr(
-        "raiderio_cli.main.RaiderIOClient.search",
+        "raiderio_cli.client.RaiderIOClient.search",
         lambda self, *, term, kind=None: {"matches": []},
     )
     monkeypatch.setattr(
@@ -2109,6 +2138,7 @@ def test_warcraft_resolve_retail_filter_keeps_fixed_retail_profile_provider(monk
 
 
 def test_warcraft_search_prefers_profile_provider_for_structured_guild_queries(monkeypatch) -> None:
+    _stub_raiderio_profile_lookups(monkeypatch)
     monkeypatch.setattr("wowhead_cli.main.WowheadClient.search_suggestions", lambda self, query: {"search": query, "results": []})
     monkeypatch.setattr(
         "method_cli.main.MethodClient.sitemap_guides",
@@ -2118,7 +2148,7 @@ def test_warcraft_search_prefers_profile_provider_for_structured_guild_queries(m
         "icy_veins_cli.main.IcyVeinsClient.sitemap_guides",
         lambda self: [{"slug": "liquid-guide", "name": "Liquid Guide", "url": "https://www.icy-veins.com/wow/liquid-guide"}],
     )
-    monkeypatch.setattr("raiderio_cli.main.RaiderIOClient.search", lambda self, *, term, kind=None: {"matches": []})
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.search", lambda self, *, term, kind=None: {"matches": []})
     monkeypatch.setattr("warcraft_wiki_cli.main.WarcraftWikiClient.search_articles", lambda self, query, limit: (0, []))
     monkeypatch.setattr(
         "wowprogress_cli.main.WowProgressClient.probe_search_route",
@@ -2148,10 +2178,11 @@ def test_warcraft_search_prefers_profile_provider_for_structured_guild_queries(m
 
 
 def test_warcraft_search_compact_and_ranking_debug(monkeypatch) -> None:
+    _stub_raiderio_profile_lookups(monkeypatch)
     monkeypatch.setattr("wowhead_cli.main.WowheadClient.search_suggestions", lambda self, query: {"search": query, "results": []})
     monkeypatch.setattr("method_cli.main.MethodClient.sitemap_guides", lambda self: [])
     monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.sitemap_guides", lambda self: [])
-    monkeypatch.setattr("raiderio_cli.main.RaiderIOClient.search", lambda self, *, term, kind=None: {"matches": []})
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.search", lambda self, *, term, kind=None: {"matches": []})
     monkeypatch.setattr("warcraft_wiki_cli.main.WarcraftWikiClient.search_articles", lambda self, query, limit: (0, []))
     monkeypatch.setattr(
         "wowprogress_cli.main.WowProgressClient.probe_search_route",
@@ -2179,10 +2210,11 @@ def test_warcraft_search_compact_and_ranking_debug(monkeypatch) -> None:
 
 
 def test_warcraft_search_adds_synthetic_wowprogress_leaderboard_candidate(monkeypatch) -> None:
+    _stub_wowprogress_search_probe(monkeypatch)
     monkeypatch.setattr("wowhead_cli.main.WowheadClient.search_suggestions", lambda self, query: {"search": query, "results": []})
     monkeypatch.setattr("method_cli.main.MethodClient.sitemap_guides", lambda self: [])
     monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.sitemap_guides", lambda self: [])
-    monkeypatch.setattr("raiderio_cli.main.RaiderIOClient.search", lambda self, *, term, kind=None: {"matches": []})
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.search", lambda self, *, term, kind=None: {"matches": []})
     monkeypatch.setattr("warcraft_wiki_cli.main.WarcraftWikiClient.search_articles", lambda self, query, limit: (0, []))
 
     result = runner.invoke(warcraft_app, ["search", "leaderboard us illidan", "--compact", "--ranking-debug"])
@@ -2195,6 +2227,7 @@ def test_warcraft_search_adds_synthetic_wowprogress_leaderboard_candidate(monkey
 
 
 def test_warcraft_resolve_prefers_stronger_later_provider(monkeypatch) -> None:
+    _stub_wowprogress_search_probe(monkeypatch)
     def fake_wowhead_search(self, query: str):  # noqa: ANN001
         return {
             "search": query,
@@ -2213,7 +2246,7 @@ def test_warcraft_resolve_prefers_stronger_later_provider(monkeypatch) -> None:
         lambda self: [{"slug": "mistweaver-monk-pve-healing-guide", "name": "Mistweaver Monk PvE Healing Guide",
                        "url": "https://www.icy-veins.com/wow/mistweaver-monk-pve-healing-guide"}],
     )
-    monkeypatch.setattr("raiderio_cli.main.RaiderIOClient.search", lambda self, *, term, kind=None: {"matches": []})
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.search", lambda self, *, term, kind=None: {"matches": []})
     monkeypatch.setattr(
         "warcraft_wiki_cli.main.WarcraftWikiClient.search_articles",
         lambda self, query, limit: (1, [{"title": "Mistweaver Monk", "pageid": 1, "snippet": "Reference page",
@@ -2240,7 +2273,7 @@ def test_warcraft_resolve_expansion_filter_blocks_retail_only_resolution(monkeyp
     monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.sitemap_guides", lambda self: (
         _ for _ in ()).throw(AssertionError("icy-veins should be excluded")))
     monkeypatch.setattr(
-        "raiderio_cli.main.RaiderIOClient.search",
+        "raiderio_cli.client.RaiderIOClient.search",
         lambda self, *, term, kind=None: (_ for _ in ()).throw(AssertionError("raiderio should be excluded")),
     )
     monkeypatch.setattr(
@@ -2281,7 +2314,7 @@ def test_warcraft_resolve_expansion_debug(monkeypatch) -> None:
         _ for _ in ()).throw(AssertionError("method should be excluded")))
     monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.sitemap_guides", lambda self: (
         _ for _ in ()).throw(AssertionError("icy-veins should be excluded")))
-    monkeypatch.setattr("raiderio_cli.main.RaiderIOClient.search", lambda self, *, term,
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.search", lambda self, *, term,
                         kind=None: (_ for _ in ()).throw(AssertionError("raiderio should be excluded")))
     monkeypatch.setattr("warcraft_wiki_cli.main.WarcraftWikiClient.search_articles", lambda self, query,
                         limit: (_ for _ in ()).throw(AssertionError("warcraft-wiki should be excluded")))
@@ -2317,7 +2350,7 @@ def test_warcraft_resolve_prefers_ready_provider(monkeypatch) -> None:
         lambda self: [{"slug": "mistweaver-monk", "name": "Mistweaver Monk", "url": "https://www.method.gg/guides/mistweaver-monk"}],
     )
     monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.sitemap_guides", lambda self: [])
-    monkeypatch.setattr("raiderio_cli.main.RaiderIOClient.search", lambda self, *, term, kind=None: {"matches": []})
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.search", lambda self, *, term, kind=None: {"matches": []})
     monkeypatch.setattr("warcraft_wiki_cli.main.WarcraftWikiClient.search_articles", lambda self, query, limit: (0, []))
     monkeypatch.setattr("wowhead_cli.main.WowheadClient.search_suggestions", fake_search)
     result = runner.invoke(warcraft_app, ["resolve", "fairbreeze favors"])
@@ -2334,7 +2367,7 @@ def test_warcraft_resolve_can_select_raiderio(monkeypatch) -> None:
     monkeypatch.setattr("method_cli.main.MethodClient.sitemap_guides", lambda self: [])
     monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.sitemap_guides", lambda self: [])
     monkeypatch.setattr(
-        "raiderio_cli.main.RaiderIOClient.search",
+        "raiderio_cli.client.RaiderIOClient.search",
         lambda self, *, term, kind=None: {
             "matches": [
                 {
@@ -2363,11 +2396,12 @@ def test_warcraft_resolve_can_select_raiderio(monkeypatch) -> None:
 
 
 def test_warcraft_resolve_prefers_raiderio_for_character_queries_when_both_resolve(monkeypatch) -> None:
+    _stub_raiderio_profile_lookups(monkeypatch, character={"name": "Roguecane", "region": "us", "realm": "Illidan", "class": "Rogue", "faction": "horde", "profile_url": "https://raider.io/characters/us/illidan/Roguecane"})
     monkeypatch.setattr("wowhead_cli.main.WowheadClient.search_suggestions", lambda self, query: {"search": query, "results": []})
     monkeypatch.setattr("method_cli.main.MethodClient.sitemap_guides", lambda self: [])
     monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.sitemap_guides", lambda self: [])
     monkeypatch.setattr(
-        "raiderio_cli.main.RaiderIOClient.search",
+        "raiderio_cli.client.RaiderIOClient.search",
         lambda self, *, term, kind=None: {
             "matches": [
                 {
@@ -2413,10 +2447,11 @@ def test_warcraft_resolve_prefers_raiderio_for_character_queries_when_both_resol
 
 
 def test_warcraft_resolve_can_select_wowprogress(monkeypatch) -> None:
+    _stub_raiderio_profile_lookups(monkeypatch)
     monkeypatch.setattr("wowhead_cli.main.WowheadClient.search_suggestions", lambda self, query: {"search": query, "results": []})
     monkeypatch.setattr("method_cli.main.MethodClient.sitemap_guides", lambda self: [])
     monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.sitemap_guides", lambda self: [])
-    monkeypatch.setattr("raiderio_cli.main.RaiderIOClient.search", lambda self, *, term, kind=None: {"matches": []})
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.search", lambda self, *, term, kind=None: {"matches": []})
     monkeypatch.setattr("warcraft_wiki_cli.main.WarcraftWikiClient.search_articles", lambda self, query, limit: (0, []))
     monkeypatch.setattr(
         "wowprogress_cli.main.WowProgressClient.probe_search_route",
@@ -2447,7 +2482,7 @@ def test_warcraft_resolve_can_select_warcraftlogs_for_explicit_report_reference(
     monkeypatch.setattr("wowhead_cli.main.WowheadClient.search_suggestions", lambda self, query: {"search": query, "results": []})
     monkeypatch.setattr("method_cli.main.MethodClient.sitemap_guides", lambda self: [])
     monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.sitemap_guides", lambda self: [])
-    monkeypatch.setattr("raiderio_cli.main.RaiderIOClient.search", lambda self, *, term, kind=None: {"matches": []})
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.search", lambda self, *, term, kind=None: {"matches": []})
     monkeypatch.setattr("warcraft_wiki_cli.main.WarcraftWikiClient.search_articles", lambda self, query, limit: (0, []))
     monkeypatch.setattr("wowprogress_cli.main.WowProgressClient.probe_search_route", lambda self, *, region, realm, name, obj_type: None)
 
@@ -2739,10 +2774,11 @@ def test_cooldown_packet_can_resolve_actor_name_and_reports_missing_actor(monkey
 
 
 def test_warcraft_resolve_compact_and_ranking_debug(monkeypatch) -> None:
+    _stub_raiderio_profile_lookups(monkeypatch)
     monkeypatch.setattr("wowhead_cli.main.WowheadClient.search_suggestions", lambda self, query: {"search": query, "results": []})
     monkeypatch.setattr("method_cli.main.MethodClient.sitemap_guides", lambda self: [])
     monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.sitemap_guides", lambda self: [])
-    monkeypatch.setattr("raiderio_cli.main.RaiderIOClient.search", lambda self, *, term, kind=None: {"matches": []})
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.search", lambda self, *, term, kind=None: {"matches": []})
     monkeypatch.setattr("warcraft_wiki_cli.main.WarcraftWikiClient.search_articles", lambda self, query, limit: (0, []))
     monkeypatch.setattr(
         "wowprogress_cli.main.WowProgressClient.probe_search_route",
@@ -2769,10 +2805,11 @@ def test_warcraft_resolve_compact_and_ranking_debug(monkeypatch) -> None:
 
 
 def test_warcraft_resolve_does_not_fabricate_synthetic_wowprogress_leaderboard_route(monkeypatch) -> None:
+    _stub_wowprogress_search_probe(monkeypatch)
     monkeypatch.setattr("wowhead_cli.main.WowheadClient.search_suggestions", lambda self, query: {"search": query, "results": []})
     monkeypatch.setattr("method_cli.main.MethodClient.sitemap_guides", lambda self: [])
     monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.sitemap_guides", lambda self: [])
-    monkeypatch.setattr("raiderio_cli.main.RaiderIOClient.search", lambda self, *, term, kind=None: {"matches": []})
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.search", lambda self, *, term, kind=None: {"matches": []})
     monkeypatch.setattr("warcraft_wiki_cli.main.WarcraftWikiClient.search_articles", lambda self, query, limit: (0, []))
 
     result = runner.invoke(warcraft_app, ["resolve", "leaderboard us illidan", "--compact", "--ranking-debug"])
@@ -5860,7 +5897,7 @@ def test_warcraft_passthrough_to_raiderio(monkeypatch) -> None:
             "mythic_plus_recent_runs": [],
         }
 
-    monkeypatch.setattr("raiderio_cli.main.RaiderIOClient.character_profile_variants", fake_profile)
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.character_profile_variants", fake_profile)
     result = runner.invoke(warcraft_app, ["raiderio", "character", "us", "illidan", "Roguecane"])
     assert result.exit_code == 0
 
@@ -6068,3 +6105,101 @@ def test_warcraft_guild_history_and_ranks_use_wowprogress(monkeypatch) -> None:
     assert ranks["ok"] is True
     assert ranks["tiers"][0]["progress_ranks"]["world"] == "19"
     assert ranks["provider_payload"]["kind"] == "guild_ranks"
+
+
+def _wrapper_module_trees() -> dict[str, ast.Module]:
+    package_dir = Path(warcraft_cli.__file__).parent
+    return {path.name: ast.parse(path.read_text(encoding="utf-8")) for path in sorted(package_dir.glob("*.py"))}
+
+
+def _imported_top_level_modules(tree: ast.Module) -> set[str]:
+    modules: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            modules.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            modules.add(node.module)
+    return modules
+
+
+def test_providers_module_is_sole_provider_import_point() -> None:
+    """Only warcraft_cli.providers may import a provider package; everything else goes through it."""
+    offenders: dict[str, set[str]] = {}
+    for filename, tree in _wrapper_module_trees().items():
+        if filename == "providers.py":
+            continue
+        leaked = {
+            module
+            for module in _imported_top_level_modules(tree)
+            if module.split(".")[0].endswith("_cli") and module.split(".")[0] != "warcraft_cli"
+        }
+        if leaked:
+            offenders[filename] = leaked
+    assert offenders == {}
+
+
+def test_wrapper_does_not_import_typer_testing() -> None:
+    """CliRunner is a test tool; the shipped wrapper calls provider surfaces and apps directly."""
+    offenders = {
+        filename
+        for filename, tree in _wrapper_module_trees().items()
+        if any(module.startswith("typer.testing") for module in _imported_top_level_modules(tree))
+    }
+    assert offenders == set()
+
+
+def test_warcraft_doctor_reports_tiers_and_no_shell_fallback() -> None:
+    result = runner.invoke(warcraft_app, ["doctor"])
+    assert result.exit_code == 0
+
+    payload = json.loads(result.stdout)
+    wrapper = payload["wrapper"]
+    assert "shell_fallback" not in wrapper
+    assert wrapper["tiers"] == {
+        "core": ["wowhead", "warcraftlogs", "simc"],
+        "supported": ["method", "icy-veins", "raiderio", "warcraft-wiki", "wowprogress"],
+        "experimental": ["raidbots", "blizzard-api", "curseforge", "lorrgs"],
+    }
+    tier_by_provider = {name: tier for tier, names in wrapper["tiers"].items() for name in names}
+    for row in payload["providers"]:
+        assert row["tier"] == tier_by_provider[row["provider"]]
+
+
+def test_warcraft_search_reports_provider_failure_as_error_row(monkeypatch) -> None:
+    """A provider that raises must appear as an error row, never as `payload: null`."""
+
+    def exploding_search(query: str, *, limit: int = 10, **options: object) -> dict[str, object]:
+        raise httpx.ConnectError("offline", request=httpx.Request("GET", "https://www.wowhead.com/"))
+
+    monkeypatch.setattr(get_provider("wowhead").surface, "search", exploding_search)
+    monkeypatch.setattr("method_cli.main.MethodClient.sitemap_guides", lambda self: [])
+    monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.sitemap_guides", lambda self: [])
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.search", lambda self, query, limit=5: [])
+    monkeypatch.setattr("warcraft_wiki_cli.main.WarcraftWikiClient.search_articles", lambda self, query, limit=5: [])
+    _stub_wowprogress_search_probe(monkeypatch)
+
+    result = runner.invoke(warcraft_app, ["search", "thunderfury"])
+    assert result.exit_code == 0
+
+    payload = json.loads(result.stdout)
+    wowhead_row = next(row for row in payload["providers"] if row["provider"] == "wowhead")
+    assert wowhead_row["ok"] is False
+    assert wowhead_row["error"]["code"] == "network_error"
+    assert isinstance(wowhead_row["payload"], dict)
+    assert all(row.get("provider") != "wowhead" for row in payload["results"])
+
+
+def test_warcraft_passthrough_forwards_output_flags(monkeypatch) -> None:
+    """Global output flags shape the provider payload behind `warcraft <provider> ...` too."""
+    monkeypatch.setattr(
+        "wowhead_cli.main.WowheadClient.search_suggestions",
+        lambda self, query: {"search": query, "results": []},
+    )
+
+    pretty = runner.invoke(warcraft_app, ["--pretty", "wowhead", "search", "defias"])
+    assert pretty.exit_code == 0
+    assert pretty.stdout.startswith("{\n")
+
+    projected = runner.invoke(warcraft_app, ["--fields", "query", "wowhead", "search", "defias"])
+    assert projected.exit_code == 0
+    assert json.loads(projected.stdout) == {"query": "defias"}

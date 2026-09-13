@@ -8,6 +8,7 @@ import pytest
 from simc_cli.build_input import (
     BuildSpec,
     DecodedTalent,
+    TalentStrings,
     build_profile_text,
     decode_build,
     detect_build_text_source_kind,
@@ -122,37 +123,30 @@ def test_detect_build_text_source_kind() -> None:
 def test_detect_talents_option_source_kind() -> None:
     assert (
         detect_talents_option_source_kind(
-            talents="ABC123",
-            class_talents=None,
-            spec_talents=None,
-            hero_talents=None,
+            talents=TalentStrings(talents="ABC123"),
         )
         == "wow_talent_export"
     )
     assert (
         detect_talents_option_source_kind(
-            talents="https://www.wowhead.com/talent-calc/demon-hunter/devourer/ABC123",
-            class_talents=None,
-            spec_talents=None,
-            hero_talents=None,
+            talents=TalentStrings(talents="https://www.wowhead.com/talent-calc/demon-hunter/devourer/ABC123"),
         )
         == "wowhead_talent_calc_url"
     )
     assert (
         detect_talents_option_source_kind(
-            talents="talents=ABC123",
-            class_talents=None,
-            spec_talents=None,
-            hero_talents=None,
+            talents=TalentStrings(talents="talents=ABC123"),
         )
         == "simc_profile"
     )
     assert (
         detect_talents_option_source_kind(
-            talents=None,
-            class_talents="AAA",
-            spec_talents="BBB",
-            hero_talents="CCC",
+            talents=TalentStrings(
+                talents=None,
+                class_talents="AAA",
+                spec_talents="BBB",
+                hero_talents="CCC",
+            ),
         )
         == "simc_split_talents"
     )
@@ -164,10 +158,7 @@ def test_load_build_spec_extracts_class_and_spec_from_talents_url() -> None:
         profile_path=None,
         build_file=None,
         build_text=None,
-        talents="https://www.wowhead.com/talent-calc/demon-hunter/devourer/ABC123",
-        class_talents=None,
-        spec_talents=None,
-        hero_talents=None,
+        talents=TalentStrings(talents="https://www.wowhead.com/talent-calc/demon-hunter/devourer/ABC123"),
         actor_class=None,
         spec_name=None,
     )
@@ -210,10 +201,7 @@ def test_load_build_spec_extracts_exact_transport_form_from_packet(tmp_path: Pat
         profile_path=None,
         build_file=None,
         build_text=None,
-        talents=None,
-        class_talents=None,
-        spec_talents=None,
-        hero_talents=None,
+        talents=TalentStrings(),
         actor_class=None,
         spec_name=None,
         build_packet=str(packet_path),
@@ -267,10 +255,7 @@ def test_load_build_spec_rejects_packet_that_mixes_exact_and_split_forms(tmp_pat
             profile_path=None,
             build_file=None,
             build_text=None,
-            talents=None,
-            class_talents=None,
-            spec_talents=None,
-            hero_talents=None,
+            talents=TalentStrings(),
             actor_class=None,
             spec_name=None,
             build_packet=str(packet_path),
@@ -284,10 +269,7 @@ def test_load_build_spec_rejects_buildless_wowhead_talent_calc_url() -> None:
             profile_path=None,
             build_file=None,
             build_text="https://www.wowhead.com/talent-calc/druid/balance",
-            talents=None,
-            class_talents=None,
-            spec_talents=None,
-            hero_talents=None,
+            talents=TalentStrings(),
             actor_class=None,
             spec_name=None,
         )
@@ -339,10 +321,7 @@ def test_load_build_spec_extracts_split_transport_form_from_packet(tmp_path: Pat
         profile_path=None,
         build_file=None,
         build_text=None,
-        talents=None,
-        class_talents=None,
-        spec_talents=None,
-        hero_talents=None,
+        talents=TalentStrings(),
         actor_class=None,
         spec_name=None,
         build_packet=str(packet_path),
@@ -399,10 +378,7 @@ def test_load_build_spec_accepts_normalized_validated_split_transport_identity_f
         profile_path=None,
         build_file=None,
         build_text=None,
-        talents=None,
-        class_talents=None,
-        spec_talents=None,
-        hero_talents=None,
+        talents=TalentStrings(),
         actor_class=None,
         spec_name=None,
         build_packet=str(packet_path),
@@ -455,10 +431,7 @@ def test_load_build_spec_rejects_unvalidated_split_transport_form_from_packet(tm
             profile_path=None,
             build_file=None,
             build_text=None,
-            talents=None,
-            class_talents=None,
-            spec_talents=None,
-            hero_talents=None,
+            talents=TalentStrings(),
             actor_class=None,
             spec_name=None,
             build_packet=str(packet_path),
@@ -497,10 +470,7 @@ def test_load_build_spec_extracts_wow_export_transport_form_from_packet(tmp_path
         profile_path=None,
         build_file=None,
         build_text=None,
-        talents=None,
-        class_talents=None,
-        spec_talents=None,
-        hero_talents=None,
+        talents=TalentStrings(),
         actor_class=None,
         spec_name=None,
         build_packet=str(packet_path),
@@ -575,10 +545,7 @@ def test_load_build_spec_uses_apl_inference_when_packet_identity_is_missing(tmp_
         profile_path=None,
         build_file=None,
         build_text=None,
-        talents=None,
-        class_talents=None,
-        spec_talents=None,
-        hero_talents=None,
+        talents=TalentStrings(),
         actor_class=None,
         spec_name=None,
         build_packet=str(packet_path),
@@ -624,10 +591,7 @@ def test_load_build_spec_lets_apl_inference_override_unverified_wow_export_packe
         profile_path=None,
         build_file=None,
         build_text=None,
-        talents=None,
-        class_talents=None,
-        spec_talents=None,
-        hero_talents=None,
+        talents=TalentStrings(),
         actor_class=None,
         spec_name=None,
         build_packet=str(packet_path),
@@ -673,10 +637,7 @@ def test_load_build_spec_rejects_conflicting_exact_transport_forms(tmp_path: Pat
             profile_path=None,
             build_file=None,
             build_text=None,
-            talents=None,
-            class_talents=None,
-            spec_talents=None,
-            hero_talents=None,
+            talents=TalentStrings(),
             actor_class=None,
             spec_name=None,
             build_packet=str(packet_path),

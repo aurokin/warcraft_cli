@@ -3,8 +3,25 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any
+
+
+def dict_at(source: Mapping[str, Any], key: str) -> dict[str, Any]:
+    """Return ``source[key]`` when it is a JSON object, else an empty dict.
+
+    Warcraft Logs GraphQL responses are loosely typed; these two accessors keep the
+    "narrow or default" idiom in one place instead of repeating isinstance ladders.
+    """
+    value = source.get(key)
+    return value if isinstance(value, dict) else {}
+
+
+def list_at(source: Mapping[str, Any], key: str) -> list[Any]:
+    """Return ``source[key]`` when it is a JSON array, else an empty list."""
+    value = source.get(key)
+    return value if isinstance(value, list) else []
 
 
 def utc_now_z() -> str:

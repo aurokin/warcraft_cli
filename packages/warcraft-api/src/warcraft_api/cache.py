@@ -150,7 +150,7 @@ class FileCacheStore:
             return None
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:  # noqa: BLE001
+        except Exception:
             with suppress(OSError):
                 path.unlink(missing_ok=True)
             return None
@@ -176,7 +176,7 @@ class FileCacheStore:
             }
             temp.write_text(json.dumps(data, separators=(",", ":")), encoding="utf-8")
             temp.replace(path)
-        except Exception:  # noqa: BLE001
+        except Exception:
             return
 
 
@@ -220,13 +220,13 @@ class RedisCacheStore:
     def get(self, key: str) -> Any | None:
         try:
             raw = self._client.get(self._redis_key(key))
-        except Exception:  # noqa: BLE001
+        except Exception:
             return None
         if raw in (None, ""):
             return None
         try:
             return json.loads(raw)
-        except Exception:  # noqa: BLE001
+        except Exception:
             return None
 
     def set(self, key: str, payload: Any, *, ttl_seconds: int) -> None:
@@ -236,7 +236,7 @@ class RedisCacheStore:
                 json.dumps(payload, separators=(",", ":")),
                 ex=ttl_seconds,
             )
-        except Exception:  # noqa: BLE001
+        except Exception:
             return
 
 
@@ -273,7 +273,7 @@ def _iter_file_cache_entries(cache_dir: Path) -> list[dict[str, Any]]:
         expires_at: float | None = None
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:  # noqa: BLE001
+        except Exception:
             payload = None
         if isinstance(payload, dict):
             raw_expires_at = payload.get("expires_at")
@@ -431,7 +431,7 @@ def inspect_redis_cache(
     try:
         client = _build_redis_client(redis_url, import_module_func=import_module_func)
         keys = _redis_iter_keys(client, f"{prefix}:*")
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         return {
             "kind": "redis",
             "available": False,

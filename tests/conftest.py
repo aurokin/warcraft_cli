@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import os
+import socket
 import sys
+from collections.abc import Iterator
 from pathlib import Path
+from typing import Any, NoReturn
 
+import curl_cffi.requests
+import httpx
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -53,10 +58,100 @@ for package_src in reversed(PACKAGE_SRC_DIRS):
     if path_str not in sys.path:
         sys.path.insert(0, path_str)
 
+# Every provider that has a file/redis cache (warcraft_api.cache.load_prefixed_cache_settings_from_env).
+CACHE_ENV_PREFIXES = (
+    "ICY_VEINS",
+    "METHOD",
+    "RAIDBOTS",
+    "RAIDERIO",
+    "WARCRAFT_WIKI",
+    "WARCRAFTLOGS",
+    "WOWHEAD",
+    "WOWPROGRESS",
+)
+
+
+class NetworkGuardError(RuntimeError):
+    """Raised when a test without the ``live`` marker attempts real network access."""
+
+
+NETWORK_ATTEMPTS_KEY = pytest.StashKey[list[str]]()
+LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
+
+
+def _is_loopback(address: object) -> bool:
+    host = address[0] if isinstance(address, tuple) and address else address
+    return isinstance(host, str) and host in LOOPBACK_HOSTS
+
 
 @pytest.fixture(autouse=True)
 def disable_cache_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("WOWHEAD_CACHE_BACKEND", "none")
+    for prefix in CACHE_ENV_PREFIXES:
+        monkeypatch.setenv(f"{prefix}_CACHE_BACKEND", "none")
+    monkeypatch.setenv("WARCRAFT_HTTP_MIN_INTERVAL_SECONDS", "0")
+
+
+@pytest.fixture(autouse=True)
+def block_network(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Block real network access for non-live tests.
+
+    Attempts raise ``NetworkGuardError`` at the socket, httpx transport, and curl_cffi seams
+    (loopback passes through). Attempts are also recorded so a test still fails at teardown
+    when the code under test swallows the error (retry loops, ``except Exception``).
+    """
+    if request.node.get_closest_marker("live") is not None:
+        yield
+        return
+
+    attempts: list[str] = []
+    request.node.stash[NETWORK_ATTEMPTS_KEY] = attempts
+
+    def blocked(target: str) -> NoReturn:
+        attempts.append(target)
+        raise NetworkGuardError(
+            f"Non-live test attempted network access: {target}. "
+            "Stub the client method or mark the test @pytest.mark.live."
+        )
+
+    real_connect = socket.socket.connect
+    real_connect_ex = socket.socket.connect_ex
+    real_getaddrinfo = socket.getaddrinfo
+
+    def guarded_connect(self: socket.socket, address: Any) -> None:
+        if not _is_loopback(address):
+            blocked(f"socket.connect {address!r}")
+        real_connect(self, address)
+
+    def guarded_connect_ex(self: socket.socket, address: Any) -> int:
+        if not _is_loopback(address):
+            blocked(f"socket.connect_ex {address!r}")
+        return real_connect_ex(self, address)
+
+    def guarded_getaddrinfo(host: Any, port: Any, *args: Any, **kwargs: Any) -> Any:
+        if not _is_loopback(host):
+            blocked(f"socket.getaddrinfo {host!r}:{port!r}")
+        return real_getaddrinfo(host, port, *args, **kwargs)
+
+    def guarded_handle_request(self: httpx.HTTPTransport, request: httpx.Request) -> httpx.Response:
+        blocked(f"httpx {request.method} {request.url}")
+
+    async def guarded_handle_async_request(self: httpx.AsyncHTTPTransport, request: httpx.Request) -> httpx.Response:
+        blocked(f"httpx async {request.method} {request.url}")
+
+    def guarded_curl_request(self: Any, method: str, url: str, *args: Any, **kwargs: Any) -> Any:
+        blocked(f"curl_cffi {method} {url}")
+
+    monkeypatch.setattr(socket.socket, "connect", guarded_connect)
+    monkeypatch.setattr(socket.socket, "connect_ex", guarded_connect_ex)
+    monkeypatch.setattr(socket, "getaddrinfo", guarded_getaddrinfo)
+    # Transport level, not Client.send, so httpx.MockTransport keeps working.
+    monkeypatch.setattr(httpx.HTTPTransport, "handle_request", guarded_handle_request)
+    monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", guarded_handle_async_request)
+    # libcurl bypasses Python sockets, so wowprogress needs its own seam.
+    monkeypatch.setattr(curl_cffi.requests.Session, "request", guarded_curl_request)
+    yield
+    if attempts:
+        pytest.fail("Non-live test touched the network: " + "; ".join(attempts))
 
 
 def _env_enabled(name: str) -> bool:

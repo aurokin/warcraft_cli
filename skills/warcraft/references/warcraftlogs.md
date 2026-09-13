@@ -150,6 +150,7 @@ Best fits:
 - `guild-attendance` is part of the official schema, but live public queries can still fail with a provider-side internal error; use it when it works, but do not assume the endpoint is fully stable
 - `guild-reports` is the easiest official path when the user wants report history for one guild without manually shaping the broader `reports` query
 - for one-fight analysis from a report link, prefer `report-encounter*` commands over manually combining `report-fights`, `report-player-details`, and `report-events`
+- every `report-encounter*` command accepts `--allow-unlisted` for reports that are not publicly listed
 - `report-encounter-casts`, `report-encounter-buffs`, and `report-encounter-damage-breakdown` support encounter-relative timeline filters:
   - `--window-start-ms`
   - `--window-end-ms`

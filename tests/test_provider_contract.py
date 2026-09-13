@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from warcraft_core.provider_contract import (
+from warcraft_cli.provider_contract import (
     candidate_score,
     compact_wrapper_candidate,
     confidence_rank,

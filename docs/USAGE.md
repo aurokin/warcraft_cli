@@ -1,87 +1,94 @@
 # Usage
 
-This document is the command-oriented reference for the local Warcraft CLI workspace.
+This document carries workflows and cross-provider conventions: what each surface is for, when to
+reach for it, and how the pieces compose.
 
-The goal is to keep the README short and keep detailed usage notes close to actual CLI behavior.
+It does not list flags. Every command, argument, option, and default is generated from the Typer
+apps into [reference/](reference/README.md) (`make reference`), so the flag lists cannot drift from
+the code. Use this page to decide *what* to run and the reference to see *how* to spell it.
 
 ## Workspace Commands
 
 ```bash
-make dev-deploy-no-link
-make worktree-env
-source .warcraft/worktree-env.sh
-WARCRAFT_ALLOW_LINK_BIN=1 make dev-deploy
+uv sync --all-extras
+make check
+make test-live
+make reference
 ```
 
 Workspace command behavior:
-- `make dev-deploy-no-link` creates or updates the current checkout's editable `.venv` without rewriting host-level command wrappers
-- `make worktree-env` regenerates `.warcraft/worktree-env.sh` for the current checkout when you want to refresh the shell activation file explicitly
-- `source .warcraft/worktree-env.sh` is the explicit shell activation step for worktree-local `PATH`, `data`, and `cache` roots
+- `uv sync --all-extras` (or `make install`) creates and updates the checkout-local `.venv`; `pip install -e '.[dev,redis]'` still works
+- `make check` runs lint, typecheck, import boundaries, the complexity gate, dead-code detection, and the fast test suite
+- `make test-live` runs every opt-in live provider suite, and `make test-live-matrix` runs the cross-provider live matrix. Each suite is gated on its own flag, so you can run one at a time — `WOWHEAD_LIVE_TESTS`, `METHOD_LIVE_TESTS`, `ICY_VEINS_LIVE_TESTS`, `RAIDERIO_LIVE_TESTS`, `WARCRAFT_WIKI_LIVE_TESTS`, `WOWPROGRESS_LIVE_TESTS`, `WARCRAFTLOGS_LIVE_TESTS`, `RAIDBOTS_LIVE_TESTS`, `LORRGS_LIVE_TESTS`, `BLIZZARD_LIVE_TESTS`, `CURSEFORGE_LIVE_TESTS`, `WARCRAFT_WRAPPER_LIVE_TESTS` — set to `1` with the matching test file, for example `WOWHEAD_LIVE_TESTS=1 pytest -q -m live tests/test_live_integration.py`. The file-to-flag registry lives in `tests/conftest.py`
+- `make reference` regenerates `docs/reference/`; `make skills` regenerates the generated provider subskills. Neither output is hand-edited
+- `make dev-deploy-no-link` refreshes the checkout-local editable environment without rewriting host-level command wrappers; `make worktree-env` regenerates `.warcraft/worktree-env.sh`, and `source .warcraft/worktree-env.sh` activates worktree-local `PATH`, data, and cache roots
 - `WARCRAFT_ALLOW_LINK_BIN=1 make dev-deploy` is a deliberate exception that repoints `~/.local/bin` at the current checkout
-- worktree creation and trunk hygiene are handled outside this repo with `worktrunk`
+
+## Global Flags
+
+These flags exist on every binary — the `warcraft` wrapper and all twelve providers — and go
+**before** the subcommand. Full contract: [foundation/ERROR_CONTRACT.md](foundation/ERROR_CONTRACT.md).
+
+| Flag | Effect |
+|------|--------|
+| `--pretty` | Pretty-print JSON. Default output is compact JSON for machine consumption. |
+| `--compact` | Truncate long string fields such as tooltip HTML blobs. |
+| `--compact-max-chars` | Truncation length for `--compact` (default `280`). |
+| `--fields` | Keep only the listed dot paths; repeatable or comma-separated. |
+| `--fields-strict` | Fail when a requested `--fields` path is missing. |
+| `--profile` | `agent` (default compact JSON), `human` (pretty JSON), `debug` (pretty JSON plus diagnostics). |
+
+Some binaries add their own global flags: `warcraft` and `wowhead` take `--expansion` (a version
+profile; the wrapper passes it through to expansion-aware providers), `warcraftlogs` takes
+`--site retail|classic|fresh`, and `simc` takes `--repo-root`. The per-binary lists are in
+[reference/](reference/README.md).
+
+```bash
+wowhead --fields query,count,results search "defias"
+warcraft --expansion wotlk search "thunderfury"
+```
+
+Every provider command emits one JSON object with the shared envelope keys `ok`, `provider`,
+`command`, `kind`, `schema_version`, `query`, `provenance`, and `data`; failures add `error` with a
+stable `code`, a human `message`, and optional `details`, and are written to stderr. Providers that
+historically emitted their payload keys at the top level still do, next to the envelope keys; those
+copies are deprecated, so read `data` where a provider populates it. The `warcraft` wrapper's own
+commands (`doctor`, `search`, `resolve`, and the composite packets) carry the same envelope keys
+with `provider: "warcraft"`, keep their historical top-level keys, and mirror them into `data`.
+`warcraft <provider> ...` passthrough output is the provider's envelope.
+
+Exit codes:
+
+| Exit | Meaning |
+|------|---------|
+| `0` | success |
+| `1` | generic failure, including uncaught exceptions |
+| `2` | usage error: bad flags or arguments |
+| `3` | authentication required or rejected |
+| `4` | target not found |
+| `5` | network or upstream failure |
 
 ## Wrapper Commands
 
+Flags: [reference/warcraft.md](reference/warcraft.md). Provider docs: [warcraft/README.md](warcraft/README.md).
+
 ```bash
 warcraft doctor
-warcraft --expansion wotlk doctor
+warcraft schema
 warcraft search "defias"
-warcraft --expansion wotlk search "thunderfury"
 warcraft --expansion wotlk search "thunderfury" --compact --expansion-debug
-warcraft search "guild us illidan Liquid" --compact --ranking-debug
 warcraft resolve "fairbreeze favors"
-warcraft --expansion wotlk resolve "thunderfury"
-warcraft --expansion wotlk resolve "guild us illidan Liquid" --compact --expansion-debug
-warcraft resolve "character us illidan Roguecane" --compact --ranking-debug
+warcraft resolve "https://www.warcraftlogs.com/reports/abcd1234#fight=3"
 warcraft guild us "Mal'Ganis" gn
-warcraft guild-history us "Mal'Ganis" gn
-warcraft guild-ranks us "Mal'Ganis" gn
-warcraft guide-compare ./tmp/method-mistweaver ./tmp/icy-mistweaver
 warcraft guide-compare-query "mistweaver monk guide"
-warcraft guide-compare-query "mistweaver monk guide" --simc-build-handoff --simc-apl-path <simc-root>/ActionPriorityLists/default/monk_mistweaver.simc
-warcraft guide-builds-simc ./tmp/method-mistweaver
+warcraft guide-compare ./tmp/method-mistweaver ./tmp/icy-mistweaver
 warcraft guide-builds-simc ./tmp/method-mistweaver --apl-path <simc-root>/ActionPriorityLists/default/monk_mistweaver.simc
-warcraft talent-packet druid/balance/ABC123
+warcraft cooldown-packet "https://www.warcraftlogs.com/reports/abcd1234#fight=3" --actor-id 1234 --phase 2
 warcraft talent-packet https://www.warcraftlogs.com/reports/abcd1234#fight=47 --actor-id 1234
-warcraft talent-packet ./tmp/gubkfc-packet.json --out ./tmp/gubkfc-packet-validated.json
 warcraft talent-describe druid/balance/ABC123 --apl-path <simc-root>/ActionPriorityLists/default/druid_balance.simc
 warcraft --expansion wotlk wowhead search "thunderfury"
-warcraft wowhead search "defias"
 warcraft wowhead guide 3143
-warcraft method search "mistweaver monk"
-warcraft method guide mistweaver-monk
-warcraft icy-veins search "mistweaver monk guide"
-warcraft icy-veins guide mistweaver-monk-pve-healing-guide
-warcraft raiderio character us illidan Roguecane
-warcraft raiderio guild us illidan Liquid
-warcraft warcraft-wiki search "world of warcraft api"
-warcraft warcraft-wiki article "World of Warcraft API"
-warcraft warcraft-wiki api "CreateFrame"
-warcraft warcraft-wiki event "OnKeyDown"
-warcraft wowprogress guild us illidan Liquid
-warcraft wowprogress leaderboard pve us --limit 10
-warcraft resolve "https://www.warcraftlogs.com/reports/abcd1234#fight=3"
-warcraft cooldown-packet "https://www.warcraftlogs.com/reports/abcd1234#fight=3" --actor-id 1234 --phase 2
-warcraft warcraftlogs resolve "https://www.warcraftlogs.com/reports/abcd1234#fight=3"
-warcraftlogs doctor
-warcraftlogs auth status
-warcraftlogs auth login --redirect-uri http://127.0.0.1:8787/callback
-warcraftlogs auth pkce-login --redirect-uri http://127.0.0.1:8787/callback
-warcraftlogs regions
-warcraftlogs guild us illidan Liquid
-warcraft simc doctor
-warcraft simc version
-warcraft simc spec-files mistweaver
-warcraft simc apl-lists <simc-root>/ActionPriorityLists/default/monk_mistweaver.simc
-warcraft simc apl-intent <simc-root>/ActionPriorityLists/default/monk_mistweaver.simc --targets 1
 warcraft simc analysis-packet <simc-root>/ActionPriorityLists/default/monk_mistweaver.simc --targets 1
-warcraft simc first-cast <simc-root>/profiles/MID1/MID1_Monk_Windwalker.simc tiger_palm --seeds 1 --max-time 20
-warcraft lorrgs specs
-warcraft lorrgs bosses
-warcraft lorrgs resolve "https://www.warcraftlogs.com/reports/bG3xDYPqKjLm8XaR?fight=22&type=damage-done"
-warcraft lorrgs report-overview "https://www.warcraftlogs.com/reports/bG3xDYPqKjLm8XaR?fight=22&type=damage-done"
-warcraft lorrgs spec-ranking mage-frost chimaerus-the-undreamt-god
-warcraft lorrgs comp-ranking chimaerus-the-undreamt-god --limit 10
 ```
 
 ## Wrapper Conventions
@@ -98,7 +105,7 @@ warcraft lorrgs comp-ranking chimaerus-the-undreamt-god --limit 10
 - `raiderio` includes real search and conservative resolve on top of the live site search surface.
 - `warcraft-wiki` is a reference provider with MediaWiki-backed search, resolve, typed `api` / `event` lookups, article export, and local query.
 - `wowprogress` is a rankings provider with structured search, conservative resolve, direct guild/character/PvE leaderboard lookups, and sample-backed leaderboard analytics primitives.
-- `warcraftlogs` is a phase-1 official API provider with retail-only OAuth client-credentials auth plus typed world metadata, guild, character, and report lookups.
+- `warcraftlogs` is an official API provider with OAuth client-credentials auth plus typed world metadata, guild, character, and report lookups; `--site retail|classic|fresh` selects the site profile and the wrapper maps `--expansion` onto it.
 - `warcraftlogs` is wired into wrapper `doctor`, passthrough, and conservative wrapper `search` / `resolve`.
 - wrapper discovery for `warcraftlogs` is intentionally narrow: only explicit report URLs and bare mixed-alphanumeric report codes resolve through the wrapper.
 - `lorrgs` is a no-auth Lorrgs public API provider for top-parse cooldown timelines, composition rankings, static spec/boss/spell metadata, and Warcraft Logs report overview handoffs; wrapper `search`/`resolve` understand Lorrgs URLs, Warcraft Logs report URLs, bare report codes, and spec/boss text.
@@ -115,7 +122,8 @@ warcraft lorrgs comp-ranking chimaerus-the-undreamt-god --limit 10
 - `warcraft guide-compare-query` conservatively resolves one guide per supported provider, exports those bundles locally, and then runs the same comparison packet over the exported evidence
 - when `guide-compare-query` cannot get a guide from provider `resolve`, it may fall back to provider `search`, but only when the top guide result has a strong enough score and a clearly decisive lead over the alternatives; weak or ambiguous guide search results are skipped instead of exported
 - `guide-compare-query` writes an orchestration manifest under the output root and reuses existing bundles only when the same guide ref is still selected and the recorded export age is within `--max-age-hours`; use `--force-refresh` to bypass reuse
-- `guide-compare-query --simc-build-handoff` adds an explicit guide-build-to-`simc` evidence block derived only from exported `build_references`; use `--simc-apl-path` when you also want exact-build `simc describe-build` output in the same packet
+- `guide-compare-query` orchestration controls: `--provider` (repeatable) restricts the run to `wowhead`, `method`, or `icy-veins`; `--out-root` sets where the exported bundles and the orchestration manifest are written; `--limit` caps provider-local resolve candidates per provider; `--max-age-hours` and `--force-refresh` control bundle reuse
+- `guide-compare-query --simc-build-handoff` adds an explicit guide-build-to-`simc` evidence block derived only from exported `build_references`; use `--simc-apl-path` when you also want exact-build `simc describe-build` output in the same packet, `--simc-decode` / `--no-simc-decode` to control whether each explicit build ref is also run through `simc decode-build`, and `--simc-build-limit` to cap how many unique build refs are handed off
 - `warcraft guide-builds-simc` reads explicit embedded guide build references from one exported guide bundle or a `guide-compare-query` output root, dedupes them, and hands those exact build refs to `simc identify-build` plus optional `simc decode-build`
 - `warcraft guide-builds-simc --apl-path <apl>` also runs `simc describe-build` for each explicit build ref so the handoff can include exact-build APL-backed detail without inferring claims from guide prose
 - `guide-builds-simc` also includes explicit provenance, citations, and source freshness metadata for the handoff packet so agents can tell whether the build evidence came from one bundle or a fresher orchestration root; for a single bundle the freshness `status` is now `known` (anchored on the bundle's `exported_at`) rather than `unknown` when the manifest carries an export timestamp
@@ -145,156 +153,65 @@ warcraft lorrgs comp-ranking chimaerus-the-undreamt-god --limit 10
 - the flattened `warcraft search` result list is globally sorted by a tunable wrapper ranking layer that combines provider score, query intent, provider family, and result kind
 - flattened wrapper results include `wrapper_ranking` so agents can inspect why a provider/result surfaced first
 - `warcraft resolve` uses the same wrapper ranking layer on top of provider confidence instead of trusting provider registration order
-- use `--compact` on `warcraft search` or `warcraft resolve` when you want the wrapper decision without the full per-provider payloads
+- `warcraft search --compact` and `warcraft resolve --compact` shrink candidate rows to the wrapper decision surface; the global `--compact` (before the subcommand) is a different flag that truncates long strings in any payload
 - use `--ranking-debug` when you want compact ranking summaries for the top wrapper candidates
 - use `--expansion-debug` when you want a compact per-provider expansion eligibility snapshot
 - wrapper ranking policy can be overridden with `~/.config/warcraft/wrapper_ranking.json`
 - the wrapper may add synthetic search candidates when a provider has a strong direct command but no native search surface for that query family, such as `wowprogress leaderboard pve ...`
 - wrapper `resolve` does not treat those synthetic direct routes as verified resolutions
 - wrapper expansion filtering is conservative:
-  - `wowhead` is currently the only profiled expansion-aware provider
-  - `method`, `icy-veins`, `raiderio`, `wowprogress`, and `warcraftlogs` are currently treated as retail-only when wrapper expansion filtering is active
-  - `warcraft-wiki` and `simc` are currently excluded from wrapper expansion-filtered `search` and `resolve`
+  - `wowhead` and `warcraftlogs` are the profiled expansion-aware providers; `warcraftlogs` maps the requested expansion onto its `retail` / `classic` / `fresh` site profile and rejects keys it cannot honor (`ptr`, `beta`, `classic-ptr`)
+  - `method`, `icy-veins`, `raiderio`, `wowprogress`, `lorrgs`, and `raidbots` are treated as retail-only when wrapper expansion filtering is active
+  - `warcraft-wiki`, `simc`, `blizzard`, and `curseforge` are excluded from wrapper expansion-filtered `search` and `resolve`
 - wrapper `search`, `resolve`, and `doctor` report included and excluded providers when expansion filtering is active
 - wrapper `doctor` also reports wrapper-surface readiness plus provider auth/install metadata, so agents can distinguish a registered provider from a wrapper-ready routing surface
 - `--expansion-debug` exposes the full provider eligibility snapshot even in compact mode
 - direct passthrough commands reject unsupported provider/expansion combinations instead of silently ignoring the expansion request
 - wrapper `doctor` preserves provider registration status, so partial providers stay marked `partial` even when their local doctor command succeeds
-
-## Agent Workflow Direction
-
-- These CLIs are designed as agent-facing building blocks for broad World of Warcraft questions, not just one-off direct lookups.
-- Broad requests like "tell me about this class, quest, item, zone, or spec" should route cleanly to the right provider without hiding source provenance.
-- Cross-provider requests should stay composable:
-  - compare guide providers against each other
-  - compare guide-derived recommendations against local `simc` APL behavior for an exact build
-  - connect reference, ranking, profile, log, and simulation surfaces without hand-normalizing every identifier
-- Deep log-analysis requests should stay scope-safe:
-  - prefer typed `warcraftlogs` report and encounter commands over manual event stitching
-  - preserve exact fight, player, target, ability, and window provenance in the payload
-  - treat sampled analytics as sampled analytics, not global truth
-- Not every high-value workflow is a one-command surface yet.
-- The current implementation direction is to add the smallest trustworthy primitives needed for agents to compute those workflows safely:
-  - shared cross-provider identity and handoff primitives
-  - normalized guide-comparison surfaces
-  - deeper scoped Warcraft Logs analytics
-  - evidence packets with consistent freshness and citation metadata
+- wrapper `doctor` reports `wrapper.tiers` plus a `tier` on every provider row (core / supported / experimental), and answers fully offline: it reads local auth and runtime state instead of probing provider endpoints
+- provider rows in `warcraft search` and `warcraft resolve` carry `ok` and `error` alongside `status`: `status` is registry readiness, `ok`/`error` is what the call actually did, so a provider failure is an error envelope instead of a null payload
+- the wrapper calls each provider's in-process `PROVIDER` surface for `search`, `resolve`, and `doctor`, and invokes the provider's own app for `warcraft <provider> ...` passthrough; global output flags are forwarded to the provider on passthrough
 
 `warcraft doctor` reports:
 - wrapper health
+- provider tiers and registered provider readiness
 - effective XDG-style config/data/cache/state roots
 - active worktree-runtime isolation details when running from an editable worktree
-- registered provider readiness
 - provider expansion-support mode and active expansion eligibility when `--expansion` is set
+
+The product philosophy behind these surfaces (what the repo will and will not answer) lives in
+[foundation/PRODUCT_PRINCIPLES.md](foundation/PRODUCT_PRINCIPLES.md).
 
 ## Wowhead Commands
 
+Flags: [reference/wowhead.md](reference/wowhead.md). Provider docs: [wowhead/README.md](wowhead/README.md).
+
 ```bash
 wowhead search "defias"
-wowhead resolve "fairbreeze favors"
-wowhead --expansion wotlk search "thunderfury"
-wowhead news
-wowhead news "hotfixes" --pages 3 --date-from 2026-03-01
-wowhead news "hotfixes" --type live --author Jaydaa --pages 2
-wowhead news-post /news/midnight-hotfixes-for-march-13th-marl-decor-cost-reduction-class-bugfixes-and-380785
-wowhead blue-tracker
-wowhead blue-tracker "class tuning" --pages 2 --date-from 2026-03-01
-wowhead blue-tracker "class tuning" --region eu --forum "General Discussion"
-wowhead blue-topic /blue-tracker/topic/eu/class-tuning-incoming-18-march-610948
-wowhead guides classes
-wowhead guides classes "death knight"
-wowhead guides classes --author Khazakdk --patch-min 120001 --updated-after 2026-02-01
-wowhead guides classes --sort updated --limit 10
-wowhead talent-calc druid/balance/DAQBBBBQQRUFURYVBEANVVRUVFVVVQCVQhEUEBUEBhVQ
-wowhead talent-calc-packet druid/balance/DAQBBBBQQRUFURYVBEANVVRUVFVVVQCVQhEUEBUEBhVQ
-wowhead talent-calc-packet druid/balance/DAQBBBBQQRUFURYVBEANVVRUVFVVVQCVQhEUEBUEBhVQ --out ./tmp/balance-packet.json
-wowhead profession-tree alchemy/BCuA
-wowhead dressing-room "#fz8zz0zb89c8mM8YB8mN8X18mO8ub8mP8uD"
-wowhead profiler 97060220/us/illidan/Roguecane
-wowhead guide 3143
-wowhead guide-full 3143
-wowhead guide-export 3143 --out ./tmp/frost-dk-guide
-wowhead guide-export 3143 --out ./tmp/frost-dk-guide --hydrate-linked-entities --hydrate-type spell,item --hydrate-limit 100
-wowhead guide-bundle-list
-wowhead guide-bundle-list --max-age-hours 72
-wowhead guide-bundle-search "frost death knight"
-wowhead guide-bundle-query "obliterate"
-wowhead guide-bundle-inspect 3143
-wowhead guide-bundle-index-rebuild
-wowhead cache-inspect
-wowhead cache-inspect --show-redis-prefixes
-wowhead cache-inspect --summary --hide-zero
-wowhead cache-repair --expired-only
-wowhead guide-bundle-inspect 3143 --summary
-wowhead cache-clear --namespace entity_response --expired-only
-wowhead guide-bundle-refresh ./tmp/frost-dk-guide
-wowhead guide-bundle-refresh 3143 --root ./wowhead_exports --max-age-hours 6
-wowhead guide-query ./tmp/frost-dk-guide "bellamy"
-wowhead guide-query 3143 "obliterate" --root ./wowhead_exports
-wowhead guide-query ./tmp/frost-dk-guide "welcome" --kind sections --section-title overview
-wowhead guide-query 3143 "bellamy" --root ./wowhead_exports --kind linked_entities --linked-source multi
-wowhead --pretty search "defias"
-wowhead --fields query,count,results search "defias"
 wowhead entity item 19019
-wowhead entity item 19019 --no-include-comments
-wowhead entity item 19019 --include-all-comments
-wowhead entity faction 529 --no-include-comments
-wowhead entity recipe 2549 --no-include-comments
-wowhead entity mount 460 --no-include-comments
-wowhead entity battle-pet 39 --no-include-comments
-wowhead --compact entity item 19019
-wowhead --expansion classic entity item 19019
-wowhead --fields entity.name,entity.page_url,tooltip.summary,linked_entities entity quest 86739
-wowhead --expansion ptr --normalize-canonical-to-expansion entity-page item 19019
-wowhead entity-page item 19019 --max-links 100
-wowhead comments item 19019 --limit 30 --sort rating
-wowhead comments item 19019 --insights --author alice --keyword fire --min-replies 1 --date-from 2024-01-01
-wowhead compare item:19019 item:19351 --comment-sample 2
-wowhead compare --preset gear item:19019 item:19351
-wowhead compare --preset quest quest:7786 quest:7787
-wowhead linked-graph item 19019 --depth 1 --relation npc,quest
-wowhead expansions
+wowhead guide-export 3143 --out ./tmp/frost-dk-guide
 ```
 
 Wowhead command behavior:
 - `search` and `resolve` are still the conservative discovery layer for entity and guide lookups
-- `news` scans the Wowhead news timeline and supports:
-  - optional topic filtering
-  - `--date-from`
-  - `--date-to`
-  - bounded pagination with `--page` and `--pages`
-  - explicit scan metadata so agents can see how much timeline history was searched
+- `news` scans the Wowhead news timeline with optional topic filtering, date bounds, and bounded pagination, and reports explicit scan metadata so agents can see how much timeline history was searched
 - `news-post` fetches one specific Wowhead news article page and returns:
   - normalized page metadata
   - extracted text
   - section chunks when the post body contains markup headings
   - author metadata when Wowhead exposes it
   - embedded related/recent-post buckets when Wowhead exposes them
-- `news` also supports stable timeline metadata filters from the listing payload:
-  - `--author`
-  - `--type`
-  - result `facets` so agents can see which authors and type buckets matched the scanned window
+- `news` also filters on stable timeline metadata from the listing payload (author, post type) and returns result `facets` so agents can see which authors and type buckets matched the scanned window
 - `blue-tracker` does the same for the Wowhead blue tracker and is the right surface for topic-over-time blue post research
 - `blue-topic` fetches one specific blue-tracker topic page and returns the normalized topic posts with extracted body text
 - `blue-topic` also returns a lightweight topic summary:
   - participant list
   - blue-author list
   - richer per-post metadata like author page, forum-area slug, and post ordering
-- `blue-tracker` also supports stable timeline metadata filters from the listing payload:
-  - `--author`
-  - `--region`
-  - `--forum`
-  - result `facets` so agents can see which authors, regions, and forums matched the scanned window
+- `blue-tracker` also filters on stable timeline metadata from the listing payload (author, region, forum) and returns result `facets` so agents can see which authors, regions, and forums matched the scanned window
 - `guides <category>` uses the live guide-category listing surface for categories such as `classes`, `professions`, and `raids`
 - `guides <category> <query>` filters within the category listing instead of forcing discovery through generic `search`
-- `guides <category>` also supports metadata filters that are more reliable than browser-scanning:
-  - `--author`
-  - `--updated-after`
-  - `--updated-before`
-  - `--patch-min`
-  - `--patch-max`
-  - `--sort relevance|updated|published|rating`
-  - result `facets` so agents can quickly see which authors and category-path buckets are in the filtered guide set
+- `guides <category>` also supports metadata filters that are more reliable than browser-scanning — author, updated-before/after, patch range, and sort order — plus result `facets` so agents can quickly see which authors and category-path buckets are in the filtered guide set
 - Wowhead entity-type handling is driven by a shared internal registry, so search suggestion types, parser support, resolve filters, and hydrate support stop drifting independently
 - `talent-calc` decodes calculator state URLs into:
   - class slug
@@ -321,14 +238,12 @@ Wowhead command behavior:
 
 ## Method Commands
 
+Flags: [reference/method.md](reference/method.md). Provider docs: [method/README.md](method/README.md).
+
 ```bash
-method doctor
 method search "mistweaver monk"
-method resolve "mistweaver monk guide"
 method guide "mistweaver-monk"
-method guide-full "mistweaver-monk"
 method guide-export "mistweaver-monk" --out ./tmp/method-mistweaver
-method guide-query ./tmp/method-mistweaver "tea serenity"
 ```
 
 Method guide behavior:
@@ -345,14 +260,12 @@ Method guide behavior:
 
 ## Icy Veins Commands
 
+Flags: [reference/icy-veins.md](reference/icy-veins.md). Provider docs: [icy-veins/README.md](icy-veins/README.md).
+
 ```bash
-icy-veins doctor
 icy-veins search "mistweaver monk guide"
-icy-veins resolve "mistweaver monk guide"
 icy-veins guide "mistweaver-monk-pve-healing-guide"
-icy-veins guide-full "mistweaver-monk-pve-healing-guide"
 icy-veins guide-export "mistweaver-monk-pve-healing-guide" --out ./tmp/icy-mistweaver
-icy-veins guide-query ./tmp/icy-mistweaver "vivify"
 ```
 
 Icy Veins guide behavior:
@@ -384,21 +297,12 @@ Icy Veins guide behavior:
 
 ## Raider.IO Commands
 
+Flags: [reference/raiderio.md](reference/raiderio.md). Provider docs: [raiderio/README.md](raiderio/README.md).
+
 ```bash
-raiderio doctor
-raiderio search "liquid"
-raiderio resolve "liquid"
 raiderio character us illidan Roguecane
 raiderio guild us illidan Liquid
-raiderio mythic-plus-runs --region world --dungeon all --page 0
-raiderio sample mythic-plus-runs --pages 2 --limit 40
 raiderio sample mythic-plus-runs --pages 2 --limit 40 --level-min 25 --contains-spec balance
-raiderio sample mythic-plus-players --pages 2 --limit 40 --player-limit 100
-raiderio distribution mythic-plus-runs --metric dungeon --pages 2 --limit 40
-raiderio distribution mythic-plus-runs --metric spec --pages 2 --limit 40
-raiderio distribution mythic-plus-runs --metric class --pages 2 --limit 40 --player-region eu
-raiderio distribution mythic-plus-players --metric class --pages 2 --limit 40
-raiderio threshold mythic-plus-runs --metric score --value 560 --pages 2 --limit 40
 ```
 
 Raider.IO phase-1 behavior:
@@ -448,18 +352,12 @@ Raider.IO phase-1 behavior:
 
 ## Warcraft Wiki Commands
 
+Flags: [reference/warcraft-wiki.md](reference/warcraft-wiki.md). Provider docs: [warcraft-wiki/README.md](warcraft-wiki/README.md).
+
 ```bash
-warcraft-wiki doctor
 warcraft-wiki search "world of warcraft api"
-warcraft-wiki resolve "world of warcraft api"
-warcraft-wiki article "World of Warcraft API"
-warcraft-wiki article-full "World of Warcraft API"
 warcraft-wiki api "CreateFrame"
-warcraft-wiki api-full "XML schema"
-warcraft-wiki event "OnKeyDown"
-warcraft-wiki event-full "Events"
 warcraft-wiki article-export "World of Warcraft API" --out ./tmp/wiki-api
-warcraft-wiki article-query ./tmp/wiki-api "framexml"
 ```
 
 Warcraft Wiki behavior:
@@ -478,26 +376,12 @@ Warcraft Wiki behavior:
 
 ## WowProgress Commands
 
+Flags: [reference/wowprogress.md](reference/wowprogress.md). Provider docs: [wowprogress/README.md](wowprogress/README.md).
+
 ```bash
-wowprogress doctor
-wowprogress search "guild us illidan Liquid"
-wowprogress resolve "character us illidan Imonthegcd"
-wowprogress guild-history us "Mal'Ganis" gn
-wowprogress guild-ranks us "Mal'Ganis" gn
-wowprogress guild-snapshot us illidan Liquid
-wowprogress history-trajectory us "Mal'Ganis" gn
 wowprogress guild us illidan Liquid
-wowprogress character us illidan Imonthegcd
-wowprogress leaderboard pve us --limit 10
-wowprogress leaderboard pve us --realm illidan --limit 10
-wowprogress sample pve-leaderboard --region us --limit 25
-wowprogress sample pve-guild-profiles --region us --limit 10
+wowprogress guild-history us "Mal'Ganis" gn
 wowprogress sample pve-guild-profiles --region us --limit 10 --faction horde --world-rank-max 25
-wowprogress distribution pve-leaderboard --region us --metric progress --limit 25
-wowprogress distribution pve-guild-profiles --region us --metric faction --limit 10
-wowprogress distribution pve-guild-profiles --region us --metric item_level_average --faction horde
-wowprogress threshold pve-leaderboard --region us --metric rank --value 25 --limit 50
-wowprogress threshold pve-guild-profiles --region us --metric world_rank --value 25 --limit 10
 ```
 
 WowProgress phase-1 behavior:
@@ -532,25 +416,12 @@ WowProgress phase-1 behavior:
 
 ## Lorrgs Commands
 
+Flags: [reference/lorrgs.md](reference/lorrgs.md). Provider docs: [lorrgs/README.md](lorrgs/README.md).
+
 ```bash
-lorrgs doctor
-lorrgs search "frost mage chimaerus"
-lorrgs resolve "frost mage chimaerus"
-lorrgs resolve "https://www.warcraftlogs.com/reports/bG3xDYPqKjLm8XaR?fight=22&type=damage-done"
 lorrgs specs
-lorrgs bosses
-lorrgs current-season
-lorrgs spec mage-frost
-lorrgs boss chimaerus-the-undreamt-god
-lorrgs spec-spells mage-frost
-lorrgs boss-spells chimaerus-the-undreamt-god
 lorrgs spec-ranking mage-frost chimaerus-the-undreamt-god
-lorrgs spec-ranking-info mage-frost chimaerus-the-undreamt-god
-lorrgs comp-ranking chimaerus-the-undreamt-god --limit 10
-lorrgs comp-ranking chimaerus-the-undreamt-god --role 'heal>=4' --spec 'mage-frost>=1'
 lorrgs report-overview "https://www.warcraftlogs.com/reports/bG3xDYPqKjLm8XaR?fight=22&type=damage-done"
-lorrgs user-report <report-id-or-url>
-lorrgs user-report-fights <report-id-or-url> --fight 2.4 --player 1.5 --type damage-done
 ```
 
 Lorrgs behavior:
@@ -578,65 +449,16 @@ Lorrgs behavior:
 
 ## Warcraft Logs Commands
 
+Flags: [reference/warcraftlogs.md](reference/warcraftlogs.md). Provider docs: [warcraftlogs/README.md](warcraftlogs/README.md).
+
 ```bash
 warcraftlogs doctor
-warcraftlogs auth status
-warcraftlogs auth client
-warcraftlogs auth token
-warcraftlogs auth whoami
-warcraftlogs auth login --redirect-uri http://127.0.0.1:8787/callback
-warcraftlogs auth pkce-login --redirect-uri http://127.0.0.1:8787/callback
-warcraftlogs auth logout
-warcraftlogs rate-limit
-warcraftlogs regions
-warcraftlogs expansions
-warcraftlogs server us illidan
-warcraftlogs zones
-warcraftlogs zones --expansion-id 12
-warcraftlogs zone 38
-warcraftlogs encounter 3012
-warcraftlogs guild us illidan Liquid
-warcraftlogs guild us illidan Liquid --zone-id 38
-warcraftlogs guild-members us illidan Liquid --limit 5
-warcraftlogs guild-attendance us illidan Liquid --limit 2
-warcraftlogs guild-rankings us illidan Liquid --zone-id 38 --size 20 --difficulty 5
-warcraftlogs guild-reports us illidan Liquid --limit 10
-warcraftlogs character us illidan Roguecane
-warcraftlogs character-rankings us illidan Roguecane --zone-id 38 --difficulty 5 --metric dps --size 20
-warcraftlogs encounter-rankings --zone-id 46 --boss-id 3180 --difficulty 5 --class-name Druid --spec-name Balance --metric dps --top 10
-warcraftlogs reports --guild-region us --guild-realm illidan --guild-name Liquid --limit 10
-warcraftlogs report abcdefgh
-warcraftlogs report-fights abcdefgh --difficulty 5
-warcraftlogs report-player-details abcdefgh --fight-id 47
-warcraftlogs report-player-talents abcdefgh --fight-id 47 --actor-id 1234
-warcraftlogs report-player-talents abcdefgh --fight-id 47 --actor-id 1234 --out ./tmp/gubkfc-packet.json
-warcraftlogs report-master-data abcdefgh --actor-type Player
-warcraftlogs report-events abcdefgh --fight-id 47 --limit 100
-warcraftlogs report-table abcdefgh --data-type damage-done --fight-id 47
-warcraftlogs report-graph abcdefgh --data-type damage-done --fight-id 47
-warcraftlogs report-rankings abcdefgh --fight-id 47 --player-metric dps --timeframe historical --compare rankings
-warcraftlogs graphql --query 'query Report($code: String!) { reportData { report(code: $code) { code title } } }' --report-code abcdefgh
-warcraftlogs graphql --query @./query.graphql --variables-json '{"code":"abcdefgh"}' --operation-name Report
-warcraftlogs graphql --introspect
 warcraftlogs report-encounter 'https://www.warcraftlogs.com/reports/abcdefgh#fight=47'
-warcraftlogs report-encounter-players 'https://www.warcraftlogs.com/reports/abcdefgh#fight=47'
-warcraftlogs report-encounter-casts 'https://www.warcraftlogs.com/reports/abcdefgh#fight=47' --preview-limit 20
-warcraftlogs report-encounter-buffs 'https://www.warcraftlogs.com/reports/abcdefgh#fight=47' --view-by source
-warcraftlogs report-encounter-aura-summary 'https://www.warcraftlogs.com/reports/abcdefgh#fight=47' --ability-id 20473 --window-start-ms 30000 --window-end-ms 90000
-warcraftlogs report-encounter-aura-compare 'https://www.warcraftlogs.com/reports/abcdefgh#fight=47' --ability-id 20473 --left-window-start-ms 30000 --left-window-end-ms 90000 --right-window-start-ms 90000 --right-window-end-ms 150000
-warcraftlogs report-encounter-damage-source-summary 'https://www.warcraftlogs.com/reports/abcdefgh#fight=47' --window-start-ms 30000 --window-end-ms 90000
-warcraftlogs report-encounter-damage-target-summary 'https://www.warcraftlogs.com/reports/abcdefgh#fight=47' --window-start-ms 30000 --window-end-ms 90000
-warcraftlogs report-encounter-damage-breakdown 'https://www.warcraftlogs.com/reports/abcdefgh#fight=47' --window-start-ms 30000 --window-end-ms 90000
-warcraftlogs boss-kills --zone-id 38 --boss-id 3012 --difficulty 5 --top 10
-warcraftlogs top-kills --zone-id 38 --boss-name 'Dimensius' --difficulty 5 --top 5
-warcraftlogs kill-time-distribution --zone-id 38 --boss-id 3012 --difficulty 5 --bucket-seconds 30
-warcraftlogs boss-spec-usage --zone-id 38 --boss-id 3012 --difficulty 5 --top 10
-warcraftlogs comp-samples --zone-id 38 --boss-id 3012 --difficulty 5 --top 5
-warcraftlogs ability-usage-summary --zone-id 38 --boss-id 3012 --difficulty 5 --ability-id 20473 --preview-limit 5
+warcraftlogs report-player-talents abcdefgh --fight-id 47 --actor-id 1234 --out ./tmp/gubkfc-packet.json
 ```
 
 Current Warcraft Logs provider behavior:
-- `warcraftlogs` currently targets the retail/main site profile only
+- `--site retail|classic|fresh` selects the Warcraft Logs site profile; it routes both the OAuth endpoints and the GraphQL endpoint, and the `warcraft` wrapper maps `--expansion` onto it
 - public OAuth client credentials are the default auth mode
 - manual user-auth groundwork is available for:
   - authorization code
@@ -708,8 +530,8 @@ EOF
   - for normal multi-fight reports, supply encounter scope via `--fight-id` or a scoped report URL
   - it only emits a packet when every selected `combatant_info.talentTree` row is fully formed
   - it preserves normalized raw talent-tree rows as `entry/node_id/rank` evidence from `combatant_info.talentTree`
-  - when local SimulationCraft trait data can resolve every row and the reconstructed build round-trips, it also emits validated `simc_split_talents`
-  - otherwise it stays `raw_only` and reports why validation could not be proven
+  - `warcraftlogs` never runs SimulationCraft itself: a standalone packet is `raw_only` with `validation.reason: simc_backend_unavailable`
+  - upgrade it to validated `simc_split_talents` with `simc validate-talent-transport --build-packet <packet>`, which resolves every row against local SimulationCraft trait data and only validates when the reconstructed build round-trips
   - add `--out <path>` when you want the command to write just the packet JSON for a later `simc` or wrapper handoff
   - malformed or incomplete talent-tree rows fail with `missing_talent_tree` instead of emitting a partial packet
   - if packet validation fails, the command stops with `invalid_transport_packet` instead of printing or writing malformed packet JSON
@@ -769,61 +591,16 @@ EOF
 - Warcraft Logs documents that guild roster verification is game-dependent, so `guild-members` should be treated as a retail-capable roster surface, not a universal guarantee across every future site profile
 - `guild-attendance` is available as an official schema surface, but live public queries can still hit provider-side internal errors; treat it as useful when it works, not as a guaranteed stable contract yet
 - cross-report analytics skip unfinished live reports and currently treat only finished reports as stable sampled inputs
-- wrapper integration is intentionally deferred for now
+- credential discovery is a pure read: `.env.local`, the XDG provider env file, and the process environment are resolved per key without mutating the environment, and `auth status` reports `credential_source: null` when the two halves come from different layers
 
 ## SimulationCraft Commands
 
+Flags: [reference/simc.md](reference/simc.md). Provider docs: [simc/README.md](simc/README.md).
+
 ```bash
 simc doctor
-simc repo
-simc repo --set-root <simc-root>
-simc checkout
-simc version
-simc verify-clean
-simc inspect
-simc inspect <simc-root>/ActionPriorityLists/default/monk_mistweaver.simc
-simc spec-files mistweaver
-simc identify-build --build-text 'CgcBG5bbocFKcv+yIq8fPd6ORBA2MmZmxMzMGzMAAAAAAAegxsNYGAAAAAAAAmxMMmZmZmZmZGzsYGjFtsxMzMzWbzMzAYYAIwMGMmB'
-simc identify-build --build-text 'https://www.wowhead.com/talent-calc/demon-hunter/devourer/CgcBG5bbocFKcv+yIq8fPd6ORBA2MmZmxMzMGzMAAAAAAAegxsNYGAAAAAAAAmxMMmZmZmZmZGzsYGjFtsxMzMzWbzMzAYYAIwMGMmB'
-simc identify-build --build-packet ./build-packet.json
-simc validate-talent-transport --build-packet ./build-packet.json
-simc validate-talent-transport --actor-class druid --spec balance --talent-row 103324:82244:1 --talent-row 109839:88206:1 --talent-row 117176:94585:1
-simc describe-build --build-text 'CgcBG5bbocFKcv+yIq8fPd6ORBA2MmZmxMzMGzMAAAAAAAegxsNYGAAAAAAAAmxMMmZmZmZmZGzsYGjFtsxMzMzWbzMzAYYAIwMGMmB'
 simc describe-build --build-packet ./build-packet.json --apl-path <simc-root>/ActionPriorityLists/default/druid_balance.simc
-simc decode-build --apl-path <simc-root>/ActionPriorityLists/default/monk_mistweaver.simc --talents ABC123
-simc decode-build --build-text 'CgcBG5bbocFKcv+yIq8fPd6ORBA2MmZmxMzMGzMAAAAAAAegxsNYGAAAAAAAAmxMMmZmZmZmZGzsYGjFtsxMzMzWbzMzAYYAIwMGMmB'
-simc decode-build --build-text $'demonhunter="probe"\nspec=devourer\ntalents=CgcBG5bbocFKcv+yIq8fPd6ORBA2MmZmxMzMGzMAAAAAAAegxsNYGAAAAAAAAmxMMmZmZmZmZGzsYGjFtsxMzMzWbzMzAYYAIwMGMmB'
-simc decode-build --build-packet ./build-packet.json
-simc sim ./profile.simc
-cat ./profile.simc | simc sim -
-simc sim ./profile.simc --preset high-accuracy
-simc build-harness --actor-class warlock --spec demonology --talents ABC123 --line hero_talents=2 --line fight_style=Patchwerk
-simc validate-apl ./demonology_harness.simc ./warlock_demonology.simc --label base
-simc compare-apls ./demonology_harness.simc --base-apl ./warlock_demonology.simc --variant wowhead=./wowhead_variant.simc --variant icyveins=./icy_variant.simc --report-out ./compare.json
-simc variant-report ./compare.json
-simc apl-lists <simc-root>/ActionPriorityLists/default/monk_mistweaver.simc
-simc apl-graph <simc-root>/ActionPriorityLists/default/monk_mistweaver.simc
-simc apl-talents <simc-root>/ActionPriorityLists/default/monk_mistweaver.simc
-simc find-action rising_sun_kick --class monk
-simc trace-action <simc-root>/ActionPriorityLists/default/monk_mistweaver.simc rising_sun_kick --class monk
-simc apl-prune <simc-root>/ActionPriorityLists/default/monk_mistweaver.simc --targets 1
-simc apl-branch-trace <simc-root>/ActionPriorityLists/default/monk_mistweaver.simc --targets 1
-simc apl-intent <simc-root>/ActionPriorityLists/default/monk_mistweaver.simc --targets 1
-simc apl-intent-explain <simc-root>/ActionPriorityLists/default/monk_mistweaver.simc --targets 1
-simc priority <simc-root>/ActionPriorityLists/default/monk_mistweaver.simc --targets 5 --talents ABC123
-simc inactive-actions <simc-root>/ActionPriorityLists/default/monk_mistweaver.simc --targets 5 --talents ABC123
-simc opener <simc-root>/ActionPriorityLists/default/monk_mistweaver.simc --targets 5 --talents ABC123
-simc apl-branch-compare <simc-root>/ActionPriorityLists/default/monk_mistweaver.simc --left-targets 3 --right-targets 1
 simc analysis-packet <simc-root>/ActionPriorityLists/default/monk_mistweaver.simc --targets 1
-simc first-cast <simc-root>/profiles/MID1/MID1_Monk_Windwalker.simc tiger_palm --seeds 1 --max-time 20
-simc log-actions /tmp/simc-cli-example/seed_1.log tiger_palm rising_sun_kick
-simc compare-builds --base 'TALENT_STRING_A' --other 'TALENT_STRING_B' --actor-class druid --spec balance
-simc compare-builds --base 'TALENT_STRING_A' --other 'TALENT_STRING_B' --other 'TALENT_STRING_C' --tree class
-simc modify-build --talents 'TALENT_STRING' --swap-class-tree-from 'OTHER_TALENT_STRING' --actor-class druid --spec balance
-simc modify-build --talents 'TALENT_STRING' --add 'forestwalk:2' --remove 'innervate' --actor-class druid --spec balance
-simc run ./profile.simc --arg iterations=1 --arg desired_targets=1
-simc sync
-simc build
 ```
 
 SimulationCraft behavior:
@@ -916,17 +693,14 @@ SimulationCraft behavior:
 
 ## Output Conventions
 
-- Default output is compact JSON for machine consumption.
-- Use `--pretty` for human-readable JSON.
-- Successful responses omit `ok`.
-- Structured failures return `ok: false` with an `error` object.
-- Use `--fields` to project only selected dot-paths from the JSON payload.
-- Use `--fields-strict` to fail when a requested `--fields` path is missing.
-- Use `--compact` to truncate long string fields such as tooltip HTML blobs.
-- Use `--compact-max-chars` to tune truncation length (default `280`).
-- Use `--profile agent|human|debug` for output presets (`human` = pretty JSON, `debug` = pretty JSON plus a `diagnostics` block when present).
-- Use `--citation-pack` on Wowhead commands to attach a deterministic `citation_pack` with source URLs and per-claim anchors (`entity`, `compare`, and similar payloads).
+- The envelope, the exit codes, and the shared output flags are described once under [Global Flags](#global-flags) and in full in [foundation/ERROR_CONTRACT.md](foundation/ERROR_CONTRACT.md).
+- `warcraft schema` prints that envelope as a draft 2020-12 JSON Schema; the same document is checked in at [../schemas/envelope.schema.json](../schemas/envelope.schema.json) for tooling that cannot run the CLI.
+- Provider responses carry `ok: true` on success; structured failures on every binary carry `ok: false` plus an `error` object on stderr.
+- `--citation-pack` on Wowhead commands attaches a deterministic `citation_pack` with source URLs and per-claim anchors (`entity`, `compare`, and similar payloads).
 - Wrapper responses preserve provider provenance instead of flattening everything into a fake universal schema.
+
+The remaining sections go deeper on the Wowhead surfaces (routing, entity retrieval, bundles,
+querying, compare, and cache), because they carry the most workflow-specific behavior.
 
 ## Expansion And Routing
 
@@ -945,7 +719,7 @@ See [wowhead/EXPANSION_RESEARCH.md](wowhead/EXPANSION_RESEARCH.md) for the routi
 - `entity` is the compact main retrieval command.
 - `entity-page` is the richer page exploration command.
 - `comments` is the comment-focused command.
-- `comments` supports richer filters (`--date-from`, `--date-to`, `--min-replies`, `--author`, `--keyword`) and `--insights` for sample-backed freshness, near-duplicate groups, and cited top insights (no sentiment scores).
+- `comments` filters on date range, reply count, author, and keyword, and `--insights` adds sample-backed freshness, near-duplicate groups, and cited top insights (no sentiment scores).
 
 Regular `entity`, `guide`, and `comments` responses include a lightweight `linked_entities` preview with:
 - basic records
@@ -1040,10 +814,7 @@ It accepts either:
 - a direct bundle path
 - a selector such as guide ID under `--root`
 
-Useful filters:
-- `--kind`
-- `--section-title`
-- `--linked-source href|gatherer|multi`
+Results can be narrowed by match kind, section title, and linked-entity source (`href`, `gatherer`, or `multi`).
 
 The flattened `top` list prefers merged linked-entity rows over duplicate raw gatherer rows for the same entity.
 
@@ -1100,6 +871,9 @@ Cache cleanup and compact inspection:
 
 ## Related Docs
 
+- [reference/README.md](reference/README.md) — generated per-command flag reference
+- [foundation/ERROR_CONTRACT.md](foundation/ERROR_CONTRACT.md) — envelope, error codes, exit codes
+- [foundation/PRODUCT_PRINCIPLES.md](foundation/PRODUCT_PRINCIPLES.md)
 - [ROADMAP.md](ROADMAP.md)
 - [wowhead/ACCESS_METHODS.md](wowhead/ACCESS_METHODS.md)
 - [wowhead/EXPANSION_RESEARCH.md](wowhead/EXPANSION_RESEARCH.md)

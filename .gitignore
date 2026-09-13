@@ -13,3 +13,5 @@ __pycache__/
 .coverage.*
 .claude/scheduled_tasks.lock
 .tmp/
+tmp/
+dist/

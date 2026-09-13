@@ -1626,7 +1626,9 @@ def test_warcraftlogs_auth_status_reports_shared_state_summary(monkeypatch) -> N
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert "command" not in payload
+    # `auth status` is not in the payload-key registry, so it gets envelope keys but no canonical body.
+    assert payload["command"] == "status"
+    assert payload["schema_version"] == "1"
     assert "deprecated_keys" not in payload
     assert payload["auth"]["configured"] is True
     assert payload["auth"]["client_credentials_configured"] is True
@@ -2085,7 +2087,7 @@ def test_warcraftlogs_auth_whoami_requires_saved_user_token_not_client_credentia
     monkeypatch.setattr("warcraftlogs_cli.client.load_provider_auth_state", lambda provider: None)
 
     result = runner.invoke(warcraftlogs_app, ["auth", "whoami"])
-    assert result.exit_code == 1
+    assert result.exit_code == 3
 
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "missing_user_auth"
@@ -2127,7 +2129,7 @@ def test_warcraftlogs_auth_login_requires_client_credentials_cleanly(monkeypatch
         warcraftlogs_app,
         ["auth", "login", "--redirect-uri", "http://127.0.0.1:8787/callback"],
     )
-    assert result.exit_code == 1
+    assert result.exit_code == 3
 
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "missing_client_credentials"
@@ -2963,7 +2965,7 @@ def test_warcraftlogs_encounter_rankings_surfaces_embedded_provider_errors(monke
         ],
     )
 
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     payload = json.loads(result.stderr)
     assert payload["ok"] is False
     assert payload["error"]["code"] == "invalid_query"
@@ -3276,7 +3278,7 @@ def test_warcraftlogs_report_player_talents_rejects_missing_actor(monkeypatch) -
         warcraftlogs_app,
         ["report-player-talents", "abcd1234", "--fight-id", "1", "--actor-id", "999"],
     )
-    assert result.exit_code == 1
+    assert result.exit_code == 4
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "not_found"
     assert payload["error"]["message"] == "Actor ID 999 was not present in the selected fight."
@@ -3606,7 +3608,7 @@ def test_warcraftlogs_report_encounter_window_rejects_inverted_range(monkeypatch
             "5000",
         ],
     )
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "invalid_query"
 
@@ -4333,7 +4335,9 @@ def test_warcraftlogs_graphql_introspection_uses_named_operation(monkeypatch) ->
     assert captured["operation_name"] == "IntrospectionQuery"
     assert "__schema" in captured["query"]
     assert payload["introspection"]["queryType"]["name"] == "Query"
-    assert "data" not in payload
+    # Introspection results live under `introspection`/`graphql`; the envelope `data` slot stays empty.
+    assert payload["data"] == {}
+    assert payload["graphql"]["queryType"]["name"] == "Query"
 
 
 def test_warcraftlogs_graphql_surfaces_partial_warnings(monkeypatch) -> None:
@@ -4442,12 +4446,12 @@ def test_warcraftlogs_emit_helper_folds_client_warnings_into_payload() -> None:
     captured: dict[str, object] = {}
     original_emit = wcl_main.emit
 
-    def _capture(payload, *, pretty=False, err=False):
+    def _capture(ctx, payload, *, err=False):  # noqa: ANN001
         captured["payload"] = payload
 
     wcl_main.emit = _capture
     try:
-        ctx = type("Ctx", (), {"obj": wcl_main.RuntimeConfig()})()
+        ctx = type("Ctx", (), {"obj": wcl_main.RuntimeConfig(), "command": None})()
         wcl_main._emit(ctx, {"ok": True, "kind": "x"}, client=_WarningClient())
     finally:
         wcl_main.emit = original_emit
@@ -4467,18 +4471,28 @@ def test_warcraftlogs_emit_helper_passes_payload_through_when_no_warnings() -> N
     captured: dict[str, object] = {}
     original_emit = wcl_main.emit
 
-    def _capture(payload, *, pretty=False, err=False):
+    def _capture(ctx, payload, *, err=False):  # noqa: ANN001
         captured["payload"] = payload
 
     wcl_main.emit = _capture
     try:
-        ctx = type("Ctx", (), {"obj": wcl_main.RuntimeConfig()})()
+        ctx = type("Ctx", (), {"obj": wcl_main.RuntimeConfig(), "command": None})()
         wcl_main._emit(ctx, {"ok": True, "kind": "x"}, client=_CleanClient())
     finally:
         wcl_main.emit = original_emit
 
     payload = captured["payload"]
-    assert payload == {"ok": True, "kind": "x"}
+    # No client warnings to fold in, so the only additions are the shared envelope keys.
+    assert payload == {
+        "ok": True,
+        "kind": "x",
+        "provider": "warcraftlogs",
+        "command": "",
+        "schema_version": "1",
+        "query": None,
+        "provenance": {},
+        "data": {},
+    }
 
 
 def test_warcraftlogs_character_rankings_surfaces_partial_warnings_as_notes(monkeypatch) -> None:
@@ -5036,7 +5050,7 @@ def test_warcraftlogs_report_fights_requires_public_auth_not_generic_missing_aut
     monkeypatch.setattr("warcraftlogs_cli.client.load_provider_auth_state", lambda provider: None)
 
     result = runner.invoke(warcraftlogs_app, ["report-fights", "abcd1234"])
-    assert result.exit_code == 1
+    assert result.exit_code == 3
 
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "missing_public_auth"
@@ -6265,3 +6279,289 @@ def test_warcraftlogs_client_probe_live_public_api_always_uses_client_endpoint(m
     assert payload["limitPerHour"] == 100
     assert captured["url"] == RETAIL_PROFILE.api_url
     assert captured["headers"]["Authorization"] == "Bearer client-token"
+
+
+def _pending_auth_state(tmp_path: Path, monkeypatch, payload: dict[str, object]) -> Path:  # noqa: ANN001
+    """Write a pending OAuth state file the auth callback commands will read."""
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state-home"))
+    state_file = tmp_path / "state-home" / "warcraft" / "providers" / "warcraftlogs.json"
+    state_file.parent.mkdir(parents=True)
+    state_file.write_text(json.dumps(payload))
+    return state_file
+
+
+def test_warcraftlogs_auth_login_rejects_mismatched_callback_state(monkeypatch, tmp_path) -> None:
+    _pending_auth_state(
+        tmp_path,
+        monkeypatch,
+        {
+            "pending_auth_mode": "authorization_code",
+            "pending_state": "pending-state-123",
+            "redirect_uri": "http://127.0.0.1:8787/callback",
+        },
+    )
+
+    def _no_exchange(ctx):  # noqa: ANN001, ANN202
+        raise AssertionError("the code must not be exchanged after a state mismatch")
+
+    monkeypatch.setattr("warcraftlogs_cli.main._client", _no_exchange)
+
+    result = runner.invoke(
+        warcraftlogs_app,
+        ["auth", "login", "--redirect-uri", "http://127.0.0.1:8787/callback", "--code", "code-123", "--state", "attacker-state"],
+    )
+
+    assert result.exit_code == 1
+    payload = json.loads(result.stderr)
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "state_mismatch"
+
+
+def test_warcraftlogs_auth_login_rejects_missing_callback_state(monkeypatch, tmp_path) -> None:
+    _pending_auth_state(
+        tmp_path,
+        monkeypatch,
+        {
+            "pending_auth_mode": "authorization_code",
+            "pending_state": "pending-state-123",
+            "redirect_uri": "http://127.0.0.1:8787/callback",
+        },
+    )
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _FakeWarcraftLogsClient())
+
+    result = runner.invoke(
+        warcraftlogs_app,
+        ["auth", "login", "--redirect-uri", "http://127.0.0.1:8787/callback", "--code", "code-123"],
+    )
+
+    assert result.exit_code == 1
+    assert json.loads(result.stderr)["error"]["code"] == "missing_state"
+
+
+def test_warcraftlogs_auth_login_rejects_mismatched_redirect_uri(monkeypatch, tmp_path) -> None:
+    _pending_auth_state(
+        tmp_path,
+        monkeypatch,
+        {
+            "pending_auth_mode": "authorization_code",
+            "pending_state": "pending-state-123",
+            "redirect_uri": "http://127.0.0.1:8787/callback",
+        },
+    )
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _FakeWarcraftLogsClient())
+
+    result = runner.invoke(
+        warcraftlogs_app,
+        [
+            "auth",
+            "login",
+            "--redirect-uri",
+            "http://127.0.0.1:9999/other",
+            "--code",
+            "code-123",
+            "--state",
+            "pending-state-123",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert json.loads(result.stderr)["error"]["code"] == "redirect_uri_mismatch"
+
+
+def test_warcraftlogs_auth_pkce_login_rejects_mismatched_callback_state(monkeypatch, tmp_path) -> None:
+    _pending_auth_state(
+        tmp_path,
+        monkeypatch,
+        {
+            "pending_auth_mode": "pkce",
+            "pending_state": "pending-state-456",
+            "redirect_uri": "http://127.0.0.1:8787/callback",
+            "code_verifier": "verifier-123",
+        },
+    )
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _FakeWarcraftLogsClient())
+
+    result = runner.invoke(
+        warcraftlogs_app,
+        [
+            "auth",
+            "pkce-login",
+            "--redirect-uri",
+            "http://127.0.0.1:8787/callback",
+            "--code",
+            "code-123",
+            "--state",
+            "attacker-state",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert json.loads(result.stderr)["error"]["code"] == "state_mismatch"
+
+
+def test_warcraftlogs_auth_pkce_login_rejects_mismatched_redirect_uri(monkeypatch, tmp_path) -> None:
+    _pending_auth_state(
+        tmp_path,
+        monkeypatch,
+        {
+            "pending_auth_mode": "pkce",
+            "pending_state": "pending-state-456",
+            "redirect_uri": "http://127.0.0.1:8787/callback",
+            "code_verifier": "verifier-123",
+        },
+    )
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _FakeWarcraftLogsClient())
+
+    result = runner.invoke(
+        warcraftlogs_app,
+        [
+            "auth",
+            "pkce-login",
+            "--redirect-uri",
+            "http://127.0.0.1:9999/other",
+            "--code",
+            "code-123",
+            "--state",
+            "pending-state-456",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert json.loads(result.stderr)["error"]["code"] == "redirect_uri_mismatch"
+
+
+def test_warcraftlogs_auth_pkce_login_rejects_callback_without_pending_verifier(monkeypatch, tmp_path) -> None:
+    _pending_auth_state(
+        tmp_path,
+        monkeypatch,
+        {"pending_auth_mode": "pkce", "pending_state": "pending-state-456", "redirect_uri": "http://127.0.0.1:8787/callback"},
+    )
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _FakeWarcraftLogsClient())
+
+    result = runner.invoke(
+        warcraftlogs_app,
+        [
+            "auth",
+            "pkce-login",
+            "--redirect-uri",
+            "http://127.0.0.1:8787/callback",
+            "--code",
+            "code-123",
+            "--state",
+            "pending-state-456",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert json.loads(result.stderr)["error"]["code"] == "missing_code_verifier"
+
+
+@pytest.fixture
+def _authenticated_transport(monkeypatch) -> None:  # noqa: ANN001
+    """Skip the OAuth token round trip so a test can drive the report request's transport seam."""
+    monkeypatch.setattr(WarcraftLogsClient, "_token", lambda self: "client-token")
+    monkeypatch.setattr(WarcraftLogsClient, "_user_token", lambda self: "user-token")
+
+
+def _http_status_error(status_code: int) -> httpx.HTTPStatusError:
+    request = httpx.Request("POST", RETAIL_PROFILE.api_url)
+    response = httpx.Response(status_code, request=request)
+    return httpx.HTTPStatusError(f"HTTP {status_code}", request=request, response=response)
+
+
+def test_warcraftlogs_report_emits_network_envelope_when_transport_fails(monkeypatch, _authenticated_transport) -> None:
+    def _raise(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+        raise httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr("warcraftlogs_cli.client.request_with_retries", _raise)
+
+    result = runner.invoke(warcraftlogs_app, ["report", "abcd1234"])
+
+    assert result.exit_code == 5
+    assert result.stdout == ""
+    payload = json.loads(result.stderr)
+    assert payload["ok"] is False
+    assert payload["provider"] == "warcraftlogs"
+    assert payload["schema_version"] == "1"
+    assert payload["error"]["code"] == "network_error"
+    assert "ConnectError" in payload["error"]["message"]
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["regions"],
+        ["encounter-rankings", "--zone-id", "1", "--boss-id", "1"],
+        ["guild", "us", "illidan", "method"],
+        ["character", "us", "illidan", "nick"],
+        ["report-fights", "abcd1234"],
+        ["report-events", "abcd1234", "--start-time", "0", "--end-time", "1"],
+        ["graphql", "--query", "{ rateLimitData { limitPerHour } }"],
+        ["report-encounter", "abcd1234", "--fight-id", "1"],
+        ["report-player-talents", "abcd1234", "--fight-id", "1", "--actor-id", "1"],
+        ["boss-kills", "--zone-id", "1", "--boss-id", "1"],
+        ["spec-kill-samples", "--zone-id", "1", "--boss-id", "1", "--spec-name", "Arms"],
+        ["auth", "whoami"],
+    ],
+    ids=lambda args: args[0] if args[0] != "auth" else "auth-whoami",
+)
+def test_warcraftlogs_commands_emit_network_envelope_when_transport_fails(
+    monkeypatch, _authenticated_transport, args: list[str]
+) -> None:
+    def _raise(*_args, **_kwargs):  # noqa: ANN002, ANN003, ANN202
+        raise httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr("warcraftlogs_cli.client.request_with_retries", _raise)
+
+    result = runner.invoke(warcraftlogs_app, args)
+
+    assert result.exit_code == 5, result.stderr
+    assert result.stdout == ""
+    payload = json.loads(result.stderr)
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "network_error"
+
+
+def test_warcraftlogs_report_emits_not_found_envelope_on_upstream_404(monkeypatch, _authenticated_transport) -> None:
+    def _raise(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+        raise _http_status_error(404)
+
+    monkeypatch.setattr("warcraftlogs_cli.client.request_with_retries", _raise)
+
+    result = runner.invoke(warcraftlogs_app, ["report", "abcd1234"])
+
+    assert result.exit_code == 4
+    assert json.loads(result.stderr)["error"]["code"] == "not_found"
+
+
+def test_warcraftlogs_report_emits_auth_envelope_on_upstream_401(monkeypatch, _authenticated_transport) -> None:
+    def _raise(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+        raise _http_status_error(401)
+
+    monkeypatch.setattr("warcraftlogs_cli.client.request_with_retries", _raise)
+
+    result = runner.invoke(warcraftlogs_app, ["report", "abcd1234"])
+
+    assert result.exit_code == 3
+    assert json.loads(result.stderr)["error"]["code"] == "auth_failed"
+
+
+def test_warcraftlogs_provider_surface_returns_conforming_envelopes() -> None:
+    from warcraft_core.envelope import envelope_violations
+    from warcraft_core.provider import ProviderSurface
+    from warcraftlogs_cli.provider import PROVIDER
+
+    assert isinstance(PROVIDER, ProviderSurface)
+
+    search_envelope = PROVIDER.search("https://www.warcraftlogs.com/reports/abcd1234#fight=3")
+    assert envelope_violations(search_envelope) == []
+    assert search_envelope["data"]["count"] == 1
+    assert search_envelope["data"]["results"][0]["report_reference"]["fight_id"] == 3
+
+    resolve_envelope = PROVIDER.resolve("abcd1234")
+    assert envelope_violations(resolve_envelope) == []
+    assert resolve_envelope["data"]["resolved"] is True
+
+    doctor_envelope = PROVIDER.doctor(live=False)
+    assert envelope_violations(doctor_envelope) == []
+    assert doctor_envelope["data"]["capabilities"]["doctor"] == "ready"

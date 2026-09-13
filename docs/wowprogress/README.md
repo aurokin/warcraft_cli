@@ -1,121 +1,110 @@
 # WowProgress CLI
 
-## Status
+`wowprogress` reads WowProgress guild pages, character pages, and PvE leaderboards, and turns them
+into JSON for agents. It needs no credentials.
 
-`wowprogress` is now implemented as a working rankings/profile provider with its first sample-backed analytics primitives.
+Every command emits the shared envelope (`ok`, `provider`, `command`, `kind`, `schema_version`,
+`query`, `provenance`, `data`, `error`) and the exit codes defined in
+[docs/foundation/ERROR_CONTRACT.md](../foundation/ERROR_CONTRACT.md). Payload keys are also still
+copied next to the envelope keys for existing agents; those top-level copies are deprecated, read
+`data` instead. Global flags (`--pretty`, `--compact`, `--compact-max-chars`, `--fields`,
+`--fields-strict`, `--profile`) go before the subcommand.
 
-Current command surface:
-- `wowprogress doctor`
-- `wowprogress search`
-- `wowprogress resolve`
-- `wowprogress guild`
-- `wowprogress guild-history`
-- `wowprogress guild-ranks`
-- `wowprogress guild-snapshot`
-- `wowprogress history-trajectory`
-- `wowprogress character`
-- `wowprogress leaderboard`
-- `wowprogress sample`
-- `wowprogress distribution`
-- `wowprogress threshold`
+## Commands
 
-Current quality notes:
-- structured guild and character lookups are the primary search and resolve path
-- direct route probes now treat canonical WowProgress realm forms like `US-Area 52` as exact matches for structured inputs like `area-52`
-- exact short-name structured queries like `guild us area-52 xD` now resolve confidently instead of failing low-score conservatively
-- structured realm normalization now tolerates some natural multi-word forms like `area 52`
-- trailing unsupported qualifier terms are excluded explicitly and surfaced back as query-normalization metadata
-- live guild and character retrieval coverage now validates rank extraction as well as basic profile parsing
-- provider-local live coverage now exists for structured search, resolve, and leaderboard contracts
-- PvE leaderboard sampling, distributions, and threshold estimates now expose freshness, provenance, and explicit caveats instead of pretending to be direct smart-answer surfaces
-- top-leaderboard guild-profile sampling now combines leaderboard context with direct guild-page data so agents can inspect progression, item level, and encounter detail without manually opening multiple browser pages
-- leaderboard and guild-profile samples now report sampling boundaries explicitly instead of implying complete visibility beyond the requested top slice
-- guild-profile analytics now support explicit post-sample filtering for faction, difficulty, world rank, item level, and encounter slices
-- guild history across tiers is now a first-class surface, built from the public `rating.tierNN` guild pages instead of forcing agents to scrape raw HTML manually
-- direct guild and character lookups now use shared normalization for region, realm, and name input, including common realm variants like `Mal'Ganis` and `area 52`
-- `guild-snapshot` composes current progress, world/region/realm ranks, item level, encounter summary, and a per-tier rank series into one provider-local payload with citations and freshness (no duplicate page fetch)
-- `history-trajectory` reports tier-over-tier rank and item-level deltas (each tier carrying its `page_url`), with an explicit `improved` flag and a caveat that consecutive tiers are different raids/difficulties — descriptive movement, not a normalized metric
-- raw `guild-history` rows now carry the parsed difficulty token (e.g. `M`) instead of the full `8/8 (M)` summary string
+| Command | What it returns |
+| --- | --- |
+| `wowprogress doctor` | Transport mode, impersonation profile, cache configuration, capabilities |
+| `wowprogress search "<query>"` | Ranked guild/character route probes for a structured query |
+| `wowprogress resolve "<query>"` | The single next command when one candidate is unambiguous |
+| `wowprogress guild <region> <realm> <name>` | One guild page: progress, ranks, item level, encounters |
+| `wowprogress guild-history <region> <realm> <name>` | Every archived `rating.tierNN` page for the guild |
+| `wowprogress guild-ranks <region> <realm> <name>` | Per-tier world/region/realm ranks only |
+| `wowprogress guild-snapshot <region> <realm> <name>` | Current progress + ranks + item level + encounters + rank series |
+| `wowprogress history-trajectory <region> <realm> <name>` | Tier-over-tier rank and item-level deltas |
+| `wowprogress character <region> <realm> <name>` | One character page: class, item level, SimDPS, PvE score |
+| `wowprogress leaderboard pve <region>` | One PvE leaderboard page |
+| `wowprogress sample pve-leaderboard` | Sampled leaderboard rows with sampling boundaries |
+| `wowprogress sample pve-guild-profiles` | Sampled leaderboard rows enriched with their guild pages |
+| `wowprogress distribution pve-leaderboard` | One metric distributed across a sampled leaderboard slice |
+| `wowprogress distribution pve-guild-profiles` | One metric distributed across sampled guild profiles |
+| `wowprogress threshold pve-leaderboard` | Where a target value sits in a sampled leaderboard slice |
+| `wowprogress threshold pve-guild-profiles` | Where a target value sits in a sampled guild-profile slice |
 
-## Why Add It
+### Flags
 
-`wowprogress` adds a different kind of value from guide and wiki sources: guild progression, character rankings, roster context, and recruitment-style profile discovery.
+- `search`, `resolve`: `--limit` (1-50, default 5).
+- `leaderboard`: `--realm`, `--limit` (1-100, default 25). Only the `pve` kind exists; anything else
+  exits 2 with `invalid_query`.
+- `sample pve-leaderboard`: `--region` (required), `--realm`, `--limit` (1-100, default 25).
+- `distribution pve-leaderboard`: `--region` (required), `--realm`, `--limit` (1-100, default 50),
+  `--metric` one of `progress`, `difficulty`, `realm`, `bosses_killed`, `rank` (default `progress`).
+- `threshold pve-leaderboard`: the `distribution` flags plus `--value` (required), `--nearest`
+  (1-50, default 10), and `--metric` one of `rank`, `bosses_killed` (default `rank`).
+- `sample pve-guild-profiles`: `--region` (required), `--realm`, `--limit` (1-25, default 10) and
+  the post-sample filters `--faction`, `--difficulty`, `--world-rank-min`, `--world-rank-max`,
+  `--item-level-min`, `--item-level-max`, `--encounter` (`--faction`, `--difficulty`, and
+  `--encounter` are repeatable).
+- `distribution pve-guild-profiles`: the sample flags plus `--metric` one of `progress`, `faction`,
+  `item_level_average`, `world_rank`, `encounter` (default `progress`).
+- `threshold pve-guild-profiles`: the sample flags plus `--value` (required), `--nearest` (1-25,
+  default 5), and `--metric` one of `world_rank`, `item_level_average` (default `world_rank`).
 
-It overlaps somewhat with `raiderio`, but not enough to skip. The overlap is useful because it will force us to prove which profile/ranking abstractions are genuinely shared.
+## Search and resolve behaviour
 
-## Research Summary
+Discovery is structured, not free text. `search` accepts `<region> <realm> <name>` with an optional
+leading `guild`/`character` token; anything it cannot parse returns a zero-result payload with
+`suggested_queries` instead of guessing. Realm variants (`Mal'Ganis`, `area 52`, `area-52`) and
+canonical forms like `US-Area 52` are treated as the same realm. Trailing recruitment-style terms
+(`recruiting`, `roster`, ...) are dropped and reported back in `excluded_terms` plus a
+`normalization_hint`. `resolve` only sets `resolved: true` when the top candidate scores well ahead
+of the runner-up and is not ambiguous between a guild and a character.
 
-Observed from live pages:
-- direct HTML fetch works without browser automation
-- current raid progression is visible in server-rendered guild ranking pages
-- character ranking pages expose many sortable profile-style metrics
-- the site is heavily leaderboard-oriented and filter-heavy
+## Transport and browser impersonation
 
-Sample observations from `https://www.wowprogress.com/` and `https://www.wowprogress.com/char_level/us`:
-- current raid progression is listed directly in HTML
-- guild, realm, and region context are visible
-- character pages and ranking pages expose progression-style metrics and profile links
+WowProgress sits behind Cloudflare bot protection: the profile and leaderboard routes this
+provider needs answer default Python HTTP clients with a `Just a moment...` challenge page instead
+of the page content. The client therefore fetches through `curl_cffi` with the `chrome136`
+impersonation profile (`DEFAULT_IMPERSONATE` in
+`packages/wowprogress-cli/src/wowprogress_cli/client.py`), which reproduces a Chrome 136 TLS and
+HTTP/2 fingerprint. This is the one sanctioned exception to the repo's transport rules; see
+[docs/foundation/OPERATIONAL_BOUNDARIES.md](../foundation/OPERATIONAL_BOUNDARIES.md).
 
-## Access Model
+Rationale and limits:
 
-This is now treated as a rankings/profile service using browser-fingerprint HTTP fetches:
-- fetch guild, character, and leaderboard HTML directly
-- extract guild, character, realm, and progression context
-- cache leaderboard and profile pages because the pages are expensive and fast-moving
-- use the site-native `u_search` route conservatively for structured guild/character discovery
-- avoid promising broad free-text discovery while the public search surface remains constrained
+- only public, unauthenticated, server-rendered pages are fetched; nothing is logged into and no
+  paywall or private view is bypassed
+- requests are read-only `GET`s and go through the shared per-host rate limiter
+  (`warcraft_api.http.DEFAULT_RATE_LIMITER`, `WARCRAFT_HTTP_MIN_INTERVAL_SECONDS`, default 0.25s)
+- pages are cached on disk so repeated agent turns do not re-fetch (see below)
+- when Cloudflare still serves a challenge page the client fails with the `blocked` error code and
+  exit 5 instead of retrying around the block
 
-## Current CLI Shape
+## Caching
 
-- `wowprogress doctor`
-- `wowprogress search "<query>"`
-- `wowprogress resolve "<query>"`
-- `wowprogress guild <region> <realm> <name>`
-- `wowprogress guild-history <region> <realm> <name>`
-- `wowprogress guild-ranks <region> <realm> <name>`
-- `wowprogress guild-snapshot <region> <realm> <name>`
-- `wowprogress history-trajectory <region> <realm> <name>`
-- `wowprogress character <region> <realm> <name>`
-- `wowprogress leaderboard pve <region> [--realm <realm>]`
-- `wowprogress sample pve-leaderboard --region <region> [--realm <realm>]`
-- `wowprogress sample pve-guild-profiles --region <region> [--realm <realm>]`
-- `wowprogress distribution pve-leaderboard --region <region> --metric <metric> [--realm <realm>]`
-- `wowprogress distribution pve-guild-profiles --region <region> --metric <metric> [--realm <realm>]`
-- `wowprogress threshold pve-leaderboard --region <region> --metric <metric> --value <value> [--realm <realm>]`
-- `wowprogress threshold pve-guild-profiles --region <region> --metric <metric> --value <value> [--realm <realm>]`
+Guild, character, and leaderboard HTML are cached through `warcraft_api.cache`:
 
-## What Can Reuse Shared Code
+| Variable | Default |
+| --- | --- |
+| `WOWPROGRESS_CACHE_BACKEND` | `file` (`none` disables caching) |
+| `WOWPROGRESS_CACHE_DIR` | provider cache root `/wowprogress/http` |
+| `WOWPROGRESS_GUILD_CACHE_TTL_SECONDS` | 900 |
+| `WOWPROGRESS_CHARACTER_CACHE_TTL_SECONDS` | 900 |
+| `WOWPROGRESS_LEADERBOARD_CACHE_TTL_SECONDS` | 300 |
+| `WOWPROGRESS_REDIS_URL` / `WOWPROGRESS_REDIS_PREFIX` | unset / `wowprogress_cli` (used when the backend is `redis`) |
 
-- cache and HTTP infrastructure
-- shared output shaping
-- wrapper provider contract
-- search and resolve payload contracts
+`doctor` reports the resolved cache settings. Sampled payloads report `freshness.cache_ttl_seconds`
+as `null` when caching is off, so they never claim a TTL that is not applied.
 
-## What Should Stay Service-Specific
+## Analytics caveats
 
-- HTML parsing rules
-- filter and ranking semantics
-- guild/character identifier resolution
-- site-specific leaderboard normalization
-- leaderboard analytics semantics
+Sampled surfaces describe the slice they fetched and nothing beyond it: every payload carries
+`sample.sampling` (requested limit, returned count, skipped rows, source scope), `freshness`, and
+`citations`. `history-trajectory` compares consecutive tiers, which are different raids and
+difficulties, so its deltas are descriptive movement rather than a normalized skill metric. See
+[docs/foundation/SAFE_ANALYTICS_RULES.md](../foundation/SAFE_ANALYTICS_RULES.md).
 
-## What This Service Has Validated
+## Related
 
-- whether profile and leaderboard payloads can share any contract with `raiderio`
-- whether cross-source guild/character resolution belongs in shared code or only in the wrapper
-- that a browser-fingerprint HTTP transport is enough for a real no-auth WowProgress provider without adding a browser-runtime dependency
-- that leaderboard analytics can stay useful and trustworthy when they are framed as sampled primitives instead of fake direct answers
-- that enriching a sampled leaderboard slice with direct guild-profile fetches can make the CLI materially more complete than a single browser page while still preserving explicit sample boundaries
-
-## Risks
-
-- the site is old and filter-heavy, so HTML stability may be inconsistent
-- rankings are time-sensitive and may need careful cache policy
-- some useful pages may not map cleanly to stable identifiers
-- discovery remains intentionally structured because the public search surface is less reliable than direct profile and leaderboard routes
-
-## Source Links
-
-- `https://www.wowprogress.com/`
-- `https://www.wowprogress.com/char_level/us`
+- [Design record](../architecture/history/wowprogress.md)
 - [Roadmap](../ROADMAP.md)

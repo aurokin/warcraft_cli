@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
-from wowhead_cli.cache import (
+from warcraft_api.cache import (
     CacheTTLConfig,
     FileCacheStore,
     RedisCacheStore,
@@ -21,7 +21,7 @@ from wowhead_cli.wowhead_client import WowheadClient
 def test_file_cache_store_roundtrips_and_expires(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     store = FileCacheStore(tmp_path)
     now = 1000.0
-    monkeypatch.setattr("wowhead_cli.cache.time.time", lambda: now)
+    monkeypatch.setattr("warcraft_api.cache.time.time", lambda: now)
 
     store.set("search_suggestions:abc123", {"query": "thunderfury"}, ttl_seconds=60)
     assert store.get("search_suggestions:abc123") == {"query": "thunderfury"}
@@ -29,7 +29,7 @@ def test_file_cache_store_roundtrips_and_expires(tmp_path: Path, monkeypatch: py
     cache_file = tmp_path / "search_suggestions" / "abc123.json"
     assert cache_file.exists()
 
-    monkeypatch.setattr("wowhead_cli.cache.time.time", lambda: now + 61)
+    monkeypatch.setattr("warcraft_api.cache.time.time", lambda: now + 61)
     assert store.get("search_suggestions:abc123") is None
     assert not cache_file.exists()
 
@@ -75,7 +75,7 @@ def test_inspect_file_cache_summarizes_active_expired_and_invalid_entries(
 ) -> None:
     store = FileCacheStore(tmp_path)
     now = 1000.0
-    monkeypatch.setattr("wowhead_cli.cache.time.time", lambda: now)
+    monkeypatch.setattr("warcraft_api.cache.time.time", lambda: now)
 
     store.set("search_suggestions:active", {"query": "thunderfury"}, ttl_seconds=60)
     store.set("entity_response:expired", {"entity": {"id": 19019}}, ttl_seconds=10)
@@ -83,7 +83,7 @@ def test_inspect_file_cache_summarizes_active_expired_and_invalid_entries(
     invalid_path.parent.mkdir(parents=True)
     invalid_path.write_text("not-json", encoding="utf-8")
 
-    monkeypatch.setattr("wowhead_cli.cache.time.time", lambda: now + 20)
+    monkeypatch.setattr("warcraft_api.cache.time.time", lambda: now + 20)
     summary = inspect_file_cache(tmp_path)
 
     assert summary["totals"] == {"active": 1, "expired": 1, "invalid": 1, "total": 3}
@@ -99,7 +99,7 @@ def test_inspect_file_cache_groups_root_level_hashed_entries_under_legacy_namesp
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     now = 1000.0
-    monkeypatch.setattr("wowhead_cli.cache.time.time", lambda: now + 20)
+    monkeypatch.setattr("warcraft_api.cache.time.time", lambda: now + 20)
     legacy_path = tmp_path / ("a" * 64 + ".json")
     legacy_path.write_text(json.dumps({"expires_at": now + 10, "payload": {}}), encoding="utf-8")
 
@@ -113,7 +113,7 @@ def test_inspect_file_cache_groups_root_level_hashed_entries_under_legacy_namesp
 
 def test_repair_file_cache_prunes_legacy_unscoped_entries(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     now = 1000.0
-    monkeypatch.setattr("wowhead_cli.cache.time.time", lambda: now + 20)
+    monkeypatch.setattr("warcraft_api.cache.time.time", lambda: now + 20)
     legacy_path = tmp_path / ("a" * 64 + ".json")
     legacy_path.write_text(json.dumps({"expires_at": now + 10, "payload": {}}), encoding="utf-8")
     namespaced_path = tmp_path / "search_suggestions" / "active.json"
@@ -145,13 +145,13 @@ def test_clear_file_cache_supports_namespace_and_expired_only(
 ) -> None:
     store = FileCacheStore(tmp_path)
     now = 1000.0
-    monkeypatch.setattr("wowhead_cli.cache.time.time", lambda: now)
+    monkeypatch.setattr("warcraft_api.cache.time.time", lambda: now)
 
     store.set("search_suggestions:active", {"query": "thunderfury"}, ttl_seconds=60)
     store.set("entity_response:expired", {"entity": {"id": 19019}}, ttl_seconds=10)
     store.set("entity_response:active", {"entity": {"id": 19020}}, ttl_seconds=60)
 
-    monkeypatch.setattr("wowhead_cli.cache.time.time", lambda: now + 20)
+    monkeypatch.setattr("warcraft_api.cache.time.time", lambda: now + 20)
     removed = clear_file_cache(tmp_path, namespaces=("entity_response",), expired_only=True)
     assert removed == {"total": 1, "namespaces": {"entity_response": 1}}
 

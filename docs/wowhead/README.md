@@ -1,311 +1,167 @@
 # Wowhead CLI
 
-Companion docs in this folder:
+`wowhead` queries Wowhead over plain HTTP and returns JSON. It does no browser automation and
+needs no credentials.
+
+Companion docs:
 - [ACCESS_METHODS.md](ACCESS_METHODS.md)
 - [CONTRACTS.md](CONTRACTS.md)
 - [EXPANSION_RESEARCH.md](EXPANSION_RESEARCH.md)
 - [NORMALIZATION.md](NORMALIZATION.md)
+- [History and design record](../architecture/history/wowhead.md)
 
-## Role In The Monorepo
+## Output Contract
 
-`wowhead` remains the most mature service CLI and should become the first consumer of shared monorepo libraries.
+Every command prints one JSON document. Successful payloads carry the shared envelope keys
+(`ok`, `provider`, `command`, `kind`, `schema_version`, `query`, `provenance`, `data`) alongside
+Wowhead's historical top-level keys such as `results`, `entity`, `comments`, and `linked_entities`.
+`data` stays empty because the payload keys are flat.
 
-It should keep its current command surface stable while shared infrastructure is extracted around it.
+Failures print an error envelope on stderr and exit with the shared code:
 
-## Current Strengths
+| Exit | Meaning |
+|------|---------|
+| 0 | success |
+| 1 | generic failure (parse errors, unexpected upstream payloads, bad cache config) |
+| 2 | usage error (bad flag value, rejected filter, invalid date range) |
+| 3 | authentication failure |
+| 4 | upstream 404 |
+| 5 | transport failure, timeout, or other upstream HTTP error |
 
-- page extraction and metadata parsing
-- guide bundle export and query workflows
-- local bundle inspection and refresh
-- cache layers and cache inspection
-- search and resolve patterns
+Full contract: [docs/foundation/ERROR_CONTRACT.md](../foundation/ERROR_CONTRACT.md).
 
-## Current Surface
+## Global Flags
 
-Implemented now:
-- `search`
-- `resolve`
-- `news`
-- `news-post`
-- `blue-tracker`
-- `blue-topic`
-- `guides <category>`
-- `talent-calc`
-- `talent-calc-packet`
-- `profession-tree`
-- `dressing-room`
-- `profiler`
-- `entity`
-- `entity-page`
-- `comments`
-- `compare`
-- `linked-graph`
-- `guide`
-- `guide-full`
-- `guide-export`
-- `guide-query`
-- `guide-bundle-*`
-- `cache-inspect`
-- `cache-clear`
-- `cache-repair`
-- `expansions`
+Global flags go before the subcommand.
 
-This is strong for:
-- direct entity lookup
-- direct guide lookup
-- comment extraction
-- linked-entity traversal
-- local guide bundle workflows
+| Flag | Effect |
+|------|--------|
+| `--pretty` | pretty-print JSON instead of the compact default |
+| `--compact` | truncate long strings to shrink the payload |
+| `--compact-max-chars N` | truncation threshold for `--compact` (default 280) |
+| `--fields a.b,c` | project only the named dot-paths |
+| `--fields-strict` | fail with exit 2 when a requested `--fields` path is missing |
+| `--profile agent\|human\|debug` | output preset; `debug` adds a `diagnostics` block |
+| `--stream` | emit large arrays as JSONL: a header line then one `{"record": ...}` per row |
+| `--expansion KEY` | route to an expansion profile (`retail`, `classic`, `tbc`, `wotlk`, `cata`, `mop-classic`, `ptr`, `beta`, `classic-ptr`) |
+| `--normalize-canonical-to-expansion` | rewrite canonical entity URLs back to the selected expansion |
+| `--citation-pack` | attach a deterministic `citation_pack` of source URLs and per-claim anchors |
 
-It is still weak or missing for:
-- database-family browsing and filtering
-- deeper tool decoding beyond the first tool-state slice
-- deeper guide category coverage beyond the first listing surface
-- deeper timeline filtering and enrichment beyond the first listing/detail summaries
+Example:
 
-Current decision:
-- generic Wowhead database pages are intentionally deferred for now
-- direct `entity`, `entity-page`, `comments`, `search`, `resolve`, `guide`, `news`, `blue-tracker`, and `guides <category>` are the preferred surfaces until a concrete browse/filter workflow requires more
-- database-page support should only move forward when the current direct commands cannot answer a real user or agent workflow cleanly
+```bash
+wowhead --pretty --expansion classic entity item 19019
+```
 
-## Quality Review Findings
+When `--expansion` is omitted, `search` (from its query), `entity` and `entity-page` (from `--url`),
+and `compare` (from its entity refs) auto-detect the profile from a Wowhead URL; the payload reports
+which rule applied in `expansion_source` (`flag`, `url`, or `default`).
 
-The current `wowhead` CLI is more mature than the other providers, but the review surfaced several meaningful gaps:
+## Commands
 
-- the CLI is still centered on direct entity pages and direct guide fetches, while live Wowhead also exposes first-class database browsing and filtering
-- tool surfaces like Talent Calculator, Profession Tree Calculator, Dressing Room, and Profiler are not represented in the CLI at all
-- guide support is strong for direct guide IDs and URLs, but category/index discovery like `guides/classes`, `guides/professions`, and `guides/raids` is not modeled
-- there is no dedicated support for Wowhead `news` or `blue-tracker`
-- Wowhead type support is spread across multiple registries, and they are already drifting
+Discovery and routing:
 
-The type-registry drift was the most important structural issue to fix before adding more Wowhead features:
-- search suggestions map type `112` to `companion`
-- but `companion` is not consistently supported across entity parsing, hydrate support, search hints, and resolve filters
+| Command | Purpose |
+|---------|---------|
+| `search QUERY` | ranked entity candidates from Wowhead search suggestions |
+| `resolve QUERY` | the single most likely entity plus the follow-up command to run |
+| `expansions` | supported expansion profiles and their routing |
+| `expansion-detect URL` | which profile a Wowhead URL belongs to |
+| `doctor` | endpoint reachability, parser shape checks, cache readiness |
 
-That is now refactored into one canonical internal type registry before adding more database families.
+Entities:
 
-## News And Blue Tracker
+| Command | Purpose |
+|---------|---------|
+| `entity TYPE ID` | tooltip payload, optionally with comments and a linked-entity preview |
+| `entity-page TYPE ID` | parsed page metadata, linked entities, and comments |
+| `comments TYPE ID` | ranked comments with filters and optional insight rollups |
+| `compare REF REF ...` | field-by-field diff of two or more entities |
+| `linked-graph TYPE ID` | bounded linked-entity graph rooted at one entity |
 
-Live Wowhead currently exposes:
-- `https://www.wowhead.com/news`
-- `https://www.wowhead.com/blue-tracker`
+Guides:
 
-Current CLI state:
-- there is now an explicit `news` command
-- there is now an explicit `blue-tracker` command
-- both commands support topic filtering plus bounded date-window scans
-- both surfaces now also have detail-fetch companions:
-  - `news-post`
-  - `blue-topic`
-- generic `search` / `resolve` are still not a reliable substitute for those surfaces
+| Command | Purpose |
+|---------|---------|
+| `guides CATEGORY` | guide listing for a category with author, patch, and updated-window filters |
+| `guide REF` | one guide with sections, linked entities, and citations |
+| `guide-full REF` | the same guide with every section, comment, and link hydrated |
+| `guide-export REF` | write a guide bundle (manifest, sections, entities) to `--out`, or `./wowhead_exports/<guide-slug>/` |
+| `guide-query BUNDLE QUERY` | query one guide bundle for matching sections, links, and comments |
+| `guide-bundle-list` | local bundles with freshness and hydration summaries |
+| `guide-bundle-search QUERY` | find local bundles by title, id, or directory name |
+| `guide-bundle-query QUERY` | rank matches across every local bundle |
+| `guide-bundle-inspect REF` | missing files, stale data, and hydration gaps for one bundle |
+| `guide-bundle-index-rebuild` | rebuild the corpus index from bundles on disk |
+| `guide-bundle-refresh REF` | re-export stale bundles using their recorded export options |
 
-That means the trustworthy contract now covers common requests like:
-- latest Wowhead news
-- recent class tuning posts
-- recent blue posts
-- finding a blue-tracker thread by topic
+Timeline surfaces:
 
-Implemented direction:
-- `wowhead news`
-- `wowhead news-post`
-- `wowhead blue-tracker`
-- `wowhead blue-topic`
-- support for:
-  - latest listing
-  - topic search
-  - bounded time windows
-  - explicit date cutoffs
-  - pagination or capped historical slices
-  - listing query provenance
-  - stable listing-field filters such as author/type/region/forum
-  - facet summaries across the matched timeline window
-  - single post/topic fetch with citations
-  - related/recent-post context on article pages when Wowhead exposes it
-  - lightweight participant and blue-author summaries on blue-tracker topic pages
+| Command | Purpose |
+|---------|---------|
+| `news [QUERY]` | news listing with topic, date-window, author, and type filters |
+| `news-post REF` | one news article with body markup, related posts, and citations |
+| `blue-tracker [QUERY]` | blue-post listing with topic, date-window, author, region, and forum filters |
+| `blue-topic REF` | one blue-tracker topic with posts, participants, and citations |
 
-Still to add:
-- category/filter narrowing when the live page model allows it
-- deeper post/topic filtering and enrichment beyond the first detail-fetch slice
+Tool-state decoders:
 
-These should be treated as list/article surfaces, not forced through `guide` or `entity`.
+| Command | Purpose |
+|---------|---------|
+| `talent-calc REF` | class, spec, and build code from a talent calculator ref |
+| `talent-calc-packet REF` | exact talent transport packet; `--out PATH` writes just the packet |
+| `profession-tree REF` | profession slug and loadout code |
+| `dressing-room REF` | normalized share hash and cited state URL |
+| `profiler REF` | normalized `list=` ref with list, region, realm, and name parts |
 
-Important usage expectation:
-- agents and users will often want topic context over time, not just the newest post
-- that means `news` and `blue-tracker` should be able to answer questions like:
-  - posts about a topic across a long time window
-  - posts between two dates
-  - recent posts since a cutoff
-  - historical context before and after a known change
+`dressing-room` and `profiler` are state inspectors: they normalize and cite the ref, they do not
+decode the opaque client-side payload behind it.
 
-So the design should include query fields like:
-- `query`
-- `date_from`
-- `date_to`
-- `limit`
-- `page` or equivalent bounded pagination
+Cache maintenance:
 
-And the response contract should expose:
-- publish timestamp
-- source URL
-- listing query provenance
-- truncation/pagination state
-- enough summary metadata to build timelines without fetching every article body first
+| Command | Purpose |
+|---------|---------|
+| `cache-inspect` | backend configuration and per-namespace entry counts |
+| `cache-repair` | delete unreadable or expired file-cache entries (`--apply` to write) |
+| `cache-clear` | clear cached responses for chosen namespaces or all of them |
 
-## Database And Tool Expansion
+Run `wowhead <command> --help` for the full flag list of any command.
 
-Live Wowhead exposes several surfaces that should become first-class CLI capabilities because they are more useful to agents in structured form than in a browser:
+## Workflows
 
-Database-family surfaces:
-- `/database`
-- `/items`
-- `/npcs`
-- `/quests`
-- `/spells`
-- `/achievements`
-- `/zones`
-- `/maps`
-- `/objects`
-- `/factions`
-- `/currencies`
-- `/skills`
-- `/item-sets`
-- `/followers`
-- `/titles`
+Resolve, then fetch:
 
-Tool surfaces:
-- `/talent-calc`
-- `/profession-tree-calc`
-- `/dressing-room`
-- `/list` (Profiler)
+```bash
+wowhead resolve "thunderfury"
+wowhead entity item 19019
+```
 
-Guide-category surfaces:
-- `/guides/classes`
-- `/guides/professions`
-- `/guides/raids`
+Export a guide once, query it repeatedly offline:
 
-Recommended additions:
-- `wowhead db <family> ...`
-- `wowhead guides <category> ...`
-- `wowhead news ...`
-- `wowhead blue-tracker ...`
-- `wowhead talent-calc ...`
-- `wowhead profession-tree ...`
-- `wowhead dressing-room ...`
-- `wowhead profiler ...`
+```bash
+wowhead guide-export 2113 --out ./tmp/guides/guide-2113
+wowhead guide-query ./tmp/guides/guide-2113 "talent build"
+```
 
-Guide-category direction:
-- keep `guides <category>` centered on the live guide listview data instead of browser-style scraping
-- prefer stable list metadata filters such as:
-  - author
-  - updated window
-  - patch range
-- support explicit guide-list sorting such as:
-  - relevance
-  - updated
-  - published
-  - rating
-- expose guide-set facet summaries so agents can inspect the filtered result bucket without opening individual guide pages
+Scan a topic across a date window:
 
-Current decision on database pages:
-- do not implement generic `wowhead db <family>` yet just because the pages exist
-- the current direct Wowhead commands are more reliable for most entity and guide workflows
-- database pages become worth the parser complexity only for concrete bulk browsing/filtering use cases that the current commands do not cover well
-- this keeps the Wowhead CLI biased toward reliable structured retrieval instead of broad but fragile page-surface coverage
+```bash
+wowhead news "class tuning" --date-from 2025-01-01 --date-to 2025-03-01 --pages 3
+```
 
-Current tool state:
-- `talent-calc` is now a real route-state decoder and extracts:
-  - class slug
-  - spec slug
-  - build code
-  - embedded listed builds when the page exposes them
-- `talent-calc-packet` is the first exact talent transport producer on the Wowhead side:
-  - it emits an exact `talent_transport_packet` only when the explicit calculator ref includes a build code
-  - it keeps the cited state URL next to the packet, and includes page metadata plus listed embedded builds on a best-effort basis when page fetch succeeds
-  - add `--out <path>` when you want to save just the exact packet JSON for wrapper handoff or parity checks
-  - if packet validation fails, it stops with `invalid_transport_packet` before printing or writing malformed packet JSON
-- `profession-tree` is now a real route-state decoder and extracts:
-  - profession slug
-  - loadout code
-- `dressing-room` is currently a stable state inspector:
-  - it normalizes share hashes and cited state URLs
-  - it does not yet decode the appearance payload itself
-- `profiler` is currently a stable state inspector:
-  - it normalizes `list=` refs and extracts obvious list/region/realm/name parts
-  - it does not yet decode the underlying profile/list contents
+## Cache
 
-Maintainability boundary:
-- stop at stable route-state inspection for `dressing-room` and `profiler`
-- do not reverse-engineer opaque client-side state payloads just because the URLs exist
-- deeper decoding here is no longer straightforward HTML or embedded-JSON extraction; it is a separate reverse-engineering project
-- that work should only start with an explicit product decision and a concrete user workflow that justifies the complexity
-- until then, keep these commands as reliable citation/state inspectors rather than fragile pseudo-decoders
+The HTTP cache is configured from the environment:
 
-The right implementation order is:
-1. expand guide-category discovery beyond the first listing slice
-2. add article/thread fetch for `news` and `blue-tracker`
-3. stop tool work at the maintainability boundary for `dressing-room` and `profiler` unless a later product decision reopens it
-4. revisit database browse/filter commands only when a concrete browse/filter workflow justifies them
+| Variable | Meaning |
+|----------|---------|
+| `WOWHEAD_CACHE_BACKEND` | `file`, `redis`, or `none` |
+| `WOWHEAD_CACHE_DIR` | file-cache directory |
+| `WOWHEAD_REDIS_URL` | Redis URL; required when the backend is `redis` |
+| `WOWHEAD_REDIS_PREFIX` | Redis key prefix |
+| `WOWHEAD_*_CACHE_TTL_SECONDS` | per-namespace TTL overrides (`SEARCH`, `TOOLTIP`, `ENTITY_PAGE`, `GUIDE_PAGE`, `PAGE`, `COMMENT_REPLIES`, `ENTITY`) |
 
-## Search And Resolve Boundary
-
-`wowhead` search and resolve should stay focused on discovery:
-- candidate search
-- conservative resolution
-- follow-up command guidance
-
-They are intentionally routing aids, not analytics answer surfaces.
-
-That means follow-up recommendations are good when they help an agent decide between:
-- `entity`
-- `entity-page`
-- `comments`
-- `guide`
-- `guide-full`
-
-But they should not be stretched into unsupported answer synthesis beyond what the retrieved Wowhead data actually shows.
-
-## What Should Move Out First
-
-The first shared extractions should be infrastructure that is already generic:
-
-- output shaping and `--fields` projection
-- structured error helpers
-- cache backends and TTL/config plumbing
-- shared config and environment handling
-- HTTP transport and retry primitives
-- bundle index, freshness, and local query primitives
-- command routing helpers for root-level `search` and `resolve`
-
-## What Should Stay Wowhead-Specific
-
-- HTML parsing rules
-- page JSON extraction
-- entity routing quirks
-- guide-body extraction
-- Wowhead-specific ranking and link normalization
-
-## What Should Wait For A Second Consumer
-
-- article-level content abstractions beyond raw bundle storage
-- search and resolve provider interfaces
-- follow-up recommendation models
-
-Those should move only after `method` proves they are not just Wowhead behavior with different names.
-
-## Why Wowhead Matters To The Restructure
-
-It is the strongest reference implementation for:
-- agent-first CLI output
-- local bundle workflows
-- cache inspection and repair
-
-But it should not define the shape of every other service. It should validate shared infrastructure, not dictate shared content models.
-
-## Recommended Migration Posture
-
-- keep `wowhead` runnable during the refactor
-- move code only when a second consumer exists or the code is obviously generic
-- use `wowhead` as the first backend behind `warcraft`
+`cache-inspect` reports the resolved settings, and `doctor` includes them in its payload.
 
 ## Source Links
 

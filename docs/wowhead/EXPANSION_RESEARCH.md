@@ -4,7 +4,7 @@ Date: 2026-02-19
 
 ## Goal
 
-Capture how Wowhead version/expansion routing works so a future `--expansion` flag can be implemented safely across all commands.
+Capture how Wowhead version/expansion routing works. The global `--expansion` flag and `expansion-detect` command implement this model; see `README.md` for current behavior.
 
 ## Confirmed Routing Model
 
@@ -57,19 +57,19 @@ From `data.pageMeta` on entity pages:
 
 ## Current Implementation State
 
-- Expansion profiles are now codified in `src/wowhead_cli/expansion_profiles.py`.
+- The shared expansion vocabulary (keys, aliases, site mapping) lives in `warcraft_core/expansions.py`; `src/wowhead_cli/expansion_profiles.py` keeps only Wowhead facts (`data_env`, legacy subdomains, URL builders).
 - Discovery command exists:
   - `wowhead expansions`
 - Global expansion selection is live:
-  - `--expansion` is wired through `search`, `entity`, `entity-page`, `comments`, and `compare`.
+  - `--expansion` is a global flag honored by every command that builds a Wowhead URL.
 - `entity` now defaults tooltip `dataEnv` from the selected expansion profile (override still possible via `--data-env`).
 - Optional canonical normalization is live:
   - `--normalize-canonical-to-expansion` rewrites canonical entity page URLs to the selected expansion path.
   - default behavior remains unchanged (normalization disabled).
-- Recorded fixture integration tests cover profile behavior across commands:
-  - `tests/test_expansion_recorded_fixtures.py`
-  - fixture dataset: `tests/fixtures/expansion_recorded.json`
+- Synthetic fixture integration tests cover profile behavior across commands:
+  - `tests/test_expansion_synthetic_fixtures.py`
+  - fixture dataset: `tests/fixtures/expansion_synthetic.json`
 - Live endpoint contract checks are available:
   - env-gated live suite: `tests/test_live_integration.py`
   - raw endpoint contract suite: `tests/test_live_endpoint_contracts.py`
-  - manual workflow dispatch: `.github/workflows/live-wowhead-contracts.yml`
+  - weekly schedule or manual dispatch: `.github/workflows/live-contracts.yml`

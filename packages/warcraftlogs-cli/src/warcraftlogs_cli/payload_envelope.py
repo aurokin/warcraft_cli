@@ -14,6 +14,10 @@ META_KEYS = frozenset(
         "graphql_warnings",
         "command",
         "deprecated_keys",
+        # Shared envelope keys never belong inside a command body.
+        "schema_version",
+        "provenance",
+        "data",
     }
 )
 

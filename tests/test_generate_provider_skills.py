@@ -35,3 +35,17 @@ def test_generate_provider_skills_creates_consumer_facing_outputs(tmp_path: Path
     assert "# Raider.IO" in raiderio_skill
     assert "sample mythic-plus-runs" in raiderio_skill
     assert 'display_name: "Wowhead"' in wowhead_yaml
+
+
+def test_generator_covers_every_wrapper_provider() -> None:
+    """The consumer subskills must not silently lag the wrapper's provider registry."""
+    repo_root = Path(__file__).resolve().parent.parent
+    sys.path.insert(0, str(repo_root / "scripts"))
+    try:
+        from generate_provider_skills import PROVIDERS as SKILLS
+    finally:
+        sys.path.remove(str(repo_root / "scripts"))
+
+    from warcraft_cli.providers import PROVIDERS
+
+    assert set(SKILLS) == {registration.name for registration in PROVIDERS}

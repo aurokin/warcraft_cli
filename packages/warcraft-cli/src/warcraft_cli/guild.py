@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from warcraft_core.shapes import as_dict, as_list
 from warcraft_core.wow_normalization import normalize_name, normalize_region, primary_realm_slug
 
 
@@ -23,8 +24,8 @@ def first_dict(items: Any) -> dict[str, Any] | None:
 
 
 def raiderio_guild_summary(payload: dict[str, Any]) -> dict[str, Any]:
-    guild = payload.get("guild") if isinstance(payload.get("guild"), dict) else {}
-    raiding = payload.get("raiding") if isinstance(payload.get("raiding"), dict) else {}
+    guild = as_dict(payload.get("guild"))
+    raiding = as_dict(payload.get("raiding"))
     active_raid = first_dict(raiding.get("progression"))
     active_rankings = first_dict(raiding.get("rankings"))
     return {
@@ -45,10 +46,10 @@ def raiderio_guild_summary(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def wowprogress_guild_summary(payload: dict[str, Any]) -> dict[str, Any]:
-    guild = payload.get("guild") if isinstance(payload.get("guild"), dict) else {}
-    progress = payload.get("progress") if isinstance(payload.get("progress"), dict) else {}
-    encounters = payload.get("encounters") if isinstance(payload.get("encounters"), dict) else {}
-    encounter_items = encounters.get("items") if isinstance(encounters.get("items"), list) else []
+    guild = as_dict(payload.get("guild"))
+    progress = as_dict(payload.get("progress"))
+    encounters = as_dict(payload.get("encounters"))
+    encounter_items = as_list(encounters.get("items"))
     return {
         "guild": guild,
         "active_raid": {
@@ -68,10 +69,10 @@ def guild_conflicts(raiderio: dict[str, Any] | None, wowprogress: dict[str, Any]
     reasons: list[str] = []
     different_window = False
     if raiderio and wowprogress:
-        ri_summary_payload = raiderio.get("summary") if isinstance(raiderio.get("summary"), dict) else {}
-        wp_summary_payload = wowprogress.get("summary") if isinstance(wowprogress.get("summary"), dict) else {}
-        ri_active = ri_summary_payload.get("active_raid") if isinstance(ri_summary_payload.get("active_raid"), dict) else {}
-        wp_active = wp_summary_payload.get("active_raid") if isinstance(wp_summary_payload.get("active_raid"), dict) else {}
+        ri_summary_payload = as_dict(raiderio.get("summary"))
+        wp_summary_payload = as_dict(wowprogress.get("summary"))
+        ri_active = as_dict(ri_summary_payload.get("active_raid"))
+        wp_active = as_dict(wp_summary_payload.get("active_raid"))
         ri_bosses = ri_active.get("boss_count")
         wp_bosses = wp_active.get("boss_count")
         ri_summary = str(ri_active.get("summary") or "")

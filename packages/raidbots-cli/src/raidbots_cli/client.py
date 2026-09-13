@@ -9,8 +9,8 @@ from typing import Any
 
 import httpx
 from warcraft_api.cache import CacheSettings, CacheTTLConfig, build_cache_store, load_prefixed_cache_settings_from_env
-from warcraft_api.http import DEFAULT_RETRY_ATTEMPTS, request_with_retries
-from warcraft_content.paths import provider_cache_root
+from warcraft_api.http import DEFAULT_RETRY_ATTEMPTS, build_client, request_with_retries
+from warcraft_core.paths import provider_cache_root
 
 DEFAULT_BASE_URL = "https://www.raidbots.com"
 DEFAULT_REPORT_PATH_TEMPLATE = "/simbot/report/{id}"
@@ -153,7 +153,7 @@ class RaidbotsClient:
 
     def _client(self) -> httpx.Client:
         if self._http_client is None:
-            self._http_client = httpx.Client(timeout=self._timeout_seconds, follow_redirects=True)
+            self._http_client = build_client(timeout=self._timeout_seconds)
         return self._http_client
 
     def _cache_key(self, namespace: str, params: dict[str, Any]) -> str:

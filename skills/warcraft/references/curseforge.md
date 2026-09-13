@@ -1,5 +1,8 @@
 # CurseForge
 
+**Tier: experimental.** The command surface is thin and the CurseForge endpoints have not been
+confirmed against the live API. Treat results as unverified.
+
 ## Best For
 
 - looking up a World of Warcraft addon by slug or numeric mod id

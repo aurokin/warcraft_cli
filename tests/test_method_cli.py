@@ -4,9 +4,13 @@ import json
 from datetime import datetime
 from pathlib import Path
 
+import httpx
+import pytest
 from method_cli.main import app
 from method_cli.page_parser import classify_guide_family, parse_guide_page, parse_sitemap_guides
+from method_cli.provider import PROVIDER
 from typer.testing import CliRunner
+from warcraft_core.envelope import envelope_violations
 
 runner = CliRunner()
 
@@ -385,3 +389,80 @@ def test_method_guide_unsupported_surface_returns_structured_error(monkeypatch) 
     payload = _error_payload(result)
     assert payload["ok"] is False
     assert payload["error"]["code"] == "unsupported_guide_surface"
+
+
+def _connect_error(*_args, **_kwargs):
+    raise httpx.ConnectError("offline", request=httpx.Request("GET", "https://www.method.gg/sitemap.xml"))
+
+
+def _not_found_error(*_args, **_kwargs):
+    request = httpx.Request("GET", "https://www.method.gg/guides/mistweaver-monk")
+    raise httpx.HTTPStatusError("404", request=request, response=httpx.Response(404, request=request))
+
+
+@pytest.mark.parametrize("args", [["search", "mistweaver monk"], ["resolve", "mistweaver monk"], ["guide", "mistweaver-monk"]])
+def test_method_transport_failure_returns_network_envelope(monkeypatch, args: list[str]) -> None:
+    monkeypatch.setattr("method_cli.client.request_with_retries", _connect_error)
+    result = runner.invoke(app, args)
+
+    assert result.exit_code == 5, result.output
+    assert result.stdout == ""
+    payload = json.loads(result.stderr)
+    assert payload["ok"] is False
+    assert payload["provider"] == "method"
+    assert payload["command"] == args[0]
+    assert payload["schema_version"] == "1"
+    assert payload["error"]["code"] == "network_error"
+    assert not isinstance(result.exception, httpx.HTTPError)
+
+
+def test_method_guide_upstream_404_returns_not_found_envelope(monkeypatch) -> None:
+    monkeypatch.setattr("method_cli.client.request_with_retries", _not_found_error)
+    result = runner.invoke(app, ["guide", "mistweaver-monk"])
+
+    assert result.exit_code == 4, result.output
+    payload = json.loads(result.stderr)
+    assert payload["error"]["code"] == "not_found"
+    assert payload["error"]["details"]["status_code"] == 404
+
+
+@pytest.mark.parametrize(
+    ("args", "kind"),
+    [
+        (["doctor"], "doctor"),
+        (["search", "mistweaver monk"], "search_results"),
+        (["resolve", "mistweaver monk"], "resolve_match"),
+        (["guide", "mistweaver-monk"], "guide"),
+        (["guide-full", "mistweaver-monk"], "guide_full"),
+    ],
+)
+def test_method_commands_emit_conforming_envelope(monkeypatch, args: list[str], kind: str) -> None:
+    monkeypatch.setattr("method_cli.main.MethodClient.sitemap_guides", lambda self: parse_sitemap_guides(SITEMAP_XML))
+    monkeypatch.setattr("method_cli.main.MethodClient.fetch_guide_page", lambda self, guide_ref: _fake_fetch_guide_page(guide_ref))
+    result = runner.invoke(app, args)
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert envelope_violations(payload) == []
+    assert payload["provider"] == "method"
+    assert payload["command"] == args[0]
+    assert payload["kind"] == kind
+    assert payload["schema_version"] == "1"
+
+
+def test_method_search_data_block_mirrors_legacy_top_level_keys(monkeypatch) -> None:
+    monkeypatch.setattr("method_cli.main.MethodClient.sitemap_guides", lambda self: parse_sitemap_guides(SITEMAP_XML))
+    result = runner.invoke(app, ["search", "mistweaver monk guide"])
+
+    payload = json.loads(result.stdout)
+    assert payload["data"]["results"] == payload["results"]
+    assert payload["data"]["count"] == payload["count"] == 1
+
+
+def test_method_provider_surface_is_callable_in_process(monkeypatch) -> None:
+    monkeypatch.setattr("method_cli.provider.MethodClient.sitemap_guides", lambda self: parse_sitemap_guides(SITEMAP_XML))
+    envelope = PROVIDER.search("mistweaver monk guide", limit=5)
+
+    assert PROVIDER.name == "method"
+    assert envelope_violations(envelope) == []
+    assert envelope["data"]["results"][0]["id"] == "mistweaver-monk"

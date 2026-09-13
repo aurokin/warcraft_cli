@@ -5,8 +5,8 @@ from typing import Any
 
 import httpx
 from warcraft_api.cache import CacheSettings, CacheTTLConfig, build_cache_store, load_prefixed_cache_settings_from_env
-from warcraft_api.http import DEFAULT_RETRY_ATTEMPTS, request_with_retries
-from warcraft_content.paths import provider_cache_root
+from warcraft_api.http import DEFAULT_RETRY_ATTEMPTS, build_client, request_with_retries
+from warcraft_core.paths import provider_cache_root
 
 from method_cli.page_parser import guide_ref_parts, guide_url, parse_guide_page, parse_sitemap_guides
 
@@ -59,7 +59,7 @@ class MethodClient:
 
     def _client(self) -> httpx.Client:
         if self._http_client is None:
-            self._http_client = httpx.Client(timeout=self._timeout_seconds, follow_redirects=True)
+            self._http_client = build_client(timeout=self._timeout_seconds)
         return self._http_client
 
     def _cache_key(self, namespace: str, url: str) -> str:

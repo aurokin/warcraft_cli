@@ -7,11 +7,25 @@ import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 import typer
+from warcraft_core.cli import (
+    CompactMaxCharsOption,
+    CompactOption,
+    FieldsOption,
+    FieldsStrictOption,
+    PrettyOption,
+    ProfileOption,
+    RuntimeConfig,
+    cfg_as,
+    configure,
+    emit,
+    fail,
+    guarded_run,
+)
 from warcraft_core.identity import build_identity_payload, refresh_talent_transport_packet, validate_talent_transport_packet
-from warcraft_core.output import emit
+from warcraft_core.output import DEFAULT_COMPACT_MAX_CHARS
 
 from simc_cli.apl import action_counts, group_entries, mermaid_graph, parse_apl, talent_refs, trace_action_entries
 from simc_cli.branch import (
@@ -29,6 +43,7 @@ from simc_cli.branch import (
 from simc_cli.build_input import (
     BuildResolution,
     BuildSpec,
+    TalentStrings,
     TreeDiff,
     build_profile_text,
     decode_build,
@@ -48,7 +63,8 @@ from simc_cli.compare import (
     verify_clean_payload,
     write_harness,
 )
-from simc_cli.packet import build_analysis_packet
+from simc_cli.packet import FirstCastOptions, build_analysis_packet
+from simc_cli.provider import PROVIDER, PROVIDER_NAME, repo_payload, simc_envelope
 from simc_cli.prune import PruneContext, prune_entries, split_csv_values
 from simc_cli.repo import (
     RepoPaths,
@@ -57,8 +73,6 @@ from simc_cli.repo import (
     discover_repo,
     resolve_repo_root,
     save_configured_repo_root,
-    validate_build,
-    validate_repo,
 )
 from simc_cli.report import load_sim_report, sim_report_payload, summarize_sim_report
 from simc_cli.run import binary_version, build_repo, repo_git_status, run_profile, sync_repo
@@ -70,8 +84,9 @@ app = typer.Typer(add_completion=False, help="SimulationCraft local workflow CLI
 
 
 @dataclass(slots=True)
-class RuntimeConfig:
-    pretty: bool = False
+class SimcConfig(RuntimeConfig):
+    """Shared runtime config plus simc's global --repo-root override."""
+
     repo_root: str | None = None
 
 
@@ -79,23 +94,14 @@ def _is_transport_int(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
-def _cfg(ctx: typer.Context) -> RuntimeConfig:
-    obj = ctx.obj
-    if isinstance(obj, RuntimeConfig):
-        return obj
-    return RuntimeConfig()
+def _cfg(ctx: typer.Context) -> SimcConfig:
+    """Narrow the shared config to simc's subclass; the callback always installs it."""
+    return cfg_as(ctx, SimcConfig)
 
 
-def _emit(ctx: typer.Context, payload: dict[str, Any], *, err: bool = False) -> None:
-    emit(payload, pretty=_cfg(ctx).pretty, err=err)
-
-
-def _fail(ctx: typer.Context, code: str, message: str, *, status: int = 1, extra: dict[str, Any] | None = None) -> None:
-    payload: dict[str, Any] = {"ok": False, "error": {"code": code, "message": message}}
-    if extra:
-        payload.update(extra)
-    _emit(ctx, payload, err=True)
-    raise typer.Exit(status)
+def _emit(ctx: typer.Context, payload: dict[str, Any]) -> None:
+    """Emit the shared success envelope, keeping the deprecated flat payload keys at the top level."""
+    emit(ctx, simc_envelope(ctx.info_name or "", payload))
 
 
 def _write_packet_json_or_fail(ctx: typer.Context, *, out: str | None, packet: dict[str, Any]) -> str | None:
@@ -107,8 +113,7 @@ def _write_packet_json_or_fail(ctx: typer.Context, *, out: str | None, packet: d
         output_path.write_text(json.dumps(packet, indent=2) + "\n")
         return str(output_path)
     except OSError as exc:
-        _fail(ctx, "transport_packet_write_failed", f"Failed to write talent transport packet: {exc}")
-        raise AssertionError("unreachable") from None
+        fail(ctx, "transport_packet_write_failed", f"Failed to write talent transport packet: {exc}")
 
 
 def _repo_paths(ctx: typer.Context) -> RepoPaths:
@@ -122,50 +127,6 @@ def _repo_resolution(ctx: typer.Context):
 def _preview_text(text: str, *, max_lines: int = 20) -> tuple[list[str], bool]:
     lines = text.splitlines()
     return lines[:max_lines], len(lines) > max_lines
-
-
-def _repo_payload(paths: RepoPaths) -> dict[str, Any]:
-    repo_issues = validate_repo(paths)
-    build_issues = validate_build(paths)
-    git_status = repo_git_status(paths)
-    version = binary_version(paths)
-    return {
-        "root": str(paths.root),
-        "exists": paths.root.exists(),
-        "repo_ready": not repo_issues,
-        "build_ready": not build_issues,
-        "repo_issues": repo_issues,
-        "build_issues": build_issues,
-        "git": git_status,
-        "binary": {
-            "path": str(paths.build_simc),
-            "exists": paths.build_simc.exists(),
-            "version_line": version.version_line,
-            "available": version.available,
-        },
-    }
-
-
-def _coming_soon_payload(*, query: str, suggested_command: str) -> dict[str, Any]:
-    return {
-        "provider": "simc",
-        "query": query,
-        "search_query": query,
-        "count": 0,
-        "results": [],
-        "candidates": [],
-        "resolved": False,
-        "confidence": "none",
-        "match": None,
-        "next_command": None,
-        "fallback_search_command": None,
-        "coming_soon": True,
-        "message": (
-            "Free-text discovery is not implemented yet for simc phase 1. "
-            "Use direct repo, spec-files, decode-build, or run commands."
-        ),
-        "suggested_command": suggested_command,
-    }
 
 
 def _serialize_build_spec(spec: Any) -> dict[str, Any]:
@@ -315,30 +276,42 @@ def _build_option_values(
     profile_path: str | None,
     build_file: str | None,
     build_text: str | None,
-    talents: str | None,
-    class_talents: str | None,
-    spec_talents: str | None,
-    hero_talents: str | None,
+    talents: TalentStrings,
     actor_class: str | None,
     spec_name: str | None,
-    enable: list[str],
-    disable: list[str],
+    enable: list[str] | None = None,
+    disable: list[str] | None = None,
     build_packet: str | None = None,
 ) -> dict[str, Any]:
+    """Pack the shared build-input flag group so wide commands can hand it to one plain function."""
     return {
         "profile_path": profile_path,
         "build_file": build_file,
         "build_packet": build_packet,
         "build_text": build_text,
         "talents": talents,
-        "class_talents": class_talents,
-        "spec_talents": spec_talents,
-        "hero_talents": hero_talents,
         "actor_class": actor_class,
         "spec_name": spec_name,
-        "enable": enable,
-        "disable": disable,
+        "enable": enable or [],
+        "disable": disable or [],
     }
+
+
+def _identified_build_or_fail(
+    ctx: typer.Context, paths: RepoPaths, *, apl_path: str | None, option_values: dict[str, Any]
+) -> tuple[Any, Any]:
+    return _load_identified_build_spec_or_fail(
+        ctx,
+        paths,
+        apl_path=apl_path,
+        profile_path=option_values["profile_path"],
+        build_file=option_values["build_file"],
+        build_packet=option_values["build_packet"],
+        build_text=option_values["build_text"],
+        talents=option_values["talents"],
+        actor_class=option_values["actor_class"],
+        spec_name=option_values["spec_name"],
+    )
 
 
 def _resolve_prune_context(paths: RepoPaths, apl_path: Path, option_values: dict[str, Any], targets: int) -> tuple[PruneContext, Any]:
@@ -349,9 +322,6 @@ def _resolve_prune_context(paths: RepoPaths, apl_path: Path, option_values: dict
         build_packet=option_values["build_packet"],
         build_text=option_values["build_text"],
         talents=option_values["talents"],
-        class_talents=option_values["class_talents"],
-        spec_talents=option_values["spec_talents"],
-        hero_talents=option_values["hero_talents"],
         actor_class=option_values["actor_class"],
         spec_name=option_values["spec_name"],
     )
@@ -383,10 +353,7 @@ def _load_identified_build_spec(
     profile_path: str | None,
     build_file: str | None,
     build_text: str | None,
-    talents: str | None,
-    class_talents: str | None,
-    spec_talents: str | None,
-    hero_talents: str | None,
+    talents: TalentStrings,
     actor_class: str | None,
     spec_name: str | None,
     build_packet: str | None = None,
@@ -398,9 +365,6 @@ def _load_identified_build_spec(
         build_packet=build_packet,
         build_text=build_text,
         talents=talents,
-        class_talents=class_talents,
-        spec_talents=spec_talents,
-        hero_talents=hero_talents,
         actor_class=actor_class,
         spec_name=spec_name,
     )
@@ -415,10 +379,7 @@ def _load_identified_build_spec_or_fail(
     profile_path: str | None,
     build_file: str | None,
     build_text: str | None,
-    talents: str | None,
-    class_talents: str | None,
-    spec_talents: str | None,
-    hero_talents: str | None,
+    talents: TalentStrings,
     actor_class: str | None,
     spec_name: str | None,
     build_packet: str | None = None,
@@ -432,18 +393,13 @@ def _load_identified_build_spec_or_fail(
             build_packet=build_packet,
             build_text=build_text,
             talents=talents,
-            class_talents=class_talents,
-            spec_talents=spec_talents,
-            hero_talents=hero_talents,
             actor_class=actor_class,
             spec_name=spec_name,
         )
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         if build_packet:
-            _fail(ctx, "invalid_build_packet", str(exc))
-            raise AssertionError("unreachable") from None
-        _fail(ctx, "invalid_query", str(exc))
-        raise AssertionError("unreachable") from None
+            fail(ctx, "invalid_build_packet", str(exc))
+        fail(ctx, "invalid_query", str(exc))
 
 
 def _prune_context_payload(resolution: Any, context: PruneContext) -> dict[str, Any]:
@@ -538,8 +494,8 @@ def _action_names(items: list[dict[str, Any]]) -> list[str]:
     return [str(item["action"]) for item in items if item.get("action")]
 
 
-def _parse_variant_specs(values: list[str]) -> list[tuple[str, str]]:
-    specs: list[tuple[str, str]] = []
+def _parse_variant_specs(values: list[str]) -> list[tuple[str, str | Path]]:
+    specs: list[tuple[str, str | Path]] = []
     for value in values:
         label, sep, path = value.partition("=")
         label = label.strip()
@@ -553,80 +509,34 @@ def _parse_variant_specs(values: list[str]) -> list[tuple[str, str]]:
 @app.callback()
 def main_callback(
     ctx: typer.Context,
-    pretty: bool = typer.Option(False, "--pretty", help="Pretty-print JSON output."),
-    repo_root: str | None = typer.Option(None, "--repo-root", help="Override the local SimulationCraft checkout path."),
+    pretty: PrettyOption = False,
+    compact: CompactOption = False,
+    fields: FieldsOption = None,
+    fields_strict: FieldsStrictOption = False,
+    profile: ProfileOption = None,
+    compact_max_chars: CompactMaxCharsOption = DEFAULT_COMPACT_MAX_CHARS,
+    repo_root: Annotated[
+        str | None, typer.Option("--repo-root", help="Override the local SimulationCraft checkout path.")
+    ] = None,
 ) -> None:
-    ctx.obj = RuntimeConfig(pretty=pretty, repo_root=repo_root)
+    """Inspect, decode, and simulate builds against a local SimulationCraft checkout."""
+    configure(
+        ctx,
+        provider=PROVIDER_NAME,
+        pretty=pretty,
+        compact=compact,
+        fields=fields,
+        fields_strict=fields_strict,
+        profile=profile,
+        compact_max_chars=compact_max_chars,
+        config=SimcConfig(repo_root=repo_root),
+    )
 
 
 @app.command("doctor")
 def doctor(ctx: typer.Context) -> None:
-    paths = _repo_paths(ctx)
-    resolution = _repo_resolution(ctx)
-    repo = _repo_payload(paths)
-    status = "ready" if repo["repo_ready"] and repo["build_ready"] else "degraded"
-    _emit(
-        ctx,
-        {
-            "provider": "simc",
-            "status": status,
-            "command": "doctor",
-            "installed": True,
-            "language": "python",
-            "auth": {
-                "required": False,
-                "deferred": False,
-            },
-            "capabilities": {
-                "search": "coming_soon",
-                "resolve": "coming_soon",
-                "doctor": "ready",
-                "repo": "ready",
-                "checkout": "ready",
-                "version": "ready",
-                "sync": "ready",
-                "build": "ready",
-                "run": "ready",
-                "inspect": "ready",
-                "spec_files": "ready",
-                "identify_build": "ready",
-                "decode_build": "ready",
-                "validate_talent_transport": "ready",
-                "apl_lists": "ready",
-                "apl_graph": "ready",
-                "apl_talents": "ready",
-                "find_action": "ready",
-                "trace_action": "ready",
-                "apl_prune": "ready",
-                "apl_branch_trace": "ready",
-                "apl_intent": "ready",
-                "apl_intent_explain": "ready",
-                "priority": "ready",
-                "describe_build": "ready",
-                "inactive_actions": "ready",
-                "opener": "ready",
-                "build_harness": "ready",
-                "validate_apl": "ready",
-                "compare_apls": "ready",
-                "variant_report": "ready",
-                "verify_clean": "ready",
-                "apl_branch_compare": "ready",
-                "analysis_packet": "ready",
-                "first_cast": "ready",
-                "log_actions": "ready",
-                "compare_builds": "ready",
-                "modify_build": "ready",
-            },
-            "repo_resolution": {
-                "source": resolution.source,
-                "config_path": str(resolution.config_path),
-                "configured_root": str(resolution.configured_root) if resolution.configured_root else None,
-                "managed_root": str(resolution.managed_root),
-                "managed_exists": resolution.managed_exists,
-            },
-            "repo": repo,
-        },
-    )
+    """Report SimulationCraft repo readiness, binary version, and per-command capabilities."""
+    emit(ctx, PROVIDER.doctor(repo_root=_cfg(ctx).repo_root))
 
 
 @app.command("repo")
@@ -635,17 +545,16 @@ def repo_command(
     set_root: str | None = typer.Option(None, "--set-root", help="Persist an explicit SimulationCraft repo root."),
     clear_root: bool = typer.Option(False, "--clear-root", help="Clear the persisted explicit SimulationCraft repo root."),
 ) -> None:
+    """Show or change which local SimulationCraft checkout the CLI uses."""
     if set_root and clear_root:
-        _fail(ctx, "invalid_query", "Use either --set-root or --clear-root, not both.")
-        return
+        fail(ctx, "invalid_query", "Use either --set-root or --clear-root, not both.")
     changed = False
     action = "inspect"
     stored_root: str | None = None
     if set_root:
         resolved = Path(set_root).expanduser().resolve()
         if not resolved.exists():
-            _fail(ctx, "not_found", f"Repo root not found: {resolved}")
-            return
+            fail(ctx, "not_found", f"Repo root not found: {resolved}")
         save_configured_repo_root(resolved)
         changed = True
         action = "set_root"
@@ -675,11 +584,11 @@ def repo_command(
 
 @app.command("checkout")
 def checkout_command(ctx: typer.Context) -> None:
+    """Clone or update the managed SimulationCraft checkout."""
     try:
         result = checkout_managed_repo()
     except RuntimeError as exc:
-        _fail(ctx, "checkout_failed", str(exc))
-        return
+        fail(ctx, "checkout_failed", str(exc))
     resolution = _repo_resolution(ctx)
     _emit(
         ctx,
@@ -706,8 +615,8 @@ def search(
     query: str = typer.Argument(..., help="Free-text query. Structured discovery is deferred for simc phase 1."),
     limit: int = typer.Option(5, "--limit", min=1, max=50, help="Unused in phase 1."),
 ) -> None:
-    del limit
-    _emit(ctx, _coming_soon_payload(query=query, suggested_command="simc spec-files monk"))
+    """Return the structured coming-soon stub for free-text search."""
+    emit(ctx, PROVIDER.search(query, limit=limit, repo_root=_cfg(ctx).repo_root))
 
 
 @app.command("resolve")
@@ -716,24 +625,17 @@ def resolve(
     query: str = typer.Argument(..., help="Free-text query. Structured resolution is deferred for simc phase 1."),
     limit: int = typer.Option(5, "--limit", min=1, max=50, help="Unused in phase 1."),
 ) -> None:
+    """Return the structured coming-soon stub for free-text resolution."""
     del limit
-    paths = _repo_paths(ctx)
-    example_apl = paths.apl_default / "monk_mistweaver.simc"
-    _emit(
-        ctx,
-        _coming_soon_payload(
-            query=query,
-            suggested_command=f"simc decode-build --apl-path {example_apl}",
-        ),
-    )
+    emit(ctx, PROVIDER.resolve(query, repo_root=_cfg(ctx).repo_root))
 
 
 @app.command("version")
 def version(ctx: typer.Context) -> None:
+    """Report the version reported by the local SimC binary."""
     version_info = binary_version(_repo_paths(ctx))
     if not version_info.available:
-        _fail(ctx, "missing_binary", f"SimC binary not found: {version_info.binary_path}")
-        return
+        fail(ctx, "missing_binary", f"SimC binary not found: {version_info.binary_path}")
     _emit(
         ctx,
         {
@@ -753,14 +655,14 @@ def inspect(
     ctx: typer.Context,
     target: str | None = typer.Argument(None, help="Optional file path to inspect. If omitted, inspect the repo."),
 ) -> None:
+    """Describe the repo, or one file inside it, including any build lines it carries."""
     paths = _repo_paths(ctx)
     if target is None:
-        _emit(ctx, {"provider": "simc", "inspect": "repo", "repo": _repo_payload(paths)})
+        _emit(ctx, {"provider": "simc", "inspect": "repo", "repo": repo_payload(paths)})
         return
     resolved = Path(target).expanduser().resolve()
     if not resolved.exists():
-        _fail(ctx, "not_found", f"Inspect target not found: {resolved}")
-        return
+        fail(ctx, "not_found", f"Inspect target not found: {resolved}")
     payload: dict[str, Any] = {
         "provider": "simc",
         "inspect": "path",
@@ -791,6 +693,7 @@ def spec_files(
     query: str | None = typer.Argument(None, help="Optional substring to narrow APL and class-module files."),
     limit: int = typer.Option(25, "--limit", min=1, max=200, help="Maximum file rows to return per category."),
 ) -> None:
+    """List APL and class-module files in the checkout, optionally narrowed by a substring."""
     paths = _repo_paths(ctx)
     matches = spec_file_search(paths, query)
     categories: dict[str, Any] = {}
@@ -813,58 +716,26 @@ def spec_files(
     _emit(ctx, {"provider": "simc", "query": query, "count": total, "categories": categories})
 
 
-@app.command("decode-build")
-def decode_build_command(
-    ctx: typer.Context,
-    apl_path: str | None = typer.Option(None, "--apl-path", help="Optional APL path used to infer actor class and spec."),
-    profile_path: str | None = typer.Option(None, "--profile-path", help="Optional profile path containing build lines."),
-    build_file: str | None = typer.Option(None, "--build-file", help="Optional plain text file with talents/spec lines."),
-    build_packet: str | None = typer.Option(None, "--build-packet", help="Path to a talent transport packet JSON file."),
-    build_text: str | None = typer.Option(
-        None, "--build-text", help="Inline build text, talent hash, or Wowhead talent-calc URL with build code."),
-    talents: str | None = typer.Option(
-        None, "--talents", help="WoW export, Wowhead talent-calc URL with build code, SimC talents string, or talents=... line."),
-    class_talents: str | None = typer.Option(None, "--class-talents", help="Split class talents string."),
-    spec_talents: str | None = typer.Option(None, "--spec-talents", help="Split spec talents string."),
-    hero_talents: str | None = typer.Option(None, "--hero-talents", help="Split hero talents string."),
-    actor_class: str | None = typer.Option(None, "--actor-class", help="Actor class such as monk or evoker."),
-    spec_name: str | None = typer.Option(None, "--spec", help="Spec name such as mistweaver."),
-) -> None:
+def _decode_build(ctx: typer.Context, *, apl_path: str | None, option_values: dict[str, Any]) -> None:
     paths = _repo_paths(ctx)
-    build_spec, identity = _load_identified_build_spec_or_fail(
-        ctx,
-        paths,
-        apl_path=apl_path,
-        profile_path=profile_path,
-        build_file=build_file,
-        build_packet=build_packet,
-        build_text=build_text,
-        talents=talents,
-        class_talents=class_talents,
-        spec_talents=spec_talents,
-        hero_talents=hero_talents,
-        actor_class=actor_class,
-        spec_name=spec_name,
-    )
+    build_spec, identity = _identified_build_or_fail(ctx, paths, apl_path=apl_path, option_values=option_values)
     if not build_spec.actor_class or not build_spec.spec:
-        _fail(
+        fail(
             ctx,
             "invalid_query",
             "Could not determine actor class and spec for build decoding.",
-            extra={"build_spec": _serialize_build_spec(build_spec), "identity": _serialize_build_identity(identity)},
+            details={"build_spec": _serialize_build_spec(build_spec), "identity": _serialize_build_identity(identity)},
         )
-        return
     try:
         resolution = decode_build(paths, build_spec)
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
-        extra = {"build_spec": _serialize_build_spec(build_spec), "identity": _serialize_build_identity(identity)}
+        extra: dict[str, Any] = {"build_spec": _serialize_build_spec(build_spec), "identity": _serialize_build_identity(identity)}
         if build_spec.actor_class and build_spec.spec and any(
             [build_spec.talents, build_spec.class_talents, build_spec.spec_talents, build_spec.hero_talents]
         ):
             with contextlib.suppress(ValueError):
                 extra["generated_profile"] = build_profile_text(build_spec)
-        _fail(ctx, "decode_failed", str(exc), extra=extra)
-        return
+        fail(ctx, "decode_failed", str(exc), details=extra)
     _emit(
         ctx,
         {
@@ -895,6 +766,55 @@ def decode_build_command(
     )
 
 
+@app.command("decode-build")
+def decode_build_command(
+    ctx: typer.Context,
+    apl_path: str | None = typer.Option(None, "--apl-path", help="Optional APL path used to infer actor class and spec."),
+    profile_path: str | None = typer.Option(None, "--profile-path", help="Optional profile path containing build lines."),
+    build_file: str | None = typer.Option(None, "--build-file", help="Optional plain text file with talents/spec lines."),
+    build_packet: str | None = typer.Option(None, "--build-packet", help="Path to a talent transport packet JSON file."),
+    build_text: str | None = typer.Option(
+        None, "--build-text", help="Inline build text, talent hash, or Wowhead talent-calc URL with build code."),
+    talents: str | None = typer.Option(
+        None, "--talents", help="WoW export, Wowhead talent-calc URL with build code, SimC talents string, or talents=... line."),
+    class_talents: str | None = typer.Option(None, "--class-talents", help="Split class talents string."),
+    spec_talents: str | None = typer.Option(None, "--spec-talents", help="Split spec talents string."),
+    hero_talents: str | None = typer.Option(None, "--hero-talents", help="Split hero talents string."),
+    actor_class: str | None = typer.Option(None, "--actor-class", help="Actor class such as monk or evoker."),
+    spec_name: str | None = typer.Option(None, "--spec", help="Spec name such as mistweaver."),
+) -> None:
+    """Decode a talent build into per-tree talents using the local SimC binary."""
+    option_values = _build_option_values(
+        profile_path=profile_path,
+        build_file=build_file,
+        build_packet=build_packet,
+        build_text=build_text,
+        talents=TalentStrings(
+            talents=talents,
+            class_talents=class_talents,
+            spec_talents=spec_talents,
+            hero_talents=hero_talents,
+        ),
+        actor_class=actor_class,
+        spec_name=spec_name,
+    )
+    _decode_build(ctx, apl_path=apl_path, option_values=option_values)
+
+
+def _identify_build(ctx: typer.Context, *, apl_path: str | None, option_values: dict[str, Any]) -> None:
+    paths = _repo_paths(ctx)
+    build_spec, identity = _identified_build_or_fail(ctx, paths, apl_path=apl_path, option_values=option_values)
+    _emit(
+        ctx,
+        {
+            "provider": "simc",
+            "kind": "identify_build",
+            "build_spec": _serialize_build_spec(build_spec),
+            "identity": _serialize_build_identity(identity),
+        },
+    )
+
+
 @app.command("identify-build")
 def identify_build_command(
     ctx: typer.Context,
@@ -912,31 +832,109 @@ def identify_build_command(
     actor_class: str | None = typer.Option(None, "--actor-class", help="Actor class such as monk or evoker."),
     spec_name: str | None = typer.Option(None, "--spec", help="Spec name such as mistweaver."),
 ) -> None:
-    paths = _repo_paths(ctx)
-    build_spec, identity = _load_identified_build_spec_or_fail(
-        ctx,
-        paths,
-        apl_path=apl_path,
+    """Resolve class/spec identity for a build without decoding its talents."""
+    option_values = _build_option_values(
         profile_path=profile_path,
         build_file=build_file,
         build_packet=build_packet,
         build_text=build_text,
-        talents=talents,
-        class_talents=class_talents,
-        spec_talents=spec_talents,
-        hero_talents=hero_talents,
+        talents=TalentStrings(
+            talents=talents,
+            class_talents=class_talents,
+            spec_talents=spec_talents,
+            hero_talents=hero_talents,
+        ),
         actor_class=actor_class,
         spec_name=spec_name,
     )
-    _emit(
-        ctx,
-        {
-            "provider": "simc",
-            "kind": "identify_build",
-            "build_spec": _serialize_build_spec(build_spec),
-            "identity": _serialize_build_identity(identity),
-        },
+    _identify_build(ctx, apl_path=apl_path, option_values=option_values)
+
+
+@dataclass(slots=True)
+class _TransportInput:
+    """Talent rows plus the identity and packet context the transport validator needs."""
+
+    source: str
+    rows: list[dict[str, Any]]
+    actor_class: str | None
+    spec: str | None
+    packet: dict[str, Any] | None = None
+    packet_path: str | None = None
+    packet_transport_status: str | None = None
+
+
+def _packet_transport_input(ctx: typer.Context, build_packet: str, actor_class: str | None, spec_name: str | None) -> _TransportInput:
+    try:
+        packet, resolved_packet_path = _load_transport_packet(build_packet)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        fail(ctx, "invalid_build_packet", str(exc))
+    transport_status = packet.get("transport_status")
+    return _TransportInput(
+        source="build_packet",
+        rows=_packet_talent_tree_rows(packet),
+        actor_class=actor_class if actor_class is not None else _packet_identity_value(packet, "actor_class"),
+        spec=spec_name if spec_name is not None else _packet_identity_value(packet, "spec"),
+        packet=packet,
+        packet_path=resolved_packet_path,
+        packet_transport_status=transport_status if isinstance(transport_status, str) else None,
     )
+
+
+def _transport_input_or_fail(
+    ctx: typer.Context,
+    *,
+    build_packet: str | None,
+    talent_row: list[str],
+    actor_class: str | None,
+    spec_name: str | None,
+) -> _TransportInput:
+    if build_packet:
+        resolved = _packet_transport_input(ctx, build_packet, actor_class, spec_name)
+    else:
+        try:
+            rows = [_parse_talent_row(value) for value in talent_row]
+        except ValueError as exc:
+            fail(ctx, "invalid_talent_row", str(exc))
+        resolved = _TransportInput(source="talent_rows", rows=rows, actor_class=actor_class, spec=spec_name)
+    if not resolved.rows:
+        fail(ctx, "invalid_query", "No raw talent rows were available to validate.")
+    if not resolved.actor_class or not resolved.spec:
+        fail(
+            ctx,
+            "invalid_query",
+            (
+                "Validate-talent-transport requires class/spec identity. "
+                "Provide --actor-class and --spec, or use a build packet with packet identity."
+            ),
+        )
+    return resolved
+
+
+def _refreshed_transport_packet(
+    ctx: typer.Context,
+    *,
+    packet: dict[str, Any],
+    resolved: _TransportInput,
+    transport_forms: dict[str, Any],
+    validation: dict[str, Any],
+) -> dict[str, Any]:
+    identity = build_identity_payload(
+        actor_class=resolved.actor_class,
+        spec=resolved.spec,
+        confidence="high" if resolved.actor_class and resolved.spec else "none",
+        source="simc_validate_talent_transport",
+        candidates=[(resolved.actor_class, resolved.spec)] if resolved.actor_class and resolved.spec else None,
+        source_notes=["class/spec identity was refreshed from simc validate-talent-transport input"],
+    )
+    try:
+        return refresh_talent_transport_packet(
+            packet,
+            transport_forms=transport_forms,
+            validation=validation,
+            build_identity=identity,
+        )
+    except ValueError as exc:
+        fail(ctx, "invalid_build_packet", str(exc))
 
 
 @app.command("validate-talent-transport")
@@ -948,91 +946,40 @@ def validate_talent_transport_command(
     spec_name: str | None = typer.Option(None, "--spec", help="Spec name such as balance or retribution."),
     out: str | None = typer.Option(None, "--out", help="Optional path to write the upgraded packet JSON when --build-packet is used."),
 ) -> None:
+    """Round-trip raw talent rows through SimulationCraft and report the validated transport forms."""
     if build_packet and talent_row:
-        _fail(ctx, "invalid_query", "Use either --build-packet or --talent-row, not both.")
-        return
+        fail(ctx, "invalid_query", "Use either --build-packet or --talent-row, not both.")
     if not build_packet and not talent_row:
-        _fail(ctx, "invalid_query", "Provide either --build-packet or at least one --talent-row.")
-        return
+        fail(ctx, "invalid_query", "Provide either --build-packet or at least one --talent-row.")
     if out and not build_packet:
-        _fail(ctx, "invalid_query", "--out requires --build-packet.")
-        return
+        fail(ctx, "invalid_query", "--out requires --build-packet.")
 
-    source = "talent_rows"
-    resolved_packet_path: str | None = None
-    packet_transport_status: str | None = None
-    packet: dict[str, Any] | None = None
-    rows: list[dict[str, Any]] = []
-    resolved_actor_class = actor_class
-    resolved_spec = spec_name
-
-    if build_packet:
-        try:
-            packet, resolved_packet_path = _load_transport_packet(build_packet)
-        except (OSError, ValueError, json.JSONDecodeError) as exc:
-            _fail(ctx, "invalid_build_packet", str(exc))
-            return
-        source = "build_packet"
-        packet_transport_status = packet.get("transport_status") if isinstance(packet.get("transport_status"), str) else None
-        rows = _packet_talent_tree_rows(packet)
-        if actor_class is None:
-            resolved_actor_class = _packet_identity_value(packet, "actor_class")
-        if spec_name is None:
-            resolved_spec = _packet_identity_value(packet, "spec")
-    else:
-        try:
-            rows = [_parse_talent_row(value) for value in talent_row]
-        except ValueError as exc:
-            _fail(ctx, "invalid_talent_row", str(exc))
-            return
-
-    if not rows:
-        _fail(ctx, "invalid_query", "No raw talent rows were available to validate.")
-        return
-    if not resolved_actor_class or not resolved_spec:
-        _fail(
-            ctx,
-            "invalid_query",
-            (
-                "Validate-talent-transport requires class/spec identity. "
-                "Provide --actor-class and --spec, or use a build packet with packet identity."
-            ),
-        )
-        return
-
+    resolved = _transport_input_or_fail(
+        ctx, build_packet=build_packet, talent_row=talent_row, actor_class=actor_class, spec_name=spec_name
+    )
     result = validate_talent_tree_transport(
-        actor_class=resolved_actor_class,
-        spec=resolved_spec,
-        talent_tree_rows=rows,
+        actor_class=resolved.actor_class,
+        spec=resolved.spec,
+        talent_tree_rows=resolved.rows,
         repo_root=_cfg(ctx).repo_root,
     )
-    transport_forms = result.get("transport_forms") if isinstance(result.get("transport_forms"), dict) else {}
-    validation = result.get("validation") if isinstance(result.get("validation"), dict) else {}
+    raw_forms = result.get("transport_forms")
+    transport_forms: dict[str, Any] = raw_forms if isinstance(raw_forms, dict) else {}
+    raw_validation = result.get("validation")
+    validation: dict[str, Any] = raw_validation if isinstance(raw_validation, dict) else {}
     transport_status = "validated" if transport_forms.get("simc_split_talents") else "raw_only"
     updated_packet: dict[str, Any] | None = None
     written_packet_path: str | None = None
-    if packet is not None:
-        try:
-            updated_packet = refresh_talent_transport_packet(
-                packet,
-                transport_forms=transport_forms,
-                validation=validation,
-                build_identity=build_identity_payload(
-                    actor_class=resolved_actor_class,
-                    spec=resolved_spec,
-                    confidence="high" if resolved_actor_class and resolved_spec else "none",
-                    source="simc_validate_talent_transport",
-                    candidates=[(resolved_actor_class, resolved_spec)] if resolved_actor_class and resolved_spec else None,
-                    source_notes=[
-                        "class/spec identity was refreshed from simc validate-talent-transport input"
-                    ],
-                ),
-            )
-        except ValueError as exc:
-            _fail(ctx, "invalid_build_packet", str(exc))
-            return
-        transport_status = updated_packet["transport_status"] if isinstance(
-            updated_packet.get("transport_status"), str) else transport_status
+    if resolved.packet is not None:
+        updated_packet = _refreshed_transport_packet(
+            ctx,
+            packet=resolved.packet,
+            resolved=resolved,
+            transport_forms=transport_forms,
+            validation=validation,
+        )
+        packet_status = updated_packet.get("transport_status")
+        transport_status = packet_status if isinstance(packet_status, str) else transport_status
         written_packet_path = _write_packet_json_or_fail(ctx, out=out, packet=updated_packet)
     _emit(
         ctx,
@@ -1040,19 +987,53 @@ def validate_talent_transport_command(
             "provider": "simc",
             "kind": "validate_talent_transport",
             "input": {
-                "source": source,
-                "build_packet": resolved_packet_path,
-                "packet_transport_status": packet_transport_status,
-                "actor_class": resolved_actor_class,
-                "spec": resolved_spec,
-                "talent_row_count": len(rows),
+                "source": resolved.source,
+                "build_packet": resolved.packet_path,
+                "packet_transport_status": resolved.packet_transport_status,
+                "actor_class": resolved.actor_class,
+                "spec": resolved.spec,
+                "talent_row_count": len(resolved.rows),
             },
-            "raw_talent_tree_entries": rows,
+            "raw_talent_tree_entries": resolved.rows,
             "transport_status": transport_status,
             "transport_forms": transport_forms,
             "validation": validation,
             "updated_packet": updated_packet,
             "written_packet_path": written_packet_path,
+        },
+    )
+
+
+def _build_harness(
+    ctx: typer.Context,
+    *,
+    out: str | None,
+    apl_path: str | None,
+    line: list[str],
+    option_values: dict[str, Any],
+) -> None:
+    paths = _repo_paths(ctx)
+    build_spec, identity = _identified_build_or_fail(ctx, paths, apl_path=apl_path, option_values=option_values)
+    if not build_spec.actor_class or not build_spec.spec:
+        fail(
+            ctx,
+            "invalid_query",
+            "Could not determine actor class and spec for harness generation.",
+            details={"build_spec": _serialize_build_spec(build_spec), "identity": _serialize_build_identity(identity)},
+        )
+    try:
+        target = write_harness(build_spec, lines=line, out_path=out)
+    except ValueError as exc:
+        fail(ctx, "build_harness_failed", str(exc))
+    _emit(
+        ctx,
+        {
+            "provider": "simc",
+            "kind": "build_harness",
+            "path": str(target),
+            "build_spec": _serialize_build_spec(build_spec),
+            "identity": _serialize_build_identity(identity),
+            "extra_lines": line,
         },
     )
 
@@ -1074,45 +1055,21 @@ def build_harness_command(
     spec_name: str | None = typer.Option(None, "--spec", help="Spec name such as demonology."),
     line: list[str] = typer.Option([], "--line", help="Extra profile line. Repeat as needed."),
 ) -> None:
-    paths = _repo_paths(ctx)
-    build_spec, identity = _load_identified_build_spec_or_fail(
-        ctx,
-        paths,
-        apl_path=apl_path,
+    """Write a harness profile for the resolved build with no APL actions."""
+    option_values = _build_option_values(
         profile_path=profile_path,
         build_file=build_file,
         build_text=build_text,
-        talents=talents,
-        class_talents=class_talents,
-        spec_talents=spec_talents,
-        hero_talents=hero_talents,
+        talents=TalentStrings(
+            talents=talents,
+            class_talents=class_talents,
+            spec_talents=spec_talents,
+            hero_talents=hero_talents,
+        ),
         actor_class=actor_class,
         spec_name=spec_name,
     )
-    if not build_spec.actor_class or not build_spec.spec:
-        _fail(
-            ctx,
-            "invalid_query",
-            "Could not determine actor class and spec for harness generation.",
-            extra={"build_spec": _serialize_build_spec(build_spec), "identity": _serialize_build_identity(identity)},
-        )
-        return
-    try:
-        target = write_harness(build_spec, lines=line, out_path=out)
-    except ValueError as exc:
-        _fail(ctx, "build_harness_failed", str(exc))
-        return
-    _emit(
-        ctx,
-        {
-            "provider": "simc",
-            "kind": "build_harness",
-            "path": str(target),
-            "build_spec": _serialize_build_spec(build_spec),
-            "identity": _serialize_build_identity(identity),
-            "extra_lines": line,
-        },
-    )
+    _build_harness(ctx, out=out, apl_path=apl_path, line=line, option_values=option_values)
 
 
 @app.command("validate-apl")
@@ -1123,13 +1080,13 @@ def validate_apl_command(
     label: str = typer.Option("variant", "--label", help="Variant label for the generated temporary profile."),
     out_dir: str | None = typer.Option(None, "--out-dir", help="Optional directory for the generated temporary profile."),
 ) -> None:
+    """Append an APL to a harness profile and check that SimC parses the result."""
     paths = _repo_paths(ctx)
     try:
         profile_path = build_variant_profile(harness_path, apl_path, label=label, out_dir=out_dir)
         validation = validate_profile_file(paths, profile_path)
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
-        _fail(ctx, "validate_apl_failed", str(exc))
-        return
+        fail(ctx, "validate_apl_failed", str(exc))
     _emit(
         ctx,
         {
@@ -1160,6 +1117,7 @@ def compare_apls_command(
                                         help="Validate each generated profile before the full comparison."),
     report_out: str | None = typer.Option(None, "--report-out", help="Optional path to save the structured comparison JSON."),
 ) -> None:
+    """Sim a base APL against labelled variants and rank them by DPS."""
     paths = _repo_paths(ctx)
     try:
         variant_specs = _parse_variant_specs(variant)
@@ -1175,8 +1133,7 @@ def compare_apls_command(
             validate_first=validate_first,
         )
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
-        _fail(ctx, "compare_apls_failed", str(exc))
-        return
+        fail(ctx, "compare_apls_failed", str(exc))
     if report_out:
         target = Path(report_out).expanduser().resolve()
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -1190,15 +1147,14 @@ def variant_report_command(
     ctx: typer.Context,
     report_path: str = typer.Argument(..., help="Path to a saved compare-apls JSON report."),
 ) -> None:
+    """Summarize a saved compare-apls JSON report."""
     resolved = Path(report_path).expanduser().resolve()
     if not resolved.exists():
-        _fail(ctx, "not_found", f"Report not found: {resolved}")
-        return
+        fail(ctx, "not_found", f"Report not found: {resolved}")
     try:
         report = json.loads(resolved.read_text())
     except json.JSONDecodeError as exc:
-        _fail(ctx, "invalid_report", str(exc))
-        return
+        fail(ctx, "invalid_report", str(exc))
     _emit(
         ctx,
         {
@@ -1214,6 +1170,7 @@ def verify_clean_command(
     ctx: typer.Context,
     hash_binary: bool = typer.Option(False, "--hash-binary", help="Hash the local simc binary as part of the cleanliness report."),
 ) -> None:
+    """Report whether the checkout and built binary are unmodified."""
     paths = _repo_paths(ctx)
     _emit(ctx, {"provider": "simc", **verify_clean_payload(paths, hash_binary=hash_binary)})
 
@@ -1224,11 +1181,11 @@ def apl_lists(
     apl_path: str = typer.Argument(..., help="Path to a .simc APL file."),
     list_name: str | None = typer.Option(None, "--list", help="Only return one action list."),
 ) -> None:
+    """List the action lists in an APL file with their entries."""
     paths = _repo_paths(ctx)
     resolved = _resolve_path(paths, apl_path)
     if not resolved.exists():
-        _fail(ctx, "not_found", f"APL file not found: {resolved}")
-        return
+        fail(ctx, "not_found", f"APL file not found: {resolved}")
     entries = parse_apl(resolved)
     grouped = group_entries(entries)
     selected_names = [list_name] if list_name else sorted(grouped)
@@ -1272,11 +1229,11 @@ def apl_graph_command(
     ctx: typer.Context,
     apl_path: str = typer.Argument(..., help="Path to a .simc APL file."),
 ) -> None:
+    """Render the action-list call graph of an APL file as Mermaid text."""
     paths = _repo_paths(ctx)
     resolved = _resolve_path(paths, apl_path)
     if not resolved.exists():
-        _fail(ctx, "not_found", f"APL file not found: {resolved}")
-        return
+        fail(ctx, "not_found", f"APL file not found: {resolved}")
     entries = parse_apl(resolved)
     grouped = group_entries(entries)
     _emit(
@@ -1301,11 +1258,11 @@ def apl_talents_command(
     ctx: typer.Context,
     apl_path: str = typer.Argument(..., help="Path to a .simc APL file."),
 ) -> None:
+    """List the talents an APL file references and the most common actions."""
     paths = _repo_paths(ctx)
     resolved = _resolve_path(paths, apl_path)
     if not resolved.exists():
-        _fail(ctx, "not_found", f"APL file not found: {resolved}")
-        return
+        fail(ctx, "not_found", f"APL file not found: {resolved}")
     entries = parse_apl(resolved)
     refs = talent_refs(entries)
     counts = action_counts(entries)
@@ -1331,6 +1288,7 @@ def find_action_command(
     wow_class: str | None = typer.Option(None, "--class", help="Optional class name to narrow code and spell dumps."),
     limit: int = typer.Option(25, "--limit", min=1, max=200, help="Maximum hits to return per bucket."),
 ) -> None:
+    """Find an action, buff, or token across APLs, class modules, and spell dumps."""
     paths = _repo_paths(ctx)
     results = find_action(paths, action, wow_class)
     buckets: dict[str, Any] = {}
@@ -1362,11 +1320,11 @@ def trace_action_command(
     wow_class: str | None = typer.Option(None, "--class", help="Optional class name to narrow code and spell dumps."),
     limit: int = typer.Option(25, "--limit", min=1, max=200, help="Maximum non-APL hits to return per bucket."),
 ) -> None:
+    """Trace one action through an APL file and the surrounding source."""
     paths = _repo_paths(ctx)
     resolved = _resolve_path(paths, apl_path)
     if not resolved.exists():
-        _fail(ctx, "not_found", f"APL file not found: {resolved}")
-        return
+        fail(ctx, "not_found", f"APL file not found: {resolved}")
     entries = trace_action_entries(parse_apl(resolved), action)
     search_hits = find_action(paths, action, wow_class)
     buckets: dict[str, Any] = {}
@@ -1418,52 +1376,25 @@ def trace_action_command(
     )
 
 
-@app.command("apl-prune")
-def apl_prune_command(
+def _apl_prune(
     ctx: typer.Context,
-    apl_path: str = typer.Argument(..., help="Path to a .simc APL file."),
-    targets: int = typer.Option(1, "--targets", min=1, help="Active target count."),
-    list_name: str | None = typer.Option(None, "--list", help="Only return one action list."),
-    show: str = typer.Option("all", "--show", help="One of all, eligible, dead, or unknown."),
-    profile_path: str | None = typer.Option(None, "--profile-path", help="Optional profile path containing build lines."),
-    build_file: str | None = typer.Option(None, "--build-file", help="Optional plain text file with talents/spec lines."),
-    build_text: str | None = typer.Option(None, "--build-text", help="Inline build text or talent hash."),
-    talents: str | None = typer.Option(
-        None, "--talents", help="WoW export, Wowhead talent-calc URL with build code, SimC talents string, or talents=... line."),
-    class_talents: str | None = typer.Option(None, "--class-talents", help="Split class talents string."),
-    spec_talents: str | None = typer.Option(None, "--spec-talents", help="Split spec talents string."),
-    hero_talents: str | None = typer.Option(None, "--hero-talents", help="Split hero talents string."),
-    actor_class: str | None = typer.Option(None, "--actor-class", help="Actor class such as monk or evoker."),
-    spec_name: str | None = typer.Option(None, "--spec", help="Spec name such as mistweaver."),
-    enable: list[str] = typer.Option([], "--enable", help="Enabled talent names. Repeat or pass comma-separated values."),
-    disable: list[str] = typer.Option([], "--disable", help="Disabled talent names. Repeat or pass comma-separated values."),
+    *,
+    apl_path: str,
+    targets: int,
+    list_name: str | None,
+    show: str,
+    option_values: dict[str, Any],
 ) -> None:
     if show not in {"all", "eligible", "dead", "unknown"}:
-        _fail(ctx, "invalid_query", "--show must be one of: all, eligible, dead, unknown")
-        return
+        fail(ctx, "invalid_query", "--show must be one of: all, eligible, dead, unknown")
     paths = _repo_paths(ctx)
     resolved = _resolve_path(paths, apl_path)
     if not resolved.exists():
-        _fail(ctx, "not_found", f"APL file not found: {resolved}")
-        return
-    option_values = _build_option_values(
-        profile_path=profile_path,
-        build_file=build_file,
-        build_text=build_text,
-        talents=talents,
-        class_talents=class_talents,
-        spec_talents=spec_talents,
-        hero_talents=hero_talents,
-        actor_class=actor_class,
-        spec_name=spec_name,
-        enable=enable,
-        disable=disable,
-    )
+        fail(ctx, "not_found", f"APL file not found: {resolved}")
     try:
         context, resolution = _resolve_prune_context(paths, resolved, option_values, targets)
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
-        _fail(ctx, "prune_context_failed", str(exc))
-        return
+        fail(ctx, "prune_context_failed", str(exc))
     grouped: dict[str, list[Any]] = {}
     for pruned in prune_entries(parse_apl(resolved), context):
         grouped.setdefault(pruned.entry.list_name, []).append(pruned)
@@ -1508,13 +1439,13 @@ def apl_prune_command(
     )
 
 
-@app.command("apl-branch-trace")
-def apl_branch_trace_command(
+@app.command("apl-prune")
+def apl_prune_command(
     ctx: typer.Context,
     apl_path: str = typer.Argument(..., help="Path to a .simc APL file."),
     targets: int = typer.Option(1, "--targets", min=1, help="Active target count."),
-    list_name: str = typer.Option("default", "--list", help="Starting action list."),
-    max_depth: int = typer.Option(6, "--max-depth", min=1, max=20, help="Maximum recursive trace depth."),
+    list_name: str | None = typer.Option(None, "--list", help="Only return one action list."),
+    show: str = typer.Option("all", "--show", help="One of all, eligible, dead, or unknown."),
     profile_path: str | None = typer.Option(None, "--profile-path", help="Optional profile path containing build lines."),
     build_file: str | None = typer.Option(None, "--build-file", help="Optional plain text file with talents/spec lines."),
     build_text: str | None = typer.Option(None, "--build-text", help="Inline build text or talent hash."),
@@ -1528,29 +1459,42 @@ def apl_branch_trace_command(
     enable: list[str] = typer.Option([], "--enable", help="Enabled talent names. Repeat or pass comma-separated values."),
     disable: list[str] = typer.Option([], "--disable", help="Disabled talent names. Repeat or pass comma-separated values."),
 ) -> None:
-    paths = _repo_paths(ctx)
-    resolved = _resolve_path(paths, apl_path)
-    if not resolved.exists():
-        _fail(ctx, "not_found", f"APL file not found: {resolved}")
-        return
+    """Classify APL entries as eligible, dead, or unknown for an exact build."""
     option_values = _build_option_values(
         profile_path=profile_path,
         build_file=build_file,
         build_text=build_text,
-        talents=talents,
-        class_talents=class_talents,
-        spec_talents=spec_talents,
-        hero_talents=hero_talents,
+        talents=TalentStrings(
+            talents=talents,
+            class_talents=class_talents,
+            spec_talents=spec_talents,
+            hero_talents=hero_talents,
+        ),
         actor_class=actor_class,
         spec_name=spec_name,
         enable=enable,
         disable=disable,
     )
+    _apl_prune(ctx, apl_path=apl_path, targets=targets, list_name=list_name, show=show, option_values=option_values)
+
+
+def _apl_branch_trace(
+    ctx: typer.Context,
+    *,
+    apl_path: str,
+    targets: int,
+    list_name: str,
+    max_depth: int,
+    option_values: dict[str, Any],
+) -> None:
+    paths = _repo_paths(ctx)
+    resolved = _resolve_path(paths, apl_path)
+    if not resolved.exists():
+        fail(ctx, "not_found", f"APL file not found: {resolved}")
     try:
         context, resolution = _resolve_prune_context(paths, resolved, option_values, targets)
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
-        _fail(ctx, "branch_trace_failed", str(exc))
-        return
+        fail(ctx, "branch_trace_failed", str(exc))
     summary = summarize_branches(resolved, context, start_list=list_name)
     trace_lines = trace_apl(resolved, context, start_list=list_name, max_depth=max_depth)
     _emit(
@@ -1582,13 +1526,13 @@ def apl_branch_trace_command(
     )
 
 
-@app.command("apl-intent")
-def apl_intent_command(
+@app.command("apl-branch-trace")
+def apl_branch_trace_command(
     ctx: typer.Context,
     apl_path: str = typer.Argument(..., help="Path to a .simc APL file."),
     targets: int = typer.Option(1, "--targets", min=1, help="Active target count."),
     list_name: str = typer.Option("default", "--list", help="Starting action list."),
-    limit: int = typer.Option(6, "--limit", min=1, max=50, help="Number of intent lines to return."),
+    max_depth: int = typer.Option(6, "--max-depth", min=1, max=20, help="Maximum recursive trace depth."),
     profile_path: str | None = typer.Option(None, "--profile-path", help="Optional profile path containing build lines."),
     build_file: str | None = typer.Option(None, "--build-file", help="Optional plain text file with talents/spec lines."),
     build_text: str | None = typer.Option(None, "--build-text", help="Inline build text or talent hash."),
@@ -1602,29 +1546,49 @@ def apl_intent_command(
     enable: list[str] = typer.Option([], "--enable", help="Enabled talent names. Repeat or pass comma-separated values."),
     disable: list[str] = typer.Option([], "--disable", help="Disabled talent names. Repeat or pass comma-separated values."),
 ) -> None:
-    paths = _repo_paths(ctx)
-    resolved = _resolve_path(paths, apl_path)
-    if not resolved.exists():
-        _fail(ctx, "not_found", f"APL file not found: {resolved}")
-        return
+    """Trace action-list dispatch for an exact build from a starting list."""
     option_values = _build_option_values(
         profile_path=profile_path,
         build_file=build_file,
         build_text=build_text,
-        talents=talents,
-        class_talents=class_talents,
-        spec_talents=spec_talents,
-        hero_talents=hero_talents,
+        talents=TalentStrings(
+            talents=talents,
+            class_talents=class_talents,
+            spec_talents=spec_talents,
+            hero_talents=hero_talents,
+        ),
         actor_class=actor_class,
         spec_name=spec_name,
         enable=enable,
         disable=disable,
     )
+    _apl_branch_trace(
+        ctx,
+        apl_path=apl_path,
+        targets=targets,
+        list_name=list_name,
+        max_depth=max_depth,
+        option_values=option_values,
+    )
+
+
+def _apl_intent(
+    ctx: typer.Context,
+    *,
+    apl_path: str,
+    targets: int,
+    list_name: str,
+    limit: int,
+    option_values: dict[str, Any],
+) -> None:
+    paths = _repo_paths(ctx)
+    resolved = _resolve_path(paths, apl_path)
+    if not resolved.exists():
+        fail(ctx, "not_found", f"APL file not found: {resolved}")
     try:
         context, resolution = _resolve_prune_context(paths, resolved, option_values, targets)
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
-        _fail(ctx, "intent_failed", str(exc))
-        return
+        fail(ctx, "intent_failed", str(exc))
     summary = summarize_branches(resolved, context, start_list=list_name)
     focus_list = summary.guaranteed_dispatch or list_name
     _emit(
@@ -1657,13 +1621,13 @@ def apl_intent_command(
     )
 
 
-@app.command("apl-intent-explain")
-def apl_intent_explain_command(
+@app.command("apl-intent")
+def apl_intent_command(
     ctx: typer.Context,
     apl_path: str = typer.Argument(..., help="Path to a .simc APL file."),
     targets: int = typer.Option(1, "--targets", min=1, help="Active target count."),
     list_name: str = typer.Option("default", "--list", help="Starting action list."),
-    limit: int = typer.Option(8, "--limit", min=1, max=50, help="Maximum items per bucket."),
+    limit: int = typer.Option(6, "--limit", min=1, max=50, help="Number of intent lines to return."),
     profile_path: str | None = typer.Option(None, "--profile-path", help="Optional profile path containing build lines."),
     build_file: str | None = typer.Option(None, "--build-file", help="Optional plain text file with talents/spec lines."),
     build_text: str | None = typer.Option(None, "--build-text", help="Inline build text or talent hash."),
@@ -1677,29 +1641,42 @@ def apl_intent_explain_command(
     enable: list[str] = typer.Option([], "--enable", help="Enabled talent names. Repeat or pass comma-separated values."),
     disable: list[str] = typer.Option([], "--disable", help="Disabled talent names. Repeat or pass comma-separated values."),
 ) -> None:
-    paths = _repo_paths(ctx)
-    resolved = _resolve_path(paths, apl_path)
-    if not resolved.exists():
-        _fail(ctx, "not_found", f"APL file not found: {resolved}")
-        return
+    """Summarize what the focus action list is trying to do for an exact build."""
     option_values = _build_option_values(
         profile_path=profile_path,
         build_file=build_file,
         build_text=build_text,
-        talents=talents,
-        class_talents=class_talents,
-        spec_talents=spec_talents,
-        hero_talents=hero_talents,
+        talents=TalentStrings(
+            talents=talents,
+            class_talents=class_talents,
+            spec_talents=spec_talents,
+            hero_talents=hero_talents,
+        ),
         actor_class=actor_class,
         spec_name=spec_name,
         enable=enable,
         disable=disable,
     )
+    _apl_intent(ctx, apl_path=apl_path, targets=targets, list_name=list_name, limit=limit, option_values=option_values)
+
+
+def _apl_intent_explain(
+    ctx: typer.Context,
+    *,
+    apl_path: str,
+    targets: int,
+    list_name: str,
+    limit: int,
+    option_values: dict[str, Any],
+) -> None:
+    paths = _repo_paths(ctx)
+    resolved = _resolve_path(paths, apl_path)
+    if not resolved.exists():
+        fail(ctx, "not_found", f"APL file not found: {resolved}")
     try:
         context, resolution = _resolve_prune_context(paths, resolved, option_values, targets)
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
-        _fail(ctx, "intent_explain_failed", str(exc))
-        return
+        fail(ctx, "intent_explain_failed", str(exc))
     summary = summarize_branches(resolved, context, start_list=list_name)
     focus_list = summary.guaranteed_dispatch or list_name
     explanation = explain_intent(resolved, context, focus_list, limit=limit)
@@ -1738,13 +1715,13 @@ def apl_intent_explain_command(
     )
 
 
-@app.command("priority")
-def priority_command(
+@app.command("apl-intent-explain")
+def apl_intent_explain_command(
     ctx: typer.Context,
     apl_path: str = typer.Argument(..., help="Path to a .simc APL file."),
     targets: int = typer.Option(1, "--targets", min=1, help="Active target count."),
     list_name: str = typer.Option("default", "--list", help="Starting action list."),
-    limit: int = typer.Option(12, "--limit", min=1, max=100, help="Maximum active priority rows to return."),
+    limit: int = typer.Option(8, "--limit", min=1, max=50, help="Maximum items per bucket."),
     profile_path: str | None = typer.Option(None, "--profile-path", help="Optional profile path containing build lines."),
     build_file: str | None = typer.Option(None, "--build-file", help="Optional plain text file with talents/spec lines."),
     build_text: str | None = typer.Option(None, "--build-text", help="Inline build text or talent hash."),
@@ -1758,29 +1735,49 @@ def priority_command(
     enable: list[str] = typer.Option([], "--enable", help="Enabled talent names. Repeat or pass comma-separated values."),
     disable: list[str] = typer.Option([], "--disable", help="Disabled talent names. Repeat or pass comma-separated values."),
 ) -> None:
-    paths = _repo_paths(ctx)
-    resolved = _resolve_path(paths, apl_path)
-    if not resolved.exists():
-        _fail(ctx, "not_found", f"APL file not found: {resolved}")
-        return
+    """Explain the focus list as setup, helper, burst, and priority buckets."""
     option_values = _build_option_values(
         profile_path=profile_path,
         build_file=build_file,
         build_text=build_text,
-        talents=talents,
-        class_talents=class_talents,
-        spec_talents=spec_talents,
-        hero_talents=hero_talents,
+        talents=TalentStrings(
+            talents=talents,
+            class_talents=class_talents,
+            spec_talents=spec_talents,
+            hero_talents=hero_talents,
+        ),
         actor_class=actor_class,
         spec_name=spec_name,
         enable=enable,
         disable=disable,
     )
+    _apl_intent_explain(
+        ctx,
+        apl_path=apl_path,
+        targets=targets,
+        list_name=list_name,
+        limit=limit,
+        option_values=option_values,
+    )
+
+
+def _priority(
+    ctx: typer.Context,
+    *,
+    apl_path: str,
+    targets: int,
+    list_name: str,
+    limit: int,
+    option_values: dict[str, Any],
+) -> None:
+    paths = _repo_paths(ctx)
+    resolved = _resolve_path(paths, apl_path)
+    if not resolved.exists():
+        fail(ctx, "not_found", f"APL file not found: {resolved}")
     try:
         context, resolution = _resolve_prune_context(paths, resolved, option_values, targets)
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
-        _fail(ctx, "priority_failed", str(exc))
-        return
+        fail(ctx, "priority_failed", str(exc))
     summary, focus = _focus_list_summary(resolved, context, start_list=list_name)
     decisions = active_priority_decisions(resolved, context, focus.focus_list)[:limit]
     excluded = inactive_priority_decisions(resolved, context, focus.focus_list, talent_only=True)
@@ -1811,23 +1808,16 @@ def priority_command(
     )
 
 
-@app.command("describe-build")
-def describe_build_command(
+@app.command("priority")
+def priority_command(
     ctx: typer.Context,
-    apl_path: str | None = typer.Option(
-        None, "--apl-path", help="Optional APL path. If omitted, the CLI tries the default spec APL for the resolved build."),
-    targets: int = typer.Option(1, "--targets", min=1, help="Primary target count for the base build summary."),
-    aoe_targets: int = typer.Option(5, "--aoe-targets", min=2, help="Secondary target count used for the cleave/AoE comparison view."),
+    apl_path: str = typer.Argument(..., help="Path to a .simc APL file."),
+    targets: int = typer.Option(1, "--targets", min=1, help="Active target count."),
     list_name: str = typer.Option("default", "--list", help="Starting action list."),
-    priority_limit: int = typer.Option(8, "--priority-limit", min=1, max=50,
-                                       help="Maximum active priority rows to summarize per target view."),
-    inactive_limit: int = typer.Option(8, "--inactive-limit", min=1, max=50,
-                                       help="Maximum inactive talent-gated actions to summarize per target view."),
+    limit: int = typer.Option(12, "--limit", min=1, max=100, help="Maximum active priority rows to return."),
     profile_path: str | None = typer.Option(None, "--profile-path", help="Optional profile path containing build lines."),
     build_file: str | None = typer.Option(None, "--build-file", help="Optional plain text file with talents/spec lines."),
-    build_packet: str | None = typer.Option(None, "--build-packet", help="Path to a talent transport packet JSON file."),
-    build_text: str | None = typer.Option(
-        None, "--build-text", help="Inline build text, talent hash, or Wowhead talent-calc URL with build code."),
+    build_text: str | None = typer.Option(None, "--build-text", help="Inline build text or talent hash."),
     talents: str | None = typer.Option(
         None, "--talents", help="WoW export, Wowhead talent-calc URL with build code, SimC talents string, or talents=... line."),
     class_talents: str | None = typer.Option(None, "--class-talents", help="Split class talents string."),
@@ -1838,60 +1828,59 @@ def describe_build_command(
     enable: list[str] = typer.Option([], "--enable", help="Enabled talent names. Repeat or pass comma-separated values."),
     disable: list[str] = typer.Option([], "--disable", help="Disabled talent names. Repeat or pass comma-separated values."),
 ) -> None:
-    paths = _repo_paths(ctx)
-    build_spec, identity = _load_identified_build_spec_or_fail(
-        ctx,
-        paths,
-        apl_path=apl_path,
-        profile_path=profile_path,
-        build_file=build_file,
-        build_packet=build_packet,
-        build_text=build_text,
-        talents=talents,
-        class_talents=class_talents,
-        spec_talents=spec_talents,
-        hero_talents=hero_talents,
-        actor_class=actor_class,
-        spec_name=spec_name,
-    )
-    if not build_spec.actor_class or not build_spec.spec:
-        _fail(
-            ctx,
-            "invalid_query",
-            "Could not determine actor class and spec for build description.",
-            extra={"build_spec": _serialize_build_spec(build_spec), "identity": _serialize_build_identity(identity)},
-        )
-        return
-    resolved = _resolve_path(paths, apl_path) if apl_path else _infer_default_apl_path(
-        paths, actor_class=build_spec.actor_class, spec=build_spec.spec)
-    if not resolved or not resolved.exists():
-        _fail(
-            ctx,
-            "not_found",
-            "Could not locate an APL file for the resolved build. Pass --apl-path explicitly.",
-            extra={"build_spec": _serialize_build_spec(build_spec), "identity": _serialize_build_identity(identity)},
-        )
-        return
+    """Return the static active priority for an exact build, excluding inactive talent branches."""
     option_values = _build_option_values(
         profile_path=profile_path,
         build_file=build_file,
-        build_packet=build_packet,
         build_text=build_text,
-        talents=talents,
-        class_talents=class_talents,
-        spec_talents=spec_talents,
-        hero_talents=hero_talents,
+        talents=TalentStrings(
+            talents=talents,
+            class_talents=class_talents,
+            spec_talents=spec_talents,
+            hero_talents=hero_talents,
+        ),
         actor_class=actor_class,
         spec_name=spec_name,
         enable=enable,
         disable=disable,
     )
+    _priority(ctx, apl_path=apl_path, targets=targets, list_name=list_name, limit=limit, option_values=option_values)
+
+
+def _describe_build(
+    ctx: typer.Context,
+    *,
+    apl_path: str | None,
+    targets: int,
+    aoe_targets: int,
+    list_name: str,
+    priority_limit: int,
+    inactive_limit: int,
+    option_values: dict[str, Any],
+) -> None:
+    paths = _repo_paths(ctx)
+    build_spec, identity = _identified_build_or_fail(ctx, paths, apl_path=apl_path, option_values=option_values)
+    if not build_spec.actor_class or not build_spec.spec:
+        fail(
+            ctx,
+            "invalid_query",
+            "Could not determine actor class and spec for build description.",
+            details={"build_spec": _serialize_build_spec(build_spec), "identity": _serialize_build_identity(identity)},
+        )
+    resolved = _resolve_path(paths, apl_path) if apl_path else _infer_default_apl_path(
+        paths, actor_class=build_spec.actor_class, spec=build_spec.spec)
+    if not resolved or not resolved.exists():
+        fail(
+            ctx,
+            "not_found",
+            "Could not locate an APL file for the resolved build. Pass --apl-path explicitly.",
+            details={"build_spec": _serialize_build_spec(build_spec), "identity": _serialize_build_identity(identity)},
+        )
     try:
         primary_context, resolution = _resolve_prune_context(paths, resolved, option_values, targets)
         aoe_context, _ = _resolve_prune_context(paths, resolved, option_values, aoe_targets)
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
-        _fail(ctx, "describe_build_failed", str(exc))
-        return
+        fail(ctx, "describe_build_failed", str(exc))
     primary = _describe_target_payload(resolved, primary_context, start_list=list_name,
                                        priority_limit=priority_limit, inactive_limit=inactive_limit)
     aoe = _describe_target_payload(resolved, aoe_context, start_list=list_name,
@@ -1929,17 +1918,23 @@ def describe_build_command(
     )
 
 
-@app.command("inactive-actions")
-def inactive_actions_command(
+@app.command("describe-build")
+def describe_build_command(
     ctx: typer.Context,
-    apl_path: str = typer.Argument(..., help="Path to a .simc APL file."),
-    targets: int = typer.Option(1, "--targets", min=1, help="Active target count."),
+    apl_path: str | None = typer.Option(
+        None, "--apl-path", help="Optional APL path. If omitted, the CLI tries the default spec APL for the resolved build."),
+    targets: int = typer.Option(1, "--targets", min=1, help="Primary target count for the base build summary."),
+    aoe_targets: int = typer.Option(5, "--aoe-targets", min=2, help="Secondary target count used for the cleave/AoE comparison view."),
     list_name: str = typer.Option("default", "--list", help="Starting action list."),
-    limit: int = typer.Option(20, "--limit", min=1, max=200, help="Maximum inactive rows to return."),
-    talent_only: bool = typer.Option(True, "--talent-only/--all-dead", help="Only return talent-gated dead actions by default."),
+    priority_limit: int = typer.Option(8, "--priority-limit", min=1, max=50,
+                                       help="Maximum active priority rows to summarize per target view."),
+    inactive_limit: int = typer.Option(8, "--inactive-limit", min=1, max=50,
+                                       help="Maximum inactive talent-gated actions to summarize per target view."),
     profile_path: str | None = typer.Option(None, "--profile-path", help="Optional profile path containing build lines."),
     build_file: str | None = typer.Option(None, "--build-file", help="Optional plain text file with talents/spec lines."),
-    build_text: str | None = typer.Option(None, "--build-text", help="Inline build text or talent hash."),
+    build_packet: str | None = typer.Option(None, "--build-packet", help="Path to a talent transport packet JSON file."),
+    build_text: str | None = typer.Option(
+        None, "--build-text", help="Inline build text, talent hash, or Wowhead talent-calc URL with build code."),
     talents: str | None = typer.Option(
         None, "--talents", help="WoW export, Wowhead talent-calc URL with build code, SimC talents string, or talents=... line."),
     class_talents: str | None = typer.Option(None, "--class-talents", help="Split class talents string."),
@@ -1950,29 +1945,53 @@ def inactive_actions_command(
     enable: list[str] = typer.Option([], "--enable", help="Enabled talent names. Repeat or pass comma-separated values."),
     disable: list[str] = typer.Option([], "--disable", help="Disabled talent names. Repeat or pass comma-separated values."),
 ) -> None:
-    paths = _repo_paths(ctx)
-    resolved = _resolve_path(paths, apl_path)
-    if not resolved.exists():
-        _fail(ctx, "not_found", f"APL file not found: {resolved}")
-        return
+    """Describe a build end to end: talents, priority, and single-target versus AoE differences."""
     option_values = _build_option_values(
         profile_path=profile_path,
         build_file=build_file,
+        build_packet=build_packet,
         build_text=build_text,
-        talents=talents,
-        class_talents=class_talents,
-        spec_talents=spec_talents,
-        hero_talents=hero_talents,
+        talents=TalentStrings(
+            talents=talents,
+            class_talents=class_talents,
+            spec_talents=spec_talents,
+            hero_talents=hero_talents,
+        ),
         actor_class=actor_class,
         spec_name=spec_name,
         enable=enable,
         disable=disable,
     )
+    _describe_build(
+        ctx,
+        apl_path=apl_path,
+        targets=targets,
+        aoe_targets=aoe_targets,
+        list_name=list_name,
+        priority_limit=priority_limit,
+        inactive_limit=inactive_limit,
+        option_values=option_values,
+    )
+
+
+def _inactive_actions(
+    ctx: typer.Context,
+    *,
+    apl_path: str,
+    targets: int,
+    list_name: str,
+    limit: int,
+    talent_only: bool,
+    option_values: dict[str, Any],
+) -> None:
+    paths = _repo_paths(ctx)
+    resolved = _resolve_path(paths, apl_path)
+    if not resolved.exists():
+        fail(ctx, "not_found", f"APL file not found: {resolved}")
     try:
         context, resolution = _resolve_prune_context(paths, resolved, option_values, targets)
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
-        _fail(ctx, "inactive_actions_failed", str(exc))
-        return
+        fail(ctx, "inactive_actions_failed", str(exc))
     summary, focus = _focus_list_summary(resolved, context, start_list=list_name)
     decisions = inactive_priority_decisions(resolved, context, focus.focus_list, talent_only=talent_only)
     _emit(
@@ -1998,13 +2017,14 @@ def inactive_actions_command(
     )
 
 
-@app.command("opener")
-def opener_command(
+@app.command("inactive-actions")
+def inactive_actions_command(
     ctx: typer.Context,
     apl_path: str = typer.Argument(..., help="Path to a .simc APL file."),
     targets: int = typer.Option(1, "--targets", min=1, help="Active target count."),
     list_name: str = typer.Option("default", "--list", help="Starting action list."),
-    limit: int = typer.Option(10, "--limit", min=1, max=50, help="Maximum early actions to return."),
+    limit: int = typer.Option(20, "--limit", min=1, max=200, help="Maximum inactive rows to return."),
+    talent_only: bool = typer.Option(True, "--talent-only/--all-dead", help="Only return talent-gated dead actions by default."),
     profile_path: str | None = typer.Option(None, "--profile-path", help="Optional profile path containing build lines."),
     build_file: str | None = typer.Option(None, "--build-file", help="Optional plain text file with talents/spec lines."),
     build_text: str | None = typer.Option(None, "--build-text", help="Inline build text or talent hash."),
@@ -2018,29 +2038,50 @@ def opener_command(
     enable: list[str] = typer.Option([], "--enable", help="Enabled talent names. Repeat or pass comma-separated values."),
     disable: list[str] = typer.Option([], "--disable", help="Disabled talent names. Repeat or pass comma-separated values."),
 ) -> None:
-    paths = _repo_paths(ctx)
-    resolved = _resolve_path(paths, apl_path)
-    if not resolved.exists():
-        _fail(ctx, "not_found", f"APL file not found: {resolved}")
-        return
+    """List the APL actions an exact build cannot use."""
     option_values = _build_option_values(
         profile_path=profile_path,
         build_file=build_file,
         build_text=build_text,
-        talents=talents,
-        class_talents=class_talents,
-        spec_talents=spec_talents,
-        hero_talents=hero_talents,
+        talents=TalentStrings(
+            talents=talents,
+            class_talents=class_talents,
+            spec_talents=spec_talents,
+            hero_talents=hero_talents,
+        ),
         actor_class=actor_class,
         spec_name=spec_name,
         enable=enable,
         disable=disable,
     )
+    _inactive_actions(
+        ctx,
+        apl_path=apl_path,
+        targets=targets,
+        list_name=list_name,
+        limit=limit,
+        talent_only=talent_only,
+        option_values=option_values,
+    )
+
+
+def _opener(
+    ctx: typer.Context,
+    *,
+    apl_path: str,
+    targets: int,
+    list_name: str,
+    limit: int,
+    option_values: dict[str, Any],
+) -> None:
+    paths = _repo_paths(ctx)
+    resolved = _resolve_path(paths, apl_path)
+    if not resolved.exists():
+        fail(ctx, "not_found", f"APL file not found: {resolved}")
     try:
         context, resolution = _resolve_prune_context(paths, resolved, option_values, targets)
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
-        _fail(ctx, "opener_failed", str(exc))
-        return
+        fail(ctx, "opener_failed", str(exc))
     summary, focus = _focus_list_summary(resolved, context, start_list=list_name)
     decisions = active_priority_decisions(resolved, context, focus.focus_list)[:limit]
     runtime_sensitive = [
@@ -2076,75 +2117,64 @@ def opener_command(
     )
 
 
-@app.command("apl-branch-compare")
-def apl_branch_compare_command(
+@app.command("opener")
+def opener_command(
     ctx: typer.Context,
     apl_path: str = typer.Argument(..., help="Path to a .simc APL file."),
-    left_targets: int = typer.Option(1, "--left-targets", min=1, help="Target count for the left context."),
-    right_targets: int = typer.Option(1, "--right-targets", min=1, help="Target count for the right context."),
+    targets: int = typer.Option(1, "--targets", min=1, help="Active target count."),
     list_name: str = typer.Option("default", "--list", help="Starting action list."),
-    profile_path: str | None = typer.Option(None, "--profile-path", help="Optional left profile path containing build lines."),
-    build_file: str | None = typer.Option(None, "--build-file", help="Optional left build file."),
-    build_text: str | None = typer.Option(None, "--build-text", help="Inline left build text or talent hash."),
+    limit: int = typer.Option(10, "--limit", min=1, max=50, help="Maximum early actions to return."),
+    profile_path: str | None = typer.Option(None, "--profile-path", help="Optional profile path containing build lines."),
+    build_file: str | None = typer.Option(None, "--build-file", help="Optional plain text file with talents/spec lines."),
+    build_text: str | None = typer.Option(None, "--build-text", help="Inline build text or talent hash."),
     talents: str | None = typer.Option(
-        None, "--talents", help="Left WoW export, Wowhead talent-calc URL with build code, SimC talents string, or talents=... line."),
-    class_talents: str | None = typer.Option(None, "--class-talents", help="Left split class talents string."),
-    spec_talents: str | None = typer.Option(None, "--spec-talents", help="Left split spec talents string."),
-    hero_talents: str | None = typer.Option(None, "--hero-talents", help="Left split hero talents string."),
-    actor_class: str | None = typer.Option(None, "--actor-class", help="Left actor class such as monk or evoker."),
-    spec_name: str | None = typer.Option(None, "--spec", help="Left spec name such as mistweaver."),
-    enable: list[str] = typer.Option([], "--enable", help="Enabled left talent names. Repeat or pass comma-separated values."),
-    disable: list[str] = typer.Option([], "--disable", help="Disabled left talent names. Repeat or pass comma-separated values."),
-    right_profile_path: str | None = typer.Option(None, "--right-profile-path", help="Optional right profile path containing build lines."),
-    right_build_file: str | None = typer.Option(None, "--right-build-file", help="Optional right build file."),
-    right_build_text: str | None = typer.Option(None, "--right-build-text", help="Inline right build text or talent hash."),
-    right_talents: str | None = typer.Option(None, "--right-talents", help="Right SimC talents string or talents=... line."),
-    right_class_talents: str | None = typer.Option(None, "--right-class-talents", help="Right split class talents string."),
-    right_spec_talents: str | None = typer.Option(None, "--right-spec-talents", help="Right split spec talents string."),
-    right_hero_talents: str | None = typer.Option(None, "--right-hero-talents", help="Right split hero talents string."),
-    right_actor_class: str | None = typer.Option(None, "--right-actor-class", help="Right actor class such as monk or evoker."),
-    right_spec_name: str | None = typer.Option(None, "--right-spec", help="Right spec name such as mistweaver."),
-    right_enable: list[str] = typer.Option([], "--right-enable", help="Enabled right talent names. Repeat or pass comma-separated values."),
-    right_disable: list[str] = typer.Option(
-        [], "--right-disable", help="Disabled right talent names. Repeat or pass comma-separated values."),
+        None, "--talents", help="WoW export, Wowhead talent-calc URL with build code, SimC talents string, or talents=... line."),
+    class_talents: str | None = typer.Option(None, "--class-talents", help="Split class talents string."),
+    spec_talents: str | None = typer.Option(None, "--spec-talents", help="Split spec talents string."),
+    hero_talents: str | None = typer.Option(None, "--hero-talents", help="Split hero talents string."),
+    actor_class: str | None = typer.Option(None, "--actor-class", help="Actor class such as monk or evoker."),
+    spec_name: str | None = typer.Option(None, "--spec", help="Spec name such as mistweaver."),
+    enable: list[str] = typer.Option([], "--enable", help="Enabled talent names. Repeat or pass comma-separated values."),
+    disable: list[str] = typer.Option([], "--disable", help="Disabled talent names. Repeat or pass comma-separated values."),
 ) -> None:
-    paths = _repo_paths(ctx)
-    resolved = _resolve_path(paths, apl_path)
-    if not resolved.exists():
-        _fail(ctx, "not_found", f"APL file not found: {resolved}")
-        return
-    left_values = _build_option_values(
+    """Preview the early priority for an exact build, flagging runtime-only conditions."""
+    option_values = _build_option_values(
         profile_path=profile_path,
         build_file=build_file,
         build_text=build_text,
-        talents=talents,
-        class_talents=class_talents,
-        spec_talents=spec_talents,
-        hero_talents=hero_talents,
+        talents=TalentStrings(
+            talents=talents,
+            class_talents=class_talents,
+            spec_talents=spec_talents,
+            hero_talents=hero_talents,
+        ),
         actor_class=actor_class,
         spec_name=spec_name,
         enable=enable,
         disable=disable,
     )
-    right_values = _build_option_values(
-        profile_path=right_profile_path if right_profile_path is not None else profile_path,
-        build_file=right_build_file if right_build_file is not None else build_file,
-        build_text=right_build_text if right_build_text is not None else build_text,
-        talents=right_talents if right_talents is not None else talents,
-        class_talents=right_class_talents if right_class_talents is not None else class_talents,
-        spec_talents=right_spec_talents if right_spec_talents is not None else spec_talents,
-        hero_talents=right_hero_talents if right_hero_talents is not None else hero_talents,
-        actor_class=right_actor_class if right_actor_class is not None else actor_class,
-        spec_name=right_spec_name if right_spec_name is not None else spec_name,
-        enable=[*enable, *right_enable],
-        disable=[*disable, *right_disable],
-    )
+    _opener(ctx, apl_path=apl_path, targets=targets, list_name=list_name, limit=limit, option_values=option_values)
+
+
+def _apl_branch_compare(
+    ctx: typer.Context,
+    *,
+    apl_path: str,
+    list_name: str,
+    left_targets: int,
+    right_targets: int,
+    left_values: dict[str, Any],
+    right_values: dict[str, Any],
+) -> None:
+    paths = _repo_paths(ctx)
+    resolved = _resolve_path(paths, apl_path)
+    if not resolved.exists():
+        fail(ctx, "not_found", f"APL file not found: {resolved}")
     try:
         left_context, left_resolution = _resolve_prune_context(paths, resolved, left_values, left_targets)
         right_context, right_resolution = _resolve_prune_context(paths, resolved, right_values, right_targets)
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
-        _fail(ctx, "branch_compare_failed", str(exc))
-        return
+        fail(ctx, "branch_compare_failed", str(exc))
     comparison = attach_focus_comparison(
         compare_branch_summaries(
             summarize_branches(resolved, left_context, start_list=list_name),
@@ -2195,57 +2225,100 @@ def apl_branch_compare_command(
     )
 
 
-@app.command("analysis-packet")
-def analysis_packet_command(
+@app.command("apl-branch-compare")
+def apl_branch_compare_command(
     ctx: typer.Context,
     apl_path: str = typer.Argument(..., help="Path to a .simc APL file."),
-    targets: int = typer.Option(1, "--targets", min=1, help="Active target count."),
+    left_targets: int = typer.Option(1, "--left-targets", min=1, help="Target count for the left context."),
+    right_targets: int = typer.Option(1, "--right-targets", min=1, help="Target count for the right context."),
     list_name: str = typer.Option("default", "--list", help="Starting action list."),
-    intent_limit: int = typer.Option(6, "--intent-limit", min=1, max=50, help="Number of intent lines to return."),
-    explain_limit: int = typer.Option(8, "--explain-limit", min=1, max=50, help="Maximum items per explanation bucket."),
-    runtime_scan_limit: int = typer.Option(8, "--runtime-scan-limit", min=1, max=50,
-                                           help="How many early runtime-sensitive lines to report."),
-    sim_profile: str | None = typer.Option(None, "--sim-profile", help="Optional profile path used for first-cast timing checks."),
-    first_cast_action: list[str] = typer.Option([], "--first-cast-action", help="Action name to time with short sims. Repeat as needed."),
-    seeds: int = typer.Option(5, "--seeds", min=1, max=100, help="Number of timing samples per first-cast action."),
-    max_time: int = typer.Option(60, "--max-time", min=1, max=10000, help="Fight length for first-cast timing sims."),
-    fight_style: str = typer.Option("Patchwerk", "--fight-style", help="Fight style for first-cast timing sims."),
-    profile_path: str | None = typer.Option(None, "--profile-path", help="Optional profile path containing build lines."),
-    build_file: str | None = typer.Option(None, "--build-file", help="Optional plain text file with talents/spec lines."),
-    build_text: str | None = typer.Option(None, "--build-text", help="Inline build text or talent hash."),
+    profile_path: str | None = typer.Option(None, "--profile-path", help="Optional left profile path containing build lines."),
+    build_file: str | None = typer.Option(None, "--build-file", help="Optional left build file."),
+    build_text: str | None = typer.Option(None, "--build-text", help="Inline left build text or talent hash."),
     talents: str | None = typer.Option(
-        None, "--talents", help="WoW export, Wowhead talent-calc URL with build code, SimC talents string, or talents=... line."),
-    class_talents: str | None = typer.Option(None, "--class-talents", help="Split class talents string."),
-    spec_talents: str | None = typer.Option(None, "--spec-talents", help="Split spec talents string."),
-    hero_talents: str | None = typer.Option(None, "--hero-talents", help="Split hero talents string."),
-    actor_class: str | None = typer.Option(None, "--actor-class", help="Actor class such as monk or evoker."),
-    spec_name: str | None = typer.Option(None, "--spec", help="Spec name such as mistweaver."),
-    enable: list[str] = typer.Option([], "--enable", help="Enabled talent names. Repeat or pass comma-separated values."),
-    disable: list[str] = typer.Option([], "--disable", help="Disabled talent names. Repeat or pass comma-separated values."),
+        None, "--talents", help="Left WoW export, Wowhead talent-calc URL with build code, SimC talents string, or talents=... line."),
+    class_talents: str | None = typer.Option(None, "--class-talents", help="Left split class talents string."),
+    spec_talents: str | None = typer.Option(None, "--spec-talents", help="Left split spec talents string."),
+    hero_talents: str | None = typer.Option(None, "--hero-talents", help="Left split hero talents string."),
+    actor_class: str | None = typer.Option(None, "--actor-class", help="Left actor class such as monk or evoker."),
+    spec_name: str | None = typer.Option(None, "--spec", help="Left spec name such as mistweaver."),
+    enable: list[str] = typer.Option([], "--enable", help="Enabled left talent names. Repeat or pass comma-separated values."),
+    disable: list[str] = typer.Option([], "--disable", help="Disabled left talent names. Repeat or pass comma-separated values."),
+    right_profile_path: str | None = typer.Option(None, "--right-profile-path", help="Optional right profile path containing build lines."),
+    right_build_file: str | None = typer.Option(None, "--right-build-file", help="Optional right build file."),
+    right_build_text: str | None = typer.Option(None, "--right-build-text", help="Inline right build text or talent hash."),
+    right_talents: str | None = typer.Option(None, "--right-talents", help="Right SimC talents string or talents=... line."),
+    right_class_talents: str | None = typer.Option(None, "--right-class-talents", help="Right split class talents string."),
+    right_spec_talents: str | None = typer.Option(None, "--right-spec-talents", help="Right split spec talents string."),
+    right_hero_talents: str | None = typer.Option(None, "--right-hero-talents", help="Right split hero talents string."),
+    right_actor_class: str | None = typer.Option(None, "--right-actor-class", help="Right actor class such as monk or evoker."),
+    right_spec_name: str | None = typer.Option(None, "--right-spec", help="Right spec name such as mistweaver."),
+    right_enable: list[str] = typer.Option([], "--right-enable", help="Enabled right talent names. Repeat or pass comma-separated values."),
+    right_disable: list[str] = typer.Option(
+        [], "--right-disable", help="Disabled right talent names. Repeat or pass comma-separated values."),
 ) -> None:
-    paths = _repo_paths(ctx)
-    resolved = _resolve_path(paths, apl_path)
-    if not resolved.exists():
-        _fail(ctx, "not_found", f"APL file not found: {resolved}")
-        return
-    option_values = _build_option_values(
+    """Compare branch dispatch between two builds or target counts on one APL."""
+    left_values = _build_option_values(
         profile_path=profile_path,
         build_file=build_file,
         build_text=build_text,
-        talents=talents,
-        class_talents=class_talents,
-        spec_talents=spec_talents,
-        hero_talents=hero_talents,
+        talents=TalentStrings(
+            talents=talents,
+            class_talents=class_talents,
+            spec_talents=spec_talents,
+            hero_talents=hero_talents,
+        ),
         actor_class=actor_class,
         spec_name=spec_name,
         enable=enable,
         disable=disable,
     )
+    right_values = _build_option_values(
+        profile_path=right_profile_path if right_profile_path is not None else profile_path,
+        build_file=right_build_file if right_build_file is not None else build_file,
+        build_text=right_build_text if right_build_text is not None else build_text,
+        talents=TalentStrings(
+            talents=right_talents if right_talents is not None else talents,
+            class_talents=right_class_talents if right_class_talents is not None else class_talents,
+            spec_talents=right_spec_talents if right_spec_talents is not None else spec_talents,
+            hero_talents=right_hero_talents if right_hero_talents is not None else hero_talents,
+        ),
+        actor_class=right_actor_class if right_actor_class is not None else actor_class,
+        spec_name=right_spec_name if right_spec_name is not None else spec_name,
+        enable=[*enable, *right_enable],
+        disable=[*disable, *right_disable],
+    )
+    _apl_branch_compare(
+        ctx,
+        apl_path=apl_path,
+        list_name=list_name,
+        left_targets=left_targets,
+        right_targets=right_targets,
+        left_values=left_values,
+        right_values=right_values,
+    )
+
+
+def _analysis_packet(
+    ctx: typer.Context,
+    *,
+    apl_path: str,
+    targets: int,
+    list_name: str,
+    intent_limit: int,
+    explain_limit: int,
+    runtime_scan_limit: int,
+    first_cast: FirstCastOptions,
+    option_values: dict[str, Any],
+) -> None:
+    paths = _repo_paths(ctx)
+    resolved = _resolve_path(paths, apl_path)
+    if not resolved.exists():
+        fail(ctx, "not_found", f"APL file not found: {resolved}")
     try:
         context, resolution = _resolve_prune_context(paths, resolved, option_values, targets)
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
-        _fail(ctx, "analysis_packet_failed", str(exc))
-        return
+        fail(ctx, "analysis_packet_failed", str(exc))
     try:
         packet = build_analysis_packet(
             paths,
@@ -2255,16 +2328,10 @@ def analysis_packet_command(
             intent_limit=intent_limit,
             explain_limit=explain_limit,
             runtime_scan_limit=runtime_scan_limit,
-            first_cast_profile=sim_profile or profile_path,
-            first_cast_actions=first_cast_action,
-            first_cast_seeds=seeds,
-            first_cast_max_time=max_time,
-            first_cast_targets=targets,
-            first_cast_fight_style=fight_style,
+            first_cast=first_cast,
         )
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
-        _fail(ctx, "analysis_packet_failed", str(exc))
-        return
+        fail(ctx, "analysis_packet_failed", str(exc))
     _emit(
         ctx,
         {
@@ -2328,6 +2395,70 @@ def analysis_packet_command(
     )
 
 
+@app.command("analysis-packet")
+def analysis_packet_command(
+    ctx: typer.Context,
+    apl_path: str = typer.Argument(..., help="Path to a .simc APL file."),
+    targets: int = typer.Option(1, "--targets", min=1, help="Active target count."),
+    list_name: str = typer.Option("default", "--list", help="Starting action list."),
+    intent_limit: int = typer.Option(6, "--intent-limit", min=1, max=50, help="Number of intent lines to return."),
+    explain_limit: int = typer.Option(8, "--explain-limit", min=1, max=50, help="Maximum items per explanation bucket."),
+    runtime_scan_limit: int = typer.Option(8, "--runtime-scan-limit", min=1, max=50,
+                                           help="How many early runtime-sensitive lines to report."),
+    sim_profile: str | None = typer.Option(None, "--sim-profile", help="Optional profile path used for first-cast timing checks."),
+    first_cast_action: list[str] = typer.Option([], "--first-cast-action", help="Action name to time with short sims. Repeat as needed."),
+    seeds: int = typer.Option(5, "--seeds", min=1, max=100, help="Number of timing samples per first-cast action."),
+    max_time: int = typer.Option(60, "--max-time", min=1, max=10000, help="Fight length for first-cast timing sims."),
+    fight_style: str = typer.Option("Patchwerk", "--fight-style", help="Fight style for first-cast timing sims."),
+    profile_path: str | None = typer.Option(None, "--profile-path", help="Optional profile path containing build lines."),
+    build_file: str | None = typer.Option(None, "--build-file", help="Optional plain text file with talents/spec lines."),
+    build_text: str | None = typer.Option(None, "--build-text", help="Inline build text or talent hash."),
+    talents: str | None = typer.Option(
+        None, "--talents", help="WoW export, Wowhead talent-calc URL with build code, SimC talents string, or talents=... line."),
+    class_talents: str | None = typer.Option(None, "--class-talents", help="Split class talents string."),
+    spec_talents: str | None = typer.Option(None, "--spec-talents", help="Split spec talents string."),
+    hero_talents: str | None = typer.Option(None, "--hero-talents", help="Split hero talents string."),
+    actor_class: str | None = typer.Option(None, "--actor-class", help="Actor class such as monk or evoker."),
+    spec_name: str | None = typer.Option(None, "--spec", help="Spec name such as mistweaver."),
+    enable: list[str] = typer.Option([], "--enable", help="Enabled talent names. Repeat or pass comma-separated values."),
+    disable: list[str] = typer.Option([], "--disable", help="Disabled talent names. Repeat or pass comma-separated values."),
+) -> None:
+    """Bundle branch, intent, and optional first-cast timing analysis into one payload."""
+    option_values = _build_option_values(
+        profile_path=profile_path,
+        build_file=build_file,
+        build_text=build_text,
+        talents=TalentStrings(
+            talents=talents,
+            class_talents=class_talents,
+            spec_talents=spec_talents,
+            hero_talents=hero_talents,
+        ),
+        actor_class=actor_class,
+        spec_name=spec_name,
+        enable=enable,
+        disable=disable,
+    )
+    _analysis_packet(
+        ctx,
+        apl_path=apl_path,
+        targets=targets,
+        list_name=list_name,
+        intent_limit=intent_limit,
+        explain_limit=explain_limit,
+        runtime_scan_limit=runtime_scan_limit,
+        first_cast=FirstCastOptions(
+            profile=sim_profile or profile_path,
+            actions=tuple(first_cast_action),
+            seeds=seeds,
+            max_time=max_time,
+            targets=targets,
+            fight_style=fight_style,
+        ),
+        option_values=option_values,
+    )
+
+
 @app.command("first-cast")
 def first_cast_command(
     ctx: typer.Context,
@@ -2338,16 +2469,15 @@ def first_cast_command(
     targets: int = typer.Option(1, "--targets", min=1, help="Active target count."),
     fight_style: str = typer.Option("Patchwerk", "--fight-style", help="Fight style for the short sims."),
 ) -> None:
+    """Time the first cast of an action across several short sims."""
     paths = _repo_paths(ctx)
     resolved = Path(profile_path).expanduser().resolve()
     if not resolved.exists():
-        _fail(ctx, "not_found", f"Profile not found: {resolved}")
-        return
+        fail(ctx, "not_found", f"Profile not found: {resolved}")
     try:
         results = run_first_casts(paths, resolved, action, seeds, max_time, targets, fight_style)
     except (FileNotFoundError, RuntimeError) as exc:
-        _fail(ctx, "first_cast_failed", str(exc))
-        return
+        fail(ctx, "first_cast_failed", str(exc))
     summary = summarize_first_casts(results)
     _emit(
         ctx,
@@ -2377,10 +2507,10 @@ def log_actions_command(
     log_path: str = typer.Argument(..., help="Path to a SimulationCraft combat log."),
     actions: list[str] = typer.Argument(..., help="One or more action names to inspect."),
 ) -> None:
+    """Report when actions were first scheduled and performed in a SimC combat log."""
     resolved = Path(log_path).expanduser().resolve()
-    if not resolved.exists():
-        _fail(ctx, "not_found", f"Log file not found: {resolved}")
-        return
+    if not resolved.is_file():
+        fail(ctx, "not_found", f"Log file not found: {resolved}")
     hits = first_action_hits(resolved, list(actions))
     _emit(
         ctx,
@@ -2406,10 +2536,10 @@ def sync(
     ctx: typer.Context,
     allow_dirty: bool = typer.Option(False, "--allow-dirty", help="Allow git pull even if the repo has local changes."),
 ) -> None:
+    """Pull the latest SimulationCraft sources into the local checkout."""
     paths = _repo_paths(ctx)
     if not paths.root.exists():
-        _fail(ctx, "missing_repo", f"SimulationCraft repo not found: {paths.root}")
-        return
+        fail(ctx, "missing_repo", f"SimulationCraft repo not found: {paths.root}")
     result = sync_repo(paths, allow_dirty=allow_dirty)
     git_status = repo_git_status(paths)
     if result is None:
@@ -2427,11 +2557,11 @@ def sync(
     stdout_preview, stdout_truncated = _preview_text(result.stdout)
     stderr_preview, stderr_truncated = _preview_text(result.stderr)
     if result.returncode != 0:
-        _fail(
+        fail(
             ctx,
             "sync_failed",
             "SimulationCraft git sync failed.",
-            extra={
+            details={
                 "command": result.command,
                 "stdout_preview": stdout_preview,
                 "stdout_truncated": stdout_truncated,
@@ -2439,7 +2569,6 @@ def sync(
                 "stderr_truncated": stderr_truncated,
             },
         )
-        return
     _emit(
         ctx,
         {
@@ -2461,19 +2590,19 @@ def build(
     ctx: typer.Context,
     target: str | None = typer.Option(None, "--target", help="Optional build target passed to cmake."),
 ) -> None:
+    """Build the local SimulationCraft binary with cmake."""
     paths = _repo_paths(ctx)
     if not paths.build_dir.exists():
-        _fail(ctx, "missing_build_dir", f"SimulationCraft build dir not found: {paths.build_dir}")
-        return
+        fail(ctx, "missing_build_dir", f"SimulationCraft build dir not found: {paths.build_dir}")
     result = build_repo(paths, target=target)
     stdout_preview, stdout_truncated = _preview_text(result.stdout)
     stderr_preview, stderr_truncated = _preview_text(result.stderr)
     if result.returncode != 0:
-        _fail(
+        fail(
             ctx,
             "build_failed",
             "SimulationCraft build failed.",
-            extra={
+            details={
                 "command": result.command,
                 "stdout_preview": stdout_preview,
                 "stdout_truncated": stdout_truncated,
@@ -2481,7 +2610,6 @@ def build(
                 "stderr_truncated": stderr_truncated,
             },
         )
-        return
     _emit(
         ctx,
         {
@@ -2494,6 +2622,140 @@ def build(
             "stderr_truncated": stderr_truncated,
         },
     )
+
+
+@dataclass(slots=True)
+class _SimProfileInput:
+    """Where the sim profile came from, plus temp files the command must clean up."""
+
+    path: Path
+    source: str
+    cleanup_paths: list[Path]
+
+
+@dataclass(slots=True)
+class _SimOverrides:
+    """SimC engine settings from the command line; iterations/max_time are None until the preset default is applied."""
+
+    iterations: int | None
+    max_time: int | None
+    fight_style: str | None
+    threads: int | None
+    targets: int | None
+    vary_combat_length: float | None
+
+
+def _sim_profile_input(ctx: typer.Context, *, profile_path: str | None, profile_text: str | None) -> _SimProfileInput:
+    if profile_text is not None:
+        written = _write_temp_profile(source_name="simc-profile-text", text=profile_text)
+        return _SimProfileInput(path=written, source="profile_text", cleanup_paths=[written])
+    if profile_path is None or profile_path == "-":
+        stdin_text = sys.stdin.read()
+        if not stdin_text.strip():
+            fail(ctx, "missing_profile", "Provide a profile path, --profile-text, or pipe a profile into stdin.")
+        written = _write_temp_profile(source_name="simc-stdin", text=stdin_text)
+        return _SimProfileInput(path=written, source="stdin", cleanup_paths=[written])
+    resolved = Path(profile_path).expanduser().resolve()
+    if not resolved.exists():
+        fail(ctx, "not_found", f"Profile not found: {resolved}")
+    return _SimProfileInput(path=resolved, source="file", cleanup_paths=[])
+
+
+def _sim_json_report_path(json_out: str | None, cleanup_paths: list[Path]) -> Path:
+    """Where SimC writes its json2 report: the caller's path, or a temp file we delete afterwards."""
+    if json_out is not None:
+        json_path = Path(json_out).expanduser().resolve()
+        json_path.parent.mkdir(parents=True, exist_ok=True)
+        return json_path
+    fd, raw_json_path = tempfile.mkstemp(suffix=".json", prefix="simc-run-")
+    os.close(fd)
+    json_path = Path(raw_json_path).resolve()
+    cleanup_paths.append(json_path)
+    return json_path
+
+
+def _sim_engine_args(overrides: _SimOverrides, *, json_path: Path) -> list[str]:
+    args = [
+        f"iterations={overrides.iterations}",
+        "target_error=0",
+        f"max_time={overrides.max_time}",
+        f"json2={json_path}",
+    ]
+    if overrides.fight_style:
+        args.append(f"fight_style={overrides.fight_style}")
+    if overrides.threads is not None:
+        args.append(f"threads={overrides.threads}")
+    if overrides.targets is not None:
+        args.append(f"desired_targets={overrides.targets}")
+    if overrides.vary_combat_length is not None:
+        args.append(f"vary_combat_length={overrides.vary_combat_length}")
+    return args
+
+
+def _unlink_all(paths: list[Path]) -> None:
+    for path in paths:
+        path.unlink(missing_ok=True)
+
+
+def _sim(
+    ctx: typer.Context,
+    *,
+    profile_path: str | None,
+    profile_text: str | None,
+    preset: str,
+    json_out: str | None,
+    overrides: _SimOverrides,
+) -> None:
+    if preset not in {"quick", "high-accuracy"}:
+        fail(ctx, "invalid_preset", f"Unsupported sim preset: {preset}")
+    paths = _repo_paths(ctx)
+    default_iterations, default_max_time = _sim_preset_settings(preset=preset)
+    overrides.iterations = overrides.iterations or default_iterations
+    overrides.max_time = overrides.max_time or default_max_time
+    profile = _sim_profile_input(ctx, profile_path=profile_path, profile_text=profile_text)
+    json_path = _sim_json_report_path(json_out, profile.cleanup_paths)
+
+    result = run_profile(paths, profile.path, simc_args=_sim_engine_args(overrides, json_path=json_path))
+    stdout_preview, stdout_truncated = _preview_text(result.stdout)
+    stderr_preview, stderr_truncated = _preview_text(result.stderr)
+    if result.returncode != 0:
+        _unlink_all(profile.cleanup_paths)
+        fail(
+            ctx,
+            "run_failed",
+            "SimulationCraft sim failed.",
+            details={
+                "command": result.command,
+                "stdout_preview": stdout_preview,
+                "stdout_truncated": stdout_truncated,
+                "stderr_preview": stderr_preview,
+                "stderr_truncated": stderr_truncated,
+            },
+        )
+
+    try:
+        summary = summarize_sim_report(load_sim_report(json_path))
+    except Exception as exc:
+        _unlink_all(profile.cleanup_paths)
+        fail(
+            ctx,
+            "invalid_report",
+            f"SimulationCraft sim completed but the JSON report could not be parsed: {exc}",
+            details={"command": result.command, "json_report_path": str(json_path)},
+        )
+
+    _emit(
+        ctx,
+        sim_report_payload(
+            summary,
+            profile_path=str(profile.path) if profile.source == "file" else None,
+            preset=preset,
+            input_source=profile.source,
+            json_report_path=str(json_path) if json_out is not None else None,
+            command=result.command,
+        ),
+    )
+    _unlink_all(profile.cleanup_paths)
 
 
 @app.command("sim")
@@ -2511,104 +2773,22 @@ def sim_command(
     profile_text: str | None = typer.Option(None, "--profile-text", help="Inline SimulationCraft profile text."),
     json_out: str | None = typer.Option(None, "--json-out", help="Optional path for the raw SimC JSON report."),
 ) -> None:
-    if preset not in {"quick", "high-accuracy"}:
-        _fail(ctx, "invalid_preset", f"Unsupported sim preset: {preset}")
-        return
-    paths = _repo_paths(ctx)
-    default_iterations, default_max_time = _sim_preset_settings(preset=preset)
-    requested_iterations = iterations or default_iterations
-    requested_max_time = max_time or default_max_time
-
-    input_source = "file"
-    resolved_profile: Path
-    cleanup_paths: list[Path] = []
-    if profile_text is not None:
-        resolved_profile = _write_temp_profile(source_name="simc-profile-text", text=profile_text)
-        cleanup_paths.append(resolved_profile)
-        input_source = "profile_text"
-    elif profile_path in {None, "-"}:
-        stdin_text = sys.stdin.read()
-        if not stdin_text.strip():
-            _fail(ctx, "missing_profile", "Provide a profile path, --profile-text, or pipe a profile into stdin.")
-            return
-        resolved_profile = _write_temp_profile(source_name="simc-stdin", text=stdin_text)
-        cleanup_paths.append(resolved_profile)
-        input_source = "stdin"
-    else:
-        resolved_profile = Path(profile_path).expanduser().resolve()
-        if not resolved_profile.exists():
-            _fail(ctx, "not_found", f"Profile not found: {resolved_profile}")
-            return
-
-    if json_out is not None:
-        json_path = Path(json_out).expanduser().resolve()
-        json_path.parent.mkdir(parents=True, exist_ok=True)
-    else:
-        fd, raw_json_path = tempfile.mkstemp(suffix=".json", prefix="simc-run-")
-        os.close(fd)
-        json_path = Path(raw_json_path).resolve()
-        cleanup_paths.append(json_path)
-
-    simc_args = [
-        f"iterations={requested_iterations}",
-        "target_error=0",
-        f"max_time={requested_max_time}",
-        f"json2={json_path}",
-    ]
-    if fight_style:
-        simc_args.append(f"fight_style={fight_style}")
-    if threads is not None:
-        simc_args.append(f"threads={threads}")
-    if targets is not None:
-        simc_args.append(f"desired_targets={targets}")
-    if vary_combat_length is not None:
-        simc_args.append(f"vary_combat_length={vary_combat_length}")
-
-    result = run_profile(paths, resolved_profile, simc_args=simc_args)
-    stdout_preview, stdout_truncated = _preview_text(result.stdout)
-    stderr_preview, stderr_truncated = _preview_text(result.stderr)
-    if result.returncode != 0:
-        for path in cleanup_paths:
-            path.unlink(missing_ok=True)
-        _fail(
-            ctx,
-            "run_failed",
-            "SimulationCraft sim failed.",
-            extra={
-                "command": result.command,
-                "stdout_preview": stdout_preview,
-                "stdout_truncated": stdout_truncated,
-                "stderr_preview": stderr_preview,
-                "stderr_truncated": stderr_truncated,
-            },
-        )
-        return
-
-    try:
-        report = load_sim_report(json_path)
-        summary = summarize_sim_report(report)
-    except Exception as exc:
-        for path in cleanup_paths:
-            path.unlink(missing_ok=True)
-        _fail(
-            ctx,
-            "invalid_report",
-            f"SimulationCraft sim completed but the JSON report could not be parsed: {exc}",
-            extra={"command": result.command, "json_report_path": str(json_path)},
-        )
-        return
-
-    payload = sim_report_payload(
-        summary,
-        profile_path=str(resolved_profile) if input_source == "file" else None,
+    """Run a profile through the local SimC binary and summarize the JSON report."""
+    _sim(
+        ctx,
+        profile_path=profile_path,
+        profile_text=profile_text,
         preset=preset,
-        input_source=input_source,
-        json_report_path=str(json_path) if json_out is not None else None,
-        command=result.command,
+        json_out=json_out,
+        overrides=_SimOverrides(
+            iterations=iterations,
+            max_time=max_time,
+            fight_style=fight_style,
+            threads=threads,
+            targets=targets,
+            vary_combat_length=vary_combat_length,
+        ),
     )
-    _emit(ctx, payload)
-    for path in cleanup_paths:
-        path.unlink(missing_ok=True)
 
 
 def _tree_diff_payload(diff: TreeDiff) -> dict[str, Any]:
@@ -2646,6 +2826,7 @@ def compare_builds_command(
     actor_class: str | None = typer.Option(None, "--actor-class", help="Actor class such as druid."),
     spec_name: str | None = typer.Option(None, "--spec", help="Spec name such as balance."),
 ) -> None:
+    """Diff a base talent build against one or more other builds, per tree."""
     paths = _repo_paths(ctx)
     trees = [t for t in tree] or ["class", "spec", "hero"]
 
@@ -2656,29 +2837,24 @@ def compare_builds_command(
         profile_path=None,
         build_file=None,
         build_text=None,
-        talents=base,
-        class_talents=None,
-        spec_talents=None,
-        hero_talents=None,
+        talents=TalentStrings(talents=base),
         actor_class=actor_class,
         spec_name=spec_name,
     )
     if not base_spec.actor_class or not base_spec.spec:
-        _fail(ctx, "invalid_query", "Could not identify actor class and spec for base build.",
-              extra={"build_spec": _serialize_build_spec(base_spec), "identity": _serialize_build_identity(base_identity)})
-        return
+        fail(ctx, "invalid_query", "Could not identify actor class and spec for base build.",
+              details={"build_spec": _serialize_build_spec(base_spec), "identity": _serialize_build_identity(base_identity)})
     try:
         base_resolution = decode_build(paths, base_spec)
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
-        _fail(ctx, "decode_failed", f"Failed to decode base build: {exc}")
-        return
+        fail(ctx, "decode_failed", f"Failed to decode base build: {exc}")
 
     comparisons: list[dict[str, Any]] = []
     for other_talents in other:
         try:
             other_spec = load_build_spec(
                 apl_path=None, profile_path=None, build_file=None, build_text=None,
-                talents=other_talents, class_talents=None, spec_talents=None, hero_talents=None,
+                talents=TalentStrings(talents=other_talents),
                 actor_class=base_spec.actor_class, spec_name=base_spec.spec,
             )
         except ValueError as exc:
@@ -2739,19 +2915,14 @@ def _resolve_modify_tree_entries(
             profile_path=None,
             build_file=None,
             build_text=None,
-            talents=swap_source,
-            class_talents=None,
-            spec_talents=None,
-            hero_talents=None,
+            talents=TalentStrings(talents=swap_source),
             actor_class=base_spec.actor_class,
             spec_name=base_spec.spec,
         )
         try:
             swap_resolution = decode_build(paths, swap_spec)
         except (FileNotFoundError, RuntimeError, ValueError) as exc:
-            # _fail raises typer.Exit, so the command aborts here; the return is unreachable.
-            _fail(ctx, "decode_failed", f"Failed to decode {tree_name} tree source: {exc}")
-            return None, None, None
+            fail(ctx, "decode_failed", f"Failed to decode {tree_name} tree source: {exc}")
         entries_str = tree_entries_string(swap_resolution.talents_by_tree.get(tree_name, []))
         if tree_name == "class":
             class_entries = entries_str
@@ -2804,23 +2975,19 @@ def _build_modify_overrides(
                 f"Cannot resolve talent to remove: '{token}'. "
                 "Use an entry ID or a name from the base build."
             )
-            # _fail raises typer.Exit; the return is unreachable defensive code.
-            _fail(ctx, "unknown_talent", msg)
-            return overrides
+            fail(ctx, "unknown_talent", msg)
         modifications.append(f"remove:{token}")
 
     for item in add:
         parts = item.strip().split(":", 1)
         if len(parts) != 2:
-            _fail(
+            fail(
                 ctx, "invalid_add",
                 f"--add requires 'name:rank' or 'entry_id:rank', got: '{item}'",
             )
-            return overrides
         name_or_id, rank_str = parts
         if not rank_str.isdigit():
-            _fail(ctx, "invalid_add", f"Rank must be a number in '{item}'")
-            return overrides
+            fail(ctx, "invalid_add", f"Rank must be a number in '{item}'")
         # Pass through as-is — SimC resolves both entry IDs and talent names.
         overrides.append(f"{name_or_id}:{rank_str}")
         modifications.append(f"add:{item}")
@@ -2885,6 +3052,105 @@ def _modify_build_diff_payload(
     return diff_payload
 
 
+@dataclass(frozen=True, slots=True)
+class _ModifyBuildOptions:
+    """The modify-build flag group: one base build plus the tree swaps and per-talent edits applied to it."""
+
+    talents: str
+    swap_class_tree_from: str | None
+    swap_spec_tree_from: str | None
+    swap_hero_tree_from: str | None
+    add: list[str]
+    remove: list[str]
+    actor_class: str | None
+    spec_name: str | None
+
+
+def _modify_build(ctx: typer.Context, options: _ModifyBuildOptions) -> None:
+    paths = _repo_paths(ctx)
+
+    base_spec, base_identity = _load_identified_build_spec_or_fail(
+        ctx,
+        paths,
+        apl_path=None,
+        profile_path=None,
+        build_file=None,
+        build_text=None,
+        talents=TalentStrings(talents=options.talents),
+        actor_class=options.actor_class,
+        spec_name=options.spec_name,
+    )
+    if not base_spec.actor_class or not base_spec.spec:
+        fail(ctx, "invalid_query", "Could not identify actor class and spec for base build.",
+              details={"build_spec": _serialize_build_spec(base_spec), "identity": _serialize_build_identity(base_identity)})
+
+    try:
+        base_resolution = decode_build(paths, base_spec)
+    except (FileNotFoundError, RuntimeError, ValueError) as exc:
+        fail(ctx, "decode_failed", f"Failed to decode base build: {exc}")
+
+    modifications: list[str] = []
+    class_entries, spec_entries, hero_entries = _resolve_modify_tree_entries(
+        ctx,
+        paths,
+        base_spec=base_spec,
+        base_resolution=base_resolution,
+        swaps=[
+            ("class", options.swap_class_tree_from),
+            ("spec", options.swap_spec_tree_from),
+            ("hero", options.swap_hero_tree_from),
+        ],
+        modifications=modifications,
+    )
+    overrides = _build_modify_overrides(
+        ctx,
+        base_resolution=base_resolution,
+        add=options.add,
+        remove=options.remove,
+        modifications=modifications,
+    )
+
+    modified_spec = _assemble_modified_spec(
+        base_spec,
+        class_entries=class_entries,
+        spec_entries=spec_entries,
+        hero_entries=hero_entries,
+        overrides=overrides,
+    )
+    if modified_spec is None:
+        fail(
+            ctx, "no_modifications",
+            "No modifications specified. Use --swap-*-tree-from, --add, or --remove.",
+        )
+
+    try:
+        encoded = encode_build(paths, modified_spec)
+    except (FileNotFoundError, RuntimeError, ValueError) as exc:
+        fail(ctx, "encode_failed", f"Failed to encode modified build: {exc}")
+
+    diff_payload = _modify_build_diff_payload(
+        paths, base_spec=base_spec, base_resolution=base_resolution, encoded=encoded
+    )
+
+    wowhead_url = f"https://www.wowhead.com/talent-calc/blizzard/{encoded}"
+
+    _emit(ctx, {
+        "provider": "simc",
+        "kind": "modify_build",
+        "base": {
+            "input": options.talents,
+            "actor_class": base_resolution.actor_class,
+            "spec": base_resolution.spec,
+        },
+        "modifications": modifications,
+        "result": {
+            "talents_export": encoded,
+            "wowhead_url": wowhead_url,
+            "diff_from_base": diff_payload,
+        },
+    })
+
+
 @app.command("modify-build")
 def modify_build_command(
     ctx: typer.Context,
@@ -2904,95 +3170,20 @@ def modify_build_command(
     actor_class: str | None = typer.Option(None, "--actor-class", help="Actor class such as druid."),
     spec_name: str | None = typer.Option(None, "--spec", help="Spec name such as balance."),
 ) -> None:
-    paths = _repo_paths(ctx)
-
-    base_spec, base_identity = _load_identified_build_spec_or_fail(
+    """Apply talent swaps, additions, and removals to a build and re-encode it."""
+    _modify_build(
         ctx,
-        paths,
-        apl_path=None,
-        profile_path=None,
-        build_file=None,
-        build_text=None,
-        talents=talents,
-        class_talents=None,
-        spec_talents=None,
-        hero_talents=None,
-        actor_class=actor_class,
-        spec_name=spec_name,
+        _ModifyBuildOptions(
+            talents=talents,
+            swap_class_tree_from=swap_class_tree_from,
+            swap_spec_tree_from=swap_spec_tree_from,
+            swap_hero_tree_from=swap_hero_tree_from,
+            add=add,
+            remove=remove,
+            actor_class=actor_class,
+            spec_name=spec_name,
+        ),
     )
-    if not base_spec.actor_class or not base_spec.spec:
-        _fail(ctx, "invalid_query", "Could not identify actor class and spec for base build.",
-              extra={"build_spec": _serialize_build_spec(base_spec), "identity": _serialize_build_identity(base_identity)})
-        return
-
-    try:
-        base_resolution = decode_build(paths, base_spec)
-    except (FileNotFoundError, RuntimeError, ValueError) as exc:
-        _fail(ctx, "decode_failed", f"Failed to decode base build: {exc}")
-        return
-
-    modifications: list[str] = []
-    class_entries, spec_entries, hero_entries = _resolve_modify_tree_entries(
-        ctx,
-        paths,
-        base_spec=base_spec,
-        base_resolution=base_resolution,
-        swaps=[
-            ("class", swap_class_tree_from),
-            ("spec", swap_spec_tree_from),
-            ("hero", swap_hero_tree_from),
-        ],
-        modifications=modifications,
-    )
-    overrides = _build_modify_overrides(
-        ctx,
-        base_resolution=base_resolution,
-        add=add,
-        remove=remove,
-        modifications=modifications,
-    )
-
-    modified_spec = _assemble_modified_spec(
-        base_spec,
-        class_entries=class_entries,
-        spec_entries=spec_entries,
-        hero_entries=hero_entries,
-        overrides=overrides,
-    )
-    if modified_spec is None:
-        _fail(
-            ctx, "no_modifications",
-            "No modifications specified. Use --swap-*-tree-from, --add, or --remove.",
-        )
-        return
-
-    try:
-        encoded = encode_build(paths, modified_spec)
-    except (FileNotFoundError, RuntimeError, ValueError) as exc:
-        _fail(ctx, "encode_failed", f"Failed to encode modified build: {exc}")
-        return
-
-    diff_payload = _modify_build_diff_payload(
-        paths, base_spec=base_spec, base_resolution=base_resolution, encoded=encoded
-    )
-
-    wowhead_url = f"https://www.wowhead.com/talent-calc/blizzard/{encoded}"
-
-    _emit(ctx, {
-        "provider": "simc",
-        "kind": "modify_build",
-        "base": {
-            "input": talents,
-            "actor_class": base_resolution.actor_class,
-            "spec": base_resolution.spec,
-        },
-        "modifications": modifications,
-        "result": {
-            "talents_export": encoded,
-            "wowhead_url": wowhead_url,
-            "diff_from_base": diff_payload,
-        },
-    })
 
 
 @app.command("run")
@@ -3001,21 +3192,21 @@ def run_command(
     profile_path: str = typer.Argument(..., help="Path to a SimulationCraft profile to execute."),
     simc_arg: list[str] = typer.Option([], "--arg", help="Additional raw SimulationCraft arg, repeatable."),
 ) -> None:
+    """Run a profile through the local SimC binary with raw SimC arguments."""
     paths = _repo_paths(ctx)
     resolved = Path(profile_path).expanduser().resolve()
     if not resolved.exists():
-        _fail(ctx, "not_found", f"Profile not found: {resolved}")
-        return
+        fail(ctx, "not_found", f"Profile not found: {resolved}")
     result = run_profile(paths, resolved, simc_args=list(simc_arg))
     stdout_preview, stdout_truncated = _preview_text(result.stdout)
     stderr_preview, stderr_truncated = _preview_text(result.stderr)
     version_line = binary_version(paths).version_line
     if result.returncode != 0:
-        _fail(
+        fail(
             ctx,
             "run_failed",
             "SimulationCraft run failed.",
-            extra={
+            details={
                 "command": result.command,
                 "stdout_preview": stdout_preview,
                 "stdout_truncated": stdout_truncated,
@@ -3024,7 +3215,6 @@ def run_command(
                 "version": version_line,
             },
         )
-        return
     _emit(
         ctx,
         {
@@ -3042,7 +3232,7 @@ def run_command(
 
 
 def run() -> None:
-    app()
+    guarded_run(app, provider=PROVIDER_NAME)
 
 
 if __name__ == "__main__":

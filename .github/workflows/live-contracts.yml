@@ -1,0 +1,321 @@
+name: Live Contracts
+
+on:
+  workflow_dispatch:
+    inputs:
+      open_issue:
+        description: "Open or update the live-failure tracking issue when a job fails"
+        type: boolean
+        default: false
+  schedule:
+    # Mondays 06:00 UTC. Live contracts never gate pull requests.
+    - cron: "0 6 * * 1"
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: live-contracts-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  wowhead-expansions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - expansion: retail
+            pytest_k: retail
+          - expansion: classic
+            pytest_k: "classic and not mop"
+          - expansion: wotlk
+            pytest_k: wotlk
+          - expansion: cata
+            pytest_k: cata
+          - expansion: mop-classic
+            pytest_k: mop-classic
+          - expansion: ptr
+            pytest_k: ptr
+          - expansion: tbc
+            pytest_k: tbc
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev --extra redis
+
+      - name: Live endpoint + integration contracts
+        env:
+          WOWHEAD_LIVE_TESTS: "1"
+        run: |
+          .venv/bin/pytest -q \
+            tests/test_live_endpoint_contracts.py -k "${{ matrix.pytest_k }}" \
+            tests/test_live_integration.py -k "${{ matrix.pytest_k }}"
+
+  wowhead-integration-global:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev --extra redis
+
+      - name: Live Wowhead integration (expansion-agnostic contracts)
+        env:
+          WOWHEAD_LIVE_TESTS: "1"
+        run: |
+          .venv/bin/pytest -q tests/test_live_integration.py \
+            -k "not (retail or classic or wotlk or cata or mop-classic or ptr or tbc)"
+
+  wowhead-parser-canaries:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev --extra redis
+
+      - name: Parser canaries
+        env:
+          WOWHEAD_LIVE_TESTS: "1"
+        run: .venv/bin/pytest -q tests/test_wowhead_parser_canaries.py
+
+  no-credential-providers:
+    name: Live (${{ matrix.provider }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - provider: method
+            flag: METHOD_LIVE_TESTS
+            files: tests/test_method_live.py
+          - provider: icy-veins
+            flag: ICY_VEINS_LIVE_TESTS
+            files: tests/test_icy_veins_live.py
+          - provider: warcraft-wiki
+            flag: WARCRAFT_WIKI_LIVE_TESTS
+            files: tests/test_warcraft_wiki_live.py
+          - provider: wowprogress
+            flag: WOWPROGRESS_LIVE_TESTS
+            files: tests/test_wowprogress_live.py
+          - provider: raiderio
+            flag: RAIDERIO_LIVE_TESTS
+            files: tests/test_raiderio_live.py
+          - provider: lorrgs
+            flag: LORRGS_LIVE_TESTS
+            files: tests/test_lorrgs_live.py
+          - provider: raidbots
+            flag: RAIDBOTS_LIVE_TESTS
+            files: tests/test_raidbots_live.py
+          - provider: wrapper
+            flag: WARCRAFT_WRAPPER_LIVE_TESTS
+            files: tests/test_warcraft_wrapper_live.py
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev --extra redis
+
+      - name: Live provider contracts
+        run: |
+          export ${{ matrix.flag }}=1
+          .venv/bin/pytest -q -m live ${{ matrix.files }}
+
+  # The secrets context cannot be used in a job-level `if`, so availability is
+  # resolved once here and consumed through job outputs.
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      warcraftlogs: ${{ steps.secrets.outputs.warcraftlogs }}
+      blizzard: ${{ steps.secrets.outputs.blizzard }}
+      curseforge: ${{ steps.secrets.outputs.curseforge }}
+    steps:
+      - name: Detect available credentials
+        id: secrets
+        env:
+          WARCRAFTLOGS_CLIENT_ID: ${{ secrets.WARCRAFTLOGS_CLIENT_ID }}
+          WARCRAFTLOGS_CLIENT_SECRET: ${{ secrets.WARCRAFTLOGS_CLIENT_SECRET }}
+          BLIZZARD_CLIENT_ID: ${{ secrets.BLIZZARD_CLIENT_ID }}
+          BLIZZARD_CLIENT_SECRET: ${{ secrets.BLIZZARD_CLIENT_SECRET }}
+          CURSEFORGE_API_KEY: ${{ secrets.CURSEFORGE_API_KEY }}
+        run: |
+          emit() {
+            name="$1"
+            shift
+            for value in "$@"; do
+              if [ -z "$value" ]; then
+                echo "$name=false" >> "$GITHUB_OUTPUT"
+                return
+              fi
+            done
+            echo "$name=true" >> "$GITHUB_OUTPUT"
+          }
+          emit warcraftlogs "$WARCRAFTLOGS_CLIENT_ID" "$WARCRAFTLOGS_CLIENT_SECRET"
+          emit blizzard "$BLIZZARD_CLIENT_ID" "$BLIZZARD_CLIENT_SECRET"
+          emit curseforge "$CURSEFORGE_API_KEY"
+
+  warcraftlogs:
+    needs: preflight
+    if: needs.preflight.outputs.warcraftlogs == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev --extra redis
+
+      # test_cooldown_packet_live.py is registered under both flags in
+      # tests/conftest.py, so it only runs when Lorrgs is enabled as well.
+      - name: Live Warcraft Logs contracts
+        env:
+          WARCRAFTLOGS_LIVE_TESTS: "1"
+          LORRGS_LIVE_TESTS: "1"
+          WARCRAFTLOGS_CLIENT_ID: ${{ secrets.WARCRAFTLOGS_CLIENT_ID }}
+          WARCRAFTLOGS_CLIENT_SECRET: ${{ secrets.WARCRAFTLOGS_CLIENT_SECRET }}
+        run: |
+          .venv/bin/pytest -q -m live \
+            tests/test_warcraftlogs_live.py \
+            tests/test_live_command_matrix.py \
+            tests/test_cooldown_packet_live.py
+
+  blizzard:
+    needs: preflight
+    if: needs.preflight.outputs.blizzard == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev --extra redis
+
+      - name: Live Blizzard API contracts
+        env:
+          BLIZZARD_LIVE_TESTS: "1"
+          BLIZZARD_CLIENT_ID: ${{ secrets.BLIZZARD_CLIENT_ID }}
+          BLIZZARD_CLIENT_SECRET: ${{ secrets.BLIZZARD_CLIENT_SECRET }}
+        run: .venv/bin/pytest -q -m live tests/test_blizzard_api_live.py
+
+  curseforge:
+    needs: preflight
+    if: needs.preflight.outputs.curseforge == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev --extra redis
+
+      - name: Live CurseForge contracts
+        env:
+          CURSEFORGE_LIVE_TESTS: "1"
+          CURSEFORGE_API_KEY: ${{ secrets.CURSEFORGE_API_KEY }}
+        run: .venv/bin/pytest -q -m live tests/test_curseforge_live.py
+
+  report-failure:
+    needs:
+      - wowhead-expansions
+      - wowhead-integration-global
+      - wowhead-parser-canaries
+      - no-credential-providers
+      - warcraftlogs
+      - blizzard
+      - curseforge
+    if: >-
+      always()
+      && contains(needs.*.result, 'failure')
+      && (github.event_name == 'schedule' || inputs.open_issue)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # One rolling tracking issue: comment on the open one, otherwise open it.
+      - name: Open or update the tracking issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const label = 'live-failure';
+            const title = 'Live contract failures';
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const body = `Live contract run failed: ${runUrl}\n\nTriggered by \`${context.eventName}\` on \`${context.ref}\`.`;
+            const existing = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: label,
+              per_page: 1,
+            });
+            if (existing.data.length > 0) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.data[0].number,
+                body,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                labels: [label],
+                body,
+              });
+            }

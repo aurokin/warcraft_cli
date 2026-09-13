@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from statistics import median
 from typing import Any
@@ -20,6 +21,7 @@ from warcraft_core.analytics import (
 from warcraft_core.analytics import (
     numeric_summary as _numeric_summary,
 )
+from warcraft_core.shapes import as_dict, as_list
 
 from wowprogress_cli.client import WowProgressClient
 from wowprogress_cli.identity import _guild_history_tier_row, _leaderboard_entry_snapshot, _progress_snapshot
@@ -33,9 +35,9 @@ def _sample_pve_leaderboard(
     limit: int,
 ) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Any]]:
     payload = client.fetch_pve_leaderboard(region=region, realm=realm, limit=limit)
-    entries = payload.get("entries") if isinstance(payload.get("entries"), list) else []
+    entries = as_list(payload.get("entries"))
     snapshots = [_leaderboard_entry_snapshot(entry) for entry in entries if isinstance(entry, dict)]
-    leaderboard = payload.get("leaderboard") if isinstance(payload.get("leaderboard"), dict) else {}
+    leaderboard = as_dict(payload.get("leaderboard"))
     meta = {
         "sampled_at": datetime.now(UTC).isoformat(),
         "cache_ttl_seconds": client.pve_leaderboard_ttl_seconds,
@@ -51,11 +53,11 @@ def _sample_pve_leaderboard(
 
 
 def _guild_profile_snapshot(*, leaderboard_entry: dict[str, Any], guild_payload: dict[str, Any]) -> dict[str, Any]:
-    guild = guild_payload.get("guild") if isinstance(guild_payload.get("guild"), dict) else {}
-    progress = guild_payload.get("progress") if isinstance(guild_payload.get("progress"), dict) else {}
-    item_level = guild_payload.get("item_level") if isinstance(guild_payload.get("item_level"), dict) else {}
-    encounters = guild_payload.get("encounters") if isinstance(guild_payload.get("encounters"), dict) else {}
-    items = encounters.get("items") if isinstance(encounters.get("items"), list) else []
+    guild = as_dict(guild_payload.get("guild"))
+    progress = as_dict(guild_payload.get("progress"))
+    item_level = as_dict(guild_payload.get("item_level"))
+    encounters = as_dict(guild_payload.get("encounters"))
+    items = as_list(encounters.get("items"))
     return {
         "leaderboard_rank": leaderboard_entry.get("rank"),
         "guild_name": guild.get("name") or leaderboard_entry.get("guild_name"),
@@ -114,8 +116,10 @@ def _sampled_pve_guild_profiles(
 
 
 def _sample_summary(entries: list[dict[str, Any]], *, meta: dict[str, Any]) -> dict[str, Any]:
-    rank_values = [int(entry["rank"]) for entry in entries if isinstance(entry.get("rank"), int)]
-    killed_values = [int(entry["bosses_killed"]) for entry in entries if isinstance(entry.get("bosses_killed"), int)]
+    rank_values: list[int | float] = [int(entry["rank"]) for entry in entries if isinstance(entry.get("rank"), int)]
+    killed_values: list[int | float] = [
+        int(entry["bosses_killed"]) for entry in entries if isinstance(entry.get("bosses_killed"), int)
+    ]
     return {
         "sampled_at": meta["sampled_at"],
         "entry_count": len(entries),
@@ -132,7 +136,7 @@ def _sample_summary(entries: list[dict[str, Any]], *, meta: dict[str, Any]) -> d
     }
 
 
-def _guild_profile_world_ranks(entries: list[dict[str, Any]]) -> list[int]:
+def _guild_profile_world_ranks(entries: list[dict[str, Any]]) -> list[int | float]:
     return [
         int(str((entry.get("progress_ranks") or {}).get("world")).replace(",", ""))
         for entry in entries
@@ -186,7 +190,7 @@ def _metric_within_bounds(value: Any, *, minimum: float | None, maximum: float |
 def _normalized_encounter_values(entry: dict[str, Any]) -> set[str]:
     return {
         "-".join(part for part in re.split(r"[^a-z0-9]+", str(row.get("encounter") or "").strip().lower()) if part)
-        for row in (entry.get("encounters") if isinstance(entry.get("encounters"), list) else [])
+        for row in (as_list(entry.get("encounters")))
         if isinstance(row, dict)
     }
 
@@ -216,7 +220,7 @@ def _rank_to_int(raw: Any) -> int | None:
 
 
 def _world_rank_value(entry: dict[str, Any]) -> int | None:
-    progress_ranks = entry.get("progress_ranks") if isinstance(entry.get("progress_ranks"), dict) else {}
+    progress_ranks = as_dict(entry.get("progress_ranks"))
     return _rank_to_int(progress_ranks.get("world"))
 
 
@@ -235,8 +239,8 @@ def _guild_profile_matches_filters(
         ("faction", faction),
         ("difficulty", difficulty),
     )
-    for field, expected in slug_filters:
-        value = str(entry.get(field) or "").strip().lower().replace(" ", "-")
+    for field_name, expected in slug_filters:
+        value = str(entry.get(field_name) or "").strip().lower().replace(" ", "-")
         if expected and value not in expected:
             return False
 
@@ -247,20 +251,26 @@ def _guild_profile_matches_filters(
     return not (encounter and not any(value in _normalized_encounter_values(entry) for value in encounter))
 
 
+@dataclass(frozen=True, slots=True)
+class GuildProfileFilters:
+    """Post-sample guild-profile filters shared by the sample/distribution/threshold commands."""
+
+    faction: list[str] = field(default_factory=list)
+    difficulty: list[str] = field(default_factory=list)
+    world_rank_min: int | None = None
+    world_rank_max: int | None = None
+    item_level_min: float | None = None
+    item_level_max: float | None = None
+    encounter: list[str] = field(default_factory=list)
+
+
 def _filter_guild_profiles(
     entries: list[dict[str, Any]],
-    *,
-    faction: list[str] | None,
-    difficulty: list[str] | None,
-    world_rank_min: int | None,
-    world_rank_max: int | None,
-    item_level_min: float | None,
-    item_level_max: float | None,
-    encounter: list[str] | None,
+    filters: GuildProfileFilters,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    normalized_faction = _normalize_slug_filters(faction)
-    normalized_difficulty = _normalize_slug_filters(difficulty)
-    normalized_encounter = _normalize_slug_filters(encounter)
+    normalized_faction = _normalize_slug_filters(filters.faction)
+    normalized_difficulty = _normalize_slug_filters(filters.difficulty)
+    normalized_encounter = _normalize_slug_filters(filters.encounter)
     filtered = [
         entry
         for entry in entries
@@ -268,20 +278,20 @@ def _filter_guild_profiles(
             entry,
             faction=normalized_faction,
             difficulty=normalized_difficulty,
-            world_rank_min=world_rank_min,
-            world_rank_max=world_rank_max,
-            item_level_min=item_level_min,
-            item_level_max=item_level_max,
+            world_rank_min=filters.world_rank_min,
+            world_rank_max=filters.world_rank_max,
+            item_level_min=filters.item_level_min,
+            item_level_max=filters.item_level_max,
             encounter=normalized_encounter,
         )
     ]
     return filtered, {
         "faction": normalized_faction,
         "difficulty": normalized_difficulty,
-        "world_rank_min": world_rank_min,
-        "world_rank_max": world_rank_max,
-        "item_level_min": item_level_min,
-        "item_level_max": item_level_max,
+        "world_rank_min": filters.world_rank_min,
+        "world_rank_max": filters.world_rank_max,
+        "item_level_min": filters.item_level_min,
+        "item_level_max": filters.item_level_max,
         "encounter": normalized_encounter,
         "source_profile_count": len(entries),
         "returned_profile_count": len(filtered),
@@ -323,7 +333,7 @@ def _guild_profile_categorical_distribution_values(metric: str, entries: list[di
         return [
             str(encounter.get("encounter") or "unknown")
             for entry in entries
-            for encounter in (entry.get("encounters") if isinstance(entry.get("encounters"), list) else [])
+            for encounter in (as_list(entry.get("encounters")))
             if isinstance(encounter, dict)
         ], "encounters"
     return None
@@ -344,9 +354,8 @@ def _guild_profile_distribution_values(metric: str, entries: list[dict[str, Any]
     if categorical is not None:
         values, unit = categorical
         return values, unit, False
-    numeric = _guild_profile_numeric_distribution_values(metric, entries)
-    values, unit = numeric if numeric is not None else ([], "guild_profiles")
-    return values, unit, True
+    numeric_values, numeric_unit = _guild_profile_numeric_distribution_values(metric, entries) or ([], "guild_profiles")
+    return numeric_values, numeric_unit, True
 
 
 def _guild_profile_distribution_payload(
@@ -596,7 +605,7 @@ def _rank_change(previous: dict[str, Any] | None, current: dict[str, Any]) -> di
     non-numeric value on either side yields ``delta``/``improved`` of None.
     """
     prev_ranks = (previous or {}).get("final_ranks") if isinstance((previous or {}).get("final_ranks"), dict) else {}
-    cur_ranks = current.get("final_ranks") if isinstance(current.get("final_ranks"), dict) else {}
+    cur_ranks = as_dict(current.get("final_ranks"))
     change: dict[str, Any] = {}
     for axis in ("world", "region", "realm"):
         before = _rank_to_int((prev_ranks or {}).get(axis))

@@ -20,40 +20,83 @@ class SimReportSummary:
 
 
 def load_sim_report(path: str | Path) -> dict[str, Any]:
+    """Read a SimC json2 report from disk."""
     resolved = Path(path).expanduser().resolve()
-    return json.loads(resolved.read_text())
+    report = json.loads(resolved.read_text())
+    if not isinstance(report, dict):
+        raise RuntimeError("SimC JSON report was not a JSON object.")
+    return report
 
 
 def summarize_sim_report(report: dict[str, Any]) -> SimReportSummary:
+    """Reduce a raw SimC JSON report to the fields the CLI reports."""
     sim = report.get("sim") if isinstance(report, dict) else None
     if not isinstance(sim, dict):
         raise RuntimeError("SimC JSON report did not contain sim metadata.")
-    options = sim.get("options") if isinstance(sim.get("options"), dict) else {}
-    statistics = sim.get("statistics") if isinstance(sim.get("statistics"), dict) else {}
     players = sim.get("players") if isinstance(sim.get("players"), list) else []
     if not players or not isinstance(players[0], dict):
         raise RuntimeError("SimC JSON report did not contain players.")
     player = players[0]
-    collected = player.get("collected_data") if isinstance(player.get("collected_data"), dict) else {}
-    iterations_completed = _metric_count(collected.get("fight_length")) or _metric_count(statistics.get("simulation_length"))
-
-    dps = _metric_mean(collected.get("dps"))
-    dps_error = _metric_mean(collected.get("dpse"))
-    target_error_percent = (
-        round(dps_error / dps * 100.0, 3)
-        if dps and dps_error is not None and isinstance(iterations_completed, int) and iterations_completed > 1
-        else None
+    options = _dict_field(sim, "options")
+    stats = _dict_field(sim, "statistics")
+    collected = _dict_field(player, "collected_data")
+    iterations_completed = _metric_count(collected.get("fight_length")) or _metric_count(stats.get("simulation_length"))
+    metrics = _metrics_block(collected)
+    return SimReportSummary(
+        version=_text(report.get("version")),
+        game_version=_game_version(options),
+        player_name=_text(player.get("name")),
+        player_spec=_text(player.get("specialization")),
+        player_role=_text(player.get("role")),
+        iterations_completed=iterations_completed,
+        run_settings=_run_settings_block(options, iterations_completed=iterations_completed, metrics=metrics),
+        runtime=_runtime_block(stats),
+        metrics=metrics,
     )
 
-    dbc = options.get("dbc") if isinstance(options.get("dbc"), dict) else {}
-    version_used = dbc.get("version_used")
-    live_info = dbc.get(version_used) if isinstance(version_used, str) and isinstance(dbc.get(version_used), dict) else {}
 
-    run_settings = {
+def _dict_field(source: dict[str, Any], key: str) -> dict[str, Any]:
+    value = source.get(key)
+    return value if isinstance(value, dict) else {}
+
+
+def _text(value: Any) -> str | None:
+    return str(value) if value is not None else None
+
+
+def _game_version(options: dict[str, Any]) -> str | None:
+    """Read the live client version out of the report's dbc block."""
+    dbc = _dict_field(options, "dbc")
+    version_used = dbc.get("version_used")
+    live_info = _dict_field(dbc, version_used) if isinstance(version_used, str) else {}
+    wow_version = live_info.get("wow_version")
+    return wow_version if isinstance(wow_version, str) else None
+
+
+def _metrics_block(collected: dict[str, Any]) -> dict[str, Any]:
+    keys = ("dps", "dtps", "hps", "deaths", "fight_length", "absorb", "heal")
+    metrics: dict[str, Any] = {key: _metric_mean(collected.get(key)) for key in keys}
+    metrics["dps_error"] = _metric_mean(collected.get("dpse"))
+    return metrics
+
+
+def _target_error_percent(*, metrics: dict[str, Any], iterations_completed: int | None) -> float | None:
+    """Observed DPS error as a percentage; only meaningful once more than one iteration ran."""
+    dps = metrics.get("dps")
+    dps_error = metrics.get("dps_error")
+    if not isinstance(dps, float) or not dps or not isinstance(dps_error, float):
+        return None
+    if not isinstance(iterations_completed, int) or iterations_completed <= 1:
+        return None
+    return round(dps_error / dps * 100.0, 3)
+
+
+def _run_settings_block(options: dict[str, Any], *, iterations_completed: int | None, metrics: dict[str, Any]) -> dict[str, Any]:
+    return {
         "iterations_requested": options.get("iterations"),
         "iterations_completed": iterations_completed,
         "target_error_requested": options.get("target_error"),
-        "target_error_percent": target_error_percent,
+        "target_error_percent": _target_error_percent(metrics=metrics, iterations_completed=iterations_completed),
         "threads": options.get("threads"),
         "fight_style": options.get("fight_style"),
         "desired_targets": options.get("desired_targets"),
@@ -62,34 +105,17 @@ def summarize_sim_report(report: dict[str, Any]) -> SimReportSummary:
         "seed": options.get("seed"),
         "stop_reason": _stop_reason(options=options, iterations_completed=iterations_completed),
     }
-    runtime = {
-        "elapsed_time_seconds": statistics.get("elapsed_time_seconds"),
-        "elapsed_cpu_seconds": statistics.get("elapsed_cpu_seconds"),
-        "init_time_seconds": statistics.get("init_time_seconds"),
-        "merge_time_seconds": statistics.get("merge_time_seconds"),
-        "analyze_time_seconds": statistics.get("analyze_time_seconds"),
-    }
-    metrics = {
-        "dps": dps,
-        "dps_error": dps_error,
-        "dtps": _metric_mean(collected.get("dtps")),
-        "hps": _metric_mean(collected.get("hps")),
-        "deaths": _metric_mean(collected.get("deaths")),
-        "fight_length": _metric_mean(collected.get("fight_length")),
-        "absorb": _metric_mean(collected.get("absorb")),
-        "heal": _metric_mean(collected.get("heal")),
-    }
-    return SimReportSummary(
-        version=str(report.get("version")) if report.get("version") is not None else None,
-        game_version=live_info.get("wow_version") if isinstance(live_info, dict) else None,
-        player_name=str(player.get("name")) if player.get("name") is not None else None,
-        player_spec=str(player.get("specialization")) if player.get("specialization") is not None else None,
-        player_role=str(player.get("role")) if player.get("role") is not None else None,
-        iterations_completed=iterations_completed,
-        run_settings=run_settings,
-        runtime=runtime,
-        metrics=metrics,
+
+
+def _runtime_block(stats: dict[str, Any]) -> dict[str, Any]:
+    keys = (
+        "elapsed_time_seconds",
+        "elapsed_cpu_seconds",
+        "init_time_seconds",
+        "merge_time_seconds",
+        "analyze_time_seconds",
     )
+    return {key: stats.get(key) for key in keys}
 
 
 def sim_report_payload(

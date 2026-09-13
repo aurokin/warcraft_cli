@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 from warcraft_core.analytics import numeric_summary
@@ -10,7 +11,9 @@ from warcraftlogs_cli.client import ReportPlayerDetailsOptions, WarcraftLogsClie
 from warcraftlogs_cli.report_payloads import fight_payload, report_brief_payload, report_payload, report_url
 from warcraftlogs_cli.sampling_utils import (
     boss_matches,
+    dict_at,
     fight_duration_ms,
+    list_at,
     normalize_match_text,
     report_is_finished,
     sampled_spec_filter_notes,
@@ -18,9 +21,36 @@ from warcraftlogs_cli.sampling_utils import (
 )
 
 
+@dataclass(frozen=True, slots=True)
+class CrossReportScope:
+    """Cohort-shaping inputs shared by every sampled cross-report command.
+
+    Field order is the emitted ``query`` key order: ``dataclasses.asdict`` on this
+    object is what the sampled payloads echo back to the caller. ``top`` is the
+    returned-row cap; commands without a ``--top`` flag leave it at the default and
+    drop it from their query echo.
+    """
+
+    zone_id: int
+    boss_id: int | None = None
+    boss_name: str | None = None
+    difficulty: int | None = None
+    spec_name: str | None = None
+    kill_time_min: float | None = None
+    kill_time_max: float | None = None
+    top: int = 10
+    report_pages: int = 1
+    reports_per_page: int = 25
+    start_time: float | None = None
+    end_time: float | None = None
+    guild_region: str | None = None
+    guild_realm: str | None = None
+    guild_name: str | None = None
+
+
 def player_spec_matches(actor: dict[str, Any], spec_name: str) -> bool:
     wanted = normalize_match_text(spec_name)
-    for spec in actor.get("specs") if isinstance(actor.get("specs"), list) else []:
+    for spec in list_at(actor, "specs"):
         if not isinstance(spec, dict):
             continue
         if normalize_match_text(str(spec.get("spec") or "")) == wanted:
@@ -29,13 +59,12 @@ def player_spec_matches(actor: dict[str, Any], spec_name: str) -> bool:
 
 
 def _player_details_roles(report: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
-    details = report.get("playerDetails") if isinstance(report.get("playerDetails"), dict) else {}
-    data = details.get("data") if isinstance(details.get("data"), dict) else {}
-    role_data = data.get("playerDetails") if isinstance(data.get("playerDetails"), dict) else data
+    details = dict_at(report, "playerDetails")
+    data = dict_at(details, "data")
+    role_data = dict_at(data, "playerDetails") or data
     roles: dict[str, list[dict[str, Any]]] = {}
     for role in ("tanks", "healers", "dps"):
-        rows = role_data.get(role) if isinstance(role_data.get(role), list) else []
-        roles[role] = [row for row in rows if isinstance(row, dict)]
+        roles[role] = [row for row in list_at(role_data, role) if isinstance(row, dict)]
     return roles
 
 
@@ -53,7 +82,7 @@ def matching_spec_players(report: dict[str, Any], *, spec_name: str) -> list[dic
                     "type": row.get("type"),
                     "matching_specs": [
                         spec
-                        for spec in (row.get("specs") if isinstance(row.get("specs"), list) else [])
+                        for spec in (list_at(row, "specs"))
                         if normalize_match_text(str(spec.get("spec") or "")) == normalize_match_text(spec_name)
                     ],
                 }
@@ -136,8 +165,8 @@ def sampled_cross_report_citations(
     sample_reports: list[dict[str, Any]] = []
     seen: set[tuple[str, int | None]] = set()
     for row in rows:
-        report = row.get("report") if isinstance(row.get("report"), dict) else {}
-        fight = row.get("fight") if isinstance(row.get("fight"), dict) else {}
+        report = dict_at(row, "report")
+        fight = dict_at(row, "fight")
         report_code = report.get("code") if isinstance(report.get("code"), str) else None
         fight_id = fight.get("id") if isinstance(fight.get("id"), int) else None
         if report_code is None:
@@ -207,7 +236,7 @@ def _fetch_zone_report_rows(
             zone_id=zone_id,
             game_zone_id=None,
         )
-        page_rows = pagination.get("data") if isinstance(pagination.get("data"), list) else []
+        page_rows = list_at(pagination, "data")
         report_rows.extend([row for row in page_rows if isinstance(row, dict)])
         if not pagination.get("has_more_pages"):
             break
@@ -281,7 +310,7 @@ def _scan_finished_reports_for_boss_kills(
             allow_unlisted=False,
             ttl_override=client._finished_report_ttl,
         )
-        fights = fights_payload.get("fights") if isinstance(fights_payload.get("fights"), list) else []
+        fights = list_at(fights_payload, "fights")
         for fight in fights:
             if not isinstance(fight, dict):
                 continue
@@ -320,46 +349,29 @@ def _scan_finished_reports_for_boss_kills(
     return boss_kills, scanned_fight_count, matched_boss_kill_count
 
 
-def collect_boss_kill_rows(
-    *,
-    client: WarcraftLogsClient,
-    zone_id: int,
-    boss_id: int | None,
-    boss_name: str | None,
-    difficulty: int | None,
-    spec_name: str | None,
-    kill_time_min: float | None,
-    kill_time_max: float | None,
-    report_pages: int,
-    reports_per_page: int,
-    start_time: float | None,
-    end_time: float | None,
-    guild_region: str | None,
-    guild_realm: str | None,
-    guild_name: str | None,
-) -> dict[str, Any]:
+def collect_boss_kill_rows(client: WarcraftLogsClient, scope: CrossReportScope) -> dict[str, Any]:
     report_rows = _fetch_zone_report_rows(
         client,
-        zone_id=zone_id,
-        guild_region=guild_region,
-        guild_realm=guild_realm,
-        guild_name=guild_name,
-        report_pages=report_pages,
-        reports_per_page=reports_per_page,
-        start_time=start_time,
-        end_time=end_time,
+        zone_id=scope.zone_id,
+        guild_region=scope.guild_region,
+        guild_realm=scope.guild_realm,
+        guild_name=scope.guild_name,
+        report_pages=scope.report_pages,
+        reports_per_page=scope.reports_per_page,
+        start_time=scope.start_time,
+        end_time=scope.end_time,
     )
     live_reports = [row for row in report_rows if not report_is_finished(row)]
     finished_reports = [row for row in report_rows if report_is_finished(row)]
     boss_kills, scanned_fight_count, matched_boss_kill_count = _scan_finished_reports_for_boss_kills(
         client,
         finished_reports,
-        boss_id=boss_id,
-        boss_name=boss_name,
-        difficulty=difficulty,
-        spec_name=spec_name,
-        kill_time_min=kill_time_min,
-        kill_time_max=kill_time_max,
+        boss_id=scope.boss_id,
+        boss_name=scope.boss_name,
+        difficulty=scope.difficulty,
+        spec_name=scope.spec_name,
+        kill_time_min=scope.kill_time_min,
+        kill_time_max=scope.kill_time_max,
     )
     return {
         "rows": boss_kills,

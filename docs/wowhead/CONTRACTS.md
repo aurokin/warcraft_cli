@@ -29,8 +29,9 @@ Pinned parser canaries live in `tests/fixtures/wowhead_canaries.py`. Required JS
 
 ## CI
 
-`.github/workflows/live-wowhead-contracts.yml` (`workflow_dispatch`):
+`.github/workflows/live-contracts.yml` (weekly schedule plus `workflow_dispatch`):
 
-- Recorded schema snapshots (no network)
 - Matrix live jobs per expansion profile
 - Parser canary job
+
+Synthetic schema snapshots need no network and run with the regular unit tests (`make test-fast`).

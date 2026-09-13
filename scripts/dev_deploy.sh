@@ -6,7 +6,14 @@ VENV_DIR="$ROOT_DIR/.venv"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 LINK_BIN=true
 ALLOW_LINK_BIN="${WARCRAFT_ALLOW_LINK_BIN:-}"
-BIN_NAMES="${WARCRAFT_BIN_NAMES:-warcraft wowhead method icy-veins raiderio warcraft-wiki wowprogress simc warcraftlogs raidbots blizzard curseforge}"
+# Console scripts are declared once, in the root pyproject; never duplicate the list here.
+read_script_names() {
+  "$1" - "$ROOT_DIR/pyproject.toml" <<'PYEOF'
+import sys, tomllib
+with open(sys.argv[1], "rb") as handle:
+    print(" ".join(tomllib.load(handle)["project"]["scripts"]))
+PYEOF
+}
 
 while (($#)); do
   case "$1" in
@@ -41,9 +48,15 @@ if [[ ! -d "$VENV_DIR" ]]; then
   "$PYTHON_BIN" -m venv "$VENV_DIR"
 fi
 
-"$VENV_DIR/bin/python" -m pip install --upgrade pip setuptools wheel >/dev/null
-"$VENV_DIR/bin/pip" install -e '.[dev]'
+if command -v uv >/dev/null 2>&1; then
+  (cd "$ROOT_DIR" && uv sync --all-extras)
+else
+  "$VENV_DIR/bin/python" -m pip install --upgrade pip setuptools wheel >/dev/null
+  "$VENV_DIR/bin/pip" install -e '.[dev]'
+fi
 "$ROOT_DIR/scripts/setup_worktree_env.sh" >/dev/null
+
+BIN_NAMES="${BIN_NAMES:-$(read_script_names "$VENV_DIR/bin/python")}"
 
 if [[ "$LINK_BIN" == "true" ]]; then
   if [[ ! "$ALLOW_LINK_BIN" =~ ^(1|true|yes)$ ]]; then

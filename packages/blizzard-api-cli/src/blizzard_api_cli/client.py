@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import httpx
-from warcraft_api.http import DEFAULT_RETRY_ATTEMPTS, request_with_retries
+from warcraft_api.http import DEFAULT_RETRY_ATTEMPTS, build_client, request_with_retries
 from warcraft_core.auth import load_provider_auth_state, save_provider_auth_state
 from warcraft_core.wow_normalization import normalize_region
 
@@ -168,7 +168,7 @@ class BlizzardClient:
 
     def _client(self) -> httpx.Client:
         if self._http_client is None:
-            self._http_client = httpx.Client(timeout=self._timeout_seconds, follow_redirects=True)
+            self._http_client = build_client(timeout=self._timeout_seconds)
         return self._http_client
 
     def _credential_cache_key(self, region: str) -> str:

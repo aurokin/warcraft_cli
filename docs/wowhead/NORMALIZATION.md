@@ -4,7 +4,10 @@ Additive normalized fields for agent consumption. Raw `tooltip`, HTML-derived bl
 
 ## Schema versions
 
-| Command | `schema_version` | When present |
+The top-level `schema_version` is the shared envelope version (`"1"`). The normalization layer
+carries its own version at `normalized.schema_version`:
+
+| Command | `normalized.schema_version` | When present |
 | --- | --- | --- |
 | `entity` | `wowhead.entity.v1` | `entity` type is `item` and at least one normalized field is available |
 | `entity-page` | `wowhead.entity_page.v1` | `entity` type is `item` and page metadata supplies normalized fields |

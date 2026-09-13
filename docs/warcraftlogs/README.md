@@ -1,1022 +1,163 @@
 # Warcraft Logs CLI
 
-## Goal
+`warcraftlogs` queries the official Warcraft Logs OAuth 2.0 + GraphQL API. It does not scrape.
+It exposes typed commands for guilds, characters, rankings, reports, encounter analytics, and
+sampled cross-report analytics, plus a raw `graphql` passthrough for queries no typed command covers.
 
-Build `warcraftlogs` as an official API-first provider for Warcraft Logs using the supported OAuth 2.0 and GraphQL APIs, not scraping.
+Companion docs:
+- [SCOPING.md](SCOPING.md) - scoping conventions and raw-GraphQL rules
+- [PAYLOAD_KEYS.md](PAYLOAD_KEYS.md) - per-command payload keys and the deprecated legacy keys
+- [CACHING.md](CACHING.md) - cache keys, TTLs, and derived-output trust fields
+- [LIVE_MATRIX.md](LIVE_MATRIX.md) - live command matrix workflow
+- [warcraftlogs-design-notes.md](../architecture/history/warcraftlogs-design-notes.md) - schema research and the original design record
+- [AUTH_ARCHITECTURE.md](../architecture/AUTH_ARCHITECTURE.md) - shared auth architecture
 
-Repo-wide product philosophy lives in [PRODUCT_PRINCIPLES.md](../foundation/PRODUCT_PRINCIPLES.md).
-Repo-wide analytics and comparison safety rules live in [SAFE_ANALYTICS_RULES.md](../foundation/SAFE_ANALYTICS_RULES.md).
-Scoping conventions live in [SCOPING.md](SCOPING.md).
-Payload envelope keys live in [PAYLOAD_KEYS.md](PAYLOAD_KEYS.md).
-Live command matrix workflow lives in [LIVE_MATRIX.md](LIVE_MATRIX.md).
-Caching contract and derived-output trust fields live in [CACHING.md](CACHING.md).
-This file tracks Warcraft Logs-specific implementation state, boundaries, and current gaps.
+## Auth
 
-The CLI should become the fastest trustworthy path for:
-- guild progression and ranking lookups
-- character ranking lookups
-- encounter ranking lookups for boss/class/spec leaderboard questions
-- report inspection
-- fight/event/table/graph extraction from reports
-- world metadata lookup for zones, encounters, regions, servers, and expansions
-- authenticated user workflows when private reports or user-scoped data matter
+Public commands use the OAuth client-credentials flow. `auth whoami` and other user-scoped
+endpoints need a saved user token from the authorization-code or PKCE flow.
 
-## Current State
+Credentials:
+- `WARCRAFTLOGS_CLIENT_ID`
+- `WARCRAFTLOGS_CLIENT_SECRET`
 
-Implemented today:
-- retail-only phase-1 standalone provider
-- official OAuth client-credentials auth against the public GraphQL endpoint
-- manual user-auth groundwork for:
-  - authorization code flow
-  - PKCE flow
-- persisted user-token metadata and private-endpoint verification via `warcraftlogs auth whoami`
-- auth lookup order:
-  - repo-local `.env.local`
-  - XDG config: `~/.config/warcraft/providers/warcraftlogs.env`
-  - process environment
-- runtime auth state path:
-  - `~/.local/state/warcraft/providers/warcraftlogs.json`
-- supported variables:
-  - `WARCRAFTLOGS_CLIENT_ID`
-  - `WARCRAFTLOGS_CLIENT_SECRET`
-- commands:
-  - `warcraftlogs doctor`
-  - `warcraftlogs auth status`
-  - `warcraftlogs auth client`
-  - `warcraftlogs auth token`
-  - `warcraftlogs auth whoami`
-  - `warcraftlogs auth login`
-  - `warcraftlogs auth pkce-login`
-  - `warcraftlogs auth logout`
-  - `warcraftlogs rate-limit`
-  - `warcraftlogs regions`
-  - `warcraftlogs expansions`
-  - `warcraftlogs server`
-  - `warcraftlogs zones`
-  - `warcraftlogs zone`
-  - `warcraftlogs encounter`
-  - `warcraftlogs guild`
-  - `warcraftlogs guild-members`
-  - `warcraftlogs guild-attendance`
-  - `warcraftlogs guild-rankings`
-  - `warcraftlogs guild-reports`
-  - `warcraftlogs character`
-  - `warcraftlogs character-rankings`
-  - `warcraftlogs encounter-rankings`
-  - `warcraftlogs reports`
-  - `warcraftlogs report`
-  - `warcraftlogs report-fights`
-  - `warcraftlogs report-master-data`
-  - `warcraftlogs report-player-details`
-  - `warcraftlogs report-player-talents`
-  - `warcraftlogs report-events`
-  - `warcraftlogs report-table`
-  - `warcraftlogs report-graph`
-  - `warcraftlogs report-rankings`
-  - `warcraftlogs graphql`
-  - `warcraftlogs report-encounter`
-  - `warcraftlogs report-encounter-players`
-  - `warcraftlogs report-encounter-casts`
-  - `warcraftlogs report-encounter-buffs`
-  - `warcraftlogs report-encounter-aura-summary`
-  - `warcraftlogs report-encounter-aura-compare`
-  - `warcraftlogs report-encounter-damage-source-summary`
-  - `warcraftlogs report-encounter-damage-target-summary`
-  - `warcraftlogs report-encounter-damage-breakdown`
-  - `warcraftlogs boss-kills`
-  - `warcraftlogs top-kills`
-  - `warcraftlogs kill-time-distribution`
-  - `warcraftlogs boss-spec-usage`
-  - `warcraftlogs comp-samples`
-  - `warcraftlogs ability-usage-summary`
-- unit coverage for the current JSON contract
-- live coverage for:
-  - `auth status`
-  - `auth client`
-  - `regions`
-  - `server`
-  - `guild`
-  - `guild-members`
-  - `expansions`
-  - `zone`
-  - `guild-rankings`
-  - `guild-reports`
-  - `reports`
-  - `report`
-  - constrained `report-master-data`
-  - constrained `report-player-details`
-  - constrained `report-events`
-  - constrained `report-table`
-  - constrained `report-graph`
-  - constrained `report-rankings`
-  - live `report-encounter`
-  - live `report-encounter-players`
-  - constrained `report-encounter-damage-breakdown`
-  - sampled `boss-kills`
-  - sampled `boss-spec-usage`
-  - `auth whoami` when user auth is configured
+Each key is resolved independently, highest layer first, with pure reads that never mutate the
+process environment:
+1. repo-local `.env.local` (searched up to the enclosing git repository root)
+2. `~/.config/warcraft/providers/warcraftlogs.env`
+3. the process environment
 
-Current intentional boundary:
-- wrapped plus standalone, but wrapper discovery is still intentionally narrow
-- site-profile selection is explicit: `--site retail|classic|fresh`
-- public data surface first, with only limited user-endpoint verification via `warcraftlogs auth whoami`
-- typed command surface plus raw `graphql` passthrough for explicitly scoped official GraphQL queries
-- no wrapper-level user-auth routing yet
+Saved user-token state lives at `~/.local/state/warcraft/providers/warcraftlogs.json` (file mode
+`0600`). `auth logout` deletes it.
 
-What changed in the research baseline:
-- we now have a local rendered docs dump under `research/warcraftlogs-docs/`
-- we now also have local rendered docs dumps under:
-  - `research/warcraftlogs-docs-classic/`
-  - `research/warcraftlogs-docs-fresh/`
-- the dump is produced by [dump_warcraftlogs_docs.py](../../scripts/dump_warcraftlogs_docs.py)
-- the dump confirms Warcraft Logs has an official OAuth 2.0 + GraphQL integration surface that is broad enough for a full CLI
+User login is a two-step manual flow: run `auth login` (or `auth pkce-login`) with
+`--redirect-uri` to get an authorize URL, then re-run the same command with `--code` and `--state`
+from the callback. `--scope` (repeatable) selects the OAuth scopes: `view-user-profile` for
+`currentUser` data and `view-private-reports` for private or guild-stealth reports. A callback whose
+`state` or `--redirect-uri` does not match the pending flow is rejected before the code is exchanged.
 
-This means `warcraftlogs` should be planned as an official integration first, with scraping treated only as a fallback for unsupported site workflows.
+`doctor` and `auth status` probe live access by default (`rate_limit()` for public access,
+`current_user()` for user access). Pass `--no-live` for local readiness only.
 
-Shared auth direction for this provider is defined in [AUTH_ARCHITECTURE.md](../architecture/AUTH_ARCHITECTURE.md). `warcraftlogs` is one of the two providers that should define the shared OAuth-oriented auth architecture.
+## Site profiles
 
-## Known Gaps And Deferred Coverage
+One package serves all three Warcraft Logs sites. The global `--site` flag routes the site URL,
+OAuth endpoints, and both GraphQL endpoints:
 
-Highest-value next implementation slices:
-- `character-rankings` now carries a trust block (`ranking_basis`, resolved scope echo, freshness, and a source-character `class_spec_identity`) alongside the preserved `raw` passthrough; continue validating it across more public characters before treating it as fully validated
-- deepen report workflows beyond the current phase-1 slice:
-  - safer event pagination patterns once `events(...)` can be validated more broadly
-  - additional report detail surfaces after the current player/events/table/graph/ranking slice is proven
-- deepen the encounter analytics slice beyond the current report-link workflows:
-  - current shipped slice covers encounter identity plus typed player/cast/buff/aura/aura-compare/damage-source/damage-target/damage summaries
-  - next: wave and phase summaries so agents do not have to derive unstable segments from raw timestamps
-- continue the multi-report analytics slice beyond the current sampled cohort commands:
-  - current shipped slice covers `boss-kills`, `top-kills`, `spec-kill-samples`, `kill-time-distribution`, `boss-spec-usage`, `comp-samples`, and `ability-usage-summary`
-  - those sampled commands now also expose freshness and citation metadata for the sampled report cohort
-  - `spec-kill-samples` is a labeled spec-filtered participant kill cohort (requires `--spec-name`), with `sample_size`, exclusion/truncation counts, freshness, and citations; it is explicitly not a spec ranking leaderboard
-  - stronger top-kill discovery semantics beyond sampled fastest kills
-  - kill-time-bounded report cohorts
-  - deeper cross-report composition summaries beyond the current sampled class-presence/signature layer
-
-Current rankings split:
-- `encounter-rankings` is the official encounter leaderboard surface for boss/class/spec ranking questions
-  - normalized row `rank` values are derived from page order when the provider omits explicit per-row rank fields
-  - normalized pagination counts are page-scoped because Warcraft Logs does not currently return a stable global total for this surface
-- `character-rankings` remains the character-centric rankings surface and now exposes a `trust` block (basis, scope echo, freshness, source-character identity)
-- `boss-kills`, `top-kills`, `spec-kill-samples`, `kill-time-distribution`, `boss-spec-usage`, `comp-samples`, and `ability-usage-summary` remain sampled cross-report analytics
-- on those sampled commands, `--spec-name` filters sampled kills by matching participant specs before aggregation; it does not turn the query into a spec ranking leaderboard
-- `spec-kill-samples` requires `--spec-name` and returns that filter as an explicit participant cohort with sample-size/exclusion/truncation accounting
-
-After that:
-- user-auth plumbing
-- wrapper integration
-
-## Site Variant Research
-
-We now have rendered docs dumps for:
-- retail:
-  - `https://www.warcraftlogs.com`
-- classic:
-  - `https://classic.warcraftlogs.com`
-- fresh:
-  - `https://fresh.warcraftlogs.com`
-
-Current research result:
-- all three sites expose the same OAuth docs content
-- all three sites expose the same normalized GraphQL schema surface
-- all three manifests currently contain `110` normalized GraphQL docs pages
-
-This is an important architectural result:
-- retail/classic/fresh should not become separate CLI packages
-- they should become site profiles inside one `warcraftlogs` provider
-- the split is operational and product-scoped, not schema-scoped
-
-## Site Profile Contract
-
-The provider has one CLI package, `warcraftlogs`, with three site profiles:
-
-| Site profile | Host |
+| `--site` | Host |
 | --- | --- |
-| `retail` | `www.warcraftlogs.com` |
+| `retail` (default) | `www.warcraftlogs.com` |
 | `classic` | `classic.warcraftlogs.com` |
 | `fresh` | `fresh.warcraftlogs.com` |
-
-The `--site` global flag routes the base site URL, OAuth authorize/token endpoints, public GraphQL endpoint, and user GraphQL endpoint through the selected profile:
 
 ```bash
 warcraftlogs --site classic auth client
 warcraftlogs --site fresh expansions
 ```
 
-The wrapper maps expansion keys to these site profiles before invoking Warcraft Logs:
+The `warcraft` wrapper maps its expansion vocabulary to these profiles: `retail` -> `retail`;
+`classic`, `tbc`, `wotlk`, `cata`, `mop-classic` -> `classic`; `fresh` -> `fresh`. `ptr`, `beta`,
+and `classic-ptr` are rejected rather than coerced.
 
-| Wrapper expansion key | `warcraftlogs --site` |
-| --- | --- |
-| `retail` | `retail` |
-| `classic`, `tbc`, `wotlk`, `cata`, `mop-classic` | `classic` |
-| `fresh` | `fresh` |
+## Commands
 
-`ptr`, `beta`, and `classic-ptr` are not mapped to Warcraft Logs. They are rejected rather than coerced.
+Run `warcraftlogs --help` or `warcraftlogs <command> --help` for flags. Global flags go before
+the subcommand: `--site`, plus the shared output flags `--pretty`, `--compact`,
+`--compact-max-chars`, `--fields`, `--fields-strict`, and `--profile`.
 
-## Official Access Model
+Discovery and health:
+`search`, `resolve`, `doctor`, `rate-limit`.
 
-Warcraft Logs officially supports OAuth 2.0 and GraphQL:
-- OAuth docs landing page: `https://www.warcraftlogs.com/api/docs`
-- public GraphQL endpoint: `https://www.warcraftlogs.com/api/v2/client`
-- user-auth GraphQL endpoint: `https://www.warcraftlogs.com/api/v2/user`
-- authorization URI: `https://www.warcraftlogs.com/oauth/authorize`
-- token URI: `https://www.warcraftlogs.com/oauth/token`
+`search` and `resolve` are explicit-report-only: they match a Warcraft Logs report URL or report
+code and return a discovery hint for anything else.
 
-Supported auth flows from the official docs:
-- client credentials flow
-  - public API only
-  - good for most read-first CLI queries
-- authorization code flow
-  - user-authorized private/user data
-- PKCE code flow
-  - user-authorized private/user data without client-secret distribution
+Auth: `auth status`, `auth client`, `auth token`, `auth login`, `auth pkce-login`, `auth whoami`,
+`auth logout`.
 
-From the official docs:
-- public data belongs under `/api/v2/client`
-- user/private data belongs under `/api/v2/user`
-- the API is schema-driven GraphQL
-- rate-limit state is queryable via `RateLimitData`
+World and static metadata: `regions`, `expansions`, `server`, `zones`, `zone`, `encounter`.
 
-## Confirmed Official Schema Surface
+Guilds: `guild`, `guild-members`, `guild-attendance`, `guild-rankings`, `guild-reports`.
 
-The rendered GraphQL docs dump confirms these top-level query families:
-- `characterData`
-- `gameData`
-- `guildData`
-- `progressRaceData`
-- `rateLimitData`
-- `reportData`
-- `userData`
-- `worldData`
-- `reportComponentData`
-- `systemReportComponentData`
+Characters: `character`, `character-rankings`.
 
-This is already enough for a substantial CLI without scraping.
+Rankings: `encounter-rankings` (official encounter leaderboard).
 
-### Guild and Progression Surface
+Reports: `reports`, `report`, `report-fights`, `report-master-data`, `report-player-details`,
+`report-events`, `report-table`, `report-graph`, `report-rankings`, `graphql`.
 
-Confirmed from `GuildData`, `Guild`, and `GuildZoneRankings`:
-- fetch a guild by:
-  - `id`
-  - or `name + serverSlug + serverRegion`
-- list guilds by:
-  - page/limit
-  - server id
-  - server slug + region
-- guild fields include:
-  - identity
-  - server
-  - faction
-  - description
-  - tags
-  - competition mode
-  - stealth mode
-- guild supports:
-  - `attendance(...)`
-  - `members(...)`
-  - `zoneRanking(zoneId: ...)`
-- zone ranking supports:
-  - `progress`
-  - `speed`
-  - `completeRaidSpeed`
-  with world / region / server rank positions
+Encounter analytics (one report, one fight): `report-encounter`, `report-encounter-players`,
+`report-player-talents`, `report-encounter-casts`, `report-encounter-buffs`,
+`report-encounter-aura-summary`, `report-encounter-aura-compare`,
+`report-encounter-damage-source-summary`, `report-encounter-damage-target-summary`,
+`report-encounter-damage-breakdown`.
 
-This makes official guild/ranking workflows first-class.
+Sampled cross-report analytics (many kills, one boss): `boss-kills`, `top-kills`,
+`spec-kill-samples`, `kill-time-distribution`, `boss-spec-usage`, `comp-samples`,
+`ability-usage-summary`.
 
-Current live caveat:
-- `attendance(...)` is documented and implemented, but public live queries can still return provider-side internal errors, so it should not be treated as a stable live-contract surface yet
+## Output contract
 
-Current report boundary:
-- `guild-reports` is now implemented as the convenience guild-scoped history view
-- `report-fights` remains on the stable broad fight-list contract
-- richer fight-filter and phase-transition workflows are still deferred until the public API behavior is reliable enough to support them honestly
+Every command emits one JSON document with the shared envelope keys (`ok`, `provider`, `command`,
+`kind`, `schema_version`, `query`, `provenance`, `data`, and `error` on failure) as defined in
+[ERROR_CONTRACT.md](../foundation/ERROR_CONTRACT.md).
 
-### Character Surface
+The payload body stays at the top level next to those keys so existing agent field paths keep
+working, and the per-command canonical key plus the older primary key are both still emitted and
+listed in [PAYLOAD_KEYS.md](PAYLOAD_KEYS.md). Because the body is not moved, `data` is `{}` for
+every command except `search`, `resolve`, and `doctor` -- the cross-provider surface, where `data`
+carries the same body the in-process provider object returns. Report and analytics payloads are
+large, so they are not duplicated a third time under `data`.
 
-Confirmed from `CharacterData` and `Character`:
-- fetch a character by:
-  - `id`
-  - or `name + serverSlug + serverRegion`
-- list characters for a guild by `guildID`
-- character fields include:
-  - canonical ID
-  - class ID
-  - faction
-  - guild rank
-  - guild memberships
-  - level
-  - visibility flags
-- character supports:
-  - `encounterRankings(...)`
-  - `zoneRankings(...)`
-  - `gameData(specID, forceUpdate)`
+Failures print the error envelope to stderr and exit with the shared codes: `1` generic, `2` usage
+or invalid query, `3` auth, `4` not found, `5` network or upstream. A transport failure is always
+an error envelope, never a traceback.
 
-Important boundary:
-- some ranking/game data is documented as non-frozen and may change without notice
-- private-log inclusion is possible on some ranking queries only via the user endpoint
+Partial GraphQL failures are surfaced, not swallowed: the payload keeps `graphql_warnings` and adds
+a note instead of pretending the result is complete.
 
-### Report Surface
+## Sampled analytics and trust
 
-Confirmed from `ReportData`, `Report`, and `ReportEventPaginator`:
-- fetch a report by `code`
-- opt into `allowUnlisted` when appropriate
-- list reports by:
-  - guild identity
-  - guild tag
-  - user id
-  - date range
-  - zone id
-  - game zone id
-  - page/limit
-- report fields include:
-  - code
-  - title
-  - owner
-  - guild
-  - guild tag
-  - region
-  - visibility
-  - archive status
-  - zone
-  - start/end time
-  - revision
-  - segments / exported segments
-  - phases
-- report supports:
-  - `events(...)`
-  - `fights(...)`
-  - `graph(...)`
-  - `masterData(...)`
-  - `playerDetails(...)`
-  - `rankings(...)`
-  - `table(...)`
+Sampled commands aggregate a bounded cohort of reports, never "all kills". Each one reports its
+sample scope, exclusion and truncation counts, cache provenance, freshness, and citations, per
+[SAFE_ANALYTICS_RULES.md](../foundation/SAFE_ANALYTICS_RULES.md).
 
-Important pagination and cost behavior:
-- event data is paginated via `ReportEventPaginator`
-- pagination continues through `nextPageTimestamp`
-- `events`, `graph`, and `table` all expose rich filter arguments
-- archived-report access is restricted unless the retrieving user has archive access
-- practical phase-1 behavior:
-  - `report-player-details` is a stable way to inspect role buckets and participants for a report slice before drilling into lower-level event data
-  - `report-table` and `report-graph` should accept user-friendly enum-like CLI values and normalize them to GraphQL enum values
-  - `report-events` should require a narrowed slice such as `fightIDs`, `encounterID`, or an explicit time window instead of encouraging whole-report pulls
-  - even valid narrowed `events(...)` queries can still return `null` event data on some public reports, so the command contract should expose that honestly instead of forcing fake summaries
-  - `report-rankings` can legitimately return zero rows for a valid public report slice, so the command contract should surface that plainly
+`--spec-name` filters sampled kills by participant spec before aggregation; it does not turn the
+query into a spec leaderboard. `spec-kill-samples` requires `--spec-name` and returns an explicit
+participant cohort. For leaderboard questions use `encounter-rankings`.
 
-### World and Static Metadata Surface
+## Talent transport
 
-Confirmed from `WorldData` and `GameData`:
-- `worldData` supports:
-  - expansions
-  - regions
-  - subregions
-  - servers
-  - zones
-  - encounters
-- `gameData` supports:
-  - abilities
-  - achievements
-  - affixes
-  - classes
-  - enchants
-  - factions
-  - items
-  - item sets
-  - maps
-  - NPCs
-  - specs
-  - zones
+`report-player-talents` is deliberately narrow: one report, one fight, one actor. It needs fight
+scope from `--fight-id` or a report URL with `#fight=<id>`, and it emits a packet only when every
+selected `combatant_info.talentTree` row is fully formed; otherwise it fails with
+`missing_talent_tree` rather than emitting a partial packet. `--out <path>` writes just the packet
+JSON; `--allow-unlisted` permits an unlisted report.
 
-Important caching signal:
-- the docs explicitly say game data changes only on major game patches and should be cached aggressively
-- `Zone.frozen` provides a strong freezing/caching signal for zone-scoped data
+Warcraft Logs performs pure structural validation only. It does not run SimulationCraft, so its
+packets are `raw_only` with `validation.reason: simc_backend_unavailable` recorded. Run `simc` to add
+validated `simc_split_talents`:
 
-### User and Private Surface
+```bash
+warcraftlogs report-player-talents <report> --fight-id <id> --actor-id <id> --out ./tmp/actor-packet.json
+simc validate-talent-transport --build-packet ./tmp/actor-packet.json --out ./tmp/actor-packet-validated.json
+warcraft talent-describe ./tmp/actor-packet-validated.json --apl-path <apl>
+```
 
-Confirmed from `UserData` and `User`:
-- `currentUser` exists only on the user endpoint
-- user fields include:
-  - id
-  - name
-  - avatar
-  - battle tag
-  - guilds
-  - claimed characters
+## Known gaps
 
-Important scope boundary:
-- Warcraft Logs distinguishes two user-facing OAuth scopes that the CLI cares about:
-  - `view-user-profile`: required for `userData.currentUser` and any field that depends on the authenticated user identity (`Guild.currentUserRank`, user guilds, claimed characters, etc.); without it the user endpoint resolves `currentUser` to `null`
-  - `view-private-reports`: additionally required for `reportData.report(...)` on any private or guild-stealth report; without it the user endpoint returns `"The user did not grant your application permission to view this report."` even when the authenticated user can see the report in their browser
-- both `warcraftlogs auth login` and `warcraftlogs auth pkce-login` accept repeated `--scope` flags. For full private-report access pass both: `--scope view-user-profile --scope view-private-reports`
-- WCL does not echo the granted scope set in the OAuth token response (`token.scope` is `null`); the CLI parses the granted scopes out of the JWT body's `scopes` claim instead, and surfaces a separate warning when `view-private-reports` is missing
-- once a user token is saved, the CLI routes every GraphQL call through `/api/v2/user`; before that, calls go to `/api/v2/client` with client credentials and only see public data
+- `character-rankings` carries a trust block plus the raw passthrough, but has been validated
+  against a small set of public characters only.
+- Encounter analytics stops at the typed player/cast/buff/aura/damage summaries; wave and phase
+  segmentation is not implemented, so agents still derive those from raw timestamps.
+- Cross-report analytics has no ranking-basis discovery beyond sampled fastest kills, and no
+  kill-time-bounded cohort discovery.
+- User auth is manual and per-command; the `warcraft` wrapper does not route user-scoped calls.
+- Progress-race and saved-query surfaces are not exposed.
 
-### Race and Live Competition Surface
+## Official endpoints
 
-Confirmed from `ProgressRaceData`:
-- `progressRace(...)`
-- `detailedComposition(...)`
-
-Important boundary:
-- this data is only active during an ongoing race
-- the docs say the JSON is not frozen and may change without notice
-
-### Rate Limits
-
-Confirmed from `RateLimitData`:
-- `limitPerHour`
-- `pointsSpentThisHour`
-- `pointsResetIn`
-
-This should be part of `doctor` and auth diagnostics from day one.
-
-## Product Direction
-
-`warcraftlogs` should be an API-first CLI with typed query helpers over the official schema.
-
-The CLI should not start with arbitrary raw GraphQL strings as the main product.
-Raw query support may be useful later, but the default UX should be shaped around stable workflows agents actually need.
-
-## Command Families
-
-The full target shape should cover these families.
-
-### Environment and Auth
-
-- `warcraftlogs doctor`
-- `warcraftlogs auth login`
-- `warcraftlogs auth pkce-login`
-- `warcraftlogs auth logout`
-- `warcraftlogs auth status`
-- `warcraftlogs auth token`
-- `warcraftlogs auth client`
-
-These commands should clearly surface:
-- current auth mode
-- endpoint family in use (`client` vs `user`)
-- configured client id
-- token expiry
-- scope availability
-- rate-limit state
-- whether public `/api/v2/client` commands are currently runnable
-- whether saved `/api/v2/user` auth is currently runnable
-
-Current runtime auth contract:
-- client credentials are required for public `/api/v2/client` commands
-- `auth whoami` stays on the private `/api/v2/user` endpoint and requires saved user auth specifically
-- `doctor` and `auth status` validate live access by default:
-  - public access probes `rate_limit()`
-  - saved user access probes `current_user()`
-  - `--no-live` skips those remote checks and reports local/runtime readiness only
-- `doctor` should report user-auth bootstrap as available when client credentials are configured even if no saved user token exists yet
-- failed `auth login` and `auth pkce-login` attempts should not write pending auth state before client credentials are validated
-
-### Guild Workflows
-
-- `warcraftlogs guild <region> <realm> <name>`
-- `warcraftlogs guild-members <region> <realm> <name>`
-- `warcraftlogs guild-attendance <region> <realm> <name>`
-- `warcraftlogs guild-rankings <region> <realm> <name>`
-- `warcraftlogs guild-reports <region> <realm> <name>`
-
-The ranking command should explicitly support:
-- `--zone-id`
-- `--difficulty`
-- `--size`
-- `--kind progress|speed|complete-raid-speed`
-
-### Character Workflows
-
-- `warcraftlogs character <region> <realm> <name>`
-- `warcraftlogs character-rankings <region> <realm> <name>`
-- `warcraftlogs character-zone-rankings <region> <realm> <name>`
-- `warcraftlogs character-game-data <region> <realm> <name>`
-
-Ranking support should include:
-- encounter
-- zone
-- metric
-- compare mode
-- timeframe
-- bracket
-- class/spec/role filters
-- include-private toggle only when user auth supports it
-
-### Report Workflows
-
-- `warcraftlogs report <code>`
-- `warcraftlogs report-fights <code>`
-- `warcraftlogs report-events <code>`
-- `warcraftlogs report-table <code>`
-- `warcraftlogs report-graph <code>`
-- `warcraftlogs report-rankings <code>`
-- `warcraftlogs graphql --query <query|@path|->`
-- `warcraftlogs report-player-details <code>`
-- `warcraftlogs report-player-talents <report-url-or-code> --fight-id <id> --actor-id <id>`
-- `warcraftlogs report-master-data <code>`
-
-These commands should support:
-- fight id filters
-- encounter filters
-- difficulty filters
-- kill/wipe/trash filters
-- source/target/ability filters
-- query-language `filterExpression`
-- pagination via `nextPageTimestamp`
-- translation toggle
-- low-bandwidth toggles when the user does not need actor/ability expansion
-
-Use `warcraftlogs graphql` when an official GraphQL query is needed before a typed command exists. It preserves the same auth routing, cache opt-in, partial-error warnings, and JSON envelope as typed commands; see [SCOPING.md](SCOPING.md#raw-graphql) for variable and helper rules.
-
-Current talent-transport lane:
-- `report-player-talents` is intentionally narrow:
-  - one report
-  - one fight
-  - one actor id
-  - for normal multi-fight reports, it needs encounter scope via `--fight-id` or a report URL that already includes `#fight=<id>`
-  - it only emits the scoped talent transport packet when every selected `combatant_info.talentTree` row is fully formed
-  - the packet preserves normalized raw talent rows as `entry/node_id/rank` evidence from that source tree
-- when local SimulationCraft trait data resolves every entry and the reconstructed build round-trips, it also emits validated `simc_split_talents`
-- when that proof does not hold, it stays `raw_only` and reports the validation failure reason in the packet
-- add `--out <path>` when you want to save just the packet JSON for follow-up `simc` validation or wrapper handoff
-- malformed or incomplete talent-tree rows fail with `missing_talent_tree` instead of emitting a partial packet
-- typical follow-up flow:
-  - `warcraftlogs report-player-talents <report> --fight-id <id> --actor-id <id> --out ./tmp/actor-packet.json`
-  - `simc validate-talent-transport --build-packet ./tmp/actor-packet.json --out ./tmp/actor-packet-validated.json`
-  - `warcraft talent-describe ./tmp/actor-packet-validated.json --apl-path <apl>`
-- if packet validation fails, `report-player-talents` stops with `invalid_transport_packet` before printing or writing malformed packet JSON
-
-### Deep Encounter Analytics
-
-This is the next major product-quality target for `warcraftlogs`.
-
-The goal is to make report-link questions safe and repeatable for agents without pushing them into inconsistent manual event calculations.
-
-Typical target questions:
-- buff uptime for one or more players in a specific fight
-- cast sequences during a pull or sub-window
-- damage on a specific wave of enemies
-- damage from a specific ability or combination of players
-- encounter-phase and wave breakdowns from one report URL
-
-The CLI should own the difficult parts:
-- report URL parsing
-- fight selection and encounter identity
-- actor normalization
-- ability normalization
-- windowing and pagination
-- wave or phase segmentation
-- typed summaries with explicit scope and provenance
-
-The agent should not be expected to:
-- hand-stitch paginated event streams
-- infer wave boundaries from raw timestamps alone
-- compute buff uptime from ad hoc event joins
-- merge player, ability, and target identity manually across inconsistent slices
-
-#### Planned Encounter Command Family
-
-- `warcraftlogs encounter <report-link-or-code>`
-- `warcraftlogs encounter-players <report-link-or-code>`
-- `warcraftlogs encounter-buffs <report-link-or-code>`
-- `warcraftlogs encounter-casts <report-link-or-code>`
-- `warcraftlogs encounter-damage-breakdown <report-link-or-code>`
-- `warcraftlogs encounter-waves <report-link-or-code>`
-- `warcraftlogs encounter-phases <report-link-or-code>`
-
-These commands should accept:
-- report code or full report URL
-- `--fight-id`
-- `--encounter-id`
-- `--start-time`
-- `--end-time`
-- `--source`
-- `--target`
-- `--ability`
-- `--hostility-type`
-- `--difficulty`
-- `--kill-only`
-- `--wipe-only`
-
-#### Encounter Contract Principles
-
-These commands should:
-- require an explicit scope when whole-report analytics would be misleading or too expensive
-- expose fight/window provenance in every payload
-- surface truncation and pagination honestly
-- prefer typed summary rows over raw GraphQL passthrough
-- make actor, ability, and target identity stable across follow-up commands
-
-They should not:
-- pretend a raw event slice is a stable answer if Warcraft Logs returned partial or null data
-- let agents silently compare different windows or fight selections
-- flatten source uncertainty into fake precision
-
-#### Planned Summary Shapes
-
-The encounter analytics layer should provide first-class summaries for:
-- buff uptime:
-  - uptime seconds
-  - uptime percent
-  - applications
-  - refreshes
-  - scoped player and fight identity
-- cast sequences:
-  - ordered casts
-  - timestamps relative to pull
-  - optional player and window filters
-- damage breakdowns:
-  - by player
-  - by ability
-  - by target
-  - by target group or wave
-- wave and phase summaries:
-  - named or inferred segment boundaries
-  - segment-local damage/cast/buff summaries
-  - explicit confidence when segmentation is inferred instead of directly exposed
-
-#### Implementation Order
-
-Recommended order:
-1. `encounter` and report-link parsing
-2. `encounter-players`
-3. `encounter-buffs`
-4. `encounter-casts`
-5. `encounter-damage-breakdown`
-6. `encounter-waves`
-7. `encounter-phases`
-
-This order is deliberate:
-- identity and scope first
-- then the high-value questions agents most often need
-- then the harder segmentation work after actor/ability/window normalization is proven
-
-### Cross-Report Analytics
-
-This is the companion layer to deep encounter analytics.
-
-Encounter analytics answers:
-- one report
-- one fight
-- one scoped window
-
-Cross-report analytics answers:
-- many kills
-- one boss
-- one filtered cohort
-- aggregated summaries with explicit sample boundaries
-
-Typical target questions:
-- top `x` kills for boss `y` with spec `z`
-- kills under or over a given duration
-- how often a spec or comp appears in high-ranking kills
-- ability usage across a filtered set of kills
-- compare composition or kill-time behavior across report cohorts
-
-The CLI should own:
-- report discovery
-- fight selection across reports
-- encounter and boss normalization
-- ranking basis and top-`N` semantics
-- kill-time filtering
-- spec/class/role filtering
-- aggregation and sample metadata
-
-The agent should not be expected to:
-- search report pages manually and guess which fights belong in scope
-- combine per-report slices into one cohort by hand
-- infer top-kill semantics without a defined ranking basis
-- compute cross-report summaries from raw event payloads
-
-#### Planned Cross-Report Command Family
-
-- `warcraftlogs top-kills`
-- `warcraftlogs boss-kills`
-- `warcraftlogs spec-kill-samples`
-- `warcraftlogs boss-spec-usage`
-- `warcraftlogs kill-time-distribution`
-- `warcraftlogs comp-samples`
-- `warcraftlogs ability-usage-summary`
-
-These commands should support:
-- `--zone`
-- `--boss`
-- `--difficulty`
-- `--size`
-- `--spec`
-- `--class`
-- `--role`
-- `--kill-time-min`
-- `--kill-time-max`
-- `--top`
-- `--start-date`
-- `--end-date`
-- `--guild`
-- `--public-only`
-
-#### Cross-Report Contract Principles
-
-These commands should:
-- make the ranking basis explicit:
-  - top by rank
-  - top by fastest kill
-  - top by filtered sample order
-- expose sample metadata:
-  - source fight count
-  - returned fight count
-  - excluded fight count
-  - truncation
-- preserve the exact boss/zone/difficulty/spec filters in the payload
-- separate aggregated summaries from raw fight rows
-
-They should not:
-- flatten many reports into one fake “global truth” without sample boundaries
-- hide when the query was truncated to a top-`N` subset
-- let the agent compare mismatched difficulties, kill states, or fight durations silently
-
-#### Implementation Order
-
-Recommended order:
-1. `boss-kills`
-2. `top-kills`
-3. `kill-time-distribution`
-4. `boss-spec-usage`
-5. `comp-samples`
-6. `ability-usage-summary`
-
-This order keeps the first cross-report layer simple:
-- discover cohort
-- expose sample boundaries
-- then add higher-level aggregate summaries
-
-### Caching Policy
-
-Caching is a first-class part of the `warcraftlogs` contract. The shipped cache key, the
-finished-vs-live report TTL rule, per-family TTLs, and the derived-output trust fields
-(`cache_provenance`, `freshness.cache_ttl_seconds`, `sample_scope`) are documented in
-[CACHING.md](CACHING.md).
-
-Key points:
-- Report detail is keyed on finish state (`endTime > 0` → 24h finished TTL; live → 60s); a
-  live report is never stored under the finished TTL and is marked `live: true`.
-- Static `gameData`/`worldData`/zone/encounter metadata caches aggressively; report listings,
-  rankings, and cohort discovery stay on short TTLs.
-- Encounter and sampled analytics expose `cache_provenance` so live-vs-finished differences
-  are never hidden behind one shared cache path.
-
-### Report Listing Workflows
-
-- `warcraftlogs reports --guild ...`
-- `warcraftlogs reports --user-id ...`
-- `warcraftlogs reports --guild-tag-id ...`
-- `warcraftlogs reports --start-time ... --end-time ...`
-- `warcraftlogs reports --zone-id ...`
-- `warcraftlogs reports --game-zone-id ...`
-
-### World and Static Metadata
-
-- `warcraftlogs expansions`
-- `warcraftlogs regions`
-- `warcraftlogs subregion <id>`
-- `warcraftlogs server <region> <slug>`
-- `warcraftlogs zones`
-- `warcraftlogs zone <id>`
-- `warcraftlogs encounter <id>`
-- `warcraftlogs abilities`
-- `warcraftlogs items`
-- `warcraftlogs npcs`
-- `warcraftlogs specs`
-- `warcraftlogs classes`
-
-This metadata layer is important for:
-- ID discovery
-- ranking/report query composition
-- reducing hard-coded IDs in agent flows
-
-### Race Workflows
-
-- `warcraftlogs progress-race`
-- `warcraftlogs progress-race-guild`
-- `warcraftlogs progress-race-composition`
-
-These should stay clearly marked as unstable JSON-backed surfaces.
-
-### Optional Advanced Surface Later
-
-- `warcraftlogs graphql`
-- `warcraftlogs saved-query ...`
-- `warcraftlogs report-component ...`
-
-These should come only after the typed workflows prove out.
-
-## Output and Modeling Strategy
-
-The CLI should expose stable typed outputs even when the GraphQL server returns `JSON` blobs.
-
-High-value normalized models:
-- guild snapshot
-- guild ranking snapshot
-- character snapshot
-- character ranking snapshot
-- report snapshot
-- report fight summary
-- report event page
-- report table/graph result wrapper
-- world metadata snapshot
-- rate-limit snapshot
-
-Every result should preserve:
-- provider
-- endpoint family (`client` or `user`)
-- source object path
-- key filters
-- pagination state
-- freshness timestamp
-
-## Normalization Requirements
-
-Warcraft Logs will need the same input quality standard we now use elsewhere:
-- normalize region names conservatively
-- normalize realm slugs
-- normalize guild and character names without losing case-preserving display forms
-- preserve the exact query inputs in output metadata
-
-Because Warcraft Logs supports:
-- `serverSlug`
-- `serverRegion`
-- `guildName`
-- `characterName`
-
-we should build on the shared Warcraft normalization layer instead of introducing another incompatible provider-local naming scheme.
-
-## Caching and Freshness
-
-Caching is explicit and data-family-aware. The full shipped contract — cache key, per-family
-TTLs, the finished-vs-live report rule, and the derived-output trust fields — lives in
-[CACHING.md](CACHING.md). Freshness is surfaced in output because ranking data, report
-event/table/graph data, and race data are not frozen.
-
-## Testing Strategy
-
-This provider needs a stronger-than-normal test plan.
-
-### Unit and Contract Tests
-
-- GraphQL payload builders
-- response parsers
-- normalization and endpoint selection
-- auth mode selection
-- pagination handling
-- rate-limit parsing
-- report event paginator handling
-
-### Recorded Fixture Tests
-
-Store recorded GraphQL responses for:
-- guild lookup
-- guild rankings
-- character lookup
-- character zone rankings
-- report summary
-- report fights
-- report events page
-- report table
-- world data lookup
-- rate-limit response
-
-### Live Tests
-
-Public live tests should cover:
-- `doctor`
-- `guild`
-- `guild-rankings`
-- `character`
-- `character-zone-rankings`
-- `report`
-- `report-fights`
-- `zones`
-- `encounter`
-- `rate-limit`
-
-User-auth live tests should be opt-in and separate.
-
-### Auth Tests
-
-Do not require real user auth in default CI.
-Instead:
-- unit test token storage and selection logic
-- unit test client/user endpoint routing
-- keep user-auth integration tests manual or explicitly gated
-
-## Phase Plan
-
-### Phase 1: Public API Foundation
-
-1. package skeleton
-2. client credentials auth bootstrap
-3. `doctor`
-4. rate-limit query
-5. world metadata:
-   - regions
-   - servers
-   - zones
-   - encounters
-6. guild lookup
-7. character lookup
-
-### Phase 2: Rankings and Report Basics
-
-1. guild rankings
-2. character rankings
-3. report lookup
-4. report listing
-5. report fights
-6. report master data
-
-### Phase 3: Report Analysis Surface
-
-1. report events
-2. report table
-3. report graph
-4. report player details
-5. report rankings
-6. event paginator handling
-7. query-expression support
-
-### Phase 4: User Auth and Private Data
-
-1. auth code / PKCE flow
-2. `auth status`
-3. `currentUser`
-4. private report access
-5. include-private ranking options
-6. user guilds and claimed characters
-
-### Phase 5: Race and Advanced Workflows
-
-1. progress race
-2. detailed composition
-3. optional raw GraphQL / saved query workflows
-4. report-component exploration if justified
-
-### Phase 6: Variant-Aware Site Profiles (Shipped)
-
-1. site-profile routing for:
-   - retail
-   - classic
-   - fresh
-2. auth/token and GraphQL endpoint behavior verified per site profile
-3. wrapper expansion-key mapping is explicit (`fresh` is first-class)
-4. wrapper provider metadata is `profiled`
-5. live tests cover site-profile selection and schema/OAuth access
-
-## What Can Reuse Shared Code
-
-- config and credential storage patterns
-- cache backends and TTL handling
-- HTTP transport
-- retry/backoff primitives
-- output shaping
-- structured error contracts
-- shared normalization helpers for region/realm/name handling
-
-## What Should Stay Service-Specific
-
-- GraphQL query documents
-- response parsers for Warcraft Logs JSON surfaces
-- endpoint-family selection (`client` vs `user`)
-- auth-flow details
-- report/ranking/query-language ergonomics
-- rate-limit interpretation
-
-This provider is still a strong reason not to over-generalize API-first services too early.
-
-## Risks
-
-- GraphQL JSON-heavy surfaces can tempt us into weakly typed pass-through output
-- report `events`, `table`, and `graph` are broad enough to become a dumping ground if not shaped carefully
-- private/public endpoint mixing can create confusing failures if not surfaced explicitly
-- report and ranking data are documented as non-frozen in important places
-- race data is explicitly unstable
-- archived report access has subscription constraints
-- the docs landing page is Cloudflare-protected in browserless fetches, so local rendered docs dumps are useful operationally
-
-## Recommended Product Boundaries
-
-- default to official API integration
-- do not scrape ranking/report pages when the GraphQL API already provides the data
-- keep raw GraphQL support behind typed commands, not in place of them
-- treat private-data workflows as a separate phase with explicit auth diagnostics
-
-## Local Research Inputs
-
-- rendered docs dump: `research/warcraftlogs-docs/`
-- rendered docs dump: `research/warcraftlogs-docs-classic/`
-- rendered docs dump: `research/warcraftlogs-docs-fresh/`
-- dump script: [dump_warcraftlogs_docs.py](../../scripts/dump_warcraftlogs_docs.py)
-
-## Source Links
-
-- `https://www.warcraftlogs.com/api/docs`
-- `https://www.warcraftlogs.com/v2-api-docs/warcraft/`
-- [Roadmap](../ROADMAP.md)
+- OAuth docs: `https://www.warcraftlogs.com/api/docs`
+- public GraphQL: `https://www.warcraftlogs.com/api/v2/client`
+- user GraphQL: `https://www.warcraftlogs.com/api/v2/user`
+- authorize: `https://www.warcraftlogs.com/oauth/authorize`
+- token: `https://www.warcraftlogs.com/oauth/token`

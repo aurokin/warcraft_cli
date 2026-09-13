@@ -8,15 +8,73 @@ Add user-visible changes to `[Unreleased]` in the same PR that ships them. See [
 
 ## [Unreleased]
 
+This release makes every binary in the repo behave the same way at the boundary: one JSON envelope,
+one error and exit-code vocabulary, one set of global output flags, and one in-process provider
+interface. Existing payload keys are preserved, so agents keep working, but the top-level copies are
+now deprecated in favour of `data`.
+
 ### Added
+
+- **Shared JSON envelope on every provider command.** All twelve provider binaries emit `ok`, `provider`, `command`, `kind`, `schema_version` (`"1"`), `query`, `provenance`, and `data`, plus `error` on failure. Defined as a TypedDict in `warcraft_core` and documented in [docs/foundation/ERROR_CONTRACT.md](docs/foundation/ERROR_CONTRACT.md). The `warcraft` wrapper's own commands (`doctor`, `search`, `resolve`, composite packets) carry the same keys with `provider: "warcraft"` and keep their historical top-level keys (mirrored into `data`); passthrough output is the provider's envelope.
+- **Global output flags on every binary.** `--compact`, `--compact-max-chars`, `--fields`, `--fields-strict`, and `--profile` now work on `warcraft` and all twelve providers (previously Wowhead only); `--pretty` is unchanged. Global flags go before the subcommand, and `warcraft` forwards them to the provider on `warcraft <provider> ...` passthrough.
+- **Process guard.** Each binary runs through `warcraft_core.cli.guarded_run`, so anything that escapes a command becomes an error envelope on stderr instead of a Python traceback.
+- **`ProviderSurface` protocol and `PROVIDER` exports.** `warcraft_core.provider` defines pure `search` / `resolve` / `doctor` surfaces returning envelopes; every provider package exports `PROVIDER` from `<pkg>/provider.py`, and the Typer commands are thin wrappers over it.
+- **Provider tiers.** `warcraft doctor` reports `wrapper.tiers` and a `tier` on every provider row: core (`wowhead`, `warcraftlogs`, `simc`), supported (`method`, `icy-veins`, `raiderio`, `warcraft-wiki`, `wowprogress`), experimental (`raidbots`, `blizzard`, `curseforge`, `lorrgs`).
+- **Help text everywhere.** Every command, positional argument, and option on every binary now prints a description in `--help`.
+- `raidbots search` and `raidbots resolve`: structured `not_supported` stubs (exit 0) so the cross-provider surface exists; Raidbots publishes no report index.
+- `error.details` on HTTP failures across providers, carrying `status_code` and `url`.
+- `raiderio search`/`resolve` called through the `warcraft` wrapper now report upstream HTTP failures as error envelopes (`invalid_query`, `auth_failed`, `not_found`, `rate_limited`, `upstream_error`, `timeout`, `network_error`) with the same codes the `raiderio` binary uses.
+- `wowprogress doctor` reports `capabilities.doctor`.
+- `warcraft schema` prints the shared envelope as a draft 2020-12 JSON Schema. The same document is checked in at `schemas/envelope.schema.json` (`make schema` rewrites it) for tooling that cannot run the CLI; it is derived from the `warcraft_core.envelope` TypedDicts, so it cannot drift from the implementation.
+- **Generated command reference.** `docs/reference/<binary>.md` is generated from the Typer apps by `make reference`, with a test that fails when it is stale. `docs/USAGE.md` no longer hand-maintains flag lists.
+- **Distribution.** A release workflow builds the wheel on a `v*` tag and attaches it to the GitHub release, so `pipx install <wheel-url>` and `uvx --from <wheel-url> warcraft ...` work. CI also builds the wheel and proves each provider package installs and runs in isolation.
+- **Tooling.** `make install` (uv sync), `make complexity-gate`, `make deadcode`, `make skills`, `make reference`, and `make build`; `make check` now runs lint, typecheck, import boundaries, complexity gate (`xenon --max-absolute C packages`), dead code (`vulture` with `scripts/vulture_allowlist.py`), and the fast test suite. Pre-commit gains gitleaks, complexity-gate, and deadcode hooks. Drift tests: `tests/test_command_reference.py` (stale reference or missing help text), `tests/test_repo_tooling.py` (Makefile live-test flags vs the conftest registry), and a wrapper-registry parity test for `scripts/generate_provider_skills.py`, which now covers all twelve providers.
+- **CI.** Installs with `uv sync` and a cached uv setup instead of `pip install -e`; the lint job runs the full gate (ruff, mypy, import boundaries, complexity, dead code); unit tests report coverage across every `packages/*/src` tree; every workflow declares a least-privilege `permissions` block; gitleaks secret scanning; `.github/dependabot.yml` for weekly pip and github-actions updates. The weekly `live-contracts.yml` workflow runs no-credential providers unconditionally, runs Warcraft Logs / Blizzard / CurseForge only when their repository secrets exist, and opens or updates a single `live-failure` tracking issue on failure instead of blocking pull requests.
+- Non-live tests run under a socket/httpx/curl_cffi network guard: a test that reaches a provider endpoint now fails loudly, and provider file caches are disabled for non-live tests (previously Wowhead only).
 
 ### Changed
 
+- **Exit codes follow one vocabulary** instead of "1 for everything": `2` usage errors (bad flags/arguments, `invalid_query`, `missing_fields`), `3` auth required or rejected, `4` not found (including upstream 404), `5` network/transport, timeout, rate limit, and other upstream failures, `1` everything else. This applies to `warcraft`, `wowhead`, `warcraftlogs`, `simc`, `raiderio`, `wowprogress`, `warcraft-wiki`, `method`, `icy-veins`, `lorrgs`, `raidbots`, `blizzard`, and `curseforge`. Notable per-provider deltas: `icy-veins guide|guide-full|guide-export` on a 404 page now exits `4` with `not_found` (was `1` with `invalid_guide_ref`); `raiderio` rejected `--kind`/`--metric` values exit `2`; `simc log-actions` pointed at a directory exits `4` instead of raising `IsADirectoryError`; `curseforge addon` reports HTTP 401/403 as `auth_failed` and 404 as `addon_not_found` (both were `http_error`); `warcraft-wiki article-query` on a missing bundle returns `invalid_bundle` with exit 1 instead of a Click usage error.
+- Upstream HTTP failures now carry precise codes instead of one generic `http_error`: 401/403 → `auth_failed`, 404 → `not_found`, timeouts → `timeout`, connection failures → `network_error`, 429 → `rate_limited`, other 5xx → `upstream_error`.
+- **The `warcraft` wrapper calls providers in-process** through their `PROVIDER` surfaces rather than a test CLI runner, and its passthrough commands are generated from the provider registry, so `warcraft --help` lists them in registry order. `warcraft doctor` reports `installed: true` for every registered provider because the surface import is what proves availability.
+- `warcraft doctor` no longer performs a live Warcraft Logs auth probe; it reports local auth and runtime readiness only, so it answers offline.
+- `warcraft search` and `warcraft resolve` provider rows include `ok` and `error`: a provider failure is reported as an error envelope instead of `payload: null`. `status` keeps its registry-readiness meaning.
+- All HTTP clients send `User-Agent: warcraft-cli/<version> (+https://github.com/aurokin/warcraft_cli)`, and requests pass through a per-host minimum interval (`WARCRAFT_HTTP_MIN_INTERVAL_SECONDS`, default `0.25`, `0` disables). A server `Retry-After` is capped at 30 seconds.
+- Provider auth state files (`~/.local/state/warcraft/providers/<provider>.json`) are written 0600 inside a 0700 directory, and an existing file is re-tightened on save.
+- `.env.local` discovery stops at the enclosing git repository root instead of walking every ancestor up to `/`; without a git ancestor only the working directory is checked.
+- `warcraftlogs` credential discovery no longer mutates `os.environ`: `.env.local`, `~/.config/warcraft/providers/warcraftlogs.env`, and the process environment are pure per-key reads, and `auth status`/`doctor` report `credential_source: null` when the two halves come from different layers.
+- `warcraftlogs report-player-talents` no longer runs SimulationCraft itself. Standalone packets are `raw_only` with `validation.reason: simc_backend_unavailable`; upgrade them with `simc validate-talent-transport --build-packet <packet>`, or use the `warcraft` wrapper, which performs that upgrade for you.
+- `wowhead entity` and `entity-page` no longer put the normalization version in the top-level `schema_version` (that key is now the envelope version `"1"`); it moved to `normalized.schema_version` (`wowhead.entity.v1` / `wowhead.entity_page.v1`).
+- `simc` failure extras moved from the top level of the error object into `error.details` (for example `build_spec`, `identity`, and `generated_profile` on `decode-build`; `command`, `stdout_preview`, and `stderr_preview` on `sync`, `build`, `sim`, and `run`). On those commands the top-level `command` key is now the subcommand name required by the envelope, and the executed SimC/git argv is at `data.command`.
+- `blizzard` and `curseforge` are labelled experimental everywhere — `doctor` reports `tier: "experimental"`, and their docs lead with the unverified status. Both still carry `provenance.verified: false` on every payload.
+- Expansion keys and aliases are shared across binaries via `warcraft_core.expansions`; `warcraft --expansion` accepts the same keys and aliases as before, and the Warcraft Logs `--site` mapping is derived from the same table.
+- Docs: `README.md` is a short pointer with a tiered provider table; `docs/USAGE.md` keeps workflows and conventions and links the generated reference for flags; `docs/ROADMAP.md` is now tiers, next work, and deferred candidates; provider READMEs were rewritten as present-tense behavior with their design records moved under `docs/architecture/history/`.
+- Tooling: mypy covers all 16 packages; ruff enables the bandit rules S102, S103, S105, S106, S107, S108, S324, S501, S603, S607; `make test-live` now includes the Blizzard and CurseForge suites (previously skipped silently); `make coverage` measures every package and detects `pytest-cov` by import, so it no longer falls back to the stdlib trace runner in a uv-created venv.
+- `scripts/dev_deploy.sh` derives the console-script list from the root `[project.scripts]` (it previously omitted `lorrgs`) and prefers `uv sync --all-extras` when `uv` is on PATH; the `WARCRAFT_BIN_NAMES` override is gone, `--bin-name` still works.
+- (internal) Per-package `pyproject.toml` files no longer point `readme` outside the package directory (hatchling rejects it, which broke every isolated provider install); `warcraft-cli` no longer depends on `httpx` (it reuses `warcraft_core.cli.error_envelope_for`); `as_dict`/`as_list` live once in `warcraft_core.shapes`; `blizzard`/`curseforge` env parsing uses `warcraft_core.env.read_env_keys`; every httpx-based client builds through `warcraft_api.http.build_client`.
+- (internal) `warcraft_core.provider_contract` moved to `warcraft_cli.provider_contract`; `warcraft_core.talent_transport.validate_talent_tree_transport` takes an injectable `backend` instead of `repo_root`, with `simc_cli.talent_transport.simc_backend()` providing the SimulationCraft-backed executor; new `warcraft_content.search` helpers (`tokenize_query`, `normalize_query`, `score_article_match`) back the guide/article providers; Wowhead expansion fixtures renamed from "recorded" to "synthetic".
+
 ### Fixed
+
+- A connection failure, timeout, or upstream HTTP error during any command now prints a JSON error envelope on stderr instead of a Python traceback. This was reproducible on every provider.
+- `warcraft guide-compare-query` no longer writes an empty `manifest.json` before failing with `insufficient_guides`; the failure payload reports `manifest: null` and writes nothing.
+- Fixed two deterministic `beta` failures in the Wowhead expansion fixture suites: the tooltip fetch was reaching Wowhead and getting a real 404.
+- Removed a dead duplicate definition of `_hydrate_guide_linked_entities` in `wowhead_cli.main` that shadowed an unused earlier copy.
+- `tmp/` and `dist/` are gitignored, so the documented `./tmp/` export paths no longer leave untracked files in `git status`.
 
 ### Removed
 
+- `wrapper.shell_fallback` from `warcraft doctor` output (no shell fallback ever existed).
+- The dead `synthetic_resolve_payloads` route in `warcraft resolve` (it never produced a candidate).
+- `docs/raidplan/` and `docs/undermine-exchange/`: both were DEFER decision memos for providers that do not exist. The decision, un-gate conditions, and first command slice now live in [docs/ROADMAP.md](docs/ROADMAP.md) under "Deferred Candidates".
+- `.github/workflows/live-wowhead-contracts.yml`, replaced by `live-contracts.yml`, which runs every provider's live suite on a weekly schedule and on demand; its `schema-snapshots` job re-ran two non-live test files already covered by CI.
+- `scripts/setup_worktree_env.sh` override variables (`WARCRAFT_WORKTREE_ROOT_OVERRIDE`, `WARCRAFT_WORKTREE_META_DIR`, `WARCRAFT_WORKTREE_RUNTIME_DIR_OVERRIDE`, `WARCRAFT_WORKTREE_ENV_PATH`); the paths are fixed under `<repo>/.warcraft/`.
+- `scripts/dump_warcraftlogs_docs.py` moved to `scripts/research/dump_warcraftlogs_docs.py`.
+- (internal) The `warcraft_content.paths` shim; import `warcraft_core.paths` directly.
+
 ### Deprecated
+
+- **Top-level payload keys duplicated outside `data`.** Providers that historically emitted payload keys at the top level (`results`, `count`, `guide`, `entity`, `match`, `resolved`, `capabilities`, `report`, `status`, and similar) still emit them next to the envelope keys so existing agents keep working. Those copies are deprecated: read `data` where the provider populates it. They will be removed in a major release.
 
 ## [0.5.0] - 2026-06-25
 

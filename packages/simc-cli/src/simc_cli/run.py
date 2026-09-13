@@ -28,7 +28,8 @@ class BinaryVersion:
 
 
 def _run(command: list[str], *, cwd: Path | None = None) -> CommandResult:
-    proc = subprocess.run(command, cwd=str(cwd) if cwd else None, capture_output=True, text=True, check=False)
+    # Fixed argv built from repo paths and CLI flags; never a shell string.
+    proc = subprocess.run(command, cwd=str(cwd) if cwd else None, capture_output=True, text=True, check=False)  # noqa: S603
     return CommandResult(command=command, cwd=cwd, returncode=proc.returncode, stdout=proc.stdout, stderr=proc.stderr)
 
 

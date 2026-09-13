@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 import httpx
+import pytest
 from lorrgs_cli.main import app
 from typer.testing import CliRunner
 from warcraft_cli.main import app as warcraft_app
@@ -145,10 +146,25 @@ class FakeLorrgsClient:
         response = httpx.Response(404, json={"detail": "Invalid Boss."}, request=request)
         raise httpx.HTTPStatusError("not found", request=request, response=response)
 
+    def spec(self, spec_slug: str) -> dict[str, object]:
+        self.calls.append(("spec", {"spec_slug": spec_slug}))
+        request = httpx.Request("GET", f"https://api2.lorrgs.io/api/specs/{spec_slug}")
+        response = httpx.Response(403, json={"detail": "Forbidden."}, request=request)
+        raise httpx.HTTPStatusError("forbidden", request=request, response=response)
+
 
 def _patch_client(monkeypatch) -> None:
     FakeLorrgsClient.calls = []
-    monkeypatch.setattr("lorrgs_cli.main.LorrgsClient", FakeLorrgsClient)
+    monkeypatch.setattr("lorrgs_cli.provider.LorrgsClient", FakeLorrgsClient)
+
+
+def _patch_transport_error(monkeypatch, exc: Exception) -> None:
+    """Break the shared HTTP seam the Lorrgs client calls, without touching the client's own logic."""
+
+    def raise_transport_error(*args: object, **kwargs: object) -> httpx.Response:
+        raise exc
+
+    monkeypatch.setattr("lorrgs_cli.client.request_with_retries", raise_transport_error)
 
 
 def test_doctor_reports_lorrgs_capabilities() -> None:
@@ -244,12 +260,21 @@ def test_comp_ranking_repeatable_filters(monkeypatch) -> None:
 def test_http_404_is_structured_not_found(monkeypatch) -> None:
     _patch_client(monkeypatch)
     result = runner.invoke(app, ["boss", "not-a-boss"])
-    assert result.exit_code == 1
+    assert result.exit_code == 4
     payload = json.loads(result.stderr)
     assert payload["ok"] is False
     assert payload["provider"] == "lorrgs"
     assert payload["error"]["code"] == "not_found"
     assert payload["error"]["message"] == "Invalid Boss."
+
+
+def test_http_403_is_structured_auth_failure(monkeypatch) -> None:
+    _patch_client(monkeypatch)
+    result = runner.invoke(app, ["spec", "mage-frost"])
+    assert result.exit_code == 3
+    payload = json.loads(result.stderr)
+    assert payload["error"]["code"] == "auth_failed"
+    assert payload["error"]["details"] == {"status_code": 403, "url": "https://api2.lorrgs.io/api/specs/mage-frost"}
 
 
 def test_search_matches_spec_and_boss(monkeypatch) -> None:
@@ -349,3 +374,40 @@ def test_warcraft_lorrgs_resolve_routes_warcraftlogs_url_through_wrapper(monkeyp
     assert payload["provider"] == "lorrgs"
     assert payload["resolved"] is True
     assert payload["match"]["kind"] == "report_overview"
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["specs"],
+        ["spec-ranking", "mage-frost", "chimaerus-the-undreamt-god"],
+        ["search", "frost mage chimaerus"],
+        ["resolve", "frost mage chimaerus"],
+    ],
+)
+def test_connect_error_emits_error_envelope_with_network_exit_code(monkeypatch, argv: list[str]) -> None:
+    _patch_transport_error(monkeypatch, httpx.ConnectError("connection refused"))
+    result = runner.invoke(app, argv)
+    assert result.exit_code == 5
+    assert result.stdout == ""
+    payload = json.loads(result.stderr)
+    assert payload["ok"] is False
+    assert payload["provider"] == "lorrgs"
+    assert payload["schema_version"] == "1"
+    assert payload["error"]["code"] == "network_error"
+
+
+def test_timeout_emits_error_envelope_with_network_exit_code(monkeypatch) -> None:
+    _patch_transport_error(monkeypatch, httpx.ReadTimeout("timed out"))
+    result = runner.invoke(app, ["specs"])
+    assert result.exit_code == 5
+    payload = json.loads(result.stderr)
+    assert payload["error"]["code"] == "timeout"
+
+
+def test_invalid_report_reference_is_a_structured_usage_failure() -> None:
+    result = runner.invoke(app, ["report-overview", "not a report"])
+    assert result.exit_code == 1
+    payload = json.loads(result.stderr)
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "invalid_report_ref"

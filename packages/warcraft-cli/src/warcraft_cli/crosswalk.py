@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from warcraft_core.shapes import as_dict, as_list
 from warcraft_core.wow_normalization import normalize_name, normalize_region, primary_realm_slug
 
 
@@ -13,12 +14,12 @@ def find_report_actors(player_details_payload: dict[str, Any], actor_name: str) 
     case-insensitive (an input concern, distinct from identity normalization). Callers must handle the
     multi-match case themselves — a report can legitimately contain two characters sharing a name.
     """
-    player_details = player_details_payload.get("player_details") if isinstance(player_details_payload.get("player_details"), dict) else {}
-    roles = player_details.get("roles") if isinstance(player_details.get("roles"), dict) else {}
+    player_details = as_dict(player_details_payload.get("player_details"))
+    roles = as_dict(player_details.get("roles"))
     target = actor_name.casefold()
     matches: list[dict[str, Any]] = []
     for role in ("tanks", "healers", "dps"):
-        rows = roles.get(role) if isinstance(roles.get(role), list) else []
+        rows = as_list(roles.get(role))
         for row in rows:
             if isinstance(row, dict) and str(row.get("name") or "").casefold() == target:
                 matches.append({**row, "role": role})
@@ -83,11 +84,11 @@ def actor_spec_ambiguous(actors: list[dict[str, Any]]) -> bool:
 
 def report_actor_names(player_details_payload: dict[str, Any]) -> list[str]:
     """List the actor names present in a report-player-details payload (for not-found hints)."""
-    player_details = player_details_payload.get("player_details") if isinstance(player_details_payload.get("player_details"), dict) else {}
-    roles = player_details.get("roles") if isinstance(player_details.get("roles"), dict) else {}
+    player_details = as_dict(player_details_payload.get("player_details"))
+    roles = as_dict(player_details.get("roles"))
     names: list[str] = []
     for role in ("tanks", "healers", "dps"):
-        rows = roles.get(role) if isinstance(roles.get(role), list) else []
+        rows = as_list(roles.get(role))
         for row in rows:
             if isinstance(row, dict) and isinstance(row.get("name"), str):
                 names.append(row["name"])

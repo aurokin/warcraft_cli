@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -59,6 +60,67 @@ def load_jsonl(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
+@dataclass(frozen=True, slots=True)
+class _PageExport:
+    """Per-page HTML files plus the flattened page and section rows written to JSONL."""
+
+    files: list[dict[str, Any]]
+    rows: list[dict[str, Any]]
+    sections: list[dict[str, Any]]
+
+
+def _export_pages(
+    pages: list[dict[str, Any]],
+    *,
+    export_dir: Path,
+    page_resource_key: str,
+    content_key: str,
+) -> _PageExport:
+    """Write one HTML file per page and collect the page/section rows describing them."""
+    export = _PageExport(files=[], rows=[], sections=[])
+    html_dir = export_dir / "pages"
+    for page in pages:
+        page_resource = dict(page[page_resource_key])
+        page_meta = dict(page["page"])
+        article = dict(page[content_key])
+        page_slug = page_resource["section_slug"]
+        html_path = html_dir / f"{page_slug}.html"
+        html_path.parent.mkdir(parents=True, exist_ok=True)
+        html_path.write_text(article["html"], encoding="utf-8")
+        export.files.append(
+            {
+                "section_slug": page_slug,
+                "path": str(html_path.relative_to(export_dir)),
+                "page_url": page_resource["page_url"],
+            }
+        )
+        export.rows.append(
+            {
+                "section_slug": page_slug,
+                "section_title": page_resource["section_title"],
+                "page_url": page_resource["page_url"],
+                "title": page_meta["title"],
+                "description": page_meta.get("description"),
+                "text": article["text"],
+                "heading_count": len(article.get("headings") or []),
+            }
+        )
+        for section in article.get("sections") or []:
+            export.sections.append(
+                {
+                    "page_url": page_resource["page_url"],
+                    "section_slug": page_slug,
+                    "page_title": page_meta["title"],
+                    "title": section["title"],
+                    "level": section["level"],
+                    "ordinal": section["ordinal"],
+                    "text": section["text"],
+                    "html": section["html"],
+                }
+            )
+    return export
+
+
 def write_article_bundle(
     full_payload: dict[str, Any],
     *,
@@ -71,53 +133,15 @@ def write_article_bundle(
     resource = dict(full_payload[resource_key])
     normalized_page_resource_key = page_resource_key or resource_key
     navigation = list((full_payload.get("navigation") or {}).get("items") or [])
-    pages = list(full_payload.get("pages") or [])
     linked_entities = list((full_payload.get("linked_entities") or {}).get("items") or [])
     build_references = list((full_payload.get("build_references") or {}).get("items") or [])
     analysis_surfaces = list((full_payload.get("analysis_surfaces") or {}).get("items") or [])
-    sections: list[dict[str, Any]] = []
-    page_rows: list[dict[str, Any]] = []
-    page_files: list[dict[str, Any]] = []
-    html_dir = export_dir / "pages"
-    for page in pages:
-        page_resource = dict(page[normalized_page_resource_key])
-        page_meta = dict(page["page"])
-        article = dict(page[content_key])
-        page_slug = page_resource["section_slug"]
-        html_path = html_dir / f"{page_slug}.html"
-        html_path.parent.mkdir(parents=True, exist_ok=True)
-        html_path.write_text(article["html"], encoding="utf-8")
-        page_files.append(
-            {
-                "section_slug": page_slug,
-                "path": str(html_path.relative_to(export_dir)),
-                "page_url": page_resource["page_url"],
-            }
-        )
-        page_rows.append(
-            {
-                "section_slug": page_slug,
-                "section_title": page_resource["section_title"],
-                "page_url": page_resource["page_url"],
-                "title": page_meta["title"],
-                "description": page_meta.get("description"),
-                "text": article["text"],
-                "heading_count": len(article.get("headings") or []),
-            }
-        )
-        for section in article.get("sections") or []:
-            sections.append(
-                {
-                    "page_url": page_resource["page_url"],
-                    "section_slug": page_slug,
-                    "page_title": page_meta["title"],
-                    "title": section["title"],
-                    "level": section["level"],
-                    "ordinal": section["ordinal"],
-                    "text": section["text"],
-                    "html": section["html"],
-                }
-            )
+    pages = _export_pages(
+        list(full_payload.get("pages") or []),
+        export_dir=export_dir,
+        page_resource_key=normalized_page_resource_key,
+        content_key=content_key,
+    )
 
     manifest = {
         "export_version": 1,
@@ -130,8 +154,8 @@ def write_article_bundle(
         "output_dir": str(export_dir),
         resource_key: resource,
         "counts": {
-            "pages": len(page_rows),
-            "sections": len(sections),
+            "pages": len(pages.rows),
+            "sections": len(pages.sections),
             "navigation_links": len(navigation),
             "linked_entities": len(linked_entities),
             "build_references": len(build_references),
@@ -152,15 +176,14 @@ def write_article_bundle(
     export_dir.mkdir(parents=True, exist_ok=True)
     _write_json(export_dir / "guide.json", full_payload)
     _write_json(export_dir / "manifest.json", manifest)
-    _write_json(export_dir / "page-files.json", {"pages": page_files})
-    _write_jsonl(export_dir / "pages.jsonl", page_rows)
-    _write_jsonl(export_dir / "sections.jsonl", sections)
+    _write_json(export_dir / "page-files.json", {"pages": pages.files})
+    _write_jsonl(export_dir / "pages.jsonl", pages.rows)
+    _write_jsonl(export_dir / "sections.jsonl", pages.sections)
     _write_jsonl(export_dir / "navigation-links.jsonl", navigation)
     _write_jsonl(export_dir / "linked-entities.jsonl", linked_entities)
     _write_jsonl(export_dir / "build-references.jsonl", build_references)
     _write_jsonl(export_dir / "analysis-surfaces.jsonl", analysis_surfaces)
     return manifest
-
 
 def load_article_bundle(export_dir: Path) -> dict[str, Any]:
     manifest = load_json(export_dir / "manifest.json")

@@ -2,150 +2,126 @@
 
 ## Purpose
 
-This document defines the intended package layout for the Warcraft monorepo.
+This document describes the package layout of the Warcraft monorepo as it actually is.
 
 It is the concrete companion to:
-- [Roadmap](../ROADMAP.md)
 - [Repo Structure And Packaging](REPO_STRUCTURE_AND_PACKAGING.md)
+- [Roadmap](../ROADMAP.md)
 
-## Workspace Model
+## Distribution Unit
 
-Use:
-- a root developer workspace
-- sibling branch worktrees for parallel work
-- one `pyproject.toml` per independently installable package
-- lightweight root scripts, docs, and shared tooling only
+The distribution unit is the root `warcraft` wheel built from the root `pyproject.toml`
+(`make build` / `uv build --wheel`). It carries every package's source and declares all 13 console
+scripts, so one install gives an agent the whole surface.
 
-This gives us:
-- package isolation
-- independent builds
-- a usable developer workflow
+The 16 package-local `pyproject.toml` files are kept because they encode the dependency graph, not
+because each one is published:
 
-Recommended operator layout:
-- parent workspace directory
-- sibling branch directories for feature worktrees
+- `tests/test_warcraft_cli_packaging.py` asserts every package declares the runtime distributions
+  its `src/` actually imports, so the per-package metadata cannot silently rot.
+- The CI `isolated-install` job installs one provider package plus the shared packages into a clean
+  virtualenv and runs its console script, so "install one provider on its own" stays real.
+- Nothing is published to PyPI. Releases attach the wheel to a GitHub release
+  (`.github/workflows/release.yml`).
 
-Worktree creation and trunk hygiene are handled outside this repo with `worktrunk`. This repo owns local editable install helpers and worktree-local runtime isolation only.
+## Packages
 
-## Package Naming
+| Directory | Distribution | Import package | Console script | Role |
+| --- | --- | --- | --- | --- |
+| `packages/warcraft-core/` | `warcraft-core-cli` | `warcraft_core` | — | shared |
+| `packages/warcraft-api/` | `warcraft-api-cli` | `warcraft_api` | — | shared |
+| `packages/warcraft-content/` | `warcraft-content-cli` | `warcraft_content` | — | shared |
+| `packages/warcraft-cli/` | `warcraft-cli` | `warcraft_cli` | `warcraft` | wrapper |
+| `packages/wowhead-cli/` | `wowhead-cli` | `wowhead_cli` | `wowhead` | core |
+| `packages/warcraftlogs-cli/` | `warcraftlogs-cli` | `warcraftlogs_cli` | `warcraftlogs` | core |
+| `packages/simc-cli/` | `simc-cli` | `simc_cli` | `simc` | core |
+| `packages/raiderio-cli/` | `raiderio-cli` | `raiderio_cli` | `raiderio` | supported |
+| `packages/wowprogress-cli/` | `wowprogress-cli` | `wowprogress_cli` | `wowprogress` | supported |
+| `packages/warcraft-wiki-cli/` | `warcraft-wiki-cli` | `warcraft_wiki_cli` | `warcraft-wiki` | supported |
+| `packages/icy-veins-cli/` | `icy-veins-cli` | `icy_veins_cli` | `icy-veins` | supported |
+| `packages/method-cli/` | `method-cli` | `method_cli` | `method` | supported |
+| `packages/lorrgs-cli/` | `lorrgs-cli` | `lorrgs_cli` | `lorrgs` | experimental |
+| `packages/raidbots-cli/` | `raidbots-cli` | `raidbots_cli` | `raidbots` | experimental |
+| `packages/blizzard-api-cli/` | `blizzard-api-cli` | `blizzard_api_cli` | `blizzard` | experimental |
+| `packages/curseforge-cli/` | `curseforge-cli` | `curseforge_cli` | `curseforge` | experimental |
 
-Keep the current alignment pattern:
-- package project names end in `-cli` when they are service-facing CLI packages
-- command names stay short and service-oriented
+The three shared distributions carry a historical `-cli` suffix even though they ship no command.
+Renaming them would break every existing per-package dependency pin for no user-visible gain.
 
-Current examples:
-- `warcraft-core` -> shared package, no end-user command
-- `warcraft` -> umbrella command
-- `wowhead-cli` -> `wowhead`
-- `method-cli` -> `method`
-- `icy-veins-cli` -> `icy-veins`
-- `raiderio-cli` -> `raiderio`
-- `warcraft-wiki-cli` -> `warcraft-wiki`
-- `wowprogress-cli` -> `wowprogress`
-- `simc-cli` -> `simc`
-- `warcraftlogs-cli` -> `warcraftlogs`
-
-Future service packages should keep the same package-to-command alignment.
-
-## Current Source Directory Shape
-
-Current high-level layout:
-
-- `packages/warcraft-core/`
-- `packages/warcraft-api/`
-- `packages/warcraft-content/`
-- `packages/warcraft-cli/`
-- `packages/wowhead-cli/`
-- `packages/method-cli/`
-- `packages/icy-veins-cli/`
-- `packages/raiderio-cli/`
-- `packages/warcraft-wiki-cli/`
-- `packages/wowprogress-cli/`
-- `packages/simc-cli/`
-- `packages/warcraftlogs-cli/`
-- `packages/raidbots-cli/`
-- `packages/blizzard-api-cli/`
-- `packages/curseforge-cli/`
-- `packages/lorrgs-cli/`
-- `skills/warcraft/`
-- `docs/`
-- `scripts/`
-- `tests/` for root-level migration and workspace checks only
+Tiers are the support level agents should expect; they are declared on each `ProviderRegistration`
+in `packages/warcraft-cli/src/warcraft_cli/providers.py` and surfaced by `warcraft doctor`.
+`blizzard` and `curseforge` are experimental with endpoints that have not been confirmed live.
 
 ## Per-Package Structure
 
-Each independently installable package should be independently buildable and follow the same basic shape:
-
 - `pyproject.toml`
-- `README.md` if package-specific docs are needed
-- `src/<package_name>/`
-- `tests/`
+- `src/<import_package>/`
+- `README.md` only when the package needs docs beyond `docs/<cli>/README.md`
 
-Provider source directories that still ship through the root package should follow the same source layout until they are split into package-local `pyproject.toml` projects.
+Packages have no local `tests/` directory. Every test lives in the root `tests/` so one pytest run
+covers cross-package contracts (envelope conformance, docs parity, help parity, packaging).
 
-Shared packages should not expose unrelated CLI entrypoints.
+Shared packages expose no CLI entrypoints.
+
+## Naming
+
+- provider distributions end in `-cli`; the command they install is the short service name
+- `blizzard-api-cli` is the only package whose command (`blizzard`) differs from its directory stem
+- new provider packages keep the same package-to-command alignment
 
 ## Dependency Direction
 
+Enforced by `.importlinter` (`make lint-boundaries`):
+
+```
+warcraft_cli
+  -> provider packages (independent of each other)
+    -> warcraft_api | warcraft_content
+      -> warcraft_core
+```
+
 Allowed:
-- service package -> `warcraft-core`
-- service package -> `warcraft-api`
-- service package -> `warcraft-content`
-- `warcraft-cli` -> shared packages
-- `warcraft-cli` -> service CLI invocation
+- provider package -> `warcraft-core`, `warcraft-api`, `warcraft-content`
+- `warcraft-cli` -> shared packages and provider packages
 
 Not allowed:
-- service package -> another service package
-- shared package -> service package
+- provider package -> another provider package
+- shared package -> provider package
 
-## Umbrella Package Behavior
+Additional rules the linter cannot express:
 
-Installing `warcraft` should install the full current service set by default.
-
-Individual service packages should also remain installable on their own.
-
-That means the umbrella package is a convenience distribution, not the only supported entrypoint.
+- Shared packages never import a provider package and never execute a provider binary.
+- `warcraft_core.talent_transport` holds pure parsing and validation only. It takes an injectable
+  round-trip executor (`RoundTripExecutor`); `simc_cli.talent_transport` supplies the
+  SimulationCraft-backed one, and `warcraftlogs_cli` uses the pure validation with an optional
+  backend that the wrapper may inject.
+- The wrapper reaches providers in-process through the `PROVIDER` surfaces registered in
+  `warcraft_cli.providers`. It does not spawn provider binaries, and no other `warcraft_cli` module
+  imports a provider package.
 
 ## Root-Level Responsibilities
 
-The repo root should own:
-- high-level docs
-- workspace scripts
-- shared CI/release configuration
-- migration checks
-
-It should not become an implicit package that other packages import from.
+The repo root owns docs, `scripts/`, `tests/`, shared tooling config, and the release/CI
+configuration. It is not an implicit package that other packages import from.
 
 ## Storage Layout
 
-Use XDG-style defaults where appropriate.
+XDG-style roots resolved by `warcraft_core.paths`:
 
-Recommended defaults:
-- config: `~/.config/warcraft/` or `XDG_CONFIG_HOME/warcraft/`
-- data: `~/.local/share/warcraft/` or `XDG_DATA_HOME/warcraft/`
-- cache: `~/.cache/warcraft/` or `XDG_CACHE_HOME/warcraft/`
+- config: `XDG_CONFIG_HOME/warcraft/` (default `~/.config/warcraft/`)
+- data: `XDG_DATA_HOME/warcraft/` (default `~/.local/share/warcraft/`)
+- cache: `XDG_CACHE_HOME/warcraft/` (default `~/.cache/warcraft/`)
+- state: `XDG_STATE_HOME/warcraft/` (default `~/.local/state/warcraft/`), including
+  `providers/<provider>.json` auth state
 
-Within those roots, prefer:
-- `shared/`
-- one directory per service
-
-## Current Service Set
-
-The current package set includes the umbrella wrapper, shared libraries, and service-facing packages for:
-- `wowhead`
-- `method`
-- `icy-veins`
-- `raiderio`
-- `warcraft-wiki`
-- `wowprogress`
-- `simc`
-- `warcraftlogs`
-
-Completed rollout milestones are archived under [history/](history/README.md). Open engineering backlog items live in Linear.
+Within each root: `shared/` for genuinely shared data, then one directory per provider.
 
 ## Rules
 
-- every package must remain independently buildable
-- shared code moves only when it is truly shared
-- package boundaries and dependency direction must stay documented
-- architecture docs must be updated whenever package layout or dependency rules change
+- every package must stay independently buildable and truthfully declare its dependencies
+- shared code moves into a shared package only when a second consumer proves the need
+- package boundaries and dependency direction stay documented here and enforced in `.importlinter`
+- update this document whenever the package set or dependency rules change
+
+Completed rollout milestones are archived under [history/](history/README.md). Open engineering
+work lives in Linear.

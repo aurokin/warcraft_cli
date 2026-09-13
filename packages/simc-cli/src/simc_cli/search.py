@@ -25,13 +25,23 @@ def _fuzzy_glob(base: Path, needle: str, pattern: str = "*") -> list[Path]:
 
 
 def _rg_files(needle: str, base: Path, pattern: str) -> list[Path]:
-    proc = subprocess.run(["rg", "-l", "-i", needle, str(base), "-g", pattern], capture_output=True, text=True, check=False)
+    # Fixed argv, no shell: ripgrep is resolved from PATH and the needle is passed as a literal argument.
+    proc = subprocess.run(  # noqa: S603
+        ["rg", "-l", "-i", needle, str(base), "-g", pattern],  # noqa: S607
+        capture_output=True,
+        text=True,
+        check=False,
+    )
     return sorted(Path(line) for line in proc.stdout.splitlines() if line.strip())
 
 
 def _run_rg(pattern: str, paths: list[Path]) -> list[SearchHit]:
-    proc = subprocess.run(["rg", "-n", "--no-heading", pattern, *[str(path)
-                          for path in paths if path.exists()]], capture_output=True, text=True, check=False)
+    proc = subprocess.run(  # noqa: S603
+        ["rg", "-n", "--no-heading", pattern, *[str(path) for path in paths if path.exists()]],  # noqa: S607
+        capture_output=True,
+        text=True,
+        check=False,
+    )
     hits: list[SearchHit] = []
     for line in proc.stdout.splitlines():
         file_name, line_no, text = line.split(":", 2)

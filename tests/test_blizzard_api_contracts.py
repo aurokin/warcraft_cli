@@ -10,7 +10,10 @@ import httpx
 import pytest
 from blizzard_api_cli.client import BlizzardClient
 from blizzard_api_cli.main import app
+from blizzard_api_cli.provider import PROVIDER
 from typer.testing import CliRunner
+from warcraft_core.envelope import SCHEMA_VERSION, envelope_violations
+from warcraft_core.provider import ProviderSurface
 
 runner = CliRunner()
 
@@ -196,7 +199,7 @@ def test_missing_credentials_error(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("BLIZZARD_CLIENT_SECRET", raising=False)
     _install_recorder(monkeypatch)
     result = runner.invoke(app, ["realm", "illidan"])
-    assert result.exit_code == 1
+    assert result.exit_code == 3
     payload = json.loads(result.stderr)
     assert payload["ok"] is False
     assert payload["error"]["code"] == "missing_client_credentials"
@@ -212,23 +215,35 @@ def test_http_status_error_no_traceback(monkeypatch: pytest.MonkeyPatch) -> None
 
     monkeypatch.setattr(client_module, "request_with_retries", _fake)
     result = runner.invoke(app, ["realm", "does-not-exist"])
-    assert result.exit_code == 1
+    assert result.exit_code == 4
     payload = json.loads(result.stderr)
-    assert payload["error"]["code"] == "http_error"
+    assert payload["error"]["code"] == "not_found"
     assert "404" in payload["error"]["message"]
 
 
-def test_network_error_no_traceback(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["realm", "illidan"],
+        ["item", "19019"],
+        ["character", "illidan", "Imonthegcd"],
+    ],
+)
+def test_network_error_no_traceback(monkeypatch: pytest.MonkeyPatch, args: list[str]) -> None:
     def _fake(client: Any, url: str, *, method: str = "GET", **kwargs: Any) -> _FakeResponse:
         if url.endswith("/token"):
             return _FakeResponse({"access_token": "fake-token", "expires_in": 3600}, url)
         raise httpx.ConnectError("connection refused")
 
     monkeypatch.setattr(client_module, "request_with_retries", _fake)
-    result = runner.invoke(app, ["realm", "illidan"])
-    assert result.exit_code == 1
+    result = runner.invoke(app, args)
+    # Transport failures must produce the error envelope on stderr and exit 5, never a traceback
+    # and never a partial payload on stdout.
+    assert result.exit_code == 5
+    assert result.stdout == ""
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "network_error"
+    assert envelope_violations(payload) == []
 
 
 def test_invalid_json_response_no_traceback(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -342,3 +357,70 @@ def test_in_memory_token_keyed_by_region(monkeypatch: pytest.MonkeyPatch) -> Non
     assert len(token_urls) == 2
     assert any("oauth.battle.net" in url for url in token_urls)
     assert any("battlenet.com.cn" in url for url in token_urls)
+
+
+@pytest.mark.parametrize(
+    ("args", "stream"),
+    [
+        (["doctor"], "stdout"),
+        (["search", "illidan"], "stdout"),
+        (["resolve", "illidan"], "stdout"),
+        (["realm", "illidan"], "stdout"),
+        (["item", "19019"], "stdout"),
+        (["character", "illidan", "Imonthegcd"], "stdout"),
+        (["realm", "illidan", "--region", "oc"], "stderr"),
+    ],
+)
+def test_every_command_emits_a_conforming_envelope(monkeypatch: pytest.MonkeyPatch, args: list[str], stream: str) -> None:
+    _install_recorder(monkeypatch)
+    result = runner.invoke(app, args)
+    payload = json.loads(result.stdout if stream == "stdout" else result.stderr)
+    assert envelope_violations(payload) == []
+    assert payload["schema_version"] == SCHEMA_VERSION
+    assert payload["provider"] == "blizzard-api"
+
+
+def test_provider_surface_is_pure_and_experimental() -> None:
+    # The wrapper calls PROVIDER in process, so the surface must return envelopes without printing.
+    assert isinstance(PROVIDER, ProviderSurface)
+    doctor = PROVIDER.doctor()
+    assert envelope_violations(doctor) == []
+    assert doctor["data"]["tier"] == "experimental"
+    assert doctor["data"]["capabilities"]["search"] == "coming_soon"
+    for envelope in (PROVIDER.search("illidan", limit=3), PROVIDER.resolve("illidan")):
+        assert envelope_violations(envelope) == []
+        assert envelope["data"]["coming_soon"] is True
+
+
+def test_timeout_maps_to_network_exit_code(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _fake(client: Any, url: str, *, method: str = "GET", **kwargs: Any) -> _FakeResponse:
+        raise httpx.ReadTimeout("timed out")
+
+    monkeypatch.setattr(client_module, "request_with_retries", _fake)
+    result = runner.invoke(app, ["item", "19019"])
+    assert result.exit_code == 5
+    payload = json.loads(result.stderr)
+    assert payload["error"]["code"] == "timeout"
+
+
+def test_unauthorized_maps_to_auth_exit_code(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _fake(client: Any, url: str, *, method: str = "GET", **kwargs: Any) -> _FakeResponse:
+        if url.endswith("/token"):
+            return _FakeResponse({"access_token": "fake-token", "expires_in": 3600}, url)
+        request = httpx.Request("GET", url)
+        raise httpx.HTTPStatusError("Forbidden", request=request, response=httpx.Response(403, request=request))
+
+    monkeypatch.setattr(client_module, "request_with_retries", _fake)
+    result = runner.invoke(app, ["realm", "illidan"])
+    assert result.exit_code == 3
+    payload = json.loads(result.stderr)
+    assert payload["error"]["code"] == "auth_failed"
+    assert payload["error"]["details"]["status_code"] == 403
+
+
+def test_global_output_flags_apply(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The shared callback gives every binary --fields/--pretty, not just wowhead.
+    _install_recorder(monkeypatch)
+    result = runner.invoke(app, ["--fields", "data.slug", "realm", "illidan"])
+    assert result.exit_code == 0
+    assert json.loads(result.stdout) == {"data": {"slug": "illidan"}}

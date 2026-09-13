@@ -9,13 +9,13 @@ default_language_version:
 repos:
   - repo: local
     hooks:
-      - id: ruff-shared-packages
-        name: ruff (shared packages)
+      - id: ruff
+        name: ruff
         entry: make lint
         language: system
         pass_filenames: false
-      - id: mypy-shared-packages
-        name: mypy (shared packages)
+      - id: mypy
+        name: mypy
         entry: make typecheck
         language: system
         pass_filenames: false
@@ -24,8 +24,22 @@ repos:
         entry: make lint-boundaries
         language: system
         pass_filenames: false
+      - id: complexity-gate
+        name: complexity gate (xenon)
+        entry: make complexity-gate
+        language: system
+        pass_filenames: false
+      - id: deadcode
+        name: dead code (vulture)
+        entry: make deadcode
+        language: system
+        pass_filenames: false
       - id: compileall-packages
         name: compileall packages
         entry: make fmt-check
         language: system
         pass_filenames: false
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.21.2
+    hooks:
+      - id: gitleaks

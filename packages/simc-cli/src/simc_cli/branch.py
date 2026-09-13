@@ -125,10 +125,14 @@ def summarize_branches(apl_path, context: PruneContext, start_list: str = "defau
     stop_here = False
 
     for entry in branch_entries:
+        # branch_entries only holds run_action_list entries with a target list; this keeps the key typed.
+        target_list = entry.target_list
+        if target_list is None:
+            continue
         if stop_here:
-            shadowed_lines.append(f"L{entry.line_no} -> {entry.target_list}")
-            branch_decisions[entry.target_list] = BranchDecision(
-                target_list=entry.target_list,
+            shadowed_lines.append(f"L{entry.line_no} -> {target_list}")
+            branch_decisions[target_list] = BranchDecision(
+                target_list=target_list,
                 line_no=entry.line_no,
                 status="shadowed",
                 reason="shadowed by earlier guaranteed dispatch",
@@ -137,28 +141,28 @@ def summarize_branches(apl_path, context: PruneContext, start_list: str = "defau
         outcome = _entry_outcome(entry, context)
         reason = explanation_for_condition(entry.condition, context, outcome) if entry.condition else "no condition"
         if outcome.guaranteed_true:
-            guaranteed_dispatch = entry.target_list
+            guaranteed_dispatch = target_list
             guaranteed_dispatch_line = entry.line_no
             guaranteed_dispatch_reason = reason
-            branch_decisions[entry.target_list] = BranchDecision(
-                target_list=entry.target_list,
+            branch_decisions[target_list] = BranchDecision(
+                target_list=target_list,
                 line_no=entry.line_no,
                 status="guaranteed",
                 reason=reason,
             )
             stop_here = True
         elif outcome.guaranteed_false:
-            dead_branches.append(f"L{entry.line_no} -> {entry.target_list}: {reason}")
-            branch_decisions[entry.target_list] = BranchDecision(
-                target_list=entry.target_list,
+            dead_branches.append(f"L{entry.line_no} -> {target_list}: {reason}")
+            branch_decisions[target_list] = BranchDecision(
+                target_list=target_list,
                 line_no=entry.line_no,
                 status="dead",
                 reason=reason,
             )
         else:
-            unresolved_branches.append(f"L{entry.line_no} -> {entry.target_list}: {reason}")
-            branch_decisions[entry.target_list] = BranchDecision(
-                target_list=entry.target_list,
+            unresolved_branches.append(f"L{entry.line_no} -> {target_list}: {reason}")
+            branch_decisions[target_list] = BranchDecision(
+                target_list=target_list,
                 line_no=entry.line_no,
                 status="possible",
                 reason=reason,

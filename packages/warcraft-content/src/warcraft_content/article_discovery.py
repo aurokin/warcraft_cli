@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shlex
+from dataclasses import dataclass
 from typing import Any
 
 
@@ -28,6 +29,19 @@ def article_follow_up(
     }
 
 
+@dataclass(frozen=True, slots=True)
+class ArticleKind:
+    """How a provider labels its articles: the follow-up surface, display/entity type, and the metadata key that carries ``ref``."""
+
+    surface: str = "guide"
+    type_name: str = "Guide"
+    entity_type: str = "guide"
+    metadata_key: str = "slug"
+
+
+GUIDE_KIND = ArticleKind()
+
+
 def article_candidate(
     *,
     ref: str,
@@ -36,29 +50,26 @@ def article_candidate(
     score: int,
     reasons: list[str],
     provider_command: str,
-    surface: str = "guide",
-    type_name: str = "Guide",
-    entity_type: str = "guide",
-    metadata_key: str = "slug",
+    kind: ArticleKind = GUIDE_KIND,
     metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     payload_metadata = {
-        metadata_key: ref,
+        kind.metadata_key: ref,
     }
     if metadata:
         payload_metadata.update(metadata)
     return {
         "id": ref,
         "name": name,
-        "type_name": type_name,
-        "entity_type": entity_type,
+        "type_name": kind.type_name,
+        "entity_type": kind.entity_type,
         "url": url,
         "ranking": {
             "score": score,
             "match_reasons": reasons,
         },
         "metadata": payload_metadata,
-        "follow_up": article_follow_up(provider_command, ref, surface=surface),
+        "follow_up": article_follow_up(provider_command, ref, surface=kind.surface),
     }
 
 

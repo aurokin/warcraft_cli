@@ -4,7 +4,7 @@ import re
 import shlex
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import ParseResult, parse_qs, urlparse
 
 from lorrgs_cli.client import LorrgsClient
 
@@ -49,6 +49,8 @@ STOP_TERMS = frozenset(
     }
 )
 COMP_TERMS = frozenset({"comp", "composition", "compositions", "setup", "setups", "raidcomp", "raid"})
+# Lorrgs path segments that immediately precede a report code ("reports" is the Warcraft Logs form).
+USER_REPORT_PATH_SEGMENTS = frozenset({"user_report", "user_reports"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,30 +71,48 @@ class LorrgsRouteReference:
 
 
 def parse_report_reference(reference: str) -> ReportReference | None:
+    """Parse a Warcraft Logs/Lorrgs report URL or a bare report code into a ``ReportReference``."""
     text = reference.strip()
     if not text:
         return None
     parsed = urlparse(text)
     if parsed.scheme and parsed.netloc:
-        host = parsed.netloc.lower()
-        if "warcraftlogs.com" not in host and "lorrgs.io" not in host:
-            return None
-        parts = [part for part in parsed.path.strip("/").split("/") if part]
-        code: str | None = None
-        if "reports" in parts:
-            index = parts.index("reports")
-            code = parts[index + 1] if index + 1 < len(parts) else None
-        elif any(part in {"user_report", "user_reports"} for part in parts):
-            index = next(index for index, part in enumerate(parts) if part in {"user_report", "user_reports"})
-            code = parts[index + 1] if index + 1 < len(parts) else None
-        if not code or not REPORT_CODE_PATTERN.fullmatch(code):
-            return None
-        fight_id = _fight_id_from_url(parsed.query) or _fight_id_from_url(parsed.fragment)
-        report_type = _query_value_from_url(parsed.query, "type") or _query_value_from_url(parsed.fragment, "type")
-        return ReportReference(code=code, fight_id=fight_id, report_type=report_type, source_url=text)
+        return _report_reference_from_url(text, parsed)
     if " " in text or not REPORT_CODE_PATTERN.fullmatch(text):
         return None
     return ReportReference(code=text)
+
+
+def _report_reference_from_url(text: str, parsed: ParseResult) -> ReportReference | None:
+    host = parsed.netloc.lower()
+    if "warcraftlogs.com" not in host and "lorrgs.io" not in host:
+        return None
+    code = _report_code_from_path([part for part in parsed.path.strip("/").split("/") if part])
+    if code is None:
+        return None
+    fight_id = _fight_id_from_url(parsed.query) or _fight_id_from_url(parsed.fragment)
+    report_type = _query_value_from_url(parsed.query, "type") or _query_value_from_url(parsed.fragment, "type")
+    return ReportReference(code=code, fight_id=fight_id, report_type=report_type, source_url=text)
+
+
+def _report_code_from_path(parts: list[str]) -> str | None:
+    index = _report_segment_index(parts)
+    if index is None:
+        return None
+    code = parts[index + 1] if index + 1 < len(parts) else None
+    if not code or not REPORT_CODE_PATTERN.fullmatch(code):
+        return None
+    return code
+
+
+def _report_segment_index(parts: list[str]) -> int | None:
+    """Index of the path segment that precedes the report code; "reports" wins over the Lorrgs form."""
+    if "reports" in parts:
+        return parts.index("reports")
+    for index, part in enumerate(parts):
+        if part in USER_REPORT_PATH_SEGMENTS:
+            return index
+    return None
 
 
 def parse_lorrgs_route(reference: str) -> LorrgsRouteReference | None:
@@ -299,33 +319,40 @@ def _rank_rows(rows: list[Any], query: str, *, row_kind: str) -> list[dict[str, 
 
 
 def _row_score(row: dict[str, Any], query_terms: set[str], *, row_kind: str) -> tuple[int, list[str]]:
-    text = " ".join(str(row.get(key) or "") for key in ("full_name_slug", "full_name", "name", "name_slug"))
-    class_info = row.get("class")
-    if isinstance(class_info, dict):
-        text += " " + " ".join(str(class_info.get(key) or "") for key in ("name", "name_slug"))
-    row_terms = set(_words(text))
-    matched = query_terms & row_terms
+    matched = query_terms & set(_words(_row_match_text(row)))
     if not matched:
         return 0, []
     score = 12 * len(matched)
     reasons = [f"term:{term}" for term in sorted(matched)]
-    slug = str(row.get("full_name_slug") or row.get("name_slug") or "").strip().lower()
-    full_name = str(row.get("full_name") or row.get("name") or "").strip().lower()
-    slug_terms = set(_words(slug))
-    full_terms = set(_words(full_name))
-    if slug and "-".join(sorted(matched)) == slug:
-        score += 30
-        reasons.append("exact_slug")
-    if full_terms and full_terms <= query_terms:
-        score += 28
-        reasons.append("full_name_terms")
-    if row_kind == "boss" and row.get("name") and str(row["name"]).lower() in query_terms:
-        score += 28
-        reasons.append("boss_short_name")
-    if row_kind == "spec" and slug_terms and slug_terms <= query_terms:
-        score += 24
-        reasons.append("spec_slug_terms")
+    for points, reason in _row_bonuses(row, matched, query_terms, row_kind=row_kind):
+        score += points
+        reasons.append(reason)
     return score, reasons
+
+
+def _row_match_text(row: dict[str, Any]) -> str:
+    text = " ".join(str(row.get(key) or "") for key in ("full_name_slug", "full_name", "name", "name_slug"))
+    class_info = row.get("class")
+    if isinstance(class_info, dict):
+        text += " " + " ".join(str(class_info.get(key) or "") for key in ("name", "name_slug"))
+    return text
+
+
+def _row_bonuses(row: dict[str, Any], matched: set[str], query_terms: set[str], *, row_kind: str) -> list[tuple[int, str]]:
+    """Score bonuses beyond raw term overlap, in the order they are reported."""
+    slug = str(row.get("full_name_slug") or row.get("name_slug") or "").strip().lower()
+    full_terms = set(_words(str(row.get("full_name") or row.get("name") or "").strip().lower()))
+    slug_terms = set(_words(slug))
+    bonuses: list[tuple[int, str]] = []
+    if slug and "-".join(sorted(matched)) == slug:
+        bonuses.append((30, "exact_slug"))
+    if full_terms and full_terms <= query_terms:
+        bonuses.append((28, "full_name_terms"))
+    if row_kind == "boss" and row.get("name") and str(row["name"]).lower() in query_terms:
+        bonuses.append((28, "boss_short_name"))
+    if row_kind == "spec" and slug_terms and slug_terms <= query_terms:
+        bonuses.append((24, "spec_slug_terms"))
+    return bonuses
 
 
 def _row_name(row: Any) -> str:

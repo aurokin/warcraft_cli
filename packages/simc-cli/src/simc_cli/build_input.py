@@ -40,6 +40,16 @@ DEFAULT_RACE_BY_CLASS = {
 }
 
 
+@dataclass(frozen=True, slots=True)
+class TalentStrings:
+    """The talent-string flag group; the four values are always supplied together by a build-input command."""
+
+    talents: str | None = None
+    class_talents: str | None = None
+    spec_talents: str | None = None
+    hero_talents: str | None = None
+
+
 @dataclass(slots=True)
 class BuildSpec:
     actor_class: str | None = None
@@ -205,7 +215,8 @@ def _packet_spec_from_split_talents(
 
 def extract_build_spec_from_packet(path: str) -> BuildSpec:
     packet, resolved_path = _load_build_packet(path)
-    transport_forms = packet.get("transport_forms") if isinstance(packet.get("transport_forms"), dict) else {}
+    raw_transport_forms = packet.get("transport_forms")
+    transport_forms: dict[str, Any] = raw_transport_forms if isinstance(raw_transport_forms, dict) else {}
     source_notes = [f"build packet: {resolved_path}", "talent transport packet"]
     source = packet.get("source")
     if isinstance(source, dict):
@@ -503,18 +514,12 @@ def normalize_talents_input(value: str | None) -> str | None:
     return stripped
 
 
-def detect_talents_option_source_kind(
-    *,
-    talents: str | None,
-    class_talents: str | None,
-    spec_talents: str | None,
-    hero_talents: str | None,
-) -> str | None:
-    if class_talents or spec_talents or hero_talents:
+def detect_talents_option_source_kind(*, talents: TalentStrings) -> str | None:
+    if talents.class_talents or talents.spec_talents or talents.hero_talents:
         return "simc_split_talents"
-    if not talents:
+    if not talents.talents:
         return None
-    stripped = talents.strip()
+    stripped = talents.talents.strip()
     if _raw_wowhead_talent_calc_ref(stripped) is not None:
         return "wowhead_talent_calc_url"
     if stripped.startswith("talents="):
@@ -528,10 +533,7 @@ def load_build_spec(
     profile_path: str | None,
     build_file: str | None,
     build_text: str | None,
-    talents: str | None,
-    class_talents: str | None,
-    spec_talents: str | None,
-    hero_talents: str | None,
+    talents: TalentStrings,
     actor_class: str | None,
     spec_name: str | None,
     build_packet: str | None = None,
@@ -542,10 +544,10 @@ def load_build_spec(
             profile_path,
             build_file,
             build_text,
-            talents,
-            class_talents,
-            spec_talents,
-            hero_talents,
+            talents.talents,
+            talents.class_talents,
+            talents.spec_talents,
+            talents.hero_talents,
             actor_class,
             spec_name,
         )
@@ -561,26 +563,21 @@ def load_build_spec(
             inferred.source_notes.append(f"inferred from apl: {Path(apl_path).stem}")
 
     from_talents_option = BuildSpec()
-    if talents:
-        from_talents_option = parse_wowhead_talent_calc_ref(talents) or BuildSpec()
+    if talents.talents:
+        from_talents_option = parse_wowhead_talent_calc_ref(talents.talents) or BuildSpec()
         if from_talents_option.source_notes:
             from_talents_option.source_notes.append("command-line talents option")
 
     explicit = BuildSpec(
         actor_class=actor_class,
         spec=spec_name,
-        talents=normalize_talents_input(talents),
-        class_talents=class_talents,
-        spec_talents=spec_talents,
-        hero_talents=hero_talents,
-        source_kind=detect_talents_option_source_kind(
-            talents=talents,
-            class_talents=class_talents,
-            spec_talents=spec_talents,
-            hero_talents=hero_talents,
-        ),
-        source_notes=["command-line build options"] if any([talents, class_talents,
-                                                           spec_talents, hero_talents, actor_class, spec_name]) else [],
+        talents=normalize_talents_input(talents.talents),
+        class_talents=talents.class_talents,
+        spec_talents=talents.spec_talents,
+        hero_talents=talents.hero_talents,
+        source_kind=detect_talents_option_source_kind(talents=talents),
+        source_notes=["command-line build options"] if any([talents.talents, talents.class_talents, talents.spec_talents,
+                                                            talents.hero_talents, actor_class, spec_name]) else [],
     )
 
     from_profile = BuildSpec()
@@ -627,7 +624,7 @@ def _direct_build_identity(build_spec: BuildSpec) -> tuple[BuildSpec, BuildIdent
             confidence=confidence,
             source=source,
             candidate_count=1,
-            candidates=[(build_spec.actor_class, build_spec.spec)],
+            candidates=[(build_spec.actor_class, build_spec.spec)] if build_spec.actor_class and build_spec.spec else [],
             source_notes=build_spec.source_notes[:],
         ),
     )
@@ -771,7 +768,7 @@ def decode_build(repo: RepoPaths, build_spec: BuildSpec) -> BuildResolution:
         "debug=1",
         "allow_experimental_specializations=1",
     ]
-    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)  # noqa: S603
     output = proc.stdout + proc.stderr
     talents_by_tree = parse_debug_talents(output)
     enabled_talents = {
@@ -850,7 +847,7 @@ def encode_build(repo: RepoPaths, build_spec: BuildSpec) -> str:
         "fight_style=Patchwerk",
         "allow_experimental_specializations=1",
     ]
-    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)  # noqa: S603
     if not save_path.exists():
         output = proc.stdout + proc.stderr
         raise RuntimeError(output.strip() or "SimC did not produce a saved profile.")

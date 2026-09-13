@@ -1,0 +1,37 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  wheel:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Resolve and install the project
+        run: uv sync --frozen
+
+      - name: Build wheel
+        run: uv build --wheel
+
+      # Attaches to the release for the pushed tag, creating it if `gh release
+      # create` has not run yet.
+      - name: Attach wheel to the GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.whl
+          fail_on_unmatched_files: true

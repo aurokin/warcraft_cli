@@ -1,5 +1,8 @@
 # Lorrgs
 
+**Tier: experimental.** Lorrgs is a narrow, recently added provider. Prefer `warcraftlogs` for
+anything that must be authoritative, and use Lorrgs for its prebuilt aggregation.
+
 ## Best For
 
 - inspecting top-parse cooldown timelines by spec and boss

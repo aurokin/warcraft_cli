@@ -3,11 +3,14 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+from cli_testkit import all_cli_apps
 from typer.testing import CliRunner
-from wowhead_cli.cache import FileCacheStore
+from warcraft_api.cache import FileCacheStore
 from wowhead_cli.main import app
 
 runner = CliRunner()
+CLI_APPS = all_cli_apps()
 
 
 def test_search_defaults_to_compact_json(monkeypatch) -> None:
@@ -22,7 +25,8 @@ def test_search_defaults_to_compact_json(monkeypatch) -> None:
     monkeypatch.setattr("wowhead_cli.main.WowheadClient.search_suggestions", fake_search)
     result = runner.invoke(app, ["search", "thunderfury"])
     assert result.exit_code == 0
-    assert result.stdout.startswith('{"query":"thunderfury",')
+    assert result.stdout.startswith('{"ok":true,')
+    assert '"query":"thunderfury"' in result.stdout
     assert result.stdout.count("\n") == 1
 
 
@@ -133,7 +137,8 @@ def test_fields_strict_fails_when_requested_path_is_missing(monkeypatch) -> None
         app,
         ["--fields-strict", "--fields", "entity.name,tooltip.summary", "entity", "item", "19019"],
     )
-    assert result.exit_code == 1
+    # missing_fields is a caller mistake, so it exits 2 (usage) per docs/foundation/ERROR_CONTRACT.md.
+    assert result.exit_code == 2
 
     payload = json.loads(result.stderr)
     assert payload["ok"] is False
@@ -202,12 +207,12 @@ def test_cache_inspect_reports_file_cache_stats(tmp_path: Path, monkeypatch) -> 
     now = 1000.0
     monkeypatch.setenv("WOWHEAD_CACHE_BACKEND", "file")
     monkeypatch.setenv("WOWHEAD_CACHE_DIR", str(cache_dir))
-    monkeypatch.setattr("wowhead_cli.cache.time.time", lambda: now)
+    monkeypatch.setattr("warcraft_api.cache.time.time", lambda: now)
 
     store.set("search_suggestions:active", {"query": "thunderfury"}, ttl_seconds=60)
     store.set("entity_response:expired", {"entity": {"id": 19019}}, ttl_seconds=10)
 
-    monkeypatch.setattr("wowhead_cli.cache.time.time", lambda: now + 20)
+    monkeypatch.setattr("warcraft_api.cache.time.time", lambda: now + 20)
     result = runner.invoke(app, ["cache-inspect"])
     assert result.exit_code == 0
 
@@ -225,12 +230,12 @@ def test_cache_inspect_summary_hides_zero_value_fields(tmp_path: Path, monkeypat
     now = 1000.0
     monkeypatch.setenv("WOWHEAD_CACHE_BACKEND", "file")
     monkeypatch.setenv("WOWHEAD_CACHE_DIR", str(cache_dir))
-    monkeypatch.setattr("wowhead_cli.cache.time.time", lambda: now)
+    monkeypatch.setattr("warcraft_api.cache.time.time", lambda: now)
 
     store.set("search_suggestions:active", {"query": "thunderfury"}, ttl_seconds=60)
     store.set("entity_response:expired", {"entity": {"id": 19019}}, ttl_seconds=10)
 
-    monkeypatch.setattr("wowhead_cli.cache.time.time", lambda: now + 20)
+    monkeypatch.setattr("warcraft_api.cache.time.time", lambda: now + 20)
     result = runner.invoke(app, ["cache-inspect", "--summary", "--namespace-limit", "1", "--hide-zero"])
     assert result.exit_code == 0
 
@@ -251,7 +256,7 @@ def test_cache_repair_reports_and_prunes_legacy_unscoped_entries(tmp_path: Path,
     now = 1000.0
     monkeypatch.setenv("WOWHEAD_CACHE_BACKEND", "file")
     monkeypatch.setenv("WOWHEAD_CACHE_DIR", str(cache_dir))
-    monkeypatch.setattr("wowhead_cli.cache.time.time", lambda: now + 20)
+    monkeypatch.setattr("warcraft_api.cache.time.time", lambda: now + 20)
 
     legacy_path = cache_dir / ("a" * 64 + ".json")
     legacy_path.write_text(json.dumps({"expires_at": now + 10, "payload": {}}), encoding="utf-8")
@@ -280,7 +285,7 @@ def test_cache_repair_can_limit_to_expired_legacy_entries(tmp_path: Path, monkey
     now = 1000.0
     monkeypatch.setenv("WOWHEAD_CACHE_BACKEND", "file")
     monkeypatch.setenv("WOWHEAD_CACHE_DIR", str(cache_dir))
-    monkeypatch.setattr("wowhead_cli.cache.time.time", lambda: now + 20)
+    monkeypatch.setattr("warcraft_api.cache.time.time", lambda: now + 20)
 
     expired_path = cache_dir / ("a" * 64 + ".json")
     expired_path.write_text(json.dumps({"expires_at": now + 10, "payload": {}}), encoding="utf-8")
@@ -343,13 +348,13 @@ def test_cache_clear_can_remove_expired_entries_by_namespace(tmp_path: Path, mon
     now = 1000.0
     monkeypatch.setenv("WOWHEAD_CACHE_BACKEND", "file")
     monkeypatch.setenv("WOWHEAD_CACHE_DIR", str(cache_dir))
-    monkeypatch.setattr("wowhead_cli.cache.time.time", lambda: now)
+    monkeypatch.setattr("warcraft_api.cache.time.time", lambda: now)
 
     store.set("search_suggestions:active", {"query": "thunderfury"}, ttl_seconds=60)
     store.set("entity_response:expired", {"entity": {"id": 19019}}, ttl_seconds=10)
     store.set("entity_response:active", {"entity": {"id": 19020}}, ttl_seconds=60)
 
-    monkeypatch.setattr("wowhead_cli.cache.time.time", lambda: now + 20)
+    monkeypatch.setattr("warcraft_api.cache.time.time", lambda: now + 20)
     result = runner.invoke(app, ["cache-clear", "--namespace", "entity_response", "--expired-only"])
     assert result.exit_code == 0
 
@@ -364,10 +369,54 @@ def test_invalid_cache_config_returns_structured_error(monkeypatch) -> None:
     assert result.exit_code == 1
 
     payload = json.loads(result.stderr)
-    assert payload == {
-        "ok": False,
-        "error": {
-            "code": "invalid_cache_config",
-            "message": "WOWHEAD_CACHE_BACKEND must be one of: file, redis, none.",
-        },
+    assert payload["ok"] is False
+    assert payload["provider"] == "wowhead"
+    assert payload["error"] == {
+        "code": "invalid_cache_config",
+        "message": "WOWHEAD_CACHE_BACKEND must be one of: file, redis, none.",
     }
+
+
+# --- Cross-binary coverage of the shared output flags -------------------------------------------
+# Every binary installs warcraft_core.cli's common options, so the same five flags must behave
+# identically everywhere. `doctor` is the one command each binary can answer offline.
+
+DOCTOR_ARGS = {"wowhead": ["doctor", "--no-live"], "warcraftlogs": ["doctor", "--no-live"]}
+
+
+def _doctor_args(binary: str) -> list[str]:
+    return DOCTOR_ARGS.get(binary, ["doctor"])
+
+
+@pytest.mark.parametrize("binary", sorted(CLI_APPS), ids=sorted(CLI_APPS))
+def test_doctor_defaults_to_single_line_json(binary: str) -> None:
+    result = runner.invoke(CLI_APPS[binary], _doctor_args(binary))
+    assert result.exit_code == 0, result.stderr
+    assert result.stdout.count("\n") == 1
+    assert isinstance(json.loads(result.stdout), dict)
+
+
+@pytest.mark.parametrize("binary", sorted(CLI_APPS), ids=sorted(CLI_APPS))
+@pytest.mark.parametrize("flags", [["--pretty"], ["--profile", "human"]], ids=["pretty", "profile-human"])
+def test_doctor_pretty_prints(binary: str, flags: list[str]) -> None:
+    result = runner.invoke(CLI_APPS[binary], [*flags, *_doctor_args(binary)])
+    assert result.exit_code == 0, result.stderr
+    assert result.stdout.startswith("{\n")
+
+
+@pytest.mark.parametrize("binary", sorted(CLI_APPS), ids=sorted(CLI_APPS))
+def test_doctor_fields_projects_to_the_requested_key(binary: str) -> None:
+    args = _doctor_args(binary)
+    key = next(iter(json.loads(runner.invoke(CLI_APPS[binary], args).stdout)))
+    result = runner.invoke(CLI_APPS[binary], ["--fields", key, *args])
+    assert result.exit_code == 0, result.stderr
+    assert set(json.loads(result.stdout)) == {key}
+
+
+@pytest.mark.parametrize("binary", sorted(CLI_APPS), ids=sorted(CLI_APPS))
+def test_doctor_fields_strict_rejects_a_missing_path(binary: str) -> None:
+    result = runner.invoke(CLI_APPS[binary], ["--fields-strict", "--fields", "nope.missing", *_doctor_args(binary)])
+    assert result.exit_code == 2, result.stdout
+    payload = json.loads(result.stderr)
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "missing_fields"

@@ -5,6 +5,8 @@ import json
 import pytest
 from typer.testing import CliRunner
 from warcraft_core.analytics import numeric_summary as _numeric_summary
+from warcraft_core.envelope import envelope_violations
+from warcraft_core.provider import ProviderSurface
 from wowprogress_cli.analytics import (
     _guild_profile_distribution_values,
     _guild_profile_matches_filters,
@@ -15,6 +17,7 @@ from wowprogress_cli.analytics import (
 )
 from wowprogress_cli.client import WowProgressClient, WowProgressClientError
 from wowprogress_cli.main import app as wowprogress_app
+from wowprogress_cli.provider import PROVIDER
 from wowprogress_cli.search import (
     _candidate_from_probe,
     _distinct_result_kinds,
@@ -56,6 +59,7 @@ def test_wowprogress_doctor_reports_phase_one_capabilities() -> None:
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
+    assert envelope_violations(payload) == []
     assert payload["provider"] == "wowprogress"
     assert payload["status"] == "ready"
     assert payload["transport"]["mode"] == "browser_fingerprint_http"
@@ -438,7 +442,10 @@ def _snapshot_history_payload() -> dict:
     }
 
 
-def test_wowprogress_guild_snapshot_command(monkeypatch) -> None:
+def test_wowprogress_guild_snapshot_command(monkeypatch, tmp_path) -> None:
+    # conftest disables every provider cache; this test asserts the advertised TTL, so use a scratch file cache.
+    monkeypatch.setenv("WOWPROGRESS_CACHE_BACKEND", "file")
+    monkeypatch.setenv("WOWPROGRESS_CACHE_DIR", str(tmp_path / "cache"))
     monkeypatch.setattr("wowprogress_cli.main.WowProgressClient.fetch_guild_history", lambda self, **kwargs: _snapshot_history_payload())
     result = runner.invoke(wowprogress_app, ["guild-snapshot", "us", "Mal'Ganis", "gn"])
     assert result.exit_code == 0, result.output
@@ -704,9 +711,10 @@ def test_wowprogress_error_maps_to_structured_error(monkeypatch) -> None:
 
     monkeypatch.setattr("wowprogress_cli.main.WowProgressClient.fetch_guild_page_variants", fake_fetch)
     result = runner.invoke(wowprogress_app, ["guild", "us", "illidan", "Missing"])
-    assert result.exit_code == 1
+    assert result.exit_code == 4
 
     payload = json.loads(result.stderr)
+    assert envelope_violations(payload) == []
     assert payload["ok"] is False
     assert payload["error"]["code"] == "not_found"
 
@@ -836,7 +844,7 @@ def test_wowprogress_distribution_rejects_invalid_metric() -> None:
         wowprogress_app,
         ["distribution", "pve-leaderboard", "--region", "us", "--metric", "invalid"],
     )
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "invalid_query"
 
@@ -1283,3 +1291,54 @@ def test_wowprogress_sample_pve_guild_profiles_decodes_plus_names(monkeypatch) -
     result = runner.invoke(wowprogress_app, ["sample", "pve-guild-profiles", "--region", "us", "--limit", "1"])
     assert result.exit_code == 0
     assert seen == [("us", "mal-ganis", "Instant+Dollars")]
+
+
+def test_wowprogress_provider_object_satisfies_the_shared_surface() -> None:
+    assert isinstance(PROVIDER, ProviderSurface)
+    assert PROVIDER.name == "wowprogress"
+    envelope = PROVIDER.doctor()
+    assert envelope_violations(envelope) == []
+    assert envelope["command"] == "doctor"
+    assert envelope["data"]["transport"]["impersonate"]
+
+
+_NETWORK_COMMANDS = [
+    ["search", "us illidan Liquid"],
+    ["resolve", "guild us illidan Liquid"],
+    ["guild", "us", "illidan", "Liquid"],
+    ["guild-history", "us", "illidan", "Liquid"],
+    ["guild-ranks", "us", "illidan", "Liquid"],
+    ["guild-snapshot", "us", "illidan", "Liquid"],
+    ["history-trajectory", "us", "illidan", "Liquid"],
+    ["character", "us", "illidan", "Imonthegcd"],
+    ["leaderboard", "pve", "us"],
+    ["sample", "pve-leaderboard", "--region", "us"],
+    ["distribution", "pve-leaderboard", "--region", "us"],
+    ["threshold", "pve-leaderboard", "--region", "us", "--value", "5"],
+    ["sample", "pve-guild-profiles", "--region", "us"],
+    ["distribution", "pve-guild-profiles", "--region", "us"],
+    ["threshold", "pve-guild-profiles", "--region", "us", "--value", "5"],
+]
+
+
+@pytest.mark.parametrize("args", _NETWORK_COMMANDS, ids=lambda args: " ".join(args[:2]))
+def test_wowprogress_transport_failure_emits_error_envelope(monkeypatch, args: list[str]) -> None:
+    """A dead curl_cffi transport must produce the JSON error envelope and exit 5, never a traceback."""
+
+    class _DeadSession:
+        def get(self, url: str, **kwargs):  # noqa: ANN001
+            del url, kwargs
+            raise ConnectionError("Failed to connect to www.wowprogress.com")
+
+    monkeypatch.setenv("WOWPROGRESS_CACHE_BACKEND", "none")
+    monkeypatch.setattr("wowprogress_cli.client.backoff_seconds", lambda attempt: 0.0)
+    monkeypatch.setattr(WowProgressClient, "_client", lambda self: _DeadSession())
+
+    result = runner.invoke(wowprogress_app, args)
+    assert result.exit_code == 5, result.output
+    assert result.stdout == ""
+
+    payload = json.loads(result.stderr)
+    assert envelope_violations(payload) == []
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "network_error"

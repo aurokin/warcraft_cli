@@ -154,72 +154,77 @@ def extract_json_ld(html_text: str) -> dict[str, Any] | list[Any] | None:
     return None
 
 
+MARKUP_CALL_MARKER = "WH.markup.printHtml("
+_PAGE_DATA_MARKER = "WH.getPageData("
+
+
+def _skip_whitespace(text: str, cursor: int) -> int:
+    while cursor < len(text) and text[cursor].isspace():
+        cursor += 1
+    return cursor
+
+
+def _markup_payload_from_page_data(html_text: str, cursor: int) -> tuple[str | None, int] | None:
+    """Resolve ``WH.getPageData("key")`` to the embedded markup string; None when the call is malformed."""
+    cursor = _skip_whitespace(html_text, cursor + len(_PAGE_DATA_MARKER))
+    try:
+        data_key, offset = JSON_DECODER.raw_decode(html_text[cursor:])
+    except json.JSONDecodeError:
+        return None
+    cursor = _skip_whitespace(html_text, cursor + offset)
+    if cursor >= len(html_text) or html_text[cursor] != ")":
+        return None
+    cursor += 1
+    if not isinstance(data_key, str):
+        return None
+    try:
+        parsed = extract_json_script(html_text, f"data.{data_key}")
+    except (ValueError, json.JSONDecodeError):
+        return None
+    return (parsed if isinstance(parsed, str) else None), cursor
+
+
+def _markup_payload_literal(html_text: str, cursor: int) -> tuple[str | None, int] | None:
+    """Read an inline JSON string argument; None when it is not valid JSON."""
+    try:
+        parsed, offset = JSON_DECODER.raw_decode(html_text[cursor:])
+    except json.JSONDecodeError:
+        return None
+    return (parsed if isinstance(parsed, str) else None), cursor + offset
+
+
+def _markup_call_target(html_text: str, cursor: int) -> tuple[Any] | None:
+    """Read the second ``WH.markup.printHtml`` argument, wrapped in a 1-tuple so ``None`` stays a value."""
+    cursor = _skip_whitespace(html_text, cursor)
+    if cursor >= len(html_text) or html_text[cursor] != ",":
+        return None
+    cursor = _skip_whitespace(html_text, cursor + 1)
+    try:
+        found_target, _offset = JSON_DECODER.raw_decode(html_text[cursor:])
+    except json.JSONDecodeError:
+        return None
+    return (found_target,)
+
+
 def extract_markup_by_target(html_text: str, *, target: str) -> str | None:
-    marker = "WH.markup.printHtml("
+    """Return the markup string that ``WH.markup.printHtml`` renders into ``target``, if the page has one."""
     start = 0
     while True:
-        index = html_text.find(marker, start)
+        index = html_text.find(MARKUP_CALL_MARKER, start)
         if index < 0:
             return None
-        cursor = index + len(marker)
-        while cursor < len(html_text) and html_text[cursor].isspace():
-            cursor += 1
-
-        payload: str | None = None
-        if html_text.startswith("WH.getPageData(", cursor):
-            cursor += len("WH.getPageData(")
-            while cursor < len(html_text) and html_text[cursor].isspace():
-                cursor += 1
-            try:
-                data_key, offset = JSON_DECODER.raw_decode(html_text[cursor:])
-            except json.JSONDecodeError:
-                start = index + len(marker)
-                continue
-            cursor += offset
-            while cursor < len(html_text) and html_text[cursor].isspace():
-                cursor += 1
-            if cursor >= len(html_text) or html_text[cursor] != ")":
-                start = index + len(marker)
-                continue
-            cursor += 1
-            if not isinstance(data_key, str):
-                start = index + len(marker)
-                continue
-            try:
-                parsed = extract_json_script(html_text, f"data.{data_key}")
-            except (ValueError, json.JSONDecodeError):
-                start = index + len(marker)
-                continue
-            if isinstance(parsed, str):
-                payload = parsed
+        start = index + len(MARKUP_CALL_MARKER)
+        cursor = _skip_whitespace(html_text, start)
+        if html_text.startswith(_PAGE_DATA_MARKER, cursor):
+            parsed = _markup_payload_from_page_data(html_text, cursor)
         else:
-            try:
-                parsed, offset = JSON_DECODER.raw_decode(html_text[cursor:])
-            except json.JSONDecodeError:
-                start = index + len(marker)
-                continue
-            cursor += offset
-            if isinstance(parsed, str):
-                payload = parsed
-
-        while cursor < len(html_text) and html_text[cursor].isspace():
-            cursor += 1
-        if cursor >= len(html_text) or html_text[cursor] != ",":
-            start = index + len(marker)
+            parsed = _markup_payload_literal(html_text, cursor)
+        if parsed is None:
             continue
-        cursor += 1
-        while cursor < len(html_text) and html_text[cursor].isspace():
-            cursor += 1
-        try:
-            found_target, offset = JSON_DECODER.raw_decode(html_text[cursor:])
-        except json.JSONDecodeError:
-            start = index + len(marker)
-            continue
-        cursor += offset
-        if found_target == target and payload is not None:
+        payload, cursor = parsed
+        found = _markup_call_target(html_text, cursor)
+        if found is not None and found[0] == target and payload is not None:
             return payload
-        start = index + len(marker)
-    return None
 
 
 def extract_guide_sections(markup_text: str) -> list[dict[str, Any]]:

@@ -4,7 +4,7 @@ import json
 from typing import Any
 
 import httpx
-from warcraft_api.http import DEFAULT_RETRY_ATTEMPTS, request_with_retries
+from warcraft_api.http import DEFAULT_RETRY_ATTEMPTS, build_client, request_with_retries
 
 from curseforge_cli.auth import CurseForgeAuthConfig, load_curseforge_auth_config
 
@@ -55,7 +55,7 @@ class CurseForgeClient:
 
     def _client(self) -> httpx.Client:
         if self._http_client is None:
-            self._http_client = httpx.Client(timeout=self._timeout_seconds, follow_redirects=True)
+            self._http_client = build_client(timeout=self._timeout_seconds)
         return self._http_client
 
     def _require_key(self) -> None:
@@ -205,7 +205,8 @@ class CurseForgeClient:
                 "addon_not_found",
                 f"CurseForge mod {mod_id} is not a World of Warcraft addon (gameId={game_id}).",
             )
-        latest_files = metadata.get("latestFiles") if isinstance(metadata.get("latestFiles"), list) else []
+        raw_files = metadata.get("latestFiles")
+        latest_files: list[Any] = raw_files if isinstance(raw_files, list) else []
         changelog = self._fetch_latest_changelog(mod_id, latest_files)
         source_urls: dict[str, str] = {"mod": mod_result["source_url"]}
         if search_url is not None:

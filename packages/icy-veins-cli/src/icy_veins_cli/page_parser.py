@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass
 from html import unescape
 from typing import Any
 from urllib.parse import urljoin, urlparse
@@ -151,22 +152,21 @@ def guide_traversal_scope(content_family: str | None) -> str:
     return "family_navigation"
 
 
-def _meta_content(soup: BeautifulSoup, **attrs: str) -> str | None:
-    tag = soup.find("meta", attrs=attrs)
+def _attribute(tag: Tag | None, name: str) -> str | None:
+    """Read one attribute as a plain string; bs4 returns a list for multi-valued attributes."""
     if tag is None:
         return None
-    return clean_text(tag.get("content"))
+    value = tag.get(name)
+    return value if isinstance(value, str) else None
 
 
-def _link_href(soup: BeautifulSoup, **attrs: str) -> str | None:
-    tag = soup.find("link", attrs=attrs)
-    if tag is None:
-        return None
-    href = tag.get("href")
-    if not isinstance(href, str):
-        return None
-    href = href.strip()
-    return href or None
+def _meta_content(soup: BeautifulSoup, *, attribute: str, value: str) -> str | None:
+    return clean_text(_attribute(soup.select_one(f'meta[{attribute}="{value}"]'), "content"))
+
+
+def _link_href(soup: BeautifulSoup, *, rel: str) -> str | None:
+    href = _attribute(soup.select_one(f'link[rel~="{rel}"]'), "href")
+    return href.strip() or None if href else None
 
 
 def _parse_json_ld_article(soup: BeautifulSoup) -> dict[str, Any] | None:
@@ -229,7 +229,8 @@ def _extract_family_navigation(soup: BeautifulSoup, *, current_url: str) -> list
         if not title:
             continue
         parent = anchor.parent if isinstance(anchor.parent, Tag) else None
-        classes = parent.get("class", []) if isinstance(parent, Tag) else []
+        raw_classes = parent.get("class") if parent is not None else None
+        classes = raw_classes if isinstance(raw_classes, list) else ([raw_classes] if isinstance(raw_classes, str) else [])
         items.append(
             {
                 "title": title,
@@ -467,67 +468,113 @@ def _extract_build_references(article: Tag, *, source_url: str) -> list[dict[str
     return sorted(items.values(), key=lambda row: str(row["url"]))
 
 
-def parse_guide_page(html: str, *, source_url: str) -> dict[str, Any]:
-    soup = BeautifulSoup(html, "html.parser")
-    canonical_url = _link_href(soup, rel="canonical") or source_url
-    canonical_url = urljoin(ICY_VEINS_BASE_URL, canonical_url)
-    slug = guide_ref_parts(canonical_url)
-    content_family = classify_guide_slug(slug)
-    article_json = _parse_json_ld_article(soup) or {}
-    data_layer = _extract_data_layer(soup)
-    page_title = clean_text(article_json.get("headline")) or _meta_content(soup, property="og:title") or clean_text(
-        soup.title.get_text(" ", strip=True) if soup.title else None
-    )
-    description = clean_text(article_json.get("description")) or _meta_content(soup, name="description")
-    author_name = None
+@dataclass(frozen=True, slots=True)
+class _PageMeta:
+    """Title/description/attribution scraped from JSON-LD, meta tags, and the visible byline."""
+
+    title: str | None
+    description: str | None
+    author: str | None
+    published_at: str | None
+    last_updated: str | None
+
+
+def _selector_text(soup: BeautifulSoup, selector: str) -> str | None:
+    tag = soup.select_one(selector)
+    return clean_text(tag.get_text(" ", strip=True)) if isinstance(tag, Tag) else None
+
+
+def _author_name(soup: BeautifulSoup, article_json: dict[str, Any]) -> str | None:
     author_value = article_json.get("author")
     if isinstance(author_value, dict):
-        author_name = clean_text(author_value.get("name"))
-    if author_name is None:
-        author_tag = soup.select_one(".page_author span[style]")
-        if isinstance(author_tag, Tag):
-            author_name = clean_text(author_tag.get_text(" ", strip=True))
-    published_at = clean_text(article_json.get("datePublished"))
-    last_updated = clean_text(article_json.get("dateModified"))
-    if last_updated is None:
-        date = clean_text(soup.select_one(".local_date_date").get_text(" ", strip=True) if soup.select_one(".local_date_date") else None)
-        hour = clean_text(soup.select_one(".local_date_hour").get_text(" ", strip=True) if soup.select_one(".local_date_hour") else None)
-        if date and hour:
-            last_updated = f"{date} {hour}"
-        elif date:
-            last_updated = date
+        name = clean_text(author_value.get("name"))
+        if name is not None:
+            return name
+    return _selector_text(soup, ".page_author span[style]")
+
+
+def _byline_last_updated(soup: BeautifulSoup) -> str | None:
+    """Fall back to the rendered 'Last updated on <date> at <hour>' byline when JSON-LD has no dateModified."""
+    date = _selector_text(soup, ".local_date_date")
+    hour = _selector_text(soup, ".local_date_hour")
+    if date and hour:
+        return f"{date} {hour}"
+    return date
+
+
+def _page_meta(soup: BeautifulSoup, article_json: dict[str, Any]) -> _PageMeta:
+    title = (
+        clean_text(article_json.get("headline"))
+        or _meta_content(soup, attribute="property", value="og:title")
+        or clean_text(soup.title.get_text(" ", strip=True) if soup.title else None)
+    )
+    return _PageMeta(
+        title=title,
+        description=clean_text(article_json.get("description")) or _meta_content(soup, attribute="name", value="description"),
+        author=_author_name(soup, article_json),
+        published_at=clean_text(article_json.get("datePublished")),
+        last_updated=clean_text(article_json.get("dateModified")) or _byline_last_updated(soup),
+    )
+
+
+def _comments_url(soup: BeautifulSoup, *, canonical_url: str) -> str | None:
+    comments_tag = soup.select_one(".page_comments a[href]")
+    if not isinstance(comments_tag, Tag):
+        return None
+    href = comments_tag.get("href")
+    return urljoin(canonical_url, href) if isinstance(href, str) else None
+
+
+def _article_payload(
+    soup: BeautifulSoup,
+    *,
+    canonical_url: str,
+    section_title: str,
+) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
+    """Return the article block plus the linked entities and build references found inside it."""
+    intro_text = _extract_intro_text(soup)
+    article_tag = _article_tag(soup)
+    if article_tag is None:
+        empty: dict[str, Any] = {"html": "", "text": "", "intro_text": intro_text, "headings": [], "sections": []}
+        return empty, [], []
+    article = _clone_article(article_tag)
+    payload = {
+        "html": "".join(str(child) for child in article.contents).strip(),
+        "text": clean_text(article.get_text("\n", strip=True)) or "",
+        "intro_text": intro_text,
+        "headings": _extract_headings(article),
+        "sections": _extract_sections(article, fallback_title=section_title),
+    }
+    return (
+        payload,
+        _extract_linked_entities(article, source_url=canonical_url),
+        _extract_build_references(article, source_url=canonical_url),
+    )
+
+
+def parse_guide_page(html: str, *, source_url: str) -> dict[str, Any]:
+    """Parse one Icy Veins WoW guide page into the shared article payload shape."""
+    soup = BeautifulSoup(html, "html.parser")
+    canonical_url = urljoin(ICY_VEINS_BASE_URL, _link_href(soup, rel="canonical") or source_url)
+    slug = guide_ref_parts(canonical_url)
+    content_family = classify_guide_slug(slug)
+    meta = _page_meta(soup, _parse_json_ld_article(soup) or {})
+    data_layer = _extract_data_layer(soup)
     navigation = _extract_family_navigation(soup, current_url=canonical_url)
     active_nav = next((item for item in navigation if item["active"]), None)
     section_title = active_nav["title"] if active_nav is not None else slug_display_name(slug)
-    page_toc = _extract_page_toc(soup, current_url=canonical_url)
-    comments_tag = soup.select_one(".page_comments a[href]")
-    comments_url = None
-    if isinstance(comments_tag, Tag):
-        href = comments_tag.get("href")
-        if isinstance(href, str):
-            comments_url = urljoin(canonical_url, href)
-    article_tag = _article_tag(soup)
-    article_html = ""
-    article_text = ""
-    headings: list[dict[str, Any]] = []
-    sections: list[dict[str, Any]] = []
-    linked_entities: list[dict[str, Any]] = []
-    build_references: list[dict[str, Any]] = []
-    if article_tag is not None:
-        article = _clone_article(article_tag)
-        article_html = "".join(str(child) for child in article.contents).strip()
-        article_text = clean_text(article.get_text("\n", strip=True)) or ""
-        headings = _extract_headings(article)
-        sections = _extract_sections(article, fallback_title=section_title)
-        linked_entities = _extract_linked_entities(article, source_url=canonical_url)
-        build_references = _extract_build_references(article, source_url=canonical_url)
-    intro_text = _extract_intro_text(soup)
+    article, linked_entities, build_references = _article_payload(
+        soup,
+        canonical_url=canonical_url,
+        section_title=section_title,
+    )
+    page_type = data_layer.get("page_type")
     return {
         "page": {
-            "title": page_title,
-            "description": description,
+            "title": meta.title,
+            "description": meta.description,
             "canonical_url": canonical_url,
-            "page_type": clean_text(str(data_layer.get("page_type"))) if data_layer.get("page_type") is not None else None,
+            "page_type": clean_text(str(page_type)) if page_type is not None else None,
         },
         "guide": {
             "slug": slug,
@@ -537,24 +584,18 @@ def parse_guide_page(html: str, *, source_url: str) -> dict[str, Any]:
             "content_family": content_family,
             "supported_surface": content_family is not None,
             "traversal_scope": guide_traversal_scope(content_family),
-            "author": author_name,
-            "last_updated": last_updated,
-            "published_at": published_at,
+            "author": meta.author,
+            "last_updated": meta.last_updated,
+            "published_at": meta.published_at,
         },
         "navigation": navigation,
-        "page_toc": page_toc,
-        "article": {
-            "html": article_html,
-            "text": article_text,
-            "intro_text": intro_text,
-            "headings": headings,
-            "sections": sections,
-        },
+        "page_toc": _extract_page_toc(soup, current_url=canonical_url),
+        "article": article,
         "linked_entities": linked_entities,
         "build_references": build_references,
         "citations": {
             "page": canonical_url,
-            "comments": comments_url,
+            "comments": _comments_url(soup, canonical_url=canonical_url),
         },
     }
 

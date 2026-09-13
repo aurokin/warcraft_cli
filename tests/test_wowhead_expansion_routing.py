@@ -52,7 +52,7 @@ def test_search_auto_detects_expansion_from_entity_url(monkeypatch) -> None:
         lambda self, query: {"search": query, "results": [{"id": 19019, "name": "Thunderfury", "type": "item"}]},
     )
     monkeypatch.setattr(
-        "wowhead_cli.main._normalize_search_results",
+        "wowhead_cli.provider.normalize_search_results",
         lambda results, *, query, expansion: [
             {"id": 19019, "name": "Thunderfury", "entity_type": "item", "url": "https://www.wowhead.com/wotlk/item=19019"}
         ],
@@ -71,7 +71,7 @@ def test_search_keeps_explicit_expansion_flag_over_url(monkeypatch) -> None:
         "wowhead_cli.wowhead_client.WowheadClient.search_suggestions",
         lambda self, query: {"search": query, "results": []},
     )
-    monkeypatch.setattr("wowhead_cli.main._normalize_search_results", lambda results, *, query, expansion: [])
+    monkeypatch.setattr("wowhead_cli.provider.normalize_search_results", lambda results, *, query, expansion: [])
 
     result = runner.invoke(
         app,
@@ -89,7 +89,7 @@ def test_entity_url_flag_overrides_type_and_id(monkeypatch) -> None:
         lambda self, entity_type, entity_id, data_env=None: {"name": "Thunderfury", "quality": 5},
     )
     monkeypatch.setattr(
-        "wowhead_cli.main._entity_page_needs_fetch",
+        "wowhead_cli.main.entity_page_needs_fetch",
         lambda **kwargs: False,
     )
 

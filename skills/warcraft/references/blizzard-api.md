@@ -1,5 +1,9 @@
 # Blizzard API
 
+**Tier: experimental.** The command surface is thin and the Battle.net hosts and namespaces
+have not been confirmed against the live API. Treat results as unverified and cross-check anything
+load-bearing against `wowhead` or `warcraftlogs`.
+
 ## Best For
 
 - authoritative World of Warcraft data straight from the official Battle.net API

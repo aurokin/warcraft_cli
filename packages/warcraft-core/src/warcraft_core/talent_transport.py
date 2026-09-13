@@ -1,17 +1,13 @@
 from __future__ import annotations
 
-import json
-import os
 import re
-import subprocess
-import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from functools import cache
 from pathlib import Path
 from typing import Any, TypeGuard
 
 from warcraft_core.identity import normalize_actor_class, normalize_spec_name
-from warcraft_core.paths import provider_config_root, provider_data_root
 
 ACTOR_LINE_RE = re.compile(r'^([a-z_]+)\s*=\s*"?(.*?)"?$')
 TALENT_DEBUG_RE = re.compile(
@@ -90,17 +86,6 @@ class TraitRecord:
 
 
 @dataclass(slots=True)
-class RepoPaths:
-    root: Path
-    apl_default: Path
-    apl_assisted: Path
-    class_modules: Path
-    spell_dump: Path
-    build_dir: Path
-    build_simc: Path
-
-
-@dataclass(slots=True)
 class BuildSpec:
     actor_class: str | None = None
     spec: str | None = None
@@ -136,6 +121,31 @@ class BuildResolution:
     source_notes: list[str]
 
 
+@dataclass(frozen=True, slots=True)
+class RoundTripResult:
+    wow_talent_export: str
+    # {"class": {entry: rank}, "spec": {...}, "hero": {...}} as decoded from the export.
+    entries_by_tree: dict[str, dict[int, int]]
+
+
+class RoundTripError(RuntimeError):
+    """The executor could not encode/decode the build (missing binary, SimC failure, bad spec)."""
+
+
+RoundTripExecutor = Callable[[BuildSpec], RoundTripResult]
+
+
+@dataclass(frozen=True, slots=True)
+class TalentTransportBackend:
+    """What SimC-backed validation needs: where generated trait .inc files live and how to round-trip a build.
+
+    Core never runs SimulationCraft itself; simc_cli supplies the executor.
+    """
+
+    trait_data_root: Path
+    round_trip: RoundTripExecutor
+
+
 DEFAULT_RACE_BY_CLASS = {
     "deathknight": "human",
     "demonhunter": "night_elf",
@@ -151,51 +161,6 @@ DEFAULT_RACE_BY_CLASS = {
     "warlock": "human",
     "warrior": "human",
 }
-
-
-def _config_path() -> Path:
-    return provider_config_root("simc") / "repo.json"
-
-
-def _managed_repo_root() -> Path:
-    return provider_data_root("simc") / "repo"
-
-
-def _load_configured_repo_root() -> Path | None:
-    path = _config_path()
-    if not path.exists():
-        return None
-    try:
-        payload = json.loads(path.read_text())
-    except json.JSONDecodeError:
-        return None
-    value = payload.get("repo_root")
-    if not isinstance(value, str) or not value.strip():
-        return None
-    return Path(value).expanduser()
-
-
-def _default_repo_root() -> Path:
-    configured = os.environ.get("SIMC_REPO_ROOT")
-    if configured:
-        return Path(configured).expanduser()
-    configured_root = _load_configured_repo_root()
-    if configured_root is not None:
-        return configured_root
-    return _managed_repo_root()
-
-
-def discover_repo(root: str | Path | None = None) -> RepoPaths:
-    repo_root = Path(root).expanduser().resolve() if root else _default_repo_root().resolve()
-    return RepoPaths(
-        root=repo_root,
-        apl_default=repo_root / "ActionPriorityLists" / "default",
-        apl_assisted=repo_root / "ActionPriorityLists" / "assisted_combat",
-        class_modules=repo_root / "engine" / "class_modules",
-        spell_dump=repo_root / "SpellDataDump",
-        build_dir=repo_root / "build",
-        build_simc=repo_root / "build" / "simc",
-    )
 
 
 def tokenize_talent_name(name: str) -> str:
@@ -247,96 +212,6 @@ def parse_debug_talents(output: str) -> dict[str, list[DecodedTalent]]:
             )
         )
     return talents_by_tree
-
-
-def decode_build(repo: RepoPaths, build_spec: BuildSpec) -> BuildResolution:
-    if not build_spec.actor_class or not build_spec.spec:
-        raise ValueError("Need both actor class and spec to decode talent strings.")
-    if not any([build_spec.talents, build_spec.class_talents, build_spec.spec_talents, build_spec.hero_talents]):
-        return BuildResolution(
-            actor_class=build_spec.actor_class,
-            spec=build_spec.spec,
-            enabled_talents=set(),
-            talents_by_tree={"class": [], "spec": [], "hero": [], "selection": []},
-            source_kind=build_spec.source_kind,
-            generated_profile_text=None,
-            source_notes=build_spec.source_notes[:],
-        )
-    if not repo.build_simc.exists():
-        raise FileNotFoundError(f"SimC binary not found: {repo.build_simc}")
-
-    profile_text = build_profile_text(build_spec)
-    temp_dir = Path(tempfile.mkdtemp(prefix="simc-cli-build-"))
-    profile_path = temp_dir / "decode.simc"
-    profile_path.write_text(profile_text)
-
-    cmd = [
-        str(repo.build_simc),
-        str(profile_path),
-        "iterations=1",
-        "max_time=1",
-        "vary_combat_length=0",
-        "desired_targets=1",
-        "fight_style=Patchwerk",
-        "debug=1",
-        "allow_experimental_specializations=1",
-    ]
-    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
-    output = proc.stdout + proc.stderr
-    talents_by_tree = parse_debug_talents(output)
-    enabled_talents = {
-        talent.token
-        for talents in talents_by_tree.values()
-        for talent in talents
-        if talent.tree in {"class", "spec", "hero"} and talent.rank > 0
-    }
-    if not enabled_talents and proc.returncode != 0:
-        raise RuntimeError(output.strip() or "Failed to decode build with simc")
-    notes = build_spec.source_notes[:] + [f"decoded via {repo.build_simc}"]
-    return BuildResolution(
-        actor_class=build_spec.actor_class,
-        spec=build_spec.spec,
-        enabled_talents=enabled_talents,
-        talents_by_tree=talents_by_tree,
-        source_kind=build_spec.source_kind,
-        generated_profile_text=profile_text,
-        source_notes=notes,
-    )
-
-
-def encode_build(repo: RepoPaths, build_spec: BuildSpec) -> str:
-    if not build_spec.actor_class or not build_spec.spec:
-        raise ValueError("Need both actor class and spec to encode talents.")
-    if not repo.build_simc.exists():
-        raise FileNotFoundError(f"SimC binary not found: {repo.build_simc}")
-
-    profile_text = build_profile_text(build_spec)
-    temp_dir = Path(tempfile.mkdtemp(prefix="simc-cli-encode-"))
-    profile_path = temp_dir / "encode.simc"
-    save_path = temp_dir / "encoded.simc"
-    profile_text += f"save={save_path}\n"
-    profile_path.write_text(profile_text)
-
-    cmd = [
-        str(repo.build_simc),
-        str(profile_path),
-        "iterations=1",
-        "max_time=1",
-        "vary_combat_length=0",
-        "desired_targets=1",
-        "fight_style=Patchwerk",
-        "allow_experimental_specializations=1",
-    ]
-    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
-    if not save_path.exists():
-        output = proc.stdout + proc.stderr
-        raise RuntimeError(output.strip() or "SimC did not produce a saved profile.")
-
-    for line in save_path.read_text().splitlines():
-        if line.startswith("talents="):
-            return line.split("=", 1)[1].strip()
-
-    raise RuntimeError("Saved SimC profile did not contain a talents= line.")
 
 
 def _generated_file(repo_root: Path, relative: str) -> Path:
@@ -432,7 +307,7 @@ def _trait_records(repo_root_text: str) -> dict[tuple[int, int, int], list[Trait
     return records
 
 
-def _decoded_entries_by_tree(resolution: BuildResolution) -> dict[str, dict[int, int]]:
+def decoded_entries_by_tree(resolution: BuildResolution) -> dict[str, dict[int, int]]:
     rows: dict[str, dict[int, int]] = {"class": {}, "spec": {}, "hero": {}}
     for tree in ("class", "spec", "hero"):
         for talent in resolution.talents_by_tree.get(tree, []):
@@ -478,60 +353,14 @@ def _build_spec_from_transport(
     )
 
 
-def validate_talent_tree_transport(
-    *,
-    actor_class: str | None,
-    spec: str | None,
+def _resolve_transport_rows(
     talent_tree_rows: list[dict[str, Any]],
-    repo_root: str | Path | None = None,
-) -> dict[str, Any]:
-    normalized_actor_class = normalize_actor_class(actor_class)
-    normalized_spec = normalize_spec_name(spec)
-    if not normalized_actor_class or not normalized_spec:
-        return {
-            "transport_forms": {},
-            "validation": {
-                "status": "not_validated",
-                "reason": "missing_class_spec_identity",
-            },
-        }
-
-    class_id = CLASS_ID_BY_ACTOR_CLASS.get(normalized_actor_class)
-    if class_id is None:
-        return {
-            "transport_forms": {},
-            "validation": {
-                "status": "not_validated",
-                "reason": "unsupported_actor_class",
-                "actor_class": normalized_actor_class,
-            },
-        }
-
-    repo = discover_repo(repo_root)
-    repo_root_text = str(repo.root.resolve())
-    spec_id = _specialization_ids(repo_root_text).get((normalized_actor_class, normalized_spec))
-    if spec_id is None:
-        return {
-            "transport_forms": {},
-            "validation": {
-                "status": "not_validated",
-                "reason": "unsupported_class_spec",
-                "actor_class": normalized_actor_class,
-                "spec": normalized_spec,
-            },
-        }
-
-    records = _trait_records(repo_root_text)
-    if not records:
-        return {
-            "transport_forms": {},
-            "validation": {
-                "status": "not_validated",
-                "reason": "simc_trait_data_unavailable",
-                "repo_root": repo_root_text,
-            },
-        }
-
+    records: dict[tuple[int, int, int], list[TraitRecord]],
+    *,
+    class_id: int,
+    spec_id: int | None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Match each raw talent row to exactly one generated trait record; return (resolved, unresolved)."""
     resolved_rows: list[dict[str, Any]] = []
     unresolved_rows: list[dict[str, Any]] = []
     for row in talent_tree_rows:
@@ -546,10 +375,7 @@ def validate_talent_tree_transport(
         rank_value = int(rank)
         candidates = records.get((entry_id, node_id_value, class_id), [])
         if spec_id:
-            spec_candidates = [
-                candidate for candidate in candidates if not any(candidate.spec_ids) or spec_id in candidate.spec_ids
-            ]
-            candidates = spec_candidates
+            candidates = [candidate for candidate in candidates if not any(candidate.spec_ids) or spec_id in candidate.spec_ids]
         if len(candidates) != 1:
             unresolved_rows.append(
                 {
@@ -577,51 +403,11 @@ def validate_talent_tree_transport(
                 "selection_index": record.selection_index,
             }
         )
+    return resolved_rows, unresolved_rows
 
-    if unresolved_rows:
-        return {
-            "transport_forms": {},
-            "validation": {
-                "status": "not_validated",
-                "reason": "simc_trait_resolution_incomplete",
-                "resolved_entries": resolved_rows,
-                "unresolved_entries": unresolved_rows,
-            },
-        }
 
-    transport_forms = _split_transport_forms(resolved_rows)
-    if not transport_forms:
-        return {
-            "transport_forms": {},
-            "validation": {
-                "status": "not_validated",
-                "reason": "no_ranked_talent_entries",
-                "resolved_entries": resolved_rows,
-            },
-        }
-    build_spec = _build_spec_from_transport(
-        actor_class=normalized_actor_class,
-        spec=normalized_spec,
-        transport_forms=transport_forms,
-    )
-    try:
-        encoded_export = encode_build(repo, build_spec)
-        round_trip_resolution = decode_build(
-            repo,
-            BuildSpec(actor_class=normalized_actor_class, spec=normalized_spec, talents=encoded_export),
-        )
-    except (FileNotFoundError, RuntimeError, ValueError) as exc:
-        return {
-            "transport_forms": {},
-            "validation": {
-                "status": "not_validated",
-                "reason": "simc_round_trip_failed",
-                "message": str(exc),
-                "resolved_entries": resolved_rows,
-            },
-        }
-
-    expected_by_tree = {
+def _expected_entries_by_tree(resolved_rows: list[dict[str, Any]]) -> dict[str, dict[int, int]]:
+    return {
         tree: {
             row["entry"]: row["rank"]
             for row in resolved_rows
@@ -629,33 +415,108 @@ def validate_talent_tree_transport(
         }
         for tree in ("class", "spec", "hero")
     }
-    actual_by_tree = _decoded_entries_by_tree(round_trip_resolution)
+
+
+def _not_validated(reason: str, **details: Any) -> dict[str, Any]:
+    """Shape the "no usable transport form" result; ``details`` become extra ``validation`` keys."""
+    return {
+        "transport_forms": {},
+        "validation": {"status": "not_validated", "reason": reason, **details},
+    }
+
+
+def _round_trip_validation(
+    backend: TalentTransportBackend,
+    *,
+    actor_class: str,
+    spec: str,
+    resolved_rows: list[dict[str, Any]],
+    transport_forms: dict[str, Any],
+) -> dict[str, Any]:
+    """Re-encode the resolved rows through SimC and confirm the decoded entries come back unchanged."""
+    build_spec = _build_spec_from_transport(
+        actor_class=actor_class,
+        spec=spec,
+        transport_forms=transport_forms,
+    )
+    try:
+        round_trip = backend.round_trip(build_spec)
+    except RoundTripError as exc:
+        return _not_validated("simc_round_trip_failed", message=str(exc), resolved_entries=resolved_rows)
+
+    expected_by_tree = _expected_entries_by_tree(resolved_rows)
+    actual_by_tree = round_trip.entries_by_tree
     if actual_by_tree != expected_by_tree:
-        return {
-            "transport_forms": {},
-            "validation": {
-                "status": "not_validated",
-                "reason": "simc_round_trip_mismatch",
-                "resolved_entries": resolved_rows,
-                "expected_entries_by_tree": expected_by_tree,
-                "actual_entries_by_tree": actual_by_tree,
-            },
-        }
+        return _not_validated(
+            "simc_round_trip_mismatch",
+            resolved_entries=resolved_rows,
+            expected_entries_by_tree=expected_by_tree,
+            actual_entries_by_tree=actual_by_tree,
+        )
 
     return {
         "transport_forms": transport_forms,
         "validation": {
             "status": "validated",
             "source": "simc_trait_data_round_trip",
-            "actor_class": normalized_actor_class,
-            "spec": normalized_spec,
+            "actor_class": actor_class,
+            "spec": spec,
             "resolved_entries": resolved_rows,
             "round_trip": {
-                "wow_talent_export": encoded_export,
+                "wow_talent_export": round_trip.wow_talent_export,
                 "matched": True,
             },
         },
     }
+
+
+def validate_talent_tree_transport(
+    *,
+    actor_class: str | None,
+    spec: str | None,
+    talent_tree_rows: list[dict[str, Any]],
+    backend: TalentTransportBackend | None,
+) -> dict[str, Any]:
+    normalized_actor_class = normalize_actor_class(actor_class)
+    normalized_spec = normalize_spec_name(spec)
+    if not normalized_actor_class or not normalized_spec:
+        return _not_validated("missing_class_spec_identity")
+
+    class_id = CLASS_ID_BY_ACTOR_CLASS.get(normalized_actor_class)
+    if class_id is None:
+        return _not_validated("unsupported_actor_class", actor_class=normalized_actor_class)
+
+    if backend is None:
+        return _not_validated("simc_backend_unavailable")
+
+    repo_root_text = str(backend.trait_data_root.expanduser().resolve())
+    spec_id = _specialization_ids(repo_root_text).get((normalized_actor_class, normalized_spec))
+    if spec_id is None:
+        return _not_validated("unsupported_class_spec", actor_class=normalized_actor_class, spec=normalized_spec)
+
+    records = _trait_records(repo_root_text)
+    if not records:
+        return _not_validated("simc_trait_data_unavailable", repo_root=repo_root_text)
+
+    resolved_rows, unresolved_rows = _resolve_transport_rows(talent_tree_rows, records, class_id=class_id, spec_id=spec_id)
+    if unresolved_rows:
+        return _not_validated(
+            "simc_trait_resolution_incomplete",
+            resolved_entries=resolved_rows,
+            unresolved_entries=unresolved_rows,
+        )
+
+    transport_forms = _split_transport_forms(resolved_rows)
+    if not transport_forms:
+        return _not_validated("no_ranked_talent_entries", resolved_entries=resolved_rows)
+
+    return _round_trip_validation(
+        backend,
+        actor_class=normalized_actor_class,
+        spec=normalized_spec,
+        resolved_rows=resolved_rows,
+        transport_forms=transport_forms,
+    )
 
 
 def _decoded_talent(*, tree: str, entry: int, rank: int, name: str) -> DecodedTalent:

@@ -73,7 +73,7 @@ def _http_get_json_with_health(
                     else "slow",
                 }
                 return response.json(), health
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             last_exc = exc
             if attempt < attempts:
                 time.sleep(float(attempt))
@@ -93,7 +93,7 @@ def _http_get_text(
                 response = client.get(url, params=params)
                 response.raise_for_status()
                 return response.text
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             last_exc = exc
             if attempt < attempts:
                 time.sleep(float(attempt))

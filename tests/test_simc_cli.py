@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+import simc_cli.main as simc_main
 from simc_cli.main import app as simc_app
 from simc_cli.repo import RepoPaths
 from typer.testing import CliRunner
@@ -26,7 +28,7 @@ def test_simc_doctor_reports_phase_one_capabilities(monkeypatch, tmp_path: Path)
             "binary": {"path": str(paths.build_simc), "exists": True, "version_line": "SimulationCraft 1201", "available": True},
         }
 
-    monkeypatch.setattr("simc_cli.main._repo_payload", fake_repo_payload)
+    monkeypatch.setattr("simc_cli.provider.repo_payload", fake_repo_payload)
     result = runner.invoke(simc_app, ["--repo-root", str(repo_root), "doctor"])
     assert result.exit_code == 0
 
@@ -661,7 +663,7 @@ def test_simc_identify_build_rejects_buildless_wowhead_talent_calc_url() -> None
         simc_app,
         ["identify-build", "--build-text", "https://www.wowhead.com/talent-calc/druid/balance"],
     )
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "invalid_query"
     assert "must include a build code" in payload["error"]["message"]
@@ -807,7 +809,7 @@ def test_simc_validate_talent_transport_rejects_build_packet_with_talent_rows(tm
         simc_app,
         ["validate-talent-transport", "--build-packet", str(packet_path), "--talent-row", "103324:82244:1"],
     )
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "invalid_query"
     assert payload["error"]["message"] == "Use either --build-packet or --talent-row, not both."
@@ -819,7 +821,7 @@ def test_simc_validate_talent_transport_rejects_out_without_build_packet() -> No
         ["validate-talent-transport", "--actor-class", "druid", "--spec", "balance",
             "--talent-row", "103324:82244:1", "--out", "./tmp/validated-packet.json"],
     )
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "invalid_query"
     assert payload["error"]["message"] == "--out requires --build-packet."
@@ -911,7 +913,7 @@ def test_simc_validate_talent_transport_rejects_null_only_packet_rows(tmp_path: 
     )
 
     result = runner.invoke(simc_app, ["validate-talent-transport", "--build-packet", str(packet_path)])
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "invalid_query"
     assert payload["error"]["message"] == "No raw talent rows were available to validate."
@@ -940,7 +942,7 @@ def test_simc_validate_talent_transport_rejects_boolean_packet_rows(tmp_path: Pa
     )
 
     result = runner.invoke(simc_app, ["validate-talent-transport", "--build-packet", str(packet_path)])
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "invalid_query"
     assert payload["error"]["message"] == "No raw talent rows were available to validate."
@@ -951,7 +953,7 @@ def test_simc_validate_talent_transport_rejects_talent_rows_without_class_spec_i
         simc_app,
         ["validate-talent-transport", "--talent-row", "103324:82244:1"],
     )
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "invalid_query"
     assert "requires class/spec identity" in payload["error"]["message"]
@@ -1208,7 +1210,7 @@ def test_simc_validate_talent_transport_keeps_zero_rank_packets_raw_only(tmp_pat
 
 def test_simc_validate_talent_transport_requires_one_input_mode() -> None:
     result = runner.invoke(simc_app, ["validate-talent-transport"])
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "invalid_query"
 
@@ -1581,7 +1583,7 @@ def test_simc_decode_build_rejects_buildless_wowhead_talent_calc_url() -> None:
         simc_app,
         ["decode-build", "--build-text", "https://www.wowhead.com/talent-calc/druid/balance"],
     )
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "invalid_query"
     assert "must include a build code" in payload["error"]["message"]
@@ -2124,7 +2126,7 @@ def test_simc_describe_build_rejects_buildless_wowhead_talent_calc_url(tmp_path:
         simc_app,
         ["describe-build", "--apl-path", str(apl_path), "--build-text", "https://www.wowhead.com/talent-calc/druid/balance"],
     )
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "invalid_query"
     assert "must include a build code" in payload["error"]["message"]
@@ -2252,8 +2254,9 @@ def test_simc_decode_build_failure_includes_source_metadata(monkeypatch) -> None
     assert result.exit_code == 1
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "decode_failed"
-    assert payload["build_spec"]["source_kind"] == "wow_talent_export"
-    assert 'demonhunter="simc_decode"' in payload["generated_profile"]
+    details = payload["error"]["details"]
+    assert details["build_spec"]["source_kind"] == "wow_talent_export"
+    assert 'demonhunter="simc_decode"' in details["generated_profile"]
 
 
 def _fake_build_spec(*, actor_class="druid", spec="balance", talents="ABC123"):  # noqa: ANN001
@@ -2444,7 +2447,7 @@ def test_simc_compare_builds_rejects_buildless_wowhead_talent_calc_url() -> None
             "DEF456",
         ],
     )
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "invalid_query"
     assert "must include a build code" in payload["error"]["message"]
@@ -2646,7 +2649,7 @@ def test_simc_modify_build_rejects_buildless_wowhead_talent_calc_url() -> None:
             "innervate",
         ],
     )
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "invalid_query"
     assert "must include a build code" in payload["error"]["message"]
@@ -2671,7 +2674,7 @@ def test_simc_modify_build_rejects_buildless_wowhead_swap_source(monkeypatch) ->
             "https://www.wowhead.com/talent-calc/druid/balance",
         ],
     )
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "invalid_query"
     assert "must include a build code" in payload["error"]["message"]
@@ -2811,7 +2814,7 @@ def test_simc_build_harness_rejects_buildless_wowhead_talent_calc_url() -> None:
             "https://www.wowhead.com/talent-calc/druid/balance",
         ],
     )
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "invalid_query"
     assert "must include a build code" in payload["error"]["message"]
@@ -3056,6 +3059,10 @@ def test_simc_first_cast_and_log_actions(monkeypatch, tmp_path: Path) -> None:
     log_payload = json.loads(log_result.stdout)
     assert log_payload["count"] == 1
     assert log_payload["hits"][0]["performed_at"] == 0.25
+
+    directory_result = runner.invoke(simc_app, ["log-actions", str(tmp_path), "rising_sun_kick"])
+    assert directory_result.exit_code == 4
+    assert json.loads(directory_result.stderr)["error"]["code"] == "not_found"
 
 
 def test_simc_analysis_packet_surfaces_runtime_timing_failures(monkeypatch, tmp_path: Path) -> None:
@@ -3336,3 +3343,22 @@ def test_simc_version_reads_explicit_repo_binary(tmp_path: Path) -> None:
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert str(payload["version"]).startswith("SimulationCraft")
+
+
+def test_simc_run_turns_uncaught_exception_into_error_envelope(monkeypatch, capsys) -> None:
+    def explode(ctx):  # noqa: ANN001
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("simc_cli.main._repo_paths", explode)
+    monkeypatch.setattr("sys.argv", ["simc", "spec-files", "monk"])
+    with pytest.raises(SystemExit) as raised:
+        simc_main.run()
+    assert raised.value.code == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    payload = json.loads(captured.err)
+    assert payload["ok"] is False
+    assert payload["provider"] == "simc"
+    assert payload["command"] == "spec-files"
+    assert payload["error"]["code"] == "internal_error"
+    assert "boom" in payload["error"]["message"]

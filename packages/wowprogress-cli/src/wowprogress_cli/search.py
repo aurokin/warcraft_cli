@@ -3,11 +3,10 @@ from __future__ import annotations
 import re
 from typing import Any
 
-import typer
+from warcraft_core.shapes import as_dict
 from warcraft_core.wow_normalization import normalize_name, normalize_region, realm_matches, realm_slug_variants
 
-from wowprogress_cli.client import WowProgressClient, WowProgressClientError
-from wowprogress_cli.context import _client, _handle_client_error
+from wowprogress_cli.client import WowProgressClient
 from wowprogress_cli.identity import _follow_up
 
 EXCLUDED_QUERY_TERMS = frozenset(
@@ -227,7 +226,7 @@ def _character_candidate_from_probe(
     query_realm: str,
     query_name: str,
 ) -> dict[str, Any]:
-    character = payload.get("character") if isinstance(payload.get("character"), dict) else {}
+    character = as_dict(payload.get("character"))
     name = str(character.get("name") or "").strip()
     region = str(character.get("region") or "").strip()
     realm = str(character.get("realm") or "").strip()
@@ -268,7 +267,7 @@ def _guild_candidate_from_probe(
     query_realm: str,
     query_name: str,
 ) -> dict[str, Any]:
-    guild = payload.get("guild") if isinstance(payload.get("guild"), dict) else {}
+    guild = as_dict(payload.get("guild"))
     name = str(guild.get("name") or "").strip()
     region = str(guild.get("region") or "").strip()
     realm = str(guild.get("realm") or "").strip()
@@ -369,7 +368,7 @@ def _resolve_confidence_label(best: dict[str, Any] | None, *, resolved: bool) ->
 
 
 def _has_follow_up_command(candidate: dict[str, Any]) -> bool:
-    follow_up = candidate.get("follow_up") if isinstance(candidate.get("follow_up"), dict) else {}
+    follow_up = as_dict(candidate.get("follow_up"))
     return bool(follow_up.get("command"))
 
 
@@ -381,7 +380,7 @@ def _is_ambiguous_untyped_result(query_kind: str | None, distinct_kinds: list[st
     return query_kind is None and len(distinct_kinds) > 1
 
 
-def _resolve_payload(search_payload: dict[str, Any]) -> dict[str, Any]:
+def resolve_payload(search_payload: dict[str, Any]) -> dict[str, Any]:
     results = search_payload.get("results")
     if not isinstance(results, list):
         results = []
@@ -389,7 +388,7 @@ def _resolve_payload(search_payload: dict[str, Any]) -> dict[str, Any]:
     second = results[1] if len(results) > 1 else None
     query_kind = search_payload.get("query_kind")
     distinct_kinds = _distinct_result_kinds(results)
-    follow_up = best.get("follow_up") if isinstance((best or {}).get("follow_up"), dict) else {}
+    follow_up = as_dict(as_dict(best).get("follow_up"))
     resolved = _resolve_is_confident(best=best, second=second, query_kind=query_kind, distinct_kinds=distinct_kinds)
     confidence = _resolve_confidence_label(best, resolved=resolved)
     return {
@@ -445,25 +444,23 @@ def _probe_search_candidates(
     return candidates
 
 
-def _search_candidates(ctx: typer.Context, query: str, *, limit: int) -> dict[str, Any]:
+def search_candidates(client: WowProgressClient, query: str, *, limit: int) -> dict[str, Any]:
+    """Rank WowProgress guild/character route probes for a structured query.
+
+    Raises ``WowProgressClientError`` on transport or upstream failure; callers translate it.
+    """
     normalized_query, kind_hint, region, query_candidates, excluded_terms = _normalize_structured_query(query)
     if region is None or not query_candidates:
         payload = _structured_search_hint(query)
         if excluded_terms:
             payload["excluded_terms"] = excluded_terms
         return payload
-    candidates: list[dict[str, Any]] = []
-    try:
-        with _client(ctx) as client:
-            candidates = _probe_search_candidates(
-                client=client,
-                kind_hint=kind_hint,
-                region=region,
-                query_candidates=query_candidates,
-            )
-    except WowProgressClientError as exc:
-        _handle_client_error(ctx, exc)
-        raise AssertionError("unreachable") from None
+    candidates = _probe_search_candidates(
+        client=client,
+        kind_hint=kind_hint,
+        region=region,
+        query_candidates=query_candidates,
+    )
     message = None if candidates else "WowProgress did not resolve that structured guild or character query."
     payload = _search_payload(
         query=query,

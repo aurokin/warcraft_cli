@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
-import httpx
+from warcraft_api.http import build_client
 
 from wowhead_cli.expansion_profiles import (
     ExpansionProfile,
@@ -61,7 +61,7 @@ def _probe_search_suggestions(profile: ExpansionProfile, *, timeout_seconds: flo
     url = build_search_suggestions_url(profile)
     started = time.perf_counter()
     try:
-        with httpx.Client(timeout=timeout_seconds, follow_redirects=True) as client:
+        with build_client(timeout=timeout_seconds) as client:
             response = client.get(url, params={"q": DOCTOR_QUERY})
             latency_ms = (time.perf_counter() - started) * 1000
             response.raise_for_status()
@@ -75,7 +75,7 @@ def _probe_search_suggestions(profile: ExpansionProfile, *, timeout_seconds: flo
                 error=None if shape_ok else "search results missing or empty",
                 shape={"result_count": len(results) if isinstance(results, list) else 0},
             )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         latency_ms = (time.perf_counter() - started) * 1000
         return _probe_result(ok=False, latency_ms=latency_ms, error=str(exc))
 
@@ -84,7 +84,7 @@ def _probe_tooltip(profile: ExpansionProfile, *, timeout_seconds: float) -> dict
     url = build_tooltip_url(profile, DOCTOR_ENTITY_TYPE, DOCTOR_ENTITY_ID)
     started = time.perf_counter()
     try:
-        with httpx.Client(timeout=timeout_seconds, follow_redirects=True) as client:
+        with build_client(timeout=timeout_seconds) as client:
             response = client.get(url, params={"dataEnv": profile.data_env})
             latency_ms = (time.perf_counter() - started) * 1000
             response.raise_for_status()
@@ -99,7 +99,7 @@ def _probe_tooltip(profile: ExpansionProfile, *, timeout_seconds: float) -> dict
                 error=None if shape_ok else "tooltip payload missing name or tooltip",
                 shape={"has_name": isinstance(name, str), "has_tooltip": tooltip is not None},
             )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         latency_ms = (time.perf_counter() - started) * 1000
         return _probe_result(ok=False, latency_ms=latency_ms, error=str(exc))
 
@@ -108,7 +108,7 @@ def _probe_entity_page(profile: ExpansionProfile, *, timeout_seconds: float) -> 
     url = build_entity_url(profile, DOCTOR_ENTITY_TYPE, DOCTOR_ENTITY_ID)
     started = time.perf_counter()
     try:
-        with httpx.Client(timeout=timeout_seconds, follow_redirects=True) as client:
+        with build_client(timeout=timeout_seconds) as client:
             response = client.get(url)
             latency_ms = (time.perf_counter() - started) * 1000
             response.raise_for_status()
@@ -131,7 +131,7 @@ def _probe_entity_page(profile: ExpansionProfile, *, timeout_seconds: float) -> 
                     "data_env_match": env_ok,
                 },
             )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         latency_ms = (time.perf_counter() - started) * 1000
         return _probe_result(ok=False, latency_ms=latency_ms, error=str(exc))
 

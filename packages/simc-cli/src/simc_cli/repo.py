@@ -164,7 +164,7 @@ def checkout_managed_repo(*, repo_url: str = SIMC_REPO_URL) -> CheckoutResult:
     if not root.exists():
         clone_command = ["git", "clone", "--depth", "1", repo_url, str(root)]
         commands.append(clone_command)
-        clone = subprocess.run(clone_command, capture_output=True, text=True, check=False)
+        clone = subprocess.run(clone_command, capture_output=True, text=True, check=False)  # noqa: S603
         if clone.returncode != 0:
             message = clone.stderr.strip() or clone.stdout.strip() or "git clone failed"
             raise RuntimeError(message)
@@ -172,7 +172,7 @@ def checkout_managed_repo(*, repo_url: str = SIMC_REPO_URL) -> CheckoutResult:
 
     fetch_command = ["git", "-C", str(root), "pull", "--ff-only"]
     commands.append(fetch_command)
-    fetch = subprocess.run(fetch_command, capture_output=True, text=True, check=False)
+    fetch = subprocess.run(fetch_command, capture_output=True, text=True, check=False)  # noqa: S603
     if fetch.returncode != 0:
         message = fetch.stderr.strip() or fetch.stdout.strip() or "git pull failed"
         raise RuntimeError(message)

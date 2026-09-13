@@ -1,0 +1,523 @@
+"""Search, resolve, ranking, and expansion-selection behavior for the wowhead CLI."""
+
+from __future__ import annotations
+
+import json
+
+from wowhead_cli.main import app
+from wowhead_cli.ranking import (
+    exact_match_score,
+    is_filtered_high_confidence,
+    is_high_confidence_exact_match,
+    is_high_confidence_score,
+    is_medium_confidence_score,
+    popularity_score,
+    prefix_and_contains_score,
+    search_result_score_and_reasons,
+    term_match_score,
+    type_hint_score,
+)
+
+from tests.wowhead_testkit import runner
+
+
+def test_expansions_command_exposes_profiles() -> None:
+    result = runner.invoke(app, ["expansions"])
+    assert result.exit_code == 0
+
+    payload = json.loads(result.stdout)
+    assert payload["default"] == "retail"
+    keys = {row["key"] for row in payload["profiles"]}
+    assert "retail" in keys
+    assert "wotlk" in keys
+
+
+
+def test_search_respects_expansion_flag(monkeypatch) -> None:
+    def fake_search(self, query: str):  # noqa: ANN001
+        return {
+            "search": query,
+            "results": [
+                {"type": 3, "id": 19019, "name": "Thunderfury", "typeName": "Item"},
+            ],
+        }
+
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.search_suggestions", fake_search)
+    result = runner.invoke(app, ["--expansion", "wotlk", "search", "thunderfury", "--limit", "1"])
+    assert result.exit_code == 0
+
+    payload = json.loads(result.stdout)
+    assert payload["expansion"] == "wotlk"
+    assert payload["search_url"].startswith("https://www.wowhead.com/wotlk/search?q=")
+
+
+
+def test_search_guide_result_includes_guide_url(monkeypatch) -> None:
+    def fake_search(self, query: str):  # noqa: ANN001
+        return {
+            "search": query,
+            "results": [
+                {"type": 100, "id": 3143, "name": "Frost Death Knight DPS Guide - Midnight", "typeName": "Guide"},
+            ],
+        }
+
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.search_suggestions", fake_search)
+    result = runner.invoke(app, ["--expansion", "wotlk", "search", "frost death knight guide", "--limit", "1"])
+    assert result.exit_code == 0
+
+    payload = json.loads(result.stdout)
+    assert payload["results"][0]["entity_type"] == "guide"
+    assert payload["results"][0]["url"] == "https://www.wowhead.com/wotlk/guide=3143"
+
+
+
+def test_search_faction_result_includes_faction_url(monkeypatch) -> None:
+    def fake_search(self, query: str):  # noqa: ANN001
+        return {
+            "search": query,
+            "results": [
+                {"type": 8, "id": 529, "name": "Argent Dawn", "typeName": "Faction"},
+            ],
+        }
+
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.search_suggestions", fake_search)
+    result = runner.invoke(app, ["search", "argent dawn", "--limit", "1"])
+    assert result.exit_code == 0
+
+    payload = json.loads(result.stdout)
+    assert payload["results"][0]["entity_type"] == "faction"
+    assert payload["results"][0]["url"] == "https://www.wowhead.com/faction=529"
+
+
+
+def test_search_reranks_exact_name_match_ahead_of_noisy_popular_result(monkeypatch) -> None:
+    def fake_search(self, query: str):  # noqa: ANN001
+        return {
+            "search": query,
+            "results": [
+                {
+                    "type": 3,
+                    "id": 2,
+                    "name": "Thunderfury Replica",
+                    "typeName": "Item",
+                    "popularity": 999999,
+                },
+                {
+                    "type": 3,
+                    "id": 19019,
+                    "name": "Thunderfury",
+                    "typeName": "Item",
+                    "popularity": 5,
+                },
+            ],
+        }
+
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.search_suggestions", fake_search)
+    result = runner.invoke(app, ["search", "thunderfury", "--limit", "2"])
+    assert result.exit_code == 0
+
+    payload = json.loads(result.stdout)
+    assert [row["id"] for row in payload["results"]] == [19019, 2]
+    assert "exact_name" in payload["results"][0]["ranking"]["match_reasons"]
+    assert payload["results"][0]["ranking"]["score"] > payload["results"][1]["ranking"]["score"]
+
+
+
+def test_search_type_hint_promotes_guides_for_guide_queries(monkeypatch) -> None:
+    def fake_search(self, query: str):  # noqa: ANN001
+        return {
+            "search": query,
+            "results": [
+                {
+                    "type": 3,
+                    "id": 19019,
+                    "name": "Frost Death Knight",
+                    "typeName": "Item",
+                    "popularity": 50,
+                },
+                {
+                    "type": 100,
+                    "id": 3143,
+                    "name": "Frost Death Knight DPS Guide - Midnight",
+                    "typeName": "Guide",
+                    "popularity": 1,
+                },
+            ],
+        }
+
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.search_suggestions", fake_search)
+    result = runner.invoke(app, ["search", "frost death knight guide", "--limit", "2"])
+    assert result.exit_code == 0
+
+    payload = json.loads(result.stdout)
+    assert [row["entity_type"] for row in payload["results"]] == ["guide", "item"]
+    assert "type_hint" in payload["results"][0]["ranking"]["match_reasons"]
+
+
+
+def test_search_pet_result_includes_pet_url(monkeypatch) -> None:
+    def fake_search(self, query: str):  # noqa: ANN001
+        return {
+            "search": query,
+            "results": [
+                {"type": 9, "id": 39, "name": "Devilsaur", "typeName": "Hunter Pet"},
+            ],
+        }
+
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.search_suggestions", fake_search)
+    result = runner.invoke(app, ["search", "devilsaur", "--limit", "1"])
+    assert result.exit_code == 0
+
+    payload = json.loads(result.stdout)
+    assert payload["results"][0]["entity_type"] == "pet"
+    assert payload["results"][0]["url"] == "https://www.wowhead.com/pet=39"
+
+
+
+def test_resolve_returns_high_confidence_match_and_next_command(monkeypatch) -> None:
+    def fake_search(self, query: str):  # noqa: ANN001
+        return {
+            "search": query,
+            "results": [
+                {"type": 5, "id": 86739, "name": "Fairbreeze Favors", "typeName": "Quest", "popularity": 10},
+                {"type": 3, "id": 123, "name": "Fairbreeze Supplies", "typeName": "Item", "popularity": 50},
+            ],
+        }
+
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.search_suggestions", fake_search)
+    result = runner.invoke(app, ["resolve", "fairbreeze favors"])
+    assert result.exit_code == 0
+
+    payload = json.loads(result.stdout)
+    assert payload["resolved"] is True
+    assert payload["confidence"] == "high"
+    assert payload["search_query"] == "fairbreeze favors"
+    assert payload["match"]["entity_type"] == "quest"
+    assert payload["next_command"] == "wowhead entity quest 86739"
+    assert payload["fallback_search_command"] is None
+
+
+
+def test_resolve_falls_back_to_search_when_query_is_ambiguous(monkeypatch) -> None:
+    def fake_search(self, query: str):  # noqa: ANN001
+        return {
+            "search": query,
+            "results": [
+                {"type": 3, "id": 1, "name": "Frost Band", "typeName": "Item", "popularity": 3},
+                {"type": 6, "id": 2, "name": "Frost Bolt", "typeName": "Spell", "popularity": 3},
+            ],
+        }
+
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.search_suggestions", fake_search)
+    result = runner.invoke(app, ["resolve", "frost", "--limit", "2"])
+    assert result.exit_code == 0
+
+    payload = json.loads(result.stdout)
+    assert payload["resolved"] is False
+    assert payload["confidence"] == "low"
+    assert payload["next_command"] is None
+    assert payload["fallback_search_command"] == "wowhead search frost"
+    assert payload["count"] == 2
+    assert len(payload["candidates"]) == 2
+
+
+
+def test_resolve_entity_type_filter_can_make_guide_resolution_confident(monkeypatch) -> None:
+    def fake_search(self, query: str):  # noqa: ANN001
+        return {
+            "search": query,
+            "results": [
+                {"type": 3, "id": 19019, "name": "Frost Death Knight", "typeName": "Item", "popularity": 50},
+                {
+                    "type": 100,
+                    "id": 3143,
+                    "name": "Frost Death Knight DPS Guide - Midnight",
+                    "typeName": "Guide",
+                    "popularity": 1,
+                },
+            ],
+        }
+
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.search_suggestions", fake_search)
+    result = runner.invoke(app, ["--expansion", "wotlk", "resolve", "frost death knight", "--entity-type", "guide"])
+    assert result.exit_code == 0
+
+    payload = json.loads(result.stdout)
+    assert payload["filters"]["entity_types"] == ["guide"]
+    assert payload["resolved"] is True
+    assert payload["confidence"] == "high"
+    assert payload["match"]["entity_type"] == "guide"
+    assert payload["next_command"] == "wowhead --expansion wotlk guide 3143"
+
+
+
+def test_search_results_include_follow_up_guidance(monkeypatch) -> None:
+    def fake_search(self, query: str):  # noqa: ANN001
+        assert query == "thunderfury"
+        return {
+            "search": query,
+            "results": [
+                {"type": 3, "id": 19019, "name": "Thunderfury", "typeName": "Item", "popularity": 5},
+            ],
+        }
+
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.search_suggestions", fake_search)
+    result = runner.invoke(app, ["search", "thunderfury", "--limit", "1"])
+    assert result.exit_code == 0
+
+    payload = json.loads(result.stdout)
+    assert payload["search_query"] == "thunderfury"
+    assert payload["results"][0]["follow_up"] == {
+        "recommended_surface": "entity",
+        "recommended_command": "wowhead entity item 19019",
+        "reason": "entity_summary",
+        "alternatives": [
+            "wowhead entity-page item 19019",
+            "wowhead comments item 19019",
+        ],
+    }
+
+
+
+def test_exact_match_score_prefers_exact_name_over_display_name() -> None:
+    score, reasons = exact_match_score(
+        "createframe",
+        name_normalized="createframe",
+        display_normalized="api createframe",
+    )
+    assert score == 30
+    assert reasons == ["exact_name"]
+
+
+
+def test_prefix_and_contains_score_prefers_name_prefix_before_contains() -> None:
+    score, reasons = prefix_and_contains_score(
+        "create",
+        name_normalized="createframe",
+        display_normalized="api createframe",
+    )
+    assert score == 10
+    assert reasons == ["name_prefix"]
+
+
+
+def test_term_match_score_requires_all_terms() -> None:
+    score, reasons = term_match_score({"world", "api"}, haystacks=["world of warcraft api", "reference"])
+    assert score == 6
+    assert reasons == ["all_terms_match"]
+
+    score, reasons = term_match_score({"world", "api", "dragonflight"}, haystacks=["world of warcraft api", "reference"])
+    assert score == 0
+    assert reasons == []
+
+
+
+def test_type_hint_score_boosts_matching_entity_type() -> None:
+    score, reasons = type_hint_score("quest thunderfury", entity_type="quest")
+    assert score == 9
+    assert reasons == ["type_hint"]
+
+    score, reasons = type_hint_score("quest thunderfury", entity_type="item")
+    assert score == 0
+    assert reasons == []
+
+
+
+def test_popularity_score_adds_reason_and_entity_bonus() -> None:
+    score, reasons = popularity_score(999, entity_type="item")
+    assert score >= 1
+    assert reasons == ["popularity"]
+
+    score, reasons = popularity_score(0, entity_type="item")
+    assert score == 1
+    assert reasons == []
+
+
+
+def test_search_result_score_and_reasons_composes_helper_scores() -> None:
+    score, reasons = search_result_score_and_reasons(
+        {
+            "type": 5,
+            "id": 86739,
+            "name": "Fairbreeze Favors",
+            "displayName": "Fairbreeze Favors",
+            "typeName": "Quest",
+            "popularity": 999,
+        },
+        query="quest fairbreeze favors",
+        ranking_query="quest fairbreeze favors",
+    )
+    assert score > 0
+    assert "all_terms_match" in reasons
+    assert "type_hint" in reasons
+    assert "popularity" in reasons
+
+
+
+def test_resolve_confidence_policy_helpers_cover_exact_filtered_and_medium_cases() -> None:
+    assert is_high_confidence_exact_match({"exact_name"}, margin=4, second_score=20) is True
+    assert is_high_confidence_exact_match({"exact_display_name"}, margin=0, second_score=0) is True
+    assert is_high_confidence_exact_match({"all_terms_match"}, margin=10, second_score=0) is False
+
+    assert is_high_confidence_score(24, margin=6) is True
+    assert is_high_confidence_score(23, margin=6) is False
+
+    assert is_filtered_high_confidence(("guide",), top_score=18, margin=4) is True
+    assert is_filtered_high_confidence((), top_score=18, margin=4) is False
+
+    assert is_medium_confidence_score(18, margin=4) is True
+    assert is_medium_confidence_score(17, margin=4) is False
+
+
+
+def test_resolve_comment_intent_uses_comment_surface_without_hurting_match_quality(monkeypatch) -> None:
+    def fake_search(self, query: str):  # noqa: ANN001
+        assert query == "fairbreeze favors"
+        return {
+            "search": query,
+            "results": [
+                {"type": 5, "id": 86739, "name": "Fairbreeze Favors", "typeName": "Quest", "popularity": 10},
+                {"type": 3, "id": 123, "name": "Commentary Logbook", "typeName": "Item", "popularity": 50},
+            ],
+        }
+
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.search_suggestions", fake_search)
+    result = runner.invoke(app, ["resolve", "fairbreeze favors comments"])
+    assert result.exit_code == 0
+
+    payload = json.loads(result.stdout)
+    assert payload["resolved"] is True
+    assert payload["confidence"] == "high"
+    assert payload["match"]["entity_type"] == "quest"
+    assert payload["match"]["follow_up"]["recommended_surface"] == "comments"
+    assert payload["next_command"] == "wowhead comments quest 86739"
+
+
+
+def test_resolve_relation_intent_uses_entity_page_surface(monkeypatch) -> None:
+    def fake_search(self, query: str):  # noqa: ANN001
+        assert query == "thunderfury"
+        return {
+            "search": query,
+            "results": [
+                {"type": 3, "id": 19019, "name": "Thunderfury", "typeName": "Item", "popularity": 5},
+                {"type": 3, "id": 2, "name": "Thunderfury Replica", "typeName": "Item", "popularity": 1000},
+            ],
+        }
+
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.search_suggestions", fake_search)
+    result = runner.invoke(app, ["resolve", "thunderfury links"])
+    assert result.exit_code == 0
+
+    payload = json.loads(result.stdout)
+    assert payload["resolved"] is True
+    assert payload["confidence"] == "high"
+    assert payload["match"]["entity_type"] == "item"
+    assert payload["match"]["follow_up"]["recommended_surface"] == "entity-page"
+    assert payload["next_command"] == "wowhead entity-page item 19019"
+
+
+
+def test_resolve_guide_relation_intent_uses_guide_full(monkeypatch) -> None:
+    def fake_search(self, query: str):  # noqa: ANN001
+        return {
+            "search": query,
+            "results": [
+                {
+                    "type": 100,
+                    "id": 3143,
+                    "name": "Frost Death Knight DPS Guide - Midnight",
+                    "typeName": "Guide",
+                    "popularity": 1,
+                },
+                {"type": 3, "id": 19019, "name": "Frost Death Knight", "typeName": "Item", "popularity": 50},
+            ],
+        }
+
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.search_suggestions", fake_search)
+    result = runner.invoke(app, ["resolve", "frost death knight guide full", "--entity-type", "guide"])
+    assert result.exit_code == 0
+
+    payload = json.loads(result.stdout)
+    assert payload["resolved"] is True
+    assert payload["match"]["entity_type"] == "guide"
+    assert payload["match"]["follow_up"]["recommended_surface"] == "guide-full"
+    assert payload["next_command"] == "wowhead guide-full 3143"
+
+
+
+def test_entity_page_mount_resolves_underlying_item_page(monkeypatch) -> None:
+    page_calls = []
+    html = """
+    <html><head>
+      <meta property="og:title" content="Reins of the Grand Expedition Yak">
+      <meta name="description" content="Mount item">
+      <link rel="canonical" href="https://www.wowhead.com/item=84101/reins-of-the-grand-expedition-yak">
+    </head><body><a href="/npc=62809/grand-expedition-yak">Yak</a></body></html>
+    """
+
+    def fake_tooltip_with_metadata(self, entity_type: str, entity_id: int, data_env=None):  # noqa: ANN001, ANN202
+        assert (entity_type, entity_id) == ("mount", 460)
+        return {"name": "Reins of the Grand Expedition Yak"}, "https://nether.wowhead.com/tooltip/item/84101?dataEnv=1"
+
+    def fake_html(self, entity_type: str, entity_id: int):  # noqa: ANN001
+        page_calls.append((entity_type, entity_id))
+        return html
+
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.tooltip_with_metadata", fake_tooltip_with_metadata)
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.entity_page_html", fake_html)
+    result = runner.invoke(app, ["entity-page", "mount", "460", "--max-links", "5"])
+    assert result.exit_code == 0
+
+    payload = json.loads(result.stdout)
+    assert page_calls == [("item", 84101)]
+    assert payload["entity"]["type"] == "mount"
+    assert payload["entity"]["id"] == 460
+    assert payload["entity"]["page_url"] == "https://www.wowhead.com/item=84101/reins-of-the-grand-expedition-yak"
+    assert payload["linked_entities"]["count"] == 1
+
+
+
+def test_comments_battle_pet_resolves_underlying_npc_page(monkeypatch) -> None:
+    page_calls = []
+    html = """
+    <html><head>
+      <meta property="og:title" content="Mechanical Squirrel">
+      <meta name="description" content="Battle pet">
+      <link rel="canonical" href="https://www.wowhead.com/npc=2671/mechanical-squirrel">
+    </head><body>
+      <a href="/item=4401/mechanical-squirrel-box">Mechanical Squirrel Box</a>
+      <script>
+        var lv_comments0 = [{"id": 11, "number": 0, "user": "A", "body": "Useful", "date": "2024-01-01T00:00:00-06:00", "rating": 7, "nreplies": 0, "replies": []}];
+      </script>
+    </body></html>
+    """
+
+    def fake_tooltip_with_metadata(self, entity_type: str, entity_id: int, data_env=None):  # noqa: ANN001, ANN202
+        assert (entity_type, entity_id) == ("battle-pet", 39)
+        return {"name": "Mechanical Squirrel"}, "https://nether.wowhead.com/tooltip/npc/2671?dataEnv=1"
+
+    def fake_html(self, entity_type: str, entity_id: int):  # noqa: ANN001
+        page_calls.append((entity_type, entity_id))
+        return html
+
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.tooltip_with_metadata", fake_tooltip_with_metadata)
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.entity_page_html", fake_html)
+    result = runner.invoke(app, ["comments", "battle-pet", "39", "--limit", "1"])
+    assert result.exit_code == 0
+
+    payload = json.loads(result.stdout)
+    assert page_calls == [("npc", 2671)]
+    assert payload["entity"]["type"] == "battle-pet"
+    assert payload["entity"]["id"] == 39
+    assert payload["entity"]["page_url"] == "https://www.wowhead.com/npc=2671/mechanical-squirrel"
+    assert payload["comments"][0]["citation_url"].endswith("#comments:id=11")
+
+
+
+def test_invalid_expansion_is_rejected() -> None:
+    result = runner.invoke(app, ["--expansion", "not-a-real-expansion", "search", "defias"])
+    assert result.exit_code != 0
+    assert "Unknown expansion" in result.output
+
+

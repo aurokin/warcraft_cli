@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 from wowhead_cli.expansion_profiles import (
     build_entity_url,
     build_guide_lookup_url,
@@ -59,3 +60,8 @@ def test_expansion_url_policy_issues_reports_mismatch() -> None:
 
 def test_parse_entity_from_wowhead_url_rejects_unknown_types() -> None:
     assert parse_entity_from_wowhead_url("https://www.wowhead.com/not-a-real-type=1") is None
+
+
+def test_resolve_expansion_rejects_shared_keys_without_a_wowhead_site() -> None:
+    with pytest.raises(ValueError, match=r"Unknown expansion 'fresh'\. Supported: retail, classic, .*, classic-ptr$"):
+        resolve_expansion("fresh")

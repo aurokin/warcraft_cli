@@ -75,15 +75,16 @@ def classify_guide_family(slug: str) -> str:
 
 
 def _meta_content(soup: BeautifulSoup, **attrs: str) -> str | None:
-    tag = soup.find("meta", attrs=attrs)
-    if tag is None:
+    tag = soup.find("meta", attrs=dict(attrs))
+    if not isinstance(tag, Tag):
         return None
-    return clean_text(tag.get("content"))
+    content = tag.get("content")
+    return clean_text(content) if isinstance(content, str) else None
 
 
 def _link_href(soup: BeautifulSoup, **attrs: str) -> str | None:
-    tag = soup.find("link", attrs=attrs)
-    if tag is None:
+    tag = soup.find("link", attrs=dict(attrs))
+    if not isinstance(tag, Tag):
         return None
     href = tag.get("href")
     if not isinstance(href, str):
@@ -110,9 +111,9 @@ def _extract_navigation(soup: BeautifulSoup, *, current_url: str) -> list[dict[s
         seen.add(key)
         path = urlparse(url).path.rstrip("/")
         _, section_slug = guide_ref_parts(url)
-        parent = anchor.parent if isinstance(anchor.parent, Tag) else None
-        classes = parent.get("class", []) if isinstance(parent, Tag) else []
-        active = "active" in classes or path == current_path
+        parent = anchor.parent
+        classes = parent.get("class") if isinstance(parent, Tag) else None
+        active = (classes is not None and "active" in classes) or path == current_path
         items.append(
             {
                 "title": title,

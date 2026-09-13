@@ -14,11 +14,8 @@ os.environ.setdefault("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "1")
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_INCLUDE_DIRS = (
-    REPO_ROOT / "packages" / "warcraft-core" / "src" / "warcraft_core",
-    REPO_ROOT / "packages" / "warcraft-api" / "src" / "warcraft_api",
-    REPO_ROOT / "packages" / "warcraft-content" / "src" / "warcraft_content",
-)
+# Every import package in the monorepo, so the fallback matches `make coverage`'s pytest-cov scope.
+DEFAULT_INCLUDE_DIRS = tuple(sorted(REPO_ROOT.glob("packages/*/src/*")))
 
 
 def _site_packages_dirs() -> list[Path]:

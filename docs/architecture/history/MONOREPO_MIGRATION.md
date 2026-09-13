@@ -21,6 +21,17 @@ Historical record of the migration from a Wowhead-only CLI to the current monore
 - Replaced Method stubs with sitemap-backed `search` / `resolve`, guide fetch, `guide-full`, bundle export/query
 - Validated article abstractions before moving them into `warcraft-content`
 
+## Milestone 3 (Completed)
+
+Warcraft Logs was the last provider whose source directory shipped only through the root package.
+It now has its own `packages/warcraftlogs-cli/pyproject.toml` with a `warcraftlogs` console script,
+which closed the last gap between "documented as independently installable" and "actually
+installable". `tests/test_warcraft_cli_packaging.py` asserts the package metadata, and the CI
+`isolated-install` job installs it on its own and runs its `--help`.
+
+Every provider that landed afterwards (raidbots, blizzard-api, curseforge, lorrgs) shipped with a
+package-local `pyproject.toml` from the start.
+
 ## Extraction Rules (Still Valid)
 
 **Moved early:** output shaping, errors, cache, config, HTTP transport, bundle/index/query scaffolding.

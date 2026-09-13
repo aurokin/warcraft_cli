@@ -108,7 +108,7 @@ def test_missing_api_key_error(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("CURSEFORGE_API_KEY", raising=False)
     _install_recorder(monkeypatch)
     result = runner.invoke(app, ["addon", "deadly-boss-mods"])
-    assert result.exit_code == 1
+    assert result.exit_code == 3
     payload = json.loads(result.stderr)
     assert payload["ok"] is False
     assert payload["error"]["code"] == "missing_api_key"
@@ -122,7 +122,7 @@ def test_addon_not_found_for_empty_search(monkeypatch: pytest.MonkeyPatch) -> No
 
     monkeypatch.setattr(client_module, "request_with_retries", _fake)
     result = runner.invoke(app, ["addon", "no-such-addon"])
-    assert result.exit_code == 1
+    assert result.exit_code == 4
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "addon_not_found"
 
@@ -135,7 +135,7 @@ def test_addon_not_found_for_mod_404(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(client_module, "request_with_retries", _fake)
     result = runner.invoke(app, ["addon", "999999"])
-    assert result.exit_code == 1
+    assert result.exit_code == 4
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "addon_not_found"
 
@@ -148,20 +148,41 @@ def test_http_status_error_no_traceback(monkeypatch: pytest.MonkeyPatch) -> None
 
     monkeypatch.setattr(client_module, "request_with_retries", _fake)
     result = runner.invoke(app, ["addon", "3358"])
-    assert result.exit_code == 1
+    assert result.exit_code == 3
     payload = json.loads(result.stderr)
-    assert payload["error"]["code"] == "http_error"
+    assert payload["error"]["code"] == "auth_failed"
     assert "403" in payload["error"]["message"]
 
 
+def test_upstream_status_error_is_network_exit_code(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _fake(client: Any, url: str, *, method: str = "GET", **kwargs: Any) -> _FakeResponse:
+        request = httpx.Request("GET", url)
+        response = httpx.Response(500, request=request)
+        raise httpx.HTTPStatusError("Server Error", request=request, response=response)
+
+    monkeypatch.setattr(client_module, "request_with_retries", _fake)
+    result = runner.invoke(app, ["addon", "3358"])
+    assert result.exit_code == 5
+    payload = json.loads(result.stderr)
+    assert payload["error"]["code"] == "http_error"
+
+
 def test_network_error_no_traceback(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Offline transport failure through the CliRunner path the wrapper uses: JSON envelope on stderr,
+    # network exit code, no traceback and nothing on stdout.
     def _fake(client: Any, url: str, *, method: str = "GET", **kwargs: Any) -> _FakeResponse:
         raise httpx.ConnectError("connection refused")
 
     monkeypatch.setattr(client_module, "request_with_retries", _fake)
     result = runner.invoke(app, ["addon", "3358"])
-    assert result.exit_code == 1
+    assert result.exit_code == 5
+    assert result.stdout == ""
+    assert not isinstance(result.exception, httpx.HTTPError)
     payload = json.loads(result.stderr)
+    assert payload["ok"] is False
+    assert payload["provider"] == "curseforge"
+    assert payload["command"] == "addon"
+    assert payload["schema_version"] == "1"
     assert payload["error"]["code"] == "network_error"
 
 
@@ -287,7 +308,7 @@ def test_slug_search_requires_exact_match(monkeypatch: pytest.MonkeyPatch) -> No
 
     monkeypatch.setattr(client_module, "request_with_retries", _fake)
     result = runner.invoke(app, ["addon", "deadly-boss-mods"])
-    assert result.exit_code == 1
+    assert result.exit_code == 4
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "addon_not_found"
 
@@ -328,7 +349,7 @@ def test_numeric_id_rejects_non_wow_mod(monkeypatch: pytest.MonkeyPatch) -> None
 
     monkeypatch.setattr(client_module, "request_with_retries", _fake)
     result = runner.invoke(app, ["addon", "12345"])
-    assert result.exit_code == 1
+    assert result.exit_code == 4
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "addon_not_found"
 

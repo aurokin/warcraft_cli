@@ -8,8 +8,9 @@ from urllib.parse import urlencode, urlparse
 
 from curl_cffi import requests
 from warcraft_api.cache import CacheSettings, CacheTTLConfig, build_cache_store, load_prefixed_cache_settings_from_env
-from warcraft_api.http import DEFAULT_RETRY_ATTEMPTS, RETRYABLE_STATUS_CODES, backoff_seconds
-from warcraft_content.paths import provider_cache_root
+from warcraft_api.http import DEFAULT_RATE_LIMITER, DEFAULT_RETRY_ATTEMPTS, RETRYABLE_STATUS_CODES, backoff_seconds
+from warcraft_core.paths import provider_cache_root
+from warcraft_core.shapes import as_dict, as_list
 from warcraft_core.wow_normalization import normalize_name, normalize_region, primary_realm_slug, realm_slug_variants
 
 from wowprogress_cli.identity import _progress_snapshot
@@ -106,13 +107,14 @@ class WowProgressClient:
         attempts = max(1, self._retry_attempts)
         for attempt in range(1, attempts + 1):
             try:
+                DEFAULT_RATE_LIMITER.wait(url)
                 response = self._client().get(
                     url,
                     impersonate=self._impersonate,
                     timeout=self._timeout_seconds,
                     allow_redirects=True,
                 )
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 if attempt >= attempts:
                     raise WowProgressClientError("network_error", f"WowProgress request failed: {exc}") from exc
                 time.sleep(backoff_seconds(attempt))
@@ -156,13 +158,14 @@ class WowProgressClient:
         attempts = max(1, self._retry_attempts)
         for attempt in range(1, attempts + 1):
             try:
+                DEFAULT_RATE_LIMITER.wait(url)
                 response = self._client().get(
                     url,
                     impersonate=self._impersonate,
                     timeout=self._timeout_seconds,
                     allow_redirects=True,
                 )
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 if attempt >= attempts:
                     raise WowProgressClientError("network_error", f"WowProgress request failed: {exc}") from exc
                 time.sleep(backoff_seconds(attempt))
@@ -295,7 +298,7 @@ class WowProgressClient:
 
     def fetch_guild_history(self, *, region: str, realm: str, name: str) -> dict[str, Any]:
         payload = self.fetch_guild_page_variants(region=region, realm=realm, name=name)
-        history_links = payload.get("history_links") if isinstance(payload.get("history_links"), list) else []
+        history_links = as_list(payload.get("history_links"))
         tiers: list[dict[str, Any]] = []
         for link in history_links:
             if not isinstance(link, dict):
@@ -304,10 +307,10 @@ class WowProgressClient:
             if not page_url:
                 continue
             tier_payload = self.fetch_guild_page_url(page_url)
-            progress = tier_payload.get("progress") if isinstance(tier_payload.get("progress"), dict) else {}
-            item_level = tier_payload.get("item_level") if isinstance(tier_payload.get("item_level"), dict) else {}
-            encounters = tier_payload.get("encounters") if isinstance(tier_payload.get("encounters"), dict) else {}
-            items = encounters.get("items") if isinstance(encounters.get("items"), list) else []
+            progress = as_dict(tier_payload.get("progress"))
+            item_level = as_dict(tier_payload.get("item_level"))
+            encounters = as_dict(tier_payload.get("encounters"))
+            items = as_list(encounters.get("items"))
             progress_summary = str(progress.get("summary") or "")
             progress_match = progress_summary.split(" ", 1)[0] if progress_summary else ""
             bosses_killed = None

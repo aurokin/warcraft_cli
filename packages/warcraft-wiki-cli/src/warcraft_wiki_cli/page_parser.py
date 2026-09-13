@@ -139,11 +139,14 @@ def _normalized_title_key(title: str) -> str:
     return normalize_article_ref(title).strip().lower()
 
 
-def classify_article_family(title: str) -> str:
-    normalized = _normalized_title_key(title)
-    if normalized.startswith("api change summaries"):
-        return "api_changes"
-    if normalized.endswith("/api changes") or normalized == "api change summaries":
+# Titles inside PROGRAMMING_FRAMEWORK_TITLES / SYSTEM_REFERENCE_TITLES that map to a narrower family.
+FRAMEWORK_TITLE_FAMILIES = {"xml schema": "xml_schema", "console variables": "cvar"}
+SYSTEM_TITLE_FAMILIES = {"expansion": "expansion_reference", "profession": "profession_reference", "zone scaling": "zone_reference"}
+
+
+def _title_pattern_family(normalized: str) -> str | None:
+    """Families decided by a title prefix/suffix pattern; checked before the title-set lookups."""
+    if normalized.startswith("api change summaries") or normalized.endswith("/api changes"):
         return "api_changes"
     if normalized.startswith("api "):
         return "api_function"
@@ -153,12 +156,13 @@ def classify_article_family(title: str) -> str:
         return "howto_programming"
     if normalized.startswith("patch ") and ("api changes" not in normalized):
         return "patch_reference"
+    return None
+
+
+def _title_set_family(normalized: str) -> str | None:
+    """Families decided by membership in a curated title set, then by broad title keywords."""
     if normalized in PROGRAMMING_FRAMEWORK_TITLES:
-        if normalized == "xml schema":
-            return "xml_schema"
-        if normalized == "console variables":
-            return "cvar"
-        return "framework_page"
+        return FRAMEWORK_TITLE_FAMILIES.get(normalized, "framework_page")
     if normalized in CLASS_REFERENCE_TITLES:
         return "class_reference"
     if normalized in PROFESSION_REFERENCE_TITLES:
@@ -166,18 +170,18 @@ def classify_article_family(title: str) -> str:
     if normalized in EXPANSION_REFERENCE_TITLES:
         return "expansion_reference"
     if normalized in SYSTEM_REFERENCE_TITLES:
-        if normalized == "expansion":
-            return "expansion_reference"
-        if normalized == "profession":
-            return "profession_reference"
-        if normalized == "zone scaling":
-            return "zone_reference"
-        return "system_reference"
+        return SYSTEM_TITLE_FAMILIES.get(normalized, "system_reference")
     if normalized.startswith("world of warcraft:") or normalized.startswith("warcraft:"):
         return "lore_reference"
     if "guide" in normalized or "howto" in normalized or "tutorial" in normalized:
         return "guide_reference"
-    return "general_article"
+    return None
+
+
+def classify_article_family(title: str) -> str:
+    """Classify a wiki title into a content family; ``general_article`` when no rule matches."""
+    normalized = _normalized_title_key(title)
+    return _title_pattern_family(normalized) or _title_set_family(normalized) or "general_article"
 
 
 def _strip_html(html_text: str) -> str:
@@ -186,8 +190,10 @@ def _strip_html(html_text: str) -> str:
 
 
 def parse_search_results(payload: dict[str, Any]) -> tuple[int, list[dict[str, Any]]]:
-    query = payload.get("query") if isinstance(payload.get("query"), dict) else {}
-    search_info = query.get("searchinfo") if isinstance(query.get("searchinfo"), dict) else {}
+    raw_query = payload.get("query")
+    query: dict[str, Any] = raw_query if isinstance(raw_query, dict) else {}
+    raw_search_info = query.get("searchinfo")
+    search_info: dict[str, Any] = raw_search_info if isinstance(raw_search_info, dict) else {}
     total_hits = int(search_info.get("totalhits") or 0)
     rows: list[dict[str, Any]] = []
     for row in query.get("search") or []:
@@ -410,7 +416,8 @@ def extract_reference_metadata(*, title: str, family: str, text: str, sections: 
 
 
 def parse_article_page(payload: dict[str, Any], *, source_title: str) -> dict[str, Any]:
-    parse = payload.get("parse") if isinstance(payload.get("parse"), dict) else {}
+    raw_parse = payload.get("parse")
+    parse: dict[str, Any] = raw_parse if isinstance(raw_parse, dict) else {}
     title = str(parse.get("title") or source_title).strip()
     display_title = _strip_html(str(parse.get("displaytitle") or title))
     html = str((parse.get("text") or {}).get("*") or "")

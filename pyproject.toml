@@ -63,6 +63,16 @@ select = [
   "E",
   "F",
   "I",
+  "S102",
+  "S103",
+  "S105",
+  "S106",
+  "S107",
+  "S108",
+  "S324",
+  "S501",
+  "S603",
+  "S607",
   "SIM",
   "UP",
   "W",
@@ -72,6 +82,14 @@ select = [
 "tests/*.py" = [
   "B011",
   "E501",
+  "S105",
+  "S106",
+  "S108",
+  "S603",
+]
+"scripts/*.py" = [
+  "S603",
+  "S607",
 ]
 "packages/**/main.py" = [
   "B008",
@@ -79,14 +97,23 @@ select = [
 
 [tool.mypy]
 python_version = "3.12"
-# `files` intentionally lists only the shared packages: provider CLIs (wowhead, raiderio,
-# blizzard-api, curseforge, …) are deliberately NOT type-checked by `make typecheck` — they are on
-# `mypy_path` so the shared packages resolve, but adding any one provider here would single it out
-# and diverge from the repo-wide convention. Revisit as a separate, all-providers decision if desired.
 files = [
   "packages/warcraft-core/src/warcraft_core",
   "packages/warcraft-api/src/warcraft_api",
   "packages/warcraft-content/src/warcraft_content",
+  "packages/warcraft-cli/src/warcraft_cli",
+  "packages/wowhead-cli/src/wowhead_cli",
+  "packages/method-cli/src/method_cli",
+  "packages/icy-veins-cli/src/icy_veins_cli",
+  "packages/raiderio-cli/src/raiderio_cli",
+  "packages/warcraft-wiki-cli/src/warcraft_wiki_cli",
+  "packages/wowprogress-cli/src/wowprogress_cli",
+  "packages/simc-cli/src/simc_cli",
+  "packages/warcraftlogs-cli/src/warcraftlogs_cli",
+  "packages/raidbots-cli/src/raidbots_cli",
+  "packages/blizzard-api-cli/src/blizzard_api_cli",
+  "packages/curseforge-cli/src/curseforge_cli",
+  "packages/lorrgs-cli/src/lorrgs_cli",
 ]
 mypy_path = "packages/warcraft-core/src:packages/warcraft-api/src:packages/warcraft-content/src:packages/warcraft-cli/src:packages/wowhead-cli/src:packages/method-cli/src:packages/icy-veins-cli/src:packages/raiderio-cli/src:packages/warcraft-wiki-cli/src:packages/wowprogress-cli/src:packages/simc-cli/src:packages/warcraftlogs-cli/src:packages/raidbots-cli/src:packages/blizzard-api-cli/src:packages/curseforge-cli/src:packages/lorrgs-cli/src"
 check_untyped_defs = true

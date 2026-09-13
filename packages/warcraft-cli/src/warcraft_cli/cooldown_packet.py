@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections import Counter
 from typing import Any
 
+from warcraft_core.shapes import as_dict, as_list
+
 
 def build_phase_windows(phases: list[Any], duration_ms: int | float | None) -> list[dict[str, Any]]:
     duration = int(duration_ms) if isinstance(duration_ms, (int, float)) and duration_ms > 0 else None
@@ -73,7 +75,7 @@ def raw_phase_markers(phases: list[Any]) -> list[dict[str, Any]]:
 
 def spell_catalog(spell_payload: dict[str, Any]) -> dict[int, dict[str, Any]]:
     raw_data = spell_payload.get("data")
-    data: dict[str, Any] = raw_data if isinstance(raw_data, dict) else {}
+    data: dict[str, Any] = as_dict(raw_data)
     catalog: dict[int, dict[str, Any]] = {}
     for key, value in data.items():
         if not isinstance(value, dict):
@@ -110,7 +112,7 @@ def spell_summary(spell_id: int | None, *, catalog: dict[int, dict[str, Any]]) -
         "duration_seconds": spell.get("duration") if isinstance(spell.get("duration"), (int, float)) else None,
         "show": bool(spell.get("show")),
         "query": bool(spell.get("query")),
-        "tags": spell.get("tags") if isinstance(spell.get("tags"), list) else [],
+        "tags": as_list(spell.get("tags")),
         "wowhead_data": spell.get("wowhead_data") if isinstance(spell.get("wowhead_data"), str) else None,
         "tooltip_info": spell.get("tooltip_info") if isinstance(spell.get("tooltip_info"), str) else None,
     }
@@ -155,7 +157,7 @@ def normalize_warcraftlogs_actor_casts(
     window: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     raw_events = events_payload.get("events")
-    events: list[Any] = raw_events if isinstance(raw_events, list) else []
+    events: list[Any] = as_list(raw_events)
     tracked: list[dict[str, Any]] = []
     phase_tracked: list[dict[str, Any]] = []
     by_spell: Counter[int] = Counter()
@@ -193,6 +195,62 @@ def normalize_warcraftlogs_actor_casts(
     }
 
 
+def _sample_for_fight(
+    report: dict[str, Any],
+    fight: dict[str, Any],
+    *,
+    phase: int,
+    spell_catalog: dict[int, dict[str, Any]],
+    boss_catalog: dict[int, dict[str, Any]],
+    spell_ids: set[int],
+) -> dict[str, Any] | None:
+    """One top-parse comparison row, or ``None`` when the fight has no usable player."""
+    players = _list_or_empty(fight.get("players"))
+    player = next((row for row in players if isinstance(row, dict)), None)
+    if player is None:
+        return None
+    windows = build_phase_windows(_list_or_empty(fight.get("phases")), fight.get("duration"))
+    window = selected_phase_window(windows, phase)
+    raw_boss = fight.get("boss")
+    boss: dict[str, Any] = as_dict(raw_boss)
+    casts: list[dict[str, Any]] = []
+    boss_casts: list[dict[str, Any]] = []
+    if window is not None:
+        casts = normalize_lorrgs_casts(
+            _list_or_empty(player.get("casts")), catalog=spell_catalog, window=window, spell_ids=spell_ids
+        )
+        boss_casts = normalize_lorrgs_casts(_list_or_empty(boss.get("casts")), catalog=boss_catalog, window=window)
+    return {
+        "report_id": report.get("report_id"),
+        "region": report.get("region"),
+        "fight_id": fight.get("fight_id"),
+        "duration_ms": fight.get("duration"),
+        "phase_window": window,
+        "phase_available": window is not None,
+        "player": {
+            "name": player.get("name"),
+            "source_id": player.get("source_id"),
+            "spec_slug": player.get("spec_slug"),
+            "total": player.get("total"),
+        },
+        "selected_phase_casts": casts,
+        "selected_phase_boss_casts": boss_casts,
+    }
+
+
+def _record_sample_spells(casts: list[dict[str, Any]], frequency: Counter[int], total_casts: Counter[int]) -> None:
+    """Count each tracked spell once per sample in ``frequency`` and once per cast in ``total_casts``."""
+    seen_in_sample: set[int] = set()
+    for cast in casts:
+        spell = cast.get("spell")
+        if isinstance(spell, dict) and isinstance(spell.get("spell_id"), int):
+            spell_id = int(spell["spell_id"])
+            seen_in_sample.add(spell_id)
+            total_casts[spell_id] += 1
+    for spell_id in seen_in_sample:
+        frequency[spell_id] += 1
+
+
 def top_parse_samples(
     ranking_payload: dict[str, Any] | None,
     *,
@@ -205,9 +263,8 @@ def top_parse_samples(
     if ranking_payload is None:
         return {"status": "unavailable", "sample_count": 0, "samples": [], "selected_phase_spell_frequency": []}
     raw_data = ranking_payload.get("data")
-    data: dict[str, Any] = raw_data if isinstance(raw_data, dict) else {}
-    raw_reports = data.get("reports")
-    reports: list[Any] = raw_reports if isinstance(raw_reports, list) else []
+    data: dict[str, Any] = as_dict(raw_data)
+    reports = _list_or_empty(data.get("reports"))
     samples: list[dict[str, Any]] = []
     frequency: Counter[int] = Counter()
     total_casts: Counter[int] = Counter()
@@ -216,66 +273,23 @@ def top_parse_samples(
             break
         if not isinstance(report, dict):
             continue
-        raw_fights = report.get("fights")
-        fights: list[Any] = raw_fights if isinstance(raw_fights, list) else []
-        for fight in fights:
+        for fight in _list_or_empty(report.get("fights")):
             if len(samples) >= sample_limit:
                 break
             if not isinstance(fight, dict):
                 continue
-            raw_players = fight.get("players")
-            players: list[Any] = raw_players if isinstance(raw_players, list) else []
-            player = next((row for row in players if isinstance(row, dict)), None)
-            if player is None:
-                continue
-            windows = build_phase_windows(_list_or_empty(fight.get("phases")), fight.get("duration"))
-            window = selected_phase_window(windows, phase)
-            raw_boss = fight.get("boss")
-            boss: dict[str, Any] = raw_boss if isinstance(raw_boss, dict) else {}
-            if window is None:
-                casts: list[dict[str, Any]] = []
-                boss_casts: list[dict[str, Any]] = []
-            else:
-                casts = normalize_lorrgs_casts(
-                    _list_or_empty(player.get("casts")),
-                    catalog=spell_catalog,
-                    window=window,
-                    spell_ids=spell_ids,
-                )
-                boss_casts = normalize_lorrgs_casts(
-                    _list_or_empty(boss.get("casts")),
-                    catalog=boss_catalog,
-                    window=window,
-                )
-            seen_in_sample = {
-                int(cast["spell"]["spell_id"])
-                for cast in casts
-                if isinstance(cast.get("spell"), dict) and isinstance(cast["spell"].get("spell_id"), int)
-            }
-            for spell_id in seen_in_sample:
-                frequency[spell_id] += 1
-            for cast in casts:
-                spell = cast.get("spell")
-                if isinstance(spell, dict) and isinstance(spell.get("spell_id"), int):
-                    total_casts[int(spell["spell_id"])] += 1
-            samples.append(
-                {
-                    "report_id": report.get("report_id"),
-                    "region": report.get("region"),
-                    "fight_id": fight.get("fight_id"),
-                    "duration_ms": fight.get("duration"),
-                    "phase_window": window,
-                    "phase_available": window is not None,
-                    "player": {
-                        "name": player.get("name"),
-                        "source_id": player.get("source_id"),
-                        "spec_slug": player.get("spec_slug"),
-                        "total": player.get("total"),
-                    },
-                    "selected_phase_casts": casts,
-                    "selected_phase_boss_casts": boss_casts,
-                }
+            sample = _sample_for_fight(
+                report,
+                fight,
+                phase=phase,
+                spell_catalog=spell_catalog,
+                boss_catalog=boss_catalog,
+                spell_ids=spell_ids,
             )
+            if sample is None:
+                continue
+            _record_sample_spells(sample["selected_phase_casts"], frequency, total_casts)
+            samples.append(sample)
     return {
         "status": "ready",
         "sample_count": len(samples),
@@ -346,7 +360,7 @@ def _int_or_none(value: Any) -> int | None:
 
 
 def _list_or_empty(value: Any) -> list[Any]:
-    return value if isinstance(value, list) else []
+    return as_list(value)
 
 
 def _quote_arg(value: str) -> str:

@@ -3,19 +3,20 @@ from __future__ import annotations
 import json
 from datetime import datetime
 
+import httpx
+import pytest
 from typer.testing import CliRunner
+from warcraft_core.envelope import envelope_violations
 from warcraft_wiki_cli.client import WarcraftWikiAPIError
-from warcraft_wiki_cli.main import (
-    _score_text_match,
+from warcraft_wiki_cli.main import app as warcraft_wiki_app
+from warcraft_wiki_cli.provider import (
     _typed_allowed_families,
     _typed_article_payload,
     _typed_direct_article_result,
     _typed_search_match,
     _typed_search_queries,
 )
-from warcraft_wiki_cli.main import (
-    app as warcraft_wiki_app,
-)
+from warcraft_wiki_cli.search import score_wiki_match
 
 runner = CliRunner()
 
@@ -171,8 +172,8 @@ def test_warcraft_wiki_search_and_resolve(monkeypatch) -> None:
     assert resolve_payload["next_command"] == "warcraft-wiki article 'World of Warcraft API'"
 
 
-def test_warcraft_wiki_score_text_match_boosts_programming_pages() -> None:
-    score, reasons, family = _score_text_match(
+def test_warcraft_wiki_score_wiki_match_boosts_programming_pages() -> None:
+    score, reasons, family = score_wiki_match(
         "API CreateFrame",
         "createframe",
         "API CreateFrame",
@@ -186,8 +187,8 @@ def test_warcraft_wiki_score_text_match_boosts_programming_pages() -> None:
     assert score >= 100
 
 
-def test_warcraft_wiki_score_text_match_handles_expansion_alias() -> None:
-    score, reasons, family = _score_text_match(
+def test_warcraft_wiki_score_wiki_match_handles_expansion_alias() -> None:
+    score, reasons, family = score_wiki_match(
         "expansion Legion",
         "legion",
         "World of Warcraft: Legion",
@@ -745,3 +746,92 @@ def test_warcraft_wiki_search_excludes_expansion_hint_terms(monkeypatch) -> None
     assert payload["resolved"] is True
     assert payload["match"]["id"] == "World of Warcraft: Legion"
     assert payload["match"]["metadata"]["content_family"] == "expansion_reference"
+
+
+def _connect_error(*_args, **_kwargs):
+    raise httpx.ConnectError("connection refused", request=httpx.Request("GET", "https://warcraft.wiki.gg/api.php"))
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["search", "createframe"],
+        ["resolve", "createframe"],
+        ["article", "API CreateFrame"],
+        ["article-full", "API CreateFrame"],
+        ["api", "CreateFrame"],
+        ["api-full", "CreateFrame"],
+        ["event", "OnKeyDown"],
+        ["event-full", "OnKeyDown"],
+        ["article-export", "API CreateFrame"],
+    ],
+)
+def test_warcraft_wiki_transport_failure_returns_error_envelope(monkeypatch, args) -> None:
+    monkeypatch.setattr("warcraft_wiki_cli.client.request_with_retries", _connect_error)
+
+    result = runner.invoke(warcraft_wiki_app, args)
+
+    assert result.exit_code == 5
+    assert result.stdout == ""
+    payload = json.loads(result.stderr)
+    assert payload["ok"] is False
+    assert payload["provider"] == "warcraft-wiki"
+    assert payload["schema_version"] == "1"
+    assert payload["error"]["code"] == "network_error"
+
+
+def test_warcraft_wiki_missing_article_exits_not_found(monkeypatch) -> None:
+    def _missing(self, article_ref):
+        raise WarcraftWikiAPIError("missingtitle", "The page you specified doesn't exist.")
+
+    monkeypatch.setattr("warcraft_wiki_cli.main.WarcraftWikiClient.fetch_article_page", _missing)
+
+    result = runner.invoke(warcraft_wiki_app, ["article", "No Such Page"])
+
+    assert result.exit_code == 4
+    payload = json.loads(result.stderr)
+    assert payload["error"]["code"] == "not_found"
+
+
+def test_warcraft_wiki_article_query_rejects_missing_bundle(tmp_path) -> None:
+    result = runner.invoke(warcraft_wiki_app, ["article-query", str(tmp_path / "absent"), "framexml"])
+
+    assert result.exit_code == 1
+    payload = json.loads(result.stderr)
+    assert payload["error"]["code"] == "invalid_bundle"
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["doctor"],
+        ["search", "world of warcraft api"],
+        ["resolve", "world of warcraft api"],
+        ["article", "World of Warcraft API"],
+        ["api", "World of Warcraft API"],
+    ],
+)
+def test_warcraft_wiki_payloads_conform_to_envelope(monkeypatch, args) -> None:
+    monkeypatch.setattr("warcraft_wiki_cli.main.WarcraftWikiClient.fetch_article_page", lambda self, article_ref: _page_payload())
+    monkeypatch.setattr(
+        "warcraft_wiki_cli.main.WarcraftWikiClient.search_articles",
+        lambda self, query, limit: (
+            1,
+            [
+                {
+                    "title": "World of Warcraft API",
+                    "pageid": 1,
+                    "snippet": "API systems and FrameXML.",
+                    "url": "https://warcraft.wiki.gg/wiki/World_of_Warcraft_API",
+                }
+            ],
+        ),
+    )
+
+    result = runner.invoke(warcraft_wiki_app, args)
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert envelope_violations(payload) == []
+    assert payload["provider"] == "warcraft-wiki"
+    assert payload["schema_version"] == "1"

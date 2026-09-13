@@ -6,12 +6,13 @@ build-backend = "hatchling.build"
 name = "method-cli"
 version = "0.5.0"
 description = "Method.gg CLI"
-readme = "../../README.md"
 requires-python = ">=3.12"
 dependencies = [
   "beautifulsoup4>=4.13.0,<5.0.0",
-  "orjson>=3.10.16,<4.0.0",
+  "httpx>=0.28.1,<1.0.0",
   "typer>=0.12.5,<1.0.0",
+  "warcraft-api-cli>=0.1.0",
+  "warcraft-content-cli>=0.1.0",
   "warcraft-core-cli>=0.1.0",
 ]
 

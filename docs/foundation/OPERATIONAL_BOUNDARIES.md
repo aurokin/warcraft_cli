@@ -19,13 +19,13 @@ Repo-wide expectations for respectful provider use, safe logging, and failure re
 | Live matrices | Warcraft Logs `make test-live-matrix` and Wowhead live workflows are **operator-triggered** — do not schedule them as high-frequency CI against production without credentials and scope review. |
 | Warcraft Logs | Query `warcraftlogs rate-limit` and inspect `doctor` / auth status before large report-scoped batch jobs. |
 
-There is no repo-wide global throttle yet. Operators are responsible for pacing automation outside documented test entrypoints.
+Every `httpx` request routed through `warcraft_api.http.request_with_retries` waits on a shared per-host limiter that enforces a minimum interval between request starts (`WARCRAFT_HTTP_MIN_INTERVAL_SECONDS`, default `0.25`; set `0` to disable). Server `Retry-After` hints are honoured but capped at 30 seconds per attempt. The limiter paces requests; operators are still responsible for overall automation volume outside documented test entrypoints.
 
 ## User-Agent and transport identity
 
 | Provider family | Current behavior |
 | --- | --- |
-| Wowhead / Method / Icy Veins / Raider.IO / Wiki | `httpx` with redirects; default library User-Agent unless overridden in client code. |
+| Wowhead / Method / Icy Veins / Raider.IO / Wiki / Lorrgs / Raidbots | `httpx` clients built through `warcraft_api.http.build_client` send `User-Agent: warcraft-cli/<version> (+https://github.com/aurokin/warcraft_cli)`. |
 | WowProgress | Browser-style transport and impersonation settings (see `docs/wowprogress/README.md` and `wowprogress doctor`). |
 | Warcraft Logs | Official GraphQL API with OAuth/client credentials — not HTML scraping. |
 

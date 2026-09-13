@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from warcraft_core.identity import class_spec_identity_payload
@@ -8,6 +9,12 @@ from warcraft_core.identity import class_spec_identity_payload
 # with Raidbots metadata added under `simbot`. We cannot import simc_cli (provider
 # CLIs must stay independent), so the small defensive json2 helpers below mirror
 # simc_cli.report rather than reuse it.
+
+
+def _nested_dict(container: Mapping[str, Any] | None, key: str) -> dict[str, Any]:
+    """Return ``container[key]`` when it is a mapping, else ``{}`` (json2 fields are all optional)."""
+    value = container.get(key) if container is not None else None
+    return value if isinstance(value, dict) else {}
 
 
 def _metric_mean(metric: Any) -> float | None:
@@ -43,7 +50,7 @@ def _stop_reason(*, options: dict[str, Any], iterations_completed: int | None) -
 
 
 def _game_version(options: dict[str, Any]) -> str | None:
-    dbc = options.get("dbc") if isinstance(options.get("dbc"), dict) else {}
+    dbc = _nested_dict(options, "dbc")
     version_used = dbc.get("version_used")
     live_info = dbc.get(version_used) if isinstance(version_used, str) and isinstance(dbc.get(version_used), dict) else {}
     return live_info.get("wow_version") if isinstance(live_info, dict) else None
@@ -77,7 +84,7 @@ def _actor_summary(player: dict[str, Any]) -> dict[str, Any]:
 
 
 def _quick_sim_metrics(player: dict[str, Any]) -> dict[str, Any]:
-    collected = player.get("collected_data") if isinstance(player.get("collected_data"), dict) else {}
+    collected = _nested_dict(player, "collected_data")
     return {
         "dps": _metric_mean(collected.get("dps")),
         "dps_error": _metric_mean(collected.get("dpse")),
@@ -88,7 +95,7 @@ def _quick_sim_metrics(player: dict[str, Any]) -> dict[str, Any]:
 
 
 def _run_settings(options: dict[str, Any], statistics: dict[str, Any], player: dict[str, Any] | None) -> dict[str, Any]:
-    collected = player.get("collected_data") if isinstance(player, dict) and isinstance(player.get("collected_data"), dict) else {}
+    collected = _nested_dict(player, "collected_data")
     iterations_completed = _metric_count(collected.get("fight_length")) or _metric_count(statistics.get("simulation_length"))
     return {
         "iterations_requested": options.get("iterations"),
@@ -159,7 +166,7 @@ def _has_profilesets(profilesets: Any) -> bool:
 
 
 def _simbot_metadata(report: dict[str, Any]) -> dict[str, Any]:
-    simbot = report.get("simbot") if isinstance(report.get("simbot"), dict) else {}
+    simbot = _nested_dict(report, "simbot")
     return {
         "sim_type": simbot.get("simType") or simbot.get("type"),
         "title": simbot.get("title"),
@@ -174,8 +181,8 @@ def parse_report(report: dict[str, Any], *, report_id: str) -> dict[str, Any]:
     sim = report.get("sim") if isinstance(report, dict) else None
     if not isinstance(sim, dict):
         raise ValueError("Raidbots report did not contain SimC `sim` metadata.")
-    options = sim.get("options") if isinstance(sim.get("options"), dict) else {}
-    statistics = sim.get("statistics") if isinstance(sim.get("statistics"), dict) else {}
+    options = _nested_dict(sim, "options")
+    statistics = _nested_dict(sim, "statistics")
     players = sim.get("players") if isinstance(sim.get("players"), list) else []
     baseline = players[0] if players and isinstance(players[0], dict) else None
     profilesets = sim.get("profilesets")

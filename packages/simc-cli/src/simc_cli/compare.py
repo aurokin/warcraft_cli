@@ -142,10 +142,13 @@ def compare_apl_variants(
 
 
 def variant_report_payload(report: dict[str, Any]) -> dict[str, Any]:
-    ranking = report.get("ranking") if isinstance(report.get("ranking"), list) else []
+    raw_ranking = report.get("ranking")
+    ranking: list[Any] = raw_ranking if isinstance(raw_ranking, list) else []
     best = ranking[0] if ranking else None
-    base = report.get("base") if isinstance(report.get("base"), dict) else None
-    comparisons = report.get("comparisons") if isinstance(report.get("comparisons"), list) else []
+    raw_base = report.get("base")
+    base: dict[str, Any] | None = raw_base if isinstance(raw_base, dict) else None
+    raw_comparisons = report.get("comparisons")
+    comparisons: list[Any] = raw_comparisons if isinstance(raw_comparisons, list) else []
     return {
         "kind": "apl_variant_report",
         "base_label": base.get("label") if base else None,

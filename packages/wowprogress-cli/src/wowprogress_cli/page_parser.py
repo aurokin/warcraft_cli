@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import quote, urljoin
 
@@ -191,7 +192,7 @@ def _parse_guild_encounters(table: Tag) -> list[dict[str, Any]]:
             prefix, rest = raw_name.split(": ", 1)
             difficulty = prefix.strip()
             encounter_name = rest.strip()
-        video_links = [_absolute_url(link["href"]) for link in cells[2].find_all("a", href=True)]
+        video_links = [_absolute_url(str(link["href"])) for link in cells[2].find_all("a", href=True)]
         encounters.append(
             {
                 "encounter": encounter_name,
@@ -201,7 +202,7 @@ def _parse_guild_encounters(table: Tag) -> list[dict[str, Any]]:
                 "region_rank": _clean_text(cells[4].get_text(" ", strip=True)) or None,
                 "realm_rank": _clean_text(cells[5].get_text(" ", strip=True)) or None,
                 "fastest_kill": _clean_text(cells[6].get_text(" ", strip=True)) or None,
-                "detail_url": _absolute_url(detail_link["href"]),
+                "detail_url": _absolute_url(str(detail_link["href"])),
                 "video_count": len(video_links),
                 "video_urls": video_links,
                 # WowProgress exposes only the encounter name (no stable encounter/journal id),
@@ -347,69 +348,105 @@ def _parse_character_raid_tables(soup: BeautifulSoup) -> list[dict[str, Any]]:
     return raids
 
 
-def parse_character_page(html: str, *, url: str, region: str, realm: str, name: str) -> dict[str, Any]:
-    soup = _soup(html)
+@dataclass(frozen=True, slots=True)
+class _CharacterHeader:
+    """Identity fields scraped from the character page heading block."""
+
+    name: str
+    realm: str
+    guild_name: str | None
+    guild_url: str | None
+    armory_url: str | None
+    race: str | None
+    class_name: str | None
+    level: int | None
+
+
+def _link_text(link: Tag | None) -> str:
+    return _clean_text(link.get_text(" ", strip=True)) if link is not None else ""
+
+
+def _parse_character_header(soup: BeautifulSoup, *, realm: str, name: str) -> _CharacterHeader:
     heading = soup.find("h1")
     if heading is None:
         raise ValueError("Missing character heading.")
     character_name = _clean_text(heading.get_text(" ", strip=True)) or name
-    header_container = heading.parent if heading.parent is not None else soup
-    realm_link = header_container.find("a", href=re.compile(r"^/gearscore/"))
-    guild_link = header_container.find("a", href=re.compile(r"^/guild/"))
-    armory_link = header_container.find("a", href=re.compile(r"(battle\.net|worldofwarcraft\.com)"))
-    header_text = _clean_text(header_container.get_text(" ", strip=True))
-    summary_text = header_text
-    for raw in (
-        character_name,
-        _clean_text(realm_link.get_text(" ", strip=True)) if realm_link else "",
-        _clean_text(guild_link.get_text(" ", strip=True)) if guild_link else "",
-        "(armory)",
-    ):
+    container = heading.parent if heading.parent is not None else soup
+    realm_link = container.find("a", href=re.compile(r"^/gearscore/"))
+    guild_link = container.find("a", href=re.compile(r"^/guild/"))
+    armory_link = container.find("a", href=re.compile(r"(battle\.net|worldofwarcraft\.com)"))
+    # The race/class/level run is whatever remains once the linked names are removed from the header.
+    summary_text = _clean_text(container.get_text(" ", strip=True))
+    for raw in (character_name, _link_text(realm_link), _link_text(guild_link), "(armory)"):
         if raw:
             summary_text = summary_text.replace(raw, " ")
     race, class_name, level = _parse_character_summary(summary_text)
+    return _CharacterHeader(
+        name=character_name,
+        realm=_link_text(realm_link) or realm,
+        guild_name=_link_text(guild_link) or None,
+        guild_url=_absolute_url(str(guild_link["href"])) if guild_link is not None else None,
+        armory_url=str(armory_link["href"]) if armory_link is not None else None,
+        race=race,
+        class_name=class_name,
+        level=level,
+    )
+
+
+def _find_metric_table(soup: BeautifulSoup, prefix: str) -> dict[str, Any]:
+    table = next((candidate for candidate in soup.find_all("table") if prefix in candidate.get_text(" ", strip=True)), None)
+    return _parse_character_metric_table(table, prefix) if table is not None else {}
+
+
+def _parse_character_pve_score(soup: BeautifulSoup) -> float | None:
+    heading = next((h for h in soup.find_all("h2") if _clean_text(h.get_text(" ", strip=True)).startswith("PvE Score:")), None)
+    match = re.search(r"PvE Score:\s*([0-9.]+)", _link_text(heading))
+    return float(match.group(1)) if match else None
+
+
+def _character_profile_fields(soup: BeautifulSoup) -> dict[str, Any]:
     detail_block = _clean_text(soup.get_text(" ", strip=True))
-    item_level_table = next((table for table in soup.find_all("table") if "Item Level:" in table.get_text(" ", strip=True)), None)
-    sim_dps_table = next((table for table in soup.find_all("table") if "SimDPS:" in table.get_text(" ", strip=True)), None)
-    pve_heading = next((h for h in soup.find_all("h2") if _clean_text(h.get_text(" ", strip=True)).startswith("PvE Score:")), None)
-    pve_match = re.search(r"PvE Score:\s*([0-9.]+)", _clean_text(pve_heading.get_text(" ", strip=True)) if pve_heading is not None else "")
-    raids = _parse_character_raid_tables(soup)
-    sim_dps = _parse_character_metric_table(sim_dps_table, "SimDPS:") if sim_dps_table is not None else {}
-    sim_dps_spec = sim_dps.get("spec") if isinstance(sim_dps, dict) else None
+    return {
+        "languages": _extract_detail_field(detail_block, "Languages:"),
+        "looking_for_guild": _extract_detail_field(detail_block, "Looking for guild:"),
+        "raids_per_week": _extract_detail_field(detail_block, "Raids per week:"),
+        "mythic_plus_dungeons": _extract_detail_field(detail_block, "Mythic Plus Dungeons:"),
+        "specs_playing": _extract_detail_field(detail_block, "Specs playing:"),
+    }
+
+
+def parse_character_page(html: str, *, url: str, region: str, realm: str, name: str) -> dict[str, Any]:
+    soup = _soup(html)
+    header = _parse_character_header(soup, realm=realm, name=name)
+    sim_dps = _find_metric_table(soup, "SimDPS:")
     return {
         "character": {
-            "name": character_name,
+            "name": header.name,
             "region": region.lower(),
-            "realm": _clean_text(realm_link.get_text(" ", strip=True)) if realm_link is not None else realm,
-            "guild_name": _clean_text(guild_link.get_text(" ", strip=True)) if guild_link is not None else None,
-            "guild_url": _absolute_url(str(guild_link["href"])) if guild_link is not None else None,
-            "race": race,
-            "class_name": class_name,
-            "level": level,
+            "realm": header.realm,
+            "guild_name": header.guild_name,
+            "guild_url": header.guild_url,
+            "race": header.race,
+            "class_name": header.class_name,
+            "level": header.level,
             "page_url": url,
-            "armory_url": armory_link.get("href") if armory_link is not None else None,
+            "armory_url": header.armory_url,
             # Class is parsed from free header text and the spec (when present) comes from the
             # SimDPS table, so this is normalized-without-confidence rather than a source-backed pair.
             "class_spec_identity": class_spec_identity_payload(
-                actor_class=class_name,
-                spec=sim_dps_spec,
+                actor_class=header.class_name,
+                spec=sim_dps.get("spec"),
                 provider="wowprogress",
                 source="character_page",
                 confidence="none",
             ),
         },
-        "profile": {
-            "languages": _extract_detail_field(detail_block, "Languages:"),
-            "looking_for_guild": _extract_detail_field(detail_block, "Looking for guild:"),
-            "raids_per_week": _extract_detail_field(detail_block, "Raids per week:"),
-            "mythic_plus_dungeons": _extract_detail_field(detail_block, "Mythic Plus Dungeons:"),
-            "specs_playing": _extract_detail_field(detail_block, "Specs playing:"),
-        },
-        "item_level": _parse_character_metric_table(item_level_table, "Item Level:") if item_level_table is not None else {},
+        "profile": _character_profile_fields(soup),
+        "item_level": _find_metric_table(soup, "Item Level:"),
         "sim_dps": sim_dps,
         "pve": {
-            "score": float(pve_match.group(1)) if pve_match else None,
-            "raids": raids,
+            "score": _parse_character_pve_score(soup),
+            "raids": _parse_character_raid_tables(soup),
         },
         "citations": {
             "page": url,
@@ -453,9 +490,9 @@ def parse_pve_leaderboard_page(
                 {
                     "rank": int(rank_text),
                     "guild_name": _clean_text(guild_link.get_text(" ", strip=True)),
-                    "guild_url": _absolute_url(guild_link["href"]),
+                    "guild_url": _absolute_url(str(guild_link["href"])),
                     "realm": _clean_text(cells[2].get_text(" ", strip=True)) or None,
-                    "realm_url": _absolute_url(realm_link["href"]) if realm_link is not None else None,
+                    "realm_url": _absolute_url(str(realm_link["href"])) if realm_link is not None else None,
                     "progress": progress_match.group(1) if progress_match else progress_text,
                 }
             )

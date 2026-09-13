@@ -2,226 +2,210 @@
 
 ## Purpose
 
-This document defines the structural rules for the Warcraft monorepo.
+Structural rules for the Warcraft monorepo: what is a package, what may depend on what, how the
+product is installed, and which tooling enforces it.
 
-It exists to keep future changes aligned with the intended architecture:
-- separate service CLIs
-- shared libraries with clear boundaries
-- a thin `warcraft` wrapper
-- isolated service packages
-- purpose-driven exceptions instead of accidental coupling
+Companion documents: [Package Layout](PACKAGE_LAYOUT.md) for the concrete package table,
+[Error and Envelope Contract](../foundation/ERROR_CONTRACT.md) for the output contract every
+binary shares, and [docs/reference/](../reference/README.md) for the generated command surface.
 
 ## Core Decisions
 
 ### Monorepo Shape
 
-This should be a monorepo with multiple package-level projects.
-
-Each service package should be buildable from:
-- its own source
-- shared source
-
-It should not depend on other service packages just because they live in the same repo.
+One repository, 16 package-level projects: three shared libraries, the `warcraft` wrapper, and 12
+provider CLIs. Each provider package builds from its own source plus the shared packages, and never
+from another provider package.
 
 ### Install Model
 
-Support both:
-- one umbrella install for normal users
-- service-specific installs for focused users or development workflows
+The distribution unit is the root `warcraft` wheel. Three supported install paths:
 
-That means:
-- `warcraft` should be the umbrella package
-- `wowhead`, `method`, `icy-veins`, `raiderio`, `warcraft-wiki`, `wowprogress`, and `simc` are independently installable provider packages
-- `warcraftlogs` currently has a provider source directory and command surface that ship through the root package; it should gain a package-local `pyproject.toml` before being documented as independently installable
-- candidate providers enter this list when they gain a package and command surface
+| Path | Command | Who it is for |
+| --- | --- | --- |
+| Released wheel | `pipx install <wheel url>` / `uvx --from <wheel url> warcraft ...` | users |
+| Editable checkout | `uv sync --all-extras` (`make install`); `pip install -e '.[dev]'` also works | developers |
+| Single provider | `uv pip install packages/warcraft-core packages/warcraft-api packages/warcraft-content packages/<provider>-cli` | focused or embedded use |
+
+Nothing is published to PyPI. `.github/workflows/release.yml` builds the wheel on a `v*` tag and
+attaches it to the GitHub release; `.github/workflows/ci.yml` proves the single-provider path by
+installing one provider at a time into a clean virtualenv and running its console script.
+
+Every provider listed in [Package Layout](PACKAGE_LAYOUT.md) has a package-local `pyproject.toml`
+whose dependency list is checked against its real imports by
+`tests/test_warcraft_cli_packaging.py`.
 
 ### Wrapper Model
 
 `warcraft` is a routing and orchestration layer.
 
-It should:
-- proxy to service CLIs
-- offer shared search and resolve
-- offer shared environment diagnostics
+It does:
+- route `search`, `resolve`, `doctor`, and `--expansion` filtering across providers
+- pass provider subcommands straight through (`warcraft wowhead entity ...`)
+- compose cross-provider evidence commands that no single provider can answer: `guild`,
+  `guide-compare`, `guide-compare-query`, `guide-builds-simc`, `talent-packet`, `talent-describe`,
+  `cooldown-packet`
 
-It should not:
-- own service parsers
-- own API schemas
+It does not:
+- own service parsers or API schemas
 - own SimC execution logic
-- become a second implementation layer for every service
+- reimplement a provider surface
+
+Composition is a legitimate wrapper responsibility; a second implementation of a provider is not.
+The wrapper reaches providers through the in-process `PROVIDER` surfaces registered in
+`warcraft_cli.providers`. It never spawns a provider binary and never drives one through a Typer
+test runner.
 
 ### Backward Compatibility
 
-The monorepo migration has shipped, so user-facing command contracts and documented output shapes are the compatibility boundary.
-
-Internal package layout can continue to evolve when needed, but provider commands should preserve shipped behavior unless the change is documented and reflected in the changelog.
+User-facing command contracts and documented output shapes are the compatibility boundary.
+Internal layout can keep evolving. Providers that historically emitted payload keys at the top
+level still emit them beside the envelope keys; those copies are deprecated but not removed. See
+[ERROR_CONTRACT.md](../foundation/ERROR_CONTRACT.md).
 
 ## Language Policy
 
-### Default Language
-
-Python is the default language for this monorepo.
-
-Reasons:
-- existing codebase is already Python
-- Python is a strong fit for HTML extraction, HTTP clients, CLI work, local tooling orchestration, and file-backed data workflows
-- the wrapper and shared layers benefit more from iteration speed and maintainability than from raw runtime performance
-
-For now, the intended baseline is:
-- shared libraries: Python
-- wrapper: Python
-- all services: Python
+Python 3.12 for everything: shared libraries, wrapper, and all providers. The codebase is already
+Python, and the work (HTML extraction, HTTP clients, CLI surfaces, local tooling orchestration,
+file-backed data workflows) rewards iteration speed over raw runtime performance.
 
 ## Package Boundaries
 
 ### Shared Packages
 
-These are the first shared package targets:
+`warcraft-core` (`warcraft_core`) — no provider imports, no subprocess execution of provider
+binaries:
 
-- `warcraft-core`
-  - output shaping
-  - field projection
-  - structured errors
-  - config loading
-  - environment inspection helpers
-- `warcraft-api`
-  - HTTP client primitives
-  - retries and backoff
-  - throttling hooks
-  - auth/config persistence helpers
-- `warcraft-content`
-  - bundle storage
-  - index management
-  - freshness tracking
-  - local query scaffolding
+| Module | Responsibility |
+| --- | --- |
+| `output` | JSON shaping: pretty/compact, field projection, diagnostics |
+| `cli` | Typer scaffolding: `RuntimeConfig`, `cfg`, `emit`, `fail`, common global options, `guarded_run` |
+| `envelope` | The `Envelope` TypedDict plus `success_envelope` / `error_envelope` |
+| `exit_codes` | Error-code to exit-code mapping (1 generic, 2 usage, 3 auth, 4 not found, 5 network) |
+| `provider` | `ProviderSurface` Protocol and `ProviderError` |
+| `auth` | Credential discovery order and provider auth-state persistence |
+| `env` | `.env.local` / provider env-file discovery and key reads |
+| `paths` | XDG config/data/cache/state roots and per-provider subpaths |
+| `identity` | Shared character/guild/realm identity semantics |
+| `citations` | Source citation shaping |
+| `analytics` | Sampling and comparison primitives shared by analytics surfaces |
+| `wow_normalization` | Game-vocabulary normalization (classes, specs, slots) |
+| `expansions` | Expansion keys, aliases, and per-site mappings (Wowhead prefixes, Warcraft Logs sites) |
+| `talent_transport` | Pure talent-packet parsing and validation with an injectable round-trip executor |
 
-These shared packages should stay narrow and infrastructure-focused.
+`warcraft-api` (`warcraft_api`):
 
-### Service Packages
+| Module | Responsibility |
+| --- | --- |
+| `http` | HTTP client construction, retries, backoff, shared per-host throttling |
+| `cache` | On-disk and Redis-backed response caching |
 
-Each service package owns:
-- parsing rules
-- API contracts
-- service-specific identifiers
-- service-specific ranking behavior
-- service-specific operational constraints
+Auth lives in `warcraft_core.auth`, not here. See [Auth Architecture](AUTH_ARCHITECTURE.md).
 
-Examples:
-- `wowhead` owns Wowhead entity/page parsing
-- `method` owns Method guide parsing
-- `raiderio` owns Raider.IO endpoint and profile logic
-- `warcraft-wiki` owns MediaWiki-backed reference lookups
-- `wowprogress` owns WowProgress ranking/profile lookups
-- `simc` owns local repo/build/run orchestration
-- `warcraftlogs` owns GraphQL query catalogs and auth scope handling
+`warcraft-content` (`warcraft_content`):
+
+| Module | Responsibility |
+| --- | --- |
+| `article_bundle` | Bundle storage, manifests, freshness tracking |
+| `article_discovery` | Sitemap and index discovery for article providers |
+| `article_provider_cli` | Shared Typer helpers for article-shaped providers |
+| `search` | Local bundle indexing and query |
+| `guide_analysis` | Cross-provider guide comparison primitives |
+
+### Provider Packages
+
+Each provider package owns its parsing rules, API contracts, identifiers, ranking behavior, and
+operational constraints, and exports `PROVIDER` from `<pkg>/provider.py`. Its Typer commands are
+thin wrappers over that surface.
+
+- `wowhead` — Wowhead entity/page parsing, comments, guides, expansion routing
+- `warcraftlogs` — GraphQL query catalogs, OAuth scope handling, sampled report analytics
+- `simc` — local SimulationCraft repo/build/run orchestration and APL analysis
+- `raiderio` — Raider.IO endpoints, profiles, sampled Mythic+ analytics
+- `wowprogress` — WowProgress ranking and profile lookups
+- `warcraft-wiki` — MediaWiki-backed reference lookups
+- `icy-veins` — Icy Veins guide families
+- `method` — Method.gg article-shaped guides
+- `lorrgs` — top-parse cooldown timelines and composition rankings
+- `raidbots` — shared report parsing and SimC-input handoff
+- `blizzard` — Battle.net Game Data and Profile reads (endpoints unverified)
+- `curseforge` — addon metadata, files, changelog (endpoints unverified)
 
 ### Dependency Direction
 
-Allowed:
-- service package -> shared package
-- umbrella package -> shared package
-- umbrella package -> service CLI invocation
-
-Not allowed:
-- service package -> another service package
-- shared package -> service package
+Enforced by `.importlinter`. Allowed: provider -> shared, wrapper -> shared, wrapper -> provider.
+Not allowed: provider -> provider, shared -> provider. Full rules in
+[Package Layout](PACKAGE_LAYOUT.md).
 
 ## Auth Policy
 
-Auth is provider-scoped. Some providers remain unauthenticated, while OAuth-backed providers such as Warcraft Logs use the shared auth primitives described in [Auth Architecture](AUTH_ARCHITECTURE.md).
+Auth is provider-scoped. Some providers are unauthenticated; OAuth-backed providers use the shared
+primitives described in [Auth Architecture](AUTH_ARCHITECTURE.md).
 
-Preferred order:
-- OS keychain when available
-- file-based secret storage with strict permissions as fallback
-- env vars for CI and headless usage
+Preferred credential order: OS keychain when available, then file-based secret storage with strict
+permissions, then env vars for CI and headless usage.
 
 Rules:
-- store secrets per service
+- store secrets per provider
 - keep shared config separate from secrets
-- do not write secrets into bundles, manifests, or shared cache entries
-- let each service own its own auth logic even if storage helpers are shared
+- never write secrets into bundles, manifests, or shared cache entries
+- each provider owns its own auth logic even when storage helpers are shared
 
 ## Search Policy
 
-`warcraft search` should query all services available to the user.
-
-That includes:
-- unauthenticated services by default
-- authenticated services when the user has configured auth for them
-
-This means provider discovery must be auth-aware and capability-aware.
+`warcraft search` queries every provider available to the user: unauthenticated providers by
+default, authenticated providers when credentials are configured. Provider discovery is therefore
+auth-aware and capability-aware, and `warcraft doctor` reports which providers were included.
 
 ## Storage Policy
 
-Use one common root with service-specific subdirectories and a separate shared directory.
-
-High-level shape:
-- `shared/`
-- `wowhead/`
-- `method/`
-- `icy-veins/`
-- `raiderio/`
-- `warcraft-wiki/`
-- `wowprogress/`
-- `simc/`
-- `warcraftlogs/`
-
-Use the shared directory only for data that is actually shared. Do not use it as a dumping ground.
+One root per XDG category, `shared/` for genuinely shared data, then one directory per provider:
+`wowhead/`, `warcraftlogs/`, `simc/`, `raiderio/`, `wowprogress/`, `warcraft-wiki/`, `icy-veins/`,
+`method/`, `lorrgs/`, `raidbots/`, `blizzard/`, `curseforge/`. Do not use `shared/` as a dumping
+ground.
 
 ## Platform Policy
 
-Keep Linux support primary.
+Linux support stays primary; `simc` is the main reason this needs to be explicit. macOS is the
+common development platform. Avoid assumptions that would make cross-platform support impossible to
+revisit.
 
-Cross-platform support can come later, but the structure should avoid making Linux-first assumptions impossible to revisit.
+## Tooling
 
-`simc` is the biggest reason this needs to be explicit.
+- **Package manager:** `uv`. `uv.lock` is committed; CI installs with `uv sync --frozen`. Makefile
+  targets run through `.venv`. `pip install -e '.[dev]'` still works.
+- **`make check`** = `lint typecheck lint-boundaries complexity-gate deadcode test-fast`. Details in
+  [LINTING_AND_COMPLEXITY.md](LINTING_AND_COMPLEXITY.md).
+- **CI** (`.github/workflows/ci.yml`): `lint-and-typecheck`, `unit-tests`, `isolated-install`,
+  `wheel`, `gitleaks`.
+- **Live contracts** (`.github/workflows/live-contracts.yml`): weekly schedule plus manual dispatch;
+  credential-gated jobs are skipped when the matching secret is absent.
+- **Release** (`.github/workflows/release.yml`): a `v*` tag builds the wheel and attaches it.
+- **Generated docs:** `make reference` regenerates `docs/reference/<cli>.md` from the Typer apps and
+  `make skills` regenerates the provider subskills. Both have staleness tests; never hand-edit the
+  output.
 
 ## Release Policy
 
-Use one release pipeline for the monorepo for now.
-
-That does not require one combined CLI. It only means release management stays centralized until there is a reason to split it.
-
-## Current Source Layout
-
-The current high-level layout includes:
-
-- `packages/warcraft-core/`
-- `packages/warcraft-api/`
-- `packages/warcraft-content/`
-- `packages/warcraft-cli/`
-- `packages/wowhead-cli/`
-- `packages/method-cli/`
-- `packages/icy-veins-cli/`
-- `packages/raiderio-cli/`
-- `packages/warcraft-wiki-cli/`
-- `packages/wowprogress-cli/`
-- `packages/simc-cli/`
-- `packages/warcraftlogs-cli/`
-- `packages/raidbots-cli/`
-- `packages/blizzard-api-cli/`
-- `packages/curseforge-cli/`
-- `packages/lorrgs-cli/`
-- `skills/warcraft/`
-
-Service-specific root skills can be added later if they prove useful. For now, the root `warcraft` skill should use progressive disclosure and route agents to the right service docs and CLI.
+One release pipeline for the monorepo. That does not require one combined CLI; it means release
+management stays centralized. Steps live in [docs/RELEASE.md](../RELEASE.md); shipped changes live
+in [CHANGELOG.md](../../CHANGELOG.md).
 
 ## Questions This Doc Resolves
 
-- Should this be one big CLI? No.
+- Should this be one big CLI? No — one wrapper plus 12 provider binaries.
 - Should this be one repo? Yes.
-- Should packages be isolated? Yes.
-- Should users be able to install one umbrella package? Yes.
-- Should users be able to install one service package? Yes.
-- Should Python remain the default? Yes.
-- Is Python the language for all services? Yes.
+- Should packages be isolated? Yes, with enforced dependency direction.
+- Is there one install for normal users? Yes — the root wheel.
+- Can a user install one provider? Yes, and CI proves it.
+- Should Python remain the default for every package? Yes.
 
 ## Linked Docs
 
-- [Roadmap](../ROADMAP.md)
 - [Architecture index](README.md)
 - [Package Layout](PACKAGE_LAYOUT.md)
-- [Monorepo migration (completed)](history/MONOREPO_MIGRATION.md)
+- [Error and Envelope Contract](../foundation/ERROR_CONTRACT.md)
 - [Wrapper Provider Contract](../foundation/WRAPPER_PROVIDER_CONTRACT.md)
-- [Warcraft wrapper CLI doc](../warcraft/README.md)
-- [Warcraft Logs CLI doc](../warcraftlogs/README.md)
+- [Generated command reference](../reference/README.md)
+- [Roadmap](../ROADMAP.md)
+- [Monorepo migration (completed)](history/MONOREPO_MIGRATION.md)

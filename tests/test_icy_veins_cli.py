@@ -4,9 +4,14 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-from icy_veins_cli.main import _resolve_is_confident, _resolve_search_payload, _score_family_match, app
+import httpx
+import pytest
+from icy_veins_cli.main import app
 from icy_veins_cli.page_parser import classify_guide_slug, parse_guide_page, parse_sitemap_guides
+from icy_veins_cli.provider import resolve_payload
+from icy_veins_cli.search import resolve_is_confident, score_family_match
 from typer.testing import CliRunner
+from warcraft_core.envelope import envelope_violations
 
 runner = CliRunner()
 
@@ -379,8 +384,8 @@ def test_classify_guide_slug_distinguishes_supported_families() -> None:
 
 
 def test_score_family_match_boosts_broad_and_specialized_families() -> None:
-    class_score, class_reasons = _score_family_match("monk", content_family="class_hub")
-    easy_score, easy_reasons = _score_family_match("fury warrior easy mode", content_family="easy_mode")
+    class_score, class_reasons = score_family_match("monk", content_family="class_hub")
+    easy_score, easy_reasons = score_family_match("fury warrior easy mode", content_family="easy_mode")
 
     assert class_score == 18
     assert class_reasons == ["family_class_hub"]
@@ -389,7 +394,7 @@ def test_score_family_match_boosts_broad_and_specialized_families() -> None:
 
 
 def test_score_family_match_penalizes_broad_hubs_for_specialized_queries() -> None:
-    score, reasons = _score_family_match("monk leveling", content_family="class_hub")
+    score, reasons = score_family_match("monk leveling", content_family="class_hub")
 
     assert score == -14
     assert reasons == ["penalty_broad_hub"]
@@ -482,20 +487,19 @@ def test_icy_veins_resolve_command_prefers_easy_mode_when_query_matches(monkeypa
 def test_icy_veins_resolve_confidence_helper_covers_easy_mode_and_intro_paths() -> None:
     easy_mode_top = {"ranking": {"score": 35, "match_reasons": ["family_easy_mode"]}}
     easy_mode_second = {"ranking": {"score": 24, "match_reasons": []}}
-    assert _resolve_is_confident(easy_mode_top, easy_mode_second) is True
+    assert resolve_is_confident(easy_mode_top, easy_mode_second) is True
 
     intro_top = {"ranking": {"score": 30, "match_reasons": ["intro_guide"]}}
     intro_second = {"ranking": {"score": 23, "match_reasons": []}}
-    assert _resolve_is_confident(intro_top, intro_second) is True
+    assert resolve_is_confident(intro_top, intro_second) is True
 
     weak_top = {"ranking": {"score": 29, "match_reasons": []}}
     weak_second = {"ranking": {"score": 25, "match_reasons": []}}
-    assert _resolve_is_confident(weak_top, weak_second) is False
+    assert resolve_is_confident(weak_top, weak_second) is False
 
 
 def test_icy_veins_resolve_search_payload_uses_confidence_helper() -> None:
-    payload = _resolve_search_payload(
-        provider_command="icy-veins",
+    payload = resolve_payload(
         query="fury warrior easy mode",
         search_query="fury warrior easy mode",
         results=[
@@ -651,3 +655,61 @@ def test_icy_veins_invalid_guide_ref_fails_structured() -> None:
     payload = json.loads(result.stderr or result.stdout)
     assert payload["ok"] is False
     assert payload["error"]["code"] == "invalid_guide_ref"
+
+
+def _connect_error(*_args, **_kwargs):
+    raise httpx.ConnectError("connection refused")
+
+
+def _status_error(status_code: int):
+    def raise_status(*_args, **_kwargs):
+        request = httpx.Request("GET", "https://www.icy-veins.com/wow/mistweaver-monk-pve-healing-guide")
+        raise httpx.HTTPStatusError("boom", request=request, response=httpx.Response(status_code, request=request))
+
+    return raise_status
+
+
+NETWORK_COMMANDS = [
+    ["search", "mistweaver monk"],
+    ["resolve", "mistweaver monk"],
+    ["guide", "mistweaver-monk-pve-healing-guide"],
+    ["guide-full", "mistweaver-monk-pve-healing-guide"],
+    ["guide-export", "mistweaver-monk-pve-healing-guide"],
+]
+
+
+@pytest.mark.parametrize("args", NETWORK_COMMANDS, ids=lambda args: args[0])
+def test_icy_veins_transport_failure_emits_error_envelope(monkeypatch, args: list[str]) -> None:
+    monkeypatch.setattr("icy_veins_cli.client.request_with_retries", _connect_error)
+    result = runner.invoke(app, args)
+
+    assert result.exit_code == 5
+    assert result.stdout == ""
+    payload = json.loads(result.stderr)
+    assert envelope_violations(payload) == []
+    assert payload["ok"] is False
+    assert payload["provider"] == "icy-veins"
+    assert payload["error"]["code"] == "network_error"
+
+
+def test_icy_veins_missing_guide_page_exits_not_found(monkeypatch) -> None:
+    monkeypatch.setattr("icy_veins_cli.client.request_with_retries", _status_error(404))
+    result = runner.invoke(app, ["guide", "mistweaver-monk-pve-healing-guide"])
+
+    assert result.exit_code == 4
+    payload = json.loads(result.stderr)
+    assert payload["error"]["code"] == "not_found"
+    assert payload["error"]["details"]["status_code"] == 404
+
+
+def test_icy_veins_search_payload_is_a_conforming_envelope(monkeypatch) -> None:
+    monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.sitemap_guides", lambda self: parse_sitemap_guides(SITEMAP_XML))
+    result = runner.invoke(app, ["search", "mistweaver monk guide"])
+    assert result.exit_code == 0
+
+    payload = json.loads(result.stdout)
+    assert envelope_violations(payload) == []
+    assert payload["kind"] == "search_results"
+    assert payload["command"] == "search"
+    # Legacy top-level keys stay alongside the envelope so existing agents keep working.
+    assert payload["results"] == payload["data"]["results"]

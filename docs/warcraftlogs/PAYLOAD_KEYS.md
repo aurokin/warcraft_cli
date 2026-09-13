@@ -1,9 +1,14 @@
 # Warcraft Logs payload keys
 
-Canonical top-level envelope keys for typed `warcraftlogs` commands (v0.4.0).
+Canonical top-level payload keys for typed `warcraftlogs` commands.
 
-During the v0.4.x minor release, legacy keys listed below are still dual-emitted at the
-top level. Prefer the canonical key; `deprecated_keys` lists legacy aliases present.
+These sit alongside the shared envelope keys (`ok`, `provider`, `command`, `kind`,
+`schema_version`, `query`, `provenance`, `data`, and `error` on failure) described in
+[ERROR_CONTRACT.md](../foundation/ERROR_CONTRACT.md); envelope keys are never copied into a
+canonical command body.
+
+Legacy keys listed below are still dual-emitted at the top level. Prefer the canonical key;
+`deprecated_keys` lists the legacy aliases present in a given payload.
 
 | Command | Canonical key | Legacy primary (deprecated) |
 | --- | --- | --- |

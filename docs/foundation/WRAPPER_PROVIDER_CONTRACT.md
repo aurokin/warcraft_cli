@@ -4,19 +4,26 @@
 
 This document defines how the Python `warcraft` wrapper interacts with service providers.
 
-It exists to keep the wrapper thin, predictable, and language-agnostic at the provider boundary.
+It exists to keep the routing boundary thin and predictable, and to make every provider look the same to an agent.
 
 ## Wrapper Philosophy
 
 `warcraft` is:
-- a router
-- a discovery layer
-- a thin orchestration layer
+- a router (`warcraft <provider> ...` passthrough)
+- a discovery layer (`search`, `resolve`, `doctor`)
+- the owner of cross-provider composition
 
 It is not:
 - a second implementation of every service
 - a parser owner
 - an API schema owner
+
+Composition is a real wrapper responsibility, not an accident: `guild`, `guild-history`,
+`guild-ranks`, `actor-profile`, `cooldown-packet`, `guide-compare`, `guide-compare-query`,
+`guide-builds-simc`, `talent-packet`, and `talent-describe` all merge or hand off between two or
+more providers. No provider owns those workflows, so the wrapper does. The line the wrapper must not
+cross is *parsing or re-modelling a provider's source data*: composite commands consume provider
+payloads, preserve each source's provenance, and add their own reconciliation layer explicitly.
 
 ## Required Provider Capabilities
 
@@ -27,9 +34,11 @@ Every service provider must expose these wrapper-facing capabilities:
 - `doctor`
 - direct passthrough execution for service-specific commands
 
-If a capability is not implemented yet, it must still exist and return a structured stub such as `coming_soon`.
-
-That keeps the wrapper contract stable even while services are being built.
+A capability that is not implemented yet must still exist and return a structured `coming_soon`
+stub. A capability the provider will never have — Raidbots publishes no report index, so it has no
+discovery surface — is declared `not_supported` in the registry and still answers with a structured
+stub instead of a crash. Either way the wrapper contract stays stable and the registry, not a
+special case in wrapper code, says which it is.
 
 ## Capability Expectations
 
@@ -68,34 +77,63 @@ Examples of what it may check:
 - auth configuration
 - local binary presence
 - cache/storage roots
-- required runtime such as Node for a non-Python package
+- local runtime dependencies such as the SimulationCraft checkout and binary
 
 This should always exist, even for stubbed providers.
 
-## Invocation Strategy
+## Provider Surface
 
-Preferred order:
-- Python-first for Python services
-- shell/CLI boundary second
+The wrapper-facing capabilities are a code-level interface, not prose. `warcraft_core.provider`
+defines:
 
-Practical meaning:
-- Python services may be invoked through shared entrypoints or direct package hooks
-- non-Python services should be invoked through a CLI boundary
-- the wrapper should preserve a stable provider contract either way
+```python
+class ProviderSurface(Protocol):
+    name: str
+    def search(self, query: str, *, limit: int = 10, **options) -> Envelope: ...
+    def resolve(self, target: str, **options) -> Envelope: ...
+    def doctor(self, **options) -> Envelope: ...
+```
 
-## Mixed-Language Rule
+Rules:
+- every provider package exports `PROVIDER` from `<pkg>/provider.py`, an object satisfying that protocol
+- surface methods are pure: they never print and never raise `typer.Exit`; they return an `Envelope` or raise `ProviderError`
+- the provider's Typer commands are thin wrappers that call the surface and emit its envelope
+- the wrapper calls `PROVIDER` objects in-process for `search`, `resolve`, and `doctor` — never a test CLI runner and never a subprocess
+- `warcraft <provider> ...` passthrough invokes that provider's Typer app in-process and forwards the global output flags
 
-If a service is implemented in another language:
-- the wrapper still stays Python
-- the provider is invoked as a CLI process
-- stdout/stderr and exit code become the integration boundary
-- the provider must still satisfy the same `search`, `resolve`, and `doctor` contract
+There is no shell integration boundary and none is planned. Every provider is a Python package in
+this repo; a future non-Python service would be wrapped by a Python adapter package that exports
+`PROVIDER` like any other provider.
+
+## Envelope, Errors, And Exit Codes
+
+Wrapper and provider payloads share one envelope (`ok`, `provider`, `command`, `kind`,
+`schema_version`, `query`, `provenance`, `data`, and `error` on failure) and one exit-code
+vocabulary (1 generic, 2 usage, 3 auth, 4 not found, 5 network/upstream). Both are defined in
+[ERROR_CONTRACT.md](ERROR_CONTRACT.md), which is the normative document; this page does not restate
+them. Provider rows inside `warcraft search` and `warcraft resolve` output carry `ok` and `error`
+from the underlying call alongside the registry `status`.
+
+## Provider Tiers
+
+Every registration declares a tier. `warcraft doctor` reports `wrapper.tiers` and a `tier` per
+provider row, and [ROADMAP.md](../ROADMAP.md) and `README.md` use the same membership.
+
+| Tier | Providers | Meaning |
+|------|-----------|---------|
+| core | `wowhead`, `warcraftlogs`, `simc` | deepest surface and contracts; the product |
+| supported | `method`, `icy-veins`, `raiderio`, `warcraft-wiki`, `wowprogress` | real, narrower surfaces expected to work |
+| experimental | `raidbots`, `blizzard-api`, `curseforge`, `lorrgs` | thin or unproven; `blizzard-api` and `curseforge` are additionally unverified against live endpoints (`provenance.verified: false`) |
+
+Tier is descriptive, not a permission: it tells an agent how much to trust the surface before
+building a workflow on it.
 
 ## Provider Registration
 
 The wrapper should know for each provider:
 - provider name
 - command name
+- support tier
 - implementation language
 - whether it is installed
 - whether auth is configured
@@ -130,8 +168,9 @@ Expected fields:
 - `expansion_mode = "profiled"`
 - provider-defined supported expansion list or profile map
 
-Current example:
-- `wowhead`
+Current examples:
+- `wowhead` (expansion profiles)
+- `warcraftlogs` (`retail` / `classic` / `fresh` site profiles)
 
 ### `fixed`
 
@@ -142,13 +181,13 @@ Expected fields:
 - `expansion_mode = "fixed"`
 - explicit `supported_expansions`
 
-Current likely examples:
+Current examples:
 - `method` -> `retail`
 - `icy-veins` -> `retail`
 - `raiderio` -> `retail`
-- `warcraftlogs` -> `retail`
 - `wowprogress` -> `retail`
 - `lorrgs` -> `retail`
+- `raidbots` -> `retail`
 
 ### `none`
 
@@ -172,9 +211,9 @@ The wrapper must not silently widen scope.
 
 `retail` is a real explicit filter, not equivalent to “no expansion filter”.
 
-Future provider note:
-- some providers may require profile-based routing that is not a clean copy of the current wowhead-centric expansion vocabulary
-- `warcraftlogs` is the current example: the wrapper now supports the retail provider surface, but classic/fresh site-profile mapping is still intentionally deferred
+Provider profile note:
+- a `profiled` provider does not have to share Wowhead's profile model; the shared key and alias vocabulary lives in `warcraft_core.expansions`, and each provider maps those keys onto its own model
+- `warcraftlogs` is the second example: the wrapper maps `retail` to `--site retail`, the classic-family keys (`classic`, `tbc`, `wotlk`, `cata`, `mop-classic`) to `--site classic`, and `fresh` to `--site fresh`; `ptr`, `beta`, and `classic-ptr` are rejected rather than coerced
 
 ## Expansion Output Rules
 
@@ -252,17 +291,8 @@ The wrapper should preserve:
 It should not flatten all provider outputs into one fake universal model.
 It should not turn routing guidance into unsupported "smart answers."
 
-## Milestone Behavior
+## Current State
 
-Milestone 1:
-- `warcraft` proxies `wowhead`
-- `method` exists as a registered provider with stubbed `search`, `resolve`, and `doctor` if needed
-- wrapper commands exist even if some providers are not yet real
-
-Milestone 2:
-- `method` becomes a real provider behind the same contract
-
-Current state:
 - `wowhead` is ready
 - `method` is ready
 - `icy-veins` is ready
@@ -270,7 +300,7 @@ Current state:
 - `warcraft-wiki` is ready
 - `wowprogress` is ready for structured search, conservative resolve, and direct phase-1 retrieval
 - `simc` is ready for direct local repo workflows plus readonly APL inspection, conservative reasoning, comparison, analysis packets, and runtime timing helpers, with `search` and `resolve` intentionally returning structured `coming_soon` payloads
-- `warcraftlogs` is ready for explicit report-scoped wrapper routing with retail-only OAuth client-credentials auth, typed world metadata, guild, character, and report commands. Wrapper `search`/`resolve` are intentionally limited to explicit report references (URL or a bare report code) and advertised as `ready_explicit_report_only`: a non-report query keeps `warcraftlogs` in the fanout but returns a structured discovery hint (`count: 0`, `resolved: false`, `message`, `supported_inputs`, `suggested_commands`) rather than a fabricated match
+- `warcraftlogs` is ready for explicit report-scoped wrapper routing with OAuth client-credentials auth across the `retail`, `classic`, and `fresh` site profiles, typed world metadata, guild, character, and report commands. Wrapper `search`/`resolve` are intentionally limited to explicit report references (URL or a bare report code) and advertised as `ready_explicit_report_only`: a non-report query keeps `warcraftlogs` in the fanout but returns a structured discovery hint (`count: 0`, `resolved: false`, `message`, `supported_inputs`, `suggested_commands`) rather than a fabricated match
 - `raidbots` is ready for report consumption (`inspect-report`, `input`, `explain-input`) and local SimC handoff; `search`/`resolve` are `not_supported` (report-driven provider, no discovery surface)
 - `blizzard-api` is ready for official Game Data and Profile reads over OAuth client-credentials auth: `doctor` reports install state, auth posture, and the region/routing block; `game_data` and `profile` are ready (`realm`/`item`/`character` read commands), while `search`/`resolve` stay `coming_soon` until a discovery surface lands. Registered with `expansion_mode=none` (Blizzard's region/namespace model is not the wrapper's expansion axis)
 - `curseforge` is a scaffold for the public CurseForge addon API (`x-api-key` auth, `CURSEFORGE_API_KEY`): `doctor` and `addon` are ready (`curseforge addon <slug|id>` returns the addon metadata, latest files, and the newest file's changelog), while `search`/`resolve` stay `coming_soon`. Registered with `expansion_mode=none` (addon game-version compatibility lives inside file records, not the wrapper's expansion axis). Host/endpoints/response shapes follow the documented public CurseForge Core API and are pending one-time live confirmation (`provenance.verified=false`; run `CURSEFORGE_LIVE_TESTS=1`)

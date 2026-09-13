@@ -1,5 +1,8 @@
 # Raidbots
 
+**Tier: experimental.** Raidbots is read-only here: the CLI parses shared reports and hands their
+SimC input to local `simc`. It cannot queue or run simulations.
+
 ## Best For
 
 - reading a Raidbots report someone shared (URL or bare report ID)
