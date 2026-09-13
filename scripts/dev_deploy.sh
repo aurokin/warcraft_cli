@@ -39,6 +39,12 @@ while (($#)); do
   shift
 done
 
+if [[ -n "${WARCRAFT_BIN_NAMES:-}" ]]; then
+  # Removed override: failing here beats silently relinking every console script.
+  echo "WARCRAFT_BIN_NAMES is no longer supported; pass --bin-name <name> instead." >&2
+  exit 1
+fi
+
 if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
   echo "Python binary '$PYTHON_BIN' not found." >&2
   exit 1

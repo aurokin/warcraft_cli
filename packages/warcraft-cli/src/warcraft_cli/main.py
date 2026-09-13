@@ -302,8 +302,12 @@ def _parse_json_object(text: str) -> dict[str, Any] | None:
 
 
 def _with_expansion_advisory(payload: dict[str, Any], advisory: dict[str, Any]) -> dict[str, Any]:
-    annotated = {**payload, "expansion_advisory": advisory}
-    annotated.setdefault("expansion_filter", advisory["expansion_filter"])
+    """Attach the advisory at the top level and inside ``data`` (which mirrors the payload on success)."""
+    added = {"expansion_advisory": advisory, "expansion_filter": payload.get("expansion_filter", advisory["expansion_filter"])}
+    annotated = {**payload, **added}
+    data = payload.get("data")
+    if payload.get("ok") is not False and isinstance(data, dict):
+        annotated["data"] = {**data, **added}
     return annotated
 
 

@@ -610,6 +610,9 @@ def test_warcraft_passthrough_relaxes_none_expansion_provider_with_advisory() ->
     assert payload["expansion_filter"] == "passthrough_no_expansion_semantics"
     assert payload["expansion_advisory"]["requested_expansion"] == "wotlk"
     assert payload["expansion_advisory"]["provider_expansion_mode"] == "none"
+    # `data` mirrors the payload, so the advisory must be readable there too.
+    assert payload["data"]["expansion_advisory"] == payload["expansion_advisory"]
+    assert payload["data"]["expansion_filter"] == "passthrough_no_expansion_semantics"
 
 
 def test_warcraft_passthrough_maps_warcraftlogs_expansion_to_site_profile() -> None:
