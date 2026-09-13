@@ -591,7 +591,7 @@ EOF
 - Warcraft Logs documents that guild roster verification is game-dependent, so `guild-members` should be treated as a retail-capable roster surface, not a universal guarantee across every future site profile
 - `guild-attendance` is available as an official schema surface, but live public queries can still hit provider-side internal errors; treat it as useful when it works, not as a guaranteed stable contract yet
 - cross-report analytics skip unfinished live reports and currently treat only finished reports as stable sampled inputs
-- credential discovery is a pure read: `.env.local`, the XDG provider env file, and the process environment are resolved per key without mutating the environment, and `auth status` reports `credential_source: null` when the two halves come from different layers
+- credential discovery is a pure read: `.env.local`, the XDG provider env file, and the process environment are read without mutating the environment, the first layer holding both the client ID and secret wins (halves from different layers are never combined), and `auth status` reports `credential_source: null` when no layer is complete
 
 ## SimulationCraft Commands
 

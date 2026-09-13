@@ -582,6 +582,18 @@ def test_warcraft_doctor_reports_expansion_filtering_state() -> None:
     }
 
 
+def test_warcraft_passthrough_advisory_is_selectable_with_strict_fields() -> None:
+    """Output shaping runs after the advisory is attached, so wrapper-added keys can be projected."""
+    result = runner.invoke(
+        warcraft_app,
+        ["--expansion", "wotlk", "--fields", "expansion_advisory", "--fields-strict", "blizzard", "doctor"],
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert payload["expansion_advisory"]["requested_expansion"] == "wotlk"
+    assert "capabilities" not in payload
+
+
 def test_warcraft_passthrough_relaxes_none_expansion_provider_with_advisory() -> None:
     # blizzard-api is expansion_mode=none: a wrapper --expansion has no semantics to honor,
     # so the command is passed through unchanged with an advisory note (relax-to-passthrough),

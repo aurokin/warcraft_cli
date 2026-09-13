@@ -209,8 +209,9 @@ def _forwarded_output_args(ctx: typer.Context) -> list[str]:
     return args
 
 
-def _passthrough_args(ctx: typer.Context, *, provider_name: str) -> list[str]:
-    args = [*_forwarded_output_args(ctx), *ctx.args]
+def _passthrough_args(ctx: typer.Context, *, provider_name: str, forward_output: bool = True) -> list[str]:
+    """Provider argv for a passthrough; ``forward_output=False`` leaves output shaping to the wrapper."""
+    args = [*(_forwarded_output_args(ctx) if forward_output else []), *ctx.args]
     requested_expansion = _requested_expansion(ctx)
     if requested_expansion is None:
         return args
@@ -250,7 +251,9 @@ def _run_passthrough(ctx: typer.Context, sub_app: typer.Typer, *, provider_name:
     as an additive sibling key (provider payload preserved), then re-emit.
     """
     advisory = _expansion_passthrough_advisory(ctx, provider_name=provider_name)
-    args = _passthrough_args(ctx, provider_name=provider_name)
+    # In the capture path the wrapper shapes the annotated payload itself (through ``_emit``), so
+    # the output flags are not forwarded; otherwise ``--fields expansion_advisory`` could never match.
+    args = _passthrough_args(ctx, provider_name=provider_name, forward_output=advisory is None)
     if advisory is None:
         invoke_provider_command(sub_app, args=args, prog_name=prog_name)
         return

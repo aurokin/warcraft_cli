@@ -21,8 +21,8 @@ Credentials:
 - `WARCRAFTLOGS_CLIENT_ID`
 - `WARCRAFTLOGS_CLIENT_SECRET`
 
-Each key is resolved independently, highest layer first, with pure reads that never mutate the
-process environment:
+The first layer that holds both keys wins; an ID from one layer is never combined with a secret
+from another. Layers are read purely (the process environment is never mutated), highest first:
 1. repo-local `.env.local` (searched up to the enclosing git repository root)
 2. `~/.config/warcraft/providers/warcraftlogs.env`
 3. the process environment
