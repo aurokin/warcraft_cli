@@ -88,10 +88,16 @@ def transport_errors() -> Iterator[None]:
         yield
     except httpx.HTTPStatusError as exc:
         status = exc.response.status_code
+        message = _upstream_message(exc)
         code = {400: "invalid_query", 401: "auth_failed", 403: "auth_failed", 404: "not_found", 429: "rate_limited"}.get(
             status, "upstream_error"
         )
-        raise ProviderError(code, _upstream_message(exc), details={"status_code": status, "url": str(exc.request.url)}) from exc
+        # Raider.IO answers a missing character/guild with HTTP 400 "Could not find requested <x>"
+        # and a malformed request with HTTP 400 "Invalid request query input". Only the latter is a
+        # usage error, so the message is what separates exit 4 (not found) from exit 2.
+        if status == 400 and message.lower().startswith("could not find"):
+            code = "not_found"
+        raise ProviderError(code, message, details={"status_code": status, "url": str(exc.request.url)}) from exc
     except httpx.TimeoutException as exc:
         raise ProviderError("timeout", f"Raider.IO request timed out: {exc}") from exc
     except httpx.RequestError as exc:

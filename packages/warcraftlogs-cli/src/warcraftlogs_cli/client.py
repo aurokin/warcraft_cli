@@ -1156,6 +1156,20 @@ def _first_graphql_error_message(errors: list[Any], operation_name: str | None) 
     return str(message) if message else f"Warcraft Logs returned GraphQL errors for {operation_name}."
 
 
+def _graphql_error_code(message: str) -> str:
+    """Classify a GraphQL error by its message so unknown ids and permission denials get contract codes.
+
+    Warcraft Logs answers both cases with ``report: null`` plus an error, so the payload shape alone
+    cannot tell "does not exist" (exit 4) from "no permission" (exit 3).
+    """
+    lowered = message.lower()
+    if "does not exist" in lowered or "not found" in lowered or "no such" in lowered:
+        return "not_found"
+    if "permission" in lowered or "not authorized" in lowered or "unauthorized" in lowered:
+        return "auth_failed"
+    return "graphql_error"
+
+
 class WarcraftLogsClientError(RuntimeError):
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
@@ -1680,7 +1694,8 @@ class WarcraftLogsClient:
         data: dict[str, Any] | None = raw_data if isinstance(raw_data, dict) else None
         has_useful_data = data is not None and bool(data) and _response_has_useful_value(data)
         if errors and not has_useful_data:
-            raise WarcraftLogsClientError("graphql_error", _first_graphql_error_message(errors, operation_name))
+            message = _first_graphql_error_message(errors, operation_name)
+            raise WarcraftLogsClientError(_graphql_error_code(message), message)
         if not data:
             label = "user " if endpoint == "user" else ""
             raise WarcraftLogsClientError(
@@ -1711,7 +1726,8 @@ class WarcraftLogsClient:
         data = payload.get("data")
         if "data" not in payload:
             if errors:
-                raise WarcraftLogsClientError("graphql_error", _first_graphql_error_message(errors, operation_name))
+                message = _first_graphql_error_message(errors, operation_name)
+                raise WarcraftLogsClientError(_graphql_error_code(message), message)
             label = "user " if endpoint == "user" else ""
             raise WarcraftLogsClientError(
                 "invalid_response",
@@ -1719,7 +1735,8 @@ class WarcraftLogsClient:
             )
         if errors:
             if data is None:
-                raise WarcraftLogsClientError("graphql_error", _first_graphql_error_message(errors, operation_name))
+                message = _first_graphql_error_message(errors, operation_name)
+                raise WarcraftLogsClientError(_graphql_error_code(message), message)
             warnings = [_normalize_graphql_error(error) for error in errors]
             self._last_warnings = warnings
             return {**data, GRAPHQL_WARNINGS_KEY: warnings} if isinstance(data, dict) else None
@@ -2360,7 +2377,12 @@ class WarcraftLogsClient:
         return reports
 
     def report_fights(
-        self, *, code: str, difficulty: int | None = None, allow_unlisted: bool = False, ttl_override: int | None = None,
+        self,
+        *,
+        code: str,
+        difficulty: int | None = None,
+        allow_unlisted: bool = False,
+        ttl_override: int | None = None,
     ) -> dict[str, Any]:
         return self._report_lookup(
             operation_name="ReportFights",

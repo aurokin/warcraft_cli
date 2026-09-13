@@ -1,10 +1,12 @@
 # Blizzard API CLI (`blizzard`)
 
-**Tier: experimental — unverified.** The endpoint hosts, OAuth token URL, and namespace strings
-follow documented Blizzard API conventions but have never been confirmed against live endpoints in
-this repo. Every read command (`realm`, `item`, `character`) carries `provenance.verified: false`,
-and `doctor` reports `data.tier: "experimental"` plus a `region.verification` block. Treat results as unconfirmed until
-someone runs the live suite with real credentials:
+**Tier: experimental — verified live.** The endpoint hosts, OAuth token URL, and namespace
+strings were confirmed against the live API on 2026-09-13 for the `us`, `eu`, `kr`, and `tw`
+regions (retail and classic Game Data, retail Profile), so `realm`, `item`, and `character` carry
+`provenance.verified: true` there. `cn` stays `verified: false` because its host is unreachable
+from where this repo is tested. `doctor` reports `data.tier: "experimental"`, `live_confirmed`, and
+the verified and unverified regions. The tier stays experimental because the command surface is
+thin, not because the data is suspect. Re-verify with:
 
 ```bash
 BLIZZARD_LIVE_TESTS=1 pytest -q -m live tests/test_blizzard_api_live.py
@@ -75,8 +77,8 @@ read command fails with `missing_client_credentials` and exit 3.
 
 Success payloads are the shared envelope: `{ok, provider, command, kind, schema_version, query,
 provenance, data}`. `data` is the raw Blizzard JSON body; `provenance` carries `region`, `namespace`,
-`namespace_class`, `game_version`, `locale`, `source_url`, `verified: false`, and a
-`verification_note`.
+`namespace_class`, `game_version`, `locale`, `source_url`, `verified` (true for confirmed regions),
+and a `verification_note`.
 
 `doctor` and the coming-soon stubs additionally repeat their payload keys at the top level
 (`status`, `capabilities`, `coming_soon`, ...). Those top-level copies are the pre-envelope shape and

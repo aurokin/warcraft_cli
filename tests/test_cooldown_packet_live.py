@@ -20,6 +20,16 @@ def _require_warcraftlogs_client_auth() -> None:
         pytest.skip("Warcraft Logs client credentials are not configured.")
 
 
+def _assert_casts_in_phase(casts: list[dict], phase: dict) -> None:
+    """Every returned cast names a real spell and falls inside the phase window it was selected for."""
+    assert casts, "expected at least one cast row"
+    for cast in casts:
+        spell_id = cast["spell"]["spell_id"]
+        assert isinstance(spell_id, int), f"spell_id {spell_id!r} is not an integer"
+        assert cast["spell"]["name"], f"spell {spell_id} has no name"
+        assert phase["start_ms"] <= cast["timestamp_ms"] < phase["end_ms"]
+
+
 def test_live_cooldown_packet_example_report_phase_two_e2e() -> None:
     _require_warcraftlogs_client_auth()
 
@@ -51,11 +61,14 @@ def test_live_cooldown_packet_example_report_phase_two_e2e() -> None:
     assert payload["query"]["spec_slug"] == "warrior-protection"
     assert payload["query"]["boss_slug"] == "lura"
 
+    # The report's own numbers (phase boundaries, which cooldowns the player pressed) are Warcraft
+    # Logs data, not a contract: assert the invariants the packet has to satisfy instead of pinning
+    # one raid night's milliseconds and spell order.
     selected_phase = payload["phase"]["selected"]
     assert selected_phase["phase"] == 2
     assert selected_phase["label"] == "P2"
-    assert selected_phase["start_ms"] == 190528
-    assert selected_phase["end_ms"] == 220530
+    assert isinstance(selected_phase["start_ms"], int)
+    assert isinstance(selected_phase["end_ms"], int)
     assert selected_phase["start_ms"] < selected_phase["end_ms"]
 
     player = payload["player"]
@@ -65,25 +78,20 @@ def test_live_cooldown_packet_example_report_phase_two_e2e() -> None:
     assert player["class_slug"] == "warrior"
 
     player_casts = payload["cooldowns"]["player_casts"]
+    selected_casts = player_casts["selected_phase_casts"]
     assert player_casts["raw_event_count"] >= player_casts["tracked_cast_count"]
-    assert player_casts["tracked_cast_count"] >= 2
-    assert player_casts["selected_phase_cast_count"] == 2
-    selected_spell_ids = [cast["spell"]["spell_id"] for cast in player_casts["selected_phase_casts"]]
-    assert selected_spell_ids == [107574, 1160]
-    assert [cast["spell"]["name"] for cast in player_casts["selected_phase_casts"]] == [
-        "Avatar",
-        "Demoralizing Shout",
-    ]
-    assert all(
-        selected_phase["start_ms"] <= cast["timestamp_ms"] < selected_phase["end_ms"]
-        for cast in player_casts["selected_phase_casts"]
-    )
+    assert player_casts["tracked_cast_count"] >= player_casts["selected_phase_cast_count"]
+    assert player_casts["selected_phase_cast_count"] == len(selected_casts)
+    assert selected_casts, "expected at least one tracked cooldown inside the selected phase"
+    _assert_casts_in_phase(selected_casts, selected_phase)
 
     comparison = payload["comparison"]
     assert comparison["status"] == "ready"
     assert comparison["sample_count"] == 1
-    assert comparison["samples"][0]["phase_available"] is True
-    assert comparison["samples"][0]["selected_phase_casts"]
+    sample = comparison["samples"][0]
+    assert isinstance(sample["phase_available"], bool)
+    if sample["phase_available"]:
+        _assert_casts_in_phase(sample["selected_phase_casts"], sample["phase_window"])
 
     source_expectations = {
         "lorrgs_user_report_fights": "lorrgs",

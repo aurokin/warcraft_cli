@@ -46,7 +46,12 @@ def invoke_live(runner: CliRunner, app: Any, args: list[str], *, provider_name: 
     error = payload.get("error") if isinstance(payload, dict) and isinstance(payload.get("error"), dict) else {}
     error_code = error.get("code") if isinstance(error.get("code"), str) else None
     if error_code == "blocked":
-        pytest.skip(f"Live {provider_name} requests are currently blocked by upstream bot protection.")
+        # Blocking is a product outage, not a reason to go green: the clients impersonate a browser
+        # on purpose, so a block means the transport needs work (see docs/wowprogress/README.md).
+        pytest.fail(
+            f"Live {provider_name} requests are blocked by upstream bot protection (error.code=blocked). "
+            "This is a transport regression, not an environment problem; fix the client rather than skipping."
+        )
     pytest.fail(
         f"Live {provider_name} command failed after {attempts} attempts.\n"
         f"args={args}\n"

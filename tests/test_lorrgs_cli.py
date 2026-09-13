@@ -7,6 +7,7 @@ import pytest
 from lorrgs_cli.main import app
 from typer.testing import CliRunner
 from warcraft_cli.main import app as warcraft_app
+from warcraft_core.envelope import envelope_violations
 
 runner = CliRunner()
 
@@ -411,3 +412,18 @@ def test_invalid_report_reference_is_a_structured_usage_failure() -> None:
     payload = json.loads(result.stderr)
     assert payload["ok"] is False
     assert payload["error"]["code"] == "invalid_report_ref"
+
+
+def test_list_shaped_route_is_keyed_under_its_payload_kind(monkeypatch) -> None:
+    # /api/zones answers with a bare JSON array, but the shared envelope requires `data` to be an
+    # object (docs/foundation/ERROR_CONTRACT.md). Key it the way the wrapped routes already are.
+    zones = [{"id": 53.1, "name_slug": "the-venomous-abyss", "bosses": []}]
+    monkeypatch.setattr(
+        "lorrgs_cli.client.LorrgsClient.zones",
+        lambda self: {"payload": zones, "source_url": "https://api2.lorrgs.io/api/zones"},
+    )
+    result = runner.invoke(app, ["zones"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert not envelope_violations(payload)
+    assert payload["data"] == {"zones": zones}

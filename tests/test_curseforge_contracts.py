@@ -75,8 +75,8 @@ def test_addon_by_slug_envelope_and_provenance(monkeypatch: pytest.MonkeyPatch) 
     assert prov["mod_id"] == 3358
     assert prov["slug"] == "deadly-boss-mods"
     assert prov["resolved_by"] == "slug_search"
-    assert prov["verified"] is False
-    assert "pending one-time live confirmation" in prov["verification_note"]
+    assert prov["verified"] is True
+    assert "confirmed against live CurseForge traffic" in prov["verification_note"]
     assert set(prov["source_urls"]) == {"mod", "search", "changelog"}
     data = payload["data"]
     assert data["metadata"]["id"] == 3358
@@ -380,3 +380,25 @@ def test_numeric_id_missing_gameid_is_invalid_response(monkeypatch: pytest.Monke
     assert result.exit_code == 1
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "invalid_response"
+
+
+def test_slug_search_auth_failure_names_the_endpoint_and_the_id_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    # /v1/mods/search is scoped separately from /v1/mods: a key that reads mods fine can still be
+    # rejected for search. The message has to say which endpoint refused and how to get the addon
+    # anyway, or the caller only sees an unactionable "HTTP 403".
+    def _fake(client: Any, url: str, *, method: str = "GET", **kwargs: Any) -> _FakeResponse:
+        if "/v1/mods/search" not in url:
+            return _FakeResponse(_fixture_for_url(url), url)
+        request = httpx.Request("GET", url)
+        response = httpx.Response(403, request=request)
+        raise httpx.HTTPStatusError("Forbidden", request=request, response=response)
+
+    monkeypatch.setattr(client_module, "request_with_retries", _fake)
+    result = runner.invoke(app, ["addon", "deadly-boss-mods"])
+    assert result.exit_code == 3
+    payload = json.loads(result.stderr)
+    assert payload["error"]["code"] == "auth_failed"
+    message = payload["error"]["message"]
+    assert "/v1/mods/search" in message
+    assert "numeric mod id" in message
+    assert "curseforge addon 3358" in message

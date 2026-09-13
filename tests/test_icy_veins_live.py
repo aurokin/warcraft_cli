@@ -19,10 +19,13 @@ ROTATION_REF = "mistweaver-monk-pve-healing-rotation-cooldowns-abilities"
 STAT_PRIORITY_REF = "mistweaver-monk-pve-healing-stat-priority"
 GEMS_ENCHANTS_CONSUMABLES_REF = "mistweaver-monk-pve-healing-gems-enchants-consumables"
 SPELL_SUMMARY_REF = "mistweaver-monk-pve-healing-spell-summary"
-RESOURCES_REF = "mistweaver-monk-resources"
+# Icy Veins retired the per-spec "resources" and "simulations" subpages in the 2026 redesign: both
+# now 301 to another page (the spec guide and the shared Raidbots how-to respectively), so the
+# families they used to cover are replaced here by two live families the matrix did not reach.
+GEAR_BEST_IN_SLOT_REF = "mistweaver-monk-pve-healing-gear-best-in-slot"
 MACROS_ADDONS_REF = "mistweaver-monk-pve-healing-macros-addons"
 MYTHIC_PLUS_TIPS_REF = "mistweaver-monk-pve-healing-mythic-plus-tips"
-SIMULATIONS_REF = "mistweaver-monk-pve-healing-simulations"
+EXPANSION_GUIDE_REF = "mistweaver-monk-the-war-within-pve-guide"
 RAID_GUIDE_REF = "mistweaver-monk-pve-healing-nerub-ar-palace-raid-guide"
 SPECIAL_EVENT_REF = "mistweaver-monk-mists-of-pandaria-remix-guide"
 
@@ -39,10 +42,10 @@ FAMILY_GUIDE_CASES = [
     (STAT_PRIORITY_REF, "stat_priority", "family_navigation"),
     (GEMS_ENCHANTS_CONSUMABLES_REF, "gems_enchants_consumables", "family_navigation"),
     (SPELL_SUMMARY_REF, "spell_summary", "family_navigation"),
-    (RESOURCES_REF, "resources", "family_navigation"),
+    (GEAR_BEST_IN_SLOT_REF, "gear_best_in_slot", "family_navigation"),
     (MACROS_ADDONS_REF, "macros_addons", "family_navigation"),
     (MYTHIC_PLUS_TIPS_REF, "mythic_plus_tips", "family_navigation"),
-    (SIMULATIONS_REF, "simulations", "family_navigation"),
+    (EXPANSION_GUIDE_REF, "expansion_guide", "family_navigation"),
 ]
 
 

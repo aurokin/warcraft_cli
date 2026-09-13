@@ -34,13 +34,19 @@ DEFAULT_REGION = "us"
 # server-side expiry. Mirrors the warcraftlogs client.
 _TOKEN_SKEW_SECONDS = 60
 
-# Hosts, OAuth token URL, and namespace strings below follow documented Blizzard API conventions
-# and are pending one-time live confirmation (run BLIZZARD_LIVE_TESTS=1). doctor + every command
-# payload carry provenance.verified=false to keep that posture honest.
-_VERIFICATION_NOTE = (
-    "Hosts, OAuth token URL, and namespace strings follow documented Blizzard API conventions and "
-    "are pending one-time live confirmation (run BLIZZARD_LIVE_TESTS=1). CN endpoints are especially "
-    "unconfirmed; classic namespace strings are best-effort."
+# Regions whose API host, OAuth token URL, and namespace strings have been confirmed against live
+# Blizzard endpoints (retail and classic Game Data, retail Profile). CN routes through a different
+# host and OAuth server that is unreachable from outside China, so it stays unconfirmed and its
+# payloads keep provenance.verified=false.
+VERIFIED_REGIONS = frozenset({"us", "eu", "kr", "tw"})
+
+_UNVERIFIED_CN_NOTE = (
+    "CN routing (gateway.battlenet.com.cn + oauth.battlenet.com.cn) follows documented Blizzard API "
+    "conventions and is unconfirmed; those hosts are unreachable from outside China."
+)
+_VERIFIED_NOTE = (
+    "Host, OAuth token URL, and namespace strings are confirmed against live Blizzard endpoints for "
+    "us/eu/kr/tw (retail and classic Game Data, retail Profile). " + _UNVERIFIED_CN_NOTE
 )
 
 
@@ -344,5 +350,8 @@ class BlizzardClient:
         return self._get(routing, f"/profile/wow/character/{realm.lower()}/{name.lower()}")
 
 
-def verification_note() -> str:
-    return _VERIFICATION_NOTE
+def verification_note(region: str | None = None) -> str:
+    """Verification posture: the CN caveat alone for an unconfirmed region, the full summary otherwise."""
+    if region is not None and region not in VERIFIED_REGIONS:
+        return _UNVERIFIED_CN_NOTE
+    return _VERIFIED_NOTE

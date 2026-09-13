@@ -181,3 +181,56 @@ def test_recorded_unsupported_page_fixture_contract() -> None:
     assert payload["guide"]["content_family"] is None
     assert payload["guide"]["supported_surface"] is False
     assert len(payload["article"]["sections"]) >= 1
+
+
+# Icy Veins rebuilt the WoW guides on an Astro layout in 2026 (new container classes for the family
+# switcher, the on-page contents, and the article body). These captures pin the new markup; the
+# cases above keep pinning the pre-redesign markup the parser still falls back to.
+ASTRO_CASES = [
+    ("astro_spec_guide.html", "https://www.icy-veins.com/wow/mistweaver-monk-pve-healing-guide", "spec_guide"),
+    ("astro_class_hub.html", "https://www.icy-veins.com/wow/monk-guide", "class_hub"),
+    ("astro_role_guide.html", "https://www.icy-veins.com/wow/healing-guide", "role_guide"),
+]
+
+
+@pytest.mark.parametrize(("fixture_name", "source_url", "content_family"), ASTRO_CASES)
+def test_astro_layout_fixture_yields_article_content(fixture_name: str, source_url: str, content_family: str) -> None:
+    payload = parse_guide_page(load_fixture_text(FIXTURE_DIR, fixture_name), source_url=source_url)
+
+    assert payload["guide"]["content_family"] == content_family
+    assert payload["guide"]["author"]
+    assert payload["page"]["page_type"] == "guides"
+    assert len(payload["article"]["sections"]) >= 1
+    assert payload["article"]["text"]
+    assert all(section["text"] or section["html"] for section in payload["article"]["sections"])
+
+
+def test_astro_spec_guide_fixture_has_family_navigation_and_page_toc() -> None:
+    payload = parse_guide_page(
+        load_fixture_text(FIXTURE_DIR, "astro_spec_guide.html"),
+        source_url="https://www.icy-veins.com/wow/mistweaver-monk-pve-healing-guide",
+    )
+
+    navigation = payload["navigation"]
+    assert len(navigation) >= 2
+    assert {row["section_slug"] for row in navigation} >= {
+        "mistweaver-monk-leveling-guide",
+        "mistweaver-monk-pve-healing-spec-builds-talents",
+    }
+    active = [row for row in navigation if row["active"]]
+    assert [row["section_slug"] for row in active] == ["mistweaver-monk-pve-healing-guide"]
+    assert payload["guide"]["section_title"] == active[0]["title"]
+    assert len(payload["page_toc"]) >= 2
+    assert all(row["anchor"] for row in payload["page_toc"])
+
+
+def test_astro_layout_fixture_drops_page_furniture_from_the_article() -> None:
+    """The Astro article container wraps the family switcher and the on-page contents; neither is prose."""
+    payload = parse_guide_page(
+        load_fixture_text(FIXTURE_DIR, "astro_spec_guide.html"),
+        source_url="https://www.icy-veins.com/wow/mistweaver-monk-pve-healing-guide",
+    )
+
+    assert "Table of Contents" not in payload["article"]["text"]
+    assert payload["article"]["intro_text"].startswith("Welcome to our Mistweaver Monk guide")
+    assert payload["article"]["intro_text"] not in payload["article"]["text"]

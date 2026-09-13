@@ -1028,6 +1028,40 @@ def test_encode_build_extracts_talents_from_save_output(tmp_path: Path) -> None:
     assert result == "ENCODED_RESULT_123"
 
 
+def test_encode_build_profile_loads_default_gear(tmp_path: Path) -> None:
+    """A gearless actor is dropped before SimC generates profiles, so the save file never appears."""
+    binary = tmp_path / "simc"
+    binary.write_text("")
+    repo = RepoPaths(
+        root=tmp_path,
+        apl_default=tmp_path,
+        apl_assisted=tmp_path,
+        class_modules=tmp_path,
+        spell_dump=tmp_path,
+        build_dir=tmp_path,
+        build_simc=binary,
+    )
+    seen: dict[str, str] = {}
+
+    def fake_run(cmd, **kwargs):  # noqa: ANN001, ANN003
+        profile_path = Path(str(cmd[1]))
+        profile_text = profile_path.read_text()
+        seen["profile"] = profile_text
+        if "load_default_gear=1" not in profile_text:
+            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="No active players in sim!")
+        for line in profile_text.splitlines():
+            if line.startswith("save="):
+                Path(line.split("=", 1)[1]).write_text("talents=ENCODED_WITH_GEAR\n")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    spec = BuildSpec(actor_class="monk", spec="windwalker", talents="ORIGINAL", class_talents="tigers_lust:0")
+    with patch("simc_cli.build_input.subprocess.run", side_effect=fake_run):
+        result = encode_build(repo, spec)
+
+    assert result == "ENCODED_WITH_GEAR"
+    assert "load_default_gear=1" in seen["profile"]
+
+
 def test_encode_build_raises_when_save_file_missing(tmp_path: Path) -> None:
     binary = tmp_path / "simc"
     binary.write_text("")

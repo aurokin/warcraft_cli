@@ -274,7 +274,7 @@ Normalize a Wowhead profiler list ref and report its list, region, realm, and na
 
 ## wowhead guide
 
-Fetch one Wowhead guide with its sections, linked entities, and citations.
+Fetch one Wowhead guide: analysis surfaces, linked entities, comments, and page metadata (sections are in guide-full).
 
 **Arguments**
 

@@ -834,6 +834,9 @@ def encode_build(repo: RepoPaths, build_spec: BuildSpec) -> str:
     temp_dir = Path(tempfile.mkdtemp(prefix="simc-cli-encode-"))
     profile_path = temp_dir / "encode.simc"
     save_path = temp_dir / "encoded.simc"
+    # SimC drops a gearless actor before it reaches the profile-generation step, so the save file
+    # would never be written. Default gear keeps the player active; it does not affect talents.
+    profile_text += "load_default_gear=1\n"
     profile_text += f"save={save_path}\n"
     profile_path.write_text(profile_text)
 

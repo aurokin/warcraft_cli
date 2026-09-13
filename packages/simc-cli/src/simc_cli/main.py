@@ -491,7 +491,19 @@ def _describe_target_payload(resolved: Path, context: PruneContext, *, start_lis
 
 
 def _action_names(items: list[dict[str, Any]]) -> list[str]:
-    return [str(item["action"]) for item in items if item.get("action")]
+    """Name each priority row, keeping the target list on dispatch rows.
+
+    Every ``call_action_list``/``run_action_list`` row would otherwise collapse to the same name, so
+    a build that dispatches to a different list at another target count would look unchanged.
+    """
+    names: list[str] = []
+    for item in items:
+        action = item.get("action")
+        if not action:
+            continue
+        target_list = item.get("target_list")
+        names.append(f"{action} -> {target_list}" if target_list else str(action))
+    return names
 
 
 def _parse_variant_specs(values: list[str]) -> list[tuple[str, str | Path]]:

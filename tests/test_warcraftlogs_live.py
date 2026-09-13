@@ -12,10 +12,15 @@ from tests.fixtures.live_matrix import (
     CHARACTER_NAME,
     GUILD_REALM,
     GUILD_REGION,
-    ZONE_ID,
 )
 
 runner = CliRunner()
+
+# A frozen past tier. These tests assert envelope and trust-block shape, never cohort contents, so
+# they want a zone whose reports stay put rather than the churning current tier. The live-tier
+# coverage lives in tests/test_live_command_matrix.py, which discovers its own zone and boss.
+FROZEN_ZONE_ID = 44  # Manaforge Omega
+FROZEN_BOSS_ID = 3129  # Plexus Sentinel
 
 
 def _payload_for(args: list[str]) -> dict[str, object]:
@@ -347,7 +352,7 @@ def test_live_warcraftlogs_character_rankings_trust_block() -> None:
     _require_warcraftlogs_auth()
 
     payload = _payload_for(
-        ["character-rankings", GUILD_REGION, GUILD_REALM, CHARACTER_NAME, "--zone-id", str(ZONE_ID)]
+        ["character-rankings", GUILD_REGION, GUILD_REALM, CHARACTER_NAME, "--zone-id", str(FROZEN_ZONE_ID)]
     )
     assert payload["provider"] == "warcraftlogs"
     rankings = payload["character_rankings"]
@@ -373,9 +378,9 @@ def test_live_warcraftlogs_spec_kill_samples_cohort_contract() -> None:
         [
             "spec-kill-samples",
             "--zone-id",
-            str(ZONE_ID),
+            str(FROZEN_ZONE_ID),
             "--boss-id",
-            "3129",
+            str(FROZEN_BOSS_ID),
             "--difficulty",
             "4",
             "--spec-name",

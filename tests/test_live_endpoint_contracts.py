@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import os
 import time
+from functools import lru_cache
 from typing import Any
 
 import httpx
 import pytest
 from wowhead_cli.expansion_profiles import (
+    ExpansionProfile,
     build_comment_replies_url,
     build_entity_url,
     build_search_suggestions_url,
@@ -32,6 +34,9 @@ ENTITY_DISCOVERY_QUERIES: dict[str, str] = {
     "npc": "defias ringleader",
     "spell": "thunderfury",
 }
+# Wowhead's page meta reports which in-development environments currently have a build behind them.
+# The flag names differ from our profile keys, and released environments never appear in the map.
+DEV_ENV_ACTIVE_FLAGS: dict[str, str] = {"ptr": "ptr", "beta": "beta", "classic-ptr": "classicptr"}
 
 
 def _require_live() -> None:
@@ -100,6 +105,52 @@ def _http_get_text(
     raise AssertionError(f"GET text failed for {url} params={params}: {last_exc}")
 
 
+def _http_get_status(
+    url: str,
+    *,
+    params: dict[str, Any] | None = None,
+    attempts: int = 3,
+) -> int:
+    last_exc: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            with httpx.Client(timeout=20.0, follow_redirects=True) as client:
+                return client.get(url, params=params).status_code
+        except Exception as exc:
+            last_exc = exc
+            if attempt < attempts:
+                time.sleep(float(attempt))
+    raise AssertionError(f"GET failed for {url} params={params}: {last_exc}")
+
+
+def _profile_for(profile_key: str) -> ExpansionProfile:
+    return next(profile for profile in list_profiles() if profile.key == profile_key)
+
+
+@lru_cache(maxsize=1)
+def _live_env_activity() -> dict[str, bool]:
+    """Read Wowhead's live `dataEnv.active` map, which every page (including retail) carries."""
+    retail = _profile_for("retail")
+    html = _http_get_text(build_entity_url(retail, ENTITY_TYPE, ENTITY_ID))
+    page_meta = parse_page_meta_json(html)
+    assert isinstance(page_meta, dict)
+    data_env = page_meta.get("dataEnv")
+    assert isinstance(data_env, dict), f"page meta no longer exposes dataEnv: {page_meta.keys()}"
+    active = data_env.get("active")
+    assert isinstance(active, dict) and active, f"page meta no longer exposes dataEnv.active: {data_env}"
+    return {str(name): bool(flag) for name, flag in active.items()}
+
+
+def _profile_env_is_active(profile_key: str) -> bool:
+    """True when the profile has a live dataset; only in-development environments can be inactive."""
+    flag = DEV_ENV_ACTIVE_FLAGS.get(profile_key)
+    if flag is None:
+        return True
+    active = _live_env_activity()
+    assert flag in active, f"Wowhead stopped reporting activity for {profile_key!r}: {sorted(active)}"
+    return active[flag]
+
+
 def _discover_entity_id(profile_key: str, *, entity_type: str, query: str) -> int:
     profile = next(profile for profile in list_profiles() if profile.key == profile_key)
     search_url = build_search_suggestions_url(profile)
@@ -144,8 +195,15 @@ def test_live_search_endpoint_contract(profile_key: str) -> None:
 @pytest.mark.parametrize("profile_key", PROFILE_KEYS)
 def test_live_tooltip_endpoint_contract(profile_key: str) -> None:
     _require_live()
-    profile = next(profile for profile in list_profiles() if profile.key == profile_key)
+    profile = _profile_for(profile_key)
     url = build_tooltip_url(profile, ENTITY_TYPE, ENTITY_ID)
+    if not _profile_env_is_active(profile_key):
+        # Between builds Wowhead reports the environment inactive and holds no dataset for it.
+        # The tooltip endpoint must say so rather than serve retail data under the inactive env's URL.
+        status = _http_get_status(url, params={"dataEnv": profile.data_env})
+        assert status == 404, f"inactive {profile_key} tooltip returned HTTP {status}, expected 404 for {url}"
+        return
+
     payload = _http_get_json(url, params={"dataEnv": profile.data_env})
 
     assert isinstance(payload, dict)
@@ -177,7 +235,7 @@ def test_live_tooltip_endpoint_contract_retail_discovered_entity_types(entity_ty
 @pytest.mark.parametrize("profile_key", PROFILE_KEYS)
 def test_live_entity_page_parser_contract(profile_key: str) -> None:
     _require_live()
-    profile = next(profile for profile in list_profiles() if profile.key == profile_key)
+    profile = _profile_for(profile_key)
     url = build_entity_url(profile, ENTITY_TYPE, ENTITY_ID)
     html = _http_get_text(url)
 
@@ -190,7 +248,10 @@ def test_live_entity_page_parser_contract(profile_key: str) -> None:
     assert isinstance(page_meta, dict)
     data_env = page_meta.get("dataEnv")
     assert isinstance(data_env, dict)
-    assert data_env.get("env") == profile.data_env
+    # An inactive in-development environment has no dataset of its own, so Wowhead still serves the
+    # page under the profile's path but from retail data. Everything else on the page must still parse.
+    expected_env = profile.data_env if _profile_env_is_active(profile_key) else _profile_for("retail").data_env
+    assert data_env.get("env") == expected_env
 
     linked = extract_linked_entities_from_href(html, source_url=meta["canonical_url"])
     assert len(linked) > 0

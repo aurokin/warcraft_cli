@@ -28,6 +28,10 @@ class InvalidReportReference(ValueError):
     """Raised when a report URL or ID cannot be parsed into a report ID."""
 
 
+class ReportNotAvailable(LookupError):
+    """Raised when Raidbots answers a report fetch with its web page instead of report content."""
+
+
 def resolve_report_id(value: str, report_path_template: str = DEFAULT_REPORT_PATH_TEMPLATE) -> str:
     # Normalize a report reference to a bare ID. We try, in order: (1) the literal path prefix of
     # the configured (env-overridable) report path template, so an override also updates URL-INPUT
@@ -197,5 +201,13 @@ class RaidbotsClient:
         self._last_from_cache = False
         response = request_with_retries(self._client(), url, retry_attempts=self._retry_attempts)
         text = response.text
+        # Raidbots serves its single-page app (HTTP 200, text/html) for a report id that does not
+        # exist, has expired, or is private. Reject that page instead of handing HTML markup back as
+        # SimC input — and never cache it.
+        if text.lstrip()[:64].lower().startswith(("<!doctype html", "<html")):
+            raise ReportNotAvailable(
+                f"Raidbots returned its web page instead of SimC input for report {report_id!r}: the "
+                f"report id is wrong, or the report has expired or is private ({url})."
+            )
         self._write_cache(key, text, ttl_seconds=self._report_ttl)
         return text

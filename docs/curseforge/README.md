@@ -1,9 +1,11 @@
 # CurseForge CLI
 
-`curseforge` is an **experimental, unverified** provider. Its host, endpoints, and response shapes
-follow the documented public CurseForge Core API but have never been confirmed against live traffic
-from this repo, so every payload carries `provenance.verified: false` and `doctor` reports
-`tier: experimental`. Treat its output as unconfirmed until a live run says otherwise.
+`curseforge` is an **experimental** provider whose host, `x-api-key` auth, mod search, mod lookup,
+and changelog endpoints were confirmed against the live API on 2026-09-13, so payloads carry
+`provenance.verified: true`. `doctor` reports `tier: experimental` because the command surface is
+thin (four commands) and addon metadata sits at the edge of the product's scope. Core API keys
+without search access can only resolve numeric mod ids; the slug path then fails with
+`auth_failed` and a message pointing at the numeric form.
 
 Design history and the go/no-go record live in
 [docs/architecture/history/curseforge.md](../architecture/history/curseforge.md).
@@ -46,7 +48,7 @@ Resolves one WoW addon and returns its metadata, latest files, and latest change
   files. Otherwise it is an object keyed by `file_id` carrying `body` (changelog HTML, or `null`
   when that file exposes no notes) plus `source_url`, or an explicit `{file_id, error}` marker when
   that one request fails. Detect empty notes via `changelog.body`, not `changelog is null`.
-- `provenance` carries `game_id`, `mod_id`, `slug`, `resolved_by`, `source_urls`, `verified: false`,
+- `provenance` carries `game_id`, `mod_id`, `slug`, `resolved_by`, `source_urls`, `verified: true`,
   and `verification_note`.
 
 ### `curseforge search <query>` and `curseforge resolve <query>`
@@ -82,14 +84,15 @@ warcraft curseforge doctor
 warcraft curseforge addon deadly-boss-mods
 ```
 
-## Verifying The Unverified Surface
+## Re-verifying
 
 ```
 CURSEFORGE_LIVE_TESTS=1 pytest -q -m live tests/test_curseforge_live.py
+make test-e2e E2E_ARGS="tests/e2e/test_curseforge.py"
 ```
 
-with a real `CURSEFORGE_API_KEY`. Until that passes against live endpoints, the provider stays
-labeled experimental.
+with a real `CURSEFORGE_API_KEY`. The end-to-end journey covers both resolution paths (numeric id
+and slug search) plus `latest-files` and `changelog`.
 
 ## Analytics And Provenance Posture
 

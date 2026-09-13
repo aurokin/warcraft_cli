@@ -90,6 +90,33 @@ def test_search_faction_result_includes_faction_url(monkeypatch) -> None:
 
 
 
+def test_search_maps_live_suggestion_type_ids_to_followable_entities(monkeypatch) -> None:
+    """Wowhead's suggestion payload uses 7=Zone, 10=Achievement, 17=Currency."""
+
+    def fake_search(self, query: str):  # noqa: ANN001
+        return {
+            "search": query,
+            "results": [
+                {"type": 7, "id": 1519, "name": "Stormwind City", "typeName": "Zone"},
+                {"type": 10, "id": 428, "name": "Thunderfury, Blessed Blade of the Windseeker", "typeName": "Achievement"},
+                {"type": 17, "id": 2815, "name": "Resonance Crystals", "typeName": "Currency"},
+            ],
+        }
+
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.search_suggestions", fake_search)
+    result = runner.invoke(app, ["search", "stormwind", "--limit", "3"])
+    assert result.exit_code == 0
+
+    payload = json.loads(result.stdout)
+    routed = {row["entity_type"]: row["url"] for row in payload["results"]}
+    assert routed == {
+        "zone": "https://www.wowhead.com/zone=1519",
+        "achievement": "https://www.wowhead.com/achievement=428",
+        "currency": "https://www.wowhead.com/currency=2815",
+    }
+
+
+
 def test_search_reranks_exact_name_match_ahead_of_noisy_popular_result(monkeypatch) -> None:
     def fake_search(self, query: str):  # noqa: ANN001
         return {

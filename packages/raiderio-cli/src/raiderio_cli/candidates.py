@@ -11,7 +11,7 @@ from typing import Any
 
 import httpx
 from warcraft_core.shapes import as_dict
-from warcraft_core.wow_normalization import normalize_name, normalize_region, primary_realm_slug
+from warcraft_core.wow_normalization import normalize_name, normalize_region, primary_realm_slug, realm_slug_variants
 
 from raiderio_cli.client import RaiderIOClient
 from raiderio_cli.identity import raiderio_class_spec_identity
@@ -61,6 +61,17 @@ def _all_terms_match(query_terms: list[str], combined: str) -> bool:
     return bool(query_terms) and all(term in combined for term in query_terms)
 
 
+def _realm_term_matches(query_terms: list[str], realm: str) -> bool:
+    """True when a query term names ``realm``, comparing through the shared realm slug variants.
+
+    Raider.IO echoes realm display names (``Mal'Ganis``), so a raw string comparison misses every
+    query that spells the realm as a slug (``malganis``, ``mal-ganis``) even though the structured
+    probe resolved that exact realm.
+    """
+    realm_variants = set(realm_slug_variants(realm))
+    return bool(realm_variants) and any(realm_variants & set(realm_slug_variants(term)) for term in query_terms)
+
+
 @dataclass(frozen=True, slots=True)
 class _MatchWeights:
     """Points a candidate earns for each way it can match the query."""
@@ -103,7 +114,7 @@ def _entity_match_score(
     if region and any(term == region.lower() for term in query_terms):
         score += weights.region
         reasons.append("region_match")
-    if realm and any(term == realm.lower() for term in query_terms):
+    if realm and _realm_term_matches(query_terms, realm):
         score += weights.realm
         reasons.append("realm_match")
     if type_hint and type_hint == kind:

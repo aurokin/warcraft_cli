@@ -74,7 +74,7 @@ Entities:
 
 | Command | Purpose |
 |---------|---------|
-| `entity TYPE ID` | tooltip payload, optionally with comments and a linked-entity preview |
+| `entity TYPE ID` | tooltip payload, optionally with comments and a linked-entity preview; `--include-all-comments` replaces the `comments.top` summary with the full `comments.items` list |
 | `entity-page TYPE ID` | parsed page metadata, linked entities, and comments |
 | `comments TYPE ID` | ranked comments with filters and optional insight rollups |
 | `compare REF REF ...` | field-by-field diff of two or more entities |
@@ -85,7 +85,7 @@ Guides:
 | Command | Purpose |
 |---------|---------|
 | `guides CATEGORY` | guide listing for a category with author, patch, and updated-window filters |
-| `guide REF` | one guide with sections, linked entities, and citations |
+| `guide REF` | one guide: analysis surfaces, linked entities, comments, and page metadata; section bodies come from `guide-full`. An unknown guide id is an upstream 400, reported as exit 5 |
 | `guide-full REF` | the same guide with every section, comment, and link hydrated |
 | `guide-export REF` | write a guide bundle (manifest, sections, entities) to `--out`, or `./wowhead_exports/<guide-slug>/` |
 | `guide-query BUNDLE QUERY` | query one guide bundle for matching sections, links, and comments |
@@ -100,9 +100,9 @@ Timeline surfaces:
 
 | Command | Purpose |
 |---------|---------|
-| `news [QUERY]` | news listing with topic, date-window, author, and type filters |
+| `news [QUERY]` | news listing with topic, date-window, author, and type filters; rows may carry expansion-scoped URLs such as `/forever/news/<slug>-<id>`, which `news-post` accepts |
 | `news-post REF` | one news article with body markup, related posts, and citations |
-| `blue-tracker [QUERY]` | blue-post listing with topic, date-window, author, region, and forum filters |
+| `blue-tracker [QUERY]` | blue-post listing with topic, date-window, author, region, and forum filters; rows mix `/blue-tracker/topic/...` and `/blue-tracker/news/...` shapes, and only topic rows feed `blue-topic` |
 | `blue-topic REF` | one blue-tracker topic with posts, participants, and citations |
 
 Tool-state decoders:

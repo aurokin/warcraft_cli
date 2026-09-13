@@ -74,6 +74,36 @@ SPECIAL_EVENT_KEYWORDS = (
     "torghast-guide",
 )
 
+# Icy Veins rebuilt the WoW guide pages on an Astro layout in 2026: the family switcher moved from
+# ``.toc_page_list`` to ``.table-of-contents``, the on-page contents from ``.toc_page_content_items``
+# to ``.content-toc``, and the body from ``.page_content`` to ``.guide-page-content``. Each layout
+# below lists the new selector first and keeps the legacy one so captured pre-redesign pages (and
+# any page the site has not migrated yet) still parse.
+FAMILY_NAVIGATION_LAYOUTS = (
+    (".table-of-contents", "nav a[href]"),
+    (".toc_page_list", ".toc_page_center_item .toc_page_list_item a, .toc_page_list_items .toc_page_list_item a"),
+)
+PAGE_TOC_LAYOUTS = (
+    (".content-toc", ".content-toc__item[href], a[href]"),
+    (".toc_page_content_items", "a[href]"),
+)
+# The GTM dataLayer is a single-element array on the legacy pages and a bare object on the Astro ones.
+DATA_LAYER_PATTERNS = (
+    re.compile(r"dataLayer\s*=\s*\[\s*({.*?})\s*\];", flags=re.DOTALL),
+    re.compile(r"dataLayer\s*=\s*({.*?})\s*;", flags=re.DOTALL),
+)
+INTRO_SELECTOR = ".guide-intro, .page_content_header_intro"
+ARTICLE_SELECTOR = ".guide-page-content, .page_content_container > .page_content"
+# Page furniture that lives inside the article container but is not article prose. The first line is
+# shared, the second is the Astro layout, the third the legacy layout.
+ARTICLE_CHROME_SELECTOR = ", ".join(
+    (
+        "script, style, noscript, .raider-io-links",
+        ".table-of-contents, .content-toc, .guide-intro, .app-banner, .back-to-top, .internal-links",
+        ".hidden_section_controls, .page_content_footer, .toc_mobile",
+    )
+)
+
 
 def clean_text(value: str | None) -> str | None:
     if not isinstance(value, str):
@@ -160,6 +190,15 @@ def _attribute(tag: Tag | None, name: str) -> str | None:
     return value if isinstance(value, str) else None
 
 
+def _first_container(soup: BeautifulSoup, layouts: tuple[tuple[str, str], ...]) -> tuple[Tag | None, str]:
+    """Return the first layout container present in ``soup`` with the anchor selector to use inside it."""
+    for container_selector, anchor_selector in layouts:
+        container = soup.select_one(container_selector)
+        if isinstance(container, Tag):
+            return container, anchor_selector
+    return None, ""
+
+
 def _meta_content(soup: BeautifulSoup, *, attribute: str, value: str) -> str | None:
     return clean_text(_attribute(soup.select_one(f'meta[{attribute}="{value}"]'), "content"))
 
@@ -194,7 +233,7 @@ def _extract_data_layer(soup: BeautifulSoup) -> dict[str, Any]:
         text = script.string or script.get_text()
         if "page_type" not in text or "dataLayer" not in text:
             continue
-        match = re.search(r"dataLayer\s*=\s*\[\s*({.*?})\s*\];", text, flags=re.DOTALL)
+        match = next((found for found in (pattern.search(text) for pattern in DATA_LAYER_PATTERNS) if found), None)
         if not match:
             continue
         raw_object = match.group(1)
@@ -210,13 +249,13 @@ def _extract_data_layer(soup: BeautifulSoup) -> dict[str, Any]:
 
 
 def _extract_family_navigation(soup: BeautifulSoup, *, current_url: str) -> list[dict[str, Any]]:
-    container = soup.select_one(".toc_page_list")
-    if not isinstance(container, Tag):
+    container, anchor_selector = _first_container(soup, FAMILY_NAVIGATION_LAYOUTS)
+    if container is None:
         return []
     current_path = urlparse(current_url).path.rstrip("/")
     items: list[dict[str, Any]] = []
     seen: set[str] = set()
-    anchors = container.select(".toc_page_center_item .toc_page_list_item a, .toc_page_list_items .toc_page_list_item a")
+    anchors = container.select(anchor_selector)
     for ordinal, anchor in enumerate(anchors, start=1):
         href = anchor.get("href")
         if not isinstance(href, str):
@@ -236,7 +275,7 @@ def _extract_family_navigation(soup: BeautifulSoup, *, current_url: str) -> list
                 "title": title,
                 "url": url,
                 "section_slug": guide_ref_parts(url),
-                "active": "selected" in classes or urlparse(url).path.rstrip("/") == current_path,
+                "active": bool({"selected", "active"} & set(classes)) or urlparse(url).path.rstrip("/") == current_path,
                 "ordinal": ordinal,
             }
         )
@@ -244,12 +283,12 @@ def _extract_family_navigation(soup: BeautifulSoup, *, current_url: str) -> list
 
 
 def _extract_page_toc(soup: BeautifulSoup, *, current_url: str) -> list[dict[str, Any]]:
-    container = soup.select_one(".toc_page_content_items")
-    if not isinstance(container, Tag):
+    container, anchor_selector = _first_container(soup, PAGE_TOC_LAYOUTS)
+    if container is None:
         return []
     items: list[dict[str, Any]] = []
     seen: set[str] = set()
-    for ordinal, anchor in enumerate(container.select("a[href]"), start=1):
+    for ordinal, anchor in enumerate(container.select(anchor_selector), start=1):
         href = anchor.get("href")
         if not isinstance(href, str):
             continue
@@ -273,7 +312,7 @@ def _extract_page_toc(soup: BeautifulSoup, *, current_url: str) -> list[dict[str
 
 
 def _extract_intro_text(soup: BeautifulSoup) -> str:
-    intro = soup.select_one(".page_content_header_intro")
+    intro = soup.select_one(INTRO_SELECTOR)
     if not isinstance(intro, Tag):
         return ""
     text = clean_text(intro.get_text(" ", strip=True))
@@ -281,19 +320,17 @@ def _extract_intro_text(soup: BeautifulSoup) -> str:
 
 
 def _article_tag(soup: BeautifulSoup) -> Tag | None:
-    article = soup.select_one(".page_content_container > .page_content")
+    article = soup.select_one(ARTICLE_SELECTOR)
     if isinstance(article, Tag):
         return article
     return None
 
 
 def _clone_article(article: Tag) -> Tag:
-    cloned = BeautifulSoup(str(article), "html.parser").find("div", class_="page_content")
+    cloned = BeautifulSoup(str(article), "html.parser").find(article.name)
     if not isinstance(cloned, Tag):
         raise ValueError("Failed to clone Icy Veins article node.")
-    for node in cloned.select(
-        "script, style, noscript, .raider-io-links, .hidden_section_controls, .page_content_footer, .toc_mobile"
-    ):
+    for node in cloned.select(ARTICLE_CHROME_SELECTOR):
         node.decompose()
     return cloned
 

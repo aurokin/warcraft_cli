@@ -1,0 +1,849 @@
+<!DOCTYPE html><html lang="en"> <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Healing Guide (Midnight 12.0.1) - World of Warcraft - Icy Veins</title><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800;&display=swap" rel="stylesheet"><link rel="stylesheet" type="text/css" href="//static.icy-veins.com/css/core-6be8814c8ee0b156e2b4aa140c58df70.css"><link href="//www.icy-veins.com/feed.atom" type="application/atom+xml" rel="alternate" title="Icy Veins - Feed"><link rel="icon" type="image/png" href="//static.icy-veins.com/images/common/favicon-high-resolution.png"><link rel="apple-touch-icon-precomposed" href="//static.icy-veins.com/images/common/favicon-high-resolution.png"><meta name="description" content="A comprehensive guide which teaches new players and veterans the various aspects of the healing role. This guide covers general concepts such as user-interface customization and general gearing priorities as well as specific healing strategies such as assignments and overhealing."><meta name="robots" content="ALL"><meta name="author" content="Icy Veins 2026"><meta name="msvalidate.01" content="BBA2E69ADD6BD4A76395B2709092CCA6"><meta property="og:title" content="Healing Guide (Midnight 12.0.1)"><meta property="og:url" content="https://www.icy-veins.com/wow/healing-guide"><meta property="og:image" content="//static.icy-veins.com/images/common/icy-veins-icon-social.png"><meta property="og:description" content="A comprehensive guide which teaches new players and veterans the various aspects of the healing role. This guide covers general concepts such as user-interface customization and general gearing priorities as well as specific healing strategies such as assignments and overhealing."><meta property="og:site_name" content="Icy Veins"><meta property="og:type" content="article"><meta property="fb:app_id" content="260815523933555"><meta name="twitter:card" content="summary_large_image"><meta name="twitter:site" content="@icyveins"><meta name="twitter:title" content="Healing Guide (Midnight 12.0.1)"><meta name="twitter:description" content="A comprehensive guide which teaches new players and veterans the various aspects of the healing role. This guide covers general concepts such as user-interface customization and general gearing priorities as well as specific healing strategies such as assignments and overhealing."><meta name="twitter:image" content="//static.icy-veins.com/images/common/icy-veins-icon-social.png"><link rel="canonical" href="https://www.icy-veins.com/wow/healing-guide"><script type="application/ld+json">{"@type":"BreadcrumbList","@context":"http://schema.org","itemListElement":[{"item":{"@id":"https://www.icy-veins.com/","name":"Home"},"@type":"ListItem","position":1},{"item":{"@id":"https://www.icy-veins.com/wow/","name":"World of Warcraft"},"@type":"ListItem","position":2},{"item":{"@id":"https://www.icy-veins.com/wow/class-guides","name":"Classes"},"@type":"ListItem","position":3},{"item":{"@id":"https://www.icy-veins.com/wow/healing-guide","name":"Healing Guide"},"@type":"ListItem","position":4}]}</script><script type="application/ld+json">{"url":"https://www.icy-veins.com/","logo":"//static.icy-veins.com/images/common/icy-veins-logo.png","name":"Icy Veins","@type":"Organization","sameAs":["https://www.facebook.com/icyveinscom","https://twitter.com/icyveins","https://www.youtube.com/user/icyveinscom","https://www.twitch.tv/icyveinscom"],"@context":"https://schema.org/"}</script><script type="application/ld+json">{"url":"https://www.icy-veins.com/wow/healing-guide","name":"Healing Guide (Midnight 12.0.1)","@type":"Article","image":{"url":"//static.icy-veins.com/images/common/icy-veins-icon-social.png","@type":"ImageObject","width":400,"height":400},"author":{"name":"Seksixeny","@type":"Person"},"@context":"https://schema.org","headline":"Healing Guide (Midnight 12.0.1)","publisher":{"logo":{"url":"https://static.icy-veins.com/images/common/icy-veins-icon-social.png","@type":"ImageObject","width":400,"height":400},"name":"Icy Veins","@type":"Organization"},"description":"A comprehensive guide which teaches new players and veterans the various aspects of the healing role. This guide covers general concepts such as user-interface customization and general gearing priorities as well as specific healing strategies such as assignments and overhealing.","dateModified":"2026-08-06T16:44:00+00:00","datePublished":"2011-09-20T18:23:00+00:00","mainEntityOfPage":{"@id":"https://www.icy-veins.com/wow/healing-guide","@type":"WebPage"}}</script><script>(function(){const dataLayer = {"page_type":"guides","page_game":"wow","author":"seksixeny"};
+const isAdFreeSurface = false;
+
+      (function () {
+        // Premium members skip ads. Keep the "icy:premium" literal in sync with
+        // premium-flag.ts. Every sign-in surface resolves the flag before it
+        // navigates — the forms inline (syncPremiumFlag), social sign-in on the
+        // /login/continue interstitial — so the first page after login is already
+        // gated. Only a lookup that fails or outruns its timeout falls back to ads.
+        var isPremium = false;
+        try { isPremium = localStorage.getItem("icy:premium") === "1"; } catch (e) {}
+        if (isPremium) return;
+
+        if (dataLayer) {
+          window.dataLayer = window.dataLayer || [];
+          window.dataLayer.push(dataLayer);
+        }
+        (function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src='https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);})(window,document,'script','dataLayer','GTM-NF9Q7DV');
+
+        // GTM (analytics) stays on for embedded u.gg sessions and for ad-free
+        // surfaces like /download — only the ad stack (Ramp + IAB slots) below
+        // is skipped.
+        if (isAdFreeSurface || window.ivEmbedMode) return;
+
+        var RAMP_BREAKPOINT = 1800;
+        var RAMP_PATH_LARGE = "icy-redesign";
+        var RAMP_PATH_SMALL = "icy-redesign-small";
+        var IAB_BREAKPOINT = 1460;
+
+        window.ramp = window.ramp || {};
+        window.ramp.que = window.ramp.que || [];
+        window.ramp.forcePath = window.innerWidth >= RAMP_BREAKPOINT ? RAMP_PATH_LARGE : RAMP_PATH_SMALL;
+        // console.log("[Ramp] Initial path:", window.ramp.forcePath, "(viewport: " + window.innerWidth + "px)");
+
+        var rampScript = document.createElement("script");
+        rampScript.async = true;
+        rampScript.setAttribute("data-cfasync", "false");
+        rampScript.src = "//cdn.intergient.com/1025267/74951/ramp.js";
+        document.head.appendChild(rampScript);
+
+        var IAB_DEBUG = false; // set to true to enable console logging
+        function iabLog() { if (IAB_DEBUG) console.log.apply(console, ["[IAB]"].concat(Array.from(arguments))); }
+
+        function syncIabSlots() {
+          var shouldHide = window.innerWidth <= IAB_BREAKPOINT;
+          var action = shouldHide ? "hideSlot" : "showAdSlot";
+          var slots = document.querySelectorAll('[id^="standard_iab_rght"], [id^="standard_iab_left"]');
+          iabLog("syncIabSlots — viewport:", window.innerWidth + "px, shouldHide:", shouldHide, "slots found:", slots.length);
+          slots.forEach(function (slot) {
+            iabLog("  →", action, slot.id);
+            window.ramp[action](slot.id);
+          });
+        }
+
+        iabLog("Script init — viewport:", window.innerWidth + "px, IAB_BREAKPOINT:", IAB_BREAKPOINT, "will hide:", window.innerWidth <= IAB_BREAKPOINT);
+
+        // Watch for Ramp to inject IAB slot elements and hide them immediately if the
+        // viewport is narrow — ramp.que fires before slots exist in the DOM on initial load.
+        if (window.innerWidth <= IAB_BREAKPOINT) {
+          iabLog("MutationObserver active — watching for IAB slots");
+          var iabObserver = new MutationObserver(function (mutations) {
+            mutations.forEach(function (mutation) {
+              mutation.addedNodes.forEach(function (node) {
+                if (node.nodeType !== 1) return;
+                // Log every element with an id so we can see what Ramp actually injects
+                if (node.id) iabLog("DOM node added — tag:", node.tagName, "id:", node.id);
+                var withIds = node.querySelectorAll("[id]");
+                withIds.forEach(function (el) { iabLog("  child node — tag:", el.tagName, "id:", el.id); });
+
+                var candidates = [node].concat(Array.from(node.querySelectorAll('[id^="standard_iab_rght"], [id^="standard_iab_left"]')));
+                candidates.forEach(function (el) {
+                  if (el.id && (el.id.indexOf("standard_iab_rght") === 0 || el.id.indexOf("standard_iab_left") === 0)) {
+                    iabLog("Observer caught slot:", el.id, "— queuing hideSlot");
+                    window.ramp.que.push(function () {
+                      iabLog("hideSlot executing for:", el.id);
+                      window.ramp.hideSlot(el.id);
+                    });
+                  }
+                });
+              });
+            });
+          });
+          iabObserver.observe(document.documentElement, { childList: true, subtree: true });
+          setTimeout(function () {
+            iabLog("MutationObserver disconnected (15s timeout)");
+            iabObserver.disconnect();
+          }, 15000);
+        }
+
+        // Fallback: if slots already exist when the Ramp queue drains (e.g. cached pages).
+        window.ramp.que.push(function () {
+          iabLog("ramp.que fallback fired");
+          syncIabSlots();
+        });
+
+        var rampResizeTimer;
+        var rampCurrentPath = window.ramp.forcePath;
+        window.addEventListener("resize", function () {
+          clearTimeout(rampResizeTimer);
+          rampResizeTimer = setTimeout(function () {
+            var newPath = window.innerWidth >= RAMP_BREAKPOINT ? RAMP_PATH_LARGE : RAMP_PATH_SMALL;
+            window.ramp.que.push(function () {
+              if (newPath !== rampCurrentPath) {
+                rampCurrentPath = newPath;
+                window.ramp.changePath(newPath);
+              }
+              syncIabSlots();
+            });
+          }, 200);
+        });
+      })();
+    })();</script>
+<link rel="stylesheet" href="/_astro/link.DyXw07fr.css">
+<link rel="stylesheet" href="/_astro/index.DfMOn5QZ.css">
+<link rel="stylesheet" href="/_astro/_path_.Db8lKAnG.css">
+<link rel="stylesheet" href="/_astro/_path_.BBP9zLBs.css">
+
+<link rel="stylesheet" href="/_astro/_path_.DrTcL5-o.css">
+</head> <body>   <astro-island uid="wO1Wn" prefix="r3" component-url="/_astro/OAuthNotice.CNSvPvfM.js" component-export="default" renderer-url="/_astro/client.DN61zz9I.js" props="{}" ssr client="load" opts="{&quot;name&quot;:&quot;OAuthNotice&quot;,&quot;value&quot;:true}"></astro-island> <header class="iv-header" data-astro-cid-2w66rqv5> <div class="iv-header__bar" data-astro-cid-2w66rqv5> <div class="iv-header__top" data-astro-cid-2w66rqv5> <a href="/" class="logo" aria-label="Go to homepage" data-astro-cid-tvrurpns> <img src="/images/header/header-logo.webp" class="logo__icon" alt="Icy Veins Logo" fetchpriority="high" decoding="async" data-astro-cid-tvrurpns> <div class="logo__text-group" data-astro-cid-tvrurpns> <img src="/images/header/header-logo-text.webp" class="logo__text-img" alt="Icy Veins" height="14" decoding="async" data-astro-cid-tvrurpns> <span class="logo__tagline" data-astro-cid-tvrurpns>News & Guides</span> </div> </a>  <div class="iv-header__top-actions" data-astro-cid-2w66rqv5> <astro-island uid="cCeGA" prefix="r4" component-url="/_astro/MobileProfileButton.D6nFYGVL.js" component-export="default" renderer-url="/_astro/client.DN61zz9I.js" props="{&quot;data-astro-cid-2w66rqv5&quot;:[0,true]}" ssr client="load" opts="{&quot;name&quot;:&quot;MobileProfileButton&quot;,&quot;value&quot;:true}" await-children><span class="_button_trl26_1" aria-hidden="true" style="visibility:hidden"></span><!--astro:end--></astro-island> <button type="button" class="iv-hamburger" aria-label="Open menu" aria-expanded="false" data-drawer-toggle data-astro-cid-2w66rqv5> <i class="ri-menu-fill" style="color:#888;font-size:18px;" data-astro-cid-2w66rqv5></i> </button> </div> </div> <a href="/download" class="iv-header__download" aria-label="Download App" data-astro-cid-2w66rqv5> <i class="ri-download-cloud-2-line" aria-hidden="true" data-astro-cid-2w66rqv5></i> <span data-astro-cid-2w66rqv5>Download App</span> </a> <a href="/discord" class="iv-header__webhook" aria-label="Discord Webhook" data-astro-cid-2w66rqv5> <i class="ri-webhook-line" aria-hidden="true" data-astro-cid-2w66rqv5></i> <span data-astro-cid-2w66rqv5>Discord Webhook</span> </a> <a href="/" class="iv-header__home" data-astro-cid-2w66rqv5> <img src="/images/header/mobile/header-home.svg" alt="" class="iv-header__home-icon" data-astro-cid-2w66rqv5> <span data-astro-cid-2w66rqv5>Home</span> </a> <nav class="iv-games" aria-label="Games"> <details class="iv-games__group" data-group="wow" data-href="/wow/"> <summary class="iv-games__summary"> <span class="iv-games__icon iv-game-sprite iv-game-sprite--wow-retail" aria-hidden="true"></span> <span class="iv-games__label">World of Warcraft</span> <i class="iv-games__chevron ri-arrow-down-s-line" aria-hidden="true"></i> </summary> <div class="iv-games__panel"> <button type="button" class="iv-go-back" data-go-back aria-label="Close menu">
+← Go Back
+</button> <a href="/wow/" class="iv-games__item"> <span class="iv-games__item-icon iv-game-sprite iv-game-sprite--wow-retail" aria-hidden="true"></span> <span class="iv-games__item-label">World of Warcraft</span> </a><a href="/wow-forever/" class="iv-games__item"> <span class="iv-games__item-icon iv-game-sprite iv-game-sprite--wow-forever" aria-hidden="true"></span> <span class="iv-games__item-label">WoW Forever</span> </a><a href="/wow-classic/" class="iv-games__item"> <span class="iv-games__item-icon iv-game-sprite iv-game-sprite--wow-classic" aria-hidden="true"></span> <span class="iv-games__item-label">WoW Classic</span> </a><a href="/tbc-classic/" class="iv-games__item"> <span class="iv-games__item-icon iv-game-sprite iv-game-sprite--wow-tbc" aria-hidden="true"></span> <span class="iv-games__item-label">TBC Classic</span> </a><a href="/wotlk-classic/" class="iv-games__item"> <span class="iv-games__item-icon iv-game-sprite iv-game-sprite--wow-wotlk" aria-hidden="true"></span> <span class="iv-games__item-label">WotLK Classic</span> </a><a href="/cataclysm-classic/" class="iv-games__item"> <span class="iv-games__item-icon iv-game-sprite iv-game-sprite--wow-cata" aria-hidden="true"></span> <span class="iv-games__item-label">Cata Classic</span> </a><a href="/mists-of-pandaria-classic/" class="iv-games__item"> <span class="iv-games__item-icon iv-game-sprite iv-game-sprite--wow-mop" aria-hidden="true"></span> <span class="iv-games__item-label">MoP Classic</span> </a> </div> </details><details class="iv-games__group" data-group="diablo" data-href="/d4/"> <summary class="iv-games__summary"> <span class="iv-games__icon iv-game-sprite iv-game-sprite--d4" aria-hidden="true"></span> <span class="iv-games__label">Diablo</span> <i class="iv-games__chevron ri-arrow-down-s-line" aria-hidden="true"></i> </summary> <div class="iv-games__panel"> <button type="button" class="iv-go-back" data-go-back aria-label="Close menu">
+← Go Back
+</button> <a href="/d4/" class="iv-games__item"> <span class="iv-games__item-icon iv-game-sprite iv-game-sprite--d4" aria-hidden="true"></span> <span class="iv-games__item-label">Diablo IV</span> </a><a href="/d3/" class="iv-games__item"> <span class="iv-games__item-icon iv-game-sprite iv-game-sprite--d3" aria-hidden="true"></span> <span class="iv-games__item-label">Diablo III</span> </a><a href="/d2/" class="iv-games__item"> <span class="iv-games__item-icon iv-game-sprite iv-game-sprite--d2" aria-hidden="true"></span> <span class="iv-games__item-label">Diablo II</span> </a> </div> </details><a href="/ffxiv/" class="iv-games__link"> <span class="iv-games__icon iv-game-sprite iv-game-sprite--ffxiv" aria-hidden="true"></span> <span class="iv-games__label">Final Fantasy XIV</span> </a><details class="iv-games__group" data-group="gacha" data-href="/gacha/"> <summary class="iv-games__summary"> <span class="iv-games__icon iv-game-sprite iv-game-sprite--gacha" aria-hidden="true"></span> <span class="iv-games__label">Gacha</span> <i class="iv-games__chevron ri-arrow-down-s-line" aria-hidden="true"></i> </summary> <div class="iv-games__panel"> <button type="button" class="iv-go-back" data-go-back aria-label="Close menu">
+← Go Back
+</button> <a href="/genshin-impact/" class="iv-games__item"> <span class="iv-games__item-icon iv-game-sprite iv-game-sprite--genshin" aria-hidden="true"></span> <span class="iv-games__item-label">Genshin Impact</span> </a><a href="/honkai-star-rail/" class="iv-games__item"> <span class="iv-games__item-icon iv-game-sprite iv-game-sprite--hsr" aria-hidden="true"></span> <span class="iv-games__item-label">Honkai: Star Rail</span> </a><a href="/zenless-zone-zero/" class="iv-games__item"> <span class="iv-games__item-icon iv-game-sprite iv-game-sprite--zzz" aria-hidden="true"></span> <span class="iv-games__item-label">Zenless Zone Zero</span> </a><a href="/arknights-endfield/" class="iv-games__item"> <span class="iv-games__item-icon iv-game-sprite iv-game-sprite--endfield" aria-hidden="true"></span> <span class="iv-games__item-label">Arknights: Endfield</span> </a><a href="/neverness-to-everness/" class="iv-games__item"> <span class="iv-games__item-icon iv-game-sprite iv-game-sprite--nte" aria-hidden="true"></span> <span class="iv-games__item-label">Neverness to Everness</span> </a><a href="/honkai-nexus-anima/" class="iv-games__item"> <span class="iv-games__item-icon iv-game-sprite iv-game-sprite--hna" aria-hidden="true"></span> <span class="iv-games__item-label">Honkai: Nexus Anima</span> </a> </div> </details><details class="iv-games__group" data-group="more"> <summary class="iv-games__summary"> <img src="/images/header/header-browse-games-icon.svg" alt="" class="iv-games__icon iv-games__icon--img"> <span class="iv-games__label">More Games</span> <i class="iv-games__chevron ri-arrow-down-s-line" aria-hidden="true"></i> </summary> <div class="iv-games__panel"> <button type="button" class="iv-go-back" data-go-back aria-label="Close menu">
+← Go Back
+</button> <a href="https://www.poe-vault.com/poe2/" class="iv-games__item"> <span class="iv-games__item-icon iv-game-sprite iv-game-sprite--poe2" aria-hidden="true"></span> <span class="iv-games__item-label">Path of Exile 2</span> </a><a href="https://www.poe-vault.com/" class="iv-games__item"> <span class="iv-games__item-icon iv-game-sprite iv-game-sprite--poe1" aria-hidden="true"></span> <span class="iv-games__item-label">Path of Exile</span> </a><a href="/chrono-odyssey/" class="iv-games__item"> <span class="iv-games__item-icon iv-game-sprite iv-game-sprite--chrono" aria-hidden="true"></span> <span class="iv-games__item-label">Chrono Odyssey</span> </a><a href="/monster-hunter-wilds/" class="iv-games__item"> <span class="iv-games__item-icon iv-game-sprite iv-game-sprite--mhwilds" aria-hidden="true"></span> <span class="iv-games__item-label">Monster Hunter Wilds</span> </a><a href="/fellowship/news/" class="iv-games__item"> <span class="iv-games__item-icon iv-game-sprite iv-game-sprite--fellowship" aria-hidden="true"></span> <span class="iv-games__item-label">Fellowship</span> </a><a href="/heroes/" class="iv-games__item"> <span class="iv-games__item-icon iv-game-sprite iv-game-sprite--heroes" aria-hidden="true"></span> <span class="iv-games__item-label">Heroes of the Storm</span> </a> </div> </details> </nav>  <div class="iv-socials" data-astro-cid-2w66rqv5> <a href="https://icy-veins.zendesk.com/hc/en-us/requests/new" class="custom-button light-purple iv-header__icon-btn" target="_blank" rel="noopener noreferrer" aria-label="Contact us" data-astro-cid-2w66rqv5> <i class="ri-mail-fill" data-astro-cid-2w66rqv5></i> </a> <a href="https://discord.gg/ZaufvyM" class="custom-button light-purple iv-header__icon-btn" target="_blank" rel="noopener noreferrer nofollow" aria-label="Discord" data-astro-cid-2w66rqv5> <i class="ri-discord-fill" data-astro-cid-2w66rqv5></i> </a> </div> <div class="iv-header__account-slot" data-astro-cid-2w66rqv5> <astro-island uid="Z1ujbXh" prefix="r5" component-url="/_astro/Account.pIQLVR1x.js" component-export="default" renderer-url="/_astro/client.DN61zz9I.js" props="{&quot;data-astro-cid-2w66rqv5&quot;:[0,true]}" ssr client="idle" opts="{&quot;name&quot;:&quot;Account&quot;,&quot;value&quot;:true}" await-children><div class="_account_viwe9_1" aria-hidden="true" style="visibility:hidden"></div><!--astro:end--></astro-island> </div> </div> <nav class="iv-subnav" aria-label="wow guides"><details class="iv-subnav__menu" data-columns="4" data-href="/wow/class-guides"><summary class="iv-subnav__summary"><span class="iv-subnav__label">Class Guides</span><i class="iv-subnav__chevron ri-arrow-down-s-line" aria-hidden="true"></i></summary><div class="iv-subnav__panel"><button type="button" class="iv-go-back" data-go-back aria-label="Close menu">
+← Go Back
+</button><a class="iv-subnav__view-all" href="/wow/class-guides">
+View all
+</a><section class="iv-subnav__block iv-subnav__block--simple"> <header class="iv-subnav__block-heading"> <span class="iv-subnav__block-label">General</span> </header> <ul class="iv-subnav__block-items iv-subnav__block-items--column"> <li> <a href="/wow/how-to-sim-your-wow-character-a-guide-to-raidbots" class="iv-subnav__item">Simming Your Character</a> </li><li> <a href="/wow/healing-guide" class="iv-subnav__item">Healing Guide</a> </li><li> <a href="/wow/tanking-guide" class="iv-subnav__item">Tanking Guide</a> </li><li> <a href="/wow/how-to-set-up-your-ui-in-world-of-warcraft" class="iv-subnav__item">Set Up your UI</a> </li><li> <a href="/wow/midnight-pve-gearing-guide" class="iv-subnav__item">PvE Gearing Guide</a> </li> </ul> </section><section class="iv-subnav__block iv-subnav__block--class" style="--block-color: #C41E3A;"> <header class="iv-subnav__block-heading"> <img src="https://static.icy-veins.com/images/wow/class-icons/jiberishui/small/death-knight.webp" alt="" class="iv-subnav__block-icon"> <span class="iv-subnav__block-label">Death Knight</span> </header> <ul class="iv-subnav__block-items iv-subnav__block-items--column"> <li> <a href="/wow/death-knight-guide" class="iv-subnav__item">Death Knight Guide</a> </li><li> <a href="/wow/blood-death-knight-pve-tank-guide" class="iv-subnav__item">Blood</a> </li><li> <a href="/wow/frost-death-knight-pve-dps-guide" class="iv-subnav__item">Frost</a> </li><li> <a href="/wow/unholy-death-knight-pve-dps-guide" class="iv-subnav__item">Unholy</a> </li> </ul> </section><section class="iv-subnav__block iv-subnav__block--class" style="--block-color: #A330C9;"> <header class="iv-subnav__block-heading"> <img src="https://static.icy-veins.com/images/wow/class-icons/jiberishui/small/demon-hunter.webp" alt="" class="iv-subnav__block-icon"> <span class="iv-subnav__block-label">Demon Hunter</span> </header> <ul class="iv-subnav__block-items iv-subnav__block-items--column"> <li> <a href="/wow/demon-hunter-guide" class="iv-subnav__item">Demon Hunter Guide</a> </li><li> <a href="/wow/devourer-demon-hunter-pve-dps-guide" class="iv-subnav__item">Devourer</a> </li><li> <a href="/wow/havoc-demon-hunter-pve-dps-guide" class="iv-subnav__item">Havoc</a> </li><li> <a href="/wow/vengeance-demon-hunter-pve-tank-guide" class="iv-subnav__item">Vengeance</a> </li> </ul> </section><section class="iv-subnav__block iv-subnav__block--class" style="--block-color: #D36301;"> <header class="iv-subnav__block-heading"> <img src="https://static.icy-veins.com/images/wow/class-icons/jiberishui/small/druid.webp" alt="" class="iv-subnav__block-icon"> <span class="iv-subnav__block-label">Druid</span> </header> <ul class="iv-subnav__block-items iv-subnav__block-items--column"> <li> <a href="/wow/druid-guide" class="iv-subnav__item">Druid Guide</a> </li><li> <a href="/wow/balance-druid-pve-dps-guide" class="iv-subnav__item">Balance</a> </li><li> <a href="/wow/feral-druid-pve-dps-guide" class="iv-subnav__item">Feral</a> </li><li> <a href="/wow/guardian-druid-pve-tank-guide" class="iv-subnav__item">Guardian</a> </li><li> <a href="/wow/restoration-druid-pve-healing-guide" class="iv-subnav__item">Restoration</a> </li> </ul> </section><section class="iv-subnav__block iv-subnav__block--class" style="--block-color: #33937F;"> <header class="iv-subnav__block-heading"> <img src="https://static.icy-veins.com/images/wow/class-icons/jiberishui/small/evoker.webp" alt="" class="iv-subnav__block-icon"> <span class="iv-subnav__block-label">Evoker</span> </header> <ul class="iv-subnav__block-items iv-subnav__block-items--column"> <li> <a href="/wow/evoker-guide" class="iv-subnav__item">Evoker Guide</a> </li><li> <a href="/wow/augmentation-evoker-pve-dps-guide" class="iv-subnav__item">Augmentation</a> </li><li> <a href="/wow/devastation-evoker-pve-dps-guide" class="iv-subnav__item">Devastation</a> </li><li> <a href="/wow/preservation-evoker-pve-healing-guide" class="iv-subnav__item">Preservation</a> </li> </ul> </section><section class="iv-subnav__block iv-subnav__block--class" style="--block-color: #66902B;"> <header class="iv-subnav__block-heading"> <img src="https://static.icy-veins.com/images/wow/class-icons/jiberishui/small/hunter.webp" alt="" class="iv-subnav__block-icon"> <span class="iv-subnav__block-label">Hunter</span> </header> <ul class="iv-subnav__block-items iv-subnav__block-items--column"> <li> <a href="/wow/hunter-guide" class="iv-subnav__item">Hunter Guide</a> </li><li> <a href="/wow/beast-mastery-hunter-pve-dps-guide" class="iv-subnav__item">Beast Mastery</a> </li><li> <a href="/wow/marksmanship-hunter-pve-dps-guide" class="iv-subnav__item">Marksmanship</a> </li><li> <a href="/wow/survival-hunter-pve-dps-guide" class="iv-subnav__item">Survival</a> </li> </ul> </section><section class="iv-subnav__block iv-subnav__block--class" style="--block-color: #0095C3;"> <header class="iv-subnav__block-heading"> <img src="https://static.icy-veins.com/images/wow/class-icons/jiberishui/small/mage.webp" alt="" class="iv-subnav__block-icon"> <span class="iv-subnav__block-label">Mage</span> </header> <ul class="iv-subnav__block-items iv-subnav__block-items--column"> <li> <a href="/wow/mage-guide" class="iv-subnav__item">Mage Guide</a> </li><li> <a href="/wow/arcane-mage-pve-dps-guide" class="iv-subnav__item">Arcane</a> </li><li> <a href="/wow/fire-mage-pve-dps-guide" class="iv-subnav__item">Fire</a> </li><li> <a href="/wow/frost-mage-pve-dps-guide" class="iv-subnav__item">Frost</a> </li> </ul> </section><section class="iv-subnav__block iv-subnav__block--class" style="--block-color: #2AA674;"> <header class="iv-subnav__block-heading"> <img src="https://static.icy-veins.com/images/wow/class-icons/jiberishui/small/monk.webp" alt="" class="iv-subnav__block-icon"> <span class="iv-subnav__block-label">Monk</span> </header> <ul class="iv-subnav__block-items iv-subnav__block-items--column"> <li> <a href="/wow/monk-guide" class="iv-subnav__item">Monk Guide</a> </li><li> <a href="/wow/brewmaster-monk-pve-tank-guide" class="iv-subnav__item">Brewmaster</a> </li><li> <a href="/wow/mistweaver-monk-pve-healing-guide" class="iv-subnav__item">Mistweaver</a> </li><li> <a href="/wow/windwalker-monk-pve-dps-guide" class="iv-subnav__item">Windwalker</a> </li> </ul> </section><section class="iv-subnav__block iv-subnav__block--class" style="--block-color: #CC5B8D;"> <header class="iv-subnav__block-heading"> <img src="https://static.icy-veins.com/images/wow/class-icons/jiberishui/small/paladin.webp" alt="" class="iv-subnav__block-icon"> <span class="iv-subnav__block-label">Paladin</span> </header> <ul class="iv-subnav__block-items iv-subnav__block-items--column"> <li> <a href="/wow/paladin-guide" class="iv-subnav__item">Paladin Guide</a> </li><li> <a href="/wow/holy-paladin-pve-healing-guide" class="iv-subnav__item">Holy</a> </li><li> <a href="/wow/protection-paladin-pve-tank-guide" class="iv-subnav__item">Protection</a> </li><li> <a href="/wow/retribution-paladin-pve-dps-guide" class="iv-subnav__item">Retribution</a> </li> </ul> </section><section class="iv-subnav__block iv-subnav__block--class" style="--block-color: #FFFFFF;"> <header class="iv-subnav__block-heading"> <img src="https://static.icy-veins.com/images/wow/class-icons/jiberishui/small/priest.webp" alt="" class="iv-subnav__block-icon"> <span class="iv-subnav__block-label">Priest</span> </header> <ul class="iv-subnav__block-items iv-subnav__block-items--column"> <li> <a href="/wow/priest-guide" class="iv-subnav__item">Priest Guide</a> </li><li> <a href="/wow/discipline-priest-pve-healing-guide" class="iv-subnav__item">Discipline</a> </li><li> <a href="/wow/holy-priest-pve-healing-guide" class="iv-subnav__item">Holy</a> </li><li> <a href="/wow/shadow-priest-pve-dps-guide" class="iv-subnav__item">Shadow</a> </li> </ul> </section><section class="iv-subnav__block iv-subnav__block--class" style="--block-color: #B7901C;"> <header class="iv-subnav__block-heading"> <img src="https://static.icy-veins.com/images/wow/class-icons/jiberishui/small/rogue.webp" alt="" class="iv-subnav__block-icon"> <span class="iv-subnav__block-label">Rogue</span> </header> <ul class="iv-subnav__block-items iv-subnav__block-items--column"> <li> <a href="/wow/rogue-guide" class="iv-subnav__item">Rogue Guide</a> </li><li> <a href="/wow/assassination-rogue-pve-dps-guide" class="iv-subnav__item">Assassination</a> </li><li> <a href="/wow/outlaw-rogue-pve-dps-guide" class="iv-subnav__item">Outlaw</a> </li><li> <a href="/wow/subtlety-rogue-pve-dps-guide" class="iv-subnav__item">Subtlety</a> </li> </ul> </section><section class="iv-subnav__block iv-subnav__block--class" style="--block-color: #0070DD;"> <header class="iv-subnav__block-heading"> <img src="https://static.icy-veins.com/images/wow/class-icons/jiberishui/small/shaman.webp" alt="" class="iv-subnav__block-icon"> <span class="iv-subnav__block-label">Shaman</span> </header> <ul class="iv-subnav__block-items iv-subnav__block-items--column"> <li> <a href="/wow/shaman-guide" class="iv-subnav__item">Shaman Guide</a> </li><li> <a href="/wow/elemental-shaman-pve-dps-guide" class="iv-subnav__item">Elemental</a> </li><li> <a href="/wow/enhancement-shaman-pve-dps-guide" class="iv-subnav__item">Enhancement</a> </li><li> <a href="/wow/restoration-shaman-pve-healing-guide" class="iv-subnav__item">Restoration</a> </li> </ul> </section><section class="iv-subnav__block iv-subnav__block--class" style="--block-color: #5D5EC8;"> <header class="iv-subnav__block-heading"> <img src="https://static.icy-veins.com/images/wow/class-icons/jiberishui/small/warlock.webp" alt="" class="iv-subnav__block-icon"> <span class="iv-subnav__block-label">Warlock</span> </header> <ul class="iv-subnav__block-items iv-subnav__block-items--column"> <li> <a href="/wow/warlock-guide" class="iv-subnav__item">Warlock Guide</a> </li><li> <a href="/wow/affliction-warlock-pve-dps-guide" class="iv-subnav__item">Affliction</a> </li><li> <a href="/wow/demonology-warlock-pve-dps-guide" class="iv-subnav__item">Demonology</a> </li><li> <a href="/wow/destruction-warlock-pve-dps-guide" class="iv-subnav__item">Destruction</a> </li> </ul> </section><section class="iv-subnav__block iv-subnav__block--class" style="--block-color: #9D6C38;"> <header class="iv-subnav__block-heading"> <img src="https://static.icy-veins.com/images/wow/class-icons/jiberishui/small/warrior.webp" alt="" class="iv-subnav__block-icon"> <span class="iv-subnav__block-label">Warrior</span> </header> <ul class="iv-subnav__block-items iv-subnav__block-items--column"> <li> <a href="/wow/warrior-guide" class="iv-subnav__item">Warrior Guide</a> </li><li> <a href="/wow/arms-warrior-pve-dps-guide" class="iv-subnav__item">Arms</a> </li><li> <a href="/wow/fury-warrior-pve-dps-guide" class="iv-subnav__item">Fury</a> </li><li> <a href="/wow/protection-warrior-pve-tank-guide" class="iv-subnav__item">Protection</a> </li> </ul> </section></div></details><details class="iv-subnav__menu" data-columns="1" data-href="/wow/midnight-season-2-guide"><summary class="iv-subnav__summary"><span class="iv-subnav__label">Season 2 Content</span><i class="iv-subnav__chevron ri-arrow-down-s-line" aria-hidden="true"></i></summary><div class="iv-subnav__panel"><button type="button" class="iv-go-back" data-go-back aria-label="Close menu">
+← Go Back
+</button><a class="iv-subnav__view-all" href="/wow/midnight-season-2-guide">
+View all
+</a><section class="iv-subnav__block iv-subnav__block--simple"> <header class="iv-subnav__block-heading"> <span class="iv-subnav__block-label">General Dungeon Guides</span> </header> <ul class="iv-subnav__block-items iv-subnav__block-items--grid"> <li> <a href="/wow/dungeons-guide" class="iv-subnav__item">Midnight Dungeons Overview</a> </li><li> <a href="/wow/follower-dungeons-guide" class="iv-subnav__item">Follower Dungeons</a> </li> </ul> </section><section class="iv-subnav__block iv-subnav__block--simple"> <header class="iv-subnav__block-heading"> <span class="iv-subnav__block-label">Midnight Season 2</span> </header> <ul class="iv-subnav__block-items iv-subnav__block-items--grid"> <li> <a href="/wow/midnight-mythic-season-2-guide" class="iv-subnav__item">Mythic+ Season 2</a> </li><li> <a href="/wow/venomous-abyss-raid-guide" class="iv-subnav__item">Venomous Abyss Raid</a> </li><li> <a href="/wow/delves-guide" class="iv-subnav__item">Delves Season 2 </a> </li><li> <a href="/wow/midnight-pvp-season-2-guide" class="iv-subnav__item">PvP Season 2</a> </li><li> <a href="/wow/venomous-abyss-raid-meta-achievement-guide" class="iv-subnav__item">Glory Raid Achievement</a> </li><li> <a href="/wow/midnight-season-2-tier-sets-guide" class="iv-subnav__item">Tier Sets Season 2 </a> </li> </ul> </section><section class="iv-subnav__block iv-subnav__block--simple"> <header class="iv-subnav__block-heading"> <span class="iv-subnav__block-label">Season 2 Features</span> </header> <ul class="iv-subnav__block-items iv-subnav__block-items--grid"> <li> <a href="/wow/midnight-season-2-guide" class="iv-subnav__item">Season 2 Overview</a> </li><li> <a href="/wow/turboboost-and-bonus-rolls-in-midnight-season-1-the-voidforge" class="iv-subnav__item">Voidforge (Bonus Rolls)</a> </li><li> <a href="/wow/void-assaults-hub" class="iv-subnav__item">Void Assaults</a> </li><li> <a href="/wow/field-accolade-guide" class="iv-subnav__item">Field Accolades</a> </li><li> <a href="/wow/showdown-zones-guide" class="iv-subnav__item">Showdown Areas</a> </li><li> <a href="/wow/omnium-folio-guide" class="iv-subnav__item">Omnium Folio</a> </li> </ul> </section></div></details><details class="iv-subnav__menu" data-columns="1" data-href="/wow/tier-lists"><summary class="iv-subnav__summary"><span class="iv-subnav__label">Tier Lists</span><i class="iv-subnav__chevron ri-arrow-down-s-line" aria-hidden="true"></i></summary><div class="iv-subnav__panel"><button type="button" class="iv-go-back" data-go-back aria-label="Close menu">
+← Go Back
+</button><a class="iv-subnav__view-all" href="/wow/tier-lists">
+View all
+</a><section class="iv-subnav__block iv-subnav__block--buttons"> <header class="iv-subnav__block-heading"> <span class="iv-subnav__block-label">Mythic+ Tier Lists</span> </header> <ul class="iv-subnav__block-items iv-subnav__block-items--tier"> <li class="iv-subnav__tier-item"> <a href="/wow/mythic-dps-tier-list" class="iv-subnav__tier-link"> <img src="https://static.bigbrain.gg/icy-veins-redesign/menu/m-icon-dps.svg" alt="" class="iv-subnav__tier-icon"> <span>DPS Tier List</span> </a> </li><li class="iv-subnav__tier-item"> <a href="/wow/mythic-tank-tier-list" class="iv-subnav__tier-link"> <img src="https://static.bigbrain.gg/icy-veins-redesign/menu/m-icon-tank.svg" alt="" class="iv-subnav__tier-icon"> <span>Tank Tier List</span> </a> </li><li class="iv-subnav__tier-item"> <a href="/wow/mythic-healer-tier-list" class="iv-subnav__tier-link"> <img src="https://static.bigbrain.gg/icy-veins-redesign/menu/m-icon-healer.svg" alt="" class="iv-subnav__tier-icon"> <span>Healer Tier List</span> </a> </li> </ul> </section><section class="iv-subnav__block iv-subnav__block--buttons"> <header class="iv-subnav__block-heading"> <span class="iv-subnav__block-label">Raiding Tier Lists</span> </header> <ul class="iv-subnav__block-items iv-subnav__block-items--tier"> <li class="iv-subnav__tier-item"> <a href="/wow/dps-rankings-tier-list" class="iv-subnav__tier-link"> <img src="https://static.bigbrain.gg/icy-veins-redesign/menu/m-icon-dps.svg" alt="" class="iv-subnav__tier-icon"> <span>DPS Tier List</span> </a> </li><li class="iv-subnav__tier-item"> <a href="/wow/tank-rankings-tier-list" class="iv-subnav__tier-link"> <img src="https://static.bigbrain.gg/icy-veins-redesign/menu/m-icon-tank.svg" alt="" class="iv-subnav__tier-icon"> <span>Tank Tier List</span> </a> </li><li class="iv-subnav__tier-item"> <a href="/wow/healer-rankings-tier-list" class="iv-subnav__tier-link"> <img src="https://static.bigbrain.gg/icy-veins-redesign/menu/m-icon-healer.svg" alt="" class="iv-subnav__tier-icon"> <span>Healer Tier List</span> </a> </li> </ul> </section><section class="iv-subnav__block iv-subnav__block--buttons"> <header class="iv-subnav__block-heading"> <span class="iv-subnav__block-label">PvP Tier Lists</span> </header> <ul class="iv-subnav__block-items iv-subnav__block-items--tier"> <li class="iv-subnav__tier-item iv-subnav__tier-item--stretch"> <a href="/wow/pvp-dps-tier-list" class="iv-subnav__tier-link"> <img src="https://static.bigbrain.gg/icy-veins-redesign/menu/m-icon-dps.svg" alt="" class="iv-subnav__tier-icon"> <span>DPS Tier List</span> </a> </li><li class="iv-subnav__tier-item iv-subnav__tier-item--stretch"> <a href="/wow/healer-tier-list-for-pvp" class="iv-subnav__tier-link"> <img src="https://static.bigbrain.gg/icy-veins-redesign/menu/m-icon-healer.svg" alt="" class="iv-subnav__tier-icon"> <span>Healer Tier List</span> </a> </li> </ul> </section></div></details><details class="iv-subnav__menu" data-columns="1" data-href="/wow/midnight-expansion-guide"><summary class="iv-subnav__summary"><span class="iv-subnav__label">Midnight Guides</span><i class="iv-subnav__chevron ri-arrow-down-s-line" aria-hidden="true"></i></summary><div class="iv-subnav__panel"><button type="button" class="iv-go-back" data-go-back aria-label="Close menu">
+← Go Back
+</button><a class="iv-subnav__view-all" href="/wow/midnight-expansion-guide">
+View all
+</a><section class="iv-subnav__block iv-subnav__block--simple"> <header class="iv-subnav__block-heading"> <span class="iv-subnav__block-label">Midnight Expansion Guides</span> </header> <ul class="iv-subnav__block-items iv-subnav__block-items--grid"> <li> <a href="/wow/midnight-expansion-guide" class="iv-subnav__item">Midnight Overview</a> </li><li> <a href="/wow/weekly-to-do-list" class="iv-subnav__item">Weekly To-Do List</a> </li><li> <a href="/wow/catalyst-guide" class="iv-subnav__item">Catalyst Guide</a> </li><li> <a href="/wow/great-vault-guide" class="iv-subnav__item">Great Vault</a> </li><li> <a href="/wow/world-of-warcraft-gear-upgrading-guide" class="iv-subnav__item">Gear Upgrading</a> </li><li> <a href="/wow/midnight-mounts-hub" class="iv-subnav__item">Mounts In Midnight</a> </li><li> <a href="/wow/prey-system-guide" class="iv-subnav__item">Prey System</a> </li><li> <a href="/wow/midnight-renown-guide" class="iv-subnav__item">Renown Overview</a> </li><li> <a href="/wow/trading-post-guide" class="iv-subnav__item">Trading Post</a> </li><li> <a href="/wow/midnight-world-bosses-guide" class="iv-subnav__item">World Bosses</a> </li><li> <a href="/wow/midnight-world-events-guide" class="iv-subnav__item">World Events</a> </li><li> <a href="/wow/midnight-zone-and-achievement-guide" class="iv-subnav__item">Zone Overview</a> </li> </ul> </section><section class="iv-subnav__block iv-subnav__block--simple"> <header class="iv-subnav__block-heading"> <span class="iv-subnav__block-label">Curse of Ula'tek Update</span> </header> <ul class="iv-subnav__block-items iv-subnav__block-items--grid"> <li> <a href="/wow/midnight-patch-12-1-guide" class="iv-subnav__item">Patch 12.1 Hub <span class='nav-badge-new' aria-label='New content badge'>NEW!</span></a> </li><li> <a href="/wow/the-coiled-isle-guide" class="iv-subnav__item">The Coiled Isle</a> </li><li> <a href="/wow/vaults-of-atalutek-guide" class="iv-subnav__item">Vaults of Atal'Utek</a> </li><li> <a href="/wow/zuljarras-forces-renown-guide" class="iv-subnav__item">Zul'jarras Forces Renown</a> </li><li> <a href="/wow/captain-tokka-reputation-guide" class="iv-subnav__item">Captain Tokka Reputation</a> </li> </ul> </section></div></details><details class="iv-subnav__menu" data-columns="1" data-href="/wow/professions"><summary class="iv-subnav__summary"><span class="iv-subnav__label">Professions</span><i class="iv-subnav__chevron ri-arrow-down-s-line" aria-hidden="true"></i></summary><div class="iv-subnav__panel"><button type="button" class="iv-go-back" data-go-back aria-label="Close menu">
+← Go Back
+</button><a class="iv-subnav__view-all" href="/wow/professions">
+View all
+</a><section class="iv-subnav__block iv-subnav__block--simple"> <header class="iv-subnav__block-heading"> <span class="iv-subnav__block-label">Midnight Professions</span> </header> <ul class="iv-subnav__block-items iv-subnav__block-items--grid"> <li> <a href="/wow/professions" class="iv-subnav__item">Profession Overview</a> </li><li> <a href="/wow/professions-crafting-orders-and-recrafting" class="iv-subnav__item">Crafting Orders/Recrafting</a> </li><li> <a href="/wow/spark-crafting-guide" class="iv-subnav__item">Spark Crafting Guide</a> </li><li> <a href="/wow/professions-making-gold" class="iv-subnav__item">Making Gold with Crafting</a> </li><li> <a href="/wow/professions-stats-and-gear" class="iv-subnav__item">Crafting Stats and Equipment</a> </li> </ul> </section><section class="iv-subnav__block iv-subnav__block--simple"> <header class="iv-subnav__block-heading"> <span class="iv-subnav__block-label">Profession Leveling and Gold Making Guides</span> </header> <ul class="iv-subnav__block-items iv-subnav__block-items--grid"> <li> <a href="/wow/professions-alchemy" class="iv-subnav__item">Alchemy</a> </li><li> <a href="/wow/professions-blacksmithing" class="iv-subnav__item">Blacksmithing</a> </li><li> <a href="/wow/professions-cooking" class="iv-subnav__item">Cooking</a> </li><li> <a href="/wow/professions-enchanting" class="iv-subnav__item">Enchanting</a> </li><li> <a href="/wow/professions-engineering" class="iv-subnav__item">Engineering</a> </li><li> <a href="/wow/professions-fishing" class="iv-subnav__item">Fishing</a> </li><li> <a href="/wow/professions-herbalism" class="iv-subnav__item">Herbalism</a> </li><li> <a href="/wow/professions-inscription" class="iv-subnav__item">Inscription</a> </li><li> <a href="/wow/professions-jewelcrafting" class="iv-subnav__item">Jewelcrafting</a> </li><li> <a href="/wow/professions-leatherworking" class="iv-subnav__item">Leatherworking</a> </li><li> <a href="/wow/professions-mining" class="iv-subnav__item">Mining</a> </li><li> <a href="/wow/professions-skinning" class="iv-subnav__item">Skinning</a> </li><li> <a href="/wow/professions-tailoring" class="iv-subnav__item">Tailoring</a> </li> </ul> </section></div></details><details class="iv-subnav__menu" data-columns="1" data-href="/wow/misc-guides-for-world-of-warcraft"><summary class="iv-subnav__summary"><span class="iv-subnav__label">General Info</span><i class="iv-subnav__chevron ri-arrow-down-s-line" aria-hidden="true"></i></summary><div class="iv-subnav__panel"><button type="button" class="iv-go-back" data-go-back aria-label="Close menu">
+← Go Back
+</button><a class="iv-subnav__view-all" href="/wow/misc-guides-for-world-of-warcraft">
+View all
+</a><section class="iv-subnav__block iv-subnav__block--simple"> <header class="iv-subnav__block-heading"> <span class="iv-subnav__block-label">Recurring Events</span> </header> <ul class="iv-subnav__block-items iv-subnav__block-items--grid"> <li> <a href="/wow/darkmoon-faire-guide" class="iv-subnav__item">Darkmoon Faire</a> </li><li> <a href="/wow/shadowlands-mage-tower-guides" class="iv-subnav__item">Legion Mage Tower Challenges</a> </li><li> <a href="/wow/turbulent-timeways-guide" class="iv-subnav__item">Turbulent Timeways</a> </li><li> <a href="/wow/a-greedy-emissary-and-winds-of-the-sanctuary-event-guide" class="iv-subnav__item">A Greedy Emissary</a> </li> </ul> </section><section class="iv-subnav__block iv-subnav__block--simple"> <header class="iv-subnav__block-heading"> <span class="iv-subnav__block-label">Tools</span> </header> <ul class="iv-subnav__block-items iv-subnav__block-items--grid"> <li> <a href="/wow/midnight-talent-calculator" class="iv-subnav__item">Talent Calculator</a> </li><li> <a href="/wow/midnight-ping-system-update" class="iv-subnav__item">Ping System Update <span class='nav-badge-new' aria-label='New content badge'>NEW!</span></a> </li> </ul> </section><section class="iv-subnav__block iv-subnav__block--simple"> <header class="iv-subnav__block-heading"> <span class="iv-subnav__block-label">Other Information</span> </header> <ul class="iv-subnav__block-items iv-subnav__block-items--grid"> <li> <a href="/wow/transmogrification-guide" class="iv-subnav__item">Transmog Guide</a> </li><li> <a href="/wow/warcraft-books-and-novels-overview" class="iv-subnav__item">Books and Novels</a> </li><li> <a href="/wow/player-housing-guide" class="iv-subnav__item">Player Housing</a> </li> </ul> </section></div></details><a href="/wow/midnight-pvp-season-2-guide" class="iv-subnav__link">PvP</a></nav>  <a href="/discord" class="iv-header__webhook-cta" data-astro-cid-2w66rqv5> <i class="ri-webhook-line" aria-hidden="true" data-astro-cid-2w66rqv5></i> <span data-astro-cid-2w66rqv5>Discord Webhook</span> </a>  <a href="/premium" class="iv-premium-cta" data-astro-cid-2w66rqv5> <i class="ri-vip-crown-2-fill" data-astro-cid-2w66rqv5></i> <span data-astro-cid-2w66rqv5>Go Ad Free</span> </a> </header>     <main> <div class="faded-bg" style="--faded-bg: url(&#34;//static.icy-veins.com/images/common/wow-bg.webp&#34;)"></div>  <div class="pw-wrapper pw-wrapper--right"> <div class="unit-1" id="top-right"></div> <div class="unit-2" id="bottom-right"></div> </div> <div class="pw-wrapper pw-wrapper--left"> <div class="unit-1" id="top-left"></div> </div>  <div class="guide-header-wrapper"> <div class="unit-wide-pw" style="position:relative;z-index:10;"></div>  <div class="content-header" data-astro-cid-dmwpkeaq> <div class="content-header__breadcrumbs" data-astro-cid-dmwpkeaq> <a href="/" class="content-header__breadcrumb-link" data-astro-cid-dmwpkeaq> Home </a><span class="content-header__breadcrumb-separator" data-astro-cid-dmwpkeaq>/</span><a href="/wow" class="content-header__breadcrumb-link" data-astro-cid-dmwpkeaq> World of Warcraft </a><span class="content-header__breadcrumb-separator" data-astro-cid-dmwpkeaq>/</span><a href="/wow/class-guides" class="content-header__breadcrumb-link" data-astro-cid-dmwpkeaq> Classes </a><span class="content-header__breadcrumb-separator" data-astro-cid-dmwpkeaq>/</span><span class="content-header__breadcrumb-current" data-astro-cid-dmwpkeaq> Healing Guide </span>  </div> <div class="content-header__content" style="background-image: url('https://static.bigbrain.gg/icy-veins-redesign/general-assets/wow-generic-header-image.jpg');" data-astro-cid-dmwpkeaq> <div class="content-header__icon" data-astro-cid-dmwpkeaq> <img src="https://static.icy-veins.com/images/wow/expansion-logos/midnight.webp" alt="Healing Guide (Midnight 12.0.1)" data-astro-cid-dmwpkeaq> </div> <div class="content-header__info" data-astro-cid-dmwpkeaq> <h1 class="content-header__title" data-astro-cid-dmwpkeaq>Healing Guide (Midnight 12.0.1)</h1> <div class="content-header__updated" data-astro-cid-dmwpkeaq> <span class="content-header__updated-label" data-astro-cid-dmwpkeaq>Last Updated:</span> <span class="content-header__updated-date" data-astro-cid-dmwpkeaq>Aug 6, 2026 - 4:44 PM</span> <span class="content-header__updated-relative" data-astro-cid-dmwpkeaq>
+(1mo ago)
+</span> </div> <div class="content-header__authors-row" data-astro-cid-dmwpkeaq> <div class="content-header__authors" data-astro-cid-dmwpkeaq> <div class="content-header__author" data-astro-cid-dmwpkeaq> <div class="content-header__author-avatar-wrapper" data-astro-cid-dmwpkeaq> <img src="//static.icy-veins.com/images/common/author-icons/seksi.webp" alt="Seksixeny" class="content-header__author-avatar" data-astro-cid-dmwpkeaq> </div> <div class="content-header__author-info" data-astro-cid-dmwpkeaq> <span class="content-header__author-name" data-astro-cid-dmwpkeaq>Seksixeny</span> </div> <div class="content-header__author-socials" data-astro-cid-dmwpkeaq>  <a href="https://discord.gg/AcTek6e" class="content-header__social-link" aria-label="Discord" target="_blank" data-astro-cid-dmwpkeaq> <i class="ri-discord-fill" data-astro-cid-dmwpkeaq></i> </a>   </div> </div> </div> <a href="/forums/premium" class="content-header__premium" aria-label="Support Our Writers" target="_blank" rel="noopener noreferrer" data-astro-cid-dmwpkeaq> <i class="ri-hand-coin-fill" data-astro-cid-dmwpkeaq></i> <p data-astro-cid-dmwpkeaq>Support Our Writers</p> </a> </div> </div> </div> </div>   </div> <div class="container">  <div class="guide-page-content guide-page-content--wow-retail">  <a href="/download" class="app-banner" style="--app-banner-art: url(&#34;/images/banner/icy-wow-app-banner-image-guides.webp&#34;)" data-astro-cid-wu4fi45p> <img src="/images/banner/icy-wow-app-banner-logo.webp" alt="Icy Veins" class="app-banner__logo" width="210" height="43" data-astro-cid-wu4fi45p> <span class="app-banner__copy" data-astro-cid-wu4fi45p> <span class="app-banner__title" data-astro-cid-wu4fi45p> <img src="/images/banner/icy-wow-app-wow-logo.webp" alt="" class="app-banner__icon" width="24" height="24" data-astro-cid-wu4fi45p>
+NEW! The Icy Veins app is here
+</span> <span class="app-banner__sub" data-astro-cid-wu4fi45p>
+Try out the WoW Class Codex Addon with the Icy Veins app
+</span> </span> <span class="app-banner__cta" data-astro-cid-wu4fi45p> <i class="ri-download-cloud-2-line" aria-hidden="true" data-astro-cid-wu4fi45p></i>
+Download App
+</span> </a>   <div class="content-toc" data-astro-cid-5jl6oxyi><div class="content-toc__title" data-astro-cid-5jl6oxyi>Table of Contents</div><div class="content-toc__grid content-toc__grid--three-columns" data-astro-cid-5jl6oxyi><a href="#the-purpose-of-this-guide" class="content-toc__item" data-astro-cid-5jl6oxyi>1. The Purpose of This Guide</a><a href="#introduction" class="content-toc__item" data-astro-cid-5jl6oxyi>2. Introduction</a><a href="#the-attributes-of-a-great-healer" class="content-toc__item" data-astro-cid-5jl6oxyi>3. The Attributes of a Great Healer</a><a href="#general-concerns" class="content-toc__item" data-astro-cid-5jl6oxyi>4. General Concerns</a><a href="#healing-specific-concerns" class="content-toc__item" data-astro-cid-5jl6oxyi>5. Healing-Specific Concerns</a><a href="#conclusions" class="content-toc__item" data-astro-cid-5jl6oxyi>6. Conclusions</a></div></div>       <div class="heading_container heading_number_2"><span >1.</span> <h2 id="the-purpose-of-this-guide">The Purpose of This Guide</h2></div>
+
+<p>This article will cover all the important aspects of the healing role. The
+information contained here will be of interest both to new players and to
+healing veterans, and reflects the state of healing in the current expansion.</p>
+
+<p>We will not go into class-specific details. Talent specs, gemming, or
+reforging advice are beyond the scope of this article. For such information,
+we recommend that you read our healing class guides.</p>
+
+<p>This guide is mainly targeted at healing in a raid environment, but a lot of
+the things we mention will, naturally, also apply to dungeons and PvP healing.</p>
+
+      <div class="heading_container heading_number_2"><span >2.</span> <h2 id="introduction">Introduction</h2></div>
+
+<p>Healing is, in our opinion, the most stressful and difficult role to
+perform. There are a multitude of factors involved in performing well as a
+healer, but we feel that the most important ones are <strong>reactivity</strong> (greatly 
+helped by a proper UI setup) and <strong>class and encounter knowledge</strong>.</p>
+
+<p>While part of being a great healer comes from personal
+<em>skill</em> (which we will attempt to define and dissect below), it is also
+extremely important to familiarize yourself with various concepts which, for
+the most part, are counter-intuitive.</p>
+
+      <div class="heading_container heading_number_3"><span >2.1.</span> <h3 id="what-is-healing">What is Healing?</h3></div>
+
+<p>While, no doubt, some of you will find this part to be extremely basic
+and unneeded, we feel that, to have a proper discussion about healing, the
+act of healing must first be defined.</p>
+
+<p><em>Healing is the act of using spells which restore the health of friendly
+players (your party or raid members) in order to help them survive the
+various forms of avoidable and unavoidable damage present in all PvE and PvP 
+encounters.</em></p>
+
+<p>This is a very basic definition, of course. In today's raiding environment,
+healers also often have to dispel friendly players of various harmful
+debuffs (magic debuffs, curses, poisons, and diseases).</p>
+
+<p>Additionally, in organized raiding groups, cooldown (or even group) healing 
+is often done based on assignments. Group leaders will establish a healer 
+cooldown rotation that handles the most difficult enemy abilities. If the 
+encounter requires the group to heavily spread out, you might be assigned to 
+focus on healing your group.</p>
+
+<p>In PvP, rather than using your cooldowns at predefined times, you will look to 
+use them when the enemy team uses their offensive cooldowns in order to counter 
+the incoming damage burst.</p>
+
+<p>There are currently 6 classes which can perform the healing role, in
+World of Warcraft:</p>
+
+<ul>
+<li>Druids: the Restoration specialization;</li>
+<li>Monks: the Mistweaver specialization;</li>
+<li>Paladins: the Holy specialization;</li>
+<li>Priests: the Holy and Discipline specializations;</li>
+<li>Shamans: the Restoration specialization;</li>
+<li>Evokers: the Preservation specialization.</li>
+</ul>
+
+<p>Essentially, healers will be targeting damaged friendly players and
+casting helpful / healing spells on them.</p>
+
+      <div class="heading_container heading_number_2"><span >3.</span> <h2 id="the-attributes-of-a-great-healer">The Attributes of a Great Healer</h2></div>
+
+<p>In order for this article's structure to be easily apparent to you from
+the start, we will list all the attributes of a great healer. Afterward,
+we will detail each of these and provide you with tips in order to
+maximize your performance.</p>
+
+<ol>
+<li>Be able to use your character <em>reliably</em> and with ease, at any time
+during the encounter. This includes being comfortable with your user interface
+and your keybinds.</li>
+<li>Be able to <em>anticipate</em> what will happen in a given encounter,
+in terms of damage (this involves knowing the encounter mechanics) and know
+how to properly <em>react</em> to it (this involves knowing your own
+class).</li>
+<li>Understand your role within the <em>team</em>, and the importance of
+knowing your healing <em>assignment</em>.</li>
+</ol>
+
+<p>As you can see, the first point relates to external factors, not
+necessarily related to healing. You must be extremely familiar with your
+user interface and with your keybinds (of which you should make extensive
+use).</p>
+
+<p>The second point relates to encounter and class knowledge. You must be
+familiar with the encounter mechanics in order to know what to expect, and you
+must be familiar with your own class in order to know what spells to use in
+order to properly react to the damage in the fight.</p>
+
+<p>The third and final point relates to understanding that you are part of a
+team and that respecting your own (and other players') assignments is
+crucial.</p>
+
+<p>In addition to these three main points, there are other finer points,
+which you must keep in mind, such as <em>Mana management</em>.</p>
+
+      <div class="heading_container heading_number_2"><span >4.</span> <h2 id="general-concerns">General Concerns</h2></div>
+
+<p>More than any other role, healing is about precision and reaction. Your
+ability to perform your role will be strongly affected, every step of the
+way, by the ease with which you can input commands to your character.</p>
+
+<p>Tanks and DPS players do, sometimes, have to make split-second decisions,
+and these decisions can sometimes impact the outcome of the encounter. Healers,
+on the other hand, have to make this kind of decision every time that they
+use a spell.</p>
+
+<p>Therefore, we feel that it is important to dedicate this section to giving
+you the necessary information required to tune your character for proper
+performance.</p>
+
+      <div class="heading_container heading_number_3"><span >4.1.</span> <h3 id="recommended-add-ons-and-user-interface-settings">Recommended Add-ons and User Interface Settings</h3></div>
+
+<p>The standard Blizzard interface has improved greatly over the years (often
+by including features that were previously supported only by user-created
+add-ons). It is possible to perform the healing role using only this user
+interface, but we feel that it is far from optimal.</p>
+
+<p>Below, we list several user interface elements which we feel require further
+customization. Keep in mind that, at all times, your goal is to make your user 
+interface aid you in completing your goals and not have it hinder you. We feel 
+that it is a very good investment to spend a large amount of time tweaking and
+tuning your interface, as it will have a huge impact on your gameplay.</p>
+
+      <div class="heading_container heading_number_4"><span >4.1.1.</span> <h4 id="raid-frames">Raid Frames</h4></div>
+
+<p>The raid frames are the most important aspect of your user interface. This
+is where your eyes will rest for the majority of the encounter, and you will
+need to be very comfortable with their appearance and layout.</p>
+
+<p>There are several add-ons which present you with an improved version of the 
+Blizzard raid frames. Before providing you with their names, we will list a few 
+things which you should keep in mind when customizing your raid frames.</p>
+
+<ul>
+<li>Ensure that they are large enough so that your eyes do not become tired
+from focusing on them at length (which you will have to do).</li>
+<li>Ensure that they have a position on your screen which is relatively
+central (usually under your character).</li>
+<li>Ensure that they show all the relevant buffs and debuffs present on
+players.</li>
+<li>Situationally, configure the pet frames to also be displayed (this option is 
+usually turned off by default).</li>
+</ul>
+
+<p>Obviously, these guidelines are subject to your own personal preference. The
+most important thing is that you are comfortable with your interface and that
+it does not hinder your actions.</p>
+
+<p>We cannot stress enough how important it is that the relevant buffs and
+(especially) debuffs are properly displayed on the raid frames. As a healer,
+you will often find yourself having to dispel or cleanse raid members of
+various debuffs (magic, poison, curse or disease). Furthermore, and this is
+detailed below, you should have your dispel or cleanse ability properly
+keybound.</p>
+
+<p>While <a href="https://www.curseforge.com/wow/addons/ellesmereui">Ellesmere UI</a> 
+is the current best option for a complete UI / raid frame solution, using the default 
+UI is also very viable, especially when combined with 
+<a href="https://www.curseforge.com/wow/addons/harreks-advanced-raid-frames">Harreks Advanced Raid Frames</a> 
+for healing-over-time customization.</p>
+
+      <div class="heading_container heading_number_4"><span >4.1.2.</span> <h4 id="buff-and-proc-monitoring">Buff and Proc Monitoring</h4></div>
+
+<p>Most healing specializations have various healing cooldowns and procs. It
+is essential to master these and use them to your advantage in order to
+maximize your performance.</p>
+
+<p>The new Blizzard Cooldown Manager is a great in-game way to track everything 
+you need, and it can be further customized with addons such as 
+<a href="https://www.curseforge.com/wow/addons/ellesmereui">Ellesmere UI</a>.</p>
+
+      <div class="heading_container heading_number_4"><span >4.1.3.</span> <h4 id="raid-announcements">Raid Announcements</h4></div>
+
+<p>Communication is extremely important as a healer. Generally, healers have
+many cooldowns which affect other players (raid damage reduction cooldowns,
+Mana regeneration cooldowns, single-target damage reduction cooldowns). It is,
+therefore, useful to have a means of communicating the use of these cooldowns
+without choking your voice-chat medium.</p>
+
+<p>Other single-target abilities (such as <span class="spell_icon_span"><img class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/spell_holy_painsupression.jpg" alt="Pain Suppression Icon" /> <span data-wowhead="spell=33206" class="spell">Pain Suppression</span></span>) can simply
+be configured to be whispered to the targeted player.</p>
+
+      <div class="heading_container heading_number_3"><span >4.2.</span> <h3 id="keybinding-and-macros">Keybinding and Macros</h3></div>
+
+<p>So far, we have covered some important aspects related to add-ons and
+user interface settings. If you have customized your interface suitably, you
+should now have a good view of the encounter area and quick and easy access
+to your raid frames.</p>
+
+<p>The next step is making sure that you can deliver your healing spells in the
+shortest possible amount of time. Having an excellent reaction time is an
+important quality of a good healer, and this is hard to accomplish without
+the use of keybinds. Furthermore, selecting a target from your raid frames 
+(by clicking it) and then using one of your spells, even through a keybinding, 
+is not optimal.</p>
+
+<p><strong>Any ability which you may need to use during combat should be
+keybound.</strong> This does not only refer to healing spells but also to dispels,
+healing cooldowns, Mana regeneration abilities, and trinkets.</p>
+
+<p>Missing even a second to click an ability, as a healer, can often prove
+disastrous to your raid.</p>
+
+<p>Moreover, we advise you to make extensive use of mouse-over macros. Mouse-over 
+macros, in short, allow you to cast spells on friendly players without selecting 
+them as your target. You can simply hover your mouse over their raid frame and 
+use your ability.</p>
+
+<p>This saves you precious time. As you can probably tell, however, this only
+works if your heals are keybound (because otherwise, when moving your mouse to
+your action bar to click a heal, you would stop mousing over your target). This
+is another reason why keybinding is practically mandatory for any healer that
+is interested in their performance.</p>
+
+<p>Below, we use the <span class="spell_icon_span"><img class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/spell_nature_healingwavelesser.jpg" alt="Healing Wave Icon" /> <span data-wowhead="spell=77472" class="spell">Healing Wave</span></span> spell to provide you with an example of 
+a mouse-over macro:</p>
+
+<ul class="code">
+<li>#showtooltip Healing Wave</li>
+<li>/cast [@mouseover,exists,nodead,help,][exists,nodead,help][@player] Healing Wave</li>
+</ul>
+
+<p>While seemingly complicated, this macro changes your <span class="spell_icon_span"><img class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/spell_nature_healingwavelesser.jpg" alt="Healing Wave Icon" /> <span data-wowhead="spell=77472" class="spell">Healing Wave</span></span> spell 
+in such a way that:</p>
+
+<ul>
+<li>If you are mousing over a target that exists, is not dead, and is friendly,
+it will cast Healing Wave on them.</li>
+<li>Otherwise, if your currently selected target exists, is not dead and is
+friendly, Healing Wave will be cast on them instead.</li>
+<li>Lastly, if neither of the above two conditions are met, it will cast
+Healing Wave on yourself.</li>
+</ul>
+
+<p>You can reduce the macro to a simpler format:</p>
+
+<ul class="code">
+<li>#showtooltip Healing Wave</li>
+<li>/cast [@mouseover] Healing Wave</li>
+</ul>
+
+<p>This provides less functionality, though.</p>
+
+<p>An added bonus to using mouse-over macros is that it allows you to have
+the boss or another add targeted (so that you can use your offensive spells
+on them) without it impacting your ability to heal. This is especially relevant 
+when playing a Discipline Priest, who needs to deal damage in order to heal.</p>
+
+<p>You can also enable <strong>Click Casting</strong> functionality for spells of your choice 
+on the default UI through the Options > Keybindings sub-menu, although you will 
+need to set keybindings individually for each character you want to use it on.</p>
+
+<p>It is worth mentioning here that there does exist a sort of alternative, in
+add-ons such as <a href="https://www.curseforge.com/wow/addons/ellesmereui">Ellesmere UI</a>,
+which allows you to set up a feature to simply click a mouse button when
+hovering over a player and causing this to heal them. In certain cases
+(such as when you need to intensively move your character while you are
+healing), such add-ons can provide a superior healing method to the
+mouseover macro + keybind combination, even though, in essence, the same thing is
+accomplished.</p>
+
+<p>The underlying point here is that the practice to be avoided at all costs
+is one where you need to click a player on your raid frames and then click a
+heal from your action bar in order to heal them. Any streamlining of this
+process that you make (keybinds, mouseover macros, both, or add-ons that handle
+the task for you) is a step in the right direction.</p>
+
+      <div class="heading_container heading_number_3"><span >4.3.</span> <h3 id="gear-optimization">Gear Optimization</h3></div>
+
+<p>It is beyond the scope of this guide to discuss specific stat priorities
+since these depend from one healing class to another, and they can change
+often. It is important to note, however, that your gearing plays an important 
+role in your ability to carry out your healer assignments.</p>
+
+      <div class="heading_container heading_number_3"><span >4.4.</span> <h3 id="knowledge-of-the-encounter">Knowledge of the Encounter</h3></div>
+
+<p>As a healer, you have to be intimately familiar with a great part of
+each encounter your raid is attempting. You have to be prepared for every
+ability cast by the boss or an add, which has the potential to deal damage to
+anyone in the raid (regardless of whether this damage is avoidable or not).</p>
+
+<p>A great part of being a good healer is being prepared for what is about to
+happen. Most boss abilities are on fixed timers or cooldowns and will often
+have a predictable outcome. You must be prepared for every such ability
+and already know which spell you are about to cast to heal your targets before
+they have taken any damage.</p>
+
+<p>It is advised that, while learning encounters, you pay special attention
+to how much damage various abilities do and how sustained that damage is.
+This will give you a good indication, for future attempts, of which spells
+are best used when.</p>
+
+<p><strong>For example</strong>: if you know there is a boss ability which deals a very
+high amount of damage (let's say around 80% of the health of most raid
+members) at a specific time, and that it is not followed by any raid damage
+whatsoever for 30 seconds, you would make sure that everyone has enough
+health to survive it, and you would then go on to heal them with Mana-efficient
+spells, allowing you to preserve your Mana. If you were not familiar with the
+encounter mechanics, you might fail to have everyone at the minimum health
+threshold to survive, and you might then panic and use Mana-inefficient spells
+trying to heal everyone up after the damage hits.</p> 
+
+      <div class="heading_container heading_number_2"><span >5.</span> <h2 id="healing-specific-concerns">Healing-Specific Concerns</h2></div>
+
+<p>If you have been following this guide so far, you should have your user
+interface, add-ons, macros and keybinds in place. You should be comfortable
+with clicking your raid frames, tracking your own procs and cooldowns, and
+just generally using your character.</p>
+
+<p>Naturally, the deeper the understanding you have of your class, the better
+your performance will be. This sort of coverage is beyond the scope of this
+article. There are, however, various aspects of playing a healer in a raid
+environment that are not related to class or specialization but rather
+to the healing role in general.</p>
+
+<p>We have done a great deal of talking about all sorts of aspects which
+prepare you for healing. Now it is time to actually look at how you should
+heal, who you should (and should not!) heal, and what you should avoid
+doing.</p>
+
+      <div class="heading_container heading_number_3"><span >5.1.</span> <h3 id="how-to-heal">How to Heal?</h3></div>
+
+<p>Your most basic goal for every encounter is that each and every one of
+your raid members survive until the boss is dead (or until he enrages due to
+insufficient DPS).</p>
+
+<p>For the most part, this means you will have to wait for raid members to 
+suffer damage and then use your healing spells to heal the damaged targets.</p>
+
+<p>This is a simplistic look at things, and the reality is more complicated
+because of several factors:</p>
+
+<ul>
+<li>Different healing spells are suited for different situations (high Mana
+cost and low cast time versus low Mana cost and high cast time, for
+example).</li>
+<li>The damage your raid takes is not always predictable; player error will
+often cause random bursts of damage which you will have to heal.</li>
+<li>Various encounter abilities can target healers, shifting the balance of
+the assignments. You will need to communicate and improvise.</li>
+<li>Some heals (particularly Discipline Priest Atonements and Restoration Druid 
+HoTs) are designed to be applied to targets before they begin taking damage.</li>
+</ul>
+
+<p>In order to achieve this goal, you will need to make good use of both
+your Mana and your global cooldowns and use the correct spells at the
+correct time. Let us go into a bit of detail!</p>
+
+      <div class="heading_container heading_number_4"><span >5.1.1.</span> <h4 id="mana-management">Mana Management</h4></div>
+
+<p>All healing classes use Mana as their main resource. Without Mana, you
+simply cannot heal.</p>
+
+<p>Mana regeneration is a fixed value per second, which can be boosted by some 
+class talents and abilities. You can also use items to recover Mana quickly. 
+Healers have to manage their Mana for the entire duration of the encounter, and 
+mistakes in this management can quickly lead to a wipe.</p>
+
+<p>The true skill of a healer comes from using the right heal for each
+situation. For example, you should use a fast and expensive heal when your
+target is dead before you have the time to finish any other heal; you
+should use a slow and inexpensive heal when you have ample time to heal your
+target; you should use slow, large heal when your target is suffering
+sustained damage.</p>
+
+<p>The idea is that, for the entire duration of the encounter, you have to
+strike a perfect (or near-perfect) balance between healing enough to keep
+your assignment alive while not using too much Mana. The only way to do this
+is to use the proper spells for each situation. To be able to do this, you
+will need an excellent understanding of your class' abilities as well as of
+the encounter mechanics.</p>
+
+<p>Finally, one key aspect of properly managing your Mana when playing a Mana-starved 
+specialization is to ensure that you do not overheal. Overhealing is covered below, 
+but to summarize, you should ensure that you do not expend Mana on a heal which 
+lands on a player whose health is already full (or that a great part of the heal 
+is wasted because their health is almost full).</p>
+
+      <div class="heading_container heading_number_4"><span >5.1.2.</span> <h4 id="triage">Triage</h4></div>
+
+<p>As a healer, it is your job not only to try to keep every single raid member
+alive, from the start of the fight until the end, but also to know when it is
+more profitable for your raid to let someone die so that you can better
+heal others (and possibly to save Mana). Before we detail this further, we
+would like to remind you not to forget to heal yourself. It is very easy to
+make the mistake of trying to heal everyone else and simply overlooking your
+own raid (or unit) frame.</p>
+
+<p>Sadly, there are times when, as a healer, you simply cannot keep everyone
+alive. This can be either due to encounter design (fights where the damage
+ramps up progressively until it becomes unhealable) or due to the mistakes
+which your raid makes in the execution of the fight.</p>
+
+<p>When this happens, you will find yourself in a position of desperately
+trying to heal several low-health (and dying) targets at once, and you will
+face being overwhelmed or running out of Mana. In times like these, you will
+have to choose which players to heal and which players to simply let die.</p>
+
+<p>While this is counter-intuitive to the nature of the healing role, it is
+often the only way to survive the encounter. It is impossible to state in
+general terms which players should be sacrificed and which players should be
+saved, as this can depend greatly based on the encounter.</p>
+
+<p>As a rule, you should keep as many tanks alive as are needed for the
+boss to be killed. Furthermore, when choosing among DPS players, those who do
+more damage should be preferred over others (keep in mind what stage the fight
+is in, though, as overall DPS numbers may not be relevant in a specific "burn
+phase").</p>
+
+<p>Finally, while your initial reaction might be, when seeing how difficult
+healing is, to try to save as many of the other healers in preference of DPS
+players, this is often wrong. The reason is that when a fight reaches such
+a critical moment, the only thing which will make it easier is if the boss
+dies extremely quickly. Therefore, even a few seconds of another DPS player
+being alive can make all the difference.</p>
+
+      <div class="heading_container heading_number_3"><span >5.2.</span> <h3 id="assignments">Assignments</h3></div>
+
+<p>No matter what encounter your raid is progressing on, and regardless of
+the raid size, your raid or healing leader will surely provide you with an 
+<em>assignment</em>.</p>
+
+<p>In short, you will be told when to use your raid cooldowns to cover specific 
+incoming damage and possibly also which group(s) to focus heal. For the most 
+part, healing assignments will be simple, along the lines of "Healer #1 uses his 
+raid cooldown first, followed by Healers #2 and #3.", although sometimes the 
+encounter may require more specific assignments.</p>
+
+<p>Currently, all of the healing specializations are fairly well balanced in 
+their roles in a raid. In the past, certain specializations were suited to a 
+single role (for example, Holy Paladins were exclusively tank healers during 
+Wrath of the Lich King, while Discipline Priests were extremely potent raid 
+healers).</p>
+
+<p>Despite this balance, some specializations shine in certain situations
+more than others. A good raid leader will assign specific healers to specific
+tasks based on the strengths and weaknesses of the healing classes (and the
+players playing them). If you feel that you have been given an improper
+assignment or that the assignments provided, as a whole, are not satisfactory
+(i.e., your cooldowns would be best used elsewhere), you should voice your
+concerns.</p>
+
+      <div class="heading_container heading_number_4"><span >5.2.1.</span> <h4 id="tank-healing">Tank Healing</h4></div>
+
+<p>The tanks are the only players who, regardless of encounter, take sustained
+damage for the entire duration of the fight. The amount of damage that they
+take and the frequency with which they take it varies widely from fight to
+fight, but in every case, the tanks must always have at least one healer
+assigned to them.</p>
+
+<p>Most fights require two tanks, although it is possible that they will
+be taking damage alternatively and not simultaneously. In any case, the
+amount of healing that each tank requires, based on their gear and on the
+encounter, is something which will have to be determined on a case-by-case
+basis.</p>
+
+<p>You should be at least remotely familiar with the kind of tanking
+mechanics your composition's tanks use (Brewmaster Monks have a smooth damage 
+intake because of <span class="spell_icon_span"><img class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/monk_stance_drunkenox.jpg" alt="Stagger Icon" /> <span data-wowhead="spell=115069" class="spell">Stagger</span></span>, Death Knights can do a lot of self-healing, 
+etc.).</p>
+
+<p>Finally, it is very important that you communicate with the tank you are
+healing so that you can both make good use of your respective cooldowns.</p>
+
+      <div class="heading_container heading_number_4"><span >5.2.2.</span> <h4 id="raid-healing">Raid Healing</h4></div>
+
+<p>Healing the raid varies widely from encounter to encounter. Some encounters
+present very little unavoidable raid damage, while other encounters contain
+heavy, sustained, unavoidable raid damage.</p>
+
+<p>Based on the type of damage you are facing, you will have to adapt your
+healing style (and possibly your talent spec and gearing) to match it. Raid 
+healing is the most common type of healing required in a raid.</p>
+
+<p>As a result, you must be able to communicate with your fellow healers, and
+we advise you to set very specific healing assignments. Below are a few
+examples:</p>
+
+<ul>
+<li>Healer #1 heals the raid members (non-tanks) in Group 1 and Healer #2
+heals the raid members in Group 2.</li>
+<li>Healer #1 starts by healing the damaged raid members, from left to right
+(on whatever raid-frame add-ons you are using) and Healer #2 starts healing
+from right to left (this is to avoid the same target within the same group
+being healed by multiple healers, while other targets remain unhealed).</li>
+<li>Healer #1 heals the players damaged by the first cast of ability X and
+Healer #2 heals the players subsequently damaged by ability X.</li>
+</ul>
+
+      <div class="heading_container heading_number_4"><span >5.2.3.</span> <h4 id="cooldown-rotations">Cooldown Rotations</h4></div>
+
+<p>Another type of assignment which you will receive in many encounters is
+to use your raid-wide healing or damage reduction cooldown at a specifically
+determined time.</p>
+
+<p>The reason for this is that there are various boss abilities which are too
+damaging for your raid to be able to survive without the use of cooldowns.
+Furthermore, these abilities will often add continuous and increasing
+strain on your raid's healing, meaning that a single cooldown will not be
+sufficient to mitigate them.</p>
+
+<p>In order for each and every damaging hit from the ability to be mitigated
+by some cooldown, it is important that all healers know when to use their
+cooldowns (so that they do not end up using two cooldowns for one ability
+and none for another).</p>
+
+<p>When being assigned a time to use a cooldown, you should make sure of a few
+things:</p>
+
+<ul>
+<li>That you understand exactly when you need to use it and why (timing
+generally needs to be very precise, with only a few seconds as a margin of
+error);</li>
+<li>That you do not (accidentally) use your cooldown on something else before,
+and end up not having it available for when it is needed;</li>
+<li>That your cooldown does actually mitigate the damage that you are
+assigned to counter (your raid leader may be mistaken in how exactly your
+spells work).</li>
+</ul>
+
+<p>If, for some reason, your cooldown is not available at the designated time,
+you should announce it to the raid ahead of time so that they can
+improvise.</p>
+
+      <div class="heading_container heading_number_4"><span >5.2.4.</span> <h4 id="respecting-your-assignment">Respecting Your Assignment</h4></div>
+
+<p>One of the most sensitive issues related to teamwork in raiding is the
+ability (or inability) of healers to respect their own healing
+assignments.</p>
+
+<p>When healing assignments are first devised, it is assumed that each healer
+can complete their own task without the aid of other healers. In practice,
+however, this is not always so. There are many factors that will cause a
+healer to fall behind on their assignment (latency or user interface problems,
+encounter mechanics, mistakes caused by the people they are assigned to heal, or
+even by themselves). When this happens, there are two possible outcomes:</p>
+
+<ul>
+<li>The other healers ignore the situation, and continue to only heal their
+assigned targets, and the first healer's target dies.</li>
+<li>The other healers decide to help and therefore ignore their own
+assignment for a few seconds.</li>
+</ul>
+
+<p>While the second outcome may appear to have a good chance to save lives
+and the raid, this is often not the case. More often than not, what happens
+is that, as a result of the other healers' reaction, they themselves will fall
+behind on their assignments. After this point, either chaos ensues, or healers
+are forced to use a lot of Mana-inefficient heals to catch up, thus running
+out of Mana later on in the fight.</p>
+
+<p>We advise you to stick to your assignments as much as possible. This does
+not mean that if something exceptional occurs during a fight, causing one
+of the healers to fall behind on their assignment, they should not be helped.
+Indeed, great healers are those who can react to the unexpected as well as
+to the expected damage and situations that occur during an encounter.</p>
+
+<p>What should be avoided is constantly making up for the lack of healing
+ability of a healer or improper healing assignments by improvising and
+filling other people's roles. This type of practice is not helpful for
+your raid in the long term. Instead, you should aim at correcting the
+underlying problems which cause you to perform someone else's assignment.
+This means the other healers should be helped to improve (or replaced), and
+the healing assignments themselves should be revised.</p>
+
+<p>For Classic WoW versions, another important reason for respecting your own healing 
+assignment is that it ensures (in theory) equal healing of all targets. Each tank 
+in the raid should have one or more healers assigned to heal them, and if assignments 
+are respected, they will all receive heals. If you go outside of the assignments,
+some tanks will end up without any heals and might die, while others will just be 
+<em>overheated</em>.</p>
+
+      <div class="heading_container heading_number_3"><span >5.3.</span> <h3 id="overhealing">Overhealing</h3></div>
+
+<p>The final concept that you should be familiar with, as a healer, is
+<em>overhealing</em>. In essence, overhealing refers to when a target receives
+heals when their health is already at maximum. Any such healing is effectively
+wasted, and so is the Mana that healing cost.</p>
+
+<p>This is typically fine in Modern (Retail) WoW versions where healers have extremely 
+efficient buttons that are always worth pressing even if they heavily overheal, 
+but in Classic WoW even the most efficient buttons will quickly lead to running 
+out of Mana if they are constantly used on full health targets.</p>
+
+<p>In order to avoid overhealing, you must be familiar with the amount of
+health that each one of your spells restores. Moreover, you should have a
+good understanding of the encounter mechanics so that you know whether a
+damaging ability will hit the player while you are casting a heal.</p>
+
+<p>Basically, you should not heal a player who is already at full health and
+you should only heal a damaged player with a heal which, roughly, matches
+the amount of missing health that they have.</p>
+
+<p>Some overhealing is unavoidable due to having to top players off in
+preparation for boss abilities and due to the critical heals, which will
+often overheal their targets. So, do not be alarmed if anywhere between
+10 and 30% of your healing is overhealing, even in Classic WoW versions. Keep in 
+mind, though, that reducing your overhealing goes hand-in-hand with properly 
+managing your Mana, so if you are struggling for Mana, you should review your 
+overhealing.</p>
+
+<p>Finally, there is one additional, less well-known way to avoid overhealing. 
+You can configure your raid-frames in such a way that they display any incoming 
+heals on players (pay special attention to enable HoTs). By doing this, you are 
+able to avoid using a heal on someone who was already in the process of being healed 
+(either through another healer's in-progress cast or through a HoT), thus reducing 
+your overhealing or that of the other healer.</p>
+
+      <div class="heading_container heading_number_2"><span >6.</span> <h2 id="conclusions">Conclusions</h2></div>
+
+<p>We cannot stress enough how important it is, as a healer, to anticipate
+the damage which will occur and to know exactly which of the many spells in
+your arsenal are suitable to counter it.</p>
+
+<p>Provided that you have followed this guide and have allowed yourself
+sufficient time and practice to customize your user interface and familiarize
+yourself with your class, you should be well on your way to being a great
+healer!</p>
+
+<p>Lastly, keep in mind that healing, more than any other role, is a team
+effort, and you should try to find ways to work with your teammates at all
+times.</p>
+
+<p>We hope you have enjoyed our guide, good luck healing in <strong>World of Warcraft</strong>!</p>
+
+<div class="inline-author-block">
+  <div class="inline-author-block_header">
+    <div class="inline-author-block_avatars">
+      <div class="inline-author-block_avatar">
+  <img src="//static.icy-veins.com/images/common/author-icons/seksi.webp" alt="Seksixeny">
+</div>
+
+    </div>
+    <div class="inline-author-block_info">
+      <div class="inline-author-block_username"><span style="color:#fff;">Seksixeny</span></div>
+      <div class="inline-author-block_role">Guide Author</div>
+    </div>
+    <div class="inline-author-block_socials">
+      <span>Follow Seksixeny</span>
+          <div class="box_title_extra">
+      <a rel="nofollow" href="https://discord.gg/AcTek6e">
+        <span class="box_title_extra_discord"></span>
+      </a>
+      <a rel="nofollow" href="https://discord.gg/earthshrine">
+        <span class="box_title_extra_discord"></span>
+      </a>
+      <a rel="nofollow" href="https://discord.gg/focusedwill">
+        <span class="box_title_extra_discord"></span>
+      </a>
+    </div>
+
+    </div>
+  </div>
+  <div class="inline-author-block_content">
+    <p>This guide has been written by <a rel="nofollow"
+          href="https://raider.io/characters/eu/tarren-mill/Seksixeny">Seksi</a>, member of <a rel="nofollow"
+          href="https://raider.io/guilds/eu/tarren-mill/Cursed%20Gifts">Cursed Gifts</a> and healing aficionado.
+          You can find him answering questions and discussing Restoration Shaman gameplay
+          on the <a rel="nofollow" href="https://discord.gg/AcTek6e">Ancestral Guidance</a>
+          and <a rel="nofollow" href="https://discord.me/earthshrine">Earthshrine</a> Discords.</p>
+  </div>
+</div>
+      <div class="heading_container heading_number_2"><span >7.</span> <h2 id="changelog">Changelog</h2></div>
+
+<div class="changelog_wrapper"><ul class="changelog">
+<li><strong>11 Aug. 2026:</strong> Updated for Midnight Season 2 launch.</li>
+<li><strong>24 Feb. 2026:</strong> Reviewed for Midnight launch.</li>
+<li><strong>16 Jan. 2026:</strong> Reviewed for Midnight pre-patch.</li>
+<li><strong>03 Mar. 2025:</strong> Reviewed for TWW Season 3.</li>
+<li><strong>16 Feb. 2025:</strong> Reviewed for TWW Season 2.</li>
+<li><strong>10 Sep. 2024:</strong> The War Within version released.</li>
+<li><strong>18 Apr. 2024:</strong> Minor adjustments for Season 4.</li>
+<li><strong>19 Mar. 2024:</strong> Reviewed for Patch 10.2.6.</li>
+<li><strong>07 Nov. 2023:</strong> Reviewed for Patch 10.2.</li>
+<li><strong>11 Jul. 2023:</strong> Reviewed for Patch 10.1.5</li>
+<li><strong>03 Jul. 2021:</strong> Reviewed for Patch 9.1.</li>
+<li><strong>06 Dec. 2020:</strong> Adapted the guide to 2020 and Shadowlands.</li>
+<li><strong>08 Oct. 2018:</strong> Made a few tweaks to bring the guide in line with the current state of the game.</li>
+<li><strong>22 Oct. 2017:</strong> Updated ElvUI download link.</li>
+<li><strong>25 Jul. 2016:</strong> Made a few minor tweaks to bring the guide in line with the current state of the game.</li>
+</ul>
+
+<span id="changelog_show_all">Show More</span>
+<span id="changelog_show_only_2">Show Less</span></div> <section class="internal-links" data-astro-cid-3qwnrlzf><div class="internal-links__block" data-astro-cid-3qwnrlzf><h3 class="internal-links__heading" data-astro-cid-3qwnrlzf>In The Same Category</h3><div class="internal-links__grid" data-astro-cid-3qwnrlzf><a class="internal-links__card" href="/wow/mistweaver-monk-pve-healing-stat-priority" data-astro-cid-3qwnrlzf><img class="internal-links__image" src="//static.icy-veins.com/images/wow/internal-links/mistweaver-monk.jpg" alt="Mistweaver Monk Stats" loading="lazy" data-astro-cid-3qwnrlzf><span class="internal-links__title" data-astro-cid-3qwnrlzf>Mistweaver Monk Stats</span></a><a class="internal-links__card" href="/wow/mistweaver-monk-pve-healing-guide" data-astro-cid-3qwnrlzf><img class="internal-links__image" src="//static.icy-veins.com/images/wow/internal-links/mistweaver-monk.jpg" alt="Mistweaver Monk Guide" loading="lazy" data-astro-cid-3qwnrlzf><span class="internal-links__title" data-astro-cid-3qwnrlzf>Mistweaver Monk Guide</span></a><a class="internal-links__card" href="/wow/restoration-shaman-pve-healing-gear-best-in-slot" data-astro-cid-3qwnrlzf><img class="internal-links__image" src="//static.icy-veins.com/images/wow/internal-links/restoration-shaman.jpg" alt="Restoration Shaman Gear" loading="lazy" data-astro-cid-3qwnrlzf><span class="internal-links__title" data-astro-cid-3qwnrlzf>Restoration Shaman Gear</span></a><a class="internal-links__card" href="/wow/restoration-shaman-pve-healing-guide" data-astro-cid-3qwnrlzf><img class="internal-links__image" src="//static.icy-veins.com/images/wow/internal-links/restoration-shaman.jpg" alt="Restoration Shaman Guide" loading="lazy" data-astro-cid-3qwnrlzf><span class="internal-links__title" data-astro-cid-3qwnrlzf>Restoration Shaman Guide</span></a><a class="internal-links__card" href="/wow/restoration-shaman-pve-healing-mythic-plus-tips" data-astro-cid-3qwnrlzf><img class="internal-links__image" src="//static.icy-veins.com/images/wow/internal-links/restoration-shaman.jpg" alt="Restoration Shaman Mythic+" loading="lazy" data-astro-cid-3qwnrlzf><span class="internal-links__title" data-astro-cid-3qwnrlzf>Restoration Shaman Mythic+</span></a><a class="internal-links__card" href="/wow/preservation-evoker-pve-healing-spec-builds-talents" data-astro-cid-3qwnrlzf><img class="internal-links__image" src="//static.icy-veins.com/images/wow/internal-links/preservation-evoker.jpg" alt="Preservation Evoker Talents" loading="lazy" data-astro-cid-3qwnrlzf><span class="internal-links__title" data-astro-cid-3qwnrlzf>Preservation Evoker Talents</span></a></div></div></section> <div class="back-to-top" data-astro-cid-c4zgazz7> <button id="back-to-top-btn" data-astro-cid-c4zgazz7> <i class="ri-arrow-up-s-line" data-astro-cid-c4zgazz7></i> <span data-astro-cid-c4zgazz7>BACK TO TOP</span> </button> </div>   </div>  </div> </main> <footer data-astro-cid-ak3upacl> <div class="container" data-astro-cid-ak3upacl> <div class="flex-wrapper" data-astro-cid-ak3upacl> <div class="left-column" data-astro-cid-ak3upacl> <div class="left-column-content" data-astro-cid-ak3upacl> <div class="left-column-main" data-astro-cid-ak3upacl> <a href="/" class="logo" aria-label="Go to homepage" data-astro-cid-tvrurpns> <img src="/images/header/header-logo.webp" class="logo__icon" alt="Icy Veins Logo" fetchpriority="high" decoding="async" data-astro-cid-tvrurpns> <div class="logo__text-group" data-astro-cid-tvrurpns> <img src="/images/header/header-logo-text.webp" class="logo__text-img" alt="Icy Veins" height="14" decoding="async" data-astro-cid-tvrurpns> <span class="logo__tagline" data-astro-cid-tvrurpns>News & Guides</span> </div> </a>  <p data-astro-cid-ak3upacl> <a href="/" data-astro-cid-ak3upacl>Icy Veins</a> is not affiliated with or endorsed by Blizzard.
+<br data-astro-cid-ak3upacl><br data-astro-cid-ak3upacl> <span class="white" data-astro-cid-ak3upacl>&copy; Vedatis S.A.S. 2026</span> </p> </div> <div class="left-column-links" data-astro-cid-ak3upacl> <div class="footer-link-group socials" data-astro-cid-ak3upacl> <ul data-astro-cid-ak3upacl> <li data-astro-cid-ak3upacl> <a href="https://www.twitch.tv/icyveinscom" target="_blank" rel="noopener noreferrer" data-astro-cid-ak3upacl> <i class="ri-twitch-line" data-astro-cid-ak3upacl></i><span data-astro-cid-ak3upacl>Twitch</span> </a> </li> <li data-astro-cid-ak3upacl> <a href="https://discord.gg/ZaufvyM" target="_blank" rel="noopener noreferrer" data-astro-cid-ak3upacl> <i class="ri-discord-fill" data-astro-cid-ak3upacl></i><span data-astro-cid-ak3upacl>Discord</span> </a> </li> <li data-astro-cid-ak3upacl> <a href="https://www.facebook.com/icyveinscom" target="_blank" rel="noopener noreferrer" data-astro-cid-ak3upacl> <i class="ri-facebook-circle-fill" data-astro-cid-ak3upacl></i><span data-astro-cid-ak3upacl>Facebook</span> </a> </li> <li data-astro-cid-ak3upacl> <a href="https://x.com/icyveins" target="_blank" rel="noopener noreferrer" data-astro-cid-ak3upacl> <i class="ri-twitter-x-line" data-astro-cid-ak3upacl></i><span data-astro-cid-ak3upacl>Twitter</span> </a> </li> <li data-astro-cid-ak3upacl> <a href="https://www.youtube.com/user/icyveinscom" target="_blank" rel="noopener noreferrer" data-astro-cid-ak3upacl> <i class="ri-youtube-fill" data-astro-cid-ak3upacl></i><span data-astro-cid-ak3upacl>YouTube</span> </a> </li> <li data-astro-cid-ak3upacl> <a href="https://icy-veins.zendesk.com/hc/en-us/requests/new" target="_blank" rel="noopener noreferrer" data-astro-cid-ak3upacl> <i class="ri-mail-fill" data-astro-cid-ak3upacl></i><span data-astro-cid-ak3upacl>Contact Us</span> </a> </li> </ul> </div> <div class="footer-link-stack" data-astro-cid-ak3upacl> <div class="footer-link-group" data-astro-cid-ak3upacl> <div class="footer-utility-links" data-astro-cid-ak3upacl> <a href="/about" data-astro-cid-ak3upacl>About</a> <a href="/contact" data-astro-cid-ak3upacl>Contact</a> <a href="/advertise" data-astro-cid-ak3upacl>Advertise</a> <a href="/faq" data-astro-cid-ak3upacl>FAQ</a> <a href="/privacy" data-astro-cid-ak3upacl>Privacy</a> <a href="/terms" data-astro-cid-ak3upacl>Terms of Use</a> <a href="/jobs" data-astro-cid-ak3upacl>Jobs</a> </div> </div> <div class="footer-link-group" data-astro-cid-ak3upacl> <p class="footer-section-heading" data-astro-cid-ak3upacl>Our Brands</p> <div class="footer-utility-links footer-brand-links" data-astro-cid-ak3upacl> <a target="_blank" rel="noopener" href="https://all.gg/" data-astro-cid-ak3upacl>all.gg</a> <a target="_blank" rel="noopener" href="https://u.gg/" data-astro-cid-ak3upacl>U.GG</a> <a target="_blank" rel="noopener" href="https://www.thesimsresource.com/" data-astro-cid-ak3upacl>The Sims Resource</a> <a target="_blank" rel="noopener" href="https://www.addictinggames.com/" data-astro-cid-ak3upacl>Addicting Games</a> <a target="_blank" rel="noopener" href="https://www.pocketgamer.com/" data-astro-cid-ak3upacl>Pocket Gamer</a> <a target="_blank" rel="noopener" href="https://www.fantasyfootballscout.co.uk/" data-astro-cid-ak3upacl>Fantasy Football Scout</a> <a target="_blank" rel="noopener" href="https://gameknot.com/" data-astro-cid-ak3upacl>GameKnot</a> </div> </div> </div> </div> </div> </div> </div> </div> </footer>  </body></html>  

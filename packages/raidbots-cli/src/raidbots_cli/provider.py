@@ -17,6 +17,7 @@ from warcraft_core.provider import ProviderError, ProviderSurface
 from raidbots_cli.client import (
     InvalidReportReference,
     RaidbotsClient,
+    ReportNotAvailable,
     load_raidbots_cache_settings_from_env,
     load_raidbots_urls_from_env,
     resolve_report_id,
@@ -47,7 +48,10 @@ NOT_SUPPORTED_MESSAGE: Final = (
 )
 SUGGESTED_COMMAND: Final = "raidbots inspect-report <url-or-id>"
 
-_HTTP_STATUS_CODES: Final[dict[int, str]] = {400: "invalid_query", 404: "not_found", 429: "rate_limited"}
+# Raidbots needs no auth, and data.json redirects to a public GCS bucket that answers 403 (not 404)
+# for an object that does not exist or has expired — so a 403 here means "no such report", never
+# "bad credentials".
+_HTTP_STATUS_CODES: Final[dict[int, str]] = {400: "invalid_query", 403: "not_found", 404: "not_found", 429: "rate_limited"}
 
 
 def _dual_emit(envelope: Envelope, payload: dict[str, Any]) -> Envelope:
@@ -62,7 +66,13 @@ def provider_error(exc: Exception) -> ProviderError:
         status = exc.response.status_code
         code = _HTTP_STATUS_CODES.get(status, "upstream_error")
         details = {"status_code": status, "url": str(exc.request.url)}
-        return ProviderError(code, f"Raidbots request failed with HTTP {status}.", details=details)
+        message = f"Raidbots request failed with HTTP {status}."
+        if code == "not_found":
+            message = (
+                f"Raidbots has no readable report at {exc.request.url} (HTTP {status}): the report id "
+                "is wrong, or the report has expired or is private."
+            )
+        return ProviderError(code, message, details=details)
     if isinstance(exc, httpx.TimeoutException):
         return ProviderError("timeout", f"Raidbots request timed out: {exc}")
     return ProviderError("network_error", f"Raidbots request failed: {exc}")
@@ -194,6 +204,8 @@ def report_input(reference: str) -> Envelope:
             text = client.report_input(report_id)
         except httpx.HTTPError as exc:
             raise provider_error(exc) from exc
+        except ReportNotAvailable as exc:
+            raise ProviderError("not_found", str(exc)) from exc
         freshness = _freshness(client)
         citations = _citations(client, report_id)
     classification = classify_simc_input(text)

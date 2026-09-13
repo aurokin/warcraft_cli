@@ -15,6 +15,19 @@ def _payload_for(args: list[str]) -> dict[str, object]:
     return json.loads(result.stdout)
 
 
+def _assert_selection_within(payload: dict[str, object], *, included: set[str]) -> None:
+    """Hold the resolve envelope identity contract for a filtered wrapper resolve.
+
+    ``provider`` is the envelope identity and is always a string: the selected provider when one
+    matched, otherwise the wrapper itself. ``selected_provider`` is the nullable selection and may
+    only ever name a provider the expansion filter kept.
+    """
+    selected = payload["selected_provider"]
+    assert selected is None or selected in included, f"selection {selected!r} escaped the filter"
+    assert payload["provider"] == (selected or "warcraft")
+    assert payload["resolved"] is (selected is not None)
+
+
 def _skip_if_wowprogress_blocked(error_payload: dict[str, object]) -> None:
     error = error_payload.get("error") if isinstance(error_payload.get("error"), dict) else {}
     error_code = error.get("code") if isinstance(error.get("code"), str) else None
@@ -51,9 +64,7 @@ def test_live_warcraft_resolve_expansion_filter_does_not_resolve_to_retail_only_
     assert payload["requested_expansion"] == "wotlk"
     assert payload["expansion_filter_active"] is True
     assert payload["included_providers"] == ["wowhead", "warcraftlogs"]
-    assert payload["provider"] in {None, "wowhead"}
-    assert payload["provider"] != "wowprogress"
-    assert payload["provider"] != "raiderio"
+    _assert_selection_within(payload, included={"wowhead", "warcraftlogs"})
 
 
 @pytest.mark.live
@@ -102,8 +113,9 @@ def test_live_warcraft_resolve_retail_filter_can_use_fixed_retail_provider() -> 
         "blizzard-api",
         "curseforge",
     }
-    assert payload["provider"] in {"wowprogress", "raiderio", "wowhead", None}
-    assert payload["provider"] != "warcraft-wiki"
+    assert payload["resolved"] is True
+    _assert_selection_within(payload, included=set(payload["included_providers"]))
+    assert payload["selected_provider"] != "warcraft-wiki"
 
 
 @pytest.mark.live

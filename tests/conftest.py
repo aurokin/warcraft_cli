@@ -84,8 +84,16 @@ def _is_loopback(address: object) -> bool:
     return isinstance(host, str) and host in LOOPBACK_HOSTS
 
 
+def _is_e2e(request: pytest.FixtureRequest) -> bool:
+    return request.node.get_closest_marker("e2e") is not None
+
+
 @pytest.fixture(autouse=True)
-def disable_cache_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+def disable_cache_by_default(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    if _is_e2e(request):
+        # End-to-end journeys run the binaries as subprocesses with their own isolated cache root
+        # (tests/e2e/conftest.py) and exercise caching on purpose.
+        return
     for prefix in CACHE_ENV_PREFIXES:
         monkeypatch.setenv(f"{prefix}_CACHE_BACKEND", "none")
     monkeypatch.setenv("WARCRAFT_HTTP_MIN_INTERVAL_SECONDS", "0")
@@ -99,7 +107,7 @@ def block_network(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatc
     (loopback passes through). Attempts are also recorded so a test still fails at teardown
     when the code under test swallows the error (retry loops, ``except Exception``).
     """
-    if request.node.get_closest_marker("live") is not None:
+    if request.node.get_closest_marker("live") is not None or _is_e2e(request):
         yield
         return
 
@@ -167,6 +175,10 @@ def _live_env_for_item(item: pytest.Item) -> tuple[str, ...]:
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
     del config
     for item in items:
+        if item.get_closest_marker("e2e") is not None:
+            if not _env_enabled("WARCRAFT_E2E"):
+                item.add_marker(pytest.mark.skip(reason="Set WARCRAFT_E2E=1 (make test-e2e) to run end-to-end journeys."))
+            continue
         if item.get_closest_marker("live") is None:
             continue
         env_names = _live_env_for_item(item)

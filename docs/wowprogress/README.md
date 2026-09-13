@@ -80,6 +80,16 @@ Rationale and limits:
 - when Cloudflare still serves a challenge page the client fails with the `blocked` error code and
   exit 5 instead of retrying around the block
 
+### Current status
+
+As of 2026-09-13 every WowProgress route answers with a Cloudflare managed challenge
+(`cf-mitigated: challenge`) for every `curl_cffi` impersonation profile and for a real headless
+Chrome, so the provider fails with `blocked` on every network command and the `warcraft guild`,
+`guild-history`, and `guild-ranks` composites lose their WowProgress source. TLS fingerprinting alone
+no longer passes; restoring the provider needs a different transport (a challenge-solving browser
+session or another data source). Until then, run the end-to-end suite with
+`WARCRAFT_E2E_SKIP=wowprogress`, and treat the provider's `supported` tier as aspirational.
+
 ## Caching
 
 Guild, character, and leaderboard HTML are cached through `warcraft_api.cache`:

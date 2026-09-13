@@ -1,8 +1,8 @@
 # Blizzard API
 
-**Tier: experimental.** The command surface is thin and the Battle.net hosts and namespaces
-have not been confirmed against the live API. Treat results as unverified and cross-check anything
-load-bearing against `wowhead` or `warcraftlogs`.
+**Tier: experimental.** The command surface is thin. The Battle.net hosts and namespaces are
+confirmed against the live API for `us`, `eu`, `kr`, and `tw` (`provenance.verified: true`);
+`cn` is unverified. Cross-check anything load-bearing against `wowhead` or `warcraftlogs`.
 
 ## Best For
 
@@ -33,9 +33,8 @@ load-bearing against `wowhead` or `warcraftlogs`.
   profiles are retail-only
 - `--locale` passes through (default `en_US`)
 - every payload carries `provenance` (region, namespace, namespace class, source URL) and
-  `provenance.verified: false` — the endpoint hosts/namespaces follow documented Blizzard
-  conventions but are pending a one-time live confirmation, so treat results as best-effort
-  until verified
+  `provenance.verified` — `true` for us/eu/kr/tw, `false` for `cn`, whose host could not be
+  reached to confirm it
 - prefer Blizzard for the official record; prefer community providers for analytics, rankings,
   and guide content
 

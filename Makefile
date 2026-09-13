@@ -28,7 +28,7 @@ LIVE_TEST_ENV := \
 IMPORT_LINTER := $(VENV)/bin/lint-imports
 PRE_COMMIT := $(VENV)/bin/pre-commit
 
-.PHONY: install dev-deploy dev-deploy-no-link worktree-env test test-fast test-live test-live-matrix \
+.PHONY: install dev-deploy dev-deploy-no-link worktree-env test test-fast test-e2e test-live test-live-matrix \
 	check fmt-check lint lint-boundaries lint-all complexity complexity-gate typecheck coverage deadcode \
 	skills reference schema build pre-commit-install benchmark-cache fixture-refresh-hints run release
 
@@ -48,7 +48,13 @@ test:
 	$(PYTEST) -q
 
 test-fast:
-	$(PYTEST) -q -m "not live"
+	$(PYTEST) -q -m "not live and not e2e"
+
+# Local end-to-end journeys through the installed binaries against real providers, using the
+# credentials in ~/.config/warcraft/providers. Never runs in CI. Exclude providers with
+# WARCRAFT_E2E_SKIP=curseforge,wowprogress; pass extra pytest args with E2E_ARGS="-k wowhead".
+test-e2e:
+	WARCRAFT_E2E=1 $(PYTEST) -q -m e2e tests/e2e --durations=25 $(E2E_ARGS)
 
 check: lint typecheck lint-boundaries complexity-gate deadcode test-fast
 

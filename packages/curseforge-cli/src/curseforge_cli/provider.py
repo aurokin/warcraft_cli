@@ -1,8 +1,9 @@
 """Pure CurseForge provider surface. The Typer commands and the ``warcraft`` wrapper both call these.
 
-CurseForge is an experimental provider: its host, endpoints, and response shapes follow the
-documented public CurseForge Core API and are unverified against live traffic, so every payload
-carries ``provenance.verified: false`` and ``doctor`` reports ``tier: experimental``.
+CurseForge is an experimental provider because the surface is small — one addon lookup plus doctor,
+with search/resolve still stubs — and ``doctor`` reports ``tier: experimental``. The endpoints the
+addon lookup uses are confirmed against live traffic, so its payloads carry
+``provenance.verified: true``.
 """
 
 from __future__ import annotations
@@ -58,7 +59,8 @@ def doctor_envelope() -> Envelope:
             "addon": "ready",
         },
         "notes": [
-            f"curseforge is an {TIER} provider: its API surface is unverified against live traffic.",
+            f"curseforge is an {TIER} provider: the surface is one addon lookup plus doctor, and "
+            "search/resolve are stubs. The endpoints it does use are live-confirmed.",
             "addon lookup returns CurseForge metadata, the latest files, and the latest file's "
             "changelog over the public CurseForge API (x-api-key auth, gameId=1).",
             verification_note(),
@@ -113,7 +115,7 @@ def addon_envelope(slug_or_id: str) -> Envelope:
             "slug": result.get("slug"),
             "resolved_by": result["resolved_by"],
             "source_urls": result["source_urls"],
-            "verified": False,
+            "verified": True,
             "verification_note": verification_note(),
         },
         data=result["data"],

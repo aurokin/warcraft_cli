@@ -101,6 +101,18 @@ def _provenance(source_url: str | None = None) -> dict[str, Any]:
     return provenance
 
 
+def _envelope_data(kind: str, payload: Any) -> dict[str, Any]:
+    """Coerce one Lorrgs route payload into the object shape the envelope requires.
+
+    ``/api/zones`` answers with a bare JSON array, unlike ``/api/specs`` and ``/api/bosses``, which
+    wrap theirs. Key an array under the payload kind so ``data`` matches the wrapped routes'
+    shape (``{"zones": [...]}``) instead of breaking the envelope contract.
+    """
+    if isinstance(payload, dict):
+        return payload
+    return {kind: payload}
+
+
 def call_api(command: str, kind: str, query: dict[str, Any], call: Callable[[LorrgsClient], dict[str, Any]]) -> Envelope:
     """Run one Lorrgs API call and wrap its payload in the success envelope."""
     with LorrgsClient() as client:
@@ -112,7 +124,7 @@ def call_api(command: str, kind: str, query: dict[str, Any], call: Callable[[Lor
         provider=PROVIDER_NAME,
         command=command,
         kind=kind,
-        data=result["payload"],
+        data=_envelope_data(kind, result["payload"]),
         query=query,
         provenance=_provenance(result["source_url"]),
     )

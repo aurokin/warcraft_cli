@@ -40,13 +40,14 @@ Thin or unproven surfaces. Do not build a workflow on them without checking `doc
 |----------|--------|
 | `lorrgs` | public API, no auth; top-parse cooldown timelines and composition rankings |
 | `raidbots` | public report consumption and SimC input handoff; no discovery surface |
-| `blizzard` | endpoints, OAuth URLs, and namespaces never confirmed live: every payload carries `provenance.verified: false` |
-| `curseforge` | host, endpoints, and response shapes never confirmed live: every payload carries `provenance.verified: false` |
+| `blizzard` | verified live for us/eu/kr/tw (2026-09-13); thin command surface, `cn` unreachable |
+| `curseforge` | verified live (2026-09-13); thin command surface, addon metadata is at the edge of scope |
 
 ## Next
 
+- **Restore WowProgress.** Every route sits behind a Cloudflare managed challenge since 2026-09-13; TLS impersonation no longer passes. Needs a challenge-solving transport or a replacement source before the provider earns its `supported` tier back. Tracked in `docs/wowprogress/README.md`.
 - Ship the wheel install path end to end: attach the built wheel to each GitHub release and verify `pipx install <wheel-url>` and `uvx --from <wheel-url> warcraft doctor` on a clean machine.
-- Run the gated Blizzard and CurseForge live suites once, then either flip `provenance.verified` and promote them, or delete the provider.
+- Decide whether Blizzard and CurseForge earn the `supported` tier now that both are verified live, or whether CurseForge leaves the product; the surfaces are thin either way.
 - Retire the deprecated dual-emitted top-level payload keys (agents read `data`); that is a major-version change, so it needs a deprecation window first.
 - Finish the expansion story for the deferred surfaces: Warcraft Logs classic/fresh cache isolation and `simc` expansion semantics.
 - Decompose the remaining radon D-or-worse blocks so `complexity-gate` stays green in `make check`.

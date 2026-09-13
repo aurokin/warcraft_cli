@@ -8,6 +8,9 @@
   in `tests/conftest.py`, so a test that reaches the network fails.
 - Local CI parity: `make check` = lint + typecheck + import boundaries + complexity gate + dead code
   + fast tests.
+- End-to-end journeys: `make test-e2e` runs `tests/e2e/` through the installed binaries against
+  real providers with the keys in `~/.config/warcraft/providers`. Local only, never CI; skips are
+  failures unless excluded via `WARCRAFT_E2E_SKIP`. See `docs/architecture/E2E_TESTING.md`.
 - Lint: `make lint` (ruff over `packages/`, `tests/`, `scripts/`; `make lint-all` is an alias).
 - Type check: `make typecheck` (mypy over all 16 packages).
 - Complexity: `make complexity-gate` (`xenon --max-absolute C packages`, blocking). `make complexity`

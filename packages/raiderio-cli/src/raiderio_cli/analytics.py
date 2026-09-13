@@ -182,6 +182,16 @@ def resolve_season_input(season: str) -> str | None:
     return season.strip()
 
 
+def response_season(payload: dict[str, Any]) -> str | None:
+    """The season slug Raider.IO actually served, recovered from a ``/mythic-plus/runs`` response.
+
+    The API echoes the season it applied under ``params.season`` (and not as a top-level key), so
+    this is the only way ``resolved_season`` can be concrete when the request omitted ``--season``.
+    """
+    season = payload.get("season") or as_dict(payload.get("params")).get("season")
+    return str(season) if isinstance(season, str) and season else None
+
+
 def sample_leaderboard_runs(
     client: RaiderIOClient,
     *,
@@ -208,8 +218,9 @@ def sample_leaderboard_runs(
             page=current_page,
         )
         pages_fetched += 1
-        if payload.get("season"):
-            effective_season = str(payload.get("season"))
+        served_season = response_season(payload)
+        if served_season:
+            effective_season = served_season
         leaderboard_url = payload.get("leaderboard_url")
         if isinstance(leaderboard_url, str) and leaderboard_url and leaderboard_url not in leaderboard_urls:
             leaderboard_urls.append(leaderboard_url)

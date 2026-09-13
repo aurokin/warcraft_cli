@@ -29,14 +29,15 @@ from blizzard_api_cli.auth import (
 from blizzard_api_cli.client import (
     CLIENT_CREDENTIALS_STATE_PROVIDER,
     SUPPORTED_REGIONS,
+    VERIFIED_REGIONS,
     BlizzardClient,
     BlizzardClientError,
     verification_note,
 )
 
-# Blizzard ships as an experimental provider: the endpoint hosts, OAuth token URL, and namespace
-# strings follow documented conventions but have never been confirmed against live endpoints, so
-# every read payload carries provenance.verified=false and doctor advertises the tier.
+# Blizzard ships as an experimental provider: the surface is still small (three reads plus doctor)
+# and search/resolve are stubs. Routing for us/eu/kr/tw is live-confirmed, so those payloads carry
+# provenance.verified=true; CN is unreachable from here and stays false.
 TIER = "experimental"
 
 # Client error codes that mean "the caller is not authenticated"; everything else the client raises
@@ -90,9 +91,8 @@ def _auth_payload(auth: BlizzardAuthConfig) -> dict[str, Any]:
 
 
 def _region_payload(auth: BlizzardAuthConfig) -> dict[str, Any]:
-    # Region/namespace routing is honored by the Game Data/Profile commands. The hosts, OAuth token
-    # URL, and namespace strings follow documented Blizzard API conventions but have not been
-    # confirmed against live endpoints in this environment, so verification stays explicit.
+    # Region/namespace routing is honored by the Game Data/Profile commands and is live-confirmed
+    # for every region except CN, whose host and OAuth server are unreachable from outside China.
     return {
         "configured": auth.region,
         "default": "us",
@@ -100,8 +100,10 @@ def _region_payload(auth: BlizzardAuthConfig) -> dict[str, Any]:
         "namespace_classes": ["dynamic", "static", "profile"],
         "routing": "ready",
         "verification": {
-            "retail": "pending_live_confirmation",
-            "classic": "pending_live_confirmation",
+            "retail": "live_confirmed",
+            "classic": "live_confirmed",
+            "verified_regions": sorted(VERIFIED_REGIONS),
+            "unverified_regions": sorted(set(SUPPORTED_REGIONS) - VERIFIED_REGIONS),
             "note": verification_note(),
         },
     }
@@ -129,9 +131,9 @@ def doctor_envelope() -> Envelope:
                 "profile": "ready",
             },
             "notes": [
-                "Experimental tier: endpoint hosts, OAuth token URL, and namespace strings are "
-                "unverified against live Blizzard endpoints, so every read payload (realm, item, "
-                "character) reports provenance.verified=false.",
+                "Experimental tier: the read surface is small (realm, item, character) and "
+                "search/resolve are stubs. Payloads routed to a CN namespace report "
+                "provenance.verified=false; every other region is live-confirmed.",
                 "Game Data (realm, item) and Profile (character) commands ship with live OAuth "
                 "client-credentials auth and region/namespace routing.",
                 verification_note(),
@@ -190,8 +192,8 @@ def fetch(
             "game_version": routing.game_version,
             "locale": routing.locale,
             "source_url": result["source_url"],
-            "verified": False,
-            "verification_note": verification_note(),
+            "verified": routing.region in VERIFIED_REGIONS,
+            "verification_note": verification_note(routing.region),
         },
         data=result["payload"],
     )

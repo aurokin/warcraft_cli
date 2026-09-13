@@ -38,7 +38,7 @@ from warcraft_core.cli import (
     RuntimeConfig as BaseRuntimeConfig,
 )
 from warcraft_core.envelope import ENVELOPE_KEYS, SCHEMA_VERSION, Envelope
-from warcraft_core.exit_codes import EXIT_AUTH, exit_code_for
+from warcraft_core.exit_codes import EXIT_AUTH, EXIT_USAGE, exit_code_for
 from warcraft_core.identity import (
     ability_identity_payload,
     class_spec_identity_payload,
@@ -323,8 +323,17 @@ def _with_warnings(payload: dict[str, Any], client: Any) -> dict[str, Any]:
 _AUTH_ERROR_CODES = frozenset({"missing_client_credentials", "missing_public_auth", "missing_user_auth", "user_token_expired"})
 
 
+# Missing required options are usage errors (exit 2), like Click's own parse failures.
+_USAGE_ERROR_CODES = frozenset({"missing_boss", "missing_query"})
+
+
 def _fail(ctx: typer.Context, code: str, message: str) -> NoReturn:
-    exit_code = EXIT_AUTH if code in _AUTH_ERROR_CODES else exit_code_for(code)
+    if code in _AUTH_ERROR_CODES:
+        exit_code = EXIT_AUTH
+    elif code in _USAGE_ERROR_CODES:
+        exit_code = EXIT_USAGE
+    else:
+        exit_code = exit_code_for(code)
     fail(ctx, code, message, exit_code=exit_code)
 
 

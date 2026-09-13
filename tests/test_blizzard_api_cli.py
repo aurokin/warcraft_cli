@@ -16,6 +16,9 @@ def _isolate_blizzard_env(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     # Isolate provider config discovery so doctor tests never read a real
     # ~/.config/warcraft/providers/blizzard-api.env or a repo-level .env.local on the dev machine.
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    # The client-credentials token cache lives under the state root; isolate it too so a token
+    # cached by a live run on the dev machine never leaks into offline expectations.
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("BLIZZARD_CLIENT_ID", raising=False)
     monkeypatch.delenv("BLIZZARD_CLIENT_SECRET", raising=False)
@@ -60,9 +63,12 @@ def test_doctor_reports_scaffold_auth_and_capabilities() -> None:
     assert region["configured"] is None
     assert region["default"] == "us"
     assert region["supported_regions"] == ["us", "eu", "kr", "tw", "cn"]
-    # Routing is honored but the concrete hosts/namespaces are pending one-time live confirmation.
-    assert region["verification"]["retail"] == "pending_live_confirmation"
-    assert "pending one-time live confirmation" in region["verification"]["note"]
+    # Routing is live-confirmed everywhere except CN, whose hosts are unreachable from outside China.
+    assert region["verification"]["retail"] == "live_confirmed"
+    assert region["verification"]["classic"] == "live_confirmed"
+    assert region["verification"]["verified_regions"] == ["eu", "kr", "tw", "us"]
+    assert region["verification"]["unverified_regions"] == ["cn"]
+    assert "CN routing" in region["verification"]["note"]
     assert payload["notes"]
 
 

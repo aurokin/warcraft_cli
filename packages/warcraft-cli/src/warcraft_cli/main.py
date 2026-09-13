@@ -26,6 +26,7 @@ from warcraft_core.cli import (
     emit,
     guarded_run,
 )
+from warcraft_core.exit_codes import EXIT_GENERIC, exit_code_for
 from warcraft_core.expansions import wowhead_path_prefixes
 from warcraft_core.identity import (
     build_reference_transport_packet_payload,
@@ -1907,6 +1908,16 @@ def guild(
         raise typer.Exit(1)
 
 
+def _source_exit_code(source_result: Mapping[str, Any]) -> int:
+    """Exit with the failing source's own code (blocked -> 5, not_found -> 4) instead of a flat 1."""
+    code = source_result.get("exit_code")
+    if isinstance(code, int) and code != 0:
+        return code
+    error = source_result.get("error")
+    error_code = error.get("code") if isinstance(error, dict) else None
+    return exit_code_for(error_code) if isinstance(error_code, str) else EXIT_GENERIC
+
+
 @app.command("guild-history")
 def guild_history(
     ctx: typer.Context,
@@ -1935,7 +1946,7 @@ def guild_history(
             },
             err=True,
         )
-        raise typer.Exit(1)
+        raise typer.Exit(_source_exit_code(source_result))
     _emit(ctx,
         {
             "ok": True,
@@ -1980,7 +1991,7 @@ def guild_ranks(
             },
             err=True,
         )
-        raise typer.Exit(1)
+        raise typer.Exit(_source_exit_code(source_result))
     _emit(ctx,
         {
             "ok": True,

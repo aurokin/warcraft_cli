@@ -3134,7 +3134,7 @@ def test_warcraftlogs_cross_report_commands_require_boss_scope(monkeypatch) -> N
         warcraftlogs_app,
         ["boss-kills", "--zone-id", "38"],
     )
-    assert result.exit_code == 1
+    assert result.exit_code == 2  # a missing required option is a usage error
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "missing_boss"
 
@@ -5421,8 +5421,23 @@ def test_warcraftlogs_client_raw_graphql_raises_when_errors_and_data_null(monkey
             endpoint="client",
         )
 
-    assert exc_info.value.code == "graphql_error"
+    # A permission denial is an auth failure (exit 3), not a generic GraphQL error.
+    assert exc_info.value.code == "auth_failed"
     assert "permission denied" in exc_info.value.message
+
+
+@pytest.mark.parametrize(
+    ("message", "expected_code"),
+    [
+        ("This report does not exist.", "not_found"),
+        ("You do not have permission to view this report.", "auth_failed"),
+        ("Internal server error", "graphql_error"),
+    ],
+)
+def test_graphql_errors_without_data_are_classified_by_message(message: str, expected_code: str) -> None:
+    from warcraftlogs_cli.client import _graphql_error_code
+
+    assert _graphql_error_code(message) == expected_code
 
 
 def test_warcraftlogs_client_raw_graphql_cache_miss_still_requests_and_writes(monkeypatch) -> None:

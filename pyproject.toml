@@ -51,6 +51,7 @@ lorrgs = "lorrgs_cli.main:run"
 testpaths = ["tests"]
 markers = [
   "live: live network contract tests against provider endpoints",
+  "e2e: local end-to-end journeys through the installed binaries (WARCRAFT_E2E=1, see docs/architecture/E2E_TESTING.md)",
 ]
 
 [tool.ruff]

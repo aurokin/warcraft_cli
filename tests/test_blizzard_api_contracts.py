@@ -84,8 +84,8 @@ def test_realm_command_envelope_and_provenance(monkeypatch: pytest.MonkeyPatch) 
     assert prov["namespace"] == "dynamic-us"
     assert prov["namespace_class"] == "dynamic"
     assert prov["game_version"] == "retail"
-    assert prov["verified"] is False
-    assert "pending one-time live confirmation" in prov["verification_note"]
+    assert prov["verified"] is True
+    assert "confirmed against live Blizzard endpoints" in prov["verification_note"]
     assert payload["data"]["slug"] == "illidan"
 
 
@@ -424,3 +424,25 @@ def test_global_output_flags_apply(monkeypatch: pytest.MonkeyPatch) -> None:
     result = runner.invoke(app, ["--fields", "data.slug", "realm", "illidan"])
     assert result.exit_code == 0
     assert json.loads(result.stdout) == {"data": {"slug": "illidan"}}
+
+
+def test_cn_routing_stays_unverified(monkeypatch: pytest.MonkeyPatch) -> None:
+    # CN routes through gateway.battlenet.com.cn and a separate OAuth host that cannot be reached
+    # from outside China, so it is the one region whose payloads must not claim live confirmation.
+    _install_recorder(monkeypatch)
+    result = runner.invoke(app, ["item", "19019", "--region", "cn"])
+    assert result.exit_code == 0
+    prov = json.loads(result.stdout)["provenance"]
+    assert prov["region"] == "cn"
+    assert prov["verified"] is False
+    assert "CN routing" in prov["verification_note"]
+    assert "confirmed against live" not in prov["verification_note"]
+
+
+def test_classic_game_data_routing_is_verified(monkeypatch: pytest.MonkeyPatch) -> None:
+    _install_recorder(monkeypatch)
+    result = runner.invoke(app, ["item", "19019", "--classic"])
+    assert result.exit_code == 0
+    prov = json.loads(result.stdout)["provenance"]
+    assert prov["namespace"] == "static-classic-us"
+    assert prov["verified"] is True

@@ -49,9 +49,9 @@ def test_doctor_reports_auth_and_capabilities() -> None:
     assert capabilities["search"] == "coming_soon"
     assert capabilities["resolve"] == "coming_soon"
     assert capabilities["addon"] == "ready"
-    # curseforge is an unverified stub provider; doctor must say so (docs/curseforge/README.md).
+    # curseforge stays experimental for its small surface, but the endpoints it uses are confirmed.
     assert payload["tier"] == "experimental"
-    assert any("unverified" in note for note in payload["notes"])
+    assert any("live-confirmed" in note for note in payload["notes"])
 
 
 def test_doctor_reports_configured_when_key_present(monkeypatch: pytest.MonkeyPatch) -> None:

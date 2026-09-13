@@ -16,7 +16,7 @@ class WowheadEntityType:
 ENTITY_TYPE_DEFS: tuple[WowheadEntityType, ...] = (
     WowheadEntityType(
         key="achievement",
-        suggestion_type_ids=(7,),
+        suggestion_type_ids=(10,),
         search_hint_terms=("achievement", "achievements"),
         parser_supported=True,
         resolve_supported=True,
@@ -39,7 +39,7 @@ ENTITY_TYPE_DEFS: tuple[WowheadEntityType, ...] = (
     ),
     WowheadEntityType(
         key="currency",
-        suggestion_type_ids=(111,),
+        suggestion_type_ids=(17,),
         search_hint_terms=("currency", "currencies", "token", "tokens"),
         parser_supported=True,
         resolve_supported=True,
@@ -133,6 +133,7 @@ ENTITY_TYPE_DEFS: tuple[WowheadEntityType, ...] = (
     ),
     WowheadEntityType(
         key="zone",
+        suggestion_type_ids=(7,),
         search_hint_terms=("zone", "zones"),
         parser_supported=True,
         resolve_supported=True,

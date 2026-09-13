@@ -555,3 +555,56 @@ def test_transport_failure_at_the_http_seam_never_escapes_as_a_traceback(
     assert not envelope_violations(payload)
     assert payload["error"]["code"] == "network_error"
     assert payload["provider"] == "raidbots"
+
+
+def test_inspect_report_maps_storage_forbidden_to_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
+    # data.json redirects to a public GCS bucket that answers 403 (not 404) for a report that never
+    # existed or has expired. Raidbots takes no credentials, so 403 can only mean "no such report" —
+    # reporting it as a network failure sent callers looking for an outage instead of a bad id.
+    url = "https://storage.googleapis.com/simbot-reports/reports/gone/data.json"
+
+    def _raise(self, report_id):  # noqa: ANN001, ANN202
+        request = httpx.Request("GET", url)
+        raise httpx.HTTPStatusError("forbidden", request=request, response=httpx.Response(403, request=request))
+
+    monkeypatch.setattr("raidbots_cli.client.RaidbotsClient.report_data", _raise)
+    result = runner.invoke(app, ["inspect-report", "gone"])
+    assert result.exit_code == 4
+    payload = json.loads(result.stderr)
+    assert payload["error"]["code"] == "not_found"
+    assert payload["error"]["details"]["status_code"] == 403
+    assert "expired or is private" in payload["error"]["message"]
+    assert not envelope_violations(payload)
+
+
+def test_report_input_rejects_the_raidbots_web_page(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # Raidbots answers /simc for an unknown report with HTTP 200 and its single-page app. Handing
+    # that markup back as SimC input produced an ok:true envelope whose "input" was HTML.
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    page = '<!doctype html>\n<html>\n  <head><title>Raidbots</title></head>\n</html>\n'
+
+    def _fake(client, url, **kwargs):  # noqa: ANN001, ANN202
+        return httpx.Response(200, text=page, request=httpx.Request("GET", url))
+
+    monkeypatch.setattr("raidbots_cli.client.request_with_retries", _fake)
+    result = runner.invoke(app, ["input", "gone"])
+    assert result.exit_code == 4
+    assert result.stdout == ""
+    payload = json.loads(result.stderr)
+    assert payload["error"]["code"] == "not_found"
+    assert "SimC input" in payload["error"]["message"]
+    assert not envelope_violations(payload)
+
+
+def test_report_input_returns_real_simc_text(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    profile = 'mage="Testchar"\nlevel=80\nspec=frost\n'
+
+    def _fake(client, url, **kwargs):  # noqa: ANN001, ANN202
+        return httpx.Response(200, text=profile, request=httpx.Request("GET", url))
+
+    monkeypatch.setattr("raidbots_cli.client.request_with_retries", _fake)
+    result = runner.invoke(app, ["input", "abc123"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["data"]["input"] == profile

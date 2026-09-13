@@ -4025,7 +4025,7 @@ def guide(
         help="Maximum linked entities to include as a lightweight preview. Set to 0 to disable.",
     ),
 ) -> None:
-    """Fetch one Wowhead guide with its sections, linked entities, and citations."""
+    """Fetch one Wowhead guide: analysis surfaces, linked entities, comments, and page metadata (sections are in guide-full)."""
     _emit(
         ctx,
         _guide_summary_payload(

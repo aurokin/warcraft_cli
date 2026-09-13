@@ -14,7 +14,7 @@ Runner: `tests/test_wowhead_parser_canaries.py` (live, `WOWHEAD_LIVE_TESTS=1`)
 | `retail-item` | retail | item | 19019 | Legendary sword; stable tooltip + page parser coverage |
 | `retail-npc` | retail | npc | 12056 | Classic raid NPC; href-linked entity extraction |
 | `retail-spell` | retail | spell | 40827 | Common spell page shape |
-| `retail-quest` | retail | quest | 76487 | Quest page with objectives block |
+| `retail-quest` | retail | quest | 5441 | Quest page with objectives block; vanilla Durotar quest that survived the Cataclysm revamp, so non-seasonal and long-lived (76487 was removed from the client DB and now 404s) |
 | `retail-object` | retail | object | 181332 | Object/chest entity type |
 | `wotlk-item` | wotlk | item | 49623 | Expansion-prefixed item URL |
 | `classic-item` | classic | item | 19019 | Classic Era prefix routing |
@@ -42,12 +42,36 @@ Runner: `tests/test_expansion_synthetic_fixtures.py`, `tests/test_wowhead_schema
 Source: `tests/fixtures/live_matrix.py`, `tests/fixtures/wcl_matrix_cases.py`  
 Runner: `tests/test_live_command_matrix.py` (`make test-live-matrix`)
 
-| Input | Value | Why pinned |
+Retail tiers roll over and reports age out of retention, so the matrix pins identities only and
+discovers every volatile input at runtime. Nothing in this section goes stale when a tier ends.
+
+| Pinned input | Value | Why pinned |
 | --- | --- | --- |
-| `PUBLIC_REPORT_CODE` | `qQVdxDcWyB3wGznL` | Heroic/Mythic retail report with stable fights for matrix commands |
-| `PRIVATE_REPORT_CODE` | `7Rc3HPCWGYy1z4tT` | User-auth private report slice (skipped without token) |
-| `ZONE_ID` / `ENCOUNTER_PLEXUS` | 44 / 3129 | Manaforge Omega sampled analytics scope |
-| `GUILD_*` | us / malganis / gn | Guild search and profile commands |
+| `GUILD_REGION` / `GUILD_REALM` / `GUILD_NAME` | us / malganis / gn | Guild profile, roster, attendance, and private-report commands |
+| `CHARACTER_NAME` | Aurow | Character profile and character-rankings commands |
+| `ANCHOR_DIFFICULTIES` | (4, 5) | Heroic then Mythic: the ranked difficulties an anchor kill may use |
+| `RAID_DIFFICULTY_IDS` | {3, 4, 5} | Marks a zone as a raid (Mythic+ and Delves zones expose other IDs) |
+| `DISCOVERY_REPORT_LIMIT` / `SAMPLE_*` | 10 / 1 page x 25 / ±1000 ms | Discovery scan depth and sampled-analytics cohort size |
+
+| Discovered at runtime | How |
+| --- | --- |
+| Zone | Newest non-frozen zone whose difficulties include the raid triple (`zones`) |
+| Boss + difficulty | First Heroic-then-Mythic kill in a recent public report of that zone (`reports` + `report-fights`) |
+| Public report + fight | The report that kill came from — the anchor for every `report-*` case |
+| Sampled cohort | `--start-time` / `--end-time` window centred on the anchor report's start, so the cohort provably contains the anchor kill |
+| Aura / actor / cast ability IDs | `report-encounter-buffs`, `report-player-details`, `report-events` on the anchor kill |
+| Private report | The guild's most recent `visibility: private` report (skipped without user auth) |
+
+Each case declares a JSON path plus a `DataCheck` (`NONEMPTY`, `POSITIVE`, `PRESENT`, `TRUE`,
+`SAMPLING_METADATA`). The path must exist — a missing leaf fails instead of silently falling back to
+the canonical block, and a scalar never passes a collection check. `SAMPLING_METADATA` is reserved
+for cohorts that may legitimately be empty (a single-spec filter); those cases still assert that
+`sample_scope.filters` echoes the requested zone/boss/difficulty, that `sample_scope.returned` is a
+count, and that `citations`, `freshness.sampled_at`, and `cache_provenance.finished` are served.
+
+`tests/test_warcraftlogs_live.py` keeps `FROZEN_ZONE_ID` / `FROZEN_BOSS_ID` (44 / 3129, Manaforge
+Omega) locally: those tests assert trust-block and cohort *shape*, so they want a tier whose reports
+stay put rather than the churning current one.
 
 ## Blizzard API contracts
 
@@ -93,3 +117,9 @@ go stale — they fail when the code or the docs drift.
 - [../foundation/ERROR_CONTRACT.md](../foundation/ERROR_CONTRACT.md)
 - [../wowhead/CONTRACTS.md](../wowhead/CONTRACTS.md)
 - [LINTING_AND_COMPLEXITY.md](LINTING_AND_COMPLEXITY.md)
+
+## End-to-end journeys
+
+`tests/e2e/` runs every binary as a subprocess against real providers; see
+[E2E_TESTING.md](E2E_TESTING.md). Its only pins are the permanent identifiers in `tests/e2e/pins.py`;
+everything else is discovered at run time.

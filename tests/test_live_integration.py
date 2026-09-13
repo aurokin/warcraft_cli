@@ -359,6 +359,21 @@ def test_live_news_type_filter_contract() -> None:
         assert str(row.get("type_name", "")).lower() == "live"
 
 
+BLUE_TRACKER_URL_PREFIX = "https://www.wowhead.com/blue-tracker/"
+BLUE_TRACKER_KINDS = frozenset({"topic", "news"})
+
+
+def _assert_blue_tracker_result_url(row: dict[str, Any]) -> None:
+    """The tracker mixes forum topics and Blizzard news; both use /blue-tracker/<kind>/<region>/<slug>-<id>."""
+    url = row["url"]
+    assert url.startswith(BLUE_TRACKER_URL_PREFIX), f"result url is not under the blue tracker: {url}"
+    kind, _, remainder = url[len(BLUE_TRACKER_URL_PREFIX) :].partition("/")
+    assert kind in BLUE_TRACKER_KINDS, f"unknown blue tracker entry kind {kind!r}: {url}"
+    region, _, slug = remainder.partition("/")
+    assert region == row["region"], f"url region {region!r} does not match result region {row['region']!r}: {url}"
+    assert slug.endswith(f"-{row['id']}"), f"url does not end with result id {row['id']}: {url}"
+
+
 def test_live_blue_tracker_contract() -> None:
     _require_live()
     payload = _payload_for(["blue-tracker", "class tuning", "--pages", "2", "--limit", "5"])
@@ -374,7 +389,8 @@ def test_live_blue_tracker_contract() -> None:
     assert isinstance(first.get("title"), str)
     assert isinstance(first.get("posted"), str)
     assert isinstance(first.get("url"), str)
-    assert first["url"].startswith("https://www.wowhead.com/blue-tracker/topic/")
+    for row in payload["results"]:
+        _assert_blue_tracker_result_url(row)
     assert isinstance(payload["facets"]["regions"], list)
     assert isinstance(payload["facets"]["forums"], list)
 

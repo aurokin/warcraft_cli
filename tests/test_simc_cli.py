@@ -1713,6 +1713,23 @@ def test_simc_describe_build_summarizes_st_and_aoe(monkeypatch, tmp_path: Path) 
     assert payload["single_target"]["inactive_talent_branches"][0]["action"] == "the_hunt"
 
 
+def test_simc_action_names_keep_the_dispatch_target() -> None:
+    """Two call_action_list rows must not collapse to one name, or describe-build's
+
+    single-target versus AoE comparison would report no difference when the build dispatches to a
+    different action list at another target count.
+    """
+    names = simc_main._action_names(
+        [
+            {"action": "tiger_palm", "target_list": None},
+            {"action": "call_action_list", "target_list": "default_st"},
+            {"action": "call_action_list", "target_list": "multitarget"},
+            {"action": None, "target_list": "ignored"},
+        ]
+    )
+    assert names == ["tiger_palm", "call_action_list -> default_st", "call_action_list -> multitarget"]
+
+
 def test_simc_describe_build_accepts_build_packet(monkeypatch, tmp_path: Path) -> None:
     apl_path = tmp_path / "druid_balance.simc"
     apl_path.write_text("actions=wrath\n")

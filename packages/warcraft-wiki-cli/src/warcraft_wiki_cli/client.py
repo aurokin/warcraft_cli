@@ -13,6 +13,10 @@ from warcraft_wiki_cli.page_parser import normalize_article_ref, parse_article_p
 
 WIKI_API_URL = "https://warcraft.wiki.gg/api.php"
 DEFAULT_CACHE_DIR = provider_cache_root("warcraft-wiki") / "http"
+# MediaWiki searches the main namespace only by default. The wiki moved its API reference pages into
+# the custom "API:" namespace (id 3000) and left the old main-namespace titles as redirects, which
+# list=search does not return, so API functions are invisible unless 3000 is searched explicitly.
+SEARCH_NAMESPACES = "0|3000"
 
 
 class WarcraftWikiAPIError(RuntimeError):
@@ -106,6 +110,7 @@ class WarcraftWikiClient:
                 "list": "search",
                 "srsearch": query,
                 "srlimit": limit,
+                "srnamespace": SEARCH_NAMESPACES,
                 "format": "json",
             },
         )

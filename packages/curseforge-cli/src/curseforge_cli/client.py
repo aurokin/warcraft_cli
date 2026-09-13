@@ -12,12 +12,13 @@ from curseforge_cli.auth import CurseForgeAuthConfig, load_curseforge_auth_confi
 API_HOST = "https://api.curseforge.com"
 WOW_GAME_ID = 1
 
-# Host, endpoints, and response shapes follow the documented public CurseForge Core API and are
-# pending one-time live confirmation (run CURSEFORGE_LIVE_TESTS=1 with a CURSEFORGE_API_KEY). doctor
-# and every command payload carry provenance.verified=false to keep that posture honest.
+# Host, x-api-key auth, and the three endpoints this client uses (slug search, mod lookup, and file
+# changelog) are confirmed against live CurseForge traffic, so payloads carry
+# provenance.verified=true. Slug search needs an API key with search access; keys without it get an
+# actionable auth_failed from _resolve_mod that points at the numeric-mod-id path.
 _VERIFICATION_NOTE = (
-    "Host, endpoints, and response shapes follow the documented public CurseForge Core API and are "
-    "pending one-time live confirmation (run CURSEFORGE_LIVE_TESTS=1 with a CURSEFORGE_API_KEY)."
+    "Host, x-api-key auth, slug search, mod lookup, and file changelog are confirmed against live "
+    "CurseForge traffic (run CURSEFORGE_LIVE_TESTS=1 with a CURSEFORGE_API_KEY to re-check)."
 )
 
 
@@ -104,11 +105,23 @@ class CurseForgeClient:
         text = addon.strip()
         if text.isdigit():
             return int(text), "id", None
-        # The `slug` search param follows the documented CurseForge Core API but is pending live
-        # confirmation. Rather than trust the server to filter, match the exact slug client-side: an
-        # ignored or renamed filter param can then never bind the wrong mod under an `ok:true` envelope
-        # (it degrades to addon_not_found instead).
-        search = self._get("/v1/mods/search", params={"gameId": WOW_GAME_ID, "slug": text})
+        # Rather than trust the server to filter, match the exact slug client-side: an ignored or
+        # renamed filter param can then never bind the wrong mod under an `ok:true` envelope (it
+        # degrades to addon_not_found instead).
+        try:
+            search = self._get("/v1/mods/search", params={"gameId": WOW_GAME_ID, "slug": text})
+        except httpx.HTTPStatusError as exc:
+            # Search is a separately scoped CurseForge capability: a key that reads /v1/mods fine can
+            # still be rejected here. Say which endpoint refused and point at the path that works,
+            # instead of a bare "HTTP 403" the caller cannot act on.
+            if exc.response.status_code not in (401, 403):
+                raise
+            raise CurseForgeClientError(
+                "auth_failed",
+                f"CurseForge rejected the slug search endpoint {exc.request.url} with HTTP "
+                f"{exc.response.status_code}: this API key has no search access. Look the addon up by "
+                "its numeric mod id instead, e.g. `curseforge addon 3358` for deadly-boss-mods.",
+            ) from exc
         rows = search["payload"].get("data")
         # A non-list `data` is a malformed/unexpected payload (schema drift, or an error wrapped in
         # `data`), distinct from a well-formed empty result set. Keep those two codes separate so

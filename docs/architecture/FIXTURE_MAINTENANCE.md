@@ -76,11 +76,11 @@ pytest -q tests/test_icy_veins_cli.py tests/test_icy_veins_recorded_fixtures.py
 
 ## Warcraft Logs live matrix
 
-1. Find a public report with fights at the desired difficulty.
-2. Update `tests/fixtures/live_matrix.py` (`PUBLIC_REPORT_CODE`, fight difficulty constants,
-   zone/encounter ids as needed).
-3. Update `PRIVATE_REPORT_CODE` only when you have user auth with `view-private-reports`.
-4. Run:
+The matrix discovers its inputs at run time: the session fixture in
+`tests/test_live_command_matrix.py` picks the current raid zone from `zones`, then a Heroic or
+Mythic kill in a recent public report of that zone, and anchors every case on it. Nothing ages out.
+`tests/fixtures/live_matrix.py` holds only identity pins (the maintainer's guild and character)
+plus discovery tuning; change those only if the guild or character moves. Run:
 
 ```bash
 make test-live-matrix

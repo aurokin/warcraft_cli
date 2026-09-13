@@ -6126,6 +6126,28 @@ def test_warcraft_guild_history_and_ranks_use_wowprogress(monkeypatch) -> None:
     assert ranks["provider_payload"]["kind"] == "guild_ranks"
 
 
+def test_warcraft_guild_history_propagates_the_source_exit_code(monkeypatch) -> None:
+    """A blocked or missing WowProgress source exits with its own code, not a flat 1."""
+
+    def fake_provider_invoke(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, object]:
+        assert provider == "wowprogress"
+        return {
+            "provider": provider,
+            "exit_code": 5,
+            "payload": {"ok": False, "error": {"code": "blocked", "message": "Cloudflare challenge"}},
+            "stdout": "",
+        }
+
+    monkeypatch.setattr("warcraft_cli.main.provider_invoke", fake_provider_invoke)
+
+    for command in ("guild-history", "guild-ranks"):
+        result = runner.invoke(warcraft_app, [command, "us", "Mal'Ganis", "gn"])
+        assert result.exit_code == 5, result.output
+        payload = json.loads(result.stderr)
+        assert payload["ok"] is False
+        assert payload["error"]["code"] == "blocked"
+
+
 def _wrapper_module_trees() -> dict[str, ast.Module]:
     package_dir = Path(warcraft_cli.__file__).parent
     return {path.name: ast.parse(path.read_text(encoding="utf-8")) for path in sorted(package_dir.glob("*.py"))}

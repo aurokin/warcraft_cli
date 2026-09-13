@@ -17,6 +17,9 @@ PROGRAMMING_FRAMEWORK_TITLES = {
     "framexml api",
     "lua functions",
     "lua api",
+    # The XML schema tree was renamed from "XML schema" to "XML" in 2026; the old title is still a
+    # redirect, so keep both.
+    "xml",
     "xml schema",
     "console variables",
     "events",
@@ -140,7 +143,7 @@ def _normalized_title_key(title: str) -> str:
 
 
 # Titles inside PROGRAMMING_FRAMEWORK_TITLES / SYSTEM_REFERENCE_TITLES that map to a narrower family.
-FRAMEWORK_TITLE_FAMILIES = {"xml schema": "xml_schema", "console variables": "cvar"}
+FRAMEWORK_TITLE_FAMILIES = {"xml": "xml_schema", "xml schema": "xml_schema", "console variables": "cvar"}
 SYSTEM_TITLE_FAMILIES = {"expansion": "expansion_reference", "profession": "profession_reference", "zone scaling": "zone_reference"}
 
 
@@ -148,7 +151,9 @@ def _title_pattern_family(normalized: str) -> str | None:
     """Families decided by a title prefix/suffix pattern; checked before the title-set lookups."""
     if normalized.startswith("api change summaries") or normalized.endswith("/api changes"):
         return "api_changes"
-    if normalized.startswith("api "):
+    # API reference pages moved from the main-namespace "API Foo" convention into the real "API:"
+    # namespace; the old titles survive as redirects, so both spellings have to classify the same.
+    if normalized.startswith("api ") or normalized.startswith("api:"):
         return "api_function"
     if normalized.startswith("uihandler "):
         return "ui_handler"

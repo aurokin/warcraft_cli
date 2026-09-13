@@ -17,6 +17,7 @@ Progressive index for repo structure, shared design, and completed work. Sequenc
 - [LINTING_AND_COMPLEXITY.md](LINTING_AND_COMPLEXITY.md) — static quality tooling and the gates in `make check`
 - [CONTRACT_TEST_CATALOG.md](CONTRACT_TEST_CATALOG.md) — pinned parser/matrix/schema inputs and cross-provider contract tests
 - [FIXTURE_MAINTENANCE.md](FIXTURE_MAINTENANCE.md) — how to refresh synthetic and captured fixtures
+- [E2E_TESTING.md](E2E_TESTING.md) — the local end-to-end journey suite, its policy, and credential setup
 
 ## Completed Work (History)
 

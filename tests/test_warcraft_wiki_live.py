@@ -16,12 +16,15 @@ def test_live_warcraft_wiki_api_search_and_resolve_contract() -> None:
 
     assert search_payload["count"] >= 1
     first = search_payload["results"][0]
-    assert first["id"] == "API CreateFrame"
+    # The wiki moved its API reference out of the main-namespace "API Foo" titles into the real
+    # "API:" namespace (id 3000) and left "API CreateFrame" behind as a redirect. Redirects are not
+    # returned by list=search, so the canonical title is now the only thing search can surface.
+    assert first["id"] == "API:CreateFrame"
     assert first["metadata"]["content_family"] == "api_function"
 
     resolve_payload = payload_for_live(runner, app, ["resolve", "CreateFrame", "--limit", "5"], provider_name="Warcraft Wiki")
     assert resolve_payload["resolved"] is True
-    assert resolve_payload["next_command"] == "warcraft-wiki article 'API CreateFrame'"
+    assert resolve_payload["next_command"] == "warcraft-wiki article API:CreateFrame"
 
     api_payload = payload_for_live(runner, app, ["api", "CreateFrame"], provider_name="Warcraft Wiki")
     assert api_payload["article"]["content_family"] == "api_function"

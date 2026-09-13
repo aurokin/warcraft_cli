@@ -1831,3 +1831,100 @@ def test_raiderio_provider_object_satisfies_the_surface() -> None:
     provider: ProviderSurface = PROVIDER
     assert provider.name == "raiderio"
     assert isinstance(PROVIDER, ProviderSurface)
+
+
+def _runs_response_with_params_season(season: str, *, page: int = 0) -> dict:
+    """The real ``/mythic-plus/runs`` shape: the applied season is echoed under ``params``."""
+    return {
+        "params": {"dungeon": "all", "page": page, "region": "us", "access_key": "", "season": season},
+        "leaderboard_url": f"https://raider.io/mythic-plus-rankings/{season}/all/us/leaderboards-strict",
+        "rankings": _leaderboard_rows(page),
+    }
+
+
+def test_raiderio_leaderboard_recovers_resolved_season_from_params(monkeypatch) -> None:
+    # Raider.IO echoes the applied season under params.season, never as a top-level key, so
+    # --season current must still report a concrete resolved_season.
+    monkeypatch.setattr(
+        "raiderio_cli.client.RaiderIOClient.mythic_plus_runs",
+        lambda self, *, season, region, dungeon, affixes, page: _runs_response_with_params_season("season-mn-2", page=page),
+    )
+    result = runner.invoke(raiderio_app, ["leaderboard", "mythic-plus", "--season", "current", "--region", "us"])
+    assert result.exit_code == 0, result.output
+
+    payload = json.loads(result.stdout)
+    assert payload["query"]["resolved_season"] == "season-mn-2"
+
+
+def test_raiderio_mythic_plus_runs_recovers_resolved_season_from_params(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "raiderio_cli.client.RaiderIOClient.mythic_plus_runs",
+        lambda self, *, season, region, dungeon, affixes, page: _runs_response_with_params_season("season-mn-2", page=page),
+    )
+    result = runner.invoke(raiderio_app, ["mythic-plus-runs", "--region", "us"])
+    assert result.exit_code == 0, result.output
+
+    payload = json.loads(result.stdout)
+    assert payload["query"]["resolved_season"] == "season-mn-2"
+
+
+def test_raiderio_sample_recovers_resolved_season_from_params(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "raiderio_cli.client.RaiderIOClient.mythic_plus_runs",
+        lambda self, *, season, region, dungeon, affixes, page: _runs_response_with_params_season("season-mn-2", page=page),
+    )
+    result = runner.invoke(raiderio_app, ["sample", "mythic-plus-runs", "--season", "current", "--limit", "2"])
+    assert result.exit_code == 0, result.output
+
+    payload = json.loads(result.stdout)
+    assert payload["query"]["resolved_season"] == "season-mn-2"
+    assert payload["sample"]["season"] == "season-mn-2"
+
+
+@pytest.mark.parametrize(
+    ("message", "code", "exit_code"),
+    [
+        ("Could not find requested guild", "not_found", 4),
+        ("Invalid request query input", "invalid_query", 2),
+    ],
+)
+def test_raiderio_http_400_separates_missing_target_from_bad_input(monkeypatch, message: str, code: str, exit_code: int) -> None:
+    # Raider.IO returns HTTP 400 both for a guild that does not exist and for a malformed request;
+    # only the message distinguishes exit 4 (not found) from exit 2 (usage).
+    request = httpx.Request("GET", "https://raider.io/api/v1/guilds/profile")
+    response = httpx.Response(400, request=request, json={"statusCode": 400, "error": "Bad Request", "message": message})
+
+    def fake_profile(self, *, region: str, realm: str, name: str, fields: str = ""):  # noqa: ANN001
+        raise httpx.HTTPStatusError("bad request", request=request, response=response)
+
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.guild_profile_variants", fake_profile)
+    result = runner.invoke(raiderio_app, ["guild", "us", "malganis", "Missing"])
+    assert result.exit_code == exit_code, result.output
+
+    payload = json.loads(result.stderr)
+    assert payload["error"]["code"] == code
+    assert payload["error"]["message"] == message
+
+
+def test_raiderio_resolve_credits_realm_spelled_as_a_slug(monkeypatch) -> None:
+    # Raider.IO echoes the realm display name ("Mal'Ganis"); a query that spells the same realm as a
+    # slug ("malganis") must still score realm_match, otherwise a confirmed structured probe of a
+    # punctuated realm never resolves.
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.search", lambda self, *, term, kind=None: {"matches": []})
+    monkeypatch.setattr(
+        "raiderio_cli.client.RaiderIOClient.guild_profile_variants",
+        lambda self, *, region, realm, name, fields="": {
+            "name": "gn",
+            "region": "us",
+            "realm": "Mal'Ganis",
+            "faction": "horde",
+            "profile_url": "https://raider.io/guilds/us/malganis/gn",
+        },
+    )
+    result = runner.invoke(raiderio_app, ["resolve", "guild us malganis gn"])
+    assert result.exit_code == 0, result.output
+
+    payload = json.loads(result.stdout)
+    assert payload["resolved"] is True
+    assert payload["next_command"] == "raiderio guild us malganis gn"
+    assert "realm_match" in payload["match"]["ranking"]["match_reasons"]

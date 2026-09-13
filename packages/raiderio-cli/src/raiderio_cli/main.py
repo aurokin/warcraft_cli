@@ -24,6 +24,7 @@ from raiderio_cli.analytics import (
     player_snapshots,
     ranking_run_summary,
     resolve_season_input,
+    response_season,
     run_filters,
     sample_leaderboard_runs,
     sample_summary,
@@ -309,6 +310,7 @@ def mythic_plus_runs(
             page=page,
         )
     rankings = as_list(payload.get("rankings"))
+    served_season = response_season(payload)
     emit(
         ctx,
         raiderio_envelope(
@@ -316,8 +318,8 @@ def mythic_plus_runs(
             kind="mythic_plus_runs",
             payload={
                 "query": {
-                    "season": payload.get("season") or season or None,
-                    "resolved_season": payload.get("season") or resolve_season_input(season),
+                    "season": served_season or season or None,
+                    "resolved_season": served_season or resolve_season_input(season),
                     "region": payload.get("region") or region,
                     "dungeon": payload.get("dungeon") or dungeon,
                     "affixes": affixes or None,

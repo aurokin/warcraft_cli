@@ -1,42 +1,32 @@
-"""Pinned Warcraft Logs live-matrix inputs (AUR-319).
+"""Stable identity pins for the Warcraft Logs live matrix (AUR-319).
 
-Rotate identifiers here when retail reports age out of retention; matrix tests
-read only from this module.
+Only identities that outlive a raid tier live here. Everything volatile — zone, encounter,
+difficulty, report codes, fight IDs, ability IDs — is discovered at runtime by
+``tests/test_live_command_matrix.py`` from these pins, because retail tiers roll over and reports
+age out of Warcraft Logs retention.
 """
 
 from __future__ import annotations
 
-# Reports
-PUBLIC_REPORT_CODE = "qQVdxDcWyB3wGznL"
-PRIVATE_REPORT_CODE = "7Rc3HPCWGYy1z4tT"
-
-# Guild / character
+# Guild / character identities used by the profile commands.
 GUILD_REGION = "us"
 GUILD_REALM = "malganis"
 GUILD_NAME = "gn"
 CHARACTER_NAME = "Aurow"
 
-# Zone / encounters (Manaforge Omega)
-ZONE_ID = 44
-ENCOUNTER_PLEXUS = 3129
-ENCOUNTER_IMPERIAL = 3176
-ENCOUNTER_CROWN = 3181
+# A Warcraft Logs zone is a raid when it exposes the Normal/Heroic/Mythic difficulty triple;
+# Mythic+ and Delves zones only expose their own difficulty IDs.
+RAID_DIFFICULTY_IDS = frozenset({3, 4, 5})
 
-PUBLIC_DIFFICULTY = 4  # Heroic
-PRIVATE_DIFFICULTY = 5  # Mythic
+# Difficulties worth anchoring the matrix on, in preference order (Heroic, then Mythic). Both are
+# ranked and widely logged, so encounter rankings exist for whichever one discovery lands on.
+ANCHOR_DIFFICULTIES: tuple[int, ...] = (4, 5)
 
-# Cross-report sampled analytics defaults (keep pages small for points)
-SAMPLED_ANALYTICS_TAIL: tuple[str, ...] = (
-    "--zone-id",
-    str(ZONE_ID),
-    "--boss-id",
-    str(ENCOUNTER_PLEXUS),
-    "--difficulty",
-    str(PUBLIC_DIFFICULTY),
-    "--top",
-    "3",
-    "--report-pages",
-    "1",
-    "--reports-per-page",
-    "5",
-)
+# How many of the zone's most recent reports discovery scans for an anchor kill.
+DISCOVERY_REPORT_LIMIT = 10
+
+# Sampled-analytics cohort. The report-list window is centred on the anchor report's start time so
+# the cohort provably contains the anchor kill instead of racing the live report firehose.
+SAMPLE_REPORT_PAGES = 1
+SAMPLE_REPORTS_PER_PAGE = 25
+SAMPLE_WINDOW_PADDING_MS = 1000

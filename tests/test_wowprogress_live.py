@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 from article_provider_testkit import payload_for_live, require_live
 from typer.testing import CliRunner
@@ -10,9 +12,23 @@ pytestmark = pytest.mark.live
 runner = CliRunner()
 
 
-def test_live_wowprogress_structured_guild_search_contract() -> None:
+def _live_payload(args: list[str]) -> dict[str, Any]:
+    """Run a live WowProgress command, failing -- never skipping -- when upstream blocks the request.
+
+    ``article_provider_testkit.invoke_live`` downgrades a bot-protection block to a skip. WowProgress
+    is fetched with a browser-impersonating client precisely so it stays reachable, so a challenge
+    page is a real provider failure; skipping it would let this whole suite report green while every
+    command returns nothing.
+    """
     require_live("WowProgress")
-    payload = payload_for_live(runner, app, ["search", "guild us illidan Liquid", "--limit", "5"], provider_name="WowProgress")
+    try:
+        return payload_for_live(runner, app, args, provider_name="WowProgress")
+    except pytest.skip.Exception as exc:
+        pytest.fail(f"Live WowProgress request was blocked upstream instead of returning data.\nargs={args}\n{exc}")
+
+
+def test_live_wowprogress_structured_guild_search_contract() -> None:
+    payload = _live_payload(["search", "guild us illidan Liquid", "--limit", "5"])
 
     assert payload["count"] >= 1
     first = payload["results"][0]
@@ -22,13 +38,7 @@ def test_live_wowprogress_structured_guild_search_contract() -> None:
 
 
 def test_live_wowprogress_structured_character_resolve_contract() -> None:
-    require_live("WowProgress")
-    payload = payload_for_live(
-        runner,
-        app,
-        ["resolve", "character us illidan Imonthegcd", "--limit", "5"],
-        provider_name="WowProgress",
-    )
+    payload = _live_payload(["resolve", "character us illidan Imonthegcd", "--limit", "5"])
 
     assert payload["resolved"] is True
     assert payload["next_command"] == "wowprogress character us illidan Imonthegcd"
@@ -37,8 +47,7 @@ def test_live_wowprogress_structured_character_resolve_contract() -> None:
 
 
 def test_live_wowprogress_short_exact_guild_resolve_contract() -> None:
-    require_live("WowProgress")
-    payload = payload_for_live(runner, app, ["resolve", "guild us area-52 xD", "--limit", "5"], provider_name="WowProgress")
+    payload = _live_payload(["resolve", "guild us area-52 xD", "--limit", "5"])
 
     assert payload["resolved"] is True
     assert payload["next_command"] == "wowprogress guild us area-52 xD"
@@ -48,8 +57,7 @@ def test_live_wowprogress_short_exact_guild_resolve_contract() -> None:
 
 
 def test_live_wowprogress_leaderboard_contract() -> None:
-    require_live("WowProgress")
-    payload = payload_for_live(runner, app, ["leaderboard", "pve", "us", "--limit", "5"], provider_name="WowProgress")
+    payload = _live_payload(["leaderboard", "pve", "us", "--limit", "5"])
 
     assert payload["leaderboard"]["kind"] == "pve"
     assert payload["leaderboard"]["region"] == "us"
@@ -59,8 +67,7 @@ def test_live_wowprogress_leaderboard_contract() -> None:
 
 
 def test_live_wowprogress_guild_contract() -> None:
-    require_live("WowProgress")
-    payload = payload_for_live(runner, app, ["guild", "na", "Illidan", "Liquid"], provider_name="WowProgress")
+    payload = _live_payload(["guild", "na", "Illidan", "Liquid"])
 
     assert payload["guild"]["name"] == "Liquid"
     assert payload["progress"]["summary"] == "8/8 (M)"
@@ -69,8 +76,7 @@ def test_live_wowprogress_guild_contract() -> None:
 
 
 def test_live_wowprogress_guild_history_contract() -> None:
-    require_live("WowProgress")
-    payload = payload_for_live(runner, app, ["guild-history", "us", "Mal'Ganis", "gn"], provider_name="WowProgress")
+    payload = _live_payload(["guild-history", "us", "Mal'Ganis", "gn"])
 
     assert payload["kind"] == "guild_history"
     assert payload["count"] >= 1
@@ -79,8 +85,7 @@ def test_live_wowprogress_guild_history_contract() -> None:
 
 
 def test_live_wowprogress_guild_snapshot_contract() -> None:
-    require_live("WowProgress")
-    payload = payload_for_live(runner, app, ["guild-snapshot", "na", "Illidan", "Liquid"], provider_name="WowProgress")
+    payload = _live_payload(["guild-snapshot", "na", "Illidan", "Liquid"])
 
     assert payload["kind"] == "guild_snapshot"
     assert payload["guild"]["name"] == "Liquid"
@@ -91,8 +96,7 @@ def test_live_wowprogress_guild_snapshot_contract() -> None:
 
 
 def test_live_wowprogress_history_trajectory_contract() -> None:
-    require_live("WowProgress")
-    payload = payload_for_live(runner, app, ["history-trajectory", "us", "Mal'Ganis", "gn"], provider_name="WowProgress")
+    payload = _live_payload(["history-trajectory", "us", "Mal'Ganis", "gn"])
 
     assert payload["kind"] == "history_trajectory"
     assert payload["count"] >= 1
@@ -103,8 +107,7 @@ def test_live_wowprogress_history_trajectory_contract() -> None:
 
 
 def test_live_wowprogress_character_contract() -> None:
-    require_live("WowProgress")
-    payload = payload_for_live(runner, app, ["character", "us", "illidan", "Imonthegcd"], provider_name="WowProgress")
+    payload = _live_payload(["character", "us", "illidan", "Imonthegcd"])
 
     assert payload["character"]["name"] == "Imonthegcd"
     assert payload["item_level"]["value"] is not None
@@ -113,13 +116,7 @@ def test_live_wowprogress_character_contract() -> None:
 
 
 def test_live_wowprogress_sample_pve_leaderboard_contract() -> None:
-    require_live("WowProgress")
-    payload = payload_for_live(
-        runner,
-        app,
-        ["sample", "pve-leaderboard", "--region", "us", "--limit", "10"],
-        provider_name="WowProgress",
-    )
+    payload = _live_payload(["sample", "pve-leaderboard", "--region", "us", "--limit", "10"])
 
     assert payload["kind"] == "pve_leaderboard_sample"
     assert payload["sample"]["entry_count"] == len(payload["entries"])
@@ -129,13 +126,7 @@ def test_live_wowprogress_sample_pve_leaderboard_contract() -> None:
 
 
 def test_live_wowprogress_distribution_pve_leaderboard_contract() -> None:
-    require_live("WowProgress")
-    payload = payload_for_live(
-        runner,
-        app,
-        ["distribution", "pve-leaderboard", "--region", "us", "--metric", "difficulty", "--limit", "10"],
-        provider_name="WowProgress",
-    )
+    payload = _live_payload(["distribution", "pve-leaderboard", "--region", "us", "--metric", "difficulty", "--limit", "10"])
 
     assert payload["kind"] == "pve_leaderboard_distribution"
     assert payload["metric"] == "difficulty"
@@ -144,13 +135,7 @@ def test_live_wowprogress_distribution_pve_leaderboard_contract() -> None:
 
 
 def test_live_wowprogress_threshold_pve_leaderboard_contract() -> None:
-    require_live("WowProgress")
-    payload = payload_for_live(
-        runner,
-        app,
-        ["threshold", "pve-leaderboard", "--region", "us", "--metric", "rank", "--value", "25", "--nearest", "5", "--limit", "25"],
-        provider_name="WowProgress",
-    )
+    payload = _live_payload(["threshold", "pve-leaderboard", "--region", "us", "--metric", "rank", "--value", "25", "--nearest", "5", "--limit", "25"])
 
     assert payload["kind"] == "pve_leaderboard_threshold"
     assert payload["metric"] == "rank"
@@ -159,13 +144,7 @@ def test_live_wowprogress_threshold_pve_leaderboard_contract() -> None:
 
 
 def test_live_wowprogress_sample_pve_guild_profiles_contract() -> None:
-    require_live("WowProgress")
-    payload = payload_for_live(
-        runner,
-        app,
-        ["sample", "pve-guild-profiles", "--region", "us", "--limit", "5"],
-        provider_name="WowProgress",
-    )
+    payload = _live_payload(["sample", "pve-guild-profiles", "--region", "us", "--limit", "5"])
 
     assert payload["kind"] == "pve_guild_profiles_sample"
     assert payload["sample"]["guild_profile_count"] == len(payload["guild_profiles"])
@@ -175,13 +154,7 @@ def test_live_wowprogress_sample_pve_guild_profiles_contract() -> None:
 
 
 def test_live_wowprogress_filtered_guild_profiles_contract() -> None:
-    require_live("WowProgress")
-    payload = payload_for_live(
-        runner,
-        app,
-        ["sample", "pve-guild-profiles", "--region", "us", "--limit", "5", "--difficulty", "m"],
-        provider_name="WowProgress",
-    )
+    payload = _live_payload(["sample", "pve-guild-profiles", "--region", "us", "--limit", "5", "--difficulty", "m"])
 
     assert payload["kind"] == "pve_guild_profiles_sample"
     assert payload["query"]["filters"]["difficulty"] == ["m"]
@@ -189,13 +162,7 @@ def test_live_wowprogress_filtered_guild_profiles_contract() -> None:
 
 
 def test_live_wowprogress_distribution_pve_guild_profiles_contract() -> None:
-    require_live("WowProgress")
-    payload = payload_for_live(
-        runner,
-        app,
-        ["distribution", "pve-guild-profiles", "--region", "us", "--metric", "progress", "--limit", "5"],
-        provider_name="WowProgress",
-    )
+    payload = _live_payload(["distribution", "pve-guild-profiles", "--region", "us", "--metric", "progress", "--limit", "5"])
 
     assert payload["kind"] == "pve_guild_profiles_distribution"
     assert payload["distribution"]["rows"]
@@ -203,13 +170,7 @@ def test_live_wowprogress_distribution_pve_guild_profiles_contract() -> None:
 
 
 def test_live_wowprogress_threshold_pve_guild_profiles_contract() -> None:
-    require_live("WowProgress")
-    payload = payload_for_live(
-        runner,
-        app,
-        ["threshold", "pve-guild-profiles", "--region", "us", "--metric", "world_rank", "--value", "25", "--nearest", "5", "--limit", "5"],
-        provider_name="WowProgress",
-    )
+    payload = _live_payload(["threshold", "pve-guild-profiles", "--region", "us", "--metric", "world_rank", "--value", "25", "--nearest", "5", "--limit", "5"])
 
     assert payload["kind"] == "pve_guild_profiles_threshold"
     assert payload["threshold"]["nearest_matches"]

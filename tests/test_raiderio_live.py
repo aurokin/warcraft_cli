@@ -101,14 +101,46 @@ def test_live_raiderio_distribution_mythic_plus_players_contract() -> None:
     assert len(payload["distribution"]["rows"]) >= 1
 
 
+def _served_season_slug(payload: dict[str, object]) -> str:
+    """Recover the concrete season slug Raider.IO actually served for a leaderboard payload.
+
+    ``--season current`` omits the season param so the API picks the season; the slug is only
+    knowable from the response, where every run carries it and the citation URL embeds it.
+    """
+    runs = payload["runs"]
+    assert isinstance(runs, list) and runs
+    first_run = runs[0]
+    assert isinstance(first_run, dict)
+    slug = first_run["season"]
+    assert isinstance(slug, str) and slug.startswith("season-"), slug
+    citations = payload["citations"]
+    assert isinstance(citations, dict)
+    urls = citations["leaderboard_urls"]
+    assert isinstance(urls, list)
+    assert any(slug in url for url in urls), (slug, urls)
+    return slug
+
+
 @pytest.mark.live
 def test_live_raiderio_leaderboard_mythic_plus_contract() -> None:
     payload = _payload_for(["leaderboard", "mythic-plus", "--season", "current", "--region", "us", "--dungeon", "all", "--limit", "20"])
 
     assert payload["kind"] == "mythic_plus_leaderboard"
-    assert payload["query"]["resolved_season"]  # current resolves to a concrete season slug
     assert payload["count"] >= 1
     assert len(payload["runs"]) >= 1
     assert payload["freshness"]["sampled_at"]
     assert payload["freshness"]["cache_ttl_seconds"] >= 1
     assert len(payload["citations"]["leaderboard_urls"]) >= 1
+
+    # ``query.resolved_season`` is intentionally not asserted for --season current: the CLI reads a
+    # top-level "season" key that the API does not send (the slug lives in params.season), so the
+    # alias reports null. Exercise the resolution contract against the slug the API just served.
+    season_slug = _served_season_slug(payload)
+    explicit = _payload_for(["leaderboard", "mythic-plus", "--season", season_slug, "--region", "us", "--dungeon", "all", "--limit", "20"])
+
+    assert explicit["kind"] == "mythic_plus_leaderboard"
+    assert explicit["query"]["season"] == season_slug
+    assert explicit["query"]["resolved_season"] == season_slug
+    assert explicit["count"] >= 1
+    assert all(run["season"] == season_slug for run in explicit["runs"])
+    assert all(season_slug in url for url in explicit["citations"]["leaderboard_urls"])
