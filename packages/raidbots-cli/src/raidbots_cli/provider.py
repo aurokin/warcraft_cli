@@ -159,11 +159,11 @@ def inspect_report(reference: str, *, include_raw: bool = True) -> Envelope:
     with _client() as client:
         try:
             data = client.report_data(report_id)
+            report = parse_report(data, report_id=report_id)
         except httpx.HTTPError as exc:
             raise provider_error(exc) from exc
-        try:
-            report = parse_report(data, report_id=report_id)
         except ValueError as exc:
+            # Covers invalid JSON and non-object bodies from report_data as well as parse failures.
             raise ProviderError("invalid_report", str(exc)) from exc
         freshness = _freshness(client)
         citations = _citations(client, report_id)

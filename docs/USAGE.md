@@ -52,7 +52,7 @@ Every provider command emits one JSON object with the shared envelope keys `ok`,
 `command`, `kind`, `schema_version`, `query`, `provenance`, and `data`; failures add `error` with a
 stable `code`, a human `message`, and optional `details`, and are written to stderr. Providers that
 historically emitted their payload keys at the top level still do, next to the envelope keys; those
-copies are deprecated, so read `data` where a provider populates it. The `warcraft` wrapper's own
+copies are deprecated and identical to `data`, so read `data`. The `warcraft` wrapper's own
 commands (`doctor`, `search`, `resolve`, and the composite packets) carry the same envelope keys
 with `provider: "warcraft"`, keep their historical top-level keys, and mirror them into `data`.
 `warcraft <provider> ...` passthrough output is the provider's envelope.

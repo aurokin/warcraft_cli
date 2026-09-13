@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-import time
-
 import httpx
+import pytest
 from warcraft_api.http import (
     DEFAULT_USER_AGENT,
     MAX_RETRY_AFTER_SECONDS,
@@ -18,19 +17,29 @@ def test_retry_after_seconds_is_capped() -> None:
     assert retry_after_seconds(response) == MAX_RETRY_AFTER_SECONDS
 
 
-def test_host_rate_limiter_spaces_same_host_only() -> None:
+def test_host_rate_limiter_spaces_same_host_only(monkeypatch) -> None:
+    class FakeClock:
+        now = 100.0
+        slept: list[float] = []
+
+        def monotonic(self) -> float:
+            return self.now
+
+        def sleep(self, seconds: float) -> None:
+            self.slept.append(seconds)
+            self.now += seconds
+
+    clock = FakeClock()
+    monkeypatch.setattr("warcraft_api.http.time.monotonic", clock.monotonic)
+    monkeypatch.setattr("warcraft_api.http.time.sleep", clock.sleep)
+
     limiter = HostRateLimiter(0.05)
     limiter.wait("https://a.example/one")
-    started = time.monotonic()
     limiter.wait("https://a.example/two")
-    same_host_elapsed = time.monotonic() - started
+    assert clock.slept == [pytest.approx(0.05)]
 
-    started = time.monotonic()
     limiter.wait("https://b.example/one")
-    other_host_elapsed = time.monotonic() - started
-
-    assert same_host_elapsed >= 0.05
-    assert other_host_elapsed < 0.05
+    assert len(clock.slept) == 1
 
 
 def test_host_rate_limiter_zero_interval_never_sleeps(monkeypatch) -> None:

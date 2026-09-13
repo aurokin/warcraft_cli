@@ -6203,3 +6203,25 @@ def test_warcraft_passthrough_forwards_output_flags(monkeypatch) -> None:
     projected = runner.invoke(warcraft_app, ["--fields", "query", "wowhead", "search", "defias"])
     assert projected.exit_code == 0
     assert json.loads(projected.stdout) == {"query": "defias"}
+
+
+
+def test_normalize_simc_transport_packet_path_rewrites_both_build_spec_copies() -> None:
+    from warcraft_cli.main import _normalize_simc_transport_packet_path
+
+    build_spec = {
+        "transport_packet": {"path": "/tmp/gone.json", "form": "simc_split_talents"},
+        "source_notes": ["build packet: /tmp/gone.json", "talent transport packet"],
+    }
+    result = {"ok": True, "payload": {"build_spec": build_spec, "data": {"build_spec": build_spec, "other": 1}}}
+
+    stable = _normalize_simc_transport_packet_path(result, stable_packet_path="/stable/packet.json")
+    for copy in (stable["payload"]["build_spec"], stable["payload"]["data"]["build_spec"]):
+        assert copy["transport_packet"]["path"] == "/stable/packet.json"
+        assert copy["source_notes"] == ["build packet: /stable/packet.json", "talent transport packet"]
+    assert stable["payload"]["data"]["other"] == 1
+
+    dropped = _normalize_simc_transport_packet_path(result, stable_packet_path=None)
+    for copy in (dropped["payload"]["build_spec"], dropped["payload"]["data"]["build_spec"]):
+        assert "path" not in copy["transport_packet"]
+        assert copy["source_notes"] == ["talent transport packet"]

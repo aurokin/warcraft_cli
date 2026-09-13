@@ -68,16 +68,22 @@ COMING_SOON_MESSAGE = (
 
 def simc_envelope(command: str, payload: Mapping[str, Any]) -> Envelope:
     """Wrap a flat simc payload in the shared envelope, keeping the deprecated flat keys at the top level."""
-    body = {key: value for key, value in payload.items() if key not in ENVELOPE_KEYS}
+    legacy = {key: value for key, value in payload.items() if key not in ENVELOPE_KEYS}
+    data = dict(legacy)
+    executed = payload.get("command")
+    if isinstance(executed, list):
+        # The envelope's top-level ``command`` is the subcommand name; the executed SimC/git argv
+        # stays at ``data.command`` so a run remains reproducible.
+        data["command"] = executed
     kind = payload.get("kind")
     envelope = success_envelope(
         provider=PROVIDER_NAME,
         command=command,
         kind=kind if isinstance(kind, str) else command.replace("-", "_"),
-        data=body,
+        data=data,
         query=payload.get("query"),
     )
-    return cast(Envelope, with_legacy_keys(envelope, body))
+    return cast(Envelope, with_legacy_keys(envelope, legacy))
 
 
 def repo_payload(paths: RepoPaths) -> dict[str, Any]:

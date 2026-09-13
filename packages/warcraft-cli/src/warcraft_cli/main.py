@@ -1051,17 +1051,33 @@ def _normalize_simc_transport_packet_path(
     *,
     stable_packet_path: str | None,
 ) -> dict[str, Any]:
+    """Point every ``build_spec.transport_packet.path`` copy at the stable packet (or drop temporary ones).
+
+    simc dual-emits ``build_spec`` at the top level (deprecated) and under ``data``; both must agree.
+    """
     payload = result.get("payload")
     if not isinstance(payload, dict):
         return result
-    build_spec = payload.get("build_spec")
-    if not isinstance(build_spec, dict):
+    normalized_payload = dict(payload)
+    build_spec = _normalize_build_spec_packet_path(payload.get("build_spec"), stable_packet_path=stable_packet_path)
+    if build_spec is not None:
+        normalized_payload["build_spec"] = build_spec
+    data = payload.get("data")
+    if isinstance(data, dict):
+        data_build_spec = _normalize_build_spec_packet_path(data.get("build_spec"), stable_packet_path=stable_packet_path)
+        if data_build_spec is not None:
+            normalized_payload["data"] = {**data, "build_spec": data_build_spec}
+    if normalized_payload == payload:
         return result
+    return {**result, "payload": normalized_payload}
+
+
+def _normalize_build_spec_packet_path(build_spec: Any, *, stable_packet_path: str | None) -> dict[str, Any] | None:
+    if not isinstance(build_spec, dict):
+        return None
     transport_packet = build_spec.get("transport_packet")
     if not isinstance(transport_packet, dict):
-        return result
-    normalized_result = dict(result)
-    normalized_payload = dict(payload)
+        return None
     normalized_build_spec = dict(build_spec)
     source_notes = build_spec.get("source_notes")
     if isinstance(source_notes, list):
@@ -1081,9 +1097,7 @@ def _normalize_simc_transport_packet_path(
     else:
         normalized_transport_packet.pop("path", None)
     normalized_build_spec["transport_packet"] = normalized_transport_packet
-    normalized_payload["build_spec"] = normalized_build_spec
-    normalized_result["payload"] = normalized_payload
-    return normalized_result
+    return normalized_build_spec
 
 
 def _normalize_upgrade_result_build_packet_path(

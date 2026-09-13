@@ -100,7 +100,18 @@ def configure(
     resolved.provider = provider
     resolved.output = output
     ctx.obj = resolved
+    global _ACTIVE_COMMAND
+    _ACTIVE_COMMAND = ctx.invoked_subcommand
     return resolved
+
+
+# Subcommand resolved by Click for the current process; ``guarded_run`` labels escaping errors with it.
+_ACTIVE_COMMAND: str | None = None
+
+
+def _first_positional(args: list[str]) -> str:
+    """Best-effort command name when the callback never ran (for example a failure inside it)."""
+    return next((arg for arg in args if not arg.startswith("-")), "")
 
 
 def install_common_callback(app: typer.Typer, *, provider: str) -> None:
@@ -184,13 +195,15 @@ def guarded_run(app: typer.Typer, *, provider: str) -> None:
     Usage errors (exit 2) and ``typer.Exit`` propagate as SystemExit untouched. Everything else is
     written to stderr as compact JSON with the contract exit code; a traceback is never printed.
     """
+    global _ACTIVE_COMMAND
+    _ACTIVE_COMMAND = None
     app.pretty_exceptions_enable = False
     try:
         app()
     except (SystemExit, KeyboardInterrupt):
         raise
     except Exception as exc:
-        command = sys.argv[1] if len(sys.argv) > 1 else ""
+        command = _ACTIVE_COMMAND or _first_positional(sys.argv[1:])
         payload, exit_code = error_envelope_for(provider, command, exc)
         typer.echo(to_json(payload, pretty=False), err=True)
         raise SystemExit(exit_code) from exc

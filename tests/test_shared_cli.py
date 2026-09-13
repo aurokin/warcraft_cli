@@ -149,6 +149,23 @@ def test_guarded_run_maps_exceptions_to_error_envelopes(
         assert payload["error"]["message"] == "ValueError: bad"
 
 
+def test_guarded_run_names_the_command_when_global_flags_precede_it(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    app = typer.Typer(add_completion=False)
+    install_common_callback(app, provider="dummy")
+
+    @app.command("boom")
+    def boom(ctx: typer.Context) -> None:
+        raise ValueError("bad")
+
+    monkeypatch.setattr(sys, "argv", ["dummy", "--pretty", "--profile", "human", "boom"])
+    with pytest.raises(SystemExit):
+        guarded_run(app, provider="dummy")
+    payload = json.loads(capsys.readouterr().err)
+    assert payload["command"] == "boom"
+
+
 def test_guarded_run_lets_usage_errors_and_typer_exit_through(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     app = build_app()
     monkeypatch.setattr(sys, "argv", ["dummy", "--profile", "bogus", "show"])

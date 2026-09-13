@@ -80,6 +80,12 @@ def envelope_json_schema() -> dict[str, Any]:
                 description="Present only when `ok` is false.",
             )
         },
+        # TypedDicts cannot express that `error` depends on `ok`; state it here so validators
+        # reject a failure without an error and a success that carries one.
+        "allOf": [
+            {"if": {"required": ["ok"], "properties": {"ok": {"const": False}}}, "then": {"required": ["error"]}},
+            {"if": {"required": ["ok"], "properties": {"ok": {"const": True}}}, "then": {"not": {"required": ["error"]}}},
+        ],
     }
 
 

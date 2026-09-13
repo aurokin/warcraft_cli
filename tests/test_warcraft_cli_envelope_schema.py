@@ -39,6 +39,16 @@ def validate(instance: Any, schema: dict[str, Any], *, root: dict[str, Any], pat
     problems: list[str] = []
     if "enum" in schema and instance not in schema["enum"]:
         problems.append(f"{path}: {instance!r} is not one of {schema['enum']}")
+    if "const" in schema and instance != schema["const"]:
+        problems.append(f"{path}: {instance!r} is not {schema['const']!r}")
+    for subschema in schema.get("allOf", []):
+        problems.extend(validate(instance, subschema, root=root, path=path))
+    if "if" in schema:
+        branch = "then" if not validate(instance, schema["if"], root=root, path=path) else "else"
+        if branch in schema:
+            problems.extend(validate(instance, schema[branch], root=root, path=path))
+    if "not" in schema and not validate(instance, schema["not"], root=root, path=path):
+        problems.append(f"{path}: must not match {schema['not']}")
     if not isinstance(instance, dict):
         return problems
     properties: dict[str, Any] = schema.get("properties", {})
@@ -54,7 +64,7 @@ def validate(instance: Any, schema: dict[str, Any], *, root: dict[str, Any], pat
 def test_checked_in_schema_matches_the_generator() -> None:
     assert SCHEMA_PATH.read_text(encoding="utf-8") == envelope_schema_document(), (
         "schemas/envelope.schema.json is stale. Regenerate it with:\n"
-        "  .venv/bin/python -c \"import pathlib; from warcraft_cli.schema import envelope_schema_document; "
+        '  .venv/bin/python -c "import pathlib; from warcraft_cli.schema import envelope_schema_document; '
         "pathlib.Path('schemas/envelope.schema.json').write_text(envelope_schema_document())\""
     )
 
@@ -98,3 +108,25 @@ def test_schema_rejects_envelopes_the_contract_forbids() -> None:
     assert "$.ok: expected boolean, got str" in problems
     assert "$.schema_version: '2' is not one of ['1']" in problems
     assert "$.error: missing required key 'code'" in problems
+
+
+def test_schema_ties_error_to_ok() -> None:
+    schema = envelope_json_schema()
+    base = {
+        "provider": "warcraft",
+        "command": "doctor",
+        "kind": "doctor",
+        "schema_version": "1",
+        "query": None,
+        "provenance": {},
+        "data": {},
+    }
+
+    failure_without_error = validate({**base, "ok": False}, schema, root=schema)
+    assert "$: missing required key 'error'" in failure_without_error
+
+    success_with_error = validate({**base, "ok": True, "error": {"code": "x", "message": "y"}}, schema, root=schema)
+    assert any(problem.startswith("$: must not match") for problem in success_with_error)
+
+    assert validate({**base, "ok": True}, schema, root=schema) == []
+    assert validate({**base, "ok": False, "kind": "error", "error": {"code": "x", "message": "y"}}, schema, root=schema) == []

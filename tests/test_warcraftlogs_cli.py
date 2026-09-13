@@ -4335,8 +4335,8 @@ def test_warcraftlogs_graphql_introspection_uses_named_operation(monkeypatch) ->
     assert captured["operation_name"] == "IntrospectionQuery"
     assert "__schema" in captured["query"]
     assert payload["introspection"]["queryType"]["name"] == "Query"
-    # Introspection results live under `introspection`/`graphql`; the envelope `data` slot stays empty.
-    assert payload["data"] == {}
+    # Introspection results live under `introspection`/`graphql` and are mirrored into `data`.
+    assert payload["data"]["introspection"]["queryType"]["name"] == "Query"
     assert payload["graphql"]["queryType"]["name"] == "Query"
 
 

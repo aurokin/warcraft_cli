@@ -74,7 +74,7 @@ now deprecated in favour of `data`.
 
 ### Deprecated
 
-- **Top-level payload keys duplicated outside `data`.** Providers that historically emitted payload keys at the top level (`results`, `count`, `guide`, `entity`, `match`, `resolved`, `capabilities`, `report`, `status`, and similar) still emit them next to the envelope keys so existing agents keep working. Those copies are deprecated: read `data` where the provider populates it. They will be removed in a major release.
+- **Top-level payload keys duplicated outside `data`.** Providers that historically emitted payload keys at the top level (`results`, `count`, `guide`, `entity`, `match`, `resolved`, `capabilities`, `report`, `status`, and similar) still emit them next to the envelope keys so existing agents keep working. Those copies are deprecated and identical to `data`: read `data`. They will be removed in a major release.
 
 ## [0.5.0] - 2026-06-25
 

@@ -37,7 +37,7 @@ from warcraft_core.cli import (
     fail,
     guarded_run,
 )
-from warcraft_core.envelope import SCHEMA_VERSION, Envelope
+from warcraft_core.envelope import ENVELOPE_KEYS, SCHEMA_VERSION, Envelope
 from warcraft_core.identity import build_identity_payload, build_reference_transport_packet_payload, validate_talent_transport_packet
 from warcraft_core.output import DEFAULT_COMPACT_MAX_CHARS, OutputProjectionError, shape_payload, to_json
 from warcraft_core.output import emit as emit_json
@@ -57,6 +57,7 @@ from wowhead_cli.entities import (
     entity_linked_entities_payload,
     entity_page_fetch_more_command,
     entity_page_needs_fetch,
+    restore_cached_normalization_version,
     truncate_text,
 )
 from wowhead_cli.entity_types import (
@@ -524,8 +525,9 @@ def _attach_citation_pack(payload: dict[str, Any], *, enabled: bool) -> dict[str
 def _with_envelope_keys(ctx: typer.Context, payload: dict[str, Any]) -> dict[str, Any]:
     """Add the shared envelope keys a payload is missing, leaving its existing top-level keys in place.
 
-    Wowhead payloads are flat by history; agents already read those keys, so ``data`` stays empty
-    rather than re-nesting them. See docs/foundation/ERROR_CONTRACT.md.
+    Wowhead payloads are flat by history; ``data`` carries the same keys so agents can read the
+    envelope slot everywhere, and the top-level copies stay for older agents (deprecated). See
+    docs/foundation/ERROR_CONTRACT.md.
 
     ``schema_version`` is always the envelope's: entity responses cached before the envelope carried
     the normalization version there, and legacy keys may not shadow envelope keys.
@@ -539,7 +541,7 @@ def _with_envelope_keys(ctx: typer.Context, payload: dict[str, Any]) -> dict[str
         "schema_version": SCHEMA_VERSION,
         "query": None,
         "provenance": {},
-        "data": {},
+        "data": {key: value for key, value in payload.items() if key not in ENVELOPE_KEYS},
     }
     return {**defaults, **payload, "schema_version": SCHEMA_VERSION}
 
@@ -948,7 +950,7 @@ def _cached_entity_payload(
     if not isinstance(cached, dict):
         return None
     if "normalized" in cached:
-        return cached
+        return restore_cached_normalization_version(cached)
     return attach_entity_normalization(
         cached,
         entity_type=entity_type,

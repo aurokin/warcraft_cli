@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 from simc_cli.main import app as simc_app
-from simc_cli.provider import PROVIDER
+from simc_cli.provider import PROVIDER, simc_envelope
 from typer.testing import CliRunner
 from warcraft_core.envelope import SCHEMA_VERSION, envelope_violations
 from warcraft_core.provider import ProviderSurface
@@ -70,3 +70,13 @@ def test_provider_surface_is_pure_and_conforms(tmp_path: Path) -> None:
         assert envelope_violations(envelope) == []
         assert envelope["ok"] is True
     assert PROVIDER.search("mistweaver", repo_root=str(tmp_path))["data"]["coming_soon"] is True
+
+
+
+def test_simc_envelope_keeps_the_executed_argv_in_data() -> None:
+    """``run``/``sim``/``build``/``sync`` report the argv they executed; the envelope must not drop it."""
+    payload = simc_envelope("run", {"command": ["simc", "profile.simc", "iterations=1"], "returncode": 0})
+    assert payload["command"] == "run"
+    assert payload["data"]["command"] == ["simc", "profile.simc", "iterations=1"]
+    assert payload["data"]["returncode"] == 0
+    assert envelope_violations(payload) == []

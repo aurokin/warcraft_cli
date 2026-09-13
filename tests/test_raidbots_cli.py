@@ -310,6 +310,19 @@ def test_input_maps_transport_error_to_envelope(monkeypatch: pytest.MonkeyPatch)
     assert not envelope_violations(payload)
 
 
+def test_inspect_report_maps_malformed_data_json_to_invalid_report(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _raise(self, report_id):  # noqa: ANN001, ANN202
+        raise ValueError(f"Unexpected Raidbots data.json shape for report {report_id}.")
+
+    monkeypatch.setattr("raidbots_cli.client.RaidbotsClient.report_data", _raise)
+    result = runner.invoke(app, ["inspect-report", "x"])
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    payload = json.loads(result.stderr)
+    assert payload["error"]["code"] == "invalid_report"
+    assert not envelope_violations(payload)
+
+
 def test_inspect_report_rejects_unparseable_reference() -> None:
     result = runner.invoke(app, ["inspect-report", "not a report"])
     assert result.exit_code == 1

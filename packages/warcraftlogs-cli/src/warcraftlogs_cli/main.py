@@ -37,7 +37,7 @@ from warcraft_core.cli import (
 from warcraft_core.cli import (
     RuntimeConfig as BaseRuntimeConfig,
 )
-from warcraft_core.envelope import SCHEMA_VERSION, Envelope
+from warcraft_core.envelope import ENVELOPE_KEYS, SCHEMA_VERSION, Envelope
 from warcraft_core.exit_codes import EXIT_AUTH, exit_code_for
 from warcraft_core.identity import (
     ability_identity_payload,
@@ -285,10 +285,12 @@ def _envelope_defaults(command: str | None) -> dict[str, Any]:
 def _with_envelope_keys(payload: dict[str, Any], *, command: str | None) -> dict[str, Any]:
     """Add the shared envelope keys this payload is missing, never overwriting what a command set.
 
-    Warcraft Logs payloads stay flat (plus the deprecated canonical command key), so ``data`` is
-    empty for every command that has not been migrated to nest its body there.
+    Warcraft Logs payloads stay flat (plus the deprecated canonical command key); ``data`` mirrors
+    those keys so agents can read the envelope slot everywhere.
     """
     missing = {key: value for key, value in _envelope_defaults(command).items() if key not in payload}
+    if "data" in missing:
+        missing["data"] = {key: value for key, value in payload.items() if key not in ENVELOPE_KEYS}
     if not missing:
         return payload
     return {**payload, **missing}

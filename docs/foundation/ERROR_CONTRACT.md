@@ -42,8 +42,9 @@ deprecated legacy top-level keys below.
 ### Deprecated legacy top-level keys
 
 Providers that historically emitted payload keys at the top level (`results`, `count`, `entity`,
-`status`, ...) still emit them next to the envelope keys so existing agents keep working. Those
-top-level copies are deprecated; read `data` instead. Legacy keys never shadow envelope keys.
+`status`, ...) still emit them next to the envelope keys so existing agents keep working. `data`
+always carries the same payload, so read `data`; the top-level copies are deprecated. Legacy keys
+never shadow envelope keys.
 
 ## Error object
 
