@@ -91,8 +91,10 @@ Failures write an error envelope to stderr and exit with the shared codes from
 
 The wrapper registers this provider as `blizzard-api` with `expansion_mode="none"`: Blizzard routes
 by region and namespace class, which is not the wrapper's expansion axis, so it stays out of
-expansion fanout. A side effect shared with `simc` is that `warcraft --expansion <x> blizzard ...` is
-rejected; plain `warcraft blizzard ...` works.
+expansion fanout. `warcraft --expansion <x> blizzard ...` still runs: the wrapper ignores the
+expansion for this provider (Blizzard's default retail routing applies) and attaches an
+`expansion_advisory` note to the result. Pass `--region`/namespace flags explicitly when you need
+a specific game version.
 
 `blizzard_api_cli.provider.PROVIDER` is the in-process surface (`search`, `resolve`, `doctor`); it
 returns envelopes and never prints.

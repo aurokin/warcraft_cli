@@ -6225,3 +6225,19 @@ def test_normalize_simc_transport_packet_path_rewrites_both_build_spec_copies() 
     for copy in (dropped["payload"]["build_spec"], dropped["payload"]["data"]["build_spec"]):
         assert "path" not in copy["transport_packet"]
         assert copy["source_notes"] == ["talent transport packet"]
+
+
+def test_normalize_upgrade_result_drops_build_packet_from_both_input_copies() -> None:
+    from warcraft_cli.main import _normalize_upgrade_result_build_packet_path
+
+    upgrade_result = {
+        "ok": True,
+        "payload": {
+            "input": {"build_packet": "/tmp/gone.json", "apl": "x"},
+            "data": {"input": {"build_packet": "/tmp/gone.json", "apl": "x"}, "other": 1},
+        },
+    }
+    normalized = _normalize_upgrade_result_build_packet_path(upgrade_result, stable_packet_path=None)
+    assert normalized["payload"]["input"] == {"apl": "x"}
+    assert normalized["payload"]["data"]["input"] == {"apl": "x"}
+    assert normalized["payload"]["data"]["other"] == 1

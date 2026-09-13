@@ -59,6 +59,7 @@ def test_wowhead_search_stream_emits_jsonl_header_when_results_empty(monkeypatch
     header = json.loads(lines[0])
     assert header["stream"] == {"field": "results", "count": 0}
     assert header["results"] == []
+    assert header["data"]["results"] == []
 
 
 def test_wowhead_search_stream_emits_jsonl_header_and_records(monkeypatch) -> None:
@@ -84,6 +85,7 @@ def test_wowhead_search_stream_emits_jsonl_header_and_records(monkeypatch) -> No
     header = json.loads(lines[0])
     assert header["stream"] == {"field": "results", "count": 2}
     assert header["results"] == []
+    assert header["data"]["results"] == []
     record = json.loads(lines[1])
     assert record["record"]["id"] == 1
 

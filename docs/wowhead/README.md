@@ -15,7 +15,8 @@ Companion docs:
 Every command prints one JSON document. Successful payloads carry the shared envelope keys
 (`ok`, `provider`, `command`, `kind`, `schema_version`, `query`, `provenance`, `data`) alongside
 Wowhead's historical top-level keys such as `results`, `entity`, `comments`, and `linked_entities`.
-`data` stays empty because the payload keys are flat.
+`data` carries those same keys; the top-level copies are deprecated. With `--stream`, the JSONL
+header empties the streamed collection in both places.
 
 Failures print an error envelope on stderr and exit with the shared code:
 

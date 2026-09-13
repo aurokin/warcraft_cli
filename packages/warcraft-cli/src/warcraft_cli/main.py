@@ -1110,16 +1110,17 @@ def _normalize_upgrade_result_build_packet_path(
     payload = upgrade_result.get("payload")
     if not isinstance(payload, dict):
         return upgrade_result
-    input_payload = payload.get("input")
-    if not isinstance(input_payload, dict):
-        return upgrade_result
-    normalized_result = dict(upgrade_result)
     normalized_payload = dict(payload)
-    normalized_input = dict(input_payload)
-    normalized_input.pop("build_packet", None)
-    normalized_payload["input"] = normalized_input
-    normalized_result["payload"] = normalized_payload
-    return normalized_result
+    input_payload = payload.get("input")
+    if isinstance(input_payload, dict):
+        normalized_payload["input"] = {key: value for key, value in input_payload.items() if key != "build_packet"}
+    data = payload.get("data")
+    if isinstance(data, dict) and isinstance(data.get("input"), dict):
+        # simc dual-emits ``input`` under ``data``; the temporary packet file is gone by now.
+        normalized_payload["data"] = {**data, "input": {key: value for key, value in data["input"].items() if key != "build_packet"}}
+    if normalized_payload == payload:
+        return upgrade_result
+    return {**upgrade_result, "payload": normalized_payload}
 
 
 def _invoke_simc_with_transport_packet(

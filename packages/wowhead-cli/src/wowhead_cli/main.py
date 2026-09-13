@@ -496,17 +496,26 @@ def _emit_jsonl(ctx: typer.Context, payload: dict[str, Any], *, err: bool = Fals
         return
 
     field, rows = spec
-    header = dict(payload)
-    if field == "linked_entities.items":
-        linked = dict(header.get("linked_entities") or {})
-        linked["items"] = []
-        header["linked_entities"] = linked
-    else:
-        header[field] = []
+    header = _without_stream_rows(dict(payload), field)
+    data = header.get("data")
+    if isinstance(data, dict):
+        # ``data`` mirrors the flat payload, so the streamed rows must be cleared there as well.
+        header["data"] = _without_stream_rows(dict(data), field)
     header["stream"] = {"field": field, "count": len(rows)}
     typer.echo(to_json(header, pretty=False), err=err)
     for row in rows:
         typer.echo(to_json({"record": row}, pretty=False), err=err)
+
+
+def _without_stream_rows(mapping: dict[str, Any], field: str) -> dict[str, Any]:
+    """Empty the streamed collection in ``mapping`` (rows are emitted as separate JSONL records)."""
+    if field == "linked_entities.items":
+        linked = dict(mapping.get("linked_entities") or {})
+        linked["items"] = []
+        mapping["linked_entities"] = linked
+    elif field in mapping:
+        mapping[field] = []
+    return mapping
 
 
 def _attach_citation_pack(payload: dict[str, Any], *, enabled: bool) -> dict[str, Any]:

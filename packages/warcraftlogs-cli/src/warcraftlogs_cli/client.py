@@ -1248,6 +1248,8 @@ class EncounterRankingsOptions:
 def load_warcraftlogs_auth_config(*, start_dir: str | None = None) -> WarcraftLogsAuthConfig:
     """Resolve the client credentials from .env.local, then the provider env file, then the process environment.
 
+    The first layer with both ``WARCRAFTLOGS_CLIENT_ID`` and ``WARCRAFTLOGS_CLIENT_SECRET`` wins.
+
     Every layer is a pure read: ``os.environ`` is never mutated, so a concurrent command in the same
     process cannot observe (or inherit) credentials this call discovered.
     """
@@ -1259,18 +1261,24 @@ def load_warcraftlogs_auth_config(*, start_dir: str | None = None) -> WarcraftLo
     layers.append((provider_path, read_env_keys(provider_path, MANAGED_ENV_KEYS)))
     layers.append((None, {key: os.environ[key] for key in MANAGED_ENV_KEYS if os.environ.get(key)}))
 
-    def resolve(key: str) -> tuple[str | None, str | None]:
-        for source, values in layers:
-            value = values.get(key)
-            if value is not None and value.strip():
-                return value.strip(), source
-        return None, None
+    def pair(values: dict[str, str]) -> tuple[str | None, str | None]:
+        client_id = (values.get(CLIENT_ID_ENV) or "").strip() or None
+        client_secret = (values.get(CLIENT_SECRET_ENV) or "").strip() or None
+        return client_id, client_secret
 
-    client_id, id_source = resolve(CLIENT_ID_ENV)
-    client_secret, secret_source = resolve(CLIENT_SECRET_ENV)
-    # env_file names the file both halves came from; None means the process environment or a split pair.
-    env_file = id_source if client_id and client_secret and id_source == secret_source else None
-    return WarcraftLogsAuthConfig(client_id=client_id, client_secret=client_secret, env_file=env_file)
+    # A client ID and secret belong to one OAuth client, so the first layer holding a complete
+    # pair wins; halves from different layers are never combined.
+    for source, values in layers:
+        client_id, client_secret = pair(values)
+        if client_id and client_secret:
+            return WarcraftLogsAuthConfig(client_id=client_id, client_secret=client_secret, env_file=source)
+    # No layer is complete: report the highest-precedence layer's half so doctor can say what is
+    # missing, without stitching it to a half from another layer.
+    for _, values in layers:
+        client_id, client_secret = pair(values)
+        if client_id or client_secret:
+            return WarcraftLogsAuthConfig(client_id=client_id, client_secret=client_secret, env_file=None)
+    return WarcraftLogsAuthConfig(client_id=None, client_secret=None, env_file=None)
 
 
 def load_warcraftlogs_cache_settings_from_env() -> tuple[CacheSettings, int, int, int, int, int]:

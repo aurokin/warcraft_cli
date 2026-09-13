@@ -103,10 +103,9 @@ Every command emits one JSON document with the shared envelope keys (`ok`, `prov
 
 The payload body stays at the top level next to those keys so existing agent field paths keep
 working, and the per-command canonical key plus the older primary key are both still emitted and
-listed in [PAYLOAD_KEYS.md](PAYLOAD_KEYS.md). Because the body is not moved, `data` is `{}` for
-every command except `search`, `resolve`, and `doctor` -- the cross-provider surface, where `data`
-carries the same body the in-process provider object returns. Report and analytics payloads are
-large, so they are not duplicated a third time under `data`.
+listed in [PAYLOAD_KEYS.md](PAYLOAD_KEYS.md). `data` mirrors that body for every command, so
+agents can read the envelope slot without provider-specific paths; the top-level copies are
+deprecated. Use `--fields` or `--compact` to bound large report payloads.
 
 Failures print the error envelope to stderr and exit with the shared codes: `1` generic, `2` usage
 or invalid query, `3` auth, `4` not found, `5` network or upstream. A transport failure is always

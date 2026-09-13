@@ -4582,6 +4582,28 @@ def test_warcraftlogs_auth_config_does_not_leak_loaded_credentials_into_process_
     assert "WARCRAFTLOGS_CLIENT_SECRET" not in os.environ
 
 
+def test_warcraftlogs_auth_config_never_mixes_credential_halves_across_layers(monkeypatch, tmp_path) -> None:
+    """An ID from .env.local must not be paired with the secret of a different client in the provider file."""
+    repo_env = tmp_path / ".env.local"
+    repo_env.write_text("WARCRAFTLOGS_CLIENT_ID=repo-id\n")
+    provider_env = tmp_path / "warcraftlogs.env"
+    provider_env.write_text("WARCRAFTLOGS_CLIENT_ID=provider-id\nWARCRAFTLOGS_CLIENT_SECRET=provider-secret\n")
+    monkeypatch.setattr("warcraftlogs_cli.client.warcraftlogs_provider_env_path", lambda: str(provider_env))
+    monkeypatch.delenv("WARCRAFTLOGS_CLIENT_ID", raising=False)
+    monkeypatch.delenv("WARCRAFTLOGS_CLIENT_SECRET", raising=False)
+
+    auth = load_warcraftlogs_auth_config(start_dir=str(tmp_path))
+
+    assert (auth.client_id, auth.client_secret) == ("provider-id", "provider-secret")
+    assert auth.env_file == str(provider_env)
+
+    provider_env.write_text("WARCRAFTLOGS_CLIENT_SECRET=provider-secret\n")
+    halves = load_warcraftlogs_auth_config(start_dir=str(tmp_path))
+    assert halves.configured is False
+    assert (halves.client_id, halves.client_secret) == ("repo-id", None)
+    assert halves.env_file is None
+
+
 def test_warcraftlogs_pkce_exchange_uses_client_auth(monkeypatch) -> None:
     monkeypatch.setattr(
         "warcraftlogs_cli.client.load_warcraftlogs_auth_config",
