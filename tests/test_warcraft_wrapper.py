@@ -2305,7 +2305,8 @@ def test_warcraft_resolve_expansion_filter_blocks_retail_only_resolution(monkeyp
     assert payload["requested_expansion"] == "wotlk"
     assert payload["expansion_filter_active"] is True
     assert payload["resolved"] is False
-    assert payload["provider"] is None
+    assert payload["selected_provider"] is None
+    assert payload["provider"] == "warcraft"
     assert payload["included_providers"] == ["wowhead", "warcraftlogs"]
     assert {row["provider"] for row in payload["excluded_providers"]} == {
         "method",
