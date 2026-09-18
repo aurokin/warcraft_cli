@@ -80,6 +80,16 @@ Raw-only transport packets are not accepted as direct build input: upgrade them 
 `simc validate-talent-transport --build-packet <path> --out <path>` first. Malformed packets fail with
 `invalid_build_packet` on every command that reads one.
 
+Validation resolves every raw row against the local SimulationCraft trait data (class, spec, hero, and
+the hero-tree selection node, which is reported under tree `selection` and named after the hero tree),
+re-encodes the build through the SimC binary, and decodes it back. Two SimC decode behaviours are
+accounted for and surfaced in `validation.round_trip`: tiered nodes (one node whose ranks are spread
+over several entries) are compared by node presence and listed under `tiered_nodes`, and the keystone
+SimC grants for the hero tree the build did not pick is listed under `ignored_granted_hero_entries`.
+A packet stays `raw_only` with `simc_trait_resolution_incomplete` when the local checkout predates a
+talent, or `simc_round_trip_mismatch` with `expected_entries_by_tree` / `actual_entries_by_tree` when
+the decoded build differs.
+
 ## Commands
 
 | Command | Arguments | Flags | What it returns |

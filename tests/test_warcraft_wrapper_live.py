@@ -28,13 +28,6 @@ def _assert_selection_within(payload: dict[str, object], *, included: set[str]) 
     assert payload["resolved"] is (selected is not None)
 
 
-def _skip_if_wowprogress_blocked(error_payload: dict[str, object]) -> None:
-    error = error_payload.get("error") if isinstance(error_payload.get("error"), dict) else {}
-    error_code = error.get("code") if isinstance(error.get("code"), str) else None
-    if error_code == "blocked":
-        pytest.skip("WowProgress live requests are currently blocked by upstream bot protection.")
-
-
 @pytest.mark.live
 def test_live_warcraft_search_expansion_filter_only_uses_supported_providers() -> None:
     payload = _payload_for(["--expansion", "wotlk", "search", "thunderfury", "--limit", "3"])
@@ -47,7 +40,6 @@ def test_live_warcraft_search_expansion_filter_only_uses_supported_providers() -
         "icy-veins",
         "raiderio",
         "warcraft-wiki",
-        "wowprogress",
         "simc",
         "raidbots",
         "blizzard-api",
@@ -80,7 +72,6 @@ def test_live_warcraft_search_retail_filter_is_not_same_as_unfiltered_search() -
         "raiderio",
         "warcraftlogs",
         "warcraft-wiki",
-        "wowprogress",
         "lorrgs",
     }
     assert {row["provider"] for row in payload["excluded_providers"]} == {
@@ -104,7 +95,6 @@ def test_live_warcraft_resolve_retail_filter_can_use_fixed_retail_provider() -> 
         "raiderio",
         "warcraftlogs",
         "warcraft-wiki",
-        "wowprogress",
         "lorrgs",
     }
     assert {row["provider"] for row in payload["excluded_providers"]} == {
@@ -124,22 +114,17 @@ def test_live_warcraft_guild_contract() -> None:
 
     assert payload["ok"] is True
     assert payload["query"] == {"region": "us", "realm": "mal-ganis", "name": "gn"}
-    wowprogress_source = payload["sources"]["wowprogress"]
-    if wowprogress_source["status"] != "ok":
-        _skip_if_wowprogress_blocked(wowprogress_source)
-    assert payload["sources"]["wowprogress"]["status"] == "ok"
+    assert set(payload["sources"]) == {"raiderio"}
     assert payload["sources"]["raiderio"]["status"] == "ok"
 
 
 @pytest.mark.live
 def test_live_warcraft_guild_ranks_contract() -> None:
-    result = runner.invoke(app, ["guild-ranks", "us", "Mal'Ganis", "gn"])
-    if result.exit_code != 0:
-        _skip_if_wowprogress_blocked(json.loads(result.stderr or result.output))
-    assert result.exit_code == 0, result.output
-    payload = json.loads(result.stdout)
+    payload = _payload_for(["guild-ranks", "us", "Mal'Ganis", "gn"])
 
     assert payload["ok"] is True
-    assert payload["source"] == "wowprogress"
+    assert payload["source"] == "raiderio"
     assert payload["count"] >= 1
-    assert payload["tiers"][0]["raid"]
+    assert payload["count"] == len(payload["raids"])
+    assert payload["raids"][0]["raid_slug"]
+    assert set(payload["raids"][0]["ranks"]) == {"normal", "heroic", "mythic"}

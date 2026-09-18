@@ -144,7 +144,7 @@ Best fits:
 ## Notes
 
 - prefer `warcraftlogs` when official log data matters more than convenience summaries
-- use `wowprogress` or `raiderio` for their own ranking/profile strengths, not as substitutes for Warcraft Logs report data
+- use `raiderio` for its own ranking/profile strengths, not as a substitute for Warcraft Logs report data
 - `character-rankings` can return a provider permission error or a provider-side failure for some characters; treat it as useful but less stable than `guild-rankings`
 - `guild-members` depends on Warcraft Logs being able to verify the guild roster for that game; treat it as a retail-capable roster surface, not a universal promise across every future site profile
 - `guild-attendance` is part of the official schema, but live public queries can still fail with a provider-side internal error; use it when it works, but do not assume the endpoint is fully stable
@@ -168,6 +168,7 @@ Best fits:
   - for normal multi-fight reports, give it `--fight-id` or a report URL that already includes `#fight=<id>`
   - it only emits a packet when every selected talent-tree row is fully formed, and then keeps normalized raw `entry/node_id/rank` rows from the source tree as evidence
   - when local SimulationCraft trait data resolves every entry and the reconstructed build round-trips, it also includes validated `simc_split_talents`
+  - the hero-tree selection node is resolved (tree `selection`, named after the hero tree) but never enters the split strings; tiered nodes, where one node spreads ranks over several entries, are checked by node presence and listed under `validation.round_trip.tiered_nodes`; keystones SimC grants for the hero tree the build did not pick are listed under `ignored_granted_hero_entries`
   - otherwise it stays `raw_only` and tells you why validation could not be proven
   - malformed or incomplete talent-tree rows fail with `missing_talent_tree` instead of emitting a partial packet
 - `report-fights` is still the stable broad fight-list surface; use it to get fight IDs first, then move to `report-player-details`, `report-events`, `report-table`, or `report-graph` for deeper filtered analysis

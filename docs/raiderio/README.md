@@ -1,7 +1,8 @@
 # Raider.IO CLI
 
 `raiderio` queries the Raider.IO developer API (`https://raider.io/api/v1`) for character profiles,
-guild profiles, and Mythic+ leaderboard analytics. Requests are unauthenticated and cached on disk.
+guild profiles, guild raid rankings, and Mythic+ leaderboard analytics. Requests are unauthenticated
+and cached on disk. Guild raid leaderboards here replace the retired WowProgress provider.
 
 Design notes and the pre-implementation research record live in
 [../architecture/history/raiderio.md](../architecture/history/raiderio.md).
@@ -38,6 +39,8 @@ raiderio --fields data.results --pretty search "liquid"
 | `guild` | `REGION REALM NAME` | |
 | `mythic-plus-runs` | | `--season`, `--region`, `--dungeon`, `--affixes`, `--page` |
 | `leaderboard mythic-plus` | | scope flags, `--limit` (1-200, default 20) |
+| `leaderboard raids` | | `--raid` (required slug), `--difficulty normal\|heroic\|mythic` (default mythic), `--region` (default `world`; `us`, `eu`, `kr`, `tw`, `cn`), `--realm` (slug, needs a standard region), `--page` (default 0), `--limit` (1-200, default 20) |
+| `raids` | | `--expansion-id` (default 11 = Midnight; 10 = The War Within, 9 = Dragonflight) |
 | `sample mythic-plus-runs` | | scope flags, `--pages`, `--limit`, filter flags |
 | `sample mythic-plus-players` | | scope flags, `--pages`, `--limit`, `--player-limit`, filter flags |
 | `distribution mythic-plus-runs` | | `--metric`, scope flags, `--pages`, `--limit`, filter flags |
@@ -59,6 +62,34 @@ Metrics:
 - `distribution mythic-plus-players --metric`: `appearance_count`, `top_mythic_level`, `class`, `spec`, `role`, `player_region`
 - `threshold mythic-plus-runs --metric`: `score`, `mythic_level`
 
+## Raid Leaderboards
+
+`raiderio raids` lists the raid slugs Raider.IO knows for one expansion (kind `raid_catalog`).
+Each row carries `id`, `slug`, `name`, `short_name`, per-region `starts`/`ends` timestamps, and the
+`encounters` (`id`, `slug`, `name`) in order. Use it to discover the `--raid` value; slugs change
+every tier, so never hard-code one.
+
+`raiderio leaderboard raids --raid <slug>` returns guild rankings for one raid and difficulty
+(kind `raid_leaderboard`). The payload:
+
+- `query`: `raid`, `difficulty`, `region`, `realm` (`null` unless set), `page`, `limit`.
+- `count` and `sample` (`requested_limit`, `returned_row_count`, `pages_requested`,
+  `pages_fetched`, `limit_reached`). Rankings are read in 20-row pages starting at `--page`, so
+  `--limit 50` fetches up to three pages; `limit_reached: false` means the scope ran out of ranked
+  guilds, not that a cap was applied silently.
+- `rows`: one per guild with `rank`, `region_rank`, `realm_rank`, `guild` (`name`, `realm` slug,
+  `realm_name`, `region`, `faction`, `profile_url` on raider.io), `encounters_defeated_count`,
+  `encounters_pulled_count`, `encounters_defeated` (`slug`, `first_defeated`, `last_defeated`), and
+  `encounters_pulled` (`slug`, `num_pulls`, `best_percent`, `is_defeated`, `pull_started_at`).
+  `rank` is relative to the requested scope: world position for `--region world`, region position
+  for a region, and realm position when `--realm` is set. `region_rank` is always region-wide.
+  `realm_rank` is passed through when Raider.IO sends it and is `null` otherwise (it was absent in
+  every response observed so far).
+- `freshness` (`sampled_at`, `cache_ttl_seconds`) and `citations` (`leaderboard_urls`, the
+  raider.io rankings page for the scope), mirrored into the envelope's `provenance`.
+
+An unknown raid slug is a usage error (exit 2) because Raider.IO rejects it as invalid input.
+
 ## Examples
 
 ```bash
@@ -68,6 +99,9 @@ raiderio resolve "us illidan Cotti"
 raiderio character us illidan Cotti
 raiderio guild us illidan Liquid
 raiderio leaderboard mythic-plus --season current --region us --dungeon all --limit 20
+raiderio raids --expansion-id 11
+raiderio leaderboard raids --raid liberation-of-undermine --difficulty mythic --region us --limit 20
+raiderio leaderboard raids --raid liberation-of-undermine --region us --realm malganis --limit 10
 raiderio sample mythic-plus-runs --region us --limit 100 --contains-class demon-hunter
 raiderio distribution mythic-plus-runs --metric mythic_level --season current
 raiderio threshold mythic-plus-runs --metric score --value 3000

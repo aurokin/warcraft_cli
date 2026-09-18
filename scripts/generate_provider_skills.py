@@ -108,23 +108,6 @@ PROVIDERS: dict[str, ProviderSkill] = {
             "has already routed you here."
         ),
     ),
-    "wowprogress": ProviderSkill(
-        key="wowprogress",
-        display_name="WowProgress",
-        description=(
-            "Use the local `wowprogress` CLI for rankings, progression, guild profiles, and "
-            "sample-backed analytics when the caller already wants WowProgress."
-        ),
-        short_description="Use the local wowprogress command for rankings, progression, and analytics.",
-        default_prompt=(
-            "Use wowprogress for guild, character, leaderboard, and sampled progression analytics "
-            "when the caller already wants WowProgress or warcraft has already routed you there."
-        ),
-        intro=(
-            "Use `wowprogress` when the caller already wants WowProgress or when `warcraft` has "
-            "already routed you here."
-        ),
-    ),
     "warcraftlogs": ProviderSkill(
         key="warcraftlogs",
         display_name="Warcraft Logs",

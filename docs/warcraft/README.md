@@ -15,7 +15,6 @@ Tiers describe how much depth an agent should expect. `warcraft doctor` reports 
 | core | warcraftlogs | `warcraftlogs` | Report analytics; discovery is limited to explicit report references. |
 | core | simc | `simc` | Local SimulationCraft repo inspection, build decoding, and runs. |
 | supported | raiderio | `raiderio` | Character/guild profiles and Mythic+ leaderboards. |
-| supported | wowprogress | `wowprogress` | Guild rankings, raid tier history, and PvE leaderboards. |
 | supported | warcraft-wiki | `warcraft-wiki` | MediaWiki-backed reference article search and export. |
 | supported | icy-veins | `icy-veins` | Guide search, resolve, and guide bundle export. |
 | supported | method | `method` | Guide search, resolve, and guide bundle export. |
@@ -54,8 +53,8 @@ Every command's flags are listed in [docs/reference/warcraft.md](../reference/wa
 - `warcraft resolve` — pick the single best match plus its follow-up command; never resolves to a
   provider that reported `resolved: false`. `selected_provider` is the match's provider or `null`;
   `provider` mirrors it when resolved and is `warcraft` when nothing matched.
-- `warcraft guild` / `guild-history` / `guild-ranks` — merge one guild identity across raiderio and
-  wowprogress, with citations.
+- `warcraft guild` / `guild-ranks` — one guild identity's Raider.IO snapshot, and its per-raid
+  normal/heroic/mythic world, region, and realm ranks, with citations.
 - `warcraft actor-profile` — cross-walk a Warcraft Logs report actor to a Raider.IO profile.
 - `warcraft cooldown-packet` — compose Lorrgs phase windows with Warcraft Logs cast events for
   phase-scoped cooldown analysis.

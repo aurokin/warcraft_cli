@@ -17,7 +17,6 @@ LIVE_TEST_ENV := \
 	ICY_VEINS_LIVE_TESTS=1 \
 	RAIDERIO_LIVE_TESTS=1 \
 	WARCRAFT_WIKI_LIVE_TESTS=1 \
-	WOWPROGRESS_LIVE_TESTS=1 \
 	WARCRAFTLOGS_LIVE_TESTS=1 \
 	RAIDBOTS_LIVE_TESTS=1 \
 	LORRGS_LIVE_TESTS=1 \
@@ -52,7 +51,7 @@ test-fast:
 
 # Local end-to-end journeys through the installed binaries against real providers, using the
 # credentials in ~/.config/warcraft/providers. Never runs in CI. Exclude providers with
-# WARCRAFT_E2E_SKIP=curseforge,wowprogress; pass extra pytest args with E2E_ARGS="-k wowhead".
+# WARCRAFT_E2E_SKIP=curseforge; pass extra pytest args with E2E_ARGS="-k wowhead".
 test-e2e:
 	WARCRAFT_E2E=1 $(PYTEST) -q -m e2e tests/e2e --durations=25 $(E2E_ARGS)
 

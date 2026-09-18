@@ -139,13 +139,13 @@ def test_expansion_filter_never_resolves_to_an_excluded_provider() -> None:
     assert payload_or_legacy(result, "requested_expansion") == "wotlk"
     assert payload_or_legacy(result, "included_providers") == WOTLK_INCLUDED
     excluded = {row["provider"] for row in payload_or_legacy(result, "excluded_providers")}
-    assert {"raiderio", "wowprogress"} <= excluded, "retail-only guild providers must be dropped for wotlk"
+    assert "raiderio" in excluded, "the retail-only guild provider must be dropped for wotlk"
     selected = payload_or_legacy(result, "selected_provider")
     assert selected is None or selected in WOTLK_INCLUDED, result.describe()
 
 
-def test_guild_merges_one_identity_across_raiderio_and_wowprogress(require) -> None:
-    require("raiderio", "wowprogress")
+def test_guild_returns_one_identity_from_raiderio(require) -> None:
+    require("raiderio")
     result = run("warcraft", "guild", REGION, REALM, GUILD)
 
     assert result.payload["query"] == {"region": REGION, "realm": REALM_SLUG, "name": GUILD}
@@ -155,40 +155,30 @@ def test_guild_merges_one_identity_across_raiderio_and_wowprogress(require) -> N
     assert guild["realm"].lower().replace("'", "").replace("-", "") == "malganis"
 
     sources = payload_or_legacy(result, "sources")
-    assert set(sources) == {"raiderio", "wowprogress"}
-    for name, source in sources.items():
-        assert source["status"] == "ok", f"{name} source failed: {source.get('error')}"
-        # Each merged source keeps its own envelope, so the citation trail survives the merge.
-        assert source["payload"]["ok"] is True, name
-        assert source["payload"]["provenance"]["citations"], name
-    assert payload_or_legacy(result, "conflicts")["reasons"] == []
+    assert set(sources) == {"raiderio"}
+    source = sources["raiderio"]
+    assert source["status"] == "ok", f"raiderio source failed: {source.get('error')}"
+    # The source keeps its own envelope, so the citation trail survives the wrap.
+    assert source["payload"]["ok"] is True
+    assert source["payload"]["provenance"]["citations"]
 
 
-def test_guild_history_reports_the_wowprogress_tier_series_with_citations(require) -> None:
-    require("wowprogress")
-    result = run("warcraft", "guild-history", REGION, REALM, GUILD)
-
-    assert result.payload["kind"] == "guild_history"
-    assert payload_or_legacy(result, "source") == "wowprogress"
-    assert result.payload["query"] == {"region": REGION, "realm": REALM_SLUG, "name": GUILD}
-    tiers = payload_or_legacy(result, "tiers")
-    assert tiers and payload_or_legacy(result, "count") == len(tiers)
-    assert tiers[0]["raid"]
-    assert payload_or_legacy(result, "citations")["page"].startswith("https://www.wowprogress.com/guild/")
-
-
-def test_guild_ranks_reports_per_tier_ranks_with_citations(require) -> None:
-    require("wowprogress")
+def test_guild_ranks_reports_per_raid_ranks_with_citations(require) -> None:
+    require("raiderio")
     result = run("warcraft", "guild-ranks", REGION, REALM, GUILD)
 
     assert result.payload["kind"] == "guild_ranks"
-    assert payload_or_legacy(result, "source") == "wowprogress"
-    tiers = payload_or_legacy(result, "tiers")
-    assert tiers and payload_or_legacy(result, "count") == len(tiers)
-    ranked = [tier for tier in tiers if tier["final_ranks"]]
-    assert ranked, "at least one tier must carry final ranks"
-    assert {"world", "region", "realm"} <= set(ranked[0]["final_ranks"])
-    assert payload_or_legacy(result, "citations")["page"].startswith("https://www.wowprogress.com/guild/")
+    assert payload_or_legacy(result, "source") == "raiderio"
+    raids = payload_or_legacy(result, "raids")
+    assert raids and payload_or_legacy(result, "count") == len(raids)
+    for raid in raids:
+        assert raid["raid_slug"]
+        assert set(raid["ranks"]) == {"normal", "heroic", "mythic"}
+    mythic = [raid for raid in raids if raid["mythic_bosses_killed"]]
+    assert mythic, "at least one raid must have mythic progress"
+    for raid in mythic:
+        assert {"world", "region", "realm"} <= set(raid["ranks"]["mythic"]), raid["raid_slug"]
+    assert payload_or_legacy(result, "citations")["profile"].startswith("https://raider.io/guilds/")
 
 
 def test_passthrough_returns_the_provider_payload_unchanged(require) -> None:

@@ -11,12 +11,10 @@ import json
 import os
 from typing import Any
 
-import curl_cffi.requests
 import httpx
 import pytest
 import typer
 import warcraft_api.http
-import wowprogress_cli.client
 from cli_testkit import all_cli_apps, run_binary, walk_commands
 from warcraft_core.envelope import envelope_violations
 from warcraft_core.exit_codes import EXIT_NETWORK, exit_code_for
@@ -36,15 +34,12 @@ NETWORK_CASES: list[tuple[str, list[str], dict[str, str]]] = [
     ("warcraftlogs", ["zones"], {"WARCRAFTLOGS_CLIENT_ID": "x", "WARCRAFTLOGS_CLIENT_SECRET": "y"}),
     ("blizzard", ["realm", "illidan"], {"BLIZZARD_CLIENT_ID": "x", "BLIZZARD_CLIENT_SECRET": "y"}),
     ("curseforge", ["addon", "123"], {"CURSEFORGE_API_KEY": "x"}),
-    ("wowprogress", ["guild", "us", "illidan", "Liquid"], {}),
 ]
 CASE_IDS = [f"{binary}-{args[0]}" for binary, args, _ in NETWORK_CASES]
 
-# wowprogress reaches the network through curl_cffi (libcurl), not httpx, so it needs its own seam.
-CURL_TRANSPORT_BINARIES = frozenset({"wowprogress"})
 # These read sitemaps and article pages, so a non-JSON body is a normal response for them: it
 # yields zero results, not an error. "The body is not JSON" is only a failure mode for JSON APIs.
-MARKUP_RESPONSE_BINARIES = frozenset({"method", "icy-veins", "wowprogress"})
+MARKUP_RESPONSE_BINARIES = frozenset({"method", "icy-veins"})
 
 
 def _no_sleep(*args: Any, **kwargs: Any) -> None:
@@ -63,24 +58,6 @@ def _install_httpx_failure(monkeypatch: pytest.MonkeyPatch, mode: str) -> None:
         )
 
     monkeypatch.setattr(httpx.Client, "send", send)
-
-
-def _install_curl_failure(monkeypatch: pytest.MonkeyPatch, mode: str) -> None:
-    def get(self: Any, url: str, *args: Any, **kwargs: Any) -> Any:
-        if mode == "connect_error":
-            raise curl_cffi.requests.errors.RequestsError("offline")
-        return curl_cffi.requests.Response()
-
-    if mode == "http_status_error":
-        def get(self: Any, url: str, *args: Any, **kwargs: Any) -> Any:  # noqa: F811
-            response = curl_cffi.requests.Response()
-            response.status_code = 400
-            response.url = url
-            response.content = b"nope"
-            return response
-
-    monkeypatch.setattr(curl_cffi.requests.Session, "get", get)
-    monkeypatch.setattr(wowprogress_cli.client.time, "sleep", _no_sleep)
 
 
 def _first_json_object(text: str) -> dict[str, Any] | None:
@@ -114,10 +91,7 @@ def test_transport_failure_emits_an_error_envelope(
     for name, value in env.items():
         monkeypatch.setenv(name, value)
     monkeypatch.setattr(warcraft_api.http.time, "sleep", _no_sleep)
-    if binary in CURL_TRANSPORT_BINARIES:
-        _install_curl_failure(monkeypatch, mode)
-    else:
-        _install_httpx_failure(monkeypatch, mode)
+    _install_httpx_failure(monkeypatch, mode)
 
     result = run_binary(binary, args)
 
@@ -138,7 +112,6 @@ def test_wrapper_search_reports_every_provider_failure_as_an_error_row(monkeypat
     """A crashing provider must appear as ``ok: false`` with an error, never as ``payload: null``."""
     monkeypatch.setattr(warcraft_api.http.time, "sleep", _no_sleep)
     _install_httpx_failure(monkeypatch, "connect_error")
-    _install_curl_failure(monkeypatch, "connect_error")
 
     result = run_binary("warcraft", ["search", "thunderfury"])
 
@@ -146,7 +119,7 @@ def test_wrapper_search_reports_every_provider_failure_as_an_error_row(monkeypat
     payload = json.loads(result.stdout)
     rows = payload["providers"]
     assert rows, "the wrapper fanned out to no provider at all"
-    # Providers that answer free text without a request (warcraftlogs, wowprogress) stay ok; if none
+    # Providers that answer free text without a request (warcraftlogs) stay ok; if none
     # of the rest failed, the transport was not actually broken and this test proves nothing.
     assert any(not row["ok"] for row in rows), "no provider reached the broken transport"
     for row in rows:

@@ -68,7 +68,7 @@ Extraction rules when a function trips the gate:
 - extract into a shared package only when repetition is proven, not in anticipation
 
 Large `main.py` entry modules (`wowhead`, `warcraftlogs`, `simc`, the `warcraft` wrapper,
-`raiderio`, `wowprogress`) are where the gate bites first.
+`raiderio`) are where the gate bites first.
 
 ## Dead Code
 

@@ -66,19 +66,7 @@ Fan out a query to every resolve-ready provider and return the single best match
 
 ## warcraft guild
 
-Merge one guild identity across raiderio and wowprogress into a single reconciled payload.
-
-**Arguments**
-
-| Argument | Type | Default | Description |
-| --- | --- | --- | --- |
-| `region` | str | required | Region slug such as us or eu. |
-| `realm` | str | required | Realm title or slug. |
-| `name` | str | required | Guild name. |
-
-## warcraft guild-history
-
-Report a guild's recorded raid tier history from wowprogress, with citations.
+Return one guild identity's Raider.IO snapshot: identity, active raid, roster preview, citations.
 
 **Arguments**
 
@@ -90,7 +78,7 @@ Report a guild's recorded raid tier history from wowprogress, with citations.
 
 ## warcraft guild-ranks
 
-Report a guild's world/region/realm ranks per tier from wowprogress, with citations.
+Report a guild's per-raid progression with normal/heroic/mythic world, region, and realm ranks from Raider.IO.
 
 **Arguments**
 
@@ -262,7 +250,6 @@ Each entry forwards every remaining argument to that provider's own CLI.
 - `warcraft raiderio ...` -> [raiderio](raiderio.md): Proxy to the raiderio CLI (supported tier). Remaining arguments are passed through unchanged.
 - `warcraft warcraftlogs ...` -> [warcraftlogs](warcraftlogs.md): Proxy to the warcraftlogs CLI (core tier). Remaining arguments are passed through unchanged.
 - `warcraft warcraft-wiki ...` -> [warcraft-wiki](warcraft-wiki.md): Proxy to the warcraft-wiki CLI (supported tier). Remaining arguments are passed through unchanged.
-- `warcraft wowprogress ...` -> [wowprogress](wowprogress.md): Proxy to the wowprogress CLI (supported tier). Remaining arguments are passed through unchanged.
 - `warcraft simc ...` -> [simc](simc.md): Proxy to the simc CLI (core tier). Remaining arguments are passed through unchanged.
 - `warcraft raidbots ...` -> [raidbots](raidbots.md): Proxy to the raidbots CLI (experimental tier). Remaining arguments are passed through unchanged.
 - `warcraft blizzard ...` -> [blizzard](blizzard.md): Proxy to the blizzard CLI (experimental tier). Remaining arguments are passed through unchanged.

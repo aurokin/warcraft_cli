@@ -18,12 +18,14 @@ It is not:
 - a parser owner
 - an API schema owner
 
-Composition is a real wrapper responsibility, not an accident: `guild`, `guild-history`,
-`guild-ranks`, `actor-profile`, `cooldown-packet`, `guide-compare`, `guide-compare-query`,
-`guide-builds-simc`, `talent-packet`, and `talent-describe` all merge or hand off between two or
-more providers. No provider owns those workflows, so the wrapper does. The line the wrapper must not
-cross is *parsing or re-modelling a provider's source data*: composite commands consume provider
-payloads, preserve each source's provenance, and add their own reconciliation layer explicitly.
+Composition is a real wrapper responsibility, not an accident: `actor-profile`,
+`cooldown-packet`, `guide-compare`, `guide-compare-query`, `guide-builds-simc`, `talent-packet`,
+and `talent-describe` all merge or hand off between two or more providers. No provider owns those
+workflows, so the wrapper does. `guild` and `guild-ranks` are identity-normalizing wrappers over
+the single guild provider (`raiderio`) and keep the same source/provenance shape so a second source
+can be added without changing the contract. The line the wrapper must not cross is *parsing or
+re-modelling a provider's source data*: composite commands consume provider payloads, preserve each
+source's provenance, and add their own reconciliation layer explicitly.
 
 ## Required Provider Capabilities
 
@@ -122,7 +124,7 @@ provider row, and [ROADMAP.md](../ROADMAP.md) and `README.md` use the same membe
 | Tier | Providers | Meaning |
 |------|-----------|---------|
 | core | `wowhead`, `warcraftlogs`, `simc` | deepest surface and contracts; the product |
-| supported | `method`, `icy-veins`, `raiderio`, `warcraft-wiki`, `wowprogress` | real, narrower surfaces expected to work |
+| supported | `method`, `icy-veins`, `raiderio`, `warcraft-wiki` | real, narrower surfaces expected to work |
 | experimental | `raidbots`, `blizzard-api`, `curseforge`, `lorrgs` | thin or unproven; `blizzard-api` and `curseforge` are additionally unverified against live endpoints (`provenance.verified: false`) |
 
 Tier is descriptive, not a permission: it tells an agent how much to trust the surface before
@@ -185,7 +187,6 @@ Current examples:
 - `method` -> `retail`
 - `icy-veins` -> `retail`
 - `raiderio` -> `retail`
-- `wowprogress` -> `retail`
 - `lorrgs` -> `retail`
 - `raidbots` -> `retail`
 
@@ -238,8 +239,7 @@ Search result ordering rules:
 - provider-local ranking stays provider-specific
 - the wrapper may apply a thin, tunable cross-provider ranking layer on top of provider-local scores
 - that wrapper layer should be query-aware and use signals like provider family, result kind, and structured query hints
-- that wrapper layer may also use provider-specific boosts for certain intents, such as preferring `raiderio` for character-profile queries and `wowprogress` for guild-profile queries
-- the wrapper may add synthetic search candidates for narrow query families when a provider has a strong direct command surface but not a native search API for that family
+- that wrapper layer may also use provider-specific boosts for certain intents, such as preferring `raiderio` for character-profile and guild-profile queries
 - wrapper ranking must stay inspectable in output, not hidden behind opaque ordering
 - the wrapper should not invent a fake universal content model beyond that thin ranking/orchestration layer
 
@@ -298,7 +298,6 @@ It should not turn routing guidance into unsupported "smart answers."
 - `icy-veins` is ready
 - `raiderio` is ready for direct phase-1 retrieval plus provider-local search and conservative resolve
 - `warcraft-wiki` is ready
-- `wowprogress` is ready for structured search, conservative resolve, and direct phase-1 retrieval
 - `simc` is ready for direct local repo workflows plus readonly APL inspection, conservative reasoning, comparison, analysis packets, and runtime timing helpers, with `search` and `resolve` intentionally returning structured `coming_soon` payloads
 - `warcraftlogs` is ready for explicit report-scoped wrapper routing with OAuth client-credentials auth across the `retail`, `classic`, and `fresh` site profiles, typed world metadata, guild, character, and report commands. Wrapper `search`/`resolve` are intentionally limited to explicit report references (URL or a bare report code) and advertised as `ready_explicit_report_only`: a non-report query keeps `warcraftlogs` in the fanout but returns a structured discovery hint (`count: 0`, `resolved: false`, `message`, `supported_inputs`, `suggested_commands`) rather than a fabricated match
 - `raidbots` is ready for report consumption (`inspect-report`, `input`, `explain-input`) and local SimC handoff; `search`/`resolve` are `not_supported` (report-driven provider, no discovery surface)

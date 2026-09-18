@@ -93,7 +93,12 @@ def lorrgs_target() -> LorrgsTarget:
                 if not fights:
                     continue
                 fight_id = int(fights[0]["fight_id"])
-                cached = run("lorrgs", "user-report-fights", str(report["report_id"]), "--fight", str(fight_id))
+                # Ranked reports are not always loaded on Lorrgs; a 404 here means "try the next one".
+                cached = run("lorrgs", "user-report-fights", str(report["report_id"]), "--fight", str(fight_id), expect=None)
+                if not cached.ok:
+                    if cached.error_code != "not_found":
+                        raise JourneyFailure(f"unexpected Lorrgs failure\n{cached.describe()}")
+                    continue
                 players = ((payload_or_legacy(cached, "fights") or [{}])[0]).get("players") or []
                 if not players:
                     continue
@@ -297,7 +302,8 @@ def test_talent_describe_adds_simc_priority_output_for_the_report_build(require,
     assert result.payload["kind"] == "talent_describe", result.describe()
     packet = result.data["talent_transport_packet"]
     assert packet["transport_status"] == "validated", result.describe()
-    assert result.data["packet_path"] == str(packet_out) or packet_out.exists(), result.describe()
+    assert packet_out.exists(), result.describe()
+    assert result.data.get("written_packet_path", str(packet_out)) == str(packet_out), result.describe()
     assert json.loads(packet_out.read_text(encoding="utf-8"))["scope"]["actor_id"] == actor["id"]
     assert result.data["describe_result"], result.describe()
 

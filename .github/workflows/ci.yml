@@ -87,8 +87,6 @@ jobs:
             cli: simc
           - package: raiderio-cli
             cli: raiderio
-          - package: wowprogress-cli
-            cli: wowprogress
           - package: warcraft-wiki-cli
             cli: warcraft-wiki
           - package: icy-veins-cli

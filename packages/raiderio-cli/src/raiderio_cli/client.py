@@ -25,7 +25,8 @@ DEFAULT_CHARACTER_FIELDS = ",".join(
 DEFAULT_GUILD_FIELDS = ",".join(("raid_progression", "raid_rankings", "members"))
 
 
-def load_raiderio_cache_settings_from_env() -> tuple[CacheSettings, int, int, int, int]:
+def load_raiderio_cache_settings_from_env() -> tuple[CacheSettings, int, int, int, int, int]:
+    """Resolve cache settings plus the static, character, guild, M+ runs, and raid rankings TTLs."""
     settings = load_prefixed_cache_settings_from_env(
         env_prefix="RAIDERIO",
         default_cache_dir=DEFAULT_CACHE_DIR,
@@ -35,12 +36,14 @@ def load_raiderio_cache_settings_from_env() -> tuple[CacheSettings, int, int, in
             entity_page_html=900,
             guide_page_html=900,
             page_html=300,
+            entity_response=900,
         ),
         ttl_env_overrides={
             "search_suggestions": "RAIDERIO_STATIC_CACHE_TTL_SECONDS",
             "entity_page_html": "RAIDERIO_CHARACTER_CACHE_TTL_SECONDS",
             "guide_page_html": "RAIDERIO_GUILD_CACHE_TTL_SECONDS",
             "page_html": "RAIDERIO_MPLUS_RUNS_CACHE_TTL_SECONDS",
+            "entity_response": "RAIDERIO_RAID_RANKINGS_CACHE_TTL_SECONDS",
         },
     )
     return (
@@ -49,6 +52,7 @@ def load_raiderio_cache_settings_from_env() -> tuple[CacheSettings, int, int, in
         settings.ttls.entity_page_html,
         settings.ttls.guide_page_html,
         settings.ttls.page_html,
+        settings.ttls.entity_response,
     )
 
 
@@ -60,7 +64,7 @@ class RaiderIOClient:
         retry_attempts: int = DEFAULT_RETRY_ATTEMPTS,
     ) -> None:
         self._http_client: httpx.Client | None = None
-        settings, static_ttl, character_ttl, guild_ttl, mplus_runs_ttl = load_raiderio_cache_settings_from_env()
+        settings, static_ttl, character_ttl, guild_ttl, mplus_runs_ttl, raid_rankings_ttl = load_raiderio_cache_settings_from_env()
         self._timeout_seconds = timeout_seconds
         self._retry_attempts = max(1, retry_attempts)
         self._cache_settings = settings
@@ -69,6 +73,7 @@ class RaiderIOClient:
         self._character_ttl = character_ttl
         self._guild_ttl = guild_ttl
         self._mplus_runs_ttl = mplus_runs_ttl
+        self._raid_rankings_ttl = raid_rankings_ttl
 
     def close(self) -> None:
         if self._http_client is not None:
@@ -207,6 +212,42 @@ class RaiderIOClient:
             ttl_seconds=self._mplus_runs_ttl,
         )
 
+    def raid_rankings(
+        self,
+        *,
+        raid: str,
+        difficulty: str,
+        region: str,
+        realm: str | None = None,
+        limit: int,
+        page: int,
+    ) -> dict[str, Any]:
+        """One page of guild raid rankings; ``limit`` is the API page size (1-200)."""
+        params: dict[str, Any] = {
+            "raid": raid,
+            "difficulty": difficulty,
+            "region": region,
+            "limit": limit,
+            "page": page,
+        }
+        if realm:
+            params["realm"] = realm
+        return self._get_json(
+            "/raiding/raid-rankings",
+            params=params,
+            namespace="raid_rankings",
+            ttl_seconds=self._raid_rankings_ttl,
+        )
+
+    def raid_static_data(self, *, expansion_id: int) -> dict[str, Any]:
+        """Raid and encounter slugs for one expansion (11 = Midnight, 10 = The War Within, ...)."""
+        return self._get_json(
+            "/raiding/static-data",
+            params={"expansion_id": expansion_id},
+            namespace="raid_static_data",
+            ttl_seconds=self._static_ttl,
+        )
+
     def search(self, *, term: str, kind: str | None = None) -> dict[str, Any]:
         params: dict[str, Any] = {"term": term}
         if kind and kind != "all":
@@ -221,3 +262,7 @@ class RaiderIOClient:
     @property
     def mythic_plus_runs_ttl_seconds(self) -> int:
         return self._mplus_runs_ttl
+
+    @property
+    def raid_rankings_ttl_seconds(self) -> int:
+        return self._raid_rankings_ttl

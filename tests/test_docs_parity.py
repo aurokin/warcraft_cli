@@ -37,7 +37,6 @@ PROVIDER_DOC_DIRS = {
     "warcraft-wiki": "warcraft-wiki",
     "warcraftlogs": "warcraftlogs",
     "wowhead": "wowhead",
-    "wowprogress": "wowprogress",
 }
 SHELL_INFO_STRINGS = frozenset({"", "bash", "sh", "shell", "zsh", "console"})
 # Lines containing any of these are shell constructs, not a single command invocation.

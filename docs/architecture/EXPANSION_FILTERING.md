@@ -22,7 +22,6 @@ When a caller requests a specific game version, the wrapper must not silently mi
 | `method` | `fixed` | `retail` | |
 | `icy-veins` | `fixed` | `retail` | |
 | `raiderio` | `fixed` | `retail` | |
-| `wowprogress` | `fixed` | `retail` | |
 | `warcraft-wiki` | `fixed` | `retail` | Reference content; wrapper excludes non-retail until classic routing exists |
 | `simc` | `none` | — | Local analysis versioning differs; proxy relaxes to passthrough (see Phase 4) |
 | `warcraftlogs` | `profiled` | `retail`, classic family, `fresh` | Site-profile routing: retail -> `www`, classic-family -> `classic`, `fresh` -> `fresh` |

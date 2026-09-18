@@ -39,7 +39,15 @@ def _write_fake_generated_repo(root: Path) -> None:
 """
     )
     (generated / "trait_data.inc").write_text(
-        "static constexpr std::array<trait_data_t, 4> __trait_data_data { {\n"
+        "static constexpr std::array<trait_data_t, 8> __trait_data_data { {\n"
+        '  { 2, 11, 120001, 98001, 1, 0, 0, 0, 0, 0, 5, 5, 100, "Tiered Growth", '
+        "{ 102, 0, 0, 0 }, { 0, 0, 0, 0 }, 0, 1 },\n"
+        '  { 2, 11, 120002, 98001, 2, 0, 0, 0, 0, 0, 5, 5, 200, "Tiered Growth", '
+        "{ 102, 0, 0, 0 }, { 0, 0, 0, 0 }, 0, 1 },\n"
+        '  { 3, 11, 117999, 94999, 1, 0, 0, 0, 0, 0, 1, 3, 100, "Other Keystone", '
+        "{ 102, 103, 0, 0 }, { 102, 103, 0, 0 }, 25, 0 },\n"
+        '  { 4, 11, 123400, 99900, 1, 0, 0, 0, 0, 0, 1, 1, 200, "0", '
+        "{ 102, 0, 0, 0 }, { 0, 0, 0, 0 }, 24, 3 },\n"
         '  { 1, 11, 103324, 82244, 1, 23, 108329, 29166, 0, 0, 10, 8, 100, "Innervate", '
         "{ 0, 0, 0, 0 }, { 0, 0, 0, 0 }, 0, 0 },\n"
         '  { 2, 11, 109839, 88206, 1, 20, 114844, 394013, 0, 102560, 9, 4, 100, '
@@ -51,6 +59,7 @@ def _write_fake_generated_repo(root: Path) -> None:
         "} };\n"
         "static constexpr std::array<std::tuple<unsigned, const char*, unsigned>, 1> __trait_sub_tree_data { {\n"
         '  { 24, "Elune\'s Chosen", 11 },\n'
+        '  { 25, "Other Tree", 11 },\n'
         "} };\n"
     )
 
@@ -99,6 +108,90 @@ def test_validate_talent_tree_transport_builds_validated_split_forms(tmp_path: P
     ]
 
 
+def test_validate_talent_tree_transport_resolves_hero_selection_nodes_outside_transport_forms(tmp_path: Path) -> None:
+    """Warcraft Logs lists the hero-tree selection node as a talent; SimC keeps it under tree index 4."""
+    _write_fake_generated_repo(tmp_path)
+
+    def round_trip(build_spec: BuildSpec) -> RoundTripResult:
+        return RoundTripResult(wow_talent_export="ENCODED123", entries_by_tree={"class": {}, "spec": {}, "hero": {117176: 1}})
+
+    payload = validate_talent_tree_transport(
+        actor_class="druid",
+        spec="balance",
+        talent_tree_rows=[
+            {"entry": 117176, "node_id": 94585, "rank": 1},
+            {"entry": 123400, "node_id": 99900, "rank": 1},
+        ],
+        backend=TalentTransportBackend(trait_data_root=tmp_path, round_trip=round_trip),
+    )
+
+    assert payload["validation"]["status"] == "validated", payload["validation"]
+    assert payload["transport_forms"]["simc_split_talents"] == {"class_talents": None, "spec_talents": None, "hero_talents": "117176:1"}
+    selection = payload["validation"]["resolved_entries"][1]
+    assert selection["tree"] == "selection"
+    assert selection["name"] == "Elune's Chosen"
+    assert selection["hero_tree"] == "Elune's Chosen"
+
+
+def _tiered_and_hero_rows() -> list[dict[str, int]]:
+    return [
+        {"entry": 117176, "node_id": 94585, "rank": 1},
+        {"entry": 123400, "node_id": 99900, "rank": 1},
+        {"entry": 120001, "node_id": 98001, "rank": 1},
+        {"entry": 120002, "node_id": 98001, "rank": 2},
+    ]
+
+
+def test_validate_talent_tree_transport_compares_tiered_nodes_by_presence(tmp_path: Path) -> None:
+    """SimC's decode prints one line per tiered node, naming the first entry with the leftover rank (0)."""
+    _write_fake_generated_repo(tmp_path)
+    backend = _fake_backend(tmp_path, export="ENCODED123", entries_by_tree={"class": {}, "spec": {120001: 0}, "hero": {117176: 1}})
+
+    payload = validate_talent_tree_transport(actor_class="druid", spec="balance", talent_tree_rows=_tiered_and_hero_rows(), backend=backend)
+
+    assert payload["validation"]["status"] == "validated", payload["validation"]
+    assert payload["transport_forms"]["simc_split_talents"]["spec_talents"] == "120001:1/120002:2"
+    assert payload["validation"]["round_trip"]["tiered_nodes"] == [
+        {
+            "tree": "spec",
+            "node_id": 98001,
+            "name": "Tiered Growth",
+            "entries": [{"entry": 120001, "rank": 1}, {"entry": 120002, "rank": 2}],
+            "total_rank": 3,
+            "compared_by": "node_presence",
+            "present_in_round_trip": True,
+        }
+    ]
+
+
+def test_validate_talent_tree_transport_rejects_a_tiered_node_missing_from_the_round_trip(tmp_path: Path) -> None:
+    _write_fake_generated_repo(tmp_path)
+    backend = _fake_backend(tmp_path, export="ENCODED123", entries_by_tree={"class": {}, "spec": {}, "hero": {117176: 1}})
+
+    payload = validate_talent_tree_transport(actor_class="druid", spec="balance", talent_tree_rows=_tiered_and_hero_rows(), backend=backend)
+
+    assert payload["validation"]["reason"] == "simc_round_trip_mismatch"
+    assert payload["validation"]["tiered_nodes"][0]["present_in_round_trip"] is False
+
+
+def test_validate_talent_tree_transport_ignores_keystones_from_unselected_hero_trees(tmp_path: Path) -> None:
+    """SimC grants the keystone of every hero tree the spec can pick; only the selected tree counts."""
+    _write_fake_generated_repo(tmp_path)
+    backend = _fake_backend(tmp_path, export="ENCODED123", entries_by_tree={"class": {}, "spec": {}, "hero": {117176: 1, 117999: 1}})
+
+    payload = validate_talent_tree_transport(
+        actor_class="druid",
+        spec="balance",
+        talent_tree_rows=[{"entry": 117176, "node_id": 94585, "rank": 1}, {"entry": 123400, "node_id": 99900, "rank": 1}],
+        backend=backend,
+    )
+
+    assert payload["validation"]["status"] == "validated", payload["validation"]
+    assert payload["validation"]["round_trip"]["ignored_granted_hero_entries"] == [
+        {"entry": 117999, "name": "Other Keystone", "hero_tree": "Other Tree", "hero_tree_id": 25}
+    ]
+
+
 def test_validate_talent_tree_transport_reports_round_trip_mismatch(tmp_path: Path) -> None:
     _write_fake_generated_repo(tmp_path)
 
@@ -111,7 +204,7 @@ def test_validate_talent_tree_transport_reports_round_trip_mismatch(tmp_path: Pa
 
     assert payload["transport_forms"] == {}
     assert payload["validation"]["reason"] == "simc_round_trip_mismatch"
-    assert payload["validation"]["expected_entries_by_tree"] == {"class": {103324: 1}, "spec": {}, "hero": {}}
+    assert payload["validation"]["expected_entries_by_tree"] == {"class": {"103324": 1}, "spec": {}, "hero": {}}
 
 
 def test_validate_talent_tree_transport_reports_round_trip_failure(tmp_path: Path) -> None:

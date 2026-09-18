@@ -38,12 +38,13 @@ from raiderio_cli.provider import (
     raiderio_envelope,
     transport_errors,
 )
+from raiderio_cli.raids import raid_catalog_rows, sample_raid_rankings, validated_raid_scope
 
 app = typer.Typer(add_completion=False, help="Raider.IO profile and leaderboard CLI.")
 sample_app = typer.Typer(add_completion=False, help="Sample-backed Raider.IO analytics primitives.")
 distribution_app = typer.Typer(add_completion=False, help="Derived distributions built from Raider.IO samples.")
 threshold_app = typer.Typer(add_completion=False, help="Threshold-style estimates derived from sampled Raider.IO runs.")
-leaderboard_app = typer.Typer(add_completion=False, help="Season-scoped Raider.IO leaderboard views.")
+leaderboard_app = typer.Typer(add_completion=False, help="Season- and raid-scoped Raider.IO leaderboard views.")
 app.add_typer(sample_app, name="sample")
 app.add_typer(distribution_app, name="distribution")
 app.add_typer(threshold_app, name="threshold")
@@ -389,6 +390,85 @@ def leaderboard_mythic_plus(
                 "freshness": freshness_payload(meta),
                 "citations": citations_payload(meta),
             },
+        ),
+    )
+
+
+@leaderboard_app.command("raids")
+def leaderboard_raids(
+    ctx: typer.Context,
+    raid: str = typer.Option(..., "--raid", help="Raid slug from `raiderio raids`, such as liberation-of-undermine."),
+    difficulty: str = typer.Option("mythic", "--difficulty", help="normal, heroic, or mythic."),
+    region: str = typer.Option("world", "--region", help="world, us, eu, kr, tw, or cn."),
+    realm: str = typer.Option("", "--realm", help="Realm slug to narrow to (requires a standard --region)."),
+    page: int = typer.Option(0, "--page", min=0, help="20-row page of rankings to start from."),
+    limit: int = typer.Option(20, "--limit", min=1, max=200, help="Maximum guild rows to return."),
+) -> None:
+    """Return the guild raid rankings for one raid and difficulty with freshness and citations.
+
+    Replaces the retired WowProgress guild leaderboards. ``rank`` is relative to the requested
+    scope (realm position when ``--realm`` is set); ``region_rank`` is always region-wide. It fetches
+    as many 20-row pages as ``--limit`` requires and reports returned-vs-requested counts.
+    """
+    with _command_errors(ctx), open_client() as client:
+        difficulty, region, realm_slug = validated_raid_scope(difficulty=difficulty, region=region, realm=realm)
+        rows, meta = sample_raid_rankings(
+            client,
+            raid=raid.strip(),
+            difficulty=difficulty,
+            region=region,
+            realm=realm_slug,
+            page=page,
+            limit=limit,
+        )
+    emit(
+        ctx,
+        raiderio_envelope(
+            command="raids",
+            kind="raid_leaderboard",
+            payload={
+                "query": {
+                    "raid": raid.strip(),
+                    "difficulty": difficulty,
+                    "region": region,
+                    "realm": realm_slug,
+                    "page": page,
+                    "limit": limit,
+                },
+                "count": len(rows),
+                "sample": {
+                    "requested_limit": limit,
+                    "returned_row_count": len(rows),
+                    "pages_requested": meta["pages_requested"],
+                    "pages_fetched": meta["pages_fetched"],
+                    # False => the provider ran out of ranked guilds before --limit (not a silent cap).
+                    "limit_reached": len(rows) >= limit,
+                },
+                "rows": rows,
+                "freshness": freshness_payload(meta),
+                "citations": citations_payload(meta),
+            },
+        ),
+    )
+
+
+@app.command("raids")
+def raids(
+    ctx: typer.Context,
+    expansion_id: int = typer.Option(
+        11, "--expansion-id", min=1, help="Expansion id: 11 = Midnight, 10 = The War Within, 9 = Dragonflight."
+    ),
+) -> None:
+    """List the raid slugs (and encounter slugs) Raider.IO knows for one expansion."""
+    with _command_errors(ctx), open_client() as client:
+        payload = client.raid_static_data(expansion_id=expansion_id)
+    rows = raid_catalog_rows(payload)
+    emit(
+        ctx,
+        raiderio_envelope(
+            command="raids",
+            kind="raid_catalog",
+            payload={"query": {"expansion_id": expansion_id}, "count": len(rows), "rows": rows},
         ),
     )
 

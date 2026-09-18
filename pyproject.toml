@@ -10,7 +10,6 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
   "beautifulsoup4>=4.13.0,<5.0.0",
-  "curl_cffi>=0.14.0,<1.0.0",
   "httpx>=0.28.1,<1.0.0",
   "orjson>=3.10.16,<4.0.0",
   "typer>=0.12.5,<1.0.0",
@@ -39,7 +38,6 @@ method = "method_cli.main:run"
 icy-veins = "icy_veins_cli.main:run"
 raiderio = "raiderio_cli.main:run"
 warcraft-wiki = "warcraft_wiki_cli.main:run"
-wowprogress = "wowprogress_cli.main:run"
 simc = "simc_cli.main:run"
 warcraftlogs = "warcraftlogs_cli.main:run"
 raidbots = "raidbots_cli.main:run"
@@ -108,7 +106,6 @@ files = [
   "packages/icy-veins-cli/src/icy_veins_cli",
   "packages/raiderio-cli/src/raiderio_cli",
   "packages/warcraft-wiki-cli/src/warcraft_wiki_cli",
-  "packages/wowprogress-cli/src/wowprogress_cli",
   "packages/simc-cli/src/simc_cli",
   "packages/warcraftlogs-cli/src/warcraftlogs_cli",
   "packages/raidbots-cli/src/raidbots_cli",
@@ -116,7 +113,7 @@ files = [
   "packages/curseforge-cli/src/curseforge_cli",
   "packages/lorrgs-cli/src/lorrgs_cli",
 ]
-mypy_path = "packages/warcraft-core/src:packages/warcraft-api/src:packages/warcraft-content/src:packages/warcraft-cli/src:packages/wowhead-cli/src:packages/method-cli/src:packages/icy-veins-cli/src:packages/raiderio-cli/src:packages/warcraft-wiki-cli/src:packages/wowprogress-cli/src:packages/simc-cli/src:packages/warcraftlogs-cli/src:packages/raidbots-cli/src:packages/blizzard-api-cli/src:packages/curseforge-cli/src:packages/lorrgs-cli/src"
+mypy_path = "packages/warcraft-core/src:packages/warcraft-api/src:packages/warcraft-content/src:packages/warcraft-cli/src:packages/wowhead-cli/src:packages/method-cli/src:packages/icy-veins-cli/src:packages/raiderio-cli/src:packages/warcraft-wiki-cli/src:packages/simc-cli/src:packages/warcraftlogs-cli/src:packages/raidbots-cli/src:packages/blizzard-api-cli/src:packages/curseforge-cli/src:packages/lorrgs-cli/src"
 check_untyped_defs = true
 ignore_missing_imports = true
 no_implicit_optional = true
@@ -137,7 +134,6 @@ packages = [
   "packages/icy-veins-cli/src/icy_veins_cli",
   "packages/raiderio-cli/src/raiderio_cli",
   "packages/warcraft-wiki-cli/src/warcraft_wiki_cli",
-  "packages/wowprogress-cli/src/wowprogress_cli",
   "packages/simc-cli/src/simc_cli",
   "packages/warcraftlogs-cli/src/warcraftlogs_cli",
   "packages/raidbots-cli/src/raidbots_cli",

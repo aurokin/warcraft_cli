@@ -19,7 +19,7 @@ make reference
 Workspace command behavior:
 - `uv sync --all-extras` (or `make install`) creates and updates the checkout-local `.venv`; `pip install -e '.[dev,redis]'` still works
 - `make check` runs lint, typecheck, import boundaries, the complexity gate, dead-code detection, and the fast test suite
-- `make test-live` runs every opt-in live provider suite, and `make test-live-matrix` runs the cross-provider live matrix. Each suite is gated on its own flag, so you can run one at a time — `WOWHEAD_LIVE_TESTS`, `METHOD_LIVE_TESTS`, `ICY_VEINS_LIVE_TESTS`, `RAIDERIO_LIVE_TESTS`, `WARCRAFT_WIKI_LIVE_TESTS`, `WOWPROGRESS_LIVE_TESTS`, `WARCRAFTLOGS_LIVE_TESTS`, `RAIDBOTS_LIVE_TESTS`, `LORRGS_LIVE_TESTS`, `BLIZZARD_LIVE_TESTS`, `CURSEFORGE_LIVE_TESTS`, `WARCRAFT_WRAPPER_LIVE_TESTS` — set to `1` with the matching test file, for example `WOWHEAD_LIVE_TESTS=1 pytest -q -m live tests/test_live_integration.py`. The file-to-flag registry lives in `tests/conftest.py`
+- `make test-live` runs every opt-in live provider suite, and `make test-live-matrix` runs the cross-provider live matrix. Each suite is gated on its own flag, so you can run one at a time — `WOWHEAD_LIVE_TESTS`, `METHOD_LIVE_TESTS`, `ICY_VEINS_LIVE_TESTS`, `RAIDERIO_LIVE_TESTS`, `WARCRAFT_WIKI_LIVE_TESTS`, `WARCRAFTLOGS_LIVE_TESTS`, `RAIDBOTS_LIVE_TESTS`, `LORRGS_LIVE_TESTS`, `BLIZZARD_LIVE_TESTS`, `CURSEFORGE_LIVE_TESTS`, `WARCRAFT_WRAPPER_LIVE_TESTS` — set to `1` with the matching test file, for example `WOWHEAD_LIVE_TESTS=1 pytest -q -m live tests/test_live_integration.py`. The file-to-flag registry lives in `tests/conftest.py`
 - `make reference` regenerates `docs/reference/`; `make skills` regenerates the generated provider subskills. Neither output is hand-edited
 - `make dev-deploy-no-link` refreshes the checkout-local editable environment without rewriting host-level command wrappers; `make worktree-env` regenerates `.warcraft/worktree-env.sh`, and `source .warcraft/worktree-env.sh` activates worktree-local `PATH`, data, and cache roots
 - `WARCRAFT_ALLOW_LINK_BIN=1 make dev-deploy` is a deliberate exception that repoints `~/.local/bin` at the current checkout
@@ -104,7 +104,6 @@ warcraft simc analysis-packet <simc-root>/ActionPriorityLists/default/monk_mistw
 - `raiderio` is a phase-1 API provider for direct character, guild, and Mythic+ runs lookups.
 - `raiderio` includes real search and conservative resolve on top of the live site search surface.
 - `warcraft-wiki` is a reference provider with MediaWiki-backed search, resolve, typed `api` / `event` lookups, article export, and local query.
-- `wowprogress` is a rankings provider with structured search, conservative resolve, direct guild/character/PvE leaderboard lookups, and sample-backed leaderboard analytics primitives.
 - `warcraftlogs` is an official API provider with OAuth client-credentials auth plus typed world metadata, guild, character, and report lookups; `--site retail|classic|fresh` selects the site profile and the wrapper maps `--expansion` onto it.
 - `warcraftlogs` is wired into wrapper `doctor`, passthrough, and conservative wrapper `search` / `resolve`.
 - wrapper discovery for `warcraftlogs` is intentionally narrow: only explicit report URLs and bare mixed-alphanumeric report codes resolve through the wrapper.
@@ -115,8 +114,8 @@ warcraft simc analysis-packet <simc-root>/ActionPriorityLists/default/monk_mistw
   - it uses Warcraft Logs `report-events --data-type casts` for the selected player's exact cast timestamps
   - it uses Lorrgs `spec-spells`, `boss-spells`, and optional `spec-ranking` samples to label cooldowns and compare top-parse phase timing
   - it emits phase windows, selected-phase player casts, selected-phase boss casts, tracked spell metadata, top-parse samples, source commands, and notes; it does not synthesize strategy advice
-- `warcraft guild` is a first-class merged guild workflow that normalizes region/realm/name input, preserves the provider-native Raider.IO and WowProgress payloads under each source, and reports explicit source disagreements as an additive wrapper layer.
-- `warcraft guild-history` and `warcraft guild-ranks` currently route through the WowProgress provider surface and preserve the wrapped provider payload alongside the wrapper summary.
+- `warcraft guild` normalizes region/realm/name input and returns the Raider.IO guild snapshot (identity, active raid, roster preview, citations) with the provider-native payload preserved under `sources.raiderio`.
+- `warcraft guild-ranks` returns the guild's per-raid progression from Raider.IO: `raids[]` rows carry `raid_slug`, `summary`, boss-kill counts per difficulty, and `ranks.normal|heroic|mythic` with `world`/`region`/`realm` ranks as Raider.IO reports them (`0` means unranked). Raider.IO only carries the current expansion, so there is no cross-expansion tier history. For cross-guild raid leaderboards use `raiderio leaderboard raids`.
 - `warcraft guide-compare` compares exported guide bundles across providers using raw section evidence, additive `analysis_surfaces`, and explicit `build_references`, while preserving provider provenance and source citations instead of flattening the guides into one fake summary
 - `guide-compare` also emits a top-level `freshness` rollup and a `comparison_evidence` block (compared bundle count, providers, matching rules, and per-bundle freshness from each bundle's `exported_at`); `--max-age-hours` (default `24`) sets the per-bundle freshness threshold. Method/Icy Veins/Warcraft Wiki bundles carry an `exported_at` timestamp in their manifest; older bundles without it degrade to `stale`/`missing_exported_at` rather than failing
 - `warcraft guide-compare-query` conservatively resolves one guide per supported provider, exports those bundles locally, and then runs the same comparison packet over the exported evidence
@@ -157,11 +156,9 @@ warcraft simc analysis-packet <simc-root>/ActionPriorityLists/default/monk_mistw
 - use `--ranking-debug` when you want compact ranking summaries for the top wrapper candidates
 - use `--expansion-debug` when you want a compact per-provider expansion eligibility snapshot
 - wrapper ranking policy can be overridden with `~/.config/warcraft/wrapper_ranking.json`
-- the wrapper may add synthetic search candidates when a provider has a strong direct command but no native search surface for that query family, such as `wowprogress leaderboard pve ...`
-- wrapper `resolve` does not treat those synthetic direct routes as verified resolutions
 - wrapper expansion filtering is conservative:
   - `wowhead` and `warcraftlogs` are the profiled expansion-aware providers; `warcraftlogs` maps the requested expansion onto its `retail` / `classic` / `fresh` site profile and rejects keys it cannot honor (`ptr`, `beta`, `classic-ptr`)
-  - `method`, `icy-veins`, `raiderio`, `wowprogress`, `lorrgs`, and `raidbots` are treated as retail-only when wrapper expansion filtering is active
+  - `method`, `icy-veins`, `raiderio`, `lorrgs`, and `raidbots` are treated as retail-only when wrapper expansion filtering is active
   - `warcraft-wiki`, `simc`, `blizzard`, and `curseforge` are excluded from wrapper expansion-filtered `search` and `resolve`
 - wrapper `search`, `resolve`, and `doctor` report included and excluded providers when expansion filtering is active
 - wrapper `doctor` also reports wrapper-surface readiness plus provider auth/install metadata, so agents can distinguish a registered provider from a wrapper-ready routing surface
@@ -373,46 +370,6 @@ Warcraft Wiki behavior:
 - programming pages strip low-value wiki chrome more aggressively and filter edit-action links from linked-entity output
 - `reference` metadata is useful beyond API pages: programming howtos, API-change pages, class pages, profession pages, faction pages, zone pages, expansion pages, systems pages, guide pages, and lore pages all expose at least a family-aware summary, and some pages also expose `patch_changes`, `see_also`, and `references`
 - redirect-backed article lookups follow MediaWiki redirects, so short refs like `Legion` resolve to canonical pages like `World of Warcraft: Legion`
-
-## WowProgress Commands
-
-Flags: [reference/wowprogress.md](reference/wowprogress.md). Provider docs: [wowprogress/README.md](wowprogress/README.md).
-
-```bash
-wowprogress guild us illidan Liquid
-wowprogress guild-history us "Mal'Ganis" gn
-wowprogress sample pve-guild-profiles --region us --limit 10 --faction horde --world-rank-max 25
-```
-
-WowProgress phase-1 behavior:
-- `doctor` reports cache config and the browser-fingerprint HTTP transport used for live fetches
-- `search` expects structured queries like `us illidan Liquid`, `guild us illidan Liquid`, or `character us illidan Imonthegcd`
-- direct guild and character commands normalize common region and realm variants like `na` and `Mal'Ganis`
-- `search` normalizes some realm forms like `area 52` -> `area-52` and returns `normalized_candidates` so the cleaned structured targets stay visible
-- `search` can exclude unsupported trailing terms like `recruit` and reports them in `excluded_terms` with a `normalization_hint`
-- `resolve` uses the same structured query shape and only returns a next command when the route probe is unambiguous
-- direct route resolution handles canonical WowProgress realm formatting, so queries like `guild us area-52 xD` still resolve correctly even when the site returns `US-Area 52`
-- `guild` returns a compact guild profile with progression, item-level rank context, and encounter history
-- `guild-history` walks the guild's historical tier pages and returns a per-tier progression timeline with final rank snapshots
-- `guild-ranks` returns the condensed per-tier final-rank view for questions like "final ranks across tiers"
-- `guild-snapshot` derives the current guild state (progression, item-level rank context, and per-tier rank series) from a single guild-history traversal, with no extra guild-page fetch in the command layer
-- `history-trajectory` returns the oldest-to-newest tier timeline with `delta_vs_previous` rank/item-level movement; deltas compare consecutive tiers, which are different raids/difficulties, so they describe movement rather than a normalized metric
-- `character` returns a compact character profile with item-level, SimDPS, and PvE raid-history context
-- `leaderboard pve` returns the current PvE progression leaderboard for a region, optionally narrowed to a realm
-- `sample pve-leaderboard` returns a top-slice leaderboard sample with explicit sampling metadata for the requested row cap and returned entry count
-- `sample pve-guild-profiles` enriches the sampled leaderboard slice with direct guild-page data and reports:
-  - source leaderboard entry count
-  - returned guild profile count
-  - skipped rows without profile URLs
-- guild-profile analytics support explicit post-sample filters for:
-  - faction
-  - difficulty
-  - world rank range
-  - item-level range
-  - encounter name
-- filtered guild-profile analytics preserve source and excluded profile counts so narrower slices stay explicit
-- `distribution` and `threshold` stay sample-backed and caveated rather than pretending to answer higher-level questions directly
-- WowProgress search is intentionally structured instead of broad free text because the site-native search surface is heavily constrained and less reliable than direct route resolution
 
 ## Lorrgs Commands
 

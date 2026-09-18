@@ -27,7 +27,6 @@ Real providers with narrower surfaces. They are expected to work and stay covere
 | Provider | Scope |
 |----------|-------|
 | `raiderio` | character/guild profiles plus sample-backed Mythic+ analytics |
-| `wowprogress` | guild rankings, history, and sample-backed leaderboard analytics |
 | `warcraft-wiki` | MediaWiki reference, typed API/event lookups, article bundles |
 | `icy-veins` | guide extraction, export, and local guide query |
 | `method` | guide extraction, export, and local guide query |
@@ -43,9 +42,12 @@ Thin or unproven surfaces. Do not build a workflow on them without checking `doc
 | `blizzard` | verified live for us/eu/kr/tw (2026-09-13); thin command surface, `cn` unreachable |
 | `curseforge` | verified live (2026-09-13); thin command surface, addon metadata is at the edge of scope |
 
+## Retired
+
+- Retired WowProgress (Cloudflare managed challenge, 2026-09); guild ranks and raid leaderboards come from Raider.IO.
+
 ## Next
 
-- **Restore WowProgress.** Every route sits behind a Cloudflare managed challenge since 2026-09-13; TLS impersonation no longer passes. Needs a challenge-solving transport or a replacement source before the provider earns its `supported` tier back. Tracked in `docs/wowprogress/README.md`.
 - Ship the wheel install path end to end: attach the built wheel to each GitHub release and verify `pipx install <wheel-url>` and `uvx --from <wheel-url> warcraft doctor` on a clean machine.
 - Decide whether Blizzard and CurseForge earn the `supported` tier now that both are verified live, or whether CurseForge leaves the product; the surfaces are thin either way.
 - Retire the deprecated dual-emitted top-level payload keys (agents read `data`); that is a major-version change, so it needs a deprecation window first.

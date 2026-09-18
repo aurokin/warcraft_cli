@@ -93,6 +93,16 @@ Return one page of the Mythic+ run leaderboard for a region and dungeon.
 | `--affixes` | str |  | Affix slug, fortified, tyrannical, current, or all. |
 | `--page` | int range | 0 | Page of rankings to request. |
 
+## raiderio raids
+
+List the raid slugs (and encounter slugs) Raider.IO knows for one expansion.
+
+**Options**
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--expansion-id` | int range | 11 | Expansion id: 11 = Midnight, 10 = The War Within, 9 = Dragonflight. |
+
 ## raiderio sample
 
 Sample-backed Raider.IO analytics primitives.
@@ -234,7 +244,7 @@ Estimate the sampled runs nearest a target score or Mythic+ level.
 
 ## raiderio leaderboard
 
-Season-scoped Raider.IO leaderboard views.
+Season- and raid-scoped Raider.IO leaderboard views.
 
 ## raiderio leaderboard mythic-plus
 
@@ -250,3 +260,18 @@ Return the season-scoped top Mythic+ runs with sampling freshness and citations.
 | `--affixes` | str |  | Affix slug, fortified, tyrannical, current, or all. |
 | `--page` | int range | 0 | Page of rankings to request. |
 | `--limit` | int range | 20 | Maximum leaderboard rows to return. |
+
+## raiderio leaderboard raids
+
+Return the guild raid rankings for one raid and difficulty with freshness and citations. Replaces the retired WowProgress guild leaderboards. ``rank`` is relative to the requested scope (realm position when ``--realm`` is set); ``region_rank`` is always region-wide. It fetches as many 20-row pages as ``--limit`` requires and reports returned-vs-requested counts.
+
+**Options**
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--raid` | str | required | Raid slug from `raiderio raids`, such as liberation-of-undermine. |
+| `--difficulty` | str | mythic | normal, heroic, or mythic. |
+| `--region` | str | world | world, us, eu, kr, tw, or cn. |
+| `--realm` | str |  | Realm slug to narrow to (requires a standard --region). |
+| `--page` | int range | 0 | 20-row page of rankings to start from. |
+| `--limit` | int range | 20 | Maximum guild rows to return. |

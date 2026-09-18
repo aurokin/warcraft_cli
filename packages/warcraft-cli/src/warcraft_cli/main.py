@@ -45,7 +45,7 @@ from warcraft_cli.crosswalk import (
     reconcile_class_spec,
     report_actor_names,
 )
-from warcraft_cli.guild import guild_merge_payload, normalized_identity, raiderio_guild_summary, wowprogress_guild_summary
+from warcraft_cli.guild import guild_merge_payload, guild_rank_rows, normalized_identity, raiderio_guild_summary
 from warcraft_cli.provider_contract import (
     compact_resolve_match,
     compact_wrapper_candidate,
@@ -53,7 +53,6 @@ from warcraft_cli.provider_contract import (
     decorate_search_result,
     resolve_payload_sort_key,
     search_result_sort_key,
-    synthetic_search_candidates,
 )
 from warcraft_cli.providers import (
     ProviderRegistration,
@@ -1684,21 +1683,6 @@ def _raiderio_source(identity: dict[str, str], *, expansion: str | None) -> dict
     }
 
 
-def _wowprogress_source(identity: dict[str, str], *, expansion: str | None) -> dict[str, Any]:
-    result = _provider_payload_result(
-        "wowprogress",
-        ["guild", identity["region"], identity["realm"], identity["name"]],
-        expansion=expansion,
-    )
-    payload = result.get("payload")
-    if result.get("status") != "ok" or not isinstance(payload, dict):
-        return result
-    return {
-        **result,
-        "summary": wowprogress_guild_summary(payload),
-    }
-
-
 @app.command("doctor")
 def doctor(ctx: typer.Context) -> None:
     """Report wrapper and per-provider readiness: tiers, auth, expansion support, and runtime paths."""
@@ -1770,22 +1754,6 @@ def search(
                             },
                         )
                     )
-    for row in synthetic_search_candidates(query):
-        registration = get_provider(str(row.get("provider") or ""))
-        if provider_expansion_exclusion_reason(registration, requested_expansion=requested_expansion) is not None:
-            continue
-        flattened.append(
-            decorate_search_result(
-                query,
-                {
-                    "provider_expansion": provider_expansion_support(
-                        registration,
-                        requested_expansion=requested_expansion,
-                    ),
-                    **row,
-                },
-            )
-        )
     flattened.sort(key=search_result_sort_key)
     top = flattened[:limit]
     if compact:
@@ -1895,17 +1863,13 @@ def guild(
     realm: str = typer.Argument(..., help="Realm title or slug."),
     name: str = typer.Argument(..., help="Guild name."),
 ) -> None:
-    """Merge one guild identity across raiderio and wowprogress into a single reconciled payload."""
+    """Return one guild identity's Raider.IO snapshot: identity, active raid, roster preview, citations."""
     identity = normalized_identity(region, realm, name)
-    requested_expansion = _requested_expansion(ctx)
-    payload = guild_merge_payload(
-        identity,
-        raiderio=_raiderio_source(identity, expansion=requested_expansion),
-        wowprogress=_wowprogress_source(identity, expansion=requested_expansion),
-    )
+    source = _raiderio_source(identity, expansion=_requested_expansion(ctx))
+    payload = guild_merge_payload(identity, raiderio=source)
     _emit(ctx, payload, err=not payload.get("ok"))
     if not payload.get("ok"):
-        raise typer.Exit(1)
+        raise typer.Exit(_source_exit_code(source))
 
 
 def _source_exit_code(source_result: Mapping[str, Any]) -> int:
@@ -1918,51 +1882,6 @@ def _source_exit_code(source_result: Mapping[str, Any]) -> int:
     return exit_code_for(error_code) if isinstance(error_code, str) else EXIT_GENERIC
 
 
-@app.command("guild-history")
-def guild_history(
-    ctx: typer.Context,
-    region: str = typer.Argument(..., help="Region slug such as us or eu."),
-    realm: str = typer.Argument(..., help="Realm title or slug."),
-    name: str = typer.Argument(..., help="Guild name."),
-) -> None:
-    """Report a guild's recorded raid tier history from wowprogress, with citations."""
-    identity = normalized_identity(region, realm, name)
-    requested_expansion = _requested_expansion(ctx)
-    source_result = _provider_payload_result(
-        "wowprogress",
-        ["guild-history", identity["region"], identity["realm"], identity["name"]],
-        expansion=requested_expansion,
-    )
-    payload = as_dict(source_result.get("payload"))
-    history = as_list(payload.get("tiers"))
-    if source_result.get("status") != "ok":
-        _emit(ctx,
-            {
-                "ok": False,
-                "error": source_result.get("error"),
-                "query": identity,
-                "source": "wowprogress",
-                "provider_payload": payload,
-            },
-            err=True,
-        )
-        raise typer.Exit(_source_exit_code(source_result))
-    _emit(ctx,
-        {
-            "ok": True,
-            "provider": "warcraft",
-            "kind": "guild_history",
-            "query": identity,
-            "source": "wowprogress",
-            "guild": payload.get("guild"),
-            "count": len(history),
-            "tiers": history,
-            "citations": payload.get("citations"),
-            "provider_payload": payload,
-        },
-    )
-
-
 @app.command("guild-ranks")
 def guild_ranks(
     ctx: typer.Context,
@@ -1970,38 +1889,37 @@ def guild_ranks(
     realm: str = typer.Argument(..., help="Realm title or slug."),
     name: str = typer.Argument(..., help="Guild name."),
 ) -> None:
-    """Report a guild's world/region/realm ranks per tier from wowprogress, with citations."""
+    """Report a guild's per-raid progression with normal/heroic/mythic world, region, and realm ranks from Raider.IO."""
     identity = normalized_identity(region, realm, name)
-    requested_expansion = _requested_expansion(ctx)
     source_result = _provider_payload_result(
-        "wowprogress",
-        ["guild-ranks", identity["region"], identity["realm"], identity["name"]],
-        expansion=requested_expansion,
+        "raiderio",
+        ["guild", identity["region"], identity["realm"], identity["name"]],
+        expansion=_requested_expansion(ctx),
     )
     payload = as_dict(source_result.get("payload"))
-    history = as_list(payload.get("tiers"))
     if source_result.get("status") != "ok":
         _emit(ctx,
             {
                 "ok": False,
                 "error": source_result.get("error"),
                 "query": identity,
-                "source": "wowprogress",
+                "source": "raiderio",
                 "provider_payload": payload,
             },
             err=True,
         )
         raise typer.Exit(_source_exit_code(source_result))
+    raids = guild_rank_rows(payload)
     _emit(ctx,
         {
             "ok": True,
             "provider": "warcraft",
             "kind": "guild_ranks",
             "query": identity,
-            "source": "wowprogress",
+            "source": "raiderio",
             "guild": payload.get("guild"),
-            "count": len(history),
-            "tiers": history,
+            "count": len(raids),
+            "raids": raids,
             "citations": payload.get("citations"),
             "provider_payload": payload,
         },

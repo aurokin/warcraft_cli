@@ -16,7 +16,7 @@ Documentation ownership:
 - `foundation/`: repo-wide principles and shared contracts
 - `architecture/`: packaging, auth, expansion filtering, linting, and completed-work history
 - `reference/`: generated per-command flag reference, one file per binary (`make reference`; never hand-edited)
-- `warcraft/`, `wowhead/`, `method/`, `icy-veins/`, `raiderio/`, `wowprogress/`, `warcraft-wiki/`, `warcraftlogs/`, `simc/`, `blizzard-api/`, `raidbots/`, `curseforge/`, `lorrgs/`: CLI-specific docs
+- `warcraft/`, `wowhead/`, `method/`, `icy-veins/`, `raiderio/`, `warcraft-wiki/`, `warcraftlogs/`, `simc/`, `blizzard-api/`, `raidbots/`, `curseforge/`, `lorrgs/`: CLI-specific docs
 - root docs:
   - [ROADMAP.md](ROADMAP.md)
   - [USAGE.md](USAGE.md)
@@ -69,7 +69,6 @@ Engineering backlog: [Linear — Warcraft CLI](https://linear.app/aurokin/projec
 - [method/README.md](method/README.md)
 - [icy-veins/README.md](icy-veins/README.md)
 - [raiderio/README.md](raiderio/README.md)
-- [wowprogress/README.md](wowprogress/README.md)
 - [warcraft-wiki/README.md](warcraft-wiki/README.md)
 - [warcraftlogs/README.md](warcraftlogs/README.md)
 - [warcraftlogs/SCOPING.md](warcraftlogs/SCOPING.md)

@@ -24,7 +24,6 @@ PACKAGES = REPO_ROOT / "packages"
 # name with underscores turned into hyphens (``wowhead_cli`` -> ``wowhead-cli``, ``httpx``, ``typer``).
 MODULE_TO_DIST = {
     "bs4": "beautifulsoup4",
-    "curl_cffi": "curl-cffi",
     "warcraft_api": "warcraft-api-cli",
     "warcraft_content": "warcraft-content-cli",
     "warcraft_core": "warcraft-core-cli",

@@ -18,7 +18,7 @@ from warcraft_core.envelope import envelope_violations
 PROVIDER_IDS = [registration.name for registration in PROVIDERS]
 TIERS = {
     "core": {"wowhead", "warcraftlogs", "simc"},
-    "supported": {"raiderio", "wowprogress", "warcraft-wiki", "icy-veins", "method"},
+    "supported": {"raiderio", "warcraft-wiki", "icy-veins", "method"},
     "experimental": {"lorrgs", "raidbots", "blizzard-api", "curseforge"},
 }
 

@@ -1,7 +1,8 @@
 # WowProgress Provider: Design Record
 
-Historical design notes for the `wowprogress` provider. For what the CLI does today, see
-[docs/wowprogress/README.md](../../wowprogress/README.md).
+Status: retired 2026-09-17 (Cloudflare managed challenge blocked every route); replaced by Raider.IO guild ranks and `raiderio leaderboard raids`.
+
+Historical design notes for the `wowprogress` provider, kept for provenance. The package, docs, and tests were removed.
 
 ## Why it was added
 

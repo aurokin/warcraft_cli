@@ -758,7 +758,8 @@ def test_spec_kill_samples_and_boss_spec_usage_describe_the_cohort(require):
     assert data["sample"]["spec_name"] == spec, samples.describe()
     assert data["cohort"], samples.describe()
 
-    usage = run("warcraftlogs", "boss-spec-usage", *cohort_args(), "--top", "5")
+    # Every spec in the cohort, so the anchor spec cannot fall outside a truncated top list.
+    usage = run("warcraftlogs", "boss-spec-usage", *cohort_args(), "--top", "40")
     assert usage.payload["kind"] == "boss_spec_usage", usage.describe()
     rows = assert_sampling_metadata(usage, expect_rows=True)["boss_spec_usage"]
     assert rows, usage.describe()

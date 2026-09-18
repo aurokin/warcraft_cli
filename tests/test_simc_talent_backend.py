@@ -27,7 +27,7 @@ def _resolution(entry: int, rank: int) -> build_input.BuildResolution:
     )
 
 
-def test_round_trip_returns_the_export_and_only_ranked_entries(monkeypatch, tmp_path: Path) -> None:
+def test_round_trip_returns_the_export_and_every_decoded_entry(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(build_input, "encode_build", lambda paths, spec: "EXPORT")
     monkeypatch.setattr(build_input, "decode_build", lambda paths, spec: _resolution(entry=101, rank=1))
 
@@ -36,8 +36,9 @@ def test_round_trip_returns_the_export_and_only_ranked_entries(monkeypatch, tmp_
 
     assert backend.trait_data_root == tmp_path.resolve()
     assert result.wow_talent_export == "EXPORT"
-    # Rank-0 talents are not selections, so they never reach the expected-entry comparison.
-    assert result.entries_by_tree == {"class": {101: 1}, "spec": {}, "hero": {}}
+    # SimC reports a tiered node as one rank-0 line, so rank-0 entries stay visible for core to
+    # compare by node presence.
+    assert result.entries_by_tree == {"class": {101: 1}, "spec": {999: 0}, "hero": {}}
 
 
 def test_encode_failure_becomes_a_round_trip_error(monkeypatch, tmp_path: Path) -> None:

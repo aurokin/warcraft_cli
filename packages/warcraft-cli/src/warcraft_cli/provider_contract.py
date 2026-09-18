@@ -17,7 +17,6 @@ DEFAULT_WRAPPER_RANKING_POLICY: dict[str, Any] = {
         "raiderio": "profile",
         "warcraftlogs": "logs",
         "warcraft-wiki": "reference",
-        "wowprogress": "profile",
         "lorrgs": "logs",
         "simc": "local_tool",
     },
@@ -94,10 +93,10 @@ DEFAULT_WRAPPER_RANKING_POLICY: dict[str, Any] = {
         "simc": {"local_tool": 40, "article": -18, "reference": -14, "entity": -14, "profile": -20},
     },
     "intent_provider_boosts": {
-        "guild_profile": {"wowprogress": 10, "raiderio": -4},
-        "character_profile": {"raiderio": 28, "wowprogress": -14},
+        "guild_profile": {"raiderio": 10},
+        "character_profile": {"raiderio": 28},
         "log_analysis": {"warcraftlogs": 28, "lorrgs": 18},
-        "structured_profile": {"wowprogress": 4, "raiderio": 2},
+        "structured_profile": {"raiderio": 4},
     },
     "intent_kind_boosts": {
         "guide": {"guide": 18},
@@ -127,7 +126,6 @@ DEFAULT_WRAPPER_RANKING_POLICY: dict[str, Any] = {
         "raiderio": {"character": 16, "guild": 6, "mythic_plus_runs": 8},
         "warcraftlogs": {"report": 12, "report_encounter": 16},
         "warcraft-wiki": {"article": 8},
-        "wowprogress": {"character": 0, "guild": 12, "leaderboard": 8},
         "lorrgs": {"report_overview": 10, "spec_ranking": 14, "comp_ranking": 10},
         "simc": {"analysis": 8, "apl": 10, "decode_build": 10, "inspect": 8, "run": 8},
     },
@@ -361,42 +359,6 @@ def compact_resolve_match(payload: Mapping[str, Any] | None) -> dict[str, Any] |
     if payload.get("confidence") is not None:
         compact["confidence"] = payload.get("confidence")
     return compact
-
-
-def synthetic_search_candidates(query: str) -> list[dict[str, Any]]:
-    normalized, tokens = _query_tokens(query)
-    ordered_tokens = [token for token in normalized.split() if token]
-    if "leaderboard" not in tokens:
-        return []
-    known_region_terms = load_wrapper_ranking_policy()["known_region_terms"]
-    region = next((term for term in ordered_tokens if term in known_region_terms and term != "world"), None)
-    if region is None:
-        return []
-    realm: str | None = None
-    region_index = ordered_tokens.index(region)
-    trailing = ordered_tokens[region_index + 1:]
-    if trailing and trailing[0] not in {"leaderboard", "pve"}:
-        realm = trailing[0]
-    command = f"wowprogress leaderboard pve {region}"
-    if realm:
-        command += f" --realm {realm}"
-    display_name = f"{region.upper()} PvE Leaderboard" if realm is None else f"{region.upper()} {realm.title()} PvE Leaderboard"
-    candidate = {
-        "provider": "wowprogress",
-        "kind": "leaderboard",
-        "id": f"wowprogress:leaderboard:pve:{region}:{realm or ''}",
-        "name": display_name,
-        "region": region,
-        "realm": realm,
-        "ranking": {"score": 60, "match_reasons": ["wrapper_direct_route", "leaderboard_query"]},
-        "follow_up": {
-            "provider": "wowprogress",
-            "kind": "leaderboard",
-            "surface": "leaderboard",
-            "command": command,
-        },
-    }
-    return [candidate]
 
 
 def decorate_search_result(query: str, row: Mapping[str, Any]) -> dict[str, Any]:

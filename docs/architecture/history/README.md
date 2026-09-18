@@ -19,7 +19,7 @@ Completed milestones and one-off design records. Use these for context and prove
 | [simc-implementation.md](simc-implementation.md) | SimulationCraft implementation plan |
 | [simc-migration-inventory.md](simc-migration-inventory.md) | SimulationCraft migration inventory |
 | [raiderio.md](raiderio.md) | Raider.IO provider design record |
-| [wowprogress.md](wowprogress.md) | WowProgress provider design record |
+| [wowprogress.md](wowprogress.md) | WowProgress provider design record (retired 2026-09) |
 | [warcraft-wiki.md](warcraft-wiki.md) | Warcraft Wiki provider design record |
 | [icy-veins.md](icy-veins.md) | Icy Veins provider pre-implementation design record and phased plan |
 | [method.md](method.md) | Method.gg provider history |

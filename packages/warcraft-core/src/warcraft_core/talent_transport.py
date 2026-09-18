@@ -31,10 +31,14 @@ CLASS_ID_BY_ACTOR_CLASS = {
     "evoker": 13,
 }
 
+# SimC's talent_tree enum: CLASS, SPECIALIZATION, HERO, SELECTION. Selection rows are the hero-tree
+# choice nodes; Warcraft Logs reports them as talent entries, SimC names them "0" and derives them
+# from the hero talents, so they resolve here but never enter a transport form.
 TREE_NAME_BY_INDEX = {
     1: "class",
     2: "spec",
     3: "hero",
+    4: "selection",
 }
 
 SPECIALIZATION_LINE_RE = re.compile(
@@ -289,14 +293,17 @@ def _trait_records(repo_root_text: str) -> dict[tuple[int, int, int], list[Trait
         node_id = int(match.group("node_id"))
         class_id = int(match.group("class_id"))
         hero_tree_id = int(match.group("hero_tree_id"))
+        name = match.group("name").strip()
+        if tree == "selection" and name == "0":
+            name = hero_tree_names.get(hero_tree_id) or "selection"
         record = TraitRecord(
             tree=tree,
             class_id=class_id,
             entry_id=entry_id,
             node_id=node_id,
             max_rank=int(match.group("max_rank")),
-            name=match.group("name").strip(),
-            token=tokenize_talent_name(match.group("name").strip()),
+            name=name,
+            token=tokenize_talent_name(name),
             spec_ids=_parse_int_list(match.group("spec_ids")),
             hero_tree_id=hero_tree_id,
             hero_tree_name=hero_tree_names.get(hero_tree_id),
@@ -406,15 +413,99 @@ def _resolve_transport_rows(
     return resolved_rows, unresolved_rows
 
 
-def _expected_entries_by_tree(resolved_rows: list[dict[str, Any]]) -> dict[str, dict[int, int]]:
-    return {
-        tree: {
-            row["entry"]: row["rank"]
-            for row in resolved_rows
-            if row["tree"] == tree and isinstance(row.get("entry"), int) and isinstance(row.get("rank"), int) and row["rank"] > 0
-        }
-        for tree in ("class", "spec", "hero")
+NODE_TIERED = 1
+
+
+@dataclass(frozen=True, slots=True)
+class _RoundTripComparison:
+    matched: bool
+    expected_entries_by_tree: dict[str, dict[int, int]]
+    actual_entries_by_tree: dict[str, dict[int, int]]
+    tiered_nodes: list[dict[str, Any]]
+    ignored_granted_hero_entries: list[dict[str, Any]]
+
+
+ROUND_TRIP_TREES = ("class", "spec", "hero")
+
+
+def _expected_round_trip(
+    resolved_rows: list[dict[str, Any]],
+) -> tuple[dict[str, dict[int, int]], dict[str, dict[int, dict[str, Any]]]]:
+    """Split the ranked rows into plain entries and tiered nodes (several entries sharing one node)."""
+    expected: dict[str, dict[int, int]] = {tree: {} for tree in ROUND_TRIP_TREES}
+    tiered: dict[str, dict[int, dict[str, Any]]] = {tree: {} for tree in ROUND_TRIP_TREES}
+    for row in resolved_rows:
+        tree = row["tree"]
+        if tree not in expected or row["rank"] <= 0:
+            continue
+        if row["node_type"] != NODE_TIERED:
+            expected[tree][row["entry"]] = row["rank"]
+            continue
+        node = tiered[tree].setdefault(
+            row["node_id"], {"tree": tree, "node_id": row["node_id"], "name": row["name"], "entries": [], "total_rank": 0}
+        )
+        node["entries"].append({"entry": row["entry"], "rank": row["rank"]})
+        node["total_rank"] += row["rank"]
+    return expected, tiered
+
+
+def _actual_round_trip(
+    actual_by_tree: dict[str, dict[int, int]],
+    record_by_entry: dict[int, TraitRecord],
+    selected_hero_trees: set[int],
+) -> tuple[dict[str, dict[int, int]], dict[str, set[int]], list[dict[str, Any]]]:
+    """Sort the decoded entries into plain entries, tiered nodes seen, and ignored granted keystones."""
+    actual: dict[str, dict[int, int]] = {tree: {} for tree in ROUND_TRIP_TREES}
+    tiered_seen: dict[str, set[int]] = {tree: set() for tree in ROUND_TRIP_TREES}
+    ignored: list[dict[str, Any]] = []
+    for tree in ROUND_TRIP_TREES:
+        for entry, rank in actual_by_tree.get(tree, {}).items():
+            record = record_by_entry.get(entry)
+            if record is not None and record.node_type == NODE_TIERED:
+                tiered_seen[tree].add(record.node_id)
+            elif tree == "hero" and record is not None and record.hero_tree_id and record.hero_tree_id not in selected_hero_trees:
+                ignored.append(
+                    {"entry": entry, "name": record.name, "hero_tree": record.hero_tree_name, "hero_tree_id": record.hero_tree_id}
+                )
+            elif rank > 0:
+                actual[tree][entry] = rank
+    return actual, tiered_seen, ignored
+
+
+def _compare_round_trip(
+    resolved_rows: list[dict[str, Any]],
+    actual_by_tree: dict[str, dict[int, int]],
+    records: dict[tuple[int, int, int], list[TraitRecord]],
+    *,
+    class_id: int,
+) -> _RoundTripComparison:
+    """Compare the decoded round trip with the resolved rows, allowing for two SimC decode quirks.
+
+    Tiered nodes come back from SimC's debug output as a single line naming the first entry with
+    the leftover rank, so they are compared by node presence. SimC also grants the keystone of
+    every hero tree the spec could pick, not only the selected one; keystones from unselected
+    trees are ignored.
+    """
+    record_by_entry = {
+        record.entry_id: record for candidates in records.values() for record in candidates if record.class_id == class_id
     }
+    selected_hero_trees = {
+        row["hero_tree_id"] for row in resolved_rows if row["tree"] in {"hero", "selection"} and row.get("hero_tree_id")
+    }
+    expected, expected_tiered = _expected_round_trip(resolved_rows)
+    actual, tiered_seen, ignored = _actual_round_trip(actual_by_tree, record_by_entry, selected_hero_trees)
+    tiered_nodes = [
+        {**node, "compared_by": "node_presence", "present_in_round_trip": node["node_id"] in tiered_seen[tree]}
+        for tree in ROUND_TRIP_TREES
+        for node in expected_tiered[tree].values()
+    ]
+    matched = actual == expected and all(set(expected_tiered[tree]) == tiered_seen[tree] for tree in ROUND_TRIP_TREES)
+    return _RoundTripComparison(matched, expected, actual, tiered_nodes, ignored)
+
+
+def _json_entries_by_tree(entries_by_tree: dict[str, dict[int, int]]) -> dict[str, dict[str, int]]:
+    """Entry ids become string keys so the mismatch details survive JSON emission."""
+    return {tree: {str(entry): rank for entry, rank in sorted(entries.items())} for tree, entries in entries_by_tree.items()}
 
 
 def _not_validated(reason: str, **details: Any) -> dict[str, Any]:
@@ -432,6 +523,8 @@ def _round_trip_validation(
     spec: str,
     resolved_rows: list[dict[str, Any]],
     transport_forms: dict[str, Any],
+    records: dict[tuple[int, int, int], list[TraitRecord]],
+    class_id: int,
 ) -> dict[str, Any]:
     """Re-encode the resolved rows through SimC and confirm the decoded entries come back unchanged."""
     build_spec = _build_spec_from_transport(
@@ -444,14 +537,20 @@ def _round_trip_validation(
     except RoundTripError as exc:
         return _not_validated("simc_round_trip_failed", message=str(exc), resolved_entries=resolved_rows)
 
-    expected_by_tree = _expected_entries_by_tree(resolved_rows)
-    actual_by_tree = round_trip.entries_by_tree
-    if actual_by_tree != expected_by_tree:
+    comparison = _compare_round_trip(resolved_rows, round_trip.entries_by_tree, records, class_id=class_id)
+    quirks: dict[str, Any] = {}
+    if comparison.tiered_nodes:
+        quirks["tiered_nodes"] = comparison.tiered_nodes
+    if comparison.ignored_granted_hero_entries:
+        quirks["ignored_granted_hero_entries"] = comparison.ignored_granted_hero_entries
+    if not comparison.matched:
         return _not_validated(
             "simc_round_trip_mismatch",
             resolved_entries=resolved_rows,
-            expected_entries_by_tree=expected_by_tree,
-            actual_entries_by_tree=actual_by_tree,
+            expected_entries_by_tree=_json_entries_by_tree(comparison.expected_entries_by_tree),
+            actual_entries_by_tree=_json_entries_by_tree(comparison.actual_entries_by_tree),
+            wow_talent_export=round_trip.wow_talent_export,
+            **quirks,
         )
 
     return {
@@ -465,6 +564,7 @@ def _round_trip_validation(
             "round_trip": {
                 "wow_talent_export": round_trip.wow_talent_export,
                 "matched": True,
+                **quirks,
             },
         },
     }
@@ -516,6 +616,8 @@ def validate_talent_tree_transport(
         spec=normalized_spec,
         resolved_rows=resolved_rows,
         transport_forms=transport_forms,
+        records=records,
+        class_id=class_id,
     )
 
 

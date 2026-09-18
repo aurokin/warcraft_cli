@@ -22,7 +22,6 @@ make dev-deploy-no-link  # refresh the checkout-local .venv for branch work
 | `warcraftlogs` | core | official log/report analysis (OAuth) | [docs/warcraftlogs](docs/warcraftlogs/README.md) |
 | `simc` | core | local SimulationCraft inspection and runs | [docs/simc](docs/simc/README.md) |
 | `raiderio` | supported | character/guild profiles, Mythic+ analytics | [docs/raiderio](docs/raiderio/README.md) |
-| `wowprogress` | supported | guild rankings and progression history | [docs/wowprogress](docs/wowprogress/README.md) |
 | `warcraft-wiki` | supported | reference, lore, API/event articles | [docs/warcraft-wiki](docs/warcraft-wiki/README.md) |
 | `icy-veins` | supported | guide extraction and local guide query | [docs/icy-veins](docs/icy-veins/README.md) |
 | `method` | supported | guide extraction and local guide query | [docs/method](docs/method/README.md) |

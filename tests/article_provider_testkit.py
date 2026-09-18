@@ -15,7 +15,6 @@ PROVIDER_LIVE_ENV = {
     "Icy Veins": "ICY_VEINS_LIVE_TESTS",
     "Method": "METHOD_LIVE_TESTS",
     "Warcraft Wiki": "WARCRAFT_WIKI_LIVE_TESTS",
-    "WowProgress": "WOWPROGRESS_LIVE_TESTS",
 }
 
 
@@ -46,8 +45,7 @@ def invoke_live(runner: CliRunner, app: Any, args: list[str], *, provider_name: 
     error = payload.get("error") if isinstance(payload, dict) and isinstance(payload.get("error"), dict) else {}
     error_code = error.get("code") if isinstance(error.get("code"), str) else None
     if error_code == "blocked":
-        # Blocking is a product outage, not a reason to go green: the clients impersonate a browser
-        # on purpose, so a block means the transport needs work (see docs/wowprogress/README.md).
+        # Blocking is a product outage, not a reason to go green: a block means the transport needs work.
         pytest.fail(
             f"Live {provider_name} requests are blocked by upstream bot protection (error.code=blocked). "
             "This is a transport regression, not an environment problem; fix the client rather than skipping."

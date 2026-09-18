@@ -40,10 +40,12 @@ def simc_backend(repo_root: str | Path | None = None) -> TalentTransportBackend:
             )
         except (FileNotFoundError, RuntimeError, ValueError) as exc:
             raise RoundTripError(str(exc)) from exc
+        # Rank 0 lines are kept: SimC reports a tiered node as one line carrying the leftover rank,
+        # and core compares those nodes by presence.
         entries_by_tree: dict[str, dict[int, int]] = {"class": {}, "spec": {}, "hero": {}}
         for tree in entries_by_tree:
             for talent in resolution.talents_by_tree.get(tree, []):
-                if talent.entry and talent.rank > 0:
+                if talent.entry:
                     entries_by_tree[tree][talent.entry] = talent.rank
         return RoundTripResult(wow_talent_export=export, entries_by_tree=entries_by_tree)
 

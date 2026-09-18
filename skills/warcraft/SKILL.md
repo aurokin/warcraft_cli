@@ -70,7 +70,6 @@ narrower, **experimental** is thin and may change.
 | `icy-veins` | supported | spec guides, hubs, and guide subpages | `warcraft icy-veins search ...`, `warcraft icy-veins guide ...` |
 | `raiderio` | supported | character/guild profiles, Mythic+, sampled run analytics | `warcraft raiderio character ...`, `warcraft raiderio sample ...` |
 | `warcraft-wiki` | supported | API docs, events, systems, lore, reference pages | `warcraft warcraft-wiki api ...`, `warcraft warcraft-wiki article ...` |
-| `wowprogress` | supported | progression, rankings, guild/profile analytics | `warcraft guild ...`, `warcraft wowprogress guild ...`, `warcraft wowprogress sample ...` |
 | `warcraftlogs` | core | official raid-log API, world metadata, guild/character/report lookups | `warcraftlogs doctor`, `warcraftlogs guild ...`, `warcraftlogs report-fights ...` |
 | `simc` | core | local SimulationCraft inspection, exact-build priority analysis, APL comparison, and runs | `warcraft simc doctor`, `warcraft simc priority ...`, `warcraft simc compare-apls ...` |
 | `raidbots` | experimental | reading shared Raidbots reports and bridging their SimC input to local `simc` | `warcraft raidbots inspect-report <url-or-id>`, `warcraft raidbots input <url-or-id>`, `warcraft raidbots explain-input` |
@@ -122,7 +121,6 @@ narrower, **experimental** is thin and may change.
 - `icy-veins`: see `references/icy-veins.md`
 - `raiderio`: see `references/raiderio.md`
 - `warcraft-wiki`: see `references/warcraft-wiki.md`
-- `wowprogress`: see `references/wowprogress.md`
 - `warcraftlogs`: see `references/warcraftlogs.md`
 - `simc`: see `references/simc.md`
 - `raidbots`: see `references/raidbots.md`

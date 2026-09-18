@@ -7,7 +7,6 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, NoReturn
 
-import curl_cffi.requests
 import httpx
 import pytest
 
@@ -22,7 +21,6 @@ PACKAGE_SRC_DIRS = (
     ROOT / "packages" / "icy-veins-cli" / "src",
     ROOT / "packages" / "raiderio-cli" / "src",
     ROOT / "packages" / "warcraft-wiki-cli" / "src",
-    ROOT / "packages" / "wowprogress-cli" / "src",
     ROOT / "packages" / "simc-cli" / "src",
     ROOT / "packages" / "warcraftlogs-cli" / "src",
     ROOT / "packages" / "raidbots-cli" / "src",
@@ -46,7 +44,6 @@ LIVE_TEST_ENV_BY_FILE: dict[str, str | tuple[str, ...]] = {
     "test_warcraftlogs_live.py": "WARCRAFTLOGS_LIVE_TESTS",
     "test_live_command_matrix.py": "WARCRAFTLOGS_LIVE_TESTS",
     "test_wowhead_parser_canaries.py": "WOWHEAD_LIVE_TESTS",
-    "test_wowprogress_live.py": "WOWPROGRESS_LIVE_TESTS",
 }
 
 TESTS_DIR = str(ROOT / "tests")
@@ -67,7 +64,6 @@ CACHE_ENV_PREFIXES = (
     "WARCRAFT_WIKI",
     "WARCRAFTLOGS",
     "WOWHEAD",
-    "WOWPROGRESS",
 )
 
 
@@ -103,7 +99,7 @@ def disable_cache_by_default(request: pytest.FixtureRequest, monkeypatch: pytest
 def block_network(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """Block real network access for non-live tests.
 
-    Attempts raise ``NetworkGuardError`` at the socket, httpx transport, and curl_cffi seams
+    Attempts raise ``NetworkGuardError`` at the socket and httpx transport seams
     (loopback passes through). Attempts are also recorded so a test still fails at teardown
     when the code under test swallows the error (retry loops, ``except Exception``).
     """
@@ -146,17 +142,12 @@ def block_network(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatc
     async def guarded_handle_async_request(self: httpx.AsyncHTTPTransport, request: httpx.Request) -> httpx.Response:
         blocked(f"httpx async {request.method} {request.url}")
 
-    def guarded_curl_request(self: Any, method: str, url: str, *args: Any, **kwargs: Any) -> Any:
-        blocked(f"curl_cffi {method} {url}")
-
     monkeypatch.setattr(socket.socket, "connect", guarded_connect)
     monkeypatch.setattr(socket.socket, "connect_ex", guarded_connect_ex)
     monkeypatch.setattr(socket, "getaddrinfo", guarded_getaddrinfo)
     # Transport level, not Client.send, so httpx.MockTransport keeps working.
     monkeypatch.setattr(httpx.HTTPTransport, "handle_request", guarded_handle_request)
     monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", guarded_handle_async_request)
-    # libcurl bypasses Python sockets, so wowprogress needs its own seam.
-    monkeypatch.setattr(curl_cffi.requests.Session, "request", guarded_curl_request)
     yield
     if attempts:
         pytest.fail("Non-live test touched the network: " + "; ".join(attempts))

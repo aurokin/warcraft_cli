@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import socket
 
-import curl_cffi.requests
 import httpx
 import pytest
 
@@ -34,12 +33,6 @@ def test_socket_connect_is_blocked() -> None:
 def test_getaddrinfo_is_blocked() -> None:
     with pytest.raises(NetworkGuardError, match="getaddrinfo"):
         socket.getaddrinfo("example.invalid", 443)
-
-
-@pytest.mark.usefixtures("clear_attempts")
-def test_curl_cffi_request_is_blocked() -> None:
-    with pytest.raises(NetworkGuardError, match="curl_cffi GET https://example.invalid/"):
-        curl_cffi.requests.Session().get("https://example.invalid/")
 
 
 def test_guard_records_attempts(request: pytest.FixtureRequest) -> None:

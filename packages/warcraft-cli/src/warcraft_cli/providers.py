@@ -46,8 +46,6 @@ from warcraftlogs_cli.main import app as warcraftlogs_app
 from warcraftlogs_cli.provider import PROVIDER as warcraftlogs_provider
 from wowhead_cli.main import app as wowhead_app
 from wowhead_cli.provider import PROVIDER as wowhead_provider
-from wowprogress_cli.main import app as wowprogress_app
-from wowprogress_cli.provider import PROVIDER as wowprogress_provider
 
 __all__ = [
     "PROVIDERS",
@@ -274,34 +272,6 @@ PROVIDERS: tuple[ProviderRegistration, ...] = (
         tier="supported",
         expansion_option=None,
         app=warcraft_wiki_app,
-        doctor_args=("doctor",),
-    ),
-    ProviderRegistration(
-        name="wowprogress",
-        command="wowprogress",
-        language="python",
-        status="partial",
-        description=(
-            "WowProgress rankings provider with structured search, conservative resolve, "
-            "guild, character, and PvE leaderboard lookups."
-        ),
-        auth_required=False,
-        expansion_mode="fixed",
-        supported_expansions=("retail",),
-        expansion_review_status="reviewed",
-        expansion_policy_note=(
-            "Current supported guild, character, and PvE leaderboard surfaces are retail-focused "
-            "and should stay fixed to retail for now."
-        ),
-        wrapper_capabilities={
-            "doctor": "ready",
-            "search": "ready",
-            "resolve": "ready",
-        },
-        surface=wowprogress_provider,
-        tier="supported",
-        expansion_option=None,
-        app=wowprogress_app,
         doctor_args=("doctor",),
     ),
     ProviderRegistration(

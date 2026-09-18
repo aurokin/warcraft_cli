@@ -44,6 +44,8 @@ CAPABILITIES = {
     "distribution_mythic_plus_players": "ready",
     "threshold_mythic_plus_runs": "ready",
     "mythic_plus_leaderboard": "ready",
+    "raid_leaderboard": "ready",
+    "raid_catalog": "ready",
 }
 
 
@@ -200,7 +202,7 @@ def search_results(client: RaiderIOClient, query: str, *, limit: int, kind: str)
 
 def doctor_report() -> dict[str, Any]:
     """Describe installation state, capabilities, and resolved cache configuration."""
-    settings, static_ttl, character_ttl, guild_ttl, mplus_runs_ttl = load_raiderio_cache_settings_from_env()
+    settings, static_ttl, character_ttl, guild_ttl, mplus_runs_ttl, raid_rankings_ttl = load_raiderio_cache_settings_from_env()
     return {
         "status": "ready",
         "installed": True,
@@ -221,6 +223,7 @@ def doctor_report() -> dict[str, Any]:
                 "character_profile": character_ttl,
                 "guild_profile": guild_ttl,
                 "mythic_plus_runs": mplus_runs_ttl,
+                "raid_rankings": raid_rankings_ttl,
             },
         },
     }

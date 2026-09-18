@@ -12,7 +12,6 @@ from warcraft_cli.provider_contract import (
     query_intents,
     resolve_payload_sort_key,
     search_result_sort_key,
-    synthetic_search_candidates,
     wrapper_search_ranking,
 )
 
@@ -79,13 +78,13 @@ def test_search_result_sort_key_prefers_wrapper_ranking_when_present() -> None:
         ),
         decorate_search_result(
             "guild us illidan Liquid",
-            {"provider": "wowprogress", "name": "Liquid", "kind": "guild", "ranking": {"score": 20}},
+            {"provider": "raiderio", "name": "Liquid", "kind": "guild", "ranking": {"score": 20}},
         ),
     ]
 
     rows.sort(key=search_result_sort_key)
 
-    assert rows[0]["provider"] == "wowprogress"
+    assert rows[0]["provider"] == "raiderio"
     assert rows[0]["wrapper_ranking"]["score"] > rows[1]["wrapper_ranking"]["score"]
 
 
@@ -95,7 +94,7 @@ def test_load_wrapper_ranking_policy_allows_json_override(tmp_path) -> None:
         json.dumps(
             {
                 "provider_kind_boosts": {
-                    "wowprogress": {"guild": 99},
+                    "warcraft-wiki": {"article": 99},
                 }
             }
         ),
@@ -104,7 +103,7 @@ def test_load_wrapper_ranking_policy_allows_json_override(tmp_path) -> None:
 
     policy = load_wrapper_ranking_policy(override_path=override_path)
 
-    assert policy["provider_kind_boosts"]["wowprogress"]["guild"] == 99
+    assert policy["provider_kind_boosts"]["warcraft-wiki"]["article"] == 99
     assert policy["provider_kind_boosts"]["raiderio"]["character"] == 16
 
 
@@ -118,28 +117,53 @@ def test_wrapper_search_ranking_prefers_raiderio_for_character_profile_queries()
             "ranking": {"score": 60},
         },
     )
-    wowprogress = wrapper_search_ranking(
+    guide = wrapper_search_ranking(
         "character us illidan Roguecane",
         {
-            "provider": "wowprogress",
+            "provider": "method",
             "name": "Roguecane",
-            "kind": "character",
+            "entity_type": "guide",
             "ranking": {"score": 80},
         },
     )
 
-    assert raiderio["score"] > wowprogress["score"]
+    assert raiderio["score"] > guide["score"]
     assert any("intent:character_profile:provider:raiderio" in reason for reason in raiderio["reasons"])
+
+
+def test_wrapper_search_ranking_prefers_raiderio_for_guild_profile_queries() -> None:
+    """Raider.IO is the only guild provider, so guild intents must boost it rather than penalize it."""
+    raiderio = wrapper_search_ranking(
+        "guild us illidan Liquid",
+        {
+            "provider": "raiderio",
+            "name": "Liquid",
+            "kind": "guild",
+            "ranking": {"score": 60},
+        },
+    )
+    guide = wrapper_search_ranking(
+        "guild us illidan Liquid",
+        {
+            "provider": "method",
+            "name": "Liquid Guide",
+            "entity_type": "guide",
+            "ranking": {"score": 80},
+        },
+    )
+
+    assert raiderio["score"] > guide["score"]
+    assert any(reason.startswith("intent:guild_profile:provider:raiderio:+") for reason in raiderio["reasons"])
 
 
 def test_compact_wrapper_candidate_keeps_ranking_and_follow_up() -> None:
     compact = compact_wrapper_candidate(
         {
-            "provider": "wowprogress",
+            "provider": "raiderio",
             "kind": "guild",
             "name": "Liquid",
             "id": "guild:1",
-            "follow_up": {"command": "wowprogress guild us illidan Liquid"},
+            "follow_up": {"command": "raiderio guild us illidan Liquid"},
             "wrapper_ranking": {
                 "score": 88,
                 "reasons": ["provider_score:20"],
@@ -149,8 +173,8 @@ def test_compact_wrapper_candidate_keeps_ranking_and_follow_up() -> None:
         }
     )
 
-    assert compact["provider"] == "wowprogress"
-    assert compact["follow_up_command"] == "wowprogress guild us illidan Liquid"
+    assert compact["provider"] == "raiderio"
+    assert compact["follow_up_command"] == "raiderio guild us illidan Liquid"
     assert compact["wrapper_ranking"]["score"] == 88
 
 
@@ -177,15 +201,6 @@ def test_compact_wrapper_candidate_keeps_provider_expansion_support() -> None:
     assert compact["provider_expansion"]["allowed"] is True
     assert compact["provider_expansion"]["review_status"] == "reviewed"
     assert "first-class expansion profiles" in compact["provider_expansion"]["policy_note"]
-
-
-def test_synthetic_search_candidates_adds_leaderboard_route() -> None:
-    candidates = synthetic_search_candidates("leaderboard us illidan")
-
-    assert len(candidates) == 1
-    assert candidates[0]["provider"] == "wowprogress"
-    assert candidates[0]["kind"] == "leaderboard"
-    assert candidates[0]["follow_up"]["command"] == "wowprogress leaderboard pve us --realm illidan"
 
 
 def test_resolve_payload_sort_key_prefers_resolved_then_confidence_then_wrapper_score() -> None:

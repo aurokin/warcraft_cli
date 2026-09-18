@@ -123,9 +123,6 @@ jobs:
           - provider: warcraft-wiki
             flag: WARCRAFT_WIKI_LIVE_TESTS
             files: tests/test_warcraft_wiki_live.py
-          - provider: wowprogress
-            flag: WOWPROGRESS_LIVE_TESTS
-            files: tests/test_wowprogress_live.py
           - provider: raiderio
             flag: RAIDERIO_LIVE_TESTS
             files: tests/test_raiderio_live.py

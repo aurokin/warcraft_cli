@@ -1928,3 +1928,209 @@ def test_raiderio_resolve_credits_realm_spelled_as_a_slug(monkeypatch) -> None:
     assert payload["resolved"] is True
     assert payload["next_command"] == "raiderio guild us malganis gn"
     assert "realm_match" in payload["match"]["ranking"]["match_reasons"]
+
+
+def _raid_ranking_row(rank: int, *, realm: str = "malganis", guild_id: int | None = None) -> dict:
+    name = f"Guild {rank}"
+    return {
+        "rank": rank,
+        "regionRank": rank + 1,
+        "guild": {
+            "id": guild_id if guild_id is not None else 1000 + rank,
+            "name": name,
+            "faction": "horde",
+            "realm": {"name": "Mal'Ganis", "slug": realm},
+            "region": {"name": "United States & Oceania", "slug": "us", "short_name": "US"},
+            "path": f"/guilds/us/{realm}/Guild%20{rank}",
+        },
+        "encountersDefeated": [
+            {"slug": "vexie-and-the-geargrinders", "firstDefeated": "2025-03-07T05:25:48.000Z", "lastDefeated": "2025-08-05T01:09:05.000Z"},
+        ],
+        "guildPrivacy": {"raidPulls": True},
+        "encountersPulled": [
+            {"id": 1, "slug": "vexie-and-the-geargrinders", "numPulls": 3, "pullStartedAt": "2025-03-07T05:19:17Z", "bestPercent": 0, "isDefeated": True},
+            {"id": 2, "slug": "cauldron-of-carnage", "numPulls": 12, "pullStartedAt": "2025-03-07T05:33:27Z", "bestPercent": 41.5, "isDefeated": False},
+        ],
+    }
+
+
+def test_raiderio_leaderboard_raids_normalizes_rows(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_rankings(self, *, raid, difficulty, region, realm=None, limit, page):  # noqa: ANN001
+        captured.update(raid=raid, difficulty=difficulty, region=region, realm=realm, limit=limit, page=page)
+        return {"raidRankings": [_raid_ranking_row(1), _raid_ranking_row(2)]}
+
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.raid_rankings", fake_rankings)
+    result = runner.invoke(
+        raiderio_app,
+        ["leaderboard", "raids", "--raid", "liberation-of-undermine", "--region", "US", "--realm", "malganis", "--limit", "5"],
+    )
+    assert result.exit_code == 0, result.output
+
+    payload = json.loads(result.stdout)
+    assert not envelope_violations(payload)
+    assert payload["kind"] == "raid_leaderboard"
+    assert payload["query"] == {"raid": "liberation-of-undermine", "difficulty": "mythic", "region": "us", "realm": "malganis", "page": 0, "limit": 5}
+    assert captured == {"raid": "liberation-of-undermine", "difficulty": "mythic", "region": "us", "realm": "malganis", "limit": 20, "page": 0}
+    assert payload["count"] == 2
+    assert payload["sample"] == {"requested_limit": 5, "returned_row_count": 2, "pages_requested": 1, "pages_fetched": 1, "limit_reached": False}
+
+    top = payload["data"]["rows"][0]
+    assert top["rank"] == 1
+    assert top["region_rank"] == 2
+    assert top["realm_rank"] is None
+    assert top["guild"] == {
+        "name": "Guild 1",
+        "realm": "malganis",
+        "realm_name": "Mal'Ganis",
+        "region": "us",
+        "faction": "horde",
+        "profile_url": "https://raider.io/guilds/us/malganis/Guild%201",
+    }
+    assert top["encounters_defeated_count"] == 1
+    assert top["encounters_pulled_count"] == 2
+    assert top["encounters_defeated"] == [
+        {"slug": "vexie-and-the-geargrinders", "first_defeated": "2025-03-07T05:25:48.000Z", "last_defeated": "2025-08-05T01:09:05.000Z"}
+    ]
+    assert top["encounters_pulled"][1] == {
+        "slug": "cauldron-of-carnage",
+        "num_pulls": 12,
+        "best_percent": 41.5,
+        "is_defeated": False,
+        "pull_started_at": "2025-03-07T05:33:27Z",
+    }
+    assert payload["citations"]["leaderboard_urls"] == ["https://raider.io/liberation-of-undermine/rankings/us/mythic?realm=malganis"]
+    assert payload["freshness"]["sampled_at"] and payload["freshness"]["cache_ttl_seconds"] >= 1
+    assert payload["provenance"]["citations"] == payload["citations"]
+
+
+def test_raiderio_leaderboard_raids_paginates_for_limit(monkeypatch) -> None:
+    # --limit beyond one 20-row page must fetch more pages and stop at the first short page.
+    def fake_rankings(self, *, raid, difficulty, region, realm=None, limit, page):  # noqa: ANN001
+        assert limit == 20
+        if page == 0:
+            return {"raidRankings": [_raid_ranking_row(rank) for rank in range(1, 21)]}
+        if page == 1:
+            return {"raidRankings": [_raid_ranking_row(rank) for rank in range(21, 26)]}
+        raise AssertionError(f"page {page} must not be requested after a short page")
+
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.raid_rankings", fake_rankings)
+    result = runner.invoke(raiderio_app, ["leaderboard", "raids", "--raid", "sporefall", "--limit", "50"])
+    assert result.exit_code == 0, result.output
+
+    payload = json.loads(result.stdout)
+    assert payload["query"]["region"] == "world" and payload["query"]["realm"] is None
+    assert payload["count"] == 25
+    assert payload["sample"] == {"requested_limit": 50, "returned_row_count": 25, "pages_requested": 3, "pages_fetched": 2, "limit_reached": False}
+    assert [row["rank"] for row in payload["rows"]] == list(range(1, 26))
+    assert payload["citations"]["leaderboard_urls"] == ["https://raider.io/sporefall/rankings/world/mythic"]
+
+
+def test_raiderio_leaderboard_raids_trims_to_limit_and_dedupes_guilds(monkeypatch) -> None:
+    def fake_rankings(self, *, raid, difficulty, region, realm=None, limit, page):  # noqa: ANN001
+        base = page * 20
+        rows = [_raid_ranking_row(base + offset) for offset in range(1, 21)]
+        if page == 1:
+            rows[0] = _raid_ranking_row(21, guild_id=1001)  # already seen on page 0
+        return {"raidRankings": rows}
+
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.raid_rankings", fake_rankings)
+    result = runner.invoke(raiderio_app, ["leaderboard", "raids", "--raid", "sporefall", "--difficulty", "heroic", "--limit", "25"])
+    assert result.exit_code == 0, result.output
+
+    payload = json.loads(result.stdout)
+    assert payload["query"]["difficulty"] == "heroic"
+    assert payload["count"] == 25
+    assert payload["sample"]["pages_fetched"] == 2
+    assert payload["sample"]["limit_reached"] is True
+    ranks = [row["rank"] for row in payload["rows"]]
+    assert 21 not in ranks and ranks[-1] == 26
+
+
+@pytest.mark.parametrize(
+    ("args", "fragment"),
+    [
+        (["--raid", "sporefall", "--difficulty", "legendary"], "--difficulty must be one of"),
+        (["--raid", "sporefall", "--region", "mars"], "--region must be one of"),
+        (["--raid", "sporefall", "--realm", "malganis"], "--realm requires a standard --region"),
+    ],
+)
+def test_raiderio_leaderboard_raids_rejects_bad_scope(monkeypatch, args: list[str], fragment: str) -> None:
+    def never(self, **kwargs):  # noqa: ANN001, ANN003
+        raise AssertionError("an invalid scope must be rejected before any request")
+
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.raid_rankings", never)
+    result = runner.invoke(raiderio_app, ["leaderboard", "raids", *args])
+    assert result.exit_code == 2, result.output
+    payload = json.loads(result.stderr)
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "invalid_query"
+    assert fragment in payload["error"]["message"]
+
+
+def test_raiderio_leaderboard_raids_maps_unknown_raid_to_usage_error(monkeypatch) -> None:
+    # Raider.IO answers an unknown raid slug with HTTP 400 "Invalid request query input".
+    def fake_rankings(self, **kwargs):  # noqa: ANN001, ANN003
+        request = httpx.Request("GET", "https://raider.io/api/v1/raiding/raid-rankings")
+        response = httpx.Response(400, json={"statusCode": 400, "error": "Bad Request", "message": "Invalid request query input"}, request=request)
+        raise httpx.HTTPStatusError("400", request=request, response=response)
+
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.raid_rankings", fake_rankings)
+    result = runner.invoke(raiderio_app, ["leaderboard", "raids", "--raid", "nope"])
+    assert result.exit_code == 2, result.output
+    assert json.loads(result.stderr)["error"]["code"] == "invalid_query"
+
+
+def test_raiderio_raids_catalog(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_static(self, *, expansion_id):  # noqa: ANN001
+        captured["expansion_id"] = expansion_id
+        return {
+            "raids": [
+                {
+                    "id": 8062,
+                    "slug": "sporefall",
+                    "name": "Sporefall",
+                    "short_name": "SF",
+                    "icon": "inv_achievement_raid_sporefall",
+                    "starts": {"us": "2026-03-17T15:00:00Z", "eu": "2026-03-18T04:00:00Z"},
+                    "ends": {"us": "2026-08-18T15:00:00Z", "eu": "2026-08-19T04:00:00Z"},
+                    "encounters": [{"id": 1, "slug": "first-boss", "name": "First Boss"}, "junk"],
+                },
+                "junk",
+            ]
+        }
+
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.raid_static_data", fake_static)
+    result = runner.invoke(raiderio_app, ["raids", "--expansion-id", "11"])
+    assert result.exit_code == 0, result.output
+
+    payload = json.loads(result.stdout)
+    assert not envelope_violations(payload)
+    assert payload["kind"] == "raid_catalog"
+    assert payload["query"] == {"expansion_id": 11}
+    assert captured == {"expansion_id": 11}
+    assert payload["count"] == 1
+    assert payload["data"]["rows"] == [
+        {
+            "id": 8062,
+            "slug": "sporefall",
+            "name": "Sporefall",
+            "short_name": "SF",
+            "starts": {"us": "2026-03-17T15:00:00Z", "eu": "2026-03-18T04:00:00Z"},
+            "ends": {"us": "2026-08-18T15:00:00Z", "eu": "2026-08-19T04:00:00Z"},
+            "encounters": [{"id": 1, "slug": "first-boss", "name": "First Boss"}],
+        }
+    ]
+
+
+def test_raiderio_doctor_reports_raid_capabilities_and_ttl() -> None:
+    result = runner.invoke(raiderio_app, ["doctor"])
+    assert result.exit_code == 0
+
+    payload = json.loads(result.stdout)
+    assert payload["capabilities"]["raid_leaderboard"] == "ready"
+    assert payload["capabilities"]["raid_catalog"] == "ready"
+    assert payload["cache"]["ttls"]["raid_rankings"] >= 1

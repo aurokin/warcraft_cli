@@ -10,6 +10,7 @@ import typer
 import warcraft_cli
 from method_cli.main import app as method_app
 from typer.testing import CliRunner
+from warcraft_cli.guild import guild_rank_rows
 from warcraft_cli.main import app as warcraft_app
 from warcraft_cli.providers import PROVIDERS, get_provider
 from warcraft_content.article_bundle import write_article_bundle
@@ -48,10 +49,21 @@ def _stub_raiderio_profile_lookups(monkeypatch: pytest.MonkeyPatch, *, character
     monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.guild_profile_variants", not_found)
 
 
-def _stub_wowprogress_search_probe(monkeypatch: pytest.MonkeyPatch) -> None:
+_LIQUID_GUILD_PROFILE = {
+    "name": "Liquid",
+    "region": "us",
+    "realm": "Illidan",
+    "faction": "horde",
+    "profile_url": "https://raider.io/guilds/us/illidan/Liquid",
+    "members": [],
+}
+
+
+def _stub_raiderio_guild_lookup(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make structured `guild region realm name` queries hit a Raider.IO guild profile."""
     monkeypatch.setattr(
-        "wowprogress_cli.main.WowProgressClient.probe_search_route",
-        lambda self, *, region, realm, name, obj_type: None,
+        "raiderio_cli.client.RaiderIOClient.guild_profile_variants",
+        lambda self, *, region, realm, name, fields=None: dict(_LIQUID_GUILD_PROFILE),
     )
 
 
@@ -370,7 +382,7 @@ def test_warcraft_doctor_reports_ready_and_stubbed_providers() -> None:
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["wrapper"]["provider_count"] == 12
+    assert payload["wrapper"]["provider_count"] == 11
     providers = {row["provider"]: row for row in payload["providers"]}
     assert providers["wowhead"]["status"] == "ready"
     assert providers["method"]["status"] == "ready"
@@ -378,7 +390,6 @@ def test_warcraft_doctor_reports_ready_and_stubbed_providers() -> None:
     assert providers["raiderio"]["status"] == "partial"
     assert providers["warcraftlogs"]["status"] == "partial"
     assert providers["warcraft-wiki"]["status"] == "ready"
-    assert providers["wowprogress"]["status"] == "partial"
     assert providers["simc"]["status"] == "partial"
     assert providers["wowhead"]["expansion_support"]["mode"] == "profiled"
     assert providers["wowhead"]["expansion_support"]["review_status"] == "reviewed"
@@ -403,7 +414,6 @@ def test_warcraft_doctor_reports_ready_and_stubbed_providers() -> None:
     assert providers["raiderio"]["details"]["capabilities"]["search"] == "ready"
     assert providers["warcraftlogs"]["details"]["capabilities"]["search"] == "ready_explicit_report_only"
     assert providers["warcraft-wiki"]["details"]["capabilities"]["article"] == "ready"
-    assert providers["wowprogress"]["details"]["capabilities"]["leaderboard"] == "ready"
     assert providers["simc"]["details"]["capabilities"]["decode_build"] == "ready"
     assert providers["simc"]["details"]["capabilities"]["validate_talent_transport"] == "ready"
     assert providers["warcraftlogs"]["auth"]["required"] is True
@@ -448,7 +458,7 @@ def test_wrapper_capabilities_match_each_cli_doctor_for_search_and_resolve() -> 
     # surface is intentionally excluded: only warcraftlogs/simc/blizzard-api emit
     # a `doctor` capability key, so it is not a parity surface.)
     overstated = {"coming_soon", "not_supported", "ready_explicit_report_only"}
-    assert len(PROVIDERS) == 12
+    assert len(PROVIDERS) == 11
     for registration in PROVIDERS:
         capabilities = _provider_doctor_capabilities(registration)
         for surface in ("search", "resolve"):
@@ -574,7 +584,6 @@ def test_warcraft_doctor_reports_expansion_filtering_state() -> None:
         "icy-veins",
         "raiderio",
         "warcraft-wiki",
-        "wowprogress",
         "simc",
         "raidbots",
         "blizzard-api",
@@ -710,7 +719,6 @@ def test_warcraft_doctor_reports_retail_filter_state() -> None:
         "raiderio",
         "warcraftlogs",
         "warcraft-wiki",
-        "wowprogress",
         "raidbots",
         "lorrgs",
     }
@@ -807,7 +815,7 @@ def test_warcraft_search_fans_out_across_providers(monkeypatch) -> None:
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["provider_count"] == 12
+    assert payload["provider_count"] == 11
     assert payload["count"] == 1
     assert payload["results"][0]["provider"] == "wowhead"
     providers = {row["provider"]: row for row in payload["providers"]}
@@ -817,8 +825,6 @@ def test_warcraft_search_fans_out_across_providers(monkeypatch) -> None:
     assert providers["warcraftlogs"]["payload"]["count"] == 0
     assert "explicit report URL or a bare report code" in providers["warcraftlogs"]["payload"]["message"]
     assert providers["warcraft-wiki"]["payload"]["count"] == 0
-    assert providers["wowprogress"]["payload"]["count"] == 0
-    assert "structured queries" in providers["wowprogress"]["payload"]["message"]
     assert "simc" not in providers
     assert "raidbots" not in providers
     excluded = {row["provider"]: row for row in payload["excluded_providers"]}
@@ -1904,7 +1910,6 @@ def test_warcraft_guide_compare_query_fails_when_too_few_guides_export(
 
 
 def test_warcraft_search_sorts_results_globally_by_ranking(monkeypatch) -> None:
-    _stub_wowprogress_search_probe(monkeypatch)
     def fake_wowhead_search(self, query: str):  # noqa: ANN001
         return {
             "search": query,
@@ -1968,10 +1973,6 @@ def test_warcraft_search_expansion_filter_excludes_nonmatching_providers(monkeyp
         "warcraft_wiki_cli.main.WarcraftWikiClient.search_articles",
         lambda self, query, limit: (_ for _ in ()).throw(AssertionError("warcraft-wiki should be excluded")),
     )
-    monkeypatch.setattr(
-        "wowprogress_cli.main.WowProgressClient.probe_search_route",
-        lambda self, *, region, realm, name, obj_type: (_ for _ in ()).throw(AssertionError("wowprogress should be excluded")),
-    )
 
     result = runner.invoke(warcraft_app, ["--expansion", "wotlk", "search", "thunderfury", "--limit", "3"])
     assert result.exit_code == 0
@@ -1987,7 +1988,6 @@ def test_warcraft_search_expansion_filter_excludes_nonmatching_providers(monkeyp
         "icy-veins",
         "raiderio",
         "warcraft-wiki",
-        "wowprogress",
         "simc",
         "raidbots",
         "blizzard-api",
@@ -2022,8 +2022,6 @@ def test_warcraft_search_compact_expansion_debug(monkeypatch) -> None:
                         kind=None: (_ for _ in ()).throw(AssertionError("raiderio should be excluded")))
     monkeypatch.setattr("warcraft_wiki_cli.main.WarcraftWikiClient.search_articles", lambda self, query,
                         limit: (_ for _ in ()).throw(AssertionError("warcraft-wiki should be excluded")))
-    monkeypatch.setattr("wowprogress_cli.main.WowProgressClient.probe_search_route", lambda self, *, region, realm,
-                        name, obj_type: (_ for _ in ()).throw(AssertionError("wowprogress should be excluded")))
 
     result = runner.invoke(
         warcraft_app,
@@ -2071,7 +2069,6 @@ def test_warcraft_search_retail_filter_keeps_fixed_retail_providers_and_excludes
         "warcraft_wiki_cli.main.WarcraftWikiClient.search_articles",
         lambda self, query, limit: [{"title": "Mistweaver Monk", "pageid": 1}],
     )
-    monkeypatch.setattr("wowprogress_cli.main.WowProgressClient.probe_search_route", lambda self, *, region, realm, name, obj_type: None)
 
     result = runner.invoke(warcraft_app, ["--expansion", "retail", "search", "mistweaver monk guide", "--limit", "5"])
     assert result.exit_code == 0
@@ -2086,7 +2083,6 @@ def test_warcraft_search_retail_filter_keeps_fixed_retail_providers_and_excludes
         "raiderio",
         "warcraftlogs",
         "warcraft-wiki",
-        "wowprogress",
         "lorrgs",
     }
     assert {row["provider"] for row in payload["excluded_providers"]} == {
@@ -2112,21 +2108,7 @@ def test_warcraft_resolve_retail_filter_keeps_fixed_retail_profile_provider(monk
         "warcraft_wiki_cli.main.WarcraftWikiClient.search_articles",
         lambda self, query, limit: [],
     )
-    monkeypatch.setattr(
-        "wowprogress_cli.main.WowProgressClient.probe_search_route",
-        lambda self, *, region, realm, name, obj_type: {
-            "_search_kind": "guild",
-            "guild": {
-                "name": "Liquid",
-                "region": "us",
-                "realm": "illidan",
-                "faction": "Horde",
-                "page_url": "https://www.wowprogress.com/guild/us/illidan/Liquid",
-            },
-        }
-        if obj_type == "guild"
-        else None,
-    )
+    _stub_raiderio_guild_lookup(monkeypatch)
 
     result = runner.invoke(warcraft_app, ["--expansion", "retail", "resolve", "guild us illidan Liquid"])
     assert result.exit_code == 0
@@ -2134,7 +2116,7 @@ def test_warcraft_resolve_retail_filter_keeps_fixed_retail_profile_provider(monk
     payload = json.loads(result.stdout)
     assert payload["requested_expansion"] == "retail"
     assert payload["expansion_filter_active"] is True
-    assert payload["provider"] == "wowprogress"
+    assert payload["provider"] == "raiderio"
     assert set(payload["included_providers"]) == {
         "wowhead",
         "method",
@@ -2142,7 +2124,6 @@ def test_warcraft_resolve_retail_filter_keeps_fixed_retail_profile_provider(monk
         "raiderio",
         "warcraftlogs",
         "warcraft-wiki",
-        "wowprogress",
         "lorrgs",
     }
     assert {row["provider"] for row in payload["excluded_providers"]} == {
@@ -2166,27 +2147,13 @@ def test_warcraft_search_prefers_profile_provider_for_structured_guild_queries(m
     )
     monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.search", lambda self, *, term, kind=None: {"matches": []})
     monkeypatch.setattr("warcraft_wiki_cli.main.WarcraftWikiClient.search_articles", lambda self, query, limit: (0, []))
-    monkeypatch.setattr(
-        "wowprogress_cli.main.WowProgressClient.probe_search_route",
-        lambda self, *, region, realm, name, obj_type: {
-            "_search_kind": "guild",
-            "guild": {
-                "name": "Liquid",
-                "region": "us",
-                "realm": "illidan",
-                "faction": "Horde",
-                "page_url": "https://www.wowprogress.com/guild/us/illidan/Liquid",
-            },
-        }
-        if obj_type == "guild"
-        else None,
-    )
+    _stub_raiderio_guild_lookup(monkeypatch)
 
     result = runner.invoke(warcraft_app, ["search", "guild us illidan Liquid", "--limit", "5"])
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["results"][0]["provider"] == "wowprogress"
+    assert payload["results"][0]["provider"] == "raiderio"
     assert any(
         "intent:structured_profile:family:profile" in reason
         for reason in payload["results"][0]["wrapper_ranking"]["reasons"]
@@ -2200,50 +2167,18 @@ def test_warcraft_search_compact_and_ranking_debug(monkeypatch) -> None:
     monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.sitemap_guides", lambda self: [])
     monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.search", lambda self, *, term, kind=None: {"matches": []})
     monkeypatch.setattr("warcraft_wiki_cli.main.WarcraftWikiClient.search_articles", lambda self, query, limit: (0, []))
-    monkeypatch.setattr(
-        "wowprogress_cli.main.WowProgressClient.probe_search_route",
-        lambda self, *, region, realm, name, obj_type: {
-            "_search_kind": "guild",
-            "guild": {
-                "name": "Liquid",
-                "region": "us",
-                "realm": "illidan",
-                "faction": "Horde",
-                "page_url": "https://www.wowprogress.com/guild/us/illidan/Liquid",
-            },
-        }
-        if obj_type == "guild"
-        else None,
-    )
+    _stub_raiderio_guild_lookup(monkeypatch)
 
     result = runner.invoke(warcraft_app, ["search", "guild us illidan Liquid", "--limit", "3", "--compact", "--ranking-debug"])
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
     assert payload["providers"] == []
-    assert payload["results"][0]["provider"] == "wowprogress"
+    assert payload["results"][0]["provider"] == "raiderio"
     assert payload["ranking_debug"][0]["wrapper_ranking"]["provider_family"] == "profile"
 
 
-def test_warcraft_search_adds_synthetic_wowprogress_leaderboard_candidate(monkeypatch) -> None:
-    _stub_wowprogress_search_probe(monkeypatch)
-    monkeypatch.setattr("wowhead_cli.main.WowheadClient.search_suggestions", lambda self, query: {"search": query, "results": []})
-    monkeypatch.setattr("method_cli.main.MethodClient.sitemap_guides", lambda self: [])
-    monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.sitemap_guides", lambda self: [])
-    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.search", lambda self, *, term, kind=None: {"matches": []})
-    monkeypatch.setattr("warcraft_wiki_cli.main.WarcraftWikiClient.search_articles", lambda self, query, limit: (0, []))
-
-    result = runner.invoke(warcraft_app, ["search", "leaderboard us illidan", "--compact", "--ranking-debug"])
-    assert result.exit_code == 0
-
-    payload = json.loads(result.stdout)
-    assert payload["results"][0]["provider"] == "wowprogress"
-    assert payload["results"][0]["kind"] == "leaderboard"
-    assert payload["results"][0]["follow_up_command"] == "wowprogress leaderboard pve us --realm illidan"
-
-
 def test_warcraft_resolve_prefers_stronger_later_provider(monkeypatch) -> None:
-    _stub_wowprogress_search_probe(monkeypatch)
     def fake_wowhead_search(self, query: str):  # noqa: ANN001
         return {
             "search": query,
@@ -2296,10 +2231,6 @@ def test_warcraft_resolve_expansion_filter_blocks_retail_only_resolution(monkeyp
         "warcraft_wiki_cli.main.WarcraftWikiClient.search_articles",
         lambda self, query, limit: (_ for _ in ()).throw(AssertionError("warcraft-wiki should be excluded")),
     )
-    monkeypatch.setattr(
-        "wowprogress_cli.main.WowProgressClient.probe_search_route",
-        lambda self, *, region, realm, name, obj_type: (_ for _ in ()).throw(AssertionError("wowprogress should be excluded")),
-    )
 
     result = runner.invoke(warcraft_app, ["--expansion", "wotlk", "resolve", "guild us illidan Liquid"])
     assert result.exit_code == 0
@@ -2316,7 +2247,6 @@ def test_warcraft_resolve_expansion_filter_blocks_retail_only_resolution(monkeyp
         "icy-veins",
         "raiderio",
         "warcraft-wiki",
-        "wowprogress",
         "simc",
         "raidbots",
         "blizzard-api",
@@ -2335,8 +2265,6 @@ def test_warcraft_resolve_expansion_debug(monkeypatch) -> None:
                         kind=None: (_ for _ in ()).throw(AssertionError("raiderio should be excluded")))
     monkeypatch.setattr("warcraft_wiki_cli.main.WarcraftWikiClient.search_articles", lambda self, query,
                         limit: (_ for _ in ()).throw(AssertionError("warcraft-wiki should be excluded")))
-    monkeypatch.setattr("wowprogress_cli.main.WowProgressClient.probe_search_route", lambda self, *, region, realm,
-                        name, obj_type: (_ for _ in ()).throw(AssertionError("wowprogress should be excluded")))
 
     result = runner.invoke(
         warcraft_app,
@@ -2437,22 +2365,6 @@ def test_warcraft_resolve_prefers_raiderio_for_character_queries_when_both_resol
         },
     )
     monkeypatch.setattr("warcraft_wiki_cli.main.WarcraftWikiClient.search_articles", lambda self, query, limit: (0, []))
-    monkeypatch.setattr(
-        "wowprogress_cli.main.WowProgressClient.probe_search_route",
-        lambda self, *, region, realm, name, obj_type: {
-            "_search_kind": "character",
-            "character": {
-                "name": "Roguecane",
-                "region": "us",
-                "realm": "illidan",
-                "guild_name": "Liquid",
-                "class_name": "Rogue",
-                "page_url": "https://www.wowprogress.com/character/us/illidan/Roguecane",
-            },
-        }
-        if obj_type == "char"
-        else None,
-    )
 
     result = runner.invoke(warcraft_app, ["resolve", "character us illidan Roguecane", "--ranking-debug"])
     assert result.exit_code == 0
@@ -2463,35 +2375,21 @@ def test_warcraft_resolve_prefers_raiderio_for_character_queries_when_both_resol
     assert payload["ranking_debug"][0]["provider"] == "raiderio"
 
 
-def test_warcraft_resolve_can_select_wowprogress(monkeypatch) -> None:
+def test_warcraft_resolve_can_select_raiderio_guild(monkeypatch) -> None:
     _stub_raiderio_profile_lookups(monkeypatch)
     monkeypatch.setattr("wowhead_cli.main.WowheadClient.search_suggestions", lambda self, query: {"search": query, "results": []})
     monkeypatch.setattr("method_cli.main.MethodClient.sitemap_guides", lambda self: [])
     monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.sitemap_guides", lambda self: [])
     monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.search", lambda self, *, term, kind=None: {"matches": []})
     monkeypatch.setattr("warcraft_wiki_cli.main.WarcraftWikiClient.search_articles", lambda self, query, limit: (0, []))
-    monkeypatch.setattr(
-        "wowprogress_cli.main.WowProgressClient.probe_search_route",
-        lambda self, *, region, realm, name, obj_type: {
-            "_search_kind": "guild",
-            "guild": {
-                "name": "Liquid",
-                "region": "us",
-                "realm": "illidan",
-                "faction": "Horde",
-                "page_url": "https://www.wowprogress.com/guild/us/illidan/Liquid",
-            },
-        }
-        if obj_type == "guild"
-        else None,
-    )
+    _stub_raiderio_guild_lookup(monkeypatch)
 
     result = runner.invoke(warcraft_app, ["resolve", "guild us illidan Liquid"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["resolved"] is True
-    assert payload["provider"] == "wowprogress"
-    assert payload["next_command"] == "wowprogress guild us illidan Liquid"
+    assert payload["provider"] == "raiderio"
+    assert payload["next_command"] == "raiderio guild us illidan Liquid"
     assert payload["match"]["wrapper_ranking"]["provider_family"] == "profile"
 
 
@@ -2501,7 +2399,6 @@ def test_warcraft_resolve_can_select_warcraftlogs_for_explicit_report_reference(
     monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.sitemap_guides", lambda self: [])
     monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.search", lambda self, *, term, kind=None: {"matches": []})
     monkeypatch.setattr("warcraft_wiki_cli.main.WarcraftWikiClient.search_articles", lambda self, query, limit: (0, []))
-    monkeypatch.setattr("wowprogress_cli.main.WowProgressClient.probe_search_route", lambda self, *, region, realm, name, obj_type: None)
 
     result = runner.invoke(warcraft_app, ["resolve", "https://www.warcraftlogs.com/reports/abcd1234#fight=3"])
     assert result.exit_code == 0
@@ -2797,48 +2694,14 @@ def test_warcraft_resolve_compact_and_ranking_debug(monkeypatch) -> None:
     monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.sitemap_guides", lambda self: [])
     monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.search", lambda self, *, term, kind=None: {"matches": []})
     monkeypatch.setattr("warcraft_wiki_cli.main.WarcraftWikiClient.search_articles", lambda self, query, limit: (0, []))
-    monkeypatch.setattr(
-        "wowprogress_cli.main.WowProgressClient.probe_search_route",
-        lambda self, *, region, realm, name, obj_type: {
-            "_search_kind": "guild",
-            "guild": {
-                "name": "Liquid",
-                "region": "us",
-                "realm": "illidan",
-                "faction": "Horde",
-                "page_url": "https://www.wowprogress.com/guild/us/illidan/Liquid",
-            },
-        }
-        if obj_type == "guild"
-        else None,
-    )
+    _stub_raiderio_guild_lookup(monkeypatch)
 
     result = runner.invoke(warcraft_app, ["resolve", "guild us illidan Liquid", "--compact", "--ranking-debug"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["providers"] == []
-    assert payload["match"]["provider"] == "wowprogress"
-    assert payload["ranking_debug"][0]["provider"] == "wowprogress"
-
-
-def test_warcraft_resolve_does_not_fabricate_synthetic_wowprogress_leaderboard_route(monkeypatch) -> None:
-    _stub_wowprogress_search_probe(monkeypatch)
-    monkeypatch.setattr("wowhead_cli.main.WowheadClient.search_suggestions", lambda self, query: {"search": query, "results": []})
-    monkeypatch.setattr("method_cli.main.MethodClient.sitemap_guides", lambda self: [])
-    monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.sitemap_guides", lambda self: [])
-    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.search", lambda self, *, term, kind=None: {"matches": []})
-    monkeypatch.setattr("warcraft_wiki_cli.main.WarcraftWikiClient.search_articles", lambda self, query, limit: (0, []))
-
-    result = runner.invoke(warcraft_app, ["resolve", "leaderboard us illidan", "--compact", "--ranking-debug"])
-    assert result.exit_code == 0
-
-    payload = json.loads(result.stdout)
-    assert payload["resolved"] is False
-    assert payload["selected_provider"] is None
-    assert payload["provider"] == "warcraft"
-    assert envelope_violations(payload) == []
-    assert payload["next_command"] is None
-    assert payload["match"] is None
+    assert payload["match"]["provider"] == "raiderio"
+    assert payload["ranking_debug"][0]["provider"] == "raiderio"
 
 
 def test_warcraft_passthrough_to_wowhead(monkeypatch) -> None:
@@ -5955,31 +5818,6 @@ def test_warcraft_passthrough_to_warcraft_wiki(monkeypatch) -> None:
     assert payload["article"]["title"] == "World of Warcraft API"
 
 
-def test_warcraft_passthrough_to_wowprogress(monkeypatch) -> None:
-    monkeypatch.setattr(
-        "wowprogress_cli.main.WowProgressClient.fetch_guild_page_variants",
-        lambda self, *, region, realm, name: {
-            "guild": {
-                "name": "Liquid",
-                "region": "us",
-                "realm": "US-Illidan",
-                "faction": "Horde",
-                "page_url": "https://www.wowprogress.com/guild/us/illidan/Liquid",
-                "armory_url": "https://worldofwarcraft.com/en-us/guild/illidan/liquid",
-            },
-            "progress": {"summary": "8/8 (M)", "ranks": {"world": "1", "region": "1", "realm": "1"}},
-            "item_level": {"average": 724.51, "group_size": "20-man", "ranks": {"world": "9026", "region": "4149", "realm": "238"}},
-            "encounters": {"count": 0, "items": []},
-            "citations": {"page": "https://www.wowprogress.com/guild/us/illidan/Liquid"},
-        },
-    )
-    result = runner.invoke(warcraft_app, ["wowprogress", "guild", "us", "illidan", "Liquid"])
-    assert result.exit_code == 0
-
-    payload = json.loads(result.stdout)
-    assert payload["guild"]["name"] == "Liquid"
-
-
 def test_warcraft_passthrough_to_warcraftlogs() -> None:
     result = runner.invoke(
         warcraft_app,
@@ -5993,159 +5831,137 @@ def test_warcraft_passthrough_to_warcraftlogs() -> None:
     assert payload["next_command"] == "warcraftlogs report-encounter abcd1234 --fight-id 3"
 
 
-def test_warcraft_guild_merges_sources_and_normalizes_query(monkeypatch) -> None:
-    def fake_provider_invoke(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, object]:
-        assert args[1:] == ["us", "mal-ganis", "gn"]
-        if provider == "raiderio":
-            return {
-                "provider": provider,
-                "exit_code": 0,
-                "payload": {
-                    "guild": {
-                        "name": "gn",
-                        "region": "us",
-                        "realm": "Mal'Ganis",
-                        "faction": "horde",
-                        "profile_url": "https://raider.io/guilds/us/malganis/gn",
-                        "member_count": 1,
-                    },
-                    "raiding": {
-                        "progression": [{"raid_slug": "tier-mn-1", "summary": "0/9 N", "total_bosses": 9}],
-                        "rankings": [{"raid_slug": "tier-mn-1", "normal": {"world": 0, "region": 0, "realm": 0}}],
-                    },
-                    "roster_preview": [
-                        {
-                            "name": "Fharg",
-                            "class_name": "Shaman",
-                            "active_spec_name": "Enhancement",
-                            "profile_url": "https://raider.io/characters/us/malganis/Fharg",
-                        }
-                    ],
-                    "citations": {"profile": "https://raider.io/guilds/us/malganis/gn"},
-                },
-                "stdout": "",
-            }
-        return {
-            "provider": provider,
-            "exit_code": 0,
-            "payload": {
-                "guild": {
-                    "name": "gn",
-                    "region": "us",
-                    "realm": "Mal'Ganis",
-                    "faction": "Horde",
-                    "page_url": "https://www.wowprogress.com/guild/us/mal-ganis/gn",
-                },
-                "progress": {
-                    "raid": "Liberation of Undermine",
-                    "tier_key": "tier34",
-                    "summary": "8/8 (M)",
-                    "ranks": {"world": "19", "region": "6", "realm": "2"},
-                },
-                "item_level": {
-                    "average": 732.1,
-                    "ranks": {"world": "1", "region": "1", "realm": "1"},
-                },
-                "encounters": {"count": 8, "items": [{"encounter": "Chrome King Gallywix"}]},
-                "citations": {"page": "https://www.wowprogress.com/guild/us/mal-ganis/gn"},
+_RAIDERIO_GN_GUILD_PAYLOAD: dict[str, object] = {
+    "guild": {
+        "name": "gn",
+        "region": "us",
+        "realm": "Mal'Ganis",
+        "faction": "horde",
+        "profile_url": "https://raider.io/guilds/us/malganis/gn",
+        "member_count": 1,
+    },
+    "raiding": {
+        "raid_count": 2,
+        "progression": [
+            {
+                "raid_slug": "liberation-of-undermine",
+                "summary": "8/8 M",
+                "total_bosses": 8,
+                "normal_bosses_killed": 8,
+                "heroic_bosses_killed": 8,
+                "mythic_bosses_killed": 8,
             },
-            "stdout": "",
+            {
+                "raid_slug": "manaforge-omega",
+                "summary": "2/8 N",
+                "total_bosses": 8,
+                "normal_bosses_killed": 2,
+                "heroic_bosses_killed": 0,
+                "mythic_bosses_killed": 0,
+            },
+        ],
+        "rankings": [
+            {
+                "raid_slug": "liberation-of-undermine",
+                "normal": {"world": 40, "region": 12, "realm": 3},
+                "heroic": {"world": 30, "region": 9, "realm": 2},
+                "mythic": {"world": 19, "region": 6, "realm": 2},
+            }
+        ],
+    },
+    "roster_preview": [
+        {
+            "name": "Fharg",
+            "class_name": "Shaman",
+            "active_spec_name": "Enhancement",
+            "profile_url": "https://raider.io/characters/us/malganis/Fharg",
         }
+    ],
+    "citations": {"profile": "https://raider.io/guilds/us/malganis/gn"},
+}
 
-    monkeypatch.setattr("warcraft_cli.main.provider_invoke", fake_provider_invoke)
+
+def _fake_raiderio_guild_invoke(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, object]:
+    assert provider == "raiderio"
+    assert args == ["guild", "us", "mal-ganis", "gn"]
+    return {"provider": provider, "exit_code": 0, "payload": _RAIDERIO_GN_GUILD_PAYLOAD, "stdout": ""}
+
+
+def test_warcraft_guild_is_a_single_raiderio_source_and_normalizes_query(monkeypatch) -> None:
+    monkeypatch.setattr("warcraft_cli.main.provider_invoke", _fake_raiderio_guild_invoke)
 
     result = runner.invoke(warcraft_app, ["guild", "na", "Mal'Ganis", "gn"])
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["ok"] is True
+    assert envelope_violations(payload) == []
+    assert payload["kind"] == "guild_snapshot"
     assert payload["query"] == {"region": "us", "realm": "mal-ganis", "name": "gn"}
-    assert payload["guild"]["name"] == "gn"
+    assert payload["guild"] == {"name": "gn", "region": "us", "realm": "Mal'Ganis", "faction": "horde"}
+    assert set(payload["sources"]) == {"raiderio"}
     assert payload["sources"]["raiderio"]["status"] == "ok"
-    assert payload["sources"]["wowprogress"]["status"] == "ok"
-    assert (
-        payload["sources"]["raiderio"]["payload"]["guild"]["profile_url"]
-        == "https://raider.io/guilds/us/malganis/gn"
-    )
-    assert payload["sources"]["wowprogress"]["payload"]["progress"]["summary"] == "8/8 (M)"
-    assert payload["conflicts"]["different_tier_window_detected"] is True
+    assert payload["sources"]["raiderio"]["summary"]["active_raid"]["key"] == "liberation-of-undermine"
+    assert "conflicts" not in payload
 
 
-def test_warcraft_guild_history_and_ranks_use_wowprogress(monkeypatch) -> None:
-    history_payload = {
-        "provider": "wowprogress",
-        "kind": "guild_history",
-        "guild": {"name": "gn", "region": "us", "realm": "Mal'Ganis"},
-        "count": 1,
-        "tiers": [
-            {
-                "tier_key": "tier34",
-                "raid": "Liberation of Undermine",
-                "current": True,
-                "progress": "8/8 (M)",
-                "progress_ranks": {"world": "19", "region": "6", "realm": "2"},
-                "item_level_average": 732.1,
-                "item_level_ranks": {"world": "1", "region": "1", "realm": "1"},
-                "last_kill_at": "Apr 4, 2025 02:03",
-                "page_url": "https://www.wowprogress.com/guild/us/mal-ganis/gn/rating.tier34",
-            }
-        ],
-        "citations": {"page": "https://www.wowprogress.com/guild/us/mal-ganis/gn"},
+def test_guild_rank_rows_joins_progression_with_rankings_on_raid_slug() -> None:
+    rows = guild_rank_rows(_RAIDERIO_GN_GUILD_PAYLOAD)
+
+    assert [row["raid_slug"] for row in rows] == ["liberation-of-undermine", "manaforge-omega"]
+    assert rows[0]["mythic_bosses_killed"] == 8
+    assert rows[0]["ranks"] == {
+        "normal": {"world": 40, "region": 12, "realm": 3},
+        "heroic": {"world": 30, "region": 9, "realm": 2},
+        "mythic": {"world": 19, "region": 6, "realm": 2},
     }
+    # A raid with progression but no rankings row still appears, with null ranks.
+    assert rows[1]["summary"] == "2/8 N"
+    assert rows[1]["ranks"] == {"normal": None, "heroic": None, "mythic": None}
+
+
+def test_warcraft_guild_ranks_reports_raiderio_ranks_per_raid(monkeypatch) -> None:
+    monkeypatch.setattr("warcraft_cli.main.provider_invoke", _fake_raiderio_guild_invoke)
+
+    result = runner.invoke(warcraft_app, ["guild-ranks", "us", "Mal'Ganis", "gn"])
+    assert result.exit_code == 0
+
+    payload = json.loads(result.stdout)
+    assert envelope_violations(payload) == []
+    assert payload["kind"] == "guild_ranks"
+    assert payload["source"] == "raiderio"
+    assert payload["query"] == {"region": "us", "realm": "mal-ganis", "name": "gn"}
+    assert payload["guild"]["profile_url"] == "https://raider.io/guilds/us/malganis/gn"
+    assert payload["count"] == 2
+    assert payload["raids"][0]["ranks"]["mythic"]["world"] == 19
+    assert payload["citations"] == {"profile": "https://raider.io/guilds/us/malganis/gn"}
+    assert payload["provider_payload"] == _RAIDERIO_GN_GUILD_PAYLOAD
+
+
+def test_warcraft_guild_commands_propagate_the_source_exit_code(monkeypatch) -> None:
+    """A missing Raider.IO guild exits with the source's own code (4), not a flat 1."""
 
     def fake_provider_invoke(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, object]:
-        assert provider == "wowprogress"
-        assert args[1:] == ["us", "mal-ganis", "gn"]
-        payload = (
-            history_payload
-            if args[0] == "guild-history"
-            else {**history_payload, "kind": "guild_ranks"}
-        )
+        assert provider == "raiderio"
         return {
             "provider": provider,
-            "exit_code": 0,
-            "payload": payload,
+            "exit_code": 4,
+            "payload": {"ok": False, "error": {"code": "not_found", "message": "Could not find requested guild"}},
             "stdout": "",
         }
 
     monkeypatch.setattr("warcraft_cli.main.provider_invoke", fake_provider_invoke)
 
-    history_result = runner.invoke(warcraft_app, ["guild-history", "us", "Mal'Ganis", "gn"])
-    assert history_result.exit_code == 0
-    history = json.loads(history_result.stdout)
-    assert history["ok"] is True
-    assert history["source"] == "wowprogress"
-    assert history["tiers"][0]["raid"] == "Liberation of Undermine"
-    assert history["provider_payload"]["kind"] == "guild_history"
-
-    ranks_result = runner.invoke(warcraft_app, ["guild-ranks", "us", "Mal'Ganis", "gn"])
-    assert ranks_result.exit_code == 0
-    ranks = json.loads(ranks_result.stdout)
-    assert ranks["ok"] is True
-    assert ranks["tiers"][0]["progress_ranks"]["world"] == "19"
-    assert ranks["provider_payload"]["kind"] == "guild_ranks"
-
-
-def test_warcraft_guild_history_propagates_the_source_exit_code(monkeypatch) -> None:
-    """A blocked or missing WowProgress source exits with its own code, not a flat 1."""
-
-    def fake_provider_invoke(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, object]:
-        assert provider == "wowprogress"
-        return {
-            "provider": provider,
-            "exit_code": 5,
-            "payload": {"ok": False, "error": {"code": "blocked", "message": "Cloudflare challenge"}},
-            "stdout": "",
-        }
-
-    monkeypatch.setattr("warcraft_cli.main.provider_invoke", fake_provider_invoke)
-
-    for command in ("guild-history", "guild-ranks"):
+    for command in ("guild", "guild-ranks"):
         result = runner.invoke(warcraft_app, [command, "us", "Mal'Ganis", "gn"])
-        assert result.exit_code == 5, result.output
+        assert result.exit_code == 4, result.output
         payload = json.loads(result.stderr)
         assert payload["ok"] is False
-        assert payload["error"]["code"] == "blocked"
+        assert payload["error"]["code"] in {"not_found", "guild_not_found"}
+
+
+def test_warcraft_guild_history_is_gone() -> None:
+    result = runner.invoke(warcraft_app, ["guild-history", "us", "Mal'Ganis", "gn"])
+    assert result.exit_code == 2
 
 
 def _wrapper_module_trees() -> dict[str, ast.Module]:
@@ -6198,7 +6014,7 @@ def test_warcraft_doctor_reports_tiers_and_no_shell_fallback() -> None:
     assert "shell_fallback" not in wrapper
     assert wrapper["tiers"] == {
         "core": ["wowhead", "warcraftlogs", "simc"],
-        "supported": ["method", "icy-veins", "raiderio", "warcraft-wiki", "wowprogress"],
+        "supported": ["method", "icy-veins", "raiderio", "warcraft-wiki"],
         "experimental": ["raidbots", "blizzard-api", "curseforge", "lorrgs"],
     }
     tier_by_provider = {name: tier for tier, names in wrapper["tiers"].items() for name in names}
@@ -6217,7 +6033,6 @@ def test_warcraft_search_reports_provider_failure_as_error_row(monkeypatch) -> N
     monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.sitemap_guides", lambda self: [])
     monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.search", lambda self, query, limit=5: [])
     monkeypatch.setattr("warcraft_wiki_cli.main.WarcraftWikiClient.search_articles", lambda self, query, limit=5: [])
-    _stub_wowprogress_search_probe(monkeypatch)
 
     result = runner.invoke(warcraft_app, ["search", "thunderfury"])
     assert result.exit_code == 0

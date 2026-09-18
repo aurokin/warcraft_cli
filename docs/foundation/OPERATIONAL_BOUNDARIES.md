@@ -14,7 +14,7 @@ Repo-wide expectations for respectful provider use, safe logging, and failure re
 | Practice | Guidance |
 | --- | --- |
 | Default posture | Treat provider APIs and HTML endpoints as rate-limited. Back off when responses are slow, empty, or HTTP 429/503. |
-| Caching | Use built-in CLI caches (`wowhead`, `warcraftlogs`, `wowprogress`, etc.) when repeating work. Clear or repair caches only when freshness requires it (`cache-clear`, `cache-repair`). |
+| Caching | Use built-in CLI caches (`wowhead`, `warcraftlogs`, `raiderio`, etc.) when repeating work. Clear or repair caches only when freshness requires it (`cache-clear`, `cache-repair`). |
 | Concurrency | Wowhead `comments --hydrate-missing-replies` exposes `--max-concurrency`; keep values modest (default 4). Avoid unbounded parallel fanout across many CLIs. |
 | Live matrices | Warcraft Logs `make test-live-matrix` and Wowhead live workflows are **operator-triggered** — do not schedule them as high-frequency CI against production without credentials and scope review. |
 | Warcraft Logs | Query `warcraftlogs rate-limit` and inspect `doctor` / auth status before large report-scoped batch jobs. |
@@ -26,12 +26,11 @@ Every `httpx` request routed through `warcraft_api.http.request_with_retries` wa
 | Provider family | Current behavior |
 | --- | --- |
 | Wowhead / Method / Icy Veins / Raider.IO / Wiki / Lorrgs / Raidbots | `httpx` clients built through `warcraft_api.http.build_client` send `User-Agent: warcraft-cli/<version> (+https://github.com/aurokin/warcraft_cli)`. |
-| WowProgress | Browser-style transport and impersonation settings (see `docs/wowprogress/README.md` and `wowprogress doctor`). |
 | Warcraft Logs | Official GraphQL API with OAuth/client credentials — not HTML scraping. |
 
 **Guidance:**
 
-- Do not misrepresent automated traffic as end-user browser sessions except where a provider CLI documents that transport (for example WowProgress impersonation).
+- Do not misrepresent automated traffic as end-user browser sessions except where a provider CLI documents that transport.
 - When adding new HTTP clients, document the User-Agent and fingerprint choice in the provider's `docs/<cli>/README.md`.
 - Prefer stable, honest identification over rotating spoofed identities.
 
@@ -113,7 +112,6 @@ warcraft --expansion retail doctor
 | --- | --- | --- | --- |
 | `wowhead` | `wowhead doctor` | Session dedupe; optional live probes | `tests/test_wowhead_schema_snapshots.py`, parser canaries |
 | `warcraftlogs` | `warcraftlogs doctor` | `warcraftlogs rate-limit`, OAuth | `tests/test_warcraftlogs_cli.py`, `make test-live-matrix` |
-| `wowprogress` | `wowprogress doctor` | Browser transport | `tests/test_wowprogress_cli.py` |
 | `warcraft` (wrapper) | `warcraft doctor` | Aggregates provider doctors | `tests/test_warcraft_wrapper.py` |
 
 ## Related

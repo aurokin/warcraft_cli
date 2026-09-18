@@ -36,7 +36,6 @@ because each one is published:
 | `packages/warcraftlogs-cli/` | `warcraftlogs-cli` | `warcraftlogs_cli` | `warcraftlogs` | core |
 | `packages/simc-cli/` | `simc-cli` | `simc_cli` | `simc` | core |
 | `packages/raiderio-cli/` | `raiderio-cli` | `raiderio_cli` | `raiderio` | supported |
-| `packages/wowprogress-cli/` | `wowprogress-cli` | `wowprogress_cli` | `wowprogress` | supported |
 | `packages/warcraft-wiki-cli/` | `warcraft-wiki-cli` | `warcraft_wiki_cli` | `warcraft-wiki` | supported |
 | `packages/icy-veins-cli/` | `icy-veins-cli` | `icy_veins_cli` | `icy-veins` | supported |
 | `packages/method-cli/` | `method-cli` | `method_cli` | `method` | supported |

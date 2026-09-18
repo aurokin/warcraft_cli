@@ -18,7 +18,7 @@ SPELL_SEARCH_QUERY = "fireball"
 REALM_SLUG = "illidan"
 REGION = "us"
 
-# Warcraft Logs / Raider.IO / WowProgress: the maintainer's guild and character (small but stable).
+# Warcraft Logs / Raider.IO: the maintainer's guild and character (small but stable).
 GUILD_REGION = "us"
 GUILD_REALM = "malganis"
 GUILD_REALM_DISPLAY = "Mal'Ganis"

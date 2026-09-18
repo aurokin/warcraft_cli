@@ -23,7 +23,6 @@ dependencies = [
   "warcraft-wiki-cli>=0.1.0",
   "warcraftlogs-cli>=0.1.0",
   "wowhead-cli>=0.1.0",
-  "wowprogress-cli>=0.1.0",
 ]
 
 [project.scripts]

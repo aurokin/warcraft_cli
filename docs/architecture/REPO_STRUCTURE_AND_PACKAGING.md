@@ -122,7 +122,6 @@ thin wrappers over that surface.
 - `warcraftlogs` — GraphQL query catalogs, OAuth scope handling, sampled report analytics
 - `simc` — local SimulationCraft repo/build/run orchestration and APL analysis
 - `raiderio` — Raider.IO endpoints, profiles, sampled Mythic+ analytics
-- `wowprogress` — WowProgress ranking and profile lookups
 - `warcraft-wiki` — MediaWiki-backed reference lookups
 - `icy-veins` — Icy Veins guide families
 - `method` — Method.gg article-shaped guides
@@ -160,7 +159,7 @@ auth-aware and capability-aware, and `warcraft doctor` reports which providers w
 ## Storage Policy
 
 One root per XDG category, `shared/` for genuinely shared data, then one directory per provider:
-`wowhead/`, `warcraftlogs/`, `simc/`, `raiderio/`, `wowprogress/`, `warcraft-wiki/`, `icy-veins/`,
+`wowhead/`, `warcraftlogs/`, `simc/`, `raiderio/`, `warcraft-wiki/`, `icy-veins/`,
 `method/`, `lorrgs/`, `raidbots/`, `blizzard/`, `curseforge/`. Do not use `shared/` as a dumping
 ground.
 

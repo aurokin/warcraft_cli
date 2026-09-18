@@ -3,7 +3,7 @@
 Live coverage follows the repo's per-provider convention: gated by the ``RAIDBOTS_LIVE_TESTS``
 env flag (wired in ``tests/conftest.py``) and run via ``make test-live``. There is intentionally
 no dedicated CI workflow — only wowhead has one (its scraper canaries). Every other provider
-(raiderio/method/warcraftlogs/wowprogress/…) relies on generic ``ci.yml`` (``make test-fast``)
+(raiderio/method/warcraftlogs/…) relies on generic ``ci.yml`` (``make test-fast``)
 plus this opt-in live path, and raidbots matches that.
 """
 

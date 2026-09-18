@@ -25,10 +25,10 @@ agent workflow end to end rather than probing one endpoint, so the wrapper compo
 ## Policy
 
 - **Skips are failures.** A provider that cannot be reached, a credential that is missing, or a
-  parser that returns nothing fails the run. Upstream bot protection is a failure too, because
-  the clients impersonate a browser on purpose.
-- **Exclude explicitly, never implicitly.** `WARCRAFT_E2E_SKIP=curseforge,wowprogress` skips
-  those providers with a visible reason. `redis` is an optional component: set
+  parser that returns nothing fails the run. Upstream bot protection is a failure too, not a
+  skip.
+- **Exclude explicitly, never implicitly.** `WARCRAFT_E2E_SKIP=curseforge` skips
+  that provider with a visible reason. `redis` is an optional component: set
   `WARCRAFT_E2E_REDIS_URL` to exercise it.
 - **No stale pins.** Only permanent identifiers live in `tests/e2e/pins.py` (Thunderfury is item
   19019 forever). Anything that ages out, such as report codes, seasons, news slugs, or current
@@ -77,10 +77,6 @@ because they rewrite the saved token. Optional inputs:
 | `WARCRAFT_E2E_RAIDBOTS_REPORT` | the Raidbots `inspect-report` / `input` round trip (reports expire, so there is no stable public pin) |
 | `WARCRAFT_E2E_REDIS_URL` | the Redis cache journey |
 | `WARCRAFT_E2E_PACE_SECONDS` | minimum gap between consecutive runs of the same binary (default 0.75s; Wowhead is held to 1.5s because it answers bursts with an IP-level 403) |
-
-Known outage: WowProgress sits behind a Cloudflare managed challenge that no impersonation
-profile passes (see `docs/wowprogress/README.md`), so its journeys fail by design until the
-transport changes. Run with `WARCRAFT_E2E_SKIP=wowprogress` in the meantime.
 
 ## Relationship to the live suites
 

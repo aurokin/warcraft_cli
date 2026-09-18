@@ -32,9 +32,6 @@ PROVIDER_STUBS: dict[str, tuple[tuple[str, Any], ...]] = {
     "icy-veins": (("icy_veins_cli.client.IcyVeinsClient.sitemap_guides", lambda self: []),),
     "raiderio": (("raiderio_cli.client.RaiderIOClient.search", lambda self, *, term, kind=None: {"matches": []}),),
     "warcraft-wiki": (("warcraft_wiki_cli.client.WarcraftWikiClient.search_articles", lambda self, query, *, limit: (0, [])),),
-    "wowprogress": (
-        ("wowprogress_cli.client.WowProgressClient.probe_search_route", lambda self, *, region, realm, name, obj_type: None),
-    ),
     "lorrgs": (
         ("lorrgs_cli.client.LorrgsClient.specs", lambda self: {"payload": {"specs": []}, "source_url": "https://api.lorrgs.io/api/spec"}),
         ("lorrgs_cli.client.LorrgsClient.bosses", lambda self: {"payload": {"bosses": []}, "source_url": "https://api.lorrgs.io/api/boss"}),

@@ -7,12 +7,12 @@ from tests.e2e.harness import EXIT_NETWORK, EXIT_USAGE, run, run_text
 
 
 def test_warcraft_doctor_reports_every_provider(doctor_rows):
-    assert {"wowhead", "warcraftlogs", "simc", "raiderio", "wowprogress", "warcraft-wiki", "icy-veins", "method", "lorrgs", "raidbots", "blizzard-api", "curseforge"} <= set(doctor_rows)
+    assert {"wowhead", "warcraftlogs", "simc", "raiderio", "warcraft-wiki", "icy-veins", "method", "lorrgs", "raidbots", "blizzard-api", "curseforge"} <= set(doctor_rows)
     assert all(row.get("tier") in {"core", "supported", "experimental"} for row in doctor_rows.values())
 
 
 def test_help_is_plain_text_for_every_binary():
-    for binary in ("warcraft", "wowhead", "warcraftlogs", "simc", "raiderio", "wowprogress", "warcraft-wiki", "icy-veins", "method", "lorrgs", "raidbots", "blizzard", "curseforge"):
+    for binary in ("warcraft", "wowhead", "warcraftlogs", "simc", "raiderio", "warcraft-wiki", "icy-veins", "method", "lorrgs", "raidbots", "blizzard", "curseforge"):
         result = run_text(binary, "--help")
         assert "Usage:" in result.stdout, result.describe()
 

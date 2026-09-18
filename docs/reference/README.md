@@ -13,7 +13,6 @@ live here only; `docs/USAGE.md` carries workflows and conventions.
 | `icy-veins` | supported | [icy-veins.md](icy-veins.md) | Icy Veins article provider with sitemap-backed search, resolve, and guide bundle export/query. |
 | `raiderio` | supported | [raiderio.md](raiderio.md) | Raider.IO API provider with search, resolve, character, guild, and mythic-plus runs lookups. |
 | `warcraft-wiki` | supported | [warcraft-wiki.md](warcraft-wiki.md) | Warcraft Wiki reference provider with MediaWiki-backed search, resolve, article export, and local query. |
-| `wowprogress` | supported | [wowprogress.md](wowprogress.md) | WowProgress rankings provider with structured search, conservative resolve, guild, character, and PvE leaderboard lookups. |
 | `simc` | core | [simc.md](simc.md) | SimulationCraft local provider with repo inspection, build decoding, and local run workflows. |
 | `warcraftlogs` | core | [warcraftlogs.md](warcraftlogs.md) | Warcraft Logs API provider with explicit report discovery plus guild, character, and report analytics commands. |
 | `raidbots` | experimental | [raidbots.md](raidbots.md) | Raidbots report consumption provider: parse public reports and bridge SimC input to local simc. |
