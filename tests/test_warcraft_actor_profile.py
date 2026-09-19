@@ -285,7 +285,7 @@ def test_actor_profile_rejects_ambiguous_actor(monkeypatch) -> None:
     assert result.exit_code == 1
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "ambiguous_actor"
-    assert len(payload["error"]["candidates"]) == 2
+    assert len(payload["error"]["details"]["candidates"]) == 2
 
 
 def test_actor_profile_rejects_multi_spec_actor(monkeypatch) -> None:
@@ -340,7 +340,7 @@ def test_actor_profile_errors_when_region_unknown(monkeypatch) -> None:
     payload = json.loads(result.stderr)
     assert payload["ok"] is False
     assert payload["error"]["code"] == "actor_region_unknown"
-    assert payload["error"]["missing_field"] == "region"
+    assert payload["error"]["details"]["missing_field"] == "region"
     # The resolved log side is still surfaced for context even though the lookup could not run.
     assert payload["sources"]["warcraftlogs"]["class_spec_identity"]["identity"]["actor_class"] == "rogue"
 
@@ -364,7 +364,7 @@ def test_actor_profile_errors_when_profile_lookup_fails(monkeypatch) -> None:
     payload = json.loads(result.stderr)
     assert payload["ok"] is False
     assert payload["error"]["code"] == "profile_lookup_failed"
-    assert payload["error"]["source"]["code"] == "character_not_found"
+    assert payload["error"]["details"]["source"]["code"] == "character_not_found"
 
 
 def test_actor_profile_errors_when_actor_absent(monkeypatch) -> None:
@@ -376,7 +376,7 @@ def test_actor_profile_errors_when_actor_absent(monkeypatch) -> None:
     payload = json.loads(result.stderr)
     assert payload["ok"] is False
     assert payload["error"]["code"] == "actor_not_found"
-    assert payload["error"]["available_actors"] == ["Someoneelse"]
+    assert payload["error"]["details"]["available_actors"] == ["Someoneelse"]
 
 
 def test_actor_profile_errors_when_warcraftlogs_lookup_fails(monkeypatch) -> None:
@@ -393,4 +393,4 @@ def test_actor_profile_errors_when_warcraftlogs_lookup_fails(monkeypatch) -> Non
     assert result.exit_code == 1
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "warcraftlogs_lookup_failed"
-    assert payload["error"]["source"]["code"] == "auth_required"
+    assert payload["error"]["details"]["source"]["code"] == "auth_required"

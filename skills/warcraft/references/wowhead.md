@@ -31,6 +31,15 @@
 - use timeline filters like `--author`, `--type`, `--region`, and `--forum` instead of scanning broad result sets manually
 - use guide filters like `--author`, `--updated-after`, `--patch-min`, and `--sort`
 - use `news-post` and `blue-topic` once you already have a specific URL
+- filter timelines by date with `--date-from` / `--date-to`, and read each row's ISO `posted_at`
+  rather than the rendered `posted` string; rows Wowhead timestamps in a form the CLI cannot read
+  are left out of the window and counted in `scan.unparsed_timestamps`
+- `resolve --entity-type` covers the types Wowhead's suggestion endpoint labels; mounts, recipes,
+  and battle pets are not among them and come back as items, spells, or NPCs
+- read `count` as the rows you were given and `total_matches` / `total` as what the limit cut off;
+  raise `--limit` when `truncated` is true
+- `resolve` drops to medium confidence with no `next_command` when its best guide match is far
+  older than the other guides in the same response; run the `fallback_search_command` instead
 
 ## Boundaries
 

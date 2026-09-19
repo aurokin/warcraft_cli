@@ -116,6 +116,19 @@ vocabulary (1 generic, 2 usage, 3 auth, 4 not found, 5 network/upstream). Both a
 them. Provider rows inside `warcraft search` and `warcraft resolve` output carry `ok` and `error`
 from the underlying call alongside the registry `status`.
 
+Fanout failure rules:
+- `failed_providers`, `failed_provider_count`, and `answered_provider_count` are always present, in
+  both the default and the `--brief` shape, so a dead fanout is never indistinguishable from an
+  empty one
+- when every included provider failed, the wrapper emits an error envelope whose `error.code` is the
+  providers' shared failure code (or `upstream_error` when they disagree), so the exit code the
+  contract derives from `error.code` is true, with the rows under `error.details.failed_providers`
+
+Composite failure rules:
+- a composite command re-emits its failing source's own `error.code` and exits with that code's
+  mapped exit code; it does not invent a code that disagrees with the exit code
+- structured context belongs under `error.details`, never as a sibling of `code`/`message`
+
 ## Provider Tiers
 
 Every registration declares a tier. `warcraft doctor` reports `wrapper.tiers` and a `tier` per
@@ -124,8 +137,8 @@ provider row, and [ROADMAP.md](../ROADMAP.md) and `README.md` use the same membe
 | Tier | Providers | Meaning |
 |------|-----------|---------|
 | core | `wowhead`, `warcraftlogs`, `simc` | deepest surface and contracts; the product |
-| supported | `method`, `icy-veins`, `raiderio`, `warcraft-wiki` | real, narrower surfaces expected to work |
-| experimental | `raidbots`, `blizzard-api`, `curseforge`, `lorrgs` | thin or unproven; `blizzard-api` and `curseforge` are additionally unverified against live endpoints (`provenance.verified: false`) |
+| supported | `method`, `icy-veins`, `raiderio`, `warcraft-wiki`, `lorrgs` | real, narrower surfaces expected to work |
+| experimental | `raidbots`, `blizzard-api`, `curseforge` | thin or unproven; `blizzard-api` and `curseforge` are additionally unverified against live endpoints (`provenance.verified: false`) |
 
 Tier is descriptive, not a permission: it tells an agent how much to trust the surface before
 building a workflow on it.
@@ -241,12 +254,20 @@ Search result ordering rules:
 - that wrapper layer should be query-aware and use signals like provider family, result kind, and structured query hints
 - that wrapper layer may also use provider-specific boosts for certain intents, such as preferring `raiderio` for character-profile and guild-profile queries
 - wrapper ranking must stay inspectable in output, not hidden behind opaque ordering
+- provider scores are not comparable across providers, so each candidate's score is rescaled against
+  its own provider's best row for the query before the merge; `wrapper_ranking` keeps the raw
+  `provider_score` and the `provider_max_score` divisor so the rescale is auditable
+- the rescale divisor has a floor, so a provider whose best row is weak is scaled down rather than
+  promoted to a full score for topping its own empty field
 - the wrapper should not invent a fake universal content model beyond that thin ranking/orchestration layer
+- `count` is the merged candidate total and `truncated` reports whether `--limit` cut the list
 
 Ranking policy location:
 - default policy lives in shared code
 - optional local override file: `~/.config/warcraft/wrapper_ranking.json`
 - override files should only tune weights and mappings, not redefine provider contracts
+- an unreadable or malformed override file fails with `invalid_config` (exit 2) naming the file,
+  instead of an `internal_error` from the JSON parser
 
 ## Resolve Rules
 
@@ -264,11 +285,14 @@ Resolve selection rules:
 - prefer higher provider-reported confidence first
 - use the tunable wrapper ranking layer, then the provider-reported match score, as tie-breakers
 - preserve the chosen provider's `match`, `next_command`, and confidence instead of flattening them
+- when nothing resolved, surface the providers' own `fallback_search_command` and the best
+  provider candidate as `best_unresolved_candidate` (flagged `resolved: false`) so the caller
+  always has a next step
 
 Debuggability rules:
 - `warcraft search --ranking-debug` should expose compact ranking summaries for the top wrapper candidates
 - `warcraft resolve --ranking-debug` should expose the ranked resolved candidates the wrapper considered
-- `warcraft search --compact` and `warcraft resolve --compact` should omit bulky provider payloads while keeping the wrapper decision surface intact
+- `warcraft search --brief` and `warcraft resolve --brief` should omit bulky provider payloads while keeping the wrapper decision surface intact (`--compact` is the global string-truncation flag and nothing else)
 
 ## Doctor Rules
 

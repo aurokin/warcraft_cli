@@ -14,7 +14,7 @@ Pass these before the subcommand: `warcraft --pretty <command> ...`.
 | `--compact` | boolean | false | Truncate long string fields to reduce payload size. |
 | `--fields` | str (repeatable) |  | Return only selected fields (dot paths). Repeat or pass comma-separated values. |
 | `--fields-strict` | boolean | false | Fail when a requested --fields dot-path is missing from the payload. |
-| `--profile` | str |  | Output profile preset: agent (default compact JSON), human (pretty JSON), debug (pretty JSON + diagnostics). |
+| `--profile` | str |  | Output profile preset: agent (default compact JSON) or human (pretty JSON). |
 | `--compact-max-chars` | int range | 280 | Maximum string length before --compact truncation adds an ellipsis. |
 | `--expansion` | str |  | Filter wrapper search/resolve to a specific expansion profile. Passed through to expansion-aware providers like wowhead. |
 
@@ -40,8 +40,8 @@ Fan out a free-text query to every search-ready provider and rank the merged can
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--limit` | int range | 5 | Maximum provider-local results to request. |
-| `--compact` | boolean | false | Return a smaller wrapper payload with compact candidates. |
+| `--limit` | int range | 5 | Results to request from each provider, and the size of the merged result list. |
+| `--brief` | boolean | false | Return a smaller wrapper payload: compact candidate rows and no per-provider payloads. |
 | `--ranking-debug` | boolean | false | Include compact wrapper ranking summaries for the returned candidates. |
 | `--expansion-debug` | boolean | false | Include a compact expansion support snapshot for all providers. |
 
@@ -60,13 +60,13 @@ Fan out a query to every resolve-ready provider and return the single best match
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `--limit` | int range | 5 | Maximum provider-local candidates to request. |
-| `--compact` | boolean | false | Return a smaller wrapper payload with a compact match summary. |
+| `--brief` | boolean | false | Return a smaller wrapper payload: a compact match summary and no per-provider payloads. |
 | `--ranking-debug` | boolean | false | Include compact wrapper ranking summaries for resolved candidates. |
 | `--expansion-debug` | boolean | false | Include a compact expansion support snapshot for all providers. |
 
 ## warcraft guild
 
-Return one guild identity's Raider.IO snapshot: identity, active raid, roster preview, citations.
+Return one guild identity's Raider.IO snapshot: identity, every raid's progression and ranks, roster preview, citations. Raider.IO orders its progression and rankings rows by raid slug and reports no raid start/end window, so the snapshot names no "active" raid; cross-reference `warcraft raiderio raids` for the tier that is currently running.
 
 **Arguments**
 
@@ -165,7 +165,7 @@ Resolve a guide query across wowhead, method, and icy-veins, export the bundles,
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `--provider` | str (repeatable) |  | Restrict orchestration to one or more providers from: wowhead, method, icy-veins. |
-| `--out-root` | directory |  | Directory root where orchestrated guide bundles should be written. |
+| `--out-root` | directory |  | Directory root where orchestrated guide bundles should be written. Defaults to <XDG data dir>/warcraft/guide_compare/<query-slug>; nothing is written to the current directory. |
 | `--limit` | int range | 5 | Maximum provider-local resolve candidates to request before selecting one guide match. |
 | `--max-age-hours` | int range | 24 | Reuse existing orchestrated guide bundles only when they are newer than this many hours. |
 | `--force-refresh / --no-force-refresh` | boolean | false | Re-export selected guide bundles even when a fresh orchestrated bundle already exists. |
@@ -254,4 +254,4 @@ Each entry forwards every remaining argument to that provider's own CLI.
 - `warcraft raidbots ...` -> [raidbots](raidbots.md): Proxy to the raidbots CLI (experimental tier). Remaining arguments are passed through unchanged.
 - `warcraft blizzard ...` -> [blizzard](blizzard.md): Proxy to the blizzard CLI (experimental tier). Remaining arguments are passed through unchanged.
 - `warcraft curseforge ...` -> [curseforge](curseforge.md): Proxy to the curseforge CLI (experimental tier). Remaining arguments are passed through unchanged.
-- `warcraft lorrgs ...` -> [lorrgs](lorrgs.md): Proxy to the lorrgs CLI (experimental tier). Remaining arguments are passed through unchanged.
+- `warcraft lorrgs ...` -> [lorrgs](lorrgs.md): Proxy to the lorrgs CLI (supported tier). Remaining arguments are passed through unchanged.

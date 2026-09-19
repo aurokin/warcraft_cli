@@ -14,7 +14,7 @@ from typing import Any, cast
 import httpx
 from warcraft_core.auth import provider_auth_status
 from warcraft_core.envelope import Envelope, success_envelope, with_legacy_keys
-from warcraft_core.exit_codes import EXIT_AUTH
+from warcraft_core.exit_codes import EXIT_AUTH, EXIT_USAGE
 from warcraft_core.paths import provider_state_path
 from warcraft_core.provider import ProviderError, ProviderSurface
 
@@ -36,13 +36,21 @@ from blizzard_api_cli.client import (
 )
 
 # Blizzard ships as an experimental provider: the surface is still small (three reads plus doctor)
-# and search/resolve are stubs. Routing for us/eu/kr/tw is live-confirmed, so those payloads carry
-# provenance.verified=true; CN is unreachable from here and stays false.
+# and search/resolve are stubs. The per-region verification posture lives in client.VERIFIED_REGIONS
+# and client.verification_note(), which --help, doctor and every payload all quote.
 TIER = "experimental"
 
-# Client error codes that mean "the caller is not authenticated"; everything else the client raises
-# is an input or response-shape problem and keeps the generic exit code from exit_code_for().
-_AUTH_ERROR_CODES = frozenset({"missing_client_credentials"})
+# Exit codes for the client's own error codes, which ERROR_CONTRACT's table does not name (so they
+# would otherwise all exit 1). The routing codes are raised while validating flag values, before any
+# request: a mistyped --region/--game-version is a usage error, and must exit 2 like the equivalent
+# mistake on every other binary, so an agent can tell "fix the command" from "something broke".
+# Anything else the client raises (invalid_response) is a real failure and keeps the generic code.
+_EXIT_CODE_BY_CLIENT_CODE = {
+    "missing_client_credentials": EXIT_AUTH,
+    "unsupported_region": EXIT_USAGE,
+    "unsupported_game_version": EXIT_USAGE,
+    "classic_profile_unsupported": EXIT_USAGE,
+}
 
 _HTTP_STATUS_ERROR_CODES = {401: "auth_failed", 403: "auth_failed", 404: "not_found", 429: "rate_limited"}
 
@@ -50,7 +58,7 @@ _HTTP_STATUS_ERROR_CODES = {401: "auth_failed", 403: "auth_failed", 404: "not_fo
 def provider_error(exc: BlizzardClientError | httpx.HTTPError) -> ProviderError:
     """Translate a client or transport failure into the shared error code + exit code vocabulary."""
     if isinstance(exc, BlizzardClientError):
-        return ProviderError(exc.code, exc.message, exit_code=EXIT_AUTH if exc.code in _AUTH_ERROR_CODES else None)
+        return ProviderError(exc.code, exc.message, exit_code=_EXIT_CODE_BY_CLIENT_CODE.get(exc.code))
     if isinstance(exc, httpx.HTTPStatusError):
         status = exc.response.status_code
         return ProviderError(
@@ -132,8 +140,7 @@ def doctor_envelope() -> Envelope:
             },
             "notes": [
                 "Experimental tier: the read surface is small (realm, item, character) and "
-                "search/resolve are stubs. Payloads routed to a CN namespace report "
-                "provenance.verified=false; every other region is live-confirmed.",
+                "search/resolve are stubs.",
                 "Game Data (realm, item) and Profile (character) commands ship with live OAuth "
                 "client-credentials auth and region/namespace routing.",
                 verification_note(),

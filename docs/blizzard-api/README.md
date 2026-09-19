@@ -12,8 +12,6 @@ thin, not because the data is suspect. Re-verify with:
 BLIZZARD_LIVE_TESTS=1 pytest -q -m live tests/test_blizzard_api_live.py
 ```
 
-CN endpoints are especially unconfirmed; classic namespace strings are best-effort.
-
 ## What It Does
 
 `blizzard` reads the official Battle.net World of Warcraft Game Data and Profile APIs over OAuth
@@ -56,7 +54,7 @@ blizzard --fields data.id,data.name item 19019
 
 Classic-era and Season of Discovery namespaces (`classic1x`) are rejected rather than guessed at.
 The Profile API has no classic namespace, so `blizzard character --classic` fails with
-`classic_profile_unsupported`.
+`classic_profile_unsupported`. All three routing rejections are usage errors and exit 2.
 
 ## Auth
 
@@ -85,9 +83,13 @@ and a `verification_note`.
 are **deprecated**; read them from `data` instead.
 
 Failures write an error envelope to stderr and exit with the shared codes from
-[ERROR_CONTRACT.md](../foundation/ERROR_CONTRACT.md): 1 generic, 2 usage, 3 auth
+[ERROR_CONTRACT.md](../foundation/ERROR_CONTRACT.md): 1 generic (`invalid_response`), 2 usage
+(`unsupported_region`, `unsupported_game_version`, `classic_profile_unsupported`), 3 auth
 (`missing_client_credentials`, `auth_failed`), 4 not found, 5 network/upstream (`network_error`,
 `timeout`, `upstream_error`, `rate_limited`). A transport failure never prints a traceback.
+
+Flag validation runs before any request, so a bad `--region`/`--game-version` fails offline with
+exit 2 and never spends a round trip.
 
 ## Wrapper Integration
 

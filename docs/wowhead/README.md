@@ -18,6 +18,27 @@ Wowhead's historical top-level keys such as `results`, `entity`, `comments`, and
 `data` carries those same keys; the top-level copies are deprecated. With `--stream`, the JSONL
 header empties the streamed collection in both places.
 
+Nothing is dropped silently. In a result list, `count` is the number of rows returned and the block
+also reports the pre-limit total — `total` for link lists, `total_matches` for `search`, `resolve`,
+`news`, `blue-tracker`, `guides`, and `guide-bundle-search` — next to a `truncated` flag. Blocks
+that deliberately return a sample instead (`comments`, the linked-entity preview,
+`analysis_surfaces`) report the full `count` alongside `more_available` / `needs_raw_fetch` and a
+`fetch_more_command`.
+
+Listing rows expose both what Wowhead rendered and a machine-readable timestamp: `posted` is the
+upstream string (`news` renders "2026/09/18 at 3:30 PM", `blue-tracker` sends
+"2026-09-18 18:48:08") and `posted_at` is the same instant as an ISO 8601 UTC value, which is what
+`--date-from` / `--date-to` compare against. Wowhead writes both forms in US Central with no
+offset, so `posted_at` is shifted accordingly. A row whose timestamp cannot be parsed is excluded
+from a date window rather than passed through, and `scan.unparsed_timestamps` reports how many rows
+that was; when a date window is requested and no scanned row carries a readable timestamp, the
+command fails with `parse_error` instead of returning an empty match set.
+
+`search` results carry `entity_type` and an openable `url` for every type Wowhead's suggestion
+endpoint labels. News posts also carry a `news-post` follow-up; world events are openable but have
+no follow-up command of their own. The one exception is Trading Post activities: Wowhead addresses
+them only by slug, so those rows come back with a null `url`.
+
 Failures print an error envelope on stderr and exit with the shared code:
 
 | Exit | Meaning |
@@ -75,7 +96,7 @@ Entities:
 | Command | Purpose |
 |---------|---------|
 | `entity TYPE ID` | tooltip payload, optionally with comments and a linked-entity preview; `--include-all-comments` replaces the `comments.top` summary with the full `comments.items` list |
-| `entity-page TYPE ID` | parsed page metadata, linked entities, and comments |
+| `entity-page TYPE ID` | parsed page metadata and linked entities; comments come from `comments` |
 | `comments TYPE ID` | ranked comments with filters and optional insight rollups |
 | `compare REF REF ...` | field-by-field diff of two or more entities |
 | `linked-graph TYPE ID` | bounded linked-entity graph rooted at one entity |

@@ -12,12 +12,12 @@ from typing import Annotated, Any, NoReturn
 
 import httpx
 import typer
+from typer.core import TyperOption
 
 from warcraft_core.envelope import Envelope, error_envelope
 from warcraft_core.exit_codes import EXIT_AUTH, EXIT_GENERIC, EXIT_NETWORK, EXIT_NOT_FOUND, EXIT_USAGE, exit_code_for
 from warcraft_core.output import (
     DEFAULT_COMPACT_MAX_CHARS,
-    DiagnosticsCollector,
     OutputOptions,
     OutputProjectionError,
     emit_shaped,
@@ -33,7 +33,9 @@ class RuntimeConfig:
 
     provider: str = ""
     output: OutputOptions = field(default_factory=OutputOptions)
-    diagnostics: DiagnosticsCollector = field(default_factory=DiagnosticsCollector)
+    # Vestige of the removed ``--profile debug`` diagnostics block; wowhead_cli still copies it when
+    # it rebuilds its config. Drop the field once that call site is gone.
+    diagnostics: object | None = None
 
 
 def cfg(ctx: typer.Context) -> RuntimeConfig:
@@ -62,9 +64,7 @@ FieldsStrictOption = Annotated[
 ]
 ProfileOption = Annotated[
     str | None,
-    typer.Option(
-        "--profile", help="Output profile preset: agent (default compact JSON), human (pretty JSON), debug (pretty JSON + diagnostics)."
-    ),
+    typer.Option("--profile", help="Output profile preset: agent (default compact JSON) or human (pretty JSON)."),
 ]
 CompactMaxCharsOption = Annotated[
     int,
@@ -109,9 +109,28 @@ def configure(
 _ACTIVE_COMMAND: str | None = None
 
 
-def _first_positional(args: list[str]) -> str:
-    """Best-effort command name when the callback never ran (for example a failure inside it)."""
-    return next((arg for arg in args if not arg.startswith("-")), "")
+def _command_label(app: typer.Typer, args: list[str]) -> str:
+    """Best-effort command name when the callback never ran, for example because argv failed to parse.
+
+    The value of a global option is not a command: ``--profile human show`` is ``show``. An empty
+    string means the caller named no subcommand at all.
+    """
+    value_options = {
+        spelling
+        for param in typer.main.get_command(app).params
+        if isinstance(param, TyperOption) and not param.is_flag and param.nargs == 1
+        for spelling in (*param.opts, *param.secondary_opts)
+    }
+    skip_next = False
+    for arg in args:
+        if skip_next:
+            skip_next = False
+            continue
+        if arg.startswith("-"):
+            skip_next = arg in value_options
+            continue
+        return arg
+    return ""
 
 
 def install_common_callback(app: typer.Typer, *, provider: str) -> None:
@@ -142,7 +161,7 @@ def install_common_callback(app: typer.Typer, *, provider: str) -> None:
 def emit(ctx: typer.Context, payload: Mapping[str, Any], *, err: bool = False) -> None:
     config = cfg(ctx)
     try:
-        emit_shaped(dict(payload), config.output, diagnostics=config.diagnostics, err=err)
+        emit_shaped(dict(payload), config.output, err=err)
     except OutputProjectionError as exc:
         fail(ctx, "missing_fields", str(exc), exit_code=EXIT_USAGE, details={"missing_fields": list(exc.missing_fields)})
 
@@ -174,6 +193,11 @@ def error_envelope_for(provider: str, command: str, exc: BaseException) -> tuple
 
     if isinstance(exc, ProviderError):
         return build(exc.code, exc.message, exc.exit_code, exc.details)
+    if isinstance(exc, typer.TyperException):
+        # Typer's vendored Click raises these for unknown flags, rejected option values and missing
+        # arguments. Their text becomes the envelope message instead of a Rich usage panel.
+        code = "invalid_argument" if exc.exit_code == EXIT_USAGE else "internal_error"
+        return build(code, exc.format_message(), exc.exit_code)
     if isinstance(exc, httpx.TimeoutException):
         return build("timeout", str(exc) or "request timed out", EXIT_NETWORK)
     if isinstance(exc, httpx.HTTPStatusError):
@@ -189,21 +213,23 @@ def error_envelope_for(provider: str, command: str, exc: BaseException) -> tuple
     return build("internal_error", f"{type(exc).__name__}: {exc}", EXIT_GENERIC)
 
 
-def guarded_run(app: typer.Typer, *, provider: str) -> None:
-    """Entry point for every binary: run ``app`` and turn any escaping exception into an error envelope.
+def guarded_run(app: typer.Typer, *, provider: str) -> NoReturn:
+    """Entry point for every binary: run ``app`` and turn anything that escapes into an error envelope.
 
-    Usage errors (exit 2) and ``typer.Exit`` propagate as SystemExit untouched. Everything else is
-    written to stderr as compact JSON with the contract exit code; a traceback is never printed.
+    Click runs in non-standalone mode so its usage errors (exit 2) reach ``error_envelope_for``
+    instead of being printed as a Rich panel; ``--help`` still prints plain text and exits 0.
+    Everything is written to stderr as compact JSON with the contract exit code, never a traceback.
     """
     global _ACTIVE_COMMAND
     _ACTIVE_COMMAND = None
-    app.pretty_exceptions_enable = False
     try:
-        app()
-    except (SystemExit, KeyboardInterrupt):
-        raise
+        result = typer.main.get_command(app).main(standalone_mode=False)
+    except typer.Abort:
+        raise SystemExit(EXIT_GENERIC) from None
     except Exception as exc:
-        command = _ACTIVE_COMMAND or _first_positional(sys.argv[1:])
+        command = _ACTIVE_COMMAND or _command_label(app, sys.argv[1:])
         payload, exit_code = error_envelope_for(provider, command, exc)
         typer.echo(to_json(payload, pretty=False), err=True)
         raise SystemExit(exit_code) from exc
+    # ``typer.Exit(n)`` surfaces as Click's return value in non-standalone mode; commands return None.
+    raise SystemExit(result if isinstance(result, int) else 0)

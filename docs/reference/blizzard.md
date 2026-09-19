@@ -2,7 +2,7 @@
 
 # blizzard
 
-Official Blizzard Battle.net World of Warcraft API CLI (experimental: endpoints are unverified).
+Official Blizzard Battle.net World of Warcraft API CLI. Experimental tier: the read surface is small (realm, item, character) and search/resolve are stubs. Host, OAuth token URL, and namespace strings are confirmed against live Blizzard endpoints for us/eu/kr/tw (retail and classic Game Data, retail Profile), whose payloads report provenance.verified=true. CN routing (gateway.battlenet.com.cn + oauth.battlenet.com.cn) follows documented Blizzard API conventions and is unconfirmed; those hosts are unreachable from outside China, so CN payloads report provenance.verified=false.
 
 ## Global options
 
@@ -14,7 +14,7 @@ Pass these before the subcommand: `blizzard --pretty <command> ...`.
 | `--compact` | boolean | false | Truncate long string fields to reduce payload size. |
 | `--fields` | str (repeatable) |  | Return only selected fields (dot paths). Repeat or pass comma-separated values. |
 | `--fields-strict` | boolean | false | Fail when a requested --fields dot-path is missing from the payload. |
-| `--profile` | str |  | Output profile preset: agent (default compact JSON), human (pretty JSON), debug (pretty JSON + diagnostics). |
+| `--profile` | str |  | Output profile preset: agent (default compact JSON) or human (pretty JSON). |
 | `--compact-max-chars` | int range | 280 | Maximum string length before --compact truncation adds an ellipsis. |
 
 ## blizzard doctor
@@ -36,7 +36,7 @@ Fetch a connected-realm-class realm record from the dynamic Game Data namespace.
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `--region / -r` | str |  | Blizzard region (us, eu, kr, tw, cn). Defaults to BLIZZARD_REGION or us. |
-| `--classic` | boolean | false | Shorthand for --game-version classic (classic namespaces are best-effort). |
+| `--classic` | boolean | false | Shorthand for --game-version classic. Classic Game Data routing is live-confirmed; the Profile API has no classic namespace. |
 | `--game-version` | str |  | Game version to route: retail (default) or classic. |
 | `--locale` | str |  | Locale passed through to Blizzard (default en_US). Not validated. |
 
@@ -55,7 +55,7 @@ Fetch an item record from the static Game Data namespace.
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `--region / -r` | str |  | Blizzard region (us, eu, kr, tw, cn). Defaults to BLIZZARD_REGION or us. |
-| `--classic` | boolean | false | Shorthand for --game-version classic (classic namespaces are best-effort). |
+| `--classic` | boolean | false | Shorthand for --game-version classic. Classic Game Data routing is live-confirmed; the Profile API has no classic namespace. |
 | `--game-version` | str |  | Game version to route: retail (default) or classic. |
 | `--locale` | str |  | Locale passed through to Blizzard (default en_US). Not validated. |
 
@@ -75,7 +75,7 @@ Fetch a character profile from the profile namespace (retail only).
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `--region / -r` | str |  | Blizzard region (us, eu, kr, tw, cn). Defaults to BLIZZARD_REGION or us. |
-| `--classic` | boolean | false | Shorthand for --game-version classic (classic namespaces are best-effort). |
+| `--classic` | boolean | false | Shorthand for --game-version classic. Classic Game Data routing is live-confirmed; the Profile API has no classic namespace. |
 | `--game-version` | str |  | Game version to route: retail (default) or classic. |
 | `--locale` | str |  | Locale passed through to Blizzard (default en_US). Not validated. |
 

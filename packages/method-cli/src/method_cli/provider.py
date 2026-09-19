@@ -229,13 +229,36 @@ def _reject_unsupported_surface(payload: dict[str, Any]) -> None:
     )
 
 
+def _require_article_content(payload: dict[str, Any]) -> dict[str, Any]:
+    """Reject a page whose article container did not parse.
+
+    When Method changes its guide template the article selectors stop matching and the parser
+    produces an article with no body and no sections; returning that as a success would look like an
+    empty guide instead of a broken parser.
+    """
+    article = payload["article"]
+    if article["sections"] or article["text"]:
+        return payload
+    page_url = payload["guide"]["page_url"]
+    raise ProviderError(
+        "parse_failed",
+        f"No article content parsed from {page_url}; the Method page layout has probably changed.",
+        details={"page_url": page_url},
+    )
+
+
 def _fetch_guide_page(client: MethodClient, guide_ref: str) -> dict[str, Any]:
+    try:
+        guide_ref_parts(guide_ref)
+    except ValueError as exc:
+        raise ProviderError("invalid_guide_ref", str(exc)) from exc
+    # Anything that fails past this point is a page problem, not a bad argument.
     try:
         payload = client.fetch_guide_page(guide_ref)
     except ValueError as exc:
-        raise ProviderError("invalid_guide_ref", str(exc)) from exc
+        raise ProviderError("parse_failed", f"Could not parse the Method guide page for {guide_ref}: {exc}") from exc
     _reject_unsupported_surface(payload)
-    return payload
+    return _require_article_content(payload)
 
 
 def _preview_block(rows: list[dict[str, Any]], fetch_more_command: str) -> dict[str, Any]:
@@ -281,6 +304,54 @@ def _guide_summary_payload(page_payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _with_analysis_surfaces(page_payload: dict[str, Any]) -> dict[str, Any]:
+    page_payload["analysis_surfaces"] = extract_guide_analysis_surfaces(page_payload, provider=PROVIDER_NAME)
+    return page_payload
+
+
+def _fetch_navigation_page(client: MethodClient, page_url: str) -> dict[str, Any]:
+    with transport_errors():
+        page_payload = client.fetch_guide_page(page_url)
+    return _with_analysis_surfaces(_require_article_content(page_payload))
+
+
+def _failed_page_row(item: dict[str, Any], *, code: str, message: str) -> dict[str, Any]:
+    return {"url": item["url"], "section_slug": item.get("section_slug"), "error": {"code": code, "message": message}}
+
+
+def _fetch_navigation_pages(
+    client: MethodClient,
+    initial: dict[str, Any],
+    nav_items: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Fetch every navigation page, keeping the pages that parsed and recording the ones that did not.
+
+    One unreachable or unparsable sibling page must not cost the caller the whole bundle, so each
+    failure becomes a row in the returned list and the bundle reports it.
+    """
+    initial_url = initial["guide"]["page_url"]
+    pages: list[dict[str, Any]] = []
+    failures: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in nav_items:
+        page_url = item["url"]
+        if page_url in seen:
+            continue
+        seen.add(page_url)
+        if page_url == initial_url:
+            pages.append(_with_analysis_surfaces(initial))
+            continue
+        try:
+            pages.append(_fetch_navigation_page(client, page_url))
+        except ProviderError as exc:
+            failures.append(_failed_page_row(item, code=exc.code, message=exc.message))
+        except ValueError as exc:
+            failures.append(_failed_page_row(item, code="parse_failed", message=str(exc)))
+    if initial_url not in seen:
+        pages.insert(0, _with_analysis_surfaces(initial))
+    return pages, failures
+
+
 def _guide_pages_payload(client: MethodClient, guide_ref: str) -> dict[str, Any]:
     initial = _fetch_guide_page(client, guide_ref)
     nav_items = initial["navigation"] or [
@@ -292,21 +363,7 @@ def _guide_pages_payload(client: MethodClient, guide_ref: str) -> dict[str, Any]
             "ordinal": 1,
         }
     ]
-    pages: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for item in nav_items:
-        page_url = item["url"]
-        if page_url in seen:
-            continue
-        seen.add(page_url)
-        page_payload = client.fetch_guide_page(page_url)
-        page_payload["analysis_surfaces"] = extract_guide_analysis_surfaces(page_payload, provider=PROVIDER_NAME)
-        pages.append(page_payload)
-    if initial["guide"]["page_url"] not in seen:
-        initial["analysis_surfaces"] = extract_guide_analysis_surfaces(initial, provider=PROVIDER_NAME)
-        pages.insert(0, initial)
-    elif "analysis_surfaces" not in initial:
-        initial["analysis_surfaces"] = extract_guide_analysis_surfaces(initial, provider=PROVIDER_NAME)
+    pages, failed_pages = _fetch_navigation_pages(client, initial, nav_items)
     guide = dict(initial["guide"])
     guide["page_count"] = len(pages)
     linked_entities = merge_article_linked_entities(pages)
@@ -341,6 +398,12 @@ def _guide_pages_payload(client: MethodClient, guide_ref: str) -> dict[str, Any]
             "count": len(analysis_surfaces),
             "items": analysis_surfaces,
         },
+        # Navigation pages that could not be fetched or parsed; their content is missing from every
+        # merged block above.
+        "failed_pages": {
+            "count": len(failed_pages),
+            "items": failed_pages,
+        },
         "citations": {
             "page": guide["page_url"],
             "pages": [page["guide"]["page_url"] for page in pages],
@@ -351,9 +414,7 @@ def _guide_pages_payload(client: MethodClient, guide_ref: str) -> dict[str, Any]
 def guide(guide_ref: str) -> Envelope:
     """One Method guide page plus a preview of its linked entities, build references, and analysis surfaces."""
     with open_client() as client, transport_errors():
-        page_payload = _fetch_guide_page(client, guide_ref)
-        page_payload["analysis_surfaces"] = extract_guide_analysis_surfaces(page_payload, provider=PROVIDER_NAME)
-        payload = _guide_summary_payload(page_payload)
+        payload = _guide_summary_payload(_with_analysis_surfaces(_fetch_guide_page(client, guide_ref)))
     return _envelope(command="guide", kind="guide", payload=payload, query=guide_ref, provenance=payload["citations"])
 
 
@@ -379,6 +440,7 @@ def guide_export(guide_ref: str, *, out: Path | None = None) -> Envelope:
         "counts": manifest["counts"],
         "output_dir": str(export_dir),
         "manifest": manifest,
+        "failed_pages": pages_payload["failed_pages"],
     }
     return _envelope(
         command="guide-export",

@@ -8,6 +8,7 @@ from typing import Any
 import curseforge_cli.client as client_module
 import httpx
 import pytest
+import typer
 from curseforge_cli.main import app
 from typer.testing import CliRunner
 
@@ -402,3 +403,21 @@ def test_slug_search_auth_failure_names_the_endpoint_and_the_id_fallback(monkeyp
     assert "/v1/mods/search" in message
     assert "numeric mod id" in message
     assert "curseforge addon 3358" in message
+
+
+def test_help_doctor_and_payloads_state_one_verification_posture(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`curseforge --help` (and docs/reference/curseforge.md, generated from it), `doctor`, and the
+    addon payload must state the same verification posture, so the help can never call the API
+    surface unverified while the payloads report provenance.verified=true."""
+    _install_recorder(monkeypatch)
+    addon = runner.invoke(app, ["addon", "deadly-boss-mods"])
+    assert addon.exit_code == 0
+    prov = json.loads(addon.stdout)["provenance"]
+    assert prov["verified"] is True
+
+    help_text = typer.main.get_command(app).help or ""
+    assert prov["verification_note"] in help_text
+
+    doctor = runner.invoke(app, ["doctor"])
+    assert doctor.exit_code == 0
+    assert any(prov["verification_note"] in note for note in json.loads(doctor.stdout)["data"]["notes"])

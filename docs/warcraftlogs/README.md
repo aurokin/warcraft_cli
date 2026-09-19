@@ -85,11 +85,21 @@ Rankings: `encounter-rankings` (official encounter leaderboard).
 Reports: `reports`, `report`, `report-fights`, `report-master-data`, `report-player-details`,
 `report-events`, `report-table`, `report-graph`, `report-rankings`, `graphql`.
 
+`report-player-details` and `report-events` require the slice shapes Warcraft Logs actually
+answers: `--fight-id`, or both `--start-time` and `--end-time`. Anything wider fails with
+`missing_scope` (exit 2) rather than returning an empty payload with `ok: true`.
+
 Encounter analytics (one report, one fight): `report-encounter`, `report-encounter-players`,
 `report-player-talents`, `report-encounter-casts`, `report-encounter-buffs`,
 `report-encounter-aura-summary`, `report-encounter-aura-compare`,
 `report-encounter-damage-source-summary`, `report-encounter-damage-target-summary`,
 `report-encounter-damage-breakdown`.
+
+The aura and damage summaries emit typed rows only. `--include-raw` attaches the untyped Warcraft
+Logs table entry per row, which is where the gear, pet and per-ability detail lives; one fight goes
+from roughly 43 KB to 560 KB with it on. `report-encounter-casts` aggregates only the events one
+`--limit` page returns, so it sets `casts.truncated` and a note when Warcraft Logs hands back a
+`next_page_timestamp`.
 
 Sampled cross-report analytics (many kills, one boss): `boss-kills`, `top-kills`,
 `spec-kill-samples`, `kill-time-distribution`, `boss-spec-usage`, `comp-samples`,
@@ -111,6 +121,14 @@ Failures print the error envelope to stderr and exit with the shared codes: `1` 
 or invalid query, `3` auth, `4` not found, `5` network or upstream. A transport failure is always
 an error envelope, never a traceback.
 
+Rejected input exits `2`: `missing_boss`, `missing_query`, `missing_scope`, `missing_spec`,
+`invalid_query`, `invalid_variables`, `ambiguous_boss`, `boss_scope_mismatch`, and the OAuth
+callback mismatches `missing_state`, `state_mismatch`, `redirect_uri_mismatch`. Auth problems exit
+`3`, including `site_profile_mismatch` when the saved user token belongs to another `--site`.
+Malformed upstream or local data exits `1`: `missing_talent_tree`, `invalid_response`,
+`invalid_provider_payload`, `invalid_transport_packet`, `invalid_runtime_config`,
+`missing_code_verifier`.
+
 Partial GraphQL failures are surfaced, not swallowed: the payload keeps `graphql_warnings` and adds
 a note instead of pretending the result is complete.
 
@@ -119,6 +137,17 @@ a note instead of pretending the result is complete.
 Sampled commands aggregate a bounded cohort of reports, never "all kills". Each one reports its
 sample scope, exclusion and truncation counts, cache provenance, freshness, and citations, per
 [SAFE_ANALYTICS_RULES.md](../foundation/SAFE_ANALYTICS_RULES.md).
+
+`freshness.sampled_at` is when the command ran, not when the cohort was fetched; the cohort itself
+can come from cache. `freshness.cache_hit_count`, `freshness.upstream_request_count`, and
+`freshness.served_entirely_from_cache` make that visible.
+
+`--zone-id` and `--boss-id`/`--boss-name` are validated against Warcraft Logs world data before the
+sample is scanned, so a wrong id fails with `not_found` (exit 4) instead of returning `count: 0`.
+
+`ability-usage-summary` requests at most `--event-limit` cast events per sampled kill. Kills that
+overflow that page are counted in `sample.kills_with_truncated_events_count`, and
+`usage.total_casts_is_lower_bound` then marks every derived total as a floor.
 
 `--spec-name` filters sampled kills by participant spec before aggregation; it does not turn the
 query into a spec leaderboard. `spec-kill-samples` requires `--spec-name` and returns an explicit

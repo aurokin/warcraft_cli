@@ -13,6 +13,7 @@ from typing import Any, NoReturn, Protocol
 
 import typer
 from warcraft_core.cli import emit
+from warcraft_core.exit_codes import EXIT_GENERIC
 from warcraft_core.shapes import as_dict, as_list
 
 from warcraft_cli.cooldown_packet import (
@@ -27,7 +28,7 @@ from warcraft_cli.cooldown_packet import (
     top_parse_samples,
     tracked_spell_ids,
 )
-from warcraft_cli.providers import parse_lorrgs_report_reference, wrapper_envelope
+from warcraft_cli.providers import parse_lorrgs_report_reference, source_exit_code, wrapper_envelope
 
 
 def _emit(ctx: typer.Context, payload: Mapping[str, Any], *, err: bool = False) -> None:
@@ -48,10 +49,12 @@ def _fail_cooldown_packet(
     message: str,
     query: dict[str, Any],
     details: dict[str, Any] | None = None,
+    exit_code: int = EXIT_GENERIC,
 ) -> NoReturn:
-    error = {"code": code, "message": message}
+    """Emit the packet failure envelope. Structured context goes under ``error.details``."""
+    error: dict[str, Any] = {"code": code, "message": message}
     if details:
-        error.update(details)
+        error["details"] = details
     _emit(ctx,
         {
             "ok": False,
@@ -62,7 +65,7 @@ def _fail_cooldown_packet(
         },
         err=True,
     )
-    raise typer.Exit(1)
+    raise typer.Exit(exit_code)
 
 
 def _cooldown_provider_payload(
@@ -86,6 +89,7 @@ def _cooldown_provider_payload(
         message=error_message,
         query=query,
         details={"source": result.get("error"), "provider": provider},
+        exit_code=source_exit_code(result),
     )
 
 
@@ -246,7 +250,9 @@ class CooldownState:
     boss_slug: str | None = None
     lorrgs_phases: list[Any] = field(default_factory=list)
     phase_windows: list[dict[str, Any]] = field(default_factory=list)
-    selected_window: dict[str, Any] = field(default_factory=dict)
+    selected_window: dict[str, Any] | None = None
+    # Set when the cached Lorrgs user report is missing: the packet keeps its Warcraft Logs half.
+    lorrgs_unavailable: dict[str, Any] | None = None
     spec_spells_args: list[str] = field(default_factory=list)
     spec_spells_result: dict[str, Any] | None = None
     cooldown_catalog: dict[int, dict[str, Any]] = field(default_factory=dict)
@@ -317,29 +323,120 @@ def _resolve_reference(ctx: typer.Context, request: CooldownRequest, state: Cool
         state.lorrgs_fight_args += ["--type", parsed_ref.report_type]
 
 
-def _load_lorrgs_fight(ctx: typer.Context, request: CooldownRequest, state: CooldownState, fetch: ProviderFetch) -> None:
-    state.lorrgs_result = _cooldown_provider_payload(
-        ctx,
-        "lorrgs",
-        state.lorrgs_fight_args,
-        fetch=fetch,
-        expansion=request.expansion,
-        query=state.query,
-        error_code="lorrgs_fight_lookup_failed",
-        error_message="Lorrgs cached fight lookup failed.",
+_LORRGS_FALLBACK_ADVICE = (
+    "Re-run with --actor-id <report source id> and --spec-slug <lorrgs spec slug> to build the "
+    "Warcraft Logs half of the packet without Lorrgs phase context."
+)
+_LORRGS_UNCACHED_ADVICE = (
+    "Lorrgs only serves reports it has already cached, which most guild and private reports are not. "
+    f"{_LORRGS_FALLBACK_ADVICE} Or load the report at https://lorrgs.io first."
+)
+
+
+def _lorrgs_lookup_failure(error: Any) -> tuple[str, str]:
+    """Why Lorrgs could not supply the fight, as ``(message, advice)``.
+
+    Lorrgs maps 401/403/404 alike to ``not_found``, so only that code means "this report is not
+    cached". A timeout, a rate limit or a transport failure must report itself instead of blaming
+    the report, or an agent retries the wrong thing.
+    """
+    details = as_dict(error)
+    if str(details.get("code") or "") == "not_found":
+        return (
+            "Lorrgs has no cached copy of this report, so phase markers are unavailable.",
+            _LORRGS_UNCACHED_ADVICE,
+        )
+    reason = str(details.get("message") or "").strip() or "Lorrgs returned no usable payload"
+    reason = reason if reason.endswith((".", "!", "?")) else f"{reason}."
+    return (
+        f"Lorrgs could not serve this report, so phase markers are unavailable: {reason}",
+        _LORRGS_FALLBACK_ADVICE,
     )
-    fight = _find_lorrgs_fight(_lorrgs_payload_data(state.lorrgs_result), state.fight_id)
-    if fight is None:
+
+
+def _degrade_without_lorrgs(
+    ctx: typer.Context,
+    request: CooldownRequest,
+    state: CooldownState,
+    *,
+    code: str,
+    message: str,
+    advice: str,
+    source: Any,
+    exit_code: int,
+) -> None:
+    """Continue without the cached Lorrgs report when the caller supplied what Lorrgs would have.
+
+    Lorrgs supplies phase markers, the actor's report-local source id, and the spec slug. Only the
+    last two can come from flags, so without them there is nothing left to build and the command
+    fails naming the precondition instead of pretending.
+    """
+    if request.actor_id is None or not (request.spec_slug or "").strip():
         _fail_cooldown_packet(
             ctx,
-            code="lorrgs_fight_not_found",
-            message="Lorrgs did not return the selected fight.",
+            code=code,
+            message=f"{message} {advice}",
             query=state.query,
+            details={
+                "source": source,
+                "provider": "lorrgs",
+                "required_flags": ["--actor-id", "--spec-slug"],
+            },
+            exit_code=exit_code,
         )
+    state.lorrgs_unavailable = {"code": code, "message": message, "source": source}
+
+
+def _load_lorrgs_fight(ctx: typer.Context, request: CooldownRequest, state: CooldownState, fetch: ProviderFetch) -> None:
+    result = fetch("lorrgs", state.lorrgs_fight_args, expansion=request.expansion)
+    state.lorrgs_result = result
+    if result.get("status") != "ok":
+        message, advice = _lorrgs_lookup_failure(result.get("error"))
+        _degrade_without_lorrgs(
+            ctx,
+            request,
+            state,
+            code="lorrgs_fight_lookup_failed",
+            message=message,
+            advice=advice,
+            source=result.get("error"),
+            exit_code=source_exit_code(result),
+        )
+        return
+    fight = _find_lorrgs_fight(_lorrgs_payload_data(result), state.fight_id)
+    if fight is None:
+        _degrade_without_lorrgs(
+            ctx,
+            request,
+            state,
+            code="lorrgs_fight_not_found",
+            message="Lorrgs cached this report but not the selected fight, so phase markers are unavailable.",
+            advice=_LORRGS_FALLBACK_ADVICE,
+            source=None,
+            exit_code=EXIT_GENERIC,
+        )
+        return
     state.lorrgs_fight = fight
 
 
+def _select_player_without_lorrgs(request: CooldownRequest, state: CooldownState) -> None:
+    """Take the actor and spec from the flags ``_degrade_without_lorrgs`` already required."""
+    state.actor_id = int(request.actor_id or 0)
+    state.spec_slug = str(request.spec_slug or "")
+    state.boss_slug = request.boss_slug
+    state.query.update(
+        {
+            "actor_id": state.actor_id,
+            "spec_slug": state.spec_slug,
+            "boss_slug": state.boss_slug,
+        }
+    )
+
+
 def _select_player(ctx: typer.Context, request: CooldownRequest, state: CooldownState) -> None:
+    if state.lorrgs_unavailable is not None:
+        _select_player_without_lorrgs(request, state)
+        return
     player, player_error = _resolve_lorrgs_player(
         state.lorrgs_fight, actor_id=request.actor_id, actor_name=request.actor_name
     )
@@ -386,6 +483,10 @@ def _select_player(ctx: typer.Context, request: CooldownRequest, state: Cooldown
 
 
 def _select_phase(ctx: typer.Context, request: CooldownRequest, state: CooldownState) -> None:
+    if state.lorrgs_unavailable is not None:
+        # No phase markers exist without Lorrgs; `phase.status` says so and the cast sections fall
+        # back to the whole fight rather than silently reporting an empty phase.
+        return
     raw_phases = state.lorrgs_fight.get("phases")
     state.lorrgs_phases = as_list(raw_phases)
     state.phase_windows = build_phase_windows(state.lorrgs_phases, state.lorrgs_fight.get("duration"))
@@ -541,12 +642,31 @@ def _source_refs(state: CooldownState) -> dict[str, Any]:
     }
 
 
+def _lorrgs_section(state: CooldownState) -> dict[str, Any]:
+    """Whether the cached Lorrgs report backed this packet, and what is missing when it did not."""
+    if state.lorrgs_unavailable is None:
+        return {"status": "ok", "reason": None, "message": None, "source": None, "missing": []}
+    return {
+        "status": "unavailable",
+        "reason": state.lorrgs_unavailable["code"],
+        "message": state.lorrgs_unavailable["message"],
+        "source": state.lorrgs_unavailable["source"],
+        "missing": ["phase_windows", "boss_casts", "lorrgs_cached_player_timeline", "fight_metadata"],
+    }
+
+
 def _notes(state: CooldownState, lorrgs_player_casts: list[Any]) -> list[str]:
     notes = [
         "Phase windows are derived from Lorrgs/Warcraft Logs phase transition markers; labels are one-based P1/P2/etc.",
         "Player casts come from Warcraft Logs cast events so cached Lorrgs user reports do not need per-player timeline generation.",
         "Top-parse samples are comparison evidence, not universal cooldown recommendations.",
     ]
+    if state.lorrgs_unavailable is not None:
+        notes.append(
+            "Lorrgs did not supply this report, so there are no phase windows: the requested --phase "
+            "was not applied, cooldowns.player_casts covers the whole fight and every selected-phase "
+            "section is empty. See the lorrgs section for the reason."
+        )
     if state.player_casts.get("next_page_timestamp") is not None:
         notes.append("Warcraft Logs returned next_page_timestamp; increase --event-limit or paginate before treating counts as complete.")
     if not lorrgs_player_casts:
@@ -570,7 +690,13 @@ def _packet_payload(state: CooldownState) -> dict[str, Any]:
         "kind": "cooldown_packet",
         "query": state.query,
         "report_url": f"https://www.warcraftlogs.com/reports/{state.report_code}#fight={state.fight_id}",
+        "lorrgs": _lorrgs_section(state),
         "phase": {
+            "status": "unavailable" if state.selected_window is None else "ready",
+            "unavailable_reason": state.lorrgs_unavailable["code"] if state.lorrgs_unavailable else None,
+            # `requested` is the --phase the caller asked for; `selected` is null when no phase
+            # markers existed, which is the only case where the request went unapplied.
+            "requested": state.query.get("phase"),
             "selected": state.selected_window,
             "windows": state.phase_windows,
             "raw_markers": raw_phase_markers(state.lorrgs_phases),
@@ -587,7 +713,7 @@ def _packet_payload(state: CooldownState) -> dict[str, Any]:
             "warcraftlogs": state.wcl_fight,
         },
         "player": {
-            "name": state.player.get("name"),
+            "name": state.player.get("name") or state.query.get("actor_name"),
             "source_id": state.actor_id,
             "spec_slug": state.spec_slug,
             "class_slug": state.player.get("class_slug"),

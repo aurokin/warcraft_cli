@@ -8,11 +8,13 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import quote
 
 from warcraft_core.provider import ProviderError
 from warcraft_core.shapes import as_dict, as_list
+from warcraft_core.wow_normalization import normalize_region, primary_realm_slug
 
-from raiderio_cli.client import RAIDERIO_SITE_BASE_URL, RaiderIOClient
+from raiderio_cli.client import RAIDERIO_BASE_URL, RAIDERIO_SITE_BASE_URL, RaiderIOClient
 
 RAID_DIFFICULTIES = ("normal", "heroic", "mythic")
 RAID_REGIONS = ("world", "us", "eu", "kr", "tw", "cn")
@@ -22,10 +24,16 @@ RAID_RANKINGS_PAGE_SIZE = 20
 
 
 def validated_raid_scope(*, difficulty: str, region: str, realm: str | None) -> tuple[str, str, str | None]:
-    """Normalize and check the ``--difficulty``/``--region``/``--realm`` combination."""
+    """Normalize and check the ``--difficulty``/``--region``/``--realm`` combination.
+
+    ``--region`` accepts the same aliases as every other command (``na`` -> ``us``) and ``--realm``
+    accepts a display name (``Tarren Mill``), which becomes the slug both the API and the citation
+    URL need.
+    """
     difficulty = difficulty.strip().lower()
-    region = region.strip().lower()
-    realm = (realm or "").strip().lower() or None
+    region = normalize_region(region)
+    realm_input = (realm or "").strip()
+    realm = primary_realm_slug(realm_input) if realm_input else None
     if difficulty not in RAID_DIFFICULTIES:
         raise ProviderError("invalid_query", f"--difficulty must be one of: {', '.join(RAID_DIFFICULTIES)}")
     if region not in RAID_REGIONS:
@@ -40,9 +48,13 @@ def raid_pages_for_limit(limit: int) -> int:
 
 
 def raid_rankings_url(*, raid: str, difficulty: str, region: str, realm: str | None) -> str:
-    """The raider.io rankings page for a scope (the site's own URL layout)."""
+    """The raider.io rankings page for a scope (the site's own URL layout).
+
+    The realm is percent-encoded: ``primary_realm_slug`` passes non-ASCII realms (``Ревущий
+    фьорд``) through unchanged, spaces and all, and a citation with a raw space is not a URL.
+    """
     url = f"{RAIDERIO_SITE_BASE_URL}/{raid}/rankings/{region}/{difficulty}"
-    return f"{url}?realm={realm}" if realm else url
+    return f"{url}?realm={quote(realm, safe='')}" if realm else url
 
 
 def _defeated_encounter(row: dict[str, Any]) -> dict[str, Any]:
@@ -74,7 +86,6 @@ def raid_ranking_row(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "rank": row.get("rank"),
         "region_rank": row.get("regionRank"),
-        "realm_rank": row.get("realmRank"),
         "guild": {
             "name": guild.get("name"),
             "realm": realm.get("slug"),
@@ -136,7 +147,7 @@ def sample_raid_rankings(
     }
 
 
-def raid_catalog_rows(payload: dict[str, Any]) -> list[dict[str, Any]]:
+def _raid_catalog_rows(payload: dict[str, Any]) -> list[dict[str, Any]]:
     """Stable fields of each raid in a ``/raiding/static-data`` response."""
     rows: list[dict[str, Any]] = []
     for raid in as_list(payload.get("raids")):
@@ -158,3 +169,17 @@ def raid_catalog_rows(payload: dict[str, Any]) -> list[dict[str, Any]]:
             }
         )
     return rows
+
+
+def raid_catalog_payload(payload: dict[str, Any], *, expansion_id: int, cache_ttl_seconds: int) -> dict[str, Any]:
+    """The ``raiderio raids`` payload: catalog rows plus where they came from and how fresh they are."""
+    rows = _raid_catalog_rows(payload)
+    return {
+        "query": {"expansion_id": expansion_id},
+        "count": len(rows),
+        "rows": rows,
+        # `sampled_at` is when this command read the catalog, the same meaning the sampled siblings
+        # give it: a cache hit can be up to `cache_ttl_seconds` older than that upstream.
+        "freshness": {"sampled_at": datetime.now(UTC).isoformat(), "cache_ttl_seconds": cache_ttl_seconds},
+        "citations": {"static_data_url": f"{RAIDERIO_BASE_URL}/raiding/static-data?expansion_id={expansion_id}"},
+    }

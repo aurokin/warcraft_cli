@@ -28,7 +28,13 @@ from warcraft_wiki_cli.page_parser import article_slug, normalize_article_ref
 from warcraft_wiki_cli.search import PROVIDER_NAME, SearchOutcome, is_confident_match, search_results
 
 API_REFERENCE_FAMILIES = frozenset({"api_function", "framework_page", "xml_schema", "cvar", "api_changes"})
-EVENT_REFERENCE_FAMILIES = frozenset({"ui_handler", "framework_page"})
+EVENT_REFERENCE_FAMILIES = frozenset({"event_reference", "ui_handler", "framework_page"})
+# Exact page titles a typed lookup fetches before it falls back to search, most specific first.
+# "Event:PLAYER_LOGIN" and "API:UnitHealth" are the canonical namespaced titles; the space-separated
+# forms are the pre-namespace titles that survive as redirects.
+TYPED_TITLE_PREFIXES = {"api": ("API:", "API "), "event": ("Event:", "UIHANDLER ")}
+# The prefix that is also a usable free-text search term for each surface.
+TYPED_SEARCH_PREFIXES = {"api": "API ", "event": "UIHANDLER "}
 ARTICLE_QUERY_KINDS = frozenset({"sections", "navigation", "linked_entities"})
 API_PROVENANCE = {"api_url": WIKI_API_URL, "source": "warcraft_wiki_mediawiki_api"}
 CAPABILITIES = {
@@ -174,26 +180,23 @@ def _article_payload_from_initial(initial: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _typed_search_queries(query: str, *, surface: str) -> list[str]:
+def _typed_direct_refs(query: str, *, surface: str) -> list[str]:
+    """Exact titles to fetch before searching, most specific first, so ``event PLAYER_LOGIN`` lands on ``Event:PLAYER LOGIN``."""
     normalized = normalize_article_ref(query)
-    candidates = [normalized]
     lowered = normalized.lower()
-    if surface == "api":
-        if not lowered.startswith("api "):
-            candidates.append(f"API {normalized}")
-    elif surface == "event":
-        if not lowered.startswith("uihandler "):
-            candidates.append(f"UIHANDLER {normalized}")
-        if lowered != "events":
-            candidates.append(f"event {normalized}")
-    ordered: list[str] = []
-    seen: set[str] = set()
-    for candidate in candidates:
-        value = candidate.strip()
-        if value and value.lower() not in seen:
-            ordered.append(value)
-            seen.add(value.lower())
-    return ordered
+    prefixes = TYPED_TITLE_PREFIXES[surface]
+    if any(lowered.startswith(prefix.lower()) for prefix in prefixes):
+        return [normalized]
+    return [*(f"{prefix}{normalized}" for prefix in prefixes), normalized]
+
+
+def _typed_search_queries(query: str, *, surface: str) -> list[str]:
+    """Free-text queries for the search fallback; a namespaced title is a page ref, not a search term."""
+    normalized = normalize_article_ref(query)
+    prefix = TYPED_SEARCH_PREFIXES[surface]
+    if normalized.lower().startswith(prefix.lower()):
+        return [normalized]
+    return [normalized, f"{prefix}{normalized}"]
 
 
 def _typed_allowed_families(surface: str) -> frozenset[str]:
@@ -243,10 +246,12 @@ def _typed_ranked_results(
 
 
 def _typed_search_match(results: list[dict[str, Any]], *, query: str, surface: str) -> dict[str, Any]:
+    """The single confident search hit, or ``not_found``: returning an unrelated page would be worse than failing."""
     if not results or not is_confident_match(results):
-        raise WarcraftWikiAPIError(
-            f"invalid_{surface}_ref",
-            f"Unable to resolve {surface} reference from query: {query}",
+        raise ProviderError(
+            "not_found",
+            f"No {surface} reference page matches query: {query}",
+            details={"surface": surface, "candidates": [str(row["id"]) for row in results]},
         )
     return results[0]
 
@@ -280,7 +285,7 @@ def _typed_article_payload(
     limit: int = 10,
 ) -> dict[str, Any]:
     allowed_families = _typed_allowed_families(surface)
-    direct_refs = _typed_search_queries(query, surface=surface)
+    direct_refs = _typed_direct_refs(query, surface=surface)
     initial = _typed_direct_article_result(client, direct_refs=direct_refs, allowed_families=allowed_families)
     if initial is not None:
         return _typed_result_payload(
@@ -302,9 +307,10 @@ def _typed_article_payload(
     top = _typed_search_match(results, query=query, surface=surface)
     initial = client.fetch_article_page(str(top["id"]))
     if initial["article"]["content_family"] not in allowed_families:
-        raise WarcraftWikiAPIError(
-            f"invalid_{surface}_ref",
-            f"Resolved article is not a supported {surface} reference: {initial['article']['title']}",
+        raise ProviderError(
+            "not_found",
+            f"No {surface} reference page matches query: {query}",
+            details={"surface": surface, "rejected_article": initial["article"]["title"]},
         )
     return _typed_result_payload(
         initial,

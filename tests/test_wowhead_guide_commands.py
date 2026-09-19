@@ -17,6 +17,7 @@ from wowhead_cli.guides import (
     guide_gatherer_matches,
     guide_linked_entity_matches,
     guide_navigation_matches,
+    guide_query_match_sort_key,
     guide_query_top_matches,
     guide_row_matches_filters,
     guide_section_matches,
@@ -305,6 +306,57 @@ def test_guide_command_supports_id_lookup(monkeypatch) -> None:
 
 
 
+def test_guide_follow_up_commands_carry_the_active_expansion(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "wowhead_cli.main.WowheadClient.guide_page_html",
+        lambda self, guide_id: SAMPLE_GUIDE_HTML,
+    )
+    result = runner.invoke(app, ["--expansion", "classic", "guide", "3143", "--comment-sample", "0"])
+    assert result.exit_code == 0
+
+    data = json.loads(result.stdout)["data"]
+    assert data["linked_entities"]["fetch_more_command"] == "wowhead --expansion classic guide-full 3143"
+    assert data["analysis_surfaces"]["fetch_more_command"] == "wowhead --expansion classic guide-full 3143"
+
+
+
+def _guide_html_with_many_links(*, href_count: int) -> str:
+    """A guide whose href links alone fill any sane --max-links, with Gatherer records after them."""
+    # "item" is a low-signal anchor label, so only a Gatherer record can name these links.
+    links = "\n".join(f'<a href="/item={300000 + index}">item</a>' for index in range(href_count))
+    last_href_id = 300000 + href_count - 1
+    gatherer = (
+        f'WH.Gatherer.addData(3, 1, {{"{last_href_id}":{{"name_enus":"Named Only By Gatherer"}}}});'
+        'WH.Gatherer.addData(1, 1, {"249998":{"name_enus":"Gatherer Only Npc"}});'
+    )
+    return f"""
+    <html><head>
+      <link rel="canonical" href="https://www.wowhead.com/guide/test-guide">
+    </head><body>
+      {links}
+      <script>{gatherer} var lv_comments0 = [];</script>
+    </body></html>
+    """
+
+
+def test_guide_full_merges_gatherer_records_even_when_href_links_fill_the_limit(monkeypatch) -> None:
+    html = _guide_html_with_many_links(href_count=250)
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.guide_page_html", lambda self, guide_id: html)
+    result = runner.invoke(app, ["guide-full", "3143", "--max-links", "250"])
+    assert result.exit_code == 0
+
+    links = json.loads(result.stdout)["data"]["linked_entities"]
+    assert links["source_counts"] == {"href": 250, "gatherer": 2, "merged": 251}
+    # The last href link is enriched by its Gatherer record instead of the merge stopping short.
+    enriched = next(row for row in links["items"] if row["id"] == 300249)
+    assert enriched["name"] == "Named Only By Gatherer"
+    assert enriched["sources"] == ["gatherer", "href"]
+    # What the limit does cut off is reported, not silently dropped.
+    assert links["count"] == len(links["items"]) == 250
+    assert links["total"] == 251
+    assert links["truncated"] is True
+
+
 def test_guide_command_supports_full_wowhead_url(monkeypatch) -> None:
     calls = []
 
@@ -525,6 +577,56 @@ def test_guide_export_hydrates_linked_entities(monkeypatch, tmp_path: Path) -> N
     assert hydrated_spell["entity"]["name"] == "Obliterate"
     assert hydrated_item["entity"]["name"] == "Bellamy's Final Judgement"
 
+
+
+def test_guide_export_hydration_migrates_a_pre_envelope_cache_entry(monkeypatch, tmp_path: Path) -> None:
+    """Bundle hydration must apply the same cache migration `wowhead entity` applies."""
+    monkeypatch.setenv("WOWHEAD_CACHE_BACKEND", "file")
+    monkeypatch.setenv("WOWHEAD_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.guide_page_html", lambda self, guide_id: SAMPLE_GUIDE_HTML)
+    monkeypatch.setattr(
+        "wowhead_cli.main.WowheadClient.tooltip",
+        lambda self, entity_type, entity_id, data_env=None: (_ for _ in ()).throw(
+            AssertionError("the cached entry must be reused")
+        ),
+    )
+
+    legacy_entry = {
+        "schema_version": "wowhead.entity.v1",
+        "expansion": "retail",
+        "entity": {"type": "item", "id": 249277, "name": "Bellamy's Final Judgement"},
+        "normalized": {"item": {"name": {"value": "Bellamy's Final Judgement"}}},
+    }
+    cache_client = WowheadClient(cache_dir=tmp_path / "cache", cache_backend="file")
+    cache_client.set_cached_entity_response(
+        legacy_entry,
+        requested_type="item",
+        requested_id=249277,
+        data_env=None,
+        include_comments=False,
+        include_all_comments=False,
+        linked_entity_preview_limit=0,
+    )
+
+    export_dir = tmp_path / "guide-export"
+    result = runner.invoke(
+        app,
+        [
+            "guide-export",
+            "3143",
+            "--out",
+            str(export_dir),
+            "--hydrate-linked-entities",
+            "--hydrate-type",
+            "item",
+            "--hydrate-limit",
+            "1",
+        ],
+    )
+    assert result.exit_code == 0
+
+    hydrated = json.loads((export_dir / "entities" / "item" / "249277.json").read_text(encoding="utf-8"))
+    assert hydrated["normalized"]["schema_version"] == "wowhead.entity.v1"
 
 
 def test_guide_export_hydration_uses_normalized_entity_cache_before_live_fetch(
@@ -827,3 +929,16 @@ def test_guide_query_reads_exported_assets(monkeypatch, tmp_path) -> None:
     assert "Unsupported linked source filter" in result.output
 
 
+
+
+def test_guide_query_match_sort_key_ranks_non_entity_rows_by_score_then_kind() -> None:
+    """Sections, comments and navigation rows share one branch; score must beat kind priority."""
+    rows = [
+        {"kind": "comment", "score": 9, "ordinal": 1},
+        {"kind": "section", "score": 9, "ordinal": 2},
+        {"kind": "section", "score": 12, "ordinal": 3},
+        {"kind": "navigation", "score": 12, "ordinal": 4},
+        {"kind": "section", "score": 12, "ordinal": 1},
+    ]
+    ordered = [row["ordinal"] for row in sorted(rows, key=guide_query_match_sort_key)]
+    assert ordered == [1, 3, 4, 2, 1]

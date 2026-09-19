@@ -17,7 +17,7 @@ Pass these before the subcommand: `wowhead --pretty <command> ...`.
 | `--fields` | str (repeatable) |  | Return only selected fields (dot paths). Repeat or pass comma-separated values. |
 | `--stream` | boolean | false | Emit large result arrays as JSONL (header line plus one record per row). |
 | `--citation-pack` | boolean | false | Attach a deterministic citation_pack with source URLs and per-claim anchors. |
-| `--profile` | str |  | Output profile preset: agent (default compact JSON), human (pretty JSON), debug (pretty JSON + diagnostics). |
+| `--profile` | str |  | Output profile preset: agent (default compact JSON) or human (pretty JSON). |
 | `--fields-strict` | boolean | false | Fail when a requested --fields dot-path is missing from the payload. |
 | `--compact-max-chars` | int range | 280 | Maximum string length before --compact truncation adds an ellipsis. |
 
@@ -469,7 +469,7 @@ Fetch a Wowhead entity tooltip with optional comments and linked entities.
 
 ## wowhead entity-page
 
-Fetch a Wowhead entity page with parsed metadata, linked entities, and comments.
+Fetch a Wowhead entity page with parsed metadata and its linked entities. Comments are a separate surface: run `wowhead comments TYPE ID`.
 
 **Arguments**
 

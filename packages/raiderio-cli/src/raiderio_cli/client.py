@@ -67,7 +67,6 @@ class RaiderIOClient:
         settings, static_ttl, character_ttl, guild_ttl, mplus_runs_ttl, raid_rankings_ttl = load_raiderio_cache_settings_from_env()
         self._timeout_seconds = timeout_seconds
         self._retry_attempts = max(1, retry_attempts)
-        self._cache_settings = settings
         self._cache_store = build_cache_store(settings) if settings.enabled else None
         self._static_ttl = static_ttl
         self._character_ttl = character_ttl
@@ -258,6 +257,10 @@ class RaiderIOClient:
             namespace="search",
             ttl_seconds=self._static_ttl,
         )
+
+    @property
+    def static_data_ttl_seconds(self) -> int:
+        return self._static_ttl
 
     @property
     def mythic_plus_runs_ttl_seconds(self) -> int:

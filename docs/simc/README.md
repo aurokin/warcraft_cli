@@ -11,7 +11,8 @@ Design history lives in [../architecture/history/simc.md](../architecture/histor
 - a SimulationCraft source checkout for read-only analysis
 - a built `simc` binary inside that checkout (`build/simc`) for `version`, `sim`, `run`, `decode-build`,
   `modify-build`, `validate-talent-transport`, and the comparison commands
-- `rg` (ripgrep) on `PATH` for `find-action` and `trace-action`
+- `rg` (ripgrep) on `PATH` for `spec-files`, `find-action`, and `trace-action`. Without it those three
+  commands fail with `missing_dependency` and `simc doctor` marks them `unavailable`.
 - `git` and `cmake` for `sync`, `checkout`, and `build`
 
 `simc doctor` reports which of these are present.
@@ -57,6 +58,18 @@ shared exit codes (1 generic, 2 usage, 3 auth, 4 not found, 5 network/upstream) 
 `simc` has no network surface, so exit 3 and exit 5 do not occur. A missing checkout, a missing binary,
 or a failed SimC run is a structured error, never a traceback.
 
+Two codes are worth knowing:
+
+- `invalid_build` (exit 1) — SimC rejected the talent input. `error.message` is SimC's own error line
+  and `error.details` carries `simc_returncode`, a 20-line `simc_output_preview` (each line clipped to
+  200 characters), and `simc_binary` with the binary's build revision, the checkout HEAD, and
+  `matches_checkout`. A rejected hash is never reported as a partial decode. When the binary is older
+  than its checkout the message says so and names the rebuild command, because a stale binary decodes
+  against older trait data; `simc doctor` reports the same mismatch.
+- `missing_dependency` (exit 1) — ripgrep is not installed.
+- `not_found` (exit 4) — `spec-files`, `find-action`, and `trace-action` were pointed at a directory that
+  is not a SimulationCraft checkout. They report this instead of returning zero hits as a success.
+
 ## Build input flags
 
 Commands that act on an exact build accept the same build-input group. Pass whichever form you have;
@@ -79,6 +92,37 @@ to force talents on or off on top of the resolved build.
 Raw-only transport packets are not accepted as direct build input: upgrade them with
 `simc validate-talent-transport --build-packet <path> --out <path>` first. Malformed packets fail with
 `invalid_build_packet` on every command that reads one.
+
+## Decoded builds
+
+`decode-build` and `describe-build` report what SimC actually gave the player, not every line it printed:
+
+- `hero_tree` names the hero tree SimC activated (`activating sub tree` in its debug output). A talent
+  hash grants the keystones of both hero trees and SimC then disables the unselected one, so those
+  talents are moved to `inactive_hero_talents` and are absent from `enabled_talents`. Keeping them there
+  flips APL branches that dispatch on a hero keystone.
+- Talent rows carry `rank_known`. SimC spreads a tiered node's ranks across several entries and prints
+  only the leftover (always `0`), so the talent is taken but its rank cannot be read back: those rows
+  report `rank: null`, `rank_known: false`, and still count as enabled.
+
+## Editing a build
+
+`modify-build` routes each `--add`/`--remove` into the tree that owns the talent (SimC resolves talent
+names per tree, so a spec talent passed as a class talent is rejected). A name must belong to the actor's
+class; an entry id is resolved against the checkout's trait data. Unresolvable values fail with
+`unknown_talent`.
+
+After re-encoding, the result is decoded again and diffed against the base. If anything changed in the
+active trees that was not asked for, the command fails with `encode_mismatch` and
+`details.unrequested_changes` instead of emitting an export. On success the payload carries
+`result.verified: true`.
+
+`result.diff_from_base` has a fourth key, `inactive_hero`. SimC regenerates the talent hash whenever it
+is handed a split talent string, and its serializer freely grants the keystone of *every* hero tree, so
+the export can carry a keystone the input hash did not. Those talents are inert (the sim never activates
+that tree) but the export string really does differ, so they are listed under `inactive_hero` and
+`result.disclosures` explains why. An empty `disclosures` means the export matches the base build
+exactly.
 
 Validation resolves every raw row against the local SimulationCraft trait data (class, spec, hero, and
 the hero-tree selection node, which is reported under tree `selection` and named after the hero tree),
@@ -163,6 +207,11 @@ simc compare-apls ./tmp/harness.simc --base-apl ./tmp/base.simc --variant "varia
 simc variant-report ./tmp/report.json
 simc verify-clean --hash-binary
 ```
+
+`dps`, `dps_error`, and `fight_length` are means over every iteration. `action_counts`, `action_cpm`,
+and `top_action_deltas` are not: SimulationCraft records an action sequence for a single iteration, so
+those describe one fight however many were simulated. The payload says so in `sampling` and repeats
+`action_sequence_iterations: 1` on each summary and comparison. Treat a small CPM delta as noise.
 
 ## Analysis boundary
 

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+from functools import cache
+from pathlib import Path
 
 import httpx
 import pytest
@@ -11,9 +13,21 @@ from warcraft_core.envelope import envelope_violations
 
 runner = CliRunner()
 
+# Captured Lorrgs responses (see docs/architecture/FIXTURE_MAINTENANCE.md). Search/resolve ranking is
+# only meaningful against Lorrgs' real roster: it holds two "Frost" specs and two encounters whose
+# short name is "Salhadaar", and hand-written rows hid both collisions.
+FIXTURE_DIR = Path(__file__).parent / "fixtures" / "lorrgs"
+
+
+@cache
+def _captured(name: str) -> dict[str, object]:
+    return json.loads((FIXTURE_DIR / f"{name}.json").read_text(encoding="utf-8"))
+
 
 class FakeLorrgsClient:
     calls: list[tuple[str, dict[str, object]]] = []
+    # Status the fake `spec` route refuses with, so one test can walk both refusal statuses.
+    spec_status: int = 403
 
     def __enter__(self) -> FakeLorrgsClient:
         return self
@@ -26,30 +40,11 @@ class FakeLorrgsClient:
 
     def specs(self) -> dict[str, object]:
         self.calls.append(("specs", {}))
-        return {
-            "payload": {"specs": [{"full_name_slug": "mage-frost", "role": "rdps"}]},
-            "source_url": "https://api2.lorrgs.io/api/specs",
-        }
+        return {"payload": _captured("specs"), "source_url": "https://api2.lorrgs.io/api/specs"}
 
     def bosses(self) -> dict[str, object]:
         self.calls.append(("bosses", {}))
-        return {
-            "payload": {
-                "bosses": [
-                    {
-                        "name": "Chimaerus",
-                        "full_name": "Chimaerus the Undreamt God",
-                        "full_name_slug": "chimaerus-the-undreamt-god",
-                    },
-                    {
-                        "name": "Lura",
-                        "full_name": "Loom'ithar",
-                        "full_name_slug": "lura",
-                    },
-                ]
-            },
-            "source_url": "https://api2.lorrgs.io/api/bosses",
-        }
+        return {"payload": _captured("bosses"), "source_url": "https://api2.lorrgs.io/api/bosses"}
 
     def season(self, season_slug: str = "current") -> dict[str, object]:
         self.calls.append(("season", {"season_slug": season_slug}))
@@ -150,8 +145,8 @@ class FakeLorrgsClient:
     def spec(self, spec_slug: str) -> dict[str, object]:
         self.calls.append(("spec", {"spec_slug": spec_slug}))
         request = httpx.Request("GET", f"https://api2.lorrgs.io/api/specs/{spec_slug}")
-        response = httpx.Response(403, json={"detail": "Forbidden."}, request=request)
-        raise httpx.HTTPStatusError("forbidden", request=request, response=response)
+        response = httpx.Response(self.spec_status, json={"detail": "Refused."}, request=request)
+        raise httpx.HTTPStatusError("refused", request=request, response=response)
 
 
 def _patch_client(monkeypatch) -> None:
@@ -193,7 +188,7 @@ def test_specs_emits_standard_success_envelope(monkeypatch) -> None:
     assert payload["provider"] == "lorrgs"
     assert payload["kind"] == "specs"
     assert payload["provenance"]["source"] == "lorrgs_public_api"
-    assert payload["data"]["specs"][0]["full_name_slug"] == "mage-frost"
+    assert any(row["full_name_slug"] == "mage-frost" for row in payload["data"]["specs"])
     assert FakeLorrgsClient.calls[-1] == ("close", {})
 
 
@@ -269,26 +264,141 @@ def test_http_404_is_structured_not_found(monkeypatch) -> None:
     assert payload["error"]["message"] == "Invalid Boss."
 
 
-def test_http_403_is_structured_auth_failure(monkeypatch) -> None:
+@pytest.mark.parametrize("status", [401, 403])
+def test_refusal_status_is_not_reported_as_an_auth_failure(monkeypatch, status: int) -> None:
+    # Lorrgs takes no credentials, so neither refusal status can mean "bad credentials" and neither
+    # must send an agent to fix auth (exit 3) it can never configure: the resource is not readable.
+    # 401 is the status Lorrgs actually returns for a report it has not loaded.
     _patch_client(monkeypatch)
+    monkeypatch.setattr(FakeLorrgsClient, "spec_status", status)
     result = runner.invoke(app, ["spec", "mage-frost"])
-    assert result.exit_code == 3
+    assert result.exit_code == 4
     payload = json.loads(result.stderr)
-    assert payload["error"]["code"] == "auth_failed"
-    assert payload["error"]["details"] == {"status_code": 403, "url": "https://api2.lorrgs.io/api/specs/mage-frost"}
+    assert payload["error"]["code"] == "not_found"
+    assert "takes no credentials" in payload["error"]["message"]
+    assert payload["error"]["details"] == {"status_code": status, "url": "https://api2.lorrgs.io/api/specs/mage-frost"}
 
 
-def test_search_matches_spec_and_boss(monkeypatch) -> None:
+def test_search_ranks_the_named_spec_ranking_above_every_weaker_candidate(monkeypatch) -> None:
+    # Against Lorrgs' real 43 specs and 100 bosses, "frost mage chimaerus" must put the Frost Mage
+    # ranking first; Frost Death Knight matches "frost" too and must not outrank it.
     _patch_client(monkeypatch)
-    result = runner.invoke(app, ["search", "frost mage chimaerus"])
+    result = runner.invoke(app, ["search", "frost mage chimaerus", "--limit", "10"])
     assert result.exit_code == 0
-    payload = json.loads(result.stdout)
-    assert payload["provider"] == "lorrgs"
-    assert payload["count"] >= 1
-    assert payload["results"][0]["kind"] == "spec_ranking"
-    assert payload["results"][0]["spec_slug"] == "mage-frost"
-    assert payload["results"][0]["boss_slug"] == "chimaerus-the-undreamt-god"
-    assert payload["results"][0]["follow_up"]["command"] == "lorrgs spec-ranking mage-frost chimaerus-the-undreamt-god"
+    data = json.loads(result.stdout)["data"]
+    results = data["results"]
+    assert results[0]["kind"] == "spec_ranking"
+    assert results[0]["spec_slug"] == "mage-frost"
+    assert results[0]["boss_slug"] == "chimaerus-the-undreamt-god"
+    assert results[0]["follow_up"]["command"] == "lorrgs spec-ranking mage-frost chimaerus-the-undreamt-god"
+    scores = [row["ranking"]["score"] for row in results]
+    assert scores == sorted(scores, reverse=True)
+    assert all(score < scores[0] for score in scores[1:])
+    assert data["count"] == len(results)
+    assert data["truncated"] is False
+
+
+def test_resolve_promotes_the_unambiguous_spec_ranking_at_high_confidence(monkeypatch) -> None:
+    # The positive counterpart of the tie tests: "frost mage chimaerus" names exactly one spec and
+    # one encounter, so it must hand back the ranking command. `match_level` is "short_name" because
+    # the query used the encounter's short name ("Chimaerus", not "Chimaerus, the Undreamt God"),
+    # and a query that names rows only partially must not reach "high".
+    _patch_client(monkeypatch)
+    result = runner.invoke(app, ["resolve", "frost mage chimaerus", "--limit", "10"])
+    assert result.exit_code == 0
+    data = json.loads(result.stdout)["data"]
+    assert data["resolved"] is True
+    assert data["confidence"] == "high"
+    assert data["match"]["kind"] == "spec_ranking"
+    assert data["match"]["ranking"]["match_level"] == "short_name"
+    assert data["match"]["ranking"]["unmatched_terms"] == []
+    assert data["next_command"] == "lorrgs spec-ranking mage-frost chimaerus-the-undreamt-god"
+
+
+def test_resolve_reads_an_encounter_whose_name_is_mostly_stop_words(monkeypatch) -> None:
+    # "The Eye of the Jailer" is spelled out in full by this query, but every word except "eye" and
+    # "jailer" is filler. Counting the filler against the row makes "The Jailer, Zovaal" — matched on
+    # its short name alone — look like the stronger match, which is the wrong encounter.
+    _patch_client(monkeypatch)
+    result = runner.invoke(app, ["resolve", "the eye of the jailer", "--limit", "10"])
+    assert result.exit_code == 0
+    data = json.loads(result.stdout)["data"]
+    assert data["resolved"] is True
+    assert data["confidence"] == "high"
+    assert data["match"]["ranking"]["match_level"] == "named"
+    assert data["next_command"] == "lorrgs comp-ranking the-eye-of-the-jailer"
+
+
+def test_resolve_refuses_a_candidate_that_drops_a_word_lorrgs_recognised(monkeypatch) -> None:
+    # Lorrgs knows "paladin", so "fire mage paladin" is a question about two classes. The only
+    # candidate is the Fire Mage spec, which answers a narrower question than the caller asked:
+    # that leftover word must block the handoff instead of being silently dropped.
+    _patch_client(monkeypatch)
+    result = runner.invoke(app, ["resolve", "fire mage paladin", "--limit", "10"])
+    assert result.exit_code == 0
+    data = json.loads(result.stdout)["data"]
+    assert data["resolved"] is False
+    assert data["confidence"] == "none"
+    assert data["next_command"] is None
+    assert data["results"][0]["ranking"]["unmatched_terms"] == ["paladin"]
+
+
+def test_bare_encounter_name_resolves_to_the_composition_ranking_not_the_boss_row(monkeypatch) -> None:
+    # A boss name alone produces a composition ranking and a bare encounter row with identical
+    # scores. They are different kinds, so this is a preference rather than ambiguity, and the
+    # preference is fixed: the ranking is the useful surface, the metadata row is not.
+    _patch_client(monkeypatch)
+    result = runner.invoke(app, ["resolve", "chimaerus", "--limit", "10"])
+    assert result.exit_code == 0
+    data = json.loads(result.stdout)["data"]
+    assert data["resolved"] is True
+    assert data["next_command"] == "lorrgs comp-ranking chimaerus-the-undreamt-god"
+    kinds = [row["kind"] for row in data["results"]]
+    assert kinds[:2] == ["comp_ranking", "boss"]
+    assert data["results"][0]["ranking"]["score"] == data["results"][1]["ranking"]["score"]
+
+
+def test_resolve_refuses_to_pick_between_two_specs_that_share_a_name(monkeypatch) -> None:
+    # "frost <boss>" fits Frost Mage and Frost Death Knight equally well. Resolving it to one of them
+    # answered a question nobody asked; the tie must surface as both candidates and no next command.
+    _patch_client(monkeypatch)
+    result = runner.invoke(app, ["resolve", "frost chimaerus", "--limit", "10"])
+    assert result.exit_code == 0
+    data = json.loads(result.stdout)["data"]
+    assert data["resolved"] is False
+    assert data["confidence"] == "none"
+    assert data["match"] is None
+    assert data["next_command"] is None
+    tied = {row["spec_slug"] for row in data["results"] if row["kind"] == "spec_ranking"}
+    assert tied == {"mage-frost", "deathknight-frost"}
+
+
+def test_resolve_refuses_to_pick_between_two_bosses_that_share_a_short_name(monkeypatch) -> None:
+    # Lorrgs lists two encounters named "Salhadaar" (Fallen-King and Nexus-King). The spec side is
+    # unambiguous here, so this pins that a maximum-score candidate no longer skips the tie check.
+    _patch_client(monkeypatch)
+    result = runner.invoke(app, ["resolve", "frost mage salhadaar", "--limit", "10"])
+    assert result.exit_code == 0
+    data = json.loads(result.stdout)["data"]
+    assert data["resolved"] is False
+    assert data["next_command"] is None
+    tied = {row["boss_slug"] for row in data["results"] if row["kind"] == "spec_ranking"}
+    assert tied == {"fallenking-salhadaar", "nexusking-salhadaar"}
+
+
+def test_resolve_limit_cannot_hide_the_rival_that_makes_a_query_ambiguous(monkeypatch) -> None:
+    # `--limit 1` keeps one candidate in `results`, and judging ambiguity from that slice made the
+    # tie invisible: the same ambiguous query resolved to Frost Death Knight at high confidence.
+    # The verdict comes from every candidate, and the payload says the list was truncated.
+    _patch_client(monkeypatch)
+    result = runner.invoke(app, ["resolve", "frost chimaerus", "--limit", "1"])
+    assert result.exit_code == 0
+    data = json.loads(result.stdout)["data"]
+    assert data["resolved"] is False
+    assert data["next_command"] is None
+    assert len(data["results"]) == 1
+    assert data["count"] > 1
+    assert data["truncated"] is True
 
 
 def test_current_season_emits_public_season_metadata(monkeypatch) -> None:
@@ -302,20 +412,25 @@ def test_current_season_emits_public_season_metadata(monkeypatch) -> None:
     assert ("season", {"season_slug": "current"}) in FakeLorrgsClient.calls
 
 
-def test_resolve_matches_warcraftlogs_report_url_with_query_fight(monkeypatch) -> None:
+def test_resolve_matches_warcraftlogs_report_url_without_promising_availability(monkeypatch) -> None:
+    # The reference parses exactly, so the next command is right — but nothing checked that Lorrgs
+    # will serve the report (it answers 401 for reports it has not loaded, and private ones), so the
+    # handoff must not claim high confidence or an "overview_available" match reason.
     _patch_client(monkeypatch)
     url = "https://www.warcraftlogs.com/reports/bG3xDYPqKjLm8XaR?fight=22&type=damage-done"
     result = runner.invoke(app, ["resolve", url])
     assert result.exit_code == 0
-    payload = json.loads(result.stdout)
-    assert payload["resolved"] is True
-    assert payload["confidence"] == "high"
-    assert payload["match"]["kind"] == "report_overview"
-    assert payload["match"]["report_id"] == "bG3xDYPqKjLm8XaR"
-    assert payload["match"]["fight_id"] == 22
-    assert payload["match"]["report_type"] == "damage-done"
-    assert payload["next_command"] == "lorrgs report-overview bG3xDYPqKjLm8XaR"
-    assert payload["results"][1]["follow_up"]["command"] == "lorrgs user-report-fights bG3xDYPqKjLm8XaR --fight 22 --type damage-done"
+    data = json.loads(result.stdout)["data"]
+    assert data["resolved"] is True
+    assert data["confidence"] == "medium"
+    assert data["match"]["kind"] == "report_overview"
+    assert data["match"]["report_id"] == "bG3xDYPqKjLm8XaR"
+    assert data["match"]["fight_id"] == 22
+    assert data["match"]["report_type"] == "damage-done"
+    assert data["match"]["ranking"]["match_reasons"] == ["explicit_report_reference"]
+    assert "not loaded" in data["match"]["caveat"]
+    assert data["next_command"] == "lorrgs report-overview bG3xDYPqKjLm8XaR"
+    assert data["results"][1]["follow_up"]["command"] == "lorrgs user-report-fights bG3xDYPqKjLm8XaR --fight 22 --type damage-done"
 
 
 def test_report_overview_accepts_warcraftlogs_url(monkeypatch) -> None:

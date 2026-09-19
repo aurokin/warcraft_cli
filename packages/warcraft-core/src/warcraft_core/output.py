@@ -1,14 +1,18 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from typing import Any, Literal
 
 import orjson
 import typer
 
-OutputProfile = Literal["agent", "human", "debug"]
+OutputProfile = Literal["agent", "human"]
 DEFAULT_COMPACT_MAX_CHARS = 280
+
+# Key added to a --fields projection listing the requested dot-paths the payload did not have, so a
+# thin or empty projection is never mistaken for a genuinely empty result. See
+# docs/foundation/ERROR_CONTRACT.md.
+FIELDS_MISSING_KEY = "fields_missing"
 
 
 class OutputProjectionError(ValueError):
@@ -19,41 +23,6 @@ class OutputProjectionError(ValueError):
         super().__init__(f"Missing requested fields: {', '.join(missing_fields)}")
 
 
-@dataclass(slots=True)
-class DiagnosticsCollector:
-    timings_ms: dict[str, float] = field(default_factory=dict)
-    request_count: int = 0
-    cache_hits: int = 0
-    cache_misses: int = 0
-
-    def record_request(self) -> None:
-        self.request_count += 1
-
-    def record_cache_hit(self) -> None:
-        self.cache_hits += 1
-
-    def record_cache_miss(self) -> None:
-        self.cache_misses += 1
-
-    def set_timing(self, label: str, milliseconds: float) -> None:
-        self.timings_ms[label] = round(float(milliseconds), 3)
-
-    def to_payload(self) -> dict[str, Any]:
-        payload: dict[str, Any] = {}
-        if self.timings_ms:
-            payload["timings_ms"] = dict(self.timings_ms)
-        if self.request_count:
-            payload["request_count"] = self.request_count
-        if self.cache_hits:
-            payload["cache_hits"] = self.cache_hits
-        if self.cache_misses:
-            payload["cache_misses"] = self.cache_misses
-        return payload
-
-    def has_values(self) -> bool:
-        return bool(self.to_payload())
-
-
 @dataclass(frozen=True, slots=True)
 class OutputOptions:
     pretty: bool = False
@@ -61,7 +30,6 @@ class OutputOptions:
     compact_max_chars: int = DEFAULT_COMPACT_MAX_CHARS
     fields: tuple[str, ...] = ()
     fields_strict: bool = False
-    include_diagnostics: bool = False
 
     @property
     def profile(self) -> OutputProfile | None:
@@ -95,8 +63,8 @@ def resolve_output_options(
     normalized_profile: OutputProfile | None = None
     if profile is not None:
         key = profile.strip().lower()
-        if key not in {"agent", "human", "debug"}:
-            raise ValueError("--profile must be one of: agent, human, debug")
+        if key not in {"agent", "human"}:
+            raise ValueError("--profile must be one of: agent, human")
         normalized_profile = key  # type: ignore[assignment]
 
     options = OutputOptions(
@@ -110,8 +78,6 @@ def resolve_output_options(
 
     if normalized_profile == "human":
         options = replace(options, pretty=True)
-    elif normalized_profile == "debug":
-        options = replace(options, pretty=True, include_diagnostics=True)
     elif normalized_profile == "agent":
         options = replace(options, pretty=False)
 
@@ -165,6 +131,12 @@ def filter_payload_fields(
     fields: tuple[str, ...],
     strict: bool = False,
 ) -> dict[str, Any]:
+    """Project ``payload`` down to ``fields``.
+
+    Requested paths the payload does not have are reported: under ``strict`` as an
+    ``OutputProjectionError`` (exit 2), otherwise as the ``fields_missing`` key, so a caller never
+    reads a thin or empty projection as a genuinely empty result.
+    """
     if not fields:
         return payload
 
@@ -179,38 +151,32 @@ def filter_payload_fields(
         found, value = extract_dict_path(payload, path)
         if found:
             assign_dict_path(filtered, path, value)
-        elif strict:
+        else:
             missing.append(path)
 
-    if missing:
+    if missing and strict:
         raise OutputProjectionError(tuple(missing))
+    if missing:
+        filtered[FIELDS_MISSING_KEY] = missing
     return filtered
-
-
-def attach_diagnostics(payload: dict[str, Any], diagnostics: DiagnosticsCollector | Mapping[str, Any] | None) -> dict[str, Any]:
-    if diagnostics is None:
-        return payload
-    block = diagnostics.to_payload() if isinstance(diagnostics, DiagnosticsCollector) else dict(diagnostics)
-    if not block:
-        return payload
-    merged = dict(payload)
-    merged["diagnostics"] = block
-    return merged
 
 
 def shape_payload(
     payload: dict[str, Any],
     options: OutputOptions,
     *,
-    diagnostics: DiagnosticsCollector | None = None,
+    diagnostics: object | None = None,
 ) -> dict[str, Any]:
+    """Apply --compact and --fields to ``payload``.
+
+    ``diagnostics`` is accepted and ignored: it fed the removed ``--profile debug`` block. It stays
+    on the signature only until wowhead_cli stops passing it (see cross-area note in the PR).
+    """
     rendered: dict[str, Any] = payload
     if options.compact:
         rendered = compact_value(rendered, max_chars=options.compact_max_chars)
     if options.fields:
         rendered = filter_payload_fields(rendered, fields=options.fields, strict=options.fields_strict)
-    if options.include_diagnostics:
-        rendered = attach_diagnostics(rendered, diagnostics)
     return rendered
 
 
@@ -225,11 +191,5 @@ def emit(payload: Any, *, pretty: bool, err: bool = False) -> None:
     typer.echo(to_json(payload, pretty=pretty), err=err)
 
 
-def emit_shaped(
-    payload: dict[str, Any],
-    options: OutputOptions,
-    *,
-    diagnostics: DiagnosticsCollector | None = None,
-    err: bool = False,
-) -> None:
-    emit(shape_payload(payload, options, diagnostics=diagnostics), pretty=options.pretty, err=err)
+def emit_shaped(payload: dict[str, Any], options: OutputOptions, *, err: bool = False) -> None:
+    emit(shape_payload(payload, options), pretty=options.pretty, err=err)

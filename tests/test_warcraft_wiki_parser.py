@@ -1,10 +1,34 @@
 from __future__ import annotations
 
-from warcraft_wiki_cli.page_parser import classify_article_family, normalize_article_ref, parse_article_page
+import json
+from pathlib import Path
+from typing import Any
+
+from warcraft_wiki_cli.page_parser import (
+    classify_article_family,
+    normalize_article_ref,
+    parse_article_page,
+    parse_search_results,
+)
+
+# Captured warcraft.wiki.gg API responses; see docs/architecture/FIXTURE_MAINTENANCE.md.
+CAPTURED_DIR = Path(__file__).parent / "fixtures" / "warcraft_wiki"
+
+
+def _captured(name: str) -> dict[str, Any]:
+    payload: dict[str, Any] = json.loads((CAPTURED_DIR / name).read_text())
+    return payload
 
 
 def test_normalize_article_ref_handles_wiki_paths() -> None:
     assert normalize_article_ref("/wiki/World_of_Warcraft_API") == "World of Warcraft API"
+
+
+def test_normalize_article_ref_handles_full_wiki_urls() -> None:
+    assert normalize_article_ref("https://warcraft.wiki.gg/wiki/Event:PLAYER_LOGIN") == "Event:PLAYER LOGIN"
+    # A pasted section URL keeps its anchor: MediaWiki resolves "Elwynn Forest#Geography" to the
+    # page itself (verified live: `article <that url>` returns the Elwynn Forest page, ok:true).
+    assert normalize_article_ref("https://warcraft.wiki.gg/wiki/Elwynn_Forest%23Geography") == "Elwynn Forest#Geography"
 
 
 def test_classify_article_family_handles_programming_and_system_titles() -> None:
@@ -22,6 +46,12 @@ def test_classify_article_family_handles_programming_and_system_titles() -> None
     assert classify_article_family("Alchemy") == "profession_reference"
     assert classify_article_family("Zone scaling") == "zone_reference"
     assert classify_article_family("World of Warcraft: Legion") == "expansion_reference"
+
+
+def test_classify_article_family_recognises_the_event_namespace() -> None:
+    assert classify_article_family("Event:PLAYER LOGIN") == "event_reference"
+    assert classify_article_family("Event:COMBAT_LOG_EVENT_UNFILTERED") == "event_reference"
+    assert classify_article_family("Events") == "framework_page"
 
 
 def test_parse_article_page_uses_mw_parser_output_root() -> None:
@@ -310,3 +340,129 @@ def test_parse_article_page_extracts_expansion_reference_metadata() -> None:
 
     assert parsed["article"]["content_family"] == "expansion_reference"
     assert parsed["reference"]["content_family"] == "expansion_reference"
+
+
+def test_linked_entities_key_on_the_article_title_not_the_anchor() -> None:
+    # The section link comes first on purpose: the row it creates has to carry the fetchable title
+    # and the fragment-free url, not "Mage#Talents" / ".../Mage#Talents" / the name "talents".
+    payload = {
+        "parse": {
+            "title": "Mage",
+            "displaytitle": "Mage",
+            "sections": [],
+            "text": {
+                "*": """
+                <div class="mw-parser-output">
+                  <p>
+                    <a href="/wiki/Mage#Talents">talents</a>
+                    <a href="/wiki/Mage">Mage</a>
+                    <a href="/wiki/Mage#Lore">lore</a>
+                    <a href="/wiki/Frost_Nova">Frost Nova</a>
+                    <a href="/wiki/Mage?action=edit&amp;section=1">edit</a>
+                    <a href="/wiki/File:Mage.png">image</a>
+                    <a href="/wiki/Category:Mage_abilities">category</a>
+                    <a href="/wiki/Special:WhatLinksHere/Mage">links</a>
+                    <a href="/wiki/Help:Editing">help</a>
+                    <a href="/wiki/Template:Mage">template</a>
+                    <a href="https://example.com/mage">offsite</a>
+                  </p>
+                </div>
+                """
+            },
+        }
+    }
+
+    entities = parse_article_page(payload, source_title="Mage")["linked_entities"]
+
+    assert [row["id"] for row in entities] == ["Frost Nova", "Mage"]
+    assert [row["url"] for row in entities] == [
+        "https://warcraft.wiki.gg/wiki/Frost_Nova",
+        "https://warcraft.wiki.gg/wiki/Mage",
+    ]
+    assert [row["name"] for row in entities] == ["Frost Nova", "Mage"]
+
+
+def test_parse_search_results_maps_a_captured_mediawiki_search_response() -> None:
+    total_hits, rows = parse_search_results(_captured("search_player_login.json"))
+
+    assert total_hits == 472
+    assert [row["title"] for row in rows[:3]] == ["Event:PLAYER LOGIN", "UIHANDLER OnEvent", "API:Frame IsEventRegistered"]
+    first = rows[0]
+    assert first["pageid"] == 284516
+    assert first["url"] == "https://warcraft.wiki.gg/wiki/Event:PLAYER_LOGIN"
+    # The upstream snippet is HTML with <span class="searchmatch"> highlights; it is stripped to text.
+    assert "<span" not in first["snippet"]
+    assert "PLAYER_LOGIN" in first["snippet"]
+
+
+def test_parse_search_results_skips_rows_without_a_title() -> None:
+    payload = {"query": {"searchinfo": {"totalhits": 3}, "search": [{"title": " "}, "junk", {"title": "Mage"}]}}
+
+    total_hits, rows = parse_search_results(payload)
+
+    assert total_hits == 3
+    assert [row["title"] for row in rows] == ["Mage"]
+
+
+def test_parse_captured_event_page_is_an_event_reference_without_page_chrome() -> None:
+    parsed = parse_article_page(_captured("parse_event_player_login.json"), source_title="Event:PLAYER_LOGIN")
+
+    assert parsed["article"]["title"] == "Event:PLAYER LOGIN"
+    assert parsed["article"]["display_title"] == "PLAYER_LOGIN"
+    assert parsed["article"]["page_url"] == "https://warcraft.wiki.gg/wiki/Event:PLAYER_LOGIN"
+    assert parsed["article"]["content_family"] == "event_reference"
+    assert [(row["title"], row["level"]) for row in parsed["article_content"]["headings"]] == [
+        ("Payload", 2),
+        ("Details", 2),
+        ("See also", 2),
+    ]
+    assert parsed["reference"]["programming_reference"] is True
+    assert parsed["reference"]["summary"].startswith("Triggered immediately before PLAYER_ENTERING_WORLD on login")
+    assert parsed["reference"]["details"] == "Related Events PLAYER_LOGOUT"
+    # The "Game Types"/"Main Menu" navigation tables are chrome, not event documentation.
+    assert "Main Menu" not in parsed["article_content"]["text"]
+    assert "Wowprogramming" not in parsed["article_content"]["text"]
+    assert [row["id"] for row in parsed["linked_entities"]] == [
+        "AddOn loading process",
+        "Event:PLAYER ENTERING WORLD",
+        "Event:PLAYER LOGOUT",
+    ]
+
+
+def test_parse_captured_api_function_page_keeps_nested_heading_levels() -> None:
+    parsed = parse_article_page(_captured("parse_api_unithealth.json"), source_title="API:UnitHealth")
+
+    assert parsed["article"]["title"] == "API:UnitHealth"
+    assert parsed["article"]["content_family"] == "api_function"
+    assert [(row["title"], row["level"]) for row in parsed["article_content"]["headings"]] == [
+        ("Arguments", 2),
+        ("Returns", 2),
+        ("Details", 2),
+        ("Patch changes", 2),
+        ("Retail", 4),
+        ("Classic", 4),
+        ("References", 2),
+    ]
+    assert parsed["reference"]["signature"] == "health = UnitHealth ( unit [, usePredicted ])"
+    assert parsed["reference"]["arguments"].startswith("unit UnitToken : string")
+    assert parsed["reference"]["returns"].startswith("health number - Returns 0 if the unit is dead")
+    assert "Main Menu" not in parsed["article_content"]["text"]
+
+
+def test_parse_captured_lore_page_refines_to_lore_reference_and_drops_the_infobox() -> None:
+    parsed = parse_article_page(_captured("parse_mankrik.json"), source_title="Mankrik")
+
+    assert parsed["article"]["content_family"] == "lore_reference"
+    headings = [(row["title"], row["level"]) for row in parsed["article_content"]["headings"]]
+    assert headings[:5] == [
+        ("Biography", 2),
+        ("Cataclysm", 3),
+        ("Legion", 3),
+        ("Dragonflight", 3),
+        ("The War Within", 3),
+    ]
+    assert headings[-3:] == [("Gallery", 2), ("References", 2), ("External links", 2)]
+    assert len(headings) == 17
+    assert parsed["article_content"]["sections"][0]["title"] == "Introduction"
+    assert "Mankrik is an orc quest giver" in parsed["article_content"]["text"]
+    assert "programming_reference" not in parsed["reference"]

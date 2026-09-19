@@ -8,7 +8,8 @@ from typing import Any
 import blizzard_api_cli.client as client_module
 import httpx
 import pytest
-from blizzard_api_cli.client import BlizzardClient
+import typer
+from blizzard_api_cli.client import SUPPORTED_REGIONS, BlizzardClient, verification_note
 from blizzard_api_cli.main import app
 from blizzard_api_cli.provider import PROVIDER
 from typer.testing import CliRunner
@@ -144,28 +145,56 @@ def test_classic_flag_selects_classic_category(monkeypatch: pytest.MonkeyPatch) 
 
 
 def test_classic_profile_unsupported(monkeypatch: pytest.MonkeyPatch) -> None:
+    # --classic on a profile read is a bad flag combination, not an internal failure: usage exit code.
     _install_recorder(monkeypatch)
     result = runner.invoke(app, ["character", "faerlina", "Someone", "--classic"])
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     payload = json.loads(result.stderr)
     assert payload["ok"] is False
     assert payload["error"]["code"] == "classic_profile_unsupported"
+    assert payload["error"]["message"] == (
+        "The Blizzard Profile API has no classic namespace; character lookups are retail-only."
+    )
+
+
+def test_help_doctor_and_payloads_state_one_verification_posture(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`blizzard --help` (and docs/reference/blizzard.md, generated from it), `doctor`, and every
+    payload must state the same verification posture, so the help can never call the endpoints
+    unverified while the payloads report provenance.verified=true."""
+    _install_recorder(monkeypatch)
+    help_text = typer.main.get_command(app).help or ""
+    doctor = runner.invoke(app, ["doctor"])
+    assert doctor.exit_code == 0
+    assert any(verification_note() in note for note in json.loads(doctor.stdout)["data"]["notes"])
+
+    for region in SUPPORTED_REGIONS:
+        result = runner.invoke(app, ["realm", "illidan", "--region", region])
+        assert result.exit_code == 0
+        prov = json.loads(result.stdout)["provenance"]
+        assert prov["verification_note"] in help_text
+        # The boolean and the prose have to agree region by region, so no payload can claim
+        # verified=true under the note that says the region is unconfirmed.
+        assert prov["verified"] is (prov["verification_note"] == verification_note())
 
 
 def test_unsupported_region_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A mistyped --region is a usage error (exit 2) like everywhere else in the repo, and the message
+    # lists the accepted values as plain text, not a Python tuple repr.
     _install_recorder(monkeypatch)
     result = runner.invoke(app, ["realm", "illidan", "--region", "oc"])
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "unsupported_region"
+    assert payload["error"]["message"] == "--region must be one of: us, eu, kr, tw, cn; got 'oc'."
 
 
 def test_unsupported_game_version_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
     _install_recorder(monkeypatch)
     result = runner.invoke(app, ["item", "19019", "--game-version", "classic-era"])
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "unsupported_game_version"
+    assert payload["error"]["message"].startswith("--game-version must be one of: retail, classic; got 'classic-era'.")
 
 
 @pytest.mark.parametrize("command", ["search", "resolve"])
@@ -187,11 +216,14 @@ def test_classic_conflicts_with_explicit_retail(monkeypatch: pytest.MonkeyPatch)
     # --game-version retail cannot both be honored.
     _install_recorder(monkeypatch)
     result = runner.invoke(app, ["realm", "illidan", "--game-version", "retail", "--classic"])
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     payload = json.loads(result.stderr)
     assert payload["ok"] is False
     assert payload["error"]["code"] == "unsupported_game_version"
-    assert "conflicts" in payload["error"]["message"]
+    assert payload["error"]["message"] == (
+        "--classic conflicts with --game-version 'retail'; pass only one "
+        "(--classic is shorthand for --game-version classic)."
+    )
 
 
 def test_missing_credentials_error(monkeypatch: pytest.MonkeyPatch) -> None:

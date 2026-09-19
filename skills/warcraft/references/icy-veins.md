@@ -18,7 +18,9 @@
 - use Icy Veins when the caller needs structured guide families rather than a single direct page
 - for broad class or role queries, let `resolve` pick the hub first
 - for narrow subpage questions, search terms like `easy mode`, `rotation`, `stat priority`, or `mythic+ tips` work well
-- explicit embedded Wowhead talent-calc links show up as `build_references`; guide slugs and titles are not treated as build evidence by themselves
+- `build_references` holds explicit build evidence from the page: embedded Wowhead talent-calc links (`reference_type: wowhead_talent_calc_url`) and published WoW loadout import strings (`reference_type: wow_talent_export`, where `url` is the import string). Guide slugs and titles are never treated as build evidence
+- current spec builds/talents pages publish import strings, so `guide-full` on a spec guide is what feeds `guide-builds-simc`
+- an import string does not name its class or spec, so `guide-builds-simc --decode` cannot decode those rows; decode one with `simc decode-build --talents <build_code> --actor-class <class> --spec <spec>`
 - additive `analysis_surfaces` highlight comparison-relevant guide topics without replacing raw guide content
 
 ## Validated Families
@@ -45,3 +47,5 @@
 ## Boundaries
 
 - patch notes, hotfixes, and news-like queries return `scope_hint` rather than guide results
+- a page whose article container no longer matches fails with `parse_failed`; an empty article is never reported as success
+- `guide-full` and `guide-export` skip a family page they cannot fetch or parse and list it in `data.failed_pages`

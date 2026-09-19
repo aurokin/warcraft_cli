@@ -14,21 +14,11 @@ from __future__ import annotations
 from typing import Any
 
 from warcraft_core.envelope import ENVELOPE_KEYS, Envelope, success_envelope
-from warcraft_core.exit_codes import EXIT_AUTH, exit_code_for
 from warcraft_core.provider import ProviderError, ProviderSurface
 
-from warcraftlogs_cli.client import RETAIL_PROFILE, WarcraftLogsClientError, WarcraftLogsSiteProfile, resolve_site_profile
+from warcraftlogs_cli.client import RETAIL_PROFILE, WarcraftLogsSiteProfile, resolve_site_profile
 
 PROVIDER_NAME = "warcraftlogs"
-
-# Warcraft Logs error codes that mean "not authorised", on top of the shared vocabulary.
-AUTH_ERROR_CODES = frozenset({"missing_client_credentials", "missing_public_auth", "missing_user_auth", "user_token_expired"})
-
-
-def provider_error(exc: WarcraftLogsClientError) -> ProviderError:
-    """Translate a client failure into the shared error vocabulary and its exit code."""
-    exit_code = EXIT_AUTH if exc.code in AUTH_ERROR_CODES else exit_code_for(exc.code)
-    return ProviderError(exc.code, exc.message, exit_code=exit_code)
 
 
 def site_profile(options: dict[str, Any]) -> WarcraftLogsSiteProfile:

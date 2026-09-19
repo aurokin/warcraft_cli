@@ -15,7 +15,7 @@ Pass these before the subcommand: `warcraftlogs --pretty <command> ...`.
 | `--compact` | boolean | false | Truncate long string fields to reduce payload size. |
 | `--fields` | str (repeatable) |  | Return only selected fields (dot paths). Repeat or pass comma-separated values. |
 | `--fields-strict` | boolean | false | Fail when a requested --fields dot-path is missing from the payload. |
-| `--profile` | str |  | Output profile preset: agent (default compact JSON), human (pretty JSON), debug (pretty JSON + diagnostics). |
+| `--profile` | str |  | Output profile preset: agent (default compact JSON) or human (pretty JSON). |
 | `--compact-max-chars` | int range | 280 | Maximum string length before --compact truncation adds an ellipsis. |
 
 ## warcraftlogs search
@@ -588,6 +588,7 @@ Summarize aura uptime in one report fight, optionally over an explicit window.
 | `--window-start-ms` | float |  | Optional encounter-relative start offset in milliseconds. |
 | `--window-end-ms` | float |  | Optional encounter-relative end offset in milliseconds. |
 | `--translate / --no-translate` | boolean |  | Optional translation toggle. |
+| `--include-raw` | boolean | false | Attach the untyped Warcraft Logs table entry to every row. Off by default: the raw entries carry full gear/pet/ability detail and dominate the payload size. |
 | `--allow-unlisted` | boolean | false | Allow lookup of unlisted reports. |
 
 ## warcraftlogs report-encounter-aura-compare
@@ -642,6 +643,7 @@ Summarize damage in one report fight by source actor.
 | `--window-start-ms` | float |  | Optional encounter-relative start offset in milliseconds. |
 | `--window-end-ms` | float |  | Optional encounter-relative end offset in milliseconds. |
 | `--translate / --no-translate` | boolean |  | Optional translation toggle. |
+| `--include-raw` | boolean | false | Attach the untyped Warcraft Logs table entry to every row. Off by default: the raw entries carry full gear/pet/ability detail and dominate the payload size. |
 | `--allow-unlisted` | boolean | false | Allow lookup of unlisted reports. |
 
 ## warcraftlogs report-encounter-damage-target-summary
@@ -667,6 +669,7 @@ Summarize damage in one report fight by target actor.
 | `--window-start-ms` | float |  | Optional encounter-relative start offset in milliseconds. |
 | `--window-end-ms` | float |  | Optional encounter-relative end offset in milliseconds. |
 | `--translate / --no-translate` | boolean |  | Optional translation toggle. |
+| `--include-raw` | boolean | false | Attach the untyped Warcraft Logs table entry to every row. Off by default: the raw entries carry full gear/pet/ability detail and dominate the payload size. |
 | `--allow-unlisted` | boolean | false | Allow lookup of unlisted reports. |
 
 ## warcraftlogs report-encounter-damage-breakdown
@@ -765,7 +768,7 @@ Run a raw Warcraft Logs GraphQL query, or introspect the schema with --introspec
 
 ## warcraftlogs report-events
 
-Return raw report events for one narrowed slice of a report.
+Return raw report events for one fight (--fight-id) or one explicit --start-time/--end-time window.
 
 **Arguments**
 
@@ -876,7 +879,7 @@ Return a report's master data: actors and abilities.
 
 ## warcraftlogs report-player-details
 
-Return a report's player details, by role and spec.
+Return a report's player details for one fight (--fight-id) or one explicit --start-time/--end-time window.
 
 **Arguments**
 

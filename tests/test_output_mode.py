@@ -195,10 +195,12 @@ def test_fields_flag_supports_nested_paths(monkeypatch) -> None:
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert set(payload.keys()) == {"entity", "tooltip"}
+    assert set(payload.keys()) == {"entity", "tooltip", "fields_missing"}
     assert payload["entity"]["name"] == "Thunderfury"
     assert payload["tooltip"]["quality"] == 5
     assert "summary" not in payload["tooltip"]
+    # Without --fields-strict the absent path is reported rather than silently dropped.
+    assert payload["fields_missing"] == ["tooltip.summary"]
 
 
 def test_cache_inspect_reports_file_cache_stats(tmp_path: Path, monkeypatch) -> None:

@@ -117,3 +117,15 @@ def test_live_icy_unsupported_query_scope_hint() -> None:
     assert payload["count"] == 0
     assert payload["results"] == []
     assert payload["scope_hint"]["code"] == "patch_notes"
+
+
+def test_live_icy_spec_builds_talents_publishes_build_references() -> None:
+    """The builds page is what feeds `warcraft guide-builds-simc`; zero build references means the
+    import-string markup moved and the handoff is silently empty."""
+    require_live("Icy Veins")
+    payload = payload_for_live(runner, app, ["guide", SPEC_BUILDS_TALENTS_REF], provider_name="Icy Veins")
+
+    builds = payload["data"]["build_references"]
+    assert builds["count"] >= 1
+    assert {row["reference_type"] for row in builds["items"]} <= {"wow_talent_export", "wowhead_talent_calc_url"}
+    assert all(row["build_code"] for row in builds["items"])

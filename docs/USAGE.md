@@ -76,7 +76,7 @@ Flags: [reference/warcraft.md](reference/warcraft.md). Provider docs: [warcraft/
 warcraft doctor
 warcraft schema
 warcraft search "defias"
-warcraft --expansion wotlk search "thunderfury" --compact --expansion-debug
+warcraft --expansion wotlk search "thunderfury" --brief --expansion-debug
 warcraft resolve "fairbreeze favors"
 warcraft resolve "https://www.warcraftlogs.com/reports/abcd1234#fight=3"
 warcraft guild us "Mal'Ganis" gn

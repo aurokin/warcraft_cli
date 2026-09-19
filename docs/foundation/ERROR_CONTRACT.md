@@ -64,7 +64,7 @@ fixed exit-code mapping, everything else exits `1`.
 | --- | --- | --- |
 | `0` | Success | |
 | `1` | Generic failure, including uncaught exceptions (`internal_error`) | any code not listed below |
-| `2` | Usage error: bad flags or arguments (Typer/Click default) | `invalid_query`, `invalid_argument`, `missing_fields` |
+| `2` | Usage error: bad flags or arguments | `invalid_query`, `invalid_argument`, `missing_fields` |
 | `3` | Authentication required or rejected | `auth_required`, `auth_failed`, `unauthorized`, `forbidden` |
 | `4` | Target not found | `not_found` |
 | `5` | Network or upstream failure | `network_error`, `timeout`, `upstream_error`, `rate_limited`, `http_error` |
@@ -80,10 +80,16 @@ escapes a command becomes an error envelope on stderr and never a traceback:
 - `httpx.TimeoutException` -> `timeout`, exit 5
 - `httpx.HTTPStatusError` -> `auth_failed` (401/403, exit 3), `not_found` (404, exit 4), otherwise `upstream_error` (exit 5); `details` carries `status_code` and `url`
 - any other `httpx.RequestError` -> `network_error`, exit 5
+- argument-parsing failures (unknown flag, rejected option value, missing argument) -> `invalid_argument`, exit 2
 - any other exception -> `internal_error` with `"<ExceptionType>: <message>"`, exit 1
 
-Click usage errors (exit 2) and explicit `typer.Exit` pass through unchanged. The guard's error
-JSON is always compact because the global flags may not have been parsed yet.
+There is no failure mode that writes human text instead of the envelope: `--help` is the only
+non-JSON output, and it exits `0`. Explicit `typer.Exit` passes through with its own exit code. The
+guard's error JSON is always compact because the global flags may not have been parsed yet.
+
+When the failure happens before the command body runs, `command` is still the subcommand named on
+the command line, never the value of a global flag (`warcraft --profile bogus schema` reports
+`"command": "schema"`). It is empty only when no subcommand was named at all.
 
 ## Global output flags
 
@@ -96,7 +102,12 @@ These flags exist on every binary and go before the subcommand:
 | `--compact-max-chars N` | Truncation length for `--compact` (40-10000) |
 | `--fields a.b,c` | Keep only the listed dot paths (repeatable or comma-separated). `ok` and `error` are always kept on failures. |
 | `--fields-strict` | Exit 2 with `missing_fields` when a requested path is absent |
-| `--profile agent\|human\|debug` | Presets: `agent` compact JSON (default), `human` pretty JSON, `debug` pretty JSON plus a `diagnostics` block |
+| `--profile agent\|human` | Presets: `agent` compact JSON (default), `human` pretty JSON |
+
+A `--fields` path the payload does not have is never dropped in silence. With `--fields-strict` it
+is a `missing_fields` error (exit 2); without it the projection carries a `fields_missing` array of
+the paths that did not resolve, so an empty or thin projection is distinguishable from an empty
+result.
 
 ```bash
 wowhead --fields data.results --compact search "thunderfury"

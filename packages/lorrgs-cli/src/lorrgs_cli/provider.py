@@ -51,7 +51,12 @@ NOTES: list[str] = [
     "Search/resolve understand Lorrgs ranking URLs, Warcraft Logs report URLs, and free text spec/boss pairs.",
 ]
 
-_HTTP_STATUS_CODES: dict[int, str] = {401: "auth_failed", 403: "auth_failed", 404: "not_found", 422: "invalid_query", 429: "rate_limited"}
+# Lorrgs takes no credentials at all (doctor reports flow "none"), so a 401/403 can never mean "bad
+# or missing credentials". It means Lorrgs, or the Warcraft Logs report behind it, refuses to serve
+# that resource anonymously — an unreadable target, not an auth problem. Mapping it to auth_failed
+# (exit 3) told agents to authenticate against a provider they can never authenticate to.
+_HTTP_STATUS_CODES: dict[int, str] = {401: "not_found", 403: "not_found", 404: "not_found", 422: "invalid_query", 429: "rate_limited"}
+_REFUSAL_STATUSES = frozenset({401, 403})
 
 
 def _dual_emit(envelope: Envelope, payload: Mapping[str, Any]) -> Envelope:
@@ -74,6 +79,18 @@ def _response_detail(response: httpx.Response) -> str | None:
     return None
 
 
+def _status_message(exc: httpx.HTTPStatusError) -> str:
+    status = exc.response.status_code
+    detail = _response_detail(exc.response)
+    if status in _REFUSAL_STATUSES:
+        return (
+            f"Lorrgs refused to serve {exc.request.url} ({detail or f'HTTP {status}'}). Lorrgs takes no "
+            "credentials, so this is not an authentication problem: the resource is private, or Lorrgs "
+            "has not loaded that report."
+        )
+    return detail or f"Lorrgs API returned HTTP {status} for {exc.request.url}."
+
+
 def provider_error(exc: Exception) -> ProviderError:
     """Translate a client or transport failure into the shared error vocabulary."""
     if isinstance(exc, LorrgsClientError):
@@ -81,8 +98,7 @@ def provider_error(exc: Exception) -> ProviderError:
     if isinstance(exc, httpx.HTTPStatusError):
         status = exc.response.status_code
         code = _HTTP_STATUS_CODES.get(status, "http_error")
-        message = _response_detail(exc.response) or f"Lorrgs API returned HTTP {status} for {exc.request.url}."
-        return ProviderError(code, message, details={"status_code": status, "url": str(exc.request.url)})
+        return ProviderError(code, _status_message(exc), details={"status_code": status, "url": str(exc.request.url)})
     if isinstance(exc, httpx.TimeoutException):
         return ProviderError("timeout", f"Lorrgs API request timed out: {exc}.")
     return ProviderError("network_error", f"Lorrgs API request failed: {exc}.")
@@ -152,7 +168,7 @@ def resolve(target: str, *, limit: int = 5, **options: Any) -> Envelope:
     """Resolve a Lorrgs query to a single next command when the top candidate is unambiguous."""
     with LorrgsClient() as client:
         try:
-            payload = resolve_payload(search_candidates(client, target, limit=limit))
+            payload = resolve_payload(client, target, limit=limit)
         except (LorrgsClientError, httpx.HTTPError) as exc:
             raise provider_error(exc) from exc
     envelope = success_envelope(

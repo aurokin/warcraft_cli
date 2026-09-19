@@ -95,18 +95,18 @@ def api_reference_full(
 @app.command("event")
 def event_reference(
     ctx: typer.Context,
-    query: str = typer.Argument(..., help="Event or UI handler query, article title, or URL."),
+    query: str = typer.Argument(..., help="Game event name (PLAYER_LOGIN), UI handler name, article title, or URL."),
 ) -> None:
-    """Resolve a query to a UI handler or event reference page and return its summary."""
+    """Resolve a query to a game event or UI handler reference page and return its summary."""
     _emit_or_fail(ctx, lambda: wiki_provider.typed_reference(query, surface="event"))
 
 
 @app.command("event-full")
 def event_reference_full(
     ctx: typer.Context,
-    query: str = typer.Argument(..., help="Event or UI handler query, article title, or URL."),
+    query: str = typer.Argument(..., help="Game event name (PLAYER_LOGIN), UI handler name, article title, or URL."),
 ) -> None:
-    """Resolve a query to a UI handler reference page and return every extracted section."""
+    """Resolve a query to a game event or UI handler reference page and return every extracted section."""
     _emit_or_fail(ctx, lambda: wiki_provider.typed_reference(query, surface="event", full=True))
 
 

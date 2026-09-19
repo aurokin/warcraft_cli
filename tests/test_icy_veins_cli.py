@@ -7,9 +7,9 @@ from pathlib import Path
 import httpx
 import pytest
 from icy_veins_cli.main import app
-from icy_veins_cli.page_parser import classify_guide_slug, parse_guide_page, parse_sitemap_guides
+from icy_veins_cli.page_parser import CLASS_HUB_SLUGS, classify_guide_slug, parse_guide_page, parse_sitemap_guides
 from icy_veins_cli.provider import resolve_payload
-from icy_veins_cli.search import resolve_is_confident, score_family_match
+from icy_veins_cli.search import NEUTRAL_SLUG_TERMS, resolve_is_confident, score_family_match
 from typer.testing import CliRunner
 from warcraft_core.envelope import envelope_violations
 
@@ -713,3 +713,307 @@ def test_icy_veins_search_payload_is_a_conforming_envelope(monkeypatch) -> None:
     assert payload["command"] == "search"
     # Legacy top-level keys stay alongside the envelope so existing agents keep working.
     assert payload["results"] == payload["data"]["results"]
+
+
+NEWS_LINK_HTML = """
+<html>
+  <head>
+    <link rel="canonical" href="https://www.icy-veins.com/wow/mistweaver-monk-pve-healing-guide">
+  </head>
+  <body>
+    <div class="guide-page-content">
+      <h2>Overview</h2>
+      <p>See the <a href="https://www.icy-veins.com/wow/news/midnight-hotfixes-march-5th">hotfix roundup</a>
+      and our <a href="/wow/mistweaver-monk-pve-healing-stat-priority">Stat Priority</a> page.</p>
+    </div>
+  </body>
+</html>
+"""
+
+FAMILY_NAV_WITH_NEWS_LINK_HTML = """
+<html>
+  <head>
+    <link rel="canonical" href="https://www.icy-veins.com/wow/mistweaver-monk-pve-healing-guide">
+  </head>
+  <body>
+    <div class="table-of-contents">
+      <nav>
+        <a href="/wow/mistweaver-monk-pve-healing-guide">Mistweaver Monk Guide</a>
+        <a href="https://www.icy-veins.com/wow/news/midnight-hotfixes-march-5th">Latest Hotfixes</a>
+        <a href="/wow/mistweaver-monk-pve-healing-stat-priority">Stat Priority</a>
+      </nav>
+    </div>
+    <div class="guide-page-content">
+      <h2>Overview</h2>
+      <p>Real prose.</p>
+    </div>
+  </body>
+</html>
+"""
+
+
+def _unrecognised_layout_html(slug: str) -> str:
+    """A page whose prose lives in a container the parser does not know: Icy Veins layout drift."""
+    return f"""
+<html>
+  <head>
+    <link rel="canonical" href="https://www.icy-veins.com/wow/{slug}">
+  </head>
+  <body>
+    <div class="some-new-astro-wrapper">
+      <h2>Overview</h2>
+      <p>Real prose that the parser cannot see.</p>
+    </div>
+  </body>
+</html>
+"""
+
+
+UNRECOGNISED_LAYOUT_HTML = _unrecognised_layout_html("mistweaver-monk-pve-healing-guide")
+
+HEALER_SITEMAP_XML = """
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>https://www.icy-veins.com/wow/mistweaver-monk-pve-healing-guide</loc></url>
+  <url><loc>https://www.icy-veins.com/wow/holy-paladin-pve-healing-guide</loc></url>
+  <url><loc>https://www.icy-veins.com/wow/discipline-priest-pve-healing-guide</loc></url>
+  <url><loc>https://www.icy-veins.com/wow/restoration-druid-pve-healing-guide</loc></url>
+</urlset>
+"""
+
+
+def test_icy_veins_guide_survives_a_multi_segment_wow_link_in_the_article(monkeypatch) -> None:
+    """A guide that links to a news post must still return its article, not an internal_error."""
+    monkeypatch.setattr(
+        "icy_veins_cli.main.IcyVeinsClient.fetch_guide_page",
+        lambda self, guide_ref: parse_guide_page(
+            NEWS_LINK_HTML,
+            source_url="https://www.icy-veins.com/wow/mistweaver-monk-pve-healing-guide",
+        ),
+    )
+    result = runner.invoke(app, ["guide", "mistweaver-monk-pve-healing-guide"])
+    assert result.exit_code == 0
+
+    payload = json.loads(result.stdout)["data"]
+    assert [row["id"] for row in payload["linked_entities"]["items"]] == ["mistweaver-monk-pve-healing-stat-priority"]
+
+
+def test_icy_veins_guide_skips_a_non_guide_link_in_the_family_navigation(monkeypatch) -> None:
+    """A news link in the family switcher is not a sibling page, and must not abort the parse."""
+    monkeypatch.setattr(
+        "icy_veins_cli.main.IcyVeinsClient.fetch_guide_page",
+        lambda self, guide_ref: parse_guide_page(
+            FAMILY_NAV_WITH_NEWS_LINK_HTML,
+            source_url="https://www.icy-veins.com/wow/mistweaver-monk-pve-healing-guide",
+        ),
+    )
+    result = runner.invoke(app, ["guide", "mistweaver-monk-pve-healing-guide"])
+    assert result.exit_code == 0
+
+    payload = json.loads(result.stdout)["data"]
+    assert [row["section_slug"] for row in payload["navigation"]["items"]] == [
+        "mistweaver-monk-pve-healing-guide",
+        "mistweaver-monk-pve-healing-stat-priority",
+    ]
+
+
+def test_icy_veins_guide_fails_when_the_article_container_is_missing(monkeypatch) -> None:
+    """Layout drift must be an error, not ok:true with an empty article."""
+    monkeypatch.setattr(
+        "icy_veins_cli.main.IcyVeinsClient.fetch_guide_page",
+        lambda self, guide_ref: parse_guide_page(
+            UNRECOGNISED_LAYOUT_HTML,
+            source_url="https://www.icy-veins.com/wow/mistweaver-monk-pve-healing-guide",
+        ),
+    )
+    result = runner.invoke(app, ["guide", "mistweaver-monk-pve-healing-guide"])
+
+    assert result.exit_code == 1
+    payload = json.loads(result.stderr or result.stdout)
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "parse_failed"
+    assert payload["error"]["details"]["page_url"] == "https://www.icy-veins.com/wow/mistweaver-monk-pve-healing-guide"
+
+
+def test_icy_veins_guide_full_fails_when_the_first_page_has_no_article(monkeypatch) -> None:
+    """The bundle commands must reject layout drift on the entry page too, not just `guide`."""
+    monkeypatch.setattr(
+        "icy_veins_cli.main.IcyVeinsClient.fetch_guide_page",
+        lambda self, guide_ref: parse_guide_page(
+            UNRECOGNISED_LAYOUT_HTML,
+            source_url="https://www.icy-veins.com/wow/mistweaver-monk-pve-healing-guide",
+        ),
+    )
+    result = runner.invoke(app, ["guide-full", "mistweaver-monk-pve-healing-guide"])
+
+    assert result.exit_code == 1
+    payload = json.loads(result.stderr or result.stdout)
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "parse_failed"
+
+
+BROKEN_FAMILY_PAGE_CASES = [
+    ("network", "network_error"),
+    ("unparsable", "parse_failed"),
+    ("empty_article", "parse_failed"),
+]
+
+
+def _family_page_fetch(failure: str):
+    """Fetch stub where the leveling sibling fails in ``failure`` mode and every other page is fine."""
+
+    def fetch(self, guide_ref: str) -> dict[str, object]:
+        slug = "mistweaver-monk-leveling-guide"
+        if not str(guide_ref).endswith(slug):
+            return _fake_fetch_guide_page(guide_ref)
+        if failure == "network":
+            raise httpx.ConnectError("boom", request=httpx.Request("GET", str(guide_ref)))
+        if failure == "unparsable":
+            raise ValueError("Failed to clone Icy Veins article node.")
+        return parse_guide_page(
+            _unrecognised_layout_html(slug),
+            source_url=f"https://www.icy-veins.com/wow/{slug}",
+        )
+
+    return fetch
+
+
+@pytest.mark.parametrize(("failure", "expected_code"), BROKEN_FAMILY_PAGE_CASES, ids=[case[0] for case in BROKEN_FAMILY_PAGE_CASES])
+def test_icy_veins_guide_full_records_a_failed_family_page_and_keeps_going(monkeypatch, failure: str, expected_code: str) -> None:
+    monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.fetch_guide_page", _family_page_fetch(failure))
+    result = runner.invoke(app, ["guide-full", "mistweaver-monk-pve-healing-guide"])
+    assert result.exit_code == 0
+
+    payload = json.loads(result.stdout)["data"]
+    assert payload["guide"]["page_count"] == 2
+    assert payload["failed_pages"]["count"] == 1
+    failed = payload["failed_pages"]["items"][0]
+    assert failed["section_slug"] == "mistweaver-monk-leveling-guide"
+    assert failed["error"]["code"] == expected_code
+
+
+def test_icy_veins_guide_export_reports_failed_family_pages(monkeypatch, tmp_path: Path) -> None:
+    """An exported bundle is partial when a sibling failed; the command must say so."""
+    monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.fetch_guide_page", _family_page_fetch("network"))
+    result = runner.invoke(
+        app,
+        ["guide-export", "mistweaver-monk-pve-healing-guide", "--out", str(tmp_path / "bundle")],
+    )
+    assert result.exit_code == 0
+
+    payload = json.loads(result.stdout)["data"]
+    assert payload["counts"]["pages"] == 2
+    assert payload["failed_pages"]["count"] == 1
+    assert payload["failed_pages"]["items"][0]["section_slug"] == "mistweaver-monk-leveling-guide"
+
+
+def test_icy_veins_guide_query_accepts_comma_separated_kinds(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.fetch_guide_page", lambda self, guide_ref: _fake_fetch_guide_page(guide_ref))
+    export_dir = tmp_path / "guide-mistweaver-monk"
+    assert runner.invoke(app, ["guide-export", "mistweaver-monk-pve-healing-guide", "--out", str(export_dir)]).exit_code == 0
+
+    # Surrounding blanks and a trailing comma are what a shell-quoted list actually looks like.
+    result = runner.invoke(app, ["guide-query", str(export_dir), "stat priority", "--kind", " navigation , analysis_surfaces ,"])
+    assert result.exit_code == 0, result.stderr or result.stdout
+
+    payload = json.loads(result.stdout)["data"]
+    assert payload["match_counts"] == {
+        "sections": 0,
+        "navigation": 1,
+        "linked_entities": 0,
+        "build_references": 0,
+        "analysis_surfaces": 1,
+    }
+
+
+def test_icy_veins_search_does_not_privilege_any_class_on_a_role_query(monkeypatch) -> None:
+    """No class or spec name may be exempt from the off-query slug penalty."""
+    monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.sitemap_guides", lambda self: parse_sitemap_guides(HEALER_SITEMAP_XML))
+    result = runner.invoke(app, ["search", "pve healing"])
+    assert result.exit_code == 0
+
+    payload = json.loads(result.stdout)["data"]
+    assert len(payload["results"]) == 4
+    assert len({row["ranking"]["score"] for row in payload["results"]}) == 1
+
+
+def test_icy_veins_resolve_stays_unresolved_on_a_tied_role_query(monkeypatch) -> None:
+    monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.sitemap_guides", lambda self: parse_sitemap_guides(HEALER_SITEMAP_XML))
+    result = runner.invoke(app, ["resolve", "pve healing"])
+    assert result.exit_code == 0
+
+    payload = json.loads(result.stdout)["data"]
+    assert payload["resolved"] is False
+
+
+SPEC_TOKENS = frozenset(
+    {
+        "blood", "frost", "unholy", "havoc", "vengeance", "balance", "feral", "guardian", "restoration",
+        "devastation", "preservation", "augmentation", "beast", "mastery", "marksmanship", "survival",
+        "arcane", "fire", "brewmaster", "mistweaver", "windwalker", "holy", "protection", "retribution",
+        "discipline", "shadow", "assassination", "outlaw", "subtlety", "elemental", "enhancement",
+        "affliction", "demonology", "destruction", "arms", "fury",
+    }
+)
+
+
+def test_neutral_slug_terms_name_no_class_or_spec() -> None:
+    """Exempting one class or spec from the off-query slug penalty hands it a permanent head start."""
+    class_tokens = {slug.removesuffix("-guide") for slug in CLASS_HUB_SLUGS}
+    class_tokens |= {part for token in class_tokens for part in token.split("-")}
+
+    assert NEUTRAL_SLUG_TERMS & (class_tokens | SPEC_TOKENS) == set()
+
+
+EXPORT_STRING_HTML = """
+<html>
+  <head>
+    <link rel="canonical" href="https://www.icy-veins.com/wow/mistweaver-monk-pve-healing-spec-builds-talents">
+  </head>
+  <body>
+    <div class="guide-page-content">
+      <h2>Talent Builds</h2>
+      <div class="export-string">
+        <div class="export-string__title">Rising Mist Raid</div>
+        <div class="export-string__code">C4QAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB</div>
+      </div>
+      <div class="export-string">
+        <div class="export-string__title">Rising Mist Mythic+</div>
+        <div class="export-string__code">C4QAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB</div>
+      </div>
+      <div class="export-string">
+        <div class="export-string__title">Copy button</div>
+        <div class="export-string__code">Copy</div>
+      </div>
+    </div>
+  </body>
+</html>
+"""
+
+
+def _export_string_builds() -> list[dict[str, object]]:
+    payload = parse_guide_page(
+        EXPORT_STRING_HTML,
+        source_url="https://www.icy-veins.com/wow/mistweaver-monk-pve-healing-spec-builds-talents",
+    )
+    return payload["build_references"]
+
+
+def test_icy_veins_ignores_export_blocks_that_hold_no_loadout_import_string() -> None:
+    """Button labels and placeholders share the export-string markup; only real import strings are builds."""
+    assert [row["build_code"] for row in _export_string_builds()] == ["C4QAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB"]
+
+
+def test_icy_veins_keeps_the_first_label_when_one_import_string_is_published_twice() -> None:
+    """Two builds can share a loadout string; the first published name wins so output is stable."""
+    assert [row["label"] for row in _export_string_builds()] == ["Rising Mist Raid"]
+
+
+@pytest.mark.parametrize("query", ["hotfixes", "hotfix", "latest hotfixes"])
+def test_icy_veins_search_hints_the_hotfix_boundary_for_realistic_queries(monkeypatch, query: str) -> None:
+    monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.sitemap_guides", lambda self: parse_sitemap_guides(SITEMAP_XML))
+    result = runner.invoke(app, ["search", query])
+    assert result.exit_code == 0
+
+    payload = json.loads(result.stdout)["data"]
+    assert payload["scope_hint"]["code"] == "hotfixes"
+    assert payload["count"] == 0

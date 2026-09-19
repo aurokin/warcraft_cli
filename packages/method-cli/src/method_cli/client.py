@@ -41,7 +41,6 @@ class MethodClient:
         settings, sitemap_ttl, page_ttl = load_method_cache_settings_from_env()
         self._timeout_seconds = timeout_seconds
         self._retry_attempts = max(1, retry_attempts)
-        self._cache_settings = settings
         self._cache_store = build_cache_store(settings) if settings.enabled else None
         self._sitemap_ttl = sitemap_ttl
         self._page_ttl = page_ttl

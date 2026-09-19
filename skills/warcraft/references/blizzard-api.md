@@ -32,6 +32,8 @@ confirmed against the live API for `us`, `eu`, `kr`, and `tw` (`provenance.verif
 - use `--game-version classic` (or the `--classic` shorthand) for classic namespaces; character
   profiles are retail-only
 - `--locale` passes through (default `en_US`)
+- a bad `--region` or `--game-version` is rejected offline with exit 2 (usage): fix the flag
+  instead of retrying
 - every payload carries `provenance` (region, namespace, namespace class, source URL) and
   `provenance.verified` — `true` for us/eu/kr/tw, `false` for `cn`, whose host could not be
   reached to confirm it

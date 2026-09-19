@@ -8,6 +8,21 @@ from bs4 import BeautifulSoup, Comment, NavigableString, Tag
 
 WIKI_BASE_URL = "https://warcraft.wiki.gg"
 
+# Families whose pages document the addon programming surface: they share the same body chrome
+# (the "Main Menu" / "Game Types" navigation tables) and the same reference metadata sections.
+PROGRAMMING_FAMILIES = frozenset(
+    {
+        "api_function",
+        "ui_handler",
+        "event_reference",
+        "framework_page",
+        "xml_schema",
+        "cvar",
+        "api_changes",
+        "howto_programming",
+    }
+)
+
 PROGRAMMING_FRAMEWORK_TITLES = {
     "world of warcraft api",
     "warcraft wiki:api",
@@ -157,6 +172,10 @@ def _title_pattern_family(normalized: str) -> str | None:
         return "api_function"
     if normalized.startswith("uihandler "):
         return "ui_handler"
+    # Game events live in the custom "Event:" namespace, one page per event name
+    # ("Event:PLAYER LOGIN"); the bare event name survives as a main-namespace redirect.
+    if normalized.startswith("event:"):
+        return "event_reference"
     if normalized in PROGRAMMING_HOWTO_TITLES:
         return "howto_programming"
     if normalized.startswith("patch ") and ("api changes" not in normalized):
@@ -189,9 +208,9 @@ def classify_article_family(title: str) -> str:
     return _title_pattern_family(normalized) or _title_set_family(normalized) or "general_article"
 
 
-def _strip_html(html_text: str) -> str:
+def _strip_html(html_text: str, *, separator: str = " ") -> str:
     soup = BeautifulSoup(html_text, "html.parser")
-    return soup.get_text(" ", strip=True)
+    return soup.get_text(separator, strip=True)
 
 
 def parse_search_results(payload: dict[str, Any]) -> tuple[int, list[dict[str, Any]]]:
@@ -207,7 +226,9 @@ def parse_search_results(payload: dict[str, Any]) -> tuple[int, list[dict[str, A
         title = str(row.get("title") or "").strip()
         if not title:
             continue
-        snippet = _strip_html(str(row.get("snippet") or ""))
+        # Search highlights wrap sub-words ("<span class="searchmatch">PLAYER</span>_LOGIN"), so the
+        # separator has to be empty or the ranker never sees the term it matched on.
+        snippet = _strip_html(str(row.get("snippet") or ""), separator="")
         rows.append(
             {
                 "title": title,
@@ -314,16 +335,22 @@ def _extract_linked_entities(root: Tag) -> list[dict[str, Any]]:
             continue
         if href.startswith("/wiki/Help:") or href.startswith("/wiki/Template:"):
             continue
-        full_url = urljoin(WIKI_BASE_URL, href)
-        if "#" in full_url:
-            full_url = full_url.split("#", 1)[0]
-        title = normalize_article_ref(href)
-        entities[title] = {
-            "type": "wiki_article",
-            "id": title,
-            "name": link.get_text(" ", strip=True) or title,
-            "url": full_url,
-        }
+        # Section links ("/wiki/Mage#Talents") point at the same article as the bare link, so the
+        # fragment comes off before the title is derived: the id has to stay a fetchable title.
+        path, _, fragment = href.partition("#")
+        title = normalize_article_ref(path)
+        # A section link's text names the section ("talents"), not the article, so only a link to
+        # the whole article can supply a display name.
+        link_text = link.get_text(" ", strip=True)
+        entities.setdefault(
+            title,
+            {
+                "type": "wiki_article",
+                "id": title,
+                "name": link_text if link_text and not fragment else title,
+                "url": urljoin(WIKI_BASE_URL, path),
+            },
+        )
     return sorted(entities.values(), key=lambda row: str(row["id"]).lower())
 
 
@@ -338,7 +365,7 @@ def _clean_root(root: Tag, *, family: str) -> Tag:
     for selector in (".navbox", ".vertical-navbox", ".infobox", ".catlinks", ".mw-hidden-catlinks"):
         for tag in output.select(selector):
             tag.decompose()
-    if family in {"api_function", "ui_handler", "framework_page", "xml_schema", "cvar", "api_changes", "howto_programming"}:
+    if family in PROGRAMMING_FAMILIES:
         for tag in output.select(".nomobile, .thumb, .gallery, .mw-references-wrap"):
             tag.decompose()
         children = [child for child in output.children if isinstance(child, Tag)]
@@ -410,7 +437,7 @@ def extract_reference_metadata(*, title: str, family: str, text: str, sections: 
     metadata["patch_changes"] = section_map.get("patch_changes", {}).get("text")
     metadata["see_also"] = section_map.get("see_also", {}).get("text")
     metadata["references"] = section_map.get("references", {}).get("text")
-    if family not in {"api_function", "ui_handler", "framework_page", "xml_schema", "cvar", "api_changes", "howto_programming"}:
+    if family not in PROGRAMMING_FAMILIES:
         return metadata
     metadata["programming_reference"] = True
     metadata["signature"] = _first_code_block_text(root)

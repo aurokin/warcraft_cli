@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 
 from wowhead_cli.main import app
 
@@ -252,3 +253,114 @@ def test_blue_topic_command_extracts_posts(monkeypatch) -> None:
     assert payload["summary"]["blue_authors"] == ["Kaivax"]
 
 
+
+
+def _news_html(*posts: dict[str, Any]) -> str:
+    """A synthetic news listing page carrying exactly the rows a test cares about."""
+    payload = {"newsPosts": list(posts), "pinnedPosts": [], "totalPages": 1, "gathered": len(posts)}
+    return (
+        '<html><head><script type="application/json" id="data.news.newsData">'
+        f"{json.dumps(payload)}</script></head></html>"
+    )
+
+
+def _news_post(post_id: int, posted_full: str) -> dict[str, Any]:
+    return {
+        "id": post_id,
+        "title": f"Post {post_id}",
+        "author": "Staff",
+        "postedFull": posted_full,
+        "postUrl": f"/news/post-{post_id}",
+        "typeId": 1,
+        "typeName": "News",
+    }
+
+
+def test_news_counts_the_rows_whose_timestamp_it_could_not_read(monkeypatch) -> None:
+    """A row a date window has to drop is reported in `scan`, never dropped silently."""
+    monkeypatch.setattr(
+        "wowhead_cli.main.WowheadClient.news_page_html",
+        lambda self, page=1: _news_html(
+            _news_post(1, "2026/03/13 at 12:34 PM"),
+            _news_post(2, "Yesterday at teatime"),
+        ),
+    )
+    result = runner.invoke(app, ["news", "--date-from", "2026-03-01", "--limit", "5"])
+    assert result.exit_code == 0
+
+    data = json.loads(result.stdout)["data"]
+    assert [row["id"] for row in data["results"]] == [1]
+    assert data["scan"]["unparsed_timestamps"] == 1
+
+
+def test_news_fails_when_a_date_window_can_read_no_timestamp_at_all(monkeypatch) -> None:
+    """Wowhead switching timestamp formats must be an error, not an empty ok:true answer."""
+    monkeypatch.setattr(
+        "wowhead_cli.main.WowheadClient.news_page_html",
+        lambda self, page=1: _news_html(
+            _news_post(1, "Yesterday at teatime"),
+            _news_post(2, "Last week"),
+        ),
+    )
+    result = runner.invoke(app, ["news", "--date-from", "2026-03-01", "--limit", "5"])
+    assert result.exit_code == 1
+
+    error = json.loads(result.output)["error"]
+    assert error["code"] == "parse_error"
+    assert "--date-from" in error["message"]
+
+
+def test_news_without_a_date_window_still_returns_rows_it_cannot_timestamp(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "wowhead_cli.main.WowheadClient.news_page_html",
+        lambda self, page=1: _news_html(_news_post(1, "Yesterday at teatime")),
+    )
+    result = runner.invoke(app, ["news", "--limit", "5"])
+    assert result.exit_code == 0
+
+    data = json.loads(result.stdout)["data"]
+    assert [row["id"] for row in data["results"]] == [1]
+    assert data["results"][0]["posted_at"] is None
+    assert data["scan"]["unparsed_timestamps"] == 1
+
+
+def _news_post_html(*recent: dict[str, Any]) -> str:
+    payload = {"news": list(recent), "blueTracker": [], "video": False}
+    return (
+        '<html><head><link rel="canonical" href="https://www.wowhead.com/news/post-1">'
+        '<script type="application/json" id="data.WH.News.recentPosts">'
+        f"{json.dumps(payload)}</script></head><body></body></html>"
+    )
+
+
+def test_news_post_reports_the_related_rows_its_limit_cut_off(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "wowhead_cli.main.WowheadClient.page_html",
+        lambda self, page_url: _news_post_html(
+            {"name": "Roundup A", "url": "/news/roundup-a-1", "author": "Staff", "time": "1h"},
+            {"name": "Roundup B", "url": "/news/roundup-b-2", "author": "Staff", "time": "2h"},
+            {"name": "Roundup C", "url": "/news/roundup-c-3", "author": "Staff", "time": "3h"},
+        ),
+    )
+    result = runner.invoke(app, ["news-post", "/news/post-1", "--related-limit", "2"])
+    assert result.exit_code == 0
+
+    news = json.loads(result.stdout)["data"]["related"]["news"]
+    assert news["count"] == len(news["items"]) == 2
+    assert news["total"] == 3
+    assert news["truncated"] is True
+    assert [row["title"] for row in news["items"]] == ["Roundup A", "Roundup B"]
+
+
+def test_guides_count_describes_the_returned_rows_not_the_pre_limit_match_set(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "wowhead_cli.main.WowheadClient.guide_category_page_html",
+        lambda self, category: SAMPLE_GUIDE_CATEGORY_HTML,
+    )
+    result = runner.invoke(app, ["guides", "classes", "--limit", "1"])
+    assert result.exit_code == 0
+
+    data = json.loads(result.stdout)["data"]
+    assert data["count"] == len(data["results"]) == 1
+    assert data["total_matches"] == 2
+    assert data["truncated"] is True

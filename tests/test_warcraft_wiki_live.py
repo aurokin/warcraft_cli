@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import pytest
-from article_provider_testkit import payload_for_live, require_live
+from article_provider_testkit import error_payload, payload_for_live, require_live
 from typer.testing import CliRunner
 from warcraft_wiki_cli.main import app
 
@@ -105,6 +105,48 @@ def test_live_warcraft_wiki_framework_event_contract() -> None:
     assert payload["article"]["content_family"] == "framework_page"
     assert payload["resolved_surface"] == "event"
     assert payload["reference"]["programming_reference"] is True
+
+
+@pytest.mark.parametrize(
+    ("event_name", "expected_title"),
+    [
+        ("PLAYER_LOGIN", "Event:PLAYER LOGIN"),
+        ("PLAYER_ENTERING_WORLD", "Event:PLAYER ENTERING WORLD"),
+        # The wiki keeps this one under its pre-"UNFILTERED" title and serves the long name as a redirect.
+        ("COMBAT_LOG_EVENT_UNFILTERED", "Event:COMBAT LOG EVENT"),
+        ("ENCOUNTER_START", "Event:ENCOUNTER START"),
+        ("UNIT_HEALTH", "Event:UNIT HEALTH"),
+        ("BAG_UPDATE", "Event:BAG UPDATE"),
+    ],
+)
+def test_live_warcraft_wiki_game_event_contract(event_name: str, expected_title: str) -> None:
+    require_live("Warcraft Wiki")
+    data = payload_for_live(runner, app, ["event", event_name], provider_name="Warcraft Wiki")["data"]
+
+    assert data["article"]["title"] == expected_title
+    assert data["article"]["content_family"] == "event_reference"
+    assert data["resolved_from"] == "direct_fetch"
+    assert data["content"]["text"]
+
+
+def test_live_warcraft_wiki_unknown_event_fails_not_found() -> None:
+    require_live("Warcraft Wiki")
+    # invoke_live retries until exit 0, so an expected failure has to go through the runner directly.
+    result = runner.invoke(app, ["event", "NOT_A_REAL_EVENT_XYZ"])
+
+    assert result.exit_code == 4
+    assert error_payload(result)["error"]["code"] == "not_found"
+
+
+def test_live_warcraft_wiki_game_event_search_contract() -> None:
+    require_live("Warcraft Wiki")
+    data = payload_for_live(runner, app, ["search", "PLAYER_LOGIN", "--limit", "5"], provider_name="Warcraft Wiki")["data"]
+
+    top = data["results"][0]
+    assert top["id"] == "Event:PLAYER LOGIN"
+    assert "exact_event_title" in top["ranking"]["match_reasons"]
+    # Whatever upstream ranked below it does not match the query: it must not come close in score.
+    assert all(row["ranking"]["score"] < top["ranking"]["score"] - 18 for row in data["results"][1:])
 
 
 def test_live_warcraft_wiki_programming_howto_contract() -> None:

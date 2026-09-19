@@ -14,14 +14,24 @@ from warcraft_core.identity import (
 from warcraft_core.identity import (
     validate_talent_transport_packet,
 )
+from warcraft_core.talent_transport import tokenize_talent_name
 
 from simc_cli.repo import RepoPaths
+from simc_cli.trait_data import load_trait_table
 
 ACTOR_LINE_RE = re.compile(r'^([a-z_]+)\s*=\s*"?(.*?)"?$')
 TALENT_DEBUG_RE = re.compile(
     r"adding (?P<tree>class|spec|hero|selection) talent (?P<name>.+?) "
     r"\(node=(?P<node>\d+) entry=(?P<entry>\d+) rank=(?P<rank>\d+)/(?P<max_rank>\d+)\)"
 )
+# SimC prints this once per hero tree the build actually selected, in two shapes depending on which
+# code path activated it: `activating sub tree Sunfury (id=39)` from a hash, `... (39)` otherwise.
+SUB_TREE_DEBUG_RE = re.compile(r"activating sub tree (?P<name>.+?) \((?:id=)?(?P<id>\d+)\)")
+# SimC keeps simulating after this one: the decode profile carries no gear on purpose.
+BENIGN_INIT_ERROR = "has no weapon equipped"
+# SimC's debug stream does not always end a line before writing an error, so the marker is matched
+# anywhere on the line rather than anchored to its start.
+_ERROR_LINE_RE = re.compile(r"Error:\s*(?P<message>.+?)\s*$")
 
 DEFAULT_RACE_BY_CLASS = {
     "deathknight": "human",
@@ -73,6 +83,19 @@ class DecodedTalent:
     rank: int
     max_rank: int
     entry: int = 0
+    # False for a tiered node decoded from a talent hash: SimC spreads the node's ranks over its
+    # entries and then prints the leftover (always 0), so the talent is taken at an unknown rank.
+    rank_known: bool = True
+
+    @property
+    def taken(self) -> bool:
+        return self.rank > 0 or not self.rank_known
+
+
+@dataclass(frozen=True, slots=True)
+class HeroTree:
+    name: str
+    id: int
 
 
 @dataclass(slots=True)
@@ -84,6 +107,35 @@ class BuildResolution:
     source_kind: str | None
     generated_profile_text: str | None
     source_notes: list[str]
+    hero_tree: HeroTree | None = None
+    # Hero talents the hash granted for a hero tree the build did not select. SimC disables them,
+    # so they are reported separately instead of counting as part of the build.
+    inactive_hero_talents: list[DecodedTalent] = field(default_factory=list)
+
+
+class SimcBuildError(RuntimeError):
+    """SimC rejected the build input. Carries only the SimC error lines plus a bounded preview."""
+
+    def __init__(self, message: str, *, output_preview: list[str], returncode: int) -> None:
+        super().__init__(message)
+        self.output_preview = output_preview
+        self.returncode = returncode
+
+
+PREVIEW_LINES = 20
+PREVIEW_LINE_CHARS = 200
+
+
+def bounded_output_preview(output: str) -> list[str]:
+    """The tail of SimC's ``debug=1`` stream, bounded in both dimensions.
+
+    A line count alone is not a bound: SimC prints the enemy's stat block on a single ~4 KB line, so
+    each line is clipped as well to keep the error envelope small enough to read.
+    """
+    return [
+        line if len(line) <= PREVIEW_LINE_CHARS else f"{line[:PREVIEW_LINE_CHARS]}... ({len(line)} chars, truncated)"
+        for line in output.splitlines()[-PREVIEW_LINES:]
+    ]
 
 
 def _load_build_packet(path: str) -> tuple[dict[str, Any], str]:
@@ -262,12 +314,6 @@ def infer_actor_and_spec_from_apl(apl_path: str | Path) -> tuple[str | None, str
         return None, None
     actor_class, spec = stem.split("_", 1)
     return actor_class, spec
-
-
-def tokenize_talent_name(name: str) -> str:
-    text = name.lower().replace("'", "")
-    text = re.sub(r"[^a-z0-9]+", "_", text)
-    return text.strip("_")
 
 
 def _normalize_actor_class(value: str | None) -> str | None:
@@ -486,17 +532,52 @@ def parse_debug_talents(output: str) -> dict[str, list[DecodedTalent]]:
         name = match.group("name")
         if tree == "selection":
             continue
+        rank = int(match.group("rank"))
         talents_by_tree[tree].append(
             DecodedTalent(
                 tree=tree,
                 name=name,
                 token=tokenize_talent_name(name),
-                rank=int(match.group("rank")),
+                rank=rank,
                 max_rank=int(match.group("max_rank")),
                 entry=int(match.group("entry")),
+                rank_known=rank > 0,
             )
         )
     return talents_by_tree
+
+
+def parse_active_hero_trees(output: str) -> list[HeroTree]:
+    """Read the hero trees SimC activated for the build, in the order it printed them."""
+    trees: list[HeroTree] = []
+    seen: set[int] = set()
+    for line in output.splitlines():
+        match = SUB_TREE_DEBUG_RE.search(line)
+        if not match:
+            continue
+        tree_id = int(match.group("id"))
+        if tree_id not in seen:
+            seen.add(tree_id)
+            trees.append(HeroTree(name=match.group("name").strip(), id=tree_id))
+    return trees
+
+
+def simc_build_errors(output: str) -> list[str]:
+    """SimC error lines that mean the build input was rejected.
+
+    The decode profile deliberately carries no gear, so SimC's "no weapon equipped" initialization
+    error is expected and is not a rejection of the talents.
+    """
+    errors: list[str] = []
+    for line in output.splitlines():
+        match = _ERROR_LINE_RE.search(line)
+        if match is None:
+            continue
+        message = match.group("message")
+        if BENIGN_INIT_ERROR in message:
+            continue
+        errors.append(message)
+    return errors
 
 
 def normalize_talents_input(value: str | None) -> str | None:
@@ -615,7 +696,9 @@ def _direct_build_identity(build_spec: BuildSpec) -> tuple[BuildSpec, BuildIdent
         source = "wow_talent_export"
         confidence = "medium"
     elif any(note.startswith("inferred from apl:") for note in build_spec.source_notes):
+        # Class and spec came from an APL file name, not from the build data itself.
         source = "apl_path"
+        confidence = "medium"
     return (
         build_spec,
         BuildIdentity(
@@ -753,32 +836,47 @@ def decode_build(repo: RepoPaths, build_spec: BuildSpec) -> BuildResolution:
         raise FileNotFoundError(f"SimC binary not found: {repo.build_simc}")
 
     profile_text = build_profile_text(build_spec)
-    temp_dir = Path(tempfile.mkdtemp(prefix="simc-cli-build-"))
-    profile_path = temp_dir / "decode.simc"
-    profile_path.write_text(profile_text)
-
-    cmd = [
-        str(repo.build_simc),
-        str(profile_path),
-        "iterations=1",
-        "max_time=1",
-        "vary_combat_length=0",
-        "desired_targets=1",
-        "fight_style=Patchwerk",
-        "debug=1",
-        "allow_experimental_specializations=1",
-    ]
-    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)  # noqa: S603
+    with tempfile.TemporaryDirectory(prefix="simc-cli-build-") as temp_dir:
+        profile_path = Path(temp_dir) / "decode.simc"
+        profile_path.write_text(profile_text)
+        cmd = [
+            str(repo.build_simc),
+            str(profile_path),
+            "iterations=1",
+            "max_time=1",
+            "vary_combat_length=0",
+            "desired_targets=1",
+            "fight_style=Patchwerk",
+            "debug=1",
+            "allow_experimental_specializations=1",
+        ]
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=False)  # noqa: S603
     output = proc.stdout + proc.stderr
+
+    errors = simc_build_errors(output)
+    if errors:
+        raise SimcBuildError(
+            " ".join(errors),
+            output_preview=bounded_output_preview(output),
+            returncode=proc.returncode,
+        )
     talents_by_tree = parse_debug_talents(output)
+    if not any(talents_by_tree[tree] for tree in ("class", "spec", "hero")):
+        raise SimcBuildError(
+            f"SimC exited {proc.returncode} without printing any talents for the build.",
+            output_preview=bounded_output_preview(output),
+            returncode=proc.returncode,
+        )
+
+    hero_trees = parse_active_hero_trees(output)
+    hero_tree = hero_trees[0] if len(hero_trees) == 1 else None
+    inactive_hero = _split_inactive_hero_talents(repo, talents_by_tree, hero_trees)
     enabled_talents = {
         talent.token
-        for talents in talents_by_tree.values()
-        for talent in talents
-        if talent.tree in {"class", "spec", "hero"} and talent.rank > 0
+        for tree in ("class", "spec", "hero")
+        for talent in talents_by_tree[tree]
+        if talent.taken
     }
-    if not enabled_talents and proc.returncode != 0:
-        raise RuntimeError(output.strip() or "Failed to decode build with simc")
     notes = build_spec.source_notes[:] + [f"decoded via {repo.build_simc}"]
     return BuildResolution(
         actor_class=build_spec.actor_class,
@@ -788,7 +886,34 @@ def decode_build(repo: RepoPaths, build_spec: BuildSpec) -> BuildResolution:
         source_kind=build_spec.source_kind,
         generated_profile_text=profile_text,
         source_notes=notes,
+        hero_tree=hero_tree,
+        inactive_hero_talents=inactive_hero,
     )
+
+
+def _split_inactive_hero_talents(
+    repo: RepoPaths,
+    talents_by_tree: dict[str, list[DecodedTalent]],
+    hero_trees: list[HeroTree],
+) -> list[DecodedTalent]:
+    """Move hero talents belonging to an unselected hero tree out of ``talents_by_tree``.
+
+    A talent hash grants the keystones of every hero tree it touches; SimC then disables the ones
+    outside the selected tree. Without this the decoded build claims talents the sim will never use,
+    which flips APL branches that dispatch on a hero keystone.
+    """
+    hero_talents = talents_by_tree["hero"]
+    if not hero_trees or not hero_talents:
+        return []
+    active_ids = {tree.id for tree in hero_trees}
+    sub_trees = load_trait_table(repo.root).hero_sub_tree_by_entry
+    active: list[DecodedTalent] = []
+    inactive: list[DecodedTalent] = []
+    for talent in hero_talents:
+        sub_tree = sub_trees.get(talent.entry)
+        (inactive if sub_tree is not None and sub_tree not in active_ids else active).append(talent)
+    talents_by_tree["hero"] = active
+    return inactive
 
 
 def tree_entries_string(talents: list[DecodedTalent]) -> str:
@@ -811,14 +936,20 @@ def diff_talent_trees(
     base_talents: list[DecodedTalent],
     other_talents: list[DecodedTalent],
 ) -> TreeDiff:
-    """Diff two talent lists from the same tree by entry ID."""
-    base_by_entry = {t.entry: t for t in base_talents if t.rank > 0 and t.entry}
-    other_by_entry = {t.entry: t for t in other_talents if t.rank > 0 and t.entry}
+    """Diff two talent lists from the same tree by entry ID.
+
+    A talent whose rank could not be read (a tiered node from a hash) still counts as taken, so
+    losing it shows up as a removal instead of vanishing from the diff.
+    """
+    base_by_entry = {t.entry: t for t in base_talents if t.taken and t.entry}
+    other_by_entry = {t.entry: t for t in other_talents if t.taken and t.entry}
     added = [other_by_entry[e] for e in sorted(other_by_entry.keys() - base_by_entry.keys())]
     removed = [base_by_entry[e] for e in sorted(base_by_entry.keys() - other_by_entry.keys())]
     changed = []
     for entry in sorted(base_by_entry.keys() & other_by_entry.keys()):
-        if base_by_entry[entry].rank != other_by_entry[entry].rank:
+        base_rank = base_by_entry[entry].rank if base_by_entry[entry].rank_known else None
+        other_rank = other_by_entry[entry].rank if other_by_entry[entry].rank_known else None
+        if base_rank != other_rank:
             changed.append((base_by_entry[entry], other_by_entry[entry]))
     return TreeDiff(added=added, removed=removed, changed=changed)
 
@@ -831,32 +962,43 @@ def encode_build(repo: RepoPaths, build_spec: BuildSpec) -> str:
         raise FileNotFoundError(f"SimC binary not found: {repo.build_simc}")
 
     profile_text = build_profile_text(build_spec)
-    temp_dir = Path(tempfile.mkdtemp(prefix="simc-cli-encode-"))
-    profile_path = temp_dir / "encode.simc"
-    save_path = temp_dir / "encoded.simc"
-    # SimC drops a gearless actor before it reaches the profile-generation step, so the save file
-    # would never be written. Default gear keeps the player active; it does not affect talents.
-    profile_text += "load_default_gear=1\n"
-    profile_text += f"save={save_path}\n"
-    profile_path.write_text(profile_text)
+    with tempfile.TemporaryDirectory(prefix="simc-cli-encode-") as temp_dir:
+        profile_path = Path(temp_dir) / "encode.simc"
+        save_path = Path(temp_dir) / "encoded.simc"
+        # SimC drops a gearless actor before it reaches the profile-generation step, so the save
+        # file would never be written. Default gear keeps the player active; talents are unaffected.
+        profile_text += "load_default_gear=1\n"
+        profile_text += f"save={save_path}\n"
+        profile_path.write_text(profile_text)
 
-    cmd = [
-        str(repo.build_simc),
-        str(profile_path),
-        "iterations=1",
-        "max_time=1",
-        "vary_combat_length=0",
-        "desired_targets=1",
-        "fight_style=Patchwerk",
-        "allow_experimental_specializations=1",
-    ]
-    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)  # noqa: S603
-    if not save_path.exists():
+        cmd = [
+            str(repo.build_simc),
+            str(profile_path),
+            "iterations=1",
+            "max_time=1",
+            "vary_combat_length=0",
+            "desired_targets=1",
+            "fight_style=Patchwerk",
+            "allow_experimental_specializations=1",
+        ]
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=False)  # noqa: S603
         output = proc.stdout + proc.stderr
-        raise RuntimeError(output.strip() or "SimC did not produce a saved profile.")
+        saved_text = save_path.read_text() if save_path.exists() else None
 
-    for line in save_path.read_text().splitlines():
+    if saved_text is None:
+        errors = simc_build_errors(output)
+        raise SimcBuildError(
+            " ".join(errors) or "SimC did not produce a saved profile.",
+            output_preview=bounded_output_preview(output),
+            returncode=proc.returncode,
+        )
+
+    for line in saved_text.splitlines():
         if line.startswith("talents="):
             return line.split("=", 1)[1].strip()
 
-    raise RuntimeError("Saved SimC profile did not contain a talents= line.")
+    raise SimcBuildError(
+        "Saved SimC profile did not contain a talents= line.",
+        output_preview=bounded_output_preview(output),
+        returncode=proc.returncode,
+    )

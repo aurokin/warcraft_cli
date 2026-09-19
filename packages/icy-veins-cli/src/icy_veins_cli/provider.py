@@ -76,6 +76,24 @@ def _client() -> Iterator[IcyVeinsClient]:
         yield client
 
 
+def _require_article_content(page_payload: dict[str, Any]) -> dict[str, Any]:
+    """Reject a page whose article container did not parse.
+
+    Icy Veins rebuilds its guide layout periodically. When the article selectors stop matching, the
+    parser produces an article with no body and no sections; returning that as a success would look
+    like an empty guide instead of a broken parser.
+    """
+    article = page_payload["article"]
+    if article["sections"] or article["text"]:
+        return page_payload
+    page_url = page_payload["guide"]["page_url"]
+    raise ProviderError(
+        "parse_failed",
+        f"No article content parsed from {page_url}; the Icy Veins page layout has probably changed.",
+        details={"page_url": page_url},
+    )
+
+
 def _supported_guide_ref(guide_ref: str) -> tuple[str, str]:
     try:
         slug = guide_ref_parts(guide_ref)
@@ -212,7 +230,7 @@ def guide(guide_ref: str) -> Envelope:
     """Fetch and summarize a single Icy Veins guide page."""
     _supported_guide_ref(guide_ref)
     with _client() as client, transport_errors(missing_message=f"Guide not found: {guide_ref}"):
-        page_payload = client.fetch_guide_page(guide_ref)
+        page_payload = _require_article_content(client.fetch_guide_page(guide_ref))
     page_payload["analysis_surfaces"] = extract_guide_analysis_surfaces(page_payload, provider=PROVIDER_NAME)
     summary = _guide_summary(page_payload)
     return _envelope("guide", "guide", summary, query=guide_ref, provenance=summary["citations"])
@@ -232,29 +250,59 @@ def _traversal_navigation(initial: dict[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
-def _fetch_family_pages(client: IcyVeinsClient, initial: dict[str, Any], nav_items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _with_analysis_surfaces(page_payload: dict[str, Any]) -> dict[str, Any]:
+    page_payload["analysis_surfaces"] = extract_guide_analysis_surfaces(page_payload, provider=PROVIDER_NAME)
+    return page_payload
+
+
+def _fetch_family_page(client: IcyVeinsClient, page_url: str) -> dict[str, Any]:
+    with transport_errors(missing_message=f"Guide page not found: {page_url}"):
+        page_payload = client.fetch_guide_page(page_url)
+    return _with_analysis_surfaces(_require_article_content(page_payload))
+
+
+def _failed_page_row(item: dict[str, Any], *, code: str, message: str) -> dict[str, Any]:
+    return {"url": item["url"], "section_slug": item.get("section_slug"), "error": {"code": code, "message": message}}
+
+
+def _fetch_family_pages(
+    client: IcyVeinsClient,
+    initial: dict[str, Any],
+    nav_items: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Fetch every family page, keeping the pages that parsed and recording the ones that did not.
+
+    One unreachable or unparsable sibling page must not cost the caller the whole bundle, so each
+    failure becomes a row in the returned list and the bundle reports it.
+    """
+    initial_url = initial["guide"]["page_url"]
     pages: list[dict[str, Any]] = []
+    failures: list[dict[str, Any]] = []
     seen: set[str] = set()
     for item in nav_items:
         page_url = item["url"]
         if page_url in seen:
             continue
         seen.add(page_url)
-        page_payload = client.fetch_guide_page(page_url)
-        page_payload["analysis_surfaces"] = extract_guide_analysis_surfaces(page_payload, provider=PROVIDER_NAME)
-        pages.append(page_payload)
-    if initial["guide"]["page_url"] not in seen:
-        initial["analysis_surfaces"] = extract_guide_analysis_surfaces(initial, provider=PROVIDER_NAME)
-        pages.insert(0, initial)
-    elif "analysis_surfaces" not in initial:
-        initial["analysis_surfaces"] = extract_guide_analysis_surfaces(initial, provider=PROVIDER_NAME)
-    return pages
+        if page_url == initial_url:
+            pages.append(_with_analysis_surfaces(initial))
+            continue
+        try:
+            pages.append(_fetch_family_page(client, page_url))
+        except ProviderError as exc:
+            failures.append(_failed_page_row(item, code=exc.code, message=exc.message))
+        except ValueError as exc:
+            failures.append(_failed_page_row(item, code="parse_failed", message=str(exc)))
+    if initial_url not in seen:
+        pages.insert(0, _with_analysis_surfaces(initial))
+    return pages, failures
 
 
 def _guide_bundle(client: IcyVeinsClient, guide_ref: str) -> dict[str, Any]:
-    initial = client.fetch_guide_page(guide_ref)
+    with transport_errors(missing_message=f"Guide not found: {guide_ref}"):
+        initial = _require_article_content(client.fetch_guide_page(guide_ref))
     nav_items = _traversal_navigation(initial)
-    pages = _fetch_family_pages(client, initial, nav_items)
+    pages, failed_pages = _fetch_family_pages(client, initial, nav_items)
     guide_row = dict(initial["guide"])
     guide_row["page_count"] = len(pages)
     linked_entities = merge_article_linked_entities(pages)
@@ -278,6 +326,9 @@ def _guide_bundle(client: IcyVeinsClient, guide_ref: str) -> dict[str, Any]:
         "linked_entities": {"count": len(linked_entities), "items": linked_entities},
         "build_references": {"count": len(build_references), "items": build_references},
         "analysis_surfaces": {"count": len(analysis_surfaces), "items": analysis_surfaces},
+        # Family pages that could not be fetched or parsed; their content is missing from every
+        # merged block above.
+        "failed_pages": {"count": len(failed_pages), "items": failed_pages},
         "citations": {
             "page": guide_row["page_url"],
             "comments": (initial.get("citations") or {}).get("comments"),
@@ -289,7 +340,7 @@ def _guide_bundle(client: IcyVeinsClient, guide_ref: str) -> dict[str, Any]:
 def guide_full(guide_ref: str) -> Envelope:
     """Fetch every page in the guide's family navigation and merge them into one payload."""
     _supported_guide_ref(guide_ref)
-    with _client() as client, transport_errors(missing_message=f"Guide not found: {guide_ref}"):
+    with _client() as client:
         payload = _guide_bundle(client, guide_ref)
     return _envelope("guide-full", "guide_full", payload, query=guide_ref, provenance=payload["citations"])
 
@@ -298,7 +349,7 @@ def guide_export(guide_ref: str, *, out: Path | None = None) -> Envelope:
     """Write the full guide bundle (pages, entities, analysis surfaces) to a local export directory."""
     slug, _ = _supported_guide_ref(guide_ref)
     export_dir = out.expanduser() if out is not None else default_article_export_dir(PROVIDER_NAME, slug)
-    with _client() as client, transport_errors(missing_message=f"Guide not found: {guide_ref}"):
+    with _client() as client:
         payload = _guide_bundle(client, guide_ref)
     manifest = write_article_bundle(payload, provider=PROVIDER_NAME, export_dir=export_dir)
     return _envelope(
@@ -309,6 +360,7 @@ def guide_export(guide_ref: str, *, out: Path | None = None) -> Envelope:
             "output_dir": str(export_dir),
             "counts": manifest["counts"],
             "files": manifest["files"],
+            "failed_pages": payload["failed_pages"],
         },
         query=guide_ref,
         provenance=payload["citations"],

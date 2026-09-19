@@ -106,10 +106,6 @@ def cache_root() -> Path:
     return _xdg_root("XDG_CACHE_HOME", (".cache",))
 
 
-def shared_root() -> Path:
-    return data_root() / "shared"
-
-
 def provider_data_root(provider: str) -> Path:
     return data_root() / provider
 

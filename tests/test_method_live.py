@@ -110,3 +110,15 @@ def test_live_method_article_family_contract() -> None:
     assert payload["guide"]["author"] == "Tayder"
     assert payload["guide"]["last_updated"] == "26th February 2026"
     assert payload["article"]["section_count"] >= 1
+
+
+def test_live_method_class_guide_publishes_build_references() -> None:
+    """The talents page is what feeds `warcraft guide-builds-simc`; zero build references means the
+    import-string markup moved and the handoff is silently empty."""
+    require_live("Method")
+    payload = payload_for_live(runner, app, ["guide", "mistweaver-monk/talents"], provider_name="Method")
+
+    builds = payload["data"]["build_references"]
+    assert builds["count"] >= 1
+    assert {row["reference_type"] for row in builds["items"]} <= {"wow_talent_export", "wowhead_talent_calc_url"}
+    assert all(row["build_code"] for row in builds["items"])

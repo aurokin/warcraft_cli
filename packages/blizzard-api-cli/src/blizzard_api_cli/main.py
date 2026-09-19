@@ -7,12 +7,17 @@ import typer
 from warcraft_core.cli import emit, fail, guarded_run, install_common_callback
 from warcraft_core.provider import ProviderError
 
-from blizzard_api_cli.client import BlizzardClient
+from blizzard_api_cli.client import BlizzardClient, verification_note
 from blizzard_api_cli.provider import PROVIDER, PROVIDER_NAME, fetch
 
 app = typer.Typer(
     add_completion=False,
-    help="Official Blizzard Battle.net World of Warcraft API CLI (experimental: endpoints are unverified).",
+    # The verification sentence comes from the client so --help, doctor and provenance never
+    # disagree about which regions are confirmed.
+    help=(
+        "Official Blizzard Battle.net World of Warcraft API CLI. Experimental tier: the read surface "
+        "is small (realm, item, character) and search/resolve are stubs. " + verification_note()
+    ),
 )
 install_common_callback(app, provider=PROVIDER_NAME)
 
@@ -24,7 +29,11 @@ def doctor(ctx: typer.Context) -> None:
 
 
 _REGION_OPTION = typer.Option(None, "--region", "-r", help="Blizzard region (us, eu, kr, tw, cn). Defaults to BLIZZARD_REGION or us.")
-_CLASSIC_OPTION = typer.Option(False, "--classic", help="Shorthand for --game-version classic (classic namespaces are best-effort).")
+_CLASSIC_OPTION = typer.Option(
+    False,
+    "--classic",
+    help="Shorthand for --game-version classic. Classic Game Data routing is live-confirmed; the Profile API has no classic namespace.",
+)
 _GAME_VERSION_OPTION = typer.Option(None, "--game-version", help="Game version to route: retail (default) or classic.")
 _LOCALE_OPTION = typer.Option(None, "--locale", help="Locale passed through to Blizzard (default en_US). Not validated.")
 

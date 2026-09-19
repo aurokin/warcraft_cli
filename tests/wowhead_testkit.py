@@ -1,14 +1,33 @@
-"""Shared synthetic Wowhead HTML fixtures and bundle builders for the wowhead CLI tests."""
+"""Shared Wowhead fixtures and bundle builders for the wowhead CLI tests.
+
+The ``SAMPLE_*`` constants below are synthetic: hand-written pages that pin routing, URL
+construction, and payload shape. The captured counterparts in ``tests/fixtures/wowhead/`` are real
+trimmed Wowhead responses, loaded through ``captured_page`` / ``captured_json``; use those whenever
+a test is about what the parsers do to production markup.
+"""
 
 from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from typer.testing import CliRunner
 
 runner = CliRunner()
+
+CAPTURED_DIR = Path(__file__).parent / "fixtures" / "wowhead"
+
+
+def captured_page(name: str) -> str:
+    """Read a captured (real, trimmed) Wowhead page from ``tests/fixtures/wowhead``."""
+    return (CAPTURED_DIR / name).read_text(encoding="utf-8")
+
+
+def captured_json(name: str) -> Any:
+    """Read a captured (real) Wowhead JSON response from ``tests/fixtures/wowhead``."""
+    return json.loads((CAPTURED_DIR / name).read_text(encoding="utf-8"))
 
 
 SAMPLE_PAGE_HTML = """
@@ -73,8 +92,8 @@ SAMPLE_NEWS_HTML = """
             "title": "Midnight Hotfixes for March 13th",
             "author": "Staff",
             "authorPage": "/author/staff",
-            "posted": "2026-03-13T12:34:56-06:00",
-            "postedFull": "2026-03-13T12:34:56-06:00",
+            "posted": "5 days ago",
+            "postedFull": "2026/03/13 at 12:34 PM",
             "postedShort": "Mar 13",
             "postUrl": "/news/midnight-hotfixes-380785",
             "preview": "<p>Class bugfixes and more.</p>",
@@ -87,8 +106,8 @@ SAMPLE_NEWS_HTML = """
             "title": "Older Tuning Roundup",
             "author": "Staff",
             "authorPage": "/author/staff",
-            "posted": "2026-03-10T09:00:00-06:00",
-            "postedFull": "2026-03-10T09:00:00-06:00",
+            "posted": "8 days ago",
+            "postedFull": "2026/03/10 at 9:00 AM",
             "postedShort": "Mar 10",
             "postUrl": "/news/older-tuning-roundup-380700",
             "preview": "<p>Older tuning notes.</p>",

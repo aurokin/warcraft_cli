@@ -16,8 +16,8 @@ Tier: supported.
 | `warcraft-wiki article-full <title-or-url>` | The same article with every section and the complete linked-entity list. |
 | `warcraft-wiki api <query>` | The API/framework/CVar/XML reference page a query resolves to, as a summary. |
 | `warcraft-wiki api-full <query>` | The same API page with every section. |
-| `warcraft-wiki event <query>` | The UI handler or event reference page a query resolves to, as a summary. |
-| `warcraft-wiki event-full <query>` | The same handler page with every section. |
+| `warcraft-wiki event <query>` | The game event or UI handler reference page a query resolves to, as a summary. |
+| `warcraft-wiki event-full <query>` | The same event page with every section. |
 | `warcraft-wiki article-export <title-or-url>` | Writes an article bundle to disk and returns the manifest. |
 | `warcraft-wiki article-query <bundle> <query>` | Searches an exported bundle offline. |
 
@@ -36,6 +36,7 @@ Command flags:
 ```bash
 warcraft-wiki --pretty search "createframe"
 warcraft-wiki api "CreateFrame"
+warcraft-wiki event "PLAYER_LOGIN"
 warcraft-wiki article-export "API CreateFrame" --out ./tmp/wiki-createframe
 warcraft-wiki article-query ./tmp/wiki-createframe "arguments" --kind sections
 ```
@@ -46,26 +47,41 @@ Every payload is a shared envelope: `ok`, `provider`, `command`, `kind`, `schema
 `data`, and `error` on failure. The historical top-level keys (`results`, `count`, `match`, `article`, `content`, ...)
 are still emitted alongside `data` so existing agents keep working.
 
-Exit codes follow `docs/foundation/ERROR_CONTRACT.md`: 1 generic (bad bundle path, unresolvable typed reference,
-invalid cache config), 2 usage, 3 auth (upstream 401/403), 4 not found (the wiki has no such page), 5 network or
-upstream failure. Failures write
+Exit codes follow `docs/foundation/ERROR_CONTRACT.md`: 1 generic (bad bundle path, invalid cache config), 2 usage,
+3 auth (upstream 401/403), 4 not found (the wiki has no such page, or no `api`/`event` page matches the query),
+5 network or upstream failure. Failures write
 the error envelope to stderr; transport failures never print a traceback.
 
 ## Content families
 
 Search ranking, resolution, and extraction all key off a locally classified content family:
 
-- Programming: `api_function`, `ui_handler`, `framework_page`, `xml_schema`, `cvar`, `api_changes`, `howto_programming`.
+- Programming: `api_function`, `ui_handler`, `event_reference`, `framework_page`, `xml_schema`, `cvar`, `api_changes`,
+  `howto_programming`.
 - Reference: `system_reference`, `expansion_reference`, `class_reference`, `profession_reference`, `faction_reference`,
   `zone_reference`, `patch_reference`, `lore_reference`, `guide_reference`.
 - Everything else: `general_article`.
 
 `api` and `api-full` only accept `api_function`, `framework_page`, `xml_schema`, `cvar`, and `api_changes` pages;
-`event` and `event-full` only accept `ui_handler` and `framework_page` pages. A query that resolves to another family
-fails with `invalid_api_ref` / `invalid_event_ref` rather than returning the wrong page.
+`event` and `event-full` only accept `event_reference`, `ui_handler`, and `framework_page` pages. Both surfaces fetch
+exact titles before they search: `api` tries `API:<query>` then `API <query>`, `event` tries `Event:<query>` then
+`UIHANDLER <query>`, and both fall back to the bare title. Only if all three miss does the query go to ranked search,
+and a query that matches nothing in the allowed families fails with `not_found` (exit 4) rather than returning the
+wrong page. Event names may be written with underscores or spaces (`PLAYER_LOGIN`, `Event:PLAYER LOGIN`).
 
 Queries that lead with a family word are rewritten before search (`lore Jaina` -> `jaina`, `class druid` -> `druid`);
 the dropped words come back as `excluded_terms` with `normalization_hint: "excluded_family_hint_terms"`.
+
+Every candidate carries its full `ranking.match_reasons`. MediaWiki's own full-text order contributes at most 10
+points and always appears as `upstream_rank_<n>`, so a row that matched only in a page body it never showed us cannot
+outscore a real title match.
+
+`resolve` reports `resolved: true`, and the `api`/`event` search fallback accepts a candidate, only when the top row
+carries a reason covering the whole query (`exact_title`, `exact_api_title`, `exact_handler_title`,
+`exact_event_title`, `title_prefix`, `title_contains_query`, `normalized_title_match`, `all_terms_match`,
+`guide_title_terms`, `expansion_alias_match`) and no other covering candidate scores within 18 points of it. Upstream
+rank, family and intent bonuses are shared by every row in the list, so they never make a candidate confident on
+their own.
 
 ## Caching
 

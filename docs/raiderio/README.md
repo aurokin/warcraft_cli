@@ -52,9 +52,11 @@ default season), `--region` (default `world`), `--dungeon` (default `all`), `--a
 Sampled commands add `--pages` (1-10) and `--limit` (1-200).
 
 Filter flags (sampled commands): `--level-min`, `--level-max`, `--score-min`, `--score-max`, and the
-repeatable `--contains-role`, `--contains-class`, `--contains-spec`, `--player-region`. Filters run
-after sampling; the payload reports `source_run_count`, `returned_run_count`, and
-`excluded_run_count` so a narrowed slice stays provenance-safe.
+repeatable `--contains-role`, `--contains-class`, `--contains-spec`, `--player-region`. Bounds are
+inclusive ("at or above" / "at or below"), and a run whose level or score Raider.IO omitted is
+excluded whenever the matching bound is set. Filters run after sampling; the payload reports
+`source_run_count`, `returned_run_count`, and `excluded_run_count` so a narrowed slice stays
+provenance-safe.
 
 Metrics:
 
@@ -67,24 +69,31 @@ Metrics:
 `raiderio raids` lists the raid slugs Raider.IO knows for one expansion (kind `raid_catalog`).
 Each row carries `id`, `slug`, `name`, `short_name`, per-region `starts`/`ends` timestamps, and the
 `encounters` (`id`, `slug`, `name`) in order. Use it to discover the `--raid` value; slugs change
-every tier, so never hard-code one.
+every tier, so never hard-code one. The `starts`/`ends` window also identifies the tier a guild is
+currently progressing, which pairs with the `raid_slug` keys in a guild payload's `progression` rows.
+The payload carries `freshness` (`sampled_at`, `cache_ttl_seconds`) and `citations`
+(`static_data_url`), mirrored into the envelope's `provenance`.
 
 `raiderio leaderboard raids --raid <slug>` returns guild rankings for one raid and difficulty
 (kind `raid_leaderboard`). The payload:
 
 - `query`: `raid`, `difficulty`, `region`, `realm` (`null` unless set), `page`, `limit`.
+  `--region` takes the same aliases as the other commands (`na` -> `us`), and `--realm` takes a
+  display name or a slug: `Tarren Mill` and `tarren-mill` both scope to the same realm, and the
+  echoed `query.realm` plus the citation URL always carry the slug. Realms with no ASCII slug
+  (`Ревущий фьорд`) are sent as written -- Raider.IO accepts them -- and percent-encoded in the
+  citation URL.
 - `count` and `sample` (`requested_limit`, `returned_row_count`, `pages_requested`,
   `pages_fetched`, `limit_reached`). Rankings are read in 20-row pages starting at `--page`, so
   `--limit 50` fetches up to three pages; `limit_reached: false` means the scope ran out of ranked
   guilds, not that a cap was applied silently.
-- `rows`: one per guild with `rank`, `region_rank`, `realm_rank`, `guild` (`name`, `realm` slug,
+- `rows`: one per guild with `rank`, `region_rank`, `guild` (`name`, `realm` slug,
   `realm_name`, `region`, `faction`, `profile_url` on raider.io), `encounters_defeated_count`,
   `encounters_pulled_count`, `encounters_defeated` (`slug`, `first_defeated`, `last_defeated`), and
   `encounters_pulled` (`slug`, `num_pulls`, `best_percent`, `is_defeated`, `pull_started_at`).
   `rank` is relative to the requested scope: world position for `--region world`, region position
   for a region, and realm position when `--realm` is set. `region_rank` is always region-wide.
-  `realm_rank` is passed through when Raider.IO sends it and is `null` otherwise (it was absent in
-  every response observed so far).
+  There is no separate realm-rank field: Raider.IO does not send one on this endpoint.
 - `freshness` (`sampled_at`, `cache_ttl_seconds`) and `citations` (`leaderboard_urls`, the
   raider.io rankings page for the scope), mirrored into the envelope's `provenance`.
 
@@ -110,11 +119,23 @@ raiderio threshold mythic-plus-runs --metric score --value 3000
 ## Behavior Notes
 
 - `search` and `resolve` probe the profile endpoints directly when the query parses as
-  `<region> <realm> <name>`, and fall back to the live site search surface otherwise. `resolve`
-  returns a single `match` plus `next_command` only when the top candidate is confidently ahead.
+  `<region> <realm> <name>`, and fall back to the live site search surface otherwise. A realm of up
+  to three words is handled (`eu tarren mill Cotti`, `us area 52 Roguecane`), and the realm may be
+  spelled as a display name or as either slug form (`mal'ganis`, `mal-ganis`, `malganis`) -- all of
+  them score the same, so the `next_command` a `resolve` emits resolves when it is fed back in.
+  `resolve` returns a single `match` plus `next_command` only when the top candidate is confidently
+  ahead. A leading or trailing `guild`/`character` word is read as a type hint and dropped
+  (`guild us malganis gn`, `Liquid guild`); the same word inside the query is part of the name and
+  is kept.
 - Every Mythic+ payload echoes `resolved_season`, so the season a sample actually used is explicit.
-- Sampled payloads carry `freshness` (`sampled_at`, `cache_ttl_seconds`) and `citations`
-  (leaderboard URLs); those also form the envelope's `provenance` block.
+- Every payload with provenance carries `freshness` (`sampled_at`, `cache_ttl_seconds`) and
+  `citations`; those also form the envelope's `provenance` block. `sampled_at` is when the command
+  read the response, not when Raider.IO produced it: a cache hit can be up to `cache_ttl_seconds`
+  older than `sampled_at`.
+- The envelope's `command` is the full sub-path (`leaderboard raids`, `distribution
+  mythic-plus-runs`) once the command runs, on success and on failure, so no two commands answer to
+  the same value. A flag that never reaches the command (a missing required option, a value outside
+  its range) is still reported by the shared runner under the group name (`leaderboard`).
 - Character, guild, search, and roster rows carry a normalized `class_spec_identity` sibling that
   claims `high` confidence only when both class and spec are known.
 - `raiderio_cli.provider.PROVIDER` exposes `search`, `resolve`, and `doctor` in-process for the

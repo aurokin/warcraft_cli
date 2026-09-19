@@ -1100,10 +1100,6 @@ _SITE_PROFILE_ALIASES = {
 }
 
 
-def list_site_profiles() -> tuple[WarcraftLogsSiteProfile, ...]:
-    return _SITE_PROFILES
-
-
 def normalize_site_profile_key(value: str) -> str:
     return value.strip().lower().replace("_", "-")
 
@@ -1128,6 +1124,15 @@ def saved_user_token_site_key(payload: dict[str, Any]) -> str:
         return resolve_site_profile(raw_site).key
     except ValueError:
         return normalize_site_profile_key(raw_site)
+
+
+def _token_fingerprint(token: str) -> str:
+    """Stable non-secret account scope for cache keys: a truncated digest of an access token.
+
+    The digest is one-way and never emitted; it only keeps one account's cached user-endpoint
+    responses out of another account's reach.
+    """
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()[:16]
 
 
 @dataclass(frozen=True, slots=True)
@@ -1295,20 +1300,19 @@ def load_warcraftlogs_auth_config(*, start_dir: str | None = None) -> WarcraftLo
     return WarcraftLogsAuthConfig(client_id=None, client_secret=None, env_file=None)
 
 
-def load_warcraftlogs_cache_settings_from_env() -> tuple[CacheSettings, int, int, int, int, int]:
+def load_warcraftlogs_cache_settings_from_env() -> tuple[CacheSettings, int, int, int, int]:
+    """Cache settings plus the guild, static, report-listing and finished-report TTLs, in that order."""
     settings = load_prefixed_cache_settings_from_env(
         env_prefix="WARCRAFTLOGS",
         default_cache_dir=DEFAULT_CACHE_DIR,
         default_redis_prefix="warcraftlogs_cli",
         ttl_defaults=CacheTTLConfig(
-            search_suggestions=900,
             entity_page_html=300,
             guide_page_html=21600,
             page_html=60,
             report_finished=86400,
         ),
         ttl_env_overrides={
-            "search_suggestions": "WARCRAFTLOGS_METADATA_CACHE_TTL_SECONDS",
             "entity_page_html": "WARCRAFTLOGS_GUILD_CACHE_TTL_SECONDS",
             "guide_page_html": "WARCRAFTLOGS_STATIC_CACHE_TTL_SECONDS",
             "page_html": "WARCRAFTLOGS_REPORT_CACHE_TTL_SECONDS",
@@ -1317,7 +1321,6 @@ def load_warcraftlogs_cache_settings_from_env() -> tuple[CacheSettings, int, int
     )
     return (
         settings,
-        settings.ttls.search_suggestions,
         settings.ttls.entity_page_html,
         settings.ttls.guide_page_html,
         settings.ttls.page_html,
@@ -1343,15 +1346,17 @@ class WarcraftLogsClient:
         self._credential_hint = auth.env_file or str(find_env_file() or ".env.local")
         self._access_token: str | None = None
         self._token_expires_at = 0.0
-        settings, metadata_ttl, guild_ttl, static_ttl, report_ttl, finished_report_ttl = load_warcraftlogs_cache_settings_from_env()
-        self._cache_settings = settings
+        settings, guild_ttl, static_ttl, report_ttl, finished_report_ttl = load_warcraftlogs_cache_settings_from_env()
         self._cache_store = build_cache_store(settings) if settings.enabled else None
-        self._metadata_ttl = metadata_ttl
         self._guild_ttl = guild_ttl
         self._static_ttl = static_ttl
         self._report_ttl = report_ttl
         self._finished_report_ttl = finished_report_ttl
         self._last_warnings: list[dict[str, Any]] = []
+        # Transport tally, reported by sampled payloads so a caller can tell a live scan from one
+        # replayed out of the cache.
+        self._cache_hit_count = 0
+        self._upstream_request_count = 0
 
     def close(self) -> None:
         if self._http_client is not None:
@@ -1369,6 +1374,26 @@ class WarcraftLogsClient:
             self._http_client = build_client(timeout=self._timeout_seconds)
         return self._http_client
 
+    def _post_graphql(self, url: str, *, token: str, body: dict[str, Any]) -> httpx.Response:
+        """One GraphQL POST, counted so callers can report how much of a payload came from upstream."""
+        self._upstream_request_count += 1
+        return _request(
+            self._client(),
+            url,
+            method="POST",
+            retry_attempts=self._retry_attempts,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            },
+            json=body,
+        )
+
+    @property
+    def transport_counts(self) -> dict[str, int]:
+        """Cache hits and upstream GraphQL calls served so far by this client instance."""
+        return {"cache_hit_count": self._cache_hit_count, "upstream_request_count": self._upstream_request_count}
+
     def _cache_key(self, namespace: str, payload: dict[str, Any]) -> str:
         raw = json.dumps({"site": self._site.key, "namespace": namespace, "payload": payload}, sort_keys=True, separators=(",", ":"))
         return f"{namespace}:{hashlib.sha256(raw.encode('utf-8')).hexdigest()}"
@@ -1377,6 +1402,8 @@ class WarcraftLogsClient:
         if self._cache_store is None:
             return None
         cached = self._cache_store.get(key)
+        if cached is not None:
+            self._cache_hit_count += 1
         if isinstance(cached, dict):
             warnings = cached.get(GRAPHQL_WARNINGS_KEY)
             self._last_warnings = list(warnings) if isinstance(warnings, list) else []
@@ -1388,6 +1415,7 @@ class WarcraftLogsClient:
         cached = self._cache_store.get(key)
         if cached is None:
             return _CACHE_MISS
+        self._cache_hit_count += 1
         if isinstance(cached, dict):
             warnings = cached.get(GRAPHQL_WARNINGS_KEY)
             self._last_warnings = list(warnings) if isinstance(warnings, list) else []
@@ -1611,8 +1639,12 @@ class WarcraftLogsClient:
         ttl_resolver: Callable[[dict[str, Any]], int] | None = None,
     ) -> dict[str, Any]:
         request_variables = _prune_null_variables(variables)
+        token = self._user_token()
+        # User-endpoint responses are account-scoped (private reports, saved identity), so the
+        # cache entry must belong to the token that fetched it and never to "whoever is logged in".
         cache_payload = {
             "endpoint": "user",
+            "account": _token_fingerprint(token),
             "operation_name": operation_name,
             "query": query,
             "variables": request_variables,
@@ -1622,51 +1654,44 @@ class WarcraftLogsClient:
             cached = self._read_cache(cache_key)
             if isinstance(cached, dict):
                 return cached
-        response = _request(
-            self._client(),
-            self._site.user_api_url,
-            method="POST",
-            retry_attempts=self._retry_attempts,
-            headers={
-                "Authorization": f"Bearer {self._user_token()}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "operationName": operation_name,
-                "query": query,
-                "variables": request_variables,
-            },
+        data = self._uncached_graphql_user(
+            operation_name=operation_name,
+            query=query,
+            variables=request_variables,
+            token=token,
         )
-        data = self._consume_graphql_response(response.json(), operation_name=operation_name, endpoint="user")
         if use_cache:
             write_ttl = ttl_resolver(data) if ttl_resolver is not None else ttl_seconds
             self._write_cache(cache_key, data, ttl_seconds=write_ttl)
         return data
 
-    def current_user(self) -> dict[str, Any]:
-        data = self._graphql_user(
-            operation_name="CurrentUser",
-            query=CURRENT_USER_QUERY,
-            variables=None,
-            namespace="user_current",
-            ttl_seconds=self._metadata_ttl,
+    def _uncached_graphql_user(
+        self,
+        *,
+        operation_name: str | None,
+        query: str,
+        variables: dict[str, Any] | None,
+        token: str,
+    ) -> dict[str, Any]:
+        """One user-endpoint GraphQL call, straight to Warcraft Logs."""
+        response = self._post_graphql(
+            self._site.user_api_url,
+            token=token,
+            body={
+                "operationName": operation_name,
+                "query": query,
+                "variables": variables,
+            },
         )
-        user_data = data.get("userData")
-        if not isinstance(user_data, dict):
-            raise WarcraftLogsClientError("not_found", "Warcraft Logs user data was missing from the current-user response.")
-        current_user = user_data.get("currentUser")
-        if not isinstance(current_user, dict):
-            raise WarcraftLogsClientError("not_found", "Warcraft Logs did not return the current user for the saved token.")
-        return current_user
+        return self._consume_graphql_response(response.json(), operation_name=operation_name, endpoint="user")
 
-    def probe_live_user_api(self) -> dict[str, Any]:
-        data = self._graphql_user(
+    def current_user(self) -> dict[str, Any]:
+        """The account behind the saved user token. Never cached: identity must be live, not remembered."""
+        data = self._uncached_graphql_user(
             operation_name="CurrentUser",
             query=CURRENT_USER_QUERY,
-            variables=None,
-            namespace="user_current",
-            ttl_seconds=self._metadata_ttl,
-            use_cache=False,
+            variables={},
+            token=self._user_token(),
         )
         user_data = data.get("userData")
         if not isinstance(user_data, dict):
@@ -1768,16 +1793,10 @@ class WarcraftLogsClient:
                 return cached if isinstance(cached, dict) else None
         url = self._site.user_api_url if endpoint == "user" else self._site.api_url
         token = self._user_token() if endpoint == "user" else self._token()
-        response = _request(
-            self._client(),
+        response = self._post_graphql(
             url,
-            method="POST",
-            retry_attempts=self._retry_attempts,
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json",
-            },
-            json={
+            token=token,
+            body={
                 "operationName": operation_name,
                 "query": query,
                 "variables": variables or {},
@@ -1822,16 +1841,10 @@ class WarcraftLogsClient:
             cached = self._read_cache(cache_key)
             if isinstance(cached, dict):
                 return cached
-        response = _request(
-            self._client(),
+        response = self._post_graphql(
             self._site.api_url,
-            method="POST",
-            retry_attempts=self._retry_attempts,
-            headers={
-                "Authorization": f"Bearer {self._token()}",
-                "Content-Type": "application/json",
-            },
-            json={
+            token=self._token(),
+            body={
                 "operationName": operation_name,
                 "query": query,
                 "variables": request_variables,

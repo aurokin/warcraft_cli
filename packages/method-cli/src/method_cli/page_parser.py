@@ -6,10 +6,18 @@ from typing import Any
 from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup, Tag
-from warcraft_core.identity import ability_identity_payload, build_reference_payload
+from warcraft_core.identity import ability_identity_payload, build_identity_payload, build_reference_payload
 
 METHOD_BASE_URL = "https://www.method.gg"
 SUPPORTED_GUIDE_PATH_RE = re.compile(r"^/guides/(?P<slug>[^/]+)(?:/(?P<section>[^/?#]+))?/?$")
+# Method publishes talent builds as WoW loadout import strings rather than talent-calc links: one
+# ``.df-talent-block`` per build, with the visible build name in ``.talent-title`` and the raw
+# import string in the ``data-talent`` attribute of ``.talent-embed``.
+TALENT_BUILD_SELECTOR = ".df-talent-block"
+TALENT_BUILD_EMBED_SELECTOR = ".talent-embed[data-talent]"
+TALENT_BUILD_TITLE_SELECTOR = ".talent-title"
+# A WoW loadout import string as Blizzard's client generates it: one long run of base64 characters.
+WOW_TALENT_EXPORT_RE = re.compile(r"^[A-Za-z0-9+/]{40,}$")
 CLASS_TOKENS = {
     "death-knight",
     "demon-hunter",
@@ -53,6 +61,16 @@ def guide_ref_parts(guide_ref: str) -> tuple[str, str | None]:
     if not match:
         raise ValueError(f"Unsupported Method guide reference: {guide_ref}")
     return match.group("slug"), match.group("section")
+
+
+def guide_section_from_url(url: str) -> tuple[str, str | None] | None:
+    """``(slug, section)`` for a ``/guides/...`` page, or ``None`` for any other Method URL shape.
+
+    Method's own guide navigation mixes in non-guide links such as the ``/guides`` index, so callers
+    that walk page links need to skip those instead of treating them as guide references.
+    """
+    match = SUPPORTED_GUIDE_PATH_RE.match(urlparse(url).path)
+    return (match.group("slug"), match.group("section")) if match else None
 
 
 def guide_url(slug: str, section_slug: str | None = None) -> str:
@@ -109,8 +127,12 @@ def _extract_navigation(soup: BeautifulSoup, *, current_url: str) -> list[dict[s
         if key in seen:
             continue
         seen.add(key)
+        parts = guide_section_from_url(url)
+        if parts is None:
+            # Not a guide page (the /guides index, marketing links): not part of this guide.
+            continue
         path = urlparse(url).path.rstrip("/")
-        _, section_slug = guide_ref_parts(url)
+        section_slug = parts[1]
         parent = anchor.parent
         classes = parent.get("class") if isinstance(parent, Tag) else None
         active = (classes is not None and "active" in classes) or path == current_path
@@ -282,6 +304,48 @@ def _extract_linked_entities(article: Tag, *, source_url: str) -> list[dict[str,
     return sorted(items.values(), key=lambda row: (row["type"], row["id"]))
 
 
+def _talent_export_reference(code: str, *, label: str | None, source_url: str) -> dict[str, Any]:
+    """One published WoW loadout import string, in the shared build-reference row shape.
+
+    ``url`` carries the import string itself: a ``wow_talent_export`` reference has no link to point
+    at, the string is what identifies it, and it is exactly what ``simc --build-text`` consumes.
+    """
+    return {
+        "kind": "build_reference",
+        "reference_type": "wow_talent_export",
+        "url": code,
+        "label": label,
+        "build_code": code,
+        "source_url": source_url,
+        "build_identity": build_identity_payload(
+            actor_class=None,
+            spec=None,
+            confidence="none",
+            source="guide_talent_export_string",
+            source_notes=(
+                "build code came from a WoW loadout import string published in the guide",
+                "class and spec are not read off this reference; decode the import string to identify them",
+            ),
+        ),
+        "source": {"provider": "method", "source": "guide_talent_export_string"},
+    }
+
+
+def _extract_talent_export_builds(article: Tag, *, source_url: str) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for block in article.select(TALENT_BUILD_SELECTOR):
+        embed = block.select_one(TALENT_BUILD_EMBED_SELECTOR)
+        if not isinstance(embed, Tag):
+            continue
+        code = embed.get("data-talent")
+        if not isinstance(code, str) or not WOW_TALENT_EXPORT_RE.match(code.strip()):
+            continue
+        title_tag = block.select_one(TALENT_BUILD_TITLE_SELECTOR)
+        label = clean_text(title_tag.get_text(" ", strip=True)) if isinstance(title_tag, Tag) else None
+        rows.append(_talent_export_reference(code.strip(), label=label, source_url=source_url))
+    return rows
+
+
 def _extract_build_references(article: Tag, *, source_url: str) -> list[dict[str, Any]]:
     items: dict[str, dict[str, Any]] = {}
     for anchor in article.find_all("a", href=True):
@@ -299,6 +363,8 @@ def _extract_build_references(article: Tag, *, source_url: str) -> list[dict[str
         if payload is None:
             continue
         items[str(payload["url"])] = payload
+    for row in _extract_talent_export_builds(article, source_url=source_url):
+        items.setdefault(str(row["url"]), row)
     return sorted(items.values(), key=lambda row: str(row["url"]))
 
 

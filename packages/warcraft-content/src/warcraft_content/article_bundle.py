@@ -6,6 +6,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from warcraft_core.provider import ProviderError
+
 
 def _iso_now_utc() -> str:
     return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
@@ -185,8 +187,25 @@ def write_article_bundle(
     _write_jsonl(export_dir / "analysis-surfaces.jsonl", analysis_surfaces)
     return manifest
 
+
+class InvalidArticleBundleError(ProviderError, ValueError):
+    """``export_dir`` is not a readable article bundle.
+
+    Also a ``ValueError`` so the existing per-bundle handlers in ``warcraft_cli`` keep turning one
+    bad bundle into an error row instead of aborting a whole multi-bundle comparison.
+    """
+
+    def __init__(self, message: str) -> None:
+        super().__init__("invalid_bundle", message)
+
+
 def load_article_bundle(export_dir: Path) -> dict[str, Any]:
-    manifest = load_json(export_dir / "manifest.json")
+    manifest_path = export_dir / "manifest.json"
+    try:
+        manifest = load_json(manifest_path)
+    except (OSError, ValueError) as exc:
+        # A missing manifest.json is the common case: the caller pointed at the parent of a bundle.
+        raise InvalidArticleBundleError(f"Not a readable article bundle, {manifest_path}: {exc}") from exc
     files = manifest.get("files") or {}
     page_files = load_json_or_default(export_dir / files.get("page_files_json", "page-files.json"), {"pages": []})
     return {

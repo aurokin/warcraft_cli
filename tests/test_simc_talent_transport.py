@@ -158,10 +158,56 @@ def test_validate_talent_tree_transport_compares_tiered_nodes_by_presence(tmp_pa
             "name": "Tiered Growth",
             "entries": [{"entry": 120001, "rank": 1}, {"entry": 120002, "rank": 2}],
             "total_rank": 3,
+            "node_max_rank": 3,
             "compared_by": "node_presence",
             "present_in_round_trip": True,
+            "total_rank_within_node_capacity": True,
+            # The round trip cannot confirm the split, and must never claim it did.
+            "per_entry_ranks_verified": False,
         }
     ]
+
+
+def test_validate_talent_tree_transport_rejects_a_rank_above_the_entry_max_rank(tmp_path: Path) -> None:
+    """SimC clamps rank to max_ranks, so an over-rank row would build a different character."""
+    _write_fake_generated_repo(tmp_path)
+
+    payload = validate_talent_tree_transport(
+        actor_class="druid",
+        spec="balance",
+        talent_tree_rows=[{"entry": 120001, "node_id": 98001, "rank": 9}],
+        backend=_unreachable_backend(tmp_path),
+    )
+
+    assert payload["transport_forms"] == {}
+    assert payload["validation"]["status"] == "not_validated"
+    assert payload["validation"]["reason"] == "simc_trait_resolution_incomplete"
+    assert payload["validation"]["unresolved_entries"] == [
+        {"entry": 120001, "node_id": 98001, "rank": 9, "max_rank": 1, "name": "Tiered Growth", "reason": "rank_exceeds_max_rank"}
+    ]
+
+
+def test_validate_talent_tree_transport_rejects_a_tiered_node_over_its_capacity(tmp_path: Path) -> None:
+    """Repeated rows can push a tiered node past the ranks it can hold; SimC would drop the excess."""
+    _write_fake_generated_repo(tmp_path)
+    backend = _fake_backend(tmp_path, export="ENCODED123", entries_by_tree={"class": {}, "spec": {120001: 0}, "hero": {}})
+
+    payload = validate_talent_tree_transport(
+        actor_class="druid",
+        spec="balance",
+        talent_tree_rows=[
+            {"entry": 120001, "node_id": 98001, "rank": 1},
+            {"entry": 120002, "node_id": 98001, "rank": 2},
+            {"entry": 120002, "node_id": 98001, "rank": 2},
+        ],
+        backend=backend,
+    )
+
+    assert payload["validation"]["reason"] == "simc_round_trip_mismatch"
+    node = payload["validation"]["tiered_nodes"][0]
+    assert node["total_rank"] == 5
+    assert node["node_max_rank"] == 3
+    assert node["total_rank_within_node_capacity"] is False
 
 
 def test_validate_talent_tree_transport_rejects_a_tiered_node_missing_from_the_round_trip(tmp_path: Path) -> None:
@@ -174,8 +220,8 @@ def test_validate_talent_tree_transport_rejects_a_tiered_node_missing_from_the_r
     assert payload["validation"]["tiered_nodes"][0]["present_in_round_trip"] is False
 
 
-def test_validate_talent_tree_transport_ignores_keystones_from_unselected_hero_trees(tmp_path: Path) -> None:
-    """SimC grants the keystone of every hero tree the spec can pick; only the selected tree counts."""
+def test_validate_talent_tree_transport_ignores_entries_from_unselected_hero_trees(tmp_path: Path) -> None:
+    """SimC grants entries from every hero tree the spec can pick; only the selected tree counts."""
     _write_fake_generated_repo(tmp_path)
     backend = _fake_backend(tmp_path, export="ENCODED123", entries_by_tree={"class": {}, "spec": {}, "hero": {117176: 1, 117999: 1}})
 
@@ -187,7 +233,7 @@ def test_validate_talent_tree_transport_ignores_keystones_from_unselected_hero_t
     )
 
     assert payload["validation"]["status"] == "validated", payload["validation"]
-    assert payload["validation"]["round_trip"]["ignored_granted_hero_entries"] == [
+    assert payload["validation"]["round_trip"]["ignored_unselected_hero_entries"] == [
         {"entry": 117999, "name": "Other Keystone", "hero_tree": "Other Tree", "hero_tree_id": 25}
     ]
 

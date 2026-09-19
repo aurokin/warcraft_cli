@@ -948,3 +948,22 @@ def test_guide_bundle_index_rebuild_rewrites_invalid_index(tmp_path: Path) -> No
     assert {row["guide_id"] for row in rebuilt_index["bundles"]} == {42, 3143}
 
 
+
+
+def test_guide_bundle_search_reports_the_matches_its_limit_cut_off(tmp_path: Path) -> None:
+    root = tmp_path / "wowhead_exports"
+    for guide_id, spec in [(3143, "Frost"), (3144, "Unholy"), (3145, "Blood")]:
+        write_bundle_fixture(
+            root,
+            dir_name=f"guide-{guide_id}-{spec.lower()}",
+            guide_id=guide_id,
+            title=f"{spec} Death Knight Guide",
+        )
+
+    result = runner.invoke(app, ["guide-bundle-search", "death knight", "--root", str(root), "--limit", "2"])
+    assert result.exit_code == 0
+
+    data = json.loads(result.stdout)["data"]
+    assert data["count"] == len(data["matches"]) == 2
+    assert data["total_matches"] == 3
+    assert data["truncated"] is True

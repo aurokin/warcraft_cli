@@ -422,7 +422,7 @@ PROVIDERS: tuple[ProviderRegistration, ...] = (
             "metadata": "ready",
         },
         surface=lorrgs_provider,
-        tier="experimental",
+        tier="supported",
         expansion_option=None,
         app=lorrgs_app,
         doctor_args=("doctor",),
@@ -493,6 +493,12 @@ def expansion_filtered_providers(
             {
                 "provider": registration.name,
                 "command": registration.command,
+                # Same top-level `reason` key the surface-readiness exclusions carry, so an agent can
+                # read one field regardless of why a provider was left out of the fanout.
+                "reason": provider_expansion_exclusion_reason(
+                    registration,
+                    requested_expansion=requested_expansion,
+                ),
                 "expansion_support": provider_expansion_support(
                     registration,
                     requested_expansion=requested_expansion,
@@ -601,6 +607,16 @@ def _unsupported_expansion_payload(registration: ProviderRegistration, expansion
         "requested_expansion": expansion,
         "expansion_support": provider_expansion_support(registration, requested_expansion=expansion),
     }
+
+
+def source_exit_code(source_result: Mapping[str, Any]) -> int:
+    """Exit with the failing source's own code (blocked -> 5, not_found -> 4) instead of a flat 1."""
+    code = source_result.get("exit_code")
+    if isinstance(code, int) and code != 0:
+        return code
+    error = source_result.get("error")
+    error_code = error.get("code") if isinstance(error, dict) else None
+    return exit_code_for(error_code) if isinstance(error_code, str) else EXIT_GENERIC
 
 
 def wrapper_envelope(command: str, payload: Mapping[str, Any]) -> dict[str, Any]:

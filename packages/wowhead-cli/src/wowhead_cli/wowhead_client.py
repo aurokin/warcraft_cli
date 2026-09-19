@@ -9,7 +9,6 @@ from urllib.parse import urlencode
 
 import httpx
 from warcraft_api.cache import (
-    DEFAULT_HTTP_CACHE_DIR,
     CacheSettings,
     CacheTTLConfig,
     build_cache_store,
@@ -33,9 +32,6 @@ from wowhead_cli.expansion_profiles import (
 )
 
 WOWHEAD_BASE_URL = "https://www.wowhead.com"
-NETHER_BASE_URL = "https://nether.wowhead.com"
-
-DEFAULT_CACHE_DIR = DEFAULT_HTTP_CACHE_DIR
 ENTITY_RESPONSE_CACHE_VERSION = 1
 
 
@@ -107,7 +103,6 @@ class WowheadClient:
         self._timeout_seconds = timeout_seconds
         self._retry_attempts = max(1, retry_attempts)
         self._cache_enabled = cache_enabled and cache_settings.enabled
-        self._cache_dir = cache_settings.cache_dir
         self._cache_ttls = cache_settings.ttls
         self._cache_store = build_cache_store(cache_settings) if self._cache_enabled else None
         self._session_json_cache: dict[str, Any] = {}

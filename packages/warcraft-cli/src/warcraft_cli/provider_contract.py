@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from warcraft_core.exit_codes import EXIT_USAGE
 from warcraft_core.paths import config_root
+from warcraft_core.provider import ProviderError
 
 DEFAULT_WRAPPER_RANKING_POLICY: dict[str, Any] = {
     "provider_families": {
@@ -186,18 +188,27 @@ def _normalize_policy(policy: Mapping[str, Any]) -> dict[str, Any]:
 
 
 @lru_cache(maxsize=4)
-def _load_wrapper_ranking_policy_cached(path_text: str | None) -> dict[str, Any]:
+def _load_wrapper_ranking_policy_cached(path_text: str) -> dict[str, Any]:
     merged = dict(DEFAULT_WRAPPER_RANKING_POLICY)
-    config_path = Path(path_text) if path_text else _wrapper_ranking_config_path()
+    config_path = Path(path_text)
     if config_path.exists():
-        payload = json.loads(config_path.read_text(encoding="utf-8"))
+        try:
+            payload = json.loads(config_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ProviderError(
+                "invalid_config",
+                f"Could not read the wrapper ranking override at {config_path}: {exc}",
+                details={"config_path": str(config_path)},
+                exit_code=EXIT_USAGE,
+            ) from exc
         if isinstance(payload, Mapping):
             merged = _deep_merge(merged, payload)
     return _normalize_policy(merged)
 
 
-def load_wrapper_ranking_policy(*, override_path: Path | None = None) -> dict[str, Any]:
-    return _load_wrapper_ranking_policy_cached(str(override_path) if override_path is not None else None)
+def load_wrapper_ranking_policy() -> dict[str, Any]:
+    """Default ranking policy, deep-merged with ``<config_root>/wrapper_ranking.json`` when present."""
+    return _load_wrapper_ranking_policy_cached(str(_wrapper_ranking_config_path()))
 
 
 def confidence_rank(value: Any) -> int:
@@ -272,13 +283,54 @@ def candidate_kind(candidate: Mapping[str, Any] | None) -> str | None:
     return None
 
 
-def wrapper_search_ranking(query: str, row: Mapping[str, Any]) -> dict[str, Any]:
+# The provider-local score a best row has to reach before it is treated as a full-strength match.
+# Every provider clears it for a real hit (a Wowhead exact name alone scores 30 before prefix, term
+# and popularity credit; a Raider.IO exact structured match scores 45 on top of its base), so the
+# floor only bites when a provider's whole answer is weak.
+MINIMUM_PROVIDER_SCORE_SCALE = 40
+
+
+def normalized_provider_score(score: int, *, provider_max_score: int) -> int:
+    """Rescale one provider-local score onto the shared 0-100 axis using that provider's own best row.
+
+    Provider search scores are not comparable: Warcraft Wiki starts at 40 for merely being the first
+    upstream hit while a Wowhead exact-name match tops out in the 40s. Merging the raw numbers lets
+    the provider with the largest scale own every slot in the merged list.
+
+    The divisor never drops below ``MINIMUM_PROVIDER_SCORE_SCALE``, so a provider whose best row is
+    junk (a two-term text match scoring 3) is scaled down rather than promoted to 100 for winning
+    its own empty field.
+    """
+    if provider_max_score <= 0 or score <= 0:
+        return 0
+    divisor = max(provider_max_score, MINIMUM_PROVIDER_SCORE_SCALE)
+    return round(100 * min(score, provider_max_score) / divisor)
+
+
+def wrapper_search_ranking(
+    query: str,
+    row: Mapping[str, Any],
+    *,
+    provider_max_score: int | None = None,
+) -> dict[str, Any]:
+    """Score one candidate for the merged wrapper list: normalized provider score plus policy boosts.
+
+    ``provider_max_score`` is the best raw score the same provider returned for this query. Pass it
+    whenever candidates from several providers end up in one ranked list (``warcraft search``) so no
+    provider's local scale can crowd the others out. ``warcraft resolve`` passes nothing: it compares
+    one answer per provider on ``resolved``/``confidence``, not a merged candidate list.
+    """
     policy = load_wrapper_ranking_policy()
     provider = str(row.get("provider") or "").strip()
     family = policy["provider_families"].get(provider, "unknown")
     kind = candidate_kind(row)
-    score = candidate_score(row)
-    reasons: list[str] = [f"provider_score:{score}"]
+    raw_score = candidate_score(row)
+    if provider_max_score is None:
+        score = raw_score
+        reasons: list[str] = [f"provider_score:{score}"]
+    else:
+        score = normalized_provider_score(raw_score, provider_max_score=provider_max_score)
+        reasons = [f"normalized_provider_score:{score}(raw {raw_score}/{provider_max_score})"]
     intents = query_intents(query)
     for intent in intents:
         family_boost = policy["intent_family_boosts"].get(intent, {}).get(family, 0)
@@ -305,7 +357,8 @@ def wrapper_search_ranking(query: str, row: Mapping[str, Any]) -> dict[str, Any]
         "intents": intents,
         "provider_family": family,
         "kind": kind,
-        "provider_score": candidate_score(row),
+        "provider_score": raw_score,
+        "provider_max_score": provider_max_score,
     }
 
 
@@ -361,10 +414,20 @@ def compact_resolve_match(payload: Mapping[str, Any] | None) -> dict[str, Any] |
     return compact
 
 
-def decorate_search_result(query: str, row: Mapping[str, Any]) -> dict[str, Any]:
+def decorate_search_result(
+    query: str,
+    row: Mapping[str, Any],
+    *,
+    provider_max_score: int | None = None,
+) -> dict[str, Any]:
     decorated = dict(row)
-    decorated["wrapper_ranking"] = wrapper_search_ranking(query, row)
+    decorated["wrapper_ranking"] = wrapper_search_ranking(query, row, provider_max_score=provider_max_score)
     return decorated
+
+
+def provider_max_candidate_score(rows: Sequence[Mapping[str, Any]]) -> int:
+    """The best raw score one provider returned for a query, the divisor for its normalized scores."""
+    return max((candidate_score(row) for row in rows), default=0)
 
 
 def search_result_sort_key(row: Mapping[str, Any]) -> tuple[int, int, str, str, str]:

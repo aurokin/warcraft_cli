@@ -87,9 +87,9 @@ def search(
 def resolve(
     ctx: typer.Context,
     query: str = typer.Argument(..., help="Resolve a Lorrgs URL/ref or spec/boss query into a next command."),
-    limit: int = typer.Option(5, "--limit", min=1, max=50, help="Maximum candidates to inspect."),
+    limit: int = typer.Option(5, "--limit", min=1, max=50, help="Maximum candidates to list; ambiguity is judged over all of them."),
 ) -> None:
-    """Resolve a Lorrgs query conservatively."""
+    """Resolve a Lorrgs query conservatively: an ambiguous query resolves to nothing, not a guess."""
     _emit_surface(ctx, lambda: provider_resolve(query, limit=limit))
 
 

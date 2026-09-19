@@ -7,7 +7,7 @@ import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, NoReturn
 
 import typer
 from warcraft_core.cli import (
@@ -26,6 +26,7 @@ from warcraft_core.cli import (
 )
 from warcraft_core.identity import build_identity_payload, refresh_talent_transport_packet, validate_talent_transport_packet
 from warcraft_core.output import DEFAULT_COMPACT_MAX_CHARS
+from warcraft_core.talent_transport import tokenize_talent_name
 
 from simc_cli.apl import action_counts, group_entries, mermaid_graph, parse_apl, talent_refs, trace_action_entries
 from simc_cli.branch import (
@@ -43,6 +44,7 @@ from simc_cli.branch import (
 from simc_cli.build_input import (
     BuildResolution,
     BuildSpec,
+    SimcBuildError,
     TalentStrings,
     TreeDiff,
     build_profile_text,
@@ -73,12 +75,14 @@ from simc_cli.repo import (
     discover_repo,
     resolve_repo_root,
     save_configured_repo_root,
+    validate_repo,
 )
 from simc_cli.report import load_sim_report, sim_report_payload, summarize_sim_report
-from simc_cli.run import binary_version, build_repo, repo_git_status, run_profile, sync_repo
-from simc_cli.search import find_action, spec_file_search
+from simc_cli.run import binary_provenance, binary_version, build_repo, repo_git_status, run_profile, sync_repo
+from simc_cli.search import MissingRipgrepError, find_action, spec_file_search
 from simc_cli.sim import first_action_hits, run_first_casts, summarize_first_casts
 from simc_cli.talent_transport import validate_talent_tree_transport
+from simc_cli.trait_data import TraitTable, load_trait_table
 
 app = typer.Typer(add_completion=False, help="SimulationCraft local workflow CLI.")
 
@@ -297,9 +301,32 @@ def _build_option_values(
     }
 
 
+def _require_checkout(ctx: typer.Context, paths: RepoPaths) -> None:
+    """Reject a search over a checkout that is not there; it otherwise reports zero hits as success."""
+    missing = validate_repo(paths)
+    if missing:
+        fail(
+            ctx,
+            "not_found",
+            f"SimulationCraft checkout is missing or incomplete: {'; '.join(missing)}. "
+            "Run 'simc checkout', or point --repo-root at a checkout.",
+            details={"repo_root": str(paths.root), "missing": missing},
+        )
+
+
+def _require_apl_path(ctx: typer.Context, paths: RepoPaths, apl_path: str | None) -> None:
+    """Reject an --apl-path that does not exist: its file stem otherwise invents a class and spec."""
+    if apl_path is None:
+        return
+    resolved = _resolve_path(paths, apl_path)
+    if not resolved.exists():
+        fail(ctx, "not_found", f"APL file not found: {resolved}")
+
+
 def _identified_build_or_fail(
     ctx: typer.Context, paths: RepoPaths, *, apl_path: str | None, option_values: dict[str, Any]
 ) -> tuple[Any, Any]:
+    _require_apl_path(ctx, paths, apl_path)
     return _load_identified_build_spec_or_fail(
         ctx,
         paths,
@@ -415,22 +442,13 @@ def _prune_context_payload(resolution: Any, context: PruneContext) -> dict[str, 
 
 
 def _talent_tree_payload(resolution: Any) -> dict[str, Any]:
-    payload: dict[str, Any] = {}
-    for tree in ("class", "spec", "hero"):
-        talents = resolution.talents_by_tree.get(tree, [])
-        payload[tree] = {
-            "selected": [
-                {"name": talent.name, "token": talent.token, "rank": talent.rank, "max_rank": talent.max_rank}
-                for talent in talents
-                if talent.rank > 0
-            ],
-            "skipped": [
-                {"name": talent.name, "token": talent.token, "rank": talent.rank, "max_rank": talent.max_rank}
-                for talent in talents
-                if talent.rank <= 0
-            ],
+    return {
+        tree: {
+            "selected": [_talent_row(talent) for talent in resolution.talents_by_tree.get(tree, []) if talent.taken],
+            "skipped": [_talent_row(talent) for talent in resolution.talents_by_tree.get(tree, []) if not talent.taken],
         }
-    return payload
+        for tree in ("class", "spec", "hero")
+    }
 
 
 def _priority_item(decision: Any) -> dict[str, Any]:
@@ -707,7 +725,11 @@ def spec_files(
 ) -> None:
     """List APL and class-module files in the checkout, optionally narrowed by a substring."""
     paths = _repo_paths(ctx)
-    matches = spec_file_search(paths, query)
+    _require_checkout(ctx, paths)
+    try:
+        matches = spec_file_search(paths, query)
+    except MissingRipgrepError as exc:
+        fail(ctx, "missing_dependency", str(exc))
     categories: dict[str, Any] = {}
     total = 0
     for category, rows in matches.items():
@@ -728,6 +750,82 @@ def spec_files(
     _emit(ctx, {"provider": "simc", "query": query, "count": total, "categories": categories})
 
 
+def _talent_row(talent: Any) -> dict[str, Any]:
+    return {
+        "name": talent.name,
+        "token": talent.token,
+        "entry": talent.entry,
+        # SimC prints the leftover rank (0) for a tiered node decoded from a hash, so the talent is
+        # taken but its rank is not recoverable from the decode output.
+        "rank": talent.rank if talent.rank_known else None,
+        "rank_known": talent.rank_known,
+        "max_rank": talent.max_rank,
+    }
+
+
+def _hero_tree_payload(resolution: BuildResolution) -> dict[str, Any]:
+    """The hero tree SimC activated, and the keystones of the tree it disabled."""
+    return {
+        "hero_tree": {"name": resolution.hero_tree.name, "id": resolution.hero_tree.id} if resolution.hero_tree else None,
+        "inactive_hero_talents": [_talent_row(talent) for talent in resolution.inactive_hero_talents],
+    }
+
+
+def _decoded_payload(resolution: BuildResolution) -> dict[str, Any]:
+    return {
+        "actor_class": resolution.actor_class,
+        "spec": resolution.spec,
+        "source_kind": resolution.source_kind,
+        "generated_profile": resolution.generated_profile_text,
+        "enabled_talents": sorted(resolution.enabled_talents),
+        **_hero_tree_payload(resolution),
+        "talents_by_tree": {
+            tree: [_talent_row(talent) for talent in talents]
+            for tree, talents in resolution.talents_by_tree.items()
+        },
+        "source_notes": resolution.source_notes,
+    }
+
+
+def _fail_build_error(
+    ctx: typer.Context, exc: Exception, *, code: str, prefix: str = "", details: dict[str, Any] | None = None
+) -> NoReturn:
+    """Report SimC's rejection of a build as ``invalid_build`` carrying only its error line.
+
+    SimC is run with ``debug=1``, so its raw output is tens of thousands of lines; only the ``Error:``
+    lines and a bounded tail belong in the envelope. The binary that rejected the build is named as
+    well: a binary older than its checkout is the usual reason a valid hash comes back rejected.
+    """
+    extra = dict(details or {})
+    if isinstance(exc, SimcBuildError):
+        provenance = binary_provenance(_repo_paths(ctx))
+        extra["simc_returncode"] = exc.returncode
+        extra["simc_output_preview"] = exc.output_preview
+        extra["simc_binary"] = {
+            "git_revision": provenance.git_revision,
+            "checkout_head": provenance.checkout_head,
+            "matches_checkout": provenance.matches_checkout,
+        }
+        hint = provenance.stale_hint
+        fail(ctx, "invalid_build", f"{prefix}{exc}{f' {hint}' if hint else ''}", details=extra or None)
+    fail(ctx, code, f"{prefix}{exc}", details=extra or None)
+
+
+def _decode_or_fail(
+    ctx: typer.Context, paths: RepoPaths, build_spec: BuildSpec, *, identity: Any = None, prefix: str = ""
+) -> BuildResolution:
+    """Decode a build, turning SimC's rejection into an ``invalid_build`` envelope with its own message."""
+    try:
+        return decode_build(paths, build_spec)
+    except (FileNotFoundError, RuntimeError, ValueError) as exc:
+        details: dict[str, Any] = {"build_spec": _serialize_build_spec(build_spec)}
+        if identity is not None:
+            details["identity"] = _serialize_build_identity(identity)
+        with contextlib.suppress(ValueError):
+            details["generated_profile"] = build_profile_text(build_spec)
+        _fail_build_error(ctx, exc, code="decode_failed", prefix=prefix, details=details)
+
+
 def _decode_build(ctx: typer.Context, *, apl_path: str | None, option_values: dict[str, Any]) -> None:
     paths = _repo_paths(ctx)
     build_spec, identity = _identified_build_or_fail(ctx, paths, apl_path=apl_path, option_values=option_values)
@@ -738,42 +836,14 @@ def _decode_build(ctx: typer.Context, *, apl_path: str | None, option_values: di
             "Could not determine actor class and spec for build decoding.",
             details={"build_spec": _serialize_build_spec(build_spec), "identity": _serialize_build_identity(identity)},
         )
-    try:
-        resolution = decode_build(paths, build_spec)
-    except (FileNotFoundError, RuntimeError, ValueError) as exc:
-        extra: dict[str, Any] = {"build_spec": _serialize_build_spec(build_spec), "identity": _serialize_build_identity(identity)}
-        if build_spec.actor_class and build_spec.spec and any(
-            [build_spec.talents, build_spec.class_talents, build_spec.spec_talents, build_spec.hero_talents]
-        ):
-            with contextlib.suppress(ValueError):
-                extra["generated_profile"] = build_profile_text(build_spec)
-        fail(ctx, "decode_failed", str(exc), details=extra)
+    resolution = _decode_or_fail(ctx, paths, build_spec, identity=identity)
     _emit(
         ctx,
         {
             "provider": "simc",
             "build_spec": _serialize_build_spec(build_spec),
             "identity": _serialize_build_identity(identity),
-            "decoded": {
-                "actor_class": resolution.actor_class,
-                "spec": resolution.spec,
-                "source_kind": resolution.source_kind,
-                "generated_profile": resolution.generated_profile_text,
-                "enabled_talents": sorted(resolution.enabled_talents),
-                "talents_by_tree": {
-                    tree: [
-                        {
-                            "name": talent.name,
-                            "token": talent.token,
-                            "rank": talent.rank,
-                            "max_rank": talent.max_rank,
-                        }
-                        for talent in talents
-                    ]
-                    for tree, talents in resolution.talents_by_tree.items()
-                },
-                "source_notes": resolution.source_notes,
-            },
+            "decoded": _decoded_payload(resolution),
         },
     )
 
@@ -1098,7 +1168,7 @@ def validate_apl_command(
         profile_path = build_variant_profile(harness_path, apl_path, label=label, out_dir=out_dir)
         validation = validate_profile_file(paths, profile_path)
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
-        fail(ctx, "validate_apl_failed", str(exc))
+        _fail_build_error(ctx, exc, code="validate_apl_failed")
     _emit(
         ctx,
         {
@@ -1302,7 +1372,11 @@ def find_action_command(
 ) -> None:
     """Find an action, buff, or token across APLs, class modules, and spell dumps."""
     paths = _repo_paths(ctx)
-    results = find_action(paths, action, wow_class)
+    _require_checkout(ctx, paths)
+    try:
+        results = find_action(paths, action, wow_class)
+    except MissingRipgrepError as exc:
+        fail(ctx, "missing_dependency", str(exc))
     buckets: dict[str, Any] = {}
     total = 0
     for bucket, hits in results.items():
@@ -1334,11 +1408,15 @@ def trace_action_command(
 ) -> None:
     """Trace one action through an APL file and the surrounding source."""
     paths = _repo_paths(ctx)
+    _require_checkout(ctx, paths)
     resolved = _resolve_path(paths, apl_path)
     if not resolved.exists():
         fail(ctx, "not_found", f"APL file not found: {resolved}")
     entries = trace_action_entries(parse_apl(resolved), action)
-    search_hits = find_action(paths, action, wow_class)
+    try:
+        search_hits = find_action(paths, action, wow_class)
+    except MissingRipgrepError as exc:
+        fail(ctx, "missing_dependency", str(exc))
     buckets: dict[str, Any] = {}
     total = 0
     for bucket, hits in search_hits.items():
@@ -1406,7 +1484,7 @@ def _apl_prune(
     try:
         context, resolution = _resolve_prune_context(paths, resolved, option_values, targets)
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
-        fail(ctx, "prune_context_failed", str(exc))
+        _fail_build_error(ctx, exc, code="prune_context_failed")
     grouped: dict[str, list[Any]] = {}
     for pruned in prune_entries(parse_apl(resolved), context):
         grouped.setdefault(pruned.entry.list_name, []).append(pruned)
@@ -1506,7 +1584,7 @@ def _apl_branch_trace(
     try:
         context, resolution = _resolve_prune_context(paths, resolved, option_values, targets)
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
-        fail(ctx, "branch_trace_failed", str(exc))
+        _fail_build_error(ctx, exc, code="branch_trace_failed")
     summary = summarize_branches(resolved, context, start_list=list_name)
     trace_lines = trace_apl(resolved, context, start_list=list_name, max_depth=max_depth)
     _emit(
@@ -1600,7 +1678,7 @@ def _apl_intent(
     try:
         context, resolution = _resolve_prune_context(paths, resolved, option_values, targets)
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
-        fail(ctx, "intent_failed", str(exc))
+        _fail_build_error(ctx, exc, code="intent_failed")
     summary = summarize_branches(resolved, context, start_list=list_name)
     focus_list = summary.guaranteed_dispatch or list_name
     _emit(
@@ -1688,7 +1766,7 @@ def _apl_intent_explain(
     try:
         context, resolution = _resolve_prune_context(paths, resolved, option_values, targets)
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
-        fail(ctx, "intent_explain_failed", str(exc))
+        _fail_build_error(ctx, exc, code="intent_explain_failed")
     summary = summarize_branches(resolved, context, start_list=list_name)
     focus_list = summary.guaranteed_dispatch or list_name
     explanation = explain_intent(resolved, context, focus_list, limit=limit)
@@ -1789,7 +1867,7 @@ def _priority(
     try:
         context, resolution = _resolve_prune_context(paths, resolved, option_values, targets)
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
-        fail(ctx, "priority_failed", str(exc))
+        _fail_build_error(ctx, exc, code="priority_failed")
     summary, focus = _focus_list_summary(resolved, context, start_list=list_name)
     decisions = active_priority_decisions(resolved, context, focus.focus_list)[:limit]
     excluded = inactive_priority_decisions(resolved, context, focus.focus_list, talent_only=True)
@@ -1892,7 +1970,7 @@ def _describe_build(
         primary_context, resolution = _resolve_prune_context(paths, resolved, option_values, targets)
         aoe_context, _ = _resolve_prune_context(paths, resolved, option_values, aoe_targets)
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
-        fail(ctx, "describe_build_failed", str(exc))
+        _fail_build_error(ctx, exc, code="describe_build_failed")
     primary = _describe_target_payload(resolved, primary_context, start_list=list_name,
                                        priority_limit=priority_limit, inactive_limit=inactive_limit)
     aoe = _describe_target_payload(resolved, aoe_context, start_list=list_name,
@@ -1915,6 +1993,7 @@ def _describe_build(
                 "spec": resolution.spec,
                 "source_kind": resolution.source_kind,
                 "enabled_talents": sorted(resolution.enabled_talents),
+                **_hero_tree_payload(resolution),
                 "talents_by_tree": _talent_tree_payload(resolution),
                 "source_notes": resolution.source_notes,
             },
@@ -2003,7 +2082,7 @@ def _inactive_actions(
     try:
         context, resolution = _resolve_prune_context(paths, resolved, option_values, targets)
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
-        fail(ctx, "inactive_actions_failed", str(exc))
+        _fail_build_error(ctx, exc, code="inactive_actions_failed")
     summary, focus = _focus_list_summary(resolved, context, start_list=list_name)
     decisions = inactive_priority_decisions(resolved, context, focus.focus_list, talent_only=talent_only)
     _emit(
@@ -2093,7 +2172,7 @@ def _opener(
     try:
         context, resolution = _resolve_prune_context(paths, resolved, option_values, targets)
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
-        fail(ctx, "opener_failed", str(exc))
+        _fail_build_error(ctx, exc, code="opener_failed")
     summary, focus = _focus_list_summary(resolved, context, start_list=list_name)
     decisions = active_priority_decisions(resolved, context, focus.focus_list)[:limit]
     runtime_sensitive = [
@@ -2186,7 +2265,7 @@ def _apl_branch_compare(
         left_context, left_resolution = _resolve_prune_context(paths, resolved, left_values, left_targets)
         right_context, right_resolution = _resolve_prune_context(paths, resolved, right_values, right_targets)
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
-        fail(ctx, "branch_compare_failed", str(exc))
+        _fail_build_error(ctx, exc, code="branch_compare_failed")
     comparison = attach_focus_comparison(
         compare_branch_summaries(
             summarize_branches(resolved, left_context, start_list=list_name),
@@ -2330,7 +2409,7 @@ def _analysis_packet(
     try:
         context, resolution = _resolve_prune_context(paths, resolved, option_values, targets)
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
-        fail(ctx, "analysis_packet_failed", str(exc))
+        _fail_build_error(ctx, exc, code="analysis_packet_failed")
     try:
         packet = build_analysis_packet(
             paths,
@@ -2343,7 +2422,7 @@ def _analysis_packet(
             first_cast=first_cast,
         )
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
-        fail(ctx, "analysis_packet_failed", str(exc))
+        _fail_build_error(ctx, exc, code="analysis_packet_failed")
     _emit(
         ctx,
         {
@@ -2859,7 +2938,7 @@ def compare_builds_command(
     try:
         base_resolution = decode_build(paths, base_spec)
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
-        fail(ctx, "decode_failed", f"Failed to decode base build: {exc}")
+        _fail_build_error(ctx, exc, code="decode_failed", prefix="Failed to decode base build: ")
 
     comparisons: list[dict[str, Any]] = []
     for other_talents in other:
@@ -2934,7 +3013,7 @@ def _resolve_modify_tree_entries(
         try:
             swap_resolution = decode_build(paths, swap_spec)
         except (FileNotFoundError, RuntimeError, ValueError) as exc:
-            fail(ctx, "decode_failed", f"Failed to decode {tree_name} tree source: {exc}")
+            _fail_build_error(ctx, exc, code="decode_failed", prefix=f"Failed to decode {tree_name} tree source: ")
         entries_str = tree_entries_string(swap_resolution.talents_by_tree.get(tree_name, []))
         if tree_name == "class":
             class_entries = entries_str
@@ -2956,54 +3035,97 @@ def _resolve_modify_tree_entries(
     return class_entries, spec_entries, hero_entries
 
 
-def _build_modify_overrides(
+@dataclass(frozen=True, slots=True)
+class _TalentEdit:
+    """One ``--add``/``--remove`` edit, routed to the tree whose SimC option string must carry it."""
+
+    tree: str
+    value: str
+    rank: int
+    entry: int | None
+
+    def as_option(self) -> str:
+        return f"{self.value}:{self.rank}"
+
+
+def _base_entry_index(base_resolution: BuildResolution) -> tuple[dict[str, tuple[str, int]], set[int]]:
+    """Map every talent name/token in the base build to its (tree, entry), plus the set of entry ids."""
+    by_name: dict[str, tuple[str, int]] = {}
+    entries: set[int] = set()
+    for tree, talents in base_resolution.talents_by_tree.items():
+        for talent in talents:
+            if not talent.entry:
+                continue
+            entries.add(talent.entry)
+            by_name.setdefault(talent.token, (tree, talent.entry))
+            by_name.setdefault(talent.name.lower(), (tree, talent.entry))
+    return by_name, entries
+
+
+def _resolve_edit(
     ctx: typer.Context,
+    value: str,
+    rank: int,
+    *,
+    table: TraitTable,
+    by_name: dict[str, tuple[str, int]],
+    class_id: int | None,
+) -> _TalentEdit:
+    """Decide which talent tree an edit belongs to; SimC resolves names per tree, not globally."""
+    if value.isdigit():
+        entry = int(value)
+        tree = table.tree_for_entry(entry)
+        if tree is None or tree == "selection":
+            fail(ctx, "unknown_talent", f"Unknown talent entry id: '{value}'.")
+        return _TalentEdit(tree=tree, value=value, rank=rank, entry=entry)
+    # SimC tokenizes talent names when it matches them, and a profile line cannot contain spaces.
+    token = tokenize_talent_name(value)
+    known = by_name.get(value.lower()) or by_name.get(token)
+    if known is not None:
+        # Pass the name through so SimC spreads the rank over a tiered node's entries itself.
+        return _TalentEdit(tree=known[0], value=token, rank=rank, entry=known[1])
+    tree = table.tree_for_name(class_id, value) if class_id is not None else None
+    if tree is None or tree == "selection":
+        fail(
+            ctx,
+            "unknown_talent",
+            f"Cannot resolve talent '{value}' to a talent tree. Use an entry id or a name from this class.",
+        )
+    return _TalentEdit(tree=tree, value=token, rank=rank, entry=None)
+
+
+def _build_modify_edits(
+    ctx: typer.Context,
+    paths: RepoPaths,
     *,
     base_resolution: BuildResolution,
     add: list[str],
     remove: list[str],
     modifications: list[str],
-) -> list[str]:
-    # SimC's parse_traits accepts both entry_id:rank and talent_name:rank,
-    # so we pass values through directly and let SimC resolve names.
-    overrides: list[str] = []
-    # For --remove by name, we need to resolve to entry:0 using the base build
-    # since SimC's rank-0 override requires an entry ID or known name.
-    token_to_entry: dict[str, int] = {}
-    for tree_talents in base_resolution.talents_by_tree.values():
-        for t in tree_talents:
-            if t.entry:
-                token_to_entry[t.token] = t.entry
-                token_to_entry[t.name.lower()] = t.entry
+) -> list[_TalentEdit]:
+    table = load_trait_table(paths.root)
+    by_name, base_entries = _base_entry_index(base_resolution)
+    class_ids = {table.class_id_by_entry[entry] for entry in base_entries if entry in table.class_id_by_entry}
+    class_id = next(iter(class_ids)) if len(class_ids) == 1 else None
 
+    edits: list[_TalentEdit] = []
     for item in remove:
-        token = item.strip()
-        if token.isdigit():
-            overrides.append(f"{token}:0")
-        elif token.lower() in token_to_entry:
-            overrides.append(f"{token_to_entry[token.lower()]}:0")
-        else:
-            msg = (
-                f"Cannot resolve talent to remove: '{token}'. "
-                "Use an entry ID or a name from the base build."
-            )
-            fail(ctx, "unknown_talent", msg)
-        modifications.append(f"remove:{token}")
-
+        value = item.strip()
+        edits.append(_resolve_edit(ctx, value, 0, table=table, by_name=by_name, class_id=class_id))
+        modifications.append(f"remove:{value}")
     for item in add:
-        parts = item.strip().split(":", 1)
-        if len(parts) != 2:
-            fail(
-                ctx, "invalid_add",
-                f"--add requires 'name:rank' or 'entry_id:rank', got: '{item}'",
-            )
-        name_or_id, rank_str = parts
-        if not rank_str.isdigit():
-            fail(ctx, "invalid_add", f"Rank must be a number in '{item}'")
-        # Pass through as-is — SimC resolves both entry IDs and talent names.
-        overrides.append(f"{name_or_id}:{rank_str}")
+        name_or_id, _, rank_str = item.strip().partition(":")
+        if not rank_str.isdigit() or not name_or_id:
+            fail(ctx, "invalid_add", f"--add requires 'name:rank' or 'entry_id:rank', got: '{item}'")
+        edits.append(_resolve_edit(ctx, name_or_id, int(rank_str), table=table, by_name=by_name, class_id=class_id))
         modifications.append(f"add:{item}")
-    return overrides
+    return edits
+
+
+def _join_tree_option(entries: str | None, edits: list[_TalentEdit], tree: str) -> str | None:
+    parts = [part for part in [entries] if part]
+    parts.extend(edit.as_option() for edit in edits if edit.tree == tree)
+    return "/".join(parts) or None
 
 
 def _assemble_modified_spec(
@@ -3012,27 +3134,59 @@ def _assemble_modified_spec(
     class_entries: str | None,
     spec_entries: str | None,
     hero_entries: str | None,
-    overrides: list[str],
+    edits: list[_TalentEdit],
 ) -> BuildSpec | None:
-    if class_entries is not None:
-        # Tree-swap path: build from split trees.
-        override_suffix = "/" + "/".join(overrides) if overrides else ""
-        return BuildSpec(
-            actor_class=base_spec.actor_class,
-            spec=base_spec.spec,
-            class_talents=class_entries + override_suffix if override_suffix else class_entries,
-            spec_talents=spec_entries,
-            hero_talents=hero_entries,
-        )
-    if overrides:
-        # Individual override path: keep base talents, append overrides.
-        return BuildSpec(
-            actor_class=base_spec.actor_class,
-            spec=base_spec.spec,
-            talents=base_spec.talents,
-            class_talents="/".join(overrides),
-        )
-    return None
+    """Apply the edits to the build, keeping every edit in the tree string SimC resolves it against."""
+    if class_entries is None and not edits:
+        return None
+    swapping = class_entries is not None
+    return BuildSpec(
+        actor_class=base_spec.actor_class,
+        spec=base_spec.spec,
+        # Without a tree swap the base hash stays the foundation: it carries per-entry ranks that the
+        # decode output cannot reproduce (tiered nodes) and freely granted traits.
+        talents=None if swapping else base_spec.talents,
+        class_talents=_join_tree_option(class_entries, edits, "class"),
+        spec_talents=_join_tree_option(spec_entries, edits, "spec"),
+        hero_talents=_join_tree_option(hero_entries, edits, "hero"),
+    )
+
+
+ACTIVE_TREES = ("class", "spec", "hero")
+# SimC freely grants every hero tree's keystone whenever it regenerates a hash (player.cpp
+# parse_traits), so a re-encoded export always carries the unselected tree's keystone even when the
+# input hash did not. Those talents are disabled in the sim, so they are disclosed rather than
+# treated as an edit that failed verification.
+INACTIVE_HERO_TREE = "inactive_hero"
+REENCODE_KEYSTONE_DISCLOSURE = (
+    "SimC regenerated the talent hash and freely granted the keystone of every hero tree, so the "
+    "export carries hero talents outside the selected tree. They are inactive in the sim and are "
+    "listed under result.diff_from_base.inactive_hero."
+)
+
+
+def _unrequested_changes(diff_payload: dict[str, Any], edits: list[_TalentEdit], swapped_trees: set[str]) -> list[dict[str, Any]]:
+    """Differences between the re-encoded build and the base that nobody asked for.
+
+    SimC re-serializes the whole build when it is handed split talent strings, so an edit can drag
+    unrelated talents along. Anything the caller did not name is reported instead of shipped.
+    Only the active trees gate the export; ``inactive_hero`` is disclosed instead (see above).
+    """
+    requested_entries = {edit.entry for edit in edits if edit.entry is not None}
+    requested_names = {tokenize_talent_name(edit.value) for edit in edits if edit.entry is None}
+    unrequested: list[dict[str, Any]] = []
+    for tree in ACTIVE_TREES:
+        if tree in swapped_trees:
+            continue
+        tree_diff = diff_payload[tree]
+        for change, rows in tree_diff.items():
+            if change == "has_differences":
+                continue
+            for row in rows:
+                if row.get("entry") in requested_entries or row.get("token") in requested_names:
+                    continue
+                unrequested.append({"tree": tree, "change": change, **row})
+    return unrequested
 
 
 def _modify_build_diff_payload(
@@ -3042,26 +3196,31 @@ def _modify_build_diff_payload(
     base_resolution: BuildResolution,
     encoded: str,
 ) -> dict[str, Any]:
-    # Decode the result to produce the diff and verify.
+    """Decode the re-encoded build and diff it against the base, per tree.
+
+    The fourth key, ``inactive_hero``, covers the hero talents SimC granted for the tree the build
+    did not select. Without it the export could differ from the input hash with nothing in the
+    payload saying so.
+    """
     verify_spec = BuildSpec(
         actor_class=base_spec.actor_class,
         spec=base_spec.spec,
         talents=encoded,
     )
-    try:
-        result_resolution = decode_build(paths, verify_spec)
-    except (FileNotFoundError, RuntimeError, ValueError):
-        result_resolution = None
-
-    diff_payload: dict[str, Any] = {}
-    if result_resolution:
-        for t in ("class", "spec", "hero"):
-            diff = diff_talent_trees(
-                base_resolution.talents_by_tree.get(t, []),
-                result_resolution.talents_by_tree.get(t, []),
+    result_resolution = decode_build(paths, verify_spec)
+    diff = {
+        tree: _tree_diff_payload(
+            diff_talent_trees(
+                base_resolution.talents_by_tree.get(tree, []),
+                result_resolution.talents_by_tree.get(tree, []),
             )
-            diff_payload[t] = _tree_diff_payload(diff)
-    return diff_payload
+        )
+        for tree in ACTIVE_TREES
+    }
+    diff[INACTIVE_HERO_TREE] = _tree_diff_payload(
+        diff_talent_trees(base_resolution.inactive_hero_talents, result_resolution.inactive_hero_talents)
+    )
+    return diff
 
 
 @dataclass(frozen=True, slots=True)
@@ -3099,7 +3258,7 @@ def _modify_build(ctx: typer.Context, options: _ModifyBuildOptions) -> None:
     try:
         base_resolution = decode_build(paths, base_spec)
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
-        fail(ctx, "decode_failed", f"Failed to decode base build: {exc}")
+        _fail_build_error(ctx, exc, code="decode_failed", prefix="Failed to decode base build: ")
 
     modifications: list[str] = []
     class_entries, spec_entries, hero_entries = _resolve_modify_tree_entries(
@@ -3114,8 +3273,9 @@ def _modify_build(ctx: typer.Context, options: _ModifyBuildOptions) -> None:
         ],
         modifications=modifications,
     )
-    overrides = _build_modify_overrides(
+    edits = _build_modify_edits(
         ctx,
+        paths,
         base_resolution=base_resolution,
         add=options.add,
         remove=options.remove,
@@ -3127,7 +3287,7 @@ def _modify_build(ctx: typer.Context, options: _ModifyBuildOptions) -> None:
         class_entries=class_entries,
         spec_entries=spec_entries,
         hero_entries=hero_entries,
-        overrides=overrides,
+        edits=edits,
     )
     if modified_spec is None:
         fail(
@@ -3137,14 +3297,29 @@ def _modify_build(ctx: typer.Context, options: _ModifyBuildOptions) -> None:
 
     try:
         encoded = encode_build(paths, modified_spec)
+        diff_payload = _modify_build_diff_payload(
+            paths, base_spec=base_spec, base_resolution=base_resolution, encoded=encoded
+        )
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
-        fail(ctx, "encode_failed", f"Failed to encode modified build: {exc}")
+        _fail_build_error(ctx, exc, code="encode_failed", prefix="Failed to encode modified build: ")
 
-    diff_payload = _modify_build_diff_payload(
-        paths, base_spec=base_spec, base_resolution=base_resolution, encoded=encoded
-    )
-
-    wowhead_url = f"https://www.wowhead.com/talent-calc/blizzard/{encoded}"
+    swapped_trees = {
+        tree
+        for tree, source in (
+            ("class", options.swap_class_tree_from),
+            ("spec", options.swap_spec_tree_from),
+            ("hero", options.swap_hero_tree_from),
+        )
+        if source
+    }
+    unrequested = _unrequested_changes(diff_payload, edits, swapped_trees)
+    if unrequested:
+        fail(
+            ctx,
+            "encode_mismatch",
+            "The re-encoded build differs from the requested build; no export was emitted.",
+            details={"modifications": modifications, "unrequested_changes": unrequested, "diff_from_base": diff_payload},
+        )
 
     _emit(ctx, {
         "provider": "simc",
@@ -3157,8 +3332,11 @@ def _modify_build(ctx: typer.Context, options: _ModifyBuildOptions) -> None:
         "modifications": modifications,
         "result": {
             "talents_export": encoded,
-            "wowhead_url": wowhead_url,
+            "wowhead_url": f"https://www.wowhead.com/talent-calc/blizzard/{encoded}",
             "diff_from_base": diff_payload,
+            "disclosures": [REENCODE_KEYSTONE_DISCLOSURE] if diff_payload[INACTIVE_HERO_TREE]["has_differences"] else [],
+            # The active trees carry exactly the requested edits; see disclosures for the rest.
+            "verified": True,
         },
     })
 

@@ -122,10 +122,15 @@ def test_comparison_helper_payloads_are_stable() -> None:
         canonical_url="https://www.wowhead.com/item=19019/thunderfury",
         tooltip={"name": "Thunderfury", "quality": 5, "icon": "inv_sword_39"},
         metadata={"title": "Thunderfury", "description": "Legendary sword"},
-        deduped_links=[
-            {"entity_type": "npc", "id": 12056, "url": "https://www.wowhead.com/npc=12056"},
-            {"entity_type": "quest", "id": 7786, "url": "https://www.wowhead.com/quest=7786"},
-        ],
+        linked_entities={
+            "count": 2,
+            "total": 2,
+            "truncated": False,
+            "items": [
+                {"entity_type": "npc", "id": 12056, "url": "https://www.wowhead.com/npc=12056"},
+                {"entity_type": "quest", "id": 7786, "url": "https://www.wowhead.com/quest=7786"},
+            ],
+        },
         raw_comments=[{"id": 1}, {"id": 2}],
         sampled_comments=[{"id": 1, "citation_url": "https://www.wowhead.com/item=19019#comments:id=1"}],
     )
@@ -196,10 +201,11 @@ def test_entity_linked_entities_payload_helper_builds_preview() -> None:
         requested_entity_type="item",
         requested_entity_id=19019,
         linked_entity_preview_limit=5,
+        expansion=resolve_expansion("classic"),
     )
     assert payload is not None
     assert payload["count"] >= 1
-    assert payload["fetch_more_command"] == "wowhead entity-page item 19019 --max-links 200"
+    assert payload["fetch_more_command"] == "wowhead --expansion classic entity-page item 19019 --max-links 200"
 
 
 
@@ -218,20 +224,22 @@ def test_entity_respects_expansion_flag(monkeypatch) -> None:
     result = runner.invoke(app, ["--expansion", "classic", "entity", "item", "19019"])
     assert result.exit_code == 0
 
-    payload = json.loads(result.stdout)
+    data = json.loads(result.stdout)["data"]
     assert calls == [("classic", None)]
-    assert payload["expansion"] == "classic"
-    assert payload["entity"]["name"] == "Thunderfury"
-    assert payload["entity"]["page_url"] == "https://www.wowhead.com/item=19019/thunderfury"
-    assert "tooltip" not in payload
-    assert payload["citations"]["comments"] == "https://www.wowhead.com/item=19019/thunderfury#comments"
-    assert payload["comments"]["count"] == 1
-    assert payload["comments"]["all_comments_included"] is True
-    assert payload["comments"]["needs_raw_fetch"] is False
-    assert payload["comments"]["top"][0]["citation_url"].endswith("#comments:id=11")
-    assert payload["linked_entities"]["count"] >= 1
-    assert payload["linked_entities"]["counts_by_type"]["npc"] == 1
-    assert payload["linked_entities"]["fetch_more_command"] == "wowhead entity-page item 19019 --max-links 200"
+    assert data["expansion"] == "classic"
+    assert data["entity"]["name"] == "Thunderfury"
+    assert data["entity"]["page_url"] == "https://www.wowhead.com/item=19019/thunderfury"
+    assert "tooltip" not in data
+    assert data["citations"]["comments"] == "https://www.wowhead.com/item=19019/thunderfury#comments"
+    assert data["comments"]["count"] == 1
+    assert data["comments"]["all_comments_included"] is True
+    assert data["comments"]["needs_raw_fetch"] is False
+    assert data["comments"]["top"][0]["citation_url"].endswith("#comments:id=11")
+    assert data["linked_entities"]["count"] >= 1
+    assert data["linked_entities"]["counts_by_type"]["npc"] == 1
+    assert data["linked_entities"]["fetch_more_command"] == (
+        "wowhead --expansion classic entity-page item 19019 --max-links 200"
+    )
 
 
 
@@ -943,3 +951,65 @@ def test_restore_cached_normalization_version_moves_legacy_top_level_version() -
     assert restore_cached_normalization_version(already_migrated) is already_migrated
     without_normalized = {"schema_version": "wowhead.entity.v1", "entity": {}}
     assert restore_cached_normalization_version(without_normalized) is without_normalized
+
+
+def test_comments_follow_up_command_carries_the_active_expansion(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "wowhead_cli.main.WowheadClient.tooltip",
+        lambda self, entity_type, entity_id, data_env=None: {"name": "Thunderfury"},
+    )
+    monkeypatch.setattr(
+        "wowhead_cli.main.WowheadClient.entity_page_html",
+        lambda self, entity_type, entity_id: SAMPLE_PAGE_HTML,
+    )
+    result = runner.invoke(app, ["--expansion", "classic", "comments", "item", "19019", "--limit", "1"])
+    assert result.exit_code == 0
+
+    data = json.loads(result.stdout)["data"]
+    assert data["linked_entities"]["fetch_more_command"] == (
+        "wowhead --expansion classic entity-page item 19019 --max-links 200"
+    )
+
+
+def test_entity_page_reports_the_links_the_max_links_limit_cut_off(monkeypatch) -> None:
+    links = "\n".join(f'<a href="/item={400000 + index}">Item {index}</a>' for index in range(30))
+    html = f"""
+    <html><head>
+      <link rel="canonical" href="https://www.wowhead.com/item=19019/thunderfury">
+    </head><body>{links}<script>var lv_comments0 = [];</script></body></html>
+    """
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.entity_page_html", lambda self, t, i: html)
+
+    full = runner.invoke(app, ["entity-page", "item", "19019", "--max-links", "30"])
+    capped = runner.invoke(app, ["entity-page", "item", "19019", "--max-links", "10"])
+    assert full.exit_code == 0
+    assert capped.exit_code == 0
+
+    full_links = json.loads(full.stdout)["data"]["linked_entities"]
+    assert full_links == {"count": 30, "total": 30, "truncated": False, "items": full_links["items"]}
+    capped_links = json.loads(capped.stdout)["data"]["linked_entities"]
+    assert capped_links["count"] == len(capped_links["items"]) == 10
+    assert capped_links["total"] == 30
+    assert capped_links["truncated"] is True
+
+
+def test_compare_reports_the_links_each_entity_budget_cut_off(monkeypatch) -> None:
+    links = "\n".join(f'<a href="/item={400000 + index}">Item {index}</a>' for index in range(30))
+    html = f"<html><body>{links}<script>var lv_comments0 = [];</script></body></html>"
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.entity_page_html", lambda self, t, i: html)
+    monkeypatch.setattr(
+        "wowhead_cli.main.WowheadClient.tooltip",
+        lambda self, t, i, data_env=None: {"name": f"Item {i}"},
+    )
+
+    result = runner.invoke(
+        app,
+        ["compare", "item:1", "item:2", "--comment-sample", "0", "--max-links-per-entity", "10"],
+    )
+    assert result.exit_code == 0
+
+    for record in json.loads(result.stdout)["data"]["entities"]:
+        links_block = record["linked_entities"]
+        assert links_block["count"] == len(links_block["items"]) == 10
+        assert links_block["total"] == 30
+        assert links_block["truncated"] is True

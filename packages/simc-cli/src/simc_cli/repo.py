@@ -78,17 +78,6 @@ def clear_configured_repo_root() -> bool:
     return True
 
 
-def default_repo_root() -> Path:
-    configured = os.environ.get("SIMC_REPO_ROOT")
-    if configured:
-        return Path(configured).expanduser()
-    configured_root = load_configured_repo_root()
-    if configured_root is not None:
-        return configured_root
-    managed_root = managed_repo_root()
-    return managed_root
-
-
 def resolve_repo_root(root: str | Path | None = None) -> RepoResolution:
     config = config_path()
     configured_root = load_configured_repo_root()

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 from dataclasses import dataclass
 from typing import Any
@@ -26,6 +27,10 @@ def build_app() -> typer.Typer:
     @app.command("missing")
     def missing(ctx: typer.Context) -> None:
         fail(ctx, "not_found", "nothing here")
+
+    @app.command("need")
+    def need(ctx: typer.Context, target: str) -> None:
+        emit(ctx, {"target": target})
 
     return app
 
@@ -53,13 +58,17 @@ def test_compact_truncates_long_strings() -> None:
     assert len(json.loads(result.stdout)["long"]) == 50
 
 
-def test_profile_human_pretty_prints_and_bogus_profile_is_usage_error() -> None:
+def test_profile_human_pretty_prints() -> None:
     result = runner.invoke(build_app(), ["--profile", "human", "show"])
     assert result.exit_code == 0
     assert result.stdout.startswith("{\n")
-    bogus = runner.invoke(build_app(), ["--profile", "bogus", "show"])
-    assert bogus.exit_code == 2
-    assert "--profile" in bogus.stderr
+
+
+def test_fields_reports_a_missing_path_instead_of_returning_an_empty_object() -> None:
+    """``--fields nope`` used to print ``{}`` with exit 0, which reads as "no results"."""
+    result = runner.invoke(build_app(), ["--fields", "nope", "show"])
+    assert result.exit_code == 0
+    assert json.loads(result.stdout) == {"fields_missing": ["nope"]}
 
 
 def test_fail_uses_exit_code_mapping_and_emits_envelope_on_stderr() -> None:
@@ -166,14 +175,67 @@ def test_guarded_run_names_the_command_when_global_flags_precede_it(
     assert payload["command"] == "boom"
 
 
-def test_guarded_run_lets_usage_errors_and_typer_exit_through(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-    app = build_app()
-    monkeypatch.setattr(sys, "argv", ["dummy", "--profile", "bogus", "show"])
-    with pytest.raises(SystemExit) as usage:
-        guarded_run(app, provider="dummy")
-    assert usage.value.code == 2
-    monkeypatch.setattr(sys, "argv", ["dummy", "missing"])
+def _run_argv(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], argv: list[str]) -> tuple[int, str, str]:
+    """Drive a binary exactly as its entry point does, with colour forced on.
+
+    Rich styling used to split option names with ANSI escapes; the envelope this asserts on is
+    written by warcraft_core itself, so it must be identical whatever the terminal wants.
+    """
+    monkeypatch.setenv("FORCE_COLOR", "1")
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.setattr(sys, "argv", argv)
     with pytest.raises(SystemExit) as exit_info:
-        guarded_run(app, provider="dummy")
-    assert exit_info.value.code == 4
-    assert json.loads(capsys.readouterr().err.splitlines()[-1])["error"]["code"] == "not_found"
+        guarded_run(build_app(), provider="dummy")
+    captured = capsys.readouterr()
+    code = exit_info.value.code
+    assert isinstance(code, int)
+    return code, captured.out, captured.err
+
+
+@pytest.mark.parametrize(
+    ("argv", "expected_command", "expected_message"),
+    [
+        (["dummy", "--profile", "bogus", "show"], "show", "Invalid value for --profile: --profile must be one of: agent, human"),
+        (["dummy", "--bogus-flag", "show"], "show", "No such option: --bogus-flag"),
+        (["dummy", "nosuchcommand"], "nosuchcommand", "No such command 'nosuchcommand'."),
+        (["dummy", "need"], "need", "Missing argument 'target'."),
+        (["dummy"], "", "Missing command."),
+    ],
+    ids=["bad-option-value", "unknown-flag", "unknown-command", "missing-argument", "no-command"],
+)
+def test_guarded_run_renders_usage_errors_as_the_json_envelope(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    argv: list[str],
+    expected_command: str,
+    expected_message: str,
+) -> None:
+    """``command`` must name the subcommand even when the callback never ran: an option value is not one."""
+    exit_code, out, err = _run_argv(monkeypatch, capsys, argv)
+    assert exit_code == 2
+    assert out == ""
+    payload = json.loads(err)
+    assert payload["ok"] is False
+    assert payload["provider"] == "dummy"
+    assert payload["command"] == expected_command
+    assert payload["error"] == {"code": "invalid_argument", "message": expected_message}
+
+
+def test_guarded_run_keeps_help_as_human_text(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """``--help`` is for humans: it must stay rendered help on stdout, not an error envelope."""
+    exit_code, out, err = _run_argv(monkeypatch, capsys, ["dummy", "--help"])
+    assert exit_code == 0
+    assert err == ""
+    assert "Usage" in re.sub(r"\x1b\[[0-9;]*m", "", out)
+
+
+def test_guarded_run_propagates_the_exit_code_from_fail(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    exit_code, _, err = _run_argv(monkeypatch, capsys, ["dummy", "missing"])
+    assert exit_code == 4
+    assert json.loads(err)["error"]["code"] == "not_found"
+
+
+def test_guarded_run_exits_zero_on_success(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    exit_code, out, _ = _run_argv(monkeypatch, capsys, ["dummy", "show"])
+    assert exit_code == 0
+    assert json.loads(out)["a"] == {"b": 1}

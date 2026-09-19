@@ -40,6 +40,34 @@ envelope keys and are deprecated. Read `data`.
 Error codes and their exit codes: `network_error`/`timeout`/`upstream_error` exit 5, `not_found`
 exits 4, `auth_failed` exits 3, and the Method-specific input errors `invalid_guide_ref`,
 `unsupported_guide_surface`, `invalid_bundle`, `invalid_kind`, and `invalid_cache_config` exit 1.
+`invalid_guide_ref` means the argument was not a Method guide reference; a page that fetched but
+whose article container no longer matches fails with `parse_failed` (exit 1) instead of returning
+an empty article with `ok:true`.
+
+### Build references
+
+`build_references` carries explicit build evidence from the page, never a guess from the slug or
+title. Two reference types are emitted:
+
+| `reference_type` | Source on the page | `url` |
+| --- | --- | --- |
+| `wowhead_talent_calc_url` | an embedded Wowhead talent-calc link | the talent-calc URL |
+| `wow_talent_export` | a published WoW loadout import string (the talent blocks on `/talents` pages) | the import string itself, because the reference has no link |
+
+Both types set `build_code`, so `warcraft guide-builds-simc` collects either one and reports it
+under `summary.identify_success_count`.
+
+`wow_talent_export` rows leave `build_identity` unknown: the import string does not say which class
+and spec it belongs to. Decoding needs both, so `warcraft guide-builds-simc --decode` currently
+leaves `summary.decode_success_count` at 0 for these rows. To decode one, name the class and spec
+yourself: `simc decode-build --talents <build_code> --actor-class paladin --spec holy`.
+
+### Partial guide bundles
+
+`guide-full` and `guide-export` walk every navigation page. A page that cannot be fetched or parsed
+is skipped rather than failing the whole bundle, and it is reported in `data.failed_pages`
+(`{count, items: [{url, section_slug, error: {code, message}}]}`). Content from those pages is
+missing from the merged sections, entities, build references, and analysis surfaces.
 
 `method_cli.provider.PROVIDER` exposes the same `search`, `resolve`, and `doctor` surfaces in
 process, without Typer.
@@ -67,6 +95,7 @@ HTTP responses are cached through `warcraft_api.cache` under the `METHOD` prefix
 
 - `tests/test_method_cli.py`: parser behavior, command contracts, envelope conformance, transport failures
 - `tests/test_method_synthetic_fixtures.py`: hand-written HTML fixtures in `tests/fixtures/method/`, one per content family
+- `tests/test_method_captured_fixtures.py`: one captured real guide page (`captured_talents_page.html`), which pins the parser against production markup
 - `tests/test_method_live.py`: live contracts, run with `METHOD_LIVE_TESTS=1 pytest -q -m live tests/test_method_live.py`
 
 Design history and the original research notes are in

@@ -32,8 +32,10 @@ def test_search_returns_a_conforming_envelope_with_legacy_keys() -> None:
     assert envelope_violations(payload) == []
     assert payload["kind"] == "search_results"
     # Agents read the flat keys; they must survive alongside the envelope.
-    assert payload["count"] == 2
-    assert len(payload["results"]) == 1
+    assert payload["data"]["count"] == 1
+    assert payload["data"]["total_matches"] == 2
+    assert payload["data"]["truncated"] is True
+    assert len(payload["data"]["results"]) == 1
 
 
 def test_resolve_returns_a_conforming_envelope() -> None:

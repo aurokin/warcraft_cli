@@ -1,10 +1,28 @@
 from __future__ import annotations
 
+import re
+import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
 from simc_cli.repo import RepoPaths
+
+RIPGREP = "rg"
+
+
+class MissingRipgrepError(RuntimeError):
+    """ripgrep is not on PATH; the content-search fallbacks cannot run."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "ripgrep (rg) is required for simc content search and is not on PATH. "
+            "Install it with 'brew install ripgrep' or your package manager."
+        )
+
+
+def ripgrep_available() -> bool:
+    return shutil.which(RIPGREP) is not None
 
 
 @dataclass(slots=True)
@@ -12,6 +30,19 @@ class SearchHit:
     path: Path
     line_no: int
     text: str
+
+
+def word_bounded_pattern(action: str) -> str:
+    r"""Escape a user query and anchor it with ``\b`` only where a word boundary can exist.
+
+    ``\b`` matches between a word and a non-word character, so ``\bcast\(x\)\b`` can never match
+    ``cast(x)`` followed by a space: the query's own punctuation makes the trailing boundary
+    unsatisfiable. Anchoring is skipped on whichever end starts or ends with punctuation.
+    """
+    escaped = re.escape(action)
+    prefix = r"\b" if action[:1].isalnum() or action[:1] == "_" else ""
+    suffix = r"\b" if action[-1:].isalnum() or action[-1:] == "_" else ""
+    return f"{prefix}{escaped}{suffix}"
 
 
 def _fuzzy_glob(base: Path, needle: str, pattern: str = "*") -> list[Path]:
@@ -24,26 +55,36 @@ def _fuzzy_glob(base: Path, needle: str, pattern: str = "*") -> list[Path]:
     return sorted(matches)
 
 
-def _rg_files(needle: str, base: Path, pattern: str) -> list[Path]:
-    # Fixed argv, no shell: ripgrep is resolved from PATH and the needle is passed as a literal argument.
+def _rg(args: list[str]) -> str:
+    """Run ripgrep with a fixed argv (no shell), turning a missing binary into a typed error."""
+    if not ripgrep_available():
+        raise MissingRipgrepError
     proc = subprocess.run(  # noqa: S603
-        ["rg", "-l", "-i", needle, str(base), "-g", pattern],  # noqa: S607
+        [RIPGREP, *args],
         capture_output=True,
         text=True,
         check=False,
     )
-    return sorted(Path(line) for line in proc.stdout.splitlines() if line.strip())
+    # ripgrep exits 1 when nothing matched; anything above that is a real failure.
+    if proc.returncode > 1:
+        raise RuntimeError(f"ripgrep failed: {proc.stderr.strip() or proc.returncode}")
+    return proc.stdout
+
+
+def _rg_files(needle: str, base: Path, pattern: str) -> list[Path]:
+    if not base.exists():
+        return []
+    stdout = _rg(["-l", "-i", "--fixed-strings", needle, str(base), "-g", pattern])
+    return sorted(Path(line) for line in stdout.splitlines() if line.strip())
 
 
 def _run_rg(pattern: str, paths: list[Path]) -> list[SearchHit]:
-    proc = subprocess.run(  # noqa: S603
-        ["rg", "-n", "--no-heading", pattern, *[str(path) for path in paths if path.exists()]],  # noqa: S607
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    existing = [str(path) for path in paths if path.exists()]
+    if not existing:
+        return []
+    stdout = _rg(["-n", "--no-heading", pattern, *existing])
     hits: list[SearchHit] = []
-    for line in proc.stdout.splitlines():
+    for line in stdout.splitlines():
         file_name, line_no, text = line.split(":", 2)
         hits.append(SearchHit(path=Path(file_name), line_no=int(line_no), text=text))
     return hits
@@ -90,5 +131,5 @@ def find_action(paths: RepoPaths, action: str, wow_class: str | None = None) -> 
             search_roots["class_modules"] = class_modules
         if spell_dump:
             search_roots["spell_dump"] = spell_dump
-    pattern = rf"\b{action}\b"
+    pattern = word_bounded_pattern(action)
     return {name: _run_rg(pattern, roots) for name, roots in search_roots.items()}

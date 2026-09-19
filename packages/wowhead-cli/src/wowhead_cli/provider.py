@@ -22,7 +22,6 @@ from wowhead_cli.doctor import build_doctor_payload
 from wowhead_cli.expansion_profiles import (
     ExpansionProfile,
     detect_expansion_from_url,
-    expansion_url_policy_issues,
     resolve_expansion,
 )
 from wowhead_cli.ranking import (
@@ -117,6 +116,14 @@ def envelope(command: str, kind: str, data: dict[str, Any], *, query: Any = None
     return cast(Envelope, with_legacy_keys(base, legacy))
 
 
+def _validated_query(raw: str) -> str:
+    """Reject an empty or whitespace-only query locally instead of spending a request on it."""
+    query = raw.strip()
+    if not query:
+        raise ProviderError("invalid_query", "Query cannot be empty.")
+    return query
+
+
 def _suggestion_results(client: WowheadClient, search_query: str) -> list[Any]:
     with transport_errors():
         try:
@@ -132,25 +139,25 @@ def _suggestion_results(client: WowheadClient, search_query: str) -> list[Any]:
 def search(query: str, *, limit: int = 10, expansion: str | None = None, **options: Any) -> Envelope:
     """Rank Wowhead search suggestions for a free-text query or Wowhead URL."""
     del options
+    query = _validated_query(query)
     selection = select_expansion(expansion, url_hint=query)
     profile = selection.profile
     search_query = search_query_for_ranking(query)
     client = open_client(profile)
     results = _suggestion_results(client, search_query)
     normalized = normalize_search_results(results, query=query, expansion=profile)
-    listing_url = search_url(search_query, expansion=profile)
+    returned = normalized[:limit]
     data: dict[str, Any] = {
         "query": query,
         "search_query": search_query,
         "expansion": profile.key,
         "expansion_source": selection.source,
-        "search_url": listing_url,
-        "count": len(normalized),
-        "results": normalized[:limit],
+        "search_url": search_url(search_query, expansion=profile),
+        "count": len(returned),
+        "total_matches": len(normalized),
+        "truncated": len(normalized) > len(returned),
+        "results": returned,
     }
-    notes = expansion_url_policy_issues(listing_url, profile=profile)
-    if notes:
-        data["notes"] = notes
     return envelope("search", "search_results", data, query=query)
 
 
@@ -164,6 +171,7 @@ def resolve(
 ) -> Envelope:
     """Resolve a query to the single most likely Wowhead entity plus the follow-up command to run."""
     del options
+    target = _validated_query(target)
     selection = select_expansion(expansion)
     profile = selection.profile
     try:
@@ -176,9 +184,8 @@ def resolve(
     candidates = normalize_search_results(results, query=target, expansion=profile, entity_types=selected_entity_types)
     confidence = resolve_confidence(candidates, entity_types=selected_entity_types)
     top_candidate = candidates[0] if candidates else None
-    next_command = (
-        resolve_next_command(top_candidate, expansion=profile) if isinstance(top_candidate, dict) and confidence == "high" else None
-    )
+    returned = candidates[:limit]
+    next_command = resolve_next_command(top_candidate) if top_candidate is not None and confidence == "high" else None
     search_command = f"{command_prefix_for_expansion(profile)} search {shlex.quote(target)}"
     data: dict[str, Any] = {
         "query": target,
@@ -191,8 +198,10 @@ def resolve(
         "match": top_candidate,
         "next_command": next_command,
         "fallback_search_command": None if next_command is not None else search_command,
-        "count": len(candidates),
-        "candidates": candidates[:limit],
+        "count": len(returned),
+        "total_matches": len(candidates),
+        "truncated": len(candidates) > len(returned),
+        "candidates": returned,
     }
     return envelope("resolve", "resolve_match", data, query=target)
 

@@ -50,7 +50,8 @@ SUGGESTED_COMMAND: Final = "raidbots inspect-report <url-or-id>"
 
 # Raidbots needs no auth, and data.json redirects to a public GCS bucket that answers 403 (not 404)
 # for an object that does not exist or has expired — so a 403 here means "no such report", never
-# "bad credentials".
+# "bad credentials". Confirmed live: an unknown report id answers HTTP 403 from
+# storage.googleapis.com/simbot-reports/reports/<id>/data.json.
 _HTTP_STATUS_CODES: Final[dict[int, str]] = {400: "invalid_query", 403: "not_found", 404: "not_found", 429: "rate_limited"}
 
 
@@ -172,6 +173,8 @@ def inspect_report(reference: str, *, include_raw: bool = True) -> Envelope:
             report = parse_report(data, report_id=report_id)
         except httpx.HTTPError as exc:
             raise provider_error(exc) from exc
+        except ReportNotAvailable as exc:
+            raise ProviderError("not_found", str(exc)) from exc
         except ValueError as exc:
             # Covers invalid JSON and non-object bodies from report_data as well as parse failures.
             raise ProviderError("invalid_report", str(exc)) from exc

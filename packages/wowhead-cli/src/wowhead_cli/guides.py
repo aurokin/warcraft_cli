@@ -17,6 +17,7 @@ from wowhead_cli.entity_types import DEFAULT_HYDRATE_ENTITY_TYPES
 from wowhead_cli.expansion_profiles import ExpansionProfile
 from wowhead_cli.listing_filters import (
     collect_timeline_facets,
+    limited_result_block,
     normalize_text_filters,
     parse_date_bound,
     parse_iso8601_utc,
@@ -635,8 +636,7 @@ def guides_payload(
             "patch_max": filters.patch_max,
             "sort": filters.sort_by,
         },
-        "count": len(normalized_rows),
-        "results": normalized_rows[:limit],
+        **limited_result_block(normalized_rows, limit=limit),
         "facets": collect_timeline_facets(
             normalized_rows,
             fields={"authors": "author", "category_paths": "category_path"},

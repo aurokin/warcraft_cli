@@ -8,6 +8,8 @@ into ``main``.
 from __future__ import annotations
 
 import math
+import re
+from datetime import date
 from typing import Any
 
 from wowhead_cli.entity_types import RESOLVE_ENTITY_TYPES, SEARCH_TYPE_HINTS
@@ -134,6 +136,15 @@ def search_follow_up(candidate: dict[str, Any], *, query: str, expansion: Expans
             "recommended_command": recommended_command,
             "reason": reason,
             "alternatives": alternatives,
+        }
+
+    if entity_type == "news":
+        # `news-post` takes a URL, and Wowhead resolves the short /news=<id> form to the article.
+        return {
+            "recommended_surface": "news-post",
+            "recommended_command": f"{prefix} news-post {entity_url('news', entity_id, expansion=expansion)}",
+            "reason": "news_post_summary",
+            "alternatives": [],
         }
 
     if entity_type not in RESOLVE_ENTITY_TYPES:
@@ -289,6 +300,42 @@ def search_result_url(*, entity_type: str | None, entity_id: int | None, expansi
     return None
 
 
+STALE_GUIDE_REASON = "stale_guide"
+STALE_GUIDE_DAYS = 180
+
+_UPDATED_FOOTER_RE = re.compile(r"Updated:\s*(?P<year>\d{4})/(?P<month>\d{2})/(?P<day>\d{2})")
+
+
+def suggestion_updated_date(row: dict[str, Any]) -> date | None:
+    """Wowhead stamps guide suggestions with ``pinFooterText: "Updated: YYYY/MM/DD"``; read that date."""
+    match = _UPDATED_FOOTER_RE.search(str_field(row, "pinFooterText"))
+    if match is None:
+        return None
+    try:
+        return date(int(match["year"]), int(match["month"]), int(match["day"]))
+    except ValueError:
+        return None
+
+
+def mark_stale_guides(candidates: list[dict[str, Any]]) -> None:
+    """Flag guide candidates that trail the freshest guide in the same response by a long way.
+
+    Wowhead's suggestion list happily mixes current class guides with guides for retired
+    limited-time events, and nothing else in the payload tells them apart. Marking the laggards
+    keeps the freshness visible to the caller and stops `resolve` claiming high confidence in one.
+    """
+    guides = [row for row in candidates if row.get("entity_type") == "guide"]
+    updates = [row["metadata"]["updated"] for row in guides if row["metadata"].get("updated")]
+    if not updates:
+        return
+    newest = max(updates)
+    for row in guides:
+        updated = row["metadata"].get("updated")
+        if updated is None or (date.fromisoformat(newest) - date.fromisoformat(updated)).days <= STALE_GUIDE_DAYS:
+            continue
+        row["ranking"]["match_reasons"].append(STALE_GUIDE_REASON)
+
+
 def normalize_search_results(
     results: list[Any],
     *,
@@ -307,6 +354,7 @@ def normalize_search_results(
             continue
         entity_id = row.get("id")
         popularity = int_field(row, "popularity")
+        updated = suggestion_updated_date(row)
         search_score, match_reasons = search_result_score_and_reasons(
             row,
             query=query,
@@ -333,6 +381,7 @@ def normalize_search_results(
                 "quality": row.get("quality"),
                 "side": row.get("side"),
                 "display_name": row.get("displayName"),
+                "updated": updated.isoformat() if updated is not None else None,
             },
             "_sort": (-search_score, -popularity, index),
         }
@@ -343,6 +392,7 @@ def normalize_search_results(
     normalized.sort(key=lambda row: row["_sort"])
     for row in normalized:
         row.pop("_sort", None)
+    mark_stale_guides(normalized)
     return normalized
 
 
@@ -352,22 +402,13 @@ def command_prefix_for_expansion(expansion: ExpansionProfile) -> str:
     return f"wowhead --expansion {expansion.key}"
 
 
-def resolve_next_command(candidate: dict[str, Any], *, expansion: ExpansionProfile) -> str | None:
-    follow_up = candidate.get("follow_up") if isinstance(candidate, dict) else None
-    if isinstance(follow_up, dict):
-        command = follow_up.get("recommended_command")
-        if isinstance(command, str) and command:
-            return command
-    entity_type = candidate.get("entity_type")
-    entity_id = candidate.get("id")
-    if not isinstance(entity_type, str) or not isinstance(entity_id, int):
+def resolve_next_command(candidate: dict[str, Any]) -> str | None:
+    """The command `resolve` recommends, read off the follow-up block `normalize_search_results` attached."""
+    follow_up = candidate.get("follow_up")
+    if not isinstance(follow_up, dict):
         return None
-    prefix = command_prefix_for_expansion(expansion)
-    if entity_type == "guide":
-        return f"{prefix} guide {entity_id}"
-    if entity_type in RESOLVE_ENTITY_TYPES:
-        return f"{prefix} entity {entity_type} {entity_id}"
-    return None
+    command = follow_up.get("recommended_command")
+    return command if isinstance(command, str) and command else None
 
 
 def resolve_confidence(candidates: list[dict[str, Any]], *, entity_types: tuple[str, ...]) -> str:
@@ -378,12 +419,15 @@ def resolve_confidence(candidates: list[dict[str, Any]], *, entity_types: tuple[
     second_score = int(candidates[1].get("ranking", {}).get("score") or 0) if len(candidates) > 1 else 0
     margin = top_score - second_score
     reasons = set(top_ranking.get("match_reasons") or [])
-    if is_high_confidence_exact_match(reasons, margin=margin, second_score=second_score):
-        return "high"
-    if is_high_confidence_score(top_score, margin=margin):
-        return "high"
-    if is_filtered_high_confidence(entity_types, top_score=top_score, margin=margin):
-        return "high"
+    high = (
+        is_high_confidence_exact_match(reasons, margin=margin, second_score=second_score)
+        or is_high_confidence_score(top_score, margin=margin)
+        or is_filtered_high_confidence(entity_types, top_score=top_score, margin=margin)
+    )
+    if high:
+        # A guide the response itself shows to be far behind its siblings is never a confident
+        # answer, so `resolve` reports it as a candidate instead of recommending a command for it.
+        return "medium" if STALE_GUIDE_REASON in reasons else "high"
     if is_medium_confidence_score(top_score, margin=margin):
         return "medium"
     return "low"

@@ -23,3 +23,24 @@ PARSER_CANARIES: tuple[ParserCanary, ...] = (
     ParserCanary("wotlk-item", "wotlk", "item", 49623, "Shadowmourne"),
     ParserCanary("classic-item", "classic", "item", 19019, "Thunderfury (Classic Era page)"),
 )
+
+
+# The entity key `suggestion_entity_type_from_type_id` must derive for a row Wowhead labels with a
+# given `typeName`. Keyed by Wowhead's own label rather than by the numeric id, so renumbering an id
+# in entity_types.py fails these checks instead of being restated by them.
+SUGGESTION_TYPE_NAME_TO_ENTITY: dict[str, str] = {
+    "NPC": "npc",
+    "Object": "object",
+    "Item": "item",
+    "Quest": "quest",
+    "Spell": "spell",
+    "Zone": "zone",
+    "Faction": "faction",
+    "Hunter Pet": "pet",
+    "Achievement": "achievement",
+    "World Event": "event",
+    "Currency": "currency",
+    "Guide": "guide",
+    "Transmog Set": "transmog-set",
+    "News Post": "news",
+}

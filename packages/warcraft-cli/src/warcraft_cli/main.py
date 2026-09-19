@@ -26,7 +26,7 @@ from warcraft_core.cli import (
     emit,
     guarded_run,
 )
-from warcraft_core.exit_codes import EXIT_GENERIC, exit_code_for
+from warcraft_core.exit_codes import EXIT_GENERIC, EXIT_NETWORK, exit_code_for
 from warcraft_core.expansions import wowhead_path_prefixes
 from warcraft_core.identity import (
     build_reference_transport_packet_payload,
@@ -34,6 +34,7 @@ from warcraft_core.identity import (
     validate_talent_transport_packet,
 )
 from warcraft_core.output import DEFAULT_COMPACT_MAX_CHARS
+from warcraft_core.paths import data_root
 from warcraft_core.shapes import as_dict, as_list
 
 from warcraft_cli.cooldown_packet_flow import CooldownRequest, emit_cooldown_packet
@@ -51,6 +52,7 @@ from warcraft_cli.provider_contract import (
     compact_wrapper_candidate,
     decorate_resolve_payload,
     decorate_search_result,
+    provider_max_candidate_score,
     resolve_payload_sort_key,
     search_result_sort_key,
 )
@@ -69,6 +71,7 @@ from warcraft_cli.providers import (
     provider_resolve,
     provider_search,
     resolve_wrapper_expansion_key,
+    source_exit_code,
     surface_filtered_providers,
     wrapper_envelope,
 )
@@ -326,7 +329,8 @@ def _slugify_path_fragment(value: str) -> str:
 
 
 def _default_guide_compare_query_root(query: str) -> Path:
-    return Path.cwd() / "warcraft_guide_compare" / _slugify_path_fragment(query)
+    """Where exported bundles land without ``--out-root``: the XDG data dir, never the caller's CWD."""
+    return data_root() / "guide_compare" / _slugify_path_fragment(query)
 
 
 def _guide_compare_manifest_path(root: Path) -> Path:
@@ -818,6 +822,15 @@ def _count_simc_handoff_successes(build_rows: list[dict[str, Any]]) -> tuple[int
     return _success("identify"), _success("decode"), _success("describe")
 
 
+def _simc_handoff_status(*, returned_build_count: int, identify_success_count: int) -> str:
+    """Whether the simc leg of the handoff produced anything, as one field an agent can branch on."""
+    if returned_build_count == 0:
+        return "no_build_references"
+    if identify_success_count == 0:
+        return "all_handoffs_failed"
+    return "ok"
+
+
 def _handoff_citations(
     selected_rows: list[dict[str, Any]],
     bundle_inputs: list[tuple[Path, dict[str, Any]]],
@@ -897,6 +910,10 @@ def _guide_builds_simc_payload(
             "identify_success_count": identify_success_count,
             "decode_success_count": decode_success_count,
             "describe_success_count": describe_success_count,
+            "simc_handoff_status": _simc_handoff_status(
+                returned_build_count=len(build_rows),
+                identify_success_count=identify_success_count,
+            ),
         },
         "builds": build_rows,
     }
@@ -1668,6 +1685,91 @@ def _provider_outcome(payload: Any) -> dict[str, Any]:
     return {"ok": bool(payload.get("ok", True)), "error": error if isinstance(error, dict) else None}
 
 
+def _failed_provider_rows(providers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """One compact row per provider that did not answer, kept in the payload even under ``--brief``."""
+    rows: list[dict[str, Any]] = []
+    for provider_row in providers:
+        if provider_row.get("ok"):
+            continue
+        error = as_dict(provider_row.get("error"))
+        rows.append(
+            {
+                "provider": provider_row.get("provider"),
+                "code": error.get("code"),
+                "message": error.get("message"),
+            }
+        )
+    return rows
+
+
+def _fanout_failure_error(failed_rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Top-level error for a fanout where every included provider failed.
+
+    The code is the providers' shared failure code when they agree so the exit code the contract
+    derives from ``error.code`` stays true; a mixed set of failures degrades to ``upstream_error``.
+    """
+    codes = {row["code"] for row in failed_rows if isinstance(row.get("code"), str)}
+    code = codes.pop() if len(codes) == 1 else "upstream_error"
+    return {
+        "code": code,
+        "message": f"No provider answered: all {len(failed_rows)} included providers failed.",
+        "details": {"failed_providers": failed_rows},
+    }
+
+
+def _unresolved_next_steps(query: str, providers: list[dict[str, Any]], *, resolved: bool) -> dict[str, Any]:
+    """What an agent should do next when no provider resolved the query.
+
+    Providers that decline to resolve still report a best candidate and their own
+    ``fallback_search_command``; without these the wrapper's resolve is a dead end even when a
+    provider clearly found the thing.
+    """
+    if resolved:
+        return {"fallback_search_command": None, "fallback_search_commands": [], "best_unresolved_candidate": None}
+    fallbacks: list[dict[str, Any]] = []
+    candidates: list[tuple[str, dict[str, Any]]] = []
+    for provider_row in providers:
+        provider_payload = provider_row.get("payload")
+        provider_name = str(provider_row.get("provider") or "")
+        if not isinstance(provider_payload, dict):
+            continue
+        command = provider_payload.get("fallback_search_command")
+        if isinstance(command, str) and command.strip():
+            fallbacks.append({"provider": provider_name, "command": command})
+        if isinstance(provider_payload.get("match"), dict):
+            candidates.append((provider_name, decorate_resolve_payload(query, provider_name, provider_payload)))
+    candidates.sort(key=lambda row: resolve_payload_sort_key(row[0], row[1]))
+    best = compact_resolve_match(candidates[0][1]) if candidates else None
+    if best is not None:
+        best["provider"] = candidates[0][0]
+        best["resolved"] = False
+    return {
+        "fallback_search_command": fallbacks[0]["command"] if fallbacks else None,
+        "fallback_search_commands": fallbacks,
+        "best_unresolved_candidate": best,
+    }
+
+
+def _fanout_health(providers: list[dict[str, Any]], *, included_count: int) -> dict[str, Any]:
+    """Answered/failed counts plus the failure rows, so partial and total failure are never silent."""
+    failed_rows = _failed_provider_rows(providers)
+    return {
+        "answered_provider_count": included_count - len(failed_rows),
+        "failed_provider_count": len(failed_rows),
+        "failed_providers": failed_rows,
+    }
+
+
+def _emit_fanout(ctx: typer.Context, payload: dict[str, Any], *, included_count: int) -> None:
+    """Emit a search/resolve payload, failing with the providers' own error when none answered."""
+    failed_rows = payload["failed_providers"]
+    if included_count and len(failed_rows) == included_count:
+        error = _fanout_failure_error(failed_rows)
+        _emit(ctx, {**payload, "ok": False, "error": error}, err=True)
+        raise typer.Exit(exit_code_for(str(error["code"]), EXIT_NETWORK))
+    _emit(ctx, payload)
+
+
 def _raiderio_source(identity: dict[str, str], *, expansion: str | None) -> dict[str, Any]:
     result = _provider_payload_result(
         "raiderio",
@@ -1703,8 +1805,18 @@ def schema(ctx: typer.Context) -> None:
 def search(
     ctx: typer.Context,
     query: str = typer.Argument(..., help="Search across available providers."),
-    limit: int = typer.Option(5, "--limit", min=1, max=50, help="Maximum provider-local results to request."),
-    compact: bool = typer.Option(False, "--compact", help="Return a smaller wrapper payload with compact candidates."),
+    limit: int = typer.Option(
+        5,
+        "--limit",
+        min=1,
+        max=50,
+        help="Results to request from each provider, and the size of the merged result list.",
+    ),
+    brief: bool = typer.Option(
+        False,
+        "--brief",
+        help="Return a smaller wrapper payload: compact candidate rows and no per-provider payloads.",
+    ),
     ranking_debug: bool = typer.Option(
         False, "--ranking-debug", help="Include compact wrapper ranking summaries for the returned candidates."),
     expansion_debug: bool = typer.Option(
@@ -1739,24 +1851,28 @@ def search(
         }
         providers.append(provider_row)
         if isinstance(provider_payload, dict):
-            for row in provider_payload.get("results", []) or []:
-                if isinstance(row, dict):
-                    flattened.append(
-                        decorate_search_result(
-                            query,
-                            {
-                                "provider": registration.name,
-                                "provider_expansion": provider_expansion_support(
-                                    registration,
-                                    requested_expansion=requested_expansion,
-                                ),
-                                **row,
-                            },
-                        )
+            provider_results = [row for row in as_list(provider_payload.get("results")) if isinstance(row, dict)]
+            # Scores are normalized against this provider's own best row before the merge so a
+            # provider with an inflated local scale cannot own every slot in the merged list.
+            provider_max_score = provider_max_candidate_score(provider_results)
+            for row in provider_results:
+                flattened.append(
+                    decorate_search_result(
+                        query,
+                        {
+                            "provider": registration.name,
+                            "provider_expansion": provider_expansion_support(
+                                registration,
+                                requested_expansion=requested_expansion,
+                            ),
+                            **row,
+                        },
+                        provider_max_score=provider_max_score,
                     )
+                )
     flattened.sort(key=search_result_sort_key)
     top = flattened[:limit]
-    if compact:
+    if brief:
         top = [compact_wrapper_candidate(row) for row in top]
     payload: dict[str, Any] = {
         "query": query,
@@ -1767,17 +1883,17 @@ def search(
         "excluded_providers": excluded_providers,
         "included_provider_count": len(included_registrations),
         "excluded_provider_count": len(excluded_providers),
-        "providers": [] if compact else providers,
+        **_fanout_health(providers, included_count=len(included_registrations)),
+        "providers": [] if brief else providers,
         "count": len(flattened),
+        "truncated": len(flattened) > len(top),
         "results": top,
     }
     if ranking_debug:
         payload["ranking_debug"] = [compact_wrapper_candidate(row) for row in flattened[:limit]]
     if expansion_debug:
         payload["expansion_debug"] = expansion_support_snapshot(requested_expansion=requested_expansion)
-    _emit(ctx,
-        payload,
-    )
+    _emit_fanout(ctx, payload, included_count=len(included_registrations))
 
 
 @app.command("resolve")
@@ -1785,7 +1901,11 @@ def resolve(
     ctx: typer.Context,
     query: str = typer.Argument(..., help="Resolve a query across available providers."),
     limit: int = typer.Option(5, "--limit", min=1, max=50, help="Maximum provider-local candidates to request."),
-    compact: bool = typer.Option(False, "--compact", help="Return a smaller wrapper payload with a compact match summary."),
+    brief: bool = typer.Option(
+        False,
+        "--brief",
+        help="Return a smaller wrapper payload: a compact match summary and no per-provider payloads.",
+    ),
     ranking_debug: bool = typer.Option(False, "--ranking-debug", help="Include compact wrapper ranking summaries for resolved candidates."),
     expansion_debug: bool = typer.Option(
         False,
@@ -1826,7 +1946,7 @@ def resolve(
     resolved_candidates.sort(key=lambda row: resolve_payload_sort_key(row[0], row[1]))
     best_provider = resolved_candidates[0][0] if resolved_candidates else None
     best_payload = resolved_candidates[0][1] if resolved_candidates else None
-    match = compact_resolve_match(best_payload) if compact else (best_payload.get("match") if isinstance(best_payload, dict) else None)
+    match = compact_resolve_match(best_payload) if brief else (best_payload.get("match") if isinstance(best_payload, dict) else None)
     payload: dict[str, Any] = {
         "query": query,
         "provider_count": len(list_providers()),
@@ -1844,16 +1964,16 @@ def resolve(
         "match": match,
         "next_command": best_payload.get("next_command") if isinstance(best_payload, dict) else None,
         "confidence": best_payload.get("confidence") if isinstance(best_payload, dict) else None,
-        "providers": [] if compact else providers,
+        **_fanout_health(providers, included_count=len(included_registrations)),
+        **_unresolved_next_steps(query, providers, resolved=best_payload is not None),
+        "providers": [] if brief else providers,
     }
     if ranking_debug:
         payload["ranking_debug"] = [compact_resolve_match(row[1])
                                     for row in resolved_candidates[:limit] if compact_resolve_match(row[1]) is not None]
     if expansion_debug:
         payload["expansion_debug"] = expansion_support_snapshot(requested_expansion=requested_expansion)
-    _emit(ctx,
-        payload,
-    )
+    _emit_fanout(ctx, payload, included_count=len(included_registrations))
 
 
 @app.command("guild")
@@ -1863,23 +1983,18 @@ def guild(
     realm: str = typer.Argument(..., help="Realm title or slug."),
     name: str = typer.Argument(..., help="Guild name."),
 ) -> None:
-    """Return one guild identity's Raider.IO snapshot: identity, active raid, roster preview, citations."""
+    """Return one guild identity's Raider.IO snapshot: identity, every raid's progression and ranks, roster preview, citations.
+
+    Raider.IO orders its progression and rankings rows by raid slug and reports no raid start/end
+    window, so the snapshot names no "active" raid; cross-reference `warcraft raiderio raids` for
+    the tier that is currently running.
+    """
     identity = normalized_identity(region, realm, name)
     source = _raiderio_source(identity, expansion=_requested_expansion(ctx))
     payload = guild_merge_payload(identity, raiderio=source)
     _emit(ctx, payload, err=not payload.get("ok"))
     if not payload.get("ok"):
-        raise typer.Exit(_source_exit_code(source))
-
-
-def _source_exit_code(source_result: Mapping[str, Any]) -> int:
-    """Exit with the failing source's own code (blocked -> 5, not_found -> 4) instead of a flat 1."""
-    code = source_result.get("exit_code")
-    if isinstance(code, int) and code != 0:
-        return code
-    error = source_result.get("error")
-    error_code = error.get("code") if isinstance(error, dict) else None
-    return exit_code_for(error_code) if isinstance(error_code, str) else EXIT_GENERIC
+        raise typer.Exit(source_exit_code(source))
 
 
 @app.command("guild-ranks")
@@ -1908,7 +2023,7 @@ def guild_ranks(
             },
             err=True,
         )
-        raise typer.Exit(_source_exit_code(source_result))
+        raise typer.Exit(source_exit_code(source_result))
     raids = guild_rank_rows(payload)
     _emit(ctx,
         {
@@ -1933,9 +2048,16 @@ def _fail_actor_profile(
     ctx: typer.Context,
     *,
     query: dict[str, Any],
-    error: dict[str, Any],
+    code: str,
+    message: str,
+    details: dict[str, Any] | None = None,
     sources: dict[str, Any] | None = None,
+    exit_code: int = EXIT_GENERIC,
 ) -> NoReturn:
+    """Emit the crosswalk failure envelope. Structured context goes under ``error.details``."""
+    error: dict[str, Any] = {"code": code, "message": message}
+    if details:
+        error["details"] = details
     payload: dict[str, Any] = {
         "ok": False,
         "provider": "warcraft",
@@ -1946,7 +2068,7 @@ def _fail_actor_profile(
     if sources is not None:
         payload["sources"] = sources
     _emit(ctx, payload, err=True)
-    raise typer.Exit(1)
+    raise typer.Exit(exit_code)
 
 
 def _actor_profile_log_payload(
@@ -1969,11 +2091,10 @@ def _actor_profile_log_payload(
         _fail_actor_profile(
             ctx,
             query=query,
-            error={
-                "code": "warcraftlogs_lookup_failed",
-                "message": "Warcraft Logs report lookup failed.",
-                "source": log_result.get("error"),
-            },
+            code="warcraftlogs_lookup_failed",
+            message="Warcraft Logs report lookup failed.",
+            details={"source": log_result.get("error"), "provider": "warcraftlogs"},
+            exit_code=source_exit_code(log_result),
         )
     return as_dict(log_result.get("payload"))
 
@@ -1992,23 +2113,21 @@ def _actor_profile_actor(
         _fail_actor_profile(
             ctx,
             query=query,
-            error={
-                "code": "actor_not_found",
-                "message": f"No actor named {name!r} in report {code!r}.",
-                "available_actors": report_actor_names(log_payload),
-            },
+            code="actor_not_found",
+            message=f"No actor named {name!r} in report {code!r}.",
+            details={"available_actors": report_actor_names(log_payload)},
         )
     targets = distinct_actor_targets(matches)
     if len(targets) > 1:
         _fail_actor_profile(
             ctx,
             query=query,
-            error={
-                "code": "ambiguous_actor",
-                "message": (
-                    f"Report {code!r} has {len(targets)} characters named {name!r} on "
-                    "different realms/regions; cannot pick one safely."
-                ),
+            code="ambiguous_actor",
+            message=(
+                f"Report {code!r} has {len(targets)} characters named {name!r} on "
+                "different realms/regions; cannot pick one safely."
+            ),
+            details={
                 "candidates": targets,
                 "hint": (
                     "Narrow to a single fight with --fight-id, or query the realm directly "
@@ -2020,14 +2139,12 @@ def _actor_profile_actor(
         _fail_actor_profile(
             ctx,
             query=query,
-            error={
-                "code": "ambiguous_actor_spec",
-                "message": (
-                    f"Actor {name!r} appears in report {code!r} with more than one class/spec "
-                    "across fights; cannot pick one to reconcile."
-                ),
-                "hint": "Narrow to a single fight with --fight-id so the actor resolves to one spec.",
-            },
+            code="ambiguous_actor_spec",
+            message=(
+                f"Actor {name!r} appears in report {code!r} with more than one class/spec "
+                "across fights; cannot pick one to reconcile."
+            ),
+            details={"hint": "Narrow to a single fight with --fight-id so the actor resolves to one spec."},
         )
     return matches[0]
 
@@ -2052,7 +2169,9 @@ def _actor_profile_identity(
         _fail_actor_profile(
             ctx,
             query=query,
-            error={"code": f"actor_{missing}_unknown", "missing_field": missing, "hint": hint},
+            code=f"actor_{missing}_unknown",
+            message=f"The report actor has no {missing}, so the Raider.IO profile lookup cannot proceed.",
+            details={"missing_field": missing, "hint": hint},
             sources={"warcraftlogs": log_side},
         )
     identity: dict[str, Any] = lookup["identity"]
@@ -2077,11 +2196,14 @@ def _actor_profile_character(
         _fail_actor_profile(
             ctx,
             query=query,
-            error={"code": "profile_lookup_failed", "source": profile_result.get("error")},
+            code="profile_lookup_failed",
+            message="Raider.IO character profile lookup failed for the report actor.",
+            details={"source": profile_result.get("error"), "provider": "raiderio"},
             sources={
                 "warcraftlogs": log_side,
                 "raiderio": {"status": "error", "error": profile_result.get("error")},
             },
+            exit_code=source_exit_code(profile_result),
         )
     profile_payload = as_dict(profile_result.get("payload"))
     return as_dict(profile_payload.get("character"))
@@ -2600,7 +2722,11 @@ def guide_compare_query(
         dir_okay=True,
         writable=True,
         resolve_path=True,
-        help="Directory root where orchestrated guide bundles should be written.",
+        help=(
+            "Directory root where orchestrated guide bundles should be written. "
+            "Defaults to <XDG data dir>/warcraft/guide_compare/<query-slug>; nothing is written to "
+            "the current directory."
+        ),
     ),
     limit: int = typer.Option(
         5,
@@ -2821,7 +2947,7 @@ def _talent_describe_payload(ctx: typer.Context, options: TalentDescribeOptions)
             resolved.get("upgrade_result"),
             stable_packet_path=stable_packet_path,
         ),
-        "packet_written_path": written_packet_path,
+        "written_packet_path": written_packet_path,
         "describe_result": _normalize_simc_transport_packet_path(
             describe_result,
             stable_packet_path=stable_packet_path,
@@ -2960,6 +3086,24 @@ def guide_builds_simc(
         limit=limit,
         expansion=requested_expansion,
     )
+    summary = payload["summary"]
+    if summary["simc_handoff_status"] == "all_handoffs_failed":
+        _emit(ctx,
+            {
+                **payload,
+                "ok": False,
+                "error": {
+                    "code": "simc_handoff_failed",
+                    "message": (
+                        f"simc identify-build failed for all {summary['returned_build_count']} build references; "
+                        "the packet carries no usable simc output. Check `warcraft simc doctor`."
+                    ),
+                    "details": {"summary": summary},
+                },
+            },
+            err=True,
+        )
+        raise typer.Exit(EXIT_GENERIC)
     _emit(ctx, payload)
 
 

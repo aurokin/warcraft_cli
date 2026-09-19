@@ -12,13 +12,14 @@ from curseforge_cli.auth import CurseForgeAuthConfig, load_curseforge_auth_confi
 API_HOST = "https://api.curseforge.com"
 WOW_GAME_ID = 1
 
-# Host, x-api-key auth, and the three endpoints this client uses (slug search, mod lookup, and file
-# changelog) are confirmed against live CurseForge traffic, so payloads carry
-# provenance.verified=true. Slug search needs an API key with search access; keys without it get an
-# actionable auth_failed from _resolve_mod that points at the numeric-mod-id path.
+# The one statement of the verification posture: `curseforge --help` (and docs/reference/
+# curseforge.md, generated from it), doctor's notes, and every payload's
+# provenance.verification_note all print this, so they cannot contradict provenance.verified.
+# Slug search needs an API key with search access; keys without it get an actionable auth_failed
+# from _resolve_mod that points at the numeric-mod-id path.
 _VERIFICATION_NOTE = (
     "Host, x-api-key auth, slug search, mod lookup, and file changelog are confirmed against live "
-    "CurseForge traffic (run CURSEFORGE_LIVE_TESTS=1 with a CURSEFORGE_API_KEY to re-check)."
+    "CurseForge traffic, so addon payloads report provenance.verified=true."
 )
 
 

@@ -40,13 +40,20 @@ _TOKEN_SKEW_SECONDS = 60
 # payloads keep provenance.verified=false.
 VERIFIED_REGIONS = frozenset({"us", "eu", "kr", "tw"})
 
+# The one statement of the verification posture. `blizzard --help` (and docs/reference/blizzard.md,
+# generated from it), doctor's notes, and every payload's provenance.verification_note all print
+# these strings, so the region list is derived from VERIFIED_REGIONS instead of re-typed in each
+# place and left to drift out of sync with what provenance.verified actually reports.
 _UNVERIFIED_CN_NOTE = (
     "CN routing (gateway.battlenet.com.cn + oauth.battlenet.com.cn) follows documented Blizzard API "
-    "conventions and is unconfirmed; those hosts are unreachable from outside China."
+    "conventions and is unconfirmed; those hosts are unreachable from outside China, so CN payloads "
+    "report provenance.verified=false."
 )
 _VERIFIED_NOTE = (
     "Host, OAuth token URL, and namespace strings are confirmed against live Blizzard endpoints for "
-    "us/eu/kr/tw (retail and classic Game Data, retail Profile). " + _UNVERIFIED_CN_NOTE
+    f"{'/'.join(region for region in SUPPORTED_REGIONS if region in VERIFIED_REGIONS)} (retail and "
+    "classic Game Data, retail Profile), whose payloads report provenance.verified=true. "
+    + _UNVERIFIED_CN_NOTE
 )
 
 
@@ -101,7 +108,7 @@ def resolve_game_version(*, game_version: str | None, classic: bool) -> str:
     if resolved not in SUPPORTED_GAME_VERSIONS:
         raise BlizzardClientError(
             "unsupported_game_version",
-            f"Blizzard routing supports game versions {SUPPORTED_GAME_VERSIONS}; got {resolved!r}. "
+            f"--game-version must be one of: {', '.join(SUPPORTED_GAME_VERSIONS)}; got {resolved!r}. "
             "Classic-era / Season of Discovery namespaces are deferred pending a live spike.",
         )
     return resolved
@@ -119,7 +126,7 @@ def resolve_routing(
     if region not in SUPPORTED_REGIONS:
         raise BlizzardClientError(
             "unsupported_region",
-            f"Blizzard API supports regions {SUPPORTED_REGIONS}; got {region!r}.",
+            f"--region must be one of: {', '.join(SUPPORTED_REGIONS)}; got {region!r}.",
         )
     resolved_version = resolve_game_version(game_version=game_version, classic=classic)
     if resolved_version == "classic" and namespace_class == "profile":
@@ -162,10 +169,6 @@ class BlizzardClient:
     @property
     def configured(self) -> bool:
         return bool(self._client_id and self._client_secret)
-
-    @property
-    def default_region(self) -> str:
-        return self._default_region
 
     def close(self) -> None:
         if self._http_client is not None:

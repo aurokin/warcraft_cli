@@ -1,0 +1,511 @@
+{
+ "search": "argent dawn",
+ "results": [
+  {
+   "type": 3,
+   "id": 12846,
+   "name": "Argent Dawn Commission",
+   "typeName": "Item",
+   "icon": "inv_jewelry_talisman_07",
+   "quality": 1,
+   "pinTitle": "Item",
+   "pinFooterText": "Trinket",
+   "pinDescription": "This trinket white goes in the \"Trinket\" slot.",
+   "pinBreadcrumb": [
+    "Armor",
+    "Trinket"
+   ],
+   "popularity": 0
+  },
+  {
+   "type": 3,
+   "id": 206372,
+   "name": "Cracked Argent Dawn Commission",
+   "typeName": "Item",
+   "icon": "inv_jewelry_ring_66",
+   "quality": 1,
+   "pinTitle": "Item",
+   "pinFooterText": "Miscellaneous Item",
+   "pinDescription": "It is looted.",
+   "pinBreadcrumb": [
+    "Miscellaneous",
+    "Miscellaneous Item"
+   ],
+   "popularity": 1
+  },
+  {
+   "type": 6,
+   "id": 417391,
+   "name": "Empowered Argent Dawn Commission",
+   "typeName": "Spell",
+   "icon": "inv_jewelry_talisman_07",
+   "pinTitle": "Spell",
+   "pinDescription": "Allows for the acquisition of Scourgestones on behalf of the Argent Dawn. In the Uncategorized Spells category.",
+   "pinBreadcrumb": [
+    "Uncategorized"
+   ],
+   "popularity": 2
+  },
+  {
+   "type": 2,
+   "id": 403567,
+   "name": "Cracked Argent Dawn Commission",
+   "typeName": "Object",
+   "pinTitle": "Object",
+   "pinBreadcrumb": [
+    "Container"
+   ],
+   "popularity": 3
+  },
+  {
+   "type": 3,
+   "id": 224567,
+   "name": "Commendation of the Argent Dawn",
+   "typeName": "Item",
+   "icon": "inv_jewelry_talisman_08",
+   "quality": 7,
+   "pinTitle": "Item",
+   "pinFooterText": "Consumable",
+   "pinDescription": "An heirloom collection item. It is sold by NPCs.",
+   "pinBreadcrumb": [
+    "Consumable"
+   ],
+   "popularity": 4
+  },
+  {
+   "type": 6,
+   "id": 17670,
+   "name": "Argent Dawn Commission",
+   "typeName": "Spell",
+   "icon": "inv_jewelry_talisman_07",
+   "pinTitle": "Spell",
+   "pinDescription": "In the Item Effects category.",
+   "pinBreadcrumb": [
+    "Item Effect"
+   ],
+   "popularity": 5
+  },
+  {
+   "type": 1,
+   "id": 16435,
+   "name": "Argent Dawn Cleric",
+   "typeName": "NPC",
+   "displayName": "Argent Dawn Cleric",
+   "pinTitle": "NPC",
+   "pinDescription": "The location of this NPC is unknown.",
+   "pinBreadcrumb": [
+    "Normal"
+   ],
+   "popularity": 6
+  },
+  {
+   "type": 6,
+   "id": 413253,
+   "name": "Repair Argent Dawn Commission",
+   "typeName": "Spell",
+   "icon": "inv_jewelry_talisman_07",
+   "pinTitle": "Spell",
+   "pinDescription": "Repair the insignia with a Righteous Orb and 4 Truesilver Bars. In the Item Effects category.",
+   "pinBreadcrumb": [
+    "Item Effect"
+   ],
+   "popularity": 7
+  },
+  {
+   "type": 6,
+   "id": 453220,
+   "name": "Commendation of the Argent Dawn",
+   "typeName": "Spell",
+   "icon": "inv_jewelry_talisman_08",
+   "pinTitle": "Spell",
+   "pinDescription": "Increases your Argent Dawn reputation by 500. In the Item Effects category.",
+   "pinBreadcrumb": [
+    "Item Effect"
+   ],
+   "popularity": 8
+  },
+  {
+   "type": 6,
+   "id": 81778,
+   "name": "Trial of the Crypt: Set Argent Dawn Faction To Min Revered",
+   "typeName": "Spell",
+   "icon": "trade_engineering",
+   "pinTitle": "Spell",
+   "pinDescription": "In the Uncategorized Spells category.",
+   "pinBreadcrumb": [
+    "Uncategorized"
+   ],
+   "popularity": 9
+  }
+ ],
+ "categories": {
+  "decor": [],
+  "guides": [],
+  "news": [
+   {
+    "type": 162,
+    "id": 378762,
+    "name": "Frost Resistance Gear & More Argent Dawn Reputation Rewards Now Available - Classic Anniversary",
+    "typeName": "News Post",
+    "pinImageUrl": "https://wow.zamimg.com/uploads/blog/images/50801-frost-resistance-gear-and-more-argent-dawn-reputation-rewards-now-available.jpg?maxHeight=80",
+    "newsTypeId": 8,
+    "newsTypeName": "Classic",
+    "pinTitle": "News",
+    "pinFooterText": "Posted 2025/10/07 by Lokthen",
+    "pinDescription": "The Argent Dawn is fighting back the Scourge, and you can earn new rewards by helping them right now! You can collect [item=22523] and [item=22524] and turn them in for powerful rewards. If you're a crafter you can also learn new Frost Resistance recipes, like [item=22686] and [item=22703]."
+   },
+   {
+    "type": 162,
+    "id": 378559,
+    "name": "How To Get Attuned to Naxxramas - Argent Dawn Reputation, Materials, & Gold Cost",
+    "typeName": "News Post",
+    "pinImageUrl": "https://wow.zamimg.com/uploads/blog/images/50534-how-to-get-attuned-to-naxxramas-argent-dawn-reputation-materials-and-gold-cost.jpg?maxHeight=80",
+    "newsTypeId": 8,
+    "newsTypeName": "Classic",
+    "pinTitle": "News",
+    "pinFooterText": "Posted 2025/09/20 by Ease",
+    "pinDescription": "Classic Anniversary Phase 6 launches on October 2nd; here's how to start the attunement process for the upcoming Naxxramas raid!"
+   },
+   {
+    "type": 162,
+    "id": 368252,
+    "name": "Argent Dawn Reputation in Season of Discovery Phase 7",
+    "typeName": "News Post",
+    "pinImageUrl": "https://wow.zamimg.com/uploads/blog/images/46935-argent-dawn-reputation-in-season-of-discovery-phase-7.jpg?maxHeight=80",
+    "newsTypeId": 23,
+    "newsTypeName": "Seasonal",
+    "pinTitle": "News",
+    "pinFooterText": "Posted 2025/02/01 by Passion",
+    "pinDescription": "Season of Discovery Phase 7 is here, and while we can't quite get into Naxxramas yet, we can start preparing by earning Reputation with the Argent Dawn!"
+   },
+   {
+    "type": 162,
+    "id": 363772,
+    "name": "Seal of Dawn Trinkets in Season of Discovery - Rank System with Argent Dawn for Buffs in Naxxramas",
+    "typeName": "News Post",
+    "pinImageUrl": "https://wow.zamimg.com/uploads/blog/images/46692-seal-of-dawn-trinkets-in-season-of-discovery-rank-system-with-argent-dawn-for.jpg?maxHeight=80",
+    "newsTypeId": 23,
+    "newsTypeName": "Seasonal",
+    "pinTitle": "News",
+    "pinFooterText": "Posted 2025/01/16 by Anshlun",
+    "pinDescription": "Blizzard has updated the Phase 7 PTR for Season of Discovery with new Seal of Dawn trinkets updates. They've expanded on the system reported on [url=https://www.wowhead.com/classic/news/new-argent-dawn-reputation-trinkets-season-of-discovery-phase-7-ptr-354959]the previous PTR update[/url]. The system now has Ranks, giving players tremendous power with each step."
+   },
+   {
+    "type": 162,
+    "id": 354959,
+    "name": "New Argent Dawn Reputation Trinkets - Season of Discovery Phase 7 PTR",
+    "typeName": "News Post",
+    "pinImageUrl": "https://wow.zamimg.com/uploads/blog/images/46246-new-argent-dawn-reputation-trinkets-season-of-discovery-phase-7-ptr.jpg?maxHeight=80",
+    "newsTypeId": 8,
+    "newsTypeName": "Classic",
+    "pinTitle": "News",
+    "pinFooterText": "Posted 2024/12/18 by Jezartroz",
+    "pinDescription": "Datamining for the Season of Discovery Phase 7 PTR is in full swing, and we've found some interesting new trinkets - it looks like the Argent Dawn reputation will be gaining a few more rewards!"
+   },
+   {
+    "type": 162,
+    "id": 350667,
+    "name": "New Argent Dawn Reputation Item Datamined - Season of Discovery Phase 6 PTR",
+    "typeName": "News Post",
+    "pinImageUrl": "https://wow.zamimg.com/uploads/blog/images/45715-new-argent-dawn-reputation-item-datamined-season-of-discovery-phase-6-ptr.jpg?maxHeight=80",
+    "newsTypeId": 8,
+    "newsTypeName": "Classic",
+    "pinTitle": "News",
+    "pinFooterText": "Posted 2024/11/15 by Spongy",
+    "pinDescription": "As we approach Season of Discovery Phase 6, we have datamined a new item of interest for players looking to increase their Argent Dawn reputation."
+   },
+   {
+    "type": 162,
+    "id": 345109,
+    "name": "All Costs to Upgrade Argent Dawn Reputation Epics in Season of Discovery Phase 4",
+    "typeName": "News Post",
+    "pinImageUrl": "https://wow.zamimg.com/uploads/blog/images/42707-all-costs-to-upgrade-argent-dawn-reputation-epics-in-season-of-discovery-phase-4.jpg?maxHeight=80",
+    "newsTypeId": 8,
+    "newsTypeName": "Classic",
+    "pinTitle": "News",
+    "pinFooterText": "Posted 2024/07/13 by Jezartroz",
+    "pinDescription": "Here are all the upgrade costs for the new Argent Dawn reputation epics in Season of Discovery Phase 4!"
+   },
+   {
+    "type": 162,
+    "id": 318847,
+    "name": "How To Get Attuned to Wow Classic Naxxramas - Argent Dawn Rep, Materials, Gold",
+    "typeName": "News Post",
+    "pinImageUrl": "https://wow.zamimg.com/uploads/blog/images/21170-how-to-get-attuned-to-wow-classic-naxxramas-argent-dawn-rep-materials-gold.jpg?maxHeight=80",
+    "newsTypeId": 8,
+    "newsTypeName": "Classic",
+    "pinTitle": "News",
+    "pinFooterText": "Posted 2020/10/30 by perculia",
+    "pinDescription": "The release date has been announced for WoW Classic Naxxramas--December 3rd. You'll be able to get attuned to Naxx with the content unlock, but there are things you can do in advance to prepare for the attunement."
+   },
+   {
+    "type": 162,
+    "id": 295080,
+    "name": "Most Classic Timbermaw Hold and Argent Dawn Reputation Rewards Not Coming in Phase 1",
+    "typeName": "News Post",
+    "pinImageUrl": "https://wow.zamimg.com/uploads/blog/images/17169-most-classic-timbermaw-hold-and-argent-dawn-reputation-rewards-not-coming-in.jpg?maxHeight=80",
+    "newsTypeId": 8,
+    "newsTypeName": "Classic",
+    "pinTitle": "News",
+    "pinFooterText": "Posted 2019/09/13 by perculia",
+    "pinDescription": "Most Argent Dawn and Timbermaw Hold recipes are not available in Phase 1 of Classic WoW. As players have hit level 60 and worked on grinding reputation, we've been able to confirm which recipes are available from the quartermasters."
+   }
+  ],
+  "tools": [],
+  "database": [
+   {
+    "type": 8,
+    "id": 529,
+    "name": "Argent Dawn",
+    "typeName": "Faction",
+    "pinTitle": "Faction",
+    "pinDescription": "The Argent Dawn were an organization focused on protecting Azeroth from the threats that seek to destroy it, such as the Burning Legion and the Scourge. Since the Shattering of Azeroth, the Argent Dawn have been merged by Tirion Fordring with his Knights of the Silver Hand, forming a new faction, the Argent Crusade. As a result, all previous means of gaining reputation with the faction have been removed."
+   },
+   {
+    "type": 10,
+    "id": 18372,
+    "name": "Wards of the Dread Citadel",
+    "typeName": "Achievement",
+    "icon": "inv_jewelry_talisman_12",
+    "pinTitle": "Achievement",
+    "pinFooterText": "Points: 10",
+    "pinDescription": "Empower your Argent Dawn Commission.",
+    "pinBreadcrumb": [
+     "Exploration",
+     "Eastern Kingdoms"
+    ]
+   },
+   {
+    "type": 3,
+    "id": 12844,
+    "name": "Argent Dawn Valor Token",
+    "typeName": "Item",
+    "icon": "inv_jewelry_talisman_08",
+    "quality": 2,
+    "pinTitle": "Item",
+    "pinDescription": "Argent Dawn Valor Token is a quest item. It is a quest reward.",
+    "pinBreadcrumb": [
+     "Quest"
+    ]
+   },
+   {
+    "type": 3,
+    "id": 12846,
+    "name": "Argent Dawn Commission",
+    "typeName": "Item",
+    "icon": "inv_jewelry_talisman_07",
+    "quality": 1,
+    "pinTitle": "Item",
+    "pinFooterText": "Trinket",
+    "pinDescription": "This trinket white goes in the \"Trinket\" slot.",
+    "pinBreadcrumb": [
+     "Armor",
+     "Trinket"
+    ]
+   },
+   {
+    "type": 3,
+    "id": 22999,
+    "name": "Tabard of the Argent Dawn",
+    "typeName": "Item",
+    "icon": "inv_shirt_guildtabard_01",
+    "quality": 2,
+    "pinTitle": "Item",
+    "pinFooterText": "Tabard",
+    "pinDescription": "This green tabard of item level 31 goes in the \"Tabard\" slot. It is sold by NPCs.",
+    "pinBreadcrumb": [
+     "Armor",
+     "Tabard"
+    ]
+   },
+   {
+    "type": 10,
+    "id": 946,
+    "name": "The Argent Dawn",
+    "typeName": "Achievement",
+    "icon": "inv_jewelry_talisman_07",
+    "pinTitle": "Achievement",
+    "pinFooterText": "Points: 15",
+    "pinDescription": "Earn Exalted status with the Argent Dawn.",
+    "pinBreadcrumb": [
+     "Reputation",
+     "Classic"
+    ]
+   },
+   {
+    "type": 3,
+    "id": 206372,
+    "name": "Cracked Argent Dawn Commission",
+    "typeName": "Item",
+    "icon": "inv_jewelry_ring_66",
+    "quality": 1,
+    "pinTitle": "Item",
+    "pinFooterText": "Miscellaneous Item",
+    "pinDescription": "It is looted.",
+    "pinBreadcrumb": [
+     "Miscellaneous",
+     "Miscellaneous Item"
+    ]
+   },
+   {
+    "type": 1,
+    "id": 49856,
+    "name": "Lord Raymond George",
+    "typeName": "NPC",
+    "displayName": "Lord Raymond George",
+    "pinTitle": "NPC",
+    "pinDescription": "Lord Raymond George is a level 15 - 30 Elite NPC. The location of this NPC is unknown.",
+    "pinBreadcrumb": [
+     "Elite"
+    ]
+   },
+   {
+    "type": 10,
+    "id": 945,
+    "name": "The Argent Champion",
+    "typeName": "Achievement",
+    "icon": "spell_holy_holyguidance",
+    "pinTitle": "Achievement",
+    "pinFooterText": "Points: 25",
+    "pinDescription": "Earn Exalted status with the Argent Dawn and the Argent Crusade.",
+    "pinBreadcrumb": [
+     "Reputation"
+    ]
+   },
+   {
+    "type": 1,
+    "id": 28386,
+    "name": "Argent Dawn Prisoner",
+    "typeName": "NPC",
+    "displayName": "Argent Dawn Prisoner",
+    "pinTitle": "NPC",
+    "pinDescription": "The location of this NPC is unknown.",
+    "pinBreadcrumb": [
+     "Normal"
+    ]
+   },
+   {
+    "type": 1,
+    "id": 10856,
+    "name": "Argent Quartermaster Hasana",
+    "typeName": "NPC",
+    "displayName": "Argent Quartermaster Hasana",
+    "pinTitle": "NPC",
+    "pinDescription": "Argent Quartermaster Hasana is a level 30 NPC. The location of this NPC is unknown.",
+    "pinBreadcrumb": [
+     "Normal"
+    ]
+   },
+   {
+    "type": 10,
+    "id": 2116,
+    "name": "Tabard of the Argent Dawn",
+    "typeName": "Achievement",
+    "icon": "inv_shirt_guildtabard_01",
+    "pinTitle": "Achievement",
+    "pinFooterText": "Points: 0",
+    "pinDescription": "Obtained a Tabard of the Argent Dawn from the Scourge Invasion event.",
+    "pinBreadcrumb": [
+     "Feats of Strength",
+     "Events"
+    ]
+   },
+   {
+    "type": 1,
+    "id": 16228,
+    "name": "Argent Dawn Infantry",
+    "typeName": "NPC",
+    "displayName": "Argent Dawn Infantry",
+    "pinTitle": "NPC",
+    "pinDescription": "The location of this NPC is unknown.",
+    "pinBreadcrumb": [
+     "Normal"
+    ]
+   },
+   {
+    "type": 1,
+    "id": 16384,
+    "name": "Argent Dawn Initiate",
+    "typeName": "NPC",
+    "displayName": "Argent Dawn Initiate",
+    "pinTitle": "NPC",
+    "pinDescription": "The location of this NPC is unknown.",
+    "pinBreadcrumb": [
+     "Normal"
+    ]
+   },
+   {
+    "type": 6,
+    "id": 417391,
+    "name": "Empowered Argent Dawn Commission",
+    "typeName": "Spell",
+    "icon": "inv_jewelry_talisman_07",
+    "pinTitle": "Spell",
+    "pinDescription": "Allows for the acquisition of Scourgestones on behalf of the Argent Dawn. In the Uncategorized Spells category.",
+    "pinBreadcrumb": [
+     "Uncategorized"
+    ]
+   },
+   {
+    "type": 2,
+    "id": 403567,
+    "name": "Cracked Argent Dawn Commission",
+    "typeName": "Object",
+    "pinTitle": "Object",
+    "pinBreadcrumb": [
+     "Container"
+    ]
+   },
+   {
+    "type": 1,
+    "id": 92863,
+    "name": "Argent Dawnbringer",
+    "typeName": "NPC",
+    "displayName": "Argent Dawnbringer",
+    "pinTitle": "NPC",
+    "pinDescription": "The location of this NPC is unknown.",
+    "pinBreadcrumb": [
+     "Normal"
+    ]
+   },
+   {
+    "type": 1,
+    "id": 16478,
+    "name": "Lieutenant Orrin",
+    "typeName": "NPC",
+    "displayName": "Lieutenant Orrin",
+    "pinTitle": "NPC",
+    "pinDescription": "The location of this NPC is unknown.",
+    "pinBreadcrumb": [
+     "Normal"
+    ]
+   },
+   {
+    "type": 1,
+    "id": 45707,
+    "name": "Lord Raymond George",
+    "typeName": "NPC",
+    "displayName": "Lord Raymond George",
+    "pinTitle": "NPC",
+    "pinDescription": "Lord Raymond George is a level 30 Elite NPC. The location of this NPC is unknown.",
+    "pinBreadcrumb": [
+     "Elite"
+    ]
+   },
+   {
+    "type": 3,
+    "id": 224567,
+    "name": "Commendation of the Argent Dawn",
+    "typeName": "Item",
+    "icon": "inv_jewelry_talisman_08",
+    "quality": 7,
+    "pinTitle": "Item",
+    "pinFooterText": "Consumable",
+    "pinDescription": "An heirloom collection item. It is sold by NPCs.",
+    "pinBreadcrumb": [
+     "Consumable"
+    ]
+   }
+  ]
+ }
+}

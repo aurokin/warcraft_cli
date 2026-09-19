@@ -46,6 +46,38 @@ def test_compare_rejects_mixed_expansion_urls(monkeypatch) -> None:
     assert result.exit_code != 0
 
 
+def test_compare_routes_off_a_url_in_any_argument_position(monkeypatch) -> None:
+    """A bare `<type>:<id>` ref first must not strip the expansion a later URL names."""
+    calls: list[str] = []
+
+    def fake_tooltip(self, entity_type: str, entity_id: int, data_env=None):  # noqa: ANN001, ANN202
+        calls.append(f"{self.expansion.key}:{entity_type}:{entity_id}")
+        return {"name": f"{entity_type} {entity_id}"}
+
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.tooltip", fake_tooltip)
+    monkeypatch.setattr(
+        "wowhead_cli.main._fetch_entity_page",
+        lambda *args, **kwargs: ("<html></html>", {"canonical_url": "https://example.test", "title": "T"}),
+    )
+    result = runner.invoke(
+        app,
+        [
+            "compare",
+            "item:19019",
+            "https://www.wowhead.com/classic/item=19351",
+            "--comment-sample",
+            "0",
+            "--max-links-per-entity",
+            "1",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert payload["data"]["expansion"] == "classic"
+    assert calls == ["classic:item:19019", "classic:item:19351"]
+
+
+
 def test_search_auto_detects_expansion_from_entity_url(monkeypatch) -> None:
     monkeypatch.setattr(
         "wowhead_cli.wowhead_client.WowheadClient.search_suggestions",

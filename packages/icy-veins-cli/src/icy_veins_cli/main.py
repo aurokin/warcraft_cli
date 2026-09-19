@@ -98,20 +98,21 @@ def guide_query(
     ),
     query: str = typer.Argument(..., help="Query text to match against the exported article bundle."),
     limit: int = typer.Option(5, "--limit", min=1, max=50, help="Maximum matches to return per kind."),
-    kind: list[str] | None = typer.Option(
-        None,
+    kind: list[str] = typer.Option(
+        [],
         "--kind",
         help=(
-            "Kinds to search. Repeat for multiple values. "
-            "Defaults to sections,navigation,linked_entities,build_references,analysis_surfaces."
+            "Kinds to search. Repeat or pass comma-separated values from: "
+            "sections, navigation, linked_entities, build_references, analysis_surfaces."
         ),
     ),
     section_title: str | None = typer.Option(None, "--section-title", help="Restrict section matches to a title substring."),
 ) -> None:
     """Search a previously exported guide bundle without touching the network."""
+    kinds = [item.strip() for raw in kind for item in raw.split(",") if item.strip()]
     _emit_surface(
         ctx,
-        lambda: provider.guide_query(bundle, query, limit=limit, kinds=kind, section_title=section_title),
+        lambda: provider.guide_query(bundle, query, limit=limit, kinds=kinds, section_title=section_title),
     )
 
 

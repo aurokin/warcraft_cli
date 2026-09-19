@@ -20,7 +20,12 @@ from wowhead_cli.page_parser import (
     normalize_comments,
     sort_comments,
 )
-from wowhead_cli.ranking import SOURCE_KIND_PRIORITY, link_source_kinds, preview_type_rank
+from wowhead_cli.ranking import (
+    SOURCE_KIND_PRIORITY,
+    command_prefix_for_expansion,
+    link_source_kinds,
+    preview_type_rank,
+)
 from wowhead_cli.wowhead_client import entity_url
 
 LOW_SIGNAL_LINK_NAMES = frozenset(
@@ -203,8 +208,12 @@ def dedupe_links(
     *,
     entity_type: str,
     entity_id: int,
-    max_links: int,
 ) -> list[dict[str, Any]]:
+    """Merge duplicate link records across the whole input, so no later source is cut off early.
+
+    Truncation belongs to the caller (see ``truncated_link_block``): stopping here would drop
+    records that only appear late in the list and would hide the real total from the payload.
+    """
     deduped: list[dict[str, Any]] = []
     seen_index: dict[tuple[str, int], int] = {}
     for record in links:
@@ -222,9 +231,18 @@ def dedupe_links(
             continue
         seen_index[key] = len(deduped)
         deduped.append(_normalize_link_record(record))
-        if len(deduped) >= max_links:
-            break
     return deduped
+
+
+def truncated_link_block(deduped: list[dict[str, Any]], *, max_links: int) -> dict[str, Any]:
+    """Cut a deduped link list down to ``max_links`` and say so in the payload rather than silently."""
+    items = deduped[:max_links]
+    return {
+        "count": len(items),
+        "total": len(deduped),
+        "truncated": len(deduped) > len(items),
+        "items": items,
+    }
 
 
 def _summarize_linked_entity(record: dict[str, Any]) -> dict[str, Any]:
@@ -237,9 +255,13 @@ def _summarize_linked_entity(record: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def entity_page_fetch_more_command(entity_type: str, entity_id: int, link_count: int) -> str:
+def entity_page_fetch_more_command(
+    entity_type: str, entity_id: int, link_count: int, *, expansion: ExpansionProfile
+) -> str:
+    """The `entity-page` command that returns the full link list, routed to the active expansion."""
     max_links = min(max(link_count, 200), 2000)
-    return f"wowhead entity-page {entity_type} {entity_id} --max-links {max_links}"
+    prefix = command_prefix_for_expansion(expansion)
+    return f"{prefix} entity-page {entity_type} {entity_id} --max-links {max_links}"
 
 
 def build_linked_entity_preview(
@@ -264,12 +286,7 @@ def build_linked_entity_preview(
             "more_available": False,
             "fetch_more_command": render_fetch_more(0),
         }
-    deduped = dedupe_links(
-        links,
-        entity_type=entity_type,
-        entity_id=entity_id,
-        max_links=max(len(links), 1),
-    )
+    deduped = dedupe_links(links, entity_type=entity_type, entity_id=entity_id)
     preview_items = _select_preview_records(deduped, source_entity_type=entity_type, limit=preview_limit)
     counts_by_type: dict[str, int] = {}
     for row in deduped:
@@ -359,6 +376,7 @@ def entity_linked_entities_payload(
     requested_entity_type: str,
     requested_entity_id: int,
     linked_entity_preview_limit: int,
+    expansion: ExpansionProfile,
 ) -> dict[str, Any] | None:
     if html is None or linked_entity_preview_limit <= 0:
         return None
@@ -367,7 +385,9 @@ def entity_linked_entities_payload(
         entity_type=page_entity_type,
         entity_id=page_entity_id,
         preview_limit=linked_entity_preview_limit,
-        fetch_more_command_builder=lambda count: entity_page_fetch_more_command(requested_entity_type, requested_entity_id, count),
+        fetch_more_command_builder=lambda count: entity_page_fetch_more_command(
+            requested_entity_type, requested_entity_id, count, expansion=expansion
+        ),
     )
 
 
@@ -379,12 +399,12 @@ def comparison_entity_record(
     canonical_url: str,
     tooltip: dict[str, Any],
     metadata: dict[str, str | None],
-    deduped_links: list[dict[str, Any]],
+    linked_entities: dict[str, Any],
     raw_comments: list[dict[str, Any]],
     sampled_comments: list[dict[str, Any]],
 ) -> tuple[dict[str, Any], set[tuple[str, int]]]:
     link_set: set[tuple[str, int]] = set()
-    for row in deduped_links:
+    for row in linked_entities["items"]:
         link_type = row.get("entity_type")
         link_id = row.get("id")
         if isinstance(link_type, str) and isinstance(link_id, int):
@@ -404,10 +424,7 @@ def comparison_entity_record(
                 "title": metadata.get("title"),
                 "description": metadata.get("description"),
             },
-            "linked_entities": {
-                "count": len(deduped_links),
-                "items": deduped_links,
-            },
+            "linked_entities": linked_entities,
             "comments": {
                 "count": len(raw_comments),
                 "top": sampled_comments,

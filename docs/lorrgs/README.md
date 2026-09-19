@@ -1,6 +1,7 @@
 # Lorrgs CLI
 
-**Tier: experimental.** Lorrgs is a thin, no-auth public-API provider; it works, but it is a narrow surface — check `lorrgs doctor` before building a workflow on it.
+**Tier: supported.** Lorrgs is a thin, no-auth public-API provider with a narrow surface — check
+`lorrgs doctor` before building a workflow on it.
 
 `lorrgs` reads the public Lorrgs API (`https://api2.lorrgs.io/api/*`) and returns raw Lorrgs JSON with
 provenance. Lorrgs renders Warcraft Logs-derived cooldown timelines for top parses by spec and boss plus
@@ -58,8 +59,35 @@ agents written against the pre-envelope shape; those duplicated keys are depreca
 
 Failures write the envelope to stderr and exit with the shared codes from
 [docs/foundation/ERROR_CONTRACT.md](../foundation/ERROR_CONTRACT.md): 1 generic (including an
-unparseable report reference or a missing `--fight`), 2 usage (bad flags or a Lorrgs 422), 3 auth (Lorrgs
-401/403), 4 not found (Lorrgs 404), 5 network, timeout, rate limit, or other upstream failure.
+unparseable report reference or a missing `--fight`), 2 usage (bad flags or a Lorrgs 422), 4 not found
+(Lorrgs 404, and Lorrgs 401/403 — it takes no credentials, so a refusal means the report is private or
+not loaded, never an auth problem), 5 network, timeout, rate limit, or other upstream failure. No Lorrgs
+command exits 3.
+
+## How search and resolve rank
+
+`search` ranks spec/boss candidates. `resolve` promotes the top one when two things hold: it accounts
+for every query word Lorrgs recognised, and no equally well matched candidate of the same kind names a
+different spec or encounter. There is no minimum strength — a query that matched only partially still
+resolves if it is unrivalled, and says so with `confidence: "medium"` and `match.ranking.match_level`.
+
+A word Lorrgs recognises that the top candidate ignores blocks the handoff: `fire mage paladin` leaves
+`paladin` in `unmatched_terms`, so it returns `resolved: false` rather than answering the narrower
+Fire Mage question. Every row tied for the best score is emitted, so a query that names a spec Lorrgs
+has twice (`frost` is Mage and Death Knight) or an encounter short name it has twice (`salhadaar` is
+Fallen-King and Nexus-King) comes back with `resolved: false`, `confidence: "none"`,
+`next_command: null`, and every tied candidate in `results` — narrow the query or pick a slug.
+
+A tie between *different* kinds is a preference, not ambiguity, and it is fixed: a bare encounter name
+(`chimaerus`) resolves to `comp-ranking`, because the ranking is the useful surface and the `boss`
+metadata row scored the same only because it was built from the same match.
+
+`--limit` only trims what is printed: `resolve` judges ambiguity over every candidate, and its payload
+carries `count` plus `truncated` so a caller can tell that rivals were cut from `results`.
+
+A report reference resolves to `lorrgs report-overview <code>` at `confidence: "medium"` with a
+`caveat`: the reference parsed exactly, but nothing verified that Lorrgs will serve it (Lorrgs refuses
+reports it has not loaded and reports Warcraft Logs keeps private).
 
 ## Examples
 

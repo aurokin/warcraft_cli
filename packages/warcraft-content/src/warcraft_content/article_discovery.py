@@ -116,6 +116,11 @@ def article_resolve_payload(
 
 
 def merge_article_linked_entities(pages: list[dict[str, Any]], *, page_key: str = "guide") -> list[dict[str, Any]]:
+    """Fold per-page linked entities into one row per entity, keeping every key the pages carried.
+
+    Provider-specific keys such as ``ability_identity`` survive the merge, so ``guide-full`` and
+    ``guide-export`` describe an entity exactly as the single-page ``guide`` surface does.
+    """
     merged: dict[tuple[str, str], dict[str, Any]] = {}
     for page in pages:
         page_url = page[page_key]["page_url"]
@@ -123,16 +128,11 @@ def merge_article_linked_entities(pages: list[dict[str, Any]], *, page_key: str 
             key = (str(row["type"]), str(row["id"]))
             record = merged.get(key)
             if record is None:
-                merged[key] = {
-                    "type": row["type"],
-                    "id": row["id"],
-                    "name": row.get("name"),
-                    "url": row["url"],
-                    "source_urls": [page_url],
-                }
+                merged[key] = {"name": None, **{k: v for k, v in row.items() if k != "source_urls"}, "source_urls": [page_url]}
                 continue
-            if not record.get("name") and row.get("name"):
-                record["name"] = row["name"]
+            for field_name, value in row.items():
+                if field_name != "source_urls" and value and not record.get(field_name):
+                    record[field_name] = value
             if page_url not in record["source_urls"]:
                 record["source_urls"].append(page_url)
     return sorted(merged.values(), key=lambda row: (str(row["type"]), str(row["id"])))

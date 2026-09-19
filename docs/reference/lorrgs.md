@@ -14,7 +14,7 @@ Pass these before the subcommand: `lorrgs --pretty <command> ...`.
 | `--compact` | boolean | false | Truncate long string fields to reduce payload size. |
 | `--fields` | str (repeatable) |  | Return only selected fields (dot paths). Repeat or pass comma-separated values. |
 | `--fields-strict` | boolean | false | Fail when a requested --fields dot-path is missing from the payload. |
-| `--profile` | str |  | Output profile preset: agent (default compact JSON), human (pretty JSON), debug (pretty JSON + diagnostics). |
+| `--profile` | str |  | Output profile preset: agent (default compact JSON) or human (pretty JSON). |
 | `--compact-max-chars` | int range | 280 | Maximum string length before --compact truncation adds an ellipsis. |
 
 ## lorrgs doctor
@@ -51,7 +51,7 @@ Search Lorrgs by explicit URL/ref or by spec/boss terms.
 
 ## lorrgs resolve
 
-Resolve a Lorrgs query conservatively.
+Resolve a Lorrgs query conservatively: an ambiguous query resolves to nothing, not a guess.
 
 **Arguments**
 
@@ -63,7 +63,7 @@ Resolve a Lorrgs query conservatively.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--limit` | int range | 5 | Maximum candidates to inspect. |
+| `--limit` | int range | 5 | Maximum candidates to list; ambiguity is judged over all of them. |
 
 ## lorrgs spec
 

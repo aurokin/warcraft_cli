@@ -19,6 +19,7 @@ from warcraft_core.analytics import (
     numeric_distribution,
     numeric_summary,
 )
+from warcraft_core.provider import ProviderError
 from warcraft_core.shapes import as_dict, as_list
 
 from raiderio_cli.client import RaiderIOClient
@@ -267,8 +268,12 @@ def _run_roster(run: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _metric_meets_bounds(value: Any, *, minimum: float | None, maximum: float | None) -> bool:
-    if not isinstance(value, (int, float)):
+    if minimum is None and maximum is None:
         return True
+    if not isinstance(value, (int, float)):
+        # A bound was asked for and this run has no metric to compare, so it cannot be claimed to be
+        # inside the requested range; the exclusion is reported in `filtering.excluded_run_count`.
+        return False
     numeric_value = float(value)
     if minimum is not None and numeric_value < minimum:
         return False
@@ -591,10 +596,35 @@ def freshness_payload(meta: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def runs_page_provenance(payload: dict[str, Any], *, cache_ttl_seconds: int) -> dict[str, Any]:
+    """``freshness`` and ``citations`` for the single-page ``mythic-plus-runs`` read.
+
+    The sampled siblings build theirs from sampling meta; this read has none, so the read time and
+    the leaderboard URL Raider.IO echoes stand in. Without it the envelope's provenance is empty.
+
+    ``sampled_at`` carries the same meaning as in the sampled siblings -- when this command read the
+    response -- because a cache hit can be up to ``cache_ttl_seconds`` older than that upstream.
+    """
+    leaderboard_url = payload.get("leaderboard_url")
+    return {
+        "freshness": {"sampled_at": datetime.now(UTC).isoformat(), "cache_ttl_seconds": cache_ttl_seconds},
+        "citations": {
+            "leaderboard_urls": [leaderboard_url] if isinstance(leaderboard_url, str) and leaderboard_url else [],
+        },
+    }
+
+
 def citations_payload(meta: dict[str, Any]) -> dict[str, Any]:
     return {
         "leaderboard_urls": meta["leaderboard_urls"],
     }
+
+
+def validated_metric(metric: str, allowed: tuple[str, ...]) -> str:
+    """Return ``metric`` when the command supports it, so the error message cannot drift from help."""
+    if metric not in allowed:
+        raise ProviderError("invalid_query", f"--metric must be one of: {', '.join(allowed)}")
+    return metric
 
 
 def _run_distribution_values(metric: str, runs: list[dict[str, Any]]) -> tuple[list[int | float] | list[str], str, bool] | None:

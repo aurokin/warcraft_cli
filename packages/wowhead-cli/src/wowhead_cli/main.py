@@ -59,6 +59,7 @@ from wowhead_cli.entities import (
     entity_page_needs_fetch,
     restore_cached_normalization_version,
     truncate_text,
+    truncated_link_block,
 )
 from wowhead_cli.entity_types import (
     DEFAULT_HYDRATE_ENTITY_TYPES,
@@ -96,9 +97,11 @@ from wowhead_cli.listing_filters import (
     absolute_wowhead_url,
     clean_htmlish_text,
     collect_timeline_facets,
+    limited_result_block,
     normalize_text_filters,
     parse_date_bound,
     parse_iso8601_utc,
+    parse_listing_timestamp,
     text_filter_match,
 )
 from wowhead_cli.normalization import attach_entity_normalization, attach_entity_page_normalization
@@ -122,6 +125,7 @@ from wowhead_cli.page_parser import (
 )
 from wowhead_cli.provider import cache_settings_payload
 from wowhead_cli.ranking import (
+    command_prefix_for_expansion,
     score_text_match,
 )
 from wowhead_cli.wowhead_client import (
@@ -1088,6 +1092,7 @@ def _build_entity_payload(
             requested_entity_type=entity_type,
             requested_entity_id=entity_id,
             linked_entity_preview_limit=linked_entity_preview_limit,
+            expansion=cfg.expansion,
         ),
         comments_payload=comments_payload,
     )
@@ -1116,15 +1121,16 @@ def _load_or_build_cached_entity_payload(
     include_all_comments: bool,
     linked_entity_preview_limit: int,
 ) -> tuple[dict[str, Any], str]:
-    cached_payload = client.get_cached_entity_response(
-        requested_type=entity_type,
-        requested_id=entity_id,
+    cached_payload = _cached_entity_payload(
+        client,
+        entity_type=entity_type,
+        entity_id=entity_id,
         data_env=data_env,
         include_comments=include_comments,
         include_all_comments=include_all_comments,
         linked_entity_preview_limit=linked_entity_preview_limit,
     )
-    if isinstance(cached_payload, dict):
+    if cached_payload is not None:
         return cached_payload, "entity_cache"
     return (
         _build_entity_payload(
@@ -1182,21 +1188,24 @@ def _collect_guide_linked_entities(
     html: str,
     canonical_url: str,
     guide_id: int | None,
-    max_links: int,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    """Return the guide's deduped href links, its raw gatherer records, and the merge of both.
+
+    Nothing is cut short here: gatherer records enrich (or add to) the href links no matter how
+    many links the page carries, and callers truncate the merged list afterwards so the payload can
+    report what the limit dropped.
+    """
     guide_entity_id = guide_id or 0
+    gatherer_entities = extract_gatherer_entities(html, source_url=canonical_url)
     href_entities = dedupe_links(
         extract_linked_entities_from_href(html, source_url=canonical_url),
         entity_type="guide",
         entity_id=guide_entity_id,
-        max_links=max_links,
     )
-    gatherer_entities = extract_gatherer_entities(html, source_url=canonical_url)
     merged_entities = dedupe_links(
         href_entities + gatherer_entities,
         entity_type="guide",
         entity_id=guide_entity_id,
-        max_links=max_links,
     )
     return href_entities, gatherer_entities, merged_entities
 
@@ -1280,12 +1289,12 @@ def _build_guide_full_payload(
         include_replies=include_replies,
     )
 
-    href_entities, gatherer_entities, linked_entities = _collect_guide_linked_entities(
+    href_entities, gatherer_entities, merged_entities = _collect_guide_linked_entities(
         html=html,
         canonical_url=canonical_url,
         guide_id=guide_id,
-        max_links=max_links,
     )
+    linked_entities_block = truncated_link_block(merged_entities, max_links=max_links)
 
     body = _guide_body_block(extract_markup_by_target(html, target="guide-body"))
     navigation = _guide_navigation_block(
@@ -1316,12 +1325,11 @@ def _build_guide_full_payload(
         "body": body,
         "navigation": navigation,
         "linked_entities": {
-            "count": len(linked_entities),
-            "items": linked_entities,
+            **linked_entities_block,
             "source_counts": {
                 "href": len(href_entities),
                 "gatherer": len(gatherer_entities),
-                "merged": len(linked_entities),
+                "merged": linked_entities_block["total"],
             },
         },
         "gatherer_entities": {
@@ -1401,6 +1409,66 @@ def _timeline_result_matches(
     return score > 0, score
 
 
+@dataclass(slots=True)
+class _TimelineScanState:
+    """Rows a listing scan kept, plus how many of the scanned timestamps it could read.
+
+    A row whose timestamp cannot be parsed is excluded from a date window, so the counts travel
+    into the payload's ``scan`` block: a silently empty ``--date-from`` result is exactly the
+    failure mode Wowhead's rendered timestamps caused before.
+    """
+
+    results: list[dict[str, Any]] = field(default_factory=list)
+    parsed_timestamps: int = 0
+    unparsed_timestamps: int = 0
+
+
+def _scan_timeline_page(
+    rows: list[dict[str, Any]],
+    *,
+    state: _TimelineScanState,
+    normalize_row: Callable[[dict[str, Any]], dict[str, Any] | None],
+    query: str | None,
+    date_from: datetime | None,
+    date_to: datetime | None,
+) -> bool:
+    """Filter one listing page into ``state``; report whether it ran past the ``--date-from`` bound."""
+    reached_older_than_window = False
+    for raw_row in rows:
+        normalized_row = normalize_row(raw_row)
+        if normalized_row is None:
+            continue
+        posted_at = parse_iso8601_utc(normalized_row.get("posted_at"))
+        if posted_at is None:
+            state.unparsed_timestamps += 1
+        else:
+            state.parsed_timestamps += 1
+            if date_from is not None and posted_at < date_from:
+                reached_older_than_window = True
+                continue
+        matched, score = _timeline_result_matches(
+            query=query,
+            values=[
+                normalized_row.get("title"),
+                normalized_row.get("preview"),
+                normalized_row.get("body_preview"),
+                normalized_row.get("author"),
+                normalized_row.get("topic"),
+                normalized_row.get("type_name"),
+                normalized_row.get("forum_area"),
+                normalized_row.get("forum"),
+            ],
+            posted_at=posted_at,
+            date_from=date_from,
+            date_to=date_to,
+        )
+        if not matched:
+            continue
+        normalized_row["match_score"] = score
+        state.results.append(normalized_row)
+    return reached_older_than_window
+
+
 def _collect_timeline_pages(
     *,
     ctx: typer.Context,
@@ -1418,7 +1486,7 @@ def _collect_timeline_pages(
     if pages <= 0:
         fail(ctx, "invalid_argument", "--pages must be >= 1.")
 
-    results: list[dict[str, Any]] = []
+    state = _TimelineScanState()
     total_pages: int | None = None
     pages_scanned = 0
     stop_reason: str | None = None
@@ -1443,36 +1511,14 @@ def _collect_timeline_pages(
             stop_reason = "empty_page"
             break
 
-        reached_older_than_window = False
-        for raw_row in rows:
-            normalized_row = normalize_row(raw_row)
-            if normalized_row is None:
-                continue
-            posted_at = parse_iso8601_utc(normalized_row.get("posted"))
-            if date_from is not None and posted_at is not None and posted_at < date_from:
-                reached_older_than_window = True
-                continue
-            matched, score = _timeline_result_matches(
-                query=query,
-                values=[
-                    normalized_row.get("title"),
-                    normalized_row.get("preview"),
-                    normalized_row.get("body_preview"),
-                    normalized_row.get("author"),
-                    normalized_row.get("topic"),
-                    normalized_row.get("type_name"),
-                    normalized_row.get("forum_area"),
-                    normalized_row.get("forum"),
-                ],
-                posted_at=posted_at,
-                date_from=date_from,
-                date_to=date_to,
-            )
-            if not matched:
-                continue
-            normalized_row["match_score"] = score
-            results.append(normalized_row)
-
+        reached_older_than_window = _scan_timeline_page(
+            rows,
+            state=state,
+            normalize_row=normalize_row,
+            query=query,
+            date_from=date_from,
+            date_to=date_to,
+        )
         if reached_older_than_window:
             stop_reason = "date_from_reached"
             break
@@ -1480,11 +1526,20 @@ def _collect_timeline_pages(
             stop_reason = "last_page_reached"
             break
 
+    if (date_from is not None or date_to is not None) and state.parsed_timestamps == 0 and state.unparsed_timestamps:
+        fail(
+            ctx,
+            "parse_error",
+            f"None of the {state.unparsed_timestamps} scanned Wowhead rows carried a timestamp this "
+            "CLI can read, so --date-from/--date-to cannot be applied.",
+        )
+
     return {
-        "results": results,
+        "results": state.results,
         "pages_scanned": pages_scanned,
         "total_pages": total_pages,
         "stop_reason": stop_reason,
+        "unparsed_timestamps": state.unparsed_timestamps,
     }
 
 
@@ -1521,10 +1576,13 @@ def _normalize_news_row(row: dict[str, Any]) -> dict[str, Any] | None:
         return None
     absolute_url = urljoin(WOWHEAD_BASE_URL, post_url)
     preview = clean_htmlish_text(row.get("preview"))
+    posted = row.get("postedFull") if isinstance(row.get("postedFull"), str) else row.get("posted")
+    posted_at = parse_listing_timestamp(posted)
     return {
         "id": post_id,
         "title": title,
-        "posted": row.get("postedFull") if isinstance(row.get("postedFull"), str) else row.get("posted"),
+        "posted": posted,
+        "posted_at": posted_at.isoformat() if posted_at is not None else None,
         "posted_short": row.get("postedShort"),
         "author": row.get("author"),
         "author_page": urljoin(WOWHEAD_BASE_URL, row["authorPage"]) if isinstance(row.get("authorPage"), str) else None,
@@ -1547,11 +1605,14 @@ def _normalize_blue_tracker_row(row: dict[str, Any]) -> dict[str, Any] | None:
     absolute_url = urljoin(WOWHEAD_BASE_URL, topic_url)
     body_preview = clean_htmlish_text(row.get("body"))
     author = row.get("author") if isinstance(row.get("author"), str) and row.get("author") else row.get("name")
+    posted = row.get("posted") if isinstance(row.get("posted"), str) else None
+    posted_at = parse_listing_timestamp(posted)
     return {
         "id": topic_id,
         "title": title,
         "topic": title,
-        "posted": row.get("posted") if isinstance(row.get("posted"), str) else None,
+        "posted": posted,
+        "posted_at": posted_at.isoformat() if posted_at is not None else None,
         "author": author,
         "region": row.get("region"),
         "forum_area": row.get("forumArea"),
@@ -1715,31 +1776,6 @@ def _extract_talent_calc_listed_builds(html: str, *, limit: int) -> dict[str, An
         "count": len(rows),
         "items": rows[:limit],
     }
-
-
-def _load_talent_calc_context(
-    ctx: typer.Context,
-    *,
-    ref: str,
-    listed_build_limit: int,
-) -> tuple[str, dict[str, Any], dict[str, Any], str, dict[str, Any] | None]:
-    cfg = _cfg(ctx)
-    try:
-        state_url = _normalize_tool_ref(ref, tool_slug="talent-calc", expansion=cfg.expansion)
-        state = _parse_talent_calc_state(state_url)
-    except ValueError as exc:
-        fail(ctx, "invalid_tool_ref", str(exc))
-    client = _client(ctx)
-    try:
-        html = client.page_html(state_url)
-    except httpx.HTTPStatusError as exc:
-        _fail_http_status(ctx, exc)
-    except httpx.HTTPError as exc:
-        fail(ctx, "network_error", str(exc))
-    metadata = parse_page_metadata(html, fallback_url=state_url)
-    page_url = absolute_wowhead_url(metadata.get("canonical_url"), fallback=state_url) or state_url
-    listed_builds = _extract_talent_calc_listed_builds(html, limit=listed_build_limit)
-    return state_url, state, metadata, page_url, listed_builds
 
 
 def _base_talent_calc_payload(
@@ -1986,7 +2022,9 @@ def _extract_news_recent_posts(html: str, *, limit: int) -> dict[str, Any] | Non
                 }
             )
         normalized[section_name] = {
-            "count": len(items),
+            "count": len(items[:limit]),
+            "total": len(items),
+            "truncated": len(items) > limit,
             "items": items[:limit],
         }
     return normalized or None
@@ -3154,6 +3192,8 @@ def _timeline_scan_block(collected: dict[str, Any], *, options: TimelineScanOpti
         "pages_scanned": collected["pages_scanned"],
         "total_pages": collected["total_pages"],
         "stop_reason": collected["stop_reason"],
+        # Rows a date window had to drop because Wowhead's timestamp did not parse.
+        "unparsed_timestamps": collected["unparsed_timestamps"],
     }
 
 
@@ -3194,8 +3234,7 @@ def _news_payload(
             "date_to": options.date_to.isoformat() if options.date_to is not None else None,
         },
         "scan": _timeline_scan_block(collected, options=options),
-        "count": len(filtered_results),
-        "results": filtered_results[: options.limit],
+        **limited_result_block(filtered_results, limit=options.limit),
         "facets": collect_timeline_facets(filtered_results, fields={"authors": "author", "types": "type_name"}),
     }
 
@@ -3307,8 +3346,7 @@ def _blue_tracker_payload(
             "date_to": options.date_to.isoformat() if options.date_to is not None else None,
         },
         "scan": _timeline_scan_block(collected, options=options),
-        "count": len(filtered_results),
-        "results": filtered_results[: options.limit],
+        **limited_result_block(filtered_results, limit=options.limit),
         "facets": collect_timeline_facets(
             filtered_results,
             fields={"authors": "author", "regions": "region", "forums": "forum"},
@@ -3870,6 +3908,11 @@ class GuideSummaryOptions:
     linked_entity_preview_limit: int
 
 
+def _guide_full_command(guide_ref: str, *, expansion: ExpansionProfile) -> str:
+    """The `guide-full` follow-up for a guide ref, routed to the active expansion."""
+    return f"{command_prefix_for_expansion(expansion)} guide-full {guide_ref}"
+
+
 def _guide_sampled_comments(
     raw_comments: list[dict[str, Any]],
     *,
@@ -3902,19 +3945,19 @@ def _guide_linked_entity_preview(
     guide_ref: str,
     guide_id: int | None,
     preview_limit: int,
+    expansion: ExpansionProfile,
 ) -> dict[str, Any]:
     href_entities, gatherer_entities, merged_entities = _collect_guide_linked_entities(
         html=html,
         canonical_url=canonical_url,
         guide_id=guide_id,
-        max_links=5000,
     )
     preview = build_linked_entity_preview(
         merged_entities,
         entity_type="guide",
         entity_id=guide_id or 0,
         preview_limit=preview_limit,
-        fetch_more_command=f"wowhead guide-full {guide_ref}",
+        fetch_more_command=_guide_full_command(guide_ref, expansion=expansion),
     )
     preview["source_counts"] = {
         "href": len(href_entities),
@@ -3978,12 +4021,13 @@ def _guide_summary_payload(
             guide_ref=guide_ref,
             guide_id=guide_id,
             preview_limit=options.linked_entity_preview_limit,
+            expansion=cfg.expansion,
         ),
         "analysis_surfaces": {
             "count": len(analysis_surfaces),
             "items": analysis_surfaces[:10],
             "more_available": len(analysis_surfaces) > 10,
-            "fetch_more_command": f"wowhead guide-full {guide_ref}",
+            "fetch_more_command": _guide_full_command(guide_ref, expansion=cfg.expansion),
         },
         "citations": {
             "page": canonical_url,
@@ -4445,7 +4489,9 @@ def guide_bundle_search(
         "query": normalized_query,
         "root": str(resolved_root),
         "max_age_hours": max_age_hours,
-        "count": len(matches),
+        "count": len(matches[:limit]),
+        "total_matches": len(matches),
+        "truncated": len(matches) > limit,
         "stale_reason_counts": _bundle_freshness_rollups(bundles),
         "matches": matches[:limit],
     }
@@ -4722,12 +4768,7 @@ def _entity_page_payload(
     if include_gatherer:
         links = links + extract_gatherer_entities(html, source_url=canonical_url)
 
-    deduped = dedupe_links(
-        links,
-        entity_type=plan.page_entity_type,
-        entity_id=plan.page_entity_id,
-        max_links=max_links,
-    )
+    deduped = dedupe_links(links, entity_type=plan.page_entity_type, entity_id=plan.page_entity_id)
 
     payload: dict[str, Any] = {
         "expansion": cfg.expansion.key,
@@ -4743,10 +4784,7 @@ def _entity_page_payload(
             "description": metadata["description"],
             "canonical_url": canonical_url,
         },
-        "linked_entities": {
-            "count": len(deduped),
-            "items": deduped,
-        },
+        "linked_entities": truncated_link_block(deduped, max_links=max_links),
         "citations": {
             "page": canonical_url,
             "comments": f"{canonical_url}#comments",
@@ -4792,7 +4830,10 @@ def entity_page(
         help="Include linked entities discovered from WH.Gatherer.addData payloads.",
     ),
 ) -> None:
-    """Fetch a Wowhead entity page with parsed metadata, linked entities, and comments."""
+    """Fetch a Wowhead entity page with parsed metadata and its linked entities.
+
+    Comments are a separate surface: run `wowhead comments TYPE ID`.
+    """
     resolved_type = entity_type
     resolved_id = entity_id
     if url is not None:
@@ -4940,7 +4981,9 @@ def _comments_payload(
             entity_type=plan.page_entity_type,
             entity_id=plan.page_entity_id,
             preview_limit=options.linked_entity_preview_limit,
-            fetch_more_command_builder=lambda count: entity_page_fetch_more_command(entity_type, entity_id, count),
+            fetch_more_command_builder=lambda count: entity_page_fetch_more_command(
+                entity_type, entity_id, count, expansion=cfg.expansion
+            ),
         )
     if options.insights:
         payload["intelligence"] = build_comments_intelligence(
@@ -5064,11 +5107,14 @@ def _compare_expansion_or_fail(ctx: typer.Context, entities: list[str]) -> None:
     """Auto-route to the expansion the refs point at, and refuse refs that span several of them."""
     if _cfg(ctx).expansion_explicit:
         return
-    detected = sorted({profile.key for token in entities if (profile := detect_expansion_from_url(token)) is not None})
+    urls_with_expansion = [token for token in entities if detect_expansion_from_url(token) is not None]
+    detected = sorted({profile.key for token in urls_with_expansion if (profile := detect_expansion_from_url(token))})
     if len(detected) > 1:
         fail(ctx, "invalid_argument", "Compare references span multiple expansions; pass explicit --expansion.")
-    if detected:
-        _apply_url_expansion(ctx, entities[0])
+    if urls_with_expansion:
+        # Route off the first ref that actually names an expansion; `entities[0]` may be a bare
+        # `<type>:<id>` ref, which would silently leave the run on the default profile.
+        _apply_url_expansion(ctx, urls_with_expansion[0])
 
 
 def _parsed_compare_refs(ctx: typer.Context, entities: list[str]) -> list[tuple[str, int, str]]:
@@ -5135,7 +5181,10 @@ def _compare_entity_record(
     links = extract_linked_entities_from_href(html, source_url=canonical_url)
     if options.include_gatherer:
         links = links + extract_gatherer_entities(html, source_url=canonical_url)
-    deduped_links = dedupe_links(links, entity_type=entity_type, entity_id=entity_id, max_links=options.max_links_per_entity)
+    linked_entities = truncated_link_block(
+        dedupe_links(links, entity_type=entity_type, entity_id=entity_id),
+        max_links=options.max_links_per_entity,
+    )
 
     try:
         raw_comments = extract_comments_dataset(html)
@@ -5150,7 +5199,7 @@ def _compare_entity_record(
         canonical_url=canonical_url,
         tooltip=tooltip,
         metadata=metadata,
-        deduped_links=deduped_links,
+        linked_entities=linked_entities,
         raw_comments=raw_comments,
         sampled_comments=_compare_sampled_comments(raw_comments, canonical_url=canonical_url, options=options),
     )

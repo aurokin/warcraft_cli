@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 import pytest
 from simc_cli.build_input import (
     BuildSpec,
     DecodedTalent,
+    SimcBuildError,
     TalentStrings,
+    bounded_output_preview,
     build_profile_text,
     decode_build,
     detect_build_text_source_kind,
@@ -30,6 +33,31 @@ from simc_cli.build_input import (
 from simc_cli.repo import RepoPaths
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "simc"
+# Real `simc ... debug=1` output, trimmed to the talent block plus the line that ends it.
+CAPTURED_HASH_REJECTED = FIXTURES / "captured_paladin_retribution_hash_error_debug.txt"
+CAPTURED_GEARLESS_ACTOR = FIXTURES / "captured_deathknight_blood_no_weapon_debug.txt"
+CAPTURED_TWO_HERO_TREES = FIXTURES / "captured_mage_arcane_sunfury_debug.txt"
+# The checkout's trait table, trimmed to the entries the captured debug output mentions.
+CAPTURED_TRAIT_DATA = FIXTURES / "captured_trait_data.inc"
+
+
+def _repo(tmp_path: Path, *, with_trait_data: bool = False) -> RepoPaths:
+    """A checkout stub whose every directory is ``tmp_path`` and whose binary merely exists."""
+    binary = tmp_path / "simc"
+    binary.write_text("")
+    if with_trait_data:
+        generated = tmp_path / "engine" / "dbc" / "generated"
+        generated.mkdir(parents=True, exist_ok=True)
+        (generated / "trait_data.inc").write_text(CAPTURED_TRAIT_DATA.read_text())
+    return RepoPaths(
+        root=tmp_path,
+        apl_default=tmp_path,
+        apl_assisted=tmp_path,
+        class_modules=tmp_path,
+        spell_dump=tmp_path,
+        build_dir=tmp_path,
+        build_simc=binary,
+    )
 
 
 def test_tokenize_talent_name_normalizes_text() -> None:
@@ -485,15 +513,7 @@ def test_load_build_spec_extracts_wow_export_transport_form_from_packet(tmp_path
 
 
 def test_identify_build_downgrades_wow_export_packet_metadata_confidence(tmp_path: Path) -> None:
-    repo = RepoPaths(
-        root=tmp_path,
-        apl_default=tmp_path,
-        apl_assisted=tmp_path,
-        class_modules=tmp_path,
-        spell_dump=tmp_path,
-        build_dir=tmp_path,
-        build_simc=tmp_path / "simc",
-    )
+    repo = _repo(tmp_path)
     build_spec = BuildSpec(
         actor_class="priest",
         spec="shadow",
@@ -665,17 +685,7 @@ def test_build_profile_text_contains_expected_lines() -> None:
 
 
 def test_decode_build_uses_debug_output(tmp_path: Path) -> None:
-    binary = tmp_path / "simc"
-    binary.write_text("")
-    repo = RepoPaths(
-        root=tmp_path,
-        apl_default=tmp_path,
-        apl_assisted=tmp_path,
-        class_modules=tmp_path,
-        spell_dump=tmp_path,
-        build_dir=tmp_path,
-        build_simc=binary,
-    )
+    repo = _repo(tmp_path)
     fake_output = (FIXTURES / "dh_decode_debug.txt").read_text()
 
     with patch("simc_cli.build_input.subprocess.run") as mocked_run:
@@ -690,6 +700,101 @@ def test_decode_build_uses_debug_output(tmp_path: Path) -> None:
     assert "devourers_bite" in result.enabled_talents
     assert "midnight" not in result.enabled_talents
     assert any("decoded via" in note for note in result.source_notes)
+
+
+def _decode(repo: RepoPaths, output: str, returncode: int, **spec_fields: str) -> Any:
+    with patch("simc_cli.build_input.subprocess.run") as mocked_run:
+        mocked_run.return_value = subprocess.CompletedProcess([], returncode, stdout=output, stderr="")
+        return decode_build(repo, BuildSpec(**spec_fields))
+
+
+def test_decode_build_rejects_a_hash_simc_refused_even_after_printing_talents(tmp_path: Path) -> None:
+    """SimC prints the freely granted talents before it reports the bad hash; that is not a build."""
+    output = CAPTURED_HASH_REJECTED.read_text()
+    assert "adding spec talent Wake of Ashes" in output
+
+    with pytest.raises(SimcBuildError) as caught:
+        _decode(_repo(tmp_path), output, 81, actor_class="paladin", spec="retribution", talents="CYEAAA")
+
+    assert "Node 81527 is not a choice node but has index selection" in str(caught.value)
+    assert caught.value.returncode == 81
+
+
+def test_decode_build_error_message_is_the_simc_error_line_not_its_option_dump(tmp_path: Path) -> None:
+    """`debug=1` makes SimC print tens of thousands of lines; only its error belongs in the envelope."""
+    dump = "World of Warcraft Raid Simulator Options:\n" + "".join(f"option_{i}=0\n" for i in range(700))
+
+    with pytest.raises(SimcBuildError) as caught:
+        _decode(
+            _repo(tmp_path),
+            dump + CAPTURED_HASH_REJECTED.read_text(),
+            81,
+            actor_class="paladin",
+            spec="retribution",
+            talents="CYEAAA",
+        )
+
+    assert "option_0=0" not in str(caught.value)
+    assert len(str(caught.value)) < 500
+    assert len(caught.value.output_preview) == 20
+
+
+def test_decode_build_keeps_a_build_whose_only_error_is_the_gearless_decode_actor(tmp_path: Path) -> None:
+    """The decode profile carries no gear on purpose, so SimC's weapon complaint is not a rejection."""
+    output = CAPTURED_GEARLESS_ACTOR.read_text()
+    assert "has no weapon equipped" in output
+
+    result = _decode(
+        _repo(tmp_path, with_trait_data=True), output, 80,
+        actor_class="deathknight", spec="blood", talents="CoEAAA",
+    )
+
+    assert result.hero_tree is not None
+    assert result.hero_tree.name == "San'layn"
+    assert "coagulopathy" in result.enabled_talents
+
+
+def test_decode_build_drops_hero_talents_from_the_hero_tree_simc_did_not_activate(tmp_path: Path) -> None:
+    """A hash grants both keystones; keeping the unselected one flips hero-gated APL branches."""
+    result = _decode(
+        _repo(tmp_path, with_trait_data=True), CAPTURED_TWO_HERO_TREES.read_text(), 0,
+        actor_class="mage", spec="arcane", talents="C4DAAA",
+    )
+
+    assert result.hero_tree is not None
+    assert (result.hero_tree.name, result.hero_tree.id) == ("Sunfury", 39)
+    assert [talent.name for talent in result.inactive_hero_talents] == ["Splintering Sorcery"]
+    assert "splintering_sorcery" not in result.enabled_talents
+    assert "ashes_of_inspiration" in result.enabled_talents
+    assert all(talent.tree != "hero" or talent.entry != 117267 for talent in result.talents_by_tree["hero"])
+
+
+def test_decode_build_counts_a_tiered_node_printed_at_rank_zero_as_taken(tmp_path: Path) -> None:
+    """SimC spreads a tiered node's ranks over its entries and prints the leftover, always 0."""
+    output = CAPTURED_TWO_HERO_TREES.read_text()
+    assert "Prismatic Bolt (node=110420 entry=137028 rank=0/1)" in output
+
+    result = _decode(
+        _repo(tmp_path, with_trait_data=True), output, 0,
+        actor_class="mage", spec="arcane", talents="C4DAAA",
+    )
+
+    assert "prismatic_bolt" in result.enabled_talents
+    tiered = next(talent for talent in result.talents_by_tree["spec"] if talent.entry == 137028)
+    assert (tiered.rank, tiered.rank_known, tiered.taken) == (0, False, True)
+
+
+def test_decode_build_removes_the_profile_directory_it_wrote(tmp_path: Path) -> None:
+    written: list[Path] = []
+
+    def fake_run(cmd, **kwargs):  # noqa: ANN001, ANN003
+        written.append(Path(str(cmd[1])))
+        return subprocess.CompletedProcess(cmd, 0, stdout=(FIXTURES / "dh_decode_debug.txt").read_text(), stderr="")
+
+    with patch("simc_cli.build_input.subprocess.run", side_effect=fake_run):
+        decode_build(_repo(tmp_path), BuildSpec(actor_class="demonhunter", spec="devourer", talents="ABC123"))
+
+    assert written and not written[0].parent.exists()
 
 
 def test_supported_specs_collects_unique_apl_specs(tmp_path: Path) -> None:
@@ -713,15 +818,7 @@ def test_supported_specs_collects_unique_apl_specs(tmp_path: Path) -> None:
 
 
 def test_identify_build_uses_direct_metadata_without_probe(tmp_path: Path) -> None:
-    repo = RepoPaths(
-        root=tmp_path,
-        apl_default=tmp_path,
-        apl_assisted=tmp_path,
-        class_modules=tmp_path,
-        spell_dump=tmp_path,
-        build_dir=tmp_path,
-        build_simc=tmp_path / "simc",
-    )
+    repo = _repo(tmp_path)
     build_spec = BuildSpec(actor_class="demonhunter", spec="devourer", talents="ABC123", source_kind="wowhead_talent_calc_url")
     identified, identity = identify_build(repo, build_spec)
     assert identified.actor_class == "demonhunter"
@@ -731,15 +828,7 @@ def test_identify_build_uses_direct_metadata_without_probe(tmp_path: Path) -> No
 
 
 def test_identify_build_probes_supported_specs(tmp_path: Path) -> None:
-    repo = RepoPaths(
-        root=tmp_path,
-        apl_default=tmp_path,
-        apl_assisted=tmp_path,
-        class_modules=tmp_path,
-        spell_dump=tmp_path,
-        build_dir=tmp_path,
-        build_simc=tmp_path / "simc",
-    )
+    repo = _repo(tmp_path)
     build_spec = BuildSpec(talents="ABC123", source_kind="wow_talent_export")
 
     with (
@@ -760,15 +849,7 @@ def test_identify_build_probes_supported_specs(tmp_path: Path) -> None:
 
 
 def test_identify_build_probes_simc_split_talent_packets_instead_of_trusting_packet_metadata(tmp_path: Path) -> None:
-    repo = RepoPaths(
-        root=tmp_path,
-        apl_default=tmp_path,
-        apl_assisted=tmp_path,
-        class_modules=tmp_path,
-        spell_dump=tmp_path,
-        build_dir=tmp_path,
-        build_simc=tmp_path / "simc",
-    )
+    repo = _repo(tmp_path)
     build_spec = BuildSpec(
         actor_class=None,
         spec=None,
@@ -797,15 +878,7 @@ def test_identify_build_probes_simc_split_talent_packets_instead_of_trusting_pac
 
 
 def test_identify_build_returns_none_when_probe_finds_no_matches(tmp_path: Path) -> None:
-    repo = RepoPaths(
-        root=tmp_path,
-        apl_default=tmp_path,
-        apl_assisted=tmp_path,
-        class_modules=tmp_path,
-        spell_dump=tmp_path,
-        build_dir=tmp_path,
-        build_simc=tmp_path / "simc",
-    )
+    repo = _repo(tmp_path)
     build_spec = BuildSpec(talents="ABC123", source_kind="wow_talent_export")
 
     with (
@@ -821,15 +894,7 @@ def test_identify_build_returns_none_when_probe_finds_no_matches(tmp_path: Path)
 
 
 def test_identify_build_reports_ambiguous_probe_matches(tmp_path: Path) -> None:
-    repo = RepoPaths(
-        root=tmp_path,
-        apl_default=tmp_path,
-        apl_assisted=tmp_path,
-        class_modules=tmp_path,
-        spell_dump=tmp_path,
-        build_dir=tmp_path,
-        build_simc=tmp_path / "simc",
-    )
+    repo = _repo(tmp_path)
     build_spec = BuildSpec(talents="ABC123", source_kind="wow_talent_export")
 
     with (
@@ -849,15 +914,7 @@ def test_identify_build_reports_ambiguous_probe_matches(tmp_path: Path) -> None:
 
 
 def test_identify_build_does_not_echo_unverified_packet_identity_when_probe_fails(tmp_path: Path) -> None:
-    repo = RepoPaths(
-        root=tmp_path,
-        apl_default=tmp_path,
-        apl_assisted=tmp_path,
-        class_modules=tmp_path,
-        spell_dump=tmp_path,
-        build_dir=tmp_path,
-        build_simc=tmp_path / "simc",
-    )
+    repo = _repo(tmp_path)
     build_spec = BuildSpec(
         actor_class="priest",
         spec="shadow",
@@ -883,15 +940,7 @@ def test_identify_build_does_not_echo_unverified_packet_identity_when_probe_fail
 
 
 def test_identify_build_preserves_apl_inferred_scope_for_wow_export_probe(tmp_path: Path) -> None:
-    repo = RepoPaths(
-        root=tmp_path,
-        apl_default=tmp_path,
-        apl_assisted=tmp_path,
-        class_modules=tmp_path,
-        spell_dump=tmp_path,
-        build_dir=tmp_path,
-        build_simc=tmp_path / "simc",
-    )
+    repo = _repo(tmp_path)
     build_spec = BuildSpec(
         actor_class="priest",
         spec="shadow",
@@ -992,21 +1041,20 @@ def test_diff_talent_trees_skips_zero_rank_entries() -> None:
     assert diff.changed == []
 
 
+def test_diff_talent_trees_reports_a_lost_tiered_node_whose_rank_was_never_readable() -> None:
+    """A tiered node decodes at rank 0 with an unknown rank; dropping it is still a removal."""
+    tiered = DecodedTalent(
+        tree="spec", name="Prismatic Bolt", token="prismatic_bolt", rank=0, max_rank=1, entry=137028, rank_known=False,
+    )
+    diff = diff_talent_trees([_talent("Active", 100), tiered], [_talent("Active", 100)])
+    assert [t.name for t in diff.removed] == ["Prismatic Bolt"]
+
+
 # --- encode_build ---
 
 
 def test_encode_build_extracts_talents_from_save_output(tmp_path: Path) -> None:
-    binary = tmp_path / "simc"
-    binary.write_text("")
-    repo = RepoPaths(
-        root=tmp_path,
-        apl_default=tmp_path,
-        apl_assisted=tmp_path,
-        class_modules=tmp_path,
-        spell_dump=tmp_path,
-        build_dir=tmp_path,
-        build_simc=binary,
-    )
+    repo = _repo(tmp_path)
 
     def fake_run(cmd, **kwargs):  # noqa: ANN001, ANN003
         # SimC writes a save file; simulate that by writing to the save= path.
@@ -1030,17 +1078,7 @@ def test_encode_build_extracts_talents_from_save_output(tmp_path: Path) -> None:
 
 def test_encode_build_profile_loads_default_gear(tmp_path: Path) -> None:
     """A gearless actor is dropped before SimC generates profiles, so the save file never appears."""
-    binary = tmp_path / "simc"
-    binary.write_text("")
-    repo = RepoPaths(
-        root=tmp_path,
-        apl_default=tmp_path,
-        apl_assisted=tmp_path,
-        class_modules=tmp_path,
-        spell_dump=tmp_path,
-        build_dir=tmp_path,
-        build_simc=binary,
-    )
+    repo = _repo(tmp_path)
     seen: dict[str, str] = {}
 
     def fake_run(cmd, **kwargs):  # noqa: ANN001, ANN003
@@ -1063,33 +1101,30 @@ def test_encode_build_profile_loads_default_gear(tmp_path: Path) -> None:
 
 
 def test_encode_build_raises_when_save_file_missing(tmp_path: Path) -> None:
-    binary = tmp_path / "simc"
-    binary.write_text("")
-    repo = RepoPaths(
-        root=tmp_path,
-        apl_default=tmp_path,
-        apl_assisted=tmp_path,
-        class_modules=tmp_path,
-        spell_dump=tmp_path,
-        build_dir=tmp_path,
-        build_simc=binary,
-    )
+    repo = _repo(tmp_path)
 
+    stderr = "Error: Generating profiles: Player 'simc_decode': Invalid 'class_talents': Unable to find class talent 'bogus'.\n"
     with patch("simc_cli.build_input.subprocess.run") as mocked_run:
-        mocked_run.return_value = subprocess.CompletedProcess([], 1, stdout="", stderr="error msg")
-        with pytest.raises(RuntimeError, match="error msg"):
+        mocked_run.return_value = subprocess.CompletedProcess([], 1, stdout="banner\n" * 900, stderr=stderr)
+        with pytest.raises(SimcBuildError) as caught:
             encode_build(repo, BuildSpec(actor_class="druid", spec="balance", talents="ABC"))
+
+    assert str(caught.value) == "Generating profiles: Player 'simc_decode': Invalid 'class_talents': Unable to find class talent 'bogus'."
+    assert caught.value.returncode == 1
 
 
 def test_encode_build_raises_without_class_or_spec(tmp_path: Path) -> None:
-    repo = RepoPaths(
-        root=tmp_path,
-        apl_default=tmp_path,
-        apl_assisted=tmp_path,
-        class_modules=tmp_path,
-        spell_dump=tmp_path,
-        build_dir=tmp_path,
-        build_simc=tmp_path / "simc",
-    )
+    repo = _repo(tmp_path)
     with pytest.raises(ValueError, match="actor class and spec"):
         encode_build(repo, BuildSpec(talents="ABC"))
+
+
+def test_bounded_output_preview_clips_a_single_enormous_debug_line() -> None:
+    """SimC writes the enemy's stat block on one ~4 KB line, so a 20-line tail is not a bound."""
+    preview = bounded_output_preview("\n".join(["short"] * 30 + ["x" * 5000]))
+
+    assert len(preview) == 20
+    assert preview[:-1] == ["short"] * 19
+    assert preview[-1].startswith("x" * 200)
+    assert preview[-1].endswith("... (5000 chars, truncated)")
+    assert max(len(line) for line in preview) < 250

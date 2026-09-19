@@ -141,6 +141,10 @@ auth_app = typer.Typer(add_completion=False, help="Warcraft Logs authentication 
 app.add_typer(auth_app, name="auth")
 
 FIGHT_ID_OPTION = typer.Option(None, "--fight-id", help="Optional fight ID filter. Repeat as needed.")
+_INCLUDE_RAW_HELP = (
+    "Attach the untyped Warcraft Logs table entry to every row. Off by default: the raw entries "
+    "carry full gear/pet/ability detail and dominate the payload size."
+)
 REPORT_CODE_PATTERN = re.compile(r"^(?=.*[A-Za-z])(?=.*\d)[A-Za-z0-9]{8,32}$")
 RAW_GRAPHQL_VAR_OPTION = typer.Option(
     [],
@@ -320,11 +324,34 @@ def _with_warnings(payload: dict[str, Any], client: Any) -> dict[str, Any]:
 
 
 # Warcraft Logs error codes that mean "the caller is not authorised", on top of the shared vocabulary.
-_AUTH_ERROR_CODES = frozenset({"missing_client_credentials", "missing_public_auth", "missing_user_auth", "user_token_expired"})
+# `site_profile_mismatch` belongs here: the saved token exists but is not usable for the selected site.
+_AUTH_ERROR_CODES = frozenset(
+    {
+        "missing_client_credentials",
+        "missing_public_auth",
+        "missing_user_auth",
+        "site_profile_mismatch",
+        "user_token_expired",
+    }
+)
 
 
-# Missing required options are usage errors (exit 2), like Click's own parse failures.
-_USAGE_ERROR_CODES = frozenset({"missing_boss", "missing_query"})
+# Rejected or contradictory command input is a usage error (exit 2), like Click's own parse failures.
+# Keep every locally-raised input code here: an omission silently downgrades the command to exit 1.
+_USAGE_ERROR_CODES = frozenset(
+    {
+        "ambiguous_boss",
+        "boss_scope_mismatch",
+        "invalid_variables",
+        "missing_boss",
+        "missing_query",
+        "missing_scope",
+        "missing_spec",
+        "missing_state",
+        "redirect_uri_mismatch",
+        "state_mismatch",
+    }
+)
 
 
 def _fail(ctx: typer.Context, code: str, message: str) -> NoReturn:
@@ -906,7 +933,7 @@ def _user_api_access_payload(
         client: WarcraftLogsClient | None = None
         try:
             client = WarcraftLogsClient(site=site)
-            client.probe_live_user_api()
+            client.current_user()
         except WarcraftLogsClientError as exc:
             return {
                 "ready": False,
@@ -1718,6 +1745,31 @@ def _encounter_filter_options(
     return options, query
 
 
+def _require_report_slice(
+    ctx: typer.Context,
+    *,
+    command: str,
+    fight_id: list[int] | None,
+    start_time: float | None,
+    end_time: float | None,
+) -> None:
+    """Reject a query Warcraft Logs answers with an empty payload plus a GraphQL warning.
+
+    Warcraft Logs accepts exactly two slice shapes here: fight IDs, or a start time AND an end
+    time. ``--encounter-id`` and a half-open time range narrow nothing on their own, so they are
+    not accepted as a slice.
+    """
+    if fight_id or (start_time is not None and end_time is not None):
+        return
+    _fail(
+        ctx,
+        "missing_scope",
+        f"{command} requires --fight-id, or both --start-time and --end-time. "
+        "Warcraft Logs answers any wider query with an empty payload; --encounter-id filters "
+        "the slice but does not define one.",
+    )
+
+
 def _require_explicit_window(ctx: typer.Context, *, name: str, start_ms: float | None, end_ms: float | None) -> None:
     if start_ms is None or end_ms is None:
         _fail(ctx, "invalid_query", f"{name} requires both a start and end window offset in milliseconds.")
@@ -1956,12 +2008,25 @@ def _encounter_cast_rows_payload(
         fight_start=fight.get("startTime") if isinstance(fight.get("startTime"), (int, float)) else None,
         preview_limit=preview_limit,
     )
+    next_page_timestamp = paginator.get("nextPageTimestamp")
+    truncated = next_page_timestamp is not None
+    notes = (
+        [
+            f"Warcraft Logs returned next_page_timestamp: every aggregate below covers only the first {len(cast_rows)} "
+            "cast events of the selected fight/window, not the whole fight. Raise --limit or narrow the window "
+            "before treating these counts as complete."
+        ]
+        if truncated
+        else []
+    )
     return {
         "report": _report_brief_payload(report),
         "fight": _fight_payload(fight),
+        "notes": notes,
         "casts": {
             "event_count": len(cast_rows),
-            "next_page_timestamp": paginator.get("nextPageTimestamp"),
+            "truncated": truncated,
+            "next_page_timestamp": next_page_timestamp,
             "by_source": _sorted_cast_rows(tallies.by_source, naming=naming, field="source"),
             "by_target": _sorted_cast_rows(tallies.by_target, naming=naming, field="target"),
             "by_ability": _sorted_cast_rows(tallies.by_ability, naming=naming, field="ability"),
@@ -2517,6 +2582,7 @@ def _boss_spec_usage_payload(
     sample: dict[str, Any],
     query: dict[str, Any],
     top: int,
+    transport_counts: dict[str, int],
     cache_ttl_seconds: int | None = None,
     root_url: str = "https://www.warcraftlogs.com",
 ) -> dict[str, Any]:
@@ -2545,7 +2611,7 @@ def _boss_spec_usage_payload(
         "matching_rule": "spec_presence_across_sampled_finished_kills_with_player_details",
         "query": query,
         "notes": _sampled_spec_filter_notes(query.get("spec_name") if isinstance(query, dict) else None),
-        "freshness": _sampled_cross_report_freshness(cache_ttl_seconds),
+        "freshness": _sampled_cross_report_freshness(cache_ttl_seconds, transport_counts=transport_counts),
         "cache_provenance": _sampled_cache_provenance(cache_ttl_seconds),
         "sample_scope": _sampled_sample_scope(
             ranking_basis="sampled_finished_kill_cohort_spec_presence",
@@ -2733,6 +2799,7 @@ def _comp_samples_payload(
     sample: dict[str, Any],
     query: dict[str, Any],
     top: int,
+    transport_counts: dict[str, int],
     cache_ttl_seconds: int | None = None,
     root_url: str = "https://www.warcraftlogs.com",
 ) -> dict[str, Any]:
@@ -2761,7 +2828,7 @@ def _comp_samples_payload(
         "matching_rule": "class_roster_composition_across_sampled_finished_kills_with_player_details",
         "query": query,
         "notes": _sampled_spec_filter_notes(query.get("spec_name") if isinstance(query, dict) else None),
-        "freshness": _sampled_cross_report_freshness(cache_ttl_seconds),
+        "freshness": _sampled_cross_report_freshness(cache_ttl_seconds, transport_counts=transport_counts),
         "cache_provenance": _sampled_cache_provenance(cache_ttl_seconds),
         "sample_scope": _sampled_sample_scope(
             ranking_basis="sampled_fastest_kills",
@@ -2803,9 +2870,12 @@ def _ability_cast_summary(
         source_id = _event_id(event.get("sourceID"))
         if isinstance(source_id, int):
             source_counts[source_id] = source_counts.get(source_id, 0) + 1
+    next_page_timestamp = paginator.get("nextPageTimestamp")
     return {
         "count": len(event_rows),
-        "next_page_timestamp": paginator.get("nextPageTimestamp"),
+        # The kill's cast events did not fit in one --event-limit page, so `count` is a lower bound.
+        "truncated": next_page_timestamp is not None,
+        "next_page_timestamp": next_page_timestamp,
         "sources": [
             {
                 "count": count,
@@ -2893,6 +2963,16 @@ def _collect_ability_usage_rows(
     }
 
 
+def _event_limit_truncation_notes(truncated_kill_count: int, *, event_limit: int) -> list[str]:
+    """Say so when sampled kills hit ``--event-limit``, so no total reads as a complete count."""
+    if truncated_kill_count <= 0:
+        return []
+    return [
+        f"{truncated_kill_count} sampled kill(s) returned more cast events than --event-limit={event_limit}; "
+        "their cast counts, and every total derived from them, are lower bounds. Raise --event-limit for exact totals"
+    ]
+
+
 def _ability_usage_summary_payload(
     *,
     rows: list[dict[str, Any]],
@@ -2901,15 +2981,16 @@ def _ability_usage_summary_payload(
     ability: dict[str, Any],
     preview_limit: int,
     event_limit: int,
+    transport_counts: dict[str, int],
     cache_ttl_seconds: int | None = None,
     root_url: str = "https://www.warcraftlogs.com",
 ) -> dict[str, Any]:
-    cast_counts = [
-        int(casts["count"])
-        for casts in (row.get("casts") for row in rows)
-        if isinstance(casts, dict) and isinstance(casts.get("count"), int)
-    ]
+    row_casts = [casts for casts in (row.get("casts") for row in rows) if isinstance(casts, dict)]
+    cast_counts = [int(casts["count"]) for casts in row_casts if isinstance(casts.get("count"), int)]
     used_counts = [count for count in cast_counts if count > 0]
+    # A kill whose cast events did not fit in one --event-limit page contributes a lower bound,
+    # so every total derived from it is a lower bound too (SAFE_ANALYTICS_RULES.md).
+    truncated_kill_count = sum(1 for casts in row_casts if casts.get("truncated"))
     preview = rows[:preview_limit]
     # The emitted `query` block widens the caller's query with the event/preview limits;
     # sample_scope.filters must project from the SAME widened query so the two cannot drift
@@ -2926,8 +3007,11 @@ def _ability_usage_summary_payload(
         "ranking_basis": "sampled_fastest_kills",
         "matching_rule": "ability_casts_across_sampled_finished_kills_with_event_limit",
         "query": scoped_query,
-        "notes": _sampled_spec_filter_notes(query.get("spec_name") if isinstance(query, dict) else None),
-        "freshness": _sampled_cross_report_freshness(cache_ttl_seconds),
+        "notes": [
+            *_sampled_spec_filter_notes(query.get("spec_name") if isinstance(query, dict) else None),
+            *_event_limit_truncation_notes(truncated_kill_count, event_limit=event_limit),
+        ],
+        "freshness": _sampled_cross_report_freshness(cache_ttl_seconds, transport_counts=transport_counts),
         "cache_provenance": _sampled_cache_provenance(cache_ttl_seconds),
         "sample_scope": _sampled_sample_scope(
             ranking_basis="sampled_fastest_kills",
@@ -2943,11 +3027,13 @@ def _ability_usage_summary_payload(
             "preview_kill_count": len(preview),
             "excluded_preview_kill_count": max(0, len(rows) - len(preview)),
             "preview_truncated": len(rows) > preview_limit,
+            "kills_with_truncated_events_count": truncated_kill_count,
             "stable_source_only": True,
         },
         "ability": ability,
         "usage": {
             "total_casts": sum(cast_counts),
+            "total_casts_is_lower_bound": truncated_kill_count > 0,
             "kills_with_any_usage_count": len(used_counts),
             "kills_with_any_usage_percent": round((len(used_counts) / len(rows)) * 100, 2) if rows else 0.0,
             "casts_per_kill": numeric_summary([float(count) for count in cast_counts]),
@@ -3131,6 +3217,7 @@ def _report_encounter_aura_summary_payload(
     table_report: dict[str, Any],
     master_report: dict[str, Any],
     ability_id: int,
+    include_raw: bool,
 ) -> dict[str, Any]:
     actor_index, ability_index = _master_data_indexes(master_report)
     rows_out: list[dict[str, Any]] = []
@@ -3152,7 +3239,7 @@ def _report_encounter_aura_summary_payload(
                 "reported_total_uptime": reported_total_uptime,
                 "reported_total_uses": entry.get("totalUses"),
                 "reported_bands": entry.get("bands"),
-                "raw_entry": entry,
+                **({"raw_entry": entry} if include_raw else {}),
             }
         )
     rows_out.sort(
@@ -3183,73 +3270,38 @@ def _report_encounter_aura_summary_payload(
     }
 
 
-def _report_encounter_damage_source_summary_payload(
+def _report_encounter_damage_summary_payload(
     *,
     report: dict[str, Any],
     fight: dict[str, Any],
     table_report: dict[str, Any],
     master_report: dict[str, Any],
+    actor_field: Literal["source", "target"],
+    include_raw: bool,
 ) -> dict[str, Any]:
+    """Damage-table rows keyed by the grouping actor, typed and sorted by reported total."""
     actor_index, _ability_index = _master_data_indexes(master_report)
+    identity_source = f"report_encounter_damage_{actor_field}_summary"
     rows_out: list[dict[str, Any]] = []
     for entry in _report_table_entries(table_report):
-        source_id = entry.get("id") if isinstance(entry.get("id"), int) else None
+        actor_id = entry.get("id") if isinstance(entry.get("id"), int) else None
         rows_out.append(
             {
-                "source": _named_actor(
+                actor_field: _named_actor(
                     actor_index,
-                    source_id,
+                    actor_id,
                     report_code=report.get("code") if isinstance(report.get("code"), str) else None,
                     fight_id=fight.get("id") if isinstance(fight.get("id"), int) else None,
-                    source="report_encounter_damage_source_summary",
-                ) if source_id is not None else {"id": None, "name": entry.get("name")},
+                    source=identity_source,
+                ) if actor_id is not None else {"id": None, "name": entry.get("name")},
                 "reported_total": entry.get("total"),
-                "raw_entry": entry,
+                **({"raw_entry": entry} if include_raw else {}),
             }
         )
     rows_out.sort(
         key=lambda row: (
             -(float(row["reported_total"]) if isinstance(row.get("reported_total"), (int, float)) else float("-inf")),
-            str((row.get("source") or {}).get("name") or ""),
-        )
-    )
-    return {
-        "report": _report_brief_payload(table_report),
-        "damage_summary": {
-            "entry_count": len(rows_out),
-            "rows": rows_out,
-        },
-    }
-
-
-def _report_encounter_damage_target_summary_payload(
-    *,
-    report: dict[str, Any],
-    fight: dict[str, Any],
-    table_report: dict[str, Any],
-    master_report: dict[str, Any],
-) -> dict[str, Any]:
-    actor_index, _ability_index = _master_data_indexes(master_report)
-    rows_out: list[dict[str, Any]] = []
-    for entry in _report_table_entries(table_report):
-        target_id = entry.get("id") if isinstance(entry.get("id"), int) else None
-        rows_out.append(
-            {
-                "target": _named_actor(
-                    actor_index,
-                    target_id,
-                    report_code=report.get("code") if isinstance(report.get("code"), str) else None,
-                    fight_id=fight.get("id") if isinstance(fight.get("id"), int) else None,
-                    source="report_encounter_damage_target_summary",
-                ) if target_id is not None else {"id": None, "name": entry.get("name")},
-                "reported_total": entry.get("total"),
-                "raw_entry": entry,
-            }
-        )
-    rows_out.sort(
-        key=lambda row: (
-            -(float(row["reported_total"]) if isinstance(row.get("reported_total"), (int, float)) else float("-inf")),
-            str((row.get("target") or {}).get("name") or ""),
+            str((row.get(actor_field) or {}).get("name") or ""),
         )
     )
     return {
@@ -3329,7 +3381,7 @@ def _aura_compare_rows(
     return compared
 
 
-def _character_rankings_payload(character: dict[str, Any], *, top: int) -> dict[str, Any]:
+def _character_rankings_payload(character: dict[str, Any], *, top: int, transport_counts: dict[str, int]) -> dict[str, Any]:
     server = dict_at(character, "server")
     faction = dict_at(character, "faction")
     rankings = dict_at(character, "zoneRankings")
@@ -3412,7 +3464,7 @@ def _character_rankings_payload(character: dict[str, Any], *, top: int) -> dict[
                 "partition": rankings.get("partition"),
                 "size": rankings.get("size"),
             },
-            "freshness": _sampled_cross_report_freshness(),
+            "freshness": _sampled_cross_report_freshness(transport_counts=transport_counts),
             "source_character_identity": source_character_identity,
         },
         "raw": rankings,
@@ -4424,7 +4476,7 @@ def character_rankings(
                 "spec_name": spec_name,
                 "top": top,
             },
-            "character_rankings": _character_rankings_payload(payload, top=top),
+            "character_rankings": _character_rankings_payload(payload, top=top, transport_counts=client.transport_counts),
         },
         client=client,
     )
@@ -4566,9 +4618,19 @@ def guild_reports(
     )
 
 
+def _validate_cohort_scope(ctx: typer.Context, client: WarcraftLogsClient, scope: CrossReportScope) -> None:
+    """Fail on a zone/boss filter Warcraft Logs does not know.
+
+    Without this an unknown zone id or misspelled boss name scans an empty cohort and returns
+    ``ok: true`` with ``count: 0``, which is indistinguishable from "nobody killed it recently".
+    """
+    _resolve_encounter(ctx, client=client, zone_id=scope.zone_id, boss_id=scope.boss_id, boss_name=scope.boss_name)
+
+
 def _sampled_kill_cohort(ctx: typer.Context, client: WarcraftLogsClient, scope: CrossReportScope) -> dict[str, Any]:
     """Collect the sampled boss-kill cohort and close the client, mapping transport errors to the CLI contract."""
     try:
+        _validate_cohort_scope(ctx, client, scope)
         return _collect_boss_kill_rows(client, scope)
     except WarcraftLogsClientError as exc:
         _handle_client_error(ctx, exc)
@@ -4579,6 +4641,7 @@ def _sampled_kill_cohort(ctx: typer.Context, client: WarcraftLogsClient, scope: 
 def _sampled_comp_cohort(ctx: typer.Context, client: WarcraftLogsClient, scope: CrossReportScope) -> dict[str, Any]:
     """Collect the sampled kill cohort with raid compositions attached, then close the client."""
     try:
+        _validate_cohort_scope(ctx, client, scope)
         return _collect_comp_sample_rows(client, scope)
     except WarcraftLogsClientError as exc:
         _handle_client_error(ctx, exc)
@@ -4593,6 +4656,7 @@ def _sampled_spec_usage_cohort(
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Sampled kill cohort plus its per-kill player-detail rows, then close the client."""
     try:
+        _validate_cohort_scope(ctx, client, scope)
         analytics = _collect_boss_kill_rows(client, scope)
         enriched_rows = [
             {
@@ -4618,6 +4682,7 @@ def _sampled_ability_usage_cohort(
 ) -> dict[str, Any]:
     """Collect the sampled kill cohort with per-kill ability casts attached, then close the client."""
     try:
+        _validate_cohort_scope(ctx, client, scope)
         return _collect_ability_usage_rows(client, scope, ability_id=ability_id, event_limit=event_limit)
     except WarcraftLogsClientError as exc:
         _handle_client_error(ctx, exc)
@@ -4690,6 +4755,7 @@ def boss_kills(
         ctx,
         _boss_kills_payload(
             cache_ttl_seconds=_emitted_finished_report_ttl(client),
+            transport_counts=client.transport_counts,
             kind="boss_kills",
             rows=analytics["rows"],
             sample=analytics["sample"],
@@ -4749,6 +4815,7 @@ def top_kills(
         ctx,
         _boss_kills_payload(
             cache_ttl_seconds=_emitted_finished_report_ttl(client),
+            transport_counts=client.transport_counts,
             kind="top_kills",
             rows=analytics["rows"],
             sample=analytics["sample"],
@@ -4809,6 +4876,7 @@ def spec_kill_samples(
         ctx,
         _spec_filtered_kill_samples_payload(
             cache_ttl_seconds=_emitted_finished_report_ttl(client),
+            transport_counts=client.transport_counts,
             rows=analytics["rows"],
             sample=analytics["sample"],
             query=asdict(scope),
@@ -4867,6 +4935,7 @@ def boss_spec_usage(
         ctx,
         _boss_spec_usage_payload(
             cache_ttl_seconds=_emitted_finished_report_ttl(client),
+            transport_counts=client.transport_counts,
             rows=enriched_rows,
             sample=analytics["sample"],
             query=asdict(scope),
@@ -4927,6 +4996,7 @@ def ability_usage_summary(
         ctx,
         _ability_usage_summary_payload(
             cache_ttl_seconds=_emitted_finished_report_ttl(client),
+            transport_counts=client.transport_counts,
             rows=analytics["rows"],
             sample=analytics["sample"],
             query=_ability_usage_query(scope, ability_id=ability_id),
@@ -4987,6 +5057,7 @@ def comp_samples(
         ctx,
         _comp_samples_payload(
             cache_ttl_seconds=_emitted_finished_report_ttl(client),
+            transport_counts=client.transport_counts,
             rows=analytics["rows"],
             sample=analytics["sample"],
             query=asdict(scope),
@@ -5245,7 +5316,9 @@ def report_encounter_casts(
             allow_unlisted=allow_unlisted,
             options=options,
         )
-        master_report = client.report_master_data(code=ref.code, allow_unlisted=allow_unlisted, actor_type="Player")
+        # Unfiltered master data: cast targets are usually NPCs, and a Player-only actor index
+        # leaves every boss and add in `by_target` as an anonymous `actor:<id>` placeholder.
+        master_report = client.report_master_data(code=ref.code, allow_unlisted=allow_unlisted)
     except WarcraftLogsClientError as exc:
         _handle_client_error(ctx, exc)
     finally:
@@ -5382,6 +5455,7 @@ def report_encounter_aura_summary(
         None, "--window-start-ms", help="Optional encounter-relative start offset in milliseconds."),
     window_end_ms: float | None = typer.Option(None, "--window-end-ms", help="Optional encounter-relative end offset in milliseconds."),
     translate: bool | None = typer.Option(None, "--translate/--no-translate", help="Optional translation toggle."),
+    include_raw: bool = typer.Option(False, "--include-raw", help=_INCLUDE_RAW_HELP),
     allow_unlisted: bool = typer.Option(False, "--allow-unlisted", help="Allow lookup of unlisted reports."),
 ) -> None:
     """Summarize aura uptime in one report fight, optionally over an explicit window."""
@@ -5438,6 +5512,7 @@ def report_encounter_aura_summary(
                 table_report=table_payload,
                 master_report=master_report,
                 ability_id=ability_id,
+                include_raw=include_raw,
             ),
         },
         client=client,
@@ -5509,6 +5584,7 @@ def _aura_compare_windows(
                 table_report=table,
                 master_report=master_report,
                 ability_id=ability_id,
+                include_raw=False,
             ),
         )
 
@@ -5638,6 +5714,7 @@ def report_encounter_damage_source_summary(
         None, "--window-start-ms", help="Optional encounter-relative start offset in milliseconds."),
     window_end_ms: float | None = typer.Option(None, "--window-end-ms", help="Optional encounter-relative end offset in milliseconds."),
     translate: bool | None = typer.Option(None, "--translate/--no-translate", help="Optional translation toggle."),
+    include_raw: bool = typer.Option(False, "--include-raw", help=_INCLUDE_RAW_HELP),
     allow_unlisted: bool = typer.Option(False, "--allow-unlisted", help="Allow lookup of unlisted reports."),
 ) -> None:
     """Summarize damage in one report fight by source actor."""
@@ -5688,11 +5765,13 @@ def report_encounter_damage_source_summary(
                 finished_report_ttl=_emitted_finished_report_ttl(client),
                 report_ttl=_emitted_report_ttl(client),
             ),
-            **_report_encounter_damage_source_summary_payload(
+            **_report_encounter_damage_summary_payload(
                 report=report,
                 fight=fight,
                 table_report=table_payload,
                 master_report=master_report,
+                actor_field="source",
+                include_raw=include_raw,
             ),
         },
         client=client,
@@ -5714,6 +5793,7 @@ def report_encounter_damage_target_summary(
         None, "--window-start-ms", help="Optional encounter-relative start offset in milliseconds."),
     window_end_ms: float | None = typer.Option(None, "--window-end-ms", help="Optional encounter-relative end offset in milliseconds."),
     translate: bool | None = typer.Option(None, "--translate/--no-translate", help="Optional translation toggle."),
+    include_raw: bool = typer.Option(False, "--include-raw", help=_INCLUDE_RAW_HELP),
     allow_unlisted: bool = typer.Option(False, "--allow-unlisted", help="Allow lookup of unlisted reports."),
 ) -> None:
     """Summarize damage in one report fight by target actor."""
@@ -5764,11 +5844,13 @@ def report_encounter_damage_target_summary(
                 finished_report_ttl=_emitted_finished_report_ttl(client),
                 report_ttl=_emitted_report_ttl(client),
             ),
-            **_report_encounter_damage_target_summary_payload(
+            **_report_encounter_damage_summary_payload(
                 report=report,
                 fight=fight,
                 table_report=table_payload,
                 master_report=master_report,
+                actor_field="target",
+                include_raw=include_raw,
             ),
         },
         client=client,
@@ -5894,6 +5976,7 @@ def kill_time_distribution(
         ctx,
         _kill_time_distribution_payload(
             cache_ttl_seconds=_emitted_finished_report_ttl(client),
+            transport_counts=client.transport_counts,
             rows=analytics["rows"],
             sample=analytics["sample"],
             query={**asdict(scope), "top": len(analytics["rows"])},
@@ -6130,13 +6213,14 @@ def report_events(
     translate: bool | None = typer.Option(None, "--translate/--no-translate", help="Optional translation toggle."),
     allow_unlisted: bool = typer.Option(False, "--allow-unlisted", help="Allow lookup of unlisted reports."),
 ) -> None:
-    """Return raw report events for one narrowed slice of a report."""
-    if not any(value is not None for value in (fight_id, encounter_id, start_time, end_time)):
-        _fail(
-            ctx,
-            "missing_scope",
-            "report-events requires a narrowed slice. Provide --fight-id, --encounter-id, --start-time, or --end-time.",
-        )
+    """Return raw report events for one fight (--fight-id) or one explicit --start-time/--end-time window."""
+    _require_report_slice(
+        ctx,
+        command="report-events",
+        fight_id=fight_id,
+        start_time=start_time,
+        end_time=end_time,
+    )
     _emit_report_events_slice(
         ctx,
         code=code,
@@ -6307,7 +6391,16 @@ def report_player_details(
     translate: bool | None = typer.Option(None, "--translate/--no-translate", help="Optional translation toggle."),
     allow_unlisted: bool = typer.Option(False, "--allow-unlisted", help="Allow lookup of unlisted reports."),
 ) -> None:
-    """Return a report's player details, by role and spec."""
+    """Return a report's player details for one fight (--fight-id) or one explicit --start-time/--end-time window."""
+    # Warcraft Logs answers a wider playerDetails query with an empty roster plus a GraphQL
+    # warning, which reads as "this report has no players". Reject it here like report-events does.
+    _require_report_slice(
+        ctx,
+        command="report-player-details",
+        fight_id=fight_id,
+        start_time=start_time,
+        end_time=end_time,
+    )
     normalized_kill_type = _normalize_graphql_enum(kill_type)
     options = ReportPlayerDetailsOptions(
         difficulty=difficulty,

@@ -16,44 +16,82 @@ from warcraft_core.wow_normalization import normalize_name, normalize_region, pr
 from raiderio_cli.client import RaiderIOClient
 from raiderio_cli.identity import raiderio_class_spec_identity
 
+STRUCTURED_REGIONS = frozenset({"us", "eu", "kr", "tw", "cn"})
+# Realm display names run to three words ("Sisters of Elune"), so a structured query is split at
+# every realm length up to three rather than assuming the realm is one token.
+MAX_REALM_TOKENS = 3
+
+
+@dataclass(frozen=True, slots=True)
+class StructuredProbe:
+    """One `<region> <realm> <name>` reading of a query, ready to be looked up directly."""
+
+    region: str
+    realm: str
+    name: str
+
+
+TYPE_HINT_TOKENS = {
+    "guild": "guild",
+    "guilds": "guild",
+    "character": "character",
+    "characters": "character",
+    "char": "character",
+}
+
 
 def _normalize_search_query(query: str) -> tuple[str, str | None]:
+    """Split a leading or trailing ``guild``/``character`` hint off the query.
+
+    Only the outer tokens count. Realm and guild names contain these words ("Sisters of Elune
+    Guild Wars"), and stripping the word wherever it appears searches for a name nobody has.
+    """
     tokens = [token for token in query.strip().split() if token]
-    type_hint: str | None = None
-    kept: list[str] = []
-    for token in tokens:
-        lower = token.lower()
-        if lower in {"guild", "guilds"}:
-            type_hint = "guild"
-            continue
-        if lower in {"character", "characters", "char"}:
-            type_hint = "character"
-            continue
-        kept.append(token)
+    if not tokens:
+        return query.strip(), None
+    type_hint = TYPE_HINT_TOKENS.get(tokens[0].lower())
+    kept = tokens[1:] if type_hint else tokens
+    if type_hint is None and len(tokens) > 1:
+        type_hint = TYPE_HINT_TOKENS.get(tokens[-1].lower())
+        kept = tokens[:-1] if type_hint else tokens
     normalized = " ".join(kept).strip() or query.strip()
     return normalized, type_hint
 
 
-def normalize_structured_query(query: str) -> tuple[str, str | None, str | None, str | None, str | None]:
+def normalize_structured_query(query: str) -> tuple[str, str | None, list[StructuredProbe]]:
+    """Return the query without its type hint, the hint, and every realm/name split worth probing.
+
+    ``us tarren mill Cotti`` is ambiguous -- the realm may be one or two tokens -- so both readings
+    are returned, longest realm last, and the caller probes them in order.
+    """
     normalized_query, type_hint = _normalize_search_query(query)
     tokens = [token for token in normalized_query.strip().split() if token]
     if len(tokens) < 3:
-        return normalized_query, type_hint, None, None, None
+        return normalized_query, type_hint, []
     region = normalize_region(tokens[0])
-    if region not in {"us", "eu", "kr", "tw", "cn"}:
-        return normalized_query, type_hint, None, None, None
-    realm = primary_realm_slug(tokens[1])
-    name = normalize_name(" ".join(tokens[2:]).strip())
-    if not name:
-        return normalized_query, type_hint, None, None, None
-    return normalized_query, type_hint, region, realm, name
+    if region not in STRUCTURED_REGIONS:
+        return normalized_query, type_hint, []
+    probes: list[StructuredProbe] = []
+    for realm_token_count in range(1, min(MAX_REALM_TOKENS, len(tokens) - 2) + 1):
+        realm = primary_realm_slug(" ".join(tokens[1 : 1 + realm_token_count]))
+        name = normalize_name(" ".join(tokens[1 + realm_token_count :]))
+        if realm and name:
+            probes.append(StructuredProbe(region=region, realm=realm, name=name))
+    return normalized_query, type_hint, probes
 
 
 def _query_terms(value: str) -> list[str]:
     return [part for part in value.lower().split() if part]
 
 
-def _combined_match_text(*parts: str | None) -> str:
+def _combined_match_text(name: str, realm: str | None, region: str | None) -> str:
+    """The lowercased text a query term has to appear in, including the realm's slug spellings.
+
+    Raider.IO echoes realm display names (``Mal'Ganis``), so without the slug spellings the CLI
+    itself emits (``malganis``, ``mal-ganis``) a query written the way ``next_command`` writes it
+    would lose the all-terms credit and never resolve.
+    """
+    parts = [name, realm, region, *(realm_slug_variants(realm) if realm else [])]
     return " ".join(part for part in parts if part).lower()
 
 
@@ -62,14 +100,21 @@ def _all_terms_match(query_terms: list[str], combined: str) -> bool:
 
 
 def _realm_term_matches(query_terms: list[str], realm: str) -> bool:
-    """True when a query term names ``realm``, comparing through the shared realm slug variants.
+    """True when a run of query terms names ``realm``, compared through the shared slug variants.
 
-    Raider.IO echoes realm display names (``Mal'Ganis``), so a raw string comparison misses every
-    query that spells the realm as a slug (``malganis``, ``mal-ganis``) even though the structured
-    probe resolved that exact realm.
+    Raider.IO echoes realm display names (``Mal'Ganis``, ``Tarren Mill``), so comparing raw strings
+    term by term misses both the slug spellings the CLI itself emits (``malganis``, ``mal-ganis``)
+    and every realm written as more than one word.
     """
     realm_variants = set(realm_slug_variants(realm))
-    return bool(realm_variants) and any(realm_variants & set(realm_slug_variants(term)) for term in query_terms)
+    if not realm_variants:
+        return False
+    spans = (
+        " ".join(query_terms[start:end])
+        for start in range(len(query_terms))
+        for end in range(start + 1, len(query_terms) + 1)
+    )
+    return any(realm_variants & set(realm_slug_variants(span)) for span in spans)
 
 
 @dataclass(frozen=True, slots=True)
@@ -270,51 +315,52 @@ def candidate_from_guild_profile(
     }
 
 
+def _probe_one_split(
+    client: RaiderIOClient,
+    probe: StructuredProbe,
+    *,
+    query: str,
+    type_hint: str | None,
+) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    probe_kinds = [type_hint] if type_hint in {"character", "guild"} else ["character", "guild"]
+    for probe_kind in probe_kinds:
+        builder = candidate_from_character_profile if probe_kind == "character" else candidate_from_guild_profile
+        fetch = client.character_profile_variants if probe_kind == "character" else client.guild_profile_variants
+        try:
+            payload = fetch(region=probe.region, realm=probe.realm, name=probe.name)
+        except httpx.HTTPStatusError as exc:
+            # 400/404 is "no such character/guild on that realm", which is the normal answer for a
+            # split that read the wrong number of realm tokens; anything else is a real failure.
+            if exc.response.status_code in {400, 404}:
+                continue
+            raise
+        candidates.append(
+            builder(
+                query=query,
+                type_hint=type_hint,
+                payload=payload,
+                query_region=probe.region,
+                query_realm=probe.realm,
+                query_name=probe.name,
+            )
+        )
+    return candidates
+
+
 def probe_structured_candidates(
     client: RaiderIOClient,
     *,
     query: str,
     type_hint: str | None,
-    region: str | None,
-    realm: str | None,
-    name: str | None,
+    probes: list[StructuredProbe],
 ) -> list[dict[str, Any]]:
-    if region is None or realm is None or name is None:
-        return []
-    candidates: list[dict[str, Any]] = []
-    probe_kinds = [type_hint] if type_hint in {"character", "guild"} else ["character", "guild"]
-    for probe_kind in probe_kinds:
-        try:
-            if probe_kind == "character":
-                payload = client.character_profile_variants(region=region, realm=realm, name=name)
-                candidates.append(
-                    candidate_from_character_profile(
-                        query=query,
-                        type_hint=type_hint,
-                        payload=payload,
-                        query_region=region,
-                        query_realm=realm,
-                        query_name=name,
-                    )
-                )
-            else:
-                payload = client.guild_profile_variants(region=region, realm=realm, name=name)
-                candidates.append(
-                    candidate_from_guild_profile(
-                        query=query,
-                        type_hint=type_hint,
-                        payload=payload,
-                        query_region=region,
-                        query_realm=realm,
-                        query_name=name,
-                    )
-                )
-        except httpx.HTTPStatusError as exc:
-            status_code = exc.response.status_code
-            if status_code in {400, 404}:
-                continue
-            raise
-    return candidates
+    """Look the query up directly, stopping at the first realm/name split that exists upstream."""
+    for probe in probes:
+        candidates = _probe_one_split(client, probe, query=query, type_hint=type_hint)
+        if candidates:
+            return candidates
+    return []
 
 
 def search_result_candidate(row: dict[str, Any], *, query: str, type_hint: str | None) -> dict[str, Any] | None:

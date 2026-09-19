@@ -9,6 +9,7 @@ from wowhead_cli.comments_intelligence import (
     filter_raw_comments,
 )
 from wowhead_cli.main import app
+from wowhead_cli.page_parser import sort_comments
 
 runner = CliRunner()
 
@@ -118,3 +119,39 @@ def test_comments_command_supports_insights_and_filters(monkeypatch) -> None:
     assert payload["counts"]["filtered_comments"] == 1
     assert payload["intelligence"]["insights"][0]["comment_id"] == 1
     assert payload["intelligence"]["freshness"]["comment_count"] == 1
+
+
+SORT_MODE_COMMENTS = [
+    {"id": 1, "user": "A", "body": "one", "date": "2024-01-01T00:00:00-06:00", "rating": 2},
+    {"id": 2, "user": "B", "body": "two", "date": "2023-01-01T00:00:00-06:00", "rating": 9},
+    {"id": 3, "user": "C", "body": "three", "date": "2025-01-01T00:00:00-06:00", "rating": 5},
+]
+
+
+def test_sort_comments_orders_each_documented_mode_differently() -> None:
+    """Rating order and date order disagree on these rows, so every mode returns its own ordering."""
+    assert [row["id"] for row in sort_comments(SORT_MODE_COMMENTS, "rating")] == [2, 3, 1]
+    assert [row["id"] for row in sort_comments(SORT_MODE_COMMENTS, "oldest")] == [2, 1, 3]
+    assert [row["id"] for row in sort_comments(SORT_MODE_COMMENTS, "newest")] == [3, 1, 2]
+
+
+def test_comments_sort_flag_reaches_the_emitted_comment_order(monkeypatch) -> None:
+    rows = json.dumps(
+        [dict(row, number=index, nreplies=0, replies=[]) for index, row in enumerate(SORT_MODE_COMMENTS)]
+    )
+    html = f"""
+    <html><head><link rel="canonical" href="https://www.wowhead.com/item=19019/thunderfury"></head>
+    <body><script>var lv_comments0 = {rows};</script></body></html>
+    """
+    monkeypatch.setattr(
+        "wowhead_cli.main.WowheadClient.tooltip",
+        lambda self, entity_type, entity_id, data_env=None: {"name": "Thunderfury"},
+    )
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.entity_page_html", lambda self, t, i: html)
+
+    emitted = {}
+    for mode in ("rating", "oldest", "newest"):
+        result = runner.invoke(app, ["comments", "item", "19019", "--sort", mode])
+        assert result.exit_code == 0, mode
+        emitted[mode] = [row["id"] for row in json.loads(result.stdout)["data"]["comments"]]
+    assert emitted == {"rating": [2, 3, 1], "oldest": [2, 1, 3], "newest": [3, 1, 2]}

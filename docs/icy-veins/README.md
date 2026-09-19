@@ -30,7 +30,7 @@ Per-command flags:
 
 - `search` / `resolve`: `--limit` (1-50, default 5)
 - `guide-export`: `--out <dir>` (defaults to `./icy-veins_exports/guide-<slug>`)
-- `guide-query`: `--limit` (1-50, default 5), `--kind` (repeatable), `--section-title`
+- `guide-query`: `--limit` (1-50, default 5), `--kind` (repeatable or comma-separated), `--section-title`
 
 `--kind` accepts `sections`, `navigation`, `linked_entities`, `build_references`, and
 `analysis_surfaces`; all five are searched when the flag is omitted.
@@ -53,7 +53,33 @@ still emitted alongside the envelope as deprecated legacy copies, so `payload["r
 `payload["data"]["results"]` hold the same value.
 
 Exit codes follow `docs/foundation/ERROR_CONTRACT.md`: 1 generic, 2 usage, 4 guide not found,
-5 network/upstream failure.
+5 network/upstream failure. A page whose article container no longer matches (an Icy Veins layout
+change) fails with `parse_failed` and exit 1 rather than returning an empty article with `ok:true`.
+
+### Build references
+
+`build_references` carries explicit build evidence from the page, never a guess from the slug or
+title. Two reference types are emitted:
+
+| `reference_type` | Source on the page | `url` |
+| --- | --- | --- |
+| `wowhead_talent_calc_url` | an embedded Wowhead talent-calc link | the talent-calc URL |
+| `wow_talent_export` | a published WoW loadout import string (the `Copy` blocks on the talents pages) | the import string itself, because the reference has no link |
+
+Both types set `build_code`, so `warcraft guide-builds-simc` collects either one and reports it
+under `summary.identify_success_count`.
+
+`wow_talent_export` rows leave `build_identity` unknown: the import string does not say which class
+and spec it belongs to. Decoding needs both, so `warcraft guide-builds-simc --decode` currently
+leaves `summary.decode_success_count` at 0 for these rows. To decode one, name the class and spec
+yourself: `simc decode-build --talents <build_code> --actor-class paladin --spec holy`.
+
+### Partial guide bundles
+
+`guide-full` and `guide-export` walk every page in the family navigation. A page that cannot be
+fetched or parsed is skipped rather than failing the whole bundle, and it is reported in
+`data.failed_pages` (`{count, items: [{url, section_slug, error: {code, message}}]}`). Content from
+those pages is missing from the merged sections, entities, build references, and analysis surfaces.
 
 ## Supported guide families
 
@@ -108,7 +134,8 @@ separately.
 ## Tests
 
 - `tests/test_icy_veins_cli.py` - parsing, ranking, command contracts, transport error envelopes
-- `tests/test_icy_veins_recorded_fixtures.py` - recorded real pages, one per supported family
+- `tests/test_icy_veins_recorded_fixtures.py` - captured real pages (pre-redesign and Astro layouts)
+  plus the slug-to-family classification table
 - `tests/test_icy_veins_live.py` - live coverage, run with `ICY_VEINS_LIVE_TESTS=1 pytest -m live`
 
 ## Not in scope

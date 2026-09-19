@@ -178,14 +178,12 @@ def _resolve_payload(search_payload: dict[str, Any], *, limit: int) -> dict[str,
 
 def search_results(client: RaiderIOClient, query: str, *, limit: int, kind: str) -> dict[str, Any]:
     """Rank Raider.IO character and guild matches for a free-text query."""
-    normalized_query, type_hint, region, realm, name = normalize_structured_query(query)
+    normalized_query, type_hint, probes = normalize_structured_query(query)
     structured_candidates = probe_structured_candidates(
         client,
         query=normalized_query,
         type_hint=type_hint,
-        region=region,
-        realm=realm,
-        name=name,
+        probes=probes,
     )
     if structured_candidates:
         return _search_results_payload(

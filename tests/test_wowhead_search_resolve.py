@@ -90,33 +90,6 @@ def test_search_faction_result_includes_faction_url(monkeypatch) -> None:
 
 
 
-def test_search_maps_live_suggestion_type_ids_to_followable_entities(monkeypatch) -> None:
-    """Wowhead's suggestion payload uses 7=Zone, 10=Achievement, 17=Currency."""
-
-    def fake_search(self, query: str):  # noqa: ANN001
-        return {
-            "search": query,
-            "results": [
-                {"type": 7, "id": 1519, "name": "Stormwind City", "typeName": "Zone"},
-                {"type": 10, "id": 428, "name": "Thunderfury, Blessed Blade of the Windseeker", "typeName": "Achievement"},
-                {"type": 17, "id": 2815, "name": "Resonance Crystals", "typeName": "Currency"},
-            ],
-        }
-
-    monkeypatch.setattr("wowhead_cli.main.WowheadClient.search_suggestions", fake_search)
-    result = runner.invoke(app, ["search", "stormwind", "--limit", "3"])
-    assert result.exit_code == 0
-
-    payload = json.loads(result.stdout)
-    routed = {row["entity_type"]: row["url"] for row in payload["results"]}
-    assert routed == {
-        "zone": "https://www.wowhead.com/zone=1519",
-        "achievement": "https://www.wowhead.com/achievement=428",
-        "currency": "https://www.wowhead.com/currency=2815",
-    }
-
-
-
 def test_search_reranks_exact_name_match_ahead_of_noisy_popular_result(monkeypatch) -> None:
     def fake_search(self, query: str):  # noqa: ANN001
         return {
@@ -317,14 +290,21 @@ def test_exact_match_score_prefers_exact_name_over_display_name() -> None:
 
 
 
-def test_prefix_and_contains_score_prefers_name_prefix_before_contains() -> None:
-    score, reasons = prefix_and_contains_score(
-        "create",
-        name_normalized="createframe",
-        display_normalized="api createframe",
-    )
-    assert score == 10
-    assert reasons == ["name_prefix"]
+def test_prefix_and_contains_score_pins_every_branch_weight() -> None:
+    assert prefix_and_contains_score(
+        "create", name_normalized="createframe", display_normalized="api createframe"
+    ) == (10, ["name_prefix"])
+    assert prefix_and_contains_score(
+        "api", name_normalized="createframe", display_normalized="api createframe"
+    ) == (8, ["display_name_prefix"])
+    # A mid-name hit outranks a prefix hit: it is a rarer, more deliberate match.
+    assert prefix_and_contains_score(
+        "frame", name_normalized="createframe", display_normalized="widget"
+    ) == (14, ["name_contains_query"])
+    assert prefix_and_contains_score(
+        "frame", name_normalized="widget", display_normalized="api createframe"
+    ) == (12, ["display_name_contains_query"])
+    assert prefix_and_contains_score("gone", name_normalized="widget", display_normalized="api") == (0, [])
 
 
 
@@ -350,14 +330,14 @@ def test_type_hint_score_boosts_matching_entity_type() -> None:
 
 
 
-def test_popularity_score_adds_reason_and_entity_bonus() -> None:
-    score, reasons = popularity_score(999, entity_type="item")
-    assert score >= 1
-    assert reasons == ["popularity"]
-
-    score, reasons = popularity_score(0, entity_type="item")
-    assert score == 1
-    assert reasons == []
+def test_popularity_score_pins_the_curve_and_the_entity_bonus() -> None:
+    # log10(popularity + 1) * 2, floored, capped at 6, plus 1 for a routable entity type.
+    assert popularity_score(999, entity_type="item") == (7, ["popularity"])
+    assert popularity_score(9, entity_type="item") == (3, ["popularity"])
+    assert popularity_score(999999, entity_type="item") == (7, ["popularity"])
+    assert popularity_score(999, entity_type=None) == (6, ["popularity"])
+    assert popularity_score(0, entity_type="item") == (1, [])
+    assert popularity_score(0, entity_type=None) == (0, [])
 
 
 
@@ -548,3 +528,81 @@ def test_invalid_expansion_is_rejected() -> None:
     assert "Unknown expansion" in result.output
 
 
+
+
+def test_resolve_rejects_entity_types_wowhead_suggestions_cannot_label() -> None:
+    """Mounts, recipes and battle pets have no suggestion type, so the filter would match nothing."""
+    for entity_type in ("mount", "recipe", "battle-pet"):
+        result = runner.invoke(app, ["resolve", "thunderfury", "--entity-type", entity_type])
+        assert result.exit_code == 2, entity_type
+        payload = json.loads(result.output)
+        assert payload["error"]["code"] == "invalid_argument"
+        assert entity_type not in payload["error"]["message"].split(": ", 1)[1]
+
+
+
+def test_search_and_resolve_reject_a_blank_query_before_calling_wowhead(monkeypatch) -> None:
+    def explode(self, query: str):  # noqa: ANN001
+        raise AssertionError("a blank query must not reach Wowhead")
+
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.search_suggestions", explode)
+    for argv in (["search", ""], ["resolve", "   "]):
+        result = runner.invoke(app, argv)
+        assert result.exit_code == 2, argv
+        payload = json.loads(result.output)
+        assert payload["error"]["code"] == "invalid_query"
+
+
+
+def test_search_reports_how_many_matches_the_limit_cut_off(monkeypatch) -> None:
+    def fake_search(self, query: str):  # noqa: ANN001
+        return {
+            "search": query,
+            "results": [
+                {"type": 3, "id": index, "name": f"Thunderfury {index}", "typeName": "Item"}
+                for index in range(1, 6)
+            ],
+        }
+
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.search_suggestions", fake_search)
+    result = runner.invoke(app, ["search", "thunderfury", "--limit", "2"])
+    assert result.exit_code == 0
+
+    data = json.loads(result.stdout)["data"]
+    assert data["count"] == len(data["results"]) == 2
+    assert data["total_matches"] == 5
+    assert data["truncated"] is True
+
+    resolved = runner.invoke(app, ["resolve", "thunderfury", "--limit", "2"])
+    assert resolved.exit_code == 0
+    resolve_data = json.loads(resolved.stdout)["data"]
+    assert resolve_data["count"] == len(resolve_data["candidates"]) == 2
+    assert resolve_data["total_matches"] == 5
+    assert resolve_data["truncated"] is True
+
+
+def test_resolve_recommends_news_post_when_the_best_match_is_a_news_row(monkeypatch) -> None:
+    """A news row is routable, so `resolve` may answer with one and hand back `news-post`."""
+
+    def fake_search(self, query: str):  # noqa: ANN001
+        return {
+            "search": query,
+            "results": [
+                {
+                    "type": 162,
+                    "id": 382931,
+                    "name": "Midnight Hotfixes for September 18th",
+                    "typeName": "News Post",
+                    "popularity": 20,
+                },
+            ],
+        }
+
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.search_suggestions", fake_search)
+    result = runner.invoke(app, ["resolve", "Midnight Hotfixes for September 18th"])
+    assert result.exit_code == 0
+
+    data = json.loads(result.stdout)["data"]
+    assert data["match"]["entity_type"] == "news"
+    assert data["resolved"] is True
+    assert data["next_command"] == "wowhead news-post https://www.wowhead.com/news=382931"

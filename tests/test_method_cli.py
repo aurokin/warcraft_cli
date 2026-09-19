@@ -466,3 +466,188 @@ def test_method_provider_surface_is_callable_in_process(monkeypatch) -> None:
     assert PROVIDER.name == "method"
     assert envelope_violations(envelope) == []
     assert envelope["data"]["results"][0]["id"] == "mistweaver-monk"
+
+
+INTRO_HTML_WITH_NON_GUIDE_NAV_LINK = """
+<html>
+  <head>
+    <link rel="canonical" href="https://www.method.gg/guides/mistweaver-monk">
+  </head>
+  <body>
+    <nav>
+      <ul class="guide-navigation">
+        <li><a href="/guides">All guides</a></li>
+        <li class="active"><a href="/guides/mistweaver-monk">Introduction</a></li>
+      </ul>
+    </nav>
+    <article class="guide-main-content">
+      <h2>Introduction</h2>
+      <p>Intro copy for Mistweaver Monk.</p>
+    </article>
+  </body>
+</html>
+"""
+
+def _unrecognised_layout_html(path: str) -> str:
+    """A page whose prose lives in a container the parser does not know: Method template drift."""
+    return f"""
+<html>
+  <head>
+    <link rel="canonical" href="https://www.method.gg/guides/{path}">
+  </head>
+  <body>
+    <div class="some-new-wrapper">
+      <h2>Introduction</h2>
+      <p>Real prose that the parser cannot see.</p>
+    </div>
+  </body>
+</html>
+"""
+
+
+UNRECOGNISED_LAYOUT_HTML = _unrecognised_layout_html("mistweaver-monk")
+
+
+def test_method_guide_survives_a_non_guide_link_in_the_page_navigation(monkeypatch) -> None:
+    """An 'All guides' link in Method's own nav must not make a valid slug look invalid."""
+    monkeypatch.setattr(
+        "method_cli.main.MethodClient.fetch_guide_page",
+        lambda self, guide_ref: parse_guide_page(
+            INTRO_HTML_WITH_NON_GUIDE_NAV_LINK,
+            source_url="https://www.method.gg/guides/mistweaver-monk",
+        ),
+    )
+    result = runner.invoke(app, ["guide", "mistweaver-monk"])
+    assert result.exit_code == 0
+
+    payload = json.loads(result.stdout)["data"]
+    assert [row["section_slug"] for row in payload["navigation"]["items"]] == ["introduction"]
+
+
+def test_method_guide_fails_when_the_article_container_is_missing(monkeypatch) -> None:
+    """Layout drift must be an error, not ok:true with an empty article."""
+    monkeypatch.setattr(
+        "method_cli.main.MethodClient.fetch_guide_page",
+        lambda self, guide_ref: parse_guide_page(
+            UNRECOGNISED_LAYOUT_HTML,
+            source_url="https://www.method.gg/guides/mistweaver-monk",
+        ),
+    )
+    result = runner.invoke(app, ["guide", "mistweaver-monk"])
+
+    assert result.exit_code == 1
+    payload = _error_payload(result)
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "parse_failed"
+    assert payload["error"]["details"]["page_url"] == "https://www.method.gg/guides/mistweaver-monk"
+
+
+def test_method_guide_page_parse_failure_is_not_blamed_on_the_argument(monkeypatch) -> None:
+    """A valid slug whose page will not parse is a `parse_failed`, not an `invalid_guide_ref`."""
+
+    def fetch(self, guide_ref: str) -> dict[str, object]:
+        raise ValueError("Failed to clone Method article node.")
+
+    monkeypatch.setattr("method_cli.main.MethodClient.fetch_guide_page", fetch)
+    result = runner.invoke(app, ["guide", "mistweaver-monk"])
+
+    assert result.exit_code == 1
+    payload = _error_payload(result)
+    assert payload["error"]["code"] == "parse_failed"
+    assert "mistweaver-monk" in payload["error"]["message"]
+
+
+BROKEN_NAVIGATION_PAGE_CASES = [
+    ("network", "network_error"),
+    ("unparsable", "parse_failed"),
+    ("empty_article", "parse_failed"),
+]
+
+
+def _navigation_page_fetch(failure: str):
+    """Fetch stub where the /talents sibling fails in ``failure`` mode and every other page is fine."""
+
+    def fetch(self, guide_ref: str) -> dict[str, object]:
+        if not str(guide_ref).endswith("/talents"):
+            return _fake_fetch_guide_page(guide_ref)
+        if failure == "network":
+            raise httpx.ConnectError("boom", request=httpx.Request("GET", str(guide_ref)))
+        if failure == "unparsable":
+            raise ValueError("Failed to clone Method article node.")
+        return parse_guide_page(
+            _unrecognised_layout_html("mistweaver-monk/talents"),
+            source_url="https://www.method.gg/guides/mistweaver-monk/talents",
+        )
+
+    return fetch
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected_code"),
+    BROKEN_NAVIGATION_PAGE_CASES,
+    ids=[case[0] for case in BROKEN_NAVIGATION_PAGE_CASES],
+)
+def test_method_guide_full_records_a_failed_navigation_page_and_keeps_going(monkeypatch, failure: str, expected_code: str) -> None:
+    monkeypatch.setattr("method_cli.main.MethodClient.fetch_guide_page", _navigation_page_fetch(failure))
+    result = runner.invoke(app, ["guide-full", "mistweaver-monk"])
+    assert result.exit_code == 0
+
+    payload = json.loads(result.stdout)["data"]
+    assert payload["guide"]["page_count"] == 1
+    assert payload["failed_pages"]["count"] == 1
+    failed = payload["failed_pages"]["items"][0]
+    assert failed["section_slug"] == "talents"
+    assert failed["error"]["code"] == expected_code
+
+
+def test_method_guide_export_reports_failed_navigation_pages(monkeypatch, tmp_path: Path) -> None:
+    """An exported bundle is partial when a navigation page failed; the command must say so."""
+    monkeypatch.setattr("method_cli.main.MethodClient.fetch_guide_page", _navigation_page_fetch("network"))
+    result = runner.invoke(app, ["guide-export", "mistweaver-monk", "--out", str(tmp_path / "bundle")])
+    assert result.exit_code == 0
+
+    payload = json.loads(result.stdout)["data"]
+    assert payload["counts"]["pages"] == 1
+    assert payload["failed_pages"]["count"] == 1
+    assert payload["failed_pages"]["items"][0]["section_slug"] == "talents"
+
+
+TALENT_BLOCK_HTML = """
+<html>
+  <head>
+    <link rel="canonical" href="https://www.method.gg/guides/mistweaver-monk/talents">
+  </head>
+  <body>
+    <article class="guide-main-content">
+      <h2>Talent Builds</h2>
+      <div class="df-talent-block">
+        <div class="talent-title">Raid (Conduit of the Celestials)</div>
+        <div class="talent-embed" data-talent="C4QAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB"></div>
+      </div>
+      <div class="df-talent-block">
+        <div class="talent-title">Mythic+ (Conduit of the Celestials)</div>
+        <div class="talent-embed" data-talent="C4QAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB"></div>
+      </div>
+      <div class="df-talent-block">
+        <div class="talent-title">Placeholder</div>
+        <div class="talent-embed" data-talent="coming soon"></div>
+      </div>
+    </article>
+  </body>
+</html>
+"""
+
+
+def _talent_block_builds() -> list[dict[str, object]]:
+    payload = parse_guide_page(TALENT_BLOCK_HTML, source_url="https://www.method.gg/guides/mistweaver-monk/talents")
+    return payload["build_references"]
+
+
+def test_method_ignores_talent_blocks_that_hold_no_loadout_import_string() -> None:
+    """Placeholder embeds share the talent-block markup; only real import strings are builds."""
+    assert [row["build_code"] for row in _talent_block_builds()] == ["C4QAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB"]
+
+
+def test_method_keeps_the_first_label_when_one_import_string_is_published_twice() -> None:
+    """Two builds can share a loadout string; the first published name wins so output is stable."""
+    assert [row["label"] for row in _talent_block_builds()] == ["Raid (Conduit of the Celestials)"]

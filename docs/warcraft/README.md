@@ -18,7 +18,7 @@ Tiers describe how much depth an agent should expect. `warcraft doctor` reports 
 | supported | warcraft-wiki | `warcraft-wiki` | MediaWiki-backed reference article search and export. |
 | supported | icy-veins | `icy-veins` | Guide search, resolve, and guide bundle export. |
 | supported | method | `method` | Guide search, resolve, and guide bundle export. |
-| experimental | lorrgs | `lorrgs` | Cooldown timeline rankings and cached report overviews. |
+| supported | lorrgs | `lorrgs` | Cooldown timeline rankings and cached report overviews; no auth. |
 | experimental | raidbots | `raidbots` | Public report parsing and SimC input handoff; no search index. |
 | experimental | blizzard-api | `blizzard` | Battle.net Game Data and Profile reads; unverified stub surfaces. |
 | experimental | curseforge | `curseforge` | Addon metadata lookup; unverified stub surfaces. |
@@ -39,8 +39,10 @@ warcraft --expansion wotlk resolve "thunderfury"
   `warcraftlogs --site`). Providers with no expansion axis (`simc`, `blizzard`, `curseforge`) pass
   through unchanged with an `expansion_advisory` note.
 
-`warcraft search --compact` and `warcraft resolve --compact` are separate command-level flags that
-shrink candidate rows; the global `--compact` truncates long strings in any payload.
+`warcraft search --brief` and `warcraft resolve --brief` shrink candidate rows and drop the
+per-provider payloads. `--compact` is the global output flag only, and it truncates long strings in
+any payload; the two no longer share a name. `--brief` never hides a provider failure:
+`failed_providers`, `failed_provider_count`, and `answered_provider_count` stay in both shapes.
 
 ## Composite commands
 
@@ -50,30 +52,55 @@ Every command's flags are listed in [docs/reference/warcraft.md](../reference/wa
 - `warcraft doctor` — wrapper and per-provider readiness: tier, auth, expansion support, runtime paths.
 - `warcraft search` — fan out to every search-ready provider and rank the merged candidates. Each
   provider row carries `ok` and `error`, so a failed provider is distinguishable from an empty result.
+  Each provider's scores are rescaled against that provider's own best row before the merge, so a
+  provider with a larger local score scale cannot take every slot; the divisor has a floor, so a
+  provider whose best row is weak does not get a full score for topping its own empty field.
+  `count` is the merged candidate total and `truncated` says whether `--limit` cut it.
 - `warcraft resolve` — pick the single best match plus its follow-up command; never resolves to a
   provider that reported `resolved: false`. `selected_provider` is the match's provider or `null`;
-  `provider` mirrors it when resolved and is `warcraft` when nothing matched.
+  `provider` mirrors it when resolved and is `warcraft` when nothing matched. When nothing resolved,
+  `fallback_search_command` and `best_unresolved_candidate` carry the next step instead of a dead end.
 - `warcraft guild` / `guild-ranks` — one guild identity's Raider.IO snapshot, and its per-raid
-  normal/heroic/mythic world, region, and realm ranks, with citations.
+  normal/heroic/mythic world, region, and realm ranks, with citations. `sources.raiderio.summary`
+  reports every raid Raider.IO returned (`raids[]`, progression joined to its own ranks by
+  `raid_slug`). There is no `active_raid`: Raider.IO orders those rows by slug and carries no raid
+  start/end window, so naming one of them "active" would be a guess. Cross-reference
+  `raiderio raids` when you need the currently running tier.
 - `warcraft actor-profile` — cross-walk a Warcraft Logs report actor to a Raider.IO profile.
 - `warcraft cooldown-packet` — compose Lorrgs phase windows with Warcraft Logs cast events for
-  phase-scoped cooldown analysis.
+  phase-scoped cooldown analysis. Lorrgs only serves reports it has already cached; for any other
+  report — or when Lorrgs itself is unreachable — pass `--actor-id` and `--spec-slug` and the packet
+  still returns the Warcraft Logs cast timeline with `lorrgs.status: "unavailable"` and
+  `phase.status: "unavailable"`. `lorrgs.message` names the real reason (only a `not_found` is
+  reported as "not cached") and `phase.requested` echoes the `--phase` that could not be applied.
 - `warcraft guide-compare` — compare two or more already-exported guide bundles.
 - `warcraft guide-compare-query` — resolve a guide query across wowhead, method, and icy-veins,
   export the bundles, and compare them. Flags: `--provider` (repeatable), `--out-root`, `--limit`,
   `--max-age-hours`, `--force-refresh/--no-force-refresh`,
   `--simc-build-handoff/--no-simc-build-handoff`, `--simc-apl-path`, `--simc-decode/--no-simc-decode`,
   `--simc-build-limit`. It writes `manifest.json` only when at least two bundles were exported.
+  Without `--out-root` it writes under `<XDG data dir>/warcraft/guide_compare/<query-slug>`, never
+  into the current directory.
 - `warcraft talent-packet` / `talent-describe` — build a validated talent transport packet, optionally
-  with simc `describe-build` output.
+  with simc `describe-build` output. Both report the file they wrote as `written_packet_path`.
 - `warcraft guide-builds-simc` — turn explicit build references in exported bundles into a simc packet.
+  `summary.simc_handoff_status` is `ok`, `no_build_references`, or `all_handoffs_failed`; the last
+  one is an error envelope, not a success with zero counters.
 
 ## Errors and exit codes
 
 Wrapper failures use the shared envelope and exit codes in
 [docs/foundation/ERROR_CONTRACT.md](../foundation/ERROR_CONTRACT.md). Wrapper validation errors
 (`unsupported_provider_expansion`, `duplicate_expansion_argument`, `invalid_argument`,
-`invalid_bundle`, `insufficient_guides`) exit 1; Typer usage errors exit 2.
+`invalid_bundle`, `insufficient_guides`, `simc_handoff_failed`) exit 1; Typer usage errors exit 2.
+
+Composite commands do not flatten a source failure: they re-emit the failing provider's own
+`error.code` and exit with the code the contract maps it to (`not_found` -> 4, `auth_required` -> 3,
+`network_error` -> 5). When every provider in a `search`/`resolve` fanout fails, the result is an
+error envelope carrying the providers' shared code (or `upstream_error` when they disagree), with
+the per-provider rows under `error.details.failed_providers` — never `ok: true` with an empty
+result list. All wrapper structured context lives under `error.details`, never as a sibling of
+`code`/`message`.
 
 ## What the wrapper does not do
 

@@ -577,9 +577,13 @@ def test_inspect_report_maps_storage_forbidden_to_not_found(monkeypatch: pytest.
     assert not envelope_violations(payload)
 
 
-def test_report_input_rejects_the_raidbots_web_page(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    # Raidbots answers /simc for an unknown report with HTTP 200 and its single-page app. Handing
-    # that markup back as SimC input produced an ok:true envelope whose "input" was HTML.
+@pytest.mark.parametrize("command", ["input", "inspect-report"])
+def test_report_fetches_reject_the_raidbots_web_page(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, command: str
+) -> None:
+    # Raidbots answers HTTP 200 with its single-page app for a report id that is gone, expired or
+    # private. `input` handed that markup back as SimC input; `inspect-report` called it a malformed
+    # report (invalid_report, exit 1). The same missing report must answer not_found on both.
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
     page = '<!doctype html>\n<html>\n  <head><title>Raidbots</title></head>\n</html>\n'
 
@@ -587,12 +591,12 @@ def test_report_input_rejects_the_raidbots_web_page(monkeypatch: pytest.MonkeyPa
         return httpx.Response(200, text=page, request=httpx.Request("GET", url))
 
     monkeypatch.setattr("raidbots_cli.client.request_with_retries", _fake)
-    result = runner.invoke(app, ["input", "gone"])
+    result = runner.invoke(app, [command, "gone"])
     assert result.exit_code == 4
     assert result.stdout == ""
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "not_found"
-    assert "SimC input" in payload["error"]["message"]
+    assert "expired or is private" in payload["error"]["message"]
     assert not envelope_violations(payload)
 
 

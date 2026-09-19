@@ -14,7 +14,7 @@ Pass these before the subcommand: `raiderio --pretty <command> ...`.
 | `--compact` | boolean | false | Truncate long string fields to reduce payload size. |
 | `--fields` | str (repeatable) |  | Return only selected fields (dot paths). Repeat or pass comma-separated values. |
 | `--fields-strict` | boolean | false | Fail when a requested --fields dot-path is missing from the payload. |
-| `--profile` | str |  | Output profile preset: agent (default compact JSON), human (pretty JSON), debug (pretty JSON + diagnostics). |
+| `--profile` | str |  | Output profile preset: agent (default compact JSON) or human (pretty JSON). |
 | `--compact-max-chars` | int range | 280 | Maximum string length before --compact truncation adds an ellipsis. |
 
 ## raiderio doctor
@@ -95,7 +95,7 @@ Return one page of the Mythic+ run leaderboard for a region and dungeon.
 
 ## raiderio raids
 
-List the raid slugs (and encounter slugs) Raider.IO knows for one expansion.
+List the raid slugs (and encounter slugs) Raider.IO knows for one expansion. Each row carries the per-region ``starts``/``ends`` timestamps, so the raid a guild is currently progressing is the one whose window covers now.
 
 **Options**
 
@@ -162,13 +162,13 @@ Derived distributions built from Raider.IO samples.
 
 ## raiderio distribution mythic-plus-runs
 
-Return a run-level distribution (level, dungeon, role, class, spec, or composition).
+Return a run-level distribution of the sampled runs over one --metric.
 
 **Options**
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--metric` | str | mythic_level | Distribution metric: mythic_level, dungeon, role, or player_region. |
+| `--metric` | str | mythic_level | Distribution metric: mythic_level, dungeon, role, player_region, class, spec, composition, class_composition. |
 | `--season` | str |  | Season slug. Defaults to Raider.IO current default season. |
 | `--region` | str | world | Region slug such as world, us, or eu. |
 | `--dungeon` | str | all | Dungeon slug or all. |
@@ -187,13 +187,13 @@ Return a run-level distribution (level, dungeon, role, class, spec, or compositi
 
 ## raiderio distribution mythic-plus-players
 
-Return a player-level distribution (appearances, top level, class, spec, role, or region).
+Return a player-level distribution of the sampled participants over one --metric.
 
 **Options**
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--metric` | str | appearance_count | Distribution metric: appearance_count, top_mythic_level, class, spec, role, or player_region. |
+| `--metric` | str | appearance_count | Distribution metric: appearance_count, top_mythic_level, class, spec, role, player_region. |
 | `--season` | str |  | Season slug. Defaults to Raider.IO current default season. |
 | `--region` | str | world | Region slug such as world, us, or eu. |
 | `--dungeon` | str | all | Dungeon slug or all. |
@@ -223,7 +223,7 @@ Estimate the sampled runs nearest a target score or Mythic+ level.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--metric` | str | score | Threshold metric: score or mythic_level. |
+| `--metric` | str | score | Threshold metric: score, mythic_level. |
 | `--value` | float | required | Target metric value to estimate around. |
 | `--season` | str |  | Season slug. Defaults to Raider.IO current default season. |
 | `--region` | str | world | Region slug such as world, us, or eu. |
@@ -271,7 +271,7 @@ Return the guild raid rankings for one raid and difficulty with freshness and ci
 | --- | --- | --- | --- |
 | `--raid` | str | required | Raid slug from `raiderio raids`, such as liberation-of-undermine. |
 | `--difficulty` | str | mythic | normal, heroic, or mythic. |
-| `--region` | str | world | world, us, eu, kr, tw, or cn. |
-| `--realm` | str |  | Realm slug to narrow to (requires a standard --region). |
+| `--region` | str | world | world, us, eu, kr, tw, cn, or an alias such as na. |
+| `--realm` | str |  | Realm slug or display name to narrow to (requires a standard --region). |
 | `--page` | int range | 0 | 20-row page of rankings to start from. |
 | `--limit` | int range | 20 | Maximum guild rows to return. |

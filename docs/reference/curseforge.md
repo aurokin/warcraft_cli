@@ -2,7 +2,7 @@
 
 # curseforge
 
-Public CurseForge addon API CLI (World of Warcraft). Experimental: the API surface is unverified against live traffic.
+Public CurseForge addon API CLI (World of Warcraft). Experimental tier: the surface is one addon lookup plus doctor and search/resolve are stubs. Host, x-api-key auth, slug search, mod lookup, and file changelog are confirmed against live CurseForge traffic, so addon payloads report provenance.verified=true.
 
 ## Global options
 
@@ -14,7 +14,7 @@ Pass these before the subcommand: `curseforge --pretty <command> ...`.
 | `--compact` | boolean | false | Truncate long string fields to reduce payload size. |
 | `--fields` | str (repeatable) |  | Return only selected fields (dot paths). Repeat or pass comma-separated values. |
 | `--fields-strict` | boolean | false | Fail when a requested --fields dot-path is missing from the payload. |
-| `--profile` | str |  | Output profile preset: agent (default compact JSON), human (pretty JSON), debug (pretty JSON + diagnostics). |
+| `--profile` | str |  | Output profile preset: agent (default compact JSON) or human (pretty JSON). |
 | `--compact-max-chars` | int range | 280 | Maximum string length before --compact truncation adds an ellipsis. |
 
 ## curseforge doctor

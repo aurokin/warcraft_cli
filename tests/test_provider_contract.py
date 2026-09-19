@@ -2,18 +2,33 @@ from __future__ import annotations
 
 import json
 
+import pytest
 from warcraft_cli.provider_contract import (
+    _load_wrapper_ranking_policy_cached,
     candidate_score,
     compact_wrapper_candidate,
     confidence_rank,
     decorate_resolve_payload,
     decorate_search_result,
     load_wrapper_ranking_policy,
+    normalized_provider_score,
+    provider_max_candidate_score,
     query_intents,
     resolve_payload_sort_key,
     search_result_sort_key,
     wrapper_search_ranking,
 )
+from warcraft_core.exit_codes import EXIT_USAGE
+from warcraft_core.provider import ProviderError
+
+
+@pytest.fixture
+def ranking_config_root(tmp_path, monkeypatch):
+    """Point ``config_root()`` at a scratch XDG config dir and return the override file's path."""
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    _load_wrapper_ranking_policy_cached.cache_clear()
+    yield tmp_path / "warcraft" / "wrapper_ranking.json"
+    _load_wrapper_ranking_policy_cached.cache_clear()
 
 
 def test_confidence_rank_orders_known_values() -> None:
@@ -88,23 +103,106 @@ def test_search_result_sort_key_prefers_wrapper_ranking_when_present() -> None:
     assert rows[0]["wrapper_ranking"]["score"] > rows[1]["wrapper_ranking"]["score"]
 
 
-def test_load_wrapper_ranking_policy_allows_json_override(tmp_path) -> None:
-    override_path = tmp_path / "wrapper_ranking.json"
-    override_path.write_text(
-        json.dumps(
-            {
-                "provider_kind_boosts": {
-                    "warcraft-wiki": {"article": 99},
-                }
-            }
-        ),
-        encoding="utf-8",
+def test_provider_kind_boosts_decide_the_order_of_otherwise_identical_candidates() -> None:
+    """The shipped provider_kind_boosts table must change ordering, not just exist as data."""
+    # "thunderfury" matches no intent keyword, so intent boosts are zero and only the
+    # provider/kind table separates these two rows.
+    spell = wrapper_search_ranking(
+        "thunderfury",
+        {"provider": "wowhead", "name": "Thunderfury", "kind": "spell", "ranking": {"score": 40}},
+        provider_max_score=40,
+    )
+    achievement = wrapper_search_ranking(
+        "thunderfury",
+        {"provider": "wowhead", "name": "Thunderfury", "kind": "object", "ranking": {"score": 40}},
+        provider_max_score=40,
     )
 
-    policy = load_wrapper_ranking_policy(override_path=override_path)
+    assert spell["intents"] == []
+    assert spell["score"] - achievement["score"] == 6  # provider_kind_boosts["wowhead"]["spell"]
+    assert "provider_kind:wowhead:spell:+6" in spell["reasons"]
 
-    assert policy["provider_kind_boosts"]["warcraft-wiki"]["article"] == 99
+
+def test_wrapper_ranking_json_override_flips_the_winner(ranking_config_root) -> None:
+    """The documented ~/.config/warcraft/wrapper_ranking.json override changes real ordering."""
+    row_a = {"provider": "wowhead", "name": "X", "kind": "spell", "ranking": {"score": 40}}
+    row_b = {"provider": "wowhead", "name": "X", "kind": "object", "ranking": {"score": 40}}
+    assert wrapper_search_ranking("thunderfury", row_a)["score"] > wrapper_search_ranking("thunderfury", row_b)["score"]
+
+    ranking_config_root.parent.mkdir(parents=True, exist_ok=True)
+    ranking_config_root.write_text(
+        json.dumps({"provider_kind_boosts": {"wowhead": {"object": 50}}}),
+        encoding="utf-8",
+    )
+    _load_wrapper_ranking_policy_cached.cache_clear()
+
+    policy = load_wrapper_ranking_policy()
+    assert policy["provider_kind_boosts"]["wowhead"]["object"] == 50
     assert policy["provider_kind_boosts"]["raiderio"]["character"] == 16
+    assert wrapper_search_ranking("thunderfury", row_b)["score"] > wrapper_search_ranking("thunderfury", row_a)["score"]
+
+
+def test_malformed_ranking_override_fails_as_invalid_config_naming_the_file(ranking_config_root) -> None:
+    ranking_config_root.parent.mkdir(parents=True, exist_ok=True)
+    ranking_config_root.write_text("{ this is not json", encoding="utf-8")
+
+    with pytest.raises(ProviderError) as excinfo:
+        load_wrapper_ranking_policy()
+
+    assert excinfo.value.code == "invalid_config"
+    assert excinfo.value.exit_code == EXIT_USAGE
+    assert str(ranking_config_root) in excinfo.value.message
+
+
+def test_normalized_provider_score_rescales_against_the_provider_own_best_row() -> None:
+    assert normalized_provider_score(47, provider_max_score=47) == 100
+    assert normalized_provider_score(24, provider_max_score=48) == 50
+    assert normalized_provider_score(0, provider_max_score=48) == 0
+    assert normalized_provider_score(10, provider_max_score=0) == 0
+    assert provider_max_candidate_score([{"ranking": {"score": 12}}, {"ranking": {"score": 40}}]) == 40
+    assert provider_max_candidate_score([]) == 0
+
+
+def test_a_provider_whose_best_row_is_weak_is_not_rescaled_to_a_full_match() -> None:
+    """Rescaling must not crown every provider's top row: a junk best row stays junk.
+
+    Raider.IO's free-text rows score in the single digits, so dividing by the provider's own best
+    row alone would hand a 3-point text match the same 100 as a Wowhead exact-name item.
+    """
+    assert normalized_provider_score(3, provider_max_score=3) == 8
+
+    junk = wrapper_search_ranking(
+        "thunderfury",
+        {"provider": "raiderio", "name": "Thunder", "kind": "guild", "ranking": {"score": 3}},
+        provider_max_score=3,
+    )
+    exact = wrapper_search_ranking(
+        "thunderfury",
+        {"provider": "wowhead", "name": "Thunderfury", "kind": "item", "ranking": {"score": 47}},
+        provider_max_score=47,
+    )
+
+    assert junk["score"] < exact["score"]
+
+
+def test_normalization_keeps_a_small_scale_provider_ahead_of_a_large_scale_one() -> None:
+    """Wowhead's exact-name match must outrank a wiki filler row whose raw score is simply bigger."""
+    wowhead = decorate_search_result(
+        "un'goro crater",
+        {"provider": "wowhead", "name": "Un'Goro Crater", "kind": "zone", "id": 490, "ranking": {"score": 47}},
+        provider_max_score=47,
+    )
+    wiki_filler = decorate_search_result(
+        "un'goro crater",
+        {"provider": "warcraft-wiki", "name": "Diemetradon", "entity_type": "article", "ranking": {"score": 58}},
+        provider_max_score=154,
+    )
+
+    rows = sorted([wiki_filler, wowhead], key=search_result_sort_key)
+
+    assert rows[0]["provider"] == "wowhead"
+    assert wowhead["wrapper_ranking"]["provider_score"] == 47
+    assert wowhead["wrapper_ranking"]["score"] > wiki_filler["wrapper_ranking"]["score"]
 
 
 def test_wrapper_search_ranking_prefers_raiderio_for_character_profile_queries() -> None:

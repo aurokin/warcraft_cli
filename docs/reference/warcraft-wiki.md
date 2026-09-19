@@ -14,7 +14,7 @@ Pass these before the subcommand: `warcraft-wiki --pretty <command> ...`.
 | `--compact` | boolean | false | Truncate long string fields to reduce payload size. |
 | `--fields` | str (repeatable) |  | Return only selected fields (dot paths). Repeat or pass comma-separated values. |
 | `--fields-strict` | boolean | false | Fail when a requested --fields dot-path is missing from the payload. |
-| `--profile` | str |  | Output profile preset: agent (default compact JSON), human (pretty JSON), debug (pretty JSON + diagnostics). |
+| `--profile` | str |  | Output profile preset: agent (default compact JSON) or human (pretty JSON). |
 | `--compact-max-chars` | int range | 280 | Maximum string length before --compact truncation adds an ellipsis. |
 
 ## warcraft-wiki doctor
@@ -95,23 +95,23 @@ Resolve a query to an API reference page and return every extracted section.
 
 ## warcraft-wiki event
 
-Resolve a query to a UI handler or event reference page and return its summary.
+Resolve a query to a game event or UI handler reference page and return its summary.
 
 **Arguments**
 
 | Argument | Type | Default | Description |
 | --- | --- | --- | --- |
-| `query` | str | required | Event or UI handler query, article title, or URL. |
+| `query` | str | required | Game event name (PLAYER_LOGIN), UI handler name, article title, or URL. |
 
 ## warcraft-wiki event-full
 
-Resolve a query to a UI handler reference page and return every extracted section.
+Resolve a query to a game event or UI handler reference page and return every extracted section.
 
 **Arguments**
 
 | Argument | Type | Default | Description |
 | --- | --- | --- | --- |
-| `query` | str | required | Event or UI handler query, article title, or URL. |
+| `query` | str | required | Game event name (PLAYER_LOGIN), UI handler name, article title, or URL. |
 
 ## warcraft-wiki article-export
 

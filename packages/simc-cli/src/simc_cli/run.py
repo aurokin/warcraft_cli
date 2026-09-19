@@ -8,6 +8,10 @@ from pathlib import Path
 from simc_cli.repo import RepoPaths
 
 VERSION_RE = re.compile(r"(SimulationCraft[^\r\n]+)")
+GIT_BUILD_RE = re.compile(r"git build (?P<branch>\S+) (?P<revision>[0-9a-f]{7,40})")
+# The cheapest invocation that makes SimC print its full build banner: the bare binary and a profile
+# it cannot open both print a short banner that omits the git revision.
+_BANNER_PROBE_ARG = "spell_query=spell.id=133"
 
 
 @dataclass(slots=True)
@@ -25,6 +29,8 @@ class BinaryVersion:
     available: bool
     version_line: str | None
     returncode: int | None
+    git_branch: str | None = None
+    git_revision: str | None = None
 
 
 def _run(command: list[str], *, cwd: Path | None = None) -> CommandResult:
@@ -43,12 +49,64 @@ def _parse_version_line(text: str) -> str | None:
 def binary_version(paths: RepoPaths) -> BinaryVersion:
     if not paths.build_simc.exists():
         return BinaryVersion(binary_path=paths.build_simc, available=False, version_line=None, returncode=None)
-    result = _run([str(paths.build_simc)])
+    try:
+        result = _run([str(paths.build_simc), _BANNER_PROBE_ARG])
+    except OSError:
+        # A file that exists but cannot be executed (interrupted build, missing +x) is as unusable as
+        # a missing one, and callers on an error path must not crash while describing the failure.
+        return BinaryVersion(binary_path=paths.build_simc, available=False, version_line=None, returncode=None)
+    text = result.stdout + result.stderr
+    git = GIT_BUILD_RE.search(text)
     return BinaryVersion(
         binary_path=paths.build_simc,
         available=True,
-        version_line=_parse_version_line(result.stdout + result.stderr),
+        version_line=_parse_version_line(text),
         returncode=result.returncode,
+        git_branch=git.group("branch") if git else None,
+        git_revision=git.group("revision") if git else None,
+    )
+
+
+def binary_matches_checkout(version: BinaryVersion, git_status: dict[str, object]) -> bool | None:
+    """Whether the binary was built from the checkout's current HEAD.
+
+    ``None`` when either side is unknown. A stale binary decodes talent hashes against older trait
+    data, which is the usual cause of a checkout's own stock profiles being rejected.
+    """
+    head = git_status.get("head")
+    if not version.git_revision or not isinstance(head, str) or not head:
+        return None
+    return head.startswith(version.git_revision)
+
+
+@dataclass(frozen=True, slots=True)
+class BinaryProvenance:
+    """Which revision the binary was built from, next to the revision of the checkout it reads."""
+
+    git_revision: str | None
+    checkout_head: str | None
+    matches_checkout: bool | None
+
+    @property
+    def stale_hint(self) -> str | None:
+        """The sentence a decode failure should carry when the binary predates its own checkout."""
+        if self.matches_checkout is not False:
+            return None
+        return (
+            f"The SimC binary was built from {self.git_revision} but the checkout is at {self.checkout_head}; "
+            "a binary older than its checkout rejects talent hashes built against newer trait data. "
+            "Rebuild it with 'simc build' and confirm with 'simc doctor'."
+        )
+
+
+def binary_provenance(paths: RepoPaths) -> BinaryProvenance:
+    version = binary_version(paths)
+    git = repo_git_status(paths)
+    head = git.get("head")
+    return BinaryProvenance(
+        git_revision=version.git_revision,
+        checkout_head=head if isinstance(head, str) else None,
+        matches_checkout=binary_matches_checkout(version, git),
     )
 
 

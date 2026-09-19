@@ -108,10 +108,25 @@ def boss_kill_row(
     }
 
 
-def sampled_cross_report_freshness(cache_ttl_seconds: int | None = None) -> dict[str, Any]:
+def sampled_cross_report_freshness(
+    cache_ttl_seconds: int | None = None,
+    *,
+    transport_counts: dict[str, int],
+) -> dict[str, Any]:
+    """Freshness for one sampled payload.
+
+    ``sampled_at`` is when the command ran, not when the cohort was fetched: report listings and
+    report details can be served from cache up to ``cache_ttl_seconds`` old. The transport counts
+    make that visible, so a warm-cache rerun is distinguishable from a live scan.
+    """
+    upstream_request_count = transport_counts.get("upstream_request_count", 0)
+    cache_hit_count = transport_counts.get("cache_hit_count", 0)
     return {
         "sampled_at": utc_now_z(),
         "cache_ttl_seconds": cache_ttl_seconds,
+        "cache_hit_count": cache_hit_count,
+        "upstream_request_count": upstream_request_count,
+        "served_entirely_from_cache": upstream_request_count == 0 and cache_hit_count > 0,
     }
 
 
@@ -392,6 +407,7 @@ def boss_kills_payload(
     sample: dict[str, Any],
     query: dict[str, Any],
     top: int,
+    transport_counts: dict[str, int],
     cache_ttl_seconds: int | None = None,
     root_url: str = "https://www.warcraftlogs.com",
 ) -> dict[str, Any]:
@@ -406,7 +422,7 @@ def boss_kills_payload(
         "matching_rule": "sampled_zone_reports_filtered_by_optional_boss_difficulty_spec_and_kill_time",
         "query": query,
         "notes": sampled_spec_filter_notes(query.get("spec_name") if isinstance(query, dict) else None),
-        "freshness": sampled_cross_report_freshness(cache_ttl_seconds),
+        "freshness": sampled_cross_report_freshness(cache_ttl_seconds, transport_counts=transport_counts),
         "cache_provenance": sampled_cache_provenance(cache_ttl_seconds),
         "sample_scope": sampled_sample_scope(
             ranking_basis="sampled_fastest_kills",
@@ -435,6 +451,7 @@ def spec_filtered_kill_samples_payload(
     sample: dict[str, Any],
     query: dict[str, Any],
     top: int,
+    transport_counts: dict[str, int],
     cache_ttl_seconds: int | None = None,
     root_url: str = "https://www.warcraftlogs.com",
 ) -> dict[str, Any]:
@@ -471,7 +488,7 @@ def spec_filtered_kill_samples_payload(
         "matching_rule": "sampled_zone_reports_filtered_to_kills_containing_the_requested_participant_spec",
         "query": query,
         "notes": notes,
-        "freshness": sampled_cross_report_freshness(cache_ttl_seconds),
+        "freshness": sampled_cross_report_freshness(cache_ttl_seconds, transport_counts=transport_counts),
         "cache_provenance": sampled_cache_provenance(cache_ttl_seconds),
         "sample_scope": sampled_sample_scope(
             ranking_basis="spec_filtered_participant_kill_samples",
@@ -504,6 +521,7 @@ def kill_time_distribution_payload(
     sample: dict[str, Any],
     query: dict[str, Any],
     bucket_seconds: int,
+    transport_counts: dict[str, int],
     cache_ttl_seconds: int | None = None,
     root_url: str = "https://www.warcraftlogs.com",
 ) -> dict[str, Any]:
@@ -520,7 +538,7 @@ def kill_time_distribution_payload(
         "matching_rule": "sampled_zone_reports_filtered_by_optional_boss_difficulty_spec_and_kill_time",
         "query": query,
         "notes": sampled_spec_filter_notes(query.get("spec_name") if isinstance(query, dict) else None),
-        "freshness": sampled_cross_report_freshness(cache_ttl_seconds),
+        "freshness": sampled_cross_report_freshness(cache_ttl_seconds, transport_counts=transport_counts),
         "cache_provenance": sampled_cache_provenance(cache_ttl_seconds),
         "sample_scope": sampled_sample_scope(
             ranking_basis="sampled_kill_time_distribution",

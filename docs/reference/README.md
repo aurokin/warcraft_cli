@@ -18,4 +18,4 @@ live here only; `docs/USAGE.md` carries workflows and conventions.
 | `raidbots` | experimental | [raidbots.md](raidbots.md) | Raidbots report consumption provider: parse public reports and bridge SimC input to local simc. |
 | `blizzard` | experimental | [blizzard.md](blizzard.md) | Official Blizzard Battle.net WoW API provider: doctor + auth, Game Data (realm, item) and Profile (character) reads. |
 | `curseforge` | experimental | [curseforge.md](curseforge.md) | CurseForge addon provider: doctor + addon lookup (metadata, latest files, changelog) over the public CurseForge API. |
-| `lorrgs` | experimental | [lorrgs.md](lorrgs.md) | Lorrgs public API provider: cooldown timeline rankings by spec/boss, composition rankings, report overview handoffs, and static class/spec/boss/spell metadata. |
+| `lorrgs` | supported | [lorrgs.md](lorrgs.md) | Lorrgs public API provider: cooldown timeline rankings by spec/boss, composition rankings, report overview handoffs, and static class/spec/boss/spell metadata. |

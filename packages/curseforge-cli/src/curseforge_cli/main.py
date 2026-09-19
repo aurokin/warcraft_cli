@@ -5,12 +5,17 @@ import typer
 from warcraft_core.cli import emit, fail, guarded_run, install_common_callback
 from warcraft_core.exit_codes import EXIT_AUTH, EXIT_NOT_FOUND, exit_code_for
 
-from curseforge_cli.client import CurseForgeClientError
+from curseforge_cli.client import CurseForgeClientError, verification_note
 from curseforge_cli.provider import PROVIDER, PROVIDER_NAME, addon_envelope
 
 app = typer.Typer(
     add_completion=False,
-    help="Public CurseForge addon API CLI (World of Warcraft). Experimental: the API surface is unverified against live traffic.",
+    # The verification sentence comes from the client so --help, doctor and provenance never
+    # disagree about whether the endpoints are confirmed.
+    help=(
+        "Public CurseForge addon API CLI (World of Warcraft). Experimental tier: the surface is one "
+        "addon lookup plus doctor and search/resolve are stubs. " + verification_note()
+    ),
 )
 install_common_callback(app, provider=PROVIDER_NAME)
 

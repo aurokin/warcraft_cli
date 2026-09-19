@@ -14,29 +14,19 @@ def normalized_identity(region: str, realm: str, name: str) -> dict[str, str]:
     }
 
 
-def first_dict(items: Any) -> dict[str, Any] | None:
-    if not isinstance(items, list):
-        return None
-    for item in items:
-        if isinstance(item, dict):
-            return item
-    return None
-
-
 def raiderio_guild_summary(payload: dict[str, Any]) -> dict[str, Any]:
+    """Guild identity, every raid Raider.IO reports (progression joined to ranks), roster, citations.
+
+    Raider.IO returns progression and rankings sorted by raid slug and carries no start/end window,
+    so there is no honest way to name one row "the active raid" from this payload alone; every raid
+    is returned instead of guessing.
+    """
     guild = as_dict(payload.get("guild"))
-    raiding = as_dict(payload.get("raiding"))
-    active_raid = first_dict(raiding.get("progression"))
-    active_rankings = first_dict(raiding.get("rankings"))
+    raids = guild_rank_rows(payload)
     return {
         "guild": guild,
-        "active_raid": {
-            "key": active_raid.get("raid_slug") if isinstance(active_raid, dict) else None,
-            "name": active_raid.get("raid_slug") if isinstance(active_raid, dict) else None,
-            "summary": active_raid.get("summary") if isinstance(active_raid, dict) else None,
-            "boss_count": active_raid.get("total_bosses") if isinstance(active_raid, dict) else None,
-            "rankings": active_rankings,
-        },
+        "raid_count": len(raids),
+        "raids": raids,
         "roster": {
             "member_count": guild.get("member_count"),
             "preview": payload.get("roster_preview"),
@@ -47,12 +37,15 @@ def raiderio_guild_summary(payload: dict[str, Any]) -> dict[str, Any]:
 
 def guild_merge_payload(identity: dict[str, str], *, raiderio: dict[str, Any]) -> dict[str, Any]:
     if raiderio.get("status") != "ok":
+        # The source error is passed through verbatim so `error.code` and the exit code the command
+        # derives from it agree; a synthesized code here would exit 5 while claiming "not found".
+        error = as_dict(raiderio.get("error")) or {
+            "code": "provider_command_failed",
+            "message": "Raider.IO did not return a guild snapshot for that query.",
+        }
         return {
             "ok": False,
-            "error": {
-                "code": "guild_not_found",
-                "message": "Raider.IO did not return a guild snapshot for that query.",
-            },
+            "error": error,
             "query": identity,
             "sources": {"raiderio": raiderio},
         }

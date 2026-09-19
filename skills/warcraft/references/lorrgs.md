@@ -1,7 +1,7 @@
 # Lorrgs
 
-**Tier: experimental.** Lorrgs is a narrow, recently added provider. Prefer `warcraftlogs` for
-anything that must be authoritative, and use Lorrgs for its prebuilt aggregation.
+**Tier: supported.** Lorrgs is a narrow provider. Prefer `warcraftlogs` for anything that must be
+authoritative, and use Lorrgs for its prebuilt aggregation.
 
 ## Best For
 
@@ -34,6 +34,12 @@ anything that must be authoritative, and use Lorrgs for its prebuilt aggregation
   while Warcraft Logs supplies exact player cast events
 - use `resolve` when you have a Lorrgs URL, Warcraft Logs report URL, report code, or likely
   spec/boss query and want the next command chosen conservatively
+- when `resolve` answers `resolved: false` with `confidence: "none"`, read `results`: either two
+  candidates tied, so re-ask with a spec slug or boss slug (`frost` matches Mage and Death Knight;
+  `salhadaar` matches two encounters), or the top candidate left a recognised word in
+  `ranking.unmatched_terms` and would have answered a narrower question than you asked
+- a report handoff resolves at `confidence: "medium"` with a `caveat`: nothing checked that Lorrgs
+  can serve that report, and it refuses reports it has not loaded or that Warcraft Logs keeps private
 - use `report-overview` for report metadata from a Warcraft Logs URL without requesting Lorrgs'
   per-fight/player timeline generation
 - use `user-report-fights <url> --type <report-type>` when the report URL carries a view type such

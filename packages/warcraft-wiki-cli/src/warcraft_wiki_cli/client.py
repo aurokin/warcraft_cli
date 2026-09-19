@@ -14,9 +14,10 @@ from warcraft_wiki_cli.page_parser import normalize_article_ref, parse_article_p
 WIKI_API_URL = "https://warcraft.wiki.gg/api.php"
 DEFAULT_CACHE_DIR = provider_cache_root("warcraft-wiki") / "http"
 # MediaWiki searches the main namespace only by default. The wiki moved its API reference pages into
-# the custom "API:" namespace (id 3000) and left the old main-namespace titles as redirects, which
-# list=search does not return, so API functions are invisible unless 3000 is searched explicitly.
-SEARCH_NAMESPACES = "0|3000"
+# the custom "API:" namespace (id 3000) and its game events into "Event:" (id 3004), leaving the old
+# main-namespace titles as redirects, which list=search does not return. Without these ids search
+# cannot see an API function or a game event at all.
+SEARCH_NAMESPACES = "0|3000|3004"
 
 
 class WarcraftWikiAPIError(RuntimeError):
@@ -51,7 +52,6 @@ class WarcraftWikiClient:
         settings, search_ttl, page_ttl = load_warcraft_wiki_cache_settings_from_env()
         self._timeout_seconds = timeout_seconds
         self._retry_attempts = max(1, retry_attempts)
-        self._cache_settings = settings
         self._cache_store = build_cache_store(settings) if settings.enabled else None
         self._search_ttl = search_ttl
         self._page_ttl = page_ttl

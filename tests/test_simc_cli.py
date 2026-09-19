@@ -1,15 +1,126 @@
 from __future__ import annotations
 
 import json
+import re
+import subprocess
 from pathlib import Path
+from typing import Any
+from unittest.mock import patch
 
 import pytest
+import simc_cli.compare as simc_compare
 import simc_cli.main as simc_main
+from simc_cli.build_input import BuildResolution, DecodedTalent, HeroTree
 from simc_cli.main import app as simc_app
 from simc_cli.repo import RepoPaths
+from simc_cli.search import word_bounded_pattern
 from typer.testing import CliRunner
+from warcraft_core.talent_transport import tokenize_talent_name
 
 runner = CliRunner()
+
+FIXTURES = Path(__file__).resolve().parent / "fixtures" / "simc"
+# Real `simc ... debug=1` output for a Sunfury Arcane Mage, plus the checkout trait rows it needs.
+CAPTURED_ARCANE_MAGE = (FIXTURES / "captured_mage_arcane_sunfury_debug.txt").read_text()
+CAPTURED_TRAIT_DATA = (FIXTURES / "captured_trait_data.inc").read_text()
+
+
+def _captured_without(*talent_names: str) -> str:
+    """The captured decode with talent lines dropped, i.e. what SimC prints after a removal."""
+    dropped = tuple(f"talent {name} (" for name in talent_names)
+    return "\n".join(line for line in CAPTURED_ARCANE_MAGE.splitlines() if not any(d in line for d in dropped))
+
+
+class _FakeSimcBinary:
+    """Stands in for the SimC binary so the real decode/encode pipeline runs over captured output.
+
+    Decode invocations answer with the captured debug text registered for the profile's ``talents=``
+    value; encode invocations write the save file the encoder reads back.
+    """
+
+    def __init__(self, decodes: dict[str, str], *, encoded: str = "MODIFIED_EXPORT") -> None:
+        self.decodes = decodes
+        self.encoded = encoded
+        self.profiles: list[str] = []
+
+    def __call__(self, cmd: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        profile_path = Path(str(cmd[1]))
+        text = profile_path.read_text()
+        self.profiles.append(text)
+        if profile_path.name == "encode.simc":
+            save = next(line.split("=", 1)[1] for line in text.splitlines() if line.startswith("save="))
+            Path(save).write_text(f"talents={self.encoded}\n")
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        talents = next((line.split("=", 1)[1] for line in text.splitlines() if line.startswith("talents=")), "")
+        return subprocess.CompletedProcess(cmd, 0, stdout=self.decodes[talents], stderr="")
+
+    @property
+    def encode_profile(self) -> str:
+        return next(text for text in self.profiles if "save=" in text)
+
+
+def _checkout(tmp_path: Path) -> Path:
+    """A checkout stub: every directory `validate_repo` requires, plus the trait table and a binary."""
+    generated = tmp_path / "engine" / "dbc" / "generated"
+    generated.mkdir(parents=True, exist_ok=True)
+    (generated / "trait_data.inc").write_text(CAPTURED_TRAIT_DATA)
+    for relative in (
+        "ActionPriorityLists/default",
+        "ActionPriorityLists/assisted_combat",
+        "engine/class_modules",
+        "SpellDataDump",
+        "build",
+    ):
+        (tmp_path / relative).mkdir(parents=True, exist_ok=True)
+    (tmp_path / "build" / "simc").write_text("")
+    return tmp_path
+
+
+def _stub_binary_banner(monkeypatch, banner: str = "SimulationCraft 1201 (git build midnight 0908ace08c)") -> None:
+    """Answer the version probe without executing the stub binary."""
+    monkeypatch.setattr(
+        "simc_cli.run.subprocess.run",
+        lambda cmd, **_kwargs: subprocess.CompletedProcess(cmd, 0, stdout=banner, stderr=""),
+    )
+
+
+def _resolution(
+    *,
+    actor_class: str = "druid",
+    spec: str = "balance",
+    enabled: set[str] | None = None,
+    talents_by_tree: dict[str, list[DecodedTalent]] | None = None,
+    generated_profile_text: str | None = None,
+    source_kind: str = "wow_talent_export",
+    source_notes: list[str] | None = None,
+    hero_tree: HeroTree | None = None,
+    inactive_hero_talents: list[DecodedTalent] | None = None,
+) -> BuildResolution:
+    """A real BuildResolution, so payload builders are exercised instead of a duck-typed stand-in."""
+    trees = talents_by_tree or {"class": [], "spec": [], "hero": [], "selection": []}
+    return BuildResolution(
+        actor_class=actor_class,
+        spec=spec,
+        enabled_talents=enabled if enabled is not None else {t.token for row in trees.values() for t in row if t.taken},
+        talents_by_tree=trees,
+        source_kind=source_kind,
+        generated_profile_text=generated_profile_text,
+        source_notes=source_notes if source_notes is not None else ["decoded via /tmp/simc"],
+        hero_tree=hero_tree,
+        inactive_hero_talents=inactive_hero_talents or [],
+    )
+
+
+def _talent(tree: str, name: str, entry: int, rank: int = 1, max_rank: int = 1) -> DecodedTalent:
+    return DecodedTalent(
+        tree=tree,
+        name=name,
+        token=tokenize_talent_name(name),
+        rank=rank,
+        max_rank=max_rank,
+        entry=entry,
+    )
+
 
 
 def test_simc_doctor_reports_phase_one_capabilities(monkeypatch, tmp_path: Path) -> None:
@@ -29,27 +140,74 @@ def test_simc_doctor_reports_phase_one_capabilities(monkeypatch, tmp_path: Path)
         }
 
     monkeypatch.setattr("simc_cli.provider.repo_payload", fake_repo_payload)
+    # Whether the host has ripgrep decides `status`, so it is pinned rather than inherited.
+    monkeypatch.setattr("simc_cli.provider.ripgrep_available", lambda: True)
     result = runner.invoke(simc_app, ["--repo-root", str(repo_root), "doctor"])
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
     assert payload["provider"] == "simc"
     assert payload["status"] == "ready"
-    assert payload["capabilities"]["version"] == "ready"
     assert payload["capabilities"]["search"] == "coming_soon"
-    assert payload["capabilities"]["repo"] == "ready"
-    assert payload["capabilities"]["checkout"] == "ready"
-    assert payload["capabilities"]["apl_lists"] == "ready"
-    assert payload["capabilities"]["apl_prune"] == "ready"
-    assert payload["capabilities"]["priority"] == "ready"
-    assert payload["capabilities"]["inactive_actions"] == "ready"
-    assert payload["capabilities"]["opener"] == "ready"
-    assert payload["capabilities"]["analysis_packet"] == "ready"
-    assert payload["capabilities"]["first_cast"] == "ready"
-    assert payload["capabilities"]["log_actions"] == "ready"
-    assert payload["capabilities"]["compare_builds"] == "ready"
-    assert payload["capabilities"]["modify_build"] == "ready"
-    assert payload["capabilities"]["validate_talent_transport"] == "ready"
+    assert {payload["capabilities"][name] for name in ("version", "repo", "priority", "modify_build")} == {"ready"}
+    assert payload["dependencies"]["ripgrep"]["available"] is True
+
+
+def test_simc_doctor_does_not_call_binary_commands_ready_without_a_usable_binary(monkeypatch, tmp_path: Path) -> None:
+    """doctor used to advertise decode_build as ready while `repo.build_ready` was false."""
+    repo_root = _checkout(tmp_path)
+    (repo_root / "build" / "simc").unlink()
+    monkeypatch.setattr("simc_cli.provider.ripgrep_available", lambda: True)
+
+    result = runner.invoke(simc_app, ["--repo-root", str(repo_root), "doctor"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)["data"]
+    assert payload["status"] == "degraded"
+    assert payload["repo"]["build_ready"] is False
+    assert payload["dependencies"]["simc_binary"]["available"] is False
+    assert {payload["capabilities"][name] for name in ("decode_build", "describe_build", "modify_build", "sim")} == {
+        "unavailable"
+    }
+    # A command that only reads files stays usable without the binary.
+    assert payload["capabilities"]["spec_files"] == "ready"
+
+
+def test_simc_doctor_reports_ripgrep_as_the_dependency_it_is(monkeypatch, tmp_path: Path) -> None:
+    """Without ripgrep three commands cannot work; doctor used to call all three ready."""
+    _stub_binary_banner(monkeypatch)
+    monkeypatch.setattr("simc_cli.provider.ripgrep_available", lambda: False)
+
+    result = runner.invoke(simc_app, ["--repo-root", str(_checkout(tmp_path)), "doctor"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)["data"]
+    assert payload["status"] == "degraded"
+    assert payload["dependencies"]["ripgrep"] == {
+        "required_by": ["find_action", "spec_files", "trace_action"],
+        "available": False,
+    }
+    assert {payload["capabilities"][name] for name in ("find_action", "spec_files", "trace_action")} == {"unavailable"}
+
+
+def test_simc_repo_reports_a_binary_built_from_an_older_commit_than_the_checkout(monkeypatch, tmp_path: Path) -> None:
+    """A stale binary decodes hashes against older trait data, which is why the checkout's own
+    profiles get rejected; `repo` used to call that build ready."""
+    repo_root = _checkout(tmp_path)
+    _stub_binary_banner(monkeypatch, "SimulationCraft 1210-01 for WoW 12.1.0 Live (git build midnight 3377576e3b)")
+    monkeypatch.setattr(
+        "simc_cli.provider.repo_git_status",
+        lambda _paths: {"git": True, "dirty": False, "branch": "midnight", "head": "0908ace08c9b", "dirty_entries": []},
+    )
+
+    result = runner.invoke(simc_app, ["--repo-root", str(repo_root), "doctor"])
+
+    assert result.exit_code == 0
+    repo = json.loads(result.stdout)["data"]["repo"]
+    assert repo["binary"]["git_revision"] == "3377576e3b"
+    assert repo["binary"]["matches_checkout"] is False
+    assert repo["build_ready"] is False
+    assert any("3377576e3b" in issue and "0908ace08c9b" in issue for issue in repo["build_issues"])
 
 
 def test_simc_search_is_structured_coming_soon() -> None:
@@ -151,7 +309,8 @@ def test_simc_version_uses_binary_probe(monkeypatch) -> None:
     assert payload["version"] == "SimulationCraft 1201"
 
 
-def test_simc_spec_files_returns_grouped_results(monkeypatch) -> None:
+def test_simc_spec_files_returns_grouped_results(monkeypatch, tmp_path: Path) -> None:
+    repo_root = _checkout(tmp_path)
     monkeypatch.setattr(
         "simc_cli.main.spec_file_search",
         lambda paths, query: {
@@ -162,7 +321,7 @@ def test_simc_spec_files_returns_grouped_results(monkeypatch) -> None:
             "spell_dump": [],
         },
     )
-    result = runner.invoke(simc_app, ["spec-files", "mistweaver"])
+    result = runner.invoke(simc_app, ["--repo-root", str(repo_root), "spec-files", "mistweaver"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["count"] == 1
@@ -185,20 +344,17 @@ def test_simc_decode_build_outputs_decoded_talents(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         "simc_cli.main.decode_build",
-        lambda paths, build_spec: type("Resolution", (), {
-            "actor_class": "monk",
-            "spec": "mistweaver",
-            "enabled_talents": {"ancient_teachings", "jadefire_stomp"},
-            "source_kind": "wow_talent_export",
-            "generated_profile_text": 'monk="simc_decode"\nlevel=90\nrace=pandaren\nspec=mistweaver\ntalents=ABC123\n',
-            "talents_by_tree": {
+        lambda paths, build_spec: _resolution(
+            actor_class="monk",
+            spec="mistweaver",
+            generated_profile_text='monk="simc_decode"\nlevel=90\nrace=pandaren\nspec=mistweaver\ntalents=ABC123\n',
+            talents_by_tree={
                 "class": [],
-                "spec": [type("Talent", (), {"name": "Ancient Teachings", "token": "ancient_teachings", "rank": 1, "max_rank": 1})()],
-                "hero": [type("Talent", (), {"name": "Jadefire Stomp", "token": "jadefire_stomp", "rank": 1, "max_rank": 1})()],
+                "spec": [_talent("spec", "Ancient Teachings", 1)],
+                "hero": [_talent("hero", "Jadefire Stomp", 2)],
                 "selection": [],
             },
-            "source_notes": ["decoded via /tmp/simc"],
-        })(),
+        ),
     )
     result = runner.invoke(simc_app, ["decode-build", "--actor-class", "monk", "--spec", "mistweaver", "--talents", "ABC123"])
     assert result.exit_code == 0
@@ -390,7 +546,7 @@ def test_simc_identify_build_probes_wow_export_packet_instead_of_trusting_packet
         lambda _repo, build_spec: (
             (_ for _ in ()).throw(RuntimeError("wrong spec"))
             if (build_spec.actor_class, build_spec.spec) == ("priest", "shadow")
-            else type("Resolution", (), {"enabled_talents": {"moonkin_form"}})()
+            else _resolution(enabled={"moonkin_form"})
         ),
     )
 
@@ -1250,19 +1406,14 @@ def test_simc_decode_build_auto_identifies_missing_class_and_spec(monkeypatch) -
     )
     monkeypatch.setattr(
         "simc_cli.main.decode_build",
-        lambda paths, build_spec: type(
-            "Resolution",
-            (),
-            {
-                "actor_class": "demonhunter",
-                "spec": "devourer",
-                "enabled_talents": {"void_ray"},
-                "source_kind": "wow_talent_export",
-                "generated_profile_text": 'demonhunter="simc_decode"\nlevel=90\nrace=night_elf\nspec=devourer\ntalents=ABC123\n',
-                "talents_by_tree": {"class": [], "spec": [], "hero": [], "selection": []},
-                "source_notes": ["decoded via /tmp/simc"],
-            },
-        )(),
+        lambda paths, build_spec: _resolution(
+                actor_class='demonhunter',
+                spec='devourer',
+                enabled={'void_ray'},
+                source_kind='wow_talent_export',
+                generated_profile_text='demonhunter="simc_decode"\nlevel=90\nrace=night_elf\nspec=devourer\ntalents=ABC123\n',
+                source_notes=['decoded via /tmp/simc'],
+            ),
     )
     result = runner.invoke(simc_app, ["decode-build", "--build-text", "ABC123"])
     assert result.exit_code == 0
@@ -1314,19 +1465,14 @@ def test_simc_decode_build_accepts_build_packet(monkeypatch, tmp_path: Path) -> 
     monkeypatch.setattr("simc_cli.main._load_identified_build_spec", fake_loader)
     monkeypatch.setattr(
         "simc_cli.main.decode_build",
-        lambda paths, build_spec: type(
-            "Resolution",
-            (),
-            {
-                "actor_class": "druid",
-                "spec": "balance",
-                "enabled_talents": {"innervate", "incarnation_chosen_of_elune"},
-                "source_kind": "simc_split_talents",
-                "generated_profile_text": 'druid="simc_decode"\nclass_talents=103324:1\nspec_talents=109839:1\nhero_talents=117176:1\n',
-                "talents_by_tree": {"class": [], "spec": [], "hero": [], "selection": []},
-                "source_notes": ["talent transport packet", "decoded via /tmp/simc"],
-            },
-        )(),
+        lambda paths, build_spec: _resolution(
+                actor_class='druid',
+                spec='balance',
+                enabled={'innervate', 'incarnation_chosen_of_elune'},
+                source_kind='simc_split_talents',
+                generated_profile_text='druid="simc_decode"\nclass_talents=103324:1\nspec_talents=109839:1\nhero_talents=117176:1\n',
+                source_notes=['talent transport packet', 'decoded via /tmp/simc'],
+            ),
     )
 
     result = runner.invoke(simc_app, ["decode-build", "--build-packet", str(packet_path)])
@@ -1375,19 +1521,14 @@ def test_simc_decode_build_uses_validated_split_packet_identity(monkeypatch, tmp
     def fake_decode_build(_paths, build_spec):  # noqa: ANN001
         assert build_spec.actor_class == "priest"
         assert build_spec.spec == "shadow"
-        return type(
-            "Resolution",
-            (),
-            {
-                "actor_class": "priest",
-                "spec": "shadow",
-                "enabled_talents": {"mind_blast"},
-                "source_kind": "simc_split_talents",
-                "generated_profile_text": 'priest="simc_decode"\nclass_talents=103324:1\nspec_talents=109839:1\n',
-                "talents_by_tree": {"class": [], "spec": [], "hero": [], "selection": []},
-                "source_notes": ["talent transport packet", "decoded via /tmp/simc"],
-            },
-        )()
+        return _resolution(
+                actor_class='priest',
+                spec='shadow',
+                enabled={'mind_blast'},
+                source_kind='simc_split_talents',
+                generated_profile_text='priest="simc_decode"\nclass_talents=103324:1\nspec_talents=109839:1\n',
+                source_notes=['talent transport packet', 'decoded via /tmp/simc'],
+            )
 
     monkeypatch.setattr("simc_cli.main.decode_build", fake_decode_build)
 
@@ -1429,19 +1570,14 @@ def test_simc_decode_build_accepts_wowhead_transport_form_from_build_packet(monk
         assert build_spec.talents == "ABC123"
         assert build_spec.source_kind == "wowhead_talent_calc_url"
         assert build_spec.transport_form == "wowhead_talent_calc_url"
-        return type(
-            "Resolution",
-            (),
-            {
-                "actor_class": "druid",
-                "spec": "balance",
-                "enabled_talents": {"moonkin_form"},
-                "source_kind": "wowhead_talent_calc_url",
-                "generated_profile_text": 'druid="simc_decode"\ntalents=ABC123\n',
-                "talents_by_tree": {"class": [], "spec": [], "hero": [], "selection": []},
-                "source_notes": ["talent transport packet"],
-            },
-        )()
+        return _resolution(
+                actor_class='druid',
+                spec='balance',
+                enabled={'moonkin_form'},
+                source_kind='wowhead_talent_calc_url',
+                generated_profile_text='druid="simc_decode"\ntalents=ABC123\n',
+                source_notes=['talent transport packet'],
+            )
 
     monkeypatch.setattr("simc_cli.main.decode_build", fake_decode_build)
 
@@ -1493,26 +1629,21 @@ def test_simc_decode_build_probes_wow_export_packet_instead_of_trusting_packet_i
         lambda _repo, build_spec: (
             (_ for _ in ()).throw(RuntimeError("wrong spec"))
             if (build_spec.actor_class, build_spec.spec) == ("priest", "shadow")
-            else type("Resolution", (), {"enabled_talents": {"moonkin_form"}})()
+            else _resolution(enabled={"moonkin_form"})
         ),
     )
 
     def fake_decode_build(_paths, build_spec):  # noqa: ANN001
         assert build_spec.actor_class == "druid"
         assert build_spec.spec == "balance"
-        return type(
-            "Resolution",
-            (),
-            {
-                "actor_class": "druid",
-                "spec": "balance",
-                "enabled_talents": {"moonkin_form"},
-                "source_kind": "wow_talent_export",
-                "generated_profile_text": 'druid="simc_decode"\ntalents=ABC123\n',
-                "talents_by_tree": {"class": [], "spec": [], "hero": [], "selection": []},
-                "source_notes": ["decoded via /tmp/simc"],
-            },
-        )()
+        return _resolution(
+                actor_class='druid',
+                spec='balance',
+                enabled={'moonkin_form'},
+                source_kind='wow_talent_export',
+                generated_profile_text='druid="simc_decode"\ntalents=ABC123\n',
+                source_notes=['decoded via /tmp/simc'],
+            )
 
     monkeypatch.setattr("simc_cli.main.decode_build", fake_decode_build)
 
@@ -1626,27 +1757,23 @@ def test_simc_describe_build_summarizes_st_and_aoe(monkeypatch, tmp_path: Path) 
         ),
     )
 
-    resolution = type(
-        "Resolution",
-        (),
-        {
-            "actor_class": "demonhunter",
-            "spec": "devourer",
-            "source_kind": "wow_talent_export",
-            "enabled_talents": {"void_ray", "world_killer", "soul_immolation"},
-            "talents_by_tree": {
-                "class": [type("Talent", (), {"name": "Voidblade", "token": "voidblade", "rank": 1, "max_rank": 1})()],
-                "spec": [
-                    type("Talent", (), {"name": "Void Ray", "token": "void_ray", "rank": 1, "max_rank": 1})(),
-                    type("Talent", (), {"name": "Midnight", "token": "midnight", "rank": 0, "max_rank": 1})(),
-                    type("Talent", (), {"name": "Soul Immolation", "token": "soul_immolation", "rank": 1, "max_rank": 1})(),
-                ],
-                "hero": [type("Talent", (), {"name": "World Killer", "token": "world_killer", "rank": 1, "max_rank": 1})()],
-                "selection": [],
-            },
-            "source_notes": ["decoded via /tmp/simc"],
+    resolution = _resolution(
+        actor_class="demonhunter",
+        spec="devourer",
+        enabled={"void_ray", "world_killer", "soul_immolation"},
+        talents_by_tree={
+            "class": [_talent("class", "Voidblade", 1)],
+            "spec": [
+                _talent("spec", "Void Ray", 2),
+                _talent("spec", "Midnight", 3, rank=0),
+                _talent("spec", "Soul Immolation", 4),
+            ],
+            "hero": [_talent("hero", "World Killer", 5)],
+            "selection": [],
         },
-    )()
+        hero_tree=HeroTree(name="Annihilator", id=124),
+        inactive_hero_talents=[_talent("hero", "Void Reaver", 6)],
+    )
 
     def _resolve_prune_context(_paths, _apl, _values, targets):
         context = type("Context", (), {"targets": targets, "enabled_talents": {"void_ray", "world_killer"},
@@ -1707,6 +1834,8 @@ def test_simc_describe_build_summarizes_st_and_aoe(monkeypatch, tmp_path: Path) 
     assert payload["identity"]["source"] == "simc_probe"
     assert payload["build"]["talents_by_tree"]["spec"]["selected"][0]["token"] == "void_ray"
     assert payload["build"]["talents_by_tree"]["spec"]["skipped"][0]["token"] == "midnight"
+    assert payload["build"]["hero_tree"] == {"name": "Annihilator", "id": 124}
+    assert [row["name"] for row in payload["build"]["inactive_hero_talents"]] == ["Void Reaver"]
     assert payload["single_target"]["focus_list"] == "melee_combo"
     assert payload["multi_target"]["focus_list"] == "aoe"
     assert payload["comparison"]["new_active_actions_in_aoe"] == ["soul_immolation"]
@@ -1773,18 +1902,13 @@ def test_simc_describe_build_accepts_build_packet(monkeypatch, tmp_path: Path) -
 
     monkeypatch.setattr("simc_cli.main._load_identified_build_spec", fake_loader)
 
-    resolution = type(
-        "Resolution",
-        (),
-        {
-            "actor_class": "druid",
-            "spec": "balance",
-            "source_kind": "simc_split_talents",
-            "enabled_talents": {"wrath"},
-            "talents_by_tree": {"class": [], "spec": [], "hero": [], "selection": []},
-            "source_notes": ["talent transport packet", "decoded via /tmp/simc"],
-        },
-    )()
+    resolution = _resolution(
+            actor_class='druid',
+            spec='balance',
+            source_kind='simc_split_talents',
+            enabled={'wrath'},
+            source_notes=['talent transport packet', 'decoded via /tmp/simc'],
+        )
 
     def fake_resolve_prune_context(_paths, _apl, option_values, targets):  # noqa: ANN001
         assert option_values["build_packet"] == str(packet_path)
@@ -1856,18 +1980,13 @@ def test_simc_describe_build_uses_validated_split_packet_identity(monkeypatch, t
     )
     monkeypatch.setattr("simc_cli.main._repo_paths", lambda _ctx: repo)
 
-    resolution = type(
-        "Resolution",
-        (),
-        {
-            "actor_class": "priest",
-            "spec": "shadow",
-            "source_kind": "simc_split_talents",
-            "enabled_talents": {"mind_blast"},
-            "talents_by_tree": {"class": [], "spec": [], "hero": [], "selection": []},
-            "source_notes": ["talent transport packet", "decoded via /tmp/simc"],
-        },
-    )()
+    resolution = _resolution(
+            actor_class='priest',
+            spec='shadow',
+            source_kind='simc_split_talents',
+            enabled={'mind_blast'},
+            source_notes=['talent transport packet', 'decoded via /tmp/simc'],
+        )
 
     def fake_resolve_prune_context(_paths, _apl, option_values, targets):  # noqa: ANN001
         assert option_values["build_packet"] == str(packet_path)
@@ -1941,21 +2060,16 @@ def test_simc_describe_build_accepts_wow_export_transport_form_from_build_packet
     )
     monkeypatch.setattr(
         "simc_cli.build_input.decode_build",
-        lambda _repo, build_spec: type("Resolution", (), {"enabled_talents": {"wrath"}})(),
+        lambda _repo, build_spec: _resolution(enabled={"wrath"}),
     )
 
-    resolution = type(
-        "Resolution",
-        (),
-        {
-            "actor_class": "druid",
-            "spec": "balance",
-            "source_kind": "wow_talent_export",
-            "enabled_talents": {"wrath"},
-            "talents_by_tree": {"class": [], "spec": [], "hero": [], "selection": []},
-            "source_notes": ["talent transport packet"],
-        },
-    )()
+    resolution = _resolution(
+            actor_class='druid',
+            spec='balance',
+            source_kind='wow_talent_export',
+            enabled={'wrath'},
+            source_notes=['talent transport packet'],
+        )
 
     def fake_resolve_prune_context(_paths, _apl, option_values, targets):  # noqa: ANN001
         assert option_values["build_packet"] == str(packet_path)
@@ -2031,22 +2145,17 @@ def test_simc_describe_build_probes_wow_export_packet_instead_of_trusting_packet
         lambda _repo, build_spec: (
             (_ for _ in ()).throw(RuntimeError("wrong spec"))
             if (build_spec.actor_class, build_spec.spec) == ("priest", "shadow")
-            else type("Resolution", (), {"enabled_talents": {"moonkin_form"}})()
+            else _resolution(enabled={"moonkin_form"})
         ),
     )
 
-    resolution = type(
-        "Resolution",
-        (),
-        {
-            "actor_class": "druid",
-            "spec": "balance",
-            "source_kind": "wow_talent_export",
-            "enabled_talents": {"wrath"},
-            "talents_by_tree": {"class": [], "spec": [], "hero": [], "selection": []},
-            "source_notes": ["talent transport packet"],
-        },
-    )()
+    resolution = _resolution(
+            actor_class='druid',
+            spec='balance',
+            source_kind='wow_talent_export',
+            enabled={'wrath'},
+            source_notes=['talent transport packet'],
+        )
 
     def fake_resolve_prune_context(_paths, _apl, option_values, targets):  # noqa: ANN001
         assert option_values["build_packet"] == str(packet_path)
@@ -2197,18 +2306,13 @@ def test_simc_describe_build_uses_leaf_focus_and_full_action_diff(monkeypatch, t
         ),
     )
 
-    resolution = type(
-        "Resolution",
-        (),
-        {
-            "actor_class": "demonhunter",
-            "spec": "devourer",
-            "source_kind": "wow_talent_export",
-            "enabled_talents": {"void_ray"},
-            "talents_by_tree": {"class": [], "spec": [], "hero": [], "selection": []},
-            "source_notes": ["decoded via /tmp/simc"],
-        },
-    )()
+    resolution = _resolution(
+            actor_class='demonhunter',
+            spec='devourer',
+            source_kind='wow_talent_export',
+            enabled={'void_ray'},
+            source_notes=['decoded via /tmp/simc'],
+        )
 
     def _resolve_prune_context(_paths, _apl, _values, targets):
         context = type(
@@ -2276,6 +2380,135 @@ def test_simc_decode_build_failure_includes_source_metadata(monkeypatch) -> None
     assert 'demonhunter="simc_decode"' in details["generated_profile"]
 
 
+def test_simc_decode_build_reports_a_rejected_hash_instead_of_the_truncated_build(tmp_path: Path) -> None:
+    """SimC prints the free spec grants before rejecting a hash; those two talents are not a build."""
+    rejected = (FIXTURES / "captured_paladin_retribution_hash_error_debug.txt").read_text()
+    option_dump = "World of Warcraft Raid Simulator Options:\n" + "".join(f"option_{i}=0\n" for i in range(700))
+    repo_root = _checkout(tmp_path)
+
+    def fake_run(cmd, **_kwargs):  # noqa: ANN001, ANN003
+        return subprocess.CompletedProcess(cmd, 81, stdout=option_dump + rejected, stderr="")
+
+    with patch("simc_cli.build_input.subprocess.run", side_effect=fake_run):
+        result = runner.invoke(
+            simc_app,
+            ["--repo-root", str(repo_root), "decode-build", "--actor-class", "paladin", "--spec", "retribution",
+             "--talents", "CYEAAA"],
+        )
+
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    payload = json.loads(result.stderr)
+    assert payload["error"]["code"] == "invalid_build"
+    assert "Node 81527 is not a choice node" in payload["error"]["message"]
+    assert "World of Warcraft Raid Simulator Options" not in payload["error"]["message"]
+    assert len(payload["error"]["message"]) < 500
+    assert payload["error"]["details"]["simc_returncode"] == 81
+    assert len(payload["error"]["details"]["simc_output_preview"]) == 20
+
+
+CHECKOUT_HEAD = "0908ace08c9b22638fcdac80a710bc7b6928d3d8"
+
+
+def _decode_build_against_a_binary_built_from(monkeypatch, tmp_path: Path, revision: str) -> dict[str, Any]:
+    """Reject a hash with a binary whose build revision is `revision`, and return the error envelope.
+
+    ``simc_cli.run`` and ``simc_cli.build_input`` share the ``subprocess`` module, so one dispatching
+    fake answers the decode, the binary's version banner and git.
+    """
+    rejected = (FIXTURES / "captured_paladin_retribution_hash_error_debug.txt").read_text()
+    repo_root = _checkout(tmp_path)
+    (repo_root / ".git").mkdir()
+
+    def fake_run(cmd, **_kwargs):  # noqa: ANN001, ANN003
+        argv = [str(part) for part in cmd]
+        if argv[0] == "git":
+            return subprocess.CompletedProcess(cmd, 0, stdout=CHECKOUT_HEAD, stderr="")
+        if any(part.startswith("spell_query=") for part in argv):
+            banner = f"SimulationCraft 1210-01 for WoW 12.1.0 Live (git build midnight {revision})"
+            return subprocess.CompletedProcess(cmd, 0, stdout=banner, stderr="")
+        return subprocess.CompletedProcess(cmd, 81, stdout=rejected, stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    result = runner.invoke(
+        simc_app,
+        ["--repo-root", str(repo_root), "decode-build", "--actor-class", "paladin", "--spec", "retribution",
+         "--talents", "CYEAAA"],
+    )
+    assert result.exit_code == 1
+    return json.loads(result.stderr)
+
+
+def test_simc_decode_build_names_a_stale_binary_when_simc_rejects_the_hash(monkeypatch, tmp_path: Path) -> None:
+    """A binary older than its checkout rejects valid hashes; the envelope has to point at it."""
+    payload = _decode_build_against_a_binary_built_from(monkeypatch, tmp_path, "3377576e3b")
+
+    assert payload["error"]["details"]["simc_binary"] == {
+        "git_revision": "3377576e3b",
+        "checkout_head": CHECKOUT_HEAD,
+        "matches_checkout": False,
+    }
+    assert "built from 3377576e3b" in payload["error"]["message"]
+    assert "simc build" in payload["error"]["message"]
+
+
+def test_simc_decode_build_error_stays_quiet_about_a_binary_that_matches_the_checkout(monkeypatch, tmp_path: Path) -> None:
+    """The rebuild hint is only true for a stale binary; a matching one must not be blamed."""
+    payload = _decode_build_against_a_binary_built_from(monkeypatch, tmp_path, CHECKOUT_HEAD[:10])
+
+    assert payload["error"]["details"]["simc_binary"]["matches_checkout"] is True
+    assert "simc build" not in payload["error"]["message"]
+
+
+def test_simc_decode_build_rejects_an_apl_path_that_does_not_exist(tmp_path: Path) -> None:
+    """The class and spec come from the file stem, so a missing file invents a confident identity."""
+    result = runner.invoke(
+        simc_app, ["decode-build", "--apl-path", str(tmp_path / "warlock_nonsensespec.simc")]
+    )
+
+    assert result.exit_code == 4
+    payload = json.loads(result.stderr)
+    assert payload["error"]["code"] == "not_found"
+    assert "warlock_nonsensespec.simc" in payload["error"]["message"]
+
+
+def test_simc_decode_build_from_an_apl_file_name_is_not_high_confidence(tmp_path: Path) -> None:
+    """A class and spec read off a file stem is a guess, not a verified identity."""
+    repo_root = _checkout(tmp_path)
+    apl = repo_root / "ActionPriorityLists" / "default" / "mage_arcane.simc"
+    apl.write_text("actions=arcane_blast\n")
+
+    result = runner.invoke(simc_app, ["--repo-root", str(repo_root), "decode-build", "--apl-path", str(apl)])
+
+    assert result.exit_code == 0
+    identity = json.loads(result.stdout)["data"]["identity"]
+    assert (identity["source"], identity["actor_class"], identity["spec"]) == ("apl_path", "mage", "arcane")
+    assert identity["confidence"] == "medium"
+
+
+def test_simc_decode_build_payload_separates_the_inactive_hero_tree_and_unreadable_ranks(tmp_path: Path) -> None:
+    repo_root = _checkout(tmp_path)
+
+    with patch(
+        "simc_cli.build_input.subprocess.run",
+        side_effect=lambda cmd, **_k: subprocess.CompletedProcess(cmd, 0, stdout=CAPTURED_ARCANE_MAGE, stderr=""),
+    ):
+        result = runner.invoke(
+            simc_app,
+            ["--repo-root", str(repo_root), "decode-build", "--actor-class", "mage", "--spec", "arcane",
+             "--talents", "C4DAAA"],
+        )
+
+    assert result.exit_code == 0
+    decoded = json.loads(result.stdout)["data"]["decoded"]
+    assert decoded["hero_tree"] == {"name": "Sunfury", "id": 39}
+    assert [row["name"] for row in decoded["inactive_hero_talents"]] == ["Splintering Sorcery"]
+    assert "splintering_sorcery" not in decoded["enabled_talents"]
+    assert "prismatic_bolt" in decoded["enabled_talents"]
+    tiered = next(row for row in decoded["talents_by_tree"]["spec"] if row["name"] == "Prismatic Bolt")
+    assert (tiered["rank"], tiered["rank_known"]) == (None, False)
+
+
 def _fake_build_spec(*, actor_class="druid", spec="balance", talents="ABC123"):  # noqa: ANN001
     return type("BuildSpec", (), {
         "actor_class": actor_class,
@@ -2309,33 +2542,19 @@ def _fake_resolution(
     spec_talents=None,
     hero_talents=None,
 ):  # noqa: ANN001
-    from simc_cli.build_input import DecodedTalent
-
-    def _t(tree, name, entry, rank=1, max_rank=1):  # noqa: ANN001
-        token = name.lower().replace("'", "").replace(" ", "_").replace("-", "_")
-        return DecodedTalent(tree=tree, name=name, token=token, rank=rank, max_rank=max_rank, entry=entry)
-
-    return type("Resolution", (), {
-        "actor_class": actor_class,
-        "spec": spec,
-        "enabled_talents": {"thick_hide", "innervate", "starlord", "dream_surge"},
-        "source_kind": "wow_talent_export",
-        "generated_profile_text": None,
-        "talents_by_tree": {
+    return _resolution(
+        actor_class=actor_class,
+        spec=spec,
+        talents_by_tree={
             "class": class_talents or [
-                _t("class", "Thick Hide", 100),
-                _t("class", "Innervate", 200),
+                _talent("class", "Thick Hide", 100),
+                _talent("class", "Innervate", 200),
             ],
-            "spec": spec_talents or [
-                _t("spec", "Starlord", 300, rank=2, max_rank=2),
-            ],
-            "hero": hero_talents or [
-                _t("hero", "Dream Surge", 400),
-            ],
+            "spec": spec_talents or [_talent("spec", "Starlord", 300, rank=2, max_rank=2)],
+            "hero": hero_talents or [_talent("hero", "Dream Surge", 400)],
             "selection": [],
         },
-        "source_notes": ["decoded via /tmp/simc"],
-    })()
+    )
 
 
 # --- compare-builds ---
@@ -2494,165 +2713,168 @@ def test_simc_compare_builds_reports_buildless_wowhead_other_as_structured_error
 
 
 # --- modify-build ---
+#
+# These drive the real edit pipeline (tree routing, encoding, re-decode, verification) and stub only
+# the SimC binary, answering it with captured `debug=1` output for an Arcane Mage.
 
 
-def test_simc_modify_build_swap_class_tree(monkeypatch) -> None:
-    from simc_cli.build_input import DecodedTalent
-
-    def _t(tree, name, entry, rank=1, max_rank=1):  # noqa: ANN001
-        token = name.lower().replace(" ", "_")
-        return DecodedTalent(tree=tree, name=name, token=token, rank=rank, max_rank=max_rank, entry=entry)
-
-    base_res = _fake_resolution(
-        class_talents=[_t("class", "Innervate", 200)],
-        spec_talents=[_t("spec", "Starlord", 300)],
-        hero_talents=[_t("hero", "Dream Surge", 400)],
-    )
-    swap_res = _fake_resolution(
-        class_talents=[_t("class", "Thick Hide", 100)],
-    )
-    verify_res = _fake_resolution(
-        class_talents=[_t("class", "Thick Hide", 100)],
-        spec_talents=[_t("spec", "Starlord", 300)],
-        hero_talents=[_t("hero", "Dream Surge", 400)],
-    )
-
-    decode_results = iter([base_res, swap_res, verify_res])
-
-    monkeypatch.setattr(
-        "simc_cli.main._load_identified_build_spec",
-        lambda *a, **kw: (_fake_build_spec(), _fake_identity()),
-    )
-    monkeypatch.setattr("simc_cli.main.load_build_spec", lambda **kw: _fake_build_spec())
-    monkeypatch.setattr("simc_cli.main.decode_build", lambda p, s: next(decode_results))
-    monkeypatch.setattr("simc_cli.main.encode_build", lambda p, s: "SPLICED_EXPORT")
-
-    result = runner.invoke(simc_app, [
-        "modify-build", "--talents", "BASE", "--swap-class-tree-from", "REF",
-    ])
-    assert result.exit_code == 0
-    payload = json.loads(result.stdout)
-    assert payload["kind"] == "modify_build"
-    assert payload["modifications"] == ["swap_class_tree"]
-    assert payload["result"]["talents_export"] == "SPLICED_EXPORT"
-    assert "wowhead.com/talent-calc/blizzard/SPLICED_EXPORT" in payload["result"]["wowhead_url"]
-    assert payload["result"]["diff_from_base"]["class"]["has_differences"] is True
+def _modify(tmp_path: Path, fake: _FakeSimcBinary, *args: str) -> tuple[int, dict[str, Any]]:
+    repo_root = _checkout(tmp_path)
+    with patch("simc_cli.build_input.subprocess.run", side_effect=fake):
+        result = runner.invoke(
+            simc_app,
+            ["--repo-root", str(repo_root), "modify-build", "--talents", "BASE",
+             "--actor-class", "mage", "--spec", "arcane", *args],
+        )
+    return result.exit_code, json.loads(result.stdout or result.stderr)
 
 
-def test_simc_modify_build_add_and_remove(monkeypatch) -> None:
-    base_res = _fake_resolution()
+def test_simc_modify_build_routes_a_spec_talent_name_into_the_spec_option(tmp_path: Path) -> None:
+    """SimC resolves talent names per tree, so a spec talent sent as `class_talents` is rejected."""
+    fake = _FakeSimcBinary({"BASE": CAPTURED_ARCANE_MAGE, "MODIFIED_EXPORT": _captured_without("Arcane Tempo")})
 
-    monkeypatch.setattr(
-        "simc_cli.main._load_identified_build_spec",
-        lambda *a, **kw: (_fake_build_spec(), _fake_identity()),
-    )
-    monkeypatch.setattr("simc_cli.main.decode_build", lambda p, s: base_res)
-    monkeypatch.setattr("simc_cli.main.encode_build", lambda p, s: "MODIFIED_EXPORT")
+    exit_code, payload = _modify(tmp_path, fake, "--remove", "Arcane Tempo")
 
-    result = runner.invoke(simc_app, [
-        "modify-build", "--talents", "BASE",
-        "--remove", "innervate", "--add", "forestwalk:2",
-    ])
-    assert result.exit_code == 0
-    payload = json.loads(result.stdout)
-    assert payload["kind"] == "modify_build"
-    assert "remove:innervate" in payload["modifications"]
-    assert "add:forestwalk:2" in payload["modifications"]
-    assert payload["result"]["talents_export"] == "MODIFIED_EXPORT"
+    assert exit_code == 0
+    assert "spec_talents=arcane_tempo:0" in fake.encode_profile
+    assert "class_talents=" not in fake.encode_profile
+    assert [row["name"] for row in payload["data"]["result"]["diff_from_base"]["spec"]["removed"]] == ["Arcane Tempo"]
+    assert payload["data"]["result"]["verified"] is True
 
 
-def test_simc_modify_build_remove_by_entry_id(monkeypatch) -> None:
-    base_res = _fake_resolution()
+def test_simc_modify_build_adds_a_talent_the_base_build_does_not_have_by_name(tmp_path: Path) -> None:
+    """`--add` by name has to work for a talent absent from the build; only trait data knows its tree."""
+    added = CAPTURED_ARCANE_MAGE + "0.000 Player 'simc_decode' adding spec talent Presence of Mind (node=1 entry=126530 rank=1/1)\n"
+    fake = _FakeSimcBinary({"BASE": CAPTURED_ARCANE_MAGE, "MODIFIED_EXPORT": added})
 
-    monkeypatch.setattr(
-        "simc_cli.main._load_identified_build_spec",
-        lambda *a, **kw: (_fake_build_spec(), _fake_identity()),
-    )
-    monkeypatch.setattr("simc_cli.main.decode_build", lambda p, s: base_res)
-    monkeypatch.setattr("simc_cli.main.encode_build", lambda p, s: "MODIFIED")
+    exit_code, payload = _modify(tmp_path, fake, "--add", "presence_of_mind:1")
 
-    result = runner.invoke(simc_app, [
-        "modify-build", "--talents", "BASE", "--remove", "200",
-    ])
-    assert result.exit_code == 0
-    payload = json.loads(result.stdout)
-    assert "remove:200" in payload["modifications"]
+    assert exit_code == 0
+    assert "spec_talents=presence_of_mind:1" in fake.encode_profile
+    assert [row["name"] for row in payload["data"]["result"]["diff_from_base"]["spec"]["added"]] == ["Presence of Mind"]
 
 
-def test_simc_modify_build_fails_without_modifications(monkeypatch) -> None:
-    monkeypatch.setattr(
-        "simc_cli.main._load_identified_build_spec",
-        lambda *a, **kw: (_fake_build_spec(), _fake_identity()),
-    )
-    monkeypatch.setattr("simc_cli.main.decode_build", lambda p, s: _fake_resolution())
+def test_simc_modify_build_discloses_hero_talents_the_reencode_grants_outside_the_selected_tree(tmp_path: Path) -> None:
+    """SimC regrants every hero keystone when it regenerates a hash; the payload has to say so.
 
-    result = runner.invoke(simc_app, ["modify-build", "--talents", "BASE"])
-    assert result.exit_code == 1
-    payload = json.loads(result.stderr)
-    assert payload["error"]["code"] == "no_modifications"
+    Splinterstorm belongs to Spellslinger (sub tree 40) while this build activated Sunfury (39), so
+    the export carries a talent the input hash did not and the sim will never use.
+    """
+    phantom = CAPTURED_ARCANE_MAGE + "0.000 Player 'simc_decode' adding hero talent Splinterstorm (node=94657 entry=117257 rank=1/1)\n"
+    fake = _FakeSimcBinary({"BASE": CAPTURED_ARCANE_MAGE, "MODIFIED_EXPORT": phantom})
+
+    exit_code, payload = _modify(tmp_path, fake, "--add", "137084:1")
+
+    assert exit_code == 0
+    result = payload["data"]["result"]
+    assert [tree for tree in ("class", "spec", "hero") if result["diff_from_base"][tree]["has_differences"]] == []
+    assert [row["name"] for row in result["diff_from_base"]["inactive_hero"]["added"]] == ["Splinterstorm"]
+    assert result["disclosures"] != []
 
 
-def test_simc_modify_build_fails_on_unknown_remove_name(monkeypatch) -> None:
-    monkeypatch.setattr(
-        "simc_cli.main._load_identified_build_spec",
-        lambda *a, **kw: (_fake_build_spec(), _fake_identity()),
-    )
-    monkeypatch.setattr("simc_cli.main.decode_build", lambda p, s: _fake_resolution())
+def test_simc_modify_build_reports_nothing_to_disclose_when_the_export_matches_the_base(tmp_path: Path) -> None:
+    fake = _FakeSimcBinary({"BASE": CAPTURED_ARCANE_MAGE, "MODIFIED_EXPORT": CAPTURED_ARCANE_MAGE})
 
-    result = runner.invoke(simc_app, [
-        "modify-build", "--talents", "BASE", "--remove", "nonexistent_talent",
-    ])
-    assert result.exit_code == 1
-    payload = json.loads(result.stderr)
+    exit_code, payload = _modify(tmp_path, fake, "--add", "137084:1")
+
+    assert exit_code == 0
+    diff = payload["data"]["result"]["diff_from_base"]
+    assert [tree for tree, rows in diff.items() if rows["has_differences"]] == []
+    assert payload["data"]["result"]["disclosures"] == []
+
+
+def test_simc_modify_build_refuses_to_emit_an_export_carrying_unrequested_changes(tmp_path: Path) -> None:
+    """SimC re-serializes the whole build; an active-tree change nobody asked for is never shipped."""
+    collateral = _captured_without("Arcane Tempo", "Ice Cold")
+    fake = _FakeSimcBinary({"BASE": CAPTURED_ARCANE_MAGE, "MODIFIED_EXPORT": collateral})
+
+    exit_code, payload = _modify(tmp_path, fake, "--remove", "Arcane Tempo")
+
+    assert exit_code == 1
+    assert payload["error"]["code"] == "encode_mismatch"
+    assert [
+        (row["tree"], row["change"], row["name"]) for row in payload["error"]["details"]["unrequested_changes"]
+    ] == [("class", "removed", "Ice Cold")]
+    assert "MODIFIED_EXPORT" not in json.dumps(payload)
+
+
+def test_simc_modify_build_rejects_a_talent_name_that_belongs_to_no_tree(tmp_path: Path) -> None:
+    fake = _FakeSimcBinary({"BASE": CAPTURED_ARCANE_MAGE})
+
+    exit_code, payload = _modify(tmp_path, fake, "--remove", "nonexistent_talent")
+
+    assert exit_code == 1
     assert payload["error"]["code"] == "unknown_talent"
 
 
-def test_simc_modify_build_fails_on_bad_add_format(monkeypatch) -> None:
-    monkeypatch.setattr(
-        "simc_cli.main._load_identified_build_spec",
-        lambda *a, **kw: (_fake_build_spec(), _fake_identity()),
-    )
-    monkeypatch.setattr("simc_cli.main.decode_build", lambda p, s: _fake_resolution())
+def test_simc_modify_build_rejects_an_entry_id_the_checkout_does_not_know(tmp_path: Path) -> None:
+    fake = _FakeSimcBinary({"BASE": CAPTURED_ARCANE_MAGE})
 
-    result = runner.invoke(simc_app, [
-        "modify-build", "--talents", "BASE", "--add", "no_rank",
-    ])
-    assert result.exit_code == 1
-    payload = json.loads(result.stderr)
+    exit_code, payload = _modify(tmp_path, fake, "--add", "999999:1")
+
+    assert exit_code == 1
+    assert payload["error"]["code"] == "unknown_talent"
+
+
+def test_simc_modify_build_fails_on_bad_add_format(tmp_path: Path) -> None:
+    fake = _FakeSimcBinary({"BASE": CAPTURED_ARCANE_MAGE})
+
+    exit_code, payload = _modify(tmp_path, fake, "--add", "no_rank")
+
+    assert exit_code == 1
     assert payload["error"]["code"] == "invalid_add"
 
 
-def test_simc_modify_build_aborts_when_swap_tree_decode_fails(monkeypatch) -> None:
-    # Regression: a failing --swap-*-tree-from source must abort the command via
-    # _fail (typer.Exit) even when --add/--remove are also present — it must NOT
-    # fall through to encode/emit a modified build.
-    base_res = _fake_resolution()
-    decode_calls = {"n": 0}
+def test_simc_modify_build_fails_without_modifications(tmp_path: Path) -> None:
+    fake = _FakeSimcBinary({"BASE": CAPTURED_ARCANE_MAGE})
 
-    def fake_decode(p, s):  # noqa: ANN001
-        decode_calls["n"] += 1
-        if decode_calls["n"] == 1:
-            return base_res
-        raise ValueError("swap source is undecodable")
+    exit_code, payload = _modify(tmp_path, fake)
 
-    monkeypatch.setattr(
-        "simc_cli.main._load_identified_build_spec",
-        lambda *a, **kw: (_fake_build_spec(), _fake_identity()),
-    )
-    monkeypatch.setattr("simc_cli.main.load_build_spec", lambda **kw: _fake_build_spec())
-    monkeypatch.setattr("simc_cli.main.decode_build", fake_decode)
-    monkeypatch.setattr("simc_cli.main.encode_build", lambda p, s: "LEAKED_EXPORT")
+    assert exit_code == 1
+    assert payload["error"]["code"] == "no_modifications"
 
-    result = runner.invoke(simc_app, [
-        "modify-build", "--talents", "BASE",
-        "--swap-class-tree-from", "REF", "--add", "forestwalk:2",
-    ])
+
+def test_simc_modify_build_swap_class_tree_rebuilds_from_split_trees(tmp_path: Path) -> None:
+    """A tree swap drops the base hash, so every tree must be written out as entry:rank strings."""
+    swapped = _captured_without("Ice Cold")
+    fake = _FakeSimcBinary({"BASE": CAPTURED_ARCANE_MAGE, "REF": swapped, "MODIFIED_EXPORT": swapped})
+    repo_root = _checkout(tmp_path)
+
+    with patch("simc_cli.build_input.subprocess.run", side_effect=fake):
+        result = runner.invoke(
+            simc_app,
+            ["--repo-root", str(repo_root), "modify-build", "--talents", "BASE",
+             "--actor-class", "mage", "--spec", "arcane", "--swap-class-tree-from", "REF"],
+        )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["data"]["modifications"] == ["swap_class_tree"]
+    assert "talents=BASE" not in fake.encode_profile
+    assert "class_talents=" in fake.encode_profile and "spec_talents=" in fake.encode_profile
+    assert [row["name"] for row in payload["data"]["result"]["diff_from_base"]["class"]["removed"]] == ["Ice Cold"]
+
+
+def test_simc_modify_build_aborts_when_swap_tree_decode_fails(tmp_path: Path) -> None:
+    """A failing --swap-*-tree-from source must abort before anything is encoded or emitted."""
+    rejected = "0.000 Player 'p' generic base statsError: Initialization error: Player 'p': Hash 'REF': bad node.\n"
+    fake = _FakeSimcBinary({"BASE": CAPTURED_ARCANE_MAGE, "REF": rejected})
+    repo_root = _checkout(tmp_path)
+
+    with patch("simc_cli.build_input.subprocess.run", side_effect=fake):
+        result = runner.invoke(
+            simc_app,
+            ["--repo-root", str(repo_root), "modify-build", "--talents", "BASE",
+             "--actor-class", "mage", "--spec", "arcane", "--swap-class-tree-from", "REF",
+             "--add", "137084:1"],
+        )
+
     assert result.exit_code == 1
-    payload = json.loads(result.stderr)
-    assert payload["error"]["code"] == "decode_failed"
-    # No modified build may be encoded or emitted after the swap decode failure.
-    assert "LEAKED_EXPORT" not in result.stdout
     assert result.stdout.strip() == ""
+    payload = json.loads(result.stderr)
+    assert payload["error"]["code"] == "invalid_build"
+    assert "Failed to decode class tree source" in payload["error"]["message"]
+    assert "bad node" in payload["error"]["message"]
 
 
 def test_simc_modify_build_rejects_buildless_wowhead_talent_calc_url() -> None:
@@ -2697,20 +2919,23 @@ def test_simc_modify_build_rejects_buildless_wowhead_swap_source(monkeypatch) ->
     assert "must include a build code" in payload["error"]["message"]
 
 
-def test_simc_modify_build_encode_failure_reports_error(monkeypatch) -> None:
-    monkeypatch.setattr(
-        "simc_cli.main._load_identified_build_spec",
-        lambda *a, **kw: (_fake_build_spec(), _fake_identity()),
-    )
-    monkeypatch.setattr("simc_cli.main.decode_build", lambda p, s: _fake_resolution())
-    monkeypatch.setattr("simc_cli.main.encode_build", lambda p, s: (_ for _ in ()).throw(RuntimeError("encode fail")))
+def test_simc_modify_build_reports_the_simc_error_when_encoding_fails(tmp_path: Path) -> None:
+    class _FailingEncoder(_FakeSimcBinary):
+        def __call__(self, cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+            if Path(str(cmd[1])).name == "encode.simc":
+                self.profiles.append(Path(str(cmd[1])).read_text())
+                return subprocess.CompletedProcess(
+                    cmd, 1, stdout="banner\n" * 900,
+                    stderr="Error: Generating profiles: Player 'simc_decode': Invalid 'spec_talents'.\n",
+                )
+            return super().__call__(cmd, **kwargs)
 
-    result = runner.invoke(simc_app, [
-        "modify-build", "--talents", "BASE", "--add", "forestwalk:2",
-    ])
-    assert result.exit_code == 1
-    payload = json.loads(result.stderr)
-    assert payload["error"]["code"] == "encode_failed"
+    exit_code, payload = _modify(tmp_path, _FailingEncoder({"BASE": CAPTURED_ARCANE_MAGE}), "--remove", "Arcane Tempo")
+
+    assert exit_code == 1
+    assert payload["error"]["code"] == "invalid_build"
+    assert "Invalid 'spec_talents'" in payload["error"]["message"]
+    assert "banner" not in payload["error"]["message"]
 
 
 def test_simc_build_harness_compare_report_and_verify_clean(monkeypatch, tmp_path: Path) -> None:
@@ -2779,33 +3004,39 @@ def test_simc_build_harness_compare_report_and_verify_clean(monkeypatch, tmp_pat
     assert validate_payload["valid"] is True
     assert validate_payload["label"] == "wowhead"
 
-    compare_payload = {
-        "kind": "apl_comparison",
-        "compare_dir": str(tmp_path),
-        "harness_path": str(harness_path),
-        "iterations": 250,
-        "threads": 1,
-        "validations": [],
-        "base": {"label": "base", "dps": 100.0},
-        "ranking": [{"label": "base", "dps": 100.0}, {"label": "wowhead", "dps": 99.0}],
-        "comparisons": [{"label": "wowhead", "base_label": "base", "dps_delta": -1.0, "percent_delta": -1.0, "top_action_deltas": []}],
-    }
-    monkeypatch.setattr("simc_cli.main.compare_apl_variants", lambda *args, **kwargs: compare_payload)
+    # Only the SimC run is stubbed, so the ranking, deltas and sampling disclosure are computed for real.
+    dps_by_label = {"base": 100.0, "wowhead": 99.0}
+
+    def fake_simulate(paths, *, label, apl_path, profile_path, iterations, threads, out_dir):  # noqa: ANN001, ANN003
+        return simc_compare.VariantSummary(
+            label=label, apl_path=apl_path, profile_path=profile_path, json_path=out_dir / f"{label}.json",
+            dps=dps_by_label[label], dps_error=1.0, fight_length=60.0,
+            action_counts={"shadow_bolt": 10}, action_cpm={"shadow_bolt": 10.0},
+        )
+
+    monkeypatch.setattr("simc_cli.compare._simulate_variant", fake_simulate)
     compare_result = runner.invoke(
         simc_app,
         ["compare-apls", str(harness_path), "--base-apl", str(apl), "--variant",
-         f"wowhead={apl}", "--report-out", str(tmp_path / "report.json")],
+         f"wowhead={apl}", "--skip-validate", "--out-dir", str(tmp_path / "compare"),
+         "--report-out", str(tmp_path / "report.json")],
     )
     assert compare_result.exit_code == 0
-    compare_stdout = json.loads(compare_result.stdout)
-    assert compare_stdout["kind"] == "apl_comparison"
+    compare_envelope = json.loads(compare_result.stdout)
+    assert compare_envelope["kind"] == "apl_comparison"
+    compare_stdout = compare_envelope["data"]
     assert compare_stdout["report_path"] == str((tmp_path / "report.json").resolve())
+    assert [row["label"] for row in compare_stdout["ranking"]] == ["base", "wowhead"]
+    assert compare_stdout["comparisons"][0]["dps_delta"] == -1.0
+    assert compare_stdout["sampling"]["action_sequence_iterations"] == 1
 
     report_result = runner.invoke(simc_app, ["variant-report", str(tmp_path / "report.json")])
     assert report_result.exit_code == 0
-    report_payload = json.loads(report_result.stdout)
-    assert report_payload["kind"] == "apl_variant_report"
+    report_envelope = json.loads(report_result.stdout)
+    assert report_envelope["kind"] == "apl_variant_report"
+    report_payload = report_envelope["data"]
     assert report_payload["best_label"] == "base"
+    assert {row["label"]: row["delta_vs_base"] for row in report_payload["ranking"]} == {"base": 0.0, "wowhead": -1.0}
 
     monkeypatch.setattr(
         "simc_cli.main.verify_clean_payload",
@@ -2880,7 +3111,8 @@ def test_simc_apl_lists_graph_talents_and_trace(monkeypatch, tmp_path: Path) -> 
     assert payload_trace["apl_hits"]["items"][0]["list_name"] == "default"
 
 
-def test_simc_find_action_groups_hits(monkeypatch) -> None:
+def test_simc_find_action_groups_hits(monkeypatch, tmp_path: Path) -> None:
+    repo_root = _checkout(tmp_path)
     monkeypatch.setattr(
         "simc_cli.main.find_action",
         lambda paths, action, wow_class: {
@@ -2890,11 +3122,68 @@ def test_simc_find_action_groups_hits(monkeypatch) -> None:
             "spell_dump": [],
         },
     )
-    result = runner.invoke(simc_app, ["find-action", "rising_sun_kick"])
+    result = runner.invoke(simc_app, ["--repo-root", str(repo_root), "find-action", "rising_sun_kick"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["count"] == 1
     assert payload["buckets"]["class_modules"]["items"][0]["line_no"] == 42
+
+
+@pytest.mark.parametrize(("args", "command"), [(["find-action", "mind_blast"], "find-action"), (["spec-files", "monk"], "spec-files")])
+def test_simc_content_search_names_ripgrep_when_it_is_not_installed(
+    monkeypatch, tmp_path: Path, args: list[str], command: str
+) -> None:
+    """Without ripgrep the commands used to die with a leaked FileNotFoundError and internal_error."""
+    repo_root = _checkout(tmp_path)
+    monkeypatch.setattr("simc_cli.search.shutil.which", lambda _name: None)
+
+    result = runner.invoke(simc_app, ["--repo-root", str(repo_root), *args])
+
+    assert result.exit_code == 1
+    payload = json.loads(result.stderr)
+    assert payload["command"] == command
+    assert payload["error"]["code"] == "missing_dependency"
+    assert "ripgrep" in payload["error"]["message"]
+
+
+def test_simc_find_action_sends_ripgrep_a_pattern_that_matches_the_query(monkeypatch, tmp_path: Path) -> None:
+    """The pattern has to match the text the query came from.
+
+    Escaping alone was not enough: the old ``\\b{query}\\b`` cannot match a query ending in
+    punctuation, because no word boundary exists after ``)``. ripgrep's ``\\b`` is Python's, so the
+    compiled pattern is checked here against text with and without a surrounding word.
+    """
+    repo_root = _checkout(tmp_path)
+    patterns: list[str] = []
+
+    def fake_run(cmd, **_kwargs):  # noqa: ANN001, ANN003
+        argv = [str(part) for part in cmd]
+        patterns.append(argv[argv.index("--no-heading") + 1])
+        return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="")
+
+    monkeypatch.setattr("simc_cli.search.shutil.which", lambda _name: "/usr/bin/rg")
+    monkeypatch.setattr("simc_cli.search.subprocess.run", fake_run)
+
+    result = runner.invoke(simc_app, ["--repo-root", str(repo_root), "find-action", "cast(x)+"])
+
+    assert result.exit_code == 0
+    assert patterns
+    for pattern in patterns:
+        assert re.search(pattern, "actions+=/cast(x)+,if=1") is not None
+        assert re.search(pattern, "precast(x)+,if=1") is None
+
+
+@pytest.mark.parametrize(
+    ("query", "text", "matches"),
+    [
+        ("mind_blast", "actions+=/mind_blast,if=1", True),
+        ("mind_blast", "actions+=/mind_blaster", False),
+        ("cast(x)", "a cast(x) b", True),
+        ("+mind_blast", "buff+mind_blast,if=1", True),
+    ],
+)
+def test_word_bounded_pattern_anchors_only_where_a_boundary_can_exist(query: str, text: str, matches: bool) -> None:
+    assert (re.search(word_bounded_pattern(query), text) is not None) is matches
 
 
 def test_simc_apl_prune_branch_trace_and_intent(monkeypatch, tmp_path: Path) -> None:
@@ -2915,7 +3204,7 @@ def test_simc_apl_prune_branch_trace_and_intent(monkeypatch, tmp_path: Path) -> 
         lambda paths, apl_path, option_values, targets: (
             type("Context", (), {"enabled_talents": {"mass_disintegrate"}, "disabled_talents": set(),
                  "targets": targets, "talent_sources": {"mass_disintegrate": "spec"}})(),
-            type("Resolution", (), {"actor_class": "evoker", "spec": "devastation", "source_notes": ["decoded via /tmp/simc"]})(),
+            _resolution(actor_class="evoker", spec="devastation"),
         ),
     )
 
@@ -2965,7 +3254,7 @@ def test_simc_priority_inactive_actions_and_opener(monkeypatch, tmp_path: Path) 
                     "talent_sources": {"void_ray": "spec", "predators_wake": "spec"},
                 },
             )(),
-            type("Resolution", (), {"actor_class": "demonhunter", "spec": "devourer", "source_notes": ["decoded via /tmp/simc"]})(),
+            _resolution(actor_class="demonhunter", spec="devourer"),
         ),
     )
 
@@ -3016,7 +3305,7 @@ def test_simc_intent_explain_branch_compare_and_analysis_packet(monkeypatch, tmp
                     "talent_sources": {"mass_disintegrate": "spec"},
                 },
             )(),
-            type("Resolution", (), {"actor_class": "evoker", "spec": "devastation", "source_notes": ["decoded via /tmp/simc"]})(),
+            _resolution(actor_class="evoker", spec="devastation"),
         )
 
     monkeypatch.setattr("simc_cli.main._resolve_prune_context", fake_context)
@@ -3090,7 +3379,7 @@ def test_simc_analysis_packet_surfaces_runtime_timing_failures(monkeypatch, tmp_
         "simc_cli.main._resolve_prune_context",
         lambda paths, apl_path, option_values, targets: (
             type("Context", (), {"enabled_talents": set(), "disabled_talents": set(), "targets": targets, "talent_sources": {}})(),
-            type("Resolution", (), {"actor_class": "evoker", "spec": "devastation", "source_notes": ["decoded via /tmp/simc"]})(),
+            _resolution(actor_class="evoker", spec="devastation"),
         ),
     )
     monkeypatch.setattr("simc_cli.main.build_analysis_packet", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("timing failed")))

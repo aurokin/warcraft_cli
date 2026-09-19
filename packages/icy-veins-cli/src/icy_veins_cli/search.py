@@ -16,6 +16,8 @@ from icy_veins_cli.client import IcyVeinsClient
 
 PROVIDER_NAME = "icy-veins"
 QUERY_STRIP_TERMS = ("icy", "veins", "guide", "guides")
+# ``keywords`` is an all-of test; ``any_keywords`` fires on a single term. Singular/plural spellings
+# of the same word belong in ``any_keywords``, never in ``keywords``, or the hint can never fire.
 UNSUPPORTED_QUERY_HINTS: dict[str, dict[str, Any]] = {
     "patch_notes": {
         "keywords": {"patch", "notes"},
@@ -26,7 +28,7 @@ UNSUPPORTED_QUERY_HINTS: dict[str, dict[str, Any]] = {
         "message": "Icy Veins latest-class-changes style WoW pages are currently out of scope for the supported guide surface.",
     },
     "hotfixes": {
-        "keywords": {"hotfix", "hotfixes"},
+        "any_keywords": {"hotfix", "hotfixes"},
         "message": "Icy Veins hotfix and news-like WoW pages are currently out of scope for the supported guide surface.",
     },
     "news": {
@@ -34,11 +36,12 @@ UNSUPPORTED_QUERY_HINTS: dict[str, dict[str, Any]] = {
         "message": "Icy Veins news-like WoW pages are currently out of scope for the supported guide surface.",
     },
 }
+# Slug words that carry no ranking signal because they say nothing about which guide is meant.
+# Class and spec names must never appear here: exempting one class from the off-query slug penalty
+# hands it a permanent head start on every query that names no class.
 NEUTRAL_SLUG_TERMS = {
     "guide",
     "guides",
-    "mistweaver",
-    "monk",
     "pve",
     "pvp",
     "healing",
@@ -174,8 +177,9 @@ def unsupported_scope_hint(query: str) -> dict[str, Any] | None:
     if not terms:
         return None
     for code, config in UNSUPPORTED_QUERY_HINTS.items():
-        keywords = set(config["keywords"])
-        if keywords <= terms:
+        all_keywords = set(config.get("keywords") or ())
+        any_keywords = set(config.get("any_keywords") or ())
+        if (all_keywords and all_keywords <= terms) or (any_keywords & terms):
             return {"code": code, "message": config["message"]}
     return None
 

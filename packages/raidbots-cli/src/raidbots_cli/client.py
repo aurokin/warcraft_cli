@@ -32,6 +32,21 @@ class ReportNotAvailable(LookupError):
     """Raised when Raidbots answers a report fetch with its web page instead of report content."""
 
 
+def _reject_web_page(text: str, *, report_id: str, url: str) -> None:
+    """Raise when a 200 response carries the Raidbots single-page app instead of report content.
+
+    Raidbots serves that page for a report id that does not exist, has expired, or is private. Both
+    report fetches must treat it the same way, or the same missing report answers `not_found` on one
+    command and a parse failure on the other.
+    """
+    if not text.lstrip()[:64].lower().startswith(("<!doctype html", "<html")):
+        return
+    raise ReportNotAvailable(
+        f"Raidbots returned its web page instead of report content for report {report_id!r}: the "
+        f"report id is wrong, or the report has expired or is private ({url})."
+    )
+
+
 def resolve_report_id(value: str, report_path_template: str = DEFAULT_REPORT_PATH_TEMPLATE) -> str:
     # Normalize a report reference to a bare ID. We try, in order: (1) the literal path prefix of
     # the configured (env-overridable) report path template, so an override also updates URL-INPUT
@@ -125,7 +140,6 @@ class RaidbotsClient:
         settings, report_ttl = load_raidbots_cache_settings_from_env()
         self._timeout_seconds = timeout_seconds
         self._retry_attempts = max(1, retry_attempts)
-        self._cache_settings = settings
         self._cache_store = build_cache_store(settings) if settings.enabled else None
         self._report_ttl = report_ttl
         self._urls = load_raidbots_urls_from_env()
@@ -185,6 +199,7 @@ class RaidbotsClient:
             return cached
         self._last_from_cache = False
         response = request_with_retries(self._client(), url, retry_attempts=self._retry_attempts)
+        _reject_web_page(response.text, report_id=report_id, url=url)
         payload = response.json()
         if not isinstance(payload, dict):
             raise ValueError(f"Unexpected Raidbots data.json shape for report {report_id}.")
@@ -201,13 +216,7 @@ class RaidbotsClient:
         self._last_from_cache = False
         response = request_with_retries(self._client(), url, retry_attempts=self._retry_attempts)
         text = response.text
-        # Raidbots serves its single-page app (HTTP 200, text/html) for a report id that does not
-        # exist, has expired, or is private. Reject that page instead of handing HTML markup back as
-        # SimC input — and never cache it.
-        if text.lstrip()[:64].lower().startswith(("<!doctype html", "<html")):
-            raise ReportNotAvailable(
-                f"Raidbots returned its web page instead of SimC input for report {report_id!r}: the "
-                f"report id is wrong, or the report has expired or is private ({url})."
-            )
+        # Never cache the web page: reject it before the write below.
+        _reject_web_page(text, report_id=report_id, url=url)
         self._write_cache(key, text, ttl_seconds=self._report_ttl)
         return text

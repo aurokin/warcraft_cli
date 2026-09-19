@@ -2,18 +2,12 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
 from typing import Any, TypeGuard
 
 from warcraft_core.identity import normalize_actor_class, normalize_spec_name
-
-ACTOR_LINE_RE = re.compile(r'^([a-z_]+)\s*=\s*"?(.*?)"?$')
-TALENT_DEBUG_RE = re.compile(
-    r"adding (?P<tree>class|spec|hero|selection) talent (?P<name>.+?) "
-    r"\(node=(?P<node>\d+) entry=(?P<entry>\d+) rank=(?P<rank>\d+)/(?P<max_rank>\d+)\)"
-)
 
 CLASS_ID_BY_ACTOR_CLASS = {
     "warrior": 1,
@@ -91,38 +85,14 @@ class TraitRecord:
 
 @dataclass(slots=True)
 class BuildSpec:
+    """The build a ``RoundTripExecutor`` is asked to encode and decode again."""
+
     actor_class: str | None = None
     spec: str | None = None
-    talents: str | None = None
     class_talents: str | None = None
     spec_talents: str | None = None
     hero_talents: str | None = None
     source_kind: str | None = None
-    source_notes: list[str] = field(default_factory=list)
-    transport_form: str | None = None
-    transport_status: str | None = None
-    transport_source: str | None = None
-
-
-@dataclass(slots=True)
-class DecodedTalent:
-    tree: str
-    name: str
-    token: str
-    rank: int
-    max_rank: int
-    entry: int = 0
-
-
-@dataclass(slots=True)
-class BuildResolution:
-    actor_class: str
-    spec: str
-    enabled_talents: set[str]
-    talents_by_tree: dict[str, list[DecodedTalent]]
-    source_kind: str | None
-    generated_profile_text: str | None
-    source_notes: list[str]
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,72 +120,10 @@ class TalentTransportBackend:
     round_trip: RoundTripExecutor
 
 
-DEFAULT_RACE_BY_CLASS = {
-    "deathknight": "human",
-    "demonhunter": "night_elf",
-    "druid": "night_elf",
-    "evoker": "dracthyr",
-    "hunter": "dwarf",
-    "mage": "human",
-    "monk": "pandaren",
-    "paladin": "human",
-    "priest": "human",
-    "rogue": "human",
-    "shaman": "orc",
-    "warlock": "human",
-    "warrior": "human",
-}
-
-
 def tokenize_talent_name(name: str) -> str:
     text = name.lower().replace("'", "")
     text = re.sub(r"[^a-z0-9]+", "_", text)
     return text.strip("_")
-
-
-def build_profile_text(build_spec: BuildSpec) -> str:
-    actor_class = build_spec.actor_class
-    if not actor_class:
-        raise ValueError("Build spec must include actor_class.")
-    race = DEFAULT_RACE_BY_CLASS.get(actor_class, "human")
-    lines = [
-        f'{actor_class}="simc_decode"',
-        "level=90",
-        f"race={race}",
-        f"spec={build_spec.spec}",
-    ]
-    if build_spec.talents:
-        lines.append(f"talents={build_spec.talents}")
-    if build_spec.class_talents:
-        lines.append(f"class_talents={build_spec.class_talents}")
-    if build_spec.spec_talents:
-        lines.append(f"spec_talents={build_spec.spec_talents}")
-    if build_spec.hero_talents:
-        lines.append(f"hero_talents={build_spec.hero_talents}")
-    return "\n".join(lines) + "\n"
-
-
-def parse_debug_talents(output: str) -> dict[str, list[DecodedTalent]]:
-    talents_by_tree: dict[str, list[DecodedTalent]] = {"class": [], "spec": [], "hero": [], "selection": []}
-    for line in output.splitlines():
-        match = TALENT_DEBUG_RE.search(line)
-        if not match:
-            continue
-        tree = match.group("tree")
-        name = match.group("name")
-        if tree == "selection":
-            continue
-        talents_by_tree[tree].append(
-            DecodedTalent(
-                tree=tree,
-                name=name,
-                token=tokenize_talent_name(name),
-                rank=int(match.group("rank")),
-                max_rank=int(match.group("max_rank")),
-                entry=int(match.group("entry")),
-            )
-        )
-    return talents_by_tree
 
 
 def _generated_file(repo_root: Path, relative: str) -> Path:
@@ -314,15 +222,6 @@ def _trait_records(repo_root_text: str) -> dict[tuple[int, int, int], list[Trait
     return records
 
 
-def decoded_entries_by_tree(resolution: BuildResolution) -> dict[str, dict[int, int]]:
-    rows: dict[str, dict[int, int]] = {"class": {}, "spec": {}, "hero": {}}
-    for tree in ("class", "spec", "hero"):
-        for talent in resolution.talents_by_tree.get(tree, []):
-            if talent.entry and talent.rank > 0:
-                rows[tree][talent.entry] = talent.rank
-    return rows
-
-
 def _split_transport_forms(resolved_rows: list[dict[str, Any]]) -> dict[str, Any]:
     grouped: dict[str, list[str]] = {"class": [], "spec": [], "hero": []}
     for row in resolved_rows:
@@ -395,6 +294,20 @@ def _resolve_transport_rows(
             )
             continue
         record = candidates[0]
+        if rank_value > record.max_rank:
+            # SimC clamps an over-rank entry to min(rank, max_ranks) when it builds the transport
+            # form, so emitting one would silently describe a different character.
+            unresolved_rows.append(
+                {
+                    "entry": entry_id,
+                    "node_id": node_id_value,
+                    "rank": rank_value,
+                    "max_rank": record.max_rank,
+                    "name": record.name,
+                    "reason": "rank_exceeds_max_rank",
+                }
+            )
+            continue
         resolved_rows.append(
             {
                 "entry": entry_id,
@@ -422,7 +335,7 @@ class _RoundTripComparison:
     expected_entries_by_tree: dict[str, dict[int, int]]
     actual_entries_by_tree: dict[str, dict[int, int]]
     tiered_nodes: list[dict[str, Any]]
-    ignored_granted_hero_entries: list[dict[str, Any]]
+    ignored_unselected_hero_entries: list[dict[str, Any]]
 
 
 ROUND_TRIP_TREES = ("class", "spec", "hero")
@@ -454,7 +367,7 @@ def _actual_round_trip(
     record_by_entry: dict[int, TraitRecord],
     selected_hero_trees: set[int],
 ) -> tuple[dict[str, dict[int, int]], dict[str, set[int]], list[dict[str, Any]]]:
-    """Sort the decoded entries into plain entries, tiered nodes seen, and ignored granted keystones."""
+    """Sort the decoded entries into plain entries, tiered node ids seen, and ignored hero entries."""
     actual: dict[str, dict[int, int]] = {tree: {} for tree in ROUND_TRIP_TREES}
     tiered_seen: dict[str, set[int]] = {tree: set() for tree in ROUND_TRIP_TREES}
     ignored: list[dict[str, Any]] = []
@@ -481,10 +394,11 @@ def _compare_round_trip(
 ) -> _RoundTripComparison:
     """Compare the decoded round trip with the resolved rows, allowing for two SimC decode quirks.
 
-    Tiered nodes come back from SimC's debug output as a single line naming the first entry with
-    the leftover rank, so they are compared by node presence. SimC also grants the keystone of
-    every hero tree the spec could pick, not only the selected one; keystones from unselected
-    trees are ignored.
+    A tiered node comes back from SimC's decode as a single debug line naming the node's first
+    entry with whatever rank was left over, so the per-entry ranks inside a tiered node cannot be
+    read back: those nodes are checked by presence plus node capacity only, and every tiered row
+    says so with ``per_entry_ranks_verified: false``. SimC also grants entries from hero trees the
+    spec could have picked but this build did not; those are reported separately and ignored.
     """
     record_by_entry = {
         record.entry_id: record for candidates in records.values() for record in candidates if record.class_id == class_id
@@ -495,12 +409,34 @@ def _compare_round_trip(
     expected, expected_tiered = _expected_round_trip(resolved_rows)
     actual, tiered_seen, ignored = _actual_round_trip(actual_by_tree, record_by_entry, selected_hero_trees)
     tiered_nodes = [
-        {**node, "compared_by": "node_presence", "present_in_round_trip": node["node_id"] in tiered_seen[tree]}
+        _tiered_node_row(node, seen=node["node_id"] in tiered_seen[tree], capacity=_node_capacity(record_by_entry, node["node_id"]))
         for tree in ROUND_TRIP_TREES
         for node in expected_tiered[tree].values()
     ]
-    matched = actual == expected and all(set(expected_tiered[tree]) == tiered_seen[tree] for tree in ROUND_TRIP_TREES)
+    matched = (
+        actual == expected
+        and all(set(expected_tiered[tree]) == tiered_seen[tree] for tree in ROUND_TRIP_TREES)
+        and all(node["total_rank_within_node_capacity"] for node in tiered_nodes)
+    )
     return _RoundTripComparison(matched, expected, actual, tiered_nodes, ignored)
+
+
+def _node_capacity(record_by_entry: dict[int, TraitRecord], node_id: int) -> int:
+    """Total ranks a node can hold: SimC fills a tiered node's entries in data order up to this sum."""
+    return sum(record.max_rank for record in record_by_entry.values() if record.node_id == node_id)
+
+
+def _tiered_node_row(node: dict[str, Any], *, seen: bool, capacity: int) -> dict[str, Any]:
+    return {
+        **node,
+        "node_max_rank": capacity,
+        "compared_by": "node_presence",
+        "present_in_round_trip": seen,
+        "total_rank_within_node_capacity": node["total_rank"] <= capacity,
+        # SimC's decode prints only the leftover rank for a tiered node, so the round trip cannot
+        # confirm how the node's total was split across its entries.
+        "per_entry_ranks_verified": False,
+    }
 
 
 def _json_entries_by_tree(entries_by_tree: dict[str, dict[int, int]]) -> dict[str, dict[str, int]]:
@@ -541,8 +477,8 @@ def _round_trip_validation(
     quirks: dict[str, Any] = {}
     if comparison.tiered_nodes:
         quirks["tiered_nodes"] = comparison.tiered_nodes
-    if comparison.ignored_granted_hero_entries:
-        quirks["ignored_granted_hero_entries"] = comparison.ignored_granted_hero_entries
+    if comparison.ignored_unselected_hero_entries:
+        quirks["ignored_unselected_hero_entries"] = comparison.ignored_unselected_hero_entries
     if not comparison.matched:
         return _not_validated(
             "simc_round_trip_mismatch",
@@ -618,15 +554,4 @@ def validate_talent_tree_transport(
         transport_forms=transport_forms,
         records=records,
         class_id=class_id,
-    )
-
-
-def _decoded_talent(*, tree: str, entry: int, rank: int, name: str) -> DecodedTalent:
-    return DecodedTalent(
-        tree=tree,
-        entry=entry,
-        rank=rank,
-        max_rank=rank,
-        name=name,
-        token=tokenize_talent_name(name),
     )

@@ -18,8 +18,8 @@ from warcraft_core.envelope import envelope_violations
 PROVIDER_IDS = [registration.name for registration in PROVIDERS]
 TIERS = {
     "core": {"wowhead", "warcraftlogs", "simc"},
-    "supported": {"raiderio", "warcraft-wiki", "icy-veins", "method"},
-    "experimental": {"lorrgs", "raidbots", "blizzard-api", "curseforge"},
+    "supported": {"raiderio", "warcraft-wiki", "icy-veins", "method", "lorrgs"},
+    "experimental": {"raidbots", "blizzard-api", "curseforge"},
 }
 
 
@@ -108,3 +108,81 @@ def test_wrapper_own_commands_return_a_conforming_envelope(tmp_path: Any) -> Non
     error_payload = json.loads(failure.stderr)
     assert envelope_violations(error_payload) == []
     assert error_payload["ok"] is False and error_payload["error"]["code"] == "invalid_bundle"
+
+
+def _offline_provider_result(provider: str, *args: Any, **kwargs: Any) -> dict[str, Any]:
+    """What every wrapper provider seam returns when the provider cannot answer."""
+    return {
+        "provider": provider,
+        "exit_code": 5,
+        "payload": {
+            "ok": False,
+            "provider": provider,
+            "command": "search",
+            "kind": "error",
+            "schema_version": "1",
+            "query": None,
+            "provenance": {},
+            "data": {},
+            "error": {"code": "network_error", "message": "ConnectError: offline"},
+        },
+        "stdout": "",
+    }
+
+
+# Every command `warcraft` owns (passthrough proxies are the provider's own envelope, covered above).
+_WRAPPER_OWN_COMMANDS = (
+    "doctor",
+    "schema",
+    "search",
+    "resolve",
+    "guild",
+    "guild-ranks",
+    "actor-profile",
+    "cooldown-packet",
+    "guide-compare",
+    "guide-compare-query",
+    "talent-packet",
+    "talent-describe",
+    "guide-builds-simc",
+)
+
+
+def _wrapper_command_args(command: str, tmp_path: Any) -> list[str]:
+    empty_source = tmp_path / "bundle"
+    empty_source.mkdir(exist_ok=True)
+    return {
+        "doctor": ["doctor"],
+        "schema": ["schema"],
+        "search": ["search", "thunderfury"],
+        "resolve": ["resolve", "thunderfury"],
+        "guild": ["guild", "us", "malganis", "gn"],
+        "guild-ranks": ["guild-ranks", "us", "malganis", "gn"],
+        "actor-profile": ["actor-profile", "abcd1234", "Someone"],
+        "cooldown-packet": ["cooldown-packet", "abcd1234", "--fight-id", "1", "--actor-id", "1", "--phase", "1"],
+        "guide-compare": ["guide-compare", str(tmp_path / "a"), str(tmp_path / "b")],
+        "guide-compare-query": ["guide-compare-query", "mistweaver monk", "--out-root", str(tmp_path / "out")],
+        "talent-packet": ["talent-packet", "druid/balance/ABC123", "--no-validate"],
+        "talent-describe": ["talent-describe", "druid/balance/ABC123", "--no-validate"],
+        "guide-builds-simc": ["guide-builds-simc", str(empty_source)],
+    }[command]
+
+
+@pytest.mark.parametrize("command", _WRAPPER_OWN_COMMANDS)
+def test_wrapper_own_command_envelopes_conform_offline(
+    command: str, tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every wrapper-owned command emits a conforming envelope when no provider can answer."""
+    for seam in ("provider_invoke", "provider_search", "provider_resolve"):
+        monkeypatch.setattr(f"warcraft_cli.main.{seam}", _offline_provider_result)
+
+    result = run_binary("warcraft", _wrapper_command_args(command, tmp_path))
+
+    stream = result.stdout if result.exit_code == 0 else result.stderr
+    payload = json.loads(stream)
+    assert envelope_violations(payload) == [], f"{command}: {envelope_violations(payload)}"
+    assert payload["provider"] == "warcraft"
+    assert payload["command"] == command
+    assert payload["ok"] is (result.exit_code == 0)
+    if payload["ok"] is False:
+        assert set(payload["error"]) <= {"code", "message", "details"}, f"{command}: error keys beyond the contract"

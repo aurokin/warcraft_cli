@@ -14,6 +14,14 @@ from simc_cli.build_input import BuildSpec, build_profile_text
 from simc_cli.repo import RepoPaths
 from simc_cli.run import CommandResult, repo_git_status, run_profile
 
+# SimC fills collected_data.action_sequence for a single iteration (engine/action/action.cpp), so
+# action counts and the CPM derived from them describe one fight even when many were simulated.
+ACTION_SAMPLE_ITERATIONS = 1
+ACTION_SAMPLE_NOTE = (
+    "action_counts, action_cpm and top_action_deltas come from SimC's one recorded action sequence, "
+    "not from an iteration mean; dps, dps_error and fight_length are means over all iterations."
+)
+
 
 @dataclass(slots=True)
 class ValidationResult:
@@ -126,14 +134,39 @@ def compare_apl_variants(
                           iterations=iterations, threads=threads, out_dir=compare_dir)
         for label, apl_path, profile_path in profiles
     ]
+    return comparison_report(
+        summaries,
+        compare_dir=compare_dir,
+        harness_path=Path(harness_path).expanduser().resolve(),
+        iterations=iterations,
+        threads=threads,
+        validations=validations,
+    )
+
+
+def comparison_report(
+    summaries: list[VariantSummary],
+    *,
+    compare_dir: Path,
+    harness_path: Path,
+    iterations: int,
+    threads: int,
+    validations: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Rank the simulated variants against the first one and state which numbers are sampled."""
     base = summaries[0]
     ranking = sorted(summaries, key=lambda item: item.dps, reverse=True)
     return {
         "kind": "apl_comparison",
         "compare_dir": str(compare_dir),
-        "harness_path": str(Path(harness_path).expanduser().resolve()),
+        "harness_path": str(harness_path),
         "iterations": iterations,
         "threads": threads,
+        "sampling": {
+            "iterations_simulated": iterations,
+            "action_sequence_iterations": ACTION_SAMPLE_ITERATIONS,
+            "note": ACTION_SAMPLE_NOTE,
+        },
         "validations": validations,
         "base": _summary_payload(base),
         "ranking": [_summary_payload(row) for row in ranking],
@@ -151,6 +184,7 @@ def variant_report_payload(report: dict[str, Any]) -> dict[str, Any]:
     comparisons: list[Any] = raw_comparisons if isinstance(raw_comparisons, list) else []
     return {
         "kind": "apl_variant_report",
+        "sampling": report.get("sampling"),
         "base_label": base.get("label") if base else None,
         "best_label": best.get("label") if best else None,
         "best_dps": best.get("dps") if best else None,
@@ -319,6 +353,7 @@ def _summary_payload(summary: VariantSummary) -> dict[str, Any]:
         "fight_length": round(summary.fight_length, 3) if summary.fight_length is not None else None,
         "action_counts": summary.action_counts,
         "action_cpm": summary.action_cpm,
+        "action_sequence_iterations": ACTION_SAMPLE_ITERATIONS,
     }
 
 
@@ -331,6 +366,7 @@ def _comparison_payload(base: VariantSummary, current: VariantSummary) -> dict[s
         "dps_delta": round(delta, 2),
         "percent_delta": round(percent, 2),
         "top_action_deltas": _top_action_deltas(base, current),
+        "action_sequence_iterations": ACTION_SAMPLE_ITERATIONS,
     }
 
 

@@ -8,12 +8,16 @@ from typing import Any
 from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup, Tag
-from warcraft_core.identity import ability_identity_payload, build_reference_payload
+from warcraft_core.identity import ability_identity_payload, build_identity_payload, build_reference_payload
 
 ICY_VEINS_BASE_URL = "https://www.icy-veins.com"
+GUIDE_PATH_RE = re.compile(r"^/wow/(?P<slug>[^/?#]+)/?$")
 WOWHEAD_LINK_RE = re.compile(
     r"^(?P<entity_type>achievement|currency|faction|item|mount|npc|object|pet|quest|spell|zone)=(?P<id>\d+)(?:/|$)"
 )
+# A WoW loadout import string as Blizzard's client generates it: one long run of base64 characters.
+WOW_TALENT_EXPORT_RE = re.compile(r"^[A-Za-z0-9+/]{40,}$")
+HEADING_TAG_RE = re.compile(r"^h[234]$")
 CLASS_HUB_SLUGS = {
     "death-knight-guide",
     "demon-hunter-guide",
@@ -32,22 +36,6 @@ CLASS_HUB_SLUGS = {
 ROLE_GUIDE_SLUGS = {
     "healing-guide",
 }
-GUIDE_KEYWORDS = (
-    "guide",
-    "easy-mode",
-    "spec-builds-talents",
-    "rotation-cooldowns-abilities",
-    "stat-priority",
-    "gems-enchants-consumables",
-    "gear-best-in-slot",
-    "spell-summary",
-    "resources",
-    "mythic-plus-tips",
-    "macros-addons",
-    "simulations",
-    "leveling",
-    "pvp",
-)
 DISPLAY_TOKEN_MAP = {
     "pve": "PvE",
     "pvp": "PvP",
@@ -79,9 +67,12 @@ SPECIAL_EVENT_KEYWORDS = (
 # to ``.content-toc``, and the body from ``.page_content`` to ``.guide-page-content``. Each layout
 # below lists the new selector first and keeps the legacy one so captured pre-redesign pages (and
 # any page the site has not migrated yet) still parse.
+# Class hubs have no per-page switcher; their Astro family navigation is the class dropdown in the
+# guide header, which lists the thirteen class hubs the legacy ``.toc_page_list`` also listed.
 FAMILY_NAVIGATION_LAYOUTS = (
     (".table-of-contents", "nav a[href]"),
     (".toc_page_list", ".toc_page_center_item .toc_page_list_item a, .toc_page_list_items .toc_page_list_item a"),
+    (".guide-header__selectors", ".dropdown__menu a[href]"),
 )
 PAGE_TOC_LAYOUTS = (
     (".content-toc", ".content-toc__item[href], a[href]"),
@@ -92,6 +83,12 @@ DATA_LAYER_PATTERNS = (
     re.compile(r"dataLayer\s*=\s*\[\s*({.*?})\s*\];", flags=re.DOTALL),
     re.compile(r"dataLayer\s*=\s*({.*?})\s*;", flags=re.DOTALL),
 )
+# Icy Veins publishes talent builds as WoW loadout import strings rather than talent-calc links:
+# one ``.export-string`` block per build, with the visible build name in ``__title`` and the raw
+# import string in ``__code``.
+TALENT_EXPORT_SELECTOR = ".export-string"
+TALENT_EXPORT_CODE_SELECTOR = ".export-string__code"
+TALENT_EXPORT_TITLE_SELECTOR = ".export-string__title"
 INTRO_SELECTOR = ".guide-intro, .page_content_header_intro"
 ARTICLE_SELECTOR = ".guide-page-content, .page_content_container > .page_content"
 # Page furniture that lives inside the article container but is not article prose. The first line is
@@ -112,23 +109,35 @@ def clean_text(value: str | None) -> str | None:
     return text or None
 
 
-def _strip_heading_prefix(title: str) -> str:
+def _strip_toc_number(title: str) -> str:
+    """Drop the ``1.`` / ``2.3.`` numbering Icy Veins renders in its on-page contents list.
+
+    Only the contents list is numbered; the headings it points at are not, so their titles are used
+    as-is and stay comparable with these.
+    """
     return re.sub(r"^\d+(?:\.\d+)*\.\s*", "", title).strip()
+
+
+def guide_slug_from_url(url: str) -> str | None:
+    """Slug of a single-segment ``/wow/<slug>`` page, or ``None`` for any other Icy Veins URL shape.
+
+    Guides link to news posts and other multi-segment ``/wow/`` pages, so callers that walk page
+    links need to skip those instead of treating them as guide references.
+    """
+    match = GUIDE_PATH_RE.match(urlparse(url).path)
+    return match.group("slug") if match else None
 
 
 def guide_ref_parts(guide_ref: str) -> str:
     raw = guide_ref.strip()
     if not raw:
         raise ValueError("Guide reference cannot be empty.")
-    if raw.startswith("http://") or raw.startswith("https://"):
-        parsed = urlparse(raw)
-        path = parsed.path
-    else:
-        path = raw if raw.startswith("/") else f"/wow/{raw}"
-    match = re.match(r"^/wow/(?P<slug>[^/?#]+)/?$", path)
-    if not match:
+    if not raw.startswith(("http://", "https://", "/")):
+        raw = f"/wow/{raw}"
+    slug = guide_slug_from_url(raw)
+    if slug is None:
         raise ValueError(f"Unsupported Icy Veins guide reference: {guide_ref}")
-    return match.group("slug")
+    return slug
 
 
 def guide_url(slug: str) -> str:
@@ -170,10 +179,6 @@ def classify_guide_slug(slug: str) -> str | None:
     if normalized.endswith("-guide"):
         return "spec_guide"
     return None
-
-
-def is_supported_guide_slug(slug: str) -> bool:
-    return classify_guide_slug(slug) is not None
 
 
 def guide_traversal_scope(content_family: str | None) -> str:
@@ -267,6 +272,10 @@ def _extract_family_navigation(soup: BeautifulSoup, *, current_url: str) -> list
         title = clean_text(anchor.get_text(" ", strip=True))
         if not title:
             continue
+        section_slug = guide_slug_from_url(url)
+        if section_slug is None:
+            # Not a guide page (news posts, tool pages): it is not part of this guide's family.
+            continue
         parent = anchor.parent if isinstance(anchor.parent, Tag) else None
         raw_classes = parent.get("class") if parent is not None else None
         classes = raw_classes if isinstance(raw_classes, list) else ([raw_classes] if isinstance(raw_classes, str) else [])
@@ -274,7 +283,7 @@ def _extract_family_navigation(soup: BeautifulSoup, *, current_url: str) -> list
             {
                 "title": title,
                 "url": url,
-                "section_slug": guide_ref_parts(url),
+                "section_slug": section_slug,
                 "active": bool({"selected", "active"} & set(classes)) or urlparse(url).path.rstrip("/") == current_path,
                 "ordinal": ordinal,
             }
@@ -297,7 +306,7 @@ def _extract_page_toc(soup: BeautifulSoup, *, current_url: str) -> list[dict[str
             continue
         seen.add(url)
         parsed = urlparse(url)
-        title = clean_text(_strip_heading_prefix(anchor.get_text(" ", strip=True)))
+        title = clean_text(_strip_toc_number(anchor.get_text(" ", strip=True)))
         if not title:
             continue
         items.append(
@@ -335,32 +344,33 @@ def _clone_article(article: Tag) -> Tag:
     return cloned
 
 
+def _heading_title_and_level(heading: Tag) -> tuple[str, int] | None:
+    title = clean_text(heading.get_text(" ", strip=True))
+    if not title:
+        return None
+    return title, int(heading.name[1])
+
+
 def _heading_from_tag(tag: Tag) -> tuple[str, int] | None:
-    if tag.name in {"h2", "h3", "h4"}:
-        title = clean_text(tag.get_text(" ", strip=True))
-        if not title:
-            return None
-        return _strip_heading_prefix(title), int(tag.name[1])
+    """``(title, level)`` when ``tag`` starts a section: a bare heading or a ``heading_container`` wrapper.
+
+    Used on the article's direct children, so an ordinary content ``div`` that happens to contain a
+    heading deeper inside must not be treated as a section start.
+    """
+    if HEADING_TAG_RE.match(tag.name):
+        return _heading_title_and_level(tag)
     if tag.name == "div" and "heading_container" in (tag.get("class") or []):
-        heading = tag.find(re.compile(r"^h[234]$"))
-        if not isinstance(heading, Tag):
-            return None
-        title = clean_text(heading.get_text(" ", strip=True))
-        if not title:
-            return None
-        return _strip_heading_prefix(title), int(heading.name[1])
+        heading = tag.find(HEADING_TAG_RE)
+        return _heading_title_and_level(heading) if isinstance(heading, Tag) else None
     return None
 
 
 def _extract_headings(article: Tag) -> list[dict[str, Any]]:
+    """Every heading in the article in document order, wrapped or not."""
     headings: list[dict[str, Any]] = []
     ordinal = 0
-    for node in article.find_all(["div", "h2", "h3", "h4"]):
-        if not isinstance(node, Tag):
-            continue
-        if node.name in {"h2", "h3", "h4"} and isinstance(node.parent, Tag) and "heading_container" in (node.parent.get("class") or []):
-            continue
-        heading = _heading_from_tag(node)
+    for node in article.find_all(HEADING_TAG_RE):
+        heading = _heading_title_and_level(node)
         if heading is None:
             continue
         ordinal += 1
@@ -447,9 +457,9 @@ def _extract_linked_entities(article: Tag, *, source_url: str) -> list[dict[str,
             entity_type = match.group("entity_type")
             entity_id: str | int = int(match.group("id"))
             key = (entity_type, entity_id)
-        elif parsed.netloc.endswith("icy-veins.com") and parsed.path.startswith("/wow/"):
+        elif parsed.netloc.endswith("icy-veins.com") and (slug := guide_slug_from_url(url)) is not None:
             entity_type = "page"
-            entity_id = guide_ref_parts(url)
+            entity_id = slug
             key = (entity_type, entity_id)
         else:
             continue
@@ -485,6 +495,48 @@ def _extract_linked_entities(article: Tag, *, source_url: str) -> list[dict[str,
     return sorted(items.values(), key=lambda row: (row["type"], str(row["id"])))
 
 
+def _talent_export_reference(code: str, *, label: str | None, source_url: str) -> dict[str, Any]:
+    """One published WoW loadout import string, in the shared build-reference row shape.
+
+    ``url`` carries the import string itself: a ``wow_talent_export`` reference has no link to point
+    at, the string is what identifies it, and it is exactly what ``simc --build-text`` consumes.
+    """
+    return {
+        "kind": "build_reference",
+        "reference_type": "wow_talent_export",
+        "url": code,
+        "label": label,
+        "build_code": code,
+        "source_url": source_url,
+        "build_identity": build_identity_payload(
+            actor_class=None,
+            spec=None,
+            confidence="none",
+            source="guide_talent_export_string",
+            source_notes=(
+                "build code came from a WoW loadout import string published in the guide",
+                "class and spec are not read off this reference; decode the import string to identify them",
+            ),
+        ),
+        "source": {"provider": "icy-veins", "source": "guide_talent_export_string"},
+    }
+
+
+def _extract_talent_export_builds(article: Tag, *, source_url: str) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for block in article.select(TALENT_EXPORT_SELECTOR):
+        code_tag = block.select_one(TALENT_EXPORT_CODE_SELECTOR)
+        if not isinstance(code_tag, Tag):
+            continue
+        code = code_tag.get_text(strip=True)
+        if not WOW_TALENT_EXPORT_RE.match(code):
+            continue
+        title_tag = block.select_one(TALENT_EXPORT_TITLE_SELECTOR)
+        label = clean_text(title_tag.get_text(" ", strip=True)) if isinstance(title_tag, Tag) else None
+        rows.append(_talent_export_reference(code, label=label, source_url=source_url))
+    return rows
+
+
 def _extract_build_references(article: Tag, *, source_url: str) -> list[dict[str, Any]]:
     items: dict[str, dict[str, Any]] = {}
     for anchor in article.find_all("a", href=True):
@@ -502,6 +554,8 @@ def _extract_build_references(article: Tag, *, source_url: str) -> list[dict[str
         if payload is None:
             continue
         items[str(payload["url"])] = payload
+    for row in _extract_talent_export_builds(article, source_url=source_url):
+        items.setdefault(str(row["url"]), row)
     return sorted(items.values(), key=lambda row: str(row["url"]))
 
 
@@ -642,15 +696,10 @@ def parse_sitemap_guides(xml_text: str) -> list[dict[str, Any]]:
     seen: set[str] = set()
     guides: list[dict[str, Any]] = []
     for url in urls:
-        try:
-            slug = guide_ref_parts(url)
-        except ValueError:
-            continue
-        if slug in seen:
+        slug = guide_slug_from_url(url)
+        if slug is None or slug in seen:
             continue
         content_family = classify_guide_slug(slug)
-        if content_family is None and not any(keyword in slug for keyword in GUIDE_KEYWORDS):
-            continue
         if content_family is None:
             continue
         seen.add(slug)
