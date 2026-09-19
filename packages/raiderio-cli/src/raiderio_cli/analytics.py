@@ -22,7 +22,7 @@ from warcraft_core.analytics import (
 from warcraft_core.provider import ProviderError
 from warcraft_core.shapes import as_dict, as_list
 
-from raiderio_cli.client import RaiderIOClient
+from raiderio_cli.client import FetchedJson, RaiderIOClient, combined_freshness
 from raiderio_cli.identity import raiderio_class_spec_identity
 
 
@@ -207,18 +207,19 @@ def sample_leaderboard_runs(
     seen_run_ids: set[str] = set()
     runs: list[dict[str, Any]] = []
     leaderboard_urls: list[str] = []
-    pages_fetched = 0
+    read_pages: list[FetchedJson] = []
     effective_season = season
     for offset in range(pages):
         current_page = page + offset
-        payload = client.mythic_plus_runs(
+        fetched = client.mythic_plus_runs(
             season=season,
             region=region,
             dungeon=dungeon,
             affixes=affixes,
             page=current_page,
         )
-        pages_fetched += 1
+        payload = fetched.payload
+        read_pages.append(fetched)
         served_season = response_season(payload)
         if served_season:
             effective_season = served_season
@@ -241,11 +242,14 @@ def sample_leaderboard_runs(
                 break
         if len(runs) >= limit:
             break
+    fetched_at, cache_hit = combined_freshness(read_pages)
     return runs, {
         "sampled_at": datetime.now(UTC).isoformat(),
+        "fetched_at": fetched_at,
+        "cache_hit": cache_hit,
         "season": effective_season,
         "pages_requested": pages,
-        "pages_fetched": pages_fetched,
+        "pages_fetched": len(read_pages),
         "cache_ttl_seconds": client.mythic_plus_runs_ttl_seconds,
         "leaderboard_urls": leaderboard_urls,
     }
@@ -590,24 +594,28 @@ def player_sample_summary(
 
 
 def freshness_payload(meta: dict[str, Any]) -> dict[str, Any]:
+    """``sampled_at`` is when the sample was assembled; ``fetched_at`` is when its oldest page was read."""
     return {
         "sampled_at": meta["sampled_at"],
+        "fetched_at": meta["fetched_at"],
+        "cache_hit": meta["cache_hit"],
         "cache_ttl_seconds": meta["cache_ttl_seconds"],
     }
 
 
-def runs_page_provenance(payload: dict[str, Any], *, cache_ttl_seconds: int) -> dict[str, Any]:
+def runs_page_provenance(fetched: FetchedJson, *, cache_ttl_seconds: int) -> dict[str, Any]:
     """``freshness`` and ``citations`` for the single-page ``mythic-plus-runs`` read.
 
-    The sampled siblings build theirs from sampling meta; this read has none, so the read time and
-    the leaderboard URL Raider.IO echoes stand in. Without it the envelope's provenance is empty.
-
-    ``sampled_at`` carries the same meaning as in the sampled siblings -- when this command read the
-    response -- because a cache hit can be up to ``cache_ttl_seconds`` older than that upstream.
+    ``fetched_at`` is when the page came off the wire, so a ``cache_hit`` replay reports the age of
+    what it replayed rather than the time the command ran. Without this the provenance is empty.
     """
-    leaderboard_url = payload.get("leaderboard_url")
+    leaderboard_url = fetched.payload.get("leaderboard_url")
     return {
-        "freshness": {"sampled_at": datetime.now(UTC).isoformat(), "cache_ttl_seconds": cache_ttl_seconds},
+        "freshness": {
+            "fetched_at": fetched.fetched_at,
+            "cache_hit": fetched.cache_hit,
+            "cache_ttl_seconds": cache_ttl_seconds,
+        },
         "citations": {
             "leaderboard_urls": [leaderboard_url] if isinstance(leaderboard_url, str) and leaderboard_url else [],
         },

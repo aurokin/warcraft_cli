@@ -12,7 +12,7 @@ import re
 from datetime import date
 from typing import Any
 
-from wowhead_cli.entity_types import RESOLVE_ENTITY_TYPES, SEARCH_TYPE_HINTS
+from wowhead_cli.entity_types import PARSER_ENTITY_TYPES, RESOLVE_ENTITY_TYPES, SEARCH_TYPE_HINTS
 from wowhead_cli.expansion_profiles import ExpansionProfile, parse_entity_from_wowhead_url, resolve_expansion
 from wowhead_cli.wowhead_client import entity_url, guide_url, suggestion_entity_type
 
@@ -400,6 +400,21 @@ def command_prefix_for_expansion(expansion: ExpansionProfile) -> str:
     if expansion.key == resolve_expansion(None).key:
         return "wowhead"
     return f"wowhead --expansion {expansion.key}"
+
+
+def partition_entity_candidates(
+    candidates: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Split `resolve` candidates into database entities and the rows that are not entities.
+
+    Wowhead's suggestions mix entities with news posts and world events, and a headline often
+    matches the query text better than the item it is written about. `resolve` answers with an
+    entity, so those rows are ranked and scored apart: they still travel in the candidate list, but
+    they only become the match when the response holds no entity at all.
+    """
+    entities = [row for row in candidates if row.get("entity_type") in PARSER_ENTITY_TYPES]
+    articles = [row for row in candidates if row.get("entity_type") not in PARSER_ENTITY_TYPES]
+    return entities, articles
 
 
 def resolve_next_command(candidate: dict[str, Any]) -> str | None:

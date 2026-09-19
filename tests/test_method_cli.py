@@ -603,13 +603,18 @@ def test_method_guide_full_records_a_failed_navigation_page_and_keeps_going(monk
 def test_method_guide_export_reports_failed_navigation_pages(monkeypatch, tmp_path: Path) -> None:
     """An exported bundle is partial when a navigation page failed; the command must say so."""
     monkeypatch.setattr("method_cli.main.MethodClient.fetch_guide_page", _navigation_page_fetch("network"))
-    result = runner.invoke(app, ["guide-export", "mistweaver-monk", "--out", str(tmp_path / "bundle")])
+    bundle_dir = tmp_path / "bundle"
+    result = runner.invoke(app, ["guide-export", "mistweaver-monk", "--out", str(bundle_dir)])
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)["data"]
     assert payload["counts"]["pages"] == 1
     assert payload["failed_pages"]["count"] == 1
     assert payload["failed_pages"]["items"][0]["section_slug"] == "talents"
+    # The manifest is all a downstream bundle reader sees, so the missing page has to reach it too.
+    manifest = json.loads((bundle_dir / "manifest.json").read_text())
+    assert manifest["failed_pages"]["count"] == 1
+    assert manifest["failed_pages"]["items"][0]["section_slug"] == "talents"
 
 
 TALENT_BLOCK_HTML = """

@@ -13,7 +13,7 @@ Design record: [docs/architecture/history/lorrgs.md](../architecture/history/lor
 
 Global flags go before the subcommand and are the same on every binary:
 `--pretty`, `--compact`, `--compact-max-chars <n>`, `--fields <dot.path>`, `--fields-strict`,
-`--profile agent|human|debug`.
+`--profile agent|human`.
 
 ```bash
 lorrgs --pretty specs
@@ -45,7 +45,10 @@ lorrgs --fields data.specs specs
 `--fight` and `--player` take dot-separated id lists (`2.4.15`).
 
 The wrapper adds `warcraft cooldown-packet <report-url> --actor-id <source-id> --phase <n>`, which joins
-cached Lorrgs phase/spell/top-parse context with Warcraft Logs actor cast events.
+cached Lorrgs phase/spell/top-parse context with Warcraft Logs actor cast events. Lorrgs only serves
+reports it has already cached; for any other report add `--spec-slug <lorrgs-spec-slug>` and the command
+degrades to the Warcraft Logs half with `data.lorrgs.status: "unavailable"` and no phase windows. Without
+both flags it fails and names them.
 
 ## Output contract
 

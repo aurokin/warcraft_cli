@@ -60,8 +60,8 @@ def cache_root(e2e_session_env: dict[str, str]) -> Path:
 def doctor_rows(e2e_session_env: dict[str, str]) -> dict[str, dict[str, Any]]:
     """``warcraft doctor`` once per session: provider readiness and auth posture by name."""
     result = harness.run("warcraft", "doctor")
-    rows = result.data.get("providers") or result.payload.get("providers") or []
-    return {row["provider"]: row for row in rows if isinstance(row, dict) and isinstance(row.get("provider"), str)}
+    rows = result.data["providers"]
+    return {row["provider"]: row for row in rows}
 
 
 @pytest.fixture(scope="session")

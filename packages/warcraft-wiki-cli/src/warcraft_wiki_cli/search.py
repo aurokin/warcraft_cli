@@ -275,6 +275,22 @@ def search_results(client: WarcraftWikiClient, query: str, *, limit: int) -> Sea
     return SearchOutcome(normalized_query, excluded_terms, matches[:limit], total_count)
 
 
+def title_names_query(title: str, query: str) -> bool:
+    """True when every word of ``query`` appears in ``title`` itself, ignoring case and separators.
+
+    The absolute relevance floor for the typed ``api``/``event`` surfaces. ``all_terms_match`` also
+    fires on the search snippet, so a page that merely *talks about* the query covers it
+    (``UIHANDLER OnEvent`` for ``PLAYER_LOGIN``); the page that *is* the answer carries the name in
+    its title (``Event:PLAYER LOGIN``). Separators are collapsed so ``PLAYER_LOGIN`` matches
+    ``PLAYER LOGIN``, and terms are matched individually so a phrase query still lands
+    (``key down handler`` -> ``UIHANDLER OnKeyDown``).
+    """
+    normalized_query, _ = normalize_wiki_query(query)
+    collapsed_title = _collapsed_text(title)
+    terms = [_collapsed_text(term) for term in normalized_query.split()]
+    return bool(terms) and all(term in collapsed_title for term in terms)
+
+
 def _covers_query(row: dict[str, Any]) -> bool:
     """True when the row earned at least one reason that ties its own text to the whole query."""
     return bool(QUERY_COVERAGE_REASONS.intersection(row["ranking"]["match_reasons"]))

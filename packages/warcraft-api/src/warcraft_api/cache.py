@@ -11,8 +11,6 @@ from typing import Any, Protocol
 
 from warcraft_core.paths import provider_cache_root
 
-DEFAULT_CACHE_ROOT = provider_cache_root("wowhead")
-DEFAULT_HTTP_CACHE_DIR = DEFAULT_CACHE_ROOT / "http"
 DEFAULT_CACHE_PREFIX = "wowhead_cli"
 
 

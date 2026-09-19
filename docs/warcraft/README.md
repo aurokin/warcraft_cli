@@ -66,7 +66,10 @@ Every command's flags are listed in [docs/reference/warcraft.md](../reference/wa
   `raid_slug`). There is no `active_raid`: Raider.IO orders those rows by slug and carries no raid
   start/end window, so naming one of them "active" would be a guess. Cross-reference
   `raiderio raids` when you need the currently running tier.
-- `warcraft actor-profile` — cross-walk a Warcraft Logs report actor to a Raider.IO profile.
+- `warcraft actor-profile` — cross-walk a Warcraft Logs report actor to a Raider.IO profile. Warcraft
+  Logs only answers a fight-scoped roster query, so without `--fight-id` the wrapper reads the
+  report's fight list first and scopes the lookup to every fight; `query.scoped_fight_ids` names the
+  fights that were actually read. A report with no fights fails `report_has_no_fights` (exit 4).
 - `warcraft cooldown-packet` — compose Lorrgs phase windows with Warcraft Logs cast events for
   phase-scoped cooldown analysis. Lorrgs only serves reports it has already cached; for any other
   report — or when Lorrgs itself is unreachable — pass `--actor-id` and `--spec-slug` and the packet
@@ -84,8 +87,11 @@ Every command's flags are listed in [docs/reference/warcraft.md](../reference/wa
 - `warcraft talent-packet` / `talent-describe` — build a validated talent transport packet, optionally
   with simc `describe-build` output. Both report the file they wrote as `written_packet_path`.
 - `warcraft guide-builds-simc` — turn explicit build references in exported bundles into a simc packet.
-  `summary.simc_handoff_status` is `ok`, `no_build_references`, or `all_handoffs_failed`; the last
-  one is an error envelope, not a success with zero counters.
+  `summary.simc_handoff_status` is `ok`, `partial`, `no_build_references`, or `all_handoffs_failed`;
+  the last one is an error envelope, not a success with zero counters. `partial` means a leg the
+  caller asked for produced nothing for any build — `summary.empty_requested_legs` names them. Guide
+  bundles publish bare `wow_talent_export` strings today, which `simc decode-build` rejects for want
+  of a class/spec, so `--decode` over a guide bundle reports `partial`, never `ok`.
 
 ## Errors and exit codes
 

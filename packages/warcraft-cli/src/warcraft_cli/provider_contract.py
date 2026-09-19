@@ -293,9 +293,10 @@ MINIMUM_PROVIDER_SCORE_SCALE = 40
 def normalized_provider_score(score: int, *, provider_max_score: int) -> int:
     """Rescale one provider-local score onto the shared 0-100 axis using that provider's own best row.
 
-    Provider search scores are not comparable: Warcraft Wiki starts at 40 for merely being the first
-    upstream hit while a Wowhead exact-name match tops out in the 40s. Merging the raw numbers lets
-    the provider with the largest scale own every slot in the merged list.
+    Provider search scores are not comparable: on ``un'goro crater`` the Warcraft Wiki stacks title,
+    term, intent and family credit into the 150s while Wowhead's exact zone match reaches 47.
+    Merging the raw numbers lets the provider with the largest scale own every slot in the merged
+    list.
 
     The divisor never drops below ``MINIMUM_PROVIDER_SCORE_SCALE``, so a provider whose best row is
     junk (a two-term text match scoring 3) is scaled down rather than promoted to 100 for winning

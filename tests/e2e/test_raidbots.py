@@ -1,9 +1,12 @@
 """End-to-end journeys for the ``raidbots`` binary.
 
-Raidbots publishes no report index and its reports expire, so there is no discoverable public
-report to pin. The always-on journeys therefore cover doctor, the two not-supported stubs, the
-fully local ``explain-input`` surface, and the ``inspect-report``/``input`` error paths. Set
-``WARCRAFT_E2E_RAIDBOTS_REPORT`` to a live report URL or id to also exercise the happy path.
+Raidbots publishes no report index and its reports expire after a few weeks, so there is nothing to
+pin and nothing to discover at run time: a report id only exists if someone on this machine just
+ran a sim. The always-on journeys therefore cover doctor, the two not-supported stubs, the fully
+local ``explain-input`` surface, and the ``inspect-report``/``input`` error paths, which are the
+only paths that can be reached without one. Set ``WARCRAFT_E2E_RAIDBOTS_REPORT`` to a live report
+URL or id to also exercise the success path; that is the documented optional input in
+docs/architecture/E2E_TESTING.md.
 """
 
 from __future__ import annotations
@@ -111,26 +114,28 @@ def test_a_missing_report_is_not_found_on_both_report_surfaces(require) -> None:
     # data.json redirects to a public GCS bucket that answers 403 for an object that is absent or
     # expired; Raidbots takes no credentials, so that can only mean "no such report".
     inspect = run("raidbots", "inspect-report", MISSING_REPORT_ID, expect=EXIT_NOT_FOUND, error_code="not_found")
-    assert inspect.payload["error"]["details"]["status_code"] in {403, 404}
+    assert inspect.payload["error"]["details"]["status_code"] == 403
+    assert inspect.payload["error"]["details"]["url"].endswith(f"{MISSING_REPORT_ID}/data.json")
     assert "expired or is private" in inspect.payload["error"]["message"]
 
     # /simc answers HTTP 200 with the Raidbots single-page app instead of 404, so the CLI has to
-    # reject the page rather than hand HTML back as SimC input.
+    # reject the page rather than hand HTML back as SimC input. Both report surfaces must say the
+    # same thing about the same missing report.
     simc_input = run("raidbots", "input", MISSING_REPORT_ID, expect=EXIT_NOT_FOUND, error_code="not_found")
-    assert "SimC input" in simc_input.payload["error"]["message"]
+    assert "expired or is private" in simc_input.payload["error"]["message"]
+    assert MISSING_REPORT_ID in simc_input.payload["error"]["message"]
     assert "<html" not in simc_input.stderr.lower()
 
 
 def test_a_live_report_round_trips_through_inspect_and_input(require, optional) -> None:
     require("raidbots")
-    # Raidbots reports expire, so no pin can stay valid; point this at a fresh public report to
-    # exercise the happy path (see tmp/handoffs/e2e-experimental-contract.md).
     reference = optional("raidbots-report", "WARCRAFT_E2E_RAIDBOTS_REPORT")
 
     report = run("raidbots", "inspect-report", reference)
     assert report.payload["kind"] == "report"
     parsed = report.data["report"]
-    assert parsed["kind"] in {"quick_sim", "multi_profile", "unknown"}
+    # "unknown" means the parser did not recognise a real report, which is a failure here.
+    assert parsed["kind"] in {"quick_sim", "multi_profile"}
     assert report.data["scope"] == {"type": "raidbots_report", "kind": parsed["kind"]}
     assert report.data["citations"]["report_url"].endswith(parsed["report_id"])
     assert report.data["freshness"]["from_cache"] is False

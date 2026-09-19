@@ -299,14 +299,15 @@ def mythic_plus_runs(
 ) -> None:
     """Return one page of the Mythic+ run leaderboard for a region and dungeon."""
     with _command_errors(ctx, "mythic-plus-runs"), open_client() as client:
-        payload = client.mythic_plus_runs(
+        fetched = client.mythic_plus_runs(
             season=resolve_season_input(season),
             region=region,
             dungeon=dungeon,
             affixes=affixes or None,
             page=page,
         )
-        provenance = runs_page_provenance(payload, cache_ttl_seconds=client.mythic_plus_runs_ttl_seconds)
+        provenance = runs_page_provenance(fetched, cache_ttl_seconds=client.mythic_plus_runs_ttl_seconds)
+    payload = fetched.payload
     rankings = as_list(payload.get("rankings"))
     served_season = response_season(payload)
     emit(

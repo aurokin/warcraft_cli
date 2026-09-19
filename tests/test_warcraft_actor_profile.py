@@ -102,8 +102,20 @@ def _raiderio_payload(name: str, actor_class: str, spec: str, *, region: str = "
     }
 
 
+# Without --fight-id the crosswalk enumerates the report's fights first, because Warcraft Logs only
+# answers a playerDetails query that names a fight list or an explicit time window.
+_WCL_FIGHTS_RESULT: dict[str, Any] = {
+    "provider": "warcraftlogs",
+    "exit_code": 0,
+    "payload": {"fights": [{"id": 1}]},
+    "stdout": "",
+}
+
+
 def _invoke(wcl_payload: dict[str, Any] | None, raiderio_payload: dict[str, Any] | None, *, raiderio_exit: int = 0):
     def fake(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, Any]:
+        if args[0] == "report-fights":
+            return _WCL_FIGHTS_RESULT
         if args[0] == "report-player-details":
             return {"provider": "warcraftlogs", "exit_code": 0, "payload": wcl_payload, "stdout": ""}
         if args[0] == "character":
@@ -222,6 +234,8 @@ def test_actor_profile_reconciles_matching_log_and_profile(monkeypatch) -> None:
         "report_code": "ABC123",
         "actor_name": "Roguecane",
         "fight_id": None,
+        # No --fight-id means "the whole report": the query names the fights that were actually read.
+        "scoped_fight_ids": [1],
         "region": "us",
         "realm": "illidan",
         "name": "Roguecane",
@@ -258,6 +272,8 @@ def test_actor_profile_region_override_drives_lookup(monkeypatch) -> None:
     seen: dict[str, Any] = {}
 
     def fake(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, Any]:
+        if args[0] == "report-fights":
+            return _WCL_FIGHTS_RESULT
         if args[0] == "report-player-details":
             return {"provider": "warcraftlogs", "exit_code": 0, "payload": wcl, "stdout": ""}
         seen["character_args"] = args
@@ -310,6 +326,8 @@ def test_actor_profile_forwards_allow_unlisted(monkeypatch) -> None:
     seen: dict[str, Any] = {}
 
     def fake(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, Any]:
+        if args[0] == "report-fights":
+            return _WCL_FIGHTS_RESULT
         if args[0] == "report-player-details":
             seen["wcl_args"] = args
             return {"provider": "warcraftlogs", "exit_code": 0, "payload": wcl, "stdout": ""}
@@ -349,6 +367,8 @@ def test_actor_profile_errors_when_profile_lookup_fails(monkeypatch) -> None:
     wcl = _wcl_payload({"dps": [_wcl_actor("Roguecane", "Illidan", "us", "Rogue", "Subtlety")]})
 
     def fake(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, Any]:
+        if args[0] == "report-fights":
+            return _WCL_FIGHTS_RESULT
         if args[0] == "report-player-details":
             return {"provider": "warcraftlogs", "exit_code": 0, "payload": wcl, "stdout": ""}
         return {

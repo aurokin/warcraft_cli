@@ -24,7 +24,7 @@ Tier: supported.
 ## Flags
 
 Global flags come before the subcommand: `--pretty`, `--compact`, `--compact-max-chars <n>`, `--fields <path>`,
-`--fields-strict`, `--profile agent|human|debug`.
+`--fields-strict`, `--profile agent|human`.
 
 Command flags:
 
@@ -76,12 +76,17 @@ Every candidate carries its full `ranking.match_reasons`. MediaWiki's own full-t
 points and always appears as `upstream_rank_<n>`, so a row that matched only in a page body it never showed us cannot
 outscore a real title match.
 
-`resolve` reports `resolved: true`, and the `api`/`event` search fallback accepts a candidate, only when the top row
-carries a reason covering the whole query (`exact_title`, `exact_api_title`, `exact_handler_title`,
-`exact_event_title`, `title_prefix`, `title_contains_query`, `normalized_title_match`, `all_terms_match`,
-`guide_title_terms`, `expansion_alias_match`) and no other covering candidate scores within 18 points of it. Upstream
-rank, family and intent bonuses are shared by every row in the list, so they never make a candidate confident on
-their own.
+`resolve` reports `resolved: true` only when the top row carries a reason covering the whole query (`exact_title`,
+`exact_api_title`, `exact_handler_title`, `exact_event_title`, `title_prefix`, `title_contains_query`,
+`normalized_title_match`, `all_terms_match`, `guide_title_terms`, `expansion_alias_match`) and no other covering
+candidate scores within 18 points of it. Upstream rank, family and intent bonuses are shared by every row in the list,
+so they never make a candidate confident on their own.
+
+The `api`/`event` search fallback adds an absolute floor on top of that: every word of the query must appear in the
+candidate's own title, ignoring case and separators (`PLAYER_LOGIN` matches `Event:PLAYER LOGIN`, `key down handler`
+matches `UIHANDLER OnKeyDown`). `all_terms_match` also fires on MediaWiki's snippet, so without the floor a page that
+merely mentions the query in its body — `UIHANDLER OnEvent` for `PLAYER_LOGIN` — could be returned as the answer.
+Rows that fail the floor are reported under `error.details.candidates` instead, and the command exits 4.
 
 ## Caching
 

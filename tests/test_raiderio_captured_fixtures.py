@@ -1,9 +1,10 @@
 """Raider.IO payload builders run against captured API responses, not hand-written stubs.
 
 The JSON under ``tests/fixtures/raiderio/`` was captured from the live Raider.IO API per
-``docs/architecture/FIXTURE_MAINTENANCE.md`` (the guild roster was trimmed to twelve members; nothing
-else was edited). Every value asserted here is one Raider.IO actually sent, so a normalizer that
-drifts away from the real response shape fails instead of agreeing with its own fixture.
+``docs/architecture/FIXTURE_MAINTENANCE.md`` (the guild roster was trimmed to twelve members and the
+Mythic+ leaderboard page to its first two runs; nothing else was edited). Every value asserted here
+is one Raider.IO actually sent, so a normalizer that drifts away from the real response shape fails
+instead of agreeing with its own fixture.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from raiderio_cli.client import FetchedJson
 from raiderio_cli.main import app as raiderio_app
 from typer.testing import CliRunner
 
@@ -62,7 +64,11 @@ def test_raiderio_raid_leaderboard_parses_a_captured_rankings_response(monkeypat
     rankings = _captured("raid_rankings_us_malganis_the_venomous_abyss.json")
     monkeypatch.setattr(
         "raiderio_cli.client.RaiderIOClient.raid_rankings",
-        lambda self, *, raid, difficulty, region, realm=None, limit, page: rankings if page == 0 else {"raidRankings": []},
+        lambda self, *, raid, difficulty, region, realm=None, limit, page: FetchedJson(
+            payload=rankings if page == 0 else {"raidRankings": []},
+            fetched_at="2026-09-19T00:00:00+00:00",
+            cache_hit=False,
+        ),
     )
     result = runner.invoke(
         raiderio_app,
@@ -96,3 +102,59 @@ def test_raiderio_raid_leaderboard_parses_a_captured_rankings_response(monkeypat
     }
     # No realm_rank: the captured response carries no realmRank, so the row shape does not claim one.
     assert "realm_rank" not in second
+
+
+def _captured_runs_page(monkeypatch) -> None:
+    """Answer every ``/mythic-plus/runs`` page with the captured first page, then nothing."""
+    runs_page = _captured("mythic_plus_runs_us_page0.json")
+    monkeypatch.setattr(
+        "raiderio_cli.client.RaiderIOClient.mythic_plus_runs",
+        lambda self, *, season, region, dungeon, affixes, page: FetchedJson(
+            payload=runs_page if page == 0 else {"rankings": []},
+            fetched_at="2026-09-19T00:00:00+00:00",
+            cache_hit=False,
+        ),
+    )
+
+
+def test_raiderio_mythic_plus_runs_parses_a_captured_leaderboard_page(monkeypatch) -> None:
+    _captured_runs_page(monkeypatch)
+    result = runner.invoke(raiderio_app, ["mythic-plus-runs", "--region", "us"])
+    assert result.exit_code == 0, result.output
+
+    payload = json.loads(result.stdout)
+    data = payload["data"]
+    # Raider.IO echoes the season it applied under params.season only, so this is the one place the
+    # resolved season can come from when --season is omitted.
+    assert payload["query"]["resolved_season"] == "season-mn-2"
+    assert data["count"] == 2
+    top = data["runs"][0]
+    assert top["rank"] == 1
+    assert top["score"] == 515.4
+    assert top["mythic_level"] == 22
+    assert top["dungeon_slug"] == "murder-row"
+    assert top["completed_at"] == "2026-09-17T21:54:20.000Z"
+    assert top["affixes"] == ["fortified", "tyrannical", "xalataths-guile"]
+    assert payload["provenance"]["citations"]["leaderboard_urls"] == [
+        "https://raider.io/mythic-plus-rankings/season-mn-2/all/us/leaderboards-strict"
+    ]
+
+
+def test_raiderio_sample_players_parses_captured_roster_entries(monkeypatch) -> None:
+    _captured_runs_page(monkeypatch)
+    result = runner.invoke(raiderio_app, ["sample", "mythic-plus-players", "--region", "us", "--limit", "2"])
+    assert result.exit_code == 0, result.output
+
+    data = json.loads(result.stdout)["data"]
+    assert data["sample"]["run_count"] == 2
+    players = {row["name"]: row for row in data["players"]}
+    tank = players["Yodadkt"]
+    assert tank["realm"] == "area-52"
+    assert tank["region"] == "us"
+    assert tank["roles"] == ["tank"]
+    assert tank["class_slugs"] == ["death-knight"]
+    assert tank["spec_slugs"] == ["blood"]
+    assert tank["top_mythic_level"] == 22
+    # The same five players ran both captured runs, so their snapshots merge instead of duplicating.
+    assert tank["appearance_count"] == 2
+    assert data["sample"]["player_count"] == 5

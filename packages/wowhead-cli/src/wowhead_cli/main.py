@@ -373,7 +373,6 @@ def _apply_url_expansion(ctx: typer.Context, url_hint: str | None) -> WowheadCon
     updated = WowheadConfig(
         provider=cfg.provider,
         output=cfg.output,
-        diagnostics=cfg.diagnostics,
         stream=cfg.stream,
         expansion=detected,
         expansion_explicit=cfg.expansion_explicit,
@@ -567,7 +566,7 @@ def _emit(ctx: typer.Context, payload: dict[str, Any], *, err: bool = False) -> 
         emit(ctx, payload, err=err)
         return
     try:
-        rendered = shape_payload(payload, cfg.output, diagnostics=cfg.diagnostics)
+        rendered = shape_payload(payload, cfg.output)
     except OutputProjectionError as exc:
         fail(ctx, "missing_fields", str(exc), details={"missing_fields": list(exc.missing_fields)})
     _emit_jsonl(ctx, rendered, err=err)

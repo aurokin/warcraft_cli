@@ -5,9 +5,10 @@ than markup a test author invented, so a Wowhead redesign or a wrong assumption 
 up in the blocking suite instead of only in the weekly live canaries.
 
 The captures are trimmed, not edited: every `<style>` element, every non-JSON `<script>`, and the
-push-key/newsletter JSON blocks no parser reads are removed, and commenter display handles are
-replaced with `commenter-<n>` so no third party's name ships in this repo. Everything a parser
-reads is byte-identical to what Wowhead served.
+push-key/newsletter/optout JSON blocks no parser reads are removed. Third-party comment text is the
+one exception to "byte-identical": display handles become `commenter-<n>` and comment bodies are
+rewritten word-for-word with neutral filler, keeping line breaks, punctuation, word count and
+Wowhead markup tags intact. Everything else a parser reads is exactly what Wowhead served.
 """
 
 from __future__ import annotations
@@ -192,7 +193,8 @@ def test_comments_parses_the_real_embedded_comment_dataset(monkeypatch) -> None:
     assert data["counts"]["embedded_comments"] == 5
     top = data["comments"][0]
     assert top["id"] == 360
-    # Commenter handles are the one thing these captures do not keep verbatim; see the module note.
+    # Commenter handles and bodies are the one thing these captures do not keep verbatim; see the
+    # module note.
     assert top["user"] == "commenter-2"
     assert top["rating"] == 262
     assert top["citation_url"].endswith("#comments:id=360")

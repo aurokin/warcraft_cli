@@ -6,9 +6,11 @@ Lorrgs top parses (``cooldown-packet``), a Warcraft Logs report actor plus Simul
 (``actor-profile``), and the ``warcraft warcraftlogs`` passthrough.
 
 Inputs are discovered at run time and reuse the Warcraft Logs discovery chain in
-``tests/e2e/test_warcraftlogs.py``: the current raid tier, the pinned guild's most recent kill in
-it, and that kill's roster. Lorrgs only serves fights from reports it has already cached, so the
-cooldown journey walks the Lorrgs spec ranking for the discovered boss until it finds one.
+``tests/e2e/test_warcraftlogs.py``: the current raid tier, the most recent kill in it, and that
+kill's roster. Lorrgs only serves fights from reports it has already cached, so ``cooldown-packet``
+is covered twice: once against a report walked out of the Lorrgs spec ranking (the full packet with
+phase windows), and once against the anchor report, which Lorrgs has not cached and which is what a
+caller's own log looks like (the degraded packet that keeps the Warcraft Logs half).
 """
 
 from __future__ import annotations
@@ -19,7 +21,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from tests.e2e.harness import EXIT_GENERIC, JourneyFailure, Result, payload_or_legacy, run
+from tests.e2e.harness import EXIT_NOT_FOUND, JourneyFailure, Result, payload_or_legacy, run
 from tests.e2e.test_warcraftlogs import anchor, current_raid_zone
 
 # How far discovery walks the Lorrgs ranking before giving up on a cached report.
@@ -64,6 +66,11 @@ class LorrgsTarget:
     @property
     def url(self) -> str:
         return _report_url(self.code, self.fight_id)
+
+    @property
+    def query_url(self) -> str:
+        """The ``?fight=N&type=...`` form Warcraft Logs links use; the packet must carry both through."""
+        return f"https://www.warcraftlogs.com/reports/{self.code}?fight={self.fight_id}&type=damage-done"
 
 
 @lru_cache(maxsize=1)
@@ -117,6 +124,24 @@ def lorrgs_target() -> LorrgsTarget:
 
 
 @lru_cache(maxsize=1)
+def _lorrgs_capable_actor() -> tuple[dict[str, Any], str]:
+    """An anchor-kill actor whose spec Lorrgs publishes cooldown metadata for."""
+    for player in anchor().players:
+        slug = _lorrgs_spec_slug(player)
+        if slug in lorrgs_spec_slugs():
+            return player, str(slug)
+    raise JourneyFailure(f"no anchor roster spec maps to a Lorrgs spec slug: {[p.get('type') for p in anchor().players]}")
+
+
+@lru_cache(maxsize=1)
+def _anchor_boss_slug() -> str:
+    slug = lorrgs_boss_slugs().get(int(anchor().fight["encounter_id"]))
+    if slug is None:
+        raise JourneyFailure(f"Lorrgs does not know encounter {anchor().fight['encounter_id']}: {anchor().fight['name']}")
+    return slug
+
+
+@lru_cache(maxsize=1)
 def simc_apl_root() -> Path:
     """The default action-priority-list directory of the local SimulationCraft checkout."""
     result = run("simc", "repo")
@@ -162,7 +187,7 @@ def test_cooldown_packet_joins_a_report_fight_to_lorrgs_top_parses(require):
     result = run(
         "warcraft",
         "cooldown-packet",
-        target.url,
+        target.query_url,
         "--actor-id",
         str(target.actor_id),
         "--phase",
@@ -178,6 +203,7 @@ def test_cooldown_packet_joins_a_report_fight_to_lorrgs_top_parses(require):
     assert query["actor_name"] == target.actor_name, result.describe()
     assert query["spec_slug"] == target.spec_slug, result.describe()
     assert query["boss_slug"] == target.boss_slug, result.describe()
+    assert query["report_type"] == "damage-done", result.describe()
 
     data = result.data
     # Phase bounds come from Lorrgs/Warcraft Logs transition markers, so assert the invariants
@@ -208,6 +234,10 @@ def test_cooldown_packet_joins_a_report_fight_to_lorrgs_top_parses(require):
         assert selected["start_ms"] <= cast["timestamp_ms"] < selected["end_ms"], result.describe()
 
     assert data["boss"]["boss_slug"] == target.boss_slug, result.describe()
+    assert data["lorrgs"]["status"] == "ok", result.describe()
+    assert data["lorrgs"]["missing"] == [], result.describe()
+    assert data["phase"]["status"] == "ready", result.describe()
+    assert data["phase"]["requested"] == 1, result.describe()
 
     expected_sources = {
         "lorrgs_user_report_fights": "lorrgs",
@@ -226,12 +256,141 @@ def test_cooldown_packet_joins_a_report_fight_to_lorrgs_top_parses(require):
 
     comparison = data["comparison"]
     assert comparison["status"] == "ready", result.describe()
-    assert comparison["sample_count"] <= 2, result.describe()
+    assert comparison["sample_count"] == len(comparison["samples"]) <= 2, result.describe()
     assert comparison["selected_phase_spell_frequency"], result.describe()
+    for sample in comparison["samples"]:
+        # Every sample is a top parse of the same boss, so P1 exists for it too and the casts the
+        # comparison quotes have to sit inside that sample's own window, not the anchor's.
+        assert sample["phase_available"] is True, result.describe()
+        window = sample["phase_window"]
+        assert window["phase"] == 1, result.describe()
+        for cast in sample["selected_phase_casts"]:
+            assert window["start_ms"] <= cast["timestamp_ms"] < window["end_ms"], result.describe()
     assert data["notes"], "the packet must say where its phase windows and samples come from"
 
 
+def _hero_selection(packet: dict[str, Any]) -> dict[str, Any]:
+    """The `selection` row SimC resolved: which hero tree this actor actually picked.
+
+    A hero tree is chosen by a selection node, not by the talents underneath it, so this row is the
+    packet's own statement of the choice and is what every downstream describe has to agree with.
+    """
+    selections = [row for row in packet["validation"]["resolved_entries"] if row["tree"] == "selection"]
+    assert len(selections) == 1, f"expected exactly one hero-tree selection row, got {selections}"
+    return selections[0]
+
+
+def test_cooldown_packet_degrades_when_lorrgs_has_not_cached_the_report(require):
+    """The common case: an ordinary report Lorrgs has never loaded.
+
+    Lorrgs only serves reports someone has opened on lorrgs.io, so most guild and private reports
+    are not there. The command must still return the Warcraft Logs half rather than failing, and it
+    must say exactly what is missing instead of reporting an empty phase as if it were a real one.
+    """
+    require("warcraftlogs", "lorrgs")
+    found = anchor()
+    actor, spec_slug = _lorrgs_capable_actor()
+    boss_slug = _anchor_boss_slug()
+
+    result = run(
+        "warcraft",
+        "cooldown-packet",
+        found.url,
+        "--actor-id",
+        str(actor["id"]),
+        "--spec-slug",
+        spec_slug,
+        "--boss-slug",
+        boss_slug,
+        "--phase",
+        "1",
+        "--sample-limit",
+        "1",
+    )
+    data = result.data
+    lorrgs = data["lorrgs"]
+    assert lorrgs["status"] == "unavailable", result.describe()
+    assert lorrgs["reason"] == "lorrgs_fight_lookup_failed", result.describe()
+    assert lorrgs["source"]["code"] == "not_found", result.describe()
+    assert "phase_windows" in lorrgs["missing"], result.describe()
+
+    # The phase the caller asked for was not applied, and the packet says so rather than showing
+    # an empty P1 window.
+    phase = data["phase"]
+    assert phase["status"] == "unavailable", result.describe()
+    assert phase["requested"] == 1, result.describe()
+    assert phase["selected"] is None, result.describe()
+    assert phase["windows"] == [], result.describe()
+    assert any("no phase windows" in note for note in data["notes"]), result.describe()
+
+    # The Warcraft Logs half is intact: the flags supplied what Lorrgs would have.
+    assert result.payload["query"]["report_code"] == found.code, result.describe()
+    assert data["player"]["source_id"] == actor["id"], result.describe()
+    assert data["player"]["spec_slug"] == spec_slug, result.describe()
+    assert data["boss"]["boss_slug"] == boss_slug, result.describe()
+    casts = data["cooldowns"]["player_casts"]
+    assert casts["tracked_cast_count"] > 0, "the degraded packet returned no Warcraft Logs casts"
+    assert casts["tracked_cast_count"] == len(casts["tracked_casts"]), result.describe()
+    assert casts["selected_phase_casts"] == [], result.describe()
+
+    sources = data["sources"]
+    assert sources["lorrgs_user_report_fights"]["status"] == "error", result.describe()
+    assert sources["warcraftlogs_report_events"]["status"] == "ok", result.describe()
+    assert sources["lorrgs_spec_spells"]["status"] == "ok", result.describe()
+
+    # --spell-id must narrow the tracked set, and the casts with it.
+    pressed = max(casts["tracked_casts_by_spell"], key=lambda row: row["count"])
+    spell_id = int(pressed["spell"]["spell_id"])
+    narrowed = run(
+        "warcraft",
+        "cooldown-packet",
+        found.url,
+        "--actor-id",
+        str(actor["id"]),
+        "--spec-slug",
+        spec_slug,
+        "--spell-id",
+        str(spell_id),
+        "--phase",
+        "1",
+        "--sample-limit",
+        "0",
+    )
+    tracked = narrowed.data["cooldowns"]
+    assert [spell["spell_id"] for spell in tracked["tracked_spells"]] == [spell_id], narrowed.describe()
+    assert tracked["tracked_spell_count"] == 1, narrowed.describe()
+    narrowed_casts = tracked["player_casts"]
+    assert narrowed_casts["tracked_cast_count"] == pressed["count"], narrowed.describe()
+    assert all(cast["spell"]["spell_id"] == spell_id for cast in narrowed_casts["tracked_casts"]), narrowed.describe()
+
+
+def test_cooldown_packet_without_the_fallback_flags_names_the_flags_it_needs(require):
+    """Without ``--actor-id``/``--spec-slug`` there is nothing left to build, so it must fail loudly."""
+    require("warcraftlogs", "lorrgs")
+    actor, _spec_slug = _lorrgs_capable_actor()
+    result = run(
+        "warcraft",
+        "cooldown-packet",
+        anchor().url,
+        "--actor-id",
+        str(actor["id"]),
+        "--phase",
+        "1",
+        expect=EXIT_NOT_FOUND,
+        error_code="lorrgs_fight_lookup_failed",
+    )
+    assert result.payload["error"]["details"]["required_flags"] == ["--actor-id", "--spec-slug"], result.describe()
+    assert "--spec-slug" in result.payload["error"]["message"], result.describe()
+    assert result.stdout == ""
+
+
 def test_talent_packet_routes_a_report_actor_through_simc(require):
+    """The composite's whole promise: a log actor becomes a SimC-validated transport packet.
+
+    ``not_validated`` is a real outcome of the producer, but it is a failure of this journey: the
+    checkout is current and built (the simc journeys assert that), so an actor SimulationCraft
+    cannot resolve means the log-to-SimC handoff is broken for every user, not just this actor.
+    """
     require("warcraftlogs", "simc")
     actor, _apl = talent_actor()
     result = talent_packet()
@@ -246,6 +405,7 @@ def test_talent_packet_routes_a_report_actor_through_simc(require):
     }, result.describe()
     assert result.data["source_packet_status"] == "raw_only", result.describe()
     assert result.data["upgrade_attempted"] is True, result.describe()
+    assert result.data["upgraded"] is True, result.describe()
 
     packet = result.data["talent_transport_packet"]
     assert packet["scope"] == {
@@ -258,26 +418,44 @@ def test_talent_packet_routes_a_report_actor_through_simc(require):
     assert identity["actor_class"] == str(actor["type"]).lower(), result.describe()
     assert identity["spec"] == str(actor["specs"][0]["spec"]).lower(), result.describe()
 
+    assert packet["transport_status"] == "validated", result.describe()
     validation = packet["validation"]
-    # simc resolved the raw combatant-info entries against its own trait data. When every entry
-    # resolves the packet is upgraded to a validated transport form; when the local SimulationCraft
-    # checkout predates a talent the packet stays raw_only and says which entries it could not map.
-    assert validation["status"] in {"validated", "not_validated"}, result.describe()
-    assert validation["resolved_entries"], result.describe()
+    assert validation["status"] == "validated", result.describe()
+    assert validation["actor_class"] == identity["actor_class"], result.describe()
+    assert validation["spec"] == identity["spec"], result.describe()
+    # Every raw combatant-info row resolved against SimC's own trait data, and nothing was dropped.
+    raw_rows = packet["raw_evidence"]["talent_tree_entries"]
+    assert raw_rows, result.describe()
+    assert len(validation["resolved_entries"]) == len(raw_rows), result.describe()
     assert all(entry["token"] and entry["tree"] for entry in validation["resolved_entries"]), result.describe()
-    if packet["transport_status"] == "validated":
-        assert result.data["upgraded"] is True, result.describe()
-        assert packet["transport_forms"], result.describe()
-    else:
-        assert validation["reason"] == "simc_trait_resolution_incomplete", result.describe()
-        assert validation["unresolved_entries"], result.describe()
+    assert {entry["entry"] for entry in validation["resolved_entries"]} == {row["entry"] for row in raw_rows}
+
+    split = packet["transport_forms"]["simc_split_talents"]
+    assert set(split) == {"class_talents", "spec_talents", "hero_talents"}, result.describe()
+    for tree, option in split.items():
+        assert option, f"{tree} came back empty for a validated packet\n{result.describe()}"
+        rows = option.split("/")
+        assert len(rows) == sum(1 for entry in validation["resolved_entries"] if entry["tree"] == tree.removesuffix("_talents"))
+        assert all(row.count(":") == 1 for row in rows), result.describe()
+
+    selection = _hero_selection(packet)
+    assert selection["hero_tree"] and isinstance(selection["hero_tree_id"], int), result.describe()
 
 
 def test_talent_describe_adds_simc_priority_output_for_the_report_build(require, out_dir):
+    """talent-describe writes the packet and describes the build the packet actually names.
+
+    The packet it wrote is then handed straight back to ``simc`` on its own, which is the handoff
+    an agent performs: if the file on disk cannot drive ``validate-talent-transport`` and
+    ``describe-build``, the composite produced a packet nobody else can read.
+    """
     require("warcraftlogs", "simc")
     actor, apl_path = talent_actor()
     packet_out = out_dir / "talent-packet.json"
-    args = (
+
+    result = run(
+        "warcraft",
+        "talent-describe",
         anchor().url,
         "--actor-id",
         str(actor["id"]),
@@ -288,24 +466,32 @@ def test_talent_describe_adds_simc_priority_output_for_the_report_build(require,
         "--packet-out",
         str(packet_out),
     )
-
-    if talent_packet().data["talent_transport_packet"]["transport_status"] != "validated":
-        # simc could not resolve every trait, so describe-build has nothing to decode. The
-        # documented handoff is an error envelope that names the missing step, not a partial
-        # analysis. See tmp/handoffs/e2e-warcraftlogs.md.
-        failure = run("warcraft", "talent-describe", *args, expect=EXIT_GENERIC, error_code="invalid_build_packet")
-        assert "validate-talent-transport" in failure.payload["error"]["message"], failure.describe()
-        assert failure.stdout == ""
-        return
-
-    result = run("warcraft", "talent-describe", *args)
     assert result.payload["kind"] == "talent_describe", result.describe()
     packet = result.data["talent_transport_packet"]
     assert packet["transport_status"] == "validated", result.describe()
-    assert packet_out.exists(), result.describe()
-    assert result.data.get("written_packet_path", str(packet_out)) == str(packet_out), result.describe()
-    assert json.loads(packet_out.read_text(encoding="utf-8"))["scope"]["actor_id"] == actor["id"]
-    assert result.data["describe_result"], result.describe()
+    assert result.data["written_packet_path"] == str(packet_out.resolve()), result.describe()
+    on_disk = json.loads(packet_out.read_text(encoding="utf-8"))
+    assert on_disk == packet, result.describe()
+
+    describe_payload = result.data["describe_result"]["payload"]
+    assert describe_payload["ok"] is True, result.describe()
+    build = describe_payload["data"]["build"]
+    selection = _hero_selection(packet)
+    # The APL is pruned against the hero tree the packet says the actor selected.
+    assert build["hero_tree"] == {"name": selection["hero_tree"], "id": selection["hero_tree_id"]}, result.describe()
+    assert describe_payload["data"]["identity"]["actor_class"] == packet["validation"]["actor_class"], result.describe()
+    assert describe_payload["data"]["apl"]["path"] == str(apl_path), result.describe()
+    assert describe_payload["data"]["single_target"]["active_priority"], result.describe()
+
+    # The written packet is a complete input on its own.
+    revalidated = run("simc", "validate-talent-transport", "--build-packet", str(packet_out))
+    assert revalidated.data["input"]["source"] == "build_packet", revalidated.describe()
+    assert revalidated.data["transport_status"] == "validated", revalidated.describe()
+    assert revalidated.data["transport_forms"]["simc_split_talents"] == packet["transport_forms"]["simc_split_talents"]
+
+    redescribed = run("simc", "describe-build", "--build-packet", str(packet_out), "--apl-path", str(apl_path))
+    assert redescribed.data["build"]["hero_tree"] == build["hero_tree"], redescribed.describe()
+    assert redescribed.data["build"]["enabled_talents"] == build["enabled_talents"], redescribed.describe()
 
 
 def test_actor_profile_crosswalks_a_report_actor_to_raider_io(require):

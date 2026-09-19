@@ -25,7 +25,7 @@ from warcraft_core.provider import ProviderError, ProviderSurface
 
 from warcraft_wiki_cli.client import WIKI_API_URL, WarcraftWikiAPIError, WarcraftWikiClient, load_warcraft_wiki_cache_settings_from_env
 from warcraft_wiki_cli.page_parser import article_slug, normalize_article_ref
-from warcraft_wiki_cli.search import PROVIDER_NAME, SearchOutcome, is_confident_match, search_results
+from warcraft_wiki_cli.search import PROVIDER_NAME, SearchOutcome, is_confident_match, search_results, title_names_query
 
 API_REFERENCE_FAMILIES = frozenset({"api_function", "framework_page", "xml_schema", "cvar", "api_changes"})
 EVENT_REFERENCE_FAMILIES = frozenset({"event_reference", "ui_handler", "framework_page"})
@@ -246,14 +246,20 @@ def _typed_ranked_results(
 
 
 def _typed_search_match(results: list[dict[str, Any]], *, query: str, surface: str) -> dict[str, Any]:
-    """The single confident search hit, or ``not_found``: returning an unrelated page would be worse than failing."""
-    if not results or not is_confident_match(results):
+    """The single confident search hit whose title names the query, or ``not_found``.
+
+    Rows whose title does not carry the queried name are dropped before the confidence test rather
+    than merely outranked: returning an unrelated page would be worse than failing. The rejected rows
+    still go out as ``candidates`` so the caller can see what was on offer.
+    """
+    named = [row for row in results if title_names_query(str(row["name"]), query)]
+    if not is_confident_match(named):
         raise ProviderError(
             "not_found",
             f"No {surface} reference page matches query: {query}",
             details={"surface": surface, "candidates": [str(row["id"]) for row in results]},
         )
-    return results[0]
+    return named[0]
 
 
 def _typed_result_payload(

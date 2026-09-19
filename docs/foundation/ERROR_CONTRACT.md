@@ -56,20 +56,26 @@ never shadow envelope keys.
 
 `code` is a stable snake_case identifier for programs; `message` is for humans; `details` is
 optional structured context. Providers keep their existing code strings; the codes below have a
-fixed exit-code mapping, everything else exits `1`.
+fixed repo-wide exit-code mapping. A provider may additionally map its own codes onto the same five
+exit codes, and documents them in its provider README: for example `warcraftlogs` exits `2` for
+`invalid_query` and its `missing_*` input codes, `curseforge` exits `3` for `missing_api_key` and
+`4` for `addon_not_found`, and `blizzard` exits `2` for `unsupported_region`,
+`unsupported_game_version`, and `classic_profile_unsupported`.
 
 ## Exit codes
 
 | Exit | Meaning | Error codes mapped to it |
 | --- | --- | --- |
 | `0` | Success | |
-| `1` | Generic failure, including uncaught exceptions (`internal_error`) | any code not listed below |
+| `1` | Generic failure, including uncaught exceptions (`internal_error`) | any code with neither a row below nor a provider-specific mapping |
 | `2` | Usage error: bad flags or arguments | `invalid_query`, `invalid_argument`, `missing_fields` |
 | `3` | Authentication required or rejected | `auth_required`, `auth_failed`, `unauthorized`, `forbidden` |
 | `4` | Target not found | `not_found` |
 | `5` | Network or upstream failure | `network_error`, `timeout`, `upstream_error`, `rate_limited`, `http_error` |
 
-The mapping is `warcraft_core.exit_codes.EXIT_CODE_BY_ERROR_CODE`; `exit_code_for(code)` resolves it.
+The repo-wide mapping is `warcraft_core.exit_codes.EXIT_CODE_BY_ERROR_CODE`; `exit_code_for(code)`
+resolves it. Provider-specific mappings sit next to the code that raises them and pass an explicit
+`exit_code`, so the five codes above stay the whole exit vocabulary.
 
 ## Process guard
 
@@ -89,7 +95,9 @@ guard's error JSON is always compact because the global flags may not have been 
 
 When the failure happens before the command body runs, `command` is still the subcommand named on
 the command line, never the value of a global flag (`warcraft --profile bogus schema` reports
-`"command": "schema"`). It is empty only when no subcommand was named at all.
+`"command": "schema"`). Nested command groups are named in full, so the label matches the one the
+success envelope would have carried (`raiderio distribution mythic-plus-runs --pages abc` reports
+`"command": "distribution mythic-plus-runs"`). It is empty only when no subcommand was named at all.
 
 ## Global output flags
 

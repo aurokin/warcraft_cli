@@ -87,20 +87,6 @@ def canonical_key_for_command(command: str) -> str:
     return command.replace("-", "_")
 
 
-def documented_payload_keys() -> list[tuple[str, str, str | None]]:
-    """Return (command, canonical_key, legacy_primary_key) for docs and tests."""
-    from warcraftlogs_cli.payload_keys_registry import ALL_COMMANDS
-
-    rows: list[tuple[str, str, str | None]] = []
-    for command in ALL_COMMANDS:
-        canonical = canonical_key_for_command(command)
-        legacy = LEGACY_PRIMARY_KEYS.get(command)
-        if legacy == canonical:
-            legacy = None
-        rows.append((command, canonical, legacy))
-    return rows
-
-
 def _encounter_envelope_body(
     payload: dict[str, Any],
     *,

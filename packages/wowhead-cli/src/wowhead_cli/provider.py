@@ -28,6 +28,7 @@ from wowhead_cli.ranking import (
     command_prefix_for_expansion,
     normalize_resolve_entity_types,
     normalize_search_results,
+    partition_entity_candidates,
     resolve_confidence,
     resolve_next_command,
     search_query_for_ranking,
@@ -181,9 +182,13 @@ def resolve(
     search_query = search_ranking_query(target)
     client = open_client(profile)
     results = _suggestion_results(client, search_query)
-    candidates = normalize_search_results(results, query=target, expansion=profile, entity_types=selected_entity_types)
-    confidence = resolve_confidence(candidates, entity_types=selected_entity_types)
-    top_candidate = candidates[0] if candidates else None
+    entities, articles = partition_entity_candidates(
+        normalize_search_results(results, query=target, expansion=profile, entity_types=selected_entity_types)
+    )
+    best = entities or articles
+    confidence = resolve_confidence(best, entity_types=selected_entity_types)
+    top_candidate = best[0] if best else None
+    candidates = entities + articles
     returned = candidates[:limit]
     next_command = resolve_next_command(top_candidate) if top_candidate is not None and confidence == "high" else None
     search_command = f"{command_prefix_for_expansion(profile)} search {shlex.quote(target)}"

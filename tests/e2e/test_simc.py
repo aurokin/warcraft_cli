@@ -4,10 +4,11 @@ Every command in docs/reference/simc.md is exercised here. The journeys mirror h
 actually works: inspect the checkout, describe a build, read an APL, run a short sim and analyse
 it, validate talent transport, and fail cleanly when the checkout or an input path is wrong.
 
-Nothing here mutates the real checkout. ``build`` is only reached through its missing-build-dir
-guard, ``sync`` only through its dirty-worktree and missing-repo guards, and ``checkout`` only
-through a temporary ``XDG_DATA_HOME`` whose managed root is not a git repo, so no clone, pull, or
-compile ever runs.
+Nothing here mutates the real checkout, so ``sync``, ``build``, and ``checkout`` are deliberately
+error-path only: a success-path journey for any of them would pull, recompile, or clone the
+checkout every other journey reads. ``build`` is reached through its missing-build-dir guard,
+``sync`` through its dirty-worktree and missing-repo guards, and ``checkout`` through a temporary
+``XDG_DATA_HOME`` whose managed root is not a git repo.
 """
 
 from __future__ import annotations
@@ -15,12 +16,22 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from tests.e2e.harness import EXIT_GENERIC, EXIT_NOT_FOUND, EXIT_USAGE, dead_proxy_env, payload_or_legacy, run, run_raw
+from tests.e2e.harness import (
+    EXIT_GENERIC,
+    EXIT_NOT_FOUND,
+    EXIT_USAGE,
+    Result,
+    dead_proxy_env,
+    payload_or_legacy,
+    run,
+    run_raw,
+)
 
 # Windwalker is the monk spec SimulationCraft ships a default APL and a profile for; mistweaver is
 # a healer and has neither. The APL itself is discovered through `simc spec-files`.
@@ -34,6 +45,19 @@ SPEC = "windwalker"
 TRAIT_ROW_RE = re.compile(r'\{\s*(\d+),\s*(\d+),\s*(\d+),\s*(\d+),\s*(\d+),.*?"([^"]+)"')
 TREE_INDEX = {"class": 1, "spec": 2, "hero": 3}
 CLASS_ID = {"monk": 10}
+
+# How many of the checkout's own tier profiles the decode sweep walks, and how many of them must
+# decode. SimulationCraft itself rejects some of its shipped hashes whenever its trait data moves
+# ahead of the profile generator, so the sweep allows that outcome but not a silent partial decode.
+DECODE_SWEEP_SIZE = 16
+DECODE_SWEEP_MIN_DECODED = DECODE_SWEEP_SIZE // 2
+
+# A decoded retail build fills all three trees. These floors are far below any real build (a class
+# tree alone carries ~30 picks) and exist to catch a decode that quietly returns a partial build.
+MIN_SELECTED_BY_TREE = {"class": 15, "spec": 15, "hero": 5}
+
+# `talent.<token>=false` in an APL prune reason: the talent that made the branch dead.
+TALENT_CONDITION_RE = re.compile(r"talent\.([a-z0-9_]+)=(?:false|true)")
 
 
 @dataclass(frozen=True)
@@ -78,6 +102,32 @@ def checkout() -> Checkout:
     return Checkout(root=root, apl=apl, assisted_apl=assisted_apl, profile=profile, talents=talents)
 
 
+def _profile_talents(path: Path) -> str:
+    """The talent export string SimulationCraft ships inside one of its own profiles."""
+    inspected = run("simc", "inspect", str(path))
+    talents = inspected.data["target"]["build_spec"]["talents"]
+    assert isinstance(talents, str) and talents, inspected.describe()
+    return talents
+
+
+def _selected_by_tree(decoded: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    """``decode-build`` lists only the talents SimC actually took, split per tree."""
+    return {tree: list(decoded["talents_by_tree"][tree]) for tree in MIN_SELECTED_BY_TREE}
+
+
+def _talent_condition_tokens(rows: list[dict[str, Any]]) -> set[str]:
+    return {match.group(1) for row in rows for match in TALENT_CONDITION_RE.finditer(row["reason"])}
+
+
+def _dispatch_calls(described: dict[str, Any]) -> set[str]:
+    """The action lists the single-target view actually dispatches to."""
+    return {name for name in described["single_target"]["active_action_names"] if name.startswith("call_action_list")}
+
+
+def _dead_lines(described: dict[str, Any]) -> set[int]:
+    return {row["line_no"] for row in described["single_target"]["inactive_talent_branches"]}
+
+
 def _talent_rows_from_build(checkout: Checkout, decoded: dict[str, Any]) -> list[str]:
     """Turn a decoded build into the raw ``entry:node:rank`` rows a log-sourced packet carries.
 
@@ -101,7 +151,8 @@ def _talent_rows_from_build(checkout: Checkout, decoded: dict[str, Any]) -> list
         if tree not in TREE_INDEX:
             continue
         for talent in talents:
-            if talent["rank"] <= 0:
+            # A tiered node decodes without a per-entry rank, so it cannot become a transport row.
+            if not talent["rank_known"]:
                 continue
             candidates = ids_by_name.get((TREE_INDEX[tree], talent["name"]), [])
             if len(candidates) != 1:
@@ -128,7 +179,8 @@ def test_doctor_reports_a_ready_checkout_and_needs_no_network(require, checkout:
     assert data["repo"]["binary"]["available"] is True
     assert "SimulationCraft" in data["repo"]["binary"]["version_line"]
     assert data["repo_resolution"]["configured_root"] == str(checkout.root)
-    assert data["repo_resolution"]["source"] in {"cli", "env", "config", "managed", "unset"}
+    # A root that resolved came from somewhere; "unset" would contradict the line above.
+    assert data["repo_resolution"]["source"] != "unset"
 
 
 def test_version_reports_the_built_binary(require, checkout: Checkout) -> None:
@@ -145,7 +197,7 @@ def test_repo_reports_the_active_resolution(require, checkout: Checkout) -> None
     assert result.data["action"] == "inspect"
     assert result.data["changed"] is False
     assert result.data["resolution"]["root"] == str(checkout.root)
-    assert result.data["resolution"]["source"] in {"config", "env", "cli", "unset", "managed"}
+    assert result.data["resolution"]["source"] != "unset"
 
 
 def test_repo_set_root_and_clear_root_round_trip(require, checkout: Checkout, out_dir: Path) -> None:
@@ -248,10 +300,148 @@ def test_decode_and_identify_a_build_from_a_repo_profile(require, checkout: Chec
     assert decoded["spec"] == SPEC
     assert len(decoded["enabled_talents"]) > 20
     for tree in ("class", "spec", "hero"):
-        selected = [talent for talent in decoded["talents_by_tree"][tree] if talent["rank"] > 0]
+        selected = decoded["talents_by_tree"][tree]
         assert selected, f"{tree} tree decoded empty: {json.dumps(decoded['talents_by_tree'][tree])[:300]}"
-        assert all(talent["rank"] <= talent["max_rank"] for talent in selected)
+        assert all(talent["rank"] <= talent["max_rank"] for talent in selected if talent["rank_known"])
     assert f"decoded via {checkout.root}" in " ".join(decoded["source_notes"])
+
+
+def test_decode_build_never_returns_a_partial_build_for_the_checkouts_own_profiles(
+    require, checkout: Checkout
+) -> None:
+    """Sweep the tier's shipped talent hashes: a full build, or ``invalid_build``, never in between.
+
+    A hash decodes against the binary's own trait data, so the only two honest answers are a build
+    with all three trees and a named hero tree, or a rejection. A decode that drops a tree (or the
+    hero-tree selection) while still reporting ``ok: true`` is the failure this guards, because
+    every priority, prune, and comparison surface downstream reads that build as complete.
+    """
+    require("simc")
+    profiles = sorted(checkout.profile.parent.glob("*_*_*.simc"))[:DECODE_SWEEP_SIZE]
+    assert len(profiles) == DECODE_SWEEP_SIZE, f"{checkout.profile.parent} ships too few tier profiles: {profiles}"
+
+    decoded_names: list[str] = []
+    for profile in profiles:
+        result = run("simc", "decode-build", "--profile-path", str(profile), expect=None)
+        if not result.ok:
+            assert result.exit_code == EXIT_GENERIC, result.describe()
+            assert result.error_code == "invalid_build", result.describe()
+            # The rejection must name the binary that rejected it, so a stale build is diagnosable.
+            assert result.payload["error"]["details"]["simc_binary"]["matches_checkout"] is True, result.describe()
+            continue
+        decoded = result.data["decoded"]
+        hero_tree = decoded["hero_tree"]
+        assert hero_tree and hero_tree["name"] and isinstance(hero_tree["id"], int), result.describe()
+        for tree, selected in _selected_by_tree(decoded).items():
+            assert len(selected) >= MIN_SELECTED_BY_TREE[tree], result.describe()
+            assert all(row["name"] and row["entry"] > 0 for row in selected), result.describe()
+        assert set(decoded["enabled_talents"]) == {
+            row["token"] for rows in _selected_by_tree(decoded).values() for row in rows
+        }, result.describe()
+        decoded_names.append(profile.name)
+
+    assert len(decoded_names) >= DECODE_SWEEP_MIN_DECODED, (
+        f"only {len(decoded_names)} of {DECODE_SWEEP_SIZE} shipped profiles decoded: {decoded_names}"
+    )
+
+
+@dataclass(frozen=True)
+class HeroVariant:
+    """One shipped profile of the journey spec, described against the journey APL."""
+
+    path: Path
+    hero_tree: dict[str, Any]
+    described: Result
+
+
+@lru_cache(maxsize=1)
+def _hero_variants(checkout: Checkout) -> tuple[HeroVariant, HeroVariant]:
+    """Two profiles of the journey spec that differ only in the hero tree they picked.
+
+    Discovered from the checkout rather than pinned: which hero trees a spec ships profiles for
+    changes every tier, and the journeys below only need two that differ.
+    """
+    by_hero_tree: dict[str, HeroVariant] = {}
+    for profile in sorted(checkout.profile.parent.glob(f"*_{APL_STEM.title()}*.simc")):
+        described = run("simc", "describe-build", "--profile-path", str(profile), "--apl-path", str(checkout.apl))
+        hero_tree = described.data["build"]["hero_tree"]
+        assert hero_tree and hero_tree["name"], described.describe()
+        by_hero_tree.setdefault(hero_tree["name"], HeroVariant(profile, hero_tree, described))
+    assert len(by_hero_tree) >= 2, (
+        f"{checkout.profile.parent} ships no two {ACTOR_CLASS} {SPEC} profiles with different hero trees: "
+        f"{sorted(by_hero_tree)}"
+    )
+    left, right = (by_hero_tree[name] for name in sorted(by_hero_tree)[:2])
+    return left, right
+
+
+def test_describe_build_routes_the_apl_by_the_selected_hero_tree(require, checkout: Checkout) -> None:
+    """Same class, spec, and APL; a different hero tree must mean a different live priority.
+
+    The APL gates whole action lists on hero-tree keystones, so which branch survives the prune is
+    the observable proof that describe-build fed the *selected* hero tree into the build. Every
+    branch one build reports dead must be dead because of a talent the other build actually took.
+    """
+    require("simc")
+    left, right = _hero_variants(checkout)
+    assert left.hero_tree != right.hero_tree
+
+    for variant in (left, right):
+        assert variant.described.data["apl"]["path"] == str(checkout.apl), variant.described.describe()
+        assert variant.described.data["identity"]["spec"] == SPEC, variant.described.describe()
+
+    left_calls = _dispatch_calls(left.described.data)
+    right_calls = _dispatch_calls(right.described.data)
+    assert left_calls != right_calls, f"both hero trees dispatch to {sorted(left_calls)}"
+
+    for mine, theirs in ((left, right), (right, left)):
+        dead = mine.described.data["single_target"]["inactive_talent_branches"]
+        assert dead, f"{mine.path.name} reports no talent-gated dead branch: {mine.described.describe()}"
+        blockers = _talent_condition_tokens(dead)
+        assert blockers, mine.described.describe()
+        assert not blockers & set(mine.described.data["build"]["enabled_talents"]), (
+            f"{mine.path.name} reports a branch dead on a talent it took: {sorted(blockers)}"
+        )
+        assert blockers <= set(theirs.described.data["build"]["enabled_talents"]), (
+            f"{mine.path.name} blames {sorted(blockers)}, which {theirs.path.name} does not take either"
+        )
+
+
+def test_enable_and_disable_override_the_talents_the_apl_is_pruned_against(require, checkout: Checkout) -> None:
+    """``--disable`` must kill the branch its talent gates, and ``--enable`` must bring it back."""
+    require("simc")
+    left, right = _hero_variants(checkout)
+    # A talent the right build took and the left build's APL prune already names as a blocker, so
+    # disabling it on the right build has a branch to kill.
+    token = sorted(_talent_condition_tokens(left.described.data["single_target"]["inactive_talent_branches"]))[0]
+    baseline_dead = _dead_lines(right.described.data)
+    assert token not in _talent_condition_tokens(right.described.data["single_target"]["inactive_talent_branches"])
+
+    disabled = run(
+        "simc", "describe-build", "--profile-path", str(right.path), "--apl-path", str(checkout.apl), "--disable", token
+    )
+    assert token in _talent_condition_tokens(disabled.data["single_target"]["inactive_talent_branches"]), disabled.describe()
+    assert _dead_lines(disabled.data) > baseline_dead, disabled.describe()
+
+    # The left build does not have that talent, so enabling it must revive the branch it gates.
+    enabled = run(
+        "simc", "describe-build", "--profile-path", str(left.path), "--apl-path", str(checkout.apl), "--enable", token
+    )
+    assert token not in _talent_condition_tokens(enabled.data["single_target"]["inactive_talent_branches"]), enabled.describe()
+    assert _dead_lines(enabled.data) < _dead_lines(left.described.data), enabled.describe()
+
+
+def test_build_file_input_reproduces_the_profile_it_was_generated_from(require, checkout: Checkout, out_dir: Path) -> None:
+    """``build-harness --out`` then ``decode-build --build-file`` must land on the same build."""
+    require("simc")
+    harness_path = out_dir / "build-file.simc"
+    run("simc", "build-harness", "--profile-path", str(checkout.profile), "--out", str(harness_path))
+
+    from_profile = run("simc", "decode-build", "--profile-path", str(checkout.profile))
+    from_file = run("simc", "decode-build", "--build-file", str(harness_path))
+    assert from_file.data["build_spec"]["talents"] == checkout.talents, from_file.describe()
+    assert from_file.data["decoded"]["enabled_talents"] == from_profile.data["decoded"]["enabled_talents"]
+    assert from_file.data["decoded"]["hero_tree"] == from_profile.data["decoded"]["hero_tree"]
 
 
 def test_describe_build_covers_talents_priority_and_the_aoe_delta(require, checkout: Checkout) -> None:
@@ -327,40 +517,69 @@ def test_compare_builds_diffs_two_real_talent_strings(require, checkout: Checkou
             assert row["entry"] > 0 and row["name"]
 
 
-def test_modify_build_removes_a_talent_and_re_encodes_it(require, checkout: Checkout) -> None:
-    """Round trip: decode the base build, drop one talent, and confirm only that talent moved."""
-    require("simc")
-    decoded = run("simc", "decode-build", "--talents", checkout.talents, "--actor-class", ACTOR_CLASS, "--spec", SPEC)
-    class_talents = [talent for talent in decoded.data["decoded"]["talents_by_tree"]["class"] if talent["rank"] > 0]
-    removable = class_talents[-1]["name"]
+# Two specs whose profiles the checkout ships: the journey spec, plus a caster with more than one
+# hero tree, because a tree-routing bug in modify-build only shows on a build that has one.
+MODIFY_BUILD_SPECS = ((ACTOR_CLASS, SPEC), ("priest", "shadow"))
 
-    result = run(
-        "simc",
-        "modify-build",
-        "--talents",
-        checkout.talents,
-        "--remove",
-        removable,
-        "--actor-class",
-        ACTOR_CLASS,
-        "--spec",
-        SPEC,
-    )
-    assert result.data["base"]["input"] == checkout.talents
-    assert result.data["modifications"] == [f"remove:{removable}"]
+
+def _spec_profile(checkout: Checkout, actor_class: str, spec: str) -> Path:
+    stem = f"*_{actor_class.title()}_{spec.title()}.simc"
+    profiles = sorted(checkout.profile.parent.glob(stem))
+    assert profiles, f"{checkout.profile.parent} ships no {stem} profile"
+    return profiles[0]
+
+
+@pytest.mark.parametrize(("actor_class", "spec"), MODIFY_BUILD_SPECS)
+def test_modify_build_removes_a_talent_and_re_encodes_it(
+    require, checkout: Checkout, actor_class: str, spec: str
+) -> None:
+    """Round trip: decode a shipped build, drop one class talent, confirm only that talent moved.
+
+    The re-encoded string is decoded again, so this fails if modify-build routes the edit into the
+    wrong tree or loses anything on the way back out — the whole point of the command.
+    """
+    require("simc")
+    talents = _profile_talents(_spec_profile(checkout, actor_class, spec))
+    build = ("--actor-class", actor_class, "--spec", spec)
+    decoded = run("simc", "decode-build", "--talents", talents, *build)
+    class_talents = [talent for talent in decoded.data["decoded"]["talents_by_tree"]["class"] if talent["rank_known"]]
+    removable = class_talents[-1]
+
+    result = run("simc", "modify-build", "--talents", talents, "--remove", removable["name"], *build)
+    assert result.data["base"]["input"] == talents
+    assert result.data["modifications"] == [f"remove:{removable['name']}"]
     encoded = result.data["result"]["talents_export"]
-    assert encoded and encoded != checkout.talents
+    assert encoded and encoded != talents
     assert result.data["result"]["wowhead_url"].endswith(encoded)
     diff = result.data["result"]["diff_from_base"]
-    assert [row["name"] for row in diff["class"]["removed"]] == [removable]
+    assert [row["name"] for row in diff["class"]["removed"]] == [removable["name"]]
     assert diff["class"]["added"] == []
     assert diff["spec"]["has_differences"] is False
     assert diff["hero"]["has_differences"] is False
 
-    # The re-encoded string must decode back to the same build minus the removed talent.
-    redecoded = run("simc", "decode-build", "--talents", encoded, "--actor-class", ACTOR_CLASS, "--spec", SPEC)
+    redecoded = run("simc", "decode-build", "--talents", encoded, *build)
     base_tokens = set(decoded.data["decoded"]["enabled_talents"])
-    assert set(redecoded.data["decoded"]["enabled_talents"]) == base_tokens - {class_talents[-1]["token"]}
+    assert set(redecoded.data["decoded"]["enabled_talents"]) == base_tokens - {removable["token"]}
+    assert redecoded.data["decoded"]["hero_tree"] == decoded.data["decoded"]["hero_tree"]
+
+
+def test_modify_build_with_a_no_op_edit_returns_the_same_build(require, checkout: Checkout) -> None:
+    """Re-adding a talent at the rank it already has must re-encode to the identical export string.
+
+    This is the round trip with the edit subtracted out: any difference is loss in the decode or
+    encode, not the edit the caller asked for.
+    """
+    require("simc")
+    build = ("--actor-class", ACTOR_CLASS, "--spec", SPEC)
+    decoded = run("simc", "decode-build", "--talents", checkout.talents, *build)
+    unchanged = [talent for talent in decoded.data["decoded"]["talents_by_tree"]["class"] if talent["rank_known"]][-1]
+
+    result = run(
+        "simc", "modify-build", "--talents", checkout.talents, "--add", f"{unchanged['name']}:{unchanged['rank']}", *build
+    )
+    assert result.data["modifications"] == [f"add:{unchanged['name']}:{unchanged['rank']}"]
+    assert result.data["result"]["talents_export"] == checkout.talents, result.describe()
+    assert all(tree["has_differences"] is False for tree in result.data["result"]["diff_from_base"].values()), result.describe()
 
 
 # --- APL analysis ---
@@ -487,6 +706,60 @@ def test_branch_and_intent_journey(require, checkout: Checkout) -> None:
     assert comparison["focus_changes"] or comparison["decision_changes"], compared.describe()
 
 
+def test_apl_branch_compare_reads_a_genuinely_different_right_hand_build(require, checkout: Checkout) -> None:
+    """The ``--right-*`` build inputs are the whole right side of the comparison; prove they land.
+
+    Left is a shipped profile, right is a second shipped build of the same spec with a different
+    hero tree, supplied only through ``--right-talents``/``--right-actor-class``/``--right-spec``.
+    Same APL, same target count: every reported change has to come from the right-hand build.
+    """
+    require("simc")
+    left, right = _hero_variants(checkout)
+    right_talents = _profile_talents(right.path)
+
+    compared = run(
+        "simc",
+        "apl-branch-compare",
+        str(checkout.apl),
+        "--profile-path",
+        str(left.path),
+        "--right-talents",
+        right_talents,
+        "--right-actor-class",
+        ACTOR_CLASS,
+        "--right-spec",
+        SPEC,
+    )
+    assert compared.data["left"]["targets"] == compared.data["right"]["targets"], compared.describe()
+    assert "command-line build options" in compared.data["right"]["source_notes"], compared.describe()
+    comparison = compared.data["comparison"]
+    changes = comparison["focus_changes"] + comparison["decision_changes"]
+    assert changes, "two builds with different hero trees compared identical"
+    # Every change must be explained by a talent exactly one of the two builds took.
+    blockers = {match.group(1) for line in changes for match in TALENT_CONDITION_RE.finditer(line)}
+    assert blockers, changes
+    left_talents = set(left.described.data["build"]["enabled_talents"])
+    right_taken = set(run("simc", "decode-build", "--talents", right_talents, "--actor-class", ACTOR_CLASS, "--spec", SPEC)
+                      .data["decoded"]["enabled_talents"])
+    assert blockers <= left_talents ^ right_taken, sorted(blockers)
+
+    identical = run(
+        "simc",
+        "apl-branch-compare",
+        str(checkout.apl),
+        "--profile-path",
+        str(left.path),
+        "--right-talents",
+        _profile_talents(left.path),
+        "--right-actor-class",
+        ACTOR_CLASS,
+        "--right-spec",
+        SPEC,
+    )
+    assert identical.data["comparison"]["focus_changes"] == [], identical.describe()
+    assert identical.data["comparison"]["decision_changes"] == [], identical.describe()
+
+
 # --- simulation run and the analysis chain that reads its output ---
 
 
@@ -605,7 +878,9 @@ def test_analysis_packet_bundles_branch_intent_and_sampled_timing(require, check
     packet = result.data["packet"]
     assert result.data["build"]["actor_class"] == ACTOR_CLASS
     assert packet["start_list"] == "default"
-    assert packet["dispatch_certainty"] in {"guaranteed", "unresolved", "possible"}
+    # The certainty has to match the branch summary it was derived from, not just be one of the
+    # three legal words.
+    assert packet["dispatch_certainty"] == ("guaranteed" if packet["branch_summary"]["guaranteed_dispatch"] else "unresolved")
     assert packet["intent_lines"] and len(packet["intent_lines"]) <= 4
     assert packet["next_steps"], result.describe()
     assert isinstance(packet["explained_intent"], dict)
@@ -710,7 +985,8 @@ def test_validate_talent_transport_round_trips_raw_rows(require, checkout: Check
     assert validation["actor_class"] == ACTOR_CLASS
     assert validation["spec"] == SPEC
     assert len(validation["resolved_entries"]) == len(rows)
-    assert all(entry["tree"] in {"class", "spec", "hero"} and entry["name"] for entry in validation["resolved_entries"])
+    assert {entry["tree"] for entry in validation["resolved_entries"]} == {"class", "spec", "hero"}
+    assert all(entry["name"] for entry in validation["resolved_entries"])
 
     # The validated split talents must decode back into the same talents the rows described.
     redecoded = run(
@@ -791,13 +1067,12 @@ def test_pretty_and_profile_presets_still_emit_one_envelope(require) -> None:
     require("simc")
     agent = run("simc", "--profile", "agent", "doctor")
     assert "\n" not in agent.stdout.strip()
-    for args in (("--pretty",), ("--profile", "human"), ("--profile", "debug")):
+    for args in (("--pretty",), ("--profile", "human")):
         pretty = run("simc", *args, "doctor")
         assert "\n  " in pretty.stdout, pretty.describe()
         assert pretty.payload["kind"] == agent.payload["kind"]
-    # simc issues no HTTP requests and records no timings, so the debug preset has no diagnostics
-    # block to attach; it only changes the formatting.
-    assert "diagnostics" not in run("simc", "--profile", "debug", "doctor").payload
+    # The `debug` preset was removed; an unknown preset is a usage error, not a silent fallback.
+    run("simc", "--profile", "debug", "doctor", expect=EXIT_USAGE, error_code="invalid_argument")
 
 
 # --- error journeys ---

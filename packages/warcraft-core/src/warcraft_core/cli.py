@@ -33,9 +33,6 @@ class RuntimeConfig:
 
     provider: str = ""
     output: OutputOptions = field(default_factory=OutputOptions)
-    # Vestige of the removed ``--profile debug`` diagnostics block; wowhead_cli still copies it when
-    # it rebuilds its config. Drop the field once that call site is gone.
-    diagnostics: object | None = None
 
 
 def cfg(ctx: typer.Context) -> RuntimeConfig:
@@ -107,6 +104,21 @@ def configure(
 
 # Subcommand resolved by Click for the current process; ``guarded_run`` labels escaping errors with it.
 _ACTIVE_COMMAND: str | None = None
+
+
+def _failing_command_path(exc: BaseException) -> str:
+    """Full subcommand path of the Click context that raised, for example ``distribution mythic-plus-runs``.
+
+    Click attaches the context to its usage errors. That context is the leaf command, so this is the
+    only label that stays right for nested command groups, where ``ctx.invoked_subcommand`` on the
+    root callback is just the group name. Empty when the error came from the root group itself.
+    """
+    ctx: typer.Context | None = getattr(exc, "ctx", None)
+    if ctx is None:
+        return ""
+    # ``command_path`` is the program name followed by every nested command name; the root context's
+    # command_path is the program name alone, so dropping that prefix leaves the subcommand path.
+    return ctx.command_path.removeprefix(ctx.find_root().command_path).strip()
 
 
 def _command_label(app: typer.Typer, args: list[str]) -> str:
@@ -227,7 +239,7 @@ def guarded_run(app: typer.Typer, *, provider: str) -> NoReturn:
     except typer.Abort:
         raise SystemExit(EXIT_GENERIC) from None
     except Exception as exc:
-        command = _ACTIVE_COMMAND or _command_label(app, sys.argv[1:])
+        command = _failing_command_path(exc) or _ACTIVE_COMMAND or _command_label(app, sys.argv[1:])
         payload, exit_code = error_envelope_for(provider, command, exc)
         typer.echo(to_json(payload, pretty=False), err=True)
         raise SystemExit(exit_code) from exc

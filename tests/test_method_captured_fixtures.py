@@ -54,11 +54,39 @@ def test_captured_talents_page_pins_the_full_heading_outline() -> None:
         ("Apex Talents", 2),
         ("Hero Talents", 2),
         ("Conduit of the Celestials", 3),
+        ("Celestial Conduit", 4),
+        ("Temple Training or Xuen’s Guidance", 4),
+        ("Niuzao’s Protection or Jade Sanctuary", 4),
+        ("Courage of the White Tiger", 4),
+        ("Strength of the Black Ox", 4),
+        ("Restore Balance or Yu’lon’s Knowledge", 4),
+        ("Heart of the Jade Serpent", 4),
+        ("Unity Within", 4),
         ("Master of Harmony", 3),
     ]
+    # Method wraps every h2 in ``div.guide-section-title`` and every build title in
+    # ``div.df-talent-block``, so a direct-children scan of the article finds neither and returns the
+    # whole page as one untitled section. "Hero Talents" is the only heading with no prose of its own.
     assert [(row["title"], row["level"]) for row in payload["article"]["sections"]] == [
-        ("Talents", 2),
+        ("Talent Builds", 2),
+        ("Raid (Conduit of the Celestials) - Preferred", 3),
+        ("Raid (Conduit of the Celestials - Sheilun's Gift", 3),
+        ("Raid (Master of Harmony)", 3),
+        ("Mythic+ (Conduit of the Celestials) - Preferred", 3),
+        ("Mythic+ (Conduit of the Celestials) - Damage Oriented", 3),
+        ("Mythic+ (Master of Harmony)", 3),
+        ("Class Talents", 2),
+        ("Spec Talents", 2),
+        ("Apex Talents", 2),
         ("Conduit of the Celestials", 3),
+        ("Celestial Conduit", 4),
+        ("Temple Training or Xuen’s Guidance", 4),
+        ("Niuzao’s Protection or Jade Sanctuary", 4),
+        ("Courage of the White Tiger", 4),
+        ("Strength of the Black Ox", 4),
+        ("Restore Balance or Yu’lon’s Knowledge", 4),
+        ("Heart of the Jade Serpent", 4),
+        ("Unity Within", 4),
         ("Master of Harmony", 3),
     ]
 

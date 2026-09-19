@@ -18,6 +18,8 @@ TALENT_BUILD_EMBED_SELECTOR = ".talent-embed[data-talent]"
 TALENT_BUILD_TITLE_SELECTOR = ".talent-title"
 # A WoW loadout import string as Blizzard's client generates it: one long run of base64 characters.
 WOW_TALENT_EXPORT_RE = re.compile(r"^[A-Za-z0-9+/]{40,}$")
+# Method guide bodies use h2 for sections, h3 for builds, and h4 for per-talent notes.
+HEADING_TAG_RE = re.compile(r"^h[234]$")
 CLASS_TOKENS = {
     "death-knight",
     "demon-hunter",
@@ -176,19 +178,21 @@ def _clone_article(article: Tag) -> Tag:
     return cloned
 
 
+def _heading_title_and_level(heading: Tag) -> tuple[str, int] | None:
+    title = clean_text(heading.get_text(" ", strip=True))
+    if not title:
+        return None
+    return title, int(heading.name[1])
+
+
 def _extract_headings(article: Tag) -> list[dict[str, Any]]:
+    """Every heading in the article in document order, however deeply the layout nests it."""
     headings: list[dict[str, Any]] = []
-    for ordinal, heading in enumerate(article.find_all(re.compile(r"^h[23]$")), start=1):
-        title = clean_text(heading.get_text(" ", strip=True))
-        if not title:
+    for node in article.find_all(HEADING_TAG_RE):
+        heading = _heading_title_and_level(node)
+        if heading is None:
             continue
-        headings.append(
-            {
-                "title": title,
-                "level": int(heading.name[1]),
-                "ordinal": ordinal,
-            }
-        )
+        headings.append({"title": heading[0], "level": heading[1], "ordinal": len(headings) + 1})
     return headings
 
 
@@ -206,38 +210,36 @@ def _append_section_content(section: dict[str, Any], node: Any) -> None:
         section["text_parts"].append(text)
 
 
-def _extract_sections(article: Tag, *, fallback_title: str) -> list[dict[str, Any]]:
-    sections: list[dict[str, Any]] = []
-    current: dict[str, Any] | None = None
-    ordinal = 0
-    for child in article.children:
+def _new_section(title: str, level: int, ordinal: int) -> dict[str, Any]:
+    return {"title": title, "level": level, "ordinal": ordinal, "html_parts": [], "text_parts": []}
+
+
+def _split_sections(node: Tag, sections: list[dict[str, Any]], *, fallback_title: str) -> None:
+    """Cut ``node``'s content into one section per heading, in document order.
+
+    Method wraps its ``h2`` headings in ``div.guide-section-title``, so a scan of the article's
+    direct children alone would miss every top-level heading and merge most of a guide page into one
+    untitled section. Descending only into elements that actually contain a heading keeps ordinary
+    content blocks whole.
+    """
+    for child in node.children:
         if not isinstance(child, Tag):
             continue
-        if child.name in {"h2", "h3"}:
-            title = clean_text(child.get_text(" ", strip=True))
-            if not title:
-                continue
-            ordinal += 1
-            current = {
-                "title": title,
-                "level": int(child.name[1]),
-                "ordinal": ordinal,
-                "html_parts": [],
-                "text_parts": [],
-            }
-            sections.append(current)
+        heading = _heading_title_and_level(child) if HEADING_TAG_RE.match(child.name) else None
+        if heading is not None:
+            sections.append(_new_section(heading[0], heading[1], len(sections) + 1))
             continue
-        if current is None:
-            ordinal += 1
-            current = {
-                "title": fallback_title,
-                "level": 2,
-                "ordinal": ordinal,
-                "html_parts": [],
-                "text_parts": [],
-            }
-            sections.append(current)
-        _append_section_content(current, child)
+        if child.find(HEADING_TAG_RE) is not None:
+            _split_sections(child, sections, fallback_title=fallback_title)
+            continue
+        if not sections:
+            sections.append(_new_section(fallback_title, 2, 1))
+        _append_section_content(sections[-1], child)
+
+
+def _extract_sections(article: Tag, *, fallback_title: str) -> list[dict[str, Any]]:
+    sections: list[dict[str, Any]] = []
+    _split_sections(article, sections, fallback_title=fallback_title)
     normalized: list[dict[str, Any]] = []
     for section in sections:
         text = clean_text(" ".join(section["text_parts"]))

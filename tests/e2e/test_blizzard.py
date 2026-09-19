@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from tests.e2e.harness import EXIT_AUTH, EXIT_GENERIC, EXIT_NOT_FOUND, run
+from tests.e2e.harness import EXIT_AUTH, EXIT_NOT_FOUND, EXIT_USAGE, dead_proxy_env, no_cache_env, run
 from tests.e2e.pins import CHARACTER_NAME, GUILD_REALM, ITEM_ID, ITEM_NAME, REALM_SLUG
 
 
@@ -45,7 +45,11 @@ def test_realm_read_uses_the_dynamic_namespace(require) -> None:
     assert result.data["slug"] == REALM_SLUG
     assert isinstance(result.data["id"], int)
     assert result.data["name"].lower() == REALM_SLUG
-    assert result.data["connected_realm"]["href"].startswith("https://us.api.blizzard.com/")
+    connected_realm = result.data["connected_realm"]["href"]
+    assert connected_realm.startswith("https://us.api.blizzard.com/")
+    # The connected-realm link is keyed by this realm's own id; a mismatch means the record and the
+    # link came from different realms.
+    assert f"/connected-realm/{result.data['id']}?" in connected_realm, result.describe()
 
 
 def test_item_read_uses_the_static_namespace_and_honours_locale(require) -> None:
@@ -64,7 +68,7 @@ def test_item_read_uses_the_static_namespace_and_honours_locale(require) -> None
     assert localized.data["name"] != ITEM_NAME
 
 
-def test_character_read_uses_the_profile_namespace(require) -> None:
+def test_character_read_uses_the_profile_namespace_and_agrees_with_the_realm_read(require) -> None:
     require("blizzard-api")
     result = run("blizzard", "character", GUILD_REALM, CHARACTER_NAME)
     assert result.payload["kind"] == "character"
@@ -74,6 +78,12 @@ def test_character_read_uses_the_profile_namespace(require) -> None:
     assert result.data["realm"]["slug"] == GUILD_REALM
     assert isinstance(result.data["level"], int)
     assert result.data["character_class"]["name"]
+
+    # Two namespaces, one realm: the profile read and the dynamic Game Data read have to name the
+    # same realm record, or one of the two routings is pointed somewhere else.
+    realm = run("blizzard", "realm", GUILD_REALM)
+    assert realm.data["id"] == result.data["realm"]["id"]
+    assert realm.data["name"] == result.data["realm"]["name"]
 
 
 def test_region_and_game_version_change_the_namespace(require) -> None:
@@ -110,22 +120,39 @@ def test_an_unknown_item_is_not_found(require) -> None:
     assert "/data/wow/item/1" in result.payload["error"]["details"]["url"]
 
 
-def test_routing_contradictions_are_refused_before_the_network(require) -> None:
+def test_bad_routing_flags_are_usage_errors_refused_before_the_network(require) -> None:
+    """Every routing rejection is a "fix the command" answer: exit 2, and no round trip spent.
+
+    The dead proxy and the disabled cache are the proof of "before the network": any of these that
+    reached Blizzard would come back as a network failure (exit 5) instead.
+    """
     require("blizzard-api")
-    region = run("blizzard", "item", str(ITEM_ID), "--region", "oc", expect=EXIT_GENERIC, error_code="unsupported_region")
+    offline = {**dead_proxy_env(), **no_cache_env()}
+
+    region = run("blizzard", "item", str(ITEM_ID), "--region", "oc", expect=EXIT_USAGE, error_code="unsupported_region", env=offline)
     assert "'oc'" in region.payload["error"]["message"]
 
-    versions = run(
-        "blizzard", "item", str(ITEM_ID), "--classic", "--game-version", "retail",
-        expect=EXIT_GENERIC, error_code="unsupported_game_version",
+    version = run(
+        "blizzard", "item", str(ITEM_ID), "--game-version", "bogus",
+        expect=EXIT_USAGE, error_code="unsupported_game_version", env=offline,
     )
-    assert "--classic conflicts with" in versions.payload["error"]["message"]
+    assert "'bogus'" in version.payload["error"]["message"]
+
+    conflict = run(
+        "blizzard", "item", str(ITEM_ID), "--classic", "--game-version", "retail",
+        expect=EXIT_USAGE, error_code="unsupported_game_version", env=offline,
+    )
+    assert "--classic conflicts with" in conflict.payload["error"]["message"]
 
     profile = run(
         "blizzard", "character", GUILD_REALM, CHARACTER_NAME, "--classic",
-        expect=EXIT_GENERIC, error_code="classic_profile_unsupported",
+        expect=EXIT_USAGE, error_code="classic_profile_unsupported", env=offline,
     )
     assert "retail-only" in profile.payload["error"]["message"]
+
+    # A value Click itself rejects takes the same exit code through the shared envelope.
+    bad_id = run("blizzard", "item", "not-an-item-id", expect=EXIT_USAGE, error_code="invalid_argument", env=offline)
+    assert "item_id" in bad_id.payload["error"]["message"]
 
 
 def test_missing_credentials_exit_3_with_a_recovery_hint(require, tmp_path: Path) -> None:

@@ -440,11 +440,17 @@ def test_typed_search_match_requires_clear_winner() -> None:
             ],
             id="no_clear_winner",
         ),
+        # A high-scoring row whose title never names the query: it matched in a page body we cannot
+        # see, so it is not the page the caller asked for however confident the ranking looks.
+        pytest.param(
+            [_ranked_row("Jaina Proudmoore", 62, ["upstream_rank_1", "exact_title", "all_terms_match"])],
+            id="title_does_not_name_the_query",
+        ),
     ],
 )
 def test_typed_search_match_fails_not_found_instead_of_guessing(rows: list[dict[str, Any]]) -> None:
     with pytest.raises(ProviderError) as excinfo:
-        _typed_search_match(rows, query="ZZZ_NOT_AN_EVENT", surface="event")
+        _typed_search_match(rows, query="OnEvent", surface="event")
 
     assert excinfo.value.code == "not_found"
     assert excinfo.value.exit_code == 4
@@ -564,9 +570,10 @@ def test_event_payload_falls_back_to_the_candidate_that_covers_the_query() -> No
 
 
 class _UnrelatedRowsClient:
-    """MediaWiki answers a nonsense event name with pages that do not mention it anywhere."""
+    """MediaWiki answers a nonsense event name with pages that do not carry it in their title."""
 
-    def __init__(self) -> None:
+    def __init__(self, handler_snippet: str) -> None:
+        self._handler_snippet = handler_snippet
         self.fetched: list[str] = []
 
     def fetch_article_page(self, ref: str) -> dict[str, object]:
@@ -579,7 +586,7 @@ class _UnrelatedRowsClient:
 
     def search_articles(self, query: str, limit: int) -> tuple[int, list[dict[str, Any]]]:
         return 3, [
-            {"title": "UIHANDLER OnEvent", "pageid": 1, "snippet": "Fires when a frame receives an event.",
+            {"title": "UIHANDLER OnEvent", "pageid": 1, "snippet": self._handler_snippet,
                 "url": "https://warcraft.wiki.gg/wiki/UIHANDLER_OnEvent"},
             {"title": "Jaina Proudmoore", "pageid": 2, "snippet": "Archmage of the Kirin Tor.",
                 "url": "https://warcraft.wiki.gg/wiki/Jaina_Proudmoore"},
@@ -587,10 +594,20 @@ class _UnrelatedRowsClient:
         ]
 
 
-def test_event_payload_fails_not_found_when_no_candidate_mentions_the_query() -> None:
-    # bb-2 in its residual form: one allowed-family row survives the family filter on upstream rank,
-    # family bonus and the stray word "event" in the query. Returning it would be a wrong answer.
-    client = _UnrelatedRowsClient()
+@pytest.mark.parametrize(
+    "handler_snippet",
+    [
+        # bb-2 in its residual form: one allowed-family row survives the family filter on upstream
+        # rank, family bonus and the stray word "event" in the query.
+        pytest.param("Fires when a frame receives an event.", id="snippet_ignores_the_query"),
+        # The narrower residual: MediaWiki's snippet quotes the queried name, which earns
+        # all_terms_match + snippet_match and used to make this lone row "confident". The handler
+        # page only talks about the event; it is not the event's page.
+        pytest.param("Fires for zzz_not_an_event and other events.", id="snippet_quotes_the_query"),
+    ],
+)
+def test_event_payload_fails_not_found_when_no_candidate_title_names_the_query(handler_snippet: str) -> None:
+    client = _UnrelatedRowsClient(handler_snippet)
 
     with pytest.raises(ProviderError) as excinfo:
         _typed_article_payload(client, "ZZZ_NOT_AN_EVENT", surface="event", full=False)

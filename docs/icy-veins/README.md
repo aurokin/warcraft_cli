@@ -67,12 +67,16 @@ title. Two reference types are emitted:
 | `wow_talent_export` | a published WoW loadout import string (the `Copy` blocks on the talents pages) | the import string itself, because the reference has no link |
 
 Both types set `build_code`, so `warcraft guide-builds-simc` collects either one and reports it
-under `summary.identify_success_count`.
+under `summary.identify_success_count`. Only `wowhead_talent_calc_url` decodes on its own: its URL
+path names the class and spec, so `simc decode-build --talents <url>` returns `ok:true`.
 
 `wow_talent_export` rows leave `build_identity` unknown: the import string does not say which class
 and spec it belongs to. Decoding needs both, so `warcraft guide-builds-simc --decode` currently
 leaves `summary.decode_success_count` at 0 for these rows. To decode one, name the class and spec
 yourself: `simc decode-build --talents <build_code> --actor-class paladin --spec holy`.
+
+The Icy Veins builds/talents pages publish import strings rather than talent-calc links, so in
+practice the rows you get back are `wow_talent_export` and none of them decode unaided.
 
 ### Partial guide bundles
 

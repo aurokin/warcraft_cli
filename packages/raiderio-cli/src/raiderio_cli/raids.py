@@ -14,7 +14,13 @@ from warcraft_core.provider import ProviderError
 from warcraft_core.shapes import as_dict, as_list
 from warcraft_core.wow_normalization import normalize_region, primary_realm_slug
 
-from raiderio_cli.client import RAIDERIO_BASE_URL, RAIDERIO_SITE_BASE_URL, RaiderIOClient
+from raiderio_cli.client import (
+    RAIDERIO_BASE_URL,
+    RAIDERIO_SITE_BASE_URL,
+    FetchedJson,
+    RaiderIOClient,
+    combined_freshness,
+)
 
 RAID_DIFFICULTIES = ("normal", "heroic", "mythic")
 RAID_REGIONS = ("world", "us", "eu", "kr", "tw", "cn")
@@ -118,9 +124,9 @@ def sample_raid_rankings(
     pages = raid_pages_for_limit(limit)
     rows: list[dict[str, Any]] = []
     seen_guilds: set[str] = set()
-    pages_fetched = 0
+    read_pages: list[FetchedJson] = []
     for offset in range(pages):
-        payload = client.raid_rankings(
+        fetched = client.raid_rankings(
             raid=raid,
             difficulty=difficulty,
             region=region,
@@ -128,8 +134,8 @@ def sample_raid_rankings(
             limit=RAID_RANKINGS_PAGE_SIZE,
             page=page + offset,
         )
-        pages_fetched += 1
-        rankings = [row for row in as_list(payload.get("raidRankings")) if isinstance(row, dict)]
+        read_pages.append(fetched)
+        rankings = [row for row in as_list(fetched.payload.get("raidRankings")) if isinstance(row, dict)]
         for row in rankings:
             guild_key = str(as_dict(row.get("guild")).get("id") or f"{row.get('rank')}:{as_dict(row.get('guild')).get('path')}")
             if guild_key in seen_guilds:
@@ -138,10 +144,13 @@ def sample_raid_rankings(
             rows.append(raid_ranking_row(row))
         if len(rows) >= limit or len(rankings) < RAID_RANKINGS_PAGE_SIZE:
             break
+    fetched_at, cache_hit = combined_freshness(read_pages)
     return rows[:limit], {
         "sampled_at": datetime.now(UTC).isoformat(),
+        "fetched_at": fetched_at,
+        "cache_hit": cache_hit,
         "pages_requested": pages,
-        "pages_fetched": pages_fetched,
+        "pages_fetched": len(read_pages),
         "cache_ttl_seconds": client.raid_rankings_ttl_seconds,
         "leaderboard_urls": [raid_rankings_url(raid=raid, difficulty=difficulty, region=region, realm=realm)],
     }
@@ -171,15 +180,19 @@ def _raid_catalog_rows(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
-def raid_catalog_payload(payload: dict[str, Any], *, expansion_id: int, cache_ttl_seconds: int) -> dict[str, Any]:
+def raid_catalog_payload(fetched: FetchedJson, *, expansion_id: int, cache_ttl_seconds: int) -> dict[str, Any]:
     """The ``raiderio raids`` payload: catalog rows plus where they came from and how fresh they are."""
-    rows = _raid_catalog_rows(payload)
+    rows = _raid_catalog_rows(fetched.payload)
     return {
         "query": {"expansion_id": expansion_id},
         "count": len(rows),
         "rows": rows,
-        # `sampled_at` is when this command read the catalog, the same meaning the sampled siblings
-        # give it: a cache hit can be up to `cache_ttl_seconds` older than that upstream.
-        "freshness": {"sampled_at": datetime.now(UTC).isoformat(), "cache_ttl_seconds": cache_ttl_seconds},
+        # The catalog TTL is six hours, so `fetched_at` is the fetch time stored with the cached
+        # body, not the time this command ran; `cache_hit` says which of the two the caller got.
+        "freshness": {
+            "fetched_at": fetched.fetched_at,
+            "cache_hit": fetched.cache_hit,
+            "cache_ttl_seconds": cache_ttl_seconds,
+        },
         "citations": {"static_data_url": f"{RAIDERIO_BASE_URL}/raiding/static-data?expansion_id={expansion_id}"},
     }

@@ -2,7 +2,9 @@
 
 Provider-specific behaviour belongs in that provider's journey file. What lives here is the shared
 surface from docs/foundation/ERROR_CONTRACT.md — one envelope, the same exit codes, the same global
-flags, plain-text help — plus the cache behaviour the binaries advertise in ``doctor``.
+flags, plain-text help — plus the cache behaviour the binaries advertise in ``doctor``. Every check
+runs on every installed binary, so this file is also the harness self-check the suite used to keep
+in a separate smoke module.
 """
 
 from __future__ import annotations
@@ -18,22 +20,10 @@ from tests.cli_testkit import all_cli_apps, console_scripts, subcommands, walk_c
 from tests.e2e.harness import EXIT_NETWORK, EXIT_USAGE, Result, dead_proxy_env, run, run_raw, run_text
 from tests.e2e.pins import ITEM_ID, ITEM_SEARCH_QUERY, REALM_SLUG
 
-# Every installed binary. The wrapper comes first because its doctor is the tier registry the
-# provider journeys read.
-BINARIES: tuple[str, ...] = (
-    "warcraft",
-    "wowhead",
-    "warcraftlogs",
-    "simc",
-    "raiderio",
-    "warcraft-wiki",
-    "icy-veins",
-    "method",
-    "lorrgs",
-    "raidbots",
-    "blizzard",
-    "curseforge",
-)
+# Every installed binary, read from the console scripts pip wires up, so a new binary joins every
+# journey below without anyone editing a list. The wrapper comes first because its doctor is the
+# tier registry the provider journeys read.
+BINARIES: tuple[str, ...] = ("warcraft", *sorted(set(console_scripts()) - {"warcraft"}))
 
 # Binary -> provider name in the envelope and in `warcraft doctor`. Only blizzard differs.
 PROVIDER_BY_BINARY: dict[str, str] = {binary: binary for binary in BINARIES} | {"blizzard": "blizzard-api"}
@@ -176,11 +166,20 @@ def test_help_is_plain_text_and_describes_every_subcommand(binary: str) -> None:
 
 
 @pytest.mark.parametrize("binary", BINARIES)
-def test_a_usage_error_exits_2_without_a_traceback(binary: str) -> None:
-    result = run_raw(binary, "definitely-not-a-command")
-    assert result.exit_code == EXIT_USAGE, result.describe()
+@pytest.mark.parametrize("argv", [("definitely-not-a-command",), ("--definitely-not-a-flag", "doctor")])
+def test_a_usage_error_is_an_exit_2_envelope_on_stderr(binary: str, argv: tuple[str, ...]) -> None:
+    # An unknown command and an unknown flag both have to reach the error contract, not a Rich
+    # usage panel: `run` proves stdout stays empty and stderr holds exactly one valid envelope.
+    result = run(binary, *argv, expect=EXIT_USAGE, error_code="invalid_argument")
     assert "Traceback" not in result.stderr, result.describe()
-    assert result.stdout == "", result.describe()
+    assert result.payload["provider"] == _provider(binary), result.describe()
+
+
+def test_the_removed_debug_profile_is_rejected_as_a_usage_error() -> None:
+    # `--profile debug` was removed; it must fail loudly rather than be accepted and ignored.
+    result = run("warcraft", "--profile", "debug", "doctor", expect=EXIT_USAGE, error_code="invalid_argument")
+    assert "agent" in result.payload["error"]["message"], result.describe()
+    assert "debug" not in run_text("warcraft", "--help").stdout, "help still advertises the debug profile"
 
 
 @pytest.mark.parametrize("binary", sorted(NETWORK_COMMAND))
@@ -197,7 +196,7 @@ def test_a_network_failure_is_an_exit_5_envelope_on_stderr(binary: str, require,
 
 
 @pytest.mark.parametrize("binary", BINARIES)
-def test_fields_selects_a_path_and_fields_strict_rejects_a_bogus_one(binary: str, require) -> None:
+def test_fields_reports_what_it_could_not_select_and_fields_strict_rejects_it(binary: str, require) -> None:
     if binary != "warcraft":
         require(_provider(binary))
     full = run(binary, "doctor")
@@ -205,6 +204,11 @@ def test_fields_selects_a_path_and_fields_strict_rejects_a_bogus_one(binary: str
     # Key sets, not values: some doctors probe endpoints and report a fresh latency every run.
     assert set(selected) == {"data"}, selected
     assert set(selected["data"]) == set(full.data), selected
+
+    # Without --fields-strict a path the payload does not have is reported, never silently dropped.
+    partial = _json_stdout(run_raw(binary, "--fields", "data,data.no_such_path", "doctor"))
+    assert partial["fields_missing"] == ["data.no_such_path"], partial
+    assert set(partial["data"]) == set(full.data), partial
 
     bogus = run(binary, "--fields", "data.no_such_path", "--fields-strict", "doctor", expect=EXIT_USAGE, error_code="missing_fields")
     assert "no_such_path" in json.dumps(bogus.payload["error"]), bogus.describe()
@@ -303,7 +307,6 @@ def test_a_redis_backed_read_hits_the_shared_cache(require, optional, tmp_path: 
 
 def test_the_contract_tables_cover_every_installed_binary() -> None:
     # A new console script must not slip past the contract; these tables are the coverage list.
-    assert set(BINARIES) == set(console_scripts())
     assert set(NETWORK_COMMAND) == set(BINARIES) - {"simc"}, "simc runs locally; every other binary needs one"
     assert set(CACHED_READ) <= set(BINARIES)
 

@@ -62,6 +62,19 @@ def load_jsonl(path: Path) -> list[dict[str, Any]]:
     return rows
 
 
+def _failed_page_rows(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Pages the provider could not fetch, from a guide payload or a bundle manifest.
+
+    Both carry the same ``{"count": n, "items": [...]}`` block. An export that lost pages must stay
+    visible to every bundle reader (docs/foundation/SAFE_ANALYTICS_RULES.md), so this never hides a
+    malformed block: it returns the rows it finds and an empty list when there are none.
+    """
+    block = payload.get("failed_pages")
+    if not isinstance(block, dict):
+        return []
+    return [row for row in block.get("items") or [] if isinstance(row, dict)]
+
+
 @dataclass(frozen=True, slots=True)
 class _PageExport:
     """Per-page HTML files plus the flattened page and section rows written to JSONL."""
@@ -138,6 +151,7 @@ def write_article_bundle(
     linked_entities = list((full_payload.get("linked_entities") or {}).get("items") or [])
     build_references = list((full_payload.get("build_references") or {}).get("items") or [])
     analysis_surfaces = list((full_payload.get("analysis_surfaces") or {}).get("items") or [])
+    failed_pages = _failed_page_rows(full_payload)
     pages = _export_pages(
         list(full_payload.get("pages") or []),
         export_dir=export_dir,
@@ -155,6 +169,8 @@ def write_article_bundle(
         "content_key": content_key,
         "output_dir": str(export_dir),
         resource_key: resource,
+        # Kept out of "counts", which describes what the bundle holds; this says what it is missing.
+        "failed_pages": {"count": len(failed_pages), "items": failed_pages},
         "counts": {
             "pages": len(pages.rows),
             "sections": len(pages.sections),
@@ -210,6 +226,7 @@ def load_article_bundle(export_dir: Path) -> dict[str, Any]:
     page_files = load_json_or_default(export_dir / files.get("page_files_json", "page-files.json"), {"pages": []})
     return {
         "manifest": manifest,
+        "failed_pages": _failed_page_rows(manifest),
         "page_files": list(page_files.get("pages") or []) if isinstance(page_files, dict) else [],
         "pages": load_jsonl(export_dir / files.get("pages_jsonl", "pages.jsonl")),
         "sections": load_jsonl(export_dir / files.get("sections_jsonl", "sections.jsonl")),
@@ -369,8 +386,11 @@ def query_article_bundle(
     for rows in results_by_kind.values():
         top.extend(rows[:limit])
     top.sort(key=lambda row: (-row["score"], row["kind"], str(row.get("title") or row.get("name") or "")))
+    failed_pages = list(bundle.get("failed_pages") or [])
     return {
         "query": query,
+        # A query answered from a partial bundle says so instead of reading as a complete answer.
+        "failed_pages": {"count": len(failed_pages), "items": failed_pages},
         "count": sum(len(rows) for rows in results_by_kind.values()),
         "match_counts": {kind: len(rows) for kind, rows in results_by_kind.items()},
         "matches": {kind: rows[:limit] for kind, rows in results_by_kind.items()},
@@ -414,6 +434,8 @@ def _bundle_descriptor(bundle: dict[str, Any], *, path: Path) -> dict[str, Any]:
         "resource_key": manifest.get("resource_key"),
         "exported_at": manifest.get("exported_at"),
         "counts": counts,
+        # A comparison that includes a partial export must not read as complete on both sides.
+        "failed_page_count": len(_failed_page_rows(manifest)),
     }
 
 

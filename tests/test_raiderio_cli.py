@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import sys
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -24,6 +26,7 @@ from raiderio_cli.candidates import (
     resolve_confidence_label,
     search_result_candidate,
 )
+from raiderio_cli.client import FetchedJson, RaiderIOClient
 from raiderio_cli.main import (
     PLAYER_DISTRIBUTION_METRICS,
     RUN_DISTRIBUTION_METRICS,
@@ -31,6 +34,9 @@ from raiderio_cli.main import (
 )
 from raiderio_cli.main import (
     app as raiderio_app,
+)
+from raiderio_cli.main import (
+    run as raiderio_run,
 )
 from raiderio_cli.provider import PROVIDER
 from typer.testing import CliRunner
@@ -48,6 +54,24 @@ def _option_help(command_path: list[str], flag: str) -> str:
         command = command.commands[name]
     option = next(param for param in command.params if flag in param.opts)
     return option.help or ""
+
+
+def _as_fetched(
+    stub: Callable[..., dict[str, Any]],
+    *,
+    fetched_at: str | None = None,
+    cache_hit: bool = False,
+) -> Callable[..., FetchedJson]:
+    """Return a client stub that answers the way the real client does: the body plus its fetch time."""
+
+    def fetch(*args: Any, **kwargs: Any) -> FetchedJson:
+        return FetchedJson(
+            payload=stub(*args, **kwargs),
+            fetched_at=fetched_at or datetime.now(UTC).isoformat(),
+            cache_hit=cache_hit,
+        )
+
+    return fetch
 
 
 def _assert_read_just_now(value: str) -> None:
@@ -110,7 +134,7 @@ def test_raiderio_search_returns_ranked_matches(monkeypatch) -> None:
             ]
         },
     )
-    result = runner.invoke(raiderio_app, ["search", "Liquid guild", "--limit", "5"])
+    result = runner.invoke(raiderio_app, ["search", "guild Liquid", "--limit", "5"])
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
@@ -523,7 +547,7 @@ def test_raiderio_resolve_stays_unresolved_for_ambiguous_match_set(monkeypatch) 
             ]
         },
     )
-    result = runner.invoke(raiderio_app, ["resolve", "Liquid guild"])
+    result = runner.invoke(raiderio_app, ["resolve", "guild Liquid"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["resolved"] is False
@@ -691,7 +715,7 @@ def test_raiderio_mythic_plus_runs_summary(monkeypatch) -> None:
             ],
         }
 
-    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.mythic_plus_runs", fake_runs)
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.mythic_plus_runs", _as_fetched(fake_runs))
     result = runner.invoke(raiderio_app, ["mythic-plus-runs"])
     assert result.exit_code == 0
 
@@ -812,7 +836,7 @@ def test_raiderio_sample_mythic_plus_runs(monkeypatch) -> None:
             "rankings": rows.get(page, []),
         }
 
-    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.mythic_plus_runs", fake_runs)
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.mythic_plus_runs", _as_fetched(fake_runs))
     result = runner.invoke(raiderio_app, ["sample", "mythic-plus-runs", "--pages", "2", "--limit", "3"])
     assert result.exit_code == 0
 
@@ -896,7 +920,7 @@ def test_raiderio_sample_mythic_plus_players(monkeypatch) -> None:
             ],
         }
 
-    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.mythic_plus_runs", fake_runs)
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.mythic_plus_runs", _as_fetched(fake_runs))
     result = runner.invoke(raiderio_app, ["sample", "mythic-plus-players", "--player-limit", "10"])
     assert result.exit_code == 0
 
@@ -956,7 +980,7 @@ def test_raiderio_sample_mythic_plus_players_reports_truncation(monkeypatch) -> 
             ],
         }
 
-    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.mythic_plus_runs", fake_runs)
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.mythic_plus_runs", _as_fetched(fake_runs))
     result = runner.invoke(raiderio_app, ["sample", "mythic-plus-players", "--player-limit", "1"])
     assert result.exit_code == 0
 
@@ -1194,7 +1218,7 @@ def test_raiderio_distribution_mythic_plus_runs(monkeypatch) -> None:
             ],
         }
 
-    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.mythic_plus_runs", fake_runs)
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.mythic_plus_runs", _as_fetched(fake_runs))
     level_result = runner.invoke(raiderio_app, ["distribution", "mythic-plus-runs", "--metric", "mythic_level"])
     assert level_result.exit_code == 0
     level_payload = json.loads(level_result.stdout)
@@ -1297,7 +1321,7 @@ def test_raiderio_distribution_mythic_plus_players(monkeypatch) -> None:
             ],
         }
 
-    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.mythic_plus_runs", fake_runs)
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.mythic_plus_runs", _as_fetched(fake_runs))
     result = runner.invoke(raiderio_app, ["distribution", "mythic-plus-players", "--metric", "appearance_count"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
@@ -1408,7 +1432,7 @@ def test_raiderio_threshold_mythic_plus_runs(monkeypatch) -> None:
             ],
         }
 
-    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.mythic_plus_runs", fake_runs)
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.mythic_plus_runs", _as_fetched(fake_runs))
     score_result = runner.invoke(
         raiderio_app,
         ["threshold", "mythic-plus-runs", "--metric", "score", "--value", "560", "--nearest", "2"],
@@ -1494,7 +1518,7 @@ def test_raiderio_sample_mythic_plus_runs_filters(monkeypatch) -> None:
             ],
         }
 
-    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.mythic_plus_runs", fake_runs)
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.mythic_plus_runs", _as_fetched(fake_runs))
     result = runner.invoke(
         raiderio_app,
         [
@@ -1581,7 +1605,7 @@ def test_raiderio_distribution_mythic_plus_runs_filters(monkeypatch) -> None:
             ],
         }
 
-    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.mythic_plus_runs", fake_runs)
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.mythic_plus_runs", _as_fetched(fake_runs))
     result = runner.invoke(
         raiderio_app,
         ["distribution", "mythic-plus-runs", "--metric", "class", "--player-region", "eu", "--contains-class", "druid"],
@@ -1628,7 +1652,7 @@ def test_raiderio_threshold_mythic_plus_runs_filters_to_empty_sample(monkeypatch
             ],
         }
 
-    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.mythic_plus_runs", fake_runs)
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.mythic_plus_runs", _as_fetched(fake_runs))
     result = runner.invoke(
         raiderio_app,
         ["threshold", "mythic-plus-runs", "--metric", "score", "--value", "560", "--contains-spec", "restoration"],
@@ -1723,7 +1747,7 @@ def test_raiderio_leaderboard_mythic_plus(monkeypatch) -> None:
             "rankings": _leaderboard_rows(page),
         }
 
-    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.mythic_plus_runs", fake_runs)
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.mythic_plus_runs", _as_fetched(fake_runs))
     result = runner.invoke(raiderio_app, ["leaderboard", "mythic-plus", "--season", "current", "--region", "us", "--dungeon", "all", "--limit", "20"])
     assert result.exit_code == 0, result.output
 
@@ -1773,7 +1797,7 @@ def test_raiderio_leaderboard_paginates_for_limit(monkeypatch) -> None:
             "rankings": rankings,
         }
 
-    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.mythic_plus_runs", fake_runs)
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.mythic_plus_runs", _as_fetched(fake_runs))
     result = runner.invoke(raiderio_app, ["leaderboard", "mythic-plus", "--region", "us", "--limit", "40"])
     assert result.exit_code == 0, result.output
 
@@ -1797,7 +1821,7 @@ def test_raiderio_leaderboard_season_current_omits_season_param(monkeypatch) -> 
             "rankings": _leaderboard_rows(0),
         }
 
-    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.mythic_plus_runs", fake_runs)
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.mythic_plus_runs", _as_fetched(fake_runs))
     result = runner.invoke(raiderio_app, ["leaderboard", "mythic-plus", "--season", "current"])
     assert result.exit_code == 0, result.output
 
@@ -1815,7 +1839,7 @@ def test_raiderio_sample_surfaces_resolved_season(monkeypatch) -> None:
             "rankings": _leaderboard_rows(0),
         }
 
-    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.mythic_plus_runs", fake_runs)
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.mythic_plus_runs", _as_fetched(fake_runs))
     result = runner.invoke(raiderio_app, ["sample", "mythic-plus-runs", "--season", "current", "--limit", "2"])
     assert result.exit_code == 0, result.output
 
@@ -1832,7 +1856,7 @@ def test_raiderio_leaderboard_empty_runs_degrades_cleanly(monkeypatch) -> None:
             "rankings": [],
         }
 
-    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.mythic_plus_runs", fake_runs)
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.mythic_plus_runs", _as_fetched(fake_runs))
     result = runner.invoke(raiderio_app, ["leaderboard", "mythic-plus"])
     assert result.exit_code == 0, result.output
 
@@ -1946,7 +1970,7 @@ def test_raiderio_leaderboard_recovers_resolved_season_from_params(monkeypatch) 
     # --season current must still report a concrete resolved_season.
     monkeypatch.setattr(
         "raiderio_cli.client.RaiderIOClient.mythic_plus_runs",
-        lambda self, *, season, region, dungeon, affixes, page: _runs_response_with_params_season("season-mn-2", page=page),
+        _as_fetched(lambda self, *, season, region, dungeon, affixes, page: _runs_response_with_params_season("season-mn-2", page=page)),
     )
     result = runner.invoke(raiderio_app, ["leaderboard", "mythic-plus", "--season", "current", "--region", "us"])
     assert result.exit_code == 0, result.output
@@ -1958,7 +1982,7 @@ def test_raiderio_leaderboard_recovers_resolved_season_from_params(monkeypatch) 
 def test_raiderio_mythic_plus_runs_recovers_resolved_season_from_params(monkeypatch) -> None:
     monkeypatch.setattr(
         "raiderio_cli.client.RaiderIOClient.mythic_plus_runs",
-        lambda self, *, season, region, dungeon, affixes, page: _runs_response_with_params_season("season-mn-2", page=page),
+        _as_fetched(lambda self, *, season, region, dungeon, affixes, page: _runs_response_with_params_season("season-mn-2", page=page)),
     )
     result = runner.invoke(raiderio_app, ["mythic-plus-runs", "--region", "us"])
     assert result.exit_code == 0, result.output
@@ -1970,7 +1994,7 @@ def test_raiderio_mythic_plus_runs_recovers_resolved_season_from_params(monkeypa
 def test_raiderio_sample_recovers_resolved_season_from_params(monkeypatch) -> None:
     monkeypatch.setattr(
         "raiderio_cli.client.RaiderIOClient.mythic_plus_runs",
-        lambda self, *, season, region, dungeon, affixes, page: _runs_response_with_params_season("season-mn-2", page=page),
+        _as_fetched(lambda self, *, season, region, dungeon, affixes, page: _runs_response_with_params_season("season-mn-2", page=page)),
     )
     result = runner.invoke(raiderio_app, ["sample", "mythic-plus-runs", "--season", "current", "--limit", "2"])
     assert result.exit_code == 0, result.output
@@ -2081,9 +2105,42 @@ def test_raiderio_structured_probe_tries_multi_word_realm_splits(monkeypatch) ->
     assert "realm_match" in payload["match"]["ranking"]["match_reasons"]
 
 
+def test_raiderio_search_keeps_a_name_that_ends_in_a_type_word(monkeypatch) -> None:
+    # Raider.IO has a guild called "Liquid Guild" on Illidan (verified live). Reading the trailing
+    # word as a type hint searched for "Liquid" and answered with a different guild under ok:true.
+    terms: list[str] = []
+
+    def fake_search(self, *, term: str, kind: str | None = None):  # noqa: ANN001
+        terms.append(term)
+        return {
+            "matches": [
+                {
+                    "type": "guild",
+                    "name": "Liquid Guild",
+                    "data": {
+                        "id": 1712678,
+                        "displayName": "Liquid Guild",
+                        "region": {"slug": "us", "name": "United States & Oceania"},
+                        "realm": {"slug": "illidan", "name": "Illidan"},
+                        "path": "/guilds/us/illidan/Liquid%20Guild",
+                    },
+                }
+            ]
+        }
+
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.search", fake_search)
+    result = runner.invoke(raiderio_app, ["search", "Liquid Guild"])
+    assert result.exit_code == 0, result.output
+
+    assert terms == ["Liquid Guild"]
+    top = json.loads(result.stdout)["data"]["results"][0]
+    assert top["name"] == "Liquid Guild"
+    assert top["ranking"]["match_reasons"] == ["exact_name", "all_terms_match"]
+
+
 def test_raiderio_structured_probe_keeps_a_type_word_inside_the_name(monkeypatch) -> None:
-    # "guild"/"character" is a type hint only at the edges of the query. Stripping the word wherever
-    # it appeared probed (and site-searched) for "Old Order", a guild nobody has.
+    # "guild"/"character" is a type hint only as the first token. Stripping the word wherever it
+    # appeared probed (and site-searched) for "Old Order", a guild nobody has.
     attempts: list[tuple[str, str]] = []
 
     def fake_guild(self, *, region: str, realm: str, name: str, fields: str = ""):  # noqa: ANN001
@@ -2140,7 +2197,7 @@ def test_raiderio_leaderboard_raids_normalizes_rows(monkeypatch) -> None:
         captured.update(raid=raid, difficulty=difficulty, region=region, realm=realm, limit=limit, page=page)
         return {"raidRankings": [_raid_ranking_row(1), _raid_ranking_row(2)]}
 
-    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.raid_rankings", fake_rankings)
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.raid_rankings", _as_fetched(fake_rankings))
     result = runner.invoke(
         raiderio_app,
         ["leaderboard", "raids", "--raid", "liberation-of-undermine", "--region", "US", "--realm", "malganis", "--limit", "5"],
@@ -2193,7 +2250,7 @@ def test_raiderio_leaderboard_raids_paginates_for_limit(monkeypatch) -> None:
             return {"raidRankings": [_raid_ranking_row(rank) for rank in range(21, 26)]}
         raise AssertionError(f"page {page} must not be requested after a short page")
 
-    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.raid_rankings", fake_rankings)
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.raid_rankings", _as_fetched(fake_rankings))
     result = runner.invoke(raiderio_app, ["leaderboard", "raids", "--raid", "sporefall", "--limit", "50"])
     assert result.exit_code == 0, result.output
 
@@ -2213,7 +2270,7 @@ def test_raiderio_leaderboard_raids_trims_to_limit_and_dedupes_guilds(monkeypatc
             rows[0] = _raid_ranking_row(21, guild_id=1001)  # already seen on page 0
         return {"raidRankings": rows}
 
-    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.raid_rankings", fake_rankings)
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.raid_rankings", _as_fetched(fake_rankings))
     result = runner.invoke(raiderio_app, ["leaderboard", "raids", "--raid", "sporefall", "--difficulty", "heroic", "--limit", "25"])
     assert result.exit_code == 0, result.output
 
@@ -2252,7 +2309,7 @@ def test_raiderio_leaderboard_raids_slugifies_and_encodes_the_realm(
         captured["realm"] = realm
         return {"raidRankings": [_raid_ranking_row(1)]}
 
-    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.raid_rankings", fake_rankings)
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.raid_rankings", _as_fetched(fake_rankings))
     result = runner.invoke(
         raiderio_app,
         ["leaderboard", "raids", "--raid", "sporefall", "--region", "eu", "--realm", realm_flag, "--limit", "5"],
@@ -2276,7 +2333,7 @@ def test_raiderio_leaderboard_raids_accepts_the_region_aliases_its_siblings_acce
         captured["region"] = region
         return {"raidRankings": [_raid_ranking_row(1)]}
 
-    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.raid_rankings", fake_rankings)
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.raid_rankings", _as_fetched(fake_rankings))
     result = runner.invoke(raiderio_app, ["leaderboard", "raids", "--raid", "sporefall", "--region", "na", "--limit", "5"])
     assert result.exit_code == 0, result.output
 
@@ -2296,7 +2353,7 @@ def test_raiderio_leaderboard_raids_rejects_bad_scope(monkeypatch, args: list[st
     def never(self, **kwargs):  # noqa: ANN001, ANN003
         raise AssertionError("an invalid scope must be rejected before any request")
 
-    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.raid_rankings", never)
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.raid_rankings", _as_fetched(never))
     result = runner.invoke(raiderio_app, ["leaderboard", "raids", *args])
     assert result.exit_code == 2, result.output
     payload = json.loads(result.stderr)
@@ -2312,7 +2369,7 @@ def test_raiderio_leaderboard_raids_maps_unknown_raid_to_usage_error(monkeypatch
         response = httpx.Response(400, json={"statusCode": 400, "error": "Bad Request", "message": "Invalid request query input"}, request=request)
         raise httpx.HTTPStatusError("400", request=request, response=response)
 
-    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.raid_rankings", fake_rankings)
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.raid_rankings", _as_fetched(fake_rankings))
     result = runner.invoke(raiderio_app, ["leaderboard", "raids", "--raid", "nope"])
     assert result.exit_code == 2, result.output
     assert json.loads(result.stderr)["error"]["code"] == "invalid_query"
@@ -2339,7 +2396,7 @@ def test_raiderio_raids_catalog(monkeypatch) -> None:
             ]
         }
 
-    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.raid_static_data", fake_static)
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.raid_static_data", _as_fetched(fake_static))
     result = runner.invoke(raiderio_app, ["raids", "--expansion-id", "11"])
     assert result.exit_code == 0, result.output
 
@@ -2371,7 +2428,7 @@ def test_raiderio_raids_catalog_cites_its_source_and_the_catalog_ttl(monkeypatch
     monkeypatch.setenv("RAIDERIO_RAID_RANKINGS_CACHE_TTL_SECONDS", "88")
     monkeypatch.setattr(
         "raiderio_cli.client.RaiderIOClient.raid_static_data",
-        lambda self, *, expansion_id: {"raids": []},
+        _as_fetched(lambda self, *, expansion_id: {"raids": []}),
     )
     result = runner.invoke(raiderio_app, ["raids", "--expansion-id", "10"])
     assert result.exit_code == 0, result.output
@@ -2382,7 +2439,8 @@ def test_raiderio_raids_catalog_cites_its_source_and_the_catalog_ttl(monkeypatch
         "static_data_url": "https://raider.io/api/v1/raiding/static-data?expansion_id=10"
     }
     assert provenance["freshness"]["cache_ttl_seconds"] == 4242
-    _assert_read_just_now(provenance["freshness"]["sampled_at"])
+    assert provenance["freshness"]["cache_hit"] is False
+    _assert_read_just_now(provenance["freshness"]["fetched_at"])
 
 
 def test_raiderio_mythic_plus_runs_cites_the_leaderboard_it_read(monkeypatch) -> None:
@@ -2390,11 +2448,13 @@ def test_raiderio_mythic_plus_runs_cites_the_leaderboard_it_read(monkeypatch) ->
     monkeypatch.setenv("RAIDERIO_MPLUS_RUNS_CACHE_TTL_SECONDS", "77")
     monkeypatch.setattr(
         "raiderio_cli.client.RaiderIOClient.mythic_plus_runs",
-        lambda self, *, season, region, dungeon, affixes, page: {
-            "season": "season-mn-1",
-            "leaderboard_url": "https://raider.io/mythic-plus-runs/season-mn-1/us/all/0",
-            "rankings": [],
-        },
+        _as_fetched(
+            lambda self, *, season, region, dungeon, affixes, page: {
+                "season": "season-mn-1",
+                "leaderboard_url": "https://raider.io/mythic-plus-runs/season-mn-1/us/all/0",
+                "rankings": [],
+            }
+        ),
     )
     result = runner.invoke(raiderio_app, ["mythic-plus-runs", "--region", "us"])
     assert result.exit_code == 0, result.output
@@ -2402,7 +2462,69 @@ def test_raiderio_mythic_plus_runs_cites_the_leaderboard_it_read(monkeypatch) ->
     provenance = json.loads(result.stdout)["provenance"]
     assert provenance["citations"]["leaderboard_urls"] == ["https://raider.io/mythic-plus-runs/season-mn-1/us/all/0"]
     assert provenance["freshness"]["cache_ttl_seconds"] == 77
-    _assert_read_just_now(provenance["freshness"]["sampled_at"])
+    assert provenance["freshness"]["cache_hit"] is False
+    _assert_read_just_now(provenance["freshness"]["fetched_at"])
+
+
+@pytest.mark.parametrize(
+    ("args", "method", "stub"),
+    [
+        (["raids"], "raid_static_data", lambda self, *, expansion_id: {"raids": []}),
+        (
+            ["mythic-plus-runs"],
+            "mythic_plus_runs",
+            lambda self, *, season, region, dungeon, affixes, page: {"rankings": []},
+        ),
+        (
+            ["leaderboard", "raids", "--raid", "sporefall"],
+            "raid_rankings",
+            lambda self, *, raid, difficulty, region, realm=None, limit, page: {"raidRankings": []},
+        ),
+        (
+            ["sample", "mythic-plus-runs"],
+            "mythic_plus_runs",
+            lambda self, *, season, region, dungeon, affixes, page: {"rankings": []},
+        ),
+    ],
+)
+def test_raiderio_freshness_reports_the_cached_fetch_time_not_the_run_time(
+    monkeypatch, args: list[str], method: str, stub: Callable[..., dict[str, Any]]
+) -> None:
+    # A cache hit used to be stamped with datetime.now() at payload-build time, so a six-hour-old
+    # raid catalog claimed to be seconds old. The fetch time travels with the cached body instead.
+    fetched_at = "2026-09-19T00:00:00+00:00"
+    monkeypatch.setattr(
+        f"raiderio_cli.client.RaiderIOClient.{method}",
+        _as_fetched(stub, fetched_at=fetched_at, cache_hit=True),
+    )
+    result = runner.invoke(raiderio_app, args)
+    assert result.exit_code == 0, result.output
+
+    freshness = json.loads(result.stdout)["data"]["freshness"]
+    assert freshness["fetched_at"] == fetched_at
+    assert freshness["cache_hit"] is True
+
+
+def test_raiderio_client_stores_the_fetch_time_with_the_cached_body(monkeypatch, tmp_path) -> None:
+    # The client is what makes the reported fetch time truthful: the second read replays the body
+    # AND the instant it was fetched, instead of re-stamping the replay with the current time.
+    monkeypatch.setenv("RAIDERIO_CACHE_BACKEND", "file")  # the suite disables every provider cache
+    monkeypatch.setenv("RAIDERIO_CACHE_DIR", str(tmp_path / "cache"))
+    requests: list[str] = []
+
+    def fake_request(client, url, *, params, retry_attempts):  # noqa: ANN001, ANN202
+        requests.append(url)
+        return httpx.Response(200, json={"raids": [{"slug": "sporefall"}]}, request=httpx.Request("GET", url))
+
+    monkeypatch.setattr("raiderio_cli.client.request_with_retries", fake_request)
+    with RaiderIOClient() as client:
+        first = client.raid_static_data(expansion_id=11)
+        second = client.raid_static_data(expansion_id=11)
+
+    assert len(requests) == 1
+    assert first.cache_hit is False and second.cache_hit is True
+    assert second.fetched_at == first.fetched_at
+    assert second.payload == first.payload
 
 
 def _stub_every_read(monkeypatch) -> None:
@@ -2411,9 +2533,9 @@ def _stub_every_read(monkeypatch) -> None:
         "search": lambda self, *, term, kind=None: {"matches": []},
         "character_profile_variants": lambda self, *, region, realm, name, fields="": {"name": name, "realm": realm},
         "guild_profile_variants": lambda self, *, region, realm, name, fields="": {"name": name, "realm": realm},
-        "mythic_plus_runs": lambda self, *, season, region, dungeon, affixes, page: {"rankings": []},
-        "raid_rankings": lambda self, *, raid, difficulty, region, realm=None, limit, page: {"raidRankings": []},
-        "raid_static_data": lambda self, *, expansion_id: {"raids": []},
+        "mythic_plus_runs": _as_fetched(lambda self, *, season, region, dungeon, affixes, page: {"rankings": []}),
+        "raid_rankings": _as_fetched(lambda self, *, raid, difficulty, region, realm=None, limit, page: {"raidRankings": []}),
+        "raid_static_data": _as_fetched(lambda self, *, expansion_id: {"raids": []}),
     }
     for name, stub in reads.items():
         monkeypatch.setattr(f"raiderio_cli.client.RaiderIOClient.{name}", stub)
@@ -2459,6 +2581,24 @@ def test_raiderio_error_envelope_carries_the_same_command_as_the_success_envelop
     bad_metric = runner.invoke(raiderio_app, ["distribution", "mythic-plus-runs", "--metric", "nope"])
     assert bad_metric.exit_code == 2
     assert json.loads(bad_metric.stderr)["command"] == "distribution mythic-plus-runs"
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["distribution mythic-plus-runs", "distribution mythic-plus-players", "leaderboard mythic-plus", "sample mythic-plus-runs"],
+)
+def test_raiderio_usage_error_before_the_command_body_names_the_full_path(monkeypatch, capsys, command: str) -> None:
+    # `--pages abc` is rejected by Click's parser, so the command body never runs and cannot relabel
+    # the envelope. Every nested command used to answer to its group name instead, which made the
+    # two `distribution` commands (and the two `mythic-plus` ones) indistinguishable on failure.
+    monkeypatch.setattr(sys, "argv", ["raiderio", *command.split(), "--pages", "abc"])
+    with pytest.raises(SystemExit) as exit_info:
+        raiderio_run()
+
+    assert exit_info.value.code == 2
+    payload = json.loads(capsys.readouterr().err)
+    assert payload["command"] == command
+    assert payload["error"]["code"] == "invalid_argument"
 
 
 def test_raiderio_doctor_reports_raid_capabilities_and_ttl() -> None:

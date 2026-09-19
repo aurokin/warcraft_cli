@@ -144,18 +144,15 @@ def run(
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
     env: dict[str, str] | None = None,
     stdin: str | None = None,
-    projected: bool = False,
 ) -> Result:
     """Run a binary and enforce the output contract.
 
     - ``expect``: required exit code (``None`` to accept any).
     - ``error_code``: required ``error.code`` for failures.
     - ``stream``: the command emits JSONL (``--stream``); the header line is the envelope.
-    - ``projected``: the call used ``--fields``, which legitimately prunes envelope keys (only
-      ``ok``/``error`` survive), so envelope validation is skipped while stream and exit-code
-      discipline still apply.
     On success stdout carries one envelope and stderr carries no JSON error. On failure stdout is
     empty and stderr carries one error envelope. Every envelope must pass ``envelope_violations``.
+    A ``--fields`` call prunes the envelope keys this checks, so those journeys use ``run_raw``.
     """
     result = run_raw(binary, *args, timeout=timeout, env=env, stdin=stdin)
     if expect is not None and result.exit_code != expect:
@@ -170,19 +167,18 @@ def run(
             result._payload = _single_json_object(lines[0], result)
         else:
             result.payload  # noqa: B018 — parses and validates stdout
-        if not projected and result.payload.get("ok") is not True:
+        if result.payload.get("ok") is not True:
             raise JourneyFailure(f"success exit but ok is not true\n{result.describe()}")
     else:
         if result.stdout.strip():
             raise JourneyFailure(f"failure wrote to stdout\n{result.describe()}")
-        if not projected and result.payload.get("ok") is not False:
+        if result.payload.get("ok") is not False:
             raise JourneyFailure(f"failure exit but ok is not false\n{result.describe()}")
         if error_code is not None and result.error_code != error_code:
             raise JourneyFailure(f"expected error.code={error_code!r}, got {result.error_code!r}\n{result.describe()}")
-    if not projected:
-        problems = envelope_violations(result.payload)
-        if problems:
-            raise JourneyFailure(f"envelope violations: {problems}\n{result.describe()}")
+    problems = envelope_violations(result.payload)
+    if problems:
+        raise JourneyFailure(f"envelope violations: {problems}\n{result.describe()}")
     return result
 
 

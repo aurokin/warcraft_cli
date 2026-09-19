@@ -138,7 +138,7 @@ provider row, and [ROADMAP.md](../ROADMAP.md) and `README.md` use the same membe
 |------|-----------|---------|
 | core | `wowhead`, `warcraftlogs`, `simc` | deepest surface and contracts; the product |
 | supported | `method`, `icy-veins`, `raiderio`, `warcraft-wiki`, `lorrgs` | real, narrower surfaces expected to work |
-| experimental | `raidbots`, `blizzard-api`, `curseforge` | thin or unproven; `blizzard-api` and `curseforge` are additionally unverified against live endpoints (`provenance.verified: false`) |
+| experimental | `raidbots`, `blizzard-api`, `curseforge` | thin or unproven surfaces; `blizzard-api` payloads report `provenance.verified: true` for `us`/`eu`/`kr`/`tw` and `false` for `cn`, and `curseforge` addon payloads report `true` |
 
 Tier is descriptive, not a permission: it tells an agent how much to trust the surface before
 building a workflow on it.
@@ -258,7 +258,15 @@ Search result ordering rules:
   its own provider's best row for the query before the merge; `wrapper_ranking` keeps the raw
   `provider_score` and the `provider_max_score` divisor so the rescale is auditable
 - the rescale divisor has a floor, so a provider whose best row is weak is scaled down rather than
-  promoted to a full score for topping its own empty field
+  promoted to a full score for topping its own empty field. The floor is one shared, documented
+  constant — `MINIMUM_PROVIDER_SCORE_SCALE` in `warcraft_cli.provider_contract`, `40` today —
+  calibrated so a genuine hit clears it on every provider's own scale: a Wowhead exact name scores
+  30 before prefix, term and popularity credit, a Raider.IO exact structured match adds 45 to its
+  base of 12, and the Warcraft Wiki adds 50 for an exact title. A provider whose whole answer is a
+  two-term text match scoring 3 therefore normalizes to `round(100 * 3 / 40) = 8`, not to 100
+- changing the floor or the per-provider scales is a contract change: record the calibration
+  evidence here, because a floor set above a provider's real ceiling would silently demote that
+  provider in every merged list
 - the wrapper should not invent a fake universal content model beyond that thin ranking/orchestration layer
 - `count` is the merged candidate total and `truncated` reports whether `--limit` cut the list
 
@@ -326,7 +334,7 @@ It should not turn routing guidance into unsupported "smart answers."
 - `warcraftlogs` is ready for explicit report-scoped wrapper routing with OAuth client-credentials auth across the `retail`, `classic`, and `fresh` site profiles, typed world metadata, guild, character, and report commands. Wrapper `search`/`resolve` are intentionally limited to explicit report references (URL or a bare report code) and advertised as `ready_explicit_report_only`: a non-report query keeps `warcraftlogs` in the fanout but returns a structured discovery hint (`count: 0`, `resolved: false`, `message`, `supported_inputs`, `suggested_commands`) rather than a fabricated match
 - `raidbots` is ready for report consumption (`inspect-report`, `input`, `explain-input`) and local SimC handoff; `search`/`resolve` are `not_supported` (report-driven provider, no discovery surface)
 - `blizzard-api` is ready for official Game Data and Profile reads over OAuth client-credentials auth: `doctor` reports install state, auth posture, and the region/routing block; `game_data` and `profile` are ready (`realm`/`item`/`character` read commands), while `search`/`resolve` stay `coming_soon` until a discovery surface lands. Registered with `expansion_mode=none` (Blizzard's region/namespace model is not the wrapper's expansion axis)
-- `curseforge` is a scaffold for the public CurseForge addon API (`x-api-key` auth, `CURSEFORGE_API_KEY`): `doctor` and `addon` are ready (`curseforge addon <slug|id>` returns the addon metadata, latest files, and the newest file's changelog), while `search`/`resolve` stay `coming_soon`. Registered with `expansion_mode=none` (addon game-version compatibility lives inside file records, not the wrapper's expansion axis). Host/endpoints/response shapes follow the documented public CurseForge Core API and are pending one-time live confirmation (`provenance.verified=false`; run `CURSEFORGE_LIVE_TESTS=1`)
+- `curseforge` is a scaffold for the public CurseForge addon API (`x-api-key` auth, `CURSEFORGE_API_KEY`): `doctor` and `addon` are ready (`curseforge addon <slug|id>` returns the addon metadata, latest files, and the newest file's changelog), while `search`/`resolve` stay `coming_soon`. Registered with `expansion_mode=none` (addon game-version compatibility lives inside file records, not the wrapper's expansion axis). Host/endpoints/response shapes follow the documented public CurseForge Core API and are confirmed against live traffic (`provenance.verified=true`)
 - `lorrgs` is ready for no-auth public Lorrgs reads: static spec/boss/spell metadata, top-parse spec rankings, composition rankings, report overview handoffs, and conservative `search`/`resolve` for Lorrgs URLs, Warcraft Logs report URLs, bare report codes, and spec/boss text. Registered with `expansion_mode=fixed` / `supported_expansions=["retail"]`
 
 ## Documentation Rule

@@ -89,6 +89,11 @@ Reports: `reports`, `report`, `report-fights`, `report-master-data`, `report-pla
 answers: `--fight-id`, or both `--start-time` and `--end-time`. Anything wider fails with
 `missing_scope` (exit 2) rather than returning an empty payload with `ok: true`.
 
+A well-formed slice that matches no fight — an unknown `--fight-id`, an `--encounter-id` or
+`--difficulty` the fight does not have, a window containing no fight — makes
+`report-player-details` fail with `not_found` (exit 4) naming the slice. A fight Warcraft Logs has
+always returns a roster, so an empty one means the slice missed, not that the report has no players.
+
 Encounter analytics (one report, one fight): `report-encounter`, `report-encounter-players`,
 `report-player-talents`, `report-encounter-casts`, `report-encounter-buffs`,
 `report-encounter-aura-summary`, `report-encounter-aura-compare`,

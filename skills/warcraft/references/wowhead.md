@@ -40,6 +40,9 @@
   raise `--limit` when `truncated` is true
 - `resolve` drops to medium confidence with no `next_command` when its best guide match is far
   older than the other guides in the same response; run the `fallback_search_command` instead
+- `resolve` answers with a database entity: news posts and world events sit behind every entity in
+  `candidates` and only become the `match` when the response holds no entity at all; use `search`
+  when you want the news coverage ranked on its own merits
 
 ## Boundaries
 

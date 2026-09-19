@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 
+import httpx
 import pytest
 from raiderio_cli.main import app
 from typer.testing import CliRunner
@@ -9,7 +11,7 @@ from typer.testing import CliRunner
 runner = CliRunner()
 
 
-def _payload_for(args: list[str]) -> dict[str, object]:
+def _payload_for(args: list[str]) -> dict[str, Any]:
     result = runner.invoke(app, args)
     assert result.exit_code == 0, result.output
     return json.loads(result.stdout)
@@ -119,6 +121,25 @@ def _served_season_slug(payload: dict[str, object]) -> str:
     assert isinstance(urls, list)
     assert any(slug in url for url in urls), (slug, urls)
     return slug
+
+
+@pytest.mark.live
+def test_live_raiderio_raid_leaderboard_citation_url_is_a_real_page() -> None:
+    """The rankings citation URL is a layout this CLI invents, so fetch it instead of re-deriving it.
+
+    Every offline assertion rebuilds the same f-string, which cannot catch a wrong layout shipping
+    inside an ``ok: true`` envelope. raider.io answers an unknown raid path with HTTP 400, so a 200
+    here is evidence the emitted URL names a page that exists.
+    """
+    raid_slug = _payload_for(["raids"])["data"]["rows"][0]["slug"]
+    data = _payload_for(["leaderboard", "raids", "--raid", raid_slug, "--region", "us", "--realm", "malganis", "--limit", "1"])["data"]
+    citation = data["citations"]["leaderboard_urls"][0]
+
+    assert citation == f"https://raider.io/{raid_slug}/rankings/us/mythic?realm=malganis"
+    with httpx.Client(timeout=30.0, follow_redirects=True) as client:
+        assert client.get(citation).status_code == 200, citation
+        bogus = client.get("https://raider.io/no-such-raid-zzz/rankings/us/mythic")
+    assert bogus.status_code != 200, "an unknown raid must not answer 200, or the check above proves nothing"
 
 
 @pytest.mark.live

@@ -92,12 +92,14 @@ TALENT_EXPORT_TITLE_SELECTOR = ".export-string__title"
 INTRO_SELECTOR = ".guide-intro, .page_content_header_intro"
 ARTICLE_SELECTOR = ".guide-page-content, .page_content_container > .page_content"
 # Page furniture that lives inside the article container but is not article prose. The first line is
-# shared, the second is the Astro layout, the third the legacy layout.
+# shared, the second is the Astro layout, the third the legacy layout, and the fourth is the ``1.2.``
+# numbering Icy Veins renders beside each heading (the heading itself is not numbered).
 ARTICLE_CHROME_SELECTOR = ", ".join(
     (
         "script, style, noscript, .raider-io-links",
         ".table-of-contents, .content-toc, .guide-intro, .app-banner, .back-to-top, .internal-links",
         ".hidden_section_controls, .page_content_footer, .toc_mobile",
+        ".heading_container > span",
     )
 )
 
@@ -351,20 +353,6 @@ def _heading_title_and_level(heading: Tag) -> tuple[str, int] | None:
     return title, int(heading.name[1])
 
 
-def _heading_from_tag(tag: Tag) -> tuple[str, int] | None:
-    """``(title, level)`` when ``tag`` starts a section: a bare heading or a ``heading_container`` wrapper.
-
-    Used on the article's direct children, so an ordinary content ``div`` that happens to contain a
-    heading deeper inside must not be treated as a section start.
-    """
-    if HEADING_TAG_RE.match(tag.name):
-        return _heading_title_and_level(tag)
-    if tag.name == "div" and "heading_container" in (tag.get("class") or []):
-        heading = tag.find(HEADING_TAG_RE)
-        return _heading_title_and_level(heading) if isinstance(heading, Tag) else None
-    return None
-
-
 def _extract_headings(article: Tag) -> list[dict[str, Any]]:
     """Every heading in the article in document order, wrapped or not."""
     headings: list[dict[str, Any]] = []
@@ -393,37 +381,36 @@ def _append_section_content(section: dict[str, Any], node: Any) -> None:
         section["text_parts"].append(text)
 
 
-def _extract_sections(article: Tag, *, fallback_title: str) -> list[dict[str, Any]]:
-    sections: list[dict[str, Any]] = []
-    current: dict[str, Any] | None = None
-    ordinal = 0
-    for child in article.children:
+def _new_section(title: str, level: int, ordinal: int) -> dict[str, Any]:
+    return {"title": title, "level": level, "ordinal": ordinal, "html_parts": [], "text_parts": []}
+
+
+def _split_sections(node: Tag, sections: list[dict[str, Any]], *, fallback_title: str) -> None:
+    """Cut ``node``'s content into one section per heading, in document order.
+
+    Icy Veins wraps its headings in layout containers (``div.heading_container`` inside
+    ``div.image_block``), so a scan of the article's direct children alone would find no heading at
+    all on a class hub and return the whole page as one untitled section. Descending only into
+    elements that actually contain a heading keeps ordinary content blocks whole.
+    """
+    for child in node.children:
         if not isinstance(child, Tag):
             continue
-        heading = _heading_from_tag(child)
+        heading = _heading_title_and_level(child) if HEADING_TAG_RE.match(child.name) else None
         if heading is not None:
-            ordinal += 1
-            title, level = heading
-            current = {
-                "title": title,
-                "level": level,
-                "ordinal": ordinal,
-                "html_parts": [],
-                "text_parts": [],
-            }
-            sections.append(current)
+            sections.append(_new_section(heading[0], heading[1], len(sections) + 1))
             continue
-        if current is None:
-            ordinal += 1
-            current = {
-                "title": fallback_title,
-                "level": 2,
-                "ordinal": ordinal,
-                "html_parts": [],
-                "text_parts": [],
-            }
-            sections.append(current)
-        _append_section_content(current, child)
+        if child.find(HEADING_TAG_RE) is not None:
+            _split_sections(child, sections, fallback_title=fallback_title)
+            continue
+        if not sections:
+            sections.append(_new_section(fallback_title, 2, 1))
+        _append_section_content(sections[-1], child)
+
+
+def _extract_sections(article: Tag, *, fallback_title: str) -> list[dict[str, Any]]:
+    sections: list[dict[str, Any]] = []
+    _split_sections(article, sections, fallback_title=fallback_title)
     normalized: list[dict[str, Any]] = []
     for section in sections:
         text = clean_text(" ".join(section["text_parts"]))

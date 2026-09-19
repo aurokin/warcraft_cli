@@ -34,7 +34,7 @@ GUIDE_SPEC = "mistweaver"
 CURSEFORGE_ADDON_ID = "3358"
 CURSEFORGE_ADDON_SLUG = "deadly-boss-mods"
 
-# Warcraft Wiki: canonical API and event pages.
+# Warcraft Wiki: canonical API and lore pages. Game events are pinned next to the titles their
+# pages carry, in tests/e2e/test_warcraft_wiki.py.
 WIKI_API_FUNCTION = "CreateFrame"
-WIKI_EVENT = "PLAYER_ENTERING_WORLD"
 WIKI_LORE_QUERY = "Argent Dawn"

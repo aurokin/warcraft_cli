@@ -37,9 +37,8 @@ disables finished caching (entries expire immediately).
 
 | Family | Env override | Default |
 | --- | --- | --- |
-| Metadata (regions/expansions/server) | `WARCRAFTLOGS_METADATA_CACHE_TTL_SECONDS` | 900s |
 | Guild/character | `WARCRAFTLOGS_GUILD_CACHE_TTL_SECONDS` | 300s |
-| Static world/zone/encounter | `WARCRAFTLOGS_STATIC_CACHE_TTL_SECONDS` | 21600s |
+| Static world/zone/encounter and metadata (regions/expansions/server) | `WARCRAFTLOGS_STATIC_CACHE_TTL_SECONDS` | 21600s |
 | Live/report listing baseline | `WARCRAFTLOGS_REPORT_CACHE_TTL_SECONDS` | 60s |
 | Finished report detail | `WARCRAFTLOGS_FINISHED_REPORT_CACHE_TTL_SECONDS` | 86400s |
 
@@ -70,7 +69,12 @@ Report-encounter commands and sampled cross-report commands emit a `cache_proven
 ### `freshness`
 
 Sampled cross-report commands emit `freshness.cache_ttl_seconds` populated with the real
-applied finished-report TTL (was previously `null`), alongside `sampled_at`.
+applied finished-report TTL, alongside `sampled_at`.
+
+They also emit the transport tally for the run — `freshness.cache_hit_count`,
+`freshness.upstream_request_count`, and `freshness.served_entirely_from_cache` (true when the
+run made no upstream request). `sampled_at` is only when the command ran, so the tally is what
+distinguishes a live scan from a warm-cache replay of an older cohort.
 
 ### `sample_scope`
 
@@ -107,9 +111,6 @@ such as sampled boss analytics. This is the accepted consequence of caching live
 and once it expires the next fetch sees `endTime > 0` and re-caches under the finished TTL.
 Finished WoW logs are immutable thereafter. To eliminate the window for a specific report,
 `cache clear` the report namespace before sampling.
-
-A coarse `cache_hits` diagnostics counter exists in `warcraft_core.output`; `cache_provenance`
-is a finer-grained, per-payload surface and does not replace it.
 
 #### Provenance is a report property, not a per-namespace cache audit
 

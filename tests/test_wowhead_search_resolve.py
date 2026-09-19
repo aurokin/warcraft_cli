@@ -606,3 +606,43 @@ def test_resolve_recommends_news_post_when_the_best_match_is_a_news_row(monkeypa
     assert data["match"]["entity_type"] == "news"
     assert data["resolved"] is True
     assert data["next_command"] == "wowhead news-post https://www.wowhead.com/news=382931"
+
+
+def test_resolve_answers_with_the_entity_when_a_news_headline_matches_the_text_better(monkeypatch) -> None:
+    """A news post about an item scores higher on the item's own name; the item is still the answer."""
+
+    def fake_search(self, query: str):  # noqa: ANN001
+        return {
+            "search": query,
+            "results": [
+                {
+                    "type": 162,
+                    "id": 375994,
+                    "name": "Thunderfury",
+                    "typeName": "News Post",
+                    "popularity": 9,
+                },
+                {
+                    "type": 3,
+                    "id": 19019,
+                    "name": "Thunderfury",
+                    "typeName": "Item",
+                    "popularity": 2,
+                },
+            ],
+        }
+
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.search_suggestions", fake_search)
+    result = runner.invoke(app, ["resolve", "thunderfury"])
+    assert result.exit_code == 0
+
+    data = json.loads(result.stdout)["data"]
+    assert data["match"]["entity_type"] == "item"
+    assert data["match"]["id"] == 19019
+    assert data["next_command"] == "wowhead entity item 19019"
+    # The news row is ranked behind the entity, not dropped: it keeps its score and its follow-up.
+    news_candidate = data["candidates"][-1]
+    assert news_candidate["entity_type"] == "news"
+    assert news_candidate["ranking"]["score"] > data["match"]["ranking"]["score"]
+    assert news_candidate["follow_up"]["recommended_surface"] == "news-post"
+    assert data["count"] == data["total_matches"] == 2

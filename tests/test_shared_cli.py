@@ -32,6 +32,13 @@ def build_app() -> typer.Typer:
     def need(ctx: typer.Context, target: str) -> None:
         emit(ctx, {"target": target})
 
+    group = typer.Typer(add_completion=False)
+    app.add_typer(group, name="group")
+
+    @group.command("leaf")
+    def leaf(ctx: typer.Context, pages: int = 1) -> None:
+        emit(ctx, {"pages": pages})
+
     return app
 
 
@@ -200,8 +207,13 @@ def _run_argv(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str
         (["dummy", "nosuchcommand"], "nosuchcommand", "No such command 'nosuchcommand'."),
         (["dummy", "need"], "need", "Missing argument 'target'."),
         (["dummy"], "", "Missing command."),
+        (
+            ["dummy", "group", "leaf", "--pages", "abc"],
+            "group leaf",
+            "Invalid value for '--pages': 'abc' is not a valid int.",
+        ),
     ],
-    ids=["bad-option-value", "unknown-flag", "unknown-command", "missing-argument", "no-command"],
+    ids=["bad-option-value", "unknown-flag", "unknown-command", "missing-argument", "no-command", "nested-command"],
 )
 def test_guarded_run_renders_usage_errors_as_the_json_envelope(
     monkeypatch: pytest.MonkeyPatch,

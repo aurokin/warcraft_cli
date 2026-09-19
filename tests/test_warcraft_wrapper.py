@@ -382,9 +382,9 @@ def test_warcraft_doctor_reports_ready_and_stubbed_providers() -> None:
     result = runner.invoke(warcraft_app, ["doctor"])
     assert result.exit_code == 0
 
-    payload = json.loads(result.stdout)
-    assert payload["wrapper"]["provider_count"] == 11
-    providers = {row["provider"]: row for row in payload["providers"]}
+    data = json.loads(result.stdout)["data"]
+    assert data["wrapper"]["provider_count"] == 11
+    providers = {row["provider"]: row for row in data["providers"]}
     assert providers["wowhead"]["status"] == "ready"
     assert providers["method"]["status"] == "ready"
     assert providers["icy-veins"]["status"] == "ready"
@@ -415,8 +415,16 @@ def test_warcraft_doctor_reports_ready_and_stubbed_providers() -> None:
     assert providers["raiderio"]["details"]["capabilities"]["search"] == "ready"
     assert providers["warcraftlogs"]["details"]["capabilities"]["search"] == "ready_explicit_report_only"
     assert providers["warcraft-wiki"]["details"]["capabilities"]["article"] == "ready"
-    assert providers["simc"]["details"]["capabilities"]["decode_build"] == "ready"
-    assert providers["simc"]["details"]["capabilities"]["validate_talent_transport"] == "ready"
+    # simc's binary-backed capabilities track the binary, not a constant: doctor says "ready" only
+    # when the SimulationCraft build is usable, and "unavailable" otherwise (no checkout on CI).
+    simc_details = providers["simc"]["details"]
+    simc_binary = simc_details["dependencies"]["simc_binary"]
+    binary_backed_state = "ready" if simc_binary["available"] else "unavailable"
+    for capability in ("decode_build", "validate_talent_transport"):
+        assert capability in simc_binary["required_by"]
+        assert simc_details["capabilities"][capability] == binary_backed_state
+    # A capability that needs neither the binary nor ripgrep stays ready either way.
+    assert simc_details["capabilities"]["repo"] == "ready"
     assert providers["warcraftlogs"]["auth"]["required"] is True
     assert providers["simc"]["wrapper_surfaces"]["search"]["ready"] is False
     assert providers["simc"]["wrapper_surfaces"]["search"]["status"] == "coming_soon"
@@ -5844,6 +5852,57 @@ def test_guide_builds_simc_reports_no_build_references_without_failing(monkeypat
     assert summary["returned_build_count"] == 0
 
 
+def test_guide_builds_simc_is_partial_when_a_requested_leg_produced_nothing(monkeypatch, tmp_path) -> None:
+    """`--simc-decode` that decodes nothing is `partial`, never `ok` with a zero counter.
+
+    This is the live shape today: guide bundles publish `wow_talent_export` strings, `identify-build`
+    accepts them and `decode-build` rejects every one of them.
+    """
+    bundle = _guide_bundle(tmp_path, build_code="ABC123")
+
+    def half_working_simc(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, object]:
+        if args[0] == "decode-build":
+            return {
+                "provider": provider,
+                "exit_code": 2,
+                "payload": {"ok": False, "error": {"code": "invalid_query", "message": "no class/spec"}},
+                "stdout": "",
+            }
+        return {"provider": provider, "exit_code": 0, "payload": {"ok": True}, "stdout": ""}
+
+    monkeypatch.setattr("warcraft_cli.main.provider_invoke", half_working_simc)
+
+    result = runner.invoke(warcraft_app, ["guide-builds-simc", str(bundle), "--decode"])
+    assert result.exit_code == 0, result.output
+
+    summary = json.loads(result.stdout)["data"]["summary"]
+    assert summary["identify_success_count"] >= 1
+    assert summary["decode_success_count"] == 0
+    assert summary["empty_requested_legs"] == ["decode"]
+    assert summary["simc_handoff_status"] == "partial"
+
+
+def test_guide_builds_simc_is_ok_when_the_requested_legs_all_produced_something(monkeypatch, tmp_path) -> None:
+    """A leg nobody asked for (`--apl-path` describe) cannot make the handoff `partial`."""
+    bundle = _guide_bundle(tmp_path, build_code="ABC123")
+
+    monkeypatch.setattr(
+        "warcraft_cli.main.provider_invoke",
+        lambda provider, args, *, expansion=None: {
+            "provider": provider, "exit_code": 0, "payload": {"ok": True}, "stdout": "",
+        },
+    )
+
+    result = runner.invoke(warcraft_app, ["guide-builds-simc", str(bundle)])
+    assert result.exit_code == 0, result.output
+
+    summary = json.loads(result.stdout)["data"]["summary"]
+    assert summary["decode_success_count"] >= 1
+    assert summary["describe_success_count"] == 0
+    assert summary["empty_requested_legs"] == []
+    assert summary["simc_handoff_status"] == "ok"
+
+
 def test_warcraft_passthrough_propagates_a_provider_nonzero_exit(monkeypatch) -> None:
     """`invoke_provider_command` must re-raise a provider's exit code instead of returning 0."""
     from warcraft_cli.providers import invoke_provider_command
@@ -6077,7 +6136,7 @@ def test_actor_profile_puts_structured_context_under_error_details(monkeypatch) 
 
     monkeypatch.setattr("warcraft_cli.main.provider_invoke", fake_provider_invoke)
 
-    result = runner.invoke(warcraft_app, ["actor-profile", "abcd1234", "Missing"])
+    result = runner.invoke(warcraft_app, ["actor-profile", "abcd1234", "Missing", "--fight-id", "1"])
 
     assert result.exit_code == 1, result.output
     payload = json.loads(result.stderr)
@@ -6120,7 +6179,7 @@ def test_actor_profile_success_envelope_conforms(monkeypatch) -> None:
 
     monkeypatch.setattr("warcraft_cli.main.provider_invoke", fake_provider_invoke)
 
-    result = runner.invoke(warcraft_app, ["actor-profile", "abcd1234", "Someone"])
+    result = runner.invoke(warcraft_app, ["actor-profile", "abcd1234", "Someone", "--fight-id", "1"])
     assert result.exit_code == 0, result.output
 
     payload = json.loads(result.stdout)
@@ -6128,6 +6187,52 @@ def test_actor_profile_success_envelope_conforms(monkeypatch) -> None:
     assert payload["data"]["sources"]["raiderio"]["profile_url"] == (
         "https://raider.io/characters/us/malganis/Someone"
     )
+
+
+def test_actor_profile_without_fight_id_scopes_player_details_to_every_fight(monkeypatch) -> None:
+    """Warcraft Logs only answers a scoped playerDetails query, so "whole report" means "all fights".
+
+    An unscoped `report-player-details` now fails with `missing_scope` (exit 2), so omitting
+    `--fight-id` has to enumerate the report's fights and name them in the call and in `query`.
+    """
+    seen: dict[str, list[str]] = {}
+
+    def fake_provider_invoke(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, object]:
+        seen[args[0]] = args
+        if args[0] == "report-fights":
+            payload: dict[str, object] = {"ok": True, "fights": [{"id": 3}, {"id": 7}]}
+        elif args[0] == "report-player-details":
+            payload = {"ok": True, "player_details": {"roles": {"dps": [
+                {"name": "Someone", "id": 1, "server": "Mal'Ganis", "region": "us", "specs": [{"spec": "Frost", "count": 1}]},
+            ]}}}
+        else:
+            payload = {"ok": True, "character": {"name": "Someone", "profile_url": "https://raider.io/x"}}
+        return {"provider": provider, "exit_code": 0, "payload": payload, "stdout": ""}
+
+    monkeypatch.setattr("warcraft_cli.main.provider_invoke", fake_provider_invoke)
+
+    result = runner.invoke(warcraft_app, ["actor-profile", "abcd1234", "Someone"])
+
+    assert result.exit_code == 0, result.output
+    assert seen["report-player-details"] == [
+        "report-player-details", "abcd1234", "--fight-id", "3", "--fight-id", "7",
+    ]
+    assert json.loads(result.stdout)["query"]["scoped_fight_ids"] == [3, 7]
+
+
+def test_actor_profile_fails_not_found_when_the_report_has_no_fights(monkeypatch) -> None:
+    """An empty fight list is a not-found report (exit 4), not an empty roster reported as success."""
+
+    def fake_provider_invoke(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, object]:
+        assert args[0] == "report-fights", args
+        return {"provider": provider, "exit_code": 0, "payload": {"ok": True, "fights": []}, "stdout": ""}
+
+    monkeypatch.setattr("warcraft_cli.main.provider_invoke", fake_provider_invoke)
+
+    result = runner.invoke(warcraft_app, ["actor-profile", "abcd1234", "Someone"])
+
+    assert result.exit_code == 4, result.output
+    assert json.loads(result.stderr)["error"]["code"] == "report_has_no_fights"
 
 
 # --- merged search ranking: provider score scales are normalized before the merge ----------------

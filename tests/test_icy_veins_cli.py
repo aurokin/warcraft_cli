@@ -894,16 +894,18 @@ def test_icy_veins_guide_full_records_a_failed_family_page_and_keeps_going(monke
 def test_icy_veins_guide_export_reports_failed_family_pages(monkeypatch, tmp_path: Path) -> None:
     """An exported bundle is partial when a sibling failed; the command must say so."""
     monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.fetch_guide_page", _family_page_fetch("network"))
-    result = runner.invoke(
-        app,
-        ["guide-export", "mistweaver-monk-pve-healing-guide", "--out", str(tmp_path / "bundle")],
-    )
+    bundle_dir = tmp_path / "bundle"
+    result = runner.invoke(app, ["guide-export", "mistweaver-monk-pve-healing-guide", "--out", str(bundle_dir)])
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)["data"]
     assert payload["counts"]["pages"] == 2
     assert payload["failed_pages"]["count"] == 1
     assert payload["failed_pages"]["items"][0]["section_slug"] == "mistweaver-monk-leveling-guide"
+    # The manifest is all a downstream bundle reader sees, so the missing page has to reach it too.
+    manifest = json.loads((bundle_dir / "manifest.json").read_text())
+    assert manifest["failed_pages"]["count"] == 1
+    assert manifest["failed_pages"]["items"][0]["section_slug"] == "mistweaver-monk-leveling-guide"
 
 
 def test_icy_veins_guide_query_accepts_comma_separated_kinds(monkeypatch, tmp_path: Path) -> None:

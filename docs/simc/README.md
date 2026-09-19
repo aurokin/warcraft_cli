@@ -40,7 +40,7 @@ Global flags go before the subcommand.
 | `--compact-max-chars N` | Truncation length for `--compact` (40-10000) |
 | `--fields a.b,c` | Keep only the listed dot paths (repeatable or comma-separated) |
 | `--fields-strict` | Exit 2 with `missing_fields` when a requested path is absent |
-| `--profile agent\|human\|debug` | Output presets: compact JSON, pretty JSON, pretty JSON plus diagnostics |
+| `--profile agent\|human` | Output presets: compact JSON, pretty JSON |
 
 ```bash
 simc --repo-root ~/src/simc --pretty doctor
@@ -58,7 +58,7 @@ shared exit codes (1 generic, 2 usage, 3 auth, 4 not found, 5 network/upstream) 
 `simc` has no network surface, so exit 3 and exit 5 do not occur. A missing checkout, a missing binary,
 or a failed SimC run is a structured error, never a traceback.
 
-Two codes are worth knowing:
+These codes are worth knowing:
 
 - `invalid_build` (exit 1) — SimC rejected the talent input. `error.message` is SimC's own error line
   and `error.details` carries `simc_returncode`, a 20-line `simc_output_preview` (each line clipped to
@@ -69,6 +69,10 @@ Two codes are worth knowing:
 - `missing_dependency` (exit 1) — ripgrep is not installed.
 - `not_found` (exit 4) — `spec-files`, `find-action`, and `trace-action` were pointed at a directory that
   is not a SimulationCraft checkout. They report this instead of returning zero hits as a success.
+- `invalid_query` (exit 2) — a build arrived without a class and spec and could not be identified.
+  Identification decodes the build once per candidate spec, and the candidates are the checkout's APL
+  files, so no healer spec is ever tried; `error.details.probed_specs` lists the ones that were. Pass
+  `--actor-class` and `--spec` for the rest.
 
 ## Build input flags
 
@@ -112,10 +116,16 @@ names per tree, so a spec talent passed as a class talent is rejected). A name m
 class; an entry id is resolved against the checkout's trait data. Unresolvable values fail with
 `unknown_talent`.
 
-After re-encoding, the result is decoded again and diffed against the base. If anything changed in the
-active trees that was not asked for, the command fails with `encode_mismatch` and
+After re-encoding, the result is decoded again and compared per tree with the build it was supposed to
+come from: the base build, or the `--swap-*-tree-from` source for a tree that was swapped. If anything
+changed in the active trees that was not asked for, the command fails with `encode_mismatch` and
 `details.unrequested_changes` instead of emitting an export. On success the payload carries
 `result.verified: true`.
+
+A tree swap drops the base hash and rebuilds every tree from `entry:rank` pairs, which cannot express a
+tiered node (see `rank_known` above). Swapping a tree that holds one therefore fails with
+`encode_mismatch` naming the talent that would have been lost; `--add`/`--remove` keep the base hash and
+are unaffected.
 
 `result.diff_from_base` has a fourth key, `inactive_hero`. SimC regenerates the talent hash whenever it
 is handed a split talent string, and its serializer freely grants the keystone of *every* hero tree, so
@@ -128,8 +138,9 @@ Validation resolves every raw row against the local SimulationCraft trait data (
 the hero-tree selection node, which is reported under tree `selection` and named after the hero tree),
 re-encodes the build through the SimC binary, and decodes it back. Two SimC decode behaviours are
 accounted for and surfaced in `validation.round_trip`: tiered nodes (one node whose ranks are spread
-over several entries) are compared by node presence and listed under `tiered_nodes`, and the keystone
-SimC grants for the hero tree the build did not pick is listed under `ignored_granted_hero_entries`.
+over several entries) are listed under `tiered_nodes` with `compared_by: "node_presence"` and
+`per_entry_ranks_verified: false`, because SimC prints only the node's leftover rank; and the keystones
+SimC grants for the hero tree the build did not pick are listed under `ignored_unselected_hero_entries`.
 A packet stays `raw_only` with `simc_trait_resolution_incomplete` when the local checkout predates a
 talent, or `simc_round_trip_mismatch` with `expected_entries_by_tree` / `actual_entries_by_tree` when
 the decoded build differs.

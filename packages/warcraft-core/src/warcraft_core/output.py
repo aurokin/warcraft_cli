@@ -161,17 +161,8 @@ def filter_payload_fields(
     return filtered
 
 
-def shape_payload(
-    payload: dict[str, Any],
-    options: OutputOptions,
-    *,
-    diagnostics: object | None = None,
-) -> dict[str, Any]:
-    """Apply --compact and --fields to ``payload``.
-
-    ``diagnostics`` is accepted and ignored: it fed the removed ``--profile debug`` block. It stays
-    on the signature only until wowhead_cli stops passing it (see cross-area note in the PR).
-    """
+def shape_payload(payload: dict[str, Any], options: OutputOptions) -> dict[str, Any]:
+    """Apply --compact and --fields to ``payload``."""
     rendered: dict[str, Any] = payload
     if options.compact:
         rendered = compact_value(rendered, max_chars=options.compact_max_chars)

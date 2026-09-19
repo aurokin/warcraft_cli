@@ -11,6 +11,7 @@ output flags.
 from __future__ import annotations
 
 import json
+import shlex
 from functools import cache
 from pathlib import Path
 from typing import Any
@@ -19,12 +20,10 @@ import pytest
 
 from tests.e2e import pins
 from tests.e2e.harness import (
-    EXIT_GENERIC,
     EXIT_NETWORK,
     EXIT_NOT_FOUND,
     Result,
     dead_proxy_env,
-    payload_or_legacy,
     run,
     run_raw,
 )
@@ -33,18 +32,33 @@ BINARY = "warcraft-wiki"
 PROVIDER = "warcraft-wiki"
 # Widget script handlers are permanent UI vocabulary, like the ids in tests/e2e/pins.py.
 UI_HANDLER_QUERY = "OnKeyDown"
-API_REFERENCE_FAMILIES = {"api_function", "framework_page", "xml_schema", "cvar", "api_changes"}
-EVENT_REFERENCE_FAMILIES = {"ui_handler", "framework_page"}
+# Game events and the wiki page that documents each one. These four are the events every addon
+# registers first, and the wiki has carried their pages for a decade. COMBAT_LOG_EVENT_UNFILTERED
+# keeps its pre-"UNFILTERED" title and serves the long name as a redirect, which is exactly the
+# case a title-matching lookup has to get right.
+GAME_EVENT_PAGES: tuple[tuple[str, str], ...] = (
+    ("PLAYER_LOGIN", "Event:PLAYER LOGIN"),
+    ("PLAYER_ENTERING_WORLD", "Event:PLAYER ENTERING WORLD"),
+    ("COMBAT_LOG_EVENT_UNFILTERED", "Event:COMBAT LOG EVENT"),
+    ("UNIT_HEALTH", "Event:UNIT HEALTH"),
+)
+# Query prefixes `resolve` strips, the article each cleaned query has to land on, the family the
+# search row can claim from a title and a snippet alone, and the family the fetched page is
+# classified as. The two differ where the title carries no signal: a zone or a character page reads
+# as a plain article until the page itself is read, and saying so beats guessing.
+RESOLVE_FAMILY_CASES: tuple[tuple[str, str, str, str, str], ...] = (
+    ("class", "druid", "Druid", "class_reference", "class_reference"),
+    ("zone", "elwynn forest", "Elwynn Forest", "general_article", "zone_reference"),
+    ("profession", "alchemy", "Alchemy", "profession_reference", "profession_reference"),
+    ("lore", "jaina proudmoore", "Jaina Proudmoore", "general_article", "lore_reference"),
+)
 
 
-def assert_data_mirrors_legacy(result: Result, *keys: str) -> None:
-    """``data`` carries the payload and the deprecated top-level copies agree with it."""
+def assert_data_holds(result: Result, *keys: str) -> None:
+    """The envelope slot ``data`` carries the payload block each journey goes on to read."""
     assert result.data, f"data slot is empty\n{result.describe()}"
     for key in keys:
         assert key in result.data, f"data is missing {key!r}\n{result.describe()}"
-        assert payload_or_legacy(result, key) == result.data[key], (
-            f"legacy top-level {key!r} disagrees with data\n{result.describe()}"
-        )
 
 
 @cache
@@ -85,7 +99,7 @@ def test_doctor_reports_every_documented_command_ready(require) -> None:
     } <= set(capabilities)
     assert set(capabilities.values()) == {"ready"}
     assert result.data["cache"]["enabled"] is True
-    assert_data_mirrors_legacy(result, "capabilities", "cache")
+    assert_data_holds(result, "capabilities", "cache")
 
 
 def test_search_puts_the_api_page_at_the_top_for_an_api_query(require) -> None:
@@ -97,18 +111,29 @@ def test_search_puts_the_api_page_at_the_top_for_an_api_query(require) -> None:
     assert first["metadata"]["content_family"] == "api_function"
     assert pins.WIKI_API_FUNCTION.lower() in first["id"].lower()
     assert first["follow_up"]["recommended_command"].startswith(f"{BINARY} article ")
-    assert_data_mirrors_legacy(result, "results", "count", "search_query")
+    assert_data_holds(result, "results", "count", "search_query")
 
 
-def test_resolve_strips_the_family_hint_and_names_the_article_command(require) -> None:
+@pytest.mark.parametrize(("hint", "name", "expected_title", "search_family", "article_family"), RESOLVE_FAMILY_CASES)
+def test_resolve_strips_the_family_hint_and_its_article_command_returns_that_page(
+    require, hint: str, name: str, expected_title: str, search_family: str, article_family: str
+) -> None:
+    """``resolve`` drops the family word, finds the page, and the command it prints fetches it."""
     require(PROVIDER)
-    result = run(BINARY, "resolve", f"lore {pins.WIKI_LORE_QUERY}", "--limit", "5")
+    resolved = run(BINARY, "resolve", f"{hint} {name}", "--limit", "10")
 
-    assert result.data["search_query"].lower() == pins.WIKI_LORE_QUERY.lower()
-    assert result.data["excluded_terms"] == ["lore"]
-    assert result.data["resolved"] is True
-    assert result.data["match"]["id"] == pins.WIKI_LORE_QUERY
-    assert result.data["next_command"] == f"{BINARY} article '{pins.WIKI_LORE_QUERY}'"
+    assert resolved.data["search_query"] == name
+    assert resolved.data["excluded_terms"] == [hint]
+    assert resolved.data["resolved"] is True
+    assert resolved.data["match"]["id"] == expected_title, resolved.describe()
+    assert resolved.data["match"]["metadata"]["content_family"] == search_family, resolved.describe()
+
+    parts = shlex.split(resolved.data["next_command"])
+    assert parts == [BINARY, "article", expected_title], resolved.describe()
+    article = run(BINARY, *parts[1:])
+    assert article.data["article"]["title"] == expected_title, article.describe()
+    assert article.data["article"]["content_family"] == article_family, article.describe()
+    assert article.data["reference"]["content_family"] == article_family, article.describe()
 
 
 def test_article_returns_classified_text_headings_and_navigation(require) -> None:
@@ -129,7 +154,7 @@ def test_article_returns_classified_text_headings_and_navigation(require) -> Non
     assert all("action=edit" not in row["url"] for row in result.data["linked_entities"]["items"])
     assert result.data["reference"]["content_family"] == "faction_reference"
     assert result.payload["provenance"]["page"] == article["page_url"]
-    assert_data_mirrors_legacy(result, "article", "content", "navigation", "reference")
+    assert_data_holds(result, "article", "content", "navigation", "reference")
 
 
 def test_article_full_returns_every_section_not_just_the_preview(require) -> None:
@@ -157,13 +182,39 @@ def test_api_commands_resolve_the_pinned_function(require, command: str) -> None
     assert reference["arguments"], "the API page lost its argument table"
 
 
-def test_api_resolves_the_xml_schema_reference(require) -> None:
+@pytest.mark.parametrize(
+    ("query", "expected_family"),
+    [("XML schema", "xml_schema"), ("World of Warcraft API", "framework_page")],
+)
+def test_api_resolves_the_reference_pages_that_are_not_functions(require, query: str, expected_family: str) -> None:
     require(PROVIDER)
-    result = run(BINARY, "api", "XML schema")
+    result = run(BINARY, "api", query)
 
-    assert result.data["article"]["content_family"] == "xml_schema"
+    assert result.data["article"]["content_family"] == expected_family, result.describe()
     assert result.data["resolved_surface"] == "api"
     assert result.data["reference"]["programming_reference"] is True
+
+
+@pytest.mark.parametrize(
+    ("article_ref", "expected_title", "expected_family"),
+    [
+        ("Patch 2.1.0/API changes", "Patch 2.1.0/API changes", "api_changes"),
+        ("Create a WoW AddOn in 15 Minutes", "Create a WoW AddOn in 15 Minutes", "howto_programming"),
+        # The wiki serves this one as a redirect; the payload must name the page it actually read.
+        ("Legion", "World of Warcraft: Legion", "expansion_reference"),
+    ],
+)
+def test_article_classifies_the_page_it_followed_a_ref_to(
+    require, article_ref: str, expected_title: str, expected_family: str
+) -> None:
+    require(PROVIDER)
+    result = run(BINARY, "article", article_ref)
+
+    assert result.data["article"]["title"] == expected_title, result.describe()
+    assert result.data["article"]["content_family"] == expected_family, result.describe()
+    assert result.data["reference"]["content_family"] == expected_family, result.describe()
+    assert result.data["content"]["text"].strip(), "the article has no extracted prose"
+    assert "Main Menu" not in result.data["content"]["text"], "wiki chrome leaked into the prose"
 
 
 @pytest.mark.parametrize("command", ["event", "event-full"])
@@ -177,14 +228,46 @@ def test_event_commands_resolve_a_ui_handler(require, command: str) -> None:
     assert result.data["reference"]["programming_reference"] is True
 
 
-def test_event_resolves_the_pinned_game_event_to_a_reference_page(require) -> None:
-    require(PROVIDER)
-    result = run(BINARY, "event", pins.WIKI_EVENT)
+@pytest.mark.parametrize(("event_name", "expected_title"), GAME_EVENT_PAGES)
+def test_event_returns_the_page_that_documents_that_event(require, event_name: str, expected_title: str) -> None:
+    """``event <NAME>`` must land on that event's own page, not on whatever page mentions it.
 
+    Ranking used to hand every upstream row a positional score, so ``event PLAYER_LOGIN`` answered
+    with ``UIHANDLER OnEvent`` and ``event ENCOUNTER_START`` with the ``Events`` index — ok: true,
+    wrong page. Asserting the title is the only thing that catches that.
+    """
+    require(PROVIDER)
+    result = run(BINARY, "event", event_name)
+
+    assert result.data["article"]["title"] == expected_title, result.describe()
+    assert result.data["article"]["content_family"] == "event_reference", result.describe()
     assert result.data["resolved_surface"] == "event"
-    assert result.data["article"]["content_family"] in EVENT_REFERENCE_FAMILIES
-    assert result.data["reference"]["programming_reference"] is True
+    assert result.data["resolved_from"] == "direct_fetch", "the exact page must be fetched, not searched for"
+    assert result.data["article"]["page_url"].endswith(f"/wiki/{expected_title.replace(' ', '_')}")
     assert result.data["content"]["text"].strip(), "the event reference page has no text"
+
+
+def test_event_full_returns_the_whole_event_page(require) -> None:
+    require(PROVIDER)
+    event_name, expected_title = GAME_EVENT_PAGES[0]
+    result = run(BINARY, "event-full", event_name)
+
+    assert result.data["article"]["title"] == expected_title, result.describe()
+    assert result.data["resolved_surface"] == "event"
+    sections = result.data["pages"][0]["article"]["sections"]
+    assert sections and all(row["title"] for row in sections), result.describe()
+
+
+def test_search_ranks_the_event_page_above_the_pages_that_merely_mention_it(require) -> None:
+    require(PROVIDER)
+    event_name, expected_title = GAME_EVENT_PAGES[0]
+    result = run(BINARY, "search", event_name, "--limit", "5")
+
+    top = result.data["results"][0]
+    assert top["id"] == expected_title, result.describe()
+    assert "exact_event_title" in top["ranking"]["match_reasons"], result.describe()
+    # Whatever ranked below it does not answer the query; it must not come close on score.
+    assert all(row["ranking"]["score"] < top["ranking"]["score"] - 18 for row in result.data["results"][1:])
 
 
 def test_article_export_writes_a_bundle_that_article_query_answers_offline(require, out_dir: Path) -> None:
@@ -227,13 +310,13 @@ def test_a_missing_article_is_a_not_found_envelope(require) -> None:
     run(BINARY, "article", "Zzz No Such Warcraft Wiki Page 90210", expect=EXIT_NOT_FOUND, error_code="not_found")
 
 
-@pytest.mark.parametrize(
-    ("command", "error_code"),
-    [("api", "invalid_api_ref"), ("event", "invalid_event_ref")],
-)
-def test_an_unresolvable_typed_reference_reports_its_documented_code(require, command: str, error_code: str) -> None:
+@pytest.mark.parametrize("command", ["api", "event"])
+@pytest.mark.parametrize("query", ["zzz-not-a-real-reference-90210", "NOT_A_REAL_EVENT_XYZ"])
+def test_an_unresolvable_typed_reference_is_not_found(require, command: str, query: str) -> None:
+    """A typed lookup that cannot find its page must fail, not fall back to an unrelated article."""
     require(PROVIDER)
-    run(BINARY, command, "zzz-not-a-real-reference-90210", expect=EXIT_GENERIC, error_code=error_code)
+    result = run(BINARY, command, query, expect=EXIT_NOT_FOUND, error_code="not_found")
+    assert result.payload["error"]["details"]["surface"] == command, result.describe()
 
 
 def test_network_failure_is_an_exit_5_envelope(require) -> None:

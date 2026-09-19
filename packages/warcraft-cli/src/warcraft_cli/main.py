@@ -26,7 +26,7 @@ from warcraft_core.cli import (
     emit,
     guarded_run,
 )
-from warcraft_core.exit_codes import EXIT_GENERIC, EXIT_NETWORK, exit_code_for
+from warcraft_core.exit_codes import EXIT_GENERIC, EXIT_NETWORK, EXIT_NOT_FOUND, exit_code_for
 from warcraft_core.expansions import wowhead_path_prefixes
 from warcraft_core.identity import (
     build_reference_transport_packet_payload,
@@ -822,13 +822,21 @@ def _count_simc_handoff_successes(build_rows: list[dict[str, Any]]) -> tuple[int
     return _success("identify"), _success("decode"), _success("describe")
 
 
-def _simc_handoff_status(*, returned_build_count: int, identify_success_count: int) -> str:
-    """Whether the simc leg of the handoff produced anything, as one field an agent can branch on."""
+def _simc_handoff_status(
+    *, returned_build_count: int, identify_success_count: int, empty_requested_legs: list[str]
+) -> str:
+    """Whether the simc leg of the handoff produced anything, as one field an agent can branch on.
+
+    ``ok`` means every leg the caller asked for produced at least one result. A leg that was
+    requested and came back empty for every build (``--simc-decode`` on guide-published import
+    strings, today) is ``partial``: reporting that as ``ok`` alongside a zero counter is the
+    wrong-answer-with-``ok: true`` shape this field exists to prevent.
+    """
     if returned_build_count == 0:
         return "no_build_references"
     if identify_success_count == 0:
         return "all_handoffs_failed"
-    return "ok"
+    return "partial" if empty_requested_legs else "ok"
 
 
 def _handoff_citations(
@@ -883,6 +891,14 @@ def _guide_builds_simc_payload(
     identify_success_count, decode_success_count, describe_success_count = _count_simc_handoff_successes(
         build_rows
     )
+    empty_requested_legs = [
+        leg
+        for leg, requested, success_count in (
+            ("decode", decode, decode_success_count),
+            ("describe", bool((apl_path or "").strip()), describe_success_count),
+        )
+        if requested and success_count == 0
+    ]
     return {
         "provider": "warcraft",
         "kind": "guide_builds_simc_handoff",
@@ -910,9 +926,12 @@ def _guide_builds_simc_payload(
             "identify_success_count": identify_success_count,
             "decode_success_count": decode_success_count,
             "describe_success_count": describe_success_count,
+            # Which requested legs produced nothing at all, so `partial` names its own cause.
+            "empty_requested_legs": empty_requested_legs,
             "simc_handoff_status": _simc_handoff_status(
                 returned_build_count=len(build_rows),
                 identify_success_count=identify_success_count,
+                empty_requested_legs=empty_requested_legs,
             ),
         },
         "builds": build_rows,
@@ -2071,18 +2090,59 @@ def _fail_actor_profile(
     raise typer.Exit(exit_code)
 
 
+def _actor_profile_fight_ids(
+    ctx: typer.Context,
+    *,
+    query: dict[str, Any],
+    code: str,
+    allow_unlisted: bool,
+    expansion: str | None,
+) -> list[int]:
+    """Every fight id in the report, so the unscoped ``--fight-id`` case still covers the whole log.
+
+    Warcraft Logs only answers ``playerDetails`` for an explicit fight list or time window; an
+    unscoped query comes back as an empty roster. The crosswalk's whole-report default therefore has
+    to enumerate the fights itself rather than omit the slice.
+    """
+    args = ["report-fights", code]
+    if allow_unlisted:
+        args.append("--allow-unlisted")
+    result = _provider_payload_result("warcraftlogs", args, expansion=expansion)
+    if result.get("status") != "ok":
+        _fail_actor_profile(
+            ctx,
+            query=query,
+            code="warcraftlogs_lookup_failed",
+            message="Warcraft Logs fight lookup failed, so the report roster cannot be scoped.",
+            details={"source": result.get("error"), "provider": "warcraftlogs"},
+            exit_code=source_exit_code(result),
+        )
+    fights = as_list(as_dict(result.get("payload")).get("fights"))
+    fight_ids = [fight["id"] for fight in fights if isinstance(fight, dict) and isinstance(fight.get("id"), int)]
+    if not fight_ids:
+        _fail_actor_profile(
+            ctx,
+            query=query,
+            code="report_has_no_fights",
+            message=f"Report {code!r} contains no fights, so it has no roster to cross-walk.",
+            details={"hint": "Check the report code, or pass --fight-id if you know the fight."},
+            exit_code=EXIT_NOT_FOUND,
+        )
+    return fight_ids
+
+
 def _actor_profile_log_payload(
     ctx: typer.Context,
     *,
     query: dict[str, Any],
     code: str,
-    fight_id: int | None,
+    fight_ids: list[int],
     allow_unlisted: bool,
     expansion: str | None,
 ) -> dict[str, Any]:
     """Fetch the Warcraft Logs report-player-details payload the crosswalk reads its actor from."""
     wcl_args = ["report-player-details", code]
-    if fight_id is not None:
+    for fight_id in fight_ids:
         wcl_args += ["--fight-id", str(fight_id)]
     if allow_unlisted:
         wcl_args.append("--allow-unlisted")
@@ -2221,11 +2281,19 @@ def actor_profile(
     """Cross-walk a Warcraft Logs report actor to a Raider.IO profile (log actor -> profile handoff)."""
     requested_expansion = _requested_expansion(ctx)
     query: dict[str, Any] = {"report_code": code, "actor_name": name, "fight_id": fight_id}
+    scoped_fight_ids = (
+        [fight_id]
+        if fight_id is not None
+        else _actor_profile_fight_ids(
+            ctx, query=query, code=code, allow_unlisted=allow_unlisted, expansion=requested_expansion
+        )
+    )
+    query["scoped_fight_ids"] = scoped_fight_ids
     log_payload = _actor_profile_log_payload(
         ctx,
         query=query,
         code=code,
-        fight_id=fight_id,
+        fight_ids=scoped_fight_ids,
         allow_unlisted=allow_unlisted,
         expansion=requested_expansion,
     )

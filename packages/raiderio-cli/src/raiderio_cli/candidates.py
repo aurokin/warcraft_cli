@@ -41,21 +41,18 @@ TYPE_HINT_TOKENS = {
 
 
 def _normalize_search_query(query: str) -> tuple[str, str | None]:
-    """Split a leading or trailing ``guild``/``character`` hint off the query.
+    """Split a *leading* ``guild``/``character`` hint off the query.
 
-    Only the outer tokens count. Realm and guild names contain these words ("Sisters of Elune
-    Guild Wars"), and stripping the word wherever it appears searches for a name nobody has.
+    Only the first token counts. Entities are named after these words -- Raider.IO has a guild
+    called "Liquid Guild" on Illidan -- so a trailing one is part of the name, and dropping it
+    searches for something else and answers confidently with the wrong entity.
     """
     tokens = [token for token in query.strip().split() if token]
     if not tokens:
         return query.strip(), None
     type_hint = TYPE_HINT_TOKENS.get(tokens[0].lower())
-    kept = tokens[1:] if type_hint else tokens
-    if type_hint is None and len(tokens) > 1:
-        type_hint = TYPE_HINT_TOKENS.get(tokens[-1].lower())
-        kept = tokens[:-1] if type_hint else tokens
-    normalized = " ".join(kept).strip() or query.strip()
-    return normalized, type_hint
+    normalized = " ".join(tokens[1:]).strip() if type_hint else " ".join(tokens)
+    return normalized or query.strip(), type_hint
 
 
 def normalize_structured_query(query: str) -> tuple[str, str | None, list[StructuredProbe]]:

@@ -39,6 +39,11 @@ endpoint labels. News posts also carry a `news-post` follow-up; world events are
 no follow-up command of their own. The one exception is Trading Post activities: Wowhead addresses
 them only by slug, so those rows come back with a null `url`.
 
+`resolve` answers with a database entity. A news headline often matches a query better than the
+item it is written about, so news posts and world events rank behind every entity in `candidates`
+and only become the `match` when the response holds no entity at all; `search` still ranks them on
+score alone.
+
 Failures print an error envelope on stderr and exit with the shared code:
 
 | Exit | Meaning |
@@ -63,7 +68,7 @@ Global flags go before the subcommand.
 | `--compact-max-chars N` | truncation threshold for `--compact` (default 280) |
 | `--fields a.b,c` | project only the named dot-paths |
 | `--fields-strict` | fail with exit 2 when a requested `--fields` path is missing |
-| `--profile agent\|human\|debug` | output preset; `debug` adds a `diagnostics` block |
+| `--profile agent\|human` | output preset; `agent` is compact JSON, `human` pretty-prints |
 | `--stream` | emit large arrays as JSONL: a header line then one `{"record": ...}` per row |
 | `--expansion KEY` | route to an expansion profile (`retail`, `classic`, `tbc`, `wotlk`, `cata`, `mop-classic`, `ptr`, `beta`, `classic-ptr`) |
 | `--normalize-canonical-to-expansion` | rewrite canonical entity URLs back to the selected expansion |

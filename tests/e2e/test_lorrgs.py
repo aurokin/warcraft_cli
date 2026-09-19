@@ -19,6 +19,12 @@ from tests.e2e.harness import EXIT_GENERIC, EXIT_NOT_FOUND, Result, run, run_tex
 # up so the report journeys always have a real code to work with.
 _SPEC_RANKING_ATTEMPTS = 4
 
+COMP_RANKING_LIMIT = 3
+# Longer than any raid encounter, so a kill-time floor set to it must empty the ranking.
+IMPOSSIBLE_KILLTIME_SECONDS = 10_000
+# How many bosses the comp-ranking journey walks before declaring the surface empty.
+COMP_RANKING_SCAN_LIMIT = 16
+
 
 @dataclass(frozen=True)
 class Catalog:
@@ -30,6 +36,7 @@ class Catalog:
     season: Result
     season_slug: str
     zone_id: str
+    zone_boss_slugs: tuple[str, ...]
     boss_slug: str
     spec_slug: str
     spec_ranking: Result
@@ -64,7 +71,9 @@ def catalog(skip_list: frozenset[str], doctor_rows: dict[str, dict[str, Any]]) -
     # Lorrgs orders a season's raids newest first and uses float ids (e.g. 53.1) for split zones.
     zone_id = f"{raids[0]:g}"
     zone_bosses = run("lorrgs", "zone-bosses", zone_id)
-    boss_slug = next(iter(zone_bosses.data))
+    zone_boss_slugs = tuple(zone_bosses.data)
+    assert zone_boss_slugs, zone_bosses.describe()
+    boss_slug = zone_boss_slugs[0]
 
     specs = run("lorrgs", "specs")
     bosses = run("lorrgs", "bosses")
@@ -81,6 +90,7 @@ def catalog(skip_list: frozenset[str], doctor_rows: dict[str, dict[str, Any]]) -
                 season=season,
                 season_slug=season.data["slug"],
                 zone_id=zone_id,
+                zone_boss_slugs=zone_boss_slugs,
                 boss_slug=boss_slug,
                 spec_slug=spec_slug,
                 spec_ranking=ranking,
@@ -199,13 +209,57 @@ def test_spec_ranking_and_its_info_view_describe_the_same_ranking(catalog: Catal
     assert len(info.stdout) < len(ranking.stdout)
 
 
-def test_comp_ranking_is_scoped_to_the_encounter(catalog: Catalog) -> None:
-    result = run("lorrgs", "comp-ranking", catalog.boss_slug, "--limit", "3", "--killtime-min", "60")
-    assert result.data["boss_slug"] == catalog.boss_slug
-    assert isinstance(result.data["updated"], str)
-    assert isinstance(result.data["reports"], list)
-    assert result.payload["query"]["limit"] == 3
-    assert result.payload["query"]["killtime_min"] == 60
+def _comp_ranking(boss_slug: str, *extra: str) -> Result:
+    return run("lorrgs", "comp-ranking", boss_slug, "--limit", str(COMP_RANKING_LIMIT), *extra)
+
+
+def _comp_ranking_candidates(catalog: Catalog) -> list[str]:
+    """Bosses to try for a populated comp ranking: this tier first, then one per other zone.
+
+    Lorrgs builds a comp ranking from the parses it has already ingested, so a raid that opened
+    days ago can legitimately have none yet. Older zones keep theirs, so the surface itself is
+    still exercised.
+    """
+    candidates = list(catalog.zone_boss_slugs)
+    for zone in catalog.zones.data["zones"]:
+        if f"{zone['id']:g}" == catalog.zone_id:
+            continue
+        bosses = zone.get("bosses") or []
+        if bosses:
+            candidates.append(str(bosses[0]["full_name_slug"]))
+    return candidates[:COMP_RANKING_SCAN_LIMIT]
+
+
+def test_comp_ranking_returns_ranked_comps_and_honours_the_killtime_filter(catalog: Catalog) -> None:
+    """A comp ranking with rows in it, and a kill-time floor that provably removes them.
+
+    An empty ``reports`` list used to pass this journey, which made it blind to the command
+    returning nothing at all. Bosses are walked until one has rows; if none does, Lorrgs is not
+    serving this surface and that is reported rather than absorbed.
+    """
+    scanned: list[str] = []
+    for boss_slug in _comp_ranking_candidates(catalog):
+        scanned.append(boss_slug)
+        result = _comp_ranking(boss_slug)
+        assert result.data["boss_slug"] == boss_slug, result.describe()
+        assert isinstance(result.data["updated"], str) and result.data["updated"], result.describe()
+        assert result.payload["query"]["limit"] == COMP_RANKING_LIMIT, result.describe()
+        reports = result.data["reports"]
+        if not reports:
+            continue
+
+        assert len(reports) <= COMP_RANKING_LIMIT, result.describe()
+        # No raid kill runs for three hours, so a floor that high must remove every row; the row
+        # schema is Lorrgs', so the filter is proved by what it removes rather than by a field name.
+        pruned = _comp_ranking(boss_slug, "--killtime-min", str(IMPOSSIBLE_KILLTIME_SECONDS))
+        assert pruned.payload["query"]["killtime_min"] == IMPOSSIBLE_KILLTIME_SECONDS, pruned.describe()
+        assert pruned.data["reports"] == [], pruned.describe()
+
+        kept = _comp_ranking(boss_slug, "--killtime-max", str(IMPOSSIBLE_KILLTIME_SECONDS))
+        assert kept.data["reports"] == reports, kept.describe()
+        return
+
+    raise AssertionError(f"Lorrgs published no comp ranking rows for any of {scanned}")
 
 
 def test_report_overview_user_report_and_fights_share_one_report(catalog: Catalog) -> None:

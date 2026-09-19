@@ -1770,6 +1770,12 @@ def _require_report_slice(
     )
 
 
+def _described_slice(query: dict[str, Any]) -> str:
+    """Echo the filters a report query actually carried, so a not-found message names the scope."""
+    carried = [f"{name}={value!r}" for name, value in sorted(query.items()) if value is not None]
+    return ", ".join(carried) if carried else "no filters"
+
+
 def _require_explicit_window(ctx: typer.Context, *, name: str, start_ms: float | None, end_ms: float | None) -> None:
     if start_ms is None or end_ms is None:
         _fail(ctx, "invalid_query", f"{name} requires both a start and end window offset in milliseconds.")
@@ -6412,6 +6418,16 @@ def report_player_details(
         start_time=start_time,
         translate=translate,
     )
+    query = {
+        "difficulty": difficulty,
+        "encounter_id": encounter_id,
+        "end_time": end_time,
+        "fight_ids": fight_id,
+        "include_combatant_info": include_combatant_info,
+        "kill_type": normalized_kill_type,
+        "start_time": start_time,
+        "translate": translate,
+    }
     client = _client(ctx)
     try:
         payload = client.report_player_details(code=code, allow_unlisted=allow_unlisted, options=options)
@@ -6419,26 +6435,27 @@ def report_player_details(
         _handle_client_error(ctx, exc)
     finally:
         client.close()
+    details = _report_player_details_payload(
+        payload,
+        report_code=code,
+        fight_id=fight_id[0] if fight_id and len(fight_id) == 1 else None,
+    )
+    # A fight Warcraft Logs actually has always has a roster. An empty one means the slice matched
+    # no fight (an unknown fight ID, a mismatched --encounter-id/--difficulty, an empty window),
+    # which must not read as "this report has no players".
+    if details["player_details"]["counts"]["total"] == 0:
+        _fail(
+            ctx,
+            "not_found",
+            f"Warcraft Logs report {code} has no fight matching {_described_slice(query)}, so the roster is empty.",
+        )
     _emit(
         ctx,
         {
             "ok": True,
             "provider": "warcraftlogs",
-            "query": {
-                "difficulty": difficulty,
-                "encounter_id": encounter_id,
-                "end_time": end_time,
-                "fight_ids": fight_id,
-                "include_combatant_info": include_combatant_info,
-                "kill_type": normalized_kill_type,
-                "start_time": start_time,
-                "translate": translate,
-            },
-            **_report_player_details_payload(
-                payload,
-                report_code=code,
-                fight_id=fight_id[0] if fight_id and len(fight_id) == 1 else None,
-            ),
+            "query": query,
+            **details,
         },
         client=client,
     )

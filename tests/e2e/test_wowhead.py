@@ -3,12 +3,14 @@
 Every volatile identifier (news slug, guide id, comment id, npc/spell/quest id, talent build code)
 is discovered at run time from an earlier command in the same journey, so the file cannot rot on a
 stale pin. The only pinned entity is Thunderfury (``tests/e2e/pins.py``), plus the three opaque
-tool-state refs below that Wowhead only ever mints inside a browser.
+tool-state refs below that Wowhead only ever mints inside a browser, and the handful of
+classic-era ids that pin the entity types whose page lives under another route.
 """
 
 from __future__ import annotations
 
 import json
+import shlex
 from pathlib import Path
 from typing import Any
 
@@ -23,7 +25,6 @@ from tests.e2e.harness import (
     Result,
     dead_proxy_env,
     no_cache_env,
-    payload_or_legacy,
     run,
     run_raw,
     stream_records,
@@ -42,15 +43,43 @@ PROFILER_REF = "97060220/us/illidan/Roguecane"
 # `wowhead expansions` lists these; every one routes real Wowhead paths for a classic-era item.
 CLASSIC_EXPANSIONS = ("classic", "tbc", "wotlk", "cata", "mop-classic")
 
+# Entity types whose Wowhead page lives under a different `<type>=<id>` route than the type name:
+# a mount is an item page, a recipe is a spell page, a battle pet is an NPC page. The ids are
+# classic-era entries and as permanent as the pins in tests/e2e/pins.py.
+ROUTED_ENTITIES: tuple[tuple[str, int, str], ...] = (
+    ("faction", 529, "https://www.wowhead.com/faction=529"),
+    ("pet", 39, "https://www.wowhead.com/pet=39"),
+    ("recipe", 2549, "https://www.wowhead.com/spell=2549"),
+    ("mount", 460, "https://www.wowhead.com/item=84101"),
+    ("battle-pet", 39, "https://www.wowhead.com/npc=2671"),
+)
+# Wowhead's own `typeName` for the numeric suggestion `type` this CLI maps to each entity type.
+# A wrong id in that table mislabels the row and mints a follow-up command for the wrong page.
+SUGGESTION_TYPE_NAMES: dict[str, str] = {
+    "achievement": "achievement",
+    "currency": "currency",
+    "guide": "guide",
+    "item": "item",
+    "npc": "npc",
+    "object": "object",
+    "quest": "quest",
+    "spell": "spell",
+    "zone": "zone",
+}
+
 
 def assert_envelope_data_holds(result: Result, *keys: str) -> None:
-    """The envelope slot ``data`` carries the payload, and legacy top-level copies agree with it."""
+    """The envelope slot ``data`` carries the payload block each journey goes on to read."""
     assert result.data, f"data slot is empty\n{result.describe()}"
     for key in keys:
         assert key in result.data, f"data is missing {key!r}\n{result.describe()}"
-        assert payload_or_legacy(result, key) == result.data[key], (
-            f"legacy top-level {key!r} disagrees with data\n{result.describe()}"
-        )
+
+
+def run_follow_up(command: str) -> Result:
+    """Run a follow-up command exactly as the CLI printed it."""
+    parts = shlex.split(command)
+    assert parts[0] == BINARY, f"follow-up command does not start with the binary: {command!r}"
+    return run(BINARY, *parts[1:])
 
 
 def entity_rows(result: Result, entity_type: str) -> list[dict[str, Any]]:
@@ -79,7 +108,8 @@ def news_listing() -> Result:
 
 @pytest.fixture(scope="module")
 def blue_listing() -> Result:
-    return run(BINARY, "blue-tracker", "--limit", "20")
+    # The whole first page, so the --region journey can compare filtered against unfiltered exactly.
+    return run(BINARY, "blue-tracker", "--limit", "200")
 
 
 def test_doctor_reports_live_endpoints_and_the_isolated_cache(require, cache_root: Path) -> None:
@@ -158,6 +188,68 @@ def test_search_resolve_and_entity_agree_on_thunderfury(require, thunderfury_sea
     assert links["count"] == len(links["items"]) > 0, page.describe()
 
 
+def test_suggestion_type_ids_label_rows_the_way_wowhead_does(require) -> None:
+    """Every row's derived ``entity_type`` must agree with Wowhead's own ``typeName`` for its ``type`` id.
+
+    The numeric suggestion ids are the only thing that tells search and resolve what a row is; a
+    wrong id (zone rows once came back labelled achievement) mints a follow-up command for another
+    page entirely, with ok: true. The response carries both fields, so the check is free.
+    """
+    require("wowhead")
+    seen: dict[str, dict[str, Any]] = {}
+    for query in ("elwynn forest", "valorstones"):
+        found = run(BINARY, "search", query, "--limit", "10")
+        for row in found.data["results"]:
+            expected = SUGGESTION_TYPE_NAMES.get(str(row["type_name"]).lower())
+            if expected is None:
+                # A type this CLI does not map (Storyline, Transmog Set, ...): it must not guess one.
+                continue
+            assert row["entity_type"] == expected, (
+                f"type id {row['type_id']} labelled {row['entity_type']!r} for a {row['type_name']!r} row\n{found.describe()}"
+            )
+            seen.setdefault(expected, row)
+
+    required = {"zone", "achievement", "currency"}
+    assert required <= set(seen), f"searches surfaced no {sorted(required - set(seen))} row to check"
+    for entity_type in sorted(required):
+        row = seen[entity_type]
+        entity = run_follow_up(row["follow_up"]["recommended_command"])
+        assert entity.data["entity"]["type"] == entity_type, entity.describe()
+        assert entity.data["entity"]["id"] == row["id"], entity.describe()
+        assert entity.data["entity"]["name"] == row["name"], entity.describe()
+
+
+def test_entity_routes_a_mount_recipe_and_battle_pet_to_the_page_that_holds_them(require) -> None:
+    """Wowhead has no mount/recipe/battle-pet page: those ids must be routed to item/spell/npc pages."""
+    require("wowhead")
+    for entity_type, entity_id, page_prefix in ROUTED_ENTITIES:
+        entity = run(
+            BINARY, "entity", entity_type, str(entity_id),
+            "--no-include-comments", "--linked-entity-preview-limit", "0",
+        )
+        assert entity.data["entity"]["type"] == entity_type, entity.describe()
+        assert entity.data["entity"]["id"] == entity_id, entity.describe()
+        assert entity.data["entity"]["page_url"].startswith(page_prefix), entity.describe()
+        name = entity.data["entity"]["name"]
+        assert name and name in entity.data["tooltip"]["text"], entity.describe()
+
+
+def test_resolve_rejects_entity_types_the_suggestion_endpoint_cannot_emit(require) -> None:
+    """``resolve`` answers with a database entity, so a type no suggestion row carries is a usage error.
+
+    Filtering on one of these silently removed every row and reported "nothing matched"; the same
+    types are legitimate on ``entity``, which is what the message points at.
+    """
+    require("wowhead")
+    for entity_type in ("mount", "recipe", "battle-pet"):
+        rejected = run(
+            BINARY, "resolve", pins.ITEM_SEARCH_QUERY, "--entity-type", entity_type,
+            expect=EXIT_USAGE, error_code="invalid_argument",
+        )
+        assert entity_type in rejected.payload["error"]["message"], rejected.describe()
+        assert "item" in rejected.payload["error"]["message"], "the message must list the types that do work"
+
+
 def test_search_stream_emits_one_jsonl_record_per_result(require) -> None:
     require("wowhead")
     streamed = run(BINARY, "--stream", "search", pins.SPELL_SEARCH_QUERY, "--limit", "5", stream=True)
@@ -202,7 +294,10 @@ def test_comments_rank_stream_and_match_the_entity_preview(require) -> None:
     assert preview["needs_raw_fetch"] is True, "a sampled preview must say a raw fetch is still needed"
     preview_ids = {row["id"] for row in preview["top"]}
 
-    ranked = run(BINARY, "comments", "item", str(pins.ITEM_ID), "--limit", "5", "--sort", "rating", "--insights")
+    ranked = run(
+        BINARY, "comments", "item", str(pins.ITEM_ID),
+        "--limit", "5", "--sort", "rating", "--insights", "--insight-limit", "2",
+    )
     assert_envelope_data_holds(ranked, "comments", "counts", "citations")
     rows = ranked.data["comments"]
     assert ranked.data["counts"]["returned_comments"] == len(rows) > 0, ranked.describe()
@@ -220,10 +315,43 @@ def test_comments_rank_stream_and_match_the_entity_preview(require) -> None:
     assert insights["sample"]["filtered_count"] == counts["filtered_comments"], ranked.describe()
     assert 0 < insights["freshness"]["comment_count"] <= counts["filtered_comments"], ranked.describe()
     assert insights["freshness"]["newest_at"] >= insights["freshness"]["oldest_at"], ranked.describe()
+    assert 0 < len(insights["insights"]) <= 2, "--insight-limit did not cap the insight rows"
+    for insight in insights["insights"]:
+        assert insight["citation_url"].endswith(f"#comments:id={insight['comment_id']}"), ranked.describe()
 
     streamed = run(BINARY, "--stream", "comments", "item", str(pins.ITEM_ID), "--limit", "5", "--sort", "rating", stream=True)
     assert streamed.data["comments"] == [], "the JSONL header must empty the streamed collection"
     assert [row["id"] for row in stream_records(streamed)] == [row["id"] for row in rows], streamed.describe()
+
+
+def test_comment_filters_keep_exactly_the_rows_that_pass_them(require) -> None:
+    """``--min-rating``/``--min-replies`` must return the unfiltered sample's matching rows, no others.
+
+    Both filters run over the comment dataset embedded in the entity page, so the baseline call and
+    the two filtered calls read the same cached page: the comparison is exact, not statistical.
+    """
+    require("wowhead")
+    baseline = run(BINARY, "comments", "item", str(pins.ITEM_ID), "--limit", "500", "--sort", "rating")
+    counts = baseline.data["counts"]
+    assert counts["returned_comments"] == counts["filtered_comments"], (
+        f"the baseline must hold every comment; raise --limit\n{baseline.describe()}"
+    )
+    rows = baseline.data["comments"]
+    ratings = sorted({row["rating"] for row in rows})
+    assert len(ratings) > 1, f"every comment shares one rating, so --min-rating cannot be tested here\n{baseline.describe()}"
+    bound = ratings[len(ratings) // 2]
+
+    rated = run(BINARY, "comments", "item", str(pins.ITEM_ID), "--limit", "500", "--sort", "rating", "--min-rating", str(bound))
+    assert [row["id"] for row in rated.data["comments"]] == [row["id"] for row in rows if row["rating"] >= bound]
+    assert 0 < rated.data["counts"]["filtered_comments"] < counts["filtered_comments"], rated.describe()
+    # The envelope's query echo is where the comment filters are reported back.
+    assert rated.payload["query"]["min_rating"] == bound, rated.describe()
+
+    replied = run(BINARY, "comments", "item", str(pins.ITEM_ID), "--limit", "500", "--sort", "rating", "--min-replies", "1")
+    expected_replied = [row["id"] for row in rows if row["nreplies"] >= 1]
+    assert expected_replied, f"no comment on the pinned item has a reply\n{baseline.describe()}"
+    assert [row["id"] for row in replied.data["comments"]] == expected_replied
+    assert len(expected_replied) < len(rows), "--min-replies 1 kept every comment, so it filtered nothing"
 
 
 def test_compare_diffs_two_legendary_items_field_by_field(require) -> None:
@@ -249,6 +377,23 @@ def test_compare_diffs_two_legendary_items_field_by_field(require) -> None:
     assert name_field["values"][f"item:{pins.ITEM_ID}"] == pins.ITEM_NAME, compared.describe()
     links = compared.data["comparison"]["linked_entities"]
     assert links["shared_count_total"] >= links["shared_count_returned"] >= 0, compared.describe()
+
+    # The link caps must cut the same lists down, not return a different set of links.
+    capped = run(
+        BINARY, "compare", f"item:{pins.ITEM_ID}", f"item:{other_id}",
+        "--preset", "gear", "--comment-sample", "0", "--max-links-per-entity", "10",
+        "--max-shared-links", "1", "--max-unique-links", "1",
+    )
+    capped_links = capped.data["comparison"]["linked_entities"]
+    assert capped_links["shared_count_total"] == links["shared_count_total"], "a cap changed the totals it only reports"
+    assert capped_links["shared_items"] == links["shared_items"][:1], capped.describe()
+    assert capped_links["shared_count_returned"] == min(1, links["shared_count_total"]), capped.describe()
+    for ref, unique in capped_links["unique_by_entity"].items():
+        assert unique == links["unique_by_entity"][ref][:1], capped.describe()
+        assert capped_links["unique_count_total_by_entity"][ref] == links["unique_count_total_by_entity"][ref]
+    assert any(links["unique_count_total_by_entity"][ref] > 1 for ref in capped_links["unique_by_entity"]), (
+        f"neither item had more than one unique link, so --max-unique-links capped nothing\n{compared.describe()}"
+    )
 
 
 def test_linked_graph_walks_out_from_thunderfury(require) -> None:
@@ -296,6 +441,31 @@ def test_guide_listing_leads_to_one_guide_and_its_full_hydration(
     assert full.data["body"]["raw_markup"], "guide-full dropped the raw guide markup"
     assert full.data["linked_entities"]["count"] == len(full.data["linked_entities"]["items"]) > 0
     assert full.data["navigation"]["links"], full.describe()
+
+
+def test_guide_patch_filters_cut_the_listing_down_to_their_patch_window(require) -> None:
+    """``--patch-min``/``--patch-max`` must drop guides outside the window, from the whole category.
+
+    The class category holds thousands of guides, so the exact rows a ``--limit`` returns cannot be
+    enumerated; ``total_matches`` counts every guide that passed the filters before the limit, which
+    is what proves a filter removed rows rather than just reordering the page.
+    """
+    require("wowhead")
+    baseline = run(BINARY, "guides", "classes", "--limit", "200")
+    total = baseline.data["total_matches"]
+    patches = sorted({row["patch"] for row in baseline.data["results"] if isinstance(row["patch"], int)})
+    assert len(patches) > 1, f"every class guide shares one patch build\n{baseline.describe()}"
+
+    newer = run(BINARY, "guides", "classes", "--limit", "200", "--patch-min", str(patches[-1]))
+    assert newer.data["filters"]["patch_min"] == patches[-1], newer.describe()
+    assert all(row["patch"] >= patches[-1] for row in newer.data["results"]), newer.describe()
+    assert 0 < newer.data["total_matches"] < total, "--patch-min kept every guide"
+
+    older = run(BINARY, "guides", "classes", "--limit", "200", "--patch-max", str(patches[0]))
+    assert all(row["patch"] <= patches[0] for row in older.data["results"]), older.describe()
+    assert 0 < older.data["total_matches"] < total, "--patch-max kept every guide"
+    # The two windows overlap on nothing and together cover every guide that carries a patch build.
+    assert newer.data["total_matches"] + older.data["total_matches"] <= total, "the windows double-counted guides"
 
 
 def test_guide_export_writes_a_bundle_the_bundle_commands_can_query(
@@ -356,6 +526,9 @@ def test_news_listing_leads_to_one_news_post(require, news_listing: Result) -> N
     assert news_listing.data["scan"]["total_pages"] >= news_listing.data["scan"]["pages_scanned"] >= 1
     rows = news_listing.data["results"]
     assert 0 < len(rows) <= 5, news_listing.describe()
+    # A --limit that cut the scan short has to say so instead of reading as the whole listing.
+    assert news_listing.data["truncated"] is True, news_listing.describe()
+    assert news_listing.data["total_matches"] > news_listing.data["count"] == len(rows), news_listing.describe()
     # Wowhead scopes some posts under an expansion path, for example /forever/news/<slug>.
     assert all("/news/" in row["url"] and row["title"] for row in rows), news_listing.describe()
     assert all(row["url"].startswith("https://www.wowhead.com/") for row in rows), news_listing.describe()
@@ -372,14 +545,55 @@ def test_news_listing_leads_to_one_news_post(require, news_listing: Result) -> N
         assert len(bucket["items"]) <= 2, post.describe()
 
 
+def test_news_date_window_returns_the_posts_inside_it_and_says_what_it_could_not_read(require) -> None:
+    """``--date-from``/``--date-to`` must select on Wowhead's rendered timestamps, not silently drop everything.
+
+    Wowhead renders ``2026/09/18 at 6:05 PM`` rather than an ISO timestamp; when that parse broke,
+    every dated query answered ``count: 0`` with ``ok: true``. The window bounds are read off the
+    unfiltered scan, so this compares the same two pages against themselves.
+    """
+    require("wowhead")
+    baseline = run(BINARY, "news", "--pages", "2", "--limit", "200")
+    assert baseline.data["truncated"] is False, f"raise --limit; the baseline must hold every post\n{baseline.describe()}"
+    assert baseline.data["scan"]["unparsed_timestamps"] == 0, (
+        f"Wowhead's listing timestamps stopped parsing\n{baseline.describe()}"
+    )
+    rows = baseline.data["results"]
+    assert rows, baseline.describe()
+    days = sorted({row["posted_at"][:10] for row in rows})
+    assert len(days) > 1, f"the two-page news window covers a single day\n{baseline.describe()}"
+
+    recent = run(BINARY, "news", "--pages", "2", "--limit", "200", "--date-from", days[-1])
+    assert recent.data["filters"]["date_from"] == f"{days[-1]}T00:00:00+00:00", recent.describe()
+    assert {row["id"] for row in recent.data["results"]} == {row["id"] for row in rows if row["posted_at"][:10] >= days[-1]}
+    assert 0 < recent.data["count"] < len(rows), "--date-from returned the whole scan"
+    assert all(row["posted_at"][:10] == days[-1] for row in recent.data["results"]), recent.describe()
+
+    oldest = run(BINARY, "news", "--pages", "2", "--limit", "200", "--date-to", days[0])
+    assert {row["id"] for row in oldest.data["results"]} == {row["id"] for row in rows if row["posted_at"][:10] <= days[0]}
+    assert 0 < oldest.data["count"] < len(rows), "--date-to returned the whole scan"
+
+
 def test_blue_tracker_listing_leads_to_one_blue_topic(require, blue_listing: Result) -> None:
     require("wowhead")
     assert_envelope_data_holds(blue_listing, "results", "count", "blue_tracker_url")
     assert blue_listing.data["blue_tracker_url"] == "https://www.wowhead.com/blue-tracker"
     rows = blue_listing.data["results"]
     assert rows, blue_listing.describe()
+    assert blue_listing.data["truncated"] is False, f"raise --limit; the baseline must hold the page\n{blue_listing.describe()}"
     assert all(row["url"].startswith("https://www.wowhead.com/blue-tracker/") for row in rows)
-    assert set(blue_listing.data["facets"]["regions"]) <= {"us", "eu"}, blue_listing.describe()
+    regions = blue_listing.data["facets"]["regions"]
+    assert set(regions) <= {"us", "eu"}, blue_listing.describe()
+    # Every listed entry's URL carries its own region and id, so the row and its citation agree.
+    for row in rows:
+        assert f"/{row['region']}/" in row["url"], blue_listing.describe()
+        assert row["url"].endswith(f"-{row['id']}"), blue_listing.describe()
+
+    assert len(regions) > 1, f"the tracker page listed one region, so --region filters nothing\n{blue_listing.describe()}"
+    filtered = run(BINARY, "blue-tracker", "--limit", "200", "--region", regions[0])
+    assert filtered.data["filters"]["regions"] == [regions[0]], filtered.describe()
+    assert {row["id"] for row in filtered.data["results"]} == {row["id"] for row in rows if row["region"] == regions[0]}
+    assert 0 < filtered.data["count"] < len(rows), "--region returned the whole listing"
 
     topics = [row for row in rows if "/blue-tracker/topic/" in row["url"]]
     assert topics, f"no forum topic in the listing\n{blue_listing.describe()}"
@@ -464,10 +678,6 @@ def test_global_output_flags_reshape_the_same_entity_payload(require) -> None:
     assert len(compact.data["tooltip"]["text"]) <= 60, compact.describe()
     assert compact.data["tooltip"]["text"].endswith("..."), compact.describe()
 
-    debug = run(BINARY, "--profile", "debug", "entity", "item", str(pins.ITEM_ID), "--no-include-comments")
-    assert "\n  " in debug.stdout, "--profile debug should be pretty"
-    assert debug.data["entity"]["name"] == pins.ITEM_NAME, debug.describe()
-
     # --fields projects the envelope away on purpose, so it cannot go through the envelope contract.
     projected = run_raw(BINARY, "--fields", "data.entity.name", "--fields-strict", "entity", "item", str(pins.ITEM_ID))
     assert projected.exit_code == EXIT_OK, projected.describe()
@@ -495,20 +705,24 @@ def test_classic_expansion_profiles_route_the_same_item(require) -> None:
         assert routed.data["tooltip"]["text"], routed.describe()
 
 
-def test_inactive_beta_profile_fails_cleanly_instead_of_crashing(require) -> None:
+def test_a_classic_search_follow_up_keeps_the_agent_on_the_classic_dataset(require) -> None:
+    """The command search prints has to carry ``--expansion``, or the next call silently reads retail."""
     require("wowhead")
-    beta = run(
-        BINARY, "--expansion", "beta", "entity", "item", str(pins.ITEM_ID),
-        "--no-include-comments", expect=None,
-    )
-    if beta.ok:
-        assert beta.data["expansion"] == "beta", beta.describe()
-        assert beta.data["entity"]["page_url"].startswith("https://www.wowhead.com/beta/"), beta.describe()
-        return
-    # Wowhead retires the beta subtree between expansions; the CLI must report that, not crash.
-    assert beta.exit_code in {EXIT_NOT_FOUND, EXIT_NETWORK}, beta.describe()
-    assert beta.error_code in {"not_found", "http_error", "upstream_error"}, beta.describe()
-    assert beta.stdout == "", beta.describe()
+    found = run(BINARY, "--expansion", "classic", "search", pins.ITEM_SEARCH_QUERY, "--limit", "10")
+    assert found.data["expansion"] == "classic", found.describe()
+    entities = [row for row in found.data["results"] if (row.get("follow_up") or {}).get("recommended_surface") == "entity"]
+    assert entities, f"the classic search offered no entity to follow up on\n{found.describe()}"
+    row = entities[0]
+    assert row["url"].startswith("https://www.wowhead.com/classic/"), found.describe()
+
+    command = row["follow_up"]["recommended_command"]
+    assert command == f"{BINARY} --expansion classic entity {row['entity_type']} {row['id']}", found.describe()
+    entity = run_follow_up(command)
+    assert entity.data["expansion"] == "classic", entity.describe()
+    assert entity.data["entity"]["id"] == row["id"], entity.describe()
+    assert entity.data["entity"]["name"] == row["name"], entity.describe()
+    # Wowhead appends a name slug to some canonical URLs, so the route is the prefix.
+    assert entity.data["entity"]["page_url"].startswith(f"https://www.wowhead.com/classic/{row['entity_type']}={row['id']}")
 
 
 def test_cache_inspect_counts_entries_and_cache_clear_empties_a_namespace(require, cache_root: Path) -> None:

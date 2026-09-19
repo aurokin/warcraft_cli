@@ -3,14 +3,22 @@
 Every command in docs/reference/raiderio.md is exercised here. The Mythic+ season is discovered
 from the leaderboard payload and the raid slug from ``raiderio raids`` instead of pinned, so the
 suite cannot rot when Raider.IO rolls a season or tier; only the maintainer's guild/character
-identity comes from tests/e2e/pins.py.
+identity comes from tests/e2e/pins.py. The global output flags are not re-checked here: the
+cross-binary contract in tests/e2e/test_contract.py holds every binary to them.
+
+Two things this file goes out of its way to make falsifiable. The rankings citation URL is a
+layout this CLI invents, so it is fetched rather than compared against the f-string that built it.
+And every result-narrowing flag (``--realm``, ``--page``, ``--affixes``, the sampled bounds) is
+checked against the unnarrowed call, so a flag that quietly stopped being wired cannot stay green.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
+import httpx
 import pytest
 
 from tests.e2e import pins
@@ -20,9 +28,7 @@ from tests.e2e.harness import (
     EXIT_USAGE,
     Result,
     dead_proxy_env,
-    payload_or_legacy,
     run,
-    run_raw,
     run_retrying,
 )
 
@@ -33,6 +39,8 @@ CHARACTER = pins.CHARACTER_NAME
 
 # One live sampling scope for every analytics journey: small, US-only, one page.
 SCOPE = ("--region", "us", "--pages", "1", "--limit", "20")
+# Raider.IO serves 20 ranking rows per page, so --page is only observable at that granularity.
+RANKING_PAGE_SIZE = 20
 
 
 @pytest.fixture(autouse=True)
@@ -57,7 +65,7 @@ def current_raid() -> str:
     slugs = [row["slug"] for row in _rows(catalog, "rows")]
     for slug in slugs:
         result = run_retrying("raiderio", "leaderboard", "raids", "--raid", slug, "--difficulty", "mythic", "--region", "us", "--limit", "1")
-        if payload_or_legacy(result, "count") >= 1:
+        if result.data["count"] >= 1:
             return slug
     raise AssertionError(f"no catalogued raid has US mythic rankings yet: {slugs}\n{catalog.describe()}")
 
@@ -68,33 +76,46 @@ def _cache_entries(cache_root: Path) -> set[Path]:
 
 
 def _rows(result: Result, key: str) -> list[dict[str, Any]]:
-    rows = payload_or_legacy(result, key)
+    rows = result.data.get(key)
     assert isinstance(rows, list) and rows, f"{key} must be a non-empty list\n{result.describe()}"
     return rows
 
 
+def _run_keys(result: Result) -> list[tuple[Any, ...]]:
+    """One identity per sampled run, so a filtered call can be compared with the unfiltered one."""
+    return [(row["dungeon_slug"], row["completed_at"], row["score"]) for row in _rows(result, "runs")]
+
+
+def _assert_freshness(result: Result) -> dict[str, Any]:
+    """Every payload with provenance reports when its data came off the wire and whether it was replayed."""
+    freshness = result.data["freshness"]
+    assert isinstance(freshness["fetched_at"], str) and freshness["fetched_at"], result.describe()
+    assert isinstance(freshness["cache_hit"], bool), result.describe()
+    assert isinstance(freshness["cache_ttl_seconds"], int) and freshness["cache_ttl_seconds"] >= 1, result.describe()
+    assert result.payload["provenance"]["freshness"] == freshness, result.describe()
+    return freshness
+
+
 def _assert_sampled_provenance(result: Result) -> None:
-    """Sampled payloads must carry the freshness and citations the analytics rules require."""
-    freshness = payload_or_legacy(result, "freshness")
-    citations = payload_or_legacy(result, "citations")
-    assert isinstance(freshness, dict) and freshness.get("sampled_at"), result.describe()
-    assert isinstance(freshness.get("cache_ttl_seconds"), int) and freshness["cache_ttl_seconds"] >= 1, result.describe()
-    assert isinstance(citations, dict), result.describe()
-    urls = citations.get("leaderboard_urls")
-    assert isinstance(urls, list) and urls and all(url.startswith("https://raider.io/") for url in urls), result.describe()
+    """Sampled payloads add the assembly time on top of the fetch time, plus leaderboard citations."""
+    freshness = _assert_freshness(result)
+    assert freshness["sampled_at"] >= freshness["fetched_at"], "a sample cannot predate the page it read"
+    citations = result.data["citations"]
+    urls = citations["leaderboard_urls"]
+    assert urls and all(url.startswith("https://raider.io/") for url in urls), result.describe()
     assert result.payload["provenance"]["citations"] == citations, result.describe()
 
 
 def test_doctor_reports_ready_capabilities_and_the_isolated_cache(cache_root: Path) -> None:
     result = run("raiderio", "doctor")
 
-    assert payload_or_legacy(result, "status") == "ready"
-    assert payload_or_legacy(result, "installed") is True
-    assert payload_or_legacy(result, "auth")["required"] is False
-    capabilities = payload_or_legacy(result, "capabilities")
+    assert result.data["status"] == "ready"
+    assert result.data["installed"] is True
+    assert result.data["auth"]["required"] is False
+    capabilities = result.data["capabilities"]
     assert {"search", "resolve", "character", "guild", "mythic_plus_leaderboard", "raid_leaderboard", "raid_catalog"} <= set(capabilities)
     assert set(capabilities.values()) == {"ready"}, result.describe()
-    cache = payload_or_legacy(result, "cache")
+    cache = result.data["cache"]
     assert cache["enabled"] is True
     assert Path(cache["cache_dir"]) == cache_root / "warcraft" / "raiderio" / "http", "doctor must report the session cache root"
 
@@ -121,31 +142,37 @@ def test_search_kind_filter_narrows_to_characters() -> None:
     assert rows[0]["name"] == CHARACTER
 
 
-def test_resolve_returns_one_follow_up_command_for_each_pinned_identity() -> None:
+def test_resolve_hands_over_a_next_command_that_returns_the_same_entity() -> None:
     for kind, name, surface in (("guild", GUILD, "guild"), ("character", CHARACTER, "character")):
         result = run("raiderio", "resolve", f"{kind} {REGION} {REALM} {name}", "--limit", "5")
 
-        assert payload_or_legacy(result, "resolved") is True, result.describe()
-        assert payload_or_legacy(result, "confidence") == "high"
-        assert payload_or_legacy(result, "next_command") == f"raiderio {surface} {REGION} {REALM} {name}"
-        match = payload_or_legacy(result, "match")
+        assert result.data["resolved"] is True, result.describe()
+        assert result.data["confidence"] == "high"
+        match = result.data["match"]
         assert match["kind"] == kind
         assert "structured_probe" in match["ranking"]["match_reasons"]
         assert "realm_match" in match["ranking"]["match_reasons"], "the pinned realm slug must be credited"
+
+        # An agent runs next_command verbatim, so it has to resolve to the entity that was matched.
+        next_command = result.data["next_command"]
+        assert next_command == f"raiderio {surface} {REGION} {REALM} {name}"
+        binary, *args = next_command.split()
+        assert binary == "raiderio"
+        assert run("raiderio", *args).data[surface]["name"] == name
 
 
 def test_resolve_stays_unresolved_for_a_nonsense_query() -> None:
     result = run("raiderio", "resolve", "zzqqxx nonsense query 8471")
 
-    assert payload_or_legacy(result, "resolved") is False
-    assert payload_or_legacy(result, "next_command") is None
-    assert payload_or_legacy(result, "fallback_search_command").startswith("raiderio search ")
+    assert result.data["resolved"] is False
+    assert result.data["next_command"] is None
+    assert result.data["fallback_search_command"].startswith("raiderio search ")
 
 
 def test_character_profile_carries_identity_score_and_normalized_class_spec() -> None:
     result = run("raiderio", "character", REGION, REALM, CHARACTER)
 
-    character = payload_or_legacy(result, "character")
+    character = result.data["character"]
     assert character["name"] == CHARACTER
     assert character["region"] == REGION
     assert character["realm"].lower().replace("'", "") == REALM
@@ -154,7 +181,7 @@ def test_character_profile_carries_identity_score_and_normalized_class_spec() ->
     assert identity["confidence"] == "high"
     assert identity["identity"]["actor_class"] == character["class_name"].lower()
 
-    mythic_plus = payload_or_legacy(result, "mythic_plus")
+    mythic_plus = result.data["mythic_plus"]
     assert isinstance(mythic_plus["current_score"], (int, float))
     assert isinstance(mythic_plus["ranks"]["overall"]["world"], int)
     assert result.payload["provenance"]["citations"]["profile"].startswith("https://raider.io/characters/")
@@ -163,19 +190,22 @@ def test_character_profile_carries_identity_score_and_normalized_class_spec() ->
 def test_guild_profile_echoes_the_guild_and_numeric_raid_rankings(cache_root: Path) -> None:
     result = run("raiderio", "guild", REGION, REALM, GUILD)
 
-    guild = payload_or_legacy(result, "guild")
+    guild = result.data["guild"]
     assert guild["name"] == GUILD
     assert guild["region"] == REGION
     assert guild["realm"].lower().replace("'", "") == REALM
     assert isinstance(guild["member_count"], int) and guild["member_count"] > 0
 
-    raiding = payload_or_legacy(result, "raiding")
+    raiding = result.data["raiding"]
     assert raiding["raid_count"] >= 1
     progression = raiding["progression"]
     assert progression and all(row["summary"] for row in progression)
     assert all(isinstance(row["total_bosses"], int) for row in progression)
     rankings = raiding["rankings"]
     assert rankings and all(isinstance(row["mythic"]["world"], int) for row in rankings)
+    # The rankings are keyed by the same raid slugs the progression rows use, so the two blocks can
+    # be joined; a ranking for a raid the guild has no progression on would mean they cannot.
+    assert {row["raid_slug"] for row in rankings} <= {row["raid_slug"] for row in progression}
     assert result.payload["provenance"]["citations"]["profile"].startswith("https://raider.io/guilds/")
     assert any("guild_profile" in str(path) for path in _cache_entries(cache_root)), "the session cache root must hold the fetched profile"
 
@@ -203,13 +233,15 @@ def test_mythic_plus_runs_echoes_the_resolved_season_and_full_rows(current_seaso
     assert query["resolved_season"] == current_season, "the page must report the season it actually read"
     assert query["region"] == "us"
     runs = _rows(result, "runs")
-    assert payload_or_legacy(result, "count") == len(runs)
+    assert result.data["count"] == len(runs)
     top = runs[0]
     assert top["rank"] == 1
     assert isinstance(top["score"], (int, float)) and top["score"] > 0
     assert isinstance(top["mythic_level"], int) and top["mythic_level"] > 0
     assert top["dungeon"] and top["affixes"]
     assert len(top["roster"]) == 5
+    _assert_freshness(result)
+    assert result.data["citations"]["leaderboard_urls"], result.describe()
 
 
 def test_sample_mythic_plus_runs_reports_sampling_filtering_and_provenance(current_season: str) -> None:
@@ -220,7 +252,7 @@ def test_sample_mythic_plus_runs_reports_sampling_filtering_and_provenance(curre
     assert query["filters"]["level_min"] == 2
     assert query["filters"]["contains_role"] == ["healer"]
 
-    sample = payload_or_legacy(result, "sample")
+    sample = result.data["sample"]
     assert sample["season"] == current_season
     assert sample["pages_requested"] == 1 and sample["pages_fetched"] >= 1
     assert sample["run_count"] >= 1
@@ -233,10 +265,49 @@ def test_sample_mythic_plus_runs_reports_sampling_filtering_and_provenance(curre
     _assert_sampled_provenance(result)
 
 
+def test_the_sampled_bounds_return_strict_subsets_that_add_back_up() -> None:
+    """``--score-min``/``--score-max``/``--level-max`` narrow the same sample, they do not re-sample."""
+    unfiltered = run("raiderio", "sample", "mythic-plus-runs", *SCOPE)
+    runs = _rows(unfiltered, "runs")
+    everything = set(_run_keys(unfiltered))
+    scores = sorted(row["score"] for row in runs)
+    midpoint = scores[len(scores) // 2]
+
+    above = run("raiderio", "sample", "mythic-plus-runs", *SCOPE, "--score-min", str(midpoint))
+    below = run("raiderio", "sample", "mythic-plus-runs", *SCOPE, "--score-max", str(midpoint))
+    above_keys, below_keys = set(_run_keys(above)), set(_run_keys(below))
+
+    assert above_keys < everything, "--score-min must drop the runs below the bound"
+    assert below_keys < everything, "--score-max must drop the runs above the bound"
+    assert all(row["score"] >= midpoint for row in _rows(above, "runs"))
+    assert all(row["score"] <= midpoint for row in _rows(below, "runs"))
+    # Inclusive bounds around one observed score: every run is in one half or the other.
+    assert above_keys | below_keys == everything, "the two halves must cover the whole sample"
+    assert above.data["sample"]["filtering"]["source_run_count"] == len(everything)
+
+    lowest_level = min(row["mythic_level"] for row in runs)
+    capped = run("raiderio", "sample", "mythic-plus-runs", *SCOPE, "--level-max", str(lowest_level))
+    assert set(_run_keys(capped)) <= everything
+    assert all(row["mythic_level"] == lowest_level for row in _rows(capped, "runs"))
+
+
+def test_the_affixes_scope_changes_both_the_rows_and_the_citation() -> None:
+    """``--affixes`` picks a different Raider.IO leaderboard, so it must show up in every row."""
+    unfiltered = run("raiderio", "sample", "mythic-plus-runs", *SCOPE)
+    affix = sorted({affix for row in _rows(unfiltered, "runs") for affix in row["affixes"]})[0]
+
+    result = run("raiderio", "sample", "mythic-plus-runs", *SCOPE, "--affixes", affix)
+
+    assert result.payload["query"]["affixes"] == affix
+    assert all(affix in row["affixes"] for row in _rows(result, "runs")), result.describe()
+    urls = result.data["citations"]["leaderboard_urls"]
+    assert all(url.endswith(f"/{affix}") for url in urls), urls
+
+
 def test_sample_mythic_plus_players_dedupes_roster_entries_into_snapshots() -> None:
     result = run("raiderio", "sample", "mythic-plus-players", *SCOPE, "--player-limit", "25")
 
-    sample = payload_or_legacy(result, "sample")
+    sample = result.data["sample"]
     assert sample["run_count"] >= 1
     player_sampling = sample["player_sampling"]
     assert player_sampling["source_player_count"] >= player_sampling["returned_player_count"]
@@ -256,8 +327,8 @@ def test_sample_mythic_plus_players_dedupes_roster_entries_into_snapshots() -> N
 def test_distribution_mythic_plus_runs_covers_every_documented_metric(metric: str) -> None:
     result = run("raiderio", "distribution", "mythic-plus-runs", "--metric", metric, *SCOPE)
 
-    assert payload_or_legacy(result, "metric") == metric
-    distribution = payload_or_legacy(result, "distribution")
+    assert result.data["metric"] == metric
+    distribution = result.data["distribution"]
     assert distribution["unit"]
     rows = distribution["rows"]
     assert rows and all(isinstance(row["count"], int) and row["count"] >= 1 for row in rows)
@@ -269,8 +340,8 @@ def test_distribution_mythic_plus_runs_covers_every_documented_metric(metric: st
 def test_distribution_mythic_plus_players_covers_every_documented_metric(metric: str) -> None:
     result = run("raiderio", "distribution", "mythic-plus-players", "--metric", metric, *SCOPE, "--player-limit", "25")
 
-    assert payload_or_legacy(result, "metric") == metric
-    distribution = payload_or_legacy(result, "distribution")
+    assert result.data["metric"] == metric
+    distribution = result.data["distribution"]
     assert distribution["unit"]
     assert distribution["rows"], result.describe()
     _assert_sampled_provenance(result)
@@ -284,9 +355,9 @@ def test_threshold_mythic_plus_runs_estimates_around_a_target(metric: str) -> No
 
     result = run("raiderio", "threshold", "mythic-plus-runs", "--metric", metric, "--value", str(target), *SCOPE, "--nearest", "5")
 
-    assert payload_or_legacy(result, "metric") == metric
-    assert payload_or_legacy(result, "target") == pytest.approx(float(target))
-    threshold = payload_or_legacy(result, "threshold")
+    assert result.data["metric"] == metric
+    assert result.data["target"] == pytest.approx(float(target))
+    threshold = result.data["threshold"]
     assert 1 <= threshold["nearest_match_count"] <= 5
     assert len(threshold["nearest_matches"]) == threshold["nearest_match_count"]
     assert threshold["nearest_matches"][0]["distance"] == pytest.approx(0.0), "an observed value must have a zero-distance neighbour"
@@ -300,16 +371,18 @@ def test_leaderboard_mythic_plus_reports_returned_versus_requested(current_seaso
     query = result.payload["query"]
     assert query["resolved_season"] == current_season
     assert query["limit"] == 25
-    sample = payload_or_legacy(result, "sample")
+    sample = result.data["sample"]
     assert sample["requested_limit"] == 25
-    assert sample["returned_run_count"] == payload_or_legacy(result, "count")
+    assert sample["returned_run_count"] == result.data["count"]
     assert sample["pages_fetched"] >= 2, "25 rows needs more than one 20-row ranking page"
     assert sample["limit_reached"] is True
 
     runs = _rows(result, "runs")
     assert len(runs) == 25
     assert [row["rank"] for row in runs] == sorted(row["rank"] for row in runs)
-    assert all(current_season in url for url in payload_or_legacy(result, "citations")["leaderboard_urls"])
+    # The rows themselves have to come from the season that was asked for, not just the citation.
+    assert {row["season"] for row in runs} == {current_season}, result.describe()
+    assert all(current_season in url for url in result.data["citations"]["leaderboard_urls"])
     _assert_sampled_provenance(result)
 
 
@@ -319,73 +392,89 @@ def test_raids_catalog_lists_slugs_with_encounters() -> None:
     assert result.payload["kind"] == "raid_catalog"
     assert result.payload["query"] == {"expansion_id": 11}
     rows = _rows(result, "rows")
-    assert payload_or_legacy(result, "count") == len(rows)
+    assert result.data["count"] == len(rows)
     for row in rows:
         assert row["slug"] and row["name"], result.describe()
         assert row["encounters"] and all(encounter["slug"] for encounter in row["encounters"]), result.describe()
+    _assert_freshness(result)
+    assert result.data["citations"]["static_data_url"].endswith("expansion_id=11")
 
 
 def test_raid_leaderboard_returns_ranked_guilds_with_profile_urls(current_raid: str) -> None:
     result = run("raiderio", "leaderboard", "raids", "--raid", current_raid, "--difficulty", "mythic", "--region", "us", "--limit", "5")
 
     assert result.payload["kind"] == "raid_leaderboard"
+    assert result.payload["command"] == "leaderboard raids", "nested commands must label themselves fully"
     query = result.payload["query"]
     assert query == {"raid": current_raid, "difficulty": "mythic", "region": "us", "realm": None, "page": 0, "limit": 5}
-    sample = payload_or_legacy(result, "sample")
+    sample = result.data["sample"]
     assert sample["requested_limit"] == 5
-    assert sample["returned_row_count"] == payload_or_legacy(result, "count") == 5
+    assert sample["returned_row_count"] == result.data["count"] == 5
     assert sample["pages_fetched"] == 1 and sample["limit_reached"] is True
 
     rows = _rows(result, "rows")
     ranks = [row["rank"] for row in rows]
-    assert ranks == sorted(ranks) and len(set(ranks)) == len(ranks), "ranks must strictly increase"
-    assert ranks[0] == 1
+    assert ranks == list(range(1, len(rows) + 1)), "the first page of a region scope is ranks 1..n"
     for row in rows:
         assert isinstance(row["region_rank"], int)
-        assert "realm_rank" in row
         guild = row["guild"]
         assert guild["name"] and guild["realm"] and guild["region"] == "us"
-        assert guild["profile_url"].startswith("https://raider.io/guilds/us/"), result.describe()
+        assert guild["profile_url"] == f"https://raider.io/guilds/us/{guild['realm']}/{quote(guild['name'])}"
         assert row["encounters_defeated_count"] == len(row["encounters_defeated"]) >= 1
         assert row["encounters_pulled_count"] == len(row["encounters_pulled"])
-    assert payload_or_legacy(result, "citations")["leaderboard_urls"] == [f"https://raider.io/{current_raid}/rankings/us/mythic"]
     _assert_sampled_provenance(result)
 
 
+def test_the_raid_rankings_citation_resolves_to_a_real_page(current_raid: str) -> None:
+    """Fetch the citation instead of re-deriving it: the URL layout is this CLI's own invention.
+
+    Every other check on this URL rebuilds the same f-string, so a wrong layout would ship inside an
+    ``ok: true`` envelope that tells an agent to follow it. raider.io answers an unknown raid slug or
+    difficulty with HTTP 400 and a wrong path shape with 404, which is what makes a 200 here
+    evidence. The page is a client-rendered shell, so its body carries no raid name to match on, and
+    the ``?realm=`` query form is not validated server-side -- neither is checked below.
+    """
+    result = run("raiderio", "leaderboard", "raids", "--raid", current_raid, "--difficulty", "mythic", "--region", "us", "--limit", "1")
+    citation = result.data["citations"]["leaderboard_urls"][0]
+
+    with httpx.Client(timeout=30.0, follow_redirects=True) as client:
+        served = client.get(citation)
+        control = client.get(citation.replace(f"/{current_raid}/", "/no-such-raid-zzz/"))
+    assert served.status_code == 200, f"{citation} -> {served.status_code}"
+    assert control.status_code != 200, "an unknown raid must not answer 200, or the check above proves nothing"
+
+
+def test_raid_leaderboard_pages_are_contiguous_and_never_overlap(current_raid: str) -> None:
+    """``--page`` walks the ranking; two adjacent pages must join up without repeating a guild."""
+    scope = ("leaderboard", "raids", "--raid", current_raid, "--difficulty", "mythic", "--region", "us", "--limit", str(RANKING_PAGE_SIZE))
+    first = run("raiderio", *scope, "--page", "0")
+    second = run("raiderio", *scope, "--page", "1")
+
+    first_rows, second_rows = _rows(first, "rows"), _rows(second, "rows")
+    assert [row["rank"] for row in first_rows] == list(range(1, RANKING_PAGE_SIZE + 1))
+    assert [row["rank"] for row in second_rows] == list(range(RANKING_PAGE_SIZE + 1, 2 * RANKING_PAGE_SIZE + 1))
+    first_guilds = {row["guild"]["profile_url"] for row in first_rows}
+    second_guilds = {row["guild"]["profile_url"] for row in second_rows}
+    assert not (first_guilds & second_guilds), "a guild must not appear on two pages"
+    assert second.payload["query"]["page"] == 1
+
+
 def test_raid_leaderboard_realm_narrows_rows_to_that_realm(current_raid: str) -> None:
-    result = run("raiderio", "leaderboard", "raids", "--raid", current_raid, "--difficulty", "mythic", "--region", REGION, "--realm", REALM, "--limit", "5")
+    scope = ("leaderboard", "raids", "--raid", current_raid, "--difficulty", "mythic", "--region", REGION)
+    region_wide = run("raiderio", *scope, "--limit", str(RANKING_PAGE_SIZE))
+    result = run("raiderio", *scope, "--realm", REALM, "--limit", "5")
 
     assert result.payload["query"]["realm"] == REALM
     rows = _rows(result, "rows")
     assert all(row["guild"]["realm"] == REALM for row in rows), result.describe()
     assert [row["rank"] for row in rows] == list(range(1, len(rows) + 1)), "realm-scoped rank must restart at 1"
     assert all(row["region_rank"] >= row["rank"] for row in rows), "a realm rank can never beat the region rank"
-    assert payload_or_legacy(result, "citations")["leaderboard_urls"][0].endswith(f"?realm={REALM}")
-
-
-def test_global_output_flags_shape_the_payload() -> None:
-    fields = run_raw("raiderio", "--fields", "data.results", "--fields-strict", "search", f"guild {REGION} {REALM} {GUILD}")
-    assert fields.exit_code == 0, fields.describe()
-    assert set(fields.payload) == {"data"}, fields.describe()
-    assert fields.payload["data"]["results"][0]["name"] == GUILD
-
-    full = run("raiderio", "character", REGION, REALM, CHARACTER)
-    compact = run("raiderio", "--compact", "--compact-max-chars", "40", "character", REGION, REALM, CHARACTER)
-    thumbnail = compact.data["character"]["thumbnail_url"]
-    assert len(full.data["character"]["thumbnail_url"]) > 40, "the uncompacted field must be long enough to truncate"
-    assert thumbnail.endswith("...") and len(thumbnail) == 40, compact.describe()
-
-    human = run("raiderio", "--profile", "human", "doctor")
-    assert human.stdout.startswith("{\n"), "the human profile must pretty-print"
-
-    debug = run("raiderio", "--profile", "debug", "doctor")
-    assert debug.stdout.startswith("{\n")
-    assert payload_or_legacy(debug, "status") == "ready"
-
-
-def test_fields_strict_rejects_a_missing_path() -> None:
-    result = run("raiderio", "--fields", "data.no_such_key", "--fields-strict", "doctor", expect=EXIT_USAGE, error_code="missing_fields")
-    assert result.payload["error"]["details"]["missing_fields"] == ["data.no_such_key"]
+    # The realm scope is a slice of the region scope, so a realm guild inside the region's top page
+    # has to carry the same region_rank in both answers.
+    region_ranks = {row["guild"]["profile_url"]: row["rank"] for row in _rows(region_wide, "rows")}
+    shared = [row for row in rows if row["guild"]["profile_url"] in region_ranks]
+    assert all(region_ranks[row["guild"]["profile_url"]] == row["region_rank"] for row in shared), result.describe()
+    assert result.data["citations"]["leaderboard_urls"][0].endswith(f"?realm={REALM}")
 
 
 def test_unknown_guild_and_character_are_not_found() -> None:
@@ -401,19 +490,22 @@ def test_malformed_request_is_a_usage_error() -> None:
 
 
 @pytest.mark.parametrize(
-    "args",
+    ("args", "command"),
     [
-        ("search", "liquid", "--kind", "bogus"),
-        ("resolve", "liquid", "--kind", "bogus"),
-        ("distribution", "mythic-plus-runs", "--metric", "bogus"),
-        ("distribution", "mythic-plus-players", "--metric", "bogus"),
-        ("threshold", "mythic-plus-runs", "--metric", "bogus", "--value", "100"),
-        ("leaderboard", "raids", "--raid", "sporefall", "--difficulty", "bogus"),
-        ("leaderboard", "raids", "--raid", "sporefall", "--realm", "malganis"),
+        (("search", "liquid", "--kind", "bogus"), "search"),
+        (("resolve", "liquid", "--kind", "bogus"), "resolve"),
+        (("distribution", "mythic-plus-runs", "--metric", "bogus"), "distribution mythic-plus-runs"),
+        (("distribution", "mythic-plus-players", "--metric", "bogus"), "distribution mythic-plus-players"),
+        (("threshold", "mythic-plus-runs", "--metric", "bogus", "--value", "100"), "threshold mythic-plus-runs"),
+        (("leaderboard", "raids", "--raid", "sporefall", "--difficulty", "bogus"), "leaderboard raids"),
+        (("leaderboard", "raids", "--raid", "sporefall", "--realm", "malganis"), "leaderboard raids"),
     ],
 )
-def test_invalid_kind_or_metric_is_a_usage_error(args: tuple[str, ...]) -> None:
-    run("raiderio", *args, expect=EXIT_USAGE, error_code="invalid_query")
+def test_invalid_kind_or_metric_is_a_usage_error(args: tuple[str, ...], command: str) -> None:
+    result = run("raiderio", *args, expect=EXIT_USAGE, error_code="invalid_query")
+    # A failure labels itself with the full sub-path, the same value the success envelope carries,
+    # so no two commands answer to the same `command`.
+    assert result.payload["command"] == command, result.describe()
 
 
 def test_network_failure_is_an_exit_5_envelope(cache_root: Path) -> None:

@@ -18,6 +18,8 @@ authoritative, and use Lorrgs for its prebuilt aggregation.
 - report overview: `warcraft lorrgs report-overview <warcraftlogs-report-url-or-code>`
 - player phase cooldown packet:
   `warcraft cooldown-packet <warcraftlogs-report-url> --actor-id <source-id> --phase 2`
+  (Lorrgs only serves reports it has already cached; for any other report add
+  `--spec-slug <lorrgs-spec-slug>`)
 - current season raids: `warcraft lorrgs current-season`
 - spec slugs: `warcraft lorrgs specs`
 - boss slugs: `warcraft lorrgs bosses`
@@ -32,6 +34,12 @@ authoritative, and use Lorrgs for its prebuilt aggregation.
 - use `warcraft cooldown-packet` when the question is about a specific player's cooldowns in a
   report phase; Lorrgs supplies phase markers, spell metadata, boss casts, and top-parse samples,
   while Warcraft Logs supplies exact player cast events
+- `cooldown-packet` needs Lorrgs to have cached the report, which most guild and private reports
+  are not. Pass `--actor-id` and `--spec-slug` and it still returns the Warcraft Logs half with
+  `data.lorrgs.status: "unavailable"`, `data.phase.status: "unavailable"`, a null
+  `data.phase.selected`, and the player's casts intact. `data.lorrgs.message` names the reason and
+  only says "no cached copy" for a `not_found`; a timeout or transport failure says so instead.
+  Without both flags there is nothing left to build, so the command fails and names them
 - use `resolve` when you have a Lorrgs URL, Warcraft Logs report URL, report code, or likely
   spec/boss query and want the next command chosen conservatively
 - when `resolve` answers `resolved: false` with `confidence: "none"`, read `results`: either two

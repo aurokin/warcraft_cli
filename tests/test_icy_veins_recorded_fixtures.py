@@ -179,8 +179,16 @@ def test_astro_talents_fixture_pins_the_full_heading_outline() -> None:
         ("PvP Talents (War Mode)", 2),
         ("Changelog", 2),
     ]
+    # Every heading that has body text under it is its own section: the five build sub-sections are
+    # nested two wrappers deep, so a direct-children scan of the article would merge them into the
+    # section above. "Changelog" is the only heading with no prose of its own.
     assert [(row["title"], row["level"]) for row in payload["article"]["sections"]] == [
         ("Best Midnight Talents for Mistweaver Monk", 2),
+        ("Rising Mist Build", 3),
+        ("DPS Mythic+ Build", 3),
+        ("Delve Soloing", 3),
+        ("Master of Harmony Raid Build", 3),
+        ("Master of Harmony Mythic+ Build", 3),
         ("Omnium Folio", 2),
         ("Apex Talent: Spiritfont", 2),
         ("Hero Talents", 2),

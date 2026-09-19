@@ -55,6 +55,7 @@ from simc_cli.build_input import (
     identify_build,
     infer_actor_and_spec_from_apl,
     load_build_spec,
+    supported_specs,
     tree_entries_string,
 )
 from simc_cli.compare import (
@@ -427,6 +428,28 @@ def _load_identified_build_spec_or_fail(
         if build_packet:
             fail(ctx, "invalid_build_packet", str(exc))
         fail(ctx, "invalid_query", str(exc))
+
+
+def _fail_unidentified_build(
+    ctx: typer.Context, paths: RepoPaths, *, purpose: str, build_spec: Any, identity: Any
+) -> NoReturn:
+    """Ask for an explicit class and spec, naming the specs identification actually tried.
+
+    A build is identified by decoding it once per candidate spec, and the candidates come from the
+    APL files in the checkout. SimC ships no APL for a healer spec, so a perfectly valid healer build
+    is never matched; without the probed list the caller cannot tell that apart from a bad build.
+    """
+    fail(
+        ctx,
+        "invalid_query",
+        f"Could not determine actor class and spec for {purpose}. Identification only probes the specs "
+        "the checkout ships an APL for (no healer spec has one), so pass --actor-class and --spec.",
+        details={
+            "build_spec": _serialize_build_spec(build_spec),
+            "identity": _serialize_build_identity(identity),
+            "probed_specs": [{"actor_class": actor_class, "spec": spec} for actor_class, spec in supported_specs(paths)],
+        },
+    )
 
 
 def _prune_context_payload(resolution: Any, context: PruneContext) -> dict[str, Any]:
@@ -830,12 +853,7 @@ def _decode_build(ctx: typer.Context, *, apl_path: str | None, option_values: di
     paths = _repo_paths(ctx)
     build_spec, identity = _identified_build_or_fail(ctx, paths, apl_path=apl_path, option_values=option_values)
     if not build_spec.actor_class or not build_spec.spec:
-        fail(
-            ctx,
-            "invalid_query",
-            "Could not determine actor class and spec for build decoding.",
-            details={"build_spec": _serialize_build_spec(build_spec), "identity": _serialize_build_identity(identity)},
-        )
+        _fail_unidentified_build(ctx, paths, purpose="build decoding", build_spec=build_spec, identity=identity)
     resolution = _decode_or_fail(ctx, paths, build_spec, identity=identity)
     _emit(
         ctx,
@@ -1097,12 +1115,7 @@ def _build_harness(
     paths = _repo_paths(ctx)
     build_spec, identity = _identified_build_or_fail(ctx, paths, apl_path=apl_path, option_values=option_values)
     if not build_spec.actor_class or not build_spec.spec:
-        fail(
-            ctx,
-            "invalid_query",
-            "Could not determine actor class and spec for harness generation.",
-            details={"build_spec": _serialize_build_spec(build_spec), "identity": _serialize_build_identity(identity)},
-        )
+        _fail_unidentified_build(ctx, paths, purpose="harness generation", build_spec=build_spec, identity=identity)
     try:
         target = write_harness(build_spec, lines=line, out_path=out)
     except ValueError as exc:
@@ -1951,12 +1964,7 @@ def _describe_build(
     paths = _repo_paths(ctx)
     build_spec, identity = _identified_build_or_fail(ctx, paths, apl_path=apl_path, option_values=option_values)
     if not build_spec.actor_class or not build_spec.spec:
-        fail(
-            ctx,
-            "invalid_query",
-            "Could not determine actor class and spec for build description.",
-            details={"build_spec": _serialize_build_spec(build_spec), "identity": _serialize_build_identity(identity)},
-        )
+        _fail_unidentified_build(ctx, paths, purpose="build description", build_spec=build_spec, identity=identity)
     resolved = _resolve_path(paths, apl_path) if apl_path else _infer_default_apl_path(
         paths, actor_class=build_spec.actor_class, spec=build_spec.spec)
     if not resolved or not resolved.exists():
@@ -2984,6 +2992,18 @@ def compare_builds_command(
     })
 
 
+@dataclass(frozen=True, slots=True)
+class _TreeSwaps:
+    """The SimC option string each tree contributes to a swap, plus the build a swapped tree came from.
+
+    ``sources`` is what a swapped tree has to be verified against: comparing it to the base can only
+    ever show the swap itself, which hides whatever the re-serialization lost on the way.
+    """
+
+    entries_by_tree: dict[str, str | None]
+    sources: dict[str, BuildResolution]
+
+
 def _resolve_modify_tree_entries(
     ctx: typer.Context,
     paths: RepoPaths,
@@ -2992,10 +3012,9 @@ def _resolve_modify_tree_entries(
     base_resolution: BuildResolution,
     swaps: list[tuple[str, str | None]],
     modifications: list[str],
-) -> tuple[str | None, str | None, str | None]:
-    class_entries: str | None = None
-    spec_entries: str | None = None
-    hero_entries: str | None = None
+) -> _TreeSwaps:
+    entries: dict[str, str | None] = dict.fromkeys(ACTIVE_TREES)
+    sources: dict[str, BuildResolution] = {}
     for tree_name, swap_source in swaps:
         if not swap_source:
             continue
@@ -3014,25 +3033,17 @@ def _resolve_modify_tree_entries(
             swap_resolution = decode_build(paths, swap_spec)
         except (FileNotFoundError, RuntimeError, ValueError) as exc:
             _fail_build_error(ctx, exc, code="decode_failed", prefix=f"Failed to decode {tree_name} tree source: ")
-        entries_str = tree_entries_string(swap_resolution.talents_by_tree.get(tree_name, []))
-        if tree_name == "class":
-            class_entries = entries_str
-        elif tree_name == "spec":
-            spec_entries = entries_str
-        else:
-            hero_entries = entries_str
+        entries[tree_name] = tree_entries_string(swap_resolution.talents_by_tree.get(tree_name, []))
+        sources[tree_name] = swap_resolution
         modifications.append(f"swap_{tree_name}_tree")
 
     # Build the per-tree entry strings for trees that are NOT being swapped,
     # pulling from the base build.
-    if any([class_entries, spec_entries, hero_entries]):
-        if class_entries is None:
-            class_entries = tree_entries_string(base_resolution.talents_by_tree.get("class", []))
-        if spec_entries is None:
-            spec_entries = tree_entries_string(base_resolution.talents_by_tree.get("spec", []))
-        if hero_entries is None:
-            hero_entries = tree_entries_string(base_resolution.talents_by_tree.get("hero", []))
-    return class_entries, spec_entries, hero_entries
+    if sources:
+        for tree_name in ACTIVE_TREES:
+            if entries[tree_name] is None:
+                entries[tree_name] = tree_entries_string(base_resolution.talents_by_tree.get(tree_name, []))
+    return _TreeSwaps(entries_by_tree=entries, sources=sources)
 
 
 @dataclass(frozen=True, slots=True)
@@ -3131,24 +3142,22 @@ def _join_tree_option(entries: str | None, edits: list[_TalentEdit], tree: str) 
 def _assemble_modified_spec(
     base_spec: BuildSpec,
     *,
-    class_entries: str | None,
-    spec_entries: str | None,
-    hero_entries: str | None,
+    entries_by_tree: dict[str, str | None],
     edits: list[_TalentEdit],
 ) -> BuildSpec | None:
     """Apply the edits to the build, keeping every edit in the tree string SimC resolves it against."""
-    if class_entries is None and not edits:
+    swapping = any(entries is not None for entries in entries_by_tree.values())
+    if not swapping and not edits:
         return None
-    swapping = class_entries is not None
     return BuildSpec(
         actor_class=base_spec.actor_class,
         spec=base_spec.spec,
         # Without a tree swap the base hash stays the foundation: it carries per-entry ranks that the
         # decode output cannot reproduce (tiered nodes) and freely granted traits.
         talents=None if swapping else base_spec.talents,
-        class_talents=_join_tree_option(class_entries, edits, "class"),
-        spec_talents=_join_tree_option(spec_entries, edits, "spec"),
-        hero_talents=_join_tree_option(hero_entries, edits, "hero"),
+        class_talents=_join_tree_option(entries_by_tree["class"], edits, "class"),
+        spec_talents=_join_tree_option(entries_by_tree["spec"], edits, "spec"),
+        hero_talents=_join_tree_option(entries_by_tree["hero"], edits, "hero"),
     )
 
 
@@ -3165,8 +3174,8 @@ REENCODE_KEYSTONE_DISCLOSURE = (
 )
 
 
-def _unrequested_changes(diff_payload: dict[str, Any], edits: list[_TalentEdit], swapped_trees: set[str]) -> list[dict[str, Any]]:
-    """Differences between the re-encoded build and the base that nobody asked for.
+def _unrequested_changes(diff_payload: dict[str, Any], edits: list[_TalentEdit]) -> list[dict[str, Any]]:
+    """Differences between the re-encoded build and the requested one that nobody asked for.
 
     SimC re-serializes the whole build when it is handed split talent strings, so an edit can drag
     unrelated talents along. Anything the caller did not name is reported instead of shipped.
@@ -3176,8 +3185,6 @@ def _unrequested_changes(diff_payload: dict[str, Any], edits: list[_TalentEdit],
     requested_names = {tokenize_talent_name(edit.value) for edit in edits if edit.entry is None}
     unrequested: list[dict[str, Any]] = []
     for tree in ACTIVE_TREES:
-        if tree in swapped_trees:
-            continue
         tree_diff = diff_payload[tree]
         for change, rows in tree_diff.items():
             if change == "has_differences":
@@ -3189,18 +3196,33 @@ def _unrequested_changes(diff_payload: dict[str, Any], edits: list[_TalentEdit],
     return unrequested
 
 
-def _modify_build_diff_payload(
+@dataclass(frozen=True, slots=True)
+class _ModifyBuildDiffs:
+    """What the re-encoded build changed, measured against two different builds.
+
+    ``from_base`` is what the payload reports. ``from_request`` is what gates the export: every tree
+    is compared with the build it was supposed to come from, which for a swapped tree is the swap
+    source rather than the base. Against the base a swapped tree differs by the whole swap, so a
+    talent the re-serialization dropped on the way would hide inside the expected differences.
+    """
+
+    from_base: dict[str, Any]
+    from_request: dict[str, Any]
+
+
+def _modify_build_diffs(
     paths: RepoPaths,
     *,
     base_spec: BuildSpec,
     base_resolution: BuildResolution,
+    swap_sources: dict[str, BuildResolution],
     encoded: str,
-) -> dict[str, Any]:
-    """Decode the re-encoded build and diff it against the base, per tree.
+) -> _ModifyBuildDiffs:
+    """Decode the re-encoded build once and diff it per tree against the base and against the request.
 
-    The fourth key, ``inactive_hero``, covers the hero talents SimC granted for the tree the build
-    did not select. Without it the export could differ from the input hash with nothing in the
-    payload saying so.
+    ``from_base`` carries a fourth key, ``inactive_hero``: the hero talents SimC granted for the tree
+    the build did not select. Without it the export could differ from the input hash with nothing in
+    the payload saying so.
     """
     verify_spec = BuildSpec(
         actor_class=base_spec.actor_class,
@@ -3208,19 +3230,24 @@ def _modify_build_diff_payload(
         talents=encoded,
     )
     result_resolution = decode_build(paths, verify_spec)
-    diff = {
-        tree: _tree_diff_payload(
+
+    def diff_against(expected: BuildResolution, tree: str) -> dict[str, Any]:
+        return _tree_diff_payload(
             diff_talent_trees(
-                base_resolution.talents_by_tree.get(tree, []),
+                expected.talents_by_tree.get(tree, []),
                 result_resolution.talents_by_tree.get(tree, []),
             )
         )
-        for tree in ACTIVE_TREES
-    }
-    diff[INACTIVE_HERO_TREE] = _tree_diff_payload(
+
+    from_base = {tree: diff_against(base_resolution, tree) for tree in ACTIVE_TREES}
+    from_base[INACTIVE_HERO_TREE] = _tree_diff_payload(
         diff_talent_trees(base_resolution.inactive_hero_talents, result_resolution.inactive_hero_talents)
     )
-    return diff
+    from_request = {
+        tree: diff_against(swap_sources[tree], tree) if tree in swap_sources else from_base[tree]
+        for tree in ACTIVE_TREES
+    }
+    return _ModifyBuildDiffs(from_base=from_base, from_request=from_request)
 
 
 @dataclass(frozen=True, slots=True)
@@ -3261,7 +3288,7 @@ def _modify_build(ctx: typer.Context, options: _ModifyBuildOptions) -> None:
         _fail_build_error(ctx, exc, code="decode_failed", prefix="Failed to decode base build: ")
 
     modifications: list[str] = []
-    class_entries, spec_entries, hero_entries = _resolve_modify_tree_entries(
+    swaps = _resolve_modify_tree_entries(
         ctx,
         paths,
         base_spec=base_spec,
@@ -3282,13 +3309,7 @@ def _modify_build(ctx: typer.Context, options: _ModifyBuildOptions) -> None:
         modifications=modifications,
     )
 
-    modified_spec = _assemble_modified_spec(
-        base_spec,
-        class_entries=class_entries,
-        spec_entries=spec_entries,
-        hero_entries=hero_entries,
-        edits=edits,
-    )
+    modified_spec = _assemble_modified_spec(base_spec, entries_by_tree=swaps.entries_by_tree, edits=edits)
     if modified_spec is None:
         fail(
             ctx, "no_modifications",
@@ -3297,22 +3318,18 @@ def _modify_build(ctx: typer.Context, options: _ModifyBuildOptions) -> None:
 
     try:
         encoded = encode_build(paths, modified_spec)
-        diff_payload = _modify_build_diff_payload(
-            paths, base_spec=base_spec, base_resolution=base_resolution, encoded=encoded
+        diffs = _modify_build_diffs(
+            paths,
+            base_spec=base_spec,
+            base_resolution=base_resolution,
+            swap_sources=swaps.sources,
+            encoded=encoded,
         )
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
         _fail_build_error(ctx, exc, code="encode_failed", prefix="Failed to encode modified build: ")
 
-    swapped_trees = {
-        tree
-        for tree, source in (
-            ("class", options.swap_class_tree_from),
-            ("spec", options.swap_spec_tree_from),
-            ("hero", options.swap_hero_tree_from),
-        )
-        if source
-    }
-    unrequested = _unrequested_changes(diff_payload, edits, swapped_trees)
+    diff_payload = diffs.from_base
+    unrequested = _unrequested_changes(diffs.from_request, edits)
     if unrequested:
         fail(
             ctx,

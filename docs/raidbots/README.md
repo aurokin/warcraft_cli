@@ -21,7 +21,7 @@ a bare report ID or any URL containing `/report/{ID}`.
 ### Flags
 
 Global flags go before the subcommand: `--pretty`, `--compact`, `--compact-max-chars N`,
-`--fields a.b,c`, `--fields-strict`, `--profile agent|human|debug`. They behave as described in
+`--fields a.b,c`, `--fields-strict`, `--profile agent|human`. They behave as described in
 [ERROR_CONTRACT.md](../foundation/ERROR_CONTRACT.md).
 
 | Command | Flag | Effect |

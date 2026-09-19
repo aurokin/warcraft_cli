@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from tests.e2e.harness import EXIT_AUTH, EXIT_NOT_FOUND, Result, run
+from tests.e2e.harness import EXIT_AUTH, EXIT_NOT_FOUND, EXIT_USAGE, Result, run
 from tests.e2e.pins import CURSEFORGE_ADDON_ID, CURSEFORGE_ADDON_SLUG
 
 
@@ -73,6 +73,11 @@ def test_addon_by_slug_resolves_to_the_same_mod(require) -> None:
     assert f"slug={CURSEFORGE_ADDON_SLUG}" in provenance["source_urls"]["search"]
     _assert_addon_payload(result)
 
+    # The two resolution paths must land on one mod record, not merely on two records that each
+    # happen to carry the pinned id.
+    by_id = run("curseforge", "addon", CURSEFORGE_ADDON_ID)
+    assert result.data["metadata"] == by_id.data["metadata"], result.describe()
+
 
 def test_search_and_resolve_are_structured_coming_soon_stubs(require) -> None:
     require("curseforge")
@@ -83,6 +88,10 @@ def test_search_and_resolve_are_structured_coming_soon_stubs(require) -> None:
         assert result.data["results"] == []
         assert result.data["suggested_command"] == "curseforge addon deadly-boss-mods"
         assert f"curseforge {command} is not implemented yet" in result.data["message"]
+
+        # The stubs still validate their one flag rather than accepting anything until they ship.
+        rejected = run("curseforge", command, "boss mods", "--limit", "0", expect=EXIT_USAGE, error_code="invalid_argument")
+        assert "--limit" in rejected.payload["error"]["message"], rejected.describe()
 
 
 def test_unknown_slug_and_unknown_id_are_not_found(require) -> None:

@@ -2,13 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from warcraftlogs_cli.payload_envelope import apply_payload_envelope, documented_payload_keys
+from warcraftlogs_cli.payload_envelope import apply_payload_envelope
 from warcraftlogs_cli.payload_keys_registry import ALL_COMMANDS
-
-
-def test_documented_payload_keys_cover_all_registry_commands() -> None:
-    documented = {row[0] for row in documented_payload_keys()}
-    assert documented == set(ALL_COMMANDS)
 
 
 def test_apply_payload_envelope_dual_emits_boss_kills() -> None:

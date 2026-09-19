@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Sequence
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -56,7 +59,35 @@ def load_raiderio_cache_settings_from_env() -> tuple[CacheSettings, int, int, in
     )
 
 
+@dataclass(frozen=True, slots=True)
+class FetchedJson:
+    """One Raider.IO response plus when it actually came off the wire.
+
+    ``fetched_at`` is stored alongside the cached body, so a cache hit reports the age of the data
+    it is replaying instead of the time the command happened to run.
+    """
+
+    payload: dict[str, Any]
+    fetched_at: str
+    cache_hit: bool
+
+
+def combined_freshness(pages: Sequence[FetchedJson]) -> tuple[str, bool]:
+    """The oldest fetch time across the pages a sample read, and whether any of them was replayed.
+
+    A sample is only as fresh as its stalest page, so the oldest time is the honest one to report.
+    """
+    return min(page.fetched_at for page in pages), any(page.cache_hit for page in pages)
+
+
 class RaiderIOClient:
+    """Cached Raider.IO API access.
+
+    The endpoints whose payloads carry provenance (leaderboards, raid rankings, the raid catalog)
+    return :class:`FetchedJson` so the command can report the real fetch time; the profile and
+    site-search endpoints report no freshness and return the response body alone.
+    """
+
     def __init__(
         self,
         *,
@@ -94,57 +125,42 @@ class RaiderIOClient:
         raw = json.dumps({"namespace": namespace, "params": params}, sort_keys=True, separators=(",", ":")).encode("utf-8")
         return f"{namespace}:{hashlib.sha256(raw).hexdigest()}"
 
-    def _read_cache(self, key: str) -> Any | None:
-        if self._cache_store is None:
+    def _read_cache(self, key: str) -> FetchedJson | None:
+        """Replay a cached response; an entry written before fetch times were stored is a miss."""
+        cached = self._cache_store.get(key) if self._cache_store is not None else None
+        if not isinstance(cached, dict):
             return None
-        return self._cache_store.get(key)
+        payload = cached.get("payload")
+        fetched_at = cached.get("fetched_at")
+        if not isinstance(payload, dict) or not isinstance(fetched_at, str):
+            return None
+        return FetchedJson(payload=payload, fetched_at=fetched_at, cache_hit=True)
 
-    def _write_cache(self, key: str, payload: Any, *, ttl_seconds: int) -> None:
+    def _write_cache(self, key: str, fetched: FetchedJson, *, ttl_seconds: int) -> None:
         if self._cache_store is None:
             return
-        self._cache_store.set(key, payload, ttl_seconds=ttl_seconds)
+        self._cache_store.set(key, {"fetched_at": fetched.fetched_at, "payload": fetched.payload}, ttl_seconds=ttl_seconds)
 
-    def _get_json(self, path: str, *, params: dict[str, Any], namespace: str, ttl_seconds: int) -> dict[str, Any]:
+    def _get_json(self, url: str, *, params: dict[str, Any], namespace: str, ttl_seconds: int) -> FetchedJson:
         key = self._cache_key(namespace, params)
         cached = self._read_cache(key)
-        if isinstance(cached, dict):
+        if cached is not None:
             return cached
-        response = request_with_retries(
-            self._client(),
-            f"{RAIDERIO_BASE_URL}{path}",
-            params=params,
-            retry_attempts=self._retry_attempts,
-        )
+        response = request_with_retries(self._client(), url, params=params, retry_attempts=self._retry_attempts)
         payload = response.json()
         if not isinstance(payload, dict):
-            raise ValueError(f"Unexpected Raider.IO response shape for {path}.")
-        self._write_cache(key, payload, ttl_seconds=ttl_seconds)
-        return payload
-
-    def _get_site_json(self, path: str, *, params: dict[str, Any], namespace: str, ttl_seconds: int) -> dict[str, Any]:
-        key = self._cache_key(namespace, params)
-        cached = self._read_cache(key)
-        if isinstance(cached, dict):
-            return cached
-        response = request_with_retries(
-            self._client(),
-            f"{RAIDERIO_SITE_BASE_URL}{path}",
-            params=params,
-            retry_attempts=self._retry_attempts,
-        )
-        payload = response.json()
-        if not isinstance(payload, dict):
-            raise ValueError(f"Unexpected Raider.IO response shape for {path}.")
-        self._write_cache(key, payload, ttl_seconds=ttl_seconds)
-        return payload
+            raise ValueError(f"Unexpected Raider.IO response shape for {url}.")
+        fetched = FetchedJson(payload=payload, fetched_at=datetime.now(UTC).isoformat(), cache_hit=False)
+        self._write_cache(key, fetched, ttl_seconds=ttl_seconds)
+        return fetched
 
     def character_profile(self, *, region: str, realm: str, name: str, fields: str = DEFAULT_CHARACTER_FIELDS) -> dict[str, Any]:
         return self._get_json(
-            "/characters/profile",
+            f"{RAIDERIO_BASE_URL}/characters/profile",
             params={"region": region, "realm": realm, "name": name, "fields": fields},
             namespace="character_profile",
             ttl_seconds=self._character_ttl,
-        )
+        ).payload
 
     def character_profile_variants(self, *, region: str, realm: str, name: str, fields: str = DEFAULT_CHARACTER_FIELDS) -> dict[str, Any]:
         normalized_region = normalize_region(region)
@@ -164,11 +180,11 @@ class RaiderIOClient:
 
     def guild_profile(self, *, region: str, realm: str, name: str, fields: str = DEFAULT_GUILD_FIELDS) -> dict[str, Any]:
         return self._get_json(
-            "/guilds/profile",
+            f"{RAIDERIO_BASE_URL}/guilds/profile",
             params={"region": region, "realm": realm, "name": name, "fields": fields},
             namespace="guild_profile",
             ttl_seconds=self._guild_ttl,
-        )
+        ).payload
 
     def guild_profile_variants(self, *, region: str, realm: str, name: str, fields: str = DEFAULT_GUILD_FIELDS) -> dict[str, Any]:
         normalized_region = normalize_region(region)
@@ -194,7 +210,7 @@ class RaiderIOClient:
         dungeon: str = "all",
         affixes: str | None = None,
         page: int = 0,
-    ) -> dict[str, Any]:
+    ) -> FetchedJson:
         params: dict[str, Any] = {
             "region": region,
             "dungeon": dungeon,
@@ -205,7 +221,7 @@ class RaiderIOClient:
         if affixes:
             params["affixes"] = affixes
         return self._get_json(
-            "/mythic-plus/runs",
+            f"{RAIDERIO_BASE_URL}/mythic-plus/runs",
             params=params,
             namespace="mythic_plus_runs",
             ttl_seconds=self._mplus_runs_ttl,
@@ -220,7 +236,7 @@ class RaiderIOClient:
         realm: str | None = None,
         limit: int,
         page: int,
-    ) -> dict[str, Any]:
+    ) -> FetchedJson:
         """One page of guild raid rankings; ``limit`` is the API page size (1-200)."""
         params: dict[str, Any] = {
             "raid": raid,
@@ -232,16 +248,16 @@ class RaiderIOClient:
         if realm:
             params["realm"] = realm
         return self._get_json(
-            "/raiding/raid-rankings",
+            f"{RAIDERIO_BASE_URL}/raiding/raid-rankings",
             params=params,
             namespace="raid_rankings",
             ttl_seconds=self._raid_rankings_ttl,
         )
 
-    def raid_static_data(self, *, expansion_id: int) -> dict[str, Any]:
+    def raid_static_data(self, *, expansion_id: int) -> FetchedJson:
         """Raid and encounter slugs for one expansion (11 = Midnight, 10 = The War Within, ...)."""
         return self._get_json(
-            "/raiding/static-data",
+            f"{RAIDERIO_BASE_URL}/raiding/static-data",
             params={"expansion_id": expansion_id},
             namespace="raid_static_data",
             ttl_seconds=self._static_ttl,
@@ -251,12 +267,12 @@ class RaiderIOClient:
         params: dict[str, Any] = {"term": term}
         if kind and kind != "all":
             params["type"] = kind
-        return self._get_site_json(
-            "/api/search",
+        return self._get_json(
+            f"{RAIDERIO_SITE_BASE_URL}/api/search",
             params=params,
             namespace="search",
             ttl_seconds=self._static_ttl,
-        )
+        ).payload
 
     @property
     def static_data_ttl_seconds(self) -> int:

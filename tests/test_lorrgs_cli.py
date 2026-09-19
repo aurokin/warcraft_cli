@@ -329,6 +329,20 @@ def test_resolve_reads_an_encounter_whose_name_is_mostly_stop_words(monkeypatch)
     assert data["next_command"] == "lorrgs comp-ranking the-eye-of-the-jailer"
 
 
+def test_resolve_downgrades_an_unrivalled_but_only_partial_match_to_medium(monkeypatch) -> None:
+    # "undreamt" is one word out of "Chimaerus, the Undreamt God" — not the slug, not the short name.
+    # Nothing rivals it, so the handoff is still useful and goes out, but it must say how thin the
+    # match was: there is no strength floor on resolving, so `confidence` is the only honest signal.
+    _patch_client(monkeypatch)
+    result = runner.invoke(app, ["resolve", "undreamt", "--limit", "10"])
+    assert result.exit_code == 0
+    data = json.loads(result.stdout)["data"]
+    assert data["resolved"] is True
+    assert data["confidence"] == "medium"
+    assert data["match"]["ranking"]["match_level"] == "partial"
+    assert data["next_command"] == "lorrgs comp-ranking chimaerus-the-undreamt-god"
+
+
 def test_resolve_refuses_a_candidate_that_drops_a_word_lorrgs_recognised(monkeypatch) -> None:
     # Lorrgs knows "paladin", so "fire mage paladin" is a question about two classes. The only
     # candidate is the Fire Mage spec, which answers a narrower question than the caller asked:

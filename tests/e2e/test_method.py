@@ -2,8 +2,14 @@
 
 The guide slug is discovered from ``method search`` on the shared guide query in
 ``tests/e2e/pins.py``, so nothing here rots when Method renames or retires a guide. Every command
-in ``docs/reference/method.md`` is exercised, plus the documented error journeys and the global
-output flags.
+in ``docs/reference/method.md`` is exercised, plus the documented error journeys.
+
+The content assertions are the point of this file. Method's guide template moved once already and
+the parser answered with an empty article and ``ok: true``; so a guide has to come back with a
+byline, a last-updated stamp, sections that carry real prose, and build references that
+``warcraft guide-builds-simc`` can hand to SimulationCraft. Each supported content family
+(class, profession, reputation, article) is discovered at run time and held to the same bar,
+which is what the retired ``tests/test_method_live.py`` pinned by slug.
 """
 
 from __future__ import annotations
@@ -22,9 +28,7 @@ from tests.e2e.harness import (
     EXIT_NOT_FOUND,
     Result,
     dead_proxy_env,
-    payload_or_legacy,
     run,
-    run_raw,
 )
 
 BINARY = "method"
@@ -33,16 +37,16 @@ PROVIDER = "method"
 # intentionally out of scope, so it is the documented way to reach the scope-hint branch.
 OUT_OF_SCOPE_QUERY = "tier list"
 UNSUPPORTED_SURFACE_SLUG = "tier-list"
-
-
-def assert_data_mirrors_legacy(result: Result, *keys: str) -> None:
-    """``data`` carries the payload and the deprecated top-level copies agree with it."""
-    assert result.data, f"data slot is empty\n{result.describe()}"
-    for key in keys:
-        assert key in result.data, f"data is missing {key!r}\n{result.describe()}"
-        assert payload_or_legacy(result, key) == result.data[key], (
-            f"legacy top-level {key!r} disagrees with data\n{result.describe()}"
-        )
+# One search query per supported content family other than class_guide (which the pinned guide
+# covers). The slugs themselves age out every patch, so only the query and the family are fixed.
+FAMILY_PROBES = (
+    ("alchemy profession", "profession_guide"),
+    ("renown reputation", "reputation_guide"),
+    ("dungeon locations", "article_guide"),
+)
+# A term that appears in the pinned mistweaver guide's prose, used to prove an exported bundle
+# answers the same text offline that the export wrote.
+BUNDLE_QUERY_TERM = "renewing mist"
 
 
 @cache
@@ -62,6 +66,41 @@ def guide_page() -> Result:
     return run(BINARY, "guide", guide_slug())
 
 
+def _assert_page_is_split_into_real_sections(page: dict[str, Any], result: Result) -> None:
+    """One page of a guide bundle has to be cut on its own headings, with prose under each one.
+
+    Method wraps its ``h2`` headings in a layout container. When the parser stopped descending into
+    it, most of a page merged into a single fallback section -- still non-empty, still ``ok: true``.
+    So the check is structural: every section title is one of the page's headings, and the page has
+    about as many sections as it has headings (a heading with no content under it is dropped, which
+    is the only legitimate way to have fewer).
+    """
+    where = page["guide"]["page_url"]
+    sections = page["article"]["sections"]
+    headings = page["article"]["headings"]
+    assert sections, f"{where} parsed into zero sections\n{result.describe()}"
+    assert all(row["title"].strip() for row in sections), f"{where} has untitled sections"
+    empty = [row["title"] for row in sections if not (row["text"] or "").strip()]
+    assert not empty, f"{where} has heading-only sections: {empty}"
+    assert {row["title"] for row in sections} <= {row["title"] for row in headings}, f"{where} has sections that are not headings"
+    assert len(sections) >= len(headings) - 2, f"{where} collapsed {len(headings)} headings into {len(sections)} sections"
+
+
+def _exported_sections(bundle: Path) -> dict[tuple[str, int], dict[str, Any]]:
+    """Every section the export wrote, keyed by the page it came from and its position on it."""
+    lines = (bundle / "sections.jsonl").read_text(encoding="utf-8").splitlines()
+    rows = [json.loads(line) for line in lines if line.strip()]
+    return {(row["page_url"], row["ordinal"]): row for row in rows}
+
+
+def _first_guide_of_family(query: str, family: str) -> str:
+    result = run(BINARY, "search", query, "--limit", "5")
+    for row in result.data["results"]:
+        if row["metadata"]["content_family"] == family:
+            return str(row["id"])
+    raise AssertionError(f"Method search for {query!r} returned no {family}\n{result.describe()}")
+
+
 def test_doctor_reports_every_documented_command_ready(require) -> None:
     require(PROVIDER)
     result = run(BINARY, "doctor")
@@ -73,7 +112,6 @@ def test_doctor_reports_every_documented_command_ready(require) -> None:
     scope = result.data["supported_scope"]
     assert "class_guide" in scope["content_families"]
     assert UNSUPPORTED_SURFACE_SLUG in scope["unsupported_roots"]
-    assert_data_mirrors_legacy(result, "capabilities", "supported_scope")
 
 
 def test_search_finds_a_real_guide_and_names_the_follow_up(require) -> None:
@@ -83,11 +121,10 @@ def test_search_finds_a_real_guide_and_names_the_follow_up(require) -> None:
     assert result.data["count"] >= 1
     first = result.data["results"][0]
     assert first["entity_type"] == "guide"
-    assert first["metadata"]["content_family"] in {"class_guide", "profession_guide", "delve_guide", "reputation_guide", "article_guide"}
-    assert first["url"].startswith("https://www.method.gg/guides/")
+    assert first["metadata"]["content_family"] == "class_guide", "a spec query must rank the class guide first"
+    assert first["url"] == f"https://www.method.gg/guides/{first['id']}"
     assert first["follow_up"]["recommended_command"] == f"{BINARY} guide {first['id']}"
     assert result.payload["provenance"]["sitemap_url"].endswith("sitemap.xml")
-    assert_data_mirrors_legacy(result, "results", "count", "search_query")
 
 
 def test_search_outside_the_supported_families_returns_a_scope_hint(require) -> None:
@@ -96,17 +133,23 @@ def test_search_outside_the_supported_families_returns_a_scope_hint(require) -> 
 
     assert result.data["count"] == 0
     assert result.data["results"] == []
-    assert result.data["scope_hint"]["code"]
+    assert result.data["scope_hint"]["code"] == "tier_list"
 
 
-def test_resolve_picks_the_search_winner_and_hands_over_the_next_command(require) -> None:
+def test_resolve_hands_over_a_next_command_that_returns_the_same_guide(require) -> None:
     require(PROVIDER)
     result = run(BINARY, "resolve", pins.GUIDE_QUERY, "--limit", "5")
 
     assert result.data["resolved"] is True
     assert result.data["match"]["id"] == guide_slug()
-    assert result.data["next_command"] == f"{BINARY} guide {guide_slug()}"
     assert result.data["candidates"], "resolve dropped the candidate list"
+
+    # The whole point of next_command is that an agent can run it verbatim.
+    next_command = result.data["next_command"]
+    assert next_command == f"{BINARY} guide {guide_slug()}"
+    binary, *args = next_command.split()
+    assert binary == BINARY
+    assert run(BINARY, *args).data["guide"]["slug"] == guide_slug()
 
 
 def test_guide_returns_titled_sections_navigation_and_linked_entities(require) -> None:
@@ -116,30 +159,64 @@ def test_guide_returns_titled_sections_navigation_and_linked_entities(require) -
     guide = result.data["guide"]
     assert guide["slug"] == guide_slug()
     assert guide["supported_surface"] is True
+    assert guide["content_family"] == "class_guide"
     assert guide["section_title"], "the active navigation page has no title"
-    assert guide["page_url"].startswith("https://www.method.gg/guides/")
+    assert guide["page_url"] == f"https://www.method.gg/guides/{guide_slug()}"
+    assert guide["author"].strip(), "the guide byline is missing"
+    assert guide["last_updated"].strip(), "the guide has no last-updated stamp"
     # Method guides are multi-page: the family navigation is the only way to reach the other pages.
     assert result.data["navigation"]["count"] >= 2
     assert all(item["title"] and item["url"] for item in result.data["navigation"]["items"])
     article = result.data["article"]
     assert article["section_count"] >= 1
     assert article["text"].strip(), "article text is empty"
+    assert len(article["section_preview"]) >= 1
+    assert all(row["title"].strip() and row["level"] >= 2 for row in article["section_preview"])
     assert result.data["linked_entities"]["count"] >= 1
     assert result.payload["provenance"]["page"] == guide["page_url"]
-    assert_data_mirrors_legacy(result, "guide", "navigation", "article", "linked_entities")
 
 
-def test_guide_full_fetches_and_merges_every_navigation_page(require) -> None:
+@pytest.mark.parametrize(("query", "family"), FAMILY_PROBES)
+def test_every_supported_guide_family_parses_with_a_byline(require, query: str, family: str) -> None:
+    """A guide from each supported family, discovered live, has to parse into attributed prose."""
+    require(PROVIDER)
+    slug = _first_guide_of_family(query, family)
+    result = run(BINARY, "guide", slug)
+
+    guide = result.data["guide"]
+    assert guide["slug"] == slug
+    assert guide["content_family"] == family
+    assert guide["supported_surface"] is True
+    assert guide["author"].strip(), f"{slug} lost its byline"
+    assert guide["last_updated"].strip(), f"{slug} lost its last-updated stamp"
+    assert result.data["article"]["section_count"] >= 1
+    assert len(result.data["article"]["text"].strip()) > 200, "the article parsed to almost nothing"
+
+
+def test_guide_full_merges_every_page_and_publishes_build_references(require) -> None:
     require(PROVIDER)
     result = run(BINARY, "guide-full", guide_slug())
 
     page_count = result.data["guide"]["page_count"]
-    assert page_count >= 2
+    assert page_count == guide_page().data["navigation"]["count"]
     assert len(result.data["pages"]) == page_count
     assert len(result.data["citations"]["pages"]) == page_count
-    assert all(page["article"]["sections"] for page in result.data["pages"])
+    # A skipped page is reported, never silently dropped; on the pinned guide none should be.
+    assert result.data["failed_pages"] == {"count": 0, "items": []}, result.describe()
+
+    for page in result.data["pages"]:
+        _assert_page_is_split_into_real_sections(page, result)
+
     # Merging every page can only add entities to what the first page alone carried.
     assert result.data["linked_entities"]["count"] >= guide_page().data["linked_entities"]["count"]
+
+    # The talents page is what feeds `warcraft guide-builds-simc`; zero build references means the
+    # import-string markup moved and that handoff is silently empty.
+    builds = result.data["build_references"]
+    assert builds["count"] >= 1, result.describe()
+    assert builds["count"] == len(builds["items"])
+    assert {row["reference_type"] for row in builds["items"]} <= {"wow_talent_export", "wowhead_talent_calc_url"}
+    assert all(row["build_code"] for row in builds["items"])
 
 
 def test_guide_export_writes_a_bundle_that_guide_query_answers_offline(require, out_dir: Path) -> None:
@@ -153,29 +230,50 @@ def test_guide_export_writes_a_bundle_that_guide_query_answers_offline(require, 
     assert counts["sections"] >= 1
     for name in ("manifest.json", "guide.json", "pages.jsonl", "sections.jsonl", "linked-entities.jsonl"):
         assert (bundle / name).is_file(), f"{name} is missing from the export"
-    assert sum(1 for _ in (bundle / "sections.jsonl").open()) == counts["sections"]
+    exported = _exported_sections(bundle)
+    assert len(exported) == counts["sections"]
 
     # The bundle has to answer without the network; a dead proxy proves nothing is fetched.
-    query = run(BINARY, "guide-query", str(bundle), "renewing mist", "--limit", "3", env=dead_proxy_env())
+    query = run(BINARY, "guide-query", str(bundle), BUNDLE_QUERY_TERM, "--limit", "3", env=dead_proxy_env())
     assert query.data["count"] >= 1
     sections = query.data["matches"]["sections"]
     assert sections, "no section matched a term that appears in the guide"
-    assert all("renewing" in (row["text"] or row["html"]).lower() for row in sections)
+    for row in sections:
+        # Matching is a substring search over title plus text, so the term has to be in one of them.
+        assert BUNDLE_QUERY_TERM in f"{row['title']} {row['text']}".lower(), row["title"]
+        # And the answer has to be the text the export wrote, not a re-derived or stale copy.
+        assert row["text"] == exported[(row["page_url"], row["ordinal"])]["text"], row["title"]
     assert all(row["kind"] for row in query.data["top"])
 
 
-def test_guide_query_honours_kind_and_section_title_filters(require, out_dir: Path) -> None:
+def test_guide_query_honours_the_limit_kind_and_section_title_filters(require, out_dir: Path) -> None:
     require(PROVIDER)
     bundle = out_dir / "method-bundle"
     run(BINARY, "guide-export", guide_slug(), "--out", str(bundle))
+
+    def section_titles(*args: str) -> list[str]:
+        result = run(BINARY, "guide-query", str(bundle), *args, env=dead_proxy_env())
+        return [row["title"] for row in result.data["matches"]["sections"]]
+
+    # --limit keeps the same ranking and cuts it off, rather than returning a different slice.
+    wide = section_titles(BUNDLE_QUERY_TERM, "--limit", "20")
+    assert len(wide) > 2, "the pinned guide needs more than two matches for --limit to mean anything"
+    assert section_titles(BUNDLE_QUERY_TERM, "--limit", "2") == wide[:2]
 
     only_navigation = run(BINARY, "guide-query", str(bundle), "talents", "--kind", "navigation", env=dead_proxy_env())
     assert only_navigation.data["match_counts"]["navigation"] >= 1
     assert only_navigation.data["matches"]["sections"] == []
     assert all(row["url"] for row in only_navigation.data["matches"]["navigation"])
 
-    titled = run(BINARY, "guide-query", str(bundle), "mana", "--section-title", "rotation", env=dead_proxy_env())
-    assert all("rotation" in row["title"].lower() for row in titled.data["matches"]["sections"])
+    # --section-title narrows that same ranking to the sections whose title contains the text. The
+    # needle is the commonest word among the matched titles, so the expected subset is known exactly
+    # and a filter that did nothing would return the whole list instead.
+    all_titles = section_titles("mana", "--limit", "50")
+    words = [word for title in all_titles for word in title.lower().split() if len(word) > 3]
+    needle = max(set(words), key=words.count)
+    expected = [title for title in all_titles if needle in title.lower()]
+    assert 0 < len(expected) < len(all_titles), f"{needle!r} has to select some titles but not all"
+    assert section_titles("mana", "--limit", "50", "--section-title", needle) == expected
 
 
 def test_unknown_guide_slug_is_a_not_found_envelope(require) -> None:
@@ -208,28 +306,9 @@ def test_a_repeated_guide_fetch_is_served_from_the_session_cache(require) -> Non
     assert cached.data["article"]["section_count"] == warm.data["article"]["section_count"]
 
 
-def test_fields_and_compact_shape_the_payload(require) -> None:
+def test_guide_query_on_a_missing_bundle_is_a_generic_failure(require) -> None:
     require(PROVIDER)
-    # --fields prunes the envelope down to the requested paths, so this journey reads the raw JSON
-    # instead of the full-envelope contract the harness enforces elsewhere.
-    fields = run_raw(BINARY, "--fields", "data.guide.slug,data.article.section_count", "guide", guide_slug())
-    assert fields.exit_code == 0, fields.describe()
-    payload: dict[str, Any] = json.loads(fields.stdout)
-    assert payload == {"data": {"guide": {"slug": guide_slug()}, "article": {"section_count": guide_page().data["article"]["section_count"]}}}
-
-    compact = run(BINARY, "--compact", "--compact-max-chars", "80", "guide", guide_slug())
-    text = compact.data["article"]["text"]
-    assert text.endswith("...")
-    assert len(text) <= 90
-    assert len(guide_page().data["article"]["text"]) > len(text)
-
-
-def test_missing_argument_is_a_usage_error(require) -> None:
-    require(PROVIDER)
-    result = run_raw(BINARY, "guide")
-
-    assert result.exit_code == 2, result.describe()
-    assert "Traceback" not in result.stderr
+    run(BINARY, "guide-query", "/nonexistent/method-bundle", "mana", expect=EXIT_GENERIC, error_code="invalid_bundle")
 
 
 @pytest.mark.parametrize("command", ["guide", "guide-full", "guide-export"])

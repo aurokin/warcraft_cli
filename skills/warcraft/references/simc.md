@@ -35,7 +35,7 @@
 - for exact-build commands, `--talents` is now safe for the same common consumer inputs as `--build-text`, including bare WoW exports and Wowhead talent-calc URLs with build codes
 - a talent string SimC rejects fails with `invalid_build` and SimC's own error line; it is never reported as a partial build. The envelope names the binary that rejected it under `error.details.simc_binary`, and when that binary is older than the checkout the message says so and asks for a rebuild; `simc doctor` reports the same mismatch under `repo.build_issues`
 - decoded builds name the active hero tree under `hero_tree`; talents from the other hero tree are listed under `inactive_hero_talents` and are not part of the build
-- do not tell the user they must provide class/spec unless `identify-build` failed first; the CLI now probes the local SimC spec set for bare WoW exports when direct metadata is missing
+- do not tell the user they must provide class/spec unless `identify-build` failed first; the CLI now probes the local SimC spec set for bare WoW exports when direct metadata is missing. The probe covers one spec per APL file in the checkout, which excludes every healer spec, so a healer build fails with `invalid_query` listing `error.details.probed_specs`: pass `--actor-class` / `--spec` for those builds
 - prefer `describe-build` over ad hoc prose synthesis when you need to talk about:
   - active hero/spec package
   - skipped capstones or alternate branches
@@ -58,7 +58,8 @@
   - `--swap-class-tree-from` / `--swap-spec-tree-from` / `--swap-hero-tree-from` replace an entire tree from another build
   - `--add name:rank` and `--remove name` adjust individual talents in any tree; a name must belong to the actor's class, and an entry id works for any talent in the checkout's trait data
   - the output includes the new WoW export string, a Wowhead URL, a diff from the base build, and `verified: true`
-  - when re-encoding changes anything in the active trees that was not requested the command fails with `encode_mismatch` and no export; do not retry, report the listed `unrequested_changes`
+  - when re-encoding changes anything in the active trees that was not requested the command fails with `encode_mismatch` and no export; do not retry, report the listed `unrequested_changes`. A swapped tree is checked against the build it came from, not the base
+  - a tree swap drops the base hash and rebuilds every tree from `entry:rank` pairs, which cannot express a tiered node (a decoded row with `rank_known: false`), so swapping a tree that holds one fails with `encode_mismatch` naming the talent that would have been lost; `--add` / `--remove` keep the base hash and still work on those builds
   - `diff_from_base.inactive_hero` lists hero talents the export gained from the hero tree the build did not select: SimC's encoder freely grants every hero keystone. They are inert in the sim, but the export string does differ from the input, so relay `result.disclosures` when it is non-empty
   - this uses SimC's own encoder, not reverse-engineered client-side encoding
 - if the user wants to compare guide-derived or custom APLs, build a harness and use `compare-apls`; do not edit upstream SimC files

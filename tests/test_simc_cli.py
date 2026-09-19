@@ -1423,6 +1423,33 @@ def test_simc_decode_build_auto_identifies_missing_class_and_spec(monkeypatch) -
     assert payload["decoded"]["spec"] == "devourer"
 
 
+def test_simc_decode_build_names_the_specs_the_probe_tried_when_it_identifies_nothing(tmp_path: Path) -> None:
+    """Identification probes one spec per APL file, and SimC ships no healer APL.
+
+    A valid healer export is therefore never matched, so the error has to say which specs were tried
+    instead of leaving the caller to guess that their build was malformed.
+    """
+    repo_root = _checkout(tmp_path)
+    (repo_root / "ActionPriorityLists" / "default" / "mage_arcane.simc").write_text("# apl\n")
+    (repo_root / "ActionPriorityLists" / "default" / "paladin_retribution.simc").write_text("# apl\n")
+    no_talents = "0.000 Player 'simc_decode' generic base stats\n"
+    fake = _FakeSimcBinary({"HOLY_PALADIN_EXPORT": no_talents})
+
+    with patch("simc_cli.build_input.subprocess.run", side_effect=fake):
+        result = runner.invoke(
+            simc_app,
+            ["--repo-root", str(repo_root), "decode-build", "--talents", "HOLY_PALADIN_EXPORT"],
+        )
+
+    assert result.exit_code == 2
+    payload = json.loads(result.stderr)
+    assert payload["error"]["code"] == "invalid_query"
+    assert payload["error"]["details"]["probed_specs"] == [
+        {"actor_class": "mage", "spec": "arcane"},
+        {"actor_class": "paladin", "spec": "retribution"},
+    ]
+
+
 def test_simc_decode_build_accepts_build_packet(monkeypatch, tmp_path: Path) -> None:
     packet_path = tmp_path / "build-packet.json"
     packet_path.write_text('{"kind":"talent_transport_packet"}')
@@ -2853,6 +2880,33 @@ def test_simc_modify_build_swap_class_tree_rebuilds_from_split_trees(tmp_path: P
     assert "talents=BASE" not in fake.encode_profile
     assert "class_talents=" in fake.encode_profile and "spec_talents=" in fake.encode_profile
     assert [row["name"] for row in payload["data"]["result"]["diff_from_base"]["class"]["removed"]] == ["Ice Cold"]
+
+
+def test_simc_modify_build_refuses_a_swap_whose_export_dropped_a_tiered_talent(tmp_path: Path) -> None:
+    """A swapped tree is verified against the build it came from, not against the base.
+
+    SimC prints a tiered node's leftover rank (always 0), so re-serializing a decoded tree as
+    `entry:rank` pairs loses it. Here Prismatic Bolt is in the swap source only: measured against the
+    base the swapped tree looks untouched, which is how the loss used to ship as a verified export.
+    """
+    without_tiered = _captured_without("Prismatic Bolt")
+    fake = _FakeSimcBinary({"BASE": without_tiered, "REF": CAPTURED_ARCANE_MAGE, "MODIFIED_EXPORT": without_tiered})
+    repo_root = _checkout(tmp_path)
+
+    with patch("simc_cli.build_input.subprocess.run", side_effect=fake):
+        result = runner.invoke(
+            simc_app,
+            ["--repo-root", str(repo_root), "modify-build", "--talents", "BASE",
+             "--actor-class", "mage", "--spec", "arcane", "--swap-spec-tree-from", "REF"],
+        )
+
+    assert result.exit_code == 1
+    payload = json.loads(result.stderr)
+    assert payload["error"]["code"] == "encode_mismatch"
+    assert [
+        (row["tree"], row["change"], row["name"]) for row in payload["error"]["details"]["unrequested_changes"]
+    ] == [("spec", "removed", "Prismatic Bolt")]
+    assert "MODIFIED_EXPORT" not in json.dumps(payload)
 
 
 def test_simc_modify_build_aborts_when_swap_tree_decode_fails(tmp_path: Path) -> None:

@@ -18,6 +18,7 @@ from warcraftlogs_cli.client import (
     GRAPHQL_WARNINGS_KEY,
     RETAIL_PROFILE,
     EncounterRankingsOptions,
+    ReportPlayerDetailsOptions,
     ReportRankingsOptions,
     WarcraftLogsAuthConfig,
     WarcraftLogsClient,
@@ -5347,7 +5348,7 @@ def test_warcraftlogs_client_raw_graphql_preserves_null_variables_on_wire(monkey
         def json(self) -> dict[str, object]:
             return {"data": {"ok": True}}
 
-    def _fake_request(http_client, url, **kwargs):
+    def _fake_request(_http_client, url, **kwargs):
         captured["json"] = kwargs.get("json")
         return _Resp()
 
@@ -5496,7 +5497,7 @@ def test_warcraftlogs_client_raw_graphql_cache_miss_still_requests_and_writes(mo
         def json(self) -> dict[str, object]:
             return {"data": {"ok": True}}
 
-    def _fake_request(http_client, url, **kwargs):
+    def _fake_request(_http_client, url, **kwargs):
         captured["requests"] += 1
         return _Resp()
 
@@ -5547,7 +5548,7 @@ def test_warcraftlogs_client_raw_graphql_does_not_cache_user_endpoint(monkeypatc
     def _fail_cache_write(key, payload, *, ttl_seconds):
         raise AssertionError("user endpoint raw queries must not write shared raw cache")
 
-    def _fake_request(http_client, url, **kwargs):
+    def _fake_request(_http_client, url, **kwargs):
         captured["requests"] += 1
         captured["url"] = url
         captured["headers"] = kwargs["headers"]
@@ -5595,7 +5596,7 @@ def test_warcraftlogs_client_graphql_omits_null_variables_in_request_body(monkey
         def json(self) -> dict[str, object]:
             return {"data": {"ok": True}}
 
-    def _fake_request(http_client, url, **kwargs):
+    def _fake_request(_http_client, url, **kwargs):
         captured["json"] = kwargs.get("json")
         return _Resp()
 
@@ -5838,7 +5839,7 @@ def test_warcraftlogs_client_graphql_uses_client_endpoint_without_user_token(mon
         def json(self) -> dict[str, object]:
             return {"data": {"ok": True}}
 
-    def _fake_request(http_client, url, **kwargs):
+    def _fake_request(_http_client, url, **kwargs):
         captured["url"] = url
         captured["headers"] = kwargs.get("headers")
         return _Resp()
@@ -6291,7 +6292,7 @@ def test_warcraftlogs_client_rate_limit_always_uses_client_endpoint(monkeypatch)
         def json(self) -> dict[str, object]:
             return {"data": {"rateLimitData": {"limitPerHour": 100, "pointsSpentThisHour": 1, "pointsResetIn": 60}}}
 
-    def _fake_request(http_client, url, **kwargs):
+    def _fake_request(_http_client, url, **kwargs):
         captured["url"] = url
         captured["headers"] = kwargs.get("headers")
         return _Resp()
@@ -6334,7 +6335,7 @@ def test_warcraftlogs_client_probe_live_public_api_always_uses_client_endpoint(m
         def json(self) -> dict[str, object]:
             return {"data": {"rateLimitData": {"limitPerHour": 100, "pointsSpentThisHour": 1, "pointsResetIn": 60}}}
 
-    def _fake_request(http_client, url, **kwargs):
+    def _fake_request(_http_client, url, **kwargs):
         captured["url"] = url
         captured["headers"] = kwargs.get("headers")
         return _Resp()
@@ -6668,7 +6669,7 @@ def test_warcraftlogs_user_endpoint_cache_is_scoped_to_the_saved_account(monkeyp
     store = _DictCacheStore()
     calls: list[str] = []
 
-    def _fake_request(http_client: object, url: str, **kwargs: Any) -> httpx.Response:
+    def _fake_request(_http_client: object, url: str, **kwargs: Any) -> httpx.Response:
         authorization = str(kwargs["headers"]["Authorization"])
         calls.append(authorization)
         owner = "UserA" if authorization.endswith("token-a") else "UserB"
@@ -6707,7 +6708,7 @@ def test_warcraftlogs_client_counts_cache_hits_and_upstream_requests(monkeypatch
     monkeypatch.setattr("warcraftlogs_cli.client.load_provider_auth_state", lambda provider: None)
     store = _DictCacheStore()
 
-    def _fake_request(http_client: object, url: str, **kwargs: Any) -> httpx.Response:
+    def _fake_request(_http_client: object, url: str, **kwargs: Any) -> httpx.Response:
         return httpx.Response(200, json={"data": {"ok": True}}, request=httpx.Request("POST", url))
 
     monkeypatch.setattr("warcraftlogs_cli.client.request_with_retries", _fake_request)
@@ -6734,7 +6735,7 @@ def test_warcraftlogs_client_counts_raw_graphql_cache_hits(monkeypatch: pytest.M
     monkeypatch.setattr("warcraftlogs_cli.client.load_provider_auth_state", lambda provider: None)
     store = _DictCacheStore()
 
-    def _fake_request(http_client: object, url: str, **kwargs: Any) -> httpx.Response:
+    def _fake_request(_http_client: object, url: str, **kwargs: Any) -> httpx.Response:
         return httpx.Response(200, json={"data": {"ok": True}}, request=httpx.Request("POST", url))
 
     monkeypatch.setattr("warcraftlogs_cli.client.request_with_retries", _fake_request)
@@ -6878,6 +6879,51 @@ def test_warcraftlogs_report_player_details_accepts_a_scoped_slice(
     assert result.exit_code == 0
     counts = json.loads(result.stdout)["data"]["player_details"]["counts"]
     assert counts["total"] == counts["tanks"] + counts["healers"] + counts["dps"] > 0
+
+
+class _FightAwareClient(_FakeWarcraftLogsClient):
+    """playerDetails that comes back empty when no fight matches the slice, the way the API does."""
+
+    def report_player_details(
+        self,
+        *,
+        code: str,
+        allow_unlisted: bool = False,
+        options: ReportPlayerDetailsOptions,
+        ttl_override: int | None = None,
+    ) -> dict[str, object]:
+        if options.fight_ids == [1] and options.encounter_id in {None, 3012}:
+            return super().report_player_details(code=code, allow_unlisted=allow_unlisted, options=options)
+        return {
+            "code": code,
+            "title": "Manaforge Omega - Liquid",
+            "zone": {"id": 38, "name": "Manaforge Omega"},
+            "playerDetails": {"data": {"tanks": [], "healers": [], "dps": []}},
+        }
+
+
+@pytest.mark.parametrize(
+    "scope_args",
+    [
+        ["--fight-id", "9999"],
+        ["--fight-id", "1", "--encounter-id", "3129"],
+        ["--start-time", "100", "--end-time", "900"],
+    ],
+)
+def test_warcraftlogs_report_player_details_rejects_a_slice_that_matches_no_fight(
+    monkeypatch: pytest.MonkeyPatch,
+    scope_args: list[str],
+) -> None:
+    # An empty roster means the slice matched nothing, not that the report has no players.
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _FightAwareClient())
+
+    result = runner.invoke(warcraftlogs_app, ["report-player-details", "abcd1234", *scope_args])
+
+    assert result.exit_code == 4
+    error = json.loads(result.stderr)["error"]
+    assert error["code"] == "not_found"
+    assert "abcd1234" in error["message"]
+    assert scope_args[-1] in error["message"]
 
 
 class _WorldDataAwareClient(_FakeWarcraftLogsClient):
