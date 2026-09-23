@@ -22,7 +22,7 @@ from warcraft_core.analytics import (
 from warcraft_core.provider import ProviderError
 from warcraft_core.shapes import as_dict, as_list
 
-from raiderio_cli.client import FetchedJson, RaiderIOClient, combined_freshness
+from raiderio_cli.client import FetchedJson, RaiderIOClient, combined_freshness, page_freshness
 from raiderio_cli.identity import raiderio_class_spec_identity
 
 
@@ -606,16 +606,11 @@ def freshness_payload(meta: dict[str, Any]) -> dict[str, Any]:
 def runs_page_provenance(fetched: FetchedJson, *, cache_ttl_seconds: int) -> dict[str, Any]:
     """``freshness`` and ``citations`` for the single-page ``mythic-plus-runs`` read.
 
-    ``fetched_at`` is when the page came off the wire, so a ``cache_hit`` replay reports the age of
-    what it replayed rather than the time the command ran. Without this the provenance is empty.
+    Without this the provenance is empty.
     """
     leaderboard_url = fetched.payload.get("leaderboard_url")
     return {
-        "freshness": {
-            "fetched_at": fetched.fetched_at,
-            "cache_hit": fetched.cache_hit,
-            "cache_ttl_seconds": cache_ttl_seconds,
-        },
+        "freshness": page_freshness(fetched, cache_ttl_seconds=cache_ttl_seconds),
         "citations": {
             "leaderboard_urls": [leaderboard_url] if isinstance(leaderboard_url, str) and leaderboard_url else [],
         },

@@ -37,7 +37,7 @@ from warcraft_core.cli import (
 from warcraft_core.cli import (
     RuntimeConfig as BaseRuntimeConfig,
 )
-from warcraft_core.envelope import ENVELOPE_KEYS, SCHEMA_VERSION, Envelope
+from warcraft_core.envelope import ENVELOPE_KEYS, SCHEMA_VERSION, Envelope, error_envelope
 from warcraft_core.exit_codes import EXIT_AUTH, EXIT_USAGE, exit_code_for
 from warcraft_core.identity import (
     ability_identity_payload,
@@ -49,7 +49,7 @@ from warcraft_core.identity import (
     talent_transport_packet_payload,
     validate_talent_transport_packet,
 )
-from warcraft_core.output import DEFAULT_COMPACT_MAX_CHARS
+from warcraft_core.output import DEFAULT_COMPACT_MAX_CHARS, to_json
 from warcraft_core.paths import provider_state_path
 from warcraft_core.talent_transport import TalentTransportBackend, validate_talent_tree_transport
 from warcraft_core.wow_normalization import normalize_region
@@ -74,6 +74,9 @@ from warcraftlogs_cli.boss_kills import (
 )
 from warcraftlogs_cli.boss_kills import (
     sampled_cross_report_freshness as _sampled_cross_report_freshness,
+)
+from warcraftlogs_cli.boss_kills import (
+    sampled_dedupe_notes as _sampled_dedupe_notes,
 )
 from warcraftlogs_cli.boss_kills import (
     sampled_sample_scope as _sampled_sample_scope,
@@ -354,14 +357,31 @@ _USAGE_ERROR_CODES = frozenset(
 )
 
 
-def _fail(ctx: typer.Context, code: str, message: str) -> NoReturn:
+def _fail(ctx: typer.Context, code: str, message: str, *, query: Any = None) -> NoReturn:
+    """Fail with the Warcraft Logs exit-code mapping, echoing the slice the command acted on.
+
+    ``warcraft_core.cli.fail`` always writes ``query: null``. A rejected or unmatched slice is only
+    actionable when the envelope names it, so a caller that knows its normalized input passes
+    ``query=`` and the envelope is written here instead.
+    """
     if code in _AUTH_ERROR_CODES:
         exit_code = EXIT_AUTH
     elif code in _USAGE_ERROR_CODES:
         exit_code = EXIT_USAGE
     else:
         exit_code = exit_code_for(code)
-    fail(ctx, code, message, exit_code=exit_code)
+    if query is None:
+        fail(ctx, code, message, exit_code=exit_code)
+    config = _cfg(ctx)
+    envelope = error_envelope(
+        provider=config.provider,
+        command=ctx.info_name or "",
+        code=code,
+        message=message,
+        query=query,
+    )
+    typer.echo(to_json(envelope, pretty=config.output.pretty), err=True)
+    raise typer.Exit(exit_code)
 
 
 def _load_graphql_query(ctx: typer.Context, query: str | None, *, introspect: bool) -> str:
@@ -1752,6 +1772,7 @@ def _require_report_slice(
     fight_id: list[int] | None,
     start_time: float | None,
     end_time: float | None,
+    query: dict[str, Any],
 ) -> None:
     """Reject a query Warcraft Logs answers with an empty payload plus a GraphQL warning.
 
@@ -1767,6 +1788,46 @@ def _require_report_slice(
         f"{command} requires --fight-id, or both --start-time and --end-time. "
         "Warcraft Logs answers any wider query with an empty payload; --encounter-id filters "
         "the slice but does not define one.",
+        query=query,
+    )
+
+
+def _fight_in_slice(fight: dict[str, Any], *, fight_ids: list[int] | None, encounter_id: int | None) -> bool:
+    if fight_ids and fight.get("id") not in fight_ids:
+        return False
+    return encounter_id is None or fight.get("encounterID") == encounter_id
+
+
+def _require_matching_fight(
+    ctx: typer.Context,
+    client: WarcraftLogsClient,
+    *,
+    code: str,
+    allow_unlisted: bool,
+    fight_ids: list[int] | None,
+    encounter_id: int | None,
+    difficulty: int | None,
+    query: dict[str, Any],
+) -> None:
+    """Reject a fight-scoped request naming a fight the report does not have.
+
+    Warcraft Logs answers an unknown ``--fight-id``, an ``--encounter-id`` the report never
+    pulled, or a ``--difficulty`` those fights were not on with an empty or null slice and HTTP
+    200, which reads as "that fight had no data" instead of "no such fight". Requests that name no
+    fight at all are left alone: a report-wide slice is a legitimate query, and an empty answer to
+    one is a real answer.
+    """
+    if not fight_ids and encounter_id is None and difficulty is None:
+        return
+    fights_report = client.report_fights(code=code, difficulty=difficulty, allow_unlisted=allow_unlisted)
+    fights = [row for row in list_at(fights_report, "fights") if isinstance(row, dict)]
+    if any(_fight_in_slice(row, fight_ids=fight_ids, encounter_id=encounter_id) for row in fights):
+        return
+    _fail(
+        ctx,
+        "not_found",
+        f"Warcraft Logs report {code} has no fight matching {_described_slice(query)}.",
+        query=query,
     )
 
 
@@ -2616,7 +2677,10 @@ def _boss_spec_usage_payload(
         "ranking_basis": "sampled_finished_kill_cohort_spec_presence",
         "matching_rule": "spec_presence_across_sampled_finished_kills_with_player_details",
         "query": query,
-        "notes": _sampled_spec_filter_notes(query.get("spec_name") if isinstance(query, dict) else None),
+        "notes": [
+            *_sampled_spec_filter_notes(query.get("spec_name") if isinstance(query, dict) else None),
+            *_sampled_dedupe_notes(sample),
+        ],
         "freshness": _sampled_cross_report_freshness(cache_ttl_seconds, transport_counts=transport_counts),
         "cache_provenance": _sampled_cache_provenance(cache_ttl_seconds),
         "sample_scope": _sampled_sample_scope(
@@ -2833,7 +2897,10 @@ def _comp_samples_payload(
         "ranking_basis": "sampled_fastest_kills",
         "matching_rule": "class_roster_composition_across_sampled_finished_kills_with_player_details",
         "query": query,
-        "notes": _sampled_spec_filter_notes(query.get("spec_name") if isinstance(query, dict) else None),
+        "notes": [
+            *_sampled_spec_filter_notes(query.get("spec_name") if isinstance(query, dict) else None),
+            *_sampled_dedupe_notes(sample),
+        ],
         "freshness": _sampled_cross_report_freshness(cache_ttl_seconds, transport_counts=transport_counts),
         "cache_provenance": _sampled_cache_provenance(cache_ttl_seconds),
         "sample_scope": _sampled_sample_scope(
@@ -3015,6 +3082,7 @@ def _ability_usage_summary_payload(
         "query": scoped_query,
         "notes": [
             *_sampled_spec_filter_notes(query.get("spec_name") if isinstance(query, dict) else None),
+            *_sampled_dedupe_notes(sample),
             *_event_limit_truncation_notes(truncated_kill_count, event_limit=event_limit),
         ],
         "freshness": _sampled_cross_report_freshness(cache_ttl_seconds, transport_counts=transport_counts),
@@ -3527,8 +3595,15 @@ def main(
 
 
 def _emit_surface(ctx: typer.Context, envelope: Envelope) -> None:
-    """Emit a pure-surface envelope, keeping its body flattened at the top level for older agents."""
-    _emit(ctx, {**envelope, **envelope["data"]})
+    """Emit a pure-surface envelope, keeping its body flattened at the top level for older agents.
+
+    ``data`` is dropped so ``_with_envelope_keys`` rebuilds it from the flattened body. Carrying
+    the provider's own ``data`` through would leave it missing the canonical command key, and
+    ``data`` would stop mirroring the top level on exactly these three commands.
+    """
+    flattened = {**envelope, **envelope["data"]}
+    del flattened["data"]
+    _emit(ctx, flattened)
 
 
 @app.command("search")
@@ -6140,6 +6215,16 @@ def _emit_report_events_slice(
     """Fetch one raw event slice and emit it with the filter options echoed back as the query."""
     client = _client(ctx)
     try:
+        _require_matching_fight(
+            ctx,
+            client,
+            code=code,
+            allow_unlisted=allow_unlisted,
+            fight_ids=options.fight_ids,
+            encounter_id=options.encounter_id,
+            difficulty=options.difficulty,
+            query=asdict(options),
+        )
         payload = client.report_events(code=code, allow_unlisted=allow_unlisted, options=options)
     except WarcraftLogsClientError as exc:
         _handle_client_error(ctx, exc)
@@ -6171,6 +6256,16 @@ def _emit_report_json_slice(
     """Fetch one raw report ``table`` or ``graph`` slice and emit it under the matching payload key."""
     client = _client(ctx)
     try:
+        _require_matching_fight(
+            ctx,
+            client,
+            code=code,
+            allow_unlisted=allow_unlisted,
+            fight_ids=options.fight_ids,
+            encounter_id=options.encounter_id,
+            difficulty=options.difficulty,
+            query=asdict(options),
+        )
         payload = (
             client.report_table(code=code, allow_unlisted=allow_unlisted, options=options)
             if field == "table"
@@ -6220,34 +6315,31 @@ def report_events(
     allow_unlisted: bool = typer.Option(False, "--allow-unlisted", help="Allow lookup of unlisted reports."),
 ) -> None:
     """Return raw report events for one fight (--fight-id) or one explicit --start-time/--end-time window."""
+    options = ReportFilterOptions(
+        ability_id=ability_id,
+        data_type=_normalize_graphql_enum(data_type),
+        difficulty=difficulty,
+        encounter_id=encounter_id,
+        end_time=end_time,
+        fight_ids=fight_id,
+        filter_expression=filter_expression,
+        hostility_type=_normalize_graphql_enum(hostility_type),
+        kill_type=_normalize_graphql_enum(kill_type),
+        limit=limit,
+        source_id=source_id,
+        start_time=start_time,
+        target_id=target_id,
+        translate=translate,
+    )
     _require_report_slice(
         ctx,
         command="report-events",
         fight_id=fight_id,
         start_time=start_time,
         end_time=end_time,
+        query=asdict(options),
     )
-    _emit_report_events_slice(
-        ctx,
-        code=code,
-        allow_unlisted=allow_unlisted,
-        options=ReportFilterOptions(
-            ability_id=ability_id,
-            data_type=_normalize_graphql_enum(data_type),
-            difficulty=difficulty,
-            encounter_id=encounter_id,
-            end_time=end_time,
-            fight_ids=fight_id,
-            filter_expression=filter_expression,
-            hostility_type=_normalize_graphql_enum(hostility_type),
-            kill_type=_normalize_graphql_enum(kill_type),
-            limit=limit,
-            source_id=source_id,
-            start_time=start_time,
-            target_id=target_id,
-            translate=translate,
-        ),
-    )
+    _emit_report_events_slice(ctx, code=code, allow_unlisted=allow_unlisted, options=options)
 
 
 @app.command("report-table")
@@ -6400,13 +6492,6 @@ def report_player_details(
     """Return a report's player details for one fight (--fight-id) or one explicit --start-time/--end-time window."""
     # Warcraft Logs answers a wider playerDetails query with an empty roster plus a GraphQL
     # warning, which reads as "this report has no players". Reject it here like report-events does.
-    _require_report_slice(
-        ctx,
-        command="report-player-details",
-        fight_id=fight_id,
-        start_time=start_time,
-        end_time=end_time,
-    )
     normalized_kill_type = _normalize_graphql_enum(kill_type)
     options = ReportPlayerDetailsOptions(
         difficulty=difficulty,
@@ -6428,6 +6513,14 @@ def report_player_details(
         "start_time": start_time,
         "translate": translate,
     }
+    _require_report_slice(
+        ctx,
+        command="report-player-details",
+        fight_id=fight_id,
+        start_time=start_time,
+        end_time=end_time,
+        query=query,
+    )
     client = _client(ctx)
     try:
         payload = client.report_player_details(code=code, allow_unlisted=allow_unlisted, options=options)
@@ -6448,6 +6541,7 @@ def report_player_details(
             ctx,
             "not_found",
             f"Warcraft Logs report {code} has no fight matching {_described_slice(query)}, so the roster is empty.",
+            query=query,
         )
     _emit(
         ctx,
@@ -6484,8 +6578,26 @@ def report_rankings(
         player_metric=player_metric,
         timeframe=normalized_timeframe,
     )
+    query = {
+        "compare": normalized_compare,
+        "difficulty": difficulty,
+        "encounter_id": encounter_id,
+        "fight_ids": fight_id,
+        "player_metric": player_metric,
+        "timeframe": normalized_timeframe,
+    }
     client = _client(ctx)
     try:
+        _require_matching_fight(
+            ctx,
+            client,
+            code=code,
+            allow_unlisted=allow_unlisted,
+            fight_ids=fight_id,
+            encounter_id=encounter_id,
+            difficulty=difficulty,
+            query=query,
+        )
         payload = client.report_rankings(code=code, allow_unlisted=allow_unlisted, options=options)
     except WarcraftLogsClientError as exc:
         _handle_client_error(ctx, exc)
@@ -6496,14 +6608,7 @@ def report_rankings(
         {
             "ok": True,
             "provider": "warcraftlogs",
-            "query": {
-                "compare": normalized_compare,
-                "difficulty": difficulty,
-                "encounter_id": encounter_id,
-                "fight_ids": fight_id,
-                "player_metric": player_metric,
-                "timeframe": normalized_timeframe,
-            },
+            "query": query,
             **_report_rankings_payload(payload),
         },
         client=client,

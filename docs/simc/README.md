@@ -69,10 +69,16 @@ These codes are worth knowing:
 - `missing_dependency` (exit 1) — ripgrep is not installed.
 - `not_found` (exit 4) — `spec-files`, `find-action`, and `trace-action` were pointed at a directory that
   is not a SimulationCraft checkout. They report this instead of returning zero hits as a success.
-- `invalid_query` (exit 2) — a build arrived without a class and spec and could not be identified.
-  Identification decodes the build once per candidate spec, and the candidates are the checkout's APL
-  files, so no healer spec is ever tried; `error.details.probed_specs` lists the ones that were. Pass
-  `--actor-class` and `--spec` for the rest.
+- `invalid_query` (exit 2) — a build arrived without a class and spec and could not be identified, or a
+  build-input option was passed with an empty value. Identification decodes the build once per candidate
+  spec, and the candidates are exactly the specs the checkout ships an APL for (34 today, healer specs
+  mostly among the ones it does not); `error.details.probed_specs` lists them. Pass `--actor-class` and
+  `--spec` for anything outside that list.
+- `unsupported_build_reference` (exit 2) — the build input is a link the CLI cannot turn into talents.
+  `error.details.reference_type` names what it recognized: `wowhead_talent_calc_url` for a talent-calc
+  URL with no build code, `url` for anything else. See "Build references" below for what does decode.
+- `unknown_talent` (exit 2) — an `--enable`/`--disable` value, or a `modify-build` `--add`/`--remove`
+  value, names no talent of the actor's class. `error.details.unknown_talents` lists them.
 
 ## Build input flags
 
@@ -93,9 +99,24 @@ the CLI reports which one it used in `source_kind` and `identity`.
 Analysis commands additionally take `--enable NAME` and `--disable NAME` (repeatable or comma-separated)
 to force talents on or off on top of the resolved build.
 
+Passing a build-input option with an empty value is a usage error, not the same as omitting it.
+
 Raw-only transport packets are not accepted as direct build input: upgrade them with
 `simc validate-talent-transport --build-packet <path> --out <path>` first. Malformed packets fail with
 `invalid_build_packet` on every command that reads one.
+
+## Build references
+
+`--build-text` and `--talents` accept these reference types. Anything else fails with
+`unsupported_build_reference` rather than reaching SimC as if it were a talent hash.
+
+| Reference type | Example | Decodes |
+|----------------|---------|---------|
+| `wow_talent_export` | `C4QAAAAAA...` | Yes, once the class and spec are known. Both Method and Icy Veins publish only this type, and the string names no class or spec, so either pass `--actor-class`/`--spec` or let identification probe the specs the checkout ships an APL for. |
+| `wowhead_talent_calc_url` | `https://www.wowhead.com/talent-calc/monk/mistweaver/<code>` | Yes, unaided: the path names the class and spec. |
+| Wowhead `/talent-calc/blizzard/<code>` | what `modify-build` publishes as `result.wowhead_url` | Yes, as a `wow_talent_export`: the URL carries the hash but no class or spec. |
+| `wowhead_talent_calc_url` with no build code | `https://www.wowhead.com/talent-calc/monk/mistweaver` | No — `unsupported_build_reference`. |
+| Any other link (guide page, article, addon export site) | `https://www.icy-veins.com/wow/...` | No — `unsupported_build_reference` with `reference_type: "url"`. |
 
 ## Decoded builds
 
@@ -105,9 +126,14 @@ Raw-only transport packets are not accepted as direct build input: upgrade them 
   hash grants the keystones of both hero trees and SimC then disables the unselected one, so those
   talents are moved to `inactive_hero_talents` and are absent from `enabled_talents`. Keeping them there
   flips APL branches that dispatch on a hero keystone.
-- Talent rows carry `rank_known`. SimC spreads a tiered node's ranks across several entries and prints
-  only the leftover (always `0`), so the talent is taken but its rank cannot be read back: those rows
-  report `rank: null`, `rank_known: false`, and still count as enabled.
+- A tiered node (one node whose ranks are spread over several entries) is reported as one row per entry,
+  each with its own rank. SimC's decode prints a single line per tiered node holding the leftover rank,
+  always `0`, so the CLI runs the build a second time with those entries set to rank `0` and reads the
+  ranks back out of SimC's own overwrite log. Without those ranks the node cannot be re-serialized, and
+  every `modify-build` tree swap dropped it.
+- Talent rows still carry `rank_known`. It is `false`, with `rank: null`, only when the read-back found
+  nothing — for example when the checkout's trait data predates the node. Such a row still counts as
+  enabled, and re-serializing it (a tree swap) will fail with `encode_mismatch` rather than lose it.
 
 ## Editing a build
 
@@ -122,10 +148,11 @@ changed in the active trees that was not asked for, the command fails with `enco
 `details.unrequested_changes` instead of emitting an export. On success the payload carries
 `result.verified: true`.
 
-A tree swap drops the base hash and rebuilds every tree from `entry:rank` pairs, which cannot express a
-tiered node (see `rank_known` above). Swapping a tree that holds one therefore fails with
-`encode_mismatch` naming the talent that would have been lost; `--add`/`--remove` keep the base hash and
-are unaffected.
+A tree swap drops the base hash and rebuilds every tree from `entry:rank` pairs. That is lossless for a
+tiered node whose per-entry ranks were read back (see "Decoded builds" above); when they were not
+(`rank_known: false`), the swap fails with `encode_mismatch` naming the talent that would have been
+lost rather than emitting an export without it. `--add`/`--remove` keep the base hash and are
+unaffected.
 
 `result.diff_from_base` has a fourth key, `inactive_hero`. SimC regenerates the talent hash whenever it
 is handed a split talent string, and its serializer freely grants the keystone of *every* hero tree, so
@@ -223,6 +250,13 @@ simc verify-clean --hash-binary
 and `top_action_deltas` are not: SimulationCraft records an action sequence for a single iteration, so
 those describe one fight however many were simulated. The payload says so in `sampling` and repeats
 `action_sequence_iterations: 1` on each summary and comparison. Treat a small CPM delta as noise.
+
+## Tests that need the binary
+
+`tests/test_simc_real_binary.py` drives the real SimC binary in the discovered checkout over its own
+stock MID1 profiles. It skips — with `REAL-BINARY TEST SKIPPED` in the skip reason — when no built
+binary is present, so it proves nothing on CI. The same logic is covered everywhere else by
+`tests/test_simc_build_input.py` and `tests/test_simc_cli.py`, which replay captured SimC output.
 
 ## Analysis boundary
 

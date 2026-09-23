@@ -7,7 +7,6 @@ into ``main``.
 
 from __future__ import annotations
 
-import math
 import re
 from datetime import date
 from typing import Any
@@ -187,9 +186,12 @@ def int_field(row: dict[str, Any], key: str) -> int:
     return value if isinstance(value, int) else 0
 
 
+EXACT_NAME_SCORE = 30
+
+
 def exact_match_score(normalized_query: str, *, name_normalized: str, display_normalized: str) -> tuple[int, list[str]]:
     if normalized_query and name_normalized == normalized_query:
-        return 30, ["exact_name"]
+        return EXACT_NAME_SCORE, ["exact_name"]
     if normalized_query and display_normalized == normalized_query:
         return 26, ["exact_display_name"]
     return 0, []
@@ -223,19 +225,53 @@ def type_hint_score(query: str, *, entity_type: str | None) -> tuple[int, list[s
     return 0, []
 
 
-def popularity_score(popularity: int, *, entity_type: str | None) -> tuple[int, list[str]]:
-    reasons: list[str] = []
-    score = 0
-    if popularity > 0:
-        score += min(6, int(math.log10(popularity + 1) * 2))
-        reasons.append("popularity")
-    if entity_type is not None:
-        score += 1
-    return score, reasons
+# Wowhead's suggestion response carries two orderings of the same rows. `results` is the flat list
+# its dropdown shows, ordered by the `popularity` ordinal (0 = most viewed), which puts proc spells
+# and news posts ahead of the entity a query names. `categories.database` is the relevance order the
+# site shows for database entities, and its head row is the entity the query means. Only the leading
+# rows earn a bonus: the head bonus clears an exact name match (`exact_name` plus `name_prefix`, 40)
+# so upstream's best answer outranks a same-named secondary entity, while the step between ranks
+# stays under that, so an exactly named row one rank down still wins.
+UPSTREAM_DATABASE_RANK_BONUS: tuple[int, ...] = (42, 28, 14)
+
+SuggestionKey = tuple[int, int]
+
+
+def suggestion_key(row: dict[str, Any]) -> SuggestionKey | None:
+    """Wowhead's own ``(type, id)`` identity for a suggestion row, shared by `results` and `categories`."""
+    type_id = row.get("type")
+    entity_id = row.get("id")
+    if isinstance(type_id, int) and isinstance(entity_id, int):
+        return type_id, entity_id
+    return None
+
+
+def upstream_database_ranks(response: dict[str, Any]) -> dict[SuggestionKey, int]:
+    """Read Wowhead's relevance order for database entities out of a suggestion response."""
+    categories = response.get("categories")
+    rows = categories.get("database") if isinstance(categories, dict) else None
+    if not isinstance(rows, list):
+        return {}
+    ranks: dict[SuggestionKey, int] = {}
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            continue
+        key = suggestion_key(row)
+        if key is not None and key not in ranks:
+            ranks[key] = index
+    return ranks
+
+
+def database_rank_score(database_rank: int | None, *, entity_type: str | None) -> tuple[int, list[str]]:
+    """Score how highly Wowhead's own database ranking placed the row, plus a point for a routable row."""
+    score = 1 if entity_type is not None else 0
+    if database_rank is None or database_rank >= len(UPSTREAM_DATABASE_RANK_BONUS):
+        return score, []
+    return score + UPSTREAM_DATABASE_RANK_BONUS[database_rank], ["upstream_database_rank"]
 
 
 def search_result_score_and_reasons(
-    row: dict[str, Any], *, query: str, ranking_query: str
+    row: dict[str, Any], *, query: str, ranking_query: str, database_rank: int | None = None
 ) -> tuple[int, list[str]]:
     normalized_query = " ".join(ranking_query.lower().split())
     terms = query_terms(ranking_query)
@@ -243,7 +279,6 @@ def search_result_score_and_reasons(
     display_name = str_field(row, "displayName")
     type_name = str_field(row, "typeName")
     entity_type = suggestion_entity_type(row)
-    popularity = int_field(row, "popularity")
 
     haystacks = [value.lower() for value in (name, display_name, type_name) if value]
     name_normalized = name.lower().strip()
@@ -256,7 +291,7 @@ def search_result_score_and_reasons(
         prefix_and_contains_score(normalized_query, name_normalized=name_normalized, display_normalized=display_normalized),
         term_match_score(terms, haystacks=haystacks),
         type_hint_score(query, entity_type=entity_type),
-        popularity_score(popularity, entity_type=entity_type),
+        database_rank_score(database_rank, entity_type=entity_type),
     ):
         score += part_score
         reasons.extend(part_reasons)
@@ -342,9 +377,11 @@ def normalize_search_results(
     query: str,
     expansion: ExpansionProfile,
     entity_types: tuple[str, ...] = (),
+    database_ranks: dict[SuggestionKey, int] | None = None,
 ) -> list[dict[str, Any]]:
     selected_entity_types = set(entity_types)
     ranking_query = search_ranking_query(query)
+    ranks = database_ranks or {}
     normalized: list[dict[str, Any]] = []
     for index, row in enumerate(results):
         if not isinstance(row, dict):
@@ -355,10 +392,12 @@ def normalize_search_results(
         entity_id = row.get("id")
         popularity = int_field(row, "popularity")
         updated = suggestion_updated_date(row)
+        key = suggestion_key(row)
         search_score, match_reasons = search_result_score_and_reasons(
             row,
             query=query,
             ranking_query=ranking_query,
+            database_rank=ranks.get(key) if key is not None else None,
         )
         candidate = {
             "id": entity_id,
@@ -383,7 +422,9 @@ def normalize_search_results(
                 "display_name": row.get("displayName"),
                 "updated": updated.isoformat() if updated is not None else None,
             },
-            "_sort": (-search_score, -popularity, index),
+            # `popularity` is upstream's ordinal, already the order `results` arrives in, so the
+            # source index is the tiebreak; ranking on the ordinal itself preferred the worse row.
+            "_sort": (-search_score, index),
         }
         follow_up = search_follow_up(candidate, query=query, expansion=expansion)
         if follow_up is not None:
@@ -402,19 +443,34 @@ def command_prefix_for_expansion(expansion: ExpansionProfile) -> str:
     return f"wowhead --expansion {expansion.key}"
 
 
-def partition_entity_candidates(
+# How far ahead of the best database entity an article has to score before it answers `resolve`.
+# One exact name match: the article's own title has to be what the query names, not just words the
+# entity shares with it.
+ARTICLE_OVER_ENTITY_MARGIN = EXACT_NAME_SCORE
+
+
+def top_candidate_score(candidates: list[dict[str, Any]]) -> int:
+    """The ranking score of the leading candidate, or 0 when the group is empty."""
+    if not candidates:
+        return 0
+    return int(candidates[0].get("ranking", {}).get("score") or 0)
+
+
+def preferred_resolve_candidates(
     candidates: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Split `resolve` candidates into database entities and the rows that are not entities.
+    """Split `resolve` candidates into the group that answers and the group that trails it.
 
-    Wowhead's suggestions mix entities with news posts and world events, and a headline often
-    matches the query text better than the item it is written about. `resolve` answers with an
-    entity, so those rows are ranked and scored apart: they still travel in the candidate list, but
-    they only become the match when the response holds no entity at all.
+    Wowhead's suggestions mix database entities with news posts and world events, and a headline
+    often matches the query text better than the item it is written about. `resolve` answers with an
+    entity unless an article leads it by `ARTICLE_OVER_ENTITY_MARGIN`, which is how a query that
+    names a headline still resolves to that news post.
     """
     entities = [row for row in candidates if row.get("entity_type") in PARSER_ENTITY_TYPES]
     articles = [row for row in candidates if row.get("entity_type") not in PARSER_ENTITY_TYPES]
-    return entities, articles
+    if entities and top_candidate_score(articles) - top_candidate_score(entities) < ARTICLE_OVER_ENTITY_MARGIN:
+        return entities, articles
+    return articles, entities
 
 
 def resolve_next_command(candidate: dict[str, Any]) -> str | None:

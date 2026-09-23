@@ -80,12 +80,24 @@ def combined_freshness(pages: Sequence[FetchedJson]) -> tuple[str, bool]:
     return min(page.fetched_at for page in pages), any(page.cache_hit for page in pages)
 
 
+def page_freshness(fetched: FetchedJson, *, cache_ttl_seconds: int) -> dict[str, Any]:
+    """The freshness block for one response: when it came off the wire, and whether it was replayed.
+
+    ``fetched_at`` is the stored fetch time rather than the time the command ran, so a ``cache_hit``
+    replay reports the age of the data it replayed. ``cache_ttl_seconds`` is how stale it may get.
+    """
+    return {
+        "fetched_at": fetched.fetched_at,
+        "cache_hit": fetched.cache_hit,
+        "cache_ttl_seconds": cache_ttl_seconds,
+    }
+
+
 class RaiderIOClient:
     """Cached Raider.IO API access.
 
-    The endpoints whose payloads carry provenance (leaderboards, raid rankings, the raid catalog)
-    return :class:`FetchedJson` so the command can report the real fetch time; the profile and
-    site-search endpoints report no freshness and return the response body alone.
+    Every endpoint a command reports provenance for returns :class:`FetchedJson`, so the command can
+    quote the real fetch time; only site search, which carries no provenance, returns a bare body.
     """
 
     def __init__(
@@ -154,53 +166,63 @@ class RaiderIOClient:
         self._write_cache(key, fetched, ttl_seconds=ttl_seconds)
         return fetched
 
-    def character_profile(self, *, region: str, realm: str, name: str, fields: str = DEFAULT_CHARACTER_FIELDS) -> dict[str, Any]:
-        return self._get_json(
-            f"{RAIDERIO_BASE_URL}/characters/profile",
-            params={"region": region, "realm": realm, "name": name, "fields": fields},
+    def _profile(self, *, path: str, namespace: str, ttl_seconds: int, region: str, realm: str, name: str, fields: str) -> FetchedJson:
+        """One profile plus its fetch time, trying each realm-slug spelling in turn.
+
+        Raider.IO's realm slug is not always the obvious slugification of the display name, so a 404
+        means "not under this spelling" and moves on; any other status is a real failure. The last
+        spelling is fetched outside the loop so its 404 reaches the caller as the answer.
+        """
+        params = {"region": normalize_region(region), "name": normalize_name(name), "fields": fields}
+
+        def fetch(realm_slug: str) -> FetchedJson:
+            return self._get_json(
+                f"{RAIDERIO_BASE_URL}/{path}",
+                params={**params, "realm": realm_slug},
+                namespace=namespace,
+                ttl_seconds=ttl_seconds,
+            )
+
+        *earlier, final = realm_slug_variants(realm) or [primary_realm_slug(realm)]
+        for candidate in earlier:
+            try:
+                return fetch(candidate)
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code != 404:
+                    raise
+        return fetch(final)
+
+    def character_profile(self, *, region: str, realm: str, name: str, fields: str = DEFAULT_CHARACTER_FIELDS) -> FetchedJson:
+        """One character profile plus its fetch time, under whichever realm spelling answers."""
+        return self._profile(
+            path="characters/profile",
             namespace="character_profile",
             ttl_seconds=self._character_ttl,
-        ).payload
+            region=region,
+            realm=realm,
+            name=name,
+            fields=fields,
+        )
 
     def character_profile_variants(self, *, region: str, realm: str, name: str, fields: str = DEFAULT_CHARACTER_FIELDS) -> dict[str, Any]:
-        normalized_region = normalize_region(region)
-        normalized_name = normalize_name(name)
-        variants = realm_slug_variants(realm) or [primary_realm_slug(realm)]
-        last_error: httpx.HTTPStatusError | None = None
-        for candidate in variants:
-            try:
-                return self.character_profile(region=normalized_region, realm=candidate, name=normalized_name, fields=fields)
-            except httpx.HTTPStatusError as exc:
-                if exc.response.status_code != 404:
-                    raise
-                last_error = exc
-        if last_error is not None:
-            raise last_error
-        return self.character_profile(region=normalized_region, realm=primary_realm_slug(realm), name=normalized_name, fields=fields)
+        """The profile body alone, for the search/resolve probes that report no freshness."""
+        return self.character_profile(region=region, realm=realm, name=name, fields=fields).payload
 
-    def guild_profile(self, *, region: str, realm: str, name: str, fields: str = DEFAULT_GUILD_FIELDS) -> dict[str, Any]:
-        return self._get_json(
-            f"{RAIDERIO_BASE_URL}/guilds/profile",
-            params={"region": region, "realm": realm, "name": name, "fields": fields},
+    def guild_profile(self, *, region: str, realm: str, name: str, fields: str = DEFAULT_GUILD_FIELDS) -> FetchedJson:
+        """One guild profile plus its fetch time, under whichever realm spelling answers."""
+        return self._profile(
+            path="guilds/profile",
             namespace="guild_profile",
             ttl_seconds=self._guild_ttl,
-        ).payload
+            region=region,
+            realm=realm,
+            name=name,
+            fields=fields,
+        )
 
     def guild_profile_variants(self, *, region: str, realm: str, name: str, fields: str = DEFAULT_GUILD_FIELDS) -> dict[str, Any]:
-        normalized_region = normalize_region(region)
-        normalized_name = normalize_name(name)
-        variants = realm_slug_variants(realm) or [primary_realm_slug(realm)]
-        last_error: httpx.HTTPStatusError | None = None
-        for candidate in variants:
-            try:
-                return self.guild_profile(region=normalized_region, realm=candidate, name=normalized_name, fields=fields)
-            except httpx.HTTPStatusError as exc:
-                if exc.response.status_code != 404:
-                    raise
-                last_error = exc
-        if last_error is not None:
-            raise last_error
-        return self.guild_profile(region=normalized_region, realm=primary_realm_slug(realm), name=normalized_name, fields=fields)
+        """The profile body alone, for the search/resolve probes that report no freshness."""
+        return self.guild_profile(region=region, realm=realm, name=name, fields=fields).payload
 
     def mythic_plus_runs(
         self,
@@ -273,6 +295,14 @@ class RaiderIOClient:
             namespace="search",
             ttl_seconds=self._static_ttl,
         ).payload
+
+    @property
+    def character_profile_ttl_seconds(self) -> int:
+        return self._character_ttl
+
+    @property
+    def guild_profile_ttl_seconds(self) -> int:
+        return self._guild_ttl
 
     @property
     def static_data_ttl_seconds(self) -> int:

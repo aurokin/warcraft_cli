@@ -40,6 +40,7 @@ from warcraft_core.exit_codes import EXIT_GENERIC, EXIT_USAGE, exit_code_for
 from warcraft_core.expansions import expansion_keys, list_expansions, resolve_expansion, warcraftlogs_site_for_expansion
 from warcraft_core.paths import cache_root, config_root, data_root, state_root, worktree_runtime_details
 from warcraft_core.provider import ProviderSurface
+from warcraft_core.shapes import as_dict
 from warcraft_wiki_cli.main import app as warcraft_wiki_app
 from warcraft_wiki_cli.provider import PROVIDER as warcraft_wiki_provider
 from warcraftlogs_cli.main import app as warcraftlogs_app
@@ -65,6 +66,7 @@ __all__ = [
     "provider_expansion_options",
     "provider_expansion_support",
     "provider_invoke",
+    "provider_payload_data",
     "provider_resolve",
     "provider_search",
     "provider_supports_surface",
@@ -109,6 +111,8 @@ class ProviderRegistration:
     supported_expansions: tuple[str, ...]
     expansion_review_status: str
     expansion_policy_note: str
+    # Readiness of the three surfaces the wrapper itself routes through. Everything else a provider
+    # can do is reported by that provider's own `doctor`; duplicating it here only lets the two drift.
     wrapper_capabilities: dict[str, SurfaceStatus]
     # Pure in-process surface (search/resolve/doctor); the wrapper never shells out to a binary.
     surface: ProviderSurface
@@ -317,9 +321,6 @@ PROVIDERS: tuple[ProviderRegistration, ...] = (
             "doctor": "ready",
             "search": "not_supported",
             "resolve": "not_supported",
-            "inspect_report": "ready",
-            "input": "ready",
-            "explain_input": "ready",
         },
         surface=raidbots_provider,
         tier="experimental",
@@ -352,8 +353,6 @@ PROVIDERS: tuple[ProviderRegistration, ...] = (
             "doctor": "ready",
             "search": "coming_soon",
             "resolve": "coming_soon",
-            "game_data": "ready",
-            "profile": "ready",
         },
         surface=blizzard_provider,
         tier="experimental",
@@ -385,7 +384,6 @@ PROVIDERS: tuple[ProviderRegistration, ...] = (
             "doctor": "ready",
             "search": "coming_soon",
             "resolve": "coming_soon",
-            "addon": "ready",
         },
         surface=curseforge_provider,
         tier="experimental",
@@ -414,12 +412,6 @@ PROVIDERS: tuple[ProviderRegistration, ...] = (
             "doctor": "ready",
             "search": "ready",
             "resolve": "ready",
-            "spec_ranking": "ready",
-            "comp_ranking": "ready",
-            "report_overview": "ready",
-            "season": "ready",
-            "current_season": "ready",
-            "metadata": "ready",
         },
         surface=lorrgs_provider,
         tier="supported",
@@ -641,16 +633,14 @@ def wrapper_envelope(command: str, payload: Mapping[str, Any]) -> dict[str, Any]
     return {**defaults, **payload}
 
 
-def _flat_payload(envelope: dict[str, Any]) -> dict[str, Any]:
-    """Envelope with its ``data`` body also flattened at the top level, the shape the CLIs print.
+def provider_payload_data(payload: Mapping[str, Any] | None) -> dict[str, Any]:
+    """The ``data`` body of a provider envelope: the only place a wrapper composite reads its fields.
 
-    Wrapper composites read legacy keys (``results``, ``resolved``, ``match``, ``auth``) directly,
-    and providers differ in whether their surface dual-emits them; flattening here keeps one shape.
+    ``data`` is the contract-stable home of every provider field (docs/foundation/ERROR_CONTRACT.md);
+    the copies of those keys at the top level of an envelope are deprecated and are being removed.
+    No wrapper reader may depend on them.
     """
-    data = envelope.get("data")
-    if not isinstance(data, dict):
-        return dict(envelope)
-    return {**data, **envelope}
+    return as_dict(as_dict(payload).get("data"))
 
 
 def _call_surface(provider: str, command: str, call: Callable[..., Any], *args: Any, **kwargs: Any) -> tuple[int, dict[str, Any]]:
@@ -660,7 +650,7 @@ def _call_surface(provider: str, command: str, call: Callable[..., Any], *args: 
     except Exception as exc:
         failure, exit_code = error_envelope_for(provider, command, exc)
         return exit_code, dict(failure)
-    payload = _flat_payload(dict(envelope))
+    payload = dict(envelope)
     if payload.get("ok") is False:
         error = payload.get("error")
         code = error.get("code") if isinstance(error, dict) else None
@@ -780,7 +770,7 @@ def provider_doctor(provider: str, *, requested_expansion: str | None = None) ->
         **registration.doctor_options,
         **expansion_options,
     )
-    raw_auth = payload.get("auth")
+    raw_auth = as_dict(payload.get("data")).get("auth")
     auth_details = raw_auth if isinstance(raw_auth, dict) else None
     return {
         "provider": registration.name,

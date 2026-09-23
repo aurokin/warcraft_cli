@@ -3,24 +3,40 @@ from __future__ import annotations
 import ast
 import json
 from pathlib import Path
+from typing import Any
 
 import httpx
 import pytest
 import typer
 import warcraft_cli
 from method_cli.main import app as method_app
+from raiderio_cli.client import FetchedJson
 from simc_cli.build_input import BuildIdentity, BuildResolution, BuildSpec
 from typer.testing import CliRunner
 from warcraft_cli.guild import guild_rank_rows
+from warcraft_cli.main import ACTOR_PROFILE_MAX_SCOPED_FIGHTS
 from warcraft_cli.main import app as warcraft_app
 from warcraft_cli.providers import PROVIDERS, get_provider
 from warcraft_content.article_bundle import write_article_bundle
 from warcraft_core.cli import error_envelope_for
-from warcraft_core.envelope import envelope_violations
+from warcraft_core.envelope import ENVELOPE_KEYS, envelope_violations
 from warcraftlogs_cli.main import app as warcraftlogs_app
 from wowhead_cli.main import app as wowhead_app
 
 runner = CliRunner()
+
+
+def _envelope(payload: dict[str, Any]) -> dict[str, Any]:
+    """A fake provider payload in real envelope shape: every non-envelope key lives under ``data``.
+
+    The wrapper reads provider fields from ``data``; the top-level copies are deprecated and are
+    being removed. A fake that emits only the flat copies would keep a broken wrapper green.
+    """
+    return {
+        "ok": True,
+        **{key: value for key, value in payload.items() if key in ENVELOPE_KEYS},
+        "data": {key: value for key, value in payload.items() if key not in ENVELOPE_KEYS},
+    }
 
 
 def _assert_wrapper_success_envelope(payload: dict, *, command: str, provider: str = "warcraft") -> None:
@@ -410,14 +426,14 @@ def test_warcraft_doctor_reports_ready_and_stubbed_providers() -> None:
     assert providers["warcraft-wiki"]["expansion_support"]["mode"] == "fixed"
     assert providers["warcraft-wiki"]["expansion_support"]["review_status"] == "reviewed"
     assert providers["warcraft-wiki"]["expansion_support"]["supported_expansions"] == ["retail"]
-    assert providers["method"]["details"]["capabilities"]["guide"] == "ready"
-    assert providers["icy-veins"]["details"]["capabilities"]["guide"] == "ready"
-    assert providers["raiderio"]["details"]["capabilities"]["search"] == "ready"
-    assert providers["warcraftlogs"]["details"]["capabilities"]["search"] == "ready_explicit_report_only"
-    assert providers["warcraft-wiki"]["details"]["capabilities"]["article"] == "ready"
+    assert providers["method"]["details"]["data"]["capabilities"]["guide"] == "ready"
+    assert providers["icy-veins"]["details"]["data"]["capabilities"]["guide"] == "ready"
+    assert providers["raiderio"]["details"]["data"]["capabilities"]["search"] == "ready"
+    assert providers["warcraftlogs"]["details"]["data"]["capabilities"]["search"] == "ready_explicit_report_only"
+    assert providers["warcraft-wiki"]["details"]["data"]["capabilities"]["article"] == "ready"
     # simc's binary-backed capabilities track the binary, not a constant: doctor says "ready" only
     # when the SimulationCraft build is usable, and "unavailable" otherwise (no checkout on CI).
-    simc_details = providers["simc"]["details"]
+    simc_details = providers["simc"]["details"]["data"]
     simc_binary = simc_details["dependencies"]["simc_binary"]
     binary_backed_state = "ready" if simc_binary["available"] else "unavailable"
     for capability in ("decode_build", "validate_talent_transport"):
@@ -433,22 +449,22 @@ def test_warcraft_doctor_reports_ready_and_stubbed_providers() -> None:
     assert providers["blizzard-api"]["auth"]["flow"] == "oauth_client_credentials"
     assert providers["blizzard-api"]["expansion_support"]["mode"] == "none"
     assert providers["blizzard-api"]["wrapper_surfaces"]["search"]["status"] == "coming_soon"
-    assert providers["blizzard-api"]["details"]["capabilities"]["doctor"] == "ready"
+    assert providers["blizzard-api"]["details"]["data"]["capabilities"]["doctor"] == "ready"
     assert providers["curseforge"]["status"] == "partial"
     assert providers["curseforge"]["auth"]["required"] is True
     assert providers["curseforge"]["auth"]["flow"] == "api_key"
     assert providers["curseforge"]["expansion_support"]["mode"] == "none"
     assert providers["curseforge"]["wrapper_surfaces"]["search"]["status"] == "coming_soon"
-    assert providers["curseforge"]["details"]["capabilities"]["addon"] == "ready"
+    assert providers["curseforge"]["details"]["data"]["capabilities"]["addon"] == "ready"
     assert providers["lorrgs"]["status"] == "partial"
     assert providers["lorrgs"]["auth"]["required"] is False
     assert providers["lorrgs"]["expansion_support"]["mode"] == "fixed"
     assert providers["lorrgs"]["expansion_support"]["supported_expansions"] == ["retail"]
     assert providers["lorrgs"]["wrapper_surfaces"]["search"]["status"] == "ready"
     assert providers["lorrgs"]["wrapper_surfaces"]["resolve"]["status"] == "ready"
-    assert providers["lorrgs"]["details"]["capabilities"]["spec_ranking"] == "ready"
-    assert providers["lorrgs"]["details"]["capabilities"]["report_overview"] == "ready"
-    assert providers["lorrgs"]["details"]["capabilities"]["current_season"] == "ready"
+    assert providers["lorrgs"]["details"]["data"]["capabilities"]["spec_ranking"] == "ready"
+    assert providers["lorrgs"]["details"]["data"]["capabilities"]["report_overview"] == "ready"
+    assert providers["lorrgs"]["details"]["data"]["capabilities"]["current_season"] == "ready"
 
 
 def _provider_doctor_capabilities(registration) -> dict[str, str]:  # noqa: ANN001
@@ -529,12 +545,12 @@ def _stub_non_warcraftlogs_fanout(monkeypatch) -> None:  # noqa: ANN001
     def only_wcl_search(provider: str, query: str, *, limit: int = 5, expansion=None):  # noqa: ANN001, ANN202
         if provider == "warcraftlogs":
             return real_search(provider, query, limit=limit, expansion=expansion)
-        return {"provider": provider, "exit_code": 0, "payload": {"provider": provider, "count": 0, "results": []}}
+        return {"provider": provider, "exit_code": 0, "payload": _envelope({"provider": provider, "count": 0, "results": []})}
 
     def only_wcl_resolve(provider: str, query: str, *, limit: int = 5, expansion=None):  # noqa: ANN001, ANN202
         if provider == "warcraftlogs":
             return real_resolve(provider, query, limit=limit, expansion=expansion)
-        return {"provider": provider, "exit_code": 0, "payload": {"provider": provider, "resolved": False, "match": None}}
+        return {"provider": provider, "exit_code": 0, "payload": _envelope({"provider": provider, "resolved": False, "match": None})}
 
     monkeypatch.setattr("warcraft_cli.main.provider_search", only_wcl_search)
     monkeypatch.setattr("warcraft_cli.main.provider_resolve", only_wcl_resolve)
@@ -552,7 +568,7 @@ def test_warcraft_search_keeps_warcraftlogs_as_explicit_report_only_discovery_hi
     assert "warcraftlogs" in payload["included_providers"]
     assert "warcraftlogs" not in {row["provider"] for row in payload["excluded_providers"]}
 
-    wcl = {row["provider"]: row for row in payload["providers"]}["warcraftlogs"]["payload"]
+    wcl = {row["provider"]: row for row in payload["providers"]}["warcraftlogs"]["payload"]["data"]
     assert wcl["count"] == 0
     assert "explicit report URL or a bare report code" in wcl["message"]
     assert wcl["supported_inputs"]
@@ -568,7 +584,7 @@ def test_warcraft_resolve_never_fabricates_a_warcraftlogs_match_for_non_report_q
     payload = json.loads(result.stdout)
 
     assert "warcraftlogs" in payload["included_providers"]
-    wcl = {row["provider"]: row for row in payload["providers"]}["warcraftlogs"]["payload"]
+    wcl = {row["provider"]: row for row in payload["providers"]}["warcraftlogs"]["payload"]["data"]
     assert wcl["resolved"] is False
     assert wcl["match"] is None
     assert wcl["supported_inputs"]
@@ -587,7 +603,7 @@ def test_warcraft_doctor_reports_expansion_filtering_state() -> None:
     assert payload["wrapper"]["expansion_filter_active"] is True
     assert payload["included_providers"] == ["wowhead", "warcraftlogs"]
     providers = {row["provider"]: row for row in payload["providers"]}
-    assert providers["warcraftlogs"]["details"]["site_profile"]["key"] == "classic"
+    assert providers["warcraftlogs"]["details"]["data"]["site_profile"]["key"] == "classic"
     assert {row["provider"] for row in payload["excluded_providers"]} == {
         "method",
         "icy-veins",
@@ -742,7 +758,7 @@ def test_warcraft_doctor_handles_ptr_filter_without_warcraftlogs_site_translatio
     providers = {row["provider"]: row for row in payload["providers"]}
     assert providers["warcraftlogs"]["expansion_support"]["allowed"] is False
     assert providers["warcraftlogs"]["expansion_support"]["exclusion_reason"] == "provider_does_not_support_requested_expansion"
-    assert providers["warcraftlogs"]["details"]["site_profile"]["key"] == "retail"
+    assert providers["warcraftlogs"]["details"]["data"]["site_profile"]["key"] == "retail"
     assert "warcraftlogs" not in payload["included_providers"]
 
 
@@ -829,12 +845,12 @@ def test_warcraft_search_fans_out_across_providers(monkeypatch) -> None:
     assert payload["count"] == 1
     assert payload["results"][0]["provider"] == "wowhead"
     providers = {row["provider"]: row for row in payload["providers"]}
-    assert providers["method"]["payload"]["count"] == 0
-    assert providers["icy-veins"]["payload"]["count"] == 0
-    assert providers["raiderio"]["payload"]["count"] == 0
-    assert providers["warcraftlogs"]["payload"]["count"] == 0
-    assert "explicit report URL or a bare report code" in providers["warcraftlogs"]["payload"]["message"]
-    assert providers["warcraft-wiki"]["payload"]["count"] == 0
+    assert providers["method"]["payload"]["data"]["count"] == 0
+    assert providers["icy-veins"]["payload"]["data"]["count"] == 0
+    assert providers["raiderio"]["payload"]["data"]["count"] == 0
+    assert providers["warcraftlogs"]["payload"]["data"]["count"] == 0
+    assert "explicit report URL or a bare report code" in providers["warcraftlogs"]["payload"]["data"]["message"]
+    assert providers["warcraft-wiki"]["payload"]["data"]["count"] == 0
     assert "simc" not in providers
     assert "raidbots" not in providers
     excluded = {row["provider"]: row for row in payload["excluded_providers"]}
@@ -845,8 +861,8 @@ def test_warcraft_search_fans_out_across_providers(monkeypatch) -> None:
     assert excluded["blizzard-api"]["surface_support"]["status"] == "coming_soon"
     assert "curseforge" not in providers
     assert excluded["curseforge"]["surface_support"]["status"] == "coming_soon"
-    assert providers["lorrgs"]["payload"]["count"] == 0
-    assert providers["wowhead"]["payload"]["results"][0]["name"] == "Thunderfury"
+    assert providers["lorrgs"]["payload"]["data"]["count"] == 0
+    assert providers["wowhead"]["payload"]["data"]["results"][0]["name"] == "Thunderfury"
 
 
 def test_warcraft_guide_compare_returns_cross_provider_bundle_packet(tmp_path: Path) -> None:
@@ -923,7 +939,7 @@ def test_warcraft_guide_compare_query_orchestrates_resolve_export_and_compare(
         return {
             "provider": provider,
             "exit_code": 0,
-            "payload": {
+            "payload": _envelope({
                 "resolved": True,
                 "confidence": "high",
                 "match": {
@@ -933,7 +949,7 @@ def test_warcraft_guide_compare_query_orchestrates_resolve_export_and_compare(
                     "url": f"https://example.test/{ref}",
                 },
                 "next_command": f"{provider} guide {ref}",
-            },
+            }),
         }
 
     def fake_provider_invoke(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, object]:
@@ -951,7 +967,7 @@ def test_warcraft_guide_compare_query_orchestrates_resolve_export_and_compare(
         return {
             "provider": provider,
             "exit_code": 0,
-            "payload": {"output_dir": str(export_dir), "guide": payload["guide"]},
+            "payload": _envelope({"output_dir": str(export_dir), "guide": payload["guide"]}),
             "stdout": "",
         }
 
@@ -997,7 +1013,7 @@ def test_warcraft_guide_compare_query_uses_conservative_search_fallback(
             return {
                 "provider": provider,
                 "exit_code": 0,
-                "payload": {
+                "payload": _envelope({
                     "resolved": True,
                     "confidence": "high",
                     "match": {
@@ -1007,17 +1023,17 @@ def test_warcraft_guide_compare_query_uses_conservative_search_fallback(
                         "url": "https://example.test/method/mistweaver-monk",
                     },
                     "next_command": "method guide mistweaver-monk",
-                },
+                }),
             }
         return {
             "provider": provider,
             "exit_code": 0,
-            "payload": {
+            "payload": _envelope({
                 "resolved": False,
                 "confidence": "none",
                 "match": None,
                 "next_command": None,
-            },
+            }),
         }
 
     def fake_provider_search(provider: str, query: str, *, limit: int = 5, expansion: str | None = None) -> dict[str, object]:
@@ -1025,7 +1041,7 @@ def test_warcraft_guide_compare_query_uses_conservative_search_fallback(
             return {
                 "provider": provider,
                 "exit_code": 0,
-                "payload": {
+                "payload": _envelope({
                     "results": [
                         {
                             "id": "mistweaver-monk-pve-healing-guide",
@@ -1045,9 +1061,9 @@ def test_warcraft_guide_compare_query_uses_conservative_search_fallback(
                             "ranking": {"score": 41},
                         },
                     ]
-                },
+                }),
             }
-        return {"provider": provider, "exit_code": 0, "payload": {"results": []}}
+        return {"provider": provider, "exit_code": 0, "payload": _envelope({"results": []})}
 
     def fake_provider_invoke(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, object]:
         export_dir = Path(args[3])
@@ -1063,7 +1079,7 @@ def test_warcraft_guide_compare_query_uses_conservative_search_fallback(
         return {
             "provider": provider,
             "exit_code": 0,
-            "payload": {"output_dir": str(export_dir), "guide": payload["guide"]},
+            "payload": _envelope({"output_dir": str(export_dir), "guide": payload["guide"]}),
             "stdout": "",
         }
 
@@ -1103,7 +1119,7 @@ def test_warcraft_guide_compare_query_skips_weak_search_fallback(
             return {
                 "provider": provider,
                 "exit_code": 0,
-                "payload": {
+                "payload": _envelope({
                     "resolved": True,
                     "confidence": "high",
                     "match": {
@@ -1113,17 +1129,17 @@ def test_warcraft_guide_compare_query_skips_weak_search_fallback(
                         "url": "https://example.test/method/mistweaver-monk",
                     },
                     "next_command": "method guide mistweaver-monk",
-                },
+                }),
             }
         return {
             "provider": provider,
             "exit_code": 0,
-            "payload": {
+            "payload": _envelope({
                 "resolved": False,
                 "confidence": "none",
                 "match": None,
                 "next_command": None,
-            },
+            }),
         }
 
     def fake_provider_search(provider: str, query: str, *, limit: int = 5, expansion: str | None = None) -> dict[str, object]:
@@ -1131,7 +1147,7 @@ def test_warcraft_guide_compare_query_skips_weak_search_fallback(
             return {
                 "provider": provider,
                 "exit_code": 0,
-                "payload": {
+                "payload": _envelope({
                     "results": [
                         {
                             "id": "mistweaver-monk-pve-healing-guide",
@@ -1148,9 +1164,9 @@ def test_warcraft_guide_compare_query_skips_weak_search_fallback(
                             "ranking": {"score": 42},
                         },
                     ]
-                },
+                }),
             }
-        return {"provider": provider, "exit_code": 0, "payload": {"results": []}}
+        return {"provider": provider, "exit_code": 0, "payload": _envelope({"results": []})}
 
     def fake_provider_invoke(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, object]:
         export_dir = Path(args[3])
@@ -1166,7 +1182,7 @@ def test_warcraft_guide_compare_query_skips_weak_search_fallback(
         return {
             "provider": provider,
             "exit_code": 0,
-            "payload": {"output_dir": str(export_dir), "guide": payload["guide"]},
+            "payload": _envelope({"output_dir": str(export_dir), "guide": payload["guide"]}),
             "stdout": "",
         }
 
@@ -1211,7 +1227,7 @@ def test_warcraft_guide_compare_query_reuses_fresh_orchestrated_bundles(
         return {
             "provider": provider,
             "exit_code": 0,
-            "payload": {
+            "payload": _envelope({
                 "resolved": True,
                 "confidence": "high",
                 "match": {
@@ -1221,7 +1237,7 @@ def test_warcraft_guide_compare_query_reuses_fresh_orchestrated_bundles(
                     "url": f"https://example.test/{ref}",
                 },
                 "next_command": f"{provider} guide {ref}",
-            },
+            }),
         }
 
     def fake_provider_invoke(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, object]:
@@ -1239,7 +1255,7 @@ def test_warcraft_guide_compare_query_reuses_fresh_orchestrated_bundles(
         return {
             "provider": provider,
             "exit_code": 0,
-            "payload": {"output_dir": str(export_dir), "guide": payload["guide"]},
+            "payload": _envelope({"output_dir": str(export_dir), "guide": payload["guide"]}),
             "stdout": "",
         }
 
@@ -1280,7 +1296,7 @@ def test_warcraft_guide_compare_query_refreshes_stale_orchestrated_bundles(
         return {
             "provider": provider,
             "exit_code": 0,
-            "payload": {
+            "payload": _envelope({
                 "resolved": True,
                 "confidence": "high",
                 "match": {
@@ -1290,7 +1306,7 @@ def test_warcraft_guide_compare_query_refreshes_stale_orchestrated_bundles(
                     "url": f"https://example.test/{ref}",
                 },
                 "next_command": f"{provider} guide {ref}",
-            },
+            }),
         }
 
     def fake_provider_invoke(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, object]:
@@ -1308,7 +1324,7 @@ def test_warcraft_guide_compare_query_refreshes_stale_orchestrated_bundles(
         return {
             "provider": provider,
             "exit_code": 0,
-            "payload": {"output_dir": str(export_dir), "guide": payload["guide"]},
+            "payload": _envelope({"output_dir": str(export_dir), "guide": payload["guide"]}),
             "stdout": "",
         }
 
@@ -1367,7 +1383,7 @@ def test_warcraft_guide_compare_query_can_include_simc_build_handoff(
         return {
             "provider": provider,
             "exit_code": 0,
-            "payload": {
+            "payload": _envelope({
                 "resolved": True,
                 "confidence": "high",
                 "match": {
@@ -1377,7 +1393,7 @@ def test_warcraft_guide_compare_query_can_include_simc_build_handoff(
                     "url": f"https://example.test/{provider}/{ref}",
                 },
                 "next_command": f"{provider} guide {ref}",
-            },
+            }),
         }
 
     def fake_provider_invoke(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, object]:
@@ -1396,7 +1412,7 @@ def test_warcraft_guide_compare_query_can_include_simc_build_handoff(
             return {
                 "provider": provider,
                 "exit_code": 0,
-                "payload": {"output_dir": str(export_dir), "guide": payload["guide"]},
+                "payload": _envelope({"output_dir": str(export_dir), "guide": payload["guide"]}),
                 "stdout": "",
             }
         return {
@@ -1483,11 +1499,11 @@ def test_warcraft_guide_builds_simc_reads_bundle_build_refs(monkeypatch, tmp_pat
         return {
             "provider": provider,
             "exit_code": 0,
-            "payload": {
+            "payload": _envelope({
                 "provider": "simc",
                 "kind": "identify_build" if args[0] == "identify-build" else "decode_build",
                 "build_spec": {"talents": "ABC123", "actor_class": "monk", "spec": "mistweaver"},
-            },
+            }),
             "stdout": "",
         }
 
@@ -1701,7 +1717,7 @@ def test_warcraft_guide_builds_simc_hides_deleted_temp_packet_paths(monkeypatch,
         return {
             "provider": provider,
             "exit_code": 0,
-            "payload": {
+            "payload": _envelope({
                 "provider": "simc",
                 "kind": args[0],
                 "build_spec": {
@@ -1712,7 +1728,7 @@ def test_warcraft_guide_builds_simc_hides_deleted_temp_packet_paths(monkeypatch,
                         "transport_status": "exact",
                     }
                 },
-            },
+            }),
             "stdout": "",
         }
 
@@ -1725,12 +1741,12 @@ def test_warcraft_guide_builds_simc_hides_deleted_temp_packet_paths(monkeypatch,
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     simc_payloads = payload["builds"][0]["simc"]
-    assert "path" not in simc_payloads["identify"]["payload"]["build_spec"]["transport_packet"]
-    assert "path" not in simc_payloads["decode"]["payload"]["build_spec"]["transport_packet"]
-    assert "path" not in simc_payloads["describe"]["payload"]["build_spec"]["transport_packet"]
-    assert simc_payloads["identify"]["payload"]["build_spec"]["source_notes"] == ["talent transport packet"]
-    assert simc_payloads["decode"]["payload"]["build_spec"]["source_notes"] == ["talent transport packet"]
-    assert simc_payloads["describe"]["payload"]["build_spec"]["source_notes"] == ["talent transport packet"]
+    assert "path" not in simc_payloads["identify"]["payload"]["data"]["build_spec"]["transport_packet"]
+    assert "path" not in simc_payloads["decode"]["payload"]["data"]["build_spec"]["transport_packet"]
+    assert "path" not in simc_payloads["describe"]["payload"]["data"]["build_spec"]["transport_packet"]
+    assert simc_payloads["identify"]["payload"]["data"]["build_spec"]["source_notes"] == ["talent transport packet"]
+    assert simc_payloads["decode"]["payload"]["data"]["build_spec"]["source_notes"] == ["talent transport packet"]
+    assert simc_payloads["describe"]["payload"]["data"]["build_spec"]["source_notes"] == ["talent transport packet"]
 
 
 def test_warcraft_guide_builds_simc_skips_buildless_talent_calc_refs(monkeypatch, tmp_path: Path) -> None:
@@ -1793,11 +1809,11 @@ def test_warcraft_guide_builds_simc_backfills_build_code_from_explicit_url(monke
         return {
             "provider": provider,
             "exit_code": 0,
-            "payload": {
+            "payload": _envelope({
                 "provider": "simc",
                 "kind": "identify_build" if args[0] == "identify-build" else "decode_build",
                 "build_spec": {"talents": "ABC123", "actor_class": "monk", "spec": "mistweaver"},
-            },
+            }),
             "stdout": "",
         }
 
@@ -1825,7 +1841,7 @@ def test_warcraft_guide_compare_query_fails_when_too_few_guides_export(
             return {
                 "provider": provider,
                 "exit_code": 0,
-                "payload": {
+                "payload": _envelope({
                     "resolved": True,
                     "confidence": "high",
                     "match": {
@@ -1835,24 +1851,24 @@ def test_warcraft_guide_compare_query_fails_when_too_few_guides_export(
                         "url": "https://example.test/method/mistweaver-monk",
                     },
                     "next_command": "method guide mistweaver-monk",
-                },
+                }),
             }
         return {
             "provider": provider,
             "exit_code": 0,
-            "payload": {
+            "payload": _envelope({
                 "resolved": False,
                 "confidence": "none",
                 "match": None,
                 "next_command": None,
-            },
+            }),
         }
 
     def fake_provider_search(provider: str, query: str, *, limit: int = 5, expansion: str | None = None) -> dict[str, object]:
         return {
             "provider": provider,
             "exit_code": 0,
-            "payload": {
+            "payload": _envelope({
                 "results": [
                     {
                         "id": "mistweaver-monk-pve-healing-guide",
@@ -1869,7 +1885,7 @@ def test_warcraft_guide_compare_query_fails_when_too_few_guides_export(
                         "ranking": {"score": 22},
                     },
                 ]
-            },
+            }),
         }
 
     def fake_provider_invoke(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, object]:
@@ -1886,7 +1902,7 @@ def test_warcraft_guide_compare_query_fails_when_too_few_guides_export(
         return {
             "provider": provider,
             "exit_code": 0,
-            "payload": {"output_dir": str(export_dir), "guide": payload["guide"]},
+            "payload": _envelope({"output_dir": str(export_dir), "guide": payload["guide"]}),
             "stdout": "",
         }
 
@@ -1912,11 +1928,19 @@ def test_warcraft_guide_compare_query_fails_when_too_few_guides_export(
     payload = json.loads(result.stderr)
     assert payload["ok"] is False
     assert payload["error"]["code"] == "insufficient_guides"
-    assert payload["exported_bundle_count"] == 1
-    assert payload["comparison"] is None
-    icy_row = next(row for row in payload["provider_results"] if row["provider"] == "icy-veins")
+    # The reason each provider declined survives in the failure envelope's own fields, not only in
+    # the deprecated top-level copies a later phase removes.
+    details = payload["error"]["details"]
+    assert payload["data"] == details
+    assert details["exported_bundle_count"] == 1
+    assert details["required_bundle_count"] == 2
+    assert details["selected_providers"] == ["method", "icy-veins"]
+    icy_row = next(row for row in details["provider_results"] if row["provider"] == "icy-veins")
     assert icy_row["status"] == "skipped"
     assert icy_row["reason"] == "search_top_guide_score_too_low:25"
+    method_row = next(row for row in details["provider_results"] if row["provider"] == "method")
+    assert method_row["candidate_ref"] == "mistweaver-monk"
+    assert payload["comparison"] is None
     # A failed run must not leave a manifest behind for the next run to reuse.
     assert payload["manifest"] is None
     assert not (tmp_path / "orchestrated" / "manifest.json").exists()
@@ -2535,18 +2559,18 @@ def test_cooldown_packet_combines_lorrgs_phase_data_with_warcraftlogs_casts(monk
             return {
                 "provider": provider,
                 "exit_code": 0,
-                "payload": {
+                "payload": _envelope({
                     "ok": True,
                     "report": {"code": "abcd1234", "title": "Test Report"},
                     "fights": [{"id": 22, "start_time": 100000, "end_time": 105000, "encounter_id": 3183, "kill": True}],
-                },
+                }),
                 "stdout": "",
             }
         if provider == "warcraftlogs" and args[:1] == ["report-events"]:
             return {
                 "provider": provider,
                 "exit_code": 0,
-                "payload": {
+                "payload": _envelope({
                     "ok": True,
                     "report": {"code": "abcd1234", "title": "Test Report"},
                     "next_page_timestamp": None,
@@ -2556,7 +2580,7 @@ def test_cooldown_packet_combines_lorrgs_phase_data_with_warcraftlogs_casts(monk
                         {"timestamp": 102500, "sourceID": 89, "abilityGameID": 1160, "targetID": -1, "type": "cast"},
                         {"timestamp": 103500, "sourceID": 89, "abilityGameID": 1160, "targetID": -1, "type": "cast"},
                     ],
-                },
+                }),
                 "stdout": "",
             }
         if provider == "lorrgs" and args[:3] == ["spec-ranking", "warrior-protection", "lura"]:
@@ -3035,7 +3059,7 @@ def test_warcraft_talent_packet_routes_explicit_wowhead_ref(monkeypatch) -> None
         return {
             "provider": "wowhead",
             "exit_code": 0,
-            "payload": {
+            "payload": _envelope({
                 "provider": "wowhead",
                 "kind": "talent_calc_packet",
                 "talent_transport_packet": {
@@ -3051,7 +3075,7 @@ def test_warcraft_talent_packet_routes_explicit_wowhead_ref(monkeypatch) -> None
                     "validation": {},
                     "scope": {"type": "wowhead_talent_calc", "expansion": "retail"},
                 },
-            },
+            }),
             "stdout": "",
         }
 
@@ -3090,7 +3114,7 @@ def test_warcraft_talent_packet_passes_wowhead_listed_build_limit_and_expansion(
         return {
             "provider": "wowhead",
             "exit_code": 0,
-            "payload": {
+            "payload": _envelope({
                 "provider": "wowhead",
                 "kind": "talent_calc_packet",
                 "talent_transport_packet": {
@@ -3106,7 +3130,7 @@ def test_warcraft_talent_packet_passes_wowhead_listed_build_limit_and_expansion(
                     "validation": {},
                     "scope": {"type": "wowhead_talent_calc", "expansion": "wotlk"},
                 },
-            },
+            }),
             "stdout": "",
         }
 
@@ -3128,7 +3152,7 @@ def test_warcraft_talent_packet_routes_expansion_prefixed_wowhead_ref(monkeypatc
         return {
             "provider": "wowhead",
             "exit_code": 0,
-            "payload": {
+            "payload": _envelope({
                 "provider": "wowhead",
                 "kind": "talent_calc_packet",
                 "talent_transport_packet": {
@@ -3144,7 +3168,7 @@ def test_warcraft_talent_packet_routes_expansion_prefixed_wowhead_ref(monkeypatc
                     "validation": {},
                     "scope": {"type": "wowhead_talent_calc", "expansion": "retail"},
                 },
-            },
+            }),
             "stdout": "",
         }
 
@@ -3170,7 +3194,7 @@ def test_warcraft_talent_packet_routes_expansion_prefixed_class_spec_wowhead_ref
         return {
             "provider": "wowhead",
             "exit_code": 0,
-            "payload": {
+            "payload": _envelope({
                 "provider": "wowhead",
                 "kind": "talent_calc_packet",
                 "talent_transport_packet": {
@@ -3186,7 +3210,7 @@ def test_warcraft_talent_packet_routes_expansion_prefixed_class_spec_wowhead_ref
                     "validation": {},
                     "scope": {"type": "wowhead_talent_calc", "expansion": "classic"},
                 },
-            },
+            }),
             "stdout": "",
         }
 
@@ -3212,7 +3236,7 @@ def test_warcraft_talent_packet_passes_allow_unlisted_to_warcraftlogs(monkeypatc
         return {
             "provider": "warcraftlogs",
             "exit_code": 0,
-            "payload": {
+            "payload": _envelope({
                 "provider": "warcraftlogs",
                 "kind": "report_player_talents",
                 "talent_transport_packet": {
@@ -3224,7 +3248,7 @@ def test_warcraft_talent_packet_passes_allow_unlisted_to_warcraftlogs(monkeypatc
                     "validation": {"status": "not_validated"},
                     "scope": {"type": "report_fight_actor", "report_code": "abcd1234", "fight_id": 1, "actor_id": 9},
                 },
-            },
+            }),
             "stdout": "",
         }
 
@@ -3249,7 +3273,7 @@ def test_warcraft_talent_packet_routes_scheme_less_warcraftlogs_report_ref(monke
         return {
             "provider": "warcraftlogs",
             "exit_code": 0,
-            "payload": {
+            "payload": _envelope({
                 "provider": "warcraftlogs",
                 "kind": "report_player_talents",
                 "talent_transport_packet": {
@@ -3261,7 +3285,7 @@ def test_warcraft_talent_packet_routes_scheme_less_warcraftlogs_report_ref(monke
                     "validation": {"status": "not_validated"},
                     "scope": {"type": "report_fight_actor", "report_code": "abcd1234", "fight_id": 1, "actor_id": 9},
                 },
-            },
+            }),
             "stdout": "",
         }
 
@@ -3297,7 +3321,7 @@ def test_warcraft_talent_packet_routes_alpha_only_warcraftlogs_report_code(monke
         return {
             "provider": "warcraftlogs",
             "exit_code": 0,
-            "payload": {
+            "payload": _envelope({
                 "provider": "warcraftlogs",
                 "kind": "report_player_talents",
                 "talent_transport_packet": {
@@ -3309,7 +3333,7 @@ def test_warcraft_talent_packet_routes_alpha_only_warcraftlogs_report_code(monke
                     "validation": {"status": "not_validated"},
                     "scope": {"type": "report_fight_actor", "report_code": "abcdefgh", "fight_id": 1, "actor_id": 9},
                 },
-            },
+            }),
             "stdout": "",
         }
 
@@ -3336,7 +3360,7 @@ def test_warcraft_talent_packet_routes_warcraftlogs_and_upgrades(monkeypatch) ->
             return {
                 "provider": provider,
                 "exit_code": 0,
-                "payload": {
+                "payload": _envelope({
                     "provider": provider,
                     "kind": "report_player_talents",
                     "talent_transport_packet": {
@@ -3352,7 +3376,7 @@ def test_warcraft_talent_packet_routes_warcraftlogs_and_upgrades(monkeypatch) ->
                         "validation": {"status": "not_validated"},
                         "scope": {"type": "report_fight_actor", "report_code": "abcd1234", "fight_id": 1, "actor_id": 9},
                     },
-                },
+                }),
                 "stdout": "",
             }
         packet = json.loads(Path(args[2]).read_text())
@@ -3362,7 +3386,7 @@ def test_warcraft_talent_packet_routes_warcraftlogs_and_upgrades(monkeypatch) ->
         return {
             "provider": provider,
             "exit_code": 0,
-            "payload": {
+            "payload": _envelope({
                 "provider": provider,
                 "kind": "validate_talent_transport",
                 "input": {"source": "build_packet", "build_packet": args[2]},
@@ -3377,7 +3401,7 @@ def test_warcraft_talent_packet_routes_warcraftlogs_and_upgrades(monkeypatch) ->
                         "spec": "balance",
                     },
                 },
-            },
+            }),
             "stdout": "",
         }
 
@@ -3398,7 +3422,7 @@ def test_warcraft_talent_packet_routes_warcraftlogs_and_upgrades(monkeypatch) ->
     assert payload["upgraded"] is True
     assert payload["talent_transport_packet"]["transport_status"] == "validated"
     assert payload["talent_transport_packet"]["transport_forms"]["simc_split_talents"]["class_talents"] == "103324:1"
-    assert "build_packet" not in payload["upgrade_result"]["payload"]["input"]
+    assert "build_packet" not in payload["upgrade_result"]["payload"]["data"]["input"]
     assert calls[0] == ("warcraftlogs", ["report-player-talents", "abcd1234", "--actor-id", "9", "--fight-id", "1"])
     assert calls[1][0] == "simc"
     assert calls[1][1][:2] == ["validate-talent-transport", "--build-packet"]
@@ -3460,7 +3484,7 @@ def test_warcraft_talent_packet_upgrades_packet_file_and_writes_output(monkeypat
         return {
             "provider": provider,
             "exit_code": 0,
-            "payload": {
+            "payload": _envelope({
                 "input": {"source": "build_packet", "build_packet": args[2]},
                 "updated_packet": {
                     **packet,
@@ -3473,7 +3497,7 @@ def test_warcraft_talent_packet_upgrades_packet_file_and_writes_output(monkeypat
                         "spec": "balance",
                     },
                 }
-            },
+            }),
             "stdout": "",
         }
 
@@ -3485,7 +3509,7 @@ def test_warcraft_talent_packet_upgrades_packet_file_and_writes_output(monkeypat
     assert payload["route"] == {"kind": "packet_file", "provider": None, "packet_path": str(packet_path.resolve())}
     assert payload["written_packet_path"] == str(out_path.resolve())
     assert payload["talent_transport_packet"]["transport_status"] == "validated"
-    assert "build_packet" not in payload["upgrade_result"]["payload"]["input"]
+    assert "build_packet" not in payload["upgrade_result"]["payload"]["data"]["input"]
     written = json.loads(out_path.read_text())
     assert written["transport_status"] == "validated"
 
@@ -3541,7 +3565,7 @@ def test_warcraft_talent_packet_accepts_hyphenated_wowhead_class_slug(monkeypatc
         return {
             "provider": provider,
             "exit_code": 0,
-            "payload": {
+            "payload": _envelope({
                 "talent_transport_packet": {
                     "kind": "talent_transport_packet",
                     "transport_status": "exact",
@@ -3557,7 +3581,7 @@ def test_warcraft_talent_packet_accepts_hyphenated_wowhead_class_slug(monkeypatc
                     "validation": {},
                     "scope": {},
                 }
-            },
+            }),
             "stdout": "",
         }
 
@@ -3822,7 +3846,7 @@ def test_warcraft_talent_packet_rejects_invalid_provider_packet(monkeypatch) -> 
         return {
             "provider": provider,
             "exit_code": 0,
-            "payload": {
+            "payload": _envelope({
                 "talent_transport_packet": {
                     "kind": "talent_transport_packet",
                     "transport_status": "validated",
@@ -3832,7 +3856,7 @@ def test_warcraft_talent_packet_rejects_invalid_provider_packet(monkeypatch) -> 
                     "validation": {},
                     "scope": {},
                 }
-            },
+            }),
             "stdout": "",
         }
 
@@ -3867,7 +3891,7 @@ def test_warcraft_talent_packet_rejects_invalid_upgraded_packet(monkeypatch, tmp
         return {
             "provider": provider,
             "exit_code": 0,
-            "payload": {
+            "payload": _envelope({
                 "updated_packet": {
                     "kind": "talent_transport_packet",
                     "transport_status": "validated",
@@ -3877,7 +3901,7 @@ def test_warcraft_talent_packet_rejects_invalid_upgraded_packet(monkeypatch, tmp
                     "validation": {},
                     "scope": {},
                 }
-            },
+            }),
             "stdout": "",
         }
 
@@ -3956,7 +3980,7 @@ def test_warcraft_talent_packet_preserves_upgrade_failure_with_malformed_updated
         return {
             "provider": provider,
             "exit_code": 1,
-            "payload": {
+            "payload": _envelope({
                 "ok": False,
                 "error": {
                     "code": "invalid_build_packet",
@@ -3971,7 +3995,7 @@ def test_warcraft_talent_packet_preserves_upgrade_failure_with_malformed_updated
                     "validation": {},
                     "scope": {},
                 },
-            },
+            }),
             "stdout": "",
         }
 
@@ -4236,7 +4260,7 @@ def test_warcraft_talent_packet_normalizes_packet_write_failure(monkeypatch, tmp
         lambda provider, args, *, expansion=None: {
             "provider": provider,
             "exit_code": 0,
-            "payload": {
+            "payload": _envelope({
                 "provider": "wowhead",
                 "talent_transport_packet": {
                     "kind": "talent_transport_packet",
@@ -4251,7 +4275,7 @@ def test_warcraft_talent_packet_normalizes_packet_write_failure(monkeypatch, tmp
                     "validation": {},
                     "scope": {"type": "wowhead_talent_calc", "expansion": "retail"},
                 },
-            },
+            }),
             "stdout": "",
         },
     )
@@ -4273,7 +4297,7 @@ def test_warcraft_talent_describe_routes_wowhead_ref_to_simc(monkeypatch) -> Non
             return {
                 "provider": provider,
                 "exit_code": 0,
-                "payload": {
+                "payload": _envelope({
                     "provider": provider,
                     "kind": "talent_calc_packet",
                     "talent_transport_packet": {
@@ -4289,7 +4313,7 @@ def test_warcraft_talent_describe_routes_wowhead_ref_to_simc(monkeypatch) -> Non
                         "validation": {},
                         "scope": {"type": "wowhead_talent_calc", "expansion": "retail"},
                     },
-                },
+                }),
                 "stdout": "",
             }
         assert provider == "simc"
@@ -4297,11 +4321,11 @@ def test_warcraft_talent_describe_routes_wowhead_ref_to_simc(monkeypatch) -> Non
         return {
             "provider": provider,
             "exit_code": 0,
-            "payload": {
+            "payload": _envelope({
                 "provider": provider,
                 "kind": "describe_build",
                 "summary": {"active_action_count": 5},
-            },
+            }),
             "stdout": "",
         }
 
@@ -4338,7 +4362,7 @@ def test_warcraft_talent_describe_hides_deleted_temp_packet_source_notes(monkeyp
             return {
                 "provider": provider,
                 "exit_code": 0,
-                "payload": {
+                "payload": _envelope({
                     "provider": provider,
                     "kind": "talent_calc_packet",
                     "talent_transport_packet": {
@@ -4354,7 +4378,7 @@ def test_warcraft_talent_describe_hides_deleted_temp_packet_source_notes(monkeyp
                         "validation": {},
                         "scope": {"type": "wowhead_talent_calc", "expansion": "retail"},
                     },
-                },
+                }),
                 "stdout": "",
             }
         assert provider == "simc"
@@ -4362,7 +4386,7 @@ def test_warcraft_talent_describe_hides_deleted_temp_packet_source_notes(monkeyp
         return {
             "provider": provider,
             "exit_code": 0,
-            "payload": {
+            "payload": _envelope({
                 "provider": provider,
                 "kind": "describe_build",
                 "build_spec": {
@@ -4373,7 +4397,7 @@ def test_warcraft_talent_describe_hides_deleted_temp_packet_source_notes(monkeyp
                         "transport_status": "exact",
                     },
                 },
-            },
+            }),
             "stdout": "",
         }
 
@@ -4384,7 +4408,7 @@ def test_warcraft_talent_describe_hides_deleted_temp_packet_source_notes(monkeyp
         ["talent-describe", "druid/balance/ABC123", "--apl-path", str(apl_path)],
     )
     assert result.exit_code == 0
-    build_spec = json.loads(result.stdout)["describe_result"]["payload"]["build_spec"]
+    build_spec = json.loads(result.stdout)["describe_result"]["payload"]["data"]["build_spec"]
     assert "path" not in build_spec["transport_packet"]
     assert build_spec["source_notes"] == ["talent transport packet"]
 
@@ -4398,7 +4422,7 @@ def test_warcraft_talent_describe_passes_wowhead_listed_build_limit(monkeypatch)
             return {
                 "provider": provider,
                 "exit_code": 0,
-                "payload": {
+                "payload": _envelope({
                     "provider": provider,
                     "kind": "talent_calc_packet",
                     "talent_transport_packet": {
@@ -4414,17 +4438,17 @@ def test_warcraft_talent_describe_passes_wowhead_listed_build_limit(monkeypatch)
                         "validation": {},
                         "scope": {"type": "wowhead_talent_calc", "expansion": "retail"},
                     },
-                },
+                }),
                 "stdout": "",
             }
         return {
             "provider": provider,
             "exit_code": 0,
-            "payload": {
+            "payload": _envelope({
                 "provider": provider,
                 "kind": "describe_build",
                 "summary": {"active_action_count": 3},
-            },
+            }),
             "stdout": "",
         }
 
@@ -4447,7 +4471,7 @@ def test_warcraft_talent_describe_passes_expansion_to_wowhead_route(monkeypatch)
             return {
                 "provider": provider,
                 "exit_code": 0,
-                "payload": {
+                "payload": _envelope({
                     "provider": provider,
                     "kind": "talent_calc_packet",
                     "talent_transport_packet": {
@@ -4463,17 +4487,17 @@ def test_warcraft_talent_describe_passes_expansion_to_wowhead_route(monkeypatch)
                         "validation": {},
                         "scope": {"type": "wowhead_talent_calc", "expansion": "cata"},
                     },
-                },
+                }),
                 "stdout": "",
             }
         return {
             "provider": provider,
             "exit_code": 0,
-            "payload": {
+            "payload": _envelope({
                 "provider": provider,
                 "kind": "describe_build",
                 "summary": {"active_action_count": 3},
-            },
+            }),
             "stdout": "",
         }
 
@@ -4502,7 +4526,7 @@ def test_warcraft_talent_describe_passes_allow_unlisted_and_expansion(monkeypatc
             return {
                 "provider": provider,
                 "exit_code": 0,
-                "payload": {
+                "payload": _envelope({
                     "provider": provider,
                     "kind": "report_player_talents",
                     "talent_transport_packet": {
@@ -4514,17 +4538,17 @@ def test_warcraft_talent_describe_passes_allow_unlisted_and_expansion(monkeypatc
                         "validation": {},
                         "scope": {"type": "report_fight_actor", "report_code": "abcd1234", "fight_id": 1, "actor_id": 9},
                     },
-                },
+                }),
                 "stdout": "",
             }
         return {
             "provider": provider,
             "exit_code": 0,
-            "payload": {
+            "payload": _envelope({
                 "provider": provider,
                 "kind": "describe_build",
                 "summary": {"active_action_count": 6},
-            },
+            }),
             "stdout": "",
         }
 
@@ -4574,11 +4598,11 @@ def test_warcraft_talent_describe_uses_packet_file_and_can_write_output(monkeypa
         return {
             "provider": provider,
             "exit_code": 0,
-            "payload": {
+            "payload": _envelope({
                 "provider": provider,
                 "kind": "describe_build",
                 "summary": {"active_action_count": 4},
-            },
+            }),
             "stdout": "",
         }
 
@@ -4628,11 +4652,11 @@ def test_warcraft_talent_describe_skips_auto_upgrade_for_unknown_packet_file(mon
         return {
             "provider": provider,
             "exit_code": 0,
-            "payload": {
+            "payload": _envelope({
                 "provider": provider,
                 "kind": "describe_build",
                 "summary": {"active_action_count": 4},
-            },
+            }),
             "stdout": "",
         }
 
@@ -4850,8 +4874,8 @@ def test_warcraft_talent_describe_packet_out_changes_after_validation_upgrade(mo
     assert direct_packet["transport_status"] == "raw_only"
     assert wrapper_packet["transport_status"] == "validated"
     assert wrapper_packet["transport_forms"]["simc_split_talents"]["spec_talents"] == "109839:1"
-    assert "build_packet" not in wrapper_payload["upgrade_result"]["payload"]["input"]
-    assert wrapper_payload["describe_result"]["payload"]["build_spec"]["transport_packet"]["path"] == str(wrapper_path.resolve())
+    assert "build_packet" not in wrapper_payload["upgrade_result"]["payload"]["data"]["input"]
+    assert wrapper_payload["describe_result"]["payload"]["data"]["build_spec"]["transport_packet"]["path"] == str(wrapper_path.resolve())
 
 
 def test_warcraft_talent_packet_file_reuse_stays_exact_without_validation(monkeypatch, tmp_path: Path) -> None:
@@ -5010,7 +5034,7 @@ def test_warcraft_talent_round_trip_wowhead_packet_to_describe(monkeypatch, tmp_
     assert describe_result.exit_code == 0
     payload = json.loads(describe_result.stdout)
     assert payload["route"] == {"kind": "packet_file", "provider": None, "packet_path": str(packet_path.resolve())}
-    transport_packet = payload["describe_result"]["payload"]["build_spec"]["transport_packet"]
+    transport_packet = payload["describe_result"]["payload"]["data"]["build_spec"]["transport_packet"]
     assert transport_packet["transport_form"] == "wowhead_talent_calc_url"
     assert transport_packet["transport_status"] == "exact"
     assert transport_packet["path"] == str(packet_path.resolve())
@@ -5081,7 +5105,7 @@ def test_warcraft_talent_round_trip_warcraftlogs_packet_to_describe(monkeypatch,
     payload = json.loads(describe_result.stdout)
     assert payload["route"] == {"kind": "packet_file", "provider": None, "packet_path": str(packet_path.resolve())}
     assert payload["talent_transport_packet"]["transport_status"] == "validated"
-    transport_packet = payload["describe_result"]["payload"]["build_spec"]["transport_packet"]
+    transport_packet = payload["describe_result"]["payload"]["data"]["build_spec"]["transport_packet"]
     assert transport_packet["transport_form"] == "simc_split_talents"
     assert transport_packet["transport_status"] == "validated"
     assert transport_packet["path"] == str(packet_path.resolve())
@@ -5137,7 +5161,7 @@ def test_warcraft_talent_describe_hides_stale_packet_path_after_in_memory_upgrad
     )
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    transport_packet = payload["describe_result"]["payload"]["build_spec"]["transport_packet"]
+    transport_packet = payload["describe_result"]["payload"]["data"]["build_spec"]["transport_packet"]
     assert transport_packet["transport_form"] == "simc_split_talents"
     assert transport_packet["transport_status"] == "validated"
     assert "path" not in transport_packet
@@ -5197,7 +5221,7 @@ def test_warcraft_talent_describe_preserves_packet_path_after_raw_only_refresh(
         "reason": "unresolved_talent_entries",
         "source": "simc_trait_data_round_trip",
     }
-    transport_packet = payload["describe_result"]["payload"]["build_spec"]["transport_packet"]
+    transport_packet = payload["describe_result"]["payload"]["data"]["build_spec"]["transport_packet"]
     assert transport_packet["transport_form"] == "talent_transport_packet"
     assert transport_packet["transport_status"] == "raw_only"
     assert transport_packet["path"] == str(packet_path.resolve())
@@ -5245,12 +5269,16 @@ def test_warcraft_passthrough_to_raiderio(monkeypatch) -> None:
             "mythic_plus_recent_runs": [],
         }
 
-    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.character_profile_variants", fake_profile)
+    # The passthrough runs the provider's own command, which reads the profile plus its fetch time.
+    monkeypatch.setattr(
+        "raiderio_cli.client.RaiderIOClient.character_profile",
+        lambda self, **kwargs: FetchedJson(payload=fake_profile(self, **kwargs), fetched_at="2026-01-01T00:00:00Z", cache_hit=False),
+    )
     result = runner.invoke(warcraft_app, ["raiderio", "character", "us", "illidan", "Roguecane"])
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["character"]["name"] == "Roguecane"
+    assert payload["data"]["character"]["name"] == "Roguecane"
 
 
 def test_warcraft_passthrough_to_warcraft_wiki(monkeypatch) -> None:
@@ -5350,7 +5378,7 @@ _RAIDERIO_GN_GUILD_PAYLOAD: dict[str, object] = {
 def _fake_raiderio_guild_invoke(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, object]:
     assert provider == "raiderio"
     assert args == ["guild", "us", "mal-ganis", "gn"]
-    return {"provider": provider, "exit_code": 0, "payload": _RAIDERIO_GN_GUILD_PAYLOAD, "stdout": ""}
+    return {"provider": provider, "exit_code": 0, "payload": _envelope(_RAIDERIO_GN_GUILD_PAYLOAD), "stdout": ""}
 
 
 def test_warcraft_guild_is_a_single_raiderio_source_and_normalizes_query(monkeypatch) -> None:
@@ -5545,13 +5573,13 @@ def test_normalize_simc_transport_packet_path_rewrites_both_build_spec_copies() 
     result = {"ok": True, "payload": {"build_spec": build_spec, "data": {"build_spec": build_spec, "other": 1}}}
 
     stable = _normalize_simc_transport_packet_path(result, stable_packet_path="/stable/packet.json")
-    for copy in (stable["payload"]["build_spec"], stable["payload"]["data"]["build_spec"]):
+    for copy in (stable["payload"]["data"]["build_spec"], stable["payload"]["data"]["build_spec"]):
         assert copy["transport_packet"]["path"] == "/stable/packet.json"
         assert copy["source_notes"] == ["build packet: /stable/packet.json", "talent transport packet"]
     assert stable["payload"]["data"]["other"] == 1
 
     dropped = _normalize_simc_transport_packet_path(result, stable_packet_path=None)
-    for copy in (dropped["payload"]["build_spec"], dropped["payload"]["data"]["build_spec"]):
+    for copy in (dropped["payload"]["data"]["build_spec"], dropped["payload"]["data"]["build_spec"]):
         assert "path" not in copy["transport_packet"]
         assert copy["source_notes"] == ["talent transport packet"]
 
@@ -5567,7 +5595,7 @@ def test_normalize_upgrade_result_drops_build_packet_from_both_input_copies() ->
         },
     }
     normalized = _normalize_upgrade_result_build_packet_path(upgrade_result, stable_packet_path=None)
-    assert normalized["payload"]["input"] == {"apl": "x"}
+    assert normalized["payload"]["data"]["input"] == {"apl": "x"}
     assert normalized["payload"]["data"]["input"] == {"apl": "x"}
     assert normalized["payload"]["data"]["other"] == 1
 
@@ -5813,6 +5841,141 @@ def _guide_bundle(root: Path, *, build_code: str | None) -> Path:
     return bundle
 
 
+def _bundle_with_references(root: Path, references: list[dict[str, object]], *, failed_pages: int = 0) -> Path:
+    """A method bundle carrying exactly ``references``, and optionally pages the export never fetched."""
+    bundle = root / "method"
+    payload = _comparison_payload(
+        provider="method",
+        slug="mistweaver-monk",
+        page_url="https://www.method.gg/guides/mistweaver-monk",
+        page_title="Method Talents",
+        analysis_tags=["builds_talents"],
+    )
+    payload["build_references"] = {"count": len(references), "items": references}
+    if failed_pages:
+        payload["failed_pages"] = {
+            "count": failed_pages,
+            "items": [
+                {"url": f"https://www.method.gg/guides/mistweaver-monk/page-{index}", "error": "http_503"}
+                for index in range(failed_pages)
+            ],
+        }
+    write_article_bundle(payload, provider="method", export_dir=bundle)
+    return bundle
+
+
+def test_guide_builds_simc_hands_each_reference_to_simc_in_the_form_its_type_requires(monkeypatch, tmp_path) -> None:
+    """A published loadout string is `--build-text`; a Wowhead talent-calc URL is a transport packet.
+
+    Sending the raw import string as a Wowhead reference produces no packet at all, which is how the
+    whole decode leg came back empty for guide-published builds.
+    """
+    bundle = _bundle_with_references(
+        tmp_path,
+        [
+            {
+                "kind": "build_reference",
+                "reference_type": "wow_talent_export",
+                "url": "CEQAAAAAAAAAAAAAAAAAAAAAAYGMzMzYmxMzMmxMzsNzMzYGmxMMzMzMzMbAAAAAAAAAAgZmZmZmZZmZGmxMzMzsNzYmxMbA",
+                "label": "Raid Build",
+                "build_code": "CEQAAAAAAAAAAAAAAAAAAAAAAYGMzMzYmxMzMmxMzsNzMzYGmxMMzMzMzMbAAAAAAAAAAgZmZmZmZZmZGmxMzMzsNzYmxMbA",
+                "source_urls": ["https://www.method.gg/guides/mistweaver-monk"],
+            },
+            {
+                "kind": "build_reference",
+                "reference_type": "wowhead_talent_calc_url",
+                "url": "https://www.wowhead.com/talent-calc/monk/mistweaver/ABC123",
+                "label": "Dungeon Build",
+                "build_code": "ABC123",
+                "source_urls": ["https://www.method.gg/guides/mistweaver-monk"],
+            },
+        ],
+    )
+    identify_args: list[list[str]] = []
+
+    def fake_simc(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, object]:
+        if args[0] == "identify-build":
+            identify_args.append(args)
+        return {"provider": provider, "exit_code": 0, "payload": {"ok": True}, "stdout": ""}
+
+    monkeypatch.setattr("warcraft_cli.main.provider_invoke", fake_simc)
+
+    result = runner.invoke(warcraft_app, ["guide-builds-simc", str(bundle)])
+    assert result.exit_code == 0, result.output
+
+    export_args = next(args for args in identify_args if args[1] == "--build-text")
+    assert export_args[2].startswith("CEQAAAAA"), "the import string itself is the build input"
+    packet_args = next(args for args in identify_args if args[1] == "--build-packet")
+    assert packet_args[2].endswith(".json")
+    assert json.loads(result.stdout)["data"]["summary"]["identify_success_count"] == 2
+
+
+def test_guide_builds_simc_names_the_references_it_could_not_hand_over(monkeypatch, tmp_path) -> None:
+    """An unusable reference is an excluded row with a reason, not a silently shorter build list."""
+    bundle = _bundle_with_references(
+        tmp_path,
+        [
+            {
+                "kind": "build_reference",
+                "reference_type": "wowhead_talent_calc_url",
+                "url": "https://www.wowhead.com/talent-calc/monk/mistweaver",
+                "label": "No Code",
+                "build_code": None,
+                "source_urls": ["https://www.method.gg/guides/mistweaver-monk"],
+            }
+        ],
+    )
+
+    monkeypatch.setattr(
+        "warcraft_cli.main.provider_invoke",
+        lambda provider, args, *, expansion=None: {
+            "provider": provider, "exit_code": 0, "payload": {"ok": True}, "stdout": "",
+        },
+    )
+
+    result = runner.invoke(warcraft_app, ["guide-builds-simc", str(bundle)])
+    assert result.exit_code == 0, result.output
+
+    data = json.loads(result.stdout)["data"]
+    assert data["build_reference_count"] == 1
+    assert data["summary"]["returned_build_count"] == 0
+    assert data["summary"]["excluded_build_count"] == 1
+    assert [row["reason"] for row in data["excluded_builds"]] == ["missing_build_code"]
+
+
+def test_guide_builds_simc_reports_the_pages_the_export_never_fetched(monkeypatch, tmp_path) -> None:
+    """A handoff read from a partial bundle says so: builds may be missing from the pages that failed."""
+    bundle = _bundle_with_references(
+        tmp_path,
+        [
+            {
+                "kind": "build_reference",
+                "reference_type": "wowhead_talent_calc_url",
+                "url": "https://www.wowhead.com/talent-calc/monk/mistweaver/ABC123",
+                "label": "Raid Build",
+                "build_code": "ABC123",
+                "source_urls": ["https://www.method.gg/guides/mistweaver-monk"],
+            }
+        ],
+        failed_pages=2,
+    )
+
+    monkeypatch.setattr(
+        "warcraft_cli.main.provider_invoke",
+        lambda provider, args, *, expansion=None: {
+            "provider": provider, "exit_code": 0, "payload": {"ok": True}, "stdout": "",
+        },
+    )
+
+    result = runner.invoke(warcraft_app, ["guide-builds-simc", str(bundle)])
+    assert result.exit_code == 0, result.output
+
+    data = json.loads(result.stdout)["data"]
+    assert data["summary"]["failed_page_count"] == 2
+    assert data["bundle_health"]["failed_page_count"] == 2
+    assert data["bundle_health"]["bundles"][0]["provider"] == "method"
+
+
 def test_guide_builds_simc_fails_when_every_simc_handoff_failed(monkeypatch, tmp_path) -> None:
     """A packet with zero usable simc output is a failure, not a success with empty counters."""
     bundle = _guide_bundle(tmp_path, build_code="ABC123")
@@ -5852,11 +6015,11 @@ def test_guide_builds_simc_reports_no_build_references_without_failing(monkeypat
     assert summary["returned_build_count"] == 0
 
 
-def test_guide_builds_simc_is_partial_when_a_requested_leg_produced_nothing(monkeypatch, tmp_path) -> None:
-    """`--simc-decode` that decodes nothing is `partial`, never `ok` with a zero counter.
+def test_guide_builds_simc_fails_when_a_requested_leg_produced_nothing(monkeypatch, tmp_path) -> None:
+    """`--decode` that decodes nothing is `failed`, never `ok` or `partial` beside a zero counter.
 
-    This is the live shape today: guide bundles publish `wow_talent_export` strings, `identify-build`
-    accepts them and `decode-build` rejects every one of them.
+    Zero decodes out of N is not "most of it worked": `partial` is reserved for a leg that succeeded
+    for some builds and failed for others, and the per-build reason has to survive in the payload.
     """
     bundle = _guide_bundle(tmp_path, build_code="ABC123")
 
@@ -5875,11 +6038,16 @@ def test_guide_builds_simc_is_partial_when_a_requested_leg_produced_nothing(monk
     result = runner.invoke(warcraft_app, ["guide-builds-simc", str(bundle), "--decode"])
     assert result.exit_code == 0, result.output
 
-    summary = json.loads(result.stdout)["data"]["summary"]
+    data = json.loads(result.stdout)["data"]
+    summary = data["summary"]
     assert summary["identify_success_count"] >= 1
     assert summary["decode_success_count"] == 0
     assert summary["empty_requested_legs"] == ["decode"]
-    assert summary["simc_handoff_status"] == "partial"
+    assert summary["partial_requested_legs"] == []
+    assert summary["simc_handoff_status"] == "failed"
+    # Each build says why its decode leg failed, so the zero counter is explainable without a re-run.
+    assert [failure["code"] for failure in data["builds"][0]["failures"]] == ["invalid_query"]
+    assert data["builds"][0]["simc"]["decode"]["error"]["message"] == "no class/spec"
 
 
 def test_guide_builds_simc_is_ok_when_the_requested_legs_all_produced_something(monkeypatch, tmp_path) -> None:
@@ -6036,14 +6204,13 @@ _LORRGS_SPEC_SPELLS = {
         "107574": {"spell_id": 107574, "name": "Avatar", "query": True, "show": True, "cooldown": 90},
     },
 }
-_WCL_FIGHTS = {"ok": True, "fights": [{"id": 22, "start_time": 1000, "name": "Lura"}]}
-_WCL_EVENTS = {
-    "ok": True,
+_WCL_FIGHTS = _envelope({"fights": [{"id": 22, "start_time": 1000, "name": "Lura"}]})
+_WCL_EVENTS = _envelope({
     "events": [
         {"abilityGameID": 107574, "timestamp": 2500, "type": "cast", "sourceID": 89},
         {"abilityGameID": 107574, "timestamp": 6000, "type": "cast", "sourceID": 89},
     ],
-}
+})
 
 
 def _uncached_lorrgs_invoke(calls: list[tuple[str, list[str]]]):
@@ -6127,10 +6294,10 @@ def test_actor_profile_puts_structured_context_under_error_details(monkeypatch) 
         return {
             "provider": provider,
             "exit_code": 0,
-            "payload": {
+            "payload": _envelope({
                 "ok": True,
                 "player_details": {"roles": {"dps": [{"name": "Someone", "server": "Mal'Ganis", "region": "us"}]}},
-            },
+            }),
             "stdout": "",
         }
 
@@ -6168,12 +6335,12 @@ def test_actor_profile_success_envelope_conforms(monkeypatch) -> None:
     """The crosswalk's success payload is checked against the envelope, not only its failures."""
 
     def fake_provider_invoke(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, object]:
-        payload: dict[str, object] = (
-            {"ok": True, "player_details": {"roles": {"dps": [
+        payload: dict[str, object] = _envelope(
+            {"player_details": {"roles": {"dps": [
                 {"name": "Someone", "id": 1, "server": "Mal'Ganis", "region": "us", "specs": [{"spec": "Frost", "count": 1}]},
             ]}}}
             if provider == "warcraftlogs"
-            else {"ok": True, "character": {"name": "Someone", "profile_url": "https://raider.io/characters/us/malganis/Someone"}}
+            else {"character": {"name": "Someone", "profile_url": "https://raider.io/characters/us/malganis/Someone"}}
         )
         return {"provider": provider, "exit_code": 0, "payload": payload, "stdout": ""}
 
@@ -6189,27 +6356,33 @@ def test_actor_profile_success_envelope_conforms(monkeypatch) -> None:
     )
 
 
-def test_actor_profile_without_fight_id_scopes_player_details_to_every_fight(monkeypatch) -> None:
-    """Warcraft Logs only answers a scoped playerDetails query, so "whole report" means "all fights".
-
-    An unscoped `report-player-details` now fails with `missing_scope` (exit 2), so omitting
-    `--fight-id` has to enumerate the report's fights and name them in the call and in `query`.
-    """
-    seen: dict[str, list[str]] = {}
-
+def _actor_profile_invoke(seen: dict[str, list[str]], fights: list[dict[str, object]]):
     def fake_provider_invoke(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, object]:
         seen[args[0]] = args
         if args[0] == "report-fights":
-            payload: dict[str, object] = {"ok": True, "fights": [{"id": 3}, {"id": 7}]}
+            payload: dict[str, object] = _envelope({"fights": fights})
         elif args[0] == "report-player-details":
-            payload = {"ok": True, "player_details": {"roles": {"dps": [
+            payload = _envelope({"player_details": {"roles": {"dps": [
                 {"name": "Someone", "id": 1, "server": "Mal'Ganis", "region": "us", "specs": [{"spec": "Frost", "count": 1}]},
-            ]}}}
+            ]}}})
         else:
-            payload = {"ok": True, "character": {"name": "Someone", "profile_url": "https://raider.io/x"}}
+            payload = _envelope({"character": {"name": "Someone", "profile_url": "https://raider.io/x"}})
         return {"provider": provider, "exit_code": 0, "payload": payload, "stdout": ""}
 
-    monkeypatch.setattr("warcraft_cli.main.provider_invoke", fake_provider_invoke)
+    return fake_provider_invoke
+
+
+def test_actor_profile_without_fight_id_scopes_player_details_to_the_report_fights(monkeypatch) -> None:
+    """Warcraft Logs only answers a scoped playerDetails query, so "whole report" means "its fights".
+
+    An unscoped `report-player-details` fails with `missing_scope` (exit 2), so omitting
+    `--fight-id` has to enumerate the report's fights and name them in the call and in `query`.
+    """
+    seen: dict[str, list[str]] = {}
+    monkeypatch.setattr(
+        "warcraft_cli.main.provider_invoke",
+        _actor_profile_invoke(seen, [{"id": 3}, {"id": 7}]),
+    )
 
     result = runner.invoke(warcraft_app, ["actor-profile", "abcd1234", "Someone"])
 
@@ -6217,7 +6390,65 @@ def test_actor_profile_without_fight_id_scopes_player_details_to_every_fight(mon
     assert seen["report-player-details"] == [
         "report-player-details", "abcd1234", "--fight-id", "3", "--fight-id", "7",
     ]
-    assert json.loads(result.stdout)["query"]["scoped_fight_ids"] == [3, 7]
+    query = json.loads(result.stdout)["query"]  # `query` is an envelope key, not a data field
+    assert query["scoped_fight_ids"] == [3, 7]
+    assert query["fight_scope"] == {
+        "rule": "kills_first_then_report_order",
+        "report_fight_count": 2,
+        "kill_fight_count": 0,
+        "scoped_fight_count": 2,
+        "max_scoped_fights": ACTOR_PROFILE_MAX_SCOPED_FIGHTS,
+        "truncated": False,
+    }
+
+
+def test_actor_profile_scopes_a_long_report_to_its_kills_and_says_so(monkeypatch) -> None:
+    """A wipe night must not become fifty --fight-id flags, and the cut must be reported."""
+    seen: dict[str, list[str]] = {}
+    fights: list[dict[str, object]] = [{"id": index, "kill": index in {40, 44}} for index in range(1, 51)]
+    monkeypatch.setattr("warcraft_cli.main.provider_invoke", _actor_profile_invoke(seen, fights))
+
+    result = runner.invoke(warcraft_app, ["actor-profile", "abcd1234", "Someone"])
+
+    assert result.exit_code == 0, result.output
+    scoped = [int(value) for value in seen["report-player-details"][3::2]]
+    assert len(scoped) == ACTOR_PROFILE_MAX_SCOPED_FIGHTS
+    assert scoped[:2] == [40, 44], "kills come first: they carry the roster the caller means"
+    query = json.loads(result.stdout)["query"]  # `query` is an envelope key, not a data field
+    assert query["scoped_fight_ids"] == scoped
+    assert query["fight_scope"]["truncated"] is True
+    assert query["fight_scope"]["report_fight_count"] == 50
+    assert query["fight_scope"]["kill_fight_count"] == 2
+
+
+def test_actor_profile_reemits_the_report_fights_failure_with_its_own_exit_code(monkeypatch) -> None:
+    """The fight lookup is a real call: when it fails the crosswalk stops with the provider's code.
+
+    Without this the only covered failure is the roster call, so a fight lookup that swallowed an
+    auth failure (or reported exit 1 for it) would pass the whole wrapper suite.
+    """
+
+    def fake_provider_invoke(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, object]:
+        assert args[0] == "report-fights", args
+        return {
+            "provider": provider,
+            "exit_code": 3,
+            "payload": {
+                "ok": False,
+                "error": {"code": "missing_credentials", "message": "Warcraft Logs credentials are not configured."},
+            },
+            "stdout": "",
+        }
+
+    monkeypatch.setattr("warcraft_cli.main.provider_invoke", fake_provider_invoke)
+
+    result = runner.invoke(warcraft_app, ["actor-profile", "abcd1234", "Someone"])
+
+    assert result.exit_code == 3, result.output
+    error = json.loads(result.stderr)["error"]
+    assert error["code"] == "warcraftlogs_lookup_failed"
+    assert error["details"]["source"]["code"] == "missing_credentials"
+    assert error["details"]["provider"] == "warcraftlogs"
 
 
 def test_actor_profile_fails_not_found_when_the_report_has_no_fights(monkeypatch) -> None:
@@ -6225,7 +6456,7 @@ def test_actor_profile_fails_not_found_when_the_report_has_no_fights(monkeypatch
 
     def fake_provider_invoke(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, object]:
         assert args[0] == "report-fights", args
-        return {"provider": provider, "exit_code": 0, "payload": {"ok": True, "fights": []}, "stdout": ""}
+        return {"provider": provider, "exit_code": 0, "payload": _envelope({"fights": []}), "stdout": ""}
 
     monkeypatch.setattr("warcraft_cli.main.provider_invoke", fake_provider_invoke)
 
@@ -6258,7 +6489,7 @@ def _ungoro_provider_search(provider: str, query: str, *, limit: int = 5, expans
     return {
         "provider": provider,
         "exit_code": 0,
-        "payload": {"ok": True, "provider": provider, "results": rows, "count": len(rows)},
+        "payload": _envelope({"ok": True, "provider": provider, "results": rows, "count": len(rows)}),
     }
 
 
@@ -6276,12 +6507,14 @@ def test_warcraft_search_normalizes_provider_scales_before_merging(monkeypatch) 
 
     data = json.loads(result.stdout)["data"]
     assert [(row["provider"], row["name"]) for row in data["results"]][:3] == [
-        ("warcraft-wiki", "Un'Goro Crater"),
         ("wowhead", "Un'Goro Crater"),
+        ("warcraft-wiki", "Un'Goro Crater"),
         ("warcraft-wiki", "Un'Goro Crater (Classic)"),
     ]
-    assert data["results"][1]["wrapper_ranking"]["provider_score"] == 47
-    assert data["results"][1]["wrapper_ranking"]["provider_max_score"] == 47
+    # The bare query names the zone exactly, so the entity provider's row anchors the page.
+    assert data["results"][0]["wrapper_ranking"]["anchor"] is True
+    assert data["results"][0]["wrapper_ranking"]["provider_score"] == 47
+    assert data["results"][0]["wrapper_ranking"]["provider_max_score"] == 47
 
 
 def test_warcraft_search_reports_whether_limit_cut_the_merged_list(monkeypatch) -> None:
@@ -6317,7 +6550,7 @@ def test_search_brief_shrinks_the_payload_and_compact_stays_a_global_flag(monkey
 
 def test_resolve_brief_shrinks_the_payload_and_compact_stays_a_global_flag(monkeypatch) -> None:
     def fake_provider_resolve(provider: str, query: str, *, limit: int = 5, expansion: str | None = None) -> dict[str, object]:
-        return {"provider": provider, "exit_code": 0, "payload": {"ok": True, "resolved": False}}
+        return {"provider": provider, "exit_code": 0, "payload": _envelope({"ok": True, "resolved": False})}
 
     monkeypatch.setattr("warcraft_cli.main.provider_resolve", fake_provider_resolve)
 

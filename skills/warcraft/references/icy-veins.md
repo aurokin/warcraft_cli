@@ -20,8 +20,9 @@
 - for narrow subpage questions, search terms like `easy mode`, `rotation`, `stat priority`, or `mythic+ tips` work well
 - `build_references` holds explicit build evidence from the page: embedded Wowhead talent-calc links (`reference_type: wowhead_talent_calc_url`) and published WoW loadout import strings (`reference_type: wow_talent_export`, where `url` is the import string). Guide slugs and titles are never treated as build evidence
 - current spec builds/talents pages publish import strings, so `guide-full` on a spec guide is what feeds `guide-builds-simc`
-- an import string does not name its class or spec, so `guide-builds-simc --decode` cannot decode those rows; decode one with `simc decode-build --talents <build_code> --actor-class <class> --spec <spec>`
-- only `wowhead_talent_calc_url` rows decode unaided, because the URL path names the class and spec; today's builds/talents pages publish import strings, so expect `decode_success_count` 0
+- `wowhead_talent_calc_url` rows always decode unaided, because the URL path names the class and spec
+- an import string names neither, so SimC has to identify it and only probes the specs its checkout ships an APL for: damage and tank builds decode unaided, healer builds fail with `invalid_query` until you pass `simc decode-build --talents <build_code> --actor-class <class> --spec <spec>`
+- `guide-builds-simc --decode` passes no class or spec, so expect `decode_success_count` 0 on a healer guide
 - additive `analysis_surfaces` highlight comparison-relevant guide topics without replacing raw guide content
 
 ## Validated Families

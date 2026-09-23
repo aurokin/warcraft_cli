@@ -3,7 +3,8 @@
 The scorer stays wiki-specific: it combines MediaWiki title conventions (``API Foo``,
 ``UIHANDLER Bar``, ``World of Warcraft: Legion``) with the content families produced by
 :mod:`warcraft_wiki_cli.page_parser`, so it cannot reuse the shared ``score_article_match``
-weights. Only the provider-noise stripping is shared (``warcraft_content.search.normalize_query``).
+weights. Only the query tokenization and the provider-noise stripping are shared
+(``warcraft_content.search.tokenize_query`` and ``normalize_query``).
 """
 
 from __future__ import annotations
@@ -13,7 +14,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from warcraft_content.article_discovery import ArticleKind, article_candidate, sort_article_candidates
-from warcraft_content.search import normalize_query
+from warcraft_content.search import normalize_query, tokenize_query
 
 from warcraft_wiki_cli.client import WarcraftWikiClient
 from warcraft_wiki_cli.page_parser import PROGRAMMING_FAMILIES, classify_article_family
@@ -70,6 +71,13 @@ QUERY_FAMILY_HINT_TERMS = {
 }
 # Dropped only when the query has more words left; "zone scaling" is a page title, not a hint.
 CONDITIONAL_FAMILY_HINT_TERMS = {"zone", "zones", "class", "classes", "profession", "professions", "expansion", "expansions"}
+
+# MediaWiki namespace tokens that mash two words into one title word, so a typed query is allowed to
+# spell them out ("key down handler" -> "UIHANDLER OnKeyDown"). Every other title word is split only
+# where the title itself marks a boundary: a separator or a camel-case hump.
+TITLE_WORD_EXPANSIONS = {"uihandler": ("ui", "handler")}
+_TITLE_WORD_RE = re.compile(r"[A-Za-z0-9]+")
+_TITLE_COMPONENT_RE = re.compile(r"[A-Z]+(?![a-z])|[A-Z][a-z0-9]*|[a-z0-9]+")
 
 
 @dataclass(frozen=True, slots=True)
@@ -275,20 +283,61 @@ def search_results(client: WarcraftWikiClient, query: str, *, limit: int) -> Sea
     return SearchOutcome(normalized_query, excluded_terms, matches[:limit], total_count)
 
 
-def title_names_query(title: str, query: str) -> bool:
-    """True when every word of ``query`` appears in ``title`` itself, ignoring case and separators.
+@dataclass(frozen=True, slots=True)
+class _TitleWord:
+    """One word of a title, lowercased, plus every offset a query term may start or end at."""
 
-    The absolute relevance floor for the typed ``api``/``event`` surfaces. ``all_terms_match`` also
-    fires on the search snippet, so a page that merely *talks about* the query covers it
-    (``UIHANDLER OnEvent`` for ``PLAYER_LOGIN``); the page that *is* the answer carries the name in
-    its title (``Event:PLAYER LOGIN``). Separators are collapsed so ``PLAYER_LOGIN`` matches
-    ``PLAYER LOGIN``, and terms are matched individually so a phrase query still lands
-    (``key down handler`` -> ``UIHANDLER OnKeyDown``).
+    text: str
+    boundaries: frozenset[int]
+
+
+def _title_words(title: str) -> list[_TitleWord]:
+    """Split ``title`` into words, marking the camel-case humps a query term is allowed to align to."""
+    words: list[_TitleWord] = []
+    for raw in _TITLE_WORD_RE.findall(title):
+        expansion = TITLE_WORD_EXPANSIONS.get(raw.lower())
+        if expansion is not None:
+            words.extend(_TitleWord(part, frozenset({0, len(part)})) for part in expansion)
+            continue
+        starts = {match.start() for match in _TITLE_COMPONENT_RE.finditer(raw)}
+        words.append(_TitleWord(raw.lower(), frozenset(starts | {len(raw)})))
+    return words
+
+
+def _term_spans(word: _TitleWord, term: str) -> list[range]:
+    """Every place ``term`` sits inside ``word`` while starting and ending on a component boundary."""
+    return [
+        range(start, start + len(term))
+        for start in word.boundaries
+        if start + len(term) in word.boundaries and word.text.startswith(term, start)
+    ]
+
+
+def title_names_query(title: str, query: str) -> bool:
+    """True when ``title`` spells the query out rather than merely containing its letters.
+
+    The absolute relevance floor for the typed ``api``/``event`` surfaces. Every query word has to
+    match a whole title word or a whole camel-case component of one (``key down handler`` ->
+    ``UIHANDLER OnKeyDown``, separators on either side are irrelevant so ``PLAYER_LOGIN`` ->
+    ``Event:PLAYER LOGIN``), and the query has to account for at least one title word end to end.
+    Plain containment is not a name: it lets ``is`` name ``API UnitIsPlayer`` and ``UnitHealth``
+    name ``API UnitHealthMax``. ``all_terms_match`` also fires on the search snippet, so without
+    this floor a page that merely *talks about* the query looks like the answer (``UIHANDLER
+    OnEvent`` for ``PLAYER_LOGIN``); the page that *is* the answer carries the name in its title.
     """
     normalized_query, _ = normalize_wiki_query(query)
-    collapsed_title = _collapsed_text(title)
-    terms = [_collapsed_text(term) for term in normalized_query.split()]
-    return bool(terms) and all(term in collapsed_title for term in terms)
+    terms = tokenize_query(normalized_query)
+    words = _title_words(title)
+    if not terms or not words:
+        return False
+    covered: list[set[int]] = [set() for _ in words]
+    for term in terms:
+        spans = [(index, span) for index, word in enumerate(words) for span in _term_spans(word, term)]
+        if not spans:
+            return False
+        for index, span in spans:
+            covered[index].update(span)
+    return any(len(marks) == len(word.text) for word, marks in zip(words, covered, strict=True))
 
 
 def _covers_query(row: dict[str, Any]) -> bool:

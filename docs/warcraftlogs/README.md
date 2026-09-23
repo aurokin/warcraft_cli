@@ -90,9 +90,12 @@ answers: `--fight-id`, or both `--start-time` and `--end-time`. Anything wider f
 `missing_scope` (exit 2) rather than returning an empty payload with `ok: true`.
 
 A well-formed slice that matches no fight — an unknown `--fight-id`, an `--encounter-id` or
-`--difficulty` the fight does not have, a window containing no fight — makes
-`report-player-details` fail with `not_found` (exit 4) naming the slice. A fight Warcraft Logs has
-always returns a roster, so an empty one means the slice missed, not that the report has no players.
+`--difficulty` the report never pulled — makes `report-events`, `report-table`, `report-graph`,
+`report-rankings`, and `report-player-details` fail with `not_found` (exit 4). The rejected slice
+is echoed in the failure envelope's `query`, not just in the message. A request that names no fight
+at all (a window, or the whole report) is left alone: an empty answer to it is a real answer.
+`report-player-details` additionally fails when its window matches no fight, because a fight
+Warcraft Logs has always returns a roster.
 
 Encounter analytics (one report, one fight): `report-encounter`, `report-encounter-players`,
 `report-player-talents`, `report-encounter-casts`, `report-encounter-buffs`,
@@ -149,6 +152,13 @@ can come from cache. `freshness.cache_hit_count`, `freshness.upstream_request_co
 
 `--zone-id` and `--boss-id`/`--boss-name` are validated against Warcraft Logs world data before the
 sample is scanned, so a wrong id fails with `not_found` (exit 4) instead of returning `count: 0`.
+
+When two raiders in one group each upload the pull, Warcraft Logs holds it as two reports. Those
+are collapsed into one sampled kill: same encounter, difficulty, raid size and guild, with
+wall-clock start *and* end within 5 s of each other. The collapse is reported, never silent —
+`sample.duplicates_removed` counts it, a note states the rule, and the kept kill's
+`duplicate_reports` cites the report codes and fight ids that were folded in. A fight whose
+absolute window cannot be computed is always kept.
 
 `ability-usage-summary` requests at most `--event-limit` cast events per sampled kill. Kills that
 overflow that page are counted in `sample.kills_with_truncated_events_count`, and

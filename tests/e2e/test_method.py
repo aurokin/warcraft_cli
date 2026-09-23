@@ -26,6 +26,7 @@ from tests.e2e.harness import (
     EXIT_GENERIC,
     EXIT_NETWORK,
     EXIT_NOT_FOUND,
+    EXIT_USAGE,
     Result,
     dead_proxy_env,
     run,
@@ -56,9 +57,20 @@ def guide_search() -> Result:
 
 @cache
 def guide_slug() -> str:
-    results = guide_search().data["results"]
-    assert results, f"search found no Method guide for {pins.GUIDE_QUERY!r}\n{guide_search().describe()}"
-    return str(results[0]["id"])
+    """The pinned spec's Method guide, discovered rather than pinned but held to the pinned identity.
+
+    A slug survives a rename this way, but it cannot quietly become another spec's guide: Method
+    ranking brewmaster first for a mistweaver query would otherwise send every journey below to the
+    wrong guide and still pass all of them.
+    """
+    result = guide_search()
+    results = result.data["results"]
+    assert results, f"search found no Method guide for {pins.GUIDE_QUERY!r}\n{result.describe()}"
+    top = results[0]
+    slug = str(top["id"])
+    assert top["metadata"]["content_family"] == "class_guide", f"{slug} is not a class guide\n{result.describe()}"
+    assert pins.GUIDE_CLASS in slug and pins.GUIDE_SPEC in slug, f"{slug} is not the pinned spec's guide"
+    return slug
 
 
 @cache
@@ -84,6 +96,32 @@ def _assert_page_is_split_into_real_sections(page: dict[str, Any], result: Resul
     assert not empty, f"{where} has heading-only sections: {empty}"
     assert {row["title"] for row in sections} <= {row["title"] for row in headings}, f"{where} has sections that are not headings"
     assert len(sections) >= len(headings) - 2, f"{where} collapsed {len(headings)} headings into {len(sections)} sections"
+
+
+def _assert_summary_was_cut_on_its_headings(result: Result) -> None:
+    """The one-page summary has about one section per heading, so a collapsed page fails.
+
+    ``guide`` publishes the heading list and a section count rather than the sections themselves,
+    and those two are enough: the parser's failure mode is merging a whole page into a single
+    fallback section, which a page that reports many headings and one section cannot hide.
+    """
+    guide = result.data["guide"]
+    article = result.data["article"]
+    headings = {row["title"] for row in article["headings"]}
+    slug = guide["slug"]
+    assert headings, f"{slug} parsed into zero headings\n{result.describe()}"
+    titles = [row["title"] for row in article["section_preview"]]
+    assert titles and all(title.strip() for title in titles), result.describe()
+    assert all(row["level"] >= 2 for row in article["section_preview"]), result.describe()
+    # Prose above the first heading legitimately becomes one leading section named after the page;
+    # every other section is one of the page's own headings.
+    assert set(titles[1:]) <= headings, f"{slug} has sections that are not headings: {titles}\n{result.describe()}"
+    assert titles[0] in headings | {guide["section_title"]}, f"{slug} opens on {titles[0]!r}\n{result.describe()}"
+    # A page merged into that one fallback section still looks non-empty, so the count is what
+    # catches it (a heading with nothing under it is dropped, which is the legitimate way to differ).
+    assert article["section_count"] >= max(1, len(headings) // 2), (
+        f"{slug} cut {len(headings)} headings into {article['section_count']} sections\n{result.describe()}"
+    )
 
 
 def _exported_sections(bundle: Path) -> dict[tuple[str, int], dict[str, Any]]:
@@ -119,9 +157,13 @@ def test_search_finds_a_real_guide_and_names_the_follow_up(require) -> None:
     result = guide_search()
 
     assert result.data["count"] >= 1
-    first = result.data["results"][0]
+    # The query names a surface ("guide"); the search term it was reduced to must not.
+    assert result.data["search_query"] == f"{pins.GUIDE_SPEC} {pins.GUIDE_CLASS}"
+    rows = result.data["results"]
+    assert rows == sorted(rows, key=lambda row: -row["ranking"]["score"]), "results must be ranked best first"
+    first = rows[0]
+    assert first["id"] == guide_slug(), "a spec query must rank that spec's class guide first"
     assert first["entity_type"] == "guide"
-    assert first["metadata"]["content_family"] == "class_guide", "a spec query must rank the class guide first"
     assert first["url"] == f"https://www.method.gg/guides/{first['id']}"
     assert first["follow_up"]["recommended_command"] == f"{BINARY} guide {first['id']}"
     assert result.payload["provenance"]["sitemap_url"].endswith("sitemap.xml")
@@ -141,7 +183,8 @@ def test_resolve_hands_over_a_next_command_that_returns_the_same_guide(require) 
     result = run(BINARY, "resolve", pins.GUIDE_QUERY, "--limit", "5")
 
     assert result.data["resolved"] is True
-    assert result.data["match"]["id"] == guide_slug()
+    assert result.data["confidence"] == "high"
+    assert result.data["match"]["id"] == guide_slug(), "resolve must land on the pinned spec's guide"
     assert result.data["candidates"], "resolve dropped the candidate list"
 
     # The whole point of next_command is that an agent can run it verbatim.
@@ -167,11 +210,8 @@ def test_guide_returns_titled_sections_navigation_and_linked_entities(require) -
     # Method guides are multi-page: the family navigation is the only way to reach the other pages.
     assert result.data["navigation"]["count"] >= 2
     assert all(item["title"] and item["url"] for item in result.data["navigation"]["items"])
-    article = result.data["article"]
-    assert article["section_count"] >= 1
-    assert article["text"].strip(), "article text is empty"
-    assert len(article["section_preview"]) >= 1
-    assert all(row["title"].strip() and row["level"] >= 2 for row in article["section_preview"])
+    assert result.data["article"]["text"].strip(), "article text is empty"
+    _assert_summary_was_cut_on_its_headings(result)
     assert result.data["linked_entities"]["count"] >= 1
     assert result.payload["provenance"]["page"] == guide["page_url"]
 
@@ -189,8 +229,8 @@ def test_every_supported_guide_family_parses_with_a_byline(require, query: str, 
     assert guide["supported_surface"] is True
     assert guide["author"].strip(), f"{slug} lost its byline"
     assert guide["last_updated"].strip(), f"{slug} lost its last-updated stamp"
-    assert result.data["article"]["section_count"] >= 1
     assert len(result.data["article"]["text"].strip()) > 200, "the article parsed to almost nothing"
+    _assert_summary_was_cut_on_its_headings(result)
 
 
 def test_guide_full_merges_every_page_and_publishes_build_references(require) -> None:
@@ -213,10 +253,12 @@ def test_guide_full_merges_every_page_and_publishes_build_references(require) ->
     # The talents page is what feeds `warcraft guide-builds-simc`; zero build references means the
     # import-string markup moved and that handoff is silently empty.
     builds = result.data["build_references"]
-    assert builds["count"] >= 1, result.describe()
     assert builds["count"] == len(builds["items"])
     assert {row["reference_type"] for row in builds["items"]} <= {"wow_talent_export", "wowhead_talent_calc_url"}
-    assert all(row["build_code"] for row in builds["items"])
+    # A spec guide publishes a build per content type, so a parser that found only one has lost
+    # most of them; the codes have to be distinct or the same build was collected repeatedly.
+    codes = [row["build_code"] for row in builds["items"]]
+    assert all(codes) and len(set(codes)) == len(codes) >= 2, result.describe()
 
 
 def test_guide_export_writes_a_bundle_that_guide_query_answers_offline(require, out_dir: Path) -> None:
@@ -260,9 +302,15 @@ def test_guide_query_honours_the_limit_kind_and_section_title_filters(require, o
     assert len(wide) > 2, "the pinned guide needs more than two matches for --limit to mean anything"
     assert section_titles(BUNDLE_QUERY_TERM, "--limit", "2") == wide[:2]
 
+    # --kind drops the kinds that were not asked for. The same query without it has to match both
+    # kinds first, or an empty section list would prove nothing about the filter.
+    both = run(BINARY, "guide-query", str(bundle), "talents", env=dead_proxy_env())
+    assert both.data["match_counts"]["sections"] >= 1, both.describe()
+    assert both.data["match_counts"]["navigation"] >= 1, both.describe()
+
     only_navigation = run(BINARY, "guide-query", str(bundle), "talents", "--kind", "navigation", env=dead_proxy_env())
-    assert only_navigation.data["match_counts"]["navigation"] >= 1
     assert only_navigation.data["matches"]["sections"] == []
+    assert only_navigation.data["matches"]["navigation"] == both.data["matches"]["navigation"]
     assert all(row["url"] for row in only_navigation.data["matches"]["navigation"])
 
     # --section-title narrows that same ranking to the sections whose title contains the text. The
@@ -306,9 +354,18 @@ def test_a_repeated_guide_fetch_is_served_from_the_session_cache(require) -> Non
     assert cached.data["article"]["section_count"] == warm.data["article"]["section_count"]
 
 
-def test_guide_query_on_a_missing_bundle_is_a_generic_failure(require) -> None:
+def test_guide_query_rejects_a_bundle_path_that_is_missing_or_not_a_directory(require, out_dir: Path) -> None:
+    """The two ways the bundle argument can be wrong get the two answers the contract reserves.
+
+    ``icy-veins guide-query`` answers identically; the pair used to disagree, so an agent that
+    learned one provider's exit code got the other one wrong.
+    """
     require(PROVIDER)
-    run(BINARY, "guide-query", "/nonexistent/method-bundle", "mana", expect=EXIT_GENERIC, error_code="invalid_bundle")
+    run(BINARY, "guide-query", "/nonexistent/method-bundle", "mana", expect=EXIT_NOT_FOUND, error_code="not_found")
+
+    not_a_directory = out_dir / "method-bundle.txt"
+    not_a_directory.write_text("not a bundle", encoding="utf-8")
+    run(BINARY, "guide-query", str(not_a_directory), "mana", expect=EXIT_USAGE, error_code="invalid_argument")
 
 
 @pytest.mark.parametrize("command", ["guide", "guide-full", "guide-export"])

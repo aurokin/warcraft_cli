@@ -1,11 +1,12 @@
 """End-to-end journeys for the ``warcraft-wiki`` binary against the live warcraft.wiki.gg site.
 
-Article titles are discovered from ``warcraft-wiki search``/``resolve`` rather than hard-coded, so
-the file follows the wiki when it moves a page. (It did: the API reference moved out of the
-main-namespace ``API Foo`` titles into the real ``API:`` namespace, which is why the API journeys
-read the resolved title instead of asserting a literal one.) Every command in
-``docs/reference/warcraft-wiki.md`` is exercised, plus the documented error journeys and the global
-output flags.
+Every typed lookup pins the title of the page it must land on, next to the query. A wiki lookup
+that answers with the wrong page is the failure this file exists to catch — ``event PLAYER_LOGIN``
+once returned ``UIHANDLER OnEvent`` and ``event ENCOUNTER_START`` the ``Events`` index, both with
+``ok: true`` — and only a title assertion sees it. The pinned titles are the wiki's own canonical
+ones (``Event:PLAYER LOGIN``, ``API:CreateFrame``); when the wiki moves a page, this file is meant
+to go red rather than follow it quietly. Every command in ``docs/reference/warcraft-wiki.md`` is
+exercised, plus the documented error journeys and the global output flags.
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from tests.e2e import pins
 from tests.e2e.harness import (
     EXIT_NETWORK,
     EXIT_NOT_FOUND,
+    EXIT_USAGE,
     Result,
     dead_proxy_env,
     run,
@@ -32,15 +34,22 @@ BINARY = "warcraft-wiki"
 PROVIDER = "warcraft-wiki"
 # Widget script handlers are permanent UI vocabulary, like the ids in tests/e2e/pins.py.
 UI_HANDLER_QUERY = "OnKeyDown"
-# Game events and the wiki page that documents each one. These four are the events every addon
-# registers first, and the wiki has carried their pages for a decade. COMBAT_LOG_EVENT_UNFILTERED
-# keeps its pre-"UNFILTERED" title and serves the long name as a redirect, which is exactly the
-# case a title-matching lookup has to get right.
+# The canonical page of the pinned API function. The reference lives in the ``API:`` namespace; a
+# lookup that lands anywhere else (``API:UnitIsPlayer`` for ``is``, a framework index page) is the
+# wrong answer, so the title is pinned instead of read back from the CLI's own search.
+API_PAGE_TITLE = f"API:{pins.WIKI_API_FUNCTION}"
+# Game events and the wiki page that documents each one. These are the events every addon registers
+# first, and the wiki has carried their pages for a decade. COMBAT_LOG_EVENT_UNFILTERED keeps its
+# pre-"UNFILTERED" title and serves the long name as a redirect, which is exactly the case a
+# title-matching lookup has to get right; ENCOUNTER_START is the query that used to answer with the
+# ``Events`` index.
 GAME_EVENT_PAGES: tuple[tuple[str, str], ...] = (
     ("PLAYER_LOGIN", "Event:PLAYER LOGIN"),
     ("PLAYER_ENTERING_WORLD", "Event:PLAYER ENTERING WORLD"),
     ("COMBAT_LOG_EVENT_UNFILTERED", "Event:COMBAT LOG EVENT"),
     ("UNIT_HEALTH", "Event:UNIT HEALTH"),
+    ("ENCOUNTER_START", "Event:ENCOUNTER START"),
+    ("BAG_UPDATE", "Event:BAG UPDATE"),
 )
 # Query prefixes `resolve` strips, the article each cleaned query has to land on, the family the
 # search row can claim from a title and a snippet alone, and the family the fetched page is
@@ -51,6 +60,10 @@ RESOLVE_FAMILY_CASES: tuple[tuple[str, str, str, str, str], ...] = (
     ("zone", "elwynn forest", "Elwynn Forest", "general_article", "zone_reference"),
     ("profession", "alchemy", "Alchemy", "profession_reference", "profession_reference"),
     ("lore", "jaina proudmoore", "Jaina Proudmoore", "general_article", "lore_reference"),
+    ("faction", "argent dawn", "Argent Dawn", "general_article", "faction_reference"),
+    # The wiki titles the expansion page "World of Warcraft: Legion"; ranking has to prefer it over
+    # the many pages whose title merely starts with "Legion".
+    ("expansion", "legion", "World of Warcraft: Legion", "expansion_reference", "expansion_reference"),
 )
 
 
@@ -64,14 +77,6 @@ def assert_data_holds(result: Result, *keys: str) -> None:
 @cache
 def api_search() -> Result:
     return run(BINARY, "search", pins.WIKI_API_FUNCTION, "--limit", "5")
-
-
-@cache
-def api_page_title() -> str:
-    """The canonical title of the pinned API function page, whatever namespace it lives in."""
-    results = api_search().data["results"]
-    assert results, f"search found nothing for {pins.WIKI_API_FUNCTION!r}\n{api_search().describe()}"
-    return str(results[0]["id"])
 
 
 @cache
@@ -106,11 +111,14 @@ def test_search_puts_the_api_page_at_the_top_for_an_api_query(require) -> None:
     require(PROVIDER)
     result = api_search()
 
-    assert result.data["count"] >= 1
-    first = result.data["results"][0]
+    results = result.data["results"]
+    # `count` is how many pages matched upstream; the rows are what `--limit` returned.
+    assert len(results) == 5, result.describe()
+    assert result.data["count"] >= len(results), result.describe()
+    first = results[0]
+    assert first["id"] == API_PAGE_TITLE, result.describe()
     assert first["metadata"]["content_family"] == "api_function"
-    assert pins.WIKI_API_FUNCTION.lower() in first["id"].lower()
-    assert first["follow_up"]["recommended_command"].startswith(f"{BINARY} article ")
+    assert first["follow_up"]["recommended_command"] == f"{BINARY} article {API_PAGE_TITLE}", result.describe()
     assert_data_holds(result, "results", "count", "search_query")
 
 
@@ -134,6 +142,27 @@ def test_resolve_strips_the_family_hint_and_its_article_command_returns_that_pag
     assert article.data["article"]["title"] == expected_title, article.describe()
     assert article.data["article"]["content_family"] == article_family, article.describe()
     assert article.data["reference"]["content_family"] == article_family, article.describe()
+
+
+def test_resolve_without_a_family_hint_lands_on_the_api_page_it_names(require) -> None:
+    """A bare function name strips nothing and still resolves to that function's own page.
+
+    ``resolve`` is the entry point an agent uses before it knows which surface a query belongs to,
+    so the command it prints has to open the API reference, not a page that mentions the call.
+    """
+    require(PROVIDER)
+    resolved = run(BINARY, "resolve", pins.WIKI_API_FUNCTION, "--limit", "3")
+
+    assert resolved.data["resolved"] is True, resolved.describe()
+    assert resolved.data.get("excluded_terms", []) == [], "a bare query has no family hint to strip"
+    assert resolved.data["match"]["id"] == API_PAGE_TITLE, resolved.describe()
+    assert resolved.data["match"]["metadata"]["content_family"] == "api_function", resolved.describe()
+
+    parts = shlex.split(resolved.data["next_command"])
+    assert parts == [BINARY, "article", API_PAGE_TITLE], resolved.describe()
+    article = run(BINARY, *parts[1:])
+    assert article.data["article"]["title"] == API_PAGE_TITLE, article.describe()
+    assert article.data["reference"]["programming_reference"] is True, article.describe()
 
 
 def test_article_returns_classified_text_headings_and_navigation(require) -> None:
@@ -173,7 +202,7 @@ def test_api_commands_resolve_the_pinned_function(require, command: str) -> None
     require(PROVIDER)
     result = run(BINARY, command, pins.WIKI_API_FUNCTION)
 
-    assert result.data["article"]["title"] == api_page_title()
+    assert result.data["article"]["title"] == API_PAGE_TITLE, result.describe()
     assert result.data["article"]["content_family"] == "api_function"
     assert result.data["resolved_surface"] == "api"
     reference = result.data["reference"]
@@ -183,13 +212,21 @@ def test_api_commands_resolve_the_pinned_function(require, command: str) -> None
 
 
 @pytest.mark.parametrize(
-    ("query", "expected_family"),
-    [("XML schema", "xml_schema"), ("World of Warcraft API", "framework_page")],
+    ("query", "expected_title", "expected_family"),
+    [("XML schema", "XML", "xml_schema"), ("World of Warcraft API", "World of Warcraft API", "framework_page")],
 )
-def test_api_resolves_the_reference_pages_that_are_not_functions(require, query: str, expected_family: str) -> None:
+def test_api_resolves_the_reference_pages_that_are_not_functions(
+    require, query: str, expected_title: str, expected_family: str
+) -> None:
+    """``api`` also answers for the reference pages that document no single function.
+
+    The family alone does not say the lookup worked: the wiki has dozens of framework pages, and
+    landing on another one is the wrong-page-with-ok-true bug in its typed form.
+    """
     require(PROVIDER)
     result = run(BINARY, "api", query)
 
+    assert result.data["article"]["title"] == expected_title, result.describe()
     assert result.data["article"]["content_family"] == expected_family, result.describe()
     assert result.data["resolved_surface"] == "api"
     assert result.data["reference"]["programming_reference"] is True
@@ -258,16 +295,28 @@ def test_event_full_returns_the_whole_event_page(require) -> None:
     assert sections and all(row["title"] for row in sections), result.describe()
 
 
+# The wiki scorer pays 40 for a title that *is* the event (`Event:<NAME>`) and at most 10 for
+# upstream's own rank. A page that merely mentions the event can score everything else the event
+# page scores, so anything closer than that difference means the title bonus stopped applying.
+EVENT_TITLE_LEAD = 30
+
+
 def test_search_ranks_the_event_page_above_the_pages_that_merely_mention_it(require) -> None:
     require(PROVIDER)
     event_name, expected_title = GAME_EVENT_PAGES[0]
     result = run(BINARY, "search", event_name, "--limit", "5")
 
-    top = result.data["results"][0]
+    results = result.data["results"]
+    # Dozens of pages mention a core event, so a short result list means the query, not the ranking,
+    # decided the outcome and the comparison below would prove nothing.
+    assert len(results) == 5, result.describe()
+    top = results[0]
     assert top["id"] == expected_title, result.describe()
-    assert "exact_event_title" in top["ranking"]["match_reasons"], result.describe()
+    assert [row["id"] for row in results if "exact_event_title" in row["ranking"]["match_reasons"]] == [
+        expected_title
+    ], result.describe()
     # Whatever ranked below it does not answer the query; it must not come close on score.
-    assert all(row["ranking"]["score"] < top["ranking"]["score"] - 18 for row in result.data["results"][1:])
+    assert all(row["ranking"]["score"] <= top["ranking"]["score"] - EVENT_TITLE_LEAD for row in results[1:]), result.describe()
 
 
 def test_article_export_writes_a_bundle_that_article_query_answers_offline(require, out_dir: Path) -> None:
@@ -356,8 +405,10 @@ def test_fields_and_compact_shape_the_payload(require) -> None:
 
 
 def test_missing_argument_is_a_usage_error(require) -> None:
+    """A missing argument reaches the error contract, envelope and all, not a bare Click usage page."""
     require(PROVIDER)
-    result = run_raw(BINARY, "article")
+    result = run(BINARY, "article", expect=EXIT_USAGE, error_code="invalid_argument")
 
-    assert result.exit_code == 2, result.describe()
-    assert "Traceback" not in result.stderr
+    assert result.payload["provider"] == PROVIDER, result.describe()
+    assert result.payload["command"] == "article", result.describe()
+    assert result.payload["error"]["message"], result.describe()

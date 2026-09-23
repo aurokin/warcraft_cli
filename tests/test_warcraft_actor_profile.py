@@ -12,6 +12,7 @@ from warcraft_cli.crosswalk import (
     reconcile_class_spec,
     report_actor_names,
 )
+from warcraft_cli.main import ACTOR_PROFILE_MAX_SCOPED_FIGHTS
 from warcraft_cli.main import app as warcraft_app
 from warcraft_core.identity import class_spec_identity_payload, report_actor_identity_payload
 
@@ -102,14 +103,18 @@ def _raiderio_payload(name: str, actor_class: str, spec: str, *, region: str = "
     }
 
 
+def _provider_result(provider: str, data: dict[str, Any] | None, *, exit_code: int = 0) -> dict[str, Any]:
+    """A ``provider_invoke`` result whose payload is a real envelope: every field lives under ``data``.
+
+    The wrapper reads provider fields from ``data`` only; the deprecated top-level copies are being
+    removed, so a fake that emits them would keep passing after the product broke.
+    """
+    return {"provider": provider, "exit_code": exit_code, "payload": {"ok": True, "data": data or {}}, "stdout": ""}
+
+
 # Without --fight-id the crosswalk enumerates the report's fights first, because Warcraft Logs only
 # answers a playerDetails query that names a fight list or an explicit time window.
-_WCL_FIGHTS_RESULT: dict[str, Any] = {
-    "provider": "warcraftlogs",
-    "exit_code": 0,
-    "payload": {"fights": [{"id": 1}]},
-    "stdout": "",
-}
+_WCL_FIGHTS_RESULT: dict[str, Any] = _provider_result("warcraftlogs", {"fights": [{"id": 1}]})
 
 
 def _invoke(wcl_payload: dict[str, Any] | None, raiderio_payload: dict[str, Any] | None, *, raiderio_exit: int = 0):
@@ -117,9 +122,9 @@ def _invoke(wcl_payload: dict[str, Any] | None, raiderio_payload: dict[str, Any]
         if args[0] == "report-fights":
             return _WCL_FIGHTS_RESULT
         if args[0] == "report-player-details":
-            return {"provider": "warcraftlogs", "exit_code": 0, "payload": wcl_payload, "stdout": ""}
+            return _provider_result("warcraftlogs", wcl_payload)
         if args[0] == "character":
-            return {"provider": "raiderio", "exit_code": raiderio_exit, "payload": raiderio_payload, "stdout": ""}
+            return _provider_result("raiderio", raiderio_payload, exit_code=raiderio_exit)
         raise AssertionError(f"unexpected provider invocation: {provider} {args}")
 
     return fake
@@ -234,8 +239,17 @@ def test_actor_profile_reconciles_matching_log_and_profile(monkeypatch) -> None:
         "report_code": "ABC123",
         "actor_name": "Roguecane",
         "fight_id": None,
-        # No --fight-id means "the whole report": the query names the fights that were actually read.
+        # No --fight-id means "the whole report": the query names the fights that were actually read
+        # and how they were chosen.
         "scoped_fight_ids": [1],
+        "fight_scope": {
+            "rule": "kills_first_then_report_order",
+            "report_fight_count": 1,
+            "kill_fight_count": 0,
+            "scoped_fight_count": 1,
+            "max_scoped_fights": ACTOR_PROFILE_MAX_SCOPED_FIGHTS,
+            "truncated": False,
+        },
         "region": "us",
         "realm": "illidan",
         "name": "Roguecane",
@@ -275,9 +289,9 @@ def test_actor_profile_region_override_drives_lookup(monkeypatch) -> None:
         if args[0] == "report-fights":
             return _WCL_FIGHTS_RESULT
         if args[0] == "report-player-details":
-            return {"provider": "warcraftlogs", "exit_code": 0, "payload": wcl, "stdout": ""}
+            return _provider_result("warcraftlogs", wcl)
         seen["character_args"] = args
-        return {"provider": "raiderio", "exit_code": 0, "payload": rio, "stdout": ""}
+        return _provider_result("raiderio", rio)
 
     monkeypatch.setattr("warcraft_cli.main.provider_invoke", fake)
     result = runner.invoke(warcraft_app, ["actor-profile", "ABC123", "Healz", "--region", "eu"])
@@ -330,8 +344,8 @@ def test_actor_profile_forwards_allow_unlisted(monkeypatch) -> None:
             return _WCL_FIGHTS_RESULT
         if args[0] == "report-player-details":
             seen["wcl_args"] = args
-            return {"provider": "warcraftlogs", "exit_code": 0, "payload": wcl, "stdout": ""}
-        return {"provider": "raiderio", "exit_code": 0, "payload": rio, "stdout": ""}
+            return _provider_result("warcraftlogs", wcl)
+        return _provider_result("raiderio", rio)
 
     monkeypatch.setattr("warcraft_cli.main.provider_invoke", fake)
     result = runner.invoke(warcraft_app, ["actor-profile", "ABC123", "Roguecane", "--allow-unlisted"])
@@ -370,7 +384,7 @@ def test_actor_profile_errors_when_profile_lookup_fails(monkeypatch) -> None:
         if args[0] == "report-fights":
             return _WCL_FIGHTS_RESULT
         if args[0] == "report-player-details":
-            return {"provider": "warcraftlogs", "exit_code": 0, "payload": wcl, "stdout": ""}
+            return _provider_result("warcraftlogs", wcl)
         return {
             "provider": "raiderio",
             "exit_code": 1,

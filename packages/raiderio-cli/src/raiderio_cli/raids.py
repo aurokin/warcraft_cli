@@ -20,6 +20,7 @@ from raiderio_cli.client import (
     FetchedJson,
     RaiderIOClient,
     combined_freshness,
+    page_freshness,
 )
 
 RAID_DIFFICULTIES = ("normal", "heroic", "mythic")
@@ -187,12 +188,6 @@ def raid_catalog_payload(fetched: FetchedJson, *, expansion_id: int, cache_ttl_s
         "query": {"expansion_id": expansion_id},
         "count": len(rows),
         "rows": rows,
-        # The catalog TTL is six hours, so `fetched_at` is the fetch time stored with the cached
-        # body, not the time this command ran; `cache_hit` says which of the two the caller got.
-        "freshness": {
-            "fetched_at": fetched.fetched_at,
-            "cache_hit": fetched.cache_hit,
-            "cache_ttl_seconds": cache_ttl_seconds,
-        },
+        "freshness": page_freshness(fetched, cache_ttl_seconds=cache_ttl_seconds),
         "citations": {"static_data_url": f"{RAIDERIO_BASE_URL}/raiding/static-data?expansion_id={expansion_id}"},
     }

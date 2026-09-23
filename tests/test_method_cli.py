@@ -234,7 +234,7 @@ def test_method_search_command_uses_sitemap_guides(monkeypatch) -> None:
     result = runner.invoke(app, ["search", "mistweaver monk guide", "--limit", "5"])
     assert result.exit_code == 0
 
-    payload = json.loads(result.stdout)
+    payload = json.loads(result.stdout)["data"]
     assert payload["count"] == 1
     assert payload["results"][0]["id"] == "mistweaver-monk"
     assert payload["results"][0]["follow_up"]["recommended_command"] == "method guide mistweaver-monk"
@@ -246,7 +246,7 @@ def test_method_resolve_command_returns_best_guide(monkeypatch) -> None:
     result = runner.invoke(app, ["resolve", "mistweaver monk"])
     assert result.exit_code == 0
 
-    payload = json.loads(result.stdout)
+    payload = json.loads(result.stdout)["data"]
     assert payload["resolved"] is True
     assert payload["next_command"] == "method guide mistweaver-monk"
 
@@ -256,7 +256,7 @@ def test_method_search_excludes_unsupported_index_roots(monkeypatch) -> None:
     result = runner.invoke(app, ["search", "tier list"])
     assert result.exit_code == 0
 
-    payload = json.loads(result.stdout)
+    payload = json.loads(result.stdout)["data"]
     assert payload["count"] == 0
     assert payload["results"] == []
     assert payload["scope_hint"]["code"] == "tier_list"
@@ -281,7 +281,7 @@ def test_method_search_boosts_matching_content_family(monkeypatch) -> None:
     result = runner.invoke(app, ["search", "alchemy profession"])
     assert result.exit_code == 0
 
-    payload = json.loads(result.stdout)
+    payload = json.loads(result.stdout)["data"]
     assert payload["results"][0]["id"] == "midnight-alchemy-profession-guide"
     assert "content_family_match" in payload["results"][0]["ranking"]["match_reasons"]
 
@@ -290,7 +290,7 @@ def test_method_guide_and_guide_full(monkeypatch) -> None:
     monkeypatch.setattr("method_cli.main.MethodClient.fetch_guide_page", lambda self, guide_ref: _fake_fetch_guide_page(guide_ref))
     guide_result = runner.invoke(app, ["guide", "mistweaver-monk"])
     assert guide_result.exit_code == 0
-    guide_payload = json.loads(guide_result.stdout)
+    guide_payload = json.loads(guide_result.stdout)["data"]
     assert guide_payload["guide"]["slug"] == "mistweaver-monk"
     assert guide_payload["linked_entities"]["count"] == 1
     assert guide_payload["build_references"]["count"] == 1
@@ -298,7 +298,7 @@ def test_method_guide_and_guide_full(monkeypatch) -> None:
 
     full_result = runner.invoke(app, ["guide-full", "mistweaver-monk"])
     assert full_result.exit_code == 0
-    full_payload = json.loads(full_result.stdout)
+    full_payload = json.loads(full_result.stdout)["data"]
     assert full_payload["guide"]["page_count"] == 2
     assert full_payload["linked_entities"]["count"] == 2
     assert full_payload["build_references"]["count"] == 2
@@ -312,7 +312,7 @@ def test_method_guide_export_and_query(monkeypatch, tmp_path: Path) -> None:
 
     export_result = runner.invoke(app, ["guide-export", "mistweaver-monk", "--out", str(export_dir)])
     assert export_result.exit_code == 0
-    export_payload = json.loads(export_result.stdout)
+    export_payload = json.loads(export_result.stdout)["data"]
     assert export_payload["counts"]["pages"] == 2
     assert (export_dir / "manifest.json").exists()
     manifest = json.loads((export_dir / "manifest.json").read_text())
@@ -321,27 +321,47 @@ def test_method_guide_export_and_query(monkeypatch, tmp_path: Path) -> None:
 
     query_result = runner.invoke(app, ["guide-query", str(export_dir), "tea serenity", "--kind", "linked_entities"])
     assert query_result.exit_code == 0
-    query_payload = json.loads(query_result.stdout)
+    query_payload = json.loads(query_result.stdout)["data"]
     assert query_payload["count"] == 1
     assert query_payload["top"][0]["name"] == "Tea of Serenity"
 
     build_query = runner.invoke(app, ["guide-query", str(export_dir), "abc123", "--kind", "build_references"])
     assert build_query.exit_code == 0
-    build_query_payload = json.loads(build_query.stdout)
+    build_query_payload = json.loads(build_query.stdout)["data"]
     assert build_query_payload["count"] == 1
     assert build_query_payload["top"][0]["build_code"] == "ABC123"
 
     analysis_query = runner.invoke(app, ["guide-query", str(export_dir), "talent recommendations", "--kind", "analysis_surfaces"])
     assert analysis_query.exit_code == 0
-    analysis_query_payload = json.loads(analysis_query.stdout)
+    analysis_query_payload = json.loads(analysis_query.stdout)["data"]
     assert analysis_query_payload["count"] == 1
     assert analysis_query_payload["top"][0]["surface_tags"] == ["builds_talents", "talent_recommendations"]
 
     section_query = runner.invoke(app, ["guide-query", str(export_dir), "mistweaver",
                                   "--kind", "sections", "--section-title", "introduction"])
     assert section_query.exit_code == 0
-    section_payload = json.loads(section_query.stdout)
+    section_payload = json.loads(section_query.stdout)["data"]
     assert section_payload["match_counts"]["sections"] >= 1
+
+
+def test_method_guide_query_answers_each_bad_bundle_path_the_way_icy_veins_does(tmp_path: Path) -> None:
+    """One answer per mistake: missing target, wrong argument type, unreadable bundle."""
+    empty_dir = tmp_path / "not-a-bundle"
+    empty_dir.mkdir()
+    file_path = tmp_path / "bundle.json"
+    file_path.write_text("{}")
+
+    answers = {}
+    for label, path in (("missing", tmp_path / "gone"), ("directory", empty_dir), ("file", file_path)):
+        result = runner.invoke(app, ["guide-query", str(path), "mana"])
+        # A Typer-rejected argument prints its envelope before the provider handler runs.
+        answers[label] = (result.exit_code, json.loads(result.stderr or result.stdout)["error"]["code"])
+
+    assert answers == {
+        "missing": (4, "not_found"),
+        "directory": (1, "invalid_bundle"),
+        "file": (2, "invalid_argument"),
+    }
 
 
 def test_method_guide_invalid_ref_returns_structured_error() -> None:

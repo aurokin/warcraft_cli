@@ -125,12 +125,16 @@ DEFAULT_WRAPPER_RANKING_POLICY: dict[str, Any] = {
         "wowhead": {"guide": 4, "item": 4, "npc": 4, "quest": 6, "spell": 6},
         "method": {"guide": 6},
         "icy-veins": {"guide": 6},
-        "raiderio": {"character": 16, "guild": 6, "mythic_plus_runs": 8},
+        # Raider.IO's character/guild rows are boosted by the profile intents only. An
+        # unconditional kind boost here made every character row outrank every entity row on a bare
+        # name such as `thunderfury`, which is not a profile query at all.
         "warcraftlogs": {"report": 12, "report_encounter": 16},
         "warcraft-wiki": {"article": 8},
         "lorrgs": {"report_overview": 10, "spec_ranking": 14, "comp_ranking": 10},
         "simc": {"analysis": 8, "apl": 10, "decode_build": 10, "inspect": 8, "run": 8},
     },
+    # How much a row's own title answering the query is worth, on the shared 0-100 axis.
+    "name_match_boosts": {"exact": 25, "title_prefix": 12},
 }
 
 TYPE_NAME_KIND_MAP = {
@@ -184,6 +188,9 @@ def _normalize_policy(policy: Mapping[str, Any]) -> dict[str, Any]:
         "intent_provider_boosts": _int_boost_map(policy.get("intent_provider_boosts")),
         "intent_kind_boosts": _int_boost_map(policy.get("intent_kind_boosts")),
         "provider_kind_boosts": _int_boost_map(policy.get("provider_kind_boosts")),
+        "name_match_boosts": {
+            str(key): int(value) for key, value in dict(policy.get("name_match_boosts") or {}).items()
+        },
     }
 
 
@@ -289,14 +296,27 @@ def candidate_kind(candidate: Mapping[str, Any] | None) -> str | None:
 # floor only bites when a provider's whole answer is weak.
 MINIMUM_PROVIDER_SCORE_SCALE = 40
 
+# The provider family that only answers a query actually asking for a player or guild profile, and
+# the intents that ask for one.
+PROFILE_FAMILY = "profile"
+PROFILE_INTENTS = frozenset({"character_profile", "guild_profile", "structured_profile"})
+# The family that owns game entities (items, spells, quests, zones). A bare query naming one of
+# them is answered by that entity first; every other family describes or lists it.
+ENTITY_FAMILY = "entity"
+
+# Punctuation that separates a title's head from its qualifier: "Thunderfury, Blessed Blade of the
+# Windseeker", "Un'Goro Crater: Reclamation".
+_TITLE_HEAD_SEPARATORS = re.compile(r"[,:]")
+
 
 def normalized_provider_score(score: int, *, provider_max_score: int) -> int:
     """Rescale one provider-local score onto the shared 0-100 axis using that provider's own best row.
 
-    Provider search scores are not comparable: on ``un'goro crater`` the Warcraft Wiki stacks title,
-    term, intent and family credit into the 150s while Wowhead's exact zone match reaches 47.
-    Merging the raw numbers lets the provider with the largest scale own every slot in the merged
-    list.
+    Provider search scores are not comparable, and the gap is in the scoring code, not in one
+    query's data: the Warcraft Wiki stacks title, term, intent and family credit while Wowhead's best
+    row is an exact name plus prefix, term and popularity credit. A live ``un'goro crater`` fanout
+    measured 116 against 89. Merging the raw numbers lets the provider with the largest scale own
+    every slot in the merged list.
 
     The divisor never drops below ``MINIMUM_PROVIDER_SCORE_SCALE``, so a provider whose best row is
     junk (a two-term text match scoring 3) is scaled down rather than promoted to 100 for winning
@@ -306,6 +326,28 @@ def normalized_provider_score(score: int, *, provider_max_score: int) -> int:
         return 0
     divisor = max(provider_max_score, MINIMUM_PROVIDER_SCORE_SCALE)
     return round(100 * min(score, provider_max_score) / divisor)
+
+
+def _normalized_title(value: Any) -> str:
+    return " ".join(str(value or "").strip().lower().split())
+
+
+def name_match_strength(query: str, name: Any) -> str | None:
+    """Whether the row's own title *is* what was asked for: the whole title, its head, or neither.
+
+    Providers score rows on their own scales, so the merged list needs one comparable signal for
+    "this row is the thing". Wowhead's item ``Thunderfury, Blessed Blade of the Windseeker`` and its
+    news post ``Possible Thunderfury-Themed Cloak on the PTR`` both merely contain ``thunderfury``;
+    only the item's title starts with it.
+    """
+    normalized_query = _normalized_title(query)
+    normalized_name = _normalized_title(name)
+    if not normalized_query or not normalized_name:
+        return None
+    if normalized_name == normalized_query:
+        return "exact"
+    head = _normalized_title(_TITLE_HEAD_SEPARATORS.split(normalized_name, maxsplit=1)[0])
+    return "title_prefix" if head == normalized_query else None
 
 
 def wrapper_search_ranking(
@@ -352,12 +394,26 @@ def wrapper_search_ranking(
         if provider_kind_boost:
             score += provider_kind_boost
             reasons.append(f"provider_kind:{provider}:{kind}:{provider_kind_boost:+d}")
+    name_match = name_match_strength(query, row.get("name"))
+    name_match_boost = policy["name_match_boosts"].get(name_match or "", 0)
+    if name_match_boost:
+        score += name_match_boost
+        reasons.append(f"name_match:{name_match}:{name_match_boost:+d}")
+    off_intent = family == PROFILE_FAMILY and not (set(intents) & PROFILE_INTENTS)
+    if off_intent:
+        reasons.append("off_intent:profile_row_without_a_profile_query")
+    anchor = not intents and family == ENTITY_FAMILY and name_match == "exact"
+    if anchor:
+        reasons.append("anchor:exact_entity_name_for_a_bare_query")
     return {
         "score": score,
         "reasons": reasons,
         "intents": intents,
         "provider_family": family,
         "kind": kind,
+        "name_match": name_match,
+        "off_intent": off_intent,
+        "anchor": anchor,
         "provider_score": raw_score,
         "provider_max_score": provider_max_score,
     }
@@ -421,8 +477,17 @@ def decorate_search_result(
     *,
     provider_max_score: int | None = None,
 ) -> dict[str, Any]:
+    """One merged-list row: the provider's own row plus its wrapper ranking and normalized ``kind``.
+
+    Providers name a row's type differently (``kind``, ``entity_type``, ``type_name``), so the merged
+    list carries the normalized ``kind`` the ranking itself used. Without it the compact ``--brief``
+    row would report a field the full row does not have.
+    """
+    ranking = wrapper_search_ranking(query, row, provider_max_score=provider_max_score)
     decorated = dict(row)
-    decorated["wrapper_ranking"] = wrapper_search_ranking(query, row, provider_max_score=provider_max_score)
+    decorated["wrapper_ranking"] = ranking
+    if ranking["kind"] is not None:
+        decorated.setdefault("kind", ranking["kind"])
     return decorated
 
 
@@ -431,20 +496,91 @@ def provider_max_candidate_score(rows: Sequence[Mapping[str, Any]]) -> int:
     return max((candidate_score(row) for row in rows), default=0)
 
 
-def search_result_sort_key(row: Mapping[str, Any]) -> tuple[int, int, str, str, str]:
+def _wrapper_ranking(row: Mapping[str, Any]) -> Mapping[str, Any]:
     wrapper = row.get("wrapper_ranking")
-    if isinstance(wrapper, Mapping):
-        try:
-            wrapper_score = int(wrapper.get("score") or 0)
-        except (TypeError, ValueError):
-            wrapper_score = 0
-    else:
-        wrapper_score = candidate_score(row)
+    return wrapper if isinstance(wrapper, Mapping) else {}
+
+
+def row_is_off_intent(row: Mapping[str, Any]) -> bool:
+    """A row whose family does not answer this kind of query, ranked below every on-intent row."""
+    return bool(_wrapper_ranking(row).get("off_intent"))
+
+
+def search_result_sort_key(row: Mapping[str, Any]) -> tuple[int, int, int, int, str, str, str]:
+    """Order for the merged list: anchors, then on-intent rows, then score.
+
+    Two tiers do the work that per-provider score tuning could not:
+
+    * the *anchor* tier: a bare query that names a game entity exactly is answered by that entity
+      first, whatever local scale another provider's description of it happens to use;
+    * the *off-intent* tier: a profile row cannot outrank rows from families the query actually
+      asked for, which is what kept ``thunderfury`` from returning five players named Thunderfury.
+    """
+    wrapper = _wrapper_ranking(row)
+    try:
+        wrapper_score = int(wrapper.get("score") or 0) if wrapper else candidate_score(row)
+    except (TypeError, ValueError):
+        wrapper_score = 0
     score = candidate_score(row)
     provider = str(row.get("provider") or "")
     name = str(row.get("name") or "")
     identifier = str(row.get("id") or "")
-    return (-wrapper_score, -score, provider, name, identifier)
+    anchor_rank = 0 if _wrapper_ranking(row).get("anchor") else 1
+    return (anchor_rank, int(row_is_off_intent(row)), -wrapper_score, -score, provider, name, identifier)
+
+
+def merged_search_page(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    limit: int,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """The merged page of candidates, with no single provider allowed to fill it.
+
+    Rank order alone is not enough: a provider whose rows tie at its own best score (Raider.IO
+    returns twenty identically scored characters for a bare name) normalizes every one of them to
+    100 and owns every slot. Each provider therefore gets at most half the page, rounded up, and an
+    off-intent provider at most a strict minority.
+
+    On-intent rows above a provider's share are deferred rather than dropped: once the other
+    providers have taken their slots the deferred rows fill whatever is left, in rank order. The
+    off-intent cap is hard, so a page can come back shorter than ``limit`` rather than repeat
+    twenty near-identical profiles; the withheld rows are reported and still reachable through the
+    per-provider payloads.
+    """
+    ordered = sorted(rows, key=search_result_sort_key)
+    per_provider_cap = max(1, (limit + 1) // 2)
+    off_intent_cap = max(1, limit // 2)
+    page: list[dict[str, Any]] = []
+    deferred: list[dict[str, Any]] = []
+    withheld: list[dict[str, Any]] = []
+    taken: dict[str, int] = {}
+    for row in ordered:
+        provider = str(row.get("provider") or "")
+        off_intent = row_is_off_intent(row)
+        cap = off_intent_cap if off_intent else per_provider_cap
+        if len(page) < limit and taken.get(provider, 0) < cap:
+            page.append(dict(row))
+            taken[provider] = taken.get(provider, 0) + 1
+        elif off_intent:
+            withheld.append(dict(row))
+        else:
+            deferred.append(dict(row))
+    promoted = deferred[: max(0, limit - len(page))]
+    page.extend(promoted)
+    provider_row_counts: dict[str, int] = {}
+    for row in page:
+        provider = str(row.get("provider") or "")
+        provider_row_counts[provider] = provider_row_counts.get(provider, 0) + 1
+    return page, {
+        "rule": "rank_then_per_provider_cap",
+        "per_provider_cap": per_provider_cap,
+        "off_intent_provider_cap": off_intent_cap,
+        "candidate_row_count": len(ordered),
+        "deferred_row_count": len(deferred),
+        "promoted_after_cap_count": len(promoted),
+        "withheld_off_intent_row_count": len(withheld),
+        "provider_row_counts": provider_row_counts,
+    }
 
 
 def decorate_resolve_payload(query: str, provider: str, payload: Mapping[str, Any]) -> dict[str, Any]:

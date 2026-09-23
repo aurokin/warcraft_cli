@@ -14,6 +14,7 @@ import pytest
 from cli_testkit import WARCRAFTLOGS_REPORT_QUERY, apply_provider_stubs, run_binary
 from warcraft_cli.providers import PROVIDERS
 from warcraft_core.envelope import envelope_violations
+from warcraft_core.identity import build_reference_transport_packet_payload
 
 PROVIDER_IDS = [registration.name for registration in PROVIDERS]
 TIERS = {
@@ -186,3 +187,140 @@ def test_wrapper_own_command_envelopes_conform_offline(
     assert payload["ok"] is (result.exit_code == 0)
     if payload["ok"] is False:
         assert set(payload["error"]) <= {"code", "message", "details"}, f"{command}: error keys beyond the contract"
+
+
+_WOWHEAD_TALENT_CALC_REF = "https://www.wowhead.com/talent-calc/druid/balance/ABC123"
+
+
+def _answering_provider_invoke(provider: str, args: list[str], **kwargs: Any) -> dict[str, Any]:
+    """A provider that answers, so the wrapper's *success* envelopes get exercised as well."""
+    bodies: dict[str, dict[str, Any]] = {
+        "guild": {
+            "guild": {"name": "gn", "region": "us", "realm": "Mal'Ganis", "faction": "horde", "member_count": 30},
+            "raiding": {
+                "progression": [{"raid_slug": "manaforge-omega", "mythic_bosses_killed": 8}],
+                "rankings": [{"raid_slug": "manaforge-omega", "mythic": {"world": 19, "region": 6, "realm": 2}}],
+            },
+            "citations": ["https://raider.io/guilds/us/mal-ganis/gn"],
+        },
+        "report-fights": {"fights": [{"id": 1, "kill": True}]},
+        "report-player-details": {
+            "player_details": {
+                "roles": {
+                    "dps": [
+                        {
+                            "name": "Someone",
+                            "id": 1,
+                            "server": "Mal'Ganis",
+                            "region": "us",
+                            "specs": [{"spec": "Balance", "count": 1}],
+                        }
+                    ]
+                }
+            }
+        },
+        "character": {"character": {"name": "Someone", "profile_url": "https://raider.io/x"}},
+        "talent-calc-packet": {
+            "talent_transport_packet": build_reference_transport_packet_payload(
+                ref=_WOWHEAD_TALENT_CALC_REF,
+                provider="wowhead",
+                source="wowhead_talent_calc_url",
+            )
+        },
+        "describe-build": {"build_spec": {"actor_class": "druid", "spec": "balance"}},
+    }
+    return {
+        "provider": provider,
+        "exit_code": 0,
+        "payload": {"ok": True, "provider": provider, "command": args[0], "data": bodies.get(args[0], {})},
+        "stdout": "",
+    }
+
+
+def _answering_provider_search(provider: str, query: str, **kwargs: Any) -> dict[str, Any]:
+    results = [
+        {
+            "id": 19019,
+            "name": "Thunderfury, Blessed Blade of the Windseeker",
+            "entity_type": "item",
+            "url": "https://www.wowhead.com/item=19019",
+            "ranking": {"score": 40},
+        }
+    ]
+    return {
+        "provider": provider,
+        "exit_code": 0,
+        "payload": {"ok": True, "provider": provider, "command": "search", "data": {"results": results, "count": 1}},
+    }
+
+
+def _answering_provider_resolve(provider: str, query: str, **kwargs: Any) -> dict[str, Any]:
+    match = {"id": 19019, "name": "Thunderfury, Blessed Blade of the Windseeker", "entity_type": "item"}
+    return {
+        "provider": provider,
+        "exit_code": 0,
+        "payload": {
+            "ok": True,
+            "provider": provider,
+            "command": "resolve",
+            "data": {
+                "resolved": True,
+                "confidence": "high",
+                "match": match,
+                "next_command": f"{provider} item 19019",
+            },
+        },
+    }
+
+
+# The wrapper commands whose success path a provider stub alone can drive, and the argv that drives
+# it. The rest need real files on disk (bundle comparisons) or a multi-provider fixture
+# (cooldown-packet); `test_every_wrapper_command_is_covered_on_one_of_the_two_paths` keeps that
+# split explicit so a new command cannot quietly land with failure-only coverage.
+_SUCCESS_PATH_ARGS = {
+    "doctor": ["doctor"],
+    "schema": ["schema"],
+    "search": ["search", "thunderfury"],
+    "resolve": ["resolve", "thunderfury"],
+    "guild": ["guild", "us", "malganis", "gn"],
+    "guild-ranks": ["guild-ranks", "us", "malganis", "gn"],
+    "actor-profile": ["actor-profile", "abcd1234", "Someone"],
+    "talent-packet": ["talent-packet", _WOWHEAD_TALENT_CALC_REF, "--no-validate"],
+}
+_FAILURE_ONLY_COMMANDS = {
+    "cooldown-packet": "needs a Lorrgs fight plus Warcraft Logs casts; covered in tests/test_warcraft_wrapper.py",
+    "guide-compare": "needs two exported bundles on disk",
+    "guide-compare-query": "needs exported bundles on disk",
+    "guide-builds-simc": "needs an exported bundle with build references on disk",
+    "talent-describe": "needs a simc checkout to describe the decoded build",
+}
+
+
+@pytest.mark.parametrize("command", sorted(_SUCCESS_PATH_ARGS))
+def test_wrapper_own_command_success_envelopes_conform(
+    command: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The success envelope is checked too: the offline case only ever produces failure envelopes.
+
+    With every provider seam answering, each command below emits its real payload, so a regression in
+    the success shape (a missing ``data`` body, a wrong ``command``, a dropped envelope key) fails
+    here instead of passing because the only covered path was the error envelope.
+    """
+    monkeypatch.setattr("warcraft_cli.main.provider_invoke", _answering_provider_invoke)
+    monkeypatch.setattr("warcraft_cli.main.provider_search", _answering_provider_search)
+    monkeypatch.setattr("warcraft_cli.main.provider_resolve", _answering_provider_resolve)
+
+    result = run_binary("warcraft", _SUCCESS_PATH_ARGS[command])
+
+    assert result.exit_code == 0, f"{command}: {result.stderr}"
+    payload = json.loads(result.stdout)
+    assert envelope_violations(payload) == [], f"{command}: {envelope_violations(payload)}"
+    assert payload["ok"] is True
+    assert payload["provider"] == ("wowhead" if command == "resolve" else "warcraft")
+    assert payload["command"] == command
+    assert payload["data"], f"{command}: a success envelope must carry its payload under data"
+
+
+def test_every_wrapper_command_is_covered_on_one_of_the_two_paths() -> None:
+    assert set(_SUCCESS_PATH_ARGS) | set(_FAILURE_ONLY_COMMANDS) == set(_WRAPPER_OWN_COMMANDS)
+    assert not set(_SUCCESS_PATH_ARGS) & set(_FAILURE_ONLY_COMMANDS)

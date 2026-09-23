@@ -3,11 +3,11 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
-from html import unescape
 from typing import Any
 from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup, Tag
+from warcraft_content.html_sections import clean_text, extract_headings, extract_sections
 from warcraft_core.identity import ability_identity_payload, build_identity_payload, build_reference_payload
 
 ICY_VEINS_BASE_URL = "https://www.icy-veins.com"
@@ -17,7 +17,6 @@ WOWHEAD_LINK_RE = re.compile(
 )
 # A WoW loadout import string as Blizzard's client generates it: one long run of base64 characters.
 WOW_TALENT_EXPORT_RE = re.compile(r"^[A-Za-z0-9+/]{40,}$")
-HEADING_TAG_RE = re.compile(r"^h[234]$")
 CLASS_HUB_SLUGS = {
     "death-knight-guide",
     "demon-hunter-guide",
@@ -102,13 +101,6 @@ ARTICLE_CHROME_SELECTOR = ", ".join(
         ".heading_container > span",
     )
 )
-
-
-def clean_text(value: str | None) -> str | None:
-    if not isinstance(value, str):
-        return None
-    text = unescape(re.sub(r"\s+", " ", value)).strip()
-    return text or None
 
 
 def _strip_toc_number(title: str) -> str:
@@ -346,87 +338,6 @@ def _clone_article(article: Tag) -> Tag:
     return cloned
 
 
-def _heading_title_and_level(heading: Tag) -> tuple[str, int] | None:
-    title = clean_text(heading.get_text(" ", strip=True))
-    if not title:
-        return None
-    return title, int(heading.name[1])
-
-
-def _extract_headings(article: Tag) -> list[dict[str, Any]]:
-    """Every heading in the article in document order, wrapped or not."""
-    headings: list[dict[str, Any]] = []
-    ordinal = 0
-    for node in article.find_all(HEADING_TAG_RE):
-        heading = _heading_title_and_level(node)
-        if heading is None:
-            continue
-        ordinal += 1
-        title, level = heading
-        headings.append({"title": title, "level": level, "ordinal": ordinal})
-    return headings
-
-
-def _append_section_content(section: dict[str, Any], node: Any) -> None:
-    if not isinstance(node, Tag):
-        text = clean_text(str(node))
-        if text:
-            section["text_parts"].append(text)
-        return
-    html = str(node).strip()
-    text = clean_text(node.get_text(" ", strip=True))
-    if html:
-        section["html_parts"].append(html)
-    if text:
-        section["text_parts"].append(text)
-
-
-def _new_section(title: str, level: int, ordinal: int) -> dict[str, Any]:
-    return {"title": title, "level": level, "ordinal": ordinal, "html_parts": [], "text_parts": []}
-
-
-def _split_sections(node: Tag, sections: list[dict[str, Any]], *, fallback_title: str) -> None:
-    """Cut ``node``'s content into one section per heading, in document order.
-
-    Icy Veins wraps its headings in layout containers (``div.heading_container`` inside
-    ``div.image_block``), so a scan of the article's direct children alone would find no heading at
-    all on a class hub and return the whole page as one untitled section. Descending only into
-    elements that actually contain a heading keeps ordinary content blocks whole.
-    """
-    for child in node.children:
-        if not isinstance(child, Tag):
-            continue
-        heading = _heading_title_and_level(child) if HEADING_TAG_RE.match(child.name) else None
-        if heading is not None:
-            sections.append(_new_section(heading[0], heading[1], len(sections) + 1))
-            continue
-        if child.find(HEADING_TAG_RE) is not None:
-            _split_sections(child, sections, fallback_title=fallback_title)
-            continue
-        if not sections:
-            sections.append(_new_section(fallback_title, 2, 1))
-        _append_section_content(sections[-1], child)
-
-
-def _extract_sections(article: Tag, *, fallback_title: str) -> list[dict[str, Any]]:
-    sections: list[dict[str, Any]] = []
-    _split_sections(article, sections, fallback_title=fallback_title)
-    normalized: list[dict[str, Any]] = []
-    for section in sections:
-        text = clean_text(" ".join(section["text_parts"]))
-        html = "\n".join(section["html_parts"]).strip()
-        normalized.append(
-            {
-                "title": section["title"],
-                "level": section["level"],
-                "ordinal": section["ordinal"],
-                "text": text or "",
-                "html": html,
-            }
-        )
-    return [section for section in normalized if section["text"] or section["html"]]
-
-
 def _extract_linked_entities(article: Tag, *, source_url: str) -> list[dict[str, Any]]:
     items: dict[tuple[str, str | int], dict[str, Any]] = {}
     for anchor in article.find_all("a", href=True):
@@ -620,8 +531,8 @@ def _article_payload(
         "html": "".join(str(child) for child in article.contents).strip(),
         "text": clean_text(article.get_text("\n", strip=True)) or "",
         "intro_text": intro_text,
-        "headings": _extract_headings(article),
-        "sections": _extract_sections(article, fallback_title=section_title),
+        "headings": extract_headings(article),
+        "sections": extract_sections(article, fallback_title=section_title),
     }
     return (
         payload,

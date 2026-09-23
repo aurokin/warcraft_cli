@@ -19,6 +19,10 @@ Use these flags to narrow report, encounter, table, graph, ranking, and sampled 
 
 - `--fight-id`: one report fight; repeat where the command supports multiple fights
 - `--encounter-id`: one Warcraft Logs encounter id
+
+A `--fight-id`, `--encounter-id`, or `--difficulty` that matches no fight in the report fails with
+`not_found` (exit 4) on `report-events`, `report-table`, `report-graph`, `report-rankings`, and
+`report-player-details`, with the rejected slice echoed in the failure envelope's `query`.
 - `--difficulty`: provider difficulty id
 - `--zone-id`: provider zone id
 - `--start-time` / `--end-time`: absolute report timestamps in milliseconds
@@ -53,7 +57,13 @@ Sampled analytics commands such as `boss-kills`, `top-kills`, `spec-kill-samples
 
 `spec-kill-samples` requires `--spec-name` (alongside boss scope): it returns the participant filter as an explicit, labeled cohort (`cohort: spec_filtered_participant_kill_cohort`) rather than as an optional refinement of `boss-kills`.
 
-Keep sample size, exclusions, truncation, freshness, and citations with any downstream analysis.
+One real pull that two raiders both uploaded is collapsed into a single sampled kill (same
+encounter, difficulty, raid size and guild, with wall-clock start and end within 5 s).
+`sample.duplicates_removed` counts the collapse and the kept kill's `duplicate_reports` cites the
+folded-in report codes and fight ids.
+
+Keep sample size, exclusions, truncation, deduplication, freshness, and citations with any
+downstream analysis.
 
 ## Raw GraphQL
 

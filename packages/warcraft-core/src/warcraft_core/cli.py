@@ -12,7 +12,7 @@ from typing import Annotated, Any, NoReturn
 
 import httpx
 import typer
-from typer.core import TyperOption
+from typer.core import TyperGroup, TyperOption
 
 from warcraft_core.envelope import Envelope, error_envelope
 from warcraft_core.exit_codes import EXIT_AUTH, EXIT_GENERIC, EXIT_NETWORK, EXIT_NOT_FOUND, EXIT_USAGE, exit_code_for
@@ -97,52 +97,67 @@ def configure(
     resolved.provider = provider
     resolved.output = output
     ctx.obj = resolved
-    global _ACTIVE_COMMAND
-    _ACTIVE_COMMAND = ctx.invoked_subcommand
     return resolved
 
 
-# Subcommand resolved by Click for the current process; ``guarded_run`` labels escaping errors with it.
-_ACTIVE_COMMAND: str | None = None
+def command_path(ctx: typer.Context) -> str:
+    """The envelope's ``command``: the full subcommand path of ``ctx``, for example ``auth status``.
 
+    Every envelope names the command the same way, so build success payloads with this too. Empty
+    at the root group: that is the program itself, not a subcommand.
 
-def _failing_command_path(exc: BaseException) -> str:
-    """Full subcommand path of the Click context that raised, for example ``distribution mythic-plus-runs``.
-
-    Click attaches the context to its usage errors. That context is the leaf command, so this is the
-    only label that stays right for nested command groups, where ``ctx.invoked_subcommand`` on the
-    root callback is just the group name. Empty when the error came from the root group itself.
+    ``command_path`` on a context is the program name followed by every nested command name, so
+    dropping the root's prefix leaves the subcommand path. The leaf is named from its command
+    object instead, so a provider that relabels its own context cannot double a group name.
     """
-    ctx: typer.Context | None = getattr(exc, "ctx", None)
-    if ctx is None:
+    parent = ctx.parent
+    if parent is None:
         return ""
-    # ``command_path`` is the program name followed by every nested command name; the root context's
-    # command_path is the program name alone, so dropping that prefix leaves the subcommand path.
-    return ctx.command_path.removeprefix(ctx.find_root().command_path).strip()
+    group_path = parent.command_path.removeprefix(parent.find_root().command_path).strip()
+    return f"{group_path} {ctx.command.name or ctx.info_name or ''}".strip()
 
 
-def _command_label(app: typer.Typer, args: list[str]) -> str:
-    """Best-effort command name when the callback never ran, for example because argv failed to parse.
+def _next_command_name(command: TyperGroup, args: list[str]) -> tuple[str, list[str]]:
+    """The first of ``args`` that names a subcommand of ``command``, plus the arguments after it.
 
-    The value of a global option is not a command: ``--profile human show`` is ``show``. An empty
-    string means the caller named no subcommand at all.
+    Option values are not command names: for ``--profile human show`` the answer is ``show``.
     """
     value_options = {
         spelling
-        for param in typer.main.get_command(app).params
+        for param in command.params
         if isinstance(param, TyperOption) and not param.is_flag and param.nargs == 1
         for spelling in (*param.opts, *param.secondary_opts)
     }
     skip_next = False
-    for arg in args:
+    for index, arg in enumerate(args):
         if skip_next:
             skip_next = False
             continue
         if arg.startswith("-"):
             skip_next = arg in value_options
             continue
-        return arg
-    return ""
+        return arg, args[index + 1 :]
+    return "", []
+
+
+def _command_path_from_args(app: typer.Typer, args: list[str]) -> str:
+    """``command_path`` for a failure no Click context survived, resolved from argv against the tree.
+
+    An unknown name is still reported, because it is what the caller asked for; the walk simply
+    stops there, as it does at the first command that is not a group.
+    """
+    command = typer.main.get_command(app)
+    names: list[str] = []
+    while isinstance(command, TyperGroup):
+        name, args = _next_command_name(command, args)
+        if not name:
+            break
+        names.append(name)
+        subcommand = command.commands.get(name)
+        if subcommand is None:
+            break
+        command = subcommand
+    return " ".join(names)
 
 
 def install_common_callback(app: typer.Typer, *, provider: str) -> None:
@@ -188,7 +203,7 @@ def fail(
 ) -> NoReturn:
     """Write an error envelope to stderr and exit with the code mapped from ``code`` unless overridden."""
     config = cfg(ctx)
-    payload = error_envelope(provider=config.provider, command=ctx.info_name or "", code=code, message=message, details=details)
+    payload = error_envelope(provider=config.provider, command=command_path(ctx), code=code, message=message, details=details)
     typer.echo(to_json(payload, pretty=config.output.pretty), err=True)
     raise typer.Exit(exit_code if exit_code is not None else exit_code_for(code))
 
@@ -232,15 +247,12 @@ def guarded_run(app: typer.Typer, *, provider: str) -> NoReturn:
     instead of being printed as a Rich panel; ``--help`` still prints plain text and exits 0.
     Everything is written to stderr as compact JSON with the contract exit code, never a traceback.
     """
-    global _ACTIVE_COMMAND
-    _ACTIVE_COMMAND = None
     try:
         result = typer.main.get_command(app).main(standalone_mode=False)
     except typer.Abort:
         raise SystemExit(EXIT_GENERIC) from None
     except Exception as exc:
-        command = _failing_command_path(exc) or _ACTIVE_COMMAND or _command_label(app, sys.argv[1:])
-        payload, exit_code = error_envelope_for(provider, command, exc)
+        payload, exit_code = error_envelope_for(provider, _command_path_from_args(app, sys.argv[1:]), exc)
         typer.echo(to_json(payload, pretty=False), err=True)
         raise SystemExit(exit_code) from exc
     # ``typer.Exit(n)`` surfaces as Click's return value in non-standalone mode; commands return None.

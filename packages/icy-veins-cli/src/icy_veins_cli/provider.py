@@ -380,8 +380,14 @@ def guide_query(
     invalid = sorted(selected_kinds - set(BUNDLE_QUERY_KINDS))
     if invalid:
         raise ProviderError("invalid_query_kind", f"Unsupported query kinds: {', '.join(invalid)}")
+    export_dir = bundle.expanduser()
+    if not export_dir.exists():
+        # A path that is not there is a missing target (exit 4); a directory that holds no readable
+        # manifest is a bad bundle, which ``load_article_bundle`` reports as invalid_bundle (exit 1).
+        # The CLI rejects a file before this with a usage error, as `method guide-query` does.
+        raise ProviderError("not_found", f"Bundle directory not found: {export_dir}")
     result = query_article_bundle(
-        load_article_bundle(bundle.expanduser()),
+        load_article_bundle(export_dir),
         query=query,
         limit=limit,
         kinds=selected_kinds,

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
@@ -156,8 +156,13 @@ def _specialization_identity(enum_name: str) -> tuple[str, str] | None:
 
 
 @cache
-def _specialization_ids(repo_root_text: str) -> dict[tuple[str, str], int]:
-    repo_root = Path(repo_root_text)
+def specialization_ids(repo_root: Path) -> Mapping[tuple[str, str], int]:
+    """Every ``(actor_class, spec)`` SimulationCraft's generated data knows, mapped to its spec id.
+
+    Public because a caller enumerating the specs SimC supports (to probe an unidentified build,
+    say) must not re-parse ``sc_specialization_data.inc`` itself and drift from this. The result is
+    cached, hence read-only.
+    """
     path = _generated_file(repo_root, "sc_specialization_data.inc")
     if not path.exists():
         return {}
@@ -526,7 +531,7 @@ def validate_talent_tree_transport(
         return _not_validated("simc_backend_unavailable")
 
     repo_root_text = str(backend.trait_data_root.expanduser().resolve())
-    spec_id = _specialization_ids(repo_root_text).get((normalized_actor_class, normalized_spec))
+    spec_id = specialization_ids(Path(repo_root_text)).get((normalized_actor_class, normalized_spec))
     if spec_id is None:
         return _not_validated("unsupported_class_spec", actor_class=normalized_actor_class, spec=normalized_spec)
 

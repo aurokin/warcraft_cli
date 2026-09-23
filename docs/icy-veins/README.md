@@ -56,6 +56,10 @@ Exit codes follow `docs/foundation/ERROR_CONTRACT.md`: 1 generic, 2 usage, 4 gui
 5 network/upstream failure. A page whose article container no longer matches (an Icy Veins layout
 change) fails with `parse_failed` and exit 1 rather than returning an empty article with `ok:true`.
 
+`guide-query` splits the two bundle mistakes the same way `method guide-query` does: a path that
+does not exist is `not_found` (exit 4), and a directory with no readable `manifest.json` is
+`invalid_bundle` (exit 1).
+
 ### Build references
 
 `build_references` carries explicit build evidence from the page, never a guess from the slug or
@@ -67,16 +71,23 @@ title. Two reference types are emitted:
 | `wow_talent_export` | a published WoW loadout import string (the `Copy` blocks on the talents pages) | the import string itself, because the reference has no link |
 
 Both types set `build_code`, so `warcraft guide-builds-simc` collects either one and reports it
-under `summary.identify_success_count`. Only `wowhead_talent_calc_url` decodes on its own: its URL
-path names the class and spec, so `simc decode-build --talents <url>` returns `ok:true`.
+under `summary.identify_success_count`. Decoding needs a class and a spec, and the two types supply
+them differently:
 
-`wow_talent_export` rows leave `build_identity` unknown: the import string does not say which class
-and spec it belongs to. Decoding needs both, so `warcraft guide-builds-simc --decode` currently
-leaves `summary.decode_success_count` at 0 for these rows. To decode one, name the class and spec
-yourself: `simc decode-build --talents <build_code> --actor-class paladin --spec holy`.
+- `wowhead_talent_calc_url` always decodes unaided: its URL path names the class and spec.
+- `wow_talent_export` names neither, so `build_identity` stays unknown on the row and SimC has to
+  identify the string itself. It only probes the specs the checkout ships an APL for, which today
+  covers the damage and tank specs but no healer spec.
+
+So `simc decode-build --talents <build_code>` returns `ok:true` for an Icy Veins damage or tank
+build (verified against the Fury Warrior talents page: the probe returns `warrior`/`fury` with
+`confidence: high`), and fails with `invalid_query` for a healer build until you name the spec
+yourself: `simc decode-build --talents <build_code> --actor-class monk --spec mistweaver`.
+`warcraft guide-builds-simc --decode` passes no class or spec, so its
+`summary.decode_success_count` stays 0 for healer guides.
 
 The Icy Veins builds/talents pages publish import strings rather than talent-calc links, so in
-practice the rows you get back are `wow_talent_export` and none of them decode unaided.
+practice the rows you get back are `wow_talent_export`.
 
 ### Partial guide bundles
 

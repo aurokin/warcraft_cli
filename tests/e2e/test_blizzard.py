@@ -10,8 +10,21 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from tests.e2e.harness import EXIT_AUTH, EXIT_NOT_FOUND, EXIT_USAGE, dead_proxy_env, no_cache_env, run
+from tests.e2e.harness import EXIT_AUTH, EXIT_NOT_FOUND, EXIT_USAGE, Result, dead_proxy_env, no_cache_env, run
 from tests.e2e.pins import CHARACTER_NAME, GUILD_REALM, ITEM_ID, ITEM_NAME, REALM_SLUG
+
+
+def _assert_the_namespace_reached_the_api(result: Result, namespace: str) -> None:
+    """The routing label and the URL that was actually sent have to agree.
+
+    ``provenance.namespace`` is the routing object describing itself, so on its own it proves
+    nothing: Blizzard serves Thunderfury under both the retail and the classic namespace, and a
+    client that routed one while labelling itself the other would look identical. ``source_url`` is
+    ``str(response.request.url)``, so it is the only witness of what went on the wire.
+    """
+    provenance = result.payload["provenance"]
+    assert provenance["namespace"] == namespace, result.describe()
+    assert f"namespace={namespace}" in provenance["source_url"], result.describe()
 
 
 def test_doctor_reports_configured_credentials_and_live_routing(require) -> None:
@@ -39,7 +52,7 @@ def test_realm_read_uses_the_dynamic_namespace(require) -> None:
     require("blizzard-api")
     result = run("blizzard", "realm", REALM_SLUG)
     assert result.payload["kind"] == "realm"
-    assert result.payload["provenance"]["namespace"] == "dynamic-us"
+    _assert_the_namespace_reached_the_api(result, "dynamic-us")
     assert result.payload["provenance"]["namespace_class"] == "dynamic"
     assert result.payload["provenance"]["verified"] is True
     assert result.data["slug"] == REALM_SLUG
@@ -55,7 +68,7 @@ def test_realm_read_uses_the_dynamic_namespace(require) -> None:
 def test_item_read_uses_the_static_namespace_and_honours_locale(require) -> None:
     require("blizzard-api")
     result = run("blizzard", "item", str(ITEM_ID))
-    assert result.payload["provenance"]["namespace"] == "static-us"
+    _assert_the_namespace_reached_the_api(result, "static-us")
     assert result.data["id"] == ITEM_ID
     assert result.data["name"] == ITEM_NAME
     assert result.data["quality"]["type"] == "LEGENDARY"
@@ -72,7 +85,7 @@ def test_character_read_uses_the_profile_namespace_and_agrees_with_the_realm_rea
     require("blizzard-api")
     result = run("blizzard", "character", GUILD_REALM, CHARACTER_NAME)
     assert result.payload["kind"] == "character"
-    assert result.payload["provenance"]["namespace"] == "profile-us"
+    _assert_the_namespace_reached_the_api(result, "profile-us")
     assert result.payload["provenance"]["namespace_class"] == "profile"
     assert result.data["name"] == CHARACTER_NAME
     assert result.data["realm"]["slug"] == GUILD_REALM
@@ -89,17 +102,26 @@ def test_character_read_uses_the_profile_namespace_and_agrees_with_the_realm_rea
 def test_region_and_game_version_change_the_namespace(require) -> None:
     require("blizzard-api")
     european = run("blizzard", "item", str(ITEM_ID), "--region", "eu")
-    assert european.payload["provenance"]["namespace"] == "static-eu"
+    _assert_the_namespace_reached_the_api(european, "static-eu")
     assert european.payload["provenance"]["source_url"].startswith("https://eu.api.blizzard.com/")
     assert european.data["id"] == ITEM_ID
+    # The EU host echoes itself in the links it returns, so the region is confirmed by the answer.
+    assert european.data["_links"]["self"]["href"].startswith("https://eu.api.blizzard.com/"), european.describe()
 
+    retail = run("blizzard", "item", str(ITEM_ID))
     classic = run("blizzard", "item", str(ITEM_ID), "--classic")
-    assert classic.payload["provenance"]["namespace"] == "static-classic-us"
+    _assert_the_namespace_reached_the_api(classic, "static-classic-us")
     assert classic.payload["provenance"]["game_version"] == "classic"
     assert classic.data["id"] == ITEM_ID
+    # The classic dataset answers with the 2005 record: Blizzard stamps its own build-qualified
+    # namespace into every link it returns, and the two datasets disagree about the item itself.
+    assert "-classic-us" in classic.data["_links"]["self"]["href"], classic.describe()
+    assert "-classic-" not in retail.data["_links"]["self"]["href"], retail.describe()
+    assert (classic.data["level"], classic.data["required_level"]) != (retail.data["level"], retail.data["required_level"])
 
     explicit = run("blizzard", "item", str(ITEM_ID), "--game-version", "classic")
-    assert explicit.payload["provenance"]["namespace"] == classic.payload["provenance"]["namespace"]
+    _assert_the_namespace_reached_the_api(explicit, "static-classic-us")
+    assert explicit.data == classic.data, "--game-version classic and --classic must read one dataset"
 
 
 def test_search_and_resolve_are_structured_coming_soon_stubs(require) -> None:

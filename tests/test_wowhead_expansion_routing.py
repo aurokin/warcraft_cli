@@ -85,7 +85,7 @@ def test_search_auto_detects_expansion_from_entity_url(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         "wowhead_cli.provider.normalize_search_results",
-        lambda results, *, query, expansion: [
+        lambda results, *, query, expansion, entity_types=(), database_ranks=None: [
             {"id": 19019, "name": "Thunderfury", "entity_type": "item", "url": "https://www.wowhead.com/wotlk/item=19019"}
         ],
     )
@@ -103,7 +103,10 @@ def test_search_keeps_explicit_expansion_flag_over_url(monkeypatch) -> None:
         "wowhead_cli.wowhead_client.WowheadClient.search_suggestions",
         lambda self, query: {"search": query, "results": []},
     )
-    monkeypatch.setattr("wowhead_cli.provider.normalize_search_results", lambda results, *, query, expansion: [])
+    monkeypatch.setattr(
+        "wowhead_cli.provider.normalize_search_results",
+        lambda results, *, query, expansion, entity_types=(), database_ranks=None: [],
+    )
 
     result = runner.invoke(
         app,

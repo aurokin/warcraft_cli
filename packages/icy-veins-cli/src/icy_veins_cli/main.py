@@ -89,11 +89,10 @@ def guide_query(
     ctx: typer.Context,
     bundle: Path = typer.Argument(
         ...,
-        exists=True,
+        # Not ``exists=True``: a missing bundle is a not_found answer from the provider (exit 4), the
+        # same one ``method guide-query`` gives, rather than a Typer usage error.
         file_okay=False,
         dir_okay=True,
-        readable=True,
-        resolve_path=False,
         help="Directory produced by 'icy-veins guide-export'.",
     ),
     query: str = typer.Argument(..., help="Query text to match against the exported article bundle."),

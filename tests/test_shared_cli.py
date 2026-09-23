@@ -10,7 +10,8 @@ import httpx
 import pytest
 import typer
 from typer.testing import CliRunner
-from warcraft_core.cli import RuntimeConfig, cfg, cfg_as, configure, emit, fail, guarded_run, install_common_callback
+from warcraft_core.cli import RuntimeConfig, cfg, cfg_as, command_path, configure, emit, fail, guarded_run, install_common_callback
+from warcraft_core.envelope import success_envelope
 from warcraft_core.provider import ProviderError
 
 runner = CliRunner()
@@ -37,7 +38,15 @@ def build_app() -> typer.Typer:
 
     @group.command("leaf")
     def leaf(ctx: typer.Context, pages: int = 1) -> None:
-        emit(ctx, {"pages": pages})
+        emit(ctx, success_envelope(provider="dummy", command=command_path(ctx), kind="leaf", data={"pages": pages}))
+
+    @group.command("sink")
+    def sink(ctx: typer.Context) -> None:
+        fail(ctx, "not_found", "nothing here")
+
+    @group.command("boom")
+    def boom(ctx: typer.Context) -> None:
+        raise ValueError("bad")
 
     return app
 
@@ -231,6 +240,34 @@ def test_guarded_run_renders_usage_errors_as_the_json_envelope(
     assert payload["provider"] == "dummy"
     assert payload["command"] == expected_command
     assert payload["error"] == {"code": "invalid_argument", "message": expected_message}
+
+
+@pytest.mark.parametrize(
+    ("argv", "expected_exit"),
+    [
+        (["dummy", "group", "leaf"], 0),
+        (["dummy", "group", "sink"], 4),
+        (["dummy", "group", "leaf", "--pages", "abc"], 2),
+        (["dummy", "group", "boom"], 1),
+    ],
+    ids=["success", "fail", "usage-error", "uncaught-exception"],
+)
+def test_a_nested_command_carries_its_full_path_however_the_process_ends(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    argv: list[str],
+    expected_exit: int,
+) -> None:
+    """One rule for ``command``: the full subcommand path, on success and on every failure path.
+
+    The four paths used to disagree -- ``fail`` and the success envelope named the leaf only, and an
+    uncaught exception named the group only -- so an agent could not match a failure to the command
+    it ran.
+    """
+    exit_code, out, err = _run_argv(monkeypatch, capsys, argv)
+    assert exit_code == expected_exit
+    payload = json.loads(out or err)
+    assert payload["command"] == f"group {argv[2]}"
 
 
 def test_guarded_run_keeps_help_as_human_text(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:

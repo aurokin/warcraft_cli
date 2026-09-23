@@ -49,7 +49,7 @@ def test_wowhead_search_stream_emits_jsonl_header_when_results_empty(monkeypatch
     )
     monkeypatch.setattr(
         "wowhead_cli.provider.normalize_search_results",
-        lambda results, *, query, expansion: results,
+        lambda results, *, query, expansion, entity_types=(), database_ranks=None: results,
     )
 
     result = runner.invoke(app, ["--stream", "search", "thunderfury", "--limit", "10"])
@@ -75,7 +75,7 @@ def test_wowhead_search_stream_emits_jsonl_header_and_records(monkeypatch) -> No
     )
     monkeypatch.setattr(
         "wowhead_cli.provider.normalize_search_results",
-        lambda results, *, query, expansion: results,
+        lambda results, *, query, expansion, entity_types=(), database_ranks=None: results,
     )
 
     result = runner.invoke(app, ["--stream", "search", "thunderfury", "--limit", "10"])

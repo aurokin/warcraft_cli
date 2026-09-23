@@ -55,7 +55,12 @@ Every command's flags are listed in [docs/reference/warcraft.md](../reference/wa
   Each provider's scores are rescaled against that provider's own best row before the merge, so a
   provider with a larger local score scale cannot take every slot; the divisor has a floor, so a
   provider whose best row is weak does not get a full score for topping its own empty field.
-  `count` is the merged candidate total and `truncated` says whether `--limit` cut it.
+  `count` is the merged candidate total and `truncated` says whether `--limit` cut it. The merged
+  page then interleaves providers under a per-provider cap, ranks rows from a family the query did
+  not ask for (a player profile for a bare item name) below the rest, and prefers a row whose own
+  title is the query; `merge_policy` reports the caps and the rows they deferred or withheld, and
+  each row carries the normalized `kind` the ranking used. See
+  [WRAPPER_PROVIDER_CONTRACT.md](../foundation/WRAPPER_PROVIDER_CONTRACT.md) for the model.
 - `warcraft resolve` — pick the single best match plus its follow-up command; never resolves to a
   provider that reported `resolved: false`. `selected_provider` is the match's provider or `null`;
   `provider` mirrors it when resolved and is `warcraft` when nothing matched. When nothing resolved,
@@ -68,8 +73,10 @@ Every command's flags are listed in [docs/reference/warcraft.md](../reference/wa
   `raiderio raids` when you need the currently running tier.
 - `warcraft actor-profile` — cross-walk a Warcraft Logs report actor to a Raider.IO profile. Warcraft
   Logs only answers a fight-scoped roster query, so without `--fight-id` the wrapper reads the
-  report's fight list first and scopes the lookup to every fight; `query.scoped_fight_ids` names the
-  fights that were actually read. A report with no fights fails `report_has_no_fights` (exit 4).
+  report's fight list first and scopes the lookup to a bounded set of fights, kills first.
+  `query.scoped_fight_ids` names the fights that were actually read and `query.fight_scope` reports
+  the rule, the report's fight count, and whether the scope was truncated. A report with no fights
+  fails `report_has_no_fights` (exit 4).
 - `warcraft cooldown-packet` — compose Lorrgs phase windows with Warcraft Logs cast events for
   phase-scoped cooldown analysis. Lorrgs only serves reports it has already cached; for any other
   report — or when Lorrgs itself is unreachable — pass `--actor-id` and `--spec-slug` and the packet
@@ -87,11 +94,16 @@ Every command's flags are listed in [docs/reference/warcraft.md](../reference/wa
 - `warcraft talent-packet` / `talent-describe` — build a validated talent transport packet, optionally
   with simc `describe-build` output. Both report the file they wrote as `written_packet_path`.
 - `warcraft guide-builds-simc` — turn explicit build references in exported bundles into a simc packet.
-  `summary.simc_handoff_status` is `ok`, `partial`, `no_build_references`, or `all_handoffs_failed`;
-  the last one is an error envelope, not a success with zero counters. `partial` means a leg the
-  caller asked for produced nothing for any build — `summary.empty_requested_legs` names them. Guide
-  bundles publish bare `wow_talent_export` strings today, which `simc decode-build` rejects for want
-  of a class/spec, so `--decode` over a guide bundle reports `partial`, never `ok`.
+  Each reference is handed to simc in the form its type requires: a `wow_talent_export` string goes
+  as `--build-text`, a Wowhead talent-calc URL as a validated transport packet. A reference that can
+  go neither way is an `excluded_builds` row naming the reason, not a silently shorter list.
+  `summary.simc_handoff_status` is `ok`, `partial`, `failed`, `no_build_references`, or
+  `all_handoffs_failed`; the last one is an error envelope, not a success with zero counters.
+  `failed` means a requested leg produced nothing at all (`summary.empty_requested_legs` names
+  them); `partial` means it worked for some builds and not others
+  (`summary.partial_requested_legs`). Every build carries its own `failures` with the simc error
+  code per leg, and `summary.failed_page_count` / `bundle_health` report pages the guide export
+  never fetched, so a handoff built from a partial bundle says so.
 
 ## Errors and exit codes
 

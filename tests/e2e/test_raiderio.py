@@ -8,12 +8,14 @@ cross-binary contract in tests/e2e/test_contract.py holds every binary to them.
 
 Two things this file goes out of its way to make falsifiable. The rankings citation URL is a
 layout this CLI invents, so it is fetched rather than compared against the f-string that built it.
-And every result-narrowing flag (``--realm``, ``--page``, ``--affixes``, the sampled bounds) is
-checked against the unnarrowed call, so a flag that quietly stopped being wired cannot stay green.
+And every result-narrowing flag (``--realm``, ``--page``, ``--affixes``, the sampled bounds, the
+roster filters) is checked against the unnarrowed call with a bound that has to bite, so a flag
+that quietly stopped being wired cannot stay green by returning everything.
 """
 
 from __future__ import annotations
 
+from collections import Counter
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -41,6 +43,37 @@ CHARACTER = pins.CHARACTER_NAME
 SCOPE = ("--region", "us", "--pages", "1", "--limit", "20")
 # Raider.IO serves 20 ranking rows per page, so --page is only observable at that granularity.
 RANKING_PAGE_SIZE = 20
+# The playable classes. A class distribution can only answer with these and a spec distribution can
+# never answer with one of them, which is what tells those two roster distributions apart: both
+# count the same roster entries under the same unit, so nothing inside the payload separates them.
+WOW_CLASS_SLUGS = frozenset(
+    {
+        "death-knight", "demon-hunter", "druid", "evoker", "hunter", "mage", "monk",
+        "paladin", "priest", "rogue", "shaman", "warlock", "warrior",
+    }
+)
+# Unit per documented `distribution mythic-plus-runs --metric`: run-level metrics count runs, roster
+# metrics count the five roster entries of each run. The unit alone rules out most wrong metrics.
+RUN_DISTRIBUTION_UNITS = {
+    "mythic_level": "runs",
+    "dungeon": "runs",
+    "composition": "runs",
+    "class_composition": "runs",
+    "role": "roster_entries",
+    "class": "roster_entries",
+    "spec": "roster_entries",
+    "player_region": "roster_entries",
+}
+# Unit per documented `distribution mythic-plus-players --metric`; the tag units count one row per
+# class/spec/role a sampled player was seen in, so they cannot be confused with the player metrics.
+PLAYER_DISTRIBUTION_UNITS = {
+    "appearance_count": "players",
+    "top_mythic_level": "players",
+    "class": "player_class_tags",
+    "spec": "player_spec_tags",
+    "role": "player_role_tags",
+    "player_region": "players",
+}
 
 
 @pytest.fixture(autouse=True)
@@ -66,8 +99,14 @@ def current_raid() -> str:
     for slug in slugs:
         result = run_retrying("raiderio", "leaderboard", "raids", "--raid", slug, "--difficulty", "mythic", "--region", "us", "--limit", "1")
         if result.data["count"] >= 1:
-            return slug
+            return str(slug)
     raise AssertionError(f"no catalogued raid has US mythic rankings yet: {slugs}\n{catalog.describe()}")
+
+
+@pytest.fixture(scope="module")
+def baseline_sample() -> Result:
+    """The unfiltered sample every narrowing journey is measured against, fetched once."""
+    return run("raiderio", "sample", "mythic-plus-runs", *SCOPE)
 
 
 def _cache_entries(cache_root: Path) -> set[Path]:
@@ -81,14 +120,38 @@ def _rows(result: Result, key: str) -> list[dict[str, Any]]:
     return rows
 
 
-def _run_keys(result: Result) -> list[tuple[Any, ...]]:
+def _run_key(row: dict[str, Any]) -> tuple[Any, ...]:
     """One identity per sampled run, so a filtered call can be compared with the unfiltered one."""
-    return [(row["dungeon_slug"], row["completed_at"], row["score"]) for row in _rows(result, "runs")]
+    return (row["dungeon_slug"], row["completed_at"], row["score"])
+
+
+def _run_keys(result: Result) -> set[tuple[Any, ...]]:
+    return {_run_key(row) for row in _rows(result, "runs")}
+
+
+def _roster_values(row: dict[str, Any], field: str) -> set[str]:
+    return {entry[field] for entry in row["roster"]}
+
+
+def _a_value_only_some_runs_carry(runs: list[dict[str, Any]], field: str) -> str:
+    """A roster value that is on at least one run and missing from at least one other.
+
+    A filter on such a value has to return a strict, non-empty subset, so a flag that quietly
+    stopped being wired cannot produce the expected set by returning everything.
+    """
+    carriers = Counter(value for row in runs for value in _roster_values(row, field))
+    candidates = sorted(value for value, count in carriers.items() if 0 < count < len(runs))
+    assert candidates, f"every sampled run carries the same {field}; nothing can narrow the sample"
+    return str(candidates[0])
+
+
+def _counts(rows: list[dict[str, Any]]) -> dict[str, int]:
+    return {row["value"]: row["count"] for row in rows}
 
 
 def _assert_freshness(result: Result) -> dict[str, Any]:
     """Every payload with provenance reports when its data came off the wire and whether it was replayed."""
-    freshness = result.data["freshness"]
+    freshness: dict[str, Any] = result.data["freshness"]
     assert isinstance(freshness["fetched_at"], str) and freshness["fetched_at"], result.describe()
     assert isinstance(freshness["cache_hit"], bool), result.describe()
     assert isinstance(freshness["cache_ttl_seconds"], int) and freshness["cache_ttl_seconds"] >= 1, result.describe()
@@ -134,12 +197,26 @@ def test_search_ranks_the_pinned_guild_from_a_structured_probe() -> None:
     assert top["follow_up"]["command"] == f"raiderio guild {REGION} {REALM} {GUILD}"
 
 
-def test_search_kind_filter_narrows_to_characters() -> None:
-    result = run("raiderio", "search", f"{REGION} {REALM} {CHARACTER}", "--kind", "character", "--limit", "5")
+def test_search_kind_filter_drops_the_other_entity_type() -> None:
+    """``--kind`` has to drop the other entity type, whichever way round the query reads.
 
-    rows = _rows(result, "results")
-    assert all(row["kind"] == "character" for row in rows), result.describe()
+    Each leg is checked against the unfiltered answer for the same query, so a ``--kind`` that
+    stopped being applied cannot look correct by returning what the query would have returned.
+    """
+    guild_query = f"guild {REGION} {REALM} {GUILD}"
+    character_query = f"{REGION} {REALM} {CHARACTER}"
+
+    guilds = run("raiderio", "search", guild_query, "--limit", "5")
+    assert any(row["kind"] == "guild" for row in _rows(guilds, "results")), guilds.describe()
+    without_guilds = run("raiderio", "search", guild_query, "--kind", "character", "--limit", "5")
+    assert not any(row["kind"] == "guild" for row in without_guilds.data["results"]), without_guilds.describe()
+
+    characters = run("raiderio", "search", character_query, "--kind", "character", "--limit", "5")
+    rows = _rows(characters, "results")
+    assert all(row["kind"] == "character" for row in rows), characters.describe()
     assert rows[0]["name"] == CHARACTER
+    without_characters = run("raiderio", "search", character_query, "--kind", "guild", "--limit", "5")
+    assert not any(row["kind"] == "character" for row in without_characters.data["results"]), without_characters.describe()
 
 
 def test_resolve_hands_over_a_next_command_that_returns_the_same_entity() -> None:
@@ -184,6 +261,7 @@ def test_character_profile_carries_identity_score_and_normalized_class_spec() ->
     mythic_plus = result.data["mythic_plus"]
     assert isinstance(mythic_plus["current_score"], (int, float))
     assert isinstance(mythic_plus["ranks"]["overall"]["world"], int)
+    _assert_freshness(result)
     assert result.payload["provenance"]["citations"]["profile"].startswith("https://raider.io/characters/")
 
 
@@ -206,13 +284,18 @@ def test_guild_profile_echoes_the_guild_and_numeric_raid_rankings(cache_root: Pa
     # The rankings are keyed by the same raid slugs the progression rows use, so the two blocks can
     # be joined; a ranking for a raid the guild has no progression on would mean they cannot.
     assert {row["raid_slug"] for row in rankings} <= {row["raid_slug"] for row in progression}
+    _assert_freshness(result)
     assert result.payload["provenance"]["citations"]["profile"].startswith("https://raider.io/guilds/")
     assert any("guild_profile" in str(path) for path in _cache_entries(cache_root)), "the session cache root must hold the fetched profile"
 
 
-def test_a_repeated_guild_fetch_is_served_from_the_disk_cache(tmp_path: Path) -> None:
-    # Raider.IO payloads expose no cache-hit flag, so the disk cache is the observable signal:
-    # a cold private cache dir must gain entries on the first call and none on an identical second.
+def test_a_repeated_guild_fetch_is_replayed_and_says_so(tmp_path: Path) -> None:
+    """A replay has to report itself and quote the age of what it replayed, not the time it ran.
+
+    ``cache_hit`` is the only way a caller can tell a fresh answer from a stale one, so it is
+    observed flipping against a private, provably cold cache directory: a payload that always
+    reported ``false``, or that restamped ``fetched_at`` on the replay, would be lying about age.
+    """
     private_cache = tmp_path / "raiderio-cache"
     env = {"RAIDERIO_CACHE_DIR": str(private_cache)}
     assert not private_cache.exists()
@@ -220,10 +303,18 @@ def test_a_repeated_guild_fetch_is_served_from_the_disk_cache(tmp_path: Path) ->
     first = run("raiderio", "guild", REGION, REALM, GUILD, env=env)
     warmed = set(private_cache.rglob("*.json"))
     assert warmed, "the first fetch must write the guild profile to the configured cache dir"
+    cold = _assert_freshness(first)
+    assert cold["cache_hit"] is False, "a cold cache cannot report a hit"
 
     repeat = run("raiderio", "guild", REGION, REALM, GUILD, env=env)
     assert set(private_cache.rglob("*.json")) == warmed, "a cache hit must not add cache entries"
-    assert repeat.data == first.data, "a cache hit must return the same payload"
+    replayed = _assert_freshness(repeat)
+    assert replayed["cache_hit"] is True, "the second read must report that it was replayed"
+    assert replayed["fetched_at"] == cold["fetched_at"], "a replay must report when the data was fetched"
+    # Everything but the freshness block, which is the one part that is allowed to differ.
+    assert {key: value for key, value in repeat.data.items() if key != "freshness"} == {
+        key: value for key, value in first.data.items() if key != "freshness"
+    }, "a cache hit must replay the same answer"
 
 
 def test_mythic_plus_runs_echoes_the_resolved_season_and_full_rows(current_season: str) -> None:
@@ -244,38 +335,47 @@ def test_mythic_plus_runs_echoes_the_resolved_season_and_full_rows(current_seaso
     assert result.data["citations"]["leaderboard_urls"], result.describe()
 
 
-def test_sample_mythic_plus_runs_reports_sampling_filtering_and_provenance(current_season: str) -> None:
-    result = run("raiderio", "sample", "mythic-plus-runs", *SCOPE, "--level-min", "2", "--contains-role", "healer")
+def test_sample_mythic_plus_runs_reports_what_it_read(current_season: str, baseline_sample: Result) -> None:
+    """The summary is recomputed from the rows in the same envelope, so it cannot describe something else."""
+    result = baseline_sample
+    assert result.payload["query"]["resolved_season"] == current_season
 
-    query = result.payload["query"]
-    assert query["resolved_season"] == current_season
-    assert query["filters"]["level_min"] == 2
-    assert query["filters"]["contains_role"] == ["healer"]
-
+    runs = _rows(result, "runs")
+    roster = [entry for row in runs for entry in row["roster"]]
     sample = result.data["sample"]
     assert sample["season"] == current_season
     assert sample["pages_requested"] == 1 and sample["pages_fetched"] >= 1
-    assert sample["run_count"] >= 1
-    assert sample["roster_entry_count"] == sample["run_count"] * 5
+    assert sample["run_count"] == len(runs)
+    assert sample["roster_entry_count"] == len(roster) == sample["run_count"] * 5
+    assert sample["unique_dungeons"] == sorted({row["dungeon"] for row in runs})
+    levels = [row["mythic_level"] for row in runs]
+    assert (sample["mythic_level"]["min"], sample["mythic_level"]["max"]) == (min(levels), max(levels))
+    assert _counts(sample["role_counts"]) == dict(Counter(entry["role"] for entry in roster))
+    assert _counts(sample["player_region_counts"]) == dict(Counter(entry["region"] for entry in roster))
+
+    # Nothing was asked for, so nothing may be dropped: the filtering block has to say so.
     filtering = sample["filtering"]
-    assert filtering["source_run_count"] == filtering["returned_run_count"] + filtering["excluded_run_count"]
-    assert sample["mythic_level"]["min"] >= 2
-    assert any(row["value"] == "healer" for row in sample["role_counts"])
-    assert _rows(result, "runs")
+    assert filtering["source_run_count"] == filtering["returned_run_count"] == len(runs)
+    assert filtering["excluded_run_count"] == 0
     _assert_sampled_provenance(result)
 
 
-def test_the_sampled_bounds_return_strict_subsets_that_add_back_up() -> None:
-    """``--score-min``/``--score-max``/``--level-max`` narrow the same sample, they do not re-sample."""
-    unfiltered = run("raiderio", "sample", "mythic-plus-runs", *SCOPE)
-    runs = _rows(unfiltered, "runs")
-    everything = set(_run_keys(unfiltered))
+def test_the_sampled_bounds_return_strict_subsets_that_add_back_up(baseline_sample: Result) -> None:
+    """``--score-min``/``--score-max``/``--level-min``/``--level-max`` narrow the same sample.
+
+    Each bound is placed where it has to bite whatever the live leaderboard looks like: the score
+    halves split the sample around an observed score, and the level bounds are set one step outside
+    the observed range, which no sample can satisfy. A flag that stopped being wired returns the
+    whole sample and fails every one of them.
+    """
+    runs = _rows(baseline_sample, "runs")
+    everything = _run_keys(baseline_sample)
     scores = sorted(row["score"] for row in runs)
     midpoint = scores[len(scores) // 2]
 
     above = run("raiderio", "sample", "mythic-plus-runs", *SCOPE, "--score-min", str(midpoint))
     below = run("raiderio", "sample", "mythic-plus-runs", *SCOPE, "--score-max", str(midpoint))
-    above_keys, below_keys = set(_run_keys(above)), set(_run_keys(below))
+    above_keys, below_keys = _run_keys(above), _run_keys(below)
 
     assert above_keys < everything, "--score-min must drop the runs below the bound"
     assert below_keys < everything, "--score-max must drop the runs above the bound"
@@ -285,16 +385,44 @@ def test_the_sampled_bounds_return_strict_subsets_that_add_back_up() -> None:
     assert above_keys | below_keys == everything, "the two halves must cover the whole sample"
     assert above.data["sample"]["filtering"]["source_run_count"] == len(everything)
 
-    lowest_level = min(row["mythic_level"] for row in runs)
-    capped = run("raiderio", "sample", "mythic-plus-runs", *SCOPE, "--level-max", str(lowest_level))
-    assert set(_run_keys(capped)) <= everything
-    assert all(row["mythic_level"] == lowest_level for row in _rows(capped, "runs"))
+    levels = [row["mythic_level"] for row in runs]
+    floor = run("raiderio", "sample", "mythic-plus-runs", *SCOPE, "--level-min", str(max(levels) + 1))
+    assert floor.data["runs"] == [], "no run can clear a floor above the highest sampled key level"
+    assert floor.data["sample"]["filtering"]["excluded_run_count"] == len(everything)
+
+    capped = run("raiderio", "sample", "mythic-plus-runs", *SCOPE, "--level-max", str(min(levels) - 1))
+    assert capped.data["runs"] == [], "no run can fit under a cap below the lowest sampled key level"
+    assert capped.data["sample"]["filtering"]["excluded_run_count"] == len(everything)
 
 
-def test_the_affixes_scope_changes_both_the_rows_and_the_citation() -> None:
+def test_the_roster_filters_keep_exactly_the_runs_that_carry_the_value(baseline_sample: Result) -> None:
+    """``--contains-class``/``--contains-spec`` select on the roster; ``--player-region``/``--contains-role`` too.
+
+    The class and spec values are chosen from the sample so that some runs carry them and some do
+    not, which makes the expected set known exactly. The other two flags are proved on values no
+    roster can carry -- a US leaderboard has no EU players, and no run fields a made-up role.
+    """
+    runs = _rows(baseline_sample, "runs")
+    everything = _run_keys(baseline_sample)
+
+    for field, flag in (("class_slug", "--contains-class"), ("spec_slug", "--contains-spec")):
+        value = _a_value_only_some_runs_carry(runs, field)
+        expected = {_run_key(row) for row in runs if value in _roster_values(row, field)}
+        narrowed = run("raiderio", "sample", "mythic-plus-runs", *SCOPE, flag, value)
+        assert _run_keys(narrowed) == expected, f"{flag} {value} kept the wrong runs\n{narrowed.describe()}"
+        assert expected < everything, f"{flag} {value} has to drop at least one run to prove anything"
+        assert narrowed.data["sample"]["filtering"]["excluded_run_count"] == len(everything) - len(expected)
+
+    for flag, field, value in (("--player-region", "region", "eu"), ("--contains-role", "role", "healbot")):
+        assert not any(value in _roster_values(row, field) for row in runs), f"{value} is in the sample after all"
+        empty = run("raiderio", "sample", "mythic-plus-runs", *SCOPE, flag, value)
+        assert empty.data["runs"] == [], f"{flag} {value} matches no sampled roster\n{empty.describe()}"
+        assert empty.data["sample"]["filtering"]["excluded_run_count"] == len(everything)
+
+
+def test_the_affixes_scope_changes_both_the_rows_and_the_citation(baseline_sample: Result) -> None:
     """``--affixes`` picks a different Raider.IO leaderboard, so it must show up in every row."""
-    unfiltered = run("raiderio", "sample", "mythic-plus-runs", *SCOPE)
-    affix = sorted({affix for row in _rows(unfiltered, "runs") for affix in row["affixes"]})[0]
+    affix = sorted({affix for row in _rows(baseline_sample, "runs") for affix in row["affixes"]})[0]
 
     result = run("raiderio", "sample", "mythic-plus-runs", *SCOPE, "--affixes", affix)
 
@@ -323,34 +451,90 @@ def test_sample_mythic_plus_players_dedupes_roster_entries_into_snapshots() -> N
     _assert_sampled_provenance(result)
 
 
-@pytest.mark.parametrize("metric", ["mythic_level", "dungeon", "role", "player_region", "class", "spec"])
+def _assert_distribution_shape(result: Result, *, unit: str) -> list[dict[str, Any]]:
+    """The rows are a complete tally under ``unit``, ordered the way the payload promises.
+
+    The ordering is checked against an independently sorted copy rather than trusted, because the
+    rows are what an agent reads "the commonest first" off.
+    """
+    distribution = result.data["distribution"]
+    rows: list[dict[str, Any]] = distribution["rows"]
+    assert distribution["unit"] == unit, result.describe()
+    assert rows and all(isinstance(row["count"], int) and row["count"] >= 1 for row in rows)
+    assert rows == sorted(rows, key=lambda row: (-row["count"], row["value"])), "rows must be ordered by count"
+    assert abs(sum(row["percent"] for row in rows) - 100.0) < 1.0, result.describe()
+    _assert_sampled_provenance(result)
+    return rows
+
+
+def _assert_run_distribution_matches_the_metric(result: Result, metric: str, rows: list[dict[str, Any]]) -> None:
+    """Tie the tally to the one thing in the sample block that only this metric can produce."""
+    sample = result.data["sample"]
+    values = {row["value"] for row in rows}
+    if metric == "mythic_level":
+        assert result.data["distribution"]["statistics"] == sample["mythic_level"], result.describe()
+    elif metric == "dungeon":
+        assert values == set(sample["unique_dungeons"]), result.describe()
+    elif metric == "role":
+        assert rows == sample["role_counts"], result.describe()
+    elif metric == "player_region":
+        assert rows == sample["player_region_counts"], result.describe()
+    elif metric == "class":
+        assert values <= WOW_CLASS_SLUGS, result.describe()
+    elif metric == "spec":
+        assert not values & WOW_CLASS_SLUGS, "a spec tally cannot answer with class slugs"
+    else:
+        # The composition keys are one "role:label" pair per roster slot, over class or spec labels.
+        labels = {part.split(":", 1)[1] for value in values for part in value.split(" | ")}
+        assert all(len(value.split(" | ")) == 5 for value in values), result.describe()
+        assert (labels <= WOW_CLASS_SLUGS) is (metric == "class_composition"), result.describe()
+
+
+@pytest.mark.parametrize("metric", sorted(RUN_DISTRIBUTION_UNITS))
 def test_distribution_mythic_plus_runs_covers_every_documented_metric(metric: str) -> None:
     result = run("raiderio", "distribution", "mythic-plus-runs", "--metric", metric, *SCOPE)
 
     assert result.data["metric"] == metric
-    distribution = result.data["distribution"]
-    assert distribution["unit"]
-    rows = distribution["rows"]
-    assert rows and all(isinstance(row["count"], int) and row["count"] >= 1 for row in rows)
-    assert abs(sum(row["percent"] for row in rows) - 100.0) < 1.0, result.describe()
-    _assert_sampled_provenance(result)
+    sample = result.data["sample"]
+    unit = RUN_DISTRIBUTION_UNITS[metric]
+    rows = _assert_distribution_shape(result, unit=unit)
+    assert sum(row["count"] for row in rows) == (sample["run_count"] if unit == "runs" else sample["roster_entry_count"])
+    _assert_run_distribution_matches_the_metric(result, metric, rows)
 
 
-@pytest.mark.parametrize("metric", ["appearance_count", "top_mythic_level", "class", "spec", "role", "player_region"])
+def _assert_player_distribution_matches_the_metric(result: Result, metric: str, rows: list[dict[str, Any]]) -> None:
+    """Tie the tally to the one thing in the sample block that only this metric can produce."""
+    sample = result.data["sample"]
+    values = {row["value"] for row in rows}
+    total = sum(row["count"] for row in rows)
+    if metric in ("appearance_count", "top_mythic_level"):
+        assert result.data["distribution"]["statistics"] == sample[metric], result.describe()
+        assert total == sample["player_count"], result.describe()
+    elif metric == "class":
+        assert values == set(sample["classes"]) <= WOW_CLASS_SLUGS, result.describe()
+    elif metric == "spec":
+        assert values == set(sample["specs"]), result.describe()
+        assert not values & WOW_CLASS_SLUGS, "a spec tally cannot answer with class slugs"
+    elif metric == "role":
+        assert values <= {"tank", "healer", "dps"}, result.describe()
+        assert total >= sample["player_count"], "every sampled player was seen in at least one role"
+    else:
+        assert total == sample["player_count"], result.describe()
+        assert values <= {row["value"] for row in sample["player_region_counts"]}, result.describe()
+
+
+@pytest.mark.parametrize("metric", sorted(PLAYER_DISTRIBUTION_UNITS))
 def test_distribution_mythic_plus_players_covers_every_documented_metric(metric: str) -> None:
     result = run("raiderio", "distribution", "mythic-plus-players", "--metric", metric, *SCOPE, "--player-limit", "25")
 
     assert result.data["metric"] == metric
-    distribution = result.data["distribution"]
-    assert distribution["unit"]
-    assert distribution["rows"], result.describe()
-    _assert_sampled_provenance(result)
+    rows = _assert_distribution_shape(result, unit=PLAYER_DISTRIBUTION_UNITS[metric])
+    _assert_player_distribution_matches_the_metric(result, metric, rows)
 
 
-@pytest.mark.parametrize("metric", ["score", "mythic_level"])
-def test_threshold_mythic_plus_runs_estimates_around_a_target(metric: str) -> None:
-    sample = run("raiderio", "sample", "mythic-plus-runs", *SCOPE)
-    runs = _rows(sample, "runs")
+@pytest.mark.parametrize(("metric", "estimated"), [("score", "mythic_level"), ("mythic_level", "score")])
+def test_threshold_mythic_plus_runs_estimates_around_a_target(metric: str, estimated: str, baseline_sample: Result) -> None:
+    runs = _rows(baseline_sample, "runs")
     target = runs[len(runs) // 2][metric]
 
     result = run("raiderio", "threshold", "mythic-plus-runs", "--metric", metric, "--value", str(target), *SCOPE, "--nearest", "5")
@@ -361,7 +545,13 @@ def test_threshold_mythic_plus_runs_estimates_around_a_target(metric: str) -> No
     assert 1 <= threshold["nearest_match_count"] <= 5
     assert len(threshold["nearest_matches"]) == threshold["nearest_match_count"]
     assert threshold["nearest_matches"][0]["distance"] == pytest.approx(0.0), "an observed value must have a zero-distance neighbour"
-    assert threshold["estimate"] is not None
+    # A threshold answers "what does a run near this score look like", so the estimate has to be
+    # about the other metric; an estimate of the metric that was asked about says nothing.
+    estimate = threshold["estimate"]
+    assert estimate["metric"] == estimated, result.describe()
+    neighbours = [row["run"][estimated] for row in threshold["nearest_matches"]]
+    assert (estimate["count"], estimate["min"], estimate["max"]) == (len(neighbours), min(neighbours), max(neighbours))
+    assert threshold["caveat"].strip(), "a derived estimate must carry its caveat"
     _assert_sampled_provenance(result)
 
 

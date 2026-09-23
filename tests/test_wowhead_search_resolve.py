@@ -6,16 +6,18 @@ import json
 
 from wowhead_cli.main import app
 from wowhead_cli.ranking import (
+    ARTICLE_OVER_ENTITY_MARGIN,
+    database_rank_score,
     exact_match_score,
     is_filtered_high_confidence,
     is_high_confidence_exact_match,
     is_high_confidence_score,
     is_medium_confidence_score,
-    popularity_score,
     prefix_and_contains_score,
     search_result_score_and_reasons,
     term_match_score,
     type_hint_score,
+    upstream_database_ranks,
 )
 
 from tests.wowhead_testkit import runner
@@ -330,14 +332,34 @@ def test_type_hint_score_boosts_matching_entity_type() -> None:
 
 
 
-def test_popularity_score_pins_the_curve_and_the_entity_bonus() -> None:
-    # log10(popularity + 1) * 2, floored, capped at 6, plus 1 for a routable entity type.
-    assert popularity_score(999, entity_type="item") == (7, ["popularity"])
-    assert popularity_score(9, entity_type="item") == (3, ["popularity"])
-    assert popularity_score(999999, entity_type="item") == (7, ["popularity"])
-    assert popularity_score(999, entity_type=None) == (6, ["popularity"])
-    assert popularity_score(0, entity_type="item") == (1, [])
-    assert popularity_score(0, entity_type=None) == (0, [])
+def test_database_rank_score_pins_the_bonus_per_upstream_rank() -> None:
+    # Wowhead's own database order, plus 1 for a routable entity type.
+    assert database_rank_score(0, entity_type="item") == (43, ["upstream_database_rank"])
+    assert database_rank_score(1, entity_type="item") == (29, ["upstream_database_rank"])
+    assert database_rank_score(2, entity_type="item") == (15, ["upstream_database_rank"])
+    assert database_rank_score(3, entity_type="item") == (1, [])
+    assert database_rank_score(None, entity_type="item") == (1, [])
+    assert database_rank_score(0, entity_type=None) == (42, ["upstream_database_rank"])
+    assert database_rank_score(None, entity_type=None) == (0, [])
+
+
+def test_upstream_database_ranks_reads_wowheads_own_relevance_order() -> None:
+    ranks = upstream_database_ranks(
+        {
+            "results": [],
+            "categories": {
+                "database": [
+                    {"type": 3, "id": 19019, "name": "Thunderfury, Blessed Blade of the Windseeker"},
+                    {"type": 6, "id": 21992, "name": "Thunderfury"},
+                    {"name": "row without an addressable id"},
+                ],
+                "news": [{"type": 162, "id": 375994, "name": "Thunderfury news"}],
+            },
+        }
+    )
+    # Only database rows are ranked, keyed by Wowhead's own (type, id) pair.
+    assert ranks == {(3, 19019): 0, (6, 21992): 1}
+    assert upstream_database_ranks({"results": []}) == {}
 
 
 
@@ -349,15 +371,15 @@ def test_search_result_score_and_reasons_composes_helper_scores() -> None:
             "name": "Fairbreeze Favors",
             "displayName": "Fairbreeze Favors",
             "typeName": "Quest",
-            "popularity": 999,
         },
         query="quest fairbreeze favors",
         ranking_query="quest fairbreeze favors",
+        database_rank=0,
     )
     assert score > 0
     assert "all_terms_match" in reasons
     assert "type_hint" in reasons
-    assert "popularity" in reasons
+    assert "upstream_database_rank" in reasons
 
 
 
@@ -611,25 +633,21 @@ def test_resolve_recommends_news_post_when_the_best_match_is_a_news_row(monkeypa
 def test_resolve_answers_with_the_entity_when_a_news_headline_matches_the_text_better(monkeypatch) -> None:
     """A news post about an item scores higher on the item's own name; the item is still the answer."""
 
+    item = {"type": 3, "id": 19019, "name": "Thunderfury, Blessed Blade of the Windseeker", "typeName": "Item"}
+
     def fake_search(self, query: str):  # noqa: ANN001
         return {
             "search": query,
             "results": [
-                {
-                    "type": 162,
-                    "id": 375994,
-                    "name": "Thunderfury",
-                    "typeName": "News Post",
-                    "popularity": 9,
-                },
-                {
-                    "type": 3,
-                    "id": 19019,
-                    "name": "Thunderfury",
-                    "typeName": "Item",
-                    "popularity": 2,
-                },
+                {"type": 162, "id": 375994, "name": "Thunderfury", "typeName": "News Post"},
+                item,
             ],
+            "categories": {
+                "database": [
+                    {"type": 3, "id": 230224, "name": "Thunderfury, Blessed Blade of the Windseeker"},
+                    item,
+                ]
+            },
         }
 
     monkeypatch.setattr("wowhead_cli.main.WowheadClient.search_suggestions", fake_search)
@@ -643,6 +661,47 @@ def test_resolve_answers_with_the_entity_when_a_news_headline_matches_the_text_b
     # The news row is ranked behind the entity, not dropped: it keeps its score and its follow-up.
     news_candidate = data["candidates"][-1]
     assert news_candidate["entity_type"] == "news"
-    assert news_candidate["ranking"]["score"] > data["match"]["ranking"]["score"]
+    news_score = news_candidate["ranking"]["score"]
+    match_score = data["match"]["ranking"]["score"]
+    # It leads the item on text, but by less than an exact name match is worth.
+    assert 0 < news_score - match_score < ARTICLE_OVER_ENTITY_MARGIN
     assert news_candidate["follow_up"]["recommended_surface"] == "news-post"
     assert data["count"] == data["total_matches"] == 2
+
+
+def test_resolve_answers_with_the_news_post_a_query_names_outright(monkeypatch) -> None:
+    """The entity preference is score-aware: a headline the query names beats a stray entity."""
+
+    def fake_search(self, query: str):  # noqa: ANN001
+        return {
+            "search": query,
+            "results": [
+                {
+                    "type": 6,
+                    "id": 12345,
+                    "name": "Midnight",
+                    "typeName": "Spell",
+                },
+                {
+                    "type": 162,
+                    "id": 382931,
+                    "name": "Midnight Hotfixes for September 18th",
+                    "typeName": "News Post",
+                },
+            ],
+        }
+
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.search_suggestions", fake_search)
+    result = runner.invoke(app, ["resolve", "Midnight Hotfixes for September 18th"])
+    assert result.exit_code == 0
+
+    data = json.loads(result.stdout)["data"]
+    assert data["match"]["entity_type"] == "news"
+    assert data["match"]["id"] == 382931
+    assert data["resolved"] is True
+    assert data["confidence"] == "high"
+    assert data["next_command"] == "wowhead news-post https://www.wowhead.com/news=382931"
+    # The spell is only a stray text hit, so it trails the answer it could not beat by the margin.
+    spell_candidate = data["candidates"][-1]
+    assert spell_candidate["entity_type"] == "spell"
+    assert data["match"]["ranking"]["score"] - spell_candidate["ranking"]["score"] >= ARTICLE_OVER_ENTITY_MARGIN

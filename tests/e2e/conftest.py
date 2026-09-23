@@ -81,7 +81,9 @@ def require(doctor_rows: dict[str, dict[str, Any]], skip_list: frozenset[str]):
             if row is None:
                 raise AssertionError(f"{provider} is not registered in warcraft doctor: {sorted(doctor_rows)}")
             auth = row.get("auth") or {}
-            if auth.get("required") and auth.get("configured") is False:
+            # Anything other than an explicit True is "not configured": a doctor that stops
+            # reporting the field must fail the run, not quietly let the journeys through.
+            if auth.get("required") and auth.get("configured") is not True:
                 raise AssertionError(
                     f"{provider} needs credentials that are not configured; see docs/architecture/E2E_TESTING.md "
                     f"(auth={json.dumps(auth)[:300]})"

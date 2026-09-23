@@ -405,7 +405,7 @@ def test_icy_veins_search_command_uses_sitemap_guides(monkeypatch) -> None:
     result = runner.invoke(app, ["search", "mistweaver monk guide", "--limit", "5"])
     assert result.exit_code == 0
 
-    payload = json.loads(result.stdout)
+    payload = json.loads(result.stdout)["data"]
     assert payload["count"] == 3
     assert payload["results"][0]["id"] == "mistweaver-monk-pve-healing-guide"
     assert payload["results"][0]["metadata"]["content_family"] == "spec_guide"
@@ -425,7 +425,7 @@ def test_icy_veins_search_command_boosts_broad_hubs_for_broad_queries(monkeypatc
     result = runner.invoke(app, ["search", "monk guide", "--limit", "5"])
     assert result.exit_code == 0
 
-    payload = json.loads(result.stdout)
+    payload = json.loads(result.stdout)["data"]
     assert payload["results"][0]["id"] == "monk-guide"
     assert "family_class_hub" in payload["results"][0]["ranking"]["match_reasons"]
 
@@ -435,7 +435,7 @@ def test_icy_veins_resolve_command_returns_best_guide(monkeypatch) -> None:
     result = runner.invoke(app, ["resolve", "mistweaver monk guide"])
     assert result.exit_code == 0
 
-    payload = json.loads(result.stdout)
+    payload = json.loads(result.stdout)["data"]
     assert payload["resolved"] is True
     assert payload["next_command"] == "icy-veins guide mistweaver-monk-pve-healing-guide"
 
@@ -453,7 +453,7 @@ def test_icy_veins_resolve_command_prefers_role_hubs_for_broad_role_queries(monk
     result = runner.invoke(app, ["resolve", "healing guide"])
     assert result.exit_code == 0
 
-    payload = json.loads(result.stdout)
+    payload = json.loads(result.stdout)["data"]
     assert payload["resolved"] is True
     assert payload["match"]["id"] == "healing-guide"
     assert "family_role_guide" in payload["match"]["ranking"]["match_reasons"]
@@ -478,7 +478,7 @@ def test_icy_veins_resolve_command_prefers_easy_mode_when_query_matches(monkeypa
     result = runner.invoke(app, ["resolve", "fury warrior easy mode"])
     assert result.exit_code == 0
 
-    payload = json.loads(result.stdout)
+    payload = json.loads(result.stdout)["data"]
     assert payload["match"]["id"] == "fury-warrior-pve-dps-easy-mode"
     assert payload["resolved"] is True
     assert payload["next_command"] == "icy-veins guide fury-warrior-pve-dps-easy-mode"
@@ -543,7 +543,7 @@ def test_icy_veins_search_penalizes_broad_hubs_for_specialized_queries(monkeypat
     result = runner.invoke(app, ["search", "fury warrior easy mode", "--limit", "5"])
     assert result.exit_code == 0
 
-    payload = json.loads(result.stdout)
+    payload = json.loads(result.stdout)["data"]
     assert payload["results"][0]["id"] == "fury-warrior-pve-dps-easy-mode"
     last_match = next(row for row in payload["results"] if row["id"] == "warrior-guide")
     assert "penalty_broad_hub" in last_match["ranking"]["match_reasons"]
@@ -554,7 +554,7 @@ def test_icy_veins_search_returns_scope_hint_for_unsupported_query_family(monkey
     result = runner.invoke(app, ["search", "patch notes", "--limit", "5"])
     assert result.exit_code == 0
 
-    payload = json.loads(result.stdout)
+    payload = json.loads(result.stdout)["data"]
     assert payload["count"] == 0
     assert payload["results"] == []
     assert payload["scope_hint"]["code"] == "patch_notes"
@@ -565,7 +565,7 @@ def test_icy_veins_resolve_returns_scope_hint_for_unsupported_query_family(monke
     result = runner.invoke(app, ["resolve", "latest class changes", "--limit", "5"])
     assert result.exit_code == 0
 
-    payload = json.loads(result.stdout)
+    payload = json.loads(result.stdout)["data"]
     assert payload["resolved"] is False
     assert payload["count"] == 0
     assert payload["candidates"] == []
@@ -576,7 +576,7 @@ def test_icy_veins_guide_and_guide_full(monkeypatch) -> None:
     monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.fetch_guide_page", lambda self, guide_ref: _fake_fetch_guide_page(guide_ref))
     guide_result = runner.invoke(app, ["guide", "mistweaver-monk-pve-healing-guide"])
     assert guide_result.exit_code == 0
-    guide_payload = json.loads(guide_result.stdout)
+    guide_payload = json.loads(guide_result.stdout)["data"]
     assert guide_payload["guide"]["slug"] == "mistweaver-monk-pve-healing-guide"
     assert guide_payload["linked_entities"]["count"] == 2
     assert guide_payload["build_references"]["count"] == 1
@@ -585,7 +585,7 @@ def test_icy_veins_guide_and_guide_full(monkeypatch) -> None:
 
     full_result = runner.invoke(app, ["guide-full", "mistweaver-monk-pve-healing-guide"])
     assert full_result.exit_code == 0
-    full_payload = json.loads(full_result.stdout)
+    full_payload = json.loads(full_result.stdout)["data"]
     assert full_payload["guide"]["page_count"] == 3
     assert full_payload["linked_entities"]["count"] >= 2
     assert full_payload["build_references"]["count"] == 1
@@ -601,7 +601,7 @@ def test_icy_veins_guide_full_keeps_class_hubs_local(monkeypatch) -> None:
     result = runner.invoke(app, ["guide-full", "monk-guide"])
     assert result.exit_code == 0
 
-    payload = json.loads(result.stdout)
+    payload = json.loads(result.stdout)["data"]
     assert payload["guide"]["content_family"] == "class_hub"
     assert payload["guide"]["page_count"] == 1
     assert payload["navigation"]["count"] == 1
@@ -614,7 +614,7 @@ def test_icy_veins_guide_export_and_query(monkeypatch, tmp_path: Path) -> None:
 
     export_result = runner.invoke(app, ["guide-export", "mistweaver-monk-pve-healing-guide", "--out", str(export_dir)])
     assert export_result.exit_code == 0
-    export_payload = json.loads(export_result.stdout)
+    export_payload = json.loads(export_result.stdout)["data"]
     assert export_payload["counts"]["pages"] == 3
     assert (export_dir / "manifest.json").exists()
     manifest = json.loads((export_dir / "manifest.json").read_text())
@@ -623,19 +623,19 @@ def test_icy_veins_guide_export_and_query(monkeypatch, tmp_path: Path) -> None:
 
     query_result = runner.invoke(app, ["guide-query", str(export_dir), "vivify", "--kind", "linked_entities"])
     assert query_result.exit_code == 0
-    query_payload = json.loads(query_result.stdout)
+    query_payload = json.loads(query_result.stdout)["data"]
     assert query_payload["count"] == 1
     assert query_payload["top"][0]["name"] == "Vivify"
 
     build_query = runner.invoke(app, ["guide-query", str(export_dir), "raid build abc123", "--kind", "build_references"])
     assert build_query.exit_code == 0
-    build_query_payload = json.loads(build_query.stdout)
+    build_query_payload = json.loads(build_query.stdout)["data"]
     assert build_query_payload["count"] == 1
     assert build_query_payload["top"][0]["build_code"] == "ABC123"
 
     analysis_query = runner.invoke(app, ["guide-query", str(export_dir), "stat priority", "--kind", "analysis_surfaces"])
     assert analysis_query.exit_code == 0
-    analysis_query_payload = json.loads(analysis_query.stdout)
+    analysis_query_payload = json.loads(analysis_query.stdout)["data"]
     assert analysis_query_payload["count"] >= 1
     assert "stat_priority" in analysis_query_payload["top"][0]["surface_tags"]
 
@@ -644,7 +644,7 @@ def test_icy_veins_guide_export_and_query(monkeypatch, tmp_path: Path) -> None:
         ["guide-query", str(export_dir), "critical strike", "--kind", "sections", "--section-title", "stat"],
     )
     assert section_query.exit_code == 0
-    section_payload = json.loads(section_query.stdout)
+    section_payload = json.loads(section_query.stdout)["data"]
     assert section_payload["match_counts"]["sections"] >= 1
 
 
@@ -925,6 +925,24 @@ def test_icy_veins_guide_query_accepts_comma_separated_kinds(monkeypatch, tmp_pa
         "build_references": 0,
         "analysis_surfaces": 1,
     }
+
+
+def test_icy_veins_guide_query_answers_each_bad_bundle_path_the_way_method_does(tmp_path: Path) -> None:
+    """One answer per mistake: missing target, wrong argument type, unreadable bundle."""
+    empty_dir = tmp_path / "not-a-bundle"
+    empty_dir.mkdir()
+    file_path = tmp_path / "bundle.json"
+    file_path.write_text("{}")
+
+    answers = {}
+    for label, path in (("missing", tmp_path / "gone"), ("directory", empty_dir)):
+        result = runner.invoke(app, ["guide-query", str(path), "mana"])
+        answers[label] = (result.exit_code, json.loads(result.stderr)["error"]["code"])
+
+    assert answers == {"missing": (4, "not_found"), "directory": (1, "invalid_bundle")}
+    # Typer rejects a file before the command body runs, so the envelope is written by
+    # `warcraft_core.cli.run` rather than the runner here; only the exit code is visible.
+    assert runner.invoke(app, ["guide-query", str(file_path), "mana"]).exit_code == 2
 
 
 def test_icy_veins_search_does_not_privilege_any_class_on_a_role_query(monkeypatch) -> None:

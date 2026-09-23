@@ -9,12 +9,21 @@ error-path only: a success-path journey for any of them would pull, recompile, o
 checkout every other journey reads. ``build`` is reached through its missing-build-dir guard,
 ``sync`` through its dirty-worktree and missing-repo guards, and ``checkout`` through a temporary
 ``XDG_DATA_HOME`` whose managed root is not a git repo.
+
+Prerequisite: the compiled binary at ``<checkout>/build/simc`` must have been built from the
+checkout's *current* HEAD. Every decode, prune, and priority journey below reads talent and spell
+data out of that binary while reading APLs and profiles off the working tree, so a binary that
+lags the checkout produces answers that are wrong rather than missing. ``simc doctor`` detects the
+mismatch (``repo.build_ready`` goes false and ``repo.binary.matches_checkout`` goes false), and the
+``checkout`` fixture turns that into a failure with the rebuild command rather than a skip: a
+skipped simc suite would hide the very handoff the wrapper journeys depend on.
 """
 
 from __future__ import annotations
 
 import json
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -26,9 +35,9 @@ from tests.e2e.harness import (
     EXIT_GENERIC,
     EXIT_NOT_FOUND,
     EXIT_USAGE,
+    JourneyFailure,
     Result,
     dead_proxy_env,
-    payload_or_legacy,
     run,
     run_raw,
 )
@@ -59,6 +68,63 @@ MIN_SELECTED_BY_TREE = {"class": 15, "spec": 15, "hero": 5}
 # `talent.<token>=false` in an APL prune reason: the talent that made the branch dead.
 TALENT_CONDITION_RE = re.compile(r"talent\.([a-z0-9_]+)=(?:false|true)")
 
+# `apl-branch-trace` renders one action per line as `L<line>: <status> <action ...>`; a list header
+# is the bare `[list_name]`. High enough that `simc priority` returns a whole action list.
+TRACE_ACTION_RE = re.compile(r"^L(\d+): (\w+)\s+(.*)$")
+DISPATCH_RE = re.compile(r"^call_action_list -> (\w+)")
+PRIORITY_SCAN_LIMIT = 100  # `simc priority --limit` caps here; the journey APL's start list is far shorter.
+INTENT_PREFIX_BY_STATUS = {"guaranteed": "always", "possible": "situational"}
+
+
+@dataclass(frozen=True)
+class TraceRow:
+    """One ``apl-branch-trace`` line: an action, or a list header (``line_no`` 0, empty status)."""
+
+    line_no: int
+    status: str
+    text: str
+
+
+def _trace_rows_at_depth(traced: dict[str, Any], depth: int) -> list[TraceRow]:
+    rows: list[TraceRow] = []
+    for row in traced["trace"]:
+        if row["depth"] != depth:
+            continue
+        match = TRACE_ACTION_RE.match(str(row["text"]))
+        rows.append(
+            TraceRow(0, "", str(row["text"]))
+            if match is None
+            else TraceRow(int(match.group(1)), match.group(2), match.group(3))
+        )
+    return rows
+
+
+def _list_headers(rows: list[TraceRow]) -> set[str]:
+    """The ``[list_name]`` headers among trace rows; the other non-action rows are ``because:`` notes."""
+    return {row.text[1:-1] for row in rows if row.text.startswith("[") and row.text.endswith("]")}
+
+
+def _dispatch_targets(rows: list[TraceRow], *, dead: bool) -> set[str]:
+    """The action lists the traced rows hand off to, split by whether the handoff survived the prune."""
+    matches = (DISPATCH_RE.match(row.text) for row in rows if (row.status == "dead") == dead)
+    return {match.group(1) for match in matches if match is not None}
+
+
+def _collapse_repeats(rows: Iterable[tuple[str, str, str | None]]) -> list[tuple[str, str, str | None]]:
+    collapsed: list[tuple[str, str, str | None]] = []
+    for row in rows:
+        if not collapsed or collapsed[-1] != row:
+            collapsed.append(row)
+    return collapsed
+
+
+def _intent_restates_priority_row(line: str, action: str, target_list: str | None) -> bool:
+    """An intent line paraphrases one priority row: a dispatch reads ``run <list>``, else the action."""
+    body = line.split(": ", 1)[-1]
+    if action == "call_action_list":
+        return target_list is not None and body.startswith("run ") and target_list.split("_")[0] in body
+    return action.replace("_", " ") in body
+
 
 @dataclass(frozen=True)
 class Checkout:
@@ -71,6 +137,29 @@ class Checkout:
     talents: str
 
 
+def _require_binary_built_from_head(repo: dict[str, Any]) -> None:
+    """Fail — never skip — when the compiled binary does not match the checkout it is read with.
+
+    A binary built from an older commit still answers every command, so the failure this catches is
+    a *wrong* build (talents resolved against stale trait data), not a missing one. See the module
+    docstring.
+    """
+    binary = repo["binary"]
+    if repo["repo_ready"] and repo["build_ready"] and binary["matches_checkout"] is True:
+        return
+    raise JourneyFailure(
+        "the local SimulationCraft checkout is not usable for these journeys.\n"
+        f"  root:              {repo['root']}\n"
+        f"  checkout HEAD:     {(repo.get('git') or {}).get('head')}\n"
+        f"  binary:            {binary['path']}\n"
+        f"  binary revision:   {binary['git_revision']} (matches_checkout={binary['matches_checkout']})\n"
+        f"  repo issues:       {repo['repo_issues']}\n"
+        f"  build issues:      {repo['build_issues']}\n"
+        "Rebuild it from the checkout's current HEAD (cmake -B build && cmake --build build, or "
+        "`simc build`) and re-run; skipping would hide wrong talent decodes, not just missing ones."
+    )
+
+
 def _first_item(result_data: dict[str, Any], category: str) -> dict[str, Any]:
     items = result_data["categories"][category]["items"]
     assert items, f"spec-files returned no {category} rows: {json.dumps(result_data)[:400]}"
@@ -81,9 +170,8 @@ def _first_item(result_data: dict[str, Any], category: str) -> dict[str, Any]:
 def checkout() -> Checkout:
     """Discover the checkout, its windwalker APLs, and a real talent string, once per module."""
     doctor = run("simc", "doctor")
-    repo = payload_or_legacy(doctor, "repo")
-    assert repo["repo_ready"] is True, doctor.describe()
-    assert repo["build_ready"] is True, doctor.describe()
+    repo = doctor.data["repo"]
+    _require_binary_built_from_head(repo)
     root = Path(repo["root"])
 
     spec_files = run("simc", "spec-files", APL_STEM)
@@ -96,7 +184,7 @@ def checkout() -> Checkout:
     profile = profiles[0]
 
     inspected = run("simc", "inspect", str(profile))
-    talents = payload_or_legacy(inspected, "target")["build_spec"]["talents"]
+    talents = inspected.data["target"]["build_spec"]["talents"]
     assert isinstance(talents, str) and len(talents) > 40, inspected.describe()
 
     return Checkout(root=root, apl=apl, assisted_apl=assisted_apl, profile=profile, talents=talents)
@@ -170,14 +258,19 @@ def test_doctor_reports_a_ready_checkout_and_needs_no_network(require, checkout:
     # simc has no network surface, so a dead proxy must not change the answer.
     result = run("simc", "doctor", env=dead_proxy_env())
     data = result.data
-    assert data == {key: payload_or_legacy(result, key) for key in data}, result.describe()
     assert data["status"] == "ready"
     assert data["auth"] == {"required": False, "deferred": False}
     assert data["capabilities"]["decode_build"] == "ready"
     assert data["capabilities"]["search"] == "coming_soon"
     assert data["repo"]["root"] == str(checkout.root)
-    assert data["repo"]["binary"]["available"] is True
-    assert "SimulationCraft" in data["repo"]["binary"]["version_line"]
+    binary = data["repo"]["binary"]
+    assert binary["available"] is True
+    assert "SimulationCraft" in binary["version_line"]
+    # doctor's build-readiness claim is only worth anything if the revision it read out of the
+    # binary really is the checkout's HEAD; that is the mismatch the module docstring is about.
+    assert binary["matches_checkout"] is True, result.describe()
+    assert binary["git_revision"] in binary["version_line"], result.describe()
+    assert str(data["repo"]["git"]["head"]).startswith(str(binary["git_revision"])), result.describe()
     assert data["repo_resolution"]["configured_root"] == str(checkout.root)
     # A root that resolved came from somewhere; "unset" would contradict the line above.
     assert data["repo_resolution"]["source"] != "unset"
@@ -487,7 +580,7 @@ def test_compare_builds_diffs_two_real_talent_strings(require, checkout: Checkou
     other_profiles = sorted(path for path in (checkout.root / "profiles").rglob("*Monk_Windwalker*.simc") if path != checkout.profile)
     assert other_profiles, "expected a second windwalker profile to diff against"
     other = run("simc", "inspect", str(other_profiles[0]))
-    other_talents = payload_or_legacy(other, "target")["build_spec"]["talents"]
+    other_talents = other.data["target"]["build_spec"]["talents"]
     assert other_talents and other_talents != checkout.talents
 
     result = run(
@@ -682,21 +775,57 @@ def test_exact_build_priority_journey(require, checkout: Checkout) -> None:
 
 
 def test_branch_and_intent_journey(require, checkout: Checkout) -> None:
+    """trace / intent / intent-explain must all describe the *same* pruned build, not just return rows.
+
+    Each of the three is checked against a view that was computed independently: the trace's own
+    start-list rows against ``priority``, the descent against the dispatches the trace itself kept
+    alive, and the two intent surfaces against each other and against ``priority``'s statuses.
+    """
     require("simc")
     build_args = ("--profile-path", str(checkout.profile))
+    intent_limit = 6
 
     trace = run("simc", "apl-branch-trace", str(checkout.apl), *build_args, "--max-depth", "3")
     assert trace.data["summary"]["start_list"] == "default"
-    assert trace.data["trace"], trace.describe()
+    priority = run("simc", "priority", str(checkout.apl), *build_args, "--limit", str(PRIORITY_SCAN_LIMIT))
 
-    intent = run("simc", "apl-intent", str(checkout.apl), *build_args, "--limit", "4")
+    items = priority.data["priority"]["items"]
+    assert len(items) < PRIORITY_SCAN_LIMIT, f"priority truncated at {PRIORITY_SCAN_LIMIT}\n{priority.describe()}"
+    start_rows = _trace_rows_at_depth(trace.data, 1)
+    assert [(row.line_no, row.status) for row in start_rows if row.status != "dead"] == [
+        (row["line_no"], row["status"]) for row in items
+    ], trace.describe()
+    dead_lines = {row.line_no for row in start_rows if row.status == "dead"}
+    assert dead_lines, f"this build prunes nothing, so the trace's dead marking is unexercised\n{trace.describe()}"
+    assert {row["line_no"] for row in priority.data["priority"]["inactive_talent_branches"]} <= dead_lines, trace.describe()
+
+    # The walk descends into the lists it kept and never into the ones it killed.
+    entered = _list_headers(_trace_rows_at_depth(trace.data, 2))
+    assert _dispatch_targets(start_rows, dead=False) == entered, trace.describe()
+    assert not _dispatch_targets(start_rows, dead=True) & entered, trace.describe()
+
+    intent = run("simc", "apl-intent", str(checkout.apl), *build_args, "--limit", str(intent_limit))
     assert intent.data["focus_list"] == "default"
-    assert intent.data["intent"] and len(intent.data["intent"]) <= 4
+    lines = intent.data["intent"]
+    assert 0 < len(lines) <= intent_limit, intent.describe()
+    assert {row["status"] for row in items} <= set(INTENT_PREFIX_BY_STATUS), priority.describe()
+    # Each line restates one priority row: "always" for a guaranteed action, "situational" for a
+    # conditional one, in priority order, with consecutive repeats of a row collapsed.
+    expected = _collapse_repeats(
+        (INTENT_PREFIX_BY_STATUS[row["status"]], row["action"], row["target_list"]) for row in items
+    )[: len(lines)]
+    assert [line.split(":", 1)[0] for line in lines] == [prefix for prefix, _, _ in expected], intent.describe()
+    mismatched = [
+        (line, row)
+        for line, row in zip(lines, expected, strict=True)
+        if not _intent_restates_priority_row(line, row[1], row[2])
+    ]
+    assert not mismatched, f"intent lines do not restate their priority rows: {mismatched}\n{intent.describe()}"
 
-    explained = run("simc", "apl-intent-explain", str(checkout.apl), *build_args, "--limit", "4")
+    explained = run("simc", "apl-intent-explain", str(checkout.apl), *build_args, "--limit", str(intent_limit))
     buckets = explained.data["explained_intent"]
-    assert isinstance(buckets, dict) and buckets
-    assert any(buckets[name] for name in buckets)
+    # explain buckets the same lines; it must partition them, not invent or drop any.
+    assert sorted(line for bucket in buckets.values() for line in bucket) == sorted(lines), explained.describe()
 
     compared = run("simc", "apl-branch-compare", str(checkout.apl), *build_args, "--left-targets", "1", "--right-targets", "5")
     comparison = compared.data["comparison"]
@@ -1135,11 +1264,16 @@ def test_bad_input_paths_exit_4(require, checkout: Checkout, out_dir: Path) -> N
     assert str(missing) in invalid_harness.payload["error"]["message"]
 
 
-def test_usage_errors_exit_2_without_a_traceback(require) -> None:
+def test_usage_errors_exit_2_with_an_error_envelope(require) -> None:
+    """A rejected invocation still owes the caller the envelope, on stderr, with an error code.
+
+    ``run`` is what enforces that: exit code, empty stdout, one parseable envelope with ``ok: false``
+    and the expected ``error.code``, and no traceback. A Click usage error printed as plain text
+    fails here, which is the regression an exit-code-only check could not see.
+    """
     require("simc")
-    missing_argument = run_raw("simc", "apl-lists")
-    assert missing_argument.exit_code == EXIT_USAGE, missing_argument.describe()
-    assert "Traceback" not in missing_argument.stderr
+    missing_argument = run("simc", "apl-lists", expect=EXIT_USAGE, error_code="invalid_argument")
+    assert "apl_path" in missing_argument.payload["error"]["message"], missing_argument.describe()
 
     run("simc", "validate-talent-transport", expect=EXIT_USAGE, error_code="invalid_query")
     run("simc", "repo", "--set-root", "/tmp", "--clear-root", expect=EXIT_USAGE, error_code="invalid_query")

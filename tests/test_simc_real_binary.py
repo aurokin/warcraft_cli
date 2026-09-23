@@ -4,9 +4,10 @@ The bugs this file guards against were invisible to mocked tests: SimC rejected 
 the handful of freely granted talents first, and the CLI reported that stub as a successful decode; and
 a re-encoded build silently carried the keystone of a hero tree the build never selected.
 
-Needs the local SimulationCraft checkout and a built binary. It is skipped, loudly, without them;
-the captured-output tests in ``test_simc_build_input.py`` and ``test_simc_cli.py`` cover the same
-logic everywhere else.
+Needs the local SimulationCraft checkout and a built binary. It is skipped, loudly, without them, so
+it proves nothing on CI - ``docs/simc/README.md`` says so under "Tests that need the binary". The
+captured-output tests in ``test_simc_build_input.py`` and ``test_simc_cli.py`` cover the same logic
+everywhere else.
 """
 
 from __future__ import annotations
@@ -155,3 +156,46 @@ def test_a_no_op_modify_build_discloses_the_hero_talents_the_reencode_adds(
     gained = {t.entry for t in export_resolution.inactive_hero_talents}
     assert {row["entry"] for row in payload["diff_from_base"]["inactive_hero"]["added"]} == gained
     assert bool(payload["disclosures"]) is bool(gained)
+
+
+def test_a_tree_swap_round_trips_a_build_that_holds_a_tiered_node(repo: RepoPaths, decoded_profiles: list[_Decoded]) -> None:
+    """SimC prints a tiered node's leftover rank, so re-serializing one used to drop the whole node.
+
+    A tree swap rebuilds every tree from the decode instead of from the base hash, so a tiered node
+    anywhere in the build made `modify-build` fail with `encode_mismatch` and emit no export.
+    """
+    tiered_entries = load_trait_table(repo.root).tiered_siblings_by_entry
+    subject = next(
+        (
+            item
+            for item in decoded_profiles
+            if item.resolution is not None
+            and any(
+                talent.entry in tiered_entries
+                for tree in ("class", "spec", "hero")
+                for talent in item.resolution.talents_by_tree[tree]
+            )
+        ),
+        None,
+    )
+    assert subject is not None, "no stock profile held a tiered node, so this check proved nothing"
+    assert subject.resolution is not None
+
+    result = CliRunner().invoke(
+        simc_app,
+        [
+            "--repo-root", str(repo.root), "modify-build",
+            "--talents", str(subject.build_spec.talents),
+            "--actor-class", str(subject.build_spec.actor_class),
+            "--spec", str(subject.build_spec.spec),
+            "--swap-hero-tree-from", str(subject.build_spec.talents),
+        ],
+    )
+
+    assert result.exit_code == 0, f"{subject.name}: {result.stdout}{result.stderr}"
+    export = json.loads(result.stdout)["data"]["result"]["talents_export"]
+    reencoded = decode_build(
+        repo,
+        BuildSpec(actor_class=subject.build_spec.actor_class, spec=subject.build_spec.spec, talents=export),
+    )
+    assert reencoded.enabled_talents == subject.resolution.enabled_talents

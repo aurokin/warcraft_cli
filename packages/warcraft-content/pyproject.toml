@@ -8,6 +8,7 @@ version = "0.5.0"
 description = "Shared content and storage helpers for the Warcraft CLI monorepo"
 requires-python = ">=3.12"
 dependencies = [
+  "beautifulsoup4>=4.13.0,<5.0.0",
   "warcraft-core-cli>=0.1.0",
 ]
 

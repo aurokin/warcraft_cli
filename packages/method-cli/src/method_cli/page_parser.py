@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import re
-from html import unescape
 from typing import Any
 from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup, Tag
+from warcraft_content.html_sections import clean_text, extract_headings, extract_sections
 from warcraft_core.identity import ability_identity_payload, build_identity_payload, build_reference_payload
 
 METHOD_BASE_URL = "https://www.method.gg"
@@ -18,8 +18,6 @@ TALENT_BUILD_EMBED_SELECTOR = ".talent-embed[data-talent]"
 TALENT_BUILD_TITLE_SELECTOR = ".talent-title"
 # A WoW loadout import string as Blizzard's client generates it: one long run of base64 characters.
 WOW_TALENT_EXPORT_RE = re.compile(r"^[A-Za-z0-9+/]{40,}$")
-# Method guide bodies use h2 for sections, h3 for builds, and h4 for per-talent notes.
-HEADING_TAG_RE = re.compile(r"^h[234]$")
 CLASS_TOKENS = {
     "death-knight",
     "demon-hunter",
@@ -41,13 +39,6 @@ WRITTEN_BY_RE = re.compile(r"^Written by\s+(?P<author>.+?)\s*-\s*(?P<date>\d{1,2
 WOWHEAD_LINK_RE = re.compile(
     r"^(?P<entity_type>achievement|currency|faction|item|mount|npc|object|pet|quest|spell|zone)=(?P<id>\d+)(?:/|$)"
 )
-
-
-def clean_text(value: str | None) -> str | None:
-    if not isinstance(value, str):
-        return None
-    text = unescape(re.sub(r"\s+", " ", value)).strip()
-    return text or None
 
 
 def guide_ref_parts(guide_ref: str) -> tuple[str, str | None]:
@@ -176,84 +167,6 @@ def _clone_article(article: Tag) -> Tag:
     for node in cloned.select("script, style, noscript, .premium-video, .mobile-video-wrap"):
         node.decompose()
     return cloned
-
-
-def _heading_title_and_level(heading: Tag) -> tuple[str, int] | None:
-    title = clean_text(heading.get_text(" ", strip=True))
-    if not title:
-        return None
-    return title, int(heading.name[1])
-
-
-def _extract_headings(article: Tag) -> list[dict[str, Any]]:
-    """Every heading in the article in document order, however deeply the layout nests it."""
-    headings: list[dict[str, Any]] = []
-    for node in article.find_all(HEADING_TAG_RE):
-        heading = _heading_title_and_level(node)
-        if heading is None:
-            continue
-        headings.append({"title": heading[0], "level": heading[1], "ordinal": len(headings) + 1})
-    return headings
-
-
-def _append_section_content(section: dict[str, Any], node: Any) -> None:
-    if not isinstance(node, Tag):
-        text = clean_text(str(node))
-        if text:
-            section["text_parts"].append(text)
-        return
-    html = str(node).strip()
-    text = clean_text(node.get_text(" ", strip=True))
-    if html:
-        section["html_parts"].append(html)
-    if text:
-        section["text_parts"].append(text)
-
-
-def _new_section(title: str, level: int, ordinal: int) -> dict[str, Any]:
-    return {"title": title, "level": level, "ordinal": ordinal, "html_parts": [], "text_parts": []}
-
-
-def _split_sections(node: Tag, sections: list[dict[str, Any]], *, fallback_title: str) -> None:
-    """Cut ``node``'s content into one section per heading, in document order.
-
-    Method wraps its ``h2`` headings in ``div.guide-section-title``, so a scan of the article's
-    direct children alone would miss every top-level heading and merge most of a guide page into one
-    untitled section. Descending only into elements that actually contain a heading keeps ordinary
-    content blocks whole.
-    """
-    for child in node.children:
-        if not isinstance(child, Tag):
-            continue
-        heading = _heading_title_and_level(child) if HEADING_TAG_RE.match(child.name) else None
-        if heading is not None:
-            sections.append(_new_section(heading[0], heading[1], len(sections) + 1))
-            continue
-        if child.find(HEADING_TAG_RE) is not None:
-            _split_sections(child, sections, fallback_title=fallback_title)
-            continue
-        if not sections:
-            sections.append(_new_section(fallback_title, 2, 1))
-        _append_section_content(sections[-1], child)
-
-
-def _extract_sections(article: Tag, *, fallback_title: str) -> list[dict[str, Any]]:
-    sections: list[dict[str, Any]] = []
-    _split_sections(article, sections, fallback_title=fallback_title)
-    normalized: list[dict[str, Any]] = []
-    for section in sections:
-        text = clean_text(" ".join(section["text_parts"]))
-        html = "\n".join(section["html_parts"]).strip()
-        normalized.append(
-            {
-                "title": section["title"],
-                "level": section["level"],
-                "ordinal": section["ordinal"],
-                "text": text or "",
-                "html": html,
-            }
-        )
-    return [section for section in normalized if section["text"] or section["html"]]
 
 
 def _extract_linked_entities(article: Tag, *, source_url: str) -> list[dict[str, Any]]:
@@ -407,8 +320,8 @@ def parse_guide_page(html: str, *, source_url: str) -> dict[str, Any]:
         article = _clone_article(article_tag)
         article_html = "".join(str(child) for child in article.contents).strip()
         article_text = clean_text(article.get_text("\n", strip=True)) or ""
-        headings = _extract_headings(article)
-        sections = _extract_sections(article, fallback_title=display_section_title)
+        headings = extract_headings(article)
+        sections = extract_sections(article, fallback_title=display_section_title)
         linked_entities = _extract_linked_entities(article, source_url=canonical_url)
         build_references = _extract_build_references(article, source_url=canonical_url)
     return {

@@ -13,7 +13,7 @@ Every command writes exactly one JSON object to stdout on success or to stderr o
 | --- | --- | --- |
 | `ok` | bool | `true` on success, `false` on failure |
 | `provider` | string | Binary/provider name (`wowhead`, `warcraftlogs`, `warcraft`, ...) |
-| `command` | string | Subcommand that produced the payload (`search`, `entity`, `doctor`, ...) |
+| `command` | string | Full subcommand path that produced the payload (`search`, `entity`, `distribution mythic-plus-runs`, ...) |
 | `kind` | string | Payload kind inside `data` (`search_results`, `entity`, `doctor`, `error`, ...) |
 | `schema_version` | string | Envelope schema version. Currently `"1"`. |
 | `query` | string, object, or null | The normalized input the command acted on |
@@ -93,11 +93,23 @@ There is no failure mode that writes human text instead of the envelope: `--help
 non-JSON output, and it exits `0`. Explicit `typer.Exit` passes through with its own exit code. The
 guard's error JSON is always compact because the global flags may not have been parsed yet.
 
-When the failure happens before the command body runs, `command` is still the subcommand named on
-the command line, never the value of a global flag (`warcraft --profile bogus schema` reports
-`"command": "schema"`). Nested command groups are named in full, so the label matches the one the
-success envelope would have carried (`raiderio distribution mythic-plus-runs --pages abc` reports
-`"command": "distribution mythic-plus-runs"`). It is empty only when no subcommand was named at all.
+## The `command` label
+
+There is one rule: `command` is the full subcommand path, so a nested group is named in full
+(`raiderio distribution mythic-plus-runs --pages abc` reports
+`"command": "distribution mythic-plus-runs"`). `warcraft_core.cli.command_path(ctx)` is the one
+implementation.
+
+Every failure envelope carries that path already, whether it came from `fail()`, from a usage error
+or from an unexpected exception: the guard and `fail()` apply the rule themselves. A command that
+builds its own success envelope is responsible for passing `command=command_path(ctx)`, so that its
+success label is the one its failures would have carried.
+
+The value of a global flag is never the label (`warcraft --profile bogus schema` reports
+`"command": "schema"`), and the label is empty only when no subcommand was named at all. When the
+failure happens before any command body runs, the path is resolved from the command line against
+the app's own command tree, so an unknown subcommand is still reported by the name the caller
+typed.
 
 ## Global output flags
 

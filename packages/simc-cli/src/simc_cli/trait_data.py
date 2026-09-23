@@ -7,6 +7,8 @@ Two things the talent code needs are absent from the debug lines:
   will never use.
 * which tree an arbitrary talent entry lives in, which ``modify-build`` needs to put an edit into the
   matching ``class_talents``/``spec_talents``/``hero_talents`` string.
+* which entries share a tiered node. SimC spreads a tiered node's ranks over its entries and prints
+  only one debug line for the node, so the decoder has to know the siblings to read the ranks back.
 
 ``engine/dbc/generated/trait_data.inc`` in the checkout carries both. ``warcraft_core`` owns that
 file's row format; this module only indexes the rows the way the decoder and the editor read them.
@@ -17,9 +19,25 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from warcraft_core.talent_transport import TRAIT_ROW_RE, TREE_NAME_BY_INDEX, tokenize_talent_name
+from warcraft_core.talent_transport import (
+    CLASS_ID_BY_ACTOR_CLASS,
+    TRAIT_ROW_RE,
+    TREE_NAME_BY_INDEX,
+    tokenize_talent_name,
+)
 
 _CACHE: dict[tuple[str, int, int], TraitTable] = {}
+
+# trait_data.inc's node_type column: SimC's NODE_TIERED.
+NODE_TIERED = 1
+
+
+@dataclass(frozen=True, slots=True)
+class TieredEntry:
+    """One entry of a tiered node, in the order SimC fills them."""
+
+    entry: int
+    max_rank: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,6 +49,8 @@ class TraitTable:
     hero_sub_tree_by_entry: dict[int, int] = field(default_factory=dict)
     # (class id, tokenized talent name) -> the trees that name appears in for that class.
     trees_by_name: dict[tuple[int, str], set[str]] = field(default_factory=dict)
+    # Every entry of a tiered node, keyed by each of those entries.
+    tiered_siblings_by_entry: dict[int, tuple[TieredEntry, ...]] = field(default_factory=dict)
 
     def tree_for_entry(self, entry: int) -> str | None:
         return self.tree_by_entry.get(entry)
@@ -47,6 +67,7 @@ def trait_data_path(repo_root: Path) -> Path:
 
 def parse_trait_table(text: str) -> TraitTable:
     table = TraitTable()
+    tiered_by_node: dict[int, list[TieredEntry]] = {}
     for match in TRAIT_ROW_RE.finditer(text):
         tree = TREE_NAME_BY_INDEX.get(int(match.group("tree_index")))
         if tree is None:
@@ -59,6 +80,13 @@ def parse_trait_table(text: str) -> TraitTable:
             table.hero_sub_tree_by_entry[entry] = int(match.group("hero_tree_id"))
         key = (class_id, tokenize_talent_name(match.group("name")))
         table.trees_by_name.setdefault(key, set()).add(tree)
+        if int(match.group("node_type")) == NODE_TIERED:
+            siblings = tiered_by_node.setdefault(int(match.group("node_id")), [])
+            siblings.append(TieredEntry(entry=entry, max_rank=int(match.group("max_rank"))))
+    for siblings in tiered_by_node.values():
+        frozen = tuple(siblings)
+        for sibling in siblings:
+            table.tiered_siblings_by_entry[sibling.entry] = frozen
     return table
 
 
@@ -78,3 +106,32 @@ def load_trait_table(repo_root: Path) -> TraitTable:
         cached = parse_trait_table(path.read_text())
         _CACHE[key] = cached
     return cached
+
+
+class UnknownTalentError(ValueError):
+    """Talent names that name no talent of the actor's class."""
+
+    def __init__(self, values: list[str]) -> None:
+        super().__init__(
+            f"Not a talent of this class: {', '.join(values)}. Pass the talent's display name or its SimC token."
+        )
+        self.values = values
+
+
+def resolve_talent_tokens(repo_root: Path, actor_class: str | None, values: set[str]) -> set[str]:
+    """Tokenize talent names and reject the ones the class has no talent for.
+
+    SimC matches talents by token, so ``--disable "Spear Hand Strike"`` silently matched nothing
+    until the display name was tokenized, and a misspelled value still does.
+    """
+    if not values:
+        return set()
+    class_id = CLASS_ID_BY_ACTOR_CLASS.get(actor_class or "")
+    if class_id is None:
+        raise UnknownTalentError(sorted(values))
+    table = load_trait_table(repo_root)
+    tokens = {value: tokenize_talent_name(value) for value in values}
+    unknown = sorted(value for value, token in tokens.items() if (class_id, token) not in table.trees_by_name)
+    if unknown:
+        raise UnknownTalentError(unknown)
+    return set(tokens.values())

@@ -4,7 +4,7 @@ import json
 import sys
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, NoReturn
 
 import httpx
 import pytest
@@ -556,7 +556,7 @@ def test_raiderio_resolve_stays_unresolved_for_ambiguous_match_set(monkeypatch) 
 
 
 def test_raiderio_character_summary(monkeypatch) -> None:
-    def fake_profile(self, *, region: str, realm: str, name: str, fields: str = ""):  # noqa: ANN001
+    def fake_profile(self: RaiderIOClient, *, region: str, realm: str, name: str, fields: str = ""):
         assert region == "us"
         assert realm == "illidan"
         assert name == "Roguecane"
@@ -600,7 +600,7 @@ def test_raiderio_character_summary(monkeypatch) -> None:
             ],
         }
 
-    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.character_profile_variants", fake_profile)
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.character_profile", _as_fetched(fake_profile))
     result = runner.invoke(raiderio_app, ["character", "us", "illidan", "Roguecane"])
     assert result.exit_code == 0
 
@@ -621,7 +621,7 @@ def test_raiderio_character_summary(monkeypatch) -> None:
 
 
 def test_raiderio_character_identity_degrades_when_class_and_spec_missing(monkeypatch) -> None:
-    def fake_profile(self, *, region: str, realm: str, name: str, fields: str = ""):  # noqa: ANN001
+    def fake_profile(self: RaiderIOClient, *, region: str, realm: str, name: str, fields: str = ""):
         return {
             "name": "Roguecane",
             "region": "us",
@@ -629,7 +629,7 @@ def test_raiderio_character_identity_degrades_when_class_and_spec_missing(monkey
             "profile_url": "https://raider.io/characters/us/illidan/Roguecane",
         }
 
-    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.character_profile_variants", fake_profile)
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.character_profile", _as_fetched(fake_profile))
     result = runner.invoke(raiderio_app, ["character", "us", "illidan", "Roguecane"])
     assert result.exit_code == 0
 
@@ -644,7 +644,7 @@ def test_raiderio_character_identity_degrades_when_class_and_spec_missing(monkey
 
 
 def test_raiderio_guild_summary(monkeypatch) -> None:
-    def fake_profile(self, *, region: str, realm: str, name: str, fields: str = ""):  # noqa: ANN001
+    def fake_profile(self: RaiderIOClient, *, region: str, realm: str, name: str, fields: str = ""):
         return {
             "name": "Liquid",
             "region": "us",
@@ -673,7 +673,7 @@ def test_raiderio_guild_summary(monkeypatch) -> None:
             ],
         }
 
-    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.guild_profile_variants", fake_profile)
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.guild_profile", _as_fetched(fake_profile))
     result = runner.invoke(raiderio_app, ["guild", "us", "illidan", "Liquid"])
     assert result.exit_code == 0
 
@@ -692,7 +692,7 @@ def test_raiderio_guild_summary(monkeypatch) -> None:
 
 
 def test_raiderio_mythic_plus_runs_summary(monkeypatch) -> None:
-    def fake_runs(self, *, season: str | None, region: str, dungeon: str, affixes: str | None, page: int):  # noqa: ANN001
+    def fake_runs(self: RaiderIOClient, *, season: str | None, region: str, dungeon: str, affixes: str | None, page: int):
         assert region == "world"
         return {
             "season": "season-tww-3",
@@ -726,7 +726,7 @@ def test_raiderio_mythic_plus_runs_summary(monkeypatch) -> None:
 
 
 def test_raiderio_sample_mythic_plus_runs(monkeypatch) -> None:
-    def fake_runs(self, *, season: str | None, region: str, dungeon: str, affixes: str | None, page: int):  # noqa: ANN001
+    def fake_runs(self: RaiderIOClient, *, season: str | None, region: str, dungeon: str, affixes: str | None, page: int):
         rows = {
             0: [
                 {
@@ -851,7 +851,7 @@ def test_raiderio_sample_mythic_plus_runs(monkeypatch) -> None:
 
 
 def test_raiderio_sample_mythic_plus_players(monkeypatch) -> None:
-    def fake_runs(self, *, season: str | None, region: str, dungeon: str, affixes: str | None, page: int):  # noqa: ANN001
+    def fake_runs(self: RaiderIOClient, *, season: str | None, region: str, dungeon: str, affixes: str | None, page: int):
         return {
             "season": "season-tww-3",
             "leaderboard_url": "https://raider.io/mythic-plus-runs/season-tww-3/world/all/0",
@@ -936,7 +936,7 @@ def test_raiderio_sample_mythic_plus_players(monkeypatch) -> None:
 
 
 def test_raiderio_sample_mythic_plus_players_reports_truncation(monkeypatch) -> None:
-    def fake_runs(self, *, season: str | None, region: str, dungeon: str, affixes: str | None, page: int):  # noqa: ANN001
+    def fake_runs(self: RaiderIOClient, *, season: str | None, region: str, dungeon: str, affixes: str | None, page: int):
         return {
             "season": "season-tww-3",
             "leaderboard_url": "https://raider.io/mythic-plus-runs/season-tww-3/world/all/0",
@@ -1138,7 +1138,7 @@ def test_raiderio_player_snapshots_merge_repeated_roster_entries() -> None:
 
 
 def test_raiderio_distribution_mythic_plus_runs(monkeypatch) -> None:
-    def fake_runs(self, *, season: str | None, region: str, dungeon: str, affixes: str | None, page: int):  # noqa: ANN001
+    def fake_runs(self: RaiderIOClient, *, season: str | None, region: str, dungeon: str, affixes: str | None, page: int):
         return {
             "season": "season-tww-3",
             "leaderboard_url": "https://raider.io/mythic-plus-runs/season-tww-3/world/all/0",
@@ -1252,7 +1252,7 @@ def test_raiderio_distribution_mythic_plus_runs(monkeypatch) -> None:
 
 
 def test_raiderio_distribution_mythic_plus_players(monkeypatch) -> None:
-    def fake_runs(self, *, season: str | None, region: str, dungeon: str, affixes: str | None, page: int):  # noqa: ANN001
+    def fake_runs(self: RaiderIOClient, *, season: str | None, region: str, dungeon: str, affixes: str | None, page: int):
         return {
             "season": "season-tww-3",
             "leaderboard_url": "https://raider.io/mythic-plus-runs/season-tww-3/world/all/0",
@@ -1374,7 +1374,7 @@ def test_raiderio_metric_help_lists_every_metric_the_command_accepts(args: list[
 
 
 def test_raiderio_threshold_mythic_plus_runs(monkeypatch) -> None:
-    def fake_runs(self, *, season: str | None, region: str, dungeon: str, affixes: str | None, page: int):  # noqa: ANN001
+    def fake_runs(self: RaiderIOClient, *, season: str | None, region: str, dungeon: str, affixes: str | None, page: int):
         return {
             "season": "season-tww-3",
             "leaderboard_url": "https://raider.io/mythic-plus-runs/season-tww-3/world/all/0",
@@ -1460,7 +1460,7 @@ def test_raiderio_threshold_rejects_unknown_metric() -> None:
 
 
 def test_raiderio_sample_mythic_plus_runs_filters(monkeypatch) -> None:
-    def fake_runs(self, *, season: str | None, region: str, dungeon: str, affixes: str | None, page: int):  # noqa: ANN001
+    def fake_runs(self: RaiderIOClient, *, season: str | None, region: str, dungeon: str, affixes: str | None, page: int):
         return {
             "season": "season-tww-3",
             "leaderboard_url": "https://raider.io/mythic-plus-runs/season-tww-3/world/all/0",
@@ -1547,7 +1547,7 @@ def test_raiderio_sample_mythic_plus_runs_filters(monkeypatch) -> None:
 
 
 def test_raiderio_distribution_mythic_plus_runs_filters(monkeypatch) -> None:
-    def fake_runs(self, *, season: str | None, region: str, dungeon: str, affixes: str | None, page: int):  # noqa: ANN001
+    def fake_runs(self: RaiderIOClient, *, season: str | None, region: str, dungeon: str, affixes: str | None, page: int):
         return {
             "season": "season-tww-3",
             "leaderboard_url": "https://raider.io/mythic-plus-runs/season-tww-3/world/all/0",
@@ -1619,7 +1619,7 @@ def test_raiderio_distribution_mythic_plus_runs_filters(monkeypatch) -> None:
 
 
 def test_raiderio_threshold_mythic_plus_runs_filters_to_empty_sample(monkeypatch) -> None:
-    def fake_runs(self, *, season: str | None, region: str, dungeon: str, affixes: str | None, page: int):  # noqa: ANN001
+    def fake_runs(self: RaiderIOClient, *, season: str | None, region: str, dungeon: str, affixes: str | None, page: int):
         return {
             "season": "season-tww-3",
             "leaderboard_url": "https://raider.io/mythic-plus-runs/season-tww-3/world/all/0",
@@ -1668,10 +1668,10 @@ def test_raiderio_http_error_maps_to_structured_error(monkeypatch) -> None:
     request = httpx.Request("GET", "https://raider.io/api/v1/characters/profile")
     response = httpx.Response(404, request=request, json={"message": "Character not found"})
 
-    def fake_profile(self, *, region: str, realm: str, name: str, fields: str = ""):  # noqa: ANN001
+    def fake_profile(self: RaiderIOClient, *, region: str, realm: str, name: str, fields: str = ""):
         raise httpx.HTTPStatusError("not found", request=request, response=response)
 
-    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.character_profile_variants", fake_profile)
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.character_profile", fake_profile)
     result = runner.invoke(raiderio_app, ["character", "us", "illidan", "Missing"])
     assert result.exit_code == 4
 
@@ -1690,10 +1690,10 @@ def test_raiderio_http_status_maps_to_exit_code(monkeypatch, status: int, code: 
     request = httpx.Request("GET", "https://raider.io/api/v1/characters/profile")
     response = httpx.Response(status, request=request, json={})
 
-    def fake_profile(self, *, region: str, realm: str, name: str, fields: str = ""):  # noqa: ANN001
+    def fake_profile(self: RaiderIOClient, *, region: str, realm: str, name: str, fields: str = ""):
         raise httpx.HTTPStatusError("upstream", request=request, response=response)
 
-    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.character_profile_variants", fake_profile)
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.character_profile", fake_profile)
     result = runner.invoke(raiderio_app, ["character", "us", "illidan", "Cotti"])
     assert result.exit_code == exit_code
     payload = json.loads(result.stderr)
@@ -1740,7 +1740,7 @@ def _leaderboard_rows(page: int) -> list[dict]:
 
 
 def test_raiderio_leaderboard_mythic_plus(monkeypatch) -> None:
-    def fake_runs(self, *, season: str | None, region: str, dungeon: str, affixes: str | None, page: int):  # noqa: ANN001
+    def fake_runs(self: RaiderIOClient, *, season: str | None, region: str, dungeon: str, affixes: str | None, page: int):
         return {
             "season": "season-tww-3",
             "leaderboard_url": f"https://raider.io/mythic-plus-runs/season-tww-3/{region}/{dungeon}/{page}",
@@ -1771,7 +1771,7 @@ def test_raiderio_leaderboard_mythic_plus(monkeypatch) -> None:
 
 def test_raiderio_leaderboard_paginates_for_limit(monkeypatch) -> None:
     # --limit beyond one page must fetch more pages, not silently return one page of rows.
-    def fake_runs(self, *, season: str | None, region: str, dungeon: str, affixes: str | None, page: int):  # noqa: ANN001
+    def fake_runs(self: RaiderIOClient, *, season: str | None, region: str, dungeon: str, affixes: str | None, page: int):
         # 20 unique rows per page (the real Raider.IO page size), pages 0 and 1 populated.
         rankings = []
         if page in (0, 1):
@@ -1813,7 +1813,7 @@ def test_raiderio_leaderboard_season_current_omits_season_param(monkeypatch) -> 
     # and the payload echoes the season recovered from the API response.
     captured: dict[str, object] = {}
 
-    def fake_runs(self, *, season: str | None, region: str, dungeon: str, affixes: str | None, page: int):  # noqa: ANN001
+    def fake_runs(self: RaiderIOClient, *, season: str | None, region: str, dungeon: str, affixes: str | None, page: int):
         captured["season"] = season
         return {
             "season": "season-tww-3",
@@ -1832,7 +1832,7 @@ def test_raiderio_leaderboard_season_current_omits_season_param(monkeypatch) -> 
 
 def test_raiderio_sample_surfaces_resolved_season(monkeypatch) -> None:
     # AC3: analytics commands surface resolved_season recovered from the API response.
-    def fake_runs(self, *, season: str | None, region: str, dungeon: str, affixes: str | None, page: int):  # noqa: ANN001
+    def fake_runs(self: RaiderIOClient, *, season: str | None, region: str, dungeon: str, affixes: str | None, page: int):
         return {
             "season": "season-tww-3",
             "leaderboard_url": "https://raider.io/mythic-plus-runs/season-tww-3/world/all/0",
@@ -1849,7 +1849,7 @@ def test_raiderio_sample_surfaces_resolved_season(monkeypatch) -> None:
 
 def test_raiderio_leaderboard_empty_runs_degrades_cleanly(monkeypatch) -> None:
     # Empty rankings: no IndexError; citations still carry the season-scoped leaderboard URL.
-    def fake_runs(self, *, season: str | None, region: str, dungeon: str, affixes: str | None, page: int):  # noqa: ANN001
+    def fake_runs(self: RaiderIOClient, *, season: str | None, region: str, dungeon: str, affixes: str | None, page: int):
         return {
             "season": "season-tww-3",
             "leaderboard_url": "https://raider.io/mythic-plus-runs/season-tww-3/world/all/0",
@@ -1873,7 +1873,7 @@ def _raise_404(endpoint: str) -> None:
     raise httpx.HTTPStatusError("not found", request=request, response=httpx.Response(404, request=request))
 
 
-def _raise_connect(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+def _raise_connect(*args: Any, **kwargs: Any) -> NoReturn:
     raise httpx.ConnectError("offline", request=httpx.Request("GET", "https://raider.io/api/v1/search"))
 
 
@@ -1919,15 +1919,17 @@ def test_raiderio_payloads_satisfy_the_shared_envelope(monkeypatch) -> None:
         lambda self, *, term, kind=None: {"matches": []},
     )
     monkeypatch.setattr(
-        "raiderio_cli.client.RaiderIOClient.character_profile_variants",
-        lambda self, *, region, realm, name, fields="": {
-            "name": "Cotti",
-            "region": "eu",
-            "realm": "Tarren Mill",
-            "class": "Druid",
-            "active_spec_name": "Balance",
-            "profile_url": "https://raider.io/characters/eu/tarren-mill/Cotti",
-        },
+        "raiderio_cli.client.RaiderIOClient.character_profile",
+        _as_fetched(
+            lambda self, *, region, realm, name, fields="": {
+                "name": "Cotti",
+                "region": "eu",
+                "realm": "Tarren Mill",
+                "class": "Druid",
+                "active_spec_name": "Balance",
+                "profile_url": "https://raider.io/characters/eu/tarren-mill/Cotti",
+            }
+        ),
     )
     invocations = {
         "doctor": ["doctor"],
@@ -2017,10 +2019,10 @@ def test_raiderio_http_400_separates_missing_target_from_bad_input(monkeypatch, 
     request = httpx.Request("GET", "https://raider.io/api/v1/guilds/profile")
     response = httpx.Response(400, request=request, json={"statusCode": 400, "error": "Bad Request", "message": message})
 
-    def fake_profile(self, *, region: str, realm: str, name: str, fields: str = ""):  # noqa: ANN001
+    def fake_profile(self: RaiderIOClient, *, region: str, realm: str, name: str, fields: str = ""):
         raise httpx.HTTPStatusError("bad request", request=request, response=response)
 
-    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.guild_profile_variants", fake_profile)
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.guild_profile", fake_profile)
     result = runner.invoke(raiderio_app, ["guild", "us", "malganis", "Missing"])
     assert result.exit_code == exit_code, result.output
 
@@ -2070,7 +2072,7 @@ def test_raiderio_structured_probe_tries_multi_word_realm_splits(monkeypatch) ->
     # if the two-token realm is tried as well.
     attempts: list[tuple[str, str]] = []
 
-    def fake_character(self, *, region: str, realm: str, name: str, fields: str = ""):  # noqa: ANN001
+    def fake_character(self: RaiderIOClient, *, region: str, realm: str, name: str, fields: str = ""):
         attempts.append((realm, name))
         if realm != "tarren-mill":
             _raise_404("characters")
@@ -2110,7 +2112,7 @@ def test_raiderio_search_keeps_a_name_that_ends_in_a_type_word(monkeypatch) -> N
     # word as a type hint searched for "Liquid" and answered with a different guild under ok:true.
     terms: list[str] = []
 
-    def fake_search(self, *, term: str, kind: str | None = None):  # noqa: ANN001
+    def fake_search(self: RaiderIOClient, *, term: str, kind: str | None = None) -> dict[str, Any]:
         terms.append(term)
         return {
             "matches": [
@@ -2143,7 +2145,7 @@ def test_raiderio_structured_probe_keeps_a_type_word_inside_the_name(monkeypatch
     # appeared probed (and site-searched) for "Old Order", a guild nobody has.
     attempts: list[tuple[str, str]] = []
 
-    def fake_guild(self, *, region: str, realm: str, name: str, fields: str = ""):  # noqa: ANN001
+    def fake_guild(self: RaiderIOClient, *, region: str, realm: str, name: str, fields: str = ""):
         attempts.append((realm, name))
         if name != "Old Guild Order":
             _raise_404("guilds")
@@ -2193,7 +2195,7 @@ def _raid_ranking_row(rank: int, *, realm: str = "malganis", guild_id: int | Non
 def test_raiderio_leaderboard_raids_normalizes_rows(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
-    def fake_rankings(self, *, raid, difficulty, region, realm=None, limit, page):  # noqa: ANN001
+    def fake_rankings(self: RaiderIOClient, *, raid: str, difficulty: str, region: str, realm: str | None = None, limit: int, page: int):
         captured.update(raid=raid, difficulty=difficulty, region=region, realm=realm, limit=limit, page=page)
         return {"raidRankings": [_raid_ranking_row(1), _raid_ranking_row(2)]}
 
@@ -2242,7 +2244,7 @@ def test_raiderio_leaderboard_raids_normalizes_rows(monkeypatch) -> None:
 
 def test_raiderio_leaderboard_raids_paginates_for_limit(monkeypatch) -> None:
     # --limit beyond one 20-row page must fetch more pages and stop at the first short page.
-    def fake_rankings(self, *, raid, difficulty, region, realm=None, limit, page):  # noqa: ANN001
+    def fake_rankings(self: RaiderIOClient, *, raid: str, difficulty: str, region: str, realm: str | None = None, limit: int, page: int):
         assert limit == 20
         if page == 0:
             return {"raidRankings": [_raid_ranking_row(rank) for rank in range(1, 21)]}
@@ -2263,7 +2265,7 @@ def test_raiderio_leaderboard_raids_paginates_for_limit(monkeypatch) -> None:
 
 
 def test_raiderio_leaderboard_raids_trims_to_limit_and_dedupes_guilds(monkeypatch) -> None:
-    def fake_rankings(self, *, raid, difficulty, region, realm=None, limit, page):  # noqa: ANN001
+    def fake_rankings(self: RaiderIOClient, *, raid: str, difficulty: str, region: str, realm: str | None = None, limit: int, page: int):
         base = page * 20
         rows = [_raid_ranking_row(base + offset) for offset in range(1, 21)]
         if page == 1:
@@ -2305,7 +2307,7 @@ def test_raiderio_leaderboard_raids_slugifies_and_encodes_the_realm(
     # "Tarren Mill" raw emitted a URL with a literal space inside an ok:true envelope.
     captured: dict[str, object] = {}
 
-    def fake_rankings(self, *, raid, difficulty, region, realm=None, limit, page):  # noqa: ANN001
+    def fake_rankings(self: RaiderIOClient, *, raid: str, difficulty: str, region: str, realm: str | None = None, limit: int, page: int):
         captured["realm"] = realm
         return {"raidRankings": [_raid_ranking_row(1)]}
 
@@ -2329,7 +2331,7 @@ def test_raiderio_leaderboard_raids_accepts_the_region_aliases_its_siblings_acce
     # `raiderio character na illidan X` works, so `--region na` must not be a usage error here.
     captured: dict[str, object] = {}
 
-    def fake_rankings(self, *, raid, difficulty, region, realm=None, limit, page):  # noqa: ANN001
+    def fake_rankings(self: RaiderIOClient, *, raid: str, difficulty: str, region: str, realm: str | None = None, limit: int, page: int):
         captured["region"] = region
         return {"raidRankings": [_raid_ranking_row(1)]}
 
@@ -2350,7 +2352,7 @@ def test_raiderio_leaderboard_raids_accepts_the_region_aliases_its_siblings_acce
     ],
 )
 def test_raiderio_leaderboard_raids_rejects_bad_scope(monkeypatch, args: list[str], fragment: str) -> None:
-    def never(self, **kwargs):  # noqa: ANN001, ANN003
+    def never(self: RaiderIOClient, **kwargs: Any):
         raise AssertionError("an invalid scope must be rejected before any request")
 
     monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.raid_rankings", _as_fetched(never))
@@ -2364,7 +2366,7 @@ def test_raiderio_leaderboard_raids_rejects_bad_scope(monkeypatch, args: list[st
 
 def test_raiderio_leaderboard_raids_maps_unknown_raid_to_usage_error(monkeypatch) -> None:
     # Raider.IO answers an unknown raid slug with HTTP 400 "Invalid request query input".
-    def fake_rankings(self, **kwargs):  # noqa: ANN001, ANN003
+    def fake_rankings(self: RaiderIOClient, **kwargs: Any):
         request = httpx.Request("GET", "https://raider.io/api/v1/raiding/raid-rankings")
         response = httpx.Response(400, json={"statusCode": 400, "error": "Bad Request", "message": "Invalid request query input"}, request=request)
         raise httpx.HTTPStatusError("400", request=request, response=response)
@@ -2378,7 +2380,7 @@ def test_raiderio_leaderboard_raids_maps_unknown_raid_to_usage_error(monkeypatch
 def test_raiderio_raids_catalog(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
-    def fake_static(self, *, expansion_id):  # noqa: ANN001
+    def fake_static(self: RaiderIOClient, *, expansion_id: int):
         captured["expansion_id"] = expansion_id
         return {
             "raids": [
@@ -2485,6 +2487,16 @@ def test_raiderio_mythic_plus_runs_cites_the_leaderboard_it_read(monkeypatch) ->
             "mythic_plus_runs",
             lambda self, *, season, region, dungeon, affixes, page: {"rankings": []},
         ),
+        (
+            ["character", "us", "malganis", "Cotti"],
+            "character_profile",
+            lambda self, *, region, realm, name, fields="": {"name": name},
+        ),
+        (
+            ["guild", "us", "malganis", "gn"],
+            "guild_profile",
+            lambda self, *, region, realm, name, fields="": {"name": name},
+        ),
     ],
 )
 def test_raiderio_freshness_reports_the_cached_fetch_time_not_the_run_time(
@@ -2505,6 +2517,95 @@ def test_raiderio_freshness_reports_the_cached_fetch_time_not_the_run_time(
     assert freshness["cache_hit"] is True
 
 
+def test_raiderio_profile_commands_quote_their_own_cache_ttl(monkeypatch) -> None:
+    # `character` and `guild` have their own TTLs, and quoting a sibling's understates (or overstates)
+    # how stale a replayed profile may be.
+    monkeypatch.setenv("RAIDERIO_CHARACTER_CACHE_TTL_SECONDS", "111")
+    monkeypatch.setenv("RAIDERIO_GUILD_CACHE_TTL_SECONDS", "222")
+    monkeypatch.setenv("RAIDERIO_STATIC_CACHE_TTL_SECONDS", "333")
+    _stub_every_read(monkeypatch)
+
+    character = runner.invoke(raiderio_app, ["character", "us", "malganis", "Cotti"])
+    guild = runner.invoke(raiderio_app, ["guild", "us", "malganis", "gn"])
+    assert (character.exit_code, guild.exit_code) == (0, 0), (character.output, guild.output)
+
+    assert json.loads(character.stdout)["provenance"]["freshness"]["cache_ttl_seconds"] == 111
+    assert json.loads(guild.stdout)["provenance"]["freshness"]["cache_ttl_seconds"] == 222
+
+
+def _one_run_page(page: int) -> dict[str, Any]:
+    """One leaderboard page holding a single run, distinct per page so a sample keeps both."""
+    return {
+        "season": "season-mn-2",
+        "leaderboard_url": f"https://raider.io/mythic-plus-runs/season-mn-2/us/all/{page}",
+        "rankings": [
+            {
+                "rank": page + 1,
+                "score": 500.0 - page,
+                "run": {
+                    "keystone_run_id": 4000 + page,
+                    "season": "season-mn-2",
+                    "mythic_level": 22,
+                    "completed_at": "2026-09-18T12:00:00.000Z",
+                    "dungeon": {"name": "Murder Row", "slug": "murder-row"},
+                    "weekly_modifiers": [{"slug": "tyrannical"}],
+                    "roster": [
+                        {"character": {"name": f"P{page}", "realm": {"slug": "malganis"}, "region": {"slug": "us"}}, "role": "dps"}
+                    ],
+                },
+            }
+        ],
+    }
+
+
+# Page 0 is read fresh and page 1 is an older replay, so "oldest page" and "any replay" are the only
+# combination that reports OLDER_FETCH with cache_hit true.
+NEWER_FETCH = "2026-09-19T06:00:00+00:00"
+OLDER_FETCH = "2026-09-19T00:00:00+00:00"
+
+
+def _paged_fetch(payload_for_page: Callable[[int], dict[str, Any]]) -> Callable[..., FetchedJson]:
+    """Answer page 0 as a fresh read and page 1 as an older cache replay."""
+
+    def fetch(self: RaiderIOClient, *, page: int, **kwargs: Any) -> FetchedJson:
+        return FetchedJson(
+            payload=payload_for_page(page),
+            fetched_at=OLDER_FETCH if page else NEWER_FETCH,
+            cache_hit=bool(page),
+        )
+
+    return fetch
+
+
+def test_raiderio_sample_freshness_reports_the_oldest_page_and_any_replay(monkeypatch) -> None:
+    # A sample is only as fresh as its stalest page: reporting the newest page's fetch time would
+    # claim the sample is six hours newer than half of it, and requiring every page to be a replay
+    # would hide that part of it came from cache.
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.mythic_plus_runs", _paged_fetch(_one_run_page))
+    result = runner.invoke(raiderio_app, ["sample", "mythic-plus-runs", "--pages", "2", "--limit", "10"])
+    assert result.exit_code == 0, result.output
+
+    data = json.loads(result.stdout)["data"]
+    assert data["sample"]["pages_fetched"] == 2
+    assert data["freshness"]["fetched_at"] == OLDER_FETCH
+    assert data["freshness"]["cache_hit"] is True
+
+
+def test_raiderio_raid_leaderboard_freshness_reports_the_oldest_page_and_any_replay(monkeypatch) -> None:
+    # Same rule for the guild rankings pager, which combines its pages on its own.
+    def rankings_page(page: int) -> dict[str, Any]:
+        return {"raidRankings": [_raid_ranking_row(page * 20 + index + 1) for index in range(20)]}
+
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.raid_rankings", _paged_fetch(rankings_page))
+    result = runner.invoke(raiderio_app, ["leaderboard", "raids", "--raid", "sporefall", "--limit", "40"])
+    assert result.exit_code == 0, result.output
+
+    data = json.loads(result.stdout)["data"]
+    assert data["sample"]["pages_fetched"] == 2
+    assert data["freshness"]["fetched_at"] == OLDER_FETCH
+    assert data["freshness"]["cache_hit"] is True
+
+
 def test_raiderio_client_stores_the_fetch_time_with_the_cached_body(monkeypatch, tmp_path) -> None:
     # The client is what makes the reported fetch time truthful: the second read replays the body
     # AND the instant it was fetched, instead of re-stamping the replay with the current time.
@@ -2512,7 +2613,7 @@ def test_raiderio_client_stores_the_fetch_time_with_the_cached_body(monkeypatch,
     monkeypatch.setenv("RAIDERIO_CACHE_DIR", str(tmp_path / "cache"))
     requests: list[str] = []
 
-    def fake_request(client, url, *, params, retry_attempts):  # noqa: ANN001, ANN202
+    def fake_request(client: httpx.Client, url: str, *, params: dict[str, Any], retry_attempts: int) -> httpx.Response:
         requests.append(url)
         return httpx.Response(200, json={"raids": [{"slug": "sporefall"}]}, request=httpx.Request("GET", url))
 
@@ -2527,12 +2628,52 @@ def test_raiderio_client_stores_the_fetch_time_with_the_cached_body(monkeypatch,
     assert second.payload == first.payload
 
 
+class _PreChangeCacheStore:
+    """A cache holding entries in the pre-freshness shape: the response body with no fetch time."""
+
+    def __init__(self, entry: Any) -> None:
+        self.entry = entry
+        self.writes: list[Any] = []
+
+    def get(self, key: str) -> Any:
+        return self.entry
+
+    def set(self, key: str, payload: Any, *, ttl_seconds: int) -> None:
+        self.writes.append(payload)
+        self.entry = payload
+
+
+def test_raiderio_client_treats_a_cache_entry_without_a_fetch_time_as_a_miss(monkeypatch, tmp_path) -> None:
+    # Caches written before the fetch time was stored hold the bare response body. Serving one as a
+    # hit would have to invent a fetch time, which is exactly the overstatement this block prevents,
+    # so the entry is refetched once and rewritten with the time it came off the wire.
+    body = {"raids": [{"slug": "sporefall"}]}
+    store = _PreChangeCacheStore(body)
+    monkeypatch.setenv("RAIDERIO_CACHE_BACKEND", "file")  # the suite disables every provider cache
+    monkeypatch.setenv("RAIDERIO_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setattr("raiderio_cli.client.build_cache_store", lambda settings: store)
+    requests: list[str] = []
+
+    def fake_request(client: httpx.Client, url: str, *, params: dict[str, Any], retry_attempts: int) -> httpx.Response:
+        requests.append(url)
+        return httpx.Response(200, json=body, request=httpx.Request("GET", url))
+
+    monkeypatch.setattr("raiderio_cli.client.request_with_retries", fake_request)
+    with RaiderIOClient() as client:
+        fetched = client.raid_static_data(expansion_id=11)
+
+    assert len(requests) == 1, "the bare entry must not answer the read"
+    assert fetched.cache_hit is False
+    _assert_read_just_now(fetched.fetched_at)
+    assert store.writes == [{"fetched_at": fetched.fetched_at, "payload": body}]
+
+
 def _stub_every_read(monkeypatch) -> None:
     """Answer every upstream read with the emptiest valid response, so any command can be invoked."""
     reads = {
         "search": lambda self, *, term, kind=None: {"matches": []},
-        "character_profile_variants": lambda self, *, region, realm, name, fields="": {"name": name, "realm": realm},
-        "guild_profile_variants": lambda self, *, region, realm, name, fields="": {"name": name, "realm": realm},
+        "character_profile": _as_fetched(lambda self, *, region, realm, name, fields="": {"name": name, "realm": realm}),
+        "guild_profile": _as_fetched(lambda self, *, region, realm, name, fields="": {"name": name, "realm": realm}),
         "mythic_plus_runs": _as_fetched(lambda self, *, season, region, dungeon, affixes, page: {"rankings": []}),
         "raid_rankings": _as_fetched(lambda self, *, raid, difficulty, region, realm=None, limit, page: {"raidRankings": []}),
         "raid_static_data": _as_fetched(lambda self, *, expansion_id: {"raids": []}),

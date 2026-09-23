@@ -82,11 +82,15 @@ outscore a real title match.
 candidate scores within 18 points of it. Upstream rank, family and intent bonuses are shared by every row in the list,
 so they never make a candidate confident on their own.
 
-The `api`/`event` search fallback adds an absolute floor on top of that: every word of the query must appear in the
-candidate's own title, ignoring case and separators (`PLAYER_LOGIN` matches `Event:PLAYER LOGIN`, `key down handler`
-matches `UIHANDLER OnKeyDown`). `all_terms_match` also fires on MediaWiki's snippet, so without the floor a page that
-merely mentions the query in its body — `UIHANDLER OnEvent` for `PLAYER_LOGIN` — could be returned as the answer.
-Rows that fail the floor are reported under `error.details.candidates` instead, and the command exits 4.
+The `api`/`event` search fallback adds an absolute floor on top of that: the candidate's own title has to spell the
+query out. Every word of the query must match a whole word of the title or a whole camel-case component of one, and
+the query must account for at least one title word end to end — case and separators are ignored on both sides, and
+`UIHANDLER` counts as the two words it mashes together (`PLAYER_LOGIN` names `Event:PLAYER LOGIN`, `key down handler`
+names `UIHANDLER OnKeyDown`). Letters that merely occur inside a longer name are not a match: `UnitHealth` does not
+name `API UnitHealthMax`, and `is` does not name `API UnitIsPlayer`. `all_terms_match` also fires on MediaWiki's
+snippet, so without the floor a page that merely mentions the query in its body — `UIHANDLER OnEvent` for
+`PLAYER_LOGIN` — could be returned as the answer. Rows that fail the floor are reported under
+`error.details.candidates` instead, and the command exits 4.
 
 ## Caching
 

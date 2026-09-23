@@ -20,7 +20,7 @@ from warcraft_wiki_cli.provider import (
     _typed_search_match,
     _typed_search_queries,
 )
-from warcraft_wiki_cli.search import is_confident_match, normalize_wiki_query, score_wiki_match
+from warcraft_wiki_cli.search import is_confident_match, normalize_wiki_query, score_wiki_match, title_names_query
 
 runner = CliRunner()
 
@@ -407,6 +407,26 @@ def test_typed_direct_article_result_returns_supported_family() -> None:
     assert result["article"]["content_family"] == "framework_page"
 
 
+@pytest.mark.parametrize(
+    ("title", "query", "expected"),
+    [
+        # Separators on either side are noise, so the event's own page still names PLAYER_LOGIN.
+        pytest.param("Event:PLAYER LOGIN", "PLAYER_LOGIN", True, id="separators_collapse"),
+        pytest.param("UIHANDLER OnEvent", "PLAYER_LOGIN", False, id="unrelated_handler_page"),
+        # A phrase query lands on the camel-case handler title, MediaWiki's namespace word included.
+        pytest.param("UIHANDLER OnKeyDown", "key down handler", True, id="phrase_matches_components"),
+        # Every query word has to land, not just one of them.
+        pytest.param("UIHANDLER OnKeyDown", "key up handler", False, id="one_query_word_missing"),
+        # Letters sitting inside an identifier are not its name, however short the query is.
+        pytest.param("API UnitIsPlayer", "is", False, id="fragment_is_not_a_name"),
+        pytest.param("API UnitHealthMax", "UnitHealth", False, id="head_of_a_longer_identifier"),
+        pytest.param("API:UnitHealth", "unit health", True, id="query_spells_out_the_identifier"),
+    ],
+)
+def test_title_names_query_matches_whole_words_not_substrings(title: str, query: str, expected: bool) -> None:
+    assert title_names_query(title, query) is expected
+
+
 def _ranked_row(ref: str, score: int, reasons: list[str]) -> dict[str, Any]:
     return {"id": ref, "name": ref, "ranking": {"score": score, "match_reasons": reasons}}
 
@@ -424,33 +444,47 @@ def test_typed_search_match_requires_clear_winner() -> None:
 
 
 @pytest.mark.parametrize(
-    "rows",
+    ("surface", "query", "rows"),
     [
         # The residual bb-2 shape: a single allowed-family row that rode MediaWiki's order and shares
         # one incidental word with the query. Rank + family + snippet must never add up to "confident".
         pytest.param(
+            "event",
+            "OnEvent",
             [_ranked_row("UIHANDLER OnEvent", 42, ["upstream_rank_1", "snippet_match", "intent_programming", "family_ui_handler"])],
             id="no_query_coverage",
         ),
-        # Two plausible pages, neither clearly better: ask the caller rather than guess.
+        # Two pages that both carry the queried name, neither clearly better: ask the caller.
         pytest.param(
+            "event",
+            "LOOT",
             [
-                _ranked_row("UIHANDLER OnEvent", 40, ["upstream_rank_1", "all_terms_match"]),
-                _ranked_row("UIHANDLER OnEventCapture", 30, ["upstream_rank_2", "all_terms_match"]),
+                _ranked_row("Event:LOOT OPENED", 40, ["upstream_rank_1", "all_terms_match"]),
+                _ranked_row("Event:LOOT CLOSED", 30, ["upstream_rank_2", "all_terms_match"]),
             ],
             id="no_clear_winner",
         ),
         # A high-scoring row whose title never names the query: it matched in a page body we cannot
         # see, so it is not the page the caller asked for however confident the ranking looks.
         pytest.param(
+            "event",
+            "OnEvent",
             [_ranked_row("Jaina Proudmoore", 62, ["upstream_rank_1", "exact_title", "all_terms_match"])],
             id="title_does_not_name_the_query",
         ),
+        # The query is only the head of the title's identifier: `api UnitHealth` must not answer with
+        # `API UnitHealthMax`, however confidently the ranker scored the one row left standing.
+        pytest.param(
+            "api",
+            "UnitHealth",
+            [_ranked_row("API UnitHealthMax", 62, ["upstream_rank_1", "title_contains_query", "all_terms_match"])],
+            id="title_names_a_longer_identifier",
+        ),
     ],
 )
-def test_typed_search_match_fails_not_found_instead_of_guessing(rows: list[dict[str, Any]]) -> None:
+def test_typed_search_match_fails_not_found_instead_of_guessing(surface: str, query: str, rows: list[dict[str, Any]]) -> None:
     with pytest.raises(ProviderError) as excinfo:
-        _typed_search_match(rows, query="OnEvent", surface="event")
+        _typed_search_match(rows, query=query, surface=surface)
 
     assert excinfo.value.code == "not_found"
     assert excinfo.value.exit_code == 4
@@ -617,6 +651,40 @@ def test_event_payload_fails_not_found_when_no_candidate_title_names_the_query(h
     assert excinfo.value.details["candidates"] == ["UIHANDLER OnEvent"]
     # The unrelated page was never fetched for output, only probed as a direct title.
     assert "UIHANDLER OnEvent" not in client.fetched
+
+
+class _LongerFunctionRowClient:
+    """The typed name has no page of its own, and search offers one function whose name extends it."""
+
+    def __init__(self) -> None:
+        self.fetched: list[str] = []
+
+    def fetch_article_page(self, ref: str) -> dict[str, object]:
+        self.fetched.append(ref)
+        if ref == "API UnitHealthMax":
+            # A real, fetchable API page: if the floor lets the row through, the surface answers
+            # ok:true with the wrong function instead of failing.
+            return _api_payload()
+        raise WarcraftWikiAPIError("missingtitle", "The page you specified doesn't exist.")
+
+    def search_articles(self, query: str, limit: int) -> tuple[int, list[dict[str, Any]]]:
+        return 1, [
+            {"title": "API UnitHealthMax", "pageid": 1, "snippet": "Returns the maximum health of a unit.",
+                "url": "https://warcraft.wiki.gg/wiki/API_UnitHealthMax"},
+        ]
+
+
+def test_api_payload_fails_not_found_when_the_only_row_names_a_longer_function() -> None:
+    client = _LongerFunctionRowClient()
+
+    with pytest.raises(ProviderError) as excinfo:
+        _typed_article_payload(client, "UnitHealth", surface="api", full=False)
+
+    assert excinfo.value.code == "not_found"
+    assert excinfo.value.exit_code == 4
+    assert excinfo.value.details["candidates"] == ["API UnitHealthMax"]
+    # The longer function's page was never fetched for output, only probed as a direct title.
+    assert "API UnitHealthMax" not in client.fetched
 
 
 def test_event_payload_rejects_a_search_hit_whose_page_is_the_wrong_family() -> None:

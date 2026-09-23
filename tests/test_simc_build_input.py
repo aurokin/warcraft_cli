@@ -11,6 +11,7 @@ from simc_cli.build_input import (
     DecodedTalent,
     SimcBuildError,
     TalentStrings,
+    UnsupportedBuildReference,
     bounded_output_preview,
     build_profile_text,
     decode_build,
@@ -291,7 +292,7 @@ def test_load_build_spec_rejects_packet_that_mixes_exact_and_split_forms(tmp_pat
 
 
 def test_load_build_spec_rejects_buildless_wowhead_talent_calc_url() -> None:
-    try:
+    with pytest.raises(UnsupportedBuildReference) as excinfo:
         load_build_spec(
             apl_path=None,
             profile_path=None,
@@ -301,10 +302,62 @@ def test_load_build_spec_rejects_buildless_wowhead_talent_calc_url() -> None:
             actor_class=None,
             spec_name=None,
         )
-    except ValueError as exc:
-        assert "must include a build code" in str(exc)
-    else:
-        raise AssertionError("expected ValueError")
+
+    assert excinfo.value.reference_type == "wowhead_talent_calc_url"
+    assert "no build code" in str(excinfo.value)
+
+
+def _loaded(**overrides: Any) -> BuildSpec:
+    options: dict[str, Any] = {
+        "apl_path": None,
+        "profile_path": None,
+        "build_file": None,
+        "build_text": None,
+        "talents": TalentStrings(),
+        "actor_class": None,
+        "spec_name": None,
+    }
+    return load_build_spec(**{**options, **overrides})
+
+
+def test_load_build_spec_rejects_a_build_option_given_an_empty_value() -> None:
+    """An empty option is not an omitted one; it used to resolve to a build with no talents."""
+    with pytest.raises(ValueError, match=r"--talents"):
+        _loaded(talents=TalentStrings(talents="  "), actor_class="monk", spec_name="mistweaver")
+
+
+def test_load_build_spec_reads_the_blizzard_talent_calc_url_modify_build_publishes() -> None:
+    """`modify-build` publishes /talent-calc/blizzard/<hash>; that hash is a plain WoW export."""
+    spec = _loaded(build_text="https://www.wowhead.com/talent-calc/blizzard/C4QAAAAA")
+
+    assert (spec.talents, spec.source_kind) == ("C4QAAAAA", "wow_talent_export")
+    assert spec.actor_class is None and spec.spec is None
+
+
+def test_load_build_spec_rejects_a_page_url_instead_of_treating_it_as_a_hash() -> None:
+    """A guide URL reached SimC as a talent hash, so the envelope blamed the build."""
+    with pytest.raises(UnsupportedBuildReference) as excinfo:
+        _loaded(talents=TalentStrings(talents="https://www.icy-veins.com/wow/mistweaver-monk-pve-healing-guide"))
+
+    assert excinfo.value.reference_type == "url"
+
+
+# One published build reference from each captured guide fixture: tests/fixtures/method's
+# captured_talents_page.html and tests/fixtures/icy_veins' astro_spec_builds_talents.html. Both guide
+# providers publish only `wow_talent_export` strings, which name no class or spec.
+GUIDE_BUILD_REFERENCES = [
+    "C4QAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAM2mB2sYGzMbzYDzMDzsstMzYhZ0MmBMYwYWmZmZY2GmhZZmAAAAAz20ysNzysBAAAAwMzAADwiMAA",
+    "C4QAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAghx2YZYzixMzyyM2wYGmZZbbmxCzoZMDYwAsMzMzwsBDWmJAAAAAAYxyMLzyMDAAMgBYGwYYsMZMDA",
+]
+
+
+@pytest.mark.parametrize("reference", GUIDE_BUILD_REFERENCES)
+def test_a_guide_build_reference_reads_as_a_wow_talent_export(reference: str) -> None:
+    """Guide references carry the talents but no identity, so decoding them needs --actor-class/--spec."""
+    spec = _loaded(build_text=reference)
+
+    assert (spec.talents, spec.source_kind) == (reference, "wow_talent_export")
+    assert spec.actor_class is None and spec.spec is None
 
 
 def test_load_build_spec_extracts_split_transport_form_from_packet(tmp_path: Path) -> None:
@@ -784,6 +837,46 @@ def test_decode_build_counts_a_tiered_node_printed_at_rank_zero_as_taken(tmp_pat
     assert (tiered.rank, tiered.rank_known, tiered.taken) == (0, False, True)
 
 
+# SimC's `log=1` answer when a talent option overwrites ranks the hash allocated to Prismatic Bolt.
+CAPTURED_TIERED_OVERWRITE_LOG = "\n".join(
+    [
+        "0.000 Overwriting talent Prismatic Bolt (137028), rank 1 -> 0",
+        "0.000 Overwriting talent Prismatic Bolt (137027), rank 2 -> 0",
+        "0.000 Overwriting talent Prismatic Bolt (137026), rank 1 -> 0",
+    ]
+)
+
+
+def test_decode_build_reads_back_the_per_entry_ranks_of_a_tiered_node(tmp_path: Path) -> None:
+    """Without the read-back a tiered node cannot be re-serialized, so every tree swap dropped it."""
+    decode_output = CAPTURED_TWO_HERO_TREES.read_text()
+    profiles: list[str] = []
+
+    def fake_run(cmd: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        profile = Path(str(cmd[1])).read_text()
+        profiles.append(profile)
+        answer = CAPTURED_TIERED_OVERWRITE_LOG if "spec_talents=" in profile else decode_output
+        return subprocess.CompletedProcess(cmd, 0, stdout=answer, stderr="")
+
+    with patch("simc_cli.build_input.subprocess.run", side_effect=fake_run):
+        result = decode_build(
+            _repo(tmp_path, with_trait_data=True),
+            BuildSpec(actor_class="mage", spec="arcane", talents="C4DAAA"),
+        )
+
+    # The probe keeps the build and adds every entry of the tiered node at rank 0.
+    assert "spec_talents=137028:0/137027:0/137026:0" in profiles[1]
+    assert "talents=C4DAAA" in profiles[1]
+    tiered = [talent for talent in result.talents_by_tree["spec"] if talent.name == "Prismatic Bolt"]
+    assert [(talent.entry, talent.rank, talent.max_rank) for talent in tiered] == [
+        (137028, 1, 1),
+        (137027, 2, 2),
+        (137026, 1, 1),
+    ]
+    assert all(talent.rank_known for talent in tiered)
+    assert "137028:1/137027:2/137026:1" in tree_entries_string(result.talents_by_tree["spec"])
+
+
 def test_decode_build_removes_the_profile_directory_it_wrote(tmp_path: Path) -> None:
     written: list[Path] = []
 
@@ -1058,15 +1151,10 @@ def test_encode_build_extracts_talents_from_save_output(tmp_path: Path) -> None:
 
     def fake_run(cmd, **kwargs):  # noqa: ANN001, ANN003
         # SimC writes a save file; simulate that by writing to the save= path.
-        for arg in cmd:
-            arg_str = str(arg)
-            if "encode.simc" in arg_str:
-                # Read the profile to find the save= path.
-                profile_text = Path(arg_str).read_text()
-                for line in profile_text.splitlines():
-                    if line.startswith("save="):
-                        save_path = line.split("=", 1)[1]
-                        Path(save_path).write_text("talents=ENCODED_RESULT_123\n")
+        profile_text = Path(str(cmd[1])).read_text()
+        for line in profile_text.splitlines():
+            if line.startswith("save="):
+                Path(line.split("=", 1)[1]).write_text("talents=ENCODED_RESULT_123\n")
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
     spec = BuildSpec(actor_class="druid", spec="balance", talents="ORIGINAL")

@@ -59,11 +59,20 @@ def guide_search() -> Result:
 
 @cache
 def spec_guide_slug() -> str:
-    """The best spec guide for the pinned query; spec guides are the ones with a family switcher."""
-    for row in guide_search().data["results"]:
-        if row["metadata"]["content_family"] == "spec_guide":
-            return str(row["id"])
-    raise AssertionError(f"search found no Icy Veins spec guide\n{guide_search().describe()}")
+    """The pinned spec's guide, which a spec query has to rank first; it owns the family switcher.
+
+    The slug is discovered rather than pinned so a rename cannot rot the file, but it has to name
+    the pinned class and spec: a ranking regression that answered with another spec's guide would
+    otherwise send every journey below to the wrong guide and still pass all of them.
+    """
+    result = guide_search()
+    rows = result.data["results"]
+    assert rows, f"search found no Icy Veins guide for {pins.GUIDE_QUERY!r}\n{result.describe()}"
+    top = rows[0]
+    slug = str(top["id"])
+    assert top["metadata"]["content_family"] == "spec_guide", f"{slug} is not a spec guide\n{result.describe()}"
+    assert pins.GUIDE_CLASS in slug and pins.GUIDE_SPEC in slug, f"{slug} is not the pinned spec's guide"
+    return slug
 
 
 @cache
@@ -91,6 +100,32 @@ def _assert_page_is_split_into_real_sections(page: dict[str, Any], result: Resul
     assert len(sections) >= len(headings) - 2, f"{where} collapsed {len(headings)} headings into {len(sections)} sections"
 
 
+def _assert_summary_was_cut_on_its_headings(result: Result) -> None:
+    """The one-page summary has about one section per heading, so a collapsed page fails.
+
+    ``guide`` publishes the heading list and a section count rather than the sections themselves,
+    and those two are enough: the parser's failure mode is merging a whole page into a single
+    fallback section, which a page that reports many headings and one section cannot hide.
+    """
+    guide = result.data["guide"]
+    article = result.data["article"]
+    headings = {row["title"] for row in article["headings"]}
+    slug = guide["slug"]
+    assert headings, f"{slug} parsed into zero headings\n{result.describe()}"
+    titles = [row["title"] for row in article["section_preview"]]
+    assert titles and all(title.strip() for title in titles), result.describe()
+    assert all(row["level"] >= 2 for row in article["section_preview"]), result.describe()
+    # Prose above the first heading legitimately becomes one leading section named after the page;
+    # every other section is one of the page's own headings.
+    assert set(titles[1:]) <= headings, f"{slug} has sections that are not headings: {titles}\n{result.describe()}"
+    assert titles[0] in headings | {guide["section_title"]}, f"{slug} opens on {titles[0]!r}\n{result.describe()}"
+    # A page merged into that one fallback section still looks non-empty, so the count is what
+    # catches it (a heading with nothing under it is dropped, which is the legitimate way to differ).
+    assert article["section_count"] >= max(1, len(headings) // 2), (
+        f"{slug} cut {len(headings)} headings into {article['section_count']} sections\n{result.describe()}"
+    )
+
+
 def _exported_sections(bundle: Path) -> dict[tuple[str, int], dict[str, Any]]:
     """Every section the export wrote, keyed by the page it came from and its position on it."""
     lines = (bundle / "sections.jsonl").read_text(encoding="utf-8").splitlines()
@@ -116,7 +151,10 @@ def test_search_ranks_real_guides_from_the_sitemap(require) -> None:
     result = guide_search()
 
     assert result.data["count"] >= 1
-    for row in result.data["results"]:
+    rows = result.data["results"]
+    assert rows == sorted(rows, key=lambda row: -row["ranking"]["score"]), "results must be ranked best first"
+    assert rows[0]["id"] == spec_guide_slug(), "a spec query must rank that spec's guide first"
+    for row in rows:
         assert row["entity_type"] == "guide"
         assert row["metadata"]["content_family"], "search returned a row without a content family"
         assert row["url"] == f"https://www.icy-veins.com/wow/{row['id']}"
@@ -136,8 +174,11 @@ def test_resolve_hands_over_a_next_command_that_returns_the_same_guide(require) 
     require(PROVIDER)
     result = run(BINARY, "resolve", pins.GUIDE_QUERY, "--limit", "5")
 
+    assert result.data["resolved"] is True
+    assert result.data["confidence"] == "high"
     match = result.data["match"]
     assert match is not None, f"resolve found no candidate\n{result.describe()}"
+    assert match["id"] == spec_guide_slug(), "resolve must land on the pinned spec's guide"
     assert result.data["candidates"], "resolve dropped the candidate list"
 
     # The whole point of next_command is that an agent can run it verbatim.
@@ -166,11 +207,9 @@ def test_guide_returns_attributed_sections_family_navigation_and_a_page_toc(requ
     assert sum(1 for item in navigation["items"] if item["active"]) == 1
     assert result.data["page_toc"]["count"] >= 1
     article = result.data["article"]
-    assert article["section_count"] >= 1
     assert article["text"].strip(), "article text is empty"
     assert article["intro_text"].strip(), "the guide intro is empty"
-    assert article["section_preview"], "no section preview"
-    assert all(row["title"].strip() and row["level"] >= 2 for row in article["section_preview"])
+    _assert_summary_was_cut_on_its_headings(result)
     assert result.data["linked_entities"]["count"] >= 1
     assert result.payload["provenance"]["page"] == guide["page_url"]
 
@@ -189,16 +228,24 @@ def test_guide_full_walks_the_family_and_publishes_build_references(require) -> 
     for page in result.data["pages"]:
         _assert_page_is_split_into_real_sections(page, result)
 
+    # The walk covers the spec's leveling, rotation, stat, gear and macro pages, and the classifier
+    # gives each of them its own family. One family across the whole walk means it stopped looking.
+    families = {page["guide"]["content_family"] for page in result.data["pages"]}
+    assert all(families), result.describe()
+    assert len(families) >= 4, f"the family walk classified {page_count} pages as {sorted(families)}"
+
     assert result.data["linked_entities"]["count"] >= guide_page().data["linked_entities"]["count"]
     assert result.data["analysis_surfaces"]["count"] >= 1
 
     # The builds/talents page is what feeds `warcraft guide-builds-simc`; zero build references
     # means the import-string markup moved and that handoff is silently empty.
     builds = result.data["build_references"]
-    assert builds["count"] >= 1, result.describe()
     assert builds["count"] == len(builds["items"])
     assert {row["reference_type"] for row in builds["items"]} <= {"wow_talent_export", "wowhead_talent_calc_url"}
-    assert all(row["build_code"] for row in builds["items"])
+    # A spec guide publishes a build per content type, so a parser that found only one has lost most
+    # of them; the codes have to be distinct or the same build was collected repeatedly.
+    codes = [row["build_code"] for row in builds["items"]]
+    assert all(codes) and len(set(codes)) == len(codes) >= 2, result.describe()
 
 
 def _first_guide_of_family(query: str, family: str) -> str:
@@ -223,8 +270,8 @@ def test_every_content_family_classifies_and_parses_with_a_byline(require, query
     assert guide["supported_surface"] is True
     assert guide["author"].strip(), f"{slug} lost its byline"
     assert guide["last_updated"].strip(), f"{slug} lost its last-updated stamp"
-    assert result.data["article"]["section_count"] >= 1
     assert len(result.data["article"]["text"].strip()) > 200, "the article parsed to almost nothing"
+    _assert_summary_was_cut_on_its_headings(result)
 
 
 def test_a_class_hub_has_no_family_to_walk(require) -> None:
@@ -283,9 +330,15 @@ def test_guide_query_honours_the_limit_kind_and_section_title_filters(require, o
     assert len(wide) > 2, "the pinned guide needs more than two matches for --limit to mean anything"
     assert section_titles(BUNDLE_QUERY_TERM, "--limit", "2") == wide[:2]
 
+    # --kind drops the kinds that were not asked for. The same query without it has to match both
+    # kinds first, or an empty section list would prove nothing about the filter.
+    both = run(BINARY, "guide-query", str(bundle), "talents", env=dead_proxy_env())
+    assert both.data["match_counts"]["sections"] >= 1, both.describe()
+    assert both.data["match_counts"]["navigation"] >= 1, both.describe()
+
     only_navigation = run(BINARY, "guide-query", str(bundle), "talents", "--kind", "navigation", env=dead_proxy_env())
     assert only_navigation.data["matches"]["sections"] == []
-    assert only_navigation.data["match_counts"]["navigation"] >= 1
+    assert only_navigation.data["matches"]["navigation"] == both.data["matches"]["navigation"]
 
     # --section-title narrows that same ranking to the sections whose title contains the text. The
     # needle is the commonest word among the matched titles, so the expected subset is known exactly
@@ -329,10 +382,18 @@ def test_a_repeated_guide_fetch_is_served_from_the_session_cache(require) -> Non
     assert cached.data["article"]["section_count"] == warm.data["article"]["section_count"]
 
 
-def test_guide_query_on_a_missing_bundle_is_a_usage_error(require) -> None:
+def test_guide_query_rejects_a_bundle_path_that_is_missing_or_not_a_directory(require, out_dir: Path) -> None:
+    """The two ways the bundle argument can be wrong get the two answers the contract reserves.
+
+    ``method guide-query`` answers identically; the pair used to disagree, so an agent that learned
+    one provider's exit code got the other one wrong.
+    """
     require(PROVIDER)
-    # The bundle argument is a Typer directory, so a missing path is rejected as bad input (exit 2).
-    run(BINARY, "guide-query", "/nonexistent/icy-veins-bundle", "mana", expect=EXIT_USAGE, error_code="invalid_argument")
+    run(BINARY, "guide-query", "/nonexistent/icy-veins-bundle", "mana", expect=EXIT_NOT_FOUND, error_code="not_found")
+
+    not_a_directory = out_dir / "icy-veins-bundle.txt"
+    not_a_directory.write_text("not a bundle", encoding="utf-8")
+    run(BINARY, "guide-query", str(not_a_directory), "mana", expect=EXIT_USAGE, error_code="invalid_argument")
 
 
 @pytest.mark.parametrize("command", ["guide", "guide-full", "guide-export"])

@@ -5,7 +5,7 @@ from contextlib import contextmanager
 from typing import Any
 
 import typer
-from warcraft_core.cli import emit, fail, guarded_run, install_common_callback
+from warcraft_core.cli import command_path, emit, fail, guarded_run, install_common_callback
 from warcraft_core.provider import ProviderError
 from warcraft_core.shapes import as_dict, as_list
 
@@ -31,6 +31,7 @@ from raiderio_cli.analytics import (
     threshold_payload,
     validated_metric,
 )
+from raiderio_cli.client import FetchedJson, page_freshness
 from raiderio_cli.identity import raiderio_class_spec_identity
 from raiderio_cli.provider import (
     PROVIDER,
@@ -58,18 +59,12 @@ THRESHOLD_METRICS = ("score", "mythic_level")
 
 
 @contextmanager
-def _command_errors(ctx: typer.Context, command: str) -> Iterator[None]:
-    """Run a command body labelled ``command``, turning failures into the shared error envelope.
+def _command_errors(ctx: typer.Context) -> Iterator[None]:
+    """Run a command body, turning its failures into the shared error envelope.
 
     Wrapping the command body is required even though ``guarded_run`` exists: the ``warcraft``
     wrapper and the tests invoke this Typer app directly and never pass through ``run()``.
-
-    ``command`` is the full sub-path (``leaderboard raids``) because Typer's leaf name collides --
-    ``raids`` names both the catalog and the guild leaderboard, which have different payloads.
-    ``fail`` labels its envelope from the context, so the context is relabelled here to keep the
-    error envelope's ``command`` identical to the success envelope's.
     """
-    ctx.info_name = command
     try:
         with transport_errors():
             yield
@@ -157,8 +152,9 @@ def _character_mythic_plus(profile: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _character_payload(profile: dict[str, Any]) -> dict[str, Any]:
+def _character_payload(fetched: FetchedJson, *, cache_ttl_seconds: int) -> dict[str, Any]:
     """Build the ``raiderio character`` payload from a Raider.IO character profile."""
+    profile = fetched.payload
     guild = as_dict(profile.get("guild"))
     raid_rows = _raid_progression_summary(as_dict(profile.get("raid_progression")))
     return {
@@ -175,6 +171,7 @@ def _character_payload(profile: dict[str, Any]) -> dict[str, Any]:
             "raid_count": len(raid_rows),
             "progression": raid_rows,
         },
+        "freshness": page_freshness(fetched, cache_ttl_seconds=cache_ttl_seconds),
         "citations": {
             "profile": profile.get("profile_url"),
         },
@@ -202,8 +199,9 @@ def _guild_roster_preview(members: list[Any]) -> list[dict[str, Any]]:
     return preview
 
 
-def _guild_payload(profile: dict[str, Any]) -> dict[str, Any]:
+def _guild_payload(fetched: FetchedJson, *, cache_ttl_seconds: int) -> dict[str, Any]:
     """Build the ``raiderio guild`` payload from a Raider.IO guild profile."""
+    profile = fetched.payload
     members = as_list(profile.get("members"))
     raid_progression = _raid_progression_summary(as_dict(profile.get("raid_progression")))
     raid_rankings = _guild_rankings_summary(as_dict(profile.get("raid_rankings")))
@@ -222,6 +220,7 @@ def _guild_payload(profile: dict[str, Any]) -> dict[str, Any]:
             "rankings": raid_rankings,
         },
         "roster_preview": _guild_roster_preview(members),
+        "freshness": page_freshness(fetched, cache_ttl_seconds=cache_ttl_seconds),
         "citations": {
             "profile": profile.get("profile_url"),
         },
@@ -246,7 +245,7 @@ def search(
     kind: str = typer.Option("all", "--kind", help="Optional result kind: all, character, or guild."),
 ) -> None:
     """Rank Raider.IO character and guild candidates for a free-text query."""
-    with _command_errors(ctx, "search"):
+    with _command_errors(ctx):
         emit(ctx, PROVIDER.search(query, limit=limit, kind=kind))
 
 
@@ -258,7 +257,7 @@ def resolve(
     kind: str = typer.Option("all", "--kind", help="Optional result kind: all, character, or guild."),
 ) -> None:
     """Resolve a free-text query to one Raider.IO entity plus the follow-up command to run."""
-    with _command_errors(ctx, "resolve"):
+    with _command_errors(ctx):
         emit(ctx, PROVIDER.resolve(query, limit=limit, kind=kind))
 
 
@@ -270,9 +269,10 @@ def character(
     name: str = typer.Argument(..., help="Character name."),
 ) -> None:
     """Return a character profile with identity, guild, Mythic+ score, and raid progression."""
-    with _command_errors(ctx, "character"), open_client() as client:
-        profile = client.character_profile_variants(region=region, realm=realm, name=name)
-    emit(ctx, raiderio_envelope(command="character", kind="character_profile", payload=_character_payload(profile)))
+    with _command_errors(ctx), open_client() as client:
+        fetched = client.character_profile(region=region, realm=realm, name=name)
+        payload = _character_payload(fetched, cache_ttl_seconds=client.character_profile_ttl_seconds)
+    emit(ctx, raiderio_envelope(command=command_path(ctx), kind="character_profile", payload=payload))
 
 
 @app.command("guild")
@@ -283,9 +283,10 @@ def guild(
     name: str = typer.Argument(..., help="Guild name."),
 ) -> None:
     """Return a guild profile with raid progression, raid rankings, and a roster preview."""
-    with _command_errors(ctx, "guild"), open_client() as client:
-        profile = client.guild_profile_variants(region=region, realm=realm, name=name)
-    emit(ctx, raiderio_envelope(command="guild", kind="guild_profile", payload=_guild_payload(profile)))
+    with _command_errors(ctx), open_client() as client:
+        fetched = client.guild_profile(region=region, realm=realm, name=name)
+        payload = _guild_payload(fetched, cache_ttl_seconds=client.guild_profile_ttl_seconds)
+    emit(ctx, raiderio_envelope(command=command_path(ctx), kind="guild_profile", payload=payload))
 
 
 @app.command("mythic-plus-runs")
@@ -298,7 +299,7 @@ def mythic_plus_runs(
     page: int = typer.Option(0, "--page", min=0, help="Page of rankings to request."),
 ) -> None:
     """Return one page of the Mythic+ run leaderboard for a region and dungeon."""
-    with _command_errors(ctx, "mythic-plus-runs"), open_client() as client:
+    with _command_errors(ctx), open_client() as client:
         fetched = client.mythic_plus_runs(
             season=resolve_season_input(season),
             region=region,
@@ -313,7 +314,7 @@ def mythic_plus_runs(
     emit(
         ctx,
         raiderio_envelope(
-            command="mythic-plus-runs",
+            command=command_path(ctx),
             kind="mythic_plus_runs",
             payload={
                 "query": {
@@ -350,7 +351,7 @@ def leaderboard_mythic_plus(
     reports returned-vs-requested counts so a short provider response is explicit, not a silent cap.
     """
     pages = leaderboard_pages_for_limit(limit)
-    with _command_errors(ctx, "leaderboard mythic-plus"), open_client() as client:
+    with _command_errors(ctx), open_client() as client:
         runs, meta = sample_leaderboard_runs(
             client,
             season=resolve_season_input(season),
@@ -364,7 +365,7 @@ def leaderboard_mythic_plus(
     emit(
         ctx,
         raiderio_envelope(
-            command="leaderboard mythic-plus",
+            command=command_path(ctx),
             kind="mythic_plus_leaderboard",
             payload={
                 "query": {
@@ -409,7 +410,7 @@ def leaderboard_raids(
     scope (realm position when ``--realm`` is set); ``region_rank`` is always region-wide. It fetches
     as many 20-row pages as ``--limit`` requires and reports returned-vs-requested counts.
     """
-    with _command_errors(ctx, "leaderboard raids"), open_client() as client:
+    with _command_errors(ctx), open_client() as client:
         difficulty, region, realm_slug = validated_raid_scope(difficulty=difficulty, region=region, realm=realm)
         rows, meta = sample_raid_rankings(
             client,
@@ -423,7 +424,7 @@ def leaderboard_raids(
     emit(
         ctx,
         raiderio_envelope(
-            command="leaderboard raids",
+            command=command_path(ctx),
             kind="raid_leaderboard",
             payload={
                 "query": {
@@ -463,12 +464,12 @@ def raids(
     Each row carries the per-region ``starts``/``ends`` timestamps, so the raid a guild is currently
     progressing is the one whose window covers now.
     """
-    with _command_errors(ctx, "raids"), open_client() as client:
+    with _command_errors(ctx), open_client() as client:
         static_data = client.raid_static_data(expansion_id=expansion_id)
         payload = raid_catalog_payload(
             static_data, expansion_id=expansion_id, cache_ttl_seconds=client.static_data_ttl_seconds
         )
-    emit(ctx, raiderio_envelope(command="raids", kind="raid_catalog", payload=payload))
+    emit(ctx, raiderio_envelope(command=command_path(ctx), kind="raid_catalog", payload=payload))
 
 
 @sample_app.command("mythic-plus-runs")
@@ -506,12 +507,12 @@ def sample_mythic_plus_runs(
         contains_spec=contains_spec,
         player_region=player_region,
     )
-    with _command_errors(ctx, "sample mythic-plus-runs"), open_client() as client:
+    with _command_errors(ctx), open_client() as client:
         runs, meta, filtering = load_filtered_runs(client, request, filters)
     emit(
         ctx,
         raiderio_envelope(
-            command="sample mythic-plus-runs",
+            command=command_path(ctx),
             kind="mythic_plus_runs_sample",
             payload={
                 "query": analytics_query(request, filters, meta=meta),
@@ -560,13 +561,13 @@ def sample_mythic_plus_players(
         contains_spec=contains_spec,
         player_region=player_region,
     )
-    with _command_errors(ctx, "sample mythic-plus-players"), open_client() as client:
+    with _command_errors(ctx), open_client() as client:
         runs, meta, filtering = load_filtered_runs(client, request, filters)
     players, player_sampling = limit_player_snapshots(player_snapshots(runs), player_limit=player_limit)
     emit(
         ctx,
         raiderio_envelope(
-            command="sample mythic-plus-players",
+            command=command_path(ctx),
             kind="mythic_plus_players_sample",
             payload={
                 "query": analytics_query(request, filters, meta=meta, player_limit=player_limit),
@@ -619,13 +620,13 @@ def distribution_mythic_plus_runs(
         contains_spec=contains_spec,
         player_region=player_region,
     )
-    with _command_errors(ctx, "distribution mythic-plus-runs"):
+    with _command_errors(ctx):
         metric = validated_metric(metric, RUN_DISTRIBUTION_METRICS)
         with open_client() as client:
             runs, meta, filtering = load_filtered_runs(client, request, filters)
     payload = distribution_payload(metric, runs, meta=meta, query=analytics_query(request, filters, meta=meta))
     payload["sample"]["filtering"] = filtering
-    emit(ctx, raiderio_envelope(command="distribution mythic-plus-runs", kind="mythic_plus_runs_distribution", payload=payload))
+    emit(ctx, raiderio_envelope(command=command_path(ctx), kind="mythic_plus_runs_distribution", payload=payload))
 
 
 @distribution_app.command("mythic-plus-players")
@@ -667,7 +668,7 @@ def distribution_mythic_plus_players(
         contains_spec=contains_spec,
         player_region=player_region,
     )
-    with _command_errors(ctx, "distribution mythic-plus-players"):
+    with _command_errors(ctx):
         metric = validated_metric(metric, PLAYER_DISTRIBUTION_METRICS)
         with open_client() as client:
             runs, meta, filtering = load_filtered_runs(client, request, filters)
@@ -681,7 +682,7 @@ def distribution_mythic_plus_players(
         filtering=filtering,
         player_sampling=player_sampling,
     )
-    emit(ctx, raiderio_envelope(command="distribution mythic-plus-players", kind="mythic_plus_players_distribution", payload=payload))
+    emit(ctx, raiderio_envelope(command=command_path(ctx), kind="mythic_plus_players_distribution", payload=payload))
 
 
 @threshold_app.command("mythic-plus-runs")
@@ -722,7 +723,7 @@ def threshold_mythic_plus_runs(
         contains_spec=contains_spec,
         player_region=player_region,
     )
-    with _command_errors(ctx, "threshold mythic-plus-runs"):
+    with _command_errors(ctx):
         metric = validated_metric(metric, THRESHOLD_METRICS)
         with open_client() as client:
             runs, meta, filtering = load_filtered_runs(client, request, filters)
@@ -735,7 +736,7 @@ def threshold_mythic_plus_runs(
         nearest_limit=nearest,
     )
     payload["sample"]["filtering"] = filtering
-    emit(ctx, raiderio_envelope(command="threshold mythic-plus-runs", kind="mythic_plus_runs_threshold", payload=payload))
+    emit(ctx, raiderio_envelope(command=command_path(ctx), kind="mythic_plus_runs_threshold", payload=payload))
 
 
 def run() -> None:

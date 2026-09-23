@@ -52,9 +52,9 @@ from warcraft_cli.provider_contract import (
     compact_wrapper_candidate,
     decorate_resolve_payload,
     decorate_search_result,
+    merged_search_page,
     provider_max_candidate_score,
     resolve_payload_sort_key,
-    search_result_sort_key,
 )
 from warcraft_cli.providers import (
     ProviderRegistration,
@@ -68,6 +68,7 @@ from warcraft_cli.providers import (
     provider_expansion_exclusion_reason,
     provider_expansion_support,
     provider_invoke,
+    provider_payload_data,
     provider_resolve,
     provider_search,
     resolve_wrapper_expansion_key,
@@ -739,26 +740,51 @@ def _handoff_evidence_section(sources: list[Any]) -> dict[str, Any]:
     }
 
 
-def _handoff_simc_section(simc_results: dict[str, Any | None]) -> dict[str, Any]:
-    identify_result = as_dict(simc_results["identify"])
-    decode_result = simc_results["decode"]
-    describe_result = simc_results["describe"]
+def _handoff_leg(result: Any) -> dict[str, Any] | None:
+    """One simc leg's outcome, with its failure reason beside its payload rather than buried in it."""
+    if not isinstance(result, dict):
+        return None
+    payload = as_dict(result.get("payload"))
+    error = as_dict(payload.get("error"))
     return {
-        "identify": {
-            "exit_code": identify_result.get("exit_code"),
-            "payload": identify_result.get("payload"),
-        },
-        "decode": (
-            {"exit_code": decode_result.get("exit_code"), "payload": decode_result.get("payload")}
-            if isinstance(decode_result, dict)
-            else None
-        ),
-        "describe": (
-            {"exit_code": describe_result.get("exit_code"), "payload": describe_result.get("payload")}
-            if isinstance(describe_result, dict)
-            else None
-        ),
+        "exit_code": result.get("exit_code"),
+        "ok": result.get("exit_code") == 0,
+        "error": {"code": error.get("code"), "message": error.get("message")} if error else None,
+        "payload": result.get("payload"),
     }
+
+
+def _handoff_simc_section(simc_results: dict[str, Any | None]) -> dict[str, Any]:
+    return {leg: _handoff_leg(simc_results[leg]) for leg in ("identify", "decode", "describe")}
+
+
+def _handoff_build_input(
+    reference: dict[str, Any],
+    sources: list[Any],
+) -> tuple[list[str], dict[str, Any] | None, dict[str, Any], str | None]:
+    """The form simc accepts for this reference type, or the reason the reference cannot be handed over.
+
+    A Wowhead talent-calc URL carries class and spec in its path, so it travels as a talent transport
+    packet. A guide-published ``wow_talent_export`` string *is* the build code and is what
+    ``simc --build-text`` consumes; sending the raw string as a wowhead reference would fail to parse.
+
+    Returns the simc argv, the transport packet when the reference needs one, the reference with its
+    resolved ``build_code``, and the reason it is unusable (``None`` when it is usable).
+    """
+    build_url = reference.get("url")
+    if not isinstance(build_url, str) or not build_url.strip():
+        return [], None, reference, "missing_reference_url"
+    build_code = _resolve_handoff_build_code(reference, build_url)
+    if build_code is None:
+        return [], None, reference, "missing_build_code"
+    normalized_reference = {**reference, "build_code": build_code}
+    reference_type = str(reference.get("reference_type") or "").strip()
+    if reference_type == "wow_talent_export":
+        return ["--build-text", build_code], None, normalized_reference, None
+    transport_packet = _build_handoff_transport_packet(build_url, normalized_reference, sources)
+    if isinstance(transport_packet, dict):
+        return [], transport_packet, normalized_reference, None
+    return [], None, normalized_reference, f"unsupported_reference_type:{reference_type or 'unknown'}"
 
 
 def _build_simc_handoff_row(
@@ -767,21 +793,20 @@ def _build_simc_handoff_row(
     decode: bool,
     apl_path: str | None,
     expansion: str | None,
-) -> dict[str, Any] | None:
+) -> dict[str, Any]:
+    """Hand one build reference to simc, or return the excluded row naming why it could not be."""
     reference = as_dict(row.get("reference"))
-    build_url = reference.get("url")
-    if not isinstance(build_url, str) or not build_url.strip():
-        return None
-    build_code = _resolve_handoff_build_code(reference, build_url)
-    if build_code is None:
-        return None
-    normalized_reference = dict(reference)
-    normalized_reference["build_code"] = build_code
     sources = as_list(row.get("sources"))
-    transport_packet = _build_handoff_transport_packet(build_url, normalized_reference, sources)
+    build_input_args, transport_packet, normalized_reference, unusable_reason = _handoff_build_input(reference, sources)
+    if unusable_reason is not None:
+        return {
+            "status": "excluded",
+            "reference": reference,
+            "reason": unusable_reason,
+            "sources": sources,
+        }
     packet_path: Path | None = None
-    build_input_args = ["--build-text", build_url]
-    if isinstance(transport_packet, dict):
+    if transport_packet is not None:
         with tempfile.NamedTemporaryFile(
             mode="w",
             encoding="utf-8",
@@ -799,12 +824,19 @@ def _build_simc_handoff_row(
         )
     finally:
         packet_path.unlink(missing_ok=True) if packet_path is not None else None
+    simc_section = _handoff_simc_section(simc_results)
     return {
+        "status": "handed_off",
         "reference": normalized_reference,
         "talent_transport_packet": transport_packet,
         "sources": sources,
         "evidence": _handoff_evidence_section(sources),
-        "simc": _handoff_simc_section(simc_results),
+        "simc": simc_section,
+        "failures": [
+            {"leg": leg, **as_dict(section.get("error") or {"code": "simc_leg_failed", "message": None})}
+            for leg, section in simc_section.items()
+            if isinstance(section, dict) and not section.get("ok")
+        ],
     }
 
 
@@ -823,20 +855,50 @@ def _count_simc_handoff_successes(build_rows: list[dict[str, Any]]) -> tuple[int
 
 
 def _simc_handoff_status(
-    *, returned_build_count: int, identify_success_count: int, empty_requested_legs: list[str]
+    *,
+    returned_build_count: int,
+    identify_success_count: int,
+    empty_requested_legs: list[str],
+    partial_requested_legs: list[str],
 ) -> str:
     """Whether the simc leg of the handoff produced anything, as one field an agent can branch on.
 
-    ``ok`` means every leg the caller asked for produced at least one result. A leg that was
-    requested and came back empty for every build (``--simc-decode`` on guide-published import
-    strings, today) is ``partial``: reporting that as ``ok`` alongside a zero counter is the
+    ``ok`` means every requested leg succeeded for every build. ``partial`` means a leg worked for
+    some builds and not others. A leg that was requested and produced nothing at all - zero decodes
+    out of ten - is ``failed``: calling that ``partial`` reads as "most of it worked", which is the
     wrong-answer-with-``ok: true`` shape this field exists to prevent.
     """
     if returned_build_count == 0:
         return "no_build_references"
     if identify_success_count == 0:
         return "all_handoffs_failed"
-    return "partial" if empty_requested_legs else "ok"
+    if empty_requested_legs:
+        return "failed"
+    return "partial" if partial_requested_legs else "ok"
+
+
+def _bundle_health(bundle_inputs: list[tuple[Path, dict[str, Any]]]) -> dict[str, Any]:
+    """Pages the exports could not fetch, so a handoff built from a partial bundle says so.
+
+    ``load_article_bundle`` reports the pages a guide export failed on; a build set read from a
+    bundle that lost pages is incomplete evidence, not a complete answer.
+    """
+    rows: list[tuple[str, Any, int]] = [
+        (
+            str(bundle_path),
+            as_dict(bundle.get("manifest")).get("provider"),
+            len(as_list(bundle.get("failed_pages"))),
+        )
+        for bundle_path, bundle in bundle_inputs
+    ]
+    return {
+        "bundle_count": len(rows),
+        "failed_page_count": sum(failed for _path, _provider, failed in rows),
+        "bundles": [
+            {"bundle_path": path, "provider": provider, "failed_page_count": failed}
+            for path, provider, failed in rows
+        ],
+    }
 
 
 def _handoff_citations(
@@ -874,6 +936,7 @@ def _guide_builds_simc_payload(
 ) -> dict[str, Any]:
     handoff_rows = _collect_build_reference_handoff_rows(bundle_inputs)
     selected_rows = handoff_rows[:limit]
+    bundle_health = _bundle_health(bundle_inputs)
     build_rows: list[dict[str, Any]] = []
     source_providers = sorted(
         {
@@ -883,21 +946,25 @@ def _guide_builds_simc_payload(
             if isinstance(provider, str) and provider
         }
     )
+    excluded_rows: list[dict[str, Any]] = []
     for row in selected_rows:
         build_row = _build_simc_handoff_row(row, decode=decode, apl_path=apl_path, expansion=expansion)
-        if build_row is not None:
-            build_rows.append(build_row)
+        (excluded_rows if build_row["status"] == "excluded" else build_rows).append(build_row)
 
     identify_success_count, decode_success_count, describe_success_count = _count_simc_handoff_successes(
         build_rows
     )
-    empty_requested_legs = [
-        leg
+    requested_legs = [
+        (leg, success_count)
         for leg, requested, success_count in (
             ("decode", decode, decode_success_count),
             ("describe", bool((apl_path or "").strip()), describe_success_count),
         )
-        if requested and success_count == 0
+        if requested
+    ]
+    empty_requested_legs = [leg for leg, success_count in requested_legs if success_count == 0]
+    partial_requested_legs = [
+        leg for leg, success_count in requested_legs if 0 < success_count < len(build_rows)
     ]
     return {
         "provider": "warcraft",
@@ -916,24 +983,30 @@ def _guide_builds_simc_payload(
         "freshness": _guide_build_handoff_freshness(source_kind, source_manifest),
         "citations": _handoff_citations(selected_rows, bundle_inputs),
         "bundle_count": len(bundle_inputs),
+        "bundle_health": bundle_health,
         "build_reference_count": len(handoff_rows),
         "truncated": len(handoff_rows) > len(selected_rows),
         "decode_enabled": decode,
         "apl_path": apl_path,
         "summary": {
             "returned_build_count": len(build_rows),
-            "excluded_build_count": max(0, len(handoff_rows) - len(selected_rows)) + max(0, len(selected_rows) - len(build_rows)),
+            "excluded_build_count": max(0, len(handoff_rows) - len(selected_rows)) + len(excluded_rows),
             "identify_success_count": identify_success_count,
             "decode_success_count": decode_success_count,
             "describe_success_count": describe_success_count,
-            # Which requested legs produced nothing at all, so `partial` names its own cause.
+            # Which requested legs produced nothing at all (`failed`) and which worked for only
+            # some builds (`partial`), so the status always names its own cause.
             "empty_requested_legs": empty_requested_legs,
+            "partial_requested_legs": partial_requested_legs,
+            "failed_page_count": bundle_health["failed_page_count"],
             "simc_handoff_status": _simc_handoff_status(
                 returned_build_count=len(build_rows),
                 identify_success_count=identify_success_count,
                 empty_requested_legs=empty_requested_legs,
+                partial_requested_legs=partial_requested_legs,
             ),
         },
+        "excluded_builds": excluded_rows,
         "builds": build_rows,
     }
 
@@ -1202,7 +1275,7 @@ def _upgrade_transport_packet_with_simc(
     )
     if _provider_result_failed(result):
         return result, None
-    payload = as_dict(result.get("payload"))
+    payload = provider_payload_data(result.get("payload"))
     updated_packet = payload.get("updated_packet") if isinstance(payload.get("updated_packet"), dict) else None
     if updated_packet is None:
         return result, None
@@ -1311,7 +1384,7 @@ def _transport_packet_from_provider_result(
     command_name: str,
     kind: str,
 ) -> dict[str, Any]:
-    producer_payload = as_dict(provider_result.get("payload"))
+    producer_payload = provider_payload_data(provider_result.get("payload"))
     provider_name = route.get("provider")
     provider_label = provider_name if isinstance(provider_name, str) and provider_name else "provider"
     if _provider_result_failed(provider_result):
@@ -1748,15 +1821,13 @@ def _unresolved_next_steps(query: str, providers: list[dict[str, Any]], *, resol
     fallbacks: list[dict[str, Any]] = []
     candidates: list[tuple[str, dict[str, Any]]] = []
     for provider_row in providers:
-        provider_payload = provider_row.get("payload")
+        provider_data = provider_payload_data(provider_row.get("payload"))
         provider_name = str(provider_row.get("provider") or "")
-        if not isinstance(provider_payload, dict):
-            continue
-        command = provider_payload.get("fallback_search_command")
+        command = provider_data.get("fallback_search_command")
         if isinstance(command, str) and command.strip():
             fallbacks.append({"provider": provider_name, "command": command})
-        if isinstance(provider_payload.get("match"), dict):
-            candidates.append((provider_name, decorate_resolve_payload(query, provider_name, provider_payload)))
+        if isinstance(provider_data.get("match"), dict):
+            candidates.append((provider_name, decorate_resolve_payload(query, provider_name, provider_data)))
     candidates.sort(key=lambda row: resolve_payload_sort_key(row[0], row[1]))
     best = compact_resolve_match(candidates[0][1]) if candidates else None
     if best is not None:
@@ -1795,12 +1866,11 @@ def _raiderio_source(identity: dict[str, str], *, expansion: str | None) -> dict
         ["guild", identity["region"], identity["realm"], identity["name"]],
         expansion=expansion,
     )
-    payload = result.get("payload")
-    if result.get("status") != "ok" or not isinstance(payload, dict):
+    if result.get("status") != "ok":
         return result
     return {
         **result,
-        "summary": raiderio_guild_summary(payload),
+        "summary": raiderio_guild_summary(provider_payload_data(result.get("payload"))),
     }
 
 
@@ -1870,7 +1940,8 @@ def search(
         }
         providers.append(provider_row)
         if isinstance(provider_payload, dict):
-            provider_results = [row for row in as_list(provider_payload.get("results")) if isinstance(row, dict)]
+            provider_data = provider_payload_data(provider_payload)
+            provider_results = [row for row in as_list(provider_data.get("results")) if isinstance(row, dict)]
             # Scores are normalized against this provider's own best row before the merge so a
             # provider with an inflated local scale cannot own every slot in the merged list.
             provider_max_score = provider_max_candidate_score(provider_results)
@@ -1889,10 +1960,8 @@ def search(
                         provider_max_score=provider_max_score,
                     )
                 )
-    flattened.sort(key=search_result_sort_key)
-    top = flattened[:limit]
-    if brief:
-        top = [compact_wrapper_candidate(row) for row in top]
+    ranked, merge_policy = merged_search_page(flattened, limit=limit)
+    top = [compact_wrapper_candidate(row) for row in ranked] if brief else ranked
     payload: dict[str, Any] = {
         "query": query,
         "provider_count": len(list_providers()),
@@ -1906,10 +1975,11 @@ def search(
         "providers": [] if brief else providers,
         "count": len(flattened),
         "truncated": len(flattened) > len(top),
+        "merge_policy": merge_policy,
         "results": top,
     }
     if ranking_debug:
-        payload["ranking_debug"] = [compact_wrapper_candidate(row) for row in flattened[:limit]]
+        payload["ranking_debug"] = [compact_wrapper_candidate(row) for row in ranked]
     if expansion_debug:
         payload["expansion_debug"] = expansion_support_snapshot(requested_expansion=requested_expansion)
     _emit_fanout(ctx, payload, included_count=len(included_registrations))
@@ -1958,9 +2028,10 @@ def resolve(
                 "payload": provider_payload,
             }
         )
-        if isinstance(provider_payload, dict) and provider_payload.get("resolved"):
+        resolve_data = provider_payload_data(provider_payload)
+        if resolve_data.get("resolved"):
             resolved_candidates.append(
-                (registration.name, decorate_resolve_payload(query, registration.name, provider_payload))
+                (registration.name, decorate_resolve_payload(query, registration.name, resolve_data))
             )
     resolved_candidates.sort(key=lambda row: resolve_payload_sort_key(row[0], row[1]))
     best_provider = resolved_candidates[0][0] if resolved_candidates else None
@@ -2030,7 +2101,7 @@ def guild_ranks(
         ["guild", identity["region"], identity["realm"], identity["name"]],
         expansion=_requested_expansion(ctx),
     )
-    payload = as_dict(source_result.get("payload"))
+    payload = provider_payload_data(source_result.get("payload"))
     if source_result.get("status") != "ok":
         _emit(ctx,
             {
@@ -2090,6 +2161,28 @@ def _fail_actor_profile(
     raise typer.Exit(exit_code)
 
 
+# A whole-report crosswalk names the fights it reads, and Warcraft Logs takes one --fight-id flag
+# per fight. A wipe night can hold fifty of them, so the scope is bounded: kills carry the roster
+# the caller means, and the bound keeps one query from turning into a fifty-flag command line.
+ACTOR_PROFILE_MAX_SCOPED_FIGHTS = 10
+
+
+def _actor_profile_fight_scope(fights: list[Any]) -> tuple[list[int], dict[str, Any]]:
+    """Pick the fights to read the roster from, kills first, and describe what was left out."""
+    rows = [fight for fight in fights if isinstance(fight, dict) and isinstance(fight.get("id"), int)]
+    kills: list[int] = [fight["id"] for fight in rows if fight.get("kill") is True]
+    others: list[int] = [fight["id"] for fight in rows if fight.get("kill") is not True]
+    scoped = [*kills, *others][:ACTOR_PROFILE_MAX_SCOPED_FIGHTS]
+    return scoped, {
+        "rule": "kills_first_then_report_order",
+        "report_fight_count": len(rows),
+        "kill_fight_count": len(kills),
+        "scoped_fight_count": len(scoped),
+        "max_scoped_fights": ACTOR_PROFILE_MAX_SCOPED_FIGHTS,
+        "truncated": len(rows) > len(scoped),
+    }
+
+
 def _actor_profile_fight_ids(
     ctx: typer.Context,
     *,
@@ -2097,8 +2190,8 @@ def _actor_profile_fight_ids(
     code: str,
     allow_unlisted: bool,
     expansion: str | None,
-) -> list[int]:
-    """Every fight id in the report, so the unscoped ``--fight-id`` case still covers the whole log.
+) -> tuple[list[int], dict[str, Any]]:
+    """The fights an unscoped ``--fight-id`` crosswalk reads, plus the scope it applied.
 
     Warcraft Logs only answers ``playerDetails`` for an explicit fight list or time window; an
     unscoped query comes back as an empty roster. The crosswalk's whole-report default therefore has
@@ -2117,8 +2210,7 @@ def _actor_profile_fight_ids(
             details={"source": result.get("error"), "provider": "warcraftlogs"},
             exit_code=source_exit_code(result),
         )
-    fights = as_list(as_dict(result.get("payload")).get("fights"))
-    fight_ids = [fight["id"] for fight in fights if isinstance(fight, dict) and isinstance(fight.get("id"), int)]
+    fight_ids, scope = _actor_profile_fight_scope(as_list(provider_payload_data(result.get("payload")).get("fights")))
     if not fight_ids:
         _fail_actor_profile(
             ctx,
@@ -2128,7 +2220,7 @@ def _actor_profile_fight_ids(
             details={"hint": "Check the report code, or pass --fight-id if you know the fight."},
             exit_code=EXIT_NOT_FOUND,
         )
-    return fight_ids
+    return fight_ids, scope
 
 
 def _actor_profile_log_payload(
@@ -2156,7 +2248,7 @@ def _actor_profile_log_payload(
             details={"source": log_result.get("error"), "provider": "warcraftlogs"},
             exit_code=source_exit_code(log_result),
         )
-    return as_dict(log_result.get("payload"))
+    return provider_payload_data(log_result.get("payload"))
 
 
 def _actor_profile_actor(
@@ -2265,8 +2357,7 @@ def _actor_profile_character(
             },
             exit_code=source_exit_code(profile_result),
         )
-    profile_payload = as_dict(profile_result.get("payload"))
-    return as_dict(profile_payload.get("character"))
+    return as_dict(provider_payload_data(profile_result.get("payload")).get("character"))
 
 
 @app.command("actor-profile")
@@ -2281,14 +2372,15 @@ def actor_profile(
     """Cross-walk a Warcraft Logs report actor to a Raider.IO profile (log actor -> profile handoff)."""
     requested_expansion = _requested_expansion(ctx)
     query: dict[str, Any] = {"report_code": code, "actor_name": name, "fight_id": fight_id}
-    scoped_fight_ids = (
-        [fight_id]
+    scoped_fight_ids, fight_scope = (
+        ([fight_id], {"rule": "explicit_fight_id", "scoped_fight_count": 1, "truncated": False})
         if fight_id is not None
         else _actor_profile_fight_ids(
             ctx, query=query, code=code, allow_unlisted=allow_unlisted, expansion=requested_expansion
         )
     )
     query["scoped_fight_ids"] = scoped_fight_ids
+    query["fight_scope"] = fight_scope
     log_payload = _actor_profile_log_payload(
         ctx,
         query=query,
@@ -2455,13 +2547,15 @@ def _resolve_guide_compare_candidate(
     resolved = provider_resolve(provider_name, query, limit=limit, expansion=expansion)
     candidate, candidate_reason = _resolved_guide_match(
         provider_name,
-        resolved.get("payload") if isinstance(resolved, dict) else None,
+        provider_payload_data(resolved.get("payload")),
     )
     search_payload: dict[str, Any] | None = None
     if candidate is None:
         searched = provider_search(provider_name, query, limit=limit, expansion=expansion)
         search_payload = searched.get("payload") if isinstance(searched, dict) else None
-        fallback_candidate, fallback_reason = _search_fallback_guide_match(provider_name, search_payload)
+        fallback_candidate, fallback_reason = _search_fallback_guide_match(
+            provider_name, provider_payload_data(search_payload)
+        )
         if fallback_candidate is not None:
             candidate = fallback_candidate
             candidate_reason = None
@@ -2697,6 +2791,17 @@ def _guide_compare_manifest_index(root: Path) -> dict[str, dict[str, Any]]:
     return {row["provider"]: row for row in rows if isinstance(row, dict) and isinstance(row.get("provider"), str)}
 
 
+def _guide_compare_decline_row(provider_row: dict[str, Any]) -> dict[str, Any]:
+    """Why one provider did not contribute a bundle, small enough to live inside ``error.details``."""
+    return {
+        "provider": provider_row.get("provider"),
+        "status": provider_row.get("status"),
+        "reason": provider_row.get("reason"),
+        "candidate_ref": as_dict(provider_row.get("candidate")).get("ref"),
+        "bundle_path": provider_row.get("bundle_path"),
+    }
+
+
 def _guide_compare_query_payload(options: GuideCompareQueryOptions) -> dict[str, Any]:
     """Export each selected provider's guide bundle and compare them.
 
@@ -2739,10 +2844,20 @@ def _guide_compare_query_payload(options: GuideCompareQueryOptions) -> dict[str,
     # a failed run must not leave a `providers: []` manifest behind for the next run to reuse.
     payload["manifest"] = None
     if len(bundle_inputs) < 2:
+        # A failure envelope carries no data body by default, so the reason each provider declined
+        # goes under `error.details` (and `data`) rather than only in the deprecated top-level keys.
+        details = {
+            "exported_bundle_count": len(bundle_inputs),
+            "required_bundle_count": 2,
+            "selected_providers": list(options.providers),
+            "provider_results": [_guide_compare_decline_row(row) for row in provider_rows],
+        }
         payload["ok"] = False
+        payload["data"] = details
         payload["error"] = {
             "code": "insufficient_guides",
             "message": "Need at least two exported guide bundles to compare.",
+            "details": details,
         }
         return payload
 

@@ -28,7 +28,12 @@ from warcraft_cli.cooldown_packet import (
     top_parse_samples,
     tracked_spell_ids,
 )
-from warcraft_cli.providers import parse_lorrgs_report_reference, source_exit_code, wrapper_envelope
+from warcraft_cli.providers import (
+    parse_lorrgs_report_reference,
+    provider_payload_data,
+    source_exit_code,
+    wrapper_envelope,
+)
 
 
 def _emit(ctx: typer.Context, payload: Mapping[str, Any], *, err: bool = False) -> None:
@@ -98,7 +103,7 @@ def _provider_source(provider_result: dict[str, Any] | None, *, command: str, ar
     payload: dict[str, Any] = as_dict(raw_payload)
     raw_provenance = payload.get("provenance")
     provenance: dict[str, Any] = as_dict(raw_provenance)
-    raw_report = payload.get("report")
+    raw_report = _data_of(provider_result).get("report")
     report: dict[str, Any] = as_dict(raw_report)
     return {
         "provider": provider_result.get("provider") if isinstance(provider_result, dict) else None,
@@ -108,13 +113,6 @@ def _provider_source(provider_result: dict[str, Any] | None, *, command: str, ar
         "report": report or None,
         "error": provider_result.get("error") if isinstance(provider_result, dict) else None,
     }
-
-
-def _lorrgs_payload_data(provider_result: dict[str, Any] | None) -> dict[str, Any]:
-    raw_payload = provider_result.get("payload") if isinstance(provider_result, dict) else None
-    payload: dict[str, Any] = as_dict(raw_payload)
-    raw_data = payload.get("data")
-    return as_dict(raw_data)
 
 
 def _find_lorrgs_fight(data: dict[str, Any], fight_id: int) -> dict[str, Any] | None:
@@ -173,9 +171,7 @@ def _resolve_lorrgs_player(
 
 
 def _find_warcraftlogs_fight(provider_result: dict[str, Any] | None, fight_id: int) -> dict[str, Any] | None:
-    raw_payload = provider_result.get("payload") if isinstance(provider_result, dict) else None
-    payload: dict[str, Any] = as_dict(raw_payload)
-    raw_fights = payload.get("fights")
+    raw_fights = _data_of(provider_result).get("fights")
     fights: list[Any] = as_list(raw_fights)
     for fight in fights:
         if isinstance(fight, dict) and fight.get("id") == fight_id:
@@ -272,9 +268,10 @@ class CooldownState:
     comparison: dict[str, Any] = field(default_factory=dict)
 
 
-def _payload_of(result: dict[str, Any] | None) -> dict[str, Any]:
+def _data_of(result: dict[str, Any] | None) -> dict[str, Any]:
+    """The provider envelope's ``data`` body, the only contract-stable home of its fields."""
     raw = result.get("payload") if isinstance(result, dict) else None
-    return as_dict(raw)
+    return provider_payload_data(raw)
 
 
 def _resolve_reference(ctx: typer.Context, request: CooldownRequest, state: CooldownState) -> None:
@@ -403,7 +400,7 @@ def _load_lorrgs_fight(ctx: typer.Context, request: CooldownRequest, state: Cool
             exit_code=source_exit_code(result),
         )
         return
-    fight = _find_lorrgs_fight(_lorrgs_payload_data(result), state.fight_id)
+    fight = _find_lorrgs_fight(_data_of(result), state.fight_id)
     if fight is None:
         _degrade_without_lorrgs(
             ctx,
@@ -514,7 +511,7 @@ def _load_spell_catalogs(ctx: typer.Context, request: CooldownRequest, state: Co
         error_code="lorrgs_spec_spells_failed",
         error_message="Lorrgs spec spell metadata lookup failed.",
     )
-    state.cooldown_catalog = spell_catalog(_payload_of(state.spec_spells_result))
+    state.cooldown_catalog = spell_catalog(_data_of(state.spec_spells_result))
     state.tracked_ids = tracked_spell_ids(state.cooldown_catalog, request.spell_ids)
     if not state.tracked_ids:
         _fail_cooldown_packet(
@@ -536,7 +533,7 @@ def _load_spell_catalogs(ctx: typer.Context, request: CooldownRequest, state: Co
             error_message="Lorrgs boss spell metadata lookup failed.",
             required=False,
         )
-    state.boss_catalog = spell_catalog(_payload_of(state.boss_spells_result))
+    state.boss_catalog = spell_catalog(_data_of(state.boss_spells_result))
 
 
 def _load_warcraftlogs_casts(ctx: typer.Context, request: CooldownRequest, state: CooldownState, fetch: ProviderFetch) -> None:
@@ -589,7 +586,7 @@ def _load_warcraftlogs_casts(ctx: typer.Context, request: CooldownRequest, state
         error_message="Warcraft Logs cast-event lookup failed.",
     )
     state.player_casts = normalize_warcraftlogs_actor_casts(
-        _payload_of(state.events_result),
+        _data_of(state.events_result),
         fight_start_time_ms=fight_start_time_ms,
         catalog=state.cooldown_catalog,
         spell_ids=state.tracked_ids,
@@ -614,7 +611,7 @@ def _load_ranking_comparison(ctx: typer.Context, request: CooldownRequest, state
             required=False,
         )
     raw_ranking = (
-        state.ranking_result.get("payload")
+        _data_of(state.ranking_result)
         if isinstance(state.ranking_result, dict) and state.ranking_result.get("status") == "ok"
         else None
     )

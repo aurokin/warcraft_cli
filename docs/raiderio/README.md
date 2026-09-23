@@ -134,6 +134,7 @@ raiderio threshold mythic-plus-runs --metric score --value 3000
   reports the age of what it replayed and `cache_hit: true` says it is a replay; the data can be up
   to `cache_ttl_seconds` old. Sampled commands add `sampled_at` (when the sample was assembled) and
   report the *oldest* page's `fetched_at`, with `cache_hit: true` when any page was replayed.
+  `character` and `guild` report the same block, each quoting its own profile TTL.
 - The envelope's `command` is the full sub-path (`leaderboard raids`, `distribution
   mythic-plus-runs`), on success and on failure, so no two commands answer to the same value. That
   includes a flag rejected before the command body runs (a bad value, a missing required option).

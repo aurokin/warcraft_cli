@@ -28,8 +28,12 @@ def _captured(name: str) -> dict[str, Any]:
 def test_raiderio_guild_payload_parses_a_captured_guild_profile(monkeypatch) -> None:
     profile = _captured("guild_profile_us_malganis_gn.json")
     monkeypatch.setattr(
-        "raiderio_cli.client.RaiderIOClient.guild_profile_variants",
-        lambda self, *, region, realm, name, fields="": profile,
+        "raiderio_cli.client.RaiderIOClient.guild_profile",
+        lambda self, *, region, realm, name, fields="": FetchedJson(
+            payload=profile,
+            fetched_at="2026-09-19T00:00:00+00:00",
+            cache_hit=False,
+        ),
     )
     result = runner.invoke(raiderio_app, ["guild", "us", "malganis", "gn"])
     assert result.exit_code == 0, result.output

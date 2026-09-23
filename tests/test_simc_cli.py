@@ -10,7 +10,7 @@ from unittest.mock import patch
 import pytest
 import simc_cli.compare as simc_compare
 import simc_cli.main as simc_main
-from simc_cli.build_input import BuildResolution, DecodedTalent, HeroTree
+from simc_cli.build_input import BuildIdentity, BuildResolution, BuildSpec, DecodedTalent, HeroTree
 from simc_cli.main import app as simc_app
 from simc_cli.repo import RepoPaths
 from simc_cli.search import word_bounded_pattern
@@ -47,7 +47,7 @@ class _FakeSimcBinary:
         profile_path = Path(str(cmd[1]))
         text = profile_path.read_text()
         self.profiles.append(text)
-        if profile_path.name == "encode.simc":
+        if "save=" in text:
             save = next(line.split("=", 1)[1] for line in text.splitlines() if line.startswith("save="))
             Path(save).write_text(f"talents={self.encoded}\n")
             return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
@@ -331,16 +331,14 @@ def test_simc_spec_files_returns_grouped_results(monkeypatch, tmp_path: Path) ->
 def test_simc_decode_build_outputs_decoded_talents(monkeypatch) -> None:
     monkeypatch.setattr(
         "simc_cli.main.load_build_spec",
-        lambda **kwargs: type("BuildSpec", (), {
-            "actor_class": "monk",
-            "spec": "mistweaver",
-            "talents": "ABC123",
-            "class_talents": None,
-            "spec_talents": None,
-            "hero_talents": None,
-            "source_kind": "wow_talent_export",
-            "source_notes": ["command-line build options"],
-        })(),
+        lambda **kwargs: BuildSpec(actor_class="monk",
+            spec="mistweaver",
+            talents="ABC123",
+            class_talents=None,
+            spec_talents=None,
+            hero_talents=None,
+            source_kind="wow_talent_export",
+            source_notes=["command-line build options"]),
     )
     monkeypatch.setattr(
         "simc_cli.main.decode_build",
@@ -370,33 +368,21 @@ def test_simc_identify_build_reports_probe_result(monkeypatch) -> None:
     monkeypatch.setattr(
         "simc_cli.main._load_identified_build_spec",
         lambda *args, **kwargs: (
-            type(
-                "BuildSpec",
-                (),
-                {
-                    "actor_class": "demonhunter",
-                    "spec": "devourer",
-                    "talents": "ABC123",
-                    "class_talents": None,
-                    "spec_talents": None,
-                    "hero_talents": None,
-                    "source_kind": "wow_talent_export",
-                    "source_notes": ["single-line talent export", "identified by SimC probe"],
-                },
-            )(),
-            type(
-                "BuildIdentity",
-                (),
-                {
-                    "actor_class": "demonhunter",
-                    "spec": "devourer",
-                    "confidence": "high",
-                    "source": "simc_probe",
-                    "candidate_count": 1,
-                    "candidates": [("demonhunter", "devourer")],
-                    "source_notes": ["single-line talent export", "identified by SimC probe"],
-                },
-            )(),
+            BuildSpec(actor_class="demonhunter",
+                    spec="devourer",
+                    talents="ABC123",
+                    class_talents=None,
+                    spec_talents=None,
+                    hero_talents=None,
+                    source_kind="wow_talent_export",
+                    source_notes=["single-line talent export", "identified by SimC probe"]),
+            BuildIdentity(actor_class="demonhunter",
+                    spec="devourer",
+                    confidence="high",
+                    source="simc_probe",
+                    candidate_count=1,
+                    candidates=[("demonhunter", "devourer")],
+                    source_notes=["single-line talent export", "identified by SimC probe"]),
         ),
     )
     result = runner.invoke(simc_app, ["identify-build", "--build-text", "ABC123"])
@@ -416,36 +402,24 @@ def test_simc_identify_build_accepts_build_packet(monkeypatch, tmp_path: Path) -
     def fake_loader(_paths, **kwargs):  # noqa: ANN001
         assert kwargs["build_packet"] == str(packet_path)
         return (
-            type(
-                "BuildSpec",
-                (),
-                {
-                    "actor_class": "druid",
-                    "spec": "balance",
-                    "talents": "ABC123",
-                    "class_talents": None,
-                    "spec_talents": None,
-                    "hero_talents": None,
-                    "source_kind": "wowhead_talent_calc_url",
-                    "source_notes": ["talent transport packet"],
-                    "transport_form": "wowhead_talent_calc_url",
-                    "transport_status": "exact",
-                    "transport_source": str(packet_path),
-                },
-            )(),
-            type(
-                "BuildIdentity",
-                (),
-                {
-                    "actor_class": "druid",
-                    "spec": "balance",
-                    "confidence": "high",
-                    "source": "wowhead_talent_calc_url",
-                    "candidate_count": 1,
-                    "candidates": [("druid", "balance")],
-                    "source_notes": ["talent transport packet"],
-                },
-            )(),
+            BuildSpec(actor_class="druid",
+                    spec="balance",
+                    talents="ABC123",
+                    class_talents=None,
+                    spec_talents=None,
+                    hero_talents=None,
+                    source_kind="wowhead_talent_calc_url",
+                    source_notes=["talent transport packet"],
+                    transport_form="wowhead_talent_calc_url",
+                    transport_status="exact",
+                    transport_source=str(packet_path)),
+            BuildIdentity(actor_class="druid",
+                    spec="balance",
+                    confidence="high",
+                    source="wowhead_talent_calc_url",
+                    candidate_count=1,
+                    candidates=[("druid", "balance")],
+                    source_notes=["talent transport packet"]),
         )
 
     monkeypatch.setattr("simc_cli.main._load_identified_build_spec", fake_loader)
@@ -482,19 +456,13 @@ def test_simc_identify_build_accepts_wow_export_transport_form_from_build_packet
         "simc_cli.main.identify_build",
         lambda _paths, build_spec: (
             build_spec,
-            type(
-                "BuildIdentity",
-                (),
-                {
-                    "actor_class": build_spec.actor_class,
-                    "spec": build_spec.spec,
-                    "confidence": "high",
-                    "source": build_spec.source_kind,
-                    "candidate_count": 1,
-                    "candidates": [(build_spec.actor_class, build_spec.spec)],
-                    "source_notes": build_spec.source_notes,
-                },
-            )(),
+            BuildIdentity(actor_class=build_spec.actor_class,
+                    spec=build_spec.spec,
+                    confidence="high",
+                    source=build_spec.source_kind,
+                    candidate_count=1,
+                    candidates=[(build_spec.actor_class, build_spec.spec)],
+                    source_notes=build_spec.source_notes),
         ),
     )
 
@@ -821,8 +789,9 @@ def test_simc_identify_build_rejects_buildless_wowhead_talent_calc_url() -> None
     )
     assert result.exit_code == 2
     payload = json.loads(result.stderr)
-    assert payload["error"]["code"] == "invalid_query"
-    assert "must include a build code" in payload["error"]["message"]
+    assert payload["error"]["code"] == "unsupported_build_reference"
+    assert payload["error"]["details"]["reference_type"] == "wowhead_talent_calc_url"
+    assert "no build code" in payload["error"]["message"]
 
 
 def test_simc_validate_talent_transport_accepts_build_packet(monkeypatch, tmp_path: Path) -> None:
@@ -1375,33 +1344,21 @@ def test_simc_decode_build_auto_identifies_missing_class_and_spec(monkeypatch) -
     monkeypatch.setattr(
         "simc_cli.main._load_identified_build_spec",
         lambda *args, **kwargs: (
-            type(
-                "BuildSpec",
-                (),
-                {
-                    "actor_class": "demonhunter",
-                    "spec": "devourer",
-                    "talents": "ABC123",
-                    "class_talents": None,
-                    "spec_talents": None,
-                    "hero_talents": None,
-                    "source_kind": "wow_talent_export",
-                    "source_notes": ["single-line talent export", "identified by SimC probe"],
-                },
-            )(),
-            type(
-                "BuildIdentity",
-                (),
-                {
-                    "actor_class": "demonhunter",
-                    "spec": "devourer",
-                    "confidence": "high",
-                    "source": "simc_probe",
-                    "candidate_count": 1,
-                    "candidates": [("demonhunter", "devourer")],
-                    "source_notes": ["single-line talent export", "identified by SimC probe"],
-                },
-            )(),
+            BuildSpec(actor_class="demonhunter",
+                    spec="devourer",
+                    talents="ABC123",
+                    class_talents=None,
+                    spec_talents=None,
+                    hero_talents=None,
+                    source_kind="wow_talent_export",
+                    source_notes=["single-line talent export", "identified by SimC probe"]),
+            BuildIdentity(actor_class="demonhunter",
+                    spec="devourer",
+                    confidence="high",
+                    source="simc_probe",
+                    candidate_count=1,
+                    candidates=[("demonhunter", "devourer")],
+                    source_notes=["single-line talent export", "identified by SimC probe"]),
         ),
     )
     monkeypatch.setattr(
@@ -1423,11 +1380,21 @@ def test_simc_decode_build_auto_identifies_missing_class_and_spec(monkeypatch) -
     assert payload["decoded"]["spec"] == "devourer"
 
 
-def test_simc_decode_build_names_the_specs_the_probe_tried_when_it_identifies_nothing(tmp_path: Path) -> None:
-    """Identification probes one spec per APL file, and SimC ships no healer APL.
+@pytest.mark.parametrize(
+    "command",
+    [
+        ["decode-build", "--talents", "HOLY_PALADIN_EXPORT"],
+        ["describe-build", "--talents", "HOLY_PALADIN_EXPORT"],
+        ["build-harness", "--talents", "HOLY_PALADIN_EXPORT"],
+        ["compare-builds", "--base", "HOLY_PALADIN_EXPORT", "--other", "HOLY_PALADIN_EXPORT"],
+        ["modify-build", "--talents", "HOLY_PALADIN_EXPORT", "--remove", "anything"],
+    ],
+)
+def test_simc_names_the_specs_the_probe_tried_when_it_identifies_nothing(tmp_path: Path, command: list[str]) -> None:
+    """Identification probes one spec per APL file, so a spec the checkout ships no APL for never matches.
 
-    A valid healer export is therefore never matched, so the error has to say which specs were tried
-    instead of leaving the caller to guess that their build was malformed.
+    Every command that identifies a build has to say which specs were tried, otherwise the caller is
+    left to guess that their perfectly valid build was malformed.
     """
     repo_root = _checkout(tmp_path)
     (repo_root / "ActionPriorityLists" / "default" / "mage_arcane.simc").write_text("# apl\n")
@@ -1436,10 +1403,7 @@ def test_simc_decode_build_names_the_specs_the_probe_tried_when_it_identifies_no
     fake = _FakeSimcBinary({"HOLY_PALADIN_EXPORT": no_talents})
 
     with patch("simc_cli.build_input.subprocess.run", side_effect=fake):
-        result = runner.invoke(
-            simc_app,
-            ["--repo-root", str(repo_root), "decode-build", "--talents", "HOLY_PALADIN_EXPORT"],
-        )
+        result = runner.invoke(simc_app, ["--repo-root", str(repo_root), *command])
 
     assert result.exit_code == 2
     payload = json.loads(result.stderr)
@@ -1448,6 +1412,59 @@ def test_simc_decode_build_names_the_specs_the_probe_tried_when_it_identifies_no
         {"actor_class": "mage", "spec": "arcane"},
         {"actor_class": "paladin", "spec": "retribution"},
     ]
+    # The probe list is the whole point of the message; a hard-coded claim about which specs it
+    # excludes went stale the moment the checkout shipped a restoration druid APL.
+    assert "healer" not in payload["error"]["message"]
+
+
+def test_simc_decode_build_rejects_an_empty_talents_option(tmp_path: Path) -> None:
+    """An empty `--talents` used to decode to an empty build with ok: true."""
+    result = runner.invoke(
+        simc_app,
+        ["--repo-root", str(_checkout(tmp_path)), "decode-build", "--talents", "", "--actor-class", "monk", "--spec", "mistweaver"],
+    )
+
+    assert result.exit_code == 2
+    payload = json.loads(result.stderr)
+    assert payload["error"]["code"] == "invalid_query"
+    assert "--talents" in payload["error"]["message"]
+
+
+def test_simc_decode_build_rejects_a_page_url_as_an_unsupported_build_reference(tmp_path: Path) -> None:
+    """A guide URL used to reach SimC as if it were a talent hash, which blamed the build."""
+    result = runner.invoke(
+        simc_app,
+        [
+            "--repo-root", str(_checkout(tmp_path)), "decode-build",
+            "--build-text", "https://www.icy-veins.com/wow/mistweaver-monk-pve-healing-guide",
+        ],
+    )
+
+    assert result.exit_code == 2
+    payload = json.loads(result.stderr)
+    assert payload["error"]["code"] == "unsupported_build_reference"
+    assert payload["error"]["details"]["reference_type"] == "url"
+
+
+def test_simc_decode_build_reads_back_the_talent_calc_url_modify_build_publishes(tmp_path: Path) -> None:
+    """`modify-build` publishes /talent-calc/blizzard/<hash>, which names no class or spec."""
+    repo_root = _checkout(tmp_path)
+    fake = _FakeSimcBinary({"ARCANE_EXPORT": CAPTURED_ARCANE_MAGE})
+
+    with patch("simc_cli.build_input.subprocess.run", side_effect=fake):
+        result = runner.invoke(
+            simc_app,
+            [
+                "--repo-root", str(repo_root), "decode-build",
+                "--actor-class", "mage", "--spec", "arcane",
+                "--build-text", "https://www.wowhead.com/talent-calc/blizzard/ARCANE_EXPORT",
+            ],
+        )
+
+    assert result.exit_code == 0, result.stderr
+    data = json.loads(result.stdout)["data"]
+    assert data["build_spec"]["talents"] == "ARCANE_EXPORT"
+    assert data["decoded"]["hero_tree"] == {"name": "Sunfury", "id": 39}
 
 
 def test_simc_decode_build_accepts_build_packet(monkeypatch, tmp_path: Path) -> None:
@@ -1457,36 +1474,24 @@ def test_simc_decode_build_accepts_build_packet(monkeypatch, tmp_path: Path) -> 
     def fake_loader(_paths, **kwargs):  # noqa: ANN001
         assert kwargs["build_packet"] == str(packet_path)
         return (
-            type(
-                "BuildSpec",
-                (),
-                {
-                    "actor_class": "druid",
-                    "spec": "balance",
-                    "talents": None,
-                    "class_talents": "103324:1",
-                    "spec_talents": "109839:1",
-                    "hero_talents": "117176:1",
-                    "source_kind": "simc_split_talents",
-                    "source_notes": ["talent transport packet"],
-                    "transport_form": "simc_split_talents",
-                    "transport_status": "validated",
-                    "transport_source": str(packet_path),
-                },
-            )(),
-            type(
-                "BuildIdentity",
-                (),
-                {
-                    "actor_class": "druid",
-                    "spec": "balance",
-                    "confidence": "high",
-                    "source": "warcraftlogs_talent_tree",
-                    "candidate_count": 1,
-                    "candidates": [("druid", "balance")],
-                    "source_notes": ["talent transport packet"],
-                },
-            )(),
+            BuildSpec(actor_class="druid",
+                    spec="balance",
+                    talents=None,
+                    class_talents="103324:1",
+                    spec_talents="109839:1",
+                    hero_talents="117176:1",
+                    source_kind="simc_split_talents",
+                    source_notes=["talent transport packet"],
+                    transport_form="simc_split_talents",
+                    transport_status="validated",
+                    transport_source=str(packet_path)),
+            BuildIdentity(actor_class="druid",
+                    spec="balance",
+                    confidence="high",
+                    source="warcraftlogs_talent_tree",
+                    candidate_count=1,
+                    candidates=[("druid", "balance")],
+                    source_notes=["talent transport packet"]),
         )
 
     monkeypatch.setattr("simc_cli.main._load_identified_build_spec", fake_loader)
@@ -1743,8 +1748,9 @@ def test_simc_decode_build_rejects_buildless_wowhead_talent_calc_url() -> None:
     )
     assert result.exit_code == 2
     payload = json.loads(result.stderr)
-    assert payload["error"]["code"] == "invalid_query"
-    assert "must include a build code" in payload["error"]["message"]
+    assert payload["error"]["code"] == "unsupported_build_reference"
+    assert payload["error"]["details"]["reference_type"] == "wowhead_talent_calc_url"
+    assert "no build code" in payload["error"]["message"]
 
 
 def test_simc_describe_build_summarizes_st_and_aoe(monkeypatch, tmp_path: Path) -> None:
@@ -1754,33 +1760,21 @@ def test_simc_describe_build_summarizes_st_and_aoe(monkeypatch, tmp_path: Path) 
     monkeypatch.setattr(
         "simc_cli.main._load_identified_build_spec",
         lambda *args, **kwargs: (
-            type(
-                "BuildSpec",
-                (),
-                {
-                    "actor_class": "demonhunter",
-                    "spec": "devourer",
-                    "talents": "ABC123",
-                    "class_talents": None,
-                    "spec_talents": None,
-                    "hero_talents": None,
-                    "source_kind": "wow_talent_export",
-                    "source_notes": ["single-line talent export"],
-                },
-            )(),
-            type(
-                "BuildIdentity",
-                (),
-                {
-                    "actor_class": "demonhunter",
-                    "spec": "devourer",
-                    "confidence": "high",
-                    "source": "simc_probe",
-                    "candidate_count": 1,
-                    "candidates": [("demonhunter", "devourer")],
-                    "source_notes": ["single-line talent export", "identified by SimC probe"],
-                },
-            )(),
+            BuildSpec(actor_class="demonhunter",
+                    spec="devourer",
+                    talents="ABC123",
+                    class_talents=None,
+                    spec_talents=None,
+                    hero_talents=None,
+                    source_kind="wow_talent_export",
+                    source_notes=["single-line talent export"]),
+            BuildIdentity(actor_class="demonhunter",
+                    spec="devourer",
+                    confidence="high",
+                    source="simc_probe",
+                    candidate_count=1,
+                    candidates=[("demonhunter", "devourer")],
+                    source_notes=["single-line talent export", "identified by SimC probe"]),
         ),
     )
 
@@ -1895,36 +1889,24 @@ def test_simc_describe_build_accepts_build_packet(monkeypatch, tmp_path: Path) -
     def fake_loader(_paths, **kwargs):  # noqa: ANN001
         assert kwargs["build_packet"] == str(packet_path)
         return (
-            type(
-                "BuildSpec",
-                (),
-                {
-                    "actor_class": "druid",
-                    "spec": "balance",
-                    "talents": None,
-                    "class_talents": "103324:1",
-                    "spec_talents": "109839:1",
-                    "hero_talents": "117176:1",
-                    "source_kind": "simc_split_talents",
-                    "source_notes": ["talent transport packet"],
-                    "transport_form": "simc_split_talents",
-                    "transport_status": "validated",
-                    "transport_source": str(packet_path),
-                },
-            )(),
-            type(
-                "BuildIdentity",
-                (),
-                {
-                    "actor_class": "druid",
-                    "spec": "balance",
-                    "confidence": "high",
-                    "source": "warcraftlogs_talent_tree",
-                    "candidate_count": 1,
-                    "candidates": [("druid", "balance")],
-                    "source_notes": ["talent transport packet"],
-                },
-            )(),
+            BuildSpec(actor_class="druid",
+                    spec="balance",
+                    talents=None,
+                    class_talents="103324:1",
+                    spec_talents="109839:1",
+                    hero_talents="117176:1",
+                    source_kind="simc_split_talents",
+                    source_notes=["talent transport packet"],
+                    transport_form="simc_split_talents",
+                    transport_status="validated",
+                    transport_source=str(packet_path)),
+            BuildIdentity(actor_class="druid",
+                    spec="balance",
+                    confidence="high",
+                    source="warcraftlogs_talent_tree",
+                    candidate_count=1,
+                    candidates=[("druid", "balance")],
+                    source_notes=["talent transport packet"]),
         )
 
     monkeypatch.setattr("simc_cli.main._load_identified_build_spec", fake_loader)
@@ -2281,8 +2263,9 @@ def test_simc_describe_build_rejects_buildless_wowhead_talent_calc_url(tmp_path:
     )
     assert result.exit_code == 2
     payload = json.loads(result.stderr)
-    assert payload["error"]["code"] == "invalid_query"
-    assert "must include a build code" in payload["error"]["message"]
+    assert payload["error"]["code"] == "unsupported_build_reference"
+    assert payload["error"]["details"]["reference_type"] == "wowhead_talent_calc_url"
+    assert "no build code" in payload["error"]["message"]
 
 
 def test_simc_describe_build_uses_leaf_focus_and_full_action_diff(monkeypatch, tmp_path: Path) -> None:
@@ -2303,33 +2286,21 @@ def test_simc_describe_build_uses_leaf_focus_and_full_action_diff(monkeypatch, t
     monkeypatch.setattr(
         "simc_cli.main._load_identified_build_spec",
         lambda *args, **kwargs: (
-            type(
-                "BuildSpec",
-                (),
-                {
-                    "actor_class": "demonhunter",
-                    "spec": "devourer",
-                    "talents": "ABC123",
-                    "class_talents": None,
-                    "spec_talents": None,
-                    "hero_talents": None,
-                    "source_kind": "wow_talent_export",
-                    "source_notes": ["single-line talent export"],
-                },
-            )(),
-            type(
-                "BuildIdentity",
-                (),
-                {
-                    "actor_class": "demonhunter",
-                    "spec": "devourer",
-                    "confidence": "high",
-                    "source": "simc_probe",
-                    "candidate_count": 1,
-                    "candidates": [("demonhunter", "devourer")],
-                    "source_notes": ["single-line talent export", "identified by SimC probe"],
-                },
-            )(),
+            BuildSpec(actor_class="demonhunter",
+                    spec="devourer",
+                    talents="ABC123",
+                    class_talents=None,
+                    spec_talents=None,
+                    hero_talents=None,
+                    source_kind="wow_talent_export",
+                    source_notes=["single-line talent export"]),
+            BuildIdentity(actor_class="demonhunter",
+                    spec="devourer",
+                    confidence="high",
+                    source="simc_probe",
+                    candidate_count=1,
+                    candidates=[("demonhunter", "devourer")],
+                    source_notes=["single-line talent export", "identified by SimC probe"]),
         ),
     )
 
@@ -2371,16 +2342,14 @@ def test_simc_describe_build_uses_leaf_focus_and_full_action_diff(monkeypatch, t
 def test_simc_decode_build_failure_includes_source_metadata(monkeypatch) -> None:
     monkeypatch.setattr(
         "simc_cli.main.load_build_spec",
-        lambda **kwargs: type("BuildSpec", (), {
-            "actor_class": "demonhunter",
-            "spec": "devourer",
-            "talents": "CgcBG5bbocFKcv+yIq8fPd6ORBA2MmZmxMzMGzMAAAAAAAegxsNYGAAAAAAAAmxMMmZmZmZmZGzsYGjFtsxMzMzWbzMzAYYAIwMGMmB",
-            "class_talents": None,
-            "spec_talents": None,
-            "hero_talents": None,
-            "source_kind": "wow_talent_export",
-            "source_notes": ["single-line talent export", "inline build text"],
-        })(),
+        lambda **kwargs: BuildSpec(actor_class="demonhunter",
+            spec="devourer",
+            talents="CgcBG5bbocFKcv+yIq8fPd6ORBA2MmZmxMzMGzMAAAAAAAegxsNYGAAAAAAAAmxMMmZmZmZmZGzsYGjFtsxMzMzWbzMzAYYAIwMGMmB",
+            class_talents=None,
+            spec_talents=None,
+            hero_talents=None,
+            source_kind="wow_talent_export",
+            source_notes=["single-line talent export", "inline build text"]),
     )
 
     def _raise_decode(_paths, _build_spec):
@@ -2537,28 +2506,24 @@ def test_simc_decode_build_payload_separates_the_inactive_hero_tree_and_unreadab
 
 
 def _fake_build_spec(*, actor_class="druid", spec="balance", talents="ABC123"):  # noqa: ANN001
-    return type("BuildSpec", (), {
-        "actor_class": actor_class,
-        "spec": spec,
-        "talents": talents,
-        "class_talents": None,
-        "spec_talents": None,
-        "hero_talents": None,
-        "source_kind": "wow_talent_export",
-        "source_notes": ["command-line build options"],
-    })()
+    return BuildSpec(actor_class=actor_class,
+        spec=spec,
+        talents=talents,
+        class_talents=None,
+        spec_talents=None,
+        hero_talents=None,
+        source_kind="wow_talent_export",
+        source_notes=["command-line build options"])
 
 
 def _fake_identity(*, actor_class="druid", spec="balance"):  # noqa: ANN001
-    return type("BuildIdentity", (), {
-        "actor_class": actor_class,
-        "spec": spec,
-        "confidence": "high",
-        "source": "direct",
-        "candidate_count": 1,
-        "candidates": [(actor_class, spec)],
-        "source_notes": ["command-line build options"],
-    })()
+    return BuildIdentity(actor_class=actor_class,
+        spec=spec,
+        confidence="high",
+        source="direct",
+        candidate_count=1,
+        candidates=[(actor_class, spec)],
+        source_notes=["command-line build options"])
 
 
 def _fake_resolution(
@@ -2712,8 +2677,9 @@ def test_simc_compare_builds_rejects_buildless_wowhead_talent_calc_url() -> None
     )
     assert result.exit_code == 2
     payload = json.loads(result.stderr)
-    assert payload["error"]["code"] == "invalid_query"
-    assert "must include a build code" in payload["error"]["message"]
+    assert payload["error"]["code"] == "unsupported_build_reference"
+    assert payload["error"]["details"]["reference_type"] == "wowhead_talent_calc_url"
+    assert "no build code" in payload["error"]["message"]
 
 
 def test_simc_compare_builds_reports_buildless_wowhead_other_as_structured_error(monkeypatch) -> None:
@@ -2736,7 +2702,7 @@ def test_simc_compare_builds_reports_buildless_wowhead_other_as_structured_error
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["comparisons"][0]["input"] == "https://www.wowhead.com/talent-calc/druid/balance"
-    assert "must include a build code" in payload["comparisons"][0]["error"]
+    assert "no build code" in payload["data"]["comparisons"][0]["error"]
 
 
 # --- modify-build ---
@@ -2944,23 +2910,23 @@ def test_simc_modify_build_rejects_buildless_wowhead_talent_calc_url() -> None:
     )
     assert result.exit_code == 2
     payload = json.loads(result.stderr)
-    assert payload["error"]["code"] == "invalid_query"
-    assert "must include a build code" in payload["error"]["message"]
+    assert payload["error"]["code"] == "unsupported_build_reference"
+    assert payload["error"]["details"]["reference_type"] == "wowhead_talent_calc_url"
+    assert "no build code" in payload["error"]["message"]
 
 
 def test_simc_modify_build_rejects_buildless_wowhead_swap_source(monkeypatch) -> None:
-    def fake_load_identified_build_spec(paths, **kwargs):  # noqa: ANN001
-        if kwargs["talents"] == "BASE":
-            return _fake_build_spec(), _fake_identity()
-        raise ValueError("Wowhead talent-calc URLs must include a build code.")
-
-    monkeypatch.setattr("simc_cli.main._load_identified_build_spec", fake_load_identified_build_spec)
+    """The swap source goes through the same reference parsing as the base build."""
     monkeypatch.setattr("simc_cli.main.decode_build", lambda paths, spec: _fake_resolution())
 
     result = runner.invoke(
         simc_app,
         [
             "modify-build",
+            "--actor-class",
+            "druid",
+            "--spec",
+            "balance",
             "--talents",
             "BASE",
             "--swap-class-tree-from",
@@ -2969,14 +2935,15 @@ def test_simc_modify_build_rejects_buildless_wowhead_swap_source(monkeypatch) ->
     )
     assert result.exit_code == 2
     payload = json.loads(result.stderr)
-    assert payload["error"]["code"] == "invalid_query"
-    assert "must include a build code" in payload["error"]["message"]
+    assert payload["error"]["code"] == "unsupported_build_reference"
+    assert payload["error"]["details"]["reference_type"] == "wowhead_talent_calc_url"
+    assert "no build code" in payload["error"]["message"]
 
 
 def test_simc_modify_build_reports_the_simc_error_when_encoding_fails(tmp_path: Path) -> None:
     class _FailingEncoder(_FakeSimcBinary):
         def __call__(self, cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
-            if Path(str(cmd[1])).name == "encode.simc":
+            if "save=" in Path(str(cmd[1])).read_text():
                 self.profiles.append(Path(str(cmd[1])).read_text())
                 return subprocess.CompletedProcess(
                     cmd, 1, stdout="banner\n" * 900,
@@ -2998,32 +2965,20 @@ def test_simc_build_harness_compare_report_and_verify_clean(monkeypatch, tmp_pat
     monkeypatch.setattr(
         "simc_cli.main._load_identified_build_spec_or_fail",
         lambda *args, **kwargs: (
-            type(
-                "BuildSpec",
-                (),
-                {
-                    "actor_class": "warlock",
-                    "spec": "demonology",
-                    "talents": "ABC123",
-                    "class_talents": None,
-                    "spec_talents": None,
-                    "hero_talents": None,
-                    "source_notes": ["command-line build options"],
-                },
-            )(),
-            type(
-                "BuildIdentity",
-                (),
-                {
-                    "actor_class": "warlock",
-                    "spec": "demonology",
-                    "confidence": "high",
-                    "source": "direct",
-                    "candidate_count": 1,
-                    "candidates": [("warlock", "demonology")],
-                    "source_notes": ["command-line build options"],
-                },
-            )(),
+            BuildSpec(actor_class="warlock",
+                    spec="demonology",
+                    talents="ABC123",
+                    class_talents=None,
+                    spec_talents=None,
+                    hero_talents=None,
+                    source_notes=["command-line build options"]),
+            BuildIdentity(actor_class="warlock",
+                    spec="demonology",
+                    confidence="high",
+                    source="direct",
+                    candidate_count=1,
+                    candidates=[("warlock", "demonology")],
+                    source_notes=["command-line build options"]),
         ),
     )
     build_result = runner.invoke(
@@ -3118,8 +3073,9 @@ def test_simc_build_harness_rejects_buildless_wowhead_talent_calc_url() -> None:
     )
     assert result.exit_code == 2
     payload = json.loads(result.stderr)
-    assert payload["error"]["code"] == "invalid_query"
-    assert "must include a build code" in payload["error"]["message"]
+    assert payload["error"]["code"] == "unsupported_build_reference"
+    assert payload["error"]["details"]["reference_type"] == "wowhead_talent_calc_url"
+    assert "no build code" in payload["error"]["message"]
 
 
 def test_simc_apl_lists_graph_talents_and_trace(monkeypatch, tmp_path: Path) -> None:
@@ -3722,3 +3678,46 @@ def test_simc_run_turns_uncaught_exception_into_error_envelope(monkeypatch, caps
     assert payload["command"] == "spec-files"
     assert payload["error"]["code"] == "internal_error"
     assert "boom" in payload["error"]["message"]
+
+
+def _describe_with_disable(repo_root: Path, *disable: str) -> tuple[int, dict[str, Any]]:
+    fake = _FakeSimcBinary({"ARCANE_EXPORT": CAPTURED_ARCANE_MAGE})
+    args = ["--repo-root", str(repo_root), "describe-build",
+            "--actor-class", "mage", "--spec", "arcane", "--talents", "ARCANE_EXPORT"]
+    for value in disable:
+        args += ["--disable", value]
+    with patch("simc_cli.build_input.subprocess.run", side_effect=fake):
+        result = runner.invoke(simc_app, args)
+    return result.exit_code, json.loads(result.stdout or result.stderr)
+
+
+def _prismatic_states(payload: dict[str, Any]) -> list[str]:
+    return payload["data"]["single_target"]["active_action_names"]
+
+
+def test_simc_describe_build_disables_a_talent_named_the_way_the_help_says(tmp_path: Path) -> None:
+    """--disable advertises talent names, but only the SimC token used to match anything."""
+    repo_root = _checkout(tmp_path)
+    (repo_root / "ActionPriorityLists" / "default" / "mage_arcane.simc").write_text(
+        "actions=arcane_blast\nactions+=/arcane_barrage,if=talent.prismatic_bolt\n"
+    )
+
+    baseline_code, baseline = _describe_with_disable(repo_root)
+    display_code, display_name = _describe_with_disable(repo_root, "Prismatic Bolt")
+    token_code, token = _describe_with_disable(repo_root, "prismatic_bolt")
+
+    assert (baseline_code, display_code, token_code) == (0, 0, 0)
+    assert _prismatic_states(display_name) == _prismatic_states(token)
+    assert _prismatic_states(display_name) != _prismatic_states(baseline)
+
+
+def test_simc_describe_build_rejects_a_disable_value_that_names_no_talent(tmp_path: Path) -> None:
+    """An unresolvable value used to be dropped in silence, so the answer ignored the flag."""
+    repo_root = _checkout(tmp_path)
+    (repo_root / "ActionPriorityLists" / "default" / "mage_arcane.simc").write_text("actions=arcane_blast\n")
+
+    exit_code, payload = _describe_with_disable(repo_root, "Spear Hand Strike")
+
+    assert exit_code == 2
+    assert payload["error"]["code"] == "unknown_talent"
+    assert payload["error"]["details"]["unknown_talents"] == ["Spear Hand Strike"]

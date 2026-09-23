@@ -32,6 +32,7 @@ CAPTURED_BLUE_TRACKER_LISTING = captured_page("blue_tracker_listing.html")
 CAPTURED_SUGGESTION_FILES = (
     "search_suggestions_thunderfury.json",
     "search_suggestions_classic_thunderfury.json",
+    "search_suggestions_wotlk_thunderfury.json",
     "search_suggestions_ungoro.json",
     "search_suggestions_valorstones.json",
     "search_suggestions_fury_warrior_guide.json",
@@ -294,6 +295,42 @@ def test_the_only_ranked_rows_left_without_a_url_are_ones_an_id_cannot_address()
         unroutable.update(row["type_name"] for row in ranked if row["url"] is None)
     # Wowhead addresses these only as /trading-post-activity/<slug>-<id>; the id alone is not enough.
     assert unroutable == {"Trading Post Activity"}
+
+
+def test_search_leads_with_the_entity_wowhead_ranks_first_in_its_database_list(monkeypatch) -> None:
+    """The WotLK response ranks the proc spells first in `results` and the sword first in `categories`."""
+    payload = captured_json("search_suggestions_wotlk_thunderfury.json")
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.search_suggestions", lambda self, query: payload)
+    result = runner.invoke(app, ["--expansion", "wotlk", "search", "thunderfury", "--limit", "10"])
+    assert result.exit_code == 0
+
+    rows = json.loads(result.stdout)["data"]["results"]
+    top = rows[0]
+    assert (top["entity_type"], top["id"]) == ("item", 19019)
+    assert top["url"] == "https://www.wowhead.com/wotlk/item=19019"
+    assert "upstream_database_rank" in top["ranking"]["match_reasons"]
+    # The two spells named exactly "Thunderfury" lead Wowhead's flat `results` list; they trail the
+    # item the query names because Wowhead's own database ranking puts the item first.
+    spells = [row for row in rows if row["entity_type"] == "spell"]
+    assert [row["id"] for row in spells] == [21992, 27648]
+    assert all(row["ranking"]["score"] < top["ranking"]["score"] for row in rows[1:])
+
+
+def test_resolve_answers_a_currency_query_with_the_currency(monkeypatch) -> None:
+    """Three rows are named "Valorstones"; Wowhead's database list says which one the query means."""
+    payload = captured_json("search_suggestions_valorstones.json")
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.search_suggestions", lambda self, query: payload)
+    result = runner.invoke(app, ["resolve", "valorstones", "--limit", "5"])
+    assert result.exit_code == 0
+
+    data = json.loads(result.stdout)["data"]
+    assert (data["match"]["entity_type"], data["match"]["id"]) == ("currency", 3008)
+    assert data["confidence"] == "high"
+    assert data["resolved"] is True
+    assert data["next_command"] == "wowhead entity currency 3008"
+    # The two quests Wowhead also names "Valorstones" stay in the candidate list, behind the answer.
+    quest_ids = [row["id"] for row in data["candidates"] if row["entity_type"] == "quest"]
+    assert 84914 in quest_ids or 82378 in quest_ids
 
 
 def test_resolve_does_not_recommend_a_guide_the_response_shows_is_stale(monkeypatch) -> None:

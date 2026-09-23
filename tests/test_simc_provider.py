@@ -64,9 +64,13 @@ def test_spec_files_emits_a_conforming_envelope_without_ripgrep(monkeypatch, tmp
     assert payload["data"]["count"] == 5
 
 
-def test_spec_files_without_a_checkout_is_not_found(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "command",
+    [["spec-files", "monk"], ["find-action", "arcane_blast"], ["trace-action", "monk_mistweaver.simc", "vivify"]],
+)
+def test_searching_without_a_checkout_is_not_found(tmp_path: Path, command: list[str]) -> None:
     """Searching a checkout that is not there used to report zero hits as a successful search."""
-    result = runner.invoke(simc_app, ["--repo-root", str(tmp_path / "missing-repo"), "spec-files", "monk"])
+    result = runner.invoke(simc_app, ["--repo-root", str(tmp_path / "missing-repo"), *command])
 
     assert result.exit_code == 4
     payload = json.loads(result.stderr)

@@ -24,6 +24,7 @@ from warcraft_core.cli import (
     fail,
     guarded_run,
 )
+from warcraft_core.exit_codes import EXIT_USAGE
 from warcraft_core.identity import build_identity_payload, refresh_talent_transport_packet, validate_talent_transport_packet
 from warcraft_core.output import DEFAULT_COMPACT_MAX_CHARS
 from warcraft_core.talent_transport import tokenize_talent_name
@@ -42,11 +43,13 @@ from simc_cli.branch import (
     trace_apl,
 )
 from simc_cli.build_input import (
+    BuildIdentity,
     BuildResolution,
     BuildSpec,
     SimcBuildError,
     TalentStrings,
     TreeDiff,
+    UnsupportedBuildReference,
     build_profile_text,
     decode_build,
     diff_talent_trees,
@@ -83,7 +86,7 @@ from simc_cli.run import binary_provenance, binary_version, build_repo, repo_git
 from simc_cli.search import MissingRipgrepError, find_action, spec_file_search
 from simc_cli.sim import first_action_hits, run_first_casts, summarize_first_casts
 from simc_cli.talent_transport import validate_talent_tree_transport
-from simc_cli.trait_data import TraitTable, load_trait_table
+from simc_cli.trait_data import TraitTable, UnknownTalentError, load_trait_table, resolve_talent_tokens
 
 app = typer.Typer(add_completion=False, help="SimulationCraft local workflow CLI.")
 
@@ -134,30 +137,27 @@ def _preview_text(text: str, *, max_lines: int = 20) -> tuple[list[str], bool]:
     return lines[:max_lines], len(lines) > max_lines
 
 
-def _serialize_build_spec(spec: Any) -> dict[str, Any]:
-    payload = {
+def _serialize_build_spec(spec: BuildSpec) -> dict[str, Any]:
+    payload: dict[str, Any] = {
         "actor_class": spec.actor_class,
         "spec": spec.spec,
         "talents": spec.talents,
         "class_talents": spec.class_talents,
         "spec_talents": spec.spec_talents,
         "hero_talents": spec.hero_talents,
-        "source_kind": getattr(spec, "source_kind", None),
+        "source_kind": spec.source_kind,
         "source_notes": spec.source_notes,
     }
-    transport_source = getattr(spec, "transport_source", None)
-    transport_form = getattr(spec, "transport_form", None)
-    transport_status = getattr(spec, "transport_status", None)
-    if transport_source or transport_form or transport_status:
+    if spec.transport_source or spec.transport_form or spec.transport_status:
         payload["transport_packet"] = {
-            "path": transport_source,
-            "transport_form": transport_form,
-            "transport_status": transport_status,
+            "path": spec.transport_source,
+            "transport_form": spec.transport_form,
+            "transport_status": spec.transport_status,
         }
     return payload
 
 
-def _serialize_build_identity(identity: Any) -> dict[str, Any]:
+def _serialize_build_identity(identity: BuildIdentity) -> dict[str, Any]:
     return {
         "actor_class": identity.actor_class,
         "spec": identity.spec,
@@ -326,7 +326,7 @@ def _require_apl_path(ctx: typer.Context, paths: RepoPaths, apl_path: str | None
 
 def _identified_build_or_fail(
     ctx: typer.Context, paths: RepoPaths, *, apl_path: str | None, option_values: dict[str, Any]
-) -> tuple[Any, Any]:
+) -> tuple[BuildSpec, BuildIdentity]:
     _require_apl_path(ctx, paths, apl_path)
     return _load_identified_build_spec_or_fail(
         ctx,
@@ -342,7 +342,9 @@ def _identified_build_or_fail(
     )
 
 
-def _resolve_prune_context(paths: RepoPaths, apl_path: Path, option_values: dict[str, Any], targets: int) -> tuple[PruneContext, Any]:
+def _resolve_prune_context(
+    paths: RepoPaths, apl_path: Path, option_values: dict[str, Any], targets: int
+) -> tuple[PruneContext, BuildResolution]:
     unresolved_spec = load_build_spec(
         apl_path=apl_path,
         profile_path=option_values["profile_path"],
@@ -355,15 +357,17 @@ def _resolve_prune_context(paths: RepoPaths, apl_path: Path, option_values: dict
     )
     build_spec, _identity = identify_build(paths, unresolved_spec)
     resolution = decode_build(paths, build_spec)
-    enabled = set(resolution.enabled_talents)
-    enabled.update(split_csv_values(option_values["enable"]))
-    disabled = split_csv_values(option_values["disable"])
+    # `--enable`/`--disable` name talents; a value the class has no talent for used to be dropped in
+    # silence, so the command answered as if the flag had never been passed.
+    enable_tokens = resolve_talent_tokens(paths.root, build_spec.actor_class, split_csv_values(option_values["enable"]))
+    disabled = resolve_talent_tokens(paths.root, build_spec.actor_class, split_csv_values(option_values["disable"]))
+    enabled = set(resolution.enabled_talents) | enable_tokens
     talent_sources = {
         talent.token: talent.tree
         for tree in ("class", "spec", "hero")
         for talent in resolution.talents_by_tree.get(tree, [])
     }
-    for token in split_csv_values(option_values["enable"]):
+    for token in enable_tokens:
         talent_sources[token] = "manual"
     context = PruneContext(
         enabled_talents=enabled,
@@ -385,7 +389,7 @@ def _load_identified_build_spec(
     actor_class: str | None,
     spec_name: str | None,
     build_packet: str | None = None,
-) -> tuple[Any, Any]:
+) -> tuple[BuildSpec, BuildIdentity]:
     unresolved_spec = load_build_spec(
         apl_path=apl_path,
         profile_path=profile_path,
@@ -411,7 +415,7 @@ def _load_identified_build_spec_or_fail(
     actor_class: str | None,
     spec_name: str | None,
     build_packet: str | None = None,
-) -> tuple[Any, Any]:
+) -> tuple[BuildSpec, BuildIdentity]:
     try:
         return _load_identified_build_spec(
             paths,
@@ -424,6 +428,14 @@ def _load_identified_build_spec_or_fail(
             actor_class=actor_class,
             spec_name=spec_name,
         )
+    except UnsupportedBuildReference as exc:
+        fail(
+            ctx,
+            "unsupported_build_reference",
+            str(exc),
+            exit_code=EXIT_USAGE,
+            details={"reference_type": exc.reference_type},
+        )
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         if build_packet:
             fail(ctx, "invalid_build_packet", str(exc))
@@ -431,23 +443,26 @@ def _load_identified_build_spec_or_fail(
 
 
 def _fail_unidentified_build(
-    ctx: typer.Context, paths: RepoPaths, *, purpose: str, build_spec: Any, identity: Any
+    ctx: typer.Context, paths: RepoPaths, *, purpose: str, build_spec: BuildSpec, identity: BuildIdentity
 ) -> NoReturn:
     """Ask for an explicit class and spec, naming the specs identification actually tried.
 
-    A build is identified by decoding it once per candidate spec, and the candidates come from the
-    APL files in the checkout. SimC ships no APL for a healer spec, so a perfectly valid healer build
-    is never matched; without the probed list the caller cannot tell that apart from a bad build.
+    A build is identified by decoding it once per candidate spec, and the candidates are exactly the
+    specs the checkout ships an APL for. Every spec outside that list - most healer specs among them -
+    is a valid build the probe can never match, so ``probed_specs`` carries the list the caller needs
+    to tell "not tried" apart from "not a build".
     """
+    probed = supported_specs(paths)
     fail(
         ctx,
         "invalid_query",
-        f"Could not determine actor class and spec for {purpose}. Identification only probes the specs "
-        "the checkout ships an APL for (no healer spec has one), so pass --actor-class and --spec.",
+        f"Could not determine actor class and spec for {purpose}. Identification only probes the "
+        f"{len(probed)} specs the checkout ships an APL for (listed in error.details.probed_specs), "
+        "so pass --actor-class and --spec.",
         details={
             "build_spec": _serialize_build_spec(build_spec),
             "identity": _serialize_build_identity(identity),
-            "probed_specs": [{"actor_class": actor_class, "spec": spec} for actor_class, spec in supported_specs(paths)],
+            "probed_specs": [{"actor_class": actor_class, "spec": spec} for actor_class, spec in probed],
         },
     )
 
@@ -820,6 +835,9 @@ def _fail_build_error(
     well: a binary older than its checkout is the usual reason a valid hash comes back rejected.
     """
     extra = dict(details or {})
+    if isinstance(exc, UnknownTalentError):
+        # A bad --enable/--disable value is the caller's typo, not SimC rejecting the build.
+        fail(ctx, "unknown_talent", str(exc), exit_code=EXIT_USAGE, details={"unknown_talents": exc.values})
     if isinstance(exc, SimcBuildError):
         provenance = binary_provenance(_repo_paths(ctx))
         extra["simc_returncode"] = exc.returncode
@@ -835,7 +853,7 @@ def _fail_build_error(
 
 
 def _decode_or_fail(
-    ctx: typer.Context, paths: RepoPaths, build_spec: BuildSpec, *, identity: Any = None, prefix: str = ""
+    ctx: typer.Context, paths: RepoPaths, build_spec: BuildSpec, *, identity: BuildIdentity | None = None, prefix: str = ""
 ) -> BuildResolution:
     """Decode a build, turning SimC's rejection into an ``invalid_build`` envelope with its own message."""
     try:
@@ -2941,8 +2959,7 @@ def compare_builds_command(
         spec_name=spec_name,
     )
     if not base_spec.actor_class or not base_spec.spec:
-        fail(ctx, "invalid_query", "Could not identify actor class and spec for base build.",
-              details={"build_spec": _serialize_build_spec(base_spec), "identity": _serialize_build_identity(base_identity)})
+        _fail_unidentified_build(ctx, paths, purpose="the base build", build_spec=base_spec, identity=base_identity)
     try:
         base_resolution = decode_build(paths, base_spec)
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
@@ -3182,7 +3199,9 @@ def _unrequested_changes(diff_payload: dict[str, Any], edits: list[_TalentEdit])
     Only the active trees gate the export; ``inactive_hero`` is disclosed instead (see above).
     """
     requested_entries = {edit.entry for edit in edits if edit.entry is not None}
-    requested_names = {tokenize_talent_name(edit.value) for edit in edits if edit.entry is None}
+    # An edit names one talent, and every entry of a tiered node carries that same name, so a
+    # name-resolved edit covers all of them. An entry-id edit tokenizes to digits and matches none.
+    requested_names = {tokenize_talent_name(edit.value) for edit in edits}
     unrequested: list[dict[str, Any]] = []
     for tree in ACTIVE_TREES:
         tree_diff = diff_payload[tree]
@@ -3279,8 +3298,7 @@ def _modify_build(ctx: typer.Context, options: _ModifyBuildOptions) -> None:
         spec_name=options.spec_name,
     )
     if not base_spec.actor_class or not base_spec.spec:
-        fail(ctx, "invalid_query", "Could not identify actor class and spec for base build.",
-              details={"build_spec": _serialize_build_spec(base_spec), "identity": _serialize_build_identity(base_identity)})
+        _fail_unidentified_build(ctx, paths, purpose="the base build", build_spec=base_spec, identity=base_identity)
 
     try:
         base_resolution = decode_build(paths, base_spec)

@@ -40,6 +40,9 @@ envelope keys and are deprecated. Read `data`.
 Error codes and their exit codes: `network_error`/`timeout`/`upstream_error` exit 5, `not_found`
 exits 4, `auth_failed` exits 3, and the Method-specific input errors `invalid_guide_ref`,
 `unsupported_guide_surface`, `invalid_bundle`, `invalid_kind`, and `invalid_cache_config` exit 1.
+`guide-query` splits the two bundle mistakes the same way `icy-veins guide-query` does: a path that
+does not exist is `not_found` (exit 4), and a directory with no readable `manifest.json` is
+`invalid_bundle` (exit 1).
 `invalid_guide_ref` means the argument was not a Method guide reference; a page that fetched but
 whose article container no longer matches fails with `parse_failed` (exit 1) instead of returning
 an empty article with `ok:true`.
@@ -55,16 +58,22 @@ title. Two reference types are emitted:
 | `wow_talent_export` | a published WoW loadout import string (the talent blocks on `/talents` pages) | the import string itself, because the reference has no link |
 
 Both types set `build_code`, so `warcraft guide-builds-simc` collects either one and reports it
-under `summary.identify_success_count`. Only `wowhead_talent_calc_url` decodes on its own: its URL
-path names the class and spec, so `simc decode-build --talents <url>` returns `ok:true`.
+under `summary.identify_success_count`. Decoding needs a class and a spec, and the two types supply
+them differently:
 
-`wow_talent_export` rows leave `build_identity` unknown: the import string does not say which class
-and spec it belongs to. Decoding needs both, so `warcraft guide-builds-simc --decode` currently
-leaves `summary.decode_success_count` at 0 for these rows. To decode one, name the class and spec
-yourself: `simc decode-build --talents <build_code> --actor-class paladin --spec holy`.
+- `wowhead_talent_calc_url` always decodes unaided: its URL path names the class and spec.
+- `wow_talent_export` names neither, so `build_identity` stays unknown on the row and SimC has to
+  identify the string itself. It only probes the specs the checkout ships an APL for, which today
+  covers the damage and tank specs but no healer spec.
+
+So `simc decode-build --talents <build_code>` returns `ok:true` for a damage or tank build, and
+fails with `invalid_query` for a healer build until you name the spec yourself:
+`simc decode-build --talents <build_code> --actor-class monk --spec mistweaver`.
+`warcraft guide-builds-simc --decode` passes no class or spec, so its
+`summary.decode_success_count` stays 0 for healer guides.
 
 The Method `/talents` sections publish import strings rather than talent-calc links, so in practice
-the rows you get back are `wow_talent_export` and none of them decode unaided.
+the rows you get back are `wow_talent_export`.
 
 ### Partial guide bundles
 

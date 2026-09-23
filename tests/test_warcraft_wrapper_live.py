@@ -113,7 +113,7 @@ def test_live_warcraft_search_merges_more_than_one_provider() -> None:
     data = _data_for(["search", "mistweaver monk guide", "--limit", "6"])
 
     _assert_providers_answered(data)
-    answering = {row["provider"] for row in data["providers"] if row["payload"].get("count")}
+    answering = {row["provider"] for row in data["providers"] if (row["payload"].get("data") or {}).get("count")}
     assert len(answering) >= 2, f"only {answering} returned candidates"
     assert len({row["provider"] for row in data["results"]}) >= 2, data["results"]
 

@@ -127,7 +127,18 @@ Fanout failure rules:
 Composite failure rules:
 - a composite command re-emits its failing source's own `error.code` and exits with that code's
   mapped exit code; it does not invent a code that disagrees with the exit code
-- structured context belongs under `error.details`, never as a sibling of `code`/`message`
+- structured context belongs under `error.details`, never as a sibling of `code`/`message`. A
+  failure envelope carries no `data` body by default, so a composite that declines (for example
+  `guide-compare-query` with fewer than two exported bundles) puts the per-provider reasons in
+  `error.details` — and mirrors them in `data` — instead of relying on the deprecated top-level keys
+
+Reading a provider payload:
+- every wrapper composite reads provider fields from the envelope's `data` body, through
+  `warcraft_cli.providers.provider_payload_data`. The copies of those keys at the top level of a
+  provider envelope are deprecated and are being removed; a composite that reads them breaks the day
+  its provider stops emitting them
+- test fakes for provider calls must emit the same shape (fields under `data`), or they keep a
+  broken composite green
 
 ## Provider Tiers
 
@@ -269,6 +280,44 @@ Search result ordering rules:
   provider in every merged list
 - the wrapper should not invent a fake universal content model beyond that thin ranking/orchestration layer
 - `count` is the merged candidate total and `truncated` reports whether `--limit` cut the list
+
+### The merged page: intent, diversity, quality
+
+Score arithmetic alone cannot order a merged page: a provider that returns twenty equally scored
+rows normalizes all twenty to 100 and owns every slot. Three structural rules decide the page, and
+each one is visible in the payload.
+
+**Intent — what kind of thing was asked for.** `query_intents()` reads the query for the keywords and
+shapes in the ranking policy. A bare name carrying no region term, no realm/character/guild token
+and no keyword is *not* a profile query:
+- a profile-family row (Raider.IO) answering a query with no profile intent is marked
+  `wrapper_ranking.off_intent` and sorts below every on-intent row, whatever its local score. It is
+  still returned — when nothing else answers it is the answer — but it can never outrank a row from
+  a family the query actually asked for.
+- a bare query that exactly matches an entity-family title anchors the page
+  (`wrapper_ranking.anchor`): the entity a user named is the primary answer, and another provider's
+  article *about* that entity is supporting reference, however large its local scale.
+  The anchor applies only when the query carries no intent at all, so
+  `character us malganis Aurow` still resolves to the character and not to a spell of the same name.
+- structured profile queries (`guild us illidan Liquid`, `character us malganis Aurow`) keep their
+  profile intent boosts and put Raider.IO first.
+
+**Diversity — no provider fills the page.** After ranking, the page is built with a per-provider cap
+of half the page rounded up. An on-intent row over the cap is *deferred*, not dropped: it fills the
+remaining slots once the other providers have taken theirs, so a page is never short when candidates
+exist. An off-intent provider's cap is a strict minority (`limit // 2`, at least one) and is hard:
+the page comes back short rather than repeating twenty near-identical profiles. `data.merge_policy`
+reports the caps, the candidate total, and how many rows were deferred or withheld
+(`docs/foundation/SAFE_ANALYTICS_RULES.md`: a page that dropped rows says so).
+
+**Quality — the row's own title.** A row whose title *is* the query (`name_match: "exact"`) or whose
+title starts with it (`"title_prefix"`, as in `Thunderfury, Blessed Blade of the Windseeker`) scores
+above one that merely mentions it somewhere, so an exact item/spell/quest beats a partial match and
+a news post about it. The boosts live in the same tunable policy as every other weight.
+
+Changing any of the three is a contract change: the model is covered by a table of realistic
+queries with realistic per-provider score scales in `tests/test_provider_contract.py`, and that
+table — not a single number — is what a change has to keep true.
 
 Ranking policy location:
 - default policy lives in shared code

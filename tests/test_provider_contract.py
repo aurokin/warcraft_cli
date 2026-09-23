@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass, field
+from typing import Any
 
 import pytest
 from warcraft_cli.provider_contract import (
@@ -11,6 +13,8 @@ from warcraft_cli.provider_contract import (
     decorate_resolve_payload,
     decorate_search_result,
     load_wrapper_ranking_policy,
+    merged_search_page,
+    name_match_strength,
     normalized_provider_score,
     provider_max_candidate_score,
     query_intents,
@@ -138,7 +142,9 @@ def test_wrapper_ranking_json_override_flips_the_winner(ranking_config_root) -> 
 
     policy = load_wrapper_ranking_policy()
     assert policy["provider_kind_boosts"]["wowhead"]["object"] == 50
-    assert policy["provider_kind_boosts"]["raiderio"]["character"] == 16
+    # The override is a deep merge: sibling sections keep their shipped defaults.
+    assert policy["provider_kind_boosts"]["wowhead"]["spell"] == 6
+    assert policy["intent_provider_boosts"]["character_profile"]["raiderio"] == 28
     assert wrapper_search_ranking("thunderfury", row_b)["score"] > wrapper_search_ranking("thunderfury", row_a)["score"]
 
 
@@ -341,3 +347,395 @@ def test_none_expansion_providers_report_no_expansion_support_reason() -> None:
             provider_expansion_exclusion_reason(registration, requested_expansion="wotlk")
             == "provider_has_no_expansion_support"
         )
+
+
+# --- merged search page: the wrapper's ranking model over realistic provider score scales -------
+#
+# Provider scores are not comparable, and the table below uses each provider's real scale:
+#   wowhead        exact name 30 + prefix 10 + all-terms + popularity, so ~47-50 top, ~17-24 partial
+#   warcraft-wiki  exact title 50 + term 36 + intent/family credit, so ~106-118 top, ~40-58 filler
+#   raiderio       exact structured match 70, free-text character rows 45-70
+#   icy-veins      exact title 40 + content-family credit, so ~90-150
+#   method         same shared article scorer, ~80-132
+#   lorrgs         spec/comp ranking rows 68-99
+#   warcraftlogs   explicit report references only, 92-96
+#   simc           search is a deferred stub: it contributes no rows at all today
+#
+# Each case states the family that should own the top row and the one row an agent must find on the
+# first page. `warcraft search` builds its page through exactly these two functions.
+
+
+@dataclass(frozen=True)
+class MergeCase:
+    """One realistic query, the rows each provider returns for it, and what the page must show."""
+
+    name: str
+    query: str
+    provider_rows: dict[str, list[dict[str, Any]]]
+    expected_top_family: str
+    required_row_id: Any
+    limit: int = 5
+    notes: str = field(default="")
+
+
+def _merged_page(case: MergeCase) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    flattened = [
+        decorate_search_result(
+            case.query,
+            {"provider": provider, **row},
+            provider_max_score=provider_max_candidate_score(rows),
+        )
+        for provider, rows in case.provider_rows.items()
+        for row in rows
+    ]
+    return merged_search_page(flattened, limit=case.limit)
+
+
+def _raiderio_characters(name: str, count: int) -> list[dict[str, Any]]:
+    """Raider.IO answers a bare name with a page of identically scored characters."""
+    return [
+        {"id": 112537057 + index, "name": name, "kind": "character", "ranking": {"score": 70}}
+        for index in range(count)
+    ]
+
+
+MERGE_CASES = [
+    MergeCase(
+        name="item_by_short_name",
+        query="thunderfury",
+        provider_rows={
+            "wowhead": [
+                {"id": 21992, "name": "Thunderfury", "entity_type": "spell", "ranking": {"score": 50}},
+                {
+                    "id": 19019,
+                    "name": "Thunderfury, Blessed Blade of the Windseeker",
+                    "entity_type": "item",
+                    "ranking": {"score": 24},
+                },
+                {
+                    "id": 346300,
+                    "name": "Possible Thunderfury-Themed Cloak on Season of Discovery PTR",
+                    "entity_type": "news",
+                    "ranking": {"score": 20},
+                },
+            ],
+            "warcraft-wiki": [
+                {
+                    "id": "Thunderfury, Blessed Blade of the Windseeker",
+                    "name": "Thunderfury, Blessed Blade of the Windseeker",
+                    "entity_type": "article",
+                    "ranking": {"score": 108},
+                },
+                {"id": "Diemetradon", "name": "Diemetradon", "entity_type": "article", "ranking": {"score": 58}},
+            ],
+            "raiderio": _raiderio_characters("Thunderfury", 20),
+        },
+        expected_top_family="entity",
+        required_row_id=19019,
+        notes="the audit's red journey: twenty tied Raider.IO characters used to own all five slots",
+    ),
+    MergeCase(
+        name="spell_by_exact_name",
+        query="rejuvenation",
+        provider_rows={
+            "wowhead": [
+                {"id": 774, "name": "Rejuvenation", "entity_type": "spell", "ranking": {"score": 50}},
+                {"id": 4611, "name": "Rejuvenation Potion", "entity_type": "item", "ranking": {"score": 24}},
+            ],
+            "warcraft-wiki": [
+                {"id": "Rejuvenation", "name": "Rejuvenation", "entity_type": "article", "ranking": {"score": 106}},
+            ],
+            "raiderio": _raiderio_characters("Rejuvenation", 6),
+        },
+        expected_top_family="entity",
+        required_row_id=774,
+    ),
+    MergeCase(
+        name="quest_by_exact_name",
+        query="the missing diplomat",
+        provider_rows={
+            "wowhead": [
+                {"id": 1324, "name": "The Missing Diplomat", "entity_type": "quest", "ranking": {"score": 47}},
+                {"id": 1339, "name": "The Missing Diplomat (part 2)", "entity_type": "quest", "ranking": {"score": 20}},
+            ],
+            "warcraft-wiki": [
+                {
+                    "id": "The Missing Diplomat",
+                    "name": "The Missing Diplomat",
+                    "entity_type": "article",
+                    "ranking": {"score": 96},
+                },
+            ],
+        },
+        expected_top_family="entity",
+        required_row_id=1324,
+    ),
+    MergeCase(
+        name="zone_by_exact_name",
+        query="un'goro crater",
+        provider_rows={
+            "wowhead": [{"id": 490, "name": "Un'Goro Crater", "entity_type": "zone", "ranking": {"score": 47}}],
+            "warcraft-wiki": [
+                {"id": "Un'Goro Crater", "name": "Un'Goro Crater", "entity_type": "article", "ranking": {"score": 118}},
+                {"id": "Diemetradon", "name": "Diemetradon", "entity_type": "article", "ranking": {"score": 58}},
+                {"id": "Devilsaur", "name": "Devilsaur", "entity_type": "article", "ranking": {"score": 54}},
+            ],
+        },
+        expected_top_family="entity",
+        required_row_id=490,
+        notes="a wiki filler row scoring 58 on a 118 scale must not outrank the zone itself",
+    ),
+    MergeCase(
+        name="class_spec_guide",
+        query="mistweaver monk guide",
+        provider_rows={
+            "icy-veins": [
+                {
+                    "id": "mistweaver-monk-pve-healing-guide",
+                    "name": "Mistweaver Monk Healing Guide",
+                    "entity_type": "guide",
+                    "ranking": {"score": 150},
+                },
+                {
+                    "id": "mistweaver-monk-pve-healing-rotation",
+                    "name": "Mistweaver Monk Rotation",
+                    "entity_type": "guide",
+                    "ranking": {"score": 125},
+                },
+            ],
+            "method": [
+                {
+                    "id": "mistweaver-monk-guide",
+                    "name": "Mistweaver Monk Guide",
+                    "entity_type": "guide",
+                    "ranking": {"score": 132},
+                },
+            ],
+            "wowhead": [
+                {"id": 116680, "name": "Thunder Focus Tea", "entity_type": "spell", "ranking": {"score": 24}},
+            ],
+            "raiderio": _raiderio_characters("Mistweaver", 4),
+        },
+        expected_top_family="article",
+        required_row_id="mistweaver-monk-pve-healing-guide",
+    ),
+    MergeCase(
+        name="api_function_reference",
+        query="wow api GetSpellInfo",
+        provider_rows={
+            "warcraft-wiki": [
+                {"id": "API GetSpellInfo", "name": "API GetSpellInfo", "entity_type": "article", "ranking": {"score": 116}},
+                {"id": "World of Warcraft API", "name": "World of Warcraft API", "entity_type": "article", "ranking": {"score": 74}},
+            ],
+            "wowhead": [
+                {"id": 585, "name": "Smite", "entity_type": "spell", "ranking": {"score": 17}},
+            ],
+        },
+        expected_top_family="reference",
+        required_row_id="API GetSpellInfo",
+    ),
+    MergeCase(
+        name="lore_article",
+        query="war of the ancients lore",
+        provider_rows={
+            "warcraft-wiki": [
+                {"id": "War of the Ancients", "name": "War of the Ancients", "entity_type": "article", "ranking": {"score": 110}},
+            ],
+            "wowhead": [
+                {"id": 24501, "name": "War of the Ancients Tabard", "entity_type": "item", "ranking": {"score": 21}},
+            ],
+            "icy-veins": [
+                {"id": "wow-lore-hub", "name": "WoW Lore Hub", "entity_type": "guide", "ranking": {"score": 44}},
+            ],
+        },
+        expected_top_family="reference",
+        required_row_id="War of the Ancients",
+    ),
+    MergeCase(
+        name="structured_guild_query",
+        query="guild us illidan Liquid",
+        provider_rows={
+            "raiderio": [
+                {"id": "guild:us:illidan:liquid", "name": "Liquid", "kind": "guild", "ranking": {"score": 70}},
+            ],
+            "warcraft-wiki": [
+                {"id": "Complexity Limit", "name": "Complexity Limit", "entity_type": "article", "ranking": {"score": 92}},
+            ],
+            "wowhead": [
+                {"id": 20852, "name": "Liquid Fire", "entity_type": "item", "ranking": {"score": 18}},
+            ],
+        },
+        expected_top_family="profile",
+        required_row_id="guild:us:illidan:liquid",
+    ),
+    MergeCase(
+        name="structured_character_query",
+        query="character us malganis Aurow",
+        provider_rows={
+            "raiderio": [
+                {"id": "character:us:malganis:aurow", "name": "Aurow", "kind": "character", "ranking": {"score": 70}},
+            ],
+            "warcraft-wiki": [
+                {"id": "Mal'Ganis", "name": "Mal'Ganis", "entity_type": "article", "ranking": {"score": 88}},
+            ],
+        },
+        expected_top_family="profile",
+        required_row_id="character:us:malganis:aurow",
+    ),
+    MergeCase(
+        name="bare_character_like_name",
+        query="aurow",
+        provider_rows={
+            "raiderio": _raiderio_characters("Aurow", 8),
+        },
+        expected_top_family="profile",
+        required_row_id=112537057,
+        notes="off-intent rows are deferred, never dropped: when they are the only answer they still fill the page",
+    ),
+    MergeCase(
+        name="boss_name_for_logs",
+        query="lura logs mythic",
+        provider_rows={
+            "lorrgs": [
+                {"id": "lorrgs:spec_ranking:lura", "name": "Lura top parses", "kind": "spec_ranking", "ranking": {"score": 99}},
+                {"id": "lorrgs:comp_ranking:lura", "name": "Lura comp ranking", "kind": "comp_ranking", "ranking": {"score": 96}},
+            ],
+            "wowhead": [
+                {"id": 234899, "name": "Lura, the Bloodsoaked", "entity_type": "npc", "ranking": {"score": 44}},
+            ],
+            "warcraft-wiki": [
+                {"id": "Lura", "name": "Lura", "entity_type": "article", "ranking": {"score": 98}},
+            ],
+        },
+        expected_top_family="logs",
+        required_row_id="lorrgs:spec_ranking:lura",
+    ),
+    MergeCase(
+        name="simc_term",
+        query="simc apl mistweaver monk",
+        provider_rows={
+            # simc's search surface is a deferred stub, so it contributes no rows for its own terms.
+            "warcraft-wiki": [
+                {"id": "SimulationCraft", "name": "SimulationCraft", "entity_type": "article", "ranking": {"score": 104}},
+            ],
+            "icy-veins": [
+                {
+                    "id": "mistweaver-monk-pve-healing-guide",
+                    "name": "Mistweaver Monk Healing Guide",
+                    "entity_type": "guide",
+                    "ranking": {"score": 150},
+                },
+            ],
+        },
+        expected_top_family="reference",
+        required_row_id="SimulationCraft",
+    ),
+]
+
+
+@pytest.mark.parametrize("case", MERGE_CASES, ids=[case.name for case in MERGE_CASES])
+def test_merged_search_page_answers_the_query_it_was_given(case: MergeCase) -> None:
+    page, _policy = _merged_page(case)
+
+    assert page, f"{case.name}: the merged page must not be empty"
+    top_family = page[0]["wrapper_ranking"]["provider_family"]
+    assert top_family == case.expected_top_family, (
+        f"{case.name}: top row is {page[0]['name']!r} from {page[0]['provider']} ({top_family})"
+    )
+    assert case.required_row_id in [row["id"] for row in page], (
+        f"{case.name}: {case.required_row_id!r} is missing from the first page: "
+        f"{[(row['provider'], row['id']) for row in page]}"
+    )
+
+
+def test_no_single_provider_can_fill_the_merged_page() -> None:
+    """Diversity: a provider whose rows all tie at its own best score cannot own every slot."""
+    case = MERGE_CASES[0]
+    page, policy = _merged_page(case)
+
+    counts = policy["provider_row_counts"]
+    assert counts == {"wowhead": 3, "warcraft-wiki": 2}
+    assert max(counts.values()) <= policy["per_provider_cap"]
+    # All twenty Raider.IO characters were withheld, and the payload says so.
+    assert policy["withheld_off_intent_row_count"] == 20
+    assert policy["candidate_row_count"] == 25
+    assert len(page) == case.limit
+
+
+def test_off_intent_profile_rows_are_a_minority_even_when_they_are_ranked_well() -> None:
+    """Raider.IO rows may share the page for a bare name, but never more than a minority of it."""
+    rows = [
+        *[
+            decorate_search_result(
+                "thunderfury",
+                {"provider": "raiderio", **row},
+                provider_max_score=70,
+            )
+            for row in _raiderio_characters("Thunderfury", 20)
+        ],
+        decorate_search_result(
+            "thunderfury",
+            {"provider": "wowhead", "id": 19019, "name": "Thunderfury, Blessed Blade of the Windseeker",
+             "entity_type": "item", "ranking": {"score": 24}},
+            provider_max_score=24,
+        ),
+    ]
+
+    page, policy = merged_search_page(rows, limit=5)
+
+    assert page[0]["provider"] == "wowhead"
+    assert policy["off_intent_provider_cap"] == 2
+    assert len([row for row in page if row["provider"] == "raiderio"]) == 2
+    assert len(page) == 3, "a short page beats five near-identical profiles the query never asked for"
+    assert policy["withheld_off_intent_row_count"] == 18
+
+
+def test_an_on_intent_provider_overflow_is_deferred_and_then_fills_the_page() -> None:
+    """The per-provider cap is soft: it orders the page, it never leaves slots empty."""
+    rows = [
+        decorate_search_result(
+            "mistweaver monk guide",
+            {
+                "provider": "icy-veins",
+                "id": f"guide-{index}",
+                "name": f"Mistweaver Monk Guide {index}",
+                "entity_type": "guide",
+                "ranking": {"score": 150 - index},
+            },
+            provider_max_score=150,
+        )
+        for index in range(6)
+    ]
+
+    page, policy = merged_search_page(rows, limit=5)
+
+    assert len(page) == 5
+    assert policy["deferred_row_count"] == 3
+    assert policy["promoted_after_cap_count"] == 2
+    assert [row["id"] for row in page] == ["guide-0", "guide-1", "guide-2", "guide-3", "guide-4"]
+
+
+def test_name_match_strength_separates_a_title_from_a_mention() -> None:
+    assert name_match_strength("thunderfury", "Thunderfury") == "exact"
+    assert name_match_strength("thunderfury", "Thunderfury, Blessed Blade of the Windseeker") == "title_prefix"
+    assert name_match_strength("thunderfury", "Possible Thunderfury-Themed Cloak on the PTR") is None
+    assert name_match_strength("", "Thunderfury") is None
+
+
+def test_merged_rows_carry_the_normalized_kind_the_compact_row_reports() -> None:
+    """`--brief` must not invent a field the full row lacks: providers name the type differently."""
+    wowhead_row = decorate_search_result(
+        "thunderfury",
+        {"provider": "wowhead", "id": 19019, "name": "Thunderfury", "entity_type": "item", "ranking": {"score": 40}},
+        provider_max_score=40,
+    )
+
+    assert wowhead_row["kind"] == "item"
+    compact = compact_wrapper_candidate(wowhead_row)
+    assert set(compact) - {"follow_up_command"} <= set(wowhead_row)
+    # A provider that already names its own kind keeps it verbatim.
+    raiderio_row = decorate_search_result(
+        "character us illidan Roguecane",
+        {"provider": "raiderio", "id": "c:1", "name": "Roguecane", "kind": "character", "ranking": {"score": 70}},
+    )
+    assert raiderio_row["kind"] == "character"

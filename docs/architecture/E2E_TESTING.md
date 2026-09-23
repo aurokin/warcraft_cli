@@ -14,13 +14,29 @@ Every journey executes an installed binary (`.venv/bin/<name>`) as a real subpro
 - exactly one JSON envelope on stdout on success, or on stderr on failure, and nothing else;
 - the expected exit code (0, 2 usage, 3 auth, 4 not found, 5 network, 1 generic);
 - no traceback, ever;
-- `envelope_violations()` empty, and the payload mirrored into `data`.
+- `envelope_violations()` empty, and every field a journey reads taken from `data`.
 
 On top of that, journeys assert real content: names, ids, counts, files on disk, and agreement
-between commands (search, resolve, and entity must name the same thing). A journey follows an
-agent workflow end to end rather than probing one endpoint, so the wrapper composites
-(`guide-compare-query`, `guide-builds-simc`, `talent-packet`, `talent-describe`,
-`cooldown-packet`, `actor-profile`) are exercised with real SimulationCraft runs.
+between commands (search, resolve, and entity must name the same thing, and the page a typed
+lookup returns must be the page the query names). A journey follows an agent workflow end to end
+rather than probing one endpoint, so the wrapper composites (`guide-compare-query`,
+`guide-builds-simc`, `talent-packet`, `talent-describe`, `cooldown-packet`, `actor-profile`) run
+against the local SimulationCraft checkout rather than a stub. How far that gets depends on the
+build: `identify-build` runs for real on every build handed off, while `decode-build` and
+`describe-build` need a class and a spec, which the guide providers' build strings do not carry
+(see Known limits).
+
+A filter, a cap, or a sort is only exercised when the bound provably excludes something: journeys
+read the unfiltered baseline first, derive the bound from it, and compare the filtered result
+against the exact rows that bound keeps.
+
+## Prerequisites
+
+- `make dev-deploy-no-link` (or `make dev-deploy`), so `.venv/bin/<name>` is this checkout.
+- A SimulationCraft binary at `<checkout>/build/simc` compiled from that checkout's *current*
+  HEAD. A binary that lags the checkout makes the simc and talent-transport journeys answer with
+  data that is wrong rather than missing; `simc doctor` reports `repo.build_ready: false` and
+  prints the rebuild command, and the simc fixture turns that into a failure, not a skip.
 
 ## Policy
 
@@ -68,15 +84,42 @@ without printing secrets.
 
 ## Coverage
 
-Every command in `docs/reference/` has at least one journey, except the three Warcraft Logs auth
-mutations (`auth login`, `auth pkce-login`, `auth logout`), which need a dedicated opt-in journey
-because they rewrite the saved token. Optional inputs:
+Every command in `docs/reference/` has at least one journey, and some need an optional input below
+to reach their success path. Six are reached only on a deliberate failure path, because a success
+path would change this machine:
+
+| Command | Why it is error-path only |
+| --- | --- |
+| `warcraftlogs auth login`, `auth pkce-login`, `auth logout` | they rewrite the saved user token, so a success path would log you out of your own account mid-run |
+| `simc sync`, `simc build`, `simc checkout` | a success path would pull, recompile, or clone the SimulationCraft checkout that every other simc journey reads. `build` is reached through its missing-build-dir guard, `sync` through its dirty-worktree and missing-repo guards, `checkout` through a temporary `XDG_DATA_HOME` whose managed root is not a git repo |
+
+Optional inputs:
 
 | Variable | Enables |
 | --- | --- |
 | `WARCRAFT_E2E_RAIDBOTS_REPORT` | the Raidbots `inspect-report` / `input` round trip (reports expire, so there is no stable public pin) |
 | `WARCRAFT_E2E_REDIS_URL` | the Redis cache journey |
+| `WARCRAFT_E2E_SKIP` | comma-separated providers to exclude, plus `redis`; anything not named here must run |
 | `WARCRAFT_E2E_PACE_SECONDS` | minimum gap between consecutive runs of the same binary (default 0.75s; Wowhead is held to 1.5s because it answers bursts with an IP-level 403) |
+
+## Known limits
+
+What a green run does **not** prove:
+
+- **Guide builds are not decoded.** Icy Veins and Method publish builds as bare
+  `wow_talent_export` strings, which carry no class or spec, so `warcraft guide-builds-simc
+  --decode/--describe` reports `simc_handoff_status: "partial"` with those legs empty. The journey
+  pins that status; it does not prove a guide build can be simulated.
+- **Wowhead's PTR and beta datasets are untested.** Whether a PTR dataset is live is upstream
+  state no command can discover, so `--normalize-canonical-to-expansion` and the `ptr` expansion
+  profile have no journey; the five classic-era profiles cover expansion routing instead.
+- **No write path anywhere.** Nothing logs in, rotates a token, uploads a sim, or mutates a
+  provider account, so those code paths are only covered by the fast tests.
+- **Volatile upstreams.** The journeys assert titles, ids, and counts from live pages. Upstream
+  renaming a page or changing a listing turns a journey red, which is the intent: a suite that
+  followed upstream quietly would pass while the CLI returned the wrong page.
+- **One machine, one account.** Credentials, the SimulationCraft checkout, and the guild and
+  character pins are the maintainer's; a green run on another machine needs the same inputs.
 
 ## Relationship to the live suites
 

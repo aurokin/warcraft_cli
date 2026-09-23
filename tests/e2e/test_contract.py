@@ -18,7 +18,7 @@ import typer
 
 from tests.cli_testkit import all_cli_apps, console_scripts, subcommands, walk_commands
 from tests.e2e.harness import EXIT_NETWORK, EXIT_USAGE, Result, dead_proxy_env, run, run_raw, run_text
-from tests.e2e.pins import ITEM_ID, ITEM_SEARCH_QUERY, REALM_SLUG
+from tests.e2e.pins import CHARACTER_NAME, GUILD_REALM, GUILD_REGION, ITEM_ID, ITEM_SEARCH_QUERY, REALM_SLUG
 
 # Every installed binary, read from the console scripts pip wires up, so a new binary joins every
 # journey below without anyone editing a list. The wrapper comes first because its doctor is the
@@ -47,7 +47,7 @@ NETWORK_COMMAND: dict[str, tuple[str, ...]] = {
 # Providers with a file-backed HTTP cache and a cheap repeatable read. lorrgs is deliberately absent:
 # its client talks straight to the API with no cache store, so there is no hit to observe.
 CACHED_READ: dict[str, tuple[str, ...]] = {
-    "raiderio": ("character", "us", "malganis", "Aurow"),
+    "raiderio": ("character", GUILD_REGION, GUILD_REALM, CHARACTER_NAME),
     "warcraft-wiki": ("article", "CreateFrame"),
     "wowhead": ("entity", "item", str(ITEM_ID)),
 }
@@ -117,6 +117,11 @@ def _strings(value: Any) -> list[str]:
 def _cache_snapshot(root: Path) -> dict[str, tuple[float, int]]:
     """Every cache file under ``root`` with its mtime and size; a re-fetch rewrites the entry."""
     return {str(path): (path.stat().st_mtime, path.stat().st_size) for path in root.rglob("*") if path.is_file()}
+
+
+def _without_freshness(data: dict[str, Any]) -> dict[str, Any]:
+    """The payload minus the block that reports cache state, which two reads may legitimately differ on."""
+    return {key: value for key, value in data.items() if key != "freshness"}
 
 
 def _json_stdout(result: Result) -> dict[str, Any]:
@@ -221,9 +226,23 @@ def test_compact_truncates_long_strings_and_never_grows_the_payload(binary: str,
     full = run(binary, "doctor")
     compact = run_raw(binary, "--compact", "--compact-max-chars", str(COMPACT_MAX_CHARS), "doctor")
     payload = _json_stdout(compact)
-    assert len(compact.stdout) <= len(full.stdout), compact.describe()
-    too_long = [text for text in _strings(payload) if len(text) > COMPACT_MAX_CHARS]
+    compact_strings = _strings(payload)
+    too_long = [text for text in compact_strings if len(text) > COMPACT_MAX_CHARS]
     assert not too_long, f"{binary} --compact left strings longer than {COMPACT_MAX_CHARS}: {too_long[:3]}"
+
+    # "No string is too long" also holds when --compact is ignored on a doctor that has no long
+    # string, so the flag only counts as exercised when something was actually cut: the payload
+    # shrinks and the cut strings say so with an ellipsis.
+    full_strings = _strings(full.payload)
+    over_limit = [text for text in full_strings if len(text) > COMPACT_MAX_CHARS]
+    if over_limit:
+        assert len(compact.stdout) < len(full.stdout), compact.describe()
+        assert any(text.endswith("...") for text in compact_strings), compact.describe()
+    else:
+        # Nothing was long enough to cut, so --compact must have cut nothing.
+        assert [text for text in compact_strings if text.endswith("...")] == [
+            text for text in full_strings if text.endswith("...")
+        ], compact.describe()
 
 
 @pytest.mark.parametrize("binary", BINARIES)
@@ -244,9 +263,11 @@ def test_pretty_and_the_human_profile_produce_readable_json(binary: str, require
 
 @pytest.mark.parametrize("binary", BINARIES)
 def test_global_flags_only_bind_before_the_subcommand(binary: str) -> None:
-    result = run_raw(binary, "doctor", "--pretty")
-    assert result.exit_code == EXIT_USAGE, result.describe()
-    assert "Traceback" not in result.stderr, result.describe()
+    # A global flag after the subcommand is rejected like any other unknown option, through the
+    # error contract: `run` proves stdout stays empty and stderr holds exactly one valid envelope.
+    result = run(binary, "doctor", "--pretty", expect=EXIT_USAGE, error_code="invalid_argument")
+    assert "--pretty" in result.payload["error"]["message"], result.describe()
+    assert result.payload["provider"] == _provider(binary), result.describe()
 
 
 @pytest.mark.parametrize("binary", sorted(CACHED_READ))
@@ -260,7 +281,11 @@ def test_a_repeated_read_is_served_from_the_isolated_cache(binary: str, require,
 
     # Behind a dead proxy the command can only succeed if every byte came from the cache.
     second = run(binary, *CACHED_READ[binary], env=dead_proxy_env())
-    assert second.data == first.data
+    # `freshness` is the one block allowed to differ: it reports where the answer came from, and a
+    # provider that has it has to say the second read was a hit. Everything else must be identical.
+    assert _without_freshness(second.data) == _without_freshness(first.data)
+    if "freshness" in second.data:
+        assert second.data["freshness"]["cache_hit"] is True, second.describe()
     # A miss would also rewrite the entry; identical mtimes and sizes mean nothing was re-fetched.
     assert _cache_snapshot(provider_cache) == after_first, second.describe()
 

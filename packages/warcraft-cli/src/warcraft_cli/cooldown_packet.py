@@ -73,9 +73,9 @@ def raw_phase_markers(phases: list[Any]) -> list[dict[str, Any]]:
     return markers
 
 
-def spell_catalog(spell_payload: dict[str, Any]) -> dict[int, dict[str, Any]]:
-    raw_data = spell_payload.get("data")
-    data: dict[str, Any] = as_dict(raw_data)
+def spell_catalog(spell_data: dict[str, Any]) -> dict[int, dict[str, Any]]:
+    """Index a Lorrgs spell map (the ``data`` body of spec-spells/boss-spells) by spell id."""
+    data: dict[str, Any] = as_dict(spell_data)
     catalog: dict[int, dict[str, Any]] = {}
     for key, value in data.items():
         if not isinstance(value, dict):
@@ -252,7 +252,7 @@ def _record_sample_spells(casts: list[dict[str, Any]], frequency: Counter[int], 
 
 
 def top_parse_samples(
-    ranking_payload: dict[str, Any] | None,
+    ranking_data: dict[str, Any] | None,
     *,
     phase: int,
     sample_limit: int,
@@ -260,10 +260,9 @@ def top_parse_samples(
     boss_catalog: dict[int, dict[str, Any]],
     spell_ids: set[int],
 ) -> dict[str, Any]:
-    if ranking_payload is None:
+    if ranking_data is None:
         return {"status": "unavailable", "sample_count": 0, "samples": [], "selected_phase_spell_frequency": []}
-    raw_data = ranking_payload.get("data")
-    data: dict[str, Any] = as_dict(raw_data)
+    data: dict[str, Any] = as_dict(ranking_data)
     reports = _list_or_empty(data.get("reports"))
     samples: list[dict[str, Any]] = []
     frequency: Counter[int] = Counter()

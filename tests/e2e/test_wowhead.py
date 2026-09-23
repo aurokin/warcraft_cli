@@ -107,6 +107,16 @@ def news_listing() -> Result:
 
 
 @pytest.fixture(scope="module")
+def news_scan() -> Result:
+    """Two whole pages of news: the unfiltered baseline every news filter journey compares against.
+
+    Wowhead's listing pages land in the session cache, so the filtered calls below cost no further
+    request and the comparison is exact rather than statistical.
+    """
+    return run(BINARY, "news", "--pages", "2", "--limit", "200")
+
+
+@pytest.fixture(scope="module")
 def blue_listing() -> Result:
     # The whole first page, so the --region journey can compare filtered against unfiltered exactly.
     return run(BINARY, "blue-tracker", "--limit", "200")
@@ -150,16 +160,23 @@ def test_expansions_list_backs_expansion_detect_on_real_urls(require) -> None:
 def test_search_resolve_and_entity_agree_on_thunderfury(require, thunderfury_search: Result) -> None:
     require("wowhead")
     assert_envelope_data_holds(thunderfury_search, "results", "count", "search_url")
-    items = entity_rows(thunderfury_search, "item")
-    assert items, thunderfury_search.describe()
-    assert all(isinstance(row["id"], int) and row["name"] for row in thunderfury_search.data["results"])
+    rows = thunderfury_search.data["results"]
+    assert thunderfury_search.data["count"] == len(rows) > 0, thunderfury_search.describe()
+    assert all(isinstance(row["id"], int) and row["name"] for row in rows)
+    # Several Wowhead items are named after Thunderfury (a replica, a quest copy); the search has to
+    # carry the real one, under its real name.
+    assert [row["name"] for row in entity_rows(thunderfury_search, "item") if row["id"] == pins.ITEM_ID] == [
+        pins.ITEM_NAME
+    ], thunderfury_search.describe()
 
     resolved = run(BINARY, "resolve", pins.ITEM_SEARCH_QUERY, "--entity-type", "item", "--limit", "3")
     assert_envelope_data_holds(resolved, "match", "candidates")
     match = resolved.data["match"]
     assert isinstance(match, dict), f"resolve found no item\n{resolved.describe()}"
     assert match["entity_type"] == "item", resolved.describe()
-    assert match["id"] in {row["id"] for row in items}, resolved.describe()
+    # Not "some item the search also returned": the query names one item and resolve must pick it.
+    assert (match["id"], match["name"]) == (pins.ITEM_ID, pins.ITEM_NAME), resolved.describe()
+    assert resolved.data["confidence"] == "high", resolved.describe()
     assert resolved.data["filters"]["entity_types"] == ["item"], resolved.describe()
 
     entity = run(BINARY, "entity", "item", str(pins.ITEM_ID))
@@ -203,6 +220,10 @@ def test_suggestion_type_ids_label_rows_the_way_wowhead_does(require) -> None:
             expected = SUGGESTION_TYPE_NAMES.get(str(row["type_name"]).lower())
             if expected is None:
                 # A type this CLI does not map (Storyline, Transmog Set, ...): it must not guess one.
+                assert row["entity_type"] is None, (
+                    f"a {row['type_name']!r} row (type id {row['type_id']}) was labelled "
+                    f"{row['entity_type']!r}\n{found.describe()}"
+                )
                 continue
             assert row["entity_type"] == expected, (
                 f"type id {row['type_id']} labelled {row['entity_type']!r} for a {row['type_name']!r} row\n{found.describe()}"
@@ -262,7 +283,7 @@ def test_search_stream_emits_one_jsonl_record_per_result(require) -> None:
 
 def test_discovered_npc_spell_and_quest_each_fetch_as_an_entity(require) -> None:
     require("wowhead")
-    discovered: dict[str, int] = {}
+    discovered: dict[str, dict[str, Any]] = {}
     for entity_type, query in (
         ("npc", pins.NPC_SEARCH_QUERY),
         ("spell", pins.SPELL_SEARCH_QUERY),
@@ -271,19 +292,20 @@ def test_discovered_npc_spell_and_quest_each_fetch_as_an_entity(require) -> None
         found = run(BINARY, "search", query, "--limit", "10")
         rows = entity_rows(found, entity_type)
         assert rows, f"no {entity_type} in search {query!r}\n{found.describe()}"
-        discovered[entity_type] = rows[0]["id"]
+        discovered[entity_type] = rows[0]
         assert rows[0]["url"] == f"https://www.wowhead.com/{entity_type}={rows[0]['id']}", found.describe()
 
-    for entity_type, entity_id in discovered.items():
+    for entity_type, row in discovered.items():
         entity = run(
-            BINARY, "entity", entity_type, str(entity_id),
+            BINARY, "entity", entity_type, str(row["id"]),
             "--no-include-comments", "--linked-entity-preview-limit", "0",
         )
         assert_envelope_data_holds(entity, "entity", "tooltip")
         assert entity.data["entity"]["type"] == entity_type, entity.describe()
-        assert entity.data["entity"]["id"] == entity_id, entity.describe()
-        assert entity.data["entity"]["name"], entity.describe()
-        assert entity.data["tooltip"]["text"], entity.describe()
+        assert entity.data["entity"]["id"] == row["id"], entity.describe()
+        # The id came off that search row, so the page it opens must be the thing the row named.
+        assert entity.data["entity"]["name"] == row["name"], entity.describe()
+        assert row["name"] in entity.data["tooltip"]["text"], entity.describe()
 
 
 def test_comments_rank_stream_and_match_the_entity_preview(require) -> None:
@@ -355,6 +377,11 @@ def test_comment_filters_keep_exactly_the_rows_that_pass_them(require) -> None:
 
 
 def test_compare_diffs_two_legendary_items_field_by_field(require) -> None:
+    """Two Molten Core legendaries: the field diff, and both link caps cutting lists that are long enough to cut.
+
+    ``--max-links-per-entity`` has to be wide enough that the two pages actually share links, or
+    every shared-link assertion below holds at zero whether or not the cap is wired up.
+    """
     require("wowhead")
     other = run(BINARY, "resolve", "sulfuras hand of ragnaros", "--entity-type", "item", "--limit", "3")
     assert isinstance(other.data["match"], dict), f"resolve found no item\n{other.describe()}"
@@ -363,7 +390,7 @@ def test_compare_diffs_two_legendary_items_field_by_field(require) -> None:
 
     compared = run(
         BINARY, "compare", f"item:{pins.ITEM_ID}", f"item:{other_id}",
-        "--preset", "gear", "--comment-sample", "0", "--max-links-per-entity", "10",
+        "--preset", "gear", "--comment-sample", "0", "--max-links-per-entity", "200",
     )
     assert_envelope_data_holds(compared, "entities", "comparison", "inputs")
     assert compared.data["inputs"] == [f"item:{pins.ITEM_ID}", f"item:{other_id}"]
@@ -376,24 +403,27 @@ def test_compare_diffs_two_legendary_items_field_by_field(require) -> None:
     assert name_field["all_equal"] is False, compared.describe()
     assert name_field["values"][f"item:{pins.ITEM_ID}"] == pins.ITEM_NAME, compared.describe()
     links = compared.data["comparison"]["linked_entities"]
-    assert links["shared_count_total"] >= links["shared_count_returned"] >= 0, compared.describe()
+    assert links["shared_count_returned"] == len(links["shared_items"]) == links["shared_count_total"] > 1, (
+        f"the uncapped comparison must return every shared link, and there must be more than one to cap\n"
+        f"{compared.describe()}"
+    )
+    assert all(links["unique_count_total_by_entity"][ref] > 1 for ref in links["unique_by_entity"]), (
+        f"an item had at most one unique link, so --max-unique-links would cap nothing\n{compared.describe()}"
+    )
 
     # The link caps must cut the same lists down, not return a different set of links.
     capped = run(
         BINARY, "compare", f"item:{pins.ITEM_ID}", f"item:{other_id}",
-        "--preset", "gear", "--comment-sample", "0", "--max-links-per-entity", "10",
+        "--preset", "gear", "--comment-sample", "0", "--max-links-per-entity", "200",
         "--max-shared-links", "1", "--max-unique-links", "1",
     )
     capped_links = capped.data["comparison"]["linked_entities"]
     assert capped_links["shared_count_total"] == links["shared_count_total"], "a cap changed the totals it only reports"
     assert capped_links["shared_items"] == links["shared_items"][:1], capped.describe()
-    assert capped_links["shared_count_returned"] == min(1, links["shared_count_total"]), capped.describe()
+    assert capped_links["shared_count_returned"] == 1, capped.describe()
     for ref, unique in capped_links["unique_by_entity"].items():
         assert unique == links["unique_by_entity"][ref][:1], capped.describe()
         assert capped_links["unique_count_total_by_entity"][ref] == links["unique_count_total_by_entity"][ref]
-    assert any(links["unique_count_total_by_entity"][ref] > 1 for ref in capped_links["unique_by_entity"]), (
-        f"neither item had more than one unique link, so --max-unique-links capped nothing\n{compared.describe()}"
-    )
 
 
 def test_linked_graph_walks_out_from_thunderfury(require) -> None:
@@ -421,6 +451,7 @@ def test_guide_listing_leads_to_one_guide_and_its_full_hydration(
     rows = class_guides.data["results"]
     assert 0 < len(rows) <= 5, class_guides.describe()
     updated = [row["last_updated"] for row in rows if isinstance(row.get("last_updated"), str)]
+    assert len(updated) == len(rows), f"a listing row carries no last_updated, so --sort updated proves nothing\n{class_guides.describe()}"
     assert updated == sorted(updated, reverse=True), "--sort updated did not sort"
     assert all(row["url"].startswith("https://www.wowhead.com/guide/") for row in rows)
     assert class_guides.data["facets"]["authors"], class_guides.describe()
@@ -430,7 +461,9 @@ def test_guide_listing_leads_to_one_guide_and_its_full_hydration(
     assert summary.data["guide"]["id"] == guide_id, summary.describe()
     assert summary.data["page"]["title"], summary.describe()
     assert summary.data["citations"]["page"] == summary.data["guide"]["page_url"], summary.describe()
-    assert len(summary.data["linked_entities"]["items"]) <= 3, summary.describe()
+    # `count` is what the page links, `items` is the preview: the flag caps the preview alone.
+    preview = summary.data["linked_entities"]
+    assert len(preview["items"]) == min(3, preview["count"]) > 0, summary.describe()
 
     full = run(BINARY, "guide-full", str(guide_id), "--max-links", "25")
     assert_envelope_data_holds(full, "guide", "body", "linked_entities")
@@ -537,15 +570,19 @@ def test_news_listing_leads_to_one_news_post(require, news_listing: Result) -> N
     post = run(BINARY, "news-post", rows[0]["url"], "--related-limit", "2")
     assert_envelope_data_holds(post, "post", "content", "citations")
     assert post.data["post"]["page_url"] == rows[0]["url"], post.describe()
-    assert post.data["post"]["title"], post.describe()
+    # The URL is an echo of the input; the title is the only field that proves which post was read.
+    assert post.data["post"]["title"] == rows[0]["title"], "news-post read a different post than the listing row"
     assert post.data["content"]["text"].strip(), "news-post returned an empty body"
     assert post.data["content"]["section_count"] == len(post.data["content"]["sections"])
     assert post.data["citations"]["page"] == post.data["post"]["page_url"], post.describe()
-    for bucket in post.data["related"].values():
-        assert len(bucket["items"]) <= 2, post.describe()
+    for name, bucket in post.data["related"].items():
+        assert bucket["count"] == len(bucket["items"]) == min(2, bucket["total"]) > 0, f"{name}\n{post.describe()}"
+        assert bucket["truncated"] is (bucket["total"] > 2), f"{name}\n{post.describe()}"
 
 
-def test_news_date_window_returns_the_posts_inside_it_and_says_what_it_could_not_read(require) -> None:
+def test_news_date_window_returns_the_posts_inside_it_and_says_what_it_could_not_read(
+    require, news_scan: Result
+) -> None:
     """``--date-from``/``--date-to`` must select on Wowhead's rendered timestamps, not silently drop everything.
 
     Wowhead renders ``2026/09/18 at 6:05 PM`` rather than an ISO timestamp; when that parse broke,
@@ -553,7 +590,7 @@ def test_news_date_window_returns_the_posts_inside_it_and_says_what_it_could_not
     unfiltered scan, so this compares the same two pages against themselves.
     """
     require("wowhead")
-    baseline = run(BINARY, "news", "--pages", "2", "--limit", "200")
+    baseline = news_scan
     assert baseline.data["truncated"] is False, f"raise --limit; the baseline must hold every post\n{baseline.describe()}"
     assert baseline.data["scan"]["unparsed_timestamps"] == 0, (
         f"Wowhead's listing timestamps stopped parsing\n{baseline.describe()}"
@@ -572,6 +609,43 @@ def test_news_date_window_returns_the_posts_inside_it_and_says_what_it_could_not
     oldest = run(BINARY, "news", "--pages", "2", "--limit", "200", "--date-to", days[0])
     assert {row["id"] for row in oldest.data["results"]} == {row["id"] for row in rows if row["posted_at"][:10] <= days[0]}
     assert 0 < oldest.data["count"] < len(rows), "--date-to returned the whole scan"
+
+
+def test_listing_field_filters_keep_exactly_the_rows_that_carry_that_value(
+    require, news_scan: Result, blue_listing: Result
+) -> None:
+    """``--type``/``--author`` select on the listing field, exactly, over the rows already scanned.
+
+    Both filters are exact case-insensitive matches on a field the unfiltered listing reports, so
+    the expected row set is computable: each filtered call must return that set and nothing else.
+    The filter value is taken from the baseline's own facets, which is what makes the bound bite —
+    a facet with more than one value cannot select every row.
+    """
+    require("wowhead")
+    news_rows = news_scan.data["results"]
+    news_types = news_scan.data["facets"]["types"]
+    assert len(news_types) > 1, f"the scanned news window carried one type, so --type filters nothing\n{news_scan.describe()}"
+    typed = run(BINARY, "news", "--pages", "2", "--limit", "200", "--type", news_types[0])
+    assert typed.data["filters"]["types"] == [news_types[0].lower()], typed.describe()
+    assert [row["id"] for row in typed.data["results"]] == [row["id"] for row in news_rows if row["type_name"] == news_types[0]]
+    assert 0 < typed.data["count"] < len(news_rows), "--type returned the whole scan"
+
+    news_authors = news_scan.data["facets"]["authors"]
+    assert len(news_authors) > 1, f"the scanned news window has one author\n{news_scan.describe()}"
+    by_author = run(BINARY, "news", "--pages", "2", "--limit", "200", "--author", news_authors[0])
+    assert by_author.data["filters"]["authors"] == [news_authors[0].lower()], by_author.describe()
+    assert [row["id"] for row in by_author.data["results"]] == [row["id"] for row in news_rows if row["author"] == news_authors[0]]
+    assert 0 < by_author.data["count"] < len(news_rows), "--author returned the whole scan"
+
+    blue_rows = blue_listing.data["results"]
+    blue_authors = blue_listing.data["facets"]["authors"]
+    assert len(blue_authors) > 1, f"the blue-tracker page has one author\n{blue_listing.describe()}"
+    blue_filtered = run(BINARY, "blue-tracker", "--limit", "200", "--author", blue_authors[0])
+    assert blue_filtered.data["filters"]["authors"] == [blue_authors[0].lower()], blue_filtered.describe()
+    assert {row["id"] for row in blue_filtered.data["results"]} == {
+        row["id"] for row in blue_rows if row["author"] == blue_authors[0]
+    }
+    assert 0 < blue_filtered.data["count"] < len(blue_rows), "--author returned the whole listing"
 
 
 def test_blue_tracker_listing_leads_to_one_blue_topic(require, blue_listing: Result) -> None:
@@ -640,20 +714,29 @@ def test_talent_calculator_build_decodes_into_a_transport_packet(require, out_di
 
 
 def test_profession_dressing_room_and_profiler_refs_normalize_and_cite(require) -> None:
+    """The three inspectors normalize their opaque ref and read the page that ref belongs to.
+
+    Everything but the page block is derived from the input, so each journey also pins what the
+    fetched page says it is: its canonical URL and a word from its own title. Wowhead answers an
+    unknown tool route with the site shell, which those two assertions are what reject.
+    """
     require("wowhead")
     profession = run(BINARY, "profession-tree", PROFESSION_TREE_REF)
     assert_envelope_data_holds(profession, "tool", "page", "citations")
     assert profession.data["tool"]["profession_slug"] == "alchemy", profession.describe()
     assert profession.data["tool"]["loadout_code"] == "BCuA", profession.describe()
     assert profession.data["tool"]["state_url"].endswith(PROFESSION_TREE_REF), profession.describe()
-    assert profession.data["page"]["title"], profession.describe()
+    assert profession.data["page"]["canonical_url"] == profession.data["tool"]["page_url"], profession.describe()
+    profession_title = profession.data["page"]["title"].lower()
+    assert "alchemy" in profession_title and "profession tree" in profession_title, profession.describe()
 
     dressing = run(BINARY, "dressing-room", DRESSING_ROOM_REF)
     assert_envelope_data_holds(dressing, "tool", "page")
     assert dressing.data["tool"]["has_share_hash"] is True, dressing.describe()
     assert dressing.data["tool"]["share_hash"] == DRESSING_ROOM_REF.lstrip("#"), dressing.describe()
     assert dressing.data["tool"]["state_url"] == f"https://www.wowhead.com/dressing-room{DRESSING_ROOM_REF}"
-    assert dressing.data["page"]["title"], dressing.describe()
+    assert dressing.data["page"]["canonical_url"] == dressing.data["tool"]["page_url"], dressing.describe()
+    assert "dressing room" in dressing.data["page"]["title"].lower(), dressing.describe()
 
     profiler = run(BINARY, "profiler", PROFILER_REF)
     assert_envelope_data_holds(profiler, "tool", "page")
@@ -661,7 +744,8 @@ def test_profession_dressing_room_and_profiler_refs_normalize_and_cite(require) 
     assert profiler.data["tool"]["region_slug"] == pins.REGION, profiler.describe()
     assert profiler.data["tool"]["realm_slug"] == pins.REALM_SLUG, profiler.describe()
     assert profiler.data["tool"]["state_url"] == f"https://www.wowhead.com/list?list={PROFILER_REF}"
-    assert profiler.data["page"]["title"], profiler.describe()
+    assert profiler.data["page"]["canonical_url"] == profiler.data["tool"]["page_url"], profiler.describe()
+    assert "profiler" in profiler.data["page"]["title"].lower(), profiler.describe()
 
 
 def test_global_output_flags_reshape_the_same_entity_payload(require) -> None:

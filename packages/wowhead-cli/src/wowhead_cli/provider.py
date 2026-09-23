@@ -28,11 +28,12 @@ from wowhead_cli.ranking import (
     command_prefix_for_expansion,
     normalize_resolve_entity_types,
     normalize_search_results,
-    partition_entity_candidates,
+    preferred_resolve_candidates,
     resolve_confidence,
     resolve_next_command,
     search_query_for_ranking,
     search_ranking_query,
+    upstream_database_ranks,
 )
 from wowhead_cli.wowhead_client import WowheadClient, search_url
 
@@ -125,7 +126,15 @@ def _validated_query(raw: str) -> str:
     return query
 
 
-def _suggestion_results(client: WowheadClient, search_query: str) -> list[Any]:
+def _ranked_suggestions(
+    client: WowheadClient,
+    search_query: str,
+    *,
+    query: str,
+    profile: ExpansionProfile,
+    entity_types: tuple[str, ...] = (),
+) -> list[dict[str, Any]]:
+    """Fetch Wowhead's suggestions for `search_query` and rank them against the caller's `query`."""
     with transport_errors():
         try:
             response = client.search_suggestions(search_query)
@@ -134,7 +143,13 @@ def _suggestion_results(client: WowheadClient, search_query: str) -> list[Any]:
     results = response.get("results")
     if not isinstance(results, list):
         raise ProviderError("unexpected_response", "Missing or invalid 'results' payload from Wowhead.")
-    return results
+    return normalize_search_results(
+        results,
+        query=query,
+        expansion=profile,
+        entity_types=entity_types,
+        database_ranks=upstream_database_ranks(response),
+    )
 
 
 def search(query: str, *, limit: int = 10, expansion: str | None = None, **options: Any) -> Envelope:
@@ -145,8 +160,7 @@ def search(query: str, *, limit: int = 10, expansion: str | None = None, **optio
     profile = selection.profile
     search_query = search_query_for_ranking(query)
     client = open_client(profile)
-    results = _suggestion_results(client, search_query)
-    normalized = normalize_search_results(results, query=query, expansion=profile)
+    normalized = _ranked_suggestions(client, search_query, query=query, profile=profile)
     returned = normalized[:limit]
     data: dict[str, Any] = {
         "query": query,
@@ -181,14 +195,18 @@ def resolve(
         raise ProviderError("invalid_argument", str(exc)) from exc
     search_query = search_ranking_query(target)
     client = open_client(profile)
-    results = _suggestion_results(client, search_query)
-    entities, articles = partition_entity_candidates(
-        normalize_search_results(results, query=target, expansion=profile, entity_types=selected_entity_types)
+    answering, trailing = preferred_resolve_candidates(
+        _ranked_suggestions(
+            client,
+            search_query,
+            query=target,
+            profile=profile,
+            entity_types=selected_entity_types,
+        )
     )
-    best = entities or articles
-    confidence = resolve_confidence(best, entity_types=selected_entity_types)
-    top_candidate = best[0] if best else None
-    candidates = entities + articles
+    confidence = resolve_confidence(answering, entity_types=selected_entity_types)
+    top_candidate = answering[0] if answering else None
+    candidates = answering + trailing
     returned = candidates[:limit]
     next_command = resolve_next_command(top_candidate) if top_candidate is not None and confidence == "high" else None
     search_command = f"{command_prefix_for_expansion(profile)} search {shlex.quote(target)}"

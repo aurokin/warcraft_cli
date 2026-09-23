@@ -40,9 +40,13 @@
   raise `--limit` when `truncated` is true
 - `resolve` drops to medium confidence with no `next_command` when its best guide match is far
   older than the other guides in the same response; run the `fallback_search_command` instead
+- `search` and `resolve` rank on Wowhead's own database ordering first, so the entity a query names
+  leads the proc spells and secondary rows that share its name; `ranking.match_reasons` carries
+  `upstream_database_rank` on the rows that ordering promoted
 - `resolve` answers with a database entity: news posts and world events sit behind every entity in
-  `candidates` and only become the `match` when the response holds no entity at all; use `search`
-  when you want the news coverage ranked on its own merits
+  `candidates` and become the `match` only when the response holds no entity, or when the article
+  outscores the best entity by a wide margin (a query that names a headline word for word); use
+  `search` when you want the news coverage ranked on its own merits
 
 ## Boundaries
 
