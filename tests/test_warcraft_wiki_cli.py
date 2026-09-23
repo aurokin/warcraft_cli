@@ -310,6 +310,24 @@ def test_search_keeps_rows_that_only_ride_the_upstream_rank(monkeypatch) -> None
     assert ranking["AddOn loading process"] == (2, ["upstream_rank_9"])
 
 
+def test_search_ranks_the_article_a_qualified_query_names_above_pages_that_mention_it(monkeypatch) -> None:
+    # Captured: MediaWiki ranks "Sha of Anger" fifth for this query, behind pages whose snippets merely
+    # list it ("WoW's 20th Anniversary", "Tap", "Armor set", "Bonus roll"). Every row's snippet carries
+    # all five words, so only the title can tell the subject from a mention of it.
+    transport = _CapturedTransport(_captured("search_world_boss_sha_of_anger.json"))
+    monkeypatch.setattr("warcraft_wiki_cli.client.request_with_retries", transport)
+
+    result = runner.invoke(warcraft_wiki_app, ["search", "world boss sha of anger", "--limit", "2"])
+    assert result.exit_code == 0
+
+    payload = json.loads(result.stdout)["data"]
+    assert [(row["id"], row["ranking"]["score"]) for row in payload["results"]] == [
+        ("Sha of Anger", 38),
+        ("World boss", 28),
+    ]
+    assert "query_contains_title" in payload["results"][0]["ranking"]["match_reasons"]
+
+
 def test_score_wiki_match_caps_the_upstream_rank_baseline() -> None:
     # A row that matches nothing rides MediaWiki's order alone. The cap is pinned to its literal
     # value: it has to stay small enough that no unexplained row can outrank a real title match.

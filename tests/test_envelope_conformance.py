@@ -99,11 +99,13 @@ def test_wrapper_own_commands_return_a_conforming_envelope(tmp_path: Any) -> Non
     assert envelope_violations(payload) == []
     assert payload["provider"] == "warcraft" and payload["command"] == "doctor"
 
+    # A missing bundle is the shared loader's not_found, with the exit code the contract maps it to.
     failure = run_binary("warcraft", ["guide-compare", str(tmp_path / "a"), str(tmp_path / "b")])
-    assert failure.exit_code != 0
+    assert failure.exit_code == 4
     error_payload = json.loads(failure.stderr)
     assert envelope_violations(error_payload) == []
-    assert error_payload["ok"] is False and error_payload["error"]["code"] == "invalid_bundle"
+    assert error_payload["ok"] is False and error_payload["error"]["code"] == "not_found"
+    assert error_payload["kind"] == "error"
 
 
 def _offline_provider_result(provider: str, *args: Any, **kwargs: Any) -> dict[str, Any]:
@@ -173,6 +175,7 @@ def test_wrapper_own_command_envelopes_conform_offline(
     assert payload["ok"] is (result.exit_code == 0)
     assert set(payload) == (REQUIRED_KEYS if payload["ok"] else ENVELOPE_KEYS), f"{command}: keys beyond the envelope"
     if payload["ok"] is False:
+        assert payload["kind"] == "error", f"{command}: a failure envelope's kind is always error"
         assert payload["data"] == {}
         assert set(payload["error"]) <= {"code", "message", "details"}, f"{command}: error keys beyond the contract"
 
@@ -305,7 +308,7 @@ def test_wrapper_own_command_success_envelopes_conform(
     assert envelope_violations(payload) == [], f"{command}: {envelope_violations(payload)}"
     assert payload["ok"] is True
     assert set(payload) == REQUIRED_KEYS, f"{command}: keys beyond the envelope"
-    assert payload["provider"] == ("wowhead" if command == "resolve" else "warcraft")
+    assert payload["provider"] == "warcraft"
     assert payload["command"] == command
     assert payload["data"], f"{command}: a success envelope must carry its payload under data"
 

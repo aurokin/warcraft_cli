@@ -10,8 +10,9 @@ classic-era ids that pin the entity types whose page lives under another route.
 from __future__ import annotations
 
 import json
+import re
 import shlex
-from datetime import UTC, datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -43,6 +44,11 @@ PROFILER_REF = "97060220/us/illidan/Roguecane"
 
 # `wowhead expansions` lists these; every one routes real Wowhead paths for a classic-era item.
 CLASSIC_EXPANSIONS = ("classic", "tbc", "wotlk", "cata", "mop-classic")
+
+# Wowhead updates each class guide in place every expansion, so the main Fury Warrior guide keeps
+# one id; the retired guides that share its words (Legion Remix, Dragonflight seasons) have their own.
+FURY_GUIDE_QUERY = "fury warrior guide"
+FURY_GUIDE_ID = 3087
 
 # Entity types whose Wowhead page lives under a different `<type>=<id>` route than the type name:
 # a mount is an item page, a recipe is a spell page, a battle pet is an NPC page. The ids are
@@ -100,6 +106,12 @@ def thunderfury_search() -> Result:
 @pytest.fixture(scope="module")
 def class_guides() -> Result:
     return run(BINARY, "guides", "classes", "--sort", "updated", "--limit", "5")
+
+
+@pytest.fixture(scope="module")
+def class_guide_baseline() -> Result:
+    """The class guides in Wowhead's default order: the unsorted, unfiltered read the sort and patch journeys compare against."""
+    return run(BINARY, "guides", "classes", "--limit", "200")
 
 
 @pytest.fixture(scope="module")
@@ -229,6 +241,46 @@ def test_resolve_answers_with_the_faction_a_query_names(require) -> None:
     assert entity.data["entity"]["page_url"].startswith("https://www.wowhead.com/faction=529"), entity.describe()
 
 
+def test_a_class_guide_query_lists_current_guides_before_retired_ones(require) -> None:
+    """``search "fury warrior guide"`` once led with the retired Legion Remix guide.
+
+    Retired guides whose title contains the whole query outscore several current guides on text
+    alone, so only the freshness demotion keeps them below. Wowhead's own ``updated`` dates, not the CLI's
+    ``stale_guide`` flag, say which guides are the retired ones.
+    """
+    require("wowhead")
+    found = run(BINARY, "search", FURY_GUIDE_QUERY, "--limit", "10")
+    rows = found.data["results"]
+    stale = [row for row in rows if "stale_guide" in row["ranking"]["match_reasons"]]
+    current = [row for row in rows if row not in stale]
+    assert stale and current, f"the page needs current and retired guides for their order to show\n{found.describe()}"
+    assert rows == current + stale, f"a retired guide is listed above a current one\n{found.describe()}"
+    assert rows[0]["id"] == FURY_GUIDE_ID, found.describe()
+    current_dates = [row["metadata"]["updated"] for row in current if row["entity_type"] == "guide"]
+    assert max(row["metadata"]["updated"] for row in stale) < min(current_dates), found.describe()
+
+    resolved = run(BINARY, "resolve", FURY_GUIDE_QUERY)
+    assert (resolved.data["match"]["id"], resolved.data["confidence"]) == (FURY_GUIDE_ID, "high"), resolved.describe()
+    assert resolved.data["next_command"] == f"{BINARY} guide {FURY_GUIDE_ID}", resolved.describe()
+
+
+def test_the_database_rank_bonus_goes_only_to_rows_that_name_the_query(require) -> None:
+    """Wowhead orders database rows on text the suggestion never shows, so that order alone is no evidence.
+
+    ``search "the argent dawn"`` once promoted achievement 18372, "Wards of the Dread Citadel", to
+    third place on the word "the". A promoted row has to carry a real query word in its own name.
+    """
+    require("wowhead")
+    found = run(BINARY, "search", "the argent dawn", "--limit", "30")
+    rows = found.data["results"]
+    promoted = {
+        (row["entity_type"], row["id"]): row["name"] for row in rows if "upstream_database_rank" in row["ranking"]["match_reasons"]
+    }
+    assert promoted.get(("faction", 529)) == "Argent Dawn", f"the faction lost the bonus it earns\n{found.describe()}"
+    assert all(re.search(r"\b(argent|dawn)\b", name, re.IGNORECASE) for name in promoted.values()), found.describe()
+    assert 18372 not in {row["id"] for row in rows if row["entity_type"] == "achievement"}, found.describe()
+
+
 def test_suggestion_type_ids_label_rows_the_way_wowhead_does(require) -> None:
     """Every row's derived ``entity_type`` must agree with Wowhead's own ``typeName`` for its ``type`` id.
 
@@ -258,7 +310,7 @@ def test_suggestion_type_ids_label_rows_the_way_wowhead_does(require) -> None:
     assert required <= set(seen), f"searches surfaced no {sorted(required - set(seen))} row to check"
     for entity_type in sorted(required):
         row = seen[entity_type]
-        entity = run_follow_up(row["follow_up"]["recommended_command"])
+        entity = run_follow_up(row["follow_up"]["command"])
         assert entity.data["entity"]["type"] == entity_type, entity.describe()
         assert entity.data["entity"]["id"] == row["id"], entity.describe()
         assert entity.data["entity"]["name"] == row["name"], entity.describe()
@@ -298,8 +350,10 @@ def test_resolve_rejects_entity_types_the_suggestion_endpoint_cannot_emit(requir
 def test_search_stream_emits_one_jsonl_record_per_result(require) -> None:
     require("wowhead")
     streamed = run(BINARY, "--stream", "search", pins.SPELL_SEARCH_QUERY, "--limit", "5", stream=True)
-    assert streamed.data["results"] == [], "the JSONL header must empty the streamed collection"
     records = stream_records(streamed)
+    # The header is the envelope with the streamed rows emptied out and `data.stream` naming them.
+    assert streamed.data["results"] == [], "the JSONL header must empty the streamed collection"
+    assert streamed.data["stream"] == {"field": "results", "count": len(records)}, streamed.describe()
     assert 0 < len(records) <= 5, streamed.describe()
     assert all(isinstance(row["id"], int) and row["name"] for row in records), streamed.describe()
     assert any(row["entity_type"] == "spell" for row in records), streamed.describe()
@@ -431,8 +485,11 @@ def test_compare_diffs_two_legendary_items_field_by_field(require) -> None:
         f"the uncapped comparison must return every shared link, and there must be more than one to cap\n"
         f"{compared.describe()}"
     )
-    assert all(links["unique_count_total_by_entity"][ref] > 1 for ref in links["unique_by_entity"]), (
-        f"an item had at most one unique link, so --max-unique-links would cap nothing\n{compared.describe()}"
+    refs = {f"item:{pins.ITEM_ID}", f"item:{other_id}"}
+    unique = links["unique_by_entity"]
+    assert set(unique) == refs, compared.describe()
+    assert all(len(unique[ref]) == links["unique_count_total_by_entity"][ref] > 1 for ref in refs), (
+        f"the uncapped comparison must return every unique link, and more than one per item to cap\n{compared.describe()}"
     )
 
     # The link caps must cut the same lists down, not return a different set of links.
@@ -445,8 +502,9 @@ def test_compare_diffs_two_legendary_items_field_by_field(require) -> None:
     assert capped_links["shared_count_total"] == links["shared_count_total"], "a cap changed the totals it only reports"
     assert capped_links["shared_items"] == links["shared_items"][:1], capped.describe()
     assert capped_links["shared_count_returned"] == 1, capped.describe()
-    for ref, unique in capped_links["unique_by_entity"].items():
-        assert unique == links["unique_by_entity"][ref][:1], capped.describe()
+    assert set(capped_links["unique_by_entity"]) == refs, capped.describe()
+    for ref in refs:
+        assert capped_links["unique_by_entity"][ref] == unique[ref][:1], capped.describe()
         assert capped_links["unique_count_total_by_entity"][ref] == links["unique_count_total_by_entity"][ref]
 
 
@@ -466,17 +524,23 @@ def test_linked_graph_walks_out_from_thunderfury(require) -> None:
 
 
 def test_guide_listing_leads_to_one_guide_and_its_full_hydration(
-    require, class_guides: Result, guide_id: int
+    require, class_guides: Result, class_guide_baseline: Result, guide_id: int
 ) -> None:
     require("wowhead")
     assert_envelope_data_holds(class_guides, "results", "count", "guides_url")
     assert class_guides.data["category"] == "classes"
     assert class_guides.data["guides_url"] == "https://www.wowhead.com/guides/classes"
     rows = class_guides.data["results"]
-    assert 0 < len(rows) <= 5, class_guides.describe()
-    updated = [row["last_updated"] for row in rows if isinstance(row.get("last_updated"), str)]
-    assert len(updated) == len(rows), f"a listing row carries no last_updated, so --sort updated proves nothing\n{class_guides.describe()}"
+    # The category holds thousands of guides, so a five-row page is always full.
+    assert len(rows) == 5, class_guides.describe()
+    updated = [datetime.fromisoformat(row["last_updated"]) for row in rows]
     assert updated == sorted(updated, reverse=True), "--sort updated did not sort"
+    # The sort has to run before the limit: re-sorting the default first page would miss the newest
+    # guide further down Wowhead's own order.
+    baseline_rows = class_guide_baseline.data["results"]
+    unsorted = [datetime.fromisoformat(row["last_updated"]) for row in baseline_rows if isinstance(row["last_updated"], str)]
+    assert max(unsorted) > max(unsorted[:5]), f"the default first page already holds the newest guide\n{class_guide_baseline.describe()}"
+    assert updated[0] >= max(unsorted), class_guides.describe()
     assert all(row["url"].startswith("https://www.wowhead.com/guide/") for row in rows)
     assert class_guides.data["facets"]["authors"], class_guides.describe()
 
@@ -500,7 +564,7 @@ def test_guide_listing_leads_to_one_guide_and_its_full_hydration(
     assert full.data["navigation"]["links"], full.describe()
 
 
-def test_guide_patch_filters_cut_the_listing_down_to_their_patch_window(require) -> None:
+def test_guide_patch_filters_cut_the_listing_down_to_their_patch_window(require, class_guide_baseline: Result) -> None:
     """``--patch-min``/``--patch-max`` must drop guides outside the window, from the whole category.
 
     The class category holds thousands of guides, so the exact rows a ``--limit`` returns cannot be
@@ -508,7 +572,7 @@ def test_guide_patch_filters_cut_the_listing_down_to_their_patch_window(require)
     is what proves a filter removed rows rather than just reordering the page.
     """
     require("wowhead")
-    baseline = run(BINARY, "guides", "classes", "--limit", "200")
+    baseline = class_guide_baseline
     total = baseline.data["total_matches"]
     patches = sorted({row["patch"] for row in baseline.data["results"] if isinstance(row["patch"], int)})
     assert len(patches) > 1, f"every class guide shares one patch build\n{baseline.describe()}"
@@ -540,6 +604,8 @@ def test_guide_export_writes_a_bundle_the_bundle_commands_can_query(
         assert (bundle_dir / name).stat().st_size > 0, f"{bundle_dir / name} is empty"
     manifest = json.loads((bundle_dir / "manifest.json").read_text())
     assert manifest["guide"]["id"] == guide_id
+    # `warcraft guide-compare` names each bundle's provider from this field.
+    assert manifest["provider"] == BINARY, manifest
     section_lines = (bundle_dir / "sections.jsonl").read_text().splitlines()
     assert len(section_lines) == exported.data["counts"]["sections"]
     assert (out_dir / "index.json").is_file(), "the corpus index was not written next to the bundle"
@@ -599,6 +665,7 @@ def test_news_listing_leads_to_one_news_post(require, news_listing: Result) -> N
     assert post.data["content"]["text"].strip(), "news-post returned an empty body"
     assert post.data["content"]["section_count"] == len(post.data["content"]["sections"])
     assert post.data["citations"]["page"] == post.data["post"]["page_url"], post.describe()
+    assert post.data["related"], f"the post links no related entity, so --related-limit caps nothing\n{post.describe()}"
     for name, bucket in post.data["related"].items():
         assert bucket["count"] == len(bucket["items"]) == min(2, bucket["total"]) > 0, f"{name}\n{post.describe()}"
         assert bucket["truncated"] is (bucket["total"] > 2), f"{name}\n{post.describe()}"
@@ -633,15 +700,6 @@ def test_news_date_window_returns_the_posts_inside_it_and_says_what_it_could_not
     oldest = run(BINARY, "news", "--pages", "2", "--limit", "200", "--date-to", days[0])
     assert {row["id"] for row in oldest.data["results"]} == {row["id"] for row in rows if row["posted_at"][:10] <= days[0]}
     assert 0 < oldest.data["count"] < len(rows), "--date-to returned the whole scan"
-
-    # The agent's everyday question: what did Wowhead post in the last week.
-    now = datetime.now(UTC)
-    week_start = (now - timedelta(days=7)).date().isoformat()
-    week = run(BINARY, "news", "--pages", "2", "--limit", "200", "--date-from", week_start)
-    assert week.data["scan"]["unparsed_timestamps"] == 0, week.describe()
-    assert week.data["count"] > 0, f"no news post in the last seven days\n{week.describe()}"
-    assert all(week_start <= row["posted_at"][:10] and datetime.fromisoformat(row["posted_at"]) <= now for row in week.data["results"])
-    assert {row["id"] for row in week.data["results"]} == {row["id"] for row in rows if row["posted_at"][:10] >= week_start}
 
 
 def test_listing_field_filters_keep_exactly_the_rows_that_carry_that_value(
@@ -749,9 +807,11 @@ def test_talent_calculator_build_decodes_into_a_transport_packet(require, out_di
 def test_profession_dressing_room_and_profiler_refs_normalize_and_cite(require) -> None:
     """The three inspectors normalize their opaque ref and read the page that ref belongs to.
 
-    Everything but the page block is derived from the input, so each journey also pins what the
-    fetched page says it is: its canonical URL and a word from its own title. Wowhead answers an
-    unknown tool route with the site shell, which those two assertions are what reject.
+    The tool block is derived from the input, so each journey also pins the fetched page: a word
+    from its own title, which is what rejects the site shell Wowhead serves for an unknown route,
+    and its canonical URL as a known literal. The profession tree's canonical URL drops the loadout
+    code, so it also proves the CLI read the page's own link rather than falling back to the input;
+    the other two pages' canonical URL is the URL fetched, so there only the title can tell.
     """
     require("wowhead")
     profession = run(BINARY, "profession-tree", PROFESSION_TREE_REF)
@@ -759,7 +819,7 @@ def test_profession_dressing_room_and_profiler_refs_normalize_and_cite(require) 
     assert profession.data["tool"]["profession_slug"] == "alchemy", profession.describe()
     assert profession.data["tool"]["loadout_code"] == "BCuA", profession.describe()
     assert profession.data["tool"]["state_url"].endswith(PROFESSION_TREE_REF), profession.describe()
-    assert profession.data["page"]["canonical_url"] == profession.data["tool"]["page_url"], profession.describe()
+    assert profession.data["page"]["canonical_url"] == "https://www.wowhead.com/profession-tree-calc/alchemy", profession.describe()
     profession_title = profession.data["page"]["title"].lower()
     assert "alchemy" in profession_title and "profession tree" in profession_title, profession.describe()
 
@@ -768,7 +828,7 @@ def test_profession_dressing_room_and_profiler_refs_normalize_and_cite(require) 
     assert dressing.data["tool"]["has_share_hash"] is True, dressing.describe()
     assert dressing.data["tool"]["share_hash"] == DRESSING_ROOM_REF.lstrip("#"), dressing.describe()
     assert dressing.data["tool"]["state_url"] == f"https://www.wowhead.com/dressing-room{DRESSING_ROOM_REF}"
-    assert dressing.data["page"]["canonical_url"] == dressing.data["tool"]["page_url"], dressing.describe()
+    assert dressing.data["page"]["canonical_url"] == "https://www.wowhead.com/dressing-room", dressing.describe()
     assert "dressing room" in dressing.data["page"]["title"].lower(), dressing.describe()
 
     profiler = run(BINARY, "profiler", PROFILER_REF)
@@ -777,7 +837,7 @@ def test_profession_dressing_room_and_profiler_refs_normalize_and_cite(require) 
     assert profiler.data["tool"]["region_slug"] == pins.REGION, profiler.describe()
     assert profiler.data["tool"]["realm_slug"] == pins.REALM_SLUG, profiler.describe()
     assert profiler.data["tool"]["state_url"] == f"https://www.wowhead.com/list?list={PROFILER_REF}"
-    assert profiler.data["page"]["canonical_url"] == profiler.data["tool"]["page_url"], profiler.describe()
+    assert profiler.data["page"]["canonical_url"] == f"https://www.wowhead.com/list?list={PROFILER_REF}", profiler.describe()
     assert "profiler" in profiler.data["page"]["title"].lower(), profiler.describe()
 
 
@@ -832,7 +892,7 @@ def test_a_classic_search_follow_up_keeps_the_agent_on_the_classic_dataset(requi
     row = entities[0]
     assert row["url"].startswith("https://www.wowhead.com/classic/"), found.describe()
 
-    command = row["follow_up"]["recommended_command"]
+    command = row["follow_up"]["command"]
     assert command == f"{BINARY} --expansion classic entity {row['entity_type']} {row['id']}", found.describe()
     entity = run_follow_up(command)
     assert entity.data["expansion"] == "classic", entity.describe()

@@ -6,16 +6,15 @@ Everything here talks to the real guide sites and the real local SimulationCraft
 
 What a green run proves:
 
-- every provider that exported a bundle contributes at least one explicit build reference, and the
-  packet hands over exactly the unique references on disk (in order, truncation reported);
+- every guide provider resolves the pinned query to its own main guide for the spec and exports it;
+- Method and Icy Veins each contribute at least one explicit build reference (Wowhead's guide export
+  carries none), and the packet hands over exactly the unique references on disk (in order,
+  truncation reported);
 - simc identifies and decodes every handed-off build, with no class or spec supplied, as the class
   and spec the guide is for: the healer guide the pins name and a damage guide alike;
 - a leg simc cannot run is reported with its own error code per build, and the summary status
   names the empty leg instead of reading as ``ok``;
 - describe-build succeeds against the spec's own APL.
-
-Wowhead's guide candidate for the pinned query does not clear the wrapper's selection rule, so the
-comparison is between Method and Icy Veins, and the journeys pin that outcome.
 """
 
 from __future__ import annotations
@@ -27,12 +26,14 @@ from typing import Any
 
 import pytest
 
-from tests.e2e.harness import EXIT_GENERIC, Result, run
+from tests.e2e.harness import EXIT_GENERIC, EXIT_NOT_FOUND, EXIT_USAGE, Result, run
 from tests.e2e.pins import GUIDE_CLASS, GUIDE_QUERY, GUIDE_SPEC
 
 GUIDE_PROVIDERS = ("wowhead", "method", "icy-veins")
-# The providers whose guide for the pinned query clears the wrapper's selection rule.
-EXPORTING_PROVIDERS = {"method", "icy-veins"}
+# Each provider's main guide for the pinned query: the one guide-compare-query has to select.
+GUIDE_REFS = {"wowhead": "3295", "method": "mistweaver-monk", "icy-veins": "mistweaver-monk-pve-healing-guide"}
+# Method and Icy Veins export article bundles with build references; a Wowhead guide export has none.
+BUILD_REFERENCE_PROVIDERS = {"method", "icy-veins"}
 BUNDLE_FILES = ("manifest.json", "guide.json", "pages.jsonl", "sections.jsonl", "build-references.jsonl")
 # Every page a bundle cites must come from that provider's own site.
 PROVIDER_HOSTS = {"wowhead": "wowhead.com", "method": "method.gg", "icy-veins": "icy-veins.com"}
@@ -45,6 +46,8 @@ DPS_CLASS = "warrior"
 DPS_SPEC = "fury"
 # The mistweaver handoff with the pinned monk APL: identify and decode succeed, describe cannot.
 HEALER_LEGS = {"identify": True, "decode": True, "describe": False}
+# Every monk hero tree, so a label naming a tree none of the codes decode to is still caught.
+MONK_HERO_TREES = ("Master of Harmony", "Conduit of the Celestials", "Shado-Pan")
 
 
 @dataclass(frozen=True)
@@ -55,6 +58,9 @@ class Orchestration:
     payload: dict[str, Any]
     bundle_paths: tuple[Path, ...]
     providers: tuple[str, ...]
+
+    def bundle(self, provider: str) -> Path:
+        return self.bundle_paths[self.providers.index(provider)]
 
 
 def _default_apls(actor_class: str) -> list[Path]:
@@ -101,21 +107,30 @@ def _bundle_rows(bundle_path: Path, name: str) -> list[dict[str, Any]]:
     return [json.loads(line) for line in (bundle_path / name).read_text().splitlines() if line.strip()]
 
 
+def _manifest(bundle_path: Path) -> dict[str, Any]:
+    manifest: dict[str, Any] = json.loads((bundle_path / "manifest.json").read_text())
+    return manifest
+
+
 def _assert_bundle_on_disk(bundle_path: Path) -> None:
     """The exported bundle is complete, self-describing, and cited from its own provider's site."""
-    assert bundle_path.is_dir(), f"{bundle_path} is not a bundle directory"
-    for name in BUNDLE_FILES:
-        assert (bundle_path / name).is_file(), f"{bundle_path} is missing {name}"
-    manifest = json.loads((bundle_path / "manifest.json").read_text())
+    manifest = _manifest(bundle_path)
     provider = manifest["provider"]
     host = PROVIDER_HOSTS[provider]
+    assert manifest["exported_at"], bundle_path
+    assert manifest["counts"]["sections"] == len(_bundle_rows(bundle_path, "sections.jsonl")) > 0, bundle_path
+    if provider == "wowhead":
+        # A Wowhead guide export is one guide page and its sections, with no build references.
+        assert host in manifest["page"]["canonical_url"], json.dumps(manifest["page"])
+        return
+    for name in BUNDLE_FILES:
+        assert (bundle_path / name).is_file(), f"{bundle_path} is missing {name}"
 
     pages = _bundle_rows(bundle_path, "pages.jsonl")
     assert pages, f"{bundle_path} exported no pages"
     assert all(host in page["page_url"] for page in pages), json.dumps(pages[:2])[:400]
     assert manifest["counts"]["pages"] == len(pages), f"{bundle_path} manifest miscounts pages"
     assert len(list((bundle_path / "pages").glob("*.html"))) == len(pages), "one raw page per row"
-    assert manifest["counts"]["sections"] == len(_bundle_rows(bundle_path, "sections.jsonl"))
 
     references = _bundle_rows(bundle_path, "build-references.jsonl")
     assert references, f"{provider} exported a guide with no explicit build reference"
@@ -127,8 +142,15 @@ def _assert_bundle_on_disk(bundle_path: Path) -> None:
 
 
 def _disk_reference_urls(bundle_paths: tuple[Path, ...]) -> list[str]:
-    """The unique build-reference URLs across the bundles on disk, in URL order."""
-    return sorted({row["url"] for path in bundle_paths for row in _bundle_rows(path, "build-references.jsonl")})
+    """The unique build-reference URLs across the bundles on disk, in URL order (Wowhead exports have none)."""
+    return sorted(
+        {
+            row["url"]
+            for path in bundle_paths
+            if _manifest(path)["provider"] in BUILD_REFERENCE_PROVIDERS
+            for row in _bundle_rows(path, "build-references.jsonl")
+        }
+    )
 
 
 def _assert_build_row(build: dict[str, Any], *, providers: set[str], bundle_paths: set[str]) -> None:
@@ -262,21 +284,15 @@ def test_guide_compare_query_exports_bundles_and_compares_them(require, orchestr
     assert payload["max_age_hours"] == 24
 
     results = {row["provider"]: row for row in payload["provider_results"]}
-    assert set(results) == set(GUIDE_PROVIDERS)
-    exported = {provider for provider, row in results.items() if row["status"] == "exported"}
-    assert exported == EXPORTING_PROVIDERS == set(orchestration.providers), json.dumps(payload["provider_results"])[:800]
-    assert payload["exported_bundle_count"] == len(EXPORTING_PROVIDERS)
-    for provider in EXPORTING_PROVIDERS:
-        row = results[provider]
-        assert PROVIDER_HOSTS[provider] in row["candidate"]["url"], row["candidate"]
-        assert row["candidate"]["selection_source"] in {"resolve", "search"}
-        assert row["exported_at"]
-        assert row["freshness"]["status"] in {"fresh", "stale", "missing"}
+    assert list(results) == list(GUIDE_PROVIDERS) == list(orchestration.providers)
+    assert payload["exported_bundle_count"] == len(GUIDE_PROVIDERS)
+    for provider, row in results.items():
+        assert row["status"] == "exported", json.dumps(row)[:600]
+        candidate = row["candidate"]
+        assert (candidate["ref"], candidate["selection_source"]) == (GUIDE_REFS[provider], "resolve"), json.dumps(candidate)[:400]
+        assert PROVIDER_HOSTS[provider] in candidate["url"], candidate
+        assert row["freshness"]["status"] == "fresh", row["freshness"]
         assert row["export"]["ok"] is True
-    # Wowhead's best guide candidate for the query is too weak to select, and it has to say so.
-    wowhead = results["wowhead"]
-    assert wowhead["status"] == "skipped", json.dumps(wowhead)[:400]
-    assert wowhead["reason"].startswith("search_top_guide_score_too_low:"), json.dumps(wowhead)[:400]
 
     manifest = payload["manifest"]
     assert manifest["kind"] == "guide_compare_orchestration_manifest"
@@ -291,7 +307,11 @@ def test_guide_compare_query_exports_bundles_and_compares_them(require, orchestr
 
     comparison = payload["comparison"]
     assert comparison["compared_bundle_count"] == payload["exported_bundle_count"]
-    assert {Path(row["path"]) for row in comparison["bundles"]} == set(orchestration.bundle_paths)
+    assert [(row["provider"], Path(row["path"])) for row in comparison["bundles"]] == list(
+        zip(orchestration.providers, orchestration.bundle_paths, strict=True)
+    )
+    for row in comparison["bundles"]:
+        assert row["title"] and row["counts"]["sections"] > 0, json.dumps(row)[:400]
     assert comparison["section_evidence"]["count"] > 0
     assert payload["simc_build_handoff"] is None
 
@@ -326,7 +346,7 @@ def test_guide_compare_query_reuses_fresh_bundles_until_force_refresh(require, o
 
 def test_guide_compare_reads_two_exported_bundles(require, orchestration: Orchestration) -> None:
     require("wowhead", "method", "icy-veins")
-    left, right = orchestration.bundle_paths[0], orchestration.bundle_paths[1]
+    left, right = orchestration.bundle("method"), orchestration.bundle("icy-veins")
     result = run("warcraft", "guide-compare", str(left), str(right), timeout=300)
     data = result.data
     assert data["compared_bundle_count"] == 2
@@ -357,17 +377,22 @@ def test_guide_compare_reads_two_exported_bundles(require, orchestration: Orches
     assert data["comparison_evidence"]
 
 
-def test_guide_compare_rejects_a_directory_that_is_not_a_bundle(require, orchestration: Orchestration, out_dir: Path) -> None:
-    require("wowhead", "method", "icy-veins")
-    result = run(
-        "warcraft",
-        "guide-compare",
-        str(out_dir),
-        str(orchestration.bundle_paths[0]),
-        expect=EXIT_GENERIC,
-        error_code="invalid_bundle",
-    )
-    assert "manifest.json" in result.payload["error"]["message"]
+@pytest.mark.parametrize(
+    ("bundles", "exit_code", "error_code"),
+    [
+        (("empty", "empty"), EXIT_GENERIC, "invalid_bundle"),
+        (("missing", "missing"), EXIT_NOT_FOUND, "not_found"),
+        (("empty",), EXIT_USAGE, "invalid_argument"),
+    ],
+)
+def test_guide_compare_rejects_what_it_cannot_compare(out_dir: Path, bundles: tuple[str, ...], exit_code: int, error_code: str) -> None:
+    """A directory with no manifest is not a bundle, a missing path is not found, one bundle is a usage error."""
+    (out_dir / "empty").mkdir()
+    result = run("warcraft", "guide-compare", *(str(out_dir / name) for name in bundles), expect=exit_code, error_code=error_code)
+    assert result.payload["kind"] == "error"
+    assert result.payload["data"] == {}
+    if len(bundles) > 1:
+        assert result.payload["error"]["details"]["bundle"] == str(out_dir / bundles[0]), result.describe()
 
 
 def test_guide_builds_simc_hands_the_orchestration_root_to_simc(
@@ -392,16 +417,16 @@ def test_guide_builds_simc_hands_the_orchestration_root_to_simc(
         decode=True,
     )
     _assert_simc_legs(packet, actor_class=GUIDE_CLASS, spec=GUIDE_SPEC, expected=HEALER_LEGS)
-    # Every exported guide must reach the packet: one provider's extraction rotting away is the
-    # regression that used to hide behind an empty build list.
+    # Every guide that publishes build references must reach the packet: one provider's extraction
+    # rotting away is the regression that used to hide behind an empty build list.
     contributing = {source["provider"] for build in packet["builds"] for source in build["sources"]}
-    assert contributing == set(orchestration.providers), json.dumps(packet["summary"])
+    assert contributing == BUILD_REFERENCE_PROVIDERS, json.dumps(packet["summary"])
 
 
 def test_guide_builds_simc_reports_the_references_it_truncates(require, orchestration: Orchestration) -> None:
     """``--limit`` cuts the reference list, and the packet says so instead of shrinking silently."""
     require("wowhead", "method", "icy-veins", "simc")
-    bundle_path = orchestration.bundle_paths[0]
+    bundle_path = orchestration.bundle("icy-veins")
     assert len(_disk_reference_urls((bundle_path,))) >= 2, "the limit must provably cut something"
     result = run("warcraft", "guide-builds-simc", str(bundle_path), "--no-decode", "--limit", "1", timeout=300)
     packet = result.data
@@ -428,11 +453,10 @@ def test_guide_build_labels_name_the_hero_tree_their_code_decodes_to(require, ha
         (build["simc"]["decode"]["payload"]["data"]["decoded"]["hero_tree"]["name"], build["reference"]["label"])
         for build in handoff.data["builds"]
     ]
-    assert trees and all(name for name, _label in trees), json.dumps(trees)
-    known = {name for name, _label in trees}
+    assert trees and all(name in MONK_HERO_TREES for name, _label in trees), json.dumps(trees)
     assert any(name.lower() in label.lower() for name, label in trees), json.dumps(trees)
     for name, label in trees:
-        mislabelled = [other for other in known - {name} if other.lower() in label.lower()]
+        mislabelled = [other for other in MONK_HERO_TREES if other != name and other.lower() in label.lower()]
         assert not mislabelled, f"{label!r} decodes to {name!r} but names {mislabelled}"
 
 
@@ -448,6 +472,7 @@ def test_guide_builds_simc_decodes_and_describes_a_damage_guide(require, out_dir
     packet = result.data
     assert packet["source"]["kind"] == "bundle"
     _assert_handoff_packet(packet, result.payload["provenance"], bundle_paths=(bundle_path,), apl_path=apl_path, decode=True)
+    assert packet["summary"]["decode_success_count"] >= 1, json.dumps(packet["summary"])
     _assert_simc_legs(
         packet, actor_class=DPS_CLASS, spec=DPS_SPEC, expected={"identify": True, "decode": True, "describe": True}
     )
@@ -504,10 +529,10 @@ def test_guide_compare_query_refuses_to_compare_fewer_than_two_guides(require, o
         error_code="insufficient_guides",
         timeout=300,
     )
-    assert result.payload["kind"] == "guide_bundle_comparison_orchestration"
+    assert result.payload["kind"] == "error"
+    assert result.payload["data"] == {}
     # An agent has to be able to see which provider declined and why.
-    details = result.data
-    assert result.payload["error"]["details"] == details
+    details = result.payload["error"]["details"]
     assert details["exported_bundle_count"] == 0
     assert details["required_bundle_count"] == 2
     assert details["selected_providers"] == list(GUIDE_PROVIDERS)

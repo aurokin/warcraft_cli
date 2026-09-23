@@ -49,8 +49,11 @@ class TraitTable:
     hero_sub_tree_by_entry: dict[int, int] = field(default_factory=dict)
     # (class id, tokenized talent name) -> every entry of that class carrying the name.
     entries_by_name: dict[tuple[int, str], list[int]] = field(default_factory=dict)
-    # The specs that can take an entry. Absent means every spec of its class; spec-tree and hero
-    # entries are always restricted, and so are some class-tree entries (Chi Burst is Brewmaster's).
+    # The specs that can take an entry. Absent means every spec of its class; spec-tree entries are
+    # always restricted, and so are some class-tree entries (Chi Burst is Brewmaster's). A hero entry
+    # takes the specs of its hero tree's selection rows, not its own spec tags, as SimC's
+    # trait_data_t::is_hero_trait_available does: Augmentation's Chronowarden entries are tagged only
+    # for Preservation, yet Augmentation's selection rows offer Chronowarden and Scalecommander.
     spec_ids_by_entry: dict[int, frozenset[int]] = field(default_factory=dict)
     # Every entry of a tiered node, keyed by each of those entries.
     tiered_siblings_by_entry: dict[int, tuple[TieredEntry, ...]] = field(default_factory=dict)
@@ -70,6 +73,10 @@ class TraitTable:
         return next(iter(trees)) if len(trees) == 1 else None
 
 
+class SimcNotReadyError(FileNotFoundError):
+    """The checkout lacks something a build command needs: the built binary or SimC's generated data."""
+
+
 def trait_data_path(repo_root: Path) -> Path:
     return repo_root / "engine" / "dbc" / "generated" / "trait_data.inc"
 
@@ -77,6 +84,7 @@ def trait_data_path(repo_root: Path) -> Path:
 def parse_trait_table(text: str) -> TraitTable:
     table = TraitTable()
     tiered_by_node: dict[int, list[TieredEntry]] = {}
+    specs_by_hero_tree: dict[tuple[int, int], set[int]] = {}
     for match in TRAIT_ROW_RE.finditer(text):
         tree = TREE_NAME_BY_INDEX.get(int(match.group("tree_index")))
         if tree is None:
@@ -89,11 +97,16 @@ def parse_trait_table(text: str) -> TraitTable:
             table.hero_sub_tree_by_entry[entry] = int(match.group("hero_tree_id"))
         table.entries_by_name.setdefault((class_id, tokenize_talent_name(match.group("name"))), []).append(entry)
         spec_ids = frozenset(int(value) for value in match.group("spec_ids").split(",") if int(value))
-        if spec_ids:
+        if tree == "selection":
+            specs_by_hero_tree.setdefault((class_id, int(match.group("hero_tree_id"))), set()).update(spec_ids)
+        elif spec_ids and tree != "hero":
             table.spec_ids_by_entry[entry] = spec_ids
         if int(match.group("node_type")) == NODE_TIERED:
             siblings = tiered_by_node.setdefault(int(match.group("node_id")), [])
             siblings.append(TieredEntry(entry=entry, max_rank=int(match.group("max_rank"))))
+    for entry, sub_tree in table.hero_sub_tree_by_entry.items():
+        specs = specs_by_hero_tree.get((table.class_id_by_entry[entry], sub_tree), set())
+        table.spec_ids_by_entry[entry] = frozenset(specs)
     for siblings in tiered_by_node.values():
         frozen = tuple(siblings)
         for sibling in siblings:
@@ -107,7 +120,7 @@ def load_trait_table(repo_root: Path) -> TraitTable:
     try:
         stat = path.stat()
     except OSError as exc:
-        raise FileNotFoundError(
+        raise SimcNotReadyError(
             f"SimulationCraft trait data not found: {path}. "
             "Talents cannot be attributed to a tree without it."
         ) from exc

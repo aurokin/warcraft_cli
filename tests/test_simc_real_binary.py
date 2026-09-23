@@ -17,7 +17,7 @@ import re
 from dataclasses import dataclass
 
 import pytest
-from simc_cli.build_input import BuildResolution, BuildSpec, SimcBuildError, decode_build
+from simc_cli.build_input import BuildResolution, BuildSpec, SimcBuildError, decode_build, encode_build, tree_entries_string
 from simc_cli.main import app as simc_app
 from simc_cli.repo import RepoPaths, discover_repo
 from simc_cli.trait_data import load_trait_table
@@ -199,6 +199,45 @@ def test_a_tree_swap_round_trips_a_build_that_holds_a_tiered_node(repo: RepoPath
         BuildSpec(actor_class=subject.build_spec.actor_class, spec=subject.build_spec.spec, talents=export),
     )
     assert reencoded.enabled_talents == subject.resolution.enabled_talents
+
+
+@pytest.mark.parametrize("swap", ["--swap-spec-tree-from", "--swap-hero-tree-from"])
+def test_a_tree_swap_round_trips_a_build_with_no_hero_tree_selected(
+    repo: RepoPaths, decoded_profiles: list[_Decoded], swap: str
+) -> None:
+    """SimC's own default talents select no hero tree; such a hash holds only the freely granted keystones.
+
+    A tree swap spelled those keystones out, which made SimC select a hero tree and disable the other
+    keystone, so every swap on such a build failed with `encode_mismatch`.
+    """
+    subject = next(item for item in decoded_profiles if item.resolution is not None)
+    assert subject.resolution is not None
+    actor_class, spec = subject.build_spec.actor_class, subject.build_spec.spec
+    trees = subject.resolution.talents_by_tree
+    no_hero_tree = encode_build(
+        repo,
+        BuildSpec(
+            actor_class=actor_class,
+            spec=spec,
+            class_talents=tree_entries_string(trees["class"]),
+            spec_talents=tree_entries_string(trees["spec"]),
+        ),
+    )
+    base = decode_build(repo, BuildSpec(actor_class=actor_class, spec=spec, talents=no_hero_tree))
+    assert base.hero_tree is None, f"{subject.name} without hero talents still selects a hero tree; this proves nothing"
+
+    result = CliRunner().invoke(
+        simc_app,
+        [
+            "--repo-root", str(repo.root), "modify-build", "--talents", no_hero_tree,
+            "--actor-class", str(actor_class), "--spec", str(spec), swap, no_hero_tree,
+        ],
+    )
+
+    assert result.exit_code == 0, f"{subject.name}: {result.stdout}{result.stderr}"
+    export = json.loads(result.stdout)["data"]["result"]["talents_export"]
+    reencoded = decode_build(repo, BuildSpec(actor_class=actor_class, spec=spec, talents=export))
+    assert reencoded.enabled_talents == base.enabled_talents
 
 
 def test_removing_a_tiered_talent_by_name_removes_every_entry_of_its_node(

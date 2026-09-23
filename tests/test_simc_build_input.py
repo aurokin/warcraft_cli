@@ -39,15 +39,17 @@ CAPTURED_GEARLESS_ACTOR = FIXTURES / "captured_deathknight_blood_no_weapon_debug
 CAPTURED_TWO_HERO_TREES = FIXTURES / "captured_mage_arcane_sunfury_debug.txt"
 # The checkout's trait table, trimmed to the entries the captured debug output mentions.
 CAPTURED_TRAIT_DATA = FIXTURES / "captured_trait_data.inc"
+CAPTURED_SPECIALIZATION_DATA = FIXTURES / "captured_sc_specialization_data.inc"
 
 
 def _repo(tmp_path: Path, *, with_trait_data: bool = False) -> RepoPaths:
-    """A checkout stub whose every directory is ``tmp_path`` and whose binary merely exists."""
+    """A checkout stub whose every directory is ``tmp_path``, with SimC's spec table and a binary that merely exists."""
     binary = tmp_path / "simc"
     binary.write_text("")
+    generated = tmp_path / "engine" / "dbc" / "generated"
+    generated.mkdir(parents=True, exist_ok=True)
+    (generated / "sc_specialization_data.inc").write_text(CAPTURED_SPECIALIZATION_DATA.read_text())
     if with_trait_data:
-        generated = tmp_path / "engine" / "dbc" / "generated"
-        generated.mkdir(parents=True, exist_ok=True)
         (generated / "trait_data.inc").write_text(CAPTURED_TRAIT_DATA.read_text())
     return RepoPaths(
         root=tmp_path,
@@ -898,9 +900,7 @@ def test_decode_build_removes_the_profile_directory_it_wrote(tmp_path: Path) -> 
 def test_identify_build_probes_healer_specs_that_ship_no_apl(tmp_path: Path) -> None:
     """The probe draws on SimC's specialization data, not on APL files, so a healer build identifies."""
     repo = _repo(tmp_path)
-    generated = tmp_path / "engine" / "dbc" / "generated"
-    generated.mkdir(parents=True)
-    (generated / "sc_specialization_data.inc").write_text("  PALADIN_HOLY = 65,\n  PALADIN_RETRIBUTION = 70,\n")
+    (tmp_path / "engine" / "dbc" / "generated" / "sc_specialization_data.inc").write_text("  PALADIN_HOLY = 65,\n  PALADIN_RETRIBUTION = 70,\n")
     tried: list[tuple[str | None, str | None]] = []
 
     def fake_decode(_repo: RepoPaths, build_spec: BuildSpec) -> Any:

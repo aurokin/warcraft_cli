@@ -17,8 +17,18 @@ import pytest
 import typer
 
 from tests.cli_testkit import all_cli_apps, console_scripts, subcommands, walk_commands
-from tests.e2e.harness import EXIT_NETWORK, EXIT_USAGE, Result, dead_proxy_env, run, run_raw, run_text
-from tests.e2e.pins import CHARACTER_NAME, GUILD_REALM, GUILD_REGION, ITEM_ID, ITEM_SEARCH_QUERY, REALM_SLUG
+from tests.e2e.harness import EXIT_NETWORK, EXIT_OK, EXIT_USAGE, Result, dead_proxy_env, run, run_raw, run_text
+from tests.e2e.pins import (
+    CHARACTER_NAME,
+    CURSEFORGE_ADDON_ID,
+    GUILD_NAME,
+    GUILD_REALM,
+    GUILD_REGION,
+    ITEM_ID,
+    ITEM_SEARCH_QUERY,
+    REALM_SLUG,
+    WIKI_API_FUNCTION,
+)
 
 # Every installed binary, read from the console scripts pip wires up, so a new binary joins every
 # journey below without anyone editing a list. The wrapper comes first because its doctor is the
@@ -41,15 +51,39 @@ NETWORK_COMMAND: dict[str, tuple[str, ...]] = {
     "lorrgs": ("specs",),
     "raidbots": ("inspect-report", "warcraftcliE2Emissing"),
     "blizzard": ("realm", REALM_SLUG),
-    "curseforge": ("addon", "3358"),
+    "curseforge": ("addon", CURSEFORGE_ADDON_ID),
 }
 
 # Providers with a file-backed HTTP cache and a cheap repeatable read. lorrgs is deliberately absent:
 # its client talks straight to the API with no cache store, so there is no hit to observe.
 CACHED_READ: dict[str, tuple[str, ...]] = {
     "raiderio": ("character", GUILD_REGION, GUILD_REALM, CHARACTER_NAME),
-    "warcraft-wiki": ("article", "CreateFrame"),
+    "warcraft-wiki": ("article", WIKI_API_FUNCTION),
     "wowhead": ("entity", "item", str(ITEM_ID)),
+}
+# The CACHED_READ commands whose payload reports cache state in a `freshness` block.
+REPORTS_FRESHNESS = frozenset({"raiderio"})
+
+# The top-level keys of a success envelope (docs/foundation/ERROR_CONTRACT.md); a failure adds `error`.
+# Spelled out rather than imported from warcraft_core, so the check does not share the code it checks.
+SUCCESS_ENVELOPE_KEYS = frozenset({"ok", "provider", "command", "kind", "schema_version", "query", "provenance", "data"})
+
+# Per binary, one cheap command that succeeds and one its command body rejects. Payload keys used to
+# be copied to the top level by the commands themselves, so `doctor` and Click usage errors alone
+# would not show them.
+ENVELOPE_PROBES: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+    "warcraft": (("schema",), ("--expansion", "not-an-expansion", "search", ITEM_SEARCH_QUERY)),
+    "wowhead": (CACHED_READ["wowhead"], ("entity", "item", "999999999")),
+    "warcraftlogs": (("regions",), ("zone", "999999")),
+    "raiderio": (CACHED_READ["raiderio"], ("guild", "zz", GUILD_REALM, GUILD_NAME)),
+    "warcraft-wiki": (CACHED_READ["warcraft-wiki"], ("article", "Zzz No Such Warcraft Wiki Page 90210")),
+    "icy-veins": (("search", "mistweaver monk"), ("guide-query", "/nonexistent/icy-veins-bundle", "mana")),
+    "method": (("search", "mistweaver monk"), ("guide-query", "/nonexistent/method-bundle", "mana")),
+    "lorrgs": (("specs",), ("spec", "no-such-spec-slug")),
+    "raidbots": (("search", "droptimizer for my mage"), ("explain-input", "--text", "x", "--file", "y")),
+    "blizzard": (("realm", REALM_SLUG), ("item", str(ITEM_ID), "--region", "oc")),
+    "curseforge": (("addon", CURSEFORGE_ADDON_ID), ("addon", "999999999")),
+    "simc": (("version",), ("repo", "--set-root", "/tmp", "--clear-root")),
 }
 
 COMPACT_MAX_CHARS = 40
@@ -265,22 +299,39 @@ def test_global_flags_only_bind_before_the_subcommand(binary: str) -> None:
     assert result.payload["provider"] == _provider(binary), result.describe()
 
 
-@pytest.mark.parametrize("binary", sorted(CACHED_READ))
-def test_a_repeated_read_is_served_from_the_isolated_cache(binary: str, require, cache_root: Path) -> None:
-    require(_provider(binary))
-    provider_cache = cache_root / "warcraft" / _provider(binary)
+@pytest.mark.parametrize("binary", BINARIES)
+def test_success_and_failure_envelopes_carry_exactly_the_envelope_keys(binary: str, require) -> None:
+    if binary != "warcraft":
+        require(_provider(binary))
+    succeeds, fails = ENVELOPE_PROBES[binary]
+    success = run(binary, *succeeds)
+    assert set(success.payload) == SUCCESS_ENVELOPE_KEYS, success.describe()
 
-    first = run(binary, *CACHED_READ[binary])
+    failure = run(binary, *fails, expect=None)
+    assert failure.exit_code != EXIT_OK, failure.describe()
+    assert set(failure.payload) == SUCCESS_ENVELOPE_KEYS | {"error"}, failure.describe()
+
+
+@pytest.mark.parametrize("binary", sorted(CACHED_READ))
+def test_a_repeated_read_is_served_from_the_isolated_cache(binary: str, require, tmp_path: Path) -> None:
+    require(_provider(binary))
+    # A cache root of its own, so the first read is a miss whatever the session already fetched.
+    cache_env = {"XDG_CACHE_HOME": str(tmp_path / "cache")}
+    provider_cache = tmp_path / "cache" / "warcraft" / _provider(binary)
+
+    first = run(binary, *CACHED_READ[binary], env=cache_env)
     after_first = _cache_snapshot(provider_cache)
     assert after_first, f"{binary} wrote no cache entry under {provider_cache}"
 
     # Behind a dead proxy the command can only succeed if every byte came from the cache.
-    second = run(binary, *CACHED_READ[binary], env=dead_proxy_env())
-    # `freshness` is the one block allowed to differ: it reports where the answer came from, and a
-    # provider that has it has to say the second read was a hit. Everything else must be identical.
+    second = run(binary, *CACHED_READ[binary], env={**cache_env, **dead_proxy_env()})
+    # `freshness` is the one block allowed to differ: it reports where the answer came from, so it
+    # has to call the first read a miss and the second a hit. Everything else must be identical.
     assert _without_freshness(second.data) == _without_freshness(first.data)
-    if "freshness" in second.data:
-        assert second.data["freshness"]["cache_hit"] is True, second.describe()
+    assert ("freshness" in second.data) is (binary in REPORTS_FRESHNESS), second.describe()
+    if binary in REPORTS_FRESHNESS:
+        hits = (first.data["freshness"]["cache_hit"], second.data["freshness"]["cache_hit"])
+        assert hits == (False, True), second.describe()
     # A miss would also rewrite the entry; identical mtimes and sizes mean nothing was re-fetched.
     assert _cache_snapshot(provider_cache) == after_first, second.describe()
 
@@ -328,7 +379,8 @@ def test_a_redis_backed_read_hits_the_shared_cache(require, optional, tmp_path: 
 def test_the_contract_tables_cover_every_installed_binary() -> None:
     # A new console script must not slip past the contract; these tables are the coverage list.
     assert set(NETWORK_COMMAND) == set(BINARIES) - {"simc"}, "simc runs locally; every other binary needs one"
-    assert set(CACHED_READ) <= set(BINARIES)
+    assert set(ENVELOPE_PROBES) == set(BINARIES)
+    assert REPORTS_FRESHNESS <= set(CACHED_READ) <= set(BINARIES)
 
 
 def test_the_help_row_parser_matches_the_typer_panel_shape() -> None:

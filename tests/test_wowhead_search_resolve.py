@@ -8,7 +8,6 @@ from wowhead_cli.main import app
 from wowhead_cli.ranking import (
     ARTICLE_OVER_ENTITY_MARGIN,
     STALE_GUIDE_REASON,
-    database_rank_score,
     exact_match_score,
     is_filtered_high_confidence,
     is_high_confidence_exact_match,
@@ -20,7 +19,8 @@ from wowhead_cli.ranking import (
     search_result_score_and_reasons,
     term_match_score,
     type_hint_score,
-    upstream_database_ranks,
+    upstream_rank_bonuses,
+    upstream_rank_score,
 )
 
 from tests.wowhead_testkit import runner
@@ -136,7 +136,7 @@ def test_search_type_hint_promotes_guides_for_guide_queries(monkeypatch) -> None
                 {
                     "type": 3,
                     "id": 19019,
-                    "name": "Frost Death Knight",
+                    "name": "Tabard of the Frost Death Knight Guide",
                     "typeName": "Item",
                     "popularity": 50,
                 },
@@ -336,19 +336,15 @@ def test_type_hint_score_boosts_matching_entity_type() -> None:
 
 
 
-def test_database_rank_score_pins_the_bonus_per_upstream_rank() -> None:
-    # Wowhead's own database order, plus 1 for a routable entity type.
-    assert database_rank_score(0, entity_type="item") == (43, ["upstream_database_rank"])
-    assert database_rank_score(1, entity_type="item") == (29, ["upstream_database_rank"])
-    assert database_rank_score(2, entity_type="item") == (15, ["upstream_database_rank"])
-    assert database_rank_score(3, entity_type="item") == (1, [])
-    assert database_rank_score(None, entity_type="item") == (1, [])
-    assert database_rank_score(0, entity_type=None) == (42, ["upstream_database_rank"])
-    assert database_rank_score(None, entity_type=None) == (0, [])
+def test_upstream_rank_score_adds_the_bonus_and_a_point_for_a_routable_row() -> None:
+    assert upstream_rank_score(42, entity_type="item") == (43, ["upstream_database_rank"])
+    assert upstream_rank_score(None, entity_type="item") == (1, [])
+    assert upstream_rank_score(42, entity_type=None) == (42, ["upstream_database_rank"])
+    assert upstream_rank_score(None, entity_type=None) == (0, [])
 
 
-def test_upstream_database_ranks_reads_wowheads_own_relevance_order() -> None:
-    ranks = upstream_database_ranks(
+def test_upstream_rank_bonuses_follow_wowheads_own_relevance_order() -> None:
+    bonuses = upstream_rank_bonuses(
         {
             "results": [],
             "categories": {
@@ -356,14 +352,16 @@ def test_upstream_database_ranks_reads_wowheads_own_relevance_order() -> None:
                     {"type": 3, "id": 19019, "name": "Thunderfury, Blessed Blade of the Windseeker"},
                     {"type": 6, "id": 21992, "name": "Thunderfury"},
                     {"name": "row without an addressable id"},
+                    {"type": 3, "id": 128507, "name": "Inflatable Thunderfury"},
                 ],
                 "news": [{"type": 162, "id": 375994, "name": "Thunderfury news"}],
+                "guides": [{"type": 100, "id": 7671, "name": "Obtaining Thunderfury"}],
             },
         }
     )
-    # Only database rows are ranked, keyed by Wowhead's own (type, id) pair.
-    assert ranks == {(3, 19019): 0, (6, 21992): 1}
-    assert upstream_database_ranks({"results": []}) == {}
+    # Only the first three rows of each list earn a bonus, keyed by Wowhead's (type, id) pair.
+    assert bonuses == {(3, 19019): 42, (6, 21992): 28, (100, 7671): 21}
+    assert upstream_rank_bonuses({"results": []}) == {}
 
 
 
@@ -378,13 +376,33 @@ def test_search_result_score_and_reasons_composes_helper_scores() -> None:
         },
         query="quest fairbreeze favors",
         ranking_query="quest fairbreeze favors",
-        database_rank=0,
+        rank_bonus=42,
     )
     assert score > 0
     assert "all_terms_match" in reasons
     assert "type_hint" in reasons
     assert "upstream_database_rank" in reasons
 
+
+
+def test_query_terms_match_whole_words_only() -> None:
+    """"sha" is inside "Shadow" and "anger" inside "Angered"; neither row names the Sha of Anger."""
+    for name in ("Shadowmourne Angered", "Shadow of Angerforge"):
+        score, reasons = search_result_score_and_reasons(
+            {"type": 3, "id": 49623, "name": name, "typeName": "Item"},
+            query="sha of anger",
+            ranking_query="sha of anger",
+            rank_bonus=42,
+        )
+        assert (score, reasons) == (1, []), name
+
+    score, reasons = search_result_score_and_reasons(
+        {"type": 1, "id": 60491, "name": "Sha of Anger", "typeName": "NPC"},
+        query="sha anger",
+        ranking_query="sha anger",
+        rank_bonus=42,
+    )
+    assert reasons == ["all_terms_match", "upstream_database_rank"]
 
 
 def test_resolve_confidence_policy_helpers_cover_exact_filtered_and_medium_cases() -> None:
@@ -686,7 +704,7 @@ def test_resolve_answers_with_the_news_post_a_query_names_outright(monkeypatch) 
                 {
                     "type": 6,
                     "id": 12345,
-                    "name": "Midnight",
+                    "name": "September 18th Midnight Hotfixes",
                     "typeName": "Spell",
                 },
                 {
@@ -708,7 +726,7 @@ def test_resolve_answers_with_the_news_post_a_query_names_outright(monkeypatch) 
     assert data["resolved"] is True
     assert data["confidence"] == "high"
     assert data["next_command"] == "wowhead news-post https://www.wowhead.com/news=382931"
-    # The spell is only a stray text hit, so it trails the answer it could not beat by the margin.
+    # The spell only shares the headline's words, so it trails the answer it could not beat by the margin.
     spell_candidate = data["candidates"][-1]
     assert spell_candidate["entity_type"] == "spell"
     assert data["match"]["ranking"]["score"] - spell_candidate["ranking"]["score"] >= ARTICLE_OVER_ENTITY_MARGIN

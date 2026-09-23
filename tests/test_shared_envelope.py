@@ -37,6 +37,8 @@ def test_envelope_violations_flags_shape_problems() -> None:
     assert envelope_violations(bad_data) == ["data must be a dict"]
     error_missing = {**error_envelope(provider="p", command="c", code="x", message="y"), "error": {"code": "x"}}
     assert envelope_violations(error_missing) == ["error.message must be a str"]
+    legacy_copy = {**success_envelope(provider="p", command="c", kind="k", data={"count": 1}), "count": 1}
+    assert envelope_violations(legacy_copy) == ["unexpected key: count"]
 
 
 def test_exit_code_for_maps_known_codes_and_defaults_to_generic() -> None:

@@ -14,7 +14,7 @@ import httpx
 import typer
 from typer.core import TyperGroup, TyperOption
 
-from warcraft_core.envelope import Envelope, error_envelope
+from warcraft_core.envelope import Envelope, envelope_violations, error_envelope
 from warcraft_core.exit_codes import EXIT_AUTH, EXIT_GENERIC, EXIT_NETWORK, EXIT_NOT_FOUND, EXIT_USAGE, exit_code_for
 from warcraft_core.output import (
     DEFAULT_COMPACT_MAX_CHARS,
@@ -186,6 +186,15 @@ def install_common_callback(app: typer.Typer, *, provider: str) -> None:
 
 
 def emit(ctx: typer.Context, payload: Mapping[str, Any], *, err: bool = False) -> None:
+    """Write ``payload`` with the global output flags applied.
+
+    ``payload`` must be a conforming envelope (``envelope_violations``): a key outside the envelope,
+    a missing key or a mistyped one is a programming error and raises ``TypeError`` instead of
+    reaching the caller, so a command that regresses the contract fails its tests.
+    """
+    problems = envelope_violations(payload)
+    if problems:
+        raise TypeError(f"refusing to emit a malformed envelope: {'; '.join(problems)}")
     config = cfg(ctx)
     try:
         emit_shaped(dict(payload), config.output, err=err)

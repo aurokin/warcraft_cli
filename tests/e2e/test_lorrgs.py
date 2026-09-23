@@ -8,6 +8,7 @@ journeys below.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any
 
@@ -228,50 +229,67 @@ def _comp_ranking_candidates(catalog: Catalog) -> list[str]:
     return candidates[:COMP_RANKING_SCAN_LIMIT]
 
 
-def _kill_seconds(result: Result) -> dict[str, float]:
+def _kill_seconds(result: Result) -> dict[tuple[str, int], float]:
     """Each ranked comp's kill time in seconds (Lorrgs reports fight durations in milliseconds)."""
-    return {row["report_id"]: row["fights"][0]["duration"] / 1000 for row in result.data["reports"]}
+    return {
+        (row["report_id"], row["fights"][0]["fight_id"]): row["fights"][0]["duration"] / 1000
+        for row in result.data["reports"]
+    }
+
+
+def _assert_bound_keeps_what_it_should(
+    unfiltered: dict[tuple[str, int], float], bounded: Result, *, low: float, high: float
+) -> None:
+    """A kill-time bound only removes rows: the unfiltered rows inside it survive, the others go.
+
+    Removing a row never demotes another, so every top-k row that satisfies the bound is still in
+    the bounded top-k. That is what fails when a bound empties the ranking outright.
+    """
+    kept = _kill_seconds(bounded)
+    inside = {key for key, value in unfiltered.items() if low <= value <= high}
+    assert inside, "the bound was chosen to keep at least one unfiltered row"
+    assert inside <= set(kept), bounded.describe()
+    assert not (set(unfiltered) - inside) & set(kept), bounded.describe()
+    assert all(low <= value <= high for value in kept.values()), bounded.describe()
 
 
 def test_comp_ranking_returns_ranked_comps_and_honours_the_killtime_filter(catalog: Catalog) -> None:
-    """A comp ranking with rows in it, and kill-time bounds that each provably remove a row.
+    """A comp ranking with rows in it, and kill-time bounds that each remove some rows and keep others.
 
-    An empty ``reports`` list used to pass this journey, which made it blind to the command
-    returning nothing at all. Bosses are walked until one has rows; if none does, Lorrgs is not
-    serving this surface and that is reported rather than absorbed. Each bound is set one second
-    inside the unfiltered extremes, so the slowest (or fastest) comp has to disappear and every row
-    that comes back has to sit inside the bound; an ignored flag returns the same rows and fails.
+    Bosses are walked until one has at least two comps whose kill times are two seconds or more
+    apart; an empty ranking must say so in its notes, and if no boss qualifies that is reported
+    rather than absorbed. The ceiling sits a second under the slowest kill and the floor a second
+    over the fastest, so each bound has to drop one row and keep another: an ignored flag keeps
+    everything and a bound that empties the ranking keeps nothing, and both fail.
     """
     scanned: list[str] = []
     for boss_slug in _comp_ranking_candidates(catalog):
-        scanned.append(boss_slug)
         result = _comp_ranking(boss_slug)
         assert result.data["boss_slug"] == boss_slug, result.describe()
         assert isinstance(result.data["updated"], str) and result.data["updated"], result.describe()
         assert result.payload["query"]["limit"] == COMP_RANKING_LIMIT, result.describe()
         reports = result.data["reports"]
+        assert len(reports) <= COMP_RANKING_LIMIT, result.describe()
         if not reports:
+            # An empty ranking is upstream's answer, and the payload has to say so rather than look ranked.
+            assert any("no composition reports" in note for note in result.data["notes"]), result.describe()
+        seconds = _kill_seconds(result)
+        scanned.append(f"{boss_slug}: {sorted(seconds.values())}")
+        if not seconds or max(seconds.values()) - min(seconds.values()) < 2:
             continue
 
-        assert len(reports) <= COMP_RANKING_LIMIT, result.describe()
-        seconds = _kill_seconds(result)
-        slowest = max(seconds, key=seconds.__getitem__)
-        fastest = min(seconds, key=seconds.__getitem__)
-
-        ceiling = int(seconds[slowest]) - 1
+        ceiling = math.floor(max(seconds.values())) - 1
         capped = _comp_ranking(boss_slug, "--killtime-max", str(ceiling))
         assert capped.payload["query"]["killtime_max"] == ceiling, capped.describe()
-        assert slowest not in _kill_seconds(capped), capped.describe()
-        assert all(value <= ceiling for value in _kill_seconds(capped).values()), capped.describe()
+        _assert_bound_keeps_what_it_should(seconds, capped, low=0, high=ceiling)
 
-        floor = int(seconds[fastest]) + 1
+        floor = math.ceil(min(seconds.values())) + 1
         floored = _comp_ranking(boss_slug, "--killtime-min", str(floor))
         assert floored.payload["query"]["killtime_min"] == floor, floored.describe()
-        assert fastest not in _kill_seconds(floored), floored.describe()
-        assert all(value >= floor for value in _kill_seconds(floored).values()), floored.describe()
+        _assert_bound_keeps_what_it_should(seconds, floored, low=floor, high=math.inf)
         return
 
-    raise AssertionError(f"Lorrgs published no comp ranking rows for any of {scanned}")
+    raise AssertionError(f"no boss has two ranked comps at least 2s apart in kill time: {scanned}")
 
 
 def test_report_overview_user_report_and_fights_share_one_report(catalog: Catalog) -> None:

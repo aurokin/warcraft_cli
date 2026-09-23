@@ -219,6 +219,35 @@ _CONTENT_FILES: Final = {
 }
 
 
+def _object_field(row: dict[str, Any], key: str) -> dict[str, Any]:
+    """``row[key]`` when it is an object, ``{}`` when absent; any other type is a corrupt bundle row."""
+    value = row.get(key)
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(f"{key} is a {type(value).__name__}, not an object")
+    return value
+
+
+def _list_field(row: dict[str, Any], key: str) -> list[Any]:
+    """``row[key]`` when it is a list, ``[]`` when absent; any other type is a corrupt bundle row."""
+    value = row.get(key)
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError(f"{key} is a {type(value).__name__}, not a list")
+    return value
+
+
+def _check_nested_fields(bundle: dict[str, Any]) -> None:
+    """Reject rows whose nested fields the query and compare readers walk into have the wrong type."""
+    for row in bundle["build_references"]:
+        _build_reference_identity(row)
+        _list_field(row, "source_urls")
+    for row in bundle["analysis_surfaces"]:
+        _list_field(row, "surface_tags")
+
+
 def _read_bundle(export_dir: Path) -> dict[str, Any]:
     manifest = load_json(export_dir / "manifest.json")
     files = manifest.get("files")
@@ -227,6 +256,7 @@ def _read_bundle(export_dir: Path) -> dict[str, Any]:
     bundle: dict[str, Any] = {"manifest": manifest, "failed_pages": _failed_page_rows(manifest)}
     for name, key in _CONTENT_FILES.items():
         bundle[name] = load_jsonl(export_dir / files[key]) if key in files else []
+    _check_nested_fields(bundle)
     return bundle
 
 
@@ -239,7 +269,8 @@ def load_article_bundle(export_dir: Path) -> dict[str, Any]:
         return _read_bundle(export_dir)
     except (OSError, ValueError, TypeError) as exc:
         # OSError: no manifest.json (commonly the parent of a bundle) or a listed file is missing.
-        # ValueError: corrupt JSON or JSONL. TypeError: a manifest entry of the wrong type.
+        # ValueError: corrupt JSON or JSONL, or a row with a wrongly typed nested field. TypeError: a
+        # manifest entry of the wrong type.
         raise ArticleBundleError("invalid_bundle", f"Not a readable article bundle, {export_dir}: {exc}") from exc
 
 
@@ -259,13 +290,18 @@ def _query_score(query: str, text: str) -> int:
     return score
 
 
+def _section_text(row: dict[str, Any]) -> Any:
+    """Section body: ``text`` in article bundles, ``content_text`` in wowhead guide-exports."""
+    return row.get("text") or row.get("content_text")
+
+
 def _section_haystack(row: dict[str, Any]) -> str:
-    title = str(row.get("title") or "")
-    return f"{title} {row.get('text') or ''}"
+    return f"{row.get('title') or ''} {_section_text(row) or ''}"
 
 
 def _navigation_haystack(row: dict[str, Any]) -> str:
-    return f"{row.get('title') or ''} {row.get('section_slug') or ''}"
+    # Article bundles title their navigation links; wowhead guide-exports label them.
+    return f"{row.get('title') or row.get('label') or ''} {row.get('section_slug') or ''}"
 
 
 def _linked_entity_haystack(row: dict[str, Any]) -> str:
@@ -273,20 +309,9 @@ def _linked_entity_haystack(row: dict[str, Any]) -> str:
 
 
 def _build_reference_haystack(row: dict[str, Any]) -> str:
-    build_identity = row.get("build_identity") or {}
-    class_spec_identity = build_identity.get("class_spec_identity") or {}
-    identity = class_spec_identity.get("identity") or {}
-    return " ".join(
-        part
-        for part in (
-            str(row.get("label") or ""),
-            str(row.get("build_code") or ""),
-            str(row.get("url") or ""),
-            str(identity.get("actor_class") or ""),
-            str(identity.get("spec") or ""),
-        )
-        if part
-    )
+    identity = _build_reference_identity(row)
+    parts = (row.get("label"), identity["build_code"], identity["url"], identity["actor_class"], identity["spec"])
+    return " ".join(str(part) for part in parts if part)
 
 
 def _analysis_surface_haystack(row: dict[str, Any]) -> str:
@@ -407,7 +432,8 @@ def query_article_bundle(
 def _bundle_title(bundle: dict[str, Any]) -> str | None:
     manifest_raw = bundle.get("manifest")
     manifest: dict[str, Any] = manifest_raw if isinstance(manifest_raw, dict) else {}
-    resource_key = manifest.get("resource_key")
+    # A wowhead guide-export manifest has no resource_key; its title is under "page".
+    resource_key = manifest.get("resource_key", "page")
     if isinstance(resource_key, str):
         resource = manifest.get(resource_key)
         if isinstance(resource, dict):
@@ -503,18 +529,13 @@ def _section_bundle_entry(bundle_info: dict[str, Any], rows: list[dict[str, Any]
         "page_titles": _unique_strings([row.get("page_title") for row in rows]),
         "section_titles": _unique_strings([row.get("title") for row in rows]),
         "section_slugs": _unique_strings([row.get("section_slug") for row in rows]),
-        "previews": _unique_strings([row.get("text") for row in rows])[:3],
+        "previews": _unique_strings([_section_text(row) for row in rows])[:3],
         "citations": citations[:5],
     }
 
 
 def _build_reference_identity(row: dict[str, Any]) -> dict[str, Any]:
-    build_identity_raw = row.get("build_identity")
-    build_identity: dict[str, Any] = build_identity_raw if isinstance(build_identity_raw, dict) else {}
-    class_spec_identity_value = build_identity.get("class_spec_identity")
-    class_spec_identity = class_spec_identity_value if isinstance(class_spec_identity_value, dict) else {}
-    identity_value = class_spec_identity.get("identity")
-    identity = identity_value if isinstance(identity_value, dict) else {}
+    identity = _object_field(_object_field(_object_field(row, "build_identity"), "class_spec_identity"), "identity")
     actor_class_value = identity.get("actor_class")
     actor_class = actor_class_value if isinstance(actor_class_value, str) else None
     spec_value = identity.get("spec")

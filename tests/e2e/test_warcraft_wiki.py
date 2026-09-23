@@ -65,6 +65,13 @@ RESOLVE_FAMILY_CASES: tuple[tuple[str, str, str, str, str], ...] = (
     # the many pages whose title merely starts with "Legion".
     ("expansion", "legion", "World of Warcraft: Legion", "expansion_reference", "expansion_reference"),
 )
+# Queries that name one article inside extra words, and that article. `world boss sha of anger` once led
+# with pages that only mention the boss ("WoW's 20th Anniversary", "Tap", "Armor set"); when the extra
+# word is the article's own disambiguation, the disambiguated page is the one named, not its base page.
+QUALIFIED_QUERY_PAGES: tuple[tuple[str, str], ...] = (
+    ("world boss sha of anger", "Sha of Anger"),
+    ("sha of anger anniversary", "Sha of Anger (Anniversary)"),
+)
 
 
 def assert_data_holds(result: Result, *keys: str) -> None:
@@ -118,8 +125,16 @@ def test_search_puts_the_api_page_at_the_top_for_an_api_query(require) -> None:
     first = results[0]
     assert first["id"] == API_PAGE_TITLE, result.describe()
     assert first["metadata"]["content_family"] == "api_function"
-    assert first["follow_up"]["recommended_command"] == f"{BINARY} article {API_PAGE_TITLE}", result.describe()
+    assert first["follow_up"]["command"] == f"{BINARY} article {API_PAGE_TITLE}", result.describe()
     assert_data_holds(result, "results", "count", "search_query")
+
+
+@pytest.mark.parametrize(("query", "expected_title"), QUALIFIED_QUERY_PAGES)
+def test_search_puts_the_article_a_qualified_query_names_first(require, query: str, expected_title: str) -> None:
+    require(PROVIDER)
+    result = run(BINARY, "search", query, "--limit", "5")
+
+    assert result.data["results"][0]["id"] == expected_title, result.describe()
 
 
 @pytest.mark.parametrize(("hint", "name", "expected_title", "search_family", "article_family"), RESOLVE_FAMILY_CASES)
@@ -154,7 +169,8 @@ def test_resolve_without_a_family_hint_lands_on_the_api_page_it_names(require) -
     resolved = run(BINARY, "resolve", pins.WIKI_API_FUNCTION, "--limit", "3")
 
     assert resolved.data["resolved"] is True, resolved.describe()
-    assert resolved.data.get("excluded_terms", []) == [], "a bare query has no family hint to strip"
+    # `excluded_terms` appears only when a family hint was stripped (the hinted journey above reads it).
+    assert "excluded_terms" not in resolved.data, "a bare query has no family hint to strip"
     assert resolved.data["match"]["id"] == API_PAGE_TITLE, resolved.describe()
     assert resolved.data["match"]["metadata"]["content_family"] == "api_function", resolved.describe()
 
@@ -262,7 +278,7 @@ def test_event_commands_resolve_a_ui_handler(require, command: str) -> None:
 
     assert result.data["article"]["content_family"] == "ui_handler"
     assert result.data["resolved_surface"] == "event"
-    assert UI_HANDLER_QUERY in result.data["article"]["title"]
+    assert result.data["article"]["title"] == f"UIHANDLER {UI_HANDLER_QUERY}", result.describe()
     assert result.data["reference"]["programming_reference"] is True
 
 

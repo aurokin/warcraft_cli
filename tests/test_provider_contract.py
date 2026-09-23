@@ -770,7 +770,8 @@ def test_merged_page_keeps_merge_order_and_gives_off_intent_rows_one_slot_at_mos
 
     page, policy = merged_search_page(rows, limit=6)
 
-    # The promoted fourth Wowhead row outranks the wiki row, so it is not appended after it.
+    # The promoted fourth Wowhead row keeps its interleaved place, ahead of the wiki row, instead of
+    # being appended after it.
     assert [row["id"] for row in page[:5]] == [0, 1, 2, 3, "Diemetradon"]
     assert [row["provider"] for row in page[5:]] == ["raiderio"]
     assert policy["reserved_exact_profile_slot_count"] == 1

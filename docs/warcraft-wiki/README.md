@@ -74,7 +74,10 @@ the dropped words come back as `excluded_terms` with `normalization_hint: "exclu
 
 Every candidate carries its full `ranking.match_reasons`. MediaWiki's own full-text order contributes at most 10
 points and always appears as `upstream_rank_<n>`, so a row that matched only in a page body it never showed us cannot
-outscore a real title match.
+outscore a real title match. A title that appears as a whole-word phrase inside a longer query earns
+`query_contains_title`, scaled by the share of query words it spells out, so `world boss sha of anger` ranks
+`Sha of Anger` above `World boss` and both above pages whose snippets only mention them. It does not count as covering
+the query for `resolve`.
 
 `resolve` reports `resolved: true` only when the top row carries a reason covering the whole query (`exact_title`,
 `exact_api_title`, `exact_handler_title`, `exact_event_title`, `title_prefix`, `title_contains_query`,

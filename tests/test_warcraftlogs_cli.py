@@ -2616,6 +2616,7 @@ def test_warcraftlogs_spec_kill_samples_empty_cohort_is_ok(monkeypatch) -> None:
     [
         (["doctor", "--no-live"], 0, ENVELOPE_KEYS - {"error"}),
         (["search", "abcd1234"], 0, ENVELOPE_KEYS - {"error"}),
+        (["resolve", "abcd1234"], 0, ENVELOPE_KEYS - {"error"}),
         (["report-fights", "abcd1234"], 0, ENVELOPE_KEYS - {"error"}),
         (["report-encounter-players", "abcd1234", "--fight-id", "1"], 0, ENVELOPE_KEYS - {"error"}),
         (["boss-kills", "--zone-id", "38", "--boss-id", "3012", "--difficulty", "5"], 0, ENVELOPE_KEYS - {"error"}),
@@ -2845,6 +2846,22 @@ def test_deduplicate_pulls_does_not_split_a_pull_around_an_overlapping_one() -> 
         ("a1report", [{"report_code": "a2report", "fight_id": 3}]),
         ("breport1", []),
     ]
+
+
+def test_deduplicate_pulls_matches_every_upload_already_in_a_pull() -> None:
+    from warcraftlogs_cli.boss_kills import deduplicate_pulls
+
+    # a2 is within 5 s of a1 but not of a3, the upload folded in last: it is still the same pull.
+    report = _double_logged_report(code="dupea001", report_start=0, fights=[])
+    pulls = deduplicate_pulls(
+        [
+            ({**report, "code": "a1report"}, _kill_fight(fight_id=1, start=10_000, end=400_000)),
+            ({**report, "code": "a3report"}, _kill_fight(fight_id=3, start=11_000, end=401_000)),
+            ({**report, "code": "a2report"}, _kill_fight(fight_id=2, start=14_000, end=395_000)),
+        ]
+    )
+
+    assert [(pull.report["code"], len(pull.duplicates)) for pull in pulls] == [("a1report", 2)]
 
 
 def test_deduplicate_pulls_keeps_pulls_of_different_raid_sizes_apart() -> None:
@@ -4735,18 +4752,19 @@ def test_warcraftlogs_graphql_surfaces_partial_warnings(monkeypatch) -> None:
         ) -> dict[str, Any]:
             return {
                 "reportData": {"report": {"code": "abcd1234"}},
+                "notes": {"total": 3},
                 GRAPHQL_WARNINGS_KEY: self.last_warnings,
             }, "client"
 
     monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _WarningGraphQLClient())
 
-    result = runner.invoke(warcraftlogs_app, ["graphql", "--query", "query Q { reportData { reports { total } } }"])
+    result = runner.invoke(warcraftlogs_app, ["graphql", "--query", "query Q { reportData { reports { total } } notes: x }"])
 
     assert result.exit_code == 0
     payload = json.loads(result.output)
-    assert payload["data"]["reportData"] == {"report": {"code": "abcd1234"}}
-    assert payload["data"]["graphql_warnings"][0]["message"] == "partial report path failed"
-    assert payload["data"]["notes"][0].startswith("warcraft logs returned partial errors")
+    # data is the GraphQL result untouched, even a field aliased ``notes``; partial errors sit in provenance.
+    assert payload["data"] == {"reportData": {"report": {"code": "abcd1234"}}, "notes": {"total": 3}}
+    assert payload["provenance"] == {"graphql_warnings": [{"message": "partial report path failed", "path": ["reportData", "report", "table"]}]}
 
 
 def test_warcraftlogs_character_rankings_surfaces_provider_permission_errors(monkeypatch) -> None:

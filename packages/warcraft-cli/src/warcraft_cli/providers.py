@@ -576,7 +576,7 @@ def provider_expansion_args(registration: ProviderRegistration, expansion: str |
 
 
 def _unsupported_expansion_result(
-    registration: ProviderRegistration, expansion: str | None, *, command: str
+    registration: ProviderRegistration, expansion: str | None, *, command: str, query: str | None = None
 ) -> dict[str, Any] | None:
     """Early return for a provider that cannot honour the requested expansion; ``None`` means proceed."""
     if (
@@ -590,6 +590,7 @@ def _unsupported_expansion_result(
         command=command,
         code="unsupported_provider_expansion",
         message=f"Provider {registration.name!r} does not support wrapper expansion {expansion!r}.",
+        query=query,
         details={
             "requested_expansion": expansion,
             "expansion_support": provider_expansion_support(registration, requested_expansion=expansion),
@@ -611,8 +612,9 @@ def source_exit_code(source_result: Mapping[str, Any]) -> int:
 def wrapper_envelope(command: str, payload: Mapping[str, Any]) -> dict[str, Any]:
     """Shape a wrapper-built payload as the contract envelope: exactly the envelope keys, nothing else.
 
-    Envelope keys the payload sets win over the defaults. Every other key is payload content: it goes
-    under ``data`` on success, and under ``error.details`` on failure, where ``data`` is ``{}``.
+    Envelope keys the payload sets win over the defaults, except that a failure's ``kind`` is always
+    ``error``. Every other key is payload content: it goes under ``data`` on success, and under
+    ``error.details`` on failure, where ``data`` is ``{}``.
     """
     ok = bool(payload.get("ok", "error" not in payload))
     body = {key: value for key, value in payload.items() if key not in ENVELOPE_KEYS}
@@ -620,7 +622,7 @@ def wrapper_envelope(command: str, payload: Mapping[str, Any]) -> dict[str, Any]
         "ok": ok,
         "provider": "warcraft",
         "command": command,
-        "kind": command if ok else "error",
+        "kind": command,
         "schema_version": SCHEMA_VERSION,
         "query": None,
         "provenance": {},
@@ -633,7 +635,7 @@ def wrapper_envelope(command: str, payload: Mapping[str, Any]) -> dict[str, Any]
     details = {**body, **as_dict(error.get("details"))}
     if details:
         error["details"] = details
-    envelope.update(ok=False, data={}, error=error)
+    envelope.update(ok=False, kind="error", data={}, error=error)
     return envelope
 
 
@@ -642,13 +644,18 @@ def provider_payload_data(payload: Mapping[str, Any] | None) -> dict[str, Any]:
     return as_dict(as_dict(payload).get("data"))
 
 
-def _call_surface(provider: str, command: str, call: Callable[..., Any], *args: Any, **kwargs: Any) -> tuple[int, dict[str, Any]]:
-    """Run one pure surface method, returning ``(exit_code, envelope)`` and never raising."""
+def _call_surface(
+    provider: str, command: str, call: Callable[[], Mapping[str, Any]], *, query: str | None = None
+) -> tuple[int, dict[str, Any]]:
+    """Run one pure surface call, returning ``(exit_code, envelope)`` and never raising.
+
+    A raised failure echoes ``query``, the input the wrapper handed the surface.
+    """
     try:
-        envelope = call(*args, **kwargs)
+        envelope = call()
     except Exception as exc:
         failure, exit_code = error_envelope_for(provider, command, exc)
-        return exit_code, dict(failure)
+        return exit_code, {**failure, "query": query}
     payload = dict(envelope)
     if payload.get("ok") is False:
         error = payload.get("error")
@@ -659,32 +666,24 @@ def _call_surface(provider: str, command: str, call: Callable[..., Any], *args: 
 
 def provider_search(provider: str, query: str, *, limit: int = 5, expansion: str | None = None) -> dict[str, Any]:
     registration = get_provider(provider)
-    unsupported = _unsupported_expansion_result(registration, expansion, command="search")
+    unsupported = _unsupported_expansion_result(registration, expansion, command="search", query=query)
     if unsupported is not None:
         return unsupported
+    options = provider_expansion_options(registration, expansion)
     code, payload = _call_surface(
-        provider,
-        "search",
-        registration.surface.search,
-        query,
-        limit=limit,
-        **provider_expansion_options(registration, expansion),
+        provider, "search", lambda: registration.surface.search(query, limit=limit, **options), query=query
     )
     return {"provider": provider, "exit_code": code, "payload": payload}
 
 
 def provider_resolve(provider: str, query: str, *, limit: int = 5, expansion: str | None = None) -> dict[str, Any]:
     registration = get_provider(provider)
-    unsupported = _unsupported_expansion_result(registration, expansion, command="resolve")
+    unsupported = _unsupported_expansion_result(registration, expansion, command="resolve", query=query)
     if unsupported is not None:
         return unsupported
+    options = provider_expansion_options(registration, expansion)
     code, payload = _call_surface(
-        provider,
-        "resolve",
-        registration.surface.resolve,
-        query,
-        limit=limit,
-        **provider_expansion_options(registration, expansion),
+        provider, "resolve", lambda: registration.surface.resolve(query, limit=limit, **options), query=query
     )
     return {"provider": provider, "exit_code": code, "payload": payload}
 
@@ -763,11 +762,7 @@ def provider_doctor(provider: str, *, requested_expansion: str | None = None) ->
     if provider_expansion_exclusion_reason(registration, requested_expansion=requested_expansion) is None:
         expansion_options = provider_expansion_options(registration, requested_expansion)
     code, payload = _call_surface(
-        provider,
-        "doctor",
-        registration.surface.doctor,
-        **registration.doctor_options,
-        **expansion_options,
+        provider, "doctor", lambda: registration.surface.doctor(**registration.doctor_options, **expansion_options)
     )
     raw_auth = as_dict(payload.get("data")).get("auth")
     auth_details = raw_auth if isinstance(raw_auth, dict) else None

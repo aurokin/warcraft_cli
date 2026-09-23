@@ -17,7 +17,7 @@ Every command writes exactly one JSON object to stdout on success or to stderr o
 | `kind` | string | Payload kind inside `data` (`search_results`, `entity`, `doctor`, `error`, ...) |
 | `schema_version` | string | Envelope schema version. Currently `"1"`. |
 | `query` | string, object, or null | On success, the normalized input the command acted on; on failure, see [Error object](#error-object) |
-| `provenance` | object | Source URLs, fetch timestamps, cache state. `{}` when there is none. |
+| `provenance` | object | Source URLs, fetch timestamps, cache state, upstream warnings about the source (for example `warcraftlogs graphql`'s `graphql_warnings`). `{}` when there is none. |
 | `data` | object | Provider payload. `{}` on failure. |
 | `error` | object | Present only when `ok` is `false`: `{"code": str, "message": str, "details"?: object}` |
 
@@ -42,7 +42,9 @@ provider owns their contents).
 
 The top level holds only the keys in the table above. Every payload field lives under `data`, once.
 Older releases also copied payload keys (`results`, `count`, `entity`, ...) to the top level; those
-copies are removed, so read `data`.
+copies are removed, so read `data`. `warcraft_core.cli.emit` enforces this: it refuses a payload with
+a missing, mistyped, or extra top-level key, so the command fails with `internal_error` (exit 1)
+rather than printing it.
 
 ## Error object
 
@@ -63,9 +65,12 @@ failure uses the same rule. The parameters are named as the command declares the
 a `warcraftlogs report-events --fight-id 1` failure echoes `"fight_id": [1]`. Two kinds of parameter
 are never echoed: an OAuth authorization code (`--code`), and the global output flags (`--pretty`,
 `--fields`, ...). `query` is `null` when no command parsed its input: a usage error or an unexpected
-exception caught by the process guard, a provider failure the `warcraft` wrapper builds from an
-in-process surface call (`search`, `resolve`, `doctor`), which runs no Click command, and the
-wrapper's `unsupported_provider_expansion` refusal, which stops before the provider runs.
+exception caught by the process guard, the same two caught by the `warcraft` wrapper while it runs a
+provider command in-process, a provider failure the wrapper builds from its in-process `doctor`
+surface call, and the `unsupported_provider_expansion` refusal a wrapper composite gets before a
+provider command runs. The wrapper's in-process `search` and `resolve` surface failures, including
+their `unsupported_provider_expansion` refusal, echo the query text, and a `warcraft <provider> ...`
+passthrough refusal echoes `{provider, expansion}`.
 
 Providers keep their existing code strings; the codes below have a fixed repo-wide exit-code
 mapping. A provider may additionally map its own codes onto the same five

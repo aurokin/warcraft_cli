@@ -165,7 +165,7 @@ def test_search_finds_a_real_guide_and_names_the_follow_up(require) -> None:
     assert first["id"] == guide_slug(), "a spec query must rank that spec's class guide first"
     assert first["entity_type"] == "guide"
     assert first["url"] == f"https://www.method.gg/guides/{first['id']}"
-    assert first["follow_up"]["recommended_command"] == f"{BINARY} guide {first['id']}"
+    assert first["follow_up"]["command"] == f"{BINARY} guide {first['id']}"
     assert result.payload["provenance"]["sitemap_url"].endswith("sitemap.xml")
 
 
@@ -374,8 +374,9 @@ def test_guide_query_rejects_a_bundle_path_that_is_missing_or_not_a_bundle(requi
     (not_a_bundle / "manifest.json").write_text(json.dumps({"files": {}}), encoding="utf-8")
     run(BINARY, "guide-query", str(not_a_bundle), "mana", expect=EXIT_GENERIC, error_code="invalid_bundle")
 
-    # An unsupported --kind is refused with the code every article-bundle query shares.
-    run(BINARY, "guide-query", str(not_a_bundle), "mana", "--kind", "bogus", expect=EXIT_GENERIC, error_code="invalid_query_kind")
+    # An unsupported --kind is a bad flag: the usage code every provider gives that mistake, raised
+    # before the bundle is read (so this one is not reported as the invalid bundle it also is).
+    run(BINARY, "guide-query", str(not_a_bundle), "mana", "--kind", "bogus", expect=EXIT_USAGE, error_code="invalid_argument")
 
 
 @pytest.mark.parametrize("command", ["guide", "guide-full", "guide-export"])

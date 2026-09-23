@@ -181,7 +181,7 @@ def deduplicate_pulls(candidates: Iterable[tuple[dict[str, Any], dict[str, Any]]
     Warcraft Logs exposes no cross-report pull ID, so the match is deliberately narrow and is
     labelled in the payload rather than inferred silently (docs/foundation/SAFE_ANALYTICS_RULES.md):
     same guild, encounter, difficulty and raid size, with wall-clock start *and* end both within
-    ``DUPLICATE_PULL_TOLERANCE_MS`` of the latest fight already in one of that identity's pulls.
+    ``DUPLICATE_PULL_TOLERANCE_MS`` of any fight already folded into one of that identity's pulls.
     Every pull of the identity is a candidate, so an unrelated pull starting in between cannot split
     one double-logged pull in two. Fights are clustered in start order, so the answer does not
     depend on the order reports were listed in, and the earliest-starting report represents the
@@ -197,19 +197,18 @@ def deduplicate_pulls(candidates: Iterable[tuple[dict[str, Any], dict[str, Any]]
         else:
             timed.append((window, identity, report, fight))
     timed.sort(key=lambda row: (row[0], str(row[2].get("code") or ""), str(row[3].get("id"))))
-    # Each identity's pulls so far, with the window of the latest fight folded into each.
-    clusters: dict[_PullIdentity, list[tuple[SampledPull, tuple[float, float]]]] = {}
+    # Each identity's pulls so far, with the window of every fight folded into each.
+    clusters: dict[_PullIdentity, list[tuple[SampledPull, list[tuple[float, float]]]]] = {}
     for window, identity, report, fight in timed:
         pulls = clusters.setdefault(identity, [])
-        match = next((index for index, (_, latest) in enumerate(pulls) if _same_window(latest, window)), None)
+        match = next((known for known in pulls if any(_same_window(member, window) for member in known[1])), None)
         if match is None:
             pull = SampledPull(report=report, fight=fight)
             kept.append(pull)
-            pulls.append((pull, window))
+            pulls.append((pull, [window]))
             continue
-        pull = pulls[match][0]
-        pull.duplicates.append(_pull_citation(report, fight))
-        pulls[match] = (pull, window)
+        match[0].duplicates.append(_pull_citation(report, fight))
+        match[1].append(window)
     return kept
 
 

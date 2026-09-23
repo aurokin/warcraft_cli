@@ -47,9 +47,9 @@ from simc_cli.build_input import (
     BuildResolution,
     BuildSpec,
     SimcBuildError,
-    SimcNotReadyError,
     TalentStrings,
     TreeDiff,
+    UnknownClassSpecError,
     UnsupportedBuildReference,
     build_profile_text,
     decode_build,
@@ -87,7 +87,13 @@ from simc_cli.run import binary_provenance, binary_version, build_repo, repo_git
 from simc_cli.search import MissingRipgrepError, find_action, spec_file_search
 from simc_cli.sim import first_action_hits, run_first_casts, summarize_first_casts
 from simc_cli.talent_transport import validate_talent_tree_transport
-from simc_cli.trait_data import TraitTable, UnknownTalentError, load_trait_table, resolve_talent_tokens
+from simc_cli.trait_data import (
+    SimcNotReadyError,
+    TraitTable,
+    UnknownTalentError,
+    load_trait_table,
+    resolve_talent_tokens,
+)
 
 app = typer.Typer(add_completion=False, help="SimulationCraft local workflow CLI.")
 
@@ -830,6 +836,8 @@ def _fail_build_error(
     if isinstance(exc, UnknownTalentError):
         # A bad --enable/--disable value is the caller's typo, not SimC rejecting the build.
         fail(ctx, "unknown_talent", str(exc), exit_code=EXIT_USAGE, details={"unknown_talents": exc.values})
+    if isinstance(exc, UnknownClassSpecError):
+        fail(ctx, "invalid_query", str(exc))
     if isinstance(exc, SimcBuildError):
         provenance = binary_provenance(_repo_paths(ctx))
         extra["simc_returncode"] = exc.returncode
@@ -3028,6 +3036,18 @@ class _TreeSwaps:
     sources: dict[str, BuildResolution]
 
 
+def _tree_option_entries(resolution: BuildResolution, tree: str) -> str:
+    """One tree of a decoded build as a SimC ``entry:rank/...`` option string.
+
+    A build with no hero tree selected holds only the hero keystones SimC grants freely. Spelling those
+    out makes SimC select a hero tree and disable the other keystone, so a tree swap on such a build
+    always failed with ``encode_mismatch``.
+    """
+    if tree == "hero" and resolution.hero_tree is None:
+        return ""
+    return tree_entries_string(resolution.talents_by_tree.get(tree, []))
+
+
 def _resolve_modify_tree_entries(
     ctx: typer.Context,
     paths: RepoPaths,
@@ -3057,7 +3077,7 @@ def _resolve_modify_tree_entries(
             swap_resolution = decode_build(paths, swap_spec)
         except (FileNotFoundError, RuntimeError, ValueError) as exc:
             _fail_build_error(ctx, exc, code="decode_failed", prefix=f"Failed to decode {tree_name} tree source: ")
-        entries[tree_name] = tree_entries_string(swap_resolution.talents_by_tree.get(tree_name, []))
+        entries[tree_name] = _tree_option_entries(swap_resolution, tree_name)
         sources[tree_name] = swap_resolution
         modifications.append(f"swap_{tree_name}_tree")
 
@@ -3066,7 +3086,7 @@ def _resolve_modify_tree_entries(
     if sources:
         for tree_name in ACTIVE_TREES:
             if entries[tree_name] is None:
-                entries[tree_name] = tree_entries_string(base_resolution.talents_by_tree.get(tree_name, []))
+                entries[tree_name] = _tree_option_entries(base_resolution, tree_name)
     return _TreeSwaps(entries_by_tree=entries, sources=sources)
 
 
@@ -3155,7 +3175,7 @@ def _build_modify_edits(
     for item in add:
         name_or_id, _, rank_str = item.strip().partition(":")
         if not rank_str.isdigit() or not name_or_id:
-            fail(ctx, "invalid_add", f"--add requires 'name:rank' or 'entry_id:rank', got: '{item}'")
+            fail(ctx, "invalid_argument", f"--add requires 'name:rank' or 'entry_id:rank', got: '{item}'")
         edits.append(
             _resolve_edit(ctx, name_or_id, int(rank_str), table=table, by_name=by_name, class_id=class_id, spec_id=spec_id)
         )

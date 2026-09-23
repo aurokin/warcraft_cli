@@ -25,6 +25,11 @@ WIKI_ARTICLE_KIND = ArticleKind(surface="article", type_name="Article", entity_t
 # MediaWiki full-text rank is a real signal, but we cannot see why a row matched (the snippet is
 # truncated), so it stays small enough that it can never outweigh an actual title match.
 UPSTREAM_RANK_MAX_SCORE = 10
+# A title that is a whole-word phrase inside a longer query ("world boss sha of anger" -> "Sha of
+# Anger") names the subject the qualifiers are about. Scaled by the share of query words the title
+# spells out, so "Sha of Anger" outranks "World boss", which outranks "Sha". A one-word title in a
+# long query earns only a few points, which the upstream rank can match.
+QUERY_CONTAINS_TITLE_MAX_SCORE = 30
 SYSTEM_REFERENCE_FAMILIES = {
     "system_reference",
     "expansion_reference",
@@ -243,6 +248,17 @@ def _family_baseline_score(query: str, title: str, *, family: str) -> tuple[int,
     return score, reasons
 
 
+def _query_contains_title_score(query: str, title: str) -> tuple[int, list[str]]:
+    query_words = _TITLE_WORD_RE.findall(query.lower())
+    title_words = _TITLE_WORD_RE.findall(title.lower())
+    size = len(title_words)
+    if not size or size >= len(query_words):
+        return 0, []
+    if not any(query_words[start : start + size] == title_words for start in range(len(query_words) - size + 1)):
+        return 0, []
+    return round(QUERY_CONTAINS_TITLE_MAX_SCORE * size / len(query_words)), ["query_contains_title"]
+
+
 def score_wiki_match(original_query: str, query: str, title: str, snippet: str, *, ordinal: int) -> tuple[int, list[str], str]:
     """Score one search row; returns (score, match reasons, content family). ``ordinal`` is the upstream rank."""
     family = classify_article_family(title)
@@ -250,6 +266,7 @@ def score_wiki_match(original_query: str, query: str, title: str, snippet: str, 
     reasons: list[str] = [f"upstream_rank_{ordinal + 1}"]
     for part_score, part_reasons in (
         _title_match_score(query, title, snippet, family=family),
+        _query_contains_title_score(query, title),
         _intent_family_score(original_query, family=family),
         _family_baseline_score(query, title, family=family),
     ):

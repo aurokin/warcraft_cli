@@ -6057,7 +6057,6 @@ class _GraphqlRequest:
     variables: dict[str, Any]
     endpoint: str
     cache_ttl_seconds: int
-    introspect: bool
 
 
 def _run_graphql(ctx: typer.Context, request: _GraphqlRequest) -> None:
@@ -6075,8 +6074,10 @@ def _run_graphql(ctx: typer.Context, request: _GraphqlRequest) -> None:
     finally:
         client.close()
     # ``data`` is the GraphQL result's own ``data`` object (``__schema`` under --introspect), built
-    # directly so a field aliased ``kind`` or ``query`` stays in ``data`` instead of becoming envelope.
-    result = {key: value for key, value in (payload or {}).items() if key != GRAPHQL_WARNINGS_KEY}
+    # directly so no field of it, whatever its alias, becomes an envelope key or is rewritten. Partial
+    # errors go under ``provenance`` for the same reason.
+    data = dict(payload or {})
+    warnings = data.pop(GRAPHQL_WARNINGS_KEY, None)
     query = {
         "operation_name": request.operation_name,
         "variables": request.variables,
@@ -6084,8 +6085,13 @@ def _run_graphql(ctx: typer.Context, request: _GraphqlRequest) -> None:
         "requested_endpoint": request.endpoint,
         "cache_ttl_seconds": request.cache_ttl_seconds,
     }
-    data = _with_warnings(result, client)
-    emit(ctx, success_envelope(provider="warcraftlogs", command="graphql", kind="graphql", data=data, query=query))
+    provenance = {"graphql_warnings": warnings} if warnings else {}
+    emit(
+        ctx,
+        success_envelope(
+            provider="warcraftlogs", command="graphql", kind="graphql", data=data, query=query, provenance=provenance
+        ),
+    )
 
 
 @app.command("graphql")
@@ -6143,7 +6149,6 @@ def graphql(
             ),
             endpoint=endpoint,
             cache_ttl_seconds=cache_ttl,
-            introspect=introspect,
         ),
     )
 

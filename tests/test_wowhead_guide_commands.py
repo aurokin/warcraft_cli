@@ -6,6 +6,7 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
+from warcraft_content.article_bundle import compare_article_bundles, load_article_bundle
 from wowhead_cli.expansion_profiles import resolve_expansion
 from wowhead_cli.guides import (
     GuideCategoryFilters,
@@ -495,6 +496,10 @@ def test_guide_export_writes_local_assets(monkeypatch, tmp_path) -> None:
     }
     assert isinstance(manifest["exported_at"], str)
     assert isinstance(manifest["guide_fetched_at"], str)
+    # The shared bundle loader names each bundle in `warcraft guide-compare` from these manifest fields.
+    bundle = load_article_bundle(export_dir)
+    described = compare_article_bundles([(export_dir, bundle), (export_dir, bundle)])["bundles"][0]
+    assert (described["provider"], described["title"]) == ("wowhead", "Frost Death Knight DPS Guide - Midnight")
 
     sections_lines = (export_dir / "sections.jsonl").read_text(encoding="utf-8").strip().splitlines()
     navigation_lines = (export_dir / "navigation-links.jsonl").read_text(encoding="utf-8").strip().splitlines()

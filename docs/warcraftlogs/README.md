@@ -139,8 +139,9 @@ Malformed upstream or local data exits `1`: `missing_talent_tree`, `invalid_resp
 `invalid_provider_payload`, `invalid_transport_packet`, `invalid_runtime_config`,
 `missing_code_verifier`.
 
-Partial GraphQL failures are surfaced, not swallowed: `data` keeps `graphql_warnings` and adds
-a note instead of pretending the result is complete.
+Partial GraphQL failures are surfaced, not swallowed: typed commands keep `data.graphql_warnings`
+and add a note instead of pretending the result is complete. `graphql` leaves `data` exactly as the
+API returned it and puts the partial errors in `provenance.graphql_warnings`.
 
 ## Sampled analytics and trust
 
@@ -157,8 +158,8 @@ sample is scanned, so a wrong id fails with `not_found` (exit 4) instead of retu
 
 When two raiders in one group each upload the pull, Warcraft Logs holds it as two reports. Those
 are collapsed into one sampled kill: same guild id, encounter, difficulty and raid size, with
-wall-clock start *and* end within 5 s of the latest upload already folded into one of that
-guild's pulls, so uploads a few seconds apart chain into one pull. Every open pull is a candidate,
+wall-clock start *and* end within 5 s of any report already folded into one of that guild's
+pulls, so uploads a few seconds apart chain into one pull. Every open pull is a candidate,
 so another pull that starts in between cannot split a double-logged one. Fights are clustered in
 start order, so the result does not depend on report listing order, and the earliest-starting
 report represents the pull. The collapse is reported, never silent —

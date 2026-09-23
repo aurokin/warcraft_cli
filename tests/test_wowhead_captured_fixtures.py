@@ -19,7 +19,8 @@ import pytest
 from wowhead_cli.entity_types import SUGGESTION_TYPE_TO_ENTITY, suggestion_entity_type_from_type_id
 from wowhead_cli.expansion_profiles import resolve_expansion
 from wowhead_cli.main import app
-from wowhead_cli.ranking import STALE_GUIDE_REASON, merge_suggestion_lists, normalize_search_results
+from wowhead_cli.ranking import STALE_GUIDE_REASON, merge_suggestion_lists, search_result_url
+from wowhead_cli.wowhead_client import suggestion_entity_type
 
 from tests.fixtures.wowhead_canaries import SUGGESTION_TYPE_NAME_TO_ENTITY
 from tests.wowhead_testkit import captured_json, captured_page, runner
@@ -283,15 +284,18 @@ def test_search_routes_a_real_world_event_suggestion_to_an_openable_url(monkeypa
     assert "follow_up" not in event_row
 
 
-def test_the_only_ranked_rows_left_without_a_url_are_ones_an_id_cannot_address() -> None:
-    """Rank every row the captured responses contain and check each one is openable."""
+def test_the_only_rows_left_without_a_url_are_ones_an_id_cannot_address() -> None:
+    """Build the URL for every row the captured responses contain and check each one is openable."""
     unroutable: set[str] = set()
     for name in CAPTURED_SUGGESTION_FILES:
-        payload = captured_json(name)
-        rows, _ = merge_suggestion_lists(payload)
-        ranked = normalize_search_results(rows, query=payload["search"], expansion=resolve_expansion(None))
-        assert ranked, name
-        unroutable.update(row["type_name"] for row in ranked if row["url"] is None)
+        rows, _ = merge_suggestion_lists(captured_json(name))
+        assert rows, name
+        unroutable.update(
+            row["typeName"]
+            for row in rows
+            if search_result_url(entity_type=suggestion_entity_type(row), entity_id=row["id"], expansion=resolve_expansion(None))
+            is None
+        )
     # Wowhead addresses these only as /trading-post-activity/<slug>-<id>; the id alone is not enough.
     assert unroutable == {"Trading Post Activity"}
 
@@ -325,6 +329,19 @@ def test_search_leads_with_the_entity_wowhead_ranks_first_in_its_database_list(
     assert all(row["ranking"]["score"] < top["ranking"]["score"] for row in rows[1:])
 
 
+def test_wowheads_top_guide_does_not_outrank_the_entity_its_database_list_puts_first(monkeypatch) -> None:
+    """The classic response heads `categories.guides` with "Obtaining Thunderfury, Blessed Blade ..."."""
+    payload = captured_json("search_suggestions_classic_thunderfury.json")
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.search_suggestions", lambda self, query: payload)
+    result = runner.invoke(app, ["--expansion", "classic", "resolve", "thunderfury"])
+    assert result.exit_code == 0
+
+    data = json.loads(result.stdout)["data"]
+    assert (data["match"]["entity_type"], data["match"]["id"]) == ("item", 19019)
+    assert data["confidence"] == "high"
+    assert data["next_command"] == "wowhead --expansion classic entity item 19019"
+
+
 def test_search_and_resolve_include_the_rows_wowhead_lists_only_in_categories(monkeypatch) -> None:
     """In this capture Faction 529 heads `categories.database` and is not in the ten-row `results` list."""
     payload = captured_json("search_suggestions_argent_dawn.json")
@@ -354,19 +371,33 @@ def test_search_and_resolve_include_the_rows_wowhead_lists_only_in_categories(mo
         "database": 20,
     }
     assert data["suggestion_merge"]["duplicates_merged"] == 5
-    assert data["count"] == data["total_matches"] == data["suggestion_merge"]["unique_rows"] == 34
+    assert data["suggestion_merge"]["unique_rows"] == 34
+    # Six rows Wowhead matched on text the suggestion never shows name neither "argent" nor "dawn".
+    assert data["suggestion_merge"]["unmatched_rows_dropped"] == 6
+    assert data["count"] == data["total_matches"] == 28
     assert data["truncated"] is False
-    assert len({(row["entity_type"], row["id"]) for row in data["results"]}) == 34
+    assert len({(row["entity_type"], row["id"]) for row in data["results"]}) == 28
     commission = next(row for row in data["results"] if row["id"] == 12846)
     assert commission["metadata"]["suggestion_lists"] == ["results", "database"]
     assert commission["metadata"]["popularity"] == 0
-    # Wowhead ranks achievement 18372 third in `database` for text the row never shows; nothing in
-    # its name matches, so it gets no rank bonus and trails every row whose name does.
-    ids = [row["id"] for row in data["results"]]
-    achievement = data["results"][ids.index(18372)]
-    assert achievement["name"] == "Wards of the Dread Citadel"
-    assert achievement["ranking"]["match_reasons"] == []
-    assert ids.index(18372) > ids.index(12846)
+    # Wowhead ranks achievement 18372 "Wards of the Dread Citadel" third in `database` for text the
+    # row never shows; nothing in its name matches, so it is not returned.
+    assert 18372 not in [row["id"] for row in data["results"]]
+
+
+def test_a_stopword_in_the_query_does_not_earn_wowheads_rank_bonus(monkeypatch) -> None:
+    """"the" is inside "Wards of the Dread Citadel", which Wowhead ranks third for "argent dawn"."""
+    payload = captured_json("search_suggestions_argent_dawn.json")
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.search_suggestions", lambda self, query: payload)
+    result = runner.invoke(app, ["search", "the argent dawn", "--limit", "50"])
+    assert result.exit_code == 0
+
+    rows = json.loads(result.stdout)["data"]["results"]
+    assert 18372 not in [row["id"] for row in rows]
+    assert (rows[0]["entity_type"], rows[0]["id"]) == ("faction", 529)
+    # Stopwords do not count as terms either, so "Argent Dawn Commission" matches every term.
+    commission = next(row for row in rows if row["id"] == 12846)
+    assert commission["ranking"]["match_reasons"] == ["all_terms_match"]
 
 
 def test_resolve_answers_a_currency_query_with_the_currency(monkeypatch) -> None:
@@ -386,7 +417,22 @@ def test_resolve_answers_a_currency_query_with_the_currency(monkeypatch) -> None
     assert 84914 in quest_ids or 82378 in quest_ids
 
 
-def test_search_ranks_every_stale_guide_below_the_current_ones(monkeypatch) -> None:
+def test_resolve_keeps_the_database_rank_of_a_name_that_starts_with_the_query(monkeypatch) -> None:
+    """"valorstone" shares no whole word with "Valorstones", but the name starts with the query.
+
+    Gating the database rank on whole words alone left five rows tied and the query unresolved.
+    """
+    payload = captured_json("search_suggestions_valorstones.json")
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.search_suggestions", lambda self, query: payload)
+    result = runner.invoke(app, ["resolve", "valorstone", "--limit", "5"])
+    assert result.exit_code == 0
+
+    data = json.loads(result.stdout)["data"]
+    assert (data["match"]["entity_type"], data["match"]["id"]) == ("currency", 3008)
+    assert data["confidence"] == "high"
+
+
+def test_search_ranks_stale_guides_below_current_guides_that_match_as_strongly(monkeypatch) -> None:
     """Five retired guides contain "fury warrior guide" verbatim; the current Midnight ones only share its words."""
     payload = captured_json("search_suggestions_fury_warrior_guide.json")
     monkeypatch.setattr("wowhead_cli.main.WowheadClient.search_suggestions", lambda self, query: payload)
@@ -398,16 +444,44 @@ def test_search_ranks_every_stale_guide_below_the_current_ones(monkeypatch) -> N
     assert stale == [False] * 6 + [True] * 14
     assert [row["id"] for row in rows[:6]] == [3087, 3082, 17733, 7242, 17726, 33101]
     assert all(row["metadata"]["updated"].startswith("2026-08") for row in rows[:6])
-    # The retired guides still outscore on title text; they are ordered last, not dropped or rescored.
+    # The retired guides still outscore some current ones on title text; they are ordered below, not rescored.
     legion_remix = next(row for row in rows if row["id"] == 31608)
-    assert legion_remix["ranking"]["score"] > rows[0]["ranking"]["score"]
+    assert legion_remix["ranking"]["score"] > rows[5]["ranking"]["score"]
 
     resolved = runner.invoke(app, ["resolve", "Fury Warrior guide", "--limit", "10"])
     assert resolved.exit_code == 0
     data = json.loads(resolved.stdout)["data"]
-    # Six current guides tie on score, so resolve names the leader but does not claim it.
+    # Six current guides share the query's words; Wowhead's own guide order names the main one.
     assert data["match"]["id"] == 3087
-    assert data["confidence"] == "low"
-    assert data["resolved"] is False
-    assert data["next_command"] is None
-    assert data["fallback_search_command"] == "wowhead search 'Fury Warrior guide'"
+    assert "upstream_database_rank" in data["match"]["ranking"]["match_reasons"]
+    assert data["confidence"] == "high"
+    assert data["next_command"] == "wowhead guide 3087"
+
+
+@pytest.mark.parametrize(
+    ("query", "ids"),
+    [
+        ("fury warrior mage tower", [14850, 3087, 3082, 17733, 5118]),
+        ("Fury Warrior PvP Guide", [18470, 3087, 3082, 17733]),
+        ("Legion Remix Fury Warrior guide", [31608, 3087, 3082, 17733]),
+    ],
+)
+def test_search_leads_with_a_stale_guide_the_query_names_and_drops_rows_it_does_not(
+    monkeypatch: pytest.MonkeyPatch, query: str, ids: list[int]
+) -> None:
+    """The capture answers "fury warrior guide"; these queries name one of its retired guides.
+
+    The retired guide's title starts with the query, which no current guide's does, so it leads.
+    The three current guides Wowhead ranks first keep that rank bonus (they share "fury warrior");
+    every other current guide matches no query term and is dropped, not listed ahead of the answer.
+    """
+    payload = captured_json("search_suggestions_fury_warrior_guide.json")
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.search_suggestions", lambda self, query: payload)
+    result = runner.invoke(app, ["search", query, "--limit", "5"])
+    assert result.exit_code == 0
+
+    data = json.loads(result.stdout)["data"]
+    assert [row["id"] for row in data["results"]] == ids
+    assert STALE_GUIDE_REASON in data["results"][0]["ranking"]["match_reasons"]
+    assert data["suggestion_merge"]["unmatched_rows_dropped"] == 20 - len(ids)
+    assert data["truncated"] is False

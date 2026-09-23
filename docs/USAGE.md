@@ -52,8 +52,9 @@ Every provider command emits one JSON object with the shared envelope keys `ok`,
 `command`, `kind`, `schema_version`, `query`, `provenance`, and `data`; failures add `error` with a
 stable `code`, a human `message`, and optional `details`, and are written to stderr. Read the payload
 from `data`. The `warcraft` wrapper's own commands (`doctor`, `search`, `resolve`, and the composite
-packets) emit exactly those envelope keys with `provider: "warcraft"` (`resolve` names the provider
-it selected): everything else is under `data` on success and under `error.details` on failure.
+packets) emit exactly those envelope keys with `provider: "warcraft"` (`resolve` reports the provider
+it selected as `data.selected_provider`), and every failure has `kind: "error"`: everything else is
+under `data` on success and under `error.details` on failure.
 `warcraft <provider> ...` passthrough output is the provider's envelope.
 
 Exit codes:

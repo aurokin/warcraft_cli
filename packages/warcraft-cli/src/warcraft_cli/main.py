@@ -12,7 +12,7 @@ from typing import Any, NoReturn
 from urllib.parse import urlparse
 
 import typer
-from warcraft_content.article_bundle import compare_article_bundles, load_article_bundle
+from warcraft_content.article_bundle import ArticleBundleError, compare_article_bundles, load_article_bundle
 from warcraft_core.cli import (
     CompactMaxCharsOption,
     CompactOption,
@@ -24,6 +24,7 @@ from warcraft_core.cli import (
     cfg_as,
     configure,
     emit,
+    fail,
     guarded_run,
 )
 from warcraft_core.exit_codes import EXIT_GENERIC, EXIT_NETWORK, EXIT_NOT_FOUND, exit_code_for
@@ -165,28 +166,22 @@ def _expansion_passthrough_advisory(ctx: typer.Context, *, provider_name: str) -
                 "command was passed through unchanged."
             ),
         }
-    _emit(ctx,
-        {
-            "ok": False,
-            "error": {
-                "code": "unsupported_provider_expansion",
-                "message": (
-                    f"Provider {provider_name!r} does not support wrapper expansion "
-                    f"{requested_expansion!r}."
-                ),
-                "details": {
-                    "provider": provider_name,
-                    "requested_expansion": requested_expansion,
-                    "expansion_support": provider_expansion_support(
-                        registration,
-                        requested_expansion=requested_expansion,
-                    ),
-                },
-            },
+    fail(
+        ctx,
+        "unsupported_provider_expansion",
+        f"Provider {provider_name!r} does not support wrapper expansion {requested_expansion!r}.",
+        query=_passthrough_query(provider_name, requested_expansion),
+        details={
+            "provider": provider_name,
+            "requested_expansion": requested_expansion,
+            "expansion_support": provider_expansion_support(registration, requested_expansion=requested_expansion),
         },
-        err=True,
     )
-    raise typer.Exit(1)
+
+
+def _passthrough_query(provider_name: str, requested_expansion: str) -> dict[str, str]:
+    """What a passthrough refusal echoes: the wrapper's own parsed input, never the provider's argv."""
+    return {"provider": provider_name, "expansion": requested_expansion}
 
 
 def _has_option(args: list[str], flags: set[str]) -> bool:
@@ -230,21 +225,13 @@ def _passthrough_args(ctx: typer.Context, *, provider_name: str, forward_output:
         duplicate_flags = {f"--{registration.expansion_option}"}
         if _has_option(args, duplicate_flags):
             flag_text = " or ".join(sorted(duplicate_flags))
-            _emit(ctx,
-                {
-                    "ok": False,
-                    "error": {
-                        "code": "duplicate_expansion_argument",
-                        "message": (
-                            f"Do not pass both warcraft --expansion and provider-level {flag_text} "
-                            "in the same command."
-                        ),
-                        "details": {"provider": provider_name, "requested_expansion": requested_expansion},
-                    },
-                },
-                err=True,
+            fail(
+                ctx,
+                "duplicate_expansion_argument",
+                f"Do not pass both warcraft --expansion and provider-level {flag_text} in the same command.",
+                query=_passthrough_query(provider_name, requested_expansion),
+                details={"provider": provider_name, "requested_expansion": requested_expansion},
             )
-            raise typer.Exit(1)
         return [*expansion_args, *args]
     return args
 
@@ -1130,7 +1117,6 @@ def _write_transport_packet_or_fail(
     path_value: str | None,
     packet: dict[str, Any],
     source: str,
-    kind: str,
     route: dict[str, Any] | None = None,
     provider_result: dict[str, Any] | None = None,
 ) -> str | None:
@@ -1144,7 +1130,6 @@ def _write_transport_packet_or_fail(
             code="transport_packet_write_failed",
             message=f"Failed to write talent transport packet: {exc}",
             source=source,
-            kind=kind,
             route=route,
             provider_result=provider_result,
         )
@@ -1341,23 +1326,19 @@ def _fail_talent_route(
     code: str,
     message: str,
     source: str,
-    kind: str,
     route: dict[str, Any] | None = None,
     provider_result: dict[str, Any] | None = None,
 ) -> NoReturn:
-    payload: dict[str, Any] = {
-        "ok": False,
-        "error": {"code": code, "message": message},
-        "provider": "warcraft",
-        "kind": kind,
-        "source": source,
-    }
+    details: dict[str, Any] = {"source": source}
     if route is not None:
-        payload["route"] = route
+        details["route"] = route
+    exit_code = None
     if provider_result is not None:
-        payload["provider_result"] = provider_result
-    _emit(ctx, payload, err=True)
-    raise typer.Exit(1)
+        details["provider_result"] = provider_result
+        # A failed provider's own exit code covers its provider-specific codes; otherwise map ``code``.
+        provider_exit = provider_result.get("exit_code")
+        exit_code = provider_exit if isinstance(provider_exit, int) and provider_exit != 0 else None
+    fail(ctx, code, message, exit_code=exit_code, details=details)
 
 
 def _transport_packet_from_provider_result(
@@ -1367,7 +1348,6 @@ def _transport_packet_from_provider_result(
     route: dict[str, Any],
     provider_result: dict[str, Any],
     command_name: str,
-    kind: str,
 ) -> dict[str, Any]:
     producer_payload = provider_payload_data(provider_result.get("payload"))
     provider_name = route.get("provider")
@@ -1379,7 +1359,6 @@ def _transport_packet_from_provider_result(
             code=str(error_payload.get("code") or "provider_command_failed"),
             message=str(error_payload.get("message") or f"{command_name} failed."),
             source=source,
-            kind=kind,
             route=route,
             provider_result=provider_result,
         )
@@ -1391,7 +1370,6 @@ def _transport_packet_from_provider_result(
             code="missing_transport_packet",
             message=f"{command_name} did not return a talent transport packet.",
             source=source,
-            kind=kind,
             route=route,
             provider_result=provider_result,
         )
@@ -1403,7 +1381,6 @@ def _transport_packet_from_provider_result(
             code="invalid_transport_packet",
             message=f"{command_name} returned an invalid talent transport packet: {exc}",
             source=source,
-            kind=kind,
             route=route,
             provider_result=provider_result,
         )
@@ -1415,7 +1392,6 @@ def _wowhead_transport_packet(
     source: str,
     listed_build_limit: int,
     requested_expansion: str | None,
-    kind: str,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     route = {"kind": "wowhead_talent_calc", "provider": "wowhead"}
     producer_result = provider_invoke(
@@ -1429,7 +1405,6 @@ def _wowhead_transport_packet(
         route=route,
         provider_result=producer_result,
         command_name="wowhead talent-calc-packet",
-        kind=kind,
     )
     return route, producer_result, packet
 
@@ -1442,7 +1417,6 @@ def _warcraftlogs_transport_packet(
     fight_id: int | None,
     allow_unlisted: bool,
     requested_expansion: str | None,
-    kind: str,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     normalized_source = _normalize_warcraftlogs_report_reference(source)
     route = {
@@ -1464,7 +1438,6 @@ def _warcraftlogs_transport_packet(
         route=route,
         provider_result=producer_result,
         command_name="warcraftlogs report-player-talents",
-        kind=kind,
     )
     return route, producer_result, packet
 
@@ -1477,7 +1450,6 @@ def _maybe_upgrade_transport_packet(
     packet: dict[str, Any],
     validate: bool,
     requested_expansion: str | None,
-    kind: str,
 ) -> tuple[str | None, bool, bool, dict[str, Any] | None, dict[str, Any]]:
     source_status = packet.get("transport_status") if isinstance(packet.get("transport_status"), str) else None
     upgrade_result: dict[str, Any] | None = None
@@ -1493,7 +1465,6 @@ def _maybe_upgrade_transport_packet(
                 code="packet_upgrade_failed",
                 message=f"simc validate-talent-transport returned an invalid upgraded packet: {exc}",
                 source=source,
-                kind=kind,
                 route=route,
             )
         if _provider_result_failed(upgrade_result):
@@ -1503,7 +1474,6 @@ def _maybe_upgrade_transport_packet(
                 code=str(error_payload.get("code") or "packet_upgrade_failed"),
                 message=str(error_payload.get("message") or "simc validate-talent-transport failed while upgrading the packet."),
                 source=source,
-                kind=kind,
                 route=route,
                 provider_result=upgrade_result,
             )
@@ -1513,7 +1483,6 @@ def _maybe_upgrade_transport_packet(
                 code="packet_upgrade_failed",
                 message="simc validate-talent-transport did not return an upgraded talent transport packet.",
                 source=source,
-                kind=kind,
                 route=route,
                 provider_result=upgrade_result,
             )
@@ -1531,7 +1500,6 @@ def _resolve_talent_transport(
     allow_unlisted: bool,
     listed_build_limit: int,
     validate: bool,
-    kind: str = "talent_transport",
 ) -> dict[str, Any]:
     requested_expansion = _requested_expansion(ctx)
     route: dict[str, Any]
@@ -1544,7 +1512,6 @@ def _resolve_talent_transport(
             code="invalid_transport_packet",
             message=str(exc),
             source=source,
-            kind=kind,
         )
     if packet_file is not None:
         packet, packet_path = packet_file
@@ -1559,7 +1526,6 @@ def _resolve_talent_transport(
             code="invalid_transport_packet",
             message=f"Talent transport packet file was not found: {source}",
             source=source,
-            kind=kind,
         )
     elif _looks_like_wowhead_talent_calc_reference(source):
         route, producer_result, packet = _wowhead_transport_packet(
@@ -1567,7 +1533,6 @@ def _resolve_talent_transport(
             source=source,
             listed_build_limit=listed_build_limit,
             requested_expansion=requested_expansion,
-            kind=kind,
         )
     elif actor_id is not None and _looks_like_warcraftlogs_report_reference(source):
         route, producer_result, packet = _warcraftlogs_transport_packet(
@@ -1577,7 +1542,6 @@ def _resolve_talent_transport(
             fight_id=fight_id,
             allow_unlisted=allow_unlisted,
             requested_expansion=requested_expansion,
-            kind=kind,
         )
     elif _looks_like_transport_packet_path_input(source):
         _fail_talent_route(
@@ -1585,7 +1549,6 @@ def _resolve_talent_transport(
             code="invalid_transport_packet",
             message=f"Talent transport packet file was not found: {source}",
             source=source,
-            kind=kind,
         )
     else:
         _fail_talent_route(
@@ -1596,7 +1559,6 @@ def _resolve_talent_transport(
                 "or a local talent transport packet JSON path."
             ),
             source=source,
-            kind=kind,
         )
 
     source_status, upgrade_attempted, packet_changed, upgrade_result, packet = _maybe_upgrade_transport_packet(
@@ -1606,7 +1568,6 @@ def _resolve_talent_transport(
         packet=packet,
         validate=validate,
         requested_expansion=requested_expansion,
-        kind=kind,
     )
     return {
         "source": source,
@@ -2052,9 +2013,6 @@ def resolve(
         "included_provider_count": len(included_registrations),
         "excluded_provider_count": len(excluded_providers),
         "resolved": best_payload is not None,
-        # The envelope is attributed to the provider whose match it carries; `selected_provider` is
-        # the same choice, nullable, inside data.
-        "provider": best_provider or "warcraft",
         "selected_provider": best_provider,
         "match": match,
         "next_command": best_payload.get("next_command") if isinstance(best_payload, dict) else None,
@@ -2141,20 +2099,8 @@ def _fail_actor_profile(
     exit_code: int = EXIT_GENERIC,
 ) -> NoReturn:
     """Emit the crosswalk failure envelope. Structured context goes under ``error.details``."""
-    error: dict[str, Any] = {"code": code, "message": message}
-    if details:
-        error["details"] = details
-    payload: dict[str, Any] = {
-        "ok": False,
-        "provider": "warcraft",
-        "kind": "actor_profile_crosswalk",
-        "query": query,
-        "error": error,
-    }
-    if sources is not None:
-        payload["sources"] = sources
-    _emit(ctx, payload, err=True)
-    raise typer.Exit(exit_code)
+    context = {**({"sources": sources} if sources is not None else {}), **(details or {})}
+    fail(ctx, code, message, exit_code=exit_code, query=query, details=context)
 
 
 # A whole-report crosswalk names the fights it reads, and Warcraft Logs takes one --fight-id flag
@@ -2497,48 +2443,15 @@ def guide_compare(
 ) -> None:
     """Compare two or more already-exported guide bundles from wowhead, method, or icy-veins."""
     if len(bundles) < 2:
-        _emit(ctx,
-            {
-                "ok": False,
-                "error": {
-                    "code": "invalid_argument",
-                    "message": "guide-compare requires at least two exported guide bundles.",
-                },
-            },
-            err=True,
-        )
-        raise typer.Exit(1)
+        fail(ctx, "invalid_argument", "guide-compare requires at least two exported guide bundles.")
 
     bundle_inputs: list[tuple[Path, dict[str, Any]]] = []
     for bundle_path in bundles:
         resolved_path = bundle_path.expanduser()
-        if not resolved_path.exists():
-            _emit(ctx,
-                {
-                    "ok": False,
-                    "error": {
-                        "code": "invalid_bundle",
-                        "message": f"Bundle directory not found: {resolved_path}",
-                    },
-                },
-                err=True,
-            )
-            raise typer.Exit(1)
         try:
             bundle_inputs.append((resolved_path, load_article_bundle(resolved_path)))
-        except (ValueError, OSError) as exc:
-            _emit(ctx,
-                {
-                    "ok": False,
-                    "error": {
-                        "code": "invalid_bundle",
-                        "message": str(exc),
-                    },
-                    "bundle": str(resolved_path),
-                },
-                err=True,
-            )
-            raise typer.Exit(1) from exc
+        except ArticleBundleError as exc:
+            fail(ctx, exc.code, exc.message, details={"bundle": str(resolved_path)})
 
     payload = {
         "provider": "warcraft",
@@ -2963,14 +2876,7 @@ def guide_compare_query(
     try:
         selected_providers = _normalize_guide_compare_providers(provider)
     except ValueError as exc:
-        _emit(ctx,
-            {
-                "ok": False,
-                "error": {"code": "invalid_argument", "message": str(exc)},
-            },
-            err=True,
-        )
-        raise typer.Exit(1) from exc
+        fail(ctx, "invalid_argument", str(exc))
 
     payload = _guide_compare_query_payload(
         GuideCompareQueryOptions(
@@ -3029,7 +2935,6 @@ def talent_packet(
         allow_unlisted=allow_unlisted,
         listed_build_limit=listed_build_limit,
         validate=validate,
-        kind="talent_transport",
     )
     packet = resolved["talent_transport_packet"]
     written_packet_path = _write_transport_packet_or_fail(
@@ -3037,7 +2942,6 @@ def talent_packet(
         path_value=out,
         packet=packet,
         source=source,
-        kind="talent_transport",
         route=resolved["route"],
         provider_result=resolved["producer_result"],
     )
@@ -3090,7 +2994,6 @@ def _talent_describe_payload(ctx: typer.Context, options: TalentDescribeOptions)
         allow_unlisted=options.allow_unlisted,
         listed_build_limit=options.listed_build_limit,
         validate=options.validate,
-        kind="talent_describe",
     )
     packet = resolved["talent_transport_packet"]
     describe_result = _describe_transport_packet_with_simc(
@@ -3110,7 +3013,6 @@ def _talent_describe_payload(ctx: typer.Context, options: TalentDescribeOptions)
             code=str(error_payload.get("code") or "describe_build_failed"),
             message=str(error_payload.get("message") or "simc describe-build failed for the routed talent transport packet."),
             source=options.source,
-            kind="talent_describe",
             route=resolved["route"],
             provider_result=describe_result,
         )
@@ -3119,7 +3021,6 @@ def _talent_describe_payload(ctx: typer.Context, options: TalentDescribeOptions)
         path_value=options.packet_out,
         packet=packet,
         source=options.source,
-        kind="talent_describe",
         route=resolved["route"],
         provider_result=describe_result,
     )
@@ -3255,15 +3156,7 @@ def guide_builds_simc(
     try:
         source_kind, bundle_inputs, source_manifest = _load_guide_build_source(source)
     except ValueError as exc:
-        _emit(ctx,
-            {
-                "ok": False,
-                "error": {"code": "invalid_bundle_source", "message": str(exc)},
-                "source": str(source),
-            },
-            err=True,
-        )
-        raise typer.Exit(1) from exc
+        fail(ctx, "invalid_bundle_source", str(exc), details={"source": str(source)})
 
     payload = _guide_builds_simc_payload(
         source_path=source,
@@ -3281,7 +3174,7 @@ def guide_builds_simc(
         # included, becomes `error.details`.
         _emit(ctx,
             {
-                **{key: value for key, value in payload.items() if key != "kind"},
+                **payload,
                 "ok": False,
                 "error": {
                     "code": "simc_handoff_failed",

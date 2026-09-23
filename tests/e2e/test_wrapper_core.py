@@ -72,29 +72,29 @@ def _provider_result_rows(rows: dict[str, dict[str, Any]]) -> dict[str, list[dic
     return {name: row["payload"]["data"]["results"] for name, row in rows.items()}
 
 
-def _page_rank_key(row: dict[str, Any]) -> tuple[int, int, int, int, str, str, str]:
-    """The documented merged-page order, rebuilt from each row's own ranking fields."""
-    ranking = row["wrapper_ranking"]
-    return (
-        0 if ranking["anchor"] else 1,
-        1 if ranking["off_intent"] else 0,
-        -ranking["score"],
-        -ranking["provider_score"],
-        row["provider"],
-        str(row["name"]),
-        str(row["id"]),
-    )
+def _page_ids(rows: list[dict[str, Any]]) -> str:
+    return json.dumps([(row["provider"], row["id"]) for row in rows])
 
 
 def _assert_merged_page(result: Result) -> list[dict[str, Any]]:
-    """The page is in rank order, drawn from the provider payloads, and its policy block adds up."""
+    """The page keeps every provider's own order, and its policy block adds up.
+
+    A provider's order is its ranking (WRAPPER_PROVIDER_CONTRACT.md), so each provider's rows on the
+    page must be the head of that provider's own list: the wrapper interleaves providers, but a row
+    it reordered, skipped past or invented breaks the prefix. Between providers only the documented
+    tiers are checked (anchored rows first, off-intent rows last); the scores that order the rest are
+    the product's own arithmetic, not something this journey can know independently.
+    """
     data = result.data
     rows: list[dict[str, Any]] = data["results"]
-    assert rows == sorted(rows, key=_page_rank_key), json.dumps([(row["provider"], row["id"]) for row in rows])
     by_provider = _provider_result_rows(_provider_rows(result))
-    for row in rows:
-        provider_ids = [candidate["id"] for candidate in by_provider[row["provider"]]]
-        assert row["id"] in provider_ids, f"{row['provider']} never returned {row['id']!r}"
+    assert {row["provider"] for row in rows} <= set(by_provider), _page_ids(rows)
+    for provider, provider_rows in by_provider.items():
+        page_ids = [row["id"] for row in rows if row["provider"] == provider]
+        own_head = [row["id"] for row in provider_rows[: len(page_ids)]]
+        assert page_ids == own_head, f"{provider} ranked {own_head}, the page shows {page_ids}"
+    tiers = [(not row["wrapper_ranking"]["anchor"], row["wrapper_ranking"]["off_intent"]) for row in rows]
+    assert tiers == sorted(tiers), _page_ids(rows)
     policy = data["merge_policy"]
     assert policy["provider_row_counts"] == dict(Counter(row["provider"] for row in rows))
     assert policy["candidate_row_count"] == data["count"]
@@ -103,7 +103,7 @@ def _assert_merged_page(result: Result) -> list[dict[str, Any]]:
 
 def _row_index(rows: list[dict[str, Any]], provider: str, identifier: Any) -> int:
     matches = [index for index, row in enumerate(rows) if (row["provider"], row["id"]) == (provider, identifier)]
-    assert matches, f"{provider} {identifier!r} is not on the page: {[(row['provider'], row['id']) for row in rows]}"
+    assert matches, f"{provider} {identifier!r} is not on the page: {_page_ids(rows)}"
     return matches[0]
 
 
@@ -174,16 +174,26 @@ def test_search_fans_out_to_every_included_provider(item_search: Result) -> None
         assert row["wrapper_ranking"]["reasons"], row
 
 
-def test_search_puts_the_named_item_on_the_first_page_above_news(item_search: Result) -> None:
+def _assert_item_leads(rows: list[dict[str, Any]]) -> None:
+    """Wowhead's top row for the bare item name is the item, and the page leads with it.
+
+    The page must also carry a row titled exactly the query (Wowhead's ``Thunderfury`` proc spells,
+    which it ranks below the item): that row is what an exact-title boost used to lift above the
+    item, so without it on the page the first-row check could not fail for that reason.
+    """
+    top = rows[0]
+    assert (top["provider"], top["id"], top["name"]) == ("wowhead", pins.ITEM_ID, pins.ITEM_NAME), _page_ids(rows)
+    assert top["wrapper_ranking"]["anchor"] is True, json.dumps(top["wrapper_ranking"])
+    assert any(row["name"].lower() == ITEM_QUERY for row in rows[1:]), _page_ids(rows)
+
+
+def test_search_leads_with_the_named_item(item_search: Result) -> None:
     """A bare item name is answered by the item, not by the players, posts or pages that mention it."""
     _assert_fanout_answered(item_search)
     rows = _assert_merged_page(item_search)
-    item = _row_index(rows, "wowhead", pins.ITEM_ID)
-    assert rows[item]["name"] == pins.ITEM_NAME
-    news = [index for index, row in enumerate(rows) if row["kind"] == "news"]
-    assert all(index > item for index in news), json.dumps([(row["provider"], row["id"]) for row in rows])
+    _assert_item_leads(rows)
     # Raider.IO has characters named Thunderfury; none of them may take the page from the item.
-    assert "raiderio" not in {row["provider"] for row in rows}, json.dumps(rows)[:600]
+    assert "raiderio" not in {row["provider"] for row in rows}, _page_ids(rows)
 
 
 def test_search_merges_candidates_from_more_than_one_provider(item_search: Result) -> None:
@@ -198,11 +208,12 @@ def test_search_merges_candidates_from_more_than_one_provider(item_search: Resul
 
 
 def test_search_merges_guide_candidates_from_more_than_one_provider() -> None:
-    """The guide-shaped query the old live suite covered: guide sites share the page too."""
+    """The guide sites share the page: Method's and Icy Veins' own guides for the spec are both on it."""
     result = run("warcraft", "search", pins.GUIDE_QUERY, "--limit", "6")
     _assert_fanout_answered(result)
     rows = _assert_merged_page(result)
-    assert len({row["provider"] for row in rows}) >= 2, json.dumps([(row["provider"], row["id"]) for row in rows])
+    for provider, guide in (("method", "mistweaver-monk"), ("icy-veins", "mistweaver-monk-pve-healing-guide")):
+        assert rows[_row_index(rows, provider, guide)]["kind"] == "guide", _page_ids(rows)
 
 
 def test_search_routes_a_structured_guild_query_to_raiderio_first(require) -> None:
@@ -213,12 +224,24 @@ def test_search_routes_a_structured_guild_query_to_raiderio_first(require) -> No
     assert (top["provider"], top["kind"], top["name"]) == ("raiderio", "guild", GUILD), json.dumps(top)[:600]
 
 
+def test_search_routes_a_multi_word_realm_profile_query_to_raiderio_first(require) -> None:
+    """``<region> <realm words> <name>`` is a profile query even when the realm is two words."""
+    require("raiderio")
+    result = run("warcraft", "search", f"{REGION} mal ganis {pins.CHARACTER_NAME}", "--limit", ITEM_LIMIT)
+    _assert_fanout_answered(result)
+    top = _assert_merged_page(result)[0]
+    assert (top["provider"], top["kind"], top["name"]) == ("raiderio", "character", pins.CHARACTER_NAME), json.dumps(top)[:600]
+    # Read as free text, the same row would be an off-intent profile that only fills leftover slots.
+    assert top["wrapper_ranking"]["off_intent"] is False, json.dumps(top["wrapper_ranking"])
+
+
 def test_search_keeps_a_raiderio_row_for_a_bare_character_name(require) -> None:
     """A bare name that is exactly a character's name keeps one profile slot on the page."""
     require("raiderio")
     result = run("warcraft", "search", pins.CHARACTER_NAME, "--limit", ITEM_LIMIT)
     _assert_fanout_answered(result)
     rows = _assert_merged_page(result)
+    # _assert_merged_page already holds the reserved row to Raider.IO's own top row.
     profiles = [row for row in rows if row["provider"] == "raiderio" and row["name"] == pins.CHARACTER_NAME]
     assert profiles, json.dumps([(row["provider"], row["name"]) for row in rows])
     assert result.data["merge_policy"]["reserved_exact_profile_slot_count"] == 1, json.dumps(result.data["merge_policy"])
@@ -237,7 +260,7 @@ def test_search_brief_and_debug_flags_reshape_the_same_candidates(item_search: R
         assert set(brief_row) - {"follow_up_command"} < set(full_row), brief_row
         assert brief_row["name"] == full_row["name"]
         assert brief_row["kind"] == full_row["kind"]
-        assert brief_row.get("follow_up_command") == full_row["follow_up"]["recommended_command"], brief_row
+        assert brief_row["follow_up_command"] == full_row["follow_up"]["command"], brief_row
 
     assert [row["id"] for row in data["ranking_debug"]] == [row["id"] for row in data["results"]]
     # The snapshot covers every registered provider, not just the ones this fanout included.
@@ -249,10 +272,10 @@ def test_search_brief_and_debug_flags_reshape_the_same_candidates(item_search: R
 def test_search_follow_up_command_returns_the_same_entity(item_search: Result) -> None:
     """Every row hands back a runnable command, and the item's command must reach that item."""
     rows = item_search.data["results"]
-    assert all(row["follow_up"]["recommended_command"] for row in rows), json.dumps(rows)[:600]
+    assert all(row["follow_up"]["command"] for row in rows), json.dumps(rows)[:600]
 
     row = rows[_row_index(rows, "wowhead", pins.ITEM_ID)]
-    binary, *args = shlex.split(row["follow_up"]["recommended_command"])
+    binary, *args = shlex.split(row["follow_up"]["command"])
     follow_up = run(binary, *args)
     assert follow_up.payload["provider"] == row["provider"]
     entity = follow_up.data["entity"]
@@ -271,7 +294,8 @@ def test_search_fails_with_the_network_error_when_no_provider_can_answer() -> No
         expect=EXIT_NETWORK,
         error_code="network_error",
     )
-    assert result.data == {}, result.describe()
+    assert result.payload["kind"] == "error"
+    assert result.payload["data"] == {}, result.describe()
     failed = {row["provider"]: row for row in result.payload["error"]["details"]["failed_providers"]}
     assert set(failed) == RETAIL_FANOUT_PROVIDERS - REPORT_ONLY_PROVIDERS, result.describe()
     for provider, row in failed.items():
@@ -279,7 +303,7 @@ def test_search_fails_with_the_network_error_when_no_provider_can_answer() -> No
         assert row["message"], provider
 
 
-def test_resolve_mirrors_the_selected_provider_and_hands_over_a_next_command(require) -> None:
+def test_resolve_selects_raiderio_and_hands_over_a_next_command(require) -> None:
     require("raiderio")
     result = run("warcraft", "resolve", GUILD_QUERY, "--limit", "5")
     _assert_fanout_answered(result)
@@ -303,15 +327,19 @@ def _assert_guild_resolved_by_raiderio(result: Result) -> None:
     data = result.data
     assert data["resolved"] is True, result.describe()
     assert data["selected_provider"] == "raiderio", result.describe()
-    assert result.payload["provider"] == "raiderio", "a resolved envelope must be attributed to the matched provider"
+    # The envelope names the binary that answered; the matched provider is data.selected_provider.
+    assert result.payload["provider"] == "warcraft"
     assert data["match"]["provider"] == "raiderio"
     assert data["match"]["name"] == GUILD
+    profile_url = data["match"]["profile_url"]
+    assert profile_url.startswith(f"https://raider.io/guilds/{REGION}/"), profile_url
 
     binary, *args = shlex.split(data["next_command"])
     assert binary == "raiderio"
     follow_up = run(binary, *args)
-    # The match's own profile URL has to come back from the command it handed over.
-    assert data["match"]["profile_url"] in json.dumps(follow_up.data), follow_up.describe()
+    # The command it handed over returns that guild, profile URL included.
+    assert follow_up.data["guild"]["name"] == GUILD, follow_up.describe()
+    assert profile_url in json.dumps(follow_up.data), follow_up.describe()
 
 
 def test_resolve_attributes_an_unresolved_answer_to_the_wrapper() -> None:
@@ -321,7 +349,7 @@ def test_resolve_attributes_an_unresolved_answer_to_the_wrapper() -> None:
 
     assert data["resolved"] is False
     assert data["selected_provider"] is None
-    assert result.payload["provider"] == "warcraft", "nothing matched, so the wrapper owns the answer"
+    assert result.payload["provider"] == "warcraft"
     assert data["match"] is None
     assert data["next_command"] is None
     assert data["best_unresolved_candidate"] is None
@@ -353,11 +381,7 @@ def test_expansion_filter_narrows_search_and_explains_every_exclusion() -> None:
     assert (wowhead["expansion"], wowhead["expansion_source"]) == ("wotlk", "flag"), json.dumps(wowhead)[:400]
     page = _assert_merged_page(result)
     assert all(row["provider"] == "wowhead" and "/wotlk/" in row["url"] for row in page), json.dumps(page)[:600]
-    item = _row_index(page, "wowhead", pins.ITEM_ID)
-    news = [index for index, row in enumerate(page) if row["kind"] == "news"]
-    assert news, "the bound must include a news post for the item to outrank"
-    assert min(news) > item
-    assert item < 2, json.dumps([(row["kind"], row["id"], row["name"]) for row in page])
+    _assert_item_leads(page)
 
 
 def test_expansion_filter_reaches_a_different_provider_profile_than_an_unfiltered_search(item_search: Result) -> None:
@@ -462,7 +486,8 @@ def test_guild_ranks_joins_every_raid_to_its_own_rankings_row(require) -> None:
     raids = result.data["raids"]
     assert raids and result.data["count"] == len(raids)
 
-    raiding = result.data["provider_payload"]["raiding"]
+    # provider_payload is Raider.IO's own envelope, kept whole for its citations.
+    raiding = result.data["provider_payload"]["data"]["raiding"]
     assert raiding["progression"] and raiding["rankings"], result.describe()
     _assert_rank_join(raids, raiding)
 

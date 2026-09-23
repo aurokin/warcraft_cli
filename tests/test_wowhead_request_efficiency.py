@@ -4,6 +4,7 @@ import json
 from unittest.mock import MagicMock
 
 from typer.testing import CliRunner
+from warcraft_core.envelope import REQUIRED_KEYS
 from wowhead_cli.main import app
 from wowhead_cli.wowhead_client import WowheadClient
 
@@ -49,7 +50,7 @@ def test_wowhead_search_stream_emits_jsonl_header_when_results_empty(monkeypatch
     )
     monkeypatch.setattr(
         "wowhead_cli.provider.normalize_search_results",
-        lambda results, *, query, expansion, entity_types=(), database_ranks=None: results,
+        lambda results, *, query, expansion, entity_types=(), rank_bonuses=None: (results, 0),
     )
 
     result = runner.invoke(app, ["--stream", "search", "thunderfury", "--limit", "10"])
@@ -74,7 +75,7 @@ def test_wowhead_search_stream_emits_jsonl_header_and_records(monkeypatch) -> No
     )
     monkeypatch.setattr(
         "wowhead_cli.provider.normalize_search_results",
-        lambda results, *, query, expansion, entity_types=(), database_ranks=None: results,
+        lambda results, *, query, expansion, entity_types=(), rank_bonuses=None: (results, 0),
     )
 
     result = runner.invoke(app, ["--stream", "search", "thunderfury", "--limit", "10"])
@@ -82,6 +83,7 @@ def test_wowhead_search_stream_emits_jsonl_header_and_records(monkeypatch) -> No
     lines = [line for line in result.stdout.splitlines() if line.strip()]
     assert len(lines) == 3
     header = json.loads(lines[0])
+    assert set(header) == REQUIRED_KEYS
     assert header["data"]["stream"] == {"field": "results", "count": 2}
     assert header["data"]["results"] == []
     record = json.loads(lines[1])

@@ -14,7 +14,9 @@ Every journey executes an installed binary (`.venv/bin/<name>`) as a real subpro
 - exactly one JSON envelope on stdout on success, or on stderr on failure, and nothing else;
 - the expected exit code (0, 2 usage, 3 auth, 4 not found, 5 network, 1 generic);
 - no traceback, ever;
-- `envelope_violations()` empty, and every field a journey reads taken from `data`.
+- `envelope_violations()` empty, so nothing at the top level but the envelope keys, and every field
+  a journey reads taken from `data`. `test_contract.py` also checks one success and one failure per
+  binary against the key list spelled out in the test.
 
 On top of that, journeys assert real content: names, ids, counts, files on disk, and agreement
 between commands (search, resolve, and entity must name the same thing, and the page a typed

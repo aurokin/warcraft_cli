@@ -43,6 +43,21 @@ def query_terms(query: str) -> list[str]:
     return [term for term in normalized.split(" ") if term]
 
 
+# Words too common to say what a query is about: "the argent dawn" means argent and dawn, and must not
+# match "Wards of the Dread Citadel" on "the".
+MATCH_STOPWORDS = frozenset({"the", "of", "a", "an", "and", "in", "on", "for", "to"})
+
+
+def word_tokens(text: str) -> set[str]:
+    """Lowercase whole words, with apostrophes dropped so "un'goro" and "Ungoro" are the same word."""
+    return set(re.findall(r"\w+", re.sub(r"['\u2019]", "", text.lower())))
+
+
+def match_terms(query: str) -> list[str]:
+    """The query words search ranking matches row names against, stopwords removed."""
+    return sorted(word_tokens(query) - MATCH_STOPWORDS)
+
+
 def score_text_match(query: str, *values: Any) -> int:
     terms = query_terms(query)
     if not terms:
@@ -209,10 +224,11 @@ def prefix_and_contains_score(normalized_query: str, *, name_normalized: str, di
 
 
 def term_match_score(terms: list[str], *, haystacks: list[str]) -> tuple[int, list[str]]:
+    """Score a row whose text holds every query term as a whole word."""
     if not terms or not haystacks:
         return 0, []
-    joined = " ".join(haystacks)
-    if all(term in joined for term in terms):
+    words = word_tokens(" ".join(haystacks))
+    if all(term in words for term in terms):
         return len(terms) * 3, ["all_terms_match"]
     return 0, []
 
@@ -231,7 +247,11 @@ def type_hint_score(query: str, *, entity_type: str | None) -> tuple[int, list[s
 # rows earn a bonus: the head bonus clears an exact name match (`exact_name` plus `name_prefix`, 40)
 # so upstream's best answer outranks a same-named secondary entity, while the step between ranks
 # stays under that, so an exactly named row one rank down still wins.
-UPSTREAM_DATABASE_RANK_BONUS: tuple[int, ...] = (42, 28, 14)
+# `categories.guides` orders guides the same way. Every current class guide shares a class-guide
+# query's words, so only that order says which is the main one; its bonus steps clear resolve's
+# 6-point margin but stay far under the database head's, so a top guide never outranks the entity
+# Wowhead's database list puts first.
+UPSTREAM_RANK_BONUS: dict[str, tuple[int, ...]] = {"database": (42, 28, 14), "guides": (21, 14, 7)}
 
 SuggestionKey = tuple[int, int]
 
@@ -245,20 +265,19 @@ def suggestion_key(row: dict[str, Any]) -> SuggestionKey | None:
     return None
 
 
-def upstream_database_ranks(response: dict[str, Any]) -> dict[SuggestionKey, int]:
-    """Read Wowhead's relevance order for database entities out of a suggestion response."""
+def upstream_rank_bonuses(response: dict[str, Any]) -> dict[SuggestionKey, int]:
+    """The bonus each leading row of Wowhead's `categories.database` and `categories.guides` order earns."""
     categories = response.get("categories")
-    rows = categories.get("database") if isinstance(categories, dict) else None
-    if not isinstance(rows, list):
+    if not isinstance(categories, dict):
         return {}
-    ranks: dict[SuggestionKey, int] = {}
-    for index, row in enumerate(rows):
-        if not isinstance(row, dict):
-            continue
-        key = suggestion_key(row)
-        if key is not None and key not in ranks:
-            ranks[key] = index
-    return ranks
+    bonuses: dict[SuggestionKey, int] = {}
+    for list_name, steps in UPSTREAM_RANK_BONUS.items():
+        rows = categories.get(list_name)
+        for row, bonus in zip(rows if isinstance(rows, list) else [], steps, strict=False):
+            key = suggestion_key(row) if isinstance(row, dict) else None
+            if key is not None:
+                bonuses.setdefault(key, bonus)
+    return bonuses
 
 
 def merge_suggestion_lists(response: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
@@ -295,19 +314,19 @@ def merge_suggestion_lists(response: dict[str, Any]) -> tuple[list[dict[str, Any
     return list(merged.values()), summary
 
 
-def database_rank_score(database_rank: int | None, *, entity_type: str | None) -> tuple[int, list[str]]:
-    """Score how highly Wowhead's own database ranking placed the row, plus a point for a routable row."""
+def upstream_rank_score(rank_bonus: int | None, *, entity_type: str | None) -> tuple[int, list[str]]:
+    """Score how highly Wowhead's own ordering placed the row, plus a point for a routable row."""
     score = 1 if entity_type is not None else 0
-    if database_rank is None or database_rank >= len(UPSTREAM_DATABASE_RANK_BONUS):
+    if not rank_bonus:
         return score, []
-    return score + UPSTREAM_DATABASE_RANK_BONUS[database_rank], ["upstream_database_rank"]
+    return score + rank_bonus, ["upstream_database_rank"]
 
 
 def search_result_score_and_reasons(
-    row: dict[str, Any], *, query: str, ranking_query: str, database_rank: int | None = None
+    row: dict[str, Any], *, query: str, ranking_query: str, rank_bonus: int | None = None
 ) -> tuple[int, list[str]]:
     normalized_query = " ".join(ranking_query.lower().split())
-    terms = query_terms(ranking_query)
+    terms = match_terms(ranking_query)
     name = str_field(row, "name")
     display_name = str_field(row, "displayName")
     type_name = str_field(row, "typeName")
@@ -319,15 +338,20 @@ def search_result_score_and_reasons(
     reasons: list[str] = []
     score = 0
 
+    exact = exact_match_score(normalized_query, name_normalized=name_normalized, display_normalized=display_normalized)
+    prefix = prefix_and_contains_score(
+        normalized_query, name_normalized=name_normalized, display_normalized=display_normalized
+    )
     # Wowhead ranks database rows on text the suggestion never shows (descriptions, criteria), so its
-    # rank only counts for a row whose own name shares a word with the query.
-    named = any(term in name_normalized or term in display_normalized for term in terms)
+    # rank only counts for a row whose own name shares a word with the query or contains the query
+    # ("valorstone" names "Valorstones").
+    named = bool(exact[1] or prefix[1] or word_tokens(f"{name} {display_name}").intersection(terms))
     for part_score, part_reasons in (
-        exact_match_score(normalized_query, name_normalized=name_normalized, display_normalized=display_normalized),
-        prefix_and_contains_score(normalized_query, name_normalized=name_normalized, display_normalized=display_normalized),
+        exact,
+        prefix,
         term_match_score(terms, haystacks=haystacks),
         type_hint_score(query, entity_type=entity_type),
-        database_rank_score(database_rank if named else None, entity_type=entity_type),
+        upstream_rank_score(rank_bonus if named else None, entity_type=entity_type),
     ):
         score += part_score
         reasons.extend(part_reasons)
@@ -374,6 +398,47 @@ def search_result_url(*, entity_type: str | None, entity_id: int | None, expansi
 STALE_GUIDE_REASON = "stale_guide"
 STALE_GUIDE_DAYS = 180
 
+# How strongly a row's own text matches the query: an exact name, a name that starts with the query,
+# or any other text match. `type_hint` and `stale_guide` say nothing about the row's text, so a row
+# with only those has strength 0 and matches nothing in the query.
+MATCH_STRENGTH = {
+    "exact_name": 3,
+    "exact_display_name": 3,
+    "name_prefix": 2,
+    "display_name_prefix": 2,
+    "name_contains_query": 1,
+    "display_name_contains_query": 1,
+    "all_terms_match": 1,
+    "upstream_database_rank": 1,
+}
+
+
+def match_strength(row: dict[str, Any]) -> int:
+    return max((MATCH_STRENGTH.get(reason, 0) for reason in row["ranking"]["match_reasons"]), default=0)
+
+
+def is_stale(row: dict[str, Any]) -> bool:
+    return STALE_GUIDE_REASON in row["ranking"]["match_reasons"]
+
+
+def order_search_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Order rows by score, then move each stale guide below every current row that matches as strongly.
+
+    A retired event guide that merely shares a class guide's words ("Legion Remix Fury Warrior
+    Guide") sorts after the current guides whatever its title scores, but one the query names more
+    closely than any current row ("Fury Warrior PvP Guide") still leads.
+    """
+    ranked = sorted(rows, key=lambda row: row["_sort"])
+    current = [row for row in ranked if not is_stale(row)]
+    slotted = [((index, False), row) for index, row in enumerate(current)]
+    for row in ranked:
+        if is_stale(row):
+            strength = match_strength(row)
+            anchor = max((index for index, other in enumerate(current) if match_strength(other) >= strength), default=-1)
+            slotted.append(((anchor, True), row))
+    return [row for _, row in sorted(slotted, key=lambda pair: pair[0])]
+
+
 _UPDATED_FOOTER_RE = re.compile(r"Updated:\s*(?P<year>\d{4})/(?P<month>\d{2})/(?P<day>\d{2})")
 
 
@@ -413,11 +478,15 @@ def normalize_search_results(
     query: str,
     expansion: ExpansionProfile,
     entity_types: tuple[str, ...] = (),
-    database_ranks: dict[SuggestionKey, int] | None = None,
-) -> list[dict[str, Any]]:
+    rank_bonuses: dict[SuggestionKey, int] | None = None,
+) -> tuple[list[dict[str, Any]], int]:
+    """Score and order suggestion rows, dropping the ones whose text matches nothing in the query.
+
+    Returns the kept rows and how many rows were dropped for matching nothing.
+    """
     selected_entity_types = set(entity_types)
     ranking_query = search_ranking_query(query)
-    ranks = database_ranks or {}
+    bonuses = rank_bonuses or {}
     normalized: list[dict[str, Any]] = []
     for index, row in enumerate(results):
         if not isinstance(row, dict):
@@ -433,7 +502,7 @@ def normalize_search_results(
             row,
             query=query,
             ranking_query=ranking_query,
-            database_rank=ranks.get(key) if key is not None else None,
+            rank_bonus=bonuses.get(key) if key is not None else None,
         )
         candidate = {
             "id": entity_id,
@@ -469,12 +538,10 @@ def normalize_search_results(
             candidate["follow_up"] = follow_up
         normalized.append(candidate)
     mark_stale_guides(normalized)
-    # A guide the response itself shows is long superseded sorts after every other row, whatever its
-    # title scores: a query for a class guide means the current one, not a retired event's.
-    normalized.sort(key=lambda row: (STALE_GUIDE_REASON in row["ranking"]["match_reasons"], row["_sort"]))
-    for row in normalized:
+    matched = order_search_rows([row for row in normalized if match_strength(row) > 0])
+    for row in matched:
         row.pop("_sort", None)
-    return normalized
+    return matched, len(normalized) - len(matched)
 
 
 def command_prefix_for_expansion(expansion: ExpansionProfile) -> str:

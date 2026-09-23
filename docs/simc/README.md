@@ -70,15 +70,17 @@ These codes are worth knowing:
 - `not_found` (exit 4) — `spec-files`, `find-action`, and `trace-action` were pointed at a directory that
   is not a SimulationCraft checkout. They report this instead of returning zero hits as a success.
 - `invalid_query` (exit 2) — a build arrived without a class and spec and could not be identified,
-  `decode-build` or `identify-build` was given no build at all, or a build-input option was passed with
-  an empty value. Identification decodes the build once per spec in the checkout's generated
+  `decode-build` or `identify-build` was given no build at all, a build-input option was passed with
+  an empty value, or the class or spec names none of SimC's specs (an unknown class, or a pair such as
+  `mage holy`); the message lists the valid values. Class and spec are read case-insensitively and
+  `Death Knight` or `death_knight` mean `deathknight`. Identification decodes the build once per spec in the checkout's generated
   specialization data (every playable spec, healers included) and keeps the one it decodes as; an
   `--actor-class` or `--spec` hint alone narrows the probe to that class's or spec's specs, and the
   message names what was probed (`decodes as none of the 3 deathknight specs`). When several specs
   decode it, `error.details.identity.candidates` lists them. Pass `--actor-class` and `--spec` together
   to skip the probe.
 - `identify_failed` (exit 1) — identification could not probe at all because the checkout has no built
-  binary or no generated specialization data; the message names which.
+  binary, no generated specialization data, or no generated trait data; the message names which.
 - `unsupported_build_reference` (exit 2) — the build input is a link the CLI cannot turn into talents.
   `error.details.reference_type` names what it recognized: `wowhead_talent_calc_url` for a talent-calc
   URL with no build code, `url` for anything else. See "Build references" below for what does decode.
@@ -154,7 +156,11 @@ comparisons; when no `--other` decodes, the command fails with the first rejecti
 names per tree, so a spec talent passed as a class talent is rejected). A name or entry id must be a
 talent the build's spec can take in the checkout's trait data: another class's talent, another spec's
 tree, or a class-tree talent reserved for another spec (Chi Burst is Brewmaster's) fails with
-`unknown_talent` (exit 2) instead of reaching SimC.
+`unknown_talent` (exit 2) instead of reaching SimC. A hero talent is checked the way SimC checks it:
+the spec must be offered its hero tree by that tree's selection node, whatever specs the talent row
+itself is tagged with (Augmentation's Chronowarden talents are tagged only for Preservation, yet
+Augmentation can take them; Arcane cannot take Frostfire's). An `--add` value that
+is not `name:rank` or `entry_id:rank` fails with `invalid_argument` (exit 2).
 
 Healer builds encode like any other. SimC refuses to simulate some healers (Mistweaver and Holy Paladin
 always), so the encoder runs SimC in debug mode, which saves the profile without needing a simulated
@@ -171,7 +177,9 @@ A tree swap drops the base hash and rebuilds every tree from `entry:rank` pairs.
 tiered node whose per-entry ranks were read back (see "Decoded builds" above); when they were not
 (`rank_known: false`), the swap fails with `encode_mismatch` naming the talent that would have been
 lost rather than emitting an export without it. `--add`/`--remove` keep the base hash and are
-unaffected.
+unaffected. A build with no hero tree selected (SimC's own default talents, for one) holds only the
+keystones SimC grants freely, so its hero tree is left out of the rebuild rather than spelled out,
+which would make SimC select a hero tree.
 
 `result.diff_from_base` has a fourth key, `inactive_hero`. SimC regenerates the talent hash whenever it
 is handed a split talent string, and its serializer freely grants the keystone of *every* hero tree, so

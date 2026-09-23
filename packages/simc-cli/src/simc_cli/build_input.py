@@ -5,6 +5,7 @@ import json
 import re
 import subprocess
 import tempfile
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,8 @@ from urllib.parse import urlparse
 
 from warcraft_core.identity import (
     IdentityConfidence,
+    normalize_actor_class,
+    normalize_spec_name,
     validate_talent_transport_packet,
 )
 from warcraft_core.identity import (
@@ -20,7 +23,7 @@ from warcraft_core.identity import (
 from warcraft_core.talent_transport import specialization_ids, tokenize_talent_name
 
 from simc_cli.repo import RepoPaths
-from simc_cli.trait_data import TieredEntry, load_trait_table
+from simc_cli.trait_data import SimcNotReadyError, TieredEntry, load_trait_table
 
 ACTOR_LINE_RE = re.compile(r'^([a-z_]+)\s*=\s*"?(.*?)"?$')
 TALENT_DEBUG_RE = re.compile(
@@ -123,10 +126,6 @@ class BuildResolution:
     inactive_hero_talents: list[DecodedTalent] = field(default_factory=list)
 
 
-class SimcNotReadyError(FileNotFoundError):
-    """The checkout lacks something a build command needs: the built binary or SimC's generated data."""
-
-
 class SimcBuildError(RuntimeError):
     """SimC rejected the build input. Carries only the SimC error lines plus a bounded preview."""
 
@@ -173,14 +172,14 @@ def _identity_value(packet: dict[str, Any], key: str) -> str | None:
 
 
 def _validated_packet_identity(packet: dict[str, Any]) -> tuple[str | None, str | None]:
-    actor_class = _normalize_actor_class(_identity_value(packet, "actor_class"))
-    spec = _normalize_spec_name(_identity_value(packet, "spec"))
+    actor_class = normalize_actor_class(_identity_value(packet, "actor_class"))
+    spec = normalize_spec_name(_identity_value(packet, "spec"))
     validation = packet.get("validation")
     if not isinstance(validation, dict) or validation.get("status") != "validated":
         return None, None
-    validated_actor_class = _normalize_actor_class(validation.get(
+    validated_actor_class = normalize_actor_class(validation.get(
         "actor_class")) if isinstance(validation.get("actor_class"), str) else None
-    validated_spec = _normalize_spec_name(validation.get("spec")) if isinstance(validation.get("spec"), str) else None
+    validated_spec = normalize_spec_name(validation.get("spec")) if isinstance(validation.get("spec"), str) else None
     if actor_class and spec and actor_class == validated_actor_class and spec == validated_spec:
         return actor_class, spec
     return None, None
@@ -330,20 +329,6 @@ def infer_actor_and_spec_from_apl(apl_path: str | Path) -> tuple[str | None, str
         return None, None
     actor_class, spec = stem.split("_", 1)
     return actor_class, spec
-
-
-def _normalize_actor_class(value: str | None) -> str | None:
-    if not value:
-        return None
-    normalized = re.sub(r"[^a-z0-9]+", "", value.lower())
-    return normalized or None
-
-
-def _normalize_spec_name(value: str | None) -> str | None:
-    if not value:
-        return None
-    normalized = re.sub(r"[^a-z0-9]+", "_", value.lower()).strip("_")
-    return normalized or None
 
 
 def _has_trusted_identity_hint(build_spec: BuildSpec) -> bool:
@@ -772,7 +757,13 @@ def load_build_spec(
         from_build_text = extract_build_spec_from_text(build_text)
         from_build_text.source_notes.append("inline build text")
 
-    return merge_build_specs(inferred, from_profile, from_build_file, from_build_packet, from_build_text, from_talents_option, explicit)
+    merged = merge_build_specs(
+        inferred, from_profile, from_build_file, from_build_packet, from_build_text, from_talents_option, explicit
+    )
+    # SimC's spellings: `Death Knight`, `death_knight` and `DeathKnight` all name deathknight.
+    merged.actor_class = normalize_actor_class(merged.actor_class)
+    merged.spec = normalize_spec_name(merged.spec)
+    return merged
 
 
 def _direct_build_identity(build_spec: BuildSpec) -> tuple[BuildSpec, BuildIdentity]:
@@ -803,15 +794,42 @@ def _direct_build_identity(build_spec: BuildSpec) -> tuple[BuildSpec, BuildIdent
     )
 
 
+class UnknownClassSpecError(ValueError):
+    """A class or spec hint SimC does not know, or a spec its class does not have: the caller's mistake."""
+
+
+def _known_specs(repo: RepoPaths) -> Mapping[tuple[str, str], int]:
+    known = specialization_ids(repo.root)
+    if not known:
+        raise SimcNotReadyError("SimC specialization data (engine/dbc/generated/sc_specialization_data.inc) not found.")
+    return known
+
+
+def _check_class_spec_hint(repo: RepoPaths, actor_class: str | None, spec: str | None) -> None:
+    """Reject a class/spec hint no SimC spec matches, naming the valid values.
+
+    An unknown hint used to narrow the probe to nothing ("decodes as none of the 0 specs"), and an
+    impossible pair such as mage holy reached SimC, which blamed the build with ``invalid_build``.
+    """
+    if not actor_class and not spec:
+        return
+    known = _known_specs(repo)
+    classes = sorted({known_class for known_class, _ in known})
+    if actor_class and actor_class not in classes:
+        raise UnknownClassSpecError(f"Unknown actor class '{actor_class}'. Valid classes: {', '.join(classes)}.")
+    specs = sorted({known_spec for known_class, known_spec in known if actor_class in (None, known_class)})
+    if spec and spec not in specs:
+        owner = f"{actor_class} " if actor_class else ""
+        raise UnknownClassSpecError(f"Unknown {owner}spec '{spec}'. Valid {owner}specs: {', '.join(specs)}.")
+
+
 def _probe_candidates(repo: RepoPaths, build_spec: BuildSpec, *, narrow: bool) -> tuple[list[tuple[str, str]], str]:
     """The specs to decode the build as, and a phrase naming them for an unidentified-build message.
 
     Every spec SimC's generated data knows, healers included: they ship no APL, so a candidate list
     drawn from APL files could never identify a healer build. A trusted class or spec hint narrows it.
     """
-    known = specialization_ids(repo.root)
-    if not known:
-        raise SimcNotReadyError("SimC specialization data (engine/dbc/generated/sc_specialization_data.inc) not found.")
+    known = _known_specs(repo)
     actor_class = build_spec.actor_class if narrow else None
     spec = build_spec.spec if narrow else None
     candidates = sorted(item for item in known if actor_class in (None, item[0]) and spec in (None, item[1]))
@@ -843,6 +861,9 @@ def _probe_build_matches(repo: RepoPaths, build_spec: BuildSpec, candidates: lis
 def identify_build(repo: RepoPaths, build_spec: BuildSpec) -> tuple[BuildSpec, BuildIdentity]:
     unverified_packet_transport = getattr(build_spec, "transport_form", None) == "wow_talent_export"
     trusted_identity_hint = _has_trusted_identity_hint(build_spec)
+    narrow = not unverified_packet_transport or trusted_identity_hint
+    if narrow:
+        _check_class_spec_hint(repo, build_spec.actor_class, build_spec.spec)
 
     if build_spec.actor_class and build_spec.spec and not unverified_packet_transport:
         return _direct_build_identity(build_spec)
@@ -861,9 +882,7 @@ def identify_build(repo: RepoPaths, build_spec: BuildSpec) -> tuple[BuildSpec, B
             ),
         )
 
-    candidates, probe_scope = _probe_candidates(
-        repo, build_spec, narrow=not unverified_packet_transport or trusted_identity_hint
-    )
+    candidates, probe_scope = _probe_candidates(repo, build_spec, narrow=narrow)
     matches = _probe_build_matches(repo, build_spec, candidates)
 
     if len(matches) == 1:

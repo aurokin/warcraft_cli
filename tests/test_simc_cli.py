@@ -14,9 +14,10 @@ from simc_cli.build_input import BuildIdentity, BuildResolution, BuildSpec, Deco
 from simc_cli.main import app as simc_app
 from simc_cli.repo import RepoPaths
 from simc_cli.search import word_bounded_pattern
+from simc_cli.trait_data import parse_trait_table
 from typer.testing import CliRunner
 from warcraft_core.envelope import ENVELOPE_KEYS
-from warcraft_core.talent_transport import tokenize_talent_name
+from warcraft_core.talent_transport import CLASS_ID_BY_ACTOR_CLASS, tokenize_talent_name
 
 runner = CliRunner()
 
@@ -24,6 +25,7 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures" / "simc"
 # Real `simc ... debug=1` output for a Sunfury Arcane Mage, plus the checkout trait rows it needs.
 CAPTURED_ARCANE_MAGE = (FIXTURES / "captured_mage_arcane_sunfury_debug.txt").read_text()
 CAPTURED_TRAIT_DATA = (FIXTURES / "captured_trait_data.inc").read_text()
+CAPTURED_SPECIALIZATION_DATA = (FIXTURES / "captured_sc_specialization_data.inc").read_text()
 
 
 def _captured_without(*talent_names: str) -> str:
@@ -43,12 +45,14 @@ class _FakeSimcBinary:
         self.decodes = decodes
         self.encoded = encoded
         self.profiles: list[str] = []
+        self.encode_args: list[str] = []
 
     def __call__(self, cmd: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
         profile_path = Path(str(cmd[1]))
         text = profile_path.read_text()
         self.profiles.append(text)
         if "save=" in text:
+            self.encode_args = cmd[2:]
             save = next(line.split("=", 1)[1] for line in text.splitlines() if line.startswith("save="))
             Path(save).write_text(f"talents={self.encoded}\n")
             return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
@@ -61,12 +65,11 @@ class _FakeSimcBinary:
 
 
 def _checkout(tmp_path: Path) -> Path:
-    """A checkout stub: every directory `validate_repo` requires, the trait table, the spec the captured
-    decodes belong to, and a binary."""
+    """A checkout stub: every directory `validate_repo` requires, the trait table, the spec table, and a binary."""
     generated = tmp_path / "engine" / "dbc" / "generated"
     generated.mkdir(parents=True, exist_ok=True)
     (generated / "trait_data.inc").write_text(CAPTURED_TRAIT_DATA)
-    (generated / "sc_specialization_data.inc").write_text("  MAGE_ARCANE = 62,\n")
+    (generated / "sc_specialization_data.inc").write_text(CAPTURED_SPECIALIZATION_DATA)
     for relative in (
         "ActionPriorityLists/default",
         "ActionPriorityLists/assisted_combat",
@@ -569,7 +572,7 @@ def test_simc_identify_build_trusts_validated_split_packet_identity(monkeypatch,
     )
 
     repo = RepoPaths(
-        root=tmp_path,
+        root=_checkout(tmp_path),
         apl_default=tmp_path,
         apl_assisted=tmp_path,
         class_modules=tmp_path,
@@ -658,7 +661,7 @@ def test_simc_identify_build_does_not_let_apl_override_validated_split_packet_id
     )
 
     repo = RepoPaths(
-        root=tmp_path,
+        root=_checkout(tmp_path),
         apl_default=tmp_path,
         apl_assisted=tmp_path,
         class_modules=tmp_path,
@@ -1443,15 +1446,65 @@ def test_simc_unidentified_build_message_names_the_specs_a_class_hint_narrowed_t
 
 
 @pytest.mark.parametrize(
+    ("command", "valid"),
+    [
+        # An unknown class narrowed the probe to nothing: "decodes as none of the 0 death_night specs".
+        (["decode-build", "--talents", "BASE", "--actor-class", "death_night"], "Valid classes: deathknight, demonhunter,"),
+        # An impossible pair reached SimC, which blamed the build with invalid_build.
+        (["decode-build", "--talents", "BASE", "--actor-class", "mage", "--spec", "holy"], "Valid mage specs: arcane, fire, frost."),
+        # The APL views read the hint on their own path, which reported prune_context_failed (exit 1).
+        (["apl-prune", "mage_arcane.simc", "--talents", "BASE", "--spec", "holyy"], "Valid mage specs: arcane, fire, frost."),
+    ],
+    ids=["unknown-class", "impossible-pair", "apl-view"],
+)
+def test_simc_rejects_a_class_or_spec_hint_simc_has_no_spec_for(tmp_path: Path, command: list[str], valid: str) -> None:
+    repo_root = _checkout(tmp_path)
+    (repo_root / "mage_arcane.simc").write_text("actions=arcane_blast\n")
+    fake = _FakeSimcBinary({"BASE": CAPTURED_ARCANE_MAGE})
+
+    with patch("simc_cli.build_input.subprocess.run", side_effect=fake):
+        result = runner.invoke(simc_app, ["--repo-root", str(repo_root), *command])
+
+    assert result.exit_code == 2, result.stdout + result.stderr
+    error = json.loads(result.stderr)["error"]
+    assert error["code"] == "invalid_query"
+    assert valid in error["message"]
+    assert fake.profiles == [], "SimC ran for a hint no spec matches"
+
+
+def test_simc_modify_build_reads_a_class_and_spec_hint_in_any_spelling(tmp_path: Path) -> None:
+    """`--spec Arcane` used to crash modify-build with an uncaught KeyError and no envelope."""
+    fake = _FakeSimcBinary({"BASE": CAPTURED_ARCANE_MAGE, "MODIFIED_EXPORT": _captured_without("Arcane Tempo")})
+
+    with patch("simc_cli.build_input.subprocess.run", side_effect=fake):
+        result = runner.invoke(
+            simc_app,
+            ["--repo-root", str(_checkout(tmp_path)), "modify-build", "--talents", "BASE",
+             "--actor-class", "Mage", "--spec", "Arcane", "--remove", "Arcane Tempo"],
+        )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    base = json.loads(result.stdout)["data"]["base"]
+    assert (base["actor_class"], base["spec"]) == ("mage", "arcane")
+    assert all("spec=arcane" in text for text in fake.profiles)
+
+
+@pytest.mark.parametrize(
     ("missing", "reason"),
-    [("engine/dbc/generated/sc_specialization_data.inc", "specialization data"), ("build/simc", "SimC binary not found")],
+    [
+        ("engine/dbc/generated/sc_specialization_data.inc", "specialization data"),
+        ("build/simc", "SimC binary not found"),
+        # Needed once a decode succeeds; its absence was reported as the caller's invalid_query (exit 2).
+        ("engine/dbc/generated/trait_data.inc", "trait data not found"),
+    ],
 )
 def test_simc_identification_blames_the_checkout_when_it_cannot_probe(tmp_path: Path, missing: str, reason: str) -> None:
-    """Without spec data or a binary nothing is decoded, which used to read as 'decodes as none of the specs'."""
+    """Without spec data, trait data or a binary nothing is decoded, which used to read as 'decodes as none of the specs'."""
     repo_root = _checkout(tmp_path)
     (repo_root / missing).unlink()
 
-    result = runner.invoke(simc_app, ["--repo-root", str(repo_root), "decode-build", "--talents", "ARCANE_EXPORT"])
+    with patch("simc_cli.build_input.subprocess.run", side_effect=_FakeSimcBinary({"ARCANE_EXPORT": CAPTURED_ARCANE_MAGE})):
+        result = runner.invoke(simc_app, ["--repo-root", str(repo_root), "decode-build", "--talents", "ARCANE_EXPORT"])
 
     assert result.exit_code == 1
     error = json.loads(result.stderr)["error"]
@@ -1613,7 +1666,7 @@ def test_simc_decode_build_uses_validated_split_packet_identity(monkeypatch, tmp
     )
 
     repo = RepoPaths(
-        root=tmp_path,
+        root=_checkout(tmp_path),
         apl_default=tmp_path,
         apl_assisted=tmp_path,
         class_modules=tmp_path,
@@ -2052,7 +2105,7 @@ def test_simc_describe_build_uses_validated_split_packet_identity(monkeypatch, t
     )
 
     repo = RepoPaths(
-        root=tmp_path,
+        root=_checkout(tmp_path),
         apl_default=tmp_path,
         apl_assisted=tmp_path,
         class_modules=tmp_path,
@@ -2992,13 +3045,48 @@ def test_simc_modify_build_rejects_a_talent_this_spec_cannot_take(tmp_path: Path
     assert not any("save=" in text for text in fake.profiles), "the edit reached the encoder"
 
 
+def test_simc_hero_talents_follow_the_specs_their_hero_tree_is_offered_to() -> None:
+    """A hero entry is takeable by the specs its hero tree's selection rows name, not by its own spec tags.
+
+    That is SimC's trait_data_t::is_hero_trait_available. Augmentation's Chronowarden entries carry only
+    Preservation's tag, and applying the tags rejected every Augmentation hero edit as `unknown_talent`.
+    Ignoring the restriction altogether let Augmentation add Flameshaper's Consume Flame and Arcane add
+    Frostfire's Isothermic Core, both trees their specs cannot select.
+    """
+    table = parse_trait_table(CAPTURED_TRAIT_DATA)
+    evoker, augmentation, preservation = CLASS_ID_BY_ACTOR_CLASS["evoker"], 1473, 1468
+    mage, arcane, frost = CLASS_ID_BY_ACTOR_CLASS["mage"], 62, 64
+
+    assert table.tree_for_entry(117522, class_id=evoker, spec_id=augmentation) == "hero"
+    assert table.tree_for_name("Chronoboon", class_id=evoker, spec_id=augmentation) == "hero"
+    assert table.tree_for_name("Consume Flame", class_id=evoker, spec_id=preservation) == "hero"
+    assert table.tree_for_name("Consume Flame", class_id=evoker, spec_id=augmentation) is None
+    assert table.tree_for_name("Isothermic Core", class_id=mage, spec_id=frost) == "hero"
+    assert table.tree_for_name("Isothermic Core", class_id=mage, spec_id=arcane) is None
+
+
+def test_simc_encode_runs_simc_the_way_a_healer_build_needs(tmp_path: Path) -> None:
+    """Without `debug=1` SimC silences a healer it will not simulate (Mistweaver, Holy Paladin) and then
+    saves no profile ("No active players in sim!"); `allow_experimental_specializations` makes it build
+    Holy Priest's stale default APL, which fails on divine_star. Either way a valid healer build came
+    back as `invalid_build`.
+    """
+    fake = _FakeSimcBinary({"BASE": CAPTURED_ARCANE_MAGE, "MODIFIED_EXPORT": _captured_without("Arcane Tempo")})
+
+    exit_code, _payload = _modify(tmp_path, fake, "--remove", "Arcane Tempo")
+
+    assert exit_code == 0
+    assert "debug=1" in fake.encode_args
+    assert not [arg for arg in fake.encode_args if arg.startswith("allow_experimental_specializations")]
+
+
 def test_simc_modify_build_fails_on_bad_add_format(tmp_path: Path) -> None:
     fake = _FakeSimcBinary({"BASE": CAPTURED_ARCANE_MAGE})
 
     exit_code, payload = _modify(tmp_path, fake, "--add", "no_rank")
 
-    assert exit_code == 1
-    assert payload["error"]["code"] == "invalid_add"
+    assert exit_code == 2
+    assert payload["error"]["code"] == "invalid_argument"
 
 
 def test_simc_modify_build_fails_without_modifications(tmp_path: Path) -> None:
@@ -3056,6 +3144,27 @@ def test_simc_modify_build_refuses_a_swap_whose_export_dropped_a_tiered_talent(t
         (row["tree"], row["change"], row["name"]) for row in payload["error"]["details"]["unrequested_changes"]
     ] == [("spec", "removed", "Prismatic Bolt")]
     assert "MODIFIED_EXPORT" not in json.dumps(payload)
+
+
+def test_simc_modify_build_swap_leaves_out_the_hero_tree_of_a_build_that_selected_none(tmp_path: Path) -> None:
+    """Spelling out the freely granted keystones of such a build makes SimC select a hero tree.
+
+    SimC then disables the other keystone, so every tree swap on a build with no hero tree selected
+    (SimC's own default talents, for one) failed with `encode_mismatch`.
+    """
+    no_hero_tree = "\n".join(line for line in CAPTURED_ARCANE_MAGE.splitlines() if "activating sub tree" not in line)
+    fake = _FakeSimcBinary({"BASE": no_hero_tree, "MODIFIED_EXPORT": no_hero_tree})
+
+    with patch("simc_cli.build_input.subprocess.run", side_effect=fake):
+        result = runner.invoke(
+            simc_app,
+            ["--repo-root", str(_checkout(tmp_path)), "modify-build", "--talents", "BASE",
+             "--actor-class", "mage", "--spec", "arcane", "--swap-spec-tree-from", "BASE"],
+        )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    assert "spec_talents=" in fake.encode_profile
+    assert "hero_talents=" not in fake.encode_profile
 
 
 def test_simc_modify_build_aborts_when_swap_tree_decode_fails(tmp_path: Path) -> None:

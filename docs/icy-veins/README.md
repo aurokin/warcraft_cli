@@ -60,7 +60,8 @@ change) fails with `parse_failed` and exit 1 rather than returning an empty arti
 not exist is `not_found` (exit 4), a file is a usage error (exit 2), and a directory that is not a
 readable bundle is `invalid_bundle` (exit 1): no `manifest.json`, a manifest whose `files` lists no
 content file (`pages.jsonl`, `sections.jsonl`, `analysis-surfaces.jsonl`, ...), or a listed file that
-is missing or corrupt. A `wowhead guide-export` bundle is readable; it has sections, navigation,
+is missing, corrupt, or holds a row with a wrongly typed nested field (a `build_identity` that is not
+an object, `surface_tags` that is not a list). A `wowhead guide-export` bundle is readable; it has sections, navigation,
 linked entities and analysis surfaces, but no pages or build references.
 
 ### Build references
@@ -128,6 +129,12 @@ every other family walks its own navigation block.
 Patch notes, class-change roundups, hotfix posts, and news pages are out of scope. `search` and
 `resolve` detect those query intents and return an empty result set with a `scope_hint` instead of
 misleading guide matches.
+
+`search` and `resolve` keep only guides whose name or slug contains a query word as a whole word, so
+`dh` does not match "headhunters". A trailing plural `s` is ignored on both sides, so `build` keeps
+the `...-spec-builds-talents` pages. Words such as `a`, `of` and `the` are ignored, and `+` reads as
+`plus`, so `mythic+` finds the "Mythic Plus" pages. There are no class or spec abbreviations: `dk`
+and `mw` match nothing.
 
 ## Caching
 

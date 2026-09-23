@@ -30,6 +30,7 @@ and are the documented exception in docs/architecture/E2E_TESTING.md.
 from __future__ import annotations
 
 import json
+from collections import Counter
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any
@@ -77,16 +78,14 @@ class Anchor:
     """One real boss kill in the current raid tier, plus its roster."""
 
     zone: dict[str, Any]
+    # The report code, owning guild and region exactly as the *listing* that discovered the kill gave
+    # them (a leaderboard row or a guild's report list), so `report` can be held to them independently.
+    code: str
+    listed_guild: str
+    listed_region: str
     report: dict[str, Any]
     fight: dict[str, Any]
     players: tuple[dict[str, Any], ...]
-    # The owning guild's name as the *listing* that discovered the report gave it, so `report` can
-    # be held to it independently.
-    listed_guild: str
-
-    @property
-    def code(self) -> str:
-        return str(self.report["code"])
 
     @property
     def fight_id(self) -> int:
@@ -194,7 +193,15 @@ def guild_anchor() -> Anchor:
         # Prefer the hardest difficulty in the report; ties go to the latest pull.
         fight = max(kills, key=lambda row: (row.get("difficulty") or 0, row.get("id") or 0))
         roster = _fight_roster(code, int(fight["id"]))
-        return Anchor(zone=zone, report=report, fight=fight, players=roster, listed_guild=str(report["guild"]["name"]))
+        return Anchor(
+            zone=zone,
+            code=code,
+            listed_guild=str(report["guild"]["name"]),
+            listed_region=pins.GUILD_REGION,
+            report=report,
+            fight=fight,
+            players=roster,
+        )
     raise JourneyFailure(
         f"{pins.GUILD_NAME!r} has no kill in its {len(guild_reports())} newest {zone['name']!r} reports, so "
         "nothing here exercises a private report (expected only in the days after a tier rollover)"
@@ -236,7 +243,15 @@ def anchor() -> Anchor:
             if fight is None:
                 continue
             roster = _fight_roster(code, fight_id)
-            return Anchor(zone=zone, report=detail, fight=fight, players=roster, listed_guild=str(row["guild_name"]))
+            return Anchor(
+                zone=zone,
+                code=code,
+                listed_guild=str(row["guild_name"]),
+                listed_region=str(row["server_region"]),
+                report=detail,
+                fight=fight,
+                players=roster,
+            )
     raise JourneyFailure(f"no ranked kill in a public guild report in {zone['name']!r}; scanned {scanned}")
 
 
@@ -589,6 +604,11 @@ def test_search_and_resolve_accept_a_report_url_and_a_bare_code(require):
     from_code = run("warcraftlogs", "resolve", found.code)
     assert from_code.data["match"]["report_reference"]["code"] == found.code, from_code.describe()
 
+    # Report codes are 16 letters and digits, and some have no digit at all; a report URL is explicit
+    # whatever its code looks like, and parsing one needs no network.
+    lettered = run("warcraftlogs", "search", "https://www.warcraftlogs.com/reports/JVFTxcKCqrvpaAzD#fight=4")
+    assert _rows(lettered, "results")[0]["report_reference"]["code"] == "JVFTxcKCqrvpaAzD", lettered.describe()
+
 
 def test_guild_family_reports_the_pinned_guild(require):
     require("warcraftlogs")
@@ -608,7 +628,12 @@ def test_guild_family_reports_the_pinned_guild(require):
     ranks = rankings.data["guild_rankings"]
     assert ranks["name"].lower() == pins.GUILD_NAME, rankings.describe()
     assert ranks["server"]["slug"] == pins.GUILD_REALM, rankings.describe()
-    assert set(ranks["zone_ranking"]) >= {"progress", "speed"}, rankings.describe()
+    # The guild has kills this tier (guild_anchor), so it holds a progress rank at every scope, and a
+    # rank can only get better as the scope narrows: a swapped or dropped scope breaks the order.
+    progress = ranks["zone_ranking"]["progress"]
+    world, region, server = (progress[scope]["number"] for scope in ("world", "region", "server"))
+    assert all(isinstance(rank, int) for rank in (world, region, server)), rankings.describe()
+    assert 0 < server <= region <= world, rankings.describe()
 
     attendance = run("warcraftlogs", "guild-attendance", *GUILD, "--limit", "3")
     rows = attendance.data["guild_attendance"]
@@ -674,7 +699,6 @@ def test_encounter_rankings_leaderboard_is_scoped_by_zone_and_boss_options(requi
         "3",
     )
     assert result.payload["kind"] == "encounter_rankings", result.describe()
-    assert "encounter_rankings" in result.data, result.describe()
     assert result.data["ranking_basis"], result.describe()
     encounter = result.data["encounter"]
     assert encounter["id"] == found.fight["encounter_id"], result.describe()
@@ -754,14 +778,15 @@ def test_report_and_report_fights_echo_the_discovered_report(require):
 
     report = run("warcraftlogs", "report", found.code)
     detail = report.data["report"]
+    # found.code is the leaderboard row's report code, not an earlier `report` answer.
     assert detail["code"] == found.code, report.describe()
     assert detail["zone"]["id"] == found.zone["id"], report.describe()
     # `report` and the leaderboard row that discovered it must agree on who owns the report.
     assert detail["guild"]["name"] == found.listed_guild, report.describe()
+    assert detail["guild"]["server"]["region"]["slug"].lower() == found.listed_region.lower(), report.describe()
 
     fights = run("warcraftlogs", "report-fights", found.code)
     assert fights.payload["kind"] == "report_fights", fights.describe()
-    assert "report_fights" in fights.data, fights.describe()
     rows = _rows(fights, "fights")
     assert fights.data["count"] == len(rows), fights.describe()
     assert found.fight_id in {row["id"] for row in rows}, fights.describe()
@@ -831,17 +856,17 @@ def test_report_encounter_aura_summary_and_compare_use_explicit_windows(require)
     duration = int(found.fight["end_time"]) - int(found.fight["start_time"])
     half = max(duration // 2, 1000)
 
-    summary = run(
-        "warcraftlogs",
-        "report-encounter-aura-summary",
-        found.url,
-        "--ability-id",
-        str(ability_id),
-        "--window-start-ms",
-        "0",
-        "--window-end-ms",
-        str(half),
-    )
+    def window_summary(start: int, end: int) -> Result:
+        return run(
+            "warcraftlogs",
+            "report-encounter-aura-summary",
+            found.url,
+            "--ability-id", str(ability_id),
+            "--window-start-ms", str(start),
+            "--window-end-ms", str(end),
+        )
+
+    summary, second_half = window_summary(0, half), window_summary(half, duration)
     assert summary.payload["kind"] == "report_encounter_aura_summary", summary.describe()
     assert summary.data["aura"]["game_id"] == ability_id, summary.describe()
     assert summary.data["aura"]["name"], summary.describe()
@@ -849,6 +874,9 @@ def test_report_encounter_aura_summary_and_compare_use_explicit_windows(require)
     assert summary.data["aura_summary"]["entry_count"] == len(rows), summary.describe()
     assert rows, "the discovered aura must have at least one holder in its own fight"
     assert rows[0]["source"]["name"], summary.describe()
+    # An ignored window would give both halves the whole fight's table, and then every comparison
+    # below would agree with itself.
+    assert summary.data["aura_summary"] != second_half.data["aura_summary"], second_half.describe()
 
     compare = run(
         "warcraftlogs",
@@ -867,26 +895,42 @@ def test_report_encounter_aura_summary_and_compare_use_explicit_windows(require)
     )
     assert compare.payload["kind"] == "report_encounter_aura_compare", compare.describe()
     assert compare.data["comparison"]["matching_rule"], compare.describe()
-    windows = {window["label"]: window["query"] for window in compare.data["windows"]}
-    assert windows["left"]["window_end_ms"] == windows["right"]["window_start_ms"], compare.describe()
-    assert windows["left"]["ability_id"] == ability_id, compare.describe()
+    windows = {window["label"]: window for window in compare.data["windows"]}
+    assert windows["left"]["query"]["window_end_ms"] == windows["right"]["query"]["window_start_ms"], compare.describe()
+    assert windows["left"]["query"]["ability_id"] == ability_id, compare.describe()
+    # Each side is the same aura table the single-window summary reads for that window.
+    assert windows["left"]["aura_summary"] == summary.data["aura_summary"], compare.describe()
+    assert windows["right"]["aura_summary"] == second_half.data["aura_summary"], compare.describe()
 
 
 def test_report_encounter_damage_surfaces_return_typed_and_raw_views(require):
     require("warcraftlogs")
     found = anchor()
 
+    # The fight-scoped raw table is the reference: every encounter-scoped damage view of the same
+    # fight must report the same per-actor totals, which a wrong fight or window cannot.
+    table = run("warcraftlogs", "report-table", found.code, "--data-type", "damage-done", "--fight-id", str(found.fight_id))
+    expected = {row["id"]: row["total"] for row in table.data["table"]["data"]["entries"]}
+    assert expected and all(total > 0 for total in expected.values()), table.describe()
+
     by_source = run("warcraftlogs", "report-encounter-damage-source-summary", found.url)
     source_rows = by_source.data["damage_summary"]["rows"]
-    assert source_rows, by_source.describe()
-    assert source_rows[0]["source"]["name"], by_source.describe()
-
-    by_target = run("warcraftlogs", "report-encounter-damage-target-summary", found.url)
-    assert by_target.data["damage_summary"]["rows"], by_target.describe()
+    assert {row["source"]["id"]: row["reported_total"] for row in source_rows} == expected, by_source.describe()
+    assert all(row["source"]["name"] for row in source_rows), by_source.describe()
 
     breakdown = run("warcraftlogs", "report-encounter-damage-breakdown", found.url, "--view-by", "source")
     assert breakdown.payload["kind"] == "report_encounter_damage_breakdown", breakdown.describe()
-    assert breakdown.data["table"], breakdown.describe()
+    entries = breakdown.data["table"]["data"]["entries"]
+    assert {row["id"]: row["total"] for row in entries} == expected, breakdown.describe()
+    assert {row["name"] for row in entries} <= {row["name"] for row in found.players}, breakdown.describe()
+
+    # Grouped by target, the rows are what the raid hit, most damage first, so an enemy leads. (Raiders
+    # can appear further down: some mechanics make them targets of their own raid's damage.)
+    by_target = run("warcraftlogs", "report-encounter-damage-target-summary", found.url)
+    target_rows = by_target.data["damage_summary"]["rows"]
+    assert target_rows and target_rows[0]["target"]["type"] == "NPC", by_target.describe()
+    totals = [row["reported_total"] for row in target_rows]
+    assert totals == sorted(totals, reverse=True), by_target.describe()
 
 
 def test_report_player_talents_emits_a_raw_only_packet_and_writes_it(require, out_dir):
@@ -1124,7 +1168,6 @@ def test_boss_kills_and_top_kills_return_the_anchor_kill(require):
 
     boss_kills = run("warcraftlogs", "boss-kills", *cohort_args(), "--top", "3")
     assert boss_kills.payload["kind"] == "boss_kills", boss_kills.describe()
-    assert "boss_kills" in boss_kills.data, boss_kills.describe()
     data = assert_sampling_metadata(boss_kills, expect_rows=True)
     kills = data["kills"]
     assert any((found.code, found.fight_id) in _pull_keys(row) for row in kills), boss_kills.describe()
@@ -1219,11 +1262,10 @@ def test_spec_kill_samples_and_boss_spec_usage_describe_the_cohort(require):
 
     samples = run("warcraftlogs", "spec-kill-samples", *cohort_args(), "--spec-name", spec, "--top", "3")
     assert samples.payload["kind"] == "spec_filtered_kill_samples", samples.describe()
-    assert "spec_kill_samples" in samples.data, samples.describe()
     data = assert_sampling_metadata(samples, expect_rows=True)
     assert data["sample"]["spec_name"] == spec, samples.describe()
     assert data["cohort"] == "spec_filtered_participant_kill_cohort", samples.describe()
-    assert data["sample"]["returned_kill_count"] == len(data["spec_kill_samples"]), samples.describe()
+    assert data["sample"]["returned_kill_count"] == len(data["kills"]), samples.describe()
     assert data["sample"]["sample_size"] >= data["sample"]["returned_kill_count"], samples.describe()
     # The rows are a sample of a cohort, not a leaderboard, and must keep saying so.
     assert any("not a spec ranking leaderboard" in note for note in data["notes"]), samples.describe()
@@ -1231,28 +1273,77 @@ def test_spec_kill_samples_and_boss_spec_usage_describe_the_cohort(require):
     # Every spec in the cohort, so the anchor spec cannot fall outside a truncated top list.
     usage = run("warcraftlogs", "boss-spec-usage", *cohort_args(), "--top", "40")
     assert usage.payload["kind"] == "boss_spec_usage", usage.describe()
-    rows = assert_sampling_metadata(usage, expect_rows=True)["boss_spec_usage"]
+    rows = assert_sampling_metadata(usage, expect_rows=True)["spec_usage"]
     assert rows, usage.describe()
     assert all(row["spec_name"] and row["appearance_count"] > 0 for row in rows), usage.describe()
     assert spec in {str(row["spec_name"]).lower() for row in rows}, usage.describe()
 
 
-def test_comp_samples_and_kill_time_distribution_bucket_the_cohort(require):
-    require("warcraftlogs")
+def _anchor_pull_row(rows: list[dict[str, Any]], result: Result) -> dict[str, Any]:
+    """The sampled row that represents the anchor pull (its own report, or the one it was folded into)."""
+    found = anchor()
+    row = next((row for row in rows if (found.code, found.fight_id) in _pull_keys(row)), None)
+    if row is None:
+        raise JourneyFailure(f"the anchor kill {found.code}#{found.fight_id} is not a sampled row\n{result.describe()}")
+    return row
 
-    comps = run("warcraftlogs", "comp-samples", *cohort_args(), "--top", "3")
+
+def _whole_cohort_kills() -> Result:
+    """``boss-kills`` over the anchor cohort, required to be complete so it can serve as the reference."""
+    result = run("warcraftlogs", "boss-kills", *cohort_args(), "--top", "10")
+    assert result.data["sample"]["truncated"] is False, result.describe()
+    return result
+
+
+def test_comp_samples_count_the_anchor_roster(require):
+    """comp-samples covers the kills ``boss-kills`` returns, and the anchor pull's classes are its roster.
+
+    The roster comes from ``report-encounter-players``, so a composition built from the wrong fight,
+    or one that drops a role, fails here.
+    """
+    require("warcraftlogs")
+    found = anchor()
+    kills = _whole_cohort_kills()
+    durations = [row["duration_seconds"] for row in kills.data["kills"]]
+
+    comps = run("warcraftlogs", "comp-samples", *cohort_args(), "--top", "10")
     assert comps.payload["kind"] == "comp_samples", comps.describe()
     data = assert_sampling_metadata(comps, expect_rows=True)
-    assert data["composition_signatures"], comps.describe()
-    assert data["class_presence"], comps.describe()
-    assert all(row["class_name"] for row in data["class_presence"]), comps.describe()
+    assert {_kill_key(row) for row in data["kills"]} == {_kill_key(row) for row in kills.data["kills"]}, comps.describe()
+    roster_classes = Counter(str(player["type"]) for player in found.players)
+    composition = _anchor_pull_row(data["kills"], comps)["composition"]
+    assert composition["player_count"] == len(found.players), comps.describe()
+    assert {row["class_name"]: row["count"] for row in composition["class_counts"]} == roster_classes, comps.describe()
+    # Presence counts kills and appearances count players, so the anchor pull alone accounts for its roster.
+    presence = {row["class_name"]: row for row in data["class_presence"]}
+    for class_name, count in roster_classes.items():
+        assert presence[class_name]["appearance_count"] >= count, comps.describe()
+        assert 1 <= presence[class_name]["kill_presence_count"] <= len(durations), comps.describe()
+    signatures = {row["class_signature"]: row["kill_count"] for row in data["composition_signatures"]}
+    assert signatures[composition["class_signature"]] >= 1, comps.describe()
+    assert sum(signatures.values()) == len(durations), comps.describe()
+
+
+def test_kill_time_distribution_buckets_the_cohort_durations(require):
+    """The histogram describes the durations ``boss-kills`` reports, anchored to ``report-fights``."""
+    require("warcraftlogs")
+    found = anchor()
+    kills = _whole_cohort_kills()
+    durations = [row["duration_seconds"] for row in kills.data["kills"]]
 
     distribution = run("warcraftlogs", "kill-time-distribution", *cohort_args(), "--bucket-seconds", "60")
     assert distribution.payload["kind"] == "kill_time_distribution", distribution.describe()
     histogram = assert_sampling_metadata(distribution, expect_rows=True)["distribution"]
     assert histogram["bucket_seconds"] == 60, distribution.describe()
-    assert histogram["statistics"]["median"] > 0, distribution.describe()
-    assert sum(bucket["count"] for bucket in histogram["rows"]) > 0, distribution.describe()
+    statistics = histogram["statistics"]
+    assert (statistics["min"], statistics["max"]) == (min(durations), max(durations)), distribution.describe()
+    assert sum(bucket["count"] for bucket in histogram["rows"]) == len(durations), distribution.describe()
+    # The anchor pull's length, as report-fights measured it, sits in a populated one-minute bucket.
+    anchor_row = _anchor_pull_row(kills.data["kills"], kills)
+    anchor_ms = int(found.fight["end_time"]) - int(found.fight["start_time"])
+    assert abs(anchor_row["duration_ms"] - anchor_ms) <= DUPLICATE_PULL_TOLERANCE_MS, kills.describe()
+    bucket = next(row for row in histogram["rows"] if row["start_seconds"] <= anchor_row["duration_seconds"] < row["end_seconds"])
+    assert bucket["count"] >= 1 and bucket["end_seconds"] - bucket["start_seconds"] == 60, distribution.describe()
 
 
 def test_ability_usage_summary_counts_a_discovered_ability(require):
@@ -1265,7 +1356,7 @@ def test_ability_usage_summary_counts_a_discovered_ability(require):
         "--ability-id",
         str(ability_id),
         "--preview-limit",
-        "3",
+        "10",
         "--event-limit",
         "200",
     )
@@ -1273,11 +1364,23 @@ def test_ability_usage_summary_counts_a_discovered_ability(require):
     data = assert_sampling_metadata(result, expect_rows=True)
     assert data["ability"]["game_id"] == ability_id, result.describe()
     usage = data["usage"]
-    assert usage["total_casts"] > 0, result.describe()
-    assert usage["kills_with_any_usage_count"] > 0, result.describe()
-    assert data["kills_preview"][0]["report"]["code"], result.describe()
     assert usage["total_casts_is_lower_bound"] is False, result.describe()
     assert data["sample"]["kills_with_truncated_events_count"] == 0, result.describe()
+    assert data["sample"]["preview_truncated"] is False, result.describe()
+    assert usage["total_casts"] == sum(row["casts"]["count"] for row in data["kills_preview"]), result.describe()
+
+    # The anchor pull's casts, counted per caster, against that fight's own event log filtered server-side.
+    row = _anchor_pull_row(data["kills_preview"], result)
+    code, fight_id = _kill_key(row)
+    events = run(
+        "warcraftlogs", "report-events", code, "--fight-id", str(fight_id), "--data-type", "casts",
+        "--limit", "10000", "--filter-expression", f"ability.id = {ability_id}",
+    )
+    assert events.data["next_page_timestamp"] is None, events.describe()
+    casters = Counter(event["sourceID"] for event in events.data["events"])
+    assert casters, events.describe()
+    assert row["casts"]["count"] == casters.total(), result.describe()
+    assert {source["source"]["id"]: source["count"] for source in row["casts"]["sources"]} == casters, result.describe()
 
 
 def test_ability_usage_summary_reports_its_own_truncation(require):
@@ -1353,13 +1456,14 @@ def test_boss_kills_spec_filter_narrows_the_cohort_to_that_spec(require):
 
     The positive half alone cannot fail while the flag is ignored, because every kill in the anchor
     cohort is the anchor kill and its roster has the spec. The discriminating half asks for a spec
-    that the pinned guild fielded and this roster did not: the cohort must come back empty. Both halves also check the rows' own ``matching_players``, which an ignored filter would
-    leave blank.
+    that the pinned guild fielded and no kill in the unfiltered cohort did: the cohort must come back
+    empty. The positive half also checks the rows' own ``matching_players``, which an ignored filter
+    would leave blank.
     """
     require("warcraftlogs")
     spec = anchor_spec_slug()
-    unfiltered = run("warcraftlogs", "boss-kills", *cohort_args(), "--top", "10")
-    all_kills = {(row["report"]["code"], row["fight"]["id"]) for row in unfiltered.data["kills"]}
+    unfiltered = _whole_cohort_kills()
+    all_kills = {_kill_key(row) for row in unfiltered.data["kills"]}
 
     filtered = run("warcraftlogs", "boss-kills", *cohort_args(), "--top", "10", "--spec-name", spec)
     data = assert_sampling_metadata(filtered, expect_rows=True)
@@ -1376,13 +1480,15 @@ def test_boss_kills_spec_filter_narrows_the_cohort_to_that_spec(require):
             str(entry["spec"]).lower() for player in matched for entry in player["matching_specs"]
         } == {spec}, filtered.describe()
 
-    absent = sorted(_roster_specs(guild_anchor().players) - _roster_specs(anchor().players))
+    # A spec is provably absent only if no kill in the unfiltered cohort fielded it.
+    fielded = set().union(*(_roster_specs(_fight_roster(code, fight_id)) for code, fight_id in all_kills))
+    absent = sorted(_roster_specs(guild_anchor().players) - fielded)
     assert absent, (
-        "the pinned guild's kill and the anchor kill fielded the same specs, so no spec is provably "
-        f"absent from the cohort: {sorted(_roster_specs(anchor().players))}"
+        "every spec the pinned guild fielded is also on a kill in the cohort, so no spec is provably "
+        f"absent from it: {sorted(fielded)}"
     )
     empty = run("warcraftlogs", "boss-kills", *cohort_args(), "--top", "10", "--spec-name", absent[0])
-    assert empty.data["kills"] == [], f"{absent[0]!r} is not on the anchor roster\n{empty.describe()}"
+    assert empty.data["kills"] == [], f"no kill in the cohort fielded {absent[0]!r}\n{empty.describe()}"
     assert empty.data["sample"]["scanned_fight_count"] > 0, empty.describe()
 
 
@@ -1397,7 +1503,8 @@ def test_graphql_introspect_and_a_typed_query_reach_the_api(require):
 
     introspect = run("warcraftlogs", "graphql", "--introspect")
     assert introspect.payload["kind"] == "graphql", introspect.describe()
-    schema = introspect.data["introspection"]
+    # graphql's data is the GraphQL result itself, so introspection sits under its own __schema.
+    schema = introspect.data["__schema"]
     assert schema["queryType"]["name"], introspect.describe()
     assert len(schema["types"]) > 50, introspect.describe()
 

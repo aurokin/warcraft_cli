@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from typing import Any, NoReturn, Protocol
 
 import typer
-from warcraft_core.cli import emit
+from warcraft_core.cli import emit, fail
 from warcraft_core.exit_codes import EXIT_GENERIC
 from warcraft_core.shapes import as_dict, as_list
 
@@ -57,20 +57,7 @@ def _fail_cooldown_packet(
     exit_code: int = EXIT_GENERIC,
 ) -> NoReturn:
     """Emit the packet failure envelope. Structured context goes under ``error.details``."""
-    error: dict[str, Any] = {"code": code, "message": message}
-    if details:
-        error["details"] = details
-    _emit(ctx,
-        {
-            "ok": False,
-            "provider": "warcraft",
-            "kind": "cooldown_packet",
-            "query": query,
-            "error": error,
-        },
-        err=True,
-    )
-    raise typer.Exit(exit_code)
+    fail(ctx, code, message, exit_code=exit_code, query=query, details=details)
 
 
 def _cooldown_provider_payload(

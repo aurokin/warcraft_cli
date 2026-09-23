@@ -110,6 +110,7 @@ def _envelope_error_violations(payload: Mapping[str, Any]) -> list[str]:
 def envelope_violations(payload: Mapping[str, Any]) -> list[str]:
     """Return why ``payload`` is not a conforming envelope; an empty list means it conforms."""
     problems = [f"missing key: {key}" for key in sorted(REQUIRED_KEYS) if key not in payload]
+    problems.extend(f"unexpected key: {key}" for key in sorted(payload.keys() - ENVELOPE_KEYS))
     problems.extend(_envelope_type_violations(payload))
     problems.extend(_envelope_error_violations(payload))
     return problems

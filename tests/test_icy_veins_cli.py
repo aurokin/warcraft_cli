@@ -445,6 +445,51 @@ def test_icy_veins_search_returns_nothing_for_a_query_no_guide_mentions(monkeypa
     assert (payload["count"], payload["results"]) == (0, [])
 
 
+def _search_ids(monkeypatch, slugs: list[str], query: str) -> list[str]:
+    sitemap = [
+        {"slug": slug, "name": slug.replace("-", " ").title(), "url": f"https://www.icy-veins.com/wow/{slug}",
+         "content_family": classify_guide_slug(slug)}
+        for slug in slugs
+    ]
+    monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.sitemap_guides", lambda self: sitemap)
+    result = runner.invoke(app, ["search", query])
+    assert result.exit_code == 0
+    return [row["id"] for row in json.loads(result.stdout)["data"]["results"]]
+
+
+def test_icy_veins_search_reads_mythic_plus_for_mythic_plus_sign(monkeypatch) -> None:
+    """Icy Veins names these pages "Mythic Plus"; the substring filter turned `search "mythic+"` from 34 rows to 0."""
+    slugs = ["frost-mage-pve-dps-mythic-plus-tips", "frost-mage-pve-dps-guide"]
+
+    assert _search_ids(monkeypatch, slugs, "mythic+")[0] == "frost-mage-pve-dps-mythic-plus-tips"
+    assert _search_ids(monkeypatch, slugs, "mythic+") == _search_ids(monkeypatch, slugs, "mythic plus")
+
+
+@pytest.mark.parametrize("query", ["dh", "mw", "the"])
+def test_icy_veins_search_matches_whole_words_only(monkeypatch, query: str) -> None:
+    """"dh" inside "headhunters", "mw" inside "stormwind" and the stopword "the" used to keep these rows."""
+    slugs = ["vol-jins-headhunters-reputation-farming-guide", "horrific-vision-of-stormwind-guide", "the-underpin-guide"]
+
+    assert _search_ids(monkeypatch, slugs, query) == []
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        ("build", "frost-mage-pve-dps-spec-builds-talents"),
+        ("talent build", "frost-mage-pve-dps-spec-builds-talents"),
+        ("macro", "frost-mage-pve-dps-macros-addons"),
+    ],
+)
+def test_icy_veins_search_matches_a_word_in_its_singular_or_plural_form(
+    monkeypatch, query: str, expected: str
+) -> None:
+    """Whole-word matching dropped every "...-builds-talents" and "...-macros-addons" page for these queries."""
+    slugs = ["frost-mage-pve-dps-spec-builds-talents", "frost-mage-pve-dps-macros-addons"]
+
+    assert _search_ids(monkeypatch, slugs, query) == [expected]
+
+
 def test_icy_veins_resolve_command_returns_best_guide(monkeypatch) -> None:
     monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.sitemap_guides", lambda self: parse_sitemap_guides(SITEMAP_XML))
     result = runner.invoke(app, ["resolve", "mistweaver monk guide"])

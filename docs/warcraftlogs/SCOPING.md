@@ -59,7 +59,7 @@ Sampled analytics commands such as `boss-kills`, `top-kills`, `spec-kill-samples
 
 One real pull that two raiders both uploaded is collapsed into a single sampled kill (same
 encounter, difficulty, raid size and guild, with wall-clock start and end within 5 s of another
-upload of that pull).
+report of that pull).
 `sample.duplicates_removed` counts the collapse and the kept kill's `duplicate_reports` cites the
 folded-in report codes and fight ids.
 
@@ -127,4 +127,4 @@ If a query declares `$fightIDs: [Int]`, repeated `--fight-id` values are injecte
 
 User-endpoint raw queries are not cached, even when `--cache-ttl` is set, because saved user auth can switch accounts and may expose private report or `currentUser` data.
 
-Partial GraphQL errors with useful data are emitted as `graphql_warnings` plus `notes`, matching typed command behavior.
+Partial GraphQL errors with useful data are emitted as `provenance.graphql_warnings`; `data` stays the GraphQL result verbatim, so an alias such as `notes` is never overwritten.

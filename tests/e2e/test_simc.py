@@ -705,12 +705,47 @@ def test_modify_build_with_a_no_op_edit_returns_the_same_build(require, checkout
     # A name held by one row only: a tiered node's entries share a name, so `name:rank` would be ambiguous.
     unchanged = [talent for talent in class_rows if [row["name"] for row in class_rows].count(talent["name"]) == 1][-1]
 
+    # Class and spec are spelled the way players write them; the command must read them case-insensitively.
     result = run(
-        "simc", "modify-build", "--talents", checkout.talents, "--add", f"{unchanged['name']}:{unchanged['rank']}", *build
+        "simc", "modify-build", "--talents", checkout.talents, "--add", f"{unchanged['name']}:{unchanged['rank']}",
+        "--actor-class", ACTOR_CLASS.title(), "--spec", SPEC.title(),
     )
+    assert (result.data["base"]["actor_class"], result.data["base"]["spec"]) == (ACTOR_CLASS, SPEC), result.describe()
     assert result.data["modifications"] == [f"add:{unchanged['name']}:{unchanged['rank']}"]
     assert result.data["result"]["talents_export"] == checkout.talents, result.describe()
     assert all(tree["has_differences"] is False for tree in result.data["result"]["diff_from_base"].values()), result.describe()
+
+
+def _taken(decoded: Result, tree: str) -> set[tuple[str, int]]:
+    return {(row["token"], row["rank"]) for row in decoded.data["decoded"]["talents_by_tree"][tree]}
+
+
+def test_modify_build_swaps_in_another_builds_spec_tree(require, checkout: Checkout) -> None:
+    """``--swap-spec-tree-from`` takes the whole spec tree from another build and nothing else.
+
+    The export is decoded again and compared tree by tree with the two shipped builds it was
+    assembled from, so a swap that took the wrong tree, or dropped or kept a talent, fails here.
+    """
+    require("simc")
+    left, right = _hero_variants(checkout)
+    build = ("--actor-class", ACTOR_CLASS, "--spec", SPEC)
+    base_talents, source_talents = _profile_talents(left.path), _profile_talents(right.path)
+    base = run("simc", "decode-build", "--talents", base_talents, *build)
+    source = run("simc", "decode-build", "--talents", source_talents, *build)
+    assert _taken(base, "spec") != _taken(source, "spec"), f"{left.path.name} and {right.path.name} share a spec tree"
+
+    result = run("simc", "modify-build", "--talents", base_talents, "--swap-spec-tree-from", source_talents, *build)
+    assert result.data["modifications"] == ["swap_spec_tree"], result.describe()
+    diff = result.data["result"]["diff_from_base"]
+    assert (diff["class"]["has_differences"], diff["spec"]["has_differences"], diff["hero"]["has_differences"]) == (
+        False, True, False
+    ), result.describe()
+
+    swapped = run("simc", "decode-build", "--talents", result.data["result"]["talents_export"], *build)
+    assert _taken(swapped, "spec") == _taken(source, "spec"), swapped.describe()
+    assert _taken(swapped, "class") == _taken(base, "class"), swapped.describe()
+    assert _taken(swapped, "hero") == _taken(base, "hero"), swapped.describe()
+    assert swapped.data["decoded"]["hero_tree"] == base.data["decoded"]["hero_tree"], swapped.describe()
 
 
 # --- APL analysis ---
@@ -1267,9 +1302,10 @@ def test_a_missing_repo_root_fails_with_the_documented_codes(require, out_dir: P
         "--spec",
         SPEC,
         expect=EXIT_GENERIC,
-        error_code="decode_failed",
+        error_code="identify_failed",
     )
-    assert "SimC binary not found" in decoded.payload["error"]["message"]
+    # The class and spec are checked against the checkout's own spec table, which is missing here too.
+    assert "sc_specialization_data.inc" in decoded.payload["error"]["message"], decoded.describe()
 
     run("simc", "--repo-root", str(missing), "build", expect=EXIT_GENERIC, error_code="missing_build_dir")
 
@@ -1302,7 +1338,7 @@ def test_bad_input_paths_exit_4(require, checkout: Checkout, out_dir: Path) -> N
     assert str(missing) in invalid_harness.payload["error"]["message"]
 
 
-def test_usage_errors_exit_2_with_an_error_envelope(require) -> None:
+def test_usage_errors_exit_2_with_an_error_envelope(require, checkout: Checkout) -> None:
     """A rejected invocation still owes the caller the envelope, on stderr, with an error code.
 
     ``run`` is what enforces that: exit code, empty stdout, one parseable envelope with ``ok: false``
@@ -1322,6 +1358,18 @@ def test_usage_errors_exit_2_with_an_error_envelope(require) -> None:
     assert not_a_build.payload["error"]["details"]["reference_type"] == "url", not_a_build.describe()
     # A class and spec with no talents is not a build, so there is nothing to decode.
     run("simc", "decode-build", "--actor-class", ACTOR_CLASS, "--spec", SPEC, expect=EXIT_USAGE, error_code="invalid_query")
+    # A class and spec that do not go together are the caller's mistake, named with the valid specs.
+    mismatched = run(
+        "simc", "decode-build", "--talents", checkout.talents, "--actor-class", "mage", "--spec", "holy",
+        expect=EXIT_USAGE, error_code="invalid_query",
+    )
+    assert "frost" in mismatched.payload["error"]["message"], mismatched.describe()
+    # An --add without a rank is malformed input, not a talent SimC failed to apply.
+    bad_add = run(
+        "simc", "modify-build", "--talents", checkout.talents, "--actor-class", ACTOR_CLASS, "--spec", SPEC,
+        "--add", "Tiger Palm", expect=EXIT_USAGE, error_code="invalid_argument",
+    )
+    assert "name:rank" in bad_add.payload["error"]["message"], bad_add.describe()
     run("simc", "repo", "--set-root", "/tmp", "--clear-root", expect=EXIT_USAGE, error_code="invalid_query")
 
 

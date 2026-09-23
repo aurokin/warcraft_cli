@@ -208,9 +208,14 @@ def classify_article_family(title: str) -> str:
     return _title_pattern_family(normalized) or _title_set_family(normalized) or "general_article"
 
 
-def _strip_html(html_text: str, *, separator: str = " ") -> str:
-    soup = BeautifulSoup(html_text, "html.parser")
-    return soup.get_text(separator, strip=True)
+def _strip_html(html_text: str) -> str:
+    """Plain text of an HTML fragment with the fragment's own whitespace, collapsed.
+
+    No separator is inserted between tags: search highlights wrap sub-words
+    (``<span class="searchmatch">PLAYER</span>_LOGIN``), and stripping each string instead would glue
+    highlighted words to their neighbours (``see <span>Sha</span> <span>of</span>`` -> ``seeShaof``).
+    """
+    return " ".join(BeautifulSoup(html_text, "html.parser").get_text().split())
 
 
 def parse_search_results(payload: dict[str, Any]) -> tuple[int, list[dict[str, Any]]]:
@@ -226,9 +231,7 @@ def parse_search_results(payload: dict[str, Any]) -> tuple[int, list[dict[str, A
         title = str(row.get("title") or "").strip()
         if not title:
             continue
-        # Search highlights wrap sub-words ("<span class="searchmatch">PLAYER</span>_LOGIN"), so the
-        # separator has to be empty or the ranker never sees the term it matched on.
-        snippet = _strip_html(str(row.get("snippet") or ""), separator="")
+        snippet = _strip_html(str(row.get("snippet") or ""))
         rows.append(
             {
                 "title": title,

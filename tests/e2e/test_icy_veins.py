@@ -158,7 +158,7 @@ def test_search_ranks_real_guides_from_the_sitemap(require) -> None:
         assert row["entity_type"] == "guide"
         assert row["metadata"]["content_family"], "search returned a row without a content family"
         assert row["url"] == f"https://www.icy-veins.com/wow/{row['id']}"
-        assert row["follow_up"]["recommended_command"] == f"{BINARY} guide {row['id']}"
+        assert row["follow_up"]["command"] == f"{BINARY} guide {row['id']}"
 
 
 def test_search_outside_the_guide_surface_returns_a_scope_hint(require) -> None:
@@ -168,6 +168,19 @@ def test_search_outside_the_guide_surface_returns_a_scope_hint(require) -> None:
     assert result.data["count"] == 0
     assert result.data["results"] == []
     assert result.data["scope_hint"]["code"] == "patch_notes"
+
+
+def test_search_reads_mythic_plus_the_way_players_write_it(require) -> None:
+    """``mythic+`` is how players type it and "Mythic Plus" is how Icy Veins names those pages.
+
+    This exact query once answered ``ok: true`` with no rows.
+    """
+    require(PROVIDER)
+    result = run(BINARY, "search", "mythic+", "--limit", "5")
+
+    rows = result.data["results"]
+    assert rows, result.describe()
+    assert all("mythic-plus" in row["id"] for row in rows), result.describe()
 
 
 def test_resolve_hands_over_a_next_command_that_returns_the_same_guide(require) -> None:
@@ -402,8 +415,9 @@ def test_guide_query_rejects_a_bundle_path_that_is_missing_or_not_a_bundle(requi
     (not_a_bundle / "manifest.json").write_text(json.dumps({"files": {}}), encoding="utf-8")
     run(BINARY, "guide-query", str(not_a_bundle), "mana", expect=EXIT_GENERIC, error_code="invalid_bundle")
 
-    # An unsupported --kind is refused with the code every article-bundle query shares.
-    run(BINARY, "guide-query", str(not_a_bundle), "mana", "--kind", "bogus", expect=EXIT_GENERIC, error_code="invalid_query_kind")
+    # An unsupported --kind is a bad flag: the usage code every provider gives that mistake, raised
+    # before the bundle is read (so this one is not reported as the invalid bundle it also is).
+    run(BINARY, "guide-query", str(not_a_bundle), "mana", "--kind", "bogus", expect=EXIT_USAGE, error_code="invalid_argument")
 
 
 @pytest.mark.parametrize("command", ["guide", "guide-full", "guide-export"])

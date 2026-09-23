@@ -61,9 +61,9 @@ Every command emits one JSON envelope: `ok`, `provider`, `command`, `kind`, `sch
 Failures write the envelope to stderr and exit with the shared codes from
 [docs/foundation/ERROR_CONTRACT.md](../foundation/ERROR_CONTRACT.md): 1 generic (including an
 unparseable report reference or a missing `--fight`), 2 usage (bad flags or a Lorrgs 422), 4 not found
-(Lorrgs 404, and Lorrgs 401/403 — it takes no credentials, so a refusal means the report is private or
-not loaded, never an auth problem), 5 network, timeout, rate limit, or other upstream failure. No Lorrgs
-command exits 3.
+(Lorrgs 404, which `user-report` also returns for a report Lorrgs has not loaded yet, and Lorrgs 401/403
+— it takes no credentials, so a refusal means Warcraft Logs keeps the report private, never an auth
+problem), 5 network, timeout, rate limit, or other upstream failure. No Lorrgs command exits 3.
 
 ## How search and resolve rank
 

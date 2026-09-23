@@ -21,7 +21,12 @@ from warcraft_content.article_bundle import (
 )
 from warcraft_content.article_discovery import merge_article_linked_entities
 from warcraft_core.provider import ProviderError
-from wowhead_cli.guides import write_guide_export_assets
+from wowhead_cli.guides import (
+    GuideExportOptions,
+    GuideHydrationResult,
+    guide_export_manifest,
+    write_guide_export_assets,
+)
 
 ABILITY_IDENTITY = {"kind": "ability_identity", "spell_id": 116670, "ability": "vivify"}
 
@@ -96,7 +101,23 @@ def _not_a_bundle(tmp_path: Path, shape: str) -> Path:
         _write_manifest(tmp_path, {"files": {"pages_jsonl": "pages.jsonl"}})
         line = '{"title": "Overv' if shape == "corrupt_jsonl" else "[1, 2]"
         (tmp_path / "pages.jsonl").write_text(line + "\n", encoding="utf-8")
+    if shape in NESTED_FIELD_ROWS:
+        file_key, row = NESTED_FIELD_ROWS[shape]
+        _write_manifest(tmp_path, {"files": {file_key: "rows.jsonl"}})
+        (tmp_path / "rows.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
     return tmp_path
+
+
+# Rows that are JSON objects but whose nested field the readers walk into has the wrong type.
+NESTED_FIELD_ROWS: dict[str, tuple[str, dict[str, Any]]] = {
+    "build_identity_not_an_object": ("build_references_jsonl", {"label": "Raid", "build_identity": ["monk"]}),
+    "class_spec_identity_not_an_object": (
+        "build_references_jsonl",
+        {"label": "Raid", "build_identity": {"class_spec_identity": "monk"}},
+    ),
+    "source_urls_not_a_list": ("build_references_jsonl", {"label": "Raid", "source_urls": 5}),
+    "surface_tags_not_a_list": ("analysis_surfaces_jsonl", {"section_title": "Overview", "surface_tags": 5}),
+}
 
 
 @pytest.mark.parametrize(
@@ -112,6 +133,7 @@ def _not_a_bundle(tmp_path: Path, shape: str) -> Path:
         ("listed_file_missing", "invalid_bundle", 1),
         ("corrupt_jsonl", "invalid_bundle", 1),
         ("jsonl_row_not_an_object", "invalid_bundle", 1),
+        *((shape, "invalid_bundle", 1) for shape in NESTED_FIELD_ROWS),
     ],
 )
 def test_load_article_bundle_refuses_a_path_that_is_not_a_readable_bundle(
@@ -127,15 +149,25 @@ def test_load_article_bundle_refuses_a_path_that_is_not_a_readable_bundle(
 
 
 def _wowhead_guide_export(export_dir: Path) -> Path:
-    """A bundle written by wowhead's own guide-export writer: no pages.jsonl, no build-references.jsonl."""
+    """A bundle written by wowhead's own guide-export writers: no pages.jsonl, no build-references.jsonl."""
     export_dir.mkdir()
     payload = {
-        "body": {"section_chunks": [{"ordinal": 1, "level": 2, "title": "Overview", "content_text": "Vivify"}]},
+        "guide": {"input": "mistweaver", "id": 1, "page_url": "https://www.wowhead.com/guide/mistweaver"},
+        "page": {"title": "Mistweaver Monk Guide"},
+        "body": {"section_chunks": [{"ordinal": 1, "level": 2, "title": "Overview", "content_text": "Cast Vivify."}]},
         "navigation": {"links": [{"label": "Talents", "url": "https://www.wowhead.com/guide/talents"}]},
         "analysis_surfaces": {"items": [{"surface_tags": ["overview"], "section_title": "Overview"}]},
     }
-    files, _assets = write_guide_export_assets(export_dir=export_dir, payload=payload, html="<html></html>")
-    _write_manifest(export_dir, {"export_version": 2, "guide": {"id": 1}, "files": files})
+    files, assets = write_guide_export_assets(export_dir=export_dir, payload=payload, html="<html></html>")
+    manifest = guide_export_manifest(
+        export_dir=export_dir,
+        payload=payload,
+        options=GuideExportOptions(guide_ref="mistweaver", max_links=10, include_replies=False),
+        assets=assets,
+        hydration=GuideHydrationResult(items=[], hydrated_at=None, files_written={}),
+        files_written=files,
+    )
+    _write_manifest(export_dir, manifest)
     return export_dir
 
 
@@ -151,6 +183,21 @@ def test_a_wowhead_guide_export_loads_and_takes_part_in_a_comparison(tmp_path: P
     assert [row["surface_tags"] for row in bundle["analysis_surfaces"]] == [["overview"]]
     assert (bundle["pages"], bundle["build_references"]) == ([], [])
     assert comparison["section_evidence"]["shared"] == ["overview"]
+    assert (comparison["bundles"][0]["provider"], comparison["bundles"][0]["title"]) == ("wowhead", "Mistweaver Monk Guide")
+    wowhead_entry = comparison["section_evidence"]["items"][0]["bundles"][0]
+    assert wowhead_entry["previews"] == ["Cast Vivify."]
+
+
+def test_guide_query_reads_a_wowhead_guide_exports_section_text_and_link_labels(tmp_path: Path) -> None:
+    """wowhead rows carry ``content_text`` and ``label``; the query read only ``text`` and ``title`` and answered 0."""
+    bundle = load_article_bundle(_wowhead_guide_export(tmp_path / "wowhead"))
+    kinds = {"sections", "navigation"}
+
+    vivify = query_article_bundle(bundle, query="vivify", limit=5, kinds=kinds, section_title_filter=None)
+    talents = query_article_bundle(bundle, query="talents", limit=5, kinds=kinds, section_title_filter=None)
+
+    assert vivify["match_counts"]["sections"] == 1
+    assert talents["match_counts"]["navigation"] == 1
 
 
 FAILED_PAGE = {

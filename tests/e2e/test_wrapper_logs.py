@@ -29,6 +29,9 @@ from tests.e2e.test_warcraftlogs import anchor, current_raid_zone, guild_anchor
 LORRGS_SPEC_ATTEMPTS = 4
 LORRGS_REPORT_ATTEMPTS = 5
 
+# Lorrgs ranks Heroic and Mythic only, named by slug; Warcraft Logs numbers them 4 and 5.
+LORRGS_DIFFICULTY_BY_WARCRAFTLOGS_ID = {4: "heroic", 5: "mythic"}
+
 
 def _report_url(code: str, fight_id: int) -> str:
     return f"https://www.warcraftlogs.com/reports/{code}#fight={fight_id}"
@@ -207,6 +210,8 @@ def test_cooldown_packet_joins_a_report_fight_to_lorrgs_top_parses(require):
     assert query["spec_slug"] == target.spec_slug, result.describe()
     assert query["boss_slug"] == target.boss_slug, result.describe()
     assert query["report_type"] == "damage-done", result.describe()
+    # The target came off Lorrgs' default (Mythic) ranking, so its top parses are compared at Mythic.
+    assert query["difficulty"] == "mythic", result.describe()
 
     data = result.data
     # Phase bounds come from Lorrgs/Warcraft Logs transition markers, so assert the invariants
@@ -384,6 +389,12 @@ def test_cooldown_packet_degrades_when_lorrgs_has_not_cached_the_report(require)
     assert sources["lorrgs_user_report_fights"]["status"] == "error", result.describe()
     assert sources["warcraftlogs_report_events"]["status"] == "ok", result.describe()
     assert sources["lorrgs_spec_spells"]["status"] == "ok", result.describe()
+    # Top parses are ranked at the analyzed fight's own difficulty, never Mythic by default.
+    difficulty = LORRGS_DIFFICULTY_BY_WARCRAFTLOGS_ID[int(found.fight["difficulty"])]
+    assert result.payload["query"]["difficulty"] == difficulty, result.describe()
+    ranking = sources["lorrgs_spec_ranking"]
+    assert ranking["status"] == "ok", result.describe()
+    assert ranking["command"].endswith(f"--difficulty {difficulty}"), result.describe()
 
     # --spell-id must narrow the tracked set, and the casts with it.
     pressed = max(casts["tracked_casts_by_spell"], key=lambda row: row["count"])

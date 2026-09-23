@@ -78,8 +78,7 @@ def _status_message(exc: httpx.HTTPStatusError) -> str:
     if status in _REFUSAL_STATUSES:
         return (
             f"Lorrgs refused to serve {exc.request.url} ({detail or f'HTTP {status}'}). Lorrgs takes no "
-            "credentials, so this is not an authentication problem: the resource is private, or Lorrgs "
-            "has not loaded that report."
+            "credentials, so this is not an authentication problem: the resource is private."
         )
     return detail or f"Lorrgs API returned HTTP {status} for {exc.request.url}."
 

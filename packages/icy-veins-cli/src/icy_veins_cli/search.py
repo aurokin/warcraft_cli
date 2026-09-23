@@ -16,6 +16,8 @@ from icy_veins_cli.client import IcyVeinsClient
 
 PROVIDER_NAME = "icy-veins"
 QUERY_STRIP_TERMS = ("icy", "veins", "guide", "guides")
+# Words that say nothing about which guide is meant, so they neither rank nor keep a row.
+QUERY_STOP_WORDS = frozenset({"a", "an", "and", "for", "how", "in", "of", "on", "the", "to"})
 # ``keywords`` is an all-of test; ``any_keywords`` fires on a single term. Singular/plural spellings
 # of the same word belong in ``any_keywords``, never in ``keywords``, or the hint can never fire.
 UNSUPPORTED_QUERY_HINTS: dict[str, dict[str, Any]] = {
@@ -68,7 +70,6 @@ SPECIALIZED_QUERY_TERMS = {
     "gear",
     "bis",
     "resources",
-    "mythic+",
     "mythic",
     "plus",
     "macros",
@@ -130,7 +131,7 @@ SPECIALIZED_FAMILY_RULES: tuple[dict[str, Any], ...] = (
         "family": "mythic_plus_tips",
         "score": 18,
         "reason": "family_mythic_plus",
-        "phrases": ("mythic+", " mythic plus "),
+        "phrases": (" mythic plus ",),
     },
     {
         "family": "macros_addons",
@@ -163,12 +164,20 @@ SPECIALIZED_FAMILY_RULES: tuple[dict[str, Any], ...] = (
 
 
 def normalize_search_query(query: str) -> str:
-    """Drop the provider and 'guide' noise words so ranking sees only the meaningful part of the query."""
-    return normalize_query(query, strip_terms=QUERY_STRIP_TERMS)
+    """Drop the provider and 'guide' noise words so ranking sees only the meaningful part of the query.
+
+    '+' is spelled out because Icy Veins names its pages "Mythic Plus": ``mythic+`` is ``mythic plus``.
+    """
+    return normalize_query(query.replace("+", " plus "), strip_terms=QUERY_STRIP_TERMS)
 
 
 def query_terms(query: str) -> set[str]:
-    return set(tokenize_query(query))
+    return set(tokenize_query(query, stop_words=QUERY_STOP_WORDS))
+
+
+def _singular_words(words: set[str]) -> set[str]:
+    """Fold a trailing plural 's', so ``build`` keeps the ``...-spec-builds-talents`` pages."""
+    return {word[:-1] if len(word) > 3 and word.endswith("s") else word for word in words}
 
 
 def unsupported_scope_hint(query: str) -> dict[str, Any] | None:
@@ -294,15 +303,16 @@ def search_results(
     scope_hint = unsupported_scope_hint(normalized_query)
     if scope_hint is not None:
         return normalized_query, [], 0, scope_hint
-    terms = query_terms(normalized_query)
+    terms = _singular_words(query_terms(normalized_query))
     matches: list[dict[str, Any]] = []
     for row in client.sitemap_guides():
         slug = row["slug"]
         name = row["name"]
         content_family = row.get("content_family")
         candidate = f"{name.lower()} {slug.replace('-', ' ')}"
-        # Family boosts alone (a class hub for any one-word query) must not surface an unrelated guide.
-        if not any(term in candidate for term in terms):
+        # Family boosts alone (a class hub for any one-word query) must not surface an unrelated guide,
+        # and a term only counts as a whole word: "dh" is not a match for "headhunters".
+        if not terms & _singular_words(set(tokenize_query(candidate))):
             continue
         score, reasons = score_slug_match(normalized_query, candidate, slug=slug)
         family_score, family_reasons = score_family_match(normalized_query, content_family=content_family)

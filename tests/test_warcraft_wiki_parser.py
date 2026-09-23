@@ -395,6 +395,16 @@ def test_parse_search_results_maps_a_captured_mediawiki_search_response() -> Non
     assert "PLAYER_LOGIN" in first["snippet"]
 
 
+def test_parse_search_results_keeps_the_spaces_between_highlighted_words() -> None:
+    # Highlights sit between plain spaces ("see <span>Sha</span> <span>of</span> ..."); stripping each
+    # text node used to glue them into "seeShaofAnger", where the ranker's substring checks find words
+    # the snippet never had ("fang").
+    _, rows = parse_search_results(_captured("search_world_boss_sha_of_anger.json"))
+
+    snippets = {row["title"]: row["snippet"] for row in rows}
+    assert snippets["Sha of Anger"].startswith("For the Anniversary version, see Sha of Anger (Anniversary). Sha of Anger is one of")
+
+
 def test_parse_search_results_skips_rows_without_a_title() -> None:
     payload = {"query": {"searchinfo": {"totalhits": 3}, "search": [{"title": " "}, "junk", {"title": "Mage"}]}}
 

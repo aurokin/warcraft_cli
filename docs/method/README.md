@@ -44,7 +44,8 @@ exits 4, `auth_failed` exits 3, and the Method-specific input errors `invalid_gu
 not exist is `not_found` (exit 4), a file is `invalid_argument` (exit 2), and a directory that is not
 a readable bundle is `invalid_bundle` (exit 1): no `manifest.json`, a manifest whose `files` lists no
 content file (`pages.jsonl`, `sections.jsonl`, `analysis-surfaces.jsonl`, ...), or a listed file that
-is missing or corrupt. A `wowhead guide-export` bundle is readable; it has sections, navigation,
+is missing, corrupt, or holds a row with a wrongly typed nested field (a `build_identity` that is not
+an object, `surface_tags` that is not a list). A `wowhead guide-export` bundle is readable; it has sections, navigation,
 linked entities and analysis surfaces, but no pages or build references.
 `invalid_guide_ref` means the argument was not a Method guide reference; a page that fetched but
 whose article container no longer matches fails with `parse_failed` (exit 1) instead of returning

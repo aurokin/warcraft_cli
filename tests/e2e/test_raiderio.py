@@ -43,9 +43,8 @@ CHARACTER = pins.CHARACTER_NAME
 SCOPE = ("--region", "us", "--pages", "1", "--limit", "20")
 # Raider.IO serves 20 ranking rows per page, so --page is only observable at that granularity.
 RANKING_PAGE_SIZE = 20
-# The playable classes. A class distribution can only answer with these and a spec distribution can
-# never answer with one of them, which is what tells those two roster distributions apart: both
-# count the same roster entries under the same unit, so nothing inside the payload separates them.
+# The playable classes. A class tally can only answer with these and a spec tally never can, which
+# is what tells the class and spec compositions and player tags apart.
 WOW_CLASS_SLUGS = frozenset(
     {
         "death-knight", "demon-hunter", "druid", "evoker", "hunter", "mage", "monk",
@@ -400,13 +399,23 @@ def test_the_sampled_bounds_return_strict_subsets_that_add_back_up(baseline_samp
     edges = run("raiderio", "sample", "mythic-plus-runs", *SCOPE, "--level-min", str(min(levels)), "--level-max", str(max(levels)))
     assert _run_keys(edges) == everything, edges.describe()
 
+    # And a floor inside the range keeps exactly the runs at the top key level: a strict, non-empty
+    # subset, so a bound that only works at the extremes (or off by one) cannot pass.
+    assert min(levels) < max(levels), "the sample needs two key levels for a bound inside the range to bite"
+    top = run("raiderio", "sample", "mythic-plus-runs", *SCOPE, "--level-min", str(max(levels)))
+    expected = {_run_key(row) for row in runs if row["mythic_level"] == max(levels)}
+    assert _run_keys(top) == expected, top.describe()
+    assert expected < everything
+
 
 def test_the_roster_filters_keep_exactly_the_runs_that_carry_the_value(baseline_sample: Result) -> None:
     """``--contains-class``/``--contains-spec`` select on the roster; ``--player-region``/``--contains-role`` too.
 
     The class and spec values are chosen from the sample so that some runs carry them and some do
-    not, which makes the expected set known exactly. The other two flags are proved on values no
-    roster can carry -- a US leaderboard has no EU players, and no run fields a made-up role.
+    not, which makes the expected set known exactly. The other two flags are proved both ways, on a
+    value every run carries (each run on a US leaderboard fields a US player and a tank) and on one
+    none can (no EU player, no made-up role): a filter that dropped everything fails the first leg,
+    one that did nothing fails the second.
     """
     runs = _rows(baseline_sample, "runs")
     everything = _run_keys(baseline_sample)
@@ -419,10 +428,15 @@ def test_the_roster_filters_keep_exactly_the_runs_that_carry_the_value(baseline_
         assert expected < everything, f"{flag} {value} has to drop at least one run to prove anything"
         assert narrowed.data["sample"]["filtering"]["excluded_run_count"] == len(everything) - len(expected)
 
-    for flag, field, value in (("--player-region", "region", "eu"), ("--contains-role", "role", "healbot")):
-        assert not any(value in _roster_values(row, field) for row in runs), f"{value} is in the sample after all"
-        empty = run("raiderio", "sample", "mythic-plus-runs", *SCOPE, flag, value)
-        assert empty.data["runs"] == [], f"{flag} {value} matches no sampled roster\n{empty.describe()}"
+    for flag, field, everywhere, nowhere in (("--player-region", "region", "us", "eu"), ("--contains-role", "role", "tank", "healbot")):
+        assert all(everywhere in _roster_values(row, field) for row in runs), f"a sampled run has no {everywhere} {field}"
+        kept = run("raiderio", "sample", "mythic-plus-runs", *SCOPE, flag, everywhere)
+        assert _run_keys(kept) == everything, f"{flag} {everywhere} is on every sampled roster\n{kept.describe()}"
+        assert kept.data["sample"]["filtering"]["excluded_run_count"] == 0
+
+        assert not any(nowhere in _roster_values(row, field) for row in runs), f"{nowhere} is in the sample after all"
+        empty = run("raiderio", "sample", "mythic-plus-runs", *SCOPE, flag, nowhere)
+        assert empty.data["runs"] == [], f"{flag} {nowhere} matches no sampled roster\n{empty.describe()}"
         assert empty.data["sample"]["filtering"]["excluded_run_count"] == len(everything)
 
 
@@ -473,8 +487,8 @@ def _assert_distribution_shape(result: Result, *, unit: str) -> list[dict[str, A
     return rows
 
 
-def _assert_run_distribution_matches_the_metric(result: Result, metric: str, rows: list[dict[str, Any]]) -> None:
-    """Tie the tally to the one thing in the sample block that only this metric can produce."""
+def _assert_run_distribution_matches_the_metric(result: Result, metric: str, rows: list[dict[str, Any]], baseline: Result) -> None:
+    """Tie the tally to the one thing in the sample that only this metric can produce."""
     sample = result.data["sample"]
     values = {row["value"] for row in rows}
     if metric == "mythic_level":
@@ -485,10 +499,12 @@ def _assert_run_distribution_matches_the_metric(result: Result, metric: str, row
         assert rows == sample["role_counts"], result.describe()
     elif metric == "player_region":
         assert rows == sample["player_region_counts"], result.describe()
-    elif metric == "class":
-        assert values <= WOW_CLASS_SLUGS, result.describe()
-    elif metric == "spec":
-        assert not values & WOW_CLASS_SLUGS, "a spec tally cannot answer with class slugs"
+    elif metric in ("class", "spec"):
+        # The sample block carries no class or spec counts, so the tally is held to the roster rows of
+        # the baseline sample, which read the same cached page. A tally of any other roster field
+        # (region, role) has the same unit and total, and only an exact count tells it apart.
+        roster = [entry for row in _rows(baseline, "runs") for entry in row["roster"]]
+        assert _counts(rows) == dict(Counter(entry[f"{metric}_slug"] for entry in roster)), result.describe()
     else:
         # The composition keys are one "role:label" pair per roster slot, over class or spec labels.
         labels = {part.split(":", 1)[1] for value in values for part in value.split(" | ")}
@@ -497,7 +513,7 @@ def _assert_run_distribution_matches_the_metric(result: Result, metric: str, row
 
 
 @pytest.mark.parametrize("metric", sorted(RUN_DISTRIBUTION_UNITS))
-def test_distribution_mythic_plus_runs_covers_every_documented_metric(metric: str) -> None:
+def test_distribution_mythic_plus_runs_covers_every_documented_metric(metric: str, baseline_sample: Result) -> None:
     result = run("raiderio", "distribution", "mythic-plus-runs", "--metric", metric, *SCOPE)
 
     assert result.data["metric"] == metric
@@ -505,7 +521,7 @@ def test_distribution_mythic_plus_runs_covers_every_documented_metric(metric: st
     unit = RUN_DISTRIBUTION_UNITS[metric]
     rows = _assert_distribution_shape(result, unit=unit)
     assert sum(row["count"] for row in rows) == (sample["run_count"] if unit == "runs" else sample["roster_entry_count"])
-    _assert_run_distribution_matches_the_metric(result, metric, rows)
+    _assert_run_distribution_matches_the_metric(result, metric, rows, baseline_sample)
 
 
 def _assert_player_distribution_matches_the_metric(result: Result, metric: str, rows: list[dict[str, Any]]) -> None:
@@ -657,7 +673,6 @@ def test_raid_leaderboard_pages_are_contiguous_and_never_overlap(current_raid: s
 
 def test_raid_leaderboard_realm_narrows_rows_to_that_realm(current_raid: str) -> None:
     scope = ("leaderboard", "raids", "--raid", current_raid, "--difficulty", "mythic", "--region", REGION)
-    region_wide = run("raiderio", *scope, "--limit", str(RANKING_PAGE_SIZE))
     result = run("raiderio", *scope, "--realm", REALM, "--limit", "5")
 
     assert result.payload["query"]["realm"] == REALM
@@ -665,11 +680,13 @@ def test_raid_leaderboard_realm_narrows_rows_to_that_realm(current_raid: str) ->
     assert all(row["guild"]["realm"] == REALM for row in rows), result.describe()
     assert [row["rank"] for row in rows] == list(range(1, len(rows) + 1)), "realm-scoped rank must restart at 1"
     assert all(row["region_rank"] >= row["rank"] for row in rows), "a realm rank can never beat the region rank"
-    # The realm scope is a slice of the region scope, so a realm guild inside the region's top page
-    # has to carry the same region_rank in both answers.
-    region_ranks = {row["guild"]["profile_url"]: row["rank"] for row in _rows(region_wide, "rows")}
-    shared = [row for row in rows if row["guild"]["profile_url"] in region_ranks]
-    assert all(region_ranks[row["guild"]["profile_url"]] == row["region_rank"] for row in shared), result.describe()
+    # The realm scope is a slice of the region scope, so the realm's best guild has to sit at its
+    # region_rank on the region-wide page that holds that rank.
+    best = rows[0]
+    page = (best["region_rank"] - 1) // RANKING_PAGE_SIZE
+    region_page = run("raiderio", *scope, "--limit", str(RANKING_PAGE_SIZE), "--page", str(page))
+    region_ranks = {row["guild"]["profile_url"]: row["rank"] for row in _rows(region_page, "rows")}
+    assert region_ranks.get(best["guild"]["profile_url"]) == best["region_rank"], region_page.describe()
     assert result.data["citations"]["leaderboard_urls"][0].endswith(f"?realm={REALM}")
 
 
@@ -686,19 +703,20 @@ def test_malformed_request_is_a_usage_error() -> None:
 
 
 @pytest.mark.parametrize(
-    ("args", "command"),
+    ("args", "command", "error_code"),
     [
-        (("search", "liquid", "--kind", "bogus"), "search"),
-        (("resolve", "liquid", "--kind", "bogus"), "resolve"),
-        (("distribution", "mythic-plus-runs", "--metric", "bogus"), "distribution mythic-plus-runs"),
-        (("distribution", "mythic-plus-players", "--metric", "bogus"), "distribution mythic-plus-players"),
-        (("threshold", "mythic-plus-runs", "--metric", "bogus", "--value", "100"), "threshold mythic-plus-runs"),
-        (("leaderboard", "raids", "--raid", "sporefall", "--difficulty", "bogus"), "leaderboard raids"),
-        (("leaderboard", "raids", "--raid", "sporefall", "--realm", "malganis"), "leaderboard raids"),
+        # An unsupported --kind is the code every provider gives that mistake (method, icy-veins too).
+        (("search", "liquid", "--kind", "bogus"), "search", "invalid_argument"),
+        (("resolve", "liquid", "--kind", "bogus"), "resolve", "invalid_argument"),
+        (("distribution", "mythic-plus-runs", "--metric", "bogus"), "distribution mythic-plus-runs", "invalid_query"),
+        (("distribution", "mythic-plus-players", "--metric", "bogus"), "distribution mythic-plus-players", "invalid_query"),
+        (("threshold", "mythic-plus-runs", "--metric", "bogus", "--value", "100"), "threshold mythic-plus-runs", "invalid_query"),
+        (("leaderboard", "raids", "--raid", "sporefall", "--difficulty", "bogus"), "leaderboard raids", "invalid_query"),
+        (("leaderboard", "raids", "--raid", "sporefall", "--realm", "malganis"), "leaderboard raids", "invalid_query"),
     ],
 )
-def test_invalid_kind_or_metric_is_a_usage_error(args: tuple[str, ...], command: str) -> None:
-    result = run("raiderio", *args, expect=EXIT_USAGE, error_code="invalid_query")
+def test_invalid_kind_or_metric_is_a_usage_error(args: tuple[str, ...], command: str, error_code: str) -> None:
+    result = run("raiderio", *args, expect=EXIT_USAGE, error_code=error_code)
     # A failure labels itself with the full sub-path, the same value the success envelope carries,
     # so no two commands answer to the same `command`.
     assert result.payload["command"] == command, result.describe()

@@ -40,15 +40,12 @@ def _envelope(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _assert_wrapper_success_envelope(payload: dict, *, command: str, provider: str = "warcraft") -> None:
-    """A wrapper-owned *success* payload has to conform too, not just its failure envelope.
-
-    ``provider`` is the wrapper itself except on `resolve`, which reports the provider it selected.
-    """
+def _assert_wrapper_success_envelope(payload: dict, *, command: str) -> None:
+    """A wrapper-owned *success* payload has to conform too, not just its failure envelope."""
     assert envelope_violations(payload) == [], f"{command}: {envelope_violations(payload)}"
     assert set(payload) == REQUIRED_KEYS, f"{command}: keys beyond the envelope"
     assert payload["ok"] is True
-    assert payload["provider"] == provider
+    assert payload["provider"] == "warcraft"
     assert payload["command"] == command
 
 
@@ -656,6 +653,8 @@ def test_warcraft_passthrough_rejects_unsupported_warcraftlogs_expansion() -> No
     result = runner.invoke(warcraft_app, ["--expansion", "ptr", "warcraftlogs", "auth", "client"])
     assert result.exit_code == 1
     payload = json.loads(result.stderr)
+    assert payload["kind"] == "error"
+    assert payload["query"] == {"provider": "warcraftlogs", "expansion": "ptr"}
     assert payload["error"]["code"] == "unsupported_provider_expansion"
     assert payload["error"]["details"]["provider"] == "warcraftlogs"
     assert payload["error"]["details"]["requested_expansion"] == "ptr"
@@ -665,6 +664,7 @@ def test_warcraft_passthrough_rejects_duplicate_warcraftlogs_site_selector() -> 
     result = runner.invoke(warcraft_app, ["--expansion", "wotlk", "warcraftlogs", "--site", "retail", "auth", "client"])
     assert result.exit_code == 1
     payload = json.loads(result.stderr)
+    assert payload["query"] == {"provider": "warcraftlogs", "expansion": "wotlk"}
     assert payload["error"]["code"] == "duplicate_expansion_argument"
     assert payload["error"]["details"]["provider"] == "warcraftlogs"
 
@@ -705,6 +705,39 @@ def test_warcraft_passthrough_rejects_fixed_provider_expansion_mismatch() -> Non
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "unsupported_provider_expansion"
     assert payload["error"]["details"]["provider"] == "method"
+
+
+def test_warcraft_passthrough_advisory_rides_on_a_provider_failure(tmp_path: Path) -> None:
+    """A failing none-expansion provider still reports the ignored --expansion, under error.details."""
+    missing = tmp_path / "missing-packet.json"
+    result = runner.invoke(
+        warcraft_app, ["--expansion", "wotlk", "simc", "validate-talent-transport", "--build-packet", str(missing)]
+    )
+    assert result.exit_code != 0
+    payload = json.loads(result.stderr)
+    assert payload["ok"] is False
+    assert payload["provider"] == "simc"
+    assert payload["data"] == {}
+    advisory = payload["error"]["details"]["expansion_advisory"]
+    assert advisory["expansion_filter"] == "passthrough_no_expansion_semantics"
+    assert advisory["requested_expansion"] == "wotlk"
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["guide-compare", "only-one-bundle"],
+        ["guide-compare-query", "mistweaver monk", "--provider", "raiderio"],
+    ],
+)
+def test_wrapper_invalid_argument_exits_as_a_usage_error(args: list[str]) -> None:
+    result = runner.invoke(warcraft_app, args)
+
+    assert result.exit_code == 2, result.output
+    payload = json.loads(result.stderr)
+    assert payload["error"]["code"] == "invalid_argument"
+    assert payload["kind"] == "error"
+    assert payload["query"], "a failure echoes the parsed input"
 
 
 def test_warcraft_passthrough_without_expansion_has_no_advisory() -> None:
@@ -2341,7 +2374,8 @@ def test_warcraft_resolve_prefers_ready_provider(monkeypatch) -> None:
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    _assert_wrapper_success_envelope(payload, command="resolve", provider="wowhead")
+    # The envelope names the binary; the provider the match came from is data.selected_provider.
+    _assert_wrapper_success_envelope(payload, command="resolve")
     assert payload["data"]["resolved"] is True
     assert payload["data"]["selected_provider"] == "wowhead"
     assert payload["data"]["next_command"] == "wowhead entity quest 86739"
@@ -2720,10 +2754,14 @@ def test_cooldown_packet_compares_top_parses_at_the_fights_own_difficulty(monkey
     assert payload["data"]["comparison"]["status"] == "ready"
 
 
-def test_cooldown_packet_says_so_when_the_fight_difficulty_has_no_ranking(monkeypatch) -> None:
+# Warcraft Logs difficulty ids: 1 LFR, 3 Normal; None when the fight row carries none.
+@pytest.mark.parametrize("fight_difficulty", [None, 1, 3])
+def test_cooldown_packet_says_so_when_the_fight_difficulty_has_no_ranking(monkeypatch, fight_difficulty: int | None) -> None:
     """A fight whose difficulty Lorrgs does not rank gets no comparison and a note, not mythic samples."""
     calls: list[tuple[str, list[str]]] = []
-    monkeypatch.setattr("warcraft_cli.main.provider_invoke", _cooldown_packet_invoke(calls, wcl_fight_difficulty=None))
+    monkeypatch.setattr(
+        "warcraft_cli.main.provider_invoke", _cooldown_packet_invoke(calls, wcl_fight_difficulty=fight_difficulty)
+    )
 
     result = runner.invoke(warcraft_app, _cooldown_packet_args())
 
@@ -2732,7 +2770,7 @@ def test_cooldown_packet_says_so_when_the_fight_difficulty_has_no_ranking(monkey
     assert not [args for provider, args in calls if args[:1] == ["spec-ranking"]]
     assert payload["query"]["difficulty"] is None
     assert payload["data"]["comparison"]["status"] == "unavailable"
-    assert any("difficulty is None" in note and "--difficulty" in note for note in payload["data"]["notes"])
+    assert any(f"difficulty is {fight_difficulty!r}" in note and "--difficulty" in note for note in payload["data"]["notes"])
 
 
 def test_cooldown_packet_can_resolve_actor_name_and_reports_missing_actor(monkeypatch) -> None:
@@ -3789,7 +3827,7 @@ def test_warcraft_talent_packet_preserves_warcraftlogs_not_found(monkeypatch) ->
         assert provider == "warcraftlogs"
         return {
             "provider": provider,
-            "exit_code": 1,
+            "exit_code": 4,
             "payload": {
                 "ok": False,
                 "error": {
@@ -3803,8 +3841,12 @@ def test_warcraft_talent_packet_preserves_warcraftlogs_not_found(monkeypatch) ->
     monkeypatch.setattr("warcraft_cli.main.provider_invoke", fake_provider_invoke)
 
     result = runner.invoke(warcraft_app, ["talent-packet", "abcd1234", "--fight-id", "1", "--actor-id", "999"])
-    assert result.exit_code == 1
+    # The source's own code, with the exit code the contract maps it to, and the parsed input as query.
+    assert result.exit_code == 4
     payload = json.loads(result.stderr)
+    assert payload["kind"] == "error"
+    assert payload["query"]["source"] == "abcd1234"
+    assert payload["query"]["actor_id"] == 999
     assert payload["error"]["code"] == "not_found"
     assert payload["error"]["message"] == "Actor ID 999 was not present in the selected fight."
     assert payload["error"]["details"]["route"] == {
@@ -3814,6 +3856,26 @@ def test_warcraft_talent_packet_preserves_warcraftlogs_not_found(monkeypatch) ->
         "fight_id": 1,
         "allow_unlisted": False,
     }
+
+
+@pytest.mark.parametrize(("code", "provider_exit"), [("missing_client_credentials", 3), ("missing_fight", 2)])
+def test_warcraft_talent_packet_exits_with_the_providers_code_for_provider_specific_errors(
+    monkeypatch, code: str, provider_exit: int
+) -> None:
+    # Provider-specific codes are not in the shared exit table, so only the provider's own exit is right.
+    def fake_provider_invoke(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, object]:
+        return {
+            "provider": provider,
+            "exit_code": provider_exit,
+            "payload": {"ok": False, "provider": provider, "error": {"code": code, "message": "m"}},
+            "stdout": "",
+        }
+
+    monkeypatch.setattr("warcraft_cli.main.provider_invoke", fake_provider_invoke)
+
+    result = runner.invoke(warcraft_app, ["talent-packet", "abcd1234", "--fight-id", "1", "--actor-id", "9"])
+    assert result.exit_code == provider_exit
+    assert json.loads(result.stderr)["error"]["code"] == code
 
 
 def test_warcraft_talent_packet_preserves_ok_false_provider_errors(monkeypatch) -> None:
@@ -3835,7 +3897,7 @@ def test_warcraft_talent_packet_preserves_ok_false_provider_errors(monkeypatch) 
     monkeypatch.setattr("warcraft_cli.main.provider_invoke", fake_provider_invoke)
 
     result = runner.invoke(warcraft_app, ["talent-packet", "druid/balance/ABC123"])
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "invalid_query"
     assert payload["error"]["message"] == "Buildless Wowhead ref cannot produce an exact packet."
@@ -4146,7 +4208,7 @@ def test_warcraft_talent_describe_reports_simc_failure(monkeypatch, tmp_path: Pa
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "apl_not_found"
     assert payload["error"]["message"] == "APL path did not exist."
-    assert payload["kind"] == "talent_describe"
+    assert payload["kind"] == "error"
     assert payload["error"]["details"]["route"] == {"kind": "packet_file", "provider": None, "packet_path": str(packet_path.resolve())}
     assert payload["error"]["details"]["provider_result"]["provider"] == "simc"
 
@@ -4197,7 +4259,7 @@ def test_warcraft_talent_describe_preserves_ok_false_simc_failure(monkeypatch, t
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "describe_build_failed"
     assert payload["error"]["message"] == "Unable to resolve build against the supplied APL."
-    assert payload["kind"] == "talent_describe"
+    assert payload["kind"] == "error"
     assert payload["error"]["details"]["provider_result"]["provider"] == "simc"
 
 
@@ -4258,11 +4320,11 @@ def test_warcraft_talent_describe_does_not_write_packet_out_on_failure(monkeypat
     assert not out_path.exists()
 
 
-def test_warcraft_talent_describe_uses_stable_error_kind_for_route_failures() -> None:
+def test_warcraft_talent_describe_route_failures_are_error_kind() -> None:
     result = runner.invoke(warcraft_app, ["talent-describe", "abcd1234"])
     assert result.exit_code == 1
     payload = json.loads(result.stderr)
-    assert payload["kind"] == "talent_describe"
+    assert payload["kind"] == "error"
     assert payload["error"]["code"] == "unsupported_talent_source"
 
 
@@ -4278,7 +4340,7 @@ def test_warcraft_talent_describe_rejects_empty_segment_wowhead_ref(tmp_path: Pa
     )
     assert result.exit_code == 1
     payload = json.loads(result.stderr)
-    assert payload["kind"] == "talent_describe"
+    assert payload["kind"] == "error"
     assert payload["error"]["code"] == "invalid_tool_ref"
     assert payload["error"]["message"] == "talent-calc reference must not include empty path segments."
 
@@ -4293,7 +4355,7 @@ def test_warcraft_talent_describe_rejects_wowhead_ref_with_trailing_extra_segmen
     )
     assert result.exit_code == 1
     payload = json.loads(result.stderr)
-    assert payload["kind"] == "talent_describe"
+    assert payload["kind"] == "error"
     assert payload["error"]["code"] == "invalid_tool_ref"
     assert payload["error"]["message"] == "Talent calculator URL must use /talent-calc/<class>/<spec>[/<build-code>]."
 
@@ -5658,14 +5720,14 @@ _SHARED_TALENT_ROUTE_REJECTIONS = [
 ]
 
 
-@pytest.mark.parametrize("command,kind", [("talent-packet", "talent_transport"), ("talent-describe", "talent_describe")])
+@pytest.mark.parametrize("command", ["talent-packet", "talent-describe"])
 @pytest.mark.parametrize("source,code,message", _SHARED_TALENT_ROUTE_REJECTIONS)
-def test_talent_route_rejections_match_across_packet_and_describe(command, kind, source, code, message) -> None:
+def test_talent_route_rejections_match_across_packet_and_describe(command, source, code, message) -> None:
     result = runner.invoke(warcraft_app, [command, source])
 
     assert result.exit_code == 1, result.output
     payload = json.loads(result.stderr)
-    assert payload["kind"] == kind
+    assert payload["kind"] == "error"
     assert payload["error"]["code"] == code
     if message is not None:
         assert payload["error"]["message"] == message
@@ -6204,6 +6266,26 @@ def test_provider_invoke_turns_a_provider_crash_into_an_error_envelope(monkeypat
     assert "provider exploded" in result["payload"]["error"]["message"]
 
 
+def test_provider_search_crash_echoes_the_query(monkeypatch) -> None:
+    """A surface that raises is still reported with the input the wrapper handed it."""
+    import dataclasses
+    from types import SimpleNamespace
+
+    from warcraft_cli.providers import provider_search
+
+    def crashing_search(query: str, **options: object) -> dict[str, object]:
+        raise RuntimeError("provider exploded")
+
+    crashing = dataclasses.replace(get_provider("method"), surface=SimpleNamespace(search=crashing_search))
+    monkeypatch.setattr("warcraft_cli.providers.get_provider", lambda name: crashing)
+
+    result = provider_search("method", "mistweaver monk")
+
+    assert result["exit_code"] == 1
+    assert result["payload"]["error"]["code"] == "internal_error"
+    assert result["payload"]["query"] == "mistweaver monk"
+
+
 def test_provider_search_rejects_an_expansion_the_provider_cannot_serve() -> None:
     """The registry-level expansion guard is reachable (e.g. `warcraft --expansion wotlk guild`)."""
     from warcraft_cli.providers import provider_search
@@ -6212,6 +6294,7 @@ def test_provider_search_rejects_an_expansion_the_provider_cannot_serve() -> Non
 
     assert result["exit_code"] == 1
     assert envelope_violations(result["payload"]) == []
+    assert result["payload"]["query"] == "thunderfury"
     assert result["payload"]["error"]["code"] == "unsupported_provider_expansion"
     assert result["payload"]["error"]["details"]["expansion_support"]["exclusion_reason"] == "provider_fixed_to_other_expansion"
 

@@ -66,8 +66,8 @@ Every command's flags are listed in [docs/reference/warcraft.md](../reference/wa
   superseded carries `wrapper_ranking.stale_guide: true`. See
   [WRAPPER_PROVIDER_CONTRACT.md](../foundation/WRAPPER_PROVIDER_CONTRACT.md) for the model.
 - `warcraft resolve` — pick the single best match plus its follow-up command; never resolves to a
-  provider that reported `resolved: false`. `selected_provider` is the match's provider or `null`;
-  `provider` mirrors it when resolved and is `warcraft` when nothing matched. When nothing resolved,
+  provider that reported `resolved: false`. The envelope's `provider` is `warcraft`, like every
+  wrapper command; `data.selected_provider` is the match's provider or `null`. When nothing resolved,
   `fallback_search_command` and `best_unresolved_candidate` carry the next step instead of a dead end.
 - `warcraft guild` / `guild-ranks` — one guild identity's Raider.IO snapshot, and its per-raid
   normal/heroic/mythic world, region, and realm ranks, with citations. `sources.raiderio.summary`
@@ -121,16 +121,21 @@ Every command's flags are listed in [docs/reference/warcraft.md](../reference/wa
 ## Errors and exit codes
 
 Wrapper failures use the shared envelope and exit codes in
-[docs/foundation/ERROR_CONTRACT.md](../foundation/ERROR_CONTRACT.md). Wrapper validation errors
-(`unsupported_provider_expansion`, `duplicate_expansion_argument`, `invalid_argument`,
-`invalid_bundle`, `insufficient_guides`, `simc_handoff_failed`) exit 1; Typer usage errors exit 2.
+[docs/foundation/ERROR_CONTRACT.md](../foundation/ERROR_CONTRACT.md). Every failure envelope has
+`kind: "error"`. `invalid_argument` (for example `guide-compare` with one bundle, or
+`guide-compare-query --provider` naming an unsupported provider) and Typer usage errors exit 2. `guide-compare` reports a bundle path the way the shared bundle loader
+does: `not_found` (exit 4) when it is missing, `invalid_argument` (exit 2) when it is a file, and
+`invalid_bundle` (exit 1) when it is not a readable bundle. `unsupported_provider_expansion`,
+`duplicate_expansion_argument`, `insufficient_guides` and `simc_handoff_failed` exit 1.
 
-Composite commands do not flatten a source failure: they re-emit the failing provider's own
-`error.code` and exit with the code the contract maps it to (`not_found` -> 4, `auth_required` -> 3,
-`network_error` -> 5). When every provider in a `search`/`resolve` fanout fails, the result is an
-error envelope carrying the providers' shared code (or `upstream_error` when they disagree), with
-the per-provider rows under `error.details.failed_providers` — never `ok: true` with an empty
-result list. A wrapper envelope carries the envelope keys and nothing else: the payload is under
+Composite commands do not flatten a source failure into exit 1: they exit with the code the contract
+maps the source's error to (`not_found` -> 4, `auth_required` -> 3, `network_error` -> 5).
+`talent-packet` and `talent-describe` re-emit the source's own `error.code`; `actor-profile` and
+`cooldown-packet` name the step that failed (for example `warcraftlogs_lookup_failed`) and carry the
+source's error under `error.details.source`. When every provider in a `search`/`resolve` fanout
+fails, the result is an error envelope carrying the providers' shared code (or `upstream_error`
+when they disagree), with the per-provider rows under `error.details.failed_providers` — never
+`ok: true` with an empty result list. A wrapper envelope carries the envelope keys and nothing else: the payload is under
 `data` on success, and all structured failure context is under `error.details`, never as a
 sibling of `code`/`message`.
 

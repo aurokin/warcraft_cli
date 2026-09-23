@@ -24,7 +24,7 @@ def build_app() -> typer.Typer:
 
     @app.command("show")
     def show(ctx: typer.Context) -> None:
-        emit(ctx, {"ok": True, "query": "shown", "a": {"b": 1}, "long": "x" * 400})
+        emit(ctx, success_envelope(provider="dummy", command="show", kind="show", query="shown", data={"a": {"b": 1}, "long": "x" * 400}))
 
     @app.command("missing")
     def missing(ctx: typer.Context) -> None:
@@ -32,7 +32,7 @@ def build_app() -> typer.Typer:
 
     @app.command("need")
     def need(ctx: typer.Context, target: str) -> None:
-        emit(ctx, {"query": target.upper(), "target": target})
+        emit(ctx, success_envelope(provider="dummy", command="need", kind="need", query=target.upper(), data={"target": target}))
 
     group = typer.Typer(add_completion=False)
     app.add_typer(group, name="group")
@@ -58,20 +58,20 @@ def build_app() -> typer.Typer:
 
 
 def test_fields_projects_payload() -> None:
-    result = runner.invoke(build_app(), ["--fields", "a.b", "show"])
+    result = runner.invoke(build_app(), ["--fields", "data.a.b", "show"])
     assert result.exit_code == 0
-    assert json.loads(result.stdout) == {"a": {"b": 1}}
+    assert json.loads(result.stdout) == {"data": {"a": {"b": 1}}}
 
 
 def test_fields_strict_missing_path_exits_2_with_missing_fields_error() -> None:
-    result = runner.invoke(build_app(), ["--fields", "a.zz", "--fields-strict", "need", "x"])
+    result = runner.invoke(build_app(), ["--fields", "data.zz", "--fields-strict", "need", "x"])
     assert result.exit_code == 2
     error = json.loads(result.stderr)
     assert error["ok"] is False
     assert error["provider"] == "dummy"
     assert error["command"] == "need"
     assert error["error"]["code"] == "missing_fields"
-    assert error["error"]["details"] == {"missing_fields": ["a.zz"]}
+    assert error["error"]["details"] == {"missing_fields": ["data.zz"]}
     # Like every failure, it names the parsed input, not the success payload's normalized query.
     assert error["query"] == {"target": "x"}
 
@@ -79,7 +79,7 @@ def test_fields_strict_missing_path_exits_2_with_missing_fields_error() -> None:
 def test_compact_truncates_long_strings() -> None:
     result = runner.invoke(build_app(), ["--compact", "--compact-max-chars", "50", "show"])
     assert result.exit_code == 0
-    assert len(json.loads(result.stdout)["long"]) == 50
+    assert len(json.loads(result.stdout)["data"]["long"]) == 50
 
 
 def test_profile_human_pretty_prints() -> None:
@@ -93,6 +93,28 @@ def test_fields_reports_a_missing_path_instead_of_returning_an_empty_object() ->
     result = runner.invoke(build_app(), ["--fields", "nope", "show"])
     assert result.exit_code == 0
     assert json.loads(result.stdout) == {"fields_missing": ["nope"]}
+
+
+@pytest.mark.parametrize(
+    ("payload", "problem"),
+    [
+        ({**success_envelope(provider="dummy", command="bad", kind="bad", data={"count": 1}), "count": 1}, "unexpected key: count"),
+        ({"ok": True, "results": []}, "missing key: data"),
+    ],
+)
+def test_emit_refuses_anything_but_an_envelope(payload: dict[str, Any], problem: str) -> None:
+    app = typer.Typer(add_completion=False)
+    install_common_callback(app, provider="dummy")
+
+    @app.command("bad")
+    def bad(ctx: typer.Context) -> None:
+        emit(ctx, payload)
+
+    result = runner.invoke(app, ["bad"])
+
+    assert result.stdout == ""
+    assert isinstance(result.exception, TypeError)
+    assert problem in str(result.exception)
 
 
 def test_fail_uses_exit_code_mapping_and_emits_envelope_on_stderr() -> None:
@@ -130,11 +152,13 @@ def test_configure_stores_subclass_config_in_ctx() -> None:
     def show(ctx: typer.Context) -> None:
         config = cfg_as(ctx, WowheadConfig)
         assert cfg(ctx) is config
-        emit(ctx, {"expansion": config.expansion, "provider": config.provider, "pretty": config.output.pretty})
+        data = {"expansion": config.expansion, "pretty": config.output.pretty}
+        emit(ctx, success_envelope(provider=config.provider, command="show", kind="show", data=data))
 
     result = runner.invoke(app, ["--pretty", "show"])
     assert result.exit_code == 0
-    assert json.loads(result.stdout) == {"expansion": "classic", "provider": "wowhead", "pretty": True}
+    payload = json.loads(result.stdout)
+    assert (payload["provider"], payload["data"]) == ("wowhead", {"expansion": "classic", "pretty": True})
 
 
 def _run_guarded(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], exc: BaseException) -> tuple[int, dict[str, Any]]:
@@ -306,4 +330,4 @@ def test_guarded_run_propagates_the_exit_code_from_fail(monkeypatch: pytest.Monk
 def test_guarded_run_exits_zero_on_success(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     exit_code, out, _ = _run_argv(monkeypatch, capsys, ["dummy", "show"])
     assert exit_code == 0
-    assert json.loads(out)["a"] == {"b": 1}
+    assert json.loads(out)["data"]["a"] == {"b": 1}

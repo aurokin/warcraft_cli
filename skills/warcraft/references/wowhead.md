@@ -39,14 +39,21 @@
 - read `count` as the rows you were given and `total_matches` / `total` as what the limit cut off;
   raise `--limit` when `truncated` is true
 - guides far older than the freshest guide in the same response carry `stale_guide` in
-  `ranking.match_reasons` and are listed after every other row; `resolve` never answers one with
+  `ranking.match_reasons` and are listed after every current row that matches the query as closely;
+  a retired guide leads only when it matches more closely than every current row (its exact title,
+  say). `resolve` never answers one with
   high confidence, so run the `fallback_search_command` when it does not resolve
-- `search` and `resolve` rank on Wowhead's own database ordering first, so the entity a query names
-  leads the proc spells and secondary rows that share its name; `ranking.match_reasons` carries
-  `upstream_database_rank` on the rows that ordering promoted
+- `search` and `resolve` rank on Wowhead's own database and guide ordering first, so the entity a
+  query names leads the proc spells and secondary rows that share its name, and a class-guide query
+  resolves to the main current guide; `ranking.match_reasons` carries `upstream_database_rank` on
+  the rows that ordering promoted
 - `search` and `resolve` rank every row Wowhead's suggestion response sent, not just its ten-row
   dropdown list, one row per entity; `metadata.suggestion_lists` says where each row came from and
   `suggestion_merge` counts the rows per list and the duplicates merged
+- query words match whole words, ignoring words like "the" and "of"; a row is returned only when its
+  text holds every query word or the whole query, or Wowhead's own ordering ranked it near the top
+  and its name shares a query word. Rows matching only some words are dropped, and
+  `suggestion_merge.unmatched_rows_dropped` counts them
 - `resolve` answers with a database entity: news posts and world events sit behind every entity in
   `candidates` and become the `match` only when the response holds no entity, or when the article
   outscores the best entity by a wide margin (a query that names a headline word for word); use

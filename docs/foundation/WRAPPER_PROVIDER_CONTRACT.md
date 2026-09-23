@@ -131,8 +131,11 @@ Fanout failure rules:
   `error.details.failed_providers`
 
 Composite failure rules:
-- a composite command re-emits its failing source's own `error.code` and exits with that code's
-  mapped exit code; it does not invent a code that disagrees with the exit code
+- a composite command exits with the code the contract maps its failing source's error to. The
+  talent routes re-emit the source's own `error.code`; `actor-profile` and `cooldown-packet` name
+  the step that failed (`warcraftlogs_lookup_failed`, `lorrgs_spec_ranking_failed`, ...) and put the
+  source's error under `error.details.source`
+- every wrapper failure envelope has `kind: "error"`
 - structured context belongs under `error.details`, never as a sibling of `code`/`message`. A
   failure envelope carries no `data` body, so a composite that declines (for example
   `guide-compare-query` with fewer than two exported bundles) puts the per-provider reasons in
@@ -325,8 +328,8 @@ of half the page rounded up. An on-intent row over the cap is *deferred*, not dr
 slots the other on-intent providers leave, so a page is never short while on-intent candidates
 exist. Off-intent rows then fill what is still empty, up to a strict minority of the page
 (`limit // 2`, at least one); the page comes back short rather than repeating twenty near-identical
-profiles. The chosen rows keep their interleaved order, so `data.results` never lists a promoted row
-after a row it outranks and never reorders a provider's rows. `data.merge_policy` reports the caps, the
+profiles. The chosen rows keep their interleaved order, so a promoted row sits where interleaving put
+it and `data.results` never reorders a provider's rows. `data.merge_policy` reports the caps, the
 reserved slot, the candidate total, and how many rows were deferred or withheld
 (`docs/foundation/SAFE_ANALYTICS_RULES.md`: a page that dropped rows says so).
 

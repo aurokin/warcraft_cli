@@ -45,19 +45,27 @@ A suggestion response carries two overlapping row lists: the flat `results` list
 `search` and `resolve` rank the union, one row per Wowhead type and id. Each row's
 `metadata.suggestion_lists` names the lists it came from (`metadata.popularity` is null for a row
 only `categories` carried), and `suggestion_merge` reports the rows each list sent and how many
-duplicates the merge removed; `total_matches` counts the merged rows.
+duplicates the merge removed. A merged row whose text does not match the query (no
+`ranking.match_reasons` beyond `type_hint` or `stale_guide`) is not returned, and
+`suggestion_merge.unmatched_rows_dropped` counts those rows; `total_matches` counts the rows kept.
 
-Ranking starts from Wowhead's own ordering. `categories.database` is ordered by relevance, and
-`search` and `resolve` score its leading rows up (`upstream_database_rank` in
-`ranking.match_reasons`) so the entity a query names leads the proc spells and secondary rows that
-share its name, then text evidence — exact name, prefix, term coverage, type hints — decides the
-rest. The rank bonus needs a query word in the row's own name: Wowhead also ranks rows on text the
-suggestion never shows, and those get no bonus. A name that merely contains the query scores below
-one that starts with it. Each row's `follow_up.command` is the command to run next.
+Ranking starts from Wowhead's own ordering. `categories.database` and `categories.guides` are
+ordered by relevance, and `search` and `resolve` score the leading rows of each up
+(`upstream_database_rank` in `ranking.match_reasons`), so the entity a query names leads the proc
+spells and secondary rows that share its name, and "fury warrior guide" resolves to the main
+current guide rather than the five others that share its words. Text evidence (exact name,
+prefix, term coverage, type hints) decides the rest. Query words match whole words only, and
+"the", "of", "a", "an", "and", "in", "on", "for" and "to" are not matched at all. The rank bonus
+needs a query word in the row's own name, or a name that starts with or contains the query
+("valorstone" and "Valorstones"): Wowhead also ranks rows on text the suggestion never shows, and
+those get no bonus. A name that merely contains the query scores below one that starts
+with it. Each row's `follow_up.command` is the command to run next.
 
 A guide updated far (180+ days) behind the freshest guide in the same response carries
-`stale_guide` in `ranking.match_reasons` and sorts after every other row, whatever its score, so
-a class-guide query leads with the current guide rather than a retired event's.
+`stale_guide` in `ranking.match_reasons` and sorts after every current row that matches the query
+at least as closely (exact name, then a name starting with the query, then any other match),
+whatever its score. A class-guide query leads with the current guide rather than a retired
+event's, while a query that names the retired guide ("Fury Warrior PvP Guide") still leads with it.
 
 `resolve` answers with a database entity. A news headline often matches a query better than the
 item it is written about, so news posts and world events rank behind every entity in `candidates`.

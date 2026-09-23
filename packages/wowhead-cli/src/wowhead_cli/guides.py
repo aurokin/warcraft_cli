@@ -774,6 +774,7 @@ def guide_export_manifest(
 ) -> dict[str, Any]:
     exported_at = iso_now_utc()
     return {
+        "provider": "wowhead",
         "export_version": 2,
         "exported_at": exported_at,
         "guide_fetched_at": exported_at,

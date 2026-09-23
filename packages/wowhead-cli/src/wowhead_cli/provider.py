@@ -34,7 +34,7 @@ from wowhead_cli.ranking import (
     resolve_next_command,
     search_query_for_ranking,
     search_ranking_query,
-    upstream_database_ranks,
+    upstream_rank_bonuses,
 )
 from wowhead_cli.wowhead_client import WowheadClient, search_url
 
@@ -134,7 +134,8 @@ def _ranked_suggestions(
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Fetch Wowhead's suggestions for `search_query`, merge its row lists, and rank them against `query`.
 
-    Returns the ranked rows and the merge summary the payload reports as ``suggestion_merge``.
+    Returns the ranked rows and the merge summary the payload reports as ``suggestion_merge``, which
+    also counts the rows dropped for matching nothing in the query.
     """
     with transport_errors():
         try:
@@ -144,14 +145,14 @@ def _ranked_suggestions(
     if not isinstance(response.get("results"), list):
         raise ProviderError("unexpected_response", "Missing or invalid 'results' payload from Wowhead.")
     rows, merge = merge_suggestion_lists(response)
-    ranked = normalize_search_results(
+    ranked, unmatched = normalize_search_results(
         rows,
         query=query,
         expansion=profile,
         entity_types=entity_types,
-        database_ranks=upstream_database_ranks(response),
+        rank_bonuses=upstream_rank_bonuses(response),
     )
-    return ranked, merge
+    return ranked, {**merge, "unmatched_rows_dropped": unmatched}
 
 
 def search(query: str, *, limit: int = 10, expansion: str | None = None, **options: Any) -> Envelope:
