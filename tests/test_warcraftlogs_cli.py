@@ -730,13 +730,8 @@ class _FakeWarcraftLogsClient:
 
     def report_fights(self, *, code: str, difficulty: int | None = None, allow_unlisted: bool = False, ttl_override: int | None = None) -> dict[str, object]:
         assert code == "abcd1234"
-        assert difficulty in {None, 5}
         self.report_fights_allow_unlisted.append(allow_unlisted)
-        return {
-            "code": "abcd1234",
-            "title": "Manaforge Omega - Liquid",
-            "zone": {"id": 38, "name": "Manaforge Omega"},
-            "fights": [
+        fights: list[dict[str, object]] = [
                 {
                     "id": 1,
                     "name": "Dimensius, the All-Devouring",
@@ -779,7 +774,13 @@ class _FakeWarcraftLogsClient:
                     "averageItemLevel": 685.2,
                     "size": 20,
                 }
-            ],
+            ]
+        # Like the API's fights(difficulty:), a difficulty filter drops the fights on other difficulties.
+        return {
+            "code": "abcd1234",
+            "title": "Manaforge Omega - Liquid",
+            "zone": {"id": 38, "name": "Manaforge Omega"},
+            "fights": [fight for fight in fights if difficulty is None or fight["difficulty"] == difficulty],
         }
 
     def report_events(self, *, code: str, allow_unlisted: bool = False, options: ReportFilterOptions) -> dict[str, object]:
@@ -1233,34 +1234,34 @@ def test_warcraftlogs_doctor_reports_phase_one_capabilities(monkeypatch) -> None
 
     payload = json.loads(result.stdout)
     assert payload["provider"] == "warcraftlogs"
-    assert payload["status"] == "ready"
-    assert payload["site_profile"]["key"] == "retail"
-    assert payload["auth"]["configured"] is True
-    assert payload["auth"]["client_credentials_configured"] is True
-    assert payload["auth"]["credential_source"] == "/tmp/.env.local"
-    assert payload["auth"]["lookup_order"][0] == ".env.local"
-    assert payload["auth"]["lookup_order"][-1] == "environment"
-    assert payload["auth"]["state"]["exists"] is False
-    assert payload["auth"]["public_api_access"]["ready"] is True
-    assert payload["auth"]["public_api_access"]["mode"] == "client_credentials"
-    assert payload["auth"]["public_api_access"]["validation"] == "live"
-    assert payload["auth"]["public_api_access"]["probe"] == "rate_limit"
-    assert payload["auth"]["user_api_access"]["ready"] is False
-    assert payload["capabilities"]["guild"] == "ready"
-    assert payload["capabilities"]["search"] == "ready_explicit_report_only"
-    assert payload["capabilities"]["resolve"] == "ready_explicit_report_only"
-    assert payload["capabilities"]["report_fights"] == "ready"
-    assert payload["capabilities"]["spec_kill_samples"] == "ready"
-    assert payload["capabilities"]["boss_spec_usage"] == "ready"
-    assert payload["capabilities"]["comp_samples"] == "ready"
-    assert payload["capabilities"]["ability_usage_summary"] == "ready"
-    assert payload["capabilities"]["report_encounter_buffs"] == "ready"
-    assert payload["capabilities"]["report_encounter_aura_summary"] == "ready"
-    assert payload["capabilities"]["report_encounter_aura_compare"] == "ready"
-    assert payload["capabilities"]["report_encounter_damage_source_summary"] == "ready"
-    assert payload["capabilities"]["report_encounter_damage_target_summary"] == "ready"
-    assert payload["capabilities"]["report_encounter_damage_breakdown"] == "ready"
-    assert payload["capabilities"]["user_auth"] == "ready_manual_exchange"
+    assert payload["data"]["status"] == "ready"
+    assert payload["data"]["site_profile"]["key"] == "retail"
+    assert payload["data"]["auth"]["configured"] is True
+    assert payload["data"]["auth"]["client_credentials_configured"] is True
+    assert payload["data"]["auth"]["credential_source"] == "/tmp/.env.local"
+    assert payload["data"]["auth"]["lookup_order"][0] == ".env.local"
+    assert payload["data"]["auth"]["lookup_order"][-1] == "environment"
+    assert payload["data"]["auth"]["state"]["exists"] is False
+    assert payload["data"]["auth"]["public_api_access"]["ready"] is True
+    assert payload["data"]["auth"]["public_api_access"]["mode"] == "client_credentials"
+    assert payload["data"]["auth"]["public_api_access"]["validation"] == "live"
+    assert payload["data"]["auth"]["public_api_access"]["probe"] == "rate_limit"
+    assert payload["data"]["auth"]["user_api_access"]["ready"] is False
+    assert payload["data"]["capabilities"]["guild"] == "ready"
+    assert payload["data"]["capabilities"]["search"] == "ready_explicit_report_only"
+    assert payload["data"]["capabilities"]["resolve"] == "ready_explicit_report_only"
+    assert payload["data"]["capabilities"]["report_fights"] == "ready"
+    assert payload["data"]["capabilities"]["spec_kill_samples"] == "ready"
+    assert payload["data"]["capabilities"]["boss_spec_usage"] == "ready"
+    assert payload["data"]["capabilities"]["comp_samples"] == "ready"
+    assert payload["data"]["capabilities"]["ability_usage_summary"] == "ready"
+    assert payload["data"]["capabilities"]["report_encounter_buffs"] == "ready"
+    assert payload["data"]["capabilities"]["report_encounter_aura_summary"] == "ready"
+    assert payload["data"]["capabilities"]["report_encounter_aura_compare"] == "ready"
+    assert payload["data"]["capabilities"]["report_encounter_damage_source_summary"] == "ready"
+    assert payload["data"]["capabilities"]["report_encounter_damage_target_summary"] == "ready"
+    assert payload["data"]["capabilities"]["report_encounter_damage_breakdown"] == "ready"
+    assert payload["data"]["capabilities"]["user_auth"] == "ready_manual_exchange"
 
 
 def test_warcraftlogs_doctor_uses_selected_site_profile(monkeypatch) -> None:
@@ -1288,9 +1289,9 @@ def test_warcraftlogs_doctor_uses_selected_site_profile(monkeypatch) -> None:
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["site_profile"]["key"] == "fresh"
-    assert payload["site_profile"]["api_url"] == "https://fresh.warcraftlogs.com/api/v2/client"
-    assert payload["auth"]["public_api_access"]["validation"] == "skipped"
+    assert payload["data"]["site_profile"]["key"] == "fresh"
+    assert payload["data"]["site_profile"]["api_url"] == "https://fresh.warcraftlogs.com/api/v2/client"
+    assert payload["data"]["auth"]["public_api_access"]["validation"] == "skipped"
 
 
 def test_warcraftlogs_doctor_reports_saved_user_token_runtime_access(monkeypatch) -> None:
@@ -1320,16 +1321,16 @@ def test_warcraftlogs_doctor_reports_saved_user_token_runtime_access(monkeypatch
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["auth"]["configured"] is False
-    assert payload["auth"]["public_api_access"]["ready"] is False
-    assert payload["auth"]["public_api_access"]["mode"] is None
-    assert payload["auth"]["public_api_access"]["reason"] == "requires_client_credentials"
-    assert payload["auth"]["public_api_access"]["validation"] == "local"
-    assert payload["auth"]["user_api_access"]["ready"] is True
-    assert payload["auth"]["user_api_access"]["validation"] == "live"
-    assert payload["auth"]["user_api_access"]["probe"] == "current_user"
-    assert payload["capabilities"]["report_fights"] == "requires_client_credentials"
-    assert payload["capabilities"]["user_auth"] == "ready"
+    assert payload["data"]["auth"]["configured"] is False
+    assert payload["data"]["auth"]["public_api_access"]["ready"] is False
+    assert payload["data"]["auth"]["public_api_access"]["mode"] is None
+    assert payload["data"]["auth"]["public_api_access"]["reason"] == "requires_client_credentials"
+    assert payload["data"]["auth"]["public_api_access"]["validation"] == "local"
+    assert payload["data"]["auth"]["user_api_access"]["ready"] is True
+    assert payload["data"]["auth"]["user_api_access"]["validation"] == "live"
+    assert payload["data"]["auth"]["user_api_access"]["probe"] == "current_user"
+    assert payload["data"]["capabilities"]["report_fights"] == "requires_client_credentials"
+    assert payload["data"]["capabilities"]["user_auth"] == "ready"
 
 
 def test_warcraftlogs_doctor_requires_client_credentials_for_user_auth_bootstrap(monkeypatch) -> None:
@@ -1359,8 +1360,8 @@ def test_warcraftlogs_doctor_requires_client_credentials_for_user_auth_bootstrap
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["auth"]["user_api_access"]["ready"] is False
-    assert payload["capabilities"]["user_auth"] == "requires_client_credentials"
+    assert payload["data"]["auth"]["user_api_access"]["ready"] is False
+    assert payload["data"]["capabilities"]["user_auth"] == "requires_client_credentials"
 
 
 def test_warcraftlogs_doctor_can_skip_live_probes(monkeypatch) -> None:
@@ -1388,11 +1389,11 @@ def test_warcraftlogs_doctor_can_skip_live_probes(monkeypatch) -> None:
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["auth"]["public_api_access"]["ready"] is True
-    assert payload["auth"]["public_api_access"]["validation"] == "skipped"
-    assert payload["auth"]["public_api_access"]["live_validated"] is False
-    assert payload["capabilities"]["report_fights"] == "ready"
-    assert payload["capabilities"]["user_auth"] == "ready_manual_exchange"
+    assert payload["data"]["auth"]["public_api_access"]["ready"] is True
+    assert payload["data"]["auth"]["public_api_access"]["validation"] == "skipped"
+    assert payload["data"]["auth"]["public_api_access"]["live_validated"] is False
+    assert payload["data"]["capabilities"]["report_fights"] == "ready"
+    assert payload["data"]["capabilities"]["user_auth"] == "ready_manual_exchange"
 
 
 def test_warcraftlogs_doctor_live_probe_uses_uncached_public_helper(monkeypatch) -> None:
@@ -1431,9 +1432,9 @@ def test_warcraftlogs_doctor_live_probe_uses_uncached_public_helper(monkeypatch)
     result = runner.invoke(warcraftlogs_app, ["doctor"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["auth"]["public_api_access"]["ready"] is True
-    assert payload["auth"]["public_api_access"]["validation"] == "live"
-    assert payload["auth"]["public_api_access"]["live_validated"] is True
+    assert payload["data"]["auth"]["public_api_access"]["ready"] is True
+    assert payload["data"]["auth"]["public_api_access"]["validation"] == "live"
+    assert payload["data"]["auth"]["public_api_access"]["live_validated"] is True
 
 
 def test_warcraftlogs_doctor_reports_live_public_auth_failure(monkeypatch) -> None:
@@ -1466,10 +1467,10 @@ def test_warcraftlogs_doctor_reports_live_public_auth_failure(monkeypatch) -> No
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["auth"]["public_api_access"]["ready"] is False
-    assert payload["auth"]["public_api_access"]["reason"] == "auth_failed"
-    assert payload["auth"]["public_api_access"]["validation"] == "live"
-    assert payload["capabilities"]["report_fights"] == "auth_failed"
+    assert payload["data"]["auth"]["public_api_access"]["ready"] is False
+    assert payload["data"]["auth"]["public_api_access"]["reason"] == "auth_failed"
+    assert payload["data"]["auth"]["public_api_access"]["validation"] == "live"
+    assert payload["data"]["capabilities"]["report_fights"] == "auth_failed"
 
 
 def test_warcraftlogs_doctor_reports_invalid_runtime_config(monkeypatch) -> None:
@@ -1504,14 +1505,14 @@ def test_warcraftlogs_doctor_reports_invalid_runtime_config(monkeypatch) -> None
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["auth"]["runtime_access"]["ready"] is False
-    assert payload["auth"]["runtime_access"]["reason"] == "invalid_runtime_config"
-    assert "WARCRAFTLOGS_REDIS_URL" in payload["auth"]["runtime_access"]["message"]
-    assert "WOWHEAD_REDIS_URL" not in payload["auth"]["runtime_access"]["message"]
-    assert payload["auth"]["public_api_access"]["ready"] is False
-    assert payload["auth"]["public_api_access"]["reason"] == "invalid_runtime_config"
-    assert payload["capabilities"]["report_fights"] == "invalid_runtime_config"
-    assert payload["capabilities"]["user_auth"] == "invalid_runtime_config"
+    assert payload["data"]["auth"]["runtime_access"]["ready"] is False
+    assert payload["data"]["auth"]["runtime_access"]["reason"] == "invalid_runtime_config"
+    assert "WARCRAFTLOGS_REDIS_URL" in payload["data"]["auth"]["runtime_access"]["message"]
+    assert "WOWHEAD_REDIS_URL" not in payload["data"]["auth"]["runtime_access"]["message"]
+    assert payload["data"]["auth"]["public_api_access"]["ready"] is False
+    assert payload["data"]["auth"]["public_api_access"]["reason"] == "invalid_runtime_config"
+    assert payload["data"]["capabilities"]["report_fights"] == "invalid_runtime_config"
+    assert payload["data"]["capabilities"]["user_auth"] == "invalid_runtime_config"
 
 
 def test_warcraftlogs_doctor_reports_invalid_runtime_config_for_saved_user_token(monkeypatch) -> None:
@@ -1544,9 +1545,9 @@ def test_warcraftlogs_doctor_reports_invalid_runtime_config_for_saved_user_token
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["auth"]["user_api_access"]["ready"] is False
-    assert payload["auth"]["user_api_access"]["reason"] == "invalid_runtime_config"
-    assert payload["capabilities"]["user_auth"] == "invalid_runtime_config"
+    assert payload["data"]["auth"]["user_api_access"]["ready"] is False
+    assert payload["data"]["auth"]["user_api_access"]["reason"] == "invalid_runtime_config"
+    assert payload["data"]["capabilities"]["user_auth"] == "invalid_runtime_config"
 
 
 def test_warcraftlogs_doctor_prioritizes_invalid_runtime_config_without_credentials(monkeypatch) -> None:
@@ -1581,10 +1582,10 @@ def test_warcraftlogs_doctor_prioritizes_invalid_runtime_config_without_credenti
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["auth"]["public_api_access"]["reason"] == "invalid_runtime_config"
-    assert payload["auth"]["user_api_access"]["reason"] == "invalid_runtime_config"
-    assert payload["capabilities"]["report_fights"] == "invalid_runtime_config"
-    assert payload["capabilities"]["user_auth"] == "invalid_runtime_config"
+    assert payload["data"]["auth"]["public_api_access"]["reason"] == "invalid_runtime_config"
+    assert payload["data"]["auth"]["user_api_access"]["reason"] == "invalid_runtime_config"
+    assert payload["data"]["capabilities"]["report_fights"] == "invalid_runtime_config"
+    assert payload["data"]["capabilities"]["user_auth"] == "invalid_runtime_config"
 
 
 def test_warcraftlogs_search_matches_explicit_report_reference() -> None:
@@ -1593,11 +1594,11 @@ def test_warcraftlogs_search_matches_explicit_report_reference() -> None:
 
     payload = json.loads(result.stdout)
     assert payload["provider"] == "warcraftlogs"
-    assert payload["count"] == 1
-    assert payload["results"][0]["kind"] == "report_encounter"
-    assert payload["results"][0]["report_reference"]["code"] == "abcd1234"
-    assert payload["results"][0]["report_reference"]["fight_id"] == 3
-    assert payload["results"][0]["follow_up"]["command"] == "warcraftlogs report-encounter abcd1234 --fight-id 3"
+    assert payload["data"]["count"] == 1
+    assert payload["data"]["results"][0]["kind"] == "report_encounter"
+    assert payload["data"]["results"][0]["report_reference"]["code"] == "abcd1234"
+    assert payload["data"]["results"][0]["report_reference"]["fight_id"] == 3
+    assert payload["data"]["results"][0]["follow_up"]["command"] == "warcraftlogs report-encounter abcd1234 --fight-id 3"
 
 
 def test_warcraftlogs_search_includes_selected_site_in_follow_up() -> None:
@@ -1605,7 +1606,7 @@ def test_warcraftlogs_search_includes_selected_site_in_follow_up() -> None:
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["results"][0]["follow_up"]["command"] == "warcraftlogs --site classic report abcd1234"
+    assert payload["data"]["results"][0]["follow_up"]["command"] == "warcraftlogs --site classic report abcd1234"
 
 
 def test_warcraftlogs_resolve_requires_explicit_report_reference() -> None:
@@ -1614,9 +1615,9 @@ def test_warcraftlogs_resolve_requires_explicit_report_reference() -> None:
 
     payload = json.loads(result.stdout)
     assert payload["provider"] == "warcraftlogs"
-    assert payload["resolved"] is False
-    assert payload["confidence"] == "none"
-    assert "explicit report URL or a bare report code" in payload["message"]
+    assert payload["data"]["resolved"] is False
+    assert payload["data"]["confidence"] == "none"
+    assert "explicit report URL or a bare report code" in payload["data"]["message"]
 
 
 def test_warcraftlogs_resolve_matches_bare_report_code() -> None:
@@ -1625,10 +1626,10 @@ def test_warcraftlogs_resolve_matches_bare_report_code() -> None:
 
     payload = json.loads(result.stdout)
     assert payload["provider"] == "warcraftlogs"
-    assert payload["resolved"] is True
-    assert payload["confidence"] == "medium"
-    assert payload["match"]["kind"] == "report"
-    assert payload["next_command"] == "warcraftlogs report abcd1234"
+    assert payload["data"]["resolved"] is True
+    assert payload["data"]["confidence"] == "medium"
+    assert payload["data"]["match"]["kind"] == "report"
+    assert payload["data"]["next_command"] == "warcraftlogs report abcd1234"
 
 
 def test_warcraftlogs_resolve_includes_selected_site_in_next_command() -> None:
@@ -1636,8 +1637,8 @@ def test_warcraftlogs_resolve_includes_selected_site_in_next_command() -> None:
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["next_command"] == "warcraftlogs --site fresh report-encounter abcd1234 --fight-id 3"
-    assert payload["match"]["follow_up"]["command"] == "warcraftlogs --site fresh report-encounter abcd1234 --fight-id 3"
+    assert payload["data"]["next_command"] == "warcraftlogs --site fresh report-encounter abcd1234 --fight-id 3"
+    assert payload["data"]["match"]["follow_up"]["command"] == "warcraftlogs --site fresh report-encounter abcd1234 --fight-id 3"
 
 
 def test_warcraftlogs_auth_status_reports_shared_state_summary(monkeypatch) -> None:
@@ -1665,22 +1666,20 @@ def test_warcraftlogs_auth_status_reports_shared_state_summary(monkeypatch) -> N
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    # `auth status` is not in the payload-key registry, so it gets envelope keys but no canonical body.
     # Its label is the full path, the same one its failures carry.
     assert payload["command"] == "auth status"
     assert payload["kind"] == "status"
     assert payload["schema_version"] == "1"
-    assert "deprecated_keys" not in payload
-    assert payload["auth"]["configured"] is True
-    assert payload["auth"]["client_credentials_configured"] is True
-    assert payload["auth"]["state"]["exists"] is True
-    assert payload["auth"]["state"]["auth_mode"] == "authorization_code"
-    assert payload["auth"]["public_api_access"]["ready"] is True
-    assert payload["auth"]["user_api_access"]["ready"] is True
-    assert payload["auth"]["public_api_access"]["validation"] == "live"
-    assert payload["auth"]["user_api_access"]["validation"] == "live"
-    assert payload["auth"]["grants"]["client_credentials"] == "ready"
-    assert payload["auth"]["grants"]["pkce"] == "ready_manual_exchange"
+    assert payload["data"]["auth"]["configured"] is True
+    assert payload["data"]["auth"]["client_credentials_configured"] is True
+    assert payload["data"]["auth"]["state"]["exists"] is True
+    assert payload["data"]["auth"]["state"]["auth_mode"] == "authorization_code"
+    assert payload["data"]["auth"]["public_api_access"]["ready"] is True
+    assert payload["data"]["auth"]["user_api_access"]["ready"] is True
+    assert payload["data"]["auth"]["public_api_access"]["validation"] == "live"
+    assert payload["data"]["auth"]["user_api_access"]["validation"] == "live"
+    assert payload["data"]["auth"]["grants"]["client_credentials"] == "ready"
+    assert payload["data"]["auth"]["grants"]["pkce"] == "ready_manual_exchange"
 
 
 def test_warcraftlogs_auth_status_marks_site_mismatched_user_token_unready(monkeypatch, tmp_path) -> None:
@@ -1708,12 +1707,12 @@ def test_warcraftlogs_auth_status_marks_site_mismatched_user_token_unready(monke
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["auth"]["active_mode"] == "client_credentials"
-    assert payload["auth"]["endpoint_family"] == "client"
-    assert payload["auth"]["user_api_access"]["ready"] is False
-    assert payload["auth"]["user_api_access"]["reason"] == "site_profile_mismatch"
-    assert payload["auth"]["user_api_access"]["token_site_profile"] == "retail"
-    assert payload["auth"]["user_api_access"]["selected_site_profile"] == "classic"
+    assert payload["data"]["auth"]["active_mode"] == "client_credentials"
+    assert payload["data"]["auth"]["endpoint_family"] == "client"
+    assert payload["data"]["auth"]["user_api_access"]["ready"] is False
+    assert payload["data"]["auth"]["user_api_access"]["reason"] == "site_profile_mismatch"
+    assert payload["data"]["auth"]["user_api_access"]["token_site_profile"] == "retail"
+    assert payload["data"]["auth"]["user_api_access"]["selected_site_profile"] == "classic"
 
 
 def test_warcraftlogs_auth_client_reports_selected_site(monkeypatch) -> None:
@@ -1726,11 +1725,11 @@ def test_warcraftlogs_auth_client_reports_selected_site(monkeypatch) -> None:
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["client"]["site_profile"] == "classic"
-    assert payload["client"]["authorize_url"] == "https://classic.warcraftlogs.com/oauth/authorize"
-    assert payload["client"]["token_url"] == "https://classic.warcraftlogs.com/oauth/token"
-    assert payload["client"]["client_api_url"] == "https://classic.warcraftlogs.com/api/v2/client"
-    assert payload["client"]["user_api_url"] == "https://classic.warcraftlogs.com/api/v2/user"
+    assert payload["data"]["client"]["site_profile"] == "classic"
+    assert payload["data"]["client"]["authorize_url"] == "https://classic.warcraftlogs.com/oauth/authorize"
+    assert payload["data"]["client"]["token_url"] == "https://classic.warcraftlogs.com/oauth/token"
+    assert payload["data"]["client"]["client_api_url"] == "https://classic.warcraftlogs.com/api/v2/client"
+    assert payload["data"]["client"]["user_api_url"] == "https://classic.warcraftlogs.com/api/v2/user"
 
 
 def test_warcraftlogs_auth_status_reports_grants_blocked_without_client_credentials(monkeypatch) -> None:
@@ -1758,11 +1757,11 @@ def test_warcraftlogs_auth_status_reports_grants_blocked_without_client_credenti
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["auth"]["public_api_access"]["ready"] is False
-    assert payload["auth"]["user_api_access"]["ready"] is True
-    assert payload["auth"]["grants"]["client_credentials"] == "requires_client_credentials"
-    assert payload["auth"]["grants"]["authorization_code"] == "requires_client_credentials"
-    assert payload["auth"]["grants"]["pkce"] == "requires_client_credentials"
+    assert payload["data"]["auth"]["public_api_access"]["ready"] is False
+    assert payload["data"]["auth"]["user_api_access"]["ready"] is True
+    assert payload["data"]["auth"]["grants"]["client_credentials"] == "requires_client_credentials"
+    assert payload["data"]["auth"]["grants"]["authorization_code"] == "requires_client_credentials"
+    assert payload["data"]["auth"]["grants"]["pkce"] == "requires_client_credentials"
 
 
 def test_warcraftlogs_auth_status_can_skip_live_probes(monkeypatch) -> None:
@@ -1790,12 +1789,12 @@ def test_warcraftlogs_auth_status_can_skip_live_probes(monkeypatch) -> None:
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["auth"]["public_api_access"]["ready"] is True
-    assert payload["auth"]["public_api_access"]["validation"] == "skipped"
-    assert payload["auth"]["public_api_access"]["live_validated"] is False
-    assert payload["auth"]["user_api_access"]["ready"] is True
-    assert payload["auth"]["user_api_access"]["validation"] == "skipped"
-    assert payload["auth"]["user_api_access"]["live_validated"] is False
+    assert payload["data"]["auth"]["public_api_access"]["ready"] is True
+    assert payload["data"]["auth"]["public_api_access"]["validation"] == "skipped"
+    assert payload["data"]["auth"]["public_api_access"]["live_validated"] is False
+    assert payload["data"]["auth"]["user_api_access"]["ready"] is True
+    assert payload["data"]["auth"]["user_api_access"]["validation"] == "skipped"
+    assert payload["data"]["auth"]["user_api_access"]["live_validated"] is False
 
 
 def test_warcraftlogs_auth_status_live_probe_calls_the_user_endpoint(monkeypatch) -> None:
@@ -1834,9 +1833,9 @@ def test_warcraftlogs_auth_status_live_probe_calls_the_user_endpoint(monkeypatch
     result = runner.invoke(warcraftlogs_app, ["auth", "status"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["auth"]["user_api_access"]["ready"] is True
-    assert payload["auth"]["user_api_access"]["validation"] == "live"
-    assert payload["auth"]["user_api_access"]["live_validated"] is True
+    assert payload["data"]["auth"]["user_api_access"]["ready"] is True
+    assert payload["data"]["auth"]["user_api_access"]["validation"] == "live"
+    assert payload["data"]["auth"]["user_api_access"]["live_validated"] is True
     assert probe_calls == ["current_user"]
 
 
@@ -1870,9 +1869,9 @@ def test_warcraftlogs_auth_status_reports_live_user_auth_failure(monkeypatch) ->
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["auth"]["user_api_access"]["ready"] is False
-    assert payload["auth"]["user_api_access"]["reason"] == "auth_failed"
-    assert payload["auth"]["user_api_access"]["validation"] == "live"
+    assert payload["data"]["auth"]["user_api_access"]["ready"] is False
+    assert payload["data"]["auth"]["user_api_access"]["reason"] == "auth_failed"
+    assert payload["data"]["auth"]["user_api_access"]["validation"] == "live"
 
 
 def test_warcraftlogs_auth_status_reports_invalid_runtime_config(monkeypatch) -> None:
@@ -1905,16 +1904,16 @@ def test_warcraftlogs_auth_status_reports_invalid_runtime_config(monkeypatch) ->
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["auth"]["runtime_access"]["ready"] is False
-    assert "WARCRAFTLOGS_REDIS_URL" in payload["auth"]["runtime_access"]["message"]
-    assert "WOWHEAD_REDIS_URL" not in payload["auth"]["runtime_access"]["message"]
-    assert payload["auth"]["public_api_access"]["ready"] is False
-    assert payload["auth"]["public_api_access"]["reason"] == "invalid_runtime_config"
-    assert payload["auth"]["user_api_access"]["ready"] is False
-    assert payload["auth"]["user_api_access"]["reason"] == "invalid_runtime_config"
-    assert payload["auth"]["grants"]["client_credentials"] == "invalid_runtime_config"
-    assert payload["auth"]["grants"]["authorization_code"] == "invalid_runtime_config"
-    assert payload["auth"]["grants"]["pkce"] == "invalid_runtime_config"
+    assert payload["data"]["auth"]["runtime_access"]["ready"] is False
+    assert "WARCRAFTLOGS_REDIS_URL" in payload["data"]["auth"]["runtime_access"]["message"]
+    assert "WOWHEAD_REDIS_URL" not in payload["data"]["auth"]["runtime_access"]["message"]
+    assert payload["data"]["auth"]["public_api_access"]["ready"] is False
+    assert payload["data"]["auth"]["public_api_access"]["reason"] == "invalid_runtime_config"
+    assert payload["data"]["auth"]["user_api_access"]["ready"] is False
+    assert payload["data"]["auth"]["user_api_access"]["reason"] == "invalid_runtime_config"
+    assert payload["data"]["auth"]["grants"]["client_credentials"] == "invalid_runtime_config"
+    assert payload["data"]["auth"]["grants"]["authorization_code"] == "invalid_runtime_config"
+    assert payload["data"]["auth"]["grants"]["pkce"] == "invalid_runtime_config"
 
 
 def test_warcraftlogs_auth_status_prioritizes_invalid_runtime_config_without_credentials(monkeypatch) -> None:
@@ -1947,11 +1946,11 @@ def test_warcraftlogs_auth_status_prioritizes_invalid_runtime_config_without_cre
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["auth"]["public_api_access"]["reason"] == "invalid_runtime_config"
-    assert payload["auth"]["user_api_access"]["reason"] == "invalid_runtime_config"
-    assert payload["auth"]["grants"]["client_credentials"] == "invalid_runtime_config"
-    assert payload["auth"]["grants"]["authorization_code"] == "invalid_runtime_config"
-    assert payload["auth"]["grants"]["pkce"] == "invalid_runtime_config"
+    assert payload["data"]["auth"]["public_api_access"]["reason"] == "invalid_runtime_config"
+    assert payload["data"]["auth"]["user_api_access"]["reason"] == "invalid_runtime_config"
+    assert payload["data"]["auth"]["grants"]["client_credentials"] == "invalid_runtime_config"
+    assert payload["data"]["auth"]["grants"]["authorization_code"] == "invalid_runtime_config"
+    assert payload["data"]["auth"]["grants"]["pkce"] == "invalid_runtime_config"
 
 
 def test_warcraftlogs_auth_client_reports_endpoint_metadata(monkeypatch) -> None:
@@ -1964,10 +1963,10 @@ def test_warcraftlogs_auth_client_reports_endpoint_metadata(monkeypatch) -> None
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["client"]["configured"] is True
-    assert payload["client"]["client_id"] == "12345678..."
-    assert payload["client"]["client_api_url"].endswith("/api/v2/client")
-    assert payload["client"]["user_api_url"].endswith("/api/v2/user")
+    assert payload["data"]["client"]["configured"] is True
+    assert payload["data"]["client"]["client_id"] == "12345678..."
+    assert payload["data"]["client"]["client_api_url"].endswith("/api/v2/client")
+    assert payload["data"]["client"]["user_api_url"].endswith("/api/v2/user")
 
 
 def test_warcraftlogs_auth_token_reports_state_summary(monkeypatch) -> None:
@@ -1992,9 +1991,9 @@ def test_warcraftlogs_auth_token_reports_state_summary(monkeypatch) -> None:
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["token"]["active_mode"] == "pkce"
-    assert payload["token"]["endpoint_family"] == "user"
-    assert payload["token"]["state"]["has_refresh_token"] is True
+    assert payload["data"]["token"]["active_mode"] == "pkce"
+    assert payload["data"]["token"]["endpoint_family"] == "user"
+    assert payload["data"]["token"]["state"]["has_refresh_token"] is True
 
 
 def test_warcraftlogs_auth_login_generates_authorize_url(monkeypatch, tmp_path) -> None:
@@ -2009,10 +2008,10 @@ def test_warcraftlogs_auth_login_generates_authorize_url(monkeypatch, tmp_path) 
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["mode"] == "authorization_code"
-    assert payload["step"] == "authorize"
-    assert payload["state"] == "pending-state-123"
-    assert "oauth/authorize" in payload["authorize_url"]
+    assert payload["data"]["mode"] == "authorization_code"
+    assert payload["data"]["step"] == "authorize"
+    assert payload["data"]["state"] == "pending-state-123"
+    assert "oauth/authorize" in payload["data"]["authorize_url"]
 
 
 def test_warcraftlogs_auth_login_can_request_scope(monkeypatch, tmp_path) -> None:
@@ -2034,8 +2033,8 @@ def test_warcraftlogs_auth_login_can_request_scope(monkeypatch, tmp_path) -> Non
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["requested_scopes"] == ["view-user-profile"]
-    assert "scope=view-user-profile" in payload["authorize_url"]
+    assert payload["data"]["requested_scopes"] == ["view-user-profile"]
+    assert "scope=view-user-profile" in payload["data"]["authorize_url"]
 
 
 def test_warcraftlogs_auth_login_exchanges_code(monkeypatch, tmp_path) -> None:
@@ -2070,10 +2069,10 @@ def test_warcraftlogs_auth_login_exchanges_code(monkeypatch, tmp_path) -> None:
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["mode"] == "authorization_code"
-    assert payload["step"] == "token_exchanged"
-    assert payload["endpoint_family"] == "user"
-    assert payload["token"]["expires_at"] == 4600.0
+    assert payload["data"]["mode"] == "authorization_code"
+    assert payload["data"]["step"] == "token_exchanged"
+    assert payload["data"]["endpoint_family"] == "user"
+    assert payload["data"]["token"]["expires_at"] == 4600.0
 
     saved_state = json.loads(state_file.read_text())
     assert saved_state["auth_mode"] == "authorization_code"
@@ -2094,10 +2093,10 @@ def test_warcraftlogs_auth_pkce_login_generates_authorize_url(monkeypatch, tmp_p
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["mode"] == "pkce"
-    assert payload["step"] == "authorize"
-    assert payload["state"] == "pending-state-456"
-    assert "challenge-123" in payload["authorize_url"]
+    assert payload["data"]["mode"] == "pkce"
+    assert payload["data"]["step"] == "authorize"
+    assert payload["data"]["state"] == "pending-state-456"
+    assert "challenge-123" in payload["data"]["authorize_url"]
 
 
 def test_warcraftlogs_auth_whoami_uses_user_endpoint_client(monkeypatch) -> None:
@@ -2107,8 +2106,8 @@ def test_warcraftlogs_auth_whoami_uses_user_endpoint_client(monkeypatch) -> None
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["endpoint_family"] == "user"
-    assert payload["user"]["name"] == "Auro"
+    assert payload["data"]["endpoint_family"] == "user"
+    assert payload["data"]["user"]["name"] == "Auro"
 
 
 def test_warcraftlogs_auth_whoami_requires_saved_user_token_not_client_credentials(monkeypatch, tmp_path) -> None:
@@ -2189,7 +2188,7 @@ def test_warcraftlogs_auth_logout_removes_state(monkeypatch, tmp_path) -> None:
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["auth"]["removed"] is True
+    assert payload["data"]["auth"]["removed"] is True
     assert not state_file.exists()
 
 
@@ -2199,42 +2198,42 @@ def test_warcraftlogs_rate_limit_and_world_metadata_commands(monkeypatch) -> Non
     rate_limit_result = runner.invoke(warcraftlogs_app, ["rate-limit"])
     assert rate_limit_result.exit_code == 0
     rate_limit_payload = json.loads(rate_limit_result.stdout)
-    assert rate_limit_payload["rate_limit"]["limit_per_hour"] == 3600
+    assert rate_limit_payload["data"]["rate_limit"]["limit_per_hour"] == 3600
 
     regions_result = runner.invoke(warcraftlogs_app, ["regions"])
     assert regions_result.exit_code == 0
     regions_payload = json.loads(regions_result.stdout)
-    assert regions_payload["count"] == 2
-    assert regions_payload["regions"][0]["slug"] == "us"
+    assert regions_payload["data"]["count"] == 2
+    assert regions_payload["data"]["regions"][0]["slug"] == "us"
 
     expansions_result = runner.invoke(warcraftlogs_app, ["expansions"])
     assert expansions_result.exit_code == 0
     expansions_payload = json.loads(expansions_result.stdout)
-    assert expansions_payload["count"] == 1
-    assert expansions_payload["expansions"][0]["zone_count"] == 1
+    assert expansions_payload["data"]["count"] == 1
+    assert expansions_payload["data"]["expansions"][0]["zone_count"] == 1
 
     server_result = runner.invoke(warcraftlogs_app, ["server", "us", "illidan"])
     assert server_result.exit_code == 0
     server_payload = json.loads(server_result.stdout)
-    assert server_payload["server"]["slug"] == "illidan"
+    assert server_payload["data"]["server"]["slug"] == "illidan"
 
     zones_result = runner.invoke(warcraftlogs_app, ["zones", "--expansion-id", "12"])
     assert zones_result.exit_code == 0
     zones_payload = json.loads(zones_result.stdout)
-    assert zones_payload["count"] == 1
-    assert zones_payload["zones"][0]["encounters"][0]["journal_id"] == 9001
+    assert zones_payload["data"]["count"] == 1
+    assert zones_payload["data"]["zones"][0]["encounters"][0]["journal_id"] == 9001
 
     encounter_result = runner.invoke(warcraftlogs_app, ["encounter", "3012"])
     assert encounter_result.exit_code == 0
     encounter_payload = json.loads(encounter_result.stdout)
-    assert encounter_payload["encounter"]["zone"]["expansion"]["name"] == "Midnight"
-    assert encounter_payload["encounter_identity"]["status"] == "canonical"
-    assert encounter_payload["encounter_identity"]["identity"]["journal_id"] == 9001
+    assert encounter_payload["data"]["encounter"]["zone"]["expansion"]["name"] == "Midnight"
+    assert encounter_payload["data"]["encounter_identity"]["status"] == "canonical"
+    assert encounter_payload["data"]["encounter_identity"]["identity"]["journal_id"] == 9001
 
     zone_result = runner.invoke(warcraftlogs_app, ["zone", "38"])
     assert zone_result.exit_code == 0
     zone_payload = json.loads(zone_result.stdout)
-    assert zone_payload["zone"]["partitions"][0]["default"] is True
+    assert zone_payload["data"]["zone"]["partitions"][0]["default"] is True
 
 
 def test_warcraftlogs_guild_character_and_report_commands(monkeypatch) -> None:
@@ -2243,14 +2242,14 @@ def test_warcraftlogs_guild_character_and_report_commands(monkeypatch) -> None:
     guild_result = runner.invoke(warcraftlogs_app, ["guild", "us", "illidan", "Liquid", "--zone-id", "38"])
     assert guild_result.exit_code == 0
     guild_payload = json.loads(guild_result.stdout)
-    assert guild_payload["guild"]["zone_ranking"]["progress"]["world"]["number"] == 2
+    assert guild_payload["data"]["guild"]["zone_ranking"]["progress"]["world"]["number"] == 2
 
     character_result = runner.invoke(warcraftlogs_app, ["character", "us", "illidan", "Roguecane"])
     assert character_result.exit_code == 0
     character_payload = json.loads(character_result.stdout)
-    assert character_payload["character"]["server"]["slug"] == "illidan"
-    assert character_payload["character"]["guild_rank"] == 3
-    assert character_payload["character"]["guilds"][0]["name"] == "Liquid"
+    assert character_payload["data"]["character"]["server"]["slug"] == "illidan"
+    assert character_payload["data"]["character"]["guild_rank"] == 3
+    assert character_payload["data"]["character"]["guilds"][0]["name"] == "Liquid"
 
     guild_rankings_result = runner.invoke(
         warcraftlogs_app,
@@ -2258,7 +2257,7 @@ def test_warcraftlogs_guild_character_and_report_commands(monkeypatch) -> None:
     )
     assert guild_rankings_result.exit_code == 0
     guild_rankings_payload = json.loads(guild_rankings_result.stdout)
-    assert guild_rankings_payload["guild_rankings"]["zone_ranking"]["speed"]["world"]["number"] == 4
+    assert guild_rankings_payload["data"]["guild_rankings"]["zone_ranking"]["speed"]["world"]["number"] == 4
 
     guild_members_result = runner.invoke(
         warcraftlogs_app,
@@ -2266,9 +2265,9 @@ def test_warcraftlogs_guild_character_and_report_commands(monkeypatch) -> None:
     )
     assert guild_members_result.exit_code == 0
     guild_members_payload = json.loads(guild_members_result.stdout)
-    assert guild_members_payload["guild_members"]["pagination"]["total"] == 1
-    assert guild_members_payload["guild_members"]["members"][0]["name"] == "Roguecane"
-    assert guild_members_payload["notes"] == ["Guild roster queries only work for games where Warcraft Logs can verify guild membership."]
+    assert guild_members_payload["data"]["guild_members"]["pagination"]["total"] == 1
+    assert guild_members_payload["data"]["guild_members"]["members"][0]["name"] == "Roguecane"
+    assert guild_members_payload["data"]["notes"] == ["Guild roster queries only work for games where Warcraft Logs can verify guild membership."]
 
     guild_attendance_result = runner.invoke(
         warcraftlogs_app,
@@ -2276,10 +2275,10 @@ def test_warcraftlogs_guild_character_and_report_commands(monkeypatch) -> None:
     )
     assert guild_attendance_result.exit_code == 0
     guild_attendance_payload = json.loads(guild_attendance_result.stdout)
-    assert guild_attendance_payload["guild_attendance"]["pagination"]["total"] == 1
-    assert guild_attendance_payload["guild_attendance"]["attendance"][0]["player_count"] == 2
-    assert guild_attendance_payload["guild_attendance"]["attendance"][0]["players"][0]["presence_label"] == "present"
-    assert guild_attendance_payload["guild_attendance"]["attendance"][0]["players"][1]["presence_label"] == "benched"
+    assert guild_attendance_payload["data"]["guild_attendance"]["pagination"]["total"] == 1
+    assert guild_attendance_payload["data"]["guild_attendance"]["attendance"][0]["player_count"] == 2
+    assert guild_attendance_payload["data"]["guild_attendance"]["attendance"][0]["players"][0]["presence_label"] == "present"
+    assert guild_attendance_payload["data"]["guild_attendance"]["attendance"][0]["players"][1]["presence_label"] == "benched"
 
     guild_reports_result = runner.invoke(
         warcraftlogs_app,
@@ -2304,9 +2303,9 @@ def test_warcraftlogs_guild_character_and_report_commands(monkeypatch) -> None:
     )
     assert guild_reports_result.exit_code == 0
     guild_reports_payload = json.loads(guild_reports_result.stdout)
-    assert guild_reports_payload["guild"]["name"] == "Liquid"
-    assert guild_reports_payload["count"] == 1
-    assert guild_reports_payload["reports"][0]["code"] == "abcd1234"
+    assert guild_reports_payload["data"]["guild"]["name"] == "Liquid"
+    assert guild_reports_payload["data"]["count"] == 1
+    assert guild_reports_payload["data"]["reports"][0]["code"] == "abcd1234"
 
     character_rankings_result = runner.invoke(
         warcraftlogs_app,
@@ -2329,9 +2328,9 @@ def test_warcraftlogs_guild_character_and_report_commands(monkeypatch) -> None:
     )
     assert character_rankings_result.exit_code == 0
     character_rankings_payload = json.loads(character_rankings_result.stdout)
-    assert character_rankings_payload["character_rankings"]["summary"]["best_performance_average"] == 85.4
-    assert character_rankings_payload["character_rankings"]["rankings"][0]["encounter"]["name"] == "Dimensius"
-    trust = character_rankings_payload["character_rankings"]["trust"]
+    assert character_rankings_payload["data"]["character_rankings"]["summary"]["best_performance_average"] == 85.4
+    assert character_rankings_payload["data"]["character_rankings"]["rankings"][0]["encounter"]["name"] == "Dimensius"
+    trust = character_rankings_payload["data"]["character_rankings"]["trust"]
     assert trust["ranking_basis"] == "public_character_zone_rankings"
     assert trust["scope"] == {"zone": 38, "difficulty": 5, "metric": "dps", "partition": 1, "size": 20}
     assert trust["freshness"]["cache_ttl_seconds"] is None
@@ -2346,8 +2345,8 @@ def test_warcraftlogs_guild_character_and_report_commands(monkeypatch) -> None:
     report_result = runner.invoke(warcraftlogs_app, ["report", "abcd1234", "--allow-unlisted"])
     assert report_result.exit_code == 0
     report_payload = json.loads(report_result.stdout)
-    assert report_payload["report"]["zone"]["name"] == "Manaforge Omega"
-    assert report_payload["report"]["archive_status"]["is_archived"] is True
+    assert report_payload["data"]["report"]["zone"]["name"] == "Manaforge Omega"
+    assert report_payload["data"]["report"]["archive_status"]["is_archived"] is True
 
     reports_result = runner.invoke(
         warcraftlogs_app,
@@ -2375,15 +2374,15 @@ def test_warcraftlogs_guild_character_and_report_commands(monkeypatch) -> None:
     )
     assert reports_result.exit_code == 0
     reports_payload = json.loads(reports_result.stdout)
-    assert reports_payload["pagination"]["current_page"] == 2
-    assert reports_payload["count"] == 1
-    assert reports_payload["reports"][0]["archive_status"]["archive_date"] == 789
+    assert reports_payload["data"]["pagination"]["current_page"] == 2
+    assert reports_payload["data"]["count"] == 1
+    assert reports_payload["data"]["reports"][0]["archive_status"]["archive_date"] == 789
 
     fights_result = runner.invoke(warcraftlogs_app, ["report-fights", "abcd1234", "--difficulty", "5"])
     assert fights_result.exit_code == 0
     fights_payload = json.loads(fights_result.stdout)
-    assert fights_payload["count"] == 3
-    assert fights_payload["fights"][0]["encounter_id"] == 3012
+    assert fights_payload["data"]["count"] == 3
+    assert fights_payload["data"]["fights"][0]["encounter_id"] == 3012
 
     events_result = runner.invoke(
         warcraftlogs_app,
@@ -2408,8 +2407,8 @@ def test_warcraftlogs_guild_character_and_report_commands(monkeypatch) -> None:
     )
     assert events_result.exit_code == 0
     events_payload = json.loads(events_result.stdout)
-    assert events_payload["next_page_timestamp"] == 999.0
-    assert events_payload["events"][0]["type"] == "cast"
+    assert events_payload["data"]["next_page_timestamp"] == 999.0
+    assert events_payload["data"]["events"][0]["type"] == "cast"
 
     table_result = runner.invoke(
         warcraftlogs_app,
@@ -2417,7 +2416,7 @@ def test_warcraftlogs_guild_character_and_report_commands(monkeypatch) -> None:
     )
     assert table_result.exit_code == 0
     table_payload = json.loads(table_result.stdout)
-    assert table_payload["table"]["entries"][0]["name"] == "Auropower"
+    assert table_payload["data"]["table"]["entries"][0]["name"] == "Auropower"
 
     graph_result = runner.invoke(
         warcraftlogs_app,
@@ -2425,7 +2424,7 @@ def test_warcraftlogs_guild_character_and_report_commands(monkeypatch) -> None:
     )
     assert graph_result.exit_code == 0
     graph_payload = json.loads(graph_result.stdout)
-    assert graph_payload["graph"]["series"][0]["name"] == "Damage"
+    assert graph_payload["data"]["graph"]["series"][0]["name"] == "Damage"
 
     master_data_result = runner.invoke(
         warcraftlogs_app,
@@ -2433,10 +2432,10 @@ def test_warcraftlogs_guild_character_and_report_commands(monkeypatch) -> None:
     )
     assert master_data_result.exit_code == 0
     master_data_payload = json.loads(master_data_result.stdout)
-    assert master_data_payload["master_data"]["log_version"] == 47
-    assert master_data_payload["master_data"]["actors"][0]["name"] == "Auropower"
-    assert master_data_payload["master_data"]["actors"][0]["identity_contract"]["status"] == "normalized"
-    assert master_data_payload["master_data"]["abilities"][0]["identity_contract"]["status"] == "canonical"
+    assert master_data_payload["data"]["master_data"]["log_version"] == 47
+    assert master_data_payload["data"]["master_data"]["actors"][0]["name"] == "Auropower"
+    assert master_data_payload["data"]["master_data"]["actors"][0]["identity_contract"]["status"] == "normalized"
+    assert master_data_payload["data"]["master_data"]["abilities"][0]["identity_contract"]["status"] == "canonical"
 
     player_details_result = runner.invoke(
         warcraftlogs_app,
@@ -2458,9 +2457,9 @@ def test_warcraftlogs_guild_character_and_report_commands(monkeypatch) -> None:
     )
     assert player_details_result.exit_code == 0
     player_details_payload = json.loads(player_details_result.stdout)
-    assert player_details_payload["player_details"]["counts"]["total"] == 2
-    assert player_details_payload["player_details"]["roles"]["tanks"][0]["name"] == "Sherway"
-    assert player_details_payload["player_details"]["roles"]["tanks"][0]["identity_contract"]["status"] == "normalized"
+    assert player_details_payload["data"]["player_details"]["counts"]["total"] == 2
+    assert player_details_payload["data"]["player_details"]["roles"]["tanks"][0]["name"] == "Sherway"
+    assert player_details_payload["data"]["player_details"]["roles"]["tanks"][0]["identity_contract"]["status"] == "normalized"
 
     rankings_result = runner.invoke(
         warcraftlogs_app,
@@ -2486,8 +2485,8 @@ def test_warcraftlogs_guild_character_and_report_commands(monkeypatch) -> None:
     )
     assert rankings_result.exit_code == 0
     rankings_payload = json.loads(rankings_result.stdout)
-    assert rankings_payload["rankings"]["count"] == 1
-    assert rankings_payload["rankings"]["rows"][0]["name"] == "Auropower"
+    assert rankings_payload["data"]["rankings"]["count"] == 1
+    assert rankings_payload["data"]["rankings"]["rows"][0]["name"] == "Auropower"
 
 
 def test_warcraftlogs_boss_kills_samples_finished_reports_and_filters_by_spec(monkeypatch) -> None:
@@ -2518,15 +2517,15 @@ def test_warcraftlogs_boss_kills_samples_finished_reports_and_filters_by_spec(mo
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["kind"] == "boss_kills"
-    assert payload["ranking_basis"] == "sampled_fastest_kills"
-    assert "not a global spec ranking leaderboard" in payload["notes"][0]
-    assert payload["sample"]["source_report_count"] == 2
-    assert payload["sample"]["finished_report_count"] == 1
-    assert payload["sample"]["skipped_live_report_count"] == 1
-    assert payload["sample"]["filtered_kill_count"] == 1
-    assert payload["kills"][0]["fight"]["encounter_id"] == 3012
-    assert payload["kills"][0]["duration_seconds"] == 100.0
-    assert payload["kills"][0]["matching_players"][0]["name"] == "Auropower"
+    assert payload["data"]["ranking_basis"] == "sampled_fastest_kills"
+    assert "not a global spec ranking leaderboard" in payload["data"]["notes"][0]
+    assert payload["data"]["sample"]["source_report_count"] == 2
+    assert payload["data"]["sample"]["finished_report_count"] == 1
+    assert payload["data"]["sample"]["skipped_live_report_count"] == 1
+    assert payload["data"]["sample"]["filtered_kill_count"] == 1
+    assert payload["data"]["kills"][0]["fight"]["encounter_id"] == 3012
+    assert payload["data"]["kills"][0]["duration_seconds"] == 100.0
+    assert payload["data"]["kills"][0]["matching_players"][0]["name"] == "Auropower"
 
 
 def test_warcraftlogs_spec_kill_samples_labels_participant_cohort(monkeypatch) -> None:
@@ -2555,33 +2554,30 @@ def test_warcraftlogs_spec_kill_samples_labels_participant_cohort(monkeypatch) -
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["kind"] == "spec_filtered_kill_samples"
-    assert payload["cohort"] == "spec_filtered_participant_kill_cohort"
-    assert payload["ranking_basis"] == "spec_filtered_participant_kill_samples"
-    # Canonical envelope key mirrors the kills list; legacy `kills` is dual-emitted + deprecated.
-    assert payload["spec_kill_samples"] == payload["kills"]
-    assert "kills" in payload["deprecated_keys"]
+    assert payload["data"]["cohort"] == "spec_filtered_participant_kill_cohort"
+    assert payload["data"]["ranking_basis"] == "spec_filtered_participant_kill_samples"
     # Explicitly labeled as a participant cohort, not a leaderboard.
-    assert any("not a spec ranking leaderboard" in note for note in payload["notes"])
-    assert payload["sample"]["spec_name"] == "Retribution"
-    assert payload["sample"]["sample_size"] == 1
-    assert payload["sample"]["matching_participant_count"] == 1
-    assert payload["sample"]["filtered_kill_count"] == 1
-    assert payload["sample"]["returned_kill_count"] == 1
-    assert payload["sample"]["excluded_kill_count"] == 0
-    assert payload["sample"]["truncated"] is False
-    assert payload["sample"]["truncation_order"] == "fastest_kill_duration_ascending"
-    assert payload["sample"]["stable_source_only"] is True
-    assert payload["freshness"]["cache_ttl_seconds"] == 86400
-    assert payload["cache_provenance"] == {
+    assert any("not a spec ranking leaderboard" in note for note in payload["data"]["notes"])
+    assert payload["data"]["sample"]["spec_name"] == "Retribution"
+    assert payload["data"]["sample"]["sample_size"] == 1
+    assert payload["data"]["sample"]["matching_participant_count"] == 1
+    assert payload["data"]["sample"]["filtered_kill_count"] == 1
+    assert payload["data"]["sample"]["returned_kill_count"] == 1
+    assert payload["data"]["sample"]["excluded_kill_count"] == 0
+    assert payload["data"]["sample"]["truncated"] is False
+    assert payload["data"]["sample"]["truncation_order"] == "fastest_kill_duration_ascending"
+    assert payload["data"]["sample"]["stable_source_only"] is True
+    assert payload["data"]["freshness"]["cache_ttl_seconds"] == 86400
+    assert payload["data"]["cache_provenance"] == {
         "finished": True,
         "live": False,
         "cache_ttl_seconds": 86400,
         "source": "sampled_finished_reports",
     }
-    assert payload["sample_scope"]["ranking_basis"] == "spec_filtered_participant_kill_samples"
-    assert payload["sample_scope"]["filters"]["spec_name"] == "Retribution"
-    assert len(payload["citations"]["sample_reports"]) == 1
-    assert payload["kills"][0]["matching_players"][0]["name"] == "Auropower"
+    assert payload["data"]["sample_scope"]["ranking_basis"] == "spec_filtered_participant_kill_samples"
+    assert payload["data"]["sample_scope"]["filters"]["spec_name"] == "Retribution"
+    assert len(payload["data"]["citations"]["sample_reports"]) == 1
+    assert payload["data"]["kills"][0]["matching_players"][0]["name"] == "Auropower"
 
 
 def test_warcraftlogs_spec_kill_samples_empty_cohort_is_ok(monkeypatch) -> None:
@@ -2608,28 +2604,31 @@ def test_warcraftlogs_spec_kill_samples_empty_cohort_is_ok(monkeypatch) -> None:
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["ok"] is True
-    assert payload["count"] == 0
-    assert payload["spec_kill_samples"] == []
-    assert payload["sample"]["sample_size"] == 0
-    assert payload["sample"]["matching_participant_count"] == 0
-    assert payload["sample"]["filtered_kill_count"] == 0
+    assert payload["data"]["count"] == 0
+    assert payload["data"]["kills"] == []
+    assert payload["data"]["sample"]["sample_size"] == 0
+    assert payload["data"]["sample"]["matching_participant_count"] == 0
+    assert payload["data"]["sample"]["filtered_kill_count"] == 0
 
 
 @pytest.mark.parametrize(
-    "args",
+    ("args", "exit_code", "keys"),
     [
-        ["doctor", "--no-live"],
-        ["report-fights", "abcd1234"],
-        ["report-encounter-players", "abcd1234", "--fight-id", "1"],
-        ["boss-kills", "--zone-id", "38", "--boss-id", "3012", "--difficulty", "5"],
+        (["doctor", "--no-live"], 0, ENVELOPE_KEYS - {"error"}),
+        (["search", "abcd1234"], 0, ENVELOPE_KEYS - {"error"}),
+        (["report-fights", "abcd1234"], 0, ENVELOPE_KEYS - {"error"}),
+        (["report-encounter-players", "abcd1234", "--fight-id", "1"], 0, ENVELOPE_KEYS - {"error"}),
+        (["boss-kills", "--zone-id", "38", "--boss-id", "3012", "--difficulty", "5"], 0, ENVELOPE_KEYS - {"error"}),
+        (["report-events", "abcd1234", "--fight-id", "99"], 4, ENVELOPE_KEYS),
     ],
 )
-def test_warcraftlogs_data_mirrors_every_top_level_payload_key(
+def test_warcraftlogs_envelopes_carry_only_the_envelope_keys(
     monkeypatch: pytest.MonkeyPatch,
     args: list[str],
+    exit_code: int,
+    keys: frozenset[str],
 ) -> None:
-    # The rest of this file asserts on the deprecated top-level copies. They are only trustworthy
-    # because `data` carries the same body, so that mirror is pinned here rather than assumed.
+    # Every field lives under `data` once; nothing is copied to the top level beside it.
     monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _FakeWarcraftLogsClient())
     monkeypatch.setattr(
         "warcraftlogs_cli.main.load_warcraftlogs_auth_config",
@@ -2638,11 +2637,11 @@ def test_warcraftlogs_data_mirrors_every_top_level_payload_key(
 
     result = runner.invoke(warcraftlogs_app, args)
 
-    assert result.exit_code == 0
-    payload = json.loads(result.stdout)
-    body = {key: value for key, value in payload.items() if key not in ENVELOPE_KEYS}
-    assert body
-    assert payload["data"] == body
+    assert result.exit_code == exit_code
+    payload = json.loads(result.stdout if exit_code == 0 else result.stderr)
+    assert set(payload) == keys
+    if exit_code == 0:
+        assert payload["data"]
 
 
 def _double_logged_report(*, code: str, report_start: int, fights: list[dict[str, object]]) -> dict[str, object]:
@@ -2829,6 +2828,36 @@ def test_deduplicate_pulls_does_not_depend_on_listing_order() -> None:
         ]
 
 
+def test_deduplicate_pulls_does_not_split_a_pull_around_an_overlapping_one() -> None:
+    from warcraftlogs_cli.boss_kills import deduplicate_pulls
+
+    # A1 and A2 are one pull logged twice; B is another pull that starts between them and ends later.
+    report = _double_logged_report(code="dupea001", report_start=0, fights=[])
+    pulls = deduplicate_pulls(
+        [
+            ({**report, "code": "a1report"}, _kill_fight(fight_id=1, start=10_000, end=400_000)),
+            ({**report, "code": "breport1"}, _kill_fight(fight_id=2, start=11_000, end=580_000)),
+            ({**report, "code": "a2report"}, _kill_fight(fight_id=3, start=12_000, end=401_000)),
+        ]
+    )
+
+    assert [(pull.report["code"], pull.duplicates) for pull in pulls] == [
+        ("a1report", [{"report_code": "a2report", "fight_id": 3}]),
+        ("breport1", []),
+    ]
+
+
+def test_deduplicate_pulls_keeps_pulls_of_different_raid_sizes_apart() -> None:
+    from warcraftlogs_cli.boss_kills import deduplicate_pulls
+
+    report = _double_logged_report(code="dupea001", report_start=1_000_000, fights=[])
+    fight = _kill_fight(fight_id=9, start=10_000, end=644_437)
+
+    pulls = deduplicate_pulls([(report, fight), ({**report, "code": "dupeb002"}, {**fight, "size": 25})])
+
+    assert [pull.duplicates for pull in pulls] == [[], []]
+
+
 def test_deduplicate_pulls_never_merges_guildless_logs_on_timing_alone() -> None:
     from warcraftlogs_cli.boss_kills import deduplicate_pulls
 
@@ -2914,9 +2943,9 @@ def test_warcraftlogs_top_kills_reports_truncation(monkeypatch) -> None:
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["kind"] == "top_kills"
-    assert payload["count"] == 1
-    assert payload["sample"]["truncated"] is False
-    assert payload["kills"][0]["fight"]["name"] == "Dimensius, the All-Devouring"
+    assert payload["data"]["count"] == 1
+    assert payload["data"]["sample"]["truncated"] is False
+    assert payload["data"]["kills"][0]["fight"]["name"] == "Dimensius, the All-Devouring"
 
 
 def test_warcraftlogs_kill_time_distribution_returns_histogram(monkeypatch) -> None:
@@ -2943,9 +2972,9 @@ def test_warcraftlogs_kill_time_distribution_returns_histogram(monkeypatch) -> N
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["kind"] == "kill_time_distribution"
-    assert payload["sample"]["filtered_kill_count"] == 1
-    assert payload["distribution"]["statistics"]["min"] == 100.0
-    assert payload["distribution"]["rows"][0]["start_seconds"] == 90
+    assert payload["data"]["sample"]["filtered_kill_count"] == 1
+    assert payload["data"]["distribution"]["statistics"]["min"] == 100.0
+    assert payload["data"]["distribution"]["rows"][0]["start_seconds"] == 90
 
 
 def test_warcraftlogs_boss_spec_usage_returns_sorted_spec_rows(monkeypatch) -> None:
@@ -2972,13 +3001,13 @@ def test_warcraftlogs_boss_spec_usage_returns_sorted_spec_rows(monkeypatch) -> N
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["kind"] == "boss_spec_usage"
-    assert payload["ranking_basis"] == "sampled_finished_kill_cohort_spec_presence"
-    assert payload["sample"]["filtered_kill_count"] == 1
-    assert payload["sample"]["sampled_player_row_count"] == 2
-    assert payload["spec_usage"][0]["spec_name"] == "Protection"
-    assert payload["spec_usage"][0]["role"] == "tanks"
-    assert payload["spec_usage"][0]["kill_presence_count"] == 1
-    assert payload["spec_usage"][0]["percent_of_kills"] == 100.0
+    assert payload["data"]["ranking_basis"] == "sampled_finished_kill_cohort_spec_presence"
+    assert payload["data"]["sample"]["filtered_kill_count"] == 1
+    assert payload["data"]["sample"]["sampled_player_row_count"] == 2
+    assert payload["data"]["spec_usage"][0]["spec_name"] == "Protection"
+    assert payload["data"]["spec_usage"][0]["role"] == "tanks"
+    assert payload["data"]["spec_usage"][0]["kill_presence_count"] == 1
+    assert payload["data"]["spec_usage"][0]["percent_of_kills"] == 100.0
 
 
 def test_warcraftlogs_encounter_rankings_returns_real_ranking_rows(monkeypatch) -> None:
@@ -3027,30 +3056,30 @@ def test_warcraftlogs_encounter_rankings_returns_real_ranking_rows(monkeypatch) 
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["kind"] == "encounter_rankings"
-    assert payload["ranking_basis"] == "encounter_character_rankings"
+    assert payload["data"]["ranking_basis"] == "encounter_character_rankings"
     assert payload["query"]["boss_id"] == 3012
     assert payload["query"]["class_name"] == "Druid"
     assert payload["query"]["spec_name"] == "Balance"
     assert payload["query"]["leaderboard"] == "LogsOnly"
     assert payload["query"]["hard_mode_level"] == "NormalMode"
-    assert payload["encounter"]["name"] == "Dimensius, the All-Devouring"
-    assert payload["rankings"]["count"] == 1
-    assert payload["rankings"]["page_count"] == 2
-    assert payload["rankings"]["truncated"] is True
-    assert payload["rankings"]["has_more_pages"] is True
-    assert payload["rankings"]["rows"][0]["name"] == "Moonkinone"
-    assert payload["rankings"]["rows"][0]["rank"] == 1
-    assert payload["rankings"]["rows"][0]["out_of"] is None
-    assert payload["rankings"]["rows"][0]["rank_percent"] is None
-    assert payload["rankings"]["rows"][0]["server_name"] == "Illidan"
-    assert payload["rankings"]["rows"][0]["server_region"] == "US"
-    assert payload["rankings"]["rows"][0]["guild_name"] == "Liquid"
-    assert payload["rankings"]["rows"][0]["start_time"] == 111
-    assert payload["rankings"]["rows"][0]["fight_id"] == 1
-    assert payload["rankings"]["rows"][0]["report_url"] == "https://www.warcraftlogs.com/reports/abcd1234#fight=1"
-    assert payload["rankings"]["rows"][0]["has_combatant_info"] is True
-    assert payload["rankings"]["rows"][0]["other_players_count"] == 2
-    assert payload["rankings"]["rows"][0]["class_spec_identity"]["identity"] == {"actor_class": "druid", "spec": "balance"}
+    assert payload["data"]["encounter"]["name"] == "Dimensius, the All-Devouring"
+    assert payload["data"]["rankings"]["count"] == 1
+    assert payload["data"]["rankings"]["page_count"] == 2
+    assert payload["data"]["rankings"]["truncated"] is True
+    assert payload["data"]["rankings"]["has_more_pages"] is True
+    assert payload["data"]["rankings"]["rows"][0]["name"] == "Moonkinone"
+    assert payload["data"]["rankings"]["rows"][0]["rank"] == 1
+    assert payload["data"]["rankings"]["rows"][0]["out_of"] is None
+    assert payload["data"]["rankings"]["rows"][0]["rank_percent"] is None
+    assert payload["data"]["rankings"]["rows"][0]["server_name"] == "Illidan"
+    assert payload["data"]["rankings"]["rows"][0]["server_region"] == "US"
+    assert payload["data"]["rankings"]["rows"][0]["guild_name"] == "Liquid"
+    assert payload["data"]["rankings"]["rows"][0]["start_time"] == 111
+    assert payload["data"]["rankings"]["rows"][0]["fight_id"] == 1
+    assert payload["data"]["rankings"]["rows"][0]["report_url"] == "https://www.warcraftlogs.com/reports/abcd1234#fight=1"
+    assert payload["data"]["rankings"]["rows"][0]["has_combatant_info"] is True
+    assert payload["data"]["rankings"]["rows"][0]["other_players_count"] == 2
+    assert payload["data"]["rankings"]["rows"][0]["class_spec_identity"]["identity"] == {"actor_class": "druid", "spec": "balance"}
 
 
 def test_warcraftlogs_encounter_rankings_uses_selected_site_for_report_urls(monkeypatch) -> None:
@@ -3100,7 +3129,7 @@ def test_warcraftlogs_encounter_rankings_uses_selected_site_for_report_urls(monk
     )
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["rankings"]["rows"][0]["report_url"] == "https://classic.warcraftlogs.com/reports/abcd1234#fight=1"
+    assert payload["data"]["rankings"]["rows"][0]["report_url"] == "https://classic.warcraftlogs.com/reports/abcd1234#fight=1"
 
 
 def test_warcraftlogs_encounter_rankings_normalizes_slug_filters(monkeypatch) -> None:
@@ -3149,8 +3178,8 @@ def test_warcraftlogs_encounter_rankings_normalizes_slug_filters(monkeypatch) ->
     payload = json.loads(result.stdout)
     assert payload["query"]["class_name"] == "druid"
     assert payload["query"]["spec_name"] == "balance"
-    assert payload["rankings"]["rows"][0]["class_name"] == "Druid"
-    assert payload["rankings"]["rows"][0]["spec_name"] == "Balance"
+    assert payload["data"]["rankings"]["rows"][0]["class_name"] == "Druid"
+    assert payload["data"]["rankings"]["rows"][0]["spec_name"] == "Balance"
 
 
 def test_warcraftlogs_encounter_rankings_derives_page_offset_ranks(monkeypatch) -> None:
@@ -3198,11 +3227,11 @@ def test_warcraftlogs_encounter_rankings_derives_page_offset_ranks(monkeypatch) 
     )
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["rankings"]["page"] == 2
-    assert payload["rankings"]["page_count"] == 1
-    assert payload["rankings"]["has_more_pages"] is False
-    assert payload["rankings"]["rows"][0]["name"] == "Moonkinthree"
-    assert payload["rankings"]["rows"][0]["rank"] == 101
+    assert payload["data"]["rankings"]["page"] == 2
+    assert payload["data"]["rankings"]["page_count"] == 1
+    assert payload["data"]["rankings"]["has_more_pages"] is False
+    assert payload["data"]["rankings"]["rows"][0]["name"] == "Moonkinthree"
+    assert payload["data"]["rankings"]["rows"][0]["rank"] == 101
 
 
 def test_warcraftlogs_encounter_rankings_surfaces_embedded_provider_errors(monkeypatch) -> None:
@@ -3291,7 +3320,7 @@ def test_warcraftlogs_encounter_rankings_accepts_matching_boss_id_and_name(monke
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["query"]["boss_id"] == 3012
-    assert payload["encounter"]["name"] == "Dimensius, the All-Devouring"
+    assert payload["data"]["encounter"]["name"] == "Dimensius, the All-Devouring"
 
 
 def test_warcraftlogs_ability_usage_summary_returns_sampled_cast_summary(monkeypatch) -> None:
@@ -3317,26 +3346,26 @@ def test_warcraftlogs_ability_usage_summary_returns_sampled_cast_summary(monkeyp
     payload = json.loads(result.stdout)
     assert payload["kind"] == "ability_usage_summary"
     assert payload["query"]["ability_id"] == 20473
-    assert payload["freshness"]["sampled_at"].endswith("Z")
-    assert payload["freshness"]["cache_ttl_seconds"] == 86400
-    assert payload["cache_provenance"]["finished"] is True
-    assert payload["cache_provenance"]["cache_ttl_seconds"] == 86400
-    assert payload["sample_scope"]["ranking_basis"] == "sampled_fastest_kills"
-    assert payload["citations"]["sample_reports"] == [
+    assert payload["data"]["freshness"]["sampled_at"].endswith("Z")
+    assert payload["data"]["freshness"]["cache_ttl_seconds"] == 86400
+    assert payload["data"]["cache_provenance"]["finished"] is True
+    assert payload["data"]["cache_provenance"]["cache_ttl_seconds"] == 86400
+    assert payload["data"]["sample_scope"]["ranking_basis"] == "sampled_fastest_kills"
+    assert payload["data"]["citations"]["sample_reports"] == [
         {
             "report_code": "abcd1234",
             "fight_id": 1,
             "report_url": "https://www.warcraftlogs.com/reports/abcd1234#fight=1",
         }
     ]
-    assert payload["ability"]["game_id"] == 20473
-    assert payload["ability"]["name"] == "Holy Shock"
-    assert payload["usage"]["total_casts"] == 2
-    assert payload["usage"]["kills_with_any_usage_count"] == 1
-    assert payload["usage"]["kills_with_any_usage_percent"] == 100.0
-    assert payload["kills_preview"][0]["casts"]["count"] == 2
-    assert payload["kills_preview"][0]["casts"]["sources"][0]["count"] == 2
-    assert payload["kills_preview"][0]["casts"]["sources"][0]["source"]["name"] == "Auropower"
+    assert payload["data"]["ability"]["game_id"] == 20473
+    assert payload["data"]["ability"]["name"] == "Holy Shock"
+    assert payload["data"]["usage"]["total_casts"] == 2
+    assert payload["data"]["usage"]["kills_with_any_usage_count"] == 1
+    assert payload["data"]["usage"]["kills_with_any_usage_percent"] == 100.0
+    assert payload["data"]["kills_preview"][0]["casts"]["count"] == 2
+    assert payload["data"]["kills_preview"][0]["casts"]["sources"][0]["count"] == 2
+    assert payload["data"]["kills_preview"][0]["casts"]["sources"][0]["source"]["name"] == "Auropower"
 
 
 def test_warcraftlogs_sampled_citations_use_selected_site_for_report_urls(monkeypatch) -> None:
@@ -3360,7 +3389,7 @@ def test_warcraftlogs_sampled_citations_use_selected_site_for_report_urls(monkey
     )
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["citations"]["sample_reports"][0]["report_url"] == "https://fresh.warcraftlogs.com/reports/abcd1234#fight=1"
+    assert payload["data"]["citations"]["sample_reports"][0]["report_url"] == "https://fresh.warcraftlogs.com/reports/abcd1234#fight=1"
 
 
 def test_warcraftlogs_comp_samples_returns_sampled_rosters_and_class_presence(monkeypatch) -> None:
@@ -3383,19 +3412,19 @@ def test_warcraftlogs_comp_samples_returns_sampled_rosters_and_class_presence(mo
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["kind"] == "comp_samples"
-    assert payload["freshness"]["sampled_at"].endswith("Z")
-    assert payload["freshness"]["cache_ttl_seconds"] == 86400
-    assert payload["cache_provenance"]["cache_ttl_seconds"] == 86400
-    assert payload["sample_scope"]["ranking_basis"] == "sampled_fastest_kills"
-    assert payload["citations"]["sample_reports"][0]["report_url"] == "https://www.warcraftlogs.com/reports/abcd1234#fight=1"
-    assert payload["sample"]["filtered_kill_count"] == 1
-    assert payload["sample"]["sampled_player_count"] == 2
-    assert payload["class_presence"][0]["class_name"] == "Paladin"
-    assert payload["class_presence"][0]["kill_presence_count"] == 1
-    assert payload["composition_signatures"][0]["class_signature"] == "Paladinx1|Warriorx1"
-    assert payload["kills"][0]["composition"]["role_counts"]["dps"] == 1
-    assert payload["kills"][0]["composition"]["role_counts"]["tanks"] == 1
-    assert payload["kills"][0]["player_details"]["players"][0]["identity_contract"]["status"] == "canonical"
+    assert payload["data"]["freshness"]["sampled_at"].endswith("Z")
+    assert payload["data"]["freshness"]["cache_ttl_seconds"] == 86400
+    assert payload["data"]["cache_provenance"]["cache_ttl_seconds"] == 86400
+    assert payload["data"]["sample_scope"]["ranking_basis"] == "sampled_fastest_kills"
+    assert payload["data"]["citations"]["sample_reports"][0]["report_url"] == "https://www.warcraftlogs.com/reports/abcd1234#fight=1"
+    assert payload["data"]["sample"]["filtered_kill_count"] == 1
+    assert payload["data"]["sample"]["sampled_player_count"] == 2
+    assert payload["data"]["class_presence"][0]["class_name"] == "Paladin"
+    assert payload["data"]["class_presence"][0]["kill_presence_count"] == 1
+    assert payload["data"]["composition_signatures"][0]["class_signature"] == "Paladinx1|Warriorx1"
+    assert payload["data"]["kills"][0]["composition"]["role_counts"]["dps"] == 1
+    assert payload["data"]["kills"][0]["composition"]["role_counts"]["tanks"] == 1
+    assert payload["data"]["kills"][0]["player_details"]["players"][0]["identity_contract"]["status"] == "canonical"
 
 
 def test_warcraftlogs_cross_report_commands_require_boss_scope(monkeypatch) -> None:
@@ -3420,12 +3449,12 @@ def test_warcraftlogs_report_encounter_accepts_report_url(monkeypatch) -> None:
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["kind"] == "report_encounter"
-    assert payload["reference"]["code"] == "abcd1234"
-    assert payload["reference"]["fight_id"] == 1
-    assert payload["fight"]["encounter_id"] == 3012
-    assert payload["encounter_identity"]["status"] == "canonical"
-    assert payload["encounter_identity"]["identity"]["encounter_id"] == 3012
-    assert payload["stability"]["cache_safe"] is True
+    assert payload["data"]["reference"]["code"] == "abcd1234"
+    assert payload["data"]["reference"]["fight_id"] == 1
+    assert payload["data"]["fight"]["encounter_id"] == 3012
+    assert payload["data"]["encounter_identity"]["status"] == "canonical"
+    assert payload["data"]["encounter_identity"]["identity"]["encounter_id"] == 3012
+    assert payload["data"]["stability"]["cache_safe"] is True
 
 
 def test_warcraftlogs_report_encounter_requires_explicit_fight_scope(monkeypatch) -> None:
@@ -3447,11 +3476,11 @@ def test_warcraftlogs_report_encounter_players_scopes_to_selected_fight(monkeypa
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["kind"] == "report_encounter_players"
-    assert payload["reference"]["fight_id"] == 1
-    assert payload["player_details"]["counts"]["total"] == 2
-    assert payload["player_details"]["roles"]["dps"][0]["name"] == "Auropower"
-    assert payload["player_details"]["roles"]["dps"][0]["identity_contract"]["status"] == "canonical"
-    assert payload["player_details"]["roles"]["dps"][0]["class_spec_identity"]["identity"]["spec"] == "retribution"
+    assert payload["data"]["reference"]["fight_id"] == 1
+    assert payload["data"]["player_details"]["counts"]["total"] == 2
+    assert payload["data"]["player_details"]["roles"]["dps"][0]["name"] == "Auropower"
+    assert payload["data"]["player_details"]["roles"]["dps"][0]["identity_contract"]["status"] == "canonical"
+    assert payload["data"]["player_details"]["roles"]["dps"][0]["class_spec_identity"]["identity"]["spec"] == "retribution"
 
 
 def test_warcraftlogs_report_player_talents_emits_raw_transport_packet(monkeypatch) -> None:
@@ -3474,20 +3503,20 @@ def test_warcraftlogs_report_player_talents_emits_raw_transport_packet(monkeypat
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["kind"] == "report_player_talents"
-    assert payload["reference"]["fight_id"] == 1
-    assert payload["player"]["id"] == 9
-    assert payload["talent_transport_packet"]["kind"] == "talent_transport_packet"
-    assert payload["talent_transport_packet"]["transport_status"] == "raw_only"
-    assert payload["talent_transport_packet"]["build_identity"]["class_spec_identity"]["identity"] == {
+    assert payload["data"]["reference"]["fight_id"] == 1
+    assert payload["data"]["player"]["id"] == 9
+    assert payload["data"]["talent_transport_packet"]["kind"] == "talent_transport_packet"
+    assert payload["data"]["talent_transport_packet"]["transport_status"] == "raw_only"
+    assert payload["data"]["talent_transport_packet"]["build_identity"]["class_spec_identity"]["identity"] == {
         "actor_class": "paladin",
         "spec": "retribution",
     }
-    assert payload["talent_transport_packet"]["raw_evidence"]["talent_tree_entries"][0] == {
+    assert payload["data"]["talent_transport_packet"]["raw_evidence"]["talent_tree_entries"][0] == {
         "entry": 103324,
         "node_id": 82244,
         "rank": 1,
     }
-    assert payload["talent_transport_packet"]["validation"]["status"] == "not_validated"
+    assert payload["data"]["talent_transport_packet"]["validation"]["status"] == "not_validated"
 
 
 def test_warcraftlogs_report_player_talents_passes_allow_unlisted(monkeypatch) -> None:
@@ -3546,7 +3575,7 @@ def test_warcraftlogs_report_player_talents_passes_allow_unlisted(monkeypatch) -
     )
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["talent_transport_packet"]["transport_status"] == "raw_only"
+    assert payload["data"]["talent_transport_packet"]["transport_status"] == "raw_only"
 
 
 def test_warcraftlogs_report_player_talents_rejects_missing_actor(monkeypatch) -> None:
@@ -3726,9 +3755,9 @@ def test_warcraftlogs_report_player_talents_emits_validated_split_transport(monk
     )
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["talent_transport_packet"]["transport_status"] == "validated"
-    assert payload["talent_transport_packet"]["transport_forms"]["simc_split_talents"]["spec_talents"] == "109839:1"
-    assert payload["talent_transport_packet"]["validation"]["status"] == "validated"
+    assert payload["data"]["talent_transport_packet"]["transport_status"] == "validated"
+    assert payload["data"]["talent_transport_packet"]["transport_forms"]["simc_split_talents"]["spec_talents"] == "109839:1"
+    assert payload["data"]["talent_transport_packet"]["validation"]["status"] == "validated"
 
 
 def test_warcraftlogs_report_player_talents_can_write_transport_packet(monkeypatch, tmp_path: Path) -> None:
@@ -3759,7 +3788,7 @@ def test_warcraftlogs_report_player_talents_can_write_transport_packet(monkeypat
     )
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["written_packet_path"] == str(out_path.resolve())
+    assert payload["data"]["written_packet_path"] == str(out_path.resolve())
 
     written_packet = json.loads(out_path.read_text())
     assert written_packet["kind"] == "talent_transport_packet"
@@ -3831,15 +3860,15 @@ def test_warcraftlogs_report_encounter_casts_summarizes_cast_rows(monkeypatch) -
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["kind"] == "report_encounter_casts"
-    assert payload["casts"]["event_count"] == 3
-    assert payload["casts"]["by_source"][0]["source"]["name"] == "Auropower"
-    assert payload["casts"]["by_target"][0]["target"]["name"] == "Dimensius, the All-Devouring"
-    assert payload["casts"]["by_ability"][0]["ability"]["name"] == "Holy Shock"
-    assert payload["casts"]["by_source_target"][0]["target"]["name"] == "Dimensius, the All-Devouring"
-    assert payload["casts"]["by_source_target"][1]["target"]["name"] == "Unstable Voidling"
-    assert payload["casts"]["preview"][0]["relative_time_ms"] == 20000.0
-    assert payload["casts"]["preview"][0]["source"]["identity_contract"]["status"] == "canonical"
-    assert payload["casts"]["preview"][0]["ability"]["identity_contract"]["status"] == "canonical"
+    assert payload["data"]["casts"]["event_count"] == 3
+    assert payload["data"]["casts"]["by_source"][0]["source"]["name"] == "Auropower"
+    assert payload["data"]["casts"]["by_target"][0]["target"]["name"] == "Dimensius, the All-Devouring"
+    assert payload["data"]["casts"]["by_ability"][0]["ability"]["name"] == "Holy Shock"
+    assert payload["data"]["casts"]["by_source_target"][0]["target"]["name"] == "Dimensius, the All-Devouring"
+    assert payload["data"]["casts"]["by_source_target"][1]["target"]["name"] == "Unstable Voidling"
+    assert payload["data"]["casts"]["preview"][0]["relative_time_ms"] == 20000.0
+    assert payload["data"]["casts"]["preview"][0]["source"]["identity_contract"]["status"] == "canonical"
+    assert payload["data"]["casts"]["preview"][0]["ability"]["identity_contract"]["status"] == "canonical"
 
 
 def test_warcraftlogs_report_encounter_casts_supports_windows_and_filters(monkeypatch) -> None:
@@ -3914,11 +3943,11 @@ def test_warcraftlogs_report_encounter_buffs_summarizes_buff_rows(monkeypatch) -
     assert payload["query"]["preview_limit"] == 20
     assert payload["query"]["start_time"] == 110000.0
     assert payload["query"]["end_time"] == 150000.0
-    assert payload["buffs"]["total"] == 2
-    assert payload["buffs"]["preview_truncated"] is False
-    assert payload["buffs"]["view_by"] == "Source"
-    assert len(payload["buffs"]["preview"]) == 2
-    top_row = payload["buffs"]["preview"][0]
+    assert payload["data"]["buffs"]["total"] == 2
+    assert payload["data"]["buffs"]["preview_truncated"] is False
+    assert payload["data"]["buffs"]["view_by"] == "Source"
+    assert len(payload["data"]["buffs"]["preview"]) == 2
+    top_row = payload["data"]["buffs"]["preview"][0]
     # aura-aggregate rows are not actor-scoped: source is a uniform placeholder, aura comes from the row
     assert top_row["source"]["id"] is None
     assert top_row["source"]["name"] is None
@@ -3952,9 +3981,9 @@ def test_warcraftlogs_report_encounter_buffs_honors_preview_limit(monkeypatch) -
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["query"]["preview_limit"] == 1
-    assert payload["buffs"]["total"] == 2
-    assert payload["buffs"]["preview_truncated"] is True
-    assert len(payload["buffs"]["preview"]) == 1
+    assert payload["data"]["buffs"]["total"] == 2
+    assert payload["data"]["buffs"]["preview_truncated"] is True
+    assert len(payload["data"]["buffs"]["preview"]) == 1
 
 
 def test_warcraftlogs_report_encounter_buffs_populates_identity_contracts(monkeypatch) -> None:
@@ -3975,7 +4004,7 @@ def test_warcraftlogs_report_encounter_buffs_populates_identity_contracts(monkey
     )
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    top_row = payload["buffs"]["preview"][0]
+    top_row = payload["data"]["buffs"]["preview"][0]
     # Aura-aggregate row: aura identity is canonical (game_id from the row), source carries an
     # identity contract that explains why it has no actor scope.
     aura_contract = top_row["aura"]["identity_contract"]
@@ -3999,8 +4028,8 @@ def test_warcraftlogs_report_encounter_buffs_derives_aura_from_ability_filter(mo
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["query"]["ability_id"] == 20473.0
-    assert payload["buffs"]["total"] == 2
-    top_row = payload["buffs"]["preview"][0]
+    assert payload["data"]["buffs"]["total"] == 2
+    top_row = payload["data"]["buffs"]["preview"][0]
     # actor-scoped row -> real source identity
     assert top_row["source"]["name"] == "Auropower"
     assert top_row["source"]["identity_contract"]["status"] == "canonical"
@@ -4046,8 +4075,8 @@ def test_warcraftlogs_report_encounter_buffs_handles_live_auras_shape(monkeypatc
     )
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["buffs"]["total"] == 1
-    row = payload["buffs"]["preview"][0]
+    assert payload["data"]["buffs"]["total"] == 1
+    row = payload["data"]["buffs"]["preview"][0]
     assert row["source"]["id"] is None
     assert "identity_contract" in row["source"]
     assert row["aura"]["name"] == "Berserker Stance"
@@ -4082,12 +4111,12 @@ def test_warcraftlogs_report_encounter_aura_summary_returns_typed_rows(monkeypat
     assert payload["query"]["view_by"] == "Source"
     assert payload["query"]["start_time"] == 110000.0
     assert payload["query"]["end_time"] == 150000.0
-    assert payload["aura"]["name"] == "Holy Shock"
-    assert payload["aura_summary"]["entry_count"] == 2
-    assert payload["aura_summary"]["rows"][0]["source"]["name"] == "Auropower"
-    assert payload["aura_summary"]["rows"][0]["reported_total"] == 98.7
-    assert payload["aura_summary"]["rows"][0]["reported_active_time"] == 74000
-    assert payload["aura_summary"]["rows"][0]["source"]["identity_contract"]["status"] == "canonical"
+    assert payload["data"]["aura"]["name"] == "Holy Shock"
+    assert payload["data"]["aura_summary"]["entry_count"] == 2
+    assert payload["data"]["aura_summary"]["rows"][0]["source"]["name"] == "Auropower"
+    assert payload["data"]["aura_summary"]["rows"][0]["reported_total"] == 98.7
+    assert payload["data"]["aura_summary"]["rows"][0]["reported_active_time"] == 74000
+    assert payload["data"]["aura_summary"]["rows"][0]["source"]["identity_contract"]["status"] == "canonical"
 
 
 def test_warcraftlogs_report_encounter_aura_compare_returns_window_deltas(monkeypatch) -> None:
@@ -4115,10 +4144,10 @@ def test_warcraftlogs_report_encounter_aura_compare_returns_window_deltas(monkey
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["kind"] == "report_encounter_aura_compare"
-    assert payload["windows"][0]["query"]["start_time"] == 110000.0
-    assert payload["windows"][1]["query"]["start_time"] == 150000.0
-    assert payload["comparison"]["matching_rule"] == "same_report_same_fight_same_ability_explicit_windows"
-    auropower_row = next(row for row in payload["comparison"]["rows"] if row["source"]["name"] == "Auropower")
+    assert payload["data"]["windows"][0]["query"]["start_time"] == 110000.0
+    assert payload["data"]["windows"][1]["query"]["start_time"] == 150000.0
+    assert payload["data"]["comparison"]["matching_rule"] == "same_report_same_fight_same_ability_explicit_windows"
+    auropower_row = next(row for row in payload["data"]["comparison"]["rows"] if row["source"]["name"] == "Auropower")
     assert auropower_row["left_reported_total"] == 98.7
     assert auropower_row["right_reported_total"] == 65.0
     assert auropower_row["reported_total_delta"] == -33.7
@@ -4136,7 +4165,7 @@ def test_warcraftlogs_report_encounter_damage_breakdown_scopes_table_query(monke
     assert payload["kind"] == "report_encounter_damage_breakdown"
     assert payload["query"]["data_type"] == "DamageDone"
     assert payload["query"]["fight_ids"] == [1]
-    assert payload["table"]["entries"][0]["name"] == "Auropower"
+    assert payload["data"]["table"]["entries"][0]["name"] == "Auropower"
 
 
 def test_warcraftlogs_report_encounter_damage_source_summary_returns_typed_rows(monkeypatch) -> None:
@@ -4150,10 +4179,10 @@ def test_warcraftlogs_report_encounter_damage_source_summary_returns_typed_rows(
     payload = json.loads(result.stdout)
     assert payload["kind"] == "report_encounter_damage_source_summary"
     assert payload["query"]["view_by"] == "Source"
-    assert payload["damage_summary"]["entry_count"] == 2
-    assert payload["damage_summary"]["rows"][0]["source"]["name"] == "Auropower"
-    assert payload["damage_summary"]["rows"][0]["reported_total"] == 123456
-    assert payload["damage_summary"]["rows"][0]["source"]["identity_contract"]["status"] == "canonical"
+    assert payload["data"]["damage_summary"]["entry_count"] == 2
+    assert payload["data"]["damage_summary"]["rows"][0]["source"]["name"] == "Auropower"
+    assert payload["data"]["damage_summary"]["rows"][0]["reported_total"] == 123456
+    assert payload["data"]["damage_summary"]["rows"][0]["source"]["identity_contract"]["status"] == "canonical"
 
 
 def test_warcraftlogs_report_encounter_damage_target_summary_returns_typed_rows(monkeypatch) -> None:
@@ -4167,10 +4196,10 @@ def test_warcraftlogs_report_encounter_damage_target_summary_returns_typed_rows(
     payload = json.loads(result.stdout)
     assert payload["kind"] == "report_encounter_damage_target_summary"
     assert payload["query"]["view_by"] == "Target"
-    assert payload["damage_summary"]["entry_count"] == 2
-    assert payload["damage_summary"]["rows"][0]["target"]["name"] == "Dimensius, the All-Devouring"
-    assert payload["damage_summary"]["rows"][0]["reported_total"] == 210000
-    assert payload["damage_summary"]["rows"][0]["target"]["identity_contract"]["status"] == "canonical"
+    assert payload["data"]["damage_summary"]["entry_count"] == 2
+    assert payload["data"]["damage_summary"]["rows"][0]["target"]["name"] == "Dimensius, the All-Devouring"
+    assert payload["data"]["damage_summary"]["rows"][0]["reported_total"] == 210000
+    assert payload["data"]["damage_summary"]["rows"][0]["target"]["identity_contract"]["status"] == "canonical"
 
 
 def test_warcraftlogs_report_encounter_damage_source_summary_handles_live_wrapped_table_shape(monkeypatch) -> None:
@@ -4208,9 +4237,9 @@ def test_warcraftlogs_report_encounter_damage_source_summary_handles_live_wrappe
     )
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["damage_summary"]["entry_count"] == 2
-    assert payload["damage_summary"]["rows"][0]["source"]["name"] == "Auropower"
-    assert payload["damage_summary"]["rows"][0]["reported_total"] == 45791437
+    assert payload["data"]["damage_summary"]["entry_count"] == 2
+    assert payload["data"]["damage_summary"]["rows"][0]["source"]["name"] == "Auropower"
+    assert payload["data"]["damage_summary"]["rows"][0]["reported_total"] == 45791437
 
 
 def test_warcraftlogs_report_encounter_aura_summary_handles_live_auras_shape(monkeypatch) -> None:
@@ -4257,8 +4286,8 @@ def test_warcraftlogs_report_encounter_aura_summary_handles_live_auras_shape(mon
     )
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["aura_summary"]["entry_count"] == 1
-    row = payload["aura_summary"]["rows"][0]
+    assert payload["data"]["aura_summary"]["entry_count"] == 1
+    row = payload["data"]["aura_summary"]["rows"][0]
     assert row["source"]["name"] == "Auropower"
     assert row["reported_total_uptime"] == 372
     assert row["reported_total_uses"] == 3
@@ -4293,9 +4322,9 @@ def test_warcraftlogs_report_events_hints_when_data_type_missing_returns_null_ev
     assert result.exit_code == 0
 
     payload = json.loads(result.output)
-    assert payload["events"] is None
-    assert "notes" in payload
-    assert any("--data-type" in note for note in payload["notes"])
+    assert payload["data"]["events"] is None
+    assert "notes" in payload["data"]
+    assert any("--data-type" in note for note in payload["data"]["notes"])
 
 
 def test_warcraftlogs_report_events_omits_hint_when_data_type_supplied(monkeypatch) -> None:
@@ -4318,8 +4347,8 @@ def test_warcraftlogs_report_events_omits_hint_when_data_type_supplied(monkeypat
     assert result.exit_code == 0
 
     payload = json.loads(result.output)
-    assert payload["events"] is None
-    assert "notes" not in payload
+    assert payload["data"]["events"] is None
+    assert "notes" not in payload["data"]
 
 
 def test_warcraftlogs_graphql_merges_explicit_vars_and_declared_scope_helpers(monkeypatch) -> None:
@@ -4684,10 +4713,9 @@ def test_warcraftlogs_graphql_introspection_uses_named_operation(monkeypatch) ->
     payload = json.loads(result.output)
     assert captured["operation_name"] == "IntrospectionQuery"
     assert "__schema" in captured["query"]
-    assert payload["introspection"]["queryType"]["name"] == "Query"
-    # Introspection results live under `introspection`/`graphql` and are mirrored into `data`.
-    assert payload["data"]["introspection"]["queryType"]["name"] == "Query"
-    assert payload["graphql"]["queryType"]["name"] == "Query"
+    # `data` is the GraphQL result itself, as it is for a typed query.
+    assert payload["data"] == {"__schema": {"queryType": {"name": "Query"}}}
+    assert set(payload) == ENVELOPE_KEYS - {"error"}
 
 
 def test_warcraftlogs_graphql_surfaces_partial_warnings(monkeypatch) -> None:
@@ -4716,9 +4744,9 @@ def test_warcraftlogs_graphql_surfaces_partial_warnings(monkeypatch) -> None:
 
     assert result.exit_code == 0
     payload = json.loads(result.output)
-    assert payload["data"] == {"reportData": {"report": {"code": "abcd1234"}}}
-    assert payload["graphql_warnings"][0]["message"] == "partial report path failed"
-    assert payload["notes"][0].startswith("warcraft logs returned partial errors")
+    assert payload["data"]["reportData"] == {"report": {"code": "abcd1234"}}
+    assert payload["data"]["graphql_warnings"][0]["message"] == "partial report path failed"
+    assert payload["data"]["notes"][0].startswith("warcraft logs returned partial errors")
 
 
 def test_warcraftlogs_character_rankings_surfaces_provider_permission_errors(monkeypatch) -> None:
@@ -4761,9 +4789,9 @@ def test_warcraftlogs_character_rankings_surfaces_provider_permission_errors(mon
     )
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["character_rankings"]["summary"] is None
-    assert payload["character_rankings"]["error"] == "You do not have permission to see this character's rankings."
-    assert payload["character_rankings"]["rankings"] == []
+    assert payload["data"]["character_rankings"]["summary"] is None
+    assert payload["data"]["character_rankings"]["error"] == "You do not have permission to see this character's rankings."
+    assert payload["data"]["character_rankings"]["rankings"] == []
 
 
 def test_warcraftlogs_guild_attendance_surfaces_partial_warnings_as_notes(monkeypatch) -> None:
@@ -4791,58 +4819,8 @@ def test_warcraftlogs_guild_attendance_surfaces_partial_warnings_as_notes(monkey
     )
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["graphql_warnings"][0]["message"].startswith("Cannot return null")
-    assert any("partial errors" in note for note in payload["notes"])
-
-
-def test_warcraftlogs_emit_helper_folds_client_warnings_into_payload(monkeypatch: pytest.MonkeyPatch) -> None:
-    from warcraftlogs_cli import main as wcl_main
-
-    class _WarningClient:
-        last_warnings = [{"message": "internal server error", "path": ["report", "table"]}]
-
-    captured: dict[str, dict[str, Any]] = {}
-
-    def _capture(ctx: typer.Context, payload: dict[str, Any], *, err: bool = False) -> None:
-        captured["payload"] = payload
-
-    monkeypatch.setattr(wcl_main, "emit", _capture)
-    ctx = typer.Context(typer.main.get_command(warcraftlogs_app), obj=wcl_main.RuntimeConfig())
-    wcl_main._emit(ctx, {"ok": True, "kind": "x"}, client=_WarningClient())
-
-    payload = captured["payload"]
-    assert payload["ok"] is True
-    assert payload["graphql_warnings"][0]["message"] == "internal server error"
-    assert any("partial errors" in note for note in payload["notes"])
-
-
-def test_warcraftlogs_emit_helper_passes_payload_through_when_no_warnings(monkeypatch: pytest.MonkeyPatch) -> None:
-    from warcraftlogs_cli import main as wcl_main
-
-    class _CleanClient:
-        last_warnings: list[dict] = []
-
-    captured: dict[str, dict[str, Any]] = {}
-
-    def _capture(ctx: typer.Context, payload: dict[str, Any], *, err: bool = False) -> None:
-        captured["payload"] = payload
-
-    monkeypatch.setattr(wcl_main, "emit", _capture)
-    ctx = typer.Context(typer.main.get_command(warcraftlogs_app), obj=wcl_main.RuntimeConfig())
-    wcl_main._emit(ctx, {"ok": True, "kind": "x"}, client=_CleanClient())
-
-    payload = captured["payload"]
-    # No client warnings to fold in, so the only additions are the shared envelope keys.
-    assert payload == {
-        "ok": True,
-        "kind": "x",
-        "provider": "warcraftlogs",
-        "command": "",
-        "schema_version": "1",
-        "query": None,
-        "provenance": {},
-        "data": {},
-    }
+    assert payload["data"]["graphql_warnings"][0]["message"].startswith("Cannot return null")
+    assert any("partial errors" in note for note in payload["data"]["notes"])
 
 
 def test_warcraftlogs_character_rankings_surfaces_partial_warnings_as_notes(monkeypatch) -> None:
@@ -4874,8 +4852,8 @@ def test_warcraftlogs_character_rankings_surfaces_partial_warnings_as_notes(monk
     )
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["graphql_warnings"][0]["message"] == "Internal server error on rankings"
-    assert any("partial errors" in note for note in payload["notes"])
+    assert payload["data"]["graphql_warnings"][0]["message"] == "Internal server error on rankings"
+    assert any("partial errors" in note for note in payload["data"]["notes"])
 
 
 def test_warcraftlogs_auth_prefers_local_env_before_xdg_provider_env(monkeypatch, tmp_path) -> None:
@@ -5420,7 +5398,7 @@ def test_warcraftlogs_report_encounter_emits_cache_provenance(monkeypatch) -> No
     result = runner.invoke(warcraftlogs_app, ["report-encounter", "abcd1234", "--fight-id", "1"])
     assert result.exit_code == 0, result.output
     payload = json.loads(result.stdout)
-    provenance = payload["report_encounter"]["cache_provenance"]
+    provenance = payload["data"]["cache_provenance"]
     # The pinned fake report has endTime > 0 (finished).
     assert provenance["finished"] is True
     assert provenance["live"] is False
@@ -6293,7 +6271,7 @@ def test_warcraftlogs_auth_status_flags_missing_view_user_profile_scope(monkeypa
     result = runner.invoke(warcraftlogs_app, ["auth", "status"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    user_api = payload["auth"]["user_api_access"]
+    user_api = payload["data"]["auth"]["user_api_access"]
     assert user_api["scopes"]["has_view_user_profile"] is False
     assert "view-user-profile" in user_api["scope_warning"]
 
@@ -6323,7 +6301,7 @@ def test_warcraftlogs_auth_status_no_scope_warning_when_both_scopes_present(monk
     result = runner.invoke(warcraftlogs_app, ["auth", "status"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    user_api = payload["auth"]["user_api_access"]
+    user_api = payload["data"]["auth"]["user_api_access"]
     assert user_api["scopes"]["has_view_user_profile"] is True
     assert user_api["scopes"]["has_view_private_reports"] is True
     assert user_api["scope_warning"] is None
@@ -6354,7 +6332,7 @@ def test_warcraftlogs_auth_status_warns_when_only_view_user_profile_present(monk
     result = runner.invoke(warcraftlogs_app, ["auth", "status"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    user_api = payload["auth"]["user_api_access"]
+    user_api = payload["data"]["auth"]["user_api_access"]
     assert user_api["scopes"]["has_view_user_profile"] is True
     assert user_api["scopes"]["has_view_private_reports"] is False
     assert "view-private-reports" in user_api["scope_warning"]
@@ -6393,11 +6371,11 @@ def test_warcraftlogs_auth_login_token_exchange_surfaces_scope_warning_when_requ
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["step"] == "token_exchanged"
-    assert payload["scopes"]["granted"] == ["reports"]
-    assert payload["scopes"]["requested"] == []
-    assert payload["scopes"]["has_view_user_profile"] is False
-    assert "view-user-profile" in payload["scope_warning"]
+    assert payload["data"]["step"] == "token_exchanged"
+    assert payload["data"]["scopes"]["granted"] == ["reports"]
+    assert payload["data"]["scopes"]["requested"] == []
+    assert payload["data"]["scopes"]["has_view_user_profile"] is False
+    assert "view-user-profile" in payload["data"]["scope_warning"]
 
 
 def test_warcraftlogs_auth_pkce_login_token_exchange_clears_warning_when_both_scopes_granted(monkeypatch, tmp_path) -> None:
@@ -6446,12 +6424,12 @@ def test_warcraftlogs_auth_pkce_login_token_exchange_clears_warning_when_both_sc
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["step"] == "token_exchanged"
-    assert payload["scopes"]["granted"] == ["view-user-profile", "view-private-reports"]
-    assert payload["scopes"]["requested"] == ["view-user-profile", "view-private-reports"]
-    assert payload["scopes"]["has_view_user_profile"] is True
-    assert payload["scopes"]["has_view_private_reports"] is True
-    assert payload["scope_warning"] is None
+    assert payload["data"]["step"] == "token_exchanged"
+    assert payload["data"]["scopes"]["granted"] == ["view-user-profile", "view-private-reports"]
+    assert payload["data"]["scopes"]["requested"] == ["view-user-profile", "view-private-reports"]
+    assert payload["data"]["scopes"]["has_view_user_profile"] is True
+    assert payload["data"]["scopes"]["has_view_private_reports"] is True
+    assert payload["data"]["scope_warning"] is None
 
 
 def test_warcraftlogs_auth_token_includes_scope_breakdown(monkeypatch, tmp_path) -> None:
@@ -6474,11 +6452,11 @@ def test_warcraftlogs_auth_token_includes_scope_breakdown(monkeypatch, tmp_path)
     result = runner.invoke(warcraftlogs_app, ["auth", "token"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["token"]["endpoint_family"] == "user"
-    assert payload["token"]["scopes"]["granted"] == ["view-user-profile", "view-private-reports"]
-    assert payload["token"]["scopes"]["has_view_user_profile"] is True
-    assert payload["token"]["scopes"]["has_view_private_reports"] is True
-    assert payload["token"]["scope_warning"] is None
+    assert payload["data"]["token"]["endpoint_family"] == "user"
+    assert payload["data"]["token"]["scopes"]["granted"] == ["view-user-profile", "view-private-reports"]
+    assert payload["data"]["token"]["scopes"]["has_view_user_profile"] is True
+    assert payload["data"]["token"]["scopes"]["has_view_private_reports"] is True
+    assert payload["data"]["token"]["scope_warning"] is None
 
 
 def test_warcraftlogs_auth_token_warns_when_view_user_profile_missing(monkeypatch, tmp_path) -> None:
@@ -6501,9 +6479,9 @@ def test_warcraftlogs_auth_token_warns_when_view_user_profile_missing(monkeypatc
     result = runner.invoke(warcraftlogs_app, ["auth", "token"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["token"]["scopes"]["granted"] == []
-    assert payload["token"]["scopes"]["has_view_user_profile"] is False
-    assert "view-user-profile" in payload["token"]["scope_warning"]
+    assert payload["data"]["token"]["scopes"]["granted"] == []
+    assert payload["data"]["token"]["scopes"]["has_view_user_profile"] is False
+    assert "view-user-profile" in payload["data"]["token"]["scope_warning"]
 
 
 def test_warcraftlogs_auth_token_decodes_scopes_from_jwt_when_top_level_omitted(monkeypatch, tmp_path) -> None:
@@ -6526,10 +6504,10 @@ def test_warcraftlogs_auth_token_decodes_scopes_from_jwt_when_top_level_omitted(
     result = runner.invoke(warcraftlogs_app, ["auth", "token"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["token"]["scopes"]["granted"] == ["view-user-profile", "view-private-reports"]
-    assert payload["token"]["scopes"]["has_view_user_profile"] is True
-    assert payload["token"]["scopes"]["has_view_private_reports"] is True
-    assert payload["token"]["scope_warning"] is None
+    assert payload["data"]["token"]["scopes"]["granted"] == ["view-user-profile", "view-private-reports"]
+    assert payload["data"]["token"]["scopes"]["has_view_user_profile"] is True
+    assert payload["data"]["token"]["scopes"]["has_view_private_reports"] is True
+    assert payload["data"]["token"]["scope_warning"] is None
 
 
 def test_warcraftlogs_auth_token_warns_when_only_view_user_profile_in_jwt(monkeypatch, tmp_path) -> None:
@@ -6552,9 +6530,9 @@ def test_warcraftlogs_auth_token_warns_when_only_view_user_profile_in_jwt(monkey
     result = runner.invoke(warcraftlogs_app, ["auth", "token"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["token"]["scopes"]["has_view_user_profile"] is True
-    assert payload["token"]["scopes"]["has_view_private_reports"] is False
-    assert "view-private-reports" in payload["token"]["scope_warning"]
+    assert payload["data"]["token"]["scopes"]["has_view_user_profile"] is True
+    assert payload["data"]["token"]["scopes"]["has_view_private_reports"] is False
+    assert "view-private-reports" in payload["data"]["token"]["scope_warning"]
 
 
 def test_warcraftlogs_auth_login_token_exchange_decodes_jwt_scopes(monkeypatch, tmp_path) -> None:
@@ -6602,10 +6580,10 @@ def test_warcraftlogs_auth_login_token_exchange_decodes_jwt_scopes(monkeypatch, 
     )
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["scopes"]["granted"] == ["view-user-profile", "view-private-reports"]
-    assert payload["scopes"]["has_view_user_profile"] is True
-    assert payload["scopes"]["has_view_private_reports"] is True
-    assert payload["scope_warning"] is None
+    assert payload["data"]["scopes"]["granted"] == ["view-user-profile", "view-private-reports"]
+    assert payload["data"]["scopes"]["has_view_user_profile"] is True
+    assert payload["data"]["scopes"]["has_view_private_reports"] is True
+    assert payload["data"]["scope_warning"] is None
 
 
 def test_warcraftlogs_auth_token_survives_corrupt_state_file(monkeypatch, tmp_path) -> None:
@@ -6617,10 +6595,10 @@ def test_warcraftlogs_auth_token_survives_corrupt_state_file(monkeypatch, tmp_pa
     result = runner.invoke(warcraftlogs_app, ["auth", "token"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["token"]["endpoint_family"] == "client"
-    assert payload["token"]["scopes"]["granted"] == []
-    assert payload["token"]["scopes"]["has_view_user_profile"] is False
-    assert payload["token"]["scope_warning"] is None
+    assert payload["data"]["token"]["endpoint_family"] == "client"
+    assert payload["data"]["token"]["scopes"]["granted"] == []
+    assert payload["data"]["token"]["scopes"]["has_view_user_profile"] is False
+    assert payload["data"]["token"]["scope_warning"] is None
 
 
 def test_warcraftlogs_auth_token_no_warning_without_saved_user_token(monkeypatch, tmp_path) -> None:
@@ -6629,9 +6607,9 @@ def test_warcraftlogs_auth_token_no_warning_without_saved_user_token(monkeypatch
     result = runner.invoke(warcraftlogs_app, ["auth", "token"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["token"]["active_mode"] == "client_credentials"
-    assert payload["token"]["scopes"]["granted"] == []
-    assert payload["token"]["scope_warning"] is None
+    assert payload["data"]["token"]["active_mode"] == "client_credentials"
+    assert payload["data"]["token"]["scopes"]["granted"] == []
+    assert payload["data"]["token"]["scope_warning"] is None
 
 
 def test_warcraftlogs_auth_token_no_warning_for_client_credentials_only_state(monkeypatch, tmp_path) -> None:
@@ -6645,7 +6623,7 @@ def test_warcraftlogs_auth_token_no_warning_for_client_credentials_only_state(mo
     result = runner.invoke(warcraftlogs_app, ["auth", "token"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["token"]["scope_warning"] is None
+    assert payload["data"]["token"]["scope_warning"] is None
 
 
 def test_warcraftlogs_client_has_user_token_survives_corrupt_state_file(monkeypatch, tmp_path) -> None:
@@ -7332,6 +7310,7 @@ def test_warcraftlogs_report_player_details_rejects_a_slice_that_matches_no_figh
         (["report-events", "abcd1234", "--data-type", "casts", "--fight-id", "9999"], [9999]),
         (["report-events", "abcd1234", "--data-type", "casts", "--fight-id", "1", "--encounter-id", "3129"], [1]),
         (["report-events", "abcd1234", "--data-type", "casts", "--fight-id", "1", "--fight-id", "9999"], [9999]),
+        (["report-events", "abcd1234", "--data-type", "casts", "--fight-id", "1", "--difficulty", "3"], [1]),
         (["report-table", "abcd1234", "--fight-id", "9999"], [9999]),
         (["report-graph", "abcd1234", "--fight-id", "1", "--fight-id", "9999"], [9999]),
         (["report-rankings", "abcd1234", "--fight-id", "9999"], [9999]),

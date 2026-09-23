@@ -16,7 +16,7 @@ def test_article_follow_up_uses_provider_command() -> None:
 
     assert follow_up == {
         "recommended_surface": "guide",
-        "recommended_command": "method guide mistweaver-monk",
+        "command": "method guide mistweaver-monk",
         "reason": "guide_summary",
         "alternatives": [
             "method guide-full mistweaver-monk",
@@ -30,7 +30,7 @@ def test_article_follow_up_supports_article_surfaces_and_quotes() -> None:
 
     assert follow_up == {
         "recommended_surface": "article",
-        "recommended_command": "warcraft-wiki article 'World of Warcraft API'",
+        "command": "warcraft-wiki article 'World of Warcraft API'",
         "reason": "article_summary",
         "alternatives": [
             "warcraft-wiki article-full 'World of Warcraft API'",
@@ -51,7 +51,7 @@ def test_article_candidate_builds_shared_shape() -> None:
 
     assert row["id"] == "mistweaver-monk"
     assert row["ranking"]["score"] == 33
-    assert row["follow_up"]["recommended_command"] == "method guide mistweaver-monk"
+    assert row["follow_up"]["command"] == "method guide mistweaver-monk"
 
 
 def test_sort_article_candidates_orders_by_score_then_name() -> None:

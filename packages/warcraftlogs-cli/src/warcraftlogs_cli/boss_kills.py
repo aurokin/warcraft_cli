@@ -181,10 +181,11 @@ def deduplicate_pulls(candidates: Iterable[tuple[dict[str, Any], dict[str, Any]]
     Warcraft Logs exposes no cross-report pull ID, so the match is deliberately narrow and is
     labelled in the payload rather than inferred silently (docs/foundation/SAFE_ANALYTICS_RULES.md):
     same guild, encounter, difficulty and raid size, with wall-clock start *and* end both within
-    ``DUPLICATE_PULL_TOLERANCE_MS`` of the latest fight already in the cluster. Fights are
-    clustered in start order, so the answer does not depend on the order reports were listed in,
-    and the earliest-starting report represents the pull. A fight without a guild or without a
-    computable window is always kept on its own.
+    ``DUPLICATE_PULL_TOLERANCE_MS`` of the latest fight already in one of that identity's pulls.
+    Every pull of the identity is a candidate, so an unrelated pull starting in between cannot split
+    one double-logged pull in two. Fights are clustered in start order, so the answer does not
+    depend on the order reports were listed in, and the earliest-starting report represents the
+    pull. A fight without a guild or without a computable window is always kept on its own.
     """
     kept: list[SampledPull] = []
     timed: list[tuple[tuple[float, float], _PullIdentity, dict[str, Any], dict[str, Any]]] = []
@@ -196,16 +197,19 @@ def deduplicate_pulls(candidates: Iterable[tuple[dict[str, Any], dict[str, Any]]
         else:
             timed.append((window, identity, report, fight))
     timed.sort(key=lambda row: (row[0], str(row[2].get("code") or ""), str(row[3].get("id"))))
-    open_clusters: dict[_PullIdentity, tuple[SampledPull, tuple[float, float]]] = {}
+    # Each identity's pulls so far, with the window of the latest fight folded into each.
+    clusters: dict[_PullIdentity, list[tuple[SampledPull, tuple[float, float]]]] = {}
     for window, identity, report, fight in timed:
-        cluster = open_clusters.get(identity)
-        if cluster is not None and _same_window(cluster[1], window):
-            cluster[0].duplicates.append(_pull_citation(report, fight))
-            open_clusters[identity] = (cluster[0], window)
+        pulls = clusters.setdefault(identity, [])
+        match = next((index for index, (_, latest) in enumerate(pulls) if _same_window(latest, window)), None)
+        if match is None:
+            pull = SampledPull(report=report, fight=fight)
+            kept.append(pull)
+            pulls.append((pull, window))
             continue
-        pull = SampledPull(report=report, fight=fight)
-        kept.append(pull)
-        open_clusters[identity] = (pull, window)
+        pull = pulls[match][0]
+        pull.duplicates.append(_pull_citation(report, fight))
+        pulls[match] = (pull, window)
     return kept
 
 
@@ -216,7 +220,8 @@ def sampled_dedupe_notes(sample: dict[str, Any]) -> list[str]:
         return []
     return [
         f"{removed} sampled fight(s) were the same pull logged in more than one report (same guild, encounter, "
-        f"difficulty and raid size, with start and end within {DUPLICATE_PULL_TOLERANCE_MS // 1000}s) "
+        f"difficulty and raid size, with start and end within {DUPLICATE_PULL_TOLERANCE_MS // 1000}s of another "
+        "report of that pull) "
         "and were collapsed into one kill; the collapsed report codes are on each kill's duplicate_reports. "
         "Reports without a guild are never collapsed"
     ]

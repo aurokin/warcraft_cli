@@ -20,7 +20,7 @@ def article_follow_up(
     quoted_ref = shlex.quote(ref)
     return {
         "recommended_surface": surface,
-        "recommended_command": f"{provider_command} {surface} {quoted_ref}",
+        "command": f"{provider_command} {surface} {quoted_ref}",
         "reason": normalized_reason,
         "alternatives": [
             f"{provider_command} {normalized_full_surface} {quoted_ref}",
@@ -108,7 +108,7 @@ def article_resolve_payload(
         "resolved": resolved,
         "confidence": "high" if resolved else ("medium" if top else "none"),
         "match": top if top else None,
-        "next_command": top["follow_up"]["recommended_command"] if resolved and top else None,
+        "next_command": top["follow_up"]["command"] if resolved and top else None,
         "fallback_search_command": None if resolved else f"{provider_command} search {query!r}",
         "count": total_count,
         "candidates": results,

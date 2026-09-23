@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections import deque
 from collections.abc import Mapping, Sequence
 from functools import lru_cache
 from pathlib import Path
@@ -10,6 +11,8 @@ from typing import Any
 from warcraft_core.exit_codes import EXIT_USAGE
 from warcraft_core.paths import config_root
 from warcraft_core.provider import ProviderError
+
+from warcraft_cli.providers import STALE_GUIDE_REASON
 
 DEFAULT_WRAPPER_RANKING_POLICY: dict[str, Any] = {
     "provider_families": {
@@ -261,10 +264,9 @@ def query_intents(query: str) -> list[str]:
         if tokens & keywords:
             intents.add(intent)
     ordered_tokens = [token for token in normalized.split() if token]
-    # The structured shape is exactly `<region> <realm> <name>`; a longer query that merely starts
-    # with a region-like word is free text.
+    # `<region> <realm...> <name>`: realms can be several words (`eu tarren mill Cotti`).
     if (
-        len(ordered_tokens) == 3
+        len(ordered_tokens) >= 3
         and ordered_tokens[0] in policy["known_region_terms"]
         and ordered_tokens[1] not in policy["structured_profile_second_token_blocklist"]
     ):
@@ -354,11 +356,19 @@ def name_match_strength(query: str, name: Any) -> str | None:
     return "title_prefix" if head == normalized_query else None
 
 
+def _provider_flagged_stale(row: Mapping[str, Any]) -> bool:
+    """Whether the provider itself marked this row a superseded guide (Wowhead does, per response)."""
+    ranking = row.get("ranking")
+    reasons = ranking.get("match_reasons") if isinstance(ranking, Mapping) else None
+    return isinstance(reasons, list) and STALE_GUIDE_REASON in reasons
+
+
 def wrapper_search_ranking(
     query: str,
     row: Mapping[str, Any],
     *,
     provider_max_score: int | None = None,
+    provider_top_row: bool = False,
 ) -> dict[str, Any]:
     """Score one candidate for the merged wrapper list: normalized provider score plus policy boosts.
 
@@ -366,6 +376,7 @@ def wrapper_search_ranking(
     whenever candidates from several providers end up in one ranked list (``warcraft search``) so no
     provider's local scale can crowd the others out. ``warcraft resolve`` passes nothing: it compares
     one answer per provider on ``resolved``/``confidence``, not a merged candidate list.
+    ``provider_top_row`` marks the provider's own first row, the only row that can anchor a page.
     """
     policy = load_wrapper_ranking_policy()
     provider = str(row.get("provider") or "").strip()
@@ -406,9 +417,9 @@ def wrapper_search_ranking(
     off_intent = family == PROFILE_FAMILY and not (set(intents) & PROFILE_INTENTS)
     if off_intent:
         reasons.append("off_intent:profile_row_without_a_profile_query")
-    anchor = not intents and family == ENTITY_FAMILY and name_match == "exact"
+    anchor = provider_top_row and not intents and family == ENTITY_FAMILY and name_match is not None
     if anchor:
-        reasons.append("anchor:exact_entity_name_for_a_bare_query")
+        reasons.append("anchor:entity_provider_top_row_named_by_a_bare_query")
     return {
         "score": score,
         "reasons": reasons,
@@ -418,6 +429,7 @@ def wrapper_search_ranking(
         "name_match": name_match,
         "off_intent": off_intent,
         "anchor": anchor,
+        "stale_guide": _provider_flagged_stale(row),
         "provider_score": raw_score,
         "provider_max_score": provider_max_score,
     }
@@ -457,6 +469,7 @@ def compact_wrapper_candidate(candidate: Mapping[str, Any]) -> dict[str, Any]:
             "reasons": ranking.get("reasons"),
             "intents": ranking.get("intents"),
             "provider_family": ranking.get("provider_family"),
+            "stale_guide": ranking.get("stale_guide"),
         }
     return compact
 
@@ -480,6 +493,7 @@ def decorate_search_result(
     row: Mapping[str, Any],
     *,
     provider_max_score: int | None = None,
+    provider_top_row: bool = False,
 ) -> dict[str, Any]:
     """One merged-list row: the provider's own row plus its wrapper ranking and normalized ``kind``.
 
@@ -487,7 +501,9 @@ def decorate_search_result(
     list carries the normalized ``kind`` the ranking itself used. Without it the compact ``--brief``
     row would report a field the full row does not have.
     """
-    ranking = wrapper_search_ranking(query, row, provider_max_score=provider_max_score)
+    ranking = wrapper_search_ranking(
+        query, row, provider_max_score=provider_max_score, provider_top_row=provider_top_row
+    )
     decorated = dict(row)
     decorated["wrapper_ranking"] = ranking
     if ranking["kind"] is not None:
@@ -511,12 +527,12 @@ def row_is_off_intent(row: Mapping[str, Any]) -> bool:
 
 
 def search_result_sort_key(row: Mapping[str, Any]) -> tuple[int, int, int, int, str, str, str]:
-    """Order for the merged list: anchors, then on-intent rows, then score.
+    """Order between providers' candidate rows: anchor, then on-intent rows, then score.
 
     Two tiers do the work that per-provider score tuning could not:
 
-    * the *anchor* tier: a bare query that names a game entity exactly is answered by that entity
-      first, whatever local scale another provider's description of it happens to use;
+    * the *anchor* tier: a bare query that names the entity provider's own top row is answered by
+      that entity first, whatever local scale another provider's description of it happens to use;
     * the *off-intent* tier: a profile row cannot outrank rows from families the query actually
       asked for, which is what kept ``thunderfury`` from returning five players named Thunderfury.
     """
@@ -529,14 +545,33 @@ def search_result_sort_key(row: Mapping[str, Any]) -> tuple[int, int, int, int, 
     provider = str(row.get("provider") or "")
     name = str(row.get("name") or "")
     identifier = str(row.get("id") or "")
-    anchor_rank = 0 if _wrapper_ranking(row).get("anchor") else 1
+    anchor_rank = 0 if wrapper.get("anchor") else 1
     return (anchor_rank, int(row_is_off_intent(row)), -wrapper_score, -score, provider, name, identifier)
+
+
+def interleave_provider_rows(rows: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    """Merge the providers' lists without reordering any one of them.
+
+    A provider's own order is its ranking, so each list is consumed front to back and only the
+    choice *between* providers uses ``search_result_sort_key``: at every step the best of the
+    providers' next rows goes next.
+    """
+    queues: dict[str, deque[Mapping[str, Any]]] = {}
+    for row in rows:
+        queues.setdefault(str(row.get("provider") or ""), deque()).append(row)
+    merged: list[Mapping[str, Any]] = []
+    while queues:
+        provider = min(queues, key=lambda name: search_result_sort_key(queues[name][0]))
+        merged.append(queues[provider].popleft())
+        if not queues[provider]:
+            del queues[provider]
+    return merged
 
 
 def _capped_rows(
     rows: Sequence[Mapping[str, Any]], *, room: int, per_provider_cap: int
 ) -> tuple[list[Mapping[str, Any]], list[Mapping[str, Any]]]:
-    """Fill ``room`` slots in rank order with at most ``per_provider_cap`` rows per provider."""
+    """Fill ``room`` slots in merged order with at most ``per_provider_cap`` rows per provider."""
     taken: list[Mapping[str, Any]] = []
     deferred: list[Mapping[str, Any]] = []
     counts: dict[str, int] = {}
@@ -550,16 +585,19 @@ def _capped_rows(
     return taken, deferred
 
 
-def _reserves_profile_slot(ordered: Sequence[Mapping[str, Any]], *, limit: int) -> bool:
+def _reserves_profile_slot(
+    ordered: Sequence[Mapping[str, Any]], off_intent: Sequence[Mapping[str, Any]], *, limit: int
+) -> bool:
     """Whether a bare name that is exactly a character's or guild's name keeps one profile row.
 
-    A bare name is ambiguous. When an entity title matches it exactly (the page is anchored) the
-    name is that entity's; otherwise an exact-name profile row may be what the user meant, and the
-    wiki's full-text search always has rows to crowd it out. One slot, never a majority.
+    A bare name is ambiguous. When an entity provider's top row answers it (the page is anchored)
+    the name is that entity's; otherwise the first off-intent row, if its name is exactly the query,
+    may be what the user meant, and the wiki's full-text search always has rows to crowd it out.
+    One slot, never a majority.
     """
-    if limit < 3 or any(_wrapper_ranking(row).get("anchor") for row in ordered):
+    if limit < 3 or not off_intent or any(_wrapper_ranking(row).get("anchor") for row in ordered):
         return False
-    return any(row_is_off_intent(row) and _wrapper_ranking(row).get("name_match") == "exact" for row in ordered)
+    return _wrapper_ranking(off_intent[0]).get("name_match") == "exact"
 
 
 def merged_search_page(
@@ -567,25 +605,27 @@ def merged_search_page(
     *,
     limit: int,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """The merged page of candidates, in rank order, with no single provider allowed to fill it.
+    """The merged page of candidates, with no single provider allowed to fill it.
 
-    Rank order alone is not enough: a provider whose rows tie at its own best score (Raider.IO
-    returns twenty identically scored characters for a bare name) normalizes every one of them to
-    100 and owns every slot. So:
+    ``rows`` arrive in each provider's own order, and the page never reorders two rows from one
+    provider (``interleave_provider_rows``). Interleaving alone is not enough: a provider whose rows
+    tie at its own best score (Raider.IO returns twenty identically scored characters for a bare
+    name) normalizes every one of them to 100 and owns every slot. So:
 
     * on-intent rows fill the page first, each provider taking at most half of it (rounded up);
       rows over that share are deferred and fill whatever the other providers leave;
     * off-intent rows only take slots on-intent rows left empty, at most a strict minority of the
       page, except for the one slot ``_reserves_profile_slot`` keeps for an exact-name profile row;
-    * the chosen rows are returned sorted by ``search_result_sort_key``.
+    * the chosen rows keep their interleaved order.
 
     Deferred, reserved and withheld rows are counted in the policy block.
     """
-    ordered = sorted(rows, key=search_result_sort_key)
+    ordered = interleave_provider_rows(rows)
+    position = {id(row): index for index, row in enumerate(ordered)}
     per_provider_cap = max(1, (limit + 1) // 2)
     off_intent_cap = max(1, limit // 2)
     off_intent = [row for row in ordered if row_is_off_intent(row)]
-    reserved = 1 if _reserves_profile_slot(ordered, limit=limit) else 0
+    reserved = 1 if _reserves_profile_slot(ordered, off_intent, limit=limit) else 0
     room = limit - reserved
     capped, deferred = _capped_rows(
         [row for row in ordered if not row_is_off_intent(row)], room=room, per_provider_cap=per_provider_cap
@@ -593,13 +633,13 @@ def merged_search_page(
     promoted = deferred[: room - len(capped)]
     on_page = [*capped, *promoted]
     off_page = off_intent[: min(off_intent_cap, limit - len(on_page))]
-    page = [dict(row) for row in sorted([*on_page, *off_page], key=search_result_sort_key)]
+    page = [dict(row) for row in sorted([*on_page, *off_page], key=lambda row: position[id(row)])]
     provider_row_counts: dict[str, int] = {}
     for row in page:
         provider = str(row.get("provider") or "")
         provider_row_counts[provider] = provider_row_counts.get(provider, 0) + 1
     return page, {
-        "rule": "rank_then_per_provider_cap",
+        "rule": "interleave_provider_order_then_per_provider_cap",
         "per_provider_cap": per_provider_cap,
         "off_intent_provider_cap": off_intent_cap,
         "reserved_exact_profile_slot_count": reserved,

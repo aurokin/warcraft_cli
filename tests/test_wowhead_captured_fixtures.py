@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 
+import pytest
 from wowhead_cli.entity_types import SUGGESTION_TYPE_TO_ENTITY, suggestion_entity_type_from_type_id
 from wowhead_cli.expansion_profiles import resolve_expansion
 from wowhead_cli.main import app
@@ -260,7 +261,7 @@ def test_search_routes_a_real_news_suggestion_to_an_openable_url(monkeypatch) ->
     assert news_row["type_name"] == "News Post"
     assert news_row["entity_type"] == "news"
     assert news_row["url"] == "https://www.wowhead.com/classic/news=375994"
-    assert news_row["follow_up"]["recommended_command"] == (
+    assert news_row["follow_up"]["command"] == (
         "wowhead --expansion classic news-post https://www.wowhead.com/classic/news=375994"
     )
     # Every ranked row is reachable: nothing comes back with a null url a caller cannot open.
@@ -295,17 +296,27 @@ def test_the_only_ranked_rows_left_without_a_url_are_ones_an_id_cannot_address()
     assert unroutable == {"Trading Post Activity"}
 
 
-def test_search_leads_with_the_entity_wowhead_ranks_first_in_its_database_list(monkeypatch) -> None:
-    """The WotLK response ranks the proc spells first in `results` and the sword first in `categories`."""
-    payload = captured_json("search_suggestions_wotlk_thunderfury.json")
+@pytest.mark.parametrize(
+    ("capture", "flags", "item_url"),
+    [
+        ("search_suggestions_thunderfury.json", [], "https://www.wowhead.com/item=19019"),
+        ("search_suggestions_wotlk_thunderfury.json", ["--expansion", "wotlk"], "https://www.wowhead.com/wotlk/item=19019"),
+    ],
+    ids=["retail", "wotlk"],
+)
+def test_search_leads_with_the_entity_wowhead_ranks_first_in_its_database_list(
+    monkeypatch: pytest.MonkeyPatch, capture: str, flags: list[str], item_url: str
+) -> None:
+    """Both responses rank the proc spells first in `results` and the sword first in `categories`."""
+    payload = captured_json(capture)
     monkeypatch.setattr("wowhead_cli.main.WowheadClient.search_suggestions", lambda self, query: payload)
-    result = runner.invoke(app, ["--expansion", "wotlk", "search", "thunderfury", "--limit", "10"])
+    result = runner.invoke(app, [*flags, "search", "thunderfury", "--limit", "10"])
     assert result.exit_code == 0
 
     rows = json.loads(result.stdout)["data"]["results"]
     top = rows[0]
     assert (top["entity_type"], top["id"]) == ("item", 19019)
-    assert top["url"] == "https://www.wowhead.com/wotlk/item=19019"
+    assert top["url"] == item_url
     assert "upstream_database_rank" in top["ranking"]["match_reasons"]
     # The two spells named exactly "Thunderfury" lead Wowhead's flat `results` list; they trail the
     # item the query names because Wowhead's own database ranking puts the item first.
@@ -315,7 +326,7 @@ def test_search_leads_with_the_entity_wowhead_ranks_first_in_its_database_list(m
 
 
 def test_search_and_resolve_include_the_rows_wowhead_lists_only_in_categories(monkeypatch) -> None:
-    """Faction 529 heads `categories.database` and is absent from the ten-row `results` list."""
+    """In this capture Faction 529 heads `categories.database` and is not in the ten-row `results` list."""
     payload = captured_json("search_suggestions_argent_dawn.json")
     monkeypatch.setattr("wowhead_cli.main.WowheadClient.search_suggestions", lambda self, query: payload)
     resolved = runner.invoke(app, ["resolve", "argent dawn"])
@@ -327,6 +338,8 @@ def test_search_and_resolve_include_the_rows_wowhead_lists_only_in_categories(mo
     assert data["next_command"] == "wowhead entity faction 529"
     assert data["match"]["metadata"]["suggestion_lists"] == ["database"]
     assert data["match"]["metadata"]["popularity"] is None
+    # A row only `categories` carried still earns Wowhead's database-rank bonus when its name matches.
+    assert "upstream_database_rank" in data["match"]["ranking"]["match_reasons"]
 
     searched = runner.invoke(app, ["search", "argent dawn", "--limit", "50"])
     assert searched.exit_code == 0
@@ -347,6 +360,13 @@ def test_search_and_resolve_include_the_rows_wowhead_lists_only_in_categories(mo
     commission = next(row for row in data["results"] if row["id"] == 12846)
     assert commission["metadata"]["suggestion_lists"] == ["results", "database"]
     assert commission["metadata"]["popularity"] == 0
+    # Wowhead ranks achievement 18372 third in `database` for text the row never shows; nothing in
+    # its name matches, so it gets no rank bonus and trails every row whose name does.
+    ids = [row["id"] for row in data["results"]]
+    achievement = data["results"][ids.index(18372)]
+    assert achievement["name"] == "Wards of the Dread Citadel"
+    assert achievement["ranking"]["match_reasons"] == []
+    assert ids.index(18372) > ids.index(12846)
 
 
 def test_resolve_answers_a_currency_query_with_the_currency(monkeypatch) -> None:
@@ -366,22 +386,28 @@ def test_resolve_answers_a_currency_query_with_the_currency(monkeypatch) -> None
     assert 84914 in quest_ids or 82378 in quest_ids
 
 
-def test_resolve_does_not_recommend_a_guide_the_response_shows_is_stale(monkeypatch) -> None:
+def test_search_ranks_every_stale_guide_below_the_current_ones(monkeypatch) -> None:
+    """Five retired guides contain "fury warrior guide" verbatim; the current Midnight ones only share its words."""
     payload = captured_json("search_suggestions_fury_warrior_guide.json")
     monkeypatch.setattr("wowhead_cli.main.WowheadClient.search_suggestions", lambda self, query: payload)
-    result = runner.invoke(app, ["resolve", "Fury Warrior guide", "--limit", "10"])
+    result = runner.invoke(app, ["search", "Fury Warrior guide", "--limit", "50"])
     assert result.exit_code == 0
 
-    data = json.loads(result.stdout)["data"]
-    # The top-scoring title matches are retired guides: the Legion Remix one from January, which
-    # leads because it is also in `results`, and four 2022-2024 guides only `categories.guides` holds.
-    assert data["match"]["id"] == 31608
-    assert data["match"]["metadata"]["updated"] == "2026-01-18"
-    assert STALE_GUIDE_REASON in data["match"]["ranking"]["match_reasons"]
+    rows = json.loads(result.stdout)["data"]["results"]
+    stale = [STALE_GUIDE_REASON in row["ranking"]["match_reasons"] for row in rows]
+    assert stale == [False] * 6 + [True] * 14
+    assert [row["id"] for row in rows[:6]] == [3087, 3082, 17733, 7242, 17726, 33101]
+    assert all(row["metadata"]["updated"].startswith("2026-08") for row in rows[:6])
+    # The retired guides still outscore on title text; they are ordered last, not dropped or rescored.
+    legion_remix = next(row for row in rows if row["id"] == 31608)
+    assert legion_remix["ranking"]["score"] > rows[0]["ranking"]["score"]
+
+    resolved = runner.invoke(app, ["resolve", "Fury Warrior guide", "--limit", "10"])
+    assert resolved.exit_code == 0
+    data = json.loads(resolved.stdout)["data"]
+    # Six current guides tie on score, so resolve names the leader but does not claim it.
+    assert data["match"]["id"] == 3087
     assert data["confidence"] == "low"
     assert data["resolved"] is False
     assert data["next_command"] is None
     assert data["fallback_search_command"] == "wowhead search 'Fury Warrior guide'"
-    current = next(row for row in data["candidates"] if row["id"] == 3087)
-    assert current["metadata"]["updated"] == "2026-08-20"
-    assert STALE_GUIDE_REASON not in current["ranking"]["match_reasons"]

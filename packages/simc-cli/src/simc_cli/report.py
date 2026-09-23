@@ -128,7 +128,6 @@ def sim_report_payload(
     command: list[str],
 ) -> dict[str, Any]:
     return {
-        "provider": "simc",
         "status": "completed",
         "preset": preset,
         "input_source": input_source,

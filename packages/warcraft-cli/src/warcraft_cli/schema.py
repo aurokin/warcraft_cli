@@ -53,9 +53,8 @@ def _typed_dict_schema(typed_dict: Any, *, required: frozenset[str], description
         "description": description,
         "properties": {name: _property_schema(annotation) for name, annotation in hints.items()},
         "required": [name for name in hints if name in required],
-        # Open: providers dual-emit deprecated payload keys next to the envelope keys, and error
-        # objects carry provider-specific context beyond `details`.
-        "additionalProperties": True,
+        # Closed: payload fields live under `data` and failure context under `error.details`.
+        "additionalProperties": False,
     }
 
 

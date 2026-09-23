@@ -29,7 +29,7 @@ Global flags go before the subcommand and are forwarded to the provider CLI on p
 
 ```bash
 warcraft --pretty wowhead search "defias"
-warcraft --fields results,count search "mistweaver monk"
+warcraft --fields data.results,data.count search "mistweaver monk"
 warcraft --expansion wotlk resolve "thunderfury"
 ```
 
@@ -40,7 +40,8 @@ warcraft --expansion wotlk resolve "thunderfury"
   through unchanged with an `expansion_advisory` note.
 
 `warcraft search --brief` and `warcraft resolve --brief` shrink candidate rows and drop the
-per-provider payloads. `--compact` is the global output flag only, and it truncates long strings in
+per-provider payloads; each brief row keeps the provider's `follow_up.command` as
+`follow_up_command`. `--compact` is the global output flag only, and it truncates long strings in
 any payload; the two no longer share a name. `--brief` never hides a provider failure:
 `failed_providers`, `failed_provider_count`, and `answered_provider_count` stay in both shapes.
 
@@ -56,12 +57,13 @@ Every command's flags are listed in [docs/reference/warcraft.md](../reference/wa
   provider with a larger local score scale cannot take every slot; the divisor has a floor, so a
   provider whose best row is weak does not get a full score for topping its own empty field.
   `count` is the merged candidate total and `truncated` says whether `--limit` cut it. The merged
-  page then interleaves providers under a per-provider cap, ranks rows from a family the query did
-  not ask for (a player profile for a bare item name) below the rest, keeps one slot for a
-  character or guild named exactly the query when no item/spell/quest is, prefers a row whose own
-  title is the query, and returns the page in rank order; `merge_policy` reports the caps, the
-  reserved slot and the rows they deferred or withheld, and each row carries the normalized `kind`
-  the ranking used. See
+  page interleaves the providers' own lists without ever reordering two rows from one provider,
+  leads with Wowhead's top row when a bare query names it, applies a per-provider cap, ranks rows
+  from a family the query did not ask for (a player profile for a bare item name) below the rest,
+  and keeps one slot for a character or guild named exactly the query when no entity anchors the
+  page; `merge_policy` reports the caps, the reserved slot and the rows they deferred or withheld,
+  and each row carries the normalized `kind` the ranking used. A guide the provider flagged as
+  superseded carries `wrapper_ranking.stale_guide: true`. See
   [WRAPPER_PROVIDER_CONTRACT.md](../foundation/WRAPPER_PROVIDER_CONTRACT.md) for the model.
 - `warcraft resolve` — pick the single best match plus its follow-up command; never resolves to a
   provider that reported `resolved: false`. `selected_provider` is the match's provider or `null`;
@@ -72,19 +74,25 @@ Every command's flags are listed in [docs/reference/warcraft.md](../reference/wa
   reports every raid Raider.IO returned (`raids[]`, progression joined to its own ranks by
   `raid_slug`). There is no `active_raid`: Raider.IO orders those rows by slug and carries no raid
   start/end window, so naming one of them "active" would be a guess. Cross-reference
-  `raiderio raids` when you need the currently running tier.
+  `raiderio raids` when you need the currently running tier. Both keep the Raider.IO envelope
+  itself: `guild` under `sources.raiderio.payload`, `guild-ranks` as `provider_payload`.
 - `warcraft actor-profile` — cross-walk a Warcraft Logs report actor to a Raider.IO profile. Warcraft
   Logs only answers a fight-scoped roster query, so without `--fight-id` the wrapper reads the
   report's fight list first and scopes the lookup to a bounded set of fights, kills first.
   `query.scoped_fight_ids` names the fights that were actually read and `query.fight_scope` reports
   the rule, the report's fight count, and whether the scope was truncated. A report with no fights
-  fails `report_has_no_fights` (exit 4).
+  fails `report_has_no_fights` (exit 4), and a name missing from the fights read fails
+  `actor_not_found` (exit 4) with `error.details.fight_scope`, so a miss inside a truncated scope
+  says the other fights were not searched.
 - `warcraft cooldown-packet` — compose Lorrgs phase windows with Warcraft Logs cast events for
   phase-scoped cooldown analysis. Lorrgs only serves reports it has already cached; for any other
   report — or when Lorrgs itself is unreachable — pass `--actor-id` and `--spec-slug` and the packet
   still returns the Warcraft Logs cast timeline with `lorrgs.status: "unavailable"` and
   `phase.status: "unavailable"`. `lorrgs.message` names the real reason (only a `not_found` is
   reported as "not cached") and `phase.requested` echoes the `--phase` that could not be applied.
+  The top-parse comparison uses `--difficulty` when passed, otherwise the Warcraft Logs fight's own
+  difficulty (heroic or mythic, echoed as `query.difficulty`); at any other difficulty it is skipped
+  and `notes` says why.
 - `warcraft guide-compare` — compare two or more already-exported guide bundles.
 - `warcraft guide-compare-query` — resolve a guide query across wowhead, method, and icy-veins,
   export the bundles, and compare them. Flags: `--provider` (repeatable), `--out-root`, `--limit`,
@@ -102,8 +110,8 @@ Every command's flags are listed in [docs/reference/warcraft.md](../reference/wa
   `summary.simc_handoff_status` is `ok`, `partial`, `failed`, `no_build_references`, or
   `all_handoffs_failed`. The requested legs are `identify` plus `decode` (on by default) and
   `describe` (with `--apl-path`). `all_handoffs_failed` means every requested leg produced nothing:
-  it is a `simc_handoff_failed` error envelope (exit 1) carrying the whole packet, per-build
-  `failures` included, under `error.details`. `failed` means some requested leg produced nothing
+  it is a `simc_handoff_failed` error envelope (exit 1, `kind: "error"`) whose `provenance` is the
+  packet's and whose `error.details` carry the rest of the packet, per-build `failures` included. `failed` means some requested leg produced nothing
   while another produced output (`summary.empty_requested_legs` names the empty ones); `partial`
   means a leg worked for some builds and not others
   (`summary.partial_requested_legs`). Every build carries its own `failures` with the simc error
@@ -122,8 +130,9 @@ Composite commands do not flatten a source failure: they re-emit the failing pro
 `network_error` -> 5). When every provider in a `search`/`resolve` fanout fails, the result is an
 error envelope carrying the providers' shared code (or `upstream_error` when they disagree), with
 the per-provider rows under `error.details.failed_providers` — never `ok: true` with an empty
-result list. All wrapper structured context lives under `error.details`, never as a sibling of
-`code`/`message`.
+result list. A wrapper envelope carries the envelope keys and nothing else: the payload is under
+`data` on success, and all structured failure context is under `error.details`, never as a
+sibling of `code`/`message`.
 
 ## What the wrapper does not do
 

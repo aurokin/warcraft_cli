@@ -57,8 +57,7 @@ def test_wowhead_search_stream_emits_jsonl_header_when_results_empty(monkeypatch
     lines = [line for line in result.stdout.splitlines() if line.strip()]
     assert len(lines) == 1
     header = json.loads(lines[0])
-    assert header["stream"] == {"field": "results", "count": 0}
-    assert header["results"] == []
+    assert header["data"]["stream"] == {"field": "results", "count": 0}
     assert header["data"]["results"] == []
 
 
@@ -83,8 +82,7 @@ def test_wowhead_search_stream_emits_jsonl_header_and_records(monkeypatch) -> No
     lines = [line for line in result.stdout.splitlines() if line.strip()]
     assert len(lines) == 3
     header = json.loads(lines[0])
-    assert header["stream"] == {"field": "results", "count": 2}
-    assert header["results"] == []
+    assert header["data"]["stream"] == {"field": "results", "count": 2}
     assert header["data"]["results"] == []
     record = json.loads(lines[1])
     assert record["record"]["id"] == 1
@@ -123,5 +121,5 @@ def test_wowhead_comments_hydration_uses_concurrency(monkeypatch) -> None:
     )
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["counts"]["hydrated_reply_threads"] == 2
+    assert payload["data"]["counts"]["hydrated_reply_threads"] == 2
     assert call_count["n"] == 2

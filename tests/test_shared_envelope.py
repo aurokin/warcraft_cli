@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-import pytest
 from warcraft_core.envelope import (
     ENVELOPE_KEYS,
     SCHEMA_VERSION,
     envelope_violations,
     error_envelope,
     success_envelope,
-    with_legacy_keys,
 )
 from warcraft_core.exit_codes import EXIT_AUTH, EXIT_GENERIC, EXIT_NOT_FOUND, exit_code_for
 from warcraft_core.provider import ProviderError, ProviderSurface
@@ -29,15 +27,6 @@ def test_error_envelope_carries_code_message_and_optional_details() -> None:
     assert envelope["error"] == {"code": "not_found", "message": "no such item", "details": {"id": 1}}
     assert "details" not in error_envelope(provider="p", command="c", code="x", message="y")["error"]
     assert envelope_violations(envelope) == []
-
-
-def test_with_legacy_keys_merges_and_rejects_collisions() -> None:
-    envelope = success_envelope(provider="p", command="search", kind="k", data={"results": [1]})
-    merged = with_legacy_keys(envelope, {"results": [1], "count": 1})
-    assert merged["results"] == [1]
-    assert merged["data"] == {"results": [1]}
-    with pytest.raises(ValueError, match="collide.*data"):
-        with_legacy_keys(envelope, {"data": {}})
 
 
 def test_envelope_violations_flags_shape_problems() -> None:

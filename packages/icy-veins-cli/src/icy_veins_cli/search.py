@@ -294,12 +294,16 @@ def search_results(
     scope_hint = unsupported_scope_hint(normalized_query)
     if scope_hint is not None:
         return normalized_query, [], 0, scope_hint
+    terms = query_terms(normalized_query)
     matches: list[dict[str, Any]] = []
     for row in client.sitemap_guides():
         slug = row["slug"]
         name = row["name"]
         content_family = row.get("content_family")
         candidate = f"{name.lower()} {slug.replace('-', ' ')}"
+        # Family boosts alone (a class hub for any one-word query) must not surface an unrelated guide.
+        if not any(term in candidate for term in terms):
+            continue
         score, reasons = score_slug_match(normalized_query, candidate, slug=slug)
         family_score, family_reasons = score_family_match(normalized_query, content_family=content_family)
         score += family_score

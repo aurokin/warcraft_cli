@@ -13,7 +13,7 @@ from blizzard_api_cli.client import SUPPORTED_REGIONS, BlizzardClient, verificat
 from blizzard_api_cli.main import app
 from blizzard_api_cli.provider import PROVIDER
 from typer.testing import CliRunner
-from warcraft_core.envelope import SCHEMA_VERSION, envelope_violations
+from warcraft_core.envelope import ENVELOPE_KEYS, REQUIRED_KEYS, SCHEMA_VERSION, envelope_violations
 from warcraft_core.provider import ProviderSurface
 
 runner = CliRunner()
@@ -208,7 +208,7 @@ def test_coming_soon_commands_emit_structured_stub(command: str) -> None:
     assert payload["provider"] == "blizzard-api"
     assert payload["command"] == command
     assert payload["kind"] == "coming_soon"
-    assert payload["coming_soon"] is True
+    assert payload["data"]["coming_soon"] is True
 
 
 def test_classic_conflicts_with_explicit_retail(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -408,6 +408,7 @@ def test_every_command_emits_a_conforming_envelope(monkeypatch: pytest.MonkeyPat
     result = runner.invoke(app, args)
     payload = json.loads(result.stdout if stream == "stdout" else result.stderr)
     assert envelope_violations(payload) == []
+    assert set(payload) == (REQUIRED_KEYS if stream == "stdout" else ENVELOPE_KEYS)
     assert payload["schema_version"] == SCHEMA_VERSION
     assert payload["provider"] == "blizzard-api"
 

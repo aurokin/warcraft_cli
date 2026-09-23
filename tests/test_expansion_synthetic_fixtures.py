@@ -46,25 +46,25 @@ def test_synthetic_fixture_search_entity_entity_page_comments(
     )
     assert search_result.exit_code == 0
     search_payload = json.loads(search_result.stdout)
-    assert search_payload["expansion"] == expansion_key
-    assert search_payload["results"][0]["url"] == build_entity_url(profile, "item", 19019)
+    assert search_payload["data"]["expansion"] == expansion_key
+    assert search_payload["data"]["results"][0]["url"] == build_entity_url(profile, "item", 19019)
 
     entity_result = runner.invoke(app, ["--expansion", expansion_key, "entity", "item", "19019"])
     assert entity_result.exit_code == 0
     entity_payload = json.loads(entity_result.stdout)
-    assert entity_payload["expansion"] == expansion_key
-    assert entity_payload["entity"]["name"] == WOWHEAD_SYNTHETIC_FIXTURE["tooltip"]["name"]
-    assert entity_payload["entity"]["page_url"] == profile_data["canonical_url"]
-    assert entity_payload["linked_entities"]["count"] == 1
-    assert entity_payload["linked_entities"]["items"][0]["type"] == "npc"
+    assert entity_payload["data"]["expansion"] == expansion_key
+    assert entity_payload["data"]["entity"]["name"] == WOWHEAD_SYNTHETIC_FIXTURE["tooltip"]["name"]
+    assert entity_payload["data"]["entity"]["page_url"] == profile_data["canonical_url"]
+    assert entity_payload["data"]["linked_entities"]["count"] == 1
+    assert entity_payload["data"]["linked_entities"]["items"][0]["type"] == "npc"
 
     page_result = runner.invoke(app, ["--expansion", expansion_key, "entity-page", "item", "19019", "--max-links", "5"])
     assert page_result.exit_code == 0
     page_payload = json.loads(page_result.stdout)
-    assert page_payload["expansion"] == expansion_key
-    assert page_payload["entity"]["page_url"] == profile_data["canonical_url"]
-    assert page_payload["linked_entities"]["count"] == 1
-    assert page_payload["linked_entities"]["items"][0]["url"] == _expected_link_url(profile_data["link_href"])
+    assert page_payload["data"]["expansion"] == expansion_key
+    assert page_payload["data"]["entity"]["page_url"] == profile_data["canonical_url"]
+    assert page_payload["data"]["linked_entities"]["count"] == 1
+    assert page_payload["data"]["linked_entities"]["items"][0]["url"] == _expected_link_url(profile_data["link_href"])
 
     comments_result = runner.invoke(
         app,
@@ -81,8 +81,8 @@ def test_synthetic_fixture_search_entity_entity_page_comments(
     )
     assert comments_result.exit_code == 0
     comments_payload = json.loads(comments_result.stdout)
-    assert comments_payload["expansion"] == expansion_key
-    assert comments_payload["entity"]["page_url"] == profile_data["canonical_url"]
-    assert comments_payload["counts"]["hydrated_reply_threads"] == 1
-    assert comments_payload["comments"][0]["citation_url"] == f'{profile_data["canonical_url"]}#comments:id=342'
-    assert comments_payload["comments"][0]["replies"][0]["id"] == 267532
+    assert comments_payload["data"]["expansion"] == expansion_key
+    assert comments_payload["data"]["entity"]["page_url"] == profile_data["canonical_url"]
+    assert comments_payload["data"]["counts"]["hydrated_reply_threads"] == 1
+    assert comments_payload["data"]["comments"][0]["citation_url"] == f'{profile_data["canonical_url"]}#comments:id=342'
+    assert comments_payload["data"]["comments"][0]["replies"][0]["id"] == 267532

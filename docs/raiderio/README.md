@@ -11,13 +11,13 @@ Design notes and the pre-implementation research record live in
 
 Every command writes one JSON object. It carries the shared envelope
 (`ok`, `provider`, `command`, `kind`, `schema_version`, `query`, `provenance`, `data`, `error`)
-described in [../foundation/ERROR_CONTRACT.md](../foundation/ERROR_CONTRACT.md). The payload keys
-inside `data` are also copied to the top level for agents that already read them; those flat copies
-are deprecated, so read `data`.
+described in [../foundation/ERROR_CONTRACT.md](../foundation/ERROR_CONTRACT.md), and nothing else at
+the top level: every payload field is under `data`.
 
-Exit codes: `0` success, `1` configuration failure, `2` usage error (bad flag value or
-`invalid_query`), `3` upstream HTTP 401/403, `4` target not found, `5` network or upstream failure. Failures write the error
-envelope to stderr and never a traceback.
+Exit codes: `0` success, `1` configuration failure, `2` usage error (bad flag value, including
+`invalid_argument` for an unsupported `--kind`, or `invalid_query`), `3` upstream HTTP 401/403, `4`
+target not found, `5` network or upstream failure. Failures write the error envelope to stderr and
+never a traceback.
 
 ## Global Flags
 
@@ -127,7 +127,10 @@ raiderio threshold mythic-plus-runs --metric score --value 3000
   `resolve` returns a single `match` plus `next_command` only when the top candidate is confidently
   ahead. A *leading* `guild`/`character` word is read as a type hint and dropped
   (`guild us malganis gn`); anywhere else the word is part of the name and is kept, because
-  entities are named after it (Raider.IO has a guild called `Liquid Guild`).
+  entities are named after it (Raider.IO has a guild called `Liquid Guild`). That word only narrows
+  the lookups and adds to the score. An explicit `--kind character|guild` wins over it and filters
+  every candidate: when nothing of that kind matches, `search` returns no rows and `resolve` is not
+  resolved, rather than answering with the other kind.
 - Every Mythic+ payload echoes `resolved_season`, so the season a sample actually used is explicit.
 - Every payload with provenance carries `freshness` and `citations`; those also form the envelope's
   `provenance` block. `freshness.fetched_at` is when the response came off the wire, so a replay

@@ -8,10 +8,10 @@ call ``PROVIDER`` in-process.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any, Final, cast
+from typing import Any, Final
 
 import httpx
-from warcraft_core.envelope import ENVELOPE_KEYS, Envelope, success_envelope, with_legacy_keys
+from warcraft_core.envelope import Envelope, success_envelope
 from warcraft_core.provider import ProviderError, ProviderSurface
 
 from raidbots_cli.client import (
@@ -53,12 +53,6 @@ SUGGESTED_COMMAND: Final = "raidbots inspect-report <url-or-id>"
 # "bad credentials". Confirmed live: an unknown report id answers HTTP 403 from
 # storage.googleapis.com/simbot-reports/reports/<id>/data.json.
 _HTTP_STATUS_CODES: Final[dict[int, str]] = {400: "invalid_query", 403: "not_found", 404: "not_found", 429: "rate_limited"}
-
-
-def _dual_emit(envelope: Envelope, payload: dict[str, Any]) -> Envelope:
-    """Envelope plus deprecated top-level copies of the payload keys agents read today."""
-    legacy = {key: value for key, value in payload.items() if key not in ENVELOPE_KEYS}
-    return cast(Envelope, with_legacy_keys(envelope, legacy))
 
 
 def provider_error(exc: Exception) -> ProviderError:
@@ -122,8 +116,7 @@ def _not_supported(command: str, kind: str, query: str) -> Envelope:
         "message": NOT_SUPPORTED_MESSAGE,
         "suggested_command": SUGGESTED_COMMAND,
     }
-    envelope = success_envelope(provider=PROVIDER_NAME, command=command, kind=kind, data=payload, query=query)
-    return _dual_emit(envelope, payload)
+    return success_envelope(provider=PROVIDER_NAME, command=command, kind=kind, data=payload, query=query)
 
 
 def search(query: str, *, limit: int = 10, **options: Any) -> Envelope:
@@ -160,8 +153,7 @@ def doctor(**options: Any) -> Envelope:
         },
         "notes": list(NOTES),
     }
-    envelope = success_envelope(provider=PROVIDER_NAME, command="doctor", kind="doctor", data=payload)
-    return _dual_emit(envelope, payload)
+    return success_envelope(provider=PROVIDER_NAME, command="doctor", kind="doctor", data=payload)
 
 
 def inspect_report(reference: str, *, include_raw: bool = True) -> Envelope:
@@ -188,7 +180,7 @@ def inspect_report(reference: str, *, include_raw: bool = True) -> Envelope:
     }
     if include_raw:
         payload["raw"] = data
-    envelope = success_envelope(
+    return success_envelope(
         provider=PROVIDER_NAME,
         command="inspect-report",
         kind="report",
@@ -196,7 +188,6 @@ def inspect_report(reference: str, *, include_raw: bool = True) -> Envelope:
         query=report_id,
         provenance={**citations, **freshness},
     )
-    return _dual_emit(envelope, payload)
 
 
 def report_input(reference: str) -> Envelope:
@@ -220,7 +211,7 @@ def report_input(reference: str) -> Envelope:
         "freshness": freshness,
         "citations": citations,
     }
-    envelope = success_envelope(
+    return success_envelope(
         provider=PROVIDER_NAME,
         command="input",
         kind="simc_input",
@@ -228,7 +219,6 @@ def report_input(reference: str) -> Envelope:
         query=report_id,
         provenance={**citations, **freshness},
     )
-    return _dual_emit(envelope, payload)
 
 
 def explain_input(text: str) -> Envelope:
@@ -240,8 +230,7 @@ def explain_input(text: str) -> Envelope:
         "scope": {"type": "raidbots_simc_input", "sim_type_guess": classification["sim_type_guess"]},
         "handoff": simc_handoff(text, classification),
     }
-    envelope = success_envelope(provider=PROVIDER_NAME, command="explain-input", kind="simc_input", data=payload)
-    return _dual_emit(envelope, payload)
+    return success_envelope(provider=PROVIDER_NAME, command="explain-input", kind="simc_input", data=payload)
 
 
 class RaidbotsProvider:

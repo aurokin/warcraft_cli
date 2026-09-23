@@ -11,7 +11,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Final, cast
+from typing import Any, Final
 
 import httpx
 from warcraft_content.article_bundle import (
@@ -33,7 +33,7 @@ from warcraft_content.article_provider_cli import (
 )
 from warcraft_content.guide_analysis import extract_guide_analysis_surfaces, merge_guide_analysis_surfaces
 from warcraft_content.search import ArticleMatchWeights, normalize_query, score_article_match, tokenize_query
-from warcraft_core.envelope import ENVELOPE_KEYS, Envelope, success_envelope, with_legacy_keys
+from warcraft_core.envelope import Envelope, success_envelope
 from warcraft_core.provider import ProviderError, ProviderSurface
 
 from method_cli.client import METHOD_SITEMAP_URL, MethodClient, guide_ref_parts, load_method_cache_settings_from_env
@@ -104,20 +104,7 @@ def _envelope(
     query: Any = None,
     provenance: dict[str, Any] | None = None,
 ) -> Envelope:
-    """Wrap a Method payload in the shared envelope, repeating the historical top-level keys as deprecated copies."""
-    envelope = success_envelope(
-        provider=PROVIDER_NAME,
-        command=command,
-        kind=kind,
-        data=payload,
-        query=query,
-        provenance=provenance,
-    )
-    # Payload keys that share a name with an envelope key (query, provider, command, ok) already
-    # carry the same value in the envelope, so only the remaining keys are copied to the top level.
-    legacy = {key: value for key, value in payload.items() if key not in ENVELOPE_KEYS}
-    # with_legacy_keys returns a plain dict because the legacy copies live outside the TypedDict.
-    return cast(Envelope, with_legacy_keys(envelope, legacy))
+    return success_envelope(provider=PROVIDER_NAME, command=command, kind=kind, data=payload, query=query, provenance=provenance)
 
 
 @contextmanager
@@ -464,7 +451,7 @@ def guide_query(
     selected_kinds = set(kinds) if kinds else set(GUIDE_QUERY_KINDS)
     invalid = sorted(selected_kinds - GUIDE_QUERY_KINDS)
     if invalid:
-        raise ProviderError("invalid_query_kind", f"Unsupported query kinds: {', '.join(invalid)}")
+        raise ProviderError("invalid_argument", f"Unsupported query kinds: {', '.join(invalid)}")
     section_title_filter = section_title.strip().lower() if section_title and section_title.strip() else None
     bundle = load_article_bundle(export_dir)
     payload = query_article_bundle(
@@ -474,7 +461,7 @@ def guide_query(
         kinds=selected_kinds,
         section_title_filter=section_title_filter,
     )
-    payload["guide"] = bundle["manifest"]["guide"]
+    payload["guide"] = bundle["manifest"].get("guide")
     payload["output_dir"] = str(export_dir)
     return _envelope(command="guide-query", kind="guide_query", payload=payload, query=query)
 

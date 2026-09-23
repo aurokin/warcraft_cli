@@ -295,14 +295,14 @@ def test_guide_command_supports_id_lookup(monkeypatch) -> None:
 
     payload = json.loads(result.stdout)
     assert calls == [3143]
-    assert payload["guide"]["id"] == 3143
-    assert payload["guide"]["lookup_url"] == "https://www.wowhead.com/wotlk/guide=3143"
-    assert payload["guide"]["page_url"] == "https://www.wowhead.com/guide/classes/death-knight/frost/overview-pve-dps"
-    assert payload["comments"]["count"] == 1
-    assert payload["comments"]["top"][0]["citation_url"].endswith("#comments:id=91")
-    assert payload["linked_entities"]["count"] >= 2
-    assert payload["linked_entities"]["source_counts"] == {"href": 2, "gatherer": 1, "merged": 2}
-    assert payload["linked_entities"]["items"][0]["url"]
+    assert payload["data"]["guide"]["id"] == 3143
+    assert payload["data"]["guide"]["lookup_url"] == "https://www.wowhead.com/wotlk/guide=3143"
+    assert payload["data"]["guide"]["page_url"] == "https://www.wowhead.com/guide/classes/death-knight/frost/overview-pve-dps"
+    assert payload["data"]["comments"]["count"] == 1
+    assert payload["data"]["comments"]["top"][0]["citation_url"].endswith("#comments:id=91")
+    assert payload["data"]["linked_entities"]["count"] >= 2
+    assert payload["data"]["linked_entities"]["source_counts"] == {"href": 2, "gatherer": 1, "merged": 2}
+    assert payload["data"]["linked_entities"]["items"][0]["url"]
 
 
 
@@ -371,9 +371,9 @@ def test_guide_command_supports_full_wowhead_url(monkeypatch) -> None:
 
     payload = json.loads(result.stdout)
     assert calls == [guide_url]
-    assert payload["guide"]["id"] is None
-    assert payload["guide"]["lookup_url"] == guide_url
-    assert payload["comments"]["top"] == []
+    assert payload["data"]["guide"]["id"] is None
+    assert payload["data"]["guide"]["lookup_url"] == guide_url
+    assert payload["data"]["comments"]["top"] == []
 
 
 
@@ -394,25 +394,25 @@ def test_guide_full_returns_rich_payload(monkeypatch) -> None:
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["guide"]["id"] == 3143
-    assert payload["guide"]["page_url"] == "https://www.wowhead.com/guide/classes/death-knight/frost/overview-pve-dps"
-    assert payload["author"]["name"] == "khazakdk"
-    assert payload["rating"]["votes"] == 70
-    assert payload["body"]["sections"][0]["title"] == "Frost Death Knight Overview"
-    assert payload["body"]["section_chunks"][0]["content_text"] == "Welcome to the guide."
-    assert payload["navigation"]["links"][0]["url"] == "https://www.wowhead.com/guide/classes/death-knight/frost/overview-pve-dps"
-    assert payload["linked_entities"]["count"] >= 2
-    assert payload["linked_entities"]["source_counts"] == {"href": 2, "gatherer": 1, "merged": 2}
-    assert payload["gatherer_entities"]["items"][0]["id"] == 249277
-    assert payload["gatherer_entities"]["items"][0]["citation_url"] == "https://www.wowhead.com/item=249277"
-    merged_item = next(row for row in payload["linked_entities"]["items"] if row["id"] == 249277)
+    assert payload["data"]["guide"]["id"] == 3143
+    assert payload["data"]["guide"]["page_url"] == "https://www.wowhead.com/guide/classes/death-knight/frost/overview-pve-dps"
+    assert payload["data"]["author"]["name"] == "khazakdk"
+    assert payload["data"]["rating"]["votes"] == 70
+    assert payload["data"]["body"]["sections"][0]["title"] == "Frost Death Knight Overview"
+    assert payload["data"]["body"]["section_chunks"][0]["content_text"] == "Welcome to the guide."
+    assert payload["data"]["navigation"]["links"][0]["url"] == "https://www.wowhead.com/guide/classes/death-knight/frost/overview-pve-dps"
+    assert payload["data"]["linked_entities"]["count"] >= 2
+    assert payload["data"]["linked_entities"]["source_counts"] == {"href": 2, "gatherer": 1, "merged": 2}
+    assert payload["data"]["gatherer_entities"]["items"][0]["id"] == 249277
+    assert payload["data"]["gatherer_entities"]["items"][0]["citation_url"] == "https://www.wowhead.com/item=249277"
+    merged_item = next(row for row in payload["data"]["linked_entities"]["items"] if row["id"] == 249277)
     assert merged_item["sources"] == ["gatherer", "href"]
     assert merged_item["source_kind"] == "gatherer"
-    assert payload["comments"]["all_comments_included"] is True
-    assert payload["comments"]["items"][0]["citation_url"].endswith("#comments:id=91")
-    assert payload["structured_data"]["headline"] == "Frost Death Knight DPS Guide - Midnight"
-    assert payload["analysis_surfaces"]["count"] >= 1
-    assert payload["analysis_surfaces"]["items"][0]["surface_tags"] == ["overview"]
+    assert payload["data"]["comments"]["all_comments_included"] is True
+    assert payload["data"]["comments"]["items"][0]["citation_url"].endswith("#comments:id=91")
+    assert payload["data"]["structured_data"]["headline"] == "Frost Death Knight DPS Guide - Midnight"
+    assert payload["data"]["analysis_surfaces"]["count"] >= 1
+    assert payload["data"]["analysis_surfaces"]["items"][0]["surface_tags"] == ["overview"]
 
 
 
@@ -429,8 +429,8 @@ def test_guide_and_guide_full_share_linked_entity_count(monkeypatch) -> None:
 
     guide_payload = json.loads(guide_result.stdout)
     full_payload = json.loads(full_result.stdout)
-    assert guide_payload["linked_entities"]["count"] == full_payload["linked_entities"]["count"] == 2
-    assert guide_payload["analysis_surfaces"]["count"] == full_payload["analysis_surfaces"]["count"]
+    assert guide_payload["data"]["linked_entities"]["count"] == full_payload["data"]["linked_entities"]["count"] == 2
+    assert guide_payload["data"]["analysis_surfaces"]["count"] == full_payload["data"]["analysis_surfaces"]["count"]
 
 
 
@@ -445,8 +445,8 @@ def test_guide_export_writes_local_assets(monkeypatch, tmp_path) -> None:
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["output_dir"] == str(export_dir)
-    assert payload["counts"] == {
+    assert payload["data"]["output_dir"] == str(export_dir)
+    assert payload["data"]["counts"] == {
         "sections": 2,
         "analysis_surfaces": 1,
         "navigation_links": 2,
@@ -555,11 +555,11 @@ def test_guide_export_hydrates_linked_entities(monkeypatch, tmp_path: Path) -> N
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["counts"]["hydrated_entities"] == 2
-    assert payload["hydration"]["enabled"] is True
-    assert payload["hydration"]["types"] == ["spell", "item"]
-    assert payload["hydration"]["limit"] == 2
-    assert isinstance(payload["hydration"]["hydrated_at"], str)
+    assert payload["data"]["counts"]["hydrated_entities"] == 2
+    assert payload["data"]["hydration"]["enabled"] is True
+    assert payload["data"]["hydration"]["types"] == ["spell", "item"]
+    assert payload["data"]["hydration"]["limit"] == 2
+    assert isinstance(payload["data"]["hydration"]["hydrated_at"], str)
 
     entities_manifest = json.loads((export_dir / "entities" / "manifest.json").read_text(encoding="utf-8"))
     assert entities_manifest["count"] == 2
@@ -570,7 +570,7 @@ def test_guide_export_hydrates_linked_entities(monkeypatch, tmp_path: Path) -> N
         "entities/spell/49020.json",
     }
     assert {row["storage_source"] for row in entities_manifest["items"]} == {"live_fetch"}
-    assert payload["hydration"]["source_counts"] == {"live_fetch": 2}
+    assert payload["data"]["hydration"]["source_counts"] == {"live_fetch": 2}
 
     hydrated_spell = json.loads((export_dir / "entities" / "spell" / "49020.json").read_text(encoding="utf-8"))
     hydrated_item = json.loads((export_dir / "entities" / "item" / "249277.json").read_text(encoding="utf-8"))
@@ -710,7 +710,7 @@ def test_guide_export_hydration_uses_normalized_entity_cache_before_live_fetch(
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["hydration"]["source_counts"] == {"entity_cache": 2}
+    assert payload["data"]["hydration"]["source_counts"] == {"entity_cache": 2}
     entities_manifest = json.loads((export_dir / "entities" / "manifest.json").read_text(encoding="utf-8"))
     assert entities_manifest["counts_by_storage_source"] == {"entity_cache": 2}
     assert {row["storage_source"] for row in entities_manifest["items"]} == {"entity_cache"}
@@ -790,7 +790,7 @@ def test_guide_export_hydration_provenance_can_mix_cache_and_live_fetch(
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["hydration"]["source_counts"] == {
+    assert payload["data"]["hydration"]["source_counts"] == {
         "entity_cache": 1,
         "live_fetch": 1,
     }
@@ -827,38 +827,38 @@ def test_guide_query_reads_exported_assets(monkeypatch, tmp_path) -> None:
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["counts"]["gatherer_entities"] >= 1
-    assert payload["counts"]["analysis_surfaces"] == 0
-    assert payload["matches"]["gatherer_entities"][0]["name"] == "Bellamy's Final Judgement"
-    assert payload["top"][0]["kind"] == "linked_entity"
-    assert payload["top"][0]["name"] == "Bellamy's Final Judgement"
-    assert payload["top"][0]["sources"] == ["gatherer", "href"]
+    assert payload["data"]["counts"]["gatherer_entities"] >= 1
+    assert payload["data"]["counts"]["analysis_surfaces"] == 0
+    assert payload["data"]["matches"]["gatherer_entities"][0]["name"] == "Bellamy's Final Judgement"
+    assert payload["data"]["top"][0]["kind"] == "linked_entity"
+    assert payload["data"]["top"][0]["name"] == "Bellamy's Final Judgement"
+    assert payload["data"]["top"][0]["sources"] == ["gatherer", "href"]
 
     result = runner.invoke(app, ["guide-query", str(export_dir), "obliterate", "--limit", "3"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["counts"]["linked_entities"] >= 1
-    assert payload["matches"]["linked_entities"][0]["entity_type"] == "spell"
-    assert payload["matches"]["linked_entities"][0]["name"] == "Obliterate"
-    assert payload["top"][0]["kind"] == "linked_entity"
-    assert payload["top"][0]["sources"] == ["href"]
+    assert payload["data"]["counts"]["linked_entities"] >= 1
+    assert payload["data"]["matches"]["linked_entities"][0]["entity_type"] == "spell"
+    assert payload["data"]["matches"]["linked_entities"][0]["name"] == "Obliterate"
+    assert payload["data"]["top"][0]["kind"] == "linked_entity"
+    assert payload["data"]["top"][0]["sources"] == ["href"]
 
     duplicate_entity_rows = [
-        row for row in payload["top"] if row.get("entity_type") == "spell" and row.get("id") == 49020
+        row for row in payload["data"]["top"] if row.get("entity_type") == "spell" and row.get("id") == 49020
     ]
     assert len(duplicate_entity_rows) == 1
 
     result = runner.invoke(app, ["guide-query", str(export_dir), "welcome guide", "--limit", "2"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["matches"]["sections"][0]["title"] == "Frost Death Knight Overview"
-    assert "Welcome to the guide." in payload["matches"]["sections"][0]["preview"]
+    assert payload["data"]["matches"]["sections"][0]["title"] == "Frost Death Knight Overview"
+    assert "Welcome to the guide." in payload["data"]["matches"]["sections"][0]["preview"]
 
     result = runner.invoke(app, ["guide-query", str(export_dir), "overview", "--kind", "analysis_surfaces"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["counts"]["analysis_surfaces"] >= 1
-    assert payload["matches"]["analysis_surfaces"][0]["surface_tags"] == ["overview"]
+    assert payload["data"]["counts"]["analysis_surfaces"] >= 1
+    assert payload["data"]["matches"]["analysis_surfaces"][0]["surface_tags"] == ["overview"]
 
     result = runner.invoke(
         app,
@@ -866,21 +866,21 @@ def test_guide_query_reads_exported_assets(monkeypatch, tmp_path) -> None:
     )
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["filters"] == {
+    assert payload["data"]["filters"] == {
         "kinds": ["sections"],
         "section_title": "overview",
         "linked_sources": [],
     }
-    assert payload["counts"]["sections"] == 1
-    assert payload["counts"]["comments"] == 0
-    assert payload["matches"]["sections"][0]["title"] == "Frost Death Knight Overview"
+    assert payload["data"]["counts"]["sections"] == 1
+    assert payload["data"]["counts"]["comments"] == 0
+    assert payload["data"]["matches"]["sections"][0]["title"] == "Frost Death Knight Overview"
 
     result = runner.invoke(app, ["guide-query", str(export_dir), "solid", "--kind", "comments"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["counts"]["comments"] == 1
-    assert payload["counts"]["sections"] == 0
-    assert payload["matches"]["comments"][0]["user"] == "A"
+    assert payload["data"]["counts"]["comments"] == 1
+    assert payload["data"]["counts"]["sections"] == 0
+    assert payload["data"]["matches"]["comments"][0]["user"] == "A"
 
     root = tmp_path / "wowhead_exports"
     selector_dir = root / export_dir.name
@@ -890,8 +890,8 @@ def test_guide_query_reads_exported_assets(monkeypatch, tmp_path) -> None:
     result = runner.invoke(app, ["guide-query", "3143", "obliterate", "--root", str(root)])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["output_dir"] == str(selector_dir)
-    assert payload["matches"]["linked_entities"][0]["name"] == "Obliterate"
+    assert payload["data"]["output_dir"] == str(selector_dir)
+    assert payload["data"]["matches"]["linked_entities"][0]["name"] == "Obliterate"
 
     result = runner.invoke(
         app,
@@ -899,10 +899,10 @@ def test_guide_query_reads_exported_assets(monkeypatch, tmp_path) -> None:
     )
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["filters"]["linked_sources"] == ["multi"]
-    assert payload["counts"]["linked_entities"] == 1
-    assert payload["matches"]["linked_entities"][0]["name"] == "Bellamy's Final Judgement"
-    assert payload["matches"]["linked_entities"][0]["sources"] == ["gatherer", "href"]
+    assert payload["data"]["filters"]["linked_sources"] == ["multi"]
+    assert payload["data"]["counts"]["linked_entities"] == 1
+    assert payload["data"]["matches"]["linked_entities"][0]["name"] == "Bellamy's Final Judgement"
+    assert payload["data"]["matches"]["linked_entities"][0]["sources"] == ["gatherer", "href"]
 
     result = runner.invoke(
         app,
@@ -910,14 +910,14 @@ def test_guide_query_reads_exported_assets(monkeypatch, tmp_path) -> None:
     )
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["filters"]["linked_sources"] == ["href"]
-    assert payload["matches"]["linked_entities"][0]["name"] == "Obliterate"
+    assert payload["data"]["filters"]["linked_sources"] == ["href"]
+    assert payload["data"]["matches"]["linked_entities"][0]["name"] == "Obliterate"
 
     result = runner.invoke(app, ["guide-query", selector_dir.name, "solid", "--root", str(root), "--kind", "comments"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["output_dir"] == str(selector_dir)
-    assert payload["matches"]["comments"][0]["user"] == "A"
+    assert payload["data"]["output_dir"] == str(selector_dir)
+    assert payload["data"]["matches"]["comments"][0]["user"] == "A"
 
     missing_dir = tmp_path / "missing-corpus"
     result = runner.invoke(app, ["guide-query", str(missing_dir), "anything"])

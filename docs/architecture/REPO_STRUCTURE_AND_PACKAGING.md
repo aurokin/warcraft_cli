@@ -59,9 +59,8 @@ test runner.
 ### Backward Compatibility
 
 User-facing command contracts and documented output shapes are the compatibility boundary.
-Internal layout can keep evolving. Providers that historically emitted payload keys at the top
-level still emit them beside the envelope keys; those copies are deprecated but not removed. See
-[ERROR_CONTRACT.md](../foundation/ERROR_CONTRACT.md).
+Internal layout can keep evolving. Every envelope carries only the envelope keys, with the payload
+under `data`; see [ERROR_CONTRACT.md](../foundation/ERROR_CONTRACT.md).
 
 ## Language Policy
 
@@ -178,7 +177,7 @@ revisit.
 - **CI** (`.github/workflows/ci.yml`): `lint-and-typecheck`, `unit-tests`, `isolated-install`,
   `wheel`, `gitleaks`.
 - **Live contracts** (`.github/workflows/live-contracts.yml`): weekly schedule plus manual dispatch;
-  credential-gated jobs are skipped when the matching secret is absent.
+  the Wowhead parser canary and the keyless end-to-end journeys, with no secrets.
 - **Release** (`.github/workflows/release.yml`): a `v*` tag builds the wheel and attaches it.
 - **Generated docs:** `make reference` regenerates `docs/reference/<cli>.md` from the Typer apps and
   `make skills` regenerates the provider subskills. Both have staleness tests; never hand-edit the

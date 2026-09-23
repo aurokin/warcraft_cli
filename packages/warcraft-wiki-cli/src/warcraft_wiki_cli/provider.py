@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import httpx
 from warcraft_content.article_bundle import (
@@ -20,7 +20,7 @@ from warcraft_content.article_bundle import (
     write_article_bundle,
 )
 from warcraft_content.article_discovery import article_resolve_payload, article_search_payload
-from warcraft_core.envelope import ENVELOPE_KEYS, Envelope, success_envelope, with_legacy_keys
+from warcraft_core.envelope import Envelope, success_envelope
 from warcraft_core.provider import ProviderError, ProviderSurface
 
 from warcraft_wiki_cli.client import WIKI_API_URL, WarcraftWikiAPIError, WarcraftWikiClient, load_warcraft_wiki_cache_settings_from_env
@@ -61,8 +61,7 @@ def _envelope(
     query: Any = None,
     provenance: dict[str, Any] | None = None,
 ) -> Envelope:
-    """Wrap a wiki payload in the shared envelope, keeping the historical top-level keys as legacy copies."""
-    envelope = success_envelope(
+    return success_envelope(
         provider=PROVIDER_NAME,
         command=command,
         kind=kind,
@@ -70,9 +69,6 @@ def _envelope(
         query=query,
         provenance=provenance,
     )
-    legacy = {key: value for key, value in payload.items() if key not in ENVELOPE_KEYS}
-    # with_legacy_keys returns a plain dict because the legacy copies are outside the TypedDict.
-    return cast(Envelope, with_legacy_keys(envelope, legacy))
 
 
 @contextmanager
@@ -391,14 +387,11 @@ def article_query(
     section_title: str | None = None,
 ) -> Envelope:
     """Search an exported wiki article bundle on disk."""
-    export_dir = Path(bundle_ref).expanduser()
-    if not export_dir.exists():
-        raise ProviderError("invalid_bundle", f"Bundle directory not found: {export_dir}")
     selected_kinds = set(kinds) if kinds else set(ARTICLE_QUERY_KINDS)
     invalid = sorted(selected_kinds - ARTICLE_QUERY_KINDS)
     if invalid:
-        raise ProviderError("invalid_query_kind", f"Unsupported query kinds: {', '.join(invalid)}")
-    bundle_payload = load_article_bundle(export_dir)
+        raise ProviderError("invalid_argument", f"Unsupported query kinds: {', '.join(invalid)}")
+    bundle_payload = load_article_bundle(Path(bundle_ref).expanduser())
     result = query_article_bundle(
         bundle_payload,
         query=query,

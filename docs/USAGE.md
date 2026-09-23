@@ -12,14 +12,14 @@ the code. Use this page to decide *what* to run and the reference to see *how* t
 ```bash
 uv sync --all-extras
 make check
-make test-live
+make test-e2e
 make reference
 ```
 
 Workspace command behavior:
 - `uv sync --all-extras` (or `make install`) creates and updates the checkout-local `.venv`; `pip install -e '.[dev,redis]'` still works
 - `make check` runs lint, typecheck, import boundaries, the complexity gate, dead-code detection, and the fast test suite
-- `make test-live` runs every opt-in live provider suite, and `make test-live-matrix` runs the cross-provider live matrix. Each suite is gated on its own flag, so you can run one at a time — `WOWHEAD_LIVE_TESTS`, `METHOD_LIVE_TESTS`, `ICY_VEINS_LIVE_TESTS`, `RAIDERIO_LIVE_TESTS`, `WARCRAFT_WIKI_LIVE_TESTS`, `WARCRAFTLOGS_LIVE_TESTS`, `LORRGS_LIVE_TESTS`, `BLIZZARD_LIVE_TESTS`, `CURSEFORGE_LIVE_TESTS`, `WARCRAFT_WRAPPER_LIVE_TESTS` — set to `1` with the matching test file, for example `WOWHEAD_LIVE_TESTS=1 pytest -q -m live tests/test_live_integration.py`. The file-to-flag registry lives in `tests/conftest.py`
+- `make test-e2e` runs the end-to-end journeys through the installed binaries against the real providers ([E2E_TESTING.md](architecture/E2E_TESTING.md)); `make test-canary` runs the live Wowhead parser canary (`WOWHEAD_LIVE_TESTS=1`)
 - `make reference` regenerates `docs/reference/`; `make skills` regenerates the generated provider subskills. Neither output is hand-edited
 - `make dev-deploy-no-link` refreshes the checkout-local editable environment without rewriting host-level command wrappers; `make worktree-env` regenerates `.warcraft/worktree-env.sh`, and `source .warcraft/worktree-env.sh` activates worktree-local `PATH`, data, and cache roots
 - `WARCRAFT_ALLOW_LINK_BIN=1 make dev-deploy` is a deliberate exception that repoints `~/.local/bin` at the current checkout
@@ -44,17 +44,16 @@ profile; the wrapper passes it through to expansion-aware providers), `warcraftl
 [reference/](reference/README.md).
 
 ```bash
-wowhead --fields query,count,results search "defias"
+wowhead --fields query,data.count,data.results search "defias"
 warcraft --expansion wotlk search "thunderfury"
 ```
 
 Every provider command emits one JSON object with the shared envelope keys `ok`, `provider`,
 `command`, `kind`, `schema_version`, `query`, `provenance`, and `data`; failures add `error` with a
-stable `code`, a human `message`, and optional `details`, and are written to stderr. Providers that
-historically emitted their payload keys at the top level still do, next to the envelope keys; those
-copies are deprecated and identical to `data`, so read `data`. The `warcraft` wrapper's own
-commands (`doctor`, `search`, `resolve`, and the composite packets) carry the same envelope keys
-with `provider: "warcraft"`, keep their historical top-level keys, and mirror them into `data`.
+stable `code`, a human `message`, and optional `details`, and are written to stderr. Read the payload
+from `data`. The `warcraft` wrapper's own commands (`doctor`, `search`, `resolve`, and the composite
+packets) emit exactly those envelope keys with `provider: "warcraft"` (`resolve` names the provider
+it selected): everything else is under `data` on success and under `error.details` on failure.
 `warcraft <provider> ...` passthrough output is the provider's envelope.
 
 Exit codes:
@@ -112,12 +111,12 @@ warcraft simc analysis-packet <simc-root>/ActionPriorityLists/default/monk_mistw
 - `warcraft cooldown-packet` is the cross-provider packet for user-specific phase cooldown questions:
   - it uses cached Lorrgs user-report fight data for phase markers, boss casts, boss/spec slugs, and player source ids
   - it uses Warcraft Logs `report-events --data-type casts` for the selected player's exact cast timestamps
-  - it uses Lorrgs `spec-spells`, `boss-spells`, and optional `spec-ranking` samples to label cooldowns and compare top-parse phase timing
+  - it uses Lorrgs `spec-spells`, `boss-spells`, and optional `spec-ranking` samples to label cooldowns and compare top-parse phase timing. The comparison uses `--difficulty` when passed, otherwise the Warcraft Logs fight's own difficulty (heroic or mythic, echoed as `query.difficulty`); a fight at any other difficulty gets no comparison and a note saying why
   - it emits phase windows, selected-phase player casts, selected-phase boss casts, tracked spell metadata, top-parse samples, source commands, and notes; it does not synthesize strategy advice
   - Lorrgs only serves reports it has already cached. For any other report — or when Lorrgs itself is unreachable — pass `--actor-id` and `--spec-slug` and the command degrades instead of failing: the packet still carries the Warcraft Logs cast timeline, with `lorrgs.status: "unavailable"` and `phase.status: "unavailable"`. `lorrgs.message` names the real reason (only a `not_found` is reported as "not cached"; a timeout or transport failure says so) and `lorrgs.source` keeps the provider's own error
   - in that degraded mode there are no phase windows, so `--phase` cannot be applied: `phase.requested` echoes the phase you asked for, `phase.selected` is `null`, `cooldowns.player_casts` covers the whole fight, and `notes` says so. Without `--actor-id` and `--spec-slug` the command fails instead, naming the Lorrgs error and the two flags
 - `warcraft guild` normalizes region/realm/name input and returns the Raider.IO guild snapshot (identity, raid progression, roster preview, citations) with the provider-native payload preserved under `sources.raiderio`. There is no `active_raid`: `sources.raiderio.summary.raids[]` carries every raid Raider.IO returned, each joined to its own ranks by `raid_slug`. Raider.IO orders those rows by slug and carries no raid start/end window, so naming one "active" would be a guess — cross-reference `raiderio raids`, whose rows carry per-region `starts`/`ends`, when you need the currently running tier.
-- `warcraft guild-ranks` returns the guild's per-raid progression from Raider.IO: `raids[]` rows carry `raid_slug`, `summary`, boss-kill counts per difficulty, and `ranks.normal|heroic|mythic` with `world`/`region`/`realm` ranks as Raider.IO reports them (`0` means unranked). Raider.IO only carries the current expansion, so there is no cross-expansion tier history. For cross-guild raid leaderboards use `raiderio leaderboard raids`.
+- `warcraft guild-ranks` returns the guild's per-raid progression from Raider.IO: `raids[]` rows carry `raid_slug`, `summary`, boss-kill counts per difficulty, and `ranks.normal|heroic|mythic` with `world`/`region`/`realm` ranks as Raider.IO reports them (`0` means unranked). Raider.IO only carries the current expansion, so there is no cross-expansion tier history. `provider_payload` is the Raider.IO envelope itself, provenance included, as under `warcraft guild`'s `sources.raiderio.payload`. For cross-guild raid leaderboards use `raiderio leaderboard raids`.
 - `warcraft guide-compare` compares exported guide bundles across providers using raw section evidence, additive `analysis_surfaces`, and explicit `build_references`, while preserving provider provenance and source citations instead of flattening the guides into one fake summary
 - `guide-compare` also emits a top-level `freshness` rollup and a `comparison_evidence` block (compared bundle count, providers, matching rules, and per-bundle freshness from each bundle's `exported_at`); `--max-age-hours` (default `24`) sets the per-bundle freshness threshold. Method/Icy Veins/Warcraft Wiki bundles carry an `exported_at` timestamp in their manifest; older bundles without it degrade to `stale`/`missing_exported_at` rather than failing
 - `warcraft guide-compare-query` conservatively resolves one guide per supported provider, exports those bundles locally, and then runs the same comparison packet over the exported evidence
@@ -151,13 +150,13 @@ warcraft simc analysis-packet <simc-root>/ActionPriorityLists/default/monk_mistw
 - `simc` includes comparison, packet, first-cast, and log-actions commands built on the same conservative reasoning layer.
 - `simc` search and resolve currently return structured `coming_soon` payloads in phase 1.
 - wrapper `search` and `resolve` fan out only to providers whose wrapper routing surfaces are currently ready; stubbed surfaces such as `simc` remain visible in `warcraft doctor` and excluded-provider metadata instead of appearing as active wrapper candidates
-- the flattened `warcraft search` result list is globally sorted by a tunable wrapper ranking layer that combines provider score, query intent, provider family, and result kind
+- the merged `warcraft search` list interleaves the providers' own lists using a tunable wrapper ranking layer that combines provider score, query intent, provider family, and result kind; it never reorders two rows from the same provider, because a provider's own order is its ranking
 - flattened wrapper results include `wrapper_ranking` so agents can inspect why a provider/result surfaced first
 - `warcraft resolve` uses the same wrapper ranking layer on top of provider confidence instead of trusting provider registration order
 - `warcraft search --brief` and `warcraft resolve --brief` shrink candidate rows to the wrapper decision surface and drop the per-provider payloads; `--compact` is the global output flag only (before the subcommand) and truncates long strings in any payload. The two no longer share a name: `--compact` after the subcommand is a usage error (exit 2)
 - `--brief` never hides a provider failure: `failed_providers`, `failed_provider_count`, and `answered_provider_count` stay in both shapes
 - `warcraft search` reports `count` as the merged candidate total and `truncated` as whether `--limit` cut the list; each provider's scores are rescaled against that provider's own best row before the merge, with a floor so a provider whose best row is weak is not promoted for topping its own empty field
-- the merged page then applies three rules, all visible in the payload (see `docs/foundation/WRAPPER_PROVIDER_CONTRACT.md`): a bare name is not a profile query, so Raider.IO rows are marked `wrapper_ranking.off_intent` and rank below every row from a family the query asked for, while an exact entity-title match anchors the page (with no anchor, one slot stays reserved for a character or guild named exactly the query); no single provider may take more than half the page (over-cap rows are deferred and fill the remaining slots, off-intent rows only fill what is left, up to a strict minority); and a row whose own title is, or starts with, the query outranks one that merely mentions it. `data.results` is in rank order, and `data.merge_policy` reports the caps, the reserved slot, and how many rows they deferred or withheld
+- the merged page then applies three rules, all visible in the payload (see `docs/foundation/WRAPPER_PROVIDER_CONTRACT.md`): a bare name is not a profile query, so Raider.IO rows are marked `wrapper_ranking.off_intent` and rank below every row from a family the query asked for, while the entity provider's own top row anchors the page when its title is, or starts with, the query (with no anchor, one slot stays reserved when Raider.IO's first row is named exactly the query); no single provider may take more than half the page (over-cap rows are deferred and fill the remaining slots, off-intent rows only fill what is left, up to a strict minority); and between providers a row whose own title is, or starts with, the query outranks one that merely mentions it. A guide row the provider flagged as superseded carries `wrapper_ranking.stale_guide: true`, in the `--brief` rows too. `data.merge_policy` reports the caps, the reserved slot, and how many rows they deferred or withheld
 - use `--ranking-debug` when you want compact ranking summaries for the top wrapper candidates
 - use `--expansion-debug` when you want a compact per-provider expansion eligibility snapshot
 - wrapper ranking policy can be overridden with `~/.config/warcraft/wrapper_ranking.json`

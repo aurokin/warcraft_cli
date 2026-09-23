@@ -49,6 +49,6 @@ wowhead entity item 19019
 
 ```bash
 make check       # lint, typecheck, import boundaries, complexity, dead code, fast tests
-make test-live   # opt-in live provider suites (network; per-suite flags in docs/USAGE.md)
+make test-e2e    # end-to-end journeys against the real providers (network; docs/architecture/E2E_TESTING.md)
 make reference   # regenerate docs/reference/; make skills regenerates provider subskills
 ```

@@ -9,7 +9,7 @@ the verified and unverified regions. The tier stays experimental because the com
 thin, not because the data is suspect. Re-verify with:
 
 ```bash
-BLIZZARD_LIVE_TESTS=1 pytest -q -m live tests/test_blizzard_api_live.py
+make test-e2e E2E_ARGS="tests/e2e/test_blizzard.py"
 ```
 
 ## What It Does
@@ -77,10 +77,6 @@ Success payloads are the shared envelope: `{ok, provider, command, kind, schema_
 provenance, data}`. `data` is the raw Blizzard JSON body; `provenance` carries `region`, `namespace`,
 `namespace_class`, `game_version`, `locale`, `source_url`, `verified` (true for confirmed regions),
 and a `verification_note`.
-
-`doctor` and the coming-soon stubs additionally repeat their payload keys at the top level
-(`status`, `capabilities`, `coming_soon`, ...). Those top-level copies are the pre-envelope shape and
-are **deprecated**; read them from `data` instead.
 
 Failures write an error envelope to stderr and exit with the shared codes from
 [ERROR_CONTRACT.md](../foundation/ERROR_CONTRACT.md): 1 generic (`invalid_response`), 2 usage

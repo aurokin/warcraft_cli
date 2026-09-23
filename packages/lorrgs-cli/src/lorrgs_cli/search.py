@@ -273,8 +273,8 @@ def _report_candidates(ref: ReportReference) -> list[dict[str, Any]]:
         "report_type": ref.report_type,
         "source_url": ref.source_url,
         # The reference parsed cleanly, but nothing here checked that Lorrgs can serve this report:
-        # it answers 401 for a report it has not loaded or that Warcraft Logs keeps private, so the
-        # handoff goes out at medium confidence with that caveat attached.
+        # load_overview loads any public report on demand, yet answers 401 for one Warcraft Logs
+        # keeps private and 404 for a code that does not exist, so the handoff stays at medium.
         "ranking": {"score": 88, "confidence": "medium", "match_reasons": ["explicit_report_reference"]},
         "follow_up": {
             "provider": "lorrgs",
@@ -282,7 +282,7 @@ def _report_candidates(ref: ReportReference) -> list[dict[str, Any]]:
             "surface": "report-overview",
             "command": f"lorrgs report-overview {quoted}",
         },
-        "caveat": "Availability is unverified: Lorrgs refuses reports it has not loaded and reports Warcraft Logs keeps private.",
+        "caveat": "Availability is unverified: Lorrgs loads any public report, but refuses reports Warcraft Logs keeps private.",
     }
     if ref.fight_id is None:
         return [overview]

@@ -95,14 +95,6 @@ def test_missing_target_exits_with_the_not_found_code(tmp_path: Path) -> None:
     assert json.loads(result.stderr)["error"]["code"] == "not_found"
 
 
-def test_flat_payload_keys_are_mirrored_inside_data(tmp_path: Path) -> None:
-    """Legacy top-level keys stay for existing agents while `data` carries the same payload."""
-    result = runner.invoke(simc_app, ["--repo-root", str(tmp_path / "missing-repo"), "doctor"])
-    payload = json.loads(result.stdout)
-    assert payload["capabilities"] == payload["data"]["capabilities"]
-    assert payload["status"] == payload["data"]["status"]
-
-
 def test_provider_surface_is_pure_and_conforms(tmp_path: Path) -> None:
     assert isinstance(PROVIDER, ProviderSurface)
     for envelope in (

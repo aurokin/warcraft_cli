@@ -50,8 +50,8 @@ simc --fields data.capabilities doctor
 ## Output contract
 
 Every command writes one JSON envelope: `ok`, `provider`, `command`, `kind`, `schema_version`, `query`,
-`provenance`, `data`, and `error` on failure. The payload lives in `data`; the same keys are still
-mirrored at the top level for existing agents and are deprecated. Failures go to stderr and use the
+`provenance`, `data`, and `error` on failure, and no other top-level key: the payload lives in `data`.
+Failures go to stderr and use the
 shared exit codes (1 generic, 2 usage, 3 auth, 4 not found, 5 network/upstream) — see
 [../foundation/ERROR_CONTRACT.md](../foundation/ERROR_CONTRACT.md).
 
@@ -70,15 +70,21 @@ These codes are worth knowing:
 - `not_found` (exit 4) — `spec-files`, `find-action`, and `trace-action` were pointed at a directory that
   is not a SimulationCraft checkout. They report this instead of returning zero hits as a success.
 - `invalid_query` (exit 2) — a build arrived without a class and spec and could not be identified,
-  `decode-build` was given no talent build at all, or a build-input option was passed with an empty
-  value. Identification decodes the build once per spec in the checkout's generated specialization data
-  (every playable spec, healers included) and keeps the one it decodes as; when several do,
-  `error.details.identity.candidates` lists them. Pass `--actor-class` and `--spec` to skip the probe.
+  `decode-build` or `identify-build` was given no build at all, or a build-input option was passed with
+  an empty value. Identification decodes the build once per spec in the checkout's generated
+  specialization data (every playable spec, healers included) and keeps the one it decodes as; an
+  `--actor-class` or `--spec` hint alone narrows the probe to that class's or spec's specs, and the
+  message names what was probed (`decodes as none of the 3 deathknight specs`). When several specs
+  decode it, `error.details.identity.candidates` lists them. Pass `--actor-class` and `--spec` together
+  to skip the probe.
+- `identify_failed` (exit 1) — identification could not probe at all because the checkout has no built
+  binary or no generated specialization data; the message names which.
 - `unsupported_build_reference` (exit 2) — the build input is a link the CLI cannot turn into talents.
   `error.details.reference_type` names what it recognized: `wowhead_talent_calc_url` for a talent-calc
   URL with no build code, `url` for anything else. See "Build references" below for what does decode.
-- `unknown_talent` (exit 2) — an `--enable`/`--disable` value, or a `modify-build` `--add`/`--remove`
-  value, names no talent of the actor's class. `error.details.unknown_talents` lists them.
+- `unknown_talent` (exit 2) — an `--enable`/`--disable` value names no talent of the actor's class
+  (`error.details.unknown_talents` lists them), or a `modify-build` `--add`/`--remove` value names no
+  talent the build's spec can take.
 
 ## Build input flags
 
@@ -145,9 +151,15 @@ comparisons; when no `--other` decodes, the command fails with the first rejecti
 ## Editing a build
 
 `modify-build` routes each `--add`/`--remove` into the tree that owns the talent (SimC resolves talent
-names per tree, so a spec talent passed as a class talent is rejected). A name must belong to the actor's
-class; an entry id is resolved against the checkout's trait data. Unresolvable values fail with
-`unknown_talent` (exit 2).
+names per tree, so a spec talent passed as a class talent is rejected). A name or entry id must be a
+talent the build's spec can take in the checkout's trait data: another class's talent, another spec's
+tree, or a class-tree talent reserved for another spec (Chi Burst is Brewmaster's) fails with
+`unknown_talent` (exit 2) instead of reaching SimC.
+
+Healer builds encode like any other. SimC refuses to simulate some healers (Mistweaver and Holy Paladin
+always), so the encoder runs SimC in debug mode, which saves the profile without needing a simulated
+player, and without `allow_experimental_specializations`, which made Holy Priest fail on its stale
+default APL.
 
 After re-encoding, the result is decoded again and compared per tree with the build it was supposed to
 come from: the base build, or the `--swap-*-tree-from` source for a tree that was swapped. If anything
@@ -260,7 +272,8 @@ those describe one fight however many were simulated. The payload says so in `sa
 ## Tests that need the binary
 
 `tests/test_simc_real_binary.py` drives the real SimC binary in the discovered checkout over its own
-stock MID1 profiles. It skips — with `REAL-BINARY TEST SKIPPED` in the skip reason — when no built
+stock MID1 profiles, plus a Mistweaver and a Holy Priest build for the healer encode path. It skips —
+with `REAL-BINARY TEST SKIPPED` in the skip reason — when no built
 binary is present, so it proves nothing on CI. The same logic is covered everywhere else by
 `tests/test_simc_build_input.py` and `tests/test_simc_cli.py`, which replay captured SimC output.
 

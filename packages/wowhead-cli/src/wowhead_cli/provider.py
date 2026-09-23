@@ -11,11 +11,11 @@ import shlex
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any
 
 import httpx
 from warcraft_api.cache import CacheSettings, load_cache_settings_from_env
-from warcraft_core.envelope import ENVELOPE_KEYS, Envelope, success_envelope, with_legacy_keys
+from warcraft_core.envelope import Envelope, success_envelope
 from warcraft_core.provider import ProviderError
 
 from wowhead_cli.doctor import build_doctor_payload
@@ -112,11 +112,8 @@ def cache_settings_payload(settings: CacheSettings) -> dict[str, Any]:
 
 
 def envelope(command: str, kind: str, data: dict[str, Any], *, query: Any = None) -> Envelope:
-    """Wrap a Wowhead payload in the shared envelope, keeping its historical top-level keys as legacy copies."""
-    base = success_envelope(provider=PROVIDER_NAME, command=command, kind=kind, data=data, query=query)
-    legacy = {key: value for key, value in data.items() if key not in ENVELOPE_KEYS}
-    # with_legacy_keys returns a plain dict because the legacy copies live outside the TypedDict.
-    return cast(Envelope, with_legacy_keys(base, legacy))
+    """Wrap a Wowhead payload in the shared envelope."""
+    return success_envelope(provider=PROVIDER_NAME, command=command, kind=kind, data=data, query=query)
 
 
 def _validated_query(raw: str) -> str:

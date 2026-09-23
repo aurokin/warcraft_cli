@@ -44,12 +44,12 @@ warcraft-wiki article-query ./tmp/wiki-createframe "arguments" --kind sections
 ## Output and exit codes
 
 Every payload is a shared envelope: `ok`, `provider`, `command`, `kind`, `schema_version`, `query`, `provenance`,
-`data`, and `error` on failure. The historical top-level keys (`results`, `count`, `match`, `article`, `content`, ...)
-are still emitted alongside `data` so existing agents keep working.
+`data`, and `error` on failure, and nothing else at the top level: every payload field is under `data`.
 
-Exit codes follow `docs/foundation/ERROR_CONTRACT.md`: 1 generic (bad bundle path, invalid cache config), 2 usage,
-3 auth (upstream 401/403), 4 not found (the wiki has no such page, or no `api`/`event` page matches the query),
-5 network or upstream failure. Failures write
+Exit codes follow `docs/foundation/ERROR_CONTRACT.md`: 1 generic (unreadable bundle, invalid cache config), 2 usage
+(including `invalid_argument` for an unsupported `article-query --kind` or a bundle path that is a file), 3 auth
+(upstream 401/403), 4 not found (the wiki has no such page, no `api`/`event` page matches the query, or the bundle
+directory does not exist), 5 network or upstream failure. Failures write
 the error envelope to stderr; transport failures never print a traceback.
 
 ## Content families

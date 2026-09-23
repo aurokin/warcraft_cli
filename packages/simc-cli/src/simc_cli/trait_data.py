@@ -47,18 +47,27 @@ class TraitTable:
     tree_by_entry: dict[int, str] = field(default_factory=dict)
     class_id_by_entry: dict[int, int] = field(default_factory=dict)
     hero_sub_tree_by_entry: dict[int, int] = field(default_factory=dict)
-    # (class id, tokenized talent name) -> the trees that name appears in for that class.
-    trees_by_name: dict[tuple[int, str], set[str]] = field(default_factory=dict)
+    # (class id, tokenized talent name) -> every entry of that class carrying the name.
+    entries_by_name: dict[tuple[int, str], list[int]] = field(default_factory=dict)
+    # The specs that can take an entry. Absent means every spec of its class; spec-tree and hero
+    # entries are always restricted, and so are some class-tree entries (Chi Burst is Brewmaster's).
+    spec_ids_by_entry: dict[int, frozenset[int]] = field(default_factory=dict)
     # Every entry of a tiered node, keyed by each of those entries.
     tiered_siblings_by_entry: dict[int, tuple[TieredEntry, ...]] = field(default_factory=dict)
 
-    def tree_for_entry(self, entry: int) -> str | None:
-        return self.tree_by_entry.get(entry)
+    def _available(self, entry: int, class_id: int, spec_id: int) -> bool:
+        specs = self.spec_ids_by_entry.get(entry)
+        return self.class_id_by_entry.get(entry) == class_id and (specs is None or spec_id in specs)
 
-    def tree_for_name(self, class_id: int, name: str) -> str | None:
-        """The tree a talent name belongs to, or None when it is unknown or spans several trees."""
-        trees = self.trees_by_name.get((class_id, tokenize_talent_name(name)))
-        return next(iter(trees)) if trees and len(trees) == 1 else None
+    def tree_for_entry(self, entry: int, *, class_id: int, spec_id: int) -> str | None:
+        """The tree an entry id belongs to, or None when the spec cannot take it."""
+        return self.tree_by_entry.get(entry) if self._available(entry, class_id, spec_id) else None
+
+    def tree_for_name(self, name: str, *, class_id: int, spec_id: int) -> str | None:
+        """The tree a talent name belongs to for this spec, or None when it has none or spans several trees."""
+        entries = self.entries_by_name.get((class_id, tokenize_talent_name(name)), [])
+        trees = {self.tree_by_entry[entry] for entry in entries if self._available(entry, class_id, spec_id)}
+        return next(iter(trees)) if len(trees) == 1 else None
 
 
 def trait_data_path(repo_root: Path) -> Path:
@@ -78,8 +87,10 @@ def parse_trait_table(text: str) -> TraitTable:
         table.class_id_by_entry[entry] = class_id
         if tree == "hero":
             table.hero_sub_tree_by_entry[entry] = int(match.group("hero_tree_id"))
-        key = (class_id, tokenize_talent_name(match.group("name")))
-        table.trees_by_name.setdefault(key, set()).add(tree)
+        table.entries_by_name.setdefault((class_id, tokenize_talent_name(match.group("name"))), []).append(entry)
+        spec_ids = frozenset(int(value) for value in match.group("spec_ids").split(",") if int(value))
+        if spec_ids:
+            table.spec_ids_by_entry[entry] = spec_ids
         if int(match.group("node_type")) == NODE_TIERED:
             siblings = tiered_by_node.setdefault(int(match.group("node_id")), [])
             siblings.append(TieredEntry(entry=entry, max_rank=int(match.group("max_rank"))))
@@ -131,7 +142,7 @@ def resolve_talent_tokens(repo_root: Path, actor_class: str | None, values: set[
         raise UnknownTalentError(sorted(values))
     table = load_trait_table(repo_root)
     tokens = {value: tokenize_talent_name(value) for value in values}
-    unknown = sorted(value for value, token in tokens.items() if (class_id, token) not in table.trees_by_name)
+    unknown = sorted(value for value, token in tokens.items() if (class_id, token) not in table.entries_by_name)
     if unknown:
         raise UnknownTalentError(unknown)
     return set(tokens.values())

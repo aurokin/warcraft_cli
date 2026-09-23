@@ -40,8 +40,7 @@ Use `warcraft` first when the caller does not already know which provider they n
 
 Every binary emits one JSON object. On success it carries `ok: true`, `provider`, `command`,
 `kind`, `schema_version`, `query`, `provenance`, and `data`. Read the payload from `data`: every
-binary populates it. Providers also copy the same keys to the top level for older agents; those
-copies are deprecated and identical to `data`.
+binary populates it, and nothing else sits at the top level.
 
 On failure the object goes to stderr with `ok: false` and
 `error: {"code": ..., "message": ..., "details"?: ...}`, and the process exit code tells you what

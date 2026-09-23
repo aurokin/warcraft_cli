@@ -27,7 +27,7 @@ from warcraft_core.cli import (
 from warcraft_core.exit_codes import EXIT_USAGE
 from warcraft_core.identity import build_identity_payload, refresh_talent_transport_packet, validate_talent_transport_packet
 from warcraft_core.output import DEFAULT_COMPACT_MAX_CHARS
-from warcraft_core.talent_transport import tokenize_talent_name
+from warcraft_core.talent_transport import CLASS_ID_BY_ACTOR_CLASS, specialization_ids, tokenize_talent_name
 
 from simc_cli.apl import action_counts, group_entries, mermaid_graph, parse_apl, talent_refs, trace_action_entries
 from simc_cli.branch import (
@@ -47,6 +47,7 @@ from simc_cli.build_input import (
     BuildResolution,
     BuildSpec,
     SimcBuildError,
+    SimcNotReadyError,
     TalentStrings,
     TreeDiff,
     UnsupportedBuildReference,
@@ -108,7 +109,7 @@ def _cfg(ctx: typer.Context) -> SimcConfig:
 
 
 def _emit(ctx: typer.Context, payload: dict[str, Any]) -> None:
-    """Emit the shared success envelope, keeping the deprecated flat payload keys at the top level."""
+    """Emit the shared success envelope with the flat payload under ``data``."""
     emit(ctx, simc_envelope(ctx.info_name or "", payload))
 
 
@@ -428,6 +429,9 @@ def _load_identified_build_spec_or_fail(
             actor_class=actor_class,
             spec_name=spec_name,
         )
+    except SimcNotReadyError as exc:
+        # The checkout, not the caller's input, is what failed; this is not a usage error.
+        fail(ctx, "identify_failed", str(exc))
     except UnsupportedBuildReference as exc:
         fail(
             ctx,
@@ -450,7 +454,7 @@ def _fail_unidentified_build(ctx: typer.Context, *, purpose: str, build_spec: Bu
         found = ", ".join(f"{actor_class} {spec}" for actor_class, spec in identity.candidates)
         reason = f"it decodes as {len(identity.candidates)} specs ({found})"
     else:
-        reason = "it decodes as none of the specs SimulationCraft knows"
+        reason = f"it decodes as none of {identity.probe_scope}"
     fail(
         ctx,
         "invalid_query",
@@ -626,7 +630,6 @@ def repo_command(
     _emit(
         ctx,
         {
-            "provider": "simc",
             "action": action,
             "changed": changed,
             "stored_root": stored_root,
@@ -653,7 +656,6 @@ def checkout_command(ctx: typer.Context) -> None:
     _emit(
         ctx,
         {
-            "provider": "simc",
             "status": result.status,
             "repo_url": result.repo_url,
             "managed_root": str(result.root),
@@ -699,7 +701,6 @@ def version(ctx: typer.Context) -> None:
     _emit(
         ctx,
         {
-            "provider": "simc",
             "binary": {
                 "path": str(version_info.binary_path),
                 "available": version_info.available,
@@ -718,13 +719,12 @@ def inspect(
     """Describe the repo, or one file inside it, including any build lines it carries."""
     paths = _repo_paths(ctx)
     if target is None:
-        _emit(ctx, {"provider": "simc", "inspect": "repo", "repo": repo_payload(paths)})
+        _emit(ctx, {"inspect": "repo", "repo": repo_payload(paths)})
         return
     resolved = Path(target).expanduser().resolve()
     if not resolved.exists():
         fail(ctx, "not_found", f"Inspect target not found: {resolved}")
     payload: dict[str, Any] = {
-        "provider": "simc",
         "inspect": "path",
         "target": {
             "path": str(resolved),
@@ -777,7 +777,7 @@ def spec_files(
             "truncated": len(rows) > limit,
         }
         total += len(rows)
-    _emit(ctx, {"provider": "simc", "query": query, "count": total, "categories": categories})
+    _emit(ctx, {"query": query, "count": total, "categories": categories})
 
 
 def _talent_row(talent: Any) -> dict[str, Any]:
@@ -875,7 +875,6 @@ def _decode_build(ctx: typer.Context, *, apl_path: str | None, option_values: di
     _emit(
         ctx,
         {
-            "provider": "simc",
             "build_spec": _serialize_build_spec(build_spec),
             "identity": _serialize_build_identity(identity),
             "decoded": _decoded_payload(resolution),
@@ -921,10 +920,16 @@ def decode_build_command(
 def _identify_build(ctx: typer.Context, *, apl_path: str | None, option_values: dict[str, Any]) -> None:
     paths = _repo_paths(ctx)
     build_spec, identity = _identified_build_or_fail(ctx, paths, apl_path=apl_path, option_values=option_values)
+    if identity.source == "missing_build_data":
+        fail(
+            ctx,
+            "invalid_query",
+            "No build was supplied to identify. Pass --talents, --build-text, --build-file, --build-packet, "
+            "--profile-path, --apl-path, --class-talents/--spec-talents/--hero-talents, or --actor-class with --spec.",
+        )
     _emit(
         ctx,
         {
-            "provider": "simc",
             "kind": "identify_build",
             "build_spec": _serialize_build_spec(build_spec),
             "identity": _serialize_build_identity(identity),
@@ -1101,7 +1106,6 @@ def validate_talent_transport_command(
     _emit(
         ctx,
         {
-            "provider": "simc",
             "kind": "validate_talent_transport",
             "input": {
                 "source": resolved.source,
@@ -1140,7 +1144,6 @@ def _build_harness(
     _emit(
         ctx,
         {
-            "provider": "simc",
             "kind": "build_harness",
             "path": str(target),
             "build_spec": _serialize_build_spec(build_spec),
@@ -1202,7 +1205,6 @@ def validate_apl_command(
     _emit(
         ctx,
         {
-            "provider": "simc",
             "kind": "validate_apl",
             "label": label,
             "apl_path": str(Path(apl_path).expanduser().resolve()),
@@ -1251,7 +1253,7 @@ def compare_apls_command(
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(json.dumps(payload, indent=2) + "\n")
         payload["report_path"] = str(target)
-    _emit(ctx, {"provider": "simc", **payload})
+    _emit(ctx, payload)
 
 
 @app.command("variant-report")
@@ -1270,7 +1272,6 @@ def variant_report_command(
     _emit(
         ctx,
         {
-            "provider": "simc",
             "report_path": str(resolved),
             **variant_report_payload(report),
         },
@@ -1284,7 +1285,7 @@ def verify_clean_command(
 ) -> None:
     """Report whether the checkout and built binary are unmodified."""
     paths = _repo_paths(ctx)
-    _emit(ctx, {"provider": "simc", **verify_clean_payload(paths, hash_binary=hash_binary)})
+    _emit(ctx, verify_clean_payload(paths, hash_binary=hash_binary))
 
 
 @app.command("apl-lists")
@@ -1324,7 +1325,6 @@ def apl_lists(
     _emit(
         ctx,
         {
-            "provider": "simc",
             "apl": {
                 "path": str(resolved),
                 "relative_to_repo": str(resolved.relative_to(paths.root)) if resolved.is_relative_to(paths.root) else None,
@@ -1351,7 +1351,6 @@ def apl_graph_command(
     _emit(
         ctx,
         {
-            "provider": "simc",
             "apl": {
                 "path": str(resolved),
                 "relative_to_repo": str(resolved.relative_to(paths.root)) if resolved.is_relative_to(paths.root) else None,
@@ -1381,7 +1380,6 @@ def apl_talents_command(
     _emit(
         ctx,
         {
-            "provider": "simc",
             "apl": {
                 "path": str(resolved),
                 "relative_to_repo": str(resolved.relative_to(paths.root)) if resolved.is_relative_to(paths.root) else None,
@@ -1425,7 +1423,7 @@ def find_action_command(
             "truncated": len(hits) > limit,
         }
         total += len(hits)
-    _emit(ctx, {"provider": "simc", "action": action, "class_filter": wow_class, "count": total, "buckets": buckets})
+    _emit(ctx, {"action": action, "class_filter": wow_class, "count": total, "buckets": buckets})
 
 
 @app.command("trace-action")
@@ -1468,7 +1466,6 @@ def trace_action_command(
     _emit(
         ctx,
         {
-            "provider": "simc",
             "action": action,
             "class_filter": wow_class,
             "apl": {
@@ -1541,7 +1538,6 @@ def _apl_prune(
     _emit(
         ctx,
         {
-            "provider": "simc",
             "apl": {
                 "path": str(resolved),
                 "relative_to_repo": str(resolved.relative_to(paths.root)) if resolved.is_relative_to(paths.root) else None,
@@ -1620,7 +1616,6 @@ def _apl_branch_trace(
     _emit(
         ctx,
         {
-            "provider": "simc",
             "apl": {
                 "path": str(resolved),
                 "relative_to_repo": str(resolved.relative_to(paths.root)) if resolved.is_relative_to(paths.root) else None,
@@ -1714,7 +1709,6 @@ def _apl_intent(
     _emit(
         ctx,
         {
-            "provider": "simc",
             "apl": {
                 "path": str(resolved),
                 "relative_to_repo": str(resolved.relative_to(paths.root)) if resolved.is_relative_to(paths.root) else None,
@@ -1803,7 +1797,6 @@ def _apl_intent_explain(
     _emit(
         ctx,
         {
-            "provider": "simc",
             "apl": {
                 "path": str(resolved),
                 "relative_to_repo": str(resolved.relative_to(paths.root)) if resolved.is_relative_to(paths.root) else None,
@@ -1904,7 +1897,6 @@ def _priority(
     _emit(
         ctx,
         {
-            "provider": "simc",
             "apl": {
                 "path": str(resolved),
                 "relative_to_repo": str(resolved.relative_to(paths.root)) if resolved.is_relative_to(paths.root) else None,
@@ -2005,7 +1997,6 @@ def _describe_build(
     _emit(
         ctx,
         {
-            "provider": "simc",
             "kind": "describe_build",
             "apl": {
                 "path": str(resolved),
@@ -2113,7 +2104,6 @@ def _inactive_actions(
     _emit(
         ctx,
         {
-            "provider": "simc",
             "apl": {
                 "path": str(resolved),
                 "relative_to_repo": str(resolved.relative_to(paths.root)) if resolved.is_relative_to(paths.root) else None,
@@ -2208,7 +2198,6 @@ def _opener(
     _emit(
         ctx,
         {
-            "provider": "simc",
             "apl": {
                 "path": str(resolved),
                 "relative_to_repo": str(resolved.relative_to(paths.root)) if resolved.is_relative_to(paths.root) else None,
@@ -2303,7 +2292,6 @@ def _apl_branch_compare(
     _emit(
         ctx,
         {
-            "provider": "simc",
             "apl": {
                 "path": str(resolved),
                 "relative_to_repo": str(resolved.relative_to(paths.root)) if resolved.is_relative_to(paths.root) else None,
@@ -2451,7 +2439,6 @@ def _analysis_packet(
     _emit(
         ctx,
         {
-            "provider": "simc",
             "apl": {
                 "path": str(packet.apl_path),
                 "relative_to_repo": str(packet.apl_path.relative_to(paths.root)) if packet.apl_path.is_relative_to(paths.root) else None,
@@ -2598,7 +2585,6 @@ def first_cast_command(
     _emit(
         ctx,
         {
-            "provider": "simc",
             "profile_path": str(resolved),
             "action": action,
             "targets": targets,
@@ -2631,7 +2617,6 @@ def log_actions_command(
     _emit(
         ctx,
         {
-            "provider": "simc",
             "log_path": str(resolved),
             "actions": list(actions),
             "count": len(hits),
@@ -2662,7 +2647,6 @@ def sync(
         _emit(
             ctx,
             {
-                "provider": "simc",
                 "status": "skipped",
                 "reason": "dirty_worktree",
                 "repo": str(paths.root),
@@ -2688,7 +2672,6 @@ def sync(
     _emit(
         ctx,
         {
-            "provider": "simc",
             "status": "updated",
             "repo": str(paths.root),
             "command": result.command,
@@ -2729,7 +2712,6 @@ def build(
     _emit(
         ctx,
         {
-            "provider": "simc",
             "status": "built",
             "command": result.command,
             "stdout_preview": stdout_preview,
@@ -3020,7 +3002,6 @@ def compare_builds_command(
         )
 
     _emit(ctx, {
-        "provider": "simc",
         "kind": "compare_builds",
         "base": {
             "input": base,
@@ -3102,18 +3083,16 @@ class _TalentEdit:
         return f"{self.value}:{self.rank}"
 
 
-def _base_entry_index(base_resolution: BuildResolution) -> tuple[dict[str, tuple[str, int]], set[int]]:
-    """Map every talent name/token in the base build to its (tree, entry), plus the set of entry ids."""
+def _base_entry_index(base_resolution: BuildResolution) -> dict[str, tuple[str, int]]:
+    """Map every talent name/token in the base build to its (tree, entry)."""
     by_name: dict[str, tuple[str, int]] = {}
-    entries: set[int] = set()
     for tree, talents in base_resolution.talents_by_tree.items():
         for talent in talents:
             if not talent.entry:
                 continue
-            entries.add(talent.entry)
             by_name.setdefault(talent.token, (tree, talent.entry))
             by_name.setdefault(talent.name.lower(), (tree, talent.entry))
-    return by_name, entries
+    return by_name
 
 
 def _resolve_edit(
@@ -3123,14 +3102,19 @@ def _resolve_edit(
     *,
     table: TraitTable,
     by_name: dict[str, tuple[str, int]],
-    class_id: int | None,
+    class_id: int,
+    spec_id: int,
 ) -> _TalentEdit:
-    """Decide which talent tree an edit belongs to; SimC resolves names per tree, not globally."""
+    """Decide which talent tree an edit belongs to; SimC resolves names per tree, not globally.
+
+    Only talents this spec can take resolve: a class has class-tree talents reserved for one spec, and
+    SimC rejects those as if the whole build were invalid.
+    """
     if value.isdigit():
         entry = int(value)
-        tree = table.tree_for_entry(entry)
+        tree = table.tree_for_entry(entry, class_id=class_id, spec_id=spec_id)
         if tree is None or tree == "selection":
-            fail(ctx, "unknown_talent", f"Unknown talent entry id: '{value}'.", exit_code=EXIT_USAGE)
+            fail(ctx, "unknown_talent", f"Unknown talent entry id for this spec: '{value}'.", exit_code=EXIT_USAGE)
         return _TalentEdit(tree=tree, value=value, rank=rank, entry=entry)
     # SimC tokenizes talent names when it matches them, and a profile line cannot contain spaces.
     token = tokenize_talent_name(value)
@@ -3138,12 +3122,12 @@ def _resolve_edit(
     if known is not None:
         # Pass the name through so SimC spreads the rank over a tiered node's entries itself.
         return _TalentEdit(tree=known[0], value=token, rank=rank, entry=known[1])
-    tree = table.tree_for_name(class_id, value) if class_id is not None else None
+    tree = table.tree_for_name(value, class_id=class_id, spec_id=spec_id)
     if tree is None or tree == "selection":
         fail(
             ctx,
             "unknown_talent",
-            f"Cannot resolve talent '{value}' to a talent tree. Use an entry id or a name from this class.",
+            f"Cannot resolve talent '{value}' to a talent tree. Use an entry id or a name this spec can take.",
             exit_code=EXIT_USAGE,
         )
     return _TalentEdit(tree=tree, value=token, rank=rank, entry=None)
@@ -3159,20 +3143,22 @@ def _build_modify_edits(
     modifications: list[str],
 ) -> list[_TalentEdit]:
     table = load_trait_table(paths.root)
-    by_name, base_entries = _base_entry_index(base_resolution)
-    class_ids = {table.class_id_by_entry[entry] for entry in base_entries if entry in table.class_id_by_entry}
-    class_id = next(iter(class_ids)) if len(class_ids) == 1 else None
+    by_name = _base_entry_index(base_resolution)
+    class_id = CLASS_ID_BY_ACTOR_CLASS[base_resolution.actor_class]
+    spec_id = specialization_ids(paths.root)[(base_resolution.actor_class, base_resolution.spec)]
 
     edits: list[_TalentEdit] = []
     for item in remove:
         value = item.strip()
-        edits.append(_resolve_edit(ctx, value, 0, table=table, by_name=by_name, class_id=class_id))
+        edits.append(_resolve_edit(ctx, value, 0, table=table, by_name=by_name, class_id=class_id, spec_id=spec_id))
         modifications.append(f"remove:{value}")
     for item in add:
         name_or_id, _, rank_str = item.strip().partition(":")
         if not rank_str.isdigit() or not name_or_id:
             fail(ctx, "invalid_add", f"--add requires 'name:rank' or 'entry_id:rank', got: '{item}'")
-        edits.append(_resolve_edit(ctx, name_or_id, int(rank_str), table=table, by_name=by_name, class_id=class_id))
+        edits.append(
+            _resolve_edit(ctx, name_or_id, int(rank_str), table=table, by_name=by_name, class_id=class_id, spec_id=spec_id)
+        )
         modifications.append(f"add:{item}")
     return edits
 
@@ -3385,7 +3371,6 @@ def _modify_build(ctx: typer.Context, options: _ModifyBuildOptions) -> None:
         )
 
     _emit(ctx, {
-        "provider": "simc",
         "kind": "modify_build",
         "base": {
             "input": options.talents,
@@ -3471,7 +3456,6 @@ def run_command(
     _emit(
         ctx,
         {
-            "provider": "simc",
             "status": "completed",
             "profile_path": str(resolved),
             "command": result.command,

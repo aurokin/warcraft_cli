@@ -93,9 +93,9 @@ def test_search_auto_detects_expansion_from_entity_url(monkeypatch) -> None:
     result = runner.invoke(app, ["search", "https://www.wowhead.com/wotlk/item=19019", "--limit", "1"])
     assert result.exit_code == 0, result.output
     payload = json.loads(result.stdout)
-    assert payload["expansion"] == "wotlk"
-    assert payload["expansion_source"] == "url"
-    assert payload["search_url"].startswith("https://www.wowhead.com/wotlk/")
+    assert payload["data"]["expansion"] == "wotlk"
+    assert payload["data"]["expansion_source"] == "url"
+    assert payload["data"]["search_url"].startswith("https://www.wowhead.com/wotlk/")
 
 
 def test_search_keeps_explicit_expansion_flag_over_url(monkeypatch) -> None:
@@ -114,8 +114,8 @@ def test_search_keeps_explicit_expansion_flag_over_url(monkeypatch) -> None:
     )
     assert result.exit_code == 0, result.output
     payload = json.loads(result.stdout)
-    assert payload["expansion"] == "classic"
-    assert payload["expansion_source"] == "flag"
+    assert payload["data"]["expansion"] == "classic"
+    assert payload["data"]["expansion_source"] == "flag"
 
 
 def test_entity_url_flag_overrides_type_and_id(monkeypatch) -> None:
@@ -141,8 +141,8 @@ def test_entity_url_flag_overrides_type_and_id(monkeypatch) -> None:
     )
     assert result.exit_code == 0, result.output
     payload = json.loads(result.stdout)
-    assert payload["expansion"] == "wotlk"
-    assert payload["entity"]["id"] == 19019
+    assert payload["data"]["expansion"] == "wotlk"
+    assert payload["data"]["entity"]["id"] == 19019
 
 
 def test_doctor_reports_expansion_url_policy(monkeypatch) -> None:
@@ -153,6 +153,6 @@ def test_doctor_reports_expansion_url_policy(monkeypatch) -> None:
     result = runner.invoke(app, ["--expansion", "wotlk", "doctor", "--no-live"])
     assert result.exit_code == 0, result.output
     payload = json.loads(result.stdout)
-    policy = payload["expansion_url_policy"]
+    policy = payload["data"]["expansion_url_policy"]
     assert policy["ok"] is True
     assert policy["checks"]

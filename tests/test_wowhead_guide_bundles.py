@@ -62,7 +62,7 @@ def test_guide_bundle_refresh_skips_fresh_bundle_with_default_max_age(tmp_path: 
     result = runner.invoke(app, ["guide-bundle-refresh", "3143", "--root", str(root)])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["refresh"] == {
+    assert payload["data"]["refresh"] == {
         "updated": False,
         "reason": "fresh",
         "max_age_hours": 24,
@@ -122,14 +122,14 @@ def test_guide_bundle_refresh_updates_stale_bundle_and_reuses_manifest_settings(
     result = runner.invoke(app, ["guide-bundle-refresh", str(export_dir)])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["refresh"] == {
+    assert payload["data"]["refresh"] == {
         "updated": True,
         "reason": "stale",
         "max_age_hours": 24,
     }
-    assert payload["hydration"]["enabled"] is True
-    assert payload["hydration"]["types"] == ["spell", "item"]
-    assert payload["counts"]["hydrated_entities"] == 2
+    assert payload["data"]["hydration"]["enabled"] is True
+    assert payload["data"]["hydration"]["types"] == ["spell", "item"]
+    assert payload["data"]["counts"]["hydrated_entities"] == 2
     assert (export_dir / "entities" / "manifest.json").exists()
 
 
@@ -209,7 +209,7 @@ def test_guide_bundle_refresh_rehydrates_only_stale_hydrated_entities(
     result = runner.invoke(app, ["guide-bundle-refresh", str(export_dir)])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["refresh"] == {
+    assert payload["data"]["refresh"] == {
         "updated": True,
         "reason": "stale",
         "max_age_hours": 24,
@@ -231,7 +231,7 @@ def test_guide_bundle_refresh_rehydrates_only_stale_hydrated_entities(
         "bundle_store": 1,
         "live_fetch": 1,
     }
-    assert payload["hydration"]["source_counts"] == {
+    assert payload["data"]["hydration"]["source_counts"] == {
         "bundle_store": 1,
         "live_fetch": 1,
     }
@@ -320,18 +320,18 @@ def test_guide_bundle_list_discovers_exported_bundles(tmp_path) -> None:
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["root"] == str(root)
-    assert payload["count"] == 2
-    assert payload["max_age_hours"] == 24
-    assert [row["guide_id"] for row in payload["bundles"]] == [42, 3143]
-    assert payload["bundles"][0]["dir_name"] == "guide-42-other"
-    assert payload["bundles"][0]["title"] == "Arcane Mage Guide"
-    assert payload["bundles"][0]["freshness"]["max_age_hours"] == 24
-    assert payload["bundles"][0]["freshness"]["bundle"] == "fresh"
-    assert payload["bundles"][0]["freshness"]["bundle_reasons"] == []
-    assert payload["bundles"][0]["freshness"]["hydration"] == "disabled"
-    assert payload["bundles"][0]["freshness"]["hydration_reasons"] == ["disabled"]
-    assert payload["bundles"][0]["hydration"] == {
+    assert payload["data"]["root"] == str(root)
+    assert payload["data"]["count"] == 2
+    assert payload["data"]["max_age_hours"] == 24
+    assert [row["guide_id"] for row in payload["data"]["bundles"]] == [42, 3143]
+    assert payload["data"]["bundles"][0]["dir_name"] == "guide-42-other"
+    assert payload["data"]["bundles"][0]["title"] == "Arcane Mage Guide"
+    assert payload["data"]["bundles"][0]["freshness"]["max_age_hours"] == 24
+    assert payload["data"]["bundles"][0]["freshness"]["bundle"] == "fresh"
+    assert payload["data"]["bundles"][0]["freshness"]["bundle_reasons"] == []
+    assert payload["data"]["bundles"][0]["freshness"]["hydration"] == "disabled"
+    assert payload["data"]["bundles"][0]["freshness"]["hydration_reasons"] == ["disabled"]
+    assert payload["data"]["bundles"][0]["hydration"] == {
         "enabled": False,
         "types": [],
         "limit": 0,
@@ -339,14 +339,14 @@ def test_guide_bundle_list_discovers_exported_bundles(tmp_path) -> None:
         "hydrated_entities": 0,
         "source_counts": {},
     }
-    assert payload["bundles"][1]["counts"]["linked_entities"] == 27
-    assert payload["bundles"][1]["freshness"]["max_age_hours"] == 24
-    assert payload["bundles"][1]["freshness"]["bundle"] == "stale"
-    assert payload["bundles"][1]["freshness"]["bundle_reasons"] == ["max_age_exceeded"]
-    assert payload["bundles"][1]["freshness"]["hydration"] == "stale"
-    assert "bundle_stale" in payload["bundles"][1]["freshness"]["hydration_reasons"]
-    assert "max_age_exceeded" in payload["bundles"][1]["freshness"]["hydration_reasons"]
-    assert payload["bundles"][1]["hydration"] == {
+    assert payload["data"]["bundles"][1]["counts"]["linked_entities"] == 27
+    assert payload["data"]["bundles"][1]["freshness"]["max_age_hours"] == 24
+    assert payload["data"]["bundles"][1]["freshness"]["bundle"] == "stale"
+    assert payload["data"]["bundles"][1]["freshness"]["bundle_reasons"] == ["max_age_exceeded"]
+    assert payload["data"]["bundles"][1]["freshness"]["hydration"] == "stale"
+    assert "bundle_stale" in payload["data"]["bundles"][1]["freshness"]["hydration_reasons"]
+    assert "max_age_exceeded" in payload["data"]["bundles"][1]["freshness"]["hydration_reasons"]
+    assert payload["data"]["bundles"][1]["hydration"] == {
         "enabled": True,
         "types": ["spell", "item"],
         "limit": 2,
@@ -358,13 +358,13 @@ def test_guide_bundle_list_discovers_exported_bundles(tmp_path) -> None:
     result = runner.invoke(app, ["guide-bundle-list", "--root", str(root), "--max-age-hours", "72"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["max_age_hours"] == 72
-    assert payload["stale_reason_counts"] == {"bundle": {}, "hydration": {}}
-    assert payload["bundles"][1]["freshness"]["max_age_hours"] == 72
-    assert payload["bundles"][1]["freshness"]["bundle"] == "fresh"
-    assert payload["bundles"][1]["freshness"]["bundle_reasons"] == []
-    assert payload["bundles"][1]["freshness"]["hydration"] == "fresh"
-    assert payload["bundles"][1]["freshness"]["hydration_reasons"] == []
+    assert payload["data"]["max_age_hours"] == 72
+    assert payload["data"]["stale_reason_counts"] == {"bundle": {}, "hydration": {}}
+    assert payload["data"]["bundles"][1]["freshness"]["max_age_hours"] == 72
+    assert payload["data"]["bundles"][1]["freshness"]["bundle"] == "fresh"
+    assert payload["data"]["bundles"][1]["freshness"]["bundle_reasons"] == []
+    assert payload["data"]["bundles"][1]["freshness"]["hydration"] == "fresh"
+    assert payload["data"]["bundles"][1]["freshness"]["hydration_reasons"] == []
 
 
 
@@ -427,14 +427,14 @@ def test_guide_bundle_list_uses_root_index_when_available(monkeypatch, tmp_path:
     result = runner.invoke(app, ["guide-bundle-list", "--root", str(root)])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["bundles"][0]["guide_id"] == 3143
-    assert payload["stale_reason_counts"] == {"bundle": {}, "hydration": {}}
-    assert payload["bundles"][0]["hydration"]["source_counts"] == {"entity_cache": 1}
-    assert payload["bundles"][0]["freshness"]["max_age_hours"] == 24
-    assert payload["bundles"][0]["freshness"]["bundle"] == "fresh"
-    assert payload["bundles"][0]["freshness"]["bundle_reasons"] == []
-    assert payload["bundles"][0]["freshness"]["hydration"] == "fresh"
-    assert payload["bundles"][0]["freshness"]["hydration_reasons"] == []
+    assert payload["data"]["bundles"][0]["guide_id"] == 3143
+    assert payload["data"]["stale_reason_counts"] == {"bundle": {}, "hydration": {}}
+    assert payload["data"]["bundles"][0]["hydration"]["source_counts"] == {"entity_cache": 1}
+    assert payload["data"]["bundles"][0]["freshness"]["max_age_hours"] == 24
+    assert payload["data"]["bundles"][0]["freshness"]["bundle"] == "fresh"
+    assert payload["data"]["bundles"][0]["freshness"]["bundle_reasons"] == []
+    assert payload["data"]["bundles"][0]["freshness"]["hydration"] == "fresh"
+    assert payload["data"]["bundles"][0]["freshness"]["hydration_reasons"] == []
 
 
 
@@ -487,26 +487,26 @@ def test_guide_bundle_search_returns_ranked_matches_and_follow_up_commands(tmp_p
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["query"] == "frost death knight"
-    assert payload["count"] == 1
-    assert payload["stale_reason_counts"] == {"bundle": {}, "hydration": {}}
-    assert payload["matches"][0]["guide_id"] == 3143
-    assert "title" in payload["matches"][0]["match_reasons"]
-    assert payload["matches"][0]["suggested_query_command"] == (
+    assert payload["data"]["count"] == 1
+    assert payload["data"]["stale_reason_counts"] == {"bundle": {}, "hydration": {}}
+    assert payload["data"]["matches"][0]["guide_id"] == 3143
+    assert "title" in payload["data"]["matches"][0]["match_reasons"]
+    assert payload["data"]["matches"][0]["suggested_query_command"] == (
         f"wowhead guide-query 3143 'frost death knight' --root {root}"
     )
 
     result = runner.invoke(app, ["guide-bundle-search", "42", "--root", str(root)])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["matches"][0]["guide_id"] == 42
-    assert "guide_id" in payload["matches"][0]["match_reasons"]
+    assert payload["data"]["matches"][0]["guide_id"] == 42
+    assert "guide_id" in payload["data"]["matches"][0]["match_reasons"]
 
     result = runner.invoke(app, ["guide-bundle-search", "classic", "--root", str(root), "--limit", "1"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["count"] == 1
-    assert payload["matches"][0]["guide_id"] == 42
-    assert "expansion" in payload["matches"][0]["match_reasons"]
+    assert payload["data"]["count"] == 1
+    assert payload["data"]["matches"][0]["guide_id"] == 42
+    assert "expansion" in payload["data"]["matches"][0]["match_reasons"]
 
 
 
@@ -566,8 +566,8 @@ def test_guide_bundle_search_uses_root_index_when_available(monkeypatch, tmp_pat
     result = runner.invoke(app, ["guide-bundle-search", "frost", "--root", str(root)])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["matches"][0]["guide_id"] == 3143
-    assert "title" in payload["matches"][0]["match_reasons"]
+    assert payload["data"]["matches"][0]["guide_id"] == 3143
+    assert "title" in payload["data"]["matches"][0]["match_reasons"]
 
 
 
@@ -628,9 +628,9 @@ def test_guide_bundle_query_returns_cross_bundle_matches(tmp_path: Path) -> None
     result = runner.invoke(app, ["guide-bundle-query", "obliterate", "--root", str(root)])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["searched_bundle_count"] == 2
-    assert payload["count"] == 1
-    assert payload["counts"] == {
+    assert payload["data"]["searched_bundle_count"] == 2
+    assert payload["data"]["count"] == 1
+    assert payload["data"]["counts"] == {
         "sections": 1,
         "analysis_surfaces": 0,
         "navigation": 0,
@@ -638,14 +638,14 @@ def test_guide_bundle_query_returns_cross_bundle_matches(tmp_path: Path) -> None
         "gatherer_entities": 0,
         "comments": 0,
     }
-    assert payload["bundles"][0]["guide_id"] == 3143
-    assert payload["bundles"][0]["match_count"] == 2
-    assert payload["bundles"][0]["match_counts"]["linked_entities"] == 1
-    assert payload["bundles"][0]["suggested_query_command"] == (
+    assert payload["data"]["bundles"][0]["guide_id"] == 3143
+    assert payload["data"]["bundles"][0]["match_count"] == 2
+    assert payload["data"]["bundles"][0]["match_counts"]["linked_entities"] == 1
+    assert payload["data"]["bundles"][0]["suggested_query_command"] == (
         f"wowhead guide-query 3143 obliterate --root {root}"
     )
-    assert payload["top"][0]["kind"] == "linked_entity"
-    assert payload["top"][0]["bundle"]["guide_id"] == 3143
+    assert payload["data"]["top"][0]["kind"] == "linked_entity"
+    assert payload["data"]["top"][0]["bundle"]["guide_id"] == 3143
 
 
 
@@ -774,10 +774,10 @@ def test_guide_bundle_query_uses_filters_and_root_index(monkeypatch, tmp_path: P
     )
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["count"] == 1
-    assert payload["filters"]["kinds"] == ["linked_entities"]
-    assert payload["filters"]["linked_sources"] == ["multi"]
-    assert payload["counts"] == {
+    assert payload["data"]["count"] == 1
+    assert payload["data"]["filters"]["kinds"] == ["linked_entities"]
+    assert payload["data"]["filters"]["linked_sources"] == ["multi"]
+    assert payload["data"]["counts"] == {
         "sections": 0,
         "analysis_surfaces": 0,
         "navigation": 0,
@@ -785,8 +785,8 @@ def test_guide_bundle_query_uses_filters_and_root_index(monkeypatch, tmp_path: P
         "gatherer_entities": 0,
         "comments": 0,
     }
-    assert payload["bundles"][0]["guide_id"] == 3143
-    assert set(payload["top"][0]["sources"]) == {"href", "gatherer"}
+    assert payload["data"]["bundles"][0]["guide_id"] == 3143
+    assert set(payload["data"]["top"][0]["sources"]) == {"href", "gatherer"}
 
 
 
@@ -865,25 +865,25 @@ def test_guide_bundle_inspect_reports_counts_and_index_status(tmp_path: Path) ->
     result = runner.invoke(app, ["guide-bundle-inspect", "3143", "--root", str(root)])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["guide"]["id"] == 3143
-    assert payload["freshness"]["bundle"] == "fresh"
-    assert payload["freshness"]["bundle_reasons"] == []
-    assert payload["freshness"]["hydration"] == "fresh"
-    assert payload["freshness"]["hydration_reasons"] == []
-    assert payload["counts"]["manifest"] == payload["counts"]["observed"]
-    assert payload["hydration"]["enabled"] is True
-    assert payload["entities_manifest"]["count"] == 1
-    assert payload["index"]["valid"] is True
-    assert payload["index"]["contains_bundle"] is True
-    assert payload["issues"] == []
+    assert payload["data"]["guide"]["id"] == 3143
+    assert payload["data"]["freshness"]["bundle"] == "fresh"
+    assert payload["data"]["freshness"]["bundle_reasons"] == []
+    assert payload["data"]["freshness"]["hydration"] == "fresh"
+    assert payload["data"]["freshness"]["hydration_reasons"] == []
+    assert payload["data"]["counts"]["manifest"] == payload["data"]["counts"]["observed"]
+    assert payload["data"]["hydration"]["enabled"] is True
+    assert payload["data"]["entities_manifest"]["count"] == 1
+    assert payload["data"]["index"]["valid"] is True
+    assert payload["data"]["index"]["contains_bundle"] is True
+    assert payload["data"]["issues"] == []
 
     summary_result = runner.invoke(app, ["guide-bundle-inspect", "3143", "--root", str(root), "--summary"])
     assert summary_result.exit_code == 0
     summary_payload = json.loads(summary_result.stdout)
-    assert summary_payload["issue_count"] == 0
-    assert summary_payload["issue_codes"] == []
-    assert summary_payload["missing_files"] == []
-    assert summary_payload["count_mismatches"] == []
+    assert summary_payload["data"]["issue_count"] == 0
+    assert summary_payload["data"]["issue_codes"] == []
+    assert summary_payload["data"]["missing_files"] == []
+    assert summary_payload["data"]["count_mismatches"] == []
 
 
 
@@ -909,13 +909,13 @@ def test_guide_bundle_inspect_reports_missing_files_and_invalid_index(tmp_path: 
     result = runner.invoke(app, ["guide-bundle-inspect", str(bundle_dir)])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    issue_codes = {row["code"] for row in payload["issues"]}
+    issue_codes = {row["code"] for row in payload["data"]["issues"]}
     assert {"missing_file", "count_mismatch", "invalid_index"}.issubset(issue_codes)
-    assert payload["files"]["sections_jsonl"]["exists"] is False
-    assert payload["counts"]["manifest"]["sections"] == 1
-    assert payload["counts"]["observed"]["sections"] == 0
-    assert payload["index"]["exists"] is True
-    assert payload["index"]["valid"] is False
+    assert payload["data"]["files"]["sections_jsonl"]["exists"] is False
+    assert payload["data"]["counts"]["manifest"]["sections"] == 1
+    assert payload["data"]["counts"]["observed"]["sections"] == 0
+    assert payload["data"]["index"]["exists"] is True
+    assert payload["data"]["index"]["valid"] is False
 
 
 
@@ -939,9 +939,9 @@ def test_guide_bundle_index_rebuild_rewrites_invalid_index(tmp_path: Path) -> No
     result = runner.invoke(app, ["guide-bundle-index-rebuild", "--root", str(root)])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["count"] == 2
-    assert payload["index"]["previous"] == {"exists": True, "valid": False, "count": 0}
-    assert payload["index"]["current"] == {"exists": True, "valid": True, "count": 2}
+    assert payload["data"]["count"] == 2
+    assert payload["data"]["index"]["previous"] == {"exists": True, "valid": False, "count": 0}
+    assert payload["data"]["index"]["current"] == {"exists": True, "valid": True, "count": 2}
 
     rebuilt_index = json.loads((root / "index.json").read_text(encoding="utf-8"))
     assert rebuilt_index["count"] == 2

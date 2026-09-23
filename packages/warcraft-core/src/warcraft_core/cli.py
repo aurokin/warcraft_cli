@@ -8,7 +8,7 @@ from __future__ import annotations
 import sys
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Annotated, Any, NoReturn
+from typing import Annotated, Any, Final, NoReturn
 
 import httpx
 import typer
@@ -196,8 +196,22 @@ def emit(ctx: typer.Context, payload: Mapping[str, Any], *, err: bool = False) -
             str(exc),
             exit_code=EXIT_USAGE,
             details={"missing_fields": list(exc.missing_fields)},
-            query=payload.get("query"),
         )
+
+
+# Parameters a failure never echoes: an OAuth authorization code, which can be exchanged for a
+# token, and the shared output flags, which shape the envelope rather than name the request.
+_NEVER_ECHOED_PARAMS: Final = frozenset(
+    {"authorization_code", "pretty", "compact", "compact_max_chars", "fields", "fields_strict", "profile"}
+)
+
+
+def _parsed_params(ctx: typer.Context) -> dict[str, Any]:
+    """The parameters Click parsed for ``ctx``'s command, minus ``_NEVER_ECHOED_PARAMS``.
+
+    These are Click's values, before Typer's own conversion, so a path option is still a string.
+    """
+    return {name: value for name, value in ctx.params.items() if name not in _NEVER_ECHOED_PARAMS}
 
 
 def fail(
@@ -211,12 +225,17 @@ def fail(
 ) -> NoReturn:
     """Write an error envelope to stderr and exit with the code mapped from ``code`` unless overridden.
 
-    ``query`` is the normalized input the command acted on. Pass it whenever the command has parsed
-    its input, so the failure names what was rejected instead of carrying ``query: null``.
+    The failure's ``query`` is ``query`` when given, otherwise the command's parsed parameters
+    (``_parsed_params``), so every failure names the input that was rejected.
     """
     config = cfg(ctx)
     payload = error_envelope(
-        provider=config.provider, command=command_path(ctx), code=code, message=message, query=query, details=details
+        provider=config.provider,
+        command=command_path(ctx),
+        code=code,
+        message=message,
+        query=_parsed_params(ctx) if query is None else query,
+        details=details,
     )
     typer.echo(to_json(payload, pretty=config.output.pretty), err=True)
     raise typer.Exit(exit_code if exit_code is not None else exit_code_for(code))

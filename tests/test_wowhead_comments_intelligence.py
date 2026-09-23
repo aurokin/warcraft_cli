@@ -115,10 +115,10 @@ def test_comments_command_supports_insights_and_filters(monkeypatch) -> None:
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["counts"]["embedded_comments"] == 2
-    assert payload["counts"]["filtered_comments"] == 1
-    assert payload["intelligence"]["insights"][0]["comment_id"] == 1
-    assert payload["intelligence"]["freshness"]["comment_count"] == 1
+    assert payload["data"]["counts"]["embedded_comments"] == 2
+    assert payload["data"]["counts"]["filtered_comments"] == 1
+    assert payload["data"]["intelligence"]["insights"][0]["comment_id"] == 1
+    assert payload["data"]["intelligence"]["freshness"]["comment_count"] == 1
 
 
 SORT_MODE_COMMENTS = [

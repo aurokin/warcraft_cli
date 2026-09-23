@@ -14,6 +14,7 @@ from wowhead_cli.ranking import (
     is_high_confidence_exact_match,
     is_high_confidence_score,
     is_medium_confidence_score,
+    merge_suggestion_lists,
     prefix_and_contains_score,
     resolve_confidence,
     search_result_score_and_reasons,
@@ -30,8 +31,8 @@ def test_expansions_command_exposes_profiles() -> None:
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["default"] == "retail"
-    keys = {row["key"] for row in payload["profiles"]}
+    assert payload["data"]["default"] == "retail"
+    keys = {row["key"] for row in payload["data"]["profiles"]}
     assert "retail" in keys
     assert "wotlk" in keys
 
@@ -51,8 +52,8 @@ def test_search_respects_expansion_flag(monkeypatch) -> None:
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["expansion"] == "wotlk"
-    assert payload["search_url"].startswith("https://www.wowhead.com/wotlk/search?q=")
+    assert payload["data"]["expansion"] == "wotlk"
+    assert payload["data"]["search_url"].startswith("https://www.wowhead.com/wotlk/search?q=")
 
 
 
@@ -70,8 +71,8 @@ def test_search_guide_result_includes_guide_url(monkeypatch) -> None:
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["results"][0]["entity_type"] == "guide"
-    assert payload["results"][0]["url"] == "https://www.wowhead.com/wotlk/guide=3143"
+    assert payload["data"]["results"][0]["entity_type"] == "guide"
+    assert payload["data"]["results"][0]["url"] == "https://www.wowhead.com/wotlk/guide=3143"
 
 
 
@@ -89,8 +90,8 @@ def test_search_faction_result_includes_faction_url(monkeypatch) -> None:
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["results"][0]["entity_type"] == "faction"
-    assert payload["results"][0]["url"] == "https://www.wowhead.com/faction=529"
+    assert payload["data"]["results"][0]["entity_type"] == "faction"
+    assert payload["data"]["results"][0]["url"] == "https://www.wowhead.com/faction=529"
 
 
 
@@ -121,9 +122,9 @@ def test_search_reranks_exact_name_match_ahead_of_noisy_popular_result(monkeypat
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert [row["id"] for row in payload["results"]] == [19019, 2]
-    assert "exact_name" in payload["results"][0]["ranking"]["match_reasons"]
-    assert payload["results"][0]["ranking"]["score"] > payload["results"][1]["ranking"]["score"]
+    assert [row["id"] for row in payload["data"]["results"]] == [19019, 2]
+    assert "exact_name" in payload["data"]["results"][0]["ranking"]["match_reasons"]
+    assert payload["data"]["results"][0]["ranking"]["score"] > payload["data"]["results"][1]["ranking"]["score"]
 
 
 
@@ -154,8 +155,8 @@ def test_search_type_hint_promotes_guides_for_guide_queries(monkeypatch) -> None
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert [row["entity_type"] for row in payload["results"]] == ["guide", "item"]
-    assert "type_hint" in payload["results"][0]["ranking"]["match_reasons"]
+    assert [row["entity_type"] for row in payload["data"]["results"]] == ["guide", "item"]
+    assert "type_hint" in payload["data"]["results"][0]["ranking"]["match_reasons"]
 
 
 
@@ -173,8 +174,8 @@ def test_search_pet_result_includes_pet_url(monkeypatch) -> None:
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["results"][0]["entity_type"] == "pet"
-    assert payload["results"][0]["url"] == "https://www.wowhead.com/pet=39"
+    assert payload["data"]["results"][0]["entity_type"] == "pet"
+    assert payload["data"]["results"][0]["url"] == "https://www.wowhead.com/pet=39"
 
 
 
@@ -193,12 +194,12 @@ def test_resolve_returns_high_confidence_match_and_next_command(monkeypatch) -> 
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["resolved"] is True
-    assert payload["confidence"] == "high"
-    assert payload["search_query"] == "fairbreeze favors"
-    assert payload["match"]["entity_type"] == "quest"
-    assert payload["next_command"] == "wowhead entity quest 86739"
-    assert payload["fallback_search_command"] is None
+    assert payload["data"]["resolved"] is True
+    assert payload["data"]["confidence"] == "high"
+    assert payload["data"]["search_query"] == "fairbreeze favors"
+    assert payload["data"]["match"]["entity_type"] == "quest"
+    assert payload["data"]["next_command"] == "wowhead entity quest 86739"
+    assert payload["data"]["fallback_search_command"] is None
 
 
 
@@ -217,12 +218,12 @@ def test_resolve_falls_back_to_search_when_query_is_ambiguous(monkeypatch) -> No
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["resolved"] is False
-    assert payload["confidence"] == "low"
-    assert payload["next_command"] is None
-    assert payload["fallback_search_command"] == "wowhead search frost"
-    assert payload["count"] == 2
-    assert len(payload["candidates"]) == 2
+    assert payload["data"]["resolved"] is False
+    assert payload["data"]["confidence"] == "low"
+    assert payload["data"]["next_command"] is None
+    assert payload["data"]["fallback_search_command"] == "wowhead search frost"
+    assert payload["data"]["count"] == 2
+    assert len(payload["data"]["candidates"]) == 2
 
 
 
@@ -247,11 +248,11 @@ def test_resolve_entity_type_filter_can_make_guide_resolution_confident(monkeypa
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["filters"]["entity_types"] == ["guide"]
-    assert payload["resolved"] is True
-    assert payload["confidence"] == "high"
-    assert payload["match"]["entity_type"] == "guide"
-    assert payload["next_command"] == "wowhead --expansion wotlk guide 3143"
+    assert payload["data"]["filters"]["entity_types"] == ["guide"]
+    assert payload["data"]["resolved"] is True
+    assert payload["data"]["confidence"] == "high"
+    assert payload["data"]["match"]["entity_type"] == "guide"
+    assert payload["data"]["next_command"] == "wowhead --expansion wotlk guide 3143"
 
 
 
@@ -270,10 +271,10 @@ def test_search_results_include_follow_up_guidance(monkeypatch) -> None:
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["search_query"] == "thunderfury"
-    assert payload["results"][0]["follow_up"] == {
+    assert payload["data"]["search_query"] == "thunderfury"
+    assert payload["data"]["results"][0]["follow_up"] == {
         "recommended_surface": "entity",
-        "recommended_command": "wowhead entity item 19019",
+        "command": "wowhead entity item 19019",
         "reason": "entity_summary",
         "alternatives": [
             "wowhead entity-page item 19019",
@@ -301,13 +302,14 @@ def test_prefix_and_contains_score_pins_every_branch_weight() -> None:
     assert prefix_and_contains_score(
         "api", name_normalized="createframe", display_normalized="api createframe"
     ) == (8, ["display_name_prefix"])
-    # A mid-name hit outranks a prefix hit: it is a rarer, more deliberate match.
+    # A mid-name hit scores below either prefix hit: "Legion Remix Fury Warrior Guide" merely
+    # contains "fury warrior guide", it is not named by it.
     assert prefix_and_contains_score(
         "frame", name_normalized="createframe", display_normalized="widget"
-    ) == (14, ["name_contains_query"])
+    ) == (6, ["name_contains_query"])
     assert prefix_and_contains_score(
         "frame", name_normalized="widget", display_normalized="api createframe"
-    ) == (12, ["display_name_contains_query"])
+    ) == (4, ["display_name_contains_query"])
     assert prefix_and_contains_score("gone", name_normalized="widget", display_normalized="api") == (0, [])
 
 
@@ -425,11 +427,11 @@ def test_resolve_comment_intent_uses_comment_surface_without_hurting_match_quali
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["resolved"] is True
-    assert payload["confidence"] == "high"
-    assert payload["match"]["entity_type"] == "quest"
-    assert payload["match"]["follow_up"]["recommended_surface"] == "comments"
-    assert payload["next_command"] == "wowhead comments quest 86739"
+    assert payload["data"]["resolved"] is True
+    assert payload["data"]["confidence"] == "high"
+    assert payload["data"]["match"]["entity_type"] == "quest"
+    assert payload["data"]["match"]["follow_up"]["recommended_surface"] == "comments"
+    assert payload["data"]["next_command"] == "wowhead comments quest 86739"
 
 
 
@@ -449,11 +451,11 @@ def test_resolve_relation_intent_uses_entity_page_surface(monkeypatch) -> None:
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["resolved"] is True
-    assert payload["confidence"] == "high"
-    assert payload["match"]["entity_type"] == "item"
-    assert payload["match"]["follow_up"]["recommended_surface"] == "entity-page"
-    assert payload["next_command"] == "wowhead entity-page item 19019"
+    assert payload["data"]["resolved"] is True
+    assert payload["data"]["confidence"] == "high"
+    assert payload["data"]["match"]["entity_type"] == "item"
+    assert payload["data"]["match"]["follow_up"]["recommended_surface"] == "entity-page"
+    assert payload["data"]["next_command"] == "wowhead entity-page item 19019"
 
 
 
@@ -478,10 +480,10 @@ def test_resolve_guide_relation_intent_uses_guide_full(monkeypatch) -> None:
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["resolved"] is True
-    assert payload["match"]["entity_type"] == "guide"
-    assert payload["match"]["follow_up"]["recommended_surface"] == "guide-full"
-    assert payload["next_command"] == "wowhead guide-full 3143"
+    assert payload["data"]["resolved"] is True
+    assert payload["data"]["match"]["entity_type"] == "guide"
+    assert payload["data"]["match"]["follow_up"]["recommended_surface"] == "guide-full"
+    assert payload["data"]["next_command"] == "wowhead guide-full 3143"
 
 
 
@@ -510,10 +512,10 @@ def test_entity_page_mount_resolves_underlying_item_page(monkeypatch) -> None:
 
     payload = json.loads(result.stdout)
     assert page_calls == [("item", 84101)]
-    assert payload["entity"]["type"] == "mount"
-    assert payload["entity"]["id"] == 460
-    assert payload["entity"]["page_url"] == "https://www.wowhead.com/item=84101/reins-of-the-grand-expedition-yak"
-    assert payload["linked_entities"]["count"] == 1
+    assert payload["data"]["entity"]["type"] == "mount"
+    assert payload["data"]["entity"]["id"] == 460
+    assert payload["data"]["entity"]["page_url"] == "https://www.wowhead.com/item=84101/reins-of-the-grand-expedition-yak"
+    assert payload["data"]["linked_entities"]["count"] == 1
 
 
 
@@ -547,10 +549,10 @@ def test_comments_battle_pet_resolves_underlying_npc_page(monkeypatch) -> None:
 
     payload = json.loads(result.stdout)
     assert page_calls == [("npc", 2671)]
-    assert payload["entity"]["type"] == "battle-pet"
-    assert payload["entity"]["id"] == 39
-    assert payload["entity"]["page_url"] == "https://www.wowhead.com/npc=2671/mechanical-squirrel"
-    assert payload["comments"][0]["citation_url"].endswith("#comments:id=11")
+    assert payload["data"]["entity"]["type"] == "battle-pet"
+    assert payload["data"]["entity"]["id"] == 39
+    assert payload["data"]["entity"]["page_url"] == "https://www.wowhead.com/npc=2671/mechanical-squirrel"
+    assert payload["data"]["comments"][0]["citation_url"].endswith("#comments:id=11")
 
 
 
@@ -710,3 +712,13 @@ def test_resolve_answers_with_the_news_post_a_query_names_outright(monkeypatch) 
     spell_candidate = data["candidates"][-1]
     assert spell_candidate["entity_type"] == "spell"
     assert data["match"]["ranking"]["score"] - spell_candidate["ranking"]["score"] >= ARTICLE_OVER_ENTITY_MARGIN
+
+
+def test_merge_names_each_suggestion_list_once_per_row() -> None:
+    row = {"type": 3, "id": 19019, "name": "Thunderfury"}
+    merged, summary = merge_suggestion_lists({"results": [row, row], "categories": {"database": [row]}})
+
+    assert [entry["suggestion_lists"] for entry in merged] == [["results", "database"]]
+    assert summary["rows_received"] == 3
+    assert summary["duplicates_merged"] == 2
+

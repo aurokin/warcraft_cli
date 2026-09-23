@@ -77,19 +77,6 @@ def error_envelope(
     }
 
 
-def with_legacy_keys(envelope: Envelope, legacy: Mapping[str, Any]) -> dict[str, Any]:
-    """Dual-emit: envelope plus deprecated top-level payload keys older agents still read.
-
-    Legacy keys may not shadow envelope keys; that would silently change the contract.
-    """
-    collisions = sorted(ENVELOPE_KEYS.intersection(legacy))
-    if collisions:
-        raise ValueError(f"Legacy keys collide with envelope keys: {', '.join(collisions)}")
-    merged: dict[str, Any] = dict(envelope)
-    merged.update(legacy)
-    return merged
-
-
 def _envelope_type_violations(payload: Mapping[str, Any]) -> list[str]:
     problems: list[str] = []
     if "ok" in payload and not isinstance(payload["ok"], bool):

@@ -6,9 +6,7 @@ sampled cross-report analytics, plus a raw `graphql` passthrough for queries no 
 
 Companion docs:
 - [SCOPING.md](SCOPING.md) - scoping conventions and raw-GraphQL rules
-- [PAYLOAD_KEYS.md](PAYLOAD_KEYS.md) - per-command payload keys and the deprecated legacy keys
 - [CACHING.md](CACHING.md) - cache keys, TTLs, and derived-output trust fields
-- [LIVE_MATRIX.md](LIVE_MATRIX.md) - live command matrix workflow
 - [warcraftlogs-design-notes.md](../architecture/history/warcraftlogs-design-notes.md) - schema research and the original design record
 - [AUTH_ARCHITECTURE.md](../architecture/AUTH_ARCHITECTURE.md) - shared auth architecture
 
@@ -120,17 +118,17 @@ Every command emits one JSON document with the shared envelope keys (`ok`, `prov
 `kind`, `schema_version`, `query`, `provenance`, `data`, and `error` on failure) as defined in
 [ERROR_CONTRACT.md](../foundation/ERROR_CONTRACT.md).
 
-The payload body stays at the top level next to those keys so existing agent field paths keep
-working, and the per-command canonical key plus the older primary key are both still emitted and
-listed in [PAYLOAD_KEYS.md](PAYLOAD_KEYS.md). `data` mirrors that body for every command, so
-agents can read the envelope slot without provider-specific paths; the top-level copies are
-deprecated. Use `--fields` or `--compact` to bound large report payloads.
+Each command's payload is under `data`, once (`data.kills`, `data.rankings`, `data.fights`, ...);
+nothing else is at the top level. `graphql`'s `data` is the GraphQL result's own `data` object,
+`__schema` included under `--introspect`. Use `--fields` or `--compact` to bound large report
+payloads.
 
 Failures print the error envelope to stderr and exit with the shared codes: `1` generic, `2` usage
 or invalid query, `3` auth, `4` not found, `5` network or upstream. A transport failure is always
 an error envelope, never a traceback. A failure's `query` is the command's parsed parameters
 (`{"reference": "abcd1234", "fight_id": 9999, ...}`), so the rejected input is machine-readable;
-the `auth login` / `auth pkce-login` authorization code is never echoed. `auth` subcommands are
+it can differ in shape from the success `query`. The `auth login` / `auth pkce-login` authorization
+code and the global output flags are never echoed. `auth` subcommands are
 labelled by their full path (`"command": "auth status"`) on success and failure alike.
 
 Rejected input exits `2`: `missing_boss`, `missing_query`, `missing_scope`, `missing_spec`,
@@ -141,7 +139,7 @@ Malformed upstream or local data exits `1`: `missing_talent_tree`, `invalid_resp
 `invalid_provider_payload`, `invalid_transport_packet`, `invalid_runtime_config`,
 `missing_code_verifier`.
 
-Partial GraphQL failures are surfaced, not swallowed: the payload keeps `graphql_warnings` and adds
+Partial GraphQL failures are surfaced, not swallowed: `data` keeps `graphql_warnings` and adds
 a note instead of pretending the result is complete.
 
 ## Sampled analytics and trust
@@ -159,9 +157,11 @@ sample is scanned, so a wrong id fails with `not_found` (exit 4) instead of retu
 
 When two raiders in one group each upload the pull, Warcraft Logs holds it as two reports. Those
 are collapsed into one sampled kill: same guild id, encounter, difficulty and raid size, with
-wall-clock start *and* end within 5 s of the latest fight already in the cluster. Fights are
-clustered in start order, so the result does not depend on report listing order, and the
-earliest-starting report represents the pull. The collapse is reported, never silent —
+wall-clock start *and* end within 5 s of the latest upload already folded into one of that
+guild's pulls, so uploads a few seconds apart chain into one pull. Every open pull is a candidate,
+so another pull that starts in between cannot split a double-logged one. Fights are clustered in
+start order, so the result does not depend on report listing order, and the earliest-starting
+report represents the pull. The collapse is reported, never silent —
 `sample.duplicates_removed` counts it, every sampled command adds a note stating the rule, and the
 kept kill's `duplicate_reports` cites the report codes and fight ids that were folded in.
 

@@ -38,7 +38,7 @@ from warcraft_core.cli import (
 from warcraft_core.cli import (
     RuntimeConfig as BaseRuntimeConfig,
 )
-from warcraft_core.envelope import ENVELOPE_KEYS, SCHEMA_VERSION, Envelope
+from warcraft_core.envelope import success_envelope
 from warcraft_core.exit_codes import EXIT_AUTH, EXIT_USAGE, exit_code_for
 from warcraft_core.identity import (
     ability_identity_payload,
@@ -100,9 +100,8 @@ from warcraftlogs_cli.client import (
     saved_user_token_site_key,
     warcraftlogs_provider_env_path,
 )
-from warcraftlogs_cli.payload_envelope import apply_payload_envelope, canonical_key_for_command
-from warcraftlogs_cli.payload_keys_registry import ALL_COMMANDS
 from warcraftlogs_cli.provider import doctor as provider_doctor
+from warcraftlogs_cli.provider import payload_body
 from warcraftlogs_cli.provider import resolve as provider_resolve
 from warcraftlogs_cli.provider import search as provider_search
 from warcraftlogs_cli.report_payloads import (
@@ -276,47 +275,25 @@ def _cfg(ctx: typer.Context) -> RuntimeConfig:
     return cfg_as(ctx, RuntimeConfig)
 
 
-def _envelope_defaults(command: str) -> dict[str, Any]:
-    # ``kind`` names the leaf command: ``auth status`` is kind ``status``.
-    canonical = canonical_key_for_command(command.rsplit(" ", 1)[-1])
-    return {
-        "ok": True,
-        "provider": "warcraftlogs",
-        "command": command,
-        "kind": canonical,
-        "schema_version": SCHEMA_VERSION,
-        "query": None,
-        "provenance": {},
-        "data": {},
-    }
-
-
-def _with_envelope_keys(payload: dict[str, Any], *, command: str) -> dict[str, Any]:
-    """Add the shared envelope keys this payload is missing, never overwriting what a command set.
-
-    Warcraft Logs payloads stay flat (plus the deprecated canonical command key); ``data`` mirrors
-    those keys so agents can read the envelope slot everywhere.
-    """
-    missing = {key: value for key, value in _envelope_defaults(command).items() if key not in payload}
-    if "data" in missing:
-        missing["data"] = {key: value for key, value in payload.items() if key not in ENVELOPE_KEYS}
-    if not missing:
-        return payload
-    return {**payload, **missing}
-
-
 def _emit(ctx: typer.Context, payload: dict[str, Any], *, client: Any = None) -> None:
-    """Emit a success payload: client warnings, then the canonical command key, then envelope keys.
+    """Emit a command's flat payload as the envelope: its fields go under ``data``, once.
 
-    ``command`` is the full subcommand path (``auth status``), the same label a failure carries.
-    Error envelopes go to stderr through ``_fail``, never here.
+    A payload may set the envelope's ``kind``, ``query`` and ``provenance``; ``kind`` defaults to
+    the leaf command (``auth status`` is kind ``status``). ``command`` is the full subcommand path,
+    the same label a failure carries. Error envelopes go to stderr through ``_fail``, never here.
     """
     if client is not None:
         payload = _with_warnings(payload, client)
     command = command_path(ctx)
-    if command in ALL_COMMANDS:
-        payload = apply_payload_envelope(command, payload)
-    emit(ctx, _with_envelope_keys(payload, command=command))
+    envelope = success_envelope(
+        provider="warcraftlogs",
+        command=command,
+        kind=payload.get("kind") or command.rsplit(" ", 1)[-1].replace("-", "_"),
+        data=payload_body(payload),
+        query=payload.get("query"),
+        provenance=payload.get("provenance"),
+    )
+    emit(ctx, envelope)
 
 
 def _with_warnings(payload: dict[str, Any], client: Any) -> dict[str, Any]:
@@ -341,10 +318,6 @@ _AUTH_ERROR_CODES = frozenset(
 )
 
 
-# OAuth authorization codes are credentials: they never go back out in an error envelope.
-_UNECHOED_PARAMS = frozenset({"authorization_code"})
-
-
 # Rejected or contradictory command input is a usage error (exit 2), like Click's own parse failures.
 # Keep every locally-raised input code here: an omission silently downgrades the command to exit 1.
 _USAGE_ERROR_CODES = frozenset(
@@ -364,20 +337,14 @@ _USAGE_ERROR_CODES = frozenset(
 
 
 def _fail(ctx: typer.Context, code: str, message: str, *, details: dict[str, Any] | None = None) -> NoReturn:
-    """Fail with the Warcraft Logs exit-code mapping, naming the input the command was given.
-
-    Every failure's ``query`` is the command's parsed parameters, so a rejected or unmatched
-    request is machine-readable without parsing the message. Parameters that carry credentials
-    are left out (``_UNECHOED_PARAMS``).
-    """
+    """Fail with the Warcraft Logs exit-code mapping."""
     if code in _AUTH_ERROR_CODES:
         exit_code = EXIT_AUTH
     elif code in _USAGE_ERROR_CODES:
         exit_code = EXIT_USAGE
     else:
         exit_code = exit_code_for(code)
-    query = {name: value for name, value in ctx.params.items() if name not in _UNECHOED_PARAMS}
-    fail(ctx, code, message, exit_code=exit_code, details=details, query=query)
+    fail(ctx, code, message, exit_code=exit_code, details=details)
 
 
 def _load_graphql_query(ctx: typer.Context, query: str | None, *, introspect: bool) -> str:
@@ -3589,18 +3556,6 @@ def main(
     )
 
 
-def _emit_surface(ctx: typer.Context, envelope: Envelope) -> None:
-    """Emit a pure-surface envelope, keeping its body flattened at the top level for older agents.
-
-    ``data`` is dropped so ``_with_envelope_keys`` rebuilds it from the flattened body. Carrying
-    the provider's own ``data`` through would leave it missing the canonical command key, and
-    ``data`` would stop mirroring the top level on exactly these three commands.
-    """
-    flattened = {**envelope, **envelope["data"]}
-    del flattened["data"]
-    _emit(ctx, flattened)
-
-
 @app.command("search")
 def search(
     ctx: typer.Context,
@@ -3609,7 +3564,7 @@ def search(
                               help="Accepted for wrapper compatibility; explicit report discovery returns at most one result."),
 ) -> None:
     """Match an explicit Warcraft Logs report URL or code; free text returns a discovery hint."""
-    _emit_surface(ctx, provider_search(query, limit=limit, site=_cfg(ctx).site_profile))
+    emit(ctx, provider_search(query, limit=limit, site=_cfg(ctx).site_profile))
 
 
 @app.command("resolve")
@@ -3621,7 +3576,7 @@ def resolve(
 ) -> None:
     """Resolve an explicit Warcraft Logs report URL or code to a single report reference."""
     del limit
-    _emit_surface(ctx, provider_resolve(query, site=_cfg(ctx).site_profile))
+    emit(ctx, provider_resolve(query, site=_cfg(ctx).site_profile))
 
 
 @app.command("doctor")
@@ -3630,7 +3585,7 @@ def doctor(
     no_live: bool = typer.Option(False, "--no-live", help="Skip live Warcraft Logs auth probes and report local/runtime readiness only."),
 ) -> None:
     """Report Warcraft Logs auth, site profile, and per-command readiness."""
-    _emit_surface(ctx, provider_doctor(live=not no_live, site=_cfg(ctx).site_profile))
+    emit(ctx, provider_doctor(live=not no_live, site=_cfg(ctx).site_profile))
 
 
 def _random_state_token() -> str:
@@ -6119,25 +6074,18 @@ def _run_graphql(ctx: typer.Context, request: _GraphqlRequest) -> None:
         _handle_client_error(ctx, exc)
     finally:
         client.close()
-    data = dict(payload) if isinstance(payload, dict) else payload
-    if isinstance(data, dict):
-        data.pop(GRAPHQL_WARNINGS_KEY, None)
-    emitted: dict[str, Any] = {
-        "ok": True,
-        "provider": "warcraftlogs",
-        "query": {
-            "operation_name": request.operation_name,
-            "variables": request.variables,
-            "endpoint": effective_endpoint,
-            "requested_endpoint": request.endpoint,
-            "cache_ttl_seconds": request.cache_ttl_seconds,
-        },
+    # ``data`` is the GraphQL result's own ``data`` object (``__schema`` under --introspect), built
+    # directly so a field aliased ``kind`` or ``query`` stays in ``data`` instead of becoming envelope.
+    result = {key: value for key, value in (payload or {}).items() if key != GRAPHQL_WARNINGS_KEY}
+    query = {
+        "operation_name": request.operation_name,
+        "variables": request.variables,
+        "endpoint": effective_endpoint,
+        "requested_endpoint": request.endpoint,
+        "cache_ttl_seconds": request.cache_ttl_seconds,
     }
-    if request.introspect:
-        emitted["introspection"] = data.get("__schema") if isinstance(data, dict) else None
-    else:
-        emitted["data"] = data
-    _emit(ctx, emitted, client=client)
+    data = _with_warnings(result, client)
+    emit(ctx, success_envelope(provider="warcraftlogs", command="graphql", kind="graphql", data=data, query=query))
 
 
 @app.command("graphql")

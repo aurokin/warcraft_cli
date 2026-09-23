@@ -127,7 +127,7 @@ Build an evidence packet for phase-scoped cooldown analysis.
 | `--phase` | int range | required | One-based phase index to analyze, e.g. --phase 2 for P2. |
 | `--spec-slug` | str |  | Override Lorrgs spec slug, e.g. mage-frost. |
 | `--boss-slug` | str |  | Override Lorrgs boss slug, e.g. lura. |
-| `--difficulty` | str | mythic | Difficulty for the Lorrgs top-parse comparison. |
+| `--difficulty` | str |  | Lorrgs difficulty for the top-parse comparison. Defaults to the Warcraft Logs fight's own difficulty. |
 | `--metric` | str |  | Optional Lorrgs ranking metric, e.g. dps or hps. |
 | `--sample-limit` | int range | 5 | Top-parse samples to include; 0 disables comparison. |
 | `--event-limit` | int range | 5000 | Warcraft Logs cast events to request. |

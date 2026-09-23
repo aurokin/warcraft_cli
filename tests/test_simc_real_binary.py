@@ -241,3 +241,33 @@ def test_removing_a_tiered_talent_by_name_removes_every_entry_of_its_node(
         BuildSpec(actor_class=subject.build_spec.actor_class, spec=subject.build_spec.spec, talents=export),
     )
     assert not node_entries & {t.entry for t in reencoded.talents_by_tree["spec"] if t.taken}
+
+
+# Healer builds, which no stock profile covers: a Mistweaver export captured from Method's talent page
+# and the Holy Priest talents this checkout's SimC loads by default (`load_default_talents=1`).
+HEALER_BUILDS = [
+    ("monk", "mistweaver", "C4QAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAM2mB2sYGzMbzYDzMDzsstMzYhZ0MmBMYwYWmZmZY2GmhZZmAAAAAz20ysNzysBAAAAwMzAADwiMAA"),
+    ("priest", "holy", "CEQAAAAAAAAAAAAAAAAAAAAAAwYAAAAAAAgZmlxMjZGDzMzYZGmBAAAwMmlZwMzMWmxMDgZKAAQAAAgZmZBQzgxYYmBAzAD"),
+]
+
+
+@pytest.mark.parametrize(("actor_class", "spec", "talents"), HEALER_BUILDS, ids=["mistweaver", "holy-priest"])
+def test_a_healer_build_identifies_and_can_be_modified(repo: RepoPaths, actor_class: str, spec: str, talents: str) -> None:
+    """SimC refuses to simulate some healers and used to reject every encode of them.
+
+    Mistweaver and Holy Paladin are always silenced, which aborted profile generation with "No active
+    players in sim!"; Holy Priest's stale default APL failed on divine_star. Both were reported as
+    `invalid_build`, blaming a valid build for the harness.
+    """
+    base = decode_build(repo, BuildSpec(actor_class=actor_class, spec=spec, talents=talents))
+    talent = next(t for t in base.talents_by_tree["spec"] if t.rank_known and t.rank > 0)
+
+    result = CliRunner().invoke(
+        simc_app, ["--repo-root", str(repo.root), "modify-build", "--talents", talents, "--remove", talent.name]
+    )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    data = json.loads(result.stdout)["data"]
+    assert (data["base"]["actor_class"], data["base"]["spec"]) == (actor_class, spec)
+    reencoded = decode_build(repo, BuildSpec(actor_class=actor_class, spec=spec, talents=data["result"]["talents_export"]))
+    assert talent.entry not in {t.entry for t in reencoded.talents_by_tree["spec"] if t.taken}

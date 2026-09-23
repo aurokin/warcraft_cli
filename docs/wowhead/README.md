@@ -12,11 +12,11 @@ Companion docs:
 
 ## Output Contract
 
-Every command prints one JSON document. Successful payloads carry the shared envelope keys
-(`ok`, `provider`, `command`, `kind`, `schema_version`, `query`, `provenance`, `data`) alongside
-Wowhead's historical top-level keys such as `results`, `entity`, `comments`, and `linked_entities`.
-`data` carries those same keys; the top-level copies are deprecated. With `--stream`, the JSONL
-header empties the streamed collection in both places.
+Every command prints one JSON document: the shared envelope (`ok`, `provider`, `command`, `kind`,
+`schema_version`, `query`, `provenance`, `data`, plus `error` on failure) and nothing else at the
+top level. Command output such as `results`, `entity`, `comments`, and `linked_entities` lives
+under `data`, so `--fields` paths start there (`--fields data.results`). With `--stream`, the JSONL
+header is the envelope with the streamed collection emptied and `data.stream` naming it.
 
 Nothing is dropped silently. In a result list, `count` is the number of rows returned and the block
 also reports the pre-limit total — `total` for link lists, `total_matches` for `search`, `resolve`,
@@ -51,7 +51,13 @@ Ranking starts from Wowhead's own ordering. `categories.database` is ordered by 
 `search` and `resolve` score its leading rows up (`upstream_database_rank` in
 `ranking.match_reasons`) so the entity a query names leads the proc spells and secondary rows that
 share its name, then text evidence — exact name, prefix, term coverage, type hints — decides the
-rest.
+rest. The rank bonus needs a query word in the row's own name: Wowhead also ranks rows on text the
+suggestion never shows, and those get no bonus. A name that merely contains the query scores below
+one that starts with it. Each row's `follow_up.command` is the command to run next.
+
+A guide updated far (180+ days) behind the freshest guide in the same response carries
+`stale_guide` in `ranking.match_reasons` and sorts after every other row, whatever its score, so
+a class-guide query leads with the current guide rather than a retired event's.
 
 `resolve` answers with a database entity. A news headline often matches a query better than the
 item it is written about, so news posts and world events rank behind every entity in `candidates`.

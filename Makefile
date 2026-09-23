@@ -9,25 +9,11 @@ VULTURE := $(VENV)/bin/vulture
 WOWHEAD := $(VENV)/bin/wowhead
 UV ?= uv
 LINT_PATHS := packages tests scripts
-# Keep in sync with LIVE_TEST_ENV_BY_FILE in tests/conftest.py
-# (tests/test_repo_tooling.py::test_makefile_live_env_matches_conftest_registry enforces it).
-LIVE_TEST_ENV := \
-	WOWHEAD_LIVE_TESTS=1 \
-	METHOD_LIVE_TESTS=1 \
-	ICY_VEINS_LIVE_TESTS=1 \
-	RAIDERIO_LIVE_TESTS=1 \
-	WARCRAFT_WIKI_LIVE_TESTS=1 \
-	WARCRAFTLOGS_LIVE_TESTS=1 \
-	RAIDBOTS_LIVE_TESTS=1 \
-	LORRGS_LIVE_TESTS=1 \
-	BLIZZARD_LIVE_TESTS=1 \
-	CURSEFORGE_LIVE_TESTS=1 \
-	WARCRAFT_WRAPPER_LIVE_TESTS=1
 
 IMPORT_LINTER := $(VENV)/bin/lint-imports
 PRE_COMMIT := $(VENV)/bin/pre-commit
 
-.PHONY: install dev-deploy dev-deploy-no-link worktree-env test test-fast test-e2e test-live test-live-matrix \
+.PHONY: install dev-deploy dev-deploy-no-link worktree-env test test-fast test-e2e test-canary \
 	check fmt-check lint lint-boundaries lint-all complexity complexity-gate typecheck coverage deadcode \
 	skills reference schema build pre-commit-install benchmark-cache fixture-refresh-hints run release
 
@@ -50,18 +36,17 @@ test-fast:
 	$(PYTEST) -q -m "not live and not e2e"
 
 # Local end-to-end journeys through the installed binaries against real providers, using the
-# credentials in ~/.config/warcraft/providers. Never runs in CI. Exclude providers with
+# credentials in ~/.config/warcraft/providers. CI runs only the keyless journey files, weekly
+# (.github/workflows/live-contracts.yml). Exclude providers with
 # WARCRAFT_E2E_SKIP=curseforge; pass extra pytest args with E2E_ARGS="-k wowhead".
 test-e2e:
 	WARCRAFT_E2E=1 $(PYTEST) -q -m e2e tests/e2e --durations=25 $(E2E_ARGS)
 
 check: lint typecheck lint-boundaries complexity-gate deadcode test-fast
 
-test-live:
-	$(LIVE_TEST_ENV) $(PYTEST) -q -m live
-
-test-live-matrix:
-	WARCRAFTLOGS_LIVE_TESTS=1 $(PYTEST) -q -m live tests/test_live_command_matrix.py
+# The one live test outside tests/e2e: pinned Wowhead pages through the parsers (weekly in CI).
+test-canary:
+	WOWHEAD_LIVE_TESTS=1 $(PYTEST) -q -m live tests/test_wowhead_parser_canaries.py
 
 fmt-check:
 	$(PYTHON) -m compileall -q packages

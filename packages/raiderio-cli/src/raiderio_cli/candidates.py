@@ -318,10 +318,10 @@ def _probe_one_split(
     *,
     query: str,
     type_hint: str | None,
+    kind: str | None,
 ) -> list[dict[str, Any]]:
     candidates: list[dict[str, Any]] = []
-    probe_kinds = [type_hint] if type_hint in {"character", "guild"} else ["character", "guild"]
-    for probe_kind in probe_kinds:
+    for probe_kind in [kind] if kind else ["character", "guild"]:
         builder = candidate_from_character_profile if probe_kind == "character" else candidate_from_guild_profile
         fetch = client.character_profile_variants if probe_kind == "character" else client.guild_profile_variants
         try:
@@ -350,11 +350,15 @@ def probe_structured_candidates(
     *,
     query: str,
     type_hint: str | None,
+    kind: str | None,
     probes: list[StructuredProbe],
 ) -> list[dict[str, Any]]:
-    """Look the query up directly, stopping at the first realm/name split that exists upstream."""
+    """Look the query up directly, stopping at the first realm/name split that exists upstream.
+
+    ``kind`` is the one entity type to look up (``None`` looks up both); ``type_hint`` only scores.
+    """
     for probe in probes:
-        candidates = _probe_one_split(client, probe, query=query, type_hint=type_hint)
+        candidates = _probe_one_split(client, probe, query=query, type_hint=type_hint, kind=kind)
         if candidates:
             return candidates
     return []

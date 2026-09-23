@@ -40,7 +40,7 @@
 - a tiered node comes back as one row per entry, each with its own rank; a row with `rank_known: false` is taken at a rank the decode could not recover, so do not quote a rank for it
 - an empty value for a build-input option is a usage error, not the same as omitting the option
 - `--enable` / `--disable` take a talent's display name or its SimC token; a value that names no talent of the actor's class fails with `unknown_talent` (exit 2) rather than being ignored
-- do not tell the user they must provide class/spec unless `identify-build` failed first; the CLI decodes a bare WoW export as every spec SimC knows, healers included, when direct metadata is missing. It fails with `invalid_query` only when no spec or more than one decodes the build (`error.details.identity.candidates` lists the latter); then pass `--actor-class` / `--spec`
+- do not tell the user they must provide class/spec unless `identify-build` failed first; the CLI decodes a bare WoW export as every spec SimC knows, healers included, when direct metadata is missing. It fails with `invalid_query` only when no spec or more than one decodes the build (`error.details.identity.candidates` lists the latter); then pass `--actor-class` / `--spec`. An `--actor-class` alone narrows the probe to that class, and the message names the specs it tried
 - prefer `describe-build` over ad hoc prose synthesis when you need to talk about:
   - active hero/spec package
   - skipped capstones or alternate branches
@@ -62,7 +62,7 @@
   - `summary.failed` counts the `--other` builds SimC rejected; each keeps its `error` in `comparisons`, so say which comparisons are missing. When none decode the command fails instead
 - use `modify-build` to produce a new talent export string from an existing build:
   - `--swap-class-tree-from` / `--swap-spec-tree-from` / `--swap-hero-tree-from` replace an entire tree from another build
-  - `--add name:rank` and `--remove name` adjust individual talents in any tree; a name must belong to the actor's class, and an entry id works for any talent in the checkout's trait data
+  - `--add name:rank` and `--remove name` adjust individual talents in any tree; a name or entry id must be a talent the build's spec can take, otherwise it fails with `unknown_talent` (exit 2). Healer builds can be modified too
   - the output includes the new WoW export string, a Wowhead URL, a diff from the base build, and `verified: true`
   - when re-encoding changes anything in the active trees that was not requested the command fails with `encode_mismatch` and no export; do not retry, report the listed `unrequested_changes`. A swapped tree is checked against the build it came from, not the base
   - a tree swap drops the base hash and rebuilds every tree from `entry:rank` pairs. Tiered nodes survive that, because the decoder reads their per-entry ranks back out of SimC. A row the read-back could not resolve (`rank_known: false`) still cannot be re-serialized, so a swap on such a build fails with `encode_mismatch` naming the talent that would have been lost; `--add` / `--remove` keep the base hash and still work

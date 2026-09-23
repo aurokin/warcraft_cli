@@ -174,13 +174,15 @@ def _expansion_passthrough_advisory(ctx: typer.Context, *, provider_name: str) -
                     f"Provider {provider_name!r} does not support wrapper expansion "
                     f"{requested_expansion!r}."
                 ),
+                "details": {
+                    "provider": provider_name,
+                    "requested_expansion": requested_expansion,
+                    "expansion_support": provider_expansion_support(
+                        registration,
+                        requested_expansion=requested_expansion,
+                    ),
+                },
             },
-            "provider": provider_name,
-            "requested_expansion": requested_expansion,
-            "expansion_support": provider_expansion_support(
-                registration,
-                requested_expansion=requested_expansion,
-            ),
         },
         err=True,
     )
@@ -237,9 +239,8 @@ def _passthrough_args(ctx: typer.Context, *, provider_name: str, forward_output:
                             f"Do not pass both warcraft --expansion and provider-level {flag_text} "
                             "in the same command."
                         ),
+                        "details": {"provider": provider_name, "requested_expansion": requested_expansion},
                     },
-                    "provider": provider_name,
-                    "requested_expansion": requested_expansion,
                 },
                 err=True,
             )
@@ -252,12 +253,12 @@ def _run_passthrough(ctx: typer.Context, sub_app: typer.Typer, *, provider_name:
     """Proxy ``warcraft <provider> ...`` to a provider CLI, applying expansion policy.
 
     Normal case: invoke the sub-app directly so its payload reaches stdout untouched.
-    none-expansion relax case: capture the provider payload and attach the advisory note
-    as an additive sibling key (provider payload preserved), then re-emit.
+    none-expansion relax case: capture the provider envelope and attach the advisory note inside it
+    (``data`` on success, ``error.details`` on failure), then re-emit.
     """
     advisory = _expansion_passthrough_advisory(ctx, provider_name=provider_name)
     # In the capture path the wrapper shapes the annotated payload itself (through ``_emit``), so
-    # the output flags are not forwarded; otherwise ``--fields expansion_advisory`` could never match.
+    # the output flags are not forwarded; otherwise ``--fields data.expansion_advisory`` could never match.
     args = _passthrough_args(ctx, provider_name=provider_name, forward_output=advisory is None)
     if advisory is None:
         invoke_provider_command(sub_app, args=args, prog_name=prog_name)
@@ -268,7 +269,7 @@ def _run_passthrough(ctx: typer.Context, sub_app: typer.Typer, *, provider_name:
     # <none-provider> ...` combination — normal `warcraft <provider> ...` returns at the
     # advisory-is-None branch above and streams untouched. There is no incremental streaming to
     # lose here regardless: provider commands emit a single JSON envelope all at once, and
-    # attaching the advisory as an additive sibling key requires the whole payload to parse it,
+    # attaching the advisory inside the envelope requires the whole payload to parse it,
     # so the buffer just holds that one envelope momentarily (non-JSON output like --help is
     # small and handled by the passthrough branch below). The buffering is intrinsic to the
     # annotate-the-payload feature, not an incidental regression of normal simc/report workflows.
@@ -288,7 +289,7 @@ def _run_passthrough(ctx: typer.Context, sub_app: typer.Typer, *, provider_name:
     else:
         # Non-JSON provider output (e.g. --help text): surface the advisory on its own so the
         # relax is never silent, then pass the raw output through below.
-        _emit(ctx, advisory, err=True)
+        _emit(ctx, {"expansion_advisory": advisory}, err=True)
     # Preserve any non-payload stream content verbatim (provenance is never hidden).
     if out_json is None and out_text:
         typer.echo(out_text, nl=False)
@@ -307,13 +308,11 @@ def _parse_json_object(text: str) -> dict[str, Any] | None:
 
 
 def _with_expansion_advisory(payload: dict[str, Any], advisory: dict[str, Any]) -> dict[str, Any]:
-    """Attach the advisory at the top level and inside ``data`` (which mirrors the payload on success)."""
-    added = {"expansion_advisory": advisory, "expansion_filter": payload.get("expansion_filter", advisory["expansion_filter"])}
-    annotated = {**payload, **added}
-    data = payload.get("data")
-    if payload.get("ok") is not False and isinstance(data, dict):
-        annotated["data"] = {**data, **added}
-    return annotated
+    """Attach the advisory inside the provider envelope: ``data`` on success, ``error.details`` on failure."""
+    if payload.get("ok") is False:
+        error = as_dict(payload.get("error"))
+        return {**payload, "error": {**error, "details": {**as_dict(error.get("details")), "expansion_advisory": advisory}}}
+    return {**payload, "data": {**as_dict(payload.get("data")), "expansion_advisory": advisory}}
 
 
 def _slugify_path_fragment(value: str) -> str:
@@ -1170,25 +1169,15 @@ def _normalize_simc_transport_packet_path(
     *,
     stable_packet_path: str | None,
 ) -> dict[str, Any]:
-    """Point every ``build_spec.transport_packet.path`` copy at the stable packet (or drop temporary ones).
-
-    simc dual-emits ``build_spec`` at the top level (deprecated) and under ``data``; both must agree.
-    """
+    """Point ``data.build_spec.transport_packet.path`` at the stable packet (or drop a temporary one)."""
     payload = result.get("payload")
     if not isinstance(payload, dict):
         return result
-    normalized_payload = dict(payload)
-    build_spec = _normalize_build_spec_packet_path(payload.get("build_spec"), stable_packet_path=stable_packet_path)
-    if build_spec is not None:
-        normalized_payload["build_spec"] = build_spec
-    data = payload.get("data")
-    if isinstance(data, dict):
-        data_build_spec = _normalize_build_spec_packet_path(data.get("build_spec"), stable_packet_path=stable_packet_path)
-        if data_build_spec is not None:
-            normalized_payload["data"] = {**data, "build_spec": data_build_spec}
-    if normalized_payload == payload:
+    data = as_dict(payload.get("data"))
+    build_spec = _normalize_build_spec_packet_path(data.get("build_spec"), stable_packet_path=stable_packet_path)
+    if build_spec is None:
         return result
-    return {**result, "payload": normalized_payload}
+    return {**result, "payload": {**payload, "data": {**data, "build_spec": build_spec}}}
 
 
 def _normalize_build_spec_packet_path(build_spec: Any, *, stable_packet_path: str | None) -> dict[str, Any] | None:
@@ -1227,19 +1216,12 @@ def _normalize_upgrade_result_build_packet_path(
     if not isinstance(upgrade_result, dict):
         return upgrade_result
     payload = upgrade_result.get("payload")
-    if not isinstance(payload, dict):
+    data = as_dict(payload.get("data")) if isinstance(payload, dict) else {}
+    if not isinstance(payload, dict) or not isinstance(data.get("input"), dict):
         return upgrade_result
-    normalized_payload = dict(payload)
-    input_payload = payload.get("input")
-    if isinstance(input_payload, dict):
-        normalized_payload["input"] = {key: value for key, value in input_payload.items() if key != "build_packet"}
-    data = payload.get("data")
-    if isinstance(data, dict) and isinstance(data.get("input"), dict):
-        # simc dual-emits ``input`` under ``data``; the temporary packet file is gone by now.
-        normalized_payload["data"] = {**data, "input": {key: value for key, value in data["input"].items() if key != "build_packet"}}
-    if normalized_payload == payload:
-        return upgrade_result
-    return {**upgrade_result, "payload": normalized_payload}
+    # The temporary packet file simc read is gone by now, so its path is not evidence.
+    trimmed_input = {key: value for key, value in data["input"].items() if key != "build_packet"}
+    return {**upgrade_result, "payload": {**payload, "data": {**data, "input": trimmed_input}}}
 
 
 def _invoke_simc_with_transport_packet(
@@ -1758,7 +1740,7 @@ def _search_fallback_guide_match(
         "name": top.get("name"),
         "url": top.get("url"),
         "confidence": "medium",
-        "next_command": follow_up.get("recommended_command") if isinstance(follow_up, dict) else None,
+        "next_command": follow_up.get("command") if isinstance(follow_up, dict) else None,
         "selection_source": "search_fallback",
         "search_ranking": top.get("ranking"),
         "selection_contract": {
@@ -1876,7 +1858,7 @@ def _emit_fanout(ctx: typer.Context, payload: dict[str, Any]) -> None:
     failed_rows = payload["failed_providers"]
     if failed_rows and not payload["answered_provider_count"]:
         error = _fanout_failure_error(failed_rows)
-        _emit(ctx, {**payload, "ok": False, "error": error}, err=True)
+        _emit(ctx, {"ok": False, "query": payload["query"], "error": error}, err=True)
         raise typer.Exit(exit_code_for(str(error["code"]), EXIT_NETWORK))
     _emit(ctx, payload)
 
@@ -1967,7 +1949,7 @@ def search(
             # Scores are normalized against this provider's own best row before the merge so a
             # provider with an inflated local scale cannot own every slot in the merged list.
             provider_max_score = provider_max_candidate_score(provider_results)
-            for row in provider_results:
+            for index, row in enumerate(provider_results):
                 flattened.append(
                     decorate_search_result(
                         query,
@@ -1980,6 +1962,7 @@ def search(
                             **row,
                         },
                         provider_max_score=provider_max_score,
+                        provider_top_row=index == 0,
                     )
                 )
     ranked, merge_policy = merged_search_page(flattened, limit=limit)
@@ -2069,8 +2052,8 @@ def resolve(
         "included_provider_count": len(included_registrations),
         "excluded_provider_count": len(excluded_providers),
         "resolved": best_payload is not None,
-        # `provider` is the envelope identity and must be a string: the selected provider when one
-        # matched, otherwise the wrapper itself. `selected_provider` is the nullable selection.
+        # The envelope is attributed to the provider whose match it carries; `selected_provider` is
+        # the same choice, nullable, inside data.
         "provider": best_provider or "warcraft",
         "selected_provider": best_provider,
         "match": match,
@@ -2123,19 +2106,10 @@ def guild_ranks(
         ["guild", identity["region"], identity["realm"], identity["name"]],
         expansion=_requested_expansion(ctx),
     )
-    payload = provider_payload_data(source_result.get("payload"))
     if source_result.get("status") != "ok":
-        _emit(ctx,
-            {
-                "ok": False,
-                "error": source_result.get("error"),
-                "query": identity,
-                "source": "raiderio",
-                "provider_payload": payload,
-            },
-            err=True,
-        )
+        _emit(ctx, {"ok": False, "error": source_result.get("error"), "query": identity, "source": "raiderio"}, err=True)
         raise typer.Exit(source_exit_code(source_result))
+    payload = provider_payload_data(source_result.get("payload"))
     raids = guild_rank_rows(payload)
     _emit(ctx,
         {
@@ -2148,7 +2122,7 @@ def guild_ranks(
             "count": len(raids),
             "raids": raids,
             "citations": payload.get("citations"),
-            "provider_payload": payload,
+            "provider_payload": source_result.get("payload"),
         },
     )
 
@@ -2299,6 +2273,7 @@ def _actor_profile_actor(
             code="actor_not_found",
             message=message,
             details={"available_actors": report_actor_names(log_payload), "fight_scope": fight_scope},
+            exit_code=EXIT_NOT_FOUND,
         )
     targets = distinct_actor_targets(matches)
     if len(targets) > 1:
@@ -2473,7 +2448,11 @@ def cooldown_packet(
     phase: int = typer.Option(..., "--phase", min=1, help="One-based phase index to analyze, e.g. --phase 2 for P2."),
     spec_slug: str | None = typer.Option(None, "--spec-slug", help="Override Lorrgs spec slug, e.g. mage-frost."),
     boss_slug: str | None = typer.Option(None, "--boss-slug", help="Override Lorrgs boss slug, e.g. lura."),
-    difficulty: str = typer.Option("mythic", "--difficulty", help="Difficulty for the Lorrgs top-parse comparison."),
+    difficulty: str | None = typer.Option(
+        None,
+        "--difficulty",
+        help="Lorrgs difficulty for the top-parse comparison. Defaults to the Warcraft Logs fight's own difficulty.",
+    ),
     metric: str | None = typer.Option(None, "--metric", help="Optional Lorrgs ranking metric, e.g. dps or hps."),
     sample_limit: int = typer.Option(5, "--sample-limit", min=0, max=20, help="Top-parse samples to include; 0 disables comparison."),
     event_limit: int = typer.Option(5000, "--event-limit", min=1, max=10000, help="Warcraft Logs cast events to request."),
@@ -2857,7 +2836,35 @@ def _guide_compare_query_payload(options: GuideCompareQueryOptions) -> dict[str,
         if bundle_input is not None:
             bundle_inputs.append(bundle_input)
 
-    payload: dict[str, Any] = {
+    if len(bundle_inputs) < 2:
+        # The manifest describes a completed comparison, so a failed run writes none: it must not
+        # leave a `providers: []` manifest behind for the next run to reuse.
+        return {
+            "ok": False,
+            "query": options.query,
+            "error": {
+                "code": "insufficient_guides",
+                "message": "Need at least two exported guide bundles to compare.",
+                "details": {
+                    "exported_bundle_count": len(bundle_inputs),
+                    "required_bundle_count": 2,
+                    "selected_providers": list(options.providers),
+                    "provider_results": [_guide_compare_decline_row(row) for row in provider_rows],
+                },
+            },
+        }
+
+    manifest = _write_guide_compare_manifest(
+        root=options.orchestration_root,
+        query=options.query,
+        requested_expansion=options.requested_expansion,
+        max_age_hours=options.max_age_hours,
+        provider_results=provider_rows,
+    )
+    include_simc_build_handoff = options.simc_build_handoff or (
+        isinstance(options.simc_apl_path, str) and bool(options.simc_apl_path.strip())
+    )
+    return {
         "provider": "warcraft",
         "kind": "guide_bundle_comparison_orchestration",
         "query": options.query,
@@ -2868,56 +2875,24 @@ def _guide_compare_query_payload(options: GuideCompareQueryOptions) -> dict[str,
         "force_refresh": options.force_refresh,
         "provider_results": provider_rows,
         "exported_bundle_count": len(bundle_inputs),
-        "comparison": None,
-        "simc_build_handoff": None,
-    }
-    # The manifest describes a completed comparison, so it is only written once one exists;
-    # a failed run must not leave a `providers: []` manifest behind for the next run to reuse.
-    payload["manifest"] = None
-    if len(bundle_inputs) < 2:
-        # A failure envelope carries no data body by default, so the reason each provider declined
-        # goes under `error.details` (and `data`) rather than only in the deprecated top-level keys.
-        details = {
-            "exported_bundle_count": len(bundle_inputs),
-            "required_bundle_count": 2,
-            "selected_providers": list(options.providers),
-            "provider_results": [_guide_compare_decline_row(row) for row in provider_rows],
-        }
-        payload["ok"] = False
-        payload["data"] = details
-        payload["error"] = {
-            "code": "insufficient_guides",
-            "message": "Need at least two exported guide bundles to compare.",
-            "details": details,
-        }
-        return payload
-
-    payload["manifest"] = _write_guide_compare_manifest(
-        root=options.orchestration_root,
-        query=options.query,
-        requested_expansion=options.requested_expansion,
-        max_age_hours=options.max_age_hours,
-        provider_results=provider_rows,
-    )
-    payload["comparison"] = {
-        "provider": "warcraft",
-        **_guide_comparison_packet(bundle_inputs, max_age_hours=options.max_age_hours),
-    }
-    include_simc_build_handoff = options.simc_build_handoff or (
-        isinstance(options.simc_apl_path, str) and bool(options.simc_apl_path.strip())
-    )
-    if include_simc_build_handoff:
-        payload["simc_build_handoff"] = _guide_builds_simc_payload(
+        "manifest": manifest,
+        "comparison": {
+            "provider": "warcraft",
+            **_guide_comparison_packet(bundle_inputs, max_age_hours=options.max_age_hours),
+        },
+        "simc_build_handoff": _guide_builds_simc_payload(
             source_path=options.orchestration_root,
             source_kind="orchestration_root",
-            source_manifest=payload["manifest"] if isinstance(payload.get("manifest"), dict) else None,
+            source_manifest=manifest,
             bundle_inputs=bundle_inputs,
             decode=options.simc_decode,
             apl_path=options.simc_apl_path,
             limit=options.simc_build_limit,
             expansion=options.requested_expansion,
         )
-    return payload
+        if include_simc_build_handoff
+        else None,
+    }
 
 
 @app.command("guide-compare-query")
@@ -3302,10 +3277,12 @@ def guide_builds_simc(
     )
     summary = payload["summary"]
     if summary["simc_handoff_status"] == "all_handoffs_failed":
+        # The packet's provenance stays the envelope's; the rest of it, per-build failure codes
+        # included, becomes `error.details`.
         _emit(ctx,
             {
+                **{key: value for key, value in payload.items() if key != "kind"},
                 "ok": False,
-                "kind": payload["kind"],
                 "error": {
                     "code": "simc_handoff_failed",
                     "message": (
@@ -3313,8 +3290,6 @@ def guide_builds_simc(
                         f"{summary['returned_build_count']} build references; the packet carries no usable simc "
                         "output. Each build's `failures` names the simc error; check `warcraft simc doctor`."
                     ),
-                    # The whole packet, so the per-build failure codes survive the error envelope.
-                    "details": payload,
                 },
             },
             err=True,

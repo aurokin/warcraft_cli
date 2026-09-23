@@ -50,7 +50,6 @@ Thin or unproven surfaces. Do not build a workflow on them without checking `doc
 
 - Ship the wheel install path end to end: attach the built wheel to each GitHub release and verify `pipx install <wheel-url>` and `uvx --from <wheel-url> warcraft doctor` on a clean machine.
 - Decide whether Blizzard and CurseForge earn the `supported` tier now that both are verified live, or whether CurseForge leaves the product; the surfaces are thin either way.
-- Retire the deprecated dual-emitted top-level payload keys (agents read `data`); that is a major-version change, so it needs a deprecation window first.
 - Finish the expansion story for the deferred surfaces: Warcraft Logs classic/fresh cache isolation and `simc` expansion semantics.
 - Decompose the remaining radon D-or-worse blocks so `complexity-gate` stays green in `make check`.
 

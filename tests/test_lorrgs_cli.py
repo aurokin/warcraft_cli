@@ -169,14 +169,14 @@ def test_doctor_reports_lorrgs_capabilities() -> None:
     payload = json.loads(result.stdout)
     assert payload["ok"] is True
     assert payload["provider"] == "lorrgs"
-    assert payload["status"] == "partial"
-    assert payload["auth"]["required"] is False
-    assert payload["capabilities"]["spec_ranking"] == "ready"
-    assert payload["capabilities"]["comp_ranking"] == "ready"
-    assert payload["capabilities"]["search"] == "ready"
-    assert payload["capabilities"]["resolve"] == "ready"
-    assert payload["data"]["capabilities"]["report_overview"] == "ready_cached_only"
-    assert payload["capabilities"]["current_season"] == "ready"
+    assert payload["data"]["status"] == "partial"
+    assert payload["data"]["auth"]["required"] is False
+    assert payload["data"]["capabilities"]["spec_ranking"] == "ready"
+    assert payload["data"]["capabilities"]["comp_ranking"] == "ready"
+    assert payload["data"]["capabilities"]["search"] == "ready"
+    assert payload["data"]["capabilities"]["resolve"] == "ready"
+    assert payload["data"]["capabilities"]["report_overview"] == "ready"
+    assert payload["data"]["capabilities"]["current_season"] == "ready"
 
 
 def test_specs_emits_standard_success_envelope(monkeypatch) -> None:
@@ -253,6 +253,18 @@ def test_comp_ranking_repeatable_filters(monkeypatch) -> None:
     ) in FakeLorrgsClient.calls
 
 
+def test_comp_ranking_says_when_lorrgs_returned_no_reports(monkeypatch) -> None:
+    """Every current-tier boss answered ``reports: []`` with ok:true and nothing saying the ranking was empty."""
+    _patch_client(monkeypatch)
+    result = runner.invoke(app, ["comp-ranking", "nekzali-the-soulcoiler"])
+
+    assert result.exit_code == 0
+    data = json.loads(result.stdout)["data"]
+    assert data["reports"] == []
+    assert len(data["notes"]) == 1
+    assert "no composition reports for nekzali-the-soulcoiler" in data["notes"][0]
+
+
 def test_http_404_is_structured_not_found(monkeypatch) -> None:
     _patch_client(monkeypatch)
     result = runner.invoke(app, ["boss", "not-a-boss"])
@@ -268,7 +280,7 @@ def test_http_404_is_structured_not_found(monkeypatch) -> None:
 def test_refusal_status_is_not_reported_as_an_auth_failure(monkeypatch, status: int) -> None:
     # Lorrgs takes no credentials, so neither refusal status can mean "bad credentials" and neither
     # must send an agent to fix auth (exit 3) it can never configure: the resource is not readable.
-    # 401 is the status Lorrgs actually returns for a report it has not loaded.
+    # 401 is the status Lorrgs actually returns for a report Warcraft Logs keeps private.
     _patch_client(monkeypatch)
     monkeypatch.setattr(FakeLorrgsClient, "spec_status", status)
     result = runner.invoke(app, ["spec", "mage-frost"])
@@ -428,7 +440,7 @@ def test_current_season_emits_public_season_metadata(monkeypatch) -> None:
 
 def test_resolve_matches_warcraftlogs_report_url_without_promising_availability(monkeypatch) -> None:
     # The reference parses exactly, so the next command is right — but nothing checked that Lorrgs
-    # will serve the report (it answers 401 for reports it has not loaded, and private ones), so the
+    # will serve the report (it answers 401 for a report Warcraft Logs keeps private), so the
     # handoff must not claim high confidence or an "overview_available" match reason.
     _patch_client(monkeypatch)
     url = "https://www.warcraftlogs.com/reports/bG3xDYPqKjLm8XaR?fight=22&type=damage-done"
@@ -442,7 +454,7 @@ def test_resolve_matches_warcraftlogs_report_url_without_promising_availability(
     assert data["match"]["fight_id"] == 22
     assert data["match"]["report_type"] == "damage-done"
     assert data["match"]["ranking"]["match_reasons"] == ["explicit_report_reference"]
-    assert "not loaded" in data["match"]["caveat"]
+    assert "private" in data["match"]["caveat"]
     assert data["next_command"] == "lorrgs report-overview bG3xDYPqKjLm8XaR"
     assert data["results"][1]["follow_up"]["command"] == "lorrgs user-report-fights bG3xDYPqKjLm8XaR --fight 22 --type damage-done"
 
@@ -492,7 +504,7 @@ def test_warcraft_lorrgs_doctor_routes_through_wrapper() -> None:
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["provider"] == "lorrgs"
-    assert payload["capabilities"]["spec_ranking"] == "ready"
+    assert payload["data"]["capabilities"]["spec_ranking"] == "ready"
 
 
 def test_warcraft_lorrgs_resolve_routes_warcraftlogs_url_through_wrapper(monkeypatch) -> None:
@@ -502,8 +514,8 @@ def test_warcraft_lorrgs_resolve_routes_warcraftlogs_url_through_wrapper(monkeyp
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["provider"] == "lorrgs"
-    assert payload["resolved"] is True
-    assert payload["match"]["kind"] == "report_overview"
+    assert payload["data"]["resolved"] is True
+    assert payload["data"]["match"]["kind"] == "report_overview"
 
 
 @pytest.mark.parametrize(

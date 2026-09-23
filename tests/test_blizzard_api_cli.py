@@ -38,9 +38,9 @@ def test_doctor_reports_scaffold_auth_and_capabilities() -> None:
     payload = json.loads(result.stdout)
     assert payload["ok"] is True
     assert payload["provider"] == "blizzard-api"
-    assert payload["status"] == "partial"
-    assert payload["installed"] is True
-    auth = payload["auth"]
+    assert payload["data"]["status"] == "partial"
+    assert payload["data"]["installed"] is True
+    auth = payload["data"]["auth"]
     assert auth["required"] is True
     assert auth["flow"] == "oauth_client_credentials"
     assert auth["active_mode"] == "client_credentials"
@@ -52,13 +52,13 @@ def test_doctor_reports_scaffold_auth_and_capabilities() -> None:
     # The client-credentials token cache lives under a distinct provider key and is surfaced too.
     assert auth["token_cache_path"].endswith("providers/blizzard-api-client-credentials.json")
     assert auth["token_cache"]["has_access_token"] is False
-    capabilities = payload["capabilities"]
+    capabilities = payload["data"]["capabilities"]
     assert capabilities["doctor"] == "ready"
     assert capabilities["search"] == "coming_soon"
     assert capabilities["resolve"] == "coming_soon"
     assert capabilities["game_data"] == "ready"
     assert capabilities["profile"] == "ready"
-    region = payload["region"]
+    region = payload["data"]["region"]
     assert region["routing"] == "ready"
     assert region["configured"] is None
     assert region["default"] == "us"
@@ -69,7 +69,7 @@ def test_doctor_reports_scaffold_auth_and_capabilities() -> None:
     assert region["verification"]["verified_regions"] == ["eu", "kr", "tw", "us"]
     assert region["verification"]["unverified_regions"] == ["cn"]
     assert "CN routing" in region["verification"]["note"]
-    assert payload["notes"]
+    assert payload["data"]["notes"]
 
 
 def test_doctor_surfaces_configured_region(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -77,7 +77,7 @@ def test_doctor_surfaces_configured_region(monkeypatch: pytest.MonkeyPatch) -> N
     result = runner.invoke(app, ["doctor"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["region"]["configured"] == "eu"
+    assert payload["data"]["region"]["configured"] == "eu"
 
 
 def test_load_blizzard_auth_config_reads_env_local(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -139,7 +139,7 @@ def test_doctor_reads_region_from_provider_env_file(tmp_path) -> None:
     result = runner.invoke(app, ["doctor"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["region"]["configured"] == "kr"
+    assert payload["data"]["region"]["configured"] == "kr"
 
 
 def test_doctor_credential_source_is_environment_when_only_process_has_creds(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -152,6 +152,6 @@ def test_doctor_credential_source_is_environment_when_only_process_has_creds(tmp
     result = runner.invoke(app, ["doctor"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["auth"]["configured"] is True
-    assert payload["auth"]["credential_source"] == "environment"
-    assert payload["region"]["configured"] == "tw"
+    assert payload["data"]["auth"]["configured"] is True
+    assert payload["data"]["auth"]["credential_source"] == "environment"
+    assert payload["data"]["region"]["configured"] == "tw"

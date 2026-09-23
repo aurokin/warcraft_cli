@@ -237,7 +237,7 @@ def test_method_search_command_uses_sitemap_guides(monkeypatch) -> None:
     payload = json.loads(result.stdout)["data"]
     assert payload["count"] == 1
     assert payload["results"][0]["id"] == "mistweaver-monk"
-    assert payload["results"][0]["follow_up"]["recommended_command"] == "method guide mistweaver-monk"
+    assert payload["results"][0]["follow_up"]["command"] == "method guide mistweaver-monk"
     assert payload["results"][0]["metadata"]["content_family"] == "class_guide"
 
 
@@ -364,7 +364,20 @@ def test_method_guide_query_answers_each_bad_bundle_path_the_way_icy_veins_does(
     }
 
 
-def test_guide_query_rejects_an_unknown_kind_with_the_code_icy_veins_uses(tmp_path: Path) -> None:
+def test_method_guide_query_reads_a_bundle_whose_manifest_names_no_guide(tmp_path: Path) -> None:
+    """Any readable bundle can be queried; a manifest without ``guide`` used to crash with internal_error."""
+    (tmp_path / "manifest.json").write_text(json.dumps({"files": {"sections_jsonl": "sections.jsonl"}}), encoding="utf-8")
+    (tmp_path / "sections.jsonl").write_text(json.dumps({"title": "Mana Tea", "text": "Spend mana"}) + "\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["guide-query", str(tmp_path), "mana"])
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.stdout)["data"]
+    assert data["guide"] is None
+    assert [row["title"] for row in data["top"]] == ["Mana Tea"]
+
+
+def test_guide_query_rejects_an_unknown_kind_as_a_usage_error_like_icy_veins(tmp_path: Path) -> None:
     from icy_veins_cli.main import app as icy_veins_app
 
     codes = set()
@@ -372,7 +385,7 @@ def test_guide_query_rejects_an_unknown_kind_with_the_code_icy_veins_uses(tmp_pa
         result = runner.invoke(cli, ["guide-query", str(tmp_path), "mana", "--kind", "bogus"])
         codes.add((result.exit_code, json.loads(result.stderr)["error"]["code"]))
 
-    assert codes == {(1, "invalid_query_kind")}
+    assert codes == {(2, "invalid_argument")}
 
 
 def test_method_guide_invalid_ref_returns_structured_error() -> None:
@@ -479,15 +492,6 @@ def test_method_commands_emit_conforming_envelope(monkeypatch, args: list[str], 
     assert payload["command"] == args[0]
     assert payload["kind"] == kind
     assert payload["schema_version"] == "1"
-
-
-def test_method_search_data_block_mirrors_legacy_top_level_keys(monkeypatch) -> None:
-    monkeypatch.setattr("method_cli.main.MethodClient.sitemap_guides", lambda self: parse_sitemap_guides(SITEMAP_XML))
-    result = runner.invoke(app, ["search", "mistweaver monk guide"])
-
-    payload = json.loads(result.stdout)
-    assert payload["data"]["results"] == payload["results"]
-    assert payload["data"]["count"] == payload["count"] == 1
 
 
 def test_method_provider_surface_is_callable_in_process(monkeypatch) -> None:

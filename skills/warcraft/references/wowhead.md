@@ -38,8 +38,9 @@
   and battle pets are not among them and come back as items, spells, or NPCs
 - read `count` as the rows you were given and `total_matches` / `total` as what the limit cut off;
   raise `--limit` when `truncated` is true
-- `resolve` drops to medium confidence with no `next_command` when its best guide match is far
-  older than the other guides in the same response; run the `fallback_search_command` instead
+- guides far older than the freshest guide in the same response carry `stale_guide` in
+  `ranking.match_reasons` and are listed after every other row; `resolve` never answers one with
+  high confidence, so run the `fallback_search_command` when it does not resolve
 - `search` and `resolve` rank on Wowhead's own database ordering first, so the entity a query names
   leads the proc spells and secondary rows that share its name; `ranking.match_reasons` carries
   `upstream_database_rank` on the rows that ordering promoted

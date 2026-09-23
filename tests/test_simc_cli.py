@@ -10,11 +10,12 @@ from unittest.mock import patch
 import pytest
 import simc_cli.compare as simc_compare
 import simc_cli.main as simc_main
-from simc_cli.build_input import BuildIdentity, BuildResolution, BuildSpec, DecodedTalent, HeroTree
+from simc_cli.build_input import BuildIdentity, BuildResolution, BuildSpec, DecodedTalent, HeroTree, SimcBuildError
 from simc_cli.main import app as simc_app
 from simc_cli.repo import RepoPaths
 from simc_cli.search import word_bounded_pattern
 from typer.testing import CliRunner
+from warcraft_core.envelope import ENVELOPE_KEYS
 from warcraft_core.talent_transport import tokenize_talent_name
 
 runner = CliRunner()
@@ -60,10 +61,12 @@ class _FakeSimcBinary:
 
 
 def _checkout(tmp_path: Path) -> Path:
-    """A checkout stub: every directory `validate_repo` requires, plus the trait table and a binary."""
+    """A checkout stub: every directory `validate_repo` requires, the trait table, the spec the captured
+    decodes belong to, and a binary."""
     generated = tmp_path / "engine" / "dbc" / "generated"
     generated.mkdir(parents=True, exist_ok=True)
     (generated / "trait_data.inc").write_text(CAPTURED_TRAIT_DATA)
+    (generated / "sc_specialization_data.inc").write_text("  MAGE_ARCANE = 62,\n")
     for relative in (
         "ActionPriorityLists/default",
         "ActionPriorityLists/assisted_combat",
@@ -147,10 +150,10 @@ def test_simc_doctor_reports_phase_one_capabilities(monkeypatch, tmp_path: Path)
 
     payload = json.loads(result.stdout)
     assert payload["provider"] == "simc"
-    assert payload["status"] == "ready"
-    assert payload["capabilities"]["search"] == "coming_soon"
-    assert {payload["capabilities"][name] for name in ("version", "repo", "priority", "modify_build")} == {"ready"}
-    assert payload["dependencies"]["ripgrep"]["available"] is True
+    assert payload["data"]["status"] == "ready"
+    assert payload["data"]["capabilities"]["search"] == "coming_soon"
+    assert {payload["data"]["capabilities"][name] for name in ("version", "repo", "priority", "modify_build")} == {"ready"}
+    assert payload["data"]["dependencies"]["ripgrep"]["available"] is True
 
 
 def test_simc_doctor_does_not_call_binary_commands_ready_without_a_usable_binary(monkeypatch, tmp_path: Path) -> None:
@@ -214,8 +217,17 @@ def test_simc_search_is_structured_coming_soon() -> None:
     result = runner.invoke(simc_app, ["search", "mistweaver"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["coming_soon"] is True
-    assert payload["count"] == 0
+    assert payload["data"]["coming_soon"] is True
+    assert payload["data"]["count"] == 0
+
+
+def test_simc_envelopes_carry_only_the_envelope_keys(tmp_path: Path) -> None:
+    """The payload lives in data; the deprecated top-level copies of it are gone."""
+    success = runner.invoke(simc_app, ["search", "mistweaver"])
+    failure = runner.invoke(simc_app, ["--repo-root", str(_checkout(tmp_path)), "decode-build"])
+
+    assert set(json.loads(success.stdout)) == ENVELOPE_KEYS - {"error"}
+    assert set(json.loads(failure.stderr)) == ENVELOPE_KEYS
 
 
 def test_simc_repo_reports_and_updates_resolution(monkeypatch, tmp_path: Path) -> None:
@@ -242,9 +254,9 @@ def test_simc_repo_reports_and_updates_resolution(monkeypatch, tmp_path: Path) -
     result = runner.invoke(simc_app, ["repo", "--set-root", str(target)])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["action"] == "set_root"
-    assert payload["changed"] is True
-    assert payload["resolution"]["source"] == "config"
+    assert payload["data"]["action"] == "set_root"
+    assert payload["data"]["changed"] is True
+    assert payload["data"]["resolution"]["source"] == "config"
 
 
 def test_simc_repo_reports_unset_resolution(monkeypatch, tmp_path: Path) -> None:
@@ -259,11 +271,11 @@ def test_simc_repo_reports_unset_resolution(monkeypatch, tmp_path: Path) -> None
     result = runner.invoke(simc_app, ["repo"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["resolution"]["root"] == str(managed.resolve())
-    assert payload["resolution"]["source"] == "unset"
-    assert payload["resolution"]["configured_root"] is None
-    assert payload["resolution"]["managed_root"] == str(managed.resolve())
-    assert payload["resolution"]["managed_exists"] is False
+    assert payload["data"]["resolution"]["root"] == str(managed.resolve())
+    assert payload["data"]["resolution"]["source"] == "unset"
+    assert payload["data"]["resolution"]["configured_root"] is None
+    assert payload["data"]["resolution"]["managed_root"] == str(managed.resolve())
+    assert payload["data"]["resolution"]["managed_exists"] is False
 
 
 def test_simc_checkout_reports_managed_checkout(monkeypatch, tmp_path: Path) -> None:
@@ -293,8 +305,8 @@ def test_simc_checkout_reports_managed_checkout(monkeypatch, tmp_path: Path) -> 
     result = runner.invoke(simc_app, ["checkout"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["status"] == "cloned"
-    assert payload["active_resolution"]["source"] == "managed"
+    assert payload["data"]["status"] == "cloned"
+    assert payload["data"]["active_resolution"]["source"] == "managed"
 
 
 def test_simc_version_uses_binary_probe(monkeypatch) -> None:
@@ -306,7 +318,7 @@ def test_simc_version_uses_binary_probe(monkeypatch) -> None:
     result = runner.invoke(simc_app, ["version"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["version"] == "SimulationCraft 1201"
+    assert payload["data"]["version"] == "SimulationCraft 1201"
 
 
 def test_simc_spec_files_returns_grouped_results(monkeypatch, tmp_path: Path) -> None:
@@ -324,8 +336,8 @@ def test_simc_spec_files_returns_grouped_results(monkeypatch, tmp_path: Path) ->
     result = runner.invoke(simc_app, ["--repo-root", str(repo_root), "spec-files", "mistweaver"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["count"] == 1
-    assert payload["categories"]["default_apl"]["items"][0]["stem"] == "monk_mistweaver"
+    assert payload["data"]["count"] == 1
+    assert payload["data"]["categories"]["default_apl"]["items"][0]["stem"] == "monk_mistweaver"
 
 
 def test_simc_decode_build_outputs_decoded_talents(monkeypatch) -> None:
@@ -357,11 +369,11 @@ def test_simc_decode_build_outputs_decoded_talents(monkeypatch) -> None:
     result = runner.invoke(simc_app, ["decode-build", "--actor-class", "monk", "--spec", "mistweaver", "--talents", "ABC123"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["build_spec"]["source_kind"] == "wow_talent_export"
-    assert payload["decoded"]["actor_class"] == "monk"
-    assert payload["decoded"]["source_kind"] == "wow_talent_export"
-    assert 'talents=ABC123' in payload["decoded"]["generated_profile"]
-    assert payload["decoded"]["enabled_talents"] == ["ancient_teachings", "jadefire_stomp"]
+    assert payload["data"]["build_spec"]["source_kind"] == "wow_talent_export"
+    assert payload["data"]["decoded"]["actor_class"] == "monk"
+    assert payload["data"]["decoded"]["source_kind"] == "wow_talent_export"
+    assert 'talents=ABC123' in payload["data"]["decoded"]["generated_profile"]
+    assert payload["data"]["decoded"]["enabled_talents"] == ["ancient_teachings", "jadefire_stomp"]
 
 
 def test_simc_identify_build_reports_probe_result(monkeypatch) -> None:
@@ -389,10 +401,10 @@ def test_simc_identify_build_reports_probe_result(monkeypatch) -> None:
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["kind"] == "identify_build"
-    assert payload["identity"]["source"] == "simc_probe"
-    assert payload["identity"]["candidates"] == [{"actor_class": "demonhunter", "spec": "devourer"}]
-    assert payload["identity"]["identity_contract"]["kind"] == "build_identity"
-    assert payload["identity"]["identity_contract"]["class_spec_identity"]["status"] == "inferred"
+    assert payload["data"]["identity"]["source"] == "simc_probe"
+    assert payload["data"]["identity"]["candidates"] == [{"actor_class": "demonhunter", "spec": "devourer"}]
+    assert payload["data"]["identity"]["identity_contract"]["kind"] == "build_identity"
+    assert payload["data"]["identity"]["identity_contract"]["class_spec_identity"]["status"] == "inferred"
 
 
 def test_simc_identify_build_accepts_build_packet(monkeypatch, tmp_path: Path) -> None:
@@ -427,9 +439,9 @@ def test_simc_identify_build_accepts_build_packet(monkeypatch, tmp_path: Path) -
     result = runner.invoke(simc_app, ["identify-build", "--build-packet", str(packet_path)])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["build_spec"]["transport_packet"]["path"] == str(packet_path)
-    assert payload["build_spec"]["transport_packet"]["transport_form"] == "wowhead_talent_calc_url"
-    assert payload["build_spec"]["transport_packet"]["transport_status"] == "exact"
+    assert payload["data"]["build_spec"]["transport_packet"]["path"] == str(packet_path)
+    assert payload["data"]["build_spec"]["transport_packet"]["transport_form"] == "wowhead_talent_calc_url"
+    assert payload["data"]["build_spec"]["transport_packet"]["transport_status"] == "exact"
 
 
 def test_simc_identify_build_accepts_wow_export_transport_form_from_build_packet(monkeypatch, tmp_path: Path) -> None:
@@ -469,10 +481,10 @@ def test_simc_identify_build_accepts_wow_export_transport_form_from_build_packet
     result = runner.invoke(simc_app, ["identify-build", "--build-packet", str(packet_path)])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["build_spec"]["source_kind"] == "wow_talent_export"
-    assert payload["build_spec"]["talents"] == "ABC123"
-    assert payload["build_spec"]["transport_packet"]["transport_form"] == "wow_talent_export"
-    assert payload["identity"]["source"] == "wow_talent_export"
+    assert payload["data"]["build_spec"]["source_kind"] == "wow_talent_export"
+    assert payload["data"]["build_spec"]["talents"] == "ABC123"
+    assert payload["data"]["build_spec"]["transport_packet"]["transport_form"] == "wow_talent_export"
+    assert payload["data"]["identity"]["source"] == "wow_talent_export"
 
 
 def test_simc_identify_build_probes_wow_export_packet_instead_of_trusting_packet_identity(monkeypatch, tmp_path: Path) -> None:
@@ -512,7 +524,7 @@ def test_simc_identify_build_probes_wow_export_packet_instead_of_trusting_packet
     monkeypatch.setattr(
         "simc_cli.build_input.decode_build",
         lambda _repo, build_spec: (
-            (_ for _ in ()).throw(RuntimeError("wrong spec"))
+            (_ for _ in ()).throw(SimcBuildError("wrong spec", output_preview=[], returncode=1))
             if (build_spec.actor_class, build_spec.spec) == ("priest", "shadow")
             else _resolution(enabled={"moonkin_form"})
         ),
@@ -521,11 +533,11 @@ def test_simc_identify_build_probes_wow_export_packet_instead_of_trusting_packet
     result = runner.invoke(simc_app, ["identify-build", "--build-packet", str(packet_path)])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["build_spec"]["actor_class"] == "druid"
-    assert payload["build_spec"]["spec"] == "balance"
-    assert payload["build_spec"]["source_kind"] == "wow_talent_export"
-    assert payload["identity"]["source"] == "simc_probe"
-    assert payload["identity"]["candidates"] == [{"actor_class": "druid", "spec": "balance"}]
+    assert payload["data"]["build_spec"]["actor_class"] == "druid"
+    assert payload["data"]["build_spec"]["spec"] == "balance"
+    assert payload["data"]["build_spec"]["source_kind"] == "wow_talent_export"
+    assert payload["data"]["identity"]["source"] == "simc_probe"
+    assert payload["data"]["identity"]["candidates"] == [{"actor_class": "druid", "spec": "balance"}]
 
 
 def test_simc_identify_build_trusts_validated_split_packet_identity(monkeypatch, tmp_path: Path) -> None:
@@ -574,11 +586,11 @@ def test_simc_identify_build_trusts_validated_split_packet_identity(monkeypatch,
     result = runner.invoke(simc_app, ["identify-build", "--build-packet", str(packet_path)])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["build_spec"]["actor_class"] == "priest"
-    assert payload["build_spec"]["spec"] == "shadow"
-    assert payload["build_spec"]["source_kind"] == "simc_split_talents"
-    assert payload["identity"]["source"] == "simc_split_talents"
-    assert payload["identity"]["candidates"] == [{"actor_class": "priest", "spec": "shadow"}]
+    assert payload["data"]["build_spec"]["actor_class"] == "priest"
+    assert payload["data"]["build_spec"]["spec"] == "shadow"
+    assert payload["data"]["build_spec"]["source_kind"] == "simc_split_talents"
+    assert payload["data"]["identity"]["source"] == "simc_split_talents"
+    assert payload["data"]["identity"]["candidates"] == [{"actor_class": "priest", "spec": "shadow"}]
 
 
 def test_simc_identify_build_rejects_unvalidated_split_packet(monkeypatch, tmp_path: Path) -> None:
@@ -663,10 +675,10 @@ def test_simc_identify_build_does_not_let_apl_override_validated_split_packet_id
     result = runner.invoke(simc_app, ["identify-build", "--apl-path", str(apl_path), "--build-packet", str(packet_path)])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["build_spec"]["actor_class"] == "priest"
-    assert payload["build_spec"]["spec"] == "shadow"
-    assert payload["identity"]["source"] == "simc_split_talents"
-    assert payload["identity"]["candidates"] == [{"actor_class": "priest", "spec": "shadow"}]
+    assert payload["data"]["build_spec"]["actor_class"] == "priest"
+    assert payload["data"]["build_spec"]["spec"] == "shadow"
+    assert payload["data"]["identity"]["source"] == "simc_split_talents"
+    assert payload["data"]["identity"]["candidates"] == [{"actor_class": "priest", "spec": "shadow"}]
 
 
 def test_simc_identify_build_rejects_malformed_build_packet(tmp_path: Path) -> None:
@@ -848,19 +860,19 @@ def test_simc_validate_talent_transport_accepts_build_packet(monkeypatch, tmp_pa
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["kind"] == "validate_talent_transport"
-    assert payload["input"]["source"] == "build_packet"
-    assert payload["input"]["packet_transport_status"] == "raw_only"
-    assert payload["transport_status"] == "validated"
-    assert payload["transport_forms"]["simc_split_talents"]["spec_talents"] == "109839:1"
-    assert payload["updated_packet"]["transport_status"] == "validated"
-    assert payload["updated_packet"]["build_identity"]["class_spec_identity"]["identity"] == {
+    assert payload["data"]["input"]["source"] == "build_packet"
+    assert payload["data"]["input"]["packet_transport_status"] == "raw_only"
+    assert payload["data"]["transport_status"] == "validated"
+    assert payload["data"]["transport_forms"]["simc_split_talents"]["spec_talents"] == "109839:1"
+    assert payload["data"]["updated_packet"]["transport_status"] == "validated"
+    assert payload["data"]["updated_packet"]["build_identity"]["class_spec_identity"]["identity"] == {
         "actor_class": "druid",
         "spec": "balance",
     }
-    assert payload["updated_packet"]["validation"]["actor_class"] == "druid"
-    assert payload["updated_packet"]["validation"]["spec"] == "balance"
+    assert payload["data"]["updated_packet"]["validation"]["actor_class"] == "druid"
+    assert payload["data"]["updated_packet"]["validation"]["spec"] == "balance"
     packet_payload = json.loads(packet_path.read_text())
-    assert payload["updated_packet"].get("source") == packet_payload.get("source")
+    assert payload["data"]["updated_packet"].get("source") == packet_payload.get("source")
 
 
 def test_simc_validate_talent_transport_refreshes_packet_identity_from_cli_override(monkeypatch, tmp_path: Path) -> None:
@@ -918,12 +930,12 @@ def test_simc_validate_talent_transport_refreshes_packet_identity_from_cli_overr
     )
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["updated_packet"]["build_identity"]["class_spec_identity"]["identity"] == {
+    assert payload["data"]["updated_packet"]["build_identity"]["class_spec_identity"]["identity"] == {
         "actor_class": "priest",
         "spec": "shadow",
     }
-    assert payload["updated_packet"]["validation"]["actor_class"] == "priest"
-    assert payload["updated_packet"]["validation"]["spec"] == "shadow"
+    assert payload["data"]["updated_packet"]["validation"]["actor_class"] == "priest"
+    assert payload["data"]["updated_packet"]["validation"]["spec"] == "shadow"
 
 
 def test_simc_validate_talent_transport_rejects_build_packet_with_talent_rows(tmp_path: Path) -> None:
@@ -1181,7 +1193,7 @@ def test_simc_validate_talent_transport_can_write_upgraded_packet(monkeypatch, t
     )
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["written_packet_path"] == str(out_path.resolve())
+    assert payload["data"]["written_packet_path"] == str(out_path.resolve())
 
     written = json.loads(out_path.read_text())
     assert written["transport_status"] == "validated"
@@ -1274,9 +1286,9 @@ def test_simc_validate_talent_transport_accepts_inline_rows(monkeypatch) -> None
     )
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["input"]["source"] == "talent_rows"
-    assert payload["transport_status"] == "raw_only"
-    assert payload["validation"]["reason"] == "simc_trait_resolution_incomplete"
+    assert payload["data"]["input"]["source"] == "talent_rows"
+    assert payload["data"]["transport_status"] == "raw_only"
+    assert payload["data"]["validation"]["reason"] == "simc_trait_resolution_incomplete"
 
 
 def test_simc_validate_talent_transport_keeps_zero_rank_packets_raw_only(tmp_path: Path) -> None:
@@ -1324,13 +1336,13 @@ def test_simc_validate_talent_transport_keeps_zero_rank_packets_raw_only(tmp_pat
     )
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["transport_status"] == "raw_only"
-    assert payload["transport_forms"] == {}
-    assert payload["validation"]["status"] == "not_validated"
-    assert payload["validation"]["reason"] == "no_ranked_talent_entries"
-    assert payload["updated_packet"]["transport_status"] == "raw_only"
-    assert payload["updated_packet"]["transport_forms"] == {}
-    assert payload["updated_packet"]["validation"]["reason"] == "no_ranked_talent_entries"
+    assert payload["data"]["transport_status"] == "raw_only"
+    assert payload["data"]["transport_forms"] == {}
+    assert payload["data"]["validation"]["status"] == "not_validated"
+    assert payload["data"]["validation"]["reason"] == "no_ranked_talent_entries"
+    assert payload["data"]["updated_packet"]["transport_status"] == "raw_only"
+    assert payload["data"]["updated_packet"]["transport_forms"] == {}
+    assert payload["data"]["updated_packet"]["validation"]["reason"] == "no_ranked_talent_entries"
 
 
 def test_simc_validate_talent_transport_requires_one_input_mode() -> None:
@@ -1375,9 +1387,9 @@ def test_simc_decode_build_auto_identifies_missing_class_and_spec(monkeypatch) -
     result = runner.invoke(simc_app, ["decode-build", "--build-text", "ABC123"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["build_spec"]["actor_class"] == "demonhunter"
-    assert payload["identity"]["source"] == "simc_probe"
-    assert payload["decoded"]["spec"] == "devourer"
+    assert payload["data"]["build_spec"]["actor_class"] == "demonhunter"
+    assert payload["data"]["identity"]["source"] == "simc_probe"
+    assert payload["data"]["decoded"]["spec"] == "devourer"
 
 
 @pytest.mark.parametrize(
@@ -1405,10 +1417,56 @@ def test_simc_asks_for_class_and_spec_when_no_spec_decodes_the_build(tmp_path: P
     assert result.exit_code == 2
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "invalid_query"
-    assert "decodes as none of the specs SimulationCraft knows" in payload["error"]["message"]
+    assert "decodes as none of the 2 specs SimulationCraft knows" in payload["error"]["message"]
     assert payload["error"]["details"]["identity"]["candidate_count"] == 0
     # Both specs were tried, one decode each.
     assert sorted(text.splitlines()[0] for text in fake.profiles) == ['mage="simc_decode"', 'paladin="simc_decode"']
+
+
+def test_simc_unidentified_build_message_names_the_specs_a_class_hint_narrowed_the_probe_to(tmp_path: Path) -> None:
+    """With --actor-class only that class's specs are probed, so the message may not claim every spec failed."""
+    repo_root = _checkout(tmp_path)
+    (repo_root / "engine" / "dbc" / "generated" / "sc_specialization_data.inc").write_text(
+        "  MAGE_ARCANE = 62,\n  PALADIN_HOLY = 65,\n  PALADIN_RETRIBUTION = 70,\n"
+    )
+    fake = _FakeSimcBinary({"ARCANE_EXPORT": "0.000 Player 'simc_decode' generic base stats\n"})
+
+    with patch("simc_cli.build_input.subprocess.run", side_effect=fake):
+        result = runner.invoke(
+            simc_app, ["--repo-root", str(repo_root), "decode-build", "--talents", "ARCANE_EXPORT", "--actor-class", "paladin"]
+        )
+
+    assert result.exit_code == 2
+    message = json.loads(result.stderr)["error"]["message"]
+    assert "decodes as none of the 2 paladin specs." in message
+    assert [text.splitlines()[0] for text in fake.profiles] == ['paladin="simc_decode"', 'paladin="simc_decode"']
+
+
+@pytest.mark.parametrize(
+    ("missing", "reason"),
+    [("engine/dbc/generated/sc_specialization_data.inc", "specialization data"), ("build/simc", "SimC binary not found")],
+)
+def test_simc_identification_blames_the_checkout_when_it_cannot_probe(tmp_path: Path, missing: str, reason: str) -> None:
+    """Without spec data or a binary nothing is decoded, which used to read as 'decodes as none of the specs'."""
+    repo_root = _checkout(tmp_path)
+    (repo_root / missing).unlink()
+
+    result = runner.invoke(simc_app, ["--repo-root", str(repo_root), "decode-build", "--talents", "ARCANE_EXPORT"])
+
+    assert result.exit_code == 1
+    error = json.loads(result.stderr)["error"]
+    assert error["code"] == "identify_failed"
+    assert reason in error["message"]
+
+
+def test_simc_identify_build_says_no_build_was_supplied(tmp_path: Path) -> None:
+    """It used to answer ok: true with an all-null build and identity source missing_build_data."""
+    result = runner.invoke(simc_app, ["--repo-root", str(_checkout(tmp_path)), "identify-build"])
+
+    assert result.exit_code == 2
+    error = json.loads(result.stderr)["error"]
+    assert error["code"] == "invalid_query"
+    assert error["message"].startswith("No build was supplied to identify")
 
 
 def test_simc_decode_build_rejects_an_empty_talents_option(tmp_path: Path) -> None:
@@ -1525,8 +1583,8 @@ def test_simc_decode_build_accepts_build_packet(monkeypatch, tmp_path: Path) -> 
     result = runner.invoke(simc_app, ["decode-build", "--build-packet", str(packet_path)])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["build_spec"]["transport_packet"]["transport_form"] == "simc_split_talents"
-    assert payload["decoded"]["source_kind"] == "simc_split_talents"
+    assert payload["data"]["build_spec"]["transport_packet"]["transport_form"] == "simc_split_talents"
+    assert payload["data"]["decoded"]["source_kind"] == "simc_split_talents"
 
 
 def test_simc_decode_build_uses_validated_split_packet_identity(monkeypatch, tmp_path: Path) -> None:
@@ -1582,9 +1640,9 @@ def test_simc_decode_build_uses_validated_split_packet_identity(monkeypatch, tmp
     result = runner.invoke(simc_app, ["decode-build", "--build-packet", str(packet_path)])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["identity"]["source"] == "simc_split_talents"
-    assert payload["build_spec"]["actor_class"] == "priest"
-    assert payload["build_spec"]["spec"] == "shadow"
+    assert payload["data"]["identity"]["source"] == "simc_split_talents"
+    assert payload["data"]["build_spec"]["actor_class"] == "priest"
+    assert payload["data"]["build_spec"]["spec"] == "shadow"
 
 
 def test_simc_decode_build_accepts_wowhead_transport_form_from_build_packet(monkeypatch, tmp_path: Path) -> None:
@@ -1631,10 +1689,10 @@ def test_simc_decode_build_accepts_wowhead_transport_form_from_build_packet(monk
     result = runner.invoke(simc_app, ["decode-build", "--build-packet", str(packet_path)])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["build_spec"]["source_kind"] == "wowhead_talent_calc_url"
-    assert payload["build_spec"]["talents"] == "ABC123"
-    assert payload["build_spec"]["transport_packet"]["transport_form"] == "wowhead_talent_calc_url"
-    assert payload["decoded"]["source_kind"] == "wowhead_talent_calc_url"
+    assert payload["data"]["build_spec"]["source_kind"] == "wowhead_talent_calc_url"
+    assert payload["data"]["build_spec"]["talents"] == "ABC123"
+    assert payload["data"]["build_spec"]["transport_packet"]["transport_form"] == "wowhead_talent_calc_url"
+    assert payload["data"]["decoded"]["source_kind"] == "wowhead_talent_calc_url"
 
 
 def test_simc_decode_build_probes_wow_export_packet_instead_of_trusting_packet_identity(monkeypatch, tmp_path: Path) -> None:
@@ -1674,7 +1732,7 @@ def test_simc_decode_build_probes_wow_export_packet_instead_of_trusting_packet_i
     monkeypatch.setattr(
         "simc_cli.build_input.decode_build",
         lambda _repo, build_spec: (
-            (_ for _ in ()).throw(RuntimeError("wrong spec"))
+            (_ for _ in ()).throw(SimcBuildError("wrong spec", output_preview=[], returncode=1))
             if (build_spec.actor_class, build_spec.spec) == ("priest", "shadow")
             else _resolution(enabled={"moonkin_form"})
         ),
@@ -1697,11 +1755,11 @@ def test_simc_decode_build_probes_wow_export_packet_instead_of_trusting_packet_i
     result = runner.invoke(simc_app, ["decode-build", "--build-packet", str(packet_path)])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["build_spec"]["actor_class"] == "druid"
-    assert payload["build_spec"]["spec"] == "balance"
-    assert payload["identity"]["source"] == "simc_probe"
-    assert payload["decoded"]["actor_class"] == "druid"
-    assert payload["decoded"]["spec"] == "balance"
+    assert payload["data"]["build_spec"]["actor_class"] == "druid"
+    assert payload["data"]["build_spec"]["spec"] == "balance"
+    assert payload["data"]["identity"]["source"] == "simc_probe"
+    assert payload["data"]["decoded"]["actor_class"] == "druid"
+    assert payload["data"]["decoded"]["spec"] == "balance"
 
 
 def test_simc_decode_build_rejects_malformed_build_packet(tmp_path: Path) -> None:
@@ -1867,15 +1925,15 @@ def test_simc_describe_build_summarizes_st_and_aoe(monkeypatch, tmp_path: Path) 
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["kind"] == "describe_build"
-    assert payload["identity"]["source"] == "simc_probe"
-    assert payload["build"]["talents_by_tree"]["spec"]["selected"][0]["token"] == "void_ray"
-    assert payload["build"]["talents_by_tree"]["spec"]["skipped"][0]["token"] == "midnight"
-    assert payload["build"]["hero_tree"] == {"name": "Annihilator", "id": 124}
-    assert [row["name"] for row in payload["build"]["inactive_hero_talents"]] == ["Void Reaver"]
-    assert payload["single_target"]["focus_list"] == "melee_combo"
-    assert payload["multi_target"]["focus_list"] == "aoe"
-    assert payload["comparison"]["new_active_actions_in_aoe"] == ["soul_immolation"]
-    assert payload["single_target"]["inactive_talent_branches"][0]["action"] == "the_hunt"
+    assert payload["data"]["identity"]["source"] == "simc_probe"
+    assert payload["data"]["build"]["talents_by_tree"]["spec"]["selected"][0]["token"] == "void_ray"
+    assert payload["data"]["build"]["talents_by_tree"]["spec"]["skipped"][0]["token"] == "midnight"
+    assert payload["data"]["build"]["hero_tree"] == {"name": "Annihilator", "id": 124}
+    assert [row["name"] for row in payload["data"]["build"]["inactive_hero_talents"]] == ["Void Reaver"]
+    assert payload["data"]["single_target"]["focus_list"] == "melee_combo"
+    assert payload["data"]["multi_target"]["focus_list"] == "aoe"
+    assert payload["data"]["comparison"]["new_active_actions_in_aoe"] == ["soul_immolation"]
+    assert payload["data"]["single_target"]["inactive_talent_branches"][0]["action"] == "the_hunt"
 
 
 def test_simc_action_names_keep_the_dispatch_target() -> None:
@@ -1962,8 +2020,8 @@ def test_simc_describe_build_accepts_build_packet(monkeypatch, tmp_path: Path) -
     result = runner.invoke(simc_app, ["describe-build", "--apl-path", str(apl_path), "--build-packet", str(packet_path)])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["build_spec"]["transport_packet"]["path"] == str(packet_path)
-    assert payload["build_spec"]["transport_packet"]["transport_form"] == "simc_split_talents"
+    assert payload["data"]["build_spec"]["transport_packet"]["path"] == str(packet_path)
+    assert payload["data"]["build_spec"]["transport_packet"]["transport_form"] == "simc_split_talents"
 
 
 def test_simc_describe_build_uses_validated_split_packet_identity(monkeypatch, tmp_path: Path) -> None:
@@ -2041,9 +2099,9 @@ def test_simc_describe_build_uses_validated_split_packet_identity(monkeypatch, t
     result = runner.invoke(simc_app, ["describe-build", "--apl-path", str(apl_path), "--build-packet", str(packet_path)])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["identity"]["source"] == "simc_split_talents"
-    assert payload["build_spec"]["actor_class"] == "priest"
-    assert payload["build_spec"]["spec"] == "shadow"
+    assert payload["data"]["identity"]["source"] == "simc_split_talents"
+    assert payload["data"]["build_spec"]["actor_class"] == "priest"
+    assert payload["data"]["build_spec"]["spec"] == "shadow"
 
 
 def test_simc_describe_build_accepts_wow_export_transport_form_from_build_packet(monkeypatch, tmp_path: Path) -> None:
@@ -2123,9 +2181,9 @@ def test_simc_describe_build_accepts_wow_export_transport_form_from_build_packet
     result = runner.invoke(simc_app, ["describe-build", "--apl-path", str(apl_path), "--build-packet", str(packet_path)])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["build_spec"]["source_kind"] == "wow_talent_export"
-    assert payload["build_spec"]["talents"] == "ABC123"
-    assert payload["build_spec"]["transport_packet"]["transport_form"] == "wow_talent_export"
+    assert payload["data"]["build_spec"]["source_kind"] == "wow_talent_export"
+    assert payload["data"]["build_spec"]["talents"] == "ABC123"
+    assert payload["data"]["build_spec"]["transport_packet"]["transport_form"] == "wow_talent_export"
 
 
 def test_simc_describe_build_probes_wow_export_packet_instead_of_trusting_packet_identity(monkeypatch, tmp_path: Path) -> None:
@@ -2167,7 +2225,7 @@ def test_simc_describe_build_probes_wow_export_packet_instead_of_trusting_packet
     monkeypatch.setattr(
         "simc_cli.build_input.decode_build",
         lambda _repo, build_spec: (
-            (_ for _ in ()).throw(RuntimeError("wrong spec"))
+            (_ for _ in ()).throw(SimcBuildError("wrong spec", output_preview=[], returncode=1))
             if (build_spec.actor_class, build_spec.spec) == ("priest", "shadow")
             else _resolution(enabled={"moonkin_form"})
         ),
@@ -2209,11 +2267,11 @@ def test_simc_describe_build_probes_wow_export_packet_instead_of_trusting_packet
     result = runner.invoke(simc_app, ["describe-build", "--apl-path", str(apl_path), "--build-packet", str(packet_path)])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["build_spec"]["actor_class"] == "druid"
-    assert payload["build_spec"]["spec"] == "balance"
-    assert payload["identity"]["source"] == "simc_probe"
-    assert payload["build"]["actor_class"] == "druid"
-    assert payload["build"]["spec"] == "balance"
+    assert payload["data"]["build_spec"]["actor_class"] == "druid"
+    assert payload["data"]["build_spec"]["spec"] == "balance"
+    assert payload["data"]["identity"]["source"] == "simc_probe"
+    assert payload["data"]["build"]["actor_class"] == "druid"
+    assert payload["data"]["build"]["spec"] == "balance"
 
 
 def test_simc_describe_build_rejects_malformed_build_packet(tmp_path: Path) -> None:
@@ -2348,10 +2406,10 @@ def test_simc_describe_build_uses_leaf_focus_and_full_action_diff(monkeypatch, t
     )
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["single_target"]["focus_list"] == "leaf"
-    assert payload["single_target"]["focus_path"] == ["default", "leaf"]
-    assert payload["single_target"]["focus_resolution"] == "guaranteed_call_leaf"
-    assert payload["comparison"]["new_active_actions_in_aoe"] == ["collapsing_star"]
+    assert payload["data"]["single_target"]["focus_list"] == "leaf"
+    assert payload["data"]["single_target"]["focus_path"] == ["default", "leaf"]
+    assert payload["data"]["single_target"]["focus_resolution"] == "guaranteed_call_leaf"
+    assert payload["data"]["comparison"]["new_active_actions_in_aoe"] == ["collapsing_star"]
 
 
 def test_simc_decode_build_failure_includes_source_metadata(monkeypatch) -> None:
@@ -2599,9 +2657,9 @@ def test_simc_compare_builds_shows_tree_diffs(monkeypatch) -> None:
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["kind"] == "compare_builds"
-    assert payload["base"]["actor_class"] == "druid"
-    assert payload["trees_compared"] == ["class"]
-    comp = payload["comparisons"][0]
+    assert payload["data"]["base"]["actor_class"] == "druid"
+    assert payload["data"]["trees_compared"] == ["class"]
+    comp = payload["data"]["comparisons"][0]
     assert comp["has_differences"] is True
     class_diff = comp["trees"]["class"]
     assert len(class_diff["added"]) == 1
@@ -2622,7 +2680,7 @@ def test_simc_compare_builds_reports_no_differences(monkeypatch) -> None:
     result = runner.invoke(simc_app, ["compare-builds", "--base", "ABC", "--other", "ABC"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["comparisons"][0]["has_differences"] is False
+    assert payload["data"]["comparisons"][0]["has_differences"] is False
 
 
 def test_simc_compare_builds_multiple_others(monkeypatch) -> None:
@@ -2649,9 +2707,9 @@ def test_simc_compare_builds_multiple_others(monkeypatch) -> None:
     ])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert len(payload["comparisons"]) == 2
-    assert payload["comparisons"][0]["has_differences"] is False
-    assert payload["comparisons"][1]["has_differences"] is True
+    assert len(payload["data"]["comparisons"]) == 2
+    assert payload["data"]["comparisons"][0]["has_differences"] is False
+    assert payload["data"]["comparisons"][1]["has_differences"] is True
 
 
 def _decode_failing_on(bad: str) -> Any:
@@ -2915,6 +2973,25 @@ def test_simc_modify_build_rejects_an_entry_id_the_checkout_does_not_know(tmp_pa
     assert payload["error"]["code"] == "unknown_talent"
 
 
+@pytest.mark.parametrize(
+    "edit",
+    [
+        ["--remove", "Blazing Barrier"],  # a mage class-tree talent only Fire can take
+        ["--add", "80178:1"],  # the same talent by entry id
+        ["--add", "96172:1"],  # Blinding Sleet, a Death Knight class talent
+    ],
+)
+def test_simc_modify_build_rejects_a_talent_this_spec_cannot_take(tmp_path: Path, edit: list[str]) -> None:
+    """SimC rejects such an edit as if the build were invalid; it is the caller's edit that names no talent."""
+    fake = _FakeSimcBinary({"BASE": CAPTURED_ARCANE_MAGE})
+
+    exit_code, payload = _modify(tmp_path, fake, *edit)
+
+    assert exit_code == 2
+    assert payload["error"]["code"] == "unknown_talent"
+    assert not any("save=" in text for text in fake.profiles), "the edit reached the encoder"
+
+
 def test_simc_modify_build_fails_on_bad_add_format(tmp_path: Path) -> None:
     fake = _FakeSimcBinary({"BASE": CAPTURED_ARCANE_MAGE})
 
@@ -3095,7 +3172,7 @@ def test_simc_build_harness_compare_report_and_verify_clean(monkeypatch, tmp_pat
     assert build_result.exit_code == 0
     build_payload = json.loads(build_result.stdout)
     assert build_payload["kind"] == "build_harness"
-    assert build_payload["path"] == str(harness_path)
+    assert build_payload["data"]["path"] == str(harness_path)
     assert harness_path.exists()
 
     apl = tmp_path / "variant.simc"
@@ -3116,8 +3193,8 @@ def test_simc_build_harness_compare_report_and_verify_clean(monkeypatch, tmp_pat
     validate_result = runner.invoke(simc_app, ["validate-apl", str(harness_path), str(apl), "--label", "wowhead"])
     assert validate_result.exit_code == 0
     validate_payload = json.loads(validate_result.stdout)
-    assert validate_payload["valid"] is True
-    assert validate_payload["label"] == "wowhead"
+    assert validate_payload["data"]["valid"] is True
+    assert validate_payload["data"]["label"] == "wowhead"
 
     # Only the SimC run is stubbed, so the ranking, deltas and sampling disclosure are computed for real.
     dps_by_label = {"base": 100.0, "wowhead": 99.0}
@@ -3161,7 +3238,7 @@ def test_simc_build_harness_compare_report_and_verify_clean(monkeypatch, tmp_pat
     assert clean_result.exit_code == 0
     clean_payload = json.loads(clean_result.stdout)
     assert clean_payload["kind"] == "verify_clean"
-    assert clean_payload["git"]["dirty"] is False
+    assert clean_payload["data"]["git"]["dirty"] is False
 
 
 def test_simc_build_harness_rejects_buildless_wowhead_talent_calc_url() -> None:
@@ -3201,20 +3278,20 @@ def test_simc_apl_lists_graph_talents_and_trace(monkeypatch, tmp_path: Path) -> 
     result_lists = runner.invoke(simc_app, ["apl-lists", str(apl)])
     assert result_lists.exit_code == 0
     payload_lists = json.loads(result_lists.stdout)
-    assert payload_lists["apl"]["list_count"] == 2
-    assert payload_lists["lists"][0]["count"] >= 1
+    assert payload_lists["data"]["apl"]["list_count"] == 2
+    assert payload_lists["data"]["lists"][0]["count"] >= 1
 
     result_graph = runner.invoke(simc_app, ["apl-graph", str(apl)])
     assert result_graph.exit_code == 0
     payload_graph = json.loads(result_graph.stdout)
-    assert payload_graph["graph"]["format"] == "mermaid"
-    assert "flowchart TD" in payload_graph["graph"]["text"]
+    assert payload_graph["data"]["graph"]["format"] == "mermaid"
+    assert "flowchart TD" in payload_graph["data"]["graph"]["text"]
 
     result_talents = runner.invoke(simc_app, ["apl-talents", str(apl)])
     assert result_talents.exit_code == 0
     payload_talents = json.loads(result_talents.stdout)
-    assert payload_talents["count"] == 1
-    assert payload_talents["talents"][0]["token"] == "rising_mist"
+    assert payload_talents["data"]["count"] == 1
+    assert payload_talents["data"]["talents"][0]["token"] == "rising_mist"
 
     monkeypatch.setattr(
         "simc_cli.main.find_action",
@@ -3223,8 +3300,8 @@ def test_simc_apl_lists_graph_talents_and_trace(monkeypatch, tmp_path: Path) -> 
     result_trace = runner.invoke(simc_app, ["trace-action", str(apl), "rising_sun_kick"])
     assert result_trace.exit_code == 0
     payload_trace = json.loads(result_trace.stdout)
-    assert payload_trace["apl_hits"]["count"] == 1
-    assert payload_trace["apl_hits"]["items"][0]["list_name"] == "default"
+    assert payload_trace["data"]["apl_hits"]["count"] == 1
+    assert payload_trace["data"]["apl_hits"]["items"][0]["list_name"] == "default"
 
 
 def test_simc_find_action_groups_hits(monkeypatch, tmp_path: Path) -> None:
@@ -3241,8 +3318,8 @@ def test_simc_find_action_groups_hits(monkeypatch, tmp_path: Path) -> None:
     result = runner.invoke(simc_app, ["--repo-root", str(repo_root), "find-action", "rising_sun_kick"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["count"] == 1
-    assert payload["buckets"]["class_modules"]["items"][0]["line_no"] == 42
+    assert payload["data"]["count"] == 1
+    assert payload["data"]["buckets"]["class_modules"]["items"][0]["line_no"] == 42
 
 
 @pytest.mark.parametrize(("args", "command"), [(["find-action", "mind_blast"], "find-action"), (["spec-files", "monk"], "spec-files")])
@@ -3327,19 +3404,19 @@ def test_simc_apl_prune_branch_trace_and_intent(monkeypatch, tmp_path: Path) -> 
     prune_result = runner.invoke(simc_app, ["apl-prune", str(apl), "--targets", "3"])
     assert prune_result.exit_code == 0
     prune_payload = json.loads(prune_result.stdout)
-    assert prune_payload["lists"][0]["items"][0]["state"] == "eligible"
+    assert prune_payload["data"]["lists"][0]["items"][0]["state"] == "eligible"
 
     trace_result = runner.invoke(simc_app, ["apl-branch-trace", str(apl), "--targets", "3"])
     assert trace_result.exit_code == 0
     trace_payload = json.loads(trace_result.stdout)
-    assert trace_payload["summary"]["guaranteed_dispatch"] == "aoe"
-    assert trace_payload["trace"][0]["text"] == "[default]"
+    assert trace_payload["data"]["summary"]["guaranteed_dispatch"] == "aoe"
+    assert trace_payload["data"]["trace"][0]["text"] == "[default]"
 
     intent_result = runner.invoke(simc_app, ["apl-intent", str(apl), "--targets", "1"])
     assert intent_result.exit_code == 0
     intent_payload = json.loads(intent_result.stdout)
-    assert intent_payload["focus_list"] == "st"
-    assert intent_payload["intent"]
+    assert intent_payload["data"]["focus_list"] == "st"
+    assert intent_payload["data"]["intent"]
 
 
 def test_simc_priority_inactive_actions_and_opener(monkeypatch, tmp_path: Path) -> None:
@@ -3377,22 +3454,22 @@ def test_simc_priority_inactive_actions_and_opener(monkeypatch, tmp_path: Path) 
     priority_result = runner.invoke(simc_app, ["priority", str(apl), "--targets", "5"])
     assert priority_result.exit_code == 0
     priority_payload = json.loads(priority_result.stdout)
-    assert priority_payload["priority"]["focus_list"] == "aoe"
-    assert [row["action"] for row in priority_payload["priority"]["items"][:2]] == ["void_ray", "reapers_toll"]
-    assert priority_payload["priority"]["inactive_talent_branches"][0]["action"] == "collapsing_star"
+    assert priority_payload["data"]["priority"]["focus_list"] == "aoe"
+    assert [row["action"] for row in priority_payload["data"]["priority"]["items"][:2]] == ["void_ray", "reapers_toll"]
+    assert priority_payload["data"]["priority"]["inactive_talent_branches"][0]["action"] == "collapsing_star"
 
     inactive_result = runner.invoke(simc_app, ["inactive-actions", str(apl), "--targets", "5"])
     assert inactive_result.exit_code == 0
     inactive_payload = json.loads(inactive_result.stdout)
-    assert inactive_payload["inactive_actions"]["count"] == 1
-    assert inactive_payload["inactive_actions"]["items"][0]["action"] == "collapsing_star"
+    assert inactive_payload["data"]["inactive_actions"]["count"] == 1
+    assert inactive_payload["data"]["inactive_actions"]["items"][0]["action"] == "collapsing_star"
 
     opener_result = runner.invoke(simc_app, ["opener", str(apl), "--targets", "5", "--limit", "3"])
     assert opener_result.exit_code == 0
     opener_payload = json.loads(opener_result.stdout)
-    assert opener_payload["opener"]["kind"] == "static_priority_preview"
-    assert opener_payload["opener"]["items"][0]["action"] == "void_ray"
-    assert "static exact-build opener preview" in opener_payload["opener"]["caveat"]
+    assert opener_payload["data"]["opener"]["kind"] == "static_priority_preview"
+    assert opener_payload["data"]["opener"]["items"][0]["action"] == "void_ray"
+    assert "static exact-build opener preview" in opener_payload["data"]["opener"]["caveat"]
 
 
 def test_simc_intent_explain_branch_compare_and_analysis_packet(monkeypatch, tmp_path: Path) -> None:
@@ -3429,19 +3506,19 @@ def test_simc_intent_explain_branch_compare_and_analysis_packet(monkeypatch, tmp
     explain_result = runner.invoke(simc_app, ["apl-intent-explain", str(apl), "--targets", "1"])
     assert explain_result.exit_code == 0
     explain_payload = json.loads(explain_result.stdout)
-    assert explain_payload["explained_intent"]["priorities"]
+    assert explain_payload["data"]["explained_intent"]["priorities"]
 
     compare_result = runner.invoke(simc_app, ["apl-branch-compare", str(apl), "--left-targets", "3", "--right-targets", "1"])
     assert compare_result.exit_code == 0
     compare_payload = json.loads(compare_result.stdout)
-    assert compare_payload["comparison"]["dispatch_changed"] is True
-    assert compare_payload["comparison"]["left_focus_intent"]
+    assert compare_payload["data"]["comparison"]["dispatch_changed"] is True
+    assert compare_payload["data"]["comparison"]["left_focus_intent"]
 
     packet_result = runner.invoke(simc_app, ["analysis-packet", str(apl), "--targets", "1"])
     assert packet_result.exit_code == 0
     packet_payload = json.loads(packet_result.stdout)
-    assert packet_payload["packet"]["focus_list"] == "st"
-    assert packet_payload["packet"]["explained_intent"]["priorities"]
+    assert packet_payload["data"]["packet"]["focus_list"] == "st"
+    assert packet_payload["data"]["packet"]["explained_intent"]["priorities"]
 
 
 def test_simc_first_cast_and_log_actions(monkeypatch, tmp_path: Path) -> None:
@@ -3473,14 +3550,14 @@ def test_simc_first_cast_and_log_actions(monkeypatch, tmp_path: Path) -> None:
     first_cast_result = runner.invoke(simc_app, ["first-cast", str(profile), "rising_sun_kick"])
     assert first_cast_result.exit_code == 0
     first_cast_payload = json.loads(first_cast_result.stdout)
-    assert first_cast_payload["summary"]["avg"] == 0.25
-    assert first_cast_payload["results"][0]["seed"] == 1
+    assert first_cast_payload["data"]["summary"]["avg"] == 0.25
+    assert first_cast_payload["data"]["results"][0]["seed"] == 1
 
     log_result = runner.invoke(simc_app, ["log-actions", str(log_path), "rising_sun_kick"])
     assert log_result.exit_code == 0
     log_payload = json.loads(log_result.stdout)
-    assert log_payload["count"] == 1
-    assert log_payload["hits"][0]["performed_at"] == 0.25
+    assert log_payload["data"]["count"] == 1
+    assert log_payload["data"]["hits"][0]["performed_at"] == 0.25
 
     directory_result = runner.invoke(simc_app, ["log-actions", str(tmp_path), "rising_sun_kick"])
     assert directory_result.exit_code == 4
@@ -3550,8 +3627,8 @@ def test_simc_sync_skips_dirty_repo(monkeypatch, tmp_path: Path) -> None:
     result = runner.invoke(simc_app, ["sync"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["status"] == "skipped"
-    assert payload["reason"] == "dirty_worktree"
+    assert payload["data"]["status"] == "skipped"
+    assert payload["data"]["reason"] == "dirty_worktree"
 
 
 def test_simc_build_surfaces_success(monkeypatch, tmp_path: Path) -> None:
@@ -3586,7 +3663,7 @@ def test_simc_build_surfaces_success(monkeypatch, tmp_path: Path) -> None:
     result = runner.invoke(simc_app, ["build"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["status"] == "built"
+    assert payload["data"]["status"] == "built"
 
 
 def test_simc_run_surfaces_failure_with_preview(monkeypatch, tmp_path: Path) -> None:
@@ -3674,18 +3751,18 @@ def test_simc_sim_uses_quick_preset_and_surfaces_run_metadata(monkeypatch, tmp_p
     result = runner.invoke(simc_app, ["sim", str(profile)])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["preset"] == "quick"
-    assert payload["input_source"] == "file"
-    assert payload["run_settings"]["iterations_requested"] == 1000
-    assert payload["run_settings"]["iterations_completed"] == 1003
-    assert payload["run_settings"]["stop_reason"] == "fixed_iterations_completed"
-    assert payload["runtime"]["elapsed_time_seconds"] == 4.33
-    assert payload["metrics"]["dps"] == 18834.4
-    assert payload["metrics"]["dtps"] == 75769.2
-    assert payload["metrics"]["fight_length"] == 299.37
-    assert payload["simc_version"] == "SimulationCraft 1201-01"
-    assert payload["game_version"] == "12.0.1.66263"
-    assert payload["json_report_path"] is None
+    assert payload["data"]["preset"] == "quick"
+    assert payload["data"]["input_source"] == "file"
+    assert payload["data"]["run_settings"]["iterations_requested"] == 1000
+    assert payload["data"]["run_settings"]["iterations_completed"] == 1003
+    assert payload["data"]["run_settings"]["stop_reason"] == "fixed_iterations_completed"
+    assert payload["data"]["runtime"]["elapsed_time_seconds"] == 4.33
+    assert payload["data"]["metrics"]["dps"] == 18834.4
+    assert payload["data"]["metrics"]["dtps"] == 75769.2
+    assert payload["data"]["metrics"]["fight_length"] == 299.37
+    assert payload["data"]["simc_version"] == "SimulationCraft 1201-01"
+    assert payload["data"]["game_version"] == "12.0.1.66263"
+    assert payload["data"]["json_report_path"] is None
 
 
 def test_simc_sim_reads_stdin_and_respects_overrides(monkeypatch, tmp_path: Path) -> None:
@@ -3745,14 +3822,14 @@ def test_simc_sim_reads_stdin_and_respects_overrides(monkeypatch, tmp_path: Path
     )
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["preset"] == "high-accuracy"
-    assert payload["input_source"] == "stdin"
-    assert payload["profile_path"] is None
-    assert payload["run_settings"]["iterations_requested"] == 6000
-    assert payload["run_settings"]["threads"] == 4
-    assert payload["run_settings"]["fight_style"] == "HecticAddCleave"
-    assert payload["run_settings"]["desired_targets"] == 5
-    assert payload["run_settings"]["max_time"] == 180
+    assert payload["data"]["preset"] == "high-accuracy"
+    assert payload["data"]["input_source"] == "stdin"
+    assert payload["data"]["profile_path"] is None
+    assert payload["data"]["run_settings"]["iterations_requested"] == 6000
+    assert payload["data"]["run_settings"]["threads"] == 4
+    assert payload["data"]["run_settings"]["fight_style"] == "HecticAddCleave"
+    assert payload["data"]["run_settings"]["desired_targets"] == 5
+    assert payload["data"]["run_settings"]["max_time"] == 180
 
 
 def test_simc_version_reads_explicit_repo_binary(tmp_path: Path) -> None:
@@ -3764,7 +3841,7 @@ def test_simc_version_reads_explicit_repo_binary(tmp_path: Path) -> None:
     result = runner.invoke(simc_app, ["--repo-root", str(tmp_path), "version"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert str(payload["version"]).startswith("SimulationCraft")
+    assert str(payload["data"]["version"]).startswith("SimulationCraft")
 
 
 def test_simc_run_turns_uncaught_exception_into_error_envelope(monkeypatch, capsys) -> None:

@@ -132,7 +132,7 @@ def search_follow_up(candidate: dict[str, Any], *, query: str, expansion: Expans
             alternatives = [guide_full_command]
         return {
             "recommended_surface": recommended_surface,
-            "recommended_command": recommended_command,
+            "command": recommended_command,
             "reason": reason,
             "alternatives": alternatives,
         }
@@ -141,7 +141,7 @@ def search_follow_up(candidate: dict[str, Any], *, query: str, expansion: Expans
         # `news-post` takes a URL, and Wowhead resolves the short /news=<id> form to the article.
         return {
             "recommended_surface": "news-post",
-            "recommended_command": f"{prefix} news-post {entity_url('news', entity_id, expansion=expansion)}",
+            "command": f"{prefix} news-post {entity_url('news', entity_id, expansion=expansion)}",
             "reason": "news_post_summary",
             "alternatives": [],
         }
@@ -168,7 +168,7 @@ def search_follow_up(candidate: dict[str, Any], *, query: str, expansion: Expans
         alternatives = [entity_command, entity_page_command]
     return {
         "recommended_surface": recommended_surface,
-        "recommended_command": recommended_command,
+        "command": recommended_command,
         "reason": reason,
         "alternatives": alternatives,
     }
@@ -192,14 +192,19 @@ def exact_match_score(normalized_query: str, *, name_normalized: str, display_no
 
 
 def prefix_and_contains_score(normalized_query: str, *, name_normalized: str, display_normalized: str) -> tuple[int, list[str]]:
+    """Score the query as a prefix of the name, or failing that as a phrase inside it.
+
+    A title that merely contains the query ("Legion Remix Fury Warrior Guide") never outscores one
+    that starts with it, so each contains score sits below both prefix scores.
+    """
     if normalized_query and name_normalized.startswith(normalized_query):
         return 10, ["name_prefix"]
     if normalized_query and display_normalized.startswith(normalized_query):
         return 8, ["display_name_prefix"]
     if normalized_query and name_normalized and normalized_query in name_normalized:
-        return 14, ["name_contains_query"]
+        return 6, ["name_contains_query"]
     if normalized_query and display_normalized and normalized_query in display_normalized:
-        return 12, ["display_name_contains_query"]
+        return 4, ["display_name_contains_query"]
     return 0, []
 
 
@@ -260,10 +265,11 @@ def merge_suggestion_lists(response: dict[str, Any]) -> tuple[list[dict[str, Any
     """Union Wowhead's `results` with every `categories` list, keeping one row per ``(type, id)``.
 
     `results` is only the dropdown's ~10 rows. `categories` carries the rest of what Wowhead matched,
-    and the entity a query names is sometimes only there: Faction 529 "Argent Dawn" heads
-    `categories.database` and is absent from `results`. Each kept row is a copy of its first
-    occurrence with ``suggestion_lists`` naming every list it appeared in, and the summary reports
-    the rows each list sent and how many duplicates the merge removed.
+    and the entity a query names is sometimes only there: in the captured "argent dawn" response
+    (tests/fixtures/wowhead/search_suggestions_argent_dawn.json), Faction 529 "Argent Dawn" heads
+    `categories.database` and is not in `results`. Each kept row is a copy of its first occurrence
+    with ``suggestion_lists`` naming each list it appeared in once, and the summary reports the rows
+    each list sent and how many duplicates the merge removed.
     """
     categories = response.get("categories")
     lists = [("results", response.get("results")), *(categories.items() if isinstance(categories, dict) else ())]
@@ -276,7 +282,8 @@ def merge_suggestion_lists(response: dict[str, Any]) -> tuple[list[dict[str, Any
         list_rows[list_name] = len(dict_rows)
         for index, row in enumerate(dict_rows):
             kept = merged.setdefault(suggestion_key(row) or (list_name, index), {**row, "suggestion_lists": []})
-            kept["suggestion_lists"].append(list_name)
+            if list_name not in kept["suggestion_lists"]:
+                kept["suggestion_lists"].append(list_name)
     received = sum(list_rows.values())
     summary = {
         "rule": "one row per Wowhead (type, id) across `results` and every `categories` list",
@@ -312,12 +319,15 @@ def search_result_score_and_reasons(
     reasons: list[str] = []
     score = 0
 
+    # Wowhead ranks database rows on text the suggestion never shows (descriptions, criteria), so its
+    # rank only counts for a row whose own name shares a word with the query.
+    named = any(term in name_normalized or term in display_normalized for term in terms)
     for part_score, part_reasons in (
         exact_match_score(normalized_query, name_normalized=name_normalized, display_normalized=display_normalized),
         prefix_and_contains_score(normalized_query, name_normalized=name_normalized, display_normalized=display_normalized),
         term_match_score(terms, haystacks=haystacks),
         type_hint_score(query, entity_type=entity_type),
-        database_rank_score(database_rank, entity_type=entity_type),
+        database_rank_score(database_rank if named else None, entity_type=entity_type),
     ):
         score += part_score
         reasons.extend(part_reasons)
@@ -458,10 +468,12 @@ def normalize_search_results(
         if follow_up is not None:
             candidate["follow_up"] = follow_up
         normalized.append(candidate)
-    normalized.sort(key=lambda row: row["_sort"])
+    mark_stale_guides(normalized)
+    # A guide the response itself shows is long superseded sorts after every other row, whatever its
+    # title scores: a query for a class guide means the current one, not a retired event's.
+    normalized.sort(key=lambda row: (STALE_GUIDE_REASON in row["ranking"]["match_reasons"], row["_sort"]))
     for row in normalized:
         row.pop("_sort", None)
-    mark_stale_guides(normalized)
     return normalized
 
 
@@ -506,7 +518,7 @@ def resolve_next_command(candidate: dict[str, Any]) -> str | None:
     follow_up = candidate.get("follow_up")
     if not isinstance(follow_up, dict):
         return None
-    command = follow_up.get("recommended_command")
+    command = follow_up.get("command")
     return command if isinstance(command, str) and command else None
 
 

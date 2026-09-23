@@ -42,7 +42,7 @@
     "provenance",
     "data"
   ],
-  "additionalProperties": true,
+  "additionalProperties": false,
   "$defs": {
     "EnvelopeError": {
       "type": "object",
@@ -62,7 +62,7 @@
         "code",
         "message"
       ],
-      "additionalProperties": true
+      "additionalProperties": false
     }
   },
   "allOf": [

@@ -9,7 +9,7 @@ from warcraft_core.envelope import Envelope
 from warcraft_core.provider import ProviderError
 
 from lorrgs_cli.client import PROVIDER_NAME, LorrgsClient
-from lorrgs_cli.provider import call_api
+from lorrgs_cli.provider import call_api, note_empty_comp_ranking
 from lorrgs_cli.provider import doctor as provider_doctor
 from lorrgs_cli.provider import resolve as provider_resolve
 from lorrgs_cli.provider import search as provider_search
@@ -260,13 +260,16 @@ def comp_ranking(
         "comp-ranking",
         "comp_ranking",
         query,
-        lambda client: client.comp_ranking(
-            boss_slug=boss_slug,
-            limit=limit,
-            roles=role,
-            specs=spec_filter,
-            killtime_min=killtime_min,
-            killtime_max=killtime_max,
+        lambda client: note_empty_comp_ranking(
+            client.comp_ranking(
+                boss_slug=boss_slug,
+                limit=limit,
+                roles=role,
+                specs=spec_filter,
+                killtime_min=killtime_min,
+                killtime_max=killtime_max,
+            ),
+            boss_slug,
         ),
     )
 

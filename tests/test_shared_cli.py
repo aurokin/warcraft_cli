@@ -4,7 +4,8 @@ import json
 import re
 import sys
 from dataclasses import dataclass
-from typing import Any
+from pathlib import Path
+from typing import Annotated, Any
 
 import httpx
 import pytest
@@ -31,7 +32,7 @@ def build_app() -> typer.Typer:
 
     @app.command("need")
     def need(ctx: typer.Context, target: str) -> None:
-        emit(ctx, {"target": target})
+        emit(ctx, {"query": target.upper(), "target": target})
 
     group = typer.Typer(add_completion=False)
     app.add_typer(group, name="group")
@@ -41,7 +42,12 @@ def build_app() -> typer.Typer:
         emit(ctx, success_envelope(provider="dummy", command=command_path(ctx), kind="leaf", data={"pages": pages}))
 
     @group.command("sink")
-    def sink(ctx: typer.Context) -> None:
+    def sink(
+        ctx: typer.Context,
+        pages: int = 1,
+        authorization_code: Annotated[str | None, typer.Option("--code")] = None,
+        out: Annotated[Path | None, typer.Option("--out")] = None,
+    ) -> None:
         fail(ctx, "not_found", "nothing here")
 
     @group.command("boom")
@@ -58,16 +64,16 @@ def test_fields_projects_payload() -> None:
 
 
 def test_fields_strict_missing_path_exits_2_with_missing_fields_error() -> None:
-    result = runner.invoke(build_app(), ["--fields", "a.zz", "--fields-strict", "show"])
+    result = runner.invoke(build_app(), ["--fields", "a.zz", "--fields-strict", "need", "x"])
     assert result.exit_code == 2
     error = json.loads(result.stderr)
     assert error["ok"] is False
     assert error["provider"] == "dummy"
-    assert error["command"] == "show"
+    assert error["command"] == "need"
     assert error["error"]["code"] == "missing_fields"
     assert error["error"]["details"] == {"missing_fields": ["a.zz"]}
-    # The projection failed, not the command: the query it acted on is still named.
-    assert error["query"] == "shown"
+    # Like every failure, it names the parsed input, not the success payload's normalized query.
+    assert error["query"] == {"target": "x"}
 
 
 def test_compact_truncates_long_strings() -> None:
@@ -97,6 +103,16 @@ def test_fail_uses_exit_code_mapping_and_emits_envelope_on_stderr() -> None:
     assert error["error"] == {"code": "not_found", "message": "nothing here"}
     assert error["schema_version"] == "1"
     assert error["query"] == {"id": 0}
+
+
+def test_fail_echoes_the_parsed_parameters_except_secrets() -> None:
+    argv = ["--pretty", "group", "sink", "--pages", "3", "--code", "oauth-code-123", "--out", "/tmp/x"]
+    result = runner.invoke(build_app(), argv)
+    assert result.exit_code == 4
+    error = json.loads(result.stderr)
+    assert error["command"] == "group sink"
+    assert error["query"] == {"pages": 3, "out": "/tmp/x"}
+    assert "oauth-code-123" not in result.stderr
 
 
 def test_configure_stores_subclass_config_in_ctx() -> None:

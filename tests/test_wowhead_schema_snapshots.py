@@ -21,8 +21,8 @@ runner = CliRunner()
 FIXTURE = WOWHEAD_SYNTHETIC_FIXTURE
 
 
-def _assert_schema(payload: dict[str, object], *, required: frozenset[str], label: str) -> None:
-    missing = sorted(required - set(payload))
+def _assert_schema(payload: dict[str, dict[str, object]], *, required: frozenset[str], label: str) -> None:
+    missing = sorted(required - set(payload["data"]))
     assert not missing, f"{label} missing keys: {missing}"
 
 

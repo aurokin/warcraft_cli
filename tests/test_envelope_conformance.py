@@ -1,8 +1,8 @@
 """One envelope, twelve providers.
 
 Every ``PROVIDER`` surface must return the shape defined in ``warcraft_core.envelope`` regardless of
-whether the provider is ready, stubbed, or unsupported. Providers keep their historical payload keys
-as deprecated top-level copies, but ``data`` is the canonical location and is what this file asserts.
+whether the provider is ready, stubbed, or unsupported. The payload lives under ``data``; the wrapper's
+own envelopes carry the envelope keys and nothing else.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ import pytest
 from cli_testkit import WARCRAFTLOGS_REPORT_QUERY, apply_provider_stubs, run_binary
 from warcraft_cli.main import app as warcraft_app
 from warcraft_cli.providers import PROVIDERS
-from warcraft_core.envelope import envelope_violations
+from warcraft_core.envelope import ENVELOPE_KEYS, REQUIRED_KEYS, envelope_violations
 from warcraft_core.identity import build_reference_transport_packet_payload
 
 PROVIDER_IDS = [registration.name for registration in PROVIDERS]
@@ -71,11 +71,7 @@ def test_ready_surfaces_return_a_conforming_envelope_offline(
 @pytest.mark.parametrize("registration", PROVIDERS, ids=PROVIDER_IDS)
 @pytest.mark.parametrize("surface", ["search", "resolve"])
 def test_stubbed_surfaces_return_a_flagged_success_envelope(registration: Any, surface: str) -> None:
-    """A surface that is not built yet answers with ``ok: true`` plus an explicit flag, never an error.
-
-    The flag lives under ``data`` (canonical) and is mirrored at the top level by the deprecated
-    dual-emit, so an agent probing an advertised surface always gets a machine-readable "not yet".
-    """
+    """A surface that is not built yet answers with ``ok: true`` plus an explicit flag under ``data``, never an error."""
     capability = registration.wrapper_capabilities.get(surface)
     if capability not in {"coming_soon", "not_supported"}:
         pytest.skip(f"{registration.name} {surface} is {capability!r}")
@@ -86,7 +82,6 @@ def test_stubbed_surfaces_return_a_flagged_success_envelope(registration: Any, s
     assert_envelope(payload, context=context)
     assert payload["ok"] is True
     assert payload["data"].get(capability) is True, f"{context}: data.{capability} must be True"
-    assert payload[capability] is True, f"{context}: the legacy top-level {capability} copy must be kept"
     assert payload["data"].get("suggested_command"), f"{context}: tell the agent what to run instead"
 
 
@@ -103,7 +98,6 @@ def test_wrapper_own_commands_return_a_conforming_envelope(tmp_path: Any) -> Non
     payload = json.loads(doctor.stdout)
     assert envelope_violations(payload) == []
     assert payload["provider"] == "warcraft" and payload["command"] == "doctor"
-    assert payload["data"]["wrapper"] == payload["wrapper"], "legacy top-level keys are mirrored into data"
 
     failure = run_binary("warcraft", ["guide-compare", str(tmp_path / "a"), str(tmp_path / "b")])
     assert failure.exit_code != 0
@@ -177,7 +171,9 @@ def test_wrapper_own_command_envelopes_conform_offline(
     assert payload["provider"] == "warcraft"
     assert payload["command"] == command
     assert payload["ok"] is (result.exit_code == 0)
+    assert set(payload) == (REQUIRED_KEYS if payload["ok"] else ENVELOPE_KEYS), f"{command}: keys beyond the envelope"
     if payload["ok"] is False:
+        assert payload["data"] == {}
         assert set(payload["error"]) <= {"code", "message", "details"}, f"{command}: error keys beyond the contract"
 
 
@@ -308,6 +304,7 @@ def test_wrapper_own_command_success_envelopes_conform(
     payload = json.loads(result.stdout)
     assert envelope_violations(payload) == [], f"{command}: {envelope_violations(payload)}"
     assert payload["ok"] is True
+    assert set(payload) == REQUIRED_KEYS, f"{command}: keys beyond the envelope"
     assert payload["provider"] == ("wowhead" if command == "resolve" else "warcraft")
     assert payload["command"] == command
     assert payload["data"], f"{command}: a success envelope must carry its payload under data"

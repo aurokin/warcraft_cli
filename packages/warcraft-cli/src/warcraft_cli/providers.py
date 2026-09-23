@@ -47,9 +47,11 @@ from warcraftlogs_cli.main import app as warcraftlogs_app
 from warcraftlogs_cli.provider import PROVIDER as warcraftlogs_provider
 from wowhead_cli.main import app as wowhead_app
 from wowhead_cli.provider import PROVIDER as wowhead_provider
+from wowhead_cli.ranking import STALE_GUIDE_REASON
 
 __all__ = [
     "PROVIDERS",
+    "STALE_GUIDE_REASON",
     "wrapper_envelope",
     "ProviderRegistration",
     "expansion_filtered_providers",
@@ -573,7 +575,9 @@ def provider_expansion_args(registration: ProviderRegistration, expansion: str |
     return [arg for key, value in provider_expansion_options(registration, expansion).items() for arg in (f"--{key}", value)]
 
 
-def _unsupported_expansion_result(registration: ProviderRegistration, expansion: str | None) -> dict[str, Any] | None:
+def _unsupported_expansion_result(
+    registration: ProviderRegistration, expansion: str | None, *, command: str
+) -> dict[str, Any] | None:
     """Early return for a provider that cannot honour the requested expansion; ``None`` means proceed."""
     if (
         expansion is None
@@ -581,24 +585,17 @@ def _unsupported_expansion_result(registration: ProviderRegistration, expansion:
         or provider_expansion_exclusion_reason(registration, requested_expansion=expansion) is None
     ):
         return None
-    return {
-        "provider": registration.name,
-        "exit_code": 1,
-        "payload": _unsupported_expansion_payload(registration, expansion),
-    }
-
-
-def _unsupported_expansion_payload(registration: ProviderRegistration, expansion: str) -> dict[str, Any]:
-    return {
-        "ok": False,
-        "error": {
-            "code": "unsupported_provider_expansion",
-            "message": f"Provider {registration.name!r} does not support wrapper expansion {expansion!r}.",
+    envelope = error_envelope(
+        provider=registration.name,
+        command=command,
+        code="unsupported_provider_expansion",
+        message=f"Provider {registration.name!r} does not support wrapper expansion {expansion!r}.",
+        details={
+            "requested_expansion": expansion,
+            "expansion_support": provider_expansion_support(registration, requested_expansion=expansion),
         },
-        "provider": registration.name,
-        "requested_expansion": expansion,
-        "expansion_support": provider_expansion_support(registration, requested_expansion=expansion),
-    }
+    )
+    return {"provider": registration.name, "exit_code": EXIT_GENERIC, "payload": dict(envelope)}
 
 
 def source_exit_code(source_result: Mapping[str, Any]) -> int:
@@ -612,39 +609,41 @@ def source_exit_code(source_result: Mapping[str, Any]) -> int:
 
 
 def wrapper_envelope(command: str, payload: Mapping[str, Any]) -> dict[str, Any]:
-    """Fill the envelope keys a wrapper-built payload lacks; keys already present are never overridden.
+    """Shape a wrapper-built payload as the contract envelope: exactly the envelope keys, nothing else.
 
-    Wrapper payloads historically carried only some envelope keys (``ok``, ``provider``, ``kind``);
-    the rest of their keys stay at the top level (deprecated dual-emit) and are copied into ``data``
-    on success. Provider envelopes passed through are complete and come back unchanged.
+    Envelope keys the payload sets win over the defaults. Every other key is payload content: it goes
+    under ``data`` on success, and under ``error.details`` on failure, where ``data`` is ``{}``.
     """
-    ok = payload.get("ok", "error" not in payload)
-    legacy = {key: value for key, value in payload.items() if key not in ENVELOPE_KEYS}
-    defaults: dict[str, Any] = {
+    ok = bool(payload.get("ok", "error" not in payload))
+    body = {key: value for key, value in payload.items() if key not in ENVELOPE_KEYS}
+    envelope: dict[str, Any] = {
         "ok": ok,
         "provider": "warcraft",
         "command": command,
-        "kind": "error" if ok is False else command,
+        "kind": command if ok else "error",
         "schema_version": SCHEMA_VERSION,
         "query": None,
         "provenance": {},
-        "data": legacy if ok else {},
+        **{key: value for key, value in payload.items() if key in ENVELOPE_KEYS},
     }
-    return {**defaults, **payload}
+    if ok:
+        envelope["data"] = {**body, **as_dict(payload.get("data"))}
+        return envelope
+    error = dict(as_dict(payload.get("error")))
+    details = {**body, **as_dict(error.get("details"))}
+    if details:
+        error["details"] = details
+    envelope.update(ok=False, data={}, error=error)
+    return envelope
 
 
 def provider_payload_data(payload: Mapping[str, Any] | None) -> dict[str, Any]:
-    """The ``data`` body of a provider envelope: the only place a wrapper composite reads its fields.
-
-    ``data`` is the contract-stable home of every provider field (docs/foundation/ERROR_CONTRACT.md);
-    the copies of those keys at the top level of an envelope are deprecated and are being removed.
-    No wrapper reader may depend on them.
-    """
+    """The ``data`` body of a provider envelope: the only place a wrapper composite reads its fields."""
     return as_dict(as_dict(payload).get("data"))
 
 
 def _call_surface(provider: str, command: str, call: Callable[..., Any], *args: Any, **kwargs: Any) -> tuple[int, dict[str, Any]]:
-    """Run one pure surface method, returning ``(exit_code, flat payload)`` and never raising."""
+    """Run one pure surface method, returning ``(exit_code, envelope)`` and never raising."""
     try:
         envelope = call(*args, **kwargs)
     except Exception as exc:
@@ -660,7 +659,7 @@ def _call_surface(provider: str, command: str, call: Callable[..., Any], *args: 
 
 def provider_search(provider: str, query: str, *, limit: int = 5, expansion: str | None = None) -> dict[str, Any]:
     registration = get_provider(provider)
-    unsupported = _unsupported_expansion_result(registration, expansion)
+    unsupported = _unsupported_expansion_result(registration, expansion, command="search")
     if unsupported is not None:
         return unsupported
     code, payload = _call_surface(
@@ -676,7 +675,7 @@ def provider_search(provider: str, query: str, *, limit: int = 5, expansion: str
 
 def provider_resolve(provider: str, query: str, *, limit: int = 5, expansion: str | None = None) -> dict[str, Any]:
     registration = get_provider(provider)
-    unsupported = _unsupported_expansion_result(registration, expansion)
+    unsupported = _unsupported_expansion_result(registration, expansion, command="resolve")
     if unsupported is not None:
         return unsupported
     code, payload = _call_surface(
@@ -745,7 +744,7 @@ def invoke_provider_command(app: typer.Typer, *, args: list[str], prog_name: str
 
 def provider_invoke(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, Any]:
     registration = get_provider(provider)
-    unsupported = _unsupported_expansion_result(registration, expansion)
+    unsupported = _unsupported_expansion_result(registration, expansion, command=" ".join(args[:1]))
     if unsupported is not None:
         return {**unsupported, "stdout": ""}
     normalized_args = [*provider_expansion_args(registration, expansion), *args]

@@ -28,23 +28,6 @@ PACKAGE_SRC_DIRS = (
     ROOT / "packages" / "curseforge-cli" / "src",
     ROOT / "packages" / "lorrgs-cli" / "src",
 )
-LIVE_TEST_ENV_BY_FILE: dict[str, str | tuple[str, ...]] = {
-    "test_blizzard_api_live.py": "BLIZZARD_LIVE_TESTS",
-    "test_cooldown_packet_live.py": ("LORRGS_LIVE_TESTS", "WARCRAFTLOGS_LIVE_TESTS"),
-    "test_curseforge_live.py": "CURSEFORGE_LIVE_TESTS",
-    "test_icy_veins_live.py": "ICY_VEINS_LIVE_TESTS",
-    "test_live_endpoint_contracts.py": "WOWHEAD_LIVE_TESTS",
-    "test_live_integration.py": "WOWHEAD_LIVE_TESTS",
-    "test_lorrgs_live.py": "LORRGS_LIVE_TESTS",
-    "test_method_live.py": "METHOD_LIVE_TESTS",
-    "test_raidbots_live.py": "RAIDBOTS_LIVE_TESTS",
-    "test_raiderio_live.py": "RAIDERIO_LIVE_TESTS",
-    "test_warcraft_wiki_live.py": "WARCRAFT_WIKI_LIVE_TESTS",
-    "test_warcraft_wrapper_live.py": "WARCRAFT_WRAPPER_LIVE_TESTS",
-    "test_warcraftlogs_live.py": "WARCRAFTLOGS_LIVE_TESTS",
-    "test_live_command_matrix.py": "WARCRAFTLOGS_LIVE_TESTS",
-    "test_wowhead_parser_canaries.py": "WOWHEAD_LIVE_TESTS",
-}
 
 TESTS_DIR = str(ROOT / "tests")
 if TESTS_DIR not in sys.path:
@@ -157,12 +140,6 @@ def _env_enabled(name: str) -> bool:
     return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _live_env_for_item(item: pytest.Item) -> tuple[str, ...]:
-    file_name = Path(str(item.path)).name
-    env_names = LIVE_TEST_ENV_BY_FILE.get(file_name, "WOWHEAD_LIVE_TESTS")
-    return (env_names,) if isinstance(env_names, str) else env_names
-
-
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
     del config
     for item in items:
@@ -170,10 +147,6 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
             if not _env_enabled("WARCRAFT_E2E"):
                 item.add_marker(pytest.mark.skip(reason="Set WARCRAFT_E2E=1 (make test-e2e) to run end-to-end journeys."))
             continue
-        if item.get_closest_marker("live") is None:
-            continue
-        env_names = _live_env_for_item(item)
-        missing = [env_name for env_name in env_names if not _env_enabled(env_name)]
-        if missing:
-            requested = " and ".join(f"{env_name}=1" for env_name in missing)
-            item.add_marker(pytest.mark.skip(reason=f"Set {requested} to run this live test."))
+        # The only live-marked suite is the Wowhead parser canary (make test-canary).
+        if item.get_closest_marker("live") is not None and not _env_enabled("WOWHEAD_LIVE_TESTS"):
+            item.add_marker(pytest.mark.skip(reason="Set WOWHEAD_LIVE_TESTS=1 (make test-canary) to run the live canary."))

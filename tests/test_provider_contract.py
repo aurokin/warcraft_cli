@@ -66,11 +66,16 @@ def test_query_intents_detect_structured_profile_and_reference() -> None:
     assert "structured_profile" in query_intents("us illidan liquid")
 
 
-def test_a_leading_region_like_word_alone_is_not_a_profile_query() -> None:
-    # `world` is not a profile region, and five free-text tokens are not `<region> <realm> <name>`.
+def test_world_is_not_a_profile_region() -> None:
+    # `world` is a leaderboard scope, not a region a character or guild lives in.
     assert "structured_profile" not in query_intents("world boss sha of anger")
     assert "structured_profile" not in query_intents("world boss ragnaros")
-    assert "structured_profile" not in query_intents("eu mythic plus tier list")
+
+
+def test_a_multi_word_realm_is_still_a_structured_profile_query() -> None:
+    # Raider.IO reads `<region> <realm...> <name>` with realms of up to three words.
+    assert "structured_profile" in query_intents("eu tarren mill Cotti")
+    assert "structured_profile" in query_intents("us area 52 Roguecane")
 
 
 def test_wrapper_search_ranking_boosts_reference_provider_for_api_queries() -> None:
@@ -386,17 +391,22 @@ class MergeCase:
     notes: str = field(default="")
 
 
-def _merged_page(case: MergeCase) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    flattened = [
+def _decorated_rows(query: str, provider_rows: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    """Decorate each provider's rows the way `warcraft search` does: in provider order, top row marked."""
+    return [
         decorate_search_result(
-            case.query,
+            query,
             {"provider": provider, **row},
             provider_max_score=provider_max_candidate_score(rows),
+            provider_top_row=index == 0,
         )
-        for provider, rows in case.provider_rows.items()
-        for row in rows
+        for provider, rows in provider_rows.items()
+        for index, row in enumerate(rows)
     ]
-    return merged_search_page(flattened, limit=case.limit)
+
+
+def _merged_page(case: MergeCase) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    return merged_search_page(_decorated_rows(case.query, case.provider_rows), limit=case.limit)
 
 
 def _raiderio_characters(name: str, count: int) -> list[dict[str, Any]]:
@@ -734,7 +744,7 @@ def test_an_on_intent_provider_overflow_is_deferred_and_then_fills_the_page() ->
     assert [row["id"] for row in page] == ["guide-0", "guide-1", "guide-2", "guide-3", "guide-4"]
 
 
-def test_merged_page_is_in_rank_order_and_gives_off_intent_rows_one_slot_at_most() -> None:
+def test_merged_page_keeps_merge_order_and_gives_off_intent_rows_one_slot_at_most() -> None:
     """Promoted rows are not appended after the page, and an exact-name profile row takes one slot."""
     rows = [
         *[
@@ -760,7 +770,6 @@ def test_merged_page_is_in_rank_order_and_gives_off_intent_rows_one_slot_at_most
 
     page, policy = merged_search_page(rows, limit=6)
 
-    assert page == sorted(page, key=search_result_sort_key)
     # The promoted fourth Wowhead row outranks the wiki row, so it is not appended after it.
     assert [row["id"] for row in page[:5]] == [0, 1, 2, 3, "Diemetradon"]
     assert [row["provider"] for row in page[5:]] == ["raiderio"]
@@ -769,27 +778,110 @@ def test_merged_page_is_in_rank_order_and_gives_off_intent_rows_one_slot_at_most
     assert policy["withheld_off_intent_row_count"] == 19
 
 
-def test_title_match_boost_decides_between_rows_the_provider_scored_the_other_way() -> None:
-    """The quality rule: an item whose title starts with the query beats a news post Wowhead scored higher."""
-    rows = [
-        decorate_search_result(
+def test_the_merge_never_reorders_one_providers_rows() -> None:
+    """A provider's own order is its ranking: wrapper boosts only decide between providers."""
+    page, _policy = merged_search_page(
+        _decorated_rows(
             "thunderfury",
-            {"provider": "wowhead", "id": 346300, "name": "Possible Thunderfury-Themed Cloak on the PTR",
-             "entity_type": "news", "ranking": {"score": 26}},
-            provider_max_score=50,
+            {
+                "wowhead": [
+                    {"id": 346300, "name": "Possible Thunderfury-Themed Cloak on the PTR", "entity_type": "news",
+                     "ranking": {"score": 26}},
+                    {"id": 19019, "name": "Thunderfury, Blessed Blade of the Windseeker", "entity_type": "item",
+                     "ranking": {"score": 22}},
+                ],
+            },
         ),
-        decorate_search_result(
-            "thunderfury",
-            {"provider": "wowhead", "id": 19019, "name": "Thunderfury, Blessed Blade of the Windseeker",
-             "entity_type": "item", "ranking": {"score": 22}},
-            provider_max_score=50,
-        ),
-    ]
+        limit=5,
+    )
 
+    # The item's title and kind boosts outscore the news post, yet Wowhead listed the post first.
+    assert page[1]["wrapper_ranking"]["score"] > page[0]["wrapper_ranking"]["score"]
+    assert [row["id"] for row in page] == [346300, 19019]
+
+
+def test_the_entity_providers_top_row_anchors_a_bare_query_even_under_a_title_prefix() -> None:
+    """Live `thunderfury` shape: Wowhead leads with the item, and the item leads the page.
+
+    Wowhead's same-named proc spells match the query exactly but sit below the item in Wowhead's
+    own list, so they cannot anchor; the wiki's article about the item outscores it on raw boosts.
+    """
+    page, _policy = merged_search_page(
+        _decorated_rows(
+            "thunderfury",
+            {
+                "wowhead": [
+                    {"id": 19019, "name": "Thunderfury, Blessed Blade of the Windseeker", "entity_type": "item",
+                     "ranking": {"score": 56}},
+                    {"id": 7787, "name": "Rise, Thunderfury!", "entity_type": "quest", "ranking": {"score": 46}},
+                    {"id": 21992, "name": "Thunderfury", "entity_type": "spell", "ranking": {"score": 44}},
+                    {"id": 27648, "name": "Thunderfury", "entity_type": "spell", "ranking": {"score": 44}},
+                ],
+                "warcraft-wiki": [
+                    {"id": "Thunderfury, Blessed Blade of the Windseeker",
+                     "name": "Thunderfury, Blessed Blade of the Windseeker", "entity_type": "article",
+                     "ranking": {"score": 66}},
+                    {"id": "Rise, Thunderfury!", "name": "Rise, Thunderfury!", "entity_type": "article",
+                     "ranking": {"score": 36}},
+                ],
+            },
+        ),
+        limit=5,
+    )
+
+    assert page[0]["id"] == 19019
+    assert page[0]["wrapper_ranking"]["anchor"] is True
+    assert [row["wrapper_ranking"]["anchor"] for row in page[1:]] == [False] * 4
+    assert [row["id"] for row in page if row["provider"] == "wowhead"] == [19019, 7787, 21992]
+
+
+def test_an_exact_name_profile_slot_is_kept_only_for_an_exact_first_profile_row() -> None:
+    """The reserved slot is for the character a bare name names, not for any profile row."""
+    fillers = {
+        "warcraft-wiki": [
+            {"id": f"Aurora {index}", "name": f"Aurora {index}", "entity_type": "article", "ranking": {"score": 42 - index}}
+            for index in range(5)
+        ],
+        "wowhead": [
+            {"id": 90000 + index, "name": f"Aurowhatever {index}", "entity_type": "item", "ranking": {"score": 17 - index}}
+            for index in range(5)
+        ],
+    }
+    exact_first = {"raiderio": [
+        {"id": 1, "name": "Aurow", "kind": "character", "ranking": {"score": 70}},
+        {"id": 2, "name": "Aurowyn", "kind": "character", "ranking": {"score": 70}},
+    ]}
+    near_first = {"raiderio": [
+        {"id": 2, "name": "Aurowyn", "kind": "character", "ranking": {"score": 70}},
+        {"id": 1, "name": "Aurow", "kind": "character", "ranking": {"score": 70}},
+    ]}
+
+    page, policy = merged_search_page(_decorated_rows("aurow", {**fillers, **exact_first}), limit=5)
+    assert policy["reserved_exact_profile_slot_count"] == 1
+    assert [row["id"] for row in page if row["provider"] == "raiderio"] == [1]
+
+    page, policy = merged_search_page(_decorated_rows("aurow", {**fillers, **near_first}), limit=5)
+    assert policy["reserved_exact_profile_slot_count"] == 0
+    assert [row for row in page if row["provider"] == "raiderio"] == []
+
+
+def test_a_stale_guide_flag_from_the_provider_reaches_the_merged_and_brief_rows() -> None:
+    """Wowhead marks guides its own response shows are long superseded; the wrapper passes that on."""
+    rows = _decorated_rows(
+        "fury warrior guide",
+        {
+            "wowhead": [
+                {"id": 3087, "name": "Fury Warrior Guide", "entity_type": "guide",
+                 "ranking": {"score": 40, "match_reasons": ["name_prefix"]}},
+                {"id": 23867, "name": "Fury Warrior DF Season 4 Guide", "entity_type": "guide",
+                 "ranking": {"score": 30, "match_reasons": ["name_contains_query", "stale_guide"]}},
+            ],
+        },
+    )
     page, _policy = merged_search_page(rows, limit=5)
 
-    assert [row["id"] for row in page] == [19019, 346300]
-    assert page[0]["wrapper_ranking"]["name_match"] == "title_prefix"
+    assert [row["wrapper_ranking"]["stale_guide"] for row in page] == [False, True]
+    assert [compact_wrapper_candidate(row)["wrapper_ranking"]["stale_guide"] for row in page] == [False, True]
 
 
 def test_name_match_strength_separates_a_title_from_a_mention() -> None:

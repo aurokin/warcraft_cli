@@ -15,7 +15,7 @@ happens outside pytest, or in a test marked `live`.
 
 ## When to refresh
 
-- A parser canary or the live matrix skips or fails with HTTP 404
+- A parser canary fails with HTTP 404
 - `wowhead doctor` live probes fail for a pinned expansion profile
 - A schema snapshot test fails after an intentional CLI output change (update the fixture or the
   expected keys, and record the change in `CHANGELOG.md`)
@@ -74,18 +74,6 @@ under 100 KB per file for anything new.
 pytest -q tests/test_icy_veins_cli.py tests/test_icy_veins_recorded_fixtures.py
 ```
 
-## Warcraft Logs live matrix
-
-The matrix discovers its inputs at run time: the session fixture in
-`tests/test_live_command_matrix.py` picks the current raid zone from `zones`, then a Heroic or
-Mythic kill in a recent public report of that zone, and anchors every case on it. Nothing ages out.
-`tests/fixtures/live_matrix.py` holds only identity pins (the maintainer's guild and character)
-plus discovery tuning; change those only if the guild or character moves. Run:
-
-```bash
-make test-live-matrix
-```
-
 ## Wowhead parser canaries
 
 1. Pick a replacement entity on the target expansion (same entity type).
@@ -93,7 +81,7 @@ make test-live-matrix
 3. Run:
 
 ```bash
-WOWHEAD_LIVE_TESTS=1 pytest -q tests/test_wowhead_parser_canaries.py
+make test-canary
 ```
 
 ## After any fixture change

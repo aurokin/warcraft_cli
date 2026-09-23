@@ -21,7 +21,8 @@ Static quality tooling, what blocks a merge, and what is advisory.
 | `make reference` | Regenerate `docs/reference/<cli>.md` from the Typer apps | — |
 | `make schema` | Regenerate `schemas/envelope.schema.json` from the envelope TypedDicts | — |
 | `make build` | `uv build --wheel` (the release artifact) | — |
-| `make test-live` | Live provider contract tests (network + credentials) | — |
+| `make test-e2e` | End-to-end journeys against the real providers (network + credentials) | — |
+| `make test-canary` | Live Wowhead parser canary (network) | — |
 | `make pre-commit-install` | Install the local hooks in `.pre-commit-config.yaml` | — |
 | `make benchmark-cache` | Cold vs warm Wowhead search timing | no |
 | `make fixture-refresh-hints` | Prints URLs for refreshing Wowhead fixtures | no |

@@ -5,7 +5,7 @@ Additive normalized fields for agent consumption. Raw `tooltip`, HTML-derived bl
 ## Schema versions
 
 The top-level `schema_version` is the shared envelope version (`"1"`). The normalization layer
-carries its own version at `normalized.schema_version`:
+carries its own version at `data.normalized.schema_version`:
 
 | Command | `normalized.schema_version` | When present |
 | --- | --- | --- |

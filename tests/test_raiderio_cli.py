@@ -41,7 +41,7 @@ from raiderio_cli.main import (
 from raiderio_cli.provider import PROVIDER
 from typer.testing import CliRunner
 from warcraft_core.analytics import numeric_summary
-from warcraft_core.envelope import envelope_violations
+from warcraft_core.envelope import ENVELOPE_KEYS, REQUIRED_KEYS, envelope_violations
 from warcraft_core.provider import ProviderSurface
 
 runner = CliRunner()
@@ -87,17 +87,17 @@ def test_raiderio_doctor_reports_phase_one_capabilities() -> None:
 
     payload = json.loads(result.stdout)
     assert payload["provider"] == "raiderio"
-    assert payload["status"] == "ready"
-    assert payload["auth"]["required"] is False
-    assert payload["auth"]["deferred"] is True
-    assert payload["capabilities"]["character"] == "ready"
-    assert payload["capabilities"]["search"] == "ready"
-    assert payload["capabilities"]["sample_mythic_plus_runs"] == "ready"
-    assert payload["capabilities"]["sample_mythic_plus_players"] == "ready"
-    assert payload["capabilities"]["distribution_mythic_plus_runs"] == "ready"
-    assert payload["capabilities"]["distribution_mythic_plus_players"] == "ready"
-    assert payload["capabilities"]["threshold_mythic_plus_runs"] == "ready"
-    assert payload["capabilities"]["mythic_plus_leaderboard"] == "ready"
+    assert payload["data"]["status"] == "ready"
+    assert payload["data"]["auth"]["required"] is False
+    assert payload["data"]["auth"]["deferred"] is True
+    assert payload["data"]["capabilities"]["character"] == "ready"
+    assert payload["data"]["capabilities"]["search"] == "ready"
+    assert payload["data"]["capabilities"]["sample_mythic_plus_runs"] == "ready"
+    assert payload["data"]["capabilities"]["sample_mythic_plus_players"] == "ready"
+    assert payload["data"]["capabilities"]["distribution_mythic_plus_runs"] == "ready"
+    assert payload["data"]["capabilities"]["distribution_mythic_plus_players"] == "ready"
+    assert payload["data"]["capabilities"]["threshold_mythic_plus_runs"] == "ready"
+    assert payload["data"]["capabilities"]["mythic_plus_leaderboard"] == "ready"
 
 
 def test_raiderio_search_returns_ranked_matches(monkeypatch) -> None:
@@ -138,11 +138,11 @@ def test_raiderio_search_returns_ranked_matches(monkeypatch) -> None:
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["count"] == 2
-    assert payload["results"][0]["kind"] == "guild"
-    assert payload["results"][0]["realm"] == "illidan"
-    assert "type_hint" in payload["results"][0]["ranking"]["match_reasons"]
-    assert payload["results"][0]["follow_up"]["command"] == "raiderio guild us illidan Liquid"
+    assert payload["data"]["count"] == 2
+    assert payload["data"]["results"][0]["kind"] == "guild"
+    assert payload["data"]["results"][0]["realm"] == "illidan"
+    assert "type_hint" in payload["data"]["results"][0]["ranking"]["match_reasons"]
+    assert payload["data"]["results"][0]["follow_up"]["command"] == "raiderio guild us illidan Liquid"
 
 
 def test_raiderio_search_result_candidate_builds_profile_shape() -> None:
@@ -442,11 +442,11 @@ def test_raiderio_search_uses_structured_direct_guild_probe_when_search_is_empty
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["count"] == 1
-    assert payload["results"][0]["kind"] == "guild"
-    assert payload["results"][0]["name"] == "Liquid"
-    assert "structured_probe" in payload["results"][0]["ranking"]["match_reasons"]
-    assert payload["results"][0]["follow_up"]["command"] == "raiderio guild us illidan Liquid"
+    assert payload["data"]["count"] == 1
+    assert payload["data"]["results"][0]["kind"] == "guild"
+    assert payload["data"]["results"][0]["name"] == "Liquid"
+    assert "structured_probe" in payload["data"]["results"][0]["ranking"]["match_reasons"]
+    assert payload["data"]["results"][0]["follow_up"]["command"] == "raiderio guild us illidan Liquid"
 
 
 def test_raiderio_resolve_returns_conservative_next_command(monkeypatch) -> None:
@@ -472,9 +472,9 @@ def test_raiderio_resolve_returns_conservative_next_command(monkeypatch) -> None
     result = runner.invoke(raiderio_app, ["resolve", "Roguecane"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["resolved"] is True
-    assert payload["confidence"] == "high"
-    assert payload["next_command"] == "raiderio character us illidan Roguecane"
+    assert payload["data"]["resolved"] is True
+    assert payload["data"]["confidence"] == "high"
+    assert payload["data"]["next_command"] == "raiderio character us illidan Roguecane"
 
 
 def test_raiderio_resolve_uses_structured_direct_character_probe(monkeypatch) -> None:
@@ -507,10 +507,10 @@ def test_raiderio_resolve_uses_structured_direct_character_probe(monkeypatch) ->
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["resolved"] is True
-    assert payload["confidence"] == "high"
-    assert payload["next_command"] == "raiderio character us illidan Roguecane"
-    assert "structured_probe" in payload["match"]["ranking"]["match_reasons"]
+    assert payload["data"]["resolved"] is True
+    assert payload["data"]["confidence"] == "high"
+    assert payload["data"]["next_command"] == "raiderio character us illidan Roguecane"
+    assert "structured_probe" in payload["data"]["match"]["ranking"]["match_reasons"]
 
 
 def test_raiderio_resolve_stays_unresolved_for_ambiguous_match_set(monkeypatch) -> None:
@@ -550,9 +550,75 @@ def test_raiderio_resolve_stays_unresolved_for_ambiguous_match_set(monkeypatch) 
     result = runner.invoke(raiderio_app, ["resolve", "guild Liquid"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["resolved"] is False
-    assert payload["next_command"] is None
-    assert payload["fallback_search_command"] == 'raiderio search "Liquid"'
+    assert payload["data"]["resolved"] is False
+    assert payload["data"]["next_command"] is None
+    assert payload["data"]["fallback_search_command"] == 'raiderio search "Liquid"'
+
+
+def _search_row(kind: str, name: str) -> dict[str, Any]:
+    return {
+        "type": kind,
+        "name": name,
+        "data": {
+            "name": name,
+            "region": {"slug": "us"},
+            "realm": {"slug": "malganis", "name": "Mal'Ganis"},
+            "path": f"/{kind}s/us/malganis/{name}",
+        },
+    }
+
+
+def _stub_profile_world(monkeypatch, *, kinds_that_exist: set[str]) -> None:
+    """Every probed name exists upstream for ``kinds_that_exist``; search returns both kinds regardless."""
+
+    def lookup(kind: str) -> Callable[..., dict[str, Any]]:
+        def fetch(self: RaiderIOClient, *, region: str, realm: str, name: str, fields: str = "") -> dict[str, Any]:
+            if kind not in kinds_that_exist:
+                _raise_404(f"{kind}s")
+            return {"name": name, "region": region, "realm": "Mal'Ganis", "profile_url": f"https://raider.io/{kind}s/us/malganis/{name}"}
+
+        return fetch
+
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.character_profile_variants", lookup("character"))
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.guild_profile_variants", lookup("guild"))
+    monkeypatch.setattr(
+        "raiderio_cli.client.RaiderIOClient.search",
+        lambda self, *, term, kind=None: {"matches": [_search_row(k, "Gn") for k in ("character", "guild") if k in kinds_that_exist]},
+    )
+
+
+@pytest.mark.parametrize(
+    ("query", "kind"),
+    [("guild us malganis gn", "character"), ("us malganis Aurow", "guild")],
+)
+def test_raiderio_explicit_kind_filters_structured_matches(monkeypatch, query: str, kind: str) -> None:
+    # An explicit --kind used to be ignored whenever the structured probe matched: a guild answered
+    # `--kind character`, and a character answered `--kind guild`, both with ok:true.
+    _stub_profile_world(monkeypatch, kinds_that_exist={"character", "guild"})
+    result = runner.invoke(raiderio_app, ["search", query, "--kind", kind])
+    assert result.exit_code == 0, result.output
+    rows = json.loads(result.stdout)["data"]["results"]
+    assert rows
+    assert {row["kind"] for row in rows} == {kind}
+
+
+def test_raiderio_explicit_kind_that_finds_nothing_returns_no_rows(monkeypatch) -> None:
+    _stub_profile_world(monkeypatch, kinds_that_exist={"guild"})
+    searched = runner.invoke(raiderio_app, ["search", "guild us malganis gn", "--kind", "character"])
+    assert searched.exit_code == 0, searched.output
+    assert json.loads(searched.stdout)["data"]["results"] == []
+
+    resolved = runner.invoke(raiderio_app, ["resolve", "guild us malganis gn", "--kind", "character"])
+    assert resolved.exit_code == 0, resolved.output
+    data = json.loads(resolved.stdout)["data"]
+    assert data["resolved"] is False
+    assert data["match"] is None
+
+
+def test_raiderio_unsupported_kind_is_a_usage_error() -> None:
+    result = runner.invoke(raiderio_app, ["search", "liquid", "--kind", "pet"])
+    assert result.exit_code == 2
+    assert json.loads(result.stderr)["error"]["code"] == "invalid_argument"
 
 
 def test_raiderio_character_summary(monkeypatch) -> None:
@@ -605,14 +671,14 @@ def test_raiderio_character_summary(monkeypatch) -> None:
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["character"]["name"] == "Roguecane"
-    assert payload["guild"]["name"] == "Liquid"
-    assert payload["mythic_plus"]["current_score"] == 1234.5
-    assert payload["raiding"]["progression"][0]["raid_slug"] == "tier-mn-1"
+    assert payload["data"]["character"]["name"] == "Roguecane"
+    assert payload["data"]["guild"]["name"] == "Liquid"
+    assert payload["data"]["mythic_plus"]["current_score"] == 1234.5
+    assert payload["data"]["raiding"]["progression"][0]["raid_slug"] == "tier-mn-1"
     # Raw class/spec strings stay intact alongside the additive normalized identity.
-    assert payload["character"]["class_name"] == "Rogue"
-    assert payload["character"]["active_spec_name"] == "Subtlety"
-    identity = payload["character"]["class_spec_identity"]
+    assert payload["data"]["character"]["class_name"] == "Rogue"
+    assert payload["data"]["character"]["active_spec_name"] == "Subtlety"
+    identity = payload["data"]["character"]["class_spec_identity"]
     assert identity["kind"] == "class_spec_identity"
     assert identity["status"] == "normalized"
     assert identity["identity"] == {"actor_class": "rogue", "spec": "subtlety"}
@@ -634,9 +700,9 @@ def test_raiderio_character_identity_degrades_when_class_and_spec_missing(monkey
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["character"]["class_name"] is None
-    assert payload["character"]["active_spec_name"] is None
-    identity = payload["character"]["class_spec_identity"]
+    assert payload["data"]["character"]["class_name"] is None
+    assert payload["data"]["character"]["active_spec_name"] is None
+    identity = payload["data"]["character"]["class_spec_identity"]
     assert identity["status"] == "unknown"
     assert identity["identity"] == {"actor_class": None, "spec": None}
     # Missing source data must not advertise high confidence.
@@ -678,13 +744,13 @@ def test_raiderio_guild_summary(monkeypatch) -> None:
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["guild"]["name"] == "Liquid"
-    assert payload["guild"]["member_count"] == 2
-    assert payload["raiding"]["rankings"][0]["raid_slug"] == "tier-mn-1"
-    assert payload["roster_preview"][0]["name"] == "Roguecane"
+    assert payload["data"]["guild"]["name"] == "Liquid"
+    assert payload["data"]["guild"]["member_count"] == 2
+    assert payload["data"]["raiding"]["rankings"][0]["raid_slug"] == "tier-mn-1"
+    assert payload["data"]["roster_preview"][0]["name"] == "Roguecane"
     # Roster preview rows carry the additive normalized identity alongside raw class/spec.
-    assert payload["roster_preview"][0]["class_name"] == "Rogue"
-    roster_identity = payload["roster_preview"][0]["class_spec_identity"]
+    assert payload["data"]["roster_preview"][0]["class_name"] == "Rogue"
+    roster_identity = payload["data"]["roster_preview"][0]["class_spec_identity"]
     assert roster_identity["status"] == "normalized"
     assert roster_identity["confidence"] == "high"
     assert roster_identity["identity"] == {"actor_class": "rogue", "spec": "subtlety"}
@@ -720,9 +786,9 @@ def test_raiderio_mythic_plus_runs_summary(monkeypatch) -> None:
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["count"] == 1
-    assert payload["runs"][0]["rank"] == 1
-    assert payload["runs"][0]["roster"][0]["name"] == "Cotti"
+    assert payload["data"]["count"] == 1
+    assert payload["data"]["runs"][0]["rank"] == 1
+    assert payload["data"]["runs"][0]["roster"][0]["name"] == "Cotti"
 
 
 def test_raiderio_sample_mythic_plus_runs(monkeypatch) -> None:
@@ -843,11 +909,11 @@ def test_raiderio_sample_mythic_plus_runs(monkeypatch) -> None:
     payload = json.loads(result.stdout)
     assert payload["kind"] == "mythic_plus_runs_sample"
     assert payload["query"]["pages"] == 2
-    assert payload["sample"]["pages_fetched"] == 2
-    assert payload["sample"]["run_count"] == 3
-    assert payload["sample"]["unique_player_count"] == 6
-    assert payload["sample"]["mythic_level"]["max"] == 26
-    assert payload["citations"]["leaderboard_urls"][0].startswith("https://raider.io/mythic-plus-runs/")
+    assert payload["data"]["sample"]["pages_fetched"] == 2
+    assert payload["data"]["sample"]["run_count"] == 3
+    assert payload["data"]["sample"]["unique_player_count"] == 6
+    assert payload["data"]["sample"]["mythic_level"]["max"] == 26
+    assert payload["data"]["citations"]["leaderboard_urls"][0].startswith("https://raider.io/mythic-plus-runs/")
 
 
 def test_raiderio_sample_mythic_plus_players(monkeypatch) -> None:
@@ -926,13 +992,13 @@ def test_raiderio_sample_mythic_plus_players(monkeypatch) -> None:
 
     payload = json.loads(result.stdout)
     assert payload["kind"] == "mythic_plus_players_sample"
-    assert payload["sample"]["player_count"] == 2
-    assert payload["sample"]["appearance_count"]["max"] == 2
-    assert payload["sample"]["player_sampling"]["source_player_count"] == 2
-    assert payload["sample"]["player_sampling"]["truncated"] is False
-    assert payload["players"][0]["name"] == "Cotti"
-    assert payload["players"][0]["appearance_count"] == 2
-    assert payload["players"][0]["top_mythic_level"] == 26
+    assert payload["data"]["sample"]["player_count"] == 2
+    assert payload["data"]["sample"]["appearance_count"]["max"] == 2
+    assert payload["data"]["sample"]["player_sampling"]["source_player_count"] == 2
+    assert payload["data"]["sample"]["player_sampling"]["truncated"] is False
+    assert payload["data"]["players"][0]["name"] == "Cotti"
+    assert payload["data"]["players"][0]["appearance_count"] == 2
+    assert payload["data"]["players"][0]["top_mythic_level"] == 26
 
 
 def test_raiderio_sample_mythic_plus_players_reports_truncation(monkeypatch) -> None:
@@ -985,10 +1051,10 @@ def test_raiderio_sample_mythic_plus_players_reports_truncation(monkeypatch) -> 
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["sample"]["player_sampling"]["source_player_count"] == 2
-    assert payload["sample"]["player_sampling"]["returned_player_count"] == 1
-    assert payload["sample"]["player_sampling"]["truncated"] is True
-    assert payload["sample"]["player_sampling"]["excluded_player_count"] == 1
+    assert payload["data"]["sample"]["player_sampling"]["source_player_count"] == 2
+    assert payload["data"]["sample"]["player_sampling"]["returned_player_count"] == 1
+    assert payload["data"]["sample"]["player_sampling"]["truncated"] is True
+    assert payload["data"]["sample"]["player_sampling"]["excluded_player_count"] == 1
 
 
 def test_raiderio_run_matches_filters_with_normalized_roster_fields() -> None:
@@ -1222,33 +1288,33 @@ def test_raiderio_distribution_mythic_plus_runs(monkeypatch) -> None:
     level_result = runner.invoke(raiderio_app, ["distribution", "mythic-plus-runs", "--metric", "mythic_level"])
     assert level_result.exit_code == 0
     level_payload = json.loads(level_result.stdout)
-    assert level_payload["distribution"]["unit"] == "runs"
-    assert level_payload["distribution"]["statistics"]["max"] == 26
-    assert level_payload["distribution"]["rows"][0]["value"] in {"25", "26"}
+    assert level_payload["data"]["distribution"]["unit"] == "runs"
+    assert level_payload["data"]["distribution"]["statistics"]["max"] == 26
+    assert level_payload["data"]["distribution"]["rows"][0]["value"] in {"25", "26"}
 
     role_result = runner.invoke(raiderio_app, ["distribution", "mythic-plus-runs", "--metric", "role"])
     assert role_result.exit_code == 0
     role_payload = json.loads(role_result.stdout)
-    assert role_payload["distribution"]["unit"] == "roster_entries"
-    assert role_payload["distribution"]["rows"][0]["value"] == "dps"
+    assert role_payload["data"]["distribution"]["unit"] == "roster_entries"
+    assert role_payload["data"]["distribution"]["rows"][0]["value"] == "dps"
 
     spec_result = runner.invoke(raiderio_app, ["distribution", "mythic-plus-runs", "--metric", "spec"])
     assert spec_result.exit_code == 0
     spec_payload = json.loads(spec_result.stdout)
-    assert spec_payload["distribution"]["unit"] == "roster_entries"
-    assert spec_payload["distribution"]["rows"][0]["value"] in {"balance", "frost", "restoration", "vengeance"}
+    assert spec_payload["data"]["distribution"]["unit"] == "roster_entries"
+    assert spec_payload["data"]["distribution"]["rows"][0]["value"] in {"balance", "frost", "restoration", "vengeance"}
 
     class_result = runner.invoke(raiderio_app, ["distribution", "mythic-plus-runs", "--metric", "class"])
     assert class_result.exit_code == 0
     class_payload = json.loads(class_result.stdout)
-    assert class_payload["distribution"]["unit"] == "roster_entries"
-    assert class_payload["distribution"]["rows"][0]["value"] in {"druid", "demon-hunter", "shaman", "mage"}
+    assert class_payload["data"]["distribution"]["unit"] == "roster_entries"
+    assert class_payload["data"]["distribution"]["rows"][0]["value"] in {"druid", "demon-hunter", "shaman", "mage"}
 
     comp_result = runner.invoke(raiderio_app, ["distribution", "mythic-plus-runs", "--metric", "composition"])
     assert comp_result.exit_code == 0
     comp_payload = json.loads(comp_result.stdout)
-    assert comp_payload["distribution"]["unit"] == "runs"
-    assert len(comp_payload["distribution"]["rows"]) >= 1
+    assert comp_payload["data"]["distribution"]["unit"] == "runs"
+    assert len(comp_payload["data"]["distribution"]["rows"]) >= 1
 
 
 def test_raiderio_distribution_mythic_plus_players(monkeypatch) -> None:
@@ -1326,16 +1392,16 @@ def test_raiderio_distribution_mythic_plus_players(monkeypatch) -> None:
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["kind"] == "mythic_plus_players_distribution"
-    assert payload["distribution"]["unit"] == "players"
-    assert payload["distribution"]["statistics"]["max"] == 2
-    assert payload["distribution"]["rows"][0]["value"] in {"1", "2"}
-    assert payload["sample"]["player_sampling"]["source_player_count"] == 2
+    assert payload["data"]["distribution"]["unit"] == "players"
+    assert payload["data"]["distribution"]["statistics"]["max"] == 2
+    assert payload["data"]["distribution"]["rows"][0]["value"] in {"1", "2"}
+    assert payload["data"]["sample"]["player_sampling"]["source_player_count"] == 2
 
     class_result = runner.invoke(raiderio_app, ["distribution", "mythic-plus-players", "--metric", "class"])
     assert class_result.exit_code == 0
     class_payload = json.loads(class_result.stdout)
-    assert class_payload["distribution"]["unit"] == "player_class_tags"
-    assert class_payload["distribution"]["rows"][0]["value"] in {"druid", "shaman"}
+    assert class_payload["data"]["distribution"]["unit"] == "player_class_tags"
+    assert class_payload["data"]["distribution"]["rows"][0]["value"] in {"druid", "shaman"}
 
 
 def test_raiderio_distribution_rejects_unknown_metric() -> None:
@@ -1439,9 +1505,9 @@ def test_raiderio_threshold_mythic_plus_runs(monkeypatch) -> None:
     )
     assert score_result.exit_code == 0
     score_payload = json.loads(score_result.stdout)
-    assert score_payload["threshold"]["nearest_match_count"] == 2
-    assert score_payload["threshold"]["estimate"]["metric"] == "mythic_level"
-    assert score_payload["threshold"]["nearest_matches"][0]["value"] == 560.0
+    assert score_payload["data"]["threshold"]["nearest_match_count"] == 2
+    assert score_payload["data"]["threshold"]["estimate"]["metric"] == "mythic_level"
+    assert score_payload["data"]["threshold"]["nearest_matches"][0]["value"] == 560.0
 
     level_result = runner.invoke(
         raiderio_app,
@@ -1449,7 +1515,7 @@ def test_raiderio_threshold_mythic_plus_runs(monkeypatch) -> None:
     )
     assert level_result.exit_code == 0
     level_payload = json.loads(level_result.stdout)
-    assert level_payload["threshold"]["estimate"]["metric"] == "score"
+    assert level_payload["data"]["threshold"]["estimate"]["metric"] == "score"
 
 
 def test_raiderio_threshold_rejects_unknown_metric() -> None:
@@ -1540,10 +1606,10 @@ def test_raiderio_sample_mythic_plus_runs_filters(monkeypatch) -> None:
     payload = json.loads(result.stdout)
     assert payload["query"]["filters"]["level_min"] == 25
     assert payload["query"]["filters"]["contains_spec"] == ["balance"]
-    assert payload["sample"]["filtering"]["source_run_count"] == 2
-    assert payload["sample"]["filtering"]["returned_run_count"] == 1
-    assert payload["sample"]["filtering"]["excluded_run_count"] == 1
-    assert payload["runs"][0]["mythic_level"] == 26
+    assert payload["data"]["sample"]["filtering"]["source_run_count"] == 2
+    assert payload["data"]["sample"]["filtering"]["returned_run_count"] == 1
+    assert payload["data"]["sample"]["filtering"]["excluded_run_count"] == 1
+    assert payload["data"]["runs"][0]["mythic_level"] == 26
 
 
 def test_raiderio_distribution_mythic_plus_runs_filters(monkeypatch) -> None:
@@ -1614,8 +1680,8 @@ def test_raiderio_distribution_mythic_plus_runs_filters(monkeypatch) -> None:
     payload = json.loads(result.stdout)
     assert payload["query"]["filters"]["player_region"] == ["eu"]
     assert payload["query"]["filters"]["contains_class"] == ["druid"]
-    assert payload["sample"]["filtering"]["returned_run_count"] == 1
-    assert payload["distribution"]["rows"][0]["value"] == "druid"
+    assert payload["data"]["sample"]["filtering"]["returned_run_count"] == 1
+    assert payload["data"]["distribution"]["rows"][0]["value"] == "druid"
 
 
 def test_raiderio_threshold_mythic_plus_runs_filters_to_empty_sample(monkeypatch) -> None:
@@ -1659,9 +1725,9 @@ def test_raiderio_threshold_mythic_plus_runs_filters_to_empty_sample(monkeypatch
     )
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["sample"]["filtering"]["returned_run_count"] == 0
-    assert payload["threshold"]["nearest_match_count"] == 0
-    assert payload["threshold"]["estimate"] is None
+    assert payload["data"]["sample"]["filtering"]["returned_run_count"] == 0
+    assert payload["data"]["threshold"]["nearest_match_count"] == 0
+    assert payload["data"]["threshold"]["estimate"] is None
 
 
 def test_raiderio_http_error_maps_to_structured_error(monkeypatch) -> None:
@@ -1757,16 +1823,16 @@ def test_raiderio_leaderboard_mythic_plus(monkeypatch) -> None:
     assert payload["query"]["resolved_season"] == "season-tww-3"
     assert payload["query"]["region"] == "us"
     assert payload["query"]["limit"] == 20
-    assert payload["count"] == 2
-    assert len(payload["runs"]) == 2
-    assert payload["runs"][0]["rank"] == 1
-    assert payload["sample"]["requested_limit"] == 20
-    assert payload["sample"]["returned_run_count"] == 2
-    assert payload["sample"]["pages_fetched"] == 1
-    assert payload["sample"]["limit_reached"] is False  # provider returned fewer than --limit
-    assert payload["freshness"]["sampled_at"]
-    assert payload["freshness"]["cache_ttl_seconds"] >= 1
-    assert len(payload["citations"]["leaderboard_urls"]) >= 1
+    assert payload["data"]["count"] == 2
+    assert len(payload["data"]["runs"]) == 2
+    assert payload["data"]["runs"][0]["rank"] == 1
+    assert payload["data"]["sample"]["requested_limit"] == 20
+    assert payload["data"]["sample"]["returned_run_count"] == 2
+    assert payload["data"]["sample"]["pages_fetched"] == 1
+    assert payload["data"]["sample"]["limit_reached"] is False  # provider returned fewer than --limit
+    assert payload["data"]["freshness"]["sampled_at"]
+    assert payload["data"]["freshness"]["cache_ttl_seconds"] >= 1
+    assert len(payload["data"]["citations"]["leaderboard_urls"]) >= 1
 
 
 def test_raiderio_leaderboard_paginates_for_limit(monkeypatch) -> None:
@@ -1802,10 +1868,10 @@ def test_raiderio_leaderboard_paginates_for_limit(monkeypatch) -> None:
     assert result.exit_code == 0, result.output
 
     payload = json.loads(result.stdout)
-    assert payload["count"] == 40
-    assert payload["sample"]["pages_fetched"] == 2
-    assert payload["sample"]["limit_reached"] is True
-    assert len(payload["citations"]["leaderboard_urls"]) == 2
+    assert payload["data"]["count"] == 40
+    assert payload["data"]["sample"]["pages_fetched"] == 2
+    assert payload["data"]["sample"]["limit_reached"] is True
+    assert len(payload["data"]["citations"]["leaderboard_urls"]) == 2
 
 
 def test_raiderio_leaderboard_season_current_omits_season_param(monkeypatch) -> None:
@@ -1861,10 +1927,10 @@ def test_raiderio_leaderboard_empty_runs_degrades_cleanly(monkeypatch) -> None:
     assert result.exit_code == 0, result.output
 
     payload = json.loads(result.stdout)
-    assert payload["count"] == 0
-    assert payload["runs"] == []
+    assert payload["data"]["count"] == 0
+    assert payload["data"]["runs"] == []
     assert payload["query"]["resolved_season"] == "season-tww-3"
-    assert len(payload["citations"]["leaderboard_urls"]) >= 1
+    assert len(payload["data"]["citations"]["leaderboard_urls"]) >= 1
 
 
 def _raise_404(endpoint: str) -> None:
@@ -1913,7 +1979,7 @@ def test_raiderio_connect_error_is_enveloped(monkeypatch, args: list[str]) -> No
 
 
 def test_raiderio_payloads_satisfy_the_shared_envelope(monkeypatch) -> None:
-    """doctor, search, resolve, and character emit a conforming envelope with flat legacy keys."""
+    """doctor, search, resolve, and character emit exactly the envelope keys, on success and on failure."""
     monkeypatch.setattr(
         "raiderio_cli.client.RaiderIOClient.search",
         lambda self, *, term, kind=None: {"matches": []},
@@ -1942,14 +2008,14 @@ def test_raiderio_payloads_satisfy_the_shared_envelope(monkeypatch) -> None:
         assert result.exit_code == 0, result.output
         payload = json.loads(result.stdout)
         assert envelope_violations(payload) == [], command
+        assert set(payload) == REQUIRED_KEYS, command
         assert payload["command"] == command
         assert payload["provider"] == "raiderio"
         assert payload["schema_version"] == "1"
 
-    # Deprecated flat copies agents already read stay next to the envelope keys.
-    search_payload = json.loads(runner.invoke(raiderio_app, ["search", "liquid"]).stdout)
-    assert search_payload["results"] == search_payload["data"]["results"]
-    assert search_payload["count"] == 0
+    failed = runner.invoke(raiderio_app, ["search", "liquid", "--kind", "pet"])
+    assert failed.exit_code == 2
+    assert set(json.loads(failed.stderr)) == ENVELOPE_KEYS
 
 
 def test_raiderio_provider_object_satisfies_the_surface() -> None:
@@ -2003,7 +2069,7 @@ def test_raiderio_sample_recovers_resolved_season_from_params(monkeypatch) -> No
 
     payload = json.loads(result.stdout)
     assert payload["query"]["resolved_season"] == "season-mn-2"
-    assert payload["sample"]["season"] == "season-mn-2"
+    assert payload["data"]["sample"]["season"] == "season-mn-2"
 
 
 @pytest.mark.parametrize(
@@ -2211,8 +2277,8 @@ def test_raiderio_leaderboard_raids_normalizes_rows(monkeypatch) -> None:
     assert payload["kind"] == "raid_leaderboard"
     assert payload["query"] == {"raid": "liberation-of-undermine", "difficulty": "mythic", "region": "us", "realm": "malganis", "page": 0, "limit": 5}
     assert captured == {"raid": "liberation-of-undermine", "difficulty": "mythic", "region": "us", "realm": "malganis", "limit": 20, "page": 0}
-    assert payload["count"] == 2
-    assert payload["sample"] == {"requested_limit": 5, "returned_row_count": 2, "pages_requested": 1, "pages_fetched": 1, "limit_reached": False}
+    assert payload["data"]["count"] == 2
+    assert payload["data"]["sample"] == {"requested_limit": 5, "returned_row_count": 2, "pages_requested": 1, "pages_fetched": 1, "limit_reached": False}
 
     top = payload["data"]["rows"][0]
     assert top["rank"] == 1
@@ -2237,9 +2303,9 @@ def test_raiderio_leaderboard_raids_normalizes_rows(monkeypatch) -> None:
         "is_defeated": False,
         "pull_started_at": "2025-03-07T05:33:27Z",
     }
-    assert payload["citations"]["leaderboard_urls"] == ["https://raider.io/liberation-of-undermine/rankings/us/mythic?realm=malganis"]
-    assert payload["freshness"]["sampled_at"] and payload["freshness"]["cache_ttl_seconds"] >= 1
-    assert payload["provenance"]["citations"] == payload["citations"]
+    assert payload["data"]["citations"]["leaderboard_urls"] == ["https://raider.io/liberation-of-undermine/rankings/us/mythic?realm=malganis"]
+    assert payload["data"]["freshness"]["sampled_at"] and payload["data"]["freshness"]["cache_ttl_seconds"] >= 1
+    assert payload["provenance"]["citations"] == payload["data"]["citations"]
 
 
 def test_raiderio_leaderboard_raids_paginates_for_limit(monkeypatch) -> None:
@@ -2258,10 +2324,10 @@ def test_raiderio_leaderboard_raids_paginates_for_limit(monkeypatch) -> None:
 
     payload = json.loads(result.stdout)
     assert payload["query"]["region"] == "world" and payload["query"]["realm"] is None
-    assert payload["count"] == 25
-    assert payload["sample"] == {"requested_limit": 50, "returned_row_count": 25, "pages_requested": 3, "pages_fetched": 2, "limit_reached": False}
-    assert [row["rank"] for row in payload["rows"]] == list(range(1, 26))
-    assert payload["citations"]["leaderboard_urls"] == ["https://raider.io/sporefall/rankings/world/mythic"]
+    assert payload["data"]["count"] == 25
+    assert payload["data"]["sample"] == {"requested_limit": 50, "returned_row_count": 25, "pages_requested": 3, "pages_fetched": 2, "limit_reached": False}
+    assert [row["rank"] for row in payload["data"]["rows"]] == list(range(1, 26))
+    assert payload["data"]["citations"]["leaderboard_urls"] == ["https://raider.io/sporefall/rankings/world/mythic"]
 
 
 def test_raiderio_leaderboard_raids_trims_to_limit_and_dedupes_guilds(monkeypatch) -> None:
@@ -2278,10 +2344,10 @@ def test_raiderio_leaderboard_raids_trims_to_limit_and_dedupes_guilds(monkeypatc
 
     payload = json.loads(result.stdout)
     assert payload["query"]["difficulty"] == "heroic"
-    assert payload["count"] == 25
-    assert payload["sample"]["pages_fetched"] == 2
-    assert payload["sample"]["limit_reached"] is True
-    ranks = [row["rank"] for row in payload["rows"]]
+    assert payload["data"]["count"] == 25
+    assert payload["data"]["sample"]["pages_fetched"] == 2
+    assert payload["data"]["sample"]["limit_reached"] is True
+    ranks = [row["rank"] for row in payload["data"]["rows"]]
     assert 21 not in ranks and ranks[-1] == 26
 
 
@@ -2407,7 +2473,7 @@ def test_raiderio_raids_catalog(monkeypatch) -> None:
     assert payload["kind"] == "raid_catalog"
     assert payload["query"] == {"expansion_id": 11}
     assert captured == {"expansion_id": 11}
-    assert payload["count"] == 1
+    assert payload["data"]["count"] == 1
     assert payload["data"]["rows"] == [
         {
             "id": 8062,
@@ -2747,6 +2813,6 @@ def test_raiderio_doctor_reports_raid_capabilities_and_ttl() -> None:
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["capabilities"]["raid_leaderboard"] == "ready"
-    assert payload["capabilities"]["raid_catalog"] == "ready"
-    assert payload["cache"]["ttls"]["raid_rankings"] >= 1
+    assert payload["data"]["capabilities"]["raid_leaderboard"] == "ready"
+    assert payload["data"]["capabilities"]["raid_catalog"] == "ready"
+    assert payload["data"]["cache"]["ttls"]["raid_rankings"] >= 1

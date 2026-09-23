@@ -1,9 +1,9 @@
 # End-to-End Testing
 
 `make test-e2e` runs the journeys under `tests/e2e/` against the real providers with the
-credentials on this machine. It is the local gate for "does the toolset still work", it never runs
-in CI, and it is meant to be run before merging anything that touches a provider, the wrapper, or
-the shared contract.
+credentials on this machine. It is the local gate for "does the toolset still work", and it is
+meant to be run before merging anything that touches a provider, the wrapper, or the shared
+contract. CI runs only the keyless half, weekly (see [CI](#ci)).
 
 ## What a journey is
 
@@ -119,9 +119,12 @@ What a green run does **not** prove:
 - **One machine, one account.** Credentials, the SimulationCraft checkout, and the guild and
   character pins are the maintainer's; a green run on another machine needs the same inputs.
 
-## Relationship to the live suites
+## CI
 
-`tests/test_*_live.py` and the Warcraft Logs matrix remain the weekly CI canaries
-(`.github/workflows/live-contracts.yml`): cheaper, endpoint-shaped, and allowed to skip when a
-credential is absent. The end-to-end journeys are the stricter local gate and are the place new
-coverage goes.
+`.github/workflows/live-contracts.yml` runs weekly and on demand with no secrets. It runs the
+keyless journey files (`test_wowhead.py`, `test_method.py`, `test_icy_veins.py`,
+`test_raiderio.py`, `test_warcraft_wiki.py`, `test_lorrgs.py`, `test_raidbots.py`, with
+`WARCRAFT_E2E_SKIP=raidbots-report`) and `make test-canary`, the Wowhead parser canary
+(`tests/test_wowhead_parser_canaries.py`, gated by `WOWHEAD_LIVE_TESTS=1`). The keyed providers,
+SimulationCraft, the wrapper composites, and `test_contract.py` stay local. A job that fails, is
+cancelled, or is skipped opens or updates the `live-failure` tracking issue.

@@ -68,6 +68,6 @@ Internal refactors, doc-only edits, and test-only changes don't need a changelog
 - **Minor (`0.3.0` → `0.4.0`)**: new commands, new flags, new fields in JSON output, additive behavior.
 - **Major (`0.3.0` → `1.0.0`)**: removed/renamed commands or flags, JSON output shape changes that break consumers, auth scope changes that require re-login.
 
-"Output shape" means the shared envelope in [foundation/ERROR_CONTRACT.md](foundation/ERROR_CONTRACT.md) plus the documented `data` payload of a command. The deprecated top-level copies of payload keys are not part of the stable shape; removing them is still a major-version change, but adding envelope keys next to them is not.
+"Output shape" means the shared envelope in [foundation/ERROR_CONTRACT.md](foundation/ERROR_CONTRACT.md) plus the documented `data` payload of a command.
 
 Pre-1.0 we still try to follow the spirit of semver — flag the breaking part of a release in `### Removed`/`### Changed` so consumers know what to update.

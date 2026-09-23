@@ -10,10 +10,10 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any
 
 import httpx
-from warcraft_core.envelope import ENVELOPE_KEYS, Envelope, error_envelope, success_envelope, with_legacy_keys
+from warcraft_core.envelope import ENVELOPE_KEYS, Envelope, error_envelope, success_envelope
 from warcraft_core.provider import ProviderError, ProviderSurface
 from warcraft_core.shapes import as_dict, as_list
 
@@ -53,12 +53,11 @@ def raiderio_envelope(*, command: str, kind: str, payload: dict[str, Any]) -> En
     """Wrap a flat Raider.IO payload in the shared envelope.
 
     ``payload`` keys that are envelope keys (``query``, ``provider``, ``kind``) are consumed by the
-    envelope; the rest land in ``data`` and are also copied to the top level, where agents have read
-    them since 0.1.0. Those flat copies are deprecated: read ``data``.
+    envelope; the rest land in ``data``.
     """
     data = {key: value for key, value in payload.items() if key not in ENVELOPE_KEYS}
     provenance = {key: payload[key] for key in ("freshness", "citations") if key in payload}
-    envelope = success_envelope(
+    return success_envelope(
         provider=PROVIDER_NAME,
         command=command,
         kind=kind,
@@ -66,8 +65,6 @@ def raiderio_envelope(*, command: str, kind: str, payload: dict[str, Any]) -> En
         query=payload.get("query"),
         provenance=provenance,
     )
-    # with_legacy_keys returns a plain dict because the legacy keys are provider-specific.
-    return cast(Envelope, with_legacy_keys(envelope, data))
 
 
 def _upstream_message(exc: httpx.HTTPStatusError) -> str:
@@ -117,22 +114,12 @@ def open_client() -> RaiderIOClient:
 def validated_kind(kind: str) -> str:
     """Return ``kind`` when it is a supported search scope."""
     if kind not in SEARCH_KINDS:
-        raise ProviderError("invalid_query", "--kind must be one of: all, character, guild")
+        raise ProviderError("invalid_argument", "--kind must be one of: all, character, guild")
     return kind
 
 
-def _search_results_payload(
-    query: str,
-    raw_matches: list[dict[str, Any]],
-    *,
-    type_hint: str | None,
-    limit: int,
-    extra_candidates: list[dict[str, Any]] | None = None,
-) -> dict[str, Any]:
-    results = search_result_candidates(raw_matches, query=query, type_hint=type_hint)
-    if extra_candidates:
-        results.extend(extra_candidates)
-    results = dedupe_search_candidates(results)
+def _search_results_payload(query: str, candidates: list[dict[str, Any]], *, limit: int) -> dict[str, Any]:
+    results = dedupe_search_candidates(candidates)
     top = sorted_search_candidates(results)[:limit]
     return {
         "provider": "raiderio",
@@ -177,25 +164,29 @@ def _resolve_payload(search_payload: dict[str, Any], *, limit: int) -> dict[str,
 
 
 def search_results(client: RaiderIOClient, query: str, *, limit: int, kind: str) -> dict[str, Any]:
-    """Rank Raider.IO character and guild matches for a free-text query."""
+    """Rank Raider.IO character and guild matches for a free-text query.
+
+    A leading ``guild``/``character`` word in the query only narrows the lookups and scores. An
+    explicit ``kind`` other than ``all`` wins over that word and filters every candidate, so
+    ``--kind guild`` never answers with a character, even when nothing of that kind exists.
+    """
     normalized_query, type_hint, probes = normalize_structured_query(query)
-    structured_candidates = probe_structured_candidates(
+    explicit_kind = None if kind == "all" else kind
+    lookup_kind = explicit_kind or type_hint
+    candidates = probe_structured_candidates(
         client,
         query=normalized_query,
         type_hint=type_hint,
+        kind=lookup_kind,
         probes=probes,
     )
-    if structured_candidates:
-        return _search_results_payload(
-            normalized_query,
-            [],
-            type_hint=type_hint,
-            limit=limit,
-            extra_candidates=structured_candidates,
-        )
-    payload = client.search(term=normalized_query, kind=type_hint or kind)
-    raw_matches = [row for row in as_list(payload.get("matches")) if isinstance(row, dict)]
-    return _search_results_payload(normalized_query, raw_matches, type_hint=type_hint, limit=limit)
+    if not candidates:
+        payload = client.search(term=normalized_query, kind=lookup_kind)
+        raw_matches = [row for row in as_list(payload.get("matches")) if isinstance(row, dict)]
+        candidates = search_result_candidates(raw_matches, query=normalized_query, type_hint=type_hint)
+    if explicit_kind:
+        candidates = [row for row in candidates if row["kind"] == explicit_kind]
+    return _search_results_payload(normalized_query, candidates, limit=limit)
 
 
 def doctor_report() -> dict[str, Any]:

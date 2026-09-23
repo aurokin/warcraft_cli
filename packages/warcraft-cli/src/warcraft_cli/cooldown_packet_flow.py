@@ -220,7 +220,7 @@ class CooldownRequest:
     phase: int
     spec_slug: str | None
     boss_slug: str | None
-    difficulty: str
+    difficulty: str | None
     metric: str | None
     sample_limit: int
     event_limit: int
@@ -265,6 +265,8 @@ class CooldownState:
     player_casts: dict[str, Any] = field(default_factory=dict)
     ranking_args: list[str] | None = None
     ranking_result: dict[str, Any] | None = None
+    # Set when the comparison was skipped because no Lorrgs difficulty could be named for the fight.
+    unranked_difficulty_note: str | None = None
     comparison: dict[str, Any] = field(default_factory=dict)
 
 
@@ -594,9 +596,29 @@ def _load_warcraftlogs_casts(ctx: typer.Context, request: CooldownRequest, state
     )
 
 
+# Warcraft Logs raid difficulty ids that Lorrgs ranks, as Lorrgs difficulty slugs.
+_LORRGS_DIFFICULTY_BY_WARCRAFTLOGS_ID = {4: "heroic", 5: "mythic"}
+
+
+def _ranking_difficulty(request: CooldownRequest, state: CooldownState) -> str | None:
+    """``--difficulty`` when passed, otherwise the analyzed fight's own difficulty, never a guess."""
+    if request.difficulty:
+        return request.difficulty
+    fight_difficulty = as_dict(state.wcl_fight).get("difficulty")
+    difficulty = _LORRGS_DIFFICULTY_BY_WARCRAFTLOGS_ID.get(fight_difficulty) if isinstance(fight_difficulty, int) else None
+    if difficulty is None:
+        state.unranked_difficulty_note = (
+            f"The Warcraft Logs fight's difficulty is {fight_difficulty!r}, which names no Lorrgs ranking "
+            "(heroic or mythic), so the top-parse comparison was skipped. Pass --difficulty to compare anyway."
+        )
+    return difficulty
+
+
 def _load_ranking_comparison(ctx: typer.Context, request: CooldownRequest, state: CooldownState, fetch: ProviderFetch) -> None:
-    if request.sample_limit > 0 and state.boss_slug:
-        state.ranking_args = ["spec-ranking", state.spec_slug, state.boss_slug, "--difficulty", request.difficulty]
+    difficulty = _ranking_difficulty(request, state) if request.sample_limit > 0 and state.boss_slug else None
+    state.query["difficulty"] = difficulty or request.difficulty
+    if difficulty is not None:
+        state.ranking_args = ["spec-ranking", state.spec_slug, str(state.boss_slug), "--difficulty", difficulty]
         if request.metric:
             state.ranking_args += ["--metric", request.metric]
         state.ranking_result = _cooldown_provider_payload(
@@ -677,6 +699,8 @@ def _notes(state: CooldownState, lorrgs_player_casts: list[Any]) -> list[str]:
         )
     if isinstance(state.ranking_result, dict) and state.ranking_result.get("status") == "error":
         notes.append("Lorrgs top-parse comparison was unavailable; inspect sources.lorrgs_spec_ranking.error for details.")
+    if state.unranked_difficulty_note is not None:
+        notes.append(state.unranked_difficulty_note)
     return notes
 
 

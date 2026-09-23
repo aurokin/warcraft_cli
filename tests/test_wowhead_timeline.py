@@ -37,14 +37,14 @@ def test_news_command_filters_by_query_and_date(monkeypatch) -> None:
     )
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["count"] == 1
-    assert payload["results"][0]["id"] == 380785
-    assert payload["results"][0]["preview"] == "Class bugfixes and more."
-    assert payload["scan"]["pages_scanned"] == 1
-    assert payload["scan"]["total_pages"] == 1637
-    assert payload["news_url"] == "https://www.wowhead.com/news"
-    assert payload["facets"]["authors"] == ["Staff"]
-    assert payload["facets"]["types"] == ["News"]
+    assert payload["data"]["count"] == 1
+    assert payload["data"]["results"][0]["id"] == 380785
+    assert payload["data"]["results"][0]["preview"] == "Class bugfixes and more."
+    assert payload["data"]["scan"]["pages_scanned"] == 1
+    assert payload["data"]["scan"]["total_pages"] == 1637
+    assert payload["data"]["news_url"] == "https://www.wowhead.com/news"
+    assert payload["data"]["facets"]["authors"] == ["Staff"]
+    assert payload["data"]["facets"]["types"] == ["News"]
 
 
 
@@ -69,11 +69,11 @@ def test_news_command_filters_by_author_and_type(monkeypatch) -> None:
     )
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["filters"]["authors"] == ["staff"]
-    assert payload["filters"]["types"] == ["news"]
-    assert payload["count"] == 2
-    assert payload["facets"]["authors"] == ["Staff"]
-    assert payload["facets"]["types"] == ["News"]
+    assert payload["data"]["filters"]["authors"] == ["staff"]
+    assert payload["data"]["filters"]["types"] == ["news"]
+    assert payload["data"]["count"] == 2
+    assert payload["data"]["facets"]["authors"] == ["Staff"]
+    assert payload["data"]["facets"]["types"] == ["News"]
 
 
 
@@ -97,15 +97,15 @@ def test_blue_tracker_command_filters_by_topic_and_date(monkeypatch) -> None:
     )
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["count"] == 1
-    assert payload["results"][0]["id"] == 610948
-    assert payload["results"][0]["region"] == "eu"
-    assert payload["results"][0]["body_preview"] == "Druid and Priest updates."
-    assert payload["scan"]["pages_scanned"] == 1
-    assert payload["scan"]["total_pages"] == 671
-    assert payload["blue_tracker_url"] == "https://www.wowhead.com/blue-tracker"
-    assert payload["facets"]["regions"] == ["eu"]
-    assert payload["facets"]["forums"] == ["General Discussion"]
+    assert payload["data"]["count"] == 1
+    assert payload["data"]["results"][0]["id"] == 610948
+    assert payload["data"]["results"][0]["region"] == "eu"
+    assert payload["data"]["results"][0]["body_preview"] == "Druid and Priest updates."
+    assert payload["data"]["scan"]["pages_scanned"] == 1
+    assert payload["data"]["scan"]["total_pages"] == 671
+    assert payload["data"]["blue_tracker_url"] == "https://www.wowhead.com/blue-tracker"
+    assert payload["data"]["facets"]["regions"] == ["eu"]
+    assert payload["data"]["facets"]["forums"] == ["General Discussion"]
 
 
 
@@ -130,12 +130,12 @@ def test_blue_tracker_command_filters_by_author_region_and_forum(monkeypatch) ->
     )
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["filters"]["authors"] == ["blizzard"]
-    assert payload["filters"]["regions"] == ["eu"]
-    assert payload["filters"]["forums"] == ["general discussion"]
-    assert payload["count"] == 1
-    assert payload["results"][0]["id"] == 610948
-    assert payload["facets"]["authors"] == ["Blizzard"]
+    assert payload["data"]["filters"]["authors"] == ["blizzard"]
+    assert payload["data"]["filters"]["regions"] == ["eu"]
+    assert payload["data"]["filters"]["forums"] == ["general discussion"]
+    assert payload["data"]["count"] == 1
+    assert payload["data"]["results"][0]["id"] == 610948
+    assert payload["data"]["facets"]["authors"] == ["Blizzard"]
 
 
 
@@ -166,11 +166,11 @@ def test_guides_command_returns_category_rows(monkeypatch) -> None:
     result = runner.invoke(app, ["guides", "classes", "death knight", "--limit", "5"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["category"] == "classes"
-    assert payload["count"] == 1
-    assert payload["results"][0]["id"] == 32000
-    assert payload["results"][0]["url"].endswith("/frost/overview-pve-dps")
-    assert payload["facets"]["authors"] == ["Khazakdk"]
+    assert payload["data"]["category"] == "classes"
+    assert payload["data"]["count"] == 1
+    assert payload["data"]["results"][0]["id"] == 32000
+    assert payload["data"]["results"][0]["url"].endswith("/frost/overview-pve-dps")
+    assert payload["data"]["facets"]["authors"] == ["Khazakdk"]
 
 
 
@@ -195,10 +195,10 @@ def test_guides_command_filters_by_author_and_patch(monkeypatch) -> None:
     )
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["filters"]["authors"] == ["khazakdk"]
-    assert payload["filters"]["patch_min"] == 120001
-    assert payload["count"] == 1
-    assert payload["results"][0]["id"] == 32000
+    assert payload["data"]["filters"]["authors"] == ["khazakdk"]
+    assert payload["data"]["filters"]["patch_min"] == 120001
+    assert payload["data"]["count"] == 1
+    assert payload["data"]["results"][0]["id"] == 32000
 
 
 
@@ -211,8 +211,8 @@ def test_guides_command_sorts_by_rating(monkeypatch) -> None:
     result = runner.invoke(app, ["guides", "classes", "--sort", "rating", "--limit", "2"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["filters"]["sort"] == "rating"
-    assert [row["id"] for row in payload["results"]] == [32000, 33131]
+    assert payload["data"]["filters"]["sort"] == "rating"
+    assert [row["id"] for row in payload["data"]["results"]] == [32000, 33131]
 
 
 
@@ -225,12 +225,12 @@ def test_news_post_command_extracts_markup_and_author(monkeypatch) -> None:
     result = runner.invoke(app, ["news-post", "/news/midnight-hotfixes-380785"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["post"]["page_url"] == "https://www.wowhead.com/news/midnight-hotfixes-380785"
-    assert payload["content"]["section_count"] == 1
-    assert payload["author"]["username"] == "staff"
-    assert payload["related"]["news"]["count"] == 1
-    assert payload["related"]["blueTracker"]["items"][0]["is_blue_tracker"] is True
-    assert "Death Knight fixes" in payload["content"]["text"]
+    assert payload["data"]["post"]["page_url"] == "https://www.wowhead.com/news/midnight-hotfixes-380785"
+    assert payload["data"]["content"]["section_count"] == 1
+    assert payload["data"]["author"]["username"] == "staff"
+    assert payload["data"]["related"]["news"]["count"] == 1
+    assert payload["data"]["related"]["blueTracker"]["items"][0]["is_blue_tracker"] is True
+    assert "Death Knight fixes" in payload["data"]["content"]["text"]
 
 
 
@@ -243,14 +243,14 @@ def test_blue_topic_command_extracts_posts(monkeypatch) -> None:
     result = runner.invoke(app, ["blue-topic", "/blue-tracker/topic/eu/class-tuning-incoming-18-march-610948"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["posts"]["count"] == 1
-    first = payload["posts"]["items"][0]
+    assert payload["data"]["posts"]["count"] == 1
+    first = payload["data"]["posts"]["items"][0]
     assert first["author"] == "Kaivax"
     assert first["author_page"] == "https://www.wowhead.com/blue-tracker/author/Kaivax"
     assert first["blue"] is True
     assert first["body_text"].startswith("The first few days of Midnight")
-    assert payload["summary"]["participants"] == ["Kaivax"]
-    assert payload["summary"]["blue_authors"] == ["Kaivax"]
+    assert payload["data"]["summary"]["participants"] == ["Kaivax"]
+    assert payload["data"]["summary"]["blue_authors"] == ["Kaivax"]
 
 
 

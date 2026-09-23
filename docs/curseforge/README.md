@@ -60,8 +60,7 @@ them is a stable contract rather than a Click "no such command" error.
 ## Output And Exit Codes
 
 Every command emits the shared envelope (`ok`, `provider`, `command`, `kind`, `schema_version`,
-`query`, `provenance`, `data`) on stdout; `doctor` and the `coming_soon` stubs additionally repeat
-their payload keys at the top level for older agents (deprecated). Failures write
+`query`, `provenance`, `data`) on stdout, and nothing else at the top level. Failures write
 `{ok: false, ..., error: {code, message}}` to stderr and exit nonzero — never a traceback.
 
 | Error code | Exit |
@@ -87,7 +86,6 @@ warcraft curseforge addon deadly-boss-mods
 ## Re-verifying
 
 ```
-CURSEFORGE_LIVE_TESTS=1 pytest -q -m live tests/test_curseforge_live.py
 make test-e2e E2E_ARGS="tests/e2e/test_curseforge.py"
 ```
 

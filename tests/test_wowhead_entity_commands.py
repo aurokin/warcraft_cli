@@ -29,11 +29,11 @@ def test_entity_page_command_returns_links_with_citations(monkeypatch) -> None:
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["entity"]["page_url"] == "https://www.wowhead.com/item=19019/thunderfury"
-    assert "comments_url" not in payload["entity"]
-    assert payload["citations"]["comments"] == "https://www.wowhead.com/item=19019/thunderfury#comments"
-    assert payload["linked_entities"]["count"] >= 1
-    first = payload["linked_entities"]["items"][0]
+    assert payload["data"]["entity"]["page_url"] == "https://www.wowhead.com/item=19019/thunderfury"
+    assert "comments_url" not in payload["data"]["entity"]
+    assert payload["data"]["citations"]["comments"] == "https://www.wowhead.com/item=19019/thunderfury#comments"
+    assert payload["data"]["linked_entities"]["count"] >= 1
+    first = payload["data"]["linked_entities"]["items"][0]
     assert "citation_url" in first
     assert "source_url" in first
 
@@ -48,12 +48,12 @@ def test_comments_command_returns_comment_citations(monkeypatch) -> None:
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["entity"]["page_url"] == "https://www.wowhead.com/item=19019/thunderfury"
-    assert "comments_url" not in payload["entity"]
-    assert payload["citations"]["comments"] == "https://www.wowhead.com/item=19019/thunderfury#comments"
-    assert payload["comments"][0]["citation_url"].endswith("#comments:id=11")
-    assert payload["linked_entities"]["count"] >= 1
-    assert payload["linked_entities"]["items"][0]["type"] == "npc"
+    assert payload["data"]["entity"]["page_url"] == "https://www.wowhead.com/item=19019/thunderfury"
+    assert "comments_url" not in payload["data"]["entity"]
+    assert payload["data"]["citations"]["comments"] == "https://www.wowhead.com/item=19019/thunderfury#comments"
+    assert payload["data"]["comments"][0]["citation_url"].endswith("#comments:id=11")
+    assert payload["data"]["linked_entities"]["count"] >= 1
+    assert payload["data"]["linked_entities"]["items"][0]["type"] == "npc"
 
 
 
@@ -99,18 +99,18 @@ def test_compare_command_returns_overlap_and_unique_links(monkeypatch) -> None:
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["comparison"]["linked_entities"]["shared_count_total"] == 1
-    assert len(payload["comparison"]["linked_entities"]["unique_by_entity"]["item:19019"]) == 1
-    assert len(payload["comparison"]["linked_entities"]["unique_by_entity"]["item:19351"]) == 1
-    assert payload["comparison"]["fields"]["name"]["all_equal"] is False
-    assert payload["entities"][0]["comments"]["top"][0]["citation_url"].endswith("#comments:id=501")
-    assert payload["entities"][0]["entity"]["page_url"] == "https://www.wowhead.com/item=19019/thunderfury"
-    assert "comments_url" not in payload["entities"][0]["entity"]
-    assert "page" not in payload["entities"][0]["citations"]
-    assert payload["entities"][0]["citations"]["comments"] == "https://www.wowhead.com/item=19019/thunderfury#comments"
-    assert "citation_url" not in payload["comparison"]["linked_entities"]["shared_items"][0]
-    assert "citation_url" not in payload["comparison"]["linked_entities"]["unique_by_entity"]["item:19019"][0]
-    assert "citations" not in payload
+    assert payload["data"]["comparison"]["linked_entities"]["shared_count_total"] == 1
+    assert len(payload["data"]["comparison"]["linked_entities"]["unique_by_entity"]["item:19019"]) == 1
+    assert len(payload["data"]["comparison"]["linked_entities"]["unique_by_entity"]["item:19351"]) == 1
+    assert payload["data"]["comparison"]["fields"]["name"]["all_equal"] is False
+    assert payload["data"]["entities"][0]["comments"]["top"][0]["citation_url"].endswith("#comments:id=501")
+    assert payload["data"]["entities"][0]["entity"]["page_url"] == "https://www.wowhead.com/item=19019/thunderfury"
+    assert "comments_url" not in payload["data"]["entities"][0]["entity"]
+    assert "page" not in payload["data"]["entities"][0]["citations"]
+    assert payload["data"]["entities"][0]["citations"]["comments"] == "https://www.wowhead.com/item=19019/thunderfury#comments"
+    assert "citation_url" not in payload["data"]["comparison"]["linked_entities"]["shared_items"][0]
+    assert "citation_url" not in payload["data"]["comparison"]["linked_entities"]["unique_by_entity"]["item:19019"][0]
+    assert "citations" not in payload["data"]
 
 
 
@@ -265,14 +265,14 @@ def test_entity_faction_uses_page_metadata_tooltip_fallback(monkeypatch) -> None
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["entity"] == {
+    assert payload["data"]["entity"] == {
         "type": "faction",
         "id": 529,
         "name": "Argent Dawn",
         "page_url": "https://www.wowhead.com/faction=529/argent-dawn",
     }
-    assert payload["tooltip"]["text"] == "Argent Dawn Protect Azeroth from the Scourge."
-    assert payload["tooltip"]["summary"] == "Protect Azeroth from the Scourge."
+    assert payload["data"]["tooltip"]["text"] == "Argent Dawn Protect Azeroth from the Scourge."
+    assert payload["data"]["tooltip"]["summary"] == "Protect Azeroth from the Scourge."
 
 
 
@@ -293,10 +293,10 @@ def test_entity_recipe_routes_through_spell_tooltip(monkeypatch) -> None:
 
     payload = json.loads(result.stdout)
     assert tooltip_calls == [("spell", 2549, None)]
-    assert payload["entity"]["type"] == "recipe"
-    assert payload["entity"]["id"] == 2549
-    assert payload["entity"]["page_url"] == "https://www.wowhead.com/spell=2549"
-    assert payload["entity"]["name"] == "Seasoned Wolf Kabob"
+    assert payload["data"]["entity"]["type"] == "recipe"
+    assert payload["data"]["entity"]["id"] == 2549
+    assert payload["data"]["entity"]["page_url"] == "https://www.wowhead.com/spell=2549"
+    assert payload["data"]["entity"]["name"] == "Seasoned Wolf Kabob"
 
 
 
@@ -323,10 +323,10 @@ def test_entity_page_merges_multi_source_linked_entities(monkeypatch) -> None:
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["linked_entities"]["count"] == 1
-    assert payload["linked_entities"]["items"][0]["name"] == "Obliterate"
-    assert payload["linked_entities"]["items"][0]["sources"] == ["gatherer", "href"]
-    assert payload["linked_entities"]["items"][0]["source_kind"] == "gatherer"
+    assert payload["data"]["linked_entities"]["count"] == 1
+    assert payload["data"]["linked_entities"]["items"][0]["name"] == "Obliterate"
+    assert payload["data"]["linked_entities"]["items"][0]["sources"] == ["gatherer", "href"]
+    assert payload["data"]["linked_entities"]["items"][0]["source_kind"] == "gatherer"
 
 
 
@@ -346,10 +346,10 @@ def test_entity_supports_excluding_comments(monkeypatch) -> None:
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert "comments" not in payload
-    assert "linked_entities" not in payload
-    assert payload["entity"]["page_url"] == "https://www.wowhead.com/item=19019"
-    assert "citations" not in payload
+    assert "comments" not in payload["data"]
+    assert "linked_entities" not in payload["data"]
+    assert payload["data"]["entity"]["page_url"] == "https://www.wowhead.com/item=19019"
+    assert "citations" not in payload["data"]
     assert page_calls == []
 
 
@@ -370,11 +370,11 @@ def test_entity_includes_linked_entity_preview_without_comments(monkeypatch) -> 
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["linked_entities"]["count"] >= 1
-    assert payload["linked_entities"]["counts_by_type"]["npc"] == 1
-    assert payload["linked_entities"]["items"][0]["type"] == "npc"
-    assert set(payload["linked_entities"]["items"][0].keys()) == {"type", "id", "name", "url"}
-    assert payload["linked_entities"]["more_available"] is False
+    assert payload["data"]["linked_entities"]["count"] >= 1
+    assert payload["data"]["linked_entities"]["counts_by_type"]["npc"] == 1
+    assert payload["data"]["linked_entities"]["items"][0]["type"] == "npc"
+    assert set(payload["data"]["linked_entities"]["items"][0].keys()) == {"type", "id", "name", "url"}
+    assert payload["data"]["linked_entities"]["more_available"] is False
     assert page_calls == [("item", 19019)]
 
 
@@ -392,12 +392,12 @@ def test_entity_supports_include_all_comments(monkeypatch) -> None:
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["comments"]["count"] == 1
-    assert payload["comments"]["all_comments_included"] is True
-    assert payload["comments"]["needs_raw_fetch"] is False
-    assert "items" in payload["comments"]
-    assert "top" not in payload["comments"]
-    assert payload["comments"]["items"][0]["id"] == 11
+    assert payload["data"]["comments"]["count"] == 1
+    assert payload["data"]["comments"]["all_comments_included"] is True
+    assert payload["data"]["comments"]["needs_raw_fetch"] is False
+    assert "items" in payload["data"]["comments"]
+    assert "top" not in payload["data"]["comments"]
+    assert payload["data"]["comments"]["items"][0]["id"] == 11
 
 
 
@@ -425,10 +425,10 @@ def test_entity_marks_partial_comments_when_more_than_top_limit(monkeypatch) -> 
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["comments"]["all_comments_included"] is False
-    assert payload["comments"]["needs_raw_fetch"] is True
-    assert payload["comments"]["count"] == 4
-    assert len(payload["comments"]["top"]) == 3
+    assert payload["data"]["comments"]["all_comments_included"] is False
+    assert payload["data"]["comments"]["needs_raw_fetch"] is True
+    assert payload["data"]["comments"]["count"] == 4
+    assert len(payload["data"]["comments"]["top"]) == 3
 
 
 
@@ -445,13 +445,13 @@ def test_entity_normalizes_tooltip_name_and_html(monkeypatch) -> None:
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["entity"]["name"] == "Thunderfury"
-    assert payload["tooltip"]["quality"] == 5
-    assert payload["tooltip"]["html"] == "<b>Legendary</b> weapon"
-    assert payload["tooltip"]["text"] == "Legendary weapon"
-    assert payload["tooltip"]["summary"] == "Legendary weapon"
-    assert "name" not in payload["tooltip"]
-    assert "tooltip" not in payload["tooltip"]
+    assert payload["data"]["entity"]["name"] == "Thunderfury"
+    assert payload["data"]["tooltip"]["quality"] == 5
+    assert payload["data"]["tooltip"]["html"] == "<b>Legendary</b> weapon"
+    assert payload["data"]["tooltip"]["text"] == "Legendary weapon"
+    assert payload["data"]["tooltip"]["summary"] == "Legendary weapon"
+    assert "name" not in payload["data"]["tooltip"]
+    assert "tooltip" not in payload["data"]["tooltip"]
 
 
 
@@ -476,8 +476,8 @@ def test_entity_cleans_spell_tooltip_artifacts_and_builds_summary(monkeypatch) -
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["tooltip"]["text"] == "Obliterate Talent Instant A brutal attack Physical and Frost damage."
-    assert payload["tooltip"]["summary"] == "A brutal attack Physical and Frost damage."
+    assert payload["data"]["tooltip"]["text"] == "Obliterate Talent Instant A brutal attack Physical and Frost damage."
+    assert payload["data"]["tooltip"]["summary"] == "A brutal attack Physical and Frost damage."
 
 
 
@@ -500,7 +500,7 @@ def test_entity_item_summary_prefers_effect_text_over_item_metadata(monkeypatch)
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["tooltip"]["summary"] == "Chance on hit: Blasts your enemy with lightning and slows its attack speed."
+    assert payload["data"]["tooltip"]["summary"] == "Chance on hit: Blasts your enemy with lightning and slows its attack speed."
 
 
 
@@ -526,7 +526,7 @@ def test_entity_mount_summary_prefers_use_text_over_mount_metadata(monkeypatch) 
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["tooltip"]["summary"] == "Use: Teaches you how to summon this three-person mount with vendors."
+    assert payload["data"]["tooltip"]["summary"] == "Use: Teaches you how to summon this three-person mount with vendors."
 
 
 
@@ -549,7 +549,7 @@ def test_entity_item_tooltip_text_formats_money_and_stat_spacing(monkeypatch) ->
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["tooltip"]["text"] == "Maladath +4 Parry +2 Haste Sell Price: 86g 98s"
+    assert payload["data"]["tooltip"]["text"] == "Maladath +4 Parry +2 Haste Sell Price: 86g 98s"
 
 
 
@@ -574,7 +574,7 @@ def test_entity_item_style_tooltip_text_drops_flavor_quotes_and_normalizes_paren
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["tooltip"]["text"] == (
+    assert payload["data"]["tooltip"]["text"] == (
         "Grand Expedition Yak Requires level 1 to 90 (90) Sell Price: 30,000g Vendor: Uncle Bigpocket Cost: 120000g"
     )
 
@@ -599,8 +599,8 @@ def test_entity_tooltip_summary_strips_leading_entity_name(monkeypatch) -> None:
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["tooltip"]["text"] == "Fairbreeze Favors Help restore order in Fairbreeze Village."
-    assert payload["tooltip"]["summary"] == "Help restore order in Fairbreeze Village."
+    assert payload["data"]["tooltip"]["text"] == "Fairbreeze Favors Help restore order in Fairbreeze Village."
+    assert payload["data"]["tooltip"]["summary"] == "Help restore order in Fairbreeze Village."
 
 
 
@@ -661,7 +661,7 @@ def test_entity_preview_prefers_gatherer_name_when_href_label_missing(monkeypatc
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["linked_entities"]["items"][0] == {
+    assert payload["data"]["linked_entities"]["items"][0] == {
         "type": "spell",
         "id": 49020,
         "name": "Obliterate",
@@ -696,7 +696,7 @@ def test_entity_preview_prefers_multi_source_links_over_single_source_peers(monk
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert [row["id"] for row in payload["linked_entities"]["items"]] == [49020, 49184]
+    assert [row["id"] for row in payload["data"]["linked_entities"]["items"]] == [49020, 49184]
 
 
 
@@ -723,8 +723,8 @@ def test_entity_preview_fetch_more_command_scales_with_known_count(monkeypatch) 
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["linked_entities"]["count"] == 250
-    assert payload["linked_entities"]["fetch_more_command"] == "wowhead entity-page currency 3008 --max-links 250"
+    assert payload["data"]["linked_entities"]["count"] == 250
+    assert payload["data"]["linked_entities"]["fetch_more_command"] == "wowhead entity-page currency 3008 --max-links 250"
 
 
 
@@ -752,13 +752,13 @@ def test_entity_preview_suppresses_low_signal_names(monkeypatch) -> None:
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["linked_entities"]["items"][0] == {
+    assert payload["data"]["linked_entities"]["items"][0] == {
         "type": "npc",
         "id": 34942,
         "name": "Memory of Hogger",
         "url": "https://www.wowhead.com/npc=34942",
     }
-    assert payload["linked_entities"]["items"][-1]["name"] is None
+    assert payload["data"]["linked_entities"]["items"][-1]["name"] is None
 
 
 
@@ -788,7 +788,7 @@ def test_entity_preview_prefers_diverse_high_value_types(monkeypatch) -> None:
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert [row["type"] for row in payload["linked_entities"]["items"]] == ["npc", "quest", "spell", "item"]
+    assert [row["type"] for row in payload["data"]["linked_entities"]["items"]] == ["npc", "quest", "spell", "item"]
 
 
 
@@ -819,7 +819,7 @@ def test_currency_preview_demotes_items_below_more_actionable_types(monkeypatch)
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert [row["type"] for row in payload["linked_entities"]["items"]] == ["npc", "quest", "spell", "object"]
+    assert [row["type"] for row in payload["data"]["linked_entities"]["items"]] == ["npc", "quest", "spell", "object"]
 
 
 
@@ -853,13 +853,13 @@ def test_compare_respects_expansion_flag_for_generated_urls(monkeypatch) -> None
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["expansion"] == "wotlk"
-    assert [row["entity"]["page_url"] for row in payload["entities"]] == [
+    assert payload["data"]["expansion"] == "wotlk"
+    assert [row["entity"]["page_url"] for row in payload["data"]["entities"]] == [
         "https://www.wowhead.com/wotlk/item=1",
         "https://www.wowhead.com/wotlk/item=2",
     ]
-    assert payload["comparison"]["linked_entities"]["shared_items"][0]["url"] == "https://www.wowhead.com/wotlk/npc=12056"
-    assert "citation_url" not in payload["comparison"]["linked_entities"]["shared_items"][0]
+    assert payload["data"]["comparison"]["linked_entities"]["shared_items"][0]["url"] == "https://www.wowhead.com/wotlk/npc=12056"
+    assert "citation_url" not in payload["data"]["comparison"]["linked_entities"]["shared_items"][0]
 
 
 
@@ -882,8 +882,8 @@ def test_canonical_normalization_flag_for_entity_page(monkeypatch) -> None:
     default_result = runner.invoke(app, ["--expansion", "ptr", "entity-page", "item", "19019", "--max-links", "1"])
     assert default_result.exit_code == 0
     default_payload = json.loads(default_result.stdout)
-    assert default_payload["normalize_canonical_to_expansion"] is False
-    assert default_payload["entity"]["page_url"] == "https://www.wowhead.com/item=19019/thunderfury-blessed-blade-of-the-windseeker"
+    assert default_payload["data"]["normalize_canonical_to_expansion"] is False
+    assert default_payload["data"]["entity"]["page_url"] == "https://www.wowhead.com/item=19019/thunderfury-blessed-blade-of-the-windseeker"
 
     normalized_result = runner.invoke(
         app,
@@ -900,8 +900,8 @@ def test_canonical_normalization_flag_for_entity_page(monkeypatch) -> None:
     )
     assert normalized_result.exit_code == 0
     normalized_payload = json.loads(normalized_result.stdout)
-    assert normalized_payload["normalize_canonical_to_expansion"] is True
-    assert normalized_payload["entity"]["page_url"] == "https://www.wowhead.com/ptr/item=19019/thunderfury-blessed-blade-of-the-windseeker"
+    assert normalized_payload["data"]["normalize_canonical_to_expansion"] is True
+    assert normalized_payload["data"]["entity"]["page_url"] == "https://www.wowhead.com/ptr/item=19019/thunderfury-blessed-blade-of-the-windseeker"
 
 
 
@@ -935,9 +935,9 @@ def test_canonical_normalization_flag_for_comments_citations(monkeypatch) -> Non
     )
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["normalize_canonical_to_expansion"] is True
-    assert payload["entity"]["page_url"] == "https://www.wowhead.com/ptr/item=19019/thunderfury-blessed-blade-of-the-windseeker"
-    assert payload["comments"][0]["citation_url"] == "https://www.wowhead.com/ptr/item=19019/thunderfury-blessed-blade-of-the-windseeker#comments:id=11"
+    assert payload["data"]["normalize_canonical_to_expansion"] is True
+    assert payload["data"]["entity"]["page_url"] == "https://www.wowhead.com/ptr/item=19019/thunderfury-blessed-blade-of-the-windseeker"
+    assert payload["data"]["comments"][0]["citation_url"] == "https://www.wowhead.com/ptr/item=19019/thunderfury-blessed-blade-of-the-windseeker#comments:id=11"
 
 
 def test_restore_cached_normalization_version_moves_legacy_top_level_version() -> None:

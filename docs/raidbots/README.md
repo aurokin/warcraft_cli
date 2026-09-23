@@ -41,8 +41,7 @@ simc sim - < profile.simc   # what `input` suggests you run locally
 ## Output
 
 Every command emits the shared envelope (`ok`, `provider`, `command`, `kind`, `schema_version`,
-`query`, `provenance`, `data`, `error`). The payload lives in `data`; the same keys are also copied
-to the top level for existing agents and are deprecated — read `data`.
+`query`, `provenance`, `data`, `error`) and no other top-level key; the payload lives in `data`.
 
 | Command | `kind` | `data` keys |
 |---|---|---|

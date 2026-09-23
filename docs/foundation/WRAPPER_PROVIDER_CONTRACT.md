@@ -113,8 +113,10 @@ Wrapper and provider payloads share one envelope (`ok`, `provider`, `command`, `
 `schema_version`, `query`, `provenance`, `data`, and `error` on failure) and one exit-code
 vocabulary (1 generic, 2 usage, 3 auth, 4 not found, 5 network/upstream). Both are defined in
 [ERROR_CONTRACT.md](ERROR_CONTRACT.md), which is the normative document; this page does not restate
-them. Provider rows inside `warcraft search` and `warcraft resolve` output carry `ok` and `error`
-from the underlying call alongside the registry `status`.
+them. A wrapper envelope carries those keys and nothing else: its payload is under `data` on
+success, and its failure context is under `error.details` (with `data: {}`). Provider rows inside
+`warcraft search` and `warcraft resolve` output carry `ok` and `error` from the underlying call
+alongside the registry `status`.
 
 Fanout failure rules:
 - `failed_providers`, `failed_provider_count`, and `answered_provider_count` are always present, in
@@ -132,15 +134,13 @@ Composite failure rules:
 - a composite command re-emits its failing source's own `error.code` and exits with that code's
   mapped exit code; it does not invent a code that disagrees with the exit code
 - structured context belongs under `error.details`, never as a sibling of `code`/`message`. A
-  failure envelope carries no `data` body by default, so a composite that declines (for example
+  failure envelope carries no `data` body, so a composite that declines (for example
   `guide-compare-query` with fewer than two exported bundles) puts the per-provider reasons in
-  `error.details` — and mirrors them in `data` — instead of relying on the deprecated top-level keys
+  `error.details`
 
 Reading a provider payload:
 - every wrapper composite reads provider fields from the envelope's `data` body, through
-  `warcraft_cli.providers.provider_payload_data`. The copies of those keys at the top level of a
-  provider envelope are deprecated and are being removed; a composite that reads them breaks the day
-  its provider stops emitting them
+  `warcraft_cli.providers.provider_payload_data`; `data` is the only place an envelope carries them
 - test fakes for provider calls must emit the same shape (fields under `data`), or they keep a
   broken composite green
 
@@ -285,48 +285,60 @@ Search result ordering rules:
 - the wrapper should not invent a fake universal content model beyond that thin ranking/orchestration layer
 - `count` is the merged candidate total and `truncated` reports whether `--limit` cut the list
 
-### The merged page: intent, diversity, quality
+### The merged page: intent, order, diversity, quality
 
 Score arithmetic alone cannot order a merged page: a provider that returns twenty equally scored
-rows normalizes all twenty to 100 and owns every slot. Three structural rules decide the page, and
+rows normalizes all twenty to 100 and owns every slot. Four structural rules decide the page, and
 each one is visible in the payload.
 
 **Intent — what kind of thing was asked for.** `query_intents()` reads the query for the keywords and
-shapes in the ranking policy. A structured profile query is either exactly `<region> <realm> <name>`
-with a Raider.IO region (`us`, `eu`, `kr`, `tw`, `cn`) or a query carrying a `guild`/`character`
-token; a longer query that only starts with a region-like word (`world boss sha of anger`) is free
-text. A bare name carrying none of these and no keyword is *not* a profile query:
+shapes in the ranking policy. A structured profile query is either `<region> <realm...> <name>` (at
+least three words, the first a Raider.IO region — `us`, `eu`, `kr`, `tw`, `cn` — so multi-word realms
+such as `eu tarren mill Cotti` and `us area 52 Roguecane` count) or a query carrying a
+`guild`/`character` token. `world` is a leaderboard scope, not a region, so `world boss sha of anger`
+is free text. A bare name carrying none of these and no keyword is *not* a profile query:
 - a profile-family row (Raider.IO) answering a query with no profile intent is marked
   `wrapper_ranking.off_intent` and sorts below every on-intent row, whatever its local score. It
-  takes a page slot only when the on-intent rows cannot fill the page, with one exception: when no
-  entity title matches a bare query exactly, one slot is kept for an off-intent row whose name is
-  exactly the query (`merge_policy.reserved_exact_profile_slot_count`), so `warcraft search <character
-  name>` still shows the character beside the wiki's fuzzy matches.
-- a bare query that exactly matches an entity-family title anchors the page
-  (`wrapper_ranking.anchor`): the entity a user named is the primary answer, and another provider's
-  article *about* that entity is supporting reference, however large its local scale. An anchored
-  page keeps no profile slot.
+  takes a page slot only when the on-intent rows cannot fill the page, with one exception: when the
+  page is not anchored and the first off-intent row's name is exactly the query, one slot is kept for
+  it (`merge_policy.reserved_exact_profile_slot_count`), so `warcraft search <character name>` still
+  shows the character beside the wiki's fuzzy matches.
+- the entity provider's own top row anchors the page (`wrapper_ranking.anchor`) when its title is the
+  bare query or starts with it (`Thunderfury, Blessed Blade of the Windseeker` for `thunderfury`):
+  the entity a user named is the primary answer, and another provider's article *about* that entity
+  is supporting reference, however large its local scale. Only a provider's top row can anchor, so a
+  same-named row Wowhead ranked lower (the `Thunderfury` proc spells) never jumps ahead of it. An
+  anchored page keeps no profile slot.
   The anchor applies only when the query carries no intent at all, so
   `character us malganis Aurow` still resolves to the character and not to a spell of the same name.
 - structured profile queries (`guild us illidan Liquid`, `character us malganis Aurow`) keep their
   profile intent boosts and put Raider.IO first.
 
-**Diversity — no provider fills the page.** After ranking, the page is built with a per-provider cap
+**Order — a provider's own order is its ranking.** The wrapper never reorders two rows from the same
+provider. It interleaves the providers' lists (`interleave_provider_rows`): at every step the best of
+the providers' next rows, by the anchor tier, the off-intent tier and then the normalized wrapper
+score (`search_result_sort_key`), takes the next place. Boosts therefore decide only *between*
+providers; within one provider, a row the provider ranked lower stays lower.
+
+**Diversity — no provider fills the page.** After interleaving, the page is built with a per-provider cap
 of half the page rounded up. An on-intent row over the cap is *deferred*, not dropped: it fills the
 slots the other on-intent providers leave, so a page is never short while on-intent candidates
 exist. Off-intent rows then fill what is still empty, up to a strict minority of the page
 (`limit // 2`, at least one); the page comes back short rather than repeating twenty near-identical
-profiles. The chosen rows are returned in rank order (`search_result_sort_key`), so `data.results`
-never lists a promoted row after a row it outranks. `data.merge_policy` reports the caps, the
+profiles. The chosen rows keep their interleaved order, so `data.results` never lists a promoted row
+after a row it outranks and never reorders a provider's rows. `data.merge_policy` reports the caps, the
 reserved slot, the candidate total, and how many rows were deferred or withheld
 (`docs/foundation/SAFE_ANALYTICS_RULES.md`: a page that dropped rows says so).
 
 **Quality — the row's own title.** A row whose title *is* the query (`name_match: "exact"`) or whose
 title starts with it (`"title_prefix"`, as in `Thunderfury, Blessed Blade of the Windseeker`) scores
-above one that merely mentions it somewhere, so an exact item/spell/quest beats a partial match and
-a news post about it. The boosts live in the same tunable policy as every other weight.
+above one that merely mentions it somewhere, so between providers an exact item/spell/quest beats a
+partial match and a news post about it. The boosts live in the same tunable policy as every other
+weight. A guide row the provider itself flagged as superseded (Wowhead's `stale_guide` ranking
+reason) carries `wrapper_ranking.stale_guide: true`, in the `--brief` rows too; the wrapper passes the
+provider's flag on and never computes one of its own.
 
-Changing any of the three is a contract change: the model is covered by a table of realistic
+Changing any of these rules is a contract change: the model is covered by a table of realistic
 queries with realistic per-provider score scales in `tests/test_provider_contract.py`, and that
 table — not a single number — is what a change has to keep true.
 

@@ -16,7 +16,7 @@ Every command writes exactly one JSON object to stdout on success or to stderr o
 | `command` | string | Full subcommand path that produced the payload (`search`, `entity`, `distribution mythic-plus-runs`, ...) |
 | `kind` | string | Payload kind inside `data` (`search_results`, `entity`, `doctor`, `error`, ...) |
 | `schema_version` | string | Envelope schema version. Currently `"1"`. |
-| `query` | string, object, or null | The normalized input the command acted on |
+| `query` | string, object, or null | On success, the normalized input the command acted on; on failure, see [Error object](#error-object) |
 | `provenance` | object | Source URLs, fetch timestamps, cache state. `{}` when there is none. |
 | `data` | object | Provider payload. `{}` on failure. |
 | `error` | object | Present only when `ok` is `false`: `{"code": str, "message": str, "details"?: object}` |
@@ -36,15 +36,13 @@ warcraft --pretty schema
 
 It is derived from the `warcraft_core.envelope` TypedDicts by `warcraft_cli.schema`, so it cannot
 drift from the implementation. `data`, `provenance`, and `error.details` are open objects (each
-provider owns their contents), and the envelope itself allows additional properties because of the
-deprecated legacy top-level keys below.
+provider owns their contents).
 
-### Deprecated legacy top-level keys
+### Nothing else at the top level
 
-Providers that historically emitted payload keys at the top level (`results`, `count`, `entity`,
-`status`, ...) still emit them next to the envelope keys so existing agents keep working. `data`
-always carries the same payload, so read `data`; the top-level copies are deprecated. Legacy keys
-never shadow envelope keys.
+The top level holds only the keys in the table above. Every payload field lives under `data`, once.
+Older releases also copied payload keys (`results`, `count`, `entity`, ...) to the top level; those
+copies are removed, so read `data`.
 
 ## Error object
 
@@ -57,11 +55,20 @@ never shadow envelope keys.
 `code` is a stable snake_case identifier for programs; `message` is for humans; `details` is
 optional structured context.
 
-A failure carries `query` whenever the command had parsed its input: the rejected request is then
-machine-readable instead of only spelled out in `message`. `warcraft_core.cli.fail(..., query=...)`
-is the one way to set it. `query` is `null` only when the failure happened before any input was
-parsed, for example a usage error caught by the process guard. Credentials never go in `query`. Providers keep their existing code strings; the codes below have a
-fixed repo-wide exit-code mapping. A provider may additionally map its own codes onto the same five
+A failure's `query` is the command's parsed parameters, so the rejected request is machine-readable
+instead of only spelled out in `message`. `warcraft_core.cli.fail()` sets it by default from the Click
+context (a command may pass its own `query=` instead), and the `--fields-strict` `missing_fields`
+failure uses the same rule. The parameters are named as the command declares them, so a failure's
+`query` can differ in shape from the same command's success `query`, which is the normalized input:
+a `warcraftlogs report-events --fight-id 1` failure echoes `"fight_id": [1]`. Two kinds of parameter
+are never echoed: an OAuth authorization code (`--code`), and the global output flags (`--pretty`,
+`--fields`, ...). `query` is `null` when no command parsed its input: a usage error or an unexpected
+exception caught by the process guard, a provider failure the `warcraft` wrapper builds from an
+in-process surface call (`search`, `resolve`, `doctor`), which runs no Click command, and the
+wrapper's `unsupported_provider_expansion` refusal, which stops before the provider runs.
+
+Providers keep their existing code strings; the codes below have a fixed repo-wide exit-code
+mapping. A provider may additionally map its own codes onto the same five
 exit codes, and documents them in its provider README: for example `warcraftlogs` exits `2` for
 `invalid_query` and its `missing_*` input codes, `curseforge` exits `3` for `missing_api_key` and
 `4` for `addon_not_found`, and `blizzard` exits `2` for `unsupported_region`,

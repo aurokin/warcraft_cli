@@ -339,7 +339,6 @@ def test_write_and_query_article_bundle_for_method_shape(tmp_path: Path) -> None
     exported_at = datetime.fromisoformat(manifest["exported_at"].replace("Z", "+00:00"))
     assert exported_at.tzinfo is not None
     bundle = load_article_bundle(export_dir)
-    assert bundle["page_files"][0]["section_slug"] == "introduction"
     result = query_article_bundle(
         bundle,
         query="tea serenity",
@@ -461,16 +460,6 @@ def test_query_article_bundle_normalizes_section_title_filter(tmp_path: Path) ->
 
     assert result["match_counts"]["sections"] == 1
     assert result["top"][0]["title"] == "Talents"
-
-
-def test_load_article_bundle_tolerates_missing_page_files_metadata(tmp_path: Path) -> None:
-    export_dir = tmp_path / "icy-guide"
-    write_article_bundle(_icy_like_payload(), provider="icy-veins", export_dir=export_dir)
-    (export_dir / "page-files.json").unlink()
-
-    bundle = load_article_bundle(export_dir)
-
-    assert bundle["page_files"] == []
 
 
 def test_compare_article_bundles_preserves_additive_surface_and_build_evidence(tmp_path: Path) -> None:

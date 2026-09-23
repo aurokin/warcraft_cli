@@ -7,11 +7,11 @@ Functions here never print and never raise ``typer.Exit``: they return an ``Enve
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
-from typing import Any, cast
+from collections.abc import Callable
+from typing import Any
 
 import httpx
-from warcraft_core.envelope import ENVELOPE_KEYS, Envelope, success_envelope, with_legacy_keys
+from warcraft_core.envelope import Envelope, success_envelope
 from warcraft_core.provider import ProviderError, ProviderSurface
 
 from lorrgs_cli.client import API_HOST, OPENAPI_URL, PROVIDER_NAME, SITE_HOST, LorrgsClient, LorrgsClientError
@@ -39,7 +39,7 @@ CAPABILITIES: dict[str, str] = {
     "spec_ranking": "ready",
     "spec_ranking_info": "ready",
     "comp_ranking": "ready",
-    "report_overview": "ready_cached_only",
+    "report_overview": "ready",
     "user_report": "ready_cached_only",
     "user_report_fights": "ready_cached_only",
 }
@@ -57,13 +57,6 @@ NOTES: list[str] = [
 # (exit 3) told agents to authenticate against a provider they can never authenticate to.
 _HTTP_STATUS_CODES: dict[int, str] = {401: "not_found", 403: "not_found", 404: "not_found", 422: "invalid_query", 429: "rate_limited"}
 _REFUSAL_STATUSES = frozenset({401, 403})
-
-
-def _dual_emit(envelope: Envelope, payload: Mapping[str, Any]) -> Envelope:
-    """Envelope plus deprecated top-level copies of the payload keys agents read today."""
-    legacy = {key: value for key, value in payload.items() if key not in ENVELOPE_KEYS}
-    # with_legacy_keys returns a plain dict; the envelope keys it carries are untouched.
-    return cast(Envelope, with_legacy_keys(envelope, legacy))
 
 
 def _response_detail(response: httpx.Response) -> str | None:
@@ -129,6 +122,17 @@ def _envelope_data(kind: str, payload: Any) -> dict[str, Any]:
     return {kind: payload}
 
 
+def note_empty_comp_ranking(result: dict[str, Any], boss_slug: str) -> dict[str, Any]:
+    """Say so when Lorrgs answers a composition ranking with no reports, so ``[]`` is not read as a ranking."""
+    payload = result["payload"]
+    if isinstance(payload, dict) and payload.get("reports") == []:
+        payload["notes"] = [
+            f"Lorrgs returned no composition reports for {boss_slug} with these filters: the upstream "
+            "ranking is empty, so there is nothing to rank yet."
+        ]
+    return result
+
+
 def call_api(command: str, kind: str, query: dict[str, Any], call: Callable[[LorrgsClient], dict[str, Any]]) -> Envelope:
     """Run one Lorrgs API call and wrap its payload in the success envelope."""
     with LorrgsClient() as client:
@@ -153,7 +157,7 @@ def search(query: str, *, limit: int = 5, **options: Any) -> Envelope:
             payload = search_candidates(client, query, limit=limit)
         except (LorrgsClientError, httpx.HTTPError) as exc:
             raise provider_error(exc) from exc
-    envelope = success_envelope(
+    return success_envelope(
         provider=PROVIDER_NAME,
         command="search",
         kind="search_results",
@@ -161,7 +165,6 @@ def search(query: str, *, limit: int = 5, **options: Any) -> Envelope:
         query=query,
         provenance=_provenance(),
     )
-    return _dual_emit(envelope, payload)
 
 
 def resolve(target: str, *, limit: int = 5, **options: Any) -> Envelope:
@@ -171,7 +174,7 @@ def resolve(target: str, *, limit: int = 5, **options: Any) -> Envelope:
             payload = resolve_payload(client, target, limit=limit)
         except (LorrgsClientError, httpx.HTTPError) as exc:
             raise provider_error(exc) from exc
-    envelope = success_envelope(
+    return success_envelope(
         provider=PROVIDER_NAME,
         command="resolve",
         kind="resolution",
@@ -179,7 +182,6 @@ def resolve(target: str, *, limit: int = 5, **options: Any) -> Envelope:
         query=target,
         provenance=_provenance(),
     )
-    return _dual_emit(envelope, payload)
 
 
 def doctor(**options: Any) -> Envelope:
@@ -193,8 +195,7 @@ def doctor(**options: Any) -> Envelope:
         "capabilities": dict(CAPABILITIES),
         "notes": list(NOTES),
     }
-    envelope = success_envelope(provider=PROVIDER_NAME, command="doctor", kind="doctor", data=payload)
-    return _dual_emit(envelope, payload)
+    return success_envelope(provider=PROVIDER_NAME, command="doctor", kind="doctor", data=payload)
 
 
 class LorrgsProvider:

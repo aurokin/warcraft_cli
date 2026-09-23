@@ -16,7 +16,7 @@ Repo-wide expectations for respectful provider use, safe logging, and failure re
 | Default posture | Treat provider APIs and HTML endpoints as rate-limited. Back off when responses are slow, empty, or HTTP 429/503. |
 | Caching | Use built-in CLI caches (`wowhead`, `warcraftlogs`, `raiderio`, etc.) when repeating work. Clear or repair caches only when freshness requires it (`cache-clear`, `cache-repair`). |
 | Concurrency | Wowhead `comments --hydrate-missing-replies` exposes `--max-concurrency`; keep values modest (default 4). Avoid unbounded parallel fanout across many CLIs. |
-| Live matrices | Warcraft Logs `make test-live-matrix` and Wowhead live workflows are **operator-triggered** — do not schedule them as high-frequency CI against production without credentials and scope review. |
+| Live suites | `make test-e2e` is **operator-triggered**; CI runs only its keyless half and the Wowhead parser canary, weekly. Do not schedule them as high-frequency CI against production without credentials and scope review. |
 | Warcraft Logs | Query `warcraftlogs rate-limit` and inspect `doctor` / auth status before large report-scoped batch jobs. |
 
 Every `httpx` request routed through `warcraft_api.http.request_with_retries` waits on a shared per-host limiter that enforces a minimum interval between request starts (`WARCRAFT_HTTP_MIN_INTERVAL_SECONDS`, default `0.25`; set `0` to disable). Server `Retry-After` hints are honoured but capped at 30 seconds per attempt. The limiter paces requests; operators are still responsible for overall automation volume outside documented test entrypoints.
@@ -82,7 +82,7 @@ warcraft --expansion retail doctor
 | --- | --- | --- |
 | HTTP 4xx/5xx | Endpoint change, auth, or rate limit | Retry once; check `doctor` probes; inspect `warcraftlogs rate-limit` for WCL. |
 | Empty `results` / missing keys | Parser drift or envelope change | Run provider contract tests; compare raw payload vs normalized layer. |
-| `parse_error` / `unexpected_response` | HTML or JSON shape change | Run Wowhead parser canaries or WCL live matrix row for the command. |
+| `parse_error` / `unexpected_response` | HTML or JSON shape change | Run the Wowhead parser canaries or the provider's end-to-end journey file. |
 | Auth errors | Expired token or missing scope | `warcraftlogs auth status`; re-run OAuth bootstrap. |
 | Wrong expansion / wrong links | Profile or URL routing bug | `wowhead expansion-detect <url>`; check `expansion_url_policy` in `wowhead doctor`. |
 
@@ -91,8 +91,8 @@ warcraft --expansion retail doctor
 | Provider | Fast checks |
 | --- | --- |
 | Wowhead | `pytest -q tests/test_wowhead_schema_snapshots.py tests/test_wowhead_doctor.py` |
-| Wowhead live (opt-in) | `WOWHEAD_LIVE_TESTS=1 pytest -q tests/test_live_integration.py` |
-| Warcraft Logs matrix (opt-in) | `make test-live-matrix` with credentials |
+| Wowhead live (opt-in) | `make test-canary`; `make test-e2e E2E_ARGS="tests/e2e/test_wowhead.py"` |
+| Warcraft Logs live (opt-in) | `make test-e2e E2E_ARGS="tests/e2e/test_warcraftlogs.py"` with credentials |
 | Monorepo CI | `make lint && make typecheck && pytest -q` |
 
 ### 4. Fix or narrow the contract
@@ -111,7 +111,7 @@ warcraft --expansion retail doctor
 | CLI | Doctor | Rate / auth signal | Contract tests |
 | --- | --- | --- | --- |
 | `wowhead` | `wowhead doctor` | Session dedupe; optional live probes | `tests/test_wowhead_schema_snapshots.py`, parser canaries |
-| `warcraftlogs` | `warcraftlogs doctor` | `warcraftlogs rate-limit`, OAuth | `tests/test_warcraftlogs_cli.py`, `make test-live-matrix` |
+| `warcraftlogs` | `warcraftlogs doctor` | `warcraftlogs rate-limit`, OAuth | `tests/test_warcraftlogs_cli.py`, `tests/e2e/test_warcraftlogs.py` |
 | `warcraft` (wrapper) | `warcraft doctor` | Aggregates provider doctors | `tests/test_warcraft_wrapper.py` |
 
 ## Related

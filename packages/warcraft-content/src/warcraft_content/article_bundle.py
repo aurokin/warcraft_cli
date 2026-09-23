@@ -4,7 +4,7 @@ import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 from warcraft_core.provider import ProviderError
 
@@ -42,23 +42,15 @@ def load_json(path: Path) -> dict[str, Any]:
     return value
 
 
-def load_json_or_default(path: Path, default: Any) -> Any:
-    if not path.exists():
-        return default
-    return load_json(path)
-
-
 def load_jsonl(path: Path) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
-    if not path.exists():
-        return rows
     for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line:
+        if not line.strip():
             continue
         value = json.loads(line)
-        if isinstance(value, dict):
-            rows.append(value)
+        if not isinstance(value, dict):
+            raise ValueError(f"Expected a JSON object on every line of {path}")
+        rows.append(value)
     return rows
 
 
@@ -208,10 +200,34 @@ class ArticleBundleError(ProviderError, ValueError):
     """``export_dir`` cannot be read as an article bundle.
 
     ``not_found`` when the path is not there, ``invalid_argument`` when it is a file, and
-    ``invalid_bundle`` when the directory is not an article bundle (no readable manifest, or no pages
-    file, as in a wowhead guide-export bundle). Also a ``ValueError`` so the per-bundle handlers in
-    ``warcraft_cli`` keep turning one bad bundle into an error row instead of aborting a comparison.
+    ``invalid_bundle`` when the directory is not a readable bundle. Also a ``ValueError`` so the
+    per-bundle handlers in ``warcraft_cli`` keep turning one bad bundle into an error row instead of
+    aborting a comparison.
     """
+
+
+# Bundle row lists and the manifest ``files`` key naming each one. Article providers list all six; a
+# wowhead guide-export lists every one but pages and build references. A manifest that lists none
+# of them is not a bundle, and a listed file that is missing or corrupt makes the bundle unreadable.
+_CONTENT_FILES: Final = {
+    "pages": "pages_jsonl",
+    "sections": "sections_jsonl",
+    "navigation": "navigation_links_jsonl",
+    "linked_entities": "linked_entities_jsonl",
+    "build_references": "build_references_jsonl",
+    "analysis_surfaces": "analysis_surfaces_jsonl",
+}
+
+
+def _read_bundle(export_dir: Path) -> dict[str, Any]:
+    manifest = load_json(export_dir / "manifest.json")
+    files = manifest.get("files")
+    if not isinstance(files, dict) or not files.keys() & set(_CONTENT_FILES.values()):
+        raise ValueError("its manifest lists no article content file")
+    bundle: dict[str, Any] = {"manifest": manifest, "failed_pages": _failed_page_rows(manifest)}
+    for name, key in _CONTENT_FILES.items():
+        bundle[name] = load_jsonl(export_dir / files[key]) if key in files else []
+    return bundle
 
 
 def load_article_bundle(export_dir: Path) -> dict[str, Any]:
@@ -219,29 +235,12 @@ def load_article_bundle(export_dir: Path) -> dict[str, Any]:
         raise ArticleBundleError("not_found", f"Bundle directory not found: {export_dir}")
     if not export_dir.is_dir():
         raise ArticleBundleError("invalid_argument", f"Bundle path is not a directory: {export_dir}")
-    manifest_path = export_dir / "manifest.json"
     try:
-        manifest = load_json(manifest_path)
-    except (OSError, ValueError) as exc:
-        # A missing manifest.json is the common case: the caller pointed at the parent of a bundle.
-        raise ArticleBundleError("invalid_bundle", f"Not a readable article bundle, {manifest_path}: {exc}") from exc
-    files = manifest.get("files") or {}
-    pages_path = export_dir / files.get("pages_jsonl", "pages.jsonl")
-    if not pages_path.is_file():
-        # Without this, every row list below loads as [] and the caller answers ok:true from nothing.
-        raise ArticleBundleError("invalid_bundle", f"Not an article bundle, no pages file: {pages_path}")
-    page_files = load_json_or_default(export_dir / files.get("page_files_json", "page-files.json"), {"pages": []})
-    return {
-        "manifest": manifest,
-        "failed_pages": _failed_page_rows(manifest),
-        "page_files": list(page_files.get("pages") or []) if isinstance(page_files, dict) else [],
-        "pages": load_jsonl(pages_path),
-        "sections": load_jsonl(export_dir / files.get("sections_jsonl", "sections.jsonl")),
-        "navigation": load_jsonl(export_dir / files.get("navigation_links_jsonl", "navigation-links.jsonl")),
-        "linked_entities": load_jsonl(export_dir / files.get("linked_entities_jsonl", "linked-entities.jsonl")),
-        "build_references": load_jsonl(export_dir / files.get("build_references_jsonl", "build-references.jsonl")),
-        "analysis_surfaces": load_jsonl(export_dir / files.get("analysis_surfaces_jsonl", "analysis-surfaces.jsonl")),
-    }
+        return _read_bundle(export_dir)
+    except (OSError, ValueError, TypeError) as exc:
+        # OSError: no manifest.json (commonly the parent of a bundle) or a listed file is missing.
+        # ValueError: corrupt JSON or JSONL. TypeError: a manifest entry of the wrong type.
+        raise ArticleBundleError("invalid_bundle", f"Not a readable article bundle, {export_dir}: {exc}") from exc
 
 
 def _query_score(query: str, text: str) -> int:

@@ -47,9 +47,11 @@ authoritative, and use Lorrgs for its prebuilt aggregation.
   `salhadaar` matches two encounters), or the top candidate left a recognised word in
   `ranking.unmatched_terms` and would have answered a narrower question than you asked
 - a report handoff resolves at `confidence: "medium"` with a `caveat`: nothing checked that Lorrgs
-  can serve that report, and it refuses reports it has not loaded or that Warcraft Logs keeps private
-- use `report-overview` for report metadata from a Warcraft Logs URL without requesting Lorrgs'
-  per-fight/player timeline generation
+  can serve that report, and it refuses reports Warcraft Logs keeps private
+- use `report-overview` for report metadata from any public Warcraft Logs URL, including one Lorrgs
+  has not cached, without requesting Lorrgs' per-fight/player timeline generation
+- an empty `comp-ranking` (`reports: []`) carries `data.notes`: Lorrgs has no composition rows for
+  that boss and those filters yet, which is not a ranking
 - use `user-report-fights <url> --type <report-type>` when the report URL carries a view type such
   as `damage-done`; the CLI also preserves that query parameter automatically from URLs
 - use `spec-spells` and `boss-spells` to interpret spell ids in timeline rows

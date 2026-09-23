@@ -21,7 +21,7 @@ Global flags go before the subcommand: `--pretty`, `--compact`, `--compact-max-c
 | `method guide-query <bundle> "<query>"` | `--limit` (1-50, default 5), `--kind` (repeatable/comma-separated), `--section-title` | matches inside an exported bundle; no network access |
 
 `--kind` accepts `sections`, `navigation`, `linked_entities`, `build_references`, and
-`analysis_surfaces`; anything else fails with `invalid_query_kind`.
+`analysis_surfaces`; anything else fails with `invalid_argument` (exit 2).
 
 ```bash
 method resolve "mistweaver monk"
@@ -33,17 +33,19 @@ method guide-query ./tmp/mistweaver "tea of serenity" --kind linked_entities
 ## Output
 
 Every command emits one shared envelope (`ok`, `provider`, `command`, `kind`, `schema_version`,
-`query`, `provenance`, `data`, and `error` on failure). The payload lives in `data`; the historical
-top-level keys (`results`, `count`, `guide`, `capabilities`, ...) are still emitted next to the
-envelope keys and are deprecated. Read `data`.
+`query`, `provenance`, `data`, and `error` on failure) and no other top-level key; the payload is in
+`data`.
 
 Error codes and their exit codes: `network_error`/`timeout`/`upstream_error` exit 5, `not_found`
 exits 4, `auth_failed` exits 3, and the Method-specific input errors `invalid_guide_ref`,
-`unsupported_guide_surface`, `invalid_bundle`, `invalid_query_kind`, and `invalid_cache_config` exit 1.
+`unsupported_guide_surface`, `invalid_bundle`, and `invalid_cache_config` exit 1; an unsupported
+`--kind` is `invalid_argument` (exit 2).
 `guide-query` answers a bad bundle path the same way `icy-veins guide-query` does: a path that does
 not exist is `not_found` (exit 4), a file is `invalid_argument` (exit 2), and a directory that is not
-an article bundle (no readable `manifest.json` or no `pages.jsonl`, such as a `wowhead guide-export`
-bundle) is `invalid_bundle` (exit 1).
+a readable bundle is `invalid_bundle` (exit 1): no `manifest.json`, a manifest whose `files` lists no
+content file (`pages.jsonl`, `sections.jsonl`, `analysis-surfaces.jsonl`, ...), or a listed file that
+is missing or corrupt. A `wowhead guide-export` bundle is readable; it has sections, navigation,
+linked entities and analysis surfaces, but no pages or build references.
 `invalid_guide_ref` means the argument was not a Method guide reference; a page that fetched but
 whose article container no longer matches fails with `parse_failed` (exit 1) instead of returning
 an empty article with `ok:true`.
@@ -64,14 +66,10 @@ them differently:
 
 - `wowhead_talent_calc_url` always decodes unaided: its URL path names the class and spec.
 - `wow_talent_export` names neither, so `build_identity` stays unknown on the row and SimC has to
-  identify the string itself. It only probes the specs the checkout ships an APL for, which today
-  covers the damage and tank specs but no healer spec.
+  identify the string itself. It probes every spec in SimC's specialization data, healers included.
 
-So `simc decode-build --talents <build_code>` returns `ok:true` for a damage or tank build, and
-fails with `invalid_query` for a healer build until you name the spec yourself:
-`simc decode-build --talents <build_code> --actor-class monk --spec mistweaver`.
-`warcraft guide-builds-simc --decode` passes no class or spec, so its
-`summary.decode_success_count` stays 0 for healer guides.
+So `simc decode-build --talents <build_code>` returns `ok:true` for a build of any role without
+`--actor-class` or `--spec`: a captured Mistweaver Monk export decodes as `monk`/`mistweaver`.
 
 The Method `/talents` sections publish import strings rather than talent-calc links, so in practice
 the rows you get back are `wow_talent_export`.
@@ -110,7 +108,7 @@ HTTP responses are cached through `warcraft_api.cache` under the `METHOD` prefix
 - `tests/test_method_cli.py`: parser behavior, command contracts, envelope conformance, transport failures
 - `tests/test_method_synthetic_fixtures.py`: hand-written HTML fixtures in `tests/fixtures/method/`, one per content family
 - `tests/test_method_captured_fixtures.py`: one captured real guide page (`captured_talents_page.html`), which pins the parser against production markup
-- `tests/test_method_live.py`: live contracts, run with `METHOD_LIVE_TESTS=1 pytest -q -m live tests/test_method_live.py`
+- `tests/e2e/test_method.py`: live end-to-end journeys, run with `make test-e2e E2E_ARGS="tests/e2e/test_method.py"`
 
 Design history and the original research notes are in
 [../architecture/history/method.md](../architecture/history/method.md).

@@ -11,6 +11,7 @@ import pytest
 import typer
 from curseforge_cli.main import app
 from typer.testing import CliRunner
+from warcraft_core.envelope import ENVELOPE_KEYS, REQUIRED_KEYS
 
 runner = CliRunner()
 
@@ -111,6 +112,7 @@ def test_missing_api_key_error(monkeypatch: pytest.MonkeyPatch) -> None:
     result = runner.invoke(app, ["addon", "deadly-boss-mods"])
     assert result.exit_code == 3
     payload = json.loads(result.stderr)
+    assert set(payload) == ENVELOPE_KEYS
     assert payload["ok"] is False
     assert payload["error"]["code"] == "missing_api_key"
 
@@ -362,11 +364,12 @@ def test_coming_soon_commands_emit_structured_stub(command: str) -> None:
     result = runner.invoke(app, [command, "dbm"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
+    assert set(payload) == REQUIRED_KEYS
     assert payload["ok"] is True
     assert payload["provider"] == "curseforge"
     assert payload["command"] == command
     assert payload["kind"] == "coming_soon"
-    assert payload["coming_soon"] is True
+    assert payload["data"]["coming_soon"] is True
 
 
 def test_numeric_id_missing_gameid_is_invalid_response(monkeypatch: pytest.MonkeyPatch) -> None:

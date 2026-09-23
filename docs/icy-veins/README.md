@@ -34,7 +34,7 @@ Per-command flags:
 
 `--kind` accepts `sections`, `navigation`, `linked_entities`, `build_references`, and
 `analysis_surfaces`; all five are searched when the flag is omitted. Anything else fails with
-`invalid_query_kind` (exit 1).
+`invalid_argument` (exit 2).
 
 ## Examples
 
@@ -49,18 +49,19 @@ icy-veins guide-query ./tmp/mw-monk "stat priority" --kind analysis_surfaces
 ## Output
 
 Every command emits the shared envelope (`ok`, `provider`, `command`, `kind`, `schema_version`,
-`query`, `provenance`, `data`, and `error` on failure). The historical top-level payload keys are
-still emitted alongside the envelope as deprecated legacy copies, so `payload["results"]` and
-`payload["data"]["results"]` hold the same value.
+`query`, `provenance`, `data`, and `error` on failure) and no other top-level key; the payload is in
+`data`.
 
 Exit codes follow `docs/foundation/ERROR_CONTRACT.md`: 1 generic, 2 usage, 4 guide not found,
 5 network/upstream failure. A page whose article container no longer matches (an Icy Veins layout
 change) fails with `parse_failed` and exit 1 rather than returning an empty article with `ok:true`.
 
 `guide-query` answers a bad bundle path the same way `method guide-query` does: a path that does
-not exist is `not_found` (exit 4), a file is a usage error (exit 2), and a directory that is not an
-article bundle (no readable `manifest.json` or no `pages.jsonl`, such as a `wowhead guide-export`
-bundle) is `invalid_bundle` (exit 1).
+not exist is `not_found` (exit 4), a file is a usage error (exit 2), and a directory that is not a
+readable bundle is `invalid_bundle` (exit 1): no `manifest.json`, a manifest whose `files` lists no
+content file (`pages.jsonl`, `sections.jsonl`, `analysis-surfaces.jsonl`, ...), or a listed file that
+is missing or corrupt. A `wowhead guide-export` bundle is readable; it has sections, navigation,
+linked entities and analysis surfaces, but no pages or build references.
 
 ### Build references
 
@@ -78,15 +79,11 @@ them differently:
 
 - `wowhead_talent_calc_url` always decodes unaided: its URL path names the class and spec.
 - `wow_talent_export` names neither, so `build_identity` stays unknown on the row and SimC has to
-  identify the string itself. It only probes the specs the checkout ships an APL for, which today
-  covers the damage and tank specs but no healer spec.
+  identify the string itself. It probes every spec in SimC's specialization data, healers included.
 
-So `simc decode-build --talents <build_code>` returns `ok:true` for an Icy Veins damage or tank
-build (verified against the Fury Warrior talents page: the probe returns `warrior`/`fury` with
-`confidence: high`), and fails with `invalid_query` for a healer build until you name the spec
-yourself: `simc decode-build --talents <build_code> --actor-class monk --spec mistweaver`.
-`warcraft guide-builds-simc --decode` passes no class or spec, so its
-`summary.decode_success_count` stays 0 for healer guides.
+So `simc decode-build --talents <build_code>` returns `ok:true` for an Icy Veins build of any role
+without `--actor-class` or `--spec` (verified against the Fury Warrior talents page: the probe returns
+`warrior`/`fury` with `confidence: high`).
 
 The Icy Veins builds/talents pages publish import strings rather than talent-calc links, so in
 practice the rows you get back are `wow_talent_export`.
@@ -153,7 +150,7 @@ separately.
 - `tests/test_icy_veins_cli.py` - parsing, ranking, command contracts, transport error envelopes
 - `tests/test_icy_veins_recorded_fixtures.py` - captured real pages (pre-redesign and Astro layouts)
   plus the slug-to-family classification table
-- `tests/test_icy_veins_live.py` - live coverage, run with `ICY_VEINS_LIVE_TESTS=1 pytest -m live`
+- `tests/e2e/test_icy_veins.py` - live end-to-end journeys, run with `make test-e2e E2E_ARGS="tests/e2e/test_icy_veins.py"`
 
 ## Not in scope
 

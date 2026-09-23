@@ -8,9 +8,9 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
-from warcraft_core.envelope import ENVELOPE_KEYS, Envelope, success_envelope, with_legacy_keys
+from warcraft_core.envelope import ENVELOPE_KEYS, Envelope, success_envelope
 from warcraft_core.provider import ProviderSurface
 
 from simc_cli.repo import RepoPaths, discover_repo, resolve_repo_root, validate_build, validate_repo
@@ -98,23 +98,21 @@ COMING_SOON_MESSAGE = (
 
 
 def simc_envelope(command: str, payload: Mapping[str, Any]) -> Envelope:
-    """Wrap a flat simc payload in the shared envelope, keeping the deprecated flat keys at the top level."""
-    legacy = {key: value for key, value in payload.items() if key not in ENVELOPE_KEYS}
-    data = dict(legacy)
+    """Wrap a flat simc payload in the shared envelope; every non-envelope key goes under ``data``."""
+    data = {key: value for key, value in payload.items() if key not in ENVELOPE_KEYS}
     executed = payload.get("command")
     if isinstance(executed, list):
         # The envelope's top-level ``command`` is the subcommand name; the executed SimC/git argv
         # stays at ``data.command`` so a run remains reproducible.
         data["command"] = executed
     kind = payload.get("kind")
-    envelope = success_envelope(
+    return success_envelope(
         provider=PROVIDER_NAME,
         command=command,
         kind=kind if isinstance(kind, str) else command.replace("-", "_"),
         data=data,
         query=payload.get("query"),
     )
-    return cast(Envelope, with_legacy_keys(envelope, legacy))
 
 
 def repo_payload(paths: RepoPaths) -> dict[str, Any]:
@@ -152,7 +150,6 @@ def repo_payload(paths: RepoPaths) -> dict[str, Any]:
 def coming_soon_payload(*, query: str, suggested_command: str) -> dict[str, Any]:
     """Structured stub for the discovery surfaces simc does not implement yet."""
     return {
-        "provider": PROVIDER_NAME,
         "query": query,
         "search_query": query,
         "count": 0,
@@ -200,7 +197,6 @@ def doctor(*, repo_root: str | Path | None = None, **options: Any) -> Envelope:
     unavailable = (set() if has_ripgrep else set(RIPGREP_COMMANDS)) | (set() if build_ready else set(BINARY_COMMANDS))
     capabilities = {name: "unavailable" if name in unavailable else state for name, state in CAPABILITIES.items()}
     payload = {
-        "provider": PROVIDER_NAME,
         "status": "ready" if repo["repo_ready"] and build_ready and has_ripgrep else "degraded",
         "command": "doctor",
         "installed": True,

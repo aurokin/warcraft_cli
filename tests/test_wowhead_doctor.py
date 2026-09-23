@@ -16,10 +16,10 @@ def test_wowhead_doctor_no_live_reports_cache_and_skipped_probes(monkeypatch) ->
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["provider"] == "wowhead"
-    assert payload["status"] == "ready"
-    assert payload["expansion"] == "retail"
-    assert payload["endpoints"]["search_suggestions"]["skipped"] is True
-    assert payload["cache"]["enabled"] is False
+    assert payload["data"]["status"] == "ready"
+    assert payload["data"]["expansion"] == "retail"
+    assert payload["data"]["endpoints"]["search_suggestions"]["skipped"] is True
+    assert payload["data"]["cache"]["enabled"] is False
 
 
 HEALTHY_ENTITY_HTML = """

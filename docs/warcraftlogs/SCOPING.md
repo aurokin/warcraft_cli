@@ -58,7 +58,8 @@ Sampled analytics commands such as `boss-kills`, `top-kills`, `spec-kill-samples
 `spec-kill-samples` requires `--spec-name` (alongside boss scope): it returns the participant filter as an explicit, labeled cohort (`cohort: spec_filtered_participant_kill_cohort`) rather than as an optional refinement of `boss-kills`.
 
 One real pull that two raiders both uploaded is collapsed into a single sampled kill (same
-encounter, difficulty, raid size and guild, with wall-clock start and end within 5 s).
+encounter, difficulty, raid size and guild, with wall-clock start and end within 5 s of another
+upload of that pull).
 `sample.duplicates_removed` counts the collapse and the kept kill's `duplicate_reports` cites the
 folded-in report codes and fight ids.
 
@@ -87,7 +88,7 @@ cat ./query.graphql | warcraftlogs graphql --query - --var code=7Rc3HPCWGYy1z4tT
 - `--query '<operation text>'`: literal GraphQL
 - `--query @path/to/query.graphql`: read a file
 - `--query -`: read stdin
-- `--introspect`: run the built-in introspection query and return `introspection`
+- `--introspect`: run the built-in introspection query and return its result (`data.__schema`)
 
 ### Variables
 

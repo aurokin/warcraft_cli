@@ -409,7 +409,7 @@ def test_icy_veins_search_command_uses_sitemap_guides(monkeypatch) -> None:
     assert payload["count"] == 3
     assert payload["results"][0]["id"] == "mistweaver-monk-pve-healing-guide"
     assert payload["results"][0]["metadata"]["content_family"] == "spec_guide"
-    assert payload["results"][0]["follow_up"]["recommended_command"] == "icy-veins guide mistweaver-monk-pve-healing-guide"
+    assert payload["results"][0]["follow_up"]["command"] == "icy-veins guide mistweaver-monk-pve-healing-guide"
 
 
 def test_icy_veins_search_command_boosts_broad_hubs_for_broad_queries(monkeypatch) -> None:
@@ -428,6 +428,21 @@ def test_icy_veins_search_command_boosts_broad_hubs_for_broad_queries(monkeypatc
     payload = json.loads(result.stdout)["data"]
     assert payload["results"][0]["id"] == "monk-guide"
     assert "family_class_hub" in payload["results"][0]["ranking"]["match_reasons"]
+
+
+def test_icy_veins_search_returns_nothing_for_a_query_no_guide_mentions(monkeypatch) -> None:
+    """A one-word query used to boost every class hub it did not name (`search aurow` listed Druid Guide, ...)."""
+    hubs = [
+        {"slug": f"{name}-guide", "name": f"{name.title()} Guide", "url": f"https://www.icy-veins.com/wow/{name}-guide",
+         "content_family": "class_hub"}
+        for name in ("druid", "evoker", "monk")
+    ]
+    monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.sitemap_guides", lambda self: parse_sitemap_guides(SITEMAP_XML) + hubs)
+    result = runner.invoke(app, ["search", "aurow"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)["data"]
+    assert (payload["count"], payload["results"]) == (0, [])
 
 
 def test_icy_veins_resolve_command_returns_best_guide(monkeypatch) -> None:
@@ -507,13 +522,13 @@ def test_icy_veins_resolve_search_payload_uses_confidence_helper() -> None:
                 "id": "fury-warrior-pve-dps-easy-mode",
                 "name": "Fury Warrior PvE DPS Easy Mode",
                 "ranking": {"score": 35, "match_reasons": ["family_easy_mode"]},
-                "follow_up": {"recommended_command": "icy-veins guide fury-warrior-pve-dps-easy-mode"},
+                "follow_up": {"command": "icy-veins guide fury-warrior-pve-dps-easy-mode"},
             },
             {
                 "id": "warrior-guide",
                 "name": "Warrior Guide",
                 "ranking": {"score": 24, "match_reasons": []},
-                "follow_up": {"recommended_command": "icy-veins guide warrior-guide"},
+                "follow_up": {"command": "icy-veins guide warrior-guide"},
             },
         ],
         total_count=2,
@@ -711,8 +726,6 @@ def test_icy_veins_search_payload_is_a_conforming_envelope(monkeypatch) -> None:
     assert envelope_violations(payload) == []
     assert payload["kind"] == "search_results"
     assert payload["command"] == "search"
-    # Legacy top-level keys stay alongside the envelope so existing agents keep working.
-    assert payload["results"] == payload["data"]["results"]
 
 
 NEWS_LINK_HTML = """

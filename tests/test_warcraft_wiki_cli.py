@@ -8,7 +8,7 @@ from typing import Any
 import httpx
 import pytest
 from typer.testing import CliRunner
-from warcraft_core.envelope import envelope_violations
+from warcraft_core.envelope import ENVELOPE_KEYS, REQUIRED_KEYS, envelope_violations
 from warcraft_core.provider import ProviderError
 from warcraft_wiki_cli.client import WarcraftWikiAPIError, WarcraftWikiClient
 from warcraft_wiki_cli.main import app as warcraft_wiki_app
@@ -208,10 +208,10 @@ def test_warcraft_wiki_doctor_reports_ready_capabilities() -> None:
 
     payload = json.loads(result.stdout)
     assert payload["provider"] == "warcraft-wiki"
-    assert payload["capabilities"]["search"] == "ready"
-    assert payload["capabilities"]["api"] == "ready"
-    assert payload["capabilities"]["event"] == "ready"
-    assert payload["capabilities"]["article_query"] == "ready"
+    assert payload["data"]["capabilities"]["search"] == "ready"
+    assert payload["data"]["capabilities"]["api"] == "ready"
+    assert payload["data"]["capabilities"]["event"] == "ready"
+    assert payload["data"]["capabilities"]["article_query"] == "ready"
 
 
 def test_warcraft_wiki_search_and_resolve(monkeypatch) -> None:
@@ -859,9 +859,9 @@ def test_warcraft_wiki_api_command_supports_framework_pages(monkeypatch) -> None
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["article"]["title"] == "World of Warcraft API"
-    assert payload["article"]["content_family"] == "framework_page"
-    assert payload["resolved_surface"] == "api"
+    assert payload["data"]["article"]["title"] == "World of Warcraft API"
+    assert payload["data"]["article"]["content_family"] == "framework_page"
+    assert payload["data"]["resolved_surface"] == "api"
 
 
 def test_warcraft_wiki_article_query(monkeypatch, tmp_path) -> None:
@@ -873,8 +873,8 @@ def test_warcraft_wiki_article_query(monkeypatch, tmp_path) -> None:
     query_result = runner.invoke(warcraft_wiki_app, ["article-query", str(export_dir), "framexml"])
     assert query_result.exit_code == 0
     payload = json.loads(query_result.stdout)
-    assert payload["article"]["title"] == "World of Warcraft API"
-    assert payload["match_counts"]["sections"] >= 1
+    assert payload["data"]["article"]["title"] == "World of Warcraft API"
+    assert payload["data"]["match_counts"]["sections"] >= 1
 
 
 def test_warcraft_wiki_search_prefers_api_page_for_function_query(monkeypatch) -> None:
@@ -897,9 +897,9 @@ def test_warcraft_wiki_search_prefers_api_page_for_function_query(monkeypatch) -
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["resolved"] is True
-    assert payload["match"]["id"] == "API CreateFrame"
-    assert payload["next_command"] == "warcraft-wiki article 'API CreateFrame'"
+    assert payload["data"]["resolved"] is True
+    assert payload["data"]["match"]["id"] == "API CreateFrame"
+    assert payload["data"]["next_command"] == "warcraft-wiki article 'API CreateFrame'"
 
 
 def test_warcraft_wiki_search_prefers_api_changes_page_for_patch_query(monkeypatch) -> None:
@@ -921,9 +921,9 @@ def test_warcraft_wiki_search_prefers_api_changes_page_for_patch_query(monkeypat
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["resolved"] is True
-    assert payload["match"]["id"] == "Patch 2.1.0/API changes"
-    assert payload["match"]["metadata"]["content_family"] == "api_changes"
+    assert payload["data"]["resolved"] is True
+    assert payload["data"]["match"]["id"] == "Patch 2.1.0/API changes"
+    assert payload["data"]["match"]["metadata"]["content_family"] == "api_changes"
 
 
 def test_warcraft_wiki_search_prefers_handler_page_for_handler_query(monkeypatch) -> None:
@@ -946,9 +946,9 @@ def test_warcraft_wiki_search_prefers_handler_page_for_handler_query(monkeypatch
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["resolved"] is True
-    assert payload["match"]["id"] == "UIHANDLER OnKeyDown"
-    assert payload["match"]["metadata"]["content_family"] == "ui_handler"
+    assert payload["data"]["resolved"] is True
+    assert payload["data"]["match"]["id"] == "UIHANDLER OnKeyDown"
+    assert payload["data"]["match"]["metadata"]["content_family"] == "ui_handler"
 
 
 def test_warcraft_wiki_search_prefers_system_reference_for_system_query(monkeypatch) -> None:
@@ -969,8 +969,8 @@ def test_warcraft_wiki_search_prefers_system_reference_for_system_query(monkeypa
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["results"][0]["id"] == "Renown"
-    assert payload["results"][0]["metadata"]["content_family"] == "system_reference"
+    assert payload["data"]["results"][0]["id"] == "Renown"
+    assert payload["data"]["results"][0]["metadata"]["content_family"] == "system_reference"
 
 
 def test_warcraft_wiki_search_excludes_family_hint_terms(monkeypatch) -> None:
@@ -989,10 +989,10 @@ def test_warcraft_wiki_search_excludes_family_hint_terms(monkeypatch) -> None:
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["search_query"] == "argent dawn"
-    assert payload["excluded_terms"] == ["faction"]
-    assert payload["normalization_hint"] == "excluded_family_hint_terms"
-    assert payload["results"][0]["id"] == "Argent Dawn"
+    assert payload["data"]["search_query"] == "argent dawn"
+    assert payload["data"]["excluded_terms"] == ["faction"]
+    assert payload["data"]["normalization_hint"] == "excluded_family_hint_terms"
+    assert payload["data"]["results"][0]["id"] == "Argent Dawn"
 
 
 def test_warcraft_wiki_search_keeps_trailing_guide_term(monkeypatch) -> None:
@@ -1015,8 +1015,8 @@ def test_warcraft_wiki_search_keeps_trailing_guide_term(monkeypatch) -> None:
 
     payload = json.loads(result.stdout)
     assert seen_queries == ["mistweaver monk guide"]
-    assert payload["search_query"] == "mistweaver monk guide"
-    assert "excluded_terms" not in payload
+    assert payload["data"]["search_query"] == "mistweaver monk guide"
+    assert "excluded_terms" not in payload["data"]
 
 
 def test_warcraft_wiki_resolve_prefers_lore_result_after_hint_cleanup(monkeypatch) -> None:
@@ -1037,10 +1037,10 @@ def test_warcraft_wiki_resolve_prefers_lore_result_after_hint_cleanup(monkeypatc
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["search_query"] == "jaina proudmoore"
-    assert payload["excluded_terms"] == ["lore"]
-    assert payload["resolved"] is True
-    assert payload["match"]["id"] == "Jaina Proudmoore"
+    assert payload["data"]["search_query"] == "jaina proudmoore"
+    assert payload["data"]["excluded_terms"] == ["lore"]
+    assert payload["data"]["resolved"] is True
+    assert payload["data"]["match"]["id"] == "Jaina Proudmoore"
 
 
 def test_warcraft_wiki_search_prefers_programming_howto_for_addon_query(monkeypatch) -> None:
@@ -1062,9 +1062,9 @@ def test_warcraft_wiki_search_prefers_programming_howto_for_addon_query(monkeypa
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["resolved"] is True
-    assert payload["match"]["id"] == "Create a WoW AddOn in 15 Minutes"
-    assert payload["match"]["metadata"]["content_family"] == "howto_programming"
+    assert payload["data"]["resolved"] is True
+    assert payload["data"]["match"]["id"] == "Create a WoW AddOn in 15 Minutes"
+    assert payload["data"]["match"]["metadata"]["content_family"] == "howto_programming"
 
 
 def test_warcraft_wiki_search_prefers_specific_programming_guide_title(monkeypatch) -> None:
@@ -1085,11 +1085,11 @@ def test_warcraft_wiki_search_prefers_specific_programming_guide_title(monkeypat
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["search_query"] == "interface customization"
-    assert payload["excluded_terms"] == ["guide"]
-    assert payload["resolved"] is True
-    assert payload["match"]["id"] == "User interface customization guide"
-    assert payload["match"]["metadata"]["content_family"] == "howto_programming"
+    assert payload["data"]["search_query"] == "interface customization"
+    assert payload["data"]["excluded_terms"] == ["guide"]
+    assert payload["data"]["resolved"] is True
+    assert payload["data"]["match"]["id"] == "User interface customization guide"
+    assert payload["data"]["match"]["metadata"]["content_family"] == "howto_programming"
 
 
 def _connect_error(*_args, **_kwargs):
@@ -1118,6 +1118,7 @@ def test_warcraft_wiki_transport_failure_returns_error_envelope(monkeypatch, arg
     assert result.exit_code == 5
     assert result.stdout == ""
     payload = json.loads(result.stderr)
+    assert set(payload) == ENVELOPE_KEYS
     assert payload["ok"] is False
     assert payload["provider"] == "warcraft-wiki"
     assert payload["schema_version"] == "1"
@@ -1139,12 +1140,21 @@ def test_warcraft_wiki_missing_article_exits_not_found(monkeypatch) -> None:
     assert payload["error"]["message"] == "The page you specified doesn't exist."
 
 
-def test_warcraft_wiki_article_query_rejects_missing_bundle(tmp_path) -> None:
+def test_warcraft_wiki_article_query_missing_bundle_is_not_found(tmp_path) -> None:
+    # Same answer as icy-veins and method: the shared bundle loader owns this check.
     result = runner.invoke(warcraft_wiki_app, ["article-query", str(tmp_path / "absent"), "framexml"])
 
-    assert result.exit_code == 1
+    assert result.exit_code == 4
     payload = json.loads(result.stderr)
-    assert payload["error"]["code"] == "invalid_bundle"
+    assert payload["error"]["code"] == "not_found"
+
+
+def test_warcraft_wiki_article_query_unsupported_kind_is_a_usage_error(tmp_path) -> None:
+    result = runner.invoke(warcraft_wiki_app, ["article-query", str(tmp_path), "framexml", "--kind", "pages"])
+
+    assert result.exit_code == 2
+    payload = json.loads(result.stderr)
+    assert payload["error"]["code"] == "invalid_argument"
 
 
 @pytest.mark.parametrize(
@@ -1179,5 +1189,6 @@ def test_warcraft_wiki_payloads_conform_to_envelope(monkeypatch, args) -> None:
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert envelope_violations(payload) == []
+    assert set(payload) == REQUIRED_KEYS
     assert payload["provider"] == "warcraft-wiki"
     assert payload["schema_version"] == "1"

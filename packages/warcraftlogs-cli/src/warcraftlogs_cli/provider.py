@@ -35,7 +35,7 @@ def site_profile(options: dict[str, Any]) -> WarcraftLogsSiteProfile:
 
 
 def payload_body(payload: dict[str, Any]) -> dict[str, Any]:
-    """The part of a legacy flat payload that belongs under the envelope's ``data``."""
+    """A command's flat payload minus the envelope keys: what goes under the envelope's ``data``."""
     return {key: value for key, value in payload.items() if key not in ENVELOPE_KEYS}
 
 

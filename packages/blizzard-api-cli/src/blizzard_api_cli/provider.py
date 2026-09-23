@@ -9,11 +9,11 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any
 
 import httpx
 from warcraft_core.auth import provider_auth_status
-from warcraft_core.envelope import Envelope, success_envelope, with_legacy_keys
+from warcraft_core.envelope import Envelope, success_envelope
 from warcraft_core.exit_codes import EXIT_AUTH, EXIT_USAGE
 from warcraft_core.paths import provider_state_path
 from warcraft_core.provider import ProviderError, ProviderSurface
@@ -71,13 +71,6 @@ def provider_error(exc: BlizzardClientError | httpx.HTTPError) -> ProviderError:
     return ProviderError("network_error", f"Blizzard API request failed: {exc}.")
 
 
-def _dual_emit(command: str, kind: str, query: Any, payload: dict[str, Any]) -> Envelope:
-    # Envelope whose data is `payload`, with payload's keys repeated at the top level. The top-level
-    # copies are the pre-envelope shape agents already read and are deprecated; see ERROR_CONTRACT.md.
-    envelope = success_envelope(provider=PROVIDER_NAME, command=command, kind=kind, query=query, data=payload)
-    return cast(Envelope, with_legacy_keys(envelope, payload))
-
-
 def _auth_payload(auth: BlizzardAuthConfig) -> dict[str, Any]:
     state = provider_auth_status(PROVIDER_NAME)
     return {
@@ -120,11 +113,11 @@ def _region_payload(auth: BlizzardAuthConfig) -> dict[str, Any]:
 def doctor_envelope() -> Envelope:
     """Install state, auth posture, region routing, and capability metadata for this provider."""
     auth = load_blizzard_auth_config()
-    return _dual_emit(
-        "doctor",
-        "doctor",
-        None,
-        {
+    return success_envelope(
+        provider=PROVIDER_NAME,
+        command="doctor",
+        kind="doctor",
+        data={
             "status": "partial",
             "tier": TIER,
             "installed": True,
@@ -154,11 +147,12 @@ def coming_soon_envelope(command: str, query: str) -> Envelope:
     """Structured stub for the surfaces doctor advertises as coming_soon (search, resolve)."""
     # A caller probing the advertised surface gets a JSON envelope with an explicit coming_soon flag
     # instead of Click's generic "No such command" error.
-    return _dual_emit(
-        command,
-        "coming_soon",
-        query,
-        {
+    return success_envelope(
+        provider=PROVIDER_NAME,
+        command=command,
+        kind="coming_soon",
+        query=query,
+        data={
             "coming_soon": True,
             "results": [],
             "resolved": False,

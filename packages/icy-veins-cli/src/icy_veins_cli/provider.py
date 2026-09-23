@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import httpx
 from warcraft_content.article_bundle import (
@@ -21,7 +21,7 @@ from warcraft_content.article_bundle import (
 from warcraft_content.article_discovery import merge_article_build_references, merge_article_linked_entities
 from warcraft_content.article_provider_cli import build_article_resolve_response, build_article_search_response
 from warcraft_content.guide_analysis import extract_guide_analysis_surfaces, merge_guide_analysis_surfaces
-from warcraft_core.envelope import ENVELOPE_KEYS, Envelope, success_envelope, with_legacy_keys
+from warcraft_core.envelope import Envelope, success_envelope
 from warcraft_core.provider import ProviderError, ProviderSurface
 
 from icy_veins_cli.client import IcyVeinsClient, guide_ref_parts, load_icy_veins_cache_settings_from_env
@@ -52,18 +52,7 @@ def transport_errors(*, missing_message: str | None = None) -> Iterator[None]:
 
 
 def _envelope(command: str, kind: str, data: dict[str, Any], *, query: Any = None, provenance: dict[str, Any] | None = None) -> Envelope:
-    """Wrap an Icy Veins payload in the shared envelope, keeping the historical top-level keys as legacy copies."""
-    envelope = success_envelope(
-        provider=PROVIDER_NAME,
-        command=command,
-        kind=kind,
-        data=data,
-        query=query,
-        provenance=provenance,
-    )
-    legacy = {key: value for key, value in data.items() if key not in ENVELOPE_KEYS}
-    # with_legacy_keys returns a plain dict because the legacy copies live outside the TypedDict.
-    return cast(Envelope, with_legacy_keys(envelope, legacy))
+    return success_envelope(provider=PROVIDER_NAME, command=command, kind=kind, data=data, query=query, provenance=provenance)
 
 
 @contextmanager
@@ -379,7 +368,7 @@ def guide_query(
     selected_kinds = set(kinds or BUNDLE_QUERY_KINDS)
     invalid = sorted(selected_kinds - set(BUNDLE_QUERY_KINDS))
     if invalid:
-        raise ProviderError("invalid_query_kind", f"Unsupported query kinds: {', '.join(invalid)}")
+        raise ProviderError("invalid_argument", f"Unsupported query kinds: {', '.join(invalid)}")
     result = query_article_bundle(
         load_article_bundle(bundle.expanduser()),
         query=query,

@@ -906,7 +906,7 @@ def test_identify_build_probes_healer_specs_that_ship_no_apl(tmp_path: Path) -> 
     def fake_decode(_repo: RepoPaths, build_spec: BuildSpec) -> Any:
         tried.append((build_spec.actor_class, build_spec.spec))
         if build_spec.spec != "holy":
-            raise RuntimeError("Selected node is not available to player's spec")
+            raise SimcBuildError("Selected node is not available to player's spec", output_preview=[], returncode=1)
         return type("Resolution", (), {"enabled_talents": {"holy_shock"}})()
 
     with patch("simc_cli.build_input.decode_build", side_effect=fake_decode):
@@ -937,7 +937,7 @@ def test_identify_build_keeps_the_one_spec_the_build_decodes_as(tmp_path: Path) 
     ):
         mocked_decode.side_effect = [
             type("Resolution", (), {"enabled_talents": {"void_ray"}})(),
-            RuntimeError("failed"),
+            SimcBuildError("failed", output_preview=[], returncode=1),
         ]
         identified, identity = identify_build(repo, build_spec)
 
@@ -966,7 +966,7 @@ def test_identify_build_probes_simc_split_talent_packets_instead_of_trusting_pac
     ):
         mocked_decode.side_effect = [
             type("Resolution", (), {"enabled_talents": {"stellar_flare"}})(),
-            RuntimeError("failed"),
+            SimcBuildError("failed", output_preview=[], returncode=1),
         ]
         identified, identity = identify_build(repo, build_spec)
 
@@ -983,7 +983,7 @@ def test_identify_build_returns_none_when_probe_finds_no_matches(tmp_path: Path)
 
     with (
         patch("simc_cli.build_input.specialization_ids", return_value={("demonhunter", "devourer"): 1480, ("monk", "mistweaver"): 270}),
-        patch("simc_cli.build_input.decode_build", side_effect=RuntimeError("failed")),
+        patch("simc_cli.build_input.decode_build", side_effect=SimcBuildError("failed", output_preview=[], returncode=1)),
     ):
         identified, identity = identify_build(repo, build_spec)
 
@@ -1027,7 +1027,7 @@ def test_identify_build_does_not_echo_unverified_packet_identity_when_probe_fail
 
     with (
         patch("simc_cli.build_input.specialization_ids", return_value={("druid", "balance"): 102, ("priest", "shadow"): 258}),
-        patch("simc_cli.build_input.decode_build", side_effect=RuntimeError("failed")),
+        patch("simc_cli.build_input.decode_build", side_effect=SimcBuildError("failed", output_preview=[], returncode=1)),
     ):
         identified, identity = identify_build(repo, build_spec)
 

@@ -1,4 +1,4 @@
-"""Required top-level keys for Wowhead CLI JSON contracts."""
+"""Required `data` keys for Wowhead CLI JSON contracts."""
 
 from __future__ import annotations
 

@@ -492,19 +492,20 @@ def _stream_rows(payload: dict[str, Any]) -> tuple[str, list[Any]] | None:
 
 
 def _emit_jsonl(ctx: typer.Context, payload: dict[str, Any], *, err: bool = False) -> None:
-    """Write an already-shaped payload as JSONL: a header line, then one ``{"record": ...}`` line per row."""
-    spec = _stream_rows(payload)
-    if spec is None:
+    """Write an already-shaped envelope as JSONL: a header line, then one ``{"record": ...}`` line per row.
+
+    The header is the envelope with the streamed collection emptied and ``data.stream`` naming it.
+    """
+    data = payload.get("data")
+    spec = _stream_rows(data) if isinstance(data, dict) else None
+    if not isinstance(data, dict) or spec is None:
         emit_json(payload, pretty=_cfg(ctx).output.pretty, err=err)
         return
 
     field, rows = spec
-    header = _without_stream_rows(dict(payload), field)
-    data = header.get("data")
-    if isinstance(data, dict):
-        # ``data`` mirrors the flat payload, so the streamed rows must be cleared there as well.
-        header["data"] = _without_stream_rows(dict(data), field)
-    header["stream"] = {"field": field, "count": len(rows)}
+    header_data = _without_stream_rows(dict(data), field)
+    header_data["stream"] = {"field": field, "count": len(rows)}
+    header = {**payload, "data": header_data}
     typer.echo(to_json(header, pretty=False), err=err)
     for row in rows:
         typer.echo(to_json({"record": row}, pretty=False), err=err)
@@ -535,14 +536,12 @@ def _attach_citation_pack(payload: dict[str, Any], *, enabled: bool) -> dict[str
 
 
 def _with_envelope_keys(ctx: typer.Context, payload: dict[str, Any]) -> dict[str, Any]:
-    """Add the shared envelope keys a payload is missing, leaving its existing top-level keys in place.
+    """Wrap a command payload in the shared envelope (docs/foundation/ERROR_CONTRACT.md).
 
-    Wowhead payloads are flat by history; ``data`` carries the same keys so agents can read the
-    envelope slot everywhere, and the top-level copies stay for older agents (deprecated). See
-    docs/foundation/ERROR_CONTRACT.md.
-
-    ``schema_version`` is always the envelope's: entity responses cached before the envelope carried
-    the normalization version there, and legacy keys may not shadow envelope keys.
+    Command bodies build flat payloads: their envelope-named keys (``query``, ``kind``) fill the
+    envelope and everything else moves under ``data``. A provider-surface envelope passes through.
+    ``schema_version`` is always the envelope's: cached entity responses carry the normalization
+    version under that name.
     """
     command = ctx.command.name or ""
     defaults: dict[str, Any] = {
@@ -550,12 +549,12 @@ def _with_envelope_keys(ctx: typer.Context, payload: dict[str, Any]) -> dict[str
         "provider": PROVIDER_NAME,
         "command": command,
         "kind": command.replace("-", "_"),
-        "schema_version": SCHEMA_VERSION,
         "query": None,
         "provenance": {},
         "data": {key: value for key, value in payload.items() if key not in ENVELOPE_KEYS},
     }
-    return {**defaults, **payload, "schema_version": SCHEMA_VERSION}
+    envelope_keys = {key: value for key, value in payload.items() if key in ENVELOPE_KEYS}
+    return {**defaults, **envelope_keys, "schema_version": SCHEMA_VERSION}
 
 
 def _emit(ctx: typer.Context, payload: dict[str, Any], *, err: bool = False) -> None:

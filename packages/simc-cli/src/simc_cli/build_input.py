@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import re
 import subprocess
@@ -120,6 +121,10 @@ class BuildResolution:
     # Hero talents the hash granted for a hero tree the build did not select. SimC disables them,
     # so they are reported separately instead of counting as part of the build.
     inactive_hero_talents: list[DecodedTalent] = field(default_factory=list)
+
+
+class SimcNotReadyError(FileNotFoundError):
+    """The checkout lacks something a build command needs: the built binary or SimC's generated data."""
 
 
 class SimcBuildError(RuntimeError):
@@ -315,6 +320,8 @@ class BuildIdentity:
     candidate_count: int
     candidates: list[tuple[str, str]] = field(default_factory=list)
     source_notes: list[str] = field(default_factory=list)
+    # The specs an unresolved probe decoded the build as, e.g. "the 3 deathknight specs".
+    probe_scope: str | None = None
 
 
 def infer_actor_and_spec_from_apl(apl_path: str | Path) -> tuple[str | None, str | None]:
@@ -796,23 +803,26 @@ def _direct_build_identity(build_spec: BuildSpec) -> tuple[BuildSpec, BuildIdent
     )
 
 
-def _probe_build_matches(
-    repo: RepoPaths,
-    build_spec: BuildSpec,
-    *,
-    unverified_packet_transport: bool,
-    trusted_identity_hint: bool,
-) -> list[tuple[str, str]]:
-    # Every spec SimC's generated data knows, healers included: they ship no APL, so a candidate list
-    # drawn from APL files could never identify a healer build.
-    candidate_specs = sorted(specialization_ids(repo.root))
-    if build_spec.actor_class and (not unverified_packet_transport or trusted_identity_hint):
-        candidate_specs = [item for item in candidate_specs if item[0] == build_spec.actor_class]
-    if build_spec.spec and (not unverified_packet_transport or trusted_identity_hint):
-        candidate_specs = [item for item in candidate_specs if item[1] == build_spec.spec]
+def _probe_candidates(repo: RepoPaths, build_spec: BuildSpec, *, narrow: bool) -> tuple[list[tuple[str, str]], str]:
+    """The specs to decode the build as, and a phrase naming them for an unidentified-build message.
 
+    Every spec SimC's generated data knows, healers included: they ship no APL, so a candidate list
+    drawn from APL files could never identify a healer build. A trusted class or spec hint narrows it.
+    """
+    known = specialization_ids(repo.root)
+    if not known:
+        raise SimcNotReadyError("SimC specialization data (engine/dbc/generated/sc_specialization_data.inc) not found.")
+    actor_class = build_spec.actor_class if narrow else None
+    spec = build_spec.spec if narrow else None
+    candidates = sorted(item for item in known if actor_class in (None, item[0]) and spec in (None, item[1]))
+    hint = " ".join(value for value in (actor_class, spec) if value)
+    noun = "spec" if len(candidates) == 1 else "specs"
+    return candidates, f"the {len(candidates)} {hint} {noun}" if hint else f"the {len(candidates)} {noun} SimulationCraft knows"
+
+
+def _probe_build_matches(repo: RepoPaths, build_spec: BuildSpec, candidates: list[tuple[str, str]]) -> list[tuple[str, str]]:
     matches: list[tuple[str, str]] = []
-    for actor_class, spec in candidate_specs:
+    for actor_class, spec in candidates:
         probe_spec = BuildSpec(
             actor_class=actor_class,
             spec=spec,
@@ -823,12 +833,10 @@ def _probe_build_matches(
             source_kind=build_spec.source_kind,
             source_notes=build_spec.source_notes[:],
         )
-        try:
-            resolution = decode_build(repo, probe_spec)
-        except (FileNotFoundError, RuntimeError, ValueError):
-            continue
-        if resolution.enabled_talents:
-            matches.append((actor_class, spec))
+        # Only SimC rejecting the talents rules a spec out; a missing binary or trait data propagates.
+        with contextlib.suppress(SimcBuildError):
+            if decode_build(repo, probe_spec).enabled_talents:
+                matches.append((actor_class, spec))
     return matches
 
 
@@ -853,12 +861,10 @@ def identify_build(repo: RepoPaths, build_spec: BuildSpec) -> tuple[BuildSpec, B
             ),
         )
 
-    matches = _probe_build_matches(
-        repo,
-        build_spec,
-        unverified_packet_transport=unverified_packet_transport,
-        trusted_identity_hint=trusted_identity_hint,
+    candidates, probe_scope = _probe_candidates(
+        repo, build_spec, narrow=not unverified_packet_transport or trusted_identity_hint
     )
+    matches = _probe_build_matches(repo, build_spec, candidates)
 
     if len(matches) == 1:
         actor_class, spec = matches[0]
@@ -900,17 +906,20 @@ def identify_build(repo: RepoPaths, build_spec: BuildSpec) -> tuple[BuildSpec, B
             candidate_count=len(matches),
             candidates=matches,
             source_notes=build_spec.source_notes[:],
+            probe_scope=probe_scope,
         ),
     )
 
 
+# No ``allow_experimental_specializations``: it makes SimC build a healer's stale default APL, which
+# fails on actions such as Holy Priest's divine_star and rejects a valid build. Decoding and encoding
+# never simulate, so an unsupported healer only needs to reach talent parsing (see encode_build).
 SIMC_BUILD_ARGS = (
     "iterations=1",
     "max_time=1",
     "vary_combat_length=0",
     "desired_targets=1",
     "fight_style=Patchwerk",
-    "allow_experimental_specializations=1",
 )
 
 
@@ -1018,7 +1027,7 @@ def decode_build(repo: RepoPaths, build_spec: BuildSpec) -> BuildResolution:
             source_notes=build_spec.source_notes[:],
         )
     if not repo.build_simc.exists():
-        raise FileNotFoundError(f"SimC binary not found: {repo.build_simc}")
+        raise SimcNotReadyError(f"SimC binary not found: {repo.build_simc}")
 
     profile_text = build_profile_text(build_spec)
     run = _run_simc(repo, profile_text, extra_args=("debug=1",))
@@ -1131,11 +1140,13 @@ def encode_build(repo: RepoPaths, build_spec: BuildSpec) -> str:
     if not build_spec.actor_class or not build_spec.spec:
         raise ValueError("Need both actor class and spec to encode talents.")
     if not repo.build_simc.exists():
-        raise FileNotFoundError(f"SimC binary not found: {repo.build_simc}")
+        raise SimcNotReadyError(f"SimC binary not found: {repo.build_simc}")
 
-    # SimC drops a gearless actor before it reaches the profile-generation step, so the save file
-    # would never be written. Default gear keeps the player active; talents are unaffected.
-    run = _run_simc(repo, build_profile_text(build_spec) + "load_default_gear=1\n", extra_args=(), save=True)
+    # A gearless melee actor fails SimC's weapon check, so default gear is loaded; talents are unaffected.
+    # SimC also silences every actor its class module refuses to simulate (Mistweaver Monk and Holy
+    # Paladin always) and then aborts profile generation with "No active players in sim!" unless
+    # ``debug`` is set. Encoding needs no simulation, so debug keeps those specs encodable.
+    run = _run_simc(repo, build_profile_text(build_spec) + "load_default_gear=1\n", extra_args=("debug=1",), save=True)
 
     if run.saved_profile is None:
         errors = simc_build_errors(run.output)

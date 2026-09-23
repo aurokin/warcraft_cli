@@ -8,11 +8,10 @@ addon lookup uses are confirmed against live traffic, so its payloads carry
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any
 
-from warcraft_core.envelope import Envelope, success_envelope, with_legacy_keys
+from warcraft_core.envelope import Envelope, success_envelope
 from warcraft_core.provider import ProviderSurface
 
 from curseforge_cli.auth import (
@@ -25,11 +24,6 @@ from curseforge_cli.auth import (
 from curseforge_cli.client import WOW_GAME_ID, CurseForgeClient, verification_note
 
 TIER = "experimental"
-
-
-def _dual_emit(envelope: Envelope, legacy: Mapping[str, Any]) -> Envelope:
-    """Envelope plus the deprecated top-level copies the wrapper and existing agents still read."""
-    return cast("Envelope", with_legacy_keys(envelope, legacy))
 
 
 def _auth_payload(auth: CurseForgeAuthConfig) -> dict[str, Any]:
@@ -67,7 +61,7 @@ def doctor_envelope() -> Envelope:
             "search/resolve are not implemented yet (report-style addon lookup is the first slice).",
         ],
     }
-    return _dual_emit(success_envelope(provider=PROVIDER_NAME, command="doctor", kind="doctor", data=data), data)
+    return success_envelope(provider=PROVIDER_NAME, command="doctor", kind="doctor", data=data)
 
 
 def coming_soon_envelope(command: str, query: str) -> Envelope:
@@ -83,14 +77,13 @@ def coming_soon_envelope(command: str, query: str) -> Envelope:
         ),
         "suggested_command": "curseforge addon deadly-boss-mods",
     }
-    envelope = success_envelope(
+    return success_envelope(
         provider=PROVIDER_NAME,
         command=command,
         kind="coming_soon",
         query={"query": query},
         data=data,
     )
-    return _dual_emit(envelope, data)
 
 
 def addon_envelope(slug_or_id: str) -> Envelope:

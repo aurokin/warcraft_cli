@@ -75,8 +75,7 @@ def test_schema_command_prints_the_checked_in_schema() -> None:
 
     payload = json.loads(result.stdout)
     assert payload["kind"] == "envelope_schema"
-    assert payload["schema"] == json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
-    assert payload["data"]["schema"] == payload["schema"]
+    assert payload["data"]["schema"] == json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
 
 
 def test_doctor_payload_validates_against_the_schema() -> None:
@@ -108,6 +107,24 @@ def test_schema_rejects_envelopes_the_contract_forbids() -> None:
     assert "$.ok: expected boolean, got str" in problems
     assert "$.schema_version: '2' is not one of ['1']" in problems
     assert "$.error: missing required key 'code'" in problems
+
+
+def test_schema_rejects_keys_outside_the_envelope() -> None:
+    schema = envelope_json_schema()
+    base = {
+        "ok": False,
+        "provider": "warcraft",
+        "command": "doctor",
+        "kind": "error",
+        "schema_version": "1",
+        "query": None,
+        "provenance": {},
+        "data": {},
+        "error": {"code": "x", "message": "y", "hint": "z"},
+    }
+
+    problems = validate({**base, "results": []}, schema, root=schema)
+    assert problems == ["$.results: unexpected key", "$.error.hint: unexpected key"]
 
 
 def test_schema_ties_error_to_ok() -> None:

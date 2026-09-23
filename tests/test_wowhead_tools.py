@@ -27,14 +27,14 @@ def test_talent_calc_command_decodes_url_and_embedded_builds(monkeypatch) -> Non
     result = runner.invoke(app, ["talent-calc", "druid/balance/ABC123", "--listed-build-limit", "5"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["tool"]["class_slug"] == "druid"
-    assert payload["tool"]["spec_slug"] == "balance"
-    assert payload["tool"]["build_code"] == "ABC123"
-    assert payload["tool"]["state_url"].endswith("/talent-calc/druid/balance/ABC123")
-    assert payload["build_identity"]["status"] == "inferred"
-    assert payload["build_identity"]["class_spec_identity"]["identity"] == {"actor_class": "druid", "spec": "balance"}
-    assert payload["listed_builds"]["count"] == 2
-    assert payload["listed_builds"]["items"][0]["name"] == "Leveling"
+    assert payload["data"]["tool"]["class_slug"] == "druid"
+    assert payload["data"]["tool"]["spec_slug"] == "balance"
+    assert payload["data"]["tool"]["build_code"] == "ABC123"
+    assert payload["data"]["tool"]["state_url"].endswith("/talent-calc/druid/balance/ABC123")
+    assert payload["data"]["build_identity"]["status"] == "inferred"
+    assert payload["data"]["build_identity"]["class_spec_identity"]["identity"] == {"actor_class": "druid", "spec": "balance"}
+    assert payload["data"]["listed_builds"]["count"] == 2
+    assert payload["data"]["listed_builds"]["items"][0]["name"] == "Leveling"
 
 
 
@@ -47,11 +47,11 @@ def test_talent_calc_command_supports_expansion_prefixed_relative_ref(monkeypatc
     result = runner.invoke(app, ["talent-calc", "cata/talent-calc/hunter/beast-mastery/XYZ987"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["expansion"] == "cata"
-    assert payload["tool"]["state_url"] == "https://www.wowhead.com/cata/talent-calc/hunter/beast-mastery/XYZ987"
-    assert payload["tool"]["class_slug"] == "hunter"
-    assert payload["tool"]["spec_slug"] == "beast-mastery"
-    assert payload["tool"]["build_code"] == "XYZ987"
+    assert payload["data"]["expansion"] == "cata"
+    assert payload["data"]["tool"]["state_url"] == "https://www.wowhead.com/cata/talent-calc/hunter/beast-mastery/XYZ987"
+    assert payload["data"]["tool"]["class_slug"] == "hunter"
+    assert payload["data"]["tool"]["spec_slug"] == "beast-mastery"
+    assert payload["data"]["tool"]["build_code"] == "XYZ987"
 
 
 
@@ -64,11 +64,11 @@ def test_talent_calc_command_supports_expansion_prefixed_class_spec_ref(monkeypa
     result = runner.invoke(app, ["talent-calc", "classic/druid/balance/ABC123"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["expansion"] == "classic"
-    assert payload["tool"]["state_url"] == "https://www.wowhead.com/classic/talent-calc/druid/balance/ABC123"
-    assert payload["tool"]["class_slug"] == "druid"
-    assert payload["tool"]["spec_slug"] == "balance"
-    assert payload["tool"]["build_code"] == "ABC123"
+    assert payload["data"]["expansion"] == "classic"
+    assert payload["data"]["tool"]["state_url"] == "https://www.wowhead.com/classic/talent-calc/druid/balance/ABC123"
+    assert payload["data"]["tool"]["class_slug"] == "druid"
+    assert payload["data"]["tool"]["spec_slug"] == "balance"
+    assert payload["data"]["tool"]["build_code"] == "ABC123"
 
 
 
@@ -81,7 +81,7 @@ def test_talent_calc_command_supports_scheme_less_wowhead_ref(monkeypatch) -> No
     result = runner.invoke(app, ["talent-calc", "wowhead.com/talent-calc/druid/balance/ABC123"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["tool"]["state_url"] == "https://wowhead.com/talent-calc/druid/balance/ABC123"
+    assert payload["data"]["tool"]["state_url"] == "https://wowhead.com/talent-calc/druid/balance/ABC123"
 
 
 
@@ -141,18 +141,18 @@ def test_talent_calc_packet_command_emits_exact_transport_packet(monkeypatch) ->
     payload = json.loads(result.stdout)
     assert payload["provider"] == "wowhead"
     assert payload["kind"] == "talent_calc_packet"
-    assert payload["tool"]["state_url"].endswith("/talent-calc/druid/balance/ABC123")
-    assert payload["talent_transport_packet"]["transport_status"] == "exact"
+    assert payload["data"]["tool"]["state_url"].endswith("/talent-calc/druid/balance/ABC123")
+    assert payload["data"]["talent_transport_packet"]["transport_status"] == "exact"
     assert (
-        payload["talent_transport_packet"]["transport_forms"]["wowhead_talent_calc_url"]
+        payload["data"]["talent_transport_packet"]["transport_forms"]["wowhead_talent_calc_url"]
         == "https://www.wowhead.com/talent-calc/druid/balance/ABC123"
     )
-    assert payload["talent_transport_packet"]["build_identity"]["class_spec_identity"]["identity"] == {
+    assert payload["data"]["talent_transport_packet"]["build_identity"]["class_spec_identity"]["identity"] == {
         "actor_class": "druid",
         "spec": "balance",
     }
-    assert payload["talent_transport_packet"]["scope"] == {"type": "wowhead_talent_calc", "expansion": "retail"}
-    assert payload["listed_builds"]["count"] == 2
+    assert payload["data"]["talent_transport_packet"]["scope"] == {"type": "wowhead_talent_calc", "expansion": "retail"}
+    assert payload["data"]["listed_builds"]["count"] == 2
 
 
 
@@ -165,13 +165,13 @@ def test_talent_calc_packet_command_supports_expansion_prefixed_relative_ref(mon
     result = runner.invoke(app, ["talent-calc-packet", "cata/talent-calc/hunter/beast-mastery/XYZ987"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["tool"]["state_url"] == "https://www.wowhead.com/cata/talent-calc/hunter/beast-mastery/XYZ987"
-    assert payload["expansion"] == "cata"
+    assert payload["data"]["tool"]["state_url"] == "https://www.wowhead.com/cata/talent-calc/hunter/beast-mastery/XYZ987"
+    assert payload["data"]["expansion"] == "cata"
     assert (
-        payload["talent_transport_packet"]["transport_forms"]["wowhead_talent_calc_url"]
+        payload["data"]["talent_transport_packet"]["transport_forms"]["wowhead_talent_calc_url"]
         == "https://www.wowhead.com/cata/talent-calc/hunter/beast-mastery/XYZ987"
     )
-    assert payload["talent_transport_packet"]["scope"]["expansion"] == "cata"
+    assert payload["data"]["talent_transport_packet"]["scope"]["expansion"] == "cata"
 
 
 
@@ -184,13 +184,13 @@ def test_talent_calc_packet_command_supports_expansion_prefixed_class_spec_ref(m
     result = runner.invoke(app, ["talent-calc-packet", "classic/druid/balance/ABC123"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["tool"]["state_url"] == "https://www.wowhead.com/classic/talent-calc/druid/balance/ABC123"
-    assert payload["expansion"] == "classic"
+    assert payload["data"]["tool"]["state_url"] == "https://www.wowhead.com/classic/talent-calc/druid/balance/ABC123"
+    assert payload["data"]["expansion"] == "classic"
     assert (
-        payload["talent_transport_packet"]["transport_forms"]["wowhead_talent_calc_url"]
+        payload["data"]["talent_transport_packet"]["transport_forms"]["wowhead_talent_calc_url"]
         == "https://www.wowhead.com/classic/talent-calc/druid/balance/ABC123"
     )
-    assert payload["talent_transport_packet"]["scope"]["expansion"] == "classic"
+    assert payload["data"]["talent_transport_packet"]["scope"]["expansion"] == "classic"
 
 
 
@@ -203,9 +203,9 @@ def test_talent_calc_packet_command_supports_scheme_less_wowhead_ref(monkeypatch
     result = runner.invoke(app, ["talent-calc-packet", "wowhead.com/talent-calc/druid/balance/ABC123"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["tool"]["state_url"] == "https://wowhead.com/talent-calc/druid/balance/ABC123"
+    assert payload["data"]["tool"]["state_url"] == "https://wowhead.com/talent-calc/druid/balance/ABC123"
     assert (
-        payload["talent_transport_packet"]["transport_forms"]["wowhead_talent_calc_url"]
+        payload["data"]["talent_transport_packet"]["transport_forms"]["wowhead_talent_calc_url"]
         == "https://wowhead.com/talent-calc/druid/balance/ABC123"
     )
 
@@ -222,10 +222,10 @@ def test_talent_calc_packet_command_can_write_exact_transport_packet(monkeypatch
     result = runner.invoke(app, ["talent-calc-packet", "druid/balance/ABC123", "--out", str(out_path)])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["written_packet_path"] == str(out_path.resolve())
+    assert payload["data"]["written_packet_path"] == str(out_path.resolve())
 
     written_packet = json.loads(out_path.read_text())
-    assert written_packet == payload["talent_transport_packet"]
+    assert written_packet == payload["data"]["talent_transport_packet"]
     assert written_packet["transport_status"] == "exact"
 
 
@@ -238,11 +238,11 @@ def test_talent_calc_packet_command_does_not_require_page_fetch_for_exact_ref(mo
     result = runner.invoke(app, ["talent-calc-packet", "druid/balance/ABC123"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["tool"]["state_url"].endswith("/talent-calc/druid/balance/ABC123")
-    assert payload["tool"]["page_url"].endswith("/talent-calc/druid/balance/ABC123")
-    assert payload["page"]["canonical_url"].endswith("/talent-calc/druid/balance/ABC123")
-    assert "listed_builds" not in payload
-    assert payload["talent_transport_packet"]["transport_status"] == "exact"
+    assert payload["data"]["tool"]["state_url"].endswith("/talent-calc/druid/balance/ABC123")
+    assert payload["data"]["tool"]["page_url"].endswith("/talent-calc/druid/balance/ABC123")
+    assert payload["data"]["page"]["canonical_url"].endswith("/talent-calc/druid/balance/ABC123")
+    assert "listed_builds" not in payload["data"]
+    assert payload["data"]["talent_transport_packet"]["transport_status"] == "exact"
 
 
 
@@ -252,15 +252,15 @@ def test_talent_calc_packet_command_does_not_require_client_init_for_exact_ref(m
     stdout_result = runner.invoke(app, ["talent-calc-packet", "druid/balance/ABC123"])
     assert stdout_result.exit_code == 0
     stdout_payload = json.loads(stdout_result.stdout)
-    assert stdout_payload["tool"]["state_url"].endswith("/talent-calc/druid/balance/ABC123")
-    assert stdout_payload["talent_transport_packet"]["transport_status"] == "exact"
-    assert "listed_builds" not in stdout_payload
+    assert stdout_payload["data"]["tool"]["state_url"].endswith("/talent-calc/druid/balance/ABC123")
+    assert stdout_payload["data"]["talent_transport_packet"]["transport_status"] == "exact"
+    assert "listed_builds" not in stdout_payload["data"]
 
     out_result = runner.invoke(app, ["talent-calc-packet", "druid/balance/ABC123", "--out", str(out_path)])
     assert out_result.exit_code == 0
     out_payload = json.loads(out_result.stdout)
-    assert out_payload["written_packet_path"] == str(out_path.resolve())
-    assert json.loads(out_path.read_text()) == out_payload["talent_transport_packet"] == stdout_payload["talent_transport_packet"]
+    assert out_payload["data"]["written_packet_path"] == str(out_path.resolve())
+    assert json.loads(out_path.read_text()) == out_payload["data"]["talent_transport_packet"] == stdout_payload["data"]["talent_transport_packet"]
 
 
 
@@ -277,14 +277,14 @@ def test_talent_calc_packet_command_falls_back_on_http_status_error(monkeypatch,
     stdout_result = runner.invoke(app, ["talent-calc-packet", "druid/balance/ABC123"])
     assert stdout_result.exit_code == 0
     stdout_payload = json.loads(stdout_result.stdout)
-    assert stdout_payload["talent_transport_packet"]["transport_status"] == "exact"
-    assert "listed_builds" not in stdout_payload
+    assert stdout_payload["data"]["talent_transport_packet"]["transport_status"] == "exact"
+    assert "listed_builds" not in stdout_payload["data"]
 
     out_result = runner.invoke(app, ["talent-calc-packet", "druid/balance/ABC123", "--out", str(out_path)])
     assert out_result.exit_code == 0
     out_payload = json.loads(out_result.stdout)
-    assert out_payload["written_packet_path"] == str(out_path.resolve())
-    assert json.loads(out_path.read_text()) == out_payload["talent_transport_packet"] == stdout_payload["talent_transport_packet"]
+    assert out_payload["data"]["written_packet_path"] == str(out_path.resolve())
+    assert json.loads(out_path.read_text()) == out_payload["data"]["talent_transport_packet"] == stdout_payload["data"]["talent_transport_packet"]
 
 
 
@@ -407,9 +407,9 @@ def test_profession_tree_command_decodes_url(monkeypatch) -> None:
     result = runner.invoke(app, ["profession-tree", "alchemy/BCuA"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["tool"]["profession_slug"] == "alchemy"
-    assert payload["tool"]["loadout_code"] == "BCuA"
-    assert payload["tool"]["state_url"].endswith("/profession-tree-calc/alchemy/BCuA")
+    assert payload["data"]["tool"]["profession_slug"] == "alchemy"
+    assert payload["data"]["tool"]["loadout_code"] == "BCuA"
+    assert payload["data"]["tool"]["state_url"].endswith("/profession-tree-calc/alchemy/BCuA")
 
 
 
@@ -422,9 +422,9 @@ def test_dressing_room_command_normalizes_hash_ref(monkeypatch) -> None:
     result = runner.invoke(app, ["dressing-room", "#fz8zz0zb89c8mM8YB"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["tool"]["share_hash"] == "fz8zz0zb89c8mM8YB"
-    assert payload["tool"]["has_share_hash"] is True
-    assert payload["tool"]["state_url"].startswith("https://www.wowhead.com/dressing-room#")
+    assert payload["data"]["tool"]["share_hash"] == "fz8zz0zb89c8mM8YB"
+    assert payload["data"]["tool"]["has_share_hash"] is True
+    assert payload["data"]["tool"]["state_url"].startswith("https://www.wowhead.com/dressing-room#")
 
 
 
@@ -437,9 +437,9 @@ def test_profiler_command_normalizes_list_ref(monkeypatch) -> None:
     result = runner.invoke(app, ["profiler", "97060220/us/illidan/Roguecane"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["tool"]["list_id"] == "97060220"
-    assert payload["tool"]["region_slug"] == "us"
-    assert payload["tool"]["realm_slug"] == "illidan"
-    assert payload["tool"]["character_name"] == "Roguecane"
+    assert payload["data"]["tool"]["list_id"] == "97060220"
+    assert payload["data"]["tool"]["region_slug"] == "us"
+    assert payload["data"]["tool"]["realm_slug"] == "illidan"
+    assert payload["data"]["tool"]["character_name"] == "Roguecane"
 
 

@@ -21,6 +21,7 @@ from warcraft_content.article_bundle import (
 )
 from warcraft_content.article_discovery import merge_article_linked_entities
 from warcraft_core.provider import ProviderError
+from wowhead_cli.guides import write_guide_export_assets
 
 ABILITY_IDENTITY = {"kind": "ability_identity", "spell_id": 116670, "ability": "vivify"}
 
@@ -69,6 +70,10 @@ def test_merge_fills_a_missing_identity_from_a_later_page_and_collects_source_ur
     assert merged[0]["source_urls"] == ["https://example.invalid/p1", "https://example.invalid/p2"]
 
 
+def _write_manifest(bundle_dir: Path, manifest: object) -> None:
+    (bundle_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+
 def _not_a_bundle(tmp_path: Path, shape: str) -> Path:
     if shape == "missing":
         return tmp_path / "gone"
@@ -77,12 +82,20 @@ def _not_a_bundle(tmp_path: Path, shape: str) -> Path:
         path.write_text("{}", encoding="utf-8")
         return path
     if shape == "manifest_not_an_object":
-        (tmp_path / "manifest.json").write_text(json.dumps([1, 2, 3]), encoding="utf-8")
-    if shape == "wowhead_guide_export":
-        # The wowhead guide-export layout: a valid manifest, but no pages.jsonl or build-references.jsonl.
-        manifest = {"export_version": 2, "files": {"guide_json": "guide.json", "sections_jsonl": "sections.jsonl"}}
-        (tmp_path / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
-        (tmp_path / "sections.jsonl").write_text(json.dumps({"title": "Overview"}) + "\n", encoding="utf-8")
+        _write_manifest(tmp_path, [1, 2, 3])
+    if shape == "manifest_files_not_an_object":
+        _write_manifest(tmp_path, {"files": ["pages.jsonl"]})
+    if shape == "manifest_lists_no_content_file":
+        _write_manifest(tmp_path, {"files": {"guide_json": "guide.json"}})
+    if shape == "manifest_file_entry_not_a_string":
+        _write_manifest(tmp_path, {"files": {"pages_jsonl": 5}})
+    if shape == "listed_file_missing":
+        _write_manifest(tmp_path, {"files": {"pages_jsonl": "pages.jsonl", "sections_jsonl": "sections.jsonl"}})
+        (tmp_path / "pages.jsonl").write_text(json.dumps({"title": "Overview"}) + "\n", encoding="utf-8")
+    if shape in ("corrupt_jsonl", "jsonl_row_not_an_object"):
+        _write_manifest(tmp_path, {"files": {"pages_jsonl": "pages.jsonl"}})
+        line = '{"title": "Overv' if shape == "corrupt_jsonl" else "[1, 2]"
+        (tmp_path / "pages.jsonl").write_text(line + "\n", encoding="utf-8")
     return tmp_path
 
 
@@ -93,19 +106,51 @@ def _not_a_bundle(tmp_path: Path, shape: str) -> Path:
         ("file", "invalid_argument", 2),
         ("no_manifest", "invalid_bundle", 1),
         ("manifest_not_an_object", "invalid_bundle", 1),
-        ("wowhead_guide_export", "invalid_bundle", 1),
+        ("manifest_files_not_an_object", "invalid_bundle", 1),
+        ("manifest_lists_no_content_file", "invalid_bundle", 1),
+        ("manifest_file_entry_not_a_string", "invalid_bundle", 1),
+        ("listed_file_missing", "invalid_bundle", 1),
+        ("corrupt_jsonl", "invalid_bundle", 1),
+        ("jsonl_row_not_an_object", "invalid_bundle", 1),
     ],
 )
-def test_load_article_bundle_refuses_a_path_that_is_not_an_article_bundle(
+def test_load_article_bundle_refuses_a_path_that_is_not_a_readable_bundle(
     tmp_path: Path, shape: str, code: str, exit_code: int
 ) -> None:
-    """Every one of these used to load, or fail, differently; the last one loaded as an empty bundle."""
+    """None of these may load as an empty bundle, and a corrupt one is not an internal error."""
     with pytest.raises(ArticleBundleError) as exc_info:
         load_article_bundle(_not_a_bundle(tmp_path, shape))
 
     assert (exc_info.value.code, exc_info.value.exit_code) == (code, exit_code)
     # warcraft_cli's guide-compare catches ValueError per bundle to keep the other bundles going.
     assert isinstance(exc_info.value, ValueError)
+
+
+def _wowhead_guide_export(export_dir: Path) -> Path:
+    """A bundle written by wowhead's own guide-export writer: no pages.jsonl, no build-references.jsonl."""
+    export_dir.mkdir()
+    payload = {
+        "body": {"section_chunks": [{"ordinal": 1, "level": 2, "title": "Overview", "content_text": "Vivify"}]},
+        "navigation": {"links": [{"label": "Talents", "url": "https://www.wowhead.com/guide/talents"}]},
+        "analysis_surfaces": {"items": [{"surface_tags": ["overview"], "section_title": "Overview"}]},
+    }
+    files, _assets = write_guide_export_assets(export_dir=export_dir, payload=payload, html="<html></html>")
+    _write_manifest(export_dir, {"export_version": 2, "guide": {"id": 1}, "files": files})
+    return export_dir
+
+
+def test_a_wowhead_guide_export_loads_and_takes_part_in_a_comparison(tmp_path: Path) -> None:
+    """The previous round rejected every wowhead bundle for lacking pages.jsonl, dropping it from guide-compare."""
+    wowhead_dir = _wowhead_guide_export(tmp_path / "wowhead")
+    method_dir = _export(tmp_path, "method", failed=False)
+
+    bundle = load_article_bundle(wowhead_dir)
+    comparison = compare_article_bundles([(wowhead_dir, bundle), (method_dir, load_article_bundle(method_dir))])
+
+    assert [row["title"] for row in bundle["sections"]] == ["Overview"]
+    assert [row["surface_tags"] for row in bundle["analysis_surfaces"]] == [["overview"]]
+    assert (bundle["pages"], bundle["build_references"]) == ([], [])
+    assert comparison["section_evidence"]["shared"] == ["overview"]
 
 
 FAILED_PAGE = {

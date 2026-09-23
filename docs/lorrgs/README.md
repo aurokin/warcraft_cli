@@ -36,8 +36,8 @@ lorrgs --fields data.specs specs
 | `season <season-slug>`, `current-season` | Season-to-raid partition metadata. `season` defaults to `current`. |
 | `spec-ranking <spec-slug> <boss-slug> [--difficulty mythic] [--metric dps]` | Top-parse cooldown timelines: reports, fights, players, boss casts, phases, cast timestamps. |
 | `spec-ranking-info <spec-slug> <boss-slug> [--difficulty mythic] [--metric dps]` | Ranking metadata without the large report list. |
-| `comp-ranking <boss-slug> [--limit N] [--role EXPR]... [--spec EXPR]... [--killtime-min S] [--killtime-max S]` | Top composition rows for an encounter. `--role`/`--spec` are repeatable filter expressions such as `heal>=4`. |
-| `report-overview <report-ref> [--refresh/--no-refresh]` | Lorrgs report overview metadata; `--refresh` asks Lorrgs to refresh it. Does not queue per-fight timeline work. |
+| `comp-ranking <boss-slug> [--limit N] [--role EXPR]... [--spec EXPR]... [--killtime-min S] [--killtime-max S]` | Top composition rows for an encounter. `--role`/`--spec` are repeatable filter expressions such as `heal>=4`. When Lorrgs returns `reports: []`, `data.notes` says the upstream ranking is empty for that boss and those filters. |
+| `report-overview <report-ref> [--refresh/--no-refresh]` | Lorrgs report overview metadata for any public Warcraft Logs report; Lorrgs loads one it has not seen on demand, and `--refresh` asks it to reload one it has. Does not queue per-fight timeline work. |
 | `user-report <report-ref>` | Already-cached Lorrgs user report overview. |
 | `user-report-fights <report-ref> [--fight IDS] [--player IDS] [--type TYPE]` | Selected cached fights. `--fight` and `--type` default to the values parsed from a report URL. |
 
@@ -53,9 +53,7 @@ both flags it fails and names them.
 ## Output contract
 
 Every command emits one JSON envelope: `ok`, `provider`, `command`, `kind`, `schema_version`, `query`,
-`provenance`, `data`, and `error` when `ok` is false. `doctor`, `search`, and `resolve` also repeat their
-payload keys at the top level (`capabilities`, `results`, `count`, `match`, `next_command`, ...) for
-agents written against the pre-envelope shape; those duplicated keys are deprecated.
+`provenance`, `data`, and `error` when `ok` is false, and no other top-level key. The payload is in `data`.
 
 `provenance` carries the exact API `source_url`, `api_host`, the site URL, and upstream source posture
 (`warcraftlogs` data, Wowhead tooltips).
@@ -89,8 +87,8 @@ metadata row scored the same only because it was built from the same match.
 carries `count` plus `truncated` so a caller can tell that rivals were cut from `results`.
 
 A report reference resolves to `lorrgs report-overview <code>` at `confidence: "medium"` with a
-`caveat`: the reference parsed exactly, but nothing verified that Lorrgs will serve it (Lorrgs refuses
-reports it has not loaded and reports Warcraft Logs keeps private).
+`caveat`: the reference parsed exactly, but nothing verified that Lorrgs will serve it (Lorrgs loads
+any public report, but refuses reports Warcraft Logs keeps private).
 
 ## Examples
 
@@ -113,8 +111,9 @@ cast timeline rows.
 
 - Registered with `status = "partial"` and `auth_required = false`.
 - Wrapper capabilities marked ready: `doctor`, `search`, `resolve`, `spec_ranking`, `comp_ranking`,
-  `season`, `current_season`, `metadata`. `report_overview`, `user_report` and `user_report_fights` are
-  `ready_cached_only`: they answer only for reports Lorrgs has already cached.
+  `season`, `current_season`, `metadata`, `report_overview`. `user_report` and `user_report_fights` are
+  `ready_cached_only`: they answer only for reports Lorrgs has already cached, and a `report-overview`
+  call does not make a report readable by `user-report` right away.
 - Every other Lorrgs command runs as direct passthrough: `warcraft lorrgs <command> ...`.
 - `expansion_mode = "fixed"`, `supported_expansions = ["retail"]`, so Lorrgs joins retail wrapper
   search/resolve fanout and is skipped when a fixed non-retail expansion is requested.
@@ -132,7 +131,7 @@ cast timeline rows.
 ## Live tests
 
 ```bash
-LORRGS_LIVE_TESTS=1 pytest -q -m live tests/test_lorrgs_live.py
+make test-e2e E2E_ARGS="tests/e2e/test_lorrgs.py"
 ```
 
 ## Source links

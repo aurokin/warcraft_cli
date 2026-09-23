@@ -9,8 +9,8 @@
 - Local CI parity: `make check` = lint + typecheck + import boundaries + complexity gate + dead code
   + fast tests.
 - End-to-end journeys: `make test-e2e` runs `tests/e2e/` through the installed binaries against
-  real providers with the keys in `~/.config/warcraft/providers`. Local only, never CI; skips are
-  failures unless excluded via `WARCRAFT_E2E_SKIP`. See `docs/architecture/E2E_TESTING.md`.
+  real providers with the keys in `~/.config/warcraft/providers`. Skips are failures unless
+  excluded via `WARCRAFT_E2E_SKIP`. See `docs/architecture/E2E_TESTING.md`.
 - Lint: `make lint` (ruff over `packages/`, `tests/`, `scripts/`; `make lint-all` is an alias).
 - Type check: `make typecheck` (mypy over all 16 packages).
 - Complexity: `make complexity-gate` (`xenon --max-absolute C packages`, blocking). `make complexity`
@@ -21,8 +21,9 @@
   `make skills` writes the provider subskills. Never hand-edit either output; staleness tests fail
   when they drift.
 - Build the release artifact: `make build` (`uv build --wheel`).
-- Live tests: `make test-live`. Provider-scoped: set the suite flag and pass the matching file, for
-  example `WOWHEAD_LIVE_TESTS=1 pytest -q -m live tests/test_live_integration.py tests/test_live_endpoint_contracts.py`.
+- Live canary: `make test-canary` (`tests/test_wowhead_parser_canaries.py`, gated by
+  `WOWHEAD_LIVE_TESTS=1`) is the only live test outside `tests/e2e/`.
+  `.github/workflows/live-contracts.yml` runs it and the keyless e2e files weekly.
 - Branch-local deploy: `make dev-deploy-no-link`. Relink `~/.local/bin` to this checkout with
   `make dev-deploy`.
 - Optional pre-commit: `make pre-commit-install`.

@@ -19,7 +19,8 @@
 ## Effective Use
 
 - prefer structured queries like `character us illidan Roguecane`; multi-word realms work too (`character eu tarren mill Cotti`)
-- the `guild`/`character` word only filters when it leads the query; anywhere else it is part of the name (`resolve "guild us malganis Old Guild Order"`, `search "Liquid Guild"`)
+- the `guild`/`character` word only counts as a hint when it leads the query; anywhere else it is part of the name (`resolve "guild us malganis Old Guild Order"`, `search "Liquid Guild"`)
+- pass `--kind character` or `--kind guild` when only one kind will do: it overrides the query word, and an empty result means nothing of that kind matched
 - discover the `--raid` slug from `raiderio raids` (or a guild profile's progression) before asking for raid rankings; slugs change every tier
 - the raid a guild is currently progressing is the `raiderio raids` row whose per-region `starts`/`ends` window covers now; join it to the guild payload's progression rows by `raid_slug`
 - add `--realm` with a standard `--region` (`us`, `eu`, `kr`, `tw`, `cn`, or an alias such as `na`) to answer "where does this guild rank on its realm"; `rank` is then the realm position and `region_rank` the region position

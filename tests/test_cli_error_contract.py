@@ -108,32 +108,32 @@ def test_transport_failure_emits_an_error_envelope(
         assert result.exit_code == EXIT_NETWORK, f"{binary}: an unreachable host must exit {EXIT_NETWORK}, got {payload}"
 
 
-def test_wrapper_search_reports_every_provider_failure_as_an_error_row(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A crashing provider must appear as ``ok: false`` with an error, never as ``payload: null``."""
+def test_wrapper_search_fails_naming_every_provider_when_none_can_answer(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A total outage is an error envelope that exits 5, never an ok:true empty page.
+
+    Warcraft Logs answers free text with a local hint and no request, so it is the one provider that
+    does not fail; every provider that did reach the broken transport is named with its own code.
+    """
     monkeypatch.setattr(warcraft_api.http.time, "sleep", _no_sleep)
     _install_httpx_failure(monkeypatch, "connect_error")
 
     result = run_binary("warcraft", ["search", "thunderfury"])
 
-    assert result.exit_code == 0, result.stderr
-    payload = json.loads(result.stdout)
-    rows = payload["providers"]
-    assert rows, "the wrapper fanned out to no provider at all"
-    # Providers that answer free text without a request (warcraftlogs) stay ok; if none
-    # of the rest failed, the transport was not actually broken and this test proves nothing.
-    assert any(not row["ok"] for row in rows), "no provider reached the broken transport"
-    for row in rows:
-        assert isinstance(row["payload"], dict), f"{row['provider']}: payload must be an envelope, not {row['payload']!r}"
-        if row["ok"]:
-            continue
-        assert row["error"]["code"], f"{row['provider']}: a failed row must carry an error code"
+    assert result.exit_code == EXIT_NETWORK, result.stdout + result.stderr
+    payload = json.loads(result.stderr)
+    assert not envelope_violations(payload)
+    assert payload["error"]["code"] == "network_error"
+    assert payload["data"] == {}
+    failed = payload["error"]["details"]["failed_providers"]
+    assert {row["provider"] for row in failed} == {"wowhead", "method", "icy-veins", "raiderio", "warcraft-wiki", "lorrgs"}
+    assert all(row["code"] == "network_error" and row["message"] for row in failed), failed
 
 
 def test_wrapper_doctor_is_offline() -> None:
     """``warcraft doctor`` is discovery, so it must answer without touching any provider endpoint."""
     result = run_binary("warcraft", ["doctor"])
     assert result.exit_code == 0, result.stderr
-    assert json.loads(result.stdout)["wrapper"]["provider_count"] == len(CLI_APPS) - 1
+    assert json.loads(result.stdout)["data"]["wrapper"]["provider_count"] == len(CLI_APPS) - 1
 
 
 def test_forced_failures_leave_no_cache_files(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:

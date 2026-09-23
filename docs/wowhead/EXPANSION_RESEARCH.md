@@ -69,7 +69,7 @@ From `data.pageMeta` on entity pages:
 - Synthetic fixture integration tests cover profile behavior across commands:
   - `tests/test_expansion_synthetic_fixtures.py`
   - fixture dataset: `tests/fixtures/expansion_synthetic.json`
-- Live endpoint contract checks are available:
-  - env-gated live suite: `tests/test_live_integration.py`
-  - raw endpoint contract suite: `tests/test_live_endpoint_contracts.py`
+- Live checks:
+  - end-to-end journeys, including the classic-era profiles: `tests/e2e/test_wowhead.py`
+  - parser canaries: `make test-canary`
   - weekly schedule or manual dispatch: `.github/workflows/live-contracts.yml`

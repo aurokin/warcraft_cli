@@ -233,11 +233,9 @@ def test_doctor_reports_partial_status_and_url_templates() -> None:
     assert payload["kind"] == "doctor"
     assert payload["schema_version"] == "1"
     assert payload["data"]["status"] == "partial"
-    # Deprecated top-level copies stay next to the envelope so existing agents keep working.
-    assert payload["status"] == "partial"
-    assert payload["capabilities"]["search"] == "not_supported"
-    assert payload["capabilities"]["inspect_report"] == "ready"
-    assert payload["url_templates"]["simc_input"].endswith("/simc")
+    assert payload["data"]["capabilities"]["search"] == "not_supported"
+    assert payload["data"]["capabilities"]["inspect_report"] == "ready"
+    assert payload["data"]["url_templates"]["simc_input"].endswith("/simc")
 
 
 def test_inspect_report_quick_sim_includes_scope_and_citations(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -250,13 +248,12 @@ def test_inspect_report_quick_sim_includes_scope_and_citations(monkeypatch: pyte
     assert payload["kind"] == "report"
     assert payload["provenance"]["report_url"].endswith("/report/abc123")
     assert payload["data"]["report"]["kind"] == "quick_sim"
-    assert payload["report"]["kind"] == "quick_sim"
-    assert payload["scope"] == {"type": "raidbots_report", "kind": "quick_sim"}
-    assert payload["citations"]["data_json_url"] == "https://www.raidbots.com/simbot/report/abc123/data.json"
-    assert payload["freshness"]["cache_ttl_seconds"] == 86400
-    assert payload["freshness"]["from_cache"] is False
-    assert "retrieved_at" in payload["freshness"]
-    assert payload["raw"] == QUICK_SIM_REPORT
+    assert payload["data"]["scope"] == {"type": "raidbots_report", "kind": "quick_sim"}
+    assert payload["data"]["citations"]["data_json_url"] == "https://www.raidbots.com/simbot/report/abc123/data.json"
+    assert payload["data"]["freshness"]["cache_ttl_seconds"] == 86400
+    assert payload["data"]["freshness"]["from_cache"] is False
+    assert "retrieved_at" in payload["data"]["freshness"]
+    assert payload["data"]["raw"] == QUICK_SIM_REPORT
 
 
 def test_inspect_report_no_raw_omits_payload(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -264,8 +261,8 @@ def test_inspect_report_no_raw_omits_payload(monkeypatch: pytest.MonkeyPatch) ->
     result = runner.invoke(app, ["inspect-report", "def456", "--no-raw"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert "raw" not in payload
-    assert payload["report"]["kind"] == "multi_profile"
+    assert "raw" not in payload["data"]
+    assert payload["data"]["report"]["kind"] == "multi_profile"
 
 
 def test_inspect_report_maps_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -341,17 +338,16 @@ def test_input_command_emits_handoff(monkeypatch: pytest.MonkeyPatch) -> None:
     assert not envelope_violations(payload)
     assert payload["kind"] == "simc_input"
     assert payload["data"]["report_id"] == "abc123"
-    assert payload["report_id"] == "abc123"
-    assert payload["handoff"]["classification"]["sim_type_guess"] == "quick_sim"
-    assert payload["scope"]["sim_type_guess"] == "quick_sim"
-    commands = [entry["command"] for entry in payload["handoff"]["suggested_simc_commands"]]
+    assert payload["data"]["handoff"]["classification"]["sim_type_guess"] == "quick_sim"
+    assert payload["data"]["scope"]["sim_type_guess"] == "quick_sim"
+    commands = [entry["command"] for entry in payload["data"]["handoff"]["suggested_simc_commands"]]
     assert "simc sim -" in commands
     # decode/describe must carry class+spec so the bare talent code resolves.
     decode = next(cmd for cmd in commands if cmd.startswith("simc decode-build"))
     assert "--actor-class mage" in decode
     assert "--spec frost" in decode
     assert "--talents CYG" in decode
-    assert payload["citations"]["simc_input_url"] == "https://www.raidbots.com/simbot/report/abc123/simc"
+    assert payload["data"]["citations"]["simc_input_url"] == "https://www.raidbots.com/simbot/report/abc123/simc"
 
 
 def test_explain_input_via_text_option() -> None:
@@ -359,8 +355,8 @@ def test_explain_input_via_text_option() -> None:
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert not envelope_violations(payload)
-    assert payload["scope"]["sim_type_guess"] == "top_gear_or_droptimizer"
-    assert payload["handoff"]["classification"]["profileset_count"] == 2
+    assert payload["data"]["scope"]["sim_type_guess"] == "top_gear_or_droptimizer"
+    assert payload["data"]["handoff"]["classification"]["profileset_count"] == 2
 
 
 def test_explain_input_requires_content() -> None:
@@ -509,8 +505,8 @@ def test_search_and_resolve_emit_structured_not_supported_stub() -> None:
         assert not envelope_violations(payload)
         assert payload["kind"] == kind
         assert payload["data"]["not_supported"] is True
-        assert payload["count"] == 0
-        assert payload["suggested_command"] == "raidbots inspect-report <url-or-id>"
+        assert payload["data"]["count"] == 0
+        assert payload["data"]["suggested_command"] == "raidbots inspect-report <url-or-id>"
 
 
 def test_provider_surface_is_pure_and_matches_doctor_capabilities() -> None:
