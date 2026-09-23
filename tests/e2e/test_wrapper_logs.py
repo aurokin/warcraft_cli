@@ -212,6 +212,9 @@ def test_cooldown_packet_joins_a_report_fight_to_lorrgs_top_parses(require):
     assert query["spec_slug"] == target.spec_slug, result.describe()
     assert query["boss_slug"] == target.boss_slug, result.describe()
     assert query["report_type"] == "damage-done", result.describe()
+    # The target came off Lorrgs' default (Mythic) ranking, so its top parses are compared at Mythic;
+    # with the Heroic journey below this pins both halves of the difficulty mapping.
+    assert query["difficulty"] == "mythic", result.describe()
 
     data = result.data
     # Phase bounds come from Lorrgs/Warcraft Logs transition markers, so assert the invariants

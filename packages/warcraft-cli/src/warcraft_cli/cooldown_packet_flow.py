@@ -13,7 +13,7 @@ from typing import Any, NoReturn, Protocol
 
 import typer
 from warcraft_core.cli import emit, fail
-from warcraft_core.exit_codes import EXIT_GENERIC
+from warcraft_core.exit_codes import EXIT_GENERIC, EXIT_USAGE
 from warcraft_core.shapes import as_dict, as_list
 
 from warcraft_cli.cooldown_packet import (
@@ -286,6 +286,7 @@ def _resolve_reference(ctx: typer.Context, request: CooldownRequest, state: Cool
             code="invalid_report_ref",
             message="Expected a Warcraft Logs report URL, Lorrgs user_report URL, or 16-character report code.",
             query=state.query,
+            exit_code=EXIT_USAGE,
         )
     resolved_fight_id = request.fight_id or parsed_ref.fight_id
     if resolved_fight_id is None:

@@ -125,8 +125,9 @@ Wrapper failures use the shared envelope and exit codes in
 `kind: "error"`. `invalid_argument` (for example `guide-compare` with one bundle, or
 `guide-compare-query --provider` naming an unsupported provider) and Typer usage errors exit 2. `guide-compare` reports a bundle path the way the shared bundle loader
 does: `not_found` (exit 4) when it is missing, `invalid_argument` (exit 2) when it is a file, and
-`invalid_bundle` (exit 1) when it is not a readable bundle. `unsupported_provider_expansion`,
-`duplicate_expansion_argument`, `insufficient_guides` and `simc_handoff_failed` exit 1.
+`invalid_bundle` (exit 1) when it is not a readable bundle. `unsupported_provider_expansion` and
+`duplicate_expansion_argument` are argument mismatches and exit 2, as does `invalid_report_ref`
+from `cooldown-packet`. `insufficient_guides` and `simc_handoff_failed` exit 1.
 
 Composite commands do not flatten a source failure into exit 1: they exit with the code the contract
 maps the source's error to (`not_found` -> 4, `auth_required` -> 3, `network_error` -> 5).

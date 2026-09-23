@@ -127,10 +127,6 @@ Open weaknesses a green run does not rule out, beyond the limits above:
 
 - **Coverage is hand-maintained.** "Every command in `docs/reference/` has a journey" is checked by
   reading, not by a test, and many documented flags appear in no journey.
-- **One journey is red against the current product**:
-  `test_wrapper_core.py::test_passthrough_refuses_an_expansion_it_cannot_apply` expects exit 2 for
-  `unsupported_provider_expansion` and `duplicate_expansion_argument`; the wrapper exits 1, which
-  `docs/warcraft/README.md` documents. One of the two has to change.
 - **Wowhead guide exports carry no build references**, so `warcraft guide-builds-simc` hands simc
   only the Method and Icy Veins builds, and the packet has no per-bundle count showing that the
   Wowhead bundle contributed none. The guide journey pins the contributing providers, so it goes

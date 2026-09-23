@@ -495,7 +495,7 @@ def test_report_overview_rejects_a_sixteen_character_word(monkeypatch, word: str
     # Real 16-character codes mix upper and lower case; a spec slug of that length is not a report.
     _patch_client(monkeypatch)
     result = runner.invoke(app, ["report-overview", word])
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     assert json.loads(result.stderr)["error"]["code"] == "invalid_report_ref"
     assert FakeLorrgsClient.calls == []
 
@@ -577,7 +577,7 @@ def test_timeout_emits_error_envelope_with_network_exit_code(monkeypatch) -> Non
 
 def test_invalid_report_reference_is_a_structured_usage_failure() -> None:
     result = runner.invoke(app, ["report-overview", "not a report"])
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     payload = json.loads(result.stderr)
     assert payload["ok"] is False
     assert payload["error"]["code"] == "invalid_report_ref"

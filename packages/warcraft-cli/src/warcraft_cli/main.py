@@ -27,7 +27,7 @@ from warcraft_core.cli import (
     fail,
     guarded_run,
 )
-from warcraft_core.exit_codes import EXIT_GENERIC, EXIT_NETWORK, EXIT_NOT_FOUND, exit_code_for
+from warcraft_core.exit_codes import EXIT_GENERIC, EXIT_NETWORK, EXIT_NOT_FOUND, EXIT_USAGE, exit_code_for
 from warcraft_core.expansions import wowhead_path_prefixes
 from warcraft_core.identity import (
     build_reference_transport_packet_payload,
@@ -146,7 +146,7 @@ def _expansion_passthrough_advisory(ctx: typer.Context, *, provider_name: str) -
     expansion it returns an advisory dict (relax-to-passthrough): the provider has no
     expansion semantics to honor, so the command runs unchanged with the note attached.
     For a ``fixed``/``profiled`` provider asked for an unsupported expansion this is a
-    genuine mismatch — it emits ``unsupported_provider_expansion`` and exits 1.
+    genuine mismatch — it emits ``unsupported_provider_expansion`` and exits 2 (a usage error).
     """
     requested_expansion = _requested_expansion(ctx)
     if requested_expansion is None:
@@ -170,6 +170,7 @@ def _expansion_passthrough_advisory(ctx: typer.Context, *, provider_name: str) -
         ctx,
         "unsupported_provider_expansion",
         f"Provider {provider_name!r} does not support wrapper expansion {requested_expansion!r}.",
+        exit_code=EXIT_USAGE,
         query=_passthrough_query(provider_name, requested_expansion),
         details={
             "provider": provider_name,
@@ -229,6 +230,7 @@ def _passthrough_args(ctx: typer.Context, *, provider_name: str, forward_output:
                 ctx,
                 "duplicate_expansion_argument",
                 f"Do not pass both warcraft --expansion and provider-level {flag_text} in the same command.",
+                exit_code=EXIT_USAGE,
                 query=_passthrough_query(provider_name, requested_expansion),
                 details={"provider": provider_name, "requested_expansion": requested_expansion},
             )

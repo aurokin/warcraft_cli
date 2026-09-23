@@ -652,7 +652,7 @@ def test_warcraft_passthrough_maps_fresh_to_warcraftlogs_fresh_site_profile() ->
 
 def test_warcraft_passthrough_rejects_unsupported_warcraftlogs_expansion() -> None:
     result = runner.invoke(warcraft_app, ["--expansion", "ptr", "warcraftlogs", "auth", "client"])
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     payload = json.loads(result.stderr)
     assert payload["kind"] == "error"
     assert payload["query"] == {"provider": "warcraftlogs", "expansion": "ptr"}
@@ -663,7 +663,7 @@ def test_warcraft_passthrough_rejects_unsupported_warcraftlogs_expansion() -> No
 
 def test_warcraft_passthrough_rejects_duplicate_warcraftlogs_site_selector() -> None:
     result = runner.invoke(warcraft_app, ["--expansion", "wotlk", "warcraftlogs", "--site", "retail", "auth", "client"])
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     payload = json.loads(result.stderr)
     assert payload["query"] == {"provider": "warcraftlogs", "expansion": "wotlk"}
     assert payload["error"]["code"] == "duplicate_expansion_argument"
@@ -672,7 +672,7 @@ def test_warcraft_passthrough_rejects_duplicate_warcraftlogs_site_selector() -> 
 
 def test_warcraft_passthrough_rejects_duplicate_warcraftlogs_site_selector_equals_form() -> None:
     result = runner.invoke(warcraft_app, ["--expansion", "wotlk", "warcraftlogs", "--site=retail", "auth", "client"])
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "duplicate_expansion_argument"
     assert payload["error"]["details"]["provider"] == "warcraftlogs"
@@ -680,7 +680,7 @@ def test_warcraft_passthrough_rejects_duplicate_warcraftlogs_site_selector_equal
 
 def test_warcraft_passthrough_rejects_fresh_for_wowhead() -> None:
     result = runner.invoke(warcraft_app, ["--expansion", "fresh", "wowhead", "search", "thunderfury"])
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "unsupported_provider_expansion"
     assert payload["error"]["details"]["provider"] == "wowhead"
@@ -702,7 +702,7 @@ def test_warcraft_passthrough_rejects_fixed_provider_expansion_mismatch() -> Non
     # Fixed/profiled providers asked for an unsupported expansion are a genuine mismatch
     # and still hard-error (only none-expansion providers relax to passthrough).
     result = runner.invoke(warcraft_app, ["--expansion", "wotlk", "method", "search", "foo"])
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "unsupported_provider_expansion"
     assert payload["error"]["details"]["provider"] == "method"
@@ -2867,7 +2867,7 @@ def test_warcraft_passthrough_to_wowhead_injects_global_expansion(monkeypatch) -
 
 def test_warcraft_passthrough_rejects_unsupported_provider_expansion() -> None:
     result = runner.invoke(warcraft_app, ["--expansion", "wotlk", "method", "guide", "mistweaver-monk"])
-    assert result.exit_code == 1
+    assert result.exit_code == 2
 
     payload = json.loads(result.output)
     assert payload["error"]["code"] == "unsupported_provider_expansion"
@@ -2880,7 +2880,7 @@ def test_warcraft_passthrough_rejects_duplicate_wowhead_expansion() -> None:
         warcraft_app,
         ["--expansion", "wotlk", "wowhead", "--expansion", "retail", "search", "thunderfury", "--limit", "1"],
     )
-    assert result.exit_code == 1
+    assert result.exit_code == 2
 
     payload = json.loads(result.output)
     assert payload["error"]["code"] == "duplicate_expansion_argument"
@@ -6293,7 +6293,7 @@ def test_provider_search_rejects_an_expansion_the_provider_cannot_serve() -> Non
 
     result = provider_search("raiderio", "thunderfury", expansion="wotlk")
 
-    assert result["exit_code"] == 1
+    assert result["exit_code"] == 2
     assert envelope_violations(result["payload"]) == []
     assert result["payload"]["query"] == "thunderfury"
     assert result["payload"]["error"]["code"] == "unsupported_provider_expansion"
@@ -6303,7 +6303,7 @@ def test_provider_search_rejects_an_expansion_the_provider_cannot_serve() -> Non
 def test_warcraft_guild_expansion_mismatch_surfaces_the_registry_guard(monkeypatch) -> None:
     result = runner.invoke(warcraft_app, ["--expansion", "wotlk", "guild", "us", "Mal'Ganis", "gn"])
 
-    assert result.exit_code == 1, result.output
+    assert result.exit_code == 2, result.output
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "unsupported_provider_expansion"
 

@@ -591,7 +591,7 @@ def _unsupported_expansion_result(
             "expansion_support": provider_expansion_support(registration, requested_expansion=expansion),
         },
     )
-    return {"provider": registration.name, "exit_code": EXIT_GENERIC, "payload": dict(envelope)}
+    return {"provider": registration.name, "exit_code": EXIT_USAGE, "payload": dict(envelope)}
 
 
 def source_exit_code(source_result: Mapping[str, Any]) -> int:

@@ -6,6 +6,7 @@ from typing import Any
 import typer
 from warcraft_core.cli import emit, fail, guarded_run, install_common_callback
 from warcraft_core.envelope import Envelope
+from warcraft_core.exit_codes import EXIT_USAGE
 from warcraft_core.provider import ProviderError
 
 from lorrgs_cli.client import PROVIDER_NAME, LorrgsClient
@@ -45,6 +46,7 @@ def _report_reference_or_fail(ctx: typer.Context, report_ref: str) -> tuple[str,
             ctx,
             "invalid_report_ref",
             "Expected a Warcraft Logs report URL, Lorrgs user_report URL, or 16-character report code.",
+            exit_code=EXIT_USAGE,
         )
     return ref.code, ref.fight_id, ref.report_type
 

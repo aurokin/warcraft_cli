@@ -80,7 +80,7 @@ A provider whose mode is `none` has no expansion semantics to honor. For the `wa
 - The provider envelope is preserved and annotated with an additive `expansion_advisory` block (`expansion_filter: "passthrough_no_expansion_semantics"`, `requested_expansion`, `provider_expansion_mode: "none"`, human note) at `data.expansion_advisory`, or at `error.details.expansion_advisory` when the provider command fails.
 - Exit code follows the provider (e.g. `warcraft --expansion wotlk simc version` and `warcraft --expansion wotlk blizzard doctor` both succeed).
 
-This applies only to `none` providers. `fixed`/`profiled` providers asked for an unsupported expansion are a genuine mismatch and still hard-fail with `unsupported_provider_expansion` (exit 1). The relaxed behavior is scoped to the proxy path; `warcraft --expansion <key> search|resolve` continues to exclude `none`/non-matching providers from the filtered fanout (surface/expansion filtering is unchanged).
+This applies only to `none` providers. `fixed`/`profiled` providers asked for an unsupported expansion are a genuine mismatch and still hard-fail with `unsupported_provider_expansion` (exit 2, a usage error). The relaxed behavior is scoped to the proxy path; `warcraft --expansion <key> search|resolve` continues to exclude `none`/non-matching providers from the filtered fanout (surface/expansion filtering is unchanged).
 
 ## Non-Goals
 

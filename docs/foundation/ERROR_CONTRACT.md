@@ -81,8 +81,10 @@ Providers keep their existing code strings; the codes below have a fixed repo-wi
 mapping. A provider may additionally map its own codes onto the same five
 exit codes, and documents them in its provider README: for example `warcraftlogs` exits `2` for
 `invalid_query` and its `missing_*` input codes, `curseforge` exits `3` for `missing_api_key` and
-`4` for `addon_not_found`, and `blizzard` exits `2` for `unsupported_region`,
-`unsupported_game_version`, and `classic_profile_unsupported`.
+`4` for `addon_not_found`, `blizzard` exits `2` for `unsupported_region`,
+`unsupported_game_version`, and `classic_profile_unsupported`, `lorrgs` exits `2` for
+`invalid_report_ref`, and `warcraft` exits `2` for `unsupported_provider_expansion`,
+`duplicate_expansion_argument`, and `invalid_report_ref`.
 
 ## Exit codes
 

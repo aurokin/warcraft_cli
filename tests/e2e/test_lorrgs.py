@@ -14,7 +14,7 @@ from typing import Any
 
 import pytest
 
-from tests.e2e.harness import EXIT_GENERIC, EXIT_NOT_FOUND, Result, run, run_text
+from tests.e2e.harness import EXIT_NOT_FOUND, EXIT_USAGE, Result, run, run_text
 
 # Ranked parses exist only for specs people actually play on a fresh tier; walk a few before giving
 # up so the report journeys always have a real code to work with.
@@ -370,7 +370,7 @@ def test_unknown_spec_and_boss_are_not_found(require) -> None:
 
 def test_a_malformed_report_reference_is_rejected_before_the_network(require) -> None:
     require("lorrgs")
-    result = run("lorrgs", "user-report", "not a report", expect=EXIT_GENERIC, error_code="invalid_report_ref")
+    result = run("lorrgs", "user-report", "not a report", expect=EXIT_USAGE, error_code="invalid_report_ref")
     assert "Warcraft Logs report URL" in result.payload["error"]["message"]
 
 
