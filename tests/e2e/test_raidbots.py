@@ -139,7 +139,10 @@ def test_a_live_report_round_trips_through_inspect_and_input(require, optional) 
     assert report.data["scope"] == {"type": "raidbots_report", "kind": parsed["kind"]}
     assert report.data["citations"]["report_url"].endswith(parsed["report_id"])
     assert report.data["freshness"]["from_cache"] is False
-    assert report.data["raw"]
+    # raw is the report's own data.json: the SimC json2 document the summary was read from.
+    raw = report.data["raw"]
+    assert str(raw["version"]) == parsed["simc_version"]
+    assert raw["sim"]["players"][0]["name"] == (parsed.get("actor") or parsed["baseline_actor"])["name"]
 
     trimmed = run("raidbots", "inspect-report", reference, "--no-raw")
     assert "raw" not in trimmed.data

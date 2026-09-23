@@ -45,15 +45,16 @@
   high confidence, so run the `fallback_search_command` when it does not resolve
 - `search` and `resolve` rank on Wowhead's own database and guide ordering first, so the entity a
   query names leads the proc spells and secondary rows that share its name, and a class-guide query
-  resolves to the main current guide; `ranking.match_reasons` carries `upstream_database_rank` on
-  the rows that ordering promoted
+  resolves to the main current guide (the guide ordering counts only when the query says "guide" or `--entity-type guide` is set);
+  `ranking.match_reasons` carries `upstream_database_rank` on the rows that ordering promoted
 - `search` and `resolve` rank every row Wowhead's suggestion response sent, not just its ten-row
   dropdown list, one row per entity; `metadata.suggestion_lists` says where each row came from and
   `suggestion_merge` counts the rows per list and the duplicates merged
-- query words match whole words, ignoring words like "the" and "of"; a row is returned only when its
-  text holds every query word or the whole query, or Wowhead's own ordering ranked it near the top
-  and its name shares a query word. Rows matching only some words are dropped, and
-  `suggestion_merge.unmatched_rows_dropped` counts them
+- query words match whole words, ignoring words like "the" and "of"; a row whose text holds none of
+  the query words is not returned, and `suggestion_merge.unmatched_rows_dropped` counts those rows.
+  A row holding only some of them stays (`some_terms_match`) and scores less for the words it lacks,
+  but Wowhead's own ordering bonus can still rank it above a row holding them all. A row's type name
+  counts as its text, so a type word such as "npc" in the query keeps every NPC row
 - `resolve` answers with a database entity: news posts and world events sit behind every entity in
   `candidates` and become the `match` only when the response holds no entity, or when the article
   outscores the best entity by a wide margin (a query that names a headline word for word); use
@@ -62,6 +63,7 @@
 ## Boundaries
 
 - database-family browse/filter pages are intentionally deferred
-- `dressing-room` and `profiler` are state inspectors, not full decoders
+- `dressing-room` and `profiler` are state inspectors, not full decoders; `profiler` fails with
+  `not_found` when Wowhead says the list does not exist
 - do not assume Wowhead tool URLs expose enough stable state for deep reverse-engineering
 - treat Wowhead `analysis_surfaces` as an additive page-level layer extracted from trusted section structure, not as a replacement for the raw guide page

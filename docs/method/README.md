@@ -111,9 +111,6 @@ HTTP responses are cached through `warcraft_api.cache` under the `METHOD` prefix
 - `tests/test_method_captured_fixtures.py`: one captured real guide page (`captured_talents_page.html`), which pins the parser against production markup
 - `tests/e2e/test_method.py`: live end-to-end journeys, run with `make test-e2e E2E_ARGS="tests/e2e/test_method.py"`
 
-Design history and the original research notes are in
-[../architecture/history/method.md](../architecture/history/method.md).
-
 ## Source Links
 
 - `https://www.method.gg/guides/mistweaver-monk`

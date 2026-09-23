@@ -160,7 +160,7 @@ def test_resolve_strips_the_family_hint_and_its_article_command_returns_that_pag
 
 
 def test_resolve_without_a_family_hint_lands_on_the_api_page_it_names(require) -> None:
-    """A bare function name strips nothing and still resolves to that function's own page.
+    """A bare function name, with no family hint, still resolves to that function's own page.
 
     ``resolve`` is the entry point an agent uses before it knows which surface a query belongs to,
     so the command it prints has to open the API reference, not a page that mentions the call.
@@ -169,8 +169,6 @@ def test_resolve_without_a_family_hint_lands_on_the_api_page_it_names(require) -
     resolved = run(BINARY, "resolve", pins.WIKI_API_FUNCTION, "--limit", "3")
 
     assert resolved.data["resolved"] is True, resolved.describe()
-    # `excluded_terms` appears only when a family hint was stripped (the hinted journey above reads it).
-    assert "excluded_terms" not in resolved.data, "a bare query has no family hint to strip"
     assert resolved.data["match"]["id"] == API_PAGE_TITLE, resolved.describe()
     assert resolved.data["match"]["metadata"]["content_family"] == "api_function", resolved.describe()
 

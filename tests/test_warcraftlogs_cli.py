@@ -63,7 +63,6 @@ def _bare_client() -> WarcraftLogsClient:
 class _FakeWarcraftLogsClient:
     def __init__(self, *, site: WarcraftLogsSiteProfile = RETAIL_PROFILE) -> None:
         self._site = site
-        self.closed = False
         self._guild_ttl = 300
         self._report_ttl = 60
         self._finished_report_ttl = 86400
@@ -75,7 +74,7 @@ class _FakeWarcraftLogsClient:
         self.report_fights_allow_unlisted: list[bool] = []
 
     def close(self) -> None:
-        self.closed = True
+        pass
 
     @property
     def site(self) -> WarcraftLogsSiteProfile:
@@ -1599,6 +1598,32 @@ def test_warcraftlogs_search_matches_explicit_report_reference() -> None:
     assert payload["data"]["results"][0]["report_reference"]["code"] == "abcd1234"
     assert payload["data"]["results"][0]["report_reference"]["fight_id"] == 3
     assert payload["data"]["results"][0]["follow_up"]["command"] == "warcraftlogs report-encounter abcd1234 --fight-id 3"
+
+
+# Real report codes are 16 letters and digits, and many carry no digit at all.
+@pytest.mark.parametrize(
+    ("reference", "kind"),
+    [
+        ("https://www.warcraftlogs.com/reports/JVFTxcKCqrvpaAzD#fight=4", "report_encounter"),
+        ("JVFTxcKCqrvpaAzD", "report"),
+        ("https://www.warcraftlogs.com/reports/DZzR9jwYmQA6tbV7#fight=4", "report_encounter"),
+        ("DZzR9jwYmQA6tbV7", "report"),
+    ],
+)
+def test_warcraftlogs_search_and_resolve_accept_real_report_codes(reference: str, kind: str) -> None:
+    code = reference.split("/")[-1].split("#")[0]
+    search = json.loads(runner.invoke(warcraftlogs_app, ["search", reference]).stdout)["data"]
+    assert [(row["kind"], row["report_reference"]["code"]) for row in search["results"]] == [(kind, code)]
+    resolve = json.loads(runner.invoke(warcraftlogs_app, ["resolve", reference]).stdout)["data"]
+    assert resolve["resolved"] is True
+    assert resolve["match"]["report_reference"]["code"] == code
+
+
+@pytest.mark.parametrize("word", ["frostdeathknight", "restorationdruid", "1234567890123456"])
+def test_warcraftlogs_resolve_does_not_read_a_sixteen_character_word_as_a_report_code(word: str) -> None:
+    # Real 16-character codes mix upper and lower case; a spec slug of that length is not a report.
+    assert json.loads(runner.invoke(warcraftlogs_app, ["search", word]).stdout)["data"]["count"] == 0
+    assert json.loads(runner.invoke(warcraftlogs_app, ["resolve", word]).stdout)["data"]["resolved"] is False
 
 
 def test_warcraftlogs_search_includes_selected_site_in_follow_up() -> None:

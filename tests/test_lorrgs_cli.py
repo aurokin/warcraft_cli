@@ -472,6 +472,34 @@ def test_report_overview_accepts_warcraftlogs_url(monkeypatch) -> None:
     assert ("report_overview", {"report_id": "bG3xDYPqKjLm8XaR", "refresh": False}) in FakeLorrgsClient.calls
 
 
+@pytest.mark.parametrize(
+    "reference",
+    [
+        "https://www.warcraftlogs.com/reports/JVFTxcKCqrvpaAzD#fight=4",
+        "JVFTxcKCqrvpaAzD",
+        "https://www.warcraftlogs.com/reports/DZzR9jwYmQA6tbV7#fight=4",
+        "DZzR9jwYmQA6tbV7",
+    ],
+)
+def test_report_overview_accepts_real_report_codes_with_or_without_digits(monkeypatch, reference: str) -> None:
+    # Real report codes are 16 letters and digits, and many carry no digit at all.
+    _patch_client(monkeypatch)
+    code = reference.split("/")[-1].split("#")[0]
+    result = runner.invoke(app, ["report-overview", reference])
+    assert result.exit_code == 0, result.stderr
+    assert ("report_overview", {"report_id": code, "refresh": False}) in FakeLorrgsClient.calls
+
+
+@pytest.mark.parametrize("word", ["frostdeathknight", "restorationdruid", "1234567890123456"])
+def test_report_overview_rejects_a_sixteen_character_word(monkeypatch, word: str) -> None:
+    # Real 16-character codes mix upper and lower case; a spec slug of that length is not a report.
+    _patch_client(monkeypatch)
+    result = runner.invoke(app, ["report-overview", word])
+    assert result.exit_code == 1
+    assert json.loads(result.stderr)["error"]["code"] == "invalid_report_ref"
+    assert FakeLorrgsClient.calls == []
+
+
 def test_report_overview_accepts_plural_lorrgs_user_reports_url(monkeypatch) -> None:
     _patch_client(monkeypatch)
     url = "https://lorrgs.io/user_reports/bG3xDYPqKjLm8XaR/fights?fight=22&type=damage-done"

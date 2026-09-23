@@ -19,9 +19,12 @@ Use `warcraft` first when the caller does not already know which provider they n
 - Global flags (every binary, always before the subcommand):
   - `--pretty` pretty-print JSON; default output is compact JSON
   - `--compact` truncate long strings, with `--compact-max-chars <n>` to set the cut
-  - `--fields <a.b,c>` keep only these dot paths; repeatable
-  - `--fields-strict` fail instead of silently dropping a missing `--fields` path
-  - `--profile agent|human|debug` presets (`agent` is the default compact JSON)
+  - `--fields <a.b,c>` keep only these dot paths, rooted at the envelope (`data.results`,
+    `data.entity.name`); repeatable. The output is the projection, not an envelope, and a path that
+    did not resolve is listed under `fields_missing` instead of vanishing
+  - `--fields-strict` fail with `missing_fields` (exit 2) instead of listing a path under `fields_missing`
+  - `--profile agent|human` presets (`agent` is the default compact JSON, `human` pretty JSON)
+  - `wowhead --stream` writes JSON Lines instead of one object (see Output Contract)
   - `warcraft --expansion <profile>` additionally restricts routing to expansion-aware providers
   - example: `warcraft --pretty --fields data.results search "<query>"`
 - Trust check:
@@ -38,13 +41,15 @@ Use `warcraft` first when the caller does not already know which provider they n
 
 ## Output Contract
 
-Every binary emits one JSON object. On success it carries `ok: true`, `provider`, `command`,
-`kind`, `schema_version`, `query`, `provenance`, and `data`. Read the payload from `data`: every
-binary populates it, and nothing else sits at the top level.
+Every binary emits one JSON object, the envelope: `ok`, `provider`, `command`, `kind`,
+`schema_version`, `query`, `provenance`, and `data`, plus `error` on failure. Nothing else sits at
+the top level; a binary refuses to print anything else and fails with `internal_error` instead.
+Read the payload from `data`.
 
-On failure the object goes to stderr with `ok: false` and
-`error: {"code": ..., "message": ..., "details"?: ...}`, and the process exit code tells you what
-to do next:
+On failure the object goes to stderr with `ok: false`, `data: {}`, `query` echoing the parameters
+the command parsed (`null` when it failed before parsing them), and
+`error: {"code": ..., "message": ..., "details"?: ...}`. The process exit
+code tells you what to do next:
 
 | Exit | Meaning | Reaction |
 | --- | --- | --- |
@@ -55,7 +60,14 @@ to do next:
 | `4` | target not found | try a different id or `resolve` again |
 | `5` | network or upstream failure | back off and retry once |
 
-A traceback is always a bug — report it rather than parsing it.
+Providers map some of their own codes onto the same exits (for example `simc` `unknown_talent`
+exits 2, `curseforge` `missing_api_key` exits 3), so branch on the exit code and read `error.code`
+for the detail. A traceback is always a bug — report it rather than parsing it.
+
+`wowhead --stream` is the one opt-in exception to "one object": when the payload has a row list,
+stdout is JSON Lines, a header line that is the envelope with that list emptied and
+`data.stream: {"field", "count"}` naming it, then one `{"record": <row>}` line per row. Parse it line
+by line.
 
 ## Provider Synopsis
 
@@ -74,13 +86,13 @@ narrower, **experimental** is thin and may change.
 | `raidbots` | experimental | reading shared Raidbots reports and bridging their SimC input to local `simc` | `warcraft raidbots inspect-report <url-or-id>`, `warcraft raidbots input <url-or-id>`, `warcraft raidbots explain-input` |
 | `blizzard` | experimental; verified live for us/eu/kr/tw | official Battle.net Game Data (realm, item) and Profile (character) reads | `warcraft blizzard doctor`, `warcraft blizzard realm ...`, `warcraft blizzard character ...` |
 | `curseforge` | experimental; verified live | World of Warcraft addon lookup: metadata, latest files, changelog | `warcraft curseforge doctor`, `warcraft curseforge addon <slug-or-id>` |
-| `lorrgs` | experimental | top-parse cooldown timelines, composition rankings, report overview handoffs, and static spec/boss/spell metadata | `warcraft lorrgs resolve ...`, `warcraft lorrgs spec-ranking ...` |
+| `lorrgs` | supported | top-parse cooldown timelines, composition rankings, report overview handoffs, and static spec/boss/spell metadata | `warcraft lorrgs resolve ...`, `warcraft lorrgs spec-ranking ...` |
 
 ## Routing Rules
 
 - Prefer `resolve` when you want one conservative next command.
 - Prefer `search` when you want to inspect candidates across providers.
-- Prefer `warcraft guild ...` when the user wants a guild snapshot and you want normalized input plus explicit source disagreement reporting.
+- Prefer `warcraft guild ...` for one guild's Raider.IO snapshot with normalized region/realm/name input, and `warcraft guild-ranks ...` for its per-raid normal/heroic/mythic world, region, and realm ranks. A rank of `0` means unranked at that difficulty, not first place, and Raider.IO only covers the current expansion.
 - Preserve provider provenance. `warcraft` is a router, not a source.
 - Use `warcraft guide-compare` when you already have exported guide bundles and want additive cross-provider evidence instead of a synthesized summary.
 - Use `warcraft guide-compare-query` when you want the wrapper to resolve, export, and compare guide candidates conservatively across supported guide providers.
@@ -88,7 +100,7 @@ narrower, **experimental** is thin and may change.
 - `guide-compare-query` should reuse prior orchestrated bundles only through explicit freshness rules like `--max-age-hours` and `--force-refresh`, not through invisible cache-like behavior.
 - Steer `guide-compare-query` orchestration with:
   - `--provider <name>` repeatable, to restrict the run to `wowhead`, `method`, or `icy-veins`
-  - `--out-root <dir>` to choose where the orchestrated bundles are written
+  - `--out-root <dir>` to choose where the orchestrated bundles are written (default `<XDG data dir>/warcraft/guide_compare/<query-slug>`, never the current directory)
   - `--limit <n>` (1-20, default 5) provider-local resolve candidates considered before one guide is selected
   - `--max-age-hours <n>` (1-720, default 24) and `--force-refresh` for bundle reuse
   - `--simc-build-handoff` plus `--simc-apl-path <apl>`, `--simc-decode` / `--no-simc-decode`, and `--simc-build-limit <n>` (1-200, default 20) for the SimC handoff
@@ -97,7 +109,9 @@ narrower, **experimental** is thin and may change.
 - Use `warcraft talent-describe` when you want that same routed packet handed directly into `simc describe-build` without manually chaining commands.
 - Use `warcraft cooldown-packet` for player-specific log questions like "how can I improve my
   cooldowns in P2"; it joins Lorrgs phase/spell/top-parse context with exact Warcraft Logs cast
-  events for the selected actor and keeps both sources visible.
+  events for the selected actor and keeps both sources visible. For a report Lorrgs cannot serve,
+  pass `--actor-id` and `--spec-slug` to get the Warcraft Logs half with
+  `data.lorrgs.status: "unavailable"`; without both flags the command fails naming them.
 - Typical packet flow:
   - `warcraftlogs report-player-talents <report> --fight-id <id> --actor-id <id> --out ./tmp/actor-packet.json`
   - `simc validate-talent-transport --build-packet ./tmp/actor-packet.json --out ./tmp/actor-packet-validated.json`
@@ -105,10 +119,10 @@ narrower, **experimental** is thin and may change.
 - Failure contract:
   - producer commands fail with `invalid_transport_packet` if they would otherwise emit malformed packet JSON
   - malformed Wowhead-like talent refs, including exact packet refs without a build code, fail with `invalid_tool_ref`
-  - `simc ... --build-packet <path>` fails with `invalid_build_packet` when the packet file is malformed
+  - `simc identify-build|decode-build|describe-build|validate-talent-transport --build-packet <path>` fails with `invalid_build_packet` when the packet file is malformed; no other simc command takes `--build-packet`
   - wrapper routing preserves provider `invalid_transport_packet` failures instead of replacing them with a generic wrapper error
 - Add `--simc-build-handoff` when you want the orchestration packet to include explicit guide build refs handed into `simc`; add `--simc-apl-path` when you also want exact-build `describe-build` output.
-- Use `warcraft guide-builds-simc` when you want explicit guide build refs handed into `simc` without inferring claims from guide prose; the handoff packet now includes provenance, citations, and source freshness so agents can tell how trustworthy the build inputs are.
+- Use `warcraft guide-builds-simc` when you want explicit guide build refs handed into `simc` without inferring claims from guide prose; the handoff packet includes provenance, citations, and source freshness so agents can tell how trustworthy the build inputs are. Branch on `summary.simc_handoff_status`: `ok`, `partial` (a leg worked for some builds), `failed` (a requested leg produced nothing, named in `summary.empty_requested_legs`), or `no_build_references`; when every requested leg produced nothing the command fails with `simc_handoff_failed` (exit 1).
 - Add `--apl-path` when you want the wrapper to include exact-build `simc describe-build` output for those same explicit guide build refs.
 - When `--expansion` matters, trust only the providers the wrapper says are included.
 - Once the provider is known, switch to the provider CLI or the provider reference below.

@@ -4,10 +4,10 @@
 - Package manager is `uv`. Install the dev environment: `uv sync --all-extras` (or `make install`).
 - `uv.lock` is committed. Refresh it with `uv lock` whenever a dependency changes, and commit it.
 - `pip install -e '.[dev]'` still works if you cannot use uv; add `,redis` for the Redis extra.
-- Fast tests: `make test-fast` (`pytest -q -m "not live"`). Non-live tests run under a network guard
-  in `tests/conftest.py`, so a test that reaches the network fails.
+- Fast tests: `make test-fast` (`pytest -q -m "not live and not e2e"`). Non-live tests run under a
+  network guard in `tests/conftest.py`, so a test that reaches the network fails.
 - Local CI parity: `make check` = lint + typecheck + import boundaries + complexity gate + dead code
-  + fast tests.
+  + `make coverage` (the fast tests with a coverage floor).
 - End-to-end journeys: `make test-e2e` runs `tests/e2e/` through the installed binaries against
   real providers with the keys in `~/.config/warcraft/providers`. Skips are failures unless
   excluded via `WARCRAFT_E2E_SKIP`. See `docs/architecture/E2E_TESTING.md`.
@@ -15,11 +15,14 @@
 - Type check: `make typecheck` (mypy over all 16 packages).
 - Complexity: `make complexity-gate` (`xenon --max-absolute C packages`, blocking). `make complexity`
   is the advisory radon report.
-- Dead code: `make deadcode` (vulture with `scripts/vulture_allowlist.py`, blocking).
-- Coverage: `make coverage` over `packages/` (`pytest-cov`, stdlib `trace` fallback).
-- Generated docs: `make reference` writes `docs/reference/<cli>.md` from the Typer apps and
-  `make skills` writes the provider subskills. Never hand-edit either output; staleness tests fail
-  when they drift.
+- Dead code: `make deadcode` (vulture at confidence 60 with `scripts/vulture_allowlist.py`, blocking).
+- Coverage: `make coverage` runs the fast tests with `pytest-cov` over `packages/` and fails below the
+  `--cov-fail-under` floor in the Makefile; part of `make check`.
+- Generated output: `make reference` writes `docs/reference/<cli>.md` from the Typer apps and
+  `make schema` writes `schemas/envelope.schema.json`; `tests/test_command_reference.py` and
+  `tests/test_warcraft_cli_envelope_schema.py` fail when either is stale. `make skills` writes the
+  provider subskills to the gitignored `.generated-skills/`, which no test compares, so rerun it
+  after editing `skills/warcraft/`. Never hand-edit generated output.
 - Build the release artifact: `make build` (`uv build --wheel`).
 - Live canary: `make test-canary` (`tests/test_wowhead_parser_canaries.py`, gated by
   `WOWHEAD_LIVE_TESTS=1`) is the only live test outside `tests/e2e/`.

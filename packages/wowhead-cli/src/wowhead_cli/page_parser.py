@@ -68,15 +68,24 @@ def canonical_comment_url(page_url: str, comment_id: int) -> str:
     return f"{page_url}#comments:id={comment_id}"
 
 
-def parse_page_metadata(html_text: str, *, fallback_url: str) -> dict[str, str | None]:
+def parse_page_metadata(html_text: str, *, fallback_url: str | None) -> dict[str, str | None]:
     canonical = _first_group(CANONICAL_RE, html_text) or fallback_url
     og_title = _first_group(META_OG_TITLE_RE, html_text)
     description = _first_group(META_DESCRIPTION_RE, html_text)
     return {
-        "canonical_url": unescape(canonical),
+        "canonical_url": unescape(canonical) if canonical else None,
         "title": unescape(og_title) if og_title else None,
         "description": unescape(description) if description else None,
     }
+
+
+PAGE_ERROR_RE = re.compile(r"""<div id=["']inputbox-error["']>(?P<message>.*?)</div>""", re.IGNORECASE | re.DOTALL)
+
+
+def parse_page_error(html_text: str) -> str | None:
+    """The message of Wowhead's error page, which it serves with HTTP 200 (a missing profiler list)."""
+    match = PAGE_ERROR_RE.search(html_text)
+    return unescape(match["message"]).strip() if match else None
 
 
 def parse_page_meta_json(html_text: str) -> dict[str, Any] | None:

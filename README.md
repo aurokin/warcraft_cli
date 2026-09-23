@@ -25,7 +25,7 @@ make dev-deploy-no-link  # refresh the checkout-local .venv for branch work
 | `warcraft-wiki` | supported | reference, lore, API/event articles | [docs/warcraft-wiki](docs/warcraft-wiki/README.md) |
 | `icy-veins` | supported | guide extraction and local guide query | [docs/icy-veins](docs/icy-veins/README.md) |
 | `method` | supported | guide extraction and local guide query | [docs/method](docs/method/README.md) |
-| `lorrgs` | experimental | top-parse cooldown timelines, comp rankings | [docs/lorrgs](docs/lorrgs/README.md) |
+| `lorrgs` | supported | top-parse cooldown timelines, comp rankings | [docs/lorrgs](docs/lorrgs/README.md) |
 | `raidbots` | experimental | public report consumption, SimC handoff | [docs/raidbots](docs/raidbots/README.md) |
 | `blizzard` | experimental (verified live for us/eu/kr/tw) | Battle.net Game Data and Profile reads | [docs/blizzard-api](docs/blizzard-api/README.md) |
 | `curseforge` | experimental (verified live) | addon metadata and changelogs | [docs/curseforge](docs/curseforge/README.md) |
@@ -48,7 +48,7 @@ wowhead entity item 19019
 ## Development
 
 ```bash
-make check       # lint, typecheck, import boundaries, complexity, dead code, fast tests
+make check       # lint, typecheck, import boundaries, complexity, dead code, fast tests + coverage floor
 make test-e2e    # end-to-end journeys against the real providers (network; docs/architecture/E2E_TESTING.md)
 make reference   # regenerate docs/reference/; make skills regenerates provider subskills
 ```

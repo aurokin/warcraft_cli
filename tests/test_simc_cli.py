@@ -469,7 +469,7 @@ def test_simc_identify_build_accepts_wow_export_transport_form_from_build_packet
 
     monkeypatch.setattr(
         "simc_cli.main.identify_build",
-        lambda _paths, build_spec: (
+        lambda _paths, build_spec, apl_path: (
             build_spec,
             BuildIdentity(actor_class=build_spec.actor_class,
                     spec=build_spec.spec,
@@ -1453,7 +1453,8 @@ def test_simc_unidentified_build_message_names_the_specs_a_class_hint_narrowed_t
         # An impossible pair reached SimC, which blamed the build with invalid_build.
         (["decode-build", "--talents", "BASE", "--actor-class", "mage", "--spec", "holy"], "Valid mage specs: arcane, fire, frost."),
         # The APL views read the hint on their own path, which reported prune_context_failed (exit 1).
-        (["apl-prune", "mage_arcane.simc", "--talents", "BASE", "--spec", "holyy"], "Valid mage specs: arcane, fire, frost."),
+        # Only the caller's hint is checked, so the file name's mage does not scope the valid values.
+        (["apl-prune", "mage_arcane.simc", "--talents", "BASE", "--spec", "holyy"], "Unknown spec 'holyy'. Valid specs: affliction,"),
     ],
     ids=["unknown-class", "impossible-pair", "apl-view"],
 )
@@ -2608,6 +2609,36 @@ def test_simc_identify_build_from_an_apl_file_name_is_not_high_confidence(tmp_pa
     assert identity["confidence"] == "medium"
 
 
+def test_simc_apl_prune_reads_a_renamed_apl_whose_name_is_no_simc_spec(tmp_path: Path) -> None:
+    """mage_arcane_variant.simc used to fail invalid_query: "Unknown mage spec 'arcane_variant'", a spec nobody passed."""
+    repo_root = _checkout(tmp_path)
+    apl = tmp_path / "mage_arcane_variant.simc"
+    apl.write_text("actions=arcane_blast\n")
+
+    result = runner.invoke(simc_app, ["--repo-root", str(repo_root), "apl-prune", str(apl)])
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    build = json.loads(result.stdout)["data"]["build"]
+    assert (build["actor_class"], build["spec"]) == (None, None)
+    assert "ignored apl name: mage_arcane_variant does not complete a SimC class/spec pair" in build["source_notes"]
+
+
+def test_simc_apl_prune_names_the_missing_class_when_a_renamed_apl_gets_enable(tmp_path: Path) -> None:
+    """With no class known, a real talent used to be reported as "Not a talent of this class"."""
+    repo_root = _checkout(tmp_path)
+    apl = tmp_path / "mage_arcane_variant.simc"
+    apl.write_text("actions=arcane_blast\n")
+
+    result = runner.invoke(
+        simc_app, ["--repo-root", str(repo_root), "apl-prune", str(apl), "--enable", "Arcane Familiar"]
+    )
+
+    assert result.exit_code == 2
+    error = json.loads(result.stderr)["error"]
+    assert error["code"] == "unknown_talent"
+    assert error["message"] == "No actor class to check talents against: Arcane Familiar. Pass --actor-class."
+
+
 def test_simc_decode_build_payload_separates_the_inactive_hero_tree_and_unreadable_ranks(tmp_path: Path) -> None:
     repo_root = _checkout(tmp_path)
 
@@ -3032,6 +3063,7 @@ def test_simc_modify_build_rejects_an_entry_id_the_checkout_does_not_know(tmp_pa
         ["--remove", "Blazing Barrier"],  # a mage class-tree talent only Fire can take
         ["--add", "80178:1"],  # the same talent by entry id
         ["--add", "96172:1"],  # Blinding Sleet, a Death Knight class talent
+        ["--add", "Isothermic Core:1"],  # Frostfire's, a hero tree Arcane's selection node does not offer
     ],
 )
 def test_simc_modify_build_rejects_a_talent_this_spec_cannot_take(tmp_path: Path, edit: list[str]) -> None:
@@ -3089,13 +3121,14 @@ def test_simc_modify_build_fails_on_bad_add_format(tmp_path: Path) -> None:
     assert payload["error"]["code"] == "invalid_argument"
 
 
-def test_simc_modify_build_fails_without_modifications(tmp_path: Path) -> None:
+def test_simc_modify_build_without_modifications_is_a_usage_error(tmp_path: Path) -> None:
     fake = _FakeSimcBinary({"BASE": CAPTURED_ARCANE_MAGE})
 
     exit_code, payload = _modify(tmp_path, fake)
 
-    assert exit_code == 1
-    assert payload["error"]["code"] == "no_modifications"
+    assert exit_code == 2
+    assert payload["error"]["code"] == "invalid_argument"
+    assert fake.profiles == [], "SimC decoded the base build for a request with nothing to change"
 
 
 def test_simc_modify_build_swap_class_tree_rebuilds_from_split_trees(tmp_path: Path) -> None:

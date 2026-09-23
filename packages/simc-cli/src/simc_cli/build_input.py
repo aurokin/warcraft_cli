@@ -6,7 +6,7 @@ import re
 import subprocess
 import tempfile
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -113,8 +113,9 @@ class HeroTree:
 
 @dataclass(slots=True)
 class BuildResolution:
-    actor_class: str
-    spec: str
+    # None only for a build with no talents whose class and spec nobody named (an APL-only view).
+    actor_class: str | None
+    spec: str | None
     enabled_talents: set[str]
     talents_by_tree: dict[str, list[DecodedTalent]]
     source_kind: str | None
@@ -671,7 +672,6 @@ def _reject_blank_build_options(supplied: dict[str, str | None]) -> None:
 
 def load_build_spec(
     *,
-    apl_path: str | Path | None,
     profile_path: str | None,
     build_file: str | None,
     build_text: str | None,
@@ -709,14 +709,6 @@ def load_build_spec(
         )
     ):
         raise ValueError("Cannot combine --build-packet with other explicit build input options.")
-
-    inferred = BuildSpec()
-    if apl_path:
-        inferred_class, inferred_spec = infer_actor_and_spec_from_apl(apl_path)
-        inferred.actor_class = inferred_class
-        inferred.spec = inferred_spec
-        if inferred.actor_class or inferred.spec:
-            inferred.source_notes.append(f"inferred from apl: {Path(apl_path).stem}")
 
     from_talents_option = BuildSpec()
     if talents.talents:
@@ -757,9 +749,7 @@ def load_build_spec(
         from_build_text = extract_build_spec_from_text(build_text)
         from_build_text.source_notes.append("inline build text")
 
-    merged = merge_build_specs(
-        inferred, from_profile, from_build_file, from_build_packet, from_build_text, from_talents_option, explicit
-    )
+    merged = merge_build_specs(from_profile, from_build_file, from_build_packet, from_build_text, from_talents_option, explicit)
     # SimC's spellings: `Death Knight`, `death_knight` and `DeathKnight` all name deathknight.
     merged.actor_class = normalize_actor_class(merged.actor_class)
     merged.spec = normalize_spec_name(merged.spec)
@@ -858,12 +848,37 @@ def _probe_build_matches(repo: RepoPaths, build_spec: BuildSpec, candidates: lis
     return matches
 
 
-def identify_build(repo: RepoPaths, build_spec: BuildSpec) -> tuple[BuildSpec, BuildIdentity]:
-    unverified_packet_transport = getattr(build_spec, "transport_form", None) == "wow_talent_export"
-    trusted_identity_hint = _has_trusted_identity_hint(build_spec)
-    narrow = not unverified_packet_transport or trusted_identity_hint
-    if narrow:
+def _with_apl_guess(repo: RepoPaths, build_spec: BuildSpec, apl_path: str | Path) -> BuildSpec:
+    """Fill a class or spec the caller left out from an APL file name such as ``mage_arcane.simc``.
+
+    The name is a guess, not caller input: a renamed copy such as ``mage_arcane_variant.simc`` names
+    no SimC spec. A guess that does not complete a known class/spec pair is dropped and noted, so it
+    is never reported as the caller's mistake.
+    """
+    guess_class, guess_spec = infer_actor_and_spec_from_apl(apl_path)
+    actor_class = build_spec.actor_class or normalize_actor_class(guess_class)
+    spec = build_spec.spec or normalize_spec_name(guess_spec)
+    if (actor_class, spec) == (build_spec.actor_class, build_spec.spec):
+        return build_spec
+    stem = Path(apl_path).stem
+    if (actor_class, spec) not in _known_specs(repo):
+        note = f"ignored apl name: {stem} does not complete a SimC class/spec pair"
+        return replace(build_spec, source_notes=[*build_spec.source_notes, note])
+    return replace(
+        build_spec, actor_class=actor_class, spec=spec, source_notes=[*build_spec.source_notes, f"inferred from apl: {stem}"]
+    )
+
+
+def identify_build(
+    repo: RepoPaths, build_spec: BuildSpec, *, apl_path: str | Path | None = None
+) -> tuple[BuildSpec, BuildIdentity]:
+    unverified_packet_transport = build_spec.transport_form == "wow_talent_export"
+    # Only the caller's own hints are validated; the APL file-name guess is checked on its own terms.
+    if not unverified_packet_transport or _has_trusted_identity_hint(build_spec):
         _check_class_spec_hint(repo, build_spec.actor_class, build_spec.spec)
+    if apl_path:
+        build_spec = _with_apl_guess(repo, build_spec, apl_path)
+    narrow = not unverified_packet_transport or _has_trusted_identity_hint(build_spec)
 
     if build_spec.actor_class and build_spec.spec and not unverified_packet_transport:
         return _direct_build_identity(build_spec)
@@ -1032,10 +1047,9 @@ def _expand_tiered_talents(repo: RepoPaths, build_spec: BuildSpec, talents_by_tr
 
 
 def decode_build(repo: RepoPaths, build_spec: BuildSpec) -> BuildResolution:
-    if not build_spec.actor_class or not build_spec.spec:
-        raise ValueError("Need both actor class and spec to decode talent strings.")
     if not has_talent_data(build_spec):
-        # An APL-only view (priority, inactive-actions) decodes a build that carries no talents.
+        # An APL-only view (priority, inactive-actions) decodes a build that carries no talents, and
+        # needs no class or spec for it: an APL whose file name names no SimC spec still reads.
         return BuildResolution(
             actor_class=build_spec.actor_class,
             spec=build_spec.spec,
@@ -1045,6 +1059,8 @@ def decode_build(repo: RepoPaths, build_spec: BuildSpec) -> BuildResolution:
             generated_profile_text=None,
             source_notes=build_spec.source_notes[:],
         )
+    if not build_spec.actor_class or not build_spec.spec:
+        raise ValueError("Need both actor class and spec to decode talent strings.")
     if not repo.build_simc.exists():
         raise SimcNotReadyError(f"SimC binary not found: {repo.build_simc}")
 

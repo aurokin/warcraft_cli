@@ -14,6 +14,7 @@ from tests.wowhead_testkit import (
     SAMPLE_PROFESSION_TREE_HTML,
     SAMPLE_PROFILER_HTML,
     SAMPLE_TALENT_CALC_HTML,
+    captured_page,
     runner,
 )
 
@@ -430,7 +431,7 @@ def test_dressing_room_command_normalizes_hash_ref(monkeypatch) -> None:
 
 def test_profiler_command_normalizes_list_ref(monkeypatch) -> None:
     def fake_page_html(self, page_url: str):  # noqa: ANN001
-        assert page_url == "https://www.wowhead.com/list"
+        assert page_url == "https://www.wowhead.com/list?list=97060220/us/illidan/Roguecane"
         return SAMPLE_PROFILER_HTML
 
     monkeypatch.setattr("wowhead_cli.main.WowheadClient.page_html", fake_page_html)
@@ -443,3 +444,40 @@ def test_profiler_command_normalizes_list_ref(monkeypatch) -> None:
     assert payload["data"]["tool"]["character_name"] == "Roguecane"
 
 
+def test_profiler_fails_not_found_when_wowhead_serves_its_missing_list_page(monkeypatch) -> None:
+    """Wowhead answers a list that does not exist with HTTP 200 and an "Error" page (captured)."""
+    fetched: list[str] = []
+
+    def fake_page_html(self, page_url: str) -> str:
+        fetched.append(page_url)
+        return captured_page("profiler_missing_list_page.html")
+
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.page_html", fake_page_html)
+    result = runner.invoke(app, ["profiler", "97060220/us/illidan/Roguecane"])
+    assert fetched == ["https://www.wowhead.com/list?list=97060220/us/illidan/Roguecane"]
+    assert result.exit_code == 4
+    payload = json.loads(result.stderr)
+    assert payload["error"]["code"] == "not_found"
+    assert "doesn't exist or has been removed" in payload["error"]["message"]
+
+
+def test_profiler_refuses_a_url_off_wowhead_without_fetching_it(monkeypatch) -> None:
+    # The host only ends with "wowhead.com"; it is not wowhead.com or a subdomain of it.
+    def fail_fetch(self, page_url: str) -> str:
+        raise AssertionError(page_url)
+
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.page_html", fail_fetch)
+    result = runner.invoke(app, ["profiler", "https://evilwowhead.com/list?list=1/us/a/b"])
+    assert result.exit_code == 1
+    assert json.loads(result.stderr)["error"]["code"] == "invalid_tool_ref"
+
+
+def test_profiler_reports_no_canonical_url_when_the_fetched_page_names_none(monkeypatch) -> None:
+    """The page's og:url says /list; the ref URL was never a canonical the page claimed."""
+    html = SAMPLE_PROFILER_HTML.replace('<link rel="canonical" href="https://www.wowhead.com/list">', "")
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.page_html", lambda self, page_url: html)
+    result = runner.invoke(app, ["profiler", "97060220/us/illidan/Roguecane"])
+    assert result.exit_code == 0
+    page = json.loads(result.stdout)["data"]["page"]
+    assert page["canonical_url"] is None
+    assert page["note"] == "The fetched page carries no canonical link."

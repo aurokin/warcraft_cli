@@ -4,8 +4,6 @@
 checkout, decodes talent builds and APLs from it, and — when the binary is built — runs short sims and
 parses their JSON reports. It never talks to a web API.
 
-Design history lives in [../architecture/history/simc.md](../architecture/history/simc.md).
-
 ## Requirements
 
 - a SimulationCraft source checkout for read-only analysis
@@ -109,6 +107,14 @@ to force talents on or off on top of the resolved build.
 
 Passing a build-input option with an empty value is a usage error, not the same as omitting it.
 
+The class and spec an APL file name suggests (`mage_arcane.simc`) only fill what the caller left out.
+When the name does not complete a SimC class/spec pair (a renamed copy such as
+`mage_arcane_variant.simc`, or a `warrior_fury.simc` given with `--actor-class mage`) it is ignored and
+`source_notes` says `ignored apl name: ...`; the build is then identified as if no APL were given, and an
+APL view with no talents reads the file with `actor_class` and `spec` null. Such a view then knows no
+class, so `--enable`/`--disable` fail with `unknown_talent` even for a real talent; pass
+`--actor-class` and `--spec`.
+
 Raw-only transport packets are not accepted as direct build input: upgrade them with
 `simc validate-talent-transport --build-packet <path> --out <path>` first. Malformed packets fail with
 `invalid_build_packet` on every command that reads one.
@@ -160,7 +166,8 @@ tree, or a class-tree talent reserved for another spec (Chi Burst is Brewmaster'
 the spec must be offered its hero tree by that tree's selection node, whatever specs the talent row
 itself is tagged with (Augmentation's Chronowarden talents are tagged only for Preservation, yet
 Augmentation can take them; Arcane cannot take Frostfire's). An `--add` value that
-is not `name:rank` or `entry_id:rank` fails with `invalid_argument` (exit 2).
+is not `name:rank` or `entry_id:rank` fails with `invalid_argument` (exit 2), and so does a
+`modify-build` with no `--swap-*-tree-from`, `--add` or `--remove`.
 
 Healer builds encode like any other. SimC refuses to simulate some healers (Mistweaver and Holy Paladin
 always), so the encoder runs SimC in debug mode, which saves the profile without needing a simulated
@@ -294,6 +301,5 @@ synthesize authoritative build advice beyond that evidence.
 ## Source links
 
 - `https://github.com/simulationcraft/simc`
-- [Design record](../architecture/history/simc.md)
 - [Error and envelope contract](../foundation/ERROR_CONTRACT.md)
 - [Roadmap](../ROADMAP.md)

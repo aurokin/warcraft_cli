@@ -44,7 +44,7 @@ def _report_reference_or_fail(ctx: typer.Context, report_ref: str) -> tuple[str,
         fail(
             ctx,
             "invalid_report_ref",
-            "Expected a Warcraft Logs report URL, Lorrgs user_report URL, or mixed alphanumeric report code.",
+            "Expected a Warcraft Logs report URL, Lorrgs user_report URL, or 16-character report code.",
         )
     return ref.code, ref.fight_id, ref.report_type
 

@@ -321,6 +321,25 @@ def test_a_warcraftlogs_report_url_carries_the_fight_through(catalog: Catalog) -
     assert [fight["fight_id"] for fight in selected.data["fights"]] == [catalog.fight_id]
 
 
+def test_a_report_code_without_a_digit_is_a_report_reference(require) -> None:
+    """Warcraft Logs report codes are 16 letters and digits, and some carry no digit at all.
+
+    A code the parser rejects fails ``invalid_report_ref`` before the network, so a load that Lorrgs
+    answers (or reports ``not_found`` once the log ages out) proves the code was read. A 16-letter
+    word is still a word, not a report.
+    """
+    require("lorrgs")
+    code = "JVFTxcKCqrvpaAzD"
+    overview = run("lorrgs", "report-overview", f"https://www.warcraftlogs.com/reports/{code}#fight=4", expect=None)
+    assert overview.error_code in (None, "not_found"), overview.describe()
+    assert (overview.payload["query"]["report_id"], overview.payload["query"]["fight_id"]) == (code, 4), overview.describe()
+
+    bare = run("lorrgs", "resolve", code)
+    assert bare.data["match"]["report_id"] == code, bare.describe()
+    word = run("lorrgs", "resolve", "restorationdruid")
+    assert (word.data.get("match") or {}).get("kind") != "report_overview", word.describe()
+
+
 def test_search_ranks_the_spec_ranking_surface_first(catalog: Catalog) -> None:
     result = run("lorrgs", "search", f"{catalog.spec_slug} {catalog.boss_slug}", "--limit", "5")
     results = result.data["results"]

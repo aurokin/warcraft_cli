@@ -160,7 +160,7 @@ def normalize_wowhead_url(raw: str) -> str | None:
     return text
 
 
-def _is_wowhead_host(hostname: str) -> bool:
+def is_wowhead_host(hostname: str) -> bool:
     host = hostname.lower()
     return host == "wowhead.com" or host.endswith(".wowhead.com")
 
@@ -190,7 +190,7 @@ def detect_expansion_from_url(raw: str) -> ExpansionProfile | None:
         return None
     parsed = urlparse(normalized)
     host = (parsed.hostname or "").lower()
-    if not _is_wowhead_host(host):
+    if not is_wowhead_host(host):
         return None
 
     legacy = _profile_for_hostname(host)

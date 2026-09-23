@@ -7,7 +7,11 @@ envelope, the same exit codes, and the same global output flags. The implementat
 
 ## Envelope
 
-Every command writes exactly one JSON object to stdout on success or to stderr on failure.
+Every command writes exactly one JSON object to stdout on success or to stderr on failure. The one
+opt-in exception is `wowhead --stream`: when the payload has a row collection (`data.results`,
+`data.comments`, or `data.linked_entities.items`), stdout is JSON Lines, a header line that is the
+envelope with that collection emptied and `data.stream: {"field", "count"}` naming it, then one
+`{"record": <row>}` line per row. Its failures are still one envelope on stderr.
 
 | Key | Type | Meaning |
 | --- | --- | --- |
@@ -42,9 +46,9 @@ provider owns their contents).
 
 The top level holds only the keys in the table above. Every payload field lives under `data`, once.
 Older releases also copied payload keys (`results`, `count`, `entity`, ...) to the top level; those
-copies are removed, so read `data`. `warcraft_core.cli.emit` enforces this: it refuses a payload with
-a missing, mistyped, or extra top-level key, so the command fails with `internal_error` (exit 1)
-rather than printing it.
+copies are removed, so read `data`. `warcraft_core.cli.emit` (and the `wowhead --stream` writer)
+enforces this: it refuses a payload with a missing, mistyped, or extra top-level key, so the command
+fails with `internal_error` (exit 1) rather than printing it.
 
 ## Error object
 
@@ -67,8 +71,9 @@ are never echoed: an OAuth authorization code (`--code`), and the global output 
 `--fields`, ...). `query` is `null` when no command parsed its input: a usage error or an unexpected
 exception caught by the process guard, the same two caught by the `warcraft` wrapper while it runs a
 provider command in-process, a provider failure the wrapper builds from its in-process `doctor`
-surface call, and the `unsupported_provider_expansion` refusal a wrapper composite gets before a
-provider command runs. The wrapper's in-process `search` and `resolve` surface failures, including
+surface call, the `unsupported_provider_expansion` refusal a wrapper composite gets before a
+provider command runs, and `warcraft guide-builds-simc`'s `simc_handoff_failed`, whose `query` is
+`null` on success too. The wrapper's in-process `search` and `resolve` surface failures, including
 their `unsupported_provider_expansion` refusal, echo the query text, and a `warcraft <provider> ...`
 passthrough refusal echoes `{provider, expansion}`.
 

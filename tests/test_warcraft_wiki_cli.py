@@ -328,6 +328,50 @@ def test_search_ranks_the_article_a_qualified_query_names_above_pages_that_menti
     assert "query_contains_title" in payload["results"][0]["ranking"]["match_reasons"]
 
 
+def test_resolve_picks_the_disambiguated_page_a_query_spells_out_over_its_base_page(monkeypatch) -> None:
+    # Captured rows: MediaWiki has "Sha of Anger" 5th and "Sha of Anger (Anniversary)" 20th, and the base
+    # page's snippet names the Anniversary version, so it carries every query word too.
+    transport = _CapturedTransport(_captured("search_world_boss_sha_of_anger.json"))
+    monkeypatch.setattr("warcraft_wiki_cli.client.request_with_retries", transport)
+
+    result = runner.invoke(warcraft_wiki_app, ["resolve", "sha of anger anniversary"])
+    assert result.exit_code == 0
+
+    payload = json.loads(result.stdout)["data"]
+    assert payload["resolved"] is True
+    assert payload["match"]["id"] == "Sha of Anger (Anniversary)"
+    # The title spells out the whole query, so it is an exact title rather than a partial one.
+    assert "exact_title" in payload["match"]["ranking"]["match_reasons"]
+    assert "query_contains_title" not in payload["match"]["ranking"]["match_reasons"]
+    assert payload["candidates"][1]["id"] == "Sha of Anger"
+
+
+@pytest.mark.parametrize(
+    ("query", "title", "exact"),
+    [
+        pytest.param("xuen tactics", "Xuen (tactics)", True, id="parenthetical_counts_as_words"),
+        pytest.param("patch 1.12", "Patch 1.1.2", False, id="digit_groups_stay_apart"),
+    ],
+)
+def test_exact_title_compares_the_words_of_title_and_query(query: str, title: str, exact: bool) -> None:
+    _, reasons, _ = score_wiki_match(query, query, title, "", ordinal=0)
+
+    assert ("exact_title" in reasons) is exact
+
+
+@pytest.mark.parametrize(
+    ("query", "title"),
+    [
+        pytest.param("shadow priest", "Sha", id="letters_inside_a_query_word"),
+        pytest.param("world boss sha of anger", "World Sha", id="words_not_adjacent_in_the_query"),
+    ],
+)
+def test_query_contains_title_needs_the_title_as_a_whole_word_phrase_of_the_query(query: str, title: str) -> None:
+    _, reasons, _ = score_wiki_match(query, query, title, "", ordinal=0)
+
+    assert "query_contains_title" not in reasons
+
+
 def test_score_wiki_match_caps_the_upstream_rank_baseline() -> None:
     # A row that matches nothing rides MediaWiki's order alone. The cap is pinned to its literal
     # value: it has to stay small enough that no unexplained row can outrank a real title match.
@@ -522,6 +566,15 @@ def test_is_confident_match_requires_the_top_row_to_cover_the_query() -> None:
     assert is_confident_match([covering_top, _ranked_row("UIHANDLER OnEvent", 50, floor)]) is True
     # Two rows that both cover the query and score within 18 of each other are genuinely ambiguous.
     assert is_confident_match([covering_top, _ranked_row("UIHANDLER OnEvent", 50, [*floor, "all_terms_match"])]) is False
+
+
+def test_is_confident_match_does_not_count_the_query_contains_title_bonus() -> None:
+    # 46 clears 25 + 18 only because of the title-in-query bonus; the title "Sha of Anger" is part of
+    # "sha of anger anniversary", which is no evidence it is the page the query asks for.
+    top = _ranked_row("Sha of Anger", 46, ["upstream_rank_1", "all_terms_match", "snippet_match", "query_contains_title"])
+    rival = _ranked_row("Sha of Anger (Anniversary)", 25, ["upstream_rank_10", "normalized_title_match", "all_terms_match"])
+
+    assert is_confident_match([top, rival]) is False
 
 
 def test_api_payload_prefers_direct_fetch_before_search() -> None:

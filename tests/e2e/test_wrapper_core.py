@@ -231,6 +231,8 @@ def test_search_routes_a_multi_word_realm_profile_query_to_raiderio_first(requir
     _assert_fanout_answered(result)
     top = _assert_merged_page(result)[0]
     assert (top["provider"], top["kind"], top["name"]) == ("raiderio", "character", pins.CHARACTER_NAME), json.dumps(top)[:600]
+    # The two realm words have to reach Raider.IO as one realm: a namesake on another realm is the wrong character.
+    assert top["id"] == f"https://raider.io/characters/{REGION}/{pins.GUILD_REALM}/{pins.CHARACTER_NAME}", json.dumps(top)[:600]
     # Read as free text, the same row would be an off-intent profile that only fills leftover slots.
     assert top["wrapper_ranking"]["off_intent"] is False, json.dumps(top["wrapper_ranking"])
 
@@ -536,6 +538,25 @@ def test_passthrough_forwards_the_global_output_flags(require) -> None:
     result = run_raw("warcraft", "--fields", "data.status", "--fields-strict", "raiderio", "doctor")
     assert result.exit_code == 0, result.describe()
     assert result.payload == {"data": {"status": "ready"}}, result.describe()
+
+
+@pytest.mark.parametrize(
+    ("argv", "provider", "error_code"),
+    [
+        (("method", "search", pins.GUIDE_QUERY), "method", "unsupported_provider_expansion"),
+        (("wowhead", "--expansion", "retail", "search", ITEM_QUERY), "wowhead", "duplicate_expansion_argument"),
+    ],
+)
+def test_passthrough_refuses_an_expansion_it_cannot_apply(argv: tuple[str, ...], provider: str, error_code: str) -> None:
+    """``--expansion wotlk`` for a retail-only provider, or twice over, is refused by the wrapper itself.
+
+    Behind a dead proxy, so a passthrough that ran the provider anyway fails on the network or
+    answers from the cache instead of producing this usage error.
+    """
+    result = run("warcraft", "--expansion", "wotlk", *argv, expect=EXIT_USAGE, error_code=error_code, env=dead_proxy_env())
+    assert result.payload["provider"] == "warcraft", result.describe()
+    assert result.payload["error"]["details"]["provider"] == provider, result.describe()
+    assert result.payload["query"] == {"provider": provider, "expansion": "wotlk"}, result.describe()
 
 
 def test_expansion_advisory_rides_along_when_a_provider_has_no_expansion_axis(require) -> None:

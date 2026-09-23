@@ -27,8 +27,12 @@ WIKI_ARTICLE_KIND = ArticleKind(surface="article", type_name="Article", entity_t
 UPSTREAM_RANK_MAX_SCORE = 10
 # A title that is a whole-word phrase inside a longer query ("world boss sha of anger" -> "Sha of
 # Anger") names the subject the qualifiers are about. Scaled by the share of query words the title
-# spells out, so "Sha of Anger" outranks "World boss", which outranks "Sha". A one-word title in a
-# long query earns only a few points, which the upstream rank can match.
+# spells out (18, 12 and 6 points for "Sha of Anger", "World boss" and "Sha" there), so the upstream
+# rank can still reorder two partial titles. A title that spells out the whole query, qualifier
+# included ("Sha of Anger (Anniversary)"), earns ``exact_title`` instead: with ``normalized_title_match``
+# that is 60 points, more than this bonus, the upstream rank and the snippet reasons together (at most
+# 54) when both titles share a content family. ``is_confident_match`` discounts this bonus, so it
+# never makes a row confident.
 QUERY_CONTAINS_TITLE_MAX_SCORE = 30
 SYSTEM_REFERENCE_FAMILIES = {
     "system_reference",
@@ -144,7 +148,10 @@ def _exact_title_score(
     score = 0
     reasons: list[str] = []
 
-    if lowered_title == query:
+    # Compared word by word, so a disambiguation title counts its parenthetical as words ("xuen tactics"
+    # is exactly "Xuen (tactics)") while digit groups stay apart ("patch 1.12" is not "Patch 1.1.2").
+    title_words = _TITLE_WORD_RE.findall(lowered_title)
+    if lowered_title == query or (title_words and title_words == _TITLE_WORD_RE.findall(query.lower())):
         score += 50
         reasons.append("exact_title")
     if family == "api_function" and normalized_title == f"api{normalized_query}":
@@ -376,5 +383,9 @@ def is_confident_match(results: list[dict[str, Any]]) -> bool:
     rivals = [row for row in results[1:] if _covers_query(row)]
     if not rivals:
         return True
-    top_score = int(results[0]["ranking"]["score"])
+    top = results[0]["ranking"]
+    # ``query_contains_title`` orders a subject above pages that mention it, but a title that is only
+    # part of the query is no evidence the page is the answer. Rows keep no score breakdown, so the
+    # bonus comes off at its maximum.
+    top_score = int(top["score"]) - (QUERY_CONTAINS_TITLE_MAX_SCORE if "query_contains_title" in top["match_reasons"] else 0)
     return top_score >= 70 or top_score >= int(rivals[0]["ranking"]["score"]) + 18

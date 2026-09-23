@@ -30,6 +30,7 @@ Real providers with narrower surfaces. They are expected to work and stay covere
 | `warcraft-wiki` | MediaWiki reference, typed API/event lookups, article bundles |
 | `icy-veins` | guide extraction, export, and local guide query |
 | `method` | guide extraction, export, and local guide query |
+| `lorrgs` | public API, no auth; top-parse cooldown timelines and composition rankings |
 
 ## Experimental
 
@@ -37,7 +38,6 @@ Thin or unproven surfaces. Do not build a workflow on them without checking `doc
 
 | Provider | Status |
 |----------|--------|
-| `lorrgs` | public API, no auth; top-parse cooldown timelines and composition rankings |
 | `raidbots` | public report consumption and SimC input handoff; no discovery surface |
 | `blizzard` | verified live for us/eu/kr/tw (2026-09-13); thin command surface, `cn` unreachable |
 | `curseforge` | verified live (2026-09-13); thin command surface, addon metadata is at the edge of scope |

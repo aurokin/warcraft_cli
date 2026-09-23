@@ -95,7 +95,7 @@ def _envelope_type_violations(payload: Mapping[str, Any]) -> list[str]:
 def _envelope_error_violations(payload: Mapping[str, Any]) -> list[str]:
     ok = payload.get("ok")
     error = payload.get("error")
-    if ok is True and error is not None:
+    if ok is True and "error" in payload:
         return ["error must be absent when ok is true"]
     if ok is not False:
         return []

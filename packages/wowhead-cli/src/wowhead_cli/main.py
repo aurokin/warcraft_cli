@@ -37,7 +37,7 @@ from warcraft_core.cli import (
     fail,
     guarded_run,
 )
-from warcraft_core.envelope import ENVELOPE_KEYS, SCHEMA_VERSION, Envelope
+from warcraft_core.envelope import ENVELOPE_KEYS, SCHEMA_VERSION, Envelope, envelope_violations
 from warcraft_core.identity import build_identity_payload, build_reference_transport_packet_payload, validate_talent_transport_packet
 from warcraft_core.output import DEFAULT_COMPACT_MAX_CHARS, OutputProjectionError, shape_payload, to_json
 from warcraft_core.output import emit as emit_json
@@ -69,6 +69,7 @@ from wowhead_cli.expansion_profiles import (
     ExpansionProfile,
     detect_expansion_from_url,
     expansion_url_policy_issues,
+    is_wowhead_host,
     list_profiles,
     parse_entity_from_wowhead_url,
     resolve_expansion,
@@ -119,6 +120,7 @@ from wowhead_cli.page_parser import (
     extract_markup_by_target,
     extract_markup_urls,
     normalize_comments,
+    parse_page_error,
     parse_page_meta_json,
     parse_page_metadata,
     sort_comments,
@@ -564,6 +566,10 @@ def _emit(ctx: typer.Context, payload: dict[str, Any], *, err: bool = False) -> 
     if not cfg.stream:
         emit(ctx, payload, err=err)
         return
+    # The JSONL path bypasses warcraft_core.cli.emit, so it applies the same envelope check itself.
+    problems = envelope_violations(payload)
+    if problems:
+        raise TypeError(f"refusing to emit a malformed envelope: {'; '.join(problems)}")
     try:
         rendered = shape_payload(payload, cfg.output)
     except OutputProjectionError as exc:
@@ -1894,7 +1900,7 @@ def _normalize_dressing_room_ref(ref: str, *, expansion: ExpansionProfile) -> st
         raise ValueError("dressing-room reference cannot be empty.")
     parsed = urlparse(raw)
     if parsed.scheme and parsed.netloc:
-        if not parsed.netloc.endswith("wowhead.com"):
+        if not is_wowhead_host(parsed.hostname or ""):
             raise ValueError("dressing-room URL must point to wowhead.com.")
         return raw
     if raw.startswith("#"):
@@ -1926,7 +1932,7 @@ def _normalize_profiler_ref(ref: str, *, expansion: ExpansionProfile) -> str:
         raise ValueError("profiler reference cannot be empty.")
     parsed = urlparse(raw)
     if parsed.scheme and parsed.netloc:
-        if not parsed.netloc.endswith("wowhead.com"):
+        if not is_wowhead_host(parsed.hostname or ""):
             raise ValueError("profiler URL must point to wowhead.com.")
         return raw
     normalized = raw.lstrip("/")
@@ -1965,7 +1971,7 @@ def _normalize_news_post_ref(ref: str, *, expansion: ExpansionProfile) -> str:
         raise ValueError("news post reference cannot be empty.")
     parsed = urlparse(raw)
     if parsed.scheme and parsed.netloc:
-        if not parsed.netloc.endswith("wowhead.com"):
+        if not is_wowhead_host(parsed.hostname or ""):
             raise ValueError("news post URL must point to wowhead.com.")
         return raw
     normalized = raw.lstrip("/")
@@ -2034,7 +2040,7 @@ def _normalize_blue_topic_ref(ref: str, *, expansion: ExpansionProfile) -> str:
         raise ValueError("blue topic reference cannot be empty.")
     parsed = urlparse(raw)
     if parsed.scheme and parsed.netloc:
-        if not parsed.netloc.endswith("wowhead.com"):
+        if not is_wowhead_host(parsed.hostname or ""):
             raise ValueError("blue topic URL must point to wowhead.com.")
         return raw
     normalized = raw.lstrip("/")
@@ -3866,15 +3872,18 @@ def profiler(
     except ValueError as exc:
         fail(ctx, "invalid_tool_ref", str(exc))
     client = _client(ctx)
-    fetch_url = tool_url("list", expansion=cfg.expansion)
     try:
-        html = client.page_html(fetch_url)
+        html = client.page_html(state_url)
     except httpx.HTTPStatusError as exc:
         _fail_http_status(ctx, exc)
     except httpx.HTTPError as exc:
         fail(ctx, "network_error", str(exc))
-    metadata = parse_page_metadata(html, fallback_url=state_url)
-    canonical_url = absolute_wowhead_url(metadata.get("canonical_url"), fallback=fetch_url)
+    page_error = parse_page_error(html)
+    if page_error is not None:
+        fail(ctx, "not_found", f"Wowhead profiler: {page_error}", details={"url": state_url})
+    # Only the fetched page's own canonical link counts; a list Wowhead renders client-side has none.
+    metadata = parse_page_metadata(html, fallback_url=None)
+    canonical_url = absolute_wowhead_url(metadata.get("canonical_url"))
 
     payload = {
         "expansion": cfg.expansion.key,
@@ -3882,13 +3891,14 @@ def profiler(
             "kind": "profiler",
             "input": ref,
             "state_url": state_url,
-            "page_url": canonical_url or fetch_url,
+            "page_url": state_url,
             **state,
         },
         "page": {
             "title": metadata.get("title"),
             "description": metadata.get("description"),
             "canonical_url": canonical_url,
+            "note": None if canonical_url else "The fetched page carries no canonical link.",
         },
         "citations": {
             "page": state_url,

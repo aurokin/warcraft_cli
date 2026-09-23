@@ -11,7 +11,8 @@ kill's roster. Lorrgs only serves fights from reports it has already cached, so 
 is covered twice: once against a report walked out of the Lorrgs spec ranking (the full packet with
 phase windows, for the first and the second phase), and once against the pinned guild's private
 report, which Lorrgs has never cached and which is what a caller's own log looks like (the degraded
-packet that keeps the Warcraft Logs half).
+packet that keeps the Warcraft Logs half). A Heroic kill off the public leaderboard proves the
+top parses are ranked at the fight's own difficulty.
 """
 
 from __future__ import annotations
@@ -23,14 +24,15 @@ from pathlib import Path
 from typing import Any
 
 from tests.e2e.harness import EXIT_NOT_FOUND, JourneyFailure, Result, run
-from tests.e2e.test_warcraftlogs import anchor, current_raid_zone, guild_anchor
+from tests.e2e.test_warcraftlogs import _fight_roster, anchor, current_raid_zone, guild_anchor
 
 # How far discovery walks the Lorrgs ranking before giving up on a cached report.
 LORRGS_SPEC_ATTEMPTS = 4
 LORRGS_REPORT_ATTEMPTS = 5
 
-# Lorrgs ranks Heroic and Mythic only, named by slug; Warcraft Logs numbers them 4 and 5.
-LORRGS_DIFFICULTY_BY_WARCRAFTLOGS_ID = {4: "heroic", 5: "mythic"}
+# Warcraft Logs' id for Heroic, and how many Heroic leaderboard rows discovery walks.
+HEROIC_DIFFICULTY_ID = 4
+HEROIC_ROW_ATTEMPTS = 5
 
 
 def _report_url(code: str, fight_id: int) -> str:
@@ -58,7 +60,7 @@ def lorrgs_boss_slugs() -> dict[int, str]:
 
 @dataclass(frozen=True)
 class LorrgsTarget:
-    """A report fight Lorrgs has already cached, plus one player inside it."""
+    """A report fight plus one player inside it."""
 
     boss_slug: str
     code: str
@@ -210,8 +212,6 @@ def test_cooldown_packet_joins_a_report_fight_to_lorrgs_top_parses(require):
     assert query["spec_slug"] == target.spec_slug, result.describe()
     assert query["boss_slug"] == target.boss_slug, result.describe()
     assert query["report_type"] == "damage-done", result.describe()
-    # The target came off Lorrgs' default (Mythic) ranking, so its top parses are compared at Mythic.
-    assert query["difficulty"] == "mythic", result.describe()
 
     data = result.data
     # Phase bounds come from Lorrgs/Warcraft Logs transition markers, so assert the invariants
@@ -389,12 +389,6 @@ def test_cooldown_packet_degrades_when_lorrgs_has_not_cached_the_report(require)
     assert sources["lorrgs_user_report_fights"]["status"] == "error", result.describe()
     assert sources["warcraftlogs_report_events"]["status"] == "ok", result.describe()
     assert sources["lorrgs_spec_spells"]["status"] == "ok", result.describe()
-    # Top parses are ranked at the analyzed fight's own difficulty, never Mythic by default.
-    difficulty = LORRGS_DIFFICULTY_BY_WARCRAFTLOGS_ID[int(found.fight["difficulty"])]
-    assert result.payload["query"]["difficulty"] == difficulty, result.describe()
-    ranking = sources["lorrgs_spec_ranking"]
-    assert ranking["status"] == "ok", result.describe()
-    assert ranking["command"].endswith(f"--difficulty {difficulty}"), result.describe()
 
     # --spell-id must narrow the tracked set, and the casts with it.
     pressed = max(casts["tracked_casts_by_spell"], key=lambda row: row["count"])
@@ -420,6 +414,56 @@ def test_cooldown_packet_degrades_when_lorrgs_has_not_cached_the_report(require)
     narrowed_casts = tracked["player_casts"]
     assert narrowed_casts["tracked_cast_count"] == pressed["count"], narrowed.describe()
     assert all(cast["spell"]["spell_id"] == spell_id for cast in narrowed_casts["tracked_casts"]), narrowed.describe()
+
+
+@lru_cache(maxsize=1)
+def heroic_target() -> LorrgsTarget:
+    """A ranked player in a Heroic kill of the anchor boss, from that boss's Heroic leaderboard.
+
+    The leaderboard does not depend on any one guild's progress, and ``report-fights`` confirms the
+    fight is a Heroic kill independently of the leaderboard's own filter.
+    """
+    boss_id = int(anchor().fight["encounter_id"])
+    ranked = run(
+        "warcraftlogs", "encounter-rankings", "--zone-id", str(current_raid_zone()["id"]), "--boss-id", str(boss_id),
+        "--difficulty", str(HEROIC_DIFFICULTY_ID), "--top", str(HEROIC_ROW_ATTEMPTS),
+    )
+    for row in ranked.data["rankings"]["rows"]:
+        code, fight_id = str(row["report_code"]), int(row["fight_id"])
+        fights = run("warcraftlogs", "report-fights", code).data["fights"]
+        fight = next(fight for fight in fights if fight["id"] == fight_id)
+        assert (fight["difficulty"], fight["kill"]) == (HEROIC_DIFFICULTY_ID, True), f"{code}#{fight_id}: {fight}"
+        player = next(player for player in _fight_roster(code, fight_id) if player["name"] == row["name"])
+        spec_slug = _lorrgs_spec_slug(player)
+        if spec_slug in lorrgs_spec_slugs():
+            return LorrgsTarget(
+                boss_slug=lorrgs_boss_slugs()[boss_id],
+                code=code,
+                fight_id=fight_id,
+                actor_id=int(player["id"]),
+                actor_name=str(player["name"]),
+                spec_slug=str(spec_slug),
+            )
+    raise JourneyFailure(f"no Heroic leaderboard row names a spec Lorrgs ranks\n{ranked.describe()}")
+
+
+def test_cooldown_packet_compares_a_heroic_fight_with_heroic_top_parses(require):
+    """Top parses are ranked at the analyzed fight's own difficulty; a Mythic default would pass on any Mythic fight."""
+    require("warcraftlogs", "lorrgs")
+    target = heroic_target()
+    result = run(
+        "warcraft", "cooldown-packet", target.url, "--actor-id", str(target.actor_id), "--spec-slug", target.spec_slug,
+        "--boss-slug", target.boss_slug, "--phase", "1", "--sample-limit", "1",
+    )
+    assert result.payload["query"]["difficulty"] == "heroic", result.describe()
+    ranking = result.data["sources"]["lorrgs_spec_ranking"]
+    assert ranking["status"] == "ok", result.describe()
+    # The URL Lorrgs was actually asked, not just the command the packet prints.
+    assert ranking["source_url"].endswith("?difficulty=heroic"), result.describe()
+    assert result.data["comparison"]["sample_count"] == 1, result.describe()
+    # A tracked cast is a `cast` event; the Casts data type also returns cast-bar and empower rows.
+    tracked = result.data["cooldowns"]["player_casts"]["tracked_casts"]
+    assert tracked and {cast["type"] for cast in tracked} == {"cast"}, result.describe()
 
 
 def test_cooldown_packet_without_the_fallback_flags_names_the_flags_it_needs(require):

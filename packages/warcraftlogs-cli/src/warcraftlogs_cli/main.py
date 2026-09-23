@@ -148,7 +148,12 @@ _INCLUDE_RAW_HELP = (
     "Attach the untyped Warcraft Logs table entry to every row. Off by default: the raw entries "
     "carry full gear/pet/ability detail and dominate the payload size."
 )
-REPORT_CODE_PATTERN = re.compile(r"^(?=.*[A-Za-z])(?=.*\d)[A-Za-z0-9]{8,32}$")
+# Warcraft Logs report codes are 16 alphanumerics with mixed case and often no digit (JVFTxcKCqrvpaAzD).
+# A code must mix upper and lower case or letters and digits, so a slug such as frostdeathknight or a
+# guild name is never read as a code.
+REPORT_CODE_PATTERN = re.compile(
+    r"^(?:(?=.*[a-z])(?=.*[A-Z])[A-Za-z0-9]{16}|(?=.*[A-Za-z])(?=.*\d)[A-Za-z0-9]{8,32})$"
+)
 RAW_GRAPHQL_VAR_OPTION = typer.Option(
     [],
     "--var",
@@ -1945,6 +1950,17 @@ def _cast_preview_row(row: dict[str, Any], *, named: dict[str, Any], fight_start
     }
 
 
+def _completed_casts(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep only the ``cast`` events of a Casts slice: one per completed cast.
+
+    The Casts data type also returns ``begincast`` (a cast bar starting, including casts later
+    cancelled) and ``empowerstart``/``empowerend`` (an empowered spell's charge). Warcraft Logs records
+    ``cast`` once per press of an empowered spell, once per finished cast-time spell, and once when a
+    channel starts, so counting only ``cast`` counts each use exactly once.
+    """
+    return [event for event in events if event.get("type") == "cast"]
+
+
 def _tally_cast_events(
     cast_rows: list[dict[str, Any]],
     *,
@@ -2030,7 +2046,8 @@ def _encounter_cast_rows_payload(
         fight_id=fight.get("id") if isinstance(fight.get("id"), int) else None,
     )
     paginator = dict_at(events_report, "events")
-    cast_rows = [row for row in list_at(paginator, "data") if isinstance(row, dict)]
+    event_rows = [row for row in list_at(paginator, "data") if isinstance(row, dict)]
+    cast_rows = _completed_casts(event_rows)
     tallies = _tally_cast_events(
         cast_rows,
         naming=naming,
@@ -2041,9 +2058,9 @@ def _encounter_cast_rows_payload(
     truncated = next_page_timestamp is not None
     notes = (
         [
-            f"Warcraft Logs returned next_page_timestamp: every aggregate below covers only the first {len(cast_rows)} "
-            "cast events of the selected fight/window, not the whole fight. Raise --limit or narrow the window "
-            "before treating these counts as complete."
+            f"Warcraft Logs returned next_page_timestamp: every aggregate below covers only the {len(cast_rows)} "
+            f"casts in the first {len(event_rows)} events of the selected fight/window, not the whole fight. "
+            "Raise --limit or narrow the window before treating these counts as complete."
         ]
         if truncated
         else []
@@ -2053,7 +2070,8 @@ def _encounter_cast_rows_payload(
         "fight": _fight_payload(fight),
         "notes": notes,
         "casts": {
-            "event_count": len(cast_rows),
+            "event_count": len(event_rows),
+            "cast_count": len(cast_rows),
             "truncated": truncated,
             "next_page_timestamp": next_page_timestamp,
             "by_source": _sorted_cast_rows(tallies.by_source, naming=naming, field="source"),
@@ -2899,7 +2917,7 @@ def _ability_cast_summary(
 ) -> dict[str, Any]:
     """Cast totals and per-source rows for one sampled kill's ability event slice."""
     paginator = dict_at(events_report, "events")
-    event_rows = [event for event in list_at(paginator, "data") if isinstance(event, dict)]
+    event_rows = _completed_casts([event for event in list_at(paginator, "data") if isinstance(event, dict)])
     source_counts: dict[int, int] = {}
     for event in event_rows:
         source_id = _event_id(event.get("sourceID"))

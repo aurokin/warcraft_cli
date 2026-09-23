@@ -12,6 +12,8 @@ warcraftlogs report-encounter 'https://www.warcraftlogs.com/reports/7Rc3HPCWGYy1
 ```
 
 If both a URL fragment and `--fight-id` are provided, `--fight-id` is the explicit override.
+Report codes are 16 letters and digits and need not contain a digit (`JVFTxcKCqrvpaAzD`); `search`
+and `resolve` recognise such a code bare or inside a `/reports/<code>` URL.
 
 ## Encounter And Window Scope
 

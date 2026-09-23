@@ -224,13 +224,13 @@ def prefix_and_contains_score(normalized_query: str, *, name_normalized: str, di
 
 
 def term_match_score(terms: list[str], *, haystacks: list[str]) -> tuple[int, list[str]]:
-    """Score a row whose text holds every query term as a whole word."""
-    if not terms or not haystacks:
+    """Score the query terms a row's text holds as whole words: 3 each when it holds all, else 1 each."""
+    matched = len(word_tokens(" ".join(haystacks)).intersection(terms))
+    if not matched:
         return 0, []
-    words = word_tokens(" ".join(haystacks))
-    if all(term in words for term in terms):
-        return len(terms) * 3, ["all_terms_match"]
-    return 0, []
+    if matched == len(terms):
+        return matched * 3, ["all_terms_match"]
+    return matched, ["some_terms_match"]
 
 
 def type_hint_score(query: str, *, entity_type: str | None) -> tuple[int, list[str]]:
@@ -250,7 +250,8 @@ def type_hint_score(query: str, *, entity_type: str | None) -> tuple[int, list[s
 # `categories.guides` orders guides the same way. Every current class guide shares a class-guide
 # query's words, so only that order says which is the main one; its bonus steps clear resolve's
 # 6-point margin but stay far under the database head's, so a top guide never outranks the entity
-# Wowhead's database list puts first.
+# Wowhead's database list puts first. It only counts for a query that asks for a guide: for an entity
+# query ("spirit beasts") it would only narrow the margin by which the entity leads.
 UPSTREAM_RANK_BONUS: dict[str, tuple[int, ...]] = {"database": (42, 28, 14), "guides": (21, 14, 7)}
 
 SuggestionKey = tuple[int, int]
@@ -265,13 +266,21 @@ def suggestion_key(row: dict[str, Any]) -> SuggestionKey | None:
     return None
 
 
-def upstream_rank_bonuses(response: dict[str, Any]) -> dict[SuggestionKey, int]:
-    """The bonus each leading row of Wowhead's `categories.database` and `categories.guides` order earns."""
+def upstream_rank_bonuses(
+    response: dict[str, Any], *, query: str, entity_types: tuple[str, ...] = ()
+) -> dict[SuggestionKey, int]:
+    """The bonus each leading row of Wowhead's `categories.database` and `categories.guides` order earns.
+
+    The guides order counts only when the caller asks for a guide, in `query` or with `entity_types`.
+    """
     categories = response.get("categories")
     if not isinstance(categories, dict):
         return {}
+    asks_for_guide = "guide" in search_type_hints(query) or "guide" in entity_types
     bonuses: dict[SuggestionKey, int] = {}
     for list_name, steps in UPSTREAM_RANK_BONUS.items():
+        if list_name == "guides" and not asks_for_guide:
+            continue
         rows = categories.get(list_name)
         for row, bonus in zip(rows if isinstance(rows, list) else [], steps, strict=False):
             key = suggestion_key(row) if isinstance(row, dict) else None
@@ -399,17 +408,18 @@ STALE_GUIDE_REASON = "stale_guide"
 STALE_GUIDE_DAYS = 180
 
 # How strongly a row's own text matches the query: an exact name, a name that starts with the query,
-# or any other text match. `type_hint` and `stale_guide` say nothing about the row's text, so a row
-# with only those has strength 0 and matches nothing in the query.
+# a match of the whole query, or only some of its words. `type_hint` and `stale_guide` say nothing
+# about the row's text, so a row with only those has strength 0 and matches nothing in the query.
 MATCH_STRENGTH = {
-    "exact_name": 3,
-    "exact_display_name": 3,
-    "name_prefix": 2,
-    "display_name_prefix": 2,
-    "name_contains_query": 1,
-    "display_name_contains_query": 1,
-    "all_terms_match": 1,
-    "upstream_database_rank": 1,
+    "exact_name": 4,
+    "exact_display_name": 4,
+    "name_prefix": 3,
+    "display_name_prefix": 3,
+    "name_contains_query": 2,
+    "display_name_contains_query": 2,
+    "all_terms_match": 2,
+    "upstream_database_rank": 2,
+    "some_terms_match": 1,
 }
 
 

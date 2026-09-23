@@ -14,7 +14,7 @@ IMPORT_LINTER := $(VENV)/bin/lint-imports
 PRE_COMMIT := $(VENV)/bin/pre-commit
 
 .PHONY: install dev-deploy dev-deploy-no-link worktree-env test test-fast test-e2e test-canary \
-	check fmt-check lint lint-boundaries lint-all complexity complexity-gate typecheck coverage deadcode \
+	check lint lint-boundaries lint-all complexity complexity-gate typecheck coverage deadcode \
 	skills reference schema build pre-commit-install benchmark-cache fixture-refresh-hints run release
 
 install:
@@ -42,14 +42,11 @@ test-fast:
 test-e2e:
 	WARCRAFT_E2E=1 $(PYTEST) -q -m e2e tests/e2e --durations=25 $(E2E_ARGS)
 
-check: lint typecheck lint-boundaries complexity-gate deadcode test-fast
+check: lint typecheck lint-boundaries complexity-gate deadcode coverage
 
 # The one live test outside tests/e2e: pinned Wowhead pages through the parsers (weekly in CI).
 test-canary:
 	WOWHEAD_LIVE_TESTS=1 $(PYTEST) -q -m live tests/test_wowhead_parser_canaries.py
-
-fmt-check:
-	$(PYTHON) -m compileall -q packages
 
 lint:
 	$(RUFF) check $(LINT_PATHS)
@@ -69,16 +66,14 @@ complexity-gate:
 typecheck:
 	$(MYPY)
 
+# The fast suite with coverage. The floor is the measured total rounded down, so a drop fails;
+# raise it when coverage rises.
 coverage:
-	@if $(PYTHON) -c 'import sqlite3, pytest_cov' >/dev/null 2>&1; then \
-		$(PYTEST) -q -m "not live" --cov=packages --cov-report=term-missing; \
-	else \
-		echo "Coverage fallback: using stdlib trace because sqlite3 and/or pytest-cov is unavailable."; \
-		$(PYTHON) scripts/trace_coverage.py; \
-	fi
+	$(PYTEST) -q -m "not live and not e2e" --cov=packages --cov-report=term-missing --cov-fail-under=91
 
 deadcode:
-	$(VULTURE) packages scripts tests scripts/vulture_allowlist.py --min-confidence 80
+	$(VULTURE) packages scripts tests scripts/vulture_allowlist.py --min-confidence 60 \
+		--ignore-decorators "@*.command,@*.callback,@pytest.fixture"
 
 skills:
 	$(PYTHON) scripts/generate_provider_skills.py

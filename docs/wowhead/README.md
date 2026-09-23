@@ -8,7 +8,6 @@ Companion docs:
 - [CONTRACTS.md](CONTRACTS.md)
 - [EXPANSION_RESEARCH.md](EXPANSION_RESEARCH.md)
 - [NORMALIZATION.md](NORMALIZATION.md)
-- [History and design record](../architecture/history/wowhead.md)
 
 ## Output Contract
 
@@ -45,15 +44,21 @@ A suggestion response carries two overlapping row lists: the flat `results` list
 `search` and `resolve` rank the union, one row per Wowhead type and id. Each row's
 `metadata.suggestion_lists` names the lists it came from (`metadata.popularity` is null for a row
 only `categories` carried), and `suggestion_merge` reports the rows each list sent and how many
-duplicates the merge removed. A merged row whose text does not match the query (no
+duplicates the merge removed. A merged row whose text holds no query word (no
 `ranking.match_reasons` beyond `type_hint` or `stale_guide`) is not returned, and
 `suggestion_merge.unmatched_rows_dropped` counts those rows; `total_matches` counts the rows kept.
+A row holding only some query words stays, with `some_terms_match`, and scores less for each word it
+lacks; Wowhead's own ordering bonus (below) can still rank it above a row that holds them all. The
+row's type name (`typeName`) counts as row text, so a type word such as "npc" in the query keeps
+every NPC row as a partial match.
 
 Ranking starts from Wowhead's own ordering. `categories.database` and `categories.guides` are
 ordered by relevance, and `search` and `resolve` score the leading rows of each up
 (`upstream_database_rank` in `ranking.match_reasons`), so the entity a query names leads the proc
 spells and secondary rows that share its name, and "fury warrior guide" resolves to the main
-current guide rather than the five others that share its words. Text evidence (exact name,
+current guide rather than the five others that share its words. The guides order counts only when
+the caller asks for a guide ("guide" or "guides" in the query, or `--entity-type guide`), so it cannot narrow the lead of the entity an
+entity query names. Text evidence (exact name,
 prefix, term coverage, type hints) decides the rest. Query words match whole words only, and
 "the", "of", "a", "an", "and", "in", "on", "for" and "to" are not matched at all. The rank bonus
 needs a query word in the row's own name, or a name that starts with or contains the query
@@ -171,7 +176,10 @@ Tool-state decoders:
 | `profiler REF` | normalized `list=` ref with list, region, realm, and name parts |
 
 `dressing-room` and `profiler` are state inspectors: they normalize and cite the ref, they do not
-decode the opaque client-side payload behind it.
+decode the opaque client-side payload behind it. `profiler` fetches the list page for the ref and
+fails with `not_found` (exit 4) when Wowhead answers with its "This list doesn't exist or has been
+removed" page. `page.canonical_url` is the fetched page's own canonical link; when the page names
+none it is null and `page.note` says so.
 
 Cache maintenance:
 

@@ -184,7 +184,6 @@ def test_detect_talents_option_source_kind() -> None:
 
 def test_load_build_spec_extracts_class_and_spec_from_talents_url() -> None:
     spec = load_build_spec(
-        apl_path=None,
         profile_path=None,
         build_file=None,
         build_text=None,
@@ -227,7 +226,6 @@ def test_load_build_spec_extracts_exact_transport_form_from_packet(tmp_path: Pat
     )
 
     spec = load_build_spec(
-        apl_path=None,
         profile_path=None,
         build_file=None,
         build_text=None,
@@ -281,7 +279,6 @@ def test_load_build_spec_rejects_packet_that_mixes_exact_and_split_forms(tmp_pat
 
     with pytest.raises(ValueError, match="must not mix exact transport forms with simc_split_talents"):
         load_build_spec(
-            apl_path=None,
             profile_path=None,
             build_file=None,
             build_text=None,
@@ -295,7 +292,6 @@ def test_load_build_spec_rejects_packet_that_mixes_exact_and_split_forms(tmp_pat
 def test_load_build_spec_rejects_buildless_wowhead_talent_calc_url() -> None:
     with pytest.raises(UnsupportedBuildReference) as excinfo:
         load_build_spec(
-            apl_path=None,
             profile_path=None,
             build_file=None,
             build_text="https://www.wowhead.com/talent-calc/druid/balance",
@@ -310,7 +306,6 @@ def test_load_build_spec_rejects_buildless_wowhead_talent_calc_url() -> None:
 
 def _loaded(**overrides: Any) -> BuildSpec:
     options: dict[str, Any] = {
-        "apl_path": None,
         "profile_path": None,
         "build_file": None,
         "build_text": None,
@@ -319,6 +314,13 @@ def _loaded(**overrides: Any) -> BuildSpec:
         "spec_name": None,
     }
     return load_build_spec(**{**options, **overrides})
+
+
+@pytest.mark.parametrize("actor_class", ["Death Knight", "death_knight", "DeathKnight"])
+def test_load_build_spec_reads_every_death_knight_spelling_as_simc_deathknight(actor_class: str) -> None:
+    loaded = _loaded(actor_class=actor_class, spec_name="Frost")
+
+    assert (loaded.actor_class, loaded.spec) == ("deathknight", "frost")
 
 
 def test_load_build_spec_rejects_a_build_option_given_an_empty_value() -> None:
@@ -405,7 +407,6 @@ def test_load_build_spec_extracts_split_transport_form_from_packet(tmp_path: Pat
     )
 
     spec = load_build_spec(
-        apl_path=None,
         profile_path=None,
         build_file=None,
         build_text=None,
@@ -462,7 +463,6 @@ def test_load_build_spec_accepts_normalized_validated_split_transport_identity_f
     )
 
     spec = load_build_spec(
-        apl_path=None,
         profile_path=None,
         build_file=None,
         build_text=None,
@@ -515,7 +515,6 @@ def test_load_build_spec_rejects_unvalidated_split_transport_form_from_packet(tm
 
     with pytest.raises(ValueError, match="simc_split_talents transport form requires a validated packet identity"):
         load_build_spec(
-            apl_path=None,
             profile_path=None,
             build_file=None,
             build_text=None,
@@ -554,7 +553,6 @@ def test_load_build_spec_extracts_wow_export_transport_form_from_packet(tmp_path
     )
 
     spec = load_build_spec(
-        apl_path=None,
         profile_path=None,
         build_file=None,
         build_text=None,
@@ -594,93 +592,69 @@ def test_parse_wowhead_talent_calc_ref_rejects_nested_talent_calc_segments() -> 
     assert parse_wowhead_talent_calc_ref("talent-calc/foo/talent-calc/druid/balance/ABC123") is None
 
 
-def test_load_build_spec_uses_apl_inference_when_packet_identity_is_missing(tmp_path: Path) -> None:
+def test_identify_build_narrows_an_unverified_packet_to_the_apl_name_spec(tmp_path: Path) -> None:
+    """The packet's unvalidated druid balance is not a hint; the APL name's evoker devastation is."""
+    repo = _repo(tmp_path)
     packet_path = tmp_path / "build-packet.json"
-    apl_path = tmp_path / "druid_balance.simc"
-    apl_path.write_text("actions=wrath\n")
     packet_path.write_text(
         """
         {
           "kind": "talent_transport_packet",
           "transport_status": "exact",
-          "build_identity": {
-            "class_spec_identity": {
-              "identity": {}
-            }
-          },
-          "transport_forms": {
-            "wow_talent_export": "ABC123"
-          },
-          "raw_evidence": {
-            "reference_type": "wow_talent_export"
-          },
+          "build_identity": {"class_spec_identity": {"identity": {"actor_class": "druid", "spec": "balance"}}},
+          "transport_forms": {"wow_talent_export": "ABC123"},
+          "raw_evidence": {"reference_type": "wow_talent_export"},
           "validation": {},
           "scope": {}
         }
         """.strip()
     )
+    loaded = _loaded(build_packet=str(packet_path))
+    tried: list[tuple[str | None, str | None]] = []
 
-    spec = load_build_spec(
-        apl_path=str(apl_path),
-        profile_path=None,
-        build_file=None,
-        build_text=None,
-        talents=TalentStrings(),
-        actor_class=None,
-        spec_name=None,
-        build_packet=str(packet_path),
-    )
+    def fake_decode(_repo: RepoPaths, build_spec: BuildSpec) -> Any:
+        tried.append((build_spec.actor_class, build_spec.spec))
+        return type("Resolution", (), {"enabled_talents": {"disintegrate"}})()
 
-    assert spec.actor_class == "druid"
-    assert spec.spec == "balance"
-    assert spec.talents == "ABC123"
-    assert any(note.startswith("inferred from apl:") for note in spec.source_notes)
+    with patch("simc_cli.build_input.decode_build", side_effect=fake_decode):
+        identified, identity = identify_build(repo, loaded, apl_path=tmp_path / "evoker_devastation.simc")
+
+    assert (loaded.actor_class, loaded.spec) == (None, None)
+    assert tried == [("evoker", "devastation")]
+    assert (identified.actor_class, identified.spec, identified.talents) == ("evoker", "devastation", "ABC123")
+    assert "inferred from apl: evoker_devastation" in identity.source_notes
 
 
-def test_load_build_spec_lets_apl_inference_override_unverified_wow_export_packet_identity(tmp_path: Path) -> None:
-    packet_path = tmp_path / "build-packet.json"
-    apl_path = tmp_path / "evoker_devastation.simc"
-    apl_path.write_text("actions=disintegrate\n")
-    packet_path.write_text(
-        """
-        {
-          "kind": "talent_transport_packet",
-          "transport_status": "exact",
-          "build_identity": {
-            "class_spec_identity": {
-              "identity": {
-                "actor_class": "druid",
-                "spec": "balance"
-              }
-            }
-          },
-          "transport_forms": {
-            "wow_talent_export": "ABC123"
-          },
-          "raw_evidence": {
-            "reference_type": "wow_talent_export"
-          },
-          "validation": {},
-          "scope": {}
-        }
-        """.strip()
-    )
+@pytest.mark.parametrize(
+    ("apl_name", "actor_class", "probed"),
+    [
+        # A renamed copy of mage_arcane.simc: 'arcane_variant' is no mage spec.
+        ("mage_arcane_variant", None, 40),
+        # The caller's mage does not pair with the file's fury; only --actor-class narrows the probe.
+        ("warrior_fury", "mage", 3),
+    ],
+)
+def test_identify_build_drops_an_apl_name_guess_that_names_no_simc_spec(
+    tmp_path: Path, apl_name: str, actor_class: str | None, probed: int
+) -> None:
+    """The file-name guess is not the caller's hint: it used to fail as invalid_query naming a spec nobody passed."""
+    repo = _repo(tmp_path)
+    tried: list[tuple[str | None, str | None]] = []
 
-    spec = load_build_spec(
-        apl_path=str(apl_path),
-        profile_path=None,
-        build_file=None,
-        build_text=None,
-        talents=TalentStrings(),
-        actor_class=None,
-        spec_name=None,
-        build_packet=str(packet_path),
-    )
+    def fake_decode(_repo: RepoPaths, build_spec: BuildSpec) -> Any:
+        tried.append((build_spec.actor_class, build_spec.spec))
+        if (build_spec.actor_class, build_spec.spec) != ("mage", "arcane"):
+            raise SimcBuildError("Selected node is not available to player's spec", output_preview=[], returncode=1)
+        return type("Resolution", (), {"enabled_talents": {"arcane_blast"}})()
 
-    assert spec.actor_class == "evoker"
-    assert spec.spec == "devastation"
-    assert spec.talents == "ABC123"
-    assert any(note.startswith("inferred from apl:") for note in spec.source_notes)
+    build_spec = BuildSpec(actor_class=actor_class, talents="HASH", source_kind="wow_talent_export")
+    with patch("simc_cli.build_input.decode_build", side_effect=fake_decode):
+        identified, identity = identify_build(repo, build_spec, apl_path=tmp_path / f"{apl_name}.simc")
+
+    assert len(tried) == probed
+    assert (identified.actor_class, identified.spec) == ("mage", "arcane")
+    assert identity.source == "simc_probe"
+    assert f"ignored apl name: {apl_name} does not complete a SimC class/spec pair" in identity.source_notes
 
 
 def test_load_build_spec_rejects_conflicting_exact_transport_forms(tmp_path: Path) -> None:
@@ -713,7 +687,6 @@ def test_load_build_spec_rejects_conflicting_exact_transport_forms(tmp_path: Pat
 
     try:
         load_build_spec(
-            apl_path=None,
             profile_path=None,
             build_file=None,
             build_text=None,

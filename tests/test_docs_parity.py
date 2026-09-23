@@ -1,8 +1,8 @@
 """Every shell example in the docs must resolve against the real Typer apps.
 
 The parser validates command names and option names only, never prose and never positional values,
-so docs can be rewritten freely as long as the commands they show still exist. Coverage is "every
-simple example": lines with shell operators (pipes, redirects, ``&&``, substitutions) and lines
+so docs can be rewritten freely as long as the commands they show still exist. A line with pipes,
+redirects or ``&&`` is validated up to its first operator; lines with command substitution and lines
 whose first token is not one of our binaries are skipped rather than validated.
 """
 
@@ -39,8 +39,8 @@ PROVIDER_DOC_DIRS = {
     "wowhead": "wowhead",
 }
 SHELL_INFO_STRINGS = frozenset({"", "bash", "sh", "shell", "zsh", "console"})
-# Lines containing any of these are shell constructs, not a single command invocation.
-SHELL_OPERATORS = ("|", "&&", "||", ";", ">", "<(", "$(", "`")
+# A substitution can supply any subcommand or flag, so lines containing one are not validated.
+SUBSTITUTIONS = ("$(", "<(", "`")
 # "wowhead-cli" as a bare word means the command; inside a path or a pip/dependency name it is the
 # distribution and stays legitimate, so require no adjacent path or word characters.
 DISTRIBUTION_NAME_MISUSE = re.compile(r"(?<![\w/.-])wowhead-cli(?![\w/-])")
@@ -173,13 +173,25 @@ def _resolve(binary: str, tokens: list[str]) -> list[str]:
         command = children[name]
 
 
+def _first_segment(text: str) -> list[str]:
+    """The tokens before the first shell operator (``|``, ``&&``, ``;``, ``>`` ...), quotes respected."""
+    lexer = shlex.shlex(text, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    tokens: list[str] = []
+    for token in lexer:
+        if set(token) <= set(lexer.punctuation_chars):
+            break
+        tokens.append(token)
+    return tokens
+
+
 def _violations(path: Path) -> list[str]:
     problems: list[str] = []
     for example in _shell_examples(path.read_text()):
-        if any(operator in example.text for operator in SHELL_OPERATORS):
+        if any(substitution in example.text for substitution in SUBSTITUTIONS):
             continue
         try:
-            tokens = shlex.split(example.text)
+            tokens = _first_segment(example.text)
         except ValueError:
             continue
         if not tokens or tokens[0] not in CLI_APPS:
@@ -192,6 +204,14 @@ def _violations(path: Path) -> list[str]:
 def test_documented_commands_and_flags_exist(doc: Path) -> None:
     problems = _violations(doc)
     assert not problems, f"{doc.relative_to(REPO_ROOT)} documents commands the CLIs do not have:\n" + "\n".join(problems)
+
+
+def test_piped_example_is_validated_up_to_the_first_operator(tmp_path: Path) -> None:
+    doc = tmp_path / "doc.md"
+    doc.write_text('```bash\nwowhead search "a|b" --no-such-flag | jq .data > out.json\n```\n')
+    assert _violations(doc) == [
+        "line 2: 'wowhead search \"a|b\" --no-such-flag | jq .data > out.json' -> wowhead search: unknown option --no-such-flag"
+    ]
 
 
 @pytest.mark.parametrize("doc", DOC_FILES, ids=DOC_IDS)

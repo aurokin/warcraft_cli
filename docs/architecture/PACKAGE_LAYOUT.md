@@ -39,7 +39,7 @@ because each one is published:
 | `packages/warcraft-wiki-cli/` | `warcraft-wiki-cli` | `warcraft_wiki_cli` | `warcraft-wiki` | supported |
 | `packages/icy-veins-cli/` | `icy-veins-cli` | `icy_veins_cli` | `icy-veins` | supported |
 | `packages/method-cli/` | `method-cli` | `method_cli` | `method` | supported |
-| `packages/lorrgs-cli/` | `lorrgs-cli` | `lorrgs_cli` | `lorrgs` | experimental |
+| `packages/lorrgs-cli/` | `lorrgs-cli` | `lorrgs_cli` | `lorrgs` | supported |
 | `packages/raidbots-cli/` | `raidbots-cli` | `raidbots_cli` | `raidbots` | experimental |
 | `packages/blizzard-api-cli/` | `blizzard-api-cli` | `blizzard_api_cli` | `blizzard` | experimental |
 | `packages/curseforge-cli/` | `curseforge-cli` | `curseforge_cli` | `curseforge` | experimental |
@@ -122,5 +122,4 @@ Within each root: `shared/` for genuinely shared data, then one directory per pr
 - package boundaries and dependency direction stay documented here and enforced in `.importlinter`
 - update this document whenever the package set or dependency rules change
 
-Completed rollout milestones are archived under [history/](history/README.md). Open engineering
-work lives in Linear.
+Open engineering work lives in Linear.

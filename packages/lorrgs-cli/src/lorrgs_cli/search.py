@@ -9,7 +9,12 @@ from urllib.parse import ParseResult, parse_qs, urlparse
 
 from lorrgs_cli.client import LorrgsClient
 
-REPORT_CODE_PATTERN = re.compile(r"^(?=.*[A-Za-z])(?=.*\d)[A-Za-z0-9]{8,32}$")
+# Warcraft Logs report codes are 16 alphanumerics with mixed case and often no digit (JVFTxcKCqrvpaAzD).
+# A code must mix upper and lower case or letters and digits, so a slug such as frostdeathknight or a
+# guild name is never read as a code.
+REPORT_CODE_PATTERN = re.compile(
+    r"^(?:(?=.*[a-z])(?=.*[A-Z])[A-Za-z0-9]{16}|(?=.*[A-Za-z])(?=.*\d)[A-Za-z0-9]{8,32})$"
+)
 WORD_PATTERN = re.compile(r"[a-z0-9]+")
 STOP_TERMS = frozenset(
     {

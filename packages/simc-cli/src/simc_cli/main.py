@@ -353,7 +353,6 @@ def _resolve_prune_context(
     paths: RepoPaths, apl_path: Path, option_values: dict[str, Any], targets: int
 ) -> tuple[PruneContext, BuildResolution]:
     unresolved_spec = load_build_spec(
-        apl_path=apl_path,
         profile_path=option_values["profile_path"],
         build_file=option_values["build_file"],
         build_packet=option_values["build_packet"],
@@ -362,7 +361,7 @@ def _resolve_prune_context(
         actor_class=option_values["actor_class"],
         spec_name=option_values["spec_name"],
     )
-    build_spec, _identity = identify_build(paths, unresolved_spec)
+    build_spec, _identity = identify_build(paths, unresolved_spec, apl_path=apl_path)
     resolution = decode_build(paths, build_spec)
     # `--enable`/`--disable` name talents; a value the class has no talent for used to be dropped in
     # silence, so the command answered as if the flag had never been passed.
@@ -398,7 +397,6 @@ def _load_identified_build_spec(
     build_packet: str | None = None,
 ) -> tuple[BuildSpec, BuildIdentity]:
     unresolved_spec = load_build_spec(
-        apl_path=apl_path,
         profile_path=profile_path,
         build_file=build_file,
         build_packet=build_packet,
@@ -407,7 +405,7 @@ def _load_identified_build_spec(
         actor_class=actor_class,
         spec_name=spec_name,
     )
-    return identify_build(paths, unresolved_spec)
+    return identify_build(paths, unresolved_spec, apl_path=apl_path)
 
 
 def _load_identified_build_spec_or_fail(
@@ -3158,14 +3156,15 @@ def _build_modify_edits(
     paths: RepoPaths,
     *,
     base_resolution: BuildResolution,
+    class_spec: tuple[str, str],
     add: list[str],
     remove: list[str],
     modifications: list[str],
 ) -> list[_TalentEdit]:
     table = load_trait_table(paths.root)
     by_name = _base_entry_index(base_resolution)
-    class_id = CLASS_ID_BY_ACTOR_CLASS[base_resolution.actor_class]
-    spec_id = specialization_ids(paths.root)[(base_resolution.actor_class, base_resolution.spec)]
+    class_id = CLASS_ID_BY_ACTOR_CLASS[class_spec[0]]
+    spec_id = specialization_ids(paths.root)[class_spec]
 
     edits: list[_TalentEdit] = []
     for item in remove:
@@ -3194,11 +3193,9 @@ def _assemble_modified_spec(
     *,
     entries_by_tree: dict[str, str | None],
     edits: list[_TalentEdit],
-) -> BuildSpec | None:
+) -> BuildSpec:
     """Apply the edits to the build, keeping every edit in the tree string SimC resolves it against."""
     swapping = any(entries is not None for entries in entries_by_tree.values())
-    if not swapping and not edits:
-        return None
     return BuildSpec(
         actor_class=base_spec.actor_class,
         spec=base_spec.spec,
@@ -3318,6 +3315,9 @@ class _ModifyBuildOptions:
 
 
 def _modify_build(ctx: typer.Context, options: _ModifyBuildOptions) -> None:
+    swap_sources = (options.swap_class_tree_from, options.swap_spec_tree_from, options.swap_hero_tree_from)
+    if not any((*swap_sources, *options.add, *options.remove)):
+        fail(ctx, "invalid_argument", "No modifications specified. Use --swap-*-tree-from, --add, or --remove.")
     paths = _repo_paths(ctx)
 
     base_spec, base_identity = _load_identified_build_spec_or_fail(
@@ -3345,28 +3345,20 @@ def _modify_build(ctx: typer.Context, options: _ModifyBuildOptions) -> None:
         paths,
         base_spec=base_spec,
         base_resolution=base_resolution,
-        swaps=[
-            ("class", options.swap_class_tree_from),
-            ("spec", options.swap_spec_tree_from),
-            ("hero", options.swap_hero_tree_from),
-        ],
+        swaps=list(zip(ACTIVE_TREES, swap_sources, strict=True)),
         modifications=modifications,
     )
     edits = _build_modify_edits(
         ctx,
         paths,
         base_resolution=base_resolution,
+        class_spec=(base_spec.actor_class, base_spec.spec),
         add=options.add,
         remove=options.remove,
         modifications=modifications,
     )
 
     modified_spec = _assemble_modified_spec(base_spec, entries_by_tree=swaps.entries_by_tree, edits=edits)
-    if modified_spec is None:
-        fail(
-            ctx, "no_modifications",
-            "No modifications specified. Use --swap-*-tree-from, --add, or --remove.",
-        )
 
     try:
         encoded = encode_build(paths, modified_spec)

@@ -163,7 +163,9 @@ def normalize_warcraftlogs_actor_casts(
     by_spell: Counter[int] = Counter()
     phase_by_spell: Counter[int] = Counter()
     for row in events:
-        if not isinstance(row, dict):
+        # The Casts data type also returns begincast and empowerstart/empowerend rows; only the
+        # `cast` row marks one use of the spell.
+        if not isinstance(row, dict) or row.get("type") != "cast":
             continue
         spell_id = _int_or_none(row.get("abilityGameID"))
         timestamp = _int_or_none(row.get("timestamp"))

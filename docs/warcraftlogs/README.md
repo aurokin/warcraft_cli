@@ -7,7 +7,6 @@ sampled cross-report analytics, plus a raw `graphql` passthrough for queries no 
 Companion docs:
 - [SCOPING.md](SCOPING.md) - scoping conventions and raw-GraphQL rules
 - [CACHING.md](CACHING.md) - cache keys, TTLs, and derived-output trust fields
-- [warcraftlogs-design-notes.md](../architecture/history/warcraftlogs-design-notes.md) - schema research and the original design record
 - [AUTH_ARCHITECTURE.md](../architecture/AUTH_ARCHITECTURE.md) - shared auth architecture
 
 ## Auth
@@ -107,6 +106,12 @@ Logs table entry per row, which is where the gear, pet and per-ability detail li
 from roughly 43 KB to 560 KB with it on. `report-encounter-casts` aggregates only the events one
 `--limit` page returns, so it sets `casts.truncated` and a note when Warcraft Logs hands back a
 `next_page_timestamp`.
+
+Cast counts (`report-encounter-casts` and `ability-usage-summary`) count only `cast` events. The
+Casts data type also returns `begincast` (a cast bar starting, including cancelled casts) and
+`empowerstart`/`empowerend` (an empowered spell's charge); these are skipped, so `casts.event_count`
+is the page size and `casts.cast_count` the counted casts. An empowered spell counts once per press,
+a cast-time spell once per finished cast, and a channelled spell once when the channel starts.
 
 Sampled cross-report analytics (many kills, one boss): `boss-kills`, `top-kills`,
 `spec-kill-samples`, `kill-time-distribution`, `boss-spec-usage`, `comp-samples`,

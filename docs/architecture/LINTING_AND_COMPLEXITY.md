@@ -6,17 +6,17 @@ Static quality tooling, what blocks a merge, and what is advisory.
 
 | Target | Purpose | Blocking |
 |--------|---------|----------|
-| `make check` | `lint` + `typecheck` + `lint-boundaries` + `complexity-gate` + `deadcode` + `test-fast` — local CI parity | yes |
+| `make check` | `lint` + `typecheck` + `lint-boundaries` + `complexity-gate` + `deadcode` + `coverage` — local CI parity | yes |
 | `make install` | `uv sync --all-extras` (editable dev environment) | — |
 | `make lint` | Ruff over `packages/`, `tests/`, `scripts/` | yes |
 | `make lint-all` | Alias of `make lint` | yes |
 | `make typecheck` | Mypy over all 16 packages (file list in root `pyproject.toml`) | yes |
 | `make lint-boundaries` | `import-linter` package boundaries (`.importlinter`) | yes |
 | `make complexity-gate` | `xenon --max-absolute C packages` — fails on any function graded D or worse | yes |
-| `make deadcode` | `vulture packages scripts tests scripts/vulture_allowlist.py --min-confidence 80` | yes |
-| `make test-fast` | `pytest -q -m "not live"` | yes |
+| `make deadcode` | `vulture packages scripts tests scripts/vulture_allowlist.py --min-confidence 60`, ignoring Typer command/callback and pytest fixture decorators | yes |
+| `make test-fast` | `pytest -q -m "not live and not e2e"` | no (`make coverage` runs the same suite) |
 | `make complexity` | Radon CC + maintainability index report (no threshold) | no |
-| `make coverage` | Coverage over `packages/` (`pytest-cov`, or stdlib `trace` fallback) | no |
+| `make coverage` | The fast suite with `pytest-cov` over `packages/`; fails below the floor in the Makefile (`--cov-fail-under`) | yes |
 | `make skills` | Regenerate provider subskills under `.generated-skills/` | — |
 | `make reference` | Regenerate `docs/reference/<cli>.md` from the Typer apps | — |
 | `make schema` | Regenerate `schemas/envelope.schema.json` from the envelope TypedDicts | — |
@@ -27,8 +27,10 @@ Static quality tooling, what blocks a merge, and what is advisory.
 | `make benchmark-cache` | Cold vs warm Wowhead search timing | no |
 | `make fixture-refresh-hints` | Prints URLs for refreshing Wowhead fixtures | no |
 
-`make reference` and `make skills` write generated files. Never hand-edit their output; staleness
-tests in `tests/` fail when the checked-in copies drift from the CLIs.
+`make reference`, `make schema`, and `make skills` write generated files. Never hand-edit their
+output. `tests/test_command_reference.py` and `tests/test_warcraft_cli_envelope_schema.py` fail when
+the checked-in reference or schema drifts from the CLIs; the skills output is gitignored and no test
+compares it, so rerun `make skills` after editing `skills/warcraft/`.
 
 ## Ruff Configuration
 
@@ -73,7 +75,8 @@ Large `main.py` entry modules (`wowhead`, `warcraftlogs`, `simc`, the `warcraft`
 
 ## Dead Code
 
-`make deadcode` runs vulture at confidence 80 with `scripts/vulture_allowlist.py` as the allowlist.
+`make deadcode` runs vulture at confidence 60 with `scripts/vulture_allowlist.py` as the allowlist,
+ignoring functions registered by `@*.command`, `@*.callback`, and `@pytest.fixture`.
 The allowlist exists for names vulture cannot see through (protocol members, `__exit__` signatures,
 test doubles). When vulture flags something new, delete the code or add an allowlist entry with a
 reason — do not lower the confidence threshold.
@@ -102,6 +105,5 @@ make install
 
 ## Related
 
-- [CONTRACT_TEST_CATALOG.md](CONTRACT_TEST_CATALOG.md)
 - [FIXTURE_MAINTENANCE.md](FIXTURE_MAINTENANCE.md)
 - [REPO_STRUCTURE_AND_PACKAGING.md](REPO_STRUCTURE_AND_PACKAGING.md)

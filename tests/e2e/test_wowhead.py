@@ -38,7 +38,8 @@ BINARY = "wowhead"
 TALENT_CALC_SPEC = "druid/balance"
 PROFESSION_TREE_REF = "alchemy/BCuA"
 # Opaque client-side state: Wowhead only mints these in the browser, so they cannot be discovered
-# from any listing command. Both are inspectors that only normalize and cite the ref they are given.
+# from any listing command. The profiler list has since been removed from Wowhead, which is what
+# its journey pins.
 DRESSING_ROOM_REF = "#fz8zz0zb89c8mM8YB8mN8X18mO8ub8mP8uD"
 PROFILER_REF = "97060220/us/illidan/Roguecane"
 
@@ -269,6 +270,8 @@ def test_the_database_rank_bonus_goes_only_to_rows_that_name_the_query(require) 
 
     ``search "the argent dawn"`` once promoted achievement 18372, "Wards of the Dread Citadel", to
     third place on the word "the". A promoted row has to carry a real query word in its own name.
+    A row that names only some of the words (Argent Quartermaster Hasana) still answers the query and
+    has to stay on the page; an earlier fix dropped every such row.
     """
     require("wowhead")
     found = run(BINARY, "search", "the argent dawn", "--limit", "30")
@@ -279,6 +282,9 @@ def test_the_database_rank_bonus_goes_only_to_rows_that_name_the_query(require) 
     assert promoted.get(("faction", 529)) == "Argent Dawn", f"the faction lost the bonus it earns\n{found.describe()}"
     assert all(re.search(r"\b(argent|dawn)\b", name, re.IGNORECASE) for name in promoted.values()), found.describe()
     assert 18372 not in {row["id"] for row in rows if row["entity_type"] == "achievement"}, found.describe()
+    partial = [row for row in rows if re.search(r"\bargent\b", row["name"], re.IGNORECASE) and not re.search(r"\bdawn\b", row["name"], re.IGNORECASE)]
+    assert partial, f"no row naming only 'argent' survived\n{found.describe()}"
+    assert all("some_terms_match" in row["ranking"]["match_reasons"] for row in partial), found.describe()
 
 
 def test_suggestion_type_ids_label_rows_the_way_wowhead_does(require) -> None:
@@ -807,11 +813,13 @@ def test_talent_calculator_build_decodes_into_a_transport_packet(require, out_di
 def test_profession_dressing_room_and_profiler_refs_normalize_and_cite(require) -> None:
     """The three inspectors normalize their opaque ref and read the page that ref belongs to.
 
-    The tool block is derived from the input, so each journey also pins the fetched page: a word
-    from its own title, which is what rejects the site shell Wowhead serves for an unknown route,
-    and its canonical URL as a known literal. The profession tree's canonical URL drops the loadout
-    code, so it also proves the CLI read the page's own link rather than falling back to the input;
-    the other two pages' canonical URL is the URL fetched, so there only the title can tell.
+    The tool block is derived from the input, so each journey also pins what the fetched page says.
+    The profession tree and dressing room: a word from the page's title, which rejects the site
+    shell Wowhead serves for an unknown route, and the page's own canonical link as a literal. That
+    literal drops the loadout code and the share hash, so the input-built fallback cannot match it.
+    The profiler: Wowhead has removed the pinned list, and only that list's page says so. The CLI
+    has to fetch it and fail not_found with Wowhead's message; it used to fetch the generic /list
+    page and answer ok: true with a canonical URL built from the input.
     """
     require("wowhead")
     profession = run(BINARY, "profession-tree", PROFESSION_TREE_REF)
@@ -831,14 +839,10 @@ def test_profession_dressing_room_and_profiler_refs_normalize_and_cite(require) 
     assert dressing.data["page"]["canonical_url"] == "https://www.wowhead.com/dressing-room", dressing.describe()
     assert "dressing room" in dressing.data["page"]["title"].lower(), dressing.describe()
 
-    profiler = run(BINARY, "profiler", PROFILER_REF)
-    assert_envelope_data_holds(profiler, "tool", "page")
-    assert profiler.data["tool"]["list_parts"] == PROFILER_REF.split("/"), profiler.describe()
-    assert profiler.data["tool"]["region_slug"] == pins.REGION, profiler.describe()
-    assert profiler.data["tool"]["realm_slug"] == pins.REALM_SLUG, profiler.describe()
-    assert profiler.data["tool"]["state_url"] == f"https://www.wowhead.com/list?list={PROFILER_REF}"
-    assert profiler.data["page"]["canonical_url"] == f"https://www.wowhead.com/list?list={PROFILER_REF}", profiler.describe()
-    assert "profiler" in profiler.data["page"]["title"].lower(), profiler.describe()
+    profiler = run(BINARY, "profiler", PROFILER_REF, expect=EXIT_NOT_FOUND, error_code="not_found")
+    error = profiler.payload["error"]
+    assert error["details"]["url"] == f"https://www.wowhead.com/list?list={PROFILER_REF}", profiler.describe()
+    assert "This list doesn't exist or has been removed." in error["message"], profiler.describe()
 
 
 def test_global_output_flags_reshape_the_same_entity_payload(require) -> None:

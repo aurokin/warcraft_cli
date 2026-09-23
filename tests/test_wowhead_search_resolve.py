@@ -314,14 +314,11 @@ def test_prefix_and_contains_score_pins_every_branch_weight() -> None:
 
 
 
-def test_term_match_score_requires_all_terms() -> None:
-    score, reasons = term_match_score({"world", "api"}, haystacks=["world of warcraft api", "reference"])
-    assert score == 6
-    assert reasons == ["all_terms_match"]
-
-    score, reasons = term_match_score({"world", "api", "dragonflight"}, haystacks=["world of warcraft api", "reference"])
-    assert score == 0
-    assert reasons == []
+def test_term_match_score_credits_every_term_and_partial_matches_less() -> None:
+    haystacks = ["world of warcraft api", "reference"]
+    assert term_match_score(["api", "world"], haystacks=haystacks) == (6, ["all_terms_match"])
+    assert term_match_score(["api", "dragonflight", "world"], haystacks=haystacks) == (2, ["some_terms_match"])
+    assert term_match_score(["dragonflight"], haystacks=haystacks) == (0, [])
 
 
 
@@ -344,24 +341,25 @@ def test_upstream_rank_score_adds_the_bonus_and_a_point_for_a_routable_row() -> 
 
 
 def test_upstream_rank_bonuses_follow_wowheads_own_relevance_order() -> None:
-    bonuses = upstream_rank_bonuses(
-        {
-            "results": [],
-            "categories": {
-                "database": [
-                    {"type": 3, "id": 19019, "name": "Thunderfury, Blessed Blade of the Windseeker"},
-                    {"type": 6, "id": 21992, "name": "Thunderfury"},
-                    {"name": "row without an addressable id"},
-                    {"type": 3, "id": 128507, "name": "Inflatable Thunderfury"},
-                ],
-                "news": [{"type": 162, "id": 375994, "name": "Thunderfury news"}],
-                "guides": [{"type": 100, "id": 7671, "name": "Obtaining Thunderfury"}],
-            },
-        }
-    )
+    response = {
+        "results": [],
+        "categories": {
+            "database": [
+                {"type": 3, "id": 19019, "name": "Thunderfury, Blessed Blade of the Windseeker"},
+                {"type": 6, "id": 21992, "name": "Thunderfury"},
+                {"name": "row without an addressable id"},
+                {"type": 3, "id": 128507, "name": "Inflatable Thunderfury"},
+            ],
+            "news": [{"type": 162, "id": 375994, "name": "Thunderfury news"}],
+            "guides": [{"type": 100, "id": 7671, "name": "Obtaining Thunderfury"}],
+        },
+    }
+    bonuses = upstream_rank_bonuses(response, query="thunderfury guide")
     # Only the first three rows of each list earn a bonus, keyed by Wowhead's (type, id) pair.
     assert bonuses == {(3, 19019): 42, (6, 21992): 28, (100, 7671): 21}
-    assert upstream_rank_bonuses({"results": []}) == {}
+    # The guides order only counts for a query that asks for a guide.
+    assert upstream_rank_bonuses(response, query="thunderfury") == {(3, 19019): 42, (6, 21992): 28}
+    assert upstream_rank_bonuses({"results": []}, query="thunderfury") == {}
 
 
 

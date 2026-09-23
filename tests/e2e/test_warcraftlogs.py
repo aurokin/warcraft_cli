@@ -383,13 +383,20 @@ def anchor_aura_id() -> int:
 
 @lru_cache(maxsize=1)
 def anchor_ability_id() -> int:
-    """The most-cast ability game id in the anchor kill."""
-    result = run("warcraftlogs", "report-encounter-casts", anchor().url, "--limit", "200", "--preview-limit", "1")
-    for row in (result.data["casts"] or {}).get("by_ability") or []:
-        game_id = ((row.get("ability") or {}).get("game_id"))
-        if isinstance(game_id, int):
-            return game_id
-    raise JourneyFailure(f"no ability game id in the anchor fight's cast summary\n{result.describe()}")
+    """The anchor kill's ability with the most cast-bar or empower events.
+
+    The Casts data type also returns ``begincast``, ``empowerstart`` and ``empowerend`` rows, and a
+    cast count must skip them; only an ability that has some can show a count that does not.
+    """
+    found = anchor()
+    result = run(
+        "warcraftlogs", "report-events", found.code, "--fight-id", str(found.fight_id), "--data-type", "casts",
+        "--limit", "200", "--filter-expression", 'type != "cast"',
+    )
+    abilities = Counter(event["abilityGameID"] for event in result.data["events"])
+    if not abilities:
+        raise JourneyFailure(f"no cast-bar or empower event in the anchor fight\n{result.describe()}")
+    return int(abilities.most_common(1)[0][0])
 
 
 @lru_cache(maxsize=1)
@@ -604,10 +611,13 @@ def test_search_and_resolve_accept_a_report_url_and_a_bare_code(require):
     from_code = run("warcraftlogs", "resolve", found.code)
     assert from_code.data["match"]["report_reference"]["code"] == found.code, from_code.describe()
 
-    # Report codes are 16 letters and digits, and some have no digit at all; a report URL is explicit
-    # whatever its code looks like, and parsing one needs no network.
-    lettered = run("warcraftlogs", "search", "https://www.warcraftlogs.com/reports/JVFTxcKCqrvpaAzD#fight=4")
-    assert _rows(lettered, "results")[0]["report_reference"]["code"] == "JVFTxcKCqrvpaAzD", lettered.describe()
+    # Report codes are 16 letters and digits, and some have no digit at all; parsing one needs no
+    # network. A 16-letter word is still a word, not a report.
+    for query in ("https://www.warcraftlogs.com/reports/JVFTxcKCqrvpaAzD#fight=4", "JVFTxcKCqrvpaAzD"):
+        lettered = run("warcraftlogs", "search", query)
+        assert _rows(lettered, "results")[0]["report_reference"]["code"] == "JVFTxcKCqrvpaAzD", lettered.describe()
+    word = run("warcraftlogs", "resolve", "frostdeathknight")
+    assert not (word.data.get("match") or {}).get("report_reference"), word.describe()
 
 
 def test_guild_family_reports_the_pinned_guild(require):
@@ -832,7 +842,6 @@ def test_report_encounter_casts_and_buffs_summarize_real_events(require):
     assert len(summary["preview"]) <= 5, casts.describe()
     assert summary["by_ability"], casts.describe()
     assert summary["by_source"][0]["source"]["name"], casts.describe()
-    assert anchor_ability_id() > 0
 
     buffs = run("warcraftlogs", "report-encounter-buffs", found.url, "--view-by", "source", "--preview-limit", "5")
     buff_summary = buffs.data["buffs"]
@@ -1358,7 +1367,7 @@ def test_ability_usage_summary_counts_a_discovered_ability(require):
         "--preview-limit",
         "10",
         "--event-limit",
-        "200",
+        "5000",
     )
     assert result.payload["kind"] == "ability_usage_summary", result.describe()
     data = assert_sampling_metadata(result, expect_rows=True)
@@ -1370,6 +1379,7 @@ def test_ability_usage_summary_counts_a_discovered_ability(require):
     assert usage["total_casts"] == sum(row["casts"]["count"] for row in data["kills_preview"]), result.describe()
 
     # The anchor pull's casts, counted per caster, against that fight's own event log filtered server-side.
+    # A cast is a `cast` event; the ability was picked for having cast-bar or empower events as well.
     row = _anchor_pull_row(data["kills_preview"], result)
     code, fight_id = _kill_key(row)
     events = run(
@@ -1377,8 +1387,8 @@ def test_ability_usage_summary_counts_a_discovered_ability(require):
         "--limit", "10000", "--filter-expression", f"ability.id = {ability_id}",
     )
     assert events.data["next_page_timestamp"] is None, events.describe()
-    casters = Counter(event["sourceID"] for event in events.data["events"])
-    assert casters, events.describe()
+    casters = Counter(event["sourceID"] for event in events.data["events"] if event["type"] == "cast")
+    assert 0 < casters.total() < len(events.data["events"]), events.describe()
     assert row["casts"]["count"] == casters.total(), result.describe()
     assert {source["source"]["id"]: source["count"] for source in row["casts"]["sources"]} == casters, result.describe()
 

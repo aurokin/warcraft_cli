@@ -77,7 +77,7 @@ binaries:
 
 | Module | Responsibility |
 | --- | --- |
-| `output` | JSON shaping: pretty/compact, field projection, diagnostics |
+| `output` | JSON shaping: pretty/compact, `--fields` projection and `fields_missing`, output profiles |
 | `cli` | Typer scaffolding: `RuntimeConfig`, `cfg`, `emit`, `fail`, common global options, `guarded_run` |
 | `envelope` | The `Envelope` TypedDict plus `success_envelope` / `error_envelope` |
 | `exit_codes` | Error-code to exit-code mapping (1 generic, 2 usage, 3 auth, 4 not found, 5 network) |
@@ -172,7 +172,7 @@ revisit.
 
 - **Package manager:** `uv`. `uv.lock` is committed; CI installs with `uv sync --frozen`. Makefile
   targets run through `.venv`. `pip install -e '.[dev]'` still works.
-- **`make check`** = `lint typecheck lint-boundaries complexity-gate deadcode test-fast`. Details in
+- **`make check`** = `lint typecheck lint-boundaries complexity-gate deadcode coverage`. Details in
   [LINTING_AND_COMPLEXITY.md](LINTING_AND_COMPLEXITY.md).
 - **CI** (`.github/workflows/ci.yml`): `lint-and-typecheck`, `unit-tests`, `isolated-install`,
   `wheel`, `gitleaks`.
@@ -191,7 +191,7 @@ in [CHANGELOG.md](../../CHANGELOG.md).
 
 ## Questions This Doc Resolves
 
-- Should this be one big CLI? No — one wrapper plus 12 provider binaries.
+- Should this be one big CLI? No — one wrapper plus 11 provider binaries.
 - Should this be one repo? Yes.
 - Should packages be isolated? Yes, with enforced dependency direction.
 - Is there one install for normal users? Yes — the root wheel.
@@ -206,4 +206,3 @@ in [CHANGELOG.md](../../CHANGELOG.md).
 - [Wrapper Provider Contract](../foundation/WRAPPER_PROVIDER_CONTRACT.md)
 - [Generated command reference](../reference/README.md)
 - [Roadmap](../ROADMAP.md)
-- [Monorepo migration (completed)](history/MONOREPO_MIGRATION.md)

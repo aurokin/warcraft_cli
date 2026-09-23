@@ -135,9 +135,10 @@ def load_trait_table(repo_root: Path) -> TraitTable:
 class UnknownTalentError(ValueError):
     """Talent names that name no talent of the actor's class."""
 
-    def __init__(self, values: list[str]) -> None:
+    def __init__(self, values: list[str], message: str | None = None) -> None:
         super().__init__(
-            f"Not a talent of this class: {', '.join(values)}. Pass the talent's display name or its SimC token."
+            message
+            or f"Not a talent of this class: {', '.join(values)}. Pass the talent's display name or its SimC token."
         )
         self.values = values
 
@@ -152,7 +153,8 @@ def resolve_talent_tokens(repo_root: Path, actor_class: str | None, values: set[
         return set()
     class_id = CLASS_ID_BY_ACTOR_CLASS.get(actor_class or "")
     if class_id is None:
-        raise UnknownTalentError(sorted(values))
+        names = ", ".join(sorted(values))
+        raise UnknownTalentError(sorted(values), f"No actor class to check talents against: {names}. Pass --actor-class.")
     table = load_trait_table(repo_root)
     tokens = {value: tokenize_talent_name(value) for value in values}
     unknown = sorted(value for value, token in tokens.items() if (class_id, token) not in table.entries_by_name)

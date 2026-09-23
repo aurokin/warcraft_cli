@@ -81,6 +81,4 @@ Caching uses the shared `RAIDBOTS_CACHE_*` settings; `RAIDBOTS_REPORT_CACHE_TTL_
 
 To analyze a report locally, run the suggested `simc sim -` / `simc decode-build` /
 `simc describe-build` commands. To run on the Raidbots cloud, paste the emitted input into
-raidbots.com. Submission is deferred; see
-[architecture/history/raidbots.md](../architecture/history/raidbots.md) for the research behind that
-decision, the report structure, and the access model.
+raidbots.com. Submission is deferred.

@@ -37,7 +37,7 @@ from simc_cli.provider import PROVIDER as simc_provider
 from warcraft_core.cli import error_envelope_for
 from warcraft_core.envelope import ENVELOPE_KEYS, SCHEMA_VERSION, error_envelope
 from warcraft_core.exit_codes import EXIT_GENERIC, EXIT_USAGE, exit_code_for
-from warcraft_core.expansions import expansion_keys, list_expansions, resolve_expansion, warcraftlogs_site_for_expansion
+from warcraft_core.expansions import list_expansions, resolve_expansion, warcraftlogs_site_for_expansion
 from warcraft_core.paths import cache_root, config_root, data_root, state_root, worktree_runtime_details
 from warcraft_core.provider import ProviderSurface
 from warcraft_core.shapes import as_dict
@@ -60,7 +60,6 @@ __all__ = [
     "global_doctor_payload",
     "invoke_provider_command",
     "list_providers",
-    "list_wrapper_expansion_keys",
     "parse_lorrgs_report_reference",
     "provider_doctor",
     "provider_expansion_args",
@@ -86,10 +85,6 @@ WOWHEAD_SUPPORTED_EXPANSIONS: tuple[str, ...] = tuple(
 WARCRAFTLOGS_SUPPORTED_EXPANSIONS: tuple[str, ...] = tuple(
     expansion.key for expansion in list_expansions() if expansion.warcraftlogs_site is not None
 )
-
-
-def list_wrapper_expansion_keys() -> tuple[str, ...]:
-    return expansion_keys()
 
 
 def resolve_wrapper_expansion_key(value: str | None) -> str:

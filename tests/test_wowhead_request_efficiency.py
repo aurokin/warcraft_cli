@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 
 from typer.testing import CliRunner
 from warcraft_core.envelope import REQUIRED_KEYS
+from wowhead_cli import main as main_module
 from wowhead_cli.main import app
 from wowhead_cli.wowhead_client import WowheadClient
 
@@ -88,6 +89,21 @@ def test_wowhead_search_stream_emits_jsonl_header_and_records(monkeypatch) -> No
     assert header["data"]["results"] == []
     record = json.loads(lines[1])
     assert record["record"]["id"] == 1
+
+
+def test_wowhead_stream_refuses_a_malformed_envelope(monkeypatch) -> None:
+    """--stream writes JSONL itself, so it must apply the envelope check warcraft_core.cli.emit applies."""
+    monkeypatch.setattr(
+        "wowhead_cli.wowhead_client.WowheadClient.search_suggestions",
+        lambda self, query: {"search": query, "results": []},
+    )
+    wrap = main_module._with_envelope_keys
+    monkeypatch.setattr(main_module, "_with_envelope_keys", lambda ctx, payload: {**wrap(ctx, payload), "results": []})
+
+    result = runner.invoke(app, ["--stream", "search", "thunderfury"])
+    assert result.stdout == ""
+    assert isinstance(result.exception, TypeError)
+    assert "unexpected key: results" in str(result.exception)
 
 
 def test_wowhead_comments_hydration_uses_concurrency(monkeypatch) -> None:

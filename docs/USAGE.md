@@ -18,7 +18,7 @@ make reference
 
 Workspace command behavior:
 - `uv sync --all-extras` (or `make install`) creates and updates the checkout-local `.venv`; `pip install -e '.[dev,redis]'` still works
-- `make check` runs lint, typecheck, import boundaries, the complexity gate, dead-code detection, and the fast test suite
+- `make check` runs lint, typecheck, import boundaries, the complexity gate, dead-code detection, and the fast test suite with its coverage floor
 - `make test-e2e` runs the end-to-end journeys through the installed binaries against the real providers ([E2E_TESTING.md](architecture/E2E_TESTING.md)); `make test-canary` runs the live Wowhead parser canary (`WOWHEAD_LIVE_TESTS=1`)
 - `make reference` regenerates `docs/reference/`; `make skills` regenerates the generated provider subskills. Neither output is hand-edited
 - `make dev-deploy-no-link` refreshes the checkout-local editable environment without rewriting host-level command wrappers; `make worktree-env` regenerates `.warcraft/worktree-env.sh`, and `source .warcraft/worktree-env.sh` activates worktree-local `PATH`, data, and cache roots
@@ -26,7 +26,7 @@ Workspace command behavior:
 
 ## Global Flags
 
-These flags exist on every binary — the `warcraft` wrapper and all twelve providers — and go
+These flags exist on every binary — the `warcraft` wrapper and all eleven providers — and go
 **before** the subcommand. Full contract: [foundation/ERROR_CONTRACT.md](foundation/ERROR_CONTRACT.md).
 
 | Flag | Effect |
@@ -106,7 +106,7 @@ warcraft simc analysis-packet <simc-root>/ActionPriorityLists/default/monk_mistw
 - `warcraft-wiki` is a reference provider with MediaWiki-backed search, resolve, typed `api` / `event` lookups, article export, and local query.
 - `warcraftlogs` is an official API provider with OAuth client-credentials auth plus typed world metadata, guild, character, and report lookups; `--site retail|classic|fresh` selects the site profile and the wrapper maps `--expansion` onto it.
 - `warcraftlogs` is wired into wrapper `doctor`, passthrough, and conservative wrapper `search` / `resolve`.
-- wrapper discovery for `warcraftlogs` is intentionally narrow: only explicit report URLs and bare mixed-alphanumeric report codes resolve through the wrapper.
+- wrapper discovery for `warcraftlogs` is intentionally narrow: only explicit report URLs and bare report codes resolve through the wrapper. A bare code is any 16 letters and digits, or 8 to 32 letters and digits with at least one digit, so a 16-letter single word (`restorationdruid`) is read as a report code too.
 - `lorrgs` is a no-auth Lorrgs public API provider for top-parse cooldown timelines, composition rankings, static spec/boss/spell metadata, and Warcraft Logs report overview handoffs; wrapper `search`/`resolve` understand Lorrgs URLs, Warcraft Logs report URLs, bare report codes, and spec/boss text.
 - `lorrgs` is fixed to retail for wrapper expansion eligibility because it exposes current Warcraft Logs-derived raid ranking data and has no classic/fresh selector.
 - `warcraft cooldown-packet` is the cross-provider packet for user-specific phase cooldown questions:
@@ -236,6 +236,8 @@ Wowhead command behavior:
 - `profiler` currently acts as a stable state inspector:
   - it normalizes the raw `list=` reference
   - it extracts list id, region, realm, and character name when present
+  - it fetches that list's own page and fails with `not_found` (exit 4) when Wowhead says the list
+    doesn't exist or has been removed
   - it does not yet decode the underlying profile/list contents
 
 ## Method Commands
@@ -388,7 +390,7 @@ lorrgs report-overview "https://www.warcraftlogs.com/reports/bG3xDYPqKjLm8XaR?fi
 
 Lorrgs behavior:
 - `doctor` reports no-auth public API posture, endpoint metadata, and capability state
-- `search` accepts Lorrgs ranking URLs, Warcraft Logs report URLs, bare mixed-alphanumeric report codes, and free text containing a spec and boss; results include `follow_up.command`
+- `search` accepts Lorrgs ranking URLs, Warcraft Logs report URLs, bare report codes, and free text containing a spec and boss; results include `follow_up.command`
 - `resolve` picks a conservative Lorrgs next command, such as `lorrgs spec-ranking ...` or `lorrgs report-overview <report-id>`
 - `spec-ranking` returns Lorrgs' raw top-parse cooldown timeline data: reports, fights, players,
   casts, boss casts, phases, timestamps, and source report ids
@@ -739,7 +741,7 @@ Search and resolve:
 - when the query contains follow-up words like `comments`, `links`, or `full`, the CLI strips those from the upstream Wowhead lookup and exposes the actual request text as `search_query`
 - use `resolve` when you want the CLI to choose the best next command conservatively
 - `resolve` reuses the same follow-up guidance, but only emits `next_command` when confidence is high
-- `resolve --entity-type guide` or similar can safely narrow ambiguous queries when the caller already knows the target class of thing
+- `resolve --entity-type guide` or similar can safely narrow ambiguous queries when the caller already knows the target class of thing; Wowhead's own guide ranking counts when the query says `guide` or `--entity-type guide` is set
 
 Bundle discovery and refresh:
 - bundle freshness summaries include reason fields such as `bundle_reasons` and `hydration_reasons`, so stale bundles can be triaged without opening the manifest

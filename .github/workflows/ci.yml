@@ -61,15 +61,10 @@ jobs:
       - name: Install dependencies
         run: uv sync --frozen --extra dev --extra redis
 
-      # Coverage spans every packages/*/src tree, so the provider CLIs and the
-      # wrapper get a visible signal instead of only warcraft-core/api/content.
-      - name: Unit tests (non-live) with coverage
-        run: |
-          cov_args=()
-          for src in packages/*/src; do
-            cov_args+=("--cov=$src")
-          done
-          .venv/bin/pytest -q -m "not live" "${cov_args[@]}" --cov-report=term
+      # Same target `make check` runs: the fast suite over every package, failing below the
+      # coverage floor set in the Makefile.
+      - name: Unit tests (non-live) with coverage floor
+        run: make coverage
 
   isolated-install:
     name: Isolated install (${{ matrix.cli }})

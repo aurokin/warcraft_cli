@@ -150,7 +150,7 @@ def _ranked_suggestions(
         query=query,
         expansion=profile,
         entity_types=entity_types,
-        rank_bonuses=upstream_rank_bonuses(response),
+        rank_bonuses=upstream_rank_bonuses(response, query=query, entity_types=entity_types),
     )
     return ranked, {**merge, "unmatched_rows_dropped": unmatched}
 

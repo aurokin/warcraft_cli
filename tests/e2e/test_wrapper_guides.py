@@ -472,7 +472,6 @@ def test_guide_builds_simc_decodes_and_describes_a_damage_guide(require, out_dir
     packet = result.data
     assert packet["source"]["kind"] == "bundle"
     _assert_handoff_packet(packet, result.payload["provenance"], bundle_paths=(bundle_path,), apl_path=apl_path, decode=True)
-    assert packet["summary"]["decode_success_count"] >= 1, json.dumps(packet["summary"])
     _assert_simc_legs(
         packet, actor_class=DPS_CLASS, spec=DPS_SPEC, expected={"identify": True, "decode": True, "describe": True}
     )

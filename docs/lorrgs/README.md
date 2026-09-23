@@ -7,8 +7,6 @@
 provenance. Lorrgs renders Warcraft Logs-derived cooldown timelines for top parses by spec and boss plus
 composition rankings per encounter. No auth is required.
 
-Design record: [docs/architecture/history/lorrgs.md](../architecture/history/lorrgs.md).
-
 ## Global flags
 
 Global flags go before the subcommand and are the same on every binary:
@@ -41,7 +39,7 @@ lorrgs --fields data.specs specs
 | `user-report <report-ref>` | Already-cached Lorrgs user report overview. |
 | `user-report-fights <report-ref> [--fight IDS] [--player IDS] [--type TYPE]` | Selected cached fights. `--fight` and `--type` default to the values parsed from a report URL. |
 
-`<report-ref>` is a Warcraft Logs report URL, a Lorrgs `user_report(s)` URL, or a bare report code.
+`<report-ref>` is a Warcraft Logs report URL, a Lorrgs `user_report(s)` URL, or a bare 16-character report code (letters and digits, mixed case; it need not contain a digit).
 `--fight` and `--player` take dot-separated id lists (`2.4.15`).
 
 The wrapper adds `warcraft cooldown-packet <report-url> --actor-id <source-id> --phase <n>`, which joins

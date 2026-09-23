@@ -15,8 +15,7 @@ Every journey executes an installed binary (`.venv/bin/<name>`) as a real subpro
 - the expected exit code (0, 2 usage, 3 auth, 4 not found, 5 network, 1 generic);
 - no traceback, ever;
 - `envelope_violations()` empty, so nothing at the top level but the envelope keys, and every field
-  a journey reads taken from `data`. `test_contract.py` also checks one success and one failure per
-  binary against the key list spelled out in the test.
+  a journey reads taken from `data`.
 
 On top of that, journeys assert real content: names, ids, counts, files on disk, and agreement
 between commands (search, resolve, and entity must name the same thing, and the page a typed
@@ -41,7 +40,8 @@ against the exact rows that bound keeps.
 
 - **Skips are failures.** A provider that cannot be reached, a credential that is missing, or a
   parser that returns nothing fails the run. Upstream bot protection is a failure too, not a
-  skip.
+  skip. The only journeys that skip are the optional ones under [Coverage](#coverage), and they
+  say so in the skip reason.
 - **Exclude explicitly, never implicitly.** `WARCRAFT_E2E_SKIP=curseforge` skips
   that provider with a visible reason. `redis` is an optional component: set
   `WARCRAFT_E2E_REDIS_URL` to exercise it.
@@ -121,12 +121,37 @@ What a green run does **not** prove:
 - **One machine, one account.** Credentials, the SimulationCraft checkout, and the guild and
   character pins are the maintainer's; a green run on another machine needs the same inputs.
 
+## Known gaps
+
+Open weaknesses a green run does not rule out, beyond the limits above:
+
+- **Coverage is hand-maintained.** "Every command in `docs/reference/` has a journey" is checked by
+  reading, not by a test, and many documented flags appear in no journey.
+- **One journey is red against the current product**:
+  `test_wrapper_core.py::test_passthrough_refuses_an_expansion_it_cannot_apply` expects exit 2 for
+  `unsupported_provider_expansion` and `duplicate_expansion_argument`; the wrapper exits 1, which
+  `docs/warcraft/README.md` documents. One of the two has to change.
+- **Wowhead guide exports carry no build references**, so `warcraft guide-builds-simc` hands simc
+  only the Method and Icy Veins builds, and the packet has no per-bundle count showing that the
+  Wowhead bundle contributed none. The guide journey pins the contributing providers, so it goes
+  red, not quiet, if that changes.
+- **Merged search order between providers** is not checked end to end: the journeys check each
+  provider's rows against its own payload, and the cross-provider order is covered only by
+  `tests/test_provider_contract.py`.
+- **The Wowhead guide-order rule** (Wowhead's guide ranking counts only when the query or
+  `--entity-type` asks for a guide) has no journey; no live query found so far tells the two rules apart.
+- **Raider.IO leaderboard citations** are compared as strings only: raider.io answers 200 for any
+  `?realm=` value, so fetching the citation would prove nothing.
+- **Wowhead suggestion type 112** (Companion) has never appeared in a live response, so its label is
+  unverified.
+
 ## CI
 
-`.github/workflows/live-contracts.yml` runs weekly and on demand with no secrets. It runs the
-keyless journey files (`test_wowhead.py`, `test_method.py`, `test_icy_veins.py`,
-`test_raiderio.py`, `test_warcraft_wiki.py`, `test_lorrgs.py`, `test_raidbots.py`, with
-`WARCRAFT_E2E_SKIP=raidbots-report`) and `make test-canary`, the Wowhead parser canary
-(`tests/test_wowhead_parser_canaries.py`, gated by `WOWHEAD_LIVE_TESTS=1`). The keyed providers,
-SimulationCraft, the wrapper composites, and `test_contract.py` stay local. A job that fails, is
-cancelled, or is skipped opens or updates the `live-failure` tracking issue.
+`.github/workflows/live-contracts.yml` runs weekly (Mondays 06:00 UTC) and on demand, with no
+secrets. It runs the keyless journey files (`test_wowhead.py`, `test_method.py`,
+`test_icy_veins.py`, `test_raiderio.py`, `test_warcraft_wiki.py`, `test_lorrgs.py`,
+`test_raidbots.py`, with `WARCRAFT_E2E_SKIP=raidbots-report`) and `make test-canary`, the Wowhead
+parser canary (`tests/test_wowhead_parser_canaries.py`, gated by `WOWHEAD_LIVE_TESTS=1`). The keyed
+providers, SimulationCraft, the wrapper composites, and `test_contract.py` stay local. It never
+gates a pull request. When a job fails, is cancelled, or is skipped, a scheduled run (or a manual
+run with `open_issue` set) opens or comments on the `live-failure` tracking issue.

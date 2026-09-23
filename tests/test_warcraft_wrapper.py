@@ -14,6 +14,7 @@ from method_cli.main import app as method_app
 from raiderio_cli.client import FetchedJson
 from simc_cli.build_input import BuildIdentity, BuildResolution, BuildSpec
 from typer.testing import CliRunner
+from warcraft_cli.cooldown_packet import normalize_warcraftlogs_actor_casts
 from warcraft_cli.guild import guild_rank_rows
 from warcraft_cli.main import ACTOR_PROFILE_MAX_SCOPED_FIGHTS
 from warcraft_cli.main import app as warcraft_app
@@ -542,7 +543,7 @@ def _stub_non_warcraftlogs_fanout(monkeypatch) -> None:  # noqa: ANN001
 
 def test_warcraft_search_keeps_warcraftlogs_as_explicit_report_only_discovery_hint(monkeypatch) -> None:
     _stub_non_warcraftlogs_fanout(monkeypatch)
-    # "Liquid" is a guild name, not a report code (REPORT_CODE_PATTERN needs a digit),
+    # "Liquid" is a guild name, not a report code (6 characters and no digit),
     # so warcraftlogs must return its structured discovery hint, not a fabricated match.
     result = runner.invoke(warcraft_app, ["search", "Liquid"])
     assert result.exit_code == 0
@@ -6403,6 +6404,19 @@ def _uncached_lorrgs_invoke(calls: list[tuple[str, list[str]]]):
         raise AssertionError((provider, args))
 
     return fake_provider_invoke
+
+
+def test_cooldown_packet_counts_an_empowered_press_once() -> None:
+    """An empowered press arrives as empowerstart + cast + empowerend; only the cast is one use."""
+    events = {"events": [
+        {"abilityGameID": 355936, "timestamp": 1000 + offset, "type": event_type, "sourceID": 14}
+        for offset, event_type in ((0, "empowerstart"), (1, "cast"), (900, "empowerend"))
+    ]}
+    casts = normalize_warcraftlogs_actor_casts(
+        events, fight_start_time_ms=0, catalog={}, spell_ids={355936}, window={"start_ms": 0, "end_ms": 5000}
+    )
+    assert (casts["tracked_cast_count"], casts["selected_phase_cast_count"]) == (1, 1)
+    assert [row["count"] for row in casts["tracked_casts_by_spell"]] == [1]
 
 
 def test_cooldown_packet_degrades_to_the_warcraftlogs_half_when_lorrgs_has_no_cached_report(monkeypatch) -> None:

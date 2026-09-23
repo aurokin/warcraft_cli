@@ -1,6 +1,6 @@
 # Architecture Docs
 
-Progressive index for repo structure, shared design, and completed work. Sequencing and near-term priorities live in [ROADMAP.md](../ROADMAP.md). Open engineering work is tracked in [Linear — Warcraft CLI](https://linear.app/aurokin/project/warcraft-cli-a9a133da0d88).
+Progressive index for repo structure and shared design. Sequencing and near-term priorities live in [ROADMAP.md](../ROADMAP.md). Open engineering work is tracked in [Linear — Warcraft CLI](https://linear.app/aurokin/project/warcraft-cli-a9a133da0d88).
 
 ## Start Here
 
@@ -15,14 +15,8 @@ Progressive index for repo structure, shared design, and completed work. Sequenc
 - [AUTH_ARCHITECTURE.md](AUTH_ARCHITECTURE.md) — shared auth classes, rollout status, provider posture
 - [EXPANSION_FILTERING.md](EXPANSION_FILTERING.md) — wrapper `--expansion` behavior and provider modes
 - [LINTING_AND_COMPLEXITY.md](LINTING_AND_COMPLEXITY.md) — static quality tooling and the gates in `make check`
-- [CONTRACT_TEST_CATALOG.md](CONTRACT_TEST_CATALOG.md) — pinned parser/matrix/schema inputs and cross-provider contract tests
-- [FIXTURE_MAINTENANCE.md](FIXTURE_MAINTENANCE.md) — how to refresh synthetic and captured fixtures
+- [FIXTURE_MAINTENANCE.md](FIXTURE_MAINTENANCE.md) — the fixture inventory, how to refresh it, and the cross-provider contract tests
 - [E2E_TESTING.md](E2E_TESTING.md) — the local end-to-end journey suite, its policy, and credential setup
-
-## Completed Work (History)
-
-Shipped milestones and design records that should not be mistaken for open plans:
-[history/README.md](history/README.md).
 
 ## Provider Candidates
 

@@ -284,7 +284,7 @@ def _resolve_reference(ctx: typer.Context, request: CooldownRequest, state: Cool
         _fail_cooldown_packet(
             ctx,
             code="invalid_report_ref",
-            message="Expected a Warcraft Logs report URL, Lorrgs user_report URL, or mixed alphanumeric report code.",
+            message="Expected a Warcraft Logs report URL, Lorrgs user_report URL, or 16-character report code.",
             query=state.query,
         )
     resolved_fight_id = request.fight_id or parsed_ref.fight_id

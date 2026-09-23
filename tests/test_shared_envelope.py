@@ -33,6 +33,8 @@ def test_envelope_violations_flags_shape_problems() -> None:
     assert "missing key: schema_version" in envelope_violations({"ok": True})
     ok_with_error = {**success_envelope(provider="p", command="c", kind="k", data={}), "error": {"code": "x", "message": "y"}}
     assert envelope_violations(ok_with_error) == ["error must be absent when ok is true"]
+    ok_with_null_error = {**success_envelope(provider="p", command="c", kind="k", data={}), "error": None}
+    assert envelope_violations(ok_with_null_error) == ["error must be absent when ok is true"]
     bad_data = {**success_envelope(provider="p", command="c", kind="k", data={}), "data": []}
     assert envelope_violations(bad_data) == ["data must be a dict"]
     error_missing = {**error_envelope(provider="p", command="c", code="x", message="y"), "error": {"code": "x"}}

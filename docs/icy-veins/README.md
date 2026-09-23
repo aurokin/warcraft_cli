@@ -163,9 +163,6 @@ separately.
 
 Login/premium content, non-WoW Icy Veins games, news ingestion, and patch-analysis pages.
 
-Historical design notes and the phased build-out plan live in
-[`../architecture/history/icy-veins.md`](../architecture/history/icy-veins.md).
-
 ## Source links
 
 - `https://www.icy-veins.com/sitemap.xml`

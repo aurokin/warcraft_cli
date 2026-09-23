@@ -4,9 +4,6 @@
 guild profiles, guild raid rankings, and Mythic+ leaderboard analytics. Requests are unauthenticated
 and cached on disk. Guild raid leaderboards here replace the retired WowProgress provider.
 
-Design notes and the pre-implementation research record live in
-[../architecture/history/raiderio.md](../architecture/history/raiderio.md).
-
 ## Output Contract
 
 Every command writes one JSON object. It carries the shared envelope

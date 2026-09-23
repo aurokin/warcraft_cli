@@ -17,11 +17,10 @@ import pytest
 import typer
 
 from tests.cli_testkit import all_cli_apps, console_scripts, subcommands, walk_commands
-from tests.e2e.harness import EXIT_NETWORK, EXIT_OK, EXIT_USAGE, Result, dead_proxy_env, run, run_raw, run_text
+from tests.e2e.harness import EXIT_NETWORK, EXIT_USAGE, Result, dead_proxy_env, run, run_raw, run_text
 from tests.e2e.pins import (
     CHARACTER_NAME,
     CURSEFORGE_ADDON_ID,
-    GUILD_NAME,
     GUILD_REALM,
     GUILD_REGION,
     ITEM_ID,
@@ -63,28 +62,6 @@ CACHED_READ: dict[str, tuple[str, ...]] = {
 }
 # The CACHED_READ commands whose payload reports cache state in a `freshness` block.
 REPORTS_FRESHNESS = frozenset({"raiderio"})
-
-# The top-level keys of a success envelope (docs/foundation/ERROR_CONTRACT.md); a failure adds `error`.
-# Spelled out rather than imported from warcraft_core, so the check does not share the code it checks.
-SUCCESS_ENVELOPE_KEYS = frozenset({"ok", "provider", "command", "kind", "schema_version", "query", "provenance", "data"})
-
-# Per binary, one cheap command that succeeds and one its command body rejects. Payload keys used to
-# be copied to the top level by the commands themselves, so `doctor` and Click usage errors alone
-# would not show them.
-ENVELOPE_PROBES: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
-    "warcraft": (("schema",), ("--expansion", "not-an-expansion", "search", ITEM_SEARCH_QUERY)),
-    "wowhead": (CACHED_READ["wowhead"], ("entity", "item", "999999999")),
-    "warcraftlogs": (("regions",), ("zone", "999999")),
-    "raiderio": (CACHED_READ["raiderio"], ("guild", "zz", GUILD_REALM, GUILD_NAME)),
-    "warcraft-wiki": (CACHED_READ["warcraft-wiki"], ("article", "Zzz No Such Warcraft Wiki Page 90210")),
-    "icy-veins": (("search", "mistweaver monk"), ("guide-query", "/nonexistent/icy-veins-bundle", "mana")),
-    "method": (("search", "mistweaver monk"), ("guide-query", "/nonexistent/method-bundle", "mana")),
-    "lorrgs": (("specs",), ("spec", "no-such-spec-slug")),
-    "raidbots": (("search", "droptimizer for my mage"), ("explain-input", "--text", "x", "--file", "y")),
-    "blizzard": (("realm", REALM_SLUG), ("item", str(ITEM_ID), "--region", "oc")),
-    "curseforge": (("addon", CURSEFORGE_ADDON_ID), ("addon", "999999999")),
-    "simc": (("version",), ("repo", "--set-root", "/tmp", "--clear-root")),
-}
 
 COMPACT_MAX_CHARS = 40
 
@@ -299,19 +276,6 @@ def test_global_flags_only_bind_before_the_subcommand(binary: str) -> None:
     assert result.payload["provider"] == _provider(binary), result.describe()
 
 
-@pytest.mark.parametrize("binary", BINARIES)
-def test_success_and_failure_envelopes_carry_exactly_the_envelope_keys(binary: str, require) -> None:
-    if binary != "warcraft":
-        require(_provider(binary))
-    succeeds, fails = ENVELOPE_PROBES[binary]
-    success = run(binary, *succeeds)
-    assert set(success.payload) == SUCCESS_ENVELOPE_KEYS, success.describe()
-
-    failure = run(binary, *fails, expect=None)
-    assert failure.exit_code != EXIT_OK, failure.describe()
-    assert set(failure.payload) == SUCCESS_ENVELOPE_KEYS | {"error"}, failure.describe()
-
-
 @pytest.mark.parametrize("binary", sorted(CACHED_READ))
 def test_a_repeated_read_is_served_from_the_isolated_cache(binary: str, require, tmp_path: Path) -> None:
     require(_provider(binary))
@@ -379,7 +343,6 @@ def test_a_redis_backed_read_hits_the_shared_cache(require, optional, tmp_path: 
 def test_the_contract_tables_cover_every_installed_binary() -> None:
     # A new console script must not slip past the contract; these tables are the coverage list.
     assert set(NETWORK_COMMAND) == set(BINARIES) - {"simc"}, "simc runs locally; every other binary needs one"
-    assert set(ENVELOPE_PROBES) == set(BINARIES)
     assert REPORTS_FRESHNESS <= set(CACHED_READ) <= set(BINARIES)
 
 

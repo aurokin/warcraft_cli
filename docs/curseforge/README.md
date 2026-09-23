@@ -7,9 +7,6 @@ thin (four commands) and addon metadata sits at the edge of the product's scope.
 without search access can only resolve numeric mod ids; the slug path then fails with
 `auth_failed` and a message pointing at the numeric form.
 
-Design history and the go/no-go record live in
-[docs/architecture/history/curseforge.md](../architecture/history/curseforge.md).
-
 ## Auth
 
 Commands that call the API need `CURSEFORGE_API_KEY` (a static `x-api-key` header). Discovery order,
@@ -25,7 +22,7 @@ highest first:
 
 Every command accepts the shared output flags, which go **before** the subcommand:
 `--pretty`, `--compact`, `--compact-max-chars <n>`, `--fields <dot.path>`, `--fields-strict`,
-`--profile agent|human|debug`.
+`--profile agent|human`.
 
 ## Commands
 

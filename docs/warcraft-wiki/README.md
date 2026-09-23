@@ -74,16 +74,24 @@ the dropped words come back as `excluded_terms` with `normalization_hint: "exclu
 
 Every candidate carries its full `ranking.match_reasons`. MediaWiki's own full-text order contributes at most 10
 points and always appears as `upstream_rank_<n>`, so a row that matched only in a page body it never showed us cannot
-outscore a real title match. A title that appears as a whole-word phrase inside a longer query earns
-`query_contains_title`, scaled by the share of query words it spells out, so `world boss sha of anger` ranks
-`Sha of Anger` above `World boss` and both above pages whose snippets only mention them. It does not count as covering
-the query for `resolve`.
+outscore a real title match. A title is compared with the query word by word, ignoring case and punctuation, so a
+disambiguation title's parenthetical counts as words: `xuen tactics` is an `exact_title` match for `Xuen (tactics)`.
+Digit groups stay separate words, so `patch 1.12` is not an `exact_title` match for `Patch 1.1.2`. A
+title that appears as a whole-word phrase inside a longer query earns `query_contains_title`, up to 30 points scaled
+by the share of query words it spells out, so `world boss sha of anger` ranks `Sha of Anger` above pages whose
+snippets only mention it. The upstream rank can still reorder two such partial titles. An exact title earns at least
+60 title points, more than a partial title of the same content family can collect from its bonus, upstream rank and
+snippet points combined, so `sha of anger anniversary` returns `Sha of Anger (Anniversary)` ahead of `Sha of Anger`
+even when MediaWiki lists the base page first.
 
 `resolve` reports `resolved: true` only when the top row carries a reason covering the whole query (`exact_title`,
 `exact_api_title`, `exact_handler_title`, `exact_event_title`, `title_prefix`, `title_contains_query`,
-`normalized_title_match`, `all_terms_match`, `guide_title_terms`, `expansion_alias_match`) and no other covering
-candidate scores within 18 points of it. Upstream rank, family and intent bonuses are shared by every row in the list,
-so they never make a candidate confident on their own.
+`normalized_title_match`, `all_terms_match`, `guide_title_terms`, `expansion_alias_match`) and either no other row
+covers the query, or the top row scores at least 70, or it leads the best other covering row by at least 18 points.
+Upstream rank, family, intent and `query_contains_title` are not covering reasons, so a row that has only those is
+never confident. For the 70 and 18-point checks, a top row's score loses 30 points when it carries
+`query_contains_title`, so a title that is only part of the query is never confident because of that bonus. Two
+covering rows can therefore both score high and still resolve confidently to the first.
 
 The `api`/`event` search fallback adds an absolute floor on top of that: the candidate's own title has to spell the
 query out. Every word of the query must match a whole word of the title or a whole camel-case component of one, and
@@ -105,6 +113,3 @@ HTTP responses are cached under the `WARCRAFT_WIKI_*` cache settings (see `docto
 - Page extraction is heuristic, not template-aware; framework pages vary more than function pages.
 - Structured data that lives only in templates or cargo tables is not extracted.
 - The family classifier is a fixed list; pages that match none of the families fall back to `general_article`.
-
-Design history and the original completion plan live in
-[`docs/architecture/history/warcraft-wiki.md`](../architecture/history/warcraft-wiki.md).

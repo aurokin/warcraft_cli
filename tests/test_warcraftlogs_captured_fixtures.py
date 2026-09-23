@@ -13,9 +13,10 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from warcraftlogs_cli.main import _encounter_cast_rows_payload
+from warcraftlogs_cli.main import _ability_cast_summary, _encounter_cast_rows_payload
 
-FIXTURE_PATH = Path(__file__).parent / "fixtures" / "warcraftlogs" / "report_encounter_casts_capture.json"
+FIXTURE_DIR = Path(__file__).parent / "fixtures" / "warcraftlogs"
+FIXTURE_PATH = FIXTURE_DIR / "report_encounter_casts_capture.json"
 
 
 @pytest.fixture(scope="module")
@@ -34,16 +35,18 @@ def test_captured_cast_page_reports_its_own_truncation(captured_casts: dict[str,
     casts = captured_casts["casts"]
     # The real response carried a nextPageTimestamp: these aggregates are one page, not the fight.
     assert casts["event_count"] == 40
+    assert casts["cast_count"] == 36
     assert casts["truncated"] is True
     assert casts["next_page_timestamp"] == 213337
-    assert any("next_page_timestamp" in note for note in captured_casts["notes"])
+    # The note names the counted casts, not the raw page size that includes begincast events.
+    assert any("only the 36 casts in the first 40 events" in note for note in captured_casts["notes"])
 
 
 def test_captured_casts_name_every_real_target(captured_casts: dict[str, Any]) -> None:
     by_target = captured_casts["casts"]["by_target"]
     # Environment (-1) and the boss NPC are named from master data, not left as `actor:<id>`.
     assert [(row["count"], row["target"]["name"], row["target"]["type"]) for row in by_target] == [
-        (23, "Environment", "NPC"),
+        (19, "Environment", "NPC"),
         (16, "Rotmire", "NPC"),
         (1, "Nicksdruid", "Player"),
     ]
@@ -52,15 +55,35 @@ def test_captured_casts_name_every_real_target(captured_casts: dict[str, Any]) -
 def test_captured_casts_tally_real_sources_and_abilities(captured_casts: dict[str, Any]) -> None:
     casts = captured_casts["casts"]
     top_source = casts["by_source"][0]
+    # Peepiceek and Infiammato both cast 5 times; the tie sorts by name.
     assert (top_source["count"], top_source["source"]["name"], top_source["source"]["sub_type"]) == (
-        6,
-        "Peepiceek",
-        "DemonHunter",
+        5,
+        "Infiammato",
+        "Mage",
     )
     top_ability = casts["by_ability"][0]
     assert (top_ability["count"], top_ability["ability"]["name"]) == (7, "Soul Fragment")
-    assert sum(row["count"] for row in casts["by_ability"]) == casts["event_count"]
+    assert sum(row["count"] for row in casts["by_ability"]) == casts["cast_count"]
 
     first_preview = casts["preview"][0]
     assert first_preview["relative_time_ms"] == 31.0
     assert first_preview["source"]["identity_contract"]["identity"]["local_key"] == "DZzR9jwYmQA6tbV7:4:15"
+
+
+def test_captured_begincast_events_are_not_counted_as_casts(captured_casts: dict[str, Any]) -> None:
+    casts = captured_casts["casts"]
+    # The page holds 4 begincast events, each paired with the `cast` event of the same use
+    # (abilities 473662 and 104316, two uses each). Counting both would double every use.
+    by_ability = {row["ability"]["game_id"]: row["count"] for row in casts["by_ability"]}
+    assert (by_ability[473662], by_ability[104316]) == (2, 2)
+    assert {row["type"] for row in casts["preview"]} == {"cast"}
+
+
+def test_captured_empowered_spell_counts_one_cast_per_press() -> None:
+    fixture = json.loads((FIXTURE_DIR / "ability_events_empowered_capture.json").read_text(encoding="utf-8"))
+    summary = _ability_cast_summary(
+        fixture["events_report"], actor_index={}, report_code="JVFTxcKCqrvpaAzD", fight_id=4
+    )
+    # 12 events are 4 presses of Dream Breath, each an empowerstart + cast + empowerend triple.
+    assert summary["count"] == 4
+    assert [(row["source"]["id"], row["count"]) for row in summary["sources"]] == [(14, 2), (20, 2)]

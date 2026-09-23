@@ -47,6 +47,8 @@ FAMILY_PROBES = (
     ("mistweaver monk raid guide", "raid_guide", "family_navigation"),
     ("healing guide", "role_guide", "current_page"),
     ("mistweaver monk the war within", "expansion_guide", "family_navigation"),
+    ("mistweaver monk spell summary", "spell_summary", "family_navigation"),
+    ("mistweaver monk remix", "special_event_guide", "family_navigation"),
 )
 # A term the pinned healing guide uses throughout, for the offline bundle journeys.
 BUNDLE_QUERY_TERM = "mana"
@@ -248,7 +250,10 @@ def test_guide_full_walks_the_family_and_publishes_build_references(require) -> 
     assert core <= families, f"the family walk classified {page_count} pages as {sorted(families)}"
 
     assert result.data["linked_entities"]["count"] >= guide_page().data["linked_entities"]["count"]
-    assert result.data["analysis_surfaces"]["count"] >= 1
+    # Each of those pages gets its own analysis surface citing it; a bare count cannot tell one
+    # surface from one per page.
+    cited = {row["page_url"] for row in result.data["analysis_surfaces"]["items"]}
+    assert {page["guide"]["page_url"] for page in result.data["pages"] if page["guide"]["content_family"] in core} <= cited
 
     # The builds/talents page is what feeds `warcraft guide-builds-simc`; zero build references
     # means the import-string markup moved and that handoff is silently empty.

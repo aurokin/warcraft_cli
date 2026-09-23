@@ -56,9 +56,7 @@ Generated from the Typer apps by `make reference`; a test fails when it drifts f
 - [architecture/AUTH_ARCHITECTURE.md](architecture/AUTH_ARCHITECTURE.md)
 - [architecture/EXPANSION_FILTERING.md](architecture/EXPANSION_FILTERING.md)
 - [architecture/LINTING_AND_COMPLEXITY.md](architecture/LINTING_AND_COMPLEXITY.md)
-- [architecture/CONTRACT_TEST_CATALOG.md](architecture/CONTRACT_TEST_CATALOG.md)
 - [architecture/FIXTURE_MAINTENANCE.md](architecture/FIXTURE_MAINTENANCE.md)
-- [architecture/history/README.md](architecture/history/README.md) — completed milestones
 
 Engineering backlog: [Linear — Warcraft CLI](https://linear.app/aurokin/project/warcraft-cli-a9a133da0d88).
 

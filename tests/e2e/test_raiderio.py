@@ -43,8 +43,8 @@ CHARACTER = pins.CHARACTER_NAME
 SCOPE = ("--region", "us", "--pages", "1", "--limit", "20")
 # Raider.IO serves 20 ranking rows per page, so --page is only observable at that granularity.
 RANKING_PAGE_SIZE = 20
-# The playable classes. A class tally can only answer with these and a spec tally never can, which
-# is what tells the class and spec compositions and player tags apart.
+# The playable classes. A class composition can only answer with these and a spec composition never
+# can, which is what tells the two compositions apart.
 WOW_CLASS_SLUGS = frozenset(
     {
         "death-knight", "demon-hunter", "druid", "evoker", "hunter", "mage", "monk",
@@ -108,6 +108,12 @@ def baseline_sample() -> Result:
     return run("raiderio", "sample", "mythic-plus-runs", *SCOPE)
 
 
+@pytest.fixture(scope="module")
+def player_sample() -> Result:
+    """The player snapshots for the baseline scope; they read the same cached leaderboard page."""
+    return run("raiderio", "sample", "mythic-plus-players", *SCOPE, "--player-limit", "25")
+
+
 def _cache_entries(cache_root: Path) -> set[Path]:
     provider_cache = cache_root / "warcraft" / "raiderio" / "http"
     return set(provider_cache.rglob("*")) if provider_cache.exists() else set()
@@ -146,6 +152,15 @@ def _a_value_only_some_runs_carry(runs: list[dict[str, Any]], field: str) -> str
 
 def _counts(rows: list[dict[str, Any]]) -> dict[str, int]:
     return {row["value"]: row["count"] for row in rows}
+
+
+def _roster_entries_by_player(baseline: Result) -> dict[str, list[dict[str, Any]]]:
+    """The baseline roster rows grouped per character, the independent record of each player's runs."""
+    entries: dict[str, list[dict[str, Any]]] = {}
+    for row in _rows(baseline, "runs"):
+        for entry in row["roster"]:
+            entries.setdefault(entry["profile_url"], []).append(entry)
+    return entries
 
 
 def _assert_freshness(result: Result) -> dict[str, Any]:
@@ -452,8 +467,8 @@ def test_the_affixes_scope_changes_both_the_rows_and_the_citation(baseline_sampl
     assert all(url.endswith(f"/{affix}") for url in urls), urls
 
 
-def test_sample_mythic_plus_players_dedupes_roster_entries_into_snapshots() -> None:
-    result = run("raiderio", "sample", "mythic-plus-players", *SCOPE, "--player-limit", "25")
+def test_sample_mythic_plus_players_dedupes_roster_entries_into_snapshots(player_sample: Result, baseline_sample: Result) -> None:
+    result = player_sample
 
     sample = result.data["sample"]
     assert sample["run_count"] >= 1
@@ -468,6 +483,10 @@ def test_sample_mythic_plus_players_dedupes_roster_entries_into_snapshots() -> N
     assert isinstance(top["appearance_count"], int) and top["appearance_count"] >= 1
     assert isinstance(top["top_mythic_level"], int)
     assert top["profile_url"].startswith("https://raider.io/characters/")
+    # One snapshot per character, counting every roster row that character has in the same page.
+    roster = _roster_entries_by_player(baseline_sample)
+    assert len({player["profile_url"] for player in players}) == len(players), "a character must be one snapshot"
+    assert all(player["appearance_count"] == len(roster[player["profile_url"]]) for player in players), result.describe()
     _assert_sampled_provenance(result)
 
 
@@ -524,7 +543,9 @@ def test_distribution_mythic_plus_runs_covers_every_documented_metric(metric: st
     _assert_run_distribution_matches_the_metric(result, metric, rows, baseline_sample)
 
 
-def _assert_player_distribution_matches_the_metric(result: Result, metric: str, rows: list[dict[str, Any]]) -> None:
+def _assert_player_distribution_matches_the_metric(
+    result: Result, metric: str, rows: list[dict[str, Any]], players: Result, baseline: Result
+) -> None:
     """Tie the tally to the one thing in the sample block that only this metric can produce."""
     sample = result.data["sample"]
     values = {row["value"] for row in rows}
@@ -532,26 +553,30 @@ def _assert_player_distribution_matches_the_metric(result: Result, metric: str, 
     if metric in ("appearance_count", "top_mythic_level"):
         assert result.data["distribution"]["statistics"] == sample[metric], result.describe()
         assert total == sample["player_count"], result.describe()
-    elif metric == "class":
-        assert values == set(sample["classes"]) <= WOW_CLASS_SLUGS, result.describe()
-    elif metric == "spec":
-        assert values == set(sample["specs"]), result.describe()
-        assert not values & WOW_CLASS_SLUGS, "a spec tally cannot answer with class slugs"
-    elif metric == "role":
-        assert values <= {"tank", "healer", "dps"}, result.describe()
-        assert total >= sample["player_count"], "every sampled player was seen in at least one role"
+    elif metric in ("class", "spec", "role"):
+        # A tag tally counts each sampled player once per distinct value it played. The sample block's
+        # own tag lists come from the same snapshot field as the tally, so the expected counts are
+        # rebuilt from the baseline roster rows of the sampled players instead.
+        field = {"class": "class_slug", "spec": "spec_slug", "role": "role"}[metric]
+        roster = _roster_entries_by_player(baseline)
+        expected = Counter(
+            value for player in _rows(players, "players") for value in {entry[field] for entry in roster[player["profile_url"]]}
+        )
+        assert _counts(rows) == dict(expected), result.describe()
     else:
         assert total == sample["player_count"], result.describe()
         assert values <= {row["value"] for row in sample["player_region_counts"]}, result.describe()
 
 
 @pytest.mark.parametrize("metric", sorted(PLAYER_DISTRIBUTION_UNITS))
-def test_distribution_mythic_plus_players_covers_every_documented_metric(metric: str) -> None:
+def test_distribution_mythic_plus_players_covers_every_documented_metric(
+    metric: str, player_sample: Result, baseline_sample: Result
+) -> None:
     result = run("raiderio", "distribution", "mythic-plus-players", "--metric", metric, *SCOPE, "--player-limit", "25")
 
     assert result.data["metric"] == metric
     rows = _assert_distribution_shape(result, unit=PLAYER_DISTRIBUTION_UNITS[metric])
-    _assert_player_distribution_matches_the_metric(result, metric, rows)
+    _assert_player_distribution_matches_the_metric(result, metric, rows, player_sample, baseline_sample)
 
 
 @pytest.mark.parametrize(("metric", "estimated"), [("score", "mythic_level"), ("mythic_level", "score")])

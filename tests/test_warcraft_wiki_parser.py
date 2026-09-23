@@ -397,8 +397,7 @@ def test_parse_search_results_maps_a_captured_mediawiki_search_response() -> Non
 
 def test_parse_search_results_keeps_the_spaces_between_highlighted_words() -> None:
     # Highlights sit between plain spaces ("see <span>Sha</span> <span>of</span> ..."); stripping each
-    # text node used to glue them into "seeShaofAnger", where the ranker's substring checks find words
-    # the snippet never had ("fang").
+    # text node used to glue them into "seeShaofAnger".
     _, rows = parse_search_results(_captured("search_world_boss_sha_of_anger.json"))
 
     snippets = {row["title"]: row["snippet"] for row in rows}

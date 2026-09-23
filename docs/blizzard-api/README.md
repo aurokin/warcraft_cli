@@ -34,7 +34,7 @@ Global flags go before the subcommand. They come from the shared CLI scaffolding
 same on every provider binary:
 
 `--pretty`, `--compact`, `--compact-max-chars <n>`, `--fields <dot.path>`, `--fields-strict`,
-`--profile agent|human|debug`.
+`--profile agent|human`.
 
 ```bash
 blizzard --pretty doctor
@@ -103,6 +103,3 @@ returns envelopes and never prints.
 
 `search`/`resolve` ranking, shared identity payloads, classic-era / Season-of-Discovery namespaces,
 auction-house, connected-realm, and spell surfaces, and user-auth (authorization-code) flows.
-
-Design rationale and the original CLI sketch live in
-[docs/architecture/history/blizzard-api.md](../architecture/history/blizzard-api.md).
