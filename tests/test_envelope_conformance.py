@@ -12,6 +12,7 @@ from typing import Any
 
 import pytest
 from cli_testkit import WARCRAFTLOGS_REPORT_QUERY, apply_provider_stubs, run_binary
+from warcraft_cli.main import app as warcraft_app
 from warcraft_cli.providers import PROVIDERS
 from warcraft_core.envelope import envelope_violations
 from warcraft_core.identity import build_reference_transport_packet_payload
@@ -131,21 +132,12 @@ def _offline_provider_result(provider: str, *args: Any, **kwargs: Any) -> dict[s
     }
 
 
-# Every command `warcraft` owns (passthrough proxies are the provider's own envelope, covered above).
-_WRAPPER_OWN_COMMANDS = (
-    "doctor",
-    "schema",
-    "search",
-    "resolve",
-    "guild",
-    "guild-ranks",
-    "actor-profile",
-    "cooldown-packet",
-    "guide-compare",
-    "guide-compare-query",
-    "talent-packet",
-    "talent-describe",
-    "guide-builds-simc",
+# Every command `warcraft` owns, read from the registered app so a new command cannot skip these
+# checks (passthrough proxies are the provider's own envelope, covered above).
+_WRAPPER_OWN_COMMANDS = tuple(
+    str(command.name)
+    for command in warcraft_app.registered_commands
+    if command.name not in {registration.command for registration in PROVIDERS}
 )
 
 

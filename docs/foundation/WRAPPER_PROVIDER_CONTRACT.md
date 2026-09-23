@@ -120,9 +120,13 @@ Fanout failure rules:
 - `failed_providers`, `failed_provider_count`, and `answered_provider_count` are always present, in
   both the default and the `--brief` shape, so a dead fanout is never indistinguishable from an
   empty one
-- when every included provider failed, the wrapper emits an error envelope whose `error.code` is the
-  providers' shared failure code (or `upstream_error` when they disagree), so the exit code the
-  contract derives from `error.code` is true, with the rows under `error.details.failed_providers`
+- a provider row's `answered` says whether the provider actually looked the query up. An
+  explicit-report-only provider (Warcraft Logs) answers free text with a locally built hint and no
+  rows, so it is `ok` but not `answered`, and `answered_provider_count` does not count it
+- when no provider answered and at least one failed, the wrapper emits an error envelope whose
+  `error.code` is the failed providers' shared code (or `upstream_error` when they disagree), so a
+  total outage exits 5 instead of returning an ok:true empty page; the rows are under
+  `error.details.failed_providers`
 
 Composite failure rules:
 - a composite command re-emits its failing source's own `error.code` and exits with that code's
@@ -288,15 +292,20 @@ rows normalizes all twenty to 100 and owns every slot. Three structural rules de
 each one is visible in the payload.
 
 **Intent — what kind of thing was asked for.** `query_intents()` reads the query for the keywords and
-shapes in the ranking policy. A bare name carrying no region term, no realm/character/guild token
-and no keyword is *not* a profile query:
+shapes in the ranking policy. A structured profile query is either exactly `<region> <realm> <name>`
+with a Raider.IO region (`us`, `eu`, `kr`, `tw`, `cn`) or a query carrying a `guild`/`character`
+token; a longer query that only starts with a region-like word (`world boss sha of anger`) is free
+text. A bare name carrying none of these and no keyword is *not* a profile query:
 - a profile-family row (Raider.IO) answering a query with no profile intent is marked
-  `wrapper_ranking.off_intent` and sorts below every on-intent row, whatever its local score. It is
-  still returned — when nothing else answers it is the answer — but it can never outrank a row from
-  a family the query actually asked for.
+  `wrapper_ranking.off_intent` and sorts below every on-intent row, whatever its local score. It
+  takes a page slot only when the on-intent rows cannot fill the page, with one exception: when no
+  entity title matches a bare query exactly, one slot is kept for an off-intent row whose name is
+  exactly the query (`merge_policy.reserved_exact_profile_slot_count`), so `warcraft search <character
+  name>` still shows the character beside the wiki's fuzzy matches.
 - a bare query that exactly matches an entity-family title anchors the page
   (`wrapper_ranking.anchor`): the entity a user named is the primary answer, and another provider's
-  article *about* that entity is supporting reference, however large its local scale.
+  article *about* that entity is supporting reference, however large its local scale. An anchored
+  page keeps no profile slot.
   The anchor applies only when the query carries no intent at all, so
   `character us malganis Aurow` still resolves to the character and not to a spell of the same name.
 - structured profile queries (`guild us illidan Liquid`, `character us malganis Aurow`) keep their
@@ -304,10 +313,12 @@ and no keyword is *not* a profile query:
 
 **Diversity — no provider fills the page.** After ranking, the page is built with a per-provider cap
 of half the page rounded up. An on-intent row over the cap is *deferred*, not dropped: it fills the
-remaining slots once the other providers have taken theirs, so a page is never short when candidates
-exist. An off-intent provider's cap is a strict minority (`limit // 2`, at least one) and is hard:
-the page comes back short rather than repeating twenty near-identical profiles. `data.merge_policy`
-reports the caps, the candidate total, and how many rows were deferred or withheld
+slots the other on-intent providers leave, so a page is never short while on-intent candidates
+exist. Off-intent rows then fill what is still empty, up to a strict minority of the page
+(`limit // 2`, at least one); the page comes back short rather than repeating twenty near-identical
+profiles. The chosen rows are returned in rank order (`search_result_sort_key`), so `data.results`
+never lists a promoted row after a row it outranks. `data.merge_policy` reports the caps, the
+reserved slot, the candidate total, and how many rows were deferred or withheld
 (`docs/foundation/SAFE_ANALYTICS_RULES.md`: a page that dropped rows says so).
 
 **Quality — the row's own title.** A row whose title *is* the query (`name_match: "exact"`) or whose

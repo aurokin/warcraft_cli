@@ -9,8 +9,9 @@ Inputs are discovered at run time and reuse the Warcraft Logs discovery chain in
 ``tests/e2e/test_warcraftlogs.py``: the current raid tier, the most recent kill in it, and that
 kill's roster. Lorrgs only serves fights from reports it has already cached, so ``cooldown-packet``
 is covered twice: once against a report walked out of the Lorrgs spec ranking (the full packet with
-phase windows), and once against the anchor report, which Lorrgs has not cached and which is what a
-caller's own log looks like (the degraded packet that keeps the Warcraft Logs half).
+phase windows, for the first and the second phase), and once against the pinned guild's private
+report, which Lorrgs has never cached and which is what a caller's own log looks like (the degraded
+packet that keeps the Warcraft Logs half).
 """
 
 from __future__ import annotations
@@ -21,8 +22,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from tests.e2e.harness import EXIT_NOT_FOUND, JourneyFailure, Result, payload_or_legacy, run
-from tests.e2e.test_warcraftlogs import anchor, current_raid_zone
+from tests.e2e.harness import EXIT_NOT_FOUND, JourneyFailure, Result, run
+from tests.e2e.test_warcraftlogs import anchor, current_raid_zone, guild_anchor
 
 # How far discovery walks the Lorrgs ranking before giving up on a cached report.
 LORRGS_SPEC_ATTEMPTS = 4
@@ -43,13 +44,13 @@ def _lorrgs_spec_slug(player: dict[str, Any]) -> str | None:
 @lru_cache(maxsize=1)
 def lorrgs_spec_slugs() -> frozenset[str]:
     result = run("lorrgs", "specs")
-    return frozenset(str(row["full_name_slug"]) for row in payload_or_legacy(result, "specs"))
+    return frozenset(str(row["full_name_slug"]) for row in result.data["specs"])
 
 
 @lru_cache(maxsize=1)
 def lorrgs_boss_slugs() -> dict[int, str]:
     result = run("lorrgs", "bosses")
-    return {int(row["id"]): str(row["full_name_slug"]) for row in payload_or_legacy(result, "bosses")}
+    return {int(row["id"]): str(row["full_name_slug"]) for row in result.data["bosses"]}
 
 
 @dataclass(frozen=True)
@@ -95,7 +96,7 @@ def lorrgs_target() -> LorrgsTarget:
             continue
         for spec_slug in candidate_specs[:LORRGS_SPEC_ATTEMPTS]:
             ranking = run("lorrgs", "spec-ranking", spec_slug, boss_slug)
-            for report in (payload_or_legacy(ranking, "reports") or [])[:LORRGS_REPORT_ATTEMPTS]:
+            for report in ranking.data["reports"][:LORRGS_REPORT_ATTEMPTS]:
                 fights = report.get("fights") or []
                 if not fights:
                     continue
@@ -106,7 +107,7 @@ def lorrgs_target() -> LorrgsTarget:
                     if cached.error_code != "not_found":
                         raise JourneyFailure(f"unexpected Lorrgs failure\n{cached.describe()}")
                     continue
-                players = ((payload_or_legacy(cached, "fights") or [{}])[0]).get("players") or []
+                players = cached.data["fights"][0]["players"]
                 if not players:
                     continue
                 player = players[0]
@@ -125,19 +126,21 @@ def lorrgs_target() -> LorrgsTarget:
 
 @lru_cache(maxsize=1)
 def _lorrgs_capable_actor() -> tuple[dict[str, Any], str]:
-    """An anchor-kill actor whose spec Lorrgs publishes cooldown metadata for."""
-    for player in anchor().players:
+    """A pinned-guild kill actor whose spec Lorrgs publishes cooldown metadata for."""
+    players = guild_anchor().players
+    for player in players:
         slug = _lorrgs_spec_slug(player)
         if slug in lorrgs_spec_slugs():
             return player, str(slug)
-    raise JourneyFailure(f"no anchor roster spec maps to a Lorrgs spec slug: {[p.get('type') for p in anchor().players]}")
+    raise JourneyFailure(f"no guild roster spec maps to a Lorrgs spec slug: {[p.get('type') for p in players]}")
 
 
 @lru_cache(maxsize=1)
-def _anchor_boss_slug() -> str:
-    slug = lorrgs_boss_slugs().get(int(anchor().fight["encounter_id"]))
+def _guild_boss_slug() -> str:
+    fight = guild_anchor().fight
+    slug = lorrgs_boss_slugs().get(int(fight["encounter_id"]))
     if slug is None:
-        raise JourneyFailure(f"Lorrgs does not know encounter {anchor().fight['encounter_id']}: {anchor().fight['name']}")
+        raise JourneyFailure(f"Lorrgs does not know encounter {fight['encounter_id']}: {fight['name']}")
     return slug
 
 
@@ -254,19 +257,54 @@ def test_cooldown_packet_joins_a_report_fight_to_lorrgs_top_parses(require):
         assert source["provider"] == provider, result.describe()
         assert source["command"].startswith(f"warcraft {provider} "), result.describe()
 
-    comparison = data["comparison"]
+    _assert_samples_sit_in_their_own_phase(data["comparison"], phase=1, result=result)
+    assert data["notes"], "the packet must say where its phase windows and samples come from"
+
+
+def _assert_samples_sit_in_their_own_phase(comparison: dict[str, Any], *, phase: int, result: Result) -> None:
+    """Top-parse samples exist, and every cast they quote sits inside that sample's own phase window.
+
+    Every sample is a top parse of the same boss, so the phase exists for it too; its window is its
+    own, not the target report's.
+    """
     assert comparison["status"] == "ready", result.describe()
-    assert comparison["sample_count"] == len(comparison["samples"]) <= 2, result.describe()
+    samples = comparison["samples"]
+    assert 1 <= comparison["sample_count"] == len(samples) <= 2, result.describe()
     assert comparison["selected_phase_spell_frequency"], result.describe()
-    for sample in comparison["samples"]:
-        # Every sample is a top parse of the same boss, so P1 exists for it too and the casts the
-        # comparison quotes have to sit inside that sample's own window, not the anchor's.
+    assert any(sample["selected_phase_casts"] for sample in samples), f"no sample pressed a cooldown in P{phase}"
+    for sample in samples:
         assert sample["phase_available"] is True, result.describe()
         window = sample["phase_window"]
-        assert window["phase"] == 1, result.describe()
+        assert window["phase"] == phase, result.describe()
         for cast in sample["selected_phase_casts"]:
             assert window["start_ms"] <= cast["timestamp_ms"] < window["end_ms"], result.describe()
-    assert data["notes"], "the packet must say where its phase windows and samples come from"
+
+
+def test_cooldown_packet_selects_the_requested_phase_not_the_first(require):
+    """``--phase 2`` must select the second window; a packet that always used P1 would pass every P1 journey."""
+    require("warcraftlogs", "lorrgs")
+    target = lorrgs_target()
+    args = ("cooldown-packet", target.url, "--actor-id", str(target.actor_id), "--sample-limit", "2")
+
+    first = run("warcraft", *args, "--phase", "1")
+    windows = first.data["phase"]["windows"]
+    if len(windows) < 2:
+        raise JourneyFailure(f"{target.boss_slug} reports one phase window, so --phase 2 cannot be proved\n{first.describe()}")
+
+    result = run("warcraft", *args, "--phase", "2")
+    phase = result.data["phase"]
+    assert phase["requested"] == 2 and phase["status"] == "ready", result.describe()
+    assert phase["windows"] == windows, result.describe()
+    selected = phase["selected"]
+    assert selected == next(window for window in windows if window["phase"] == 2), result.describe()
+    assert selected["label"] == "P2", result.describe()
+    assert selected != first.data["phase"]["selected"], result.describe()
+
+    casts = result.data["cooldowns"]["player_casts"]
+    assert casts["selected_phase_cast_count"] == len(casts["selected_phase_casts"]), result.describe()
+    for cast in casts["selected_phase_casts"]:
+        assert selected["start_ms"] <= cast["timestamp_ms"] < selected["end_ms"], result.describe()
+    _assert_samples_sit_in_their_own_phase(result.data["comparison"], phase=2, result=result)
 
 
 def _hero_selection(packet: dict[str, Any]) -> dict[str, Any]:
@@ -275,7 +313,7 @@ def _hero_selection(packet: dict[str, Any]) -> dict[str, Any]:
     A hero tree is chosen by a selection node, not by the talents underneath it, so this row is the
     packet's own statement of the choice and is what every downstream describe has to agree with.
     """
-    selections = [row for row in packet["validation"]["resolved_entries"] if row["tree"] == "selection"]
+    selections: list[dict[str, Any]] = [row for row in packet["validation"]["resolved_entries"] if row["tree"] == "selection"]
     assert len(selections) == 1, f"expected exactly one hero-tree selection row, got {selections}"
     return selections[0]
 
@@ -288,9 +326,9 @@ def test_cooldown_packet_degrades_when_lorrgs_has_not_cached_the_report(require)
     must say exactly what is missing instead of reporting an empty phase as if it were a real one.
     """
     require("warcraftlogs", "lorrgs")
-    found = anchor()
+    found = guild_anchor()
     actor, spec_slug = _lorrgs_capable_actor()
-    boss_slug = _anchor_boss_slug()
+    boss_slug = _guild_boss_slug()
 
     result = run(
         "warcraft",
@@ -298,6 +336,8 @@ def test_cooldown_packet_degrades_when_lorrgs_has_not_cached_the_report(require)
         found.url,
         "--actor-id",
         str(actor["id"]),
+        "--actor-name",
+        str(actor["name"]),
         "--spec-slug",
         spec_slug,
         "--boss-slug",
@@ -325,8 +365,15 @@ def test_cooldown_packet_degrades_when_lorrgs_has_not_cached_the_report(require)
 
     # The Warcraft Logs half is intact: the flags supplied what Lorrgs would have.
     assert result.payload["query"]["report_code"] == found.code, result.describe()
-    assert data["player"]["source_id"] == actor["id"], result.describe()
-    assert data["player"]["spec_slug"] == spec_slug, result.describe()
+    # Without the Lorrgs roster the player is named by the flags, and the packet says so.
+    identity = {key: data["player"][key] for key in ("name", "source_id", "spec_slug", "class_slug")}
+    assert identity == {
+        "name": actor["name"],
+        "source_id": actor["id"],
+        "spec_slug": spec_slug,
+        "class_slug": str(actor["type"]).lower(),
+    }, result.describe()
+    assert any("--actor-name" in note for note in data["notes"]), result.describe()
     assert data["boss"]["boss_slug"] == boss_slug, result.describe()
     casts = data["cooldowns"]["player_casts"]
     assert casts["tracked_cast_count"] > 0, "the degraded packet returned no Warcraft Logs casts"
@@ -371,7 +418,7 @@ def test_cooldown_packet_without_the_fallback_flags_names_the_flags_it_needs(req
     result = run(
         "warcraft",
         "cooldown-packet",
-        anchor().url,
+        guild_anchor().url,
         "--actor-id",
         str(actor["id"]),
         "--phase",

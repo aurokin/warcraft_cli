@@ -199,3 +199,45 @@ def test_a_tree_swap_round_trips_a_build_that_holds_a_tiered_node(repo: RepoPath
         BuildSpec(actor_class=subject.build_spec.actor_class, spec=subject.build_spec.spec, talents=export),
     )
     assert reencoded.enabled_talents == subject.resolution.enabled_talents
+
+
+def test_removing_a_tiered_talent_by_name_removes_every_entry_of_its_node(
+    repo: RepoPaths, decoded_profiles: list[_Decoded]
+) -> None:
+    """A tiered node decodes as one row per entry, all sharing the talent's name.
+
+    Only the entry the name resolved to used to count as requested, so the node's other entries were
+    reported as unrequested changes and `modify-build --remove <name>` emitted no export.
+    """
+    tiered_entries = load_trait_table(repo.root).tiered_siblings_by_entry
+    subject, talent = next(
+        (
+            (item, talent)
+            for item in decoded_profiles
+            if item.resolution is not None
+            for talent in item.resolution.talents_by_tree["spec"]
+            if talent.entry in tiered_entries and talent.rank_known
+        ),
+        (None, None),
+    )
+    assert subject is not None and talent is not None, "no stock profile held a tiered spec talent, so this check proved nothing"
+    node_entries = {sibling.entry for sibling in tiered_entries[talent.entry]}
+
+    result = CliRunner().invoke(
+        simc_app,
+        [
+            "--repo-root", str(repo.root), "modify-build",
+            "--talents", str(subject.build_spec.talents),
+            "--actor-class", str(subject.build_spec.actor_class),
+            "--spec", str(subject.build_spec.spec),
+            "--remove", talent.name,
+        ],
+    )
+
+    assert result.exit_code == 0, f"{subject.name} --remove {talent.name!r}: {result.stdout}{result.stderr}"
+    export = json.loads(result.stdout)["data"]["result"]["talents_export"]
+    reencoded = decode_build(
+        repo,
+        BuildSpec(actor_class=subject.build_spec.actor_class, spec=subject.build_spec.spec, talents=export),
+    )
+    assert not node_entries & {t.entry for t in reencoded.talents_by_tree["spec"] if t.taken}

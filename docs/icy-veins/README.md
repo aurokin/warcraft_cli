@@ -33,7 +33,8 @@ Per-command flags:
 - `guide-query`: `--limit` (1-50, default 5), `--kind` (repeatable or comma-separated), `--section-title`
 
 `--kind` accepts `sections`, `navigation`, `linked_entities`, `build_references`, and
-`analysis_surfaces`; all five are searched when the flag is omitted.
+`analysis_surfaces`; all five are searched when the flag is omitted. Anything else fails with
+`invalid_query_kind` (exit 1).
 
 ## Examples
 
@@ -56,9 +57,10 @@ Exit codes follow `docs/foundation/ERROR_CONTRACT.md`: 1 generic, 2 usage, 4 gui
 5 network/upstream failure. A page whose article container no longer matches (an Icy Veins layout
 change) fails with `parse_failed` and exit 1 rather than returning an empty article with `ok:true`.
 
-`guide-query` splits the two bundle mistakes the same way `method guide-query` does: a path that
-does not exist is `not_found` (exit 4), and a directory with no readable `manifest.json` is
-`invalid_bundle` (exit 1).
+`guide-query` answers a bad bundle path the same way `method guide-query` does: a path that does
+not exist is `not_found` (exit 4), a file is a usage error (exit 2), and a directory that is not an
+article bundle (no readable `manifest.json` or no `pages.jsonl`, such as a `wowhead guide-export`
+bundle) is `invalid_bundle` (exit 1).
 
 ### Build references
 

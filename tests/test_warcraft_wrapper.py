@@ -463,7 +463,7 @@ def test_warcraft_doctor_reports_ready_and_stubbed_providers() -> None:
     assert providers["lorrgs"]["wrapper_surfaces"]["search"]["status"] == "ready"
     assert providers["lorrgs"]["wrapper_surfaces"]["resolve"]["status"] == "ready"
     assert providers["lorrgs"]["details"]["data"]["capabilities"]["spec_ranking"] == "ready"
-    assert providers["lorrgs"]["details"]["data"]["capabilities"]["report_overview"] == "ready"
+    assert providers["lorrgs"]["details"]["data"]["capabilities"]["report_overview"] == "ready_cached_only"
     assert providers["lorrgs"]["details"]["data"]["capabilities"]["current_season"] == "ready"
 
 
@@ -4408,7 +4408,7 @@ def test_warcraft_talent_describe_hides_deleted_temp_packet_source_notes(monkeyp
         ["talent-describe", "druid/balance/ABC123", "--apl-path", str(apl_path)],
     )
     assert result.exit_code == 0
-    build_spec = json.loads(result.stdout)["describe_result"]["payload"]["data"]["build_spec"]
+    build_spec = json.loads(result.stdout)["data"]["describe_result"]["payload"]["data"]["build_spec"]
     assert "path" not in build_spec["transport_packet"]
     assert build_spec["source_notes"] == ["talent transport packet"]
 
@@ -5632,6 +5632,9 @@ def test_talent_route_rejections_match_across_packet_and_describe(command, kind,
 # --- fanout health: a dead fanout must not look like "no results" -------------------------------
 
 _SEARCH_READY_PROVIDERS = {"wowhead", "method", "icy-veins", "raiderio", "warcraftlogs", "warcraft-wiki", "lorrgs"}
+# Warcraft Logs only matches explicit report references: free text gets a locally built hint, so it
+# is included in the fanout but never counts as having answered one.
+_FREE_TEXT_SEARCHERS = _SEARCH_READY_PROVIDERS - {"warcraftlogs"}
 
 
 def _stub_healthy_search_fanout(monkeypatch) -> None:
@@ -5660,10 +5663,14 @@ def _break_every_fanout_provider(monkeypatch, surface: str) -> None:
 
     Several provider surfaces are read-only attributes, so this replaces the wrapper's own
     ``provider_search``/``provider_resolve`` seam with exactly what ``_call_surface`` builds from a
-    transport error: the production converter, not a hand-written envelope.
+    transport error: the production converter, not a hand-written envelope. Warcraft Logs keeps its
+    real surface: its free-text answer is built locally, so an outage leaves it answering ok.
     """
+    real = getattr(warcraft_cli.main, f"provider_{surface}")
 
     def offline(provider: str, query: str, *, limit: int = 5, expansion: str | None = None) -> dict[str, object]:
+        if provider == "warcraftlogs":
+            return real(provider, query, limit=limit, expansion=expansion)
         exc = httpx.ConnectError("offline", request=httpx.Request("GET", "https://example.invalid/"))
         envelope, exit_code = error_envelope_for(provider, surface, exc)
         return {"provider": provider, "exit_code": exit_code, "payload": dict(envelope)}
@@ -5682,7 +5689,8 @@ def test_warcraft_search_healthy_fanout_has_no_internal_error_rows(monkeypatch) 
     assert {row["provider"] for row in data["providers"]} == _SEARCH_READY_PROVIDERS
     assert [row for row in data["providers"] if not row["ok"]] == []
     assert data["failed_provider_count"] == 0
-    assert data["answered_provider_count"] == len(_SEARCH_READY_PROVIDERS)
+    assert {row["provider"] for row in data["providers"] if row["answered"]} == _FREE_TEXT_SEARCHERS
+    assert data["answered_provider_count"] == len(_FREE_TEXT_SEARCHERS)
 
 
 def test_warcraft_search_fails_with_the_providers_own_code_when_every_provider_fails(monkeypatch) -> None:
@@ -5696,7 +5704,7 @@ def test_warcraft_search_fails_with_the_providers_own_code_when_every_provider_f
     assert payload["ok"] is False
     assert payload["error"]["code"] == "network_error"
     failed = payload["error"]["details"]["failed_providers"]
-    assert {row["provider"] for row in failed} == _SEARCH_READY_PROVIDERS
+    assert {row["provider"] for row in failed} == _FREE_TEXT_SEARCHERS
 
 
 def test_warcraft_search_brief_still_reports_total_provider_failure(monkeypatch) -> None:
@@ -5708,7 +5716,7 @@ def test_warcraft_search_brief_still_reports_total_provider_failure(monkeypatch)
     assert result.exit_code == 5, result.output
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "network_error"
-    assert len(payload["error"]["details"]["failed_providers"]) == len(_SEARCH_READY_PROVIDERS)
+    assert len(payload["error"]["details"]["failed_providers"]) == len(_FREE_TEXT_SEARCHERS)
 
 
 def test_warcraft_search_brief_reports_partial_provider_failure(monkeypatch) -> None:
@@ -5728,7 +5736,7 @@ def test_warcraft_search_brief_reports_partial_provider_failure(monkeypatch) -> 
     assert data["failed_providers"] == [{"provider": "wowhead", "code": "network_error",
                                          "message": "ConnectError: offline"}]
     assert data["failed_provider_count"] == 1
-    assert data["answered_provider_count"] == len(_SEARCH_READY_PROVIDERS) - 1
+    assert data["answered_provider_count"] == len(_FREE_TEXT_SEARCHERS) - 1
 
 
 def test_warcraft_resolve_fails_with_the_providers_own_code_when_every_provider_fails(monkeypatch) -> None:
@@ -5740,7 +5748,7 @@ def test_warcraft_resolve_fails_with_the_providers_own_code_when_every_provider_
     payload = json.loads(result.stderr)
     assert payload["ok"] is False
     assert payload["error"]["code"] == "network_error"
-    assert len(payload["error"]["details"]["failed_providers"]) == len(_SEARCH_READY_PROVIDERS)
+    assert len(payload["error"]["details"]["failed_providers"]) == len(_FREE_TEXT_SEARCHERS)
 
 
 def test_warcraft_resolve_surfaces_the_provider_fallback_and_best_unresolved_candidate(monkeypatch) -> None:
@@ -5999,8 +6007,39 @@ def test_guide_builds_simc_fails_when_every_simc_handoff_failed(monkeypatch, tmp
     assert payload["error"]["code"] == "simc_handoff_failed"
     summary = payload["error"]["details"]["summary"]
     assert summary["simc_handoff_status"] == "all_handoffs_failed"
+    assert summary["empty_requested_legs"] == ["identify", "decode"]
     assert summary["identify_success_count"] == 0
     assert summary["returned_build_count"] >= 1
+    # The packet travels under error.details, so each build still names the simc error per leg.
+    failures = payload["error"]["details"]["builds"][0]["failures"]
+    assert [(failure["leg"], failure["code"]) for failure in failures] == [
+        ("identify", "network_error"), ("decode", "network_error"),
+    ]
+
+
+def test_guide_builds_simc_stays_ok_when_one_requested_leg_still_produced_output(monkeypatch, tmp_path) -> None:
+    """Mixed legs are not a total failure: decode output is usable even when identify failed."""
+    bundle = _guide_bundle(tmp_path, build_code="ABC123")
+
+    def identify_fails(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, object]:
+        if args[0] == "identify-build":
+            return {
+                "provider": provider,
+                "exit_code": 1,
+                "payload": {"ok": False, "error": {"code": "unsupported_build", "message": "no probe"}},
+                "stdout": "",
+            }
+        return {"provider": provider, "exit_code": 0, "payload": {"ok": True}, "stdout": ""}
+
+    monkeypatch.setattr("warcraft_cli.main.provider_invoke", identify_fails)
+
+    result = runner.invoke(warcraft_app, ["guide-builds-simc", str(bundle), "--decode"])
+    assert result.exit_code == 0, result.output
+
+    summary = json.loads(result.stdout)["data"]["summary"]
+    assert summary["decode_success_count"] >= 1
+    assert summary["empty_requested_legs"] == ["identify"]
+    assert summary["simc_handoff_status"] == "failed"
 
 
 def test_guide_builds_simc_reports_no_build_references_without_failing(monkeypatch, tmp_path) -> None:
@@ -6261,6 +6300,10 @@ def test_cooldown_packet_degrades_to_the_warcraftlogs_half_when_lorrgs_has_no_ca
     assert data["cooldowns"]["player_casts"]["tracked_cast_count"] == 2
     assert data["cooldowns"]["player_casts"]["selected_phase_cast_count"] == 0
     assert data["player"]["source_id"] == 89
+    # No Lorrgs roster: the class comes from the spec slug, and the null name is explained.
+    assert data["player"]["class_slug"] == "warrior"
+    assert data["player"]["name"] is None
+    assert any("player.name is --actor-name" in note for note in data["notes"])
     assert any("no phase windows" in note for note in data["notes"])
     assert ("warcraftlogs", ["report-events", "abcd1234", "--fight-id", "22", "--source-id", "89",
                             "--data-type", "casts", "--limit", "5000"]) in calls

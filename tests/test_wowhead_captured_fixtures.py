@@ -18,7 +18,7 @@ import json
 from wowhead_cli.entity_types import SUGGESTION_TYPE_TO_ENTITY, suggestion_entity_type_from_type_id
 from wowhead_cli.expansion_profiles import resolve_expansion
 from wowhead_cli.main import app
-from wowhead_cli.ranking import STALE_GUIDE_REASON, normalize_search_results
+from wowhead_cli.ranking import STALE_GUIDE_REASON, merge_suggestion_lists, normalize_search_results
 
 from tests.fixtures.wowhead_canaries import SUGGESTION_TYPE_NAME_TO_ENTITY
 from tests.wowhead_testkit import captured_json, captured_page, runner
@@ -287,9 +287,7 @@ def test_the_only_ranked_rows_left_without_a_url_are_ones_an_id_cannot_address()
     unroutable: set[str] = set()
     for name in CAPTURED_SUGGESTION_FILES:
         payload = captured_json(name)
-        rows = list(payload["results"])
-        for category_rows in payload.get("categories", {}).values():
-            rows.extend(category_rows)
+        rows, _ = merge_suggestion_lists(payload)
         ranked = normalize_search_results(rows, query=payload["search"], expansion=resolve_expansion(None))
         assert ranked, name
         unroutable.update(row["type_name"] for row in ranked if row["url"] is None)
@@ -316,6 +314,41 @@ def test_search_leads_with_the_entity_wowhead_ranks_first_in_its_database_list(m
     assert all(row["ranking"]["score"] < top["ranking"]["score"] for row in rows[1:])
 
 
+def test_search_and_resolve_include_the_rows_wowhead_lists_only_in_categories(monkeypatch) -> None:
+    """Faction 529 heads `categories.database` and is absent from the ten-row `results` list."""
+    payload = captured_json("search_suggestions_argent_dawn.json")
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.search_suggestions", lambda self, query: payload)
+    resolved = runner.invoke(app, ["resolve", "argent dawn"])
+    assert resolved.exit_code == 0
+
+    data = json.loads(resolved.stdout)["data"]
+    assert (data["match"]["entity_type"], data["match"]["id"], data["match"]["name"]) == ("faction", 529, "Argent Dawn")
+    assert data["confidence"] == "high"
+    assert data["next_command"] == "wowhead entity faction 529"
+    assert data["match"]["metadata"]["suggestion_lists"] == ["database"]
+    assert data["match"]["metadata"]["popularity"] is None
+
+    searched = runner.invoke(app, ["search", "argent dawn", "--limit", "50"])
+    assert searched.exit_code == 0
+    data = json.loads(searched.stdout)["data"]
+    # 10 `results` rows + 20 database + 9 news rows; five database rows repeat `results` rows.
+    assert data["suggestion_merge"]["list_rows"] == {
+        "results": 10,
+        "decor": 0,
+        "guides": 0,
+        "news": 9,
+        "tools": 0,
+        "database": 20,
+    }
+    assert data["suggestion_merge"]["duplicates_merged"] == 5
+    assert data["count"] == data["total_matches"] == data["suggestion_merge"]["unique_rows"] == 34
+    assert data["truncated"] is False
+    assert len({(row["entity_type"], row["id"]) for row in data["results"]}) == 34
+    commission = next(row for row in data["results"] if row["id"] == 12846)
+    assert commission["metadata"]["suggestion_lists"] == ["results", "database"]
+    assert commission["metadata"]["popularity"] == 0
+
+
 def test_resolve_answers_a_currency_query_with_the_currency(monkeypatch) -> None:
     """Three rows are named "Valorstones"; Wowhead's database list says which one the query means."""
     payload = captured_json("search_suggestions_valorstones.json")
@@ -340,11 +373,12 @@ def test_resolve_does_not_recommend_a_guide_the_response_shows_is_stale(monkeypa
     assert result.exit_code == 0
 
     data = json.loads(result.stdout)["data"]
-    # Wowhead's top-scoring title match is a retired Legion Remix guide from January.
+    # The top-scoring title matches are retired guides: the Legion Remix one from January, which
+    # leads because it is also in `results`, and four 2022-2024 guides only `categories.guides` holds.
     assert data["match"]["id"] == 31608
     assert data["match"]["metadata"]["updated"] == "2026-01-18"
     assert STALE_GUIDE_REASON in data["match"]["ranking"]["match_reasons"]
-    assert data["confidence"] == "medium"
+    assert data["confidence"] == "low"
     assert data["resolved"] is False
     assert data["next_command"] is None
     assert data["fallback_search_command"] == "wowhead search 'Fury Warrior guide'"

@@ -23,11 +23,11 @@ def build_app() -> typer.Typer:
 
     @app.command("show")
     def show(ctx: typer.Context) -> None:
-        emit(ctx, {"ok": True, "a": {"b": 1}, "long": "x" * 400})
+        emit(ctx, {"ok": True, "query": "shown", "a": {"b": 1}, "long": "x" * 400})
 
     @app.command("missing")
     def missing(ctx: typer.Context) -> None:
-        fail(ctx, "not_found", "nothing here")
+        fail(ctx, "not_found", "nothing here", query={"id": 0})
 
     @app.command("need")
     def need(ctx: typer.Context, target: str) -> None:
@@ -66,6 +66,8 @@ def test_fields_strict_missing_path_exits_2_with_missing_fields_error() -> None:
     assert error["command"] == "show"
     assert error["error"]["code"] == "missing_fields"
     assert error["error"]["details"] == {"missing_fields": ["a.zz"]}
+    # The projection failed, not the command: the query it acted on is still named.
+    assert error["query"] == "shown"
 
 
 def test_compact_truncates_long_strings() -> None:
@@ -94,6 +96,7 @@ def test_fail_uses_exit_code_mapping_and_emits_envelope_on_stderr() -> None:
     error = json.loads(result.stderr)
     assert error["error"] == {"code": "not_found", "message": "nothing here"}
     assert error["schema_version"] == "1"
+    assert error["query"] == {"id": 0}
 
 
 def test_configure_stores_subclass_config_in_ctx() -> None:

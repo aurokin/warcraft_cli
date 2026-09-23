@@ -113,7 +113,8 @@ cast timeline rows.
 
 - Registered with `status = "partial"` and `auth_required = false`.
 - Wrapper capabilities marked ready: `doctor`, `search`, `resolve`, `spec_ranking`, `comp_ranking`,
-  `report_overview`, `season`, `current_season`, `metadata`.
+  `season`, `current_season`, `metadata`. `report_overview`, `user_report` and `user_report_fights` are
+  `ready_cached_only`: they answer only for reports Lorrgs has already cached.
 - Every other Lorrgs command runs as direct passthrough: `warcraft lorrgs <command> ...`.
 - `expansion_mode = "fixed"`, `supported_expansions = ["retail"]`, so Lorrgs joins retail wrapper
   search/resolve fanout and is skipped when a fixed non-retail expansion is requested.

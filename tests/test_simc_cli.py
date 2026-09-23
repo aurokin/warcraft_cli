@@ -506,8 +506,8 @@ def test_simc_identify_build_probes_wow_export_packet_instead_of_trusting_packet
     )
     monkeypatch.setattr("simc_cli.main._repo_paths", lambda _ctx: repo)
     monkeypatch.setattr(
-        "simc_cli.build_input.supported_specs",
-        lambda _repo: [("priest", "shadow"), ("druid", "balance")],
+        "simc_cli.build_input.specialization_ids",
+        lambda _root: {("druid", "balance"): 102, ("priest", "shadow"): 258},
     )
     monkeypatch.setattr(
         "simc_cli.build_input.decode_build",
@@ -1390,15 +1390,12 @@ def test_simc_decode_build_auto_identifies_missing_class_and_spec(monkeypatch) -
         ["modify-build", "--talents", "HOLY_PALADIN_EXPORT", "--remove", "anything"],
     ],
 )
-def test_simc_names_the_specs_the_probe_tried_when_it_identifies_nothing(tmp_path: Path, command: list[str]) -> None:
-    """Identification probes one spec per APL file, so a spec the checkout ships no APL for never matches.
-
-    Every command that identifies a build has to say which specs were tried, otherwise the caller is
-    left to guess that their perfectly valid build was malformed.
-    """
+def test_simc_asks_for_class_and_spec_when_no_spec_decodes_the_build(tmp_path: Path, command: list[str]) -> None:
+    """Identification decodes the build once per spec SimC knows; when none takes it, say so."""
     repo_root = _checkout(tmp_path)
-    (repo_root / "ActionPriorityLists" / "default" / "mage_arcane.simc").write_text("# apl\n")
-    (repo_root / "ActionPriorityLists" / "default" / "paladin_retribution.simc").write_text("# apl\n")
+    (repo_root / "engine" / "dbc" / "generated" / "sc_specialization_data.inc").write_text(
+        "  MAGE_ARCANE = 62,\n  PALADIN_RETRIBUTION = 70,\n"
+    )
     no_talents = "0.000 Player 'simc_decode' generic base stats\n"
     fake = _FakeSimcBinary({"HOLY_PALADIN_EXPORT": no_talents})
 
@@ -1408,13 +1405,10 @@ def test_simc_names_the_specs_the_probe_tried_when_it_identifies_nothing(tmp_pat
     assert result.exit_code == 2
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "invalid_query"
-    assert payload["error"]["details"]["probed_specs"] == [
-        {"actor_class": "mage", "spec": "arcane"},
-        {"actor_class": "paladin", "spec": "retribution"},
-    ]
-    # The probe list is the whole point of the message; a hard-coded claim about which specs it
-    # excludes went stale the moment the checkout shipped a restoration druid APL.
-    assert "healer" not in payload["error"]["message"]
+    assert "decodes as none of the specs SimulationCraft knows" in payload["error"]["message"]
+    assert payload["error"]["details"]["identity"]["candidate_count"] == 0
+    # Both specs were tried, one decode each.
+    assert sorted(text.splitlines()[0] for text in fake.profiles) == ['mage="simc_decode"', 'paladin="simc_decode"']
 
 
 def test_simc_decode_build_rejects_an_empty_talents_option(tmp_path: Path) -> None:
@@ -1428,6 +1422,27 @@ def test_simc_decode_build_rejects_an_empty_talents_option(tmp_path: Path) -> No
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "invalid_query"
     assert "--talents" in payload["error"]["message"]
+
+
+@pytest.mark.parametrize("identity", [[], ["--actor-class", "monk", "--spec", "mistweaver"]])
+def test_simc_decode_build_says_no_build_was_supplied(tmp_path: Path, identity: list[str]) -> None:
+    """With no talents there is nothing to decode; a class and spec alone used to decode to an empty build."""
+    result = runner.invoke(simc_app, ["--repo-root", str(_checkout(tmp_path)), "decode-build", *identity])
+
+    assert result.exit_code == 2
+    payload = json.loads(result.stderr)
+    assert payload["error"]["code"] == "invalid_query"
+    assert payload["error"]["message"].startswith("No talent build was supplied")
+
+
+@pytest.mark.parametrize("command", ["describe-build", "build-harness"])
+def test_simc_build_commands_say_no_build_was_supplied_rather_than_blaming_the_probe(tmp_path: Path, command: str) -> None:
+    result = runner.invoke(simc_app, ["--repo-root", str(_checkout(tmp_path)), command])
+
+    assert result.exit_code == 2
+    payload = json.loads(result.stderr)
+    assert payload["error"]["code"] == "invalid_query"
+    assert "no talent build was supplied" in payload["error"]["message"]
 
 
 def test_simc_decode_build_rejects_a_page_url_as_an_unsupported_build_reference(tmp_path: Path) -> None:
@@ -1653,8 +1668,8 @@ def test_simc_decode_build_probes_wow_export_packet_instead_of_trusting_packet_i
     )
     monkeypatch.setattr("simc_cli.main._repo_paths", lambda _ctx: repo)
     monkeypatch.setattr(
-        "simc_cli.build_input.supported_specs",
-        lambda _repo: [("priest", "shadow"), ("druid", "balance")],
+        "simc_cli.build_input.specialization_ids",
+        lambda _root: {("druid", "balance"): 102, ("priest", "shadow"): 258},
     )
     monkeypatch.setattr(
         "simc_cli.build_input.decode_build",
@@ -2064,8 +2079,8 @@ def test_simc_describe_build_accepts_wow_export_transport_form_from_build_packet
     )
     monkeypatch.setattr("simc_cli.main._repo_paths", lambda _ctx: repo)
     monkeypatch.setattr(
-        "simc_cli.build_input.supported_specs",
-        lambda _repo: [("druid", "balance")],
+        "simc_cli.build_input.specialization_ids",
+        lambda _root: {("druid", "balance"): 102},
     )
     monkeypatch.setattr(
         "simc_cli.build_input.decode_build",
@@ -2146,8 +2161,8 @@ def test_simc_describe_build_probes_wow_export_packet_instead_of_trusting_packet
     )
     monkeypatch.setattr("simc_cli.main._repo_paths", lambda _ctx: repo)
     monkeypatch.setattr(
-        "simc_cli.build_input.supported_specs",
-        lambda _repo: [("priest", "shadow"), ("druid", "balance")],
+        "simc_cli.build_input.specialization_ids",
+        lambda _root: {("druid", "balance"): 102, ("priest", "shadow"): 258},
     )
     monkeypatch.setattr(
         "simc_cli.build_input.decode_build",
@@ -2468,13 +2483,13 @@ def test_simc_decode_build_rejects_an_apl_path_that_does_not_exist(tmp_path: Pat
     assert "warlock_nonsensespec.simc" in payload["error"]["message"]
 
 
-def test_simc_decode_build_from_an_apl_file_name_is_not_high_confidence(tmp_path: Path) -> None:
+def test_simc_identify_build_from_an_apl_file_name_is_not_high_confidence(tmp_path: Path) -> None:
     """A class and spec read off a file stem is a guess, not a verified identity."""
     repo_root = _checkout(tmp_path)
     apl = repo_root / "ActionPriorityLists" / "default" / "mage_arcane.simc"
     apl.write_text("actions=arcane_blast\n")
 
-    result = runner.invoke(simc_app, ["--repo-root", str(repo_root), "decode-build", "--apl-path", str(apl)])
+    result = runner.invoke(simc_app, ["--repo-root", str(repo_root), "identify-build", "--apl-path", str(apl)])
 
     assert result.exit_code == 0
     identity = json.loads(result.stdout)["data"]["identity"]
@@ -2576,7 +2591,6 @@ def test_simc_compare_builds_shows_tree_diffs(monkeypatch) -> None:
         "simc_cli.main._load_identified_build_spec",
         lambda *a, **kw: (_fake_build_spec(), _fake_identity()),
     )
-    monkeypatch.setattr("simc_cli.main.load_build_spec", lambda **kw: _fake_build_spec())
     monkeypatch.setattr("simc_cli.main.decode_build", fake_decode)
 
     result = runner.invoke(simc_app, [
@@ -2603,7 +2617,6 @@ def test_simc_compare_builds_reports_no_differences(monkeypatch) -> None:
         "simc_cli.main._load_identified_build_spec",
         lambda *a, **kw: (_fake_build_spec(), _fake_identity()),
     )
-    monkeypatch.setattr("simc_cli.main.load_build_spec", lambda **kw: _fake_build_spec())
     monkeypatch.setattr("simc_cli.main.decode_build", lambda paths, spec: res)
 
     result = runner.invoke(simc_app, ["compare-builds", "--base", "ABC", "--other", "ABC"])
@@ -2629,7 +2642,6 @@ def test_simc_compare_builds_multiple_others(monkeypatch) -> None:
         "simc_cli.main._load_identified_build_spec",
         lambda *a, **kw: (_fake_build_spec(), _fake_identity()),
     )
-    monkeypatch.setattr("simc_cli.main.load_build_spec", lambda **kw: _fake_build_spec())
     monkeypatch.setattr("simc_cli.main.decode_build", lambda paths, spec: next(decode_results))
 
     result = runner.invoke(simc_app, [
@@ -2642,26 +2654,74 @@ def test_simc_compare_builds_multiple_others(monkeypatch) -> None:
     assert payload["comparisons"][1]["has_differences"] is True
 
 
-def test_simc_compare_builds_decode_failure_reports_error(monkeypatch) -> None:
-    call_count = {"n": 0}
+def _decode_failing_on(bad: str) -> Any:
+    """A decode stub: the base and every other build decode, except the ones whose talents are ``bad``."""
 
     def fake_decode(paths, spec):  # noqa: ANN001
-        call_count["n"] += 1
-        if call_count["n"] == 1:
-            return _fake_resolution()
-        raise RuntimeError("bad build")
+        if spec.talents == bad:
+            raise RuntimeError("bad build")
+        return _fake_resolution()
 
-    monkeypatch.setattr(
-        "simc_cli.main._load_identified_build_spec",
-        lambda *a, **kw: (_fake_build_spec(), _fake_identity()),
+    return fake_decode
+
+
+def test_simc_compare_builds_fails_when_no_other_build_decodes(monkeypatch) -> None:
+    """A comparison with nothing to compare against is a failure, not an empty success."""
+    monkeypatch.setattr("simc_cli.main.decode_build", _decode_failing_on("BAD"))
+
+    result = runner.invoke(
+        simc_app, ["compare-builds", "--base", "A", "--other", "BAD", "--actor-class", "druid", "--spec", "balance"]
     )
-    monkeypatch.setattr("simc_cli.main.load_build_spec", lambda **kw: _fake_build_spec())
-    monkeypatch.setattr("simc_cli.main.decode_build", fake_decode)
 
-    result = runner.invoke(simc_app, ["compare-builds", "--base", "A", "--other", "BAD"])
+    assert result.exit_code == 1
+    payload = json.loads(result.stderr)
+    assert payload["error"]["code"] == "decode_failed"
+    assert "bad build" in payload["error"]["message"]
+    assert payload["error"]["details"]["comparisons"] == [{"input": "BAD", "error": "bad build"}]
+
+
+def test_simc_compare_builds_counts_the_other_builds_that_failed(monkeypatch) -> None:
+    monkeypatch.setattr("simc_cli.main.decode_build", _decode_failing_on("BAD"))
+
+    result = runner.invoke(
+        simc_app,
+        ["compare-builds", "--base", "A", "--other", "A", "--other", "BAD", "--actor-class", "druid", "--spec", "balance"],
+    )
+
     assert result.exit_code == 0
-    payload = json.loads(result.stdout)
-    assert "error" in payload["comparisons"][0]
+    data = json.loads(result.stdout)["data"]
+    assert data["summary"] == {"succeeded": 1, "failed": 1}
+    assert data["comparisons"][1] == {"input": "BAD", "error": "bad build"}
+
+
+def test_simc_compare_builds_rejects_an_unknown_tree(monkeypatch) -> None:
+    """An unknown tree used to compare nothing and report no differences."""
+    monkeypatch.setattr("simc_cli.main.decode_build", lambda paths, spec: _fake_resolution())
+
+    result = runner.invoke(
+        simc_app,
+        ["compare-builds", "--base", "A", "--other", "B", "--tree", "heroo", "--actor-class", "druid", "--spec", "balance"],
+    )
+
+    assert result.exit_code == 2
+    payload = json.loads(result.stderr)
+    assert payload["error"]["code"] == "invalid_argument"
+    assert "heroo" in payload["error"]["message"]
+
+
+@pytest.mark.parametrize(
+    ("flag", "args"),
+    [("--base", ["--base", "", "--other", "B"]), ("--other", ["--base", "A", "--other", "B", "--other", " "])],
+)
+def test_simc_compare_builds_names_the_option_given_an_empty_build(monkeypatch, flag: str, args: list[str]) -> None:
+    monkeypatch.setattr("simc_cli.main.decode_build", lambda paths, spec: _fake_resolution())
+
+    result = runner.invoke(simc_app, ["compare-builds", *args, "--actor-class", "druid", "--spec", "balance"])
+
+    assert result.exit_code == 2
+    payload = json.loads(result.stderr)
+    assert payload["error"]["code"] == "invalid_query"
+    assert payload["error"]["message"] == f"{flag} was given an empty value."
 
 
 def test_simc_compare_builds_rejects_buildless_wowhead_talent_calc_url() -> None:
@@ -2682,27 +2742,28 @@ def test_simc_compare_builds_rejects_buildless_wowhead_talent_calc_url() -> None
     assert "no build code" in payload["error"]["message"]
 
 
-def test_simc_compare_builds_reports_buildless_wowhead_other_as_structured_error(monkeypatch) -> None:
-    monkeypatch.setattr(
-        "simc_cli.main._load_identified_build_spec_or_fail",
-        lambda *args, **kwargs: (_fake_build_spec(), _fake_identity()),
-    )
+def test_simc_compare_builds_rejects_buildless_wowhead_other(monkeypatch) -> None:
+    """An --other that is no build is a usage error, even when the base decodes."""
     monkeypatch.setattr("simc_cli.main.decode_build", lambda paths, spec: _fake_resolution())
 
     result = runner.invoke(
         simc_app,
         [
             "compare-builds",
+            "--actor-class",
+            "druid",
+            "--spec",
+            "balance",
             "--base",
             "BASE",
             "--other",
             "https://www.wowhead.com/talent-calc/druid/balance",
         ],
     )
-    assert result.exit_code == 0
-    payload = json.loads(result.stdout)
-    assert payload["comparisons"][0]["input"] == "https://www.wowhead.com/talent-calc/druid/balance"
-    assert "no build code" in payload["data"]["comparisons"][0]["error"]
+    assert result.exit_code == 2
+    payload = json.loads(result.stderr)
+    assert payload["error"]["code"] == "unsupported_build_reference"
+    assert "no build code" in payload["error"]["message"]
 
 
 # --- modify-build ---
@@ -2791,12 +2852,57 @@ def test_simc_modify_build_refuses_to_emit_an_export_carrying_unrequested_change
     assert "MODIFIED_EXPORT" not in json.dumps(payload)
 
 
+class _TieredReadBackSimcBinary(_FakeSimcBinary):
+    """Also answers the ``log=1`` read-back run with the ranks SimC spread over Prismatic Bolt's entries."""
+
+    def __call__(self, cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        if "log=1" in cmd:
+            self.profiles.append(Path(str(cmd[1])).read_text())
+            log = "\n".join(
+                f"0.000 Overwriting talent Prismatic Bolt ({entry}), rank {rank} -> 0"
+                for entry, rank in ((137028, 1), (137027, 2), (137026, 1))
+            )
+            return subprocess.CompletedProcess(cmd, 0, stdout=log, stderr="")
+        return super().__call__(cmd, **kwargs)
+
+
+def test_simc_modify_build_removes_every_entry_of_a_tiered_talent_by_name(tmp_path: Path) -> None:
+    """A tiered node decodes as one row per entry, all sharing the talent's name.
+
+    Removing it by name removes all of them; only matching the one entry the name resolved to reported
+    the node's other entries as unrequested changes and refused the export.
+    """
+    fake = _TieredReadBackSimcBinary({"BASE": CAPTURED_ARCANE_MAGE, "MODIFIED_EXPORT": _captured_without("Prismatic Bolt")})
+
+    exit_code, payload = _modify(tmp_path, fake, "--remove", "Prismatic Bolt")
+
+    assert exit_code == 0, payload
+    removed = payload["data"]["result"]["diff_from_base"]["spec"]["removed"]
+    assert [(row["entry"], row["rank"]) for row in removed] == [(137026, 1), (137027, 2), (137028, 1)]
+    assert "spec_talents=prismatic_bolt:0" in fake.encode_profile
+
+
+def test_simc_modify_build_name_edit_does_not_cover_a_same_named_talent_in_another_tree() -> None:
+    """A name edit covers its own tiered node, not a talent that happens to share the name elsewhere."""
+    from simc_cli.main import _TalentEdit, _unrequested_changes
+
+    def diff(*removed: int) -> dict[str, Any]:
+        rows = [{"name": "Arcane Tempo", "token": "arcane_tempo", "rank": 1, "max_rank": 1, "entry": entry} for entry in removed]
+        return {"added": [], "removed": rows, "changed": [], "has_differences": bool(rows)}
+
+    edits = [_TalentEdit(tree="spec", value="arcane_tempo", rank=0, entry=1)]
+
+    unrequested = _unrequested_changes({"class": diff(9), "spec": diff(1, 2), "hero": diff()}, edits)
+
+    assert [(row["tree"], row["entry"]) for row in unrequested] == [("class", 9)]
+
+
 def test_simc_modify_build_rejects_a_talent_name_that_belongs_to_no_tree(tmp_path: Path) -> None:
     fake = _FakeSimcBinary({"BASE": CAPTURED_ARCANE_MAGE})
 
     exit_code, payload = _modify(tmp_path, fake, "--remove", "nonexistent_talent")
 
-    assert exit_code == 1
+    assert exit_code == 2
     assert payload["error"]["code"] == "unknown_talent"
 
 
@@ -2805,7 +2911,7 @@ def test_simc_modify_build_rejects_an_entry_id_the_checkout_does_not_know(tmp_pa
 
     exit_code, payload = _modify(tmp_path, fake, "--add", "999999:1")
 
-    assert exit_code == 1
+    assert exit_code == 2
     assert payload["error"]["code"] == "unknown_talent"
 
 

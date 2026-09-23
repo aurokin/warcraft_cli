@@ -664,6 +664,10 @@ def _notes(state: CooldownState, lorrgs_player_casts: list[Any]) -> list[str]:
             "was not applied, cooldowns.player_casts covers the whole fight and every selected-phase "
             "section is empty. See the lorrgs section for the reason."
         )
+        notes.append(
+            "Without the Lorrgs roster the player is identified by flags only: player.name is "
+            "--actor-name (null when it was not passed) and player.class_slug is the class half of --spec-slug."
+        )
     if state.player_casts.get("next_page_timestamp") is not None:
         notes.append("Warcraft Logs returned next_page_timestamp; increase --event-limit or paginate before treating counts as complete.")
     if not lorrgs_player_casts:
@@ -674,6 +678,12 @@ def _notes(state: CooldownState, lorrgs_player_casts: list[Any]) -> list[str]:
     if isinstance(state.ranking_result, dict) and state.ranking_result.get("status") == "error":
         notes.append("Lorrgs top-parse comparison was unavailable; inspect sources.lorrgs_spec_ranking.error for details.")
     return notes
+
+
+def _spec_class_slug(spec_slug: str) -> str | None:
+    """The class half of a Lorrgs spec slug, which is ``<class>-<spec>`` (``deathknight-blood``)."""
+    class_slug, separator, _spec = spec_slug.partition("-")
+    return class_slug if separator and class_slug else None
 
 
 def _packet_payload(state: CooldownState) -> dict[str, Any]:
@@ -713,7 +723,7 @@ def _packet_payload(state: CooldownState) -> dict[str, Any]:
             "name": state.player.get("name") or state.query.get("actor_name"),
             "source_id": state.actor_id,
             "spec_slug": state.spec_slug,
-            "class_slug": state.player.get("class_slug"),
+            "class_slug": state.player.get("class_slug") or _spec_class_slug(state.spec_slug),
             "total": state.player.get("total"),
             "deaths": _phase_deaths(state.player.get("deaths"), window=state.selected_window),
         },

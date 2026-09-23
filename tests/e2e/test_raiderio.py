@@ -289,7 +289,8 @@ def test_guild_profile_echoes_the_guild_and_numeric_raid_rankings(cache_root: Pa
     assert any("guild_profile" in str(path) for path in _cache_entries(cache_root)), "the session cache root must hold the fetched profile"
 
 
-def test_a_repeated_guild_fetch_is_replayed_and_says_so(tmp_path: Path) -> None:
+@pytest.mark.parametrize(("command", "name"), [("guild", GUILD), ("character", CHARACTER)])
+def test_a_repeated_profile_fetch_is_replayed_and_says_so(tmp_path: Path, command: str, name: str) -> None:
     """A replay has to report itself and quote the age of what it replayed, not the time it ran.
 
     ``cache_hit`` is the only way a caller can tell a fresh answer from a stale one, so it is
@@ -300,13 +301,13 @@ def test_a_repeated_guild_fetch_is_replayed_and_says_so(tmp_path: Path) -> None:
     env = {"RAIDERIO_CACHE_DIR": str(private_cache)}
     assert not private_cache.exists()
 
-    first = run("raiderio", "guild", REGION, REALM, GUILD, env=env)
+    first = run("raiderio", command, REGION, REALM, name, env=env)
     warmed = set(private_cache.rglob("*.json"))
-    assert warmed, "the first fetch must write the guild profile to the configured cache dir"
+    assert warmed, f"the first fetch must write the {command} profile to the configured cache dir"
     cold = _assert_freshness(first)
     assert cold["cache_hit"] is False, "a cold cache cannot report a hit"
 
-    repeat = run("raiderio", "guild", REGION, REALM, GUILD, env=env)
+    repeat = run("raiderio", command, REGION, REALM, name, env=env)
     assert set(private_cache.rglob("*.json")) == warmed, "a cache hit must not add cache entries"
     replayed = _assert_freshness(repeat)
     assert replayed["cache_hit"] is True, "the second read must report that it was replayed"
@@ -393,6 +394,11 @@ def test_the_sampled_bounds_return_strict_subsets_that_add_back_up(baseline_samp
     capped = run("raiderio", "sample", "mythic-plus-runs", *SCOPE, "--level-max", str(min(levels) - 1))
     assert capped.data["runs"] == [], "no run can fit under a cap below the lowest sampled key level"
     assert capped.data["sample"]["filtering"]["excluded_run_count"] == len(everything)
+
+    # The other direction: bounds sitting exactly on the observed range are inclusive and keep every
+    # run, so a level filter that dropped everything would fail here instead of passing the two above.
+    edges = run("raiderio", "sample", "mythic-plus-runs", *SCOPE, "--level-min", str(min(levels)), "--level-max", str(max(levels)))
+    assert _run_keys(edges) == everything, edges.describe()
 
 
 def test_the_roster_filters_keep_exactly_the_runs_that_carry_the_value(baseline_sample: Result) -> None:

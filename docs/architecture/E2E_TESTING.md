@@ -21,10 +21,7 @@ between commands (search, resolve, and entity must name the same thing, and the 
 lookup returns must be the page the query names). A journey follows an agent workflow end to end
 rather than probing one endpoint, so the wrapper composites (`guide-compare-query`,
 `guide-builds-simc`, `talent-packet`, `talent-describe`, `cooldown-packet`, `actor-profile`) run
-against the local SimulationCraft checkout rather than a stub. How far that gets depends on the
-build: `identify-build` runs for real on every build handed off, while `decode-build` and
-`describe-build` need a class and a spec, which the guide providers' build strings do not carry
-(see Known limits).
+against the local SimulationCraft checkout rather than a stub.
 
 A filter, a cap, or a sort is only exercised when the bound provably excludes something: journeys
 read the unfiltered baseline first, derive the bound from it, and compare the filtered result
@@ -84,14 +81,15 @@ without printing secrets.
 
 ## Coverage
 
-Every command in `docs/reference/` has at least one journey, and some need an optional input below
-to reach their success path. Six are reached only on a deliberate failure path, because a success
-path would change this machine:
+Every command in `docs/reference/` has at least one journey except the three Warcraft Logs auth
+mutations below, and some commands need an optional input to reach their success path. Six
+commands are deliberately kept off their success path, because a success would change this
+machine:
 
-| Command | Why it is error-path only |
+| Command | Coverage and why |
 | --- | --- |
-| `warcraftlogs auth login`, `auth pkce-login`, `auth logout` | they rewrite the saved user token, so a success path would log you out of your own account mid-run |
-| `simc sync`, `simc build`, `simc checkout` | a success path would pull, recompile, or clone the SimulationCraft checkout that every other simc journey reads. `build` is reached through its missing-build-dir guard, `sync` through its dirty-worktree and missing-repo guards, `checkout` through a temporary `XDG_DATA_HOME` whose managed root is not a git repo |
+| `warcraftlogs auth login`, `auth pkce-login`, `auth logout` | no journey at all, not even an error path. Each one rewrites or deletes the saved user token that the private-report journeys depend on, so a success would log you out of your own account mid-run. The read-only `auth status`, `client`, `token`, and `whoami` are covered |
+| `simc sync`, `simc build`, `simc checkout` | error path only. A success would pull, recompile, or clone the SimulationCraft checkout that every other simc journey reads. `build` is reached through its missing-build-dir guard, `sync` through its dirty-worktree and missing-repo guards, `checkout` through a temporary `XDG_DATA_HOME` whose managed root is not a git repo |
 
 Optional inputs:
 
@@ -106,13 +104,13 @@ Optional inputs:
 
 What a green run does **not** prove:
 
-- **Guide builds are not decoded.** Icy Veins and Method publish builds as bare
-  `wow_talent_export` strings, which carry no class or spec, so `warcraft guide-builds-simc
-  --decode/--describe` reports `simc_handoff_status: "partial"` with those legs empty. The journey
-  pins that status; it does not prove a guide build can be simulated.
+- **The auth mutations and the SimC update commands never succeed here.** See Coverage.
 - **Wowhead's PTR and beta datasets are untested.** Whether a PTR dataset is live is upstream
   state no command can discover, so `--normalize-canonical-to-expansion` and the `ptr` expansion
   profile have no journey; the five classic-era profiles cover expansion routing instead.
+- **Some Wowhead flags have no journey.** `comments --hydrate-missing-replies`, the `guides
+  <query>` text filter, and `compare` across mixed entity types (quest, npc, spell) each need extra
+  live Wowhead requests per run and stays out of the suite to keep it under Wowhead's rate limit.
 - **No write path anywhere.** Nothing logs in, rotates a token, uploads a sim, or mutates a
   provider account, so those code paths are only covered by the fast tests.
 - **Volatile upstreams.** The journeys assert titles, ids, and counts from live pages. Upstream

@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 from warcraft_content.article_bundle import (
-    InvalidArticleBundleError,
+    ArticleBundleError,
     compare_article_bundles,
     load_article_bundle,
     query_article_bundle,
@@ -69,23 +69,43 @@ def test_merge_fills_a_missing_identity_from_a_later_page_and_collects_source_ur
     assert merged[0]["source_urls"] == ["https://example.invalid/p1", "https://example.invalid/p2"]
 
 
-def test_load_article_bundle_rejects_a_directory_without_a_manifest(tmp_path: Path) -> None:
-    with pytest.raises(InvalidArticleBundleError) as exc_info:
-        load_article_bundle(tmp_path)
+def _not_a_bundle(tmp_path: Path, shape: str) -> Path:
+    if shape == "missing":
+        return tmp_path / "gone"
+    if shape == "file":
+        path = tmp_path / "bundle.json"
+        path.write_text("{}", encoding="utf-8")
+        return path
+    if shape == "manifest_not_an_object":
+        (tmp_path / "manifest.json").write_text(json.dumps([1, 2, 3]), encoding="utf-8")
+    if shape == "wowhead_guide_export":
+        # The wowhead guide-export layout: a valid manifest, but no pages.jsonl or build-references.jsonl.
+        manifest = {"export_version": 2, "files": {"guide_json": "guide.json", "sections_jsonl": "sections.jsonl"}}
+        (tmp_path / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+        (tmp_path / "sections.jsonl").write_text(json.dumps({"title": "Overview"}) + "\n", encoding="utf-8")
+    return tmp_path
 
-    assert exc_info.value.code == "invalid_bundle"
-    assert "manifest.json" in exc_info.value.message
+
+@pytest.mark.parametrize(
+    ("shape", "code", "exit_code"),
+    [
+        ("missing", "not_found", 4),
+        ("file", "invalid_argument", 2),
+        ("no_manifest", "invalid_bundle", 1),
+        ("manifest_not_an_object", "invalid_bundle", 1),
+        ("wowhead_guide_export", "invalid_bundle", 1),
+    ],
+)
+def test_load_article_bundle_refuses_a_path_that_is_not_an_article_bundle(
+    tmp_path: Path, shape: str, code: str, exit_code: int
+) -> None:
+    """Every one of these used to load, or fail, differently; the last one loaded as an empty bundle."""
+    with pytest.raises(ArticleBundleError) as exc_info:
+        load_article_bundle(_not_a_bundle(tmp_path, shape))
+
+    assert (exc_info.value.code, exc_info.value.exit_code) == (code, exit_code)
     # warcraft_cli's guide-compare catches ValueError per bundle to keep the other bundles going.
     assert isinstance(exc_info.value, ValueError)
-
-
-def test_load_article_bundle_rejects_a_manifest_that_is_not_a_json_object(tmp_path: Path) -> None:
-    (tmp_path / "manifest.json").write_text(json.dumps([1, 2, 3]), encoding="utf-8")
-
-    with pytest.raises(InvalidArticleBundleError) as exc_info:
-        load_article_bundle(tmp_path)
-
-    assert exc_info.value.code == "invalid_bundle"
 
 
 FAILED_PAGE = {

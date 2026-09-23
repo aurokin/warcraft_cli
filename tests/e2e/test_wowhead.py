@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import shlex
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -58,12 +59,17 @@ ROUTED_ENTITIES: tuple[tuple[str, int, str], ...] = (
 SUGGESTION_TYPE_NAMES: dict[str, str] = {
     "achievement": "achievement",
     "currency": "currency",
+    "faction": "faction",
     "guide": "guide",
+    "hunter pet": "pet",
     "item": "item",
+    "news post": "news",
     "npc": "npc",
     "object": "object",
     "quest": "quest",
     "spell": "spell",
+    "transmog set": "transmog-set",
+    "world event": "event",
     "zone": "zone",
 }
 
@@ -205,6 +211,24 @@ def test_search_resolve_and_entity_agree_on_thunderfury(require, thunderfury_sea
     assert links["count"] == len(links["items"]) > 0, page.describe()
 
 
+def test_resolve_answers_with_the_faction_a_query_names(require) -> None:
+    """``resolve "argent dawn"`` must land on Faction 529, not an item whose name contains the query.
+
+    Wowhead lists the faction only in its category groups, not in the dropdown rows, so this is the
+    journey that fails if ``resolve`` stops ranking every row the suggestion response returned.
+    """
+    require("wowhead")
+    resolved = run(BINARY, "resolve", "argent dawn", "--limit", "5")
+    match = resolved.data["match"]
+    assert (match["entity_type"], match["id"], match["name"]) == ("faction", 529, "Argent Dawn"), resolved.describe()
+    assert resolved.data["confidence"] == "high", resolved.describe()
+    assert resolved.data["next_command"] == f"{BINARY} entity faction 529", resolved.describe()
+
+    entity = run_follow_up(resolved.data["next_command"])
+    assert entity.data["entity"]["name"] == "Argent Dawn", entity.describe()
+    assert entity.data["entity"]["page_url"].startswith("https://www.wowhead.com/faction=529"), entity.describe()
+
+
 def test_suggestion_type_ids_label_rows_the_way_wowhead_does(require) -> None:
     """Every row's derived ``entity_type`` must agree with Wowhead's own ``typeName`` for its ``type`` id.
 
@@ -219,7 +243,7 @@ def test_suggestion_type_ids_label_rows_the_way_wowhead_does(require) -> None:
         for row in found.data["results"]:
             expected = SUGGESTION_TYPE_NAMES.get(str(row["type_name"]).lower())
             if expected is None:
-                # A type this CLI does not map (Storyline, Transmog Set, ...): it must not guess one.
+                # A type this CLI does not map (Storyline, Trading Post Activity, ...): it must not guess one.
                 assert row["entity_type"] is None, (
                     f"a {row['type_name']!r} row (type id {row['type_id']}) was labelled "
                     f"{row['entity_type']!r}\n{found.describe()}"
@@ -609,6 +633,15 @@ def test_news_date_window_returns_the_posts_inside_it_and_says_what_it_could_not
     oldest = run(BINARY, "news", "--pages", "2", "--limit", "200", "--date-to", days[0])
     assert {row["id"] for row in oldest.data["results"]} == {row["id"] for row in rows if row["posted_at"][:10] <= days[0]}
     assert 0 < oldest.data["count"] < len(rows), "--date-to returned the whole scan"
+
+    # The agent's everyday question: what did Wowhead post in the last week.
+    now = datetime.now(UTC)
+    week_start = (now - timedelta(days=7)).date().isoformat()
+    week = run(BINARY, "news", "--pages", "2", "--limit", "200", "--date-from", week_start)
+    assert week.data["scan"]["unparsed_timestamps"] == 0, week.describe()
+    assert week.data["count"] > 0, f"no news post in the last seven days\n{week.describe()}"
+    assert all(week_start <= row["posted_at"][:10] and datetime.fromisoformat(row["posted_at"]) <= now for row in week.data["results"])
+    assert {row["id"] for row in week.data["results"]} == {row["id"] for row in rows if row["posted_at"][:10] >= week_start}
 
 
 def test_listing_field_filters_keep_exactly_the_rows_that_carry_that_value(

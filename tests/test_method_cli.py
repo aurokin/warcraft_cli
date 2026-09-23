@@ -364,6 +364,17 @@ def test_method_guide_query_answers_each_bad_bundle_path_the_way_icy_veins_does(
     }
 
 
+def test_guide_query_rejects_an_unknown_kind_with_the_code_icy_veins_uses(tmp_path: Path) -> None:
+    from icy_veins_cli.main import app as icy_veins_app
+
+    codes = set()
+    for cli in (app, icy_veins_app):
+        result = runner.invoke(cli, ["guide-query", str(tmp_path), "mana", "--kind", "bogus"])
+        codes.add((result.exit_code, json.loads(result.stderr)["error"]["code"]))
+
+    assert codes == {(1, "invalid_query_kind")}
+
+
 def test_method_guide_invalid_ref_returns_structured_error() -> None:
     result = runner.invoke(app, ["guide", "https://www.method.gg/premium"])
     assert result.exit_code == 1

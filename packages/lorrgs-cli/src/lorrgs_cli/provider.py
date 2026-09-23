@@ -39,7 +39,7 @@ CAPABILITIES: dict[str, str] = {
     "spec_ranking": "ready",
     "spec_ranking_info": "ready",
     "comp_ranking": "ready",
-    "report_overview": "ready",
+    "report_overview": "ready_cached_only",
     "user_report": "ready_cached_only",
     "user_report_fights": "ready_cached_only",
 }

@@ -428,3 +428,33 @@ def test_actor_profile_errors_when_warcraftlogs_lookup_fails(monkeypatch) -> Non
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "warcraftlogs_lookup_failed"
     assert payload["error"]["details"]["source"]["code"] == "auth_required"
+
+
+def test_actor_profile_miss_in_a_truncated_fight_scope_says_the_rest_was_not_searched(monkeypatch) -> None:
+    """A miss inside the bounded fight sample is not a miss in the report, and the failure says so."""
+    fight_count = ACTOR_PROFILE_MAX_SCOPED_FIGHTS + 2
+    fights = _provider_result("warcraftlogs", {"fights": [{"id": index} for index in range(1, fight_count + 1)]})
+    wcl = _wcl_payload({"dps": [_wcl_actor("Someoneelse", "Illidan", "us", "Rogue", "Subtlety")]})
+    detail_args: list[list[str]] = []
+
+    def fake(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, Any]:
+        if args[0] == "report-fights":
+            return fights
+        detail_args.append(args)
+        return _provider_result("warcraftlogs", wcl)
+
+    monkeypatch.setattr("warcraft_cli.main.provider_invoke", fake)
+
+    result = runner.invoke(warcraft_app, ["actor-profile", "ABC123", "Roguecane"])
+
+    assert result.exit_code == 1
+    error = json.loads(result.stderr)["error"]
+    assert error["code"] == "actor_not_found"
+    assert error["details"]["fight_scope"]["scoped_fight_count"] == ACTOR_PROFILE_MAX_SCOPED_FIGHTS
+    assert error["details"]["fight_scope"]["report_fight_count"] == fight_count
+    assert f"{ACTOR_PROFILE_MAX_SCOPED_FIGHTS} of {fight_count} fights" in error["message"]
+    # The roster is read with the scoped fight set, one --fight-id per fight.
+    assert detail_args == [
+        ["report-player-details", "ABC123",
+         *[arg for fight_id in range(1, ACTOR_PROFILE_MAX_SCOPED_FIGHTS + 1) for arg in ("--fight-id", str(fight_id))]]
+    ]

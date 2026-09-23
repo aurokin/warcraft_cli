@@ -28,7 +28,7 @@
 - prefer readonly APL inspection before jumping to a real sim run
 - if the user provides a talent string, import string, or Wowhead talent-calc URL with build code, assume they want the exact build only; use `describe-build` first for “what is this build doing?” requests, then use `priority` or `inactive-actions` with the same `--talents` value when you need finer evidence (`--build-packet` is accepted only by `describe-build`, `decode-build`, `identify-build`, and `validate-talent-transport`; for the other exact-build commands pass the packet's `simc_split_talents` strings as `--class-talents` / `--spec-talents` / `--hero-talents`)
 - users may paste:
-  - a bare WoW talent export string (this is what Method and Icy Veins guides publish; it names no class or spec, so pass `--actor-class` / `--spec` when the spec ships no APL)
+  - a bare WoW talent export string (this is what Method and Icy Veins guides publish; it names no class or spec, so the CLI identifies it by decoding it as each spec SimC knows)
   - a Wowhead talent-calc URL with build code, which names the class and spec by itself
   - a Wowhead `/talent-calc/blizzard/<hash>` URL, which is what `modify-build` publishes
   - SimC-native build/profile text
@@ -40,7 +40,7 @@
 - a tiered node comes back as one row per entry, each with its own rank; a row with `rank_known: false` is taken at a rank the decode could not recover, so do not quote a rank for it
 - an empty value for a build-input option is a usage error, not the same as omitting the option
 - `--enable` / `--disable` take a talent's display name or its SimC token; a value that names no talent of the actor's class fails with `unknown_talent` (exit 2) rather than being ignored
-- do not tell the user they must provide class/spec unless `identify-build` failed first; the CLI probes the local SimC spec set for bare WoW exports when direct metadata is missing. The probe covers one spec per APL file in the checkout, so a build whose spec ships no APL fails with `invalid_query` listing `error.details.probed_specs`: pass `--actor-class` / `--spec` for those builds. Most healer specs are outside that list, so a guide's healer build needs the two flags
+- do not tell the user they must provide class/spec unless `identify-build` failed first; the CLI decodes a bare WoW export as every spec SimC knows, healers included, when direct metadata is missing. It fails with `invalid_query` only when no spec or more than one decodes the build (`error.details.identity.candidates` lists the latter); then pass `--actor-class` / `--spec`
 - prefer `describe-build` over ad hoc prose synthesis when you need to talk about:
   - active hero/spec package
   - skipped capstones or alternate branches
@@ -59,6 +59,7 @@
 - `compare-apls` ranks variants on mean DPS, but `action_counts`, `action_cpm`, and `top_action_deltas` come from the one iteration SimC records an action sequence for; the payload states this under `sampling`, so present cast-rate differences as a single sampled fight, not as an average
 - `spec-files`, `find-action`, and `trace-action` need ripgrep; without it they fail with `missing_dependency` and `simc doctor` marks them `unavailable`. Pointed at a directory that is not a SimulationCraft checkout they fail with `not_found` (exit 4) rather than reporting zero hits
 - use `compare-builds` to diff talent selections between two or more builds by tree; this is the right tool when the user asks "what changed between these two builds?"
+  - `summary.failed` counts the `--other` builds SimC rejected; each keeps its `error` in `comparisons`, so say which comparisons are missing. When none decode the command fails instead
 - use `modify-build` to produce a new talent export string from an existing build:
   - `--swap-class-tree-from` / `--swap-spec-tree-from` / `--swap-hero-tree-from` replace an entire tree from another build
   - `--add name:rank` and `--remove name` adjust individual talents in any tree; a name must belong to the actor's class, and an entry id works for any talent in the checkout's trait data

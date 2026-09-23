@@ -55,10 +55,10 @@ from simc_cli.build_input import (
     diff_talent_trees,
     encode_build,
     extract_build_spec_from_text,
+    has_talent_data,
     identify_build,
     infer_actor_and_spec_from_apl,
     load_build_spec,
-    supported_specs,
     tree_entries_string,
 )
 from simc_cli.compare import (
@@ -442,28 +442,20 @@ def _load_identified_build_spec_or_fail(
         fail(ctx, "invalid_query", str(exc))
 
 
-def _fail_unidentified_build(
-    ctx: typer.Context, paths: RepoPaths, *, purpose: str, build_spec: BuildSpec, identity: BuildIdentity
-) -> NoReturn:
-    """Ask for an explicit class and spec, naming the specs identification actually tried.
-
-    A build is identified by decoding it once per candidate spec, and the candidates are exactly the
-    specs the checkout ships an APL for. Every spec outside that list - most healer specs among them -
-    is a valid build the probe can never match, so ``probed_specs`` carries the list the caller needs
-    to tell "not tried" apart from "not a build".
-    """
-    probed = supported_specs(paths)
+def _fail_unidentified_build(ctx: typer.Context, *, purpose: str, build_spec: BuildSpec, identity: BuildIdentity) -> NoReturn:
+    """Ask for an explicit class and spec when decoding the build as every candidate spec found no single match."""
+    if identity.source == "missing_build_data":
+        reason = "no talent build was supplied"
+    elif identity.candidates:
+        found = ", ".join(f"{actor_class} {spec}" for actor_class, spec in identity.candidates)
+        reason = f"it decodes as {len(identity.candidates)} specs ({found})"
+    else:
+        reason = "it decodes as none of the specs SimulationCraft knows"
     fail(
         ctx,
         "invalid_query",
-        f"Could not determine actor class and spec for {purpose}. Identification only probes the "
-        f"{len(probed)} specs the checkout ships an APL for (listed in error.details.probed_specs), "
-        "so pass --actor-class and --spec.",
-        details={
-            "build_spec": _serialize_build_spec(build_spec),
-            "identity": _serialize_build_identity(identity),
-            "probed_specs": [{"actor_class": actor_class, "spec": spec} for actor_class, spec in probed],
-        },
+        f"Could not determine actor class and spec for {purpose}: {reason}. Pass --actor-class and --spec.",
+        details={"build_spec": _serialize_build_spec(build_spec), "identity": _serialize_build_identity(identity)},
     )
 
 
@@ -870,8 +862,15 @@ def _decode_or_fail(
 def _decode_build(ctx: typer.Context, *, apl_path: str | None, option_values: dict[str, Any]) -> None:
     paths = _repo_paths(ctx)
     build_spec, identity = _identified_build_or_fail(ctx, paths, apl_path=apl_path, option_values=option_values)
+    if not has_talent_data(build_spec):
+        fail(
+            ctx,
+            "invalid_query",
+            "No talent build was supplied to decode. Pass --talents, --build-text, --build-file, --build-packet, "
+            "--profile-path, or --class-talents/--spec-talents/--hero-talents.",
+        )
     if not build_spec.actor_class or not build_spec.spec:
-        _fail_unidentified_build(ctx, paths, purpose="build decoding", build_spec=build_spec, identity=identity)
+        _fail_unidentified_build(ctx, purpose="build decoding", build_spec=build_spec, identity=identity)
     resolution = _decode_or_fail(ctx, paths, build_spec, identity=identity)
     _emit(
         ctx,
@@ -1133,7 +1132,7 @@ def _build_harness(
     paths = _repo_paths(ctx)
     build_spec, identity = _identified_build_or_fail(ctx, paths, apl_path=apl_path, option_values=option_values)
     if not build_spec.actor_class or not build_spec.spec:
-        _fail_unidentified_build(ctx, paths, purpose="harness generation", build_spec=build_spec, identity=identity)
+        _fail_unidentified_build(ctx, purpose="harness generation", build_spec=build_spec, identity=identity)
     try:
         target = write_harness(build_spec, lines=line, out_path=out)
     except ValueError as exc:
@@ -1982,7 +1981,7 @@ def _describe_build(
     paths = _repo_paths(ctx)
     build_spec, identity = _identified_build_or_fail(ctx, paths, apl_path=apl_path, option_values=option_values)
     if not build_spec.actor_class or not build_spec.spec:
-        _fail_unidentified_build(ctx, paths, purpose="build description", build_spec=build_spec, identity=identity)
+        _fail_unidentified_build(ctx, purpose="build description", build_spec=build_spec, identity=identity)
     resolved = _resolve_path(paths, apl_path) if apl_path else _infer_default_apl_path(
         paths, actor_class=build_spec.actor_class, spec=build_spec.spec)
     if not resolved or not resolved.exists():
@@ -2934,6 +2933,41 @@ def _tree_diff_payload(diff: TreeDiff) -> dict[str, Any]:
     return payload
 
 
+def _require_build_value(ctx: typer.Context, flag: str, value: str) -> str:
+    """Refuse an empty build option under its own flag name; the shared loader would call it --talents."""
+    if not value.strip():
+        fail(ctx, "invalid_query", f"{flag} was given an empty value.")
+    return value
+
+
+def _load_other_build_or_fail(ctx: typer.Context, paths: RepoPaths, value: str, base_spec: BuildSpec) -> BuildSpec:
+    """Parse one ``--other`` as a build of the base's class and spec; a malformed one is a usage error."""
+    other_spec, _ = _load_identified_build_spec_or_fail(
+        ctx,
+        paths,
+        apl_path=None,
+        profile_path=None,
+        build_file=None,
+        build_text=None,
+        talents=TalentStrings(talents=_require_build_value(ctx, "--other", value)),
+        actor_class=base_spec.actor_class,
+        spec_name=base_spec.spec,
+    )
+    return other_spec
+
+
+def _build_comparison(value: str, base: BuildResolution, other: BuildResolution, trees: list[str]) -> dict[str, Any]:
+    tree_diffs = {
+        tree: _tree_diff_payload(diff_talent_trees(base.talents_by_tree.get(tree, []), other.talents_by_tree.get(tree, [])))
+        for tree in trees
+    }
+    return {
+        "input": value,
+        "trees": tree_diffs,
+        "has_differences": any(diff["has_differences"] for diff in tree_diffs.values()),
+    }
+
+
 @app.command("compare-builds")
 def compare_builds_command(
     ctx: typer.Context,
@@ -2944,8 +2978,11 @@ def compare_builds_command(
     spec_name: str | None = typer.Option(None, "--spec", help="Spec name such as balance."),
 ) -> None:
     """Diff a base talent build against one or more other builds, per tree."""
+    unknown_trees = sorted(set(tree) - set(ACTIVE_TREES))
+    if unknown_trees:
+        fail(ctx, "invalid_argument", f"Unknown --tree value: {', '.join(unknown_trees)}. Use class, spec, or hero.")
+    trees = list(tree) or list(ACTIVE_TREES)
     paths = _repo_paths(ctx)
-    trees = [t for t in tree] or ["class", "spec", "hero"]
 
     base_spec, base_identity = _load_identified_build_spec_or_fail(
         ctx,
@@ -2954,46 +2991,33 @@ def compare_builds_command(
         profile_path=None,
         build_file=None,
         build_text=None,
-        talents=TalentStrings(talents=base),
+        talents=TalentStrings(talents=_require_build_value(ctx, "--base", base)),
         actor_class=actor_class,
         spec_name=spec_name,
     )
     if not base_spec.actor_class or not base_spec.spec:
-        _fail_unidentified_build(ctx, paths, purpose="the base build", build_spec=base_spec, identity=base_identity)
+        _fail_unidentified_build(ctx, purpose="the base build", build_spec=base_spec, identity=base_identity)
+    other_specs = [_load_other_build_or_fail(ctx, paths, value, base_spec) for value in other]
     try:
         base_resolution = decode_build(paths, base_spec)
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
         _fail_build_error(ctx, exc, code="decode_failed", prefix="Failed to decode base build: ")
 
     comparisons: list[dict[str, Any]] = []
-    for other_talents in other:
-        try:
-            other_spec = load_build_spec(
-                apl_path=None, profile_path=None, build_file=None, build_text=None,
-                talents=TalentStrings(talents=other_talents),
-                actor_class=base_spec.actor_class, spec_name=base_spec.spec,
-            )
-        except ValueError as exc:
-            comparisons.append({"input": other_talents, "error": str(exc)})
-            continue
+    failures: list[Exception] = []
+    for value, other_spec in zip(other, other_specs, strict=True):
         try:
             other_resolution = decode_build(paths, other_spec)
         except (FileNotFoundError, RuntimeError, ValueError) as exc:
-            comparisons.append({"input": other_talents, "error": str(exc)})
+            failures.append(exc)
+            comparisons.append({"input": value, "error": str(exc)})
             continue
-        tree_diffs: dict[str, Any] = {}
-        for t in trees:
-            diff = diff_talent_trees(
-                base_resolution.talents_by_tree.get(t, []),
-                other_resolution.talents_by_tree.get(t, []),
-            )
-            tree_diffs[t] = _tree_diff_payload(diff)
-        has_any = any(tree_diffs[t]["has_differences"] for t in trees)
-        comparisons.append({
-            "input": other_talents,
-            "trees": tree_diffs,
-            "has_differences": has_any,
-        })
+        comparisons.append(_build_comparison(value, base_resolution, other_resolution, trees))
+    if len(failures) == len(other):
+        _fail_build_error(
+            ctx, failures[0], code="decode_failed", prefix="No --other build could be decoded. First error: ",
+            details={"comparisons": comparisons},
+        )
 
     _emit(ctx, {
         "provider": "simc",
@@ -3005,6 +3029,8 @@ def compare_builds_command(
             "enabled_talents": sorted(base_resolution.enabled_talents),
         },
         "trees_compared": trees,
+        # A failed --other stays in `comparisons` with its error; the counts keep a partial answer visible.
+        "summary": {"succeeded": len(other) - len(failures), "failed": len(failures)},
         "comparisons": comparisons,
     })
 
@@ -3104,7 +3130,7 @@ def _resolve_edit(
         entry = int(value)
         tree = table.tree_for_entry(entry)
         if tree is None or tree == "selection":
-            fail(ctx, "unknown_talent", f"Unknown talent entry id: '{value}'.")
+            fail(ctx, "unknown_talent", f"Unknown talent entry id: '{value}'.", exit_code=EXIT_USAGE)
         return _TalentEdit(tree=tree, value=value, rank=rank, entry=entry)
     # SimC tokenizes talent names when it matches them, and a profile line cannot contain spaces.
     token = tokenize_talent_name(value)
@@ -3118,6 +3144,7 @@ def _resolve_edit(
             ctx,
             "unknown_talent",
             f"Cannot resolve talent '{value}' to a talent tree. Use an entry id or a name from this class.",
+            exit_code=EXIT_USAGE,
         )
     return _TalentEdit(tree=tree, value=token, rank=rank, entry=None)
 
@@ -3200,8 +3227,9 @@ def _unrequested_changes(diff_payload: dict[str, Any], edits: list[_TalentEdit])
     """
     requested_entries = {edit.entry for edit in edits if edit.entry is not None}
     # An edit names one talent, and every entry of a tiered node carries that same name, so a
-    # name-resolved edit covers all of them. An entry-id edit tokenizes to digits and matches none.
-    requested_names = {tokenize_talent_name(edit.value) for edit in edits}
+    # name-resolved edit covers all of them within its tree. An entry-id edit tokenizes to digits and
+    # matches no name.
+    requested_names = {(edit.tree, tokenize_talent_name(edit.value)) for edit in edits}
     unrequested: list[dict[str, Any]] = []
     for tree in ACTIVE_TREES:
         tree_diff = diff_payload[tree]
@@ -3209,7 +3237,7 @@ def _unrequested_changes(diff_payload: dict[str, Any], edits: list[_TalentEdit])
             if change == "has_differences":
                 continue
             for row in rows:
-                if row.get("entry") in requested_entries or row.get("token") in requested_names:
+                if row.get("entry") in requested_entries or (tree, row.get("token")) in requested_names:
                     continue
                 unrequested.append({"tree": tree, "change": change, **row})
     return unrequested
@@ -3298,7 +3326,7 @@ def _modify_build(ctx: typer.Context, options: _ModifyBuildOptions) -> None:
         spec_name=options.spec_name,
     )
     if not base_spec.actor_class or not base_spec.spec:
-        _fail_unidentified_build(ctx, paths, purpose="the base build", build_spec=base_spec, identity=base_identity)
+        _fail_unidentified_build(ctx, purpose="the base build", build_spec=base_spec, identity=base_identity)
 
     try:
         base_resolution = decode_build(paths, base_spec)

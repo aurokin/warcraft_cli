@@ -40,9 +40,8 @@ def simc_backend(repo_root: str | Path | None = None) -> TalentTransportBackend:
             )
         except (FileNotFoundError, RuntimeError, ValueError) as exc:
             raise RoundTripError(str(exc)) from exc
-        # Rank 0 lines are kept: a tiered node whose per-entry ranks the decoder could not read back
-        # comes through as one entry at rank 0, and dropping it would hide the node from core, which
-        # compares tiered nodes by presence. Resolved tiered nodes arrive here with their real ranks.
+        # Tiered nodes arrive with their real per-entry ranks. One whose ranks the decoder could not
+        # read back stays a single rank-0 entry, which core's rank comparison rejects.
         entries_by_tree: dict[str, dict[int, int]] = {"class": {}, "spec": {}, "hero": {}}
         for tree in entries_by_tree:
             for talent in resolution.talents_by_tree.get(tree, []):

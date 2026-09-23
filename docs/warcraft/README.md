@@ -57,9 +57,11 @@ Every command's flags are listed in [docs/reference/warcraft.md](../reference/wa
   provider whose best row is weak does not get a full score for topping its own empty field.
   `count` is the merged candidate total and `truncated` says whether `--limit` cut it. The merged
   page then interleaves providers under a per-provider cap, ranks rows from a family the query did
-  not ask for (a player profile for a bare item name) below the rest, and prefers a row whose own
-  title is the query; `merge_policy` reports the caps and the rows they deferred or withheld, and
-  each row carries the normalized `kind` the ranking used. See
+  not ask for (a player profile for a bare item name) below the rest, keeps one slot for a
+  character or guild named exactly the query when no item/spell/quest is, prefers a row whose own
+  title is the query, and returns the page in rank order; `merge_policy` reports the caps, the
+  reserved slot and the rows they deferred or withheld, and each row carries the normalized `kind`
+  the ranking used. See
   [WRAPPER_PROVIDER_CONTRACT.md](../foundation/WRAPPER_PROVIDER_CONTRACT.md) for the model.
 - `warcraft resolve` — pick the single best match plus its follow-up command; never resolves to a
   provider that reported `resolved: false`. `selected_provider` is the match's provider or `null`;
@@ -98,9 +100,12 @@ Every command's flags are listed in [docs/reference/warcraft.md](../reference/wa
   as `--build-text`, a Wowhead talent-calc URL as a validated transport packet. A reference that can
   go neither way is an `excluded_builds` row naming the reason, not a silently shorter list.
   `summary.simc_handoff_status` is `ok`, `partial`, `failed`, `no_build_references`, or
-  `all_handoffs_failed`; the last one is an error envelope, not a success with zero counters.
-  `failed` means a requested leg produced nothing at all (`summary.empty_requested_legs` names
-  them); `partial` means it worked for some builds and not others
+  `all_handoffs_failed`. The requested legs are `identify` plus `decode` (on by default) and
+  `describe` (with `--apl-path`). `all_handoffs_failed` means every requested leg produced nothing:
+  it is a `simc_handoff_failed` error envelope (exit 1) carrying the whole packet, per-build
+  `failures` included, under `error.details`. `failed` means some requested leg produced nothing
+  while another produced output (`summary.empty_requested_legs` names the empty ones); `partial`
+  means a leg worked for some builds and not others
   (`summary.partial_requested_legs`). Every build carries its own `failures` with the simc error
   code per leg, and `summary.failed_page_count` / `bundle_health` report pages the guide export
   never fetched, so a handoff built from a partial bundle says so.

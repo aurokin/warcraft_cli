@@ -29,6 +29,7 @@ from warcraft_core.cli import (
     PrettyOption,
     ProfileOption,
     cfg_as,
+    command_path,
     configure,
     emit,
     fail,
@@ -37,7 +38,7 @@ from warcraft_core.cli import (
 from warcraft_core.cli import (
     RuntimeConfig as BaseRuntimeConfig,
 )
-from warcraft_core.envelope import ENVELOPE_KEYS, SCHEMA_VERSION, Envelope, error_envelope
+from warcraft_core.envelope import ENVELOPE_KEYS, SCHEMA_VERSION, Envelope
 from warcraft_core.exit_codes import EXIT_AUTH, EXIT_USAGE, exit_code_for
 from warcraft_core.identity import (
     ability_identity_payload,
@@ -49,7 +50,7 @@ from warcraft_core.identity import (
     talent_transport_packet_payload,
     validate_talent_transport_packet,
 )
-from warcraft_core.output import DEFAULT_COMPACT_MAX_CHARS, to_json
+from warcraft_core.output import DEFAULT_COMPACT_MAX_CHARS
 from warcraft_core.paths import provider_state_path
 from warcraft_core.talent_transport import TalentTransportBackend, validate_talent_tree_transport
 from warcraft_core.wow_normalization import normalize_region
@@ -275,12 +276,13 @@ def _cfg(ctx: typer.Context) -> RuntimeConfig:
     return cfg_as(ctx, RuntimeConfig)
 
 
-def _envelope_defaults(command: str | None) -> dict[str, Any]:
-    canonical = canonical_key_for_command(command) if command else ""
+def _envelope_defaults(command: str) -> dict[str, Any]:
+    # ``kind`` names the leaf command: ``auth status`` is kind ``status``.
+    canonical = canonical_key_for_command(command.rsplit(" ", 1)[-1])
     return {
         "ok": True,
         "provider": "warcraftlogs",
-        "command": command or "",
+        "command": command,
         "kind": canonical,
         "schema_version": SCHEMA_VERSION,
         "query": None,
@@ -289,7 +291,7 @@ def _envelope_defaults(command: str | None) -> dict[str, Any]:
     }
 
 
-def _with_envelope_keys(payload: dict[str, Any], *, command: str | None) -> dict[str, Any]:
+def _with_envelope_keys(payload: dict[str, Any], *, command: str) -> dict[str, Any]:
     """Add the shared envelope keys this payload is missing, never overwriting what a command set.
 
     Warcraft Logs payloads stay flat (plus the deprecated canonical command key); ``data`` mirrors
@@ -303,18 +305,18 @@ def _with_envelope_keys(payload: dict[str, Any], *, command: str | None) -> dict
     return {**payload, **missing}
 
 
-def _emit(ctx: typer.Context, payload: dict[str, Any], *, client: Any = None, command: str | None = None) -> None:
+def _emit(ctx: typer.Context, payload: dict[str, Any], *, client: Any = None) -> None:
     """Emit a success payload: client warnings, then the canonical command key, then envelope keys.
 
+    ``command`` is the full subcommand path (``auth status``), the same label a failure carries.
     Error envelopes go to stderr through ``_fail``, never here.
     """
     if client is not None:
         payload = _with_warnings(payload, client)
-    ctx_command = getattr(ctx, "command", None)
-    command_name = command or (ctx_command.name if ctx_command is not None else None)
-    if command_name in ALL_COMMANDS:
-        payload = apply_payload_envelope(command_name, payload)
-    emit(ctx, _with_envelope_keys(payload, command=command_name))
+    command = command_path(ctx)
+    if command in ALL_COMMANDS:
+        payload = apply_payload_envelope(command, payload)
+    emit(ctx, _with_envelope_keys(payload, command=command))
 
 
 def _with_warnings(payload: dict[str, Any], client: Any) -> dict[str, Any]:
@@ -339,6 +341,10 @@ _AUTH_ERROR_CODES = frozenset(
 )
 
 
+# OAuth authorization codes are credentials: they never go back out in an error envelope.
+_UNECHOED_PARAMS = frozenset({"authorization_code"})
+
+
 # Rejected or contradictory command input is a usage error (exit 2), like Click's own parse failures.
 # Keep every locally-raised input code here: an omission silently downgrades the command to exit 1.
 _USAGE_ERROR_CODES = frozenset(
@@ -357,12 +363,12 @@ _USAGE_ERROR_CODES = frozenset(
 )
 
 
-def _fail(ctx: typer.Context, code: str, message: str, *, query: Any = None) -> NoReturn:
-    """Fail with the Warcraft Logs exit-code mapping, echoing the slice the command acted on.
+def _fail(ctx: typer.Context, code: str, message: str, *, details: dict[str, Any] | None = None) -> NoReturn:
+    """Fail with the Warcraft Logs exit-code mapping, naming the input the command was given.
 
-    ``warcraft_core.cli.fail`` always writes ``query: null``. A rejected or unmatched slice is only
-    actionable when the envelope names it, so a caller that knows its normalized input passes
-    ``query=`` and the envelope is written here instead.
+    Every failure's ``query`` is the command's parsed parameters, so a rejected or unmatched
+    request is machine-readable without parsing the message. Parameters that carry credentials
+    are left out (``_UNECHOED_PARAMS``).
     """
     if code in _AUTH_ERROR_CODES:
         exit_code = EXIT_AUTH
@@ -370,18 +376,8 @@ def _fail(ctx: typer.Context, code: str, message: str, *, query: Any = None) -> 
         exit_code = EXIT_USAGE
     else:
         exit_code = exit_code_for(code)
-    if query is None:
-        fail(ctx, code, message, exit_code=exit_code)
-    config = _cfg(ctx)
-    envelope = error_envelope(
-        provider=config.provider,
-        command=ctx.info_name or "",
-        code=code,
-        message=message,
-        query=query,
-    )
-    typer.echo(to_json(envelope, pretty=config.output.pretty), err=True)
-    raise typer.Exit(exit_code)
+    query = {name: value for name, value in ctx.params.items() if name not in _UNECHOED_PARAMS}
+    fail(ctx, code, message, exit_code=exit_code, details=details, query=query)
 
 
 def _load_graphql_query(ctx: typer.Context, query: str | None, *, introspect: bool) -> str:
@@ -1772,7 +1768,6 @@ def _require_report_slice(
     fight_id: list[int] | None,
     start_time: float | None,
     end_time: float | None,
-    query: dict[str, Any],
 ) -> None:
     """Reject a query Warcraft Logs answers with an empty payload plus a GraphQL warning.
 
@@ -1788,14 +1783,7 @@ def _require_report_slice(
         f"{command} requires --fight-id, or both --start-time and --end-time. "
         "Warcraft Logs answers any wider query with an empty payload; --encounter-id filters "
         "the slice but does not define one.",
-        query=query,
     )
-
-
-def _fight_in_slice(fight: dict[str, Any], *, fight_ids: list[int] | None, encounter_id: int | None) -> bool:
-    if fight_ids and fight.get("id") not in fight_ids:
-        return False
-    return encounter_id is None or fight.get("encounterID") == encounter_id
 
 
 def _require_matching_fight(
@@ -1807,27 +1795,34 @@ def _require_matching_fight(
     fight_ids: list[int] | None,
     encounter_id: int | None,
     difficulty: int | None,
-    query: dict[str, Any],
 ) -> None:
     """Reject a fight-scoped request naming a fight the report does not have.
 
     Warcraft Logs answers an unknown ``--fight-id``, an ``--encounter-id`` the report never
     pulled, or a ``--difficulty`` those fights were not on with an empty or null slice and HTTP
-    200, which reads as "that fight had no data" instead of "no such fight". Requests that name no
-    fight at all are left alone: a report-wide slice is a legitimate query, and an empty answer to
-    one is a real answer.
+    200, which reads as "that fight had no data" instead of "no such fight". Every requested fight
+    ID has to exist and match the other filters: one missing ID fails the request and is named in
+    ``error.details.missing_fight_ids``, instead of the answer silently covering only the others.
+    Requests that name no fight at all are left alone: a report-wide slice is a legitimate query,
+    and an empty answer to one is a real answer.
     """
     if not fight_ids and encounter_id is None and difficulty is None:
         return
     fights_report = client.report_fights(code=code, difficulty=difficulty, allow_unlisted=allow_unlisted)
-    fights = [row for row in list_at(fights_report, "fights") if isinstance(row, dict)]
-    if any(_fight_in_slice(row, fight_ids=fight_ids, encounter_id=encounter_id) for row in fights):
+    matching_ids = {
+        row.get("id")
+        for row in list_at(fights_report, "fights")
+        if isinstance(row, dict) and (encounter_id is None or row.get("encounterID") == encounter_id)
+    }
+    missing = [fight_id for fight_id in fight_ids or [] if fight_id not in matching_ids]
+    if matching_ids and not missing:
         return
+    scope = {"fight_ids": missing or None, "encounter_id": encounter_id, "difficulty": difficulty}
     _fail(
         ctx,
         "not_found",
-        f"Warcraft Logs report {code} has no fight matching {_described_slice(query)}.",
-        query=query,
+        f"Warcraft Logs report {code} has no fight matching {_described_slice(scope)}.",
+        details={"missing_fight_ids": missing} if missing else None,
     )
 
 
@@ -3936,7 +3931,7 @@ def auth_token(ctx: typer.Context) -> None:
 def auth_login(
     ctx: typer.Context,
     redirect_uri: str = typer.Option(..., "--redirect-uri", help="Registered redirect URI for the Warcraft Logs OAuth client."),
-    code: str | None = typer.Option(None, "--code", help="Authorization code returned by the redirect callback."),
+    authorization_code: str | None = typer.Option(None, "--code", help="Authorization code returned by the redirect callback."),
     state: str | None = typer.Option(None, "--state", help="State value returned by the redirect callback."),
     scope: list[str] = typer.Option(
         [],
@@ -3948,7 +3943,7 @@ def auth_login(
     ),
 ) -> None:
     """Start (or complete with --code) the authorization-code login that grants a user token."""
-    if not code:
+    if not authorization_code:
         _emit_authorize_step(ctx, mode="authorization_code", redirect_uri=redirect_uri, scope=scope)
         return
 
@@ -3965,7 +3960,7 @@ def auth_login(
 
     client = _client(ctx)
     try:
-        payload = client.exchange_authorization_code(code=code, redirect_uri=redirect_uri)
+        payload = client.exchange_authorization_code(code=authorization_code, redirect_uri=redirect_uri)
     except WarcraftLogsClientError as exc:
         _handle_client_error(ctx, exc)
     finally:
@@ -3977,7 +3972,7 @@ def auth_login(
 def auth_pkce_login(
     ctx: typer.Context,
     redirect_uri: str = typer.Option(..., "--redirect-uri", help="Registered redirect URI for the Warcraft Logs OAuth client."),
-    code: str | None = typer.Option(None, "--code", help="Authorization code returned by the redirect callback."),
+    authorization_code: str | None = typer.Option(None, "--code", help="Authorization code returned by the redirect callback."),
     state: str | None = typer.Option(None, "--state", help="State value returned by the redirect callback."),
     scope: list[str] = typer.Option(
         [],
@@ -3989,7 +3984,7 @@ def auth_pkce_login(
     ),
 ) -> None:
     """Start (or complete with --code) the PKCE login that grants a user token without a client secret."""
-    if not code:
+    if not authorization_code:
         _emit_authorize_step(ctx, mode="pkce", redirect_uri=redirect_uri, scope=scope)
         return
 
@@ -4013,7 +4008,7 @@ def auth_pkce_login(
 
     client = _client(ctx)
     try:
-        payload = client.exchange_pkce_code(code=code, redirect_uri=redirect_uri, code_verifier=code_verifier)
+        payload = client.exchange_pkce_code(code=authorization_code, redirect_uri=redirect_uri, code_verifier=code_verifier)
     except WarcraftLogsClientError as exc:
         _handle_client_error(ctx, exc)
     finally:
@@ -6223,7 +6218,6 @@ def _emit_report_events_slice(
             fight_ids=options.fight_ids,
             encounter_id=options.encounter_id,
             difficulty=options.difficulty,
-            query=asdict(options),
         )
         payload = client.report_events(code=code, allow_unlisted=allow_unlisted, options=options)
     except WarcraftLogsClientError as exc:
@@ -6264,7 +6258,6 @@ def _emit_report_json_slice(
             fight_ids=options.fight_ids,
             encounter_id=options.encounter_id,
             difficulty=options.difficulty,
-            query=asdict(options),
         )
         payload = (
             client.report_table(code=code, allow_unlisted=allow_unlisted, options=options)
@@ -6337,7 +6330,6 @@ def report_events(
         fight_id=fight_id,
         start_time=start_time,
         end_time=end_time,
-        query=asdict(options),
     )
     _emit_report_events_slice(ctx, code=code, allow_unlisted=allow_unlisted, options=options)
 
@@ -6519,10 +6511,18 @@ def report_player_details(
         fight_id=fight_id,
         start_time=start_time,
         end_time=end_time,
-        query=query,
     )
     client = _client(ctx)
     try:
+        _require_matching_fight(
+            ctx,
+            client,
+            code=code,
+            allow_unlisted=allow_unlisted,
+            fight_ids=fight_id,
+            encounter_id=encounter_id,
+            difficulty=difficulty,
+        )
         payload = client.report_player_details(code=code, allow_unlisted=allow_unlisted, options=options)
     except WarcraftLogsClientError as exc:
         _handle_client_error(ctx, exc)
@@ -6541,7 +6541,6 @@ def report_player_details(
             ctx,
             "not_found",
             f"Warcraft Logs report {code} has no fight matching {_described_slice(query)}, so the roster is empty.",
-            query=query,
         )
     _emit(
         ctx,
@@ -6596,7 +6595,6 @@ def report_rankings(
             fight_ids=fight_id,
             encounter_id=encounter_id,
             difficulty=difficulty,
-            query=query,
         )
         payload = client.report_rankings(code=code, allow_unlisted=allow_unlisted, options=options)
     except WarcraftLogsClientError as exc:

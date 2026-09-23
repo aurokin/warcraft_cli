@@ -461,18 +461,10 @@ def guide_query(
 ) -> Envelope:
     """Search an exported Method bundle on disk; no network access."""
     export_dir = Path(bundle_ref).expanduser()
-    # The three ways the argument can be wrong, answered exactly as ``icy-veins guide-query``
-    # answers them: a missing path is a missing target (exit 4), a file is a usage error (exit 2),
-    # and a directory with no readable manifest is the invalid_bundle that ``load_article_bundle``
-    # raises below (exit 1).
-    if not export_dir.exists():
-        raise ProviderError("not_found", f"Bundle directory not found: {export_dir}")
-    if not export_dir.is_dir():
-        raise ProviderError("invalid_argument", f"Bundle path is not a directory: {export_dir}")
     selected_kinds = set(kinds) if kinds else set(GUIDE_QUERY_KINDS)
     invalid = sorted(selected_kinds - GUIDE_QUERY_KINDS)
     if invalid:
-        raise ProviderError("invalid_kind", f"Unsupported guide-query kinds: {', '.join(invalid)}")
+        raise ProviderError("invalid_query_kind", f"Unsupported query kinds: {', '.join(invalid)}")
     section_title_filter = section_title.strip().lower() if section_title and section_title.strip() else None
     bundle = load_article_bundle(export_dir)
     payload = query_article_bundle(

@@ -204,31 +204,38 @@ def write_article_bundle(
     return manifest
 
 
-class InvalidArticleBundleError(ProviderError, ValueError):
-    """``export_dir`` is not a readable article bundle.
+class ArticleBundleError(ProviderError, ValueError):
+    """``export_dir`` cannot be read as an article bundle.
 
-    Also a ``ValueError`` so the existing per-bundle handlers in ``warcraft_cli`` keep turning one
-    bad bundle into an error row instead of aborting a whole multi-bundle comparison.
+    ``not_found`` when the path is not there, ``invalid_argument`` when it is a file, and
+    ``invalid_bundle`` when the directory is not an article bundle (no readable manifest, or no pages
+    file, as in a wowhead guide-export bundle). Also a ``ValueError`` so the per-bundle handlers in
+    ``warcraft_cli`` keep turning one bad bundle into an error row instead of aborting a comparison.
     """
-
-    def __init__(self, message: str) -> None:
-        super().__init__("invalid_bundle", message)
 
 
 def load_article_bundle(export_dir: Path) -> dict[str, Any]:
+    if not export_dir.exists():
+        raise ArticleBundleError("not_found", f"Bundle directory not found: {export_dir}")
+    if not export_dir.is_dir():
+        raise ArticleBundleError("invalid_argument", f"Bundle path is not a directory: {export_dir}")
     manifest_path = export_dir / "manifest.json"
     try:
         manifest = load_json(manifest_path)
     except (OSError, ValueError) as exc:
         # A missing manifest.json is the common case: the caller pointed at the parent of a bundle.
-        raise InvalidArticleBundleError(f"Not a readable article bundle, {manifest_path}: {exc}") from exc
+        raise ArticleBundleError("invalid_bundle", f"Not a readable article bundle, {manifest_path}: {exc}") from exc
     files = manifest.get("files") or {}
+    pages_path = export_dir / files.get("pages_jsonl", "pages.jsonl")
+    if not pages_path.is_file():
+        # Without this, every row list below loads as [] and the caller answers ok:true from nothing.
+        raise ArticleBundleError("invalid_bundle", f"Not an article bundle, no pages file: {pages_path}")
     page_files = load_json_or_default(export_dir / files.get("page_files_json", "page-files.json"), {"pages": []})
     return {
         "manifest": manifest,
         "failed_pages": _failed_page_rows(manifest),
         "page_files": list(page_files.get("pages") or []) if isinstance(page_files, dict) else [],
-        "pages": load_jsonl(export_dir / files.get("pages_jsonl", "pages.jsonl")),
+        "pages": load_jsonl(pages_path),
         "sections": load_jsonl(export_dir / files.get("sections_jsonl", "sections.jsonl")),
         "navigation": load_jsonl(export_dir / files.get("navigation_links_jsonl", "navigation-links.jsonl")),
         "linked_entities": load_jsonl(export_dir / files.get("linked_entities_jsonl", "linked-entities.jsonl")),

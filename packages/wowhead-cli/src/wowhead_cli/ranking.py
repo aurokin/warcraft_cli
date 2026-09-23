@@ -180,12 +180,6 @@ def str_field(row: dict[str, Any], key: str) -> str:
     return value if isinstance(value, str) else ""
 
 
-def int_field(row: dict[str, Any], key: str) -> int:
-    """Read an integer field from an untyped upstream record, falling back to 0."""
-    value = row.get(key)
-    return value if isinstance(value, int) else 0
-
-
 EXACT_NAME_SCORE = 30
 
 
@@ -225,9 +219,9 @@ def type_hint_score(query: str, *, entity_type: str | None) -> tuple[int, list[s
     return 0, []
 
 
-# Wowhead's suggestion response carries two orderings of the same rows. `results` is the flat list
-# its dropdown shows, ordered by the `popularity` ordinal (0 = most viewed), which puts proc spells
-# and news posts ahead of the entity a query names. `categories.database` is the relevance order the
+# Wowhead's suggestion response carries two overlapping row lists. `results` is the flat list its
+# dropdown shows, ordered by the `popularity` ordinal (0 = most viewed), which puts proc spells and
+# news posts ahead of the entity a query names. `categories.database` is the relevance order the
 # site shows for database entities, and its head row is the entity the query means. Only the leading
 # rows earn a bonus: the head bonus clears an exact name match (`exact_name` plus `name_prefix`, 40)
 # so upstream's best answer outranks a same-named secondary entity, while the step between ranks
@@ -260,6 +254,38 @@ def upstream_database_ranks(response: dict[str, Any]) -> dict[SuggestionKey, int
         if key is not None and key not in ranks:
             ranks[key] = index
     return ranks
+
+
+def merge_suggestion_lists(response: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Union Wowhead's `results` with every `categories` list, keeping one row per ``(type, id)``.
+
+    `results` is only the dropdown's ~10 rows. `categories` carries the rest of what Wowhead matched,
+    and the entity a query names is sometimes only there: Faction 529 "Argent Dawn" heads
+    `categories.database` and is absent from `results`. Each kept row is a copy of its first
+    occurrence with ``suggestion_lists`` naming every list it appeared in, and the summary reports
+    the rows each list sent and how many duplicates the merge removed.
+    """
+    categories = response.get("categories")
+    lists = [("results", response.get("results")), *(categories.items() if isinstance(categories, dict) else ())]
+    merged: dict[tuple[int | str, int], dict[str, Any]] = {}
+    list_rows: dict[str, int] = {}
+    for list_name, rows in lists:
+        if not isinstance(rows, list):
+            continue
+        dict_rows = [row for row in rows if isinstance(row, dict)]
+        list_rows[list_name] = len(dict_rows)
+        for index, row in enumerate(dict_rows):
+            kept = merged.setdefault(suggestion_key(row) or (list_name, index), {**row, "suggestion_lists": []})
+            kept["suggestion_lists"].append(list_name)
+    received = sum(list_rows.values())
+    summary = {
+        "rule": "one row per Wowhead (type, id) across `results` and every `categories` list",
+        "list_rows": list_rows,
+        "rows_received": received,
+        "unique_rows": len(merged),
+        "duplicates_merged": received - len(merged),
+    }
+    return list(merged.values()), summary
 
 
 def database_rank_score(database_rank: int | None, *, entity_type: str | None) -> tuple[int, list[str]]:
@@ -390,7 +416,7 @@ def normalize_search_results(
         if selected_entity_types and entity_type not in selected_entity_types:
             continue
         entity_id = row.get("id")
-        popularity = int_field(row, "popularity")
+        popularity = row.get("popularity")
         updated = suggestion_updated_date(row)
         key = suggestion_key(row)
         search_score, match_reasons = search_result_score_and_reasons(
@@ -415,15 +441,17 @@ def normalize_search_results(
                 "match_reasons": match_reasons,
             },
             "metadata": {
-                "popularity": popularity,
+                # Only `results` rows carry the ordinal; a row that came from `categories` has none.
+                "popularity": popularity if isinstance(popularity, int) else None,
+                "suggestion_lists": row.get("suggestion_lists"),
                 "icon": row.get("icon"),
                 "quality": row.get("quality"),
                 "side": row.get("side"),
                 "display_name": row.get("displayName"),
                 "updated": updated.isoformat() if updated is not None else None,
             },
-            # `popularity` is upstream's ordinal, already the order `results` arrives in, so the
-            # source index is the tiebreak; ranking on the ordinal itself preferred the worse row.
+            # The source index is the tiebreak: `results` rows first, in Wowhead's `popularity`
+            # order, then the category-only rows in the order Wowhead listed them.
             "_sort": (-search_score, index),
         }
         follow_up = search_follow_up(candidate, query=query, expansion=expansion)

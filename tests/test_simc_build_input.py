@@ -27,7 +27,6 @@ from simc_cli.build_input import (
     normalize_talents_input,
     parse_debug_talents,
     parse_wowhead_talent_calc_ref,
-    supported_specs,
     tokenize_talent_name,
     tree_entries_string,
 )
@@ -334,6 +333,12 @@ def test_load_build_spec_reads_the_blizzard_talent_calc_url_modify_build_publish
     assert spec.actor_class is None and spec.spec is None
 
 
+def test_load_build_spec_reads_the_blizzard_talent_calc_path_only_on_wowhead() -> None:
+    """A look-alike host is not Wowhead, so its /talent-calc/blizzard/<hash> is no build reference."""
+    with pytest.raises(UnsupportedBuildReference):
+        _loaded(build_text="https://notwowhead.com/talent-calc/blizzard/C4QAAAAA")
+
+
 def test_load_build_spec_rejects_a_page_url_instead_of_treating_it_as_a_hash() -> None:
     """A guide URL reached SimC as a talent hash, so the envelope blamed the build."""
     with pytest.raises(UnsupportedBuildReference) as excinfo:
@@ -353,7 +358,7 @@ GUIDE_BUILD_REFERENCES = [
 
 @pytest.mark.parametrize("reference", GUIDE_BUILD_REFERENCES)
 def test_a_guide_build_reference_reads_as_a_wow_talent_export(reference: str) -> None:
-    """Guide references carry the talents but no identity, so decoding them needs --actor-class/--spec."""
+    """Guide references carry the talents but no identity; the SimC probe or --actor-class/--spec supplies it."""
     spec = _loaded(build_text=reference)
 
     assert (spec.talents, spec.source_kind) == (reference, "wow_talent_export")
@@ -890,24 +895,26 @@ def test_decode_build_removes_the_profile_directory_it_wrote(tmp_path: Path) -> 
     assert written and not written[0].parent.exists()
 
 
-def test_supported_specs_collects_unique_apl_specs(tmp_path: Path) -> None:
-    default_dir = tmp_path / "default"
-    assisted_dir = tmp_path / "assisted"
-    default_dir.mkdir()
-    assisted_dir.mkdir()
-    (default_dir / "demonhunter_devourer.simc").write_text("")
-    (assisted_dir / "demonhunter_devourer.simc").write_text("")
-    (default_dir / "warlock_demonology.simc").write_text("")
-    repo = RepoPaths(
-        root=tmp_path,
-        apl_default=default_dir,
-        apl_assisted=assisted_dir,
-        class_modules=tmp_path,
-        spell_dump=tmp_path,
-        build_dir=tmp_path,
-        build_simc=tmp_path / "simc",
-    )
-    assert supported_specs(repo) == [("demonhunter", "devourer"), ("warlock", "demonology")]
+def test_identify_build_probes_healer_specs_that_ship_no_apl(tmp_path: Path) -> None:
+    """The probe draws on SimC's specialization data, not on APL files, so a healer build identifies."""
+    repo = _repo(tmp_path)
+    generated = tmp_path / "engine" / "dbc" / "generated"
+    generated.mkdir(parents=True)
+    (generated / "sc_specialization_data.inc").write_text("  PALADIN_HOLY = 65,\n  PALADIN_RETRIBUTION = 70,\n")
+    tried: list[tuple[str | None, str | None]] = []
+
+    def fake_decode(_repo: RepoPaths, build_spec: BuildSpec) -> Any:
+        tried.append((build_spec.actor_class, build_spec.spec))
+        if build_spec.spec != "holy":
+            raise RuntimeError("Selected node is not available to player's spec")
+        return type("Resolution", (), {"enabled_talents": {"holy_shock"}})()
+
+    with patch("simc_cli.build_input.decode_build", side_effect=fake_decode):
+        identified, identity = identify_build(repo, BuildSpec(talents="HOLY_EXPORT", source_kind="wow_talent_export"))
+
+    assert tried == [("paladin", "holy"), ("paladin", "retribution")]
+    assert (identified.actor_class, identified.spec) == ("paladin", "holy")
+    assert (identity.source, identity.confidence) == ("simc_probe", "high")
 
 
 def test_identify_build_uses_direct_metadata_without_probe(tmp_path: Path) -> None:
@@ -920,17 +927,17 @@ def test_identify_build_uses_direct_metadata_without_probe(tmp_path: Path) -> No
     assert identity.confidence == "high"
 
 
-def test_identify_build_probes_supported_specs(tmp_path: Path) -> None:
+def test_identify_build_keeps_the_one_spec_the_build_decodes_as(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     build_spec = BuildSpec(talents="ABC123", source_kind="wow_talent_export")
 
     with (
-        patch("simc_cli.build_input.supported_specs", return_value=[("monk", "mistweaver"), ("demonhunter", "devourer")]),
+        patch("simc_cli.build_input.specialization_ids", return_value={("demonhunter", "devourer"): 1480, ("monk", "mistweaver"): 270}),
         patch("simc_cli.build_input.decode_build") as mocked_decode,
     ):
         mocked_decode.side_effect = [
-            RuntimeError("failed"),
             type("Resolution", (), {"enabled_talents": {"void_ray"}})(),
+            RuntimeError("failed"),
         ]
         identified, identity = identify_build(repo, build_spec)
 
@@ -954,12 +961,12 @@ def test_identify_build_probes_simc_split_talent_packets_instead_of_trusting_pac
     )
 
     with (
-        patch("simc_cli.build_input.supported_specs", return_value=[("monk", "mistweaver"), ("druid", "balance")]),
+        patch("simc_cli.build_input.specialization_ids", return_value={("druid", "balance"): 102, ("monk", "mistweaver"): 270}),
         patch("simc_cli.build_input.decode_build") as mocked_decode,
     ):
         mocked_decode.side_effect = [
-            RuntimeError("failed"),
             type("Resolution", (), {"enabled_talents": {"stellar_flare"}})(),
+            RuntimeError("failed"),
         ]
         identified, identity = identify_build(repo, build_spec)
 
@@ -975,7 +982,7 @@ def test_identify_build_returns_none_when_probe_finds_no_matches(tmp_path: Path)
     build_spec = BuildSpec(talents="ABC123", source_kind="wow_talent_export")
 
     with (
-        patch("simc_cli.build_input.supported_specs", return_value=[("monk", "mistweaver"), ("demonhunter", "devourer")]),
+        patch("simc_cli.build_input.specialization_ids", return_value={("demonhunter", "devourer"): 1480, ("monk", "mistweaver"): 270}),
         patch("simc_cli.build_input.decode_build", side_effect=RuntimeError("failed")),
     ):
         identified, identity = identify_build(repo, build_spec)
@@ -991,19 +998,19 @@ def test_identify_build_reports_ambiguous_probe_matches(tmp_path: Path) -> None:
     build_spec = BuildSpec(talents="ABC123", source_kind="wow_talent_export")
 
     with (
-        patch("simc_cli.build_input.supported_specs", return_value=[("monk", "mistweaver"), ("demonhunter", "devourer")]),
+        patch("simc_cli.build_input.specialization_ids", return_value={("demonhunter", "devourer"): 1480, ("monk", "mistweaver"): 270}),
         patch("simc_cli.build_input.decode_build") as mocked_decode,
     ):
         mocked_decode.side_effect = [
-            type("Resolution", (), {"enabled_talents": {"ancient_teachings"}})(),
             type("Resolution", (), {"enabled_talents": {"void_ray"}})(),
+            type("Resolution", (), {"enabled_talents": {"ancient_teachings"}})(),
         ]
         identified, identity = identify_build(repo, build_spec)
 
     assert identified.actor_class is None
     assert identified.spec is None
     assert identity.confidence == "low"
-    assert identity.candidates == [("monk", "mistweaver"), ("demonhunter", "devourer")]
+    assert identity.candidates == [("demonhunter", "devourer"), ("monk", "mistweaver")]
 
 
 def test_identify_build_does_not_echo_unverified_packet_identity_when_probe_fails(tmp_path: Path) -> None:
@@ -1019,7 +1026,7 @@ def test_identify_build_does_not_echo_unverified_packet_identity_when_probe_fail
     )
 
     with (
-        patch("simc_cli.build_input.supported_specs", return_value=[("priest", "shadow"), ("druid", "balance")]),
+        patch("simc_cli.build_input.specialization_ids", return_value={("druid", "balance"): 102, ("priest", "shadow"): 258}),
         patch("simc_cli.build_input.decode_build", side_effect=RuntimeError("failed")),
     ):
         identified, identity = identify_build(repo, build_spec)
@@ -1045,7 +1052,7 @@ def test_identify_build_preserves_apl_inferred_scope_for_wow_export_probe(tmp_pa
     )
 
     with (
-        patch("simc_cli.build_input.supported_specs", return_value=[("priest", "shadow"), ("druid", "balance")]),
+        patch("simc_cli.build_input.specialization_ids", return_value={("druid", "balance"): 102, ("priest", "shadow"): 258}),
         patch("simc_cli.build_input.decode_build") as mocked_decode,
     ):
         mocked_decode.side_effect = [

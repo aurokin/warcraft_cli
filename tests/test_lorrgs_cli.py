@@ -175,7 +175,7 @@ def test_doctor_reports_lorrgs_capabilities() -> None:
     assert payload["capabilities"]["comp_ranking"] == "ready"
     assert payload["capabilities"]["search"] == "ready"
     assert payload["capabilities"]["resolve"] == "ready"
-    assert payload["capabilities"]["report_overview"] == "ready"
+    assert payload["data"]["capabilities"]["report_overview"] == "ready_cached_only"
     assert payload["capabilities"]["current_season"] == "ready"
 
 

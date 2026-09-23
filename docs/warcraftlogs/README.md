@@ -91,8 +91,9 @@ answers: `--fight-id`, or both `--start-time` and `--end-time`. Anything wider f
 
 A well-formed slice that matches no fight — an unknown `--fight-id`, an `--encounter-id` or
 `--difficulty` the report never pulled — makes `report-events`, `report-table`, `report-graph`,
-`report-rankings`, and `report-player-details` fail with `not_found` (exit 4). The rejected slice
-is echoed in the failure envelope's `query`, not just in the message. A request that names no fight
+`report-rankings`, and `report-player-details` fail with `not_found` (exit 4). Every listed
+`--fight-id` has to exist: `--fight-id 1 --fight-id 9999` fails rather than answering for fight 1
+alone, and `error.details.missing_fight_ids` names the ones that did not match. A request that names no fight
 at all (a window, or the whole report) is left alone: an empty answer to it is a real answer.
 `report-player-details` additionally fails when its window matches no fight, because a fight
 Warcraft Logs has always returns a roster.
@@ -127,7 +128,10 @@ deprecated. Use `--fields` or `--compact` to bound large report payloads.
 
 Failures print the error envelope to stderr and exit with the shared codes: `1` generic, `2` usage
 or invalid query, `3` auth, `4` not found, `5` network or upstream. A transport failure is always
-an error envelope, never a traceback.
+an error envelope, never a traceback. A failure's `query` is the command's parsed parameters
+(`{"reference": "abcd1234", "fight_id": 9999, ...}`), so the rejected input is machine-readable;
+the `auth login` / `auth pkce-login` authorization code is never echoed. `auth` subcommands are
+labelled by their full path (`"command": "auth status"`) on success and failure alike.
 
 Rejected input exits `2`: `missing_boss`, `missing_query`, `missing_scope`, `missing_spec`,
 `invalid_query`, `invalid_variables`, `ambiguous_boss`, `boss_scope_mismatch`, and the OAuth
@@ -154,11 +158,17 @@ can come from cache. `freshness.cache_hit_count`, `freshness.upstream_request_co
 sample is scanned, so a wrong id fails with `not_found` (exit 4) instead of returning `count: 0`.
 
 When two raiders in one group each upload the pull, Warcraft Logs holds it as two reports. Those
-are collapsed into one sampled kill: same encounter, difficulty, raid size and guild, with
-wall-clock start *and* end within 5 s of each other. The collapse is reported, never silent —
-`sample.duplicates_removed` counts it, a note states the rule, and the kept kill's
-`duplicate_reports` cites the report codes and fight ids that were folded in. A fight whose
-absolute window cannot be computed is always kept.
+are collapsed into one sampled kill: same guild id, encounter, difficulty and raid size, with
+wall-clock start *and* end within 5 s of the latest fight already in the cluster. Fights are
+clustered in start order, so the result does not depend on report listing order, and the
+earliest-starting report represents the pull. The collapse is reported, never silent —
+`sample.duplicates_removed` counts it, every sampled command adds a note stating the rule, and the
+kept kill's `duplicate_reports` cites the report codes and fight ids that were folded in.
+
+Warcraft Logs has no cross-report pull id, and timing alone cannot tell two unrelated personal
+logs apart, so a fight from a report with no guild is never collapsed; neither is a guild upload
+merged with a personal upload of the same pull. Such a pull can therefore count twice. A fight
+whose absolute window cannot be computed is always kept.
 
 `ability-usage-summary` requests at most `--event-limit` cast events per sampled kill. Kills that
 overflow that page are counted in `sample.kills_with_truncated_events_count`, and

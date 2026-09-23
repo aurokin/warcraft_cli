@@ -129,7 +129,8 @@ def _json_stdout(result: Result) -> dict[str, Any]:
     the envelope keys ``run()`` validates."""
     assert result.exit_code == 0, result.describe()
     assert "Traceback" not in result.stderr, result.describe()
-    return json.loads(result.stdout)
+    payload: dict[str, Any] = json.loads(result.stdout)
+    return payload
 
 
 @pytest.mark.parametrize("binary", BINARIES)
@@ -231,18 +232,12 @@ def test_compact_truncates_long_strings_and_never_grows_the_payload(binary: str,
     assert not too_long, f"{binary} --compact left strings longer than {COMPACT_MAX_CHARS}: {too_long[:3]}"
 
     # "No string is too long" also holds when --compact is ignored on a doctor that has no long
-    # string, so the flag only counts as exercised when something was actually cut: the payload
-    # shrinks and the cut strings say so with an ellipsis.
-    full_strings = _strings(full.payload)
-    over_limit = [text for text in full_strings if len(text) > COMPACT_MAX_CHARS]
-    if over_limit:
-        assert len(compact.stdout) < len(full.stdout), compact.describe()
-        assert any(text.endswith("...") for text in compact_strings), compact.describe()
-    else:
-        # Nothing was long enough to cut, so --compact must have cut nothing.
-        assert [text for text in compact_strings if text.endswith("...")] == [
-            text for text in full_strings if text.endswith("...")
-        ], compact.describe()
+    # string, so every doctor must carry one (each reports a cache path, a repo path, or a note past the
+    # limit) and the cut has to show: the payload shrinks and the cut strings end in an ellipsis.
+    over_limit = [text for text in _strings(full.payload) if len(text) > COMPACT_MAX_CHARS]
+    assert over_limit, f"{binary} doctor has no string over {COMPACT_MAX_CHARS} chars, so --compact cannot be observed"
+    assert len(compact.stdout) < len(full.stdout), compact.describe()
+    assert any(text.endswith("...") for text in compact_strings), compact.describe()
 
 
 @pytest.mark.parametrize("binary", BINARIES)

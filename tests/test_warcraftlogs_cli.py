@@ -5,6 +5,7 @@ import json
 import os
 import re
 import time
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, NoReturn
 
@@ -186,7 +187,7 @@ class _FakeWarcraftLogsClient:
             "zone": {"id": 38, "name": "Manaforge Omega", "expansion": {"id": 12, "name": "Midnight"}},
         }
 
-    def encounter_rankings(self, *, encounter_id: int, options: object) -> dict[str, object]:
+    def encounter_rankings(self, *, encounter_id: int, options: EncounterRankingsOptions) -> dict[str, object]:
         assert encounter_id == 3012
         assert options.bracket == 1
         assert options.difficulty == 5
@@ -1665,7 +1666,9 @@ def test_warcraftlogs_auth_status_reports_shared_state_summary(monkeypatch) -> N
 
     payload = json.loads(result.stdout)
     # `auth status` is not in the payload-key registry, so it gets envelope keys but no canonical body.
-    assert payload["command"] == "status"
+    # Its label is the full path, the same one its failures carry.
+    assert payload["command"] == "auth status"
+    assert payload["kind"] == "status"
     assert payload["schema_version"] == "1"
     assert "deprecated_keys" not in payload
     assert payload["auth"]["configured"] is True
@@ -2711,8 +2714,37 @@ class _DoubleLoggedCohortClient(_FakeWarcraftLogsClient):
         report = next(row for row in self.COHORT if row["code"] == code)
         return {"code": code, "endTime": report["endTime"], "fights": report["fights"]}
 
+    # Every sampled kill reuses the base fake's fight-1 roster and casts.
+    def report_player_details(
+        self,
+        *,
+        code: str,
+        allow_unlisted: bool = False,
+        options: ReportPlayerDetailsOptions,
+        ttl_override: int | None = None,
+    ) -> dict[str, object]:
+        return super().report_player_details(
+            code="abcd1234", allow_unlisted=allow_unlisted, options=replace(options, fight_ids=[1]), ttl_override=ttl_override
+        )
 
-def test_warcraftlogs_boss_kills_collapses_one_pull_logged_in_two_reports(monkeypatch) -> None:
+    def report_events(self, *, code: str, allow_unlisted: bool = False, options: ReportFilterOptions) -> dict[str, object]:
+        return super().report_events(code="abcd1234", allow_unlisted=allow_unlisted, options=replace(options, fight_ids=[1]))
+
+    def report_master_data(
+        self,
+        *,
+        code: str,
+        allow_unlisted: bool = False,
+        translate: bool | None = None,
+        actor_type: str | None = None,
+        actor_sub_type: str | None = None,
+    ) -> dict[str, object]:
+        return super().report_master_data(
+            code="abcd1234", allow_unlisted=allow_unlisted, translate=translate, actor_type=actor_type, actor_sub_type=actor_sub_type
+        )
+
+
+def test_warcraftlogs_boss_kills_collapses_one_pull_logged_in_two_reports(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _DoubleLoggedCohortClient())
 
     result = runner.invoke(
@@ -2754,8 +2786,61 @@ def test_deduplicate_pulls_keeps_two_guilds_that_pulled_at_the_same_time() -> No
 
     pulls = deduplicate_pulls([(liquid, fight), (echo, fight)])
 
-    assert [pull.report["code"] for pull in pulls] == ["liquid01", "echo0001"]
+    # Same start, so the report code breaks the tie.
+    assert [pull.report["code"] for pull in pulls] == ["echo0001", "liquid01"]
     assert all(pull.duplicates == [] for pull in pulls)
+
+
+def test_deduplicate_pulls_keeps_same_start_pulls_that_ended_apart() -> None:
+    from warcraftlogs_cli.boss_kills import deduplicate_pulls
+
+    # Same guild and same start, but one fight ran 30 s longer: the end time alone separates them.
+    first = _double_logged_report(code="dupea001", report_start=1_000_000, fights=[])
+    second = _double_logged_report(code="dupeb002", report_start=1_000_000, fights=[])
+
+    pulls = deduplicate_pulls(
+        [
+            (first, _kill_fight(fight_id=9, start=10_000, end=644_437)),
+            (second, _kill_fight(fight_id=11, start=10_000, end=674_437)),
+        ]
+    )
+
+    assert [pull.duplicates for pull in pulls] == [[], []]
+
+
+def test_deduplicate_pulls_does_not_depend_on_listing_order() -> None:
+    from itertools import permutations
+
+    from warcraftlogs_cli.boss_kills import deduplicate_pulls
+
+    # Three uploaders of one pull whose logs started 0, 4 and 8 s apart.
+    uploads = [
+        (_double_logged_report(code=f"upload0{offset}", report_start=1_000_000 + offset * 1000, fights=[]),
+         _kill_fight(fight_id=1, start=10_000, end=644_437))
+        for offset in (0, 4, 8)
+    ]
+
+    for ordering in permutations(uploads):
+        pulls = deduplicate_pulls(ordering)
+        assert [pull.report["code"] for pull in pulls] == ["upload00"]
+        assert pulls[0].duplicates == [
+            {"report_code": "upload04", "fight_id": 1},
+            {"report_code": "upload08", "fight_id": 1},
+        ]
+
+
+def test_deduplicate_pulls_never_merges_guildless_logs_on_timing_alone() -> None:
+    from warcraftlogs_cli.boss_kills import deduplicate_pulls
+
+    fight = _kill_fight(fight_id=9, start=10_000, end=644_437)
+    personal = [
+        {**_double_logged_report(code=code, report_start=1_000_000, fights=[fight]), "guild": None}
+        for code in ("solo0001", "solo0002")
+    ]
+
+    pulls = deduplicate_pulls([(report, fight) for report in personal])
+
+    assert [pull.duplicates for pull in pulls] == [[], []]
 
 
 def test_spec_filtered_kill_samples_payload_surfaces_truncation_bias() -> None:
@@ -3122,7 +3207,7 @@ def test_warcraftlogs_encounter_rankings_derives_page_offset_ranks(monkeypatch) 
 
 def test_warcraftlogs_encounter_rankings_surfaces_embedded_provider_errors(monkeypatch) -> None:
     class _RankingErrorClient(_FakeWarcraftLogsClient):
-        def encounter_rankings(self, *, encounter_id: int, options: object) -> dict[str, object]:
+        def encounter_rankings(self, *, encounter_id: int, options: EncounterRankingsOptions) -> dict[str, object]:
             assert encounter_id == 3012
             assert options.class_name == "Hunter"
             assert options.spec_name == "Marksmanship"
@@ -4710,24 +4795,20 @@ def test_warcraftlogs_guild_attendance_surfaces_partial_warnings_as_notes(monkey
     assert any("partial errors" in note for note in payload["notes"])
 
 
-def test_warcraftlogs_emit_helper_folds_client_warnings_into_payload() -> None:
+def test_warcraftlogs_emit_helper_folds_client_warnings_into_payload(monkeypatch: pytest.MonkeyPatch) -> None:
     from warcraftlogs_cli import main as wcl_main
 
     class _WarningClient:
         last_warnings = [{"message": "internal server error", "path": ["report", "table"]}]
 
-    captured: dict[str, object] = {}
-    original_emit = wcl_main.emit
+    captured: dict[str, dict[str, Any]] = {}
 
     def _capture(ctx: typer.Context, payload: dict[str, Any], *, err: bool = False) -> None:
         captured["payload"] = payload
 
-    wcl_main.emit = _capture
-    try:
-        ctx = type("Ctx", (), {"obj": wcl_main.RuntimeConfig(), "command": None})()
-        wcl_main._emit(ctx, {"ok": True, "kind": "x"}, client=_WarningClient())
-    finally:
-        wcl_main.emit = original_emit
+    monkeypatch.setattr(wcl_main, "emit", _capture)
+    ctx = typer.Context(typer.main.get_command(warcraftlogs_app), obj=wcl_main.RuntimeConfig())
+    wcl_main._emit(ctx, {"ok": True, "kind": "x"}, client=_WarningClient())
 
     payload = captured["payload"]
     assert payload["ok"] is True
@@ -4735,24 +4816,20 @@ def test_warcraftlogs_emit_helper_folds_client_warnings_into_payload() -> None:
     assert any("partial errors" in note for note in payload["notes"])
 
 
-def test_warcraftlogs_emit_helper_passes_payload_through_when_no_warnings() -> None:
+def test_warcraftlogs_emit_helper_passes_payload_through_when_no_warnings(monkeypatch: pytest.MonkeyPatch) -> None:
     from warcraftlogs_cli import main as wcl_main
 
     class _CleanClient:
         last_warnings: list[dict] = []
 
-    captured: dict[str, object] = {}
-    original_emit = wcl_main.emit
+    captured: dict[str, dict[str, Any]] = {}
 
     def _capture(ctx: typer.Context, payload: dict[str, Any], *, err: bool = False) -> None:
         captured["payload"] = payload
 
-    wcl_main.emit = _capture
-    try:
-        ctx = type("Ctx", (), {"obj": wcl_main.RuntimeConfig(), "command": None})()
-        wcl_main._emit(ctx, {"ok": True, "kind": "x"}, client=_CleanClient())
-    finally:
-        wcl_main.emit = original_emit
+    monkeypatch.setattr(wcl_main, "emit", _capture)
+    ctx = typer.Context(typer.main.get_command(warcraftlogs_app), obj=wcl_main.RuntimeConfig())
+    wcl_main._emit(ctx, {"ok": True, "kind": "x"}, client=_CleanClient())
 
     payload = captured["payload"]
     # No client warnings to fold in, so the only additions are the shared envelope keys.
@@ -6701,6 +6778,9 @@ def test_warcraftlogs_auth_login_rejects_mismatched_callback_state(monkeypatch, 
     payload = json.loads(result.stderr)
     assert payload["ok"] is False
     assert payload["error"]["code"] == "state_mismatch"
+    # The failure names the callback it rejected, but never echoes the authorization code.
+    assert payload["query"]["state"] == "attacker-state"
+    assert "code-123" not in result.stderr
 
 
 def test_warcraftlogs_auth_login_rejects_missing_callback_state(monkeypatch, tmp_path) -> None:
@@ -7244,55 +7324,99 @@ def test_warcraftlogs_report_player_details_rejects_a_slice_that_matches_no_figh
     assert scope_args[-1] in error["message"]
 
 
-# Every raw report slice that names a fight. The report has fights 1 and 2, both encounter 3012.
+# Every report slice that takes a --fight-id list. The report has fights 1 and 2 (encounter 3012)
+# and fight 3 (encounter 3002).
 @pytest.mark.parametrize(
-    "args",
+    ("args", "missing"),
     [
-        ["report-events", "abcd1234", "--data-type", "casts", "--fight-id", "9999"],
-        ["report-events", "abcd1234", "--data-type", "casts", "--fight-id", "1", "--encounter-id", "3129"],
-        ["report-table", "abcd1234", "--fight-id", "9999"],
-        ["report-graph", "abcd1234", "--fight-id", "9999"],
-        ["report-rankings", "abcd1234", "--fight-id", "9999"],
+        (["report-events", "abcd1234", "--data-type", "casts", "--fight-id", "9999"], [9999]),
+        (["report-events", "abcd1234", "--data-type", "casts", "--fight-id", "1", "--encounter-id", "3129"], [1]),
+        (["report-events", "abcd1234", "--data-type", "casts", "--fight-id", "1", "--fight-id", "9999"], [9999]),
+        (["report-table", "abcd1234", "--fight-id", "9999"], [9999]),
+        (["report-graph", "abcd1234", "--fight-id", "1", "--fight-id", "9999"], [9999]),
+        (["report-rankings", "abcd1234", "--fight-id", "9999"], [9999]),
+        (["report-player-details", "abcd1234", "--fight-id", "1", "--fight-id", "9999"], [9999]),
     ],
 )
-def test_warcraftlogs_raw_report_slices_reject_a_fight_the_report_does_not_have(
+def test_warcraftlogs_report_slices_reject_any_fight_the_report_does_not_have(
     monkeypatch: pytest.MonkeyPatch,
     args: list[str],
+    missing: list[int],
 ) -> None:
-    # Warcraft Logs answers an unknown fight with an empty slice and HTTP 200, which reads as
-    # "that fight had no events/table/graph/rankings" instead of "no such fight".
+    # Warcraft Logs answers an unknown fight with an empty slice and HTTP 200, and answers a list
+    # holding one real fight with that fight alone; either reads as "no data" for the missing one.
     monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _FakeWarcraftLogsClient())
 
     result = runner.invoke(warcraftlogs_app, args)
 
     assert result.exit_code == 4
+    assert result.stdout == ""
     envelope = json.loads(result.stderr)
     assert envelope["error"]["code"] == "not_found"
     assert "abcd1234" in envelope["error"]["message"]
-    # The rejected slice is machine-readable, not only spelled out in the message.
-    assert envelope["query"]["fight_ids"] == [int(args[args.index("--fight-id") + 1])]
+    assert envelope["error"]["details"] == {"missing_fight_ids": missing}
+    # The request is echoed as parsed, so the rejected slice is machine-readable.
+    requested = [int(value) for flag, value in zip(args, args[1:], strict=False) if flag == "--fight-id"]
+    assert envelope["query"]["fight_id"] == requested
 
 
-def test_warcraftlogs_report_wide_slice_costs_no_fight_lookup() -> None:
-    import warcraftlogs_cli.main as warcraftlogs_main
-
+def test_warcraftlogs_report_wide_slice_costs_no_fight_lookup(monkeypatch: pytest.MonkeyPatch) -> None:
     # A slice that names no fight (a window, or the whole report) has nothing to be checked
     # against, and an empty answer to it is a real answer.
-    class _NoFightsClient:
-        def report_fights(self, **kwargs: object) -> dict[str, object]:
+    class _NoFightLookupClient(_FakeWarcraftLogsClient):
+        def report_fights(
+            self,
+            *,
+            code: str,
+            difficulty: int | None = None,
+            allow_unlisted: bool = False,
+            ttl_override: int | None = None,
+        ) -> dict[str, object]:
             raise AssertionError("a report-wide slice must not cost a fight lookup")
 
-    ctx = typer.Context(typer.main.get_command(warcraftlogs_app), info_name="report-events")
-    warcraftlogs_main._require_matching_fight(
-        ctx,
-        _NoFightsClient(),
-        code="abcd1234",
-        allow_unlisted=False,
-        fight_ids=None,
-        encounter_id=None,
-        difficulty=None,
-        query={"start_time": 100.0, "end_time": 900.0},
+        def report_events(self, *, code: str, allow_unlisted: bool = False, options: ReportFilterOptions) -> dict[str, object]:
+            return {"code": code, "events": {"data": []}}
+
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _NoFightLookupClient())
+
+    result = runner.invoke(
+        warcraftlogs_app,
+        ["report-events", "abcd1234", "--data-type", "casts", "--start-time", "100", "--end-time", "900"],
     )
+
+    assert result.exit_code == 0, result.output
+
+
+_REPORT = {"reference": "abcd1234"}
+
+
+@pytest.mark.parametrize(
+    ("args", "code", "echoed"),
+    [
+        (["report-encounter", "abcd1234", "--fight-id", "9999"], "not_found", {**_REPORT, "fight_id": 9999}),
+        (["report-encounter-players", "abcd1234", "--fight-id", "9999"], "not_found", {**_REPORT, "fight_id": 9999}),
+        (["report-encounter-casts", "abcd1234", "--fight-id", "9999"], "not_found", {**_REPORT, "fight_id": 9999}),
+        (["report-encounter-damage-breakdown", "abcd1234", "--fight-id", "9999"], "not_found", {**_REPORT, "fight_id": 9999}),
+        (["report-player-talents", "abcd1234", "--fight-id", "9999", "--actor-id", "9"], "not_found", {**_REPORT, "fight_id": 9999}),
+        (["report-player-talents", "abcd1234", "--fight-id", "1", "--actor-id", "4242"], "not_found", {**_REPORT, "actor_id": 4242}),
+        (["zone", "99999"], "not_found", {"zone_id": 99999}),
+        (["boss-kills", "--zone-id", "38"], "missing_boss", {"zone_id": 38}),
+    ],
+)
+def test_warcraftlogs_failures_name_the_input_they_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+    args: list[str],
+    code: str,
+    echoed: dict[str, object],
+) -> None:
+    # Local guards, encounter-scope lookups and client errors all put the parsed input on the envelope.
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _WorldDataAwareClient())
+
+    result = runner.invoke(warcraftlogs_app, args)
+
+    envelope = json.loads(result.stderr)
+    assert envelope["error"]["code"] == code
+    assert {key: envelope["query"][key] for key in echoed} == echoed
 
 
 def test_warcraftlogs_missing_scope_error_names_the_slice_it_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -7330,6 +7454,25 @@ _SAMPLED_COMMAND_ARGS = {
     "spec-kill-samples": ["--spec-name", "Protection"],
     "top-kills": ["--top", "1"],
 }
+
+
+@pytest.mark.parametrize("command", sorted(_SAMPLED_COMMAND_ARGS))
+def test_warcraftlogs_every_sampled_command_reports_collapsed_pulls(
+    monkeypatch: pytest.MonkeyPatch,
+    command: str,
+) -> None:
+    # One pull logged in two reports must count once and say so, whichever summary is built on it.
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _DoubleLoggedCohortClient())
+
+    result = runner.invoke(
+        warcraftlogs_app,
+        [command, "--zone-id", "38", "--boss-id", "3012", *_SAMPLED_COMMAND_ARGS[command]],
+    )
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.stdout)["data"]
+    assert data["sample"]["duplicates_removed"] == 1
+    assert any("collapsed into one kill" in note for note in data["notes"])
 
 
 @pytest.mark.parametrize(

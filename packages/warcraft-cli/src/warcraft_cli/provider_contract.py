@@ -22,7 +22,9 @@ DEFAULT_WRAPPER_RANKING_POLICY: dict[str, Any] = {
         "lorrgs": "logs",
         "simc": "local_tool",
     },
-    "known_region_terms": ["us", "eu", "kr", "tw", "cn", "world"],
+    # Raider.IO profile regions. `world` is a leaderboard scope, not a region a profile lives in, and
+    # counting it made `world boss sha of anger` read as a profile lookup.
+    "known_region_terms": ["us", "eu", "kr", "tw", "cn"],
     "structured_profile_second_token_blocklist": ["of", "the", "warcraft", "wiki", "api", "guide", "guides", "article", "articles"],
     "intent_keywords": {
         "guide": ["guide", "guides", "build", "builds", "rotation", "talent", "talents", "bis"],
@@ -259,8 +261,10 @@ def query_intents(query: str) -> list[str]:
         if tokens & keywords:
             intents.add(intent)
     ordered_tokens = [token for token in normalized.split() if token]
+    # The structured shape is exactly `<region> <realm> <name>`; a longer query that merely starts
+    # with a region-like word is free text.
     if (
-        len(ordered_tokens) >= 3
+        len(ordered_tokens) == 3
         and ordered_tokens[0] in policy["known_region_terms"]
         and ordered_tokens[1] not in policy["structured_profile_second_token_blocklist"]
     ):
@@ -529,44 +533,67 @@ def search_result_sort_key(row: Mapping[str, Any]) -> tuple[int, int, int, int, 
     return (anchor_rank, int(row_is_off_intent(row)), -wrapper_score, -score, provider, name, identifier)
 
 
+def _capped_rows(
+    rows: Sequence[Mapping[str, Any]], *, room: int, per_provider_cap: int
+) -> tuple[list[Mapping[str, Any]], list[Mapping[str, Any]]]:
+    """Fill ``room`` slots in rank order with at most ``per_provider_cap`` rows per provider."""
+    taken: list[Mapping[str, Any]] = []
+    deferred: list[Mapping[str, Any]] = []
+    counts: dict[str, int] = {}
+    for row in rows:
+        provider = str(row.get("provider") or "")
+        if len(taken) < room and counts.get(provider, 0) < per_provider_cap:
+            taken.append(row)
+            counts[provider] = counts.get(provider, 0) + 1
+        else:
+            deferred.append(row)
+    return taken, deferred
+
+
+def _reserves_profile_slot(ordered: Sequence[Mapping[str, Any]], *, limit: int) -> bool:
+    """Whether a bare name that is exactly a character's or guild's name keeps one profile row.
+
+    A bare name is ambiguous. When an entity title matches it exactly (the page is anchored) the
+    name is that entity's; otherwise an exact-name profile row may be what the user meant, and the
+    wiki's full-text search always has rows to crowd it out. One slot, never a majority.
+    """
+    if limit < 3 or any(_wrapper_ranking(row).get("anchor") for row in ordered):
+        return False
+    return any(row_is_off_intent(row) and _wrapper_ranking(row).get("name_match") == "exact" for row in ordered)
+
+
 def merged_search_page(
     rows: Sequence[Mapping[str, Any]],
     *,
     limit: int,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """The merged page of candidates, with no single provider allowed to fill it.
+    """The merged page of candidates, in rank order, with no single provider allowed to fill it.
 
     Rank order alone is not enough: a provider whose rows tie at its own best score (Raider.IO
     returns twenty identically scored characters for a bare name) normalizes every one of them to
-    100 and owns every slot. Each provider therefore gets at most half the page, rounded up, and an
-    off-intent provider at most a strict minority.
+    100 and owns every slot. So:
 
-    On-intent rows above a provider's share are deferred rather than dropped: once the other
-    providers have taken their slots the deferred rows fill whatever is left, in rank order. The
-    off-intent cap is hard, so a page can come back shorter than ``limit`` rather than repeat
-    twenty near-identical profiles; the withheld rows are reported and still reachable through the
-    per-provider payloads.
+    * on-intent rows fill the page first, each provider taking at most half of it (rounded up);
+      rows over that share are deferred and fill whatever the other providers leave;
+    * off-intent rows only take slots on-intent rows left empty, at most a strict minority of the
+      page, except for the one slot ``_reserves_profile_slot`` keeps for an exact-name profile row;
+    * the chosen rows are returned sorted by ``search_result_sort_key``.
+
+    Deferred, reserved and withheld rows are counted in the policy block.
     """
     ordered = sorted(rows, key=search_result_sort_key)
     per_provider_cap = max(1, (limit + 1) // 2)
     off_intent_cap = max(1, limit // 2)
-    page: list[dict[str, Any]] = []
-    deferred: list[dict[str, Any]] = []
-    withheld: list[dict[str, Any]] = []
-    taken: dict[str, int] = {}
-    for row in ordered:
-        provider = str(row.get("provider") or "")
-        off_intent = row_is_off_intent(row)
-        cap = off_intent_cap if off_intent else per_provider_cap
-        if len(page) < limit and taken.get(provider, 0) < cap:
-            page.append(dict(row))
-            taken[provider] = taken.get(provider, 0) + 1
-        elif off_intent:
-            withheld.append(dict(row))
-        else:
-            deferred.append(dict(row))
-    promoted = deferred[: max(0, limit - len(page))]
-    page.extend(promoted)
+    off_intent = [row for row in ordered if row_is_off_intent(row)]
+    reserved = 1 if _reserves_profile_slot(ordered, limit=limit) else 0
+    room = limit - reserved
+    capped, deferred = _capped_rows(
+        [row for row in ordered if not row_is_off_intent(row)], room=room, per_provider_cap=per_provider_cap
+    )
+    promoted = deferred[: room - len(capped)]
+    on_page = [*capped, *promoted]
+    off_page = off_intent[: min(off_intent_cap, limit - len(on_page))]
+    page = [dict(row) for row in sorted([*on_page, *off_page], key=search_result_sort_key)]
     provider_row_counts: dict[str, int] = {}
     for row in page:
         provider = str(row.get("provider") or "")
@@ -575,10 +602,11 @@ def merged_search_page(
         "rule": "rank_then_per_provider_cap",
         "per_provider_cap": per_provider_cap,
         "off_intent_provider_cap": off_intent_cap,
+        "reserved_exact_profile_slot_count": reserved,
         "candidate_row_count": len(ordered),
         "deferred_row_count": len(deferred),
         "promoted_after_cap_count": len(promoted),
-        "withheld_off_intent_row_count": len(withheld),
+        "withheld_off_intent_row_count": len(off_intent) - len(off_page),
         "provider_row_counts": provider_row_counts,
     }
 

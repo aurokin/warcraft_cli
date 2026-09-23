@@ -71,6 +71,7 @@ from warcraft_cli.providers import (
     provider_payload_data,
     provider_resolve,
     provider_search,
+    provider_surface_status,
     resolve_wrapper_expansion_key,
     source_exit_code,
     surface_filtered_providers,
@@ -857,7 +858,7 @@ def _count_simc_handoff_successes(build_rows: list[dict[str, Any]]) -> tuple[int
 def _simc_handoff_status(
     *,
     returned_build_count: int,
-    identify_success_count: int,
+    requested_leg_count: int,
     empty_requested_legs: list[str],
     partial_requested_legs: list[str],
 ) -> str:
@@ -866,11 +867,12 @@ def _simc_handoff_status(
     ``ok`` means every requested leg succeeded for every build. ``partial`` means a leg worked for
     some builds and not others. A leg that was requested and produced nothing at all - zero decodes
     out of ten - is ``failed``: calling that ``partial`` reads as "most of it worked", which is the
-    wrong-answer-with-``ok: true`` shape this field exists to prevent.
+    wrong-answer-with-``ok: true`` shape this field exists to prevent. When every requested leg
+    produced nothing the packet has no simc output at all: ``all_handoffs_failed``, an error.
     """
     if returned_build_count == 0:
         return "no_build_references"
-    if identify_success_count == 0:
+    if len(empty_requested_legs) == requested_leg_count:
         return "all_handoffs_failed"
     if empty_requested_legs:
         return "failed"
@@ -957,6 +959,7 @@ def _guide_builds_simc_payload(
     requested_legs = [
         (leg, success_count)
         for leg, requested, success_count in (
+            ("identify", True, identify_success_count),
             ("decode", decode, decode_success_count),
             ("describe", bool((apl_path or "").strip()), describe_success_count),
         )
@@ -1001,7 +1004,7 @@ def _guide_builds_simc_payload(
             "failed_page_count": bundle_health["failed_page_count"],
             "simc_handoff_status": _simc_handoff_status(
                 returned_build_count=len(build_rows),
-                identify_success_count=identify_success_count,
+                requested_leg_count=len(requested_legs),
                 empty_requested_legs=empty_requested_legs,
                 partial_requested_legs=partial_requested_legs,
             ),
@@ -1777,6 +1780,21 @@ def _provider_outcome(payload: Any) -> dict[str, Any]:
     return {"ok": bool(payload.get("ok", True)), "error": error if isinstance(error, dict) else None}
 
 
+def _provider_answered(registration: ProviderRegistration, surface: str, provider_row: dict[str, Any]) -> bool:
+    """Whether the provider actually looked the query up.
+
+    An explicit-report-only provider (Warcraft Logs) answers free text with a hint it builds
+    locally and no rows by construction. Counting that as an answer would turn an outage of every
+    provider that does search into an ok:true empty page.
+    """
+    if not provider_row["ok"]:
+        return False
+    if provider_surface_status(registration, surface) != "ready_explicit_report_only":
+        return True
+    data = provider_payload_data(provider_row.get("payload"))
+    return bool(as_list(data.get("results")) or data.get("resolved"))
+
+
 def _failed_provider_rows(providers: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """One compact row per provider that did not answer, kept in the payload even under ``--brief``."""
     rows: list[dict[str, Any]] = []
@@ -1795,7 +1813,7 @@ def _failed_provider_rows(providers: list[dict[str, Any]]) -> list[dict[str, Any
 
 
 def _fanout_failure_error(failed_rows: list[dict[str, Any]]) -> dict[str, Any]:
-    """Top-level error for a fanout where every included provider failed.
+    """Top-level error for a fanout where no provider answered and at least one failed.
 
     The code is the providers' shared failure code when they agree so the exit code the contract
     derives from ``error.code`` stays true; a mixed set of failures degrades to ``upstream_error``.
@@ -1804,7 +1822,10 @@ def _fanout_failure_error(failed_rows: list[dict[str, Any]]) -> dict[str, Any]:
     code = codes.pop() if len(codes) == 1 else "upstream_error"
     return {
         "code": code,
-        "message": f"No provider answered: all {len(failed_rows)} included providers failed.",
+        "message": (
+            f"No provider answered: {len(failed_rows)} providers failed and no other included provider "
+            "searched this query."
+        ),
         "details": {"failed_providers": failed_rows},
     }
 
@@ -1840,20 +1861,20 @@ def _unresolved_next_steps(query: str, providers: list[dict[str, Any]], *, resol
     }
 
 
-def _fanout_health(providers: list[dict[str, Any]], *, included_count: int) -> dict[str, Any]:
+def _fanout_health(providers: list[dict[str, Any]]) -> dict[str, Any]:
     """Answered/failed counts plus the failure rows, so partial and total failure are never silent."""
     failed_rows = _failed_provider_rows(providers)
     return {
-        "answered_provider_count": included_count - len(failed_rows),
+        "answered_provider_count": sum(1 for row in providers if row["answered"]),
         "failed_provider_count": len(failed_rows),
         "failed_providers": failed_rows,
     }
 
 
-def _emit_fanout(ctx: typer.Context, payload: dict[str, Any], *, included_count: int) -> None:
+def _emit_fanout(ctx: typer.Context, payload: dict[str, Any]) -> None:
     """Emit a search/resolve payload, failing with the providers' own error when none answered."""
     failed_rows = payload["failed_providers"]
-    if included_count and len(failed_rows) == included_count:
+    if failed_rows and not payload["answered_provider_count"]:
         error = _fanout_failure_error(failed_rows)
         _emit(ctx, {**payload, "ok": False, "error": error}, err=True)
         raise typer.Exit(exit_code_for(str(error["code"]), EXIT_NETWORK))
@@ -1938,6 +1959,7 @@ def search(
             ),
             "payload": provider_payload,
         }
+        provider_row["answered"] = _provider_answered(registration, "search", provider_row)
         providers.append(provider_row)
         if isinstance(provider_payload, dict):
             provider_data = provider_payload_data(provider_payload)
@@ -1971,7 +1993,7 @@ def search(
         "excluded_providers": excluded_providers,
         "included_provider_count": len(included_registrations),
         "excluded_provider_count": len(excluded_providers),
-        **_fanout_health(providers, included_count=len(included_registrations)),
+        **_fanout_health(providers),
         "providers": [] if brief else providers,
         "count": len(flattened),
         "truncated": len(flattened) > len(top),
@@ -1982,7 +2004,7 @@ def search(
         payload["ranking_debug"] = [compact_wrapper_candidate(row) for row in ranked]
     if expansion_debug:
         payload["expansion_debug"] = expansion_support_snapshot(requested_expansion=requested_expansion)
-    _emit_fanout(ctx, payload, included_count=len(included_registrations))
+    _emit_fanout(ctx, payload)
 
 
 @app.command("resolve")
@@ -2016,18 +2038,18 @@ def resolve(
     for registration in included_registrations:
         result = provider_resolve(registration.name, query, limit=limit, expansion=requested_expansion)
         provider_payload = result.get("payload")
-        providers.append(
-            {
-                "provider": registration.name,
-                "status": registration.status,
-                **_provider_outcome(provider_payload),
-                "expansion_support": provider_expansion_support(
-                    registration,
-                    requested_expansion=requested_expansion,
-                ),
-                "payload": provider_payload,
-            }
-        )
+        provider_row = {
+            "provider": registration.name,
+            "status": registration.status,
+            **_provider_outcome(provider_payload),
+            "expansion_support": provider_expansion_support(
+                registration,
+                requested_expansion=requested_expansion,
+            ),
+            "payload": provider_payload,
+        }
+        provider_row["answered"] = _provider_answered(registration, "resolve", provider_row)
+        providers.append(provider_row)
         resolve_data = provider_payload_data(provider_payload)
         if resolve_data.get("resolved"):
             resolved_candidates.append(
@@ -2054,7 +2076,7 @@ def resolve(
         "match": match,
         "next_command": best_payload.get("next_command") if isinstance(best_payload, dict) else None,
         "confidence": best_payload.get("confidence") if isinstance(best_payload, dict) else None,
-        **_fanout_health(providers, included_count=len(included_registrations)),
+        **_fanout_health(providers),
         **_unresolved_next_steps(query, providers, resolved=best_payload is not None),
         "providers": [] if brief else providers,
     }
@@ -2063,7 +2085,7 @@ def resolve(
                                     for row in resolved_candidates[:limit] if compact_resolve_match(row[1]) is not None]
     if expansion_debug:
         payload["expansion_debug"] = expansion_support_snapshot(requested_expansion=requested_expansion)
-    _emit_fanout(ctx, payload, included_count=len(included_registrations))
+    _emit_fanout(ctx, payload)
 
 
 @app.command("guild")
@@ -2262,12 +2284,21 @@ def _actor_profile_actor(
     """Resolve ``name`` to exactly one report actor, or fail with the ambiguity that blocks the join."""
     matches = find_report_actors(log_payload, name)
     if not matches:
+        fight_scope = query["fight_scope"]
+        message = f"No actor named {name!r} in report {code!r}."
+        if fight_scope["truncated"]:
+            # A miss inside a sampled scope is not a miss in the report.
+            message = (
+                f"No actor named {name!r} in the {fight_scope['scoped_fight_count']} of "
+                f"{fight_scope['report_fight_count']} fights read from report {code!r}; the other fights "
+                "were not searched. Pass --fight-id to read one of them."
+            )
         _fail_actor_profile(
             ctx,
             query=query,
             code="actor_not_found",
-            message=f"No actor named {name!r} in report {code!r}.",
-            details={"available_actors": report_actor_names(log_payload)},
+            message=message,
+            details={"available_actors": report_actor_names(log_payload), "fight_scope": fight_scope},
         )
     targets = distinct_actor_targets(matches)
     if len(targets) > 1:
@@ -3273,15 +3304,17 @@ def guide_builds_simc(
     if summary["simc_handoff_status"] == "all_handoffs_failed":
         _emit(ctx,
             {
-                **payload,
                 "ok": False,
+                "kind": payload["kind"],
                 "error": {
                     "code": "simc_handoff_failed",
                     "message": (
-                        f"simc identify-build failed for all {summary['returned_build_count']} build references; "
-                        "the packet carries no usable simc output. Check `warcraft simc doctor`."
+                        f"Every requested simc leg ({', '.join(summary['empty_requested_legs'])}) failed for all "
+                        f"{summary['returned_build_count']} build references; the packet carries no usable simc "
+                        "output. Each build's `failures` names the simc error; check `warcraft simc doctor`."
                     ),
-                    "details": {"summary": summary},
+                    # The whole packet, so the per-build failure codes survive the error envelope.
+                    "details": payload,
                 },
             },
             err=True,

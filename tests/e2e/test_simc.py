@@ -55,11 +55,12 @@ TRAIT_ROW_RE = re.compile(r'\{\s*(\d+),\s*(\d+),\s*(\d+),\s*(\d+),\s*(\d+),.*?"(
 TREE_INDEX = {"class": 1, "spec": 2, "hero": 3}
 CLASS_ID = {"monk": 10}
 
-# How many of the checkout's own tier profiles the decode sweep walks, and how many of them must
-# decode. SimulationCraft itself rejects some of its shipped hashes whenever its trait data moves
-# ahead of the profile generator, so the sweep allows that outcome but not a silent partial decode.
+# How many of the checkout's own tier profiles the decode sweep walks. SimulationCraft itself
+# rejects some of its shipped hashes whenever its trait data moves ahead of the profile generator,
+# so each profile's expected verdict comes from running that profile through the binary unchanged.
 DECODE_SWEEP_SIZE = 16
-DECODE_SWEEP_MIN_DECODED = DECODE_SWEEP_SIZE // 2
+# The oracle run: one iteration of one second is enough for SimC to initialise the player's talents.
+ORACLE_RUN_ARGS = ("--arg", "iterations=1", "--arg", "max_time=1", "--arg", "threads=1")
 
 # A decoded retail build fills all three trees. These floors are far below any real build (a class
 # tree alone carries ~30 picks) and exist to catch a decode that quietly returns a partial build.
@@ -161,7 +162,7 @@ def _require_binary_built_from_head(repo: dict[str, Any]) -> None:
 
 
 def _first_item(result_data: dict[str, Any], category: str) -> dict[str, Any]:
-    items = result_data["categories"][category]["items"]
+    items: list[dict[str, Any]] = result_data["categories"][category]["items"]
     assert items, f"spec-files returned no {category} rows: {json.dumps(result_data)[:400]}"
     return items[0]
 
@@ -239,9 +240,6 @@ def _talent_rows_from_build(checkout: Checkout, decoded: dict[str, Any]) -> list
         if tree not in TREE_INDEX:
             continue
         for talent in talents:
-            # A tiered node decodes without a per-entry rank, so it cannot become a transport row.
-            if not talent["rank_known"]:
-                continue
             candidates = ids_by_name.get((TREE_INDEX[tree], talent["name"]), [])
             if len(candidates) != 1:
                 continue
@@ -395,19 +393,26 @@ def test_decode_and_identify_a_build_from_a_repo_profile(require, checkout: Chec
     for tree in ("class", "spec", "hero"):
         selected = decoded["talents_by_tree"][tree]
         assert selected, f"{tree} tree decoded empty: {json.dumps(decoded['talents_by_tree'][tree])[:300]}"
-        assert all(talent["rank"] <= talent["max_rank"] for talent in selected if talent["rank_known"])
+        # Tiered nodes are read back one row per entry, so every taken row carries its real rank.
+        unranked = [talent for talent in selected if not (isinstance(talent["rank"], int) and 0 < talent["rank"] <= talent["max_rank"])]
+        assert not unranked, f"{tree} rows without a real rank: {unranked}"
     assert f"decoded via {checkout.root}" in " ".join(decoded["source_notes"])
 
 
-def test_decode_build_never_returns_a_partial_build_for_the_checkouts_own_profiles(
-    require, checkout: Checkout
-) -> None:
-    """Sweep the tier's shipped talent hashes: a full build, or ``invalid_build``, never in between.
+def _simc_rejection(oracle: Result) -> str:
+    """The reason SimC gave for rejecting a profile, without the player and hash it names."""
+    errors: list[str] = [line for line in oracle.payload["error"]["details"]["stderr_preview"] if line.startswith("Error:")]
+    assert errors, oracle.describe()
+    return errors[0].rsplit("': ", 1)[-1]
 
-    A hash decodes against the binary's own trait data, so the only two honest answers are a build
-    with all three trees and a named hero tree, or a rejection. A decode that drops a tree (or the
-    hero-tree selection) while still reporting ``ok: true`` is the failure this guards, because
-    every priority, prune, and comparison surface downstream reads that build as complete.
+
+def test_decode_build_agrees_with_simc_on_the_checkouts_own_profiles(require, checkout: Checkout) -> None:
+    """Sweep the tier's shipped talent hashes against SimulationCraft's own verdict on each profile.
+
+    ``simc run`` hands the profile to the binary untouched, so it is the reference: a profile SimC
+    accepts must decode to a full build (all three trees and a named hero tree), and a profile SimC
+    rejects must fail ``invalid_build`` for the reason SimC gave. A decode that drops a tree while
+    reporting ``ok: true``, or rejects a build SimC itself accepts, fails here with no slack.
     """
     require("simc")
     profiles = sorted(checkout.profile.parent.glob("*_*_*.simc"))[:DECODE_SWEEP_SIZE]
@@ -415,13 +420,15 @@ def test_decode_build_never_returns_a_partial_build_for_the_checkouts_own_profil
 
     decoded_names: list[str] = []
     for profile in profiles:
-        result = run("simc", "decode-build", "--profile-path", str(profile), expect=None)
-        if not result.ok:
-            assert result.exit_code == EXIT_GENERIC, result.describe()
-            assert result.error_code == "invalid_build", result.describe()
+        oracle = run("simc", "run", str(profile), *ORACLE_RUN_ARGS, expect=None, timeout=300)
+        if not oracle.ok:
+            assert oracle.error_code == "run_failed", oracle.describe()
+            result = run("simc", "decode-build", "--profile-path", str(profile), expect=EXIT_GENERIC, error_code="invalid_build")
+            assert result.payload["error"]["message"].endswith(_simc_rejection(oracle)), result.describe()
             # The rejection must name the binary that rejected it, so a stale build is diagnosable.
             assert result.payload["error"]["details"]["simc_binary"]["matches_checkout"] is True, result.describe()
             continue
+        result = run("simc", "decode-build", "--profile-path", str(profile))
         decoded = result.data["decoded"]
         hero_tree = decoded["hero_tree"]
         assert hero_tree and hero_tree["name"] and isinstance(hero_tree["id"], int), result.describe()
@@ -433,9 +440,7 @@ def test_decode_build_never_returns_a_partial_build_for_the_checkouts_own_profil
         }, result.describe()
         decoded_names.append(profile.name)
 
-    assert len(decoded_names) >= DECODE_SWEEP_MIN_DECODED, (
-        f"only {len(decoded_names)} of {DECODE_SWEEP_SIZE} shipped profiles decoded: {decoded_names}"
-    )
+    assert decoded_names, f"SimC rejected every one of {[path.name for path in profiles]}, so no decode was checked"
 
 
 @dataclass(frozen=True)
@@ -515,6 +520,27 @@ def test_enable_and_disable_override_the_talents_the_apl_is_pruned_against(requi
     )
     assert token in _talent_condition_tokens(disabled.data["single_target"]["inactive_talent_branches"]), disabled.describe()
     assert _dead_lines(disabled.data) > baseline_dead, disabled.describe()
+
+    # The help promises talent names, so the display name must prune exactly what the token does.
+    name = next(
+        row["name"]
+        for rows in right.described.data["build"]["talents_by_tree"].values()
+        for row in rows["selected"]
+        if row["token"] == token
+    )
+    assert name != token, f"{token!r} has no separate display name to prove the name form with"
+    by_name = run(
+        "simc", "describe-build", "--profile-path", str(right.path), "--apl-path", str(checkout.apl), "--disable", name
+    )
+    assert _dead_lines(by_name.data) == _dead_lines(disabled.data), by_name.describe()
+
+    # A value that names no talent of the class is a usage error, never a silent no-op.
+    unknown = run(
+        "simc", "describe-build", "--profile-path", str(right.path), "--apl-path", str(checkout.apl),
+        "--disable", "not_a_talent_of_this_class",
+        expect=EXIT_USAGE, error_code="unknown_talent",
+    )
+    assert unknown.payload["error"]["details"]["unknown_talents"] == ["not_a_talent_of_this_class"], unknown.describe()
 
     # The left build does not have that talent, so enabling it must revive the branch it gates.
     enabled = run(
@@ -609,6 +635,15 @@ def test_compare_builds_diffs_two_real_talent_strings(require, checkout: Checkou
         for row in [*diff["added"], *diff["removed"]]:
             assert row["entry"] > 0 and row["name"]
 
+    # --tree narrows the diff to named trees; a tree that does not exist is the caller's mistake, not
+    # a comparison with no differences in it.
+    base_args = ("compare-builds", "--base", checkout.talents, "--other", other_talents, "--actor-class", ACTOR_CLASS, "--spec", SPEC)
+    narrowed = run("simc", *base_args, "--tree", "hero")
+    assert narrowed.data["trees_compared"] == ["hero"], narrowed.describe()
+    assert set(narrowed.data["comparisons"][0]["trees"]) == {"hero"}, narrowed.describe()
+    bogus = run("simc", *base_args, "--tree", "class", "--tree", "bogus", expect=EXIT_USAGE, error_code="invalid_argument")
+    assert "bogus" in bogus.payload["error"]["message"], bogus.describe()
+
 
 # Two specs whose profiles the checkout ships: the journey spec, plus a caster with more than one
 # hero tree, because a tree-routing bug in modify-build only shows on a build that has one.
@@ -635,8 +670,7 @@ def test_modify_build_removes_a_talent_and_re_encodes_it(
     talents = _profile_talents(_spec_profile(checkout, actor_class, spec))
     build = ("--actor-class", actor_class, "--spec", spec)
     decoded = run("simc", "decode-build", "--talents", talents, *build)
-    class_talents = [talent for talent in decoded.data["decoded"]["talents_by_tree"]["class"] if talent["rank_known"]]
-    removable = class_talents[-1]
+    removable = decoded.data["decoded"]["talents_by_tree"]["class"][-1]
 
     result = run("simc", "modify-build", "--talents", talents, "--remove", removable["name"], *build)
     assert result.data["base"]["input"] == talents
@@ -645,12 +679,14 @@ def test_modify_build_removes_a_talent_and_re_encodes_it(
     assert encoded and encoded != talents
     assert result.data["result"]["wowhead_url"].endswith(encoded)
     diff = result.data["result"]["diff_from_base"]
-    assert [row["name"] for row in diff["class"]["removed"]] == [removable["name"]]
+    # A tiered node is one row per entry, so removing it by name can remove several rows of that name.
+    assert {row["name"] for row in diff["class"]["removed"]} == {removable["name"]}
     assert diff["class"]["added"] == []
     assert diff["spec"]["has_differences"] is False
     assert diff["hero"]["has_differences"] is False
 
-    redecoded = run("simc", "decode-build", "--talents", encoded, *build)
+    # The Wowhead link modify-build hands back is itself a build reference simc reads.
+    redecoded = run("simc", "decode-build", "--talents", result.data["result"]["wowhead_url"], *build)
     base_tokens = set(decoded.data["decoded"]["enabled_talents"])
     assert set(redecoded.data["decoded"]["enabled_talents"]) == base_tokens - {removable["token"]}
     assert redecoded.data["decoded"]["hero_tree"] == decoded.data["decoded"]["hero_tree"]
@@ -665,7 +701,9 @@ def test_modify_build_with_a_no_op_edit_returns_the_same_build(require, checkout
     require("simc")
     build = ("--actor-class", ACTOR_CLASS, "--spec", SPEC)
     decoded = run("simc", "decode-build", "--talents", checkout.talents, *build)
-    unchanged = [talent for talent in decoded.data["decoded"]["talents_by_tree"]["class"] if talent["rank_known"]][-1]
+    class_rows = decoded.data["decoded"]["talents_by_tree"]["class"]
+    # A name held by one row only: a tiered node's entries share a name, so `name:rank` would be ambiguous.
+    unchanged = [talent for talent in class_rows if [row["name"] for row in class_rows].count(talent["name"]) == 1][-1]
 
     result = run(
         "simc", "modify-build", "--talents", checkout.talents, "--add", f"{unchanged['name']}:{unchanged['rank']}", *build
@@ -1276,6 +1314,14 @@ def test_usage_errors_exit_2_with_an_error_envelope(require) -> None:
     assert "apl_path" in missing_argument.payload["error"]["message"], missing_argument.describe()
 
     run("simc", "validate-talent-transport", expect=EXIT_USAGE, error_code="invalid_query")
+    # A link that is not a build is refused instead of being handed to SimC as if it were a hash.
+    not_a_build = run(
+        "simc", "decode-build", "--talents", "https://www.raidbots.com/simbot/report/abc",
+        expect=EXIT_USAGE, error_code="unsupported_build_reference",
+    )
+    assert not_a_build.payload["error"]["details"]["reference_type"] == "url", not_a_build.describe()
+    # A class and spec with no talents is not a build, so there is nothing to decode.
+    run("simc", "decode-build", "--actor-class", ACTOR_CLASS, "--spec", SPEC, expect=EXIT_USAGE, error_code="invalid_query")
     run("simc", "repo", "--set-root", "/tmp", "--clear-root", expect=EXIT_USAGE, error_code="invalid_query")
 
 

@@ -7,6 +7,7 @@ import json
 from wowhead_cli.main import app
 from wowhead_cli.ranking import (
     ARTICLE_OVER_ENTITY_MARGIN,
+    STALE_GUIDE_REASON,
     database_rank_score,
     exact_match_score,
     is_filtered_high_confidence,
@@ -14,6 +15,7 @@ from wowhead_cli.ranking import (
     is_high_confidence_score,
     is_medium_confidence_score,
     prefix_and_contains_score,
+    resolve_confidence,
     search_result_score_and_reasons,
     term_match_score,
     type_hint_score,
@@ -398,6 +400,14 @@ def test_resolve_confidence_policy_helpers_cover_exact_filtered_and_medium_cases
     assert is_medium_confidence_score(17, margin=4) is False
 
 
+def test_resolve_confidence_never_calls_a_stale_guide_high() -> None:
+    """An exact name with a clear margin is high confidence, unless the guide is marked stale."""
+    fresh = {"ranking": {"score": 40, "match_reasons": ["exact_name"]}}
+    stale = {"ranking": {"score": 40, "match_reasons": ["exact_name", STALE_GUIDE_REASON]}}
+    assert resolve_confidence([fresh], entity_types=()) == "high"
+    assert resolve_confidence([stale], entity_types=()) == "medium"
+
+
 
 def test_resolve_comment_intent_uses_comment_surface_without_hurting_match_quality(monkeypatch) -> None:
     def fake_search(self, query: str):  # noqa: ANN001
@@ -631,7 +641,7 @@ def test_resolve_recommends_news_post_when_the_best_match_is_a_news_row(monkeypa
 
 
 def test_resolve_answers_with_the_entity_when_a_news_headline_matches_the_text_better(monkeypatch) -> None:
-    """A news post about an item scores higher on the item's own name; the item is still the answer."""
+    """A headline matches the query text better than the item it covers; the item is still the answer."""
 
     item = {"type": 3, "id": 19019, "name": "Thunderfury, Blessed Blade of the Windseeker", "typeName": "Item"}
 
@@ -639,19 +649,14 @@ def test_resolve_answers_with_the_entity_when_a_news_headline_matches_the_text_b
         return {
             "search": query,
             "results": [
-                {"type": 162, "id": 375994, "name": "Thunderfury", "typeName": "News Post"},
+                {"type": 162, "id": 375994, "name": "Thunderfury Returns in Classic", "typeName": "News Post"},
                 item,
             ],
-            "categories": {
-                "database": [
-                    {"type": 3, "id": 230224, "name": "Thunderfury, Blessed Blade of the Windseeker"},
-                    item,
-                ]
-            },
+            "categories": {"database": [item]},
         }
 
     monkeypatch.setattr("wowhead_cli.main.WowheadClient.search_suggestions", fake_search)
-    result = runner.invoke(app, ["resolve", "thunderfury"])
+    result = runner.invoke(app, ["resolve", "thunderfury returns in classic"])
     assert result.exit_code == 0
 
     data = json.loads(result.stdout)["data"]

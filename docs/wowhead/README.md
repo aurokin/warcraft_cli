@@ -39,13 +39,19 @@ endpoint labels. News posts also carry a `news-post` follow-up; world events are
 no follow-up command of their own. The one exception is Trading Post activities: Wowhead addresses
 them only by slug, so those rows come back with a null `url`.
 
-Ranking starts from Wowhead's own ordering. A suggestion response carries two views of the same
-rows: the flat `results` list, ordered by the `popularity` ordinal, and a `categories.database`
-list, ordered by relevance. `search` and `resolve` score the leading rows of the database list up
-(`upstream_database_rank` in `ranking.match_reasons`) so the entity a query names leads the proc
-spells and secondary rows that share its name, then text evidence — exact name, prefix, term
-coverage, type hints — decides the rest. Rows Wowhead returns only in the flat list are ranked on
-text alone.
+A suggestion response carries two overlapping row lists: the flat `results` list (the dropdown's
+~10 rows, ordered by the `popularity` ordinal) and a `categories` map (`database`, `guides`, `news`,
+...) that often holds rows `results` leaves out, sometimes the very entity a query names.
+`search` and `resolve` rank the union, one row per Wowhead type and id. Each row's
+`metadata.suggestion_lists` names the lists it came from (`metadata.popularity` is null for a row
+only `categories` carried), and `suggestion_merge` reports the rows each list sent and how many
+duplicates the merge removed; `total_matches` counts the merged rows.
+
+Ranking starts from Wowhead's own ordering. `categories.database` is ordered by relevance, and
+`search` and `resolve` score its leading rows up (`upstream_database_rank` in
+`ranking.match_reasons`) so the entity a query names leads the proc spells and secondary rows that
+share its name, then text evidence — exact name, prefix, term coverage, type hints — decides the
+rest.
 
 `resolve` answers with a database entity. A news headline often matches a query better than the
 item it is written about, so news posts and world events rank behind every entity in `candidates`.

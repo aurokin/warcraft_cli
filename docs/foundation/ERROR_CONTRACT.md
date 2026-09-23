@@ -55,7 +55,12 @@ never shadow envelope keys.
 ```
 
 `code` is a stable snake_case identifier for programs; `message` is for humans; `details` is
-optional structured context. Providers keep their existing code strings; the codes below have a
+optional structured context.
+
+A failure carries `query` whenever the command had parsed its input: the rejected request is then
+machine-readable instead of only spelled out in `message`. `warcraft_core.cli.fail(..., query=...)`
+is the one way to set it. `query` is `null` only when the failure happened before any input was
+parsed, for example a usage error caught by the process guard. Credentials never go in `query`. Providers keep their existing code strings; the codes below have a
 fixed repo-wide exit-code mapping. A provider may additionally map its own codes onto the same five
 exit codes, and documents them in its provider README: for example `warcraftlogs` exits `2` for
 `invalid_query` and its `missing_*` input codes, `curseforge` exits `3` for `missing_api_key` and

@@ -43,6 +43,9 @@
 - `search` and `resolve` rank on Wowhead's own database ordering first, so the entity a query names
   leads the proc spells and secondary rows that share its name; `ranking.match_reasons` carries
   `upstream_database_rank` on the rows that ordering promoted
+- `search` and `resolve` rank every row Wowhead's suggestion response sent, not just its ten-row
+  dropdown list, one row per entity; `metadata.suggestion_lists` says where each row came from and
+  `suggestion_merge` counts the rows per list and the duplicates merged
 - `resolve` answers with a database entity: news posts and world events sit behind every entity in
   `candidates` and become the `match` only when the response holds no entity, or when the article
   outscores the best entity by a wide margin (a query that names a headline word for word); use

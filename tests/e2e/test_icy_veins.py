@@ -228,11 +228,11 @@ def test_guide_full_walks_the_family_and_publishes_build_references(require) -> 
     for page in result.data["pages"]:
         _assert_page_is_split_into_real_sections(page, result)
 
-    # The walk covers the spec's leveling, rotation, stat, gear and macro pages, and the classifier
-    # gives each of them its own family. One family across the whole walk means it stopped looking.
+    # The walk covers the spec's talents, rotation, stat and gear pages, and the classifier gives each
+    # of them its own family. A classifier that labelled every sub-page spec_guide would miss these.
     families = {page["guide"]["content_family"] for page in result.data["pages"]}
-    assert all(families), result.describe()
-    assert len(families) >= 4, f"the family walk classified {page_count} pages as {sorted(families)}"
+    core = {"spec_guide", "spec_builds_talents", "rotation_guide", "stat_priority", "gear_best_in_slot"}
+    assert core <= families, f"the family walk classified {page_count} pages as {sorted(families)}"
 
     assert result.data["linked_entities"]["count"] >= guide_page().data["linked_entities"]["count"]
     assert result.data["analysis_surfaces"]["count"] >= 1
@@ -382,8 +382,8 @@ def test_a_repeated_guide_fetch_is_served_from_the_session_cache(require) -> Non
     assert cached.data["article"]["section_count"] == warm.data["article"]["section_count"]
 
 
-def test_guide_query_rejects_a_bundle_path_that_is_missing_or_not_a_directory(require, out_dir: Path) -> None:
-    """The two ways the bundle argument can be wrong get the two answers the contract reserves.
+def test_guide_query_rejects_a_bundle_path_that_is_missing_or_not_a_bundle(require, out_dir: Path) -> None:
+    """The three ways the bundle argument can be wrong get the three answers the contract reserves.
 
     ``method guide-query`` answers identically; the pair used to disagree, so an agent that learned
     one provider's exit code got the other one wrong.
@@ -394,6 +394,16 @@ def test_guide_query_rejects_a_bundle_path_that_is_missing_or_not_a_directory(re
     not_a_directory = out_dir / "icy-veins-bundle.txt"
     not_a_directory.write_text("not a bundle", encoding="utf-8")
     run(BINARY, "guide-query", str(not_a_directory), "mana", expect=EXIT_USAGE, error_code="invalid_argument")
+
+    # A directory with a manifest but no pages file (a wowhead guide-export bundle looks like this)
+    # used to load as an empty bundle and answer ok:true with zero matches.
+    not_a_bundle = out_dir / "icy-veins-not-a-bundle"
+    not_a_bundle.mkdir()
+    (not_a_bundle / "manifest.json").write_text(json.dumps({"files": {}}), encoding="utf-8")
+    run(BINARY, "guide-query", str(not_a_bundle), "mana", expect=EXIT_GENERIC, error_code="invalid_bundle")
+
+    # An unsupported --kind is refused with the code every article-bundle query shares.
+    run(BINARY, "guide-query", str(not_a_bundle), "mana", "--kind", "bogus", expect=EXIT_GENERIC, error_code="invalid_query_kind")
 
 
 @pytest.mark.parametrize("command", ["guide", "guide-full", "guide-export"])

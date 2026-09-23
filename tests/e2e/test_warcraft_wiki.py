@@ -250,6 +250,7 @@ def test_article_classifies_the_page_it_followed_a_ref_to(
     assert result.data["article"]["title"] == expected_title, result.describe()
     assert result.data["article"]["content_family"] == expected_family, result.describe()
     assert result.data["reference"]["content_family"] == expected_family, result.describe()
+    assert result.data["reference"]["summary"], "the classified page carries no reference summary"
     assert result.data["content"]["text"].strip(), "the article has no extracted prose"
     assert "Main Menu" not in result.data["content"]["text"], "wiki chrome leaked into the prose"
 
@@ -263,6 +264,27 @@ def test_event_commands_resolve_a_ui_handler(require, command: str) -> None:
     assert result.data["resolved_surface"] == "event"
     assert UI_HANDLER_QUERY in result.data["article"]["title"]
     assert result.data["reference"]["programming_reference"] is True
+
+
+def test_a_typed_lookup_with_no_exact_page_ranks_its_way_to_the_named_one(require) -> None:
+    """``event "on key down"`` names no page title, so it must go through ranked search and still land.
+
+    This is the only journey that reaches the typed search fallback in the accept direction: the
+    relevance floor has to keep ``UIHANDLER OnKeyDown`` while rejecting its siblings, which share
+    every family and intent bonus and differ only in whether their title spells the query out.
+    """
+    require(PROVIDER)
+    result = run(BINARY, "event", "on key down")
+
+    assert result.data["resolved_from"] == "search", result.describe()
+    assert result.data["article"]["title"] == "UIHANDLER OnKeyDown", result.describe()
+    assert result.data["article"]["content_family"] == "ui_handler", result.describe()
+    resolution = result.data["resolution"]
+    assert resolution["match"]["id"] == "UIHANDLER OnKeyDown", result.describe()
+    # Another handler page on offer is what shows the floor chose between candidates rather than
+    # taking the only row the search returned.
+    rivals = [row["id"] for row in resolution["candidates"] if row["metadata"]["content_family"] == "ui_handler"]
+    assert len(rivals) > 1, result.describe()
 
 
 @pytest.mark.parametrize(("event_name", "expected_title"), GAME_EVENT_PAGES)

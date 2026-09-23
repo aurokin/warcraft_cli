@@ -20,8 +20,6 @@ from tests.e2e.harness import EXIT_GENERIC, EXIT_NOT_FOUND, Result, run, run_tex
 _SPEC_RANKING_ATTEMPTS = 4
 
 COMP_RANKING_LIMIT = 3
-# Longer than any raid encounter, so a kill-time floor set to it must empty the ranking.
-IMPOSSIBLE_KILLTIME_SECONDS = 10_000
 # How many bosses the comp-ranking journey walks before declaring the surface empty.
 COMP_RANKING_SCAN_LIMIT = 16
 
@@ -230,12 +228,19 @@ def _comp_ranking_candidates(catalog: Catalog) -> list[str]:
     return candidates[:COMP_RANKING_SCAN_LIMIT]
 
 
+def _kill_seconds(result: Result) -> dict[str, float]:
+    """Each ranked comp's kill time in seconds (Lorrgs reports fight durations in milliseconds)."""
+    return {row["report_id"]: row["fights"][0]["duration"] / 1000 for row in result.data["reports"]}
+
+
 def test_comp_ranking_returns_ranked_comps_and_honours_the_killtime_filter(catalog: Catalog) -> None:
-    """A comp ranking with rows in it, and a kill-time floor that provably removes them.
+    """A comp ranking with rows in it, and kill-time bounds that each provably remove a row.
 
     An empty ``reports`` list used to pass this journey, which made it blind to the command
     returning nothing at all. Bosses are walked until one has rows; if none does, Lorrgs is not
-    serving this surface and that is reported rather than absorbed.
+    serving this surface and that is reported rather than absorbed. Each bound is set one second
+    inside the unfiltered extremes, so the slowest (or fastest) comp has to disappear and every row
+    that comes back has to sit inside the bound; an ignored flag returns the same rows and fails.
     """
     scanned: list[str] = []
     for boss_slug in _comp_ranking_candidates(catalog):
@@ -249,14 +254,21 @@ def test_comp_ranking_returns_ranked_comps_and_honours_the_killtime_filter(catal
             continue
 
         assert len(reports) <= COMP_RANKING_LIMIT, result.describe()
-        # No raid kill runs for three hours, so a floor that high must remove every row; the row
-        # schema is Lorrgs', so the filter is proved by what it removes rather than by a field name.
-        pruned = _comp_ranking(boss_slug, "--killtime-min", str(IMPOSSIBLE_KILLTIME_SECONDS))
-        assert pruned.payload["query"]["killtime_min"] == IMPOSSIBLE_KILLTIME_SECONDS, pruned.describe()
-        assert pruned.data["reports"] == [], pruned.describe()
+        seconds = _kill_seconds(result)
+        slowest = max(seconds, key=seconds.__getitem__)
+        fastest = min(seconds, key=seconds.__getitem__)
 
-        kept = _comp_ranking(boss_slug, "--killtime-max", str(IMPOSSIBLE_KILLTIME_SECONDS))
-        assert kept.data["reports"] == reports, kept.describe()
+        ceiling = int(seconds[slowest]) - 1
+        capped = _comp_ranking(boss_slug, "--killtime-max", str(ceiling))
+        assert capped.payload["query"]["killtime_max"] == ceiling, capped.describe()
+        assert slowest not in _kill_seconds(capped), capped.describe()
+        assert all(value <= ceiling for value in _kill_seconds(capped).values()), capped.describe()
+
+        floor = int(seconds[fastest]) + 1
+        floored = _comp_ranking(boss_slug, "--killtime-min", str(floor))
+        assert floored.payload["query"]["killtime_min"] == floor, floored.describe()
+        assert fastest not in _kill_seconds(floored), floored.describe()
+        assert all(value >= floor for value in _kill_seconds(floored).values()), floored.describe()
         return
 
     raise AssertionError(f"Lorrgs published no comp ranking rows for any of {scanned}")

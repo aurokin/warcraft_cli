@@ -125,20 +125,23 @@ class _PullIdentity:
     encounter_id: int | None
     difficulty: int | None
     size: int | None
-    guild_id: int | None
-    guild_name: str | None
+    guild_id: int
 
 
-def _pull_identity(report: dict[str, Any], fight: dict[str, Any]) -> _PullIdentity:
-    guild = dict_at(report, "guild")
-    guild_id = guild.get("id")
-    guild_name = guild.get("name")
+def _pull_identity(report: dict[str, Any], fight: dict[str, Any]) -> _PullIdentity | None:
+    """The fight's identity, or ``None`` for a report with no guild.
+
+    Timing alone cannot tell two unrelated personal logs apart, and a report carries no roster
+    fingerprint without an extra request per fight, so a guildless fight is never collapsed.
+    """
+    guild_id = dict_at(report, "guild").get("id")
+    if not isinstance(guild_id, int):
+        return None
     return _PullIdentity(
         encounter_id=fight.get("encounterID") if isinstance(fight.get("encounterID"), int) else None,
         difficulty=fight.get("difficulty") if isinstance(fight.get("difficulty"), int) else None,
         size=fight.get("size") if isinstance(fight.get("size"), int) else None,
-        guild_id=guild_id if isinstance(guild_id, int) else None,
-        guild_name=guild_name if isinstance(guild_name, str) else None,
+        guild_id=guild_id,
     )
 
 
@@ -154,20 +157,18 @@ def _absolute_fight_window_ms(report: dict[str, Any], fight: dict[str, Any]) -> 
     return float(report_start) + float(fight_start), float(report_start) + float(fight_end)
 
 
+def _same_window(first: tuple[float, float], second: tuple[float, float]) -> bool:
+    """Start and end both within ``DUPLICATE_PULL_TOLERANCE_MS``."""
+    return all(abs(mine - other) <= DUPLICATE_PULL_TOLERANCE_MS for mine, other in zip(first, second, strict=True))
+
+
 @dataclass(slots=True)
 class SampledPull:
     """One real pull, plus the citations of the other reports that logged the same pull."""
 
     report: dict[str, Any]
     fight: dict[str, Any]
-    identity: _PullIdentity
-    window_ms: tuple[float, float] | None
     duplicates: list[dict[str, Any]] = field(default_factory=list)
-
-    def is_same_pull(self, identity: _PullIdentity, window_ms: tuple[float, float] | None) -> bool:
-        if self.window_ms is None or window_ms is None or identity != self.identity:
-            return False
-        return all(abs(mine - other) <= DUPLICATE_PULL_TOLERANCE_MS for mine, other in zip(self.window_ms, window_ms, strict=True))
 
 
 def _pull_citation(report: dict[str, Any], fight: dict[str, Any]) -> dict[str, Any]:
@@ -179,19 +180,33 @@ def deduplicate_pulls(candidates: Iterable[tuple[dict[str, Any], dict[str, Any]]
 
     Warcraft Logs exposes no cross-report pull ID, so the match is deliberately narrow and is
     labelled in the payload rather than inferred silently (docs/foundation/SAFE_ANALYTICS_RULES.md):
-    same encounter, difficulty, raid size and guild, with wall-clock start *and* end both within
-    ``DUPLICATE_PULL_TOLERANCE_MS``. A fight whose absolute window cannot be computed is always kept.
+    same guild, encounter, difficulty and raid size, with wall-clock start *and* end both within
+    ``DUPLICATE_PULL_TOLERANCE_MS`` of the latest fight already in the cluster. Fights are
+    clustered in start order, so the answer does not depend on the order reports were listed in,
+    and the earliest-starting report represents the pull. A fight without a guild or without a
+    computable window is always kept on its own.
     """
-    pulls: list[SampledPull] = []
+    kept: list[SampledPull] = []
+    timed: list[tuple[tuple[float, float], _PullIdentity, dict[str, Any], dict[str, Any]]] = []
     for report, fight in candidates:
         identity = _pull_identity(report, fight)
-        window_ms = _absolute_fight_window_ms(report, fight)
-        existing = None
-        if existing is None:
-            pulls.append(SampledPull(report=report, fight=fight, identity=identity, window_ms=window_ms))
+        window = _absolute_fight_window_ms(report, fight)
+        if identity is None or window is None:
+            kept.append(SampledPull(report=report, fight=fight))
+        else:
+            timed.append((window, identity, report, fight))
+    timed.sort(key=lambda row: (row[0], str(row[2].get("code") or ""), str(row[3].get("id"))))
+    open_clusters: dict[_PullIdentity, tuple[SampledPull, tuple[float, float]]] = {}
+    for window, identity, report, fight in timed:
+        cluster = open_clusters.get(identity)
+        if cluster is not None and _same_window(cluster[1], window):
+            cluster[0].duplicates.append(_pull_citation(report, fight))
+            open_clusters[identity] = (cluster[0], window)
             continue
-        existing.duplicates.append(_pull_citation(report, fight))
-    return pulls
+        pull = SampledPull(report=report, fight=fight)
+        kept.append(pull)
+        open_clusters[identity] = (pull, window)
+    return kept
 
 
 def sampled_dedupe_notes(sample: dict[str, Any]) -> list[str]:
@@ -200,9 +215,10 @@ def sampled_dedupe_notes(sample: dict[str, Any]) -> list[str]:
     if not isinstance(removed, int) or removed <= 0:
         return []
     return [
-        f"{removed} sampled fight(s) were the same pull logged in more than one report (same encounter, "
-        f"difficulty, raid size and guild, with start and end within {DUPLICATE_PULL_TOLERANCE_MS // 1000}s) "
-        "and were collapsed into one kill; the collapsed report codes are on each kill's duplicate_reports"
+        f"{removed} sampled fight(s) were the same pull logged in more than one report (same guild, encounter, "
+        f"difficulty and raid size, with start and end within {DUPLICATE_PULL_TOLERANCE_MS // 1000}s) "
+        "and were collapsed into one kill; the collapsed report codes are on each kill's duplicate_reports. "
+        "Reports without a guild are never collapsed"
     ]
 
 
@@ -630,6 +646,7 @@ def spec_filtered_kill_samples_payload(
             "rows are sampled kills that contained at least one participant of the requested spec; "
             "this is a participant cohort, not a spec ranking leaderboard"
         ),
+        *sampled_dedupe_notes(sample),
     ]
     if truncated:
         notes.append(

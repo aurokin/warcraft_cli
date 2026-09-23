@@ -190,7 +190,14 @@ def emit(ctx: typer.Context, payload: Mapping[str, Any], *, err: bool = False) -
     try:
         emit_shaped(dict(payload), config.output, err=err)
     except OutputProjectionError as exc:
-        fail(ctx, "missing_fields", str(exc), exit_code=EXIT_USAGE, details={"missing_fields": list(exc.missing_fields)})
+        fail(
+            ctx,
+            "missing_fields",
+            str(exc),
+            exit_code=EXIT_USAGE,
+            details={"missing_fields": list(exc.missing_fields)},
+            query=payload.get("query"),
+        )
 
 
 def fail(
@@ -200,10 +207,17 @@ def fail(
     *,
     exit_code: int | None = None,
     details: dict[str, Any] | None = None,
+    query: Any = None,
 ) -> NoReturn:
-    """Write an error envelope to stderr and exit with the code mapped from ``code`` unless overridden."""
+    """Write an error envelope to stderr and exit with the code mapped from ``code`` unless overridden.
+
+    ``query`` is the normalized input the command acted on. Pass it whenever the command has parsed
+    its input, so the failure names what was rejected instead of carrying ``query: null``.
+    """
     config = cfg(ctx)
-    payload = error_envelope(provider=config.provider, command=command_path(ctx), code=code, message=message, details=details)
+    payload = error_envelope(
+        provider=config.provider, command=command_path(ctx), code=code, message=message, query=query, details=details
+    )
     typer.echo(to_json(payload, pretty=config.output.pretty), err=True)
     raise typer.Exit(exit_code if exit_code is not None else exit_code_for(code))
 

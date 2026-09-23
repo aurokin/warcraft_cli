@@ -7,22 +7,18 @@ character), because retail tiers roll over and reports age out of Warcraft Logs 
 The discovery chain is:
 
 ``zones`` -> newest unfrozen zone that exposes the Normal/Heroic/Mythic triple (the current raid)
--> ``guild-reports`` for that zone -> the newest report that contains a boss kill
+-> ``encounter-rankings`` for its bosses -> the first ranked kill in a *public* guild report
 -> ``report-encounter-players`` for that kill -> actor ids, specs, and ability ids.
-
-Most journeys hang off that one kill, so when the pinned guild has not killed anything in the new
-tier yet (the window right after a tier rollover) discovery falls back to ``public_anchor``. The
-sampled cross-report analytics are scoped to the anchor report's own guild when it has one and to a
-report-time window around it, so the sampled cohort provably contains the anchor kill instead of
-racing the public report firehose.
 
 Three discovery fixtures, because one cannot prove everything:
 
-- ``anchor`` is the pinned guild's own kill. Every one of its reports is *private*, so it is also
-  what proves the saved user token is what opens a report.
-- ``public_anchor`` is a kill taken from the tier's own encounter leaderboard, so it is guaranteed
-  to be a kill and its report is *public* — the visibility mode the pinned guild cannot cover, and
-  the roster the spec filter's negative case is derived from.
+- ``anchor`` is a public, guild-owned kill off the tier leaderboard: a guaranteed kill in a report
+  any token can read, which is what an agent is usually pointed at. Almost every report journey
+  hangs off it. The sampled cross-report analytics are scoped to its guild and to a report-time
+  window around it, so the sampled cohort provably contains it instead of racing the firehose.
+- ``guild_anchor`` is the pinned guild's own newest kill. Every one of its reports is *private*, so
+  it is what proves the saved user token opens a report the client token cannot; it is also the
+  roster the spec filter's negative case is derived from, and a report Lorrgs has never cached.
 - ``wide_cohort`` is the guild's whole tier on a boss it killed more than once, because ordering and
   duplicate collapsing are claims that a single-kill cohort can never contradict.
 
@@ -65,12 +61,11 @@ SAMPLE_WINDOW_PADDING_MS = 60_000
 SAMPLE_REPORT_PAGES = "1"
 SAMPLE_REPORTS_PER_PAGE = "5"
 
-# Mythic: the difficulty the public leaderboards and the pinned guild's progression both sit on.
+# Mythic: the difficulty the public leaderboards rank.
 MYTHIC_DIFFICULTY_ID = 5
-# How far the public-report and wide-cohort walks go before reporting what they scanned.
+# How far the public-report walk goes before reporting what it scanned.
 PUBLIC_ANCHOR_BOSS_ATTEMPTS = 3
 PUBLIC_ANCHOR_ROW_ATTEMPTS = 5
-WIDE_COHORT_BOSS_ATTEMPTS = 6
 WIDE_COHORT_TOP = "20"
 # The widest wall-clock drift two logs of one pull may show before they are different pulls. Stated
 # here rather than imported so the journey asserts the contract instead of the implementation.
@@ -85,6 +80,9 @@ class Anchor:
     report: dict[str, Any]
     fight: dict[str, Any]
     players: tuple[dict[str, Any], ...]
+    # The owning guild's name as the *listing* that discovered the report gave it, so `report` can
+    # be held to it independently.
+    listed_guild: str
 
     @property
     def code(self) -> str:
@@ -173,34 +171,9 @@ def _absolute_fight_window(code: str, fight_id: int) -> FightWindow:
     )
 
 
-def _guild_identity(guild: Any) -> tuple[Any, ...] | None:
-    """The fields two Warcraft Logs surfaces must agree on; the rest of the block is padded nulls."""
-    if not isinstance(guild, dict):
-        return None
-    server = guild.get("server") or {}
-    return (guild.get("id"), guild.get("name"), server.get("slug"), (server.get("region") or {}).get("slug"))
-
-
-def _anchor_from_reports(zone: dict[str, Any], reports: list[Any]) -> Anchor | None:
-    """The newest of ``reports`` that actually contains a boss kill, with its roster attached."""
-    for report in reports:
-        code = str(report.get("code") or "")
-        if not code:
-            continue
-        fights = run("warcraftlogs", "report-fights", code).data["fights"]
-        kills = [fight for fight in fights if fight.get("kill") and fight.get("encounter_id")]
-        if not kills:
-            continue
-        # Prefer the hardest difficulty in the report; ties go to the latest pull.
-        fight = max(kills, key=lambda row: (row.get("difficulty") or 0, row.get("id") or 0))
-        roster = _fight_roster(code, int(fight["id"]))
-        return Anchor(zone=zone, report=report, fight=fight, players=roster)
-    return None
-
-
 @lru_cache(maxsize=1)
 def guild_reports() -> tuple[dict[str, Any], ...]:
-    """The pinned guild's most recent current-tier reports; the anchor and the wide cohort share them."""
+    """The pinned guild's most recent current-tier reports; the guild anchor and the wide cohort share them."""
     zone = current_raid_zone()
     result = run(
         "warcraftlogs", "guild-reports", *GUILD, "--zone-id", str(zone["id"]), "--limit", str(DISCOVERY_REPORT_LIMIT)
@@ -209,26 +182,33 @@ def guild_reports() -> tuple[dict[str, Any], ...]:
 
 
 @lru_cache(maxsize=1)
-def anchor() -> Anchor:
-    """A current-tier kill in the pinned guild's own log, or a public one at a tier rollover.
-
-    The pinned guild is preferred because its reports keep the sampled cohort small and provably
-    contain this kill. At a tier rollover the guild can legitimately have no kill in the new zone
-    yet, and the whole log half of the suite hangs off this fixture, so discovery then falls back to
-    :func:`public_anchor`, which is the only listing that guarantees a kill.
-    """
-    found = _anchor_from_reports(current_raid_zone(), list(guild_reports()))
-    return found if found is not None else public_anchor()
+def guild_anchor() -> Anchor:
+    """The newest current-tier kill in the pinned guild's own (private) logs, with its roster."""
+    zone = current_raid_zone()
+    for report in guild_reports():
+        code = str(report["code"])
+        fights = run("warcraftlogs", "report-fights", code).data["fights"]
+        kills = [fight for fight in fights if fight.get("kill") and fight.get("encounter_id")]
+        if not kills:
+            continue
+        # Prefer the hardest difficulty in the report; ties go to the latest pull.
+        fight = max(kills, key=lambda row: (row.get("difficulty") or 0, row.get("id") or 0))
+        roster = _fight_roster(code, int(fight["id"]))
+        return Anchor(zone=zone, report=report, fight=fight, players=roster, listed_guild=str(report["guild"]["name"]))
+    raise JourneyFailure(
+        f"{pins.GUILD_NAME!r} has no kill in its {len(guild_reports())} newest {zone['name']!r} reports, so "
+        "nothing here exercises a private report (expected only in the days after a tier rollover)"
+    )
 
 
 @lru_cache(maxsize=1)
-def public_anchor() -> Anchor:
-    """A kill inside a *public* report, taken from the current tier's own leaderboard.
+def anchor() -> Anchor:
+    """A kill inside a *public*, guild-owned report, taken from the current tier's own leaderboard.
 
-    Every recent report of the pinned guild is private, so on its own the report half of this suite
-    would only ever exercise reports the saved user token can read. Encounter rankings list public
-    parses, so each row is both a guaranteed kill and a report any client token can read; the two
-    together are what :func:`test_report_visibility_decides_which_token_can_read_it` contrasts.
+    Encounter rankings list ranked parses, so each row is a guaranteed kill; its report has to be
+    public (any client token can read it) and belong to a guild (so the sampled cohort can be scoped
+    to that guild and provably contain this kill). Together with :func:`guild_anchor` this is what
+    :func:`test_report_visibility_decides_which_token_can_read_it` contrasts.
     """
     zone = current_raid_zone()
     scanned: list[str] = []
@@ -246,15 +226,18 @@ def public_anchor() -> Anchor:
             if not isinstance(code, str) or not isinstance(fight_id, int):
                 continue
             scanned.append(f"{code}#{fight_id}")
+            if not row.get("guild_name"):
+                continue
             detail = run("warcraftlogs", "report", code).data["report"]
-            if detail.get("visibility") != "public":
+            if detail.get("visibility") != "public" or not detail.get("guild"):
                 continue
             fights = run("warcraftlogs", "report-fights", code).data["fights"]
             fight = next((row for row in fights if row.get("id") == fight_id and row.get("kill")), None)
             if fight is None:
                 continue
-            return Anchor(zone=zone, report=detail, fight=fight, players=_fight_roster(code, fight_id))
-    raise JourneyFailure(f"no public ranked kill in {zone['name']!r}; scanned {scanned}")
+            roster = _fight_roster(code, fight_id)
+            return Anchor(zone=zone, report=detail, fight=fight, players=roster, listed_guild=str(row["guild_name"]))
+    raise JourneyFailure(f"no ranked kill in a public guild report in {zone['name']!r}; scanned {scanned}")
 
 
 def guild_tier_window() -> tuple[int, int]:
@@ -277,22 +260,24 @@ class WideCohort:
 
 @lru_cache(maxsize=1)
 def wide_cohort() -> WideCohort:
-    """The pinned guild's whole tier on the first boss it killed more than once.
+    """The pinned guild's whole tier, every difficulty, on the first boss it killed more than once.
 
     :func:`cohort_args` is one report window, which after duplicate collapsing is a single kill: an
     ordering claim over one row is true whatever the product does, and a dedupe claim has nothing to
     collapse. This walks the tier's bosses until one yields at least two kills of different lengths
     *and* at least one collapsed duplicate report, and says exactly what it scanned when none does.
+    The guild kills a boss about once per difficulty, so the difficulty is left unfiltered.
     """
     zone = current_raid_zone()
     start, end = guild_tier_window()
     scanned: list[str] = []
-    for boss in zone["encounters"][:WIDE_COHORT_BOSS_ATTEMPTS]:
+    for boss in zone["encounters"]:
         args = (
             "--zone-id", str(zone["id"]),
             "--boss-id", str(boss["id"]),
-            "--difficulty", str(MYTHIC_DIFFICULTY_ID),
-            *anchor().guild_scope,
+            "--guild-region", pins.GUILD_REGION,
+            "--guild-realm", pins.GUILD_REALM,
+            "--guild-name", pins.GUILD_NAME,
             "--start-time", str(start),
             "--end-time", str(end),
             "--report-pages", SAMPLE_REPORT_PAGES,
@@ -343,9 +328,10 @@ def assert_sampling_metadata(
 ) -> dict[str, Any]:
     """Every sampled command must describe its own cohort per SAFE_ANALYTICS_RULES.md.
 
-    ``expect_code`` is the report every populated cohort has to cite; ``expect_boss_id`` and the
-    difficulty come from the anchor unless the caller scoped somewhere else. Echoing back all three
-    filters matters because a sampled answer is only quotable next to the scope it was sampled from.
+    ``expect_code`` is the report every populated cohort has to cite. The boss and difficulty come
+    from the anchor unless the caller passes ``expect_boss_id`` for the wide cohort, which filters no
+    difficulty. Echoing back all three filters matters because a sampled answer is only quotable next
+    to the scope it was sampled from.
     """
     found = anchor()
     data = result.data
@@ -358,7 +344,7 @@ def assert_sampling_metadata(
     filters = scope.get("filters") or {}
     assert filters.get("zone_id") == found.zone["id"], result.describe()
     assert filters.get("boss_id") == (expect_boss_id or found.fight["encounter_id"]), result.describe()
-    assert filters.get("difficulty") == (MYTHIC_DIFFICULTY_ID if expect_boss_id else found.fight["difficulty"]), result.describe()
+    assert filters.get("difficulty") == (None if expect_boss_id else found.fight["difficulty"]), result.describe()
     assert isinstance(scope.get("returned"), int), result.describe()
     assert sample.get("source_report_count", 0) >= 1, result.describe()
     if expect_rows:
@@ -393,23 +379,16 @@ def anchor_ability_id() -> int:
 
 @lru_cache(maxsize=1)
 def anchor_wipe_fight_id() -> int:
-    """A wipe on the anchor kill's encounter, in the same report.
+    """The longest boss wipe in the anchor report.
 
     ``--wipe-cutoff`` only has anything to cut on a pull that wiped, so the flag cannot be proved
     against the anchor kill itself.
     """
     found = anchor()
     fights = run("warcraftlogs", "report-fights", found.code).data["fights"]
-    wipes = [
-        fight
-        for fight in fights
-        if fight.get("encounter_id") == found.fight["encounter_id"] and not fight.get("kill")
-    ]
+    wipes = [fight for fight in fights if fight.get("encounter_id") and fight.get("kill") is False]
     if not wipes:
-        raise JourneyFailure(
-            f"report {found.code} has no wipe on encounter {found.fight['encounter_id']}, "
-            "so --wipe-cutoff cannot be exercised against it"
-        )
+        raise JourneyFailure(f"report {found.code} has no boss wipe, so --wipe-cutoff cannot be exercised against it")
     return int(max(wipes, key=lambda row: row["end_time"] - row["start_time"])["id"])
 
 
@@ -740,17 +719,16 @@ def _client_view(code: str) -> Any:
 def test_report_visibility_decides_which_token_can_read_it(require):
     """Both visibility modes, contrasted on the same command.
 
-    The pinned guild logs privately, so every other report journey here is reading a report only the
-    saved *user* token can open — true today only by accident, and silently lost the day the guild
-    goes public or the anchor falls back to a public report. This pins it: the private anchor is
-    invisible to the client token and readable through the normal (user) path, and the public anchor
-    discovered from the tier leaderboard is readable by the client token as well.
+    Every other report journey reads the public anchor. The pinned guild logs privately, and this is
+    the one journey that proves the saved *user* token opens a report the client token cannot: the
+    private report is invisible to the client token and readable through the user endpoint, while
+    the public anchor is readable by the client token as well.
     """
     require("warcraftlogs")
-    private, public = anchor(), public_anchor()
+    private, public = guild_anchor(), anchor()
     assert private.report["visibility"] == "private", (
-        f"the anchor report {private.code} is no longer private, so nothing in this suite exercises "
-        "user-token-only report access any more"
+        f"the pinned guild's report {private.code} is no longer private, so nothing in this suite "
+        "exercises user-token-only report access any more"
     )
     assert public.report["visibility"] == "public", public.report
 
@@ -765,30 +743,9 @@ def test_report_visibility_decides_which_token_can_read_it(require):
         through_user.describe()
     )
 
-
-def test_a_public_report_answers_the_same_report_surfaces(require):
-    """The read chain over a report this machine has no special access to.
-
-    Somebody else's public log is what an agent is usually pointed at, and it is the half of the
-    visibility contract the pinned guild cannot cover. The fight is discovered from the tier
-    leaderboard, so it is a real kill and its roster must line up across three surfaces.
-    """
-    require("warcraftlogs")
-    found = public_anchor()
-
-    encounter = run("warcraftlogs", "report-encounter", found.url)
-    assert encounter.data["reference"]["code"] == found.code, encounter.describe()
-    assert encounter.data["fight"]["id"] == found.fight_id, encounter.describe()
-    assert encounter.data["fight"]["kill"] is True, encounter.describe()
-    assert encounter.data["encounter"]["name"] == found.fight["name"], encounter.describe()
-
-    roster = {row["name"] for row in found.players}
-    assert len(roster) == encounter.data["fight"]["size"], (sorted(roster), encounter.describe())
-
-    table = run("warcraftlogs", "report-table", found.code, "--data-type", "damage-done", "--fight-id", str(found.fight_id))
-    entries = table.data["table"]["data"]["entries"]
-    assert entries, table.describe()
-    assert {row["name"] for row in entries} <= roster, table.describe()
+    # The normal report command reads the private one too; it names the pinned guild.
+    detail = run("warcraftlogs", "report", private.code).data["report"]
+    assert detail["guild"]["name"].lower() == pins.GUILD_NAME, detail
 
 
 def test_report_and_report_fights_echo_the_discovered_report(require):
@@ -799,8 +756,8 @@ def test_report_and_report_fights_echo_the_discovered_report(require):
     detail = report.data["report"]
     assert detail["code"] == found.code, report.describe()
     assert detail["zone"]["id"] == found.zone["id"], report.describe()
-    # `report` and the listing that discovered it must agree on who owns the report.
-    assert _guild_identity(detail["guild"]) == _guild_identity(found.report["guild"]), report.describe()
+    # `report` and the leaderboard row that discovered it must agree on who owns the report.
+    assert detail["guild"]["name"] == found.listed_guild, report.describe()
 
     fights = run("warcraftlogs", "report-fights", found.code)
     assert fights.payload["kind"] == "report_fights", fights.describe()
@@ -1170,7 +1127,7 @@ def test_boss_kills_and_top_kills_return_the_anchor_kill(require):
     assert "boss_kills" in boss_kills.data, boss_kills.describe()
     data = assert_sampling_metadata(boss_kills, expect_rows=True)
     kills = data["kills"]
-    assert any(row["report"]["code"] == found.code and row["fight"]["id"] == found.fight_id for row in kills), boss_kills.describe()
+    assert any((found.code, found.fight_id) in _pull_keys(row) for row in kills), boss_kills.describe()
     assert all(row["fight"]["kill"] is True for row in kills), boss_kills.describe()
     assert all(row["duration_seconds"] > 0 for row in kills), boss_kills.describe()
 
@@ -1182,6 +1139,15 @@ def test_boss_kills_and_top_kills_return_the_anchor_kill(require):
 
 def _kill_key(row: dict[str, Any]) -> tuple[str, int]:
     return str(row["report"]["code"]), int(row["fight"]["id"])
+
+
+def _pull_keys(row: dict[str, Any]) -> set[tuple[str, int]]:
+    """Every report that logged this kill: the row's own, plus the ones collapsed into it.
+
+    Another raider's earlier-starting log of the anchor pull represents it after the collapse, so
+    "the anchor kill is in the cohort" means it is one of these.
+    """
+    return {_kill_key(row), *((str(entry["report_code"]), int(entry["fight_id"])) for entry in row["duplicate_reports"])}
 
 
 def test_top_kills_orders_a_multi_kill_cohort_by_duration(require):
@@ -1387,8 +1353,7 @@ def test_boss_kills_spec_filter_narrows_the_cohort_to_that_spec(require):
 
     The positive half alone cannot fail while the flag is ignored, because every kill in the anchor
     cohort is the anchor kill and its roster has the spec. The discriminating half asks for a spec
-    that another guild fielded on the same boss and this roster did not: the cohort must come back
-    empty. Both halves also check the rows' own ``matching_players``, which an ignored filter would
+    that the pinned guild fielded and this roster did not: the cohort must come back empty. Both halves also check the rows' own ``matching_players``, which an ignored filter would
     leave blank.
     """
     require("warcraftlogs")
@@ -1402,7 +1367,7 @@ def test_boss_kills_spec_filter_narrows_the_cohort_to_that_spec(require):
     kept = {(row["report"]["code"], row["fight"]["id"]) for row in data["kills"]}
     assert kept <= all_kills, filtered.describe()
     # The anchor kill's own roster contains the spec it was discovered from.
-    assert (anchor().code, anchor().fight_id) in kept, filtered.describe()
+    assert any((anchor().code, anchor().fight_id) in _pull_keys(row) for row in data["kills"]), filtered.describe()
     assert any("spec" in note.lower() for note in data["notes"]), filtered.describe()
     for row in data["kills"]:
         matched = row["matching_players"]
@@ -1411,10 +1376,10 @@ def test_boss_kills_spec_filter_narrows_the_cohort_to_that_spec(require):
             str(entry["spec"]).lower() for player in matched for entry in player["matching_specs"]
         } == {spec}, filtered.describe()
 
-    absent = sorted(_roster_specs(public_anchor().players) - _roster_specs(anchor().players))
+    absent = sorted(_roster_specs(guild_anchor().players) - _roster_specs(anchor().players))
     assert absent, (
-        "the public and the pinned kill fielded the same specs, so no spec is provably absent from "
-        f"the cohort: {sorted(_roster_specs(anchor().players))}"
+        "the pinned guild's kill and the anchor kill fielded the same specs, so no spec is provably "
+        f"absent from the cohort: {sorted(_roster_specs(anchor().players))}"
     )
     empty = run("warcraftlogs", "boss-kills", *cohort_args(), "--top", "10", "--spec-name", absent[0])
     assert empty.data["kills"] == [], f"{absent[0]!r} is not on the anchor roster\n{empty.describe()}"
@@ -1548,21 +1513,26 @@ def test_a_report_query_without_a_fight_scope_is_a_usage_error(require):
         assert result.stdout == ""
 
 
-def test_a_fight_scope_that_matches_nothing_is_not_found_not_an_empty_roster(require):
-    """An unknown fight id must not come back as a report with zero players."""
+def test_a_fight_scope_that_matches_nothing_is_not_found_not_an_empty_slice(require):
+    """An unknown fight id must not come back as a well-formed but empty table, graph, or roster.
+
+    Warcraft Logs answers a fight id the report does not have with an empty slice, which reads as
+    "nobody did anything". Every fight-scoped report surface has to say the fight is missing instead,
+    and name it, even when the other listed fight id is real.
+    """
     require("warcraftlogs")
     found = anchor()
-    result = run(
-        "warcraftlogs",
-        "report-player-details",
-        found.code,
-        "--fight-id",
-        "999999",
-        expect=EXIT_NOT_FOUND,
-        error_code="not_found",
-    )
-    assert found.code in result.payload["error"]["message"], result.describe()
-    assert "999999" in result.payload["error"]["message"], result.describe()
+    scope = ("--fight-id", str(found.fight_id), "--fight-id", "999999")
+    for command, extra in (
+        ("report-player-details", ()),
+        ("report-events", ("--data-type", "casts")),
+        ("report-table", ("--data-type", "damage-done")),
+        ("report-graph", ("--data-type", "damage-done")),
+        ("report-rankings", ()),
+    ):
+        result = run("warcraftlogs", command, found.code, *scope, *extra, expect=EXIT_NOT_FOUND, error_code="not_found")
+        assert result.payload["error"]["details"]["missing_fight_ids"] == [999999], result.describe()
+        assert found.code in result.payload["error"]["message"], result.describe()
 
 
 def test_a_dead_proxy_is_an_exit_5_envelope_on_stderr(require):

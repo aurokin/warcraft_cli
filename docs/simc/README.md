@@ -69,11 +69,11 @@ These codes are worth knowing:
 - `missing_dependency` (exit 1) — ripgrep is not installed.
 - `not_found` (exit 4) — `spec-files`, `find-action`, and `trace-action` were pointed at a directory that
   is not a SimulationCraft checkout. They report this instead of returning zero hits as a success.
-- `invalid_query` (exit 2) — a build arrived without a class and spec and could not be identified, or a
-  build-input option was passed with an empty value. Identification decodes the build once per candidate
-  spec, and the candidates are exactly the specs the checkout ships an APL for (34 today, healer specs
-  mostly among the ones it does not); `error.details.probed_specs` lists them. Pass `--actor-class` and
-  `--spec` for anything outside that list.
+- `invalid_query` (exit 2) — a build arrived without a class and spec and could not be identified,
+  `decode-build` was given no talent build at all, or a build-input option was passed with an empty
+  value. Identification decodes the build once per spec in the checkout's generated specialization data
+  (every playable spec, healers included) and keeps the one it decodes as; when several do,
+  `error.details.identity.candidates` lists them. Pass `--actor-class` and `--spec` to skip the probe.
 - `unsupported_build_reference` (exit 2) — the build input is a link the CLI cannot turn into talents.
   `error.details.reference_type` names what it recognized: `wowhead_talent_calc_url` for a talent-calc
   URL with no build code, `url` for anything else. See "Build references" below for what does decode.
@@ -112,7 +112,7 @@ Raw-only transport packets are not accepted as direct build input: upgrade them 
 
 | Reference type | Example | Decodes |
 |----------------|---------|---------|
-| `wow_talent_export` | `C4QAAAAAA...` | Yes, once the class and spec are known. Both Method and Icy Veins publish only this type, and the string names no class or spec, so either pass `--actor-class`/`--spec` or let identification probe the specs the checkout ships an APL for. |
+| `wow_talent_export` | `C4QAAAAAA...` | Yes, once the class and spec are known. Both Method and Icy Veins publish only this type, and the string names no class or spec, so either pass `--actor-class`/`--spec` or let identification probe every spec SimC knows. |
 | `wowhead_talent_calc_url` | `https://www.wowhead.com/talent-calc/monk/mistweaver/<code>` | Yes, unaided: the path names the class and spec. |
 | Wowhead `/talent-calc/blizzard/<code>` | what `modify-build` publishes as `result.wowhead_url` | Yes, as a `wow_talent_export`: the URL carries the hash but no class or spec. |
 | `wowhead_talent_calc_url` with no build code | `https://www.wowhead.com/talent-calc/monk/mistweaver` | No — `unsupported_build_reference`. |
@@ -135,12 +135,19 @@ Raw-only transport packets are not accepted as direct build input: upgrade them 
   nothing — for example when the checkout's trait data predates the node. Such a row still counts as
   enabled, and re-serializing it (a tree swap) will fail with `encode_mismatch` rather than lose it.
 
+## Comparing builds
+
+`compare-builds --tree` takes `class`, `spec`, or `hero`; any other value fails with `invalid_argument`
+(exit 2). A `--base` or `--other` that is empty or is no build reference is a usage error. An `--other`
+SimC rejects stays in `comparisons` with its `error`, and `summary` counts the `succeeded` and `failed`
+comparisons; when no `--other` decodes, the command fails with the first rejection instead.
+
 ## Editing a build
 
 `modify-build` routes each `--add`/`--remove` into the tree that owns the talent (SimC resolves talent
 names per tree, so a spec talent passed as a class talent is rejected). A name must belong to the actor's
 class; an entry id is resolved against the checkout's trait data. Unresolvable values fail with
-`unknown_talent`.
+`unknown_talent` (exit 2).
 
 After re-encoding, the result is decoded again and compared per tree with the build it was supposed to
 come from: the base build, or the `--swap-*-tree-from` source for a tree that was swapped. If anything
@@ -163,14 +170,13 @@ exactly.
 
 Validation resolves every raw row against the local SimulationCraft trait data (class, spec, hero, and
 the hero-tree selection node, which is reported under tree `selection` and named after the hero tree),
-re-encodes the build through the SimC binary, and decodes it back. Two SimC decode behaviours are
-accounted for and surfaced in `validation.round_trip`: tiered nodes (one node whose ranks are spread
-over several entries) are listed under `tiered_nodes` with `compared_by: "node_presence"` and
-`per_entry_ranks_verified: false`, because SimC prints only the node's leftover rank; and the keystones
-SimC grants for the hero tree the build did not pick are listed under `ignored_unselected_hero_entries`.
-A packet stays `raw_only` with `simc_trait_resolution_incomplete` when the local checkout predates a
-talent, or `simc_round_trip_mismatch` with `expected_entries_by_tree` / `actual_entries_by_tree` when
-the decoded build differs.
+re-encodes the build through the SimC binary, and decodes it back. Every entry is compared by rank,
+tiered nodes included: their per-entry ranks are read back as described under "Decoded builds", and a
+node whose ranks cannot be read back fails the comparison. The keystones SimC grants for the hero tree
+the build did not pick are listed under `validation.round_trip.ignored_unselected_hero_entries` and
+ignored. A packet stays `raw_only` with `simc_trait_resolution_incomplete` when the local checkout
+predates a talent or a row repeats an entry (`duplicate_entry`), or `simc_round_trip_mismatch` with
+`expected_entries_by_tree` / `actual_entries_by_tree` when the decoded build differs.
 
 ## Commands
 

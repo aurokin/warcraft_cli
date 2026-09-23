@@ -21,7 +21,7 @@ Global flags go before the subcommand: `--pretty`, `--compact`, `--compact-max-c
 | `method guide-query <bundle> "<query>"` | `--limit` (1-50, default 5), `--kind` (repeatable/comma-separated), `--section-title` | matches inside an exported bundle; no network access |
 
 `--kind` accepts `sections`, `navigation`, `linked_entities`, `build_references`, and
-`analysis_surfaces`; anything else fails with `invalid_kind`.
+`analysis_surfaces`; anything else fails with `invalid_query_kind`.
 
 ```bash
 method resolve "mistweaver monk"
@@ -39,10 +39,11 @@ envelope keys and are deprecated. Read `data`.
 
 Error codes and their exit codes: `network_error`/`timeout`/`upstream_error` exit 5, `not_found`
 exits 4, `auth_failed` exits 3, and the Method-specific input errors `invalid_guide_ref`,
-`unsupported_guide_surface`, `invalid_bundle`, `invalid_kind`, and `invalid_cache_config` exit 1.
-`guide-query` splits the two bundle mistakes the same way `icy-veins guide-query` does: a path that
-does not exist is `not_found` (exit 4), and a directory with no readable `manifest.json` is
-`invalid_bundle` (exit 1).
+`unsupported_guide_surface`, `invalid_bundle`, `invalid_query_kind`, and `invalid_cache_config` exit 1.
+`guide-query` answers a bad bundle path the same way `icy-veins guide-query` does: a path that does
+not exist is `not_found` (exit 4), a file is `invalid_argument` (exit 2), and a directory that is not
+an article bundle (no readable `manifest.json` or no `pages.jsonl`, such as a `wowhead guide-export`
+bundle) is `invalid_bundle` (exit 1).
 `invalid_guide_ref` means the argument was not a Method guide reference; a page that fetched but
 whose article container no longer matches fails with `parse_failed` (exit 1) instead of returning
 an empty article with `ok:true`.

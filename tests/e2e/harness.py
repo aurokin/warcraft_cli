@@ -225,13 +225,6 @@ def stream_records(result: Result) -> list[dict[str, Any]]:
     return records
 
 
-def payload_or_legacy(result: Result, key: str) -> Any:
-    """Read ``key`` from ``data``, falling back to the deprecated top-level copy."""
-    if key in result.data:
-        return result.data[key]
-    return result.payload.get(key)
-
-
 def dead_proxy_env() -> dict[str, str]:
     """Environment that makes every outbound HTTP connection fail fast (exit 5 journeys).
 

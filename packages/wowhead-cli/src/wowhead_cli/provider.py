@@ -26,6 +26,7 @@ from wowhead_cli.expansion_profiles import (
 )
 from wowhead_cli.ranking import (
     command_prefix_for_expansion,
+    merge_suggestion_lists,
     normalize_resolve_entity_types,
     normalize_search_results,
     preferred_resolve_candidates,
@@ -133,23 +134,27 @@ def _ranked_suggestions(
     query: str,
     profile: ExpansionProfile,
     entity_types: tuple[str, ...] = (),
-) -> list[dict[str, Any]]:
-    """Fetch Wowhead's suggestions for `search_query` and rank them against the caller's `query`."""
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Fetch Wowhead's suggestions for `search_query`, merge its row lists, and rank them against `query`.
+
+    Returns the ranked rows and the merge summary the payload reports as ``suggestion_merge``.
+    """
     with transport_errors():
         try:
             response = client.search_suggestions(search_query)
         except ValueError as exc:
             raise ProviderError("parse_error", str(exc)) from exc
-    results = response.get("results")
-    if not isinstance(results, list):
+    if not isinstance(response.get("results"), list):
         raise ProviderError("unexpected_response", "Missing or invalid 'results' payload from Wowhead.")
-    return normalize_search_results(
-        results,
+    rows, merge = merge_suggestion_lists(response)
+    ranked = normalize_search_results(
+        rows,
         query=query,
         expansion=profile,
         entity_types=entity_types,
         database_ranks=upstream_database_ranks(response),
     )
+    return ranked, merge
 
 
 def search(query: str, *, limit: int = 10, expansion: str | None = None, **options: Any) -> Envelope:
@@ -160,7 +165,7 @@ def search(query: str, *, limit: int = 10, expansion: str | None = None, **optio
     profile = selection.profile
     search_query = search_query_for_ranking(query)
     client = open_client(profile)
-    normalized = _ranked_suggestions(client, search_query, query=query, profile=profile)
+    normalized, merge = _ranked_suggestions(client, search_query, query=query, profile=profile)
     returned = normalized[:limit]
     data: dict[str, Any] = {
         "query": query,
@@ -171,6 +176,7 @@ def search(query: str, *, limit: int = 10, expansion: str | None = None, **optio
         "count": len(returned),
         "total_matches": len(normalized),
         "truncated": len(normalized) > len(returned),
+        "suggestion_merge": merge,
         "results": returned,
     }
     return envelope("search", "search_results", data, query=query)
@@ -195,15 +201,14 @@ def resolve(
         raise ProviderError("invalid_argument", str(exc)) from exc
     search_query = search_ranking_query(target)
     client = open_client(profile)
-    answering, trailing = preferred_resolve_candidates(
-        _ranked_suggestions(
-            client,
-            search_query,
-            query=target,
-            profile=profile,
-            entity_types=selected_entity_types,
-        )
+    ranked, merge = _ranked_suggestions(
+        client,
+        search_query,
+        query=target,
+        profile=profile,
+        entity_types=selected_entity_types,
     )
+    answering, trailing = preferred_resolve_candidates(ranked)
     confidence = resolve_confidence(answering, entity_types=selected_entity_types)
     top_candidate = answering[0] if answering else None
     candidates = answering + trailing
@@ -224,6 +229,7 @@ def resolve(
         "count": len(returned),
         "total_matches": len(candidates),
         "truncated": len(candidates) > len(returned),
+        "suggestion_merge": merge,
         "candidates": returned,
     }
     return envelope("resolve", "resolve_match", data, query=target)

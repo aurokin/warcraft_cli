@@ -16,7 +16,7 @@ from warcraft_core.identity import (
 from warcraft_core.identity import (
     parse_wowhead_talent_calc_ref as parse_shared_wowhead_talent_calc_ref,
 )
-from warcraft_core.talent_transport import tokenize_talent_name
+from warcraft_core.talent_transport import specialization_ids, tokenize_talent_name
 
 from simc_cli.repo import RepoPaths
 from simc_cli.trait_data import TieredEntry, load_trait_table
@@ -355,7 +355,7 @@ class UnsupportedBuildReference(ValueError):
         self.reference_type = reference_type
 
 
-WOWHEAD_HOST_SUFFIX = "wowhead.com"
+WOWHEAD_HOST = "wowhead.com"
 TALENT_CALC_SEGMENT = "talent-calc"
 BLIZZARD_CALC_SEGMENT = "blizzard"
 
@@ -375,7 +375,8 @@ def wowhead_blizzard_build_code(ref: str) -> str | None:
     publishes exactly this URL for its result, so the CLI has to be able to read its own output back.
     """
     segments = _url_path_segments(ref)
-    if segments is None or not (urlparse(ref).hostname or "").lower().endswith(WOWHEAD_HOST_SUFFIX):
+    host = (urlparse(ref).hostname or "").lower()
+    if segments is None or not (host == WOWHEAD_HOST or host.endswith(f".{WOWHEAD_HOST}")):
         return None
     if TALENT_CALC_SEGMENT not in segments:
         return None
@@ -554,16 +555,6 @@ def merge_build_specs(*specs: BuildSpec) -> BuildSpec:
             merged.transport_source = spec.transport_source
         merged.source_notes.extend(spec.source_notes)
     return merged
-
-
-def supported_specs(repo: RepoPaths) -> list[tuple[str, str]]:
-    candidates: list[tuple[str, str]] = []
-    for directory in (repo.apl_default, repo.apl_assisted):
-        for path in sorted(directory.glob("*.simc")):
-            actor_class, spec = infer_actor_and_spec_from_apl(path)
-            if actor_class and spec and (actor_class, spec) not in candidates:
-                candidates.append((actor_class, spec))
-    return candidates
 
 
 def build_profile_text(build_spec: BuildSpec) -> str:
@@ -812,7 +803,9 @@ def _probe_build_matches(
     unverified_packet_transport: bool,
     trusted_identity_hint: bool,
 ) -> list[tuple[str, str]]:
-    candidate_specs = supported_specs(repo)
+    # Every spec SimC's generated data knows, healers included: they ship no APL, so a candidate list
+    # drawn from APL files could never identify a healer build.
+    candidate_specs = sorted(specialization_ids(repo.root))
     if build_spec.actor_class and (not unverified_packet_transport or trusted_identity_hint):
         candidate_specs = [item for item in candidate_specs if item[0] == build_spec.actor_class]
     if build_spec.spec and (not unverified_packet_transport or trusted_identity_hint):
