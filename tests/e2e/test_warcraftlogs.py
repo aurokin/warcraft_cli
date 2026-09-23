@@ -1156,7 +1156,8 @@ def test_report_encounter_casts_says_when_its_aggregates_are_truncated(require):
     assert summary["truncated"] is True, capped.describe()
     assert summary["next_page_timestamp"] is not None, capped.describe()
     # The note has to name the count the aggregates below it were actually built from.
-    assert any(f"first {summary['event_count']} cast events" in note for note in capped.data["notes"]), capped.describe()
+    counted = f"{summary['cast_count']} casts in the first {summary['event_count']} events"
+    assert any(counted in note for note in capped.data["notes"]), capped.describe()
 
     # The opening seconds of the pull fit inside one page, so the same command must stop warning.
     complete = run("warcraftlogs", *args, "--limit", "10000", "--window-start-ms", "0", "--window-end-ms", "5000")
