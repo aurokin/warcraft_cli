@@ -11,6 +11,7 @@ from simc_cli.build_input import (
     DecodedTalent,
     SimcBuildError,
     TalentStrings,
+    UnknownClassSpecError,
     UnsupportedBuildReference,
     bounded_output_preview,
     build_profile_text,
@@ -943,11 +944,8 @@ def test_identify_build_confirms_direct_metadata_with_one_decode(tmp_path: Path)
         # hunter marksmanship with high confidence.
         (BuildSpec(actor_class="hunter", spec="marksmanship", talents="BM_HASH", source_kind="wowhead_talent_calc_url"),
          None, "ignored talent-calc url path: the build does not decode as hunter marksmanship"),
-        # The file name of the APL the build is read against is no statement about the build.
-        (BuildSpec(talents="BM_HASH", source_kind="wow_talent_export"),
-         "mage_fire.simc", "ignored apl name: the build does not decode as mage fire"),
     ],
-    ids=["url-path", "apl-name"],
+    ids=["url-path"],
 )
 def test_identify_build_drops_a_guessed_spec_the_hash_does_not_decode_as(
     tmp_path: Path, guessed: BuildSpec, apl_path: str | None, note: str
@@ -961,6 +959,19 @@ def test_identify_build_drops_a_guessed_spec_the_hash_does_not_decode_as(
     assert (identified.actor_class, identified.spec) == ("hunter", "beast_mastery")
     assert (identity.source, identity.confidence) == ("simc_probe", "high")
     assert note in identity.source_notes
+
+
+def test_identify_build_refuses_a_build_read_against_another_specs_apl(tmp_path: Path) -> None:
+    """A Beast Mastery hash read against mage_fire.simc must fail, not describe the fire rotation."""
+    repo = _repo(tmp_path)
+    tried: list[tuple[str | None, str | None]] = []
+    build_spec = BuildSpec(talents="BM_HASH", source_kind="wow_talent_export")
+
+    with (
+        patch("simc_cli.build_input.decode_build", side_effect=_decodes_only_as("hunter", "beast_mastery", tried)),
+        pytest.raises(UnknownClassSpecError, match="mage fire, the spec of the APL"),
+    ):
+        identify_build(repo, build_spec, apl_path=tmp_path / "mage_fire.simc")
 
 
 def test_identify_build_does_not_confirm_a_caller_spec_the_hash_does_not_decode_as(tmp_path: Path) -> None:

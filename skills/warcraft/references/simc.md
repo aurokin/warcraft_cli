@@ -35,6 +35,7 @@
   `identify-build`, `describe-build`, and `decode-build` report `source_kind`, resolved class/spec, and the normalized generated profile so you can verify the handoff before reasoning from it
 - any other link (a guide page, an article, an addon export site) fails with `unsupported_build_reference` (exit 2) naming what it recognized under `error.details.reference_type`; do not retry it as a talent string
 - for exact-build commands, `--talents` is now safe for the same common consumer inputs as `--build-text`, including bare WoW exports and Wowhead talent-calc URLs with build codes
+- a build read against another spec's APL (`--apl-path monk_brewmaster.simc` for a mistweaver build) fails with `invalid_query` instead of describing the wrong rotation
 - a talent string SimC rejects fails with `invalid_build` and SimC's own error line; it is never reported as a partial build. The envelope names the binary that rejected it under `error.details.simc_binary`, and when that binary is older than the checkout the message says so and asks for a rebuild; `simc doctor` reports the same mismatch under `repo.build_issues`
 - decoded builds name the active hero tree under `hero_tree`; talents from the other hero tree are listed under `inactive_hero_talents` and are not part of the build
 - a tiered node comes back as one row per entry, each with its own rank; a row with `rank_known: false` is taken at a rank the decode could not recover, so do not quote a rank for it

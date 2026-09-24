@@ -238,8 +238,8 @@ def _assert_handoff_packet(
 def _assert_leg(build: dict[str, Any], leg: str, *, succeeds: bool, actor_class: str, spec: str) -> dict[str, Any] | None:
     """One requested simc leg has its pinned outcome; returns the failure row it must produce.
 
-    The only failure pinned is describe-build against another spec's APL (``invalid_build``,
-    "Wrong specialization"), so any new failure mode turns the journey red.
+    The only failure pinned is describe-build against another spec's APL (``invalid_query``, "the spec
+    of the APL it is read against"), so any new failure mode turns the journey red.
     """
     section = build["simc"][leg]
     assert section["ok"] is succeeds, f"{leg}: {json.dumps(section)[:600]}"
@@ -250,8 +250,8 @@ def _assert_leg(build: dict[str, Any], leg: str, *, succeeds: bool, actor_class:
         assert (identity["actor_class"], identity["spec"]) == (actor_class, spec), f"{leg}: {identity}"
         return None
     error = section["error"]
-    assert error["code"] == section["payload"]["error"]["code"] == "invalid_build", f"{leg}: {error}"
-    assert "Wrong specialization" in error["message"], f"{leg}: {error}"
+    assert error["code"] == section["payload"]["error"]["code"] == "invalid_query", f"{leg}: {error}"
+    assert "the spec of the APL it is read against" in error["message"], f"{leg}: {error}"
     return {"leg": leg, **error}
 
 

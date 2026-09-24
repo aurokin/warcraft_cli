@@ -70,7 +70,9 @@ These codes are worth knowing:
 - `invalid_query` (exit 2) — a build arrived without a class and spec and could not be identified,
   `decode-build` or `identify-build` was given no build at all, a build-input option was passed with
   an empty value, or the class or spec names none of SimC's specs (an unknown class, or a pair such as
-  `mage holy`); the message lists the valid values. Class and spec are read case-insensitively and
+  `mage holy`); the message lists the valid values. It is also the answer when `--apl-path` names a
+  spec's APL (for example `monk_brewmaster.simc`) that the build does not decode as: a build is never
+  described against another spec's rotation. Class and spec are read case-insensitively and
   `Death Knight` or `death_knight` mean `deathknight`. Identification decodes the build once per spec in the checkout's generated
   specialization data (every playable spec, healers included) and keeps the one it decodes as; an
   `--actor-class` or `--spec` hint alone narrows the probe to that class's or spec's specs, and the

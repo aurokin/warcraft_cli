@@ -293,7 +293,14 @@ def _resolve_transport_rows(
         seen_entries.add(entry_id)
         candidates = records.get((entry_id, node_id_value, class_id), [])
         if spec_id:
-            candidates = [candidate for candidate in candidates if not any(candidate.spec_ids) or spec_id in candidate.spec_ids]
+            # SimC ignores id_spec for hero entries (player.cpp checks it only outside the HERO tree):
+            # which hero trees a spec may take is decided by its selection node, and the round trip
+            # through SimC enforces that. Augmentation's Chronowarden entries are tagged Preservation.
+            candidates = [
+                candidate
+                for candidate in candidates
+                if candidate.tree == "hero" or not any(candidate.spec_ids) or spec_id in candidate.spec_ids
+            ]
         if len(candidates) != 1:
             unresolved_rows.append(
                 {

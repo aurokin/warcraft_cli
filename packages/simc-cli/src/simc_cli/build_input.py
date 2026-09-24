@@ -887,11 +887,17 @@ def _unconfirmed_identity(repo: RepoPaths, build_spec: BuildSpec, caller_spec: B
     pair = (str(build_spec.actor_class), str(build_spec.spec))
     if _probe_build_matches(repo, build_spec, [pair]):
         return None
-    from_apl = _guessed_from_apl(build_spec)
-    if not from_apl and build_spec.source_kind != "wowhead_talent_calc_url":
+    if _guessed_from_apl(build_spec):
+        # The APL names a real spec the build is not: reading it against that APL would describe
+        # another spec's rotation with ok:true.
+        raise UnknownClassSpecError(
+            f"The build does not decode as {' '.join(pair)}, the spec of the APL it is read against. "
+            "Pass the APL for the build's own spec, or omit --apl-path to use its default APL."
+        )
+    if build_spec.source_kind != "wowhead_talent_calc_url":
         return build_spec
-    note = f"ignored {'apl name' if from_apl else 'talent-calc url path'}: the build does not decode as {' '.join(pair)}"
-    fallback = caller_spec if from_apl else replace(build_spec, actor_class=None, spec=None)
+    note = f"ignored talent-calc url path: the build does not decode as {' '.join(pair)}"
+    fallback = replace(build_spec, actor_class=None, spec=None)
     return replace(fallback, source_notes=[*fallback.source_notes, note])
 
 

@@ -134,6 +134,11 @@ def sync_repo(paths: RepoPaths, *, allow_dirty: bool) -> CommandResult | None:
 
 
 def build_repo(paths: RepoPaths, *, target: str | None) -> CommandResult:
+    """Configure, then build. SimC bakes its git revision in at configure time, so building alone
+    after a ``sync`` leaves a binary that ``doctor`` reports as built from the old commit."""
+    configure = _run(["cmake", "-S", str(paths.root), "-B", str(paths.build_dir)], cwd=paths.root)
+    if configure.returncode != 0:
+        return configure
     command = ["cmake", "--build", str(paths.build_dir)]
     if target:
         command.extend(["--target", target])

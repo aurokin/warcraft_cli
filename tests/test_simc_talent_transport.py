@@ -353,6 +353,24 @@ def test_validate_talent_tree_transport_rejects_rows_for_other_specs(tmp_path: P
     assert payload["validation"]["unresolved_entries"][0]["reason"] == "trait_not_found"
 
 
+def test_validate_talent_tree_transport_resolves_hero_entries_tagged_for_a_sibling_spec(tmp_path: Path) -> None:
+    """SimC ignores id_spec on hero entries, so a hero talent tagged for Balance resolves for Feral."""
+    _write_fake_generated_repo(tmp_path)
+
+    def round_trip(build_spec: BuildSpec) -> RoundTripResult:
+        return RoundTripResult(wow_talent_export="ENCODED123", entries_by_tree={"class": {}, "spec": {}, "hero": {117176: 1}})
+
+    payload = validate_talent_tree_transport(
+        actor_class="Druid",
+        spec="Feral",
+        talent_tree_rows=[{"entry": 117176, "node_id": 94585, "rank": 1}],
+        backend=TalentTransportBackend(trait_data_root=tmp_path, round_trip=round_trip),
+    )
+
+    assert payload["validation"]["status"] == "validated", payload["validation"]
+    assert payload["transport_forms"]["simc_split_talents"]["hero_talents"] == "117176:1"
+
+
 def test_validate_talent_tree_transport_supports_specs_with_underscores(tmp_path: Path) -> None:
     generated = tmp_path / "engine" / "dbc" / "generated"
     generated.mkdir(parents=True)
