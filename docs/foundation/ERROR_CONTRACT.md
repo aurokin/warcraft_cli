@@ -94,7 +94,7 @@ exit codes, and documents them in its provider README: for example `warcraftlogs
 | --- | --- | --- |
 | `0` | Success | |
 | `1` | Generic failure, including uncaught exceptions (`internal_error`) | any code with neither a row below nor a provider-specific mapping |
-| `2` | Usage error: bad flags or arguments | `invalid_query`, `invalid_argument`, `missing_fields` |
+| `2` | Usage error: bad flags or arguments | `invalid_query`, `invalid_argument`, `missing_fields`, `invalid_guide_ref`, `invalid_ref`, `invalid_tool_ref` |
 | `3` | Authentication required or rejected | `auth_required`, `auth_failed`, `unauthorized`, `forbidden` |
 | `4` | Target not found | `not_found` |
 | `5` | Network or upstream failure | `network_error`, `timeout`, `upstream_error`, `rate_limited`, `http_error` |

@@ -115,6 +115,15 @@ def player_sample() -> Result:
     return run("raiderio", "sample", "mythic-plus-players", *SCOPE, "--player-limit", "25")
 
 
+# Spec slugs more than one class uses; a class-qualified spec filter has to tell them apart.
+SHARED_SPEC_CLASSES: dict[str, tuple[str, ...]] = {
+    "frost": ("death-knight", "mage"),
+    "holy": ("paladin", "priest"),
+    "protection": ("paladin", "warrior"),
+    "restoration": ("druid", "shaman"),
+}
+
+
 def _cache_entries(cache_root: Path) -> set[Path]:
     provider_cache = cache_root / "warcraft" / "raiderio" / "http"
     return set(provider_cache.rglob("*")) if provider_cache.exists() else set()
@@ -154,6 +163,24 @@ def _a_value_only_some_runs_carry(runs: list[dict[str, Any]], field: str) -> str
     candidates = sorted(value for value, count in carriers.items() if 0 < count < len(runs))
     assert candidates, f"every sampled run carries the same {field}; nothing can narrow the sample"
     return str(candidates[0])
+
+
+def _a_class_spec_another_class_shares(runs: list[dict[str, Any]]) -> str:
+    """A ``class-spec`` whose bare spec another class fields on a run without it.
+
+    ``--contains-spec priest-holy`` must not keep a run whose only Holy is a paladin's; only a value
+    with such a run tells a filter that reads the class prefix from one that ignores it. The value
+    itself may be on no sampled run, and then the filter has to keep none.
+    """
+    for spec_slug, classes in sorted(SHARED_SPEC_CLASSES.items()):
+        for class_slug in classes:
+            value = f"{class_slug}-{spec_slug}"
+            if any(
+                value not in _roster_values(row, "class_spec") and spec_slug in _roster_values(row, "spec_slug")
+                for row in runs
+            ):
+                return value
+    raise AssertionError(f"no sampled run fields a spec that two classes share: {sorted(SHARED_SPEC_CLASSES)}")
 
 
 def _counts(rows: list[dict[str, Any]]) -> dict[str, int]:
@@ -457,20 +484,27 @@ def test_the_roster_filters_keep_exactly_the_runs_that_carry_the_value(baseline_
     """``--contains-class``/``--contains-spec`` select on the roster; ``--player-region``/``--contains-role`` too.
 
     The class and spec values are chosen from the sample so that some runs carry them and some do
-    not, which makes the expected set known exactly. The other two flags are proved both ways, on a
-    value every run carries (each run on a US leaderboard fields a US player and a tank) and on one
-    none can (no EU player, no made-up role): a filter that dropped everything fails the first leg,
-    one that did nothing fails the second.
+    not, which makes the expected set known exactly. A second class-qualified spec is one whose bare
+    spec another class fields on a run without it, so a filter that ignores the class keeps that run;
+    its expected set may be empty, which the first class-qualified leg rules out on its own. The
+    other two flags are proved both ways, on a value every run carries (each run on a US leaderboard
+    fields a US player and a tank) and on one none can (no EU player, no made-up role): a filter that
+    dropped everything fails the first leg, one that did nothing fails the second.
     """
     runs = _rows(baseline_sample, "runs")
     everything = _run_keys(baseline_sample)
 
-    # A class-qualified spec (``priest-holy``) must not also keep the runs of another class's Holy.
-    for field, flag in (("class_slug", "--contains-class"), ("spec_slug", "--contains-spec"), ("class_spec", "--contains-spec")):
-        value = _a_value_only_some_runs_carry(runs, field)
+    legs = (
+        ("class_slug", "--contains-class", _a_value_only_some_runs_carry(runs, "class_slug")),
+        ("spec_slug", "--contains-spec", _a_value_only_some_runs_carry(runs, "spec_slug")),
+        ("class_spec", "--contains-spec", _a_value_only_some_runs_carry(runs, "class_spec")),
+        ("class_spec", "--contains-spec", _a_class_spec_another_class_shares(runs)),
+    )
+    for field, flag, value in legs:
         expected = {_run_key(row) for row in runs if value in _roster_values(row, field)}
         narrowed = run("raiderio", "sample", "mythic-plus-runs", *SCOPE, flag, value)
-        assert _run_keys(narrowed) == expected, f"{flag} {value} kept the wrong runs\n{narrowed.describe()}"
+        narrowed_keys = {_run_key(row) for row in narrowed.data["runs"]}
+        assert narrowed_keys == expected, f"{flag} {value} kept the wrong runs\n{narrowed.describe()}"
         assert expected < everything, f"{flag} {value} has to drop at least one run to prove anything"
         assert narrowed.data["sample"]["filtering"]["excluded_run_count"] == len(everything) - len(expected)
 

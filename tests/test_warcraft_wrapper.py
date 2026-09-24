@@ -103,10 +103,6 @@ def _disable_wowhead_page_fetch(monkeypatch) -> None:  # noqa: ANN001
     monkeypatch.setattr("wowhead_cli.main.WowheadClient.page_html", fake_page_html)
 
 
-def _disable_wowhead_client_init(monkeypatch) -> None:  # noqa: ANN001
-    monkeypatch.setattr("wowhead_cli.main._client", lambda ctx: (_ for _ in ()).throw(typer.Exit(1)))
-
-
 def _simc_build_input_summary(args: list[str]) -> dict[str, object]:
     summary: dict[str, object] = {"command": args[0], "args": args}
     if "--build-packet" in args:
@@ -3203,15 +3199,16 @@ def test_warcraft_talent_packet_routes_explicit_wowhead_ref(monkeypatch) -> None
     assert calls == [("wowhead", ["talent-calc-packet", "druid/balance/ABC123", "--listed-build-limit", "10"])]
 
 
-def test_warcraft_talent_packet_routes_explicit_wowhead_ref_without_client_init(monkeypatch) -> None:
-    _disable_wowhead_client_init(monkeypatch)
+def test_warcraft_talent_packet_fails_on_a_broken_wowhead_cache_config(monkeypatch) -> None:
+    """A bad cache setting is one failure envelope, not an error on stderr plus a success on stdout."""
+    monkeypatch.setenv("WOWHEAD_PAGE_CACHE_TTL_SECONDS", "abc")
 
     result = runner.invoke(warcraft_app, ["talent-packet", "druid/balance/ABC123", "--no-validate"])
-    assert result.exit_code == 0
-    payload = json.loads(result.stdout)
-    assert payload["data"]["route"] == {"kind": "wowhead_talent_calc", "provider": "wowhead"}
-    assert payload["data"]["talent_transport_packet"]["transport_status"] == "exact"
-    assert "listed_builds" not in payload["data"]["producer_result"]["payload"]["data"]
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    payload = json.loads(result.stderr)
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "invalid_cache_config"
 
 
 def test_warcraft_talent_packet_passes_wowhead_listed_build_limit_and_expansion(monkeypatch) -> None:
@@ -4360,7 +4357,7 @@ def test_warcraft_talent_describe_rejects_empty_segment_wowhead_ref(tmp_path: Pa
         warcraft_app,
         ["talent-describe", "druid//balance/ABC123", "--apl-path", str(apl_path)],
     )
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     payload = json.loads(result.stderr)
     assert payload["kind"] == "error"
     assert payload["error"]["code"] == "invalid_tool_ref"
@@ -4375,7 +4372,7 @@ def test_warcraft_talent_describe_rejects_wowhead_ref_with_trailing_extra_segmen
         warcraft_app,
         ["talent-describe", "https://www.wowhead.com/talent-calc/druid/balance/ABC123/extra", "--apl-path", str(apl_path)],
     )
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     payload = json.loads(result.stderr)
     assert payload["kind"] == "error"
     assert payload["error"]["code"] == "invalid_tool_ref"
@@ -5710,24 +5707,24 @@ def test_normalize_upgrade_result_drops_the_deleted_build_packet_path() -> None:
 # is the same code path with a different payload `kind`. One parametrized pair pins that, instead of
 # a copy of each rejection test per command.
 _SHARED_TALENT_ROUTE_REJECTIONS = [
-    ("https://notwowhead.com/talent-calc/druid/balance/ABC123", "unsupported_talent_source", None),
-    ("notwowhead.com/talent-calc/druid/balance/ABC123", "invalid_tool_ref",
+    ("https://notwowhead.com/talent-calc/druid/balance/ABC123", "unsupported_talent_source", 1, None),
+    ("notwowhead.com/talent-calc/druid/balance/ABC123", "invalid_tool_ref", 2,
      "talent-calc reference must be a Wowhead talent-calc path or class/spec ref."),
-    ("talent-calc/foo/talent-calc/druid/balance/ABC123", "invalid_tool_ref",
+    ("talent-calc/foo/talent-calc/druid/balance/ABC123", "invalid_tool_ref", 2,
      "talent-calc reference must be a Wowhead talent-calc path or class/spec ref."),
-    ("tmp/talent-calc/druid/balance/ABC123", "invalid_tool_ref",
+    ("tmp/talent-calc/druid/balance/ABC123", "invalid_tool_ref", 2,
      "talent-calc reference must be a Wowhead talent-calc path or class/spec ref."),
-    ("https://www.wowhead.com/items/talent-calc/druid/balance/ABC123", "invalid_tool_ref", None),
-    ("druid/balance", "invalid_tool_ref", "talent-calc packet refs must include an explicit build code."),
+    ("https://www.wowhead.com/items/talent-calc/druid/balance/ABC123", "invalid_tool_ref", 2, None),
+    ("druid/balance", "invalid_tool_ref", 2, "talent-calc packet refs must include an explicit build code."),
 ]
 
 
 @pytest.mark.parametrize("command", ["talent-packet", "talent-describe"])
-@pytest.mark.parametrize("source,code,message", _SHARED_TALENT_ROUTE_REJECTIONS)
-def test_talent_route_rejections_match_across_packet_and_describe(command, source, code, message) -> None:
+@pytest.mark.parametrize("source,code,exit_code,message", _SHARED_TALENT_ROUTE_REJECTIONS)
+def test_talent_route_rejections_match_across_packet_and_describe(command, source, code, exit_code, message) -> None:
     result = runner.invoke(warcraft_app, [command, source])
 
-    assert result.exit_code == 1, result.output
+    assert result.exit_code == exit_code, result.output
     payload = json.loads(result.stderr)
     assert payload["kind"] == "error"
     assert payload["error"]["code"] == code

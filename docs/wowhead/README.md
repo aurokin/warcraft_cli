@@ -92,7 +92,7 @@ Failures print an error envelope on stderr and exit with the shared code:
 |------|---------|
 | 0 | success |
 | 1 | generic failure (parse errors, unexpected upstream payloads, bad cache config) |
-| 2 | usage error (bad flag value, rejected filter, invalid date range) |
+| 2 | usage error (bad flag value, rejected filter, invalid date range, a malformed talent-calc or tool reference (`invalid_tool_ref`) or news or blue-tracker reference (`invalid_ref`)) |
 | 3 | authentication failure |
 | 4 | upstream 404 |
 | 5 | transport failure (`network_error`), `timeout`, HTTP 429 (`rate_limited`), or other upstream HTTP error (`upstream_error`) |
@@ -185,7 +185,7 @@ Tool-state decoders:
 | Command | Purpose |
 |---------|---------|
 | `talent-calc REF` | class, spec, and build code from a talent calculator ref |
-| `talent-calc-packet REF` | exact talent transport packet; `--out PATH` writes just the packet |
+| `talent-calc-packet REF` | exact talent transport packet; `--out PATH` writes just the packet. The packet comes from the build code in `REF`, so a failed page fetch still answers, with `page.canonical_url` null and `page.fetch_error` `{code, message}` |
 | `profession-tree REF` | profession slug and loadout code |
 | `dressing-room REF` | normalized share hash and cited state URL |
 | `profiler REF` | normalized `list=` ref with list, region, realm, and name parts |

@@ -21,16 +21,21 @@ Every journey executes an installed binary (`.venv/bin/<name>`) as a real subpro
 On top of that, journeys assert real content: names, ids, counts, files on disk, and agreement
 between commands (search, resolve, and entity must name the same thing, and the page a typed
 lookup returns must be the page the query names). A journey follows an agent workflow end to end
-rather than probing one endpoint: every handed-over command (`next_command`, `follow_up.command`)
-a journey reads is split with `shlex` and run. The wrapper composites run against the real
-providers, and the ones that hand builds to simc (`guide-builds-simc`, `guide-compare-query
---simc-build-handoff`, `talent-packet`, `talent-describe`) run against the local SimulationCraft
-checkout rather than a stub.
+rather than probing one endpoint. Every `next_command` except Lorrgs' and the Wowhead guide
+resolve's, the Wowhead and wrapper search `follow_up.command`, the wrapper `fallback_search_command`
+and simc's `suggested_command` are split with `shlex` and run. The other hand-offs are only compared
+as strings: the Wowhead guide resolve's `next_command`, the search `follow_up.command` of Icy Veins,
+Method, Warcraft Wiki and Raider.IO, every Lorrgs hand-off, Raider.IO's `fallback_search_command`,
+Raidbots' `suggested_simc_commands`, the Blizzard and CurseForge stubs' `suggested_command`, and the
+wrapper composites' `sources.*.command`. The wrapper composites run against the real providers, and the
+ones that hand builds to simc (`guide-builds-simc`, `guide-compare-query --simc-build-handoff`,
+`talent-packet`, `talent-describe`) run against the local SimulationCraft checkout rather than a
+stub.
 
 Where a journey exercises a filter, a cap, or a sort, the bound has to provably exclude something:
 the journey reads the unfiltered baseline first, derives the bound from it, and compares the
-filtered result against the exact rows that bound keeps. Not every such flag has a journey, and a
-few caps are still only checked as `<= N`; see [Known limits](#known-limits).
+filtered result against the exact rows that bound keeps. Not every such flag has a journey; see
+[Known limits](#known-limits).
 
 ## Prerequisites
 
@@ -54,8 +59,9 @@ few caps are still only checked as `<= N`; see [Known limits](#known-limits).
   current tier bosses are discovered at run time. Some journeys also pin the exact page a past bug
   answered wrongly, which can age out: the Wowhead Fury Warrior guide id and achievement 18372 and
   the three tool-state refs in `test_wowhead.py`, the mistweaver guide refs and monk hero-tree
-  names in `test_wrapper_guides.py`, and the Icy Veins family probes for The War Within and the
-  Remix event in `test_icy_veins.py`. When upstream retires one, the journey goes red and the pin
+  names in `test_wrapper_guides.py`, the Icy Veins mistweaver guide the compact journey in
+  `test_contract.py` reads, and the Icy Veins family probes for The War Within and the Remix event
+  in `test_icy_veins.py`. When upstream retires one, the journey goes red and the pin
   is updated; it never passes on stale data.
 - **Real caches, isolated.** The session points `XDG_CACHE_HOME` at a temporary directory so
   journeys can assert cache hits without touching `~/.cache`. Config, state, and data roots stay
@@ -124,15 +130,12 @@ What a green run does **not** prove:
   filters such as `wowhead guides --updated-after/--updated-before`, `comments --keyword`,
   `blue-tracker --forum`, `linked-graph --relation`, the Warcraft Logs `--boss-name`,
   `--source-id`, `--target-id`, `--hostility-type` and `--kill-type` filters, the
-  `encounter-rankings` partition and server filters, and `lorrgs comp-ranking --role`. Some caps
-  are only checked as `<= N` (`warcraftlogs report-events --limit`, `reports --limit`,
-  `simc find-action --limit`), which passes whether or not the cap bites.
+  `encounter-rankings` partition and server filters, and `lorrgs comp-ranking --role`.
 - **Raidbots report parsing is untested against a real report.** The `inspect-report` / `input`
   success path runs only when `WARCRAFT_E2E_RAIDBOTS_REPORT` is set, CI excludes it, and the fast
   tests parse synthetic reports only.
-- **Some error paths never run.** No journey sees Warcraft Logs exit 3, or a failure envelope from
-  `talent-packet`, `talent-describe`, `actor-profile` or `guide-builds-simc`; the fast tests cover
-  them.
+- **Some error paths never run.** No journey sees a failure envelope from `talent-describe` or
+  `guide-builds-simc`; the fast tests cover them.
 - **No write path anywhere.** Nothing logs in, rotates a token, uploads a sim, or mutates a
   provider account, so those code paths are only covered by the fast tests.
 - **Volatile upstreams.** The journeys assert titles, ids, and counts from live pages. Upstream
@@ -161,6 +164,10 @@ Open weaknesses a green run does not rule out, beyond the limits above:
   `?realm=` value, so fetching the citation would prove nothing.
 - **Wowhead suggestion type 112** (Companion) has never appeared in a live response, so its label is
   unverified.
+- **`warcraftlogs graphql --introspect` has no success journey.** Warcraft Logs answers any query
+  that selects `__schema.types` with the GraphQL error "Internal server error" on both endpoints
+  (`__schema { queryType }` alone works), so the journey asserts the `graphql_error` exit 1 envelope
+  and a minimal `__schema` query instead. It goes red when upstream answers again.
 
 ## CI
 

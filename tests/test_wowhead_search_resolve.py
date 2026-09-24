@@ -276,7 +276,7 @@ def test_search_results_include_follow_up_guidance(monkeypatch) -> None:
         "recommended_surface": "entity",
         "command": "wowhead entity item 19019",
         "reason": "entity_summary",
-        "alternatives": [
+        "alternative_commands": [
             "wowhead entity-page item 19019",
             "wowhead comments item 19019",
         ],

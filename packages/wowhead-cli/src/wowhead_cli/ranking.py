@@ -140,7 +140,7 @@ def search_follow_up(candidate: dict[str, Any], *, intent: str, expansion: Expan
             "recommended_surface": recommended_surface,
             "command": recommended_command,
             "reason": reason,
-            "alternatives": alternatives,
+            "alternative_commands": alternatives,
         }
 
     if entity_type == "news":
@@ -149,7 +149,7 @@ def search_follow_up(candidate: dict[str, Any], *, intent: str, expansion: Expan
             "recommended_surface": "news-post",
             "command": f"{prefix} news-post {entity_url('news', entity_id, expansion=expansion)}",
             "reason": "news_post_summary",
-            "alternatives": [],
+            "alternative_commands": [],
         }
 
     if entity_type not in RESOLVE_ENTITY_TYPES:
@@ -176,7 +176,7 @@ def search_follow_up(candidate: dict[str, Any], *, intent: str, expansion: Expan
         "recommended_surface": recommended_surface,
         "command": recommended_command,
         "reason": reason,
-        "alternatives": alternatives,
+        "alternative_commands": alternatives,
     }
 
 
@@ -418,7 +418,7 @@ def url_entity_result(url: str, *, expansion: ExpansionProfile) -> dict[str, Any
         "recommended_surface": "entity",
         "command": f"{command_prefix_for_expansion(expansion)} entity {entity_type} {entity_id}",
         "reason": "entity_summary",
-        "alternatives": [],
+        "alternative_commands": [],
     }
     return row
 

@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+from warcraft_api.cache import redacted_redis_url
 from warcraft_content.article_bundle import (
     default_article_export_dir,
     load_article_bundle,
@@ -466,7 +467,7 @@ class WarcraftWikiProvider:
                 "enabled": settings.enabled,
                 "backend": settings.backend,
                 "cache_dir": str(settings.cache_dir),
-                "redis_url": settings.redis_url,
+                "redis_url": redacted_redis_url(settings.redis_url),
                 "prefix": settings.prefix,
                 "ttls": {
                     "search": search_ttl,

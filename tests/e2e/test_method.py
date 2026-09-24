@@ -392,4 +392,4 @@ def test_guide_query_rejects_a_bundle_path_that_is_missing_or_not_a_bundle(requi
 @pytest.mark.parametrize("command", ["guide", "guide-full", "guide-export"])
 def test_every_guide_command_rejects_an_empty_reference(require, command: str) -> None:
     require(PROVIDER)
-    run(BINARY, command, "   ", expect=EXIT_GENERIC, error_code="invalid_guide_ref")
+    run(BINARY, command, "   ", expect=EXIT_USAGE, error_code="invalid_guide_ref")

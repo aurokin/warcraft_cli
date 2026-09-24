@@ -104,7 +104,7 @@ those pages is missing from the merged sections, entities, build references, and
 ## Supported guide families
 
 Sitemap discovery and `guide` only accept slugs that classify into a known family. Unclassified WoW
-pages fail with `invalid_guide_ref`.
+pages fail with `invalid_guide_ref` (exit 2).
 
 | Family | Example slug |
 | --- | --- |
@@ -149,7 +149,8 @@ match nothing.
 A spec query (`frost mage`, `survival hunter guide`) resolves to that spec's
 `...-pve-<role>-guide`. Healer specs also publish a PvE DPS guide; their healing guide ranks first.
 A hunter spec's pets page ranks with its PvP and leveling pages, below the spec guide. `resolve`
-never picks between candidates with the same score.
+never picks between candidates with the same or nearly the same score, so a spec name that several
+classes share (`frost`, `holy`, `protection`, `restoration`) stays unresolved; add the class.
 
 Each result carries `metadata.last_updated`, the sitemap's `<lastmod>` date. A page last updated more
 than a year before the newest page in the sitemap loses 10 points and lists `penalty_stale_page` in

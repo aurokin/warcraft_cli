@@ -30,7 +30,7 @@ output flags, and many commands that used to answer wrong with `ok: true` now an
 - **Exit codes**: `2` usage (`invalid_query`, `invalid_argument`, `missing_fields`), `3` auth, `4` not found (including upstream 404), `5` network, timeout, rate limit and upstream failures, `1` everything else, on every binary. Provider-specific mappings are listed in ERROR_CONTRACT.md and each provider README.
 - **Upstream HTTP failures** are `auth_failed` (401/403), `not_found` (404), `rate_limited` (429) or `upstream_error` (other statuses), timeouts `timeout`, connection failures `network_error`, instead of `http_error`, always with `error.details.status_code` and `url`. Lorrgs answers 401/403 with `not_found` (the report is private).
 - HTTP clients send `User-Agent: warcraft-cli/<version>`, space requests to one host by `WARCRAFT_HTTP_MIN_INTERVAL_SECONDS` (default `0.25`) and cap `Retry-After` at 30 s. Auth state files are written 0600 in a 0700 directory, and `.env.local` discovery stops at the git root.
-- Handed-over commands (`next_command`, `follow_up.command`, `fallback_search_command`, `fetch_more_command`, cooldown-packet source commands) are shell-quoted. Wowhead, Icy Veins, Method and Warcraft Wiki rows name theirs in `follow_up.command` (was `follow_up.recommended_command`).
+- Handed-over commands (`next_command`, `follow_up.command`, `fallback_search_command`, `fetch_more_command`, cooldown-packet source commands) are shell-quoted. Wowhead, Icy Veins, Method and Warcraft Wiki rows name theirs in `follow_up.command` (was `follow_up.recommended_command`) and list the others in `follow_up.alternative_commands` (was `follow_up.alternatives`), which `--compact` never truncates.
 - Choosing the Redis cache backend without a URL fails naming the provider's own variables (`METHOD_REDIS_URL`, not `WOWHEAD_*`), and `doctor` prints `redis_url` without credentials.
 - `warcraft` calls providers in-process. `doctor` answers offline (no Warcraft Logs auth probe) and drops `language` and `shell_fallback`.
 - `warcraft search` and `resolve`: `--brief` is the small payload (was `--compact`, now only the global flag). `search` merges providers by query intent, keeps each provider's own order, caps any provider at half the page, lets the entity provider's exact-name row lead, and reports the rules in `data.merge_policy`. Both report `answered_provider_count`, `failed_provider_count` and `failed_providers[]` (with `exit_code`), and fail when no searching provider answered: with the providers' shared code, `upstream_error` (exit 5) when all failed upstream, otherwise `providers_failed` (exit 1).
@@ -58,6 +58,7 @@ output flags, and many commands that used to answer wrong with `ok: true` now an
 - `icy-veins` and `method` `guide-query` answer bad bundles the same way: missing `not_found` (4), a file `invalid_argument` (2), unreadable `invalid_bundle` (1); a section whose title matches the query ranks above sections that only mention it. A blank `search`/`resolve` query is `invalid_query` (exit 2).
 - `blizzard` `realm` and `character` accept display names and either slug spelling (`Mal'Ganis`, `Tarren Mill`); flag-validation failures exit 2. `blizzard` (us/eu/kr/tw) and `curseforge` payloads report `provenance.verified: true`. `curseforge` `data.changelog` names the file's `display_name` and `release_type`.
 - `raidbots` rejects an unparseable report reference with `invalid_report_ref` (exit 2); quick-sim reports with several actors carry `actor_count` and `other_actors`.
+- A malformed guide, tool or page reference is a usage error: `invalid_guide_ref` (`icy-veins`, `method`), `invalid_tool_ref` and `invalid_ref` (`wowhead`, and the `warcraft` talent routes that pass them through) exit 2 (was 1).
 
 ### Fixed
 
@@ -71,6 +72,10 @@ output flags, and many commands that used to answer wrong with `ok: true` now an
 - `icy-veins` parses the rebuilt guide layout and class hubs again. `icy-veins` and `method` guides split into real sections, extract talent export strings into `build_references`, report unfetchable pages in `failed_pages`, and fail `parse_failed` when a page layout no longer matches.
 - `warcraft-wiki` `search` covers the `API:` and `Event:` namespaces, keeps highlighted sub-words intact and ranks the named article first; blank queries fail locally; `maxlag`/`readonly` are `upstream_error` and `ratelimited` is `rate_limited`.
 - `curseforge addon` reports 401/403 as `auth_failed` (pointing at the numeric-id form) and 404 as `addon_not_found`. `lorrgs comp-ranking` and `spec-ranking` add a note when Lorrgs returns no reports.
+- `icy-veins resolve` no longer answers a spec name several classes share (`frost`) with one class's guide at high confidence, and `icy-veins search "mythic+ season 2"` ranks the current season's guide above past seasons' guides.
+- `doctor` and the Wowhead cache commands never print a Redis password: `wowhead`, `raiderio`, `raidbots` and `warcraft-wiki` printed `redis_url` verbatim, and `icy-veins`/`method` leaked the tail of a password containing `@`.
+- `wowhead talent-calc-packet` with an invalid cache setting fails with `invalid_cache_config` (exit 1); it used to print that error and a success envelope and exit 0.
+- `wowhead talent-calc-packet` no longer reports the input URL as the fetched page when the page fetch fails: `page.canonical_url` is null and `page.fetch_error` names the failure.
 
 ### Removed
 

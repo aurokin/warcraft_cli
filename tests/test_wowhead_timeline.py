@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+import pytest
 from wowhead_cli.main import app
 
 from tests.wowhead_testkit import (
@@ -253,6 +254,11 @@ def test_blue_topic_command_extracts_posts(monkeypatch) -> None:
     assert payload["data"]["summary"]["blue_authors"] == ["Kaivax"]
 
 
+@pytest.mark.parametrize("command", ["news-post", "blue-topic"])
+def test_a_reference_that_is_not_a_wowhead_page_is_a_usage_error(command: str) -> None:
+    result = runner.invoke(app, [command, "https://example.com/news/some-post"])
+
+    assert (result.exit_code, json.loads(result.stderr)["error"]["code"]) == (2, "invalid_ref")
 
 
 def _news_html(*posts: dict[str, Any]) -> str:

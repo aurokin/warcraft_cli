@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import httpx
-from warcraft_api.cache import CacheSettings, load_cache_settings_from_env
+from warcraft_api.cache import CacheSettings, load_cache_settings_from_env, redacted_redis_url
 from warcraft_core.envelope import Envelope, success_envelope
 from warcraft_core.exit_codes import error_code_for_http_status
 from warcraft_core.provider import ProviderError
@@ -97,7 +97,7 @@ def cache_settings_payload(settings: CacheSettings) -> dict[str, Any]:
         "enabled": settings.enabled,
         "backend": settings.backend,
         "cache_dir": str(settings.cache_dir),
-        "redis_url": settings.redis_url,
+        "redis_url": redacted_redis_url(settings.redis_url),
         "prefix": settings.prefix,
         "ttls": {
             "search_suggestions": ttls.search_suggestions,

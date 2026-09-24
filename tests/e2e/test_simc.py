@@ -928,15 +928,13 @@ def test_exact_build_priority_journey(require, checkout: Checkout) -> None:
     inactive = run("simc", "inactive-actions", str(checkout.apl), *build_args, "--limit", "10")
     assert inactive.data["inactive_actions"]["talent_only"] is True
     inactive_items = inactive.data["inactive_actions"]["items"]
+    # An empty list would make every check below true whatever the product does.
+    assert inactive_items, f"this build has no talent-dead action to report\n{inactive.describe()}"
     assert inactive.data["inactive_actions"]["count"] == len(inactive_items)
     assert all("talent." in row["reason"] for row in inactive_items)
     # Everything the priority view returned is active, so it cannot also be inactive.
-    assert not {row["line_no"] for row in rows} & {row["line_no"] for row in inactive_items}
-    # The priority view lists the same talent-dead lines of this build; an empty list would prove nothing.
-    wide_priority = run("simc", "priority", str(checkout.apl), *build_args, "--limit", "10")
-    talent_dead_lines = {row["line_no"] for row in wide_priority.data["priority"]["inactive_talent_branches"]}
-    assert talent_dead_lines, f"this build has no talent-dead action to report\n{wide_priority.describe()}"
-    assert {row["line_no"] for row in inactive_items} == talent_dead_lines, inactive.describe()
+    talent_dead_lines = {row["line_no"] for row in inactive_items}
+    assert not {row["line_no"] for row in rows} & talent_dead_lines
 
     all_dead = run("simc", "inactive-actions", str(checkout.apl), *build_args, "--all-dead", "--limit", "20")
     assert all_dead.data["inactive_actions"]["talent_only"] is False

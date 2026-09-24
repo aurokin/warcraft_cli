@@ -499,6 +499,16 @@ def test_icy_veins_resolve_answers_a_spec_query_with_that_specs_guide(monkeypatc
     assert (payload["resolved"], payload["match"]["id"]) == (True, expected)
 
 
+@pytest.mark.parametrize("query", ["frost", "frost guide"])
+def test_icy_veins_resolve_does_not_pick_a_class_for_a_spec_name_two_classes_share(monkeypatch, query: str) -> None:
+    """"frost" resolved to the mage guide at high confidence; the death knight guide was 3 points behind."""
+    slugs = [*CAPTURED_SPEC_SLUGS, "frost-death-knight-pve-dps-guide", "frost-death-knight-pvp-guide"]
+    payload = _invoke_with_sitemap(monkeypatch, slugs, ["resolve", query])
+
+    assert payload["resolved"] is False
+    assert {row["id"] for row in payload["candidates"][:2]} == {"frost-mage-pve-dps-guide", "frost-death-knight-pve-dps-guide"}
+
+
 def test_icy_veins_search_ranks_a_hunter_pets_page_with_the_specs_other_specialized_pages(monkeypatch) -> None:
     """The pets page is one part of a hunter spec, like its PvP page; it used to outrank the spec guide."""
     ids = _search_ids(monkeypatch, CAPTURED_SPEC_SLUGS, "survival hunter")
@@ -527,6 +537,40 @@ def test_icy_veins_search_ranks_the_current_mythic_plus_season_above_a_stale_one
         ("season-3-mythic-plus-guide", "2025-08-01"),
     ]
     assert "penalty_stale_page" in rows[1]["ranking"]["match_reasons"]
+
+
+def test_icy_veins_search_ranks_the_current_numbered_season_above_a_stale_one(monkeypatch) -> None:
+    """Only the old ``-mythic-plus-season-`` slug matched the whole query; that bonus cancelled its stale penalty."""
+    sitemap_xml = """
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>https://www.icy-veins.com/wow/dragonflight-mythic-plus-season-2-guide</loc><lastmod>2023-07-13</lastmod></url>
+  <url><loc>https://www.icy-veins.com/wow/midnight-mythic-season-2-guide</loc><lastmod>2026-08-05</lastmod></url>
+</urlset>
+"""
+    monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.sitemap_guides", lambda self: parse_sitemap_guides(sitemap_xml))
+    result = runner.invoke(app, ["search", "mythic+ season 2"])
+    assert result.exit_code == 0
+
+    ids = [row["id"] for row in json.loads(result.stdout)["data"]["results"]]
+    assert ids == ["midnight-mythic-season-2-guide", "dragonflight-mythic-plus-season-2-guide"]
+
+
+def test_icy_veins_search_ranks_numbered_seasons_newest_first_for_the_pages_own_spelling(monkeypatch) -> None:
+    """Rewriting "mythic season" to "mythic plus season" put the 2023 and 2021 guides above 2025's for "mythic season 2"."""
+    sitemap_xml = """
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>https://www.icy-veins.com/wow/shadowlands-mythic-plus-season-2-guide</loc><lastmod>2021-07-01</lastmod></url>
+  <url><loc>https://www.icy-veins.com/wow/dragonflight-mythic-plus-season-2-guide</loc><lastmod>2023-07-13</lastmod></url>
+  <url><loc>https://www.icy-veins.com/wow/the-war-within-mythic-season-2-guide</loc><lastmod>2025-03-01</lastmod></url>
+  <url><loc>https://www.icy-veins.com/wow/midnight-mythic-season-2-guide</loc><lastmod>2026-08-05</lastmod></url>
+</urlset>
+"""
+    monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.sitemap_guides", lambda self: parse_sitemap_guides(sitemap_xml))
+    result = runner.invoke(app, ["search", "mythic season 2"])
+    assert result.exit_code == 0
+
+    ids = [row["id"] for row in json.loads(result.stdout)["data"]["results"]]
+    assert ids[:2] == ["midnight-mythic-season-2-guide", "the-war-within-mythic-season-2-guide"]
 
 
 def test_icy_veins_search_reads_mythic_plus_for_mythic_plus_sign(monkeypatch) -> None:
@@ -785,7 +829,7 @@ def test_icy_veins_guide_export_and_query(monkeypatch, tmp_path: Path) -> None:
 
 def test_icy_veins_invalid_guide_ref_fails_structured() -> None:
     result = runner.invoke(app, ["guide", "news-roundup"])
-    assert result.exit_code == 1
+    assert result.exit_code == 2
 
     payload = json.loads(result.stderr or result.stdout)
     assert payload["ok"] is False
@@ -1215,8 +1259,18 @@ def test_icy_veins_guide_quotes_the_slug_in_its_fetch_more_command(monkeypatch) 
     assert shlex.split(command) == ["icy-veins", "guide-full", "mistweaver-monk's-guide"]
 
 
-def test_icy_veins_doctor_never_prints_the_redis_password(monkeypatch) -> None:
-    monkeypatch.setenv("ICY_VEINS_REDIS_URL", "redis://user:FAKEPASS@cache.example:6380/2?password=QUERYPASS")
+@pytest.mark.parametrize(
+    "redis_url",
+    [
+        "redis://user:FAKEPASS@cache.example:6380/2?password=QUERYPASS",
+        # redis-py reads the password up to the last '@': the first '@' used to leak "PASS@".
+        "redis://:FAKE@PASS@cache.example:6380/2",
+        # A URL parser rejects brackets outside an IPv6 host, which failed doctor with internal_error.
+        "redis://:FA[KE@PA]SS@cache.example:6380/2",
+    ],
+)
+def test_icy_veins_doctor_never_prints_the_redis_password(monkeypatch, redis_url: str) -> None:
+    monkeypatch.setenv("ICY_VEINS_REDIS_URL", redis_url)
     result = runner.invoke(app, ["doctor"])
     assert result.exit_code == 0
 

@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import httpx
+from warcraft_api.cache import redacted_redis_url
 from warcraft_core.envelope import ENVELOPE_KEYS, Envelope, error_envelope, success_envelope
 from warcraft_core.provider import ProviderError, ProviderSurface
 from warcraft_core.shapes import as_dict, as_list
@@ -197,7 +198,7 @@ def doctor_report() -> dict[str, Any]:
             "enabled": settings.enabled,
             "backend": settings.backend,
             "cache_dir": str(settings.cache_dir),
-            "redis_url": settings.redis_url,
+            "redis_url": redacted_redis_url(settings.redis_url),
             "prefix": settings.prefix,
             "ttls": {
                 "static_data": static_ttl,

@@ -291,9 +291,9 @@ def score_slug_match(query: str, candidate: str, *, slug: str) -> tuple[int, lis
             score += 2
             reasons.append("specialized_guide")
         else:
-            # Healer specs also publish a secondary ``-pve-dps-guide``; it scores just below their
+            # Healer specs also publish a secondary ``-pve-dps-guide``; it scores clearly below their
             # ``-pve-healing-guide`` so a healer query still resolves to the healing guide.
-            score += 14 if slug.endswith("-pve-dps-guide") else 16
+            score += 10 if slug.endswith("-pve-dps-guide") else 16
             reasons.append("intro_guide")
     query_words = query.split()
     penalty_terms = [term for term in slug.split("-") if term and term not in query_words and term not in NEUTRAL_SLUG_TERMS]
@@ -315,10 +315,11 @@ def _scored_candidate(row: dict[str, Any], query: str, terms: set[str], *, stale
     slug = row["slug"]
     content_family = row.get("content_family")
     candidate = f"{row['name'].lower()} {slug.replace('-', ' ')}"
-    if "-mythic-season-" in slug:
-        # Icy Veins drops "plus" from its newer seasonal slugs (``midnight-mythic-season-2-guide``), so
-        # "mythic+" has to find those as well as the ``...-mythic-plus-...`` pages.
-        candidate += " mythic plus"
+    # Icy Veins drops "plus" from its newer seasonal slugs (``midnight-mythic-season-2-guide``). Adding the
+    # "mythic plus season" spelling lets "mythic+ season 2" score them like the older ``-mythic-plus-season-``
+    # pages, so only the stale penalty separates seasons, while the page's own title still matches.
+    if "mythic season" in candidate:
+        candidate += " " + candidate.replace("mythic season", "mythic plus season")
     # Family boosts alone (a class hub for any one-word query) must not surface an unrelated guide,
     # and a term only counts as a whole word: "dh" is not a match for "headhunters".
     if not terms & _singular_words(set(tokenize_query(candidate))):
@@ -377,10 +378,10 @@ def resolve_is_confident(top: dict[str, Any] | None, second: dict[str, Any] | No
     top_score = top["ranking"]["score"]
     second_score = second["ranking"]["score"] if second else 0
     top_reasons = set(top["ranking"]["match_reasons"])
-    # A tie is never an answer, however high both candidates score.
+    # A tie or a near-tie is never an answer, however high both candidates score: "frost" is a mage
+    # and a death knight spec, and only the off-query slug words tell those guides apart.
     return (
-        (top_score >= 50 and top_score > second_score)
-        or top_score >= second_score + 15
+        top_score >= second_score + 15
         or ("family_easy_mode" in top_reasons and top_score >= second_score + 10 and top_score >= 35)
         or ("intro_guide" in top_reasons and top_score >= second_score + 6 and top_score >= 30)
     )

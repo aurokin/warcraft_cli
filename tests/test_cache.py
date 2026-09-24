@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import json
 from pathlib import Path
 
@@ -13,6 +14,7 @@ from warcraft_api.cache import (
     inspect_file_cache,
     inspect_redis_cache,
     load_cache_settings_from_env,
+    redacted_redis_url,
     repair_file_cache,
 )
 from wowhead_cli.wowhead_client import WowheadClient
@@ -373,3 +375,45 @@ def test_entity_response_cache_is_scoped_by_expansion(tmp_path: Path) -> None:
         include_all_comments=False,
         linked_entity_preview_limit=0,
     ) == classic_payload
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("redis://user:FAKEPASS@cache.example:6380/2?password=QUERYPASS", "redis://***@cache.example:6380/2"),
+        ("redis://:FAKE@PASS@cache.example:6380/2", "redis://***@cache.example:6380/2"),
+        ("redis://:FA[KE@PA]SS@cache.example:6380/2", "redis://***@cache.example:6380/2"),
+        ("redis://cache.example:6379/0", "redis://cache.example:6379/0"),
+        ("FAKEPASS@cache.example", "***"),
+        (None, None),
+    ],
+)
+def test_redacted_redis_url_hides_every_credential(url: str | None, expected: str | None) -> None:
+    assert redacted_redis_url(url) == expected
+
+
+@pytest.mark.parametrize(
+    ("env_prefix", "provider_module"),
+    [
+        ("RAIDERIO", "raiderio_cli.provider"),
+        ("RAIDBOTS", "raidbots_cli.provider"),
+        ("WARCRAFT_WIKI", "warcraft_wiki_cli.provider"),
+        ("ICY_VEINS", "icy_veins_cli.provider"),
+        ("METHOD", "method_cli.provider"),
+    ],
+)
+def test_no_provider_doctor_prints_the_redis_password(monkeypatch, env_prefix: str, provider_module: str) -> None:
+    monkeypatch.setenv(f"{env_prefix}_REDIS_URL", "redis://:FAKE@PASS@cache.example:6380/2")
+    provider = importlib.import_module(provider_module).PROVIDER
+    payload = json.dumps(provider.doctor())
+    assert "PASS" not in payload
+    assert "redis://***@cache.example:6380/2" in payload
+
+
+def test_wowhead_cache_settings_never_print_the_redis_password(monkeypatch) -> None:
+    """Feeds wowhead doctor, cache-inspect, cache-repair and cache-clear (doctor itself probes live)."""
+    from wowhead_cli.provider import cache_settings_payload
+
+    monkeypatch.setenv("WOWHEAD_REDIS_URL", "redis://:FAKE@PASS@cache.example:6380/2")
+    payload = cache_settings_payload(load_cache_settings_from_env())
+    assert payload["redis_url"] == "redis://***@cache.example:6380/2"

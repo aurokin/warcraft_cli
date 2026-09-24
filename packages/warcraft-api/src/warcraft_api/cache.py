@@ -509,3 +509,20 @@ def clear_redis_cache(
         "total": sum(removed_by_namespace.values()),
         "namespaces": dict(sorted(removed_by_namespace.items())),
     }
+
+
+def redacted_redis_url(url: str | None) -> str | None:
+    """The Redis URL without its credentials or query string, for doctor and cache output.
+
+    Agents keep that output in their context and logs, so a password must never reach it. The userinfo
+    ends at the last '@' before the path, as redis-py reads it, so a password holding '@' (or '[')
+    is hidden whole; no URL parser is involved, so no password character can make this raise.
+    """
+    if url is None:
+        return None
+    scheme, sep, rest = url.split("?", 1)[0].partition("://")
+    if not sep:
+        return "***"
+    netloc, slash, path = rest.partition("/")
+    host = netloc.rpartition("@")[2]
+    return f"{scheme}://{'***@' if '@' in netloc else ''}{host}{slash}{path}"

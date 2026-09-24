@@ -22,7 +22,7 @@ def article_follow_up(
         "recommended_surface": surface,
         "command": f"{provider_command} {surface} {quoted_ref}",
         "reason": normalized_reason,
-        "alternatives": [
+        "alternative_commands": [
             f"{provider_command} {normalized_full_surface} {quoted_ref}",
             f"{provider_command} {normalized_export_surface} {quoted_ref}",
         ],

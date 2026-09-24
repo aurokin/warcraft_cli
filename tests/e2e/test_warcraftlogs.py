@@ -19,8 +19,9 @@ Three discovery fixtures, because one cannot prove everything:
 - ``guild_anchor`` is the pinned guild's own newest kill. Every one of its reports is *private*, so
   it is what proves the saved user token opens a report the client token cannot; it is also the
   roster the spec filter's negative case is derived from, and a report Lorrgs has never cached.
-- ``wide_cohort`` is the guild's whole tier on a boss it killed more than once, because ordering and
-  duplicate collapsing are claims that a single-kill cohort can never contradict.
+- ``wide_cohort`` is the guild's newest reports of one tier (the current one, or an earlier one while
+  the current tier is too new) on a boss it killed more than once, because ordering and duplicate
+  collapsing are claims that a single-kill cohort can never contradict.
 
 Auth journeys read only. ``auth login``, ``auth pkce-login``, and ``auth logout`` rewrite the saved
 user token, so exercising them would log this machine out; they are deliberately not covered here
@@ -33,12 +34,13 @@ import json
 import shlex
 from collections import Counter
 from dataclasses import dataclass
-from functools import lru_cache
+from functools import cache, lru_cache
 from typing import Any
 
 from tests.e2e import pins
 from tests.e2e.harness import (
     EXIT_AUTH,
+    EXIT_GENERIC,
     EXIT_NETWORK,
     EXIT_NOT_FOUND,
     EXIT_USAGE,
@@ -70,6 +72,9 @@ MYTHIC_DIFFICULTY_ID = 5
 PUBLIC_ANCHOR_BOSS_ATTEMPTS = 3
 PUBLIC_ANCHOR_ROW_ATTEMPTS = 5
 WIDE_COHORT_TOP = "20"
+# How many raid zones, newest first, the wide cohort walks. The one before the current tier can be a
+# one-boss raid, so two would not always reach a finished tier.
+WIDE_COHORT_ZONES = 3
 # The widest wall-clock drift two logs of one pull may show before they are different pulls. Stated
 # here rather than imported so the journey asserts the contract instead of the implementation.
 DUPLICATE_PULL_TOLERANCE_MS = 5_000
@@ -122,20 +127,27 @@ def _rows(result: Result, key: str) -> list[Any]:
 
 
 @lru_cache(maxsize=1)
-def current_raid_zone() -> dict[str, Any]:
-    """The newest unfrozen raid zone Warcraft Logs knows about."""
+def raid_zones() -> tuple[dict[str, Any], ...]:
+    """Every raid zone Warcraft Logs knows about, newest first."""
     result = run("warcraftlogs", "zones")
     raids = [
         zone
         for zone in _rows(result, "zones")
         if isinstance(zone, dict)
-        and not zone.get("frozen")
         and zone.get("encounters")
         and {difficulty.get("id") for difficulty in zone.get("difficulties") or []} >= RAID_DIFFICULTY_IDS
     ]
-    if not raids:
-        raise JourneyFailure(f"no unfrozen raid zone in the zone list\n{result.describe()}")
-    return max(raids, key=lambda zone: ((zone.get("expansion") or {}).get("id") or 0, zone.get("id") or 0))
+    return tuple(
+        sorted(raids, key=lambda zone: ((zone.get("expansion") or {}).get("id") or 0, zone.get("id") or 0), reverse=True)
+    )
+
+
+def current_raid_zone() -> dict[str, Any]:
+    """The newest unfrozen raid zone Warcraft Logs knows about."""
+    zone = next((zone for zone in raid_zones() if not zone.get("frozen")), None)
+    if zone is None:
+        raise JourneyFailure(f"no unfrozen raid zone among {[zone['name'] for zone in raid_zones()]}")
+    return zone
 
 
 def _fight_roster(code: str, fight_id: int) -> tuple[dict[str, Any], ...]:
@@ -172,21 +184,19 @@ def _absolute_fight_window(code: str, fight_id: int) -> FightWindow:
     )
 
 
-@lru_cache(maxsize=1)
-def guild_reports() -> tuple[dict[str, Any], ...]:
-    """The pinned guild's most recent current-tier reports; the guild anchor and the wide cohort share them."""
-    zone = current_raid_zone()
-    result = run(
-        "warcraftlogs", "guild-reports", *GUILD, "--zone-id", str(zone["id"]), "--limit", str(DISCOVERY_REPORT_LIMIT)
-    )
-    return tuple(_rows(result, "reports"))
+@cache
+def guild_reports(zone_id: int) -> tuple[dict[str, Any], ...]:
+    """The pinned guild's most recent reports in one zone; the guild anchor and the wide cohort share them."""
+    result = run("warcraftlogs", "guild-reports", *GUILD, "--zone-id", str(zone_id), "--limit", str(DISCOVERY_REPORT_LIMIT))
+    return tuple(result.data["reports"])
 
 
 @lru_cache(maxsize=1)
 def guild_anchor() -> Anchor:
     """The newest current-tier kill in the pinned guild's own (private) logs, with its roster."""
     zone = current_raid_zone()
-    for report in guild_reports():
+    reports = guild_reports(int(zone["id"]))
+    for report in reports:
         code = str(report["code"])
         fights = run("warcraftlogs", "report-fights", code).data["fights"]
         # Only the tier's own bosses: a raid-zone report can also hold a Mythic+ run (difficulty 10),
@@ -208,7 +218,7 @@ def guild_anchor() -> Anchor:
             players=roster,
         )
     raise JourneyFailure(
-        f"{pins.GUILD_NAME!r} has no kill in its {len(guild_reports())} newest {zone['name']!r} reports, so "
+        f"{pins.GUILD_NAME!r} has no kill in its {len(reports)} newest {zone['name']!r} reports, so "
         "nothing here exercises a private report (expected only in the days after a tier rollover)"
     )
 
@@ -260,11 +270,10 @@ def anchor() -> Anchor:
     raise JourneyFailure(f"no ranked kill in a public guild report in {zone['name']!r}; scanned {scanned}")
 
 
-def guild_tier_window() -> tuple[int, int]:
-    """Report-time bounds covering every current-tier report of the pinned guild."""
-    rows = guild_reports()
-    start = min(int(row["start_time"]) for row in rows) - SAMPLE_WINDOW_PADDING_MS
-    end = max(int(row["end_time"]) for row in rows) + SAMPLE_WINDOW_PADDING_MS
+def _report_window(reports: tuple[dict[str, Any], ...]) -> tuple[int, int]:
+    """Report-time bounds covering every one of ``reports``."""
+    start = min(int(row["start_time"]) for row in reports) - SAMPLE_WINDOW_PADDING_MS
+    end = max(int(row["end_time"]) for row in reports) + SAMPLE_WINDOW_PADDING_MS
     return start, end
 
 
@@ -272,25 +281,20 @@ def guild_tier_window() -> tuple[int, int]:
 class WideCohort:
     """A sampled scope holding more than one kill, so an ordering or dedupe claim can be wrong."""
 
+    zone: dict[str, Any]
     boss: dict[str, Any]
     args: tuple[str, ...]
     kills: tuple[dict[str, Any], ...]
     sample: dict[str, Any]
 
 
-@lru_cache(maxsize=1)
-def wide_cohort() -> WideCohort:
-    """The pinned guild's whole tier, every difficulty, on the first boss it killed more than once.
-
-    :func:`cohort_args` is one report window, which after duplicate collapsing is a single kill: an
-    ordering claim over one row is true whatever the product does, and a dedupe claim has nothing to
-    collapse. This walks the tier's bosses until one yields at least two kills of different lengths
-    *and* at least one collapsed duplicate report, and says exactly what it scanned when none does.
-    The guild kills a boss about once per difficulty, so the difficulty is left unfiltered.
-    """
-    zone = current_raid_zone()
-    start, end = guild_tier_window()
-    scanned: list[str] = []
+def _zone_wide_cohort(zone: dict[str, Any], scanned: list[str]) -> WideCohort | None:
+    """The first boss of ``zone`` the pinned guild's newest reports hold a qualifying cohort for."""
+    reports = guild_reports(int(zone["id"]))
+    if not reports:
+        scanned.append(f"{zone['name']}: no guild reports")
+        return None
+    start, end = _report_window(reports)
     for boss in zone["encounters"]:
         args = (
             "--zone-id", str(zone["id"]),
@@ -306,12 +310,33 @@ def wide_cohort() -> WideCohort:
         result = run("warcraftlogs", "boss-kills", *args, "--top", str(WIDE_COHORT_TOP))
         kills = tuple(result.data["kills"])
         sample = result.data["sample"]
-        scanned.append(f"{boss['name']}: {len(kills)} kill(s), {sample['duplicates_removed']} duplicate(s)")
+        scanned.append(
+            f"{zone['name']} / {boss['name']}: {len(kills)} kill(s), {sample['duplicates_removed']} duplicate(s)"
+        )
         if len({row["duration_ms"] for row in kills}) >= 2 and sample["duplicates_removed"] >= 1:
-            return WideCohort(boss=boss, args=args, kills=kills, sample=sample)
+            return WideCohort(zone=zone, boss=boss, args=args, kills=kills, sample=sample)
+    return None
+
+
+@lru_cache(maxsize=1)
+def wide_cohort() -> WideCohort:
+    """The pinned guild's newest reports of one tier, every difficulty, on a boss it killed more than once.
+
+    :func:`cohort_args` is one report window, which after duplicate collapsing is a single kill: an
+    ordering claim over one row is true whatever the product does, and a dedupe claim has nothing to
+    collapse. This walks each tier's bosses until one yields at least two kills of different lengths
+    *and* at least one collapsed duplicate report, and says exactly what it scanned when none does.
+    A tier that opened days ago has no boss killed twice yet, so the walk falls back to the tiers
+    before it. The guild kills a boss about once per difficulty, so the difficulty is left unfiltered.
+    """
+    scanned: list[str] = []
+    for zone in raid_zones()[:WIDE_COHORT_ZONES]:
+        cohort = _zone_wide_cohort(zone, scanned)
+        if cohort is not None:
+            return cohort
     raise JourneyFailure(
-        f"no boss in {zone['name']!r} gives {pins.GUILD_NAME!r} two kills of different lengths with a "
-        f"double-logged pull among them, so ordering and dedupe cannot be proved: {scanned}"
+        f"no boss in the {WIDE_COHORT_ZONES} newest raid zones gives {pins.GUILD_NAME!r} two kills of different "
+        f"lengths with a double-logged pull among them, so ordering and dedupe cannot be proved: {scanned}"
     )
 
 
@@ -343,17 +368,19 @@ def assert_sampling_metadata(
     result: Result,
     *,
     expect_rows: bool,
-    expect_code: str | None = None,
-    expect_boss_id: int | None = None,
+    wide: WideCohort | None = None,
 ) -> dict[str, Any]:
     """Every sampled command must describe its own cohort per SAFE_ANALYTICS_RULES.md.
 
-    ``expect_code`` is the report every populated cohort has to cite. The boss and difficulty come
-    from the anchor unless the caller passes ``expect_boss_id`` for the wide cohort, which filters no
-    difficulty. Echoing back all three filters matters because a sampled answer is only quotable next
-    to the scope it was sampled from.
+    The zone, boss, difficulty and a report every populated cohort has to cite come from the anchor,
+    or from ``wide`` for the wide cohort, which filters no difficulty. Echoing back all three filters
+    matters because a sampled answer is only quotable next to the scope it was sampled from.
     """
-    found = anchor()
+    if wide is None:
+        found = anchor()
+        zone_id, boss_id, difficulty, code = found.zone["id"], found.fight["encounter_id"], found.fight["difficulty"], found.code
+    else:
+        zone_id, boss_id, difficulty, code = wide.zone["id"], wide.boss["id"], None, wide.kills[0]["report"]["code"]
     data = result.data
     scope = data.get("sample_scope") or {}
     sample = data.get("sample") or {}
@@ -362,15 +389,15 @@ def assert_sampling_metadata(
     assert (data.get("freshness") or {}).get("sampled_at"), result.describe()
     assert (data.get("cache_provenance") or {}).get("source"), result.describe()
     filters = scope.get("filters") or {}
-    assert filters.get("zone_id") == found.zone["id"], result.describe()
-    assert filters.get("boss_id") == (expect_boss_id or found.fight["encounter_id"]), result.describe()
-    assert filters.get("difficulty") == (None if expect_boss_id else found.fight["difficulty"]), result.describe()
+    assert filters.get("zone_id") == zone_id, result.describe()
+    assert filters.get("boss_id") == boss_id, result.describe()
+    assert filters.get("difficulty") == difficulty, result.describe()
     assert isinstance(scope.get("returned"), int), result.describe()
     assert sample.get("source_report_count", 0) >= 1, result.describe()
     if expect_rows:
         assert scope["returned"] > 0, result.describe()
         codes = [row.get("report_code") for row in (data.get("citations") or {}).get("sample_reports") or []]
-        assert (expect_code or found.code) in codes, result.describe()
+        assert code in codes, result.describe()
     return data
 
 
@@ -1264,9 +1291,7 @@ def test_top_kills_orders_a_multi_kill_cohort_by_duration(require):
     assert len({row["duration_ms"] for row in cohort.kills}) >= 2, cohort.kills
 
     result = run("warcraftlogs", "top-kills", *cohort.args, "--top", WIDE_COHORT_TOP)
-    ranked = assert_sampling_metadata(
-        result, expect_rows=True, expect_code=str(cohort.kills[0]["report"]["code"]), expect_boss_id=int(cohort.boss["id"])
-    )["kills"]
+    ranked = assert_sampling_metadata(result, expect_rows=True, wide=cohort)["kills"]
     assert {_kill_key(row) for row in ranked} == {_kill_key(row) for row in cohort.kills}, result.describe()
     expected = sorted(cohort.kills, key=lambda row: (row["duration_ms"], _kill_key(row)))
     assert [_kill_key(row) for row in ranked] == [_kill_key(row) for row in expected], result.describe()
@@ -1336,11 +1361,35 @@ def test_spec_kill_samples_and_boss_spec_usage_describe_the_cohort(require):
     assert rows, usage.describe()
     assert all(row["spec_name"] and row["appearance_count"] > 0 for row in rows), usage.describe()
     assert spec in {str(row["spec_name"]).lower() for row in rows}, usage.describe()
-    # A spec is counted with its class: Frost Mage and Frost Death Knight are two rows, never one "Frost".
     keys = [(row["class_name"], row["spec_name"], row["role"]) for row in rows]
     assert len(keys) == len(set(keys)), usage.describe()
-    fielded = {(player["type"], entry["spec"]) for player in anchor().players for entry in player.get("specs") or []}
-    assert fielded <= {(row["class_name"], row["spec_name"]) for row in rows}, usage.describe()
+
+
+def _shared_spec_name_roster(cohort: WideCohort) -> set[tuple[str, str]]:
+    """``(class, spec)`` of the first kill in ``cohort`` whose roster fields one spec name under two classes."""
+    scanned: list[str] = []
+    for kill in cohort.kills:
+        code, fight_id = _kill_key(kill)
+        roster = _fight_roster(code, fight_id)
+        fielded = {(str(player["type"]), str(entry["spec"])) for player in roster for entry in player.get("specs") or []}
+        if any(count > 1 for count in Counter(spec for _, spec in fielded).values()):
+            return fielded
+        scanned.append(f"{code}#{fight_id}")
+    raise JourneyFailure(f"no kill in the wide cohort fields one spec name under two classes: {scanned}")
+
+
+def test_boss_spec_usage_counts_a_spec_with_its_class(require):
+    """Frost Mage and Frost Death Knight are two rows, never one "Frost".
+
+    Only a roster that fields one spec name under two classes can tell a class-blind count apart, so
+    the check reads such a kill's roster from its own report and requires every class and spec on it
+    as a row of the cohort that holds it.
+    """
+    require("warcraftlogs")
+    cohort = wide_cohort()
+    usage = run("warcraftlogs", "boss-spec-usage", *cohort.args, "--top", "40")
+    rows = assert_sampling_metadata(usage, expect_rows=True, wide=cohort)["spec_usage"]
+    assert _shared_spec_name_roster(cohort) <= {(row["class_name"], row["spec_name"]) for row in rows}, usage.describe()
 
 
 def _anchor_pull_row(rows: list[dict[str, Any]], result: Result) -> dict[str, Any]:
@@ -1563,15 +1612,23 @@ def test_boss_kills_spec_filter_narrows_the_cohort_to_that_spec(require):
 
 
 def test_graphql_introspect_and_a_typed_query_reach_the_api(require):
+    """Raw GraphQL reaches the API, and ``--introspect`` reports upstream's refusal as a failure.
+
+    Warcraft Logs answers any query that selects ``__schema.types`` with the GraphQL error "Internal
+    server error", on both the client and the user endpoint, while ``__schema { queryType }`` alone
+    works (probed 2026-09-24). So ``--introspect`` cannot succeed today and has to fail as
+    ``graphql_error`` (exit 1), never ``ok: true`` with an empty schema. If upstream starts answering,
+    this fails: assert the returned ``__schema`` again (see docs/architecture/E2E_TESTING.md).
+    """
     require("warcraftlogs")
     found = anchor()
 
-    introspect = run("warcraftlogs", "graphql", "--introspect")
-    assert introspect.payload["kind"] == "graphql", introspect.describe()
+    introspect = run("warcraftlogs", "graphql", "--introspect", expect=EXIT_GENERIC, error_code="graphql_error")
+    assert introspect.payload["error"]["message"] == "Internal server error", introspect.describe()
+
     # graphql's data is the GraphQL result itself, so introspection sits under its own __schema.
-    schema = introspect.data["__schema"]
-    assert schema["queryType"]["name"], introspect.describe()
-    assert len(schema["types"]) > 50, introspect.describe()
+    schema = run("warcraftlogs", "graphql", "--query", "{ __schema { queryType { name } } }")
+    assert schema.data["__schema"]["queryType"]["name"] == "Query", schema.describe()
 
     query = run(
         "warcraftlogs",

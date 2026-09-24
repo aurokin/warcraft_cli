@@ -6,7 +6,6 @@ raises ``typer.Exit``, so the ``warcraft`` wrapper can call ``PROVIDER`` in-proc
 
 from __future__ import annotations
 
-import re
 import shlex
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -14,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+from warcraft_api.cache import redacted_redis_url
 from warcraft_content.article_bundle import (
     default_article_export_dir,
     load_article_bundle,
@@ -96,15 +96,6 @@ def _supported_guide_ref(guide_ref: str) -> tuple[str, str]:
     return slug, content_family
 
 
-def _redacted_redis_url(url: str | None) -> str | None:
-    """The Redis URL without its credentials or query string, which can carry a password.
-
-    Doctor output is what agents read first and keep in their context and logs.
-    """
-    if url is None:
-        return None
-    return re.sub(r"(?<=//)[^/@]*@", "***@", url.split("?", 1)[0])
-
 
 def _require_query(query: str) -> None:
     if not query.strip():
@@ -137,7 +128,7 @@ def doctor(**options: Any) -> Envelope:
                 "enabled": settings.enabled,
                 "backend": settings.backend,
                 "cache_dir": str(settings.cache_dir),
-                "redis_url": _redacted_redis_url(settings.redis_url),
+                "redis_url": redacted_redis_url(settings.redis_url),
                 "prefix": settings.prefix,
                 "ttls": {"sitemap": sitemap_ttl, "page_html": page_ttl},
             },

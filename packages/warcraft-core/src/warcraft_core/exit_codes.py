@@ -28,6 +28,9 @@ EXIT_CODE_BY_ERROR_CODE: Final[dict[str, ExitCode]] = {
     "invalid_query": EXIT_USAGE,
     "invalid_argument": EXIT_USAGE,
     "missing_fields": EXIT_USAGE,
+    "invalid_guide_ref": EXIT_USAGE,
+    "invalid_ref": EXIT_USAGE,
+    "invalid_tool_ref": EXIT_USAGE,
 }
 
 

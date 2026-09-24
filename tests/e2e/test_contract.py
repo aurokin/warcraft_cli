@@ -65,6 +65,17 @@ REPORTS_FRESHNESS = frozenset({"raiderio"})
 
 COMPACT_MAX_CHARS = 40
 
+# The compact journey runs `doctor` unless the doctor has no prose over COMPACT_MAX_CHARS to cut; these
+# binaries use a cheap command whose payload does (a local parse of a made-up report URL, or a read the
+# session cache serves the second time).
+COMPACT_COMMAND: dict[str, tuple[str, ...]] = {
+    "icy-veins": ("guide", "mistweaver-monk-pve-healing-guide"),
+    "raiderio": ("threshold", "mythic-plus-runs", "--metric", "mythic_level", "--value", "20", "--region", "us", "--limit", "20"),
+    "warcraft-wiki": CACHED_READ["warcraft-wiki"],
+    "warcraftlogs": ("search", "https://www.warcraftlogs.com/reports/a1B2c3D4e5F6g7H8#fight=3"),
+    "wowhead": CACHED_READ["wowhead"],
+}
+
 
 def _provider(binary: str) -> str:
     return PROVIDER_BY_BINARY[binary]
@@ -131,12 +142,19 @@ def _strings(value: Any, path: str = "") -> dict[str, str]:
     return found
 
 
+def _cuttable(path: str, text: str) -> bool:
+    """ERROR_CONTRACT.md ``--compact``: prose (has a space or tab) is cut unless it sits under a
+    ``*command``/``*commands`` key; a single token (a path, URL, code) never is."""
+    under_command = any(key.endswith(("command", "commands")) for key in path.split("."))
+    return (" " in text or "\t" in text) and not under_command
+
+
 def _long(payload: dict[str, Any], *, prose: bool) -> dict[str, str]:
-    """Strings over the compact limit: prose (has a space or tab) or a single token (a path, URL, code)."""
+    """Strings over the compact limit that ``--compact`` cuts (``prose``) or has to keep whole."""
     return {
         path: text
         for path, text in _strings(payload).items()
-        if len(text) > COMPACT_MAX_CHARS and (" " in text or "\t" in text) is prose
+        if len(text) > COMPACT_MAX_CHARS and _cuttable(path, text) is prose
     }
 
 
@@ -243,16 +261,19 @@ def test_fields_reports_what_it_could_not_select_and_fields_strict_rejects_it(bi
 def test_compact_cuts_exactly_the_long_prose_and_lists_every_cut(binary: str, require) -> None:
     """``--compact`` cuts prose past the limit, leaves single tokens whole, and names every cut.
 
-    The expected cuts come from the uncompacted doctor, so a binary that ignores the flag, cuts a
-    path or URL another tool would consume, or cuts without listing it in
-    ``provenance.compacted_paths`` fails. A doctor with no prose over the limit must cut nothing.
+    The expected cuts come from the same command run without the flag, which has to carry prose over
+    the limit, so a binary that ignores the flag, cuts a path, URL or command another tool would
+    consume, or cuts without listing it in ``provenance.compacted_paths`` fails.
     """
     if binary != "warcraft":
         require(_provider(binary))
-    full = run(binary, "doctor")
-    compact = run(binary, "--compact", "--compact-max-chars", str(COMPACT_MAX_CHARS), "doctor")
+    command = COMPACT_COMMAND.get(binary, ("doctor",))
+    full = run(binary, *command)
+    expected = _long(full.payload, prose=True)
+    assert expected, f"{binary} {' '.join(command)} has no prose over {COMPACT_MAX_CHARS} chars to cut"
+    compact = run(binary, "--compact", "--compact-max-chars", str(COMPACT_MAX_CHARS), *command)
     cut = compact.payload["provenance"].get("compacted_paths", [])
-    assert sorted(cut) == sorted(_long(full.payload, prose=True)), compact.describe()
+    assert sorted(cut) == sorted(expected), compact.describe()
     texts = _strings(compact.payload)
     assert all(len(texts[path]) == COMPACT_MAX_CHARS and texts[path].endswith("...") for path in cut), compact.describe()
     tokens = _long(full.payload, prose=False)

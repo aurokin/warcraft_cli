@@ -20,7 +20,7 @@ def test_article_follow_up_uses_provider_command() -> None:
         "recommended_surface": "guide",
         "command": "method guide mistweaver-monk",
         "reason": "guide_summary",
-        "alternatives": [
+        "alternative_commands": [
             "method guide-full mistweaver-monk",
             "method guide-export mistweaver-monk",
         ],
@@ -34,7 +34,7 @@ def test_article_follow_up_supports_article_surfaces_and_quotes() -> None:
         "recommended_surface": "article",
         "command": "warcraft-wiki article 'World of Warcraft API'",
         "reason": "article_summary",
-        "alternatives": [
+        "alternative_commands": [
             "warcraft-wiki article-full 'World of Warcraft API'",
             "warcraft-wiki article-export 'World of Warcraft API'",
         ],
@@ -216,3 +216,13 @@ def test_article_resolve_fallback_search_command_is_valid_shell() -> None:
     )
 
     assert shlex.split(payload["fallback_search_command"]) == ["warcraft-wiki", "search", query]
+
+
+def test_compact_never_cuts_a_follow_up_command() -> None:
+    """Every runnable hand-off sits under a ``*command``/``*commands`` key, which --compact keeps whole."""
+    from warcraft_core.output import compact_value
+
+    follow_up = article_follow_up(provider_command="method", surface="guide", ref="x" * 400)
+    cut: list[str] = []
+    assert compact_value(follow_up, max_chars=40, cut=cut) == follow_up
+    assert cut == []

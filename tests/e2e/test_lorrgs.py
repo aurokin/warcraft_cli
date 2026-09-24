@@ -268,7 +268,7 @@ def test_comp_ranking_returns_ranked_comps_and_honours_the_killtime_filter(catal
     scanned: list[str] = []
     for boss_slug in _comp_ranking_candidates(catalog):
         result = run("lorrgs", "comp-ranking", boss_slug, "--limit", str(COMP_RANKING_LIMIT), expect=None)
-        if result.error_code == "not_found":
+        if result.error_code == "not_found" and boss_slug not in catalog.zone_boss_slugs:
             # Lorrgs keeps comp rankings only for the raids it still tracks; a retired one is a 404.
             assert result.exit_code == EXIT_NOT_FOUND, result.describe()
             scanned.append(f"{boss_slug}: not_found")

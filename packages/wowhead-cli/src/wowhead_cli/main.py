@@ -1757,7 +1757,7 @@ def _base_talent_calc_payload(
         "page": {
             "title": None,
             "description": None,
-            "canonical_url": state_url,
+            "canonical_url": None,
         },
         "citations": {
             "page": state_url,
@@ -1773,19 +1773,16 @@ def _enrich_talent_calc_payload_with_page_data(
     fail_on_fetch_error: bool,
 ) -> dict[str, Any]:
     state_url = str(payload["tool"]["state_url"])
-    try:
-        client = _client(ctx)
-    except typer.Exit:
-        if fail_on_fetch_error:
-            raise
-        return payload
+    # A broken cache config has already written its error envelope, so it fails the command.
+    client = _client(ctx)
     try:
         with provider.transport_errors():
             html = client.page_html(state_url)
     except ProviderError as exc:
         if fail_on_fetch_error:
             fail(ctx, exc.code, exc.message, exit_code=exc.exit_code, details=exc.details)
-        return payload
+        # The build code in the URL still answers; the page metadata and listed builds are what is missing.
+        return {**payload, "page": {**payload["page"], "fetch_error": {"code": exc.code, "message": exc.message}}}
     metadata = parse_page_metadata(html, fallback_url=state_url)
     page_url = absolute_wowhead_url(metadata.get("canonical_url"), fallback=state_url) or state_url
     enriched_payload = dict(payload)
@@ -3666,7 +3663,7 @@ def talent_calc_packet(
             ref=str(payload["tool"]["state_url"]),
             provider="wowhead",
             source="wowhead_talent_calc_url",
-            source_url=str(payload["page"]["canonical_url"]),
+            source_url=str(payload["page"]["canonical_url"] or payload["tool"]["state_url"]),
             notes=["exact transport packet came from an explicit Wowhead talent-calc ref"],
             scope={"type": "wowhead_talent_calc", "expansion": str(payload["tool"]["expansion"])},
         ),

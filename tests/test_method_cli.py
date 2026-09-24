@@ -391,7 +391,7 @@ def test_guide_query_rejects_an_unknown_kind_as_a_usage_error_like_icy_veins(tmp
 
 def test_method_guide_invalid_ref_returns_structured_error() -> None:
     result = runner.invoke(app, ["guide", "https://www.method.gg/premium"])
-    assert result.exit_code == 1
+    assert result.exit_code == 2
 
     payload = _error_payload(result)
     assert payload["ok"] is False
@@ -400,7 +400,7 @@ def test_method_guide_invalid_ref_returns_structured_error() -> None:
 
 def test_method_guide_export_invalid_ref_returns_structured_error(tmp_path: Path) -> None:
     result = runner.invoke(app, ["guide-export", "https://www.method.gg/premium", "--out", str(tmp_path / "out")])
-    assert result.exit_code == 1
+    assert result.exit_code == 2
 
     payload = _error_payload(result)
     assert payload["ok"] is False
@@ -736,8 +736,18 @@ def test_method_guide_quotes_the_slug_in_its_fetch_more_command(monkeypatch) -> 
     assert shlex.split(command) == ["method", "guide-full", "mistweaver-monk's"]
 
 
-def test_method_doctor_never_prints_the_redis_password(monkeypatch) -> None:
-    monkeypatch.setenv("METHOD_REDIS_URL", "redis://user:FAKEPASS@cache.example:6380/2?password=QUERYPASS")
+@pytest.mark.parametrize(
+    "redis_url",
+    [
+        "redis://user:FAKEPASS@cache.example:6380/2?password=QUERYPASS",
+        # redis-py reads the password up to the last '@': the first '@' used to leak "PASS@".
+        "redis://:FAKE@PASS@cache.example:6380/2",
+        # A URL parser rejects brackets outside an IPv6 host, which failed doctor with internal_error.
+        "redis://:FA[KE@PA]SS@cache.example:6380/2",
+    ],
+)
+def test_method_doctor_never_prints_the_redis_password(monkeypatch, redis_url: str) -> None:
+    monkeypatch.setenv("METHOD_REDIS_URL", redis_url)
     result = runner.invoke(app, ["doctor"])
     assert result.exit_code == 0
 

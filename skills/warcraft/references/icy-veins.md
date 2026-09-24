@@ -17,7 +17,7 @@
 
 - use Icy Veins when the caller needs structured guide families rather than a single direct page
 - for broad class or role queries, let `resolve` pick the hub first
-- a spec query such as `frost mage` or `survival hunter` resolves to that spec's PvE guide; healer specs resolve to their healing guide
+- a spec query such as `frost mage` or `survival hunter` resolves to that spec's PvE guide; healer specs resolve to their healing guide; a spec name several classes share (`frost`, `holy`) stays unresolved, so name the class
 - every result carries `metadata.last_updated`; a page a year behind the newest one is marked `penalty_stale_page` and ranked lower
 - for narrow subpage questions, search terms like `easy mode`, `rotation`, `stat priority`, or `mythic+ tips` work well
 - `build_references` holds explicit build evidence from the page: embedded Wowhead talent-calc links (`reference_type: wowhead_talent_calc_url`) and published WoW loadout import strings (`reference_type: wow_talent_export`, where `url` is the import string). Guide slugs and titles are never treated as build evidence

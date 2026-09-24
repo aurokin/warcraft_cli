@@ -39,10 +39,10 @@ Every command emits one shared envelope (`ok`, `provider`, `command`, `kind`, `s
 `data`.
 
 Error codes and their exit codes: `network_error`/`timeout`/`upstream_error` exit 5, `not_found`
-exits 4, `auth_failed` exits 3, and the Method-specific input errors `invalid_guide_ref`,
-`unsupported_guide_surface`, `invalid_bundle`, and `invalid_cache_config` exit 1; an unsupported
-`--kind` is `invalid_argument` (exit 2), and a blank `search` or `resolve` query is `invalid_query`
-(exit 2), rejected before any request.
+exits 4, `auth_failed` exits 3, and the Method-specific errors `unsupported_guide_surface`,
+`invalid_bundle`, and `invalid_cache_config` exit 1; an argument that is not a Method guide reference
+is `invalid_guide_ref` (exit 2), an unsupported `--kind` is `invalid_argument` (exit 2), and a blank
+`search` or `resolve` query is `invalid_query` (exit 2), rejected before any request.
 `guide-query` answers a bad bundle path the same way `icy-veins guide-query` does: a path that does
 not exist is `not_found` (exit 4), a file is `invalid_argument` (exit 2), and a directory that is not
 a readable bundle is `invalid_bundle` (exit 1): no `manifest.json`, a manifest whose `files` lists no
