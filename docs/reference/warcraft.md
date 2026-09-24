@@ -11,7 +11,7 @@ Pass these before the subcommand: `warcraft --pretty <command> ...`.
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `--pretty` | boolean | false | Pretty-print JSON for human reading. Default output is compact JSON. |
-| `--compact` | boolean | false | Truncate long string fields to reduce payload size. |
+| `--compact` | boolean | false | Truncate long prose strings to reduce payload size. URLs, talent strings and commands stay whole. |
 | `--fields` | str (repeatable) |  | Return only selected fields (dot paths). Repeat or pass comma-separated values. |
 | `--fields-strict` | boolean | false | Fail when a requested --fields dot-path is missing from the payload. |
 | `--profile` | str |  | Output profile preset: agent (default compact JSON) or human (pretty JSON). |
@@ -47,7 +47,7 @@ Fan out a free-text query to every search-ready provider and rank the merged can
 
 ## warcraft resolve
 
-Fan out a query to every resolve-ready provider and return the single best match plus its follow-up command.
+Fan out a query to every resolve-ready provider and return the single best match plus its follow-up command. The answer is the candidate `warcraft search` would rank first, and only when its own provider resolved it; otherwise the command reports `resolved: false` with that candidate as `best_unresolved_candidate`.
 
 **Arguments**
 
@@ -59,26 +59,14 @@ Fan out a query to every resolve-ready provider and return the single best match
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--limit` | int range | 5 | Maximum provider-local candidates to request. |
+| `--limit` | int range | 5 | Ranked candidates to list under --ranking-debug. |
 | `--brief` | boolean | false | Return a smaller wrapper payload: a compact match summary and no per-provider payloads. |
-| `--ranking-debug` | boolean | false | Include compact wrapper ranking summaries for resolved candidates. |
+| `--ranking-debug` | boolean | false | Include the first --limit providers' matches in ranking order, each with its resolved flag. |
 | `--expansion-debug` | boolean | false | Include a compact expansion support snapshot for all providers. |
 
 ## warcraft guild
 
 Return one guild identity's Raider.IO snapshot: identity, every raid's progression and ranks, roster preview, citations. Raider.IO orders its progression and rankings rows by raid slug and reports no raid start/end window, so the snapshot names no "active" raid; cross-reference `warcraft raiderio raids` for the tier that is currently running.
-
-**Arguments**
-
-| Argument | Type | Default | Description |
-| --- | --- | --- | --- |
-| `region` | str | required | Region slug such as us or eu. |
-| `realm` | str | required | Realm title or slug. |
-| `name` | str | required | Guild name. |
-
-## warcraft guild-ranks
-
-Report a guild's per-raid progression with normal/heroic/mythic world, region, and realm ranks from Raider.IO.
 
 **Arguments**
 
@@ -166,7 +154,6 @@ Resolve a guide query across wowhead, method, and icy-veins, export the bundles,
 | --- | --- | --- | --- |
 | `--provider` | str (repeatable) |  | Restrict orchestration to one or more providers from: wowhead, method, icy-veins. |
 | `--out-root` | directory |  | Directory root where orchestrated guide bundles should be written. Defaults to <XDG data dir>/warcraft/guide_compare/<query-slug>; nothing is written to the current directory. |
-| `--limit` | int range | 5 | Maximum provider-local resolve candidates to request before selecting one guide match. |
 | `--max-age-hours` | int range | 24 | Reuse existing orchestrated guide bundles only when they are newer than this many hours. |
 | `--force-refresh / --no-force-refresh` | boolean | false | Re-export selected guide bundles even when a fresh orchestrated bundle already exists. |
 | `--simc-build-handoff / --no-simc-build-handoff` | boolean | false | Also emit an explicit guide-build-to-simc evidence packet from the exported bundles. |

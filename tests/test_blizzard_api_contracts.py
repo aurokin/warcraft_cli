@@ -355,6 +355,36 @@ def test_realm_slug_lowercased(monkeypatch: pytest.MonkeyPatch) -> None:
     assert payload["provenance"]["source_url"].endswith("/data/wow/realm/illidan")
 
 
+@pytest.mark.parametrize(
+    ("args", "path"),
+    [
+        (["realm", "Mal'Ganis"], "/data/wow/realm/{}"),
+        (["realm", "mal-ganis"], "/data/wow/realm/{}"),
+        (["character", "Mal'Ganis", "Aurow"], "/profile/wow/character/{}/aurow"),
+    ],
+)
+def test_realm_display_name_finds_the_blizzard_slug(monkeypatch: pytest.MonkeyPatch, args: list[str], path: str) -> None:
+    # Blizzard drops apostrophes ("malganis") but keeps word breaks ("tarren-mill"), so each slug
+    # spelling is tried in turn and only a 404 moves on to the next.
+    requested: list[str] = []
+
+    def _fake(client: Any, url: str, *, method: str = "GET", **kwargs: Any) -> _FakeResponse:
+        if url.endswith("/token"):
+            return _FakeResponse({"access_token": "fake-token", "expires_in": 3600}, url)
+        requested.append(url)
+        if path.format("malganis") not in url:
+            request = httpx.Request("GET", url)
+            raise httpx.HTTPStatusError("Not Found", request=request, response=httpx.Response(404, request=request))
+        return _FakeResponse(_fixture_for_url(url), url)
+
+    monkeypatch.setattr(client_module, "request_with_retries", _fake)
+    result = runner.invoke(app, args)
+
+    assert result.exit_code == 0, result.output
+    assert [url.split(".api.blizzard.com")[1] for url in requested] == [path.format("mal-ganis"), path.format("malganis")]
+    assert json.loads(result.stdout)["provenance"]["source_url"].endswith(path.format("malganis"))
+
+
 def test_malformed_expires_in_no_traceback(monkeypatch: pytest.MonkeyPatch) -> None:
     def _fake(client: Any, url: str, *, method: str = "GET", **kwargs: Any) -> _FakeResponse:
         if url.endswith("/token"):

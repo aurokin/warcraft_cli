@@ -94,8 +94,8 @@ def test_cached_entity_payload_preserves_existing_normalization(monkeypatch) -> 
         "expansion": "retail",
         "entity": {"type": "item", "id": 19019, "name": "Thunderfury"},
         "tooltip": {"quality": 5},
-        "schema_version": ENTITY_PAYLOAD_SCHEMA_VERSION,  # pre-envelope cache entries carried it at the top level
         "normalized": {
+            "schema_version": ENTITY_PAYLOAD_SCHEMA_VERSION,
             "item": {
                 "page_title": {"value": "Page Title", "provenance": {"source": "page"}},
             }

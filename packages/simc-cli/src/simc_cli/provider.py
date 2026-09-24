@@ -6,6 +6,7 @@ wraps them for the CLI and the ``warcraft`` wrapper can call ``PROVIDER`` in-pro
 
 from __future__ import annotations
 
+import shlex
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -178,10 +179,10 @@ def search(query: str, *, limit: int = 10, repo_root: str | Path | None = None, 
 
 
 def resolve(target: str, *, repo_root: str | Path | None = None, **options: Any) -> Envelope:
-    """Free-text resolution is deferred; point at the direct decode path for the discovered repo."""
+    """Free-text resolution is deferred; point at a command that runs against the discovered repo as is."""
     del options
     example_apl = _example_apl_path(discover_repo(repo_root))
-    suggested = f"simc decode-build --apl-path {example_apl}" if example_apl else "simc spec-files monk"
+    suggested = shlex.join(["simc", "apl-lists", str(example_apl)]) if example_apl else "simc spec-files monk"
     payload = coming_soon_payload(query=target, suggested_command=suggested)
     return simc_envelope("resolve", payload)
 

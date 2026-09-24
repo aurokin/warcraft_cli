@@ -5,6 +5,7 @@ from typing import Any
 
 import httpx
 from warcraft_api.http import DEFAULT_RETRY_ATTEMPTS, build_client, request_with_retries
+from warcraft_core.exit_codes import error_code_for_http_status
 
 from curseforge_cli.auth import CurseForgeAuthConfig, load_curseforge_auth_config
 
@@ -167,6 +168,8 @@ class CurseForgeClient:
         file_id = newest.get("id")
         if not isinstance(file_id, int):
             return None
+        # The newest file can be an alpha or beta (releaseType 3 / 2), so say which file the notes cover.
+        file_ref = {"file_id": file_id, "display_name": newest.get("displayName"), "release_type": newest.get("releaseType")}
         try:
             result = self._get(f"/v1/mods/{mod_id}/files/{file_id}/changelog")
         except (httpx.HTTPError, CurseForgeClientError) as exc:
@@ -174,13 +177,13 @@ class CurseForgeClient:
             # the failure explicit (an `error` marker, not a silent null) so callers can distinguish a
             # failed fetch from "no files to fetch". Covers HTTPStatusError, a post-retry network
             # RequestError, and a malformed/non-JSON changelog body (CurseForgeClientError).
-            return {"file_id": file_id, "error": _changelog_error(exc)}
+            return {**file_ref, "error": _changelog_error(exc)}
         body = result["payload"].get("data")
         # Documented changelog `data` is an HTML string (or null/absent when a file has none). A
         # present-but-non-string `data` is schema drift, surfaced as an explicit marker rather than
         # silently flattened to a null body that looks like "no changelog".
         if body is not None and not isinstance(body, str):
-            return {"file_id": file_id, "error": {"code": "invalid_response", "message": "changelog data was not a string."}}
+            return {**file_ref, "error": {"code": "invalid_response", "message": "changelog data was not a string."}}
         # A successful fetch always keeps the object form (file_id + source_url) even when the file
         # exposes no notes (`body: null`). Top-level `changelog is None` is reserved for "no file to
         # fetch"; an empty `body` means "checked this file, it has none" — kept distinct on purpose so a
@@ -188,7 +191,7 @@ class CurseForgeClient:
         # consistent with the error-marker form above (a failed fetch must not return *more* structure
         # than a successful one). Callers detect empty notes via `changelog.body`, not `changelog is None`.
         return {
-            "file_id": file_id,
+            **file_ref,
             "source_url": result["source_url"],
             "body": body,
         }
@@ -245,7 +248,8 @@ def _changelog_error(exc: httpx.HTTPError | CurseForgeClientError) -> dict[str, 
     if isinstance(exc, CurseForgeClientError):
         return {"code": exc.code, "message": exc.message}
     if isinstance(exc, httpx.HTTPStatusError):
-        return {"code": "http_error", "message": f"changelog request returned HTTP {exc.response.status_code}."}
+        status = exc.response.status_code
+        return {"code": error_code_for_http_status(status), "message": f"changelog request returned HTTP {status}."}
     return {"code": "network_error", "message": f"changelog request failed: {exc}."}
 
 

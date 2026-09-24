@@ -157,7 +157,7 @@ def test_raiderio_sample_players_parses_captured_roster_entries(monkeypatch) -> 
     assert tank["region"] == "us"
     assert tank["roles"] == ["tank"]
     assert tank["class_slugs"] == ["death-knight"]
-    assert tank["spec_slugs"] == ["blood"]
+    assert tank["spec_slugs"] == ["death-knight-blood"]
     assert tank["top_mythic_level"] == 22
     # The same five players ran both captured runs, so their snapshots merge instead of duplicating.
     assert tank["appearance_count"] == 2

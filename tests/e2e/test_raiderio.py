@@ -15,6 +15,7 @@ that quietly stopped being wired cannot stay green by returning everything.
 
 from __future__ import annotations
 
+import shlex
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -134,8 +135,13 @@ def _run_keys(result: Result) -> set[tuple[Any, ...]]:
     return {_run_key(row) for row in _rows(result, "runs")}
 
 
+def _class_spec(entry: dict[str, Any]) -> str:
+    """``priest-holy``: spec slugs repeat across classes (holy, frost, protection, restoration)."""
+    return f"{entry['class_slug']}-{entry['spec_slug']}"
+
+
 def _roster_values(row: dict[str, Any], field: str) -> set[str]:
-    return {entry[field] for entry in row["roster"]}
+    return {_class_spec(entry) if field == "class_spec" else entry[field] for entry in row["roster"]}
 
 
 def _a_value_only_some_runs_carry(runs: list[dict[str, Any]], field: str) -> str:
@@ -208,7 +214,7 @@ def test_search_ranks_the_pinned_guild_from_a_structured_probe() -> None:
     assert "mal" in str(top["realm"]).lower() and "ganis" in str(top["realm"]).lower()
     assert top["profile_url"].startswith("https://raider.io/guilds/")
     assert "structured_probe" in top["ranking"]["match_reasons"]
-    assert top["follow_up"]["command"] == f"raiderio guild {REGION} {REALM} {GUILD}"
+    assert top["follow_up"]["command"] == shlex.join(["raiderio", "guild", REGION, REALM, GUILD])
 
 
 def test_search_kind_filter_drops_the_other_entity_type() -> None:
@@ -229,6 +235,9 @@ def test_search_kind_filter_drops_the_other_entity_type() -> None:
     rows = _rows(characters, "results")
     assert all(row["kind"] == "character" for row in rows), characters.describe()
     assert rows[0]["name"] == CHARACTER
+    # Site search sends no path for characters; the row still has to link the character's page.
+    assert rows[0]["profile_url"].startswith(f"https://raider.io/characters/{REGION}/"), characters.describe()
+    assert rows[0]["profile_url"].endswith(f"/{CHARACTER}"), characters.describe()
     without_characters = run("raiderio", "search", character_query, "--kind", "guild", "--limit", "5")
     assert not any(row["kind"] == "character" for row in without_characters.data["results"]), without_characters.describe()
 
@@ -246,10 +255,31 @@ def test_resolve_hands_over_a_next_command_that_returns_the_same_entity() -> Non
 
         # An agent runs next_command verbatim, so it has to resolve to the entity that was matched.
         next_command = result.data["next_command"]
-        assert next_command == f"raiderio {surface} {REGION} {REALM} {name}"
-        binary, *args = next_command.split()
+        assert next_command == shlex.join(["raiderio", surface, REGION, REALM, name])
+        binary, *args = shlex.split(next_command)
         assert binary == "raiderio"
         assert run("raiderio", *args).data[surface]["name"] == name
+
+
+def test_a_multi_word_guild_name_hands_over_a_command_that_runs(current_raid: str) -> None:
+    """Most guild names have a space, so the handed-over command has to be shell-quoted to run.
+
+    The guild is discovered from the raid leaderboard, which is also the oracle for its name and
+    realm. An unquoted ``raiderio guild us <realm> Two Words`` fails with "unexpected extra argument".
+    """
+    leaderboard = run(
+        "raiderio", "leaderboard", "raids", "--raid", current_raid, "--difficulty", "mythic", "--region", "us",
+        "--limit", str(RANKING_PAGE_SIZE),
+    )
+    guild = next((row["guild"] for row in _rows(leaderboard, "rows") if " " in row["guild"]["name"]), None)
+    assert guild is not None, f"no multi-word guild name on the first leaderboard page\n{leaderboard.describe()}"
+
+    result = run("raiderio", "resolve", f"guild us {guild['realm']} {guild['name']}", "--kind", "guild")
+    assert result.data["resolved"] is True, result.describe()
+    binary, *args = shlex.split(result.data["next_command"])
+    assert (binary, len(args)) == ("raiderio", 4), result.describe()
+    profile = run("raiderio", *args)
+    assert (profile.data["guild"]["name"], profile.data["guild"]["region"]) == (guild["name"], "us"), profile.describe()
 
 
 def test_resolve_stays_unresolved_for_a_nonsense_query() -> None:
@@ -435,7 +465,8 @@ def test_the_roster_filters_keep_exactly_the_runs_that_carry_the_value(baseline_
     runs = _rows(baseline_sample, "runs")
     everything = _run_keys(baseline_sample)
 
-    for field, flag in (("class_slug", "--contains-class"), ("spec_slug", "--contains-spec")):
+    # A class-qualified spec (``priest-holy``) must not also keep the runs of another class's Holy.
+    for field, flag in (("class_slug", "--contains-class"), ("spec_slug", "--contains-spec"), ("class_spec", "--contains-spec")):
         value = _a_value_only_some_runs_carry(runs, field)
         expected = {_run_key(row) for row in runs if value in _roster_values(row, field)}
         narrowed = run("raiderio", "sample", "mythic-plus-runs", *SCOPE, flag, value)
@@ -521,14 +552,18 @@ def _assert_run_distribution_matches_the_metric(result: Result, metric: str, row
     elif metric in ("class", "spec"):
         # The sample block carries no class or spec counts, so the tally is held to the roster rows of
         # the baseline sample, which read the same cached page. A tally of any other roster field
-        # (region, role) has the same unit and total, and only an exact count tells it apart.
+        # (region, role) has the same unit and total, and only an exact count tells it apart. A spec
+        # is counted with its class, so Holy Paladin and Holy Priest are two rows, not one "holy".
         roster = [entry for row in _rows(baseline, "runs") for entry in row["roster"]]
-        assert _counts(rows) == dict(Counter(entry[f"{metric}_slug"] for entry in roster)), result.describe()
+        label = (lambda entry: entry["class_slug"]) if metric == "class" else _class_spec
+        assert _counts(rows) == dict(Counter(map(label, roster))), result.describe()
     else:
-        # The composition keys are one "role:label" pair per roster slot, over class or spec labels.
+        # The composition keys are one "role:label" pair per roster slot, over class or class-spec labels.
         labels = {part.split(":", 1)[1] for value in values for part in value.split(" | ")}
         assert all(len(value.split(" | ")) == 5 for value in values), result.describe()
         assert (labels <= WOW_CLASS_SLUGS) is (metric == "class_composition"), result.describe()
+        if metric == "composition":
+            assert all(any(label.startswith(f"{slug}-") for slug in WOW_CLASS_SLUGS) for label in labels), result.describe()
 
 
 @pytest.mark.parametrize("metric", sorted(RUN_DISTRIBUTION_UNITS))
@@ -557,10 +592,12 @@ def _assert_player_distribution_matches_the_metric(
         # A tag tally counts each sampled player once per distinct value it played. The sample block's
         # own tag lists come from the same snapshot field as the tally, so the expected counts are
         # rebuilt from the baseline roster rows of the sampled players instead.
-        field = {"class": "class_slug", "spec": "spec_slug", "role": "role"}[metric]
+        field = {"class": "class_slug", "spec": "class_spec", "role": "role"}[metric]
         roster = _roster_entries_by_player(baseline)
         expected = Counter(
-            value for player in _rows(players, "players") for value in {entry[field] for entry in roster[player["profile_url"]]}
+            value
+            for player in _rows(players, "players")
+            for value in _roster_values({"roster": roster[player["profile_url"]]}, field)
         )
         assert _counts(rows) == dict(expected), result.describe()
     else:
@@ -720,6 +757,18 @@ def test_unknown_guild_and_character_are_not_found() -> None:
         result = run("raiderio", command, REGION, REALM, name, expect=EXIT_NOT_FOUND, error_code="not_found")
         assert result.payload["error"]["details"]["status_code"] == 400
         assert "could not find" in result.payload["error"]["message"].lower()
+
+    # Raider.IO answers an unknown realm with HTTP 400 "Failed to find realm", which is a miss too.
+    realm = run("raiderio", "guild", REGION, "zzzznorealmzzzz", GUILD, expect=EXIT_NOT_FOUND, error_code="not_found")
+    assert "failed to find realm" in realm.payload["error"]["message"].lower(), realm.describe()
+
+
+def test_a_realm_display_name_finds_the_same_guild() -> None:
+    """Players type ``Mal'Ganis``; Raider.IO takes either slug spelling, so the display name has to reach the guild."""
+    by_slug = run("raiderio", "guild", REGION, REALM, GUILD)
+    by_name = run("raiderio", "guild", REGION, pins.GUILD_REALM_DISPLAY, GUILD)
+    assert by_name.data["guild"]["name"] == by_slug.data["guild"]["name"] == GUILD, by_name.describe()
+    assert by_name.data["guild"]["realm"] == by_slug.data["guild"]["realm"], by_name.describe()
 
 
 def test_malformed_request_is_a_usage_error() -> None:

@@ -109,7 +109,7 @@ def article_resolve_payload(
         "confidence": "high" if resolved else ("medium" if top else "none"),
         "match": top if top else None,
         "next_command": top["follow_up"]["command"] if resolved and top else None,
-        "fallback_search_command": None if resolved else f"{provider_command} search {query!r}",
+        "fallback_search_command": None if resolved else f"{provider_command} search {shlex.quote(query)}",
         "count": total_count,
         "candidates": results,
     }

@@ -11,7 +11,8 @@ import httpx
 from warcraft_api.cache import CacheSettings, CacheTTLConfig, build_cache_store, load_prefixed_cache_settings_from_env
 from warcraft_api.http import DEFAULT_RETRY_ATTEMPTS, build_client, request_with_retries
 from warcraft_core.paths import provider_cache_root
-from warcraft_core.wow_normalization import normalize_name, normalize_region, primary_realm_slug, realm_slug_variants
+from warcraft_core.provider import ProviderError
+from warcraft_core.wow_normalization import normalize_name, normalize_region, primary_realm_slug
 
 RAIDERIO_BASE_URL = "https://raider.io/api/v1"
 RAIDERIO_SITE_BASE_URL = "https://raider.io"
@@ -159,41 +160,28 @@ class RaiderIOClient:
         if cached is not None:
             return cached
         response = request_with_retries(self._client(), url, params=params, retry_attempts=self._retry_attempts)
-        payload = response.json()
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = None
         if not isinstance(payload, dict):
-            raise ValueError(f"Unexpected Raider.IO response shape for {url}.")
+            raise ProviderError("upstream_error", f"Raider.IO did not answer {url} with a JSON object.", details={"url": url})
         fetched = FetchedJson(payload=payload, fetched_at=datetime.now(UTC).isoformat(), cache_hit=False)
         self._write_cache(key, fetched, ttl_seconds=ttl_seconds)
         return fetched
 
     def _profile(self, *, path: str, namespace: str, ttl_seconds: int, region: str, realm: str, name: str, fields: str) -> FetchedJson:
-        """One profile plus its fetch time, trying each realm-slug spelling in turn.
+        """One profile plus its fetch time.
 
-        Raider.IO's realm slug is not always the obvious slugification of the display name, so a 404
-        means "not under this spelling" and moves on; any other status is a real failure. The last
-        spelling is fetched outside the loop so its 404 reaches the caller as the answer.
+        Raider.IO accepts either slug spelling of a realm (``mal-ganis`` and ``malganis`` both find
+        Mal'Ganis) and answers an unknown realm with HTTP 400 "Failed to find realm", so one request
+        per lookup is enough.
         """
-        params = {"region": normalize_region(region), "name": normalize_name(name), "fields": fields}
-
-        def fetch(realm_slug: str) -> FetchedJson:
-            return self._get_json(
-                f"{RAIDERIO_BASE_URL}/{path}",
-                params={**params, "realm": realm_slug},
-                namespace=namespace,
-                ttl_seconds=ttl_seconds,
-            )
-
-        *earlier, final = realm_slug_variants(realm) or [primary_realm_slug(realm)]
-        for candidate in earlier:
-            try:
-                return fetch(candidate)
-            except httpx.HTTPStatusError as exc:
-                if exc.response.status_code != 404:
-                    raise
-        return fetch(final)
+        params = {"region": normalize_region(region), "realm": primary_realm_slug(realm), "name": normalize_name(name), "fields": fields}
+        return self._get_json(f"{RAIDERIO_BASE_URL}/{path}", params=params, namespace=namespace, ttl_seconds=ttl_seconds)
 
     def character_profile(self, *, region: str, realm: str, name: str, fields: str = DEFAULT_CHARACTER_FIELDS) -> FetchedJson:
-        """One character profile plus its fetch time, under whichever realm spelling answers."""
+        """One character profile plus its fetch time."""
         return self._profile(
             path="characters/profile",
             namespace="character_profile",
@@ -209,7 +197,7 @@ class RaiderIOClient:
         return self.character_profile(region=region, realm=realm, name=name, fields=fields).payload
 
     def guild_profile(self, *, region: str, realm: str, name: str, fields: str = DEFAULT_GUILD_FIELDS) -> FetchedJson:
-        """One guild profile plus its fetch time, under whichever realm spelling answers."""
+        """One guild profile plus its fetch time."""
         return self._profile(
             path="guilds/profile",
             namespace="guild_profile",

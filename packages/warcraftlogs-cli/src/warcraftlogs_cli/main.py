@@ -154,6 +154,9 @@ _INCLUDE_RAW_HELP = (
 REPORT_CODE_PATTERN = re.compile(
     r"^(?:(?=.*[a-z])(?=.*[A-Z])[A-Za-z0-9]{16}|(?=.*[A-Za-z])(?=.*\d)[A-Za-z0-9]{8,32})$"
 )
+# A bare word made of capitalised words (HavocDemonHunter) is a name, not a code. Only bare words are
+# checked: a random code has this shape about once in 1750, and a /reports/<code> URL path is a code.
+CAMEL_CASE_NAME_PATTERN = re.compile(r"(?:[A-Z][a-z]+)+")
 RAW_GRAPHQL_VAR_OPTION = typer.Option(
     [],
     "--var",
@@ -302,7 +305,7 @@ def _emit(ctx: typer.Context, payload: dict[str, Any], *, client: Any = None) ->
 
 
 def _with_warnings(payload: dict[str, Any], client: Any) -> dict[str, Any]:
-    warnings = list(getattr(client, "last_warnings", []) or [])
+    warnings = list(getattr(client, "graphql_warnings", []) or [])
     if not warnings:
         return payload
     notes = list(payload.get("notes") or [])
@@ -1406,12 +1409,13 @@ def _report_discovery_hint(query: str, *, site: WarcraftLogsSiteProfile) -> dict
             "Use an explicit report URL or a bare report code."
         ),
         "supported_inputs": [
-            f"{site.root_url}/reports/<code>#fight=<id>",
+            f"{site.root_url}/reports/<code>?fight=<id> (or #fight=<id>)",
             "<report_code>",
         ],
+        # Placeholders are bare words, so each command stays a valid shell line once filled in.
         "suggested_commands": [
-            f"{command_prefix} report <report_code>",
-            f"{command_prefix} report-encounter <report_code> --fight-id <id>",
+            f"{command_prefix} report REPORT_CODE",
+            f"{command_prefix} report-encounter REPORT_CODE --fight-id FIGHT_ID",
         ],
     }
 
@@ -1433,8 +1437,8 @@ def _parse_report_reference(reference: str, *, explicit_fight_id: int | None) ->
             code = parts[reports_index + 1]
         except (ValueError, IndexError):
             raise ValueError("Could not extract a Warcraft Logs report code from the provided URL.") from None
-        fragments = parse_qs(parsed.fragment)
-        fight_values = fragments.get("fight") or []
+        # Warcraft Logs writes the fight as ``?fight=N`` or ``#fight=N``; the query string wins.
+        fight_values = parse_qs(parsed.query).get("fight") or parse_qs(parsed.fragment).get("fight") or []
         if fight_values:
             try:
                 parsed_fight_id = int(fight_values[0])
@@ -1455,6 +1459,8 @@ def _explicit_report_reference(query: str) -> ReportReference | None:
     except ValueError:
         return None
     if not REPORT_CODE_PATTERN.fullmatch(ref.code):
+        return None
+    if ref.source_url is None and CAMEL_CASE_NAME_PATTERN.fullmatch(ref.code):
         return None
     return ref
 
@@ -1534,7 +1540,16 @@ def _report_resolve_payload(query: str, *, ref: ReportReference | None, site: Wa
     }
 
 
-def _kill_type_for_fight(fight: dict[str, Any]) -> str:
+def _fight_encounter_id(fight: dict[str, Any]) -> int | None:
+    """The fight's boss encounter ID; ``None`` for a trash fight, which Warcraft Logs reports as 0."""
+    encounter_id = fight.get("encounterID")
+    return encounter_id if isinstance(encounter_id, int) and encounter_id > 0 else None
+
+
+def _kill_type_for_fight(fight: dict[str, Any]) -> str | None:
+    """Kills or Wipes for a boss fight. A trash fight is neither, so its slice carries no kill filter."""
+    if _fight_encounter_id(fight) is None:
+        return None
     return "Kills" if fight.get("kill") else "Wipes"
 
 
@@ -1566,10 +1581,14 @@ def _resolve_encounter_scope(
     elif len(fight_rows) == 1:
         selected = fight_rows[0]
     else:
-        _fail(ctx, "missing_scope", "Provide --fight-id or a report URL with a numeric #fight=... fragment for encounter-scoped analysis.")
-    encounter_id = selected.get("encounterID")
+        _fail(
+            ctx,
+            "missing_scope",
+            "Provide --fight-id or a report URL with a numeric ?fight=... or #fight=... for encounter-scoped analysis.",
+        )
+    encounter_id = _fight_encounter_id(selected)
     encounter = None
-    if isinstance(encounter_id, int):
+    if encounter_id is not None:
         try:
             encounter = client.encounter(encounter_id=encounter_id)
         except WarcraftLogsClientError:
@@ -1600,7 +1619,7 @@ def _encounter_summary_payload(*, ref: ReportReference, report: dict[str, Any],
                                finished_report_ttl: int | None = 86400, report_ttl: int | None = 60) -> dict[str, Any]:
     encounter_payload = None
     encounter_identity = encounter_identity_payload(
-        encounter_id=fight.get("encounterID") if isinstance(fight.get("encounterID"), int) else None,
+        encounter_id=_fight_encounter_id(fight),
         name=fight.get("name") if isinstance(fight.get("name"), str) else None,
         provider="warcraftlogs",
         source="report_encounter",
@@ -1649,16 +1668,26 @@ def _encounter_window_bounds(
     fight: dict[str, Any],
     window_start_ms: float | None,
     window_end_ms: float | None,
+    flag: str,
 ) -> tuple[float | None, float | None]:
+    """Absolute report timestamps for an encounter-relative window; ``flag`` names the window's options."""
+    if window_start_ms is None and window_end_ms is None:
+        return None, None
     fight_start = fight.get("startTime")
-    if (window_start_ms is not None or window_end_ms is not None) and not isinstance(fight_start, (int, float)):
+    if not isinstance(fight_start, (int, float)):
         _fail(ctx, "invalid_response", "Selected fight did not include a start timestamp for encounter windowing.")
-    absolute_start = float(fight_start) + \
-        float(window_start_ms) if window_start_ms is not None and isinstance(fight_start, (int, float)) else None
-    absolute_end = float(fight_start) + \
-        float(window_end_ms) if window_end_ms is not None and isinstance(fight_start, (int, float)) else None
-    if absolute_start is not None and absolute_end is not None and absolute_end < absolute_start:
-        _fail(ctx, "invalid_query", "--window-end-ms must be greater than or equal to --window-start-ms.")
+    if window_start_ms is not None and window_end_ms is not None and window_end_ms < window_start_ms:
+        _fail(ctx, "invalid_query", f"{flag}-end-ms must be greater than or equal to {flag}-start-ms.")
+    fight_end = fight.get("endTime")
+    # A window that opens after the pull ended holds no events; answering zero would read as "none happened".
+    if window_start_ms is not None and isinstance(fight_end, (int, float)) and fight_start + window_start_ms >= fight_end:
+        _fail(
+            ctx,
+            "invalid_query",
+            f"{flag}-start-ms {window_start_ms:g} is at or past the end of the fight ({fight_end - fight_start:g} ms long).",
+        )
+    absolute_start = float(fight_start) + float(window_start_ms) if window_start_ms is not None else None
+    absolute_end = float(fight_start) + float(window_end_ms) if window_end_ms is not None else None
     return absolute_start, absolute_end
 
 
@@ -1681,6 +1710,8 @@ class _EncounterFilters:
     wipe_cutoff: int | None = None
     window_start_ms: float | None = None
     window_end_ms: float | None = None
+    # The option prefix the window came from, so a rejected window names the caller's own flag.
+    window_flag: str = "--window"
 
 
 def _encounter_filter_options(
@@ -1693,8 +1724,9 @@ def _encounter_filter_options(
         fight=fight,
         window_start_ms=filters.window_start_ms,
         window_end_ms=filters.window_end_ms,
+        flag=filters.window_flag,
     )
-    encounter_id = fight.get("encounterID") if isinstance(fight.get("encounterID"), int) else None
+    encounter_id = _fight_encounter_id(fight)
     fight_ids = [int(fight["id"])] if isinstance(fight.get("id"), int) else None
     options = ReportFilterOptions(
         ability_id=filters.ability_id,
@@ -2581,20 +2613,22 @@ def _player_talent_transport_packet(
 
 def _accumulate_boss_spec_counts(
     rows: list[dict[str, Any]],
-) -> tuple[dict[tuple[str, str], dict[str, Any]], int]:
-    spec_counts: dict[tuple[str, str], dict[str, Any]] = {}
+) -> tuple[dict[tuple[str, str, str], dict[str, Any]], int]:
+    spec_counts: dict[tuple[str, str, str], dict[str, Any]] = {}
     sampled_player_rows = 0
     for row in rows:
         code = str((row.get("report") or {}).get("code") or "")
         fight_id = int((row.get("fight") or {}).get("id") or 0)
         player_rows = list_at(row, "player_details")
-        seen_specs_for_fight: set[tuple[str, int, str, str]] = set()
+        seen_specs_for_fight: set[tuple[str, int, str, str, str]] = set()
         for player in player_rows:
             if not isinstance(player, dict):
                 continue
             sampled_player_rows += 1
             role = str(player.get("role") or "unknown")
             specs = list_at(player, "specs")
+            # Spec names repeat across classes (Frost Mage, Frost Death Knight), so a spec is class + spec.
+            class_name = str(player.get("type") or "").strip()
             for spec in specs:
                 if not isinstance(spec, dict):
                     continue
@@ -2602,10 +2636,11 @@ def _accumulate_boss_spec_counts(
                 if not spec_name:
                     continue
                 count = int(spec.get("count") or 0)
-                key = (spec_name, role)
+                key = (class_name, spec_name, role)
                 entry = spec_counts.setdefault(
                     key,
                     {
+                        "class_name": class_name or None,
                         "spec_name": spec_name,
                         "role": role,
                         "appearance_count": 0,
@@ -2614,7 +2649,7 @@ def _accumulate_boss_spec_counts(
                     },
                 )
                 entry["appearance_count"] += count if count > 0 else 1
-                fight_key = (code, fight_id, spec_name, role)
+                fight_key = (code, fight_id, *key)
                 if fight_key not in seen_specs_for_fight:
                     seen_specs_for_fight.add(fight_key)
                     entry["kill_presence_count"] += 1
@@ -2647,6 +2682,7 @@ def _boss_spec_usage_payload(
             -int(entry["kill_presence_count"]),
             -int(entry["appearance_count"]),
             str(entry["spec_name"]).lower(),
+            str(entry["class_name"] or "").lower(),
         ),
     )
     returned = normalized_rows[:top]
@@ -2658,7 +2694,7 @@ def _boss_spec_usage_payload(
         "matching_rule": "spec_presence_across_sampled_finished_kills_with_player_details",
         "query": query,
         "notes": [
-            *_sampled_spec_filter_notes(query.get("spec_name") if isinstance(query, dict) else None),
+            *_sampled_spec_filter_notes(query.get("spec_name") if isinstance(query, dict) else None, sample),
             *_sampled_dedupe_notes(sample),
         ],
         "freshness": _sampled_cross_report_freshness(cache_ttl_seconds, transport_counts=transport_counts),
@@ -2878,7 +2914,7 @@ def _comp_samples_payload(
         "matching_rule": "class_roster_composition_across_sampled_finished_kills_with_player_details",
         "query": query,
         "notes": [
-            *_sampled_spec_filter_notes(query.get("spec_name") if isinstance(query, dict) else None),
+            *_sampled_spec_filter_notes(query.get("spec_name") if isinstance(query, dict) else None, sample),
             *_sampled_dedupe_notes(sample),
         ],
         "freshness": _sampled_cross_report_freshness(cache_ttl_seconds, transport_counts=transport_counts),
@@ -3061,7 +3097,7 @@ def _ability_usage_summary_payload(
         "matching_rule": "ability_casts_across_sampled_finished_kills_with_event_limit",
         "query": scoped_query,
         "notes": [
-            *_sampled_spec_filter_notes(query.get("spec_name") if isinstance(query, dict) else None),
+            *_sampled_spec_filter_notes(query.get("spec_name") if isinstance(query, dict) else None, sample),
             *_sampled_dedupe_notes(sample),
             *_event_limit_truncation_notes(truncated_kill_count, event_limit=event_limit),
         ],
@@ -3277,7 +3313,6 @@ def _report_encounter_aura_summary_payload(
     rows_out: list[dict[str, Any]] = []
     for entry in _report_table_entries(table_report):
         source_id = entry.get("id") if isinstance(entry.get("id"), int) else None
-        reported_total_uptime = entry.get("totalUptime") if isinstance(entry.get("totalUptime"), (int, float)) else entry.get("totalTime")
         rows_out.append(
             {
                 "source": _named_actor(
@@ -3287,10 +3322,8 @@ def _report_encounter_aura_summary_payload(
                     fight_id=fight.get("id") if isinstance(fight.get("id"), int) else None,
                     source="report_encounter_aura_summary",
                 ) if source_id is not None else {"id": None, "name": entry.get("name")},
-                "reported_total": entry.get("total"),
-                "reported_active_time": entry.get("activeTime"),
-                "reported_total_time": entry.get("totalTime"),
-                "reported_total_uptime": reported_total_uptime,
+                # An ability-scoped Buffs table reports per-source uptime (ms), uses and bands only.
+                "reported_total_uptime": entry.get("totalUptime"),
                 "reported_total_uses": entry.get("totalUses"),
                 "reported_bands": entry.get("bands"),
                 **({"raw_entry": entry} if include_raw else {}),
@@ -3298,8 +3331,7 @@ def _report_encounter_aura_summary_payload(
         )
     rows_out.sort(
         key=lambda row: (
-            -(float(row["reported_total_uptime"]) if isinstance(row.get("reported_total_uptime"), (int, float)) else
-              float(row["reported_total"]) if isinstance(row.get("reported_total"), (int, float)) else float("-inf")),
+            -(float(row["reported_total_uptime"]) if isinstance(row.get("reported_total_uptime"), (int, float)) else float("-inf")),
             str((row.get("source") or {}).get("name") or ""),
         )
     )
@@ -3372,67 +3404,48 @@ def _aura_summary_rows(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return [row for row in list_at(dict_at(payload, "aura_summary"), "rows") if isinstance(row, dict)]
 
 
+# The fields a Warcraft Logs Buffs table actually carries per source (totalUptime ms, totalUses).
+_AURA_COMPARE_FIELDS = ("reported_total_uptime", "reported_total_uses")
+
+
 def _aura_compare_rows(
     *,
     left_rows: list[dict[str, Any]],
     right_rows: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
+    """One row per aura source, with right-minus-left deltas of uptime and uses, largest uptime change first."""
+
     def _row_key(row: dict[str, Any]) -> tuple[int | None, str]:
         source = dict_at(row, "source")
         source_id = source.get("id") if isinstance(source.get("id"), int) else None
-        source_name = str(source.get("name") or "")
-        return source_id, source_name
+        return source_id, str(source.get("name") or "")
 
-    def _compare_row(
-        key: tuple[int | None, str],
-        left: dict[str, Any] | None,
-        right: dict[str, Any] | None,
-    ) -> dict[str, Any]:
-        left_total = left.get("reported_total") if isinstance(left, dict) else None
-        right_total = right.get("reported_total") if isinstance(right, dict) else None
-        left_active = left.get("reported_active_time") if isinstance(left, dict) else None
-        right_active = right.get("reported_active_time") if isinstance(right, dict) else None
-        return {
-            "source": (
-                left.get("source")
-                if isinstance(left, dict) and isinstance(left.get("source"), dict)
-                else (
-                    right.get("source")
-                    if isinstance(right, dict) and isinstance(right.get("source"), dict)
-                    else {"id": key[0], "name": key[1]}
-                )
-            ),
-            "left_reported_total": left_total,
-            "right_reported_total": right_total,
-            "reported_total_delta": (
-                round(float(right_total) - float(left_total), 2)
-                if isinstance(left_total, (int, float)) and isinstance(right_total, (int, float))
-                else None
-            ),
-            "left_reported_active_time": left_active,
-            "right_reported_active_time": right_active,
-            "reported_active_time_delta": (
-                int(right_active) - int(left_active)
-                if isinstance(left_active, (int, float)) and isinstance(right_active, (int, float))
-                else None
-            ),
-            "left_row": left,
-            "right_row": right,
+    def _compare_row(key: tuple[int | None, str], left: dict[str, Any] | None, right: dict[str, Any] | None) -> dict[str, Any]:
+        compared: dict[str, Any] = {
+            "source": dict_at(left or {}, "source") or dict_at(right or {}, "source") or {"id": key[0], "name": key[1]},
         }
+        for field in _AURA_COMPARE_FIELDS:
+            left_value = (left or {}).get(field)
+            right_value = (right or {}).get(field)
+            compared[f"left_{field}"] = left_value
+            compared[f"right_{field}"] = right_value
+            compared[f"{field}_delta"] = (
+                right_value - left_value
+                if isinstance(left_value, (int, float)) and isinstance(right_value, (int, float))
+                else None
+            )
+        return {**compared, "left_row": left, "right_row": right}
 
-    left_index = {_row_key(row): row for row in left_rows if isinstance(row, dict)}
-    right_index = {_row_key(row): row for row in right_rows if isinstance(row, dict)}
-    combined_keys = sorted(set(left_index) | set(right_index), key=lambda item: (str(item[1]).lower(), item[0] or 0))
-    compared: list[dict[str, Any]] = [
-        _compare_row(key, left_index.get(key), right_index.get(key)) for key in combined_keys
-    ]
-    compared.sort(
+    left_index = {_row_key(row): row for row in left_rows}
+    right_index = {_row_key(row): row for row in right_rows}
+    compared_rows = [_compare_row(key, left_index.get(key), right_index.get(key)) for key in set(left_index) | set(right_index)]
+    compared_rows.sort(
         key=lambda row: (
-            -abs(float(row["reported_total_delta"])) if isinstance(row.get("reported_total_delta"), (int, float)) else -1.0,
-            str((row.get("source") or {}).get("name") or ""),
+            -abs(row["reported_total_uptime_delta"]) if row["reported_total_uptime_delta"] is not None else 1,
+            str(row["source"].get("name") or "").lower(),
         )
     )
-    return compared
+    return compared_rows
 
 
 def _character_rankings_payload(character: dict[str, Any], *, top: int, transport_counts: dict[str, int]) -> dict[str, Any]:
@@ -5186,7 +5199,7 @@ def report_encounter_players(
             code=ref.code,
             allow_unlisted=allow_unlisted,
             options=ReportPlayerDetailsOptions(
-                encounter_id=fight.get("encounterID") if isinstance(fight.get("encounterID"), int) else None,
+                encounter_id=_fight_encounter_id(fight),
                 fight_ids=[int(fight["id"])] if isinstance(fight.get("id"), int) else None,
                 include_combatant_info=include_combatant_info,
                 kill_type=_kill_type_for_fight(fight),
@@ -5245,7 +5258,7 @@ def report_player_talents(
             code=ref.code,
             allow_unlisted=allow_unlisted,
             options=ReportPlayerDetailsOptions(
-                encounter_id=fight.get("encounterID") if isinstance(fight.get("encounterID"), int) else None,
+                encounter_id=_fight_encounter_id(fight),
                 fight_ids=[int(fight["id"])] if isinstance(fight.get("id"), int) else None,
                 include_combatant_info=True,
                 kill_type=_kill_type_for_fight(fight),
@@ -5609,10 +5622,10 @@ def _aura_compare_windows(
         )
         fight = scope[2]
         left_options, left_query = _encounter_filter_options(
-            ctx, fight, replace(filters, window_start_ms=left.start_ms, window_end_ms=left.end_ms)
+            ctx, fight, replace(filters, window_start_ms=left.start_ms, window_end_ms=left.end_ms, window_flag="--left-window")
         )
         right_options, right_query = _encounter_filter_options(
-            ctx, fight, replace(filters, window_start_ms=right.start_ms, window_end_ms=right.end_ms)
+            ctx, fight, replace(filters, window_start_ms=right.start_ms, window_end_ms=right.end_ms, window_flag="--right-window")
         )
         code = scope[0].code
         left_table = client.report_table(code=code, allow_unlisted=allow_unlisted, options=left_options)

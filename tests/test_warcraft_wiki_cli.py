@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -329,8 +330,9 @@ def test_search_ranks_the_article_a_qualified_query_names_above_pages_that_menti
 
 
 def test_resolve_picks_the_disambiguated_page_a_query_spells_out_over_its_base_page(monkeypatch) -> None:
-    # Captured rows: MediaWiki has "Sha of Anger" 5th and "Sha of Anger (Anniversary)" 20th, and the base
-    # page's snippet names the Anniversary version, so it carries every query word too.
+    # Replays the capture for "world boss sha of anger" (the stub ignores the query), so this rests on
+    # that query's row order. There MediaWiki has "Sha of Anger" 5th and "Sha of Anger (Anniversary)"
+    # 20th, and the base page's snippet names the Anniversary version, so it carries every query word too.
     transport = _CapturedTransport(_captured("search_world_boss_sha_of_anger.json"))
     monkeypatch.setattr("warcraft_wiki_cli.client.request_with_retries", transport)
 
@@ -393,8 +395,8 @@ def test_score_wiki_match_caps_the_upstream_rank_baseline() -> None:
         ("class druid", "druid", ["class"]),
         ("expansion legion", "legion", ["expansion"]),
         ("guide lore jaina", "jaina", ["guide", "lore"]),
-        # "Zone scaling" is a page title, so the leading "zone" is the subject, not a hint.
-        ("zone scaling", "zone scaling", []),
+        # Dropped here; ``search_results`` keeps it when a page is titled "Zone scaling".
+        ("zone scaling", "scaling", ["zone"]),
         # A hint word that is not leading names the page ("... Guide"), so it stays.
         ("mistweaver monk guide", "mistweaver monk guide", []),
         # Nothing would be left, so the query survives whole rather than becoming empty.
@@ -1263,3 +1265,112 @@ def test_warcraft_wiki_payloads_conform_to_envelope(monkeypatch, args) -> None:
     assert set(payload) == REQUIRED_KEYS
     assert payload["provider"] == "warcraft-wiki"
     assert payload["schema_version"] == "1"
+
+
+def _search_rows(*titles: str) -> list[dict[str, Any]]:
+    return [
+        {"title": title, "pageid": index, "snippet": "", "url": f"https://warcraft.wiki.gg/wiki/{title.replace(' ', '_')}"}
+        for index, title in enumerate(titles)
+    ]
+
+
+@pytest.mark.parametrize("limit", ["1", "5"])
+def test_resolve_judges_confidence_before_limit_trims_the_rivals(monkeypatch, limit: str) -> None:
+    rows = _search_rows("Jaina Proudmoore", "Jaina Proudmoore (tactics)", "Jaina Proudmoore (Warcraft III)")
+    monkeypatch.setattr("warcraft_wiki_cli.main.WarcraftWikiClient.search_articles", lambda self, query, limit: (3, rows))
+
+    result = runner.invoke(warcraft_wiki_app, ["resolve", "jaina", "--limit", limit])
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.stdout)["data"]
+    assert data["resolved"] is False
+    assert data["next_command"] is None
+    assert len(data["candidates"]) == min(int(limit), len(rows))
+
+
+def test_resolve_does_not_answer_with_a_lone_row_whose_snippet_alone_covers_the_query(monkeypatch) -> None:
+    # Every query word is in the title or snippet (all_terms_match), but the title names none of the
+    # rest of the query: the page talks about the guild, it is not the answer to it.
+    rows = [{"title": "Team Liquid", "pageid": 1, "snippet": "Liquid is a guild on US Illidan.",
+             "url": "https://warcraft.wiki.gg/wiki/Team_Liquid"}]
+    monkeypatch.setattr("warcraft_wiki_cli.main.WarcraftWikiClient.search_articles", lambda self, query, limit: (1, rows))
+
+    result = runner.invoke(warcraft_wiki_app, ["resolve", "Liquid guild us illidan"])
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.stdout)["data"]
+    assert "all_terms_match" in data["candidates"][0]["ranking"]["match_reasons"]
+    assert data["resolved"] is False
+    assert data["confidence"] != "high"
+
+
+@pytest.mark.parametrize(
+    ("query", "titles", "searched", "search_query"),
+    [
+        # A page is titled with the whole query, so the leading family word is the subject.
+        ("class hall", ("Class Hall", "Hall"), ["class hall"], "class hall"),
+        # No page is, so the word is a hint and the rest is searched.
+        ("class druid", ("Druid",), ["class druid", "druid"], "druid"),
+    ],
+)
+def test_search_keeps_a_family_word_that_titles_a_page(
+    monkeypatch, query: str, titles: tuple[str, ...], searched: list[str], search_query: str
+) -> None:
+    seen: list[str] = []
+
+    def fake_search(self: object, query: str, limit: int) -> tuple[int, list[dict[str, Any]]]:
+        seen.append(query)
+        return len(titles), _search_rows(*titles)
+
+    monkeypatch.setattr("warcraft_wiki_cli.main.WarcraftWikiClient.search_articles", fake_search)
+    result = runner.invoke(warcraft_wiki_app, ["search", query])
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.stdout)["data"]
+    assert seen == searched
+    assert data["search_query"] == search_query
+    assert data["results"][0]["id"] == titles[0]
+
+
+@pytest.mark.parametrize("command", ["search", "resolve"])
+@pytest.mark.parametrize("query", ["", "   "])
+def test_blank_query_is_a_usage_error_without_a_request(monkeypatch, command: str, query: str) -> None:
+    transport = _CapturedTransport({})
+    monkeypatch.setattr("warcraft_wiki_cli.client.request_with_retries", transport)
+
+    result = runner.invoke(warcraft_wiki_app, [command, query])
+
+    assert result.exit_code == 2, result.output
+    assert json.loads(result.stderr)["error"]["code"] == "invalid_query"
+    assert transport.calls == []
+
+
+@pytest.mark.parametrize(
+    ("response", "code"),
+    [
+        # A 200 HTML page (a challenge or maintenance page) is the upstream misbehaving.
+        (httpx.Response(200, text="<html>just a moment</html>"), "upstream_error"),
+        (httpx.Response(200, json={"error": {"code": "ratelimited", "info": "You've exceeded your rate limit."}}), "rate_limited"),
+        (httpx.Response(200, json={"error": {"code": "maxlag", "info": "Waiting for a database server."}}), "upstream_error"),
+    ],
+)
+def test_upstream_failures_exit_with_the_network_code(monkeypatch, response: httpx.Response, code: str) -> None:
+    def fake_request(client: Any, url: str, *, params: dict[str, Any], retry_attempts: int) -> httpx.Response:
+        response.request = httpx.Request("GET", url)
+        return response
+
+    monkeypatch.setattr("warcraft_wiki_cli.client.request_with_retries", fake_request)
+    result = runner.invoke(warcraft_wiki_app, ["search", "jaina"])
+
+    assert result.exit_code == 5, result.output
+    assert json.loads(result.stderr)["error"]["code"] == code
+
+
+def test_article_fetch_more_command_survives_the_shell(monkeypatch) -> None:
+    title = "Kael'thas \"Sunstrider\" $HOME"
+    page = {**_page_payload(), "article": {"title": title, "page_url": "https://warcraft.wiki.gg/wiki/Kael%27thas"}}
+    monkeypatch.setattr("warcraft_wiki_cli.main.WarcraftWikiClient.fetch_article_page", lambda self, article_ref: page)
+
+    data = json.loads(runner.invoke(warcraft_wiki_app, ["article", "anything"]).stdout)["data"]
+
+    assert shlex.split(data["linked_entities"]["fetch_more_command"]) == ["warcraft-wiki", "article-full", title]

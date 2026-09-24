@@ -1,8 +1,8 @@
-"""Parser tests against a captured Warcraft Logs GraphQL response.
+"""Parser tests against captured Warcraft Logs GraphQL responses.
 
-The fixture in ``tests/fixtures/warcraftlogs/`` is a real (trimmed) ``ReportEvents`` +
-``ReportMasterData`` pair from a public guild report, so these assertions pin the cast parser to
-data Warcraft Logs actually returns rather than to hand-written shapes. See
+The fixtures in ``tests/fixtures/warcraftlogs/`` are real (trimmed) GraphQL responses (each file's
+``_capture`` block names its source), so these assertions pin the cast and aura parsers to data
+Warcraft Logs actually returns rather than to hand-written shapes. See
 ``docs/architecture/FIXTURE_MAINTENANCE.md``.
 """
 
@@ -13,7 +13,13 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from warcraftlogs_cli.main import _ability_cast_summary, _encounter_cast_rows_payload
+from warcraftlogs_cli.main import (
+    _ability_cast_summary,
+    _aura_compare_rows,
+    _aura_summary_rows,
+    _encounter_cast_rows_payload,
+    _report_encounter_aura_summary_payload,
+)
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "warcraftlogs"
 FIXTURE_PATH = FIXTURE_DIR / "report_encounter_casts_capture.json"
@@ -87,3 +93,27 @@ def test_captured_empowered_spell_counts_one_cast_per_press() -> None:
     # 12 events are 4 presses of Dream Breath, each an empowerstart + cast + empowerend triple.
     assert summary["count"] == 4
     assert [(row["source"]["id"], row["count"]) for row in summary["sources"]] == [(14, 2), (20, 2)]
+
+
+def test_captured_buffs_tables_give_real_aura_compare_deltas() -> None:
+    fixture = json.loads((FIXTURE_DIR / "report_encounter_aura_buffs_capture.json").read_text(encoding="utf-8"))
+
+    def window_rows(table_key: str) -> list[dict[str, Any]]:
+        summary = _report_encounter_aura_summary_payload(
+            report=fixture["left_table_report"],
+            fight=fixture["fight"],
+            table_report=fixture[table_key],
+            master_report=fixture["master_report"],
+            ability_id=390386,
+            include_raw=False,
+        )
+        return _aura_summary_rows(summary)
+
+    rows = _aura_compare_rows(left_rows=window_rows("left_table_report"), right_rows=window_rows("right_table_report"))
+
+    # The real Buffs table carries totalUptime/totalUses per source, not total/activeTime.
+    assert [
+        (row["source"]["name"], row["left_reported_total_uptime"], row["right_reported_total_uptime"],
+         row["reported_total_uptime_delta"], row["reported_total_uses_delta"])
+        for row in rows
+    ] == [("Augvoker", 8054, 59976, 51922, 8)]

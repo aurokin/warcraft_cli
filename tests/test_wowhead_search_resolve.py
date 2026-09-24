@@ -407,12 +407,15 @@ def test_resolve_confidence_policy_helpers_cover_exact_filtered_and_medium_cases
     assert is_high_confidence_exact_match({"exact_name"}, margin=4, second_score=20) is True
     assert is_high_confidence_exact_match({"exact_display_name"}, margin=0, second_score=0) is True
     assert is_high_confidence_exact_match({"all_terms_match"}, margin=10, second_score=0) is False
+    assert is_high_confidence_exact_match({"exact_name"}, margin=3, second_score=20) is False
 
     assert is_high_confidence_score(24, margin=6) is True
     assert is_high_confidence_score(23, margin=6) is False
+    assert is_high_confidence_score(40, margin=5) is False
 
     assert is_filtered_high_confidence(("guide",), top_score=18, margin=4) is True
     assert is_filtered_high_confidence((), top_score=18, margin=4) is False
+    assert is_filtered_high_confidence(("guide",), top_score=18, margin=3) is False
 
     assert is_medium_confidence_score(18, margin=4) is True
     assert is_medium_confidence_score(17, margin=4) is False
@@ -427,8 +430,51 @@ def test_resolve_confidence_never_calls_a_stale_guide_high() -> None:
 
 
 
+def test_resolve_does_not_pick_between_two_rows_with_the_same_exact_name(monkeypatch) -> None:
+    rows = [
+        {"type": 3, "id": 49623, "name": "Shadowmourne", "typeName": "Item", "popularity": 1},
+        {"type": 6, "id": 71903, "name": "Shadowmourne", "typeName": "Spell", "popularity": 2},
+    ]
+    monkeypatch.setattr(
+        "wowhead_cli.main.WowheadClient.search_suggestions",
+        lambda self, query: {"search": query, "results": rows},
+    )
+    result = runner.invoke(app, ["resolve", "shadowmourne"])
+    assert result.exit_code == 0, result.output
+
+    data = json.loads(result.stdout)["data"]
+    assert [row["ranking"]["score"] for row in data["candidates"]] == [44, 44]
+    assert data["confidence"] != "high"
+    assert data["resolved"] is False
+    assert data["next_command"] is None
+
+
+def test_a_name_made_of_follow_up_words_is_searched_as_a_name(monkeypatch) -> None:
+    """"Soul Link" is a spell, not "soul" plus the follow-up word "link"."""
+    upstream = {
+        "soul link": [{"type": 6, "id": 108415, "name": "Soul Link", "typeName": "Spell", "popularity": 1}],
+        "soul": [
+            {"type": 3, "id": 1, "name": "Soul Harvester", "typeName": "Item", "popularity": 1},
+            {"type": 6, "id": 108415, "name": "Soul Link", "typeName": "Spell", "popularity": 2},
+        ],
+    }
+    monkeypatch.setattr(
+        "wowhead_cli.main.WowheadClient.search_suggestions",
+        lambda self, query: {"search": query, "results": upstream[query]},
+    )
+
+    resolved = json.loads(runner.invoke(app, ["resolve", "Soul Link"]).stdout)["data"]
+    assert resolved["search_query"] == "soul link"
+    assert resolved["next_command"] == "wowhead entity spell 108415"
+
+    found = json.loads(runner.invoke(app, ["search", "Soul Link"]).stdout)["data"]
+    assert found["results"][0]["follow_up"]["recommended_surface"] == "entity"
+
+
 def test_resolve_comment_intent_uses_comment_surface_without_hurting_match_quality(monkeypatch) -> None:
     def fake_search(self, query: str):  # noqa: ANN001
+        if query == "fairbreeze favors comments":  # Wowhead matches names, so the text with the follow-up word finds nothing
+            return {"search": query, "results": []}
         assert query == "fairbreeze favors"
         return {
             "search": query,
@@ -453,6 +499,8 @@ def test_resolve_comment_intent_uses_comment_surface_without_hurting_match_quali
 
 def test_resolve_relation_intent_uses_entity_page_surface(monkeypatch) -> None:
     def fake_search(self, query: str):  # noqa: ANN001
+        if query == "thunderfury links":  # Wowhead matches names, so the text with the follow-up word finds nothing
+            return {"search": query, "results": []}
         assert query == "thunderfury"
         return {
             "search": query,

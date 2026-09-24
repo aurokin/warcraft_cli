@@ -89,12 +89,12 @@ def _split_sections(node: Tag, sections: list[_Section], *, fallback_title: str)
                 continue
             html = str(child).strip()
             text = clean_text(child.get_text(" ", strip=True))
-        else:
-            # Prose written straight into a wrapper, with no element of its own to carry it.
+        elif type(child) in Tag.MAIN_CONTENT_STRING_TYPES and (text := clean_text(str(child))):
+            # Prose written straight into a wrapper, with no element of its own to carry it. Only the
+            # string types get_text() reads count, so HTML comments (author notes) stay out.
             html = ""
-            text = clean_text(str(child))
-            if text is None:
-                continue
+        else:
+            continue
         if not sections:
             sections.append(_Section(title=fallback_title, level=2))
         if html:

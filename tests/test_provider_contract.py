@@ -18,6 +18,7 @@ from warcraft_cli.provider_contract import (
     normalized_provider_score,
     provider_max_candidate_score,
     query_intents,
+    resolve_answer_accepted,
     resolve_payload_sort_key,
     search_result_sort_key,
     wrapper_search_ranking,
@@ -320,29 +321,50 @@ def test_compact_wrapper_candidate_keeps_provider_expansion_support() -> None:
     assert "first-class expansion profiles" in compact["provider_expansion"]["policy_note"]
 
 
-def test_resolve_payload_sort_key_prefers_resolved_then_confidence_then_wrapper_score() -> None:
-    unresolved = ("wowhead", {"resolved": False, "confidence": "medium", "match": {"ranking": {"score": 90}}})
-    medium = (
-        "method",
-        decorate_resolve_payload(
-            "mistweaver monk guide",
-            "method",
-            {"resolved": True, "confidence": "medium", "match": {"entity_type": "guide", "ranking": {"score": 20}}},
-        ),
-    )
-    high = (
-        "icy-veins",
-        decorate_resolve_payload(
-            "mistweaver monk guide",
-            "icy-veins",
-            {"resolved": True, "confidence": "high", "match": {"entity_type": "guide", "ranking": {"score": 10}}},
-        ),
-    )
+def _resolve_answer(query: str, provider: str, *, confidence: str, **match: Any) -> dict[str, Any]:
+    return decorate_resolve_payload(query, provider, {"resolved": True, "confidence": confidence, "match": match})
 
-    ordered = sorted([medium, unresolved, high], key=lambda row: resolve_payload_sort_key(row[0], row[1]))
 
-    assert ordered[0][0] == "icy-veins"
-    assert ordered[-1][0] == "wowhead"
+def test_resolve_ranks_answers_as_search_does_and_confidence_only_breaks_exact_ties() -> None:
+    # Live scales from the `un'goro crater` fanout: the wiki's 116 must not beat Wowhead's 89.
+    zone = _resolve_answer("un'goro crater", "wowhead", confidence="high", name="Un'Goro Crater",
+                           entity_type="zone", ranking={"score": 89})
+    article = _resolve_answer("un'goro crater", "warcraft-wiki", confidence="high", name="Un'Goro Crater",
+                              entity_type="article", ranking={"score": 116})
+    assert [row["match"]["provider"] for row in sorted([article, zone], key=resolve_payload_sort_key)] == [
+        "wowhead", "warcraft-wiki"]
+
+    # Same family, same normalized score, same boosts: only the provider's confidence differs.
+    medium = _resolve_answer("mistweaver monk guide", "icy-veins", confidence="medium", name="MW",
+                             entity_type="guide", ranking={"score": 90})
+    high = _resolve_answer("mistweaver monk guide", "method", confidence="high", name="MW",
+                           entity_type="guide", ranking={"score": 90})
+    assert medium["wrapper_ranking"]["score"] == high["wrapper_ranking"]["score"]
+    assert [row["match"]["provider"] for row in sorted([medium, high], key=resolve_payload_sort_key)] == [
+        "method", "icy-veins"]
+
+
+def test_resolve_match_is_normalized_against_the_providers_own_candidates() -> None:
+    """A match the provider scored below one of its own candidates is not that provider's best row."""
+    match = {"name": "Onyxia", "entity_type": "npc", "ranking": {"score": 60}}
+    rival = {"name": "Onyxia's Lair", "entity_type": "zone", "ranking": {"score": 120}}
+    decorated = decorate_resolve_payload("onyxia", "wowhead", {"resolved": True, "match": match, "candidates": [match, rival]})
+
+    assert decorated["wrapper_ranking"]["provider_max_score"] == 120
+
+
+def test_resolve_answer_needs_a_family_the_query_intent_does_not_rank_down() -> None:
+    spec = _resolve_answer("frost mage guide", "lorrgs", confidence="high", name="Frost Mage", kind="spec",
+                           ranking={"score": 96})
+    guild_article = _resolve_answer("Liquid guild us illidan", "warcraft-wiki", confidence="high",
+                                    name="Team Liquid", entity_type="article", ranking={"score": 24})
+    guide = _resolve_answer("frost mage guide", "method", confidence="high", name="Frost Mage",
+                            entity_type="guide", ranking={"score": 33})
+
+    assert resolve_answer_accepted(spec) is False
+    assert resolve_answer_accepted(guild_article) is False
+    assert resolve_answer_accepted(guide) is True
+    assert resolve_answer_accepted({**guide, "resolved": False}) is False
 
 
 def test_none_expansion_providers_report_no_expansion_support_reason() -> None:

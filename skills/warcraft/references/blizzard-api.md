@@ -17,6 +17,7 @@ confirmed against the live API for `us`, `eu`, `kr`, and `tw` (`provenance.verif
 - a realm: `warcraft blizzard realm <slug>` (e.g. `illidan`)
 - an item: `warcraft blizzard item <id>` (e.g. `19019`)
 - a character: `warcraft blizzard character <realm> <name>` (retail only)
+- realms may be a slug or a display name (`malganis`, `Mal'Ganis`, `Tarren Mill`)
 
 ## Auth
 

@@ -66,14 +66,16 @@ complexity-gate:
 typecheck:
 	$(MYPY)
 
-# The fast suite with coverage. The floor is the measured total rounded down, so a drop fails;
-# raise it when coverage rises.
+# The fast suite with coverage. The floor is the total measured in a clean environment (empty HOME,
+# no SimC checkout, as in CI; 91.8% on 2026-09-24) rounded down, so a drop fails; raise it when
+# coverage rises. -rs lists the skipped tests, such as the opt-in real-binary SimC tests.
 coverage:
-	$(PYTEST) -q -m "not live and not e2e" --cov=packages --cov-report=term-missing --cov-fail-under=91
+	$(PYTEST) -q -rs -m "not live and not e2e" --cov=packages --cov-report=term-missing --cov-fail-under=91
 
+# tests/ is not scanned, so production code only a test uses counts as dead. The allowlist
+# (scripts/vulture_allowlist.py) is picked up with scripts/.
 deadcode:
-	$(VULTURE) packages scripts tests scripts/vulture_allowlist.py --min-confidence 60 \
-		--ignore-decorators "@*.command,@*.callback,@pytest.fixture"
+	$(VULTURE) packages scripts --min-confidence 60 --ignore-decorators "@*.command,@*.callback"
 
 skills:
 	$(PYTHON) scripts/generate_provider_skills.py

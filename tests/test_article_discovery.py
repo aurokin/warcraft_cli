@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import shlex
+
 from warcraft_content.article_discovery import (
     article_candidate,
     article_follow_up,
@@ -205,3 +207,12 @@ def test_merge_article_build_references_dedupes_and_preserves_source_urls() -> N
             ],
         }
     ]
+
+
+def test_article_resolve_fallback_search_command_is_valid_shell() -> None:
+    query = """kil'jaeden "raid" $HOME guide"""
+    payload = article_resolve_payload(
+        provider_command="warcraft-wiki", query=query, search_query=query, results=[], total_count=0, resolved=False
+    )
+
+    assert shlex.split(payload["fallback_search_command"]) == ["warcraft-wiki", "search", query]

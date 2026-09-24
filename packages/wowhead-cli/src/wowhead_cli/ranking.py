@@ -104,15 +104,6 @@ def search_ranking_query(query: str) -> str:
     return " ".join(query.lower().split())
 
 
-def search_query_for_ranking(query: str) -> str:
-    """Rank a Wowhead entity URL by its type/id instead of its raw slug text."""
-    entity = parse_entity_from_wowhead_url(query)
-    if entity is not None:
-        entity_type, entity_id = entity
-        return f"{entity_type} {entity_id}"
-    return search_ranking_query(query)
-
-
 def search_follow_up_kind(query: str) -> str:
     terms = set(query_terms(query))
     if terms & FOLLOW_UP_COMMENT_TERMS:
@@ -122,14 +113,14 @@ def search_follow_up_kind(query: str) -> str:
     return "summary"
 
 
-def search_follow_up(candidate: dict[str, Any], *, query: str, expansion: ExpansionProfile) -> dict[str, Any] | None:
+def search_follow_up(candidate: dict[str, Any], *, intent: str, expansion: ExpansionProfile) -> dict[str, Any] | None:
+    """The command that opens a search row, steered by the query's intent from ``search_follow_up_kind``."""
     entity_type = candidate.get("entity_type")
     entity_id = candidate.get("id")
     if not isinstance(entity_type, str) or not isinstance(entity_id, int):
         return None
 
     prefix = command_prefix_for_expansion(expansion)
-    intent = search_follow_up_kind(query)
     if entity_type == "guide":
         guide_command = f"{prefix} guide {entity_id}"
         guide_full_command = f"{prefix} guide-full {entity_id}"
@@ -404,6 +395,34 @@ def search_result_url(*, entity_type: str | None, entity_id: int | None, expansi
     return None
 
 
+def url_entity_result(url: str, *, expansion: ExpansionProfile) -> dict[str, Any] | None:
+    """The search answer for a Wowhead entity URL: the entity it names, or None when it names none.
+
+    Wowhead's suggestions endpoint matches names, so neither the URL nor its type and id find
+    anything there. The URL already identifies the entity, so the answer is that entity and the
+    command that opens it; its name stays null because nothing was fetched.
+    """
+    entity = parse_entity_from_wowhead_url(url)
+    if entity is None:
+        return None
+    entity_type, entity_id = entity
+    row: dict[str, Any] = {
+        "id": entity_id,
+        "name": None,
+        "entity_type": entity_type,
+        "url": search_result_url(entity_type=entity_type, entity_id=entity_id, expansion=expansion),
+        "ranking": {"score": EXACT_NAME_SCORE, "match_reasons": ["url_entity"]},
+    }
+    # Types `resolve` never returns (mount, recipe, ...) still open with `entity`.
+    row["follow_up"] = search_follow_up(row, intent="summary", expansion=expansion) or {
+        "recommended_surface": "entity",
+        "command": f"{command_prefix_for_expansion(expansion)} entity {entity_type} {entity_id}",
+        "reason": "entity_summary",
+        "alternatives": [],
+    }
+    return row
+
+
 STALE_GUIDE_REASON = "stale_guide"
 STALE_GUIDE_DAYS = 180
 
@@ -489,13 +508,17 @@ def normalize_search_results(
     expansion: ExpansionProfile,
     entity_types: tuple[str, ...] = (),
     rank_bonuses: dict[SuggestionKey, int] | None = None,
+    literal: bool = False,
 ) -> tuple[list[dict[str, Any]], int]:
     """Score and order suggestion rows, dropping the ones whose text matches nothing in the query.
 
+    Follow-up words ("comments", "links") steer each row's follow-up command and are left out of the
+    ranking, unless `literal` says the whole query is a name ("Soul Link").
     Returns the kept rows and how many rows were dropped for matching nothing.
     """
     selected_entity_types = set(entity_types)
-    ranking_query = search_ranking_query(query)
+    ranking_query = " ".join(query.lower().split()) if literal else search_ranking_query(query)
+    intent = "summary" if literal else search_follow_up_kind(query)
     bonuses = rank_bonuses or {}
     normalized: list[dict[str, Any]] = []
     for index, row in enumerate(results):
@@ -543,7 +566,7 @@ def normalize_search_results(
             # order, then the category-only rows in the order Wowhead listed them.
             "_sort": (-search_score, index),
         }
-        follow_up = search_follow_up(candidate, query=query, expansion=expansion)
+        follow_up = search_follow_up(candidate, intent=intent, expansion=expansion)
         if follow_up is not None:
             candidate["follow_up"] = follow_up
         normalized.append(candidate)

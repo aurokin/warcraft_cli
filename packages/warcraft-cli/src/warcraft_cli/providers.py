@@ -15,7 +15,6 @@ from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-import click
 import typer
 from blizzard_api_cli.main import app as blizzard_app
 from blizzard_api_cli.provider import PROVIDER as blizzard_provider
@@ -34,7 +33,7 @@ from raiderio_cli.main import app as raiderio_app
 from raiderio_cli.provider import PROVIDER as raiderio_provider
 from simc_cli.main import app as simc_app
 from simc_cli.provider import PROVIDER as simc_provider
-from warcraft_core.cli import error_envelope_for
+from warcraft_core.cli import command_path_from_args, error_envelope_for
 from warcraft_core.envelope import ENVELOPE_KEYS, SCHEMA_VERSION, error_envelope
 from warcraft_core.exit_codes import EXIT_GENERIC, EXIT_USAGE, exit_code_for
 from warcraft_core.expansions import list_expansions, resolve_expansion, warcraftlogs_site_for_expansion
@@ -100,7 +99,6 @@ ProviderTier = Literal["core", "supported", "experimental"]
 class ProviderRegistration:
     name: str
     command: str
-    language: str
     status: str
     description: str
     auth_required: bool
@@ -118,8 +116,6 @@ class ProviderRegistration:
     # Keyword name the surface takes for the wrapper's --expansion value, when it takes one at all.
     expansion_option: str | None
     app: typer.Typer
-    # Argument vector for `<provider> doctor`, used by the registry/CLI parity tests.
-    doctor_args: tuple[str, ...]
     # Extra keyword arguments for surface.doctor(), e.g. skipping wowhead's live probes.
     doctor_options: dict[str, Any] = field(default_factory=dict)
 
@@ -128,7 +124,6 @@ PROVIDERS: tuple[ProviderRegistration, ...] = (
     ProviderRegistration(
         name="wowhead",
         command="wowhead",
-        language="python",
         status="ready",
         description="Structured Wowhead provider with live search, resolve, and retrieval commands.",
         auth_required=False,
@@ -145,13 +140,11 @@ PROVIDERS: tuple[ProviderRegistration, ...] = (
         tier="core",
         expansion_option="expansion",
         app=wowhead_app,
-        doctor_args=("doctor", "--no-live"),
         doctor_options={"live": False},
     ),
     ProviderRegistration(
         name="method",
         command="method",
-        language="python",
         status="ready",
         description="Method.gg article provider with sitemap-backed search and guide bundle export/query.",
         auth_required=False,
@@ -171,12 +164,10 @@ PROVIDERS: tuple[ProviderRegistration, ...] = (
         tier="supported",
         expansion_option=None,
         app=method_app,
-        doctor_args=("doctor",),
     ),
     ProviderRegistration(
         name="icy-veins",
         command="icy-veins",
-        language="python",
         status="ready",
         description="Icy Veins article provider with sitemap-backed search, resolve, and guide bundle export/query.",
         auth_required=False,
@@ -196,12 +187,10 @@ PROVIDERS: tuple[ProviderRegistration, ...] = (
         tier="supported",
         expansion_option=None,
         app=icy_veins_app,
-        doctor_args=("doctor",),
     ),
     ProviderRegistration(
         name="raiderio",
         command="raiderio",
-        language="python",
         status="partial",
         description="Raider.IO API provider with search, resolve, character, guild, and mythic-plus runs lookups.",
         auth_required=False,
@@ -221,12 +210,10 @@ PROVIDERS: tuple[ProviderRegistration, ...] = (
         tier="supported",
         expansion_option=None,
         app=raiderio_app,
-        doctor_args=("doctor",),
     ),
     ProviderRegistration(
         name="warcraftlogs",
         command="warcraftlogs",
-        language="python",
         status="partial",
         description="Warcraft Logs API provider with explicit report discovery plus guild, character, and report analytics commands.",
         auth_required=True,
@@ -247,13 +234,11 @@ PROVIDERS: tuple[ProviderRegistration, ...] = (
         tier="core",
         expansion_option="site",
         app=warcraftlogs_app,
-        doctor_args=("doctor", "--no-live"),
         doctor_options={"live": False},
     ),
     ProviderRegistration(
         name="warcraft-wiki",
         command="warcraft-wiki",
-        language="python",
         status="ready",
         description="Warcraft Wiki reference provider with MediaWiki-backed search, resolve, article export, and local query.",
         auth_required=False,
@@ -273,12 +258,10 @@ PROVIDERS: tuple[ProviderRegistration, ...] = (
         tier="supported",
         expansion_option=None,
         app=warcraft_wiki_app,
-        doctor_args=("doctor",),
     ),
     ProviderRegistration(
         name="simc",
         command="simc",
-        language="python",
         status="partial",
         description="SimulationCraft local provider with repo inspection, build decoding, and local run workflows.",
         auth_required=False,
@@ -298,12 +281,10 @@ PROVIDERS: tuple[ProviderRegistration, ...] = (
         tier="core",
         expansion_option=None,
         app=simc_app,
-        doctor_args=("doctor",),
     ),
     ProviderRegistration(
         name="raidbots",
         command="raidbots",
-        language="python",
         status="partial",
         description="Raidbots report consumption provider: parse public reports and bridge SimC input to local simc.",
         auth_required=False,
@@ -323,12 +304,10 @@ PROVIDERS: tuple[ProviderRegistration, ...] = (
         tier="experimental",
         expansion_option=None,
         app=raidbots_app,
-        doctor_args=("doctor",),
     ),
     ProviderRegistration(
         name="blizzard-api",
         command="blizzard",
-        language="python",
         status="partial",
         description="Official Blizzard Battle.net WoW API provider: doctor + auth, Game Data (realm, item) and Profile (character) reads.",
         auth_required=True,
@@ -355,12 +334,10 @@ PROVIDERS: tuple[ProviderRegistration, ...] = (
         tier="experimental",
         expansion_option=None,
         app=blizzard_app,
-        doctor_args=("doctor",),
     ),
     ProviderRegistration(
         name="curseforge",
         command="curseforge",
-        language="python",
         status="partial",
         description="CurseForge addon provider: doctor + addon lookup (metadata, latest files, changelog) over the public CurseForge API.",
         auth_required=True,
@@ -386,12 +363,10 @@ PROVIDERS: tuple[ProviderRegistration, ...] = (
         tier="experimental",
         expansion_option=None,
         app=curseforge_app,
-        doctor_args=("doctor",),
     ),
     ProviderRegistration(
         name="lorrgs",
         command="lorrgs",
-        language="python",
         status="partial",
         description=(
             "Lorrgs public API provider: cooldown timeline rankings by spec/boss, composition rankings, "
@@ -414,7 +389,6 @@ PROVIDERS: tuple[ProviderRegistration, ...] = (
         tier="supported",
         expansion_option=None,
         app=lorrgs_app,
-        doctor_args=("doctor",),
     ),
 )
 
@@ -694,15 +668,12 @@ def _capture_command(app: typer.Typer, args: list[str], *, prog_name: str) -> tu
             returned = command.main(args=args, prog_name=prog_name, standalone_mode=False)
         if isinstance(returned, int):
             exit_code = returned
-    except click.ClickException as exc:
-        # standalone_mode=False raises usage errors instead of printing them.
-        exit_code = EXIT_USAGE
-        failure = dict(error_envelope(provider=prog_name, command=prog_name, code="usage_error", message=exc.format_message()))
     except SystemExit as exc:
         exit_code = exc.code if isinstance(exc.code, int) else EXIT_GENERIC
     except Exception as exc:
-        # A provider crash must reach the agent as an envelope, never a traceback.
-        envelope, exit_code = error_envelope_for(prog_name, prog_name, exc)
+        # Usage errors and provider crashes both land here, and reach the agent as an envelope
+        # labelled with the subcommand path, exactly as the provider's own binary would label it.
+        envelope, exit_code = error_envelope_for(prog_name, command_path_from_args(app, args), exc)
         failure = dict(envelope)
     text = out.getvalue() + err.getvalue()
     if failure is not None:
@@ -765,7 +736,6 @@ def provider_doctor(provider: str, *, requested_expansion: str | None = None) ->
         "provider": registration.name,
         "status": registration.status if code == 0 else "error",
         "command": registration.command,
-        "language": registration.language,
         "tier": registration.tier,
         # The provider package imported, so the surface is always reachable in-process.
         "installed": True,

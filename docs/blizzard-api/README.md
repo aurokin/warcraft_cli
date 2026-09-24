@@ -23,6 +23,11 @@ client credentials and emits the shared JSON envelope.
 | `blizzard realm <slug>` | Reads `/data/wow/realm/{slug}` from the dynamic Game Data namespace. |
 | `blizzard item <item-id>` | Reads `/data/wow/item/{id}` from the static Game Data namespace. |
 | `blizzard character <realm-slug> <name>` | Reads `/profile/wow/character/{realm}/{name}` from the profile namespace. Retail only. |
+
+`realm` and `character` also take a realm display name or the other slug spelling (`Mal'Ganis`,
+`mal-ganis`, `Tarren Mill`). Blizzard's slug drops apostrophes and keeps word breaks (`malganis`,
+`tarren-mill`), so the hyphenated spelling is tried first and the joined one only after a 404; a
+realm that exists under neither is `not_found` (exit 4).
 | `blizzard search <query>` | Coming soon. Returns a `kind: "coming_soon"` envelope with exit 0, not an error. |
 | `blizzard resolve <query>` | Coming soon. Returns a `kind: "coming_soon"` envelope with exit 0, not an error. |
 

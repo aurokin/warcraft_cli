@@ -16,6 +16,7 @@ from typing import Any
 import httpx
 from warcraft_api.cache import CacheSettings, load_cache_settings_from_env
 from warcraft_core.envelope import Envelope, success_envelope
+from warcraft_core.exit_codes import error_code_for_http_status
 from warcraft_core.provider import ProviderError
 
 from wowhead_cli.doctor import build_doctor_payload
@@ -32,9 +33,9 @@ from wowhead_cli.ranking import (
     preferred_resolve_candidates,
     resolve_confidence,
     resolve_next_command,
-    search_query_for_ranking,
     search_ranking_query,
     upstream_rank_bonuses,
+    url_entity_result,
 )
 from wowhead_cli.wowhead_client import WowheadClient, search_url
 
@@ -65,17 +66,16 @@ def select_expansion(expansion: str | None = None, *, url_hint: str | None = Non
 
 @contextmanager
 def transport_errors() -> Iterator[None]:
-    """Translate httpx transport failures into ``ProviderError`` so callers get an envelope, never a traceback."""
+    """Translate httpx transport failures into ``ProviderError`` so callers get an envelope, never a traceback.
+
+    The one Wowhead mapping: every command's requests go through it (``main._upstream``).
+    """
     try:
         yield
     except httpx.HTTPStatusError as exc:
         status = exc.response.status_code
         details = {"status_code": status, "url": str(exc.request.url)}
-        if status in (401, 403):
-            raise ProviderError("auth_failed", f"Wowhead returned HTTP {status}", details=details) from exc
-        if status == 404:
-            raise ProviderError("not_found", f"Wowhead returned HTTP {status}", details=details) from exc
-        raise ProviderError("http_error", f"Wowhead returned HTTP {status}", details=details) from exc
+        raise ProviderError(error_code_for_http_status(status), f"Wowhead returned HTTP {status}", details=details) from exc
     except httpx.TimeoutException as exc:
         raise ProviderError("timeout", f"{type(exc).__name__}: {exc}") from exc
     except httpx.HTTPError as exc:
@@ -124,13 +124,14 @@ def _validated_query(raw: str) -> str:
     return query
 
 
-def _ranked_suggestions(
+def _fetch_ranked(
     client: WowheadClient,
     search_query: str,
     *,
     query: str,
     profile: ExpansionProfile,
-    entity_types: tuple[str, ...] = (),
+    entity_types: tuple[str, ...],
+    literal: bool,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Fetch Wowhead's suggestions for `search_query`, merge its row lists, and rank them against `query`.
 
@@ -151,8 +152,36 @@ def _ranked_suggestions(
         expansion=profile,
         entity_types=entity_types,
         rank_bonuses=upstream_rank_bonuses(response, query=query, entity_types=entity_types),
+        literal=literal,
     )
     return ranked, {**merge, "unmatched_rows_dropped": unmatched}
+
+
+def _ranked_suggestions(
+    client: WowheadClient,
+    query: str,
+    *,
+    profile: ExpansionProfile,
+    entity_types: tuple[str, ...] = (),
+) -> tuple[str, list[dict[str, Any]], dict[str, Any]]:
+    """Rank Wowhead's suggestions for `query`, returning the text sent upstream, the rows, and the merge summary.
+
+    Follow-up words ("thunderfury comments") are dropped from the upstream text. When the query has
+    any, the whole text is tried first, and kept when a row is named exactly that: "Soul Link" and
+    "Body and Soul" are spells, not "soul" plus a follow-up word.
+    """
+    literal_query = " ".join(query.lower().split())
+    stripped_query = search_ranking_query(query)
+    if stripped_query != literal_query:
+        ranked, merge = _fetch_ranked(
+            client, literal_query, query=query, profile=profile, entity_types=entity_types, literal=True
+        )
+        if any({"exact_name", "exact_display_name"} & set(row["ranking"]["match_reasons"]) for row in ranked):
+            return literal_query, ranked, merge
+    ranked, merge = _fetch_ranked(
+        client, stripped_query, query=query, profile=profile, entity_types=entity_types, literal=False
+    )
+    return stripped_query, ranked, merge
 
 
 def search(query: str, *, limit: int = 10, expansion: str | None = None, **options: Any) -> Envelope:
@@ -161,16 +190,20 @@ def search(query: str, *, limit: int = 10, expansion: str | None = None, **optio
     query = _validated_query(query)
     selection = select_expansion(expansion, url_hint=query)
     profile = selection.profile
-    search_query = search_query_for_ranking(query)
-    client = open_client(profile)
-    normalized, merge = _ranked_suggestions(client, search_query, query=query, profile=profile)
+    url_entity = url_entity_result(query, expansion=profile)
+    search_query: str | None = None
+    merge: dict[str, Any] | None = None
+    if url_entity is not None:
+        normalized = [url_entity]
+    else:
+        search_query, normalized, merge = _ranked_suggestions(open_client(profile), query, profile=profile)
     returned = normalized[:limit]
     data: dict[str, Any] = {
         "query": query,
         "search_query": search_query,
         "expansion": profile.key,
         "expansion_source": selection.source,
-        "search_url": search_url(search_query, expansion=profile),
+        "search_url": search_url(search_query, expansion=profile) if search_query is not None else None,
         "count": len(returned),
         "total_matches": len(normalized),
         "truncated": len(normalized) > len(returned),
@@ -197,14 +230,8 @@ def resolve(
         selected_entity_types = normalize_resolve_entity_types(list(entity_types))
     except ValueError as exc:
         raise ProviderError("invalid_argument", str(exc)) from exc
-    search_query = search_ranking_query(target)
-    client = open_client(profile)
-    ranked, merge = _ranked_suggestions(
-        client,
-        search_query,
-        query=target,
-        profile=profile,
-        entity_types=selected_entity_types,
+    search_query, ranked, merge = _ranked_suggestions(
+        open_client(profile), target, profile=profile, entity_types=selected_entity_types
     )
     answering, trailing = preferred_resolve_candidates(ranked)
     confidence = resolve_confidence(answering, entity_types=selected_entity_types)

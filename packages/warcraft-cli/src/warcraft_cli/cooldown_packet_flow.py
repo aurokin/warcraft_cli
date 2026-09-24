@@ -13,7 +13,7 @@ from typing import Any, NoReturn, Protocol
 
 import typer
 from warcraft_core.cli import emit, fail
-from warcraft_core.exit_codes import EXIT_GENERIC, EXIT_USAGE
+from warcraft_core.exit_codes import EXIT_GENERIC, EXIT_NOT_FOUND, EXIT_USAGE
 from warcraft_core.shapes import as_dict, as_list
 
 from warcraft_cli.cooldown_packet import (
@@ -252,8 +252,9 @@ class CooldownState:
     player_casts: dict[str, Any] = field(default_factory=dict)
     ranking_args: list[str] | None = None
     ranking_result: dict[str, Any] | None = None
-    # Set when the comparison was skipped because no Lorrgs difficulty could be named for the fight.
-    unranked_difficulty_note: str | None = None
+    # Why the top-parse comparison is unavailable, and what to do about it; None when it ran.
+    comparison_reason: str | None = None
+    comparison_note: str | None = None
     comparison: dict[str, Any] = field(default_factory=dict)
 
 
@@ -400,7 +401,7 @@ def _load_lorrgs_fight(ctx: typer.Context, request: CooldownRequest, state: Cool
             message="Lorrgs cached this report but not the selected fight, so phase markers are unavailable.",
             advice=_LORRGS_FALLBACK_ADVICE,
             source=None,
-            exit_code=EXIT_GENERIC,
+            exit_code=EXIT_NOT_FOUND,
         )
         return
     state.lorrgs_fight = fight
@@ -428,12 +429,14 @@ def _select_player(ctx: typer.Context, request: CooldownRequest, state: Cooldown
         state.lorrgs_fight, actor_id=request.actor_id, actor_name=request.actor_name
     )
     if player is None:
+        code = player_error or "actor_not_found"
         _fail_cooldown_packet(
             ctx,
-            code=player_error or "actor_not_found",
+            code=code,
             message="Could not resolve the selected player in the Lorrgs fight payload.",
             query=state.query,
             details={"available_players": _available_lorrgs_players(state.lorrgs_fight)},
+            exit_code=EXIT_NOT_FOUND if code.endswith("_not_found") else EXIT_GENERIC,
         )
     resolved_actor_id = _cooldown_int(player.get("source_id"))
     if resolved_actor_id is None:
@@ -541,14 +544,28 @@ def _load_warcraftlogs_casts(ctx: typer.Context, request: CooldownRequest, state
         error_message="Warcraft Logs fight lookup failed.",
     )
     state.wcl_fight = _find_warcraftlogs_fight(state.wcl_fights_result, state.fight_id)
-    fight_start_time_ms = _cooldown_int(state.wcl_fight.get("start_time") if isinstance(state.wcl_fight, dict) else None)
+    if state.wcl_fight is None:
+        _fail_cooldown_packet(
+            ctx,
+            code="fight_not_found",
+            message=f"Warcraft Logs report {state.report_code} has no fight {state.fight_id}.",
+            query=state.query,
+            details={
+                "available_fight_ids": [
+                    fight.get("id") for fight in as_list(_data_of(state.wcl_fights_result).get("fights"))
+                    if isinstance(fight, dict)
+                ]
+            },
+            exit_code=EXIT_NOT_FOUND,
+        )
+    fight_start_time_ms = _cooldown_int(state.wcl_fight.get("start_time"))
     if fight_start_time_ms is None:
         _fail_cooldown_packet(
             ctx,
             code="fight_start_missing",
             message="Warcraft Logs did not return a fight start timestamp for relative event conversion.",
             query=state.query,
-            details={"fight": state.wcl_fight or {}},
+            details={"fight": state.wcl_fight},
         )
     state.fight_start_time_ms = fight_start_time_ms
     state.events_args = [
@@ -595,15 +612,31 @@ def _ranking_difficulty(request: CooldownRequest, state: CooldownState) -> str |
     fight_difficulty = as_dict(state.wcl_fight).get("difficulty")
     difficulty = _LORRGS_DIFFICULTY_BY_WARCRAFTLOGS_ID.get(fight_difficulty) if isinstance(fight_difficulty, int) else None
     if difficulty is None:
-        state.unranked_difficulty_note = (
+        state.comparison_reason = "unranked_difficulty"
+        state.comparison_note = (
             f"The Warcraft Logs fight's difficulty is {fight_difficulty!r}, which names no Lorrgs ranking "
             "(heroic or mythic), so the top-parse comparison was skipped. Pass --difficulty to compare anyway."
         )
     return difficulty
 
 
+def _comparison_difficulty(request: CooldownRequest, state: CooldownState) -> str | None:
+    """The Lorrgs difficulty to rank against, or ``None`` with the reason recorded on ``state``."""
+    if request.sample_limit == 0:
+        state.comparison_reason = "disabled_by_sample_limit"
+        return None
+    if not state.boss_slug:
+        state.comparison_reason = "no_boss_slug"
+        state.comparison_note = (
+            "Lorrgs did not name this fight's boss, so the top-parse comparison was skipped. "
+            "Pass --boss-slug (see `warcraft lorrgs bosses`) to compare anyway."
+        )
+        return None
+    return _ranking_difficulty(request, state)
+
+
 def _load_ranking_comparison(ctx: typer.Context, request: CooldownRequest, state: CooldownState, fetch: ProviderFetch) -> None:
-    difficulty = _ranking_difficulty(request, state) if request.sample_limit > 0 and state.boss_slug else None
+    difficulty = _comparison_difficulty(request, state)
     state.query["difficulty"] = difficulty or request.difficulty
     if difficulty is not None:
         state.ranking_args = ["spec-ranking", state.spec_slug, str(state.boss_slug), "--difficulty", difficulty]
@@ -626,6 +659,11 @@ def _load_ranking_comparison(ctx: typer.Context, request: CooldownRequest, state
         else None
     )
     ranking_payload = raw_ranking if isinstance(raw_ranking, dict) else None
+    if difficulty is not None and ranking_payload is None:
+        state.comparison_reason = "lorrgs_spec_ranking_failed"
+        state.comparison_note = (
+            "Lorrgs top-parse comparison was unavailable; inspect sources.lorrgs_spec_ranking.error for details."
+        )
     state.comparison = top_parse_samples(
         ranking_payload,
         phase=request.phase,
@@ -634,6 +672,7 @@ def _load_ranking_comparison(ctx: typer.Context, request: CooldownRequest, state
         boss_catalog=state.boss_catalog,
         spell_ids=state.tracked_ids,
     )
+    state.comparison["reason"] = None if ranking_payload is not None else state.comparison_reason
 
 
 def _source_refs(state: CooldownState) -> dict[str, Any]:
@@ -663,11 +702,16 @@ def _lorrgs_section(state: CooldownState) -> dict[str, Any]:
 
 
 def _notes(state: CooldownState, lorrgs_player_casts: list[Any]) -> list[str]:
+    """What the packet's evidence is and where it is incomplete; each note matches the payload."""
     notes = [
-        "Phase windows are derived from Lorrgs/Warcraft Logs phase transition markers; labels are one-based P1/P2/etc.",
         "Player casts come from Warcraft Logs cast events so cached Lorrgs user reports do not need per-player timeline generation.",
-        "Top-parse samples are comparison evidence, not universal cooldown recommendations.",
     ]
+    if state.selected_window is not None:
+        notes.append(
+            "Phase windows are derived from Lorrgs/Warcraft Logs phase transition markers; labels are one-based P1/P2/etc."
+        )
+    if state.comparison.get("status") == "ready":
+        notes.append("Top-parse samples are comparison evidence, not universal cooldown recommendations.")
     if state.lorrgs_unavailable is not None:
         notes.append(
             "Lorrgs did not supply this report, so there are no phase windows: the requested --phase "
@@ -678,17 +722,20 @@ def _notes(state: CooldownState, lorrgs_player_casts: list[Any]) -> list[str]:
             "Without the Lorrgs roster the player is identified by flags only: player.name is "
             "--actor-name (null when it was not passed) and player.class_slug is the class half of --spec-slug."
         )
-    if state.player_casts.get("next_page_timestamp") is not None:
-        notes.append("Warcraft Logs returned next_page_timestamp; increase --event-limit or paginate before treating counts as complete.")
-    if not lorrgs_player_casts:
+    elif not lorrgs_player_casts:
         notes.append(
             "Cached Lorrgs user-report data did not include player cooldown casts for this actor; "
             "Warcraft Logs events fill that gap."
         )
-    if isinstance(state.ranking_result, dict) and state.ranking_result.get("status") == "error":
-        notes.append("Lorrgs top-parse comparison was unavailable; inspect sources.lorrgs_spec_ranking.error for details.")
-    if state.unranked_difficulty_note is not None:
-        notes.append(state.unranked_difficulty_note)
+    if state.player_casts.get("next_page_timestamp") is not None:
+        notes.append("Warcraft Logs returned next_page_timestamp; increase --event-limit or paginate before treating counts as complete.")
+    if isinstance(state.boss_spells_result, dict) and state.boss_spells_result.get("status") != "ok":
+        notes.append(
+            "Lorrgs boss spell metadata was unavailable, so boss casts are named spell:<id>; "
+            "inspect sources.lorrgs_boss_spells.error for details."
+        )
+    if state.comparison_note is not None:
+        notes.append(state.comparison_note)
     return notes
 
 

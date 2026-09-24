@@ -3,13 +3,14 @@ from __future__ import annotations
 import hashlib
 import json
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
 import httpx
 from warcraft_api.http import DEFAULT_RETRY_ATTEMPTS, build_client, request_with_retries
 from warcraft_core.auth import load_provider_auth_state, save_provider_auth_state
-from warcraft_core.wow_normalization import normalize_region
+from warcraft_core.wow_normalization import normalize_region, realm_slug_variants
 
 from blizzard_api_cli.auth import BlizzardAuthConfig, load_blizzard_auth_config
 
@@ -296,6 +297,21 @@ class BlizzardClient:
             "source_url": str(response.request.url),
         }
 
+    def _get_realm_scoped(self, routing: BlizzardRouting, realm: str, path_for: Callable[[str], str]) -> dict[str, Any]:
+        """GET ``path_for(slug)`` for each slug spelling of ``realm``, moving on only on HTTP 404.
+
+        Blizzard slugs drop apostrophes and keep word breaks (``Mal'Ganis`` -> ``malganis``, ``Tarren
+        Mill`` -> ``tarren-mill``), so neither spelling alone covers every realm or every way it is typed.
+        """
+        *earlier, final = realm_slug_variants(realm) or [realm.strip().lower()]
+        for slug in earlier:
+            try:
+                return self._get(routing, path_for(slug))
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code != 404:
+                    raise
+        return self._get(routing, path_for(final))
+
     def fetch_realm(
         self,
         slug: str,
@@ -312,8 +328,7 @@ class BlizzardClient:
             locale=locale,
             namespace_class="dynamic",
         )
-        # Blizzard realm slugs are lowercase (e.g. "illidan", "mal-ganis").
-        return self._get(routing, f"/data/wow/realm/{slug.lower()}")
+        return self._get_realm_scoped(routing, slug, lambda realm_slug: f"/data/wow/realm/{realm_slug}")
 
     def fetch_item(
         self,
@@ -350,7 +365,7 @@ class BlizzardClient:
             locale=locale,
             namespace_class="profile",
         )
-        return self._get(routing, f"/profile/wow/character/{realm.lower()}/{name.lower()}")
+        return self._get_realm_scoped(routing, realm, lambda realm_slug: f"/profile/wow/character/{realm_slug}/{name.lower()}")
 
 
 def verification_note(region: str | None = None) -> str:

@@ -7,6 +7,7 @@ failures raise :class:`~warcraft_core.provider.ProviderError`.
 
 from __future__ import annotations
 
+import shlex
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -91,10 +92,11 @@ def transport_errors() -> Iterator[None]:
         code = {400: "invalid_query", 401: "auth_failed", 403: "auth_failed", 404: "not_found", 429: "rate_limited"}.get(
             status, "upstream_error"
         )
-        # Raider.IO answers a missing character/guild with HTTP 400 "Could not find requested <x>"
-        # and a malformed request with HTTP 400 "Invalid request query input". Only the latter is a
-        # usage error, so the message is what separates exit 4 (not found) from exit 2.
-        if status == 400 and message.lower().startswith("could not find"):
+        # Raider.IO answers a missing character/guild with HTTP 400 "Could not find requested <x>", an
+        # unknown realm with HTTP 400 "Failed to find realm <x> in region <y>", and a malformed request
+        # with HTTP 400 "Invalid request query input". Only the last is a usage error, so the message
+        # is what separates exit 4 (not found) from exit 2.
+        if status == 400 and message.lower().startswith(("could not find", "failed to find")):
             code = "not_found"
         raise ProviderError(code, message, details={"status_code": status, "url": str(exc.request.url)}) from exc
     except httpx.TimeoutException as exc:
@@ -118,57 +120,47 @@ def validated_kind(kind: str) -> str:
     return kind
 
 
-def _search_results_payload(query: str, candidates: list[dict[str, Any]], *, limit: int) -> dict[str, Any]:
-    results = dedupe_search_candidates(candidates)
-    top = sorted_search_candidates(results)[:limit]
-    return {
-        "provider": "raiderio",
-        "query": query,
-        "search_query": query,
-        "count": len(results),
-        "results": top,
-        "truncated": len(results) > limit,
-    }
+def _resolve_payload(query: str, ranked: list[dict[str, Any]], *, limit: int) -> dict[str, Any]:
+    """Judge confidence on every ranked candidate; ``limit`` only trims the ``candidates`` shown.
 
-
-def _resolve_payload(search_payload: dict[str, Any], *, limit: int) -> dict[str, Any]:
-    top = as_list(search_payload.get("results"))[:limit]
-    if not top:
+    Truncating first would hide the rivals: ``--limit 1`` leaves one row, which always looks unique.
+    """
+    fallback = shlex.join(["raiderio", "search", query])
+    if not ranked:
         return {
             "provider": "raiderio",
-            "query": search_payload.get("query"),
-            "search_query": search_payload.get("search_query"),
+            "query": query,
+            "search_query": query,
             "resolved": False,
             "confidence": "none",
             "match": None,
             "next_command": None,
-            "fallback_search_command": f'raiderio search "{search_payload.get("search_query")}"',
+            "fallback_search_command": fallback,
             "candidates": [],
         }
-    best = top[0]
+    best = ranked[0]
     follow_up = as_dict(best.get("follow_up"))
-    best_score = candidate_ranking_score(best)
-    resolved = bool(follow_up.get("command")) and resolve_candidate_is_confident(top)
-    confidence = resolve_confidence_label(best_score, resolved=resolved)
+    resolved = bool(follow_up.get("command")) and resolve_candidate_is_confident(ranked)
     return {
         "provider": "raiderio",
-        "query": search_payload.get("query"),
-        "search_query": search_payload.get("search_query"),
+        "query": query,
+        "search_query": query,
         "resolved": resolved,
-        "confidence": confidence if top else "none",
+        "confidence": resolve_confidence_label(candidate_ranking_score(best), resolved=resolved),
         "match": best,
         "next_command": follow_up.get("command") if resolved else None,
-        "fallback_search_command": None if resolved else f'raiderio search "{search_payload.get("search_query")}"',
-        "candidates": top,
+        "fallback_search_command": None if resolved else fallback,
+        "candidates": ranked[:limit],
     }
 
 
-def search_results(client: RaiderIOClient, query: str, *, limit: int, kind: str) -> dict[str, Any]:
-    """Rank Raider.IO character and guild matches for a free-text query.
+def ranked_candidates(client: RaiderIOClient, query: str, *, kind: str) -> tuple[str, list[dict[str, Any]]]:
+    """Every deduplicated Raider.IO character and guild match for a free-text query, best first.
 
-    A leading ``guild``/``character`` word in the query only narrows the lookups and scores. An
-    explicit ``kind`` other than ``all`` wins over that word and filters every candidate, so
-    ``--kind guild`` never answers with a character, even when nothing of that kind exists.
+    Returns the query with its leading type hint removed alongside the rows. A leading
+    ``guild``/``character`` word in the query only narrows the lookups and scores. An explicit
+    ``kind`` other than ``all`` wins over that word and filters every candidate, so ``--kind guild``
+    never answers with a character, even when nothing of that kind exists.
     """
     normalized_query, type_hint, probes = normalize_structured_query(query)
     explicit_kind = None if kind == "all" else kind
@@ -186,7 +178,7 @@ def search_results(client: RaiderIOClient, query: str, *, limit: int, kind: str)
         candidates = search_result_candidates(raw_matches, query=normalized_query, type_hint=type_hint)
     if explicit_kind:
         candidates = [row for row in candidates if row["kind"] == explicit_kind]
-    return _search_results_payload(normalized_query, candidates, limit=limit)
+    return normalized_query, sorted_search_candidates(dedupe_search_candidates(candidates))
 
 
 def doctor_report() -> dict[str, Any]:
@@ -227,18 +219,26 @@ class RaiderIOProvider:
     def search(self, query: str, *, limit: int = 10, **options: Any) -> Envelope:
         kind = validated_kind(str(options.get("kind", "all")))
         with transport_errors(), open_client() as client:
-            payload = search_results(client, query, limit=limit, kind=kind)
+            search_query, ranked = ranked_candidates(client, query, kind=kind)
+        payload = {
+            "provider": "raiderio",
+            "query": search_query,
+            "search_query": search_query,
+            "count": len(ranked),
+            "results": ranked[:limit],
+            "truncated": len(ranked) > limit,
+        }
         return raiderio_envelope(command="search", kind="search_results", payload=payload)
 
     def resolve(self, target: str, **options: Any) -> Envelope:
         limit = int(options.get("limit", 5))
         kind = validated_kind(str(options.get("kind", "all")))
         with transport_errors(), open_client() as client:
-            payload = search_results(client, target, limit=limit, kind=kind)
+            search_query, ranked = ranked_candidates(client, target, kind=kind)
         return raiderio_envelope(
             command="resolve",
             kind="resolve_match",
-            payload=_resolve_payload(payload, limit=limit),
+            payload=_resolve_payload(search_query, ranked, limit=limit),
         )
 
     def doctor(self, **options: Any) -> Envelope:

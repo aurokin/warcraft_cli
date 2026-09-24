@@ -86,7 +86,7 @@ def test_compact_flag_truncates_long_string_fields(monkeypatch) -> None:
     def fake_tooltip(self, entity_type: str, entity_id: int, data_env=None):  # noqa: ANN001, ANN202
         return {
             "name": "Thunderfury",
-            "tooltip": "x" * 800,
+            "tooltip": "long tooltip prose " * 50,
         }
 
     def fake_html(self, entity_type: str, entity_id: int):  # noqa: ANN001
@@ -166,7 +166,7 @@ def test_compact_max_chars_flag_controls_truncation(monkeypatch) -> None:
     def fake_tooltip(self, entity_type: str, entity_id: int, data_env=None):  # noqa: ANN001, ANN202
         return {
             "name": "Thunderfury",
-            "tooltip": "x" * 800,
+            "tooltip": "long tooltip prose " * 50,
         }
 
     def fake_html(self, entity_type: str, entity_id: int):  # noqa: ANN001

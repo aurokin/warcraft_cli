@@ -9,7 +9,6 @@ description = "Umbrella Warcraft CLI"
 requires-python = ">=3.12"
 dependencies = [
   "blizzard-api-cli>=0.1.0",
-  "click>=8.1.0,<9.0.0",
   "curseforge-cli>=0.1.0",
   "icy-veins-cli>=0.1.0",
   "lorrgs-cli>=0.1.0",

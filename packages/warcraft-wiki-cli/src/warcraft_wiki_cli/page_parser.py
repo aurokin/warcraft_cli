@@ -424,12 +424,12 @@ def _section_lookup(sections: list[dict[str, Any]]) -> dict[str, dict[str, Any]]
     return lookup
 
 
-def _first_code_block_text(root: Tag) -> str | None:
+def _signature_text(root: Tag) -> str | None:
+    """The code block of the page introduction; a block under a heading is an example, not the signature."""
     block = root.select_one(".mw-highlight")
-    if block is None:
+    if block is None or block.find_previous(["h2", "h3", "h4"]) is not None:
         return None
-    text = block.get_text(" ", strip=True)
-    return text or None
+    return block.get_text(" ", strip=True) or None
 
 
 def extract_reference_metadata(*, title: str, family: str, text: str, sections: list[dict[str, Any]], root: Tag) -> dict[str, Any]:
@@ -443,8 +443,9 @@ def extract_reference_metadata(*, title: str, family: str, text: str, sections: 
     if family not in PROGRAMMING_FAMILIES:
         return metadata
     metadata["programming_reference"] = True
-    metadata["signature"] = _first_code_block_text(root)
-    metadata["arguments"] = section_map.get("arguments", {}).get("text")
+    metadata["signature"] = _signature_text(root)
+    # Event pages title their arguments section "Payload".
+    metadata["arguments"] = (section_map.get("arguments") or section_map.get("payload") or {}).get("text")
     metadata["returns"] = section_map.get("returns", {}).get("text")
     metadata["details"] = section_map.get("details", {}).get("text")
     return metadata

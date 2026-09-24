@@ -57,6 +57,7 @@ def _bare_client() -> WarcraftLogsClient:
     client = WarcraftLogsClient.__new__(WarcraftLogsClient)
     client._cache_hit_count = 0
     client._upstream_request_count = 0
+    client._graphql_warnings = []
     return client
 
 
@@ -843,54 +844,19 @@ class _FakeWarcraftLogsClient:
             if options.data_type == "Buffs" and options.ability_id is not None:
                 assert options.view_by == "Source"
                 assert options.ability_id == 20473.0
-                if options.start_time == 150000.0 and options.end_time == 190000.0:
-                    entries = [
-                        {
-                            "id": 9,
-                            "name": "Auropower",
-                            "total": 65.0,
-                            "activeTime": 26000,
-                            "totalTime": 40000,
-                            "bands": [{"startTime": 152000, "endTime": 188000}],
-                        },
-                        {
-                            "id": 1,
-                            "name": "Sherway",
-                            "total": 80.0,
-                            "activeTime": 32000,
-                            "totalTime": 40000,
-                            "bands": [{"startTime": 151000, "endTime": 189000}],
-                        },
-                    ]
-                    return {
-                        "code": "abcd1234",
-                        "title": "Manaforge Omega - Liquid",
-                        "zone": {"id": 38, "name": "Manaforge Omega"},
-                        "table": {"entries": entries},
-                    }
-                entries = [
-                    {
-                        "id": 9,
-                        "name": "Auropower",
-                        "total": 98.7,
-                        "activeTime": 74000,
-                        "totalTime": 75000,
-                        "bands": [{"startTime": 110000, "endTime": 150000}],
-                    },
-                    {
-                        "id": 1,
-                        "name": "Sherway",
-                        "total": 45.2,
-                        "activeTime": 33900,
-                        "totalTime": 75000,
-                        "bands": [{"startTime": 118000, "endTime": 140000}],
-                    },
+                # The real ability-scoped Buffs table shape: per-source uptime (ms), uses and bands.
+                right_window = options.start_time == 150000.0 and options.end_time == 190000.0
+                auras = [
+                    {"id": 9, "name": "Auropower", "type": "Paladin", "totalUptime": 26000 if right_window else 38000,
+                     "totalUses": 2 if right_window else 3, "bands": [{"startTime": 152000, "endTime": 178000}]},
+                    {"id": 1, "name": "Sherway", "type": "Priest", "totalUptime": 32000 if right_window else 22000,
+                     "totalUses": 4 if right_window else 2, "bands": [{"startTime": 151000, "endTime": 183000}]},
                 ]
                 return {
                     "code": "abcd1234",
                     "title": "Manaforge Omega - Liquid",
                     "zone": {"id": 38, "name": "Manaforge Omega"},
-                    "table": {"entries": entries},
+                    "table": {"data": {"auras": auras, "totalTime": 40000}},
                 }
             if options.data_type == "DamageDone":
                 assert options.view_by in {"Source", "Target"}
@@ -1608,10 +1574,13 @@ def test_warcraftlogs_search_matches_explicit_report_reference() -> None:
         ("JVFTxcKCqrvpaAzD", "report"),
         ("https://www.warcraftlogs.com/reports/DZzR9jwYmQA6tbV7#fight=4", "report_encounter"),
         ("DZzR9jwYmQA6tbV7", "report"),
+        # A random code can look like capitalised words; in a report URL it is still the code.
+        ("https://www.warcraftlogs.com/reports/QwErTyUiOpAsDfGh#fight=3", "report_encounter"),
+        ("https://www.warcraftlogs.com/reports/JVFTxcKCqrvpaAzD?fight=4&type=damage-done", "report_encounter"),
     ],
 )
 def test_warcraftlogs_search_and_resolve_accept_real_report_codes(reference: str, kind: str) -> None:
-    code = reference.split("/")[-1].split("#")[0]
+    code = re.split(r"[#?]", reference.split("/")[-1])[0]
     search = json.loads(runner.invoke(warcraftlogs_app, ["search", reference]).stdout)["data"]
     assert [(row["kind"], row["report_reference"]["code"]) for row in search["results"]] == [(kind, code)]
     resolve = json.loads(runner.invoke(warcraftlogs_app, ["resolve", reference]).stdout)["data"]
@@ -1619,7 +1588,7 @@ def test_warcraftlogs_search_and_resolve_accept_real_report_codes(reference: str
     assert resolve["match"]["report_reference"]["code"] == code
 
 
-@pytest.mark.parametrize("word", ["frostdeathknight", "restorationdruid", "1234567890123456"])
+@pytest.mark.parametrize("word", ["frostdeathknight", "restorationdruid", "1234567890123456", "HavocDemonHunter"])
 def test_warcraftlogs_resolve_does_not_read_a_sixteen_character_word_as_a_report_code(word: str) -> None:
     # Real 16-character codes mix upper and lower case; a spec slug of that length is not a report.
     assert json.loads(runner.invoke(warcraftlogs_app, ["search", word]).stdout)["data"]["count"] == 0
@@ -1643,6 +1612,11 @@ def test_warcraftlogs_resolve_requires_explicit_report_reference() -> None:
     assert payload["data"]["resolved"] is False
     assert payload["data"]["confidence"] == "none"
     assert "explicit report URL or a bare report code" in payload["data"]["message"]
+    # Suggested commands are shell lines: a <placeholder> would be read as a redirection.
+    assert payload["data"]["suggested_commands"] == [
+        "warcraftlogs report REPORT_CODE",
+        "warcraftlogs report-encounter REPORT_CODE --fight-id FIGHT_ID",
+    ]
 
 
 def test_warcraftlogs_resolve_matches_bare_report_code() -> None:
@@ -2767,6 +2741,81 @@ class _DoubleLoggedCohortClient(_FakeWarcraftLogsClient):
         return super().report_master_data(
             code="abcd1234", allow_unlisted=allow_unlisted, translate=translate, actor_type=actor_type, actor_sub_type=actor_sub_type
         )
+
+
+class _FrostPlayersClient(_FakeWarcraftLogsClient):
+    """Every sampled kill has a Frost Mage and a Frost Death Knight: one spec name, two classes."""
+
+    def report_player_details(self, **kwargs: Any) -> dict[str, object]:
+        frost = [{"spec": "Frost", "count": 1}]
+        dps = [{"name": "Icy", "id": 4, "type": "Mage", "specs": frost}, {"name": "Rime", "id": 5, "type": "DeathKnight", "specs": frost}]
+        return {"code": "abcd1234", "playerDetails": {"data": {"tanks": [], "healers": [], "dps": dps}}}
+
+
+_BOSS_COHORT_ARGS = ["--zone-id", "38", "--boss-id", "3012", "--difficulty", "5", "--report-pages", "1"]
+
+
+@pytest.mark.parametrize(
+    ("spec_name", "matched", "ambiguous"),
+    [("Frost", ["Icy", "Rime"], True), ("Frost Mage", ["Icy"], False), ("frost-death-knight", ["Rime"], False)],
+)
+def test_warcraftlogs_spec_filter_takes_class_and_spec_and_flags_a_bare_spec_on_two_classes(
+    monkeypatch, spec_name: str, matched: list[str], ambiguous: bool
+) -> None:
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _FrostPlayersClient())
+
+    result = runner.invoke(warcraftlogs_app, ["boss-kills", *_BOSS_COHORT_ARGS, "--spec-name", spec_name])
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.stdout)["data"]
+    assert [player["name"] for player in data["kills"][0]["matching_players"]] == matched
+    assert any("more than one class (DeathKnight, Mage)" in note for note in data["notes"]) is ambiguous
+
+
+def test_warcraftlogs_boss_spec_usage_counts_same_named_specs_of_different_classes_apart(monkeypatch) -> None:
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _FrostPlayersClient())
+
+    result = runner.invoke(warcraftlogs_app, ["boss-spec-usage", *_BOSS_COHORT_ARGS])
+
+    assert result.exit_code == 0, result.output
+    rows = json.loads(result.stdout)["data"]["spec_usage"]
+    assert [(row["class_name"], row["spec_name"], row["kill_presence_count"]) for row in rows] == [
+        ("DeathKnight", "Frost", 1),
+        ("Mage", "Frost", 1),
+    ]
+
+
+def test_warcraftlogs_sampled_report_walk_follows_has_more_pages_and_stops_at_the_last_page() -> None:
+    from warcraftlogs_cli.boss_kills import _fetch_zone_report_rows
+
+    pages_requested: list[int] = []
+
+    class _PagedClient:
+        def reports(self, *, page: int, **kwargs: Any) -> dict[str, Any]:
+            pages_requested.append(page)
+            return {"data": [{"code": f"page{page}"}], "has_more_pages": page < 2}
+
+    rows = _fetch_zone_report_rows(
+        _PagedClient(),
+        zone_id=38, guild_region=None, guild_realm=None, guild_name=None,
+        report_pages=3, reports_per_page=10, start_time=None, end_time=None,
+    )
+
+    assert [row["code"] for row in rows] == ["page1", "page2"]
+    assert pages_requested == [1, 2]
+
+
+@pytest.mark.parametrize(
+    ("kill_time_min", "kill_time_max", "expected"),
+    [(None, None, 100.0), (100.0, 100.0, 100.0), (101.0, None, None), (None, 99.0, None)],
+)
+def test_warcraftlogs_kill_time_bounds_drop_kills_outside_them(
+    kill_time_min: float | None, kill_time_max: float | None, expected: float | None
+) -> None:
+    from warcraftlogs_cli.boss_kills import _kill_duration_in_bounds
+
+    fight = {"startTime": 100_000, "endTime": 200_000}
+    assert _kill_duration_in_bounds(fight, kill_time_min=kill_time_min, kill_time_max=kill_time_max) == expected
 
 
 def test_warcraftlogs_boss_kills_collapses_one_pull_logged_in_two_reports(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -3941,25 +3990,49 @@ def test_warcraftlogs_report_encounter_casts_supports_windows_and_filters(monkey
     assert payload["query"]["end_time"] == 130000.0
 
 
-def test_warcraftlogs_report_encounter_window_rejects_inverted_range(monkeypatch) -> None:
+# Fight 1 lasts 100000 ms: an inverted window and one that opens after the pull ended are both refused.
+@pytest.mark.parametrize(("start_ms", "end_ms"), [("30000", "5000"), ("100000", "120000")])
+def test_warcraftlogs_report_encounter_window_rejects_an_empty_range(monkeypatch, start_ms: str, end_ms: str) -> None:
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _FakeWarcraftLogsClient())
+
+    result = runner.invoke(
+        warcraftlogs_app,
+        ["report-encounter-casts", "abcd1234", "--fight-id", "1", "--window-start-ms", start_ms, "--window-end-ms", end_ms],
+    )
+    assert result.exit_code == 2
+    payload = json.loads(result.stderr)
+    assert payload["error"]["code"] == "invalid_query"
+    assert payload["error"]["message"].startswith("--window-")
+
+
+@pytest.mark.parametrize(("start_ms", "end_ms"), [("30000", "5000"), ("100000", "120000")])
+def test_warcraftlogs_aura_compare_rejects_an_empty_window_by_its_own_flag(monkeypatch, start_ms: str, end_ms: str) -> None:
     monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _FakeWarcraftLogsClient())
 
     result = runner.invoke(
         warcraftlogs_app,
         [
-            "report-encounter-casts",
-            "abcd1234",
-            "--fight-id",
-            "1",
-            "--window-start-ms",
-            "30000",
-            "--window-end-ms",
-            "5000",
+            "report-encounter-aura-compare", "abcd1234", "--fight-id", "1", "--ability-id", "20473",
+            "--left-window-start-ms", "0", "--left-window-end-ms", "5000",
+            "--right-window-start-ms", start_ms, "--right-window-end-ms", end_ms,
         ],
     )
     assert result.exit_code == 2
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "invalid_query"
+    assert payload["error"]["message"].startswith("--right-window-")
+
+
+def test_warcraftlogs_trash_fight_slice_sends_no_encounter_or_kill_filter() -> None:
+    # Warcraft Logs marks trash as encounterID 0 and kill null; killType Wipes would filter it out.
+    import warcraftlogs_cli.main as warcraftlogs_main
+
+    ctx = typer.Context(typer.main.get_command(warcraftlogs_app))
+    trash = {"id": 7, "encounterID": 0, "kill": None, "startTime": 0, "endTime": 5000}
+    options, query = warcraftlogs_main._encounter_filter_options(ctx, trash, warcraftlogs_main._EncounterFilters(data_type="Casts"))
+
+    assert (options.encounter_id, options.kill_type, options.fight_ids) == (None, None, [7])
+    assert (query["encounter_id"], query["kill_type"]) == (None, None)
 
 
 def test_warcraftlogs_report_encounter_buffs_summarizes_buff_rows(monkeypatch) -> None:
@@ -4156,8 +4229,8 @@ def test_warcraftlogs_report_encounter_aura_summary_returns_typed_rows(monkeypat
     assert payload["data"]["aura"]["name"] == "Holy Shock"
     assert payload["data"]["aura_summary"]["entry_count"] == 2
     assert payload["data"]["aura_summary"]["rows"][0]["source"]["name"] == "Auropower"
-    assert payload["data"]["aura_summary"]["rows"][0]["reported_total"] == 98.7
-    assert payload["data"]["aura_summary"]["rows"][0]["reported_active_time"] == 74000
+    assert payload["data"]["aura_summary"]["rows"][0]["reported_total_uptime"] == 38000
+    assert payload["data"]["aura_summary"]["rows"][0]["reported_total_uses"] == 3
     assert payload["data"]["aura_summary"]["rows"][0]["source"]["identity_contract"]["status"] == "canonical"
 
 
@@ -4189,10 +4262,12 @@ def test_warcraftlogs_report_encounter_aura_compare_returns_window_deltas(monkey
     assert payload["data"]["windows"][0]["query"]["start_time"] == 110000.0
     assert payload["data"]["windows"][1]["query"]["start_time"] == 150000.0
     assert payload["data"]["comparison"]["matching_rule"] == "same_report_same_fight_same_ability_explicit_windows"
-    auropower_row = next(row for row in payload["data"]["comparison"]["rows"] if row["source"]["name"] == "Auropower")
-    assert auropower_row["left_reported_total"] == 98.7
-    assert auropower_row["right_reported_total"] == 65.0
-    assert auropower_row["reported_total_delta"] == -33.7
+    rows = payload["data"]["comparison"]["rows"]
+    # Right minus left, largest uptime change first.
+    assert [(row["source"]["name"], row["reported_total_uptime_delta"], row["reported_total_uses_delta"]) for row in rows] == [
+        ("Auropower", -12000, -1),
+        ("Sherway", 10000, 2),
+    ]
 
 
 def test_warcraftlogs_report_encounter_damage_breakdown_scopes_table_query(monkeypatch) -> None:
@@ -4763,7 +4838,7 @@ def test_warcraftlogs_graphql_introspection_uses_named_operation(monkeypatch) ->
 def test_warcraftlogs_graphql_surfaces_partial_warnings(monkeypatch) -> None:
     class _WarningGraphQLClient(_FakeWarcraftLogsClient):
         @property
-        def last_warnings(self) -> list[dict[str, Any]]:
+        def graphql_warnings(self) -> list[dict[str, Any]]:
             return [{"message": "partial report path failed", "path": ["reportData", "report", "table"]}]
 
         def raw_graphql(
@@ -4778,7 +4853,7 @@ def test_warcraftlogs_graphql_surfaces_partial_warnings(monkeypatch) -> None:
             return {
                 "reportData": {"report": {"code": "abcd1234"}},
                 "notes": {"total": 3},
-                GRAPHQL_WARNINGS_KEY: self.last_warnings,
+                GRAPHQL_WARNINGS_KEY: self.graphql_warnings,
             }, "client"
 
     monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _WarningGraphQLClient())
@@ -4841,7 +4916,7 @@ def test_warcraftlogs_guild_attendance_surfaces_partial_warnings_as_notes(monkey
     class _WarningClient(_FakeWarcraftLogsClient):
         def __init__(self) -> None:
             super().__init__()
-            self.last_warnings = [{"message": "Cannot return null for non-nullable field Zone.frozen"}]
+            self.graphql_warnings = [{"message": "Cannot return null for non-nullable field Zone.frozen"}]
 
     monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _WarningClient())
 
@@ -4866,11 +4941,67 @@ def test_warcraftlogs_guild_attendance_surfaces_partial_warnings_as_notes(monkey
     assert any("partial errors" in note for note in payload["data"]["notes"])
 
 
+_WARN_REPORT = {
+    "code": "AbCdEfGh12345678",
+    "title": "t",
+    "startTime": 1_700_000_000_000,
+    "endTime": 1_700_000_900_000,
+    "zone": {"id": 1, "name": "z"},
+    "fights": [{"id": 3, "name": "Boss", "encounterID": 2902, "difficulty": 5, "kill": True, "startTime": 1000, "endTime": 61000}],
+    "events": {"data": [{"timestamp": 1200, "type": "cast", "sourceID": 1, "abilityGameID": 100}], "nextPageTimestamp": None},
+    "masterData": {"actors": [], "abilities": []},
+}
+
+
+def test_warcraftlogs_real_client_keeps_an_early_partial_error_and_never_caches_it(monkeypatch, tmp_path: Path) -> None:
+    """The events call errors partially and the later master-data call is clean: the warning must survive
+    to the envelope, and the partial events response must not be cached (a rerun goes upstream again)."""
+    monkeypatch.setenv("WARCRAFTLOGS_CACHE_BACKEND", "file")
+    monkeypatch.setenv("WARCRAFTLOGS_CACHE_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        "warcraftlogs_cli.client.load_warcraftlogs_auth_config",
+        lambda: WarcraftLogsAuthConfig(client_id="id", client_secret="secret", env_file=None),
+    )
+    monkeypatch.setattr("warcraftlogs_cli.client.load_provider_auth_state", lambda provider: None)
+    monkeypatch.setattr(WarcraftLogsClient, "_token", lambda self: "token")
+    posted: list[str] = []
+    events_errors = [{"message": "partial failure while reading events"}]
+
+    def _post(self: WarcraftLogsClient, url: str, *, token: str, body: dict[str, Any]) -> httpx.Response:
+        operation = body["operationName"]
+        posted.append(operation)
+        payload: dict[str, Any] = {"data": {"reportData": {"report": _WARN_REPORT}}}
+        if operation == "Encounter":
+            payload = {"data": {"worldData": {"encounter": {"id": 2902, "name": "Boss"}}}}
+        if operation == "ReportEvents" and events_errors:
+            payload["errors"] = events_errors
+        return httpx.Response(200, json=payload, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(WarcraftLogsClient, "_post_graphql", _post)
+    args = ["report-encounter-casts", "AbCdEfGh12345678", "--fight-id", "3"]
+
+    first = runner.invoke(warcraftlogs_app, args)
+
+    assert first.exit_code == 0, first.output
+    data = json.loads(first.stdout)["data"]
+    assert data["graphql_warnings"] == [{"message": "partial failure while reading events"}]
+    assert any("partial failure while reading events" in note for note in data["notes"])
+    assert posted[-1] == "ReportMasterData"
+
+    events_errors.clear()
+    posted.clear()
+    second = runner.invoke(warcraftlogs_app, args)
+
+    assert second.exit_code == 0, second.output
+    assert posted == ["ReportEvents"]
+    assert "graphql_warnings" not in json.loads(second.stdout)["data"]
+
+
 def test_warcraftlogs_character_rankings_surfaces_partial_warnings_as_notes(monkeypatch) -> None:
     class _WarningClient(_FakeWarcraftLogsClient):
         def __init__(self) -> None:
             super().__init__()
-            self.last_warnings = [{"message": "Internal server error on rankings"}]
+            self.graphql_warnings = [{"message": "Internal server error on rankings"}]
 
     monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _WarningClient())
 
@@ -5132,6 +5263,7 @@ def test_warcraftlogs_client_ignores_invalid_shared_public_token_state(monkeypat
         "warcraftlogs_cli.client.load_provider_auth_state",
         lambda provider: (_ for _ in ()).throw(json.JSONDecodeError("bad json", "{", 1)),
     )
+    monkeypatch.setattr("warcraftlogs_cli.client.save_provider_auth_state", lambda *args, **kwargs: None)
 
     token_requests: list[str] = []
 
@@ -5242,6 +5374,9 @@ def test_warcraftlogs_client_live_public_probe_does_not_write_shared_cache(monke
             },
         )(),
     )
+    # The token exchange must neither read nor overwrite the developer's shared token slot.
+    monkeypatch.setattr("warcraftlogs_cli.client.load_provider_auth_state", lambda provider: None)
+    monkeypatch.setattr("warcraftlogs_cli.client.save_provider_auth_state", lambda *args, **kwargs: None)
 
     def _fake_request(
         client: WarcraftLogsClient,
@@ -5368,8 +5503,10 @@ def test_warcraftlogs_finished_report_cached_under_finished_ttl(monkeypatch) -> 
 
 
 def test_warcraftlogs_live_report_never_cached_under_finished_ttl(monkeypatch) -> None:
-    # A live (in-progress) report has endTime == 0 and must keep the short report TTL.
+    # A report still being logged carries its latest event as endTime, seconds before now, so only
+    # endTime alone being > 0 does not make it finished; it keeps the short report TTL.
     assert _capture_report_fights_ttl(monkeypatch, end_time=0) == 60
+    assert _capture_report_fights_ttl(monkeypatch, end_time=int(time.time() * 1000) - 60_000) == 60
 
 
 def test_warcraftlogs_finished_report_ttl_env_default_and_override(monkeypatch) -> None:
@@ -5655,7 +5792,6 @@ def test_warcraftlogs_client_graphql_uses_client_endpoint_for_site_mismatched_us
     client._site = CLASSIC_PROFILE
     client._cache_store = None
     client._retry_attempts = 1
-    client._last_warnings = []
     monkeypatch.setattr(WarcraftLogsClient, "_token", lambda self: "client-token")
     monkeypatch.setattr(WarcraftLogsClient, "_client", lambda self: object())
     captured: dict[str, object] = {}
@@ -7717,12 +7853,12 @@ def test_warcraftlogs_aura_summary_keeps_raw_table_entries_opt_in(monkeypatch: p
     assert narrow.exit_code == 0
     narrow_row = json.loads(narrow.stdout)["data"]["aura_summary"]["rows"][0]
     assert "raw_entry" not in narrow_row
-    assert narrow_row["reported_total"] is not None
+    assert narrow_row["reported_total_uptime"] is not None
 
     raw = runner.invoke(warcraftlogs_app, [*args, "--include-raw"])
     assert raw.exit_code == 0
     raw_row = json.loads(raw.stdout)["data"]["aura_summary"]["rows"][0]
-    assert raw_row["raw_entry"]["total"] == raw_row["reported_total"]
+    assert raw_row["raw_entry"]["totalUptime"] == raw_row["reported_total_uptime"]
 
 
 def test_warcraftlogs_aura_compare_windows_never_carry_raw_table_entries(monkeypatch: pytest.MonkeyPatch) -> None:

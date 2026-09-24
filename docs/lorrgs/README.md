@@ -32,7 +32,7 @@ lorrgs --fields data.specs specs
 | `boss <boss-slug>`, `boss-spells <boss-slug>` | Encounter metadata and tracked boss abilities. |
 | `spell <spell-id>` | Lorrgs metadata for one spell id. |
 | `season <season-slug>`, `current-season` | Season-to-raid partition metadata. `season` defaults to `current`. |
-| `spec-ranking <spec-slug> <boss-slug> [--difficulty mythic] [--metric dps]` | Top-parse cooldown timelines: reports, fights, players, boss casts, phases, cast timestamps. |
+| `spec-ranking <spec-slug> <boss-slug> [--difficulty mythic] [--metric dps]` | Top-parse cooldown timelines: reports, fights, players, boss casts, phases, cast timestamps. When Lorrgs returns `reports: []`, `data.notes` says the upstream ranking is empty, which is not evidence the spec is unplayed on that boss. |
 | `spec-ranking-info <spec-slug> <boss-slug> [--difficulty mythic] [--metric dps]` | Ranking metadata without the large report list. |
 | `comp-ranking <boss-slug> [--limit N] [--role EXPR]... [--spec EXPR]... [--killtime-min S] [--killtime-max S]` | Top composition rows for an encounter. `--role`/`--spec` are repeatable filter expressions such as `heal>=4`. When Lorrgs returns `reports: []`, `data.notes` says the upstream ranking is empty for that boss and those filters. |
 | `report-overview <report-ref> [--refresh/--no-refresh]` | Lorrgs report overview metadata for any public Warcraft Logs report; Lorrgs loads one it has not seen on demand, and `--refresh` asks it to reload one it has. Does not queue per-fight timeline work. |
@@ -57,8 +57,8 @@ Every command emits one JSON envelope: `ok`, `provider`, `command`, `kind`, `sch
 (`warcraftlogs` data, Wowhead tooltips).
 
 Failures write the envelope to stderr and exit with the shared codes from
-[docs/foundation/ERROR_CONTRACT.md](../foundation/ERROR_CONTRACT.md): 1 generic (including a
-missing `--fight`), 2 usage (bad flags, an unparseable report reference, or a Lorrgs 422), 4 not found
+[docs/foundation/ERROR_CONTRACT.md](../foundation/ERROR_CONTRACT.md): 1 generic, 2 usage (bad
+flags, an unparseable report reference, a missing `--fight`, or a Lorrgs 422), 4 not found
 (Lorrgs 404, which `user-report` also returns for a report Lorrgs has not loaded yet, and Lorrgs 401/403
 — it takes no credentials, so a refusal means Warcraft Logs keeps the report private, never an auth
 problem), 5 network, timeout, rate limit, or other upstream failure. No Lorrgs command exits 3.
@@ -66,13 +66,13 @@ problem), 5 network, timeout, rate limit, or other upstream failure. No Lorrgs c
 ## How search and resolve rank
 
 `search` ranks spec/boss candidates. `resolve` promotes the top one when two things hold: it accounts
-for every query word Lorrgs recognised, and no equally well matched candidate of the same kind names a
+for every query word except filler (`the`, `of`, `on`, `cooldowns`, `top`, ...), and no equally well matched candidate of the same kind names a
 different spec or encounter. There is no minimum strength — a query that matched only partially still
 resolves if it is unrivalled, and says so with `confidence: "medium"` and `match.ranking.match_level`.
 
-A word Lorrgs recognises that the top candidate ignores blocks the handoff: `fire mage paladin` leaves
-`paladin` in `unmatched_terms`, so it returns `resolved: false` rather than answering the narrower
-Fire Mage question. Every row tied for the best score is emitted, so a query that names a spec Lorrgs
+A word the top candidate ignores blocks the handoff: `fire mage paladin` leaves `paladin` in
+`unmatched_terms`, so it returns `resolved: false` rather than answering the narrower Fire Mage
+question, and `frost mage guide` leaves `guide` (Lorrgs has no guides). Every row tied for the best score is emitted, so a query that names a spec Lorrgs
 has twice (`frost` is Mage and Death Knight) or an encounter short name it has twice (`salhadaar` is
 Fallen-King and Nexus-King) comes back with `resolved: false`, `confidence: "none"`,
 `next_command: null`, and every tied candidate in `results` — narrow the query or pick a slug.

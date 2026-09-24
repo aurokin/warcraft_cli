@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import shlex
+import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -378,6 +380,18 @@ def test_guide_command_supports_full_wowhead_url(monkeypatch) -> None:
 
 
 
+def test_guide_follow_up_commands_quote_the_guide_ref(monkeypatch) -> None:
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.page_html", lambda self, page_url: SAMPLE_GUIDE_HTML)
+    guide_url = "https://www.wowhead.com/guide/classes/death-knight/frost/overview-pve-dps?tab=1&view=2"
+    result = runner.invoke(app, ["guide", guide_url, "--comment-sample", "0"])
+    assert result.exit_code == 0, result.output
+
+    data = json.loads(result.stdout)["data"]
+    for command in (data["analysis_surfaces"]["fetch_more_command"], data["linked_entities"]["fetch_more_command"]):
+        # `&` would background the command in a shell, so the URL has to arrive quoted.
+        assert command == f"wowhead guide-full {shlex.quote(guide_url)}"
+
+
 def test_guide_command_rejects_non_wowhead_url() -> None:
     result = runner.invoke(app, ["guide", "https://example.com/guide=3143"])
     assert result.exit_code != 0
@@ -497,8 +511,10 @@ def test_guide_export_writes_local_assets(monkeypatch, tmp_path) -> None:
     assert isinstance(manifest["exported_at"], str)
     assert isinstance(manifest["guide_fetched_at"], str)
     # The shared bundle loader names each bundle in `warcraft guide-compare` from these manifest fields.
-    bundle = load_article_bundle(export_dir)
-    described = compare_article_bundles([(export_dir, bundle), (export_dir, bundle)])["bundles"][0]
+    copy_dir = shutil.copytree(export_dir, tmp_path / "guide-export-copy")
+    described = compare_article_bundles(
+        [(export_dir, load_article_bundle(export_dir)), (copy_dir, load_article_bundle(copy_dir))]
+    )["bundles"][0]
     assert (described["provider"], described["title"]) == ("wowhead", "Frost Death Knight DPS Guide - Midnight")
 
     sections_lines = (export_dir / "sections.jsonl").read_text(encoding="utf-8").strip().splitlines()
@@ -582,56 +598,6 @@ def test_guide_export_hydrates_linked_entities(monkeypatch, tmp_path: Path) -> N
     assert hydrated_spell["entity"]["name"] == "Obliterate"
     assert hydrated_item["entity"]["name"] == "Bellamy's Final Judgement"
 
-
-
-def test_guide_export_hydration_migrates_a_pre_envelope_cache_entry(monkeypatch, tmp_path: Path) -> None:
-    """Bundle hydration must apply the same cache migration `wowhead entity` applies."""
-    monkeypatch.setenv("WOWHEAD_CACHE_BACKEND", "file")
-    monkeypatch.setenv("WOWHEAD_CACHE_DIR", str(tmp_path / "cache"))
-    monkeypatch.setattr("wowhead_cli.main.WowheadClient.guide_page_html", lambda self, guide_id: SAMPLE_GUIDE_HTML)
-    monkeypatch.setattr(
-        "wowhead_cli.main.WowheadClient.tooltip",
-        lambda self, entity_type, entity_id, data_env=None: (_ for _ in ()).throw(
-            AssertionError("the cached entry must be reused")
-        ),
-    )
-
-    legacy_entry = {
-        "schema_version": "wowhead.entity.v1",
-        "expansion": "retail",
-        "entity": {"type": "item", "id": 249277, "name": "Bellamy's Final Judgement"},
-        "normalized": {"item": {"name": {"value": "Bellamy's Final Judgement"}}},
-    }
-    cache_client = WowheadClient(cache_dir=tmp_path / "cache", cache_backend="file")
-    cache_client.set_cached_entity_response(
-        legacy_entry,
-        requested_type="item",
-        requested_id=249277,
-        data_env=None,
-        include_comments=False,
-        include_all_comments=False,
-        linked_entity_preview_limit=0,
-    )
-
-    export_dir = tmp_path / "guide-export"
-    result = runner.invoke(
-        app,
-        [
-            "guide-export",
-            "3143",
-            "--out",
-            str(export_dir),
-            "--hydrate-linked-entities",
-            "--hydrate-type",
-            "item",
-            "--hydrate-limit",
-            "1",
-        ],
-    )
-    assert result.exit_code == 0
-
-    hydrated = json.loads((export_dir / "entities" / "item" / "249277.json").read_text(encoding="utf-8"))
-    assert hydrated["normalized"]["schema_version"] == "wowhead.entity.v1"
 
 
 def test_guide_export_hydration_uses_normalized_entity_cache_before_live_fetch(

@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from wowhead_cli.main import app
+from wowhead_cli.wowhead_client import WowheadClient
 
 from tests.wowhead_testkit import SAMPLE_GUIDE_HTML, runner, write_bundle_fixture
 
@@ -132,6 +133,26 @@ def test_guide_bundle_refresh_updates_stale_bundle_and_reuses_manifest_settings(
     assert payload["data"]["counts"]["hydrated_entities"] == 2
     assert (export_dir / "entities" / "manifest.json").exists()
 
+
+
+def test_guide_bundle_refresh_fetches_from_the_bundle_expansion(monkeypatch, tmp_path: Path) -> None:
+    fetched_from: list[str] = []
+
+    def fake_guide_page_html(self: WowheadClient, guide_id: int) -> str:
+        fetched_from.append(self.expansion.key)
+        return SAMPLE_GUIDE_HTML
+
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.guide_page_html", fake_guide_page_html)
+    export_dir = tmp_path / "guide-export"
+    export_result = runner.invoke(app, ["--expansion", "wotlk", "guide-export", "3143", "--out", str(export_dir)])
+    assert export_result.exit_code == 0, export_result.output
+
+    result = runner.invoke(app, ["guide-bundle-refresh", str(export_dir), "--force"])
+
+    assert result.exit_code == 0, result.output
+    assert fetched_from == ["wotlk", "wotlk"]
+    assert json.loads(result.stdout)["data"]["expansion"] == "wotlk"
+    assert json.loads((export_dir / "manifest.json").read_text(encoding="utf-8"))["expansion"] == "wotlk"
 
 
 def test_guide_bundle_refresh_rehydrates_only_stale_hydrated_entities(

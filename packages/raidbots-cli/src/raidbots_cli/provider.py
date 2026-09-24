@@ -12,6 +12,7 @@ from typing import Any, Final
 
 import httpx
 from warcraft_core.envelope import Envelope, success_envelope
+from warcraft_core.exit_codes import EXIT_USAGE
 from warcraft_core.provider import ProviderError, ProviderSurface
 
 from raidbots_cli.client import (
@@ -41,12 +42,13 @@ NOTES: Final[list[str]] = [
     "Submission is deferred (no sanctioned Raidbots API); generate input locally and paste it.",
 ]
 
-# Raidbots publishes no report index and no search API, so the two generic surfaces every provider
-# exposes return a structured stub instead of an error; doctor and the wrapper registry say the same.
+# Raidbots publishes no report index and no search API, so the in-process search/resolve surfaces the
+# wrapper protocol requires return a structured stub; doctor and the wrapper registry say the same.
+# The CLI has no search/resolve commands.
 NOT_SUPPORTED_MESSAGE: Final = (
     "Raidbots exposes no public report index; open a known report with `raidbots inspect-report <url-or-id>`."
 )
-SUGGESTED_COMMAND: Final = "raidbots inspect-report <url-or-id>"
+SUGGESTED_COMMAND: Final = "raidbots inspect-report REPORT_URL_OR_ID"
 
 # Raidbots needs no auth, and data.json redirects to a public GCS bucket that answers 403 (not 404)
 # for an object that does not exist or has expired — so a 403 here means "no such report", never
@@ -86,7 +88,8 @@ def _report_id(reference: str) -> str:
         # round-trips the report URLs this CLI emits even when the template is overridden.
         return resolve_report_id(reference, load_raidbots_urls_from_env().report_path_template)
     except InvalidReportReference as exc:
-        raise ProviderError("invalid_report", str(exc)) from exc
+        # A reference that names no report is bad input (exit 2); `invalid_report` is a bad payload.
+        raise ProviderError("invalid_report_ref", str(exc), exit_code=EXIT_USAGE) from exc
 
 
 def _freshness(client: RaidbotsClient) -> dict[str, Any]:

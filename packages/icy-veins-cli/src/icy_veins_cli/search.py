@@ -7,6 +7,7 @@ below it (guide-family boosts, slug penalties, resolve confidence) is Icy Veins 
 
 from __future__ import annotations
 
+from datetime import date, timedelta
 from typing import Any
 
 from warcraft_content.article_discovery import article_candidate, sort_article_candidates
@@ -85,6 +86,13 @@ SPECIALIZED_QUERY_TERMS = {
     "midnight",
 }
 ROLE_QUERY_TERMS = {"healing", "tank", "dps"}
+# ``-guide`` pages that are one part of a spec rather than the introduction to a topic: they must not
+# outrank the spec's own ``-pve-<role>-guide`` on a bare spec query.
+SPECIALIZED_GUIDE_WORDS = frozenset({"leveling", "pvp", "pets"})
+# Pages the sitemap has not seen updated for a year behind its newest page (past seasons, retired
+# raids) rank below current ones that match the query as well.
+STALE_AFTER = timedelta(days=365)
+STALE_PENALTY = 10
 SPECIALIZED_FAMILY_RULES: tuple[dict[str, Any], ...] = (
     {"family": "easy_mode", "score": 28, "reason": "family_easy_mode", "all_terms": {"easy", "mode"}},
     {"family": "leveling", "score": 24, "reason": "family_leveling", "all_terms": {"leveling"}},
@@ -279,17 +287,64 @@ def score_slug_match(query: str, candidate: str, *, slug: str) -> tuple[int, lis
     if not query or not candidate:
         return score, reasons
     if slug.endswith("-guide"):
-        if any(token in slug for token in ("leveling", "dps", "pvp")):
+        if SPECIALIZED_GUIDE_WORDS & set(slug.split("-")):
             score += 2
             reasons.append("specialized_guide")
         else:
-            score += 16
+            # Healer specs also publish a secondary ``-pve-dps-guide``; it scores just below their
+            # ``-pve-healing-guide`` so a healer query still resolves to the healing guide.
+            score += 14 if slug.endswith("-pve-dps-guide") else 16
             reasons.append("intro_guide")
     query_words = query.split()
     penalty_terms = [term for term in slug.split("-") if term and term not in query_words and term not in NEUTRAL_SLUG_TERMS]
     if penalty_terms:
         score -= len(penalty_terms) * 3
     return score, reasons
+
+
+def _stale_before(rows: list[dict[str, Any]]) -> str | None:
+    """Cut-off date for stale pages: a year before the newest ``last_updated`` in the sitemap.
+
+    Anchored to the sitemap rather than the clock, so ranking depends only on the data it ranks.
+    """
+    newest = max((row["last_updated"] for row in rows if row.get("last_updated")), default=None)
+    return (date.fromisoformat(newest) - STALE_AFTER).isoformat() if newest else None
+
+
+def _scored_candidate(row: dict[str, Any], query: str, terms: set[str], *, stale_before: str | None) -> dict[str, Any] | None:
+    slug = row["slug"]
+    content_family = row.get("content_family")
+    candidate = f"{row['name'].lower()} {slug.replace('-', ' ')}"
+    if "-mythic-season-" in slug:
+        # Icy Veins drops "plus" from its newer seasonal slugs (``midnight-mythic-season-2-guide``), so
+        # "mythic+" has to find those as well as the ``...-mythic-plus-...`` pages.
+        candidate += " mythic plus"
+    # Family boosts alone (a class hub for any one-word query) must not surface an unrelated guide,
+    # and a term only counts as a whole word: "dh" is not a match for "headhunters".
+    if not terms & _singular_words(set(tokenize_query(candidate))):
+        return None
+    score, reasons = score_slug_match(query, candidate, slug=slug)
+    family_score, family_reasons = score_family_match(query, content_family=content_family)
+    score += family_score
+    reasons.extend(family_reasons)
+    if query and reasons and set(reasons) <= {"intro_guide", "specialized_guide"}:
+        return None
+    last_updated = row.get("last_updated")
+    if stale_before and last_updated and last_updated < stale_before:
+        score -= STALE_PENALTY
+        reasons.append("penalty_stale_page")
+    if score <= 0:
+        return None
+    candidate_row = article_candidate(
+        ref=slug,
+        name=row["name"],
+        url=row["url"],
+        score=score,
+        reasons=reasons,
+        provider_command=PROVIDER_NAME,
+    )
+    candidate_row["metadata"].update(content_family=content_family, last_updated=last_updated)
+    return candidate_row
 
 
 def search_results(
@@ -304,34 +359,13 @@ def search_results(
     if scope_hint is not None:
         return normalized_query, [], 0, scope_hint
     terms = _singular_words(query_terms(normalized_query))
-    matches: list[dict[str, Any]] = []
-    for row in client.sitemap_guides():
-        slug = row["slug"]
-        name = row["name"]
-        content_family = row.get("content_family")
-        candidate = f"{name.lower()} {slug.replace('-', ' ')}"
-        # Family boosts alone (a class hub for any one-word query) must not surface an unrelated guide,
-        # and a term only counts as a whole word: "dh" is not a match for "headhunters".
-        if not terms & _singular_words(set(tokenize_query(candidate))):
-            continue
-        score, reasons = score_slug_match(normalized_query, candidate, slug=slug)
-        family_score, family_reasons = score_family_match(normalized_query, content_family=content_family)
-        score += family_score
-        reasons.extend(family_reasons)
-        if normalized_query and reasons and set(reasons) <= {"intro_guide", "specialized_guide"}:
-            continue
-        if score <= 0:
-            continue
-        candidate_row = article_candidate(
-            ref=slug,
-            name=name,
-            url=row["url"],
-            score=score,
-            reasons=reasons,
-            provider_command=PROVIDER_NAME,
-        )
-        candidate_row["metadata"]["content_family"] = content_family
-        matches.append(candidate_row)
+    rows = client.sitemap_guides()
+    stale_before = _stale_before(rows)
+    matches = [
+        candidate
+        for candidate in (_scored_candidate(row, normalized_query, terms, stale_before=stale_before) for row in rows)
+        if candidate is not None
+    ]
     sort_article_candidates(matches)
     return normalized_query, matches[:limit], len(matches), None
 
@@ -343,8 +377,9 @@ def resolve_is_confident(top: dict[str, Any] | None, second: dict[str, Any] | No
     top_score = top["ranking"]["score"]
     second_score = second["ranking"]["score"] if second else 0
     top_reasons = set(top["ranking"]["match_reasons"])
+    # A tie is never an answer, however high both candidates score.
     return (
-        top_score >= 50
+        (top_score >= 50 and top_score > second_score)
         or top_score >= second_score + 15
         or ("family_easy_mode" in top_reasons and top_score >= second_score + 10 and top_score >= 35)
         or ("intro_guide" in top_reasons and top_score >= second_score + 6 and top_score >= 30)

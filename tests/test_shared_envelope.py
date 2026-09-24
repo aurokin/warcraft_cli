@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from typing import Any
+
+import pytest
 from warcraft_core.envelope import (
     ENVELOPE_KEYS,
     SCHEMA_VERSION,
@@ -41,6 +44,28 @@ def test_envelope_violations_flags_shape_problems() -> None:
     assert envelope_violations(error_missing) == ["error.message must be a str"]
     legacy_copy = {**success_envelope(provider="p", command="c", kind="k", data={"count": 1}), "count": 1}
     assert envelope_violations(legacy_copy) == ["unexpected key: count"]
+
+
+_SUCCESS = success_envelope(provider="p", command="c", kind="k", data={})
+_FAILURE = error_envelope(provider="p", command="c", code="x", message="y")
+
+
+@pytest.mark.parametrize(
+    ("payload", "problem"),
+    [
+        ({**_SUCCESS, "ok": "true"}, "ok must be a bool"),
+        ({**_SUCCESS, "provider": 1}, "provider must be a str"),
+        ({**_SUCCESS, "command": None}, "command must be a str"),
+        ({**_SUCCESS, "kind": ["k"]}, "kind must be a str"),
+        ({**_SUCCESS, "schema_version": "2"}, "schema_version must be '1'"),
+        ({**_SUCCESS, "provenance": None}, "provenance must be a dict"),
+        ({**_FAILURE, "error": None}, "error must be a dict when ok is false"),
+        ({**_FAILURE, "error": {"code": 1, "message": "y"}}, "error.code must be a str"),
+        ({**_FAILURE, "error": {"code": "x", "message": "y", "details": []}}, "error.details must be a dict"),
+    ],
+)
+def test_envelope_violations_flags_each_type_rule(payload: dict[str, Any], problem: str) -> None:
+    assert envelope_violations(payload) == [problem]
 
 
 def test_exit_code_for_maps_known_codes_and_defaults_to_generic() -> None:

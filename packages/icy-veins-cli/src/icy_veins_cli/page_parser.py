@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
+from datetime import date
 from typing import Any
 from urllib.parse import urljoin, urlparse
 
@@ -12,6 +13,7 @@ from warcraft_core.identity import ability_identity_payload, build_identity_payl
 
 ICY_VEINS_BASE_URL = "https://www.icy-veins.com"
 GUIDE_PATH_RE = re.compile(r"^/wow/(?P<slug>[^/?#]+)/?$")
+SITEMAP_ENTRY_RE = re.compile(r"<loc>(https://www\.icy-veins\.com/wow/[^<]+)</loc>\s*(?:<lastmod>([^<]*)</lastmod>)?")
 WOWHEAD_LINK_RE = re.compile(
     r"^(?P<entity_type>achievement|currency|faction|item|mount|npc|object|pet|quest|spell|zone)=(?P<id>\d+)(?:/|$)"
 )
@@ -66,13 +68,15 @@ SPECIAL_EVENT_KEYWORDS = (
 # to ``.content-toc``, and the body from ``.page_content`` to ``.guide-page-content``. Each layout
 # below lists the new selector first and keeps the legacy one so captured pre-redesign pages (and
 # any page the site has not migrated yet) still parse.
-# Class hubs have no per-page switcher; their Astro family navigation is the class dropdown in the
-# guide header, which lists the thirteen class hubs the legacy ``.toc_page_list`` also listed.
 FAMILY_NAVIGATION_LAYOUTS = (
     (".table-of-contents", "nav a[href]"),
     (".toc_page_list", ".toc_page_center_item .toc_page_list_item a, .toc_page_list_items .toc_page_list_item a"),
-    (".guide-header__selectors", ".dropdown__menu a[href]"),
 )
+# Class hubs have no per-page switcher; their Astro family navigation is the class dropdown in the
+# guide header, which lists the thirteen class hubs the legacy ``.toc_page_list`` also listed. Spec
+# pages carry the same dropdown, so it is read on class hubs only: a spec page whose switcher stopped
+# matching must not turn into a family of every class hub.
+CLASS_HUB_NAVIGATION_LAYOUTS = (*FAMILY_NAVIGATION_LAYOUTS, (".guide-header__selectors", ".dropdown__menu a[href]"))
 PAGE_TOC_LAYOUTS = (
     (".content-toc", ".content-toc__item[href], a[href]"),
     (".toc_page_content_items", "a[href]"),
@@ -247,8 +251,9 @@ def _extract_data_layer(soup: BeautifulSoup) -> dict[str, Any]:
     return {}
 
 
-def _extract_family_navigation(soup: BeautifulSoup, *, current_url: str) -> list[dict[str, Any]]:
-    container, anchor_selector = _first_container(soup, FAMILY_NAVIGATION_LAYOUTS)
+def _extract_family_navigation(soup: BeautifulSoup, *, current_url: str, content_family: str | None) -> list[dict[str, Any]]:
+    layouts = CLASS_HUB_NAVIGATION_LAYOUTS if content_family == "class_hub" else FAMILY_NAVIGATION_LAYOUTS
+    container, anchor_selector = _first_container(soup, layouts)
     if container is None:
         return []
     current_path = urlparse(current_url).path.rstrip("/")
@@ -549,7 +554,7 @@ def parse_guide_page(html: str, *, source_url: str) -> dict[str, Any]:
     content_family = classify_guide_slug(slug)
     meta = _page_meta(soup, _parse_json_ld_article(soup) or {})
     data_layer = _extract_data_layer(soup)
-    navigation = _extract_family_navigation(soup, current_url=canonical_url)
+    navigation = _extract_family_navigation(soup, current_url=canonical_url, content_family=content_family)
     active_nav = next((item for item in navigation if item["active"]), None)
     section_title = active_nav["title"] if active_nav is not None else slug_display_name(slug)
     article, linked_entities, build_references = _article_payload(
@@ -589,11 +594,19 @@ def parse_guide_page(html: str, *, source_url: str) -> dict[str, Any]:
     }
 
 
+def _sitemap_date(lastmod: str) -> str | None:
+    """The ``YYYY-MM-DD`` part of a sitemap ``<lastmod>``, or ``None`` when it is missing or not a date."""
+    try:
+        return date.fromisoformat(lastmod[:10]).isoformat()
+    except ValueError:
+        return None
+
+
 def parse_sitemap_guides(xml_text: str) -> list[dict[str, Any]]:
-    urls = re.findall(r"<loc>(https://www\.icy-veins\.com/wow/[^<]+)</loc>", xml_text)
+    entries = SITEMAP_ENTRY_RE.findall(xml_text)
     seen: set[str] = set()
     guides: list[dict[str, Any]] = []
-    for url in urls:
+    for url, lastmod in entries:
         slug = guide_slug_from_url(url)
         if slug is None or slug in seen:
             continue
@@ -607,6 +620,7 @@ def parse_sitemap_guides(xml_text: str) -> list[dict[str, Any]]:
                 "name": slug_display_name(slug),
                 "url": url,
                 "content_family": content_family,
+                "last_updated": _sitemap_date(lastmod),
             }
         )
     guides.sort(key=lambda row: row["name"].lower())

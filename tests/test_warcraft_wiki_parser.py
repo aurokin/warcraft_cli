@@ -428,6 +428,8 @@ def test_parse_captured_event_page_is_an_event_reference_without_page_chrome() -
     assert parsed["reference"]["programming_reference"] is True
     assert parsed["reference"]["summary"].startswith("Triggered immediately before PLAYER_ENTERING_WORLD on login")
     assert parsed["reference"]["details"] == "Related Events PLAYER_LOGOUT"
+    # Event pages title their arguments "Payload"; PLAYER_LOGIN's says it has none.
+    assert parsed["reference"]["arguments"] == "None"
     # The "Game Types"/"Main Menu" navigation tables are chrome, not event documentation.
     assert "Main Menu" not in parsed["article_content"]["text"]
     assert "Wowprogramming" not in parsed["article_content"]["text"]
@@ -475,3 +477,30 @@ def test_parse_captured_lore_page_refines_to_lore_reference_and_drops_the_infobo
     assert parsed["article_content"]["sections"][0]["title"] == "Introduction"
     assert "Mankrik is an orc quest giver" in parsed["article_content"]["text"]
     assert "programming_reference" not in parsed["reference"]
+
+
+def test_parse_event_page_takes_no_signature_from_an_example_block() -> None:
+    # Synthetic, shaped like Event:COMBAT_LOG_EVENT_UNFILTERED: no code block in the introduction,
+    # and the first one on the page is the "Script" example.
+    payload = {
+        "parse": {
+            "title": "Event:COMBAT LOG EVENT UNFILTERED",
+            "text": {
+                "*": """
+                <div class="mw-parser-output">
+                  <p>Fires for combat log events.</p>
+                  <h2><span class="mw-headline" id="Script">Script</span></h2>
+                  <div class="mw-highlight">local function OnEvent(self, event) end</div>
+                  <h2><span class="mw-headline" id="Payload">Payload</span></h2>
+                  <p>timestamp number</p>
+                </div>
+                """
+            },
+        }
+    }
+
+    reference = parse_article_page(payload, source_title="Event:COMBAT_LOG_EVENT_UNFILTERED")["reference"]
+
+    assert reference["content_family"] == "event_reference"
+    assert reference["signature"] is None
+    assert reference["arguments"] == "timestamp number"

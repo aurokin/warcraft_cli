@@ -13,7 +13,7 @@ Static quality tooling, what blocks a merge, and what is advisory.
 | `make typecheck` | Mypy over all 16 packages (file list in root `pyproject.toml`) | yes |
 | `make lint-boundaries` | `import-linter` package boundaries (`.importlinter`) | yes |
 | `make complexity-gate` | `xenon --max-absolute C packages` — fails on any function graded D or worse | yes |
-| `make deadcode` | `vulture packages scripts tests scripts/vulture_allowlist.py --min-confidence 60`, ignoring Typer command/callback and pytest fixture decorators | yes |
+| `make deadcode` | `vulture packages scripts --min-confidence 60` (the allowlist is `scripts/vulture_allowlist.py`), ignoring Typer command/callback decorators | yes |
 | `make test-fast` | `pytest -q -m "not live and not e2e"` | no (`make coverage` runs the same suite) |
 | `make complexity` | Radon CC + maintainability index report (no threshold) | no |
 | `make coverage` | The fast suite with `pytest-cov` over `packages/`; fails below the floor in the Makefile (`--cov-fail-under`) | yes |
@@ -75,11 +75,13 @@ Large `main.py` entry modules (`wowhead`, `warcraftlogs`, `simc`, the `warcraft`
 
 ## Dead Code
 
-`make deadcode` runs vulture at confidence 60 with `scripts/vulture_allowlist.py` as the allowlist,
-ignoring functions registered by `@*.command`, `@*.callback`, and `@pytest.fixture`.
-The allowlist exists for names vulture cannot see through (protocol members, `__exit__` signatures,
-test doubles). When vulture flags something new, delete the code or add an allowlist entry with a
-reason — do not lower the confidence threshold.
+`make deadcode` runs vulture over `packages/` and `scripts/` at confidence 60 with
+`scripts/vulture_allowlist.py` as the allowlist, ignoring functions registered by `@*.command` and
+`@*.callback`. `tests/` is not scanned, so production code that only a test uses is reported as
+dead. The allowlist holds only names used where vulture cannot see (`__exit__` signatures,
+TypedDict keys read by subscript, a function the Makefile calls). When vulture flags something new,
+delete the code, or add an allowlist entry with a reason if it really is used — do not lower the
+confidence threshold.
 
 ## Pre-commit
 

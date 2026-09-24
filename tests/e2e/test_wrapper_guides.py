@@ -6,7 +6,8 @@ Everything here talks to the real guide sites and the real local SimulationCraft
 
 What a green run proves:
 
-- every guide provider resolves the pinned query to its own main guide for the spec and exports it;
+- every guide provider resolves the pinned query to its own main guide for the spec and exports it,
+  and Icy Veins resolves a damage-spec query too;
 - Method and Icy Veins each contribute at least one explicit build reference (Wowhead's guide export
   carries none), and the packet hands over exactly the unique references on disk (in order,
   truncation reported);
@@ -20,13 +21,24 @@ What a green run proves:
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from tests.e2e.harness import EXIT_GENERIC, EXIT_NOT_FOUND, EXIT_USAGE, Result, run
+from tests.e2e.harness import (
+    EXIT_GENERIC,
+    EXIT_NETWORK,
+    EXIT_NOT_FOUND,
+    EXIT_USAGE,
+    REPO_ROOT,
+    Result,
+    dead_proxy_env,
+    no_cache_env,
+    run,
+)
 from tests.e2e.pins import GUIDE_CLASS, GUIDE_QUERY, GUIDE_SPEC
 
 GUIDE_PROVIDERS = ("wowhead", "method", "icy-veins")
@@ -41,7 +53,7 @@ PROVIDER_HOSTS = {"wowhead": "wowhead.com", "method": "method.gg", "icy-veins": 
 GUIDE_REFERENCE_TYPE = "wow_talent_export"
 SIMC_LEGS = ("identify", "decode", "describe")
 # A damage spec SimC ships an APL for, so every leg of its handoff, describe included, must succeed.
-DPS_GUIDE_REF = "fury-warrior-pve-dps-spec-builds-talents"
+DPS_GUIDE_QUERY = "fury warrior guide"
 DPS_CLASS = "warrior"
 DPS_SPEC = "fury"
 # The mistweaver handoff with the pinned monk APL: identify and decode succeed, describe cannot.
@@ -460,18 +472,29 @@ def test_guide_build_labels_name_the_hero_tree_their_code_decodes_to(require, ha
         assert not mislabelled, f"{label!r} decodes to {name!r} but names {mislabelled}"
 
 
-def test_guide_builds_simc_decodes_and_describes_a_damage_guide(require, out_dir: Path) -> None:
-    """A damage guide's builds pass every simc leg, describe included, against the spec's own APL."""
-    require("icy-veins", "simc")
-    bundle_path = out_dir / "icy-veins"
-    run("icy-veins", "guide-export", DPS_GUIDE_REF, "--out", str(bundle_path), timeout=300)
-    _assert_bundle_on_disk(bundle_path)
-    apl_path = next(path for path in _default_apls(DPS_CLASS) if path.name == f"{DPS_CLASS}_{DPS_SPEC}.simc")
+def test_a_damage_guide_query_resolves_and_hands_every_build_to_simc(require, out_dir: Path) -> None:
+    """``fury warrior guide`` end to end: Icy Veins resolves its damage guide, and every build it
+    publishes passes every simc leg, describe included, against the spec's own APL.
 
-    result = run("warcraft", "guide-builds-simc", str(bundle_path), "--apl-path", str(apl_path), timeout=300)
-    packet = result.data
-    assert packet["source"]["kind"] == "bundle"
-    _assert_handoff_packet(packet, result.payload["provenance"], bundle_paths=(bundle_path,), apl_path=apl_path, decode=True)
+    Icy Veins once resolved no damage spec at all. SimC identifying each exported code as Fury is
+    the oracle for which guide was selected.
+    """
+    require("wowhead", "icy-veins", "simc")
+    apl_path = next(path for path in _default_apls(DPS_CLASS) if path.name == f"{DPS_CLASS}_{DPS_SPEC}.simc")
+    out_root = out_dir / "damage"
+    out_root.mkdir()
+    result = run(
+        "warcraft", "guide-compare-query", DPS_GUIDE_QUERY, "--out-root", str(out_root),
+        "--provider", "wowhead", "--provider", "icy-veins", "--simc-build-handoff", "--simc-apl-path", str(apl_path),
+        timeout=300,
+    )
+    rows = {row["provider"]: row for row in result.data["provider_results"]}
+    assert rows["icy-veins"]["candidate"]["selection_source"] == "resolve", json.dumps(rows["icy-veins"])[:600]
+    bundle_paths = tuple(Path(row["bundle_path"]) for row in result.data["manifest"]["providers"])
+    for bundle_path in bundle_paths:
+        _assert_bundle_on_disk(bundle_path)
+    packet = result.data["simc_build_handoff"]
+    _assert_handoff_packet(packet, packet["provenance"], bundle_paths=bundle_paths, apl_path=apl_path, decode=True)
     _assert_simc_legs(
         packet, actor_class=DPS_CLASS, spec=DPS_SPEC, expected={"identify": True, "decode": True, "describe": True}
     )
@@ -537,5 +560,28 @@ def test_guide_compare_query_refuses_to_compare_fewer_than_two_guides(require, o
     assert details["selected_providers"] == list(GUIDE_PROVIDERS)
     assert [row["provider"] for row in details["provider_results"]] == list(GUIDE_PROVIDERS)
     for row in details["provider_results"]:
-        assert row["status"] == "skipped" and row["reason"], row
+        assert row["status"] == "skipped" and row["reason"] and row["error"] is None, row
     assert list(out_root.iterdir()) == []
+
+
+def test_guide_compare_query_reports_an_outage_as_the_network_error(out_dir: Path) -> None:
+    """An outage is exit 5 with every provider's own error, never "no guide found" (exit 1)."""
+    out_root = out_dir / "outage"
+    out_root.mkdir()
+    result = run(
+        "warcraft", "guide-compare-query", GUIDE_QUERY, "--out-root", str(out_root),
+        env={**dead_proxy_env(), **no_cache_env()}, expect=EXIT_NETWORK, error_code="network_error",
+    )
+    rows = result.payload["error"]["details"]["provider_results"]
+    assert [row["provider"] for row in rows] == list(GUIDE_PROVIDERS), result.describe()
+    for row in rows:
+        assert (row["status"], row["reason"], row["resolve_reason"]) == ("error", "provider_failed", "provider_failed"), row
+        assert row["error"]["code"] == "network_error", row
+    assert list(out_root.iterdir()) == []
+
+
+def test_guide_compare_refuses_one_bundle_named_twice(require, orchestration: Orchestration) -> None:
+    """The same bundle once absolute and once relative is one bundle, so there is nothing to compare."""
+    require("wowhead", "method", "icy-veins")
+    bundle = orchestration.bundle("method")
+    run("warcraft", "guide-compare", str(bundle), os.path.relpath(bundle, REPO_ROOT), expect=EXIT_USAGE, error_code="invalid_argument")

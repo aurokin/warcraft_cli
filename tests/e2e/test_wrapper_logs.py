@@ -32,6 +32,7 @@ LORRGS_REPORT_ATTEMPTS = 5
 
 # Warcraft Logs' id for Heroic, and how many Heroic leaderboard rows discovery walks.
 HEROIC_DIFFICULTY_ID = 4
+MYTHIC_DIFFICULTY_ID = 5
 HEROIC_ROW_ATTEMPTS = 5
 
 
@@ -392,6 +393,21 @@ def test_cooldown_packet_degrades_when_lorrgs_has_not_cached_the_report(require)
     assert sources["lorrgs_user_report_fights"]["status"] == "error", result.describe()
     assert sources["warcraftlogs_report_events"]["status"] == "ok", result.describe()
     assert sources["lorrgs_spec_spells"]["status"] == "ok", result.describe()
+    # The notes describe only what the packet holds: there are no phase windows to explain here.
+    assert not any("Phase windows are derived" in note for note in data["notes"]), result.describe()
+    # --boss-slug stands in for the boss Lorrgs would have named, so the top parses are still compared,
+    # unless the kill is on a difficulty Lorrgs does not rank (it ranks Heroic and Mythic only).
+    ranked = found.fight["difficulty"] in (HEROIC_DIFFICULTY_ID, MYTHIC_DIFFICULTY_ID)
+    assert data["comparison"]["reason"] == (None if ranked else "unranked_difficulty"), result.describe()
+
+    # Without --boss-slug nothing names the boss, and the packet says why the comparison is missing.
+    unnamed = run(
+        "warcraft", "cooldown-packet", found.url, "--actor-id", str(actor["id"]), "--spec-slug", spec_slug,
+        "--phase", "1", "--sample-limit", "1",
+    )
+    assert unnamed.data["comparison"]["reason"] == "no_boss_slug", unnamed.describe()
+    assert unnamed.data["comparison"]["samples"] == [], unnamed.describe()
+    assert any("--boss-slug" in note for note in unnamed.data["notes"]), unnamed.describe()
 
     # --spell-id must narrow the tracked set, and the casts with it.
     pressed = max(casts["tracked_casts_by_spell"], key=lambda row: row["count"])
@@ -417,6 +433,8 @@ def test_cooldown_packet_degrades_when_lorrgs_has_not_cached_the_report(require)
     narrowed_casts = tracked["player_casts"]
     assert narrowed_casts["tracked_cast_count"] == pressed["count"], narrowed.describe()
     assert all(cast["spell"]["spell_id"] == spell_id for cast in narrowed_casts["tracked_casts"]), narrowed.describe()
+    # --sample-limit 0 turns the comparison off, and the packet names that as the reason.
+    assert narrowed.data["comparison"]["reason"] == "disabled_by_sample_limit", narrowed.describe()
 
 
 @lru_cache(maxsize=1)
@@ -494,7 +512,8 @@ def test_talent_packet_routes_a_report_actor_through_simc(require):
 
     ``not_validated`` is a real outcome of the producer, but it is a failure of this journey: the
     checkout is current and built (the simc journeys assert that), so an actor SimulationCraft
-    cannot resolve means the log-to-SimC handoff is broken for every user, not just this actor.
+    cannot resolve means the log-to-SimC handoff is broken for that actor's class and spec. The
+    journey below holds every other class and spec on the roster to the same verdict.
     """
     require("warcraftlogs", "simc")
     actor, _apl = talent_actor()
@@ -545,6 +564,60 @@ def test_talent_packet_routes_a_report_actor_through_simc(require):
 
     selection = _hero_selection(packet)
     assert selection["hero_tree"] and isinstance(selection["hero_tree_id"], int), result.describe()
+
+
+def test_talent_packet_validates_every_class_and_spec_on_the_roster(require):
+    """One actor per class and spec of the anchor kill, healers and tanks included, must validate.
+
+    Hero-tree and choice-node handling differ per spec, so one actor per run (always the first tank)
+    once hid a handoff that broke for only some of them.
+    """
+    require("warcraftlogs", "simc")
+    found = anchor()
+    by_spec: dict[tuple[str, str], dict[str, Any]] = {}
+    for player in found.players:
+        specs = player.get("specs") or []
+        if specs and isinstance(specs[0].get("spec"), str):
+            by_spec.setdefault((str(player["type"]), str(specs[0]["spec"])), player)
+    assert len(by_spec) >= 5, f"the anchor roster names too few specs to sample: {sorted(by_spec)}"
+
+    failures = []
+    for (actor_class, spec), player in sorted(by_spec.items()):
+        result = run("warcraft", "talent-packet", found.url, "--actor-id", str(player["id"]), "--fight-id", str(found.fight_id))
+        packet = result.data["talent_transport_packet"]
+        identity = packet["build_identity"]["class_spec_identity"]["identity"]
+        if packet["transport_status"] != "validated" or (identity["actor_class"], identity["spec"]) != (
+            actor_class.lower(),
+            spec.lower(),
+        ):
+            validation = packet["validation"]
+            unresolved = [row["entry"] for row in validation.get("unresolved_entries") or []]
+            failures.append(f"{spec} {actor_class} ({player['name']}): {validation['status']} {validation.get('reason')} {unresolved}")
+    assert not failures, "\n".join(failures)
+
+
+def test_wrapper_composites_answer_a_missing_actor_or_fight_with_exit_4(require):
+    """A fight or actor the report does not have is a not-found answer, and it says what does exist."""
+    require("warcraftlogs", "lorrgs", "raiderio")
+    found = guild_anchor()
+    actor, spec_slug = _lorrgs_capable_actor()
+
+    fight = run(
+        "warcraft", "cooldown-packet", _report_url(found.code, 9999), "--actor-id", str(actor["id"]), "--spec-slug", spec_slug,
+        "--phase", "1", expect=EXIT_NOT_FOUND, error_code="fight_not_found",
+    )
+    assert found.fight_id in fight.payload["error"]["details"]["available_fight_ids"], fight.describe()
+
+    profile = run(
+        "warcraft", "actor-profile", found.code, "Zzqxnoactorzz", "--fight-id", str(found.fight_id),
+        expect=EXIT_NOT_FOUND, error_code="actor_not_found",
+    )
+    assert actor["name"] in profile.payload["error"]["details"]["available_actors"], profile.describe()
+
+    run(
+        "warcraft", "talent-packet", found.url, "--actor-id", "999999", "--fight-id", str(found.fight_id),
+        expect=EXIT_NOT_FOUND, error_code="not_found",
+    )
 
 
 def test_talent_describe_adds_simc_priority_output_for_the_report_build(require, out_dir):

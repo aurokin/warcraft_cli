@@ -37,7 +37,7 @@ happens outside pytest.
 | `tests/fixtures/warcraft_wiki/` | captured | `test_warcraft_wiki_parser.py`, `test_warcraft_wiki_cli.py` |
 | `tests/fixtures/lorrgs/` | captured | `test_lorrgs_cli.py` |
 | `tests/fixtures/warcraftlogs/` | captured | `test_warcraftlogs_captured_fixtures.py` |
-| `tests/fixtures/simc/` | captured | `test_simc_cli.py`, `test_simc_build_input.py`, `test_simc_compare.py` |
+| `tests/fixtures/simc/` | captured, plus one synthetic decode log (`dh_decode_debug.txt`) | `test_simc_cli.py`, `test_simc_build_input.py`, `test_simc_compare.py` |
 | `tests/fixtures/blizzard/*.json` | synthetic | `test_blizzard_api_contracts.py` |
 | `tests/fixtures/curseforge/*.json` | synthetic | `test_curseforge_contracts.py` |
 
@@ -101,8 +101,8 @@ pytest -q tests/test_icy_veins_cli.py tests/test_icy_veins_recorded_fixtures.py 
 
 ## Captured: Wowhead responses
 
-`tests/fixtures/wowhead/` holds four HTML pages (item 19019, guide 283, the news listing, the
-blue-tracker listing), the "list doesn't exist or has been removed" page `wowhead profiler` fails
+`tests/fixtures/wowhead/` holds five HTML pages (item 19019, guide 283, Fury Warrior guide 3087, the
+news listing, the blue-tracker listing), the "list doesn't exist or has been removed" page `wowhead profiler` fails
 on, and nine search-suggestion JSON responses (`search_suggestions_<query>.json`; each file's
 `search` field is the query it was captured for, for example `spirit beast`, singular).
 
@@ -113,6 +113,9 @@ on, and nine search-suggestion JSON responses (`search_suggestions_<query>.json`
 - Third-party comment text is the one edit: commenter display handles become `commenter-<n>`, and
   comment and reply bodies are rewritten word for word with neutral filler, keeping line breaks,
   punctuation, word count, and Wowhead markup tags (`[url=...]`) intact.
+- `guide_3087_page.html` ships without comments: its comment and commenter (`g_users`,
+  `lv_comments0`) script is removed instead of anonymised. It pins inline `[spell=N]` tokens and
+  `[build]` blocks.
 - Everything else stays byte-identical.
 
 ```bash
@@ -155,11 +158,12 @@ pytest -q tests/test_lorrgs_cli.py
 
 ## Captured: Warcraft Logs GraphQL responses
 
-`tests/fixtures/warcraftlogs/*_capture.json` are real `api/v2` responses from public reports. Each
+`tests/fixtures/warcraftlogs/*_capture.json` are real `api/v2` responses. Each
 file's `_capture` block names the source query, the report code and fight, the capture date, and
 how it was trimmed (an event window and row limit, and master data reduced to the actors and
 abilities those rows reference). Keep the `_capture` block accurate when re-capturing; the rest of
-the file is the response as served.
+the file is the response as served, except that a private report's player identities (name, GUID,
+server) are replaced, as `report_encounter_aura_buffs_capture.json`'s `_capture.trimmed` records.
 
 ```bash
 pytest -q tests/test_warcraftlogs_captured_fixtures.py
@@ -168,11 +172,14 @@ pytest -q tests/test_warcraftlogs_captured_fixtures.py
 ## Captured: SimulationCraft output
 
 `tests/fixtures/simc/` holds real SimulationCraft output: `debug=1` decode logs
-(`captured_*_debug.txt`, `dh_decode_debug.txt`), a `json2` report
+(`captured_*_debug.txt`), a `json2` report
 (`captured_arcane_mage_json2_report.json`), and the rows of the checkout's generated
 `trait_data.inc` and `sc_specialization_data.inc` those captures need. Copy trait and
 specialization rows verbatim from `engine/dbc/generated/` in the checkout the captures came from,
 and add only the rows a test reads.
+
+`dh_decode_debug.txt` is the exception: a synthetic, hand-written decode log with invented node and
+entry ids (`101`-`105`, `201`-`205`) that pins only the line format the decode parser reads.
 
 ```bash
 pytest -q tests/test_simc_cli.py tests/test_simc_build_input.py tests/test_simc_compare.py

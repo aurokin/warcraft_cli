@@ -121,13 +121,16 @@ def _envelope_data(kind: str, payload: Any) -> dict[str, Any]:
     return {kind: payload}
 
 
-def note_empty_comp_ranking(result: dict[str, Any], boss_slug: str) -> dict[str, Any]:
-    """Say so when Lorrgs answers a composition ranking with no reports, so ``[]`` is not read as a ranking."""
+def note_empty_ranking(result: dict[str, Any], subject: str) -> dict[str, Any]:
+    """Say so when Lorrgs answers a ranking with no reports, so ``[]`` is not read as an answer.
+
+    ``subject`` names what was ranked, e.g. "composition reports for <boss> with these filters".
+    """
     payload = result["payload"]
     if isinstance(payload, dict) and payload.get("reports") == []:
         payload["notes"] = [
-            f"Lorrgs returned no composition reports for {boss_slug} with these filters: the upstream "
-            "ranking is empty, so there is nothing to rank yet."
+            f"Lorrgs returned no {subject}: the upstream ranking is empty, so there is nothing to rank yet. "
+            "It does not mean nobody plays or logs this."
         ]
     return result
 

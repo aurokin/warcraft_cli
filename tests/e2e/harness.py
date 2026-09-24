@@ -150,8 +150,8 @@ def run(
     - ``expect``: required exit code (``None`` to accept any).
     - ``error_code``: required ``error.code`` for failures.
     - ``stream``: the command emits JSONL (``--stream``); the header line is the envelope.
-    On success stdout carries one envelope and stderr carries no JSON error. On failure stdout is
-    empty and stderr carries one error envelope. Every envelope must pass ``envelope_violations``.
+    On success stdout carries one envelope and stderr is empty. On failure stdout is empty and
+    stderr carries one error envelope. Every envelope must pass ``envelope_violations``.
     A ``--fields`` call prunes the envelope keys this checks, so those journeys use ``run_raw``.
     """
     result = run_raw(binary, *args, timeout=timeout, env=env, stdin=stdin)
@@ -160,6 +160,8 @@ def run(
     if "Traceback (most recent call last)" in result.stderr:
         raise JourneyFailure(f"traceback leaked\n{result.describe()}")
     if result.ok:
+        if result.stderr.strip():
+            raise JourneyFailure(f"success wrote to stderr\n{result.describe()}")
         if stream:
             lines = [line for line in result.stdout.splitlines() if line.strip()]
             if not lines:

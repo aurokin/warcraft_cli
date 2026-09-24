@@ -8,12 +8,14 @@ The captures are trimmed, not edited: every `<style>` element, every non-JSON `<
 push-key/newsletter/optout JSON blocks no parser reads are removed. Third-party comment text is the
 one exception to "byte-identical": display handles become `commenter-<n>` and comment bodies are
 rewritten word-for-word with neutral filler, keeping line breaks, punctuation, word count and
-Wowhead markup tags intact. Everything else a parser reads is exactly what Wowhead served.
+Wowhead markup tags intact. `guide_3087_page.html` carries no comments: its comment and commenter
+script is removed instead. Everything else a parser reads is exactly what Wowhead served.
 """
 
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 from wowhead_cli.entity_types import SUGGESTION_TYPE_TO_ENTITY, suggestion_entity_type_from_type_id
@@ -27,6 +29,7 @@ from tests.wowhead_testkit import captured_json, captured_page, runner
 
 CAPTURED_ENTITY_PAGE = captured_page("item_19019_page.html")
 CAPTURED_GUIDE_PAGE = captured_page("guide_283_page.html")
+CAPTURED_CLASS_GUIDE_PAGE = captured_page("guide_3087_page.html")
 CAPTURED_NEWS_LISTING = captured_page("news_listing.html")
 CAPTURED_BLUE_TRACKER_LISTING = captured_page("blue_tracker_listing.html")
 
@@ -227,6 +230,31 @@ def test_guide_full_parses_a_real_wowhead_guide_page(monkeypatch) -> None:
     assert links["truncated"] is False
     assert links["source_counts"] == {"href": 9, "gatherer": 0, "merged": 9}
     assert data["comments"]["count"] == 5
+
+
+def test_guide_text_keeps_the_abilities_and_build_a_real_class_guide_names(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Wowhead writes abilities as `[spell=184367]` and builds as `[build ...]` blocks, not prose."""
+    monkeypatch.setattr(
+        "wowhead_cli.main.WowheadClient.guide_page_html",
+        lambda self, guide_id: CAPTURED_CLASS_GUIDE_PAGE,
+    )
+    full = runner.invoke(app, ["guide-full", "3087"])
+    assert full.exit_code == 0, full.output
+    chunks = {chunk["title"]: chunk["content_text"] for chunk in json.loads(full.stdout)["data"]["body"]["section_chunks"]}
+    assert "Generate enough Rage to cast Rampage and maintain Enrage" in chunks["Fury Warrior Overview"]
+    cheat_sheet = chunks["Fury Warrior Cheat Sheet"]
+    assert "Fury Warrior Raid Build, stats str>>mastery>haste>crit>versatility" in cheat_sheet
+    assert "Slayer's Dominance" in cheat_sheet
+    assert "Voracious Heart of Ula'tek" in cheat_sheet
+
+    export_dir = tmp_path / "guide-3087"
+    assert runner.invoke(app, ["guide-export", "3087", "--out", str(export_dir)]).exit_code == 0
+    query = runner.invoke(app, ["guide-query", str(export_dir), "Rampage", "--kind", "sections"])
+    assert query.exit_code == 0, query.output
+    sections = json.loads(query.stdout)["data"]["matches"]["sections"]
+    assert "Fury Warrior Overview" in [row["title"] for row in sections]
 
 
 def test_suggestion_type_ids_derive_the_entity_type_wowhead_labels_the_row() -> None:

@@ -83,6 +83,13 @@ class FakeLorrgsClient:
             "source_url": f"https://api2.lorrgs.io/api/spec_ranking/{spec_slug}/{boss_slug}/info",
         }
 
+    def spec_ranking(self, *, spec_slug: str, boss_slug: str, difficulty: str = "mythic", metric: str | None = None) -> dict[str, object]:
+        self.calls.append(("spec_ranking", {"spec_slug": spec_slug, "boss_slug": boss_slug}))
+        return {
+            "payload": {"spec_slug": spec_slug, "boss_slug": boss_slug, "difficulty": difficulty, "reports": []},
+            "source_url": f"https://api2.lorrgs.io/api/spec_ranking/{spec_slug}/{boss_slug}",
+        }
+
     def comp_ranking(
         self,
         *,
@@ -265,6 +272,28 @@ def test_comp_ranking_says_when_lorrgs_returned_no_reports(monkeypatch) -> None:
     assert "no composition reports for nekzali-the-soulcoiler" in data["notes"][0]
 
 
+def test_spec_ranking_says_when_lorrgs_returned_no_reports(monkeypatch) -> None:
+    _patch_client(monkeypatch)
+    result = runner.invoke(app, ["spec-ranking", "mage-frost", "nekzali-the-soulcoiler"])
+
+    assert result.exit_code == 0
+    data = json.loads(result.stdout)["data"]
+    assert data["reports"] == []
+    assert data["notes"] == [
+        "Lorrgs returned no mage-frost reports for nekzali-the-soulcoiler on mythic: the upstream ranking is empty, "
+        "so there is nothing to rank yet. It does not mean nobody plays or logs this."
+    ]
+
+
+def test_user_report_fights_without_a_fight_is_a_usage_error(monkeypatch) -> None:
+    _patch_client(monkeypatch)
+    result = runner.invoke(app, ["user-report-fights", "AbCdEfGh12345678"])
+
+    assert result.exit_code == 2
+    assert json.loads(result.stderr)["error"]["code"] == "missing_fight"
+    assert FakeLorrgsClient.calls == []
+
+
 def test_http_404_is_structured_not_found(monkeypatch) -> None:
     _patch_client(monkeypatch)
     result = runner.invoke(app, ["boss", "not-a-boss"])
@@ -324,6 +353,23 @@ def test_resolve_promotes_the_unambiguous_spec_ranking_at_high_confidence(monkey
     assert data["match"]["kind"] == "spec_ranking"
     assert data["match"]["ranking"]["match_level"] == "short_name"
     assert data["match"]["ranking"]["unmatched_terms"] == []
+    assert data["next_command"] == "lorrgs spec-ranking mage-frost chimaerus-the-undreamt-god"
+
+
+def test_resolve_refuses_a_word_lorrgs_has_no_answer_for(monkeypatch) -> None:
+    # Lorrgs has cooldown timelines, not guides: dropping "guide" would answer a different question.
+    _patch_client(monkeypatch)
+    result = runner.invoke(app, ["resolve", "frost mage guide", "--limit", "10"])
+    assert result.exit_code == 0
+    data = json.loads(result.stdout)["data"]
+    assert data["resolved"] is False
+    assert data["next_command"] is None
+    assert data["results"][0]["ranking"]["unmatched_terms"] == ["guide"]
+
+    # Filler words are not a question of their own.
+    result = runner.invoke(app, ["resolve", "frost mage on chimaerus", "--limit", "10"])
+    data = json.loads(result.stdout)["data"]
+    assert data["resolved"] is True
     assert data["next_command"] == "lorrgs spec-ranking mage-frost chimaerus-the-undreamt-god"
 
 
@@ -479,6 +525,8 @@ def test_report_overview_accepts_warcraftlogs_url(monkeypatch) -> None:
         "JVFTxcKCqrvpaAzD",
         "https://www.warcraftlogs.com/reports/DZzR9jwYmQA6tbV7#fight=4",
         "DZzR9jwYmQA6tbV7",
+        # A random code can look like capitalised words; in a report URL it is still the code.
+        "https://www.warcraftlogs.com/reports/QwErTyUiOpAsDfGh#fight=3",
     ],
 )
 def test_report_overview_accepts_real_report_codes_with_or_without_digits(monkeypatch, reference: str) -> None:
@@ -490,7 +538,7 @@ def test_report_overview_accepts_real_report_codes_with_or_without_digits(monkey
     assert ("report_overview", {"report_id": code, "refresh": False}) in FakeLorrgsClient.calls
 
 
-@pytest.mark.parametrize("word", ["frostdeathknight", "restorationdruid", "1234567890123456"])
+@pytest.mark.parametrize("word", ["frostdeathknight", "restorationdruid", "1234567890123456", "HavocDemonHunter"])
 def test_report_overview_rejects_a_sixteen_character_word(monkeypatch, word: str) -> None:
     # Real 16-character codes mix upper and lower case; a spec slug of that length is not a report.
     _patch_client(monkeypatch)

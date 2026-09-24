@@ -18,10 +18,13 @@ Use `warcraft` first when the caller does not already know which provider they n
   - `warcraft --expansion <profile> ...`
 - Global flags (every binary, always before the subcommand):
   - `--pretty` pretty-print JSON; default output is compact JSON
-  - `--compact` truncate long strings, with `--compact-max-chars <n>` to set the cut
+  - `--compact` truncate long prose strings, with `--compact-max-chars <n>` to set the cut; URLs,
+    talent/transport strings, export codes and `*command` values stay whole, and every cut path is
+    listed in `provenance.compacted_paths`
   - `--fields <a.b,c>` keep only these dot paths, rooted at the envelope (`data.results`,
     `data.entity.name`); repeatable. The output is the projection, not an envelope, and a path that
-    did not resolve is listed under `fields_missing` instead of vanishing
+    did not resolve is listed under `fields_missing` instead of vanishing. A failure envelope is
+    always printed whole
   - `--fields-strict` fail with `missing_fields` (exit 2) instead of listing a path under `fields_missing`
   - `--profile agent|human` presets (`agent` is the default compact JSON, `human` pretty JSON)
   - `wowhead --stream` writes JSON Lines instead of one object (see Output Contract)
@@ -29,6 +32,8 @@ Use `warcraft` first when the caller does not already know which provider they n
   - example: `warcraft --pretty --fields data.results search "<query>"`
 - Trust check:
   - `warcraft doctor`
+- Log actor to Raider.IO profile:
+  - `warcraft actor-profile <report-code> <character-name> --fight-id <id>`
 - Cross-provider guide evidence:
   - `warcraft talent-packet <source>`
   - `warcraft talent-describe <source> --apl-path <apl>`
@@ -92,7 +97,8 @@ narrower, **experimental** is thin and may change.
 
 - Prefer `resolve` when you want one conservative next command.
 - Prefer `search` when you want to inspect candidates across providers.
-- Prefer `warcraft guild ...` for one guild's Raider.IO snapshot with normalized region/realm/name input, and `warcraft guild-ranks ...` for its per-raid normal/heroic/mythic world, region, and realm ranks. A rank of `0` means unranked at that difficulty, not first place, and Raider.IO only covers the current expansion.
+- Prefer `warcraft guild ...` for one guild's Raider.IO snapshot with normalized region/realm/name input; `data.sources.raiderio.summary.raids[]` carries each raid's normal/heroic/mythic world, region, and realm ranks. A rank of `0` means unranked at that difficulty, not first place, and Raider.IO only covers the current expansion.
+- Use `warcraft actor-profile <report-code> <name>` to hand a Warcraft Logs report actor to their Raider.IO profile. Pass `--fight-id` when you know it; without it the wrapper searches a bounded set of the report's fights (`query.fight_scope`).
 - Preserve provider provenance. `warcraft` is a router, not a source.
 - Use `warcraft guide-compare` when you already have exported guide bundles and want additive cross-provider evidence instead of a synthesized summary.
 - Use `warcraft guide-compare-query` when you want the wrapper to resolve, export, and compare guide candidates conservatively across supported guide providers.
@@ -101,10 +107,9 @@ narrower, **experimental** is thin and may change.
 - Steer `guide-compare-query` orchestration with:
   - `--provider <name>` repeatable, to restrict the run to `wowhead`, `method`, or `icy-veins`
   - `--out-root <dir>` to choose where the orchestrated bundles are written (default `<XDG data dir>/warcraft/guide_compare/<query-slug>`, never the current directory)
-  - `--limit <n>` (1-20, default 5) provider-local resolve candidates considered before one guide is selected
   - `--max-age-hours <n>` (1-720, default 24) and `--force-refresh` for bundle reuse
   - `--simc-build-handoff` plus `--simc-apl-path <apl>`, `--simc-decode` / `--no-simc-decode`, and `--simc-build-limit <n>` (1-200, default 20) for the SimC handoff
-  - example: `warcraft guide-compare-query "<guide query>" --provider wowhead --provider icy-veins --limit 3 --out-root ./tmp/guide-compare`
+  - example: `warcraft guide-compare-query "<guide query>" --provider wowhead --provider icy-veins --out-root ./tmp/guide-compare`
 - Use `warcraft talent-packet` when the source is already an explicit build ref, scoped log actor, or packet file and you want the wrapper to route it into the shared transport contract.
 - Use `warcraft talent-describe` when you want that same routed packet handed directly into `simc describe-build` without manually chaining commands.
 - Use `warcraft cooldown-packet` for player-specific log questions like "how can I improve my

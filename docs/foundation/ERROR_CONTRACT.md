@@ -20,8 +20,8 @@ envelope with that collection emptied and `data.stream: {"field", "count"}` nami
 | `command` | string | Full subcommand path that produced the payload (`search`, `entity`, `distribution mythic-plus-runs`, ...) |
 | `kind` | string | Payload kind inside `data` (`search_results`, `entity`, `doctor`, `error`, ...) |
 | `schema_version` | string | Envelope schema version. Currently `"1"`. |
-| `query` | string, object, or null | On success, the normalized input the command acted on; on failure, see [Error object](#error-object) |
-| `provenance` | object | Source URLs, fetch timestamps, cache state, upstream warnings about the source (for example `warcraftlogs graphql`'s `graphql_warnings`). `{}` when there is none. |
+| `query` | string, object, or null | On success, the normalized input when the command reports one, otherwise `null` (many commands that take a report, build or file answer with `null` here and describe their input inside `data`); on failure, see [Error object](#error-object) |
+| `provenance` | object | Source URLs, fetch timestamps, cache state, upstream warnings about the source (for example `warcraftlogs graphql`'s `graphql_warnings`), and `compacted_paths` under `--compact`. `{}` when the command reports none; some commands keep their source URLs in `data` instead (for example `wowhead entity`'s `data.entity.page_url` and `data.citations`). |
 | `data` | object | Provider payload. `{}` on failure. |
 | `error` | object | Present only when `ok` is `false`: `{"code": str, "message": str, "details"?: object}` |
 
@@ -83,8 +83,10 @@ exit codes, and documents them in its provider README: for example `warcraftlogs
 `invalid_query` and its `missing_*` input codes, `curseforge` exits `3` for `missing_api_key` and
 `4` for `addon_not_found`, `blizzard` exits `2` for `unsupported_region`,
 `unsupported_game_version`, and `classic_profile_unsupported`, `lorrgs` exits `2` for
-`invalid_report_ref`, and `warcraft` exits `2` for `unsupported_provider_expansion`,
-`duplicate_expansion_argument`, and `invalid_report_ref`.
+`invalid_report_ref` and `missing_fight`, `raidbots` exits `2` for `invalid_report_ref`, and
+`warcraft` exits `2` for `unsupported_provider_expansion`, `duplicate_expansion_argument`, and
+`invalid_report_ref`, and `4` for `cooldown-packet`'s `fight_not_found`, `actor_id_not_found`,
+`actor_name_not_found`, and `lorrgs_fight_not_found`.
 
 ## Exit codes
 
@@ -108,7 +110,7 @@ escapes a command becomes an error envelope on stderr and never a traceback:
 
 - `ProviderError` -> its own `code` and exit code (default from the table above)
 - `httpx.TimeoutException` -> `timeout`, exit 5
-- `httpx.HTTPStatusError` -> `auth_failed` (401/403, exit 3), `not_found` (404, exit 4), otherwise `upstream_error` (exit 5); `details` carries `status_code` and `url`
+- `httpx.HTTPStatusError` -> `auth_failed` (401/403, exit 3), `not_found` (404, exit 4), `rate_limited` (429, exit 5), otherwise `upstream_error` (exit 5); `details` carries `status_code` and `url`. Providers that translate status errors themselves use the same mapping (`warcraft_core.exit_codes.error_code_for_http_status`)
 - any other `httpx.RequestError` -> `network_error`, exit 5
 - argument-parsing failures (unknown flag, rejected option value, missing argument) -> `invalid_argument`, exit 2
 - any other exception -> `internal_error` with `"<ExceptionType>: <message>"`, exit 1
@@ -142,9 +144,9 @@ These flags exist on every binary and go before the subcommand:
 | Flag | Effect |
 | --- | --- |
 | `--pretty` | Pretty-print JSON. Default output is compact JSON. |
-| `--compact` | Truncate long string fields (default 280 chars, adds `...`) |
+| `--compact` | Truncate long prose strings (default 280 chars, adds `...`) and list each cut dot path in `provenance.compacted_paths`. Strings without a space or tab (URLs, talent and transport strings, export codes, ids, a generated SimC profile) and `*command`/`*commands` values are never cut. With `--fields`, `provenance.compacted_paths` lists the cut paths the projection kept. |
 | `--compact-max-chars N` | Truncation length for `--compact` (40-10000) |
-| `--fields a.b,c` | Keep only the listed dot paths (repeatable or comma-separated). `ok` and `error` are always kept on failures. |
+| `--fields a.b,c` | Keep only the listed dot paths (repeatable or comma-separated) |
 | `--fields-strict` | Exit 2 with `missing_fields` when a requested path is absent |
 | `--profile agent\|human` | Presets: `agent` compact JSON (default), `human` pretty JSON |
 
@@ -152,6 +154,9 @@ A `--fields` path the payload does not have is never dropped in silence. With `-
 is a `missing_fields` error (exit 2); without it the projection carries a `fields_missing` array of
 the paths that did not resolve, so an empty or thin projection is distinguishable from an empty
 result.
+
+`--fields` and `--compact` shape success envelopes only. A failure is always written whole, so its
+`error` and `query` are never projected or cut away.
 
 ```bash
 wowhead --fields data.results --compact search "thunderfury"

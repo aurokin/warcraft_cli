@@ -15,8 +15,10 @@ a bare report ID or any URL containing `/report/{ID}`.
 | `raidbots inspect-report <url-or-id>` | Fetch and parse a report's `data.json` into a kind-aware summary (quick-sim actor plus metrics, or ranked profilesets for Top Gear/Droptimizer) with freshness, citations, and scope. |
 | `raidbots input <url-or-id>` | Fetch the report's SimC input and emit it with a handoff: classification plus suggested local `simc` commands. |
 | `raidbots explain-input` | Classify SimC addon/profile text locally and explain the handoff. No network. |
-| `raidbots search <query>` | Structured `not_supported` stub (exit 0): Raidbots publishes no report index. |
-| `raidbots resolve <target>` | Structured `not_supported` stub (exit 0): open a known report with `inspect-report`. |
+
+Raidbots publishes no report index, so there is no `search` or `resolve` command; open a known report
+with `inspect-report`. The in-process surface the `warcraft` wrapper holds answers `search`/`resolve`
+with a `not_supported` stub, and the wrapper never fans out to it.
 
 ### Flags
 
@@ -30,7 +32,6 @@ Global flags go before the subcommand: `--pretty`, `--compact`, `--compact-max-c
 | `input` | — | No command flags. |
 | `explain-input` | `--text TEXT` | Read inline SimC addon/profile text. |
 | `explain-input` | `--file PATH` | Read SimC text from a file. With neither flag, the text is read from stdin. |
-| `search` | `--limit N` | Accepted for cross-provider parity; the stub always returns zero results. |
 
 ```bash
 raidbots --pretty inspect-report https://www.raidbots.com/simbot/report/abc123 --no-raw
@@ -47,9 +48,11 @@ Every command emits the shared envelope (`ok`, `provider`, `command`, `kind`, `s
 |---|---|---|
 | `doctor` | `doctor` | `status`, `installed`, `language`, `auth`, `capabilities`, `url_templates`, `cache`, `notes` |
 | `inspect-report` | `report` | `report`, `scope`, `freshness`, `citations`, `raw` (unless `--no-raw`) |
+
+A quick-sim `report` carries `actor` and `metrics` for the first actor, plus `actor_count` and
+`other_actors` (each with `actor` and `metrics`) when the sim had more than one.
 | `input` | `simc_input` | `report_id`, `input`, `handoff`, `scope`, `freshness`, `citations` |
 | `explain-input` | `simc_input` | `scope`, `handoff` |
-| `search` / `resolve` | `search_results` / `resolve_match` | `results`, `count`, `not_supported`, `message`, `suggested_command` |
 
 `freshness.from_cache` marks a payload that may be up to `cache_ttl_seconds` old; `retrieved_at` is
 always when this CLI produced the response.
@@ -61,7 +64,8 @@ Failures write the error envelope to stderr. Codes follow
 
 | Code | Exit | When |
 |---|---|---|
-| `invalid_report` | 1 | The reference is not a report URL or ID, or the payload is not SimC json2. |
+| `invalid_report_ref` | 2 | The reference is not a report URL or ID. Checked before any network call. |
+| `invalid_report` | 1 | The report payload is not SimC json2. |
 | `invalid_cache_config` | 1 | `RAIDBOTS_CACHE_*` environment values are unusable. |
 | `invalid_query` | 2 | Bad `explain-input` flags, empty SimC text, or upstream HTTP 400. |
 | `not_found` | 4 | No readable report: upstream HTTP 404, HTTP 403 from the report storage bucket, or an HTTP 200 that carries the Raidbots web page instead of report content (wrong, expired, or private report). Raidbots takes no credentials, so 403 never means bad credentials. |

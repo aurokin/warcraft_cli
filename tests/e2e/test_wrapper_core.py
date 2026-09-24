@@ -1,7 +1,7 @@
 """End-to-end journeys for the ``warcraft`` wrapper's own commands.
 
 Covers the routing and composition surface the wrapper owns: ``doctor``, ``schema``, ``search``,
-``resolve``, expansion filtering, the guild composites, the global output flags, and provider
+``resolve``, expansion filtering, the guild snapshot, the global output flags, and provider
 passthrough. Provider-specific depth lives in the per-provider journey modules; what is asserted
 here is the wrapper contract in docs/foundation/WRAPPER_PROVIDER_CONTRACT.md.
 
@@ -284,19 +284,20 @@ def test_search_follow_up_command_returns_the_same_entity(item_search: Result) -
     assert (entity["type"], entity["id"], entity["name"]) == ("item", pins.ITEM_ID, pins.ITEM_NAME), follow_up.describe()
 
 
-def test_search_fails_with_the_network_error_when_no_provider_can_answer() -> None:
+@pytest.mark.parametrize("command", ["search", "resolve"])
+def test_fanout_fails_with_the_network_error_when_no_provider_can_answer(command: str) -> None:
     """A network outage must never read as a good answer: exit 5, with every outage named.
 
     Warcraft Logs answers free text locally without searching, so it is not an answer and not a
     failure; every provider that does search has to be in the failure list.
     """
     result = run(
-        "warcraft", "search", ITEM_QUERY, "--limit", "3",
+        "warcraft", command, ITEM_QUERY,
         env={**dead_proxy_env(), **no_cache_env()},
         expect=EXIT_NETWORK,
         error_code="network_error",
     )
-    assert result.payload["kind"] == "error"
+    assert (result.payload["kind"], result.payload["command"]) == ("error", command), result.describe()
     assert result.payload["data"] == {}, result.describe()
     failed = {row["provider"]: row for row in result.payload["error"]["details"]["failed_providers"]}
     assert set(failed) == RETAIL_FANOUT_PROVIDERS - REPORT_ONLY_PROVIDERS, result.describe()
@@ -358,6 +359,68 @@ def test_resolve_attributes_an_unresolved_answer_to_the_wrapper() -> None:
     # An unresolved resolve still hands the agent a next step rather than a dead end.
     assert data["fallback_search_commands"], result.describe()
     assert data["fallback_search_command"] == data["fallback_search_commands"][0]["command"]
+
+
+def test_resolve_answers_with_the_candidate_search_ranks_first(item_search: Result) -> None:
+    """A bare entity name: resolve and search name the same Wowhead item, whatever scale the wiki scores on.
+
+    Resolve once broke ties on raw provider scores, so the wiki article outranked the item search
+    leads with. The item is pinned, so the agreement is checked against a known answer.
+    """
+    result = run("warcraft", "resolve", ITEM_QUERY)
+    _assert_fanout_answered(result)
+    data = result.data
+    top = item_search.data["results"][0]
+    answer = data["match"] if data["resolved"] else data["best_unresolved_candidate"]
+    assert (answer["provider"], answer["id"]) == (top["provider"], top["id"]) == ("wowhead", pins.ITEM_ID), result.describe()
+    if data["resolved"]:
+        binary, *args = shlex.split(data["next_command"])
+        assert run(binary, *args).data["entity"]["name"] == pins.ITEM_NAME
+    else:
+        assert answer["unresolved_reason"] == "provider_did_not_resolve", result.describe()
+
+
+def test_resolve_answers_a_guide_query_with_a_guide_for_that_spec() -> None:
+    """``frost mage guide`` once resolved to Lorrgs spec metadata at high confidence.
+
+    The answer must be a guide site's guide and the row search ranks first, and the command it
+    hands over must open a page whose own title names the spec.
+    """
+    query = "frost mage guide"
+    searched = run("warcraft", "search", query)
+    _assert_fanout_answered(searched)
+    result = run("warcraft", "resolve", query)
+    _assert_fanout_answered(result)
+    data = result.data
+    assert data["resolved"] is True, result.describe()
+    assert data["selected_provider"] in {"wowhead", "method", "icy-veins"}, result.describe()
+    top = searched.data["results"][0]
+    assert (data["match"]["provider"], data["match"]["id"]) == (top["provider"], top["id"]), result.describe()
+
+    binary, *args = shlex.split(data["next_command"])
+    assert binary == data["selected_provider"], data["next_command"]
+    title = run(binary, *args).data["page"]["title"].lower()
+    assert "frost" in title and "mage" in title, title
+
+
+def test_resolve_hands_over_a_runnable_command_for_a_multi_word_guild(require) -> None:
+    """A guild name with a space reaches the handed-over command quoted, so that command runs.
+
+    The guild comes from Raider.IO's heroic leaderboard for a raid that is open now, which is also
+    the oracle for its name.
+    """
+    require("raiderio")
+    catalog = run("raiderio", "raids")
+    open_slugs = sorted(_open_raid_slugs(catalog.data["rows"], region=REGION))
+    assert open_slugs, catalog.describe()
+    board = run("raiderio", "leaderboard", "raids", "--raid", open_slugs[0], "--difficulty", "heroic", "--region", REGION)
+    guild = next((row["guild"] for row in board.data["rows"] if " " in row["guild"]["name"]), None)
+    assert guild is not None, f"no multi-word guild name on the first leaderboard page\n{board.describe()}"
+
+    result = run("warcraft", "resolve", f"guild {REGION} {guild['realm']} {guild['name']}")
+    assert result.data["selected_provider"] == "raiderio", result.describe()
+    binary, *args = shlex.split(result.data["next_command"])
+    assert run(binary, *args).data["guild"]["name"] == guild["name"], result.data["next_command"]
 
 
 def test_expansion_filter_narrows_search_and_explains_every_exclusion() -> None:
@@ -451,7 +514,13 @@ def _open_raid_slugs(raids: list[dict[str, Any]], *, region: str) -> set[str]:
     return {row["slug"] for row in raids if row["starts"][region] <= now <= row["ends"][region]}
 
 
-def test_guild_returns_one_identity_and_every_raid_raiderio_reports(require) -> None:
+def test_guild_returns_one_identity_and_the_ranks_of_every_open_raid(require) -> None:
+    """Every raid Raider.IO reports survives the wrap with its own ranks, and the open raids are all there.
+
+    Raider.IO reports progression and rankings as two lists; a wrong join hands a raid another raid's
+    world rank, which reads as a perfectly plausible number. The snapshot names no active tier, so a
+    guild whose ranks stop at last tier's raid would report a stale season as current.
+    """
     require("raiderio")
     result = run("warcraft", "guild", REGION, REALM, GUILD)
 
@@ -470,49 +539,20 @@ def test_guild_returns_one_identity_and_every_raid_raiderio_reports(require) -> 
     assert source["payload"]["provenance"]["citations"]
 
     summary = source["summary"]
-    assert summary["raid_count"] == len(summary["raids"]) >= 1
+    raids = summary["raids"]
+    assert summary["raid_count"] == len(raids) >= 1
     assert summary["roster"]["member_count"] >= 1
-    # Every raid Raider.IO reports progression for survives the wrap; none is invented.
-    _assert_rank_join(summary["raids"], source["payload"]["data"]["raiding"])
-
-
-def test_guild_ranks_joins_every_raid_to_its_own_rankings_row(require) -> None:
-    """Raider.IO reports progression and rankings as two lists; a wrong join hands a raid another
-    raid's world rank, which reads as a perfectly plausible number.
-    """
-    require("raiderio")
-    result = run("warcraft", "guild-ranks", REGION, REALM, GUILD)
-
-    assert result.payload["kind"] == "guild_ranks"
-    assert result.data["source"] == "raiderio"
-    raids = result.data["raids"]
-    assert raids and result.data["count"] == len(raids)
-
-    # provider_payload is Raider.IO's own envelope, kept whole for its citations.
-    raiding = result.data["provider_payload"]["data"]["raiding"]
-    assert raiding["progression"] and raiding["rankings"], result.describe()
-    _assert_rank_join(raids, raiding)
-
+    _assert_rank_join(raids, source["payload"]["data"]["raiding"])
     mythic = [raid for raid in raids if raid["mythic_bosses_killed"]]
     assert mythic, "at least one raid must have mythic progress"
     for raid in mythic:
-        ranks = raid["ranks"]["mythic"]
-        assert all(isinstance(ranks[scope], int) and ranks[scope] > 0 for scope in ("world", "region", "realm")), raid
-    assert result.data["citations"]["profile"].startswith("https://raider.io/guilds/")
+        assert all(isinstance(rank, int) and rank > 0 for rank in raid["ranks"]["mythic"].values()), raid
 
-
-def test_guild_ranks_cover_the_raids_that_are_currently_open(require) -> None:
-    """The snapshot names no active tier, so the currently open raids must all be in it: a guild
-    whose ranks stop at last tier's raid is reporting a stale season as if it were current.
-    """
-    require("raiderio")
     catalog = run("raiderio", "raids")
     open_slugs = _open_raid_slugs(catalog.data["rows"], region=REGION)
     assert open_slugs, catalog.describe()
-
-    result = run("warcraft", "guild-ranks", REGION, REALM, GUILD)
-    reported = {raid["raid_slug"] for raid in result.data["raids"]}
-    assert open_slugs <= reported, f"missing open raids {sorted(open_slugs - reported)}"
+    missing = open_slugs - {raid["raid_slug"] for raid in raids}
+    assert not missing, f"missing open raids {sorted(missing)}"
 
 
 def test_passthrough_returns_the_provider_payload_unchanged(require) -> None:
@@ -585,10 +625,6 @@ def test_global_output_flags_shape_the_wrapper_payload() -> None:
     human = run("warcraft", "--profile", "human", "doctor")
     assert human.stdout.startswith("{\n"), "the human profile must pretty-print"
 
-    compact = run("warcraft", "--compact", "--compact-max-chars", "40", "doctor")
-    paths = compact.data["paths"]
-    assert any(isinstance(value, str) and value.endswith("...") and len(value) == 40 for value in paths.values()), compact.describe()
-
     fields = run_raw("warcraft", "--fields", "data.wrapper.tiers", "--fields-strict", "doctor")
     assert fields.exit_code == 0, fields.describe()
     assert set(fields.payload["data"]["wrapper"]["tiers"]) == TIERS
@@ -605,12 +641,6 @@ def test_fields_reports_the_paths_it_could_not_project() -> None:
 def test_fields_strict_rejects_a_missing_path() -> None:
     result = run("warcraft", "--fields", "data.no_such_key", "--fields-strict", "schema", expect=EXIT_USAGE, error_code="missing_fields")
     assert result.payload["error"]["details"]["missing_fields"] == ["data.no_such_key"]
-
-
-def test_a_retired_output_profile_is_a_usage_error() -> None:
-    """The `debug` preset is gone; asking for it must fail loudly rather than fall back to `agent`."""
-    result = run("warcraft", "--profile", "debug", "schema", expect=EXIT_USAGE, error_code="invalid_argument")
-    assert "agent, human" in result.payload["error"]["message"]
 
 
 def test_a_missing_argument_is_a_usage_error() -> None:

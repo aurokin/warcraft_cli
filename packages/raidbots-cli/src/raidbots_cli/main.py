@@ -14,8 +14,6 @@ from raidbots_cli.provider import doctor as provider_doctor
 from raidbots_cli.provider import explain_input as provider_explain_input
 from raidbots_cli.provider import inspect_report as provider_inspect_report
 from raidbots_cli.provider import report_input as provider_report_input
-from raidbots_cli.provider import resolve as provider_resolve
-from raidbots_cli.provider import search as provider_search
 
 app = typer.Typer(add_completion=False, help="Raidbots report consumption and local SimC handoff CLI.")
 install_common_callback(app, provider=PROVIDER_NAME)
@@ -34,25 +32,6 @@ def _emit_surface(ctx: typer.Context, build: Callable[[], Envelope]) -> None:
 def doctor(ctx: typer.Context) -> None:
     """Report Raidbots capabilities, cache configuration, and the resolved report URL templates."""
     _emit_surface(ctx, provider_doctor)
-
-
-@app.command("search")
-def search(
-    ctx: typer.Context,
-    query: str = typer.Argument(..., metavar="QUERY", help="Free-text query (Raidbots has no searchable report index)."),
-    limit: int = typer.Option(10, "--limit", min=1, help="Maximum results to return; kept for cross-provider parity."),
-) -> None:
-    """Emit the not-supported search stub: Raidbots publishes no report index."""
-    _emit_surface(ctx, lambda: provider_search(query, limit=limit))
-
-
-@app.command("resolve")
-def resolve(
-    ctx: typer.Context,
-    target: str = typer.Argument(..., metavar="TARGET", help="Free-text target (use `inspect-report` with a known report)."),
-) -> None:
-    """Emit the not-supported resolve stub: only a known report URL or ID can be opened."""
-    _emit_surface(ctx, lambda: provider_resolve(target))
 
 
 @app.command("inspect-report")

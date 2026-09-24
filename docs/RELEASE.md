@@ -51,7 +51,7 @@ Internal refactors, doc-only edits, and test-only changes don't need a changelog
 
    Or simpler: copy the `## [X.Y.Z]` section into a scratch file and pass it via `--notes-file`. The GitHub release body should match the changelog section verbatim so the two never drift.
 
-   Pushing the tag triggers `.github/workflows/release.yml`, which builds the wheel and attaches it to the release. It works in either order: run before `gh release create` and the wheel lands on the release the workflow creates; run after and the wheel is added to the existing release.
+   Pushing the tag triggers `.github/workflows/release.yml`, which runs `make check` on the tagged commit and only then builds the wheel and attaches it to the release; a red check publishes nothing. It works in either order: run before `gh release create` and the wheel lands on the release the workflow creates; run after and the wheel is added to the existing release.
 
 6. **Verify the published wheel.**
 

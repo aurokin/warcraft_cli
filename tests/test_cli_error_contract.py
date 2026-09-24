@@ -53,6 +53,8 @@ def _install_httpx_failure(monkeypatch: pytest.MonkeyPatch, mode: str) -> None:
         if mode == "http_status_error":
             # 400 is not in warcraft_api.http.RETRYABLE_STATUS_CODES, so it surfaces immediately.
             return httpx.Response(400, request=request, content=b"{}")
+        if mode == "rate_limited":
+            return httpx.Response(429, request=request, content=b"{}")
         return httpx.Response(
             200, request=request, content=b"<html>not json", headers={"content-type": "application/json"}
         )
@@ -82,7 +84,7 @@ def test_every_error_contract_case_names_a_real_command() -> None:
 
 
 @pytest.mark.parametrize(("binary", "args", "env"), NETWORK_CASES, ids=CASE_IDS)
-@pytest.mark.parametrize("mode", ["connect_error", "http_status_error", "invalid_json"])
+@pytest.mark.parametrize("mode", ["connect_error", "http_status_error", "invalid_json", "rate_limited"])
 def test_transport_failure_emits_an_error_envelope(
     binary: str, args: list[str], env: dict[str, str], mode: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -106,6 +108,11 @@ def test_transport_failure_emits_an_error_envelope(
     assert result.exit_code == exit_code_for(code), f"{binary} {mode}: exit {result.exit_code} for code {code!r}"
     if mode == "connect_error":
         assert result.exit_code == EXIT_NETWORK, f"{binary}: an unreachable host must exit {EXIT_NETWORK}, got {payload}"
+    if mode == "rate_limited":
+        assert code == "rate_limited", f"{binary}: a 429 must be rate_limited, got {payload['error']}"
+    # `internal_error` is the contract's code for an exception nobody classified. A bad upstream
+    # status or body is a known failure mode, so passing it through unclassified is the bug.
+    assert code != "internal_error", f"{binary} {mode}: upstream failure left unclassified: {payload['error']}"
 
 
 def test_wrapper_search_fails_naming_every_provider_when_none_can_answer(monkeypatch: pytest.MonkeyPatch) -> None:

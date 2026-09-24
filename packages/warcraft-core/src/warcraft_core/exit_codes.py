@@ -31,5 +31,13 @@ EXIT_CODE_BY_ERROR_CODE: Final[dict[str, ExitCode]] = {
 }
 
 
+# The one HTTP status -> error code mapping every provider uses; any other status is ``upstream_error``.
+_ERROR_CODE_BY_HTTP_STATUS: Final[dict[int, str]] = {401: "auth_failed", 403: "auth_failed", 404: "not_found", 429: "rate_limited"}
+
+
+def error_code_for_http_status(status: int) -> str:
+    return _ERROR_CODE_BY_HTTP_STATUS.get(status, "upstream_error")
+
+
 def exit_code_for(code: str, default: int = EXIT_GENERIC) -> int:
     return EXIT_CODE_BY_ERROR_CODE.get(code, default)

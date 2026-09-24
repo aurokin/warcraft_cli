@@ -52,6 +52,10 @@ GUIDE_HEADING_RE = re.compile(r"""\[(?P<tag>h[1-6])\b[^\]]*\](?P<body>.*?)\[/\1\
 WOWHEAD_URL_TAG_RE = re.compile(
     r"""\[url(?:=(?P<url1>[^\]]+)|\s+guide=(?P<guide_id>\d+))\](?P<label>.*?)\[/url\]""", re.IGNORECASE | re.DOTALL)
 INLINE_TAG_RE = re.compile(r"""\[[^\]]+\]""")
+MARKUP_ENTITY_TOKEN_RE = re.compile(r"""\[(?P<etype>[a-z-]+)=(?P<eid>\d+)[^\]]*\]""")
+# `[build title="..." stats=...]`, `[key-talents="Hero" spells=1,2,3]`, `[build-items bis=1,2 alt=3]`
+MARKUP_BUILD_TAG_RE = re.compile(r"""\[(?P<tag>build|key-talents|build-items)(?P<attrs>[\s=][^\]]*)\]""")
+MARKUP_ATTR_RE = re.compile(r"""(?P<key>[a-z-]*)=(?:"(?P<quoted>[^"]*)"|(?P<bare>[^\s\]]+))""")
 HTML_TAG_RE = re.compile(r"""<[^>]+>""")
 JSON_LD_RE = re.compile(
     r"""<script\b[^>]*\btype=["']application/ld\+json["'][^>]*>(?P<body>.*?)</script>""",
@@ -249,7 +253,46 @@ def extract_guide_sections(markup_text: str) -> list[dict[str, Any]]:
     return sections
 
 
-def extract_guide_section_chunks(markup_text: str) -> list[dict[str, Any]]:
+def entity_names(records: list[dict[str, Any]]) -> dict[tuple[str, int], str]:
+    """Map ``(entity_type, id)`` to the name each linked-entity record carries, for ``guide_markup_text``."""
+    return {
+        (record["entity_type"], record["id"]): record["name"]
+        for record in records
+        if isinstance(record.get("name"), str) and record["name"]
+    }
+
+
+def _render_build_tag(match: re.Match[str], names: dict[tuple[str, int], str]) -> str:
+    """Spell out a build block's title, stat priority, and the talents and items it lists by id."""
+    attrs = {row["key"]: row["quoted"] or row["bare"] or "" for row in MARKUP_ATTR_RE.finditer(match.group("attrs"))}
+    id_type = "spell" if match.group("tag") == "key-talents" else "item"
+    listed = [
+        names[(id_type, int(entity_id))]
+        for key in ("spells", "bis", "alt", "list")
+        for entity_id in re.findall(r"(?:^|,)(\d+)", attrs.get(key, ""))
+        if (id_type, int(entity_id)) in names
+    ]
+    parts = [attrs.get("title", ""), attrs.get("", ""), f"stats {attrs['stats']}" if "stats" in attrs else "", *listed]
+    return " " + ", ".join(part for part in parts if part) + " "
+
+
+def guide_markup_text(markup_text: str, names: dict[tuple[str, int], str]) -> str:
+    """Plain text of guide markup that keeps what its tags name, unlike ``clean_markup_text``.
+
+    ``[spell=184367]`` becomes the entity's name, and build blocks keep their title, stat priority,
+    key talents, and listed items. A token whose entity has no known name is dropped.
+    """
+    text = MARKUP_BUILD_TAG_RE.sub(lambda match: _render_build_tag(match, names), markup_text)
+    text = MARKUP_ENTITY_TOKEN_RE.sub(
+        lambda match: f" {names.get((match.group('etype'), int(match.group('eid'))), '')} ", text
+    )
+    return clean_markup_text(text)
+
+
+def extract_guide_section_chunks(
+    markup_text: str, names: dict[tuple[str, int], str] | None = None
+) -> list[dict[str, Any]]:
+    """Split guide markup at its headings; ``names`` (from ``entity_names``) fills in inline entity tokens."""
     matches = list(GUIDE_HEADING_RE.finditer(markup_text))
     chunks: list[dict[str, Any]] = []
     for index, match in enumerate(matches):
@@ -264,7 +307,7 @@ def extract_guide_section_chunks(markup_text: str) -> list[dict[str, Any]]:
                 "level": int(tag[1]),
                 "title": title,
                 "content_raw": raw_content,
-                "content_text": clean_markup_text(raw_content),
+                "content_text": guide_markup_text(raw_content, names or {}),
             }
         )
     return chunks

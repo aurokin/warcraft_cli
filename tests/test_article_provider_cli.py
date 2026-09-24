@@ -118,8 +118,6 @@ _OFFLINE_ARGV: dict[str, dict[str, list[str]]] = {
     },
     "raidbots": {
         "doctor": ["doctor"],
-        "search": ["search", "frost mage"],
-        "resolve": ["resolve", "frost mage"],
         "inspect-report": ["inspect-report", "abc123XYZ"],
         "input": ["input", "abc123XYZ"],
         "explain-input": ["explain-input", "--text", _SIMC_INPUT],

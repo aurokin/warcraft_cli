@@ -351,10 +351,12 @@ def _collect_kind_matches(
     for row in rows:
         if predicate is not None and not predicate(row):
             continue
-        score = _query_score(query, haystack_fn(row))
+        # A match in a title counts twice, so the section named for the question outranks every
+        # section that merely mentions it.
+        score = _query_score(query, haystack_fn(row)) + _query_score(query, str(row.get("title") or ""))
         if score <= 0:
             continue
-        matches.append({"kind": kind, "score": score, **row})
+        matches.append({**row, "kind": kind, "score": score})
     return matches
 
 
@@ -724,6 +726,15 @@ def _build_build_reference_rows(
 def compare_article_bundles(bundle_inputs: list[tuple[Path, dict[str, Any]]]) -> dict[str, Any]:
     if len(bundle_inputs) < 2:
         raise ValueError("compare_article_bundles requires at least two bundles")
+    # Membership is keyed by path, so a bundle given twice would read as disagreeing with itself.
+    resolved = [path.resolve() for path, _bundle in bundle_inputs]
+    duplicates = sorted({str(path) for path in resolved if resolved.count(path) > 1})
+    if duplicates:
+        raise ArticleBundleError(
+            "invalid_argument",
+            f"The same bundle was given more than once: {', '.join(duplicates)}",
+            details={"duplicate_bundles": duplicates},
+        )
 
     bundle_descriptors = [_bundle_descriptor(bundle, path=path) for path, bundle in bundle_inputs]
     bundle_paths = [str(path) for path, _bundle in bundle_inputs]

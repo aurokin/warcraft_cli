@@ -21,9 +21,9 @@ It is not:
 Composition is a real wrapper responsibility, not an accident: `actor-profile`,
 `cooldown-packet`, `guide-compare`, `guide-compare-query`, `guide-builds-simc`, `talent-packet`,
 and `talent-describe` all merge or hand off between two or more providers. No provider owns those
-workflows, so the wrapper does. `guild` and `guild-ranks` are identity-normalizing wrappers over
-the single guild provider (`raiderio`) and keep the same source/provenance shape so a second source
-can be added without changing the contract. The line the wrapper must not cross is *parsing or
+workflows, so the wrapper does. `guild` is an identity-normalizing wrapper over the single guild
+provider (`raiderio`) and keeps the source/provenance shape so a second source can be added without
+changing the contract. The line the wrapper must not cross is *parsing or
 re-modelling a provider's source data*: composite commands consume provider payloads, preserve each
 source's provenance, and add their own reconciliation layer explicitly.
 
@@ -38,9 +38,10 @@ Every service provider must expose these wrapper-facing capabilities:
 
 A capability that is not implemented yet must still exist and return a structured `coming_soon`
 stub. A capability the provider will never have — Raidbots publishes no report index, so it has no
-discovery surface — is declared `not_supported` in the registry and still answers with a structured
-stub instead of a crash. Either way the wrapper contract stays stable and the registry, not a
-special case in wrapper code, says which it is.
+discovery surface — is declared `not_supported` in the registry, and its in-process `PROVIDER`
+surface still answers with a structured stub instead of a crash; the provider binary does not need
+the command (`raidbots` has no `search` or `resolve`). Either way the wrapper contract stays stable
+and the registry, not a special case in wrapper code, says which it is.
 
 ## Capability Expectations
 
@@ -126,8 +127,10 @@ Fanout failure rules:
   explicit-report-only provider (Warcraft Logs) answers free text with a locally built hint and no
   rows, so it is `ok` but not `answered`, and `answered_provider_count` does not count it
 - when no provider answered and at least one failed, the wrapper emits an error envelope whose
-  `error.code` is the failed providers' shared code (or `upstream_error` when they disagree), so a
-  total outage exits 5 instead of returning an ok:true empty page; the rows are under
+  `error.code` and exit code are the failed providers' shared ones, so a total outage exits 5
+  instead of returning an ok:true empty page. When they disagree the code is `upstream_error`
+  (exit 5) if every provider failed upstream, otherwise `providers_failed` (exit 1): a crash or a bad
+  argument must not read as "retry later". The rows, each with the provider's `exit_code`, are under
   `error.details.failed_providers`
 
 Composite failure rules:
@@ -167,7 +170,6 @@ The wrapper should know for each provider:
 - provider name
 - command name
 - support tier
-- implementation language
 - whether it is installed
 - whether auth is configured
 - whether auth is required for the provider at all
@@ -364,17 +366,24 @@ Ranking policy location:
 Providers whose wrapper `resolve` surface is stubbed or otherwise not ready should be excluded from wrapper fanout and surfaced in exclusion metadata instead of being queried like live routing candidates.
 
 Resolve selection rules:
-- do not pick the first provider that reports `resolved`
-- prefer higher provider-reported confidence first
-- use the tunable wrapper ranking layer, then the provider-reported match score, as tie-breakers
+- `warcraft resolve` and `warcraft search` agree: each provider's match is ranked as search ranks that
+  provider's top row (normalized against the provider's own candidates, anchor and off-intent tiers,
+  intent boosts), and the top-ranked match is the only candidate for the answer
+- provider-reported `resolved` and confidence never lift a match over a better-ranked one; they only
+  break an exact tie on the wrapper score, ahead of the incomparable raw provider score
+- the top-ranked match is the answer only when its own provider resolved it and the query's intents
+  do not rank that provider's family down (`wrapper_ranking.intent_family_fit` is not negative):
+  a guide query is never answered by Lorrgs spec metadata, a guild query never by a wiki article
+- the wrapper never passes its own `--limit` to a provider's resolve: providers judge confidence
+  against their rivals, and a small limit would hide them
 - preserve the chosen provider's `match`, `next_command`, and confidence instead of flattening them
-- when nothing resolved, surface the providers' own `fallback_search_command` and the best
-  provider candidate as `best_unresolved_candidate` (flagged `resolved: false`) so the caller
-  always has a next step
+- when the top-ranked match is not the answer, surface it as `best_unresolved_candidate` (flagged
+  `resolved: false`, with `unresolved_reason`) together with the providers' own
+  `fallback_search_command`s, so the caller always has a next step
 
 Debuggability rules:
 - `warcraft search --ranking-debug` should expose compact ranking summaries for the top wrapper candidates
-- `warcraft resolve --ranking-debug` should expose the ranked resolved candidates the wrapper considered
+- `warcraft resolve --ranking-debug` should expose the first `--limit` providers' matches in ranking order, each with its provider's `resolved` flag
 - `warcraft search --brief` and `warcraft resolve --brief` should omit bulky provider payloads while keeping the wrapper decision surface intact (`--compact` is the global string-truncation flag and nothing else)
 
 ## Doctor Rules

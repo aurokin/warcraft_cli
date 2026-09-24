@@ -15,6 +15,7 @@ which is what the retired ``tests/test_method_live.py`` pinned by slug.
 from __future__ import annotations
 
 import json
+import shlex
 from functools import cache
 from pathlib import Path
 from typing import Any
@@ -178,6 +179,15 @@ def test_search_outside_the_supported_families_returns_a_scope_hint(require) -> 
     assert result.data["scope_hint"]["code"] == "tier_list"
 
 
+def test_search_reads_mythic_plus_as_the_mythic_dungeon_pages(require) -> None:
+    """Method never writes "Mythic+": its M+ pages say "mythic dungeon". ``mythic+`` once found nothing."""
+    require(PROVIDER)
+    result = run(BINARY, "search", "mythic+", "--limit", "5")
+    rows = result.data["results"]
+    assert rows, result.describe()
+    assert "mythic-dungeon" in rows[0]["id"], result.describe()
+
+
 def test_resolve_hands_over_a_next_command_that_returns_the_same_guide(require) -> None:
     require(PROVIDER)
     result = run(BINARY, "resolve", pins.GUIDE_QUERY, "--limit", "5")
@@ -190,7 +200,7 @@ def test_resolve_hands_over_a_next_command_that_returns_the_same_guide(require) 
     # The whole point of next_command is that an agent can run it verbatim.
     next_command = result.data["next_command"]
     assert next_command == f"{BINARY} guide {guide_slug()}"
-    binary, *args = next_command.split()
+    binary, *args = shlex.split(next_command)
     assert binary == BINARY
     assert run(BINARY, *args).data["guide"]["slug"] == guide_slug()
 

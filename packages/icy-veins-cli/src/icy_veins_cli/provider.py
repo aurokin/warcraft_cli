@@ -6,6 +6,8 @@ raises ``typer.Exit``, so the ``warcraft`` wrapper can call ``PROVIDER`` in-proc
 
 from __future__ import annotations
 
+import re
+import shlex
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -22,6 +24,7 @@ from warcraft_content.article_discovery import merge_article_build_references, m
 from warcraft_content.article_provider_cli import build_article_resolve_response, build_article_search_response
 from warcraft_content.guide_analysis import extract_guide_analysis_surfaces, merge_guide_analysis_surfaces
 from warcraft_core.envelope import Envelope, success_envelope
+from warcraft_core.exit_codes import error_code_for_http_status
 from warcraft_core.provider import ProviderError, ProviderSurface
 
 from icy_veins_cli.client import IcyVeinsClient, guide_ref_parts, load_icy_veins_cache_settings_from_env
@@ -40,11 +43,10 @@ def transport_errors(*, missing_message: str | None = None) -> Iterator[None]:
     except httpx.HTTPStatusError as exc:
         status = exc.response.status_code
         details = {"status_code": status, "url": str(exc.request.url)}
-        if status in (401, 403):
-            raise ProviderError("auth_failed", str(exc), details=details) from exc
-        if status == 404:
-            raise ProviderError("not_found", missing_message or str(exc), details=details) from exc
-        raise ProviderError("upstream_error", f"Icy Veins request failed with status {status}", details=details) from exc
+        code = error_code_for_http_status(status)
+        if code == "not_found":
+            raise ProviderError(code, missing_message or str(exc), details=details) from exc
+        raise ProviderError(code, f"Icy Veins request failed with status {status}", details=details) from exc
     except httpx.TimeoutException as exc:
         raise ProviderError("timeout", f"{type(exc).__name__}: {exc}") from exc
     except httpx.RequestError as exc:
@@ -94,6 +96,21 @@ def _supported_guide_ref(guide_ref: str) -> tuple[str, str]:
     return slug, content_family
 
 
+def _redacted_redis_url(url: str | None) -> str | None:
+    """The Redis URL without its credentials or query string, which can carry a password.
+
+    Doctor output is what agents read first and keep in their context and logs.
+    """
+    if url is None:
+        return None
+    return re.sub(r"(?<=//)[^/@]*@", "***@", url.split("?", 1)[0])
+
+
+def _require_query(query: str) -> None:
+    if not query.strip():
+        raise ProviderError("invalid_query", "Query cannot be empty.")
+
+
 def doctor(**options: Any) -> Envelope:
     """Report installation state, capabilities, and the resolved HTTP cache configuration."""
     del options
@@ -120,7 +137,7 @@ def doctor(**options: Any) -> Envelope:
                 "enabled": settings.enabled,
                 "backend": settings.backend,
                 "cache_dir": str(settings.cache_dir),
-                "redis_url": settings.redis_url,
+                "redis_url": _redacted_redis_url(settings.redis_url),
                 "prefix": settings.prefix,
                 "ttls": {"sitemap": sitemap_ttl, "page_html": page_ttl},
             },
@@ -131,6 +148,7 @@ def doctor(**options: Any) -> Envelope:
 def search(query: str, *, limit: int = 5, **options: Any) -> Envelope:
     """Rank Icy Veins WoW guides from the sitemap against a free-text query."""
     del options
+    _require_query(query)
     with _client() as client, transport_errors():
         normalized_query, results, total_count, scope_hint = search_results(client, query, limit=limit)
     data = build_article_search_response(
@@ -146,6 +164,7 @@ def search(query: str, *, limit: int = 5, **options: Any) -> Envelope:
 def resolve(target: str, *, limit: int = 5, **options: Any) -> Envelope:
     """Resolve a free-text query to the single best Icy Veins guide, with the candidate list attached."""
     del options
+    _require_query(target)
     with _client() as client, transport_errors():
         normalized_query, results, total_count, scope_hint = search_results(client, target, limit=limit)
     data = resolve_payload(
@@ -192,7 +211,7 @@ def _guide_summary(page_payload: dict[str, Any]) -> dict[str, Any]:
     navigation = list(page_payload["navigation"])
     page_toc = list(page_payload["page_toc"])
     article = dict(page_payload["article"])
-    fetch_more_command = f"icy-veins guide-full {guide['slug']}"
+    fetch_more_command = shlex.join(["icy-veins", "guide-full", guide["slug"]])
     return {
         "guide": guide,
         "page": dict(page_payload["page"]),
@@ -215,11 +234,21 @@ def _guide_summary(page_payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _fetch_requested_page(client: IcyVeinsClient, guide_ref: str) -> dict[str, Any]:
+    """Fetch and parse the page the caller asked for; the ref is already validated, so a failure here is the page's."""
+    with transport_errors(missing_message=f"Guide not found: {guide_ref}"):
+        try:
+            page_payload = client.fetch_guide_page(guide_ref)
+        except ValueError as exc:
+            raise ProviderError("parse_failed", f"Could not parse the Icy Veins guide page for {guide_ref}: {exc}") from exc
+    return _require_article_content(page_payload)
+
+
 def guide(guide_ref: str) -> Envelope:
     """Fetch and summarize a single Icy Veins guide page."""
     _supported_guide_ref(guide_ref)
-    with _client() as client, transport_errors(missing_message=f"Guide not found: {guide_ref}"):
-        page_payload = _require_article_content(client.fetch_guide_page(guide_ref))
+    with _client() as client:
+        page_payload = _fetch_requested_page(client, guide_ref)
     page_payload["analysis_surfaces"] = extract_guide_analysis_surfaces(page_payload, provider=PROVIDER_NAME)
     summary = _guide_summary(page_payload)
     return _envelope("guide", "guide", summary, query=guide_ref, provenance=summary["citations"])
@@ -288,8 +317,7 @@ def _fetch_family_pages(
 
 
 def _guide_bundle(client: IcyVeinsClient, guide_ref: str) -> dict[str, Any]:
-    with transport_errors(missing_message=f"Guide not found: {guide_ref}"):
-        initial = _require_article_content(client.fetch_guide_page(guide_ref))
+    initial = _fetch_requested_page(client, guide_ref)
     nav_items = _traversal_navigation(initial)
     pages, failed_pages = _fetch_family_pages(client, initial, nav_items)
     guide_row = dict(initial["guide"])

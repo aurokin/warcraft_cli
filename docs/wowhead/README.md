@@ -4,9 +4,7 @@
 needs no credentials.
 
 Companion docs:
-- [ACCESS_METHODS.md](ACCESS_METHODS.md)
 - [CONTRACTS.md](CONTRACTS.md)
-- [EXPANSION_RESEARCH.md](EXPANSION_RESEARCH.md)
 - [NORMALIZATION.md](NORMALIZATION.md)
 
 ## Output Contract
@@ -66,6 +64,16 @@ needs a query word in the row's own name, or a name that starts with or contains
 those get no bonus. A name that merely contains the query scores below one that starts
 with it. Each row's `follow_up.command` is the command to run next.
 
+Follow-up words in a query ("comments", "links", "full", "related", ...) pick the follow-up command
+(`comments`, `entity-page`) and are left out of the text sent to Wowhead, which `search_query`
+reports. A query that is itself a name made of such words ("Soul Link", "Body and Soul") is sent
+whole first, and kept when a row carries exactly that name.
+
+`search` given a Wowhead entity URL (`https://www.wowhead.com/classic/item=19019/...`) answers with
+that entity alone: one row with its type, id, URL and `follow_up`, `match_reasons: ["url_entity"]`,
+`name: null` (nothing is fetched), and `search_query: null`. Wowhead's suggestions endpoint matches
+names, so it has nothing to say about a URL.
+
 A guide updated far (180+ days) behind the freshest guide in the same response carries
 `stale_guide` in `ranking.match_reasons` and sorts after every current row that matches the query
 at least as closely (exact name, then a name starting with the query, then any other match),
@@ -87,7 +95,9 @@ Failures print an error envelope on stderr and exit with the shared code:
 | 2 | usage error (bad flag value, rejected filter, invalid date range) |
 | 3 | authentication failure |
 | 4 | upstream 404 |
-| 5 | transport failure, timeout, or other upstream HTTP error |
+| 5 | transport failure (`network_error`), `timeout`, HTTP 429 (`rate_limited`), or other upstream HTTP error (`upstream_error`) |
+
+Every upstream HTTP failure carries `error.details.status_code` and `error.details.url`.
 
 Full contract: [docs/foundation/ERROR_CONTRACT.md](../foundation/ERROR_CONTRACT.md).
 
@@ -98,7 +108,7 @@ Global flags go before the subcommand.
 | Flag | Effect |
 |------|--------|
 | `--pretty` | pretty-print JSON instead of the compact default |
-| `--compact` | truncate long strings to shrink the payload |
+| `--compact` | truncate long prose strings (URLs, talent strings and `*command` values stay whole; cut paths are listed in `provenance.compacted_paths`) |
 | `--compact-max-chars N` | truncation threshold for `--compact` (default 280) |
 | `--fields a.b,c` | project only the named dot-paths |
 | `--fields-strict` | fail with exit 2 when a requested `--fields` path is missing |
@@ -154,7 +164,12 @@ Guides:
 | `guide-bundle-query QUERY` | rank matches across every local bundle |
 | `guide-bundle-inspect REF` | missing files, stale data, and hydration gaps for one bundle |
 | `guide-bundle-index-rebuild` | rebuild the corpus index from bundles on disk |
-| `guide-bundle-refresh REF` | re-export stale bundles using their recorded export options |
+| `guide-bundle-refresh REF` | re-export stale bundles using their recorded export options and expansion (`--expansion` overrides it) |
+
+Section `content_text` (and `body.summary`) is the plain text of the section markup with Wowhead's
+inline tokens spelled out: `[spell=184367]` becomes the name the page's own entity data gives it
+("Rampage"), and a `[build]` block keeps its title, stat priority, key talents, and listed items.
+A token whose entity the page does not name is dropped; `content_raw` keeps the markup as served.
 
 Timeline surfaces:
 
@@ -178,15 +193,16 @@ Tool-state decoders:
 `dressing-room` and `profiler` are state inspectors: they normalize and cite the ref, they do not
 decode the opaque client-side payload behind it. `profiler` fetches the list page for the ref and
 fails with `not_found` (exit 4) when Wowhead answers with its "This list doesn't exist or has been
-removed" page. `page.canonical_url` is the fetched page's own canonical link; when the page names
-none it is null and `page.note` says so.
+removed" page. For both, `page.canonical_url` is the fetched page's own canonical link; when the
+page names none it is null and `page.note` says so. A share URL under an expansion path
+(`/classic/dressing-room#...`) is read from that expansion unless `--expansion` is passed.
 
 Cache maintenance:
 
 | Command | Purpose |
 |---------|---------|
 | `cache-inspect` | backend configuration and per-namespace entry counts |
-| `cache-repair` | delete unreadable or expired file-cache entries (`--apply` to write) |
+| `cache-repair` | report, or with `--apply` delete, legacy entries at the file-cache root from before cache namespacing; unreadable entries elsewhere are only counted (use `cache-clear`) |
 | `cache-clear` | clear cached responses for chosen namespaces or all of them |
 
 Run `wowhead <command> --help` for the full flag list of any command.
@@ -230,5 +246,3 @@ The HTTP cache is configured from the environment:
 ## Source Links
 
 - [Usage](../USAGE.md)
-- [Access Methods](ACCESS_METHODS.md)
-- [Expansion Research](EXPANSION_RESEARCH.md)

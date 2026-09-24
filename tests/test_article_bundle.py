@@ -2,8 +2,11 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
+import pytest
 from warcraft_content.article_bundle import (
+    ArticleBundleError,
     compare_article_bundles,
     default_article_export_dir,
     load_article_bundle,
@@ -501,3 +504,43 @@ def test_compare_article_bundles_preserves_additive_surface_and_build_evidence(t
     assert build_row["build_code"] == "ABC123"
     assert build_row["bundle_count"] == 2
     assert {row["provider"] for row in build_row["bundles"]} == {"method", "wowhead"}
+
+
+def _query_bundle(**rows: list[dict[str, Any]]) -> dict[str, Any]:
+    empty: dict[str, list[dict[str, Any]]] = {
+        kind: [] for kind in ("sections", "navigation", "linked_entities", "build_references", "analysis_surfaces")
+    }
+    return {**empty, **rows}
+
+
+def test_query_article_bundle_ranks_the_section_named_for_the_question_first() -> None:
+    """Sections that merely mention the phrase used to tie with it and bury it below the default limit."""
+    mentions = [{"title": f"Changelog {n}", "text": "Updated the stat priority."} for n in range(5)]
+    answer = {"title": "Stat Priority", "text": "Haste > Critical Strike > Versatility > Mastery"}
+    bundle = _query_bundle(sections=[*mentions, answer])
+
+    result = query_article_bundle(bundle, query="stat priority", limit=5, kinds={"sections"}, section_title_filter=None)
+
+    assert result["top"][0]["title"] == "Stat Priority"
+
+
+def test_query_article_bundle_match_labels_win_over_the_rows_own_keys() -> None:
+    surface = {"kind": "guide_analysis_surface", "score": 999, "surface_tags": ["rotation"], "section_title": "Rotation"}
+    bundle = _query_bundle(analysis_surfaces=[surface])
+
+    result = query_article_bundle(bundle, query="rotation", limit=5, kinds={"analysis_surfaces"}, section_title_filter=None)
+
+    assert [(row["kind"], row["score"]) for row in result["top"]] == [("analysis_surface", 18)]
+
+
+def test_compare_article_bundles_rejects_the_same_bundle_twice(tmp_path: Path) -> None:
+    """Given twice, a bundle's own sections came out as partial, as if it disagreed with itself."""
+    export_dir = tmp_path / "method-guide"
+    write_article_bundle(_method_like_payload(), provider="method", export_dir=export_dir)
+    bundle = load_article_bundle(export_dir)
+
+    with pytest.raises(ArticleBundleError) as exc_info:
+        compare_article_bundles([(export_dir, bundle), (tmp_path / "." / "method-guide", bundle)])
+
+    assert exc_info.value.code == "invalid_argument"
+    assert exc_info.value.details == {"duplicate_bundles": [str(export_dir.resolve())]}

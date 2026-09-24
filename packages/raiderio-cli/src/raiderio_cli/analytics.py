@@ -323,6 +323,19 @@ def _roster_contains_any(
     return any(value in values for value in expected)
 
 
+def _class_spec_label(entry: dict[str, Any]) -> str:
+    """``priest-holy``: spec slugs repeat across classes (holy, frost, protection, restoration)."""
+    spec = _normalized_roster_label(entry, "spec_slug", "spec_name")
+    class_label = _normalized_roster_label(entry, "class_slug", "class_name")
+    return f"{class_label}-{spec}" if spec and class_label else spec
+
+
+def _roster_spec_values(roster: list[dict[str, Any]]) -> set[str]:
+    """Bare and class-qualified spec labels, so ``--contains-spec`` takes ``holy`` or ``priest-holy``."""
+    bare = _roster_field_values(roster, primary_key="spec_slug", fallback_key="spec_name", slugify_spaces=True)
+    return bare | {label for label in map(_class_spec_label, roster) if label}
+
+
 def run_matches_filters(
     run: dict[str, Any],
     *,
@@ -344,7 +357,7 @@ def run_matches_filters(
         return False
     if not _roster_contains_any(roster, contains_class, primary_key="class_slug", fallback_key="class_name", slugify_spaces=True):
         return False
-    if not _roster_contains_any(roster, contains_spec, primary_key="spec_slug", fallback_key="spec_name", slugify_spaces=True):
+    if contains_spec and not _roster_spec_values(roster) & set(contains_spec):
         return False
     return _roster_contains_any(roster, player_region, primary_key="region")
 
@@ -423,7 +436,7 @@ def _composition_key(run: dict[str, Any], *, mode: str) -> str:
             continue
         role = str(entry.get("role") or "unknown")
         if mode == "spec":
-            label = str(entry.get("spec_slug") or entry.get("spec_name") or "unknown")
+            label = _class_spec_label(entry) or "unknown"
         else:
             label = str(entry.get("class_slug") or entry.get("class_name") or "unknown")
         parts.append(f"{role}:{label}")
@@ -497,7 +510,7 @@ def _update_player_snapshot(snapshot: dict[str, Any], entry: dict[str, Any], run
     snapshot["appearance_count"] += 1
     _append_unique(snapshot, "roles", str(entry.get("role") or "").strip().lower())
     _append_unique(snapshot, "class_slugs", _normalized_roster_label(entry, "class_slug", "class_name"))
-    _append_unique(snapshot, "spec_slugs", _normalized_roster_label(entry, "spec_slug", "spec_name"))
+    _append_unique(snapshot, "spec_slugs", _class_spec_label(entry))
 
     mythic_level = run.get("mythic_level")
     if isinstance(mythic_level, int):
@@ -649,7 +662,7 @@ def _roster_metric_value(entry: dict[str, Any], metric: str) -> str:
     if metric == "class":
         return str(entry.get("class_slug") or entry.get("class_name") or "unknown")
     if metric == "spec":
-        return str(entry.get("spec_slug") or entry.get("spec_name") or "unknown")
+        return _class_spec_label(entry) or "unknown"
     return str(entry.get("region") or "unknown")
 
 

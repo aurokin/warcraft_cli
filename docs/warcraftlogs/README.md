@@ -145,7 +145,8 @@ Malformed upstream or local data exits `1`: `missing_talent_tree`, `invalid_resp
 `missing_code_verifier`.
 
 Partial GraphQL failures are surfaced, not swallowed: typed commands keep `data.graphql_warnings`
-and add a note instead of pretending the result is complete. `graphql` leaves `data` exactly as the
+(every partial error from every request the command made) and add a note instead of pretending the
+result is complete. Partial responses are never cached. `graphql` leaves `data` exactly as the
 API returned it and puts the partial errors in `provenance.graphql_warnings`.
 
 ## Sampled analytics and trust
@@ -181,7 +182,9 @@ overflow that page are counted in `sample.kills_with_truncated_events_count`, an
 `usage.total_casts_is_lower_bound` then marks every derived total as a floor.
 
 `--spec-name` filters sampled kills by participant spec before aggregation; it does not turn the
-query into a spec leaderboard. `spec-kill-samples` requires `--spec-name` and returns an explicit
+query into a spec leaderboard. It takes the class too (`'Frost Mage'`), because a bare spec name
+matches every class with that spec (see `SCOPING.md`); `boss-spec-usage` rows are keyed by class and
+spec for the same reason. `spec-kill-samples` requires `--spec-name` and returns an explicit
 participant cohort. For leaderboard questions use `encounter-rankings`.
 
 ## Talent transport

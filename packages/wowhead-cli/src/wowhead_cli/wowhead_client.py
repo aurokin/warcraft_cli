@@ -32,7 +32,8 @@ from wowhead_cli.expansion_profiles import (
 )
 
 WOWHEAD_BASE_URL = "https://www.wowhead.com"
-ENTITY_RESPONSE_CACHE_VERSION = 1
+# Bump when the cached entity payload changes shape, so older entries stop being served.
+ENTITY_RESPONSE_CACHE_VERSION = 2
 
 
 class WowheadClient:

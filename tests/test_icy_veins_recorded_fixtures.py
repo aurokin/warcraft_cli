@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 from article_provider_testkit import load_fixture_text
+from bs4 import BeautifulSoup
 from icy_veins_cli.page_parser import classify_guide_slug, parse_guide_page
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "icy_veins"
@@ -143,6 +144,17 @@ def test_astro_class_hub_fixture_keeps_the_class_switcher_as_family_navigation()
     assert [row["section_slug"] for row in navigation[:2]] == ["death-knight-guide", "demon-hunter-guide"]
     assert len(navigation) == 13
     assert [row["section_slug"] for row in navigation if row["active"]] == ["monk-guide"]
+
+
+def test_astro_spec_guide_never_borrows_the_class_dropdown_as_its_family() -> None:
+    """Spec pages carry the class dropdown too; if their switcher drifts, guide-full must not crawl every class hub."""
+    soup = BeautifulSoup(load_fixture_text(FIXTURE_DIR, "astro_spec_guide.html"), "html.parser")
+    for switcher in soup.select(".table-of-contents"):
+        switcher.decompose()
+
+    payload = parse_guide_page(str(soup), source_url="https://www.icy-veins.com/wow/mistweaver-monk-pve-healing-guide")
+
+    assert payload["navigation"] == []
 
 
 def test_astro_layout_fixture_drops_page_furniture_from_the_article() -> None:

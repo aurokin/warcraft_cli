@@ -49,14 +49,24 @@ class CrossReportScope:
     guild_name: str | None = None
 
 
-def player_spec_matches(actor: dict[str, Any], spec_name: str) -> bool:
+def _spec_spellings(actor_class: str, spec: str) -> set[str]:
+    """How a --spec-name may name this spec: bare ("Frost") or with its class in either order ("Frost Mage")."""
+    spec_text = normalize_match_text(spec)
+    if not spec_text:
+        return set()
+    class_text = normalize_match_text(actor_class)
+    return {spec_text, spec_text + class_text, class_text + spec_text}
+
+
+def matching_specs(actor: dict[str, Any], spec_name: str) -> list[dict[str, Any]]:
+    """The actor's spec rows that ``spec_name`` names; the actor's ``type`` is its class."""
     wanted = normalize_match_text(spec_name)
-    for spec in list_at(actor, "specs"):
-        if not isinstance(spec, dict):
-            continue
-        if normalize_match_text(str(spec.get("spec") or "")) == wanted:
-            return True
-    return False
+    actor_class = str(actor.get("type") or "")
+    return [
+        spec
+        for spec in list_at(actor, "specs")
+        if isinstance(spec, dict) and wanted in _spec_spellings(actor_class, str(spec.get("spec") or ""))
+    ]
 
 
 def _player_details_roles(report: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
@@ -73,21 +83,11 @@ def matching_spec_players(report: dict[str, Any], *, spec_name: str) -> list[dic
     matches: list[dict[str, Any]] = []
     for role, rows in _player_details_roles(report).items():
         for row in rows:
-            if not player_spec_matches(row, spec_name):
-                continue
-            matches.append(
-                {
-                    "name": row.get("name"),
-                    "id": row.get("id"),
-                    "role": role,
-                    "type": row.get("type"),
-                    "matching_specs": [
-                        spec
-                        for spec in (list_at(row, "specs"))
-                        if normalize_match_text(str(spec.get("spec") or "")) == normalize_match_text(spec_name)
-                    ],
-                }
-            )
+            specs = matching_specs(row, spec_name)
+            if specs:
+                matches.append(
+                    {"name": row.get("name"), "id": row.get("id"), "role": role, "type": row.get("type"), "matching_specs": specs}
+                )
     return matches
 
 
@@ -559,19 +559,22 @@ def collect_boss_kill_rows(client: WarcraftLogsClient, scope: CrossReportScope) 
         kill_time_min=scope.kill_time_min,
         kill_time_max=scope.kill_time_max,
     )
-    return {
-        "rows": scanned.rows,
-        "sample": {
-            "source_report_count": len(report_rows),
-            "finished_report_count": len(finished_reports),
-            "skipped_live_report_count": len(live_reports),
-            "scanned_fight_count": scanned.scanned_fight_count,
-            # Distinct pulls: a kill logged by several raiders counts once, and duplicates_removed
-            # says how many raw fights were collapsed to get there.
-            "matched_boss_kill_count": scanned.matched_boss_kill_count,
-            "duplicates_removed": scanned.duplicates_removed,
-        },
+    sample: dict[str, Any] = {
+        "source_report_count": len(report_rows),
+        "finished_report_count": len(finished_reports),
+        "skipped_live_report_count": len(live_reports),
+        "scanned_fight_count": scanned.scanned_fight_count,
+        # Distinct pulls: a kill logged by several raiders counts once, and duplicates_removed
+        # says how many raw fights were collapsed to get there.
+        "matched_boss_kill_count": scanned.matched_boss_kill_count,
+        "duplicates_removed": scanned.duplicates_removed,
     }
+    if scope.spec_name:
+        # A bare spec name can match several classes (Frost Mage and Frost Death Knight).
+        sample["matched_spec_classes"] = sorted(
+            {str(player["type"]) for row in scanned.rows for player in row["matching_players"] if player.get("type")}
+        )
+    return {"rows": scanned.rows, "sample": sample}
 
 
 def boss_kills_payload(
@@ -596,7 +599,7 @@ def boss_kills_payload(
         "matching_rule": "sampled_zone_reports_filtered_by_optional_boss_difficulty_spec_and_kill_time",
         "query": query,
         "notes": [
-            *sampled_spec_filter_notes(query.get("spec_name") if isinstance(query, dict) else None),
+            *sampled_spec_filter_notes(query.get("spec_name") if isinstance(query, dict) else None, sample),
             *sampled_dedupe_notes(sample),
         ],
         "freshness": sampled_cross_report_freshness(cache_ttl_seconds, transport_counts=transport_counts),
@@ -645,7 +648,7 @@ def spec_filtered_kill_samples_payload(
         if isinstance(row, dict)
     )
     notes = [
-        *sampled_spec_filter_notes(spec_name),
+        *sampled_spec_filter_notes(spec_name, sample),
         (
             "rows are sampled kills that contained at least one participant of the requested spec; "
             "this is a participant cohort, not a spec ranking leaderboard"
@@ -716,7 +719,7 @@ def kill_time_distribution_payload(
         "matching_rule": "sampled_zone_reports_filtered_by_optional_boss_difficulty_spec_and_kill_time",
         "query": query,
         "notes": [
-            *sampled_spec_filter_notes(query.get("spec_name") if isinstance(query, dict) else None),
+            *sampled_spec_filter_notes(query.get("spec_name") if isinstance(query, dict) else None, sample),
             *sampled_dedupe_notes(sample),
         ],
         "freshness": sampled_cross_report_freshness(cache_ttl_seconds, transport_counts=transport_counts),

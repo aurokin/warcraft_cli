@@ -4,8 +4,9 @@ The bugs this file guards against were invisible to mocked tests: SimC rejected 
 the handful of freely granted talents first, and the CLI reported that stub as a successful decode; and
 a re-encoded build silently carried the keystone of a hero tree the build never selected.
 
-Needs the local SimulationCraft checkout and a built binary. It is skipped, loudly, without them, so
-it proves nothing on CI - ``docs/simc/README.md`` says so under "Tests that need the binary". The
+Opt in by pointing ``WARCRAFT_SIMC_TESTS_REPO`` at a SimulationCraft checkout with a built binary; the
+configured or managed checkout is never read. Without the variable the file is skipped, loudly, so it
+proves nothing on CI - ``docs/simc/README.md`` says so under "Tests that need the binary". The
 captured-output tests in ``test_simc_build_input.py`` and ``test_simc_cli.py`` cover the same logic
 everywhere else.
 """
@@ -13,15 +14,18 @@ everywhere else.
 from __future__ import annotations
 
 import json
+import os
 import re
 from dataclasses import dataclass
+from typing import Any
 
 import pytest
 from simc_cli.build_input import BuildResolution, BuildSpec, SimcBuildError, decode_build, encode_build, tree_entries_string
 from simc_cli.main import app as simc_app
 from simc_cli.repo import RepoPaths, discover_repo
-from simc_cli.trait_data import load_trait_table
+from simc_cli.trait_data import TraitTable, load_trait_table
 from typer.testing import CliRunner
+from warcraft_core.talent_transport import CLASS_ID_BY_ACTOR_CLASS, specialization_ids
 
 ACTOR_CLASS_LINE = re.compile(
     r'^(deathknight|demonhunter|druid|evoker|hunter|mage|monk|paladin|priest|rogue|shaman|warlock|warrior)='
@@ -29,6 +33,7 @@ ACTOR_CLASS_LINE = re.compile(
 # A max-level stock profile fills its trees. A decode that returns a handful of talents is a stub of
 # freely granted ones, which is exactly the failure mode this file exists for.
 MINIMUM_TALENTS_IN_A_STOCK_BUILD = 30
+REPO_ENV = "WARCRAFT_SIMC_TESTS_REPO"
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,9 +59,12 @@ def _stock_profiles(repo: RepoPaths) -> list[tuple[str, BuildSpec]]:
 
 @pytest.fixture(scope="module")
 def repo() -> RepoPaths:
-    discovered = discover_repo()
+    root = os.environ.get(REPO_ENV, "").strip()
+    if not root:
+        pytest.skip(f"REAL-BINARY TEST SKIPPED: set {REPO_ENV} to a SimulationCraft checkout with a built binary")
+    discovered = discover_repo(root)
     if not discovered.build_simc.exists():
-        pytest.skip(f"REAL-BINARY TEST SKIPPED: no built SimC binary at {discovered.build_simc} (run `simc build`)")
+        pytest.fail(f"{REPO_ENV}={root} has no built SimC binary at {discovered.build_simc} (run `simc build`)")
     return discovered
 
 
@@ -310,3 +318,85 @@ def test_a_healer_build_identifies_and_can_be_modified(repo: RepoPaths, actor_cl
     assert (data["base"]["actor_class"], data["base"]["spec"]) == (actor_class, spec)
     reencoded = decode_build(repo, BuildSpec(actor_class=actor_class, spec=spec, talents=data["result"]["talents_export"]))
     assert talent.entry not in {t.entry for t in reencoded.talents_by_tree["spec"] if t.taken}
+
+
+def _modify(repo: RepoPaths, item: _Decoded, *edits: str) -> tuple[int, dict[str, Any]]:
+    result = CliRunner().invoke(
+        simc_app,
+        [
+            "--repo-root", str(repo.root), "modify-build",
+            "--talents", str(item.build_spec.talents),
+            "--actor-class", str(item.build_spec.actor_class),
+            "--spec", str(item.build_spec.spec),
+            *edits,
+        ],
+    )
+    return result.exit_code, json.loads(result.stdout or result.stderr)
+
+
+def _taken_entries(repo: RepoPaths, item: _Decoded, export: str) -> set[int]:
+    decoded = decode_build(
+        repo, BuildSpec(actor_class=item.build_spec.actor_class, spec=item.build_spec.spec, talents=export)
+    )
+    return {t.entry for tree in ("class", "spec") for t in decoded.talents_by_tree[tree] if t.taken}
+
+
+def _spec_ids(repo: RepoPaths, item: _Decoded) -> tuple[int, int]:
+    actor_class, spec = str(item.build_spec.actor_class), str(item.build_spec.spec)
+    return CLASS_ID_BY_ACTOR_CLASS[actor_class], specialization_ids(repo.root)[(actor_class, spec)]
+
+
+def _choice_partner(table: TraitTable, repo: RepoPaths, item: _Decoded) -> tuple[str, int] | None:
+    """A spec-tree choice talent the build takes, and the other entry of its node, which it does not."""
+    assert item.resolution is not None
+    class_id, spec_id = _spec_ids(repo, item)
+    for talent in item.resolution.talents_by_tree["spec"]:
+        node = table.choice_node_by_entry.get(talent.entry)
+        partners = [
+            entry for entry, other in table.choice_node_by_entry.items()
+            if other == node and entry != talent.entry and table.tree_for_entry(entry, class_id=class_id, spec_id=spec_id) == "spec"
+        ]
+        if node is not None and talent.taken and len(partners) == 1:
+            return talent.name, partners[0]
+    return None
+
+
+def test_adding_the_other_choice_of_a_taken_choice_node_needs_the_taken_one_removed(
+    repo: RepoPaths, decoded_profiles: list[_Decoded]
+) -> None:
+    """The hash holds one entry per choice node; the add alone used to come back unchanged and verified."""
+    table = load_trait_table(repo.root)
+    subject, pair = next(
+        ((item, pair) for item in decoded_profiles if item.resolution is not None and (pair := _choice_partner(table, repo, item))),
+        (None, None),
+    )
+    assert subject is not None and pair is not None, "no stock profile took a spec choice node, so this check proved nothing"
+    taken_name, partner = pair
+
+    refused_code, refused = _modify(repo, subject, "--add", f"{partner}:1")
+    swapped_code, swapped = _modify(repo, subject, "--add", f"{partner}:1", "--remove", taken_name)
+
+    assert refused_code == 2, refused
+    assert refused["error"]["code"] == "invalid_argument"
+    assert swapped_code == 0, f"{subject.name}: {swapped}"
+    taken = _taken_entries(repo, subject, swapped["data"]["result"]["talents_export"])
+    assert partner in taken
+
+
+def test_an_added_talent_the_base_lacks_is_in_the_export(repo: RepoPaths, decoded_profiles: list[_Decoded]) -> None:
+    """Every earlier real-binary add re-added a talent the build already had, so a dropped add passed."""
+    table = load_trait_table(repo.root)
+    subject = next(item for item in decoded_profiles if item.resolution is not None)
+    assert subject.resolution is not None
+    class_id, spec_id = _spec_ids(repo, subject)
+    present = {t.entry for tree in ("class", "spec", "hero") for t in subject.resolution.talents_by_tree[tree]}
+    entry = next(
+        entry for entry, tree in sorted(table.tree_by_entry.items())
+        if tree == "spec" and entry not in present and entry not in table.choice_node_by_entry
+        and entry not in table.tiered_siblings_by_entry and table.tree_for_entry(entry, class_id=class_id, spec_id=spec_id)
+    )
+
+    exit_code, payload = _modify(repo, subject, "--add", f"{entry}:1")
+
+    assert exit_code == 0, f"{subject.name} --add {entry}:1: {payload}"
+    assert entry in _taken_entries(repo, subject, payload["data"]["result"]["talents_export"])

@@ -92,9 +92,12 @@ class WarcraftWikiClient:
         if isinstance(cached, dict):
             return cached
         response = request_with_retries(self._client(), WIKI_API_URL, params=params, retry_attempts=self._retry_attempts)
-        payload = response.json()
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = None
         if not isinstance(payload, dict):
-            raise WarcraftWikiAPIError("invalid_response", "Unexpected Warcraft Wiki API response shape.")
+            raise WarcraftWikiAPIError("upstream_error", "Warcraft Wiki API did not answer with a JSON object.")
         if isinstance(payload.get("error"), dict):
             error = payload["error"]
             raise WarcraftWikiAPIError(str(error.get("code") or "api_error"), str(error.get("info") or "Warcraft Wiki API error."))

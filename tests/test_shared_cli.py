@@ -12,7 +12,7 @@ import pytest
 import typer
 from typer.testing import CliRunner
 from warcraft_core.cli import RuntimeConfig, cfg, cfg_as, command_path, configure, emit, fail, guarded_run, install_common_callback
-from warcraft_core.envelope import success_envelope
+from warcraft_core.envelope import ENVELOPE_KEYS, error_envelope, success_envelope
 from warcraft_core.provider import ProviderError
 
 runner = CliRunner()
@@ -24,7 +24,11 @@ def build_app() -> typer.Typer:
 
     @app.command("show")
     def show(ctx: typer.Context) -> None:
-        emit(ctx, success_envelope(provider="dummy", command="show", kind="show", query="shown", data={"a": {"b": 1}, "long": "x" * 400}))
+        emit(ctx, success_envelope(provider="dummy", command="show", kind="show", query="shown", data={"a": {"b": 1}, "long": "word " * 80}))
+
+    @app.command("refuse")
+    def refuse(ctx: typer.Context) -> None:
+        emit(ctx, error_envelope(provider="dummy", command="refuse", code="not_found", message="nothing here"), err=True)
 
     @app.command("missing")
     def missing(ctx: typer.Context) -> None:
@@ -76,10 +80,32 @@ def test_fields_strict_missing_path_exits_2_with_missing_fields_error() -> None:
     assert error["query"] == {"target": "x"}
 
 
-def test_compact_truncates_long_strings() -> None:
+def test_compact_truncates_long_strings_and_lists_them_in_provenance() -> None:
     result = runner.invoke(build_app(), ["--compact", "--compact-max-chars", "50", "show"])
     assert result.exit_code == 0
-    assert len(json.loads(result.stdout)["data"]["long"]) == 50
+    payload = json.loads(result.stdout)
+    assert len(payload["data"]["long"]) == 50
+    assert payload["provenance"] == {"compacted_paths": ["data.long"]}
+
+
+def test_compact_marks_a_cut_value_that_fields_keeps() -> None:
+    result = runner.invoke(build_app(), ["--compact", "--compact-max-chars", "50", "--fields", "data.long", "show"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert len(payload["data"]["long"]) == 50
+    assert payload["provenance"] == {"compacted_paths": ["data.long"]}
+
+    result = runner.invoke(build_app(), ["--compact", "--compact-max-chars", "50", "--fields", "data.a", "show"])
+    assert json.loads(result.stdout) == {"data": {"a": {"b": 1}}}
+
+
+@pytest.mark.parametrize("command", ["missing", "refuse"])
+def test_failures_ignore_fields_and_print_the_whole_envelope(command: str) -> None:
+    """``fail()`` and a failure envelope passed to ``emit`` must come out the same way under --fields."""
+    result = runner.invoke(build_app(), ["--fields", "data.a", command])
+    error = json.loads(result.stderr)
+    assert set(error) == ENVELOPE_KEYS
+    assert error["error"]["code"] == "not_found"
 
 
 def test_profile_human_pretty_prints() -> None:
@@ -192,7 +218,9 @@ def _status_error(status: int) -> httpx.HTTPStatusError:
         (httpx.ConnectError("refused"), "network_error", 5),
         (httpx.ReadTimeout("slow"), "timeout", 5),
         (_status_error(401), "auth_failed", 3),
+        (_status_error(403), "auth_failed", 3),
         (_status_error(404), "not_found", 4),
+        (_status_error(429), "rate_limited", 5),
         (_status_error(500), "upstream_error", 5),
         (ProviderError("auth_required", "login first"), "auth_required", 3),
         (ValueError("bad"), "internal_error", 1),

@@ -13,7 +13,7 @@ Pass these before the subcommand: `wowhead --pretty <command> ...`.
 | `--pretty` | boolean | false | Pretty-print JSON for human reading. Default output is compact JSON. |
 | `--expansion` | str |  | Expansion profile key/alias (for example: retail, classic, tbc, wotlk, cata, mop-classic, ptr). When omitted, defaults to retail but may auto-detect from a Wowhead URL in supported commands. |
 | `--normalize-canonical-to-expansion / --no-normalize-canonical-to-expansion` | boolean | false | Rewrite canonical entity page URLs to the selected expansion path when canonical redirects across profiles. |
-| `--compact` | boolean | false | Truncate long string fields to reduce payload size. |
+| `--compact` | boolean | false | Truncate long prose strings to reduce payload size. URLs, talent strings and commands stay whole. |
 | `--fields` | str (repeatable) |  | Return only selected fields (dot paths). Repeat or pass comma-separated values. |
 | `--stream` | boolean | false | Emit large result arrays as JSONL (header line plus one record per row). |
 | `--citation-pack` | boolean | false | Attach a deterministic citation_pack with source URLs and per-claim anchors. |
@@ -61,7 +61,7 @@ Report the cache backend configuration and per-namespace entry counts.
 
 ## wowhead cache-repair
 
-Delete unreadable or expired file-cache entries and report what was repaired.
+Report, or with --apply delete, file-cache entries left at the cache root by pre-namespacing versions.
 
 **Options**
 

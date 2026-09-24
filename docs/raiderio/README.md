@@ -27,22 +27,26 @@ raiderio --fields data.results --pretty search "liquid"
 
 ## Commands
 
-| Command | Arguments | Flags |
-| --- | --- | --- |
-| `doctor` | | |
-| `search` | `QUERY` | `--limit` (1-50, default 5), `--kind all\|character\|guild` |
-| `resolve` | `QUERY` | `--limit` (1-50, default 5), `--kind all\|character\|guild` |
-| `character` | `REGION REALM NAME` | |
-| `guild` | `REGION REALM NAME` | |
-| `mythic-plus-runs` | | `--season`, `--region`, `--dungeon`, `--affixes`, `--page` |
-| `leaderboard mythic-plus` | | scope flags, `--limit` (1-200, default 20) |
-| `leaderboard raids` | | `--raid` (required slug), `--difficulty normal\|heroic\|mythic` (default mythic), `--region` (default `world`; `us`, `eu`, `kr`, `tw`, `cn`), `--realm` (slug or display name, needs a standard region), `--page` (default 0), `--limit` (1-200, default 20) |
-| `raids` | | `--expansion-id` (default 11 = Midnight; 10 = The War Within, 9 = Dragonflight) |
-| `sample mythic-plus-runs` | | scope flags, `--pages`, `--limit`, filter flags |
-| `sample mythic-plus-players` | | scope flags, `--pages`, `--limit`, `--player-limit`, filter flags |
-| `distribution mythic-plus-runs` | | `--metric`, scope flags, `--pages`, `--limit`, filter flags |
-| `distribution mythic-plus-players` | | `--metric`, scope flags, `--pages`, `--limit`, `--player-limit`, filter flags |
-| `threshold mythic-plus-runs` | | `--metric`, `--value` (required), `--nearest`, scope flags, `--pages`, `--limit`, filter flags |
+| Command | Arguments |
+| --- | --- |
+| `doctor` | |
+| `search` | `QUERY` |
+| `resolve` | `QUERY` |
+| `character` | `REGION REALM NAME` |
+| `guild` | `REGION REALM NAME` |
+| `mythic-plus-runs` | |
+| `leaderboard mythic-plus` | |
+| `leaderboard raids` | |
+| `raids` | |
+| `sample mythic-plus-runs` | |
+| `sample mythic-plus-players` | |
+| `distribution mythic-plus-runs` | |
+| `distribution mythic-plus-players` | |
+| `threshold mythic-plus-runs` | |
+
+Flags, defaults, and ranges are in [reference/raiderio.md](../reference/raiderio.md).
+`leaderboard raids --realm` takes a slug or a display name and needs a standard region;
+`raids --expansion-id` defaults to 11 (Midnight; 10 is The War Within, 9 Dragonflight).
 
 Scope flags (all Mythic+ commands): `--season` (slug, or empty/`current` for the Raider.IO current
 default season), `--region` (default `world`), `--dungeon` (default `all`), `--affixes`, `--page`.
@@ -51,7 +55,10 @@ Sampled commands add `--pages` (1-10) and `--limit` (1-200).
 Filter flags (sampled commands): `--level-min`, `--level-max`, `--score-min`, `--score-max`, and the
 repeatable `--contains-role`, `--contains-class`, `--contains-spec`, `--player-region`. Bounds are
 inclusive ("at or above" / "at or below"), and a run whose level or score Raider.IO omitted is
-excluded whenever the matching bound is set. Filters run after sampling; the payload reports
+excluded whenever the matching bound is set. Each `--contains-*` flag matches any roster entry on
+its own, so `--contains-class priest --contains-spec holy` also keeps a Holy Paladin + Shadow Priest
+run. `--contains-spec` takes a bare spec (`holy`, any class) or a class-qualified one
+(`priest-holy`), which is how to ask for one class's spec. Filters run after sampling; the payload reports
 `source_run_count`, `returned_run_count`, and `excluded_run_count` so a narrowed slice stays
 provenance-safe.
 
@@ -60,6 +67,10 @@ Metrics:
 - `distribution mythic-plus-runs --metric`: `mythic_level`, `dungeon`, `role`, `player_region`, `class`, `spec`, `composition`, `class_composition`
 - `distribution mythic-plus-players --metric`: `appearance_count`, `top_mythic_level`, `class`, `spec`, `role`, `player_region`
 - `threshold mythic-plus-runs --metric`: `score`, `mythic_level`
+
+Spec names repeat across classes (holy, protection, restoration, frost), so every spec label is
+class-qualified: the `spec` metric, the `composition` keys (`healer:priest-holy`), and a player's
+`spec_slugs` tags read `priest-holy`, not `holy`. Roster rows keep the raw `class_slug` and `spec_slug`.
 
 ## Raid Leaderboards
 
@@ -93,7 +104,9 @@ The payload carries `freshness` (`fetched_at`, `cache_hit`, `cache_ttl_seconds`)
   There is no separate realm-rank field: Raider.IO does not send one on this endpoint.
 - `freshness` (`sampled_at`, `fetched_at`, `cache_hit`, `cache_ttl_seconds`) and `citations`
   (`leaderboard_urls`, the raider.io rankings page for the scope), mirrored into the envelope's
-  `provenance`.
+  `provenance`. With `--realm` the URL is the region page plus `?realm=<slug>`; whether the site
+  applies that filter is unverified (the page renders client-side), so the rows, not the page, are
+  the realm-scoped record.
 
 An unknown raid slug is a usage error (exit 2) because Raider.IO rejects it as invalid input.
 
@@ -122,12 +135,18 @@ raiderio threshold mythic-plus-runs --metric score --value 3000
   spelled as a display name or as either slug form (`mal'ganis`, `mal-ganis`, `malganis`) -- all of
   them score the same, so the `next_command` a `resolve` emits resolves when it is fed back in.
   `resolve` returns a single `match` plus `next_command` only when the top candidate is confidently
-  ahead. A *leading* `guild`/`character` word is read as a type hint and dropped
+  ahead of every other candidate; `--limit` only trims the `candidates` list, so `--limit 1` never
+  hides a rival. `next_command`, `follow_up.command` and `fallback_search_command` are shell-quoted
+  (`raiderio guild us illidan 'Liquid Guild'`). Character rows link their raider.io page in
+  `profile_url` even though site search sends a path for guilds only. A *leading* `guild`/`character` word is read as a type hint and dropped
   (`guild us malganis gn`); anywhere else the word is part of the name and is kept, because
   entities are named after it (Raider.IO has a guild called `Liquid Guild`). That word only narrows
   the lookups and adds to the score. An explicit `--kind character|guild` wins over it and filters
   every candidate: when nothing of that kind matches, `search` returns no rows and `resolve` is not
   resolved, rather than answering with the other kind.
+- An unknown character, guild, or realm is `not_found` (exit 4): Raider.IO answers all three with
+  HTTP 400 ("Could not find requested ...", "Failed to find realm ..."). A body that is not JSON is
+  `upstream_error` (exit 5).
 - Every Mythic+ payload echoes `resolved_season`, so the season a sample actually used is explicit.
 - Every payload with provenance carries `freshness` and `citations`; those also form the envelope's
   `provenance` block. `freshness.fetched_at` is when the response came off the wire, so a replay

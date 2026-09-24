@@ -11,7 +11,7 @@ permissions:
 jobs:
   wheel:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -23,7 +23,12 @@ jobs:
           python-version: "3.12"
 
       - name: Resolve and install the project
-        run: uv sync --frozen
+        run: uv sync --frozen --extra dev --extra redis
+
+      # The same gate as CI (lint, typecheck, import boundaries, complexity, dead code, fast
+      # tests with the coverage floor), so a tag on a red commit publishes nothing.
+      - name: Checks
+        run: make check
 
       - name: Build wheel
         run: uv build --wheel

@@ -167,7 +167,7 @@ def test_upstream_status_error_is_network_exit_code(monkeypatch: pytest.MonkeyPa
     result = runner.invoke(app, ["addon", "3358"])
     assert result.exit_code == 5
     payload = json.loads(result.stderr)
-    assert payload["error"]["code"] == "http_error"
+    assert payload["error"]["code"] == "upstream_error"
 
 
 def test_network_error_no_traceback(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -220,7 +220,7 @@ def test_changelog_best_effort_error_marker_on_http_failure(monkeypatch: pytest.
     payload = json.loads(result.stdout)
     changelog = payload["data"]["changelog"]
     assert changelog["file_id"] == 5001
-    assert changelog["error"]["code"] == "http_error"
+    assert changelog["error"]["code"] == "upstream_error"
     assert "changelog" not in payload["provenance"]["source_urls"]
     assert payload["data"]["metadata"]["id"] == 3358
 
@@ -424,3 +424,22 @@ def test_help_doctor_and_payloads_state_one_verification_posture(monkeypatch: py
     doctor = runner.invoke(app, ["doctor"])
     assert doctor.exit_code == 0
     assert any(prov["verification_note"] in note for note in json.loads(doctor.stdout)["data"]["notes"])
+
+
+def test_changelog_names_the_file_it_covers(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The newest file can be an alpha, so the changelog says which file and release type it is for.
+    mod = _fixture("mod")
+    newest = max(mod["data"]["latestFiles"], key=lambda row: row["fileDate"])
+    newest.update({"displayName": "DBM 11.1.0-3-gabc123", "releaseType": 3})
+
+    def _fake(client: Any, url: str, *, method: str = "GET", **kwargs: Any) -> _FakeResponse:
+        if "/changelog" not in url and "/v1/mods/" in url:
+            return _FakeResponse(mod, url)
+        return _FakeResponse(_fixture_for_url(url), url)
+
+    monkeypatch.setattr(client_module, "request_with_retries", _fake)
+    result = runner.invoke(app, ["addon", "3358"])
+
+    assert result.exit_code == 0, result.output
+    changelog = json.loads(result.stdout)["data"]["changelog"]
+    assert (changelog["file_id"], changelog["display_name"], changelog["release_type"]) == (newest["id"], "DBM 11.1.0-3-gabc123", 3)

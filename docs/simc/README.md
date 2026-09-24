@@ -34,7 +34,7 @@ Global flags go before the subcommand.
 |------|--------|
 | `--repo-root PATH` | Override the local SimulationCraft checkout for this invocation |
 | `--pretty` | Pretty-print JSON. Default output is compact JSON |
-| `--compact` | Truncate long string fields |
+| `--compact` | Truncate long prose strings (tooltip HTML, article text) and list each cut path in `provenance.compacted_paths`; URLs, talent/transport strings, export codes and `*command` values stay whole. |
 | `--compact-max-chars N` | Truncation length for `--compact` (40-10000) |
 | `--fields a.b,c` | Keep only the listed dot paths (repeatable or comma-separated) |
 | `--fields-strict` | Exit 2 with `missing_fields` when a requested path is absent |
@@ -76,9 +76,12 @@ These codes are worth knowing:
   `--actor-class` or `--spec` hint alone narrows the probe to that class's or spec's specs, and the
   message names what was probed (`decodes as none of the 3 deathknight specs`). When several specs
   decode it, `error.details.identity.candidates` lists them. Pass `--actor-class` and `--spec` together
-  to skip the probe.
+  to skip the probe; a talent hash is still decoded once as that spec, and when it does not decode as
+  it the identity comes back with `confidence: none` and the build commands fail with SimC's own error.
 - `identify_failed` (exit 1) — identification could not probe at all because the checkout has no built
-  binary, no generated specialization data, or no generated trait data; the message names which.
+  binary, a binary that cannot be executed or that crashed (exited on a signal or with an unexpected
+  code) part-way through, no generated specialization data, or no generated trait data; the message
+  names which. A decode never returns the talents of a SimC run that crashed part-way.
 - `unsupported_build_reference` (exit 2) — the build input is a link the CLI cannot turn into talents.
   `error.details.reference_type` names what it recognized: `wowhead_talent_calc_url` for a talent-calc
   URL with no build code, `url` for anything else. See "Build references" below for what does decode.
@@ -108,7 +111,10 @@ to force talents on or off on top of the resolved build.
 Passing a build-input option with an empty value is a usage error, not the same as omitting it.
 
 The class and spec an APL file name suggests (`mage_arcane.simc`) only fill what the caller left out.
-When the name does not complete a SimC class/spec pair (a renamed copy such as
+With a talent hash they are a guess the hash is decoded against once: when it does not decode as that
+spec the guess is ignored (`ignored apl name: the build does not decode as mage fire`) and the build is
+identified by the probe. The same holds for the class and spec in a Wowhead talent-calc URL path
+(`ignored talent-calc url path: ...`). When the name does not complete a SimC class/spec pair (a renamed copy such as
 `mage_arcane_variant.simc`, or a `warrior_fury.simc` given with `--actor-class mage`) it is ignored and
 `source_notes` says `ignored apl name: ...`; the build is then identified as if no APL were given, and an
 APL view with no talents reads the file with `actor_class` and `spec` null. Such a view then knows no
@@ -127,7 +133,7 @@ Raw-only transport packets are not accepted as direct build input: upgrade them 
 | Reference type | Example | Decodes |
 |----------------|---------|---------|
 | `wow_talent_export` | `C4QAAAAAA...` | Yes, once the class and spec are known. Both Method and Icy Veins publish only this type, and the string names no class or spec, so either pass `--actor-class`/`--spec` or let identification probe every spec SimC knows. |
-| `wowhead_talent_calc_url` | `https://www.wowhead.com/talent-calc/monk/mistweaver/<code>` | Yes, unaided: the path names the class and spec. |
+| `wowhead_talent_calc_url` | `https://www.wowhead.com/talent-calc/monk/mistweaver/<code>` | Yes, unaided: the path names the class and spec, which the hash is decoded against once. A path the hash contradicts is ignored and the probe identifies the build. |
 | Wowhead `/talent-calc/blizzard/<code>` | what `modify-build` publishes as `result.wowhead_url` | Yes, as a `wow_talent_export`: the URL carries the hash but no class or spec. |
 | `wowhead_talent_calc_url` with no build code | `https://www.wowhead.com/talent-calc/monk/mistweaver` | No — `unsupported_build_reference`. |
 | Any other link (guide page, article, addon export site) | `https://www.icy-veins.com/wow/...` | No — `unsupported_build_reference` with `reference_type: "url"`. |
@@ -176,9 +182,22 @@ default APL.
 
 After re-encoding, the result is decoded again and compared per tree with the build it was supposed to
 come from: the base build, or the `--swap-*-tree-from` source for a tree that was swapped. If anything
-changed in the active trees that was not asked for, the command fails with `encode_mismatch` and
-`details.unrequested_changes` instead of emitting an export. On success the payload carries
-`result.verified: true`.
+changed in the active trees that was not asked for, or a requested `--add`/`--remove` is not in the
+export at the requested rank, the command fails with `encode_mismatch` instead of emitting an export:
+`details.unrequested_changes` lists the former and `details.unapplied_edits` the latter (`tree`,
+`talent`, `requested_rank`, `export_rank`). SimC clamps a rank above the talent's maximum and ignores
+a talent it cannot place without any error, so this is the only place either shows. On success the
+payload carries `result.verified: true`: every requested edit landed and nothing else changed in the
+active trees. It does not mean the game will accept the export.
+
+An `--add` on a choice node whose other entry the build takes fails with `invalid_argument` (exit 2)
+before SimC runs, naming the talent to drop and its entry id: the talent hash holds one entry per choice
+node, so SimC either kept the old choice or dropped it unasked. Pass the `--remove <entry id>` the
+message gives to swap them; it also works when both entries share a name (Fire's two Flamestrikes).
+
+SimC checks neither the game's per-tree point budget nor node prerequisites. When the export spends
+more points in a tree than the base build did (an `--add` on a full build), `result.disclosures` says
+so and warns that the game may refuse to import it.
 
 A tree swap drops the base hash and rebuilds every tree from `entry:rank` pairs. That is lossless for a
 tiered node whose per-entry ranks were read back (see "Decoded builds" above); when they were not
@@ -202,57 +221,66 @@ tiered nodes included: their per-entry ranks are read back as described under "D
 node whose ranks cannot be read back fails the comparison. The keystones SimC grants for the hero tree
 the build did not pick are listed under `validation.round_trip.ignored_unselected_hero_entries` and
 ignored. A packet stays `raw_only` with `simc_trait_resolution_incomplete` when the local checkout
-predates a talent or a row repeats an entry (`duplicate_entry`), or `simc_round_trip_mismatch` with
-`expected_entries_by_tree` / `actual_entries_by_tree` when the decoded build differs.
+predates a talent or a row repeats an entry (`duplicate_entry`) or has a negative rank
+(`negative_rank`), with `multiple_hero_trees` (`hero_tree_ids`) when the rows span two hero trees,
+or with `simc_round_trip_mismatch` (`expected_entries_by_tree` / `actual_entries_by_tree`) when the
+decoded build differs.
 
 ## Commands
 
-| Command | Arguments | Flags | What it returns |
-|---------|-----------|-------|-----------------|
-| `analysis-packet` | APL_PATH | `--targets`, `--list`, `--intent-limit`, `--explain-limit`, `--runtime-scan-limit`, `--sim-profile`, `--first-cast-action`, `--seeds`, `--max-time`, `--fight-style`; build input (no `--apl-path`, `--build-packet`); `--enable`, `--disable` | Bundle branch, intent, and optional first-cast timing analysis into one payload. |
-| `apl-branch-compare` | APL_PATH | `--left-targets`, `--right-targets`, `--list`, `--right-profile-path`, `--right-build-file`, `--right-build-text`, `--right-talents`, `--right-class-talents`, `--right-spec-talents`, `--right-hero-talents`, `--right-actor-class`, `--right-spec`, `--right-enable`, `--right-disable`; build input (no `--apl-path`, `--build-packet`); `--enable`, `--disable` | Compare branch dispatch between two builds or target counts on one APL. |
-| `apl-branch-trace` | APL_PATH | `--targets`, `--list`, `--max-depth`; build input (no `--apl-path`, `--build-packet`); `--enable`, `--disable` | Trace action-list dispatch for an exact build from a starting list. |
-| `apl-graph` | APL_PATH | - | Render the action-list call graph of an APL file as Mermaid text. |
-| `apl-intent` | APL_PATH | `--targets`, `--list`, `--limit`; build input (no `--apl-path`, `--build-packet`); `--enable`, `--disable` | Summarize what the focus action list is trying to do for an exact build. |
-| `apl-intent-explain` | APL_PATH | `--targets`, `--list`, `--limit`; build input (no `--apl-path`, `--build-packet`); `--enable`, `--disable` | Explain the focus list as setup, helper, burst, and priority buckets. |
-| `apl-lists` | APL_PATH | `--list` | List the action lists in an APL file with their entries. |
-| `apl-prune` | APL_PATH | `--targets`, `--list`, `--show`; build input (no `--apl-path`, `--build-packet`); `--enable`, `--disable` | Classify APL entries as eligible, dead, or unknown for an exact build. |
-| `apl-talents` | APL_PATH | - | List the talents an APL file references and the most common actions. |
-| `build` | - | `--target` | Build the local SimulationCraft binary with cmake. |
-| `build-harness` | - | `--out`, `--line`; build input (no `--build-packet`) | Write a harness profile for the resolved build with no APL actions. |
-| `checkout` | - | - | Clone or update the managed SimulationCraft checkout. |
-| `compare-apls` | HARNESS_PATH | `--base-apl`, `--base-label`, `--variant`, `--iterations`, `--threads`, `--out-dir`, `--validate-first/--skip-validate`, `--report-out` | Sim a base APL against labelled variants and rank them by DPS. |
-| `compare-builds` | - | `--base`, `--other`, `--tree`; `--actor-class`, `--spec` | Diff a base talent build against one or more other builds, per tree. |
-| `decode-build` | - | build input | Decode a talent build into per-tree talents using the local SimC binary. |
-| `describe-build` | - | `--targets`, `--aoe-targets`, `--list`, `--priority-limit`, `--inactive-limit`; build input; `--enable`, `--disable` | Describe a build end to end: talents, priority, and single-target versus AoE differences. |
-| `doctor` | - | - | Report SimulationCraft repo readiness, binary version, and per-command capabilities. |
-| `find-action` | ACTION | `--class`, `--limit` | Find an action, buff, or token across APLs, class modules, and spell dumps. |
-| `first-cast` | PROFILE_PATH ACTION | `--seeds`, `--max-time`, `--targets`, `--fight-style` | Time the first cast of an action across several short sims. |
-| `identify-build` | - | build input | Resolve class/spec identity for a build without decoding its talents. |
-| `inactive-actions` | APL_PATH | `--targets`, `--list`, `--limit`, `--talent-only/--all-dead`; build input (no `--apl-path`, `--build-packet`); `--enable`, `--disable` | List the APL actions an exact build cannot use. |
-| `inspect` | [TARGET] | - | Describe the repo, or one file inside it, including any build lines it carries. |
-| `log-actions` | LOG_PATH ACTIONS | - | Report when actions were first scheduled and performed in a SimC combat log. |
-| `modify-build` | - | `--swap-class-tree-from`, `--swap-spec-tree-from`, `--swap-hero-tree-from`, `--add`, `--remove`; `--talents`, `--actor-class`, `--spec` | Apply talent swaps, additions, and removals to a build and re-encode it. |
-| `opener` | APL_PATH | `--targets`, `--list`, `--limit`; build input (no `--apl-path`, `--build-packet`); `--enable`, `--disable` | Preview the early priority for an exact build, flagging runtime-only conditions. |
-| `priority` | APL_PATH | `--targets`, `--list`, `--limit`; build input (no `--apl-path`, `--build-packet`); `--enable`, `--disable` | Return the static active priority for an exact build, excluding inactive talent branches. |
-| `repo` | - | `--set-root`, `--clear-root` | Show or change which local SimulationCraft checkout the CLI uses. |
-| `resolve` | QUERY | `--limit` | Return the structured coming-soon stub for free-text resolution. |
-| `run` | PROFILE_PATH | `--arg` | Run a profile through the local SimC binary with raw SimC arguments. |
-| `search` | QUERY | `--limit` | Return the structured coming-soon stub for free-text search. |
-| `sim` | [PROFILE_PATH] | `--preset`, `--iterations`, `--max-time`, `--fight-style`, `--threads`, `--targets`, `--vary-combat-length`, `--profile-text`, `--json-out` | Run a profile through the local SimC binary and summarize the JSON report. |
-| `spec-files` | [QUERY] | `--limit` | List APL and class-module files in the checkout, optionally narrowed by a substring. |
-| `sync` | - | `--allow-dirty` | Pull the latest SimulationCraft sources into the local checkout. |
-| `trace-action` | APL_PATH ACTION | `--class`, `--limit` | Trace one action through an APL file and the surrounding source. |
-| `validate-apl` | HARNESS_PATH APL_PATH | `--label`, `--out-dir` | Append an APL to a harness profile and check that SimC parses the result. |
-| `validate-talent-transport` | - | `--talent-row`, `--out`; `--build-packet`, `--actor-class`, `--spec` | Round-trip raw talent rows through SimulationCraft and report the validated transport forms. |
-| `variant-report` | REPORT_PATH | - | Summarize a saved compare-apls JSON report. |
-| `verify-clean` | - | `--hash-binary` | Report whether the checkout and built binary are unmodified. |
-| `version` | - | - | Report the version reported by the local SimC binary. |
+| Command | Arguments | What it returns |
+|---------|-----------|-----------------|
+| `analysis-packet` | APL_PATH | Bundle branch, intent, and optional first-cast timing analysis into one payload. |
+| `apl-branch-compare` | APL_PATH | Compare branch dispatch between two builds or target counts on one APL. |
+| `apl-branch-trace` | APL_PATH | Trace action-list dispatch for an exact build from a starting list. |
+| `apl-graph` | APL_PATH | Render the action-list call graph of an APL file as Mermaid text. |
+| `apl-intent` | APL_PATH | Summarize what the focus action list is trying to do for an exact build. |
+| `apl-intent-explain` | APL_PATH | Explain the focus list as setup, helper, burst, and priority buckets. |
+| `apl-lists` | APL_PATH | List the action lists in an APL file with their entries. |
+| `apl-prune` | APL_PATH | Classify APL entries as eligible, dead, or unknown for an exact build. |
+| `apl-talents` | APL_PATH | List the talents an APL file references and the most common actions. |
+| `build` | - | Build the local SimulationCraft binary with cmake. |
+| `build-harness` | - | Write a harness profile for the resolved build with no APL actions. |
+| `checkout` | - | Clone or update the managed SimulationCraft checkout. |
+| `compare-apls` | HARNESS_PATH | Sim a base APL against labelled variants and rank them by DPS. |
+| `compare-builds` | - | Diff a base talent build against one or more other builds, per tree. |
+| `decode-build` | - | Decode a talent build into per-tree talents using the local SimC binary. |
+| `describe-build` | - | Describe a build end to end: talents, priority, and single-target versus AoE differences. |
+| `doctor` | - | Report SimulationCraft repo readiness, binary version, and per-command capabilities. |
+| `find-action` | ACTION | Find an action, buff, or token across APLs, class modules, and spell dumps. |
+| `first-cast` | PROFILE_PATH ACTION | Time the first cast of an action across several short sims. |
+| `identify-build` | - | Resolve class/spec identity for a build without decoding its talents. |
+| `inactive-actions` | APL_PATH | List the APL actions an exact build cannot use. |
+| `inspect` | [TARGET] | Describe the repo, or one file inside it, including any build lines it carries. |
+| `log-actions` | LOG_PATH ACTIONS | Report when actions were first scheduled and performed in a SimC combat log. |
+| `modify-build` | - | Apply talent swaps, additions, and removals to a build and re-encode it. |
+| `opener` | APL_PATH | Preview the early priority for an exact build, flagging runtime-only conditions. |
+| `priority` | APL_PATH | Return the static active priority for an exact build, excluding inactive talent branches. |
+| `repo` | - | Show or change which local SimulationCraft checkout the CLI uses. |
+| `resolve` | QUERY | Return the structured coming-soon stub for free-text resolution. |
+| `run` | PROFILE_PATH | Run a profile through the local SimC binary with raw SimC arguments. |
+| `search` | QUERY | Return the structured coming-soon stub for free-text search. |
+| `sim` | [PROFILE_PATH] | Run a profile through the local SimC binary and summarize the JSON report. |
+| `spec-files` | [QUERY] | List APL and class-module files in the checkout, optionally narrowed by a substring. |
+| `sync` | - | Pull the latest SimulationCraft sources into the local checkout. |
+| `trace-action` | APL_PATH ACTION | Trace one action through an APL file and the surrounding source. |
+| `validate-apl` | HARNESS_PATH APL_PATH | Append an APL to a harness profile and check that SimC parses the result. |
+| `validate-talent-transport` | - | Round-trip raw talent rows through SimulationCraft and report the validated transport forms. |
+| `variant-report` | REPORT_PATH | Summarize a saved compare-apls JSON report. |
+| `verify-clean` | - | Report whether the checkout and built binary are unmodified. |
+| `version` | - | Report the version reported by the local SimC binary. |
+
+`apl-branch-compare` takes the right-hand build only from the `--right-*` options once any right-hand
+build source is given (`--right-profile-path`, `--right-build-file`, `--right-build-text`,
+`--right-talents`, or a `--right-*-talents` split string); nothing of the left build carries over. Without
+one, the right side is the left build again with any `--right-actor-class`/`--right-spec` and
+`--right-enable`/`--right-disable` layered on, which compares target counts or talent overrides.
 
 `search` and `resolve` are structured `coming_soon` stubs that exit 0. They exist so the `warcraft`
 wrapper can route uniformly; use the direct commands above for discovery.
 
-Run `simc <command> --help` for per-flag detail including defaults and value ranges.
+Flags, defaults, and value ranges are in [reference/simc.md](../reference/simc.md) and
+`simc <command> --help`.
 
 ## Sim presets
 
@@ -286,11 +314,14 @@ those describe one fight however many were simulated. The payload says so in `sa
 
 ## Tests that need the binary
 
-`tests/test_simc_real_binary.py` drives the real SimC binary in the discovered checkout over its own
-stock MID1 profiles, plus a Mistweaver and a Holy Priest build for the healer encode path. It skips —
-with `REAL-BINARY TEST SKIPPED` in the skip reason — when no built
-binary is present, so it proves nothing on CI. The same logic is covered everywhere else by
-`tests/test_simc_build_input.py` and `tests/test_simc_cli.py`, which replay captured SimC output.
+`tests/test_simc_real_binary.py` drives the real SimC binary over its checkout's own stock MID1
+profiles, plus a Mistweaver and a Holy Priest build for the healer encode path. It runs only when
+`WARCRAFT_SIMC_TESTS_REPO` names a SimulationCraft checkout
+(`WARCRAFT_SIMC_TESTS_REPO=~/code/simc pytest tests/test_simc_real_binary.py`); the configured or
+managed checkout is never read. Without the variable it skips with `REAL-BINARY TEST SKIPPED` in the
+skip reason, so it proves nothing on CI; with it but no built binary it fails. The same logic is
+covered everywhere else by `tests/test_simc_build_input.py` and `tests/test_simc_cli.py`, which replay
+captured SimC output.
 
 ## Analysis boundary
 

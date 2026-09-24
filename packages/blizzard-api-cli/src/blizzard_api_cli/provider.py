@@ -14,7 +14,7 @@ from typing import Any
 import httpx
 from warcraft_core.auth import provider_auth_status
 from warcraft_core.envelope import Envelope, success_envelope
-from warcraft_core.exit_codes import EXIT_AUTH, EXIT_USAGE
+from warcraft_core.exit_codes import EXIT_AUTH, EXIT_USAGE, error_code_for_http_status
 from warcraft_core.paths import provider_state_path
 from warcraft_core.provider import ProviderError, ProviderSurface
 
@@ -52,9 +52,6 @@ _EXIT_CODE_BY_CLIENT_CODE = {
     "classic_profile_unsupported": EXIT_USAGE,
 }
 
-_HTTP_STATUS_ERROR_CODES = {401: "auth_failed", 403: "auth_failed", 404: "not_found", 429: "rate_limited"}
-
-
 def provider_error(exc: BlizzardClientError | httpx.HTTPError) -> ProviderError:
     """Translate a client or transport failure into the shared error code + exit code vocabulary."""
     if isinstance(exc, BlizzardClientError):
@@ -62,7 +59,7 @@ def provider_error(exc: BlizzardClientError | httpx.HTTPError) -> ProviderError:
     if isinstance(exc, httpx.HTTPStatusError):
         status = exc.response.status_code
         return ProviderError(
-            _HTTP_STATUS_ERROR_CODES.get(status, "upstream_error"),
+            error_code_for_http_status(status),
             f"Blizzard API returned HTTP {status} for {exc.request.url}.",
             details={"status_code": status, "url": str(exc.request.url)},
         )

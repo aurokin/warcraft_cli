@@ -10,7 +10,7 @@ from warcraft_core.exit_codes import EXIT_USAGE
 from warcraft_core.provider import ProviderError
 
 from lorrgs_cli.client import PROVIDER_NAME, LorrgsClient
-from lorrgs_cli.provider import call_api, note_empty_comp_ranking
+from lorrgs_cli.provider import call_api, note_empty_ranking
 from lorrgs_cli.provider import doctor as provider_doctor
 from lorrgs_cli.provider import resolve as provider_resolve
 from lorrgs_cli.provider import search as provider_search
@@ -215,7 +215,10 @@ def spec_ranking(
         "spec-ranking",
         "spec_ranking",
         query,
-        lambda client: client.spec_ranking(spec_slug=spec_slug, boss_slug=boss_slug, difficulty=difficulty, metric=metric),
+        lambda client: note_empty_ranking(
+            client.spec_ranking(spec_slug=spec_slug, boss_slug=boss_slug, difficulty=difficulty, metric=metric),
+            f"{spec_slug} reports for {boss_slug} on {difficulty}",
+        ),
     )
 
 
@@ -262,7 +265,7 @@ def comp_ranking(
         "comp-ranking",
         "comp_ranking",
         query,
-        lambda client: note_empty_comp_ranking(
+        lambda client: note_empty_ranking(
             client.comp_ranking(
                 boss_slug=boss_slug,
                 limit=limit,
@@ -271,7 +274,7 @@ def comp_ranking(
                 killtime_min=killtime_min,
                 killtime_max=killtime_max,
             ),
-            boss_slug,
+            f"composition reports for {boss_slug} with these filters",
         ),
     )
 
@@ -318,7 +321,7 @@ def user_report_fights(
     resolved_fight = fight or (str(parsed_fight_id) if parsed_fight_id is not None else None)
     resolved_type = data_type or parsed_report_type
     if not resolved_fight:
-        fail(ctx, "missing_fight", "Pass --fight or provide a report URL containing fight=<id>.")
+        fail(ctx, "missing_fight", "Pass --fight or provide a report URL containing fight=<id>.", exit_code=EXIT_USAGE)
     query = {"report_ref": report_ref, "report_id": report_id, "fight": resolved_fight, "player": player, "type": resolved_type}
     _run_command(
         ctx,

@@ -28,8 +28,9 @@ from warcraft_core.talent_transport import (
 
 _CACHE: dict[tuple[str, int, int], TraitTable] = {}
 
-# trait_data.inc's node_type column: SimC's NODE_TIERED.
+# trait_data.inc's node_type column: SimC's NODE_TIERED and NODE_CHOICE.
 NODE_TIERED = 1
+NODE_CHOICE = 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,6 +58,8 @@ class TraitTable:
     spec_ids_by_entry: dict[int, frozenset[int]] = field(default_factory=dict)
     # Every entry of a tiered node, keyed by each of those entries.
     tiered_siblings_by_entry: dict[int, tuple[TieredEntry, ...]] = field(default_factory=dict)
+    # The node of every entry on a choice node, where a build can take only one of the entries.
+    choice_node_by_entry: dict[int, int] = field(default_factory=dict)
 
     def _available(self, entry: int, class_id: int, spec_id: int) -> bool:
         specs = self.spec_ids_by_entry.get(entry)
@@ -66,15 +69,23 @@ class TraitTable:
         """The tree an entry id belongs to, or None when the spec cannot take it."""
         return self.tree_by_entry.get(entry) if self._available(entry, class_id, spec_id) else None
 
+    def entries_for_name(self, name: str, *, class_id: int, spec_id: int) -> list[int]:
+        """Every entry carrying a talent name that this spec can take."""
+        entries = self.entries_by_name.get((class_id, tokenize_talent_name(name)), [])
+        return [entry for entry in entries if self._available(entry, class_id, spec_id)]
+
+    def choice_nodes(self, entries: list[int]) -> frozenset[int]:
+        """The choice nodes among the nodes these entries sit on."""
+        return frozenset(self.choice_node_by_entry[entry] for entry in entries if entry in self.choice_node_by_entry)
+
     def tree_for_name(self, name: str, *, class_id: int, spec_id: int) -> str | None:
         """The tree a talent name belongs to for this spec, or None when it has none or spans several trees."""
-        entries = self.entries_by_name.get((class_id, tokenize_talent_name(name)), [])
-        trees = {self.tree_by_entry[entry] for entry in entries if self._available(entry, class_id, spec_id)}
+        trees = {self.tree_by_entry[entry] for entry in self.entries_for_name(name, class_id=class_id, spec_id=spec_id)}
         return next(iter(trees)) if len(trees) == 1 else None
 
 
 class SimcNotReadyError(FileNotFoundError):
-    """The checkout lacks something a build command needs: the built binary or SimC's generated data."""
+    """The checkout cannot serve a build command: its binary is missing, cannot run or crashed, or SimC's generated data is missing."""
 
 
 def trait_data_path(repo_root: Path) -> Path:
@@ -101,6 +112,8 @@ def parse_trait_table(text: str) -> TraitTable:
             specs_by_hero_tree.setdefault((class_id, int(match.group("hero_tree_id"))), set()).update(spec_ids)
         elif spec_ids and tree != "hero":
             table.spec_ids_by_entry[entry] = spec_ids
+        if int(match.group("node_type")) == NODE_CHOICE:
+            table.choice_node_by_entry[entry] = int(match.group("node_id"))
         if int(match.group("node_type")) == NODE_TIERED:
             siblings = tiered_by_node.setdefault(int(match.group("node_id")), [])
             siblings.append(TieredEntry(entry=entry, max_rank=int(match.group("max_rank"))))

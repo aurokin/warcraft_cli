@@ -22,16 +22,23 @@ Report detail is keyed on **finish state**, derived from the report's `endTime`:
 
 | Report state | Signal | Applied TTL |
 | --- | --- | --- |
-| Finished | `endTime > 0` | `WARCRAFTLOGS_FINISHED_REPORT_CACHE_TTL_SECONDS` (default **86400** = 24h) |
-| Live / in-progress | `endTime` is `0`/absent | `WARCRAFTLOGS_REPORT_CACHE_TTL_SECONDS` (default **60s**) |
+| Finished | `endTime` more than 2 hours ago | `WARCRAFTLOGS_FINISHED_REPORT_CACHE_TTL_SECONDS` (default **86400** = 24h) |
+| Live / in-progress | `endTime` within the last 2 hours, `0` or absent | `WARCRAFTLOGS_REPORT_CACHE_TTL_SECONDS` (default **60s**) |
+
+A report that is still being logged has `endTime > 0`: Warcraft Logs sets it to the latest event,
+seconds before now. So `endTime > 0` alone does not mean finished; the report must also have been
+quiet for two hours, which outlasts a raid break.
 
 The TTL is resolved from the actual response at the cache-write site (both the client and
 user GraphQL endpoints), so **a live report is never stored under the finished TTL**. Live
 reports are still cached — briefly — and marked `live: true` rather than skipped.
 
 `endTime == 0` (or absent) falls back to the short live TTL: unknown finish state is treated
-as live, never as finished. Setting `WARCRAFTLOGS_FINISHED_REPORT_CACHE_TTL_SECONDS=0`
-disables finished caching (entries expire immediately).
+as live, never as finished. Setting `WARCRAFTLOGS_FINISHED_REPORT_CACHE_TTL_SECONDS=0` disables
+finished caching (entries expire immediately).
+
+A response that carries GraphQL partial errors is never cached, under any TTL, so a transient
+upstream failure is not replayed after Warcraft Logs recovers.
 
 ### Per-family TTL
 
@@ -108,8 +115,8 @@ while **live** is stored under the short report TTL and can still be served from
 for up to that TTL (default 60s) after the report finishes — even by a finished-only workflow
 such as sampled boss analytics. This is the accepted consequence of caching live reports
 (rather than no-caching them, for rate-limit relief): the short live TTL bounds the window,
-and once it expires the next fetch sees `endTime > 0` and re-caches under the finished TTL.
-Finished WoW logs are immutable thereafter. To eliminate the window for a specific report,
+and once it expires the next fetch sees an `endTime` over two hours old and re-caches under the
+finished TTL. Finished WoW logs are immutable thereafter. To eliminate the window for a specific report,
 `cache clear` the report namespace before sampling.
 
 #### Provenance is a report property, not a per-namespace cache audit

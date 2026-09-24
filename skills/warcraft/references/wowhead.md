@@ -50,6 +50,10 @@
 - `search` and `resolve` rank every row Wowhead's suggestion response sent, not just its ten-row
   dropdown list, one row per entity; `metadata.suggestion_lists` says where each row came from and
   `suggestion_merge` counts the rows per list and the duplicates merged
+- `search <Wowhead entity URL>` answers with that entity alone (`name` null, `follow_up` set); use
+  `entity` for its details
+- follow-up words ("comments", "links", "full") steer `follow_up.command` and are not searched for,
+  unless the whole query is a name ("Soul Link")
 - query words match whole words, ignoring words like "the" and "of"; a row whose text holds none of
   the query words is not returned, and `suggestion_merge.unmatched_rows_dropped` counts those rows.
   A row holding only some of them stays (`some_terms_match`) and scores less for the words it lacks,

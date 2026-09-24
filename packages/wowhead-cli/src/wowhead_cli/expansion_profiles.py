@@ -204,7 +204,10 @@ def parse_entity_from_wowhead_url(raw: str) -> tuple[str, int] | None:
     normalized = normalize_wowhead_url(raw)
     if normalized is None:
         return None
-    match = _ENTITY_PATH_RE.match(urlparse(normalized).path)
+    parsed = urlparse(normalized)
+    if not is_wowhead_host(parsed.hostname or ""):
+        return None
+    match = _ENTITY_PATH_RE.match(parsed.path)
     if match is None:
         return None
     entity_type = match.group("etype")

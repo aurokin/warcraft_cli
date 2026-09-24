@@ -19,7 +19,9 @@ authoritative, and use Lorrgs for its prebuilt aggregation.
 - player phase cooldown packet:
   `warcraft cooldown-packet <warcraftlogs-report-url> --actor-id <source-id> --phase 2`
   (Lorrgs only serves reports it has already cached; for any other report add
-  `--spec-slug <lorrgs-spec-slug>`)
+  `--spec-slug <lorrgs-spec-slug>`). For a report Lorrgs has not cached, also pass
+  `--boss-slug <slug>` (see `warcraft lorrgs bosses`) or the top-parse comparison is skipped with
+  `comparison.reason: no_boss_slug`.
 - current season raids: `warcraft lorrgs current-season`
 - spec slugs: `warcraft lorrgs specs`
 - boss slugs: `warcraft lorrgs bosses`
@@ -50,8 +52,9 @@ authoritative, and use Lorrgs for its prebuilt aggregation.
   can serve that report, and it refuses reports Warcraft Logs keeps private
 - use `report-overview` for report metadata from any public Warcraft Logs URL, including one Lorrgs
   has not cached, without requesting Lorrgs' per-fight/player timeline generation
-- an empty `comp-ranking` (`reports: []`) carries `data.notes`: Lorrgs has no composition rows for
-  that boss and those filters yet, which is not a ranking
+- an empty `comp-ranking` or `spec-ranking` (`reports: []`) carries `data.notes`: Lorrgs has no
+  ranked rows for that boss (and spec or filters) yet, which is not a ranking and not evidence the
+  spec is unplayed there
 - use `user-report-fights <url> --type <report-type>` when the report URL carries a view type such
   as `damage-done`; the CLI also preserves that query parameter automatically from URLs
 - use `spec-spells` and `boss-spells` to interpret spell ids in timeline rows

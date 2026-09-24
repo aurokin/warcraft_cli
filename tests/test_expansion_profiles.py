@@ -62,6 +62,12 @@ def test_parse_entity_from_wowhead_url_rejects_unknown_types() -> None:
     assert parse_entity_from_wowhead_url("https://www.wowhead.com/not-a-real-type=1") is None
 
 
+def test_parse_entity_from_wowhead_url_rejects_other_hosts() -> None:
+    assert parse_entity_from_wowhead_url("https://evil.example.com/item=19019") is None
+    assert parse_entity_from_wowhead_url("https://notwowhead.com/item=19019") is None
+    assert parse_entity_from_wowhead_url("https://classic.wowhead.com/item=19019") == ("item", 19019)
+
+
 def test_resolve_expansion_rejects_shared_keys_without_a_wowhead_site() -> None:
     with pytest.raises(ValueError, match=r"Unknown expansion 'fresh'\. Supported: retail, classic, .*, classic-ptr$"):
         resolve_expansion("fresh")

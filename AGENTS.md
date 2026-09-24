@@ -5,7 +5,11 @@
 - `uv.lock` is committed. Refresh it with `uv lock` whenever a dependency changes, and commit it.
 - `pip install -e '.[dev]'` still works if you cannot use uv; add `,redis` for the Redis extra.
 - Fast tests: `make test-fast` (`pytest -q -m "not live and not e2e"`). Non-live tests run under a
-  network guard in `tests/conftest.py`, so a test that reaches the network fails.
+  network guard in `tests/conftest.py`, so a test that reaches the network fails, and a hermetic
+  environment (HOME, the XDG roots and the working directory point at a per-test tmp dir; product env
+  vars are cleared), so no test reads your config, credentials, caches or SimC checkout.
+- Real-binary SimC tests: `WARCRAFT_SIMC_TESTS_REPO=<simc checkout> pytest tests/test_simc_real_binary.py`
+  (skipped without it; never reads the configured checkout).
 - Local CI parity: `make check` = lint + typecheck + import boundaries + complexity gate + dead code
   + `make coverage` (the fast tests with a coverage floor).
 - End-to-end journeys: `make test-e2e` runs `tests/e2e/` through the installed binaries against
@@ -15,7 +19,8 @@
 - Type check: `make typecheck` (mypy over all 16 packages).
 - Complexity: `make complexity-gate` (`xenon --max-absolute C packages`, blocking). `make complexity`
   is the advisory radon report.
-- Dead code: `make deadcode` (vulture at confidence 60 with `scripts/vulture_allowlist.py`, blocking).
+- Dead code: `make deadcode` (vulture over `packages/` and `scripts/` at confidence 60 with
+  `scripts/vulture_allowlist.py`, blocking). `tests/` is not scanned, so code only a test uses is dead.
 - Coverage: `make coverage` runs the fast tests with `pytest-cov` over `packages/` and fails below the
   `--cov-fail-under` floor in the Makefile; part of `make check`.
 - Generated output: `make reference` writes `docs/reference/<cli>.md` from the Typer apps and

@@ -12,7 +12,6 @@ from wowhead_cli.entities import (
     entity_comments_payload,
     entity_linked_entities_payload,
     entity_page_needs_fetch,
-    restore_cached_normalization_version,
 )
 from wowhead_cli.expansion_profiles import resolve_expansion
 from wowhead_cli.main import app
@@ -938,19 +937,6 @@ def test_canonical_normalization_flag_for_comments_citations(monkeypatch) -> Non
     assert payload["data"]["normalize_canonical_to_expansion"] is True
     assert payload["data"]["entity"]["page_url"] == "https://www.wowhead.com/ptr/item=19019/thunderfury-blessed-blade-of-the-windseeker"
     assert payload["data"]["comments"][0]["citation_url"] == "https://www.wowhead.com/ptr/item=19019/thunderfury-blessed-blade-of-the-windseeker#comments:id=11"
-
-
-def test_restore_cached_normalization_version_moves_legacy_top_level_version() -> None:
-    """Entries cached before the envelope kept `wowhead.entity.v1` at the top level; it must survive under `normalized`."""
-    cached = {"schema_version": "wowhead.entity.v1", "entity": {"id": 1}, "normalized": {"item": {"id": 1}}}
-    restored = restore_cached_normalization_version(cached)
-    assert restored["normalized"] == {"schema_version": "wowhead.entity.v1", "item": {"id": 1}}
-    assert restored["entity"] == {"id": 1}
-
-    already_migrated = {"schema_version": "1", "normalized": {"schema_version": "wowhead.entity.v1", "item": {}}}
-    assert restore_cached_normalization_version(already_migrated) is already_migrated
-    without_normalized = {"schema_version": "wowhead.entity.v1", "entity": {}}
-    assert restore_cached_normalization_version(without_normalized) is without_normalized
 
 
 def test_comments_follow_up_command_carries_the_active_expansion(monkeypatch) -> None:

@@ -14,7 +14,7 @@ Documentation ownership:
 ## Folder Layout
 
 - `foundation/`: repo-wide principles and shared contracts
-- `architecture/`: packaging, auth, expansion filtering, linting, and completed-work history
+- `architecture/`: packaging, auth, expansion filtering, linting, fixtures, and end-to-end testing
 - `reference/`: generated per-command flag reference, one file per binary (`make reference`; never hand-edited)
 - `warcraft/`, `wowhead/`, `method/`, `icy-veins/`, `raiderio/`, `warcraft-wiki/`, `warcraftlogs/`, `simc/`, `blizzard-api/`, `raidbots/`, `curseforge/`, `lorrgs/`: CLI-specific docs
 - root docs:
@@ -79,11 +79,9 @@ Engineering backlog: [Linear — Warcraft CLI](https://linear.app/aurokin/projec
 
 Deferred provider candidates (RaidPlan, Undermine Exchange) live in [ROADMAP.md](ROADMAP.md#deferred-candidates).
 
-## Usage And Research
+## Usage
 
 - [USAGE.md](USAGE.md)
-- [wowhead/ACCESS_METHODS.md](wowhead/ACCESS_METHODS.md)
-- [wowhead/EXPANSION_RESEARCH.md](wowhead/EXPANSION_RESEARCH.md)
 
 ## Releases
 

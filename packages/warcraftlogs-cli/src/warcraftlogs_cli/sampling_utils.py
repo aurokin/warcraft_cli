@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import time
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any
@@ -34,9 +35,15 @@ def normalize_match_text(value: str | None) -> str:
     return re.sub(r"[^a-z0-9]+", "", value.lower())
 
 
+# A report that is still being logged has endTime > 0: it is the timestamp of the latest event
+# (seen live on 2026-09-24, when reports mid-raid had endTime seconds before now). So a report counts
+# as finished only once it has been quiet this long; raid breaks are well under two hours.
+LIVE_REPORT_QUIET_MS = 2 * 60 * 60 * 1000
+
+
 def report_is_finished(report: dict[str, Any]) -> bool:
     end_time = report.get("endTime")
-    return isinstance(end_time, (int, float)) and float(end_time) > 0
+    return isinstance(end_time, (int, float)) and 0 < end_time <= time.time() * 1000 - LIVE_REPORT_QUIET_MS
 
 
 def report_cache_provenance(
@@ -48,7 +55,7 @@ def report_cache_provenance(
 ) -> dict[str, Any]:
     """Describe the applied report cache TTL keyed on finish state.
 
-    Finished reports (``endTime > 0``) are cached under ``finished_ttl``; live
+    Finished reports (see ``report_is_finished``) are cached under ``finished_ttl``; live
     reports under the short ``live_ttl`` and are flagged ``live: True``. Either TTL
     may be ``None`` when caching is disabled, in which case ``cache_ttl_seconds`` is
     ``null`` (nothing is stored).
@@ -85,12 +92,19 @@ def boss_matches(fight: dict[str, Any], *, boss_id: int | None, boss_name: str |
     return query in actual or actual in query
 
 
-def sampled_spec_filter_notes(spec_name: str | None) -> list[str]:
+def sampled_spec_filter_notes(spec_name: str | None, sample: Mapping[str, Any]) -> list[str]:
     if not spec_name:
         return []
-    return [
+    notes = [
         (
             "spec_name filters sampled fights by matching participant specs before aggregation; "
             "these results are not a global spec ranking leaderboard"
         )
     ]
+    classes = list_at(sample, "matched_spec_classes")
+    if len(classes) > 1:
+        notes.append(
+            f"spec_name {spec_name!r} matched that spec on more than one class ({', '.join(classes)}); "
+            f"name the class too, for example '{spec_name} {classes[0]}'"
+        )
+    return notes

@@ -15,7 +15,7 @@ import typer
 from typer.core import TyperGroup, TyperOption
 
 from warcraft_core.envelope import Envelope, envelope_violations, error_envelope
-from warcraft_core.exit_codes import EXIT_AUTH, EXIT_GENERIC, EXIT_NETWORK, EXIT_NOT_FOUND, EXIT_USAGE, exit_code_for
+from warcraft_core.exit_codes import EXIT_GENERIC, EXIT_NETWORK, EXIT_USAGE, error_code_for_http_status, exit_code_for
 from warcraft_core.output import (
     DEFAULT_COMPACT_MAX_CHARS,
     OutputOptions,
@@ -51,7 +51,10 @@ def cfg_as[T: RuntimeConfig](ctx: typer.Context, cls: type[T]) -> T:
 
 # Shared option aliases so every callback declares identical flags and help text.
 PrettyOption = Annotated[bool, typer.Option("--pretty", help="Pretty-print JSON for human reading. Default output is compact JSON.")]
-CompactOption = Annotated[bool, typer.Option("--compact", help="Truncate long string fields to reduce payload size.")]
+CompactOption = Annotated[
+    bool,
+    typer.Option("--compact", help="Truncate long prose strings to reduce payload size. URLs, talent strings and commands stay whole."),
+]
 FieldsOption = Annotated[
     list[str] | None,
     typer.Option("--fields", help="Return only selected fields (dot paths). Repeat or pass comma-separated values."),
@@ -140,7 +143,7 @@ def _next_command_name(command: TyperGroup, args: list[str]) -> tuple[str, list[
     return "", []
 
 
-def _command_path_from_args(app: typer.Typer, args: list[str]) -> str:
+def command_path_from_args(app: typer.Typer, args: list[str]) -> str:
     """``command_path`` for a failure no Click context survived, resolved from argv against the tree.
 
     An unknown name is still reported, because it is what the caller asked for; the walk simply
@@ -271,12 +274,8 @@ def error_envelope_for(provider: str, command: str, exc: BaseException) -> tuple
         return build("timeout", str(exc) or "request timed out", EXIT_NETWORK)
     if isinstance(exc, httpx.HTTPStatusError):
         status = exc.response.status_code
-        details = {"status_code": status, "url": str(exc.request.url)}
-        if status in (401, 403):
-            return build("auth_failed", str(exc), EXIT_AUTH, details)
-        if status == 404:
-            return build("not_found", str(exc), EXIT_NOT_FOUND, details)
-        return build("upstream_error", str(exc), EXIT_NETWORK, details)
+        code = error_code_for_http_status(status)
+        return build(code, str(exc), exit_code_for(code), {"status_code": status, "url": str(exc.request.url)})
     if isinstance(exc, httpx.RequestError):
         return build("network_error", f"{type(exc).__name__}: {exc}", EXIT_NETWORK)
     return build("internal_error", f"{type(exc).__name__}: {exc}", EXIT_GENERIC)
@@ -294,7 +293,7 @@ def guarded_run(app: typer.Typer, *, provider: str) -> NoReturn:
     except typer.Abort:
         raise SystemExit(EXIT_GENERIC) from None
     except Exception as exc:
-        payload, exit_code = error_envelope_for(provider, _command_path_from_args(app, sys.argv[1:]), exc)
+        payload, exit_code = error_envelope_for(provider, command_path_from_args(app, sys.argv[1:]), exc)
         typer.echo(to_json(payload, pretty=False), err=True)
         raise SystemExit(exit_code) from exc
     # ``typer.Exit(n)`` surfaces as Click's return value in non-standalone mode; commands return None.

@@ -4,11 +4,12 @@ import json
 import math
 import re
 import shlex
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated, Any, NoReturn
+from typing import Annotated, Any
 from urllib.parse import urljoin, urlparse
 
 import httpx
@@ -57,7 +58,6 @@ from wowhead_cli.entities import (
     entity_linked_entities_payload,
     entity_page_fetch_more_command,
     entity_page_needs_fetch,
-    restore_cached_normalization_version,
     truncate_text,
     truncated_link_block,
 )
@@ -108,6 +108,7 @@ from wowhead_cli.listing_filters import (
 from wowhead_cli.normalization import attach_entity_normalization, attach_entity_page_normalization
 from wowhead_cli.page_parser import (
     clean_markup_text,
+    entity_names,
     extract_comments_dataset,
     extract_gatherer_entities,
     extract_guide_rating,
@@ -119,6 +120,7 @@ from wowhead_cli.page_parser import (
     extract_listview_data,
     extract_markup_by_target,
     extract_markup_urls,
+    guide_markup_text,
     normalize_comments,
     parse_page_error,
     parse_page_meta_json,
@@ -203,12 +205,15 @@ def _load_cache_settings_or_fail(ctx: typer.Context) -> CacheSettings:
         fail(ctx, "invalid_cache_config", str(exc))
 
 
-def _fail_http_status(ctx: typer.Context, exc: httpx.HTTPStatusError, *, context: str | None = None) -> NoReturn:
-    """Map an upstream HTTP status onto the shared error-code vocabulary (404 -> not found, 401/403 -> auth)."""
-    status = exc.response.status_code
-    code = {401: "auth_failed", 403: "auth_failed", 404: "not_found"}.get(status, "http_error")
-    suffix = f" for {context}" if context else ""
-    fail(ctx, code, f"Wowhead returned HTTP {status}{suffix}", details={"status_code": status})
+@contextmanager
+def _upstream(ctx: typer.Context, *, context: str | None = None) -> Iterator[None]:
+    """Fail with ``provider.transport_errors``' code and details when a Wowhead request inside the block fails."""
+    try:
+        with provider.transport_errors():
+            yield
+    except ProviderError as exc:
+        message = f"{context}: {exc.message}" if context else exc.message
+        fail(ctx, exc.code, message, exit_code=exc.exit_code, details=exc.details)
 
 
 def _normalize_cache_namespaces(values: list[str]) -> tuple[str, ...]:
@@ -366,11 +371,14 @@ def _build_tooltip_from_page_metadata(metadata: dict[str, str | None]) -> tuple[
 
 
 def _apply_url_expansion(ctx: typer.Context, url_hint: str | None) -> WowheadConfig:
+    detected = detect_expansion_from_url(url_hint) if url_hint else None
+    return _adopt_expansion(ctx, detected, source="url")
+
+
+def _adopt_expansion(ctx: typer.Context, detected: ExpansionProfile | None, *, source: str) -> WowheadConfig:
+    """Switch the command to an implied expansion (URL prefix, bundle manifest) unless --expansion was passed."""
     cfg = _cfg(ctx)
-    if cfg.expansion_explicit or not url_hint:
-        return cfg
-    detected = detect_expansion_from_url(url_hint)
-    if detected is None or detected.key == cfg.expansion.key:
+    if cfg.expansion_explicit or detected is None or detected.key == cfg.expansion.key:
         return cfg
     updated = WowheadConfig(
         provider=cfg.provider,
@@ -378,7 +386,7 @@ def _apply_url_expansion(ctx: typer.Context, url_hint: str | None) -> WowheadCon
         stream=cfg.stream,
         expansion=detected,
         expansion_explicit=cfg.expansion_explicit,
-        expansion_source="url",
+        expansion_source=source,
         normalize_canonical_to_expansion=cfg.normalize_canonical_to_expansion,
         citation_pack=cfg.citation_pack,
     )
@@ -542,8 +550,7 @@ def _with_envelope_keys(ctx: typer.Context, payload: dict[str, Any]) -> dict[str
 
     Command bodies build flat payloads: their envelope-named keys (``query``, ``kind``) fill the
     envelope and everything else moves under ``data``. A provider-surface envelope passes through.
-    ``schema_version`` is always the envelope's: cached entity responses carry the normalization
-    version under that name.
+    ``schema_version`` is always the envelope's.
     """
     command = ctx.command.name or ""
     defaults: dict[str, Any] = {
@@ -766,19 +773,6 @@ def _build_tooltip_summary(text: str, *, entity_name: str | None, max_chars: int
     return clipped.rstrip(" ,;:-") + "..."
 
 
-def _tooltip_block_for_normalization(payload: dict[str, Any]) -> dict[str, Any] | None:
-    tooltip = payload.get("tooltip")
-    if not isinstance(tooltip, dict):
-        return None
-    merged = dict(tooltip)
-    entity = payload.get("entity")
-    if isinstance(entity, dict):
-        name = entity.get("name")
-        if isinstance(name, str) and name.strip():
-            merged.setdefault("name", name.strip())
-    return merged
-
-
 def _normalize_tooltip_payload(tooltip: dict[str, Any]) -> tuple[str | None, dict[str, Any]]:
     entity_name = tooltip.get("name")
     name = entity_name if isinstance(entity_name, str) and entity_name.strip() else None
@@ -810,12 +804,8 @@ def _fetch_entity_page(
     entity_type: str,
     entity_id: int,
 ) -> tuple[str, dict[str, str | None]]:
-    try:
+    with _upstream(ctx):
         html = client.entity_page_html(entity_type, entity_id)
-    except httpx.HTTPStatusError as exc:
-        _fail_http_status(ctx, exc)
-    except httpx.HTTPError as exc:
-        fail(ctx, "network_error", str(exc))
     fallback_url = entity_url(entity_type, entity_id, expansion=client.expansion)
     metadata = parse_page_metadata(html, fallback_url=fallback_url)
     return html, metadata
@@ -835,15 +825,12 @@ def _resolve_page_fetch_target(
     if plan.tooltip_entity_type is None or plan.tooltip_entity_id is None:
         fail(ctx, "unsupported_entity_type", f"{entity_type!r} does not define a tooltip route for page resolution.")
     try:
-        _, final_url = client.tooltip_with_metadata(
-            plan.tooltip_entity_type,
-            plan.tooltip_entity_id,
-            data_env=data_env,
-        )
-    except httpx.HTTPStatusError as exc:
-        _fail_http_status(ctx, exc)
-    except httpx.HTTPError as exc:
-        fail(ctx, "network_error", str(exc))
+        with _upstream(ctx):
+            _, final_url = client.tooltip_with_metadata(
+                plan.tooltip_entity_type,
+                plan.tooltip_entity_id,
+                data_env=data_env,
+            )
     except ValueError as exc:
         fail(ctx, "parse_error", str(exc))
 
@@ -945,36 +932,6 @@ def _normalize_hydrate_types(values: list[str]) -> tuple[str, ...]:
     return tuple(normalized)
 
 
-def _cached_entity_payload(
-    client: WowheadClient,
-    *,
-    entity_type: str,
-    entity_id: int,
-    data_env: int | None,
-    include_comments: bool,
-    include_all_comments: bool,
-    linked_entity_preview_limit: int,
-) -> dict[str, Any] | None:
-    """Return the cached entity payload, backfilling normalization for entries cached before it existed."""
-    cached = client.get_cached_entity_response(
-        requested_type=entity_type,
-        requested_id=entity_id,
-        data_env=data_env,
-        include_comments=include_comments,
-        include_all_comments=include_all_comments,
-        linked_entity_preview_limit=linked_entity_preview_limit,
-    )
-    if not isinstance(cached, dict):
-        return None
-    if "normalized" in cached:
-        return restore_cached_normalization_version(cached)
-    return attach_entity_normalization(
-        cached,
-        entity_type=entity_type,
-        tooltip=_tooltip_block_for_normalization(cached),
-    )
-
-
 def _entity_tooltip(
     ctx: typer.Context, client: WowheadClient, plan: EntityAccessPlan, *, data_env: int | None
 ) -> tuple[dict[str, Any], str | None]:
@@ -982,13 +939,10 @@ def _entity_tooltip(
     if plan.tooltip_entity_type is None or plan.tooltip_entity_id is None:
         return {}, None
     try:
-        if plan.page_from_tooltip_redirect:
-            return client.tooltip_with_metadata(plan.tooltip_entity_type, plan.tooltip_entity_id, data_env=data_env)
-        return client.tooltip(plan.tooltip_entity_type, plan.tooltip_entity_id, data_env=data_env), None
-    except httpx.HTTPStatusError as exc:
-        _fail_http_status(ctx, exc)
-    except httpx.HTTPError as exc:
-        fail(ctx, "network_error", str(exc))
+        with _upstream(ctx):
+            if plan.page_from_tooltip_redirect:
+                return client.tooltip_with_metadata(plan.tooltip_entity_type, plan.tooltip_entity_id, data_env=data_env)
+            return client.tooltip(plan.tooltip_entity_type, plan.tooltip_entity_id, data_env=data_env), None
     except ValueError as exc:
         fail(ctx, "parse_error", str(exc))
 
@@ -1028,10 +982,9 @@ def _build_entity_payload(
     top_comment_chars: int = 320,
 ) -> dict[str, Any]:
     cfg = _cfg(ctx)
-    cached_payload = _cached_entity_payload(
-        client,
-        entity_type=entity_type,
-        entity_id=entity_id,
+    cached_payload = client.get_cached_entity_response(
+        requested_type=entity_type,
+        requested_id=entity_id,
         data_env=data_env,
         include_comments=include_comments,
         include_all_comments=include_all_comments,
@@ -1125,10 +1078,9 @@ def _load_or_build_cached_entity_payload(
     include_all_comments: bool,
     linked_entity_preview_limit: int,
 ) -> tuple[dict[str, Any], str]:
-    cached_payload = _cached_entity_payload(
-        client,
-        entity_type=entity_type,
-        entity_id=entity_id,
+    cached_payload = client.get_cached_entity_response(
+        requested_type=entity_type,
+        requested_id=entity_id,
         data_env=data_env,
         include_comments=include_comments,
         include_all_comments=include_all_comments,
@@ -1174,13 +1126,9 @@ def _fetch_guide_page(
     except ValueError as exc:
         fail(ctx, "invalid_argument", str(exc))
 
-    try:
+    with _upstream(ctx):
         default_lookup = guide_url(guide_id, expansion=client.expansion) if guide_id is not None else None
         html = client.guide_page_html(guide_id) if guide_id is not None and lookup_url == default_lookup else client.page_html(lookup_url)
-    except httpx.HTTPStatusError as exc:
-        _fail_http_status(ctx, exc)
-    except httpx.HTTPError as exc:
-        fail(ctx, "network_error", str(exc))
 
     metadata = parse_page_metadata(html, fallback_url=lookup_url)
     canonical_url = metadata["canonical_url"] or lookup_url
@@ -1245,15 +1193,15 @@ def _guide_analysis_surfaces(
     )
 
 
-def _guide_body_block(guide_body_markup: str | None) -> dict[str, Any]:
+def _guide_body_block(guide_body_markup: str | None, names: dict[tuple[str, int], str]) -> dict[str, Any]:
     """Guide body markup plus its parsed sections, chunks, and leading summary text."""
     if not isinstance(guide_body_markup, str):
         return {"raw_markup": guide_body_markup, "sections": [], "section_chunks": [], "summary": None}
     return {
         "raw_markup": guide_body_markup,
         "sections": extract_guide_sections(guide_body_markup),
-        "section_chunks": extract_guide_section_chunks(guide_body_markup),
-        "summary": clean_markup_text(guide_body_markup[:2000]),
+        "section_chunks": extract_guide_section_chunks(guide_body_markup, names),
+        "summary": guide_markup_text(guide_body_markup[:2000], names),
     }
 
 
@@ -1300,7 +1248,7 @@ def _build_guide_full_payload(
     )
     linked_entities_block = truncated_link_block(merged_entities, max_links=max_links)
 
-    body = _guide_body_block(extract_markup_by_target(html, target="guide-body"))
+    body = _guide_body_block(extract_markup_by_target(html, target="guide-body"), entity_names(gatherer_entities))
     navigation = _guide_navigation_block(
         extract_markup_by_target(html, target="interior-sidebar-related-markup"),
         canonical_url=canonical_url,
@@ -1496,12 +1444,8 @@ def _collect_timeline_pages(
     stop_reason: str | None = None
 
     for current_page in range(page, page + pages):
-        try:
+        with _upstream(ctx):
             html = fetch_page(current_page)
-        except httpx.HTTPStatusError as exc:
-            _fail_http_status(ctx, exc)
-        except httpx.HTTPError as exc:
-            fail(ctx, "network_error", str(exc))
 
         try:
             rows, extracted_total_pages = extract_page(html)
@@ -1836,14 +1780,11 @@ def _enrich_talent_calc_payload_with_page_data(
             raise
         return payload
     try:
-        html = client.page_html(state_url)
-    except httpx.HTTPStatusError as exc:
+        with provider.transport_errors():
+            html = client.page_html(state_url)
+    except ProviderError as exc:
         if fail_on_fetch_error:
-            _fail_http_status(ctx, exc)
-        return payload
-    except httpx.HTTPError as exc:
-        if fail_on_fetch_error:
-            fail(ctx, "network_error", str(exc))
+            fail(ctx, exc.code, exc.message, exit_code=exc.exit_code, details=exc.details)
         return payload
     metadata = parse_page_metadata(html, fallback_url=state_url)
     page_url = absolute_wowhead_url(metadata.get("canonical_url"), fallback=state_url) or state_url
@@ -3062,7 +3003,7 @@ def cache_repair(
         help="Maximum legacy cache paths to sample in the repair report.",
     ),
 ) -> None:
-    """Delete unreadable or expired file-cache entries and report what was repaired."""
+    """Report, or with --apply delete, file-cache entries left at the cache root by pre-namespacing versions."""
     settings = _load_cache_settings_or_fail(ctx)
     if settings.backend != "file":
         fail(ctx, "invalid_argument", "cache-repair is currently only supported for file cache backends.")
@@ -3453,17 +3394,14 @@ def news_post(
     except ValueError as exc:
         fail(ctx, "invalid_ref", str(exc))
     client = _client(ctx)
-    try:
+    with _upstream(ctx):
         html = client.page_html(page_url)
-    except httpx.HTTPStatusError as exc:
-        _fail_http_status(ctx, exc)
-    except httpx.HTTPError as exc:
-        fail(ctx, "network_error", str(exc))
     metadata = parse_page_metadata(html, fallback_url=page_url)
     canonical_url = absolute_wowhead_url(metadata.get("canonical_url"), fallback=page_url)
     markup = _extract_news_post_markup(html) or ""
     sections = extract_guide_sections(markup) if markup else []
-    section_chunks = extract_guide_section_chunks(markup) if markup else []
+    names = entity_names(extract_gatherer_entities(html, source_url=page_url))
+    section_chunks = extract_guide_section_chunks(markup, names) if markup else []
     recent_posts = _extract_news_recent_posts(html, limit=related_limit)
     author_embed = None
     try:
@@ -3517,12 +3455,8 @@ def blue_topic(
     except ValueError as exc:
         fail(ctx, "invalid_ref", str(exc))
     client = _client(ctx)
-    try:
+    with _upstream(ctx):
         html = client.page_html(page_url)
-    except httpx.HTTPStatusError as exc:
-        _fail_http_status(ctx, exc)
-    except httpx.HTTPError as exc:
-        fail(ctx, "network_error", str(exc))
     metadata = parse_page_metadata(html, fallback_url=page_url)
     canonical_url = absolute_wowhead_url(metadata.get("canonical_url"), fallback=page_url)
     try:
@@ -3657,12 +3591,8 @@ def guides(
         )
     except ValueError as exc:
         fail(ctx, "invalid_argument", str(exc))
-    try:
+    with _upstream(ctx):
         html = client.guide_category_page_html(normalized_category)
-    except httpx.HTTPStatusError as exc:
-        _fail_http_status(ctx, exc)
-    except httpx.HTTPError as exc:
-        fail(ctx, "network_error", str(exc))
 
     try:
         rows = extract_listview_data(html, "guides")
@@ -3779,12 +3709,8 @@ def profession_tree(
     except ValueError as exc:
         fail(ctx, "invalid_tool_ref", str(exc))
     client = _client(ctx)
-    try:
+    with _upstream(ctx):
         html = client.page_html(state_url)
-    except httpx.HTTPStatusError as exc:
-        _fail_http_status(ctx, exc)
-    except httpx.HTTPError as exc:
-        fail(ctx, "network_error", str(exc))
     metadata = parse_page_metadata(html, fallback_url=state_url)
     canonical_url = absolute_wowhead_url(metadata.get("canonical_url"), fallback=state_url)
 
@@ -3818,7 +3744,7 @@ def dressing_room(
     ),
 ) -> None:
     """Normalize a Wowhead dressing-room ref and report its cited state URL."""
-    cfg = _cfg(ctx)
+    cfg = _apply_url_expansion(ctx, ref)
     try:
         state_url = _normalize_dressing_room_ref(ref, expansion=cfg.expansion)
         state = _parse_dressing_room_state(state_url)
@@ -3826,14 +3752,11 @@ def dressing_room(
         fail(ctx, "invalid_tool_ref", str(exc))
     client = _client(ctx)
     fetch_url = tool_url("dressing-room", expansion=cfg.expansion)
-    try:
+    with _upstream(ctx):
         html = client.page_html(fetch_url)
-    except httpx.HTTPStatusError as exc:
-        _fail_http_status(ctx, exc)
-    except httpx.HTTPError as exc:
-        fail(ctx, "network_error", str(exc))
-    metadata = parse_page_metadata(html, fallback_url=state_url)
-    canonical_url = absolute_wowhead_url(metadata.get("canonical_url"), fallback=fetch_url)
+    # Only the fetched page's own canonical link counts, never the share URL the user passed in.
+    metadata = parse_page_metadata(html, fallback_url=None)
+    canonical_url = absolute_wowhead_url(metadata.get("canonical_url"))
 
     payload = {
         "expansion": cfg.expansion.key,
@@ -3848,6 +3771,7 @@ def dressing_room(
             "title": metadata.get("title"),
             "description": metadata.get("description"),
             "canonical_url": canonical_url,
+            "note": None if canonical_url else "The fetched page carries no canonical link.",
         },
         "citations": {
             "page": state_url,
@@ -3872,12 +3796,8 @@ def profiler(
     except ValueError as exc:
         fail(ctx, "invalid_tool_ref", str(exc))
     client = _client(ctx)
-    try:
+    with _upstream(ctx):
         html = client.page_html(state_url)
-    except httpx.HTTPStatusError as exc:
-        _fail_http_status(ctx, exc)
-    except httpx.HTTPError as exc:
-        fail(ctx, "network_error", str(exc))
     page_error = parse_page_error(html)
     if page_error is not None:
         fail(ctx, "not_found", f"Wowhead profiler: {page_error}", details={"url": state_url})
@@ -3918,7 +3838,7 @@ class GuideSummaryOptions:
 
 def _guide_full_command(guide_ref: str, *, expansion: ExpansionProfile) -> str:
     """The `guide-full` follow-up for a guide ref, routed to the active expansion."""
-    return f"{command_prefix_for_expansion(expansion)} guide-full {guide_ref}"
+    return f"{command_prefix_for_expansion(expansion)} guide-full {shlex.quote(guide_ref)}"
 
 
 def _guide_sampled_comments(
@@ -3991,8 +3911,9 @@ def _guide_summary_payload(
         raw_comments = []
 
     guide_body_markup = extract_markup_by_target(html, target="guide-body")
+    names = entity_names(extract_gatherer_entities(html, source_url=canonical_url))
     analysis_surfaces = _guide_analysis_surfaces(
-        section_chunks=extract_guide_section_chunks(guide_body_markup) if isinstance(guide_body_markup, str) else [],
+        section_chunks=extract_guide_section_chunks(guide_body_markup, names) if isinstance(guide_body_markup, str) else [],
         canonical_url=canonical_url,
         page_title=metadata["title"],
     )
@@ -4677,6 +4598,12 @@ def guide_bundle_refresh(
         _emit(ctx, refreshed_manifest)
         return
 
+    recorded_expansion = manifest.get("expansion")
+    if isinstance(recorded_expansion, str):
+        try:
+            _adopt_expansion(ctx, resolve_expansion(recorded_expansion), source="bundle")
+        except ValueError as exc:
+            fail(ctx, "invalid_bundle", str(exc))
     client = _client(ctx)
     refreshed_manifest = _write_guide_export_bundle(
         ctx,
@@ -5138,11 +5065,8 @@ def _parsed_compare_refs(ctx: typer.Context, entities: list[str]) -> list[tuple[
 
 def _compare_tooltip(ctx: typer.Context, client: WowheadClient, *, entity_type: str, entity_id: int, token: str) -> dict[str, Any]:
     try:
-        return client.tooltip(entity_type, entity_id)
-    except httpx.HTTPStatusError as exc:
-        _fail_http_status(ctx, exc, context=token)
-    except httpx.HTTPError as exc:
-        fail(ctx, "network_error", f"{token}: {exc}")
+        with _upstream(ctx, context=token):
+            return client.tooltip(entity_type, entity_id)
     except ValueError as exc:
         fail(ctx, "parse_error", f"{token}: {exc}")
 

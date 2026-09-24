@@ -3,9 +3,10 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import shlex
 import sys
 import tempfile
-from dataclasses import dataclass
+from dataclasses import astuple, dataclass
 from pathlib import Path
 from typing import Annotated, Any, NoReturn
 
@@ -46,6 +47,7 @@ from simc_cli.build_input import (
     BuildIdentity,
     BuildResolution,
     BuildSpec,
+    DecodedTalent,
     SimcBuildError,
     TalentStrings,
     TreeDiff,
@@ -2384,19 +2386,19 @@ def apl_branch_compare_command(
         disable=disable,
     )
     right_values = _build_option_values(
-        profile_path=right_profile_path if right_profile_path is not None else profile_path,
-        build_file=right_build_file if right_build_file is not None else build_file,
-        build_text=right_build_text if right_build_text is not None else build_text,
+        profile_path=right_profile_path,
+        build_file=right_build_file,
+        build_text=right_build_text,
         talents=TalentStrings(
-            talents=right_talents if right_talents is not None else talents,
-            class_talents=right_class_talents if right_class_talents is not None else class_talents,
-            spec_talents=right_spec_talents if right_spec_talents is not None else spec_talents,
-            hero_talents=right_hero_talents if right_hero_talents is not None else hero_talents,
+            talents=right_talents,
+            class_talents=right_class_talents,
+            spec_talents=right_spec_talents,
+            hero_talents=right_hero_talents,
         ),
-        actor_class=right_actor_class if right_actor_class is not None else actor_class,
-        spec_name=right_spec_name if right_spec_name is not None else spec_name,
-        enable=[*enable, *right_enable],
-        disable=[*disable, *right_disable],
+        actor_class=right_actor_class,
+        spec_name=right_spec_name,
+        enable=right_enable,
+        disable=right_disable,
     )
     _apl_branch_compare(
         ctx,
@@ -2405,8 +2407,29 @@ def apl_branch_compare_command(
         left_targets=left_targets,
         right_targets=right_targets,
         left_values=left_values,
-        right_values=right_values,
+        right_values=_right_side_values(left_values, right_values),
     )
+
+
+def _right_side_values(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
+    """The right side of apl-branch-compare: its own build when it names one, else the left build again.
+
+    A right-hand build replaces the left one whole. Inheriting the left sources it did not override let
+    a left ``--talents`` or ``--build-file`` outrank a ``--right-profile-path`` in the merge, so the
+    command compared the left build with itself and reported no changes. Without a right-hand build the
+    comparison is of target counts, and only the right class/spec hints and ``--right-enable``/
+    ``--right-disable`` are layered over the left build.
+    """
+    right_sources = (right["profile_path"], right["build_file"], right["build_text"], *astuple(right["talents"]))
+    if any(source is not None for source in right_sources):
+        return right
+    return {
+        **left,
+        "actor_class": right["actor_class"] if right["actor_class"] is not None else left["actor_class"],
+        "spec_name": right["spec_name"] if right["spec_name"] is not None else left["spec_name"],
+        "enable": [*left["enable"], *right["enable"]],
+        "disable": [*left["disable"], *right["disable"]],
+    }
 
 
 def _analysis_packet(
@@ -3095,10 +3118,19 @@ class _TalentEdit:
     tree: str
     value: str
     rank: int
-    entry: int | None
+    # The entries the edit names: one for an entry id, the whole tiered node for a name the build
+    # takes, and every entry carrying the name for one it does not. Never a same-named entry on
+    # another node, such as the other half of a choice node whose entries share the name (Fire's two
+    # Flamestrikes) or a second node of that name (Guardian's two Starfires).
+    entries: frozenset[int]
+    # The choice nodes the talent sits on; a build takes only one entry of a choice node.
+    choice_nodes: frozenset[int] = frozenset()
 
     def as_option(self) -> str:
         return f"{self.value}:{self.rank}"
+
+    def names(self, talent: DecodedTalent) -> bool:
+        return talent.entry in self.entries
 
 
 def _base_entry_index(base_resolution: BuildResolution) -> dict[str, tuple[str, int]]:
@@ -3133,13 +3165,14 @@ def _resolve_edit(
         tree = table.tree_for_entry(entry, class_id=class_id, spec_id=spec_id)
         if tree is None or tree == "selection":
             fail(ctx, "unknown_talent", f"Unknown talent entry id for this spec: '{value}'.", exit_code=EXIT_USAGE)
-        return _TalentEdit(tree=tree, value=value, rank=rank, entry=entry)
+        return _TalentEdit(tree=tree, value=value, rank=rank, entries=frozenset({entry}), choice_nodes=table.choice_nodes([entry]))
     # SimC tokenizes talent names when it matches them, and a profile line cannot contain spaces.
     token = tokenize_talent_name(value)
     known = by_name.get(value.lower()) or by_name.get(token)
     if known is not None:
         # Pass the name through so SimC spreads the rank over a tiered node's entries itself.
-        return _TalentEdit(tree=known[0], value=token, rank=rank, entry=known[1])
+        node = {known[1], *(sibling.entry for sibling in table.tiered_siblings_by_entry.get(known[1], ()))}
+        return _TalentEdit(tree=known[0], value=token, rank=rank, entries=frozenset(node), choice_nodes=table.choice_nodes([known[1]]))
     tree = table.tree_for_name(value, class_id=class_id, spec_id=spec_id)
     if tree is None or tree == "selection":
         fail(
@@ -3148,7 +3181,33 @@ def _resolve_edit(
             f"Cannot resolve talent '{value}' to a talent tree. Use an entry id or a name this spec can take.",
             exit_code=EXIT_USAGE,
         )
-    return _TalentEdit(tree=tree, value=token, rank=rank, entry=None)
+    entries = table.entries_for_name(value, class_id=class_id, spec_id=spec_id)
+    return _TalentEdit(tree=tree, value=token, rank=rank, entries=frozenset(entries), choice_nodes=table.choice_nodes(entries))
+
+
+def _choice_conflicts(
+    edits: list[_TalentEdit], trees: dict[str, list[DecodedTalent]], choice_node_by_entry: dict[int, int]
+) -> list[str]:
+    """An add on a choice node whose other entry the build takes and no ``--remove`` drops.
+
+    ``trees`` is what each tree is built from: the base build, or the swap source of a swapped tree.
+    The talent hash holds one entry per choice node, so SimC keeps one of the two: either the add never
+    lands or the build's choice silently goes. Neither is the build that was asked for.
+    """
+    kept = [
+        (tree, talent)
+        for tree, talents in trees.items()
+        for talent in talents
+        if talent.taken and not any(edit.rank == 0 and edit.tree == tree and edit.names(talent) for edit in edits)
+    ]
+    return [
+        f"{edit.as_option()} shares a choice node with {talent.name} (entry {talent.entry}), which the build takes; "
+        f"pass {shlex.join(['--remove', str(talent.entry)])} as well to swap them."
+        for edit in edits
+        if edit.rank
+        for tree, talent in kept
+        if tree == edit.tree and choice_node_by_entry.get(talent.entry) in edit.choice_nodes and not edit.names(talent)
+    ]
 
 
 def _build_modify_edits(
@@ -3156,6 +3215,7 @@ def _build_modify_edits(
     paths: RepoPaths,
     *,
     base_resolution: BuildResolution,
+    swap_sources: dict[str, BuildResolution],
     class_spec: tuple[str, str],
     add: list[str],
     remove: list[str],
@@ -3179,6 +3239,10 @@ def _build_modify_edits(
             _resolve_edit(ctx, name_or_id, int(rank_str), table=table, by_name=by_name, class_id=class_id, spec_id=spec_id)
         )
         modifications.append(f"add:{item}")
+    trees = {tree: swap_sources.get(tree, base_resolution).talents_by_tree.get(tree, []) for tree in ACTIVE_TREES}
+    conflicts = _choice_conflicts(edits, trees, table.choice_node_by_entry)
+    if conflicts:
+        fail(ctx, "invalid_argument", " ".join(conflicts), exit_code=EXIT_USAGE)
     return edits
 
 
@@ -3228,7 +3292,7 @@ def _unrequested_changes(diff_payload: dict[str, Any], edits: list[_TalentEdit])
     unrelated talents along. Anything the caller did not name is reported instead of shipped.
     Only the active trees gate the export; ``inactive_hero`` is disclosed instead (see above).
     """
-    requested_entries = {edit.entry for edit in edits if edit.entry is not None}
+    requested_entries = frozenset[int]().union(*(edit.entries for edit in edits))
     # An edit names one talent, and every entry of a tiered node carries that same name, so a
     # name-resolved edit covers all of them within its tree. An entry-id edit tokenizes to digits and
     # matches no name.
@@ -3246,6 +3310,42 @@ def _unrequested_changes(diff_payload: dict[str, Any], edits: list[_TalentEdit])
     return unrequested
 
 
+def _unapplied_edits(edits: list[_TalentEdit], result: BuildResolution) -> list[dict[str, Any]]:
+    """The edits the re-encoded build does not carry at the requested rank.
+
+    SimC clamps a rank above the talent's maximum and ignores a talent it cannot place, without an
+    error, so an export can come back without an edit that was asked for.
+    """
+    unapplied: list[dict[str, Any]] = []
+    for edit in edits:
+        rows = [talent for talent in result.talents_by_tree.get(edit.tree, []) if talent.taken and edit.names(talent)]
+        export_rank = sum(talent.rank for talent in rows) if all(talent.rank_known for talent in rows) else None
+        if export_rank != edit.rank:
+            unapplied.append({"tree": edit.tree, "talent": edit.value, "requested_rank": edit.rank, "export_rank": export_rank})
+    return unapplied
+
+
+def _tree_points(resolution: BuildResolution, tree: str) -> int:
+    return sum(talent.rank for talent in resolution.talents_by_tree.get(tree, []) if talent.taken)
+
+
+def _modify_disclosures(diff_from_base: dict[str, Any], base: BuildResolution, result: BuildResolution) -> list[str]:
+    """What the payload must say about an export that is exactly the requested build.
+
+    SimC checks neither the game's point budget nor node prerequisites, so an add on a full build
+    yields an export the game may refuse to import.
+    """
+    disclosures = [REENCODE_KEYSTONE_DISCLOSURE] if diff_from_base[INACTIVE_HERO_TREE]["has_differences"] else []
+    for tree in ACTIVE_TREES:
+        spent, budget = _tree_points(result, tree), _tree_points(base, tree)
+        if spent > budget:
+            disclosures.append(
+                f"The export spends {spent} points in the {tree} tree, more than the base build's {budget}. SimC does not "
+                "enforce the game's point budget or node prerequisites, so the game may refuse to import it."
+            )
+    return disclosures
+
+
 @dataclass(frozen=True, slots=True)
 class _ModifyBuildDiffs:
     """What the re-encoded build changed, measured against two different builds.
@@ -3258,6 +3358,7 @@ class _ModifyBuildDiffs:
 
     from_base: dict[str, Any]
     from_request: dict[str, Any]
+    result: BuildResolution
 
 
 def _modify_build_diffs(
@@ -3297,7 +3398,7 @@ def _modify_build_diffs(
         tree: diff_against(swap_sources[tree], tree) if tree in swap_sources else from_base[tree]
         for tree in ACTIVE_TREES
     }
-    return _ModifyBuildDiffs(from_base=from_base, from_request=from_request)
+    return _ModifyBuildDiffs(from_base=from_base, from_request=from_request, result=result_resolution)
 
 
 @dataclass(frozen=True, slots=True)
@@ -3352,6 +3453,7 @@ def _modify_build(ctx: typer.Context, options: _ModifyBuildOptions) -> None:
         ctx,
         paths,
         base_resolution=base_resolution,
+        swap_sources=swaps.sources,
         class_spec=(base_spec.actor_class, base_spec.spec),
         add=options.add,
         remove=options.remove,
@@ -3374,12 +3476,18 @@ def _modify_build(ctx: typer.Context, options: _ModifyBuildOptions) -> None:
 
     diff_payload = diffs.from_base
     unrequested = _unrequested_changes(diffs.from_request, edits)
-    if unrequested:
+    unapplied = _unapplied_edits(edits, diffs.result)
+    if unrequested or unapplied:
         fail(
             ctx,
             "encode_mismatch",
             "The re-encoded build differs from the requested build; no export was emitted.",
-            details={"modifications": modifications, "unrequested_changes": unrequested, "diff_from_base": diff_payload},
+            details={
+                "modifications": modifications,
+                "unrequested_changes": unrequested,
+                "unapplied_edits": unapplied,
+                "diff_from_base": diff_payload,
+            },
         )
 
     _emit(ctx, {
@@ -3394,8 +3502,8 @@ def _modify_build(ctx: typer.Context, options: _ModifyBuildOptions) -> None:
             "talents_export": encoded,
             "wowhead_url": f"https://www.wowhead.com/talent-calc/blizzard/{encoded}",
             "diff_from_base": diff_payload,
-            "disclosures": [REENCODE_KEYSTONE_DISCLOSURE] if diff_payload[INACTIVE_HERO_TREE]["has_differences"] else [],
-            # The active trees carry exactly the requested edits; see disclosures for the rest.
+            "disclosures": _modify_disclosures(diff_payload, base_resolution, diffs.result),
+            # Every requested edit landed and nothing else changed in the active trees; see disclosures.
             "verified": True,
         },
     })

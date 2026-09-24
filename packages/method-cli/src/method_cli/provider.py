@@ -7,6 +7,8 @@ Nothing here prints or raises ``typer.Exit``: every function returns an envelope
 
 from __future__ import annotations
 
+import re
+import shlex
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -34,6 +36,7 @@ from warcraft_content.article_provider_cli import (
 from warcraft_content.guide_analysis import extract_guide_analysis_surfaces, merge_guide_analysis_surfaces
 from warcraft_content.search import ArticleMatchWeights, normalize_query, score_article_match, tokenize_query
 from warcraft_core.envelope import Envelope, success_envelope
+from warcraft_core.exit_codes import error_code_for_http_status
 from warcraft_core.provider import ProviderError, ProviderSurface
 
 from method_cli.client import METHOD_SITEMAP_URL, MethodClient, guide_ref_parts, load_method_cache_settings_from_env
@@ -43,6 +46,9 @@ PROVIDER_NAME: Final = "method"
 # Method guide titles are short, so an all-terms hit is worth less here than on long article titles.
 MATCH_WEIGHTS: Final = ArticleMatchWeights(all_terms=8)
 QUERY_NOISE_TERMS: Final = ("method", "guide", "guides")
+# Method never writes "Mythic+" or "Mythic Plus": its M+ pages are about "mythic dungeons", so every
+# spelling of M+ reads as "mythic dungeon".
+MYTHIC_PLUS_RE: Final = re.compile(r"\bm(?:ythic)?(?:\s*\+|\s+plus\b)")
 FAMILY_SCORE_BOOST: Final = 12
 FAMILY_QUERY_KEYWORDS: Final[dict[str, frozenset[str]]] = {
     "profession_guide": frozenset(
@@ -117,11 +123,7 @@ def transport_errors() -> Iterator[None]:
     except httpx.HTTPStatusError as exc:
         status = exc.response.status_code
         details = {"status_code": status, "url": str(exc.request.url)}
-        if status in (401, 403):
-            raise ProviderError("auth_failed", str(exc), details=details) from exc
-        if status == 404:
-            raise ProviderError("not_found", str(exc), details=details) from exc
-        raise ProviderError("upstream_error", str(exc), details=details) from exc
+        raise ProviderError(error_code_for_http_status(status), str(exc), details=details) from exc
     except httpx.RequestError as exc:
         raise ProviderError("network_error", f"{type(exc).__name__}: {exc}", details={"url": str(exc.request.url)}) from exc
 
@@ -184,7 +186,7 @@ def _scored_candidate(row: dict[str, Any], normalized_query: str, terms: set[str
 
 def search_results(client: MethodClient, query: str, *, limit: int) -> SearchOutcome:
     """Rank the sitemap's supported guide slugs against ``query``."""
-    normalized_query = normalize_query(query, strip_terms=QUERY_NOISE_TERMS)
+    normalized_query = normalize_query(MYTHIC_PLUS_RE.sub("mythic dungeon", query.lower()), strip_terms=QUERY_NOISE_TERMS)
     terms = set(tokenize_query(normalized_query))
     scope_hint = _unsupported_scope_hint(terms)
     if scope_hint is not None:
@@ -199,6 +201,8 @@ def search_results(client: MethodClient, query: str, *, limit: int) -> SearchOut
 
 
 def _search_outcome(query: str, *, limit: int) -> SearchOutcome:
+    if not query.strip():
+        raise ProviderError("invalid_query", "Query cannot be empty.")
     with open_client() as client, transport_errors():
         return search_results(client, query, limit=limit)
 
@@ -261,7 +265,7 @@ def _guide_summary_payload(page_payload: dict[str, Any]) -> dict[str, Any]:
     guide = dict(page_payload["guide"])
     article = dict(page_payload["article"])
     navigation = list(page_payload["navigation"])
-    fetch_more_command = f"method guide-full {guide['slug']}"
+    fetch_more_command = shlex.join(["method", "guide-full", guide["slug"]])
     return {
         "guide": guide,
         "page": dict(page_payload["page"]),
@@ -466,6 +470,16 @@ def guide_query(
     return _envelope(command="guide-query", kind="guide_query", payload=payload, query=query)
 
 
+def _redacted_redis_url(url: str | None) -> str | None:
+    """The Redis URL without its credentials or query string, which can carry a password.
+
+    Doctor output is what agents read first and keep in their context and logs.
+    """
+    if url is None:
+        return None
+    return re.sub(r"(?<=//)[^/@]*@", "***@", url.split("?", 1)[0])
+
+
 def _is_confident_match(results: list[dict[str, Any]]) -> bool:
     if not results:
         return False
@@ -528,7 +542,7 @@ class MethodProvider:
                 "enabled": settings.enabled,
                 "backend": settings.backend,
                 "cache_dir": str(settings.cache_dir),
-                "redis_url": settings.redis_url,
+                "redis_url": _redacted_redis_url(settings.redis_url),
                 "prefix": settings.prefix,
                 "ttls": {
                     "sitemap": sitemap_ttl,

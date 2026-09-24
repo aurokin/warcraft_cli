@@ -2,9 +2,9 @@
 
 Raidbots publishes no report index and its reports expire after a few weeks, so there is nothing to
 pin and nothing to discover at run time: a report id only exists if someone on this machine just
-ran a sim. The always-on journeys therefore cover doctor, the two not-supported stubs, the fully
-local ``explain-input`` surface, and the ``inspect-report``/``input`` error paths, which are the
-only paths that can be reached without one. Set ``WARCRAFT_E2E_RAIDBOTS_REPORT`` to a live report
+ran a sim. The always-on journeys therefore cover doctor, the fully local ``explain-input``
+surface, and the ``inspect-report``/``input`` error paths, which are the only paths that can be
+reached without one. Set ``WARCRAFT_E2E_RAIDBOTS_REPORT`` to a live report
 URL or id to also exercise the success path; that is the documented optional input in
 docs/architecture/E2E_TESTING.md.
 """
@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from tests.e2e.harness import EXIT_GENERIC, EXIT_NOT_FOUND, EXIT_USAGE, run
+from tests.e2e.harness import EXIT_NOT_FOUND, EXIT_USAGE, run
 
 # A report id that matches Raidbots' slug alphabet but has never existed.
 MISSING_REPORT_ID = "warcraftcliE2Emissing"
@@ -50,18 +50,6 @@ def test_doctor_cache_dir_lives_under_the_isolated_cache_root(require, cache_roo
     require("raidbots")
     result = run("raidbots", "doctor")
     assert Path(result.data["cache"]["cache_dir"]).is_relative_to(cache_root)
-
-
-def test_search_and_resolve_are_structured_not_supported_stubs(require) -> None:
-    require("raidbots")
-    for command, kind in (("search", "search_results"), ("resolve", "resolve_match")):
-        result = run("raidbots", command, "droptimizer for my mage")
-        assert result.payload["kind"] == kind
-        assert result.data["not_supported"] is True
-        assert result.data["results"] == []
-        assert result.data["count"] == 0
-        assert result.data["suggested_command"] == "raidbots inspect-report <url-or-id>"
-        assert "no public report index" in result.data["message"]
 
 
 def test_explain_input_classifies_a_quick_sim_profile(require) -> None:
@@ -105,7 +93,7 @@ def test_explain_input_rejects_empty_and_contradictory_input(require) -> None:
 
 def test_an_unparseable_reference_is_rejected_before_the_network(require) -> None:
     require("raidbots")
-    result = run("raidbots", "inspect-report", "https://www.raidbots.com/x/", expect=EXIT_GENERIC, error_code="invalid_report")
+    result = run("raidbots", "inspect-report", "https://www.raidbots.com/x/", expect=EXIT_USAGE, error_code="invalid_report_ref")
     assert "Could not extract a report ID" in result.payload["error"]["message"]
 
 
@@ -143,6 +131,9 @@ def test_a_live_report_round_trips_through_inspect_and_input(require, optional) 
     raw = report.data["raw"]
     assert str(raw["version"]) == parsed["simc_version"]
     assert raw["sim"]["players"][0]["name"] == (parsed.get("actor") or parsed["baseline_actor"])["name"]
+    if parsed["kind"] == "quick_sim":
+        # An Advanced sim carries several actors; none may be dropped after players[0].
+        assert parsed["actor_count"] == len(raw["sim"]["players"]) == 1 + len(parsed["other_actors"])
 
     trimmed = run("raidbots", "inspect-report", reference, "--no-raw")
     assert "raw" not in trimmed.data

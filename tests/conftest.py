@@ -48,8 +48,22 @@ CACHE_ENV_PREFIXES = (
     "WARCRAFTLOGS",
     "WOWHEAD",
 )
-
-
+# Prefixes of every setting the binaries read from the environment: credentials, cache and Redis
+# config, endpoint overrides, the SimC checkout and the worktree runtime roots.
+PRODUCT_ENV_PREFIXES = (
+    "BLIZZARD_",
+    "CURSEFORGE_",
+    "ICY_VEINS_",
+    "LORRGS_",
+    "METHOD_",
+    "RAIDBOTS_",
+    "RAIDERIO_",
+    "SIMC_",
+    "WARCRAFT_",
+    "WARCRAFTLOGS_",
+    "WOWHEAD_",
+)
+XDG_ENV_NAMES = ("XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME")
 class NetworkGuardError(RuntimeError):
     """Raised when a test without the ``live`` marker attempts real network access."""
 
@@ -68,11 +82,24 @@ def _is_e2e(request: pytest.FixtureRequest) -> bool:
 
 
 @pytest.fixture(autouse=True)
-def disable_cache_by_default(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+def hermetic_env(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory) -> None:
+    """Keep every non-e2e test off the developer's config, credentials, caches, state and SimC checkout.
+
+    Product settings are cleared, HOME and the XDG roots point into a fresh per-test directory, and
+    the working directory moves there too because the credential loaders read ``.env.local`` from it.
+    """
     if _is_e2e(request):
         # End-to-end journeys run the binaries as subprocesses with their own isolated cache root
-        # (tests/e2e/conftest.py) and exercise caching on purpose.
+        # (tests/e2e/conftest.py) and use the developer's real provider credentials on purpose.
         return
+    for name in list(os.environ):
+        if name.startswith(PRODUCT_ENV_PREFIXES):
+            monkeypatch.delenv(name)
+    home = tmp_path_factory.mktemp("home")
+    monkeypatch.setenv("HOME", str(home))
+    for name in XDG_ENV_NAMES:
+        monkeypatch.setenv(name, str(home / name.lower()))
+    monkeypatch.chdir(home)
     for prefix in CACHE_ENV_PREFIXES:
         monkeypatch.setenv(f"{prefix}_CACHE_BACKEND", "none")
     monkeypatch.setenv("WARCRAFT_HTTP_MIN_INTERVAL_SECONDS", "0")

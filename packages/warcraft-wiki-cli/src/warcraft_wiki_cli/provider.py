@@ -7,6 +7,7 @@ Nothing here prints or raises ``typer.Exit``: every function returns an envelope
 
 from __future__ import annotations
 
+import shlex
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -21,6 +22,7 @@ from warcraft_content.article_bundle import (
 )
 from warcraft_content.article_discovery import article_resolve_payload, article_search_payload
 from warcraft_core.envelope import Envelope, success_envelope
+from warcraft_core.exit_codes import error_code_for_http_status
 from warcraft_core.provider import ProviderError, ProviderSurface
 
 from warcraft_wiki_cli.client import WIKI_API_URL, WarcraftWikiAPIError, WarcraftWikiClient, load_warcraft_wiki_cache_settings_from_env
@@ -49,8 +51,15 @@ CAPABILITIES = {
     "article_export": "ready",
     "article_query": "ready",
 }
-# MediaWiki error codes that mean "the page does not exist" rather than "the request failed".
-_API_ERROR_CODES = {"missingtitle": "not_found", "invalidtitle": "not_found"}
+# MediaWiki error codes with a shared meaning: the page does not exist, or the wiki is throttling or
+# briefly unwritable. Any other code passes through verbatim and exits 1.
+_API_ERROR_CODES = {
+    "missingtitle": "not_found",
+    "invalidtitle": "not_found",
+    "ratelimited": "rate_limited",
+    "maxlag": "upstream_error",
+    "readonly": "upstream_error",
+}
 
 
 def _envelope(
@@ -83,11 +92,7 @@ def transport_errors() -> Iterator[None]:
     except httpx.HTTPStatusError as exc:
         status = exc.response.status_code
         details = {"status_code": status, "url": str(exc.request.url)}
-        if status in (401, 403):
-            raise ProviderError("auth_failed", str(exc), details=details) from exc
-        if status == 404:
-            raise ProviderError("not_found", str(exc), details=details) from exc
-        raise ProviderError("upstream_error", str(exc), details=details) from exc
+        raise ProviderError(error_code_for_http_status(status), str(exc), details=details) from exc
     except httpx.RequestError as exc:
         raise ProviderError("network_error", f"{type(exc).__name__}: {exc}", details={"url": str(exc.request.url)}) from exc
 
@@ -144,7 +149,7 @@ def _article_summary(page_payload: dict[str, Any]) -> dict[str, Any]:
             "count": len(linked_entities),
             "items": linked_entities[:10],
             "more_available": len(linked_entities) > 10,
-            "fetch_more_command": f"warcraft-wiki article-full {article['title']!r}",
+            "fetch_more_command": shlex.join(["warcraft-wiki", "article-full", article["title"]]),
         },
         "citations": {
             "page": article["page_url"],
@@ -230,7 +235,7 @@ def _typed_ranked_results(
         outcome = search_results(client, search_query, limit=limit)
         query_trace.append(outcome.normalized_query)
         total_count = max(total_count, outcome.total_count)
-        for row in outcome.results:
+        for row in outcome.results[:limit]:
             family = str((row.get("metadata") or {}).get("content_family") or "")
             if family not in allowed_families:
                 continue
@@ -420,7 +425,7 @@ class WarcraftWikiProvider:
             article_search_payload(
                 query=query,
                 search_query=outcome.normalized_query,
-                results=outcome.results,
+                results=outcome.results[:limit],
                 total_count=outcome.total_count,
             ),
             outcome,
@@ -434,9 +439,12 @@ class WarcraftWikiProvider:
                 provider_command=PROVIDER_NAME,
                 query=target,
                 search_query=outcome.normalized_query,
-                results=outcome.results,
+                results=outcome.results[:limit],
                 total_count=outcome.total_count,
-                resolved=is_confident_match(outcome.results),
+                # Judged on every ranked row: trimming to --limit first would hide the rivals. The top
+                # title must also name the query, the typed surfaces' floor: ``all_terms_match`` fires
+                # on the snippet, so "Liquid guild us illidan" alone would resolve to "Team Liquid".
+                resolved=is_confident_match(outcome.results) and title_names_query(str(outcome.results[0]["name"]), target),
             ),
             outcome,
         )

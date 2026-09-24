@@ -376,18 +376,28 @@ def test_article_export_writes_a_bundle_that_article_query_answers_offline(requi
     assert all("scarlet" in (row["text"] or row["html"]).lower() for row in sections)
 
 
-def test_article_query_honours_kind_and_section_title_filters(require, out_dir: Path) -> None:
+def test_article_query_filters_keep_exactly_the_baseline_rows_that_pass_them(require, out_dir: Path) -> None:
+    """``--kind`` and ``--section-title`` return the unfiltered query's matching rows, no others.
+
+    The baseline has to hold rows each filter drops (a linked entity, a section with another
+    title), or an ignored filter would pass.
+    """
     require(PROVIDER)
     bundle = out_dir / "wiki-bundle"
     run(BINARY, "article-export", pins.WIKI_LORE_QUERY, "--out", str(bundle))
+    offline = dead_proxy_env()
+    baseline = run(BINARY, "article-query", str(bundle), "argent", "--limit", "50", env=offline)
+    sections = baseline.data["matches"]["sections"]
+    assert baseline.data["match_counts"]["linked_entities"] >= 1, baseline.describe()
 
-    only_sections = run(BINARY, "article-query", str(bundle), "reputation", "--kind", "sections", env=dead_proxy_env())
-    assert only_sections.data["match_counts"]["sections"] >= 1
-    assert only_sections.data["match_counts"]["linked_entities"] == 0
+    only_sections = run(BINARY, "article-query", str(bundle), "argent", "--limit", "50", "--kind", "sections", env=offline)
+    assert only_sections.data["matches"]["sections"] == sections, only_sections.describe()
+    assert only_sections.data["match_counts"]["linked_entities"] == 0, only_sections.describe()
 
-    titled = run(BINARY, "article-query", str(bundle), "argent", "--section-title", "organization", env=dead_proxy_env())
-    assert titled.data["matches"]["sections"], "no section titled 'Organization' matched"
-    assert all("organization" in row["title"].lower() for row in titled.data["matches"]["sections"])
+    organization = [row for row in sections if "organization" in row["title"].lower()]
+    assert 0 < len(organization) < len(sections), baseline.describe()
+    titled = run(BINARY, "article-query", str(bundle), "argent", "--limit", "50", "--section-title", "organization", env=offline)
+    assert titled.data["matches"]["sections"] == organization, titled.describe()
 
 
 def test_a_missing_article_is_a_not_found_envelope(require) -> None:
@@ -437,6 +447,7 @@ def test_fields_and_compact_shape_the_payload(require) -> None:
     text = compact.data["content"]["text"]
     assert text.endswith("...")
     assert len(text) <= 90
+    assert "data.content.text" in compact.payload["provenance"]["compacted_paths"], compact.describe()
     assert len(lore_article().data["content"]["text"]) > len(text)
 
 

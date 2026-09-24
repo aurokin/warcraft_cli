@@ -7,10 +7,9 @@ into ``main``.
 
 from __future__ import annotations
 
+import shlex
 from collections.abc import Callable
 from typing import Any
-
-from warcraft_core.envelope import SCHEMA_VERSION
 
 from wowhead_cli.expansion_profiles import ExpansionProfile
 from wowhead_cli.page_parser import (
@@ -261,7 +260,7 @@ def entity_page_fetch_more_command(
     """The `entity-page` command that returns the full link list, routed to the active expansion."""
     max_links = min(max(link_count, 200), 2000)
     prefix = command_prefix_for_expansion(expansion)
-    return f"{prefix} entity-page {entity_type} {entity_id} --max-links {max_links}"
+    return f"{prefix} entity-page {shlex.quote(entity_type)} {entity_id} --max-links {max_links}"
 
 
 def build_linked_entity_preview(
@@ -499,22 +498,3 @@ def comparison_linked_entities_summary(
         "unique_count_total_by_entity": unique_counts,
         "unique_by_entity": unique_by_ref,
     }
-
-
-def restore_cached_normalization_version(cached: dict[str, Any]) -> dict[str, Any]:
-    """Move a pre-envelope entry's top-level normalization version under ``normalized``.
-
-    Entries cached before the envelope stored the normalization version (``wowhead.entity.v1``) at
-    the top level, where the envelope's ``schema_version`` now overwrites it. The cache key did not
-    change, so those entries keep serving until they expire.
-    """
-    normalized = cached.get("normalized")
-    legacy_version = cached.get("schema_version")
-    if (
-        not isinstance(normalized, dict)
-        or "schema_version" in normalized
-        or not isinstance(legacy_version, str)
-        or legacy_version == SCHEMA_VERSION
-    ):
-        return cached
-    return {**cached, "normalized": {"schema_version": legacy_version, **normalized}}

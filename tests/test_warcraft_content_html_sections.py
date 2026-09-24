@@ -38,3 +38,12 @@ def test_a_page_with_no_heading_becomes_one_section_under_the_fallback_title() -
     assert [(row["title"], row["level"], row["text"]) for row in sections] == [
         ("Mistweaver Monk", 2, "Intro prose.")
     ]
+
+
+def test_html_comments_stay_out_of_section_text() -> None:
+    """Guide authors leave notes in comments; get_text() skips them, so the sections must too."""
+    article = _article("<article><h2>Stats</h2><p>Haste first.</p><!-- CHECK BACK AND FIX SOON --></article>")
+
+    sections = extract_sections(article, fallback_title="Guide")
+
+    assert [(row["title"], row["text"]) for row in sections] == [("Stats", "Haste first.")]

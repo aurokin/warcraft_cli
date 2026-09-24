@@ -27,7 +27,9 @@ def _assert_addon_payload(result: Result) -> None:
 
     changelog = result.data["changelog"]
     assert "error" not in changelog, result.describe()
-    assert changelog["file_id"] in {row["id"] for row in latest_files}
+    # The newest file can be an alpha or beta, so the changelog names the file its notes cover.
+    newest = {row["id"]: row for row in latest_files}[changelog["file_id"]]
+    assert (changelog["display_name"], changelog["release_type"]) == (newest["displayName"], newest["releaseType"]), result.describe()
     assert changelog["source_url"].endswith("/changelog")
 
 

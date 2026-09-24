@@ -80,6 +80,9 @@ def catalog(skip_list: frozenset[str], doctor_rows: dict[str, dict[str, Any]]) -
 
     for spec_slug in _spec_slugs(specs)[:_SPEC_RANKING_ATTEMPTS]:
         ranking = run("lorrgs", "spec-ranking", spec_slug, boss_slug)
+        if ranking.data["reports"] == []:
+            # An empty ranking is upstream's answer, and the payload has to say so rather than look ranked.
+            assert any("Lorrgs returned no" in note for note in ranking.data["notes"]), ranking.describe()
         found = _first_report(ranking)
         if found is not None:
             return Catalog(
@@ -216,11 +219,11 @@ def _comp_ranking_candidates(catalog: Catalog) -> list[str]:
     """Bosses to try for a populated comp ranking: this tier first, then one per other zone.
 
     Lorrgs builds a comp ranking from the parses it has already ingested, so a raid that opened
-    days ago can legitimately have none yet. Older zones keep theirs, so the surface itself is
-    still exercised.
+    days ago can legitimately have none yet. Recent older zones keep theirs, so they are walked
+    newest first and the surface itself is still exercised.
     """
     candidates = list(catalog.zone_boss_slugs)
-    for zone in catalog.zones.data["zones"]:
+    for zone in sorted(catalog.zones.data["zones"], key=lambda row: -float(row["id"])):
         if f"{zone['id']:g}" == catalog.zone_id:
             continue
         bosses = zone.get("bosses") or []
@@ -264,7 +267,13 @@ def test_comp_ranking_returns_ranked_comps_and_honours_the_killtime_filter(catal
     """
     scanned: list[str] = []
     for boss_slug in _comp_ranking_candidates(catalog):
-        result = _comp_ranking(boss_slug)
+        result = run("lorrgs", "comp-ranking", boss_slug, "--limit", str(COMP_RANKING_LIMIT), expect=None)
+        if result.error_code == "not_found":
+            # Lorrgs keeps comp rankings only for the raids it still tracks; a retired one is a 404.
+            assert result.exit_code == EXIT_NOT_FOUND, result.describe()
+            scanned.append(f"{boss_slug}: not_found")
+            continue
+        assert result.ok, result.describe()
         assert result.data["boss_slug"] == boss_slug, result.describe()
         assert isinstance(result.data["updated"], str) and result.data["updated"], result.describe()
         assert result.payload["query"]["limit"] == COMP_RANKING_LIMIT, result.describe()
@@ -336,8 +345,24 @@ def test_a_report_code_without_a_digit_is_a_report_reference(require) -> None:
 
     bare = run("lorrgs", "resolve", code)
     assert bare.data["match"]["report_id"] == code, bare.describe()
-    word = run("lorrgs", "resolve", "restorationdruid")
-    assert (word.data.get("match") or {}).get("kind") != "report_overview", word.describe()
+    for word_query in ("restorationdruid", "RestorationDruid"):
+        word = run("lorrgs", "resolve", word_query)
+        assert (word.data.get("match") or {}).get("kind") != "report_overview", word.describe()
+
+
+def test_a_guide_question_does_not_resolve_to_spec_metadata(require) -> None:
+    """Lorrgs has spec timelines, not guides: "guide" is a word it cannot answer, so it may not resolve.
+
+    The same query without "guide" is the oracle that the spec itself is still recognised.
+    """
+    require("lorrgs")
+    spec = run("lorrgs", "resolve", "frost mage")
+    assert spec.data["resolved"] is True, spec.describe()
+    assert spec.data["next_command"] == "lorrgs spec mage-frost", spec.describe()
+
+    guide = run("lorrgs", "resolve", "frost mage guide")
+    assert guide.data["resolved"] is False, guide.describe()
+    assert guide.data["next_command"] is None, guide.describe()
 
 
 def test_search_ranks_the_spec_ranking_surface_first(catalog: Catalog) -> None:
@@ -372,6 +397,10 @@ def test_a_malformed_report_reference_is_rejected_before_the_network(require) ->
     require("lorrgs")
     result = run("lorrgs", "user-report", "not a report", expect=EXIT_USAGE, error_code="invalid_report_ref")
     assert "Warcraft Logs report URL" in result.payload["error"]["message"]
+
+    # A report reference with no fight in it and no --fight is also a command to fix, not an upstream failure.
+    no_fight = run("lorrgs", "user-report-fights", "JVFTxcKCqrvpaAzD", expect=EXIT_USAGE, error_code="missing_fight")
+    assert "--fight" in no_fight.payload["error"]["message"]
 
 
 def test_help_names_every_documented_surface(require) -> None:

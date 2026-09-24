@@ -8,6 +8,7 @@ from pathlib import Path
 import httpx
 import typer
 from wowhead_cli.main import app
+from wowhead_cli.wowhead_client import WowheadClient
 
 from tests.wowhead_testkit import (
     SAMPLE_DRESSING_ROOM_HTML,
@@ -427,6 +428,23 @@ def test_dressing_room_command_normalizes_hash_ref(monkeypatch) -> None:
     assert payload["data"]["tool"]["has_share_hash"] is True
     assert payload["data"]["tool"]["state_url"].startswith("https://www.wowhead.com/dressing-room#")
 
+
+
+def test_dressing_room_reads_a_classic_share_url_from_classic_and_never_cites_it_as_canonical(monkeypatch) -> None:
+    fetched: list[str] = []
+
+    def fake_page_html(self: WowheadClient, page_url: str) -> str:
+        fetched.append(page_url)
+        return "<html><head><title>Dressing Room</title></head></html>"
+
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.page_html", fake_page_html)
+    result = runner.invoke(app, ["dressing-room", "https://www.wowhead.com/classic/dressing-room#abc123"])
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.stdout)["data"]
+    assert fetched == ["https://www.wowhead.com/classic/dressing-room"]
+    assert data["expansion"] == "classic"
+    assert data["page"]["canonical_url"] is None
+    assert data["page"]["note"] == "The fetched page carries no canonical link."
 
 
 def test_profiler_command_normalizes_list_ref(monkeypatch) -> None:

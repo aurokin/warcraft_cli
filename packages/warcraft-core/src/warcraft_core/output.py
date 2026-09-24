@@ -84,19 +84,39 @@ def resolve_output_options(
     return options
 
 
-def truncate_string(value: str, *, max_chars: int) -> str:
-    if len(value) <= max_chars:
-        return value
-    return value[: max_chars - 3] + "..."
+# Key under ``provenance`` listing the dot paths --compact shortened, so a cut value is never read as whole.
+COMPACTED_PATHS_KEY = "compacted_paths"
+_COMMAND_KEY_SUFFIXES = ("command", "commands")
 
 
-def compact_value(value: Any, *, max_chars: int) -> Any:
+def compact_value(value: Any, *, max_chars: int, cut: list[str], path: str = "", verbatim: bool = False) -> Any:
+    """Truncate long prose strings in ``value`` to ``max_chars`` (ending in ``...``), recording each path in ``cut``.
+
+    Values another tool consumes verbatim are never cut: strings without a space or tab (URLs, talent
+    and transport strings, export codes, ids, and line-per-token text such as a generated SimC
+    profile) and anything under a ``*command`` / ``*commands`` key.
+    """
     if isinstance(value, str):
-        return truncate_string(value, max_chars=max_chars)
+        if verbatim or len(value) <= max_chars or not (" " in value or "\t" in value):
+            return value
+        cut.append(path)
+        return value[: max_chars - 3] + "..."
     if isinstance(value, list):
-        return [compact_value(row, max_chars=max_chars) for row in value]
+        return [
+            compact_value(row, max_chars=max_chars, cut=cut, path=f"{path}.{index}", verbatim=verbatim)
+            for index, row in enumerate(value)
+        ]
     if isinstance(value, dict):
-        return {key: compact_value(item, max_chars=max_chars) for key, item in value.items()}
+        return {
+            key: compact_value(
+                item,
+                max_chars=max_chars,
+                cut=cut,
+                path=f"{path}.{key}" if path else str(key),
+                verbatim=verbatim or str(key).endswith(_COMMAND_KEY_SUFFIXES),
+            )
+            for key, item in value.items()
+        }
     return value
 
 
@@ -141,11 +161,6 @@ def filter_payload_fields(
         return payload
 
     filtered: dict[str, Any] = {}
-    if payload.get("ok") is False:
-        filtered["ok"] = payload["ok"]
-    if payload.get("ok") is False and "error" in payload:
-        filtered["error"] = payload["error"]
-
     missing: list[str] = []
     for path in fields:
         found, value = extract_dict_path(payload, path)
@@ -162,12 +177,19 @@ def filter_payload_fields(
 
 
 def shape_payload(payload: dict[str, Any], options: OutputOptions) -> dict[str, Any]:
-    """Apply --compact and --fields to ``payload``."""
+    """Apply --compact and --fields to a success envelope. A failure is always written whole."""
+    if payload.get("ok") is False:
+        return payload
     rendered: dict[str, Any] = payload
+    cut: list[str] = []
     if options.compact:
-        rendered = compact_value(rendered, max_chars=options.compact_max_chars)
+        rendered = compact_value(rendered, max_chars=options.compact_max_chars, cut=cut)
     if options.fields:
         rendered = filter_payload_fields(rendered, fields=options.fields, strict=options.fields_strict)
+        cut = [path for path in cut if any(path == field or path.startswith(f"{field}.") for field in options.fields)]
+    # Recorded after the projection, so a cut value the projection keeps is always marked as cut.
+    if cut:
+        assign_dict_path(rendered, f"provenance.{COMPACTED_PATHS_KEY}", cut)
     return rendered
 
 

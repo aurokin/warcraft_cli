@@ -30,6 +30,7 @@ and are the documented exception in docs/architecture/E2E_TESTING.md.
 from __future__ import annotations
 
 import json
+import shlex
 from collections import Counter
 from dataclasses import dataclass
 from functools import lru_cache
@@ -37,6 +38,7 @@ from typing import Any
 
 from tests.e2e import pins
 from tests.e2e.harness import (
+    EXIT_AUTH,
     EXIT_NETWORK,
     EXIT_NOT_FOUND,
     EXIT_USAGE,
@@ -187,7 +189,10 @@ def guild_anchor() -> Anchor:
     for report in guild_reports():
         code = str(report["code"])
         fights = run("warcraftlogs", "report-fights", code).data["fights"]
-        kills = [fight for fight in fights if fight.get("kill") and fight.get("encounter_id")]
+        # Only the tier's own bosses: a raid-zone report can also hold a Mythic+ run (difficulty 10),
+        # whose dungeon "encounter" would otherwise win the difficulty tie-break below.
+        raid_bosses = {int(boss["id"]) for boss in zone["encounters"]}
+        kills = [fight for fight in fights if fight.get("kill") and fight.get("encounter_id") in raid_bosses]
         if not kills:
             continue
         # Prefer the hardest difficulty in the report; ties go to the latest pull.
@@ -371,14 +376,16 @@ def assert_sampling_metadata(
 
 @lru_cache(maxsize=1)
 def anchor_aura_id() -> int:
-    """An aura game id that is actually applied during the anchor kill."""
-    result = run("warcraftlogs", "report-encounter-buffs", anchor().url, "--view-by", "source", "--preview-limit", "5")
-    preview = (result.data["buffs"] or {}).get("preview") or []
-    for row in preview:
-        game_id = ((row.get("aura") or {}).get("game_id"))
-        if isinstance(game_id, int):
-            return game_id
-    raise JourneyFailure(f"no aura game id in the anchor fight's buff preview\n{result.describe()}")
+    """An aura game id applied again and again during the anchor kill, so both halves of the fight hold it.
+
+    The most-applied aura, not the longest-held one: a pre-pull food buff is held all fight but
+    applied once, which gives the two-window comparison nothing to set side by side.
+    """
+    result = run("warcraftlogs", "report-encounter-buffs", anchor().url, "--view-by", "source", "--preview-limit", "25")
+    preview = [row for row in (result.data["buffs"] or {}).get("preview") or [] if isinstance((row.get("aura") or {}).get("game_id"), int)]
+    if not preview:
+        raise JourneyFailure(f"no aura game id in the anchor fight's buff preview\n{result.describe()}")
+    return int(max(preview, key=lambda row: row.get("reported_total_uses") or 0)["aura"]["game_id"])
 
 
 @lru_cache(maxsize=1)
@@ -607,6 +614,14 @@ def test_search_and_resolve_accept_a_report_url_and_a_bare_code(require):
     assert match["report_reference"]["code"] == found.code, from_url.describe()
     assert match["report_reference"]["fight_id"] == found.fight_id, from_url.describe()
     assert str(found.fight_id) in from_url.data["next_command"], from_url.describe()
+    # next_command is handed to an agent to run as written, so it has to run and read that fight.
+    binary, *args = shlex.split(from_url.data["next_command"])
+    handed_over = run(binary, *args)
+    assert (handed_over.data["reference"]["code"], handed_over.data["fight"]["id"]) == (found.code, found.fight_id), handed_over.describe()
+
+    # Warcraft Logs writes the fight as ``?fight=N`` as often as ``#fight=N``; both carry it.
+    query_form = run("warcraftlogs", "resolve", f"https://www.warcraftlogs.com/reports/{found.code}?fight={found.fight_id}")
+    assert query_form.data["match"]["report_reference"]["fight_id"] == found.fight_id, query_form.describe()
 
     from_code = run("warcraftlogs", "resolve", found.code)
     assert from_code.data["match"]["report_reference"]["code"] == found.code, from_code.describe()
@@ -616,8 +631,9 @@ def test_search_and_resolve_accept_a_report_url_and_a_bare_code(require):
     for query in ("https://www.warcraftlogs.com/reports/JVFTxcKCqrvpaAzD#fight=4", "JVFTxcKCqrvpaAzD"):
         lettered = run("warcraftlogs", "search", query)
         assert _rows(lettered, "results")[0]["report_reference"]["code"] == "JVFTxcKCqrvpaAzD", lettered.describe()
-    word = run("warcraftlogs", "resolve", "frostdeathknight")
-    assert not (word.data.get("match") or {}).get("report_reference"), word.describe()
+    for word_query in ("frostdeathknight", "FrostDeathKnight"):
+        word = run("warcraftlogs", "resolve", word_query)
+        assert not (word.data.get("match") or {}).get("report_reference"), word.describe()
 
 
 def test_guild_family_reports_the_pinned_guild(require):
@@ -726,7 +742,9 @@ def test_reports_and_guild_reports_list_the_current_tier(require):
 
     public = run("warcraftlogs", "reports", "--zone-id", str(zone["id"]), "--limit", "3")
     rows = _rows(public, "reports")
-    assert len(rows) <= 3, public.describe()
+    # The current tier has far more than three public reports, so the cap has to bite.
+    assert public.data["pagination"]["has_more_pages"] is True, public.describe()
+    assert len(rows) == 3, public.describe()
     assert all(row["zone"]["id"] == zone["id"] for row in rows), public.describe()
 
     listing = run("warcraftlogs", "guild-reports", *GUILD, "--zone-id", str(zone["id"]), "--limit", "3")
@@ -911,6 +929,30 @@ def test_report_encounter_aura_summary_and_compare_use_explicit_windows(require)
     assert windows["left"]["aura_summary"] == summary.data["aura_summary"], compare.describe()
     assert windows["right"]["aura_summary"] == second_half.data["aura_summary"], compare.describe()
 
+    # The deltas are right minus left of the two single-window summaries, per holder (a holder missing
+    # from one window has no delta). Every delta once came back null on real data.
+    def uptime_by_source(result: Result) -> dict[Any, Any]:
+        return {row["source"]["id"]: row["reported_total_uptime"] for row in result.data["aura_summary"]["rows"]}
+
+    left_uptime, right_uptime = uptime_by_source(summary), uptime_by_source(second_half)
+    assert set(left_uptime) & set(right_uptime), f"no holder in both windows: {left_uptime} vs {right_uptime}"
+    compared = compare.data["comparison"]["rows"]
+    assert {row["source"]["id"] for row in compared} == set(left_uptime) | set(right_uptime), compare.describe()
+    for row in compared:
+        source = row["source"]["id"]
+        both = source in left_uptime and source in right_uptime
+        expected = right_uptime[source] - left_uptime[source] if both else None
+        assert row["reported_total_uptime_delta"] == expected, compare.describe()
+    deltas = [abs(row["reported_total_uptime_delta"]) for row in compared if row["reported_total_uptime_delta"] is not None]
+    assert deltas == sorted(deltas, reverse=True), compare.describe()
+
+    # A window that opens after the pull ended holds nothing, and zero would read as "never up".
+    past_end = run(
+        "warcraftlogs", "report-encounter-aura-summary", found.url, "--ability-id", str(ability_id),
+        "--window-start-ms", str(duration + 1000), expect=EXIT_USAGE, error_code="invalid_query",
+    )
+    assert "--window-start-ms" in past_end.payload["error"]["message"], past_end.describe()
+
 
 def test_report_encounter_damage_surfaces_return_typed_and_raw_views(require):
     require("warcraftlogs")
@@ -985,8 +1027,10 @@ def test_raw_report_surfaces_return_scoped_slices(require):
     events = run("warcraftlogs", "report-events", found.code, "--fight-id", fight, "--data-type", "casts", "--limit", "5")
     assert events.payload["kind"] == "report_events", events.describe()
     assert events.data["report"]["code"] == found.code, events.describe()
-    assert events.data["events"], events.describe()
-    assert len(events.data["events"]) <= 5, events.describe()
+    # --limit cuts the same time-ordered page short; a wider page proves the cap bit.
+    wider = run("warcraftlogs", "report-events", found.code, "--fight-id", fight, "--data-type", "casts", "--limit", "50")
+    assert len(wider.data["events"]) > 5, wider.describe()
+    assert events.data["events"] == wider.data["events"][:5], events.describe()
     assert {row["type"] for row in events.data["events"]} <= {"cast", "begincast"}, events.describe()
     assert {row["fight"] for row in events.data["events"]} == {found.fight_id}, events.describe()
 
@@ -1155,9 +1199,14 @@ def test_report_encounter_casts_says_when_its_aggregates_are_truncated(require):
     summary = capped.data["casts"]
     assert summary["truncated"] is True, capped.describe()
     assert summary["next_page_timestamp"] is not None, capped.describe()
-    # The note has to name the count the aggregates below it were actually built from.
+    # The note has to name the count the aggregates below it were actually built from, and that
+    # count is held to the same 25-event page read through the raw events surface.
     counted = f"{summary['cast_count']} casts in the first {summary['event_count']} events"
     assert any(counted in note for note in capped.data["notes"]), capped.describe()
+    page = run("warcraftlogs", "report-events", found.code, "--fight-id", str(found.fight_id), "--data-type", "casts", "--limit", "25")
+    page_events = page.data["events"]
+    assert summary["event_count"] == len(page_events), page.describe()
+    assert summary["cast_count"] == sum(1 for event in page_events if event["type"] == "cast"), page.describe()
 
     # The opening seconds of the pull fit inside one page, so the same command must stop warning.
     complete = run("warcraftlogs", *args, "--limit", "10000", "--window-start-ms", "0", "--window-end-ms", "5000")
@@ -1287,6 +1336,11 @@ def test_spec_kill_samples_and_boss_spec_usage_describe_the_cohort(require):
     assert rows, usage.describe()
     assert all(row["spec_name"] and row["appearance_count"] > 0 for row in rows), usage.describe()
     assert spec in {str(row["spec_name"]).lower() for row in rows}, usage.describe()
+    # A spec is counted with its class: Frost Mage and Frost Death Knight are two rows, never one "Frost".
+    keys = [(row["class_name"], row["spec_name"], row["role"]) for row in rows]
+    assert len(keys) == len(set(keys)), usage.describe()
+    fielded = {(player["type"], entry["spec"]) for player in anchor().players for entry in player.get("specs") or []}
+    assert fielded <= {(row["class_name"], row["spec_name"]) for row in rows}, usage.describe()
 
 
 def _anchor_pull_row(rows: list[dict[str, Any]], result: Result) -> dict[str, Any]:
@@ -1567,6 +1621,25 @@ def test_fields_projection_and_compact_bound_the_payload(require):
 # --------------------------------------------------------------------------------------------
 # Error journeys
 # --------------------------------------------------------------------------------------------
+
+
+def test_missing_credentials_exit_3_with_a_recovery_hint(require, tmp_path):
+    """No client credentials anywhere is an auth answer (exit 3) that names the variables to set.
+
+    The config and state roots point at empty directories and the cache is off, so neither the real
+    credentials nor a saved token or cached response can answer instead.
+    """
+    require("warcraftlogs")
+    blank = {
+        "XDG_CONFIG_HOME": str(tmp_path / "config"),
+        "XDG_STATE_HOME": str(tmp_path / "state"),
+        "WARCRAFTLOGS_CLIENT_ID": "",
+        "WARCRAFTLOGS_CLIENT_SECRET": "",
+        **no_cache_env(),
+    }
+    result = run("warcraftlogs", "zones", expect=EXIT_AUTH, env=blank)
+    assert result.error_code in {"missing_public_auth", "missing_client_credentials"}, result.describe()
+    assert "WARCRAFTLOGS_CLIENT_ID" in result.payload["error"]["message"], result.describe()
 
 
 def test_a_missing_fight_in_a_real_report_is_a_not_found_envelope(require):

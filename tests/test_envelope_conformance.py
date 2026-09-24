@@ -1,4 +1,4 @@
-"""One envelope, twelve providers.
+"""One envelope, every provider.
 
 Every ``PROVIDER`` surface must return the shape defined in ``warcraft_core.envelope`` regardless of
 whether the provider is ready, stubbed, or unsupported. The payload lives under ``data``; the wrapper's
@@ -85,6 +85,14 @@ def test_stubbed_surfaces_return_a_flagged_success_envelope(registration: Any, s
     assert payload["data"].get("suggested_command"), f"{context}: tell the agent what to run instead"
 
 
+def test_every_search_and_resolve_capability_is_covered_by_one_of_the_surface_tests() -> None:
+    """A missing or new capability value would be skipped by both surface tests above."""
+    covered = {"ready", "ready_explicit_report_only", "coming_soon", "not_supported"}
+    for registration in PROVIDERS:
+        for surface in ("search", "resolve"):
+            assert registration.wrapper_capabilities.get(surface) in covered, f"{registration.name} {surface}"
+
+
 def test_every_provider_is_assigned_to_exactly_one_tier() -> None:
     registry_tiers = {registration.name: registration.tier for registration in PROVIDERS}
     expected = {name: tier for tier, names in TIERS.items() for name in names}
@@ -146,7 +154,6 @@ def _wrapper_command_args(command: str, tmp_path: Any) -> list[str]:
         "search": ["search", "thunderfury"],
         "resolve": ["resolve", "thunderfury"],
         "guild": ["guild", "us", "malganis", "gn"],
-        "guild-ranks": ["guild-ranks", "us", "malganis", "gn"],
         "actor-profile": ["actor-profile", "abcd1234", "Someone"],
         "cooldown-packet": ["cooldown-packet", "abcd1234", "--fight-id", "1", "--actor-id", "1", "--phase", "1"],
         "guide-compare": ["guide-compare", str(tmp_path / "a"), str(tmp_path / "b")],
@@ -274,7 +281,6 @@ _SUCCESS_PATH_ARGS = {
     "search": ["search", "thunderfury"],
     "resolve": ["resolve", "thunderfury"],
     "guild": ["guild", "us", "malganis", "gn"],
-    "guild-ranks": ["guild-ranks", "us", "malganis", "gn"],
     "actor-profile": ["actor-profile", "abcd1234", "Someone"],
     "talent-packet": ["talent-packet", _WOWHEAD_TALENT_CALC_REF, "--no-validate"],
 }

@@ -5,6 +5,7 @@ import json
 from typer.testing import CliRunner
 from wowhead_cli.expansion_profiles import detect_expansion_from_url, parse_entity_from_wowhead_url
 from wowhead_cli.main import app
+from wowhead_cli.wowhead_client import WowheadClient
 
 runner = CliRunner()
 
@@ -78,25 +79,26 @@ def test_compare_routes_off_a_url_in_any_argument_position(monkeypatch) -> None:
 
 
 
-def test_search_auto_detects_expansion_from_entity_url(monkeypatch) -> None:
-    monkeypatch.setattr(
-        "wowhead_cli.wowhead_client.WowheadClient.search_suggestions",
-        lambda self, query: {"search": query, "results": [{"id": 19019, "name": "Thunderfury", "type": "item"}]},
-    )
-    monkeypatch.setattr(
-        "wowhead_cli.provider.normalize_search_results",
-        lambda results, *, query, expansion, entity_types=(), rank_bonuses=None: (
-            [{"id": 19019, "name": "Thunderfury", "entity_type": "item", "url": "https://www.wowhead.com/wotlk/item=19019"}],
-            0,
-        ),
-    )
+def test_search_answers_the_entity_a_url_names_without_searching_upstream(monkeypatch) -> None:
+    """Wowhead's suggestions endpoint matches names, so a URL (or "item 19019") finds nothing there."""
 
-    result = runner.invoke(app, ["search", "https://www.wowhead.com/wotlk/item=19019", "--limit", "1"])
+    def no_upstream_search(self: WowheadClient, query: str) -> dict[str, object]:
+        raise AssertionError(f"searched upstream for {query!r}")
+
+    monkeypatch.setattr("wowhead_cli.wowhead_client.WowheadClient.search_suggestions", no_upstream_search)
+
+    result = runner.invoke(app, ["search", "https://www.wowhead.com/wotlk/item=19019/thunderfury"])
     assert result.exit_code == 0, result.output
-    payload = json.loads(result.stdout)
-    assert payload["data"]["expansion"] == "wotlk"
-    assert payload["data"]["expansion_source"] == "url"
-    assert payload["data"]["search_url"].startswith("https://www.wowhead.com/wotlk/")
+    data = json.loads(result.stdout)["data"]
+    assert data["expansion"] == "wotlk"
+    assert data["expansion_source"] == "url"
+    assert data["count"] == 1
+    row = data["results"][0]
+    assert (row["entity_type"], row["id"], row["url"]) == ("item", 19019, "https://www.wowhead.com/wotlk/item=19019")
+    assert row["follow_up"]["command"] == "wowhead --expansion wotlk entity item 19019"
+
+    mount = runner.invoke(app, ["search", "https://www.wowhead.com/mount=2"])
+    assert json.loads(mount.stdout)["data"]["results"][0]["follow_up"]["command"] == "wowhead entity mount 2"
 
 
 def test_search_keeps_explicit_expansion_flag_over_url(monkeypatch) -> None:

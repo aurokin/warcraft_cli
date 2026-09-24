@@ -15,6 +15,7 @@ from typing import Any
 
 from warcraft_content.article_discovery import ArticleKind, article_candidate, sort_article_candidates
 from warcraft_content.search import normalize_query, tokenize_query
+from warcraft_core.provider import ProviderError
 
 from warcraft_wiki_cli.client import WarcraftWikiClient
 from warcraft_wiki_cli.page_parser import PROGRAMMING_FAMILIES, classify_article_family
@@ -63,23 +64,30 @@ QUERY_COVERAGE_REASONS = frozenset(
 )
 
 # Leading words that name an article family rather than the subject ("lore Jaina" -> "jaina").
+# ``search_results`` keeps them when a page is titled with the whole query ("class hall").
 QUERY_FAMILY_HINT_TERMS = {
     "article",
     "articles",
+    "class",
+    "classes",
+    "expansion",
+    "expansions",
     "faction",
     "factions",
     "guide",
     "guides",
     "lore",
+    "profession",
+    "professions",
     "reference",
     "references",
     "story",
     "stories",
     "tutorial",
     "tutorials",
+    "zone",
+    "zones",
 }
-# Dropped only when the query has more words left; "zone scaling" is a page title, not a hint.
-CONDITIONAL_FAMILY_HINT_TERMS = {"zone", "zones", "class", "classes", "profession", "professions", "expansion", "expansions"}
 
 # MediaWiki namespace tokens that mash two words into one title word, so a typed query is allowed to
 # spell them out ("key down handler" -> "UIHANDLER OnKeyDown"). Every other title word is split only
@@ -91,7 +99,7 @@ _TITLE_COMPONENT_RE = re.compile(r"[A-Z]+(?![a-z])|[A-Z][a-z0-9]*|[a-z0-9]+")
 
 @dataclass(frozen=True, slots=True)
 class SearchOutcome:
-    """Ranked wiki search results plus the query rewriting that produced them."""
+    """Every ranked wiki search row plus the query rewriting that produced them."""
 
     normalized_query: str
     excluded_terms: list[str]
@@ -104,16 +112,8 @@ def normalize_wiki_query(query: str) -> tuple[str, list[str]]:
     base = normalize_query(query, strip_terms=("wiki",))
     kept_terms = base.split()
     excluded_terms: list[str] = []
-    while kept_terms:
-        head = kept_terms[0]
-        if head in QUERY_FAMILY_HINT_TERMS:
-            excluded_terms.append(kept_terms.pop(0))
-            continue
-        conditional = head in CONDITIONAL_FAMILY_HINT_TERMS and len(kept_terms) >= 2
-        if conditional and not (head in {"zone", "zones"} and kept_terms[1] == "scaling"):
-            excluded_terms.append(kept_terms.pop(0))
-            continue
-        break
+    while kept_terms and kept_terms[0] in QUERY_FAMILY_HINT_TERMS:
+        excluded_terms.append(kept_terms.pop(0))
     if not kept_terms:
         return base, []
     return " ".join(kept_terms), excluded_terms
@@ -282,15 +282,13 @@ def score_wiki_match(original_query: str, query: str, title: str, snippet: str, 
     return score, reasons, family
 
 
-def search_results(client: WarcraftWikiClient, query: str, *, limit: int) -> SearchOutcome:
-    """Run the MediaWiki search for ``query`` and rank the rows into article candidates."""
-    normalized_query, excluded_terms = normalize_wiki_query(query)
-    fetch_limit = max(limit * 5, 25)
-    total_count, rows = client.search_articles(normalized_query, limit=fetch_limit)
+def _ranked_matches(client: WarcraftWikiClient, original_query: str, search_query: str, *, limit: int) -> tuple[int, list[dict[str, Any]]]:
+    """MediaWiki's total hit count and every fetched row for ``search_query`` as ranked candidates."""
+    total_count, rows = client.search_articles(search_query, limit=max(limit * 5, 25))
     matches: list[dict[str, Any]] = []
     for index, row in enumerate(rows):
         title = row["title"]
-        score, reasons, family = score_wiki_match(query, normalized_query, title, row.get("snippet") or "", ordinal=index)
+        score, reasons, family = score_wiki_match(original_query, search_query, title, row.get("snippet") or "", ordinal=index)
         matches.append(
             article_candidate(
                 ref=title,
@@ -304,7 +302,26 @@ def search_results(client: WarcraftWikiClient, query: str, *, limit: int) -> Sea
             )
         )
     sort_article_candidates(matches)
-    return SearchOutcome(normalized_query, excluded_terms, matches[:limit], total_count)
+    return total_count, matches
+
+
+def search_results(client: WarcraftWikiClient, query: str, *, limit: int) -> SearchOutcome:
+    """Run the MediaWiki search for ``query`` and rank every fetched row; callers apply ``limit``.
+
+    A leading family word is dropped ("class druid" -> "druid") unless a page is titled with the whole
+    query ("class hall" is the "Class Hall" page), so the query as typed is searched first whenever a
+    word would be dropped.
+    """
+    normalized_query, excluded_terms = normalize_wiki_query(query)
+    if not normalized_query:
+        raise ProviderError("invalid_query", "Query cannot be empty.")
+    if excluded_terms:
+        full_query = " ".join([*excluded_terms, normalized_query])
+        total_count, matches = _ranked_matches(client, query, full_query, limit=limit)
+        if any("exact_title" in row["ranking"]["match_reasons"] for row in matches):
+            return SearchOutcome(full_query, [], matches, total_count)
+    total_count, matches = _ranked_matches(client, query, normalized_query, limit=limit)
+    return SearchOutcome(normalized_query, excluded_terms, matches, total_count)
 
 
 @dataclass(frozen=True, slots=True)

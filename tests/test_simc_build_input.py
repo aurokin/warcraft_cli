@@ -31,6 +31,7 @@ from simc_cli.build_input import (
     tree_entries_string,
 )
 from simc_cli.repo import RepoPaths
+from simc_cli.trait_data import SimcNotReadyError
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "simc"
 # Real `simc ... debug=1` output, trimmed to the talent block plus the line that ends it.
@@ -580,7 +581,8 @@ def test_identify_build_downgrades_wow_export_packet_metadata_confidence(tmp_pat
         source_notes=["build packet: /tmp/forged.json", "talent transport packet"],
     )
 
-    identified, identity = identify_build(repo, build_spec)
+    with patch("simc_cli.build_input.decode_build", return_value=type("Resolution", (), {"enabled_talents": {"mind_blast"}})()):
+        identified, identity = identify_build(repo, build_spec)
 
     assert identified.actor_class == "priest"
     assert identified.spec == "shadow"
@@ -787,6 +789,25 @@ def test_decode_build_keeps_a_build_whose_only_error_is_the_gearless_decode_acto
     assert "coagulopathy" in result.enabled_talents
 
 
+@pytest.mark.parametrize("returncode", [139, -11])
+def test_decode_build_refuses_the_talents_of_a_simc_run_that_crashed(tmp_path: Path, returncode: int) -> None:
+    """SimC killed part-way through the talent block used to decode as a whole build with ok: true."""
+    partial = "\n".join(CAPTURED_TWO_HERO_TREES.read_text().splitlines()[:20])
+    assert "adding class talent" in partial
+
+    with pytest.raises(SimcNotReadyError, match=f"SimC exited {returncode} before finishing the decode"):
+        _decode(_repo(tmp_path, with_trait_data=True), partial, returncode, actor_class="mage", spec="arcane", talents="C4DAAA")
+
+
+def test_decode_build_blames_the_checkout_for_a_binary_it_cannot_run(tmp_path: Path) -> None:
+    """A non-executable binary used to escape as a bare PermissionError (internal_error)."""
+    with (
+        patch("simc_cli.build_input.subprocess.run", side_effect=PermissionError(13, "Permission denied")),
+        pytest.raises(SimcNotReadyError, match="Cannot run the SimC binary .*: Permission denied"),
+    ):
+        decode_build(_repo(tmp_path), BuildSpec(actor_class="mage", spec="arcane", talents="C4DAAA"))
+
+
 def test_decode_build_drops_hero_talents_from_the_hero_tree_simc_did_not_activate(tmp_path: Path) -> None:
     """A hash grants both keystones; keeping the unselected one flips hero-gated APL branches."""
     result = _decode(
@@ -890,14 +911,73 @@ def test_identify_build_probes_healer_specs_that_ship_no_apl(tmp_path: Path) -> 
     assert (identity.source, identity.confidence) == ("simc_probe", "high")
 
 
-def test_identify_build_uses_direct_metadata_without_probe(tmp_path: Path) -> None:
+def _decodes_only_as(actor_class: str, spec: str, tried: list[tuple[str | None, str | None]]) -> Any:
+    """A decode stub that accepts the hash as one spec and rejects it, as SimC does, as every other."""
+
+    def fake_decode(_repo: RepoPaths, build_spec: BuildSpec) -> Any:
+        tried.append((build_spec.actor_class, build_spec.spec))
+        if (build_spec.actor_class, build_spec.spec) != (actor_class, spec):
+            raise SimcBuildError("Wrong specialization.", output_preview=[], returncode=81)
+        return type("Resolution", (), {"enabled_talents": {"a_talent"}})()
+
+    return fake_decode
+
+
+def test_identify_build_confirms_direct_metadata_with_one_decode(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
+    tried: list[tuple[str | None, str | None]] = []
     build_spec = BuildSpec(actor_class="demonhunter", spec="devourer", talents="ABC123", source_kind="wowhead_talent_calc_url")
-    identified, identity = identify_build(repo, build_spec)
-    assert identified.actor_class == "demonhunter"
-    assert identified.spec == "devourer"
-    assert identity.source == "wowhead_talent_calc_url"
-    assert identity.confidence == "high"
+
+    with patch("simc_cli.build_input.decode_build", side_effect=_decodes_only_as("demonhunter", "devourer", tried)):
+        identified, identity = identify_build(repo, build_spec)
+
+    assert tried == [("demonhunter", "devourer")]
+    assert (identified.actor_class, identified.spec) == ("demonhunter", "devourer")
+    assert (identity.source, identity.confidence) == ("wowhead_talent_calc_url", "high")
+
+
+@pytest.mark.parametrize(
+    ("guessed", "apl_path", "note"),
+    [
+        # A Beast Mastery hash pasted into a /talent-calc/hunter/marksmanship/ URL used to come back as
+        # hunter marksmanship with high confidence.
+        (BuildSpec(actor_class="hunter", spec="marksmanship", talents="BM_HASH", source_kind="wowhead_talent_calc_url"),
+         None, "ignored talent-calc url path: the build does not decode as hunter marksmanship"),
+        # The file name of the APL the build is read against is no statement about the build.
+        (BuildSpec(talents="BM_HASH", source_kind="wow_talent_export"),
+         "mage_fire.simc", "ignored apl name: the build does not decode as mage fire"),
+    ],
+    ids=["url-path", "apl-name"],
+)
+def test_identify_build_drops_a_guessed_spec_the_hash_does_not_decode_as(
+    tmp_path: Path, guessed: BuildSpec, apl_path: str | None, note: str
+) -> None:
+    repo = _repo(tmp_path)
+    tried: list[tuple[str | None, str | None]] = []
+
+    with patch("simc_cli.build_input.decode_build", side_effect=_decodes_only_as("hunter", "beast_mastery", tried)):
+        identified, identity = identify_build(repo, guessed, apl_path=tmp_path / apl_path if apl_path else None)
+
+    assert (identified.actor_class, identified.spec) == ("hunter", "beast_mastery")
+    assert (identity.source, identity.confidence) == ("simc_probe", "high")
+    assert note in identity.source_notes
+
+
+def test_identify_build_does_not_confirm_a_caller_spec_the_hash_does_not_decode_as(tmp_path: Path) -> None:
+    """The caller's class and spec are kept, but identification no longer reports them as the build's."""
+    repo = _repo(tmp_path)
+    tried: list[tuple[str | None, str | None]] = []
+    build_spec = BuildSpec(
+        actor_class="mage", spec="fire", talents="SHADOW_HASH", source_kind="wow_talent_export",
+        source_notes=["command-line build options"],
+    )
+
+    with patch("simc_cli.build_input.decode_build", side_effect=_decodes_only_as("priest", "shadow", tried)):
+        identified, identity = identify_build(repo, build_spec)
+
+    assert set(tried) == {("mage", "fire")}
+    assert (identified.actor_class, identified.spec) == ("mage", "fire")
+    assert (identity.confidence, identity.candidates) == ("none", [])
 
 
 def test_identify_build_keeps_the_one_spec_the_build_decodes_as(tmp_path: Path) -> None:

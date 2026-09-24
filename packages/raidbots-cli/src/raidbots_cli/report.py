@@ -183,7 +183,7 @@ def parse_report(report: dict[str, Any], *, report_id: str) -> dict[str, Any]:
         raise ValueError("Raidbots report did not contain SimC `sim` metadata.")
     options = _nested_dict(sim, "options")
     statistics = _nested_dict(sim, "statistics")
-    players = sim.get("players") if isinstance(sim.get("players"), list) else []
+    players: list[Any] = sim["players"] if isinstance(sim.get("players"), list) else []
     baseline = players[0] if players and isinstance(players[0], dict) else None
     profilesets = sim.get("profilesets")
 
@@ -214,11 +214,15 @@ def parse_report(report: dict[str, Any], *, report_id: str) -> dict[str, Any]:
         return common
 
     if baseline is not None:
+        # An Advanced sim can carry several actors; `actor` stays players[0] and the rest are kept.
+        others = [player for player in players[1:] if isinstance(player, dict)]
         common.update(
             {
                 "kind": "quick_sim",
                 "actor": _actor_summary(baseline),
                 "metrics": _quick_sim_metrics(baseline),
+                "actor_count": 1 + len(others),
+                "other_actors": [{"actor": _actor_summary(player), "metrics": _quick_sim_metrics(player)} for player in others],
             }
         )
         return common

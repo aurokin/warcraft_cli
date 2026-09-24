@@ -31,6 +31,7 @@
 - use `sample mythic-plus-runs` and `distribution mythic-plus-runs` for analytics questions
 - use `sample mythic-plus-players` and `distribution mythic-plus-players` when you need participant-level slices instead of raw run rows
 - narrow sampled analytics with filters like `--level-min`, `--contains-spec`, and `--player-region` when you need a tighter slice
+- spec labels in analytics are class-qualified (`priest-holy`, `paladin-holy`) because spec names repeat across classes; pass `--contains-spec priest-holy` to select one class's spec, since `--contains-class` and `--contains-spec` each match any roster entry on their own
 - use `threshold mythic-plus-runs` for sampled estimates around score or key level targets
 - treat the analytics outputs as sampled leaderboard-derived summaries, not authoritative universal truths
 - check the filtering counts when you narrow a slice so you do not over-trust a tiny sample

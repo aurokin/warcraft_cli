@@ -27,7 +27,7 @@ from warcraft_core.cli import (
     fail,
     guarded_run,
 )
-from warcraft_core.exit_codes import EXIT_GENERIC, EXIT_NETWORK, EXIT_NOT_FOUND, EXIT_USAGE, exit_code_for
+from warcraft_core.exit_codes import EXIT_GENERIC, EXIT_NETWORK, EXIT_NOT_FOUND, EXIT_USAGE
 from warcraft_core.expansions import wowhead_path_prefixes
 from warcraft_core.identity import (
     build_reference_transport_packet_payload,
@@ -47,7 +47,7 @@ from warcraft_cli.crosswalk import (
     reconcile_class_spec,
     report_actor_names,
 )
-from warcraft_cli.guild import guild_merge_payload, guild_rank_rows, normalized_identity, raiderio_guild_summary
+from warcraft_cli.guild import guild_merge_payload, normalized_identity, raiderio_guild_summary
 from warcraft_cli.provider_contract import (
     compact_resolve_match,
     compact_wrapper_candidate,
@@ -55,6 +55,7 @@ from warcraft_cli.provider_contract import (
     decorate_search_result,
     merged_search_page,
     provider_max_candidate_score,
+    resolve_answer_accepted,
     resolve_payload_sort_key,
 )
 from warcraft_cli.providers import (
@@ -1717,12 +1718,18 @@ def _search_fallback_guide_match(
     }, None
 
 
-def _provider_outcome(payload: Any) -> dict[str, Any]:
+def _provider_outcome(result: Mapping[str, Any]) -> dict[str, Any]:
     """Per-provider fanout outcome: ``status`` is registry readiness, this is what the call did."""
+    payload = result.get("payload")
+    exit_code = result.get("exit_code")
     if not isinstance(payload, dict):
-        return {"ok": False, "error": {"code": "missing_provider_payload", "message": "Provider returned no JSON payload."}}
+        return {
+            "ok": False,
+            "exit_code": exit_code or EXIT_GENERIC,
+            "error": {"code": "missing_provider_payload", "message": "Provider returned no JSON payload."},
+        }
     error = payload.get("error")
-    return {"ok": bool(payload.get("ok", True)), "error": error if isinstance(error, dict) else None}
+    return {"ok": bool(payload.get("ok", True)), "exit_code": exit_code, "error": error if isinstance(error, dict) else None}
 
 
 def _provider_answered(registration: ProviderRegistration, surface: str, provider_row: dict[str, Any]) -> bool:
@@ -1752,53 +1759,50 @@ def _failed_provider_rows(providers: list[dict[str, Any]]) -> list[dict[str, Any
                 "provider": provider_row.get("provider"),
                 "code": error.get("code"),
                 "message": error.get("message"),
+                "exit_code": provider_row.get("exit_code"),
             }
         )
     return rows
 
 
-def _fanout_failure_error(failed_rows: list[dict[str, Any]]) -> dict[str, Any]:
-    """Top-level error for a fanout where no provider answered and at least one failed.
+def _shared_failure(failed_rows: list[dict[str, Any]]) -> tuple[str, int]:
+    """``(error.code, exit code)`` for a command that failed because every provider it needed failed.
 
-    The code is the providers' shared failure code when they agree so the exit code the contract
-    derives from ``error.code`` stays true; a mixed set of failures degrades to ``upstream_error``.
+    Agreeing providers lend their own code and exit code. Disagreeing ones that all failed upstream
+    (exit 5) are ``upstream_error``; any other mix is ``providers_failed``, exit 1, because a
+    deterministic crash or a bad argument must not read as "retry later".
     """
-    codes = {row["code"] for row in failed_rows if isinstance(row.get("code"), str)}
-    code = codes.pop() if len(codes) == 1 else "upstream_error"
-    return {
-        "code": code,
-        "message": (
-            f"No provider answered: {len(failed_rows)} providers failed and no other included provider "
-            "searched this query."
-        ),
-        "details": {"failed_providers": failed_rows},
-    }
+    codes = {row.get("code") for row in failed_rows}
+    exit_codes = {row.get("exit_code") for row in failed_rows}
+    exit_code = exit_codes.pop() if len(exit_codes) == 1 else EXIT_GENERIC
+    if not isinstance(exit_code, int) or exit_code == 0:
+        exit_code = EXIT_GENERIC
+    if len(codes) == 1 and isinstance(code := next(iter(codes)), str):
+        return code, exit_code
+    return ("upstream_error" if exit_code == EXIT_NETWORK else "providers_failed"), exit_code
 
 
-def _unresolved_next_steps(query: str, providers: list[dict[str, Any]], *, resolved: bool) -> dict[str, Any]:
-    """What an agent should do next when no provider resolved the query.
+def _unresolved_next_steps(providers: list[dict[str, Any]], top: dict[str, Any] | None, *, resolved: bool) -> dict[str, Any]:
+    """What an agent should do next when the top-ranked candidate is not a resolved answer.
 
     Providers that decline to resolve still report a best candidate and their own
     ``fallback_search_command``; without these the wrapper's resolve is a dead end even when a
-    provider clearly found the thing.
+    provider clearly found the thing. ``best_unresolved_candidate`` is the top-ranked candidate and
+    names why it is not the answer.
     """
     if resolved:
         return {"fallback_search_command": None, "fallback_search_commands": [], "best_unresolved_candidate": None}
     fallbacks: list[dict[str, Any]] = []
-    candidates: list[tuple[str, dict[str, Any]]] = []
     for provider_row in providers:
-        provider_data = provider_payload_data(provider_row.get("payload"))
-        provider_name = str(provider_row.get("provider") or "")
-        command = provider_data.get("fallback_search_command")
+        command = provider_payload_data(provider_row.get("payload")).get("fallback_search_command")
         if isinstance(command, str) and command.strip():
-            fallbacks.append({"provider": provider_name, "command": command})
-        if isinstance(provider_data.get("match"), dict):
-            candidates.append((provider_name, decorate_resolve_payload(query, provider_name, provider_data)))
-    candidates.sort(key=lambda row: resolve_payload_sort_key(row[0], row[1]))
-    best = compact_resolve_match(candidates[0][1]) if candidates else None
-    if best is not None:
-        best["provider"] = candidates[0][0]
+            fallbacks.append({"provider": provider_row.get("provider"), "command": command})
+    best = compact_resolve_match(top)
+    if best is not None and top is not None:
         best["resolved"] = False
+        best["unresolved_reason"] = (
+            "provider_family_ranked_down_by_query_intent" if top.get("resolved") else "provider_did_not_resolve"
+        )
     return {
         "fallback_search_command": fallbacks[0]["command"] if fallbacks else None,
         "fallback_search_commands": fallbacks,
@@ -1820,9 +1824,14 @@ def _emit_fanout(ctx: typer.Context, payload: dict[str, Any]) -> None:
     """Emit a search/resolve payload, failing with the providers' own error when none answered."""
     failed_rows = payload["failed_providers"]
     if failed_rows and not payload["answered_provider_count"]:
-        error = _fanout_failure_error(failed_rows)
+        code, exit_code = _shared_failure(failed_rows)
+        message = (
+            f"No provider answered: {len(failed_rows)} providers failed and no other included provider "
+            "searched this query."
+        )
+        error = {"code": code, "message": message, "details": {"failed_providers": failed_rows}}
         _emit(ctx, {"ok": False, "query": payload["query"], "error": error}, err=True)
-        raise typer.Exit(exit_code_for(str(error["code"]), EXIT_NETWORK))
+        raise typer.Exit(exit_code)
     _emit(ctx, payload)
 
 
@@ -1897,7 +1906,7 @@ def search(
         provider_row = {
             "provider": registration.name,
             "status": registration.status,
-            **_provider_outcome(provider_payload),
+            **_provider_outcome(result),
             "expansion_support": provider_expansion_support(
                 registration,
                 requested_expansion=requested_expansion,
@@ -1957,20 +1966,27 @@ def search(
 def resolve(
     ctx: typer.Context,
     query: str = typer.Argument(..., help="Resolve a query across available providers."),
-    limit: int = typer.Option(5, "--limit", min=1, max=50, help="Maximum provider-local candidates to request."),
+    limit: int = typer.Option(5, "--limit", min=1, max=50, help="Ranked candidates to list under --ranking-debug."),
     brief: bool = typer.Option(
         False,
         "--brief",
         help="Return a smaller wrapper payload: a compact match summary and no per-provider payloads.",
     ),
-    ranking_debug: bool = typer.Option(False, "--ranking-debug", help="Include compact wrapper ranking summaries for resolved candidates."),
+    ranking_debug: bool = typer.Option(
+        False, "--ranking-debug", help="Include the first --limit providers' matches in ranking order, each with its resolved flag."
+    ),
     expansion_debug: bool = typer.Option(
         False,
         "--expansion-debug",
         help="Include a compact expansion support snapshot for all providers.",
     ),
 ) -> None:
-    """Fan out a query to every resolve-ready provider and return the single best match plus its follow-up command."""
+    """Fan out a query to every resolve-ready provider and return the single best match plus its follow-up command.
+
+    The answer is the candidate `warcraft search` would rank first, and only when its own provider
+    resolved it; otherwise the command reports `resolved: false` with that candidate as
+    `best_unresolved_candidate`.
+    """
     requested_expansion = _requested_expansion(ctx)
     expansion_included, excluded_providers = expansion_filtered_providers(requested_expansion=requested_expansion)
     included_registrations, surface_excluded = surface_filtered_providers(
@@ -1980,14 +1996,16 @@ def resolve(
     )
     excluded_providers = [*excluded_providers, *surface_excluded]
     providers: list[dict[str, Any]] = []
-    resolved_candidates: list[tuple[str, dict[str, Any]]] = []
+    ranked: list[dict[str, Any]] = []
     for registration in included_registrations:
-        result = provider_resolve(registration.name, query, limit=limit, expansion=requested_expansion)
+        # No --limit here: a provider judges its confidence over the candidates it returns, so a
+        # small limit would hide the rival that makes a query ambiguous.
+        result = provider_resolve(registration.name, query, expansion=requested_expansion)
         provider_payload = result.get("payload")
         provider_row = {
             "provider": registration.name,
             "status": registration.status,
-            **_provider_outcome(provider_payload),
+            **_provider_outcome(result),
             "expansion_support": provider_expansion_support(
                 registration,
                 requested_expansion=requested_expansion,
@@ -1997,14 +2015,12 @@ def resolve(
         provider_row["answered"] = _provider_answered(registration, "resolve", provider_row)
         providers.append(provider_row)
         resolve_data = provider_payload_data(provider_payload)
-        if resolve_data.get("resolved"):
-            resolved_candidates.append(
-                (registration.name, decorate_resolve_payload(query, registration.name, resolve_data))
-            )
-    resolved_candidates.sort(key=lambda row: resolve_payload_sort_key(row[0], row[1]))
-    best_provider = resolved_candidates[0][0] if resolved_candidates else None
-    best_payload = resolved_candidates[0][1] if resolved_candidates else None
-    match = compact_resolve_match(best_payload) if brief else (best_payload.get("match") if isinstance(best_payload, dict) else None)
+        if isinstance(resolve_data.get("match"), dict):
+            ranked.append(decorate_resolve_payload(query, registration.name, resolve_data))
+    ranked.sort(key=resolve_payload_sort_key)
+    top = ranked[0] if ranked else None
+    best = top if top is not None and resolve_answer_accepted(top) else None
+    match = compact_resolve_match(best) if brief else as_dict(best).get("match")
     payload: dict[str, Any] = {
         "query": query,
         "provider_count": len(list_providers()),
@@ -2014,18 +2030,19 @@ def resolve(
         "excluded_providers": excluded_providers,
         "included_provider_count": len(included_registrations),
         "excluded_provider_count": len(excluded_providers),
-        "resolved": best_payload is not None,
-        "selected_provider": best_provider,
-        "match": match,
-        "next_command": best_payload.get("next_command") if isinstance(best_payload, dict) else None,
-        "confidence": best_payload.get("confidence") if isinstance(best_payload, dict) else None,
+        "resolved": best is not None,
+        "selected_provider": as_dict(as_dict(best).get("match")).get("provider"),
+        "match": match or None,
+        "next_command": as_dict(best).get("next_command"),
+        "confidence": as_dict(best).get("confidence"),
         **_fanout_health(providers),
-        **_unresolved_next_steps(query, providers, resolved=best_payload is not None),
+        **_unresolved_next_steps(providers, top, resolved=best is not None),
         "providers": [] if brief else providers,
     }
     if ranking_debug:
-        payload["ranking_debug"] = [compact_resolve_match(row[1])
-                                    for row in resolved_candidates[:limit] if compact_resolve_match(row[1]) is not None]
+        payload["ranking_debug"] = [
+            {**as_dict(compact_resolve_match(row)), "resolved": bool(row.get("resolved"))} for row in ranked[:limit]
+        ]
     if expansion_debug:
         payload["expansion_debug"] = expansion_support_snapshot(requested_expansion=requested_expansion)
     _emit_fanout(ctx, payload)
@@ -2050,41 +2067,6 @@ def guild(
     _emit(ctx, payload, err=not payload.get("ok"))
     if not payload.get("ok"):
         raise typer.Exit(source_exit_code(source))
-
-
-@app.command("guild-ranks")
-def guild_ranks(
-    ctx: typer.Context,
-    region: str = typer.Argument(..., help="Region slug such as us or eu."),
-    realm: str = typer.Argument(..., help="Realm title or slug."),
-    name: str = typer.Argument(..., help="Guild name."),
-) -> None:
-    """Report a guild's per-raid progression with normal/heroic/mythic world, region, and realm ranks from Raider.IO."""
-    identity = normalized_identity(region, realm, name)
-    source_result = _provider_payload_result(
-        "raiderio",
-        ["guild", identity["region"], identity["realm"], identity["name"]],
-        expansion=_requested_expansion(ctx),
-    )
-    if source_result.get("status") != "ok":
-        _emit(ctx, {"ok": False, "error": source_result.get("error"), "query": identity, "source": "raiderio"}, err=True)
-        raise typer.Exit(source_exit_code(source_result))
-    payload = provider_payload_data(source_result.get("payload"))
-    raids = guild_rank_rows(payload)
-    _emit(ctx,
-        {
-            "ok": True,
-            "provider": "warcraft",
-            "kind": "guild_ranks",
-            "query": identity,
-            "source": "raiderio",
-            "guild": payload.get("guild"),
-            "count": len(raids),
-            "raids": raids,
-            "citations": payload.get("citations"),
-            "provider_payload": source_result.get("payload"),
-        },
-    )
 
 
 _ACTOR_PROFILE_JOIN_RULE = "soft match on region + realm + character name; not a canonical cross-provider actor id"
@@ -2455,39 +2437,60 @@ def guide_compare(
         except ArticleBundleError as exc:
             fail(ctx, exc.code, exc.message, details={"bundle": str(resolved_path)})
 
-    payload = {
-        "provider": "warcraft",
-        **_guide_comparison_packet(bundle_inputs, max_age_hours=max_age_hours),
-    }
-    _emit(ctx, payload)
+    try:
+        packet = _guide_comparison_packet(bundle_inputs, max_age_hours=max_age_hours)
+    except ArticleBundleError as exc:  # the same bundle given twice
+        fail(ctx, exc.code, exc.message, details=exc.details)
+    _emit(ctx, {"provider": "warcraft", **packet})
+
+
+def _failed_call(result: Mapping[str, Any]) -> tuple[dict[str, Any], int] | None:
+    """``({code, message}, exit code)`` of a provider call that failed; ``None`` when it succeeded."""
+    exit_code = result.get("exit_code")
+    if exit_code == 0:
+        return None
+    error = as_dict(as_dict(result.get("payload")).get("error"))
+    return (
+        {"code": error.get("code") or "provider_failed", "message": error.get("message") or f"Exited {exit_code}."},
+        exit_code if isinstance(exit_code, int) else EXIT_GENERIC,
+    )
 
 
 def _resolve_guide_compare_candidate(
     provider_name: str,
     query: str,
     *,
-    limit: int,
     expansion: str | None,
-) -> tuple[dict[str, Any] | None, str | None, dict[str, Any] | None, dict[str, Any] | None]:
-    resolved = provider_resolve(provider_name, query, limit=limit, expansion=expansion)
-    candidate, candidate_reason = _resolved_guide_match(
-        provider_name,
-        provider_payload_data(resolved.get("payload")),
-    )
-    search_payload: dict[str, Any] | None = None
-    if candidate is None:
-        searched = provider_search(provider_name, query, limit=limit, expansion=expansion)
-        search_payload = searched.get("payload") if isinstance(searched, dict) else None
-        fallback_candidate, fallback_reason = _search_fallback_guide_match(
-            provider_name, provider_payload_data(search_payload)
-        )
-        if fallback_candidate is not None:
-            candidate = fallback_candidate
-            candidate_reason = None
-        else:
-            candidate_reason = fallback_reason if fallback_reason is not None else candidate_reason
-    resolve_payload = resolved.get("payload") if isinstance(resolved, dict) else None
-    return candidate, candidate_reason, resolve_payload, search_payload
+) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    """The provider's guide for ``query``: its resolved guide, else a decisive search top hit.
+
+    Returns ``(candidate, decline)``; ``decline`` is the provider row when there is no candidate,
+    naming why each step declined. Neither call gets a --limit: the resolve confidence and the
+    search margin both need the rivals a small limit would hide.
+    """
+    resolved = provider_resolve(provider_name, query, expansion=expansion)
+    candidate, resolve_reason = _resolved_guide_match(provider_name, provider_payload_data(resolved.get("payload")))
+    if candidate is not None:
+        return candidate, {}
+    searched = provider_search(provider_name, query, expansion=expansion)
+    candidate, search_reason = _search_fallback_guide_match(provider_name, provider_payload_data(searched.get("payload")))
+    if candidate is not None:
+        return candidate, {}
+    resolve_failure = _failed_call(resolved)
+    decline: dict[str, Any] = {
+        "provider": provider_name,
+        "status": "skipped",
+        "reason": search_reason,
+        "resolve_reason": "provider_failed" if resolve_failure is not None else resolve_reason,
+        "resolve": resolved.get("payload"),
+        "search": searched.get("payload"),
+    }
+    # A failed call means the provider was never asked properly, so "no guide" would be a guess.
+    # Search is the last step, so its failure is the one reported when both failed.
+    failure = _failed_call(searched) or resolve_failure
+    if failure is not None:
+        decline.update(status="error", reason="provider_failed", error=failure[0], exit_code=failure[1])
+    return None, decline
 
 
 def _guide_compare_existing_freshness(existing_row: dict[str, Any] | None, *, max_age_hours: int) -> dict[str, Any]:
@@ -2529,7 +2532,8 @@ def _guide_compare_invalid_bundle_row(
         "candidate": candidate,
         "bundle_path": str(export_dir),
         "freshness": freshness,
-        "error": error,
+        "error": {"code": "invalid_bundle", "message": error},
+        "exit_code": EXIT_GENERIC,
     }
 
 
@@ -2577,14 +2581,18 @@ def _guide_compare_export_row(
         ["guide-export", candidate["ref"], "--out", str(export_dir)],
         expansion=expansion,
     )
-    if export_result.get("exit_code") != 0:
+    failure = _failed_call(export_result)
+    if failure is not None:
         return {
             "provider": provider_name,
             "status": "error",
             "reason": "guide_export_failed",
             "candidate": candidate,
-            "bundle_path": str(export_dir),
+            # The export wrote nothing usable, so there is no bundle to point at.
+            "bundle_path": None,
             "freshness": freshness,
+            "error": failure[0],
+            "exit_code": failure[1],
             "export": export_result.get("payload"),
         }, None
     try:
@@ -2626,7 +2634,6 @@ def _process_guide_compare_provider(
     *,
     query: str,
     requested_expansion: str | None,
-    limit: int,
     max_age_hours: int,
     force_refresh: bool,
     orchestration_root: Path,
@@ -2648,20 +2655,9 @@ def _process_guide_compare_provider(
             ),
         }, None
 
-    candidate, candidate_reason, resolve_payload, search_payload = _resolve_guide_compare_candidate(
-        provider_name,
-        query,
-        limit=limit,
-        expansion=requested_expansion,
-    )
+    candidate, decline = _resolve_guide_compare_candidate(provider_name, query, expansion=requested_expansion)
     if candidate is None:
-        return {
-            "provider": provider_name,
-            "status": "skipped",
-            "reason": candidate_reason,
-            "resolve": resolve_payload,
-            "search": search_payload,
-        }, None
+        return decline, None
 
     export_dir = orchestration_root / provider_name
     existing_row = manifest_by_provider.get(provider_name)
@@ -2698,7 +2694,6 @@ class GuideCompareQueryOptions:
     providers: tuple[str, ...]
     orchestration_root: Path
     requested_expansion: str | None
-    limit: int
     max_age_hours: int
     force_refresh: bool
     simc_build_handoff: bool
@@ -2722,16 +2717,49 @@ def _guide_compare_decline_row(provider_row: dict[str, Any]) -> dict[str, Any]:
         "provider": provider_row.get("provider"),
         "status": provider_row.get("status"),
         "reason": provider_row.get("reason"),
+        "resolve_reason": provider_row.get("resolve_reason"),
         "candidate_ref": as_dict(provider_row.get("candidate")).get("ref"),
         "bundle_path": provider_row.get("bundle_path"),
+        "error": provider_row.get("error"),
     }
 
 
-def _guide_compare_query_payload(options: GuideCompareQueryOptions) -> dict[str, Any]:
+def _insufficient_guides_error(provider_rows: list[dict[str, Any]]) -> tuple[dict[str, Any], int]:
+    """The failure for a run that exported fewer than two bundles, and its exit code.
+
+    When every provider that contributed nothing failed (an outage, not a missing guide) the run
+    fails with those providers' shared code and exit code, so an agent retries instead of concluding
+    no guide exists. Otherwise it is ``insufficient_guides``, exit 1.
+    """
+    failed = [row for row in provider_rows if row.get("status") == "error"]
+    empty = [row for row in provider_rows if row.get("status") not in ("exported", "reused")]
+    if failed and len(failed) == len(empty):
+        code, exit_code = _shared_failure(
+            [{**as_dict(row.get("error")), "exit_code": row.get("exit_code")} for row in failed]
+        )
+        message = f"{len(failed)} guide providers failed, so fewer than two guide bundles exported."
+        return {"code": code, "message": message}, exit_code
+    return {"code": "insufficient_guides", "message": "Need at least two exported guide bundles to compare."}, EXIT_GENERIC
+
+
+def _simc_handoff_failure(summary: Mapping[str, Any]) -> dict[str, Any]:
+    """The error for a simc build handoff whose every requested leg failed for every build."""
+    return {
+        "code": "simc_handoff_failed",
+        "message": (
+            f"Every requested simc leg ({', '.join(summary['empty_requested_legs'])}) failed for all "
+            f"{summary['returned_build_count']} build references; the packet carries no usable simc "
+            "output. Each build's `failures` names the simc error; check `warcraft simc doctor`."
+        ),
+    }
+
+
+def _guide_compare_query_payload(options: GuideCompareQueryOptions) -> tuple[dict[str, Any], int]:
     """Export each selected provider's guide bundle and compare them.
 
-    Returns the payload to emit; ``ok: False`` with ``insufficient_guides`` when fewer than two
-    bundles exported, which the command turns into exit 1.
+    Returns the payload to emit and its exit code. The payload is ``ok: False`` when fewer than two
+    bundles exported, or when the requested simc handoff failed for every leg; the comparison then
+    rides along in ``error.details``.
     """
     manifest_by_provider = _guide_compare_manifest_index(options.orchestration_root)
     provider_rows: list[dict[str, Any]] = []
@@ -2741,7 +2769,6 @@ def _guide_compare_query_payload(options: GuideCompareQueryOptions) -> dict[str,
             provider_name,
             query=options.query,
             requested_expansion=options.requested_expansion,
-            limit=options.limit,
             max_age_hours=options.max_age_hours,
             force_refresh=options.force_refresh,
             orchestration_root=options.orchestration_root,
@@ -2754,20 +2781,14 @@ def _guide_compare_query_payload(options: GuideCompareQueryOptions) -> dict[str,
     if len(bundle_inputs) < 2:
         # The manifest describes a completed comparison, so a failed run writes none: it must not
         # leave a `providers: []` manifest behind for the next run to reuse.
-        return {
-            "ok": False,
-            "query": options.query,
-            "error": {
-                "code": "insufficient_guides",
-                "message": "Need at least two exported guide bundles to compare.",
-                "details": {
-                    "exported_bundle_count": len(bundle_inputs),
-                    "required_bundle_count": 2,
-                    "selected_providers": list(options.providers),
-                    "provider_results": [_guide_compare_decline_row(row) for row in provider_rows],
-                },
-            },
+        error, exit_code = _insufficient_guides_error(provider_rows)
+        error["details"] = {
+            "exported_bundle_count": len(bundle_inputs),
+            "required_bundle_count": 2,
+            "selected_providers": list(options.providers),
+            "provider_results": [_guide_compare_decline_row(row) for row in provider_rows],
         }
+        return {"ok": False, "query": options.query, "error": error}, exit_code
 
     manifest = _write_guide_compare_manifest(
         root=options.orchestration_root,
@@ -2779,7 +2800,7 @@ def _guide_compare_query_payload(options: GuideCompareQueryOptions) -> dict[str,
     include_simc_build_handoff = options.simc_build_handoff or (
         isinstance(options.simc_apl_path, str) and bool(options.simc_apl_path.strip())
     )
-    return {
+    payload = {
         "provider": "warcraft",
         "kind": "guide_bundle_comparison_orchestration",
         "query": options.query,
@@ -2808,6 +2829,10 @@ def _guide_compare_query_payload(options: GuideCompareQueryOptions) -> dict[str,
         if include_simc_build_handoff
         else None,
     }
+    summary = as_dict(as_dict(payload["simc_build_handoff"]).get("summary"))
+    if summary.get("simc_handoff_status") == "all_handoffs_failed":
+        return {**payload, "ok": False, "error": _simc_handoff_failure(summary)}, EXIT_GENERIC
+    return payload, 0
 
 
 @app.command("guide-compare-query")
@@ -2831,13 +2856,6 @@ def guide_compare_query(
             "Defaults to <XDG data dir>/warcraft/guide_compare/<query-slug>; nothing is written to "
             "the current directory."
         ),
-    ),
-    limit: int = typer.Option(
-        5,
-        "--limit",
-        min=1,
-        max=20,
-        help="Maximum provider-local resolve candidates to request before selecting one guide match.",
     ),
     max_age_hours: int = typer.Option(
         24,
@@ -2880,13 +2898,12 @@ def guide_compare_query(
     except ValueError as exc:
         fail(ctx, "invalid_argument", str(exc))
 
-    payload = _guide_compare_query_payload(
+    payload, exit_code = _guide_compare_query_payload(
         GuideCompareQueryOptions(
             query=query,
             providers=selected_providers,
             orchestration_root=(out_root or _default_guide_compare_query_root(query)).expanduser(),
             requested_expansion=_requested_expansion(ctx),
-            limit=limit,
             max_age_hours=max_age_hours,
             force_refresh=force_refresh,
             simc_build_handoff=simc_build_handoff,
@@ -2895,10 +2912,9 @@ def guide_compare_query(
             simc_build_limit=simc_build_limit,
         )
     )
-    if payload.get("ok") is False:
-        _emit(ctx, payload, err=True)
-        raise typer.Exit(1)
-    _emit(ctx, payload)
+    _emit(ctx, payload, err=exit_code != 0)
+    if exit_code != 0:
+        raise typer.Exit(exit_code)
 
 
 @app.command("talent-packet")
@@ -3170,25 +3186,10 @@ def guide_builds_simc(
         limit=limit,
         expansion=requested_expansion,
     )
-    summary = payload["summary"]
-    if summary["simc_handoff_status"] == "all_handoffs_failed":
+    if payload["summary"]["simc_handoff_status"] == "all_handoffs_failed":
         # The packet's provenance stays the envelope's; the rest of it, per-build failure codes
         # included, becomes `error.details`.
-        _emit(ctx,
-            {
-                **payload,
-                "ok": False,
-                "error": {
-                    "code": "simc_handoff_failed",
-                    "message": (
-                        f"Every requested simc leg ({', '.join(summary['empty_requested_legs'])}) failed for all "
-                        f"{summary['returned_build_count']} build references; the packet carries no usable simc "
-                        "output. Each build's `failures` names the simc error; check `warcraft simc doctor`."
-                    ),
-                },
-            },
-            err=True,
-        )
+        _emit(ctx, {**payload, "ok": False, "error": _simc_handoff_failure(payload["summary"])}, err=True)
         raise typer.Exit(EXIT_GENERIC)
     _emit(ctx, payload)
 

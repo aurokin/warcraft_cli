@@ -90,6 +90,19 @@ def _stub_binary_banner(monkeypatch, banner: str = "SimulationCraft 1201 (git bu
     )
 
 
+def _any_hash_decodes(monkeypatch, tmp_path: Path) -> list[str]:
+    """``--repo-root`` for a checkout stub whose binary decodes every hash, as the captured Arcane Mage.
+
+    Identification decodes a hash once as the class and spec it came with; this lets that check pass
+    for tests that stub the command's own decode.
+    """
+    monkeypatch.setattr(
+        "simc_cli.build_input.subprocess.run",
+        lambda cmd, **_kwargs: subprocess.CompletedProcess(cmd, 0, stdout=CAPTURED_ARCANE_MAGE, stderr=""),
+    )
+    return ["--repo-root", str(_checkout(tmp_path))]
+
+
 def _resolution(
     *,
     actor_class: str = "druid",
@@ -343,7 +356,7 @@ def test_simc_spec_files_returns_grouped_results(monkeypatch, tmp_path: Path) ->
     assert payload["data"]["categories"]["default_apl"]["items"][0]["stem"] == "monk_mistweaver"
 
 
-def test_simc_decode_build_outputs_decoded_talents(monkeypatch) -> None:
+def test_simc_decode_build_outputs_decoded_talents(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(
         "simc_cli.main.load_build_spec",
         lambda **kwargs: BuildSpec(actor_class="monk",
@@ -369,7 +382,10 @@ def test_simc_decode_build_outputs_decoded_talents(monkeypatch) -> None:
             },
         ),
     )
-    result = runner.invoke(simc_app, ["decode-build", "--actor-class", "monk", "--spec", "mistweaver", "--talents", "ABC123"])
+    result = runner.invoke(
+        simc_app,
+        [*_any_hash_decodes(monkeypatch, tmp_path), "decode-build", "--actor-class", "monk", "--spec", "mistweaver", "--talents", "ABC123"],
+    )
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["data"]["build_spec"]["source_kind"] == "wow_talent_export"
@@ -1513,6 +1529,20 @@ def test_simc_identification_blames_the_checkout_when_it_cannot_probe(tmp_path: 
     assert reason in error["message"]
 
 
+def test_simc_identify_build_blames_a_crashing_binary_rather_than_the_build(tmp_path: Path) -> None:
+    """Every probe dying on a signal used to read as "decodes as no spec": ok: true, confidence none."""
+    def crashed(cmd: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(cmd, -11, stdout="", stderr="")
+
+    with patch("simc_cli.build_input.subprocess.run", side_effect=crashed):
+        result = runner.invoke(simc_app, ["--repo-root", str(_checkout(tmp_path)), "identify-build", "--talents", "ARCANE_EXPORT"])
+
+    assert result.exit_code == 1
+    error = json.loads(result.stderr)["error"]
+    assert error["code"] == "identify_failed"
+    assert "SimC exited -11" in error["message"]
+
+
 def test_simc_identify_build_says_no_build_was_supplied(tmp_path: Path) -> None:
     """It used to answer ok: true with an all-null build and identity source missing_build_data."""
     result = runner.invoke(simc_app, ["--repo-root", str(_checkout(tmp_path)), "identify-build"])
@@ -1740,7 +1770,7 @@ def test_simc_decode_build_accepts_wowhead_transport_form_from_build_packet(monk
 
     monkeypatch.setattr("simc_cli.main.decode_build", fake_decode_build)
 
-    result = runner.invoke(simc_app, ["decode-build", "--build-packet", str(packet_path)])
+    result = runner.invoke(simc_app, [*_any_hash_decodes(monkeypatch, tmp_path), "decode-build", "--build-packet", str(packet_path)])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["data"]["build_spec"]["source_kind"] == "wowhead_talent_calc_url"
@@ -2466,7 +2496,7 @@ def test_simc_describe_build_uses_leaf_focus_and_full_action_diff(monkeypatch, t
     assert payload["data"]["comparison"]["new_active_actions_in_aoe"] == ["collapsing_star"]
 
 
-def test_simc_decode_build_failure_includes_source_metadata(monkeypatch) -> None:
+def test_simc_decode_build_failure_includes_source_metadata(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(
         "simc_cli.main.load_build_spec",
         lambda **kwargs: BuildSpec(actor_class="demonhunter",
@@ -2486,6 +2516,7 @@ def test_simc_decode_build_failure_includes_source_metadata(monkeypatch) -> None
     result = runner.invoke(
         simc_app,
         [
+            *_any_hash_decodes(monkeypatch, tmp_path),
             "decode-build",
             "--actor-class",
             "demonhunter",
@@ -2807,12 +2838,14 @@ def _decode_failing_on(bad: str) -> Any:
     return fake_decode
 
 
-def test_simc_compare_builds_fails_when_no_other_build_decodes(monkeypatch) -> None:
+def test_simc_compare_builds_fails_when_no_other_build_decodes(monkeypatch, tmp_path: Path) -> None:
     """A comparison with nothing to compare against is a failure, not an empty success."""
     monkeypatch.setattr("simc_cli.main.decode_build", _decode_failing_on("BAD"))
 
     result = runner.invoke(
-        simc_app, ["compare-builds", "--base", "A", "--other", "BAD", "--actor-class", "druid", "--spec", "balance"]
+        simc_app,
+        [*_any_hash_decodes(monkeypatch, tmp_path), "compare-builds", "--base", "A", "--other", "BAD",
+         "--actor-class", "druid", "--spec", "balance"],
     )
 
     assert result.exit_code == 1
@@ -2822,12 +2855,12 @@ def test_simc_compare_builds_fails_when_no_other_build_decodes(monkeypatch) -> N
     assert payload["error"]["details"]["comparisons"] == [{"input": "BAD", "error": "bad build"}]
 
 
-def test_simc_compare_builds_counts_the_other_builds_that_failed(monkeypatch) -> None:
+def test_simc_compare_builds_counts_the_other_builds_that_failed(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr("simc_cli.main.decode_build", _decode_failing_on("BAD"))
 
     result = runner.invoke(
         simc_app,
-        ["compare-builds", "--base", "A", "--other", "A", "--other", "BAD", "--actor-class", "druid", "--spec", "balance"],
+        [*_any_hash_decodes(monkeypatch, tmp_path), "compare-builds", "--base", "A", "--other", "A", "--other", "BAD", "--actor-class", "druid", "--spec", "balance"],
     )
 
     assert result.exit_code == 0
@@ -2855,10 +2888,12 @@ def test_simc_compare_builds_rejects_an_unknown_tree(monkeypatch) -> None:
     ("flag", "args"),
     [("--base", ["--base", "", "--other", "B"]), ("--other", ["--base", "A", "--other", "B", "--other", " "])],
 )
-def test_simc_compare_builds_names_the_option_given_an_empty_build(monkeypatch, flag: str, args: list[str]) -> None:
+def test_simc_compare_builds_names_the_option_given_an_empty_build(monkeypatch, tmp_path: Path, flag: str, args: list[str]) -> None:
     monkeypatch.setattr("simc_cli.main.decode_build", lambda paths, spec: _fake_resolution())
 
-    result = runner.invoke(simc_app, ["compare-builds", *args, "--actor-class", "druid", "--spec", "balance"])
+    result = runner.invoke(
+        simc_app, [*_any_hash_decodes(monkeypatch, tmp_path), "compare-builds", *args, "--actor-class", "druid", "--spec", "balance"]
+    )
 
     assert result.exit_code == 2
     payload = json.loads(result.stderr)
@@ -2884,13 +2919,14 @@ def test_simc_compare_builds_rejects_buildless_wowhead_talent_calc_url() -> None
     assert "no build code" in payload["error"]["message"]
 
 
-def test_simc_compare_builds_rejects_buildless_wowhead_other(monkeypatch) -> None:
+def test_simc_compare_builds_rejects_buildless_wowhead_other(monkeypatch, tmp_path: Path) -> None:
     """An --other that is no build is a usage error, even when the base decodes."""
     monkeypatch.setattr("simc_cli.main.decode_build", lambda paths, spec: _fake_resolution())
 
     result = runner.invoke(
         simc_app,
         [
+            *_any_hash_decodes(monkeypatch, tmp_path),
             "compare-builds",
             "--actor-class",
             "druid",
@@ -2938,16 +2974,76 @@ def test_simc_modify_build_routes_a_spec_talent_name_into_the_spec_option(tmp_pa
     assert payload["data"]["result"]["verified"] is True
 
 
+# Presence of Mind shares choice node 102460 with Slipstream, which the captured build takes.
+PRESENCE_OF_MIND_LINE = "0.000 Player 'simc_decode' adding spec talent Presence of Mind (node=102460 entry=126530 rank=1/1)\n"
+# Spellsteal (a class talent on no choice node) is absent from the captured build.
+SPELLSTEAL_LINE = "0.000 Player 'simc_decode' adding class talent Spellsteal (node=62084 entry=80140 rank=1/1)\n"
+
+
 def test_simc_modify_build_adds_a_talent_the_base_build_does_not_have_by_name(tmp_path: Path) -> None:
     """`--add` by name has to work for a talent absent from the build; only trait data knows its tree."""
-    added = CAPTURED_ARCANE_MAGE + "0.000 Player 'simc_decode' adding spec talent Presence of Mind (node=1 entry=126530 rank=1/1)\n"
-    fake = _FakeSimcBinary({"BASE": CAPTURED_ARCANE_MAGE, "MODIFIED_EXPORT": added})
+    swapped = _captured_without("Slipstream") + PRESENCE_OF_MIND_LINE
+    fake = _FakeSimcBinary({"BASE": CAPTURED_ARCANE_MAGE, "MODIFIED_EXPORT": swapped})
+
+    exit_code, payload = _modify(tmp_path, fake, "--add", "presence_of_mind:1", "--remove", "Slipstream")
+
+    assert exit_code == 0, payload
+    assert "spec_talents=slipstream:0/presence_of_mind:1" in fake.encode_profile
+    spec_diff = payload["data"]["result"]["diff_from_base"]["spec"]
+    assert [row["name"] for row in spec_diff["added"]] == ["Presence of Mind"]
+    assert [row["name"] for row in spec_diff["removed"]] == ["Slipstream"]
+    assert payload["data"]["result"]["disclosures"] == []
+
+
+def test_simc_modify_build_refuses_an_add_whose_choice_node_partner_the_build_takes(tmp_path: Path) -> None:
+    """The hash holds one entry per choice node; SimC kept the base's choice and the add was reported verified."""
+    fake = _FakeSimcBinary({"BASE": CAPTURED_ARCANE_MAGE, "MODIFIED_EXPORT": CAPTURED_ARCANE_MAGE})
 
     exit_code, payload = _modify(tmp_path, fake, "--add", "presence_of_mind:1")
 
-    assert exit_code == 0
-    assert "spec_talents=presence_of_mind:1" in fake.encode_profile
-    assert [row["name"] for row in payload["data"]["result"]["diff_from_base"]["spec"]["added"]] == ["Presence of Mind"]
+    assert exit_code == 2
+    assert payload["error"]["code"] == "invalid_argument"
+    assert "shares a choice node with Slipstream (entry 134025)" in payload["error"]["message"]
+    assert "pass --remove 134025 as well" in payload["error"]["message"]
+    assert not any("save=" in text for text in fake.profiles), "SimC encoded a build that could not carry the add"
+
+
+@pytest.mark.parametrize(
+    ("edit", "unapplied"),
+    [
+        # SimC ignored the add without an error, and the unchanged export was reported verified.
+        (("--add", "Spellsteal:1"), {"tree": "class", "talent": "spellsteal", "requested_rank": 1, "export_rank": 0}),
+        # Arcane Tempo has one rank; SimC clamps a higher one without an error.
+        (("--add", "arcane_tempo:5"), {"tree": "spec", "talent": "arcane_tempo", "requested_rank": 5, "export_rank": 1}),
+        # The export still takes a talent the caller removed.
+        (("--remove", "Arcane Tempo"), {"tree": "spec", "talent": "arcane_tempo", "requested_rank": 0, "export_rank": 1}),
+    ],
+)
+def test_simc_modify_build_refuses_an_export_missing_a_requested_edit(
+    tmp_path: Path, edit: tuple[str, str], unapplied: dict[str, Any]
+) -> None:
+    fake = _FakeSimcBinary({"BASE": CAPTURED_ARCANE_MAGE, "MODIFIED_EXPORT": CAPTURED_ARCANE_MAGE})
+
+    exit_code, payload = _modify(tmp_path, fake, *edit)
+
+    assert exit_code == 1
+    assert payload["error"]["code"] == "encode_mismatch"
+    assert payload["error"]["details"]["unapplied_edits"] == [unapplied]
+    assert "MODIFIED_EXPORT" not in json.dumps(payload)
+
+
+def test_simc_modify_build_discloses_an_export_over_the_base_builds_point_spend(tmp_path: Path) -> None:
+    """SimC enforces no point budget, so an add on a full build is an export the game may refuse."""
+    fake = _FakeSimcBinary({"BASE": CAPTURED_ARCANE_MAGE, "MODIFIED_EXPORT": CAPTURED_ARCANE_MAGE + SPELLSTEAL_LINE})
+
+    exit_code, payload = _modify(tmp_path, fake, "--add", "Spellsteal:1")
+
+    assert exit_code == 0, payload
+    result = payload["data"]["result"]
+    assert result["verified"] is True
+    assert [row["name"] for row in result["diff_from_base"]["class"]["added"]] == ["Spellsteal"]
+    assert len(result["disclosures"]) == 1
+    assert "points in the class tree, more than the base build's" in result["disclosures"][0]
 
 
 def test_simc_modify_build_discloses_hero_talents_the_reencode_grants_outside_the_selected_tree(tmp_path: Path) -> None:
@@ -3032,11 +3128,42 @@ def test_simc_modify_build_name_edit_does_not_cover_a_same_named_talent_in_anoth
         rows = [{"name": "Arcane Tempo", "token": "arcane_tempo", "rank": 1, "max_rank": 1, "entry": entry} for entry in removed]
         return {"added": [], "removed": rows, "changed": [], "has_differences": bool(rows)}
 
-    edits = [_TalentEdit(tree="spec", value="arcane_tempo", rank=0, entry=1)]
+    edits = [_TalentEdit(tree="spec", value="arcane_tempo", rank=0, entries=frozenset({1, 2}))]
 
     unrequested = _unrequested_changes({"class": diff(9), "spec": diff(1, 2), "hero": diff()}, edits)
 
     assert [(row["tree"], row["entry"]) for row in unrequested] == [("class", 9)]
+
+
+def test_simc_modify_build_swaps_a_choice_node_whose_entries_share_a_name(tmp_path: Path) -> None:
+    """Fire's Flamestrike node offers two entries named Flamestrike; the build takes one.
+
+    Synthetic: Presence of Mind (126530), Slipstream's choice partner, is renamed Slipstream. Removing
+    the taken Slipstream by name must not count the added, same-named entry as a removal that failed.
+    """
+    repo_root = _checkout(tmp_path)
+    trait_data = repo_root / "engine" / "dbc" / "generated" / "trait_data.inc"
+    trait_data.write_text(CAPTURED_TRAIT_DATA.replace('"Presence of Mind"', '"Slipstream"'))
+    swapped = _captured_without("Slipstream") + PRESENCE_OF_MIND_LINE.replace("Presence of Mind", "Slipstream")
+    fake = _FakeSimcBinary({"BASE": CAPTURED_ARCANE_MAGE, "MODIFIED_EXPORT": swapped})
+
+    def modify(*args: str) -> tuple[int, dict[str, Any]]:
+        with patch("simc_cli.build_input.subprocess.run", side_effect=fake):
+            result = runner.invoke(
+                simc_app,
+                ["--repo-root", str(repo_root), "modify-build", "--talents", "BASE",
+                 "--actor-class", "mage", "--spec", "arcane", *args],
+            )
+        return result.exit_code, json.loads(result.stdout or result.stderr)
+
+    exit_code, payload = modify("--add", "126530:1")
+    assert exit_code == 2
+    assert "pass --remove 134025 as well" in payload["error"]["message"]
+
+    for remove in ("Slipstream", "134025"):
+        exit_code, payload = modify("--add", "126530:1", "--remove", remove)
+        assert exit_code == 0, payload
+        assert payload["data"]["result"]["verified"] is True
 
 
 def test_simc_modify_build_rejects_a_talent_name_that_belongs_to_no_tree(tmp_path: Path) -> None:
@@ -3240,13 +3367,14 @@ def test_simc_modify_build_rejects_buildless_wowhead_talent_calc_url() -> None:
     assert "no build code" in payload["error"]["message"]
 
 
-def test_simc_modify_build_rejects_buildless_wowhead_swap_source(monkeypatch) -> None:
+def test_simc_modify_build_rejects_buildless_wowhead_swap_source(monkeypatch, tmp_path: Path) -> None:
     """The swap source goes through the same reference parsing as the base build."""
     monkeypatch.setattr("simc_cli.main.decode_build", lambda paths, spec: _fake_resolution())
 
     result = runner.invoke(
         simc_app,
         [
+            *_any_hash_decodes(monkeypatch, tmp_path),
             "modify-build",
             "--actor-class",
             "druid",
@@ -3439,7 +3567,7 @@ def test_simc_apl_lists_graph_talents_and_trace(monkeypatch, tmp_path: Path) -> 
         "simc_cli.main.find_action",
         lambda paths, action, wow_class: {"apl_default": [], "apl_assisted": [], "class_modules": [], "spell_dump": []},
     )
-    result_trace = runner.invoke(simc_app, ["trace-action", str(apl), "rising_sun_kick"])
+    result_trace = runner.invoke(simc_app, ["--repo-root", str(_checkout(tmp_path)), "trace-action", str(apl), "rising_sun_kick"])
     assert result_trace.exit_code == 0
     payload_trace = json.loads(result_trace.stdout)
     assert payload_trace["data"]["apl_hits"]["count"] == 1
@@ -4046,3 +4174,80 @@ def test_simc_describe_build_rejects_a_disable_value_that_names_no_talent(tmp_pa
     assert exit_code == 2
     assert payload["error"]["code"] == "unknown_talent"
     assert payload["error"]["details"]["unknown_talents"] == ["Spear Hand Strike"]
+
+
+# The branch-compare APL: Arcane Tempo decides which list the build dispatches to.
+TEMPO_APL = (
+    "actions=call_action_list,name=tempo,if=talent.arcane_tempo\n"
+    "actions+=/call_action_list,name=plain\n"
+    "actions.tempo=arcane_blast\n"
+    "actions.plain=arcane_missiles\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("left", "right"),
+    [
+        (["--build-file", "{left_file}"], ["--right-profile-path", "{right_file}"]),
+        (["--talents", "LEFT", "--actor-class", "mage", "--spec", "arcane"], ["--right-profile-path", "{right_file}"]),
+        (["--build-text", "{left_text}"], ["--right-build-file", "{right_file}"]),
+        (["--profile-path", "{left_file}"], ["--right-build-text", "{right_text}"]),
+        (["--build-file", "{left_file}"], ["--right-talents", "RIGHT", "--right-actor-class", "mage", "--right-spec", "arcane"]),
+    ],
+)
+def test_simc_apl_branch_compare_reads_the_right_hand_build_it_was_given(
+    tmp_path: Path, left: list[str], right: list[str]
+) -> None:
+    """A left build source the right side did not override used to outrank a right-hand profile in the
+    merge, so the command compared the left build with itself and reported no changes."""
+    repo_root = _checkout(tmp_path / "simc")
+    apl = tmp_path / "mage_arcane.simc"
+    apl.write_text(TEMPO_APL)
+    left_text, right_text = ("mage=\"simc\"\nspec=arcane\ntalents=LEFT\n", "mage=\"simc\"\nspec=arcane\ntalents=RIGHT\n")
+    (tmp_path / "left.simc").write_text(left_text)
+    (tmp_path / "right.simc").write_text(right_text)
+    values = {"left_file": str(tmp_path / "left.simc"), "right_file": str(tmp_path / "right.simc"),
+              "left_text": left_text, "right_text": right_text}
+    fake = _FakeSimcBinary({"LEFT": CAPTURED_ARCANE_MAGE, "RIGHT": _captured_without("Arcane Tempo")})
+
+    with patch("simc_cli.build_input.subprocess.run", side_effect=fake):
+        result = runner.invoke(
+            simc_app,
+            ["--repo-root", str(repo_root), "apl-branch-compare", str(apl), *(arg.format(**values) for arg in [*left, *right])],
+        )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    data = json.loads(result.stdout)["data"]
+    assert data["comparison"]["focus_changes"] == [
+        "L1 call_action_list -> tempo: guaranteed -> dead | left=talent.arcane_tempo=true [spec] | right=talent.arcane_tempo=false"
+    ]
+    assert not any("left.simc" in note for note in data["right"]["source_notes"])
+
+
+def test_simc_describe_build_reports_talent_gated_and_runtime_rows_from_the_real_analysis(tmp_path: Path) -> None:
+    """The other describe-build tests stub the per-target analysis, so emptying it passed them all."""
+    repo_root = _checkout(tmp_path)
+    apl = repo_root / "ActionPriorityLists" / "default" / "mage_arcane.simc"
+    apl.write_text(
+        "actions=run_action_list,name=st\n"
+        "actions.st=presence_of_mind,if=talent.presence_of_mind\n"
+        "actions.st+=/arcane_blast,if=buff.clearcasting.up\n"
+        "actions.st+=/arcane_missiles\n"
+    )
+    fake = _FakeSimcBinary({"BASE": CAPTURED_ARCANE_MAGE})
+
+    with patch("simc_cli.build_input.subprocess.run", side_effect=fake):
+        result = runner.invoke(
+            simc_app,
+            ["--repo-root", str(repo_root), "describe-build", "--talents", "BASE", "--actor-class", "mage", "--spec", "arcane"],
+        )
+
+    assert result.exit_code == 0, result.stdout + result.stderr
+    data = json.loads(result.stdout)["data"]
+    single = data["single_target"]
+    assert single["focus_list"] == "st"
+    # The build does not take Presence of Mind (it takes Slipstream on that choice node).
+    assert [(row["action"], row["reason"]) for row in single["inactive_talent_branches"]] == [
+        ("presence_of_mind", "talent.presence_of_mind=false")
+    ]
+    assert [row["action"] for row in single["runtime_sensitive"]] == ["arcane_blast"]

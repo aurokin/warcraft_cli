@@ -1,13 +1,21 @@
-"""Proves the conftest network guard blocks real access for non-live tests and passes loopback through."""
+"""Proves the conftest guards: the network guard blocks real access for non-live tests and passes
+loopback through, and the hermetic environment keeps tests off the developer's own files."""
 
 from __future__ import annotations
 
+import os
+import shutil
 import socket
+import subprocess
+import sys
+import textwrap
+from pathlib import Path
 
 import httpx
 import pytest
+from warcraft_core.paths import cache_root, config_root, data_root, state_root
 
-from tests.conftest import NETWORK_ATTEMPTS_KEY, NetworkGuardError
+from tests.conftest import NETWORK_ATTEMPTS_KEY, PRODUCT_ENV_PREFIXES, NetworkGuardError
 
 
 @pytest.fixture
@@ -58,3 +66,66 @@ def test_httpx_mock_transport_passes_through() -> None:
 
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
         assert client.get("https://example.invalid/").json() == {"ok": True}
+
+
+def _run_inner_suite(tmp_path: Path, test_source: str, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    """Run ``test_source`` in a child pytest under a copy of this suite's conftest."""
+    shutil.copy(Path(__file__).with_name("conftest.py"), tmp_path / "conftest.py")
+    (tmp_path / "test_inner.py").write_text(textwrap.dedent(test_source))
+    return subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "test_inner.py"],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_swallowed_network_attempt_still_fails_at_teardown(tmp_path: Path) -> None:
+    result = _run_inner_suite(
+        tmp_path,
+        """
+        import socket
+
+        def test_swallows_the_guard_error():
+            try:
+                socket.getaddrinfo("example.invalid", 443)
+            except Exception:
+                pass
+        """,
+        dict(os.environ),
+    )
+    assert result.returncode == 1, result.stdout
+    assert "1 passed, 1 error" in result.stdout
+    assert "Non-live test touched the network: socket.getaddrinfo 'example.invalid'" in result.stdout
+
+
+def test_product_env_set_by_the_outer_shell_is_cleared(tmp_path: Path) -> None:
+    result = _run_inner_suite(
+        tmp_path,
+        """
+        import os
+
+        def test_simc_checkout_is_not_visible():
+            assert "SIMC_REPO_ROOT" not in os.environ
+        """,
+        {**os.environ, "SIMC_REPO_ROOT": "/nonexistent"},
+    )
+    assert result.returncode == 0, result.stdout
+
+
+def test_product_roots_and_working_directory_are_a_per_test_home(tmp_path_factory: pytest.TempPathFactory) -> None:
+    home = Path.home()
+    assert home.is_relative_to(tmp_path_factory.getbasetemp())
+    assert Path.cwd() == home
+    for root in (config_root(), cache_root(), data_root(), state_root()):
+        assert root.is_relative_to(home)
+    leaked = [
+        name
+        for name in os.environ
+        if name.startswith(PRODUCT_ENV_PREFIXES)
+        and not name.endswith("_CACHE_BACKEND")
+        and name != "WARCRAFT_HTTP_MIN_INTERVAL_SECONDS"
+    ]
+    assert leaked == []

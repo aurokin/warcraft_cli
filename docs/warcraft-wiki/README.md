@@ -46,10 +46,13 @@ warcraft-wiki article-query ./tmp/wiki-createframe "arguments" --kind sections
 Every payload is a shared envelope: `ok`, `provider`, `command`, `kind`, `schema_version`, `query`, `provenance`,
 `data`, and `error` on failure, and nothing else at the top level: every payload field is under `data`.
 
-Exit codes follow `docs/foundation/ERROR_CONTRACT.md`: 1 generic (unreadable bundle, invalid cache config), 2 usage
-(including `invalid_argument` for an unsupported `article-query --kind` or a bundle path that is a file), 3 auth
-(upstream 401/403), 4 not found (the wiki has no such page, no `api`/`event` page matches the query, or the bundle
-directory does not exist), 5 network or upstream failure. Failures write
+Exit codes follow `docs/foundation/ERROR_CONTRACT.md`: 1 generic (unreadable bundle, invalid cache config, a
+MediaWiki error code with no shared meaning, passed through verbatim), 2 usage (including `invalid_argument` for an
+unsupported `article-query --kind` or a bundle path that is a file, and `invalid_query` for a blank `search`/`resolve`
+query, rejected before any request), 3 auth (upstream 401/403), 4 not found (the wiki has no such page, no
+`api`/`event` page matches the query, or the bundle directory does not exist), 5 network or upstream failure
+(including `rate_limited` for MediaWiki's `ratelimited`, and `upstream_error` for `maxlag`, `readonly`, or a body that
+is not JSON). Failures write
 the error envelope to stderr; transport failures never print a traceback.
 
 ## Content families
@@ -70,7 +73,8 @@ and a query that matches nothing in the allowed families fails with `not_found` 
 wrong page. Event names may be written with underscores or spaces (`PLAYER_LOGIN`, `Event:PLAYER LOGIN`).
 
 Queries that lead with a family word are rewritten before search (`lore Jaina` -> `jaina`, `class druid` -> `druid`);
-the dropped words come back as `excluded_terms` with `normalization_hint: "excluded_family_hint_terms"`.
+the dropped words come back as `excluded_terms` with `normalization_hint: "excluded_family_hint_terms"`. The query as
+typed is searched first, and when a page is titled with all of it (`class hall`, `zone scaling`) nothing is dropped.
 
 Every candidate carries its full `ranking.match_reasons`. MediaWiki's own full-text order contributes at most 10
 points and always appears as `upstream_rank_<n>`, so a row that matched only in a page body it never showed us cannot
@@ -91,7 +95,12 @@ covers the query, or the top row scores at least 70, or it leads the best other 
 Upstream rank, family, intent and `query_contains_title` are not covering reasons, so a row that has only those is
 never confident. For the 70 and 18-point checks, a top row's score loses 30 points when it carries
 `query_contains_title`, so a title that is only part of the query is never confident because of that bonus. Two
-covering rows can therefore both score high and still resolve confidently to the first.
+covering rows can therefore both score high and still resolve confidently to the first. The top row's title must
+also name the query word for word (as for `api`/`event`): `all_terms_match` also fires on the snippet, so a page
+that only mentions every word (`Liquid guild us illidan` -> `Team Liquid`) is never confident. Confidence is judged on
+every fetched row, and `--limit` only trims `candidates`, so `--limit 1` never hides a fetched rival. The
+fetch is MediaWiki's top `max(25, 5 x --limit)` results, so a `--limit` above 5 reads more rows and can
+find a rival further down.
 
 The `api`/`event` search fallback adds an absolute floor on top of that: the candidate's own title has to spell the
 query out. Every word of the query must match a whole word of the title or a whole camel-case component of one, and

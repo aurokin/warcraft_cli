@@ -469,7 +469,8 @@ def test_warcraft_doctor_reports_ready_and_stubbed_providers() -> None:
 
 def _provider_doctor_capabilities(registration) -> dict[str, str]:  # noqa: ANN001
     """Invoke a provider CLI's own doctor and return its reported capabilities map."""
-    result = runner.invoke(registration.app, list(registration.doctor_args))
+    live_flags = ["--no-live"] if registration.doctor_options.get("live") is False else []
+    result = runner.invoke(registration.app, ["doctor", *live_flags])
     assert result.exit_code == 0, f"{registration.name} doctor exited {result.exit_code}"
     payload = json.loads(result.stdout)
     capabilities = payload["data"].get("capabilities")
@@ -781,6 +782,9 @@ def test_warcraft_doctor_handles_ptr_filter_without_warcraftlogs_site_translatio
 
 
 def test_warcraft_doctor_reports_worktree_runtime(monkeypatch, tmp_path) -> None:
+    # The worktree runtime isolates only the roots no XDG override claims.
+    monkeypatch.delenv("XDG_DATA_HOME")
+    monkeypatch.delenv("XDG_CACHE_HOME")
     monkeypatch.setenv("WARCRAFT_WORKTREE_ROOT", str(tmp_path / "repo"))
 
     result = runner.invoke(warcraft_app, ["doctor"])
@@ -819,6 +823,8 @@ def test_warcraft_doctor_reports_xdg_overrides_in_worktree_runtime(monkeypatch, 
 
 
 def test_warcraft_doctor_reports_explicit_runtime_dir_without_worktree_root(monkeypatch, tmp_path) -> None:
+    monkeypatch.delenv("XDG_DATA_HOME")
+    monkeypatch.delenv("XDG_CACHE_HOME")
     monkeypatch.setenv("WARCRAFT_WORKTREE_RUNTIME_DIR", str(tmp_path / "runtime"))
 
     result = runner.invoke(warcraft_app, ["doctor"])
@@ -2770,11 +2776,26 @@ def test_cooldown_packet_says_so_when_the_fight_difficulty_has_no_ranking(monkey
     payload = json.loads(result.stdout)
     assert not [args for provider, args in calls if args[:1] == ["spec-ranking"]]
     assert payload["query"]["difficulty"] is None
-    assert payload["data"]["comparison"]["status"] == "unavailable"
+    assert (payload["data"]["comparison"]["status"], payload["data"]["comparison"]["reason"]) == ("unavailable", "unranked_difficulty")
     assert any(f"difficulty is {fight_difficulty!r}" in note and "--difficulty" in note for note in payload["data"]["notes"])
 
 
-def test_cooldown_packet_can_resolve_actor_name_and_reports_missing_actor(monkeypatch) -> None:
+def test_cooldown_packet_names_a_disabled_comparison(monkeypatch) -> None:
+    calls: list[tuple[str, list[str]]] = []
+    monkeypatch.setattr("warcraft_cli.main.provider_invoke", _cooldown_packet_invoke(calls))
+
+    result = runner.invoke(warcraft_app, [*_cooldown_packet_args(), "--sample-limit", "0"])
+
+    assert result.exit_code == 0, result.output
+    comparison = json.loads(result.stdout)["data"]["comparison"]
+    assert (comparison["status"], comparison["reason"]) == ("unavailable", "disabled_by_sample_limit")
+    assert not [args for _provider, args in calls if args[:1] == ["spec-ranking"]]
+
+
+@pytest.mark.parametrize(
+    ("actor_args", "code"), [(["--actor-name", "Missing"], "actor_name_not_found"), (["--actor-id", "7"], "actor_id_not_found")]
+)
+def test_cooldown_packet_reports_a_missing_actor_as_not_found(monkeypatch, actor_args: list[str], code: str) -> None:
     def fake_provider_invoke(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, object]:
         assert provider == "lorrgs"
         assert args[:1] == ["user-report-fights"]
@@ -2802,12 +2823,12 @@ def test_cooldown_packet_can_resolve_actor_name_and_reports_missing_actor(monkey
 
     result = runner.invoke(
         warcraft_app,
-        ["cooldown-packet", "abcd1234", "--fight-id", "22", "--actor-name", "Missing", "--phase", "2"],
+        ["cooldown-packet", "abcd1234", "--fight-id", "22", *actor_args, "--phase", "2"],
     )
 
-    assert result.exit_code == 1
+    assert result.exit_code == 4
     payload = json.loads(result.stderr)
-    assert payload["error"]["code"] == "actor_name_not_found"
+    assert payload["error"]["code"] == code
     assert payload["error"]["details"]["available_players"] == [
         {"name": "Buikia", "source_id": 89, "spec_slug": "warrior-protection", "class_slug": None}
     ]
@@ -5531,26 +5552,7 @@ def test_guild_rank_rows_joins_progression_with_rankings_on_raid_slug() -> None:
     assert rows[1]["ranks"] == {"normal": None, "heroic": None, "mythic": None}
 
 
-def test_warcraft_guild_ranks_reports_raiderio_ranks_per_raid(monkeypatch) -> None:
-    monkeypatch.setattr("warcraft_cli.main.provider_invoke", _fake_raiderio_guild_invoke)
-
-    result = runner.invoke(warcraft_app, ["guild-ranks", "us", "Mal'Ganis", "gn"])
-    assert result.exit_code == 0
-
-    payload = json.loads(result.stdout)
-    assert envelope_violations(payload) == []
-    assert payload["kind"] == "guild_ranks"
-    assert payload["data"]["source"] == "raiderio"
-    assert payload["query"] == {"region": "us", "realm": "mal-ganis", "name": "gn"}
-    assert payload["data"]["guild"]["profile_url"] == "https://raider.io/guilds/us/malganis/gn"
-    assert payload["data"]["count"] == 2
-    assert payload["data"]["raids"][0]["ranks"]["mythic"]["world"] == 19
-    assert payload["data"]["citations"] == {"profile": "https://raider.io/guilds/us/malganis/gn"}
-    # The Raider.IO envelope itself, provenance included, like `guild`'s `sources.raiderio.payload`.
-    assert payload["data"]["provider_payload"]["data"] == _RAIDERIO_GN_GUILD_PAYLOAD
-
-
-def test_warcraft_guild_commands_propagate_the_source_exit_code(monkeypatch) -> None:
+def test_warcraft_guild_propagates_the_source_exit_code(monkeypatch) -> None:
     """A missing Raider.IO guild exits with the source's own code (4), not a flat 1."""
 
     def fake_provider_invoke(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, object]:
@@ -5564,12 +5566,11 @@ def test_warcraft_guild_commands_propagate_the_source_exit_code(monkeypatch) -> 
 
     monkeypatch.setattr("warcraft_cli.main.provider_invoke", fake_provider_invoke)
 
-    for command in ("guild", "guild-ranks"):
-        result = runner.invoke(warcraft_app, [command, "us", "Mal'Ganis", "gn"])
-        assert result.exit_code == 4, result.output
-        payload = json.loads(result.stderr)
-        assert payload["ok"] is False
-        assert payload["error"]["code"] == "not_found"
+    result = runner.invoke(warcraft_app, ["guild", "us", "Mal'Ganis", "gn"])
+    assert result.exit_code == 4, result.output
+    payload = json.loads(result.stderr)
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "not_found"
 
 
 def test_warcraft_guild_history_is_gone() -> None:
@@ -5839,7 +5840,7 @@ def test_warcraft_search_brief_reports_partial_provider_failure(monkeypatch) -> 
     data = json.loads(result.stdout)["data"]
     assert data["providers"] == []
     assert data["failed_providers"] == [{"provider": "wowhead", "code": "network_error",
-                                         "message": "ConnectError: offline"}]
+                                         "message": "ConnectError: offline", "exit_code": 5}]
     assert data["failed_provider_count"] == 1
     assert data["answered_provider_count"] == len(_FREE_TEXT_SEARCHERS) - 1
 
@@ -6805,3 +6806,608 @@ def test_cooldown_packet_hard_failure_message_matches_the_lorrgs_error(monkeypat
     assert "HTTP 429" in payload["error"]["message"]
     assert "only serves reports it has already cached" not in payload["error"]["message"]
     assert "--spec-slug" in payload["error"]["message"]
+
+
+# --- resolve agrees with search ---------------------------------------------------------------------
+
+
+def _match(provider: str, name: str, kind: str, score: int) -> dict[str, Any]:
+    return {"id": f"{provider}:{name}", "name": name, "entity_type": kind, "ranking": {"score": score}}
+
+
+def _stub_resolve_seam(monkeypatch, answers: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    """Each provider's resolve answer; providers not named answer with no match. Records the kwargs."""
+    seen: list[dict[str, Any]] = []
+
+    def fake_resolve(provider: str, query: str, **kwargs: Any) -> dict[str, Any]:
+        seen.append(kwargs)
+        data = answers.get(provider, {"resolved": False, "confidence": "none", "match": None})
+        return {"provider": provider, "exit_code": 0, "payload": _envelope(data)}
+
+    monkeypatch.setattr("warcraft_cli.main.provider_resolve", fake_resolve)
+    return seen
+
+
+def test_warcraft_resolve_answers_with_the_row_search_ranks_first(monkeypatch) -> None:
+    """A bare entity name resolves to the entity, however large the wiki's local score scale is."""
+    zone = _match("wowhead", "Un'Goro Crater", "zone", 89)
+    article = _match("warcraft-wiki", "Un'Goro Crater", "article", 116)
+    _stub_resolve_seam(monkeypatch, {
+        "wowhead": {"resolved": True, "confidence": "high", "match": zone, "next_command": "wowhead entity zone 490"},
+        "warcraft-wiki": {"resolved": True, "confidence": "high", "match": article, "next_command": "warcraft-wiki article X"},
+    })
+    rows = {"wowhead": [zone], "warcraft-wiki": [article]}
+    monkeypatch.setattr(
+        "warcraft_cli.main.provider_search",
+        lambda provider, query, **kwargs: {
+            "provider": provider, "exit_code": 0, "payload": _envelope({"results": rows.get(provider, [])}),
+        },
+    )
+
+    resolved = json.loads(runner.invoke(warcraft_app, ["resolve", "un'goro crater"]).stdout)["data"]
+    searched = json.loads(runner.invoke(warcraft_app, ["search", "un'goro crater"]).stdout)["data"]
+
+    assert searched["results"][0]["provider"] == "wowhead"
+    assert resolved["selected_provider"] == "wowhead"
+    assert resolved["next_command"] == "wowhead entity zone 490"
+
+
+def test_warcraft_resolve_never_answers_a_guide_query_with_lorrgs_spec_metadata(monkeypatch) -> None:
+    """Live `frost mage guide` scales: Lorrgs 96 against Wowhead 40 and Method 33, all 'high'."""
+    lorrgs = {"resolved": True, "confidence": "high", "match": {**_match("lorrgs", "Frost Mage", "spec", 96), "kind": "spec"},
+              "next_command": "lorrgs spec mage-frost"}
+    answers = {
+        "lorrgs": lorrgs,
+        "wowhead": {"resolved": True, "confidence": "high", "match": _match("wowhead", "Frost Mage DPS Guide", "guide", 40),
+                    "next_command": "wowhead guide 3047"},
+        "method": {"resolved": True, "confidence": "high", "match": _match("method", "Frost Mage", "guide", 33),
+                   "next_command": "method guide frost-mage"},
+    }
+    seen = _stub_resolve_seam(monkeypatch, answers)
+
+    data = json.loads(runner.invoke(warcraft_app, ["resolve", "frost mage guide", "--limit", "1"]).stdout)["data"]
+    assert data["resolved"] is True
+    assert data["selected_provider"] in {"wowhead", "method"}
+    # The caller's --limit never reaches a provider: it would hide the rivals its confidence needs.
+    assert all("limit" not in kwargs for kwargs in seen)
+
+    _stub_resolve_seam(monkeypatch, {"lorrgs": lorrgs})
+    alone = json.loads(runner.invoke(warcraft_app, ["resolve", "frost mage guide"]).stdout)["data"]
+    assert alone["resolved"] is False
+    assert alone["next_command"] is None
+    assert alone["best_unresolved_candidate"]["provider"] == "lorrgs"
+    assert alone["best_unresolved_candidate"]["unresolved_reason"] == "provider_family_ranked_down_by_query_intent"
+
+
+def test_warcraft_resolve_does_not_answer_when_a_better_ranked_candidate_is_unresolved(monkeypatch) -> None:
+    """The top-ranked row decides; a lower row's 'high' does not stand in for it."""
+    _stub_resolve_seam(monkeypatch, {
+        "wowhead": {"resolved": False, "confidence": "low", "match": _match("wowhead", "Thunderfury", "item", 48)},
+        "warcraft-wiki": {"resolved": True, "confidence": "high", "match": _match("warcraft-wiki", "Thunderfury lore", "article", 60),
+                          "next_command": "warcraft-wiki article Thunderfury"},
+    })
+
+    data = json.loads(runner.invoke(warcraft_app, ["resolve", "thunderfury", "--ranking-debug"]).stdout)["data"]
+
+    assert data["resolved"] is False
+    assert data["best_unresolved_candidate"]["provider"] == "wowhead"
+    assert data["best_unresolved_candidate"]["unresolved_reason"] == "provider_did_not_resolve"
+    assert [(row["provider"], row["resolved"]) for row in data["ranking_debug"]] == [
+        ("wowhead", False), ("warcraft-wiki", True)]
+
+
+def test_warcraft_resolve_reports_the_selected_providers_own_confidence(monkeypatch) -> None:
+    _stub_resolve_seam(monkeypatch, {
+        "method": {"resolved": True, "confidence": "medium", "match": _match("method", "Mistweaver Monk", "guide", 50),
+                   "next_command": "method guide mistweaver-monk"},
+    })
+
+    data = json.loads(runner.invoke(warcraft_app, ["resolve", "mistweaver monk guide"]).stdout)["data"]
+
+    assert data["selected_provider"] == "method"
+    assert data["confidence"] == "medium"
+
+
+def test_warcraft_search_forwards_the_requested_limit_to_every_provider(monkeypatch) -> None:
+    limits: list[object] = []
+
+    def spy(provider: str, query: str, **kwargs: Any) -> dict[str, Any]:
+        limits.append(kwargs.get("limit"))
+        return {"provider": provider, "exit_code": 0, "payload": _envelope({"results": []})}
+
+    monkeypatch.setattr("warcraft_cli.main.provider_search", spy)
+
+    assert runner.invoke(warcraft_app, ["search", "thunderfury", "--limit", "7"]).exit_code == 0
+    assert limits and set(limits) == {7}
+
+
+# --- fanout failure exit codes ----------------------------------------------------------------------
+
+
+def _failing_search(codes: dict[str, tuple[str, int]]) -> Callable[..., dict[str, Any]]:
+    """Providers named in ``codes`` fail with that code and exit code; the others answer empty."""
+
+    def fake(provider: str, query: str, **kwargs: Any) -> dict[str, Any]:
+        if provider not in codes:
+            return {"provider": provider, "exit_code": 0, "payload": _envelope({"results": []})}
+        code, exit_code = codes[provider]
+        envelope = {"ok": False, "provider": provider, "command": "search", "kind": "error",
+                    "data": {}, "error": {"code": code, "message": f"{provider} {code}"}}
+        return {"provider": provider, "exit_code": exit_code, "payload": envelope}
+
+    return fake
+
+
+def test_warcraft_search_crash_of_the_only_searcher_is_not_reported_as_retryable(monkeypatch) -> None:
+    """`--expansion classic` leaves Wowhead as the only free-text searcher; its crash exits 1, not 5."""
+    monkeypatch.setattr("warcraft_cli.main.provider_search", _failing_search({"wowhead": ("internal_error", 1)}))
+
+    result = runner.invoke(warcraft_app, ["--expansion", "classic", "search", "thunderfury"])
+
+    assert result.exit_code == 1, result.output
+    payload = json.loads(result.stderr)
+    assert payload["error"]["code"] == "internal_error"
+    assert payload["error"]["details"]["failed_providers"][0]["exit_code"] == 1
+
+
+@pytest.mark.parametrize(
+    ("failures", "code", "exit_code"),
+    [
+        ({"wowhead": ("internal_error", 1), "warcraftlogs": ("network_error", 5)}, "providers_failed", 1),
+        ({"wowhead": ("timeout", 5), "warcraftlogs": ("network_error", 5)}, "upstream_error", 5),
+    ],
+    ids=["crash_and_outage", "two_outages"],
+)
+def test_warcraft_search_mixed_failures_exit_retryable_only_when_every_one_is(
+    monkeypatch, failures: dict[str, tuple[str, int]], code: str, exit_code: int
+) -> None:
+    monkeypatch.setattr("warcraft_cli.main.provider_search", _failing_search(failures))
+
+    result = runner.invoke(warcraft_app, ["--expansion", "classic", "search", "thunderfury"])
+
+    assert result.exit_code == exit_code, result.output
+    assert json.loads(result.stderr)["error"]["code"] == code
+
+
+# --- guide-compare-query: guide selection and provider failures ------------------------------------
+
+
+def _guide_seam(monkeypatch, *, resolve: dict[str, Any], search: list[dict[str, Any]]) -> None:
+    monkeypatch.setattr(
+        "warcraft_cli.main.provider_resolve",
+        lambda provider, query, **kwargs: {"provider": provider, "exit_code": 0, "payload": _envelope(resolve)},
+    )
+    monkeypatch.setattr(
+        "warcraft_cli.main.provider_search",
+        lambda provider, query, **kwargs: {"provider": provider, "exit_code": 0, "payload": _envelope({"results": search})},
+    )
+
+
+def _guide_row(slug: str, score: int, kind: str = "guide") -> dict[str, Any]:
+    return {"id": slug, "name": slug, "entity_type": kind, "url": f"https://example.test/{slug}",
+            "ranking": {"score": score}, "follow_up": {"command": f"method guide {slug}"}}
+
+
+def test_guide_compare_query_does_not_accept_an_unresolved_match(monkeypatch) -> None:
+    from warcraft_cli.main import _resolve_guide_compare_candidate
+
+    _guide_seam(monkeypatch, resolve={"resolved": False, "confidence": "medium", "match": _guide_row("weak-guess", 40)},
+                search=[_guide_row("decisive-guide", 90)])
+
+    candidate, decline = _resolve_guide_compare_candidate("method", "mw guide", expansion=None)
+
+    assert candidate is not None and candidate["ref"] == "decisive-guide"
+    assert candidate["selection_source"] == "search_fallback"
+    assert decline == {}
+
+
+@pytest.mark.parametrize(
+    ("resolve", "search", "reason", "resolve_reason"),
+    [
+        ({"resolved": True, "confidence": "high", "match": _guide_row("thunderfury", 90, kind="item")}, [],
+         "provider_search_returned_no_results", "resolved_non_guide:item"),
+        ({"resolved": False, "match": None}, [_guide_row("only-hit", 60)],
+         "search_single_result_not_strong_enough", "provider_did_not_resolve_query"),
+        ({"resolved": False, "match": None}, [_guide_row("an-item", 95, kind="item"), _guide_row("a-guide", 20)],
+         "search_top_non_guide:item", "provider_did_not_resolve_query"),
+    ],
+    ids=["resolved_non_guide", "weak_single_hit", "search_top_non_guide"],
+)
+def test_guide_compare_query_declines_each_unusable_selection(
+    monkeypatch, resolve: dict[str, Any], search: list[dict[str, Any]], reason: str, resolve_reason: str
+) -> None:
+    from warcraft_cli.main import _resolve_guide_compare_candidate
+
+    _guide_seam(monkeypatch, resolve=resolve, search=search)
+
+    candidate, decline = _resolve_guide_compare_candidate("method", "q", expansion=None)
+
+    assert candidate is None
+    assert (decline["status"], decline["reason"], decline["resolve_reason"]) == ("skipped", reason, resolve_reason)
+
+
+def _network_failure(provider: str, command: str) -> dict[str, Any]:
+    envelope = {"ok": False, "provider": provider, "command": command, "kind": "error", "data": {},
+                "error": {"code": "network_error", "message": "ConnectError: offline"}}
+    return {"provider": provider, "exit_code": 5, "payload": envelope, "stdout": ""}
+
+
+def test_guide_compare_query_total_provider_outage_is_a_network_failure(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr("warcraft_cli.main.provider_resolve", lambda provider, query, **kwargs: _network_failure(provider, "resolve"))
+    monkeypatch.setattr("warcraft_cli.main.provider_search", lambda provider, query, **kwargs: _network_failure(provider, "search"))
+
+    result = runner.invoke(warcraft_app, ["guide-compare-query", "fury warrior guide", "--out-root", str(tmp_path / "o")])
+
+    assert result.exit_code == 5, result.output
+    error = json.loads(result.stderr)["error"]
+    assert error["code"] == "network_error"
+    rows = error["details"]["provider_results"]
+    assert {row["reason"] for row in rows} == {"provider_failed"}
+    assert all(row["error"] == {"code": "network_error", "message": "ConnectError: offline"} for row in rows)
+
+
+def test_guide_compare_query_reports_a_resolve_outage_that_search_could_not_make_up_for(monkeypatch) -> None:
+    from warcraft_cli.main import _resolve_guide_compare_candidate
+
+    monkeypatch.setattr("warcraft_cli.main.provider_resolve", lambda provider, query, **kwargs: _network_failure(provider, "resolve"))
+    monkeypatch.setattr(
+        "warcraft_cli.main.provider_search",
+        lambda provider, query, **kwargs: {"provider": provider, "exit_code": 0, "payload": _envelope({"results": []})},
+    )
+
+    candidate, decline = _resolve_guide_compare_candidate("icy-veins", "mw guide", expansion=None)
+
+    assert candidate is None
+    assert (decline["status"], decline["reason"], decline["resolve_reason"]) == ("error", "provider_failed", "provider_failed")
+    assert decline["error"]["code"] == "network_error"
+
+
+def test_guide_compare_query_one_missing_guide_and_one_outage_is_insufficient_guides(monkeypatch, tmp_path) -> None:
+    """Only an outage of every provider that contributed nothing is retryable; a missing guide is not."""
+    monkeypatch.setattr(
+        "warcraft_cli.main.provider_resolve",
+        lambda provider, query, **kwargs: {"provider": provider, "exit_code": 0, "payload": _envelope({"resolved": False, "match": None})},
+    )
+    monkeypatch.setattr(
+        "warcraft_cli.main.provider_search",
+        lambda provider, query, **kwargs: _network_failure(provider, "search") if provider == "icy-veins"
+        else {"provider": provider, "exit_code": 0, "payload": _envelope({"results": []})},
+    )
+
+    result = runner.invoke(warcraft_app, [
+        "guide-compare-query", "mw guide", "--provider", "method", "--provider", "icy-veins", "--out-root", str(tmp_path / "o"),
+    ])
+
+    assert result.exit_code == 1, result.output
+    error = json.loads(result.stderr)["error"]
+    assert error["code"] == "insufficient_guides"
+    assert [(row["provider"], row["reason"]) for row in error["details"]["provider_results"]] == [
+        ("method", "provider_search_returned_no_results"), ("icy-veins", "provider_failed")]
+
+
+def test_guide_compare_query_export_outage_keeps_each_providers_error(monkeypatch, tmp_path) -> None:
+    _guide_seam(monkeypatch, resolve={"resolved": True, "confidence": "high", "match": _guide_row("mw", 90)}, search=[])
+    monkeypatch.setattr("warcraft_cli.main.provider_invoke", lambda p, args, **k: _network_failure(p, args[0]))
+
+    result = runner.invoke(warcraft_app, [
+        "guide-compare-query", "mistweaver monk guide", "--provider", "method", "--provider", "icy-veins",
+        "--out-root", str(tmp_path / "o"),
+    ])
+
+    assert result.exit_code == 5, result.output
+    rows = json.loads(result.stderr)["error"]["details"]["provider_results"]
+    assert [(row["reason"], row["error"]["code"], row["bundle_path"]) for row in rows] == [
+        ("guide_export_failed", "network_error", None)] * 2
+
+
+def test_guide_compare_query_fails_when_the_requested_simc_handoff_produced_nothing(monkeypatch, tmp_path) -> None:
+    _guide_seam(monkeypatch, resolve={"resolved": True, "confidence": "high", "match": _guide_row("mw", 90)}, search=[])
+
+    def fake_invoke(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, Any]:
+        if provider == "simc":
+            envelope = {"ok": False, "error": {"code": "simc_not_found", "message": "no simc binary"}}
+            return {"provider": "simc", "exit_code": 1, "payload": envelope, "stdout": ""}
+        export_dir = Path(args[3])
+        write_article_bundle(
+            _comparison_payload(provider=provider, slug=args[1], page_url=f"https://example.test/{provider}",
+                                page_title="g", analysis_tags=["builds_talents"], build_code="ABC123"),
+            provider=provider, export_dir=export_dir,
+        )
+        return {"provider": provider, "exit_code": 0, "payload": _envelope({"output_dir": str(export_dir)}), "stdout": ""}
+
+    monkeypatch.setattr("warcraft_cli.main.provider_invoke", fake_invoke)
+
+    result = runner.invoke(warcraft_app, [
+        "guide-compare-query", "mistweaver monk guide", "--provider", "method", "--provider", "icy-veins",
+        "--out-root", str(tmp_path / "o"), "--simc-build-handoff",
+    ])
+
+    assert result.exit_code == 1, result.output
+    error = json.loads(result.stderr)["error"]
+    assert error["code"] == "simc_handoff_failed"
+    assert error["details"]["simc_build_handoff"]["summary"]["simc_handoff_status"] == "all_handoffs_failed"
+    # The comparison itself is still valid evidence and rides along.
+    assert error["details"]["comparison"]["compared_bundle_count"] == 2
+
+
+def test_guide_builds_simc_reports_partial_when_a_leg_worked_for_some_builds(monkeypatch, tmp_path) -> None:
+    references = [
+        {"kind": "build_reference", "reference_type": "wowhead_talent_calc_url",
+         "url": f"https://www.wowhead.com/talent-calc/monk/mistweaver/{code}", "label": code, "build_code": code,
+         "source_urls": ["https://www.method.gg/guides/mistweaver-monk"]}
+        for code in ("ABC123", "DEF456")
+    ]
+    bundle = _bundle_with_references(tmp_path, references)
+    decodes: list[list[str]] = []
+
+    def second_decode_fails(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, object]:
+        if args[0] == "decode-build":
+            decodes.append(args)
+            if len(decodes) == 2:
+                return {"provider": provider, "exit_code": 2, "stdout": "",
+                        "payload": {"ok": False, "error": {"code": "invalid_query", "message": "bad build"}}}
+        return {"provider": provider, "exit_code": 0, "payload": {"ok": True}, "stdout": ""}
+
+    monkeypatch.setattr("warcraft_cli.main.provider_invoke", second_decode_fails)
+
+    result = runner.invoke(warcraft_app, ["guide-builds-simc", str(bundle)])
+    assert result.exit_code == 0, result.output
+
+    summary = json.loads(result.stdout)["data"]["summary"]
+    assert (summary["decode_success_count"], summary["partial_requested_legs"]) == (1, ["decode"])
+    assert summary["simc_handoff_status"] == "partial"
+
+
+# --- cooldown-packet: completeness notes, overrides and not-found paths ----------------------------
+
+
+def _cooldown_invoke_with(
+    calls: list[tuple[str, list[str]]], overrides: dict[tuple[str, str], dict[str, Any]]
+) -> Callable[..., dict[str, object]]:
+    """``_cooldown_packet_invoke`` with some ``(provider, command)`` answers replaced."""
+    base = _cooldown_packet_invoke(calls)
+
+    def invoke(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, object]:
+        override = overrides.get((provider, args[0]))
+        if override is None:
+            return base(provider, args, expansion=expansion)
+        calls.append((provider, args))
+        return {"provider": provider, "stdout": "", **override}
+
+    return invoke
+
+
+def _ok_answer(data: dict[str, Any]) -> dict[str, Any]:
+    return {"exit_code": 0, "payload": _envelope(data)}
+
+
+def _failed_answer(code: str, exit_code: int) -> dict[str, Any]:
+    return {"exit_code": exit_code, "payload": {"ok": False, "error": {"code": code, "message": f"lorrgs {code}"}}}
+
+
+def test_cooldown_packet_says_when_warcraftlogs_truncated_the_cast_events(monkeypatch) -> None:
+    events = {"next_page_timestamp": 104000, "events": [
+        {"timestamp": 100500, "sourceID": 89, "abilityGameID": 107574, "targetID": -1, "type": "cast"}]}
+    monkeypatch.setattr("warcraft_cli.main.provider_invoke",
+                        _cooldown_invoke_with([], {("warcraftlogs", "report-events"): _ok_answer(events)}))
+
+    result = runner.invoke(warcraft_app, _cooldown_packet_args())
+
+    assert result.exit_code == 0, result.output
+    assert any("next_page_timestamp" in note for note in json.loads(result.stdout)["data"]["notes"])
+
+
+def test_cooldown_packet_ranks_at_the_explicit_difficulty_and_metric(monkeypatch) -> None:
+    calls: list[tuple[str, list[str]]] = []
+    monkeypatch.setattr("warcraft_cli.main.provider_invoke", _cooldown_packet_invoke(calls, wcl_fight_difficulty=5))
+
+    result = runner.invoke(warcraft_app, [*_cooldown_packet_args(), "--difficulty", "heroic", "--metric", "hps"])
+
+    assert result.exit_code == 0, result.output
+    assert ("lorrgs", ["spec-ranking", "warrior-protection", "lura", "--difficulty", "heroic", "--metric", "hps"]) in calls
+    assert json.loads(result.stdout)["query"]["difficulty"] == "heroic"
+
+
+def test_cooldown_packet_names_a_failed_ranking_lookup(monkeypatch) -> None:
+    monkeypatch.setattr("warcraft_cli.main.provider_invoke",
+                        _cooldown_invoke_with([], {("lorrgs", "spec-ranking"): _failed_answer("network_error", 5)}))
+
+    result = runner.invoke(warcraft_app, _cooldown_packet_args())
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.stdout)["data"]
+    assert (data["comparison"]["status"], data["comparison"]["reason"]) == ("unavailable", "lorrgs_spec_ranking_failed")
+    assert any("sources.lorrgs_spec_ranking.error" in note for note in data["notes"])
+    assert not any("Top-parse samples are comparison evidence" in note for note in data["notes"])
+
+
+def test_cooldown_packet_names_a_failed_boss_spell_lookup(monkeypatch) -> None:
+    monkeypatch.setattr("warcraft_cli.main.provider_invoke",
+                        _cooldown_invoke_with([], {("lorrgs", "boss-spells"): _failed_answer("network_error", 5)}))
+
+    result = runner.invoke(warcraft_app, _cooldown_packet_args())
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.stdout)["data"]
+    assert data["boss"]["selected_phase_casts"][0]["spell"]["name"] == "spell:900001"
+    assert any("sources.lorrgs_boss_spells.error" in note for note in data["notes"])
+
+
+def test_cooldown_packet_fails_when_the_spec_has_no_tracked_spells(monkeypatch) -> None:
+    monkeypatch.setattr("warcraft_cli.main.provider_invoke",
+                        _cooldown_invoke_with([], {("lorrgs", "spec-spells"): _ok_answer({})}))
+
+    result = runner.invoke(warcraft_app, _cooldown_packet_args())
+
+    assert result.exit_code == 1, result.output
+    assert json.loads(result.stderr)["error"]["code"] == "no_tracked_spells"
+
+
+@pytest.mark.parametrize(
+    ("fights", "code", "exit_code"),
+    [
+        ([{"id": 7, "start_time": 1}, {"id": 9, "start_time": 2}], "fight_not_found", 4),
+        ([{"id": 22}], "fight_start_missing", 1),
+    ],
+    ids=["fight_missing", "start_missing"],
+)
+def test_cooldown_packet_tells_a_missing_fight_from_a_missing_start(
+    monkeypatch, fights: list[dict[str, Any]], code: str, exit_code: int
+) -> None:
+    monkeypatch.setattr("warcraft_cli.main.provider_invoke",
+                        _cooldown_invoke_with([], {("warcraftlogs", "report-fights"): _ok_answer({"fights": fights})}))
+
+    result = runner.invoke(warcraft_app, _cooldown_packet_args())
+
+    assert result.exit_code == exit_code, result.output
+    error = json.loads(result.stderr)["error"]
+    assert error["code"] == code
+    if code == "fight_not_found":
+        assert error["details"]["available_fight_ids"] == [7, 9]
+
+
+def test_cooldown_packet_degrades_when_lorrgs_cached_the_report_but_not_the_fight(monkeypatch) -> None:
+    other_fights = _ok_answer({"fights": [{"fight_id": 7, "players": []}, {"fight_id": 9, "players": []}]})
+    monkeypatch.setattr("warcraft_cli.main.provider_invoke",
+                        _cooldown_invoke_with([], {("lorrgs", "user-report-fights"): other_fights}))
+
+    refused = runner.invoke(warcraft_app, _cooldown_packet_args())
+    assert refused.exit_code == 4, refused.output
+    assert json.loads(refused.stderr)["error"]["code"] == "lorrgs_fight_not_found"
+
+    degraded = runner.invoke(warcraft_app, [*_cooldown_packet_args(), "--spec-slug", "warrior-protection"])
+    assert degraded.exit_code == 0, degraded.output
+    assert json.loads(degraded.stdout)["data"]["lorrgs"]["reason"] == "lorrgs_fight_not_found"
+
+
+def test_cooldown_packet_without_lorrgs_names_boss_slug_and_claims_no_phase_or_samples(monkeypatch) -> None:
+    monkeypatch.setattr("warcraft_cli.main.provider_invoke", _uncached_lorrgs_invoke([]))
+
+    result = runner.invoke(warcraft_app, [
+        "cooldown-packet", "abcd1234", "--fight-id", "22", "--actor-id", "89",
+        "--spec-slug", "warrior-protection", "--phase", "2",
+    ])
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.stdout)["data"]
+    assert (data["comparison"]["status"], data["comparison"]["reason"]) == ("unavailable", "no_boss_slug")
+    notes = " ".join(data["notes"])
+    assert "--boss-slug" in notes
+    for claim in ("Phase windows are derived", "Top-parse samples are comparison evidence", "Cached Lorrgs user-report data"):
+        assert claim not in notes
+
+
+# --- in-process provider capture -------------------------------------------------------------------
+
+
+def test_captured_usage_error_is_invalid_argument_labelled_with_the_subcommand() -> None:
+    from warcraft_cli.providers import provider_invoke
+
+    result = provider_invoke("lorrgs", ["spec-spells", "--bogus"])
+
+    assert result["exit_code"] == 2
+    assert result["payload"]["error"]["code"] == "invalid_argument"
+    assert result["payload"]["command"] == "spec-spells"
+
+
+def test_captured_system_exit_keeps_its_code() -> None:
+    from warcraft_cli.providers import _capture_command
+
+    app = typer.Typer()
+
+    @app.command()
+    def bail() -> None:
+        raise SystemExit(3)
+
+    @app.command()
+    def other() -> None:
+        """A second command, so `bail` is a subcommand as in every provider app."""
+
+    exit_code, payload, _text = _capture_command(app, ["bail"], prog_name="fake")
+
+    assert (exit_code, payload) == (3, None)
+
+
+def _parse_with_the_real_provider_cli(provider: str, args: list[str]) -> None:
+    """Parse ``args`` exactly as ``provider``'s own CLI would, raising on any usage error."""
+    group = typer.main.get_command(get_provider(provider).app)
+    assert isinstance(group, typer.core.TyperGroup), provider
+    command = group.commands[args[0]]
+    command.make_context(args[0], list(args[1:]), parent=group.make_context(provider, []))
+
+
+def test_composite_argv_parses_with_the_real_provider_clis(monkeypatch, tmp_path) -> None:
+    """A renamed provider flag must break the composite's tests, not only the provider's own."""
+    calls: list[tuple[str, list[str]]] = []
+    monkeypatch.setattr("warcraft_cli.main.provider_invoke", _cooldown_packet_invoke(calls))
+    assert runner.invoke(warcraft_app, [*_cooldown_packet_args(), "--metric", "hps"]).exit_code == 0
+
+    def export_and_simc(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, Any]:
+        calls.append((provider, args))
+        if provider != "simc":
+            write_article_bundle(
+                _comparison_payload(provider=provider, slug=args[1], page_url=f"https://example.test/{provider}",
+                                    page_title="g", analysis_tags=["builds_talents"], build_code="ABC123"),
+                provider=provider, export_dir=Path(args[3]),
+            )
+        return {"provider": provider, "exit_code": 0, "payload": _envelope({}), "stdout": ""}
+
+    _guide_seam(monkeypatch, resolve={"resolved": True, "confidence": "high", "match": _guide_row("mw", 90)}, search=[])
+    monkeypatch.setattr("warcraft_cli.main.provider_invoke", export_and_simc)
+    result = runner.invoke(warcraft_app, [
+        "guide-compare-query", "mistweaver monk guide", "--provider", "method", "--provider", "icy-veins",
+        "--out-root", str(tmp_path / "o"), "--simc-build-handoff",
+    ])
+    assert result.exit_code == 0, result.output
+
+    assert {(provider, args[0]) for provider, args in calls} >= {
+        ("lorrgs", "user-report-fights"), ("lorrgs", "spec-ranking"), ("warcraftlogs", "report-events"),
+        ("method", "guide-export"), ("simc", "identify-build"), ("simc", "decode-build"),
+    }
+    for provider, args in calls:
+        _parse_with_the_real_provider_cli(provider, args)
+
+
+@pytest.mark.parametrize(
+    ("argv", "first_call"),
+    [
+        (["guild", "us", "illidan", "Liquid Guild"], ("raiderio", "guild")),
+        (["actor-profile", "abcd1234", "Buikia", "--fight-id", "3"], ("warcraftlogs", "report-player-details")),
+        (["talent-packet", "https://www.wowhead.com/talent-calc/monk/mistweaver/ABC123"], ("wowhead", "talent-calc-packet")),
+        (["talent-describe", "abcd1234", "--actor-id", "5", "--fight-id", "3"], ("warcraftlogs", "report-player-talents")),
+    ],
+    ids=["guild", "actor-profile", "talent-packet", "talent-describe"],
+)
+def test_single_provider_composites_hand_over_argv_the_provider_cli_parses(
+    monkeypatch, argv: list[str], first_call: tuple[str, str]
+) -> None:
+    """Each composite's first provider call parses with that provider's real CLI (the call itself fails)."""
+    calls: list[tuple[str, list[str]]] = []
+
+    def failing(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, Any]:
+        calls.append((provider, args))
+        return _network_failure(provider, args[0])
+
+    monkeypatch.setattr("warcraft_cli.main.provider_invoke", failing)
+    runner.invoke(warcraft_app, argv)
+
+    assert (calls[0][0], calls[0][1][0]) == first_call
+    for provider, args in calls:
+        _parse_with_the_real_provider_cli(provider, args)
+
+
+def test_guide_compare_rejects_the_same_bundle_twice_with_a_usage_envelope(tmp_path) -> None:
+    export_dir = tmp_path / "bundle"
+    write_article_bundle(
+        _comparison_payload(provider="method", slug="mw", page_url="https://example.test/method", page_title="g",
+                            analysis_tags=["builds_talents"], build_code="ABC123"),
+        provider="method", export_dir=export_dir,
+    )
+
+    result = runner.invoke(warcraft_app, ["guide-compare", str(export_dir), str(tmp_path / "." / "bundle")])
+
+    assert result.exit_code == 2, result.output
+    error = json.loads(result.stderr)
+    assert error["error"]["code"] == "invalid_argument"
+    assert error["query"]["bundles"]
+

@@ -11,7 +11,8 @@ Every journey executes an installed binary (`.venv/bin/<name>`) as a real subpro
 `tests/e2e/harness.py` and holds it to the contract in
 [ERROR_CONTRACT.md](../foundation/ERROR_CONTRACT.md):
 
-- exactly one JSON envelope on stdout on success, or on stderr on failure, and nothing else;
+- exactly one JSON envelope on stdout and nothing on stderr on success; on failure, nothing on
+  stdout and one error envelope on stderr;
 - the expected exit code (0, 2 usage, 3 auth, 4 not found, 5 network, 1 generic);
 - no traceback, ever;
 - `envelope_violations()` empty, so nothing at the top level but the envelope keys, and every field
@@ -20,13 +21,16 @@ Every journey executes an installed binary (`.venv/bin/<name>`) as a real subpro
 On top of that, journeys assert real content: names, ids, counts, files on disk, and agreement
 between commands (search, resolve, and entity must name the same thing, and the page a typed
 lookup returns must be the page the query names). A journey follows an agent workflow end to end
-rather than probing one endpoint, so the wrapper composites (`guide-compare-query`,
-`guide-builds-simc`, `talent-packet`, `talent-describe`, `cooldown-packet`, `actor-profile`) run
-against the local SimulationCraft checkout rather than a stub.
+rather than probing one endpoint: every handed-over command (`next_command`, `follow_up.command`)
+a journey reads is split with `shlex` and run. The wrapper composites run against the real
+providers, and the ones that hand builds to simc (`guide-builds-simc`, `guide-compare-query
+--simc-build-handoff`, `talent-packet`, `talent-describe`) run against the local SimulationCraft
+checkout rather than a stub.
 
-A filter, a cap, or a sort is only exercised when the bound provably excludes something: journeys
-read the unfiltered baseline first, derive the bound from it, and compare the filtered result
-against the exact rows that bound keeps.
+Where a journey exercises a filter, a cap, or a sort, the bound has to provably exclude something:
+the journey reads the unfiltered baseline first, derives the bound from it, and compares the
+filtered result against the exact rows that bound keeps. Not every such flag has a journey, and a
+few caps are still only checked as `<= N`; see [Known limits](#known-limits).
 
 ## Prerequisites
 
@@ -45,9 +49,14 @@ against the exact rows that bound keeps.
 - **Exclude explicitly, never implicitly.** `WARCRAFT_E2E_SKIP=curseforge` skips
   that provider with a visible reason. `redis` is an optional component: set
   `WARCRAFT_E2E_REDIS_URL` to exercise it.
-- **No stale pins.** Only permanent identifiers live in `tests/e2e/pins.py` (Thunderfury is item
-  19019 forever). Anything that ages out, such as report codes, seasons, news slugs, or current
-  tier bosses, is discovered at run time by the journey that needs it.
+- **Pins are either permanent or named as regression targets.** Permanent identifiers live in
+  `tests/e2e/pins.py` (Thunderfury is item 19019 forever). Report codes, seasons, news slugs, and
+  current tier bosses are discovered at run time. Some journeys also pin the exact page a past bug
+  answered wrongly, which can age out: the Wowhead Fury Warrior guide id and achievement 18372 and
+  the three tool-state refs in `test_wowhead.py`, the mistweaver guide refs and monk hero-tree
+  names in `test_wrapper_guides.py`, and the Icy Veins family probes for The War Within and the
+  Remix event in `test_icy_veins.py`. When upstream retires one, the journey goes red and the pin
+  is updated; it never passes on stale data.
 - **Real caches, isolated.** The session points `XDG_CACHE_HOME` at a temporary directory so
   journeys can assert cache hits without touching `~/.cache`. Config, state, and data roots stay
   real so credentials, saved tokens, guide bundles, and the local SimC checkout resolve exactly
@@ -110,9 +119,20 @@ What a green run does **not** prove:
 - **Wowhead's PTR and beta datasets are untested.** Whether a PTR dataset is live is upstream
   state no command can discover, so `--normalize-canonical-to-expansion` and the `ptr` expansion
   profile have no journey; the five classic-era profiles cover expansion routing instead.
-- **Some Wowhead flags have no journey.** `comments --hydrate-missing-replies`, the `guides
-  <query>` text filter, and `compare` across mixed entity types (quest, npc, spell) each need extra
-  live Wowhead requests per run and stays out of the suite to keep it under Wowhead's rate limit.
+- **Many documented flags have no journey.** About 190 of the roughly 920 option rows in
+  `docs/reference/` appear in no journey, 38 of them on `wowhead`. They include result-shaping
+  filters such as `wowhead guides --updated-after/--updated-before`, `comments --keyword`,
+  `blue-tracker --forum`, `linked-graph --relation`, the Warcraft Logs `--boss-name`,
+  `--source-id`, `--target-id`, `--hostility-type` and `--kill-type` filters, the
+  `encounter-rankings` partition and server filters, and `lorrgs comp-ranking --role`. Some caps
+  are only checked as `<= N` (`warcraftlogs report-events --limit`, `reports --limit`,
+  `simc find-action --limit`), which passes whether or not the cap bites.
+- **Raidbots report parsing is untested against a real report.** The `inspect-report` / `input`
+  success path runs only when `WARCRAFT_E2E_RAIDBOTS_REPORT` is set, CI excludes it, and the fast
+  tests parse synthetic reports only.
+- **Some error paths never run.** No journey sees Warcraft Logs exit 3, or a failure envelope from
+  `talent-packet`, `talent-describe`, `actor-profile` or `guide-builds-simc`; the fast tests cover
+  them.
 - **No write path anywhere.** Nothing logs in, rotates a token, uploads a sim, or mutates a
   provider account, so those code paths are only covered by the fast tests.
 - **Volatile upstreams.** The journeys assert titles, ids, and counts from live pages. Upstream
@@ -126,14 +146,15 @@ What a green run does **not** prove:
 Open weaknesses a green run does not rule out, beyond the limits above:
 
 - **Coverage is hand-maintained.** "Every command in `docs/reference/` has a journey" is checked by
-  reading, not by a test, and many documented flags appear in no journey.
+  reading, not by a test, and nothing fails when a new command or flag ships without one.
 - **Wowhead guide exports carry no build references**, so `warcraft guide-builds-simc` hands simc
   only the Method and Icy Veins builds, and the packet has no per-bundle count showing that the
   Wowhead bundle contributed none. The guide journey pins the contributing providers, so it goes
   red, not quiet, if that changes.
-- **Merged search order between providers** is not checked end to end: the journeys check each
-  provider's rows against its own payload, and the cross-provider order is covered only by
-  `tests/test_provider_contract.py`.
+- **Merged search order between providers** is checked end to end only at the top: the journeys
+  check each provider's rows against its own payload, and that `warcraft resolve` answers with the
+  row `warcraft search` ranks first for an item and a guide query. The rest of the cross-provider
+  order is covered only by `tests/test_provider_contract.py`.
 - **The Wowhead guide-order rule** (Wowhead's guide ranking counts only when the query or
   `--entity-type` asks for a guide) has no journey; no live query found so far tells the two rules apart.
 - **Raider.IO leaderboard citations** are compared as strings only: raider.io answers 200 for any

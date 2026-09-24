@@ -94,6 +94,8 @@ def load_prefixed_cache_settings_from_env(
     redis_url = os.getenv(redis_url_var)
     if redis_url is not None:
         redis_url = redis_url.strip() or None
+    if enabled and backend == "redis" and redis_url is None:
+        raise ValueError(f"{redis_url_var} is required when {backend_var}=redis.")
 
     defaults = ttl_defaults if ttl_defaults is not None else CacheTTLConfig()
     ttl_values = {
@@ -184,7 +186,7 @@ def _build_redis_client(
     import_module_func: Any = importlib.import_module,
 ) -> Any:
     if not redis_url:
-        raise ValueError("WOWHEAD_REDIS_URL is required when WOWHEAD_CACHE_BACKEND=redis.")
+        raise ValueError("A Redis URL is required for the redis cache backend.")
     redis_module = import_module_func("redis")
     client = None
     from_url = getattr(redis_module, "from_url", None)
@@ -424,7 +426,7 @@ def inspect_redis_cache(
             "available": False,
             "count": 0,
             "namespaces": {},
-            "error": "WOWHEAD_REDIS_URL is required when WOWHEAD_CACHE_BACKEND=redis.",
+            "error": "A Redis URL is required for the redis cache backend.",
         }
     try:
         client = _build_redis_client(redis_url, import_module_func=import_module_func)

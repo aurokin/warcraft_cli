@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 from datetime import datetime
 from pathlib import Path
 
@@ -691,3 +692,54 @@ def test_method_ignores_talent_blocks_that_hold_no_loadout_import_string() -> No
 def test_method_keeps_the_first_label_when_one_import_string_is_published_twice() -> None:
     """Two builds can share a loadout string; the first published name wins so output is stable."""
     assert [row["label"] for row in _talent_block_builds()] == ["Raid (Conduit of the Celestials)"]
+
+
+MYTHIC_SITEMAP_XML = """
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>https://www.method.gg/guides/wow-midnight-season-2-mythic-dungeon-rotation</loc></url>
+  <url><loc>https://www.method.gg/guides/mythic-crest-rewards-and-crafting-cost-changes</loc></url>
+  <url><loc>https://www.method.gg/guides/mistweaver-monk</loc></url>
+</urlset>
+"""
+
+
+@pytest.mark.parametrize("query", ["mythic+", "m+", "mythic plus"])
+def test_method_search_reads_every_mythic_plus_spelling_as_mythic_dungeons(monkeypatch, query: str) -> None:
+    """Method never writes "Mythic+"; its M+ pages say "mythic dungeon", so `mythic+` used to find nothing."""
+    monkeypatch.setattr("method_cli.main.MethodClient.sitemap_guides", lambda self: parse_sitemap_guides(MYTHIC_SITEMAP_XML))
+    result = runner.invoke(app, ["search", query])
+    assert result.exit_code == 0
+
+    ids = [row["id"] for row in json.loads(result.stdout)["data"]["results"]]
+    assert ids == ["wow-midnight-season-2-mythic-dungeon-rotation"]
+
+
+@pytest.mark.parametrize("args", [["search", ""], ["resolve", "   "]], ids=["search", "resolve"])
+def test_method_rejects_a_blank_query_without_fetching(monkeypatch, args: list[str]) -> None:
+    monkeypatch.setattr("method_cli.client.request_with_retries", _connect_error)
+    result = runner.invoke(app, args)
+
+    assert result.exit_code == 2
+    assert json.loads(result.stderr)["error"]["code"] == "invalid_query"
+
+
+def test_method_guide_quotes_the_slug_in_its_fetch_more_command(monkeypatch) -> None:
+    html = INTRO_HTML.replace("guides/mistweaver-monk\"", "guides/mistweaver-monk's\"")
+    monkeypatch.setattr(
+        "method_cli.main.MethodClient.fetch_guide_page",
+        lambda self, guide_ref: parse_guide_page(html, source_url="https://www.method.gg/guides/mistweaver-monk"),
+    )
+    result = runner.invoke(app, ["guide", "mistweaver-monk"])
+    assert result.exit_code == 0
+
+    command = json.loads(result.stdout)["data"]["linked_entities"]["fetch_more_command"]
+    assert shlex.split(command) == ["method", "guide-full", "mistweaver-monk's"]
+
+
+def test_method_doctor_never_prints_the_redis_password(monkeypatch) -> None:
+    monkeypatch.setenv("METHOD_REDIS_URL", "redis://user:FAKEPASS@cache.example:6380/2?password=QUERYPASS")
+    result = runner.invoke(app, ["doctor"])
+    assert result.exit_code == 0
+
+    assert "PASS" not in result.stdout
+    assert json.loads(result.stdout)["data"]["cache"]["redis_url"] == "redis://***@cache.example:6380/2"

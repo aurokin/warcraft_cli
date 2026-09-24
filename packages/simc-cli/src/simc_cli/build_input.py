@@ -756,19 +756,23 @@ def load_build_spec(
     return merged
 
 
+def _guessed_from_apl(build_spec: BuildSpec) -> bool:
+    return any(note.startswith("inferred from apl:") for note in build_spec.source_notes)
+
+
 def _direct_build_identity(build_spec: BuildSpec) -> tuple[BuildSpec, BuildIdentity]:
     source = "direct"
     confidence: IdentityConfidence = "high"
-    if build_spec.source_kind == "wowhead_talent_calc_url":
+    if _guessed_from_apl(build_spec):
+        # Class and spec came from an APL file name, not from the build data itself.
+        source = "apl_path"
+        confidence = "medium"
+    elif build_spec.source_kind == "wowhead_talent_calc_url":
         source = "wowhead_talent_calc_url"
     elif build_spec.source_kind == "simc_split_talents":
         source = "simc_split_talents"
     elif build_spec.source_kind == "wow_talent_export":
         source = "wow_talent_export"
-        confidence = "medium"
-    elif any(note.startswith("inferred from apl:") for note in build_spec.source_notes):
-        # Class and spec came from an APL file name, not from the build data itself.
-        source = "apl_path"
         confidence = "medium"
     return (
         build_spec,
@@ -841,7 +845,8 @@ def _probe_build_matches(repo: RepoPaths, build_spec: BuildSpec, candidates: lis
             source_kind=build_spec.source_kind,
             source_notes=build_spec.source_notes[:],
         )
-        # Only SimC rejecting the talents rules a spec out; a missing binary or trait data propagates.
+        # Only SimC rejecting the talents rules a spec out; a missing, unrunnable or crashing binary
+        # and missing trait data propagate (SimcNotReadyError).
         with contextlib.suppress(SimcBuildError):
             if decode_build(repo, probe_spec).enabled_talents:
                 matches.append((actor_class, spec))
@@ -869,6 +874,27 @@ def _with_apl_guess(repo: RepoPaths, build_spec: BuildSpec, apl_path: str | Path
     )
 
 
+def _unconfirmed_identity(repo: RepoPaths, build_spec: BuildSpec, caller_spec: BuildSpec) -> BuildSpec | None:
+    """The spec to probe with when a talent hash does not decode as the class and spec it came with, else None.
+
+    A hash names its own spec, so it is decoded once as the class and spec that came with it. A pair
+    read off an APL file name or a talent-calc URL path is only a guess: when the hash contradicts it
+    the guess is dropped and noted, and the probe identifies the build. A pair the caller or a profile
+    named is kept, and the probe then reports that the build does not decode as it.
+    """
+    if not build_spec.talents:
+        return None
+    pair = (str(build_spec.actor_class), str(build_spec.spec))
+    if _probe_build_matches(repo, build_spec, [pair]):
+        return None
+    from_apl = _guessed_from_apl(build_spec)
+    if not from_apl and build_spec.source_kind != "wowhead_talent_calc_url":
+        return build_spec
+    note = f"ignored {'apl name' if from_apl else 'talent-calc url path'}: the build does not decode as {' '.join(pair)}"
+    fallback = caller_spec if from_apl else replace(build_spec, actor_class=None, spec=None)
+    return replace(fallback, source_notes=[*fallback.source_notes, note])
+
+
 def identify_build(
     repo: RepoPaths, build_spec: BuildSpec, *, apl_path: str | Path | None = None
 ) -> tuple[BuildSpec, BuildIdentity]:
@@ -876,12 +902,16 @@ def identify_build(
     # Only the caller's own hints are validated; the APL file-name guess is checked on its own terms.
     if not unverified_packet_transport or _has_trusted_identity_hint(build_spec):
         _check_class_spec_hint(repo, build_spec.actor_class, build_spec.spec)
+    caller_spec = build_spec
     if apl_path:
         build_spec = _with_apl_guess(repo, build_spec, apl_path)
-    narrow = not unverified_packet_transport or _has_trusted_identity_hint(build_spec)
 
     if build_spec.actor_class and build_spec.spec and not unverified_packet_transport:
-        return _direct_build_identity(build_spec)
+        unconfirmed = _unconfirmed_identity(repo, build_spec, caller_spec)
+        if unconfirmed is None:
+            return _direct_build_identity(build_spec)
+        build_spec = unconfirmed
+    narrow = not unverified_packet_transport or _has_trusted_identity_hint(build_spec)
 
     # Without talent data there is nothing reliable to probe.
     if not has_talent_data(build_spec):
@@ -973,7 +1003,11 @@ def _run_simc(repo: RepoPaths, profile_text: str, *, extra_args: tuple[str, ...]
         profile_path = Path(temp_dir) / "build.simc"
         profile_path.write_text(profile_text)
         cmd = [str(repo.build_simc), str(profile_path), *SIMC_BUILD_ARGS, *extra_args]
-        proc = subprocess.run(cmd, capture_output=True, text=True, check=False)  # noqa: S603
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, check=False)  # noqa: S603
+        except OSError as exc:
+            # A binary that cannot be executed is the checkout's fault, not the caller's input.
+            raise SimcNotReadyError(f"Cannot run the SimC binary {repo.build_simc}: {exc.strerror or exc}") from exc
         saved_profile = save_path.read_text() if save and save_path.exists() else None
     return SimcRun(output=proc.stdout + proc.stderr, returncode=proc.returncode, saved_profile=saved_profile)
 
@@ -1074,6 +1108,12 @@ def decode_build(repo: RepoPaths, build_spec: BuildSpec) -> BuildResolution:
             " ".join(errors),
             output_preview=bounded_output_preview(output),
             returncode=run.returncode,
+        )
+    if run.returncode and BENIGN_INIT_ERROR not in output:
+        # A crash or kill part-way through leaves a truncated talent list that would read as a whole build.
+        raise SimcNotReadyError(
+            f"SimC exited {run.returncode} before finishing the decode; the binary {repo.build_simc} may be broken "
+            "(rebuild it with 'simc build')."
         )
     talents_by_tree = parse_debug_talents(output)
     if not any(talents_by_tree[tree] for tree in ("class", "spec", "hero")):

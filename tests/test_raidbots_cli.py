@@ -95,6 +95,17 @@ def test_resolve_report_id_handles_bare_id_and_urls() -> None:
         resolve_report_id("not a report")
 
 
+def test_parse_report_quick_sim_keeps_every_actor_of_a_multi_actor_sim() -> None:
+    players = QUICK_SIM_REPORT["sim"]["players"]
+    second = {**players[0], "name": "Secondmage", "collected_data": {"dps": {"mean": 2500000.0}}}
+    report = {**QUICK_SIM_REPORT, "sim": {**QUICK_SIM_REPORT["sim"], "players": [*players, second]}}
+
+    parsed = parse_report(report, report_id="abc")
+
+    assert (parsed["actor"]["name"], parsed["actor_count"]) == ("Frostmage", 2)
+    assert [(row["actor"]["name"], row["metrics"]["dps"]) for row in parsed["other_actors"]] == [("Secondmage", 2500000.0)]
+
+
 def test_parse_report_quick_sim_extracts_actor_and_metrics() -> None:
     parsed = parse_report(QUICK_SIM_REPORT, report_id="abc")
     assert parsed["kind"] == "quick_sim"
@@ -320,11 +331,11 @@ def test_inspect_report_maps_malformed_data_json_to_invalid_report(monkeypatch: 
     assert not envelope_violations(payload)
 
 
-def test_inspect_report_rejects_unparseable_reference() -> None:
+def test_inspect_report_rejects_unparseable_reference_as_a_usage_error() -> None:
     result = runner.invoke(app, ["inspect-report", "not a report"])
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     payload = json.loads(result.stderr)
-    assert payload["error"]["code"] == "invalid_report"
+    assert payload["error"]["code"] == "invalid_report_ref"
 
 
 def test_input_command_emits_handoff(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -495,27 +506,16 @@ def test_simc_handoff_omits_decode_without_class_and_spec() -> None:
     assert commands == ["simc sim -"]
 
 
-def test_search_and_resolve_emit_structured_not_supported_stub() -> None:
-    # Raidbots has no report index. The surfaces still exist so the wrapper and agents get a
-    # structured answer (exit 0) instead of Click's "No such command".
-    for args, kind in ((["search", "thunderfury"], "search_results"), (["resolve", "some-report"], "resolve_match")):
-        result = runner.invoke(app, args)
-        assert result.exit_code == 0, result.stderr
-        payload = json.loads(result.stdout)
-        assert not envelope_violations(payload)
-        assert payload["kind"] == kind
-        assert payload["data"]["not_supported"] is True
-        assert payload["data"]["count"] == 0
-        assert payload["data"]["suggested_command"] == "raidbots inspect-report <url-or-id>"
-
-
 def test_provider_surface_is_pure_and_matches_doctor_capabilities() -> None:
     assert isinstance(PROVIDER, ProviderSurface)
     assert PROVIDER.name == "raidbots"
     capabilities = PROVIDER.doctor()["data"]["capabilities"]
     assert capabilities["search"] == "not_supported"
     assert capabilities["resolve"] == "not_supported"
-    assert PROVIDER.search("thunderfury", limit=3)["data"]["not_supported"] is True
+    search = PROVIDER.search("thunderfury", limit=3)["data"]
+    assert search["not_supported"] is True
+    # A shell line: a <placeholder> would be read as a redirection.
+    assert search["suggested_command"] == "raidbots inspect-report REPORT_URL_OR_ID"
     assert PROVIDER.resolve("abc123")["data"]["not_supported"] is True
 
 

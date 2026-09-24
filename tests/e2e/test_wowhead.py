@@ -1,10 +1,10 @@
 """End-to-end journeys for the ``wowhead`` binary against the live site.
 
-Every volatile identifier (news slug, guide id, comment id, npc/spell/quest id, talent build code)
-is discovered at run time from an earlier command in the same journey, so the file cannot rot on a
-stale pin. The only pinned entity is Thunderfury (``tests/e2e/pins.py``), plus the three opaque
-tool-state refs below that Wowhead only ever mints inside a browser, and the handful of
-classic-era ids that pin the entity types whose page lives under another route.
+Listing identifiers (news slug, guide id, comment id, npc/spell/quest id, talent build code) are
+discovered at run time from an earlier command in the same journey. The pins are Thunderfury
+(``tests/e2e/pins.py``), the classic-era ids of the entity types whose page lives under another
+route, and regression targets that can age out and then need updating: the three opaque tool-state
+refs Wowhead only mints in a browser, the Fury Warrior guide id, and achievement 18372.
 """
 
 from __future__ import annotations
@@ -222,6 +222,21 @@ def test_search_resolve_and_entity_agree_on_thunderfury(require, thunderfury_sea
     assert page.data["citations"]["page"] == page.data["entity"]["page_url"], page.describe()
     links = page.data["linked_entities"]
     assert links["count"] == len(links["items"]) > 0, page.describe()
+
+
+def test_search_answers_a_wowhead_url_with_the_entity_it_names(require) -> None:
+    """A pasted entity URL is answered by that entity, on the URL's own dataset.
+
+    Wowhead's suggestions match names, so forwarding the URL upstream once answered ok: true with
+    no results. The entity page the follow-up opens is the oracle for the name.
+    """
+    require("wowhead")
+    found = run(BINARY, "search", f"https://www.wowhead.com/classic/item={pins.ITEM_ID}")
+    assert found.data["expansion"] == "classic", found.describe()
+    assert [(row["entity_type"], row["id"]) for row in found.data["results"]] == [("item", pins.ITEM_ID)], found.describe()
+    entity = run_follow_up(found.data["results"][0]["follow_up"]["command"])
+    assert entity.data["expansion"] == "classic", entity.describe()
+    assert (entity.data["entity"]["id"], entity.data["entity"]["name"]) == (pins.ITEM_ID, pins.ITEM_NAME), entity.describe()
 
 
 def test_resolve_answers_with_the_faction_a_query_names(require) -> None:
@@ -614,6 +629,18 @@ def test_guide_export_writes_a_bundle_the_bundle_commands_can_query(
     assert manifest["provider"] == BINARY, manifest
     section_lines = (bundle_dir / "sections.jsonl").read_text().splitlines()
     assert len(section_lines) == exported.data["counts"]["sections"]
+    # Inline [spell=ID] / [item=ID] markup reads as the entity's name, or guide-query cannot find a
+    # section by the ability it discusses. The page's own gatherer names are the oracle.
+    linked = json.loads((bundle_dir / "guide.json").read_text())["linked_entities"]["items"]
+    names = {(row["entity_type"], row["id"]): row["name"] for row in linked}
+    inline = [
+        (names[(kind, int(ident))], section["content_text"])
+        for section in map(json.loads, section_lines)
+        for kind, ident in re.findall(r"\[(spell|item)=(\d+)", section["content_raw"])
+        if (kind, int(ident)) in names
+    ]
+    assert inline, f"guide {guide_id} links no named spell or item inline"
+    assert [name for name, text in inline if name not in text] == [], "section text dropped inline entity names"
     assert (out_dir / "index.json").is_file(), "the corpus index was not written next to the bundle"
 
     query = run(BINARY, "guide-query", str(bundle_dir), "guide", "--limit", "3", "--kind", "sections")
@@ -646,6 +673,25 @@ def test_guide_export_writes_a_bundle_the_bundle_commands_can_query(
     assert refreshed.data["guide"]["id"] == guide_id, refreshed.describe()
     assert refreshed.data["refresh"] == {"updated": True, "reason": "forced", "max_age_hours": 24}
     assert refreshed.data["exported_at"] >= exported.data["exported_at"], refreshed.describe()
+
+
+def test_guide_bundle_refresh_rereads_the_dataset_the_bundle_was_exported_from(require, out_dir: Path) -> None:
+    """Refreshing a classic bundle with no ``--expansion`` re-reads classic, not retail.
+
+    Refresh once ignored the expansion the manifest records and re-exported into the bundle from
+    the retail site. The guide page's own canonical link says which dataset was read.
+    """
+    require("wowhead")
+    listed = run(BINARY, "--expansion", "classic", "guides", "classes", "--limit", "1")
+    guide_id = int(listed.data["results"][0]["id"])
+    bundle_dir = out_dir / f"guide-{guide_id}"
+    run(BINARY, "--expansion", "classic", "guide-export", str(guide_id), "--out", str(bundle_dir))
+    exported_page = json.loads((bundle_dir / "guide.json").read_text())["page"]
+    assert "/classic/" in exported_page["canonical_url"], exported_page
+
+    refreshed = run(BINARY, "guide-bundle-refresh", str(guide_id), "--root", str(out_dir), "--force")
+    assert (refreshed.data["expansion"], refreshed.data["refresh"]["reason"]) == ("classic", "forced"), refreshed.describe()
+    assert json.loads((bundle_dir / "guide.json").read_text())["page"] == exported_page
 
 
 def test_news_listing_leads_to_one_news_post(require, news_listing: Result) -> None:
@@ -858,6 +904,7 @@ def test_global_output_flags_reshape_the_same_entity_payload(require) -> None:
     assert "\n" not in compact.stdout.strip(), "--compact output should stay on one line"
     assert len(compact.data["tooltip"]["text"]) <= 60, compact.describe()
     assert compact.data["tooltip"]["text"].endswith("..."), compact.describe()
+    assert "data.tooltip.text" in compact.payload["provenance"]["compacted_paths"], compact.describe()
 
     # --fields projects the envelope away on purpose, so it cannot go through the envelope contract.
     projected = run_raw(BINARY, "--fields", "data.entity.name", "--fields-strict", "entity", "item", str(pins.ITEM_ID))

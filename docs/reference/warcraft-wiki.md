@@ -11,7 +11,7 @@ Pass these before the subcommand: `warcraft-wiki --pretty <command> ...`.
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `--pretty` | boolean | false | Pretty-print JSON for human reading. Default output is compact JSON. |
-| `--compact` | boolean | false | Truncate long string fields to reduce payload size. |
+| `--compact` | boolean | false | Truncate long prose strings to reduce payload size. URLs, talent strings and commands stay whole. |
 | `--fields` | str (repeatable) |  | Return only selected fields (dot paths). Repeat or pass comma-separated values. |
 | `--fields-strict` | boolean | false | Fail when a requested --fields dot-path is missing from the payload. |
 | `--profile` | str |  | Output profile preset: agent (default compact JSON) or human (pretty JSON). |

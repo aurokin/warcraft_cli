@@ -13,7 +13,9 @@ import json
 import httpx
 import pytest
 from typer.testing import CliRunner
+from warcraft_core.provider import ProviderError
 from wowhead_cli.main import app
+from wowhead_cli.provider import transport_errors
 from wowhead_cli.wowhead_client import WowheadClient
 
 runner = CliRunner()
@@ -48,6 +50,15 @@ def _raise_not_found(self: WowheadClient, url: str, *, params: dict[str, object]
     raise httpx.HTTPStatusError("404 Not Found", request=request, response=httpx.Response(404, request=request))
 
 
+def _raise_unavailable(self: WowheadClient, url: str, *, params: dict[str, object] | None = None) -> httpx.Response:
+    request = httpx.Request("GET", url)
+    raise httpx.HTTPStatusError("503", request=request, response=httpx.Response(503, request=request))
+
+
+def _raise_timeout(self: WowheadClient, url: str, *, params: dict[str, object] | None = None) -> httpx.Response:
+    raise httpx.ReadTimeout("timed out", request=httpx.Request("GET", url))
+
+
 @pytest.mark.parametrize(("name", "argv"), NETWORK_COMMANDS, ids=[row[0] for row in NETWORK_COMMANDS])
 def test_connect_error_returns_network_envelope(name: str, argv: list[str], monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(WowheadClient, "_request_with_retries", _raise_connect_error)
@@ -59,7 +70,7 @@ def test_connect_error_returns_network_envelope(name: str, argv: list[str], monk
     assert payload["ok"] is False
     assert payload["provider"] == "wowhead"
     assert payload["schema_version"] == "1"
-    assert payload["error"]["code"] in {"network_error", "http_error"}
+    assert payload["error"]["code"] == "network_error"
 
 
 @pytest.mark.parametrize(("name", "argv"), NETWORK_COMMANDS, ids=[row[0] for row in NETWORK_COMMANDS])
@@ -73,3 +84,29 @@ def test_upstream_404_returns_not_found_envelope(name: str, argv: list[str], mon
     assert payload["ok"] is False
     assert payload["error"]["code"] == "not_found"
     assert payload["error"]["details"]["status_code"] == 404
+
+
+@pytest.mark.parametrize(("name", "argv"), NETWORK_COMMANDS, ids=[row[0] for row in NETWORK_COMMANDS])
+def test_every_command_reports_an_upstream_failure_the_same_way(
+    name: str, argv: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One mapping for the whole binary: a 5xx is `upstream_error` naming the URL, a timeout is `timeout`."""
+    monkeypatch.setattr(WowheadClient, "_request_with_retries", _raise_unavailable)
+    unavailable = runner.invoke(app, argv)
+    assert unavailable.exit_code == 5, unavailable.output
+    error = json.loads(unavailable.stderr)["error"]
+    assert error["code"] == "upstream_error"
+    assert error["details"]["status_code"] == 503
+    assert error["details"]["url"].startswith("https://")
+
+    monkeypatch.setattr(WowheadClient, "_request_with_retries", _raise_timeout)
+    timed_out = runner.invoke(app, argv)
+    assert timed_out.exit_code == 5, timed_out.output
+    assert json.loads(timed_out.stderr)["error"]["code"] == "timeout"
+
+
+def test_a_429_is_rate_limited() -> None:
+    request = httpx.Request("GET", "https://www.wowhead.com/item=19019")
+    with pytest.raises(ProviderError) as caught, transport_errors():
+        raise httpx.HTTPStatusError("429", request=request, response=httpx.Response(429, request=request))
+    assert (caught.value.code, caught.value.exit_code) == ("rate_limited", 5)

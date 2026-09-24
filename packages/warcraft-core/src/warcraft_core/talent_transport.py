@@ -306,9 +306,10 @@ def _resolve_transport_rows(
             )
             continue
         record = candidates[0]
-        if rank_value > record.max_rank:
+        if not 0 <= rank_value <= record.max_rank:
             # SimC clamps an over-rank entry to min(rank, max_ranks) when it builds the transport
-            # form, so emitting one would silently describe a different character.
+            # form, and a negative rank would be dropped from it, so either would silently describe a
+            # different character.
             unresolved_rows.append(
                 {
                     "entry": entry_id,
@@ -316,7 +317,7 @@ def _resolve_transport_rows(
                     "rank": rank_value,
                     "max_rank": record.max_rank,
                     "name": record.name,
-                    "reason": "rank_exceeds_max_rank",
+                    "reason": "rank_exceeds_max_rank" if rank_value > 0 else "negative_rank",
                 }
             )
             continue
@@ -497,6 +498,14 @@ def validate_talent_tree_transport(
             resolved_entries=resolved_rows,
             unresolved_entries=unresolved_rows,
         )
+
+    # A character has one hero tree. Rows from two cannot describe a real build, and the round trip
+    # would accept them, because the trees it treats as selected come from these same rows.
+    hero_tree_ids = sorted(
+        {row["hero_tree_id"] for row in resolved_rows if row["tree"] in {"hero", "selection"} and row["hero_tree_id"] and row["rank"] > 0}
+    )
+    if len(hero_tree_ids) > 1:
+        return _not_validated("multiple_hero_trees", hero_tree_ids=hero_tree_ids, resolved_entries=resolved_rows)
 
     transport_forms = _split_transport_forms(resolved_rows)
     if not transport_forms:

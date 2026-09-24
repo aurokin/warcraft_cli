@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -56,30 +55,3 @@ def read_env_keys(path: str | Path, keys: Iterable[str]) -> dict[str, str]:
         if parsed is not None and parsed[0] in wanted:
             found[parsed[0]] = parsed[1]
     return found
-
-
-def load_explicit_env_file(path: str | Path, *, override: bool = False) -> Path | None:
-    candidate = Path(path).expanduser()
-    if not candidate.is_file():
-        return None
-    for raw_line in candidate.read_text().splitlines():
-        parsed = _parse_env_line(raw_line)
-        if parsed is None:
-            continue
-        env_key, env_value = parsed
-        if not override and env_key in os.environ:
-            continue
-        os.environ[env_key] = env_value
-    return candidate
-
-
-def load_env_file(
-    filename: str = ".env.local",
-    *,
-    start_dir: str | Path | None = None,
-    override: bool = False,
-) -> Path | None:
-    path = find_env_file(filename, start_dir=start_dir)
-    if path is None:
-        return None
-    return load_explicit_env_file(path, override=override)

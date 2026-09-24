@@ -62,4 +62,3 @@ Each normalized field is an object:
 ## Related
 
 - [../foundation/SAFE_ANALYTICS_RULES.md](../foundation/SAFE_ANALYTICS_RULES.md)
-- [EXPANSION_RESEARCH.md](EXPANSION_RESEARCH.md)

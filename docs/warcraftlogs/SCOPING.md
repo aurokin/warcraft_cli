@@ -11,9 +11,13 @@ warcraftlogs report-encounter 7Rc3HPCWGYy1z4tT --fight-id 25
 warcraftlogs report-encounter 'https://www.warcraftlogs.com/reports/7Rc3HPCWGYy1z4tT#fight=25'
 ```
 
-If both a URL fragment and `--fight-id` are provided, `--fight-id` is the explicit override.
+The URL may carry the fight as `?fight=25` or `#fight=25`. If both a URL fight and `--fight-id`
+are provided, `--fight-id` is the explicit override.
 Report codes are 16 letters and digits and need not contain a digit (`JVFTxcKCqrvpaAzD`); `search`
-and `resolve` recognise such a code bare or inside a `/reports/<code>` URL.
+and `resolve` recognise such a code bare or inside a `/reports/<code>` URL, but not a CamelCase
+word such as `HavocDemonHunter`.
+A trash fight (Warcraft Logs encounter ID 0) is sliced by its fight ID alone, with no encounter or
+kill-type filter.
 
 ## Encounter And Window Scope
 
@@ -28,7 +32,7 @@ A `--fight-id`, `--encounter-id`, or `--difficulty` that matches no fight in the
 - `--difficulty`: provider difficulty id
 - `--zone-id`: provider zone id
 - `--start-time` / `--end-time`: absolute report timestamps in milliseconds
-- `--window-start-ms` / `--window-end-ms`: encounter-relative timestamps on supported `report-encounter*` commands
+- `--window-start-ms` / `--window-end-ms`: encounter-relative timestamps on supported `report-encounter*` commands; a window that starts at or after the fight's end fails with `invalid_query` (exit 2) instead of answering zero
 - `--left-window-start-ms` / `--left-window-end-ms` and `--right-window-start-ms` / `--right-window-end-ms`: explicit comparison windows for `report-encounter-aura-compare`
 - `--boss-id` / `--boss-name`: sampled cross-report boss scope where supported
 
@@ -55,7 +59,7 @@ Sampled analytics commands such as `boss-kills`, `top-kills`, `spec-kill-samples
 - report budget: `--report-pages`, `--reports-per-page`
 - time filters: `--start-time`, `--end-time`
 - encounter filters: `--zone-id`, `--boss-id`, `--boss-name`, `--difficulty`
-- participant filter: `--spec-name` keeps sampled kills that include that spec; it is not a spec leaderboard
+- participant filter: `--spec-name` keeps sampled kills that include that spec; it is not a spec leaderboard. Spec names repeat across classes, so pass the class too (`'Frost Mage'`, `frost-death-knight`); a bare spec name matches every class with that spec, lists them in `sample.matched_spec_classes`, and adds a note when there are several
 
 `spec-kill-samples` requires `--spec-name` (alongside boss scope): it returns the participant filter as an explicit, labeled cohort (`cohort: spec_filtered_participant_kill_cohort`) rather than as an optional refinement of `boss-kills`.
 

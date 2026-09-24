@@ -12,7 +12,7 @@ Pass these before the subcommand: `warcraftlogs --pretty <command> ...`.
 | --- | --- | --- | --- |
 | `--site` | str | retail | Warcraft Logs site profile: retail, classic, or fresh. |
 | `--pretty` | boolean | false | Pretty-print JSON for human reading. Default output is compact JSON. |
-| `--compact` | boolean | false | Truncate long string fields to reduce payload size. |
+| `--compact` | boolean | false | Truncate long prose strings to reduce payload size. URLs, talent strings and commands stay whole. |
 | `--fields` | str (repeatable) |  | Return only selected fields (dot paths). Repeat or pass comma-separated values. |
 | `--fields-strict` | boolean | false | Fail when a requested --fields dot-path is missing from the payload. |
 | `--profile` | str |  | Output profile preset: agent (default compact JSON) or human (pretty JSON). |

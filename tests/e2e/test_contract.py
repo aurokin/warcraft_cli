@@ -115,14 +115,29 @@ def _help_descriptions(binary: str) -> dict[tuple[str, ...], str]:
     return described
 
 
-def _strings(value: Any) -> list[str]:
+def _strings(value: Any, path: str = "") -> dict[str, str]:
+    """Every string in ``value`` by the dot path ``provenance.compacted_paths`` uses (``data.notes.0``)."""
     if isinstance(value, str):
-        return [value]
-    if isinstance(value, list):
-        return [text for row in value for text in _strings(row)]
+        return {path: value}
     if isinstance(value, dict):
-        return [text for row in value.values() for text in _strings(row)]
-    return []
+        children = [(str(key), row) for key, row in value.items()]
+    elif isinstance(value, list):
+        children = [(str(index), row) for index, row in enumerate(value)]
+    else:
+        return {}
+    found: dict[str, str] = {}
+    for name, row in children:
+        found.update(_strings(row, f"{path}.{name}" if path else name))
+    return found
+
+
+def _long(payload: dict[str, Any], *, prose: bool) -> dict[str, str]:
+    """Strings over the compact limit: prose (has a space or tab) or a single token (a path, URL, code)."""
+    return {
+        path: text
+        for path, text in _strings(payload).items()
+        if len(text) > COMPACT_MAX_CHARS and (" " in text or "\t" in text) is prose
+    }
 
 
 def _cache_snapshot(root: Path) -> dict[str, tuple[float, int]]:
@@ -192,13 +207,6 @@ def test_a_usage_error_is_an_exit_2_envelope_on_stderr(binary: str, argv: tuple[
     assert result.payload["provider"] == _provider(binary), result.describe()
 
 
-def test_the_removed_debug_profile_is_rejected_as_a_usage_error() -> None:
-    # `--profile debug` was removed; it must fail loudly rather than be accepted and ignored.
-    result = run("warcraft", "--profile", "debug", "doctor", expect=EXIT_USAGE, error_code="invalid_argument")
-    assert "agent" in result.payload["error"]["message"], result.describe()
-    assert "debug" not in run_text("warcraft", "--help").stdout, "help still advertises the debug profile"
-
-
 @pytest.mark.parametrize("binary", sorted(NETWORK_COMMAND))
 def test_a_network_failure_is_an_exit_5_envelope_on_stderr(binary: str, require, tmp_path: Path) -> None:
     if binary != "warcraft":
@@ -232,23 +240,23 @@ def test_fields_reports_what_it_could_not_select_and_fields_strict_rejects_it(bi
 
 
 @pytest.mark.parametrize("binary", BINARIES)
-def test_compact_truncates_long_strings_and_never_grows_the_payload(binary: str, require) -> None:
+def test_compact_cuts_exactly_the_long_prose_and_lists_every_cut(binary: str, require) -> None:
+    """``--compact`` cuts prose past the limit, leaves single tokens whole, and names every cut.
+
+    The expected cuts come from the uncompacted doctor, so a binary that ignores the flag, cuts a
+    path or URL another tool would consume, or cuts without listing it in
+    ``provenance.compacted_paths`` fails. A doctor with no prose over the limit must cut nothing.
+    """
     if binary != "warcraft":
         require(_provider(binary))
     full = run(binary, "doctor")
-    compact = run_raw(binary, "--compact", "--compact-max-chars", str(COMPACT_MAX_CHARS), "doctor")
-    payload = _json_stdout(compact)
-    compact_strings = _strings(payload)
-    too_long = [text for text in compact_strings if len(text) > COMPACT_MAX_CHARS]
-    assert not too_long, f"{binary} --compact left strings longer than {COMPACT_MAX_CHARS}: {too_long[:3]}"
-
-    # "No string is too long" also holds when --compact is ignored on a doctor that has no long
-    # string, so every doctor must carry one (each reports a cache path, a repo path, or a note past the
-    # limit) and the cut has to show: the payload shrinks and the cut strings end in an ellipsis.
-    over_limit = [text for text in _strings(full.payload) if len(text) > COMPACT_MAX_CHARS]
-    assert over_limit, f"{binary} doctor has no string over {COMPACT_MAX_CHARS} chars, so --compact cannot be observed"
-    assert len(compact.stdout) < len(full.stdout), compact.describe()
-    assert any(text.endswith("...") for text in compact_strings), compact.describe()
+    compact = run(binary, "--compact", "--compact-max-chars", str(COMPACT_MAX_CHARS), "doctor")
+    cut = compact.payload["provenance"].get("compacted_paths", [])
+    assert sorted(cut) == sorted(_long(full.payload, prose=True)), compact.describe()
+    texts = _strings(compact.payload)
+    assert all(len(texts[path]) == COMPACT_MAX_CHARS and texts[path].endswith("...") for path in cut), compact.describe()
+    tokens = _long(full.payload, prose=False)
+    assert {path: texts.get(path) for path in tokens} == tokens, f"{binary} --compact cut a single-token value"
 
 
 @pytest.mark.parametrize("binary", BINARIES)

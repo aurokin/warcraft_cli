@@ -17,6 +17,7 @@
 
 - use Method when an article-style guide is easier to traverse than a Wowhead guide page
 - prefer `guide` before `guide-full`
+- Method titles never say "Mythic+": `mythic+`, `m+` and `mythic plus` search for "mythic dungeon" pages
 - expect explicit support boundaries; unsupported families return structured failures or `scope_hint`
 - `build_references` holds explicit build evidence from the page: embedded Wowhead talent-calc links (`reference_type: wowhead_talent_calc_url`) and published WoW loadout import strings (`reference_type: wow_talent_export`, where `url` is the import string). There is no slug/title-based guide hardlinking
 - current class guides publish import strings on their `/talents` section, so `guide-full` on a class guide is what feeds `guide-builds-simc`

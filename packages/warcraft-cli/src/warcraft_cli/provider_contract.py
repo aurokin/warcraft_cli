@@ -90,7 +90,8 @@ DEFAULT_WRAPPER_RANKING_POLICY: dict[str, Any] = {
         ],
     },
     "intent_family_boosts": {
-        "guide": {"article": 26, "entity": 10, "reference": -6, "profile": -18, "local_tool": -22},
+        # Lorrgs and Warcraft Logs describe specs and fights, never a guide.
+        "guide": {"article": 26, "entity": 10, "reference": -6, "profile": -18, "local_tool": -22, "logs": -10},
         "reference": {"reference": 32, "entity": 8, "article": -10, "profile": -18, "local_tool": -12},
         "entity": {"entity": 30, "article": -10, "reference": -6, "profile": -16, "local_tool": -18},
         "guild_profile": {"profile": 30, "article": -14, "reference": -10, "entity": -12, "local_tool": -20},
@@ -373,10 +374,11 @@ def wrapper_search_ranking(
     """Score one candidate for the merged wrapper list: normalized provider score plus policy boosts.
 
     ``provider_max_score`` is the best raw score the same provider returned for this query. Pass it
-    whenever candidates from several providers end up in one ranked list (``warcraft search``) so no
-    provider's local scale can crowd the others out. ``warcraft resolve`` passes nothing: it compares
-    one answer per provider on ``resolved``/``confidence``, not a merged candidate list.
+    whenever candidates from several providers end up in one ranked list (``warcraft search`` and
+    ``warcraft resolve``) so no provider's local scale can crowd the others out.
     ``provider_top_row`` marks the provider's own first row, the only row that can anchor a page.
+    ``intent_family_fit`` is the sum of the family boosts the query's intents gave the row: below zero,
+    the query asked for a different kind of source than this row's provider.
     """
     policy = load_wrapper_ranking_policy()
     provider = str(row.get("provider") or "").strip()
@@ -390,10 +392,12 @@ def wrapper_search_ranking(
         score = normalized_provider_score(raw_score, provider_max_score=provider_max_score)
         reasons = [f"normalized_provider_score:{score}(raw {raw_score}/{provider_max_score})"]
     intents = query_intents(query)
+    family_fit = 0
     for intent in intents:
         family_boost = policy["intent_family_boosts"].get(intent, {}).get(family, 0)
         if family_boost:
             score += family_boost
+            family_fit += family_boost
             reasons.append(f"intent:{intent}:family:{family}:{family_boost:+d}")
         provider_boost = policy["intent_provider_boosts"].get(intent, {}).get(provider, 0)
         if provider_boost:
@@ -428,6 +432,7 @@ def wrapper_search_ranking(
         "kind": kind,
         "name_match": name_match,
         "off_intent": off_intent,
+        "intent_family_fit": family_fit,
         "anchor": anchor,
         "stale_guide": _provider_flagged_stale(row),
         "provider_score": raw_score,
@@ -652,26 +657,46 @@ def merged_search_page(
 
 
 def decorate_resolve_payload(query: str, provider: str, payload: Mapping[str, Any]) -> dict[str, Any]:
+    """One provider's resolve answer, its match ranked exactly as ``warcraft search`` ranks that
+    provider's top row: normalized against the provider's own candidates, and able to anchor."""
     decorated = dict(payload)
     match = payload.get("match")
     if isinstance(match, Mapping):
-        decorated_match = decorate_search_result(query, {"provider": provider, **dict(match)})
+        rows = [match, *(row for row in payload.get("candidates") or [] if isinstance(row, Mapping))]
+        decorated_match = decorate_search_result(
+            query,
+            {"provider": provider, **dict(match)},
+            provider_max_score=provider_max_candidate_score(rows),
+            provider_top_row=True,
+        )
         decorated["match"] = decorated_match
         decorated["wrapper_ranking"] = decorated_match["wrapper_ranking"]
     return decorated
 
 
-def resolve_payload_sort_key(provider: str, payload: Mapping[str, Any]) -> tuple[int, int, int, int, str]:
+def resolve_payload_sort_key(payload: Mapping[str, Any]) -> tuple[int, int, int, int, int, int, str, str, str]:
+    """Order between providers' decorated resolve answers: ``search_result_sort_key`` on the match.
+
+    ``warcraft resolve`` answers with the row ``warcraft search`` would put first, so a provider's own
+    ``resolved``/``confidence`` never lifts a row over a better-ranked one; they only break an exact
+    tie on the wrapper score, ahead of the incomparable raw provider score.
+    """
+    match = payload.get("match")
+    anchor, off_intent, wrapper_score, score, provider, name, identifier = search_result_sort_key(
+        match if isinstance(match, Mapping) else {}
+    )
     resolved = 1 if payload.get("resolved") else 0
     confidence = confidence_rank(payload.get("confidence"))
-    wrapper = payload.get("wrapper_ranking")
-    if isinstance(wrapper, Mapping):
-        try:
-            wrapper_score = int(wrapper.get("score") or 0)
-        except (TypeError, ValueError):
-            wrapper_score = 0
-    else:
-        wrapper_score = 0
-    match = payload.get("match")
-    score = candidate_score(match if isinstance(match, Mapping) else None)
-    return (-resolved, -confidence, -wrapper_score, -score, provider)
+    return (anchor, off_intent, wrapper_score, -resolved, -confidence, score, provider, name, identifier)
+
+
+def resolve_answer_accepted(payload: Mapping[str, Any]) -> bool:
+    """Whether the top-ranked resolve answer is the wrapper's answer.
+
+    Its own provider must have resolved it, and the query's intents must not rank that provider's
+    family down: a guide query is not answered by Lorrgs spec metadata, nor a guild query by a wiki
+    article, whatever confidence the provider reported.
+    """
+    ranking = payload.get("wrapper_ranking")
+    fit = ranking.get("intent_family_fit") if isinstance(ranking, Mapping) else 0
+    return bool(payload.get("resolved")) and int(fit or 0) >= 0

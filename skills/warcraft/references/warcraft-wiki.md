@@ -19,7 +19,8 @@
 - prefer `event` for game events (`PLAYER_LOGIN`, `ENCOUNTER_START`) and UI handlers (`OnKeyDown`)
 - `api` and `event` fail with `not_found` (exit 4) instead of returning an unrelated page
 - use `article` when the query is broader than programming
-- use `reference` metadata on article responses instead of parsing the full body first
+- use `reference` metadata on article responses instead of parsing the full body first; on `api`/`event` pages `reference.arguments` holds the arguments (an event's "Payload"), and `reference.signature` is the introduction's code block or `null`
+- `reference.summary` is the page's opening text, which can start with a "For the ..., see ..." hatnote or infobox text on lore and API pages; read `content.text` when the summary looks like navigation
 
 ## Strong Families
 

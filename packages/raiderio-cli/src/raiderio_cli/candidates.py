@@ -6,8 +6,10 @@ I/O beyond the structured probe, and nothing here prints or raises ``typer.Exit`
 
 from __future__ import annotations
 
+import shlex
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 from warcraft_core.shapes import as_dict
@@ -186,22 +188,13 @@ def match_reasons(
 
 
 def _follow_up_for_match(kind: str, region: str | None, realm: str | None, name: str) -> dict[str, Any]:
+    """The ``raiderio character|guild`` command for a match, shell-quoted: guild names have spaces."""
     base = {
         "provider": "raiderio",
         "kind": kind,
     }
-    if kind == "character" and region and realm:
-        return {
-            **base,
-            "surface": "character",
-            "command": f"raiderio character {region} {realm} {name}",
-        }
-    if kind == "guild" and region and realm:
-        return {
-            **base,
-            "surface": "guild",
-            "command": f"raiderio guild {region} {realm} {name}",
-        }
+    if kind in {"character", "guild"} and region and realm:
+        return {**base, "surface": kind, "command": shlex.join(["raiderio", kind, region, realm, name])}
     return {
         **base,
         "surface": None,
@@ -385,6 +378,9 @@ def search_result_candidate(row: dict[str, Any], *, query: str, type_hint: str |
     )
     path = data.get("path")
     profile_url = f"https://raider.io{path}" if isinstance(path, str) and path.startswith("/") else None
+    # Site search sends ``path`` for guild rows only; a character's page lives at a fixed layout.
+    if profile_url is None and kind == "character" and region and realm and name:
+        profile_url = f"https://raider.io/characters/{region}/{realm}/{quote(name)}"
     candidate: dict[str, Any] = {
         "provider": "raiderio",
         "kind": kind,

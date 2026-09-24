@@ -33,6 +33,7 @@ against the live API; `provenance.verified` is `true`.
   object for the newest file with its changelog `body` (`null` when that file exposes no notes) and
   `source_url`, or an explicit `{file_id, error}` marker on a failed fetch — the lookup still returns
   metadata + files. Detect empty notes via `changelog.body`, not `changelog is null`.
+- the newest file can be an alpha or beta: check `changelog.release_type` (1 release, 2 beta, 3 alpha) and `changelog.display_name` before quoting its notes as "the latest release"
 - every payload carries `provenance` (mod id, slug, resolved-by, source URLs) and
   `provenance.verified: true` — host, auth, search, lookup, and changelog endpoints are confirmed
   live; keys without search access can only resolve numeric mod ids (`curseforge addon 3358`)

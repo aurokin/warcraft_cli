@@ -53,8 +53,13 @@ Every command emits the shared envelope (`ok`, `provider`, `command`, `kind`, `s
 `data`.
 
 Exit codes follow `docs/foundation/ERROR_CONTRACT.md`: 1 generic, 2 usage, 4 guide not found,
-5 network/upstream failure. A page whose article container no longer matches (an Icy Veins layout
-change) fails with `parse_failed` and exit 1 rather than returning an empty article with `ok:true`.
+5 network/upstream failure. A blank `search` or `resolve` query fails with `invalid_query` (exit 2)
+before any request. A page whose article container no longer matches (an Icy Veins layout change),
+or whose canonical link is not a guide page, fails with `parse_failed` and exit 1 rather than
+returning an empty article with `ok:true`.
+
+`doctor` reports `cache.redis_url` without its credentials or query string
+(`redis://***@host:6379/0`).
 
 `guide-query` answers a bad bundle path the same way `method guide-query` does: a path that does
 not exist is `not_found` (exit 4), a file is a usage error (exit 2), and a directory that is not a
@@ -124,17 +129,31 @@ pages fail with `invalid_guide_ref`.
 | `special_event_guide` | `mistweaver-monk-mists-of-pandaria-remix-guide` |
 
 `guide-full` traversal is family-aware: class hubs and role guides stay on the current page, and
-every other family walks its own navigation block.
+every other family walks its own navigation block. Only a class hub reads the class dropdown in the
+page header as its navigation; a spec page whose own switcher is missing gets no navigation and
+`guide-full` returns that one page.
 
 Patch notes, class-change roundups, hotfix posts, and news pages are out of scope. `search` and
 `resolve` detect those query intents and return an empty result set with a `scope_hint` instead of
 misleading guide matches.
 
-`search` and `resolve` keep only guides whose name or slug contains a query word as a whole word, so
-`dh` does not match "headhunters". A trailing plural `s` is ignored on both sides, so `build` keeps
-the `...-spec-builds-talents` pages. Words such as `a`, `of` and `the` are ignored, and `+` reads as
-`plus`, so `mythic+` finds the "Mythic Plus" pages. There are no class or spec abbreviations: `dk`
-and `mw` match nothing.
+`search` and `resolve` return a guide only when its name or slug contains the whole query or every
+query word, or when a query word names the guide's family (`talents`, `stats`, `easy mode`, ...). One
+word that no guide contains therefore empties the result: `frost dk` returns nothing. Words match
+whole, so `dh` does not match "headhunters", and a trailing plural `s` is ignored on both sides, so
+`build` keeps the `...-spec-builds-talents` pages. Words such as `a`, `of` and `the` are ignored, and
+`+` reads as `plus`, so `mythic+` finds the "Mythic Plus" pages and the seasonal
+`<expansion>-mythic-season-<n>-guide` pages. There are no class or spec abbreviations: `dk` and `mw`
+match nothing.
+
+A spec query (`frost mage`, `survival hunter guide`) resolves to that spec's
+`...-pve-<role>-guide`. Healer specs also publish a PvE DPS guide; their healing guide ranks first.
+A hunter spec's pets page ranks with its PvP and leveling pages, below the spec guide. `resolve`
+never picks between candidates with the same score.
+
+Each result carries `metadata.last_updated`, the sitemap's `<lastmod>` date. A page last updated more
+than a year before the newest page in the sitemap loses 10 points and lists `penalty_stale_page` in
+`ranking.match_reasons`, so a past season's guide ranks below the current one.
 
 ## Caching
 

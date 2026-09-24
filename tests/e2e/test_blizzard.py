@@ -99,6 +99,15 @@ def test_character_read_uses_the_profile_namespace_and_agrees_with_the_realm_rea
     assert realm.data["name"] == result.data["realm"]["name"]
 
 
+def test_a_realm_display_name_reaches_the_realm_its_slug_names(require) -> None:
+    """Blizzard slugs drop apostrophes, so the name a player types has to be tried as a slug spelling."""
+    require("blizzard-api")
+    by_slug = run("blizzard", "realm", "malganis")
+    by_name = run("blizzard", "realm", "Mal'Ganis")
+    assert by_name.data["slug"] == "malganis", by_name.describe()
+    assert by_name.data["id"] == by_slug.data["id"], by_name.describe()
+
+
 def test_region_and_game_version_change_the_namespace(require) -> None:
     require("blizzard-api")
     european = run("blizzard", "item", str(ITEM_ID), "--region", "eu")

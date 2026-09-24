@@ -15,6 +15,9 @@ from lorrgs_cli.client import LorrgsClient
 REPORT_CODE_PATTERN = re.compile(
     r"^(?:(?=.*[a-z])(?=.*[A-Z])[A-Za-z0-9]{16}|(?=.*[A-Za-z])(?=.*\d)[A-Za-z0-9]{8,32})$"
 )
+# A bare word made of capitalised words (HavocDemonHunter) is a name, not a code. Only bare words are
+# checked: a random code has this shape about once in 1750, and a /reports/<code> URL path is a code.
+CAMEL_CASE_NAME_PATTERN = re.compile(r"(?:[A-Z][a-z]+)+")
 WORD_PATTERN = re.compile(r"[a-z0-9]+")
 STOP_TERMS = frozenset(
     {
@@ -33,6 +36,10 @@ STOP_TERMS = frozenset(
         "of",
         "the",
         "and",
+        "on",
+        "for",
+        "in",
+        "vs",
         "mythic",
         "heroic",
         "normal",
@@ -103,7 +110,7 @@ def parse_report_reference(reference: str) -> ReportReference | None:
     parsed = urlparse(text)
     if parsed.scheme and parsed.netloc:
         return _report_reference_from_url(text, parsed)
-    if " " in text or not REPORT_CODE_PATTERN.fullmatch(text):
+    if " " in text or not REPORT_CODE_PATTERN.fullmatch(text) or CAMEL_CASE_NAME_PATTERN.fullmatch(text):
         return None
     return ReportReference(code=text)
 
@@ -200,10 +207,10 @@ def _ranked_candidates(client: LorrgsClient, query: str) -> list[dict[str, Any]]
     query_terms = _query_terms(query)
     spec_matches = _match_rows(specs if isinstance(specs, list) else [], query_terms)
     boss_matches = _match_rows(bosses if isinstance(bosses, list) else [], query_terms)
-    # Every query word the Lorrgs roster recognises. A candidate that leaves one of these out answered
-    # a narrower question than the caller asked ("frost chimaerus" -> a boss, dropping "frost"), while
-    # a word Lorrgs has never heard of is just noise and must not block an otherwise exact match.
-    known_terms = frozenset().union(*(match.terms for match in spec_matches + boss_matches), frozenset())
+    # Every query word that is not filler (STOP_TERMS). A candidate that leaves one out answered a
+    # narrower question than the caller asked: "frost chimaerus" -> a boss drops "frost", and "frost
+    # mage guide" -> the Frost Mage spec drops "guide", a question Lorrgs has no answer for.
+    known_terms = frozenset(query_terms)
     # Keep every row tied for the strongest match rather than the first one: "frost <boss>" fits Frost
     # Mage and Frost Death Knight equally, so both have to reach the caller as separate candidates.
     top_specs = _best_matches(spec_matches)

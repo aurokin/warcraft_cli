@@ -14,6 +14,8 @@ references that ``warcraft guide-builds-simc`` can hand to SimulationCraft.
 from __future__ import annotations
 
 import json
+import shlex
+from datetime import date
 from functools import cache
 from pathlib import Path
 from typing import Any
@@ -182,7 +184,12 @@ def test_search_reads_mythic_plus_the_way_players_write_it(require) -> None:
 
     rows = result.data["results"]
     assert rows, result.describe()
-    assert all("mythic-plus" in row["id"] for row in rows), result.describe()
+    # Newer seasonal slugs drop "plus" (``midnight-mythic-season-2-guide``) and still answer the query.
+    assert all("mythic-plus" in row["id"] or "-mythic-season-" in row["id"] for row in rows), result.describe()
+    # The answer is the current season's page, not a guide the site stopped updating a year ago.
+    dates = [date.fromisoformat(row["metadata"]["last_updated"]) for row in rows if row["metadata"]["last_updated"]]
+    top_date = rows[0]["metadata"]["last_updated"]
+    assert top_date and (max(dates) - date.fromisoformat(top_date)).days < 365, result.describe()
 
 
 def test_resolve_hands_over_a_next_command_that_returns_the_same_guide(require) -> None:
@@ -199,9 +206,31 @@ def test_resolve_hands_over_a_next_command_that_returns_the_same_guide(require) 
     # The whole point of next_command is that an agent can run it verbatim.
     next_command = result.data["next_command"]
     assert next_command == f"{BINARY} guide {match['id']}"
-    binary, *args = next_command.split()
+    binary, *args = shlex.split(next_command)
     assert binary == BINARY
     assert run(BINARY, *args).data["guide"]["slug"] == match["id"]
+
+
+@pytest.mark.parametrize(("query", "spec_slug"), [("frost mage", "frost-mage"), ("survival hunter guide", "survival-hunter")])
+def test_resolve_lands_a_dps_spec_on_its_pve_dps_guide(require, query: str, spec_slug: str) -> None:
+    """A damage spec's intro guide is ``<spec>-<class>-pve-dps-guide``; the PvP and pets pages are parts of it.
+
+    Every DPS spec once tied its PvP guide and stayed unresolved, and the hunter specs resolved to
+    their pets guide at high confidence. The expected slug is built from the query, and search has to
+    list it, so the sitemap itself confirms the page exists.
+    """
+    require(PROVIDER)
+    expected = f"{spec_slug}-pve-dps-guide"
+    listed = run(BINARY, "search", query, "--limit", "10")
+    assert expected in [row["id"] for row in listed.data["results"]], listed.describe()
+
+    result = run(BINARY, "resolve", query)
+    assert result.data["resolved"] is True, result.describe()
+    assert result.data["match"]["id"] == expected, result.describe()
+    binary, *args = shlex.split(result.data["next_command"])
+    assert binary == BINARY
+    page = run(BINARY, *args)
+    assert (page.data["guide"]["slug"], page.data["guide"]["content_family"]) == (expected, "spec_guide"), page.describe()
 
 
 def test_guide_returns_attributed_sections_family_navigation_and_a_page_toc(require) -> None:

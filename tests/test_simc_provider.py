@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 from pathlib import Path
 
 import pytest
@@ -106,6 +107,20 @@ def test_provider_surface_is_pure_and_conforms(tmp_path: Path) -> None:
         assert envelope["ok"] is True
     assert PROVIDER.search("mistweaver", repo_root=str(tmp_path))["data"]["coming_soon"] is True
 
+
+
+def test_resolve_suggests_a_command_that_runs(tmp_path: Path) -> None:
+    """It used to suggest `decode-build --apl-path <apl>`, which always fails: an APL carries no build."""
+    root = tmp_path / "simc checkout"
+    (root / "ActionPriorityLists" / "default").mkdir(parents=True)
+    (root / "ActionPriorityLists" / "default" / "monk_windwalker.simc").write_text("actions=tiger_palm\n")
+
+    suggested = PROVIDER.resolve("windwalker", repo_root=str(root))["data"]["suggested_command"]
+    program, *args = shlex.split(suggested)
+    result = runner.invoke(simc_app, ["--repo-root", str(root), *args])
+
+    assert program == "simc"
+    assert result.exit_code == 0, result.stdout + result.stderr
 
 
 def test_the_capability_map_covers_every_command_the_cli_exposes() -> None:

@@ -96,5 +96,4 @@ This applies only to `none` providers. `fixed`/`profiled` providers asked for an
 ## Related
 
 - [../foundation/WRAPPER_PROVIDER_CONTRACT.md](../foundation/WRAPPER_PROVIDER_CONTRACT.md)
-- [../wowhead/EXPANSION_RESEARCH.md](../wowhead/EXPANSION_RESEARCH.md)
 - [../ROADMAP.md](../ROADMAP.md)

@@ -11,7 +11,7 @@ Pass these before the subcommand: `raidbots --pretty <command> ...`.
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `--pretty` | boolean | false | Pretty-print JSON for human reading. Default output is compact JSON. |
-| `--compact` | boolean | false | Truncate long string fields to reduce payload size. |
+| `--compact` | boolean | false | Truncate long prose strings to reduce payload size. URLs, talent strings and commands stay whole. |
 | `--fields` | str (repeatable) |  | Return only selected fields (dot paths). Repeat or pass comma-separated values. |
 | `--fields-strict` | boolean | false | Fail when a requested --fields dot-path is missing from the payload. |
 | `--profile` | str |  | Output profile preset: agent (default compact JSON) or human (pretty JSON). |
@@ -20,32 +20,6 @@ Pass these before the subcommand: `raidbots --pretty <command> ...`.
 ## raidbots doctor
 
 Report Raidbots capabilities, cache configuration, and the resolved report URL templates.
-
-## raidbots search
-
-Emit the not-supported search stub: Raidbots publishes no report index.
-
-**Arguments**
-
-| Argument | Type | Default | Description |
-| --- | --- | --- | --- |
-| `query` | str | required | Free-text query (Raidbots has no searchable report index). |
-
-**Options**
-
-| Option | Type | Default | Description |
-| --- | --- | --- | --- |
-| `--limit` | int range | 10 | Maximum results to return; kept for cross-provider parity. |
-
-## raidbots resolve
-
-Emit the not-supported resolve stub: only a known report URL or ID can be opened.
-
-**Arguments**
-
-| Argument | Type | Default | Description |
-| --- | --- | --- | --- |
-| `target` | str | required | Free-text target (use `inspect-report` with a known report). |
 
 ## raidbots inspect-report
 

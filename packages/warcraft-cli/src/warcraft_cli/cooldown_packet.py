@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shlex
 from collections import Counter
 from typing import Any
 
@@ -306,7 +307,8 @@ def top_parse_samples(
 
 
 def source_command(command: str, args: list[str]) -> str:
-    return " ".join(["warcraft", command, *[_quote_arg(arg) for arg in args]])
+    """The provider call as a command line a shell runs verbatim."""
+    return shlex.join(["warcraft", command, *args])
 
 
 def _count_rows(counts: Counter[int], *, catalog: dict[int, dict[str, Any]]) -> list[dict[str, Any]]:
@@ -362,9 +364,3 @@ def _int_or_none(value: Any) -> int | None:
 
 def _list_or_empty(value: Any) -> list[Any]:
     return as_list(value)
-
-
-def _quote_arg(value: str) -> str:
-    if value and all(character.isalnum() or character in "-_=./" for character in value):
-        return value
-    return "'" + value.replace("'", "'\"'\"'") + "'"

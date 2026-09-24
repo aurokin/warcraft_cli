@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
 from collections.abc import Iterable
 from dataclasses import dataclass
 from functools import lru_cache
@@ -54,6 +55,13 @@ SPEC = "windwalker"
 TRAIT_ROW_RE = re.compile(r'\{\s*(\d+),\s*(\d+),\s*(\d+),\s*(\d+),\s*(\d+),.*?"([^"]+)"')
 TREE_INDEX = {"class": 1, "spec": 2, "hero": 3}
 CLASS_ID = {"monk": 10}
+SPEC_ID = {"windwalker": 269}
+# The same row read whole: the spec ids a talent is limited to (all zero means every spec) and the
+# node type in the last column, where 2 is a choice node (a build takes one of its entries).
+TRAIT_ROW_FULL_RE = re.compile(
+    r'\{\s*(\d+),\s*(\d+),\s*(\d+),\s*(\d+),\s*(\d+),.*?"([^"]+)",\s*\{([^}]*)\}.*?(\d+)\s*\},?\s*$'
+)
+NODE_CHOICE = 2
 
 # How many of the checkout's own tier profiles the decode sweep walks. SimulationCraft itself
 # rejects some of its shipped hashes whenever its trait data moves ahead of the profile generator,
@@ -370,7 +378,10 @@ def test_search_and_resolve_are_structured_coming_soon_stubs(require) -> None:
         assert result.data["coming_soon"] is True
         assert result.data["resolved"] is False
         assert result.data["results"] == []
-        assert result.data["suggested_command"].startswith("simc ")
+        # The suggestion is the stub's whole answer, so it has to run against this checkout as written.
+        binary, *args = shlex.split(result.data["suggested_command"])
+        assert binary == "simc", result.describe()
+        run("simc", *args)
 
 
 # --- build description ---
@@ -748,6 +759,89 @@ def test_modify_build_swaps_in_another_builds_spec_tree(require, checkout: Check
     assert swapped.data["decoded"]["hero_tree"] == base.data["decoded"]["hero_tree"], swapped.describe()
 
 
+@dataclass(frozen=True)
+class TraitRow:
+    entry: int
+    node: int
+    max_rank: int
+    name: str
+    choice: bool
+
+
+def _class_tree_rows(checkout: Checkout) -> list[TraitRow]:
+    """The journey spec's class-tree talents, read straight out of SimC's generated trait table."""
+    trait_file = checkout.root / "engine" / "dbc" / "generated" / "trait_data.inc"
+    rows: list[TraitRow] = []
+    for line in trait_file.read_text().splitlines():
+        match = TRAIT_ROW_FULL_RE.search(line)
+        if match is None:
+            continue
+        tree_index, class_id, entry, node, max_rank, name, specs, node_type = match.groups()
+        spec_ids = {int(value) for value in specs.split(",") if int(value)}
+        if (int(tree_index), int(class_id)) != (TREE_INDEX["class"], CLASS_ID[ACTOR_CLASS]):
+            continue
+        if spec_ids and SPEC_ID[SPEC] not in spec_ids:
+            continue
+        rows.append(TraitRow(int(entry), int(node), int(max_rank), name, int(node_type) == NODE_CHOICE))
+    return rows
+
+
+def test_modify_build_reports_verified_only_for_the_build_that_was_asked_for(require, checkout: Checkout) -> None:
+    """``verified: true`` means every requested edit is in the export at the requested rank.
+
+    It once said so for an add SimC dropped: a talent whose choice node the build already fills,
+    or a rank above the talent's maximum. The expected talents come from SimC's trait table and the
+    export is decoded again, so neither side of the check is the command's own account of itself.
+    """
+    require("simc")
+    build = ("--actor-class", ACTOR_CLASS, "--spec", SPEC)
+    decoded = run("simc", "decode-build", "--talents", checkout.talents, *build)
+    taken = {row["entry"] for row in decoded.data["decoded"]["talents_by_tree"]["class"]}
+    rows = _class_tree_rows(checkout)
+    node_of = {row.entry: row.node for row in rows}
+    names = [row.name for row in rows]
+    unique = [row for row in rows if names.count(row.name) == 1]
+
+    # A talent on a node the build leaves empty lands, and nothing else moves.
+    absent = next(row for row in unique if not row.choice and row.max_rank == 1 and row.node not in {node_of.get(e) for e in taken})
+    added = run("simc", "modify-build", "--talents", checkout.talents, "--add", f"{absent.entry}:1", *build)
+    assert added.data["result"]["verified"] is True, added.describe()
+    assert [row["name"] for row in added.data["result"]["diff_from_base"]["class"]["added"]] == [absent.name], added.describe()
+    redecoded = run("simc", "decode-build", "--talents", added.data["result"]["talents_export"], *build)
+    assert {row["entry"] for row in redecoded.data["decoded"]["talents_by_tree"]["class"]} == taken | {absent.entry}, redecoded.describe()
+
+    # A rank above the talent's maximum cannot be encoded; SimC clamps it, so the export is refused.
+    over = run(
+        "simc", "modify-build", "--talents", checkout.talents, "--add", f"{absent.entry}:2", *build,
+        expect=EXIT_GENERIC, error_code="encode_mismatch",
+    )
+    assert over.payload["error"]["details"]["unapplied_edits"] == [
+        {"tree": "class", "talent": str(absent.entry), "requested_rank": 2, "export_rank": 1}
+    ], over.describe()
+
+    # The other half of a choice node the build fills is refused with the --remove that makes it a swap.
+    held, partner = next(
+        (held, partner)
+        for held in rows
+        if held.choice and held.entry in taken
+        for partner in unique
+        if partner.node == held.node and partner.entry != held.entry
+    )
+    conflict = run(
+        "simc", "modify-build", "--talents", checkout.talents, "--add", f"{partner.entry}:1", *build,
+        expect=EXIT_USAGE, error_code="invalid_argument",
+    )
+    assert f"--remove {held.entry}" in conflict.payload["error"]["message"], conflict.describe()
+    swapped = run(
+        "simc", "modify-build", "--talents", checkout.talents, "--add", f"{partner.entry}:1", "--remove", str(held.entry), *build
+    )
+    assert swapped.data["result"]["verified"] is True, swapped.describe()
+    swapped_entries = run("simc", "decode-build", "--talents", swapped.data["result"]["talents_export"], *build)
+    assert {row["entry"] for row in swapped_entries.data["decoded"]["talents_by_tree"]["class"]} == (taken - {held.entry}) | {
+        partner.entry
+    }, swapped_entries.describe()
+
+
 # --- APL analysis ---
 
 
@@ -790,8 +884,17 @@ def test_find_and_trace_an_action_across_the_checkout(require, checkout: Checkou
     assert populated, found.describe()
     for bucket in populated.values():
         assert bucket["items"]
-        assert len(bucket["items"]) <= 5
         assert all(item["path"] and item["line_no"] > 0 for item in bucket["items"])
+    # --limit keeps at most five of each bucket's hits and says when it cut; one bucket must be cut to
+    # prove the flag bites. Hits across files come back in ripgrep's thread order, so which five is not pinned.
+    wide = run("simc", "find-action", action, "--class", ACTOR_CLASS, "--limit", "200")
+    for name, bucket in found.data["buckets"].items():
+        every_hit = wide.data["buckets"][name]["items"]
+        assert bucket["count"] == len(every_hit), wide.describe()
+        assert len(bucket["items"]) == min(5, len(every_hit)), found.describe()
+        assert all(item in every_hit for item in bucket["items"]), found.describe()
+        assert bucket["truncated"] is (len(every_hit) > 5), found.describe()
+    assert any(bucket["truncated"] for bucket in found.data["buckets"].values()), wide.describe()
 
     traced = run("simc", "trace-action", str(checkout.apl), action, "--class", ACTOR_CLASS, "--limit", "3")
     assert traced.data["action"] == action
@@ -824,14 +927,20 @@ def test_exact_build_priority_journey(require, checkout: Checkout) -> None:
 
     inactive = run("simc", "inactive-actions", str(checkout.apl), *build_args, "--limit", "10")
     assert inactive.data["inactive_actions"]["talent_only"] is True
-    assert inactive.data["inactive_actions"]["count"] == len(inactive.data["inactive_actions"]["items"])
-    assert all("talent." in row["reason"] for row in inactive.data["inactive_actions"]["items"])
+    inactive_items = inactive.data["inactive_actions"]["items"]
+    assert inactive.data["inactive_actions"]["count"] == len(inactive_items)
+    assert all("talent." in row["reason"] for row in inactive_items)
     # Everything the priority view returned is active, so it cannot also be inactive.
-    assert not {row["line_no"] for row in rows} & {row["line_no"] for row in inactive.data["inactive_actions"]["items"]}
+    assert not {row["line_no"] for row in rows} & {row["line_no"] for row in inactive_items}
+    # The priority view lists the same talent-dead lines of this build; an empty list would prove nothing.
+    wide_priority = run("simc", "priority", str(checkout.apl), *build_args, "--limit", "10")
+    talent_dead_lines = {row["line_no"] for row in wide_priority.data["priority"]["inactive_talent_branches"]}
+    assert talent_dead_lines, f"this build has no talent-dead action to report\n{wide_priority.describe()}"
+    assert {row["line_no"] for row in inactive_items} == talent_dead_lines, inactive.describe()
 
     all_dead = run("simc", "inactive-actions", str(checkout.apl), *build_args, "--all-dead", "--limit", "20")
     assert all_dead.data["inactive_actions"]["talent_only"] is False
-    assert all_dead.data["inactive_actions"]["count"] >= inactive.data["inactive_actions"]["count"]
+    assert {row["line_no"] for row in all_dead.data["inactive_actions"]["items"]} >= talent_dead_lines, all_dead.describe()
 
     pruned = run("simc", "apl-prune", str(checkout.apl), *build_args, "--list", "default")
     assert pruned.data["show"] == "all"
@@ -960,6 +1069,37 @@ def test_apl_branch_compare_reads_a_genuinely_different_right_hand_build(require
     )
     assert identical.data["comparison"]["focus_changes"] == [], identical.describe()
     assert identical.data["comparison"]["decision_changes"] == [], identical.describe()
+
+
+def test_apl_branch_compare_takes_the_right_build_from_every_right_side_source(require, checkout: Checkout) -> None:
+    """Each right-hand build source must replace the left build whole, whatever the left was given as.
+
+    A left ``--build-file`` or ``--talents`` once outranked a ``--right-profile-path`` in the merge, so
+    the command compared the left build with itself and answered ``ok: true`` with no changes. The
+    oracle is the ``--right-talents`` comparison, which the journey above ties to the talents that
+    differ: the same two builds must give the same changes through every other pair of sources.
+    """
+    require("simc")
+    left, right = _hero_variants(checkout)
+    left_talents, right_talents = _profile_talents(left.path), _profile_talents(right.path)
+    spec_args = ("--actor-class", ACTOR_CLASS, "--spec", SPEC)
+
+    def changes(*build_args: str) -> tuple[list[str], list[str]]:
+        comparison = run("simc", "apl-branch-compare", str(checkout.apl), *build_args).data["comparison"]
+        return comparison["focus_changes"], comparison["decision_changes"]
+
+    expected = changes(
+        "--profile-path", str(left.path), "--right-talents", right_talents,
+        "--right-actor-class", ACTOR_CLASS, "--right-spec", SPEC,
+    )
+    assert expected[0] or expected[1], "two builds with different hero trees compared identical"
+    for build_args in (
+        ("--build-file", str(left.path), "--right-profile-path", str(right.path)),
+        ("--talents", left_talents, *spec_args, "--right-profile-path", str(right.path)),
+        ("--talents", left_talents, *spec_args, "--right-build-file", str(right.path)),
+        ("--build-file", str(left.path), "--right-build-text", right.path.read_text(encoding="utf-8")),
+    ):
+        assert changes(*build_args) == expected, f"left {build_args[0]} with right {build_args[-2]}"
 
 
 # --- simulation run and the analysis chain that reads its output ---
@@ -1254,15 +1394,21 @@ def test_fields_and_compact_shape_the_payload(require, checkout: Checkout) -> No
     strict = run("simc", "--fields", "data.not_a_field", "--fields-strict", "doctor", expect=EXIT_USAGE, error_code="missing_fields")
     assert strict.payload["error"]["details"]["missing_fields"] == ["data.not_a_field"]
 
+    # A raw APL line is one token another tool reads verbatim, so --compact leaves it whole however long.
     full = run("simc", "apl-lists", str(checkout.apl), "--list", "default")
     compact = run("simc", "--compact", "--compact-max-chars", "40", "apl-lists", str(checkout.apl), "--list", "default")
-    full_entries = full.data["lists"][0]["entries"]
-    compact_entries = compact.data["lists"][0]["entries"]
-    assert len(compact_entries) == len(full_entries)
-    assert all(len(entry["raw"]) <= 43 for entry in compact_entries)
-    truncated = [entry for entry in compact_entries if entry["raw"].endswith("...")]
-    assert truncated, compact.describe()
-    assert any(len(entry["raw"]) > 43 for entry in full_entries)
+    assert any(len(entry["raw"]) > 40 for entry in full.data["lists"][0]["entries"]), full.describe()
+    assert compact.data == full.data, compact.describe()
+    assert "compacted_paths" not in compact.payload["provenance"], compact.describe()
+
+    # Prose is cut, and every cut value is named, so a shortened string is never read as the whole one.
+    full_doctor = run("simc", "doctor")
+    compact_doctor = run("simc", "--compact", "--compact-max-chars", "40", "doctor")
+    cut_paths = compact_doctor.payload["provenance"]["compacted_paths"]
+    version_line = full_doctor.data["repo"]["binary"]["version_line"]
+    assert " " in version_line and len(version_line) > 40, full_doctor.describe()
+    assert "data.repo.binary.version_line" in cut_paths, compact_doctor.describe()
+    assert compact_doctor.data["repo"]["binary"]["version_line"] == version_line[:37] + "...", compact_doctor.describe()
 
 
 def test_pretty_and_profile_presets_still_emit_one_envelope(require) -> None:
@@ -1273,8 +1419,6 @@ def test_pretty_and_profile_presets_still_emit_one_envelope(require) -> None:
         pretty = run("simc", *args, "doctor")
         assert "\n  " in pretty.stdout, pretty.describe()
         assert pretty.payload["kind"] == agent.payload["kind"]
-    # The `debug` preset was removed; an unknown preset is a usage error, not a silent fallback.
-    run("simc", "--profile", "debug", "doctor", expect=EXIT_USAGE, error_code="invalid_argument")
 
 
 # --- error journeys ---
