@@ -22,7 +22,6 @@ When a caller requests a specific game version, the wrapper must not silently mi
 | `method` | `fixed` | `retail` | |
 | `icy-veins` | `fixed` | `retail` | |
 | `raiderio` | `fixed` | `retail` | |
-| `wowprogress` | `fixed` | `retail` | |
 | `warcraft-wiki` | `fixed` | `retail` | Reference content; wrapper excludes non-retail until classic routing exists |
 | `simc` | `none` | — | Local analysis versioning differs; proxy relaxes to passthrough (see Phase 4) |
 | `warcraftlogs` | `profiled` | `retail`, classic family, `fresh` | Site-profile routing: retail -> `www`, classic-family -> `classic`, `fresh` -> `fresh` |
@@ -78,10 +77,10 @@ A provider is promoted toward `profiled` only when all of the following hold; un
 A provider whose mode is `none` has no expansion semantics to honor. For the `warcraft <provider> ...` proxy path, a wrapper `--expansion <key>` is therefore **relaxed to passthrough with an advisory note** rather than rejected:
 
 - The provider command runs unchanged (the `--expansion` flag is not injected).
-- The provider payload is preserved verbatim and annotated with an additive advisory: `expansion_filter: "passthrough_no_expansion_semantics"` plus an `expansion_advisory` block (`requested_expansion`, `provider_expansion_mode: "none"`, human note).
+- The provider envelope is preserved and annotated with an additive `expansion_advisory` block (`expansion_filter: "passthrough_no_expansion_semantics"`, `requested_expansion`, `provider_expansion_mode: "none"`, human note) at `data.expansion_advisory`, or at `error.details.expansion_advisory` when the provider command fails.
 - Exit code follows the provider (e.g. `warcraft --expansion wotlk simc version` and `warcraft --expansion wotlk blizzard doctor` both succeed).
 
-This applies only to `none` providers. `fixed`/`profiled` providers asked for an unsupported expansion are a genuine mismatch and still hard-fail with `unsupported_provider_expansion` (exit 1). The relaxed behavior is scoped to the proxy path; `warcraft --expansion <key> search|resolve` continues to exclude `none`/non-matching providers from the filtered fanout (surface/expansion filtering is unchanged).
+This applies only to `none` providers. `fixed`/`profiled` providers asked for an unsupported expansion are a genuine mismatch and still hard-fail with `unsupported_provider_expansion` (exit 2, a usage error). The relaxed behavior is scoped to the proxy path; `warcraft --expansion <key> search|resolve` continues to exclude `none`/non-matching providers from the filtered fanout (surface/expansion filtering is unchanged).
 
 ## Non-Goals
 
@@ -97,5 +96,4 @@ This applies only to `none` providers. `fixed`/`profiled` providers asked for an
 ## Related
 
 - [../foundation/WRAPPER_PROVIDER_CONTRACT.md](../foundation/WRAPPER_PROVIDER_CONTRACT.md)
-- [../wowhead/EXPANSION_RESEARCH.md](../wowhead/EXPANSION_RESEARCH.md)
 - [../ROADMAP.md](../ROADMAP.md)

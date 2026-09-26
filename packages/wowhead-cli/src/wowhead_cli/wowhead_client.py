@@ -8,15 +8,14 @@ from typing import Any
 from urllib.parse import urlencode
 
 import httpx
-from warcraft_api.http import DEFAULT_RETRY_ATTEMPTS, request_with_retries
-
-from wowhead_cli.cache import (
-    DEFAULT_HTTP_CACHE_DIR,
+from warcraft_api.cache import (
     CacheSettings,
     CacheTTLConfig,
     build_cache_store,
     load_cache_settings_from_env,
 )
+from warcraft_api.http import DEFAULT_RETRY_ATTEMPTS, build_client, request_with_retries
+
 from wowhead_cli.entity_types import suggestion_entity_type_from_type_id
 from wowhead_cli.expansion_profiles import (
     ExpansionProfile,
@@ -33,10 +32,8 @@ from wowhead_cli.expansion_profiles import (
 )
 
 WOWHEAD_BASE_URL = "https://www.wowhead.com"
-NETHER_BASE_URL = "https://nether.wowhead.com"
-
-DEFAULT_CACHE_DIR = DEFAULT_HTTP_CACHE_DIR
-ENTITY_RESPONSE_CACHE_VERSION = 1
+# Bump when the cached entity payload changes shape, so older entries stop being served.
+ENTITY_RESPONSE_CACHE_VERSION = 2
 
 
 class WowheadClient:
@@ -107,7 +104,6 @@ class WowheadClient:
         self._timeout_seconds = timeout_seconds
         self._retry_attempts = max(1, retry_attempts)
         self._cache_enabled = cache_enabled and cache_settings.enabled
-        self._cache_dir = cache_settings.cache_dir
         self._cache_ttls = cache_settings.ttls
         self._cache_store = build_cache_store(cache_settings) if self._cache_enabled else None
         self._session_json_cache: dict[str, Any] = {}
@@ -131,7 +127,7 @@ class WowheadClient:
 
     def _client(self) -> httpx.Client:
         if self._http_client is None:
-            self._http_client = httpx.Client(timeout=self._timeout_seconds, follow_redirects=True)
+            self._http_client = build_client(timeout=self._timeout_seconds)
         return self._http_client
 
     def _request_with_retries(self, url: str, *, params: dict[str, Any] | None = None) -> httpx.Response:
@@ -237,9 +233,9 @@ class WowheadClient:
         if session_key in self._session_json_cache:
             return copy.deepcopy(self._session_json_cache[session_key])
 
-        cache_key = None
-        if cache_ttl_seconds and cache_ttl_seconds > 0:
-            cache_key = session_key
+        ttl_seconds = cache_ttl_seconds or 0
+        cache_key = session_key if ttl_seconds > 0 else None
+        if cache_key is not None:
             cached = self._read_cache(cache_key)
             if cached is not None:
                 self._session_json_cache[session_key] = cached
@@ -250,7 +246,7 @@ class WowheadClient:
 
         self._session_json_cache[session_key] = payload
         if cache_key is not None:
-            self._write_cache(cache_key, payload, ttl_seconds=cache_ttl_seconds)
+            self._write_cache(cache_key, payload, ttl_seconds=ttl_seconds)
         return copy.deepcopy(payload)
 
     def _get_text(
@@ -265,9 +261,9 @@ class WowheadClient:
         if session_key in self._session_text_cache:
             return self._session_text_cache[session_key]
 
-        cache_key = None
-        if cache_ttl_seconds and cache_ttl_seconds > 0:
-            cache_key = session_key
+        ttl_seconds = cache_ttl_seconds or 0
+        cache_key = session_key if ttl_seconds > 0 else None
+        if cache_key is not None:
             cached = self._read_cache(cache_key)
             if isinstance(cached, str):
                 self._session_text_cache[session_key] = cached
@@ -278,7 +274,7 @@ class WowheadClient:
 
         self._session_text_cache[session_key] = payload
         if cache_key is not None:
-            self._write_cache(cache_key, payload, ttl_seconds=cache_ttl_seconds)
+            self._write_cache(cache_key, payload, ttl_seconds=ttl_seconds)
         return payload
 
     def search_suggestions(self, query: str) -> dict[str, Any]:

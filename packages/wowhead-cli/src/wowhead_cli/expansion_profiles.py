@@ -4,6 +4,10 @@ import re
 from dataclasses import dataclass
 from urllib.parse import quote, urlparse
 
+from warcraft_core.expansions import list_expansions
+from warcraft_core.expansions import normalize_expansion_key as normalize_expansion_key
+from warcraft_core.expansions import resolve_expansion as resolve_shared_expansion
+
 from wowhead_cli.entity_types import PARSER_ENTITY_TYPES
 
 WOWHEAD_ROOT = "https://www.wowhead.com"
@@ -32,88 +36,44 @@ class ExpansionProfile:
         return NETHER_ROOT
 
 
-_PROFILES: tuple[ExpansionProfile, ...] = (
+# Wowhead-only profile facts keyed by shared expansion key; keys without a Wowhead site (e.g. fresh) are absent.
+_DATA_ENV_BY_KEY: dict[str, int] = {
+    "retail": 1,
+    "classic": 4,
+    "tbc": 5,
+    "wotlk": 8,
+    "cata": 11,
+    "mop-classic": 15,
+    "ptr": 2,
+    "beta": 3,
+    "classic-ptr": 14,
+}
+_LEGACY_SUBDOMAINS_BY_KEY: dict[str, tuple[str, ...]] = {
+    "retail": ("wowhead.com", "www.wowhead.com"),
+    "classic": ("classic.wowhead.com",),
+    "tbc": ("tbc.wowhead.com",),
+    "wotlk": ("wotlk.wowhead.com", "wrath.wowhead.com"),
+    "cata": ("cata.wowhead.com", "cataclysm.wowhead.com"),
+    "mop-classic": ("mists.wowhead.com", "mop.wowhead.com"),
+    "ptr": ("ptr.wowhead.com",),
+    "beta": ("beta.wowhead.com",),
+    "classic-ptr": ("classicptr.wowhead.com",),
+}
+
+_PROFILES: tuple[ExpansionProfile, ...] = tuple(
     ExpansionProfile(
-        key="retail",
-        label="Retail / Default",
-        path_prefix="",
-        data_env=1,
-        aliases=("default", "live", "wowhead"),
-        legacy_subdomains=("wowhead.com", "www.wowhead.com"),
-    ),
-    ExpansionProfile(
-        key="classic",
-        label="Classic Era",
-        path_prefix="classic",
-        data_env=4,
-        aliases=("vanilla",),
-        legacy_subdomains=("classic.wowhead.com",),
-    ),
-    ExpansionProfile(
-        key="tbc",
-        label="Burning Crusade Classic",
-        path_prefix="tbc",
-        data_env=5,
-        aliases=("burning-crusade", "bc"),
-        legacy_subdomains=("tbc.wowhead.com",),
-    ),
-    ExpansionProfile(
-        key="wotlk",
-        label="Wrath of the Lich King Classic",
-        path_prefix="wotlk",
-        data_env=8,
-        aliases=("wrath",),
-        legacy_subdomains=("wotlk.wowhead.com", "wrath.wowhead.com"),
-    ),
-    ExpansionProfile(
-        key="cata",
-        label="Cataclysm Classic",
-        path_prefix="cata",
-        data_env=11,
-        aliases=("cataclysm",),
-        legacy_subdomains=("cata.wowhead.com", "cataclysm.wowhead.com"),
-    ),
-    ExpansionProfile(
-        key="mop-classic",
-        label="Mists of Pandaria Classic",
-        path_prefix="mop-classic",
-        data_env=15,
-        aliases=("mop", "mists"),
-        legacy_subdomains=("mists.wowhead.com", "mop.wowhead.com"),
-    ),
-    ExpansionProfile(
-        key="ptr",
-        label="Retail PTR",
-        path_prefix="ptr",
-        data_env=2,
-        aliases=(),
-        legacy_subdomains=("ptr.wowhead.com",),
-    ),
-    ExpansionProfile(
-        key="beta",
-        label="Retail Beta",
-        path_prefix="beta",
-        data_env=3,
-        aliases=(),
-        legacy_subdomains=("beta.wowhead.com",),
-    ),
-    ExpansionProfile(
-        key="classic-ptr",
-        label="Classic PTR",
-        path_prefix="classic-ptr",
-        data_env=14,
-        aliases=("classicptr",),
-        legacy_subdomains=("classicptr.wowhead.com",),
-    ),
+        key=expansion.key,
+        label=expansion.label,
+        path_prefix=expansion.wowhead_path_prefix,
+        data_env=_DATA_ENV_BY_KEY[expansion.key],
+        aliases=expansion.aliases,
+        legacy_subdomains=_LEGACY_SUBDOMAINS_BY_KEY[expansion.key],
+    )
+    for expansion in list_expansions()
+    if expansion.wowhead_path_prefix is not None
 )
 
 _BY_KEY = {profile.key: profile for profile in _PROFILES}
-_ALIAS_TO_KEY: dict[str, str] = {}
-for profile in _PROFILES:
-    _ALIAS_TO_KEY[profile.key] = profile.key
-    for alias in profile.aliases:
-        _ALIAS_TO_KEY[alias] = profile.key
-
 _PREFIX_PROFILES: tuple[ExpansionProfile, ...] = tuple(
     sorted((profile for profile in _PROFILES if profile.path_prefix), key=lambda row: len(row.path_prefix), reverse=True)
 )
@@ -132,19 +92,16 @@ def list_profiles() -> tuple[ExpansionProfile, ...]:
     return _PROFILES
 
 
-def normalize_expansion_key(value: str) -> str:
-    return value.strip().lower().replace("_", "-")
-
-
 def resolve_expansion(value: str | None) -> ExpansionProfile:
-    if value is None or value.strip() == "":
-        return _BY_KEY["retail"]
-    normalized = normalize_expansion_key(value)
-    key = _ALIAS_TO_KEY.get(normalized)
-    if key is None:
-        options = ", ".join(profile.key for profile in _PROFILES)
+    """Resolve a shared expansion key/alias to its Wowhead profile; keys without a Wowhead site are unknown here."""
+    try:
+        profile = _BY_KEY.get(resolve_shared_expansion(value).key)
+    except ValueError:
+        profile = None
+    if profile is None:
+        options = ", ".join(row.key for row in _PROFILES)
         raise ValueError(f"Unknown expansion {value!r}. Supported: {options}")
-    return _BY_KEY[key]
+    return profile
 
 
 def build_entity_url(profile: ExpansionProfile, entity_type: str, entity_id: int) -> str:
@@ -192,7 +149,8 @@ def build_guide_category_url(profile: ExpansionProfile, category: str) -> str:
 
 def normalize_wowhead_url(raw: str) -> str | None:
     text = raw.strip()
-    if not text:
+    # A URL has no whitespace: "fury guide from www.wowhead.com" is a search, not a URL.
+    if not text or len(text.split()) > 1:
         return None
     if text.startswith("www."):
         text = f"https://{text}"
@@ -203,7 +161,7 @@ def normalize_wowhead_url(raw: str) -> str | None:
     return text
 
 
-def _is_wowhead_host(hostname: str) -> bool:
+def is_wowhead_host(hostname: str) -> bool:
     host = hostname.lower()
     return host == "wowhead.com" or host.endswith(".wowhead.com")
 
@@ -233,7 +191,7 @@ def detect_expansion_from_url(raw: str) -> ExpansionProfile | None:
         return None
     parsed = urlparse(normalized)
     host = (parsed.hostname or "").lower()
-    if not _is_wowhead_host(host):
+    if not is_wowhead_host(host):
         return None
 
     legacy = _profile_for_hostname(host)
@@ -247,7 +205,10 @@ def parse_entity_from_wowhead_url(raw: str) -> tuple[str, int] | None:
     normalized = normalize_wowhead_url(raw)
     if normalized is None:
         return None
-    match = _ENTITY_PATH_RE.match(urlparse(normalized).path)
+    parsed = urlparse(normalized)
+    if not is_wowhead_host(parsed.hostname or ""):
+        return None
+    match = _ENTITY_PATH_RE.match(parsed.path)
     if match is None:
         return None
     entity_type = match.group("etype")

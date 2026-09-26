@@ -6,13 +6,18 @@ from typing import Any
 
 import httpx
 from warcraft_api.cache import CacheSettings, CacheTTLConfig, build_cache_store, load_prefixed_cache_settings_from_env
-from warcraft_api.http import DEFAULT_RETRY_ATTEMPTS, request_with_retries
-from warcraft_content.paths import provider_cache_root
+from warcraft_api.http import DEFAULT_RETRY_ATTEMPTS, build_client, request_with_retries
+from warcraft_core.paths import provider_cache_root
 
 from warcraft_wiki_cli.page_parser import normalize_article_ref, parse_article_page, parse_search_results
 
 WIKI_API_URL = "https://warcraft.wiki.gg/api.php"
 DEFAULT_CACHE_DIR = provider_cache_root("warcraft-wiki") / "http"
+# MediaWiki searches the main namespace only by default. The wiki moved its API reference pages into
+# the custom "API:" namespace (id 3000) and its game events into "Event:" (id 3004), leaving the old
+# main-namespace titles as redirects, which list=search does not return. Without these ids search
+# cannot see an API function or a game event at all.
+SEARCH_NAMESPACES = "0|3000|3004"
 
 
 class WarcraftWikiAPIError(RuntimeError):
@@ -47,7 +52,6 @@ class WarcraftWikiClient:
         settings, search_ttl, page_ttl = load_warcraft_wiki_cache_settings_from_env()
         self._timeout_seconds = timeout_seconds
         self._retry_attempts = max(1, retry_attempts)
-        self._cache_settings = settings
         self._cache_store = build_cache_store(settings) if settings.enabled else None
         self._search_ttl = search_ttl
         self._page_ttl = page_ttl
@@ -65,7 +69,7 @@ class WarcraftWikiClient:
 
     def _client(self) -> httpx.Client:
         if self._http_client is None:
-            self._http_client = httpx.Client(timeout=self._timeout_seconds, follow_redirects=True)
+            self._http_client = build_client(timeout=self._timeout_seconds)
         return self._http_client
 
     def _cache_key(self, namespace: str, params: dict[str, Any]) -> str:
@@ -88,9 +92,12 @@ class WarcraftWikiClient:
         if isinstance(cached, dict):
             return cached
         response = request_with_retries(self._client(), WIKI_API_URL, params=params, retry_attempts=self._retry_attempts)
-        payload = response.json()
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = None
         if not isinstance(payload, dict):
-            raise WarcraftWikiAPIError("invalid_response", "Unexpected Warcraft Wiki API response shape.")
+            raise WarcraftWikiAPIError("upstream_error", "Warcraft Wiki API did not answer with a JSON object.")
         if isinstance(payload.get("error"), dict):
             error = payload["error"]
             raise WarcraftWikiAPIError(str(error.get("code") or "api_error"), str(error.get("info") or "Warcraft Wiki API error."))
@@ -106,6 +113,7 @@ class WarcraftWikiClient:
                 "list": "search",
                 "srsearch": query,
                 "srlimit": limit,
+                "srnamespace": SEARCH_NAMESPACES,
                 "format": "json",
             },
         )

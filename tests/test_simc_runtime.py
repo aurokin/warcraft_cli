@@ -2,7 +2,30 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from simc_cli.run import BinaryVersion, binary_matches_checkout
 from simc_cli.sim import first_action_hits, first_action_time, summarize_first_casts
+
+
+def _version(revision: str | None) -> BinaryVersion:
+    return BinaryVersion(
+        binary_path=Path("/repo/build/simc"),
+        available=True,
+        version_line="SimulationCraft 1210-01",
+        returncode=0,
+        git_branch="midnight",
+        git_revision=revision,
+    )
+
+
+def test_binary_matches_checkout_compares_the_abbreviated_build_revision_with_head() -> None:
+    """SimC's banner carries an abbreviated revision; git reports the full hash."""
+    assert binary_matches_checkout(_version("3377576e3b"), {"head": "3377576e3b1122334455"}) is True
+    assert binary_matches_checkout(_version("3377576e3b"), {"head": "0908ace08c9b22638fcd"}) is False
+
+
+def test_binary_matches_checkout_is_unknown_when_either_side_is_missing() -> None:
+    assert binary_matches_checkout(_version(None), {"head": "0908ace08c"}) is None
+    assert binary_matches_checkout(_version("3377576e3b"), {"head": None}) is None
 
 
 def test_first_action_time_extracts_first_performed_timestamp() -> None:

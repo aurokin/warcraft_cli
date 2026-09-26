@@ -4,7 +4,8 @@ import json
 from typing import Any
 
 import httpx
-from warcraft_api.http import DEFAULT_RETRY_ATTEMPTS, request_with_retries
+from warcraft_api.http import DEFAULT_RETRY_ATTEMPTS, build_client, request_with_retries
+from warcraft_core.exit_codes import error_code_for_http_status
 
 from curseforge_cli.auth import CurseForgeAuthConfig, load_curseforge_auth_config
 
@@ -12,12 +13,14 @@ from curseforge_cli.auth import CurseForgeAuthConfig, load_curseforge_auth_confi
 API_HOST = "https://api.curseforge.com"
 WOW_GAME_ID = 1
 
-# Host, endpoints, and response shapes follow the documented public CurseForge Core API and are
-# pending one-time live confirmation (run CURSEFORGE_LIVE_TESTS=1 with a CURSEFORGE_API_KEY). doctor
-# and every command payload carry provenance.verified=false to keep that posture honest.
+# The one statement of the verification posture: `curseforge --help` (and docs/reference/
+# curseforge.md, generated from it), doctor's notes, and every payload's
+# provenance.verification_note all print this, so they cannot contradict provenance.verified.
+# Slug search needs an API key with search access; keys without it get an actionable auth_failed
+# from _resolve_mod that points at the numeric-mod-id path.
 _VERIFICATION_NOTE = (
-    "Host, endpoints, and response shapes follow the documented public CurseForge Core API and are "
-    "pending one-time live confirmation (run CURSEFORGE_LIVE_TESTS=1 with a CURSEFORGE_API_KEY)."
+    "Host, x-api-key auth, slug search, mod lookup, and file changelog are confirmed against live "
+    "CurseForge traffic, so addon payloads report provenance.verified=true."
 )
 
 
@@ -55,7 +58,7 @@ class CurseForgeClient:
 
     def _client(self) -> httpx.Client:
         if self._http_client is None:
-            self._http_client = httpx.Client(timeout=self._timeout_seconds, follow_redirects=True)
+            self._http_client = build_client(timeout=self._timeout_seconds)
         return self._http_client
 
     def _require_key(self) -> None:
@@ -104,11 +107,23 @@ class CurseForgeClient:
         text = addon.strip()
         if text.isdigit():
             return int(text), "id", None
-        # The `slug` search param follows the documented CurseForge Core API but is pending live
-        # confirmation. Rather than trust the server to filter, match the exact slug client-side: an
-        # ignored or renamed filter param can then never bind the wrong mod under an `ok:true` envelope
-        # (it degrades to addon_not_found instead).
-        search = self._get("/v1/mods/search", params={"gameId": WOW_GAME_ID, "slug": text})
+        # Rather than trust the server to filter, match the exact slug client-side: an ignored or
+        # renamed filter param can then never bind the wrong mod under an `ok:true` envelope (it
+        # degrades to addon_not_found instead).
+        try:
+            search = self._get("/v1/mods/search", params={"gameId": WOW_GAME_ID, "slug": text})
+        except httpx.HTTPStatusError as exc:
+            # Search is a separately scoped CurseForge capability: a key that reads /v1/mods fine can
+            # still be rejected here. Say which endpoint refused and point at the path that works,
+            # instead of a bare "HTTP 403" the caller cannot act on.
+            if exc.response.status_code not in (401, 403):
+                raise
+            raise CurseForgeClientError(
+                "auth_failed",
+                f"CurseForge rejected the slug search endpoint {exc.request.url} with HTTP "
+                f"{exc.response.status_code}: this API key has no search access. Look the addon up by "
+                "its numeric mod id instead, e.g. `curseforge addon 3358` for deadly-boss-mods.",
+            ) from exc
         rows = search["payload"].get("data")
         # A non-list `data` is a malformed/unexpected payload (schema drift, or an error wrapped in
         # `data`), distinct from a well-formed empty result set. Keep those two codes separate so
@@ -153,6 +168,8 @@ class CurseForgeClient:
         file_id = newest.get("id")
         if not isinstance(file_id, int):
             return None
+        # The newest file can be an alpha or beta (releaseType 3 / 2), so say which file the notes cover.
+        file_ref = {"file_id": file_id, "display_name": newest.get("displayName"), "release_type": newest.get("releaseType")}
         try:
             result = self._get(f"/v1/mods/{mod_id}/files/{file_id}/changelog")
         except (httpx.HTTPError, CurseForgeClientError) as exc:
@@ -160,13 +177,13 @@ class CurseForgeClient:
             # the failure explicit (an `error` marker, not a silent null) so callers can distinguish a
             # failed fetch from "no files to fetch". Covers HTTPStatusError, a post-retry network
             # RequestError, and a malformed/non-JSON changelog body (CurseForgeClientError).
-            return {"file_id": file_id, "error": _changelog_error(exc)}
+            return {**file_ref, "error": _changelog_error(exc)}
         body = result["payload"].get("data")
         # Documented changelog `data` is an HTML string (or null/absent when a file has none). A
         # present-but-non-string `data` is schema drift, surfaced as an explicit marker rather than
         # silently flattened to a null body that looks like "no changelog".
         if body is not None and not isinstance(body, str):
-            return {"file_id": file_id, "error": {"code": "invalid_response", "message": "changelog data was not a string."}}
+            return {**file_ref, "error": {"code": "invalid_response", "message": "changelog data was not a string."}}
         # A successful fetch always keeps the object form (file_id + source_url) even when the file
         # exposes no notes (`body: null`). Top-level `changelog is None` is reserved for "no file to
         # fetch"; an empty `body` means "checked this file, it has none" — kept distinct on purpose so a
@@ -174,7 +191,7 @@ class CurseForgeClient:
         # consistent with the error-marker form above (a failed fetch must not return *more* structure
         # than a successful one). Callers detect empty notes via `changelog.body`, not `changelog is None`.
         return {
-            "file_id": file_id,
+            **file_ref,
             "source_url": result["source_url"],
             "body": body,
         }
@@ -205,7 +222,8 @@ class CurseForgeClient:
                 "addon_not_found",
                 f"CurseForge mod {mod_id} is not a World of Warcraft addon (gameId={game_id}).",
             )
-        latest_files = metadata.get("latestFiles") if isinstance(metadata.get("latestFiles"), list) else []
+        raw_files = metadata.get("latestFiles")
+        latest_files: list[Any] = raw_files if isinstance(raw_files, list) else []
         changelog = self._fetch_latest_changelog(mod_id, latest_files)
         source_urls: dict[str, str] = {"mod": mod_result["source_url"]}
         if search_url is not None:
@@ -230,7 +248,8 @@ def _changelog_error(exc: httpx.HTTPError | CurseForgeClientError) -> dict[str, 
     if isinstance(exc, CurseForgeClientError):
         return {"code": exc.code, "message": exc.message}
     if isinstance(exc, httpx.HTTPStatusError):
-        return {"code": "http_error", "message": f"changelog request returned HTTP {exc.response.status_code}."}
+        status = exc.response.status_code
+        return {"code": error_code_for_http_status(status), "message": f"changelog request returned HTTP {status}."}
     return {"code": "network_error", "message": f"changelog request failed: {exc}."}
 
 

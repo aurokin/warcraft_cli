@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shlex
+from dataclasses import dataclass
 from typing import Any
 
 
@@ -19,13 +20,26 @@ def article_follow_up(
     quoted_ref = shlex.quote(ref)
     return {
         "recommended_surface": surface,
-        "recommended_command": f"{provider_command} {surface} {quoted_ref}",
+        "command": f"{provider_command} {surface} {quoted_ref}",
         "reason": normalized_reason,
-        "alternatives": [
+        "alternative_commands": [
             f"{provider_command} {normalized_full_surface} {quoted_ref}",
             f"{provider_command} {normalized_export_surface} {quoted_ref}",
         ],
     }
+
+
+@dataclass(frozen=True, slots=True)
+class ArticleKind:
+    """How a provider labels its articles: the follow-up surface, display/entity type, and the metadata key that carries ``ref``."""
+
+    surface: str = "guide"
+    type_name: str = "Guide"
+    entity_type: str = "guide"
+    metadata_key: str = "slug"
+
+
+GUIDE_KIND = ArticleKind()
 
 
 def article_candidate(
@@ -36,29 +50,26 @@ def article_candidate(
     score: int,
     reasons: list[str],
     provider_command: str,
-    surface: str = "guide",
-    type_name: str = "Guide",
-    entity_type: str = "guide",
-    metadata_key: str = "slug",
+    kind: ArticleKind = GUIDE_KIND,
     metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     payload_metadata = {
-        metadata_key: ref,
+        kind.metadata_key: ref,
     }
     if metadata:
         payload_metadata.update(metadata)
     return {
         "id": ref,
         "name": name,
-        "type_name": type_name,
-        "entity_type": entity_type,
+        "type_name": kind.type_name,
+        "entity_type": kind.entity_type,
         "url": url,
         "ranking": {
             "score": score,
             "match_reasons": reasons,
         },
         "metadata": payload_metadata,
-        "follow_up": article_follow_up(provider_command, ref, surface=surface),
+        "follow_up": article_follow_up(provider_command, ref, surface=kind.surface),
     }
 
 
@@ -97,14 +108,19 @@ def article_resolve_payload(
         "resolved": resolved,
         "confidence": "high" if resolved else ("medium" if top else "none"),
         "match": top if top else None,
-        "next_command": top["follow_up"]["recommended_command"] if resolved and top else None,
-        "fallback_search_command": None if resolved else f"{provider_command} search {query!r}",
+        "next_command": top["follow_up"]["command"] if resolved and top else None,
+        "fallback_search_command": None if resolved else f"{provider_command} search {shlex.quote(query)}",
         "count": total_count,
         "candidates": results,
     }
 
 
 def merge_article_linked_entities(pages: list[dict[str, Any]], *, page_key: str = "guide") -> list[dict[str, Any]]:
+    """Fold per-page linked entities into one row per entity, keeping every key the pages carried.
+
+    Provider-specific keys such as ``ability_identity`` survive the merge, so ``guide-full`` and
+    ``guide-export`` describe an entity exactly as the single-page ``guide`` surface does.
+    """
     merged: dict[tuple[str, str], dict[str, Any]] = {}
     for page in pages:
         page_url = page[page_key]["page_url"]
@@ -112,16 +128,11 @@ def merge_article_linked_entities(pages: list[dict[str, Any]], *, page_key: str 
             key = (str(row["type"]), str(row["id"]))
             record = merged.get(key)
             if record is None:
-                merged[key] = {
-                    "type": row["type"],
-                    "id": row["id"],
-                    "name": row.get("name"),
-                    "url": row["url"],
-                    "source_urls": [page_url],
-                }
+                merged[key] = {"name": None, **{k: v for k, v in row.items() if k != "source_urls"}, "source_urls": [page_url]}
                 continue
-            if not record.get("name") and row.get("name"):
-                record["name"] = row["name"]
+            for field_name, value in row.items():
+                if field_name != "source_urls" and value and not record.get(field_name):
+                    record[field_name] = value
             if page_url not in record["source_urls"]:
                 record["source_urls"].append(page_url)
     return sorted(merged.values(), key=lambda row: (str(row["type"]), str(row["id"])))

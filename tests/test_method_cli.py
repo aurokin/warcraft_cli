@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import json
+import shlex
 from datetime import datetime
 from pathlib import Path
 
+import httpx
+import pytest
 from method_cli.main import app
 from method_cli.page_parser import classify_guide_family, parse_guide_page, parse_sitemap_guides
+from method_cli.provider import PROVIDER
 from typer.testing import CliRunner
+from warcraft_core.envelope import envelope_violations
 
 runner = CliRunner()
 
@@ -230,10 +235,10 @@ def test_method_search_command_uses_sitemap_guides(monkeypatch) -> None:
     result = runner.invoke(app, ["search", "mistweaver monk guide", "--limit", "5"])
     assert result.exit_code == 0
 
-    payload = json.loads(result.stdout)
+    payload = json.loads(result.stdout)["data"]
     assert payload["count"] == 1
     assert payload["results"][0]["id"] == "mistweaver-monk"
-    assert payload["results"][0]["follow_up"]["recommended_command"] == "method guide mistweaver-monk"
+    assert payload["results"][0]["follow_up"]["command"] == "method guide mistweaver-monk"
     assert payload["results"][0]["metadata"]["content_family"] == "class_guide"
 
 
@@ -242,7 +247,7 @@ def test_method_resolve_command_returns_best_guide(monkeypatch) -> None:
     result = runner.invoke(app, ["resolve", "mistweaver monk"])
     assert result.exit_code == 0
 
-    payload = json.loads(result.stdout)
+    payload = json.loads(result.stdout)["data"]
     assert payload["resolved"] is True
     assert payload["next_command"] == "method guide mistweaver-monk"
 
@@ -252,7 +257,7 @@ def test_method_search_excludes_unsupported_index_roots(monkeypatch) -> None:
     result = runner.invoke(app, ["search", "tier list"])
     assert result.exit_code == 0
 
-    payload = json.loads(result.stdout)
+    payload = json.loads(result.stdout)["data"]
     assert payload["count"] == 0
     assert payload["results"] == []
     assert payload["scope_hint"]["code"] == "tier_list"
@@ -277,7 +282,7 @@ def test_method_search_boosts_matching_content_family(monkeypatch) -> None:
     result = runner.invoke(app, ["search", "alchemy profession"])
     assert result.exit_code == 0
 
-    payload = json.loads(result.stdout)
+    payload = json.loads(result.stdout)["data"]
     assert payload["results"][0]["id"] == "midnight-alchemy-profession-guide"
     assert "content_family_match" in payload["results"][0]["ranking"]["match_reasons"]
 
@@ -286,7 +291,7 @@ def test_method_guide_and_guide_full(monkeypatch) -> None:
     monkeypatch.setattr("method_cli.main.MethodClient.fetch_guide_page", lambda self, guide_ref: _fake_fetch_guide_page(guide_ref))
     guide_result = runner.invoke(app, ["guide", "mistweaver-monk"])
     assert guide_result.exit_code == 0
-    guide_payload = json.loads(guide_result.stdout)
+    guide_payload = json.loads(guide_result.stdout)["data"]
     assert guide_payload["guide"]["slug"] == "mistweaver-monk"
     assert guide_payload["linked_entities"]["count"] == 1
     assert guide_payload["build_references"]["count"] == 1
@@ -294,7 +299,7 @@ def test_method_guide_and_guide_full(monkeypatch) -> None:
 
     full_result = runner.invoke(app, ["guide-full", "mistweaver-monk"])
     assert full_result.exit_code == 0
-    full_payload = json.loads(full_result.stdout)
+    full_payload = json.loads(full_result.stdout)["data"]
     assert full_payload["guide"]["page_count"] == 2
     assert full_payload["linked_entities"]["count"] == 2
     assert full_payload["build_references"]["count"] == 2
@@ -308,7 +313,7 @@ def test_method_guide_export_and_query(monkeypatch, tmp_path: Path) -> None:
 
     export_result = runner.invoke(app, ["guide-export", "mistweaver-monk", "--out", str(export_dir)])
     assert export_result.exit_code == 0
-    export_payload = json.loads(export_result.stdout)
+    export_payload = json.loads(export_result.stdout)["data"]
     assert export_payload["counts"]["pages"] == 2
     assert (export_dir / "manifest.json").exists()
     manifest = json.loads((export_dir / "manifest.json").read_text())
@@ -317,32 +322,76 @@ def test_method_guide_export_and_query(monkeypatch, tmp_path: Path) -> None:
 
     query_result = runner.invoke(app, ["guide-query", str(export_dir), "tea serenity", "--kind", "linked_entities"])
     assert query_result.exit_code == 0
-    query_payload = json.loads(query_result.stdout)
+    query_payload = json.loads(query_result.stdout)["data"]
     assert query_payload["count"] == 1
     assert query_payload["top"][0]["name"] == "Tea of Serenity"
 
     build_query = runner.invoke(app, ["guide-query", str(export_dir), "abc123", "--kind", "build_references"])
     assert build_query.exit_code == 0
-    build_query_payload = json.loads(build_query.stdout)
+    build_query_payload = json.loads(build_query.stdout)["data"]
     assert build_query_payload["count"] == 1
     assert build_query_payload["top"][0]["build_code"] == "ABC123"
 
     analysis_query = runner.invoke(app, ["guide-query", str(export_dir), "talent recommendations", "--kind", "analysis_surfaces"])
     assert analysis_query.exit_code == 0
-    analysis_query_payload = json.loads(analysis_query.stdout)
+    analysis_query_payload = json.loads(analysis_query.stdout)["data"]
     assert analysis_query_payload["count"] == 1
     assert analysis_query_payload["top"][0]["surface_tags"] == ["builds_talents", "talent_recommendations"]
 
     section_query = runner.invoke(app, ["guide-query", str(export_dir), "mistweaver",
                                   "--kind", "sections", "--section-title", "introduction"])
     assert section_query.exit_code == 0
-    section_payload = json.loads(section_query.stdout)
+    section_payload = json.loads(section_query.stdout)["data"]
     assert section_payload["match_counts"]["sections"] >= 1
+
+
+def test_method_guide_query_answers_each_bad_bundle_path_the_way_icy_veins_does(tmp_path: Path) -> None:
+    """One answer per mistake: missing target, wrong argument type, unreadable bundle."""
+    empty_dir = tmp_path / "not-a-bundle"
+    empty_dir.mkdir()
+    file_path = tmp_path / "bundle.json"
+    file_path.write_text("{}")
+
+    answers = {}
+    for label, path in (("missing", tmp_path / "gone"), ("directory", empty_dir), ("file", file_path)):
+        result = runner.invoke(app, ["guide-query", str(path), "mana"])
+        # A Typer-rejected argument prints its envelope before the provider handler runs.
+        answers[label] = (result.exit_code, json.loads(result.stderr or result.stdout)["error"]["code"])
+
+    assert answers == {
+        "missing": (4, "not_found"),
+        "directory": (1, "invalid_bundle"),
+        "file": (2, "invalid_argument"),
+    }
+
+
+def test_method_guide_query_reads_a_bundle_whose_manifest_names_no_guide(tmp_path: Path) -> None:
+    """Any readable bundle can be queried; a manifest without ``guide`` used to crash with internal_error."""
+    (tmp_path / "manifest.json").write_text(json.dumps({"files": {"sections_jsonl": "sections.jsonl"}}), encoding="utf-8")
+    (tmp_path / "sections.jsonl").write_text(json.dumps({"title": "Mana Tea", "text": "Spend mana"}) + "\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["guide-query", str(tmp_path), "mana"])
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.stdout)["data"]
+    assert data["guide"] is None
+    assert [row["title"] for row in data["top"]] == ["Mana Tea"]
+
+
+def test_guide_query_rejects_an_unknown_kind_as_a_usage_error_like_icy_veins(tmp_path: Path) -> None:
+    from icy_veins_cli.main import app as icy_veins_app
+
+    codes = set()
+    for cli in (app, icy_veins_app):
+        result = runner.invoke(cli, ["guide-query", str(tmp_path), "mana", "--kind", "bogus"])
+        codes.add((result.exit_code, json.loads(result.stderr)["error"]["code"]))
+
+    assert codes == {(2, "invalid_argument")}
 
 
 def test_method_guide_invalid_ref_returns_structured_error() -> None:
     result = runner.invoke(app, ["guide", "https://www.method.gg/premium"])
-    assert result.exit_code == 1
+    assert result.exit_code == 2
 
     payload = _error_payload(result)
     assert payload["ok"] is False
@@ -351,7 +400,7 @@ def test_method_guide_invalid_ref_returns_structured_error() -> None:
 
 def test_method_guide_export_invalid_ref_returns_structured_error(tmp_path: Path) -> None:
     result = runner.invoke(app, ["guide-export", "https://www.method.gg/premium", "--out", str(tmp_path / "out")])
-    assert result.exit_code == 1
+    assert result.exit_code == 2
 
     payload = _error_payload(result)
     assert payload["ok"] is False
@@ -385,3 +434,322 @@ def test_method_guide_unsupported_surface_returns_structured_error(monkeypatch) 
     payload = _error_payload(result)
     assert payload["ok"] is False
     assert payload["error"]["code"] == "unsupported_guide_surface"
+
+
+def _connect_error(*_args, **_kwargs):
+    raise httpx.ConnectError("offline", request=httpx.Request("GET", "https://www.method.gg/sitemap.xml"))
+
+
+def _not_found_error(*_args, **_kwargs):
+    request = httpx.Request("GET", "https://www.method.gg/guides/mistweaver-monk")
+    raise httpx.HTTPStatusError("404", request=request, response=httpx.Response(404, request=request))
+
+
+@pytest.mark.parametrize("args", [["search", "mistweaver monk"], ["resolve", "mistweaver monk"], ["guide", "mistweaver-monk"]])
+def test_method_transport_failure_returns_network_envelope(monkeypatch, args: list[str]) -> None:
+    monkeypatch.setattr("method_cli.client.request_with_retries", _connect_error)
+    result = runner.invoke(app, args)
+
+    assert result.exit_code == 5, result.output
+    assert result.stdout == ""
+    payload = json.loads(result.stderr)
+    assert payload["ok"] is False
+    assert payload["provider"] == "method"
+    assert payload["command"] == args[0]
+    assert payload["schema_version"] == "1"
+    assert payload["error"]["code"] == "network_error"
+    assert not isinstance(result.exception, httpx.HTTPError)
+
+
+def test_method_guide_upstream_404_returns_not_found_envelope(monkeypatch) -> None:
+    monkeypatch.setattr("method_cli.client.request_with_retries", _not_found_error)
+    result = runner.invoke(app, ["guide", "mistweaver-monk"])
+
+    assert result.exit_code == 4, result.output
+    payload = json.loads(result.stderr)
+    assert payload["error"]["code"] == "not_found"
+    assert payload["error"]["details"]["status_code"] == 404
+
+
+@pytest.mark.parametrize(
+    ("args", "kind"),
+    [
+        (["doctor"], "doctor"),
+        (["search", "mistweaver monk"], "search_results"),
+        (["resolve", "mistweaver monk"], "resolve_match"),
+        (["guide", "mistweaver-monk"], "guide"),
+        (["guide-full", "mistweaver-monk"], "guide_full"),
+    ],
+)
+def test_method_commands_emit_conforming_envelope(monkeypatch, args: list[str], kind: str) -> None:
+    monkeypatch.setattr("method_cli.main.MethodClient.sitemap_guides", lambda self: parse_sitemap_guides(SITEMAP_XML))
+    monkeypatch.setattr("method_cli.main.MethodClient.fetch_guide_page", lambda self, guide_ref: _fake_fetch_guide_page(guide_ref))
+    result = runner.invoke(app, args)
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert envelope_violations(payload) == []
+    assert payload["provider"] == "method"
+    assert payload["command"] == args[0]
+    assert payload["kind"] == kind
+    assert payload["schema_version"] == "1"
+
+
+def test_method_provider_surface_is_callable_in_process(monkeypatch) -> None:
+    monkeypatch.setattr("method_cli.provider.MethodClient.sitemap_guides", lambda self: parse_sitemap_guides(SITEMAP_XML))
+    envelope = PROVIDER.search("mistweaver monk guide", limit=5)
+
+    assert PROVIDER.name == "method"
+    assert envelope_violations(envelope) == []
+    assert envelope["data"]["results"][0]["id"] == "mistweaver-monk"
+
+
+INTRO_HTML_WITH_NON_GUIDE_NAV_LINK = """
+<html>
+  <head>
+    <link rel="canonical" href="https://www.method.gg/guides/mistweaver-monk">
+  </head>
+  <body>
+    <nav>
+      <ul class="guide-navigation">
+        <li><a href="/guides">All guides</a></li>
+        <li class="active"><a href="/guides/mistweaver-monk">Introduction</a></li>
+      </ul>
+    </nav>
+    <article class="guide-main-content">
+      <h2>Introduction</h2>
+      <p>Intro copy for Mistweaver Monk.</p>
+    </article>
+  </body>
+</html>
+"""
+
+def _unrecognised_layout_html(path: str) -> str:
+    """A page whose prose lives in a container the parser does not know: Method template drift."""
+    return f"""
+<html>
+  <head>
+    <link rel="canonical" href="https://www.method.gg/guides/{path}">
+  </head>
+  <body>
+    <div class="some-new-wrapper">
+      <h2>Introduction</h2>
+      <p>Real prose that the parser cannot see.</p>
+    </div>
+  </body>
+</html>
+"""
+
+
+UNRECOGNISED_LAYOUT_HTML = _unrecognised_layout_html("mistweaver-monk")
+
+
+def test_method_guide_survives_a_non_guide_link_in_the_page_navigation(monkeypatch) -> None:
+    """An 'All guides' link in Method's own nav must not make a valid slug look invalid."""
+    monkeypatch.setattr(
+        "method_cli.main.MethodClient.fetch_guide_page",
+        lambda self, guide_ref: parse_guide_page(
+            INTRO_HTML_WITH_NON_GUIDE_NAV_LINK,
+            source_url="https://www.method.gg/guides/mistweaver-monk",
+        ),
+    )
+    result = runner.invoke(app, ["guide", "mistweaver-monk"])
+    assert result.exit_code == 0
+
+    payload = json.loads(result.stdout)["data"]
+    assert [row["section_slug"] for row in payload["navigation"]["items"]] == ["introduction"]
+
+
+def test_method_guide_fails_when_the_article_container_is_missing(monkeypatch) -> None:
+    """Layout drift must be an error, not ok:true with an empty article."""
+    monkeypatch.setattr(
+        "method_cli.main.MethodClient.fetch_guide_page",
+        lambda self, guide_ref: parse_guide_page(
+            UNRECOGNISED_LAYOUT_HTML,
+            source_url="https://www.method.gg/guides/mistweaver-monk",
+        ),
+    )
+    result = runner.invoke(app, ["guide", "mistweaver-monk"])
+
+    assert result.exit_code == 1
+    payload = _error_payload(result)
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "parse_failed"
+    assert payload["error"]["details"]["page_url"] == "https://www.method.gg/guides/mistweaver-monk"
+
+
+def test_method_guide_page_parse_failure_is_not_blamed_on_the_argument(monkeypatch) -> None:
+    """A valid slug whose page will not parse is a `parse_failed`, not an `invalid_guide_ref`."""
+
+    def fetch(self, guide_ref: str) -> dict[str, object]:
+        raise ValueError("Failed to clone Method article node.")
+
+    monkeypatch.setattr("method_cli.main.MethodClient.fetch_guide_page", fetch)
+    result = runner.invoke(app, ["guide", "mistweaver-monk"])
+
+    assert result.exit_code == 1
+    payload = _error_payload(result)
+    assert payload["error"]["code"] == "parse_failed"
+    assert "mistweaver-monk" in payload["error"]["message"]
+
+
+BROKEN_NAVIGATION_PAGE_CASES = [
+    ("network", "network_error"),
+    ("unparsable", "parse_failed"),
+    ("empty_article", "parse_failed"),
+]
+
+
+def _navigation_page_fetch(failure: str):
+    """Fetch stub where the /talents sibling fails in ``failure`` mode and every other page is fine."""
+
+    def fetch(self, guide_ref: str) -> dict[str, object]:
+        if not str(guide_ref).endswith("/talents"):
+            return _fake_fetch_guide_page(guide_ref)
+        if failure == "network":
+            raise httpx.ConnectError("boom", request=httpx.Request("GET", str(guide_ref)))
+        if failure == "unparsable":
+            raise ValueError("Failed to clone Method article node.")
+        return parse_guide_page(
+            _unrecognised_layout_html("mistweaver-monk/talents"),
+            source_url="https://www.method.gg/guides/mistweaver-monk/talents",
+        )
+
+    return fetch
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected_code"),
+    BROKEN_NAVIGATION_PAGE_CASES,
+    ids=[case[0] for case in BROKEN_NAVIGATION_PAGE_CASES],
+)
+def test_method_guide_full_records_a_failed_navigation_page_and_keeps_going(monkeypatch, failure: str, expected_code: str) -> None:
+    monkeypatch.setattr("method_cli.main.MethodClient.fetch_guide_page", _navigation_page_fetch(failure))
+    result = runner.invoke(app, ["guide-full", "mistweaver-monk"])
+    assert result.exit_code == 0
+
+    payload = json.loads(result.stdout)["data"]
+    assert payload["guide"]["page_count"] == 1
+    assert payload["failed_pages"]["count"] == 1
+    failed = payload["failed_pages"]["items"][0]
+    assert failed["section_slug"] == "talents"
+    assert failed["error"]["code"] == expected_code
+
+
+def test_method_guide_export_reports_failed_navigation_pages(monkeypatch, tmp_path: Path) -> None:
+    """An exported bundle is partial when a navigation page failed; the command must say so."""
+    monkeypatch.setattr("method_cli.main.MethodClient.fetch_guide_page", _navigation_page_fetch("network"))
+    bundle_dir = tmp_path / "bundle"
+    result = runner.invoke(app, ["guide-export", "mistweaver-monk", "--out", str(bundle_dir)])
+    assert result.exit_code == 0
+
+    payload = json.loads(result.stdout)["data"]
+    assert payload["counts"]["pages"] == 1
+    assert payload["failed_pages"]["count"] == 1
+    assert payload["failed_pages"]["items"][0]["section_slug"] == "talents"
+    # The manifest is all a downstream bundle reader sees, so the missing page has to reach it too.
+    manifest = json.loads((bundle_dir / "manifest.json").read_text())
+    assert manifest["failed_pages"]["count"] == 1
+    assert manifest["failed_pages"]["items"][0]["section_slug"] == "talents"
+
+
+TALENT_BLOCK_HTML = """
+<html>
+  <head>
+    <link rel="canonical" href="https://www.method.gg/guides/mistweaver-monk/talents">
+  </head>
+  <body>
+    <article class="guide-main-content">
+      <h2>Talent Builds</h2>
+      <div class="df-talent-block">
+        <div class="talent-title">Raid (Conduit of the Celestials)</div>
+        <div class="talent-embed" data-talent="C4QAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB"></div>
+      </div>
+      <div class="df-talent-block">
+        <div class="talent-title">Mythic+ (Conduit of the Celestials)</div>
+        <div class="talent-embed" data-talent="C4QAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB"></div>
+      </div>
+      <div class="df-talent-block">
+        <div class="talent-title">Placeholder</div>
+        <div class="talent-embed" data-talent="coming soon"></div>
+      </div>
+    </article>
+  </body>
+</html>
+"""
+
+
+def _talent_block_builds() -> list[dict[str, object]]:
+    payload = parse_guide_page(TALENT_BLOCK_HTML, source_url="https://www.method.gg/guides/mistweaver-monk/talents")
+    return payload["build_references"]
+
+
+def test_method_ignores_talent_blocks_that_hold_no_loadout_import_string() -> None:
+    """Placeholder embeds share the talent-block markup; only real import strings are builds."""
+    assert [row["build_code"] for row in _talent_block_builds()] == ["C4QAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB"]
+
+
+def test_method_keeps_the_first_label_when_one_import_string_is_published_twice() -> None:
+    """Two builds can share a loadout string; the first published name wins so output is stable."""
+    assert [row["label"] for row in _talent_block_builds()] == ["Raid (Conduit of the Celestials)"]
+
+
+MYTHIC_SITEMAP_XML = """
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>https://www.method.gg/guides/wow-midnight-season-2-mythic-dungeon-rotation</loc></url>
+  <url><loc>https://www.method.gg/guides/mythic-crest-rewards-and-crafting-cost-changes</loc></url>
+  <url><loc>https://www.method.gg/guides/mistweaver-monk</loc></url>
+</urlset>
+"""
+
+
+@pytest.mark.parametrize("query", ["mythic+", "m+", "mythic plus"])
+def test_method_search_reads_every_mythic_plus_spelling_as_mythic_dungeons(monkeypatch, query: str) -> None:
+    """Method never writes "Mythic+"; its M+ pages say "mythic dungeon", so `mythic+` used to find nothing."""
+    monkeypatch.setattr("method_cli.main.MethodClient.sitemap_guides", lambda self: parse_sitemap_guides(MYTHIC_SITEMAP_XML))
+    result = runner.invoke(app, ["search", query])
+    assert result.exit_code == 0
+
+    ids = [row["id"] for row in json.loads(result.stdout)["data"]["results"]]
+    assert ids == ["wow-midnight-season-2-mythic-dungeon-rotation"]
+
+
+@pytest.mark.parametrize("args", [["search", ""], ["resolve", "   "]], ids=["search", "resolve"])
+def test_method_rejects_a_blank_query_without_fetching(monkeypatch, args: list[str]) -> None:
+    monkeypatch.setattr("method_cli.client.request_with_retries", _connect_error)
+    result = runner.invoke(app, args)
+
+    assert result.exit_code == 2
+    assert json.loads(result.stderr)["error"]["code"] == "invalid_query"
+
+
+def test_method_guide_quotes_the_slug_in_its_fetch_more_command(monkeypatch) -> None:
+    html = INTRO_HTML.replace("guides/mistweaver-monk\"", "guides/mistweaver-monk's\"")
+    monkeypatch.setattr(
+        "method_cli.main.MethodClient.fetch_guide_page",
+        lambda self, guide_ref: parse_guide_page(html, source_url="https://www.method.gg/guides/mistweaver-monk"),
+    )
+    result = runner.invoke(app, ["guide", "mistweaver-monk"])
+    assert result.exit_code == 0
+
+    command = json.loads(result.stdout)["data"]["linked_entities"]["fetch_more_command"]
+    assert shlex.split(command) == ["method", "guide-full", "mistweaver-monk's"]
+
+
+@pytest.mark.parametrize(
+    "redis_url",
+    [
+        "redis://user:FAKEPASS@cache.example:6380/2?password=QUERYPASS",
+        # redis-py reads the password up to the last '@': the first '@' used to leak "PASS@".
+        "redis://:FAKE@PASS@cache.example:6380/2",
+        # A URL parser rejects brackets outside an IPv6 host, which failed doctor with internal_error.
+        "redis://:FA[KE@PA]SS@cache.example:6380/2",
+    ],
+)
+def test_method_doctor_never_prints_the_redis_password(monkeypatch, redis_url: str) -> None:
+    monkeypatch.setenv("METHOD_REDIS_URL", redis_url)
+    result = runner.invoke(app, ["doctor"])
+    assert result.exit_code == 0
+
+    assert "PASS" not in result.stdout
+    assert json.loads(result.stdout)["data"]["cache"]["redis_url"] == "redis://***@cache.example:6380/2"

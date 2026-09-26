@@ -8,6 +8,21 @@ from bs4 import BeautifulSoup, Comment, NavigableString, Tag
 
 WIKI_BASE_URL = "https://warcraft.wiki.gg"
 
+# Families whose pages document the addon programming surface: they share the same body chrome
+# (the "Main Menu" / "Game Types" navigation tables) and the same reference metadata sections.
+PROGRAMMING_FAMILIES = frozenset(
+    {
+        "api_function",
+        "ui_handler",
+        "event_reference",
+        "framework_page",
+        "xml_schema",
+        "cvar",
+        "api_changes",
+        "howto_programming",
+    }
+)
+
 PROGRAMMING_FRAMEWORK_TITLES = {
     "world of warcraft api",
     "warcraft wiki:api",
@@ -17,6 +32,9 @@ PROGRAMMING_FRAMEWORK_TITLES = {
     "framexml api",
     "lua functions",
     "lua api",
+    # The XML schema tree was renamed from "XML schema" to "XML" in 2026; the old title is still a
+    # redirect, so keep both.
+    "xml",
     "xml schema",
     "console variables",
     "events",
@@ -139,26 +157,36 @@ def _normalized_title_key(title: str) -> str:
     return normalize_article_ref(title).strip().lower()
 
 
-def classify_article_family(title: str) -> str:
-    normalized = _normalized_title_key(title)
-    if normalized.startswith("api change summaries"):
+# Titles inside PROGRAMMING_FRAMEWORK_TITLES / SYSTEM_REFERENCE_TITLES that map to a narrower family.
+FRAMEWORK_TITLE_FAMILIES = {"xml": "xml_schema", "xml schema": "xml_schema", "console variables": "cvar"}
+SYSTEM_TITLE_FAMILIES = {"expansion": "expansion_reference", "profession": "profession_reference", "zone scaling": "zone_reference"}
+
+
+def _title_pattern_family(normalized: str) -> str | None:
+    """Families decided by a title prefix/suffix pattern; checked before the title-set lookups."""
+    if normalized.startswith("api change summaries") or normalized.endswith("/api changes"):
         return "api_changes"
-    if normalized.endswith("/api changes") or normalized == "api change summaries":
-        return "api_changes"
-    if normalized.startswith("api "):
+    # API reference pages moved from the main-namespace "API Foo" convention into the real "API:"
+    # namespace; the old titles survive as redirects, so both spellings have to classify the same.
+    if normalized.startswith("api ") or normalized.startswith("api:"):
         return "api_function"
     if normalized.startswith("uihandler "):
         return "ui_handler"
+    # Game events live in the custom "Event:" namespace, one page per event name
+    # ("Event:PLAYER LOGIN"); the bare event name survives as a main-namespace redirect.
+    if normalized.startswith("event:"):
+        return "event_reference"
     if normalized in PROGRAMMING_HOWTO_TITLES:
         return "howto_programming"
     if normalized.startswith("patch ") and ("api changes" not in normalized):
         return "patch_reference"
+    return None
+
+
+def _title_set_family(normalized: str) -> str | None:
+    """Families decided by membership in a curated title set, then by broad title keywords."""
     if normalized in PROGRAMMING_FRAMEWORK_TITLES:
-        if normalized == "xml schema":
-            return "xml_schema"
-        if normalized == "console variables":
-            return "cvar"
-        return "framework_page"
+        return FRAMEWORK_TITLE_FAMILIES.get(normalized, "framework_page")
     if normalized in CLASS_REFERENCE_TITLES:
         return "class_reference"
     if normalized in PROFESSION_REFERENCE_TITLES:
@@ -166,28 +194,35 @@ def classify_article_family(title: str) -> str:
     if normalized in EXPANSION_REFERENCE_TITLES:
         return "expansion_reference"
     if normalized in SYSTEM_REFERENCE_TITLES:
-        if normalized == "expansion":
-            return "expansion_reference"
-        if normalized == "profession":
-            return "profession_reference"
-        if normalized == "zone scaling":
-            return "zone_reference"
-        return "system_reference"
+        return SYSTEM_TITLE_FAMILIES.get(normalized, "system_reference")
     if normalized.startswith("world of warcraft:") or normalized.startswith("warcraft:"):
         return "lore_reference"
     if "guide" in normalized or "howto" in normalized or "tutorial" in normalized:
         return "guide_reference"
-    return "general_article"
+    return None
+
+
+def classify_article_family(title: str) -> str:
+    """Classify a wiki title into a content family; ``general_article`` when no rule matches."""
+    normalized = _normalized_title_key(title)
+    return _title_pattern_family(normalized) or _title_set_family(normalized) or "general_article"
 
 
 def _strip_html(html_text: str) -> str:
-    soup = BeautifulSoup(html_text, "html.parser")
-    return soup.get_text(" ", strip=True)
+    """Plain text of an HTML fragment with the fragment's own whitespace, collapsed.
+
+    No separator is inserted between tags: search highlights wrap sub-words
+    (``<span class="searchmatch">PLAYER</span>_LOGIN``), and stripping each string instead would glue
+    highlighted words to their neighbours (``see <span>Sha</span> <span>of</span>`` -> ``seeShaof``).
+    """
+    return " ".join(BeautifulSoup(html_text, "html.parser").get_text().split())
 
 
 def parse_search_results(payload: dict[str, Any]) -> tuple[int, list[dict[str, Any]]]:
-    query = payload.get("query") if isinstance(payload.get("query"), dict) else {}
-    search_info = query.get("searchinfo") if isinstance(query.get("searchinfo"), dict) else {}
+    raw_query = payload.get("query")
+    query: dict[str, Any] = raw_query if isinstance(raw_query, dict) else {}
+    raw_search_info = query.get("searchinfo")
+    search_info: dict[str, Any] = raw_search_info if isinstance(raw_search_info, dict) else {}
     total_hits = int(search_info.get("totalhits") or 0)
     rows: list[dict[str, Any]] = []
     for row in query.get("search") or []:
@@ -303,16 +338,22 @@ def _extract_linked_entities(root: Tag) -> list[dict[str, Any]]:
             continue
         if href.startswith("/wiki/Help:") or href.startswith("/wiki/Template:"):
             continue
-        full_url = urljoin(WIKI_BASE_URL, href)
-        if "#" in full_url:
-            full_url = full_url.split("#", 1)[0]
-        title = normalize_article_ref(href)
-        entities[title] = {
-            "type": "wiki_article",
-            "id": title,
-            "name": link.get_text(" ", strip=True) or title,
-            "url": full_url,
-        }
+        # Section links ("/wiki/Mage#Talents") point at the same article as the bare link, so the
+        # fragment comes off before the title is derived: the id has to stay a fetchable title.
+        path, _, fragment = href.partition("#")
+        title = normalize_article_ref(path)
+        # A section link's text names the section ("talents"), not the article, so only a link to
+        # the whole article can supply a display name.
+        link_text = link.get_text(" ", strip=True)
+        entities.setdefault(
+            title,
+            {
+                "type": "wiki_article",
+                "id": title,
+                "name": link_text if link_text and not fragment else title,
+                "url": urljoin(WIKI_BASE_URL, path),
+            },
+        )
     return sorted(entities.values(), key=lambda row: str(row["id"]).lower())
 
 
@@ -327,7 +368,7 @@ def _clean_root(root: Tag, *, family: str) -> Tag:
     for selector in (".navbox", ".vertical-navbox", ".infobox", ".catlinks", ".mw-hidden-catlinks"):
         for tag in output.select(selector):
             tag.decompose()
-    if family in {"api_function", "ui_handler", "framework_page", "xml_schema", "cvar", "api_changes", "howto_programming"}:
+    if family in PROGRAMMING_FAMILIES:
         for tag in output.select(".nomobile, .thumb, .gallery, .mw-references-wrap"):
             tag.decompose()
         children = [child for child in output.children if isinstance(child, Tag)]
@@ -383,12 +424,12 @@ def _section_lookup(sections: list[dict[str, Any]]) -> dict[str, dict[str, Any]]
     return lookup
 
 
-def _first_code_block_text(root: Tag) -> str | None:
+def _signature_text(root: Tag) -> str | None:
+    """The code block of the page introduction; a block under a heading is an example, not the signature."""
     block = root.select_one(".mw-highlight")
-    if block is None:
+    if block is None or block.find_previous(["h2", "h3", "h4"]) is not None:
         return None
-    text = block.get_text(" ", strip=True)
-    return text or None
+    return block.get_text(" ", strip=True) or None
 
 
 def extract_reference_metadata(*, title: str, family: str, text: str, sections: list[dict[str, Any]], root: Tag) -> dict[str, Any]:
@@ -399,18 +440,20 @@ def extract_reference_metadata(*, title: str, family: str, text: str, sections: 
     metadata["patch_changes"] = section_map.get("patch_changes", {}).get("text")
     metadata["see_also"] = section_map.get("see_also", {}).get("text")
     metadata["references"] = section_map.get("references", {}).get("text")
-    if family not in {"api_function", "ui_handler", "framework_page", "xml_schema", "cvar", "api_changes", "howto_programming"}:
+    if family not in PROGRAMMING_FAMILIES:
         return metadata
     metadata["programming_reference"] = True
-    metadata["signature"] = _first_code_block_text(root)
-    metadata["arguments"] = section_map.get("arguments", {}).get("text")
+    metadata["signature"] = _signature_text(root)
+    # Event pages title their arguments section "Payload".
+    metadata["arguments"] = (section_map.get("arguments") or section_map.get("payload") or {}).get("text")
     metadata["returns"] = section_map.get("returns", {}).get("text")
     metadata["details"] = section_map.get("details", {}).get("text")
     return metadata
 
 
 def parse_article_page(payload: dict[str, Any], *, source_title: str) -> dict[str, Any]:
-    parse = payload.get("parse") if isinstance(payload.get("parse"), dict) else {}
+    raw_parse = payload.get("parse")
+    parse: dict[str, Any] = raw_parse if isinstance(raw_parse, dict) else {}
     title = str(parse.get("title") or source_title).strip()
     display_title = _strip_html(str(parse.get("displaytitle") or title))
     html = str((parse.get("text") or {}).get("*") or "")

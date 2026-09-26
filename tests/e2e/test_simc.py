@@ -1,0 +1,1550 @@
+"""End-to-end journeys for the ``simc`` binary against the local SimulationCraft checkout.
+
+Every command in docs/reference/simc.md is exercised here. The journeys mirror how an agent
+actually works: inspect the checkout, describe a build, read an APL, run a short sim and analyse
+it, validate talent transport, and fail cleanly when the checkout or an input path is wrong.
+
+Nothing here mutates the real checkout, so ``sync``, ``build``, and ``checkout`` are deliberately
+error-path only: a success-path journey for any of them would pull, recompile, or clone the
+checkout every other journey reads. ``build`` is reached through its missing-build-dir guard,
+``sync`` through its dirty-worktree and missing-repo guards, and ``checkout`` through a temporary
+``XDG_DATA_HOME`` whose managed root is not a git repo.
+
+Prerequisite: the compiled binary at ``<checkout>/build/simc`` must have been built from the
+checkout's *current* HEAD. Every decode, prune, and priority journey below reads talent and spell
+data out of that binary while reading APLs and profiles off the working tree, so a binary that
+lags the checkout produces answers that are wrong rather than missing. ``simc doctor`` detects the
+mismatch (``repo.build_ready`` goes false and ``repo.binary.matches_checkout`` goes false), and the
+``checkout`` fixture turns that into a failure with the rebuild command rather than a skip: a
+skipped simc suite would hide the very handoff the wrapper journeys depend on.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import shlex
+from collections.abc import Iterable
+from dataclasses import dataclass
+from functools import lru_cache
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from tests.e2e.harness import (
+    EXIT_GENERIC,
+    EXIT_NOT_FOUND,
+    EXIT_USAGE,
+    JourneyFailure,
+    Result,
+    dead_proxy_env,
+    run,
+    run_raw,
+)
+
+# Windwalker is the monk spec SimulationCraft ships a default APL and a profile for; mistweaver is
+# a healer and has neither. The APL itself is discovered through `simc spec-files`.
+APL_STEM = "monk_windwalker"
+ACTOR_CLASS = "monk"
+SPEC = "windwalker"
+
+# `{ tree_index, class_id, entry_id, node_id, max_rank, ..., "Talent Name" ...}` in the SimC
+# generated trait table. Only the leading ids and the name are needed to turn a decoded build back
+# into the raw (entry, node, rank) rows a transport packet carries.
+TRAIT_ROW_RE = re.compile(r'\{\s*(\d+),\s*(\d+),\s*(\d+),\s*(\d+),\s*(\d+),.*?"([^"]+)"')
+TREE_INDEX = {"class": 1, "spec": 2, "hero": 3}
+CLASS_ID = {"monk": 10}
+SPEC_ID = {"windwalker": 269}
+# The same row read whole: the spec ids a talent is limited to (all zero means every spec) and the
+# node type in the last column, where 2 is a choice node (a build takes one of its entries).
+TRAIT_ROW_FULL_RE = re.compile(
+    r'\{\s*(\d+),\s*(\d+),\s*(\d+),\s*(\d+),\s*(\d+),.*?"([^"]+)",\s*\{([^}]*)\}.*?(\d+)\s*\},?\s*$'
+)
+NODE_CHOICE = 2
+
+# How many of the checkout's own tier profiles the decode sweep walks. SimulationCraft itself
+# rejects some of its shipped hashes whenever its trait data moves ahead of the profile generator,
+# so each profile's expected verdict comes from running that profile through the binary unchanged.
+DECODE_SWEEP_SIZE = 16
+# The oracle run: one iteration of one second is enough for SimC to initialise the player's talents.
+ORACLE_RUN_ARGS = ("--arg", "iterations=1", "--arg", "max_time=1", "--arg", "threads=1")
+
+# A decoded retail build fills all three trees. These floors are far below any real build (a class
+# tree alone carries ~30 picks) and exist to catch a decode that quietly returns a partial build.
+MIN_SELECTED_BY_TREE = {"class": 15, "spec": 15, "hero": 5}
+
+# `talent.<token>=false` in an APL prune reason: the talent that made the branch dead.
+TALENT_CONDITION_RE = re.compile(r"talent\.([a-z0-9_]+)=(?:false|true)")
+
+# `apl-branch-trace` renders one action per line as `L<line>: <status> <action ...>`; a list header
+# is the bare `[list_name]`. High enough that `simc priority` returns a whole action list.
+TRACE_ACTION_RE = re.compile(r"^L(\d+): (\w+)\s+(.*)$")
+DISPATCH_RE = re.compile(r"^call_action_list -> (\w+)")
+PRIORITY_SCAN_LIMIT = 100  # `simc priority --limit` caps here; the journey APL's start list is far shorter.
+INTENT_PREFIX_BY_STATUS = {"guaranteed": "always", "possible": "situational"}
+
+
+@dataclass(frozen=True)
+class TraceRow:
+    """One ``apl-branch-trace`` line: an action, or a list header (``line_no`` 0, empty status)."""
+
+    line_no: int
+    status: str
+    text: str
+
+
+def _trace_rows_at_depth(traced: dict[str, Any], depth: int) -> list[TraceRow]:
+    rows: list[TraceRow] = []
+    for row in traced["trace"]:
+        if row["depth"] != depth:
+            continue
+        match = TRACE_ACTION_RE.match(str(row["text"]))
+        rows.append(
+            TraceRow(0, "", str(row["text"]))
+            if match is None
+            else TraceRow(int(match.group(1)), match.group(2), match.group(3))
+        )
+    return rows
+
+
+def _list_headers(rows: list[TraceRow]) -> set[str]:
+    """The ``[list_name]`` headers among trace rows; the other non-action rows are ``because:`` notes."""
+    return {row.text[1:-1] for row in rows if row.text.startswith("[") and row.text.endswith("]")}
+
+
+def _dispatch_targets(rows: list[TraceRow], *, dead: bool) -> set[str]:
+    """The action lists the traced rows hand off to, split by whether the handoff survived the prune."""
+    matches = (DISPATCH_RE.match(row.text) for row in rows if (row.status == "dead") == dead)
+    return {match.group(1) for match in matches if match is not None}
+
+
+def _collapse_repeats(rows: Iterable[tuple[str, str, str | None]]) -> list[tuple[str, str, str | None]]:
+    collapsed: list[tuple[str, str, str | None]] = []
+    for row in rows:
+        if not collapsed or collapsed[-1] != row:
+            collapsed.append(row)
+    return collapsed
+
+
+def _intent_restates_priority_row(line: str, action: str, target_list: str | None) -> bool:
+    """An intent line paraphrases one priority row: a dispatch reads ``run <list>``, else the action."""
+    body = line.split(": ", 1)[-1]
+    if action == "call_action_list":
+        return target_list is not None and body.startswith("run ") and target_list.split("_")[0] in body
+    return action.replace("_", " ") in body
+
+
+@dataclass(frozen=True)
+class Checkout:
+    """The pieces of the local SimulationCraft checkout the journeys below act on."""
+
+    root: Path
+    apl: Path
+    assisted_apl: Path
+    profile: Path
+    talents: str
+
+
+def _require_binary_built_from_head(repo: dict[str, Any]) -> None:
+    """Fail — never skip — when the compiled binary does not match the checkout it is read with.
+
+    A binary built from an older commit still answers every command, so the failure this catches is
+    a *wrong* build (talents resolved against stale trait data), not a missing one. See the module
+    docstring.
+    """
+    binary = repo["binary"]
+    if repo["repo_ready"] and repo["build_ready"] and binary["matches_checkout"] is True:
+        return
+    raise JourneyFailure(
+        "the local SimulationCraft checkout is not usable for these journeys.\n"
+        f"  root:              {repo['root']}\n"
+        f"  checkout HEAD:     {(repo.get('git') or {}).get('head')}\n"
+        f"  binary:            {binary['path']}\n"
+        f"  binary revision:   {binary['git_revision']} (matches_checkout={binary['matches_checkout']})\n"
+        f"  repo issues:       {repo['repo_issues']}\n"
+        f"  build issues:      {repo['build_issues']}\n"
+        "Rebuild it from the checkout's current HEAD (cmake -B build && cmake --build build, or "
+        "`simc build`) and re-run; skipping would hide wrong talent decodes, not just missing ones."
+    )
+
+
+def _first_item(result_data: dict[str, Any], category: str) -> dict[str, Any]:
+    items: list[dict[str, Any]] = result_data["categories"][category]["items"]
+    assert items, f"spec-files returned no {category} rows: {json.dumps(result_data)[:400]}"
+    return items[0]
+
+
+@pytest.fixture(scope="module")
+def checkout() -> Checkout:
+    """Discover the checkout, its windwalker APLs, and a real talent string, once per module."""
+    doctor = run("simc", "doctor")
+    repo = doctor.data["repo"]
+    _require_binary_built_from_head(repo)
+    root = Path(repo["root"])
+
+    spec_files = run("simc", "spec-files", APL_STEM)
+    apl = Path(_first_item(spec_files.data, "default_apl")["path"])
+    assisted_apl = Path(_first_item(spec_files.data, "assisted_apl")["path"])
+    assert apl.name == f"{APL_STEM}.simc", spec_files.describe()
+
+    profiles = sorted((root / "profiles").rglob("*Monk_Windwalker.simc"))
+    assert profiles, f"no windwalker profile under {root / 'profiles'}"
+    profile = profiles[0]
+
+    inspected = run("simc", "inspect", str(profile))
+    talents = inspected.data["target"]["build_spec"]["talents"]
+    assert isinstance(talents, str) and len(talents) > 40, inspected.describe()
+
+    return Checkout(root=root, apl=apl, assisted_apl=assisted_apl, profile=profile, talents=talents)
+
+
+def _profile_talents(path: Path) -> str:
+    """The talent export string SimulationCraft ships inside one of its own profiles."""
+    inspected = run("simc", "inspect", str(path))
+    talents = inspected.data["target"]["build_spec"]["talents"]
+    assert isinstance(talents, str) and talents, inspected.describe()
+    return talents
+
+
+def _selected_by_tree(decoded: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    """``decode-build`` lists only the talents SimC actually took, split per tree."""
+    return {tree: list(decoded["talents_by_tree"][tree]) for tree in MIN_SELECTED_BY_TREE}
+
+
+def _talent_condition_tokens(rows: list[dict[str, Any]]) -> set[str]:
+    return {match.group(1) for row in rows for match in TALENT_CONDITION_RE.finditer(row["reason"])}
+
+
+def _dispatch_calls(described: dict[str, Any]) -> set[str]:
+    """The action lists the single-target view actually dispatches to."""
+    return {name for name in described["single_target"]["active_action_names"] if name.startswith("call_action_list")}
+
+
+def _dead_lines(described: dict[str, Any]) -> set[int]:
+    return {row["line_no"] for row in described["single_target"]["inactive_talent_branches"]}
+
+
+def _talent_rows_from_build(checkout: Checkout, decoded: dict[str, Any]) -> list[str]:
+    """Turn a decoded build into the raw ``entry:node:rank`` rows a log-sourced packet carries.
+
+    Only SimC's generated trait table maps a talent to its node id, so the ids come from there.
+    Names that appear more than once in a tree (choice nodes) are dropped: the row would be
+    ambiguous, and validate-talent-transport is expected to accept a partial selection.
+    """
+    trait_file = checkout.root / "engine" / "dbc" / "generated" / "trait_data.inc"
+    ids_by_name: dict[tuple[int, str], list[tuple[int, int]]] = {}
+    for line in trait_file.read_text().splitlines():
+        match = TRAIT_ROW_RE.search(line)
+        if match is None:
+            continue
+        tree_index, class_id, entry_id, node_id, _max_rank, name = match.groups()
+        if int(class_id) != CLASS_ID[ACTOR_CLASS]:
+            continue
+        ids_by_name.setdefault((int(tree_index), name), []).append((int(entry_id), int(node_id)))
+
+    rows: list[str] = []
+    for tree, talents in decoded["talents_by_tree"].items():
+        if tree not in TREE_INDEX:
+            continue
+        for talent in talents:
+            candidates = ids_by_name.get((TREE_INDEX[tree], talent["name"]), [])
+            if len(candidates) != 1:
+                continue
+            entry_id, node_id = candidates[0]
+            rows.append(f"{entry_id}:{node_id}:{talent['rank']}")
+    return rows
+
+
+# --- repo inspection ---
+
+
+def test_doctor_reports_a_ready_checkout_and_needs_no_network(require, checkout: Checkout) -> None:
+    require("simc")
+    # simc has no network surface, so a dead proxy must not change the answer.
+    result = run("simc", "doctor", env=dead_proxy_env())
+    data = result.data
+    assert data["status"] == "ready"
+    assert data["auth"] == {"required": False, "deferred": False}
+    assert data["capabilities"]["decode_build"] == "ready"
+    assert data["capabilities"]["search"] == "coming_soon"
+    assert data["repo"]["root"] == str(checkout.root)
+    binary = data["repo"]["binary"]
+    assert binary["available"] is True
+    assert "SimulationCraft" in binary["version_line"]
+    # doctor's build-readiness claim is only worth anything if the revision it read out of the
+    # binary really is the checkout's HEAD; that is the mismatch the module docstring is about.
+    assert binary["matches_checkout"] is True, result.describe()
+    assert binary["git_revision"] in binary["version_line"], result.describe()
+    assert str(data["repo"]["git"]["head"]).startswith(str(binary["git_revision"])), result.describe()
+    assert data["repo_resolution"]["configured_root"] == str(checkout.root)
+    # A root that resolved came from somewhere; "unset" would contradict the line above.
+    assert data["repo_resolution"]["source"] != "unset"
+
+
+def test_version_reports_the_built_binary(require, checkout: Checkout) -> None:
+    require("simc")
+    result = run("simc", "version")
+    assert result.data["binary"]["path"] == str(checkout.root / "build" / "simc")
+    assert result.data["binary"]["available"] is True
+    assert result.data["version"].startswith("SimulationCraft")
+
+
+def test_repo_reports_the_active_resolution(require, checkout: Checkout) -> None:
+    require("simc")
+    result = run("simc", "repo")
+    assert result.data["action"] == "inspect"
+    assert result.data["changed"] is False
+    assert result.data["resolution"]["root"] == str(checkout.root)
+    assert result.data["resolution"]["source"] != "unset"
+
+
+def test_repo_set_root_and_clear_root_round_trip(require, checkout: Checkout, out_dir: Path) -> None:
+    """The persisted root is written and cleared inside a throwaway config home, never the real one."""
+    require("simc")
+    config_home = out_dir / "config"
+    config_home.mkdir()
+    env = {"XDG_CONFIG_HOME": str(config_home)}
+
+    stored = run("simc", "repo", "--set-root", str(checkout.root), env=env)
+    assert stored.data["action"] == "set_root"
+    assert stored.data["changed"] is True
+    assert stored.data["stored_root"] == str(checkout.root)
+    assert stored.data["resolution"]["configured_root"] == str(checkout.root)
+    config_path = Path(stored.data["resolution"]["config_path"])
+    assert config_path.is_relative_to(config_home) and config_path.is_file()
+
+    reread = run("simc", "repo", env=env)
+    assert reread.data["resolution"]["configured_root"] == str(checkout.root)
+    assert reread.data["resolution"]["source"] == "config"
+
+    cleared = run("simc", "repo", "--clear-root", env=env)
+    assert cleared.data["action"] == "clear_root"
+    assert cleared.data["changed"] is True
+    assert cleared.data["resolution"]["configured_root"] is None
+    assert not config_path.exists()
+
+
+def test_repo_set_root_rejects_a_missing_directory(require, out_dir: Path) -> None:
+    require("simc")
+    missing = out_dir / "not-a-checkout"
+    result = run("simc", "repo", "--set-root", str(missing), expect=EXIT_NOT_FOUND, error_code="not_found")
+    assert str(missing) in result.payload["error"]["message"]
+
+
+def test_verify_clean_reports_the_checkout_and_binary(require, checkout: Checkout) -> None:
+    require("simc")
+    result = run("simc", "verify-clean", "--hash-binary", timeout=300)
+    assert result.data["repo_root"] == str(checkout.root)
+    assert result.data["git"]["git"] is True
+    assert result.data["binary"]["exists"] is True
+    assert len(result.data["binary"]["sha256"]) == 64
+
+
+def test_inspect_describes_the_repo_and_a_profile_inside_it(require, checkout: Checkout) -> None:
+    require("simc")
+    repo_view = run("simc", "inspect")
+    assert repo_view.data["inspect"] == "repo"
+    assert repo_view.data["repo"]["root"] == str(checkout.root)
+
+    file_view = run("simc", "inspect", str(checkout.profile))
+    target = file_view.data["target"]
+    assert target["kind"] == "file"
+    assert target["relative_to_repo"] == str(checkout.profile.relative_to(checkout.root))
+    assert target["line_count"] > 0
+    assert target["build_spec"]["actor_class"] == ACTOR_CLASS
+    assert target["build_spec"]["spec"] == SPEC
+    assert target["build_spec"]["talents"] == checkout.talents
+
+
+def test_spec_files_lists_class_files_for_the_queried_spec(require, checkout: Checkout) -> None:
+    require("simc")
+    result = run("simc", "spec-files", ACTOR_CLASS, "--limit", "50")
+    assert result.payload["query"] == ACTOR_CLASS
+    assert result.data["count"] > 0
+    categories = result.data["categories"]
+    default_paths = [item["relative_path"] for item in categories["default_apl"]["items"]]
+    assert default_paths, result.describe()
+    assert all(ACTOR_CLASS in path for path in default_paths)
+    assert f"ActionPriorityLists/default/{APL_STEM}.simc" in default_paths
+    cpp_paths = [item["relative_path"] for item in categories["cpp"]["items"]]
+    assert any(ACTOR_CLASS in path for path in cpp_paths), result.describe()
+
+
+def test_search_and_resolve_are_structured_coming_soon_stubs(require) -> None:
+    require("simc")
+    for command in ("search", "resolve"):
+        result = run("simc", command, "mistweaver monk")
+        assert result.data["coming_soon"] is True
+        assert result.data["resolved"] is False
+        assert result.data["results"] == []
+        # The suggestion is the stub's whole answer, so it has to run against this checkout as written.
+        binary, *args = shlex.split(result.data["suggested_command"])
+        assert binary == "simc", result.describe()
+        run("simc", *args)
+
+
+# --- build description ---
+
+
+def test_decode_and_identify_a_build_from_a_repo_profile(require, checkout: Checkout) -> None:
+    require("simc")
+    identified = run("simc", "identify-build", "--profile-path", str(checkout.profile))
+    assert identified.data["identity"]["actor_class"] == ACTOR_CLASS
+    assert identified.data["identity"]["spec"] == SPEC
+    assert identified.data["identity"]["confidence"] == "high"
+    assert identified.data["build_spec"]["talents"] == checkout.talents
+
+    decoded_result = run("simc", "decode-build", "--talents", checkout.talents, "--actor-class", ACTOR_CLASS, "--spec", SPEC)
+    assert decoded_result.data["build_spec"]["talents"] == checkout.talents
+    decoded = decoded_result.data["decoded"]
+    assert decoded["actor_class"] == ACTOR_CLASS
+    assert decoded["spec"] == SPEC
+    assert len(decoded["enabled_talents"]) > 20
+    for tree in ("class", "spec", "hero"):
+        selected = decoded["talents_by_tree"][tree]
+        assert selected, f"{tree} tree decoded empty: {json.dumps(decoded['talents_by_tree'][tree])[:300]}"
+        # Tiered nodes are read back one row per entry, so every taken row carries its real rank.
+        unranked = [talent for talent in selected if not (isinstance(talent["rank"], int) and 0 < talent["rank"] <= talent["max_rank"])]
+        assert not unranked, f"{tree} rows without a real rank: {unranked}"
+    assert f"decoded via {checkout.root}" in " ".join(decoded["source_notes"])
+
+
+def _simc_rejection(oracle: Result) -> str:
+    """The reason SimC gave for rejecting a profile, without the player and hash it names."""
+    errors: list[str] = [line for line in oracle.payload["error"]["details"]["stderr_preview"] if line.startswith("Error:")]
+    assert errors, oracle.describe()
+    return errors[0].rsplit("': ", 1)[-1]
+
+
+def test_decode_build_agrees_with_simc_on_the_checkouts_own_profiles(require, checkout: Checkout) -> None:
+    """Sweep the tier's shipped talent hashes against SimulationCraft's own verdict on each profile.
+
+    ``simc run`` hands the profile to the binary untouched, so it is the reference: a profile SimC
+    accepts must decode to a full build (all three trees and a named hero tree), and a profile SimC
+    rejects must fail ``invalid_build`` for the reason SimC gave. A decode that drops a tree while
+    reporting ``ok: true``, or rejects a build SimC itself accepts, fails here with no slack.
+    """
+    require("simc")
+    profiles = sorted(checkout.profile.parent.glob("*_*_*.simc"))[:DECODE_SWEEP_SIZE]
+    assert len(profiles) == DECODE_SWEEP_SIZE, f"{checkout.profile.parent} ships too few tier profiles: {profiles}"
+
+    decoded_names: list[str] = []
+    for profile in profiles:
+        oracle = run("simc", "run", str(profile), *ORACLE_RUN_ARGS, expect=None, timeout=300)
+        if not oracle.ok:
+            assert oracle.error_code == "run_failed", oracle.describe()
+            result = run("simc", "decode-build", "--profile-path", str(profile), expect=EXIT_GENERIC, error_code="invalid_build")
+            assert result.payload["error"]["message"].endswith(_simc_rejection(oracle)), result.describe()
+            # The rejection must name the binary that rejected it, so a stale build is diagnosable.
+            assert result.payload["error"]["details"]["simc_binary"]["matches_checkout"] is True, result.describe()
+            continue
+        result = run("simc", "decode-build", "--profile-path", str(profile))
+        decoded = result.data["decoded"]
+        hero_tree = decoded["hero_tree"]
+        assert hero_tree and hero_tree["name"] and isinstance(hero_tree["id"], int), result.describe()
+        for tree, selected in _selected_by_tree(decoded).items():
+            assert len(selected) >= MIN_SELECTED_BY_TREE[tree], result.describe()
+            assert all(row["name"] and row["entry"] > 0 for row in selected), result.describe()
+        assert set(decoded["enabled_talents"]) == {
+            row["token"] for rows in _selected_by_tree(decoded).values() for row in rows
+        }, result.describe()
+        decoded_names.append(profile.name)
+
+    assert decoded_names, f"SimC rejected every one of {[path.name for path in profiles]}, so no decode was checked"
+
+
+@dataclass(frozen=True)
+class HeroVariant:
+    """One shipped profile of the journey spec, described against the journey APL."""
+
+    path: Path
+    hero_tree: dict[str, Any]
+    described: Result
+
+
+@lru_cache(maxsize=1)
+def _hero_variants(checkout: Checkout) -> tuple[HeroVariant, HeroVariant]:
+    """Two profiles of the journey spec that differ only in the hero tree they picked.
+
+    Discovered from the checkout rather than pinned: which hero trees a spec ships profiles for
+    changes every tier, and the journeys below only need two that differ.
+    """
+    by_hero_tree: dict[str, HeroVariant] = {}
+    for profile in sorted(checkout.profile.parent.glob(f"*_{APL_STEM.title()}*.simc")):
+        described = run("simc", "describe-build", "--profile-path", str(profile), "--apl-path", str(checkout.apl))
+        hero_tree = described.data["build"]["hero_tree"]
+        assert hero_tree and hero_tree["name"], described.describe()
+        by_hero_tree.setdefault(hero_tree["name"], HeroVariant(profile, hero_tree, described))
+    assert len(by_hero_tree) >= 2, (
+        f"{checkout.profile.parent} ships no two {ACTOR_CLASS} {SPEC} profiles with different hero trees: "
+        f"{sorted(by_hero_tree)}"
+    )
+    left, right = (by_hero_tree[name] for name in sorted(by_hero_tree)[:2])
+    return left, right
+
+
+def test_describe_build_routes_the_apl_by_the_selected_hero_tree(require, checkout: Checkout) -> None:
+    """Same class, spec, and APL; a different hero tree must mean a different live priority.
+
+    The APL gates whole action lists on hero-tree keystones, so which branch survives the prune is
+    the observable proof that describe-build fed the *selected* hero tree into the build. Every
+    branch one build reports dead must be dead because of a talent the other build actually took.
+    """
+    require("simc")
+    left, right = _hero_variants(checkout)
+    assert left.hero_tree != right.hero_tree
+
+    for variant in (left, right):
+        assert variant.described.data["apl"]["path"] == str(checkout.apl), variant.described.describe()
+        assert variant.described.data["identity"]["spec"] == SPEC, variant.described.describe()
+
+    left_calls = _dispatch_calls(left.described.data)
+    right_calls = _dispatch_calls(right.described.data)
+    assert left_calls != right_calls, f"both hero trees dispatch to {sorted(left_calls)}"
+
+    for mine, theirs in ((left, right), (right, left)):
+        dead = mine.described.data["single_target"]["inactive_talent_branches"]
+        assert dead, f"{mine.path.name} reports no talent-gated dead branch: {mine.described.describe()}"
+        blockers = _talent_condition_tokens(dead)
+        assert blockers, mine.described.describe()
+        assert not blockers & set(mine.described.data["build"]["enabled_talents"]), (
+            f"{mine.path.name} reports a branch dead on a talent it took: {sorted(blockers)}"
+        )
+        assert blockers <= set(theirs.described.data["build"]["enabled_talents"]), (
+            f"{mine.path.name} blames {sorted(blockers)}, which {theirs.path.name} does not take either"
+        )
+
+
+def test_enable_and_disable_override_the_talents_the_apl_is_pruned_against(require, checkout: Checkout) -> None:
+    """``--disable`` must kill the branch its talent gates, and ``--enable`` must bring it back."""
+    require("simc")
+    left, right = _hero_variants(checkout)
+    # A talent the right build took and the left build's APL prune already names as a blocker, so
+    # disabling it on the right build has a branch to kill.
+    token = sorted(_talent_condition_tokens(left.described.data["single_target"]["inactive_talent_branches"]))[0]
+    baseline_dead = _dead_lines(right.described.data)
+    assert token not in _talent_condition_tokens(right.described.data["single_target"]["inactive_talent_branches"])
+
+    disabled = run(
+        "simc", "describe-build", "--profile-path", str(right.path), "--apl-path", str(checkout.apl), "--disable", token
+    )
+    assert token in _talent_condition_tokens(disabled.data["single_target"]["inactive_talent_branches"]), disabled.describe()
+    assert _dead_lines(disabled.data) > baseline_dead, disabled.describe()
+
+    # The help promises talent names, so the display name must prune exactly what the token does.
+    name = next(
+        row["name"]
+        for rows in right.described.data["build"]["talents_by_tree"].values()
+        for row in rows["selected"]
+        if row["token"] == token
+    )
+    assert name != token, f"{token!r} has no separate display name to prove the name form with"
+    by_name = run(
+        "simc", "describe-build", "--profile-path", str(right.path), "--apl-path", str(checkout.apl), "--disable", name
+    )
+    assert _dead_lines(by_name.data) == _dead_lines(disabled.data), by_name.describe()
+
+    # A value that names no talent of the class is a usage error, never a silent no-op.
+    unknown = run(
+        "simc", "describe-build", "--profile-path", str(right.path), "--apl-path", str(checkout.apl),
+        "--disable", "not_a_talent_of_this_class",
+        expect=EXIT_USAGE, error_code="unknown_talent",
+    )
+    assert unknown.payload["error"]["details"]["unknown_talents"] == ["not_a_talent_of_this_class"], unknown.describe()
+
+    # The left build does not have that talent, so enabling it must revive the branch it gates.
+    enabled = run(
+        "simc", "describe-build", "--profile-path", str(left.path), "--apl-path", str(checkout.apl), "--enable", token
+    )
+    assert token not in _talent_condition_tokens(enabled.data["single_target"]["inactive_talent_branches"]), enabled.describe()
+    assert _dead_lines(enabled.data) < _dead_lines(left.described.data), enabled.describe()
+
+
+def test_build_file_input_reproduces_the_profile_it_was_generated_from(require, checkout: Checkout, out_dir: Path) -> None:
+    """``build-harness --out`` then ``decode-build --build-file`` must land on the same build."""
+    require("simc")
+    harness_path = out_dir / "build-file.simc"
+    run("simc", "build-harness", "--profile-path", str(checkout.profile), "--out", str(harness_path))
+
+    from_profile = run("simc", "decode-build", "--profile-path", str(checkout.profile))
+    from_file = run("simc", "decode-build", "--build-file", str(harness_path))
+    assert from_file.data["build_spec"]["talents"] == checkout.talents, from_file.describe()
+    assert from_file.data["decoded"]["enabled_talents"] == from_profile.data["decoded"]["enabled_talents"]
+    assert from_file.data["decoded"]["hero_tree"] == from_profile.data["decoded"]["hero_tree"]
+
+
+def test_describe_build_covers_talents_priority_and_the_aoe_delta(require, checkout: Checkout) -> None:
+    require("simc")
+    result = run(
+        "simc",
+        "describe-build",
+        "--profile-path",
+        str(checkout.profile),
+        "--apl-path",
+        str(checkout.apl),
+        "--targets",
+        "1",
+        "--aoe-targets",
+        "5",
+        "--priority-limit",
+        "6",
+    )
+    data = result.data
+    assert data["build_spec"]["talents"] == checkout.talents
+    assert data["identity"]["actor_class"] == ACTOR_CLASS
+    assert data["apl"]["path"] == str(checkout.apl)
+    for tree in ("class", "spec", "hero"):
+        assert data["build"]["talents_by_tree"][tree]["selected"], result.describe()
+
+    single, multi = data["single_target"], data["multi_target"]
+    assert single["targets"] == 1
+    assert multi["targets"] == 5
+    for view in (single, multi):
+        assert view["active_priority"], result.describe()
+        assert len(view["active_priority"]) <= 6
+        assert view["active_action_names"]
+        assert all(row["action"] and row["status"] for row in view["active_priority"])
+    comparison = data["comparison"]
+    assert comparison["primary_targets"] == 1
+    assert comparison["aoe_targets"] == 5
+    # The windwalker APL splits single-target and multitarget lists, so the views must differ.
+    assert set(comparison["new_active_actions_in_aoe"]) | set(comparison["missing_active_actions_in_aoe"]), result.describe()
+
+
+def test_compare_builds_diffs_two_real_talent_strings(require, checkout: Checkout) -> None:
+    require("simc")
+    other_profiles = sorted(path for path in (checkout.root / "profiles").rglob("*Monk_Windwalker*.simc") if path != checkout.profile)
+    assert other_profiles, "expected a second windwalker profile to diff against"
+    other = run("simc", "inspect", str(other_profiles[0]))
+    other_talents = other.data["target"]["build_spec"]["talents"]
+    assert other_talents and other_talents != checkout.talents
+
+    result = run(
+        "simc",
+        "compare-builds",
+        "--base",
+        checkout.talents,
+        "--other",
+        other_talents,
+        "--actor-class",
+        ACTOR_CLASS,
+        "--spec",
+        SPEC,
+    )
+    assert result.data["base"]["actor_class"] == ACTOR_CLASS
+    assert result.data["base"]["enabled_talents"]
+    assert result.data["trees_compared"] == ["class", "spec", "hero"]
+    comparison = result.data["comparisons"][0]
+    assert comparison["input"] == other_talents
+    assert comparison["has_differences"] is True
+    changed_trees = [tree for tree, diff in comparison["trees"].items() if diff["has_differences"]]
+    assert changed_trees, result.describe()
+    for tree in changed_trees:
+        diff = comparison["trees"][tree]
+        assert diff["added"] or diff["removed"] or diff["changed"]
+        for row in [*diff["added"], *diff["removed"]]:
+            assert row["entry"] > 0 and row["name"]
+
+    # --tree narrows the diff to named trees; a tree that does not exist is the caller's mistake, not
+    # a comparison with no differences in it.
+    base_args = ("compare-builds", "--base", checkout.talents, "--other", other_talents, "--actor-class", ACTOR_CLASS, "--spec", SPEC)
+    narrowed = run("simc", *base_args, "--tree", "hero")
+    assert narrowed.data["trees_compared"] == ["hero"], narrowed.describe()
+    assert set(narrowed.data["comparisons"][0]["trees"]) == {"hero"}, narrowed.describe()
+    bogus = run("simc", *base_args, "--tree", "class", "--tree", "bogus", expect=EXIT_USAGE, error_code="invalid_argument")
+    assert "bogus" in bogus.payload["error"]["message"], bogus.describe()
+
+
+# Two specs whose profiles the checkout ships: the journey spec, plus a caster with more than one
+# hero tree, because a tree-routing bug in modify-build only shows on a build that has one.
+MODIFY_BUILD_SPECS = ((ACTOR_CLASS, SPEC), ("priest", "shadow"))
+
+
+def _spec_profile(checkout: Checkout, actor_class: str, spec: str) -> Path:
+    stem = f"*_{actor_class.title()}_{spec.title()}.simc"
+    profiles = sorted(checkout.profile.parent.glob(stem))
+    assert profiles, f"{checkout.profile.parent} ships no {stem} profile"
+    return profiles[0]
+
+
+@pytest.mark.parametrize(("actor_class", "spec"), MODIFY_BUILD_SPECS)
+def test_modify_build_removes_a_talent_and_re_encodes_it(
+    require, checkout: Checkout, actor_class: str, spec: str
+) -> None:
+    """Round trip: decode a shipped build, drop one class talent, confirm only that talent moved.
+
+    The re-encoded string is decoded again, so this fails if modify-build routes the edit into the
+    wrong tree or loses anything on the way back out — the whole point of the command.
+    """
+    require("simc")
+    talents = _profile_talents(_spec_profile(checkout, actor_class, spec))
+    build = ("--actor-class", actor_class, "--spec", spec)
+    decoded = run("simc", "decode-build", "--talents", talents, *build)
+    removable = decoded.data["decoded"]["talents_by_tree"]["class"][-1]
+
+    result = run("simc", "modify-build", "--talents", talents, "--remove", removable["name"], *build)
+    assert result.data["base"]["input"] == talents
+    assert result.data["modifications"] == [f"remove:{removable['name']}"]
+    encoded = result.data["result"]["talents_export"]
+    assert encoded and encoded != talents
+    assert result.data["result"]["wowhead_url"].endswith(encoded)
+    diff = result.data["result"]["diff_from_base"]
+    # A tiered node is one row per entry, so removing it by name can remove several rows of that name.
+    assert {row["name"] for row in diff["class"]["removed"]} == {removable["name"]}
+    assert diff["class"]["added"] == []
+    assert diff["spec"]["has_differences"] is False
+    assert diff["hero"]["has_differences"] is False
+
+    # The Wowhead link modify-build hands back is itself a build reference simc reads.
+    redecoded = run("simc", "decode-build", "--talents", result.data["result"]["wowhead_url"], *build)
+    base_tokens = set(decoded.data["decoded"]["enabled_talents"])
+    assert set(redecoded.data["decoded"]["enabled_talents"]) == base_tokens - {removable["token"]}
+    assert redecoded.data["decoded"]["hero_tree"] == decoded.data["decoded"]["hero_tree"]
+
+
+def test_modify_build_with_a_no_op_edit_returns_the_same_build(require, checkout: Checkout) -> None:
+    """Re-adding a talent at the rank it already has must re-encode to the identical export string.
+
+    This is the round trip with the edit subtracted out: any difference is loss in the decode or
+    encode, not the edit the caller asked for.
+    """
+    require("simc")
+    build = ("--actor-class", ACTOR_CLASS, "--spec", SPEC)
+    decoded = run("simc", "decode-build", "--talents", checkout.talents, *build)
+    class_rows = decoded.data["decoded"]["talents_by_tree"]["class"]
+    # A name held by one row only: a tiered node's entries share a name, so `name:rank` would be ambiguous.
+    unchanged = [talent for talent in class_rows if [row["name"] for row in class_rows].count(talent["name"]) == 1][-1]
+
+    # Class and spec are spelled the way players write them; the command must read them case-insensitively.
+    result = run(
+        "simc", "modify-build", "--talents", checkout.talents, "--add", f"{unchanged['name']}:{unchanged['rank']}",
+        "--actor-class", ACTOR_CLASS.title(), "--spec", SPEC.title(),
+    )
+    assert (result.data["base"]["actor_class"], result.data["base"]["spec"]) == (ACTOR_CLASS, SPEC), result.describe()
+    assert result.data["modifications"] == [f"add:{unchanged['name']}:{unchanged['rank']}"]
+    assert result.data["result"]["talents_export"] == checkout.talents, result.describe()
+    assert all(tree["has_differences"] is False for tree in result.data["result"]["diff_from_base"].values()), result.describe()
+
+
+def _taken(decoded: Result, tree: str) -> set[tuple[str, int]]:
+    return {(row["token"], row["rank"]) for row in decoded.data["decoded"]["talents_by_tree"][tree]}
+
+
+def test_modify_build_swaps_in_another_builds_spec_tree(require, checkout: Checkout) -> None:
+    """``--swap-spec-tree-from`` takes the whole spec tree from another build and nothing else.
+
+    The export is decoded again and compared tree by tree with the two shipped builds it was
+    assembled from, so a swap that took the wrong tree, or dropped or kept a talent, fails here.
+    """
+    require("simc")
+    left, right = _hero_variants(checkout)
+    build = ("--actor-class", ACTOR_CLASS, "--spec", SPEC)
+    base_talents, source_talents = _profile_talents(left.path), _profile_talents(right.path)
+    base = run("simc", "decode-build", "--talents", base_talents, *build)
+    source = run("simc", "decode-build", "--talents", source_talents, *build)
+    assert _taken(base, "spec") != _taken(source, "spec"), f"{left.path.name} and {right.path.name} share a spec tree"
+
+    result = run("simc", "modify-build", "--talents", base_talents, "--swap-spec-tree-from", source_talents, *build)
+    assert result.data["modifications"] == ["swap_spec_tree"], result.describe()
+    diff = result.data["result"]["diff_from_base"]
+    assert (diff["class"]["has_differences"], diff["spec"]["has_differences"], diff["hero"]["has_differences"]) == (
+        False, True, False
+    ), result.describe()
+
+    swapped = run("simc", "decode-build", "--talents", result.data["result"]["talents_export"], *build)
+    assert _taken(swapped, "spec") == _taken(source, "spec"), swapped.describe()
+    assert _taken(swapped, "class") == _taken(base, "class"), swapped.describe()
+    assert _taken(swapped, "hero") == _taken(base, "hero"), swapped.describe()
+    assert swapped.data["decoded"]["hero_tree"] == base.data["decoded"]["hero_tree"], swapped.describe()
+
+
+@dataclass(frozen=True)
+class TraitRow:
+    entry: int
+    node: int
+    max_rank: int
+    name: str
+    choice: bool
+
+
+def _class_tree_rows(checkout: Checkout) -> list[TraitRow]:
+    """The journey spec's class-tree talents, read straight out of SimC's generated trait table."""
+    trait_file = checkout.root / "engine" / "dbc" / "generated" / "trait_data.inc"
+    rows: list[TraitRow] = []
+    for line in trait_file.read_text().splitlines():
+        match = TRAIT_ROW_FULL_RE.search(line)
+        if match is None:
+            continue
+        tree_index, class_id, entry, node, max_rank, name, specs, node_type = match.groups()
+        spec_ids = {int(value) for value in specs.split(",") if int(value)}
+        if (int(tree_index), int(class_id)) != (TREE_INDEX["class"], CLASS_ID[ACTOR_CLASS]):
+            continue
+        if spec_ids and SPEC_ID[SPEC] not in spec_ids:
+            continue
+        rows.append(TraitRow(int(entry), int(node), int(max_rank), name, int(node_type) == NODE_CHOICE))
+    return rows
+
+
+def test_modify_build_reports_verified_only_for_the_build_that_was_asked_for(require, checkout: Checkout) -> None:
+    """``verified: true`` means every requested edit is in the export at the requested rank.
+
+    It once said so for an add SimC dropped: a talent whose choice node the build already fills,
+    or a rank above the talent's maximum. The expected talents come from SimC's trait table and the
+    export is decoded again, so neither side of the check is the command's own account of itself.
+    """
+    require("simc")
+    build = ("--actor-class", ACTOR_CLASS, "--spec", SPEC)
+    decoded = run("simc", "decode-build", "--talents", checkout.talents, *build)
+    taken = {row["entry"] for row in decoded.data["decoded"]["talents_by_tree"]["class"]}
+    rows = _class_tree_rows(checkout)
+    node_of = {row.entry: row.node for row in rows}
+    names = [row.name for row in rows]
+    unique = [row for row in rows if names.count(row.name) == 1]
+
+    # A talent on a node the build leaves empty lands, and nothing else moves.
+    absent = next(row for row in unique if not row.choice and row.max_rank == 1 and row.node not in {node_of.get(e) for e in taken})
+    added = run("simc", "modify-build", "--talents", checkout.talents, "--add", f"{absent.entry}:1", *build)
+    assert added.data["result"]["verified"] is True, added.describe()
+    assert [row["name"] for row in added.data["result"]["diff_from_base"]["class"]["added"]] == [absent.name], added.describe()
+    redecoded = run("simc", "decode-build", "--talents", added.data["result"]["talents_export"], *build)
+    assert {row["entry"] for row in redecoded.data["decoded"]["talents_by_tree"]["class"]} == taken | {absent.entry}, redecoded.describe()
+
+    # A rank above the talent's maximum cannot be encoded; SimC clamps it, so the export is refused.
+    over = run(
+        "simc", "modify-build", "--talents", checkout.talents, "--add", f"{absent.entry}:2", *build,
+        expect=EXIT_GENERIC, error_code="encode_mismatch",
+    )
+    assert over.payload["error"]["details"]["unapplied_edits"] == [
+        {"tree": "class", "talent": str(absent.entry), "requested_rank": 2, "export_rank": 1}
+    ], over.describe()
+
+    # The other half of a choice node the build fills is refused with the --remove that makes it a swap.
+    held, partner = next(
+        (held, partner)
+        for held in rows
+        if held.choice and held.entry in taken
+        for partner in unique
+        if partner.node == held.node and partner.entry != held.entry
+    )
+    conflict = run(
+        "simc", "modify-build", "--talents", checkout.talents, "--add", f"{partner.entry}:1", *build,
+        expect=EXIT_USAGE, error_code="invalid_argument",
+    )
+    assert f"--remove {held.entry}" in conflict.payload["error"]["message"], conflict.describe()
+    swapped = run(
+        "simc", "modify-build", "--talents", checkout.talents, "--add", f"{partner.entry}:1", "--remove", str(held.entry), *build
+    )
+    assert swapped.data["result"]["verified"] is True, swapped.describe()
+    swapped_entries = run("simc", "decode-build", "--talents", swapped.data["result"]["talents_export"], *build)
+    assert {row["entry"] for row in swapped_entries.data["decoded"]["talents_by_tree"]["class"]} == (taken - {held.entry}) | {
+        partner.entry
+    }, swapped_entries.describe()
+
+
+# --- APL analysis ---
+
+
+def test_apl_structure_journey(require, checkout: Checkout) -> None:
+    require("simc")
+    lists = run("simc", "apl-lists", str(checkout.apl))
+    assert lists.data["apl"]["path"] == str(checkout.apl)
+    assert lists.data["apl"]["list_count"] > 1
+    assert lists.data["apl"]["entry_count"] > 10
+    list_names = {entry["list_name"] for entry in lists.data["lists"]}
+    assert "default" in list_names
+    default_list = next(entry for entry in lists.data["lists"] if entry["list_name"] == "default")
+    assert default_list["count"] == len(default_list["entries"])
+    assert all(entry["action"] and entry["raw"] for entry in default_list["entries"])
+
+    single = run("simc", "apl-lists", str(checkout.apl), "--list", "default")
+    assert [entry["list_name"] for entry in single.data["lists"]] == ["default"]
+
+    graph = run("simc", "apl-graph", str(checkout.apl))
+    assert graph.data["graph"]["format"] == "mermaid"
+    text = graph.data["graph"]["text"]
+    assert text.startswith("flowchart TD")
+    assert "default" in text and "-->" in text
+    assert graph.data["apl"]["list_count"] == lists.data["apl"]["list_count"]
+
+    talents = run("simc", "apl-talents", str(checkout.apl))
+    assert talents.data["count"] == len(talents.data["talents"])
+    assert talents.data["count"] > 0
+    assert all(row["token"] and row["lines"] for row in talents.data["talents"])
+
+
+def test_find_and_trace_an_action_across_the_checkout(require, checkout: Checkout) -> None:
+    require("simc")
+    action = "rising_sun_kick"
+    found = run("simc", "find-action", action, "--class", ACTOR_CLASS, "--limit", "5")
+    assert found.data["action"] == action
+    assert found.data["class_filter"] == ACTOR_CLASS
+    assert found.data["count"] > 0
+    populated = {name: bucket for name, bucket in found.data["buckets"].items() if bucket["count"]}
+    assert populated, found.describe()
+    for bucket in populated.values():
+        assert bucket["items"]
+        assert all(item["path"] and item["line_no"] > 0 for item in bucket["items"])
+    # --limit keeps at most five of each bucket's hits and says when it cut; one bucket must be cut to
+    # prove the flag bites. Hits across files come back in ripgrep's thread order, so which five is not pinned.
+    wide = run("simc", "find-action", action, "--class", ACTOR_CLASS, "--limit", "200")
+    for name, bucket in found.data["buckets"].items():
+        every_hit = wide.data["buckets"][name]["items"]
+        assert bucket["count"] == len(every_hit), wide.describe()
+        assert len(bucket["items"]) == min(5, len(every_hit)), found.describe()
+        assert all(item in every_hit for item in bucket["items"]), found.describe()
+        assert bucket["truncated"] is (len(every_hit) > 5), found.describe()
+    assert any(bucket["truncated"] for bucket in found.data["buckets"].values()), wide.describe()
+
+    traced = run("simc", "trace-action", str(checkout.apl), action, "--class", ACTOR_CLASS, "--limit", "3")
+    assert traced.data["action"] == action
+    assert traced.data["apl"]["path"] == str(checkout.apl)
+    apl_hits = traced.data["apl_hits"]
+    assert apl_hits["count"] == len(apl_hits["items"])
+    assert apl_hits["count"] > 0
+    assert all(hit["action"] == action and hit["list_name"] for hit in apl_hits["items"])
+
+
+def test_exact_build_priority_journey(require, checkout: Checkout) -> None:
+    """priority / opener / inactive-actions / apl-prune all describe the same exact build."""
+    require("simc")
+    build_args = ("--profile-path", str(checkout.profile))
+
+    priority = run("simc", "priority", str(checkout.apl), *build_args, "--limit", "5")
+    assert priority.data["build"]["actor_class"] == ACTOR_CLASS
+    assert priority.data["build"]["enabled_talent_count"] > 20
+    rows = priority.data["priority"]["items"]
+    assert rows and len(rows) <= 5
+    assert priority.data["priority"]["count"] == len(rows)
+    assert all(row["status"] in {"guaranteed", "possible"} for row in rows)
+    assert all(row["action"] and row["text"] for row in rows)
+    assert priority.data["priority"]["focus_list"] == "default"
+
+    opener = run("simc", "opener", str(checkout.apl), *build_args, "--limit", "5")
+    assert opener.data["opener"]["kind"] == "static_priority_preview"
+    assert [row["action"] for row in opener.data["opener"]["items"]] == [row["action"] for row in rows]
+    assert opener.data["opener"]["caveat"]
+
+    inactive = run("simc", "inactive-actions", str(checkout.apl), *build_args, "--limit", "10")
+    assert inactive.data["inactive_actions"]["talent_only"] is True
+    inactive_items = inactive.data["inactive_actions"]["items"]
+    # An empty list would make every check below true whatever the product does.
+    assert inactive_items, f"this build has no talent-dead action to report\n{inactive.describe()}"
+    assert inactive.data["inactive_actions"]["count"] == len(inactive_items)
+    assert all("talent." in row["reason"] for row in inactive_items)
+    # Everything the priority view returned is active, so it cannot also be inactive.
+    talent_dead_lines = {row["line_no"] for row in inactive_items}
+    assert not {row["line_no"] for row in rows} & talent_dead_lines
+
+    all_dead = run("simc", "inactive-actions", str(checkout.apl), *build_args, "--all-dead", "--limit", "20")
+    assert all_dead.data["inactive_actions"]["talent_only"] is False
+    assert {row["line_no"] for row in all_dead.data["inactive_actions"]["items"]} >= talent_dead_lines, all_dead.describe()
+
+    pruned = run("simc", "apl-prune", str(checkout.apl), *build_args, "--list", "default")
+    assert pruned.data["show"] == "all"
+    default_list = next(entry for entry in pruned.data["lists"] if entry["list_name"] == "default")
+    states = {entry["state"] for entry in default_list["items"]}
+    assert states <= {"eligible", "dead", "unknown"}
+    assert "eligible" in states
+    assert default_list["count"] == len(default_list["items"])
+
+    eligible_only = run("simc", "apl-prune", str(checkout.apl), *build_args, "--list", "default", "--show", "eligible")
+    eligible_items = next(entry for entry in eligible_only.data["lists"] if entry["list_name"] == "default")["items"]
+    assert eligible_items
+    assert {entry["state"] for entry in eligible_items} == {"eligible"}
+
+
+def test_branch_and_intent_journey(require, checkout: Checkout) -> None:
+    """trace / intent / intent-explain must all describe the *same* pruned build, not just return rows.
+
+    Each of the three is checked against a view that was computed independently: the trace's own
+    start-list rows against ``priority``, the descent against the dispatches the trace itself kept
+    alive, and the two intent surfaces against each other and against ``priority``'s statuses.
+    """
+    require("simc")
+    build_args = ("--profile-path", str(checkout.profile))
+    intent_limit = 6
+
+    trace = run("simc", "apl-branch-trace", str(checkout.apl), *build_args, "--max-depth", "3")
+    assert trace.data["summary"]["start_list"] == "default"
+    priority = run("simc", "priority", str(checkout.apl), *build_args, "--limit", str(PRIORITY_SCAN_LIMIT))
+
+    items = priority.data["priority"]["items"]
+    assert len(items) < PRIORITY_SCAN_LIMIT, f"priority truncated at {PRIORITY_SCAN_LIMIT}\n{priority.describe()}"
+    start_rows = _trace_rows_at_depth(trace.data, 1)
+    assert [(row.line_no, row.status) for row in start_rows if row.status != "dead"] == [
+        (row["line_no"], row["status"]) for row in items
+    ], trace.describe()
+    dead_lines = {row.line_no for row in start_rows if row.status == "dead"}
+    assert dead_lines, f"this build prunes nothing, so the trace's dead marking is unexercised\n{trace.describe()}"
+    assert {row["line_no"] for row in priority.data["priority"]["inactive_talent_branches"]} <= dead_lines, trace.describe()
+
+    # The walk descends into the lists it kept and never into the ones it killed.
+    entered = _list_headers(_trace_rows_at_depth(trace.data, 2))
+    assert _dispatch_targets(start_rows, dead=False) == entered, trace.describe()
+    assert not _dispatch_targets(start_rows, dead=True) & entered, trace.describe()
+
+    intent = run("simc", "apl-intent", str(checkout.apl), *build_args, "--limit", str(intent_limit))
+    assert intent.data["focus_list"] == "default"
+    lines = intent.data["intent"]
+    assert 0 < len(lines) <= intent_limit, intent.describe()
+    assert {row["status"] for row in items} <= set(INTENT_PREFIX_BY_STATUS), priority.describe()
+    # Each line restates one priority row: "always" for a guaranteed action, "situational" for a
+    # conditional one, in priority order, with consecutive repeats of a row collapsed.
+    expected = _collapse_repeats(
+        (INTENT_PREFIX_BY_STATUS[row["status"]], row["action"], row["target_list"]) for row in items
+    )[: len(lines)]
+    assert [line.split(":", 1)[0] for line in lines] == [prefix for prefix, _, _ in expected], intent.describe()
+    mismatched = [
+        (line, row)
+        for line, row in zip(lines, expected, strict=True)
+        if not _intent_restates_priority_row(line, row[1], row[2])
+    ]
+    assert not mismatched, f"intent lines do not restate their priority rows: {mismatched}\n{intent.describe()}"
+
+    explained = run("simc", "apl-intent-explain", str(checkout.apl), *build_args, "--limit", str(intent_limit))
+    buckets = explained.data["explained_intent"]
+    # explain buckets the same lines; it must partition them, not invent or drop any.
+    assert sorted(line for bucket in buckets.values() for line in bucket) == sorted(lines), explained.describe()
+
+    compared = run("simc", "apl-branch-compare", str(checkout.apl), *build_args, "--left-targets", "1", "--right-targets", "5")
+    comparison = compared.data["comparison"]
+    assert comparison["start_list"] == "default"
+    assert comparison["left_focus_preview"] and comparison["right_focus_preview"]
+    # Single-target versus five targets must flip at least one call_action_list decision.
+    assert comparison["focus_changes"] or comparison["decision_changes"], compared.describe()
+
+
+def test_apl_branch_compare_reads_a_genuinely_different_right_hand_build(require, checkout: Checkout) -> None:
+    """The ``--right-*`` build inputs are the whole right side of the comparison; prove they land.
+
+    Left is a shipped profile, right is a second shipped build of the same spec with a different
+    hero tree, supplied only through ``--right-talents``/``--right-actor-class``/``--right-spec``.
+    Same APL, same target count: every reported change has to come from the right-hand build.
+    """
+    require("simc")
+    left, right = _hero_variants(checkout)
+    right_talents = _profile_talents(right.path)
+
+    compared = run(
+        "simc",
+        "apl-branch-compare",
+        str(checkout.apl),
+        "--profile-path",
+        str(left.path),
+        "--right-talents",
+        right_talents,
+        "--right-actor-class",
+        ACTOR_CLASS,
+        "--right-spec",
+        SPEC,
+    )
+    assert compared.data["left"]["targets"] == compared.data["right"]["targets"], compared.describe()
+    assert "command-line build options" in compared.data["right"]["source_notes"], compared.describe()
+    comparison = compared.data["comparison"]
+    changes = comparison["focus_changes"] + comparison["decision_changes"]
+    assert changes, "two builds with different hero trees compared identical"
+    # Every change must be explained by a talent exactly one of the two builds took.
+    blockers = {match.group(1) for line in changes for match in TALENT_CONDITION_RE.finditer(line)}
+    assert blockers, changes
+    left_talents = set(left.described.data["build"]["enabled_talents"])
+    right_taken = set(run("simc", "decode-build", "--talents", right_talents, "--actor-class", ACTOR_CLASS, "--spec", SPEC)
+                      .data["decoded"]["enabled_talents"])
+    assert blockers <= left_talents ^ right_taken, sorted(blockers)
+
+    identical = run(
+        "simc",
+        "apl-branch-compare",
+        str(checkout.apl),
+        "--profile-path",
+        str(left.path),
+        "--right-talents",
+        _profile_talents(left.path),
+        "--right-actor-class",
+        ACTOR_CLASS,
+        "--right-spec",
+        SPEC,
+    )
+    assert identical.data["comparison"]["focus_changes"] == [], identical.describe()
+    assert identical.data["comparison"]["decision_changes"] == [], identical.describe()
+
+
+def test_apl_branch_compare_takes_the_right_build_from_every_right_side_source(require, checkout: Checkout) -> None:
+    """Each right-hand build source must replace the left build whole, whatever the left was given as.
+
+    A left ``--build-file`` or ``--talents`` once outranked a ``--right-profile-path`` in the merge, so
+    the command compared the left build with itself and answered ``ok: true`` with no changes. The
+    oracle is the ``--right-talents`` comparison, which the journey above ties to the talents that
+    differ: the same two builds must give the same changes through every other pair of sources.
+    """
+    require("simc")
+    left, right = _hero_variants(checkout)
+    left_talents, right_talents = _profile_talents(left.path), _profile_talents(right.path)
+    spec_args = ("--actor-class", ACTOR_CLASS, "--spec", SPEC)
+
+    def changes(*build_args: str) -> tuple[list[str], list[str]]:
+        comparison = run("simc", "apl-branch-compare", str(checkout.apl), *build_args).data["comparison"]
+        return comparison["focus_changes"], comparison["decision_changes"]
+
+    expected = changes(
+        "--profile-path", str(left.path), "--right-talents", right_talents,
+        "--right-actor-class", ACTOR_CLASS, "--right-spec", SPEC,
+    )
+    assert expected[0] or expected[1], "two builds with different hero trees compared identical"
+    for build_args in (
+        ("--build-file", str(left.path), "--right-profile-path", str(right.path)),
+        ("--talents", left_talents, *spec_args, "--right-profile-path", str(right.path)),
+        ("--talents", left_talents, *spec_args, "--right-build-file", str(right.path)),
+        ("--build-file", str(left.path), "--right-build-text", right.path.read_text(encoding="utf-8")),
+    ):
+        assert changes(*build_args) == expected, f"left {build_args[0]} with right {build_args[-2]}"
+
+
+# --- simulation run and the analysis chain that reads its output ---
+
+
+def test_sim_run_and_log_analysis_chain(require, checkout: Checkout, out_dir: Path) -> None:
+    """A short sim, then the commands that read its JSON report and combat log."""
+    require("simc")
+    json_out = out_dir / "sim.json"
+    simmed = run(
+        "simc",
+        "sim",
+        str(checkout.profile),
+        "--iterations",
+        "50",
+        "--threads",
+        "1",
+        "--max-time",
+        "60",
+        "--json-out",
+        str(json_out),
+        timeout=300,
+    )
+    data = simmed.data
+    assert data["status"] == "completed"
+    assert data["input_source"] == "file"
+    assert data["profile_path"] == str(checkout.profile)
+    assert data["json_report_path"] == str(json_out)
+    assert json_out.is_file() and json_out.stat().st_size > 0
+    assert data["player"]["spec"].lower().startswith(SPEC)
+    assert data["run_settings"]["iterations_requested"] == 50
+    assert data["run_settings"]["threads"] == 1
+    assert data["run_settings"]["max_time"] == 60
+    assert data["metrics"]["dps"] > 0
+    assert data["runtime"]["elapsed_time_seconds"] >= 0
+    assert data["command"][0] == str(checkout.root / "build" / "simc")
+    assert str(checkout.profile) in data["command"]
+    assert "iterations=50" in data["command"]
+
+    inline = run(
+        "simc",
+        "sim",
+        "--profile-text",
+        checkout.profile.read_text(),
+        "--iterations",
+        "20",
+        "--threads",
+        "1",
+        "--max-time",
+        "30",
+        timeout=300,
+    )
+    assert inline.data["input_source"] == "profile_text"
+    assert inline.data["metrics"]["dps"] > 0
+
+    combat_log = out_dir / "combat.txt"
+    ran = run(
+        "simc",
+        "run",
+        str(checkout.profile),
+        "--arg",
+        "iterations=1",
+        "--arg",
+        "threads=1",
+        "--arg",
+        "max_time=60",
+        "--arg",
+        "log=1",
+        "--arg",
+        f"output={combat_log}",
+        timeout=300,
+    )
+    assert ran.data["status"] == "completed"
+    assert ran.data["profile_path"] == str(checkout.profile)
+    assert ran.data["command"][0] == str(checkout.root / "build" / "simc")
+    assert ran.data["command"][1] == str(checkout.profile)
+    assert "log=1" in ran.data["command"]
+    assert combat_log.is_file()
+
+    logged = run("simc", "log-actions", str(combat_log), "tiger_palm", "rising_sun_kick")
+    assert logged.data["log_path"] == str(combat_log)
+    assert logged.data["actions"] == ["tiger_palm", "rising_sun_kick"]
+    assert logged.data["count"] == 2
+    hits = {hit["action"]: hit for hit in logged.data["hits"]}
+    assert hits["tiger_palm"]["performed_at"] is not None
+    assert hits["tiger_palm"]["scheduled_at"] is not None
+    assert all(hit["performed_at"] >= hit["scheduled_at"] for hit in logged.data["hits"] if hit["performed_at"] is not None)
+
+    first_cast = run("simc", "first-cast", str(checkout.profile), "tiger_palm", "--seeds", "2", "--max-time", "30", timeout=300)
+    assert first_cast.data["action"] == "tiger_palm"
+    assert first_cast.data["seeds"] == 2
+    assert first_cast.data["summary"]["samples"] == 2
+    assert first_cast.data["summary"]["found"] == 2
+    assert first_cast.data["summary"]["min"] <= first_cast.data["summary"]["avg"] <= first_cast.data["summary"]["max"]
+    assert [row["seed"] for row in first_cast.data["results"]] == [1, 2]
+
+
+def test_analysis_packet_bundles_branch_intent_and_sampled_timing(require, checkout: Checkout) -> None:
+    require("simc")
+    result = run(
+        "simc",
+        "analysis-packet",
+        str(checkout.apl),
+        "--profile-path",
+        str(checkout.profile),
+        "--sim-profile",
+        str(checkout.profile),
+        "--first-cast-action",
+        "tiger_palm",
+        "--seeds",
+        "2",
+        "--max-time",
+        "30",
+        "--intent-limit",
+        "4",
+        timeout=300,
+    )
+    packet = result.data["packet"]
+    assert result.data["build"]["actor_class"] == ACTOR_CLASS
+    assert packet["start_list"] == "default"
+    # The certainty has to match the branch summary it was derived from, not just be one of the
+    # three legal words.
+    assert packet["dispatch_certainty"] == ("guaranteed" if packet["branch_summary"]["guaranteed_dispatch"] else "unresolved")
+    assert packet["intent_lines"] and len(packet["intent_lines"]) <= 4
+    assert packet["next_steps"], result.describe()
+    assert isinstance(packet["explained_intent"], dict)
+    assert isinstance(packet["branch_summary"], dict)
+    first_cast = packet["first_casts"]
+    assert len(first_cast) == 1
+    assert first_cast[0]["action"] == "tiger_palm"
+    assert first_cast[0]["samples"] == 2
+    assert first_cast[0]["found"] == 2
+    assert first_cast[0]["min_time"] <= first_cast[0]["max_time"]
+
+
+def test_harness_validate_compare_and_report_workflow(require, checkout: Checkout, out_dir: Path) -> None:
+    """The documented comparison workflow, end to end, without touching the checkout."""
+    require("simc")
+    harness_path = out_dir / "harness.simc"
+    harness = run("simc", "build-harness", "--profile-path", str(checkout.profile), "--out", str(harness_path), "--line", "role=attack")
+    assert harness.data["path"] == str(harness_path)
+    assert harness.data["build_spec"]["talents"] == checkout.talents
+    assert harness.data["extra_lines"] == ["role=attack"]
+    harness_text = harness_path.read_text()
+    assert f"talents={checkout.talents}" in harness_text
+    assert "load_default_gear=1" in harness_text
+    assert "role=attack" in harness_text
+    assert "actions" not in harness_text
+
+    validated = run("simc", "validate-apl", str(harness_path), str(checkout.apl), "--label", "base", "--out-dir", str(out_dir), timeout=300)
+    assert validated.data["valid"] is True
+    assert validated.data["returncode"] == 0
+    assert validated.data["label"] == "base"
+    generated = Path(validated.data["profile_path"])
+    assert generated.is_file()
+    assert "actions" in generated.read_text()
+
+    report_path = out_dir / "report.json"
+    compared = run(
+        "simc",
+        "compare-apls",
+        str(harness_path),
+        "--base-apl",
+        str(checkout.apl),
+        "--variant",
+        f"assisted={checkout.assisted_apl}",
+        "--iterations",
+        "50",
+        "--threads",
+        "1",
+        "--out-dir",
+        str(out_dir),
+        "--report-out",
+        str(report_path),
+        timeout=300,
+    )
+    assert compared.data["iterations"] == 50
+    assert compared.data["threads"] == 1
+    assert {row["label"] for row in compared.data["validations"]} == {"base", "assisted"}
+    assert all(row["valid"] is True for row in compared.data["validations"])
+    assert compared.data["base"]["label"] == "base"
+    assert compared.data["base"]["dps"] > 0
+    assert compared.data["base"]["action_counts"]
+    labels = [row["label"] for row in compared.data["ranking"]]
+    assert set(labels) == {"base", "assisted"}
+    dps_values = [row["dps"] for row in compared.data["ranking"]]
+    assert dps_values == sorted(dps_values, reverse=True)
+    assert compared.data["report_path"] == str(report_path)
+    assert report_path.is_file()
+
+    summary = run("simc", "variant-report", str(report_path))
+    assert summary.data["report_path"] == str(report_path)
+    assert summary.data["base_label"] == "base"
+    assert summary.data["best_label"] == labels[0]
+    assert summary.data["best_dps"] == dps_values[0]
+    assert {row["label"] for row in summary.data["ranking"]} == {"base", "assisted"}
+    base_row = next(row for row in summary.data["ranking"] if row["label"] == "base")
+    assert base_row["delta_vs_base"] == 0.0
+    assert summary.data["comparisons"][0]["top_action_deltas"]
+
+
+# --- talent transport ---
+
+
+def test_validate_talent_transport_round_trips_raw_rows(require, checkout: Checkout) -> None:
+    """Raw ``entry:node:rank`` rows (the shape a log packet carries) become validated SimC forms."""
+    require("simc")
+    decoded = run("simc", "decode-build", "--talents", checkout.talents, "--actor-class", ACTOR_CLASS, "--spec", SPEC)
+    rows = _talent_rows_from_build(checkout, decoded.data["decoded"])
+    assert len(rows) > 30, "expected the decoded build to yield raw transport rows"
+
+    args = ["validate-talent-transport", "--actor-class", ACTOR_CLASS, "--spec", SPEC]
+    for row in rows:
+        args += ["--talent-row", row]
+    result = run("simc", *args, timeout=300)
+
+    assert result.data["input"]["source"] == "talent_rows"
+    assert result.data["input"]["talent_row_count"] == len(rows)
+    assert result.data["transport_status"] == "validated"
+    split = result.data["transport_forms"]["simc_split_talents"]
+    assert split["class_talents"] and split["spec_talents"] and split["hero_talents"]
+    validation = result.data["validation"]
+    assert validation["status"] == "validated", json.dumps(validation)[:600]
+    assert validation["source"] == "simc_trait_data_round_trip"
+    assert validation["actor_class"] == ACTOR_CLASS
+    assert validation["spec"] == SPEC
+    assert len(validation["resolved_entries"]) == len(rows)
+    assert {entry["tree"] for entry in validation["resolved_entries"]} == {"class", "spec", "hero"}
+    assert all(entry["name"] for entry in validation["resolved_entries"])
+
+    # The validated split talents must decode back into the same talents the rows described.
+    redecoded = run(
+        "simc",
+        "decode-build",
+        "--class-talents",
+        split["class_talents"],
+        "--spec-talents",
+        split["spec_talents"],
+        "--hero-talents",
+        split["hero_talents"],
+        "--actor-class",
+        ACTOR_CLASS,
+        "--spec",
+        SPEC,
+    )
+    expected_tokens = {entry["token"] for entry in validation["resolved_entries"]}
+    assert expected_tokens <= set(redecoded.data["decoded"]["enabled_talents"])
+
+
+def test_validate_talent_transport_rejects_a_malformed_row(require) -> None:
+    require("simc")
+    result = run(
+        "simc",
+        "validate-talent-transport",
+        "--actor-class",
+        ACTOR_CLASS,
+        "--spec",
+        SPEC,
+        "--talent-row",
+        "not-a-row",
+        expect=EXIT_GENERIC,
+        error_code="invalid_talent_row",
+    )
+    assert "entry_id:node_id:rank" in result.payload["error"]["message"]
+
+
+def test_validate_talent_transport_rejects_a_malformed_packet(require, out_dir: Path) -> None:
+    require("simc")
+    packet_path = out_dir / "packet.json"
+    packet_path.write_text('{"kind": "talent_transport_packet"}')
+    result = run(
+        "simc",
+        "validate-talent-transport",
+        "--build-packet",
+        str(packet_path),
+        expect=EXIT_GENERIC,
+        error_code="invalid_build_packet",
+    )
+    assert "transport status" in result.payload["error"]["message"]
+
+
+# --- global flags ---
+
+
+def test_fields_and_compact_shape_the_payload(require, checkout: Checkout) -> None:
+    require("simc")
+    # --fields prunes the envelope itself on success, so this journey reads the raw stdout.
+    filtered = run_raw("simc", "--fields", "data.repo.root,data.status", "doctor")
+    assert filtered.exit_code == 0, filtered.describe()
+    assert json.loads(filtered.stdout) == {"data": {"repo": {"root": str(checkout.root)}, "status": "ready"}}
+
+    strict = run("simc", "--fields", "data.not_a_field", "--fields-strict", "doctor", expect=EXIT_USAGE, error_code="missing_fields")
+    assert strict.payload["error"]["details"]["missing_fields"] == ["data.not_a_field"]
+
+    # A raw APL line is one token another tool reads verbatim, so --compact leaves it whole however long.
+    full = run("simc", "apl-lists", str(checkout.apl), "--list", "default")
+    compact = run("simc", "--compact", "--compact-max-chars", "40", "apl-lists", str(checkout.apl), "--list", "default")
+    assert any(len(entry["raw"]) > 40 for entry in full.data["lists"][0]["entries"]), full.describe()
+    assert compact.data == full.data, compact.describe()
+    assert "compacted_paths" not in compact.payload["provenance"], compact.describe()
+
+    # Prose is cut, and every cut value is named, so a shortened string is never read as the whole one.
+    full_doctor = run("simc", "doctor")
+    compact_doctor = run("simc", "--compact", "--compact-max-chars", "40", "doctor")
+    cut_paths = compact_doctor.payload["provenance"]["compacted_paths"]
+    version_line = full_doctor.data["repo"]["binary"]["version_line"]
+    assert " " in version_line and len(version_line) > 40, full_doctor.describe()
+    assert "data.repo.binary.version_line" in cut_paths, compact_doctor.describe()
+    assert compact_doctor.data["repo"]["binary"]["version_line"] == version_line[:37] + "...", compact_doctor.describe()
+
+
+def test_pretty_and_profile_presets_still_emit_one_envelope(require) -> None:
+    require("simc")
+    agent = run("simc", "--profile", "agent", "doctor")
+    assert "\n" not in agent.stdout.strip()
+    for args in (("--pretty",), ("--profile", "human")):
+        pretty = run("simc", *args, "doctor")
+        assert "\n  " in pretty.stdout, pretty.describe()
+        assert pretty.payload["kind"] == agent.payload["kind"]
+
+
+# --- error journeys ---
+
+
+def test_a_missing_repo_root_fails_with_the_documented_codes(require, out_dir: Path) -> None:
+    require("simc")
+    missing = out_dir / "missing-checkout"
+
+    version = run("simc", "--repo-root", str(missing), "version", expect=EXIT_GENERIC, error_code="missing_binary")
+    assert str(missing / "build" / "simc") in version.payload["error"]["message"]
+
+    synced = run("simc", "--repo-root", str(missing), "sync", expect=EXIT_GENERIC, error_code="missing_repo")
+    assert str(missing) in synced.payload["error"]["message"]
+
+    decoded = run(
+        "simc",
+        "--repo-root",
+        str(missing),
+        "decode-build",
+        "--talents",
+        "CEQ",
+        "--actor-class",
+        ACTOR_CLASS,
+        "--spec",
+        SPEC,
+        expect=EXIT_GENERIC,
+        error_code="identify_failed",
+    )
+    # The class and spec are checked against the checkout's own spec table, which is missing here too.
+    assert "sc_specialization_data.inc" in decoded.payload["error"]["message"], decoded.describe()
+
+    run("simc", "--repo-root", str(missing), "build", expect=EXIT_GENERIC, error_code="missing_build_dir")
+
+
+def test_bad_input_paths_exit_4(require, checkout: Checkout, out_dir: Path) -> None:
+    require("simc")
+    missing = out_dir / "nope.simc"
+    for args in (
+        ("sim", str(missing)),
+        ("run", str(missing)),
+        ("apl-lists", str(missing)),
+        ("apl-graph", str(missing)),
+        ("priority", str(missing)),
+        ("log-actions", str(missing), "tiger_palm"),
+        ("first-cast", str(missing), "tiger_palm"),
+        ("variant-report", str(missing)),
+        ("inspect", str(missing)),
+    ):
+        result = run("simc", *args, expect=EXIT_NOT_FOUND, error_code="not_found")
+        assert str(missing) in result.payload["error"]["message"], result.describe()
+
+    invalid_harness = run(
+        "simc",
+        "validate-apl",
+        str(missing),
+        str(checkout.apl),
+        expect=EXIT_GENERIC,
+        error_code="validate_apl_failed",
+    )
+    assert str(missing) in invalid_harness.payload["error"]["message"]
+
+
+def test_usage_errors_exit_2_with_an_error_envelope(require, checkout: Checkout) -> None:
+    """A rejected invocation still owes the caller the envelope, on stderr, with an error code.
+
+    ``run`` is what enforces that: exit code, empty stdout, one parseable envelope with ``ok: false``
+    and the expected ``error.code``, and no traceback. A Click usage error printed as plain text
+    fails here, which is the regression an exit-code-only check could not see.
+    """
+    require("simc")
+    missing_argument = run("simc", "apl-lists", expect=EXIT_USAGE, error_code="invalid_argument")
+    assert "apl_path" in missing_argument.payload["error"]["message"], missing_argument.describe()
+
+    run("simc", "validate-talent-transport", expect=EXIT_USAGE, error_code="invalid_query")
+    # A link that is not a build is refused instead of being handed to SimC as if it were a hash.
+    not_a_build = run(
+        "simc", "decode-build", "--talents", "https://www.raidbots.com/simbot/report/abc",
+        expect=EXIT_USAGE, error_code="unsupported_build_reference",
+    )
+    assert not_a_build.payload["error"]["details"]["reference_type"] == "url", not_a_build.describe()
+    # A class and spec with no talents is not a build, so there is nothing to decode.
+    run("simc", "decode-build", "--actor-class", ACTOR_CLASS, "--spec", SPEC, expect=EXIT_USAGE, error_code="invalid_query")
+    # A class and spec that do not go together are the caller's mistake, named with the valid specs.
+    mismatched = run(
+        "simc", "decode-build", "--talents", checkout.talents, "--actor-class", "mage", "--spec", "holy",
+        expect=EXIT_USAGE, error_code="invalid_query",
+    )
+    assert "frost" in mismatched.payload["error"]["message"], mismatched.describe()
+    # An --add without a rank is malformed input, not a talent SimC failed to apply.
+    bad_add = run(
+        "simc", "modify-build", "--talents", checkout.talents, "--actor-class", ACTOR_CLASS, "--spec", SPEC,
+        "--add", "Tiger Palm", expect=EXIT_USAGE, error_code="invalid_argument",
+    )
+    assert "name:rank" in bad_add.payload["error"]["message"], bad_add.describe()
+    run("simc", "repo", "--set-root", "/tmp", "--clear-root", expect=EXIT_USAGE, error_code="invalid_query")
+
+
+def test_sync_refuses_a_dirty_worktree_instead_of_pulling(require, out_dir: Path) -> None:
+    """The guard is exercised on a throwaway git repo; the real checkout is never pulled."""
+    require("simc")
+    fake_repo = out_dir / "dirty-checkout"
+    fake_repo.mkdir()
+    (fake_repo / ".git").mkdir()
+    (fake_repo / "untracked.txt").write_text("local change\n")
+    # A bare .git directory is enough for `git status --short` to report the untracked file.
+    (fake_repo / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
+    (fake_repo / ".git" / "config").write_text("[core]\n\trepositoryformatversion = 0\n")
+    (fake_repo / ".git" / "objects").mkdir()
+    (fake_repo / ".git" / "refs").mkdir()
+
+    result = run("simc", "--repo-root", str(fake_repo), "sync")
+    assert result.data["status"] == "skipped"
+    assert result.data["reason"] == "dirty_worktree"
+    assert result.data["git"]["dirty"] is True
+    assert result.data["git"]["dirty_entries"]
+
+
+def test_checkout_reports_a_failed_managed_update(require, out_dir: Path) -> None:
+    """Point the managed data root at a non-git directory so checkout fails instead of cloning."""
+    require("simc")
+    data_home = out_dir / "data"
+    (data_home / "warcraft" / "simc" / "repo").mkdir(parents=True)
+    result = run(
+        "simc",
+        "checkout",
+        env={"XDG_DATA_HOME": str(data_home)},
+        expect=EXIT_GENERIC,
+        error_code="checkout_failed",
+    )
+    assert "not a git repository" in result.payload["error"]["message"]

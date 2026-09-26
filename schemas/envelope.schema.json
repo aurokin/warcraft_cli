@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Warcraft CLI envelope",
+  "type": "object",
+  "description": "The single JSON object every binary in this repo writes to stdout on success or to stderr on failure. See docs/foundation/ERROR_CONTRACT.md.",
+  "properties": {
+    "ok": {
+      "type": "boolean"
+    },
+    "provider": {
+      "type": "string"
+    },
+    "command": {
+      "type": "string"
+    },
+    "kind": {
+      "type": "string"
+    },
+    "schema_version": {
+      "enum": [
+        "1"
+      ]
+    },
+    "query": {},
+    "provenance": {
+      "type": "object"
+    },
+    "data": {
+      "type": "object"
+    },
+    "error": {
+      "$ref": "#/$defs/EnvelopeError"
+    }
+  },
+  "required": [
+    "ok",
+    "provider",
+    "command",
+    "kind",
+    "schema_version",
+    "query",
+    "provenance",
+    "data"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "EnvelopeError": {
+      "type": "object",
+      "description": "Present only when `ok` is false.",
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "details": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "required": [
+          "ok"
+        ],
+        "properties": {
+          "ok": {
+            "const": false
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "error"
+        ]
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "ok"
+        ],
+        "properties": {
+          "ok": {
+            "const": true
+          }
+        }
+      },
+      "then": {
+        "not": {
+          "required": [
+            "error"
+          ]
+        }
+      }
+    }
+  ]
+}

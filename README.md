@@ -1,134 +1,54 @@
 # warcraft
 
-Warcraft data CLI monorepo.
-
-See [CHANGELOG.md](CHANGELOG.md) for what shipped in each release.
-
-## Principles
-
-- These CLIs exist to give agents a comprehensive World of Warcraft toolset across guides, reference content, rankings, logs, and local simulation workflows.
-- The product goal is to make complex WoW questions easier for agents by returning accurate, structured, well-formatted data with clear provenance.
-- When a workflow is not supported, the CLIs should fail clearly instead of pretending to answer it.
-- Prefer trustworthy building blocks that agents can compose:
-  - normalization
-  - sampling
-  - aggregation
-  - provenance
-  - freshness
-- Normalization is an additive analysis layer. It should improve routing and comparison without replacing raw source detail.
-- Do not bolt on fake universal "smart answers" where the underlying source contract is narrower than the question.
+A monorepo of World of Warcraft data CLIs built for AI agents. The `warcraft` wrapper routes and composes; each provider binary speaks the same JSON envelope, the same exit codes, and the same global output flags, so an agent can compose guides, reference content, rankings, logs, and local SimulationCraft analysis without learning a new output shape per source. See [docs/foundation/PRODUCT_PRINCIPLES.md](docs/foundation/PRODUCT_PRINCIPLES.md) for what the repo will and will not do.
 
 ## Install
 
 ```bash
-# branch-local editable environment
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e '.[dev]'
-
-# optional: install Redis cache support
-pip install -e '.[dev,redis]'
+# release wheel — attached to each GitHub release from the first release after the release workflow lands
+pipx install https://github.com/aurokin/warcraft_cli/releases/download/v0.5.0/warcraft-0.5.0-py3-none-any.whl
+uvx --from https://github.com/aurokin/warcraft_cli/releases/download/v0.5.0/warcraft-0.5.0-py3-none-any.whl warcraft doctor
+# from a checkout (editable)
+uv sync --all-extras     # or: make install, or: pip install -e '.[dev,redis]'
+make dev-deploy-no-link  # refresh the checkout-local .venv for branch work
 ```
 
-## Local Editable Deploy
+## Providers
 
-```bash
-# setup/update the current checkout as an editable branch-local environment
-make dev-deploy-no-link
-
-# optional: regenerate the shell env activation file for this worktree
-make worktree-env
-
-# optional: add the worktree venv to PATH in this shell
-source .warcraft/worktree-env.sh
-
-# deliberate exception: relink ~/.local/bin to this checkout
-WARCRAFT_ALLOW_LINK_BIN=1 make dev-deploy
-```
-
-This project uses editable install mode (`pip install -e`) for local development, so code changes are immediately reflected without rebuilding.
-Use `make dev-deploy-no-link` for normal branch work. It updates the checkout-local `.venv` and writes `.warcraft/worktree-env.sh` without rewriting host-level command wrappers.
-The generated worktree env keeps credentials in the shared host config/state roots and isolates branch-local data/cache under `.warcraft/runtime/`.
-Use `make worktree-env` whenever you want to regenerate or refresh that shell activation file explicitly.
-Worktree creation and trunk hygiene are intentionally outside this repo and should be handled with `worktrunk`.
-If `wowhead` is not found, add `~/.local/bin` to your `PATH`.
-
-## Supported Providers
-
-- [`warcraft`](docs/warcraft/README.md): root wrapper and orchestration CLI
-- [`wowhead`](docs/wowhead/README.md): entity, guide, comments, and bundle workflows
-- [`method`](docs/method/README.md): guide extraction and local guide workflows
-- [`icy-veins`](docs/icy-veins/README.md): guide extraction and local guide workflows
-- [`raiderio`](docs/raiderio/README.md): API-backed profile and leaderboard workflows
-- [`warcraft-wiki`](docs/warcraft-wiki/README.md): reference, lore, and API/article workflows
-- [`wowprogress`](docs/wowprogress/README.md): rankings and profile workflows
-- [`warcraftlogs`](docs/warcraftlogs/README.md): official log/report workflows
-- [`simc`](docs/simc/README.md): local SimulationCraft inspection and analysis workflows
-- [`raidbots`](docs/raidbots/README.md): public report consumption and SimC input handoff
-- [`blizzard`](docs/blizzard-api/README.md): official Battle.net Game Data and Profile reads
-- [`curseforge`](docs/curseforge/README.md): addon metadata, latest files, and changelog workflows
-- [`lorrgs`](docs/lorrgs/README.md): top-parse cooldown timelines, composition rankings, and report overview handoffs
+| Command | Tier | Best for | Docs |
+|---------|------|----------|------|
+| `warcraft` | core | routing, discovery, cross-provider composition | [docs/warcraft](docs/warcraft/README.md) |
+| `wowhead` | core | entities, guides, comments, talent calc | [docs/wowhead](docs/wowhead/README.md) |
+| `warcraftlogs` | core | official log/report analysis (OAuth) | [docs/warcraftlogs](docs/warcraftlogs/README.md) |
+| `simc` | core | local SimulationCraft inspection and runs | [docs/simc](docs/simc/README.md) |
+| `raiderio` | supported | character/guild profiles, Mythic+ analytics | [docs/raiderio](docs/raiderio/README.md) |
+| `warcraft-wiki` | supported | reference, lore, API/event articles | [docs/warcraft-wiki](docs/warcraft-wiki/README.md) |
+| `icy-veins` | supported | guide extraction and local guide query | [docs/icy-veins](docs/icy-veins/README.md) |
+| `method` | supported | guide extraction and local guide query | [docs/method](docs/method/README.md) |
+| `lorrgs` | supported | top-parse cooldown timelines, comp rankings | [docs/lorrgs](docs/lorrgs/README.md) |
+| `raidbots` | experimental | public report consumption, SimC handoff | [docs/raidbots](docs/raidbots/README.md) |
+| `blizzard` | experimental (verified live for us/eu/kr/tw) | Battle.net Game Data and Profile reads | [docs/blizzard-api](docs/blizzard-api/README.md) |
+| `curseforge` | experimental (verified live) | addon metadata and changelogs | [docs/curseforge](docs/curseforge/README.md) |
 
 ## Quick Start
 
 ```bash
-warcraft doctor
-warcraft --pretty search "defias"
+warcraft doctor  # start here when the source is unclear; call a provider binary directly once you know it
+warcraft --pretty resolve "thunderfury"
 warcraft search "defias"
-warcraft guide-compare-query "mistweaver monk guide"
-warcraft warcraftlogs resolve "https://www.warcraftlogs.com/reports/abcd1234#fight=3"
-warcraftlogs report-encounter abcd1234 --fight-id 3
-simc analysis-packet <simc-root>/ActionPriorityLists/default/monk_mistweaver.simc --targets 1
+wowhead entity item 19019
 ```
-
-Use `warcraft` when the source is unclear. Use `wowhead`, `method`, `icy-veins`, `raiderio`, `warcraft-wiki`, `wowprogress`, `warcraftlogs`, `simc`, `raidbots`, `blizzard`, `curseforge`, or `lorrgs` directly once you know the provider you need.
 
 ## Docs
 
-- [docs/README.md](docs/README.md)
-- [docs/USAGE.md](docs/USAGE.md)
-- [docs/ROADMAP.md](docs/ROADMAP.md)
-- [docs/foundation/PRODUCT_PRINCIPLES.md](docs/foundation/PRODUCT_PRINCIPLES.md)
-- [docs/foundation/SAFE_ANALYTICS_RULES.md](docs/foundation/SAFE_ANALYTICS_RULES.md)
+- [docs/README.md](docs/README.md) (map) · [docs/USAGE.md](docs/USAGE.md) (workflows) · [docs/reference/README.md](docs/reference/README.md) (generated per-command flags)
+- [docs/foundation/ERROR_CONTRACT.md](docs/foundation/ERROR_CONTRACT.md) — envelope, exit codes, and the global flags (`--pretty`, `--compact`, `--fields`, `--fields-strict`, `--profile`) that go before the subcommand
+- [docs/ROADMAP.md](docs/ROADMAP.md) · [CHANGELOG.md](CHANGELOG.md)
 
-## Testing
+## Development
 
 ```bash
-# fast local suite (fixture + unit tests)
-pytest -q
-
-# live contract checks against every opted-in provider suite
-make test-live
-
-# one provider at a time
-WOWHEAD_LIVE_TESTS=1 pytest -q -m live tests/test_live_integration.py tests/test_live_endpoint_contracts.py
-METHOD_LIVE_TESTS=1 pytest -q -m live tests/test_method_live.py
-ICY_VEINS_LIVE_TESTS=1 pytest -q -m live tests/test_icy_veins_live.py
-RAIDERIO_LIVE_TESTS=1 pytest -q -m live tests/test_raiderio_live.py
-WARCRAFT_WIKI_LIVE_TESTS=1 pytest -q -m live tests/test_warcraft_wiki_live.py
-WOWPROGRESS_LIVE_TESTS=1 pytest -q -m live tests/test_wowprogress_live.py
-WARCRAFTLOGS_LIVE_TESTS=1 pytest -q -m live tests/test_warcraftlogs_live.py
-RAIDBOTS_LIVE_TESTS=1 pytest -q -m live tests/test_raidbots_live.py
-LORRGS_LIVE_TESTS=1 pytest -q -m live tests/test_lorrgs_live.py
-make test-live-matrix
-WARCRAFT_WRAPPER_LIVE_TESTS=1 pytest -q -m live tests/test_warcraft_wrapper_live.py
+make check       # lint, typecheck, import boundaries, complexity, dead code, fast tests + coverage floor
+make test-e2e    # end-to-end journeys against the real providers (network; docs/architecture/E2E_TESTING.md)
+make reference   # regenerate docs/reference/; make skills regenerates provider subskills
 ```
-
-Wowhead live checks can be run manually in GitHub Actions via `.github/workflows/live-wowhead-contracts.yml` (`workflow_dispatch`).
-Wowhead live coverage includes mixed entity-type (`item`, `quest`, `npc`, `spell`) contracts and cross-entity compare checks.
-
-## Health Checks
-
-```bash
-make fmt-check
-make lint
-make lint-all
-make complexity
-make typecheck
-make coverage
-```
-
-Notes:
-- `make lint-all` is report-only and keeps the current full-repo Ruff backlog visible without blocking local work.
-- `make complexity` runs `radon` via `python -m` so stale console-script wrappers do not break the report.
-- `make coverage` prefers `pytest-cov` when available and falls back to stdlib `trace` coverage for the shared packages when the active Python build lacks `sqlite3`.

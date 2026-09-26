@@ -8,6 +8,7 @@ from curseforge_cli.auth import load_curseforge_auth_config
 from curseforge_cli.main import app
 from typer.testing import CliRunner
 from warcraft_cli.main import app as warcraft_app
+from warcraft_core.envelope import REQUIRED_KEYS
 
 runner = CliRunner()
 
@@ -32,11 +33,12 @@ def test_doctor_reports_auth_and_capabilities() -> None:
     result = runner.invoke(app, ["doctor"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
+    assert set(payload) == REQUIRED_KEYS
     assert payload["ok"] is True
     assert payload["provider"] == "curseforge"
-    assert payload["status"] == "partial"
-    assert payload["installed"] is True
-    auth = payload["auth"]
+    assert payload["data"]["status"] == "partial"
+    assert payload["data"]["installed"] is True
+    auth = payload["data"]["auth"]
     assert auth["required"] is True
     assert auth["flow"] == "api_key"
     assert auth["key_env"] == "CURSEFORGE_API_KEY"
@@ -44,12 +46,14 @@ def test_doctor_reports_auth_and_capabilities() -> None:
     assert auth["configured"] is False
     assert auth["lookup_order"][0] == ".env.local"
     assert auth["lookup_order"][-1] == "environment"
-    capabilities = payload["capabilities"]
+    capabilities = payload["data"]["capabilities"]
     assert capabilities["doctor"] == "ready"
     assert capabilities["search"] == "coming_soon"
     assert capabilities["resolve"] == "coming_soon"
     assert capabilities["addon"] == "ready"
-    assert payload["notes"]
+    # curseforge stays experimental for its small surface, but the endpoints it uses are confirmed.
+    assert payload["data"]["tier"] == "experimental"
+    assert any("live-confirmed" in note for note in payload["data"]["notes"])
 
 
 def test_doctor_reports_configured_when_key_present(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -57,8 +61,8 @@ def test_doctor_reports_configured_when_key_present(monkeypatch: pytest.MonkeyPa
     result = runner.invoke(app, ["doctor"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["auth"]["configured"] is True
-    assert payload["auth"]["credential_source"] == "environment"
+    assert payload["data"]["auth"]["configured"] is True
+    assert payload["data"]["auth"]["credential_source"] == "environment"
 
 
 def test_load_curseforge_auth_config_reads_env_local(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -101,4 +105,4 @@ def test_warcraft_curseforge_doctor_routes_through_wrapper() -> None:
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["provider"] == "curseforge"
-    assert payload["capabilities"]["addon"] == "ready"
+    assert payload["data"]["capabilities"]["addon"] == "ready"

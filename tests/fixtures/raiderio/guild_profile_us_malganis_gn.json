@@ -1,0 +1,327 @@
+{
+ "name": "gn",
+ "displayName": null,
+ "faction": "horde",
+ "region": "us",
+ "realm": "Mal'Ganis",
+ "last_crawled_at": "2026-09-18T21:46:24.000Z",
+ "profile_url": "https://raider.io/guilds/us/malganis/gn",
+ "raid_rankings": {
+  "tier-mn-1": {
+   "normal": {
+    "world": 15718,
+    "region": 6982,
+    "realm": 226
+   },
+   "heroic": {
+    "world": 411,
+    "region": 119,
+    "realm": 6
+   },
+   "mythic": {
+    "world": 37,
+    "region": 10,
+    "realm": 2
+   }
+  },
+  "sporefall": {
+   "normal": {
+    "world": 0,
+    "region": 0,
+    "realm": 0
+   },
+   "heroic": {
+    "world": 154,
+    "region": 154,
+    "realm": 6
+   },
+   "mythic": {
+    "world": 30,
+    "region": 30,
+    "realm": 3
+   }
+  },
+  "the-tidebound-grotto": {
+   "normal": {
+    "world": 420,
+    "region": 420,
+    "realm": 16
+   },
+   "heroic": {
+    "world": 39,
+    "region": 39,
+    "realm": 5
+   },
+   "mythic": {
+    "world": 129,
+    "region": 31,
+    "realm": 3
+   }
+  },
+  "the-venomous-abyss": {
+   "normal": {
+    "world": 2807,
+    "region": 1192,
+    "realm": 76
+   },
+   "heroic": {
+    "world": 132,
+    "region": 29,
+    "realm": 2
+   },
+   "mythic": {
+    "world": 35,
+    "region": 10,
+    "realm": 2
+   }
+  }
+ },
+ "raid_progression": {
+  "tier-mn-1": {
+   "summary": "9/9 M",
+   "total_bosses": 9,
+   "normal_bosses_killed": 7,
+   "heroic_bosses_killed": 9,
+   "mythic_bosses_killed": 9
+  },
+  "sporefall": {
+   "summary": "1/1 M",
+   "total_bosses": 1,
+   "normal_bosses_killed": 0,
+   "heroic_bosses_killed": 1,
+   "mythic_bosses_killed": 1
+  },
+  "the-tidebound-grotto": {
+   "summary": "1/1 M",
+   "total_bosses": 1,
+   "normal_bosses_killed": 1,
+   "heroic_bosses_killed": 1,
+   "mythic_bosses_killed": 1
+  },
+  "the-venomous-abyss": {
+   "summary": "7/8 M",
+   "total_bosses": 8,
+   "normal_bosses_killed": 8,
+   "heroic_bosses_killed": 8,
+   "mythic_bosses_killed": 7
+  }
+ },
+ "members": [
+  {
+   "rank": 8,
+   "character": {
+    "name": "Fharg",
+    "race": "Orc",
+    "class": "Shaman",
+    "active_spec_name": "Enhancement",
+    "active_spec_role": "DPS",
+    "gender": "male",
+    "faction": "horde",
+    "achievement_points": 34090,
+    "region": "us",
+    "realm": "Mal'Ganis",
+    "last_crawled_at": "2026-08-24T10:32:50.000Z",
+    "profile_url": "https://raider.io/characters/us/malganis/Fharg",
+    "profile_banner": "hordebanner1"
+   }
+  },
+  {
+   "rank": 8,
+   "character": {
+    "name": "Kryczek",
+    "race": "Blood Elf",
+    "class": "Warrior",
+    "active_spec_name": "Fury",
+    "active_spec_role": "DPS",
+    "gender": "male",
+    "faction": "horde",
+    "achievement_points": 34090,
+    "region": "us",
+    "realm": "Mal'Ganis",
+    "last_crawled_at": "2026-08-23T09:39:30.000Z",
+    "profile_url": "https://raider.io/characters/us/malganis/Kryczek",
+    "profile_banner": "hordebanner1"
+   }
+  },
+  {
+   "rank": 8,
+   "character": {
+    "name": "Tureis",
+    "race": "Blood Elf",
+    "class": "Hunter",
+    "active_spec_name": "Beast Mastery",
+    "active_spec_role": "DPS",
+    "gender": "female",
+    "faction": "horde",
+    "achievement_points": 34090,
+    "region": "us",
+    "realm": "Mal'Ganis",
+    "last_crawled_at": "2026-08-24T13:33:04.000Z",
+    "profile_url": "https://raider.io/characters/us/malganis/Tureis",
+    "profile_banner": "hordebanner1"
+   }
+  },
+  {
+   "rank": 9,
+   "character": {
+    "name": "Mogoogaipain",
+    "race": "Blood Elf",
+    "class": "Monk",
+    "active_spec_name": "Brewmaster",
+    "active_spec_role": "TANK",
+    "gender": "female",
+    "faction": "horde",
+    "achievement_points": 34100,
+    "region": "us",
+    "realm": "Mal'Ganis",
+    "last_crawled_at": "2026-08-27T17:25:42.000Z",
+    "profile_url": "https://raider.io/characters/us/malganis/Mogoogaipain",
+    "profile_banner": "hordebanner1"
+   }
+  },
+  {
+   "rank": 9,
+   "character": {
+    "name": "Algorab",
+    "race": "Blood Elf",
+    "class": "Rogue",
+    "active_spec_name": "Assassination",
+    "active_spec_role": "DPS",
+    "gender": "female",
+    "faction": "horde",
+    "achievement_points": 34090,
+    "region": "us",
+    "realm": "Mal'Ganis",
+    "last_crawled_at": "2026-08-23T16:52:13.000Z",
+    "profile_url": "https://raider.io/characters/us/malganis/Algorab",
+    "profile_banner": "hordebanner1"
+   }
+  },
+  {
+   "rank": 8,
+   "character": {
+    "name": "Kinbote",
+    "race": "Blood Elf",
+    "class": "Warlock",
+    "active_spec_name": "Destruction",
+    "active_spec_role": "DPS",
+    "gender": "male",
+    "faction": "horde",
+    "achievement_points": 34100,
+    "region": "us",
+    "realm": "Mal'Ganis",
+    "last_crawled_at": "2026-08-23T16:52:14.000Z",
+    "profile_url": "https://raider.io/characters/us/malganis/Kinbote",
+    "profile_banner": "hordebanner1"
+   }
+  },
+  {
+   "rank": 9,
+   "character": {
+    "name": "Leopard",
+    "race": "Blood Elf",
+    "class": "Paladin",
+    "active_spec_name": "Protection",
+    "active_spec_role": "TANK",
+    "gender": "male",
+    "faction": "horde",
+    "achievement_points": 24705,
+    "region": "us",
+    "realm": "Illidan",
+    "last_crawled_at": "2026-09-02T17:51:58.000Z",
+    "profile_url": "https://raider.io/characters/us/illidan/Leopard",
+    "profile_banner": "hordebanner1"
+   }
+  },
+  {
+   "rank": 9,
+   "character": {
+    "name": "Dementedone",
+    "race": "Orc",
+    "class": "Shaman",
+    "active_spec_name": "Elemental",
+    "active_spec_role": "DPS",
+    "gender": "male",
+    "faction": "horde",
+    "achievement_points": 9680,
+    "region": "us",
+    "realm": "Mal'Ganis",
+    "last_crawled_at": "2026-07-24T00:01:16.000Z",
+    "profile_url": "https://raider.io/characters/us/malganis/Dementedone",
+    "profile_banner": "hordebanner1"
+   }
+  },
+  {
+   "rank": 9,
+   "character": {
+    "name": "Treasons",
+    "race": "Blood Elf",
+    "class": "Rogue",
+    "active_spec_name": "Assassination",
+    "active_spec_role": "DPS",
+    "gender": "female",
+    "faction": "horde",
+    "achievement_points": 28870,
+    "region": "us",
+    "realm": "Burning Legion",
+    "last_crawled_at": "2026-09-16T20:19:04.000Z",
+    "profile_url": "https://raider.io/characters/us/burning-legion/Treasons",
+    "profile_banner": "hordebanner1"
+   }
+  },
+  {
+   "rank": 9,
+   "character": {
+    "name": "Leethunter",
+    "race": "Blood Elf",
+    "class": "Hunter",
+    "active_spec_name": "Marksmanship",
+    "active_spec_role": "DPS",
+    "gender": "male",
+    "faction": "horde",
+    "achievement_points": 20605,
+    "region": "us",
+    "realm": "Mal'Ganis",
+    "last_crawled_at": "2026-09-16T08:57:45.000Z",
+    "profile_url": "https://raider.io/characters/us/malganis/Leethunter",
+    "profile_banner": "hordebanner1"
+   }
+  },
+  {
+   "rank": 8,
+   "character": {
+    "name": "Megamak",
+    "race": "Troll",
+    "class": "Mage",
+    "active_spec_name": "Frost",
+    "active_spec_role": "DPS",
+    "gender": "male",
+    "faction": "horde",
+    "achievement_points": 24120,
+    "region": "us",
+    "realm": "Mal'Ganis",
+    "last_crawled_at": "2026-03-31T23:04:02.000Z",
+    "profile_url": "https://raider.io/characters/us/malganis/Megamak",
+    "profile_banner": "hordebanner1"
+   }
+  },
+  {
+   "rank": 9,
+   "character": {
+    "name": "Druidryan",
+    "race": "Tauren",
+    "class": "Druid",
+    "active_spec_name": "Guardian",
+    "active_spec_role": "TANK",
+    "gender": "male",
+    "faction": "horde",
+    "achievement_points": 15180,
+    "region": "us",
+    "realm": "Mal'Ganis",
+    "last_crawled_at": "2026-03-25T19:27:01.000Z",
+    "profile_url": "https://raider.io/characters/us/malganis/Druidryan",
+    "profile_banner": "hordebanner1"
+   }
+  }
+ ]
+}

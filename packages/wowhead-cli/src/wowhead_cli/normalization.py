@@ -98,8 +98,7 @@ def attach_entity_normalization(
     if normalized_item is None:
         return payload
     enriched = dict(payload)
-    enriched["schema_version"] = ENTITY_PAYLOAD_SCHEMA_VERSION
-    enriched["normalized"] = {"item": normalized_item}
+    enriched["normalized"] = {"schema_version": ENTITY_PAYLOAD_SCHEMA_VERSION, "item": normalized_item}
     return enriched
 
 
@@ -115,6 +114,5 @@ def attach_entity_page_normalization(
     if normalized_item is None:
         return payload
     enriched = dict(payload)
-    enriched["schema_version"] = ENTITY_PAGE_PAYLOAD_SCHEMA_VERSION
-    enriched["normalized"] = {"item": normalized_item}
+    enriched["normalized"] = {"schema_version": ENTITY_PAGE_PAYLOAD_SCHEMA_VERSION, "item": normalized_item}
     return enriched

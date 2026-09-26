@@ -10,7 +10,9 @@ Internal refactors, doc-only edits, and test-only changes don't need a changelog
 
 ## Cutting a Release
 
-1. **Confirm `[Unreleased]` covers what's about to ship.** Skim `git log` since the previous tag and reconcile against the changelog.
+1. **Confirm `[Unreleased]` covers what's about to ship.** Skim `git log` since the previous tag and reconcile against the changelog. While you are there, reconcile the docs that carry release-coupled facts:
+   - [ROADMAP.md](ROADMAP.md) — tiers, `## Next`, and deferred candidates still true?
+   - `README.md` — the wheel URL in the install block carries a literal version; bump it to the version you are about to tag.
 2. **Move `[Unreleased]` content into a new versioned section.**
    - Rename the heading: `## [Unreleased]` → `## [X.Y.Z] - YYYY-MM-DD` (today's date, ISO).
    - Add a fresh empty `## [Unreleased]` block above it with the standard subheads.
@@ -25,11 +27,17 @@ Internal refactors, doc-only edits, and test-only changes don't need a changelog
    ```
 
    This runs `scripts/bump_version.py`, which validates the new version is semver, errors if the current versions across the workspace disagree, and rewrites every workspace `pyproject.toml` in place. It does not stage or commit.
+
+   If dependencies changed in this release, refresh the lockfile too so the CI install (`uv sync --frozen`) resolves the same set:
+
+   ```bash
+   uv lock
+   ```
 4. **Review and commit.**
 
    ```bash
    git diff
-   git add CHANGELOG.md pyproject.toml packages/*/pyproject.toml
+   git add CHANGELOG.md README.md docs/ROADMAP.md pyproject.toml packages/*/pyproject.toml uv.lock
    git commit -m "Release vX.Y.Z"
    git push
    ```
@@ -43,10 +51,23 @@ Internal refactors, doc-only edits, and test-only changes don't need a changelog
 
    Or simpler: copy the `## [X.Y.Z]` section into a scratch file and pass it via `--notes-file`. The GitHub release body should match the changelog section verbatim so the two never drift.
 
+   Pushing the tag triggers `.github/workflows/release.yml`, which runs `make check` on the tagged commit and only then builds the wheel and attaches it to the release; a red check publishes nothing. It works in either order: run before `gh release create` and the wheel lands on the release the workflow creates; run after and the wheel is added to the existing release.
+
+6. **Verify the published wheel.**
+
+   ```bash
+   pipx install --force https://github.com/aurokin/warcraft_cli/releases/download/vX.Y.Z/warcraft-X.Y.Z-py3-none-any.whl
+   uvx --from https://github.com/aurokin/warcraft_cli/releases/download/vX.Y.Z/warcraft-X.Y.Z-py3-none-any.whl warcraft doctor
+   ```
+
+   `warcraft doctor` on a clean machine is the check that the wheel actually ships every provider package.
+
 ## Picking the Version
 
 - **Patch (`0.3.0` → `0.3.1`)**: bug fixes only, no new flags or output changes.
 - **Minor (`0.3.0` → `0.4.0`)**: new commands, new flags, new fields in JSON output, additive behavior.
 - **Major (`0.3.0` → `1.0.0`)**: removed/renamed commands or flags, JSON output shape changes that break consumers, auth scope changes that require re-login.
+
+"Output shape" means the shared envelope in [foundation/ERROR_CONTRACT.md](foundation/ERROR_CONTRACT.md) plus the documented `data` payload of a command.
 
 Pre-1.0 we still try to follow the spirit of semver — flag the breaking part of a release in `### Removed`/`### Changed` so consumers know what to update.

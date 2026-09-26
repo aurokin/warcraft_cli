@@ -58,6 +58,7 @@ Best fits:
   - `warcraftlogs report-encounter-damage-breakdown <report-url-or-code>`
   - `warcraftlogs boss-kills --zone-id ... --boss-id ... --difficulty ...`
   - `warcraftlogs top-kills --zone-id ... --boss-id ... --difficulty ...`
+  - `warcraftlogs spec-kill-samples --zone-id ... --boss-id ... --spec-name ...`
   - `warcraftlogs kill-time-distribution --zone-id ... --boss-id ... --difficulty ...`
   - `warcraftlogs boss-spec-usage --zone-id ... --boss-id ... --difficulty ...`
   - `warcraftlogs comp-samples --zone-id ... --boss-id ... --difficulty ...`
@@ -136,6 +137,7 @@ Best fits:
 - sampled cross-report analytics:
   - `warcraftlogs boss-kills --zone-id 38 --boss-id 3012 --difficulty 5 --top 10`
   - `warcraftlogs top-kills --zone-id 38 --boss-name Dimensius --difficulty 5 --top 5`
+  - `warcraftlogs spec-kill-samples --zone-id 38 --boss-id 3012 --difficulty 5 --spec-name Balance --top 5`
   - `warcraftlogs kill-time-distribution --zone-id 38 --boss-id 3012 --difficulty 5 --bucket-seconds 30`
   - `warcraftlogs boss-spec-usage --zone-id 38 --boss-id 3012 --difficulty 5 --top 10`
   - `warcraftlogs comp-samples --zone-id 38 --boss-id 3012 --difficulty 5 --top 5`
@@ -144,48 +146,60 @@ Best fits:
 ## Notes
 
 - prefer `warcraftlogs` when official log data matters more than convenience summaries
-- use `wowprogress` or `raiderio` for their own ranking/profile strengths, not as substitutes for Warcraft Logs report data
+- use `raiderio` for its own ranking/profile strengths, not as a substitute for Warcraft Logs report data
 - `character-rankings` can return a provider permission error or a provider-side failure for some characters; treat it as useful but less stable than `guild-rankings`
 - `guild-members` depends on Warcraft Logs being able to verify the guild roster for that game; treat it as a retail-capable roster surface, not a universal promise across every future site profile
 - `guild-attendance` is part of the official schema, but live public queries can still fail with a provider-side internal error; use it when it works, but do not assume the endpoint is fully stable
 - `guild-reports` is the easiest official path when the user wants report history for one guild without manually shaping the broader `reports` query
 - for one-fight analysis from a report link, prefer `report-encounter*` commands over manually combining `report-fights`, `report-player-details`, and `report-events`
+- every `report-encounter*` command accepts `--allow-unlisted` for reports that are not publicly listed
 - `report-encounter-casts`, `report-encounter-buffs`, and `report-encounter-damage-breakdown` support encounter-relative timeline filters:
   - `--window-start-ms`
   - `--window-end-ms`
-- `report-encounter-casts` also includes additive `by_target` and `by_source_target` summaries for target-scoped cast analysis inside the selected fight/window
-- `report-encounter-buffs` returns typed `buffs.preview` rows with per-row `source` (or `target` when `--view-by target`), `aura` (with identity contract), and reported buff-table fields (`reported_total_uptime`, `reported_total_uses`, `reported_bands`); use `--preview-limit` to bound the row count and `buffs.preview_truncated` to detect truncation
-- `report-encounter-aura-summary` is the narrower aura workflow: it requires one explicit `--ability-id` and returns typed source rows with preserved reported buff-table fields for that selected fight/window
-- `report-encounter-aura-compare` is stricter still: same report, same fight, same aura, and two fully explicit windows; use it when you want typed per-source deltas without pretending two different pulls or scopes are directly comparable
+- `report-encounter-casts` also includes additive `by_target` and `by_source_target` summaries for target-scoped cast analysis inside the selected fight/window; targets are named from report master data, including NPCs and pets, so bosses and adds come back by name; actor id `-1` is the no-target slot and Warcraft Logs names it `Environment`
+- `report-encounter-casts` requests at most `--limit` cast events (default 200, max 10000) in one page: a busy fight overflows that easily, so check `casts.truncated` before reading any `by_*` count as a whole-fight total, and raise `--limit` or narrow `--window-start-ms`/`--window-end-ms` until it is `false`
+- cast counts in `report-encounter-casts` and `ability-usage-summary` count only completed `cast` events: `begincast`, `empowerstart` and `empowerend` are skipped, so an empowered spell counts once per press, a cast-time spell once per finished cast, and a channel once when it starts; `casts.event_count` is the raw page size and `casts.cast_count` the counted casts
+- `report-encounter-buffs` returns typed `buffs.preview` rows with `aura` (with identity contract) and reported buff-table fields (`reported_total_uptime`, `reported_total_uses`, `reported_bands`); the unfiltered table is aura-aggregate, so `source`/`target` come back null there — pass `--ability-id` or use `report-encounter-aura-summary` for per-actor rows; use `--preview-limit` to bound the row count and `buffs.preview_truncated` to detect truncation
+- `report-encounter-aura-summary` is the narrower aura workflow: it requires one explicit `--ability-id` and returns typed source rows with the buff-table fields Warcraft Logs reports (`reported_total_uptime`, `reported_total_uses`, `reported_bands`) for that selected fight/window
+- `report-encounter-aura-compare` is stricter still: same report, same fight, same aura, and two fully explicit windows; each `comparison.rows[]` entry carries left, right and right-minus-left values for `reported_total_uptime` (ms) and `reported_total_uses`, largest uptime change first; the windows may differ in length, so compare uptime against each window's own duration
 - `report-encounter-damage-source-summary` is the equivalent narrow damage workflow for source-grouped damage rows; use it when you want typed source identities without depending on the broader raw breakdown payload alone
 - `report-encounter-damage-target-summary` is the target-grouped sibling; use it when the question is really about damage on explicit encounter targets or adds
-- those encounter-scoped commands surface the resolved absolute `start_time` and `end_time` in the payload so the agent does not have to derive report timestamps manually
+- the damage and aura summaries return typed rows only; pass `--include-raw` to attach the untyped Warcraft Logs table entry per row (gear, pets, per-ability detail), or use `report-encounter-damage-breakdown` / `report-table` for the whole raw table
+- those encounter-scoped commands echo the resolved report-relative window (`start_time`, `end_time`, `window_start_ms`, `window_end_ms`) in the envelope `query` block, so the agent does not have to derive report timestamps manually; `data.fight.start_time`/`end_time` are the fight's own bounds
 - `report-player-details` is the easiest way to inspect the participants in a report slice before deeper event/table work
 - `report-player-talents` is the first narrow build-transport lane:
   - use it when you need one actor's selected talents for one explicit fight
   - it returns a scoped `talent_transport_packet` sourced from `combatant_info.talentTree`
-  - for normal multi-fight reports, give it `--fight-id` or a report URL that already includes `#fight=<id>`
+  - for normal multi-fight reports, give it `--fight-id` or a report URL that already includes `?fight=<id>` or `#fight=<id>`
   - it only emits a packet when every selected talent-tree row is fully formed, and then keeps normalized raw `entry/node_id/rank` rows from the source tree as evidence
-  - when local SimulationCraft trait data resolves every entry and the reconstructed build round-trips, it also includes validated `simc_split_talents`
-  - otherwise it stays `raw_only` and tells you why validation could not be proven
+  - it never validates the build itself: the packet always comes back `transport_status: raw_only` with `validation.reason: simc_backend_unavailable`, because Warcraft Logs does not run SimulationCraft
+  - to get validated `simc_split_talents`, write the packet with `--out <path>` and run `simc validate-talent-transport --build-packet <path>`, or use `warcraft talent-packet` which chains both steps
+  - in that validated packet the hero-tree selection node is resolved (tree `selection`, named after the hero tree) but never enters the split strings; every entry, including each entry of a tiered node that spreads its ranks over several entries, is compared rank by rank, and an entry whose rank could not be read back fails validation with `simc_round_trip_mismatch`; a talent row that repeats an entry (`reason: duplicate_entry` on the row) or has a negative rank (`reason: negative_rank`) leaves the packet unvalidated with `simc_trait_resolution_incomplete`, and rows from two hero trees leave it unvalidated with `multiple_hero_trees` (`hero_tree_ids`); entries SimC grants from a hero tree this build did not pick are listed under `validation.round_trip.ignored_unselected_hero_entries`
   - malformed or incomplete talent-tree rows fail with `missing_talent_tree` instead of emitting a partial packet
+- `report-events`, `report-table`, `report-graph`, `report-rankings`, and `report-player-details` fail with `not_found` (exit 4) when any listed `--fight-id` is not in the report (or not on the given `--encounter-id`/`--difficulty`); `error.details.missing_fight_ids` names them, and the failure's `query` echoes the parsed flags
 - `report-fights` is still the stable broad fight-list surface; use it to get fight IDs first, then move to `report-player-details`, `report-events`, `report-table`, or `report-graph` for deeper filtered analysis
 - `report-table` and `report-graph` accept user-friendly enum filters like `damage-done` and normalize them for the API
-- `graphql` is the raw official API escape hatch for queries not covered by typed commands; it keeps auth routing, partial-error warnings, and the standard JSON envelope
+- `graphql` is the raw official API escape hatch for queries not covered by typed commands; it keeps auth routing and the standard JSON envelope; `data` is the GraphQL result's own `data` object (`data.__schema` under `--introspect`), and partial errors are in `provenance.graphql_warnings`
 - `graphql --query` accepts literal query text, `@path`, or `-` for stdin; use `--introspect` when the next step needs schema discovery
 - `graphql` variables can come from `--variables-json` or repeatable `--var key=value`; `--var` wins on conflicts and values are JSON-coerced when possible
 - `graphql` scoping helpers inject only declared variables: `--report-code` -> `code`, `--fight-id` -> `fightID` or `fightIDs`, `--encounter-id` -> `encounterID`, `--start-time` -> `startTime`, `--end-time` -> `endTime`, `--difficulty` -> `difficulty`, `--zone-id` -> `zoneID`, `--source-id` -> `sourceID`, `--target-id` -> `targetID`, `--ability-id` -> `abilityID`, and `--allow-unlisted` -> `allowUnlisted=true`
 - `graphql --endpoint auto` uses saved user auth when available, `--endpoint client` forces client credentials, and `--endpoint user` forces saved user auth; `--cache-ttl` is opt-in for client-endpoint queries and user-endpoint raw queries are not cached
-- `report-events` intentionally requires a narrowed slice such as `--fight-id`, `--encounter-id`, `--start-time`, or `--end-time`
+- `report-events` and `report-player-details` accept exactly the slice shapes Warcraft Logs answers: `--fight-id`, or both `--start-time` and `--end-time`; anything wider (including `--encounter-id` on its own, which filters a slice but does not define one) fails with `missing_scope` (exit 2) instead of returning an empty result
+- `report-events`, `report-table`, `report-graph`, `report-rankings`, and `report-player-details` fail with `not_found` (exit 4) when a slice names a fight the report does not have — an unknown `--fight-id`, or an `--encounter-id`/`--difficulty` the report never pulled; the rejected slice is echoed in the failure envelope's `query`, and a request that names no fight at all is left alone because an empty answer to it is a real answer
+- `report-player-details` additionally fails with `not_found` when its `--start-time`/`--end-time` window matches no fight, because a fight Warcraft Logs actually has always returns a roster, so an empty one means the slice missed rather than that the report has no players
 - `report-events` can still return `events: null` for some valid report slices; use it as a typed event-query surface, not a guarantee of non-empty data
 - `report-rankings` can legitimately return zero rows for a valid public report slice
 - `encounter-rankings` is the ranking surface to use when the user means boss/class/spec leaderboard results like "top Balance parses on Vanguard"
 - `boss-kills`, `top-kills`, and `kill-time-distribution` are sampled cross-report analytics, not a promise that the CLI searched every possible public report
 - `boss-kills` and `top-kills` do accept `--spec-name`, but on those sampled commands the filter means "keep sampled kills whose participants included that spec", not "return spec rankings"
-- `boss-spec-usage` is also sampled cross-report analytics; it reports spec presence within the filtered finished-kill cohort, not a site-wide meta snapshot
+- `boss-spec-usage` is also sampled cross-report analytics; it reports spec presence within the filtered finished-kill cohort, not a site-wide meta snapshot; each row is one `class_name` + `spec_name` + `role`, so Frost Mage and Frost Death Knight are counted apart
+- `--spec-name` on sampled commands takes the class too (`'Frost Mage'`, `frost-death-knight`); a bare spec name matches every class with that spec, and when it matched several the payload lists them in `sample.matched_spec_classes` and adds a note
 - `comp-samples` is sampled cross-report analytics too; it returns sampled kill rosters plus additive class-presence and exact class-signature summaries for that filtered cohort
-- `ability-usage-summary` is sampled cross-report analytics too; it reports explicit cast counts for one requested `--ability-id` across the filtered finished-kill cohort
-- these sampled analytics commands now include freshness and citation metadata for the sampled report cohort so agents can preserve trust boundaries when composing follow-up steps
+- `spec-kill-samples` is the participant-cohort sibling of `boss-kills`: it requires `--spec-name`, returns the fastest sampled kills that contained that spec, and reports `sample.truncation_order` so the returned head is never mistaken for a random sample or a spec leaderboard
+- `ability-usage-summary` is sampled cross-report analytics too; it reports explicit cast counts for one requested `--ability-id` across the filtered finished-kill cohort; a kill whose events overflow `--event-limit` is counted in `sample.kills_with_truncated_events_count`, and `usage.total_casts_is_lower_bound` then says the totals are floors
+- the sampled commands validate `--zone-id` and `--boss-id`/`--boss-name` against Warcraft Logs world data first, so a typo fails with `not_found` (exit 4) instead of returning an empty cohort
+- the sampled commands collapse one real pull that two raiders both logged into a single kill (same guild, encounter, difficulty and raid size, with wall-clock start and end within 5 s of another report of that pull); the collapse is reported, never silent — `sample.duplicates_removed` counts it, a note states the rule, and the kept kill's `duplicate_reports` cites the folded-in report codes and fight ids; reports without a guild are never collapsed, so a pull logged in two personal reports still counts twice
+- these sampled analytics commands include freshness and citation metadata for the sampled report cohort so agents can preserve trust boundaries when composing follow-up steps; `freshness.sampled_at` is when the command ran, and `freshness.cache_hit_count`/`upstream_request_count`/`served_entirely_from_cache` say whether the cohort was fetched live or replayed from cache
 - those sampled analytics intentionally skip unfinished live reports and surface sample/truncation metadata instead of faking global certainty
 - `warcraftlogs auth status` is the first place to check when auth looks wrong; it shows credential source and whether any persisted auth state exists
 - `warcraftlogs auth login --redirect-uri ...` and `warcraftlogs auth pkce-login --redirect-uri ...` are two-step flows:

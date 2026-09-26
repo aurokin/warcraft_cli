@@ -78,17 +78,6 @@ def clear_configured_repo_root() -> bool:
     return True
 
 
-def default_repo_root() -> Path:
-    configured = os.environ.get("SIMC_REPO_ROOT")
-    if configured:
-        return Path(configured).expanduser()
-    configured_root = load_configured_repo_root()
-    if configured_root is not None:
-        return configured_root
-    managed_root = managed_repo_root()
-    return managed_root
-
-
 def resolve_repo_root(root: str | Path | None = None) -> RepoResolution:
     config = config_path()
     configured_root = load_configured_repo_root()
@@ -164,7 +153,7 @@ def checkout_managed_repo(*, repo_url: str = SIMC_REPO_URL) -> CheckoutResult:
     if not root.exists():
         clone_command = ["git", "clone", "--depth", "1", repo_url, str(root)]
         commands.append(clone_command)
-        clone = subprocess.run(clone_command, capture_output=True, text=True, check=False)
+        clone = subprocess.run(clone_command, capture_output=True, text=True, check=False)  # noqa: S603
         if clone.returncode != 0:
             message = clone.stderr.strip() or clone.stdout.strip() or "git clone failed"
             raise RuntimeError(message)
@@ -172,7 +161,7 @@ def checkout_managed_repo(*, repo_url: str = SIMC_REPO_URL) -> CheckoutResult:
 
     fetch_command = ["git", "-C", str(root), "pull", "--ff-only"]
     commands.append(fetch_command)
-    fetch = subprocess.run(fetch_command, capture_output=True, text=True, check=False)
+    fetch = subprocess.run(fetch_command, capture_output=True, text=True, check=False)  # noqa: S603
     if fetch.returncode != 0:
         message = fetch.stderr.strip() or fetch.stdout.strip() or "git pull failed"
         raise RuntimeError(message)

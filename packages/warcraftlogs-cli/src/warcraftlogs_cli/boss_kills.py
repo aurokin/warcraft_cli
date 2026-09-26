@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+from dataclasses import dataclass, field
 from typing import Any
 
 from warcraft_core.analytics import numeric_summary
@@ -10,7 +12,9 @@ from warcraftlogs_cli.client import ReportPlayerDetailsOptions, WarcraftLogsClie
 from warcraftlogs_cli.report_payloads import fight_payload, report_brief_payload, report_payload, report_url
 from warcraftlogs_cli.sampling_utils import (
     boss_matches,
+    dict_at,
     fight_duration_ms,
+    list_at,
     normalize_match_text,
     report_is_finished,
     sampled_spec_filter_notes,
@@ -18,24 +22,60 @@ from warcraftlogs_cli.sampling_utils import (
 )
 
 
-def player_spec_matches(actor: dict[str, Any], spec_name: str) -> bool:
+@dataclass(frozen=True, slots=True)
+class CrossReportScope:
+    """Cohort-shaping inputs shared by every sampled cross-report command.
+
+    Field order is the emitted ``query`` key order: ``dataclasses.asdict`` on this
+    object is what the sampled payloads echo back to the caller. ``top`` is the
+    returned-row cap; commands without a ``--top`` flag leave it at the default and
+    drop it from their query echo.
+    """
+
+    zone_id: int
+    boss_id: int | None = None
+    boss_name: str | None = None
+    difficulty: int | None = None
+    spec_name: str | None = None
+    kill_time_min: float | None = None
+    kill_time_max: float | None = None
+    top: int = 10
+    report_pages: int = 1
+    reports_per_page: int = 25
+    start_time: float | None = None
+    end_time: float | None = None
+    guild_region: str | None = None
+    guild_realm: str | None = None
+    guild_name: str | None = None
+
+
+def _spec_spellings(actor_class: str, spec: str) -> set[str]:
+    """How a --spec-name may name this spec: bare ("Frost") or with its class in either order ("Frost Mage")."""
+    spec_text = normalize_match_text(spec)
+    if not spec_text:
+        return set()
+    class_text = normalize_match_text(actor_class)
+    return {spec_text, spec_text + class_text, class_text + spec_text}
+
+
+def matching_specs(actor: dict[str, Any], spec_name: str) -> list[dict[str, Any]]:
+    """The actor's spec rows that ``spec_name`` names; the actor's ``type`` is its class."""
     wanted = normalize_match_text(spec_name)
-    for spec in actor.get("specs") if isinstance(actor.get("specs"), list) else []:
-        if not isinstance(spec, dict):
-            continue
-        if normalize_match_text(str(spec.get("spec") or "")) == wanted:
-            return True
-    return False
+    actor_class = str(actor.get("type") or "")
+    return [
+        spec
+        for spec in list_at(actor, "specs")
+        if isinstance(spec, dict) and wanted in _spec_spellings(actor_class, str(spec.get("spec") or ""))
+    ]
 
 
 def _player_details_roles(report: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
-    details = report.get("playerDetails") if isinstance(report.get("playerDetails"), dict) else {}
-    data = details.get("data") if isinstance(details.get("data"), dict) else {}
-    role_data = data.get("playerDetails") if isinstance(data.get("playerDetails"), dict) else data
+    details = dict_at(report, "playerDetails")
+    data = dict_at(details, "data")
+    role_data = dict_at(data, "playerDetails") or data
     roles: dict[str, list[dict[str, Any]]] = {}
     for role in ("tanks", "healers", "dps"):
-        rows = role_data.get(role) if isinstance(role_data.get(role), list) else []
-        roles[role] = [row for row in rows if isinstance(row, dict)]
+        roles[role] = [row for row in list_at(role_data, role) if isinstance(row, dict)]
     return roles
 
 
@@ -43,21 +83,11 @@ def matching_spec_players(report: dict[str, Any], *, spec_name: str) -> list[dic
     matches: list[dict[str, Any]] = []
     for role, rows in _player_details_roles(report).items():
         for row in rows:
-            if not player_spec_matches(row, spec_name):
-                continue
-            matches.append(
-                {
-                    "name": row.get("name"),
-                    "id": row.get("id"),
-                    "role": role,
-                    "type": row.get("type"),
-                    "matching_specs": [
-                        spec
-                        for spec in (row.get("specs") if isinstance(row.get("specs"), list) else [])
-                        if normalize_match_text(str(spec.get("spec") or "")) == normalize_match_text(spec_name)
-                    ],
-                }
-            )
+            specs = matching_specs(row, spec_name)
+            if specs:
+                matches.append(
+                    {"name": row.get("name"), "id": row.get("id"), "role": role, "type": row.get("type"), "matching_specs": specs}
+                )
     return matches
 
 
@@ -66,6 +96,7 @@ def boss_kill_row(
     report: dict[str, Any],
     fight: dict[str, Any],
     matching_players: list[dict[str, Any]] | None = None,
+    duplicate_reports: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     duration_ms = fight_duration_ms(fight)
     return {
@@ -76,13 +107,144 @@ def boss_kill_row(
         "duration_ms": duration_ms,
         "duration_seconds": round(duration_ms / 1000, 2) if duration_ms is not None else None,
         "matching_players": matching_players or [],
+        # Other reports of this same pull, collapsed into this row by deduplicate_pulls.
+        "duplicate_reports": duplicate_reports or [],
     }
 
 
-def sampled_cross_report_freshness(cache_ttl_seconds: int | None = None) -> dict[str, Any]:
+# Two raiders in one group each uploading the pull yields two reports of a single kill. Their
+# combat logs start seconds apart, so the same pull lands at slightly different wall-clock
+# boundaries; anything further apart than this is a different pull.
+DUPLICATE_PULL_TOLERANCE_MS = 5000
+
+
+@dataclass(frozen=True, slots=True)
+class _PullIdentity:
+    """Everything except timing that has to agree before two sampled fights can be one pull."""
+
+    encounter_id: int | None
+    difficulty: int | None
+    size: int | None
+    guild_id: int
+
+
+def _pull_identity(report: dict[str, Any], fight: dict[str, Any]) -> _PullIdentity | None:
+    """The fight's identity, or ``None`` for a report with no guild.
+
+    Timing alone cannot tell two unrelated personal logs apart, and a report carries no roster
+    fingerprint without an extra request per fight, so a guildless fight is never collapsed.
+    """
+    guild_id = dict_at(report, "guild").get("id")
+    if not isinstance(guild_id, int):
+        return None
+    return _PullIdentity(
+        encounter_id=fight.get("encounterID") if isinstance(fight.get("encounterID"), int) else None,
+        difficulty=fight.get("difficulty") if isinstance(fight.get("difficulty"), int) else None,
+        size=fight.get("size") if isinstance(fight.get("size"), int) else None,
+        guild_id=guild_id,
+    )
+
+
+def _absolute_fight_window_ms(report: dict[str, Any], fight: dict[str, Any]) -> tuple[float, float] | None:
+    """Wall-clock ``(start, end)`` of a fight: report start plus the report-relative fight offsets."""
+    report_start = report.get("startTime")
+    fight_start = fight.get("startTime")
+    fight_end = fight.get("endTime")
+    if not isinstance(report_start, (int, float)) or not isinstance(fight_start, (int, float)):
+        return None
+    if not isinstance(fight_end, (int, float)):
+        return None
+    return float(report_start) + float(fight_start), float(report_start) + float(fight_end)
+
+
+def _same_window(first: tuple[float, float], second: tuple[float, float]) -> bool:
+    """Start and end both within ``DUPLICATE_PULL_TOLERANCE_MS``."""
+    return all(abs(mine - other) <= DUPLICATE_PULL_TOLERANCE_MS for mine, other in zip(first, second, strict=True))
+
+
+@dataclass(slots=True)
+class SampledPull:
+    """One real pull, plus the citations of the other reports that logged the same pull."""
+
+    report: dict[str, Any]
+    fight: dict[str, Any]
+    duplicates: list[dict[str, Any]] = field(default_factory=list)
+
+
+def _pull_citation(report: dict[str, Any], fight: dict[str, Any]) -> dict[str, Any]:
+    return {"report_code": report.get("code"), "fight_id": fight.get("id")}
+
+
+def deduplicate_pulls(candidates: Iterable[tuple[dict[str, Any], dict[str, Any]]]) -> list[SampledPull]:
+    """Collapse one real pull logged in several reports into a single sampled kill.
+
+    Warcraft Logs exposes no cross-report pull ID, so the match is deliberately narrow and is
+    labelled in the payload rather than inferred silently (docs/foundation/SAFE_ANALYTICS_RULES.md):
+    same guild, encounter, difficulty and raid size, with wall-clock start *and* end both within
+    ``DUPLICATE_PULL_TOLERANCE_MS`` of any fight already folded into one of that identity's pulls.
+    Every pull of the identity is a candidate, so an unrelated pull starting in between cannot split
+    one double-logged pull in two. Fights are clustered in start order, so the answer does not
+    depend on the order reports were listed in, and the earliest-starting report represents the
+    pull. A fight without a guild or without a computable window is always kept on its own.
+    """
+    kept: list[SampledPull] = []
+    timed: list[tuple[tuple[float, float], _PullIdentity, dict[str, Any], dict[str, Any]]] = []
+    for report, fight in candidates:
+        identity = _pull_identity(report, fight)
+        window = _absolute_fight_window_ms(report, fight)
+        if identity is None or window is None:
+            kept.append(SampledPull(report=report, fight=fight))
+        else:
+            timed.append((window, identity, report, fight))
+    timed.sort(key=lambda row: (row[0], str(row[2].get("code") or ""), str(row[3].get("id"))))
+    # Each identity's pulls so far, with the window of every fight folded into each.
+    clusters: dict[_PullIdentity, list[tuple[SampledPull, list[tuple[float, float]]]]] = {}
+    for window, identity, report, fight in timed:
+        pulls = clusters.setdefault(identity, [])
+        match = next((known for known in pulls if any(_same_window(member, window) for member in known[1])), None)
+        if match is None:
+            pull = SampledPull(report=report, fight=fight)
+            kept.append(pull)
+            pulls.append((pull, [window]))
+            continue
+        match[0].duplicates.append(_pull_citation(report, fight))
+        match[1].append(window)
+    return kept
+
+
+def sampled_dedupe_notes(sample: dict[str, Any]) -> list[str]:
+    """Say so in the payload when sampled kills were collapsed, per SAFE_ANALYTICS_RULES.md."""
+    removed = sample.get("duplicates_removed")
+    if not isinstance(removed, int) or removed <= 0:
+        return []
+    return [
+        f"{removed} sampled fight(s) were the same pull logged in more than one report (same guild, encounter, "
+        f"difficulty and raid size, with start and end within {DUPLICATE_PULL_TOLERANCE_MS // 1000}s of another "
+        "report of that pull) "
+        "and were collapsed into one kill; the collapsed report codes are on each kill's duplicate_reports. "
+        "Reports without a guild are never collapsed"
+    ]
+
+
+def sampled_cross_report_freshness(
+    cache_ttl_seconds: int | None = None,
+    *,
+    transport_counts: dict[str, int],
+) -> dict[str, Any]:
+    """Freshness for one sampled payload.
+
+    ``sampled_at`` is when the command ran, not when the cohort was fetched: report listings and
+    report details can be served from cache up to ``cache_ttl_seconds`` old. The transport counts
+    make that visible, so a warm-cache rerun is distinguishable from a live scan.
+    """
+    upstream_request_count = transport_counts.get("upstream_request_count", 0)
+    cache_hit_count = transport_counts.get("cache_hit_count", 0)
     return {
         "sampled_at": utc_now_z(),
         "cache_ttl_seconds": cache_ttl_seconds,
+        "cache_hit_count": cache_hit_count,
+        "upstream_request_count": upstream_request_count,
+        "served_entirely_from_cache": upstream_request_count == 0 and cache_hit_count > 0,
     }
 
 
@@ -127,6 +289,25 @@ def sampled_sample_scope(
     }
 
 
+def _row_citation_pairs(row: dict[str, Any]) -> list[tuple[str, int | None]]:
+    """A row's own ``(report code, fight id)``, then every report that logged the same pull.
+
+    The collapsed reports stay citable: a caller holding one of them must still be able to find
+    the kill it was folded into.
+    """
+    candidates = [(dict_at(row, "report").get("code"), dict_at(row, "fight").get("id"))]
+    candidates += [
+        (entry.get("report_code"), entry.get("fight_id"))
+        for entry in list_at(row, "duplicate_reports")
+        if isinstance(entry, dict)
+    ]
+    return [
+        (code, fight_id if isinstance(fight_id, int) else None)
+        for code, fight_id in candidates
+        if isinstance(code, str)
+    ]
+
+
 def sampled_cross_report_citations(
     rows: list[dict[str, Any]],
     *,
@@ -135,17 +316,10 @@ def sampled_cross_report_citations(
 ) -> dict[str, Any]:
     sample_reports: list[dict[str, Any]] = []
     seen: set[tuple[str, int | None]] = set()
-    for row in rows:
-        report = row.get("report") if isinstance(row.get("report"), dict) else {}
-        fight = row.get("fight") if isinstance(row.get("fight"), dict) else {}
-        report_code = report.get("code") if isinstance(report.get("code"), str) else None
-        fight_id = fight.get("id") if isinstance(fight.get("id"), int) else None
-        if report_code is None:
+    for report_code, fight_id in (pair for row in rows for pair in _row_citation_pairs(row)):
+        if (report_code, fight_id) in seen:
             continue
-        key = (report_code, fight_id)
-        if key in seen:
-            continue
-        seen.add(key)
+        seen.add((report_code, fight_id))
         sample_reports.append(
             {
                 "report_code": report_code,
@@ -207,7 +381,7 @@ def _fetch_zone_report_rows(
             zone_id=zone_id,
             game_zone_id=None,
         )
-        page_rows = pagination.get("data") if isinstance(pagination.get("data"), list) else []
+        page_rows = list_at(pagination, "data")
         report_rows.extend([row for row in page_rows if isinstance(row, dict)])
         if not pagination.get("has_more_pages"):
             break
@@ -259,6 +433,50 @@ def _matching_players_for_fight(
     return matching_players
 
 
+def _matching_kill_fights(
+    client: WarcraftLogsClient,
+    finished_reports: list[dict[str, Any]],
+    *,
+    boss_id: int | None,
+    boss_name: str | None,
+    difficulty: int | None,
+    kill_time_min: float | None,
+    kill_time_max: float | None,
+) -> tuple[list[tuple[dict[str, Any], dict[str, Any]]], int]:
+    """``(report, fight)`` pairs for every kill matching the cohort filters, and the fights scanned."""
+    candidates: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    scanned_fight_count = 0
+    for report in finished_reports:
+        fights_payload = client.report_fights(
+            code=str(report.get("code") or ""),
+            difficulty=difficulty,
+            allow_unlisted=False,
+            ttl_override=client._finished_report_ttl,
+        )
+        for fight in list_at(fights_payload, "fights"):
+            if not isinstance(fight, dict):
+                continue
+            scanned_fight_count += 1
+            if not fight.get("kill"):
+                continue
+            if not boss_matches(fight, boss_id=boss_id, boss_name=boss_name):
+                continue
+            if _kill_duration_in_bounds(fight, kill_time_min=kill_time_min, kill_time_max=kill_time_max) is None:
+                continue
+            candidates.append((report, fight))
+    return candidates, scanned_fight_count
+
+
+@dataclass(frozen=True, slots=True)
+class ScannedKills:
+    """Rows for one sampled cohort plus the counts that make the sampling legible."""
+
+    rows: list[dict[str, Any]]
+    scanned_fight_count: int
+    matched_boss_kill_count: int
+    duplicates_removed: int
+
+
 def _scan_finished_reports_for_boss_kills(
     client: WarcraftLogsClient,
     finished_reports: list[dict[str, Any]],
@@ -269,46 +487,38 @@ def _scan_finished_reports_for_boss_kills(
     spec_name: str | None,
     kill_time_min: float | None,
     kill_time_max: float | None,
-) -> tuple[list[dict[str, Any]], int, int]:
+) -> ScannedKills:
+    candidates, scanned_fight_count = _matching_kill_fights(
+        client,
+        finished_reports,
+        boss_id=boss_id,
+        boss_name=boss_name,
+        difficulty=difficulty,
+        kill_time_min=kill_time_min,
+        kill_time_max=kill_time_max,
+    )
+    # Collapse before the per-fight player-details fetch, so a double-logged pull neither
+    # double-counts nor costs a second upstream request.
+    pulls = deduplicate_pulls(candidates)
     boss_kills: list[dict[str, Any]] = []
-    scanned_fight_count = 0
-    matched_boss_kill_count = 0
-
-    for report in finished_reports:
-        fights_payload = client.report_fights(
-            code=str(report.get("code") or ""),
+    for pull in pulls:
+        matching_players = _matching_players_for_fight(
+            client,
+            report=pull.report,
+            fight=pull.fight,
             difficulty=difficulty,
-            allow_unlisted=False,
-            ttl_override=client._finished_report_ttl,
+            spec_name=spec_name,
         )
-        fights = fights_payload.get("fights") if isinstance(fights_payload.get("fights"), list) else []
-        for fight in fights:
-            if not isinstance(fight, dict):
-                continue
-            scanned_fight_count += 1
-            if not fight.get("kill"):
-                continue
-            if not boss_matches(fight, boss_id=boss_id, boss_name=boss_name):
-                continue
-            if _kill_duration_in_bounds(fight, kill_time_min=kill_time_min, kill_time_max=kill_time_max) is None:
-                continue
-            matched_boss_kill_count += 1
-            matching_players = _matching_players_for_fight(
-                client,
-                report=report,
-                fight=fight,
-                difficulty=difficulty,
-                spec_name=spec_name,
+        if spec_name and matching_players is None:
+            continue
+        boss_kills.append(
+            boss_kill_row(
+                report=pull.report,
+                fight=pull.fight,
+                matching_players=matching_players or [],
+                duplicate_reports=pull.duplicates,
             )
-            if spec_name and matching_players is None:
-                continue
-            boss_kills.append(
-                boss_kill_row(
-                    report=report,
-                    fight=fight,
-                    matching_players=matching_players or [],
-                )
-            )
+        )
 
     boss_kills.sort(
         key=lambda row: (
@@ -317,60 +527,54 @@ def _scan_finished_reports_for_boss_kills(
             int((row.get("fight") or {}).get("id") or 0),
         )
     )
-    return boss_kills, scanned_fight_count, matched_boss_kill_count
+    return ScannedKills(
+        rows=boss_kills,
+        scanned_fight_count=scanned_fight_count,
+        matched_boss_kill_count=len(pulls),
+        duplicates_removed=len(candidates) - len(pulls),
+    )
 
 
-def collect_boss_kill_rows(
-    *,
-    client: WarcraftLogsClient,
-    zone_id: int,
-    boss_id: int | None,
-    boss_name: str | None,
-    difficulty: int | None,
-    spec_name: str | None,
-    kill_time_min: float | None,
-    kill_time_max: float | None,
-    report_pages: int,
-    reports_per_page: int,
-    start_time: float | None,
-    end_time: float | None,
-    guild_region: str | None,
-    guild_realm: str | None,
-    guild_name: str | None,
-) -> dict[str, Any]:
+def collect_boss_kill_rows(client: WarcraftLogsClient, scope: CrossReportScope) -> dict[str, Any]:
     report_rows = _fetch_zone_report_rows(
         client,
-        zone_id=zone_id,
-        guild_region=guild_region,
-        guild_realm=guild_realm,
-        guild_name=guild_name,
-        report_pages=report_pages,
-        reports_per_page=reports_per_page,
-        start_time=start_time,
-        end_time=end_time,
+        zone_id=scope.zone_id,
+        guild_region=scope.guild_region,
+        guild_realm=scope.guild_realm,
+        guild_name=scope.guild_name,
+        report_pages=scope.report_pages,
+        reports_per_page=scope.reports_per_page,
+        start_time=scope.start_time,
+        end_time=scope.end_time,
     )
     live_reports = [row for row in report_rows if not report_is_finished(row)]
     finished_reports = [row for row in report_rows if report_is_finished(row)]
-    boss_kills, scanned_fight_count, matched_boss_kill_count = _scan_finished_reports_for_boss_kills(
+    scanned = _scan_finished_reports_for_boss_kills(
         client,
         finished_reports,
-        boss_id=boss_id,
-        boss_name=boss_name,
-        difficulty=difficulty,
-        spec_name=spec_name,
-        kill_time_min=kill_time_min,
-        kill_time_max=kill_time_max,
+        boss_id=scope.boss_id,
+        boss_name=scope.boss_name,
+        difficulty=scope.difficulty,
+        spec_name=scope.spec_name,
+        kill_time_min=scope.kill_time_min,
+        kill_time_max=scope.kill_time_max,
     )
-    return {
-        "rows": boss_kills,
-        "sample": {
-            "source_report_count": len(report_rows),
-            "finished_report_count": len(finished_reports),
-            "skipped_live_report_count": len(live_reports),
-            "scanned_fight_count": scanned_fight_count,
-            "matched_boss_kill_count": matched_boss_kill_count,
-        },
+    sample: dict[str, Any] = {
+        "source_report_count": len(report_rows),
+        "finished_report_count": len(finished_reports),
+        "skipped_live_report_count": len(live_reports),
+        "scanned_fight_count": scanned.scanned_fight_count,
+        # Distinct pulls: a kill logged by several raiders counts once, and duplicates_removed
+        # says how many raw fights were collapsed to get there.
+        "matched_boss_kill_count": scanned.matched_boss_kill_count,
+        "duplicates_removed": scanned.duplicates_removed,
     }
+    if scope.spec_name:
+        # A bare spec name can match several classes (Frost Mage and Frost Death Knight).
+        sample["matched_spec_classes"] = sorted(
+            {str(player["type"]) for row in scanned.rows for player in row["matching_players"] if player.get("type")}
+        )
+    return {"rows": scanned.rows, "sample": sample}
 
 
 def boss_kills_payload(
@@ -380,6 +584,7 @@ def boss_kills_payload(
     sample: dict[str, Any],
     query: dict[str, Any],
     top: int,
+    transport_counts: dict[str, int],
     cache_ttl_seconds: int | None = None,
     root_url: str = "https://www.warcraftlogs.com",
 ) -> dict[str, Any]:
@@ -393,8 +598,11 @@ def boss_kills_payload(
         "ranking_basis": "sampled_fastest_kills",
         "matching_rule": "sampled_zone_reports_filtered_by_optional_boss_difficulty_spec_and_kill_time",
         "query": query,
-        "notes": sampled_spec_filter_notes(query.get("spec_name") if isinstance(query, dict) else None),
-        "freshness": sampled_cross_report_freshness(cache_ttl_seconds),
+        "notes": [
+            *sampled_spec_filter_notes(query.get("spec_name") if isinstance(query, dict) else None, sample),
+            *sampled_dedupe_notes(sample),
+        ],
+        "freshness": sampled_cross_report_freshness(cache_ttl_seconds, transport_counts=transport_counts),
         "cache_provenance": sampled_cache_provenance(cache_ttl_seconds),
         "sample_scope": sampled_sample_scope(
             ranking_basis="sampled_fastest_kills",
@@ -423,6 +631,7 @@ def spec_filtered_kill_samples_payload(
     sample: dict[str, Any],
     query: dict[str, Any],
     top: int,
+    transport_counts: dict[str, int],
     cache_ttl_seconds: int | None = None,
     root_url: str = "https://www.warcraftlogs.com",
 ) -> dict[str, Any]:
@@ -439,11 +648,12 @@ def spec_filtered_kill_samples_payload(
         if isinstance(row, dict)
     )
     notes = [
-        *sampled_spec_filter_notes(spec_name),
+        *sampled_spec_filter_notes(spec_name, sample),
         (
             "rows are sampled kills that contained at least one participant of the requested spec; "
             "this is a participant cohort, not a spec ranking leaderboard"
         ),
+        *sampled_dedupe_notes(sample),
     ]
     if truncated:
         notes.append(
@@ -459,7 +669,7 @@ def spec_filtered_kill_samples_payload(
         "matching_rule": "sampled_zone_reports_filtered_to_kills_containing_the_requested_participant_spec",
         "query": query,
         "notes": notes,
-        "freshness": sampled_cross_report_freshness(cache_ttl_seconds),
+        "freshness": sampled_cross_report_freshness(cache_ttl_seconds, transport_counts=transport_counts),
         "cache_provenance": sampled_cache_provenance(cache_ttl_seconds),
         "sample_scope": sampled_sample_scope(
             ranking_basis="spec_filtered_participant_kill_samples",
@@ -492,6 +702,7 @@ def kill_time_distribution_payload(
     sample: dict[str, Any],
     query: dict[str, Any],
     bucket_seconds: int,
+    transport_counts: dict[str, int],
     cache_ttl_seconds: int | None = None,
     root_url: str = "https://www.warcraftlogs.com",
 ) -> dict[str, Any]:
@@ -507,8 +718,11 @@ def kill_time_distribution_payload(
         "ranking_basis": "sampled_kill_time_distribution",
         "matching_rule": "sampled_zone_reports_filtered_by_optional_boss_difficulty_spec_and_kill_time",
         "query": query,
-        "notes": sampled_spec_filter_notes(query.get("spec_name") if isinstance(query, dict) else None),
-        "freshness": sampled_cross_report_freshness(cache_ttl_seconds),
+        "notes": [
+            *sampled_spec_filter_notes(query.get("spec_name") if isinstance(query, dict) else None, sample),
+            *sampled_dedupe_notes(sample),
+        ],
+        "freshness": sampled_cross_report_freshness(cache_ttl_seconds, transport_counts=transport_counts),
         "cache_provenance": sampled_cache_provenance(cache_ttl_seconds),
         "sample_scope": sampled_sample_scope(
             ranking_basis="sampled_kill_time_distribution",

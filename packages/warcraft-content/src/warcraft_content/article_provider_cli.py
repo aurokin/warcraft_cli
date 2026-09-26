@@ -1,22 +1,8 @@
 from __future__ import annotations
 
-from collections.abc import Callable
-from typing import Any, NoReturn
-
-import typer
+from typing import Any
 
 from warcraft_content.article_discovery import article_resolve_payload, article_search_payload
-
-
-def fail_with_error(
-    emit_payload: Callable[[dict[str, Any], bool], None],
-    *,
-    code: str,
-    message: str,
-    status: int = 1,
-) -> NoReturn:
-    emit_payload({"ok": False, "error": {"code": code, "message": message}}, True)
-    raise typer.Exit(status)
 
 
 def build_article_search_response(

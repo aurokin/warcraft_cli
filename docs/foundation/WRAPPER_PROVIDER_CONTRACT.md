@@ -4,19 +4,28 @@
 
 This document defines how the Python `warcraft` wrapper interacts with service providers.
 
-It exists to keep the wrapper thin, predictable, and language-agnostic at the provider boundary.
+It exists to keep the routing boundary thin and predictable, and to make every provider look the same to an agent.
 
 ## Wrapper Philosophy
 
 `warcraft` is:
-- a router
-- a discovery layer
-- a thin orchestration layer
+- a router (`warcraft <provider> ...` passthrough)
+- a discovery layer (`search`, `resolve`, `doctor`)
+- the owner of cross-provider composition
 
 It is not:
 - a second implementation of every service
 - a parser owner
 - an API schema owner
+
+Composition is a real wrapper responsibility, not an accident: `actor-profile`,
+`cooldown-packet`, `guide-compare`, `guide-compare-query`, `guide-builds-simc`, `talent-packet`,
+and `talent-describe` all merge or hand off between two or more providers. No provider owns those
+workflows, so the wrapper does. `guild` is an identity-normalizing wrapper over the single guild
+provider (`raiderio`) and keeps the source/provenance shape so a second source can be added without
+changing the contract. The line the wrapper must not cross is *parsing or
+re-modelling a provider's source data*: composite commands consume provider payloads, preserve each
+source's provenance, and add their own reconciliation layer explicitly.
 
 ## Required Provider Capabilities
 
@@ -27,9 +36,12 @@ Every service provider must expose these wrapper-facing capabilities:
 - `doctor`
 - direct passthrough execution for service-specific commands
 
-If a capability is not implemented yet, it must still exist and return a structured stub such as `coming_soon`.
-
-That keeps the wrapper contract stable even while services are being built.
+A capability that is not implemented yet must still exist and return a structured `coming_soon`
+stub. A capability the provider will never have — Raidbots publishes no report index, so it has no
+discovery surface — is declared `not_supported` in the registry, and its in-process `PROVIDER`
+surface still answers with a structured stub instead of a crash; the provider binary does not need
+the command (`raidbots` has no `search` or `resolve`). Either way the wrapper contract stays stable
+and the registry, not a special case in wrapper code, says which it is.
 
 ## Capability Expectations
 
@@ -68,35 +80,96 @@ Examples of what it may check:
 - auth configuration
 - local binary presence
 - cache/storage roots
-- required runtime such as Node for a non-Python package
+- local runtime dependencies such as the SimulationCraft checkout and binary
 
 This should always exist, even for stubbed providers.
 
-## Invocation Strategy
+## Provider Surface
 
-Preferred order:
-- Python-first for Python services
-- shell/CLI boundary second
+The wrapper-facing capabilities are a code-level interface, not prose. `warcraft_core.provider`
+defines:
 
-Practical meaning:
-- Python services may be invoked through shared entrypoints or direct package hooks
-- non-Python services should be invoked through a CLI boundary
-- the wrapper should preserve a stable provider contract either way
+```python
+class ProviderSurface(Protocol):
+    name: str
+    def search(self, query: str, *, limit: int = 10, **options) -> Envelope: ...
+    def resolve(self, target: str, **options) -> Envelope: ...
+    def doctor(self, **options) -> Envelope: ...
+```
 
-## Mixed-Language Rule
+Rules:
+- every provider package exports `PROVIDER` from `<pkg>/provider.py`, an object satisfying that protocol
+- surface methods are pure: they never print and never raise `typer.Exit`; they return an `Envelope` or raise `ProviderError`
+- the provider's Typer commands are thin wrappers that call the surface and emit its envelope
+- the wrapper calls `PROVIDER` objects in-process for `search`, `resolve`, and `doctor` — never a test CLI runner and never a subprocess
+- `warcraft <provider> ...` passthrough invokes that provider's Typer app in-process and forwards the global output flags
 
-If a service is implemented in another language:
-- the wrapper still stays Python
-- the provider is invoked as a CLI process
-- stdout/stderr and exit code become the integration boundary
-- the provider must still satisfy the same `search`, `resolve`, and `doctor` contract
+There is no shell integration boundary and none is planned. Every provider is a Python package in
+this repo; a future non-Python service would be wrapped by a Python adapter package that exports
+`PROVIDER` like any other provider.
+
+## Envelope, Errors, And Exit Codes
+
+Wrapper and provider payloads share one envelope (`ok`, `provider`, `command`, `kind`,
+`schema_version`, `query`, `provenance`, `data`, and `error` on failure) and one exit-code
+vocabulary (1 generic, 2 usage, 3 auth, 4 not found, 5 network/upstream). Both are defined in
+[ERROR_CONTRACT.md](ERROR_CONTRACT.md), which is the normative document; this page does not restate
+them. A wrapper envelope carries those keys and nothing else: its payload is under `data` on
+success, and its failure context is under `error.details` (with `data: {}`). Provider rows inside
+`warcraft search` and `warcraft resolve` output carry `ok` and `error` from the underlying call
+alongside the registry `status`.
+
+Fanout failure rules:
+- `failed_providers`, `failed_provider_count`, and `answered_provider_count` are always present, in
+  both the default and the `--brief` shape, so a dead fanout is never indistinguishable from an
+  empty one
+- a provider row's `answered` says whether the provider actually looked the query up. An
+  explicit-report-only provider (Warcraft Logs) answers free text with a locally built hint and no
+  rows, so it is `ok` but not `answered`, and `answered_provider_count` does not count it
+- when no provider answered and at least one failed, the wrapper emits an error envelope whose
+  `error.code` and exit code are the failed providers' shared ones, so a total outage exits 5
+  instead of returning an ok:true empty page. When they disagree the code is `upstream_error`
+  (exit 5) if every provider failed upstream, otherwise `providers_failed` (exit 1): a crash or a bad
+  argument must not read as "retry later". The rows, each with the provider's `exit_code`, are under
+  `error.details.failed_providers`
+
+Composite failure rules:
+- a composite command exits with the code the contract maps its failing source's error to. The
+  talent routes re-emit the source's own `error.code`; `actor-profile` and `cooldown-packet` name
+  the step that failed (`warcraftlogs_lookup_failed`, `lorrgs_spec_ranking_failed`, ...) and put the
+  source's error under `error.details.source`
+- every wrapper failure envelope has `kind: "error"`
+- structured context belongs under `error.details`, never as a sibling of `code`/`message`. A
+  failure envelope carries no `data` body, so a composite that declines (for example
+  `guide-compare-query` with fewer than two exported bundles) puts the per-provider reasons in
+  `error.details`
+
+Reading a provider payload:
+- every wrapper composite reads provider fields from the envelope's `data` body, through
+  `warcraft_cli.providers.provider_payload_data`; `data` is the only place an envelope carries them
+- test fakes for provider calls must emit the same shape (fields under `data`), or they keep a
+  broken composite green
+
+## Provider Tiers
+
+Every registration declares a tier. `warcraft doctor` reports `wrapper.tiers` and a `tier` per
+provider row, and [ROADMAP.md](../ROADMAP.md) and `README.md` use the same membership.
+
+| Tier | Providers | Meaning |
+|------|-----------|---------|
+| core | `wowhead`, `warcraftlogs`, `simc` | deepest surface and contracts; the product |
+| supported | `method`, `icy-veins`, `raiderio`, `warcraft-wiki`, `lorrgs` | real, narrower surfaces expected to work |
+| experimental | `raidbots`, `blizzard-api`, `curseforge` | thin or unproven surfaces; `blizzard-api` payloads report `provenance.verified: true` for `us`/`eu`/`kr`/`tw` and `false` for `cn`, and `curseforge` addon payloads report `true` |
+
+Tier is descriptive, not a permission: it tells an agent how much to trust the surface before
+building a workflow on it.
 
 ## Provider Registration
 
 The wrapper should know for each provider:
 - provider name
 - command name
-- implementation language
+- support tier
 - whether it is installed
 - whether auth is configured
 - whether auth is required for the provider at all
@@ -130,8 +203,9 @@ Expected fields:
 - `expansion_mode = "profiled"`
 - provider-defined supported expansion list or profile map
 
-Current example:
-- `wowhead`
+Current examples:
+- `wowhead` (expansion profiles)
+- `warcraftlogs` (`retail` / `classic` / `fresh` site profiles)
 
 ### `fixed`
 
@@ -142,13 +216,12 @@ Expected fields:
 - `expansion_mode = "fixed"`
 - explicit `supported_expansions`
 
-Current likely examples:
+Current examples:
 - `method` -> `retail`
 - `icy-veins` -> `retail`
 - `raiderio` -> `retail`
-- `warcraftlogs` -> `retail`
-- `wowprogress` -> `retail`
 - `lorrgs` -> `retail`
+- `raidbots` -> `retail`
 
 ### `none`
 
@@ -172,9 +245,9 @@ The wrapper must not silently widen scope.
 
 `retail` is a real explicit filter, not equivalent to “no expansion filter”.
 
-Future provider note:
-- some providers may require profile-based routing that is not a clean copy of the current wowhead-centric expansion vocabulary
-- `warcraftlogs` is the current example: the wrapper now supports the retail provider surface, but classic/fresh site-profile mapping is still intentionally deferred
+Provider profile note:
+- a `profiled` provider does not have to share Wowhead's profile model; the shared key and alias vocabulary lives in `warcraft_core.expansions`, and each provider maps those keys onto its own model
+- `warcraftlogs` is the second example: the wrapper maps `retail` to `--site retail`, the classic-family keys (`classic`, `tbc`, `wotlk`, `cata`, `mop-classic`) to `--site classic`, and `fresh` to `--site fresh`; `ptr`, `beta`, and `classic-ptr` are rejected rather than coerced
 
 ## Expansion Output Rules
 
@@ -199,15 +272,87 @@ Search result ordering rules:
 - provider-local ranking stays provider-specific
 - the wrapper may apply a thin, tunable cross-provider ranking layer on top of provider-local scores
 - that wrapper layer should be query-aware and use signals like provider family, result kind, and structured query hints
-- that wrapper layer may also use provider-specific boosts for certain intents, such as preferring `raiderio` for character-profile queries and `wowprogress` for guild-profile queries
-- the wrapper may add synthetic search candidates for narrow query families when a provider has a strong direct command surface but not a native search API for that family
+- that wrapper layer may also use provider-specific boosts for certain intents, such as preferring `raiderio` for character-profile and guild-profile queries
 - wrapper ranking must stay inspectable in output, not hidden behind opaque ordering
+- provider scores are not comparable across providers, so each candidate's score is rescaled against
+  its own provider's best row for the query before the merge; `wrapper_ranking` keeps the raw
+  `provider_score` and the `provider_max_score` divisor so the rescale is auditable
+- the rescale divisor has a floor, so a provider whose best row is weak is scaled down rather than
+  promoted to a full score for topping its own empty field. The floor is one shared, documented
+  constant — `MINIMUM_PROVIDER_SCORE_SCALE` in `warcraft_cli.provider_contract`, `40` today —
+  calibrated so a genuine hit clears it on every provider's own scale: a Wowhead exact name scores
+  30 before prefix, term and popularity credit, a Raider.IO exact structured match adds 45 to its
+  base of 12, and the Warcraft Wiki adds 50 for an exact title. A provider whose whole answer is a
+  two-term text match scoring 3 therefore normalizes to `round(100 * 3 / 40) = 8`, not to 100
+- changing the floor or the per-provider scales is a contract change: record the calibration
+  evidence here, because a floor set above a provider's real ceiling would silently demote that
+  provider in every merged list
 - the wrapper should not invent a fake universal content model beyond that thin ranking/orchestration layer
+- `count` is the merged candidate total and `truncated` reports whether `--limit` cut the list
+
+### The merged page: intent, order, diversity, quality
+
+Score arithmetic alone cannot order a merged page: a provider that returns twenty equally scored
+rows normalizes all twenty to 100 and owns every slot. Four structural rules decide the page, and
+each one is visible in the payload.
+
+**Intent — what kind of thing was asked for.** `query_intents()` reads the query for the keywords and
+shapes in the ranking policy. A structured profile query is either `<region> <realm...> <name>` (at
+least three words, the first a Raider.IO region — `us`, `eu`, `kr`, `tw`, `cn` — so multi-word realms
+such as `eu tarren mill Cotti` and `us area 52 Roguecane` count) or a query carrying a
+`guild`/`character` token. `world` is a leaderboard scope, not a region, so `world boss sha of anger`
+is free text. A bare name carrying none of these and no keyword is *not* a profile query:
+- a profile-family row (Raider.IO) answering a query with no profile intent is marked
+  `wrapper_ranking.off_intent` and sorts below every on-intent row, whatever its local score. It
+  takes a page slot only when the on-intent rows cannot fill the page, with one exception: when the
+  page is not anchored and the first off-intent row's name is exactly the query, one slot is kept for
+  it (`merge_policy.reserved_exact_profile_slot_count`), so `warcraft search <character name>` still
+  shows the character beside the wiki's fuzzy matches.
+- the entity provider's own top row anchors the page (`wrapper_ranking.anchor`) when its title is the
+  bare query or starts with it (`Thunderfury, Blessed Blade of the Windseeker` for `thunderfury`):
+  the entity a user named is the primary answer, and another provider's article *about* that entity
+  is supporting reference, however large its local scale. Only a provider's top row can anchor, so a
+  same-named row Wowhead ranked lower (the `Thunderfury` proc spells) never jumps ahead of it. An
+  anchored page keeps no profile slot.
+  The anchor applies only when the query carries no intent at all, so
+  `character us malganis Aurow` still resolves to the character and not to a spell of the same name.
+- structured profile queries (`guild us illidan Liquid`, `character us malganis Aurow`) keep their
+  profile intent boosts and put Raider.IO first.
+
+**Order — a provider's own order is its ranking.** The wrapper never reorders two rows from the same
+provider. It interleaves the providers' lists (`interleave_provider_rows`): at every step the best of
+the providers' next rows, by the anchor tier, the off-intent tier and then the normalized wrapper
+score (`search_result_sort_key`), takes the next place. Boosts therefore decide only *between*
+providers; within one provider, a row the provider ranked lower stays lower.
+
+**Diversity — no provider fills the page.** After interleaving, the page is built with a per-provider cap
+of half the page rounded up. An on-intent row over the cap is *deferred*, not dropped: it fills the
+slots the other on-intent providers leave, so a page is never short while on-intent candidates
+exist. Off-intent rows then fill what is still empty, up to a strict minority of the page
+(`limit // 2`, at least one); the page comes back short rather than repeating twenty near-identical
+profiles. The chosen rows keep their interleaved order, so a promoted row sits where interleaving put
+it and `data.results` never reorders a provider's rows. `data.merge_policy` reports the caps, the
+reserved slot, the candidate total, and how many rows were deferred or withheld
+(`docs/foundation/SAFE_ANALYTICS_RULES.md`: a page that dropped rows says so).
+
+**Quality — the row's own title.** A row whose title *is* the query (`name_match: "exact"`) or whose
+title starts with it (`"title_prefix"`, as in `Thunderfury, Blessed Blade of the Windseeker`) scores
+above one that merely mentions it somewhere, so between providers an exact item/spell/quest beats a
+partial match and a news post about it. The boosts live in the same tunable policy as every other
+weight. A guide row the provider itself flagged as superseded (Wowhead's `stale_guide` ranking
+reason) carries `wrapper_ranking.stale_guide: true`, in the `--brief` rows too; the wrapper passes the
+provider's flag on and never computes one of its own.
+
+Changing any of these rules is a contract change: the model is covered by a table of realistic
+queries with realistic per-provider score scales in `tests/test_provider_contract.py`, and that
+table — not a single number — is what a change has to keep true.
 
 Ranking policy location:
 - default policy lives in shared code
 - optional local override file: `~/.config/warcraft/wrapper_ranking.json`
 - override files should only tune weights and mappings, not redefine provider contracts
+- an unreadable or malformed override file fails with `invalid_config` (exit 2) naming the file,
+  instead of an `internal_error` from the JSON parser
 
 ## Resolve Rules
 
@@ -221,15 +366,25 @@ Ranking policy location:
 Providers whose wrapper `resolve` surface is stubbed or otherwise not ready should be excluded from wrapper fanout and surfaced in exclusion metadata instead of being queried like live routing candidates.
 
 Resolve selection rules:
-- do not pick the first provider that reports `resolved`
-- prefer higher provider-reported confidence first
-- use the tunable wrapper ranking layer, then the provider-reported match score, as tie-breakers
+- `warcraft resolve` and `warcraft search` agree: each provider's match is ranked as search ranks that
+  provider's top row (normalized against the provider's own candidates, anchor and off-intent tiers,
+  intent boosts), and the top-ranked match is the only candidate for the answer
+- provider-reported `resolved` and confidence never lift a match over a better-ranked one; they only
+  break an exact tie on the wrapper score, ahead of the incomparable raw provider score
+- the top-ranked match is the answer only when its own provider resolved it and the query's intents
+  do not rank that provider's family down (`wrapper_ranking.intent_family_fit` is not negative):
+  a guide query is never answered by Lorrgs spec metadata, a guild query never by a wiki article
+- the wrapper never passes its own `--limit` to a provider's resolve: providers judge confidence
+  against their rivals, and a small limit would hide them
 - preserve the chosen provider's `match`, `next_command`, and confidence instead of flattening them
+- when the top-ranked match is not the answer, surface it as `best_unresolved_candidate` (flagged
+  `resolved: false`, with `unresolved_reason`) together with the providers' own
+  `fallback_search_command`s, so the caller always has a next step
 
 Debuggability rules:
 - `warcraft search --ranking-debug` should expose compact ranking summaries for the top wrapper candidates
-- `warcraft resolve --ranking-debug` should expose the ranked resolved candidates the wrapper considered
-- `warcraft search --compact` and `warcraft resolve --compact` should omit bulky provider payloads while keeping the wrapper decision surface intact
+- `warcraft resolve --ranking-debug` should expose the first `--limit` providers' matches in ranking order, each with its provider's `resolved` flag
+- `warcraft search --brief` and `warcraft resolve --brief` should omit bulky provider payloads while keeping the wrapper decision surface intact (`--compact` is the global string-truncation flag and nothing else)
 
 ## Doctor Rules
 
@@ -252,28 +407,18 @@ The wrapper should preserve:
 It should not flatten all provider outputs into one fake universal model.
 It should not turn routing guidance into unsupported "smart answers."
 
-## Milestone Behavior
+## Current State
 
-Milestone 1:
-- `warcraft` proxies `wowhead`
-- `method` exists as a registered provider with stubbed `search`, `resolve`, and `doctor` if needed
-- wrapper commands exist even if some providers are not yet real
-
-Milestone 2:
-- `method` becomes a real provider behind the same contract
-
-Current state:
 - `wowhead` is ready
 - `method` is ready
 - `icy-veins` is ready
 - `raiderio` is ready for direct phase-1 retrieval plus provider-local search and conservative resolve
 - `warcraft-wiki` is ready
-- `wowprogress` is ready for structured search, conservative resolve, and direct phase-1 retrieval
 - `simc` is ready for direct local repo workflows plus readonly APL inspection, conservative reasoning, comparison, analysis packets, and runtime timing helpers, with `search` and `resolve` intentionally returning structured `coming_soon` payloads
-- `warcraftlogs` is ready for explicit report-scoped wrapper routing with retail-only OAuth client-credentials auth, typed world metadata, guild, character, and report commands. Wrapper `search`/`resolve` are intentionally limited to explicit report references (URL or a bare report code) and advertised as `ready_explicit_report_only`: a non-report query keeps `warcraftlogs` in the fanout but returns a structured discovery hint (`count: 0`, `resolved: false`, `message`, `supported_inputs`, `suggested_commands`) rather than a fabricated match
+- `warcraftlogs` is ready for explicit report-scoped wrapper routing with OAuth client-credentials auth across the `retail`, `classic`, and `fresh` site profiles, typed world metadata, guild, character, and report commands. Wrapper `search`/`resolve` are intentionally limited to explicit report references (URL or a bare report code) and advertised as `ready_explicit_report_only`: a non-report query keeps `warcraftlogs` in the fanout but returns a structured discovery hint (`count: 0`, `resolved: false`, `message`, `supported_inputs`, `suggested_commands`) rather than a fabricated match
 - `raidbots` is ready for report consumption (`inspect-report`, `input`, `explain-input`) and local SimC handoff; `search`/`resolve` are `not_supported` (report-driven provider, no discovery surface)
 - `blizzard-api` is ready for official Game Data and Profile reads over OAuth client-credentials auth: `doctor` reports install state, auth posture, and the region/routing block; `game_data` and `profile` are ready (`realm`/`item`/`character` read commands), while `search`/`resolve` stay `coming_soon` until a discovery surface lands. Registered with `expansion_mode=none` (Blizzard's region/namespace model is not the wrapper's expansion axis)
-- `curseforge` is a scaffold for the public CurseForge addon API (`x-api-key` auth, `CURSEFORGE_API_KEY`): `doctor` and `addon` are ready (`curseforge addon <slug|id>` returns the addon metadata, latest files, and the newest file's changelog), while `search`/`resolve` stay `coming_soon`. Registered with `expansion_mode=none` (addon game-version compatibility lives inside file records, not the wrapper's expansion axis). Host/endpoints/response shapes follow the documented public CurseForge Core API and are pending one-time live confirmation (`provenance.verified=false`; run `CURSEFORGE_LIVE_TESTS=1`)
+- `curseforge` is a scaffold for the public CurseForge addon API (`x-api-key` auth, `CURSEFORGE_API_KEY`): `doctor` and `addon` are ready (`curseforge addon <slug|id>` returns the addon metadata, latest files, and the newest file's changelog), while `search`/`resolve` stay `coming_soon`. Registered with `expansion_mode=none` (addon game-version compatibility lives inside file records, not the wrapper's expansion axis). Host/endpoints/response shapes follow the documented public CurseForge Core API and are confirmed against live traffic (`provenance.verified=true`)
 - `lorrgs` is ready for no-auth public Lorrgs reads: static spec/boss/spell metadata, top-parse spec rankings, composition rankings, report overview handoffs, and conservative `search`/`resolve` for Lorrgs URLs, Warcraft Logs report URLs, bare report codes, and spec/boss text. Registered with `expansion_mode=fixed` / `supported_expansions=["retail"]`
 
 ## Documentation Rule

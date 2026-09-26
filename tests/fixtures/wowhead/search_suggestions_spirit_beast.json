@@ -1,0 +1,390 @@
+{
+ "search": "spirit beast",
+ "results": [
+  {
+   "type": 9,
+   "id": 46,
+   "name": "Spirit Beast",
+   "typeName": "Hunter Pet",
+   "icon": "ability_druid_primalprecision",
+   "pinTitle": "Hunter Pet",
+   "pinDescription": "The Spirit Beast family of Hunter pets have the Tenacity specialization. This is an Exotic pet family, which means they can only be tamed by Beast Mastery Hunters with Exotic Beasts. They were first introduced in the Wrath of the Lich King expansion. Spirit Beasts have one of the most valuable special abilities of all pets, Spirit Mend, which allows your pet to do a small amount of healing to any friendly target. Overall, they make exceptional raid and dungeon pets.",
+   "pinBreadcrumb": [
+    "Tenacity"
+   ],
+   "popularity": 0
+  },
+  {
+   "type": 1,
+   "id": 169057,
+   "name": "Spirit Beast",
+   "typeName": "NPC",
+   "displayName": "Spirit Beast",
+   "pinTitle": "NPC",
+   "pinDescription": "The location of this NPC is unknown.",
+   "pinBreadcrumb": [
+    "Normal"
+   ],
+   "popularity": 1
+  },
+  {
+   "type": 1,
+   "id": 168904,
+   "name": "Spirit Beast",
+   "typeName": "NPC",
+   "displayName": "Spirit Beast",
+   "pinTitle": "NPC",
+   "pinDescription": "The location of this NPC is unknown.",
+   "pinBreadcrumb": [
+    "Normal"
+   ],
+   "popularity": 2
+  },
+  {
+   "type": 1,
+   "id": 217608,
+   "name": "Spirit Beast",
+   "typeName": "NPC",
+   "displayName": "Spirit Beast",
+   "pinTitle": "NPC",
+   "pinDescription": "The location of this NPC is unknown.",
+   "pinBreadcrumb": [
+    "Normal"
+   ],
+   "popularity": 3
+  },
+  {
+   "type": 6,
+   "id": 104736,
+   "name": "Summon Raging Beast Spirit",
+   "typeName": "Spell",
+   "icon": "trade_engineering",
+   "pinTitle": "Spell",
+   "pinDescription": "In the Uncategorized Spells category.",
+   "pinBreadcrumb": [
+    "Uncategorized"
+   ],
+   "popularity": 4
+  },
+  {
+   "type": 1,
+   "id": 55787,
+   "name": "Peaceful Beast Spirit",
+   "typeName": "NPC",
+   "displayName": "Peaceful Beast Spirit",
+   "pinTitle": "NPC",
+   "pinDescription": "The location of this NPC is unknown.",
+   "pinBreadcrumb": [
+    "Normal"
+   ],
+   "popularity": 5
+  },
+  {
+   "type": 1,
+   "id": 110388,
+   "name": "Spirit of the Beast",
+   "typeName": "NPC",
+   "displayName": "Spirit of the Beast",
+   "pinTitle": "NPC",
+   "pinDescription": "Spirit of the Beast is an Elite NPC. The location of this NPC is unknown.",
+   "pinBreadcrumb": [
+    "Elite"
+   ],
+   "popularity": 6
+  },
+  {
+   "type": 1,
+   "id": 55790,
+   "name": "Raging Beast Spirit",
+   "typeName": "NPC",
+   "displayName": "Raging Beast Spirit",
+   "pinTitle": "NPC",
+   "pinDescription": "Raging Beast Spirit is a level 35 NPC. The location of this NPC is unknown.",
+   "pinBreadcrumb": [
+    "Normal"
+   ],
+   "popularity": 7
+  },
+  {
+   "type": 1,
+   "id": 55462,
+   "name": "Beast Spirit Kill Credit",
+   "typeName": "NPC",
+   "displayName": "Beast Spirit Kill Credit",
+   "pinTitle": "NPC",
+   "pinDescription": "The location of this NPC is unknown.",
+   "pinBreadcrumb": [
+    "Normal"
+   ],
+   "popularity": 8
+  },
+  {
+   "type": 100,
+   "id": 1514,
+   "name": "Spirit Beasts: The Huntress and the Hunted",
+   "typeName": "Guide",
+   "pinImageUrl": "https://wow.zamimg.com/images/content/tall-headers/retail/categories/classes.jpg?maxHeight=80",
+   "pinTitle": "Classes",
+   "pinFooterText": "Updated: 2021/07/12",
+   "pinDescription": "A guide about every spirit beast! From one spirit beast-obsessed hunter to others, this guide provides all you need to know about the hunt and tame.",
+   "popularity": 11
+  }
+ ],
+ "categories": {
+  "decor": [],
+  "guides": [
+   {
+    "type": 100,
+    "id": 1514,
+    "name": "Spirit Beasts: The Huntress and the Hunted",
+    "typeName": "Guide",
+    "pinImageUrl": "https://wow.zamimg.com/images/content/tall-headers/retail/categories/classes.jpg?maxHeight=80",
+    "pinTitle": "Classes",
+    "pinFooterText": "Updated: 2021/07/12",
+    "pinDescription": "A guide about every spirit beast! From one spirit beast-obsessed hunter to others, this guide provides all you need to know about the hunt and tame."
+   }
+  ],
+  "news": [
+   {
+    "type": 162,
+    "id": 346686,
+    "name": "How to Tame Aradan - Stormrook Spirit Beast Pet That Matches Heroic Edition Mount",
+    "typeName": "News Post",
+    "pinImageUrl": "https://wow.zamimg.com/uploads/blog/images/44319-how-to-tame-aradan-stormrook-spirit-beast-pet-that-matches-heroic-edition-mount.jpg?maxHeight=80",
+    "newsTypeId": 1,
+    "newsTypeName": "Live",
+    "pinTitle": "News",
+    "pinFooterText": "Posted 2024/09/15 by Neryssa",
+    "pinDescription": "Aradan is a mysterious stormrook Spirit Beast hunter pet that players have been trying to figure out how to tame. Thanks to the WoW Secret Finding Discord, the search is now over!"
+   },
+   {
+    "type": 162,
+    "id": 346590,
+    "name": "New Spirit Beast Aradan Is Available: Method of Acquisition Currently Unknown",
+    "typeName": "News Post",
+    "pinImageUrl": "https://wow.zamimg.com/uploads/blog/images/44213-new-spirit-beast-aradan-is-available-method-of-acquisition-currently-unknown.png?maxHeight=80",
+    "newsTypeId": 1,
+    "newsTypeName": "Live",
+    "pinTitle": "News",
+    "pinFooterText": "Posted 2024/09/10 by iMX3",
+    "pinDescription": "Blizzard has confirmed that the new Spirit Beast, Aradan, is available for Beast Mastery Hunters to tame but the method of acquiring this bird is currently unknown!"
+   },
+   {
+    "type": 162,
+    "id": 336319,
+    "name": "BM Hunters: Here's How to Find and Tame Sul'raka, the Emerald Dream's Red Loa Spirit Beast",
+    "typeName": "News Post",
+    "pinImageUrl": "https://wow.zamimg.com/uploads/blog/images/37941-bm-hunters-heres-how-to-find-and-tame-sulraka-the-emerald-dreams-red-loa-spirit.jpg?maxHeight=80",
+    "newsTypeId": 1,
+    "newsTypeName": "Live",
+    "pinTitle": "News",
+    "pinFooterText": "Posted 2023/11/23 by DiscordianKitty",
+    "pinDescription": "Sul'raka is a new spirit beast with a unique skin that's been added to the Emerald Dream in 10.2, but like many other rare pets, there's a trick to finding her. Read our short guide to find out how!"
+   },
+   {
+    "type": 162,
+    "id": 330244,
+    "name": "How to Tame Bloodgullet - Dragonflight's Secret Spirit Beast Hunter Pet",
+    "typeName": "News Post",
+    "pinImageUrl": "https://wow.zamimg.com/uploads/blog/images/31190-how-to-tame-bloodgullet-dragonflights-secret-spirit-beast-hunter-pet.jpg?maxHeight=80",
+    "newsTypeId": 1,
+    "newsTypeName": "Live",
+    "pinTitle": "News",
+    "pinFooterText": "Posted 2022/12/03 by DiscordianKitty",
+    "pinDescription": "A new Spirit Beast pet has been found in Dragonflight! Bloodgullet is an Armoredon with a unique spectral form that can be found wandering around Ohn'ahran Plains - providing you know where to look."
+   },
+   {
+    "type": 162,
+    "id": 317414,
+    "name": "The Newest Spirit Beast - Elegon Can be Tamed in Shadowlands",
+    "typeName": "News Post",
+    "pinImageUrl": "https://wow.zamimg.com/uploads/blog/images/20114-the-newest-spirit-beast-elegon-can-be-tamed-in-shadowlands.jpg?maxHeight=80",
+    "newsTypeId": 3,
+    "newsTypeName": "Shadowlands",
+    "pinTitle": "News",
+    "pinFooterText": "Posted 2020/08/11 by Archimtiros",
+    "pinDescription": "[db=ptr]The raid boss [npc=60410], celestial guardian raid boss of Mogu'shan Vaults, is now a Spirit Beast and can be tamed on the [i]Shadowlands[/i] PTR. Interestingly, the boss was previously categorized as a mechanical, but is now a member of the Spirit Beast family, while similar cloud serpent dragons are part of the Serpent family."
+   },
+   {
+    "type": 162,
+    "id": 287043,
+    "name": "Hunter Pet Series: Spirit Beasts",
+    "typeName": "News Post",
+    "pinImageUrl": "https://wow.zamimg.com/uploads/blog/images/14671-hunter-pet-series-spirit-beasts.jpg?maxHeight=80",
+    "newsTypeId": 5,
+    "newsTypeName": "Wowhead",
+    "pinTitle": "News",
+    "pinFooterText": "Posted 2018/09/15 by Moofzy",
+    "pinDescription": "Welcome to the Hunter Pet Series! Hunters are one of the most played classes in World of Warcraft. One of the many cool benefits of being a Hunter is our pets! We’ve decided to start a new series specifically dedicated to Hunters and their pets. Each week we will highlight a particular pet family and give you a short summary of the pet along with how and where to find them.\r\n\r\nSince Uldir has just been released and the Mythic+ season has just kicked off, we’ve decided to start with one of the most useful (and awesome) pet families: [pet=46]s!"
+   },
+   {
+    "type": 162,
+    "id": 259149,
+    "name": "Upgrade Legendaries to 940 When Nighthold Opens and New Duskwood Spirit Beast",
+    "typeName": "News Post",
+    "pinImageUrl": "https://wow.zamimg.com/uploads/blog/images/10753-upgrade-legendaries-to-940-when-nighthold-opens-and-new-duskwood-spirit-beast.png?maxHeight=80",
+    "newsTypeId": 0,
+    "newsTypeName": "None",
+    "pinTitle": "News",
+    "pinFooterText": "Posted 2017/01/11 by Wowhead",
+    "pinDescription": "Blizzard has clarified when players will be able to upgrade legendaries to ilvl 940; it will be when Nighthold opens. Players with at least one legendary will be able to pick up the quest [quest=45352] and collect 50 [item=143614] from [url=https://www.wowhead.com/the-nighthold-raid-guides-and-rewards#bosses-and-strategy-guides]Nighthold Raid Bosses[/url], Mythic Keystone caches, Emissary bags, and PvP Weekly Quests. This quest is repeatable and rewards [item=143613].\r\n\r\nWhen Nighthold opens, any new legendaries acquired will automatically be ilvl 940. Learn more in the [url=https://www.wowhead.com/legion-legendary-items-guide]Legion Legendary Guide[/url]."
+   },
+   {
+    "type": 162,
+    "id": 209980,
+    "name": "5.2 PTR: Spirit Beasts, Item Upgrade Hiatus, Revised T15 Set Bonuses",
+    "typeName": "News Post",
+    "pinImageUrl": "https://wow.zamimg.com/uploads/blog/images/3470-5-2-ptr-spirit-beasts-item-upgrade-hiatus-revised-t15-set-bonuses.png?maxHeight=80",
+    "newsTypeId": 1,
+    "newsTypeName": "Live",
+    "pinTitle": "News",
+    "pinFooterText": "Posted 2013/01/15 by perculia"
+   },
+   {
+    "type": 162,
+    "id": 128588,
+    "name": "New Hunter Spirit Beast: Arcturis",
+    "typeName": "News Post",
+    "newsTypeId": 1,
+    "newsTypeName": "Live",
+    "pinTitle": "News",
+    "pinFooterText": "Posted 2009/10/31 by fewyn"
+   }
+  ],
+  "tools": [],
+  "database": [
+   {
+    "type": 9,
+    "id": 46,
+    "name": "Spirit Beast",
+    "typeName": "Hunter Pet",
+    "icon": "ability_druid_primalprecision",
+    "pinTitle": "Hunter Pet",
+    "pinDescription": "The Spirit Beast family of Hunter pets have the Tenacity specialization. This is an Exotic pet family, which means they can only be tamed by Beast Mastery Hunters with Exotic Beasts. They were first introduced in the Wrath of the Lich King expansion. Spirit Beasts have one of the most valuable special abilities of all pets, Spirit Mend, which allows your pet to do a small amount of healing to any friendly target. Overall, they make exceptional raid and dungeon pets.",
+    "pinBreadcrumb": [
+     "Tenacity"
+    ]
+   },
+   {
+    "type": 6,
+    "id": 104736,
+    "name": "Summon Raging Beast Spirit",
+    "typeName": "Spell",
+    "icon": "trade_engineering",
+    "pinTitle": "Spell",
+    "pinDescription": "In the Uncategorized Spells category.",
+    "pinBreadcrumb": [
+     "Uncategorized"
+    ]
+   },
+   {
+    "type": 1,
+    "id": 55787,
+    "name": "Peaceful Beast Spirit",
+    "typeName": "NPC",
+    "displayName": "Peaceful Beast Spirit",
+    "pinTitle": "NPC",
+    "pinDescription": "The location of this NPC is unknown.",
+    "pinBreadcrumb": [
+     "Normal"
+    ]
+   },
+   {
+    "type": 1,
+    "id": 110388,
+    "name": "Spirit of the Beast",
+    "typeName": "NPC",
+    "displayName": "Spirit of the Beast",
+    "pinTitle": "NPC",
+    "pinDescription": "Spirit of the Beast is an Elite NPC. The location of this NPC is unknown.",
+    "pinBreadcrumb": [
+     "Elite"
+    ]
+   },
+   {
+    "type": 1,
+    "id": 169057,
+    "name": "Spirit Beast",
+    "typeName": "NPC",
+    "displayName": "Spirit Beast",
+    "pinTitle": "NPC",
+    "pinDescription": "The location of this NPC is unknown.",
+    "pinBreadcrumb": [
+     "Normal"
+    ]
+   },
+   {
+    "type": 1,
+    "id": 168904,
+    "name": "Spirit Beast",
+    "typeName": "NPC",
+    "displayName": "Spirit Beast",
+    "pinTitle": "NPC",
+    "pinDescription": "The location of this NPC is unknown.",
+    "pinBreadcrumb": [
+     "Normal"
+    ]
+   },
+   {
+    "type": 1,
+    "id": 55790,
+    "name": "Raging Beast Spirit",
+    "typeName": "NPC",
+    "displayName": "Raging Beast Spirit",
+    "pinTitle": "NPC",
+    "pinDescription": "Raging Beast Spirit is a level 35 NPC. The location of this NPC is unknown.",
+    "pinBreadcrumb": [
+     "Normal"
+    ]
+   },
+   {
+    "type": 1,
+    "id": 55462,
+    "name": "Beast Spirit Kill Credit",
+    "typeName": "NPC",
+    "displayName": "Beast Spirit Kill Credit",
+    "pinTitle": "NPC",
+    "pinDescription": "The location of this NPC is unknown.",
+    "pinBreadcrumb": [
+     "Normal"
+    ]
+   },
+   {
+    "type": 6,
+    "id": 63184,
+    "name": "Pet Spirit Beast",
+    "typeName": "Spell",
+    "icon": "trade_engineering",
+    "pinTitle": "Spell",
+    "pinDescription": "In the NPC Abilities category.",
+    "pinBreadcrumb": [
+     "NPC Abilities"
+    ]
+   },
+   {
+    "type": 1,
+    "id": 217608,
+    "name": "Spirit Beast",
+    "typeName": "NPC",
+    "displayName": "Spirit Beast",
+    "pinTitle": "NPC",
+    "pinDescription": "The location of this NPC is unknown.",
+    "pinBreadcrumb": [
+     "Normal"
+    ]
+   },
+   {
+    "type": 6,
+    "id": 104732,
+    "name": "Summon Peaceful Spirit Beast",
+    "typeName": "Spell",
+    "icon": "trade_engineering",
+    "pinTitle": "Spell",
+    "pinDescription": "In the Uncategorized Spells category.",
+    "pinBreadcrumb": [
+     "Uncategorized"
+    ]
+   }
+  ]
+ }
+}

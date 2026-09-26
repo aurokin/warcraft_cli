@@ -11,7 +11,13 @@ warcraftlogs report-encounter 7Rc3HPCWGYy1z4tT --fight-id 25
 warcraftlogs report-encounter 'https://www.warcraftlogs.com/reports/7Rc3HPCWGYy1z4tT#fight=25'
 ```
 
-If both a URL fragment and `--fight-id` are provided, `--fight-id` is the explicit override.
+The URL may carry the fight as `?fight=25` or `#fight=25`. If both a URL fight and `--fight-id`
+are provided, `--fight-id` is the explicit override.
+Report codes are 16 letters and digits and need not contain a digit (`JVFTxcKCqrvpaAzD`); `search`
+and `resolve` recognise such a code bare or inside a `/reports/<code>` URL, but not a CamelCase
+word such as `HavocDemonHunter`.
+A trash fight (Warcraft Logs encounter ID 0) is sliced by its fight ID alone, with no encounter or
+kill-type filter.
 
 ## Encounter And Window Scope
 
@@ -19,10 +25,14 @@ Use these flags to narrow report, encounter, table, graph, ranking, and sampled 
 
 - `--fight-id`: one report fight; repeat where the command supports multiple fights
 - `--encounter-id`: one Warcraft Logs encounter id
+
+A `--fight-id`, `--encounter-id`, or `--difficulty` that matches no fight in the report fails with
+`not_found` (exit 4) on `report-events`, `report-table`, `report-graph`, `report-rankings`, and
+`report-player-details`, with the rejected slice echoed in the failure envelope's `query`.
 - `--difficulty`: provider difficulty id
 - `--zone-id`: provider zone id
 - `--start-time` / `--end-time`: absolute report timestamps in milliseconds
-- `--window-start-ms` / `--window-end-ms`: encounter-relative timestamps on supported `report-encounter*` commands
+- `--window-start-ms` / `--window-end-ms`: encounter-relative timestamps on supported `report-encounter*` commands; a window that starts at or after the fight's end fails with `invalid_query` (exit 2) instead of answering zero
 - `--left-window-start-ms` / `--left-window-end-ms` and `--right-window-start-ms` / `--right-window-end-ms`: explicit comparison windows for `report-encounter-aura-compare`
 - `--boss-id` / `--boss-name`: sampled cross-report boss scope where supported
 
@@ -49,11 +59,18 @@ Sampled analytics commands such as `boss-kills`, `top-kills`, `spec-kill-samples
 - report budget: `--report-pages`, `--reports-per-page`
 - time filters: `--start-time`, `--end-time`
 - encounter filters: `--zone-id`, `--boss-id`, `--boss-name`, `--difficulty`
-- participant filter: `--spec-name` keeps sampled kills that include that spec; it is not a spec leaderboard
+- participant filter: `--spec-name` keeps sampled kills that include that spec; it is not a spec leaderboard. Spec names repeat across classes, so pass the class too (`'Frost Mage'`, `frost-death-knight`); a bare spec name matches every class with that spec, lists them in `sample.matched_spec_classes`, and adds a note when there are several
 
 `spec-kill-samples` requires `--spec-name` (alongside boss scope): it returns the participant filter as an explicit, labeled cohort (`cohort: spec_filtered_participant_kill_cohort`) rather than as an optional refinement of `boss-kills`.
 
-Keep sample size, exclusions, truncation, freshness, and citations with any downstream analysis.
+One real pull that two raiders both uploaded is collapsed into a single sampled kill (same
+encounter, difficulty, raid size and guild, with wall-clock start and end within 5 s of another
+report of that pull).
+`sample.duplicates_removed` counts the collapse and the kept kill's `duplicate_reports` cites the
+folded-in report codes and fight ids.
+
+Keep sample size, exclusions, truncation, deduplication, freshness, and citations with any
+downstream analysis.
 
 ## Raw GraphQL
 
@@ -77,7 +94,7 @@ cat ./query.graphql | warcraftlogs graphql --query - --var code=7Rc3HPCWGYy1z4tT
 - `--query '<operation text>'`: literal GraphQL
 - `--query @path/to/query.graphql`: read a file
 - `--query -`: read stdin
-- `--introspect`: run the built-in introspection query and return `introspection`
+- `--introspect`: run the built-in introspection query and return its result (`data.__schema`)
 
 ### Variables
 
@@ -116,4 +133,4 @@ If a query declares `$fightIDs: [Int]`, repeated `--fight-id` values are injecte
 
 User-endpoint raw queries are not cached, even when `--cache-ttl` is set, because saved user auth can switch accounts and may expose private report or `currentUser` data.
 
-Partial GraphQL errors with useful data are emitted as `graphql_warnings` plus `notes`, matching typed command behavior.
+Partial GraphQL errors with useful data are emitted as `provenance.graphql_warnings`; `data` stays the GraphQL result verbatim, so an alias such as `notes` is never overwritten.

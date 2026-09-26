@@ -3,57 +3,42 @@ from __future__ import annotations
 import io
 import json
 import tempfile
+from collections.abc import Mapping
 from contextlib import redirect_stderr, redirect_stdout
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, NoReturn
 from urllib.parse import urlparse
 
 import typer
-from blizzard_api_cli.main import app as blizzard_app
-from curseforge_cli.main import app as curseforge_app
-from icy_veins_cli.main import app as icy_veins_app
-from lorrgs_cli.main import app as lorrgs_app
-from lorrgs_cli.search import parse_report_reference as parse_lorrgs_report_reference
-from method_cli.main import app as method_app
-from raidbots_cli.main import app as raidbots_app
-from raiderio_cli.main import app as raiderio_app
-from simc_cli.main import app as simc_app
-from typer.main import get_command
-from warcraft_content.article_bundle import compare_article_bundles, load_article_bundle
+from warcraft_content.article_bundle import ArticleBundleError, compare_article_bundles, load_article_bundle
+from warcraft_core.cli import (
+    CompactMaxCharsOption,
+    CompactOption,
+    FieldsOption,
+    FieldsStrictOption,
+    PrettyOption,
+    ProfileOption,
+    RuntimeConfig,
+    cfg_as,
+    configure,
+    emit,
+    fail,
+    guarded_run,
+)
+from warcraft_core.exit_codes import EXIT_GENERIC, EXIT_NETWORK, EXIT_NOT_FOUND, EXIT_USAGE
+from warcraft_core.expansions import wowhead_path_prefixes
 from warcraft_core.identity import (
     build_reference_transport_packet_payload,
     parse_wowhead_talent_calc_ref,
     validate_talent_transport_packet,
 )
-from warcraft_core.output import emit
-from warcraft_core.provider_contract import (
-    compact_resolve_match,
-    compact_wrapper_candidate,
-    decorate_resolve_payload,
-    decorate_search_result,
-    resolve_payload_sort_key,
-    search_result_sort_key,
-    synthetic_resolve_payloads,
-    synthetic_search_candidates,
-)
-from warcraft_wiki_cli.main import app as warcraft_wiki_app
-from warcraftlogs_cli.main import app as warcraftlogs_app
-from wowhead_cli.main import app as wowhead_app
-from wowprogress_cli.main import app as wowprogress_app
+from warcraft_core.output import DEFAULT_COMPACT_MAX_CHARS
+from warcraft_core.paths import data_root
+from warcraft_core.shapes import as_dict, as_list
 
-from warcraft_cli.cooldown_packet import (
-    build_phase_windows,
-    normalize_lorrgs_casts,
-    normalize_warcraftlogs_actor_casts,
-    raw_phase_markers,
-    selected_phase_window,
-    source_command,
-    spell_catalog,
-    spell_summary,
-    top_parse_samples,
-    tracked_spell_ids,
-)
+from warcraft_cli.cooldown_packet_flow import CooldownRequest, emit_cooldown_packet
 from warcraft_cli.crosswalk import (
     actor_lookup_identity,
     actor_spec_ambiguous,
@@ -62,24 +47,46 @@ from warcraft_cli.crosswalk import (
     reconcile_class_spec,
     report_actor_names,
 )
-from warcraft_cli.guild import guild_merge_payload, normalized_identity, raiderio_guild_summary, wowprogress_guild_summary
+from warcraft_cli.guild import guild_merge_payload, normalized_identity, raiderio_guild_summary
+from warcraft_cli.provider_contract import (
+    compact_resolve_match,
+    compact_wrapper_candidate,
+    decorate_resolve_payload,
+    decorate_search_result,
+    merged_search_page,
+    provider_max_candidate_score,
+    resolve_answer_accepted,
+    resolve_payload_sort_key,
+)
 from warcraft_cli.providers import (
+    ProviderRegistration,
     expansion_filtered_providers,
     expansion_support_snapshot,
     get_provider,
     global_doctor_payload,
+    invoke_provider_command,
     list_providers,
     provider_expansion_args,
     provider_expansion_exclusion_reason,
     provider_expansion_support,
     provider_invoke,
+    provider_payload_data,
     provider_resolve,
     provider_search,
+    provider_surface_status,
     resolve_wrapper_expansion_key,
+    source_exit_code,
     surface_filtered_providers,
+    wrapper_envelope,
 )
+from warcraft_cli.schema import envelope_json_schema
 
+PROVIDER_NAME = "warcraft"
 app = typer.Typer(add_completion=False, help="Warcraft wrapper CLI for routing to service-specific Warcraft CLIs.")
+
+
+def _emit(ctx: typer.Context, payload: Mapping[str, Any], *, err: bool = False) -> None:
+    emit(ctx, wrapper_envelope(ctx.info_name or "", payload), err=err)
 GUIDE_COMPARE_BUNDLES_ARGUMENT = typer.Argument(
     ...,
     help="Two or more exported guide bundle directories from wowhead, method, or icy-veins.",
@@ -87,28 +94,22 @@ GUIDE_COMPARE_BUNDLES_ARGUMENT = typer.Argument(
 GUIDE_COMPARE_QUERY_PROVIDERS = ("wowhead", "method", "icy-veins")
 
 
-def _emit(payload: Any, *, pretty: bool, err: bool = False) -> None:
-    emit(payload, pretty=pretty, err=err)
+@dataclass(slots=True)
+class WrapperConfig(RuntimeConfig):
+    """Shared runtime config plus the wrapper's one extra global flag."""
 
-
-def _invoke_sub_app(sub_app: typer.Typer, *, args: list[str], prog_name: str) -> None:
-    command = get_command(sub_app)
-    try:
-        # standalone_mode=False makes click *return* the exit code for typer.Exit/click.Exit
-        # rather than calling sys.exit, so a provider's `raise typer.Exit(1)` would otherwise
-        # be silently swallowed to exit 0. Re-raise it so passthrough propagates failures.
-        exit_code = command.main(args=args, prog_name=prog_name, standalone_mode=False)
-    except SystemExit as exc:
-        code = exc.code if isinstance(exc.code, int) else 1
-        raise typer.Exit(code) from exc
-    if isinstance(exit_code, int) and exit_code != 0:
-        raise typer.Exit(exit_code)
+    requested_expansion: str | None = None
 
 
 @app.callback()
 def main_callback(
     ctx: typer.Context,
-    pretty: bool = typer.Option(False, "--pretty", help="Pretty-print JSON output."),
+    pretty: PrettyOption = False,
+    compact: CompactOption = False,
+    fields: FieldsOption = None,
+    fields_strict: FieldsStrictOption = False,
+    profile: ProfileOption = None,
+    compact_max_chars: CompactMaxCharsOption = DEFAULT_COMPACT_MAX_CHARS,
     expansion: str | None = typer.Option(
         None,
         "--expansion",
@@ -121,23 +122,21 @@ def main_callback(
             requested_expansion = resolve_wrapper_expansion_key(expansion)
         except ValueError as exc:
             raise typer.BadParameter(str(exc), param_hint="--expansion") from exc
-    ctx.obj = {"pretty": pretty, "requested_expansion": requested_expansion}
-
-
-def _pretty(ctx: typer.Context) -> bool:
-    obj = ctx.obj
-    if isinstance(obj, dict):
-        return bool(obj.get("pretty"))
-    return False
+    configure(
+        ctx,
+        provider=PROVIDER_NAME,
+        pretty=pretty,
+        compact=compact,
+        fields=fields,
+        fields_strict=fields_strict,
+        profile=profile,
+        compact_max_chars=compact_max_chars,
+        config=WrapperConfig(requested_expansion=requested_expansion),
+    )
 
 
 def _requested_expansion(ctx: typer.Context) -> str | None:
-    obj = ctx.obj
-    if isinstance(obj, dict):
-        value = obj.get("requested_expansion")
-        if isinstance(value, str) and value:
-            return value
-    return None
+    return cfg_as(ctx, WrapperConfig).requested_expansion
 
 
 def _expansion_passthrough_advisory(ctx: typer.Context, *, provider_name: str) -> dict[str, Any] | None:
@@ -148,7 +147,7 @@ def _expansion_passthrough_advisory(ctx: typer.Context, *, provider_name: str) -
     expansion it returns an advisory dict (relax-to-passthrough): the provider has no
     expansion semantics to honor, so the command runs unchanged with the note attached.
     For a ``fixed``/``profiled`` provider asked for an unsupported expansion this is a
-    genuine mismatch — it emits ``unsupported_provider_expansion`` and exits 1.
+    genuine mismatch — it emits ``unsupported_provider_expansion`` and exits 2 (a usage error).
     """
     requested_expansion = _requested_expansion(ctx)
     if requested_expansion is None:
@@ -168,35 +167,55 @@ def _expansion_passthrough_advisory(ctx: typer.Context, *, provider_name: str) -
                 "command was passed through unchanged."
             ),
         }
-    _emit(
-        {
-            "ok": False,
-            "error": {
-                "code": "unsupported_provider_expansion",
-                "message": (
-                    f"Provider {provider_name!r} does not support wrapper expansion "
-                    f"{requested_expansion!r}."
-                ),
-            },
+    fail(
+        ctx,
+        "unsupported_provider_expansion",
+        f"Provider {provider_name!r} does not support wrapper expansion {requested_expansion!r}.",
+        exit_code=EXIT_USAGE,
+        query=_passthrough_query(provider_name, requested_expansion),
+        details={
             "provider": provider_name,
             "requested_expansion": requested_expansion,
-            "expansion_support": provider_expansion_support(
-                registration,
-                requested_expansion=requested_expansion,
-            ),
+            "expansion_support": provider_expansion_support(registration, requested_expansion=requested_expansion),
         },
-        pretty=_pretty(ctx),
-        err=True,
     )
-    raise typer.Exit(1)
+
+
+def _passthrough_query(provider_name: str, requested_expansion: str) -> dict[str, str]:
+    """What a passthrough refusal echoes: the wrapper's own parsed input, never the provider's argv."""
+    return {"provider": provider_name, "expansion": requested_expansion}
 
 
 def _has_option(args: list[str], flags: set[str]) -> bool:
     return any(arg in flags or any(arg.startswith(f"{flag}=") for flag in flags) for arg in args)
 
 
-def _passthrough_args(ctx: typer.Context, *, provider_name: str) -> list[str]:
-    args = list(ctx.args)
+def _forwarded_output_args(ctx: typer.Context) -> list[str]:
+    """The wrapper's global output flags, restated for the provider CLI behind a passthrough.
+
+    Every binary accepts the same common options, so `warcraft --pretty wowhead search x` must
+    shape the provider's payload the same way `warcraft --pretty search x` shapes the wrapper's.
+    """
+    output = cfg_as(ctx, WrapperConfig).output
+    args: list[str] = []
+    if output.pretty:
+        args.append("--pretty")
+    if output.compact:
+        args.append("--compact")
+    if output.compact_max_chars != DEFAULT_COMPACT_MAX_CHARS:
+        args += ["--compact-max-chars", str(output.compact_max_chars)]
+    for path in output.fields:
+        args += ["--fields", path]
+    if output.fields_strict:
+        args.append("--fields-strict")
+    if output.profile is not None:
+        args += ["--profile", output.profile]
+    return args
+
+
+def _passthrough_args(ctx: typer.Context, *, provider_name: str, forward_output: bool = True) -> list[str]:
+    """Provider argv for a passthrough; ``forward_output=False`` leaves output shaping to the wrapper."""
+    args = [*(_forwarded_output_args(ctx) if forward_output else []), *ctx.args]
     requested_expansion = _requested_expansion(ctx)
     if requested_expansion is None:
         return args
@@ -205,26 +224,17 @@ def _passthrough_args(ctx: typer.Context, *, provider_name: str) -> list[str]:
         return args
     expansion_args = provider_expansion_args(registration, requested_expansion)
     if expansion_args:
-        duplicate_flags = {"--expansion"} if provider_name == "wowhead" else {"--site"}
+        duplicate_flags = {f"--{registration.expansion_option}"}
         if _has_option(args, duplicate_flags):
             flag_text = " or ".join(sorted(duplicate_flags))
-            _emit(
-                {
-                    "ok": False,
-                    "error": {
-                        "code": "duplicate_expansion_argument",
-                        "message": (
-                            f"Do not pass both warcraft --expansion and provider-level {flag_text} "
-                            "in the same command."
-                        ),
-                    },
-                    "provider": provider_name,
-                    "requested_expansion": requested_expansion,
-                },
-                pretty=_pretty(ctx),
-                err=True,
+            fail(
+                ctx,
+                "duplicate_expansion_argument",
+                f"Do not pass both warcraft --expansion and provider-level {flag_text} in the same command.",
+                exit_code=EXIT_USAGE,
+                query=_passthrough_query(provider_name, requested_expansion),
+                details={"provider": provider_name, "requested_expansion": requested_expansion},
             )
-            raise typer.Exit(1)
         return [*expansion_args, *args]
     return args
 
@@ -233,13 +243,15 @@ def _run_passthrough(ctx: typer.Context, sub_app: typer.Typer, *, provider_name:
     """Proxy ``warcraft <provider> ...`` to a provider CLI, applying expansion policy.
 
     Normal case: invoke the sub-app directly so its payload reaches stdout untouched.
-    none-expansion relax case: capture the provider payload and attach the advisory note
-    as an additive sibling key (provider payload preserved), then re-emit.
+    none-expansion relax case: capture the provider envelope and attach the advisory note inside it
+    (``data`` on success, ``error.details`` on failure), then re-emit.
     """
     advisory = _expansion_passthrough_advisory(ctx, provider_name=provider_name)
-    args = _passthrough_args(ctx, provider_name=provider_name)
+    # In the capture path the wrapper shapes the annotated payload itself (through ``_emit``), so
+    # the output flags are not forwarded; otherwise ``--fields data.expansion_advisory`` could never match.
+    args = _passthrough_args(ctx, provider_name=provider_name, forward_output=advisory is None)
     if advisory is None:
-        _invoke_sub_app(sub_app, args=args, prog_name=prog_name)
+        invoke_provider_command(sub_app, args=args, prog_name=prog_name)
         return
     # The provider emits its payload to stdout (ok) or stderr (error). Capture both so the
     # advisory note can be attached regardless of which stream carried the JSON payload.
@@ -247,7 +259,7 @@ def _run_passthrough(ctx: typer.Context, sub_app: typer.Typer, *, provider_name:
     # <none-provider> ...` combination — normal `warcraft <provider> ...` returns at the
     # advisory-is-None branch above and streams untouched. There is no incremental streaming to
     # lose here regardless: provider commands emit a single JSON envelope all at once, and
-    # attaching the advisory as an additive sibling key requires the whole payload to parse it,
+    # attaching the advisory inside the envelope requires the whole payload to parse it,
     # so the buffer just holds that one envelope momentarily (non-JSON output like --help is
     # small and handled by the passthrough branch below). The buffering is intrinsic to the
     # annotate-the-payload feature, not an incidental regression of normal simc/report workflows.
@@ -255,19 +267,19 @@ def _run_passthrough(ctx: typer.Context, sub_app: typer.Typer, *, provider_name:
     exit_code = 0
     try:
         with redirect_stdout(out_buf), redirect_stderr(err_buf):
-            _invoke_sub_app(sub_app, args=args, prog_name=prog_name)
+            invoke_provider_command(sub_app, args=args, prog_name=prog_name)
     except typer.Exit as exc:
         exit_code = exc.exit_code if isinstance(exc.exit_code, int) else 1
     out_text, err_text = out_buf.getvalue(), err_buf.getvalue()
     out_json, err_json = _parse_json_object(out_text), _parse_json_object(err_text)
     if out_json is not None:
-        _emit(_with_expansion_advisory(out_json, advisory), pretty=_pretty(ctx))
+        _emit(ctx, _with_expansion_advisory(out_json, advisory))
     elif err_json is not None:
-        _emit(_with_expansion_advisory(err_json, advisory), pretty=_pretty(ctx), err=True)
+        _emit(ctx, _with_expansion_advisory(err_json, advisory), err=True)
     else:
         # Non-JSON provider output (e.g. --help text): surface the advisory on its own so the
         # relax is never silent, then pass the raw output through below.
-        _emit(advisory, pretty=_pretty(ctx), err=True)
+        _emit(ctx, {"expansion_advisory": advisory}, err=True)
     # Preserve any non-payload stream content verbatim (provenance is never hidden).
     if out_json is None and out_text:
         typer.echo(out_text, nl=False)
@@ -286,9 +298,11 @@ def _parse_json_object(text: str) -> dict[str, Any] | None:
 
 
 def _with_expansion_advisory(payload: dict[str, Any], advisory: dict[str, Any]) -> dict[str, Any]:
-    annotated = {**payload, "expansion_advisory": advisory}
-    annotated.setdefault("expansion_filter", advisory["expansion_filter"])
-    return annotated
+    """Attach the advisory inside the provider envelope: ``data`` on success, ``error.details`` on failure."""
+    if payload.get("ok") is False:
+        error = as_dict(payload.get("error"))
+        return {**payload, "error": {**error, "details": {**as_dict(error.get("details")), "expansion_advisory": advisory}}}
+    return {**payload, "data": {**as_dict(payload.get("data")), "expansion_advisory": advisory}}
 
 
 def _slugify_path_fragment(value: str) -> str:
@@ -306,7 +320,8 @@ def _slugify_path_fragment(value: str) -> str:
 
 
 def _default_guide_compare_query_root(query: str) -> Path:
-    return Path.cwd() / "warcraft_guide_compare" / _slugify_path_fragment(query)
+    """Where exported bundles land without ``--out-root``: the XDG data dir, never the caller's CWD."""
+    return data_root() / "guide_compare" / _slugify_path_fragment(query)
 
 
 def _guide_compare_manifest_path(root: Path) -> Path:
@@ -468,8 +483,8 @@ def _write_guide_compare_manifest(
     for row in provider_results:
         if row.get("status") not in {"exported", "reused"}:
             continue
-        candidate = row.get("candidate") if isinstance(row.get("candidate"), dict) else {}
-        freshness = row.get("freshness") if isinstance(row.get("freshness"), dict) else {}
+        candidate = as_dict(row.get("candidate"))
+        freshness = as_dict(row.get("freshness"))
         providers.append(
             {
                 "provider": row.get("provider"),
@@ -534,173 +549,6 @@ def _provider_payload_result(
     }
 
 
-def _fail_cooldown_packet(
-    ctx: typer.Context,
-    *,
-    code: str,
-    message: str,
-    query: dict[str, Any],
-    details: dict[str, Any] | None = None,
-) -> NoReturn:
-    error = {"code": code, "message": message}
-    if details:
-        error.update(details)
-    _emit(
-        {
-            "ok": False,
-            "provider": "warcraft",
-            "kind": "cooldown_packet",
-            "query": query,
-            "error": error,
-        },
-        pretty=_pretty(ctx),
-        err=True,
-    )
-    raise typer.Exit(1)
-
-
-def _cooldown_provider_payload(
-    ctx: typer.Context,
-    provider: str,
-    args: list[str],
-    *,
-    query: dict[str, Any],
-    error_code: str,
-    error_message: str,
-    required: bool = True,
-) -> dict[str, Any] | None:
-    result = _provider_payload_result(provider, args, expansion=_requested_expansion(ctx))
-    if result.get("status") == "ok":
-        return result
-    if not required:
-        return result
-    _fail_cooldown_packet(
-        ctx,
-        code=error_code,
-        message=error_message,
-        query=query,
-        details={"source": result.get("error"), "provider": provider},
-    )
-
-
-def _provider_source(provider_result: dict[str, Any] | None, *, command: str, args: list[str]) -> dict[str, Any]:
-    raw_payload = provider_result.get("payload") if isinstance(provider_result, dict) else None
-    payload: dict[str, Any] = raw_payload if isinstance(raw_payload, dict) else {}
-    raw_provenance = payload.get("provenance")
-    provenance: dict[str, Any] = raw_provenance if isinstance(raw_provenance, dict) else {}
-    raw_report = payload.get("report")
-    report: dict[str, Any] = raw_report if isinstance(raw_report, dict) else {}
-    return {
-        "provider": provider_result.get("provider") if isinstance(provider_result, dict) else None,
-        "status": provider_result.get("status") if isinstance(provider_result, dict) else "not_requested",
-        "command": source_command(command, args),
-        "source_url": provenance.get("source_url"),
-        "report": report or None,
-        "error": provider_result.get("error") if isinstance(provider_result, dict) else None,
-    }
-
-
-def _lorrgs_payload_data(provider_result: dict[str, Any] | None) -> dict[str, Any]:
-    raw_payload = provider_result.get("payload") if isinstance(provider_result, dict) else None
-    payload: dict[str, Any] = raw_payload if isinstance(raw_payload, dict) else {}
-    raw_data = payload.get("data")
-    return raw_data if isinstance(raw_data, dict) else {}
-
-
-def _find_lorrgs_fight(data: dict[str, Any], fight_id: int) -> dict[str, Any] | None:
-    raw_fights = data.get("fights")
-    fights: list[Any] = raw_fights if isinstance(raw_fights, list) else []
-    for fight in fights:
-        if isinstance(fight, dict) and fight.get("fight_id") == fight_id:
-            return fight
-    return fights[0] if len(fights) == 1 and isinstance(fights[0], dict) else None
-
-
-def _available_lorrgs_players(fight: dict[str, Any]) -> list[dict[str, Any]]:
-    raw_players = fight.get("players")
-    players: list[Any] = raw_players if isinstance(raw_players, list) else []
-    available = []
-    for player in players:
-        if not isinstance(player, dict):
-            continue
-        available.append(
-            {
-                "name": player.get("name"),
-                "source_id": player.get("source_id"),
-                "spec_slug": player.get("spec_slug"),
-                "class_slug": player.get("class_slug"),
-            }
-        )
-    return available
-
-
-def _resolve_lorrgs_player(
-    fight: dict[str, Any],
-    *,
-    actor_id: int | None,
-    actor_name: str | None,
-) -> tuple[dict[str, Any] | None, str | None]:
-    raw_players = fight.get("players")
-    players = [player for player in raw_players if isinstance(player, dict)] if isinstance(raw_players, list) else []
-    if actor_id is not None:
-        for player in players:
-            if _cooldown_int(player.get("source_id")) == actor_id:
-                return player, None
-        return None, "actor_id_not_found"
-    if actor_name is not None and actor_name.strip():
-        normalized_name = actor_name.strip().casefold()
-        matches = [
-            player
-            for player in players
-            if isinstance(player.get("name"), str) and str(player["name"]).casefold() == normalized_name
-        ]
-        if len(matches) == 1:
-            return matches[0], None
-        if len(matches) > 1:
-            return None, "ambiguous_actor_name"
-        return None, "actor_name_not_found"
-    return None, "missing_actor"
-
-
-def _find_warcraftlogs_fight(provider_result: dict[str, Any] | None, fight_id: int) -> dict[str, Any] | None:
-    raw_payload = provider_result.get("payload") if isinstance(provider_result, dict) else None
-    payload: dict[str, Any] = raw_payload if isinstance(raw_payload, dict) else {}
-    raw_fights = payload.get("fights")
-    fights: list[Any] = raw_fights if isinstance(raw_fights, list) else []
-    for fight in fights:
-        if isinstance(fight, dict) and fight.get("id") == fight_id:
-            return fight
-    return None
-
-
-def _phase_deaths(deaths: Any, *, window: dict[str, Any] | None) -> dict[str, Any]:
-    raw = deaths if isinstance(deaths, list) else []
-    selected = []
-    for death in raw:
-        if not isinstance(death, dict):
-            continue
-        timestamp = _cooldown_int(death.get("ts")) or _cooldown_int(death.get("timestamp"))
-        if timestamp is None or window is None:
-            continue
-        start_ms = _cooldown_int(window.get("start_ms"))
-        end_ms = _cooldown_int(window.get("end_ms"))
-        if start_ms is not None and end_ms is not None and start_ms <= timestamp < end_ms:
-            selected.append(death)
-    return {"count": len(raw), "raw": raw, "selected_phase_count": len(selected), "selected_phase": selected}
-
-
-def _cooldown_int(value: Any) -> int | None:
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float):
-        return int(value)
-    if isinstance(value, str) and value.strip().lstrip("-").isdigit():
-        return int(value)
-    return None
-
-
 def _load_guide_build_source(source_path: Path) -> tuple[str, list[tuple[Path, dict[str, Any]]], dict[str, Any] | None]:
     manifest_path = source_path / "manifest.json"
     if not manifest_path.exists():
@@ -733,7 +581,7 @@ def _collect_build_reference_handoff_rows(
 ) -> list[dict[str, Any]]:
     grouped: dict[str, dict[str, Any]] = {}
     for bundle_path, bundle in bundle_inputs:
-        manifest = bundle.get("manifest") if isinstance(bundle.get("manifest"), dict) else {}
+        manifest = as_dict(bundle.get("manifest"))
         provider = manifest.get("provider") if isinstance(manifest.get("provider"), str) else None
         for row in bundle.get("build_references") or []:
             if not isinstance(row, dict):
@@ -882,26 +730,51 @@ def _handoff_evidence_section(sources: list[Any]) -> dict[str, Any]:
     }
 
 
-def _handoff_simc_section(simc_results: dict[str, Any | None]) -> dict[str, Any]:
-    identify_result = simc_results["identify"]
-    decode_result = simc_results["decode"]
-    describe_result = simc_results["describe"]
+def _handoff_leg(result: Any) -> dict[str, Any] | None:
+    """One simc leg's outcome, with its failure reason beside its payload rather than buried in it."""
+    if not isinstance(result, dict):
+        return None
+    payload = as_dict(result.get("payload"))
+    error = as_dict(payload.get("error"))
     return {
-        "identify": {
-            "exit_code": identify_result.get("exit_code"),
-            "payload": identify_result.get("payload"),
-        },
-        "decode": (
-            {"exit_code": decode_result.get("exit_code"), "payload": decode_result.get("payload")}
-            if isinstance(decode_result, dict)
-            else None
-        ),
-        "describe": (
-            {"exit_code": describe_result.get("exit_code"), "payload": describe_result.get("payload")}
-            if isinstance(describe_result, dict)
-            else None
-        ),
+        "exit_code": result.get("exit_code"),
+        "ok": result.get("exit_code") == 0,
+        "error": {"code": error.get("code"), "message": error.get("message")} if error else None,
+        "payload": result.get("payload"),
     }
+
+
+def _handoff_simc_section(simc_results: dict[str, Any | None]) -> dict[str, Any]:
+    return {leg: _handoff_leg(simc_results[leg]) for leg in ("identify", "decode", "describe")}
+
+
+def _handoff_build_input(
+    reference: dict[str, Any],
+    sources: list[Any],
+) -> tuple[list[str], dict[str, Any] | None, dict[str, Any], str | None]:
+    """The form simc accepts for this reference type, or the reason the reference cannot be handed over.
+
+    A Wowhead talent-calc URL carries class and spec in its path, so it travels as a talent transport
+    packet. A guide-published ``wow_talent_export`` string *is* the build code and is what
+    ``simc --build-text`` consumes; sending the raw string as a wowhead reference would fail to parse.
+
+    Returns the simc argv, the transport packet when the reference needs one, the reference with its
+    resolved ``build_code``, and the reason it is unusable (``None`` when it is usable).
+    """
+    build_url = reference.get("url")
+    if not isinstance(build_url, str) or not build_url.strip():
+        return [], None, reference, "missing_reference_url"
+    build_code = _resolve_handoff_build_code(reference, build_url)
+    if build_code is None:
+        return [], None, reference, "missing_build_code"
+    normalized_reference = {**reference, "build_code": build_code}
+    reference_type = str(reference.get("reference_type") or "").strip()
+    if reference_type == "wow_talent_export":
+        return ["--build-text", build_code], None, normalized_reference, None
+    transport_packet = _build_handoff_transport_packet(build_url, normalized_reference, sources)
+    if isinstance(transport_packet, dict):
+        return [], transport_packet, normalized_reference, None
+    return [], None, normalized_reference, f"unsupported_reference_type:{reference_type or 'unknown'}"
 
 
 def _build_simc_handoff_row(
@@ -910,21 +783,20 @@ def _build_simc_handoff_row(
     decode: bool,
     apl_path: str | None,
     expansion: str | None,
-) -> dict[str, Any] | None:
-    reference = row.get("reference") if isinstance(row.get("reference"), dict) else {}
-    build_url = reference.get("url")
-    if not isinstance(build_url, str) or not build_url.strip():
-        return None
-    build_code = _resolve_handoff_build_code(reference, build_url)
-    if build_code is None:
-        return None
-    normalized_reference = dict(reference)
-    normalized_reference["build_code"] = build_code
-    sources = row.get("sources") if isinstance(row.get("sources"), list) else []
-    transport_packet = _build_handoff_transport_packet(build_url, normalized_reference, sources)
+) -> dict[str, Any]:
+    """Hand one build reference to simc, or return the excluded row naming why it could not be."""
+    reference = as_dict(row.get("reference"))
+    sources = as_list(row.get("sources"))
+    build_input_args, transport_packet, normalized_reference, unusable_reason = _handoff_build_input(reference, sources)
+    if unusable_reason is not None:
+        return {
+            "status": "excluded",
+            "reference": reference,
+            "reason": unusable_reason,
+            "sources": sources,
+        }
     packet_path: Path | None = None
-    build_input_args = ["--build-text", build_url]
-    if isinstance(transport_packet, dict):
+    if transport_packet is not None:
         with tempfile.NamedTemporaryFile(
             mode="w",
             encoding="utf-8",
@@ -942,12 +814,19 @@ def _build_simc_handoff_row(
         )
     finally:
         packet_path.unlink(missing_ok=True) if packet_path is not None else None
+    simc_section = _handoff_simc_section(simc_results)
     return {
+        "status": "handed_off",
         "reference": normalized_reference,
         "talent_transport_packet": transport_packet,
         "sources": sources,
         "evidence": _handoff_evidence_section(sources),
-        "simc": _handoff_simc_section(simc_results),
+        "simc": simc_section,
+        "failures": [
+            {"leg": leg, **as_dict(section.get("error") or {"code": "simc_leg_failed", "message": None})}
+            for leg, section in simc_section.items()
+            if isinstance(section, dict) and not section.get("ok")
+        ],
     }
 
 
@@ -963,6 +842,54 @@ def _count_simc_handoff_successes(build_rows: list[dict[str, Any]]) -> tuple[int
         )
 
     return _success("identify"), _success("decode"), _success("describe")
+
+
+def _simc_handoff_status(
+    *,
+    returned_build_count: int,
+    requested_leg_count: int,
+    empty_requested_legs: list[str],
+    partial_requested_legs: list[str],
+) -> str:
+    """Whether the simc leg of the handoff produced anything, as one field an agent can branch on.
+
+    ``ok`` means every requested leg succeeded for every build. ``partial`` means a leg worked for
+    some builds and not others. A leg that was requested and produced nothing at all - zero decodes
+    out of ten - is ``failed``: calling that ``partial`` reads as "most of it worked", which is the
+    wrong-answer-with-``ok: true`` shape this field exists to prevent. When every requested leg
+    produced nothing the packet has no simc output at all: ``all_handoffs_failed``, an error.
+    """
+    if returned_build_count == 0:
+        return "no_build_references"
+    if len(empty_requested_legs) == requested_leg_count:
+        return "all_handoffs_failed"
+    if empty_requested_legs:
+        return "failed"
+    return "partial" if partial_requested_legs else "ok"
+
+
+def _bundle_health(bundle_inputs: list[tuple[Path, dict[str, Any]]]) -> dict[str, Any]:
+    """Pages the exports could not fetch, so a handoff built from a partial bundle says so.
+
+    ``load_article_bundle`` reports the pages a guide export failed on; a build set read from a
+    bundle that lost pages is incomplete evidence, not a complete answer.
+    """
+    rows: list[tuple[str, Any, int]] = [
+        (
+            str(bundle_path),
+            as_dict(bundle.get("manifest")).get("provider"),
+            len(as_list(bundle.get("failed_pages"))),
+        )
+        for bundle_path, bundle in bundle_inputs
+    ]
+    return {
+        "bundle_count": len(rows),
+        "failed_page_count": sum(failed for _path, _provider, failed in rows),
+        "bundles": [
+            {"bundle_path": path, "provider": provider, "failed_page_count": failed}
+            for path, provider, failed in rows
+        ],
+    }
 
 
 def _handoff_citations(
@@ -1000,6 +927,7 @@ def _guide_builds_simc_payload(
 ) -> dict[str, Any]:
     handoff_rows = _collect_build_reference_handoff_rows(bundle_inputs)
     selected_rows = handoff_rows[:limit]
+    bundle_health = _bundle_health(bundle_inputs)
     build_rows: list[dict[str, Any]] = []
     source_providers = sorted(
         {
@@ -1009,14 +937,27 @@ def _guide_builds_simc_payload(
             if isinstance(provider, str) and provider
         }
     )
+    excluded_rows: list[dict[str, Any]] = []
     for row in selected_rows:
         build_row = _build_simc_handoff_row(row, decode=decode, apl_path=apl_path, expansion=expansion)
-        if build_row is not None:
-            build_rows.append(build_row)
+        (excluded_rows if build_row["status"] == "excluded" else build_rows).append(build_row)
 
     identify_success_count, decode_success_count, describe_success_count = _count_simc_handoff_successes(
         build_rows
     )
+    requested_legs = [
+        (leg, success_count)
+        for leg, requested, success_count in (
+            ("identify", True, identify_success_count),
+            ("decode", decode, decode_success_count),
+            ("describe", bool((apl_path or "").strip()), describe_success_count),
+        )
+        if requested
+    ]
+    empty_requested_legs = [leg for leg, success_count in requested_legs if success_count == 0]
+    partial_requested_legs = [
+        leg for leg, success_count in requested_legs if 0 < success_count < len(build_rows)
+    ]
     return {
         "provider": "warcraft",
         "kind": "guide_builds_simc_handoff",
@@ -1034,51 +975,37 @@ def _guide_builds_simc_payload(
         "freshness": _guide_build_handoff_freshness(source_kind, source_manifest),
         "citations": _handoff_citations(selected_rows, bundle_inputs),
         "bundle_count": len(bundle_inputs),
+        "bundle_health": bundle_health,
         "build_reference_count": len(handoff_rows),
         "truncated": len(handoff_rows) > len(selected_rows),
         "decode_enabled": decode,
         "apl_path": apl_path,
         "summary": {
             "returned_build_count": len(build_rows),
-            "excluded_build_count": max(0, len(handoff_rows) - len(selected_rows)) + max(0, len(selected_rows) - len(build_rows)),
+            "excluded_build_count": max(0, len(handoff_rows) - len(selected_rows)) + len(excluded_rows),
             "identify_success_count": identify_success_count,
             "decode_success_count": decode_success_count,
             "describe_success_count": describe_success_count,
+            # Which requested legs produced nothing at all (`failed`) and which worked for only
+            # some builds (`partial`), so the status always names its own cause.
+            "empty_requested_legs": empty_requested_legs,
+            "partial_requested_legs": partial_requested_legs,
+            "failed_page_count": bundle_health["failed_page_count"],
+            "simc_handoff_status": _simc_handoff_status(
+                returned_build_count=len(build_rows),
+                requested_leg_count=len(requested_legs),
+                empty_requested_legs=empty_requested_legs,
+                partial_requested_legs=partial_requested_legs,
+            ),
         },
+        "excluded_builds": excluded_rows,
         "builds": build_rows,
     }
 
 
-def _looks_like_wowhead_talent_calc_reference(value: str) -> bool:
-    text = value.strip()
-    if not text:
-        return False
-    lowered = text.lower()
-    url_candidate: str | None = None
-    if "://" in text:
-        url_candidate = text
-    elif lowered.startswith(("www.wowhead.com/", "wowhead.com/")):
-        url_candidate = f"https://{text}"
-    if url_candidate is not None:
-        parsed = urlparse(url_candidate)
-        hostname = parsed.hostname.lower() if isinstance(parsed.hostname, str) else ""
-        path_parts = [part for part in parsed.path.split("/") if part]
-        return (
-            (hostname == "wowhead.com" or hostname.endswith(".wowhead.com"))
-            and "talent-calc" in path_parts
-        )
-    parts = text.split("/")
-    if parts and parts[0] == "":
-        parts = parts[1:]
-    if parts and parts[-1] == "":
-        parts = parts[:-1]
-    if not parts:
-        return False
-    if parts and parts[0] in {"classic", "tbc", "wotlk", "cata", "mop-classic", "ptr", "beta", "classic-ptr"}:
-        parts = parts[1:]
-        if not parts:
-            return False
-    known_classes = {
+# Wowhead class path segments that precede /talent-calc in a bare (non-URL) reference.
+_WOWHEAD_CLASS_SLUGS = frozenset(
+    {
         "deathknight",
         "death-knight",
         "demonhunter",
@@ -1095,9 +1022,39 @@ def _looks_like_wowhead_talent_calc_reference(value: str) -> bool:
         "warlock",
         "warrior",
     }
-    if parts[0].strip() in known_classes:
-        return True
-    if parts[0].strip() == "talent-calc":
+)
+# Expansion path prefixes Wowhead puts in front of a talent-calc path.
+_WOWHEAD_EXPANSION_PREFIXES = wowhead_path_prefixes()
+
+
+def _wowhead_url_targets_talent_calc(url: str) -> bool:
+    parsed = urlparse(url)
+    hostname = parsed.hostname.lower() if isinstance(parsed.hostname, str) else ""
+    path_parts = [part for part in parsed.path.split("/") if part]
+    return (hostname == "wowhead.com" or hostname.endswith(".wowhead.com")) and "talent-calc" in path_parts
+
+
+def _talent_calc_path_parts(text: str) -> list[str]:
+    """Path segments of a bare Wowhead reference with any leading expansion prefix removed."""
+    parts = [part for part in text.split("/") if part]
+    if parts and parts[0] in _WOWHEAD_EXPANSION_PREFIXES:
+        parts = parts[1:]
+    return parts
+
+
+def _looks_like_wowhead_talent_calc_reference(value: str) -> bool:
+    text = value.strip()
+    if not text:
+        return False
+    lowered = text.lower()
+    if "://" in text:
+        return _wowhead_url_targets_talent_calc(text)
+    if lowered.startswith(("www.wowhead.com/", "wowhead.com/")):
+        return _wowhead_url_targets_talent_calc(f"https://{text}")
+    parts = _talent_calc_path_parts(text)
+    if not parts:
+        return False
+    if parts[0].strip() in _WOWHEAD_CLASS_SLUGS or parts[0].strip() == "talent-calc":
         return True
     return len(parts) >= 2 and parts[1].strip() == "talent-calc"
 
@@ -1163,7 +1120,6 @@ def _write_transport_packet_or_fail(
     path_value: str | None,
     packet: dict[str, Any],
     source: str,
-    kind: str,
     route: dict[str, Any] | None = None,
     provider_result: dict[str, Any] | None = None,
 ) -> str | None:
@@ -1177,7 +1133,6 @@ def _write_transport_packet_or_fail(
             code="transport_packet_write_failed",
             message=f"Failed to write talent transport packet: {exc}",
             source=source,
-            kind=kind,
             route=route,
             provider_result=provider_result,
         )
@@ -1202,17 +1157,23 @@ def _normalize_simc_transport_packet_path(
     *,
     stable_packet_path: str | None,
 ) -> dict[str, Any]:
+    """Point ``data.build_spec.transport_packet.path`` at the stable packet (or drop a temporary one)."""
     payload = result.get("payload")
     if not isinstance(payload, dict):
         return result
-    build_spec = payload.get("build_spec")
-    if not isinstance(build_spec, dict):
+    data = as_dict(payload.get("data"))
+    build_spec = _normalize_build_spec_packet_path(data.get("build_spec"), stable_packet_path=stable_packet_path)
+    if build_spec is None:
         return result
+    return {**result, "payload": {**payload, "data": {**data, "build_spec": build_spec}}}
+
+
+def _normalize_build_spec_packet_path(build_spec: Any, *, stable_packet_path: str | None) -> dict[str, Any] | None:
+    if not isinstance(build_spec, dict):
+        return None
     transport_packet = build_spec.get("transport_packet")
     if not isinstance(transport_packet, dict):
-        return result
-    normalized_result = dict(result)
-    normalized_payload = dict(payload)
+        return None
     normalized_build_spec = dict(build_spec)
     source_notes = build_spec.get("source_notes")
     if isinstance(source_notes, list):
@@ -1232,9 +1193,7 @@ def _normalize_simc_transport_packet_path(
     else:
         normalized_transport_packet.pop("path", None)
     normalized_build_spec["transport_packet"] = normalized_transport_packet
-    normalized_payload["build_spec"] = normalized_build_spec
-    normalized_result["payload"] = normalized_payload
-    return normalized_result
+    return normalized_build_spec
 
 
 def _normalize_upgrade_result_build_packet_path(
@@ -1245,18 +1204,12 @@ def _normalize_upgrade_result_build_packet_path(
     if not isinstance(upgrade_result, dict):
         return upgrade_result
     payload = upgrade_result.get("payload")
-    if not isinstance(payload, dict):
+    data = as_dict(payload.get("data")) if isinstance(payload, dict) else {}
+    if not isinstance(payload, dict) or not isinstance(data.get("input"), dict):
         return upgrade_result
-    input_payload = payload.get("input")
-    if not isinstance(input_payload, dict):
-        return upgrade_result
-    normalized_result = dict(upgrade_result)
-    normalized_payload = dict(payload)
-    normalized_input = dict(input_payload)
-    normalized_input.pop("build_packet", None)
-    normalized_payload["input"] = normalized_input
-    normalized_result["payload"] = normalized_payload
-    return normalized_result
+    # The temporary packet file simc read is gone by now, so its path is not evidence.
+    trimmed_input = {key: value for key, value in data["input"].items() if key != "build_packet"}
+    return {**upgrade_result, "payload": {**payload, "data": {**data, "input": trimmed_input}}}
 
 
 def _invoke_simc_with_transport_packet(
@@ -1295,20 +1248,18 @@ def _upgrade_transport_packet_with_simc(
     )
     if _provider_result_failed(result):
         return result, None
-    payload = result.get("payload") if isinstance(result.get("payload"), dict) else {}
+    payload = provider_payload_data(result.get("payload"))
     updated_packet = payload.get("updated_packet") if isinstance(payload.get("updated_packet"), dict) else None
     if updated_packet is None:
         return result, None
     return result, validate_talent_transport_packet(updated_packet)
 
 
+_TRANSPORT_STATUS_RANKS = {"unknown": 0, "raw_only": 1, "validated": 2, "exact": 3}
+
+
 def _transport_status_rank(status: str | None) -> int:
-    return {
-        "unknown": 0,
-        "raw_only": 1,
-        "validated": 2,
-        "exact": 3,
-    }.get(status, -1)
+    return _TRANSPORT_STATUS_RANKS.get(status or "", -1)
 
 
 def _non_empty_transport_form_names(packet: dict[str, Any]) -> set[str]:
@@ -1378,23 +1329,19 @@ def _fail_talent_route(
     code: str,
     message: str,
     source: str,
-    kind: str,
     route: dict[str, Any] | None = None,
     provider_result: dict[str, Any] | None = None,
 ) -> NoReturn:
-    payload: dict[str, Any] = {
-        "ok": False,
-        "error": {"code": code, "message": message},
-        "provider": "warcraft",
-        "kind": kind,
-        "source": source,
-    }
+    details: dict[str, Any] = {"source": source}
     if route is not None:
-        payload["route"] = route
+        details["route"] = route
+    exit_code = None
     if provider_result is not None:
-        payload["provider_result"] = provider_result
-    _emit(payload, pretty=_pretty(ctx), err=True)
-    raise typer.Exit(1)
+        details["provider_result"] = provider_result
+        # A failed provider's own exit code covers its provider-specific codes; otherwise map ``code``.
+        provider_exit = provider_result.get("exit_code")
+        exit_code = provider_exit if isinstance(provider_exit, int) and provider_exit != 0 else None
+    fail(ctx, code, message, exit_code=exit_code, details=details)
 
 
 def _transport_packet_from_provider_result(
@@ -1404,9 +1351,8 @@ def _transport_packet_from_provider_result(
     route: dict[str, Any],
     provider_result: dict[str, Any],
     command_name: str,
-    kind: str,
 ) -> dict[str, Any]:
-    producer_payload = provider_result.get("payload") if isinstance(provider_result.get("payload"), dict) else {}
+    producer_payload = provider_payload_data(provider_result.get("payload"))
     provider_name = route.get("provider")
     provider_label = provider_name if isinstance(provider_name, str) and provider_name else "provider"
     if _provider_result_failed(provider_result):
@@ -1416,19 +1362,17 @@ def _transport_packet_from_provider_result(
             code=str(error_payload.get("code") or "provider_command_failed"),
             message=str(error_payload.get("message") or f"{command_name} failed."),
             source=source,
-            kind=kind,
             route=route,
             provider_result=provider_result,
         )
     packet_value = producer_payload.get("talent_transport_packet")
-    packet = packet_value if isinstance(packet_value, dict) else {}
+    packet = as_dict(packet_value)
     if not packet:
         _fail_talent_route(
             ctx,
             code="missing_transport_packet",
             message=f"{command_name} did not return a talent transport packet.",
             source=source,
-            kind=kind,
             route=route,
             provider_result=provider_result,
         )
@@ -1440,7 +1384,6 @@ def _transport_packet_from_provider_result(
             code="invalid_transport_packet",
             message=f"{command_name} returned an invalid talent transport packet: {exc}",
             source=source,
-            kind=kind,
             route=route,
             provider_result=provider_result,
         )
@@ -1452,7 +1395,6 @@ def _wowhead_transport_packet(
     source: str,
     listed_build_limit: int,
     requested_expansion: str | None,
-    kind: str,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     route = {"kind": "wowhead_talent_calc", "provider": "wowhead"}
     producer_result = provider_invoke(
@@ -1466,7 +1408,6 @@ def _wowhead_transport_packet(
         route=route,
         provider_result=producer_result,
         command_name="wowhead talent-calc-packet",
-        kind=kind,
     )
     return route, producer_result, packet
 
@@ -1479,7 +1420,6 @@ def _warcraftlogs_transport_packet(
     fight_id: int | None,
     allow_unlisted: bool,
     requested_expansion: str | None,
-    kind: str,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     normalized_source = _normalize_warcraftlogs_report_reference(source)
     route = {
@@ -1501,7 +1441,6 @@ def _warcraftlogs_transport_packet(
         route=route,
         provider_result=producer_result,
         command_name="warcraftlogs report-player-talents",
-        kind=kind,
     )
     return route, producer_result, packet
 
@@ -1514,7 +1453,6 @@ def _maybe_upgrade_transport_packet(
     packet: dict[str, Any],
     validate: bool,
     requested_expansion: str | None,
-    kind: str,
 ) -> tuple[str | None, bool, bool, dict[str, Any] | None, dict[str, Any]]:
     source_status = packet.get("transport_status") if isinstance(packet.get("transport_status"), str) else None
     upgrade_result: dict[str, Any] | None = None
@@ -1523,37 +1461,35 @@ def _maybe_upgrade_transport_packet(
     if upgrade_attempted:
         original_packet = packet
         try:
-            upgrade_result, packet = _upgrade_transport_packet_with_simc(packet, expansion=requested_expansion)
+            upgrade_result, upgraded_packet = _upgrade_transport_packet_with_simc(packet, expansion=requested_expansion)
         except ValueError as exc:
             _fail_talent_route(
                 ctx,
                 code="packet_upgrade_failed",
                 message=f"simc validate-talent-transport returned an invalid upgraded packet: {exc}",
                 source=source,
-                kind=kind,
                 route=route,
             )
-        if upgrade_result is not None and _provider_result_failed(upgrade_result):
+        if _provider_result_failed(upgrade_result):
             error_payload = _provider_error_payload("simc", upgrade_result)
             _fail_talent_route(
                 ctx,
                 code=str(error_payload.get("code") or "packet_upgrade_failed"),
                 message=str(error_payload.get("message") or "simc validate-talent-transport failed while upgrading the packet."),
                 source=source,
-                kind=kind,
                 route=route,
                 provider_result=upgrade_result,
             )
-        if packet is None:
+        if upgraded_packet is None:
             _fail_talent_route(
                 ctx,
                 code="packet_upgrade_failed",
                 message="simc validate-talent-transport did not return an upgraded talent transport packet.",
                 source=source,
-                kind=kind,
                 route=route,
                 provider_result=upgrade_result,
             )
+        packet = upgraded_packet
         packet_changed = _transport_packet_upgraded(original_packet, packet)
     return source_status, upgrade_attempted, packet_changed, upgrade_result, packet
 
@@ -1567,7 +1503,6 @@ def _resolve_talent_transport(
     allow_unlisted: bool,
     listed_build_limit: int,
     validate: bool,
-    kind: str = "talent_transport",
 ) -> dict[str, Any]:
     requested_expansion = _requested_expansion(ctx)
     route: dict[str, Any]
@@ -1580,7 +1515,6 @@ def _resolve_talent_transport(
             code="invalid_transport_packet",
             message=str(exc),
             source=source,
-            kind=kind,
         )
     if packet_file is not None:
         packet, packet_path = packet_file
@@ -1595,7 +1529,6 @@ def _resolve_talent_transport(
             code="invalid_transport_packet",
             message=f"Talent transport packet file was not found: {source}",
             source=source,
-            kind=kind,
         )
     elif _looks_like_wowhead_talent_calc_reference(source):
         route, producer_result, packet = _wowhead_transport_packet(
@@ -1603,7 +1536,6 @@ def _resolve_talent_transport(
             source=source,
             listed_build_limit=listed_build_limit,
             requested_expansion=requested_expansion,
-            kind=kind,
         )
     elif actor_id is not None and _looks_like_warcraftlogs_report_reference(source):
         route, producer_result, packet = _warcraftlogs_transport_packet(
@@ -1613,7 +1545,6 @@ def _resolve_talent_transport(
             fight_id=fight_id,
             allow_unlisted=allow_unlisted,
             requested_expansion=requested_expansion,
-            kind=kind,
         )
     elif _looks_like_transport_packet_path_input(source):
         _fail_talent_route(
@@ -1621,7 +1552,6 @@ def _resolve_talent_transport(
             code="invalid_transport_packet",
             message=f"Talent transport packet file was not found: {source}",
             source=source,
-            kind=kind,
         )
     else:
         _fail_talent_route(
@@ -1632,7 +1562,6 @@ def _resolve_talent_transport(
                 "or a local talent transport packet JSON path."
             ),
             source=source,
-            kind=kind,
         )
 
     source_status, upgrade_attempted, packet_changed, upgrade_result, packet = _maybe_upgrade_transport_packet(
@@ -1642,7 +1571,6 @@ def _resolve_talent_transport(
         packet=packet,
         validate=validate,
         requested_expansion=requested_expansion,
-        kind=kind,
     )
     return {
         "source": source,
@@ -1704,10 +1632,14 @@ def _resolved_guide_match(provider: str, payload: dict[str, Any] | None) -> tupl
     }, None
 
 
-def _search_fallback_guide_match(
-    provider: str,
-    payload: dict[str, Any] | None,
-) -> tuple[dict[str, Any] | None, str | None]:
+# Thresholds for accepting a search top hit as a guide selection when resolve did not fire.
+_SEARCH_FALLBACK_MIN_TOP_SCORE = 50
+_SEARCH_FALLBACK_MIN_MARGIN = 25
+_SEARCH_FALLBACK_MIN_SINGLE_SCORE = 70
+
+
+def _top_guide_result(payload: dict[str, Any] | None) -> tuple[list[dict[str, Any]] | None, str | None]:
+    """The search result rows, only when the top row is a usable guide candidate."""
     if not isinstance(payload, dict):
         return None, "missing_search_payload"
     results = payload.get("results")
@@ -1718,52 +1650,189 @@ def _search_fallback_guide_match(
         return None, "invalid_search_top_candidate"
     if top.get("entity_type") != "guide":
         return None, f"search_top_non_guide:{top.get('entity_type')}"
+    return [row for row in results if isinstance(row, dict)], None
 
-    ranking = top.get("ranking")
-    top_score = int(ranking.get("score") or 0) if isinstance(ranking, dict) else 0
-    second_score = 0
-    has_second = False
-    if len(results) > 1 and isinstance(results[1], dict):
-        second_ranking = results[1].get("ranking")
-        second_score = int(second_ranking.get("score") or 0) if isinstance(second_ranking, dict) else 0
-        has_second = True
-    if top_score < 50:
-        return None, f"search_top_guide_score_too_low:{top_score}"
-    if has_second and top_score < second_score + 25:
-        return None, "search_results_not_decisive"
-    if not has_second and top_score < 70:
-        return None, "search_single_result_not_strong_enough"
 
+def _search_scores(results: list[dict[str, Any]]) -> tuple[int, int | None]:
+    """Ranking scores of the top row and its runner-up (``None`` when there is only one row)."""
+
+    def score(row: dict[str, Any]) -> int:
+        ranking = row.get("ranking")
+        return int(ranking.get("score") or 0) if isinstance(ranking, dict) else 0
+
+    return score(results[0]), score(results[1]) if len(results) > 1 else None
+
+
+def _search_fallback_rejection(top_score: int, second_score: int | None) -> str | None:
+    if top_score < _SEARCH_FALLBACK_MIN_TOP_SCORE:
+        return f"search_top_guide_score_too_low:{top_score}"
+    if second_score is not None and top_score < second_score + _SEARCH_FALLBACK_MIN_MARGIN:
+        return "search_results_not_decisive"
+    if second_score is None and top_score < _SEARCH_FALLBACK_MIN_SINGLE_SCORE:
+        return "search_single_result_not_strong_enough"
+    return None
+
+
+def _search_candidate_ref(top: dict[str, Any]) -> str | None:
     raw_ref = top.get("id")
     if raw_ref is None:
         metadata = top.get("metadata")
         if isinstance(metadata, dict):
             raw_ref = metadata.get("slug")
-    if raw_ref is None:
-        return None, "search_guide_missing_ref"
+    return None if raw_ref is None else str(raw_ref)
 
+
+def _search_fallback_guide_match(
+    provider: str,
+    payload: dict[str, Any] | None,
+) -> tuple[dict[str, Any] | None, str | None]:
+    results, reason = _top_guide_result(payload)
+    if results is None:
+        return None, reason
+    top = results[0]
+    top_score, second_score = _search_scores(results)
+    rejection = _search_fallback_rejection(top_score, second_score)
+    if rejection is not None:
+        return None, rejection
+    ref = _search_candidate_ref(top)
+    if ref is None:
+        return None, "search_guide_missing_ref"
+    follow_up = top.get("follow_up")
     return {
         "provider": provider,
-        "ref": str(raw_ref),
+        "ref": ref,
         "name": top.get("name"),
         "url": top.get("url"),
         "confidence": "medium",
-        "next_command": (
-            top.get("follow_up", {}).get("recommended_command")
-            if isinstance(top.get("follow_up"), dict)
-            else None
-        ),
+        "next_command": follow_up.get("command") if isinstance(follow_up, dict) else None,
         "selection_source": "search_fallback",
-        "search_ranking": ranking,
+        "search_ranking": top.get("ranking"),
         "selection_contract": {
             "rule": "top_guide_result_with_strong_score_and_clear_margin",
             "top_score": top_score,
-            "second_score": second_score if has_second else None,
-            "minimum_top_score": 50,
-            "minimum_margin_over_runner_up": 25 if has_second else None,
-            "single_result_minimum_score": None if has_second else 70,
+            "second_score": second_score,
+            "minimum_top_score": _SEARCH_FALLBACK_MIN_TOP_SCORE,
+            "minimum_margin_over_runner_up": _SEARCH_FALLBACK_MIN_MARGIN if second_score is not None else None,
+            "single_result_minimum_score": None if second_score is not None else _SEARCH_FALLBACK_MIN_SINGLE_SCORE,
         },
     }, None
+
+
+def _provider_outcome(result: Mapping[str, Any]) -> dict[str, Any]:
+    """Per-provider fanout outcome: ``status`` is registry readiness, this is what the call did."""
+    payload = result.get("payload")
+    exit_code = result.get("exit_code")
+    if not isinstance(payload, dict):
+        return {
+            "ok": False,
+            "exit_code": exit_code or EXIT_GENERIC,
+            "error": {"code": "missing_provider_payload", "message": "Provider returned no JSON payload."},
+        }
+    error = payload.get("error")
+    return {"ok": bool(payload.get("ok", True)), "exit_code": exit_code, "error": error if isinstance(error, dict) else None}
+
+
+def _provider_answered(registration: ProviderRegistration, surface: str, provider_row: dict[str, Any]) -> bool:
+    """Whether the provider actually looked the query up.
+
+    An explicit-report-only provider (Warcraft Logs) answers free text with a hint it builds
+    locally and no rows by construction. Counting that as an answer would turn an outage of every
+    provider that does search into an ok:true empty page.
+    """
+    if not provider_row["ok"]:
+        return False
+    if provider_surface_status(registration, surface) != "ready_explicit_report_only":
+        return True
+    data = provider_payload_data(provider_row.get("payload"))
+    return bool(as_list(data.get("results")) or data.get("resolved"))
+
+
+def _failed_provider_rows(providers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """One compact row per provider that did not answer, kept in the payload even under ``--brief``."""
+    rows: list[dict[str, Any]] = []
+    for provider_row in providers:
+        if provider_row.get("ok"):
+            continue
+        error = as_dict(provider_row.get("error"))
+        rows.append(
+            {
+                "provider": provider_row.get("provider"),
+                "code": error.get("code"),
+                "message": error.get("message"),
+                "exit_code": provider_row.get("exit_code"),
+            }
+        )
+    return rows
+
+
+def _shared_failure(failed_rows: list[dict[str, Any]]) -> tuple[str, int]:
+    """``(error.code, exit code)`` for a command that failed because every provider it needed failed.
+
+    Agreeing providers lend their own code and exit code. Disagreeing ones that all failed upstream
+    (exit 5) are ``upstream_error``; any other mix is ``providers_failed``, exit 1, because a
+    deterministic crash or a bad argument must not read as "retry later".
+    """
+    codes = {row.get("code") for row in failed_rows}
+    exit_codes = {row.get("exit_code") for row in failed_rows}
+    exit_code = exit_codes.pop() if len(exit_codes) == 1 else EXIT_GENERIC
+    if not isinstance(exit_code, int) or exit_code == 0:
+        exit_code = EXIT_GENERIC
+    if len(codes) == 1 and isinstance(code := next(iter(codes)), str):
+        return code, exit_code
+    return ("upstream_error" if exit_code == EXIT_NETWORK else "providers_failed"), exit_code
+
+
+def _unresolved_next_steps(providers: list[dict[str, Any]], top: dict[str, Any] | None, *, resolved: bool) -> dict[str, Any]:
+    """What an agent should do next when the top-ranked candidate is not a resolved answer.
+
+    Providers that decline to resolve still report a best candidate and their own
+    ``fallback_search_command``; without these the wrapper's resolve is a dead end even when a
+    provider clearly found the thing. ``best_unresolved_candidate`` is the top-ranked candidate and
+    names why it is not the answer.
+    """
+    if resolved:
+        return {"fallback_search_command": None, "fallback_search_commands": [], "best_unresolved_candidate": None}
+    fallbacks: list[dict[str, Any]] = []
+    for provider_row in providers:
+        command = provider_payload_data(provider_row.get("payload")).get("fallback_search_command")
+        if isinstance(command, str) and command.strip():
+            fallbacks.append({"provider": provider_row.get("provider"), "command": command})
+    best = compact_resolve_match(top)
+    if best is not None and top is not None:
+        best["resolved"] = False
+        best["unresolved_reason"] = (
+            "provider_family_ranked_down_by_query_intent" if top.get("resolved") else "provider_did_not_resolve"
+        )
+    return {
+        "fallback_search_command": fallbacks[0]["command"] if fallbacks else None,
+        "fallback_search_commands": fallbacks,
+        "best_unresolved_candidate": best,
+    }
+
+
+def _fanout_health(providers: list[dict[str, Any]]) -> dict[str, Any]:
+    """Answered/failed counts plus the failure rows, so partial and total failure are never silent."""
+    failed_rows = _failed_provider_rows(providers)
+    return {
+        "answered_provider_count": sum(1 for row in providers if row["answered"]),
+        "failed_provider_count": len(failed_rows),
+        "failed_providers": failed_rows,
+    }
+
+
+def _emit_fanout(ctx: typer.Context, payload: dict[str, Any]) -> None:
+    """Emit a search/resolve payload, failing with the providers' own error when none answered."""
+    failed_rows = payload["failed_providers"]
+    if failed_rows and not payload["answered_provider_count"]:
+        code, exit_code = _shared_failure(failed_rows)
+        message = (
+            f"No provider answered: {len(failed_rows)} providers failed and no other included provider "
+            "searched this query."
+        )
+        error = {"code": code, "message": message, "details": {"failed_providers": failed_rows}}
+        _emit(ctx, {"ok": False, "query": payload["query"], "error": error}, err=True)
+        raise typer.Exit(exit_code)
+    _emit(ctx, payload)
 
 
 def _raiderio_source(identity: dict[str, str], *, expansion: str | None) -> dict[str, Any]:
@@ -1772,41 +1841,46 @@ def _raiderio_source(identity: dict[str, str], *, expansion: str | None) -> dict
         ["guild", identity["region"], identity["realm"], identity["name"]],
         expansion=expansion,
     )
-    payload = result.get("payload")
-    if result.get("status") != "ok" or not isinstance(payload, dict):
+    if result.get("status") != "ok":
         return result
     return {
         **result,
-        "summary": raiderio_guild_summary(payload),
-    }
-
-
-def _wowprogress_source(identity: dict[str, str], *, expansion: str | None) -> dict[str, Any]:
-    result = _provider_payload_result(
-        "wowprogress",
-        ["guild", identity["region"], identity["realm"], identity["name"]],
-        expansion=expansion,
-    )
-    payload = result.get("payload")
-    if result.get("status") != "ok" or not isinstance(payload, dict):
-        return result
-    return {
-        **result,
-        "summary": wowprogress_guild_summary(payload),
+        "summary": raiderio_guild_summary(provider_payload_data(result.get("payload"))),
     }
 
 
 @app.command("doctor")
 def doctor(ctx: typer.Context) -> None:
-    _emit(global_doctor_payload(requested_expansion=_requested_expansion(ctx)), pretty=_pretty(ctx))
+    """Report wrapper and per-provider readiness: tiers, auth, expansion support, and runtime paths."""
+    _emit(ctx, global_doctor_payload(requested_expansion=_requested_expansion(ctx)))
+
+
+@app.command("schema")
+def schema(ctx: typer.Context) -> None:
+    """Print the JSON Schema (draft 2020-12) that every envelope this repo emits conforms to.
+
+    The same document is checked in at `schemas/envelope.schema.json` for agents that cannot run the
+    CLI; see `docs/foundation/ERROR_CONTRACT.md` for what the keys mean.
+    """
+    _emit(ctx, {"kind": "envelope_schema", "schema": envelope_json_schema()})
 
 
 @app.command("search")
 def search(
     ctx: typer.Context,
     query: str = typer.Argument(..., help="Search across available providers."),
-    limit: int = typer.Option(5, "--limit", min=1, max=50, help="Maximum provider-local results to request."),
-    compact: bool = typer.Option(False, "--compact", help="Return a smaller wrapper payload with compact candidates."),
+    limit: int = typer.Option(
+        5,
+        "--limit",
+        min=1,
+        max=50,
+        help="Results to request from each provider, and the size of the merged result list.",
+    ),
+    brief: bool = typer.Option(
+        False,
+        "--brief",
+        help="Return a smaller wrapper payload: compact candidate rows and no per-provider payloads.",
+    ),
     ranking_debug: bool = typer.Option(
         False, "--ranking-debug", help="Include compact wrapper ranking summaries for the returned candidates."),
     expansion_debug: bool = typer.Option(
@@ -1815,6 +1889,7 @@ def search(
         help="Include a compact expansion support snapshot for all providers.",
     ),
 ) -> None:
+    """Fan out a free-text query to every search-ready provider and rank the merged candidates."""
     requested_expansion = _requested_expansion(ctx)
     expansion_included, excluded_providers = expansion_filtered_providers(requested_expansion=requested_expansion)
     included_registrations, surface_excluded = surface_filtered_providers(
@@ -1827,53 +1902,43 @@ def search(
     flattened: list[dict[str, Any]] = []
     for registration in included_registrations:
         result = provider_search(registration.name, query, limit=limit, expansion=requested_expansion)
-        payload = result.get("payload")
+        provider_payload = result.get("payload")
         provider_row = {
             "provider": registration.name,
             "status": registration.status,
+            **_provider_outcome(result),
             "expansion_support": provider_expansion_support(
                 registration,
                 requested_expansion=requested_expansion,
             ),
-            "payload": payload,
+            "payload": provider_payload,
         }
+        provider_row["answered"] = _provider_answered(registration, "search", provider_row)
         providers.append(provider_row)
-        if isinstance(payload, dict):
-            for row in payload.get("results", []) or []:
-                if isinstance(row, dict):
-                    flattened.append(
-                        decorate_search_result(
-                            query,
-                            {
-                                "provider": registration.name,
-                                "provider_expansion": provider_expansion_support(
-                                    registration,
-                                    requested_expansion=requested_expansion,
-                                ),
-                                **row,
-                            },
-                        )
+        if isinstance(provider_payload, dict):
+            provider_data = provider_payload_data(provider_payload)
+            provider_results = [row for row in as_list(provider_data.get("results")) if isinstance(row, dict)]
+            # Scores are normalized against this provider's own best row before the merge so a
+            # provider with an inflated local scale cannot own every slot in the merged list.
+            provider_max_score = provider_max_candidate_score(provider_results)
+            for index, row in enumerate(provider_results):
+                flattened.append(
+                    decorate_search_result(
+                        query,
+                        {
+                            "provider": registration.name,
+                            "provider_expansion": provider_expansion_support(
+                                registration,
+                                requested_expansion=requested_expansion,
+                            ),
+                            **row,
+                        },
+                        provider_max_score=provider_max_score,
+                        provider_top_row=index == 0,
                     )
-    for row in synthetic_search_candidates(query):
-        registration = get_provider(str(row.get("provider") or ""))
-        if provider_expansion_exclusion_reason(registration, requested_expansion=requested_expansion) is not None:
-            continue
-        flattened.append(
-            decorate_search_result(
-                query,
-                {
-                    "provider_expansion": provider_expansion_support(
-                        registration,
-                        requested_expansion=requested_expansion,
-                    ),
-                    **row,
-                },
-            )
-        )
-    flattened.sort(key=search_result_sort_key)
-    top = flattened[:limit]
-    if compact:
-        top = [compact_wrapper_candidate(row) for row in top]
+                )
+    ranked, merge_policy = merged_search_page(flattened, limit=limit)
+    top = [compact_wrapper_candidate(row) for row in ranked] if brief else ranked
     payload: dict[str, Any] = {
         "query": query,
         "provider_count": len(list_providers()),
@@ -1883,33 +1948,45 @@ def search(
         "excluded_providers": excluded_providers,
         "included_provider_count": len(included_registrations),
         "excluded_provider_count": len(excluded_providers),
-        "providers": [] if compact else providers,
+        **_fanout_health(providers),
+        "providers": [] if brief else providers,
         "count": len(flattened),
+        "truncated": len(flattened) > len(top),
+        "merge_policy": merge_policy,
         "results": top,
     }
     if ranking_debug:
-        payload["ranking_debug"] = [compact_wrapper_candidate(row) for row in flattened[:limit]]
+        payload["ranking_debug"] = [compact_wrapper_candidate(row) for row in ranked]
     if expansion_debug:
         payload["expansion_debug"] = expansion_support_snapshot(requested_expansion=requested_expansion)
-    _emit(
-        payload,
-        pretty=_pretty(ctx),
-    )
+    _emit_fanout(ctx, payload)
 
 
 @app.command("resolve")
 def resolve(
     ctx: typer.Context,
     query: str = typer.Argument(..., help="Resolve a query across available providers."),
-    limit: int = typer.Option(5, "--limit", min=1, max=50, help="Maximum provider-local candidates to request."),
-    compact: bool = typer.Option(False, "--compact", help="Return a smaller wrapper payload with a compact match summary."),
-    ranking_debug: bool = typer.Option(False, "--ranking-debug", help="Include compact wrapper ranking summaries for resolved candidates."),
+    limit: int = typer.Option(5, "--limit", min=1, max=50, help="Ranked candidates to list under --ranking-debug."),
+    brief: bool = typer.Option(
+        False,
+        "--brief",
+        help="Return a smaller wrapper payload: a compact match summary and no per-provider payloads.",
+    ),
+    ranking_debug: bool = typer.Option(
+        False, "--ranking-debug", help="Include the first --limit providers' matches in ranking order, each with its resolved flag."
+    ),
     expansion_debug: bool = typer.Option(
         False,
         "--expansion-debug",
         help="Include a compact expansion support snapshot for all providers.",
     ),
 ) -> None:
+    """Fan out a query to every resolve-ready provider and return the single best match plus its follow-up command.
+
+    The answer is the candidate `warcraft search` would rank first, and only when its own provider
+    resolved it; otherwise the command reports `resolved: false` with that candidate as
+    `best_unresolved_candidate`.
+    """
     requested_expansion = _requested_expansion(ctx)
     expansion_included, excluded_providers = expansion_filtered_providers(requested_expansion=requested_expansion)
     included_registrations, surface_excluded = surface_filtered_providers(
@@ -1919,32 +1996,31 @@ def resolve(
     )
     excluded_providers = [*excluded_providers, *surface_excluded]
     providers: list[dict[str, Any]] = []
-    resolved_candidates: list[tuple[str, dict[str, Any]]] = []
+    ranked: list[dict[str, Any]] = []
     for registration in included_registrations:
-        result = provider_resolve(registration.name, query, limit=limit, expansion=requested_expansion)
-        payload = result.get("payload")
-        providers.append(
-            {
-                "provider": registration.name,
-                "status": registration.status,
-                "expansion_support": provider_expansion_support(
-                    registration,
-                    requested_expansion=requested_expansion,
-                ),
-                "payload": payload,
-            }
-        )
-        if isinstance(payload, dict) and payload.get("resolved"):
-            resolved_candidates.append((registration.name, decorate_resolve_payload(query, registration.name, payload)))
-    for provider_name, payload in synthetic_resolve_payloads(query):
-        registration = get_provider(provider_name)
-        if provider_expansion_exclusion_reason(registration, requested_expansion=requested_expansion) is not None:
-            continue
-        resolved_candidates.append((provider_name, payload))
-    resolved_candidates.sort(key=lambda row: resolve_payload_sort_key(row[0], row[1]))
-    best_provider = resolved_candidates[0][0] if resolved_candidates else None
-    best_payload = resolved_candidates[0][1] if resolved_candidates else None
-    match = compact_resolve_match(best_payload) if compact else (best_payload.get("match") if isinstance(best_payload, dict) else None)
+        # No --limit here: a provider judges its confidence over the candidates it returns, so a
+        # small limit would hide the rival that makes a query ambiguous.
+        result = provider_resolve(registration.name, query, expansion=requested_expansion)
+        provider_payload = result.get("payload")
+        provider_row = {
+            "provider": registration.name,
+            "status": registration.status,
+            **_provider_outcome(result),
+            "expansion_support": provider_expansion_support(
+                registration,
+                requested_expansion=requested_expansion,
+            ),
+            "payload": provider_payload,
+        }
+        provider_row["answered"] = _provider_answered(registration, "resolve", provider_row)
+        providers.append(provider_row)
+        resolve_data = provider_payload_data(provider_payload)
+        if isinstance(resolve_data.get("match"), dict):
+            ranked.append(decorate_resolve_payload(query, registration.name, resolve_data))
+    ranked.sort(key=resolve_payload_sort_key)
+    top = ranked[0] if ranked else None
+    best = top if top is not None and resolve_answer_accepted(top) else None
+    match = compact_resolve_match(best) if brief else as_dict(best).get("match")
     payload: dict[str, Any] = {
         "query": query,
         "provider_count": len(list_providers()),
@@ -1954,22 +2030,22 @@ def resolve(
         "excluded_providers": excluded_providers,
         "included_provider_count": len(included_registrations),
         "excluded_provider_count": len(excluded_providers),
-        "resolved": best_payload is not None,
-        "provider": best_provider,
-        "match": match,
-        "next_command": best_payload.get("next_command") if isinstance(best_payload, dict) else None,
-        "confidence": best_payload.get("confidence") if isinstance(best_payload, dict) else None,
-        "providers": [] if compact else providers,
+        "resolved": best is not None,
+        "selected_provider": as_dict(as_dict(best).get("match")).get("provider"),
+        "match": match or None,
+        "next_command": as_dict(best).get("next_command"),
+        "confidence": as_dict(best).get("confidence"),
+        **_fanout_health(providers),
+        **_unresolved_next_steps(providers, top, resolved=best is not None),
+        "providers": [] if brief else providers,
     }
     if ranking_debug:
-        payload["ranking_debug"] = [compact_resolve_match(row[1])
-                                    for row in resolved_candidates[:limit] if compact_resolve_match(row[1]) is not None]
+        payload["ranking_debug"] = [
+            {**as_dict(compact_resolve_match(row)), "resolved": bool(row.get("resolved"))} for row in ranked[:limit]
+        ]
     if expansion_debug:
         payload["expansion_debug"] = expansion_support_snapshot(requested_expansion=requested_expansion)
-    _emit(
-        payload,
-        pretty=_pretty(ctx),
-    )
+    _emit_fanout(ctx, payload)
 
 
 @app.command("guild")
@@ -1979,111 +2055,245 @@ def guild(
     realm: str = typer.Argument(..., help="Realm title or slug."),
     name: str = typer.Argument(..., help="Guild name."),
 ) -> None:
+    """Return one guild identity's Raider.IO snapshot: identity, every raid's progression and ranks, roster preview, citations.
+
+    Raider.IO orders its progression and rankings rows by raid slug and reports no raid start/end
+    window, so the snapshot names no "active" raid; cross-reference `warcraft raiderio raids` for
+    the tier that is currently running.
+    """
     identity = normalized_identity(region, realm, name)
-    requested_expansion = _requested_expansion(ctx)
-    payload = guild_merge_payload(
-        identity,
-        raiderio=_raiderio_source(identity, expansion=requested_expansion),
-        wowprogress=_wowprogress_source(identity, expansion=requested_expansion),
-    )
-    _emit(payload, pretty=_pretty(ctx), err=not payload.get("ok"))
+    source = _raiderio_source(identity, expansion=_requested_expansion(ctx))
+    payload = guild_merge_payload(identity, raiderio=source)
+    _emit(ctx, payload, err=not payload.get("ok"))
     if not payload.get("ok"):
-        raise typer.Exit(1)
-
-
-@app.command("guild-history")
-def guild_history(
-    ctx: typer.Context,
-    region: str = typer.Argument(..., help="Region slug such as us or eu."),
-    realm: str = typer.Argument(..., help="Realm title or slug."),
-    name: str = typer.Argument(..., help="Guild name."),
-) -> None:
-    identity = normalized_identity(region, realm, name)
-    requested_expansion = _requested_expansion(ctx)
-    source_result = _provider_payload_result(
-        "wowprogress",
-        ["guild-history", identity["region"], identity["realm"], identity["name"]],
-        expansion=requested_expansion,
-    )
-    payload = source_result.get("payload") if isinstance(source_result.get("payload"), dict) else {}
-    history = payload.get("tiers") if isinstance(payload.get("tiers"), list) else []
-    if source_result.get("status") != "ok":
-        _emit(
-            {
-                "ok": False,
-                "error": source_result.get("error"),
-                "query": identity,
-                "source": "wowprogress",
-                "provider_payload": payload,
-            },
-            pretty=_pretty(ctx),
-            err=True,
-        )
-        raise typer.Exit(1)
-    _emit(
-        {
-            "ok": True,
-            "provider": "warcraft",
-            "kind": "guild_history",
-            "query": identity,
-            "source": "wowprogress",
-            "guild": payload.get("guild"),
-            "count": len(history),
-            "tiers": history,
-            "citations": payload.get("citations"),
-            "provider_payload": payload,
-        },
-        pretty=_pretty(ctx),
-    )
-
-
-@app.command("guild-ranks")
-def guild_ranks(
-    ctx: typer.Context,
-    region: str = typer.Argument(..., help="Region slug such as us or eu."),
-    realm: str = typer.Argument(..., help="Realm title or slug."),
-    name: str = typer.Argument(..., help="Guild name."),
-) -> None:
-    identity = normalized_identity(region, realm, name)
-    requested_expansion = _requested_expansion(ctx)
-    source_result = _provider_payload_result(
-        "wowprogress",
-        ["guild-ranks", identity["region"], identity["realm"], identity["name"]],
-        expansion=requested_expansion,
-    )
-    payload = source_result.get("payload") if isinstance(source_result.get("payload"), dict) else {}
-    history = payload.get("tiers") if isinstance(payload.get("tiers"), list) else []
-    if source_result.get("status") != "ok":
-        _emit(
-            {
-                "ok": False,
-                "error": source_result.get("error"),
-                "query": identity,
-                "source": "wowprogress",
-                "provider_payload": payload,
-            },
-            pretty=_pretty(ctx),
-            err=True,
-        )
-        raise typer.Exit(1)
-    _emit(
-        {
-            "ok": True,
-            "provider": "warcraft",
-            "kind": "guild_ranks",
-            "query": identity,
-            "source": "wowprogress",
-            "guild": payload.get("guild"),
-            "count": len(history),
-            "tiers": history,
-            "citations": payload.get("citations"),
-            "provider_payload": payload,
-        },
-        pretty=_pretty(ctx),
-    )
+        raise typer.Exit(source_exit_code(source))
 
 
 _ACTOR_PROFILE_JOIN_RULE = "soft match on region + realm + character name; not a canonical cross-provider actor id"
+
+
+def _fail_actor_profile(
+    ctx: typer.Context,
+    *,
+    query: dict[str, Any],
+    code: str,
+    message: str,
+    details: dict[str, Any] | None = None,
+    sources: dict[str, Any] | None = None,
+    exit_code: int = EXIT_GENERIC,
+) -> NoReturn:
+    """Emit the crosswalk failure envelope. Structured context goes under ``error.details``."""
+    context = {**({"sources": sources} if sources is not None else {}), **(details or {})}
+    fail(ctx, code, message, exit_code=exit_code, query=query, details=context)
+
+
+# A whole-report crosswalk names the fights it reads, and Warcraft Logs takes one --fight-id flag
+# per fight. A wipe night can hold fifty of them, so the scope is bounded: kills carry the roster
+# the caller means, and the bound keeps one query from turning into a fifty-flag command line.
+ACTOR_PROFILE_MAX_SCOPED_FIGHTS = 10
+
+
+def _actor_profile_fight_scope(fights: list[Any]) -> tuple[list[int], dict[str, Any]]:
+    """Pick the fights to read the roster from, kills first, and describe what was left out."""
+    rows = [fight for fight in fights if isinstance(fight, dict) and isinstance(fight.get("id"), int)]
+    kills: list[int] = [fight["id"] for fight in rows if fight.get("kill") is True]
+    others: list[int] = [fight["id"] for fight in rows if fight.get("kill") is not True]
+    scoped = [*kills, *others][:ACTOR_PROFILE_MAX_SCOPED_FIGHTS]
+    return scoped, {
+        "rule": "kills_first_then_report_order",
+        "report_fight_count": len(rows),
+        "kill_fight_count": len(kills),
+        "scoped_fight_count": len(scoped),
+        "max_scoped_fights": ACTOR_PROFILE_MAX_SCOPED_FIGHTS,
+        "truncated": len(rows) > len(scoped),
+    }
+
+
+def _actor_profile_fight_ids(
+    ctx: typer.Context,
+    *,
+    query: dict[str, Any],
+    code: str,
+    allow_unlisted: bool,
+    expansion: str | None,
+) -> tuple[list[int], dict[str, Any]]:
+    """The fights an unscoped ``--fight-id`` crosswalk reads, plus the scope it applied.
+
+    Warcraft Logs only answers ``playerDetails`` for an explicit fight list or time window; an
+    unscoped query comes back as an empty roster. The crosswalk's whole-report default therefore has
+    to enumerate the fights itself rather than omit the slice.
+    """
+    args = ["report-fights", code]
+    if allow_unlisted:
+        args.append("--allow-unlisted")
+    result = _provider_payload_result("warcraftlogs", args, expansion=expansion)
+    if result.get("status") != "ok":
+        _fail_actor_profile(
+            ctx,
+            query=query,
+            code="warcraftlogs_lookup_failed",
+            message="Warcraft Logs fight lookup failed, so the report roster cannot be scoped.",
+            details={"source": result.get("error"), "provider": "warcraftlogs"},
+            exit_code=source_exit_code(result),
+        )
+    fight_ids, scope = _actor_profile_fight_scope(as_list(provider_payload_data(result.get("payload")).get("fights")))
+    if not fight_ids:
+        _fail_actor_profile(
+            ctx,
+            query=query,
+            code="report_has_no_fights",
+            message=f"Report {code!r} contains no fights, so it has no roster to cross-walk.",
+            details={"hint": "Check the report code, or pass --fight-id if you know the fight."},
+            exit_code=EXIT_NOT_FOUND,
+        )
+    return fight_ids, scope
+
+
+def _actor_profile_log_payload(
+    ctx: typer.Context,
+    *,
+    query: dict[str, Any],
+    code: str,
+    fight_ids: list[int],
+    allow_unlisted: bool,
+    expansion: str | None,
+) -> dict[str, Any]:
+    """Fetch the Warcraft Logs report-player-details payload the crosswalk reads its actor from."""
+    wcl_args = ["report-player-details", code]
+    for fight_id in fight_ids:
+        wcl_args += ["--fight-id", str(fight_id)]
+    if allow_unlisted:
+        wcl_args.append("--allow-unlisted")
+    log_result = _provider_payload_result("warcraftlogs", wcl_args, expansion=expansion)
+    if log_result.get("status") != "ok":
+        _fail_actor_profile(
+            ctx,
+            query=query,
+            code="warcraftlogs_lookup_failed",
+            message="Warcraft Logs report lookup failed.",
+            details={"source": log_result.get("error"), "provider": "warcraftlogs"},
+            exit_code=source_exit_code(log_result),
+        )
+    return provider_payload_data(log_result.get("payload"))
+
+
+def _actor_profile_actor(
+    ctx: typer.Context,
+    *,
+    query: dict[str, Any],
+    log_payload: dict[str, Any],
+    code: str,
+    name: str,
+) -> dict[str, Any]:
+    """Resolve ``name`` to exactly one report actor, or fail with the ambiguity that blocks the join."""
+    matches = find_report_actors(log_payload, name)
+    if not matches:
+        fight_scope = query["fight_scope"]
+        message = f"No actor named {name!r} in report {code!r}."
+        if fight_scope["truncated"]:
+            # A miss inside a sampled scope is not a miss in the report.
+            message = (
+                f"No actor named {name!r} in the {fight_scope['scoped_fight_count']} of "
+                f"{fight_scope['report_fight_count']} fights read from report {code!r}; the other fights "
+                "were not searched. Pass --fight-id to read one of them."
+            )
+        _fail_actor_profile(
+            ctx,
+            query=query,
+            code="actor_not_found",
+            message=message,
+            details={"available_actors": report_actor_names(log_payload), "fight_scope": fight_scope},
+            exit_code=EXIT_NOT_FOUND,
+        )
+    targets = distinct_actor_targets(matches)
+    if len(targets) > 1:
+        _fail_actor_profile(
+            ctx,
+            query=query,
+            code="ambiguous_actor",
+            message=(
+                f"Report {code!r} has {len(targets)} characters named {name!r} on "
+                "different realms/regions; cannot pick one safely."
+            ),
+            details={
+                "candidates": targets,
+                "hint": (
+                    "Narrow to a single fight with --fight-id, or query the realm directly "
+                    "with 'raiderio character <region> <realm> <name>'."
+                ),
+            },
+        )
+    if actor_spec_ambiguous(matches):
+        _fail_actor_profile(
+            ctx,
+            query=query,
+            code="ambiguous_actor_spec",
+            message=(
+                f"Actor {name!r} appears in report {code!r} with more than one class/spec "
+                "across fights; cannot pick one to reconcile."
+            ),
+            details={"hint": "Narrow to a single fight with --fight-id so the actor resolves to one spec."},
+        )
+    return matches[0]
+
+
+def _actor_profile_identity(
+    ctx: typer.Context,
+    *,
+    query: dict[str, Any],
+    actor: dict[str, Any],
+    log_side: dict[str, Any],
+    region: str | None,
+) -> dict[str, Any]:
+    """Region/realm/name for the Raider.IO lookup, or fail naming the field the report never carried."""
+    lookup = actor_lookup_identity(actor, region_override=region)
+    if not lookup["ok"]:
+        missing = lookup["missing"]
+        hint = (
+            "Re-run with --region <slug> to enable the Raider.IO profile lookup."
+            if missing == "region"
+            else f"The report actor is missing its {missing}; the Raider.IO profile lookup cannot proceed."
+        )
+        _fail_actor_profile(
+            ctx,
+            query=query,
+            code=f"actor_{missing}_unknown",
+            message=f"The report actor has no {missing}, so the Raider.IO profile lookup cannot proceed.",
+            details={"missing_field": missing, "hint": hint},
+            sources={"warcraftlogs": log_side},
+        )
+    identity: dict[str, Any] = lookup["identity"]
+    return identity
+
+
+def _actor_profile_character(
+    ctx: typer.Context,
+    *,
+    query: dict[str, Any],
+    identity: dict[str, Any],
+    log_side: dict[str, Any],
+    expansion: str | None,
+) -> dict[str, Any]:
+    """Fetch the Raider.IO character the report actor soft-matches to."""
+    profile_result = _provider_payload_result(
+        "raiderio",
+        ["character", identity["region"], identity["realm"], identity["name"]],
+        expansion=expansion,
+    )
+    if profile_result.get("status") != "ok":
+        _fail_actor_profile(
+            ctx,
+            query=query,
+            code="profile_lookup_failed",
+            message="Raider.IO character profile lookup failed for the report actor.",
+            details={"source": profile_result.get("error"), "provider": "raiderio"},
+            sources={
+                "warcraftlogs": log_side,
+                "raiderio": {"status": "error", "error": profile_result.get("error")},
+            },
+            exit_code=source_exit_code(profile_result),
+        )
+    return as_dict(provider_payload_data(profile_result.get("payload")).get("character"))
 
 
 @app.command("actor-profile")
@@ -2098,94 +2308,24 @@ def actor_profile(
     """Cross-walk a Warcraft Logs report actor to a Raider.IO profile (log actor -> profile handoff)."""
     requested_expansion = _requested_expansion(ctx)
     query: dict[str, Any] = {"report_code": code, "actor_name": name, "fight_id": fight_id}
-    wcl_args = ["report-player-details", code]
-    if fight_id is not None:
-        wcl_args += ["--fight-id", str(fight_id)]
-    if allow_unlisted:
-        wcl_args.append("--allow-unlisted")
-    log_result = _provider_payload_result("warcraftlogs", wcl_args, expansion=requested_expansion)
-    if log_result.get("status") != "ok":
-        _emit(
-            {
-                "ok": False,
-                "provider": "warcraft",
-                "kind": "actor_profile_crosswalk",
-                "query": query,
-                "error": {
-                    "code": "warcraftlogs_lookup_failed",
-                    "message": "Warcraft Logs report lookup failed.",
-                    "source": log_result.get("error"),
-                },
-            },
-            pretty=_pretty(ctx),
-            err=True,
+    scoped_fight_ids, fight_scope = (
+        ([fight_id], {"rule": "explicit_fight_id", "scoped_fight_count": 1, "truncated": False})
+        if fight_id is not None
+        else _actor_profile_fight_ids(
+            ctx, query=query, code=code, allow_unlisted=allow_unlisted, expansion=requested_expansion
         )
-        raise typer.Exit(1)
-    log_payload = log_result.get("payload") if isinstance(log_result.get("payload"), dict) else {}
-    matches = find_report_actors(log_payload, name)
-    if not matches:
-        _emit(
-            {
-                "ok": False,
-                "provider": "warcraft",
-                "kind": "actor_profile_crosswalk",
-                "query": query,
-                "error": {
-                    "code": "actor_not_found",
-                    "message": f"No actor named {name!r} in report {code!r}.",
-                    "available_actors": report_actor_names(log_payload),
-                },
-            },
-            pretty=_pretty(ctx),
-            err=True,
-        )
-        raise typer.Exit(1)
-    targets = distinct_actor_targets(matches)
-    if len(targets) > 1:
-        _emit(
-            {
-                "ok": False,
-                "provider": "warcraft",
-                "kind": "actor_profile_crosswalk",
-                "query": query,
-                "error": {
-                    "code": "ambiguous_actor",
-                    "message": (
-                        f"Report {code!r} has {len(targets)} characters named {name!r} on "
-                        "different realms/regions; cannot pick one safely."
-                    ),
-                    "candidates": targets,
-                    "hint": (
-                        "Narrow to a single fight with --fight-id, or query the realm directly "
-                        "with 'raiderio character <region> <realm> <name>'."
-                    ),
-                },
-            },
-            pretty=_pretty(ctx),
-            err=True,
-        )
-        raise typer.Exit(1)
-    if actor_spec_ambiguous(matches):
-        _emit(
-            {
-                "ok": False,
-                "provider": "warcraft",
-                "kind": "actor_profile_crosswalk",
-                "query": query,
-                "error": {
-                    "code": "ambiguous_actor_spec",
-                    "message": (
-                        f"Actor {name!r} appears in report {code!r} with more than one class/spec "
-                        "across fights; cannot pick one to reconcile."
-                    ),
-                    "hint": "Narrow to a single fight with --fight-id so the actor resolves to one spec.",
-                },
-            },
-            pretty=_pretty(ctx),
-            err=True,
-        )
-        raise typer.Exit(1)
-    actor = matches[0]
+    )
+    query["scoped_fight_ids"] = scoped_fight_ids
+    query["fight_scope"] = fight_scope
+    log_payload = _actor_profile_log_payload(
+        ctx,
+        query=query,
+        code=code,
+        fight_ids=scoped_fight_ids,
+        allow_unlisted=allow_unlisted,
+        expansion=requested_expansion,
+    )
+    actor = _actor_profile_actor(ctx, query=query, log_payload=log_payload, code=code, name=name)
     log_side = {
         "status": "ok",
         "role": actor.get("role"),
@@ -2194,52 +2334,17 @@ def actor_profile(
         "class_spec_identity": actor.get("class_spec_identity"),
         "report_actor_identity": actor.get("identity_contract"),
     }
-    lookup = actor_lookup_identity(actor, region_override=region)
-    if not lookup["ok"]:
-        missing = lookup["missing"]
-        hint = (
-            "Re-run with --region <slug> to enable the Raider.IO profile lookup."
-            if missing == "region"
-            else f"The report actor is missing its {missing}; the Raider.IO profile lookup cannot proceed."
-        )
-        _emit(
-            {
-                "ok": False,
-                "provider": "warcraft",
-                "kind": "actor_profile_crosswalk",
-                "query": query,
-                "error": {"code": f"actor_{missing}_unknown", "missing_field": missing, "hint": hint},
-                "sources": {"warcraftlogs": log_side},
-            },
-            pretty=_pretty(ctx),
-            err=True,
-        )
-        raise typer.Exit(1)
-    identity = lookup["identity"]
+    identity = _actor_profile_identity(ctx, query=query, actor=actor, log_side=log_side, region=region)
     query.update(identity)
-    profile_result = _provider_payload_result(
-        "raiderio",
-        ["character", identity["region"], identity["realm"], identity["name"]],
+    character = _actor_profile_character(
+        ctx,
+        query=query,
+        identity=identity,
+        log_side=log_side,
         expansion=requested_expansion,
     )
-    if profile_result.get("status") != "ok":
-        _emit(
-            {
-                "ok": False,
-                "provider": "warcraft",
-                "kind": "actor_profile_crosswalk",
-                "query": query,
-                "error": {"code": "profile_lookup_failed", "source": profile_result.get("error")},
-                "sources": {"warcraftlogs": log_side, "raiderio": {"status": "error", "error": profile_result.get("error")}},
-            },
-            pretty=_pretty(ctx),
-            err=True,
-        )
-        raise typer.Exit(1)
-    profile_payload = profile_result.get("payload") if isinstance(profile_result.get("payload"), dict) else {}
-    character = profile_payload.get("character") if isinstance(profile_payload.get("character"), dict) else {}
     profile_identity = character.get("class_spec_identity")
-    _emit(
+    _emit(ctx,
         {
             "ok": True,
             "provider": "warcraft",
@@ -2256,7 +2361,6 @@ def actor_profile(
             },
             "reconciliation": reconcile_class_spec(actor.get("class_spec_identity"), profile_identity),
         },
-        pretty=_pretty(ctx),
     )
 
 
@@ -2274,7 +2378,11 @@ def cooldown_packet(
     phase: int = typer.Option(..., "--phase", min=1, help="One-based phase index to analyze, e.g. --phase 2 for P2."),
     spec_slug: str | None = typer.Option(None, "--spec-slug", help="Override Lorrgs spec slug, e.g. mage-frost."),
     boss_slug: str | None = typer.Option(None, "--boss-slug", help="Override Lorrgs boss slug, e.g. lura."),
-    difficulty: str = typer.Option("mythic", "--difficulty", help="Difficulty for the Lorrgs top-parse comparison."),
+    difficulty: str | None = typer.Option(
+        None,
+        "--difficulty",
+        help="Lorrgs difficulty for the top-parse comparison. Defaults to the Warcraft Logs fight's own difficulty.",
+    ),
     metric: str | None = typer.Option(None, "--metric", help="Optional Lorrgs ranking metric, e.g. dps or hps."),
     sample_limit: int = typer.Option(5, "--sample-limit", min=0, max=20, help="Top-parse samples to include; 0 disables comparison."),
     event_limit: int = typer.Option(5000, "--event-limit", min=1, max=10000, help="Warcraft Logs cast events to request."),
@@ -2286,328 +2394,23 @@ def cooldown_packet(
     allow_unlisted: bool = typer.Option(False, "--allow-unlisted", help="Allow lookup of unlisted Warcraft Logs reports."),
 ) -> None:
     """Build an evidence packet for phase-scoped cooldown analysis."""
-    parsed_ref = parse_lorrgs_report_reference(report_ref)
-    query: dict[str, Any] = {
-        "report_ref": report_ref,
-        "fight_id": fight_id,
-        "actor_id": actor_id,
-        "actor_name": actor_name,
-        "phase": phase,
-        "spec_slug": spec_slug,
-        "boss_slug": boss_slug,
-        "difficulty": difficulty,
-        "metric": metric,
-        "sample_limit": sample_limit,
-        "event_limit": event_limit,
-        "spell_ids": spell_id or [],
-        "allow_unlisted": allow_unlisted,
-    }
-    if parsed_ref is None:
-        _fail_cooldown_packet(
-            ctx,
-            code="invalid_report_ref",
-            message="Expected a Warcraft Logs report URL, Lorrgs user_report URL, or mixed alphanumeric report code.",
-            query=query,
-        )
-    report_code = parsed_ref.code
-    resolved_fight_id = fight_id or parsed_ref.fight_id
-    if resolved_fight_id is None:
-        _fail_cooldown_packet(
-            ctx,
-            code="missing_fight",
-            message="Pass --fight-id or provide a report URL containing fight=<id>.",
-            query={**query, "report_code": report_code},
-        )
-    query.update(
-        {
-            "report_code": report_code,
-            "fight_id": resolved_fight_id,
-            "report_type": parsed_ref.report_type,
-        }
-    )
-
-    lorrgs_fight_args = ["user-report-fights", report_ref, "--fight", str(resolved_fight_id)]
-    if parsed_ref.report_type:
-        lorrgs_fight_args += ["--type", parsed_ref.report_type]
-    lorrgs_result = _cooldown_provider_payload(
-        ctx,
-        "lorrgs",
-        lorrgs_fight_args,
-        query=query,
-        error_code="lorrgs_fight_lookup_failed",
-        error_message="Lorrgs cached fight lookup failed.",
-    )
-    lorrgs_fight = _find_lorrgs_fight(_lorrgs_payload_data(lorrgs_result), resolved_fight_id)
-    if lorrgs_fight is None:
-        _fail_cooldown_packet(
-            ctx,
-            code="lorrgs_fight_not_found",
-            message="Lorrgs did not return the selected fight.",
-            query=query,
-        )
-
-    player, player_error = _resolve_lorrgs_player(lorrgs_fight, actor_id=actor_id, actor_name=actor_name)
-    if player is None:
-        _fail_cooldown_packet(
-            ctx,
-            code=player_error or "actor_not_found",
-            message="Could not resolve the selected player in the Lorrgs fight payload.",
-            query=query,
-            details={"available_players": _available_lorrgs_players(lorrgs_fight)},
-        )
-    resolved_actor_id = _cooldown_int(player.get("source_id"))
-    if resolved_actor_id is None:
-        _fail_cooldown_packet(
-            ctx,
-            code="actor_id_missing",
-            message="The selected player did not include a report-local source id.",
-            query=query,
-            details={"player": player},
-        )
-    resolved_spec_slug = spec_slug or (player.get("spec_slug") if isinstance(player.get("spec_slug"), str) else None)
-    if resolved_spec_slug is None:
-        _fail_cooldown_packet(
-            ctx,
-            code="spec_slug_missing",
-            message="The selected player did not include a Lorrgs spec slug. Pass --spec-slug.",
-            query={**query, "actor_id": resolved_actor_id},
-            details={"player": player},
-        )
-    raw_boss = lorrgs_fight.get("boss")
-    boss: dict[str, Any] = raw_boss if isinstance(raw_boss, dict) else {}
-    resolved_boss_slug = boss_slug or (boss.get("boss_slug") if isinstance(boss.get("boss_slug"), str) else None)
-    query.update(
-        {
-            "actor_id": resolved_actor_id,
-            "actor_name": player.get("name"),
-            "spec_slug": resolved_spec_slug,
-            "boss_slug": resolved_boss_slug,
-        }
-    )
-
-    raw_phases = lorrgs_fight.get("phases")
-    lorrgs_phases: list[Any] = raw_phases if isinstance(raw_phases, list) else []
-    phase_windows = build_phase_windows(
-        lorrgs_phases,
-        lorrgs_fight.get("duration"),
-    )
-    selected_window = selected_phase_window(phase_windows, phase)
-    if selected_window is None:
-        _fail_cooldown_packet(
-            ctx,
-            code="phase_not_found",
-            message="The selected phase index is not present in the Lorrgs phase markers.",
-            query=query,
-            details={"phase_windows": phase_windows, "raw_phase_markers": raw_phase_markers(lorrgs_phases)},
-        )
-
-    spec_spells_args = ["spec-spells", resolved_spec_slug]
-    spec_spells_result = _cooldown_provider_payload(
-        ctx,
-        "lorrgs",
-        spec_spells_args,
-        query=query,
-        error_code="lorrgs_spec_spells_failed",
-        error_message="Lorrgs spec spell metadata lookup failed.",
-    )
-    spec_spells_payload = spec_spells_result.get("payload") if isinstance(spec_spells_result, dict) else None
-    cooldown_catalog = spell_catalog(spec_spells_payload if isinstance(spec_spells_payload, dict) else {})
-    tracked_ids = tracked_spell_ids(cooldown_catalog, spell_id)
-    if not tracked_ids:
-        _fail_cooldown_packet(
-            ctx,
-            code="no_tracked_spells",
-            message="No tracked cooldown spell ids were available. Pass --spell-id or choose a spec with Lorrgs spell metadata.",
-            query=query,
-        )
-
-    boss_spells_args: list[str] | None = ["boss-spells", resolved_boss_slug] if resolved_boss_slug else None
-    boss_spells_result = (
-        _cooldown_provider_payload(
-            ctx,
-            "lorrgs",
-            boss_spells_args,
-            query=query,
-            error_code="lorrgs_boss_spells_failed",
-            error_message="Lorrgs boss spell metadata lookup failed.",
-            required=False,
-        )
-        if boss_spells_args is not None
-        else None
-    )
-    boss_spells_payload = boss_spells_result.get("payload") if isinstance(boss_spells_result, dict) else None
-    boss_catalog = spell_catalog(boss_spells_payload if isinstance(boss_spells_payload, dict) else {})
-
-    wcl_fights_args = ["report-fights", report_code]
-    if allow_unlisted:
-        wcl_fights_args.append("--allow-unlisted")
-    wcl_fights_result = _cooldown_provider_payload(
-        ctx,
-        "warcraftlogs",
-        wcl_fights_args,
-        query=query,
-        error_code="warcraftlogs_fights_failed",
-        error_message="Warcraft Logs fight lookup failed.",
-    )
-    wcl_fight = _find_warcraftlogs_fight(wcl_fights_result, resolved_fight_id)
-    fight_start_time_ms = _cooldown_int(wcl_fight.get("start_time") if isinstance(wcl_fight, dict) else None)
-    if fight_start_time_ms is None:
-        _fail_cooldown_packet(
-            ctx,
-            code="fight_start_missing",
-            message="Warcraft Logs did not return a fight start timestamp for relative event conversion.",
-            query=query,
-            details={"fight": wcl_fight or {}},
-        )
-
-    events_args = [
-        "report-events",
-        report_code,
-        "--fight-id",
-        str(resolved_fight_id),
-        "--source-id",
-        str(resolved_actor_id),
-        "--data-type",
-        "casts",
-        "--limit",
-        str(event_limit),
-    ]
-    if allow_unlisted:
-        events_args.append("--allow-unlisted")
-    events_result = _cooldown_provider_payload(
-        ctx,
-        "warcraftlogs",
-        events_args,
-        query=query,
-        error_code="warcraftlogs_events_failed",
-        error_message="Warcraft Logs cast-event lookup failed.",
-    )
-    raw_events_payload = events_result.get("payload") if isinstance(events_result, dict) else None
-    events_payload: dict[str, Any] = raw_events_payload if isinstance(raw_events_payload, dict) else {}
-    player_casts = normalize_warcraftlogs_actor_casts(
-        events_payload,
-        fight_start_time_ms=fight_start_time_ms,
-        catalog=cooldown_catalog,
-        spell_ids=tracked_ids,
-        window=selected_window,
-    )
-
-    ranking_args: list[str] | None = None
-    ranking_result: dict[str, Any] | None = None
-    if sample_limit > 0 and resolved_boss_slug:
-        ranking_args = ["spec-ranking", resolved_spec_slug, resolved_boss_slug, "--difficulty", difficulty]
-        if metric:
-            ranking_args += ["--metric", metric]
-        ranking_result = _cooldown_provider_payload(
-            ctx,
-            "lorrgs",
-            ranking_args,
-            query=query,
-            error_code="lorrgs_spec_ranking_failed",
-            error_message="Lorrgs top-parse ranking lookup failed.",
-            required=False,
-        )
-    ranking_payload = (
-        ranking_result.get("payload")
-        if isinstance(ranking_result, dict) and ranking_result.get("status") == "ok" and isinstance(ranking_result.get("payload"), dict)
-        else None
-    )
-    comparison = top_parse_samples(
-        ranking_payload,
+    request = CooldownRequest(
+        report_ref=report_ref,
+        fight_id=fight_id,
+        actor_id=actor_id,
+        actor_name=actor_name,
         phase=phase,
+        spec_slug=spec_slug,
+        boss_slug=boss_slug,
+        difficulty=difficulty,
+        metric=metric,
         sample_limit=sample_limit,
-        spell_catalog=cooldown_catalog,
-        boss_catalog=boss_catalog,
-        spell_ids=tracked_ids,
+        event_limit=event_limit,
+        spell_ids=spell_id,
+        allow_unlisted=allow_unlisted,
+        expansion=_requested_expansion(ctx),
     )
-
-    raw_player_casts = player.get("casts")
-    lorrgs_player_casts: list[Any] = raw_player_casts if isinstance(raw_player_casts, list) else []
-    tracked_spell_summaries = [spell_summary(spell_id_value, catalog=cooldown_catalog) for spell_id_value in sorted(tracked_ids)]
-    source_refs = {
-        "lorrgs_user_report_fights": _provider_source(lorrgs_result, command="lorrgs", args=lorrgs_fight_args),
-        "lorrgs_spec_spells": _provider_source(spec_spells_result, command="lorrgs", args=spec_spells_args),
-        "lorrgs_boss_spells": _provider_source(boss_spells_result, command="lorrgs", args=boss_spells_args or []),
-        "warcraftlogs_report_fights": _provider_source(wcl_fights_result, command="warcraftlogs", args=wcl_fights_args),
-        "warcraftlogs_report_events": _provider_source(events_result, command="warcraftlogs", args=events_args),
-        "lorrgs_spec_ranking": _provider_source(ranking_result, command="lorrgs", args=ranking_args or []),
-    }
-    notes = [
-        "Phase windows are derived from Lorrgs/Warcraft Logs phase transition markers; labels are one-based P1/P2/etc.",
-        "Player casts come from Warcraft Logs cast events so cached Lorrgs user reports do not need per-player timeline generation.",
-        "Top-parse samples are comparison evidence, not universal cooldown recommendations.",
-    ]
-    if player_casts.get("next_page_timestamp") is not None:
-        notes.append("Warcraft Logs returned next_page_timestamp; increase --event-limit or paginate before treating counts as complete.")
-    if not lorrgs_player_casts:
-        notes.append(
-            "Cached Lorrgs user-report data did not include player cooldown casts for this actor; "
-            "Warcraft Logs events fill that gap."
-        )
-    if isinstance(ranking_result, dict) and ranking_result.get("status") == "error":
-        notes.append("Lorrgs top-parse comparison was unavailable; inspect sources.lorrgs_spec_ranking.error for details.")
-
-    raw_boss_casts = boss.get("casts")
-    boss_casts: list[Any] = raw_boss_casts if isinstance(raw_boss_casts, list) else []
-    _emit(
-        {
-            "ok": True,
-            "provider": "warcraft",
-            "kind": "cooldown_packet",
-            "query": query,
-            "report_url": f"https://www.warcraftlogs.com/reports/{report_code}#fight={resolved_fight_id}",
-            "phase": {
-                "selected": selected_window,
-                "windows": phase_windows,
-                "raw_markers": raw_phase_markers(lorrgs_phases),
-            },
-            "fight": {
-                "lorrgs": {
-                    "fight_id": lorrgs_fight.get("fight_id"),
-                    "duration_ms": lorrgs_fight.get("duration"),
-                    "difficulty": lorrgs_fight.get("difficulty"),
-                    "kill": lorrgs_fight.get("kill"),
-                    "percent": lorrgs_fight.get("percent"),
-                    "start_time": lorrgs_fight.get("start_time"),
-                },
-                "warcraftlogs": wcl_fight,
-            },
-            "player": {
-                "name": player.get("name"),
-                "source_id": resolved_actor_id,
-                "spec_slug": resolved_spec_slug,
-                "class_slug": player.get("class_slug"),
-                "total": player.get("total"),
-                "deaths": _phase_deaths(player.get("deaths"), window=selected_window),
-            },
-            "boss": {
-                "boss_slug": resolved_boss_slug,
-                "selected_phase_casts": normalize_lorrgs_casts(
-                    boss_casts,
-                    catalog=boss_catalog,
-                    window=selected_window,
-                ),
-            },
-            "cooldowns": {
-                "tracked_spell_count": len(tracked_ids),
-                "tracked_spells": tracked_spell_summaries,
-                "player_casts": player_casts,
-                "lorrgs_cached_player_timeline": {
-                    "raw_cast_count": len(lorrgs_player_casts),
-                    "selected_phase_casts": normalize_lorrgs_casts(
-                        lorrgs_player_casts,
-                        catalog=cooldown_catalog,
-                        window=selected_window,
-                        spell_ids=tracked_ids,
-                    ),
-                },
-            },
-            "comparison": comparison,
-            "sources": source_refs,
-            "notes": notes,
-        },
-        pretty=_pretty(ctx),
-    )
+    emit_cooldown_packet(ctx, request, fetch=_provider_payload_result)
 
 
 @app.command("guide-compare")
@@ -2622,84 +2425,208 @@ def guide_compare(
         help="Freshness threshold (hours) for each compared bundle's exported_at.",
     ),
 ) -> None:
+    """Compare two or more already-exported guide bundles from wowhead, method, or icy-veins."""
     if len(bundles) < 2:
-        _emit(
-            {
-                "ok": False,
-                "error": {
-                    "code": "invalid_argument",
-                    "message": "guide-compare requires at least two exported guide bundles.",
-                },
-            },
-            pretty=_pretty(ctx),
-            err=True,
-        )
-        raise typer.Exit(1)
+        fail(ctx, "invalid_argument", "guide-compare requires at least two exported guide bundles.")
 
     bundle_inputs: list[tuple[Path, dict[str, Any]]] = []
     for bundle_path in bundles:
         resolved_path = bundle_path.expanduser()
-        if not resolved_path.exists():
-            _emit(
-                {
-                    "ok": False,
-                    "error": {
-                        "code": "invalid_bundle",
-                        "message": f"Bundle directory not found: {resolved_path}",
-                    },
-                },
-                pretty=_pretty(ctx),
-                err=True,
-            )
-            raise typer.Exit(1)
         try:
             bundle_inputs.append((resolved_path, load_article_bundle(resolved_path)))
-        except (ValueError, OSError) as exc:
-            _emit(
-                {
-                    "ok": False,
-                    "error": {
-                        "code": "invalid_bundle",
-                        "message": str(exc),
-                    },
-                    "bundle": str(resolved_path),
-                },
-                pretty=_pretty(ctx),
-                err=True,
-            )
-            raise typer.Exit(1) from exc
+        except ArticleBundleError as exc:
+            fail(ctx, exc.code, exc.message, details={"bundle": str(resolved_path)})
 
-    payload = {
-        "provider": "warcraft",
-        **_guide_comparison_packet(bundle_inputs, max_age_hours=max_age_hours),
-    }
-    _emit(payload, pretty=_pretty(ctx))
+    try:
+        packet = _guide_comparison_packet(bundle_inputs, max_age_hours=max_age_hours)
+    except ArticleBundleError as exc:  # the same bundle given twice
+        fail(ctx, exc.code, exc.message, details=exc.details)
+    _emit(ctx, {"provider": "warcraft", **packet})
+
+
+def _failed_call(result: Mapping[str, Any]) -> tuple[dict[str, Any], int] | None:
+    """``({code, message}, exit code)`` of a provider call that failed; ``None`` when it succeeded."""
+    exit_code = result.get("exit_code")
+    if exit_code == 0:
+        return None
+    error = as_dict(as_dict(result.get("payload")).get("error"))
+    return (
+        {"code": error.get("code") or "provider_failed", "message": error.get("message") or f"Exited {exit_code}."},
+        exit_code if isinstance(exit_code, int) else EXIT_GENERIC,
+    )
 
 
 def _resolve_guide_compare_candidate(
     provider_name: str,
     query: str,
     *,
-    limit: int,
     expansion: str | None,
-) -> tuple[dict[str, Any] | None, str | None, dict[str, Any] | None, dict[str, Any] | None]:
-    resolved = provider_resolve(provider_name, query, limit=limit, expansion=expansion)
-    candidate, candidate_reason = _resolved_guide_match(
-        provider_name,
-        resolved.get("payload") if isinstance(resolved, dict) else None,
+) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    """The provider's guide for ``query``: its resolved guide, else a decisive search top hit.
+
+    Returns ``(candidate, decline)``; ``decline`` is the provider row when there is no candidate,
+    naming why each step declined. Neither call gets a --limit: the resolve confidence and the
+    search margin both need the rivals a small limit would hide.
+    """
+    resolved = provider_resolve(provider_name, query, expansion=expansion)
+    candidate, resolve_reason = _resolved_guide_match(provider_name, provider_payload_data(resolved.get("payload")))
+    if candidate is not None:
+        return candidate, {}
+    searched = provider_search(provider_name, query, expansion=expansion)
+    candidate, search_reason = _search_fallback_guide_match(provider_name, provider_payload_data(searched.get("payload")))
+    if candidate is not None:
+        return candidate, {}
+    resolve_failure = _failed_call(resolved)
+    decline: dict[str, Any] = {
+        "provider": provider_name,
+        "status": "skipped",
+        "reason": search_reason,
+        "resolve_reason": "provider_failed" if resolve_failure is not None else resolve_reason,
+        "resolve": resolved.get("payload"),
+        "search": searched.get("payload"),
+    }
+    # A failed call means the provider was never asked properly, so "no guide" would be a guess.
+    # Search is the last step, so its failure is the one reported when both failed.
+    failure = _failed_call(searched) or resolve_failure
+    if failure is not None:
+        decline.update(status="error", reason="provider_failed", error=failure[0], exit_code=failure[1])
+    return None, decline
+
+
+def _guide_compare_existing_freshness(existing_row: dict[str, Any] | None, *, max_age_hours: int) -> dict[str, Any]:
+    if existing_row is None:
+        return {"status": "stale", "reason": "missing_manifest_row", "age_hours": None, "max_age_hours": max_age_hours}
+    return _guide_compare_freshness(existing_row.get("exported_at"), max_age_hours=max_age_hours)
+
+
+def _guide_compare_reusable(
+    existing_row: dict[str, Any] | None,
+    *,
+    candidate: dict[str, Any],
+    export_dir: Path,
+    freshness: dict[str, Any],
+    force_refresh: bool,
+) -> bool:
+    """An exported bundle is reusable only when the manifest row names this candidate and is still fresh."""
+    if existing_row is None or force_refresh:
+        return False
+    same_candidate = (
+        str(existing_row.get("candidate_ref") or "") == str(candidate["ref"])
+        and str(existing_row.get("bundle_path") or "") == str(export_dir)
     )
-    search_payload: dict[str, Any] | None = None
-    if candidate is None:
-        searched = provider_search(provider_name, query, limit=limit, expansion=expansion)
-        search_payload = searched.get("payload") if isinstance(searched, dict) else None
-        fallback_candidate, fallback_reason = _search_fallback_guide_match(provider_name, search_payload)
-        if fallback_candidate is not None:
-            candidate = fallback_candidate
-            candidate_reason = None
-        else:
-            candidate_reason = fallback_reason if fallback_reason is not None else candidate_reason
-    resolve_payload = resolved.get("payload") if isinstance(resolved, dict) else None
-    return candidate, candidate_reason, resolve_payload, search_payload
+    return same_candidate and freshness.get("status") == "fresh" and export_dir.exists()
+
+
+def _guide_compare_invalid_bundle_row(
+    provider_name: str,
+    *,
+    candidate: dict[str, Any],
+    export_dir: Path,
+    freshness: dict[str, Any],
+    error: str,
+) -> dict[str, Any]:
+    return {
+        "provider": provider_name,
+        "status": "error",
+        "reason": "invalid_exported_bundle",
+        "candidate": candidate,
+        "bundle_path": str(export_dir),
+        "freshness": freshness,
+        "error": {"code": "invalid_bundle", "message": error},
+        "exit_code": EXIT_GENERIC,
+    }
+
+
+def _guide_compare_reuse_row(
+    provider_name: str,
+    *,
+    candidate: dict[str, Any],
+    export_dir: Path,
+    existing_row: dict[str, Any] | None,
+    freshness: dict[str, Any],
+) -> tuple[dict[str, Any], tuple[Path, dict[str, Any]] | None]:
+    """Load the already-exported bundle instead of re-exporting it."""
+    try:
+        bundle = load_article_bundle(export_dir)
+    except (ValueError, OSError) as exc:
+        return _guide_compare_invalid_bundle_row(
+            provider_name,
+            candidate=candidate,
+            export_dir=export_dir,
+            freshness=freshness,
+            error=str(exc),
+        ), None
+    return {
+        "provider": provider_name,
+        "status": "reused",
+        "candidate": candidate,
+        "bundle_path": str(export_dir),
+        "freshness": freshness,
+        "exported_at": existing_row.get("exported_at") if existing_row is not None else None,
+    }, (export_dir, bundle)
+
+
+def _guide_compare_export_row(
+    provider_name: str,
+    *,
+    candidate: dict[str, Any],
+    export_dir: Path,
+    freshness: dict[str, Any],
+    expansion: str | None,
+    max_age_hours: int,
+) -> tuple[dict[str, Any], tuple[Path, dict[str, Any]] | None]:
+    """Run the provider's guide-export into ``export_dir`` and load the bundle it wrote."""
+    export_result = provider_invoke(
+        provider_name,
+        ["guide-export", candidate["ref"], "--out", str(export_dir)],
+        expansion=expansion,
+    )
+    failure = _failed_call(export_result)
+    if failure is not None:
+        return {
+            "provider": provider_name,
+            "status": "error",
+            "reason": "guide_export_failed",
+            "candidate": candidate,
+            # The export wrote nothing usable, so there is no bundle to point at.
+            "bundle_path": None,
+            "freshness": freshness,
+            "error": failure[0],
+            "exit_code": failure[1],
+            "export": export_result.get("payload"),
+        }, None
+    try:
+        bundle = load_article_bundle(export_dir)
+    except (ValueError, OSError) as exc:
+        return _guide_compare_invalid_bundle_row(
+            provider_name,
+            candidate=candidate,
+            export_dir=export_dir,
+            freshness=freshness,
+            error=str(exc),
+        ), None
+
+    # exported_at comes from the manifest the provider's guide-export just stamped, so the
+    # orchestration row, the reuse check, and _guide_comparison_packet share one timestamp (they
+    # cannot disagree on freshness). The `or _iso_now_utc()` is an unreachable safety net, NOT a
+    # freshness fabricator: every guide-compare provider stamps exported_at on export (wowhead via
+    # _guide_export_manifest, method/icy-veins via write_article_bundle), and this branch runs only
+    # after guide-export above re-wrote the bundle now — so "now" would reflect a real just-happened
+    # export, never a stale reuse. A timestamp-less bundle is also never *reused*: the reuse gate
+    # requires freshness "fresh" and _guide_compare_freshness(None) is always "stale", which forces a
+    # re-export (re-stamping a real anchor). So a bundle lacking a real anchor cannot be stamped here
+    # and then treated as freshly exported on a later run.
+    bundle_manifest = as_dict(bundle.get("manifest"))
+    exported_at = bundle_manifest.get("exported_at") or _iso_now_utc()
+    return {
+        "provider": provider_name,
+        "status": "exported",
+        "candidate": candidate,
+        "bundle_path": str(export_dir),
+        "freshness": _guide_compare_freshness(exported_at, max_age_hours=max_age_hours),
+        "exported_at": exported_at,
+        "export": export_result.get("payload"),
+    }, (export_dir, bundle)
 
 
 def _process_guide_compare_provider(
@@ -2707,7 +2634,6 @@ def _process_guide_compare_provider(
     *,
     query: str,
     requested_expansion: str | None,
-    limit: int,
     max_age_hours: int,
     force_refresh: bool,
     orchestration_root: Path,
@@ -2729,110 +2655,184 @@ def _process_guide_compare_provider(
             ),
         }, None
 
-    candidate, candidate_reason, resolve_payload, search_payload = _resolve_guide_compare_candidate(
-        provider_name,
-        query,
-        limit=limit,
-        expansion=requested_expansion,
-    )
+    candidate, decline = _resolve_guide_compare_candidate(provider_name, query, expansion=requested_expansion)
     if candidate is None:
-        return {
-            "provider": provider_name,
-            "status": "skipped",
-            "reason": candidate_reason,
-            "resolve": resolve_payload,
-            "search": search_payload,
-        }, None
+        return decline, None
 
     export_dir = orchestration_root / provider_name
     existing_row = manifest_by_provider.get(provider_name)
-    existing_freshness = (
-        _guide_compare_freshness(existing_row.get("exported_at"), max_age_hours=max_age_hours)
-        if isinstance(existing_row, dict)
-        else {"status": "stale", "reason": "missing_manifest_row", "age_hours": None, "max_age_hours": max_age_hours}
-    )
-    same_candidate = (
-        isinstance(existing_row, dict)
-        and str(existing_row.get("candidate_ref") or "") == str(candidate["ref"])
-        and str(existing_row.get("bundle_path") or "") == str(export_dir)
-    )
-    can_reuse = (
-        not force_refresh
-        and same_candidate
-        and existing_freshness.get("status") == "fresh"
-        and export_dir.exists()
-    )
-    if can_reuse:
-        try:
-            bundle = load_article_bundle(export_dir)
-        except (ValueError, OSError) as exc:
-            return {
-                "provider": provider_name,
-                "status": "error",
-                "reason": "invalid_exported_bundle",
-                "candidate": candidate,
-                "bundle_path": str(export_dir),
-                "freshness": existing_freshness,
-                "error": str(exc),
-            }, None
-        return {
-            "provider": provider_name,
-            "status": "reused",
-            "candidate": candidate,
-            "bundle_path": str(export_dir),
-            "freshness": existing_freshness,
-            "exported_at": existing_row.get("exported_at") if isinstance(existing_row, dict) else None,
-        }, (export_dir, bundle)
-
-    export_result = provider_invoke(
+    existing_freshness = _guide_compare_existing_freshness(existing_row, max_age_hours=max_age_hours)
+    if _guide_compare_reusable(
+        existing_row,
+        candidate=candidate,
+        export_dir=export_dir,
+        freshness=existing_freshness,
+        force_refresh=force_refresh,
+    ):
+        return _guide_compare_reuse_row(
+            provider_name,
+            candidate=candidate,
+            export_dir=export_dir,
+            existing_row=existing_row,
+            freshness=existing_freshness,
+        )
+    return _guide_compare_export_row(
         provider_name,
-        ["guide-export", candidate["ref"], "--out", str(export_dir)],
+        candidate=candidate,
+        export_dir=export_dir,
+        freshness=existing_freshness,
         expansion=requested_expansion,
+        max_age_hours=max_age_hours,
     )
-    if export_result.get("exit_code") != 0:
-        return {
-            "provider": provider_name,
-            "status": "error",
-            "reason": "guide_export_failed",
-            "candidate": candidate,
-            "bundle_path": str(export_dir),
-            "freshness": existing_freshness,
-            "export": export_result.get("payload"),
-        }, None
-    try:
-        bundle = load_article_bundle(export_dir)
-    except (ValueError, OSError) as exc:
-        return {
-            "provider": provider_name,
-            "status": "error",
-            "reason": "invalid_exported_bundle",
-            "candidate": candidate,
-            "bundle_path": str(export_dir),
-            "freshness": existing_freshness,
-            "error": str(exc),
-        }, None
 
-    # exported_at comes from the manifest the provider's guide-export just stamped, so the
-    # orchestration row, the reuse check, and _guide_comparison_packet share one timestamp (they
-    # cannot disagree on freshness). The `or _iso_now_utc()` is an unreachable safety net, NOT a
-    # freshness fabricator: every guide-compare provider stamps exported_at on export (wowhead via
-    # _guide_export_manifest, method/icy-veins via write_article_bundle), and this branch runs only
-    # after guide-export above re-wrote the bundle now — so "now" would reflect a real just-happened
-    # export, never a stale reuse. A timestamp-less bundle is also never *reused*: the reuse gate
-    # requires freshness "fresh" and _guide_compare_freshness(None) is always "stale", which forces a
-    # re-export (re-stamping a real anchor). So a bundle lacking a real anchor cannot be stamped here
-    # and then treated as freshly exported on a later run.
-    bundle_manifest = bundle.get("manifest") if isinstance(bundle.get("manifest"), dict) else {}
-    exported_at = bundle_manifest.get("exported_at") or _iso_now_utc()
+
+@dataclass(frozen=True, slots=True)
+class GuideCompareQueryOptions:
+    """One orchestration run of `warcraft guide-compare-query`, after its flags are validated."""
+
+    query: str
+    providers: tuple[str, ...]
+    orchestration_root: Path
+    requested_expansion: str | None
+    max_age_hours: int
+    force_refresh: bool
+    simc_build_handoff: bool
+    simc_apl_path: str | None
+    simc_decode: bool
+    simc_build_limit: int
+
+
+def _guide_compare_manifest_index(root: Path) -> dict[str, dict[str, Any]]:
+    """Provider rows from a previous orchestration manifest, keyed by provider name."""
+    manifest = _load_guide_compare_manifest(root) or {}
+    rows = manifest.get("providers")
+    if not isinstance(rows, list):
+        return {}
+    return {row["provider"]: row for row in rows if isinstance(row, dict) and isinstance(row.get("provider"), str)}
+
+
+def _guide_compare_decline_row(provider_row: dict[str, Any]) -> dict[str, Any]:
+    """Why one provider did not contribute a bundle, small enough to live inside ``error.details``."""
     return {
-        "provider": provider_name,
-        "status": "exported",
-        "candidate": candidate,
-        "bundle_path": str(export_dir),
-        "freshness": _guide_compare_freshness(exported_at, max_age_hours=max_age_hours),
-        "exported_at": exported_at,
-        "export": export_result.get("payload"),
-    }, (export_dir, bundle)
+        "provider": provider_row.get("provider"),
+        "status": provider_row.get("status"),
+        "reason": provider_row.get("reason"),
+        "resolve_reason": provider_row.get("resolve_reason"),
+        "candidate_ref": as_dict(provider_row.get("candidate")).get("ref"),
+        "bundle_path": provider_row.get("bundle_path"),
+        "error": provider_row.get("error"),
+    }
+
+
+def _insufficient_guides_error(provider_rows: list[dict[str, Any]]) -> tuple[dict[str, Any], int]:
+    """The failure for a run that exported fewer than two bundles, and its exit code.
+
+    When every provider that contributed nothing failed (an outage, not a missing guide) the run
+    fails with those providers' shared code and exit code, so an agent retries instead of concluding
+    no guide exists. Otherwise it is ``insufficient_guides``, exit 1.
+    """
+    failed = [row for row in provider_rows if row.get("status") == "error"]
+    empty = [row for row in provider_rows if row.get("status") not in ("exported", "reused")]
+    if failed and len(failed) == len(empty):
+        code, exit_code = _shared_failure(
+            [{**as_dict(row.get("error")), "exit_code": row.get("exit_code")} for row in failed]
+        )
+        message = f"{len(failed)} guide providers failed, so fewer than two guide bundles exported."
+        return {"code": code, "message": message}, exit_code
+    return {"code": "insufficient_guides", "message": "Need at least two exported guide bundles to compare."}, EXIT_GENERIC
+
+
+def _simc_handoff_failure(summary: Mapping[str, Any]) -> dict[str, Any]:
+    """The error for a simc build handoff whose every requested leg failed for every build."""
+    return {
+        "code": "simc_handoff_failed",
+        "message": (
+            f"Every requested simc leg ({', '.join(summary['empty_requested_legs'])}) failed for all "
+            f"{summary['returned_build_count']} build references; the packet carries no usable simc "
+            "output. Each build's `failures` names the simc error; check `warcraft simc doctor`."
+        ),
+    }
+
+
+def _guide_compare_query_payload(options: GuideCompareQueryOptions) -> tuple[dict[str, Any], int]:
+    """Export each selected provider's guide bundle and compare them.
+
+    Returns the payload to emit and its exit code. The payload is ``ok: False`` when fewer than two
+    bundles exported, or when the requested simc handoff failed for every leg; the comparison then
+    rides along in ``error.details``.
+    """
+    manifest_by_provider = _guide_compare_manifest_index(options.orchestration_root)
+    provider_rows: list[dict[str, Any]] = []
+    bundle_inputs: list[tuple[Path, dict[str, Any]]] = []
+    for provider_name in options.providers:
+        provider_row, bundle_input = _process_guide_compare_provider(
+            provider_name,
+            query=options.query,
+            requested_expansion=options.requested_expansion,
+            max_age_hours=options.max_age_hours,
+            force_refresh=options.force_refresh,
+            orchestration_root=options.orchestration_root,
+            manifest_by_provider=manifest_by_provider,
+        )
+        provider_rows.append(provider_row)
+        if bundle_input is not None:
+            bundle_inputs.append(bundle_input)
+
+    if len(bundle_inputs) < 2:
+        # The manifest describes a completed comparison, so a failed run writes none: it must not
+        # leave a `providers: []` manifest behind for the next run to reuse.
+        error, exit_code = _insufficient_guides_error(provider_rows)
+        error["details"] = {
+            "exported_bundle_count": len(bundle_inputs),
+            "required_bundle_count": 2,
+            "selected_providers": list(options.providers),
+            "provider_results": [_guide_compare_decline_row(row) for row in provider_rows],
+        }
+        return {"ok": False, "query": options.query, "error": error}, exit_code
+
+    manifest = _write_guide_compare_manifest(
+        root=options.orchestration_root,
+        query=options.query,
+        requested_expansion=options.requested_expansion,
+        max_age_hours=options.max_age_hours,
+        provider_results=provider_rows,
+    )
+    include_simc_build_handoff = options.simc_build_handoff or (
+        isinstance(options.simc_apl_path, str) and bool(options.simc_apl_path.strip())
+    )
+    payload = {
+        "provider": "warcraft",
+        "kind": "guide_bundle_comparison_orchestration",
+        "query": options.query,
+        "requested_expansion": options.requested_expansion,
+        "selected_providers": list(options.providers),
+        "output_root": str(options.orchestration_root),
+        "max_age_hours": options.max_age_hours,
+        "force_refresh": options.force_refresh,
+        "provider_results": provider_rows,
+        "exported_bundle_count": len(bundle_inputs),
+        "manifest": manifest,
+        "comparison": {
+            "provider": "warcraft",
+            **_guide_comparison_packet(bundle_inputs, max_age_hours=options.max_age_hours),
+        },
+        "simc_build_handoff": _guide_builds_simc_payload(
+            source_path=options.orchestration_root,
+            source_kind="orchestration_root",
+            source_manifest=manifest,
+            bundle_inputs=bundle_inputs,
+            decode=options.simc_decode,
+            apl_path=options.simc_apl_path,
+            limit=options.simc_build_limit,
+            expansion=options.requested_expansion,
+        )
+        if include_simc_build_handoff
+        else None,
+    }
+    summary = as_dict(as_dict(payload["simc_build_handoff"]).get("summary"))
+    if summary.get("simc_handoff_status") == "all_handoffs_failed":
+        return {**payload, "ok": False, "error": _simc_handoff_failure(summary)}, EXIT_GENERIC
+    return payload, 0
 
 
 @app.command("guide-compare-query")
@@ -2851,14 +2851,11 @@ def guide_compare_query(
         dir_okay=True,
         writable=True,
         resolve_path=True,
-        help="Directory root where orchestrated guide bundles should be written.",
-    ),
-    limit: int = typer.Option(
-        5,
-        "--limit",
-        min=1,
-        max=20,
-        help="Maximum provider-local resolve candidates to request before selecting one guide match.",
+        help=(
+            "Directory root where orchestrated guide bundles should be written. "
+            "Defaults to <XDG data dir>/warcraft/guide_compare/<query-slug>; nothing is written to "
+            "the current directory."
+        ),
     ),
     max_age_hours: int = typer.Option(
         24,
@@ -2895,99 +2892,29 @@ def guide_compare_query(
         help="Maximum unique explicit build references to hand off to simc when simc build handoff is enabled.",
     ),
 ) -> None:
-    requested_expansion = _requested_expansion(ctx)
+    """Resolve a guide query across wowhead, method, and icy-veins, export the bundles, and compare them."""
     try:
         selected_providers = _normalize_guide_compare_providers(provider)
     except ValueError as exc:
-        _emit(
-            {
-                "ok": False,
-                "error": {"code": "invalid_argument", "message": str(exc)},
-            },
-            pretty=_pretty(ctx),
-            err=True,
-        )
-        raise typer.Exit(1) from exc
+        fail(ctx, "invalid_argument", str(exc))
 
-    orchestration_root = (out_root or _default_guide_compare_query_root(query)).expanduser()
-    orchestration_manifest = _load_guide_compare_manifest(orchestration_root) or {}
-    manifest_rows = orchestration_manifest.get("providers")
-    manifest_by_provider: dict[str, dict[str, Any]] = {}
-    if isinstance(manifest_rows, list):
-        for row in manifest_rows:
-            if not isinstance(row, dict):
-                continue
-            provider_name = row.get("provider")
-            if isinstance(provider_name, str):
-                manifest_by_provider[provider_name] = row
-    provider_rows: list[dict[str, Any]] = []
-    bundle_inputs: list[tuple[Path, dict[str, Any]]] = []
-
-    for provider_name in selected_providers:
-        provider_row, bundle_input = _process_guide_compare_provider(
-            provider_name,
+    payload, exit_code = _guide_compare_query_payload(
+        GuideCompareQueryOptions(
             query=query,
-            requested_expansion=requested_expansion,
-            limit=limit,
+            providers=selected_providers,
+            orchestration_root=(out_root or _default_guide_compare_query_root(query)).expanduser(),
+            requested_expansion=_requested_expansion(ctx),
             max_age_hours=max_age_hours,
             force_refresh=force_refresh,
-            orchestration_root=orchestration_root,
-            manifest_by_provider=manifest_by_provider,
+            simc_build_handoff=simc_build_handoff,
+            simc_apl_path=simc_apl_path,
+            simc_decode=simc_decode,
+            simc_build_limit=simc_build_limit,
         )
-        provider_rows.append(provider_row)
-        if bundle_input is not None:
-            bundle_inputs.append(bundle_input)
-
-    payload: dict[str, Any] = {
-        "provider": "warcraft",
-        "kind": "guide_bundle_comparison_orchestration",
-        "query": query,
-        "requested_expansion": requested_expansion,
-        "selected_providers": list(selected_providers),
-        "output_root": str(orchestration_root),
-        "max_age_hours": max_age_hours,
-        "force_refresh": force_refresh,
-        "provider_results": provider_rows,
-        "exported_bundle_count": len(bundle_inputs),
-        "comparison": None,
-        "simc_build_handoff": None,
-    }
-    payload["manifest"] = _write_guide_compare_manifest(
-        root=orchestration_root,
-        query=query,
-        requested_expansion=requested_expansion,
-        max_age_hours=max_age_hours,
-        provider_results=provider_rows,
     )
-    if len(bundle_inputs) >= 2:
-        payload["comparison"] = {
-            "provider": "warcraft",
-            **_guide_comparison_packet(bundle_inputs, max_age_hours=max_age_hours),
-        }
-        include_simc_build_handoff = simc_build_handoff or (
-            isinstance(simc_apl_path, str) and bool(simc_apl_path.strip())
-        )
-        if include_simc_build_handoff:
-            payload["simc_build_handoff"] = _guide_builds_simc_payload(
-                source_path=orchestration_root,
-                source_kind="orchestration_root",
-                source_manifest=payload["manifest"] if isinstance(payload.get("manifest"), dict) else None,
-                bundle_inputs=bundle_inputs,
-                decode=simc_decode,
-                apl_path=simc_apl_path,
-                limit=simc_build_limit,
-                expansion=requested_expansion,
-            )
-        _emit(payload, pretty=_pretty(ctx))
-        return
-
-    payload["ok"] = False
-    payload["error"] = {
-        "code": "insufficient_guides",
-        "message": "Need at least two exported guide bundles to compare.",
-    }
-    _emit(payload, pretty=_pretty(ctx), err=True)
-    raise typer.Exit(1)
+    _emit(ctx, payload, err=exit_code != 0)
+    if exit_code != 0:
+        raise typer.Exit(exit_code)
 
 
 @app.command("talent-packet")
@@ -3017,6 +2944,7 @@ def talent_packet(
     ),
     out: str | None = typer.Option(None, "--out", help="Optional path to write the final talent transport packet JSON."),
 ) -> None:
+    """Build a validated talent transport packet from a Wowhead talent-calc or Warcraft Logs reference."""
     resolved = _resolve_talent_transport(
         ctx,
         source=source,
@@ -3025,7 +2953,6 @@ def talent_packet(
         allow_unlisted=allow_unlisted,
         listed_build_limit=listed_build_limit,
         validate=validate,
-        kind="talent_transport",
     )
     packet = resolved["talent_transport_packet"]
     written_packet_path = _write_transport_packet_or_fail(
@@ -3033,7 +2960,6 @@ def talent_packet(
         path_value=out,
         packet=packet,
         source=source,
-        kind="talent_transport",
         route=resolved["route"],
         provider_result=resolved["producer_result"],
     )
@@ -3046,7 +2972,7 @@ def talent_packet(
         resolved.get("upgrade_result") if isinstance(resolved, dict) else None,
         stable_packet_path=stable_packet_path,
     )
-    _emit(
+    _emit(ctx,
         {
             "provider": "warcraft",
             "kind": "talent_transport",
@@ -3054,8 +2980,87 @@ def talent_packet(
             "upgrade_result": upgrade_result,
             "written_packet_path": written_packet_path,
         },
-        pretty=_pretty(ctx),
     )
+
+
+@dataclass(frozen=True, slots=True)
+class TalentDescribeOptions:
+    """One `warcraft talent-describe` run: how to route the packet, and how to describe the build."""
+
+    source: str
+    actor_id: int | None
+    fight_id: int | None
+    allow_unlisted: bool
+    listed_build_limit: int
+    validate: bool
+    packet_out: str | None
+    apl_path: str | None
+    targets: int
+    aoe_targets: int
+    list_name: str
+    priority_limit: int
+    inactive_limit: int
+
+
+def _talent_describe_payload(ctx: typer.Context, options: TalentDescribeOptions) -> dict[str, Any]:
+    """Route the source to a talent transport packet and attach simc describe-build output for it."""
+    resolved = _resolve_talent_transport(
+        ctx,
+        source=options.source,
+        actor_id=options.actor_id,
+        fight_id=options.fight_id,
+        allow_unlisted=options.allow_unlisted,
+        listed_build_limit=options.listed_build_limit,
+        validate=options.validate,
+    )
+    packet = resolved["talent_transport_packet"]
+    describe_result = _describe_transport_packet_with_simc(
+        packet,
+        expansion=resolved["requested_expansion"],
+        apl_path=options.apl_path,
+        targets=options.targets,
+        aoe_targets=options.aoe_targets,
+        list_name=options.list_name,
+        priority_limit=options.priority_limit,
+        inactive_limit=options.inactive_limit,
+    )
+    if _provider_result_failed(describe_result):
+        error_payload = _provider_error_payload("simc", describe_result)
+        _fail_talent_route(
+            ctx,
+            code=str(error_payload.get("code") or "describe_build_failed"),
+            message=str(error_payload.get("message") or "simc describe-build failed for the routed talent transport packet."),
+            source=options.source,
+            route=resolved["route"],
+            provider_result=describe_result,
+        )
+    written_packet_path = _write_transport_packet_or_fail(
+        ctx,
+        path_value=options.packet_out,
+        packet=packet,
+        source=options.source,
+        route=resolved["route"],
+        provider_result=describe_result,
+    )
+    stable_packet_path = _stable_transport_packet_path(
+        route=resolved["route"],
+        written_packet_path=written_packet_path,
+        upgraded=bool(resolved["upgraded"]),
+    )
+    return {
+        "provider": "warcraft",
+        "kind": "talent_describe",
+        **resolved,
+        "upgrade_result": _normalize_upgrade_result_build_packet_path(
+            resolved.get("upgrade_result"),
+            stable_packet_path=stable_packet_path,
+        ),
+        "written_packet_path": written_packet_path,
+        "describe_result": _normalize_simc_transport_packet_path(
+            describe_result,
+            stable_packet_path=stable_packet_path,
+        ),
+    }
 
 
 @app.command("talent-describe")
@@ -3111,70 +3116,26 @@ def talent_describe(
         help="Maximum inactive talent-gated actions to summarize per target view.",
     ),
 ) -> None:
-    resolved = _resolve_talent_transport(
-        ctx,
-        source=source,
-        actor_id=actor_id,
-        fight_id=fight_id,
-        allow_unlisted=allow_unlisted,
-        listed_build_limit=listed_build_limit,
-        validate=validate,
-        kind="talent_describe",
-    )
-    packet = resolved["talent_transport_packet"]
-    describe_result = _describe_transport_packet_with_simc(
-        packet,
-        expansion=resolved["requested_expansion"],
-        apl_path=apl_path,
-        targets=targets,
-        aoe_targets=aoe_targets,
-        list_name=list_name,
-        priority_limit=priority_limit,
-        inactive_limit=inactive_limit,
-    )
-    if _provider_result_failed(describe_result):
-        error_payload = _provider_error_payload("simc", describe_result)
-        _fail_talent_route(
+    """Build a talent transport packet and add simc describe-build output for the decoded build."""
+    _emit(ctx,
+        _talent_describe_payload(
             ctx,
-            code=str(error_payload.get("code") or "describe_build_failed"),
-            message=str(error_payload.get("message") or "simc describe-build failed for the routed talent transport packet."),
-            source=source,
-            kind="talent_describe",
-            route=resolved["route"],
-            provider_result=describe_result,
-        )
-    written_packet_path = _write_transport_packet_or_fail(
-        ctx,
-        path_value=packet_out,
-        packet=packet,
-        source=source,
-        kind="talent_describe",
-        route=resolved["route"],
-        provider_result=describe_result,
-    )
-    stable_packet_path = _stable_transport_packet_path(
-        route=resolved["route"],
-        written_packet_path=written_packet_path,
-        upgraded=bool(resolved["upgraded"]),
-    )
-    upgrade_result = _normalize_upgrade_result_build_packet_path(
-        resolved.get("upgrade_result") if isinstance(resolved, dict) else None,
-        stable_packet_path=stable_packet_path,
-    )
-    describe_result = _normalize_simc_transport_packet_path(
-        describe_result,
-        stable_packet_path=stable_packet_path,
-    )
-    _emit(
-        {
-            "provider": "warcraft",
-            "kind": "talent_describe",
-            **resolved,
-            "upgrade_result": upgrade_result,
-            "packet_written_path": written_packet_path,
-            "describe_result": describe_result,
-        },
-        pretty=_pretty(ctx),
+            TalentDescribeOptions(
+                source=source,
+                actor_id=actor_id,
+                fight_id=fight_id,
+                allow_unlisted=allow_unlisted,
+                listed_build_limit=listed_build_limit,
+                validate=validate,
+                packet_out=packet_out,
+                apl_path=apl_path,
+                targets=targets,
+                aoe_targets=aoe_targets,
+                list_name=list_name,
+                priority_limit=priority_limit,
+                inactive_limit=inactive_limit,
+            ),
+        ),
     )
 
 
@@ -3208,20 +3169,12 @@ def guide_builds_simc(
         help="Maximum unique explicit build references to hand off to simc.",
     ),
 ) -> None:
+    """Turn the explicit build references in exported guide bundles into a simc evidence packet."""
     requested_expansion = _requested_expansion(ctx)
     try:
         source_kind, bundle_inputs, source_manifest = _load_guide_build_source(source)
     except ValueError as exc:
-        _emit(
-            {
-                "ok": False,
-                "error": {"code": "invalid_bundle_source", "message": str(exc)},
-                "source": str(source),
-            },
-            pretty=_pretty(ctx),
-            err=True,
-        )
-        raise typer.Exit(1) from exc
+        fail(ctx, "invalid_bundle_source", str(exc), details={"source": str(source)})
 
     payload = _guide_builds_simc_payload(
         source_path=source,
@@ -3233,107 +3186,36 @@ def guide_builds_simc(
         limit=limit,
         expansion=requested_expansion,
     )
-    _emit(payload, pretty=_pretty(ctx))
+    if payload["summary"]["simc_handoff_status"] == "all_handoffs_failed":
+        # The packet's provenance stays the envelope's; the rest of it, per-build failure codes
+        # included, becomes `error.details`.
+        _emit(ctx, {**payload, "ok": False, "error": _simc_handoff_failure(payload["summary"])}, err=True)
+        raise typer.Exit(EXIT_GENERIC)
+    _emit(ctx, payload)
 
 
-@app.command(
-    "wowhead",
-    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
-)
-def wowhead_passthrough(ctx: typer.Context) -> None:
-    _run_passthrough(ctx, wowhead_app, provider_name="wowhead", prog_name="wowhead")
+def _register_passthrough(registration: ProviderRegistration) -> None:
+    """Register `warcraft <provider> ...` as a proxy to that provider's own CLI."""
+
+    def passthrough(ctx: typer.Context) -> None:
+        _run_passthrough(ctx, registration.app, provider_name=registration.name, prog_name=registration.command)
+
+    app.command(
+        registration.command,
+        help=(
+            f"Proxy to the {registration.command} CLI ({registration.tier} tier). "
+            "Remaining arguments are passed through unchanged."
+        ),
+        context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
+    )(passthrough)
 
 
-@app.command(
-    "icy-veins",
-    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
-)
-def icy_veins_passthrough(ctx: typer.Context) -> None:
-    _run_passthrough(ctx, icy_veins_app, provider_name="icy-veins", prog_name="icy-veins")
-
-
-@app.command(
-    "method",
-    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
-)
-def method_passthrough(ctx: typer.Context) -> None:
-    _run_passthrough(ctx, method_app, provider_name="method", prog_name="method")
-
-
-@app.command(
-    "raiderio",
-    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
-)
-def raiderio_passthrough(ctx: typer.Context) -> None:
-    _run_passthrough(ctx, raiderio_app, provider_name="raiderio", prog_name="raiderio")
-
-
-@app.command(
-    "warcraftlogs",
-    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
-)
-def warcraftlogs_passthrough(ctx: typer.Context) -> None:
-    _run_passthrough(ctx, warcraftlogs_app, provider_name="warcraftlogs", prog_name="warcraftlogs")
-
-
-@app.command(
-    "warcraft-wiki",
-    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
-)
-def warcraft_wiki_passthrough(ctx: typer.Context) -> None:
-    _run_passthrough(ctx, warcraft_wiki_app, provider_name="warcraft-wiki", prog_name="warcraft-wiki")
-
-
-@app.command(
-    "wowprogress",
-    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
-)
-def wowprogress_passthrough(ctx: typer.Context) -> None:
-    _run_passthrough(ctx, wowprogress_app, provider_name="wowprogress", prog_name="wowprogress")
-
-
-@app.command(
-    "simc",
-    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
-)
-def simc_passthrough(ctx: typer.Context) -> None:
-    _run_passthrough(ctx, simc_app, provider_name="simc", prog_name="simc")
-
-
-@app.command(
-    "raidbots",
-    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
-)
-def raidbots_passthrough(ctx: typer.Context) -> None:
-    _run_passthrough(ctx, raidbots_app, provider_name="raidbots", prog_name="raidbots")
-
-
-@app.command(
-    "blizzard",
-    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
-)
-def blizzard_passthrough(ctx: typer.Context) -> None:
-    _run_passthrough(ctx, blizzard_app, provider_name="blizzard-api", prog_name="blizzard")
-
-
-@app.command(
-    "curseforge",
-    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
-)
-def curseforge_passthrough(ctx: typer.Context) -> None:
-    _run_passthrough(ctx, curseforge_app, provider_name="curseforge", prog_name="curseforge")
-
-
-@app.command(
-    "lorrgs",
-    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
-)
-def lorrgs_passthrough(ctx: typer.Context) -> None:
-    _run_passthrough(ctx, lorrgs_app, provider_name="lorrgs", prog_name="lorrgs")
+for _registration in list_providers():
+    _register_passthrough(_registration)
 
 
 def run() -> None:
-    app()
+    guarded_run(app, provider=PROVIDER_NAME)
 
 
 if __name__ == "__main__":

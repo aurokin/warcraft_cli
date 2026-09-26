@@ -1,5 +1,8 @@
 # CurseForge
 
+**Tier: experimental.** The command surface is thin (four commands). The endpoints are confirmed
+against the live API; `provenance.verified` is `true`.
+
 ## Best For
 
 - looking up a World of Warcraft addon by slug or numeric mod id
@@ -30,9 +33,10 @@
   object for the newest file with its changelog `body` (`null` when that file exposes no notes) and
   `source_url`, or an explicit `{file_id, error}` marker on a failed fetch — the lookup still returns
   metadata + files. Detect empty notes via `changelog.body`, not `changelog is null`.
+- the newest file can be an alpha or beta: check `changelog.release_type` (1 release, 2 beta, 3 alpha) and `changelog.display_name` before quoting its notes as "the latest release"
 - every payload carries `provenance` (mod id, slug, resolved-by, source URLs) and
-  `provenance.verified: false` — endpoints/shapes follow the documented public CurseForge API but
-  are pending a one-time live confirmation, so treat results as best-effort until verified
+  `provenance.verified: true` — host, auth, search, lookup, and changelog endpoints are confirmed
+  live; keys without search access can only resolve numeric mod ids (`curseforge addon 3358`)
 
 ## Boundaries
 

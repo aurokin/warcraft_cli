@@ -22,24 +22,30 @@ Report detail is keyed on **finish state**, derived from the report's `endTime`:
 
 | Report state | Signal | Applied TTL |
 | --- | --- | --- |
-| Finished | `endTime > 0` | `WARCRAFTLOGS_FINISHED_REPORT_CACHE_TTL_SECONDS` (default **86400** = 24h) |
-| Live / in-progress | `endTime` is `0`/absent | `WARCRAFTLOGS_REPORT_CACHE_TTL_SECONDS` (default **60s**) |
+| Finished | `endTime` more than 2 hours ago | `WARCRAFTLOGS_FINISHED_REPORT_CACHE_TTL_SECONDS` (default **86400** = 24h) |
+| Live / in-progress | `endTime` within the last 2 hours, `0` or absent | `WARCRAFTLOGS_REPORT_CACHE_TTL_SECONDS` (default **60s**) |
+
+A report that is still being logged has `endTime > 0`: Warcraft Logs sets it to the latest event,
+seconds before now. So `endTime > 0` alone does not mean finished; the report must also have been
+quiet for two hours, which outlasts a raid break.
 
 The TTL is resolved from the actual response at the cache-write site (both the client and
 user GraphQL endpoints), so **a live report is never stored under the finished TTL**. Live
 reports are still cached — briefly — and marked `live: true` rather than skipped.
 
 `endTime == 0` (or absent) falls back to the short live TTL: unknown finish state is treated
-as live, never as finished. Setting `WARCRAFTLOGS_FINISHED_REPORT_CACHE_TTL_SECONDS=0`
-disables finished caching (entries expire immediately).
+as live, never as finished. Setting `WARCRAFTLOGS_FINISHED_REPORT_CACHE_TTL_SECONDS=0` disables
+finished caching (entries expire immediately).
+
+A response that carries GraphQL partial errors is never cached, under any TTL, so a transient
+upstream failure is not replayed after Warcraft Logs recovers.
 
 ### Per-family TTL
 
 | Family | Env override | Default |
 | --- | --- | --- |
-| Metadata (regions/expansions/server) | `WARCRAFTLOGS_METADATA_CACHE_TTL_SECONDS` | 900s |
 | Guild/character | `WARCRAFTLOGS_GUILD_CACHE_TTL_SECONDS` | 300s |
-| Static world/zone/encounter | `WARCRAFTLOGS_STATIC_CACHE_TTL_SECONDS` | 21600s |
+| Static world/zone/encounter and metadata (regions/expansions/server) | `WARCRAFTLOGS_STATIC_CACHE_TTL_SECONDS` | 21600s |
 | Live/report listing baseline | `WARCRAFTLOGS_REPORT_CACHE_TTL_SECONDS` | 60s |
 | Finished report detail | `WARCRAFTLOGS_FINISHED_REPORT_CACHE_TTL_SECONDS` | 86400s |
 
@@ -70,7 +76,12 @@ Report-encounter commands and sampled cross-report commands emit a `cache_proven
 ### `freshness`
 
 Sampled cross-report commands emit `freshness.cache_ttl_seconds` populated with the real
-applied finished-report TTL (was previously `null`), alongside `sampled_at`.
+applied finished-report TTL, alongside `sampled_at`.
+
+They also emit the transport tally for the run — `freshness.cache_hit_count`,
+`freshness.upstream_request_count`, and `freshness.served_entirely_from_cache` (true when the
+run made no upstream request). `sampled_at` is only when the command ran, so the tally is what
+distinguishes a live scan from a warm-cache replay of an older cohort.
 
 ### `sample_scope`
 
@@ -104,12 +115,9 @@ while **live** is stored under the short report TTL and can still be served from
 for up to that TTL (default 60s) after the report finishes — even by a finished-only workflow
 such as sampled boss analytics. This is the accepted consequence of caching live reports
 (rather than no-caching them, for rate-limit relief): the short live TTL bounds the window,
-and once it expires the next fetch sees `endTime > 0` and re-caches under the finished TTL.
-Finished WoW logs are immutable thereafter. To eliminate the window for a specific report,
+and once it expires the next fetch sees an `endTime` over two hours old and re-caches under the
+finished TTL. Finished WoW logs are immutable thereafter. To eliminate the window for a specific report,
 `cache clear` the report namespace before sampling.
-
-A coarse `cache_hits` diagnostics counter exists in `warcraft_core.output`; `cache_provenance`
-is a finer-grained, per-payload surface and does not replace it.
 
 #### Provenance is a report property, not a per-namespace cache audit
 

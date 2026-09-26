@@ -6,51 +6,158 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   lint-and-typecheck:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m venv .venv
-          .venv/bin/pip install -e ".[dev]"
-
-      - name: Ruff (shared packages)
-        run: make lint
-
-      - name: Mypy (shared packages)
-        run: make typecheck
-
-      - name: Import boundaries
-        run: make lint-boundaries
-
-  unit-tests:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v6
         with:
+          enable-cache: true
           python-version: "3.12"
 
       - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m venv .venv
-          .venv/bin/pip install -e ".[dev]"
+        run: uv sync --frozen --extra dev --extra redis
 
-      - name: Unit tests (non-live)
-        run: make test-fast
+      - name: Ruff
+        run: make lint
+
+      - name: Mypy
+        run: make typecheck
+
+      - name: Import boundaries
+        run: make lint-boundaries
+
+      - name: Complexity gate
+        run: make complexity-gate
+
+      - name: Dead code
+        run: make deadcode
+
+  unit-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev --extra redis
+
+      # Same target `make check` runs: the fast suite over every package, failing below the
+      # coverage floor set in the Makefile.
+      - name: Unit tests (non-live) with coverage floor
+        run: make coverage
+
+  isolated-install:
+    name: Isolated install (${{ matrix.cli }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: wowhead-cli
+            cli: wowhead
+          - package: warcraftlogs-cli
+            cli: warcraftlogs
+          - package: simc-cli
+            cli: simc
+          - package: raiderio-cli
+            cli: raiderio
+          - package: warcraft-wiki-cli
+            cli: warcraft-wiki
+          - package: icy-veins-cli
+            cli: icy-veins
+          - package: method-cli
+            cli: method
+          - package: lorrgs-cli
+            cli: lorrgs
+          - package: raidbots-cli
+            cli: raidbots
+          - package: blizzard-api-cli
+            cli: blizzard
+          - package: curseforge-cli
+            cli: curseforge
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      # Proves a single provider package still installs without the umbrella
+      # wheel: a missing runtime dependency in its pyproject fails here.
+      - name: Install provider into a clean environment
+        run: |
+          uv venv /tmp/iso --python 3.12
+          uv pip install --python /tmp/iso \
+            packages/warcraft-core \
+            packages/warcraft-api \
+            packages/warcraft-content \
+            packages/${{ matrix.package }}
+
+      - name: Smoke test the console script
+        run: |
+          /tmp/iso/bin/${{ matrix.cli }} --help
+          /tmp/iso/bin/${{ matrix.cli }} doctor --help
+
+  wheel:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Build wheel
+        run: uv build --wheel
+
+      - name: Upload wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: warcraft-wheel
+          path: dist/*.whl
+          if-no-files-found: error
+
+  gitleaks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # GITLEAKS_LICENSE is only required for organization-owned repositories;
+      # personal repositories run the action without it.
+      - name: Scan for secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}

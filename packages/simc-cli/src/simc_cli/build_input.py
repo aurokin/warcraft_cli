@@ -1,27 +1,46 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import re
 import subprocess
 import tempfile
-from dataclasses import dataclass, field
+from collections.abc import Mapping
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
+from warcraft_core.identity import (
+    IdentityConfidence,
+    normalize_actor_class,
+    normalize_spec_name,
+    validate_talent_transport_packet,
+)
 from warcraft_core.identity import (
     parse_wowhead_talent_calc_ref as parse_shared_wowhead_talent_calc_ref,
 )
-from warcraft_core.identity import (
-    validate_talent_transport_packet,
-)
+from warcraft_core.talent_transport import specialization_ids, tokenize_talent_name
 
 from simc_cli.repo import RepoPaths
+from simc_cli.trait_data import SimcNotReadyError, TieredEntry, load_trait_table
 
 ACTOR_LINE_RE = re.compile(r'^([a-z_]+)\s*=\s*"?(.*?)"?$')
 TALENT_DEBUG_RE = re.compile(
     r"adding (?P<tree>class|spec|hero|selection) talent (?P<name>.+?) "
     r"\(node=(?P<node>\d+) entry=(?P<entry>\d+) rank=(?P<rank>\d+)/(?P<max_rank>\d+)\)"
 )
+# SimC prints this once per hero tree the build actually selected, in two shapes depending on which
+# code path activated it: `activating sub tree Sunfury (id=39)` from a hash, `... (39)` otherwise.
+SUB_TREE_DEBUG_RE = re.compile(r"activating sub tree (?P<name>.+?) \((?:id=)?(?P<id>\d+)\)")
+# SimC's `log=1` line when a talent option overwrites a rank the talent hash already allocated. It is
+# the only place SimC reports the per-entry ranks it spread over a tiered node.
+OVERWRITE_LOG_RE = re.compile(r"Overwriting talent (?P<name>.+?) \((?P<entry>\d+)\), rank (?P<rank>\d+) -> 0")
+# SimC keeps simulating after this one: the decode profile carries no gear on purpose.
+BENIGN_INIT_ERROR = "has no weapon equipped"
+# SimC's debug stream does not always end a line before writing an error, so the marker is matched
+# anywhere on the line rather than anchored to its start.
+_ERROR_LINE_RE = re.compile(r"Error:\s*(?P<message>.+?)\s*$")
 
 DEFAULT_RACE_BY_CLASS = {
     "deathknight": "human",
@@ -40,6 +59,16 @@ DEFAULT_RACE_BY_CLASS = {
 }
 
 
+@dataclass(frozen=True, slots=True)
+class TalentStrings:
+    """The talent-string flag group; the four values are always supplied together by a build-input command."""
+
+    talents: str | None = None
+    class_talents: str | None = None
+    spec_talents: str | None = None
+    hero_talents: str | None = None
+
+
 @dataclass(slots=True)
 class BuildSpec:
     actor_class: str | None = None
@@ -55,6 +84,10 @@ class BuildSpec:
     transport_source: str | None = None
 
 
+def has_talent_data(build_spec: BuildSpec) -> bool:
+    return any([build_spec.talents, build_spec.class_talents, build_spec.spec_talents, build_spec.hero_talents])
+
+
 @dataclass(slots=True)
 class DecodedTalent:
     tree: str
@@ -63,17 +96,60 @@ class DecodedTalent:
     rank: int
     max_rank: int
     entry: int = 0
+    # False for a tiered node decoded from a talent hash: SimC spreads the node's ranks over its
+    # entries and then prints the leftover (always 0), so the talent is taken at an unknown rank.
+    rank_known: bool = True
+
+    @property
+    def taken(self) -> bool:
+        return self.rank > 0 or not self.rank_known
+
+
+@dataclass(frozen=True, slots=True)
+class HeroTree:
+    name: str
+    id: int
 
 
 @dataclass(slots=True)
 class BuildResolution:
-    actor_class: str
-    spec: str
+    # None only for a build with no talents whose class and spec nobody named (an APL-only view).
+    actor_class: str | None
+    spec: str | None
     enabled_talents: set[str]
     talents_by_tree: dict[str, list[DecodedTalent]]
     source_kind: str | None
     generated_profile_text: str | None
     source_notes: list[str]
+    hero_tree: HeroTree | None = None
+    # Hero talents the hash granted for a hero tree the build did not select. SimC disables them,
+    # so they are reported separately instead of counting as part of the build.
+    inactive_hero_talents: list[DecodedTalent] = field(default_factory=list)
+
+
+class SimcBuildError(RuntimeError):
+    """SimC rejected the build input. Carries only the SimC error lines plus a bounded preview."""
+
+    def __init__(self, message: str, *, output_preview: list[str], returncode: int) -> None:
+        super().__init__(message)
+        self.output_preview = output_preview
+        self.returncode = returncode
+
+
+PREVIEW_LINES = 20
+PREVIEW_LINE_CHARS = 200
+
+
+def bounded_output_preview(output: str) -> list[str]:
+    """The tail of SimC's ``debug=1`` stream, bounded in both dimensions.
+
+    A line count alone is not a bound: SimC prints the enemy's stat block on a single ~4 KB line, so
+    each line is clipped as well to keep the error envelope small enough to read.
+    """
+    return [
+        line if len(line) <= PREVIEW_LINE_CHARS else f"{line[:PREVIEW_LINE_CHARS]}... ({len(line)} chars, truncated)"
+        for line in output.splitlines()[-PREVIEW_LINES:]
+    ]
 
 
 def _load_build_packet(path: str) -> tuple[dict[str, Any], str]:
@@ -97,14 +173,14 @@ def _identity_value(packet: dict[str, Any], key: str) -> str | None:
 
 
 def _validated_packet_identity(packet: dict[str, Any]) -> tuple[str | None, str | None]:
-    actor_class = _normalize_actor_class(_identity_value(packet, "actor_class"))
-    spec = _normalize_spec_name(_identity_value(packet, "spec"))
+    actor_class = normalize_actor_class(_identity_value(packet, "actor_class"))
+    spec = normalize_spec_name(_identity_value(packet, "spec"))
     validation = packet.get("validation")
     if not isinstance(validation, dict) or validation.get("status") != "validated":
         return None, None
-    validated_actor_class = _normalize_actor_class(validation.get(
+    validated_actor_class = normalize_actor_class(validation.get(
         "actor_class")) if isinstance(validation.get("actor_class"), str) else None
-    validated_spec = _normalize_spec_name(validation.get("spec")) if isinstance(validation.get("spec"), str) else None
+    validated_spec = normalize_spec_name(validation.get("spec")) if isinstance(validation.get("spec"), str) else None
     if actor_class and spec and actor_class == validated_actor_class and spec == validated_spec:
         return actor_class, spec
     return None, None
@@ -205,7 +281,8 @@ def _packet_spec_from_split_talents(
 
 def extract_build_spec_from_packet(path: str) -> BuildSpec:
     packet, resolved_path = _load_build_packet(path)
-    transport_forms = packet.get("transport_forms") if isinstance(packet.get("transport_forms"), dict) else {}
+    raw_transport_forms = packet.get("transport_forms")
+    transport_forms: dict[str, Any] = raw_transport_forms if isinstance(raw_transport_forms, dict) else {}
     source_notes = [f"build packet: {resolved_path}", "talent transport packet"]
     source = packet.get("source")
     if isinstance(source, dict):
@@ -238,11 +315,13 @@ def extract_build_spec_from_packet(path: str) -> BuildSpec:
 class BuildIdentity:
     actor_class: str | None
     spec: str | None
-    confidence: str
+    confidence: IdentityConfidence
     source: str
     candidate_count: int
     candidates: list[tuple[str, str]] = field(default_factory=list)
     source_notes: list[str] = field(default_factory=list)
+    # The specs an unresolved probe decoded the build as, e.g. "the 3 deathknight specs".
+    probe_scope: str | None = None
 
 
 def infer_actor_and_spec_from_apl(apl_path: str | Path) -> tuple[str | None, str | None]:
@@ -253,31 +332,60 @@ def infer_actor_and_spec_from_apl(apl_path: str | Path) -> tuple[str | None, str
     return actor_class, spec
 
 
-def tokenize_talent_name(name: str) -> str:
-    text = name.lower().replace("'", "")
-    text = re.sub(r"[^a-z0-9]+", "_", text)
-    return text.strip("_")
-
-
-def _normalize_actor_class(value: str | None) -> str | None:
-    if not value:
-        return None
-    normalized = re.sub(r"[^a-z0-9]+", "", value.lower())
-    return normalized or None
-
-
-def _normalize_spec_name(value: str | None) -> str | None:
-    if not value:
-        return None
-    normalized = re.sub(r"[^a-z0-9]+", "_", value.lower()).strip("_")
-    return normalized or None
-
-
 def _has_trusted_identity_hint(build_spec: BuildSpec) -> bool:
     return any(
         note.startswith(("inferred from apl:", "profile:", "build file:"))
         or note in {"command-line build options", "inline build text"}
         for note in build_spec.source_notes
+    )
+
+
+class UnsupportedBuildReference(ValueError):
+    """A build reference SimC has no way to decode; ``reference_type`` names what it was."""
+
+    def __init__(self, message: str, *, reference_type: str) -> None:
+        super().__init__(message)
+        self.reference_type = reference_type
+
+
+WOWHEAD_HOST = "wowhead.com"
+TALENT_CALC_SEGMENT = "talent-calc"
+BLIZZARD_CALC_SEGMENT = "blizzard"
+
+
+def _url_path_segments(ref: str) -> list[str] | None:
+    """The path segments of ``ref`` when it is an absolute URL, else None."""
+    parsed = urlparse(ref)
+    if not parsed.scheme or not parsed.netloc:
+        return None
+    return [segment for segment in parsed.path.split("/") if segment]
+
+
+def wowhead_blizzard_build_code(ref: str) -> str | None:
+    """The talent hash in a Wowhead ``/talent-calc/blizzard/<hash>`` URL.
+
+    That URL names no class or spec, so the hash reads as a plain WoW export. ``simc modify-build``
+    publishes exactly this URL for its result, so the CLI has to be able to read its own output back.
+    """
+    segments = _url_path_segments(ref)
+    host = (urlparse(ref).hostname or "").lower()
+    if segments is None or not (host == WOWHEAD_HOST or host.endswith(f".{WOWHEAD_HOST}")):
+        return None
+    if TALENT_CALC_SEGMENT not in segments:
+        return None
+    tail = segments[segments.index(TALENT_CALC_SEGMENT) + 1:]
+    return tail[1] if len(tail) == 2 and tail[0] == BLIZZARD_CALC_SEGMENT else None
+
+
+def reject_unsupported_build_reference(ref: str) -> None:
+    """Refuse a URL that is no build reference instead of handing it to SimC as if it were a hash."""
+    if _url_path_segments(ref) is None or _raw_wowhead_talent_calc_ref(ref) is not None:
+        return
+    raise UnsupportedBuildReference(
+        f"Cannot decode this build reference: {ref}. simc decodes a WoW talent export string, a "
+        "Wowhead talent-calc URL that names the class and spec, and a Wowhead "
+        "/talent-calc/blizzard/<hash> URL.",
+        reference_type="url",
     )
 
 
@@ -290,7 +398,11 @@ def _ensure_exact_wowhead_talent_calc_ref(ref: str) -> dict[str, str | None] | N
     if parsed is None:
         return None
     if not parsed["build_code"]:
-        raise ValueError("Wowhead talent-calc URLs must include a build code for simc analysis.")
+        raise UnsupportedBuildReference(
+            f"Wowhead talent-calc URL carries no build code: {ref}. Copy the URL with the build code "
+            "on the end.",
+            reference_type="wowhead_talent_calc_url",
+        )
     return parsed
 
 
@@ -320,6 +432,8 @@ def detect_build_text_source_kind(text: str) -> str | None:
         shared_ref = _raw_wowhead_talent_calc_ref(non_empty_lines[0])
         if shared_ref is not None:
             return "wowhead_talent_calc_url"
+        if wowhead_blizzard_build_code(non_empty_lines[0]):
+            return "wow_talent_export"
     if len(non_empty_lines) == 1 and "=" not in non_empty_lines[0]:
         return "wow_talent_export"
 
@@ -352,12 +466,15 @@ def _single_line_build_spec(spec: BuildSpec, non_empty_lines: list[str]) -> Buil
     if len(non_empty_lines) != 1:
         return None
     line = non_empty_lines[0]
-    shared_ref = _raw_wowhead_talent_calc_ref(line)
-    if shared_ref is not None and not shared_ref["build_code"]:
-        raise ValueError("Wowhead talent-calc URLs must include a build code for simc analysis.")
     wowhead_ref = parse_wowhead_talent_calc_ref(line)
     if wowhead_ref is not None:
         return wowhead_ref
+    blizzard_code = wowhead_blizzard_build_code(line)
+    if blizzard_code:
+        spec.talents = blizzard_code
+        spec.source_notes.append("wowhead talent-calc blizzard url")
+        return spec
+    reject_unsupported_build_reference(line)
     if "=" not in line:
         spec.talents = line
         spec.source_notes.append("single-line talent export")
@@ -433,16 +550,6 @@ def merge_build_specs(*specs: BuildSpec) -> BuildSpec:
     return merged
 
 
-def supported_specs(repo: RepoPaths) -> list[tuple[str, str]]:
-    candidates: list[tuple[str, str]] = []
-    for directory in (repo.apl_default, repo.apl_assisted):
-        for path in sorted(directory.glob("*.simc")):
-            actor_class, spec = infer_actor_and_spec_from_apl(path)
-            if actor_class and spec and (actor_class, spec) not in candidates:
-                candidates.append((actor_class, spec))
-    return candidates
-
-
 def build_profile_text(build_spec: BuildSpec) -> str:
     actor_class = build_spec.actor_class
     if not actor_class:
@@ -475,17 +582,52 @@ def parse_debug_talents(output: str) -> dict[str, list[DecodedTalent]]:
         name = match.group("name")
         if tree == "selection":
             continue
+        rank = int(match.group("rank"))
         talents_by_tree[tree].append(
             DecodedTalent(
                 tree=tree,
                 name=name,
                 token=tokenize_talent_name(name),
-                rank=int(match.group("rank")),
+                rank=rank,
                 max_rank=int(match.group("max_rank")),
                 entry=int(match.group("entry")),
+                rank_known=rank > 0,
             )
         )
     return talents_by_tree
+
+
+def parse_active_hero_trees(output: str) -> list[HeroTree]:
+    """Read the hero trees SimC activated for the build, in the order it printed them."""
+    trees: list[HeroTree] = []
+    seen: set[int] = set()
+    for line in output.splitlines():
+        match = SUB_TREE_DEBUG_RE.search(line)
+        if not match:
+            continue
+        tree_id = int(match.group("id"))
+        if tree_id not in seen:
+            seen.add(tree_id)
+            trees.append(HeroTree(name=match.group("name").strip(), id=tree_id))
+    return trees
+
+
+def simc_build_errors(output: str) -> list[str]:
+    """SimC error lines that mean the build input was rejected.
+
+    The decode profile deliberately carries no gear, so SimC's "no weapon equipped" initialization
+    error is expected and is not a rejection of the talents.
+    """
+    errors: list[str] = []
+    for line in output.splitlines():
+        match = _ERROR_LINE_RE.search(line)
+        if match is None:
+            continue
+        message = match.group("message")
+        if BENIGN_INIT_ERROR in message:
+            continue
+        errors.append(message)
+    return errors
 
 
 def normalize_talents_input(value: str | None) -> str | None:
@@ -494,27 +636,22 @@ def normalize_talents_input(value: str | None) -> str | None:
     stripped = value.strip()
     if stripped.startswith("talents="):
         return stripped.split("=", 1)[1].strip()
-    shared_ref = _raw_wowhead_talent_calc_ref(stripped)
-    if shared_ref is not None and not shared_ref["build_code"]:
-        raise ValueError("Wowhead talent-calc URLs must include a build code for simc analysis.")
     wowhead_ref = parse_wowhead_talent_calc_ref(stripped)
     if wowhead_ref is not None and wowhead_ref.talents:
         return wowhead_ref.talents
+    blizzard_code = wowhead_blizzard_build_code(stripped)
+    if blizzard_code:
+        return blizzard_code
+    reject_unsupported_build_reference(stripped)
     return stripped
 
 
-def detect_talents_option_source_kind(
-    *,
-    talents: str | None,
-    class_talents: str | None,
-    spec_talents: str | None,
-    hero_talents: str | None,
-) -> str | None:
-    if class_talents or spec_talents or hero_talents:
+def detect_talents_option_source_kind(*, talents: TalentStrings) -> str | None:
+    if talents.class_talents or talents.spec_talents or talents.hero_talents:
         return "simc_split_talents"
-    if not talents:
+    if not talents.talents:
         return None
-    stripped = talents.strip()
+    stripped = talents.talents.strip()
     if _raw_wowhead_talent_calc_ref(stripped) is not None:
         return "wowhead_talent_calc_url"
     if stripped.startswith("talents="):
@@ -522,65 +659,73 @@ def detect_talents_option_source_kind(
     return "wow_talent_export"
 
 
+def _reject_blank_build_options(supplied: dict[str, str | None]) -> None:
+    """Refuse a build-input option that was passed with an empty value.
+
+    An empty ``--talents`` used to be indistinguishable from an omitted one, so the command answered
+    with an empty build and ``ok: true`` instead of saying the input carried nothing.
+    """
+    blank = sorted(name for name, value in supplied.items() if value is not None and not value.strip())
+    if blank:
+        raise ValueError(f"Build input options were given an empty value: {', '.join(blank)}.")
+
+
 def load_build_spec(
     *,
-    apl_path: str | Path | None,
     profile_path: str | None,
     build_file: str | None,
     build_text: str | None,
-    talents: str | None,
-    class_talents: str | None,
-    spec_talents: str | None,
-    hero_talents: str | None,
+    talents: TalentStrings,
     actor_class: str | None,
     spec_name: str | None,
     build_packet: str | None = None,
 ) -> BuildSpec:
+    _reject_blank_build_options(
+        {
+            "--profile-path": profile_path,
+            "--build-file": build_file,
+            "--build-packet": build_packet,
+            "--build-text": build_text,
+            "--talents": talents.talents,
+            "--class-talents": talents.class_talents,
+            "--spec-talents": talents.spec_talents,
+            "--hero-talents": talents.hero_talents,
+            "--actor-class": actor_class,
+            "--spec": spec_name,
+        }
+    )
     if build_packet and any(
         value
         for value in (
             profile_path,
             build_file,
             build_text,
-            talents,
-            class_talents,
-            spec_talents,
-            hero_talents,
+            talents.talents,
+            talents.class_talents,
+            talents.spec_talents,
+            talents.hero_talents,
             actor_class,
             spec_name,
         )
     ):
         raise ValueError("Cannot combine --build-packet with other explicit build input options.")
 
-    inferred = BuildSpec()
-    if apl_path:
-        inferred_class, inferred_spec = infer_actor_and_spec_from_apl(apl_path)
-        inferred.actor_class = inferred_class
-        inferred.spec = inferred_spec
-        if inferred.actor_class or inferred.spec:
-            inferred.source_notes.append(f"inferred from apl: {Path(apl_path).stem}")
-
     from_talents_option = BuildSpec()
-    if talents:
-        from_talents_option = parse_wowhead_talent_calc_ref(talents) or BuildSpec()
+    if talents.talents:
+        from_talents_option = parse_wowhead_talent_calc_ref(talents.talents) or BuildSpec()
         if from_talents_option.source_notes:
             from_talents_option.source_notes.append("command-line talents option")
 
     explicit = BuildSpec(
         actor_class=actor_class,
         spec=spec_name,
-        talents=normalize_talents_input(talents),
-        class_talents=class_talents,
-        spec_talents=spec_talents,
-        hero_talents=hero_talents,
-        source_kind=detect_talents_option_source_kind(
-            talents=talents,
-            class_talents=class_talents,
-            spec_talents=spec_talents,
-            hero_talents=hero_talents,
-        ),
-        source_notes=["command-line build options"] if any([talents, class_talents,
-                                                           spec_talents, hero_talents, actor_class, spec_name]) else [],
+        talents=normalize_talents_input(talents.talents),
+        class_talents=talents.class_talents,
+        spec_talents=talents.spec_talents,
+        hero_talents=talents.hero_talents,
+        source_kind=detect_talents_option_source_kind(talents=talents),
+        source_notes=["command-line build options"] if any([talents.talents, talents.class_talents, talents.spec_talents,
+                                                            talents.hero_talents, actor_class, spec_name]) else [],
     )
 
     from_profile = BuildSpec()
@@ -604,21 +749,31 @@ def load_build_spec(
         from_build_text = extract_build_spec_from_text(build_text)
         from_build_text.source_notes.append("inline build text")
 
-    return merge_build_specs(inferred, from_profile, from_build_file, from_build_packet, from_build_text, from_talents_option, explicit)
+    merged = merge_build_specs(from_profile, from_build_file, from_build_packet, from_build_text, from_talents_option, explicit)
+    # SimC's spellings: `Death Knight`, `death_knight` and `DeathKnight` all name deathknight.
+    merged.actor_class = normalize_actor_class(merged.actor_class)
+    merged.spec = normalize_spec_name(merged.spec)
+    return merged
+
+
+def _guessed_from_apl(build_spec: BuildSpec) -> bool:
+    return any(note.startswith("inferred from apl:") for note in build_spec.source_notes)
 
 
 def _direct_build_identity(build_spec: BuildSpec) -> tuple[BuildSpec, BuildIdentity]:
     source = "direct"
-    confidence = "high"
-    if build_spec.source_kind == "wowhead_talent_calc_url":
+    confidence: IdentityConfidence = "high"
+    if _guessed_from_apl(build_spec):
+        # Class and spec came from an APL file name, not from the build data itself.
+        source = "apl_path"
+        confidence = "medium"
+    elif build_spec.source_kind == "wowhead_talent_calc_url":
         source = "wowhead_talent_calc_url"
     elif build_spec.source_kind == "simc_split_talents":
         source = "simc_split_talents"
     elif build_spec.source_kind == "wow_talent_export":
         source = "wow_talent_export"
         confidence = "medium"
-    elif any(note.startswith("inferred from apl:") for note in build_spec.source_notes):
-        source = "apl_path"
     return (
         build_spec,
         BuildIdentity(
@@ -627,27 +782,59 @@ def _direct_build_identity(build_spec: BuildSpec) -> tuple[BuildSpec, BuildIdent
             confidence=confidence,
             source=source,
             candidate_count=1,
-            candidates=[(build_spec.actor_class, build_spec.spec)],
+            candidates=[(build_spec.actor_class, build_spec.spec)] if build_spec.actor_class and build_spec.spec else [],
             source_notes=build_spec.source_notes[:],
         ),
     )
 
 
-def _probe_build_matches(
-    repo: RepoPaths,
-    build_spec: BuildSpec,
-    *,
-    unverified_packet_transport: bool,
-    trusted_identity_hint: bool,
-) -> list[tuple[str, str]]:
-    candidate_specs = supported_specs(repo)
-    if build_spec.actor_class and (not unverified_packet_transport or trusted_identity_hint):
-        candidate_specs = [item for item in candidate_specs if item[0] == build_spec.actor_class]
-    if build_spec.spec and (not unverified_packet_transport or trusted_identity_hint):
-        candidate_specs = [item for item in candidate_specs if item[1] == build_spec.spec]
+class UnknownClassSpecError(ValueError):
+    """A class or spec hint SimC does not know, or a spec its class does not have: the caller's mistake."""
 
+
+def _known_specs(repo: RepoPaths) -> Mapping[tuple[str, str], int]:
+    known = specialization_ids(repo.root)
+    if not known:
+        raise SimcNotReadyError("SimC specialization data (engine/dbc/generated/sc_specialization_data.inc) not found.")
+    return known
+
+
+def _check_class_spec_hint(repo: RepoPaths, actor_class: str | None, spec: str | None) -> None:
+    """Reject a class/spec hint no SimC spec matches, naming the valid values.
+
+    An unknown hint used to narrow the probe to nothing ("decodes as none of the 0 specs"), and an
+    impossible pair such as mage holy reached SimC, which blamed the build with ``invalid_build``.
+    """
+    if not actor_class and not spec:
+        return
+    known = _known_specs(repo)
+    classes = sorted({known_class for known_class, _ in known})
+    if actor_class and actor_class not in classes:
+        raise UnknownClassSpecError(f"Unknown actor class '{actor_class}'. Valid classes: {', '.join(classes)}.")
+    specs = sorted({known_spec for known_class, known_spec in known if actor_class in (None, known_class)})
+    if spec and spec not in specs:
+        owner = f"{actor_class} " if actor_class else ""
+        raise UnknownClassSpecError(f"Unknown {owner}spec '{spec}'. Valid {owner}specs: {', '.join(specs)}.")
+
+
+def _probe_candidates(repo: RepoPaths, build_spec: BuildSpec, *, narrow: bool) -> tuple[list[tuple[str, str]], str]:
+    """The specs to decode the build as, and a phrase naming them for an unidentified-build message.
+
+    Every spec SimC's generated data knows, healers included: they ship no APL, so a candidate list
+    drawn from APL files could never identify a healer build. A trusted class or spec hint narrows it.
+    """
+    known = _known_specs(repo)
+    actor_class = build_spec.actor_class if narrow else None
+    spec = build_spec.spec if narrow else None
+    candidates = sorted(item for item in known if actor_class in (None, item[0]) and spec in (None, item[1]))
+    hint = " ".join(value for value in (actor_class, spec) if value)
+    noun = "spec" if len(candidates) == 1 else "specs"
+    return candidates, f"the {len(candidates)} {hint} {noun}" if hint else f"the {len(candidates)} {noun} SimulationCraft knows"
+
+
+def _probe_build_matches(repo: RepoPaths, build_spec: BuildSpec, candidates: list[tuple[str, str]]) -> list[tuple[str, str]]:
     matches: list[tuple[str, str]] = []
-    for actor_class, spec in candidate_specs:
+    for actor_class, spec in candidates:
         probe_spec = BuildSpec(
             actor_class=actor_class,
             spec=spec,
@@ -658,24 +845,82 @@ def _probe_build_matches(
             source_kind=build_spec.source_kind,
             source_notes=build_spec.source_notes[:],
         )
-        try:
-            resolution = decode_build(repo, probe_spec)
-        except (FileNotFoundError, RuntimeError, ValueError):
-            continue
-        if resolution.enabled_talents:
-            matches.append((actor_class, spec))
+        # Only SimC rejecting the talents rules a spec out; a missing, unrunnable or crashing binary
+        # and missing trait data propagate (SimcNotReadyError).
+        with contextlib.suppress(SimcBuildError):
+            if decode_build(repo, probe_spec).enabled_talents:
+                matches.append((actor_class, spec))
     return matches
 
 
-def identify_build(repo: RepoPaths, build_spec: BuildSpec) -> tuple[BuildSpec, BuildIdentity]:
-    unverified_packet_transport = getattr(build_spec, "transport_form", None) == "wow_talent_export"
-    trusted_identity_hint = _has_trusted_identity_hint(build_spec)
+def _with_apl_guess(repo: RepoPaths, build_spec: BuildSpec, apl_path: str | Path) -> BuildSpec:
+    """Fill a class or spec the caller left out from an APL file name such as ``mage_arcane.simc``.
+
+    The name is a guess, not caller input: a renamed copy such as ``mage_arcane_variant.simc`` names
+    no SimC spec. A guess that does not complete a known class/spec pair is dropped and noted, so it
+    is never reported as the caller's mistake.
+    """
+    guess_class, guess_spec = infer_actor_and_spec_from_apl(apl_path)
+    actor_class = build_spec.actor_class or normalize_actor_class(guess_class)
+    spec = build_spec.spec or normalize_spec_name(guess_spec)
+    if (actor_class, spec) == (build_spec.actor_class, build_spec.spec):
+        return build_spec
+    stem = Path(apl_path).stem
+    if (actor_class, spec) not in _known_specs(repo):
+        note = f"ignored apl name: {stem} does not complete a SimC class/spec pair"
+        return replace(build_spec, source_notes=[*build_spec.source_notes, note])
+    return replace(
+        build_spec, actor_class=actor_class, spec=spec, source_notes=[*build_spec.source_notes, f"inferred from apl: {stem}"]
+    )
+
+
+def _unconfirmed_identity(repo: RepoPaths, build_spec: BuildSpec, caller_spec: BuildSpec) -> BuildSpec | None:
+    """The spec to probe with when a talent hash does not decode as the class and spec it came with, else None.
+
+    A hash names its own spec, so it is decoded once as the class and spec that came with it. A pair
+    read off an APL file name or a talent-calc URL path is only a guess: when the hash contradicts it
+    the guess is dropped and noted, and the probe identifies the build. A pair the caller or a profile
+    named is kept, and the probe then reports that the build does not decode as it.
+    """
+    if not build_spec.talents:
+        return None
+    pair = (str(build_spec.actor_class), str(build_spec.spec))
+    if _probe_build_matches(repo, build_spec, [pair]):
+        return None
+    if _guessed_from_apl(build_spec):
+        # The APL names a real spec the build is not: reading it against that APL would describe
+        # another spec's rotation with ok:true.
+        raise UnknownClassSpecError(
+            f"The build does not decode as {' '.join(pair)}, the spec of the APL it is read against. "
+            "Pass the APL for the build's own spec, or omit --apl-path to use its default APL."
+        )
+    if build_spec.source_kind != "wowhead_talent_calc_url":
+        return build_spec
+    note = f"ignored talent-calc url path: the build does not decode as {' '.join(pair)}"
+    fallback = replace(build_spec, actor_class=None, spec=None)
+    return replace(fallback, source_notes=[*fallback.source_notes, note])
+
+
+def identify_build(
+    repo: RepoPaths, build_spec: BuildSpec, *, apl_path: str | Path | None = None
+) -> tuple[BuildSpec, BuildIdentity]:
+    unverified_packet_transport = build_spec.transport_form == "wow_talent_export"
+    # Only the caller's own hints are validated; the APL file-name guess is checked on its own terms.
+    if not unverified_packet_transport or _has_trusted_identity_hint(build_spec):
+        _check_class_spec_hint(repo, build_spec.actor_class, build_spec.spec)
+    caller_spec = build_spec
+    if apl_path:
+        build_spec = _with_apl_guess(repo, build_spec, apl_path)
 
     if build_spec.actor_class and build_spec.spec and not unverified_packet_transport:
-        return _direct_build_identity(build_spec)
+        unconfirmed = _unconfirmed_identity(repo, build_spec, caller_spec)
+        if unconfirmed is None:
+            return _direct_build_identity(build_spec)
+        build_spec = unconfirmed
+    narrow = not unverified_packet_transport or _has_trusted_identity_hint(build_spec)
 
     # Without talent data there is nothing reliable to probe.
-    if not any([build_spec.talents, build_spec.class_talents, build_spec.spec_talents, build_spec.hero_talents]):
+    if not has_talent_data(build_spec):
         return (
             build_spec,
             BuildIdentity(
@@ -688,12 +933,8 @@ def identify_build(repo: RepoPaths, build_spec: BuildSpec) -> tuple[BuildSpec, B
             ),
         )
 
-    matches = _probe_build_matches(
-        repo,
-        build_spec,
-        unverified_packet_transport=unverified_packet_transport,
-        trusted_identity_hint=trusted_identity_hint,
-    )
+    candidates, probe_scope = _probe_candidates(repo, build_spec, narrow=narrow)
+    matches = _probe_build_matches(repo, build_spec, candidates)
 
     if len(matches) == 1:
         actor_class, spec = matches[0]
@@ -735,14 +976,120 @@ def identify_build(repo: RepoPaths, build_spec: BuildSpec) -> tuple[BuildSpec, B
             candidate_count=len(matches),
             candidates=matches,
             source_notes=build_spec.source_notes[:],
+            probe_scope=probe_scope,
         ),
     )
 
 
+# No ``allow_experimental_specializations``: it makes SimC build a healer's stale default APL, which
+# fails on actions such as Holy Priest's divine_star and rejects a valid build. Decoding and encoding
+# never simulate, so an unsupported healer only needs to reach talent parsing (see encode_build).
+SIMC_BUILD_ARGS = (
+    "iterations=1",
+    "max_time=1",
+    "vary_combat_length=0",
+    "desired_targets=1",
+    "fight_style=Patchwerk",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class SimcRun:
+    output: str
+    returncode: int
+    saved_profile: str | None
+
+
+def _run_simc(repo: RepoPaths, profile_text: str, *, extra_args: tuple[str, ...], save: bool = False) -> SimcRun:
+    """Run the checkout's SimC binary over ``profile_text``, optionally keeping the profile it saves."""
+    with tempfile.TemporaryDirectory(prefix="simc-cli-build-") as temp_dir:
+        save_path = Path(temp_dir) / "saved.simc"
+        if save:
+            profile_text += f"save={save_path}\n"
+        profile_path = Path(temp_dir) / "build.simc"
+        profile_path.write_text(profile_text)
+        cmd = [str(repo.build_simc), str(profile_path), *SIMC_BUILD_ARGS, *extra_args]
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, check=False)  # noqa: S603
+        except OSError as exc:
+            # A binary that cannot be executed is the checkout's fault, not the caller's input.
+            raise SimcNotReadyError(f"Cannot run the SimC binary {repo.build_simc}: {exc.strerror or exc}") from exc
+        saved_profile = save_path.read_text() if save and save_path.exists() else None
+    return SimcRun(output=proc.stdout + proc.stderr, returncode=proc.returncode, saved_profile=saved_profile)
+
+
+def _join_talent_options(*values: str | None) -> str | None:
+    parts = [value for value in values if value]
+    return "/".join(parts) or None
+
+
+def _probe_overwritten_ranks(repo: RepoPaths, build_spec: BuildSpec, zeroed: dict[str, list[str]]) -> dict[int, int]:
+    """Re-run the build with ``zeroed`` entries set to rank 0 and read back the ranks SimC overwrites."""
+    probe = BuildSpec(
+        actor_class=build_spec.actor_class,
+        spec=build_spec.spec,
+        talents=build_spec.talents,
+        class_talents=_join_talent_options(build_spec.class_talents, "/".join(zeroed.get("class", []))),
+        spec_talents=_join_talent_options(build_spec.spec_talents, "/".join(zeroed.get("spec", []))),
+        hero_talents=_join_talent_options(build_spec.hero_talents, "/".join(zeroed.get("hero", []))),
+    )
+    run = _run_simc(repo, build_profile_text(probe), extra_args=("log=1",))
+    return {int(match.group("entry")): int(match.group("rank")) for match in OVERWRITE_LOG_RE.finditer(run.output)}
+
+
+def _expand_tiered_talents(repo: RepoPaths, build_spec: BuildSpec, talents_by_tree: dict[str, list[DecodedTalent]]) -> None:
+    """Replace each tiered node's single decoded row with one row per entry, carrying its real rank.
+
+    A talent hash allocates a tiered node as one total that SimC spreads over the node's entries, and
+    its decode prints a single line per node holding whatever rank was left over (always 0). The
+    per-entry ranks therefore never reach the debug stream, and a build that cannot be re-serialized
+    loses the whole node on every ``modify-build`` tree swap. Setting those entries to rank 0 in a
+    second run makes SimC log the rank it overwrites, which is the rank the build actually had.
+    """
+    placeholders = [
+        (tree, talent) for tree in ("class", "spec", "hero") for talent in talents_by_tree[tree] if not talent.rank_known
+    ]
+    if not placeholders:
+        return
+    siblings_by_entry = load_trait_table(repo.root).tiered_siblings_by_entry
+    pending: list[tuple[str, DecodedTalent, tuple[TieredEntry, ...]]] = []
+    zeroed: dict[str, list[str]] = {}
+    for tree, talent in placeholders:
+        siblings = siblings_by_entry.get(talent.entry)
+        if siblings is None:
+            continue
+        pending.append((tree, talent, siblings))
+        zeroed.setdefault(tree, []).extend(f"{sibling.entry}:0" for sibling in siblings)
+    if not pending:
+        return
+
+    ranks = _probe_overwritten_ranks(repo, build_spec, zeroed)
+    expanded_by_entry: dict[int, list[DecodedTalent]] = {}
+    for tree, talent, siblings in pending:
+        rows = [
+            DecodedTalent(
+                tree=tree,
+                name=talent.name,
+                token=talent.token,
+                rank=ranks[sibling.entry],
+                max_rank=sibling.max_rank,
+                entry=sibling.entry,
+            )
+            for sibling in siblings
+            if ranks.get(sibling.entry)
+        ]
+        if rows:
+            expanded_by_entry[talent.entry] = rows
+    for tree in ("class", "spec", "hero"):
+        talents_by_tree[tree] = [
+            row for talent in talents_by_tree[tree] for row in expanded_by_entry.get(talent.entry, [talent])
+        ]
+
+
 def decode_build(repo: RepoPaths, build_spec: BuildSpec) -> BuildResolution:
-    if not build_spec.actor_class or not build_spec.spec:
-        raise ValueError("Need both actor class and spec to decode talent strings.")
-    if not any([build_spec.talents, build_spec.class_talents, build_spec.spec_talents, build_spec.hero_talents]):
+    if not has_talent_data(build_spec):
+        # An APL-only view (priority, inactive-actions) decodes a build that carries no talents, and
+        # needs no class or spec for it: an APL whose file name names no SimC spec still reads.
         return BuildResolution(
             actor_class=build_spec.actor_class,
             spec=build_spec.spec,
@@ -752,36 +1099,46 @@ def decode_build(repo: RepoPaths, build_spec: BuildSpec) -> BuildResolution:
             generated_profile_text=None,
             source_notes=build_spec.source_notes[:],
         )
+    if not build_spec.actor_class or not build_spec.spec:
+        raise ValueError("Need both actor class and spec to decode talent strings.")
     if not repo.build_simc.exists():
-        raise FileNotFoundError(f"SimC binary not found: {repo.build_simc}")
+        raise SimcNotReadyError(f"SimC binary not found: {repo.build_simc}")
 
     profile_text = build_profile_text(build_spec)
-    temp_dir = Path(tempfile.mkdtemp(prefix="simc-cli-build-"))
-    profile_path = temp_dir / "decode.simc"
-    profile_path.write_text(profile_text)
+    run = _run_simc(repo, profile_text, extra_args=("debug=1",))
+    output = run.output
 
-    cmd = [
-        str(repo.build_simc),
-        str(profile_path),
-        "iterations=1",
-        "max_time=1",
-        "vary_combat_length=0",
-        "desired_targets=1",
-        "fight_style=Patchwerk",
-        "debug=1",
-        "allow_experimental_specializations=1",
-    ]
-    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
-    output = proc.stdout + proc.stderr
+    errors = simc_build_errors(output)
+    if errors:
+        raise SimcBuildError(
+            " ".join(errors),
+            output_preview=bounded_output_preview(output),
+            returncode=run.returncode,
+        )
+    if run.returncode and BENIGN_INIT_ERROR not in output:
+        # A crash or kill part-way through leaves a truncated talent list that would read as a whole build.
+        raise SimcNotReadyError(
+            f"SimC exited {run.returncode} before finishing the decode; the binary {repo.build_simc} may be broken "
+            "(rebuild it with 'simc build')."
+        )
     talents_by_tree = parse_debug_talents(output)
+    if not any(talents_by_tree[tree] for tree in ("class", "spec", "hero")):
+        raise SimcBuildError(
+            f"SimC exited {run.returncode} without printing any talents for the build.",
+            output_preview=bounded_output_preview(output),
+            returncode=run.returncode,
+        )
+    _expand_tiered_talents(repo, build_spec, talents_by_tree)
+
+    hero_trees = parse_active_hero_trees(output)
+    hero_tree = hero_trees[0] if len(hero_trees) == 1 else None
+    inactive_hero = _split_inactive_hero_talents(repo, talents_by_tree, hero_trees)
     enabled_talents = {
         talent.token
-        for talents in talents_by_tree.values()
-        for talent in talents
-        if talent.tree in {"class", "spec", "hero"} and talent.rank > 0
+        for tree in ("class", "spec", "hero")
+        for talent in talents_by_tree[tree]
+        if talent.taken
     }
-    if not enabled_talents and proc.returncode != 0:
-        raise RuntimeError(output.strip() or "Failed to decode build with simc")
     notes = build_spec.source_notes[:] + [f"decoded via {repo.build_simc}"]
     return BuildResolution(
         actor_class=build_spec.actor_class,
@@ -791,7 +1148,34 @@ def decode_build(repo: RepoPaths, build_spec: BuildSpec) -> BuildResolution:
         source_kind=build_spec.source_kind,
         generated_profile_text=profile_text,
         source_notes=notes,
+        hero_tree=hero_tree,
+        inactive_hero_talents=inactive_hero,
     )
+
+
+def _split_inactive_hero_talents(
+    repo: RepoPaths,
+    talents_by_tree: dict[str, list[DecodedTalent]],
+    hero_trees: list[HeroTree],
+) -> list[DecodedTalent]:
+    """Move hero talents belonging to an unselected hero tree out of ``talents_by_tree``.
+
+    A talent hash grants the keystones of every hero tree it touches; SimC then disables the ones
+    outside the selected tree. Without this the decoded build claims talents the sim will never use,
+    which flips APL branches that dispatch on a hero keystone.
+    """
+    hero_talents = talents_by_tree["hero"]
+    if not hero_trees or not hero_talents:
+        return []
+    active_ids = {tree.id for tree in hero_trees}
+    sub_trees = load_trait_table(repo.root).hero_sub_tree_by_entry
+    active: list[DecodedTalent] = []
+    inactive: list[DecodedTalent] = []
+    for talent in hero_talents:
+        sub_tree = sub_trees.get(talent.entry)
+        (inactive if sub_tree is not None and sub_tree not in active_ids else active).append(talent)
+    talents_by_tree["hero"] = active
+    return inactive
 
 
 def tree_entries_string(talents: list[DecodedTalent]) -> str:
@@ -814,14 +1198,20 @@ def diff_talent_trees(
     base_talents: list[DecodedTalent],
     other_talents: list[DecodedTalent],
 ) -> TreeDiff:
-    """Diff two talent lists from the same tree by entry ID."""
-    base_by_entry = {t.entry: t for t in base_talents if t.rank > 0 and t.entry}
-    other_by_entry = {t.entry: t for t in other_talents if t.rank > 0 and t.entry}
+    """Diff two talent lists from the same tree by entry ID.
+
+    A talent whose rank could not be read (a tiered node from a hash) still counts as taken, so
+    losing it shows up as a removal instead of vanishing from the diff.
+    """
+    base_by_entry = {t.entry: t for t in base_talents if t.taken and t.entry}
+    other_by_entry = {t.entry: t for t in other_talents if t.taken and t.entry}
     added = [other_by_entry[e] for e in sorted(other_by_entry.keys() - base_by_entry.keys())]
     removed = [base_by_entry[e] for e in sorted(base_by_entry.keys() - other_by_entry.keys())]
     changed = []
     for entry in sorted(base_by_entry.keys() & other_by_entry.keys()):
-        if base_by_entry[entry].rank != other_by_entry[entry].rank:
+        base_rank = base_by_entry[entry].rank if base_by_entry[entry].rank_known else None
+        other_rank = other_by_entry[entry].rank if other_by_entry[entry].rank_known else None
+        if base_rank != other_rank:
             changed.append((base_by_entry[entry], other_by_entry[entry]))
     return TreeDiff(added=added, removed=removed, changed=changed)
 
@@ -831,32 +1221,28 @@ def encode_build(repo: RepoPaths, build_spec: BuildSpec) -> str:
     if not build_spec.actor_class or not build_spec.spec:
         raise ValueError("Need both actor class and spec to encode talents.")
     if not repo.build_simc.exists():
-        raise FileNotFoundError(f"SimC binary not found: {repo.build_simc}")
+        raise SimcNotReadyError(f"SimC binary not found: {repo.build_simc}")
 
-    profile_text = build_profile_text(build_spec)
-    temp_dir = Path(tempfile.mkdtemp(prefix="simc-cli-encode-"))
-    profile_path = temp_dir / "encode.simc"
-    save_path = temp_dir / "encoded.simc"
-    profile_text += f"save={save_path}\n"
-    profile_path.write_text(profile_text)
+    # A gearless melee actor fails SimC's weapon check, so default gear is loaded; talents are unaffected.
+    # SimC also silences every actor its class module refuses to simulate (Mistweaver Monk and Holy
+    # Paladin always) and then aborts profile generation with "No active players in sim!" unless
+    # ``debug`` is set. Encoding needs no simulation, so debug keeps those specs encodable.
+    run = _run_simc(repo, build_profile_text(build_spec) + "load_default_gear=1\n", extra_args=("debug=1",), save=True)
 
-    cmd = [
-        str(repo.build_simc),
-        str(profile_path),
-        "iterations=1",
-        "max_time=1",
-        "vary_combat_length=0",
-        "desired_targets=1",
-        "fight_style=Patchwerk",
-        "allow_experimental_specializations=1",
-    ]
-    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
-    if not save_path.exists():
-        output = proc.stdout + proc.stderr
-        raise RuntimeError(output.strip() or "SimC did not produce a saved profile.")
+    if run.saved_profile is None:
+        errors = simc_build_errors(run.output)
+        raise SimcBuildError(
+            " ".join(errors) or "SimC did not produce a saved profile.",
+            output_preview=bounded_output_preview(run.output),
+            returncode=run.returncode,
+        )
 
-    for line in save_path.read_text().splitlines():
+    for line in run.saved_profile.splitlines():
         if line.startswith("talents="):
             return line.split("=", 1)[1].strip()
 
-    raise RuntimeError("Saved SimC profile did not contain a talents= line.")
+    raise SimcBuildError(
+        "Saved SimC profile did not contain a talents= line.",
+        output_preview=bounded_output_preview(run.output),
+        returncode=run.returncode,
+    )

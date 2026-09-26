@@ -53,5 +53,5 @@ def test_linked_graph_command_emits_graph_payload(monkeypatch) -> None:
 
     payload = json.loads(result.stdout)
     assert payload["kind"] == "linked_graph"
-    assert payload["graph"]["edge_count"] == 1
-    assert payload["graph"]["edges"][0]["to"] == "npc:12056"
+    assert payload["data"]["graph"]["edge_count"] == 1
+    assert payload["data"]["graph"]["edges"][0]["to"] == "npc:12056"

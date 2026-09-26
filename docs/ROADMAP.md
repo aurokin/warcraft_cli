@@ -1,98 +1,77 @@
 # Roadmap
 
-Sequencing and status for the repo. **Open engineering work lives in [Linear — Warcraft CLI](https://linear.app/aurokin/project/warcraft-cli-a9a133da0d88)** — not duplicated here.
+What the repo treats as core, what is supported, what is experimental, and what is next.
 
-Stable reference material:
-- product philosophy: [PRODUCT_PRINCIPLES.md](foundation/PRODUCT_PRINCIPLES.md)
-- analytics and comparison safety rules: [SAFE_ANALYTICS_RULES.md](foundation/SAFE_ANALYTICS_RULES.md)
-- shared identity semantics: [IDENTITY_CONTRACT.md](foundation/IDENTITY_CONTRACT.md)
-- wrapper boundary: [WRAPPER_PROVIDER_CONTRACT.md](foundation/WRAPPER_PROVIDER_CONTRACT.md)
-- architecture and package boundaries: [architecture/README.md](architecture/README.md)
-- provider-specific behavior: `docs/<cli>/README.md`
+- Open engineering work lives in [Linear — Warcraft CLI](https://linear.app/aurokin/project/warcraft-cli-a9a133da0d88), not here.
+- Shipped work lives in the versioned sections of [../CHANGELOG.md](../CHANGELOG.md), not here.
+- Command behavior lives in `docs/<cli>/README.md` and the generated [reference/](reference/README.md).
+- Repo-wide rules live in [foundation/](README.md#foundations) and [architecture/](architecture/README.md).
 
-## Goal
+Tiers are declared in the wrapper registry (`packages/warcraft-cli/src/warcraft_cli/providers.py`) and reported by `warcraft doctor` as `wrapper.tiers`, so this page and the CLI cannot drift.
 
-Grow the repo as a Warcraft data monorepo with:
-- individually runnable provider CLIs
-- shared libraries only where the behavior is genuinely shared
-- a root `warcraft` wrapper for routing and orchestration
-- agent-friendly outputs that preserve source identity and trust boundaries
+## Core
 
-## Current State
+The product. These carry the deepest command surface, the most test coverage, and the strongest contracts.
 
-Working now:
-- shared packages: `warcraft-core`, `warcraft-api`, `warcraft-content`
-- root wrapper: `warcraft`
-- provider CLIs: `wowhead`, `method`, `icy-veins`, `raiderio`, `warcraft-wiki`, `wowprogress`, `warcraftlogs`, `simc`, `raidbots`, `blizzard`, `curseforge`, `lorrgs`
-- root `warcraft` skill
+| Provider | Scope |
+|----------|-------|
+| `wowhead` | entities, guides, comments, talent calc, bundles, expansion profiles |
+| `warcraftlogs` | official API: world metadata, guilds, characters, reports, scoped encounter analytics |
+| `simc` | local SimulationCraft repo inspection, build decoding, APL analysis, runs |
+| `warcraft` (wrapper) | routing, discovery, and cross-provider composition over the provider surfaces |
 
-Validated shared systems:
-- output and error shaping
-- cache and HTTP infrastructure
-- bundle export/load/query scaffolding
-- wrapper routing and provider passthrough
-- article bundle and guide-comparison primitives
-- wrapper expansion filtering and provider metadata
-- ranking policy for wrapper discovery
-- sample-backed analytics direction for profile and leaderboard providers
-- worktree-local data/cache isolation with shared config/state credentials
-- DX: `make check`, CI lint/typecheck/boundaries/tests, full-repo Ruff, contract fixture catalog
+## Supported
 
-## Priority Order
+Real providers with narrower surfaces. They are expected to work and stay covered by tests.
 
-Work in this order unless a dependency or incident says otherwise:
+| Provider | Scope |
+|----------|-------|
+| `raiderio` | character/guild profiles plus sample-backed Mythic+ analytics |
+| `warcraft-wiki` | MediaWiki reference, typed API/event lookups, article bundles |
+| `icy-veins` | guide extraction, export, and local guide query |
+| `method` | guide extraction, export, and local guide query |
+| `lorrgs` | public API, no auth; top-parse cooldown timelines and composition rankings |
 
-| Priority | Issue | Theme |
-|----------|-------|--------|
-| Hygiene (optional) | [AUR-382](https://linear.app/aurokin/issue/AUR-382) | Phase 3 complexity refactors (E/F extractions) |
-| 1 | [AUR-384](https://linear.app/aurokin/issue/AUR-384) | Wrapper routing, doctor, provider registration |
-| 2 | [AUR-385](https://linear.app/aurokin/issue/AUR-385) | Shared identity and cross-provider handoffs |
-| 3 | [AUR-386](https://linear.app/aurokin/issue/AUR-386) | Guide comparison, evidence metadata, SimC handoff |
-| 4 | [AUR-387](https://linear.app/aurokin/issue/AUR-387) | WCL character-rankings, report coverage, explicit-scope analytics |
-| 5 | [AUR-388](https://linear.app/aurokin/issue/AUR-388) | WCL finished-report caching and derived-output trust metadata |
-| 6 | [AUR-389](https://linear.app/aurokin/issue/AUR-389) | Expansion filtering deferred (simc, WCL classic/fresh) |
-| 7 | [AUR-390](https://linear.app/aurokin/issue/AUR-390) | Blizzard API provider bootstrap |
-| 8 | [AUR-391](https://linear.app/aurokin/issue/AUR-391) / [AUR-392](https://linear.app/aurokin/issue/AUR-392) | Raider.IO and WowProgress analytics depth |
-| 9 | [AUR-393](https://linear.app/aurokin/issue/AUR-393) | Raidbots report consumption and SimC handoff |
-| — | [AUR-394](https://linear.app/aurokin/issue/AUR-394) | Wowhead scoped-extraction policy (track, don’t expand blindly) |
-| — | [AUR-395](https://linear.app/aurokin/issue/AUR-395) | Provider candidate decisions — CurseForge **GO** (→ AUR-499), Undermine + RaidPlan **DEFER** |
-| 10 | [AUR-499](https://linear.app/aurokin/issue/AUR-499) | CurseForge provider scaffold (doctor + addon lookup) |
+## Experimental
 
-Refactors (AUR-382) can run in parallel with product work when they are behavior-preserving extractions; prefer product issues above when choosing the next PR.
+Thin or unproven surfaces. Do not build a workflow on them without checking `doctor` first.
 
-## Provider Docs
+| Provider | Status |
+|----------|--------|
+| `raidbots` | public report consumption and SimC input handoff; no discovery surface |
+| `blizzard` | verified live for us/eu/kr/tw (2026-09-13); thin command surface, `cn` unreachable |
+| `curseforge` | verified live (2026-09-13); thin command surface, addon metadata is at the edge of scope |
 
-Command behavior and boundaries stay in provider READMEs — use Linear issues above for *what to build next*:
+## Retired
 
-| Provider | Doc |
-|----------|-----|
-| Warcraft Logs | [warcraftlogs/README.md](warcraftlogs/README.md) |
-| Blizzard API | [blizzard-api/README.md](blizzard-api/README.md) |
-| Raider.IO | [raiderio/README.md](raiderio/README.md) |
-| WowProgress | [wowprogress/README.md](wowprogress/README.md) |
-| Wowhead | [wowhead/README.md](wowhead/README.md) |
-| Raidbots | [raidbots/README.md](raidbots/README.md) |
-| CurseForge | [curseforge/README.md](curseforge/README.md) |
-| Lorrgs | [lorrgs/README.md](lorrgs/README.md) |
-| Wrapper | [warcraft/README.md](warcraft/README.md) |
+- Retired WowProgress (Cloudflare managed challenge, 2026-09); guild ranks and raid leaderboards come from Raider.IO.
 
-## Recently Completed
+## Next
 
-Tracked in Linear (Done) and `CHANGELOG.md` `[Unreleased]`:
+- Ship the wheel install path end to end: attach the built wheel to each GitHub release and verify `pipx install <wheel-url>` and `uvx --from <wheel-url> warcraft doctor` on a clean machine.
+- Decide whether Blizzard and CurseForge earn the `supported` tier now that both are verified live, or whether CurseForge leaves the product; the surfaces are thin either way.
+- Finish the expansion story for the deferred surfaces: Warcraft Logs classic/fresh cache isolation and `simc` expansion semantics.
+- Decompose the remaining radon D-or-worse blocks so `complexity-gate` stays green in `make check`.
 
-- FUTURE_TASKS migration (Wowhead, monorepo ergonomics, expansion filtering phase 3)
-- AUR-366 DX tooling, CI, Ruff phase 2; warcraftlogs boss-kills slice (PR #31)
-- WCL payload key parity, live command matrix, graphql passthrough, typed buff previews
-- Worktree-local data/cache isolation; removal of repo-owned deploy/skill-export workflow
+## Deferred Candidates
 
-Operational note: worktree creation and trunk hygiene are owned outside this repo by `worktrunk`.
+Both were decided under [AUR-395](https://linear.app/aurokin/issue/AUR-395) and remain **DEFER**. Nothing is built; the un-gate conditions below are the whole decision.
 
-## Sequencing Rules
+**RaidPlan** (`https://raidplan.io/`) — would cover boss strategy planning, mechanic assignments, and shareable encounter plans, which no current provider covers. Deferred because it is unconfirmed whether the valuable workflows (shared plans and their assignment data) are readable without authentication, and the visual assignment data may be materially harder to normalize than guide/wiki content.
 
-- Keep **priority order** and status narrative here; keep **open tasks** in Linear.
-- Keep repo-wide rules in foundation/architecture docs unless they directly affect sequencing.
-- Only extract shared code after a second provider proves the abstraction is real.
-- Prefer feature delivery, reliability, and trust metadata over broadening auth-heavy surfaces too early.
+Un-gate when **both** are true and recorded here:
+1. public shared plans are confirmed readable without auth via a stable plan URL, and
+2. plan data is confirmed exportable or extractable without auth into a structured form that fits the existing bundle/query model.
+
+First slice if un-gated: `doctor` + fetch one public plan + export/query a local plan bundle, read-only, following [foundation/SAFE_ANALYTICS_RULES.md](foundation/SAFE_ANALYTICS_RULES.md).
+
+**Undermine Exchange** (`https://undermine.exchange/`) — would cover auction pricing, commodity/item market history, and trade-good discovery, a genuine gap. Deferred because the public site was under maintenance at decision time with no confirmed stable page or documented data endpoint, and market data is time-sensitive enough that cache design is a real cost to take on speculatively.
+
+Un-gate when **both** are true and recorded here:
+1. the public surface is stable again (out of maintenance), and
+2. a stable public page or documented data endpoint is confirmed for at least one market lookup (item or commodity pricing) plus one history/summary surface.
+
+First slice if un-gated: `doctor` + one item/commodity lookup + one history surface, preserving raw source identifiers and treating market-summary normalization as additive.
 
 ## Risks
 
@@ -100,12 +79,11 @@ Operational note: worktree creation and trunk hygiene are owned outside this rep
 - hiding source differences behind fake shared schemas
 - pushing too much logic into the root wrapper
 - adding broad analytics semantics before the source contract is strong enough
-- letting documentation drift away from the actual CLI surfaces
+- documentation drift — now partly guarded: `tests/test_command_reference.py` fails when `docs/reference/` is stale and `tests/test_docs_parity.py` fails when a documented command or flag does not exist
 
-## Success Criteria
+## Rules
 
-- agents can start from the root skill and reach the right provider quickly
-- each provider remains independently runnable and testable
-- shared code stays genuinely shared
-- the wrapper improves discovery without erasing provenance
-- roadmap sequencing stays here; open backlog stays in Linear; stable rules and provider behavior stay in their own docs
+- Keep tiers, what is next, and deferred candidates here; keep open tasks in Linear; keep shipped work in the changelog.
+- Only extract shared code after a second provider proves the abstraction is real.
+- Prefer depth, reliability, and trust metadata in the core tier over adding another provider.
+- A provider that cannot honestly support a workflow fails clearly instead of faking coverage.

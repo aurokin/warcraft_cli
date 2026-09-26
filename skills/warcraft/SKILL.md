@@ -16,10 +16,24 @@ Use `warcraft` first when the caller does not already know which provider they n
   - `warcraft <provider> ...`
 - Version-specific request:
   - `warcraft --expansion <profile> ...`
-- Global flags:
-  - put them before the subcommand, e.g. `warcraft --pretty search "<query>"`
+- Global flags (every binary, always before the subcommand):
+  - `--pretty` pretty-print JSON; default output is compact JSON
+  - `--compact` truncate long prose strings, with `--compact-max-chars <n>` to set the cut; URLs,
+    talent/transport strings, export codes and `*command` values stay whole, and every cut path is
+    listed in `provenance.compacted_paths`
+  - `--fields <a.b,c>` keep only these dot paths, rooted at the envelope (`data.results`,
+    `data.entity.name`); repeatable. The output is the projection, not an envelope, and a path that
+    did not resolve is listed under `fields_missing` instead of vanishing. A failure envelope is
+    always printed whole
+  - `--fields-strict` fail with `missing_fields` (exit 2) instead of listing a path under `fields_missing`
+  - `--profile agent|human` presets (`agent` is the default compact JSON, `human` pretty JSON)
+  - `wowhead --stream` writes JSON Lines instead of one object (see Output Contract)
+  - `warcraft --expansion <profile>` additionally restricts routing to expansion-aware providers
+  - example: `warcraft --pretty --fields data.results search "<query>"`
 - Trust check:
   - `warcraft doctor`
+- Log actor to Raider.IO profile:
+  - `warcraft actor-profile <report-code> <character-name> --fight-id <id>`
 - Cross-provider guide evidence:
   - `warcraft talent-packet <source>`
   - `warcraft talent-describe <source> --apl-path <apl>`
@@ -30,38 +44,79 @@ Use `warcraft` first when the caller does not already know which provider they n
   - `warcraft guide-builds-simc <bundle-or-orchestration-root>`
   - `warcraft guide-builds-simc <bundle-or-orchestration-root> --apl-path <apl>`
 
+## Output Contract
+
+Every binary emits one JSON object, the envelope: `ok`, `provider`, `command`, `kind`,
+`schema_version`, `query`, `provenance`, and `data`, plus `error` on failure. Nothing else sits at
+the top level; a binary refuses to print anything else and fails with `internal_error` instead.
+Read the payload from `data`.
+
+On failure the object goes to stderr with `ok: false`, `data: {}`, `query` echoing the parameters
+the command parsed (`null` when it failed before parsing them), and
+`error: {"code": ..., "message": ..., "details"?: ...}`. The process exit
+code tells you what to do next:
+
+| Exit | Meaning | Reaction |
+| --- | --- | --- |
+| `0` | success | continue |
+| `1` | generic failure | read `error.code`; do not retry blindly |
+| `2` | usage error (bad flag or argument) | fix the command |
+| `3` | auth required or rejected | run the provider's `doctor` / `auth status` |
+| `4` | target not found | try a different id or `resolve` again |
+| `5` | network or upstream failure | back off and retry once |
+
+Providers map some of their own codes onto the same exits (for example `simc` `unknown_talent`
+exits 2, `curseforge` `missing_api_key` exits 3), so branch on the exit code and read `error.code`
+for the detail. A traceback is always a bug — report it rather than parsing it.
+
+`wowhead --stream` is the one opt-in exception to "one object": when the payload has a row list,
+stdout is JSON Lines, a header line that is the envelope with that list emptied and
+`data.stream: {"field", "count"}` naming it, then one `{"record": <row>}` line per row. Parse it line
+by line.
+
 ## Provider Synopsis
 
-| Provider | Best for | First commands |
-| --- | --- | --- |
-| `wowhead` | entities, guides, comments, timelines, tool-state refs | `warcraft wowhead search ...`, `warcraft wowhead entity ...`, `warcraft wowhead guide ...` |
-| `method` | supported article/guide families with simple article structure | `warcraft method search ...`, `warcraft method guide ...` |
-| `icy-veins` | spec guides, hubs, and guide subpages | `warcraft icy-veins search ...`, `warcraft icy-veins guide ...` |
-| `raiderio` | character/guild profiles, Mythic+, sampled run analytics | `warcraft raiderio character ...`, `warcraft raiderio sample ...` |
-| `warcraft-wiki` | API docs, events, systems, lore, reference pages | `warcraft warcraft-wiki api ...`, `warcraft warcraft-wiki article ...` |
-| `wowprogress` | progression, rankings, guild/profile analytics | `warcraft guild ...`, `warcraft wowprogress guild ...`, `warcraft wowprogress sample ...` |
-| `warcraftlogs` | official raid-log API, world metadata, guild/character/report lookups | `warcraftlogs doctor`, `warcraftlogs guild ...`, `warcraftlogs report-fights ...` |
-| `simc` | local SimulationCraft inspection, exact-build priority analysis, APL comparison, and runs | `warcraft simc doctor`, `warcraft simc priority ...`, `warcraft simc compare-apls ...` |
-| `raidbots` | reading shared Raidbots reports and bridging their SimC input to local `simc` | `warcraft raidbots inspect-report <url-or-id>`, `warcraft raidbots input <url-or-id>`, `warcraft raidbots explain-input` |
-| `blizzard` | official Battle.net Game Data (realm, item) and Profile (character) reads | `warcraft blizzard doctor`, `warcraft blizzard realm ...`, `warcraft blizzard character ...` |
-| `curseforge` | World of Warcraft addon lookup: metadata, latest files, changelog | `warcraft curseforge doctor`, `warcraft curseforge addon <slug-or-id>` |
-| `lorrgs` | top-parse cooldown timelines, composition rankings, report overview handoffs, and static spec/boss/spell metadata | `warcraft lorrgs resolve ...`, `warcraft lorrgs spec-ranking ...` |
+Tiers are the support level to expect: **core** is deeply covered, **supported** is stable but
+narrower, **experimental** is thin and may change.
+
+| Provider | Tier | Best for | First commands |
+| --- | --- | --- | --- |
+| `wowhead` | core | entities, guides, comments, timelines, tool-state refs | `warcraft wowhead search ...`, `warcraft wowhead entity ...`, `warcraft wowhead guide ...` |
+| `method` | supported | supported article/guide families with simple article structure | `warcraft method search ...`, `warcraft method guide ...` |
+| `icy-veins` | supported | spec guides, hubs, and guide subpages | `warcraft icy-veins search ...`, `warcraft icy-veins guide ...` |
+| `raiderio` | supported | character/guild profiles, Mythic+, sampled run analytics | `warcraft raiderio character ...`, `warcraft raiderio sample ...` |
+| `warcraft-wiki` | supported | API docs, events, systems, lore, reference pages | `warcraft warcraft-wiki api ...`, `warcraft warcraft-wiki article ...` |
+| `warcraftlogs` | core | official raid-log API, world metadata, guild/character/report lookups | `warcraftlogs doctor`, `warcraftlogs guild ...`, `warcraftlogs report-fights ...` |
+| `simc` | core | local SimulationCraft inspection, exact-build priority analysis, APL comparison, and runs | `warcraft simc doctor`, `warcraft simc priority ...`, `warcraft simc compare-apls ...` |
+| `raidbots` | experimental | reading shared Raidbots reports and bridging their SimC input to local `simc` | `warcraft raidbots inspect-report <url-or-id>`, `warcraft raidbots input <url-or-id>`, `warcraft raidbots explain-input` |
+| `blizzard` | experimental; verified live for us/eu/kr/tw | official Battle.net Game Data (realm, item) and Profile (character) reads | `warcraft blizzard doctor`, `warcraft blizzard realm ...`, `warcraft blizzard character ...` |
+| `curseforge` | experimental; verified live | World of Warcraft addon lookup: metadata, latest files, changelog | `warcraft curseforge doctor`, `warcraft curseforge addon <slug-or-id>` |
+| `lorrgs` | supported | top-parse cooldown timelines, composition rankings, report overview handoffs, and static spec/boss/spell metadata | `warcraft lorrgs resolve ...`, `warcraft lorrgs spec-ranking ...` |
 
 ## Routing Rules
 
 - Prefer `resolve` when you want one conservative next command.
 - Prefer `search` when you want to inspect candidates across providers.
-- Prefer `warcraft guild ...` when the user wants a guild snapshot and you want normalized input plus explicit source disagreement reporting.
+- Prefer `warcraft guild ...` for one guild's Raider.IO snapshot with normalized region/realm/name input; `data.sources.raiderio.summary.raids[]` carries each raid's normal/heroic/mythic world, region, and realm ranks. A rank of `0` means unranked at that difficulty, not first place, and Raider.IO only covers the current expansion.
+- Use `warcraft actor-profile <report-code> <name>` to hand a Warcraft Logs report actor to their Raider.IO profile. Pass `--fight-id` when you know it; without it the wrapper searches a bounded set of the report's fights (`query.fight_scope`).
 - Preserve provider provenance. `warcraft` is a router, not a source.
 - Use `warcraft guide-compare` when you already have exported guide bundles and want additive cross-provider evidence instead of a synthesized summary.
 - Use `warcraft guide-compare-query` when you want the wrapper to resolve, export, and compare guide candidates conservatively across supported guide providers.
 - `guide-compare-query` may use a provider search fallback only when the top guide result is clearly decisive; it should not guess across weak or ambiguous guide candidates.
 - `guide-compare-query` should reuse prior orchestrated bundles only through explicit freshness rules like `--max-age-hours` and `--force-refresh`, not through invisible cache-like behavior.
+- Steer `guide-compare-query` orchestration with:
+  - `--provider <name>` repeatable, to restrict the run to `wowhead`, `method`, or `icy-veins`
+  - `--out-root <dir>` to choose where the orchestrated bundles are written (default `<XDG data dir>/warcraft/guide_compare/<query-slug>`, never the current directory)
+  - `--max-age-hours <n>` (1-720, default 24) and `--force-refresh` for bundle reuse
+  - `--simc-build-handoff` plus `--simc-apl-path <apl>`, `--simc-decode` / `--no-simc-decode`, and `--simc-build-limit <n>` (1-200, default 20) for the SimC handoff
+  - example: `warcraft guide-compare-query "<guide query>" --provider wowhead --provider icy-veins --out-root ./tmp/guide-compare`
 - Use `warcraft talent-packet` when the source is already an explicit build ref, scoped log actor, or packet file and you want the wrapper to route it into the shared transport contract.
 - Use `warcraft talent-describe` when you want that same routed packet handed directly into `simc describe-build` without manually chaining commands.
 - Use `warcraft cooldown-packet` for player-specific log questions like "how can I improve my
   cooldowns in P2"; it joins Lorrgs phase/spell/top-parse context with exact Warcraft Logs cast
-  events for the selected actor and keeps both sources visible.
+  events for the selected actor and keeps both sources visible. For a report Lorrgs cannot serve,
+  pass `--actor-id` and `--spec-slug` to get the Warcraft Logs half with
+  `data.lorrgs.status: "unavailable"`; without both flags the command fails naming them.
 - Typical packet flow:
   - `warcraftlogs report-player-talents <report> --fight-id <id> --actor-id <id> --out ./tmp/actor-packet.json`
   - `simc validate-talent-transport --build-packet ./tmp/actor-packet.json --out ./tmp/actor-packet-validated.json`
@@ -69,10 +124,10 @@ Use `warcraft` first when the caller does not already know which provider they n
 - Failure contract:
   - producer commands fail with `invalid_transport_packet` if they would otherwise emit malformed packet JSON
   - malformed Wowhead-like talent refs, including exact packet refs without a build code, fail with `invalid_tool_ref`
-  - `simc ... --build-packet <path>` fails with `invalid_build_packet` when the packet file is malformed
+  - `simc identify-build|decode-build|describe-build|validate-talent-transport --build-packet <path>` fails with `invalid_build_packet` when the packet file is malformed; no other simc command takes `--build-packet`
   - wrapper routing preserves provider `invalid_transport_packet` failures instead of replacing them with a generic wrapper error
 - Add `--simc-build-handoff` when you want the orchestration packet to include explicit guide build refs handed into `simc`; add `--simc-apl-path` when you also want exact-build `describe-build` output.
-- Use `warcraft guide-builds-simc` when you want explicit guide build refs handed into `simc` without inferring claims from guide prose; the handoff packet now includes provenance, citations, and source freshness so agents can tell how trustworthy the build inputs are.
+- Use `warcraft guide-builds-simc` when you want explicit guide build refs handed into `simc` without inferring claims from guide prose; the handoff packet includes provenance, citations, and source freshness so agents can tell how trustworthy the build inputs are. Branch on `summary.simc_handoff_status`: `ok`, `partial` (a leg worked for some builds), `failed` (a requested leg produced nothing, named in `summary.empty_requested_legs`), or `no_build_references`; when every requested leg produced nothing the command fails with `simc_handoff_failed` (exit 1).
 - Add `--apl-path` when you want the wrapper to include exact-build `simc describe-build` output for those same explicit guide build refs.
 - When `--expansion` matters, trust only the providers the wrapper says are included.
 - Once the provider is known, switch to the provider CLI or the provider reference below.
@@ -84,7 +139,6 @@ Use `warcraft` first when the caller does not already know which provider they n
 - `icy-veins`: see `references/icy-veins.md`
 - `raiderio`: see `references/raiderio.md`
 - `warcraft-wiki`: see `references/warcraft-wiki.md`
-- `wowprogress`: see `references/wowprogress.md`
 - `warcraftlogs`: see `references/warcraftlogs.md`
 - `simc`: see `references/simc.md`
 - `raidbots`: see `references/raidbots.md`

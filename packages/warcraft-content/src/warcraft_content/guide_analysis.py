@@ -102,14 +102,24 @@ def _keyword_tags(*values: str | None) -> tuple[list[str], list[str]]:
     return tags, reasons
 
 
+def _clean_field(mapping: dict[str, Any], key: str) -> str | None:
+    return _clean_text(str(mapping.get(key) or "")) or None
+
+
+def _append_unique(target: list[str], values: list[str]) -> None:
+    for value in values:
+        if value not in target:
+            target.append(value)
+
+
 def extract_guide_analysis_surfaces(page_payload: dict[str, Any], *, provider: str) -> list[dict[str, Any]]:
     guide = dict(page_payload.get("guide") or {})
     page = dict(page_payload.get("page") or {})
     article = dict(page_payload.get("article") or {})
-    content_family = _clean_text(str(guide.get("content_family") or "")) or None
-    section_slug = _clean_text(str(guide.get("section_slug") or "")) or None
-    section_title = _clean_text(str(guide.get("section_title") or "")) or None
-    page_title = _clean_text(str(page.get("title") or "")) or None
+    content_family = _clean_field(guide, "content_family")
+    section_slug = _clean_field(guide, "section_slug")
+    section_title = _clean_field(guide, "section_title")
+    page_title = _clean_field(page, "title")
 
     tags = list(SURFACE_TAGS_BY_CONTENT_FAMILY.get(content_family or "", []))
     reasons = [f"content_family:{content_family}"] if tags and content_family else []
@@ -117,12 +127,8 @@ def extract_guide_analysis_surfaces(page_payload: dict[str, Any], *, provider: s
     source_kind = "content_family" if tags else "title_slug_heuristic"
 
     keyword_tags, keyword_reasons = _keyword_tags(section_slug, section_title, page_title)
-    for tag in keyword_tags:
-        if tag not in tags:
-            tags.append(tag)
-    for reason in keyword_reasons:
-        if reason not in reasons:
-            reasons.append(reason)
+    _append_unique(tags, keyword_tags)
+    _append_unique(reasons, keyword_reasons)
 
     if not tags:
         return []

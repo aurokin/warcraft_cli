@@ -16,6 +16,8 @@ def test_provider_roots_use_xdg_homes(monkeypatch, tmp_path) -> None:  # noqa: A
 def test_worktree_runtime_isolates_data_and_cache_but_keeps_config_shared(monkeypatch, tmp_path) -> None:  # noqa: ANN001
     monkeypatch.setenv("WARCRAFT_WORKTREE_ROOT", str(tmp_path / "repo"))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.delenv("XDG_DATA_HOME")
+    monkeypatch.delenv("XDG_CACHE_HOME")
 
     assert provider_config_root("simc") == (tmp_path / "config" / "warcraft" / "simc")
     assert provider_data_root("simc") == (tmp_path / "repo" / ".warcraft" / "runtime" / "data" / "simc")
@@ -47,6 +49,8 @@ def test_explicit_xdg_roots_override_worktree_runtime(monkeypatch, tmp_path) -> 
 
 def test_explicit_runtime_dir_activates_worktree_runtime_without_root(monkeypatch, tmp_path) -> None:  # noqa: ANN001
     monkeypatch.setenv("WARCRAFT_WORKTREE_RUNTIME_DIR", str(tmp_path / "runtime"))
+    monkeypatch.delenv("XDG_DATA_HOME")
+    monkeypatch.delenv("XDG_CACHE_HOME")
 
     assert provider_data_root("simc") == (tmp_path / "runtime" / "data" / "simc")
     assert provider_cache_root("simc") == (tmp_path / "runtime" / "cache" / "simc")

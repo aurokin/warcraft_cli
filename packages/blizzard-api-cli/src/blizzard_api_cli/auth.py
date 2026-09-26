@@ -4,41 +4,16 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from warcraft_core.env import find_env_file
+from warcraft_core.env import find_env_file, read_env_keys
 from warcraft_core.paths import provider_env_path
 
 PROVIDER = "blizzard-api"
 
 CLIENT_ID_ENV = "BLIZZARD_CLIENT_ID"
-CLIENT_SECRET_ENV = "BLIZZARD_CLIENT_SECRET"
+CLIENT_SECRET_ENV = "BLIZZARD_CLIENT_SECRET"  # noqa: S105 — env var name, not a credential
 REGION_ENV = "BLIZZARD_REGION"
 
 MANAGED_ENV_KEYS = (CLIENT_ID_ENV, CLIENT_SECRET_ENV, REGION_ENV)
-
-
-def _read_env_keys(path: Path, keys: tuple[str, ...]) -> dict[str, str]:
-    # Pure-read parse of the managed keys from a .env file, with no os.environ mutation, so doctor can
-    # attribute each credential half to the source that supplied it. Kept local to this provider: only
-    # one consumer needs it today, and the repo extracts shared helpers after a second caller appears.
-    if not path.is_file():
-        return {}
-    allowed = set(keys)
-    values: dict[str, str] = {}
-    for raw_line in path.read_text().splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if line.startswith("export "):
-            line = line[7:].lstrip()
-        key, separator, value = line.partition("=")
-        env_key = key.strip()
-        if separator != "=" or env_key not in allowed:
-            continue
-        env_value = value.strip()
-        if len(env_value) >= 2 and env_value[0] == env_value[-1] and env_value[0] in {"'", '"'}:
-            env_value = env_value[1:-1]
-        values[env_key] = env_value
-    return values
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,9 +45,9 @@ def load_blizzard_auth_config(*, start_dir: str | None = None) -> BlizzardAuthCo
     # Each layer is (source_label, values); source_label is None for the process environment.
     layers: list[tuple[str | None, dict[str, str]]] = []
     if local_path is not None:
-        layers.append((str(local_path), _read_env_keys(local_path, MANAGED_ENV_KEYS)))
+        layers.append((str(local_path), read_env_keys(local_path, MANAGED_ENV_KEYS)))
     if provider_path.is_file():
-        layers.append((str(provider_path), _read_env_keys(provider_path, MANAGED_ENV_KEYS)))
+        layers.append((str(provider_path), read_env_keys(provider_path, MANAGED_ENV_KEYS)))
     layers.append((None, {key: os.environ[key] for key in MANAGED_ENV_KEYS if os.environ.get(key)}))
 
     def resolve(key: str) -> tuple[str | None, str | None]:

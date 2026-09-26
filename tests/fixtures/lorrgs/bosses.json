@@ -1,0 +1,804 @@
+{
+  "bosses": [
+    {
+      "id": 2537,
+      "name": "Jailer",
+      "icon": "inv_achievement_raid_progenitorraid_jailer.jpg",
+      "full_name": "The Jailer, Zovaal",
+      "full_name_slug": "the-jailer-zovaal",
+      "phase_type": "static"
+    },
+    {
+      "id": 2607,
+      "name": "Raszageth",
+      "icon": "achievement_raidprimalist_raszageth.jpg",
+      "full_name": "Raszageth the Storm-Eater",
+      "full_name_slug": "raszageth-the-stormeater",
+      "phase_type": "static"
+    },
+    {
+      "id": 3182,
+      "name": "Belo'ren",
+      "icon": "inv_120_raid_marchonqueldanas_lightvoidphoenix.jpg",
+      "full_name": "Belo'ren, Child of Al'ar",
+      "full_name_slug": "beloren-child-of-alar",
+      "phase_type": "dynamic"
+    },
+    {
+      "id": 2918,
+      "name": "Rasha'nan",
+      "icon": "inv_achievement_raidnerubian_flyingnerubianevolved.jpg",
+      "full_name": "Rasha'nan",
+      "full_name_slug": "rashanan",
+      "phase_type": "static"
+    },
+    {
+      "id": 2731,
+      "name": "Larodar",
+      "icon": "inv_achievement_raidemeralddream_keeperoftheflames.jpg",
+      "full_name": "Larodar, Keeper of the Flame",
+      "full_name_slug": "larodar-keeper-of-the-flame",
+      "phase_type": "static"
+    },
+    {
+      "id": 3011,
+      "name": "Rik",
+      "icon": "inv_111_raid_achievement_rikreverb.jpg",
+      "full_name": "Rik Reverb",
+      "full_name_slug": "rik-reverb",
+      "phase_type": "static"
+    },
+    {
+      "id": 2540,
+      "name": "Dausegne",
+      "icon": "inv_achievement_raid_progenitorraid_dominated_progenitor_bot.jpg",
+      "full_name": "Dausegne, the Fallen Oracle",
+      "full_name_slug": "dausegne-the-fallen-oracle",
+      "phase_type": "static"
+    },
+    {
+      "id": 2399,
+      "name": "Sludgefist",
+      "icon": "achievement_raid_revendrethraid_sludgefist.jpg",
+      "full_name": "Sludgefist",
+      "full_name_slug": "sludgefist",
+      "phase_type": "static"
+    },
+    {
+      "id": 2687,
+      "name": "The Amalgamation Chamber",
+      "icon": "inv_achievement_raiddragon_amalgamationchamber.jpg",
+      "full_name": "The Amalgamation Chamber",
+      "full_name_slug": "the-amalgamation-chamber",
+      "phase_type": "static"
+    },
+    {
+      "id": 3179,
+      "name": "Salhadaar",
+      "icon": "inv_120_raid_voidspire_salhadaar.jpg",
+      "full_name": "Fallen-King Salhadaar",
+      "full_name_slug": "fallenking-salhadaar",
+      "phase_type": "static"
+    },
+    {
+      "id": 2434,
+      "name": "Soulrender",
+      "icon": "achievement_raid_torghast_soulrenderdormazain.jpg",
+      "full_name": "Soulrender Dormazain",
+      "full_name_slug": "soulrender-dormazain",
+      "phase_type": "static"
+    },
+    {
+      "id": 3181,
+      "name": "Alleria",
+      "icon": "inv_120_raid_voidspire_alleria.jpg",
+      "full_name": "Crown of the Cosmos",
+      "full_name_slug": "crown-of-the-cosmos",
+      "phase_type": "dynamic"
+    },
+    {
+      "id": 2689,
+      "name": "Zskarn",
+      "icon": "inv_achievement_raiddragon_zskarn.jpg",
+      "full_name": "The Vigilant Steward, Zskarn",
+      "full_name_slug": "the-vigilant-steward-zskarn",
+      "phase_type": "static"
+    },
+    {
+      "id": 3455,
+      "name": "Vashnik",
+      "icon": "inv_121_raid_achievement_alchemist.jpg",
+      "full_name": "Vashnik the Malignant",
+      "full_name_slug": "vashnik-the-malignant",
+      "phase_type": "static"
+    },
+    {
+      "id": 2417,
+      "name": "Stone Legion Generals",
+      "icon": "achievement_raid_revendrethraid_generalkaalgrashaal.jpg",
+      "full_name": "Stone Legion Generals",
+      "full_name_slug": "stone-legion-generals",
+      "phase_type": "static"
+    },
+    {
+      "id": 2430,
+      "name": "Painsmith",
+      "icon": "achievement_raid_torghast_painsmithraznal.jpg",
+      "full_name": "Painsmith Raznal",
+      "full_name_slug": "painsmith-raznal",
+      "phase_type": "static"
+    },
+    {
+      "id": 3183,
+      "name": "L'ura",
+      "icon": "inv_120_raid_marchonqueldanas_lura.jpg",
+      "full_name": "L'ura",
+      "full_name_slug": "lura",
+      "phase_type": "dynamic"
+    },
+    {
+      "id": 3129,
+      "name": "Plexus Sentinel",
+      "icon": "inv_112_achievement_raid_automaton.jpg",
+      "full_name": "Plexus Sentinel",
+      "full_name_slug": "plexus-sentinel",
+      "phase_type": "static"
+    },
+    {
+      "id": 3470,
+      "name": "Nek'zali",
+      "icon": "inv_121_raid_achievement_priestess.jpg",
+      "full_name": "Nek'zali the Soulcoiler",
+      "full_name_slug": "nekzali-the-soulcoiler",
+      "phase_type": "dynamic"
+    },
+    {
+      "id": 3135,
+      "name": "Dimensius",
+      "icon": "inv_112_achievement_raid_dimensius.jpg",
+      "full_name": "Dimensius, the All-Devouring",
+      "full_name_slug": "dimensius-the-alldevouring",
+      "phase_type": "static"
+    },
+    {
+      "id": 2635,
+      "name": "Dathea",
+      "icon": "achievement_raidprimalist_windelemental.jpg",
+      "full_name": "Dathea, Ascended",
+      "full_name_slug": "dathea-ascended",
+      "phase_type": "static"
+    },
+    {
+      "id": 2407,
+      "name": "Sire Denathrius",
+      "icon": "achievement_raid_revendrethraid_siredenathrius.jpg",
+      "full_name": "Sire Denathrius",
+      "full_name_slug": "sire-denathrius",
+      "phase_type": "static"
+    },
+    {
+      "id": 2544,
+      "name": "Prototype Pantheon",
+      "icon": "inv_achievement_raid_progenitorraid_proto_primus.jpg",
+      "full_name": "Prototype Pantheon",
+      "full_name_slug": "prototype-pantheon",
+      "phase_type": "static"
+    },
+    {
+      "id": 3010,
+      "name": "Cauldron",
+      "icon": "inv_11_arenaboss_colossalclash.jpg",
+      "full_name": "Cauldron of Carnage",
+      "full_name_slug": "cauldron-of-carnage",
+      "phase_type": "static"
+    },
+    {
+      "id": 2898,
+      "name": "Sikran",
+      "icon": "inv_achievement_raidnerubian_nerubianevolved.jpg",
+      "full_name": "Sikran, Captain of the Sureki",
+      "full_name_slug": "sikran-captain-of-the-sureki",
+      "phase_type": "static"
+    },
+    {
+      "id": 2708,
+      "name": "Nymue",
+      "icon": "inv_achievement_raidemeralddream_dreamweaver.jpg",
+      "full_name": "Nymue, Weaver of the Cycle",
+      "full_name_slug": "nymue-weaver-of-the-cycle",
+      "phase_type": "static"
+    },
+    {
+      "id": 3497,
+      "name": "The Lost Turtles",
+      "icon": "inv_121_raid_achievement_tortollans.jpg",
+      "full_name": "The Lost Explorers",
+      "full_name_slug": "the-lost-explorers",
+      "phase_type": "dynamic"
+    },
+    {
+      "id": 3180,
+      "name": "Vanguard",
+      "icon": "inv_120_raid_voidspire_paladintrio.jpg",
+      "full_name": "Lightblinded Vanguard",
+      "full_name_slug": "lightblinded-vanguard",
+      "phase_type": "static"
+    },
+    {
+      "id": 3015,
+      "name": "Mug'Zee",
+      "icon": "inv_111_raid_achievement_mugzeeheadsofsecurity.jpg",
+      "full_name": "Mug'Zee, Heads of Security",
+      "full_name_slug": "mugzee-heads-of-security",
+      "phase_type": "static"
+    },
+    {
+      "id": 3012,
+      "name": "Stix",
+      "icon": "inv_111_raid_achievement_stixbunkjunker.jpg",
+      "full_name": "Stix Bunkjunker",
+      "full_name_slug": "stix-bunkjunker",
+      "phase_type": "static"
+    },
+    {
+      "id": 2436,
+      "name": "Guardian",
+      "icon": "achievement_raid_torghast_guardianofthefirstones.jpg",
+      "full_name": "Guardian of the First Ones",
+      "full_name_slug": "guardian-of-the-first-ones",
+      "phase_type": "static"
+    },
+    {
+      "id": 2728,
+      "name": "Council of Dreams",
+      "icon": "inv_achievement_raidemeralddream_dreamcouncil.jpg",
+      "full_name": "Council of Dreams",
+      "full_name_slug": "council-of-dreams",
+      "phase_type": "static"
+    },
+    {
+      "id": 2922,
+      "name": "Ansurek",
+      "icon": "inv_achievement_raidnerubian_queenansurek.jpg",
+      "full_name": "Queen Ansurek",
+      "full_name_slug": "queen-ansurek",
+      "phase_type": "static"
+    },
+    {
+      "id": 2683,
+      "name": "Magmorax",
+      "icon": "inv_achievement_raiddragon_magmorax.jpg",
+      "full_name": "Magmorax",
+      "full_name_slug": "magmorax",
+      "phase_type": "static"
+    },
+    {
+      "id": 3134,
+      "name": "Salhadaar",
+      "icon": "inv_112_achievement_raid_salhadaar.jpg",
+      "full_name": "Nexus-King Salhadaar",
+      "full_name_slug": "nexusking-salhadaar",
+      "phase_type": "static"
+    },
+    {
+      "id": 2539,
+      "name": "Lihuvim",
+      "icon": "inv_achievement_raid_progenitorraid_terrestrial_keeper.jpg",
+      "full_name": "Lihuvim, Principal Architect",
+      "full_name_slug": "lihuvim-principal-architect",
+      "phase_type": "static"
+    },
+    {
+      "id": 2587,
+      "name": "Eranog",
+      "icon": "achievement_raidprimalist_eranog.jpg",
+      "full_name": "Eranog",
+      "full_name_slug": "eranog",
+      "phase_type": "static"
+    },
+    {
+      "id": 2605,
+      "name": "Kurog",
+      "icon": "achievement_raidprimalist_kurog.jpg",
+      "full_name": "Kurog Grimtotem",
+      "full_name_slug": "kurog-grimtotem",
+      "phase_type": "static"
+    },
+    {
+      "id": 2431,
+      "name": "Fatescribe",
+      "icon": "achievement_raid_torghast_guardianofthefirstones.jpg",
+      "full_name": "Fatescribe Roh-Kalo",
+      "full_name_slug": "fatescribe-rohkalo",
+      "phase_type": "static"
+    },
+    {
+      "id": 2824,
+      "name": "Smolderon",
+      "icon": "inv_achievement_raidemeralddream_smolderon.jpg",
+      "full_name": "Smolderon",
+      "full_name_slug": "smolderon",
+      "phase_type": "static"
+    },
+    {
+      "id": 3420,
+      "name": "Sszorak",
+      "icon": "inv_121_raid_achievement_brute.jpg",
+      "full_name": "Sszorak",
+      "full_name_slug": "sszorak",
+      "phase_type": "static"
+    },
+    {
+      "id": 2684,
+      "name": "Neltharion",
+      "icon": "inv_achievement_raiddragon_neltharion.jpg",
+      "full_name": "Echo of Neltharion",
+      "full_name_slug": "echo-of-neltharion",
+      "phase_type": "static"
+    },
+    {
+      "id": 2921,
+      "name": "Silken Court",
+      "icon": "inv_achievement_raidnerubian_council.jpg",
+      "full_name": "The Silken Court",
+      "full_name_slug": "the-silken-court",
+      "phase_type": "static"
+    },
+    {
+      "id": 3159,
+      "name": "Rotmire",
+      "icon": "inv_1207_achievement_raid_fungariangiant_fungalgiant.jpg",
+      "full_name": "Rotmire",
+      "full_name_slug": "rotmire",
+      "phase_type": "static"
+    },
+    {
+      "id": 2677,
+      "name": "Fyrakk",
+      "icon": "inv_achievement_raidemeralddream_fyrakk.jpg",
+      "full_name": "Fyrakk the Blazing",
+      "full_name_slug": "fyrakk-the-blazing",
+      "phase_type": "static"
+    },
+    {
+      "id": 3492,
+      "name": "Ula'tek",
+      "icon": "inv_121_raid_achievement_ulatek.jpg",
+      "full_name": "Ula'tek",
+      "full_name_slug": "ulatek",
+      "phase_type": "static"
+    },
+    {
+      "id": 2423,
+      "name": "Tarragrue",
+      "icon": "achievement_raid_torghast_tarragrue.jpg",
+      "full_name": "The Tarragrue",
+      "full_name_slug": "the-tarragrue",
+      "phase_type": "static"
+    },
+    {
+      "id": 2422,
+      "name": "Kel'Thuzad",
+      "icon": "achievement_raid_torghast_kel-thuzad.jpg",
+      "full_name": "Kel'Thuzad",
+      "full_name_slug": "kelthuzad",
+      "phase_type": "static"
+    },
+    {
+      "id": 2398,
+      "name": "Shriekwing",
+      "icon": "achievement_raid_revendrethraid_shriekwing.jpg",
+      "full_name": "Shriekwing",
+      "full_name_slug": "shriekwing",
+      "phase_type": "static"
+    },
+    {
+      "id": 2693,
+      "name": "The Forgotten Experiments",
+      "icon": "inv_achievement_raiddragon_forgottenexperiments.jpg",
+      "full_name": "The Forgotten Experiments",
+      "full_name_slug": "the-forgotten-experiments",
+      "phase_type": "static"
+    },
+    {
+      "id": 2529,
+      "name": "Halondrus",
+      "icon": "inv_achievement_raid_progenitorraid_progenium_keeper.jpg",
+      "full_name": "Halondrus the Reclaimer",
+      "full_name_slug": "halondrus-the-reclaimer",
+      "phase_type": "static"
+    },
+    {
+      "id": 3009,
+      "name": "Vexie",
+      "icon": "inv_111_raid_achievement_vexieandthegeargrinders.jpg",
+      "full_name": "Vexie and the Geargrinders",
+      "full_name_slug": "vexie-and-the-geargrinders",
+      "phase_type": "static"
+    },
+    {
+      "id": 2786,
+      "name": "Tindral",
+      "icon": "inv_achievement_raidemeralddream_druidoftheflame.jpg",
+      "full_name": "Tindral Sageswift, Seer of the Flame",
+      "full_name_slug": "tindral-sageswift-seer-of-the-flame",
+      "phase_type": "static"
+    },
+    {
+      "id": 2639,
+      "name": "Terros",
+      "icon": "achievement_raidprimalist_terros.jpg",
+      "full_name": "Terros",
+      "full_name_slug": "terros",
+      "phase_type": "static"
+    },
+    {
+      "id": 2542,
+      "name": "Skolex",
+      "icon": "inv_achievement_raid_progenitorraid_progenium_devourer_worm.jpg",
+      "full_name": "Skolex, the Insatiable Ravener",
+      "full_name_slug": "skolex-the-insatiable-ravener",
+      "phase_type": "static"
+    },
+    {
+      "id": 3016,
+      "name": "Gallywix",
+      "icon": "inv_111_raid_achievement_chromekinggallywix.jpg",
+      "full_name": "Chrome King Gallywix",
+      "full_name_slug": "chrome-king-gallywix",
+      "phase_type": "static"
+    },
+    {
+      "id": 3421,
+      "name": "Twin Fangs",
+      "icon": "inv_121_raid_achievement_twins.jpg",
+      "full_name": "The Twin Fangs",
+      "full_name_slug": "the-twin-fangs",
+      "phase_type": "static"
+    },
+    {
+      "id": 2435,
+      "name": "Sylvanas",
+      "icon": "achievement_raid_torghast_sylvanaswindrunner.jpg",
+      "full_name": "Sylvanas Windrunner",
+      "full_name_slug": "sylvanas-windrunner",
+      "phase_type": "static"
+    },
+    {
+      "id": 2917,
+      "name": "Bloodbound Horror",
+      "icon": "inv_achievement_raidnerubian_blackblood.jpg",
+      "full_name": "The Bloodbound Horror",
+      "full_name_slug": "the-bloodbound-horror",
+      "phase_type": "static"
+    },
+    {
+      "id": 2433,
+      "name": "The Eye",
+      "icon": "achievement_raid_torghast_theeyeofthejailer.jpg",
+      "full_name": "The Eye of the Jailer",
+      "full_name_slug": "the-eye-of-the-jailer",
+      "phase_type": "static"
+    },
+    {
+      "id": 3133,
+      "name": "Fractillus",
+      "icon": "inv_112_achievement_raid_glasselemental.jpg",
+      "full_name": "Fractillus",
+      "full_name_slug": "fractillus",
+      "phase_type": "static"
+    },
+    {
+      "id": 3177,
+      "name": "Vorasius",
+      "icon": "inv_120_raid_voidspire_kaiju.jpg",
+      "full_name": "Vorasius",
+      "full_name_slug": "vorasius",
+      "phase_type": "static"
+    },
+    {
+      "id": 2546,
+      "name": "Anduin",
+      "icon": "inv_achievement_raid_progenitorraid_anduin.jpg",
+      "full_name": "Anduin Wrynn",
+      "full_name_slug": "anduin-wrynn",
+      "phase_type": "static"
+    },
+    {
+      "id": 2685,
+      "name": "Sarkareth",
+      "icon": "inv_achievement_raiddragon_sarkareth.jpg",
+      "full_name": "Scalecommander Sarkareth",
+      "full_name_slug": "scalecommander-sarkareth",
+      "phase_type": "static"
+    },
+    {
+      "id": 2920,
+      "name": "Ky'veza",
+      "icon": "inv_achievement_raidnerubian_etherealassasin.jpg",
+      "full_name": "Nexus-Princess Ky'veza",
+      "full_name_slug": "nexusprincess-kyveza",
+      "phase_type": "static"
+    },
+    {
+      "id": 3379,
+      "name": "Nymrissa",
+      "icon": "achievement_boss_elitenagamale.jpg",
+      "full_name": "Nymrissa Wavecaller",
+      "full_name_slug": "nymrissa-wavecaller",
+      "phase_type": "static"
+    },
+    {
+      "id": 2418,
+      "name": "Huntsman Altimor",
+      "icon": "achievement_raid_revendrethraid_altimor.jpg",
+      "full_name": "Huntsman Altimor",
+      "full_name_slug": "huntsman-altimor",
+      "phase_type": "static"
+    },
+    {
+      "id": 2590,
+      "name": "The Primal Council",
+      "icon": "achievement_raidprimalist_council.jpg",
+      "full_name": "The Primal Council",
+      "full_name_slug": "the-primal-council",
+      "phase_type": "static"
+    },
+    {
+      "id": 2902,
+      "name": "Ulgrax",
+      "icon": "inv_achievement_raidnerubian_nerubianhulk.jpg",
+      "full_name": "Ulgrax the Devourer",
+      "full_name_slug": "ulgrax-the-devourer",
+      "phase_type": "static"
+    },
+    {
+      "id": 3306,
+      "name": "Chimaerus",
+      "icon": "inv_120_raid_dreamwell_malformedmanifestation.jpg",
+      "full_name": "Chimaerus the Undreamt God",
+      "full_name_slug": "chimaerus-the-undreamt-god",
+      "phase_type": "dynamic"
+    },
+    {
+      "id": 2383,
+      "name": "Hungering Destroyer",
+      "icon": "achievement_raid_revendrethraid_hungeringdestroyer.jpg",
+      "full_name": "Hungering Destroyer",
+      "full_name_slug": "hungering-destroyer",
+      "phase_type": "static"
+    },
+    {
+      "id": 2682,
+      "name": "Assault of the Zaqali",
+      "icon": "inv_achievement_raiddragon_zaqaliassault.jpg",
+      "full_name": "Assault of the Zaqali",
+      "full_name_slug": "assault-of-the-zaqali",
+      "phase_type": "static"
+    },
+    {
+      "id": 3131,
+      "name": "Loom'ithar",
+      "icon": "inv_112_achievement_raid_silkworm.jpg",
+      "full_name": "Loom'ithar",
+      "full_name_slug": "loomithar",
+      "phase_type": "static"
+    },
+    {
+      "id": 3178,
+      "name": "Vaelgor",
+      "icon": "inv_120_raid_voidspire_dragonduo.jpg",
+      "full_name": "Vaelgor & Ezzorak",
+      "full_name_slug": "vaelgor-&-ezzorak",
+      "phase_type": "static"
+    },
+    {
+      "id": 2820,
+      "name": "Gnarlroot",
+      "icon": "inv_achievement_raidemeralddream_fieryancient.jpg",
+      "full_name": "Gnarlroot",
+      "full_name_slug": "gnarlroot",
+      "phase_type": "static"
+    },
+    {
+      "id": 2614,
+      "name": "Diurna",
+      "icon": "achievement_raidprimalist_diurna.jpg",
+      "full_name": "Broodkeeper Diurna",
+      "full_name_slug": "broodkeeper-diurna",
+      "phase_type": "static"
+    },
+    {
+      "id": 3122,
+      "name": "Soul Hunters",
+      "icon": "inv_112_achievement_raid_dhcouncil.jpg",
+      "full_name": "The Soul Hunters",
+      "full_name_slug": "the-soul-hunters",
+      "phase_type": "static"
+    },
+    {
+      "id": 2402,
+      "name": "Sun King",
+      "icon": "achievement_raid_revendrethraid_kaelthassunstrider.jpg",
+      "full_name": "Sun King's Salvation",
+      "full_name_slug": "sun-kings-salvation",
+      "phase_type": "static"
+    },
+    {
+      "id": 3130,
+      "name": "Naazindhri",
+      "icon": "inv_112_achievement_raid_binder.jpg",
+      "full_name": "Soulbinder Naazindhri",
+      "full_name_slug": "soulbinder-naazindhri",
+      "phase_type": "static"
+    },
+    {
+      "id": 3014,
+      "name": "Bandit",
+      "icon": "inv_111_raid_achievement_onearmedbandit.jpg",
+      "full_name": "One-Armed Bandit",
+      "full_name_slug": "onearmed-bandit",
+      "phase_type": "static"
+    },
+    {
+      "id": 3445,
+      "name": "Sentinels",
+      "icon": "inv_121_raid_achievement_golems.jpg",
+      "full_name": "Entombed Sentinels",
+      "full_name_slug": "entombed-sentinels",
+      "phase_type": "dynamic"
+    },
+    {
+      "id": 2543,
+      "name": "Lords of Dread",
+      "icon": "inv_achievement_raid_progenitorraid_dreadlord_duo.jpg",
+      "full_name": "Lords of Dread",
+      "full_name_slug": "lords-of-dread",
+      "phase_type": "static"
+    },
+    {
+      "id": 2688,
+      "name": "Kazzara",
+      "icon": "inv_achievement_raiddragon_kazzara.jpg",
+      "full_name": "Kazzara, the Hellforged",
+      "full_name_slug": "kazzara-the-hellforged",
+      "phase_type": "static"
+    },
+    {
+      "id": 3013,
+      "name": "Lockenstock",
+      "icon": "inv_111_raid_achievement_sprocketmongerlocknstock.jpg",
+      "full_name": "Sprocketmonger Lockenstock",
+      "full_name_slug": "sprocketmonger-lockenstock",
+      "phase_type": "static"
+    },
+    {
+      "id": 2405,
+      "name": "Xy'mox",
+      "icon": "achievement_raid_revendrethraid_artificerxymox.jpg",
+      "full_name": "Artificer Xy'mox (CN)",
+      "full_name_slug": "artificer-xymox-cn",
+      "phase_type": "static"
+    },
+    {
+      "id": 2919,
+      "name": "Ovi'nax",
+      "icon": "inv_achievement_raidnerubian_swarmmother.jpg",
+      "full_name": "Broodtwister Ovi'nax",
+      "full_name_slug": "broodtwister-ovinax",
+      "phase_type": "static"
+    },
+    {
+      "id": 2592,
+      "name": "Sennarth",
+      "icon": "achievement_raidprimalist_sennarth.jpg",
+      "full_name": "Sennarth, The Cold Breath",
+      "full_name_slug": "sennarth-the-cold-breath",
+      "phase_type": "static"
+    },
+    {
+      "id": 2429,
+      "name": "The Nine",
+      "icon": "achievement_raid_torghast_thenine.jpg",
+      "full_name": "The Nine",
+      "full_name_slug": "the-nine",
+      "phase_type": "static"
+    },
+    {
+      "id": 2737,
+      "name": "Volcoross",
+      "icon": "inv_achievement_raidemeralddream_lavaserpent.jpg",
+      "full_name": "Volcoross",
+      "full_name_slug": "volcoross",
+      "phase_type": "static"
+    },
+    {
+      "id": 3132,
+      "name": "Araz",
+      "icon": "inv_112_achievement_raid_engineer.jpg",
+      "full_name": "Forgeweaver Araz",
+      "full_name_slug": "forgeweaver-araz",
+      "phase_type": "static"
+    },
+    {
+      "id": 3429,
+      "name": "Coiled Altar",
+      "icon": "inv_121_raid_achievement_zuljinmalacrass.jpg",
+      "full_name": "The Coiled Altar",
+      "full_name_slug": "the-coiled-altar",
+      "phase_type": "dynamic"
+    },
+    {
+      "id": 3176,
+      "name": "Averzian",
+      "icon": "inv_120_raid_voidspire_hostgeneral.jpg",
+      "full_name": "Imperator Averzian",
+      "full_name_slug": "imperator-averzian",
+      "phase_type": "static"
+    },
+    {
+      "id": 2553,
+      "name": "Xy'mox",
+      "icon": "inv_achievement_raid_progenitorraid_broker_incursion.jpg",
+      "full_name": "Artificer Xy'mox",
+      "full_name_slug": "artificer-xymox",
+      "phase_type": "static"
+    },
+    {
+      "id": 2406,
+      "name": "Inerva",
+      "icon": "achievement_raid_revendrethraid_ladyinervadarkvein.jpg",
+      "full_name": "Lady Inerva Darkvein",
+      "full_name_slug": "lady-inerva-darkvein",
+      "phase_type": "static"
+    },
+    {
+      "id": 2549,
+      "name": "Rygelon",
+      "icon": "inv_achievement_raid_progenitorraid_dominated_constellar.jpg",
+      "full_name": "Rygelon",
+      "full_name_slug": "rygelon",
+      "phase_type": "static"
+    },
+    {
+      "id": 2680,
+      "name": "Rashok",
+      "icon": "inv_achievement_raiddragon_rashok.jpg",
+      "full_name": "Rashok, the Elder",
+      "full_name_slug": "rashok-the-elder",
+      "phase_type": "static"
+    },
+    {
+      "id": 2709,
+      "name": "Igira",
+      "icon": "inv_achievement_raidemeralddream_igira-the-cruel.jpg",
+      "full_name": "Igira the Cruel",
+      "full_name_slug": "igira-the-cruel",
+      "phase_type": "static"
+    },
+    {
+      "id": 2512,
+      "name": "Vigilant Guardian",
+      "icon": "inv_achievement_raid_progenitorraid_progenitor_defensewall_boss.jpg",
+      "full_name": "Vigilant Guardian",
+      "full_name_slug": "vigilant-guardian",
+      "phase_type": "static"
+    },
+    {
+      "id": 2432,
+      "name": "Ner'zhul",
+      "icon": "achievement_raid_torghast_shadowscourge_prisonofnerzhul.jpg",
+      "full_name": "Remnant of Ner'zhul",
+      "full_name_slug": "remnant-of-nerzhul",
+      "phase_type": "static"
+    },
+    {
+      "id": 2412,
+      "name": "Council",
+      "icon": "achievement_raid_revendrethraid_nobilitycouncil.jpg",
+      "full_name": "The Council of Blood",
+      "full_name_slug": "the-council-of-blood",
+      "phase_type": "static"
+    }
+  ]
+}

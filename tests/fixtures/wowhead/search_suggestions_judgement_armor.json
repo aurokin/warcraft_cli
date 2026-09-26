@@ -1,0 +1,59 @@
+{
+ "search": "judgement armor",
+ "results": [
+  {
+   "type": 101,
+   "id": 576,
+   "name": "Judgement Armor",
+   "typeName": "Transmog Set",
+   "icon": "inv_chest_plate03",
+   "pinTitle": "Transmog Set",
+   "pinBreadcrumb": [
+    "Plate"
+   ],
+   "popularity": 0
+  },
+  {
+   "type": 101,
+   "id": 404,
+   "name": "Judgement Armor (Recolor)",
+   "typeName": "Transmog Set",
+   "icon": "inv_chest_plate11",
+   "pinTitle": "Transmog Set",
+   "pinBreadcrumb": [
+    "Plate"
+   ],
+   "popularity": 1
+  }
+ ],
+ "categories": {
+  "decor": [],
+  "guides": [],
+  "news": [],
+  "tools": [],
+  "database": [
+   {
+    "type": 101,
+    "id": 404,
+    "name": "Judgement Armor (Recolor)",
+    "typeName": "Transmog Set",
+    "icon": "inv_chest_plate11",
+    "pinTitle": "Transmog Set",
+    "pinBreadcrumb": [
+     "Plate"
+    ]
+   },
+   {
+    "type": 101,
+    "id": 576,
+    "name": "Judgement Armor",
+    "typeName": "Transmog Set",
+    "icon": "inv_chest_plate03",
+    "pinTitle": "Transmog Set",
+    "pinBreadcrumb": [
+     "Plate"
+    ]
+   }
+  ]
+ }
+}

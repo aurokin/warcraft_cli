@@ -1,0 +1,114 @@
+name: Live Contracts
+
+on:
+  workflow_dispatch:
+    inputs:
+      open_issue:
+        description: "Open or update the live-failure tracking issue when a job fails"
+        type: boolean
+        default: false
+  schedule:
+    # Mondays 06:00 UTC. Live contracts never gate pull requests.
+    - cron: "0 6 * * 1"
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: live-contracts-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  wowhead-parser-canaries:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev --extra redis
+
+      - name: Parser canaries
+        run: make test-canary
+
+  # The keyless half of tests/e2e (docs/architecture/E2E_TESTING.md). No secrets are passed, so the
+  # journeys for Warcraft Logs, Blizzard, CurseForge, SimulationCraft (needs a local checkout and
+  # build), the wrapper composites, and the cross-binary contract file stay local-only. Missing
+  # providers fail rather than skip; the one optional input is excluded by name.
+  e2e-keyless:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev --extra redis
+
+      - name: Keyless end-to-end journeys
+        env:
+          WARCRAFT_E2E_SKIP: raidbots-report
+        run: >-
+          make test-e2e E2E_ARGS="-rs
+          tests/e2e/test_wowhead.py tests/e2e/test_method.py tests/e2e/test_icy_veins.py
+          tests/e2e/test_raiderio.py tests/e2e/test_warcraft_wiki.py tests/e2e/test_lorrgs.py
+          tests/e2e/test_raidbots.py"
+
+  report-failure:
+    needs:
+      - wowhead-parser-canaries
+      - e2e-keyless
+    # Anything but success is loud: a skipped or cancelled job proves nothing either.
+    if: >-
+      always()
+      && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped'))
+      && (github.event_name == 'schedule' || inputs.open_issue)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # One rolling tracking issue: comment on the open one, otherwise open it.
+      - name: Open or update the tracking issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const label = 'live-failure';
+            const title = 'Live contract failures';
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const body = `Live contract run did not pass: ${runUrl}\n\nTriggered by \`${context.eventName}\` on \`${context.ref}\`.`;
+            const existing = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: label,
+              per_page: 1,
+            });
+            if (existing.data.length > 0) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.data[0].number,
+                body,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                labels: [label],
+                body,
+              });
+            }

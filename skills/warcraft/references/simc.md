@@ -26,14 +26,22 @@
 ## Effective Use
 
 - prefer readonly APL inspection before jumping to a real sim run
-- if the user provides a talent string, import string, or Wowhead talent-calc URL with build code, assume they want the exact build only; use `describe-build` first for “what is this build doing?” requests, then use `priority` or `inactive-actions` when you need finer evidence
+- if the user provides a talent string, import string, or Wowhead talent-calc URL with build code, assume they want the exact build only; use `describe-build` first for “what is this build doing?” requests, then use `priority` or `inactive-actions` with the same `--talents` value when you need finer evidence (`--build-packet` is accepted only by `describe-build`, `decode-build`, `identify-build`, and `validate-talent-transport`; for the other exact-build commands pass the packet's `simc_split_talents` strings as `--class-talents` / `--spec-talents` / `--hero-talents`)
 - users may paste:
-  - a bare WoW talent export string
-  - a Wowhead talent-calc URL with build code
+  - a bare WoW talent export string (this is what Method and Icy Veins guides publish; it names no class or spec, so the CLI identifies it by decoding it as each spec SimC knows)
+  - a Wowhead talent-calc URL with build code, which names the class and spec by itself
+  - a Wowhead `/talent-calc/blizzard/<hash>` URL, which is what `modify-build` publishes
   - SimC-native build/profile text
   `identify-build`, `describe-build`, and `decode-build` report `source_kind`, resolved class/spec, and the normalized generated profile so you can verify the handoff before reasoning from it
+- any other link (a guide page, an article, an addon export site) fails with `unsupported_build_reference` (exit 2) naming what it recognized under `error.details.reference_type`; do not retry it as a talent string
 - for exact-build commands, `--talents` is now safe for the same common consumer inputs as `--build-text`, including bare WoW exports and Wowhead talent-calc URLs with build codes
-- do not tell the user they must provide class/spec unless `identify-build` failed first; the CLI now probes the local SimC spec set for bare WoW exports when direct metadata is missing
+- a build read against another spec's APL (`--apl-path monk_brewmaster.simc` for a mistweaver build) fails with `invalid_query` instead of describing the wrong rotation
+- a talent string SimC rejects fails with `invalid_build` and SimC's own error line; it is never reported as a partial build. The envelope names the binary that rejected it under `error.details.simc_binary`, and when that binary is older than the checkout the message says so and asks for a rebuild; `simc doctor` reports the same mismatch under `repo.build_issues`
+- decoded builds name the active hero tree under `hero_tree`; talents from the other hero tree are listed under `inactive_hero_talents` and are not part of the build
+- a tiered node comes back as one row per entry, each with its own rank; a row with `rank_known: false` is taken at a rank the decode could not recover, so do not quote a rank for it
+- an empty value for a build-input option is a usage error, not the same as omitting the option
+- `--enable` / `--disable` take a talent's display name or its SimC token; a value that names no talent of the actor's class fails with `unknown_talent` (exit 2) rather than being ignored
+- do not tell the user they must provide class/spec unless `identify-build` failed first; the CLI decodes a bare WoW export as every spec SimC knows, healers included, when direct metadata is missing. It fails with `invalid_query` only when no spec or more than one decodes the build (`error.details.identity.candidates` lists the latter); then pass `--actor-class` / `--spec`. `identify-build` with an explicit class and spec the hash does not decode as returns `confidence: none`; say the build is not that spec. `identify_failed` (exit 1) means the SimC checkout or binary is broken (missing, not executable, or crashed), not the build. An `--actor-class` alone narrows the probe to that class, and the message names the specs it tried. Class and spec are case-insensitive (`Death Knight` means `deathknight`); a class or spec SimC has no spec for, or a pair such as `mage holy`, fails with `invalid_query` (exit 2) listing the valid values. The class and spec an APL file name or a Wowhead talent-calc URL path suggests are only a guess: a talent hash is decoded against them once, and a guess the hash contradicts is ignored with an `ignored apl name` / `ignored talent-calc url path` source note while the probe identifies the build. A name that is no SimC class/spec pair (a renamed `mage_arcane_variant.simc`) is ignored with an `ignored apl name` source note, never an error on its own; with `--enable`/`--disable` and no talents such a file fails with `unknown_talent` because no class is known, so pass `--actor-class` and `--spec`
 - prefer `describe-build` over ad hoc prose synthesis when you need to talk about:
   - active hero/spec package
   - skipped capstones or alternate branches
@@ -49,11 +57,20 @@
   - `simc sim ./profile.simc`
   - `cat ./profile.simc | simc sim -`
   - it always reports run settings, runtime, and core output metrics
+- `compare-apls` ranks variants on mean DPS, but `action_counts`, `action_cpm`, and `top_action_deltas` come from the one iteration SimC records an action sequence for; the payload states this under `sampling`, so present cast-rate differences as a single sampled fight, not as an average
+- `spec-files`, `find-action`, and `trace-action` need ripgrep; without it they fail with `missing_dependency` and `simc doctor` marks them `unavailable`. Pointed at a directory that is not a SimulationCraft checkout they fail with `not_found` (exit 4) rather than reporting zero hits
 - use `compare-builds` to diff talent selections between two or more builds by tree; this is the right tool when the user asks "what changed between these two builds?"
+  - `summary.failed` counts the `--other` builds SimC rejected; each keeps its `error` in `comparisons`, so say which comparisons are missing. When none decode the command fails instead
 - use `modify-build` to produce a new talent export string from an existing build:
   - `--swap-class-tree-from` / `--swap-spec-tree-from` / `--swap-hero-tree-from` replace an entire tree from another build
-  - `--add name:rank` and `--remove name` adjust individual talents
-  - the output includes the new WoW export string, a Wowhead URL, and a diff from the base build
+  - `--add name:rank` and `--remove name` adjust individual talents in any tree; a name or entry id must be a talent the build's spec can take, otherwise it fails with `unknown_talent` (exit 2). A hero talent counts when the spec can select its hero tree. Healer builds can be modified too
+  - at least one `--swap-*-tree-from`, `--add` or `--remove` is required; without one the command fails with `invalid_argument` (exit 2)
+  - the output includes the new WoW export string, a Wowhead URL, a diff from the base build, and `verified: true`, which means every requested edit is in the export and nothing else changed in the active trees; it does not mean the game will import it
+  - when re-encoding changes anything in the active trees that was not requested, or a requested edit is not in the export at the requested rank (SimC silently clamps a rank above the maximum), the command fails with `encode_mismatch` and no export; do not retry, report the listed `unrequested_changes` and `unapplied_edits`. A swapped tree is checked against the build it came from, not the base
+  - an `--add` on a choice node whose other entry the build takes fails with `invalid_argument` (exit 2) naming the talent; rerun with the `--remove` the message gives to swap the two
+  - SimC enforces no point budget or node prerequisites: when an add makes a tree spend more points than the base build, `result.disclosures` says the game may refuse the export, so tell the user which talent to drop
+  - a tree swap drops the base hash and rebuilds every tree from `entry:rank` pairs. Tiered nodes survive that, because the decoder reads their per-entry ranks back out of SimC. A row the read-back could not resolve (`rank_known: false`) still cannot be re-serialized, so a swap on such a build fails with `encode_mismatch` naming the talent that would have been lost; `--add` / `--remove` keep the base hash and still work
+  - `diff_from_base.inactive_hero` lists hero talents the export gained from the hero tree the build did not select: SimC's encoder freely grants every hero keystone. They are inert in the sim, but the export string does differ from the input, so relay `result.disclosures` when it is non-empty
   - this uses SimC's own encoder, not reverse-engineered client-side encoding
 - if the user wants to compare guide-derived or custom APLs, build a harness and use `compare-apls`; do not edit upstream SimC files
 - use `verify-clean` before and after local comparison work when upstream cleanliness matters
@@ -83,7 +100,7 @@ This is the default safe path for:
 - use `modify-build` with `--swap-*-tree-from` when the user wants to take an entire tree from another build
 - use `modify-build` with `--add` / `--remove` when the user wants to adjust specific talents without a full tree swap
 - both paths can be combined: swap a tree and then add/remove on top
-- talent encoding goes through the local SimC binary, so `doctor` must report a working binary
+- talent encoding goes through the local SimC binary, so `doctor` must report a working binary: when `repo.build_ready` is false, every binary-backed command is listed as `unavailable` in `capabilities` and under `dependencies.simc_binary`
 
 ## Boundaries
 

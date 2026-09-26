@@ -1,0 +1,215 @@
+{
+ "search": "thunderfury",
+ "results": [
+  {
+   "type": 6,
+   "id": 21992,
+   "name": "Thunderfury",
+   "typeName": "Spell",
+   "icon": "spell_nature_cyclone",
+   "pinTitle": "Spell",
+   "pinDescription": "Blasts your enemy with lightning, dealing 300 Nature damage and then jumping to additional nearby enemies.  Each jump reduces that victim's Nature resistance by 25. Affects 5 targets. Your primary target is also consumed by a cyclone, slowing its attack speed by 20% for 12 sec.",
+   "pinBreadcrumb": [
+    "NPC Abilities"
+   ],
+   "popularity": 0
+  },
+  {
+   "type": 6,
+   "id": 27648,
+   "name": "Thunderfury",
+   "typeName": "Spell",
+   "icon": "spell_nature_cyclone",
+   "pinTitle": "Spell",
+   "pinDescription": "In the NPC Abilities category.",
+   "pinBreadcrumb": [
+    "NPC Abilities"
+   ],
+   "popularity": 1
+  },
+  {
+   "type": 3,
+   "id": 19019,
+   "name": "Thunderfury, Blessed Blade of the Windseeker",
+   "typeName": "Item",
+   "icon": "inv_sword_39",
+   "quality": 5,
+   "pinTitle": "Item",
+   "pinFooterText": "One-Handed Sword",
+   "pinDescription": "Thunderfury, Blessed Blade of the Windseeker is the legendary sword once wielded by Thunderaan, Prince of Air.",
+   "pinBreadcrumb": [
+    "Weapon",
+    "One-Handed Sword"
+   ],
+   "popularity": 2
+  },
+  {
+   "type": 10,
+   "id": 428,
+   "name": "Thunderfury, Blessed Blade of the Windseeker",
+   "typeName": "Achievement",
+   "icon": "inv_sword_39",
+   "pinTitle": "Achievement",
+   "pinFooterText": "Points: 0",
+   "pinDescription": "Wielder of Thunderfury, Blessed Blade of the Windseeker.",
+   "pinBreadcrumb": [
+    "Feats of Strength"
+   ],
+   "popularity": 3
+  },
+  {
+   "type": 5,
+   "id": 7787,
+   "name": "Rise, Thunderfury!",
+   "typeName": "Quest",
+   "side": 3,
+   "pinTitle": "Quest",
+   "pinFooterText": "Level: 60",
+   "pinDescription": "You have defeated the Wind Seeker. Take the dormant blade and force the lying wretch, Demitrian, to use the materials you provided for his betrayal to wake Thunderfury.",
+   "pinBreadcrumb": [
+    "Miscellaneous",
+    "Legendary"
+   ],
+   "popularity": 4
+  },
+  {
+   "type": 162,
+   "id": 375994,
+   "name": "How to Complete Your Thunderfury in Phase 3 - WoW Classic Fresh",
+   "typeName": "News Post",
+   "pinImageUrl": "https://wow.zamimg.com/uploads/blog/images/47775-how-to-complete-your-thunderfury-in-phase-3-wow-classic-fresh.jpg?maxHeight=80",
+   "newsTypeId": 8,
+   "newsTypeName": "Classic",
+   "pinTitle": "News",
+   "pinFooterText": "Posted 2025/03/25 by Venom0243",
+   "pinDescription": "Phase 3 of the 20th Anniversary Servers introduces the final steps players will need to take to obtain their [item=19019]!",
+   "popularity": 5
+  },
+  {
+   "type": 162,
+   "id": 347109,
+   "name": "How to Acquire Thunderfury in Season of Discovery Phase 5",
+   "typeName": "News Post",
+   "pinImageUrl": "https://wow.zamimg.com/uploads/blog/images/44630-how-to-acquire-thunderfury-in-season-of-discovery-phase-5.png?maxHeight=80",
+   "newsTypeId": 8,
+   "newsTypeName": "Classic",
+   "pinTitle": "News",
+   "pinFooterText": "Posted 2024/09/30 by Serenal",
+   "pinDescription": "Season of Discovery Phase 5 has opened the doors to [url guide=26980]Blackwing Lair[/url], and now players will finally be able to get their hands on [item=230224]!",
+   "popularity": 6
+  },
+  {
+   "type": 162,
+   "id": 346300,
+   "name": "Possible Thunderfury-Themed Cloak on Season of Discovery PTR",
+   "typeName": "News Post",
+   "pinImageUrl": "https://wow.zamimg.com/uploads/blog/images/43903-possible-thunderfury-themed-cloak-on-season-of-discovery-ptr.jpg?maxHeight=80",
+   "newsTypeId": 8,
+   "newsTypeName": "Classic",
+   "pinTitle": "News",
+   "pinFooterText": "Posted 2024/08/29 by perculia",
+   "pinDescription": "There might be a fun bonus Thunderfury-themed item in store for players in Season of Discovery based on the Patch 1.15.4 PTR!",
+   "popularity": 7
+  },
+  {
+   "type": 162,
+   "id": 345045,
+   "name": "Thunderfury Model Size Adjusted on Classic Realms",
+   "typeName": "News Post",
+   "pinImageUrl": "https://wow.zamimg.com/uploads/blog/images/42655-thunderfury-model-size-adjusted-on-classic-realms.jpg?maxHeight=80",
+   "newsTypeId": 8,
+   "newsTypeName": "Classic",
+   "pinTitle": "News",
+   "pinFooterText": "Posted 2024/07/10 by Wowhead",
+   "pinDescription": "With the launch of Season of Discovery Patch 1.15.3, eagle-eyed players have noticed a change to Thunderfury, Blessed Blade of the Windseeker - it's gotten significantly smaller.",
+   "popularity": 8
+  },
+  {
+   "type": 162,
+   "id": 344308,
+   "name": "Thunderfury Will Not Be Changing in Season of Discovery Phase 4",
+   "typeName": "News Post",
+   "pinImageUrl": "https://wow.zamimg.com/uploads/blog/images/42542-thunderfury-will-not-be-changing-in-season-of-discovery-phase-4.jpg?maxHeight=80",
+   "newsTypeId": 8,
+   "newsTypeName": "Classic",
+   "pinTitle": "News",
+   "pinFooterText": "Posted 2024/07/05 by Wowhead",
+   "pinDescription": "As we prepare for Phase 4 Season of Discovery, it has felt like every item has had some huge changes. So some players were relieved too learn that [item=19019] will not be changed.",
+   "popularity": 9
+  }
+ ],
+ "categories": {
+  "decor": [],
+  "guides": [],
+  "news": [],
+  "tools": [],
+  "database": [
+   {
+    "type": 3,
+    "id": 19019,
+    "name": "Thunderfury, Blessed Blade of the Windseeker",
+    "typeName": "Item",
+    "icon": "inv_sword_39",
+    "quality": 5,
+    "pinTitle": "Item",
+    "pinFooterText": "One-Handed Sword",
+    "pinDescription": "Thunderfury, Blessed Blade of the Windseeker is the legendary sword once wielded by Thunderaan, Prince of Air.",
+    "pinBreadcrumb": [
+     "Weapon",
+     "One-Handed Sword"
+    ]
+   },
+   {
+    "type": 5,
+    "id": 7787,
+    "name": "Rise, Thunderfury!",
+    "typeName": "Quest",
+    "side": 3,
+    "pinTitle": "Quest",
+    "pinFooterText": "Level: 60",
+    "pinDescription": "You have defeated the Wind Seeker. Take the dormant blade and force the lying wretch, Demitrian, to use the materials you provided for his betrayal to wake Thunderfury.",
+    "pinBreadcrumb": [
+     "Miscellaneous",
+     "Legendary"
+    ]
+   },
+   {
+    "type": 10,
+    "id": 428,
+    "name": "Thunderfury, Blessed Blade of the Windseeker",
+    "typeName": "Achievement",
+    "icon": "inv_sword_39",
+    "pinTitle": "Achievement",
+    "pinFooterText": "Points: 0",
+    "pinDescription": "Wielder of Thunderfury, Blessed Blade of the Windseeker.",
+    "pinBreadcrumb": [
+     "Feats of Strength"
+    ]
+   },
+   {
+    "type": 6,
+    "id": 21992,
+    "name": "Thunderfury",
+    "typeName": "Spell",
+    "icon": "spell_nature_cyclone",
+    "pinTitle": "Spell",
+    "pinDescription": "Blasts your enemy with lightning, dealing 300 Nature damage and then jumping to additional nearby enemies.  Each jump reduces that victim's Nature resistance by 25. Affects 5 targets. Your primary target is also consumed by a cyclone, slowing its attack speed by 20% for 12 sec.",
+    "pinBreadcrumb": [
+     "NPC Abilities"
+    ]
+   },
+   {
+    "type": 6,
+    "id": 27648,
+    "name": "Thunderfury",
+    "typeName": "Spell",
+    "icon": "spell_nature_cyclone",
+    "pinTitle": "Spell",
+    "pinDescription": "In the NPC Abilities category.",
+    "pinBreadcrumb": [
+     "NPC Abilities"
+    ]
+   }
+  ]
+ }
+}

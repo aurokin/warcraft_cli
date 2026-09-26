@@ -12,11 +12,11 @@ from urllib.parse import urlencode
 
 import httpx
 from warcraft_api.cache import CacheSettings, CacheTTLConfig, build_cache_store, load_prefixed_cache_settings_from_env
-from warcraft_api.http import DEFAULT_RETRY_ATTEMPTS, request_with_retries
-from warcraft_content.paths import provider_cache_root
+from warcraft_api.http import DEFAULT_RETRY_ATTEMPTS, build_client, request_with_retries
 from warcraft_core.auth import load_provider_auth_state, save_provider_auth_state
-from warcraft_core.env import find_env_file, load_env_file, load_explicit_env_file
-from warcraft_core.paths import provider_env_path
+from warcraft_core.env import find_env_file, read_env_keys
+from warcraft_core.exit_codes import error_code_for_http_status
+from warcraft_core.paths import provider_cache_root, provider_env_path
 from warcraft_core.wow_normalization import normalize_name, normalize_region, primary_realm_slug
 
 from warcraftlogs_cli.sampling_utils import report_is_finished
@@ -1062,7 +1062,7 @@ RETAIL_PROFILE = WarcraftLogsSiteProfile(
     label="Retail / Main",
     root_url="https://www.warcraftlogs.com",
     oauth_authorize_url="https://www.warcraftlogs.com/oauth/authorize",
-    oauth_token_url="https://www.warcraftlogs.com/oauth/token",
+    oauth_token_url="https://www.warcraftlogs.com/oauth/token",  # noqa: S106 - OAuth endpoint URL, not a credential
     api_url="https://www.warcraftlogs.com/api/v2/client",
     user_api_url="https://www.warcraftlogs.com/api/v2/user",
 )
@@ -1072,7 +1072,7 @@ CLASSIC_PROFILE = WarcraftLogsSiteProfile(
     label="Classic",
     root_url="https://classic.warcraftlogs.com",
     oauth_authorize_url="https://classic.warcraftlogs.com/oauth/authorize",
-    oauth_token_url="https://classic.warcraftlogs.com/oauth/token",
+    oauth_token_url="https://classic.warcraftlogs.com/oauth/token",  # noqa: S106 - OAuth endpoint URL, not a credential
     api_url="https://classic.warcraftlogs.com/api/v2/client",
     user_api_url="https://classic.warcraftlogs.com/api/v2/user",
 )
@@ -1082,7 +1082,7 @@ FRESH_PROFILE = WarcraftLogsSiteProfile(
     label="Classic Fresh / Anniversary",
     root_url="https://fresh.warcraftlogs.com",
     oauth_authorize_url="https://fresh.warcraftlogs.com/oauth/authorize",
-    oauth_token_url="https://fresh.warcraftlogs.com/oauth/token",
+    oauth_token_url="https://fresh.warcraftlogs.com/oauth/token",  # noqa: S106 - OAuth endpoint URL, not a credential
     api_url="https://fresh.warcraftlogs.com/api/v2/client",
     user_api_url="https://fresh.warcraftlogs.com/api/v2/user",
 )
@@ -1099,10 +1099,6 @@ _SITE_PROFILE_ALIASES = {
     "anniversary": "fresh",
     "classic-anniversary": "fresh",
 }
-
-
-def list_site_profiles() -> tuple[WarcraftLogsSiteProfile, ...]:
-    return _SITE_PROFILES
 
 
 def normalize_site_profile_key(value: str) -> str:
@@ -1131,6 +1127,15 @@ def saved_user_token_site_key(payload: dict[str, Any]) -> str:
         return normalize_site_profile_key(raw_site)
 
 
+def _token_fingerprint(token: str) -> str:
+    """Stable non-secret account scope for cache keys: a truncated digest of an access token.
+
+    The digest is one-way and never emitted; it only keeps one account's cached user-endpoint
+    responses out of another account's reach.
+    """
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()[:16]
+
+
 @dataclass(frozen=True, slots=True)
 class WarcraftLogsAuthConfig:
     client_id: str | None
@@ -1146,11 +1151,62 @@ def warcraftlogs_provider_env_path() -> str:
     return str(provider_env_path("warcraftlogs"))
 
 
+CLIENT_ID_ENV = "WARCRAFTLOGS_CLIENT_ID"
+CLIENT_SECRET_ENV = "WARCRAFTLOGS_CLIENT_SECRET"  # noqa: S105 - env var name, not a credential
+MANAGED_ENV_KEYS = (CLIENT_ID_ENV, CLIENT_SECRET_ENV)
+
+
+def _first_graphql_error_message(errors: list[Any], operation_name: str | None) -> str:
+    first = errors[0] if errors else None
+    message = first.get("message") if isinstance(first, dict) else None
+    return str(message) if message else f"Warcraft Logs returned GraphQL errors for {operation_name}."
+
+
+def _graphql_error_code(message: str) -> str:
+    """Classify a GraphQL error by its message so unknown ids and permission denials get contract codes.
+
+    Warcraft Logs answers both cases with ``report: null`` plus an error, so the payload shape alone
+    cannot tell "does not exist" (exit 4) from "no permission" (exit 3).
+    """
+    lowered = message.lower()
+    if "does not exist" in lowered or "not found" in lowered or "no such" in lowered:
+        return "not_found"
+    if "permission" in lowered or "not authorized" in lowered or "unauthorized" in lowered:
+        return "auth_failed"
+    return "graphql_error"
+
+
 class WarcraftLogsClientError(RuntimeError):
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
+
+
+def _request(client: httpx.Client, url: str, **kwargs: Any) -> httpx.Response:
+    """``request_with_retries`` with transport and status failures mapped to the shared error vocabulary.
+
+    Every Warcraft Logs HTTP call goes through here so the CLI layer only ever sees
+    ``WarcraftLogsClientError`` and can pick the contract exit code from the error code.
+    """
+    try:
+        return request_with_retries(client, url, **kwargs)
+    except httpx.TimeoutException as exc:
+        raise WarcraftLogsClientError("timeout", f"Warcraft Logs request to {url} timed out: {exc}") from exc
+    except httpx.HTTPStatusError as exc:
+        status = exc.response.status_code
+        code = error_code_for_http_status(status)
+        raise WarcraftLogsClientError(code, f"Warcraft Logs returned HTTP {status} for {url}.") from exc
+    except httpx.RequestError as exc:
+        raise WarcraftLogsClientError("network_error", f"Warcraft Logs request to {url} failed: {type(exc).__name__}: {exc}") from exc
+
+
+def _response_json(response: httpx.Response) -> Any:
+    """The body of a Warcraft Logs response; a body that is not JSON is a classified upstream failure."""
+    try:
+        return response.json()
+    except ValueError as exc:
+        raise WarcraftLogsClientError("invalid_response", f"Warcraft Logs returned a body that is not JSON: {exc}") from exc
 
 
 @dataclass(frozen=True, slots=True)
@@ -1215,46 +1271,54 @@ class EncounterRankingsOptions:
 
 
 def load_warcraftlogs_auth_config(*, start_dir: str | None = None) -> WarcraftLogsAuthConfig:
-    previous_client_id = os.environ.get("WARCRAFTLOGS_CLIENT_ID")
-    previous_client_secret = os.environ.get("WARCRAFTLOGS_CLIENT_SECRET")
-    env_path = load_env_file(start_dir=start_dir, override=True)
-    try:
-        if not (os.getenv("WARCRAFTLOGS_CLIENT_ID") and os.getenv("WARCRAFTLOGS_CLIENT_SECRET")):
-            provider_env_path = warcraftlogs_provider_env_path()
-            if load_explicit_env_file(provider_env_path, override=True) is not None:
-                env_path = provider_env_path
-        client_id = os.getenv("WARCRAFTLOGS_CLIENT_ID")
-        client_secret = os.getenv("WARCRAFTLOGS_CLIENT_SECRET")
-    finally:
-        if previous_client_id is None:
-            os.environ.pop("WARCRAFTLOGS_CLIENT_ID", None)
-        else:
-            os.environ["WARCRAFTLOGS_CLIENT_ID"] = previous_client_id
-        if previous_client_secret is None:
-            os.environ.pop("WARCRAFTLOGS_CLIENT_SECRET", None)
-        else:
-            os.environ["WARCRAFTLOGS_CLIENT_SECRET"] = previous_client_secret
-    return WarcraftLogsAuthConfig(
-        client_id=client_id.strip() if client_id else None,
-        client_secret=client_secret.strip() if client_secret else None,
-        env_file=str(env_path) if env_path is not None else None,
-    )
+    """Resolve the client credentials from .env.local, then the provider env file, then the process environment.
+
+    The first layer with both ``WARCRAFTLOGS_CLIENT_ID`` and ``WARCRAFTLOGS_CLIENT_SECRET`` wins.
+
+    Every layer is a pure read: ``os.environ`` is never mutated, so a concurrent command in the same
+    process cannot observe (or inherit) credentials this call discovered.
+    """
+    layers: list[tuple[str | None, dict[str, str]]] = []
+    local_path = find_env_file(start_dir=start_dir)
+    if local_path is not None:
+        layers.append((str(local_path), read_env_keys(local_path, MANAGED_ENV_KEYS)))
+    provider_path = warcraftlogs_provider_env_path()
+    layers.append((provider_path, read_env_keys(provider_path, MANAGED_ENV_KEYS)))
+    layers.append((None, {key: os.environ[key] for key in MANAGED_ENV_KEYS if os.environ.get(key)}))
+
+    def pair(values: dict[str, str]) -> tuple[str | None, str | None]:
+        client_id = (values.get(CLIENT_ID_ENV) or "").strip() or None
+        client_secret = (values.get(CLIENT_SECRET_ENV) or "").strip() or None
+        return client_id, client_secret
+
+    # A client ID and secret belong to one OAuth client, so the first layer holding a complete
+    # pair wins; halves from different layers are never combined.
+    for source, values in layers:
+        client_id, client_secret = pair(values)
+        if client_id and client_secret:
+            return WarcraftLogsAuthConfig(client_id=client_id, client_secret=client_secret, env_file=source)
+    # No layer is complete: report the highest-precedence layer's half so doctor can say what is
+    # missing, without stitching it to a half from another layer.
+    for _, values in layers:
+        client_id, client_secret = pair(values)
+        if client_id or client_secret:
+            return WarcraftLogsAuthConfig(client_id=client_id, client_secret=client_secret, env_file=None)
+    return WarcraftLogsAuthConfig(client_id=None, client_secret=None, env_file=None)
 
 
-def load_warcraftlogs_cache_settings_from_env() -> tuple[CacheSettings, int, int, int, int, int]:
+def load_warcraftlogs_cache_settings_from_env() -> tuple[CacheSettings, int, int, int, int]:
+    """Cache settings plus the guild, static, report-listing and finished-report TTLs, in that order."""
     settings = load_prefixed_cache_settings_from_env(
         env_prefix="WARCRAFTLOGS",
         default_cache_dir=DEFAULT_CACHE_DIR,
         default_redis_prefix="warcraftlogs_cli",
         ttl_defaults=CacheTTLConfig(
-            search_suggestions=900,
             entity_page_html=300,
             guide_page_html=21600,
             page_html=60,
             report_finished=86400,
         ),
         ttl_env_overrides={
-            "search_suggestions": "WARCRAFTLOGS_METADATA_CACHE_TTL_SECONDS",
             "entity_page_html": "WARCRAFTLOGS_GUILD_CACHE_TTL_SECONDS",
             "guide_page_html": "WARCRAFTLOGS_STATIC_CACHE_TTL_SECONDS",
             "page_html": "WARCRAFTLOGS_REPORT_CACHE_TTL_SECONDS",
@@ -1263,7 +1327,6 @@ def load_warcraftlogs_cache_settings_from_env() -> tuple[CacheSettings, int, int
     )
     return (
         settings,
-        settings.ttls.search_suggestions,
         settings.ttls.entity_page_html,
         settings.ttls.guide_page_html,
         settings.ttls.page_html,
@@ -1289,15 +1352,17 @@ class WarcraftLogsClient:
         self._credential_hint = auth.env_file or str(find_env_file() or ".env.local")
         self._access_token: str | None = None
         self._token_expires_at = 0.0
-        settings, metadata_ttl, guild_ttl, static_ttl, report_ttl, finished_report_ttl = load_warcraftlogs_cache_settings_from_env()
-        self._cache_settings = settings
+        settings, guild_ttl, static_ttl, report_ttl, finished_report_ttl = load_warcraftlogs_cache_settings_from_env()
         self._cache_store = build_cache_store(settings) if settings.enabled else None
-        self._metadata_ttl = metadata_ttl
         self._guild_ttl = guild_ttl
         self._static_ttl = static_ttl
         self._report_ttl = report_ttl
         self._finished_report_ttl = finished_report_ttl
-        self._last_warnings: list[dict[str, Any]] = []
+        self._graphql_warnings: list[dict[str, Any]] = []
+        # Transport tally, reported by sampled payloads so a caller can tell a live scan from one
+        # replayed out of the cache.
+        self._cache_hit_count = 0
+        self._upstream_request_count = 0
 
     def close(self) -> None:
         if self._http_client is not None:
@@ -1312,8 +1377,28 @@ class WarcraftLogsClient:
 
     def _client(self) -> httpx.Client:
         if self._http_client is None:
-            self._http_client = httpx.Client(timeout=self._timeout_seconds, follow_redirects=True)
+            self._http_client = build_client(timeout=self._timeout_seconds)
         return self._http_client
+
+    def _post_graphql(self, url: str, *, token: str, body: dict[str, Any]) -> httpx.Response:
+        """One GraphQL POST, counted so callers can report how much of a payload came from upstream."""
+        self._upstream_request_count += 1
+        return _request(
+            self._client(),
+            url,
+            method="POST",
+            retry_attempts=self._retry_attempts,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            },
+            json=body,
+        )
+
+    @property
+    def transport_counts(self) -> dict[str, int]:
+        """Cache hits and upstream GraphQL calls served so far by this client instance."""
+        return {"cache_hit_count": self._cache_hit_count, "upstream_request_count": self._upstream_request_count}
 
     def _cache_key(self, namespace: str, payload: dict[str, Any]) -> str:
         raw = json.dumps({"site": self._site.key, "namespace": namespace, "payload": payload}, sort_keys=True, separators=(",", ":"))
@@ -1323,9 +1408,9 @@ class WarcraftLogsClient:
         if self._cache_store is None:
             return None
         cached = self._cache_store.get(key)
-        if isinstance(cached, dict):
-            warnings = cached.get(GRAPHQL_WARNINGS_KEY)
-            self._last_warnings = list(warnings) if isinstance(warnings, list) else []
+        if cached is not None:
+            self._cache_hit_count += 1
+        self._record_warnings(cached)
         return cached
 
     def _read_raw_cache(self, key: str) -> Any:
@@ -1334,13 +1419,20 @@ class WarcraftLogsClient:
         cached = self._cache_store.get(key)
         if cached is None:
             return _CACHE_MISS
-        if isinstance(cached, dict):
-            warnings = cached.get(GRAPHQL_WARNINGS_KEY)
-            self._last_warnings = list(warnings) if isinstance(warnings, list) else []
+        self._cache_hit_count += 1
+        self._record_warnings(cached)
         return cached
 
+    def _record_warnings(self, payload: Any) -> None:
+        """Add a response's partial-error warnings to the tally the command reports at emit time."""
+        warnings = payload.get(GRAPHQL_WARNINGS_KEY) if isinstance(payload, dict) else None
+        if isinstance(warnings, list):
+            self._graphql_warnings.extend(warnings)
+
     def _write_cache(self, key: str, payload: Any, *, ttl_seconds: int) -> None:
-        if self._cache_store is None:
+        # A partial-error response is a transient upstream failure: caching it (for 24h on a finished
+        # report) would keep serving the gap after Warcraft Logs recovers.
+        if self._cache_store is None or (isinstance(payload, dict) and GRAPHQL_WARNINGS_KEY in payload):
             return
         self._cache_store.set(key, payload, ttl_seconds=ttl_seconds)
 
@@ -1414,7 +1506,7 @@ class WarcraftLogsClient:
         shared_token = self._load_shared_client_token(now=now)
         if shared_token is not None:
             return shared_token
-        response = request_with_retries(
+        response = _request(
             self._client(),
             self._site.oauth_token_url,
             method="POST",
@@ -1422,7 +1514,7 @@ class WarcraftLogsClient:
             auth=(self._client_id, self._client_secret),
             retry_attempts=self._retry_attempts,
         )
-        payload = response.json()
+        payload = _response_json(response)
         token = payload.get("access_token")
         expires_in = payload.get("expires_in", 3600)
         if not isinstance(token, str) or not token:
@@ -1476,8 +1568,9 @@ class WarcraftLogsClient:
         return self._site
 
     @property
-    def last_warnings(self) -> list[dict[str, Any]]:
-        return list(self._last_warnings)
+    def graphql_warnings(self) -> list[dict[str, Any]]:
+        """Every partial-error warning this client has seen, in request order. One client serves one command."""
+        return list(self._graphql_warnings)
 
     @property
     def client_id(self) -> str:
@@ -1507,7 +1600,7 @@ class WarcraftLogsClient:
 
     def exchange_authorization_code(self, *, code: str, redirect_uri: str) -> dict[str, Any]:
         self._require_client_credentials()
-        response = request_with_retries(
+        response = _request(
             self._client(),
             self._site.oauth_token_url,
             method="POST",
@@ -1519,14 +1612,14 @@ class WarcraftLogsClient:
             auth=(self._client_id, self._client_secret),
             retry_attempts=self._retry_attempts,
         )
-        payload = response.json()
+        payload = _response_json(response)
         if not isinstance(payload, dict):
             raise WarcraftLogsClientError("auth_failed", "Warcraft Logs returned an invalid authorization-code token response.")
         return payload
 
     def exchange_pkce_code(self, *, code: str, redirect_uri: str, code_verifier: str) -> dict[str, Any]:
         self._require_client_credentials()
-        response = request_with_retries(
+        response = _request(
             self._client(),
             self._site.oauth_token_url,
             method="POST",
@@ -1540,7 +1633,7 @@ class WarcraftLogsClient:
             auth=(self._client_id, self._client_secret),
             retry_attempts=self._retry_attempts,
         )
-        payload = response.json()
+        payload = _response_json(response)
         if not isinstance(payload, dict):
             raise WarcraftLogsClientError("auth_failed", "Warcraft Logs returned an invalid PKCE token response.")
         return payload
@@ -1557,8 +1650,12 @@ class WarcraftLogsClient:
         ttl_resolver: Callable[[dict[str, Any]], int] | None = None,
     ) -> dict[str, Any]:
         request_variables = _prune_null_variables(variables)
+        token = self._user_token()
+        # User-endpoint responses are account-scoped (private reports, saved identity), so the
+        # cache entry must belong to the token that fetched it and never to "whoever is logged in".
         cache_payload = {
             "endpoint": "user",
+            "account": _token_fingerprint(token),
             "operation_name": operation_name,
             "query": query,
             "variables": request_variables,
@@ -1568,51 +1665,44 @@ class WarcraftLogsClient:
             cached = self._read_cache(cache_key)
             if isinstance(cached, dict):
                 return cached
-        response = request_with_retries(
-            self._client(),
-            self._site.user_api_url,
-            method="POST",
-            retry_attempts=self._retry_attempts,
-            headers={
-                "Authorization": f"Bearer {self._user_token()}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "operationName": operation_name,
-                "query": query,
-                "variables": request_variables,
-            },
+        data = self._uncached_graphql_user(
+            operation_name=operation_name,
+            query=query,
+            variables=request_variables,
+            token=token,
         )
-        data = self._consume_graphql_response(response.json(), operation_name=operation_name, endpoint="user")
         if use_cache:
             write_ttl = ttl_resolver(data) if ttl_resolver is not None else ttl_seconds
             self._write_cache(cache_key, data, ttl_seconds=write_ttl)
         return data
 
-    def current_user(self) -> dict[str, Any]:
-        data = self._graphql_user(
-            operation_name="CurrentUser",
-            query=CURRENT_USER_QUERY,
-            variables=None,
-            namespace="user_current",
-            ttl_seconds=self._metadata_ttl,
+    def _uncached_graphql_user(
+        self,
+        *,
+        operation_name: str | None,
+        query: str,
+        variables: dict[str, Any] | None,
+        token: str,
+    ) -> dict[str, Any]:
+        """One user-endpoint GraphQL call, straight to Warcraft Logs."""
+        response = self._post_graphql(
+            self._site.user_api_url,
+            token=token,
+            body={
+                "operationName": operation_name,
+                "query": query,
+                "variables": variables,
+            },
         )
-        user_data = data.get("userData")
-        if not isinstance(user_data, dict):
-            raise WarcraftLogsClientError("not_found", "Warcraft Logs user data was missing from the current-user response.")
-        current_user = user_data.get("currentUser")
-        if not isinstance(current_user, dict):
-            raise WarcraftLogsClientError("not_found", "Warcraft Logs did not return the current user for the saved token.")
-        return current_user
+        return self._consume_graphql_response(_response_json(response), operation_name=operation_name, endpoint="user")
 
-    def probe_live_user_api(self) -> dict[str, Any]:
-        data = self._graphql_user(
+    def current_user(self) -> dict[str, Any]:
+        """The account behind the saved user token. Never cached: identity must be live, not remembered."""
+        data = self._uncached_graphql_user(
             operation_name="CurrentUser",
             query=CURRENT_USER_QUERY,
-            variables=None,
-            namespace="user_current",
-            ttl_seconds=self._metadata_ttl,
-            use_cache=False,
+            variables={},
+            token=self._user_token(),
         )
         user_data = data.get("userData")
         if not isinstance(user_data, dict):
@@ -1635,29 +1725,23 @@ class WarcraftLogsClient:
                 "invalid_response",
                 f"Unexpected Warcraft Logs {label}response shape for {operation_name}.",
             )
-        errors = payload.get("errors")
-        data = payload.get("data")
-        has_data_dict = isinstance(data, dict) and bool(data)
-        has_useful_data = has_data_dict and _response_has_useful_value(data)
-        has_errors = isinstance(errors, list) and bool(errors)
-        if has_errors and not has_useful_data:
-            first = errors[0]
-            message = first.get("message") if isinstance(first, dict) else None
-            raise WarcraftLogsClientError(
-                "graphql_error",
-                message or f"Warcraft Logs returned GraphQL errors for {operation_name}.",
-            )
-        if not has_data_dict:
+        errors = payload.get("errors") if isinstance(payload.get("errors"), list) else []
+        raw_data = payload.get("data")
+        data: dict[str, Any] | None = raw_data if isinstance(raw_data, dict) else None
+        has_useful_data = data is not None and bool(data) and _response_has_useful_value(data)
+        if errors and not has_useful_data:
+            message = _first_graphql_error_message(errors, operation_name)
+            raise WarcraftLogsClientError(_graphql_error_code(message), message)
+        if not data:
             label = "user " if endpoint == "user" else ""
             raise WarcraftLogsClientError(
                 "invalid_response",
                 f"Warcraft Logs returned no {label}data for {operation_name}.",
             )
-        if has_errors:
+        if errors:
             warnings = [_normalize_graphql_error(error) for error in errors]
-            self._last_warnings = warnings
+            self._graphql_warnings.extend(warnings)
             return {**data, GRAPHQL_WARNINGS_KEY: warnings}
-        self._last_warnings = []
         return data
 
     def _consume_raw_graphql_response(
@@ -1673,35 +1757,25 @@ class WarcraftLogsClient:
                 "invalid_response",
                 f"Unexpected Warcraft Logs {label}response shape for {operation_name}.",
             )
-        errors = payload.get("errors")
+        errors = payload.get("errors") if isinstance(payload.get("errors"), list) else []
         data = payload.get("data")
-        has_errors = isinstance(errors, list) and bool(errors)
-        if "data" not in payload and has_errors:
-            first = errors[0]
-            message = first.get("message") if isinstance(first, dict) else None
-            raise WarcraftLogsClientError(
-                "graphql_error",
-                message or f"Warcraft Logs returned GraphQL errors for {operation_name}.",
-            )
         if "data" not in payload:
+            if errors:
+                message = _first_graphql_error_message(errors, operation_name)
+                raise WarcraftLogsClientError(_graphql_error_code(message), message)
             label = "user " if endpoint == "user" else ""
             raise WarcraftLogsClientError(
                 "invalid_response",
                 f"Warcraft Logs returned no {label}data for {operation_name}.",
             )
-        if has_errors:
+        if errors:
             if data is None:
-                first = errors[0]
-                message = first.get("message") if isinstance(first, dict) else None
-                raise WarcraftLogsClientError(
-                    "graphql_error",
-                    message or f"Warcraft Logs returned GraphQL errors for {operation_name}.",
-                )
+                message = _first_graphql_error_message(errors, operation_name)
+                raise WarcraftLogsClientError(_graphql_error_code(message), message)
             warnings = [_normalize_graphql_error(error) for error in errors]
-            self._last_warnings = warnings
-            return {**data, GRAPHQL_WARNINGS_KEY: warnings} if isinstance(data, dict) else data
-        self._last_warnings = []
-        return data
+            self._graphql_warnings.extend(warnings)
+            return {**data, GRAPHQL_WARNINGS_KEY: warnings} if isinstance(data, dict) else None
+        return data if isinstance(data, dict) else None
 
     def _raw_graphql_request(
         self,
@@ -1725,25 +1799,19 @@ class WarcraftLogsClient:
         if use_cache:
             cached = self._read_raw_cache(cache_key)
             if cached is not _CACHE_MISS:
-                return cached
+                return cached if isinstance(cached, dict) else None
         url = self._site.user_api_url if endpoint == "user" else self._site.api_url
         token = self._user_token() if endpoint == "user" else self._token()
-        response = request_with_retries(
-            self._client(),
+        response = self._post_graphql(
             url,
-            method="POST",
-            retry_attempts=self._retry_attempts,
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json",
-            },
-            json={
+            token=token,
+            body={
                 "operationName": operation_name,
                 "query": query,
                 "variables": variables or {},
             },
         )
-        data = self._consume_raw_graphql_response(response.json(), operation_name=operation_name, endpoint=endpoint)
+        data = self._consume_raw_graphql_response(_response_json(response), operation_name=operation_name, endpoint=endpoint)
         if use_cache:
             self._write_cache(cache_key, data, ttl_seconds=ttl_seconds)
         return data
@@ -1782,22 +1850,16 @@ class WarcraftLogsClient:
             cached = self._read_cache(cache_key)
             if isinstance(cached, dict):
                 return cached
-        response = request_with_retries(
-            self._client(),
+        response = self._post_graphql(
             self._site.api_url,
-            method="POST",
-            retry_attempts=self._retry_attempts,
-            headers={
-                "Authorization": f"Bearer {self._token()}",
-                "Content-Type": "application/json",
-            },
-            json={
+            token=self._token(),
+            body={
                 "operationName": operation_name,
                 "query": query,
                 "variables": request_variables,
             },
         )
-        data = self._consume_graphql_response(response.json(), operation_name=operation_name, endpoint="client")
+        data = self._consume_graphql_response(_response_json(response), operation_name=operation_name, endpoint="client")
         if use_cache:
             write_ttl = ttl_resolver(data) if ttl_resolver is not None else ttl_seconds
             self._write_cache(cache_key, data, ttl_seconds=write_ttl)
@@ -1919,7 +1981,7 @@ class WarcraftLogsClient:
     def _report_finish_ttl_resolver(self, *, ttl_override: int | None = None) -> Callable[[dict[str, Any]], int]:
         """Resolve the cache TTL from a report response's finish state.
 
-        Finished reports (``endTime > 0``) use the finished TTL (or an explicit
+        Finished reports (``report_is_finished``) use the finished TTL (or an explicit
         ``ttl_override``); live/unknown reports use the short report TTL so a live
         report is never stored under the finished TTL. By design ``ttl_override``
         scopes the *finished* TTL only — it is the "how long to keep this finished
@@ -2337,7 +2399,12 @@ class WarcraftLogsClient:
         return reports
 
     def report_fights(
-        self, *, code: str, difficulty: int | None = None, allow_unlisted: bool = False, ttl_override: int | None = None,
+        self,
+        *,
+        code: str,
+        difficulty: int | None = None,
+        allow_unlisted: bool = False,
+        ttl_override: int | None = None,
     ) -> dict[str, Any]:
         return self._report_lookup(
             operation_name="ReportFights",

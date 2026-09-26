@@ -8,9 +8,9 @@ import secrets
 import shlex
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, NoReturn
 from urllib.parse import parse_qs, urlparse
 
 import typer
@@ -21,6 +21,25 @@ from warcraft_core.auth import (
     provider_auth_status,
     save_provider_auth_state,
 )
+from warcraft_core.cli import (
+    CompactMaxCharsOption,
+    CompactOption,
+    FieldsOption,
+    FieldsStrictOption,
+    PrettyOption,
+    ProfileOption,
+    cfg_as,
+    command_path,
+    configure,
+    emit,
+    fail,
+    guarded_run,
+)
+from warcraft_core.cli import (
+    RuntimeConfig as BaseRuntimeConfig,
+)
+from warcraft_core.envelope import success_envelope
+from warcraft_core.exit_codes import EXIT_AUTH, EXIT_USAGE, exit_code_for
 from warcraft_core.identity import (
     ability_identity_payload,
     class_spec_identity_payload,
@@ -31,11 +50,14 @@ from warcraft_core.identity import (
     talent_transport_packet_payload,
     validate_talent_transport_packet,
 )
-from warcraft_core.output import emit
+from warcraft_core.output import DEFAULT_COMPACT_MAX_CHARS
 from warcraft_core.paths import provider_state_path
-from warcraft_core.talent_transport import validate_talent_tree_transport
+from warcraft_core.talent_transport import TalentTransportBackend, validate_talent_tree_transport
 from warcraft_core.wow_normalization import normalize_region
 
+from warcraftlogs_cli.boss_kills import (
+    CrossReportScope,
+)
 from warcraftlogs_cli.boss_kills import (
     boss_kills_payload as _boss_kills_payload,
 )
@@ -53,6 +75,9 @@ from warcraftlogs_cli.boss_kills import (
 )
 from warcraftlogs_cli.boss_kills import (
     sampled_cross_report_freshness as _sampled_cross_report_freshness,
+)
+from warcraftlogs_cli.boss_kills import (
+    sampled_dedupe_notes as _sampled_dedupe_notes,
 )
 from warcraftlogs_cli.boss_kills import (
     sampled_sample_scope as _sampled_sample_scope,
@@ -75,6 +100,10 @@ from warcraftlogs_cli.client import (
     saved_user_token_site_key,
     warcraftlogs_provider_env_path,
 )
+from warcraftlogs_cli.provider import doctor as provider_doctor
+from warcraftlogs_cli.provider import payload_body
+from warcraftlogs_cli.provider import resolve as provider_resolve
+from warcraftlogs_cli.provider import search as provider_search
 from warcraftlogs_cli.report_payloads import (
     fight_payload as _fight_payload,
 )
@@ -96,6 +125,7 @@ from warcraftlogs_cli.report_payloads import (
 from warcraftlogs_cli.sampling_utils import (
     boss_matches as _boss_matches,
 )
+from warcraftlogs_cli.sampling_utils import dict_at, list_at
 from warcraftlogs_cli.sampling_utils import (
     normalize_match_text as _normalize_match_text,
 )
@@ -114,7 +144,19 @@ auth_app = typer.Typer(add_completion=False, help="Warcraft Logs authentication 
 app.add_typer(auth_app, name="auth")
 
 FIGHT_ID_OPTION = typer.Option(None, "--fight-id", help="Optional fight ID filter. Repeat as needed.")
-REPORT_CODE_PATTERN = re.compile(r"^(?=.*[A-Za-z])(?=.*\d)[A-Za-z0-9]{8,32}$")
+_INCLUDE_RAW_HELP = (
+    "Attach the untyped Warcraft Logs table entry to every row. Off by default: the raw entries "
+    "carry full gear/pet/ability detail and dominate the payload size."
+)
+# Warcraft Logs report codes are 16 alphanumerics with mixed case and often no digit (JVFTxcKCqrvpaAzD).
+# A code must mix upper and lower case or letters and digits, so a slug such as frostdeathknight or a
+# guild name is never read as a code.
+REPORT_CODE_PATTERN = re.compile(
+    r"^(?:(?=.*[a-z])(?=.*[A-Z])[A-Za-z0-9]{16}|(?=.*[A-Za-z])(?=.*\d)[A-Za-z0-9]{8,32})$"
+)
+# A bare word made of capitalised words (HavocDemonHunter) is a name, not a code. Only bare words are
+# checked: a random code has this shape about once in 1750, and a /reports/<code> URL path is a code.
+CAMEL_CASE_NAME_PATTERN = re.compile(r"(?:[A-Z][a-z]+)+")
 RAW_GRAPHQL_VAR_OPTION = typer.Option(
     [],
     "--var",
@@ -224,8 +266,9 @@ fragment TypeRef on __Type {
 
 
 @dataclass(slots=True)
-class RuntimeConfig:
-    pretty: bool = False
+class RuntimeConfig(BaseRuntimeConfig):
+    """Shared runtime config plus the Warcraft Logs ``--site`` profile."""
+
     site_profile: WarcraftLogsSiteProfile = RETAIL_PROFILE
 
 
@@ -237,35 +280,32 @@ class ReportReference:
 
 
 def _cfg(ctx: typer.Context) -> RuntimeConfig:
-    obj = ctx.obj
-    if isinstance(obj, RuntimeConfig):
-        return obj
-    return RuntimeConfig()
+    return cfg_as(ctx, RuntimeConfig)
 
 
-def _emit(
-    ctx: typer.Context,
-    payload: dict[str, Any],
-    *,
-    err: bool = False,
-    client: Any = None,
-    command: str | None = None,
-) -> None:
+def _emit(ctx: typer.Context, payload: dict[str, Any], *, client: Any = None) -> None:
+    """Emit a command's flat payload as the envelope: its fields go under ``data``, once.
+
+    A payload may set the envelope's ``kind``, ``query`` and ``provenance``; ``kind`` defaults to
+    the leaf command (``auth status`` is kind ``status``). ``command`` is the full subcommand path,
+    the same label a failure carries. Error envelopes go to stderr through ``_fail``, never here.
+    """
     if client is not None:
         payload = _with_warnings(payload, client)
-    if not err and payload.get("ok") is not False:
-        from warcraftlogs_cli.payload_envelope import apply_payload_envelope
-        from warcraftlogs_cli.payload_keys_registry import ALL_COMMANDS
-
-        ctx_command = getattr(ctx, "command", None)
-        command_name = command or (ctx_command.name if ctx_command is not None else None)
-        if command_name in ALL_COMMANDS:
-            payload = apply_payload_envelope(command_name, payload)
-    emit(payload, pretty=_cfg(ctx).pretty, err=err)
+    command = command_path(ctx)
+    envelope = success_envelope(
+        provider="warcraftlogs",
+        command=command,
+        kind=payload.get("kind") or command.rsplit(" ", 1)[-1].replace("-", "_"),
+        data=payload_body(payload),
+        query=payload.get("query"),
+        provenance=payload.get("provenance"),
+    )
+    emit(ctx, envelope)
 
 
 def _with_warnings(payload: dict[str, Any], client: Any) -> dict[str, Any]:
-    warnings = list(getattr(client, "last_warnings", []) or [])
+    warnings = list(getattr(client, "graphql_warnings", []) or [])
     if not warnings:
         return payload
     notes = list(payload.get("notes") or [])
@@ -273,9 +313,46 @@ def _with_warnings(payload: dict[str, Any], client: Any) -> dict[str, Any]:
     return {**payload, "notes": notes, "graphql_warnings": warnings}
 
 
-def _fail(ctx: typer.Context, code: str, message: str, *, status: int = 1) -> None:
-    _emit(ctx, {"ok": False, "error": {"code": code, "message": message}}, err=True)
-    raise typer.Exit(status)
+# Warcraft Logs error codes that mean "the caller is not authorised", on top of the shared vocabulary.
+# `site_profile_mismatch` belongs here: the saved token exists but is not usable for the selected site.
+_AUTH_ERROR_CODES = frozenset(
+    {
+        "missing_client_credentials",
+        "missing_public_auth",
+        "missing_user_auth",
+        "site_profile_mismatch",
+        "user_token_expired",
+    }
+)
+
+
+# Rejected or contradictory command input is a usage error (exit 2), like Click's own parse failures.
+# Keep every locally-raised input code here: an omission silently downgrades the command to exit 1.
+_USAGE_ERROR_CODES = frozenset(
+    {
+        "ambiguous_boss",
+        "boss_scope_mismatch",
+        "invalid_variables",
+        "missing_boss",
+        "missing_query",
+        "missing_scope",
+        "missing_spec",
+        "missing_state",
+        "redirect_uri_mismatch",
+        "state_mismatch",
+    }
+)
+
+
+def _fail(ctx: typer.Context, code: str, message: str, *, details: dict[str, Any] | None = None) -> NoReturn:
+    """Fail with the Warcraft Logs exit-code mapping."""
+    if code in _AUTH_ERROR_CODES:
+        exit_code = EXIT_AUTH
+    elif code in _USAGE_ERROR_CODES:
+        exit_code = EXIT_USAGE
+    else:
+        exit_code = exit_code_for(code)
+    fail(ctx, code, message, exit_code=exit_code, details=details)
 
 
 def _load_graphql_query(ctx: typer.Context, query: str | None, *, introspect: bool) -> str:
@@ -400,21 +477,28 @@ def _graphql_variable_is_list(graphql_type: str | None) -> bool:
     return isinstance(graphql_type, str) and graphql_type.strip().startswith("[")
 
 
+@dataclass(frozen=True, slots=True)
+class _GraphqlScope:
+    """Scope values a raw GraphQL call can inject into the variables its operation declares."""
+
+    report_code: str | None = None
+    fight_ids: list[int] | None = None
+    encounter_id: int | None = None
+    start_time: float | None = None
+    end_time: float | None = None
+    difficulty: int | None = None
+    zone_id: int | None = None
+    source_id: int | None = None
+    target_id: int | None = None
+    ability_id: int | None = None
+    allow_unlisted: bool = False
+
+
 def _inject_graphql_scope_helpers(
     variables: dict[str, Any],
     *,
     declared_variables: dict[str, str],
-    report_code: str | None,
-    fight_ids: list[int] | None,
-    encounter_id: int | None,
-    start_time: float | None,
-    end_time: float | None,
-    difficulty: int | None,
-    zone_id: int | None,
-    source_id: int | None,
-    target_id: int | None,
-    ability_id: int | None,
-    allow_unlisted: bool,
+    scope: _GraphqlScope,
 ) -> dict[str, Any]:
     merged = dict(variables)
 
@@ -422,21 +506,21 @@ def _inject_graphql_scope_helpers(
         if name in declared_variables and name not in merged and value is not None:
             merged[name] = value
 
-    inject("code", report_code)
-    if fight_ids:
+    inject("code", scope.report_code)
+    if scope.fight_ids:
         if "fightIDs" in declared_variables and "fightIDs" not in merged:
-            merged["fightIDs"] = list(fight_ids)
+            merged["fightIDs"] = list(scope.fight_ids)
         elif "fightID" in declared_variables and "fightID" not in merged:
-            merged["fightID"] = fight_ids[0]
-    inject("encounterID", encounter_id)
-    inject("startTime", start_time)
-    inject("endTime", end_time)
-    inject("difficulty", difficulty)
-    inject("zoneID", zone_id)
-    inject("sourceID", source_id)
-    inject("targetID", target_id)
-    inject("abilityID", ability_id)
-    if allow_unlisted:
+            merged["fightID"] = scope.fight_ids[0]
+    inject("encounterID", scope.encounter_id)
+    inject("startTime", scope.start_time)
+    inject("endTime", scope.end_time)
+    inject("difficulty", scope.difficulty)
+    inject("zoneID", scope.zone_id)
+    inject("sourceID", scope.source_id)
+    inject("targetID", scope.target_id)
+    inject("abilityID", scope.ability_id)
+    if scope.allow_unlisted:
         inject("allowUnlisted", True)
 
     for name, graphql_type in declared_variables.items():
@@ -450,7 +534,6 @@ def _validated_transport_packet(ctx: typer.Context, packet: Any, *, command_name
         return validate_talent_transport_packet(packet)
     except ValueError as exc:
         _fail(ctx, "invalid_transport_packet", f"{command_name} produced an invalid talent transport packet: {exc}")
-        raise AssertionError("unreachable") from exc
 
 
 
@@ -553,12 +636,11 @@ def _normalize_encounter_ranking_spec_name(value: str | None) -> str | None:
 def _client(ctx: typer.Context) -> WarcraftLogsClient:
     try:
         return WarcraftLogsClient(site=_cfg(ctx).site_profile)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         _fail(ctx, "invalid_runtime_config", _runtime_error_message(str(exc)))
-        raise AssertionError("unreachable") from exc
 
 
-def _handle_client_error(ctx: typer.Context, exc: WarcraftLogsClientError) -> None:
+def _handle_client_error(ctx: typer.Context, exc: WarcraftLogsClientError) -> NoReturn:
     _fail(ctx, exc.code, exc.message)
 
 
@@ -717,7 +799,7 @@ def _site_profile_payload(site: WarcraftLogsSiteProfile) -> dict[str, Any]:
 def _runtime_access_payload(site: WarcraftLogsSiteProfile) -> dict[str, Any]:
     try:
         client = WarcraftLogsClient(site=site)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         return {
             "ready": False,
             "reason": "invalid_runtime_config",
@@ -766,7 +848,7 @@ def _public_api_access_payload(
                 "validation": "live",
                 "probe": "rate_limit",
             }
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             return _probe_failed_payload(
                 mode="client_credentials",
                 validation="live",
@@ -842,7 +924,7 @@ def _user_api_access_payload(
         client: WarcraftLogsClient | None = None
         try:
             client = WarcraftLogsClient(site=site)
-            client.probe_live_user_api()
+            client.current_user()
         except WarcraftLogsClientError as exc:
             return {
                 "ready": False,
@@ -854,7 +936,7 @@ def _user_api_access_payload(
                 "scopes": scopes,
                 "scope_warning": scope_warning,
             }
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             failure = _probe_failed_payload(
                 mode=str(auth_mode) if isinstance(auth_mode, str) else None,
                 validation="live",
@@ -1023,7 +1105,7 @@ def _doctor_payload(*, live: bool, site: WarcraftLogsSiteProfile) -> dict[str, A
 
 
 def _zone_payload(zone: dict[str, Any]) -> dict[str, Any]:
-    expansion = zone.get("expansion") if isinstance(zone.get("expansion"), dict) else {}
+    expansion = dict_at(zone, "expansion")
     difficulties = zone.get("difficulties")
     encounters = zone.get("encounters")
     return {
@@ -1057,15 +1139,15 @@ def _zone_payload(zone: dict[str, Any]) -> dict[str, Any]:
                 "compact_name": partition.get("compactName"),
                 "default": partition.get("default"),
             }
-            for partition in (zone.get("partitions") if isinstance(zone.get("partitions"), list) else [])
+            for partition in (list_at(zone, "partitions"))
             if isinstance(partition, dict)
         ],
     }
 
 
 def _encounter_payload(encounter: dict[str, Any]) -> dict[str, Any]:
-    zone = encounter.get("zone") if isinstance(encounter.get("zone"), dict) else {}
-    expansion = zone.get("expansion") if isinstance(zone.get("expansion"), dict) else {}
+    zone = dict_at(encounter, "zone")
+    expansion = dict_at(zone, "expansion")
     return {
         "id": encounter.get("id"),
         "name": encounter.get("name"),
@@ -1109,10 +1191,10 @@ def _rank_payload(rank: dict[str, Any] | None) -> dict[str, Any] | None:
 
 
 def _guild_payload(guild: dict[str, Any]) -> dict[str, Any]:
-    faction = guild.get("faction") if isinstance(guild.get("faction"), dict) else {}
-    server = guild.get("server") if isinstance(guild.get("server"), dict) else {}
-    zone_ranking = guild.get("zoneRanking") if isinstance(guild.get("zoneRanking"), dict) else {}
-    progress = zone_ranking.get("progress") if isinstance(zone_ranking.get("progress"), dict) else {}
+    faction = dict_at(guild, "faction")
+    server = dict_at(guild, "server")
+    zone_ranking = dict_at(guild, "zoneRanking")
+    progress = dict_at(zone_ranking, "progress")
     tags = guild.get("tags")
     return {
         "id": guild.get("id"),
@@ -1157,8 +1239,8 @@ def _rank_positions_payload(positions: dict[str, Any] | None) -> dict[str, Any] 
 
 
 def _guild_rankings_payload(guild: dict[str, Any]) -> dict[str, Any]:
-    server = guild.get("server") if isinstance(guild.get("server"), dict) else {}
-    zone_ranking = guild.get("zoneRanking") if isinstance(guild.get("zoneRanking"), dict) else {}
+    server = dict_at(guild, "server")
+    zone_ranking = dict_at(guild, "zoneRanking")
     return {
         "id": guild.get("id"),
         "name": guild.get("name"),
@@ -1188,8 +1270,8 @@ def _pagination_payload(value: dict[str, Any] | None) -> dict[str, Any] | None:
 
 
 def _guild_member_payload(character: dict[str, Any]) -> dict[str, Any]:
-    faction = character.get("faction") if isinstance(character.get("faction"), dict) else {}
-    server = character.get("server") if isinstance(character.get("server"), dict) else {}
+    faction = dict_at(character, "faction")
+    server = dict_at(character, "server")
     return {
         "id": character.get("id"),
         "canonical_id": character.get("canonicalID"),
@@ -1204,9 +1286,9 @@ def _guild_member_payload(character: dict[str, Any]) -> dict[str, Any]:
 
 
 def _guild_members_payload(guild: dict[str, Any]) -> dict[str, Any]:
-    server = guild.get("server") if isinstance(guild.get("server"), dict) else {}
-    members = guild.get("members") if isinstance(guild.get("members"), dict) else {}
-    rows = [row for row in (members.get("data") if isinstance(members.get("data"), list) else []) if isinstance(row, dict)]
+    server = dict_at(guild, "server")
+    members = dict_at(guild, "members")
+    rows = [row for row in (list_at(members, "data")) if isinstance(row, dict)]
     return {
         "id": guild.get("id"),
         "name": guild.get("name"),
@@ -1236,13 +1318,13 @@ def _attendance_player_payload(player: dict[str, Any]) -> dict[str, Any]:
 
 
 def _guild_attendance_payload(guild: dict[str, Any]) -> dict[str, Any]:
-    server = guild.get("server") if isinstance(guild.get("server"), dict) else {}
-    attendance = guild.get("attendance") if isinstance(guild.get("attendance"), dict) else {}
-    rows = [row for row in (attendance.get("data") if isinstance(attendance.get("data"), list) else []) if isinstance(row, dict)]
+    server = dict_at(guild, "server")
+    attendance = dict_at(guild, "attendance")
+    rows = [row for row in (list_at(attendance, "data")) if isinstance(row, dict)]
     attendance_rows = []
     for row in rows:
-        zone = row.get("zone") if isinstance(row.get("zone"), dict) else {}
-        players = [player for player in (row.get("players") if isinstance(row.get("players"), list) else []) if isinstance(player, dict)]
+        zone = dict_at(row, "zone")
+        players = [player for player in (list_at(row, "players")) if isinstance(player, dict)]
         attendance_rows.append(
             {
                 "code": row.get("code"),
@@ -1270,19 +1352,20 @@ def _guild_attendance_payload(guild: dict[str, Any]) -> dict[str, Any]:
 
 
 def _character_payload(character: dict[str, Any]) -> dict[str, Any]:
-    faction = character.get("faction") if isinstance(character.get("faction"), dict) else {}
-    server = character.get("server") if isinstance(character.get("server"), dict) else {}
+    faction = dict_at(character, "faction")
+    server = dict_at(character, "server")
     guilds = character.get("guilds")
     normalized_guilds: list[dict[str, Any]] = []
     if isinstance(guilds, list):
         for guild in guilds:
             if not isinstance(guild, dict):
                 continue
+            guild_server = dict_at(guild, "server")
             normalized_guilds.append(
                 {
                     "id": guild.get("id"),
                     "name": guild.get("name"),
-                    "server": _server_payload(guild.get("server")) if isinstance(guild.get("server"), dict) else None,
+                    "server": _server_payload(guild_server) if guild_server else None,
                 }
             )
     return {
@@ -1326,12 +1409,13 @@ def _report_discovery_hint(query: str, *, site: WarcraftLogsSiteProfile) -> dict
             "Use an explicit report URL or a bare report code."
         ),
         "supported_inputs": [
-            f"{site.root_url}/reports/<code>#fight=<id>",
+            f"{site.root_url}/reports/<code>?fight=<id> (or #fight=<id>)",
             "<report_code>",
         ],
+        # Placeholders are bare words, so each command stays a valid shell line once filled in.
         "suggested_commands": [
-            f"{command_prefix} report <report_code>",
-            f"{command_prefix} report-encounter <report_code> --fight-id <id>",
+            f"{command_prefix} report REPORT_CODE",
+            f"{command_prefix} report-encounter REPORT_CODE --fight-id FIGHT_ID",
         ],
     }
 
@@ -1353,8 +1437,8 @@ def _parse_report_reference(reference: str, *, explicit_fight_id: int | None) ->
             code = parts[reports_index + 1]
         except (ValueError, IndexError):
             raise ValueError("Could not extract a Warcraft Logs report code from the provided URL.") from None
-        fragments = parse_qs(parsed.fragment)
-        fight_values = fragments.get("fight") or []
+        # Warcraft Logs writes the fight as ``?fight=N`` or ``#fight=N``; the query string wins.
+        fight_values = parse_qs(parsed.query).get("fight") or parse_qs(parsed.fragment).get("fight") or []
         if fight_values:
             try:
                 parsed_fight_id = int(fight_values[0])
@@ -1375,6 +1459,8 @@ def _explicit_report_reference(query: str) -> ReportReference | None:
     except ValueError:
         return None
     if not REPORT_CODE_PATTERN.fullmatch(ref.code):
+        return None
+    if ref.source_url is None and CAMEL_CASE_NAME_PATTERN.fullmatch(ref.code):
         return None
     return ref
 
@@ -1454,8 +1540,21 @@ def _report_resolve_payload(query: str, *, ref: ReportReference | None, site: Wa
     }
 
 
-def _kill_type_for_fight(fight: dict[str, Any]) -> str:
+def _fight_encounter_id(fight: dict[str, Any]) -> int | None:
+    """The fight's boss encounter ID; ``None`` for a trash fight, which Warcraft Logs reports as 0."""
+    encounter_id = fight.get("encounterID")
+    return encounter_id if isinstance(encounter_id, int) and encounter_id > 0 else None
+
+
+def _kill_type_for_fight(fight: dict[str, Any]) -> str | None:
+    """Kills or Wipes for a boss fight. A trash fight is neither, so its slice carries no kill filter."""
+    if _fight_encounter_id(fight) is None:
+        return None
     return "Kills" if fight.get("kill") else "Wipes"
+
+
+# Report reference, report, selected fight, and the encounter the fight belongs to (when known).
+_EncounterScope = tuple[ReportReference, dict[str, Any], dict[str, Any], dict[str, Any] | None]
 
 
 def _resolve_encounter_scope(
@@ -1465,15 +1564,14 @@ def _resolve_encounter_scope(
     reference: str,
     fight_id: int | None,
     allow_unlisted: bool,
-) -> tuple[ReportReference, dict[str, Any], dict[str, Any], dict[str, Any] | None]:
+) -> _EncounterScope:
     try:
         ref = _parse_report_reference(reference, explicit_fight_id=fight_id)
     except ValueError as exc:
         _fail(ctx, "invalid_query", str(exc))
-        raise AssertionError("unreachable") from exc
     report = client.report(code=ref.code, allow_unlisted=allow_unlisted)
     fights_report = client.report_fights(code=ref.code, difficulty=None, allow_unlisted=allow_unlisted)
-    fights = fights_report.get("fights") if isinstance(fights_report.get("fights"), list) else []
+    fights = list_at(fights_report, "fights")
     fight_rows = [row for row in fights if isinstance(row, dict)]
     selected: dict[str, Any] | None = None
     if ref.fight_id is not None:
@@ -1483,10 +1581,14 @@ def _resolve_encounter_scope(
     elif len(fight_rows) == 1:
         selected = fight_rows[0]
     else:
-        _fail(ctx, "missing_scope", "Provide --fight-id or a report URL with a numeric #fight=... fragment for encounter-scoped analysis.")
-    encounter_id = selected.get("encounterID")
+        _fail(
+            ctx,
+            "missing_scope",
+            "Provide --fight-id or a report URL with a numeric ?fight=... or #fight=... for encounter-scoped analysis.",
+        )
+    encounter_id = _fight_encounter_id(selected)
     encounter = None
-    if isinstance(encounter_id, int):
+    if encounter_id is not None:
         try:
             encounter = client.encounter(encounter_id=encounter_id)
         except WarcraftLogsClientError:
@@ -1517,14 +1619,14 @@ def _encounter_summary_payload(*, ref: ReportReference, report: dict[str, Any],
                                finished_report_ttl: int | None = 86400, report_ttl: int | None = 60) -> dict[str, Any]:
     encounter_payload = None
     encounter_identity = encounter_identity_payload(
-        encounter_id=fight.get("encounterID") if isinstance(fight.get("encounterID"), int) else None,
+        encounter_id=_fight_encounter_id(fight),
         name=fight.get("name") if isinstance(fight.get("name"), str) else None,
         provider="warcraftlogs",
         source="report_encounter",
         notes=["canonical only within explicit encounter metadata returned by Warcraft Logs"],
     )
     if isinstance(encounter, dict):
-        zone = encounter.get("zone") if isinstance(encounter.get("zone"), dict) else {}
+        zone = dict_at(encounter, "zone")
         encounter_identity = encounter_identity_payload(
             encounter_id=encounter.get("id") if isinstance(encounter.get("id"), int) else None,
             journal_id=encounter.get("journalID") if isinstance(encounter.get("journalID"), int) else None,
@@ -1566,78 +1668,172 @@ def _encounter_window_bounds(
     fight: dict[str, Any],
     window_start_ms: float | None,
     window_end_ms: float | None,
+    flag: str,
 ) -> tuple[float | None, float | None]:
+    """Absolute report timestamps for an encounter-relative window; ``flag`` names the window's options."""
+    if window_start_ms is None and window_end_ms is None:
+        return None, None
     fight_start = fight.get("startTime")
-    if (window_start_ms is not None or window_end_ms is not None) and not isinstance(fight_start, (int, float)):
+    if not isinstance(fight_start, (int, float)):
         _fail(ctx, "invalid_response", "Selected fight did not include a start timestamp for encounter windowing.")
-    absolute_start = float(fight_start) + \
-        float(window_start_ms) if window_start_ms is not None and isinstance(fight_start, (int, float)) else None
-    absolute_end = float(fight_start) + \
-        float(window_end_ms) if window_end_ms is not None and isinstance(fight_start, (int, float)) else None
-    if absolute_start is not None and absolute_end is not None and absolute_end < absolute_start:
-        _fail(ctx, "invalid_query", "--window-end-ms must be greater than or equal to --window-start-ms.")
+    if window_start_ms is not None and window_end_ms is not None and window_end_ms < window_start_ms:
+        _fail(ctx, "invalid_query", f"{flag}-end-ms must be greater than or equal to {flag}-start-ms.")
+    fight_end = fight.get("endTime")
+    # A window that opens after the pull ended holds no events; answering zero would read as "none happened".
+    if window_start_ms is not None and isinstance(fight_end, (int, float)) and fight_start + window_start_ms >= fight_end:
+        _fail(
+            ctx,
+            "invalid_query",
+            f"{flag}-start-ms {window_start_ms:g} is at or past the end of the fight ({fight_end - fight_start:g} ms long).",
+        )
+    absolute_start = float(fight_start) + float(window_start_ms) if window_start_ms is not None else None
+    absolute_end = float(fight_start) + float(window_end_ms) if window_end_ms is not None else None
     return absolute_start, absolute_end
+
+
+@dataclass(frozen=True, slots=True)
+class _EncounterFilters:
+    """Per-command filter inputs for one encounter slice, before fight-relative resolution.
+
+    Window offsets are encounter-relative milliseconds; ``_encounter_filter_options``
+    turns them into the absolute report timestamps the transport wants.
+    """
+
+    data_type: str
+    ability_id: float | None = None
+    source_id: int | None = None
+    target_id: int | None = None
+    hostility_type: str | None = None
+    translate: bool | None = None
+    view_by: str | None = None
+    limit: int | None = None
+    wipe_cutoff: int | None = None
+    window_start_ms: float | None = None
+    window_end_ms: float | None = None
+    # The option prefix the window came from, so a rejected window names the caller's own flag.
+    window_flag: str = "--window"
 
 
 def _encounter_filter_options(
     ctx: typer.Context,
-    *,
     fight: dict[str, Any],
-    ability_id: float | None,
-    data_type: str,
-    source_id: int | None,
-    target_id: int | None,
-    hostility_type: str | None,
-    translate: bool | None,
-    view_by: str | None = None,
-    limit: int | None = None,
-    wipe_cutoff: int | None = None,
-    window_start_ms: float | None = None,
-    window_end_ms: float | None = None,
+    filters: _EncounterFilters,
 ) -> tuple[ReportFilterOptions, dict[str, Any]]:
     start_time, end_time = _encounter_window_bounds(
         ctx,
         fight=fight,
-        window_start_ms=window_start_ms,
-        window_end_ms=window_end_ms,
+        window_start_ms=filters.window_start_ms,
+        window_end_ms=filters.window_end_ms,
+        flag=filters.window_flag,
     )
-    encounter_id = fight.get("encounterID") if isinstance(fight.get("encounterID"), int) else None
+    encounter_id = _fight_encounter_id(fight)
     fight_ids = [int(fight["id"])] if isinstance(fight.get("id"), int) else None
     options = ReportFilterOptions(
-        ability_id=ability_id,
-        data_type=data_type,
+        ability_id=filters.ability_id,
+        data_type=filters.data_type,
         encounter_id=encounter_id,
         end_time=end_time,
         fight_ids=fight_ids,
-        hostility_type=hostility_type,
+        hostility_type=filters.hostility_type,
         kill_type=_kill_type_for_fight(fight),
-        limit=limit,
-        source_id=source_id,
+        limit=filters.limit,
+        source_id=filters.source_id,
         start_time=start_time,
-        target_id=target_id,
-        translate=translate,
-        view_by=view_by,
-        wipe_cutoff=wipe_cutoff,
+        target_id=filters.target_id,
+        translate=filters.translate,
+        view_by=filters.view_by,
+        wipe_cutoff=filters.wipe_cutoff,
     )
     query = {
-        "ability_id": ability_id,
-        "data_type": data_type,
+        "ability_id": filters.ability_id,
+        "data_type": filters.data_type,
         "encounter_id": encounter_id,
         "fight_ids": fight_ids,
-        "hostility_type": hostility_type,
+        "hostility_type": filters.hostility_type,
         "kill_type": _kill_type_for_fight(fight),
-        "limit": limit,
-        "source_id": source_id,
-        "target_id": target_id,
-        "translate": translate,
-        "view_by": view_by,
-        "wipe_cutoff": wipe_cutoff,
-        "window_start_ms": window_start_ms,
-        "window_end_ms": window_end_ms,
+        "limit": filters.limit,
+        "source_id": filters.source_id,
+        "target_id": filters.target_id,
+        "translate": filters.translate,
+        "view_by": filters.view_by,
+        "wipe_cutoff": filters.wipe_cutoff,
+        "window_start_ms": filters.window_start_ms,
+        "window_end_ms": filters.window_end_ms,
         "start_time": start_time,
         "end_time": end_time,
     }
     return options, query
+
+
+def _require_report_slice(
+    ctx: typer.Context,
+    *,
+    command: str,
+    fight_id: list[int] | None,
+    start_time: float | None,
+    end_time: float | None,
+) -> None:
+    """Reject a query Warcraft Logs answers with an empty payload plus a GraphQL warning.
+
+    Warcraft Logs accepts exactly two slice shapes here: fight IDs, or a start time AND an end
+    time. ``--encounter-id`` and a half-open time range narrow nothing on their own, so they are
+    not accepted as a slice.
+    """
+    if fight_id or (start_time is not None and end_time is not None):
+        return
+    _fail(
+        ctx,
+        "missing_scope",
+        f"{command} requires --fight-id, or both --start-time and --end-time. "
+        "Warcraft Logs answers any wider query with an empty payload; --encounter-id filters "
+        "the slice but does not define one.",
+    )
+
+
+def _require_matching_fight(
+    ctx: typer.Context,
+    client: WarcraftLogsClient,
+    *,
+    code: str,
+    allow_unlisted: bool,
+    fight_ids: list[int] | None,
+    encounter_id: int | None,
+    difficulty: int | None,
+) -> None:
+    """Reject a fight-scoped request naming a fight the report does not have.
+
+    Warcraft Logs answers an unknown ``--fight-id``, an ``--encounter-id`` the report never
+    pulled, or a ``--difficulty`` those fights were not on with an empty or null slice and HTTP
+    200, which reads as "that fight had no data" instead of "no such fight". Every requested fight
+    ID has to exist and match the other filters: one missing ID fails the request and is named in
+    ``error.details.missing_fight_ids``, instead of the answer silently covering only the others.
+    Requests that name no fight at all are left alone: a report-wide slice is a legitimate query,
+    and an empty answer to one is a real answer.
+    """
+    if not fight_ids and encounter_id is None and difficulty is None:
+        return
+    fights_report = client.report_fights(code=code, difficulty=difficulty, allow_unlisted=allow_unlisted)
+    matching_ids = {
+        row.get("id")
+        for row in list_at(fights_report, "fights")
+        if isinstance(row, dict) and (encounter_id is None or row.get("encounterID") == encounter_id)
+    }
+    missing = [fight_id for fight_id in fight_ids or [] if fight_id not in matching_ids]
+    if matching_ids and not missing:
+        return
+    scope = {"fight_ids": missing or None, "encounter_id": encounter_id, "difficulty": difficulty}
+    _fail(
+        ctx,
+        "not_found",
+        f"Warcraft Logs report {code} has no fight matching {_described_slice(scope)}.",
+        details={"missing_fight_ids": missing} if missing else None,
+    )
+
+
+def _described_slice(query: dict[str, Any]) -> str:
+    """Echo the filters a report query actually carried, so a not-found message names the scope."""
+    carried = [f"{name}={value!r}" for name, value in sorted(query.items()) if value is not None]
+    return ", ".join(carried) if carried else "no filters"
 
 
 def _require_explicit_window(ctx: typer.Context, *, name: str, start_ms: float | None, end_ms: float | None) -> None:
@@ -1739,144 +1935,183 @@ def _event_id(value: Any) -> int | None:
     return int(value) if isinstance(value, (int, float)) else None
 
 
-def _encounter_cast_rows_payload(*, report: dict[str, Any], fight: dict[str, Any], events_report: dict[str,
-                                 Any], master_report: dict[str, Any], preview_limit: int) -> dict[str, Any]:
-    actor_index, ability_index = _master_data_indexes(master_report)
-    paginator = events_report.get("events") if isinstance(events_report.get("events"), dict) else {}
-    rows = paginator.get("data") if isinstance(paginator.get("data"), list) else []
-    cast_rows = [row for row in rows if isinstance(row, dict)]
-    by_source: dict[tuple[int | None, str | None], int] = {}
-    by_target: dict[tuple[int | None, str | None], int] = {}
-    by_ability: dict[tuple[int | None, str | None], int] = {}
-    by_source_ability: dict[tuple[int | None, int | None], int] = {}
-    by_source_target: dict[tuple[int | None, int | None], int] = {}
-    preview: list[dict[str, Any]] = []
-    fight_start = fight.get("startTime") if isinstance(fight.get("startTime"), (int, float)) else None
-    report_code = report.get("code") if isinstance(report.get("code"), str) else None
-    selected_fight_id = fight.get("id") if isinstance(fight.get("id"), int) else None
+@dataclass(frozen=True, slots=True)
+class _CastNaming:
+    """Master-data lookups plus the report scope every cast identity in one fight is stamped with."""
 
+    actor_index: dict[int, dict[str, Any]]
+    ability_index: dict[int, dict[str, Any]]
+    report_code: str | None
+    fight_id: int | None
+
+    def actor(self, actor_id: int | None) -> dict[str, Any] | None:
+        return _named_actor(
+            self.actor_index,
+            actor_id,
+            report_code=self.report_code,
+            fight_id=self.fight_id,
+            source="report_encounter_casts",
+        )
+
+    def ability(self, ability_id: int | None) -> dict[str, Any] | None:
+        return _named_ability(self.ability_index, ability_id, source="report_encounter_casts")
+
+
+@dataclass(slots=True)
+class _CastTallies:
+    """Cast counts for one fight, keyed by identity pair, plus the bounded event preview."""
+
+    by_source: dict[tuple[int | None, str | None], int]
+    by_target: dict[tuple[int | None, str | None], int]
+    by_ability: dict[tuple[int | None, str | None], int]
+    by_source_ability: dict[tuple[int | None, int | None], int]
+    by_source_target: dict[tuple[int | None, int | None], int]
+    preview: list[dict[str, Any]]
+
+
+def _cast_preview_row(row: dict[str, Any], *, named: dict[str, Any], fight_start: float | None) -> dict[str, Any]:
+    timestamp = row.get("timestamp")
+    relative_ms = None
+    if isinstance(timestamp, (int, float)) and isinstance(fight_start, (int, float)):
+        relative_ms = float(timestamp) - float(fight_start)
+    return {
+        "timestamp": timestamp,
+        "relative_time_ms": relative_ms,
+        **named,
+        "type": row.get("type"),
+    }
+
+
+def _completed_casts(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep only the ``cast`` events of a Casts slice: one per completed cast.
+
+    The Casts data type also returns ``begincast`` (a cast bar starting, including casts later
+    cancelled) and ``empowerstart``/``empowerend`` (an empowered spell's charge). Warcraft Logs records
+    ``cast`` once per press of an empowered spell, once per finished cast-time spell, and once when a
+    channel starts, so counting only ``cast`` counts each use exactly once.
+    """
+    return [event for event in events if event.get("type") == "cast"]
+
+
+def _tally_cast_events(
+    cast_rows: list[dict[str, Any]],
+    *,
+    naming: _CastNaming,
+    fight_start: float | None,
+    preview_limit: int,
+) -> _CastTallies:
+    tallies = _CastTallies({}, {}, {}, {}, {}, [])
     for row in cast_rows:
         source_id = _event_id(row.get("sourceID"))
         target_id = _event_id(row.get("targetID"))
         ability_id = _event_id(row.get("abilityGameID"))
-        source = _named_actor(
-            actor_index,
-            source_id,
-            report_code=report_code,
-            fight_id=selected_fight_id,
-            source="report_encounter_casts",
-        )
-        target = _named_actor(
-            actor_index,
-            target_id,
-            report_code=report_code,
-            fight_id=selected_fight_id,
-            source="report_encounter_casts",
-        )
-        ability = _named_ability(ability_index, ability_id, source="report_encounter_casts")
+        source = naming.actor(source_id)
+        target = naming.actor(target_id)
+        ability = naming.ability(ability_id)
         source_key = (source_id, str(source.get("name") if source else None))
         target_key = (target_id, str(target.get("name") if target else None))
         ability_key = (ability_id, str(ability.get("name") if ability else None))
-        by_source[source_key] = by_source.get(source_key, 0) + 1
-        by_target[target_key] = by_target.get(target_key, 0) + 1
-        by_ability[ability_key] = by_ability.get(ability_key, 0) + 1
-        by_source_ability[(source_id, ability_id)] = by_source_ability.get((source_id, ability_id), 0) + 1
-        by_source_target[(source_id, target_id)] = by_source_target.get((source_id, target_id), 0) + 1
-        if len(preview) < preview_limit:
-            timestamp = row.get("timestamp")
-            relative_ms = None
-            if isinstance(timestamp, (int, float)) and isinstance(fight_start, (int, float)):
-                relative_ms = float(timestamp) - float(fight_start)
-            preview.append(
-                {
-                    "timestamp": timestamp,
-                    "relative_time_ms": relative_ms,
-                    "source": source,
-                    "target": target,
-                    "ability": ability,
-                    "type": row.get("type"),
-                }
+        tallies.by_source[source_key] = tallies.by_source.get(source_key, 0) + 1
+        tallies.by_target[target_key] = tallies.by_target.get(target_key, 0) + 1
+        tallies.by_ability[ability_key] = tallies.by_ability.get(ability_key, 0) + 1
+        tallies.by_source_ability[(source_id, ability_id)] = tallies.by_source_ability.get((source_id, ability_id), 0) + 1
+        tallies.by_source_target[(source_id, target_id)] = tallies.by_source_target.get((source_id, target_id), 0) + 1
+        if len(tallies.preview) < preview_limit:
+            tallies.preview.append(
+                _cast_preview_row(
+                    row,
+                    named={"source": source, "target": target, "ability": ability},
+                    fight_start=fight_start,
+                )
             )
+    return tallies
 
-    def _sorted_rows(counts: dict[tuple[Any, Any], int], *, field: str) -> list[dict[str, Any]]:
-        rows_out: list[dict[str, Any]] = []
-        for (numeric_id, name), count in sorted(counts.items(), key=lambda item: (-item[1], str(item[0][1] or ""))):
-            base = {"count": count}
-            if field == "source":
-                base["source"] = _named_actor(
-                    actor_index,
-                    numeric_id if isinstance(numeric_id, int) else None,
-                    report_code=report_code,
-                    fight_id=selected_fight_id,
-                    source="report_encounter_casts",
-                ) or {"id": numeric_id, "name": name}
-            elif field == "target":
-                base["target"] = _named_actor(
-                    actor_index,
-                    numeric_id if isinstance(numeric_id, int) else None,
-                    report_code=report_code,
-                    fight_id=selected_fight_id,
-                    source="report_encounter_casts",
-                ) or {"id": numeric_id, "name": name}
-            else:
-                base["ability"] = _named_ability(
-                    ability_index,
-                    numeric_id if isinstance(numeric_id, int) else None,
-                    source="report_encounter_casts",
-                ) or {"game_id": numeric_id, "name": name}
-            rows_out.append(base)
-        return rows_out
 
-    combo_rows = []
-    for (source_id, ability_id), count in sorted(by_source_ability.items(), key=lambda item: (-item[1], item[0])):
-        combo_rows.append(
-            {
-                "count": count,
-                "source": _named_actor(
-                    actor_index,
-                    source_id,
-                    report_code=report_code,
-                    fight_id=selected_fight_id,
-                    source="report_encounter_casts",
-                ),
-                "ability": _named_ability(ability_index, ability_id, source="report_encounter_casts"),
-            }
-        )
+def _sorted_cast_rows(
+    counts: dict[tuple[Any, Any], int],
+    *,
+    naming: _CastNaming,
+    field: Literal["source", "target", "ability"],
+) -> list[dict[str, Any]]:
+    """Counts sorted by descending count then name, each re-resolved to a full identity payload."""
+    rows_out: list[dict[str, Any]] = []
+    for (numeric_id, name), count in sorted(counts.items(), key=lambda item: (-item[1], str(item[0][1] or ""))):
+        identity_id = numeric_id if isinstance(numeric_id, int) else None
+        if field == "ability":
+            named = naming.ability(identity_id) or {"game_id": numeric_id, "name": name}
+        else:
+            named = naming.actor(identity_id) or {"id": numeric_id, "name": name}
+        rows_out.append({"count": count, field: named})
+    return rows_out
 
-    source_target_rows = []
-    for (source_id, target_id), count in sorted(by_source_target.items(), key=lambda item: (-item[1], item[0])):
-        source_target_rows.append(
-            {
-                "count": count,
-                "source": _named_actor(
-                    actor_index,
-                    source_id,
-                    report_code=report_code,
-                    fight_id=selected_fight_id,
-                    source="report_encounter_casts",
-                ),
-                "target": _named_actor(
-                    actor_index,
-                    target_id,
-                    report_code=report_code,
-                    fight_id=selected_fight_id,
-                    source="report_encounter_casts",
-                ),
-            }
-        )
 
+def _cast_pair_rows(
+    counts: dict[tuple[int | None, int | None], int],
+    *,
+    naming: _CastNaming,
+    second: Literal["target", "ability"],
+) -> list[dict[str, Any]]:
+    """Source-keyed pair counts, sorted by descending count then by the raw id pair."""
+    return [
+        {
+            "count": count,
+            "source": naming.actor(source_id),
+            second: naming.actor(other_id) if second == "target" else naming.ability(other_id),
+        }
+        for (source_id, other_id), count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    ]
+
+
+def _encounter_cast_rows_payload(
+    *,
+    report: dict[str, Any],
+    fight: dict[str, Any],
+    events_report: dict[str, Any],
+    master_report: dict[str, Any],
+    preview_limit: int,
+) -> dict[str, Any]:
+    actor_index, ability_index = _master_data_indexes(master_report)
+    naming = _CastNaming(
+        actor_index=actor_index,
+        ability_index=ability_index,
+        report_code=report.get("code") if isinstance(report.get("code"), str) else None,
+        fight_id=fight.get("id") if isinstance(fight.get("id"), int) else None,
+    )
+    paginator = dict_at(events_report, "events")
+    event_rows = [row for row in list_at(paginator, "data") if isinstance(row, dict)]
+    cast_rows = _completed_casts(event_rows)
+    tallies = _tally_cast_events(
+        cast_rows,
+        naming=naming,
+        fight_start=fight.get("startTime") if isinstance(fight.get("startTime"), (int, float)) else None,
+        preview_limit=preview_limit,
+    )
+    next_page_timestamp = paginator.get("nextPageTimestamp")
+    truncated = next_page_timestamp is not None
+    notes = (
+        [
+            f"Warcraft Logs returned next_page_timestamp: every aggregate below covers only the {len(cast_rows)} "
+            f"casts in the first {len(event_rows)} events of the selected fight/window, not the whole fight. "
+            "Raise --limit or narrow the window before treating these counts as complete."
+        ]
+        if truncated
+        else []
+    )
     return {
         "report": _report_brief_payload(report),
         "fight": _fight_payload(fight),
+        "notes": notes,
         "casts": {
-            "event_count": len(cast_rows),
-            "next_page_timestamp": paginator.get("nextPageTimestamp"),
-            "by_source": _sorted_rows(by_source, field="source"),
-            "by_target": _sorted_rows(by_target, field="target"),
-            "by_ability": _sorted_rows(by_ability, field="ability"),
-            "by_source_ability": combo_rows,
-            "by_source_target": source_target_rows,
-            "preview": preview,
+            "event_count": len(event_rows),
+            "cast_count": len(cast_rows),
+            "truncated": truncated,
+            "next_page_timestamp": next_page_timestamp,
+            "by_source": _sorted_cast_rows(tallies.by_source, naming=naming, field="source"),
+            "by_target": _sorted_cast_rows(tallies.by_target, naming=naming, field="target"),
+            "by_ability": _sorted_cast_rows(tallies.by_ability, naming=naming, field="ability"),
+            "by_source_ability": _cast_pair_rows(tallies.by_source_ability, naming=naming, second="ability"),
+            "by_source_target": _cast_pair_rows(tallies.by_source_target, naming=naming, second="target"),
+            "preview": tallies.preview,
         },
     }
 
@@ -2030,7 +2265,7 @@ def _resolve_encounter_by_id(
     if boss_name and not _boss_matches(zone_match, boss_id=None, boss_name=boss_name):
         _fail(ctx, "boss_scope_mismatch", f"Encounter {boss_id} in zone {zone_id} does not match boss name {boss_name!r}.")
     encounter = client.encounter(encounter_id=boss_id)
-    encounter_zone = encounter.get("zone") if isinstance(encounter.get("zone"), dict) else {}
+    encounter_zone = dict_at(encounter, "zone")
     if encounter_zone.get("id") != zone_id:
         _fail(ctx, "boss_scope_mismatch", f"Encounter {boss_id} does not belong to zone {zone_id}.")
     return encounter
@@ -2071,7 +2306,7 @@ def _resolve_encounter(
     boss_name: str | None,
 ) -> dict[str, Any]:
     zone = client.zone(zone_id=zone_id)
-    encounters = [row for row in (zone.get("encounters") if isinstance(zone.get("encounters"), list) else []) if isinstance(row, dict)]
+    encounters = [row for row in (list_at(zone, "encounters")) if isinstance(row, dict)]
     if boss_id is not None:
         return _resolve_encounter_by_id(
             ctx, client=client, zone_id=zone_id, boss_id=boss_id, boss_name=boss_name, encounters=encounters
@@ -2123,10 +2358,12 @@ def _encounter_ranking_has_combatant_info(row: dict[str, Any]) -> bool:
 
 
 def _encounter_ranking_other_players_count(row: dict[str, Any]) -> int:
-    if isinstance(row.get("otherPlayers"), list):
-        return len(row.get("otherPlayers"))
-    if isinstance(row.get("allCharacters"), list):
-        return max(len(row.get("allCharacters")) - 1, 0)
+    other_players = row.get("otherPlayers")
+    if isinstance(other_players, list):
+        return len(other_players)
+    all_characters = row.get("allCharacters")
+    if isinstance(all_characters, list):
+        return max(len(all_characters) - 1, 0)
     return 0
 
 
@@ -2151,9 +2388,9 @@ def _encounter_ranking_row_payload(
     row_index: int,
     site: WarcraftLogsSiteProfile,
 ) -> dict[str, Any]:
-    report = row.get("report") if isinstance(row.get("report"), dict) else {}
-    server = row.get("server") if isinstance(row.get("server"), dict) else {}
-    guild = row.get("guild") if isinstance(row.get("guild"), dict) else {}
+    report = dict_at(row, "report")
+    server = dict_at(row, "server")
+    guild = dict_at(row, "guild")
     class_name = row.get("className") if isinstance(row.get("className"), str) else row.get("class")
     spec_name = row.get("spec") if isinstance(row.get("spec"), str) else row.get("specName")
     report_code = _first_non_empty_str(
@@ -2211,7 +2448,7 @@ def _encounter_rankings_payload(
         for row_index, row in enumerate(_encounter_rankings_rows(rankings))
     ]
     returned = normalized_rows[:top]
-    page_count = rankings.get("count") if isinstance(rankings, dict) and isinstance(rankings.get("count"), int) else len(normalized_rows)
+    page_count: int = rankings["count"] if isinstance(rankings, dict) and isinstance(rankings.get("count"), int) else len(normalized_rows)
     return {
         "ok": True,
         "provider": "warcraftlogs",
@@ -2258,14 +2495,14 @@ def _all_player_detail_rows_from_roles(details: dict[str, Any]) -> list[dict[str
 
 
 def _player_detail_actor(details_payload: dict[str, Any], actor_id: int) -> dict[str, Any] | None:
-    player_details = details_payload.get("player_details") if isinstance(details_payload.get("player_details"), dict) else {}
-    roles = player_details.get("roles") if isinstance(player_details.get("roles"), dict) else {}
+    player_details = dict_at(details_payload, "player_details")
+    roles = dict_at(player_details, "roles")
     return next((row for row in _all_player_detail_rows_from_roles(roles) if row.get("id") == actor_id), None)
 
 
 def _normalized_talent_tree_rows(actor: dict[str, Any]) -> tuple[list[dict[str, Any]], bool]:
-    combatant_info = actor.get("combatant_info") if isinstance(actor.get("combatant_info"), dict) else {}
-    rows = combatant_info.get("talentTree") if isinstance(combatant_info.get("talentTree"), list) else []
+    combatant_info = dict_at(actor, "combatant_info")
+    rows = list_at(combatant_info, "talentTree")
     normalized_rows: list[dict[str, Any]] = []
     had_invalid_rows = False
     for row in rows:
@@ -2285,8 +2522,8 @@ def _normalized_talent_tree_rows(actor: dict[str, Any]) -> tuple[list[dict[str, 
 
 
 def _player_talent_transport_identity(actor: dict[str, Any]) -> tuple[str | None, str | None]:
-    class_spec_identity = actor.get("class_spec_identity") if isinstance(actor.get("class_spec_identity"), dict) else {}
-    identity = class_spec_identity.get("identity") if isinstance(class_spec_identity.get("identity"), dict) else {}
+    class_spec_identity = dict_at(actor, "class_spec_identity")
+    identity = dict_at(class_spec_identity, "identity")
     actor_class = identity.get("actor_class") if isinstance(identity.get("actor_class"), str) else None
     spec = identity.get("spec") if isinstance(identity.get("spec"), str) else None
     return actor_class, spec
@@ -2296,6 +2533,7 @@ def _player_talent_transport_validation(
     actor: dict[str, Any],
     *,
     raw_rows: list[dict[str, Any]] | None = None,
+    backend: TalentTransportBackend | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Any]]:
     if raw_rows is None:
         raw_rows, _ = _normalized_talent_tree_rows(actor)
@@ -2304,9 +2542,10 @@ def _player_talent_transport_validation(
         actor_class=actor_class,
         spec=spec,
         talent_tree_rows=raw_rows,
+        backend=backend,
     )
-    transport_forms = validation_result.get("transport_forms") if isinstance(validation_result.get("transport_forms"), dict) else {}
-    validation = validation_result.get("validation") if isinstance(validation_result.get("validation"), dict) else {}
+    transport_forms = dict_at(validation_result, "transport_forms")
+    validation = dict_at(validation_result, "validation")
     return raw_rows, transport_forms, validation
 
 
@@ -2339,9 +2578,10 @@ def _player_talent_transport_packet(
     fight_id: int,
     actor_id: int,
     raw_rows: list[dict[str, Any]] | None = None,
+    backend: TalentTransportBackend | None = None,
 ) -> dict[str, Any]:
     actor_class, spec = _player_talent_transport_identity(actor)
-    raw_rows, transport_forms, validation = _player_talent_transport_validation(actor, raw_rows=raw_rows)
+    raw_rows, transport_forms, validation = _player_talent_transport_validation(actor, raw_rows=raw_rows, backend=backend)
     return talent_transport_packet_payload(
         actor_class=actor_class,
         spec=spec,
@@ -2373,20 +2613,22 @@ def _player_talent_transport_packet(
 
 def _accumulate_boss_spec_counts(
     rows: list[dict[str, Any]],
-) -> tuple[dict[tuple[str, str], dict[str, Any]], int]:
-    spec_counts: dict[tuple[str, str], dict[str, Any]] = {}
+) -> tuple[dict[tuple[str, str, str], dict[str, Any]], int]:
+    spec_counts: dict[tuple[str, str, str], dict[str, Any]] = {}
     sampled_player_rows = 0
     for row in rows:
         code = str((row.get("report") or {}).get("code") or "")
         fight_id = int((row.get("fight") or {}).get("id") or 0)
-        player_rows = row.get("player_details") if isinstance(row.get("player_details"), list) else []
-        seen_specs_for_fight: set[tuple[str, int, str, str]] = set()
+        player_rows = list_at(row, "player_details")
+        seen_specs_for_fight: set[tuple[str, int, str, str, str]] = set()
         for player in player_rows:
             if not isinstance(player, dict):
                 continue
             sampled_player_rows += 1
             role = str(player.get("role") or "unknown")
-            specs = player.get("specs") if isinstance(player.get("specs"), list) else []
+            specs = list_at(player, "specs")
+            # Spec names repeat across classes (Frost Mage, Frost Death Knight), so a spec is class + spec.
+            class_name = str(player.get("type") or "").strip()
             for spec in specs:
                 if not isinstance(spec, dict):
                     continue
@@ -2394,10 +2636,11 @@ def _accumulate_boss_spec_counts(
                 if not spec_name:
                     continue
                 count = int(spec.get("count") or 0)
-                key = (spec_name, role)
+                key = (class_name, spec_name, role)
                 entry = spec_counts.setdefault(
                     key,
                     {
+                        "class_name": class_name or None,
                         "spec_name": spec_name,
                         "role": role,
                         "appearance_count": 0,
@@ -2406,7 +2649,7 @@ def _accumulate_boss_spec_counts(
                     },
                 )
                 entry["appearance_count"] += count if count > 0 else 1
-                fight_key = (code, fight_id, spec_name, role)
+                fight_key = (code, fight_id, *key)
                 if fight_key not in seen_specs_for_fight:
                     seen_specs_for_fight.add(fight_key)
                     entry["kill_presence_count"] += 1
@@ -2421,6 +2664,7 @@ def _boss_spec_usage_payload(
     sample: dict[str, Any],
     query: dict[str, Any],
     top: int,
+    transport_counts: dict[str, int],
     cache_ttl_seconds: int | None = None,
     root_url: str = "https://www.warcraftlogs.com",
 ) -> dict[str, Any]:
@@ -2438,6 +2682,7 @@ def _boss_spec_usage_payload(
             -int(entry["kill_presence_count"]),
             -int(entry["appearance_count"]),
             str(entry["spec_name"]).lower(),
+            str(entry["class_name"] or "").lower(),
         ),
     )
     returned = normalized_rows[:top]
@@ -2448,8 +2693,11 @@ def _boss_spec_usage_payload(
         "ranking_basis": "sampled_finished_kill_cohort_spec_presence",
         "matching_rule": "spec_presence_across_sampled_finished_kills_with_player_details",
         "query": query,
-        "notes": _sampled_spec_filter_notes(query.get("spec_name") if isinstance(query, dict) else None),
-        "freshness": _sampled_cross_report_freshness(cache_ttl_seconds),
+        "notes": [
+            *_sampled_spec_filter_notes(query.get("spec_name") if isinstance(query, dict) else None, sample),
+            *_sampled_dedupe_notes(sample),
+        ],
+        "freshness": _sampled_cross_report_freshness(cache_ttl_seconds, transport_counts=transport_counts),
         "cache_provenance": _sampled_cache_provenance(cache_ttl_seconds),
         "sample_scope": _sampled_sample_scope(
             ranking_basis="sampled_finished_kill_cohort_spec_presence",
@@ -2515,63 +2763,41 @@ def _composition_sample_row(row: dict[str, Any], *, details_report: dict[str, An
     }
 
 
-def _collect_comp_sample_rows(
-    *,
-    client: WarcraftLogsClient,
-    zone_id: int,
-    boss_id: int | None,
-    boss_name: str | None,
-    difficulty: int | None,
-    spec_name: str | None,
-    kill_time_min: float | None,
-    kill_time_max: float | None,
-    report_pages: int,
-    reports_per_page: int,
-    start_time: float | None,
-    end_time: float | None,
-    guild_region: str | None,
-    guild_realm: str | None,
-    guild_name: str | None,
-) -> dict[str, Any]:
-    analytics = _collect_boss_kill_rows(
-        client=client,
-        zone_id=zone_id,
-        boss_id=boss_id,
-        boss_name=boss_name,
-        difficulty=difficulty,
-        spec_name=spec_name,
-        kill_time_min=kill_time_min,
-        kill_time_max=kill_time_max,
-        report_pages=report_pages,
-        reports_per_page=reports_per_page,
-        start_time=start_time,
-        end_time=end_time,
-        guild_region=guild_region,
-        guild_realm=guild_realm,
-        guild_name=guild_name,
+def _sampled_kill_row_scope(row: dict[str, Any]) -> tuple[str, int] | None:
+    """Report code and fight ID of one sampled kill row, or ``None`` when the row cannot be scoped."""
+    report_code = dict_at(row, "report").get("code")
+    fight_id = dict_at(row, "fight").get("id")
+    if not isinstance(report_code, str) or not isinstance(fight_id, int):
+        return None
+    return report_code, fight_id
+
+
+def _fight_player_details(client: WarcraftLogsClient, row: dict[str, Any], *, difficulty: int | None) -> dict[str, Any]:
+    """Combatant-info player details for the fight behind one sampled kill row."""
+    fight_payload = dict_at(row, "fight")
+    fight_id = fight_payload.get("id")
+    encounter_id = fight_payload.get("encounter_id")
+    return client.report_player_details(
+        code=str(dict_at(row, "report").get("code") or ""),
+        allow_unlisted=False,
+        options=ReportPlayerDetailsOptions(
+            difficulty=int(fight_payload["difficulty"]) if isinstance(fight_payload.get("difficulty"), int) else difficulty,
+            encounter_id=int(encounter_id) if isinstance(encounter_id, int) else None,
+            fight_ids=[int(fight_id)] if isinstance(fight_id, int) else None,
+            include_combatant_info=True,
+            kill_type="Kills",
+        ),
+        ttl_override=client._finished_report_ttl,
     )
-    composed_rows: list[dict[str, Any]] = []
-    for row in analytics["rows"]:
-        report_payload = row.get("report") if isinstance(row.get("report"), dict) else {}
-        fight_payload = row.get("fight") if isinstance(row.get("fight"), dict) else {}
-        report_code = report_payload.get("code")
-        fight_id = fight_payload.get("id")
-        encounter_id = fight_payload.get("encounter_id")
-        if not isinstance(report_code, str) or not isinstance(fight_id, int):
-            continue
-        details_report = client.report_player_details(
-            code=report_code,
-            allow_unlisted=False,
-            options=ReportPlayerDetailsOptions(
-                difficulty=int(fight_payload["difficulty"]) if isinstance(fight_payload.get("difficulty"), int) else difficulty,
-                encounter_id=int(encounter_id) if isinstance(encounter_id, int) else None,
-                fight_ids=[fight_id],
-                include_combatant_info=True,
-                kill_type="Kills",
-            ),
-            ttl_override=client._finished_report_ttl,
-        )
-        composed_rows.append(_composition_sample_row(row, details_report=details_report))
+
+
+def _collect_comp_sample_rows(client: WarcraftLogsClient, scope: CrossReportScope) -> dict[str, Any]:
+    analytics = _collect_boss_kill_rows(client, scope)
+    composed_rows = [
+        _composition_sample_row(row, details_report=_fight_player_details(client, row, difficulty=scope.difficulty))
+        for row in analytics["rows"]
+        if _sampled_kill_row_scope(row) is not None
+    ]
     return {
         "rows": composed_rows,
         "sample": analytics["sample"],
@@ -2641,11 +2867,11 @@ def _accumulate_comp_presence(
     for row in rows:
         report_code = str((row.get("report") or {}).get("code") or "")
         fight_id = int((row.get("fight") or {}).get("id") or 0)
-        player_details = row.get("player_details") if isinstance(row.get("player_details"), dict) else {}
-        players = player_details.get("players") if isinstance(player_details.get("players"), list) else []
+        player_details = dict_at(row, "player_details")
+        players = list_at(player_details, "players")
         sampled_player_count += len([player for player in players if isinstance(player, dict)])
-        composition = row.get("composition") if isinstance(row.get("composition"), dict) else {}
-        class_rows = composition.get("class_counts") if isinstance(composition.get("class_counts"), list) else []
+        composition = dict_at(row, "composition")
+        class_rows = list_at(composition, "class_counts")
         _record_comp_class_presence(class_presence, class_rows, report_code=report_code, fight_id=fight_id)
         _record_comp_signature(
             signature_counts, composition.get("class_signature"), report_code=report_code, fight_id=fight_id
@@ -2659,6 +2885,7 @@ def _comp_samples_payload(
     sample: dict[str, Any],
     query: dict[str, Any],
     top: int,
+    transport_counts: dict[str, int],
     cache_ttl_seconds: int | None = None,
     root_url: str = "https://www.warcraftlogs.com",
 ) -> dict[str, Any]:
@@ -2686,8 +2913,11 @@ def _comp_samples_payload(
         "ranking_basis": "sampled_fastest_kills",
         "matching_rule": "class_roster_composition_across_sampled_finished_kills_with_player_details",
         "query": query,
-        "notes": _sampled_spec_filter_notes(query.get("spec_name") if isinstance(query, dict) else None),
-        "freshness": _sampled_cross_report_freshness(cache_ttl_seconds),
+        "notes": [
+            *_sampled_spec_filter_notes(query.get("spec_name") if isinstance(query, dict) else None, sample),
+            *_sampled_dedupe_notes(sample),
+        ],
+        "freshness": _sampled_cross_report_freshness(cache_ttl_seconds, transport_counts=transport_counts),
         "cache_provenance": _sampled_cache_provenance(cache_ttl_seconds),
         "sample_scope": _sampled_sample_scope(
             ranking_basis="sampled_fastest_kills",
@@ -2714,55 +2944,76 @@ def _comp_samples_payload(
     }
 
 
-def _collect_ability_usage_rows(
+def _ability_cast_summary(
+    events_report: dict[str, Any],
     *,
+    actor_index: dict[int, dict[str, Any]],
+    report_code: str,
+    fight_id: int,
+) -> dict[str, Any]:
+    """Cast totals and per-source rows for one sampled kill's ability event slice."""
+    paginator = dict_at(events_report, "events")
+    event_rows = _completed_casts([event for event in list_at(paginator, "data") if isinstance(event, dict)])
+    source_counts: dict[int, int] = {}
+    for event in event_rows:
+        source_id = _event_id(event.get("sourceID"))
+        if isinstance(source_id, int):
+            source_counts[source_id] = source_counts.get(source_id, 0) + 1
+    next_page_timestamp = paginator.get("nextPageTimestamp")
+    return {
+        "count": len(event_rows),
+        # The kill's cast events did not fit in one --event-limit page, so `count` is a lower bound.
+        "truncated": next_page_timestamp is not None,
+        "next_page_timestamp": next_page_timestamp,
+        "sources": [
+            {
+                "count": count,
+                "source": _named_actor(
+                    actor_index,
+                    source_id,
+                    report_code=report_code,
+                    fight_id=fight_id,
+                    source="ability_usage_summary",
+                ),
+            }
+            for source_id, count in sorted(source_counts.items(), key=lambda item: (-item[1], item[0]))
+        ],
+    }
+
+
+def _unresolved_ability_identity(ability_id: int) -> dict[str, Any]:
+    """Ability identity for an explicitly filtered ability that never appeared in sampled master data."""
+    return {
+        "game_id": ability_id,
+        "name": f"ability:{ability_id}",
+        "identity_contract": ability_identity_payload(
+            game_id=ability_id,
+            name=f"ability:{ability_id}",
+            provider="warcraftlogs",
+            source="ability_usage_summary",
+            notes=["ability id was filtered explicitly but was not present in sampled master data"],
+        ),
+    }
+
+
+def _collect_ability_usage_rows(
     client: WarcraftLogsClient,
-    zone_id: int,
-    boss_id: int | None,
-    boss_name: str | None,
-    difficulty: int | None,
-    spec_name: str | None,
-    kill_time_min: float | None,
-    kill_time_max: float | None,
-    report_pages: int,
-    reports_per_page: int,
-    start_time: float | None,
-    end_time: float | None,
-    guild_region: str | None,
-    guild_realm: str | None,
-    guild_name: str | None,
+    scope: CrossReportScope,
+    *,
     ability_id: int,
     event_limit: int,
 ) -> dict[str, Any]:
-    analytics = _collect_boss_kill_rows(
-        client=client,
-        zone_id=zone_id,
-        boss_id=boss_id,
-        boss_name=boss_name,
-        difficulty=difficulty,
-        spec_name=spec_name,
-        kill_time_min=kill_time_min,
-        kill_time_max=kill_time_max,
-        report_pages=report_pages,
-        reports_per_page=reports_per_page,
-        start_time=start_time,
-        end_time=end_time,
-        guild_region=guild_region,
-        guild_realm=guild_realm,
-        guild_name=guild_name,
-    )
+    analytics = _collect_boss_kill_rows(client, scope)
     master_cache: dict[str, dict[str, Any]] = {}
     usage_rows: list[dict[str, Any]] = []
     resolved_ability: dict[str, Any] | None = None
 
     for row in analytics["rows"]:
-        report_payload = row.get("report") if isinstance(row.get("report"), dict) else {}
-        fight_payload = row.get("fight") if isinstance(row.get("fight"), dict) else {}
-        report_code = report_payload.get("code")
-        fight_id = fight_payload.get("id")
-        encounter_id = fight_payload.get("encounter_id")
-        if not isinstance(report_code, str) or not isinstance(fight_id, int):
+        row_scope = _sampled_kill_row_scope(row)
+        if row_scope is None:
             continue
+        report_code, fight_id = row_scope
+        encounter_id = dict_at(row, "fight").get("encounter_id")
         master_report = master_cache.get(report_code)
         if master_report is None:
             master_report = client.report_master_data(code=report_code, allow_unlisted=False, actor_type="Player")
@@ -2782,55 +3033,33 @@ def _collect_ability_usage_rows(
                 limit=event_limit,
             ),
         )
-        paginator = events_report.get("events") if isinstance(events_report.get("events"), dict) else {}
-        event_rows = paginator.get("data") if isinstance(paginator.get("data"), list) else []
-        source_counts: dict[int, int] = {}
-        for event in event_rows:
-            if not isinstance(event, dict):
-                continue
-            source_id = _event_id(event.get("sourceID"))
-            if isinstance(source_id, int):
-                source_counts[source_id] = source_counts.get(source_id, 0) + 1
         usage_rows.append(
             {
                 **row,
-                "casts": {
-                    "count": len([event for event in event_rows if isinstance(event, dict)]),
-                    "next_page_timestamp": paginator.get("nextPageTimestamp"),
-                    "sources": [
-                        {
-                            "count": count,
-                            "source": _named_actor(
-                                actor_index,
-                                source_id,
-                                report_code=report_code,
-                                fight_id=fight_id,
-                                source="ability_usage_summary",
-                            ),
-                        }
-                        for source_id, count in sorted(source_counts.items(), key=lambda item: (-item[1], item[0]))
-                    ],
-                },
+                "casts": _ability_cast_summary(
+                    events_report,
+                    actor_index=actor_index,
+                    report_code=report_code,
+                    fight_id=fight_id,
+                ),
             }
         )
 
-    if resolved_ability is None:
-        resolved_ability = {
-            "game_id": ability_id,
-            "name": f"ability:{ability_id}",
-            "identity_contract": ability_identity_payload(
-                game_id=ability_id,
-                name=f"ability:{ability_id}",
-                provider="warcraftlogs",
-                source="ability_usage_summary",
-                notes=["ability id was filtered explicitly but was not present in sampled master data"],
-            ),
-        }
     return {
         "rows": usage_rows,
         "sample": analytics["sample"],
-        "ability": resolved_ability,
+        "ability": resolved_ability or _unresolved_ability_identity(ability_id),
     }
+
+
+def _event_limit_truncation_notes(truncated_kill_count: int, *, event_limit: int) -> list[str]:
+    """Say so when sampled kills hit ``--event-limit``, so no total reads as a complete count."""
+    if truncated_kill_count <= 0:
+        return []
+    return [
+        f"{truncated_kill_count} sampled kill(s) returned more cast events than --event-limit={event_limit}; "
+        "their cast counts, and every total derived from them, are lower bounds. Raise --event-limit for exact totals"
+    ]
 
 
 def _ability_usage_summary_payload(
@@ -2841,15 +3070,16 @@ def _ability_usage_summary_payload(
     ability: dict[str, Any],
     preview_limit: int,
     event_limit: int,
+    transport_counts: dict[str, int],
     cache_ttl_seconds: int | None = None,
     root_url: str = "https://www.warcraftlogs.com",
 ) -> dict[str, Any]:
-    cast_counts = [
-        int(casts.get("count"))
-        for casts in (row.get("casts") for row in rows)
-        if isinstance(casts, dict) and isinstance(casts.get("count"), int)
-    ]
+    row_casts = [casts for casts in (row.get("casts") for row in rows) if isinstance(casts, dict)]
+    cast_counts = [int(casts["count"]) for casts in row_casts if isinstance(casts.get("count"), int)]
     used_counts = [count for count in cast_counts if count > 0]
+    # A kill whose cast events did not fit in one --event-limit page contributes a lower bound,
+    # so every total derived from it is a lower bound too (SAFE_ANALYTICS_RULES.md).
+    truncated_kill_count = sum(1 for casts in row_casts if casts.get("truncated"))
     preview = rows[:preview_limit]
     # The emitted `query` block widens the caller's query with the event/preview limits;
     # sample_scope.filters must project from the SAME widened query so the two cannot drift
@@ -2866,8 +3096,12 @@ def _ability_usage_summary_payload(
         "ranking_basis": "sampled_fastest_kills",
         "matching_rule": "ability_casts_across_sampled_finished_kills_with_event_limit",
         "query": scoped_query,
-        "notes": _sampled_spec_filter_notes(query.get("spec_name") if isinstance(query, dict) else None),
-        "freshness": _sampled_cross_report_freshness(cache_ttl_seconds),
+        "notes": [
+            *_sampled_spec_filter_notes(query.get("spec_name") if isinstance(query, dict) else None, sample),
+            *_sampled_dedupe_notes(sample),
+            *_event_limit_truncation_notes(truncated_kill_count, event_limit=event_limit),
+        ],
+        "freshness": _sampled_cross_report_freshness(cache_ttl_seconds, transport_counts=transport_counts),
         "cache_provenance": _sampled_cache_provenance(cache_ttl_seconds),
         "sample_scope": _sampled_sample_scope(
             ranking_basis="sampled_fastest_kills",
@@ -2883,11 +3117,13 @@ def _ability_usage_summary_payload(
             "preview_kill_count": len(preview),
             "excluded_preview_kill_count": max(0, len(rows) - len(preview)),
             "preview_truncated": len(rows) > preview_limit,
+            "kills_with_truncated_events_count": truncated_kill_count,
             "stable_source_only": True,
         },
         "ability": ability,
         "usage": {
             "total_casts": sum(cast_counts),
+            "total_casts_is_lower_bound": truncated_kill_count > 0,
             "kills_with_any_usage_count": len(used_counts),
             "kills_with_any_usage_percent": round((len(used_counts) / len(rows)) * 100, 2) if rows else 0.0,
             "casts_per_kill": numeric_summary([float(count) for count in cast_counts]),
@@ -2897,86 +3133,8 @@ def _ability_usage_summary_payload(
     }
 
 
-def _report_filter_query_payload(
-    *,
-    ability_id: float | None,
-    data_type: str | None,
-    difficulty: int | None,
-    encounter_id: int | None,
-    end_time: float | None,
-    fight_ids: list[int] | None,
-    filter_expression: str | None,
-    hostility_type: str | None,
-    kill_type: str | None,
-    limit: int | None,
-    source_id: int | None,
-    start_time: float | None,
-    target_id: int | None,
-    translate: bool | None,
-    view_by: str | None,
-    wipe_cutoff: int | None,
-) -> dict[str, Any]:
-    return {
-        "ability_id": ability_id,
-        "data_type": data_type,
-        "difficulty": difficulty,
-        "encounter_id": encounter_id,
-        "end_time": end_time,
-        "fight_ids": fight_ids,
-        "filter_expression": filter_expression,
-        "hostility_type": hostility_type,
-        "kill_type": kill_type,
-        "limit": limit,
-        "source_id": source_id,
-        "start_time": start_time,
-        "target_id": target_id,
-        "translate": translate,
-        "view_by": view_by,
-        "wipe_cutoff": wipe_cutoff,
-    }
-
-
-def _report_filter_options(
-    *,
-    ability_id: float | None,
-    data_type: str | None,
-    difficulty: int | None,
-    encounter_id: int | None,
-    end_time: float | None,
-    fight_ids: list[int] | None,
-    filter_expression: str | None,
-    hostility_type: str | None,
-    kill_type: str | None,
-    limit: int | None,
-    source_id: int | None,
-    start_time: float | None,
-    target_id: int | None,
-    translate: bool | None,
-    view_by: str | None,
-    wipe_cutoff: int | None,
-) -> ReportFilterOptions:
-    return ReportFilterOptions(
-        ability_id=ability_id,
-        data_type=data_type,
-        difficulty=difficulty,
-        encounter_id=encounter_id,
-        end_time=end_time,
-        fight_ids=fight_ids or None,
-        filter_expression=filter_expression,
-        hostility_type=hostility_type,
-        kill_type=kill_type,
-        limit=limit,
-        source_id=source_id,
-        start_time=start_time,
-        target_id=target_id,
-        translate=translate,
-        view_by=view_by,
-        wipe_cutoff=wipe_cutoff,
-    )
-
-
 def _report_events_payload(report: dict[str, Any]) -> dict[str, Any]:
-    paginator = report.get("events") if isinstance(report.get("events"), dict) else {}
+    paginator = dict_at(report, "events")
     return {
         "report": _report_brief_payload(report),
         "next_page_timestamp": paginator.get("nextPageTimestamp"),
@@ -2992,18 +3150,18 @@ def _report_json_payload(report: dict[str, Any], *, field: str) -> dict[str, Any
 
 
 def _report_table_entries(report: dict[str, Any]) -> list[dict[str, Any]]:
-    table = report.get("table") if isinstance(report.get("table"), dict) else {}
-    container = table.get("data") if isinstance(table.get("data"), dict) else table
+    table = dict_at(report, "table")
+    container = dict_at(table, "data") or table
     rows = container.get("entries")
     if not isinstance(rows, list):
-        rows = container.get("auras") if isinstance(container.get("auras"), list) else []
+        rows = list_at(container, "auras")
     return [row for row in rows if isinstance(row, dict)]
 
 
 def _report_master_data_payload(report: dict[str, Any]) -> dict[str, Any]:
-    master_data = report.get("masterData") if isinstance(report.get("masterData"), dict) else {}
-    abilities = master_data.get("abilities") if isinstance(master_data.get("abilities"), list) else []
-    actors = master_data.get("actors") if isinstance(master_data.get("actors"), list) else []
+    master_data = dict_at(report, "masterData")
+    abilities = list_at(master_data, "abilities")
+    actors = list_at(master_data, "actors")
     report_code = report.get("code") if isinstance(report.get("code"), str) else None
     return {
         "report": _report_brief_payload(report),
@@ -3058,7 +3216,7 @@ def _report_master_data_payload(report: dict[str, Any]) -> dict[str, Any]:
 
 
 def _player_detail_actor_payload(actor: dict[str, Any], *, report_code: str | None = None, fight_id: int | None = None) -> dict[str, Any]:
-    specs = actor.get("specs") if isinstance(actor.get("specs"), list) else []
+    specs = list_at(actor, "specs")
     normalized_specs = [
         {"spec": spec.get("spec"), "count": spec.get("count")}
         for spec in specs
@@ -3105,13 +3263,13 @@ def _player_detail_actor_payload(actor: dict[str, Any], *, report_code: str | No
 
 def _report_player_details_payload(report: dict[str, Any], *, report_code: str |
                                    None = None, fight_id: int | None = None) -> dict[str, Any]:
-    details = report.get("playerDetails") if isinstance(report.get("playerDetails"), dict) else {}
-    data = details.get("data") if isinstance(details.get("data"), dict) else {}
-    role_data = data.get("playerDetails") if isinstance(data.get("playerDetails"), dict) else data
+    details = dict_at(report, "playerDetails")
+    data = dict_at(details, "data")
+    role_data = dict_at(data, "playerDetails") or data
     roles: dict[str, list[dict[str, Any]]] = {}
     counts: dict[str, int] = {}
     for role in ("tanks", "healers", "dps"):
-        rows = role_data.get(role) if isinstance(role_data.get(role), list) else []
+        rows = list_at(role_data, role)
         normalized_rows = [
             _player_detail_actor_payload(row, report_code=report_code, fight_id=fight_id)
             for row in rows
@@ -3149,12 +3307,12 @@ def _report_encounter_aura_summary_payload(
     table_report: dict[str, Any],
     master_report: dict[str, Any],
     ability_id: int,
+    include_raw: bool,
 ) -> dict[str, Any]:
     actor_index, ability_index = _master_data_indexes(master_report)
     rows_out: list[dict[str, Any]] = []
     for entry in _report_table_entries(table_report):
         source_id = entry.get("id") if isinstance(entry.get("id"), int) else None
-        reported_total_uptime = entry.get("totalUptime") if isinstance(entry.get("totalUptime"), (int, float)) else entry.get("totalTime")
         rows_out.append(
             {
                 "source": _named_actor(
@@ -3164,19 +3322,16 @@ def _report_encounter_aura_summary_payload(
                     fight_id=fight.get("id") if isinstance(fight.get("id"), int) else None,
                     source="report_encounter_aura_summary",
                 ) if source_id is not None else {"id": None, "name": entry.get("name")},
-                "reported_total": entry.get("total"),
-                "reported_active_time": entry.get("activeTime"),
-                "reported_total_time": entry.get("totalTime"),
-                "reported_total_uptime": reported_total_uptime,
+                # An ability-scoped Buffs table reports per-source uptime (ms), uses and bands only.
+                "reported_total_uptime": entry.get("totalUptime"),
                 "reported_total_uses": entry.get("totalUses"),
                 "reported_bands": entry.get("bands"),
-                "raw_entry": entry,
+                **({"raw_entry": entry} if include_raw else {}),
             }
         )
     rows_out.sort(
         key=lambda row: (
-            -(float(row["reported_total_uptime"]) if isinstance(row.get("reported_total_uptime"), (int, float)) else
-              float(row["reported_total"]) if isinstance(row.get("reported_total"), (int, float)) else float("-inf")),
+            -(float(row["reported_total_uptime"]) if isinstance(row.get("reported_total_uptime"), (int, float)) else float("-inf")),
             str((row.get("source") or {}).get("name") or ""),
         )
     )
@@ -3201,34 +3356,38 @@ def _report_encounter_aura_summary_payload(
     }
 
 
-def _report_encounter_damage_source_summary_payload(
+def _report_encounter_damage_summary_payload(
     *,
     report: dict[str, Any],
     fight: dict[str, Any],
     table_report: dict[str, Any],
     master_report: dict[str, Any],
+    actor_field: Literal["source", "target"],
+    include_raw: bool,
 ) -> dict[str, Any]:
+    """Damage-table rows keyed by the grouping actor, typed and sorted by reported total."""
     actor_index, _ability_index = _master_data_indexes(master_report)
+    identity_source = f"report_encounter_damage_{actor_field}_summary"
     rows_out: list[dict[str, Any]] = []
     for entry in _report_table_entries(table_report):
-        source_id = entry.get("id") if isinstance(entry.get("id"), int) else None
+        actor_id = entry.get("id") if isinstance(entry.get("id"), int) else None
         rows_out.append(
             {
-                "source": _named_actor(
+                actor_field: _named_actor(
                     actor_index,
-                    source_id,
+                    actor_id,
                     report_code=report.get("code") if isinstance(report.get("code"), str) else None,
                     fight_id=fight.get("id") if isinstance(fight.get("id"), int) else None,
-                    source="report_encounter_damage_source_summary",
-                ) if source_id is not None else {"id": None, "name": entry.get("name")},
+                    source=identity_source,
+                ) if actor_id is not None else {"id": None, "name": entry.get("name")},
                 "reported_total": entry.get("total"),
-                "raw_entry": entry,
+                **({"raw_entry": entry} if include_raw else {}),
             }
         )
     rows_out.sort(
         key=lambda row: (
             -(float(row["reported_total"]) if isinstance(row.get("reported_total"), (int, float)) else float("-inf")),
-            str((row.get("source") or {}).get("name") or ""),
+            str((row.get(actor_field) or {}).get("name") or ""),
         )
     )
     return {
@@ -3240,43 +3399,13 @@ def _report_encounter_damage_source_summary_payload(
     }
 
 
-def _report_encounter_damage_target_summary_payload(
-    *,
-    report: dict[str, Any],
-    fight: dict[str, Any],
-    table_report: dict[str, Any],
-    master_report: dict[str, Any],
-) -> dict[str, Any]:
-    actor_index, _ability_index = _master_data_indexes(master_report)
-    rows_out: list[dict[str, Any]] = []
-    for entry in _report_table_entries(table_report):
-        target_id = entry.get("id") if isinstance(entry.get("id"), int) else None
-        rows_out.append(
-            {
-                "target": _named_actor(
-                    actor_index,
-                    target_id,
-                    report_code=report.get("code") if isinstance(report.get("code"), str) else None,
-                    fight_id=fight.get("id") if isinstance(fight.get("id"), int) else None,
-                    source="report_encounter_damage_target_summary",
-                ) if target_id is not None else {"id": None, "name": entry.get("name")},
-                "reported_total": entry.get("total"),
-                "raw_entry": entry,
-            }
-        )
-    rows_out.sort(
-        key=lambda row: (
-            -(float(row["reported_total"]) if isinstance(row.get("reported_total"), (int, float)) else float("-inf")),
-            str((row.get("target") or {}).get("name") or ""),
-        )
-    )
-    return {
-        "report": _report_brief_payload(table_report),
-        "damage_summary": {
-            "entry_count": len(rows_out),
-            "rows": rows_out,
-        },
-    }
+def _aura_summary_rows(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Rows of an aura-summary payload, or an empty list when the summary is missing."""
+    return [row for row in list_at(dict_at(payload, "aura_summary"), "rows") if isinstance(row, dict)]
+
+
+# The fields a Warcraft Logs Buffs table actually carries per source (totalUptime ms, totalUses).
+_AURA_COMPARE_FIELDS = ("reported_total_uptime", "reported_total_uses")
 
 
 def _aura_compare_rows(
@@ -3284,71 +3413,48 @@ def _aura_compare_rows(
     left_rows: list[dict[str, Any]],
     right_rows: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
+    """One row per aura source, with right-minus-left deltas of uptime and uses, largest uptime change first."""
+
     def _row_key(row: dict[str, Any]) -> tuple[int | None, str]:
-        source = row.get("source") if isinstance(row.get("source"), dict) else {}
+        source = dict_at(row, "source")
         source_id = source.get("id") if isinstance(source.get("id"), int) else None
-        source_name = str(source.get("name") or "")
-        return source_id, source_name
+        return source_id, str(source.get("name") or "")
 
-    def _compare_row(
-        key: tuple[int | None, str],
-        left: dict[str, Any] | None,
-        right: dict[str, Any] | None,
-    ) -> dict[str, Any]:
-        left_total = left.get("reported_total") if isinstance(left, dict) else None
-        right_total = right.get("reported_total") if isinstance(right, dict) else None
-        left_active = left.get("reported_active_time") if isinstance(left, dict) else None
-        right_active = right.get("reported_active_time") if isinstance(right, dict) else None
-        return {
-            "source": (
-                left.get("source")
-                if isinstance(left, dict) and isinstance(left.get("source"), dict)
-                else (
-                    right.get("source")
-                    if isinstance(right, dict) and isinstance(right.get("source"), dict)
-                    else {"id": key[0], "name": key[1]}
-                )
-            ),
-            "left_reported_total": left_total,
-            "right_reported_total": right_total,
-            "reported_total_delta": (
-                round(float(right_total) - float(left_total), 2)
-                if isinstance(left_total, (int, float)) and isinstance(right_total, (int, float))
-                else None
-            ),
-            "left_reported_active_time": left_active,
-            "right_reported_active_time": right_active,
-            "reported_active_time_delta": (
-                int(right_active) - int(left_active)
-                if isinstance(left_active, (int, float)) and isinstance(right_active, (int, float))
-                else None
-            ),
-            "left_row": left,
-            "right_row": right,
+    def _compare_row(key: tuple[int | None, str], left: dict[str, Any] | None, right: dict[str, Any] | None) -> dict[str, Any]:
+        compared: dict[str, Any] = {
+            "source": dict_at(left or {}, "source") or dict_at(right or {}, "source") or {"id": key[0], "name": key[1]},
         }
+        for field in _AURA_COMPARE_FIELDS:
+            left_value = (left or {}).get(field)
+            right_value = (right or {}).get(field)
+            compared[f"left_{field}"] = left_value
+            compared[f"right_{field}"] = right_value
+            compared[f"{field}_delta"] = (
+                right_value - left_value
+                if isinstance(left_value, (int, float)) and isinstance(right_value, (int, float))
+                else None
+            )
+        return {**compared, "left_row": left, "right_row": right}
 
-    left_index = {_row_key(row): row for row in left_rows if isinstance(row, dict)}
-    right_index = {_row_key(row): row for row in right_rows if isinstance(row, dict)}
-    combined_keys = sorted(set(left_index) | set(right_index), key=lambda item: (str(item[1]).lower(), item[0] or 0))
-    compared: list[dict[str, Any]] = [
-        _compare_row(key, left_index.get(key), right_index.get(key)) for key in combined_keys
-    ]
-    compared.sort(
+    left_index = {_row_key(row): row for row in left_rows}
+    right_index = {_row_key(row): row for row in right_rows}
+    compared_rows = [_compare_row(key, left_index.get(key), right_index.get(key)) for key in set(left_index) | set(right_index)]
+    compared_rows.sort(
         key=lambda row: (
-            -abs(float(row["reported_total_delta"])) if isinstance(row.get("reported_total_delta"), (int, float)) else -1.0,
-            str((row.get("source") or {}).get("name") or ""),
+            -abs(row["reported_total_uptime_delta"]) if row["reported_total_uptime_delta"] is not None else 1,
+            str(row["source"].get("name") or "").lower(),
         )
     )
-    return compared
+    return compared_rows
 
 
-def _character_rankings_payload(character: dict[str, Any], *, top: int) -> dict[str, Any]:
-    server = character.get("server") if isinstance(character.get("server"), dict) else {}
-    faction = character.get("faction") if isinstance(character.get("faction"), dict) else {}
-    rankings = character.get("zoneRankings") if isinstance(character.get("zoneRankings"), dict) else {}
+def _character_rankings_payload(character: dict[str, Any], *, top: int, transport_counts: dict[str, int]) -> dict[str, Any]:
+    server = dict_at(character, "server")
+    faction = dict_at(character, "faction")
+    rankings = dict_at(character, "zoneRankings")
     rankings_error = rankings.get("error") if isinstance(rankings.get("error"), str) else None
-    all_stars = rankings.get("allStars") if isinstance(rankings.get("allStars"), list) else []
-    ranking_rows = rankings.get("rankings") if isinstance(rankings.get("rankings"), list) else []
+    all_stars = list_at(rankings, "allStars")
+    ranking_rows = list_at(rankings, "rankings")
     all_star_specs = [
         row.get("spec")
         for row in all_stars
@@ -3425,7 +3531,7 @@ def _character_rankings_payload(character: dict[str, Any], *, top: int) -> dict[
                 "partition": rankings.get("partition"),
                 "size": rankings.get("size"),
             },
-            "freshness": _sampled_cross_report_freshness(),
+            "freshness": _sampled_cross_report_freshness(transport_counts=transport_counts),
             "source_character_identity": source_character_identity,
         },
         "raw": rankings,
@@ -3433,7 +3539,7 @@ def _character_rankings_payload(character: dict[str, Any], *, top: int) -> dict[
 
 
 def _reports_payload(pagination: dict[str, Any]) -> dict[str, Any]:
-    rows = pagination.get("data") if isinstance(pagination.get("data"), list) else []
+    rows = list_at(pagination, "data")
     return {
         "pagination": {
             "total": pagination.get("total"),
@@ -3451,18 +3557,34 @@ def _reports_payload(pagination: dict[str, Any]) -> dict[str, Any]:
 @app.callback()
 def main(
     ctx: typer.Context,
-    pretty: bool = typer.Option(False, "--pretty", help="Pretty-print JSON output."),
     site: str = typer.Option(
         "retail",
         "--site",
         help="Warcraft Logs site profile: retail, classic, or fresh.",
     ),
+    pretty: PrettyOption = False,
+    compact: CompactOption = False,
+    fields: FieldsOption = None,
+    fields_strict: FieldsStrictOption = False,
+    profile: ProfileOption = None,
+    compact_max_chars: CompactMaxCharsOption = DEFAULT_COMPACT_MAX_CHARS,
 ) -> None:
+    """Global options for every warcraftlogs command."""
     try:
         site_profile = resolve_site_profile(site)
     except ValueError as exc:
         raise typer.BadParameter(str(exc), param_hint="--site") from exc
-    ctx.obj = RuntimeConfig(pretty=pretty, site_profile=site_profile)
+    configure(
+        ctx,
+        provider="warcraftlogs",
+        pretty=pretty,
+        compact=compact,
+        fields=fields,
+        fields_strict=fields_strict,
+        profile=profile,
+        compact_max_chars=compact_max_chars,
+        config=RuntimeConfig(site_profile=site_profile),
+    )
 
 
 @app.command("search")
@@ -3472,8 +3594,8 @@ def search(
     limit: int = typer.Option(5, "--limit", min=1, max=50,
                               help="Accepted for wrapper compatibility; explicit report discovery returns at most one result."),
 ) -> None:
-    del limit
-    _emit(ctx, _report_search_payload(query, ref=_explicit_report_reference(query), site=_cfg(ctx).site_profile))
+    """Match an explicit Warcraft Logs report URL or code; free text returns a discovery hint."""
+    emit(ctx, provider_search(query, limit=limit, site=_cfg(ctx).site_profile))
 
 
 @app.command("resolve")
@@ -3483,8 +3605,9 @@ def resolve(
     limit: int = typer.Option(5, "--limit", min=1, max=50,
                               help="Accepted for wrapper compatibility; explicit report resolution returns at most one match."),
 ) -> None:
+    """Resolve an explicit Warcraft Logs report URL or code to a single report reference."""
     del limit
-    _emit(ctx, _report_resolve_payload(query, ref=_explicit_report_reference(query), site=_cfg(ctx).site_profile))
+    emit(ctx, provider_resolve(query, site=_cfg(ctx).site_profile))
 
 
 @app.command("doctor")
@@ -3492,7 +3615,8 @@ def doctor(
     ctx: typer.Context,
     no_live: bool = typer.Option(False, "--no-live", help="Skip live Warcraft Logs auth probes and report local/runtime readiness only."),
 ) -> None:
-    _emit(ctx, _doctor_payload(live=not no_live, site=_cfg(ctx).site_profile))
+    """Report Warcraft Logs auth, site profile, and per-command readiness."""
+    emit(ctx, provider_doctor(live=not no_live, site=_cfg(ctx).site_profile))
 
 
 def _random_state_token() -> str:
@@ -3536,6 +3660,132 @@ def _validate_pending_site_profile(ctx: typer.Context, pending: dict[str, Any]) 
         )
 
 
+def _requested_scopes(scope: list[str]) -> list[str]:
+    return [item.strip() for item in scope if item.strip()]
+
+
+def _authorize_url_with_scopes(authorize_url: str, scopes: list[str]) -> str:
+    if not scopes:
+        return authorize_url
+    joiner = "&" if "?" in authorize_url else "?"
+    return f"{authorize_url}{joiner}scope={'+'.join(scopes)}"
+
+
+def _emit_authorize_step(ctx: typer.Context, *, mode: str, redirect_uri: str, scope: list[str]) -> None:
+    """Persist the pending OAuth state and emit the authorize URL for ``auth login``/``auth pkce-login``."""
+    client = _client(ctx)
+    try:
+        pending_state = _random_state_token()
+        scopes = _requested_scopes(scope)
+        pending: dict[str, Any] = {
+            "pending_auth_mode": mode,
+            "pending_state": pending_state,
+            "redirect_uri": redirect_uri,
+            "requested_scopes": scopes,
+            "site_profile": client.site.key,
+        }
+        if mode == "pkce":
+            code_verifier = _pkce_verifier()
+            pending["code_verifier"] = code_verifier
+            authorize_url = client.pkce_code_url(
+                redirect_uri=redirect_uri,
+                state=pending_state,
+                code_challenge=_pkce_challenge(code_verifier),
+            )
+        else:
+            authorize_url = client.authorization_code_url(redirect_uri=redirect_uri, state=pending_state)
+        authorize_url = _authorize_url_with_scopes(authorize_url, scopes)
+        saved_path = save_provider_auth_state("warcraftlogs", pending)
+    except WarcraftLogsClientError as exc:
+        _handle_client_error(ctx, exc)
+    finally:
+        client.close()
+    _emit(
+        ctx,
+        {
+            "ok": True,
+            "provider": "warcraftlogs",
+            "mode": mode,
+            "step": "authorize",
+            "authorize_url": authorize_url,
+            "redirect_uri": redirect_uri,
+            "state": pending_state,
+            "requested_scopes": scopes,
+            "site_profile": _site_profile_payload(client.site),
+            "state_path": str(saved_path),
+        },
+        client=client,
+    )
+
+
+def _validate_oauth_callback(
+    ctx: typer.Context,
+    pending: dict[str, Any],
+    *,
+    state: str | None,
+    redirect_uri: str,
+    flow_label: str,
+    authorize_step_label: str,
+) -> None:
+    """Reject a callback that does not match the pending flow before any code is exchanged."""
+    expected_state = pending.get("pending_state")
+    if isinstance(expected_state, str) and expected_state:
+        if not state:
+            _fail(ctx, "missing_state", f"Missing callback state. Re-run {authorize_step_label} and provide the returned state value.")
+        if state != expected_state:
+            _fail(ctx, "state_mismatch", f"Callback state did not match the pending {flow_label}.")
+    if isinstance(pending.get("redirect_uri"), str) and pending.get("redirect_uri") != redirect_uri:
+        _fail(ctx, "redirect_uri_mismatch", f"Redirect URI did not match the pending {flow_label}.")
+
+
+def _emit_token_step(
+    ctx: typer.Context,
+    *,
+    mode: str,
+    pending: dict[str, Any],
+    payload: dict[str, Any],
+    redirect_uri: str,
+    client: WarcraftLogsClient,
+) -> None:
+    """Save the exchanged user token and emit the granted-scope summary."""
+    token_summary = _token_payload_summary(payload, auth_mode=mode, redirect_uri=redirect_uri)
+    token_summary["site_profile"] = _cfg(ctx).site_profile.key
+    if isinstance(pending.get("requested_scopes"), list):
+        token_summary["requested_scopes"] = pending.get("requested_scopes")
+    saved_path = save_provider_auth_state("warcraftlogs", token_summary)
+    scopes = _scope_breakdown(
+        granted_scope=token_summary.get("scope"),
+        requested_scopes=token_summary.get("requested_scopes"),
+        access_token=token_summary.get("access_token"),
+    )
+    _emit(
+        ctx,
+        {
+            "ok": True,
+            "provider": "warcraftlogs",
+            "mode": mode,
+            "step": "token_exchanged",
+            "endpoint_family": "user",
+            "site_profile": _site_profile_payload(_cfg(ctx).site_profile),
+            "state_path": str(saved_path),
+            "token": {
+                "token_type": token_summary.get("token_type"),
+                "scope": token_summary.get("scope"),
+                "expires_at": token_summary.get("expires_at"),
+                "has_refresh_token": bool(token_summary.get("refresh_token")),
+            },
+            "scopes": {
+                "granted": scopes["granted"],
+                "requested": scopes["requested"],
+                "has_view_user_profile": scopes["has_view_user_profile"],
+                "has_view_private_reports": scopes["has_view_private_reports"],
+            },
+            "scope_warning": scopes["warning"],
+        },
+        client=client,
+    )
+
+
 def _active_auth_mode_from_state(state: dict[str, Any], *, site: WarcraftLogsSiteProfile | None = None) -> str:
     auth_mode = state.get("auth_mode")
     if state.get("has_access_token") and isinstance(auth_mode, str):
@@ -3560,6 +3810,7 @@ def auth_status(
     ctx: typer.Context,
     no_live: bool = typer.Option(False, "--no-live", help="Skip live Warcraft Logs auth probes and report local/runtime readiness only."),
 ) -> None:
+    """Report saved Warcraft Logs credentials, token state, and public/user API readiness."""
     site = _cfg(ctx).site_profile
     auth = load_warcraftlogs_auth_config()
     credential_source = auth.env_file if auth.env_file is not None else ("environment" if auth.configured else None)
@@ -3603,6 +3854,7 @@ def auth_status(
 
 @auth_app.command("client")
 def auth_client(ctx: typer.Context) -> None:
+    """Show the configured OAuth client and the endpoints of the selected site profile."""
     site = _cfg(ctx).site_profile
     auth = load_warcraftlogs_auth_config()
     credential_source = auth.env_file if auth.env_file is not None else ("environment" if auth.configured else None)
@@ -3630,6 +3882,7 @@ def auth_client(ctx: typer.Context) -> None:
 
 @auth_app.command("token")
 def auth_token(ctx: typer.Context) -> None:
+    """Summarize the saved user token: type, expiry, and granted OAuth scopes."""
     site = _cfg(ctx).site_profile
     state = provider_auth_status("warcraftlogs")
     payload = _saved_provider_auth_payload(state)
@@ -3664,7 +3917,7 @@ def auth_token(ctx: typer.Context) -> None:
 def auth_login(
     ctx: typer.Context,
     redirect_uri: str = typer.Option(..., "--redirect-uri", help="Registered redirect URI for the Warcraft Logs OAuth client."),
-    code: str | None = typer.Option(None, "--code", help="Authorization code returned by the redirect callback."),
+    authorization_code: str | None = typer.Option(None, "--code", help="Authorization code returned by the redirect callback."),
     state: str | None = typer.Option(None, "--state", help="State value returned by the redirect callback."),
     scope: list[str] = typer.Option(
         [],
@@ -3675,109 +3928,37 @@ def auth_login(
         ),
     ),
 ) -> None:
-    if not code:
-        client = _client(ctx)
-        try:
-            pending_state = _random_state_token()
-            scopes = [item.strip() for item in scope if item.strip()]
-            authorize_url = client.authorization_code_url(redirect_uri=redirect_uri, state=pending_state)
-            if scopes:
-                joiner = "&" if "?" in authorize_url else "?"
-                authorize_url = f"{authorize_url}{joiner}scope={'+'.join(scopes)}"
-            saved_path = save_provider_auth_state(
-                "warcraftlogs",
-                {
-                    "pending_auth_mode": "authorization_code",
-                    "pending_state": pending_state,
-                    "redirect_uri": redirect_uri,
-                    "requested_scopes": scopes,
-                    "site_profile": client.site.key,
-                },
-            )
-        except WarcraftLogsClientError as exc:
-            _handle_client_error(ctx, exc)
-            return
-        finally:
-            client.close()
-        _emit(
-            ctx,
-            {
-                "ok": True,
-                "provider": "warcraftlogs",
-                "mode": "authorization_code",
-                "step": "authorize",
-                "authorize_url": authorize_url,
-                "redirect_uri": redirect_uri,
-                "state": pending_state,
-                "requested_scopes": scopes,
-                "site_profile": _site_profile_payload(client.site),
-                "state_path": str(saved_path),
-            },
-            client=client,
-        )
+    """Start (or complete with --code) the authorization-code login that grants a user token."""
+    if not authorization_code:
+        _emit_authorize_step(ctx, mode="authorization_code", redirect_uri=redirect_uri, scope=scope)
         return
 
     pending = load_provider_auth_state("warcraftlogs") or {}
     _validate_pending_site_profile(ctx, pending)
-    expected_state = pending.get("pending_state")
-    if isinstance(expected_state, str) and expected_state and not state:
-        _fail(ctx, "missing_state", "Missing callback state. Re-run the login URL step and provide the returned state value.")
-    if isinstance(expected_state, str) and expected_state and state and state != expected_state:
-        _fail(ctx, "state_mismatch", "Callback state did not match the pending authorization flow.")
-    if isinstance(pending.get("redirect_uri"), str) and pending.get("redirect_uri") != redirect_uri:
-        _fail(ctx, "redirect_uri_mismatch", "Redirect URI did not match the pending authorization flow.")
+    _validate_oauth_callback(
+        ctx,
+        pending,
+        state=state,
+        redirect_uri=redirect_uri,
+        flow_label="authorization flow",
+        authorize_step_label="the login URL step",
+    )
 
     client = _client(ctx)
     try:
-        payload = client.exchange_authorization_code(code=code, redirect_uri=redirect_uri)
+        payload = client.exchange_authorization_code(code=authorization_code, redirect_uri=redirect_uri)
     except WarcraftLogsClientError as exc:
         _handle_client_error(ctx, exc)
-        return
     finally:
         client.close()
-    token_summary = _token_payload_summary(payload, auth_mode="authorization_code", redirect_uri=redirect_uri)
-    token_summary["site_profile"] = _cfg(ctx).site_profile.key
-    if isinstance(pending.get("requested_scopes"), list):
-        token_summary["requested_scopes"] = pending.get("requested_scopes")
-    saved_path = save_provider_auth_state("warcraftlogs", token_summary)
-    scopes = _scope_breakdown(
-        granted_scope=token_summary.get("scope"),
-        requested_scopes=token_summary.get("requested_scopes"),
-        access_token=token_summary.get("access_token"),
-    )
-    _emit(
-        ctx,
-        {
-            "ok": True,
-            "provider": "warcraftlogs",
-            "mode": "authorization_code",
-            "step": "token_exchanged",
-            "endpoint_family": "user",
-            "site_profile": _site_profile_payload(_cfg(ctx).site_profile),
-            "state_path": str(saved_path),
-            "token": {
-                "token_type": token_summary.get("token_type"),
-                "scope": token_summary.get("scope"),
-                "expires_at": token_summary.get("expires_at"),
-                "has_refresh_token": bool(token_summary.get("refresh_token")),
-            },
-            "scopes": {
-                "granted": scopes["granted"],
-                "requested": scopes["requested"],
-                "has_view_user_profile": scopes["has_view_user_profile"],
-                "has_view_private_reports": scopes["has_view_private_reports"],
-            },
-            "scope_warning": scopes["warning"],
-        },
-        client=client,
-    )
+    _emit_token_step(ctx, mode="authorization_code", pending=pending, payload=payload, redirect_uri=redirect_uri, client=client)
 
 
 @auth_app.command("pkce-login")
 def auth_pkce_login(
     ctx: typer.Context,
     redirect_uri: str = typer.Option(..., "--redirect-uri", help="Registered redirect URI for the Warcraft Logs OAuth client."),
-    code: str | None = typer.Option(None, "--code", help="Authorization code returned by the redirect callback."),
+    authorization_code: str | None = typer.Option(None, "--code", help="Authorization code returned by the redirect callback."),
     state: str | None = typer.Option(None, "--state", help="State value returned by the redirect callback."),
     scope: list[str] = typer.Option(
         [],
@@ -3788,58 +3969,13 @@ def auth_pkce_login(
         ),
     ),
 ) -> None:
-    if not code:
-        client = _client(ctx)
-        try:
-            pending_state = _random_state_token()
-            code_verifier = _pkce_verifier()
-            code_challenge = _pkce_challenge(code_verifier)
-            scopes = [item.strip() for item in scope if item.strip()]
-            authorize_url = client.pkce_code_url(
-                redirect_uri=redirect_uri,
-                state=pending_state,
-                code_challenge=code_challenge,
-            )
-            if scopes:
-                joiner = "&" if "?" in authorize_url else "?"
-                authorize_url = f"{authorize_url}{joiner}scope={'+'.join(scopes)}"
-            saved_path = save_provider_auth_state(
-                "warcraftlogs",
-                {
-                    "pending_auth_mode": "pkce",
-                    "pending_state": pending_state,
-                    "redirect_uri": redirect_uri,
-                    "code_verifier": code_verifier,
-                    "requested_scopes": scopes,
-                    "site_profile": client.site.key,
-                },
-            )
-        except WarcraftLogsClientError as exc:
-            _handle_client_error(ctx, exc)
-            return
-        finally:
-            client.close()
-        _emit(
-            ctx,
-            {
-                "ok": True,
-                "provider": "warcraftlogs",
-                "mode": "pkce",
-                "step": "authorize",
-                "authorize_url": authorize_url,
-                "redirect_uri": redirect_uri,
-                "state": pending_state,
-                "requested_scopes": scopes,
-                "site_profile": _site_profile_payload(client.site),
-                "state_path": str(saved_path),
-            },
-            client=client,
-        )
+    """Start (or complete with --code) the PKCE login that grants a user token without a client secret."""
+    if not authorization_code:
+        _emit_authorize_step(ctx, mode="pkce", redirect_uri=redirect_uri, scope=scope)
         return
 
     pending = load_provider_auth_state("warcraftlogs") or {}
     _validate_pending_site_profile(ctx, pending)
-    expected_state = pending.get("pending_state")
     code_verifier = pending.get("code_verifier")
     if not isinstance(code_verifier, str) or not code_verifier:
         _fail(
@@ -3847,61 +3983,28 @@ def auth_pkce_login(
             "missing_code_verifier",
             "Missing pending PKCE verifier. Re-run `warcraftlogs auth pkce-login --redirect-uri ...` first.",
         )
-    if isinstance(expected_state, str) and expected_state and not state:
-        _fail(ctx, "missing_state", "Missing callback state. Re-run the PKCE login URL step and provide the returned state value.")
-    if isinstance(expected_state, str) and expected_state and state and state != expected_state:
-        _fail(ctx, "state_mismatch", "Callback state did not match the pending PKCE flow.")
-    if isinstance(pending.get("redirect_uri"), str) and pending.get("redirect_uri") != redirect_uri:
-        _fail(ctx, "redirect_uri_mismatch", "Redirect URI did not match the pending PKCE flow.")
+    _validate_oauth_callback(
+        ctx,
+        pending,
+        state=state,
+        redirect_uri=redirect_uri,
+        flow_label="PKCE flow",
+        authorize_step_label="the PKCE login URL step",
+    )
 
     client = _client(ctx)
     try:
-        payload = client.exchange_pkce_code(code=code, redirect_uri=redirect_uri, code_verifier=code_verifier)
+        payload = client.exchange_pkce_code(code=authorization_code, redirect_uri=redirect_uri, code_verifier=code_verifier)
     except WarcraftLogsClientError as exc:
         _handle_client_error(ctx, exc)
-        return
     finally:
         client.close()
-    token_summary = _token_payload_summary(payload, auth_mode="pkce", redirect_uri=redirect_uri)
-    token_summary["site_profile"] = _cfg(ctx).site_profile.key
-    if isinstance(pending.get("requested_scopes"), list):
-        token_summary["requested_scopes"] = pending.get("requested_scopes")
-    saved_path = save_provider_auth_state("warcraftlogs", token_summary)
-    scopes = _scope_breakdown(
-        granted_scope=token_summary.get("scope"),
-        requested_scopes=token_summary.get("requested_scopes"),
-        access_token=token_summary.get("access_token"),
-    )
-    _emit(
-        ctx,
-        {
-            "ok": True,
-            "provider": "warcraftlogs",
-            "mode": "pkce",
-            "step": "token_exchanged",
-            "endpoint_family": "user",
-            "site_profile": _site_profile_payload(_cfg(ctx).site_profile),
-            "state_path": str(saved_path),
-            "token": {
-                "token_type": token_summary.get("token_type"),
-                "scope": token_summary.get("scope"),
-                "expires_at": token_summary.get("expires_at"),
-                "has_refresh_token": bool(token_summary.get("refresh_token")),
-            },
-            "scopes": {
-                "granted": scopes["granted"],
-                "requested": scopes["requested"],
-                "has_view_user_profile": scopes["has_view_user_profile"],
-                "has_view_private_reports": scopes["has_view_private_reports"],
-            },
-            "scope_warning": scopes["warning"],
-        },
-        client=client,
-    )
+    _emit_token_step(ctx, mode="pkce", pending=pending, payload=payload, redirect_uri=redirect_uri, client=client)
 
 
 @auth_app.command("logout")
 def auth_logout(ctx: typer.Context) -> None:
+    """Delete the saved Warcraft Logs user token from local state."""
     removed = delete_provider_auth_state("warcraftlogs")
     _emit(
         ctx,
@@ -3918,12 +4021,12 @@ def auth_logout(ctx: typer.Context) -> None:
 
 @auth_app.command("whoami")
 def auth_whoami(ctx: typer.Context) -> None:
+    """Show the Warcraft Logs account the saved user token belongs to."""
     client = _client(ctx)
     try:
         payload = client.current_user()
     except WarcraftLogsClientError as exc:
         _handle_client_error(ctx, exc)
-        return
     finally:
         client.close()
     _emit(
@@ -3944,12 +4047,12 @@ def auth_whoami(ctx: typer.Context) -> None:
 
 @app.command("rate-limit")
 def rate_limit(ctx: typer.Context) -> None:
+    """Show the remaining hourly Warcraft Logs API points for the configured client."""
     client = _client(ctx)
     try:
         payload = client.rate_limit()
     except WarcraftLogsClientError as exc:
         _handle_client_error(ctx, exc)
-        return
     finally:
         client.close()
     _emit(
@@ -3969,12 +4072,12 @@ def rate_limit(ctx: typer.Context) -> None:
 
 @app.command("regions")
 def regions(ctx: typer.Context) -> None:
+    """List Warcraft Logs regions and their realms."""
     client = _client(ctx)
     try:
         rows = client.regions()
     except WarcraftLogsClientError as exc:
         _handle_client_error(ctx, exc)
-        return
     finally:
         client.close()
     regions_payload = [_region_payload(region) for region in rows]
@@ -3983,12 +4086,12 @@ def regions(ctx: typer.Context) -> None:
 
 @app.command("expansions")
 def expansions(ctx: typer.Context) -> None:
+    """List Warcraft Logs expansions and their zones."""
     client = _client(ctx)
     try:
         rows = client.expansions()
     except WarcraftLogsClientError as exc:
         _handle_client_error(ctx, exc)
-        return
     finally:
         client.close()
     expansions_payload = [_expansion_payload(row) for row in rows]
@@ -3998,15 +4101,15 @@ def expansions(ctx: typer.Context) -> None:
 @app.command("server")
 def server(
     ctx: typer.Context,
-    region: str,
-    slug: str,
+    region: str = typer.Argument(..., help="Realm region slug, for example us or eu."),
+    slug: str = typer.Argument(..., help="Realm slug, for example illidan."),
 ) -> None:
+    """Look up a realm by region and slug."""
     client = _client(ctx)
     try:
         payload = client.server(region=region, slug=slug)
     except WarcraftLogsClientError as exc:
         _handle_client_error(ctx, exc)
-        return
     finally:
         client.close()
     _emit(ctx, {"ok": True, "provider": "warcraftlogs", "server": _server_payload(payload)}, client=client)
@@ -4017,12 +4120,12 @@ def zones(
     ctx: typer.Context,
     expansion_id: int | None = typer.Option(None, "--expansion-id", help="Optional Warcraft Logs expansion ID filter."),
 ) -> None:
+    """List zones, optionally filtered to one expansion."""
     client = _client(ctx)
     try:
         rows = client.zones(expansion_id=expansion_id)
     except WarcraftLogsClientError as exc:
         _handle_client_error(ctx, exc)
-        return
     finally:
         client.close()
     zones_payload = [_zone_payload(zone) for zone in rows]
@@ -4040,29 +4143,35 @@ def zones(
 
 
 @app.command("zone")
-def zone(ctx: typer.Context, zone_id: int) -> None:
+def zone(
+    ctx: typer.Context,
+    zone_id: int = typer.Argument(..., help="Warcraft Logs zone ID."),
+) -> None:
+    """Show one zone with its difficulties, encounters, and partitions."""
     client = _client(ctx)
     try:
         payload = client.zone(zone_id=zone_id)
     except WarcraftLogsClientError as exc:
         _handle_client_error(ctx, exc)
-        return
     finally:
         client.close()
     _emit(ctx, {"ok": True, "provider": "warcraftlogs", "zone": _zone_payload(payload)}, client=client)
 
 
 @app.command("encounter")
-def encounter(ctx: typer.Context, encounter_id: int) -> None:
+def encounter(
+    ctx: typer.Context,
+    encounter_id: int = typer.Argument(..., help="Warcraft Logs encounter ID."),
+) -> None:
+    """Show one encounter and the zone it belongs to."""
     client = _client(ctx)
     try:
         payload = client.encounter(encounter_id=encounter_id)
     except WarcraftLogsClientError as exc:
         _handle_client_error(ctx, exc)
-        return
     finally:
         client.close()
-    zone = payload.get("zone") if isinstance(payload.get("zone"), dict) else {}
+    zone = dict_at(payload, "zone")
     _emit(
         ctx,
         {
@@ -4078,6 +4187,80 @@ def encounter(ctx: typer.Context, encounter_id: int) -> None:
                 source="encounter",
             ),
         },
+        client=client,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _EncounterRankingsRequest:
+    """One encounter-rankings run: transport options plus the raw scope echoed back in ``query``."""
+
+    zone_id: int
+    boss_id: int | None
+    boss_name: str | None
+    class_name: str | None
+    spec_name: str | None
+    server_region: str | None
+    top: int
+    options: EncounterRankingsOptions
+
+
+def _encounter_rankings_query(request: _EncounterRankingsRequest, encounter: dict[str, Any]) -> dict[str, Any]:
+    options = request.options
+    return {
+        "zone_id": request.zone_id,
+        "boss_id": encounter.get("id"),
+        "boss_name": encounter.get("name"),
+        "bracket": options.bracket,
+        "difficulty": options.difficulty,
+        "class_name": request.class_name,
+        "spec_name": request.spec_name,
+        "metric": options.metric,
+        "page": options.page,
+        "partition": options.partition,
+        "size": options.size,
+        "server_region": normalize_region(request.server_region) if request.server_region else None,
+        "server_slug": options.server_slug,
+        "leaderboard": options.leaderboard,
+        "hard_mode_level": options.hard_mode_level,
+        "filter": options.filter,
+        "include_combatant_info": options.include_combatant_info,
+        "include_other_players": options.include_other_players,
+        "top": request.top,
+    }
+
+
+def _run_encounter_rankings(ctx: typer.Context, request: _EncounterRankingsRequest) -> None:
+    client = _client(ctx)
+    try:
+        encounter_payload = _resolve_encounter(
+            ctx,
+            client=client,
+            zone_id=request.zone_id,
+            boss_id=request.boss_id,
+            boss_name=request.boss_name,
+        )
+        rankings_payload = client.encounter_rankings(
+            encounter_id=int(encounter_payload["id"]),
+            options=request.options,
+        )
+    except WarcraftLogsClientError as exc:
+        _handle_client_error(ctx, exc)
+    finally:
+        client.close()
+    rankings = rankings_payload.get("characterRankings")
+    rankings_error = rankings.get("error") if isinstance(rankings, dict) and isinstance(rankings.get("error"), str) else None
+    if rankings_error:
+        _fail(ctx, "invalid_query", rankings_error)
+    _emit(
+        ctx,
+        _encounter_rankings_payload(
+            encounter=rankings_payload,
+            rankings=rankings,
+            query=_encounter_rankings_query(request, encounter_payload),
+            top=request.top,
+            site=client.site,
+        ),
         client=client,
     )
 
@@ -4113,96 +4296,52 @@ def encounter_rankings(
     ),
     top: int = typer.Option(10, "--top", min=1, max=100, help="Maximum returned ranking rows after normalization."),
 ) -> None:
-    normalized_leaderboard = _normalize_graphql_enum(leaderboard)
-    normalized_hard_mode_level = _normalize_hard_mode_level_rank_filter(hard_mode_level)
-    normalized_class_name = _normalize_encounter_ranking_class_name(class_name)
-    normalized_spec_name = _normalize_encounter_ranking_spec_name(spec_name)
-    client = _client(ctx)
-    try:
-        encounter_payload = _resolve_encounter(
-            ctx,
-            client=client,
+    """Rank characters on one encounter, filtered by class, spec, difficulty, and server."""
+    _run_encounter_rankings(
+        ctx,
+        _EncounterRankingsRequest(
             zone_id=zone_id,
             boss_id=boss_id,
             boss_name=boss_name,
-        )
-        options = EncounterRankingsOptions(
-            bracket=bracket,
-            difficulty=difficulty,
-            page=page,
-            partition=partition,
-            size=size,
+            class_name=class_name,
+            spec_name=spec_name,
             server_region=server_region,
-            server_slug=server_slug,
-            leaderboard=normalized_leaderboard,
-            hard_mode_level=normalized_hard_mode_level,
-            metric=metric,
-            filter=filter_text,
-            include_combatant_info=include_combatant_info,
-            include_other_players=include_other_players,
-            class_name=normalized_class_name,
-            spec_name=normalized_spec_name,
-        )
-        rankings_payload = client.encounter_rankings(
-            encounter_id=int(encounter_payload["id"]),
-            options=options,
-        )
-    except WarcraftLogsClientError as exc:
-        _handle_client_error(ctx, exc)
-        return
-    finally:
-        client.close()
-    rankings = rankings_payload.get("characterRankings")
-    rankings_error = rankings.get("error") if isinstance(rankings, dict) and isinstance(rankings.get("error"), str) else None
-    if rankings_error:
-        _fail(ctx, "invalid_query", rankings_error)
-    _emit(
-        ctx,
-        _encounter_rankings_payload(
-            encounter=rankings_payload,
-            rankings=rankings,
-            query={
-                "zone_id": zone_id,
-                "boss_id": encounter_payload.get("id"),
-                "boss_name": encounter_payload.get("name"),
-                "bracket": bracket,
-                "difficulty": difficulty,
-                "class_name": class_name,
-                "spec_name": spec_name,
-                "metric": metric,
-                "page": page,
-                "partition": partition,
-                "size": size,
-                "server_region": normalize_region(server_region) if server_region else None,
-                "server_slug": server_slug,
-                "leaderboard": normalized_leaderboard,
-                "hard_mode_level": normalized_hard_mode_level,
-                "filter": filter_text,
-                "include_combatant_info": include_combatant_info,
-                "include_other_players": include_other_players,
-                "top": top,
-            },
             top=top,
-            site=client.site,
+            options=EncounterRankingsOptions(
+                bracket=bracket,
+                difficulty=difficulty,
+                page=page,
+                partition=partition,
+                size=size,
+                server_region=server_region,
+                server_slug=server_slug,
+                leaderboard=_normalize_graphql_enum(leaderboard),
+                hard_mode_level=_normalize_hard_mode_level_rank_filter(hard_mode_level),
+                metric=metric,
+                filter=filter_text,
+                include_combatant_info=include_combatant_info,
+                include_other_players=include_other_players,
+                class_name=_normalize_encounter_ranking_class_name(class_name),
+                spec_name=_normalize_encounter_ranking_spec_name(spec_name),
+            ),
         ),
-        client=client,
     )
 
 
 @app.command("guild")
 def guild(
     ctx: typer.Context,
-    region: str,
-    realm: str,
-    name: str,
+    region: str = typer.Argument(..., help="Guild region slug, for example us or eu."),
+    realm: str = typer.Argument(..., help="Guild realm slug or name."),
+    name: str = typer.Argument(..., help="Guild name."),
     zone_id: int | None = typer.Option(None, "--zone-id", help="Optional Warcraft Logs zone ID for current guild ranking context."),
 ) -> None:
+    """Look up a guild by region, realm, and name."""
     client = _client(ctx)
     try:
         payload = client.guild(region=region, realm=realm, name=name, zone_id=zone_id)
     except WarcraftLogsClientError as exc:
         _handle_client_error(ctx, exc)
-        return
     finally:
         client.close()
     _emit(
@@ -4220,19 +4359,19 @@ def guild(
 @app.command("guild-rankings")
 def guild_rankings(
     ctx: typer.Context,
-    region: str,
-    realm: str,
-    name: str,
+    region: str = typer.Argument(..., help="Guild region slug, for example us or eu."),
+    realm: str = typer.Argument(..., help="Guild realm slug or name."),
+    name: str = typer.Argument(..., help="Guild name."),
     zone_id: int | None = typer.Option(None, "--zone-id", help="Optional Warcraft Logs zone ID."),
     size: int | None = typer.Option(None, "--size", help="Optional raid size."),
     difficulty: int | None = typer.Option(None, "--difficulty", help="Optional difficulty ID for speed ranks."),
 ) -> None:
+    """Show a guild's progress and speed rankings for one zone."""
     client = _client(ctx)
     try:
         payload = client.guild_rankings(region=region, realm=realm, name=name, zone_id=zone_id, size=size, difficulty=difficulty)
     except WarcraftLogsClientError as exc:
         _handle_client_error(ctx, exc)
-        return
     finally:
         client.close()
     _emit(
@@ -4250,18 +4389,18 @@ def guild_rankings(
 @app.command("guild-members")
 def guild_members(
     ctx: typer.Context,
-    region: str,
-    realm: str,
-    name: str,
+    region: str = typer.Argument(..., help="Guild region slug, for example us or eu."),
+    realm: str = typer.Argument(..., help="Guild realm slug or name."),
+    name: str = typer.Argument(..., help="Guild name."),
     limit: int = typer.Option(100, "--limit", min=1, max=100, help="Roster rows per page."),
     page: int = typer.Option(1, "--page", min=1, help="Page number."),
 ) -> None:
+    """List a guild's roster."""
     client = _client(ctx)
     try:
         payload = client.guild_members(region=region, realm=realm, name=name, limit=limit, page=page)
     except WarcraftLogsClientError as exc:
         _handle_client_error(ctx, exc)
-        return
     finally:
         client.close()
     _emit(
@@ -4282,14 +4421,15 @@ def guild_members(
 @app.command("guild-attendance")
 def guild_attendance(
     ctx: typer.Context,
-    region: str,
-    realm: str,
-    name: str,
+    region: str = typer.Argument(..., help="Guild region slug, for example us or eu."),
+    realm: str = typer.Argument(..., help="Guild realm slug or name."),
+    name: str = typer.Argument(..., help="Guild name."),
     guild_tag_id: int | None = typer.Option(None, "--guild-tag-id", help="Optional guild tag filter."),
     limit: int = typer.Option(16, "--limit", min=1, max=25, help="Attendance rows per page."),
     page: int = typer.Option(1, "--page", min=1, help="Page number."),
     zone_id: int | None = typer.Option(None, "--zone-id", help="Optional zone filter."),
 ) -> None:
+    """Show a guild's raid attendance by report."""
     client = _client(ctx)
     try:
         payload = client.guild_attendance(
@@ -4303,7 +4443,6 @@ def guild_attendance(
         )
     except WarcraftLogsClientError as exc:
         _handle_client_error(ctx, exc)
-        return
     finally:
         client.close()
     _emit(
@@ -4327,13 +4466,18 @@ def guild_attendance(
 
 
 @app.command("character")
-def character(ctx: typer.Context, region: str, realm: str, name: str) -> None:
+def character(
+    ctx: typer.Context,
+    region: str = typer.Argument(..., help="Character region slug, for example us or eu."),
+    realm: str = typer.Argument(..., help="Character realm slug or name."),
+    name: str = typer.Argument(..., help="Character name."),
+) -> None:
+    """Look up a character by region, realm, and name."""
     client = _client(ctx)
     try:
         payload = client.character(region=region, realm=realm, name=name)
     except WarcraftLogsClientError as exc:
         _handle_client_error(ctx, exc)
-        return
     finally:
         client.close()
     _emit(
@@ -4351,9 +4495,9 @@ def character(ctx: typer.Context, region: str, realm: str, name: str) -> None:
 @app.command("character-rankings")
 def character_rankings(
     ctx: typer.Context,
-    region: str,
-    realm: str,
-    name: str,
+    region: str = typer.Argument(..., help="Character region slug, for example us or eu."),
+    realm: str = typer.Argument(..., help="Character realm slug or name."),
+    name: str = typer.Argument(..., help="Character name."),
     zone_id: int | None = typer.Option(None, "--zone-id", help="Optional Warcraft Logs zone ID."),
     difficulty: int | None = typer.Option(None, "--difficulty", help="Optional difficulty ID."),
     metric: str | None = typer.Option(None, "--metric", help="Optional ranking metric such as dps, hps, or tankhps."),
@@ -4361,6 +4505,7 @@ def character_rankings(
     spec_name: str | None = typer.Option(None, "--spec-name", help="Optional spec slug filter."),
     top: int = typer.Option(5, "--top", min=1, max=20, help="Number of top ranking rows to keep in the summary."),
 ) -> None:
+    """Show a character's encounter rankings for one zone."""
     client = _client(ctx)
     try:
         payload = client.character_rankings(
@@ -4375,7 +4520,6 @@ def character_rankings(
         )
     except WarcraftLogsClientError as exc:
         _handle_client_error(ctx, exc)
-        return
     finally:
         client.close()
     _emit(
@@ -4394,7 +4538,7 @@ def character_rankings(
                 "spec_name": spec_name,
                 "top": top,
             },
-            "character_rankings": _character_rankings_payload(payload, top=top),
+            "character_rankings": _character_rankings_payload(payload, top=top, transport_counts=client.transport_counts),
         },
         client=client,
     )
@@ -4403,15 +4547,15 @@ def character_rankings(
 @app.command("report")
 def report(
     ctx: typer.Context,
-    code: str,
+    code: str = typer.Argument(..., help="Warcraft Logs report code."),
     allow_unlisted: bool = typer.Option(False, "--allow-unlisted", help="Allow lookup of unlisted reports."),
 ) -> None:
+    """Show one report's metadata, zone, and owning guild."""
     client = _client(ctx)
     try:
         payload = client.report(code=code, allow_unlisted=allow_unlisted)
     except WarcraftLogsClientError as exc:
         _handle_client_error(ctx, exc)
-        return
     finally:
         client.close()
     _emit(
@@ -4438,6 +4582,7 @@ def reports(
     zone_id: int | None = typer.Option(None, "--zone-id", help="Optional Warcraft Logs zone filter."),
     game_zone_id: int | None = typer.Option(None, "--game-zone-id", help="Optional game zone filter."),
 ) -> None:
+    """List reports for a guild, optionally narrowed by zone and time window."""
     client = _client(ctx)
     try:
         payload = client.reports(
@@ -4453,7 +4598,6 @@ def reports(
         )
     except WarcraftLogsClientError as exc:
         _handle_client_error(ctx, exc)
-        return
     finally:
         client.close()
     report_payload = _reports_payload(payload)
@@ -4483,9 +4627,9 @@ def reports(
 @app.command("guild-reports")
 def guild_reports(
     ctx: typer.Context,
-    region: str,
-    realm: str,
-    name: str,
+    region: str = typer.Argument(..., help="Guild region slug, for example us or eu."),
+    realm: str = typer.Argument(..., help="Guild realm slug or name."),
+    name: str = typer.Argument(..., help="Guild name."),
     limit: int = typer.Option(25, "--limit", min=1, max=100, help="Reports per page."),
     page: int = typer.Option(1, "--page", min=1, help="Page number."),
     start_time: float | None = typer.Option(None, "--start-time", help="Optional report-range start time in milliseconds."),
@@ -4493,6 +4637,7 @@ def guild_reports(
     zone_id: int | None = typer.Option(None, "--zone-id", help="Optional Warcraft Logs zone filter."),
     game_zone_id: int | None = typer.Option(None, "--game-zone-id", help="Optional game zone filter."),
 ) -> None:
+    """List a guild's reports by region, realm, and name."""
     client = _client(ctx)
     try:
         payload = client.reports(
@@ -4508,7 +4653,6 @@ def guild_reports(
         )
     except WarcraftLogsClientError as exc:
         _handle_client_error(ctx, exc)
-        return
     finally:
         client.close()
     report_payload = _reports_payload(payload)
@@ -4536,41 +4680,83 @@ def guild_reports(
     )
 
 
-def _cross_report_query(
+def _validate_cohort_scope(ctx: typer.Context, client: WarcraftLogsClient, scope: CrossReportScope) -> None:
+    """Fail on a zone/boss filter Warcraft Logs does not know.
+
+    Without this an unknown zone id or misspelled boss name scans an empty cohort and returns
+    ``ok: true`` with ``count: 0``, which is indistinguishable from "nobody killed it recently".
+    """
+    _resolve_encounter(ctx, client=client, zone_id=scope.zone_id, boss_id=scope.boss_id, boss_name=scope.boss_name)
+
+
+def _sampled_kill_cohort(ctx: typer.Context, client: WarcraftLogsClient, scope: CrossReportScope) -> dict[str, Any]:
+    """Collect the sampled boss-kill cohort and close the client, mapping transport errors to the CLI contract."""
+    try:
+        _validate_cohort_scope(ctx, client, scope)
+        return _collect_boss_kill_rows(client, scope)
+    except WarcraftLogsClientError as exc:
+        _handle_client_error(ctx, exc)
+    finally:
+        client.close()
+
+
+def _sampled_comp_cohort(ctx: typer.Context, client: WarcraftLogsClient, scope: CrossReportScope) -> dict[str, Any]:
+    """Collect the sampled kill cohort with raid compositions attached, then close the client."""
+    try:
+        _validate_cohort_scope(ctx, client, scope)
+        return _collect_comp_sample_rows(client, scope)
+    except WarcraftLogsClientError as exc:
+        _handle_client_error(ctx, exc)
+    finally:
+        client.close()
+
+
+def _sampled_spec_usage_cohort(
+    ctx: typer.Context,
+    client: WarcraftLogsClient,
+    scope: CrossReportScope,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Sampled kill cohort plus its per-kill player-detail rows, then close the client."""
+    try:
+        _validate_cohort_scope(ctx, client, scope)
+        analytics = _collect_boss_kill_rows(client, scope)
+        enriched_rows = [
+            {
+                **row,
+                "player_details": _all_player_detail_rows(_fight_player_details(client, row, difficulty=scope.difficulty)),
+            }
+            for row in analytics["rows"]
+        ]
+        return analytics, enriched_rows
+    except WarcraftLogsClientError as exc:
+        _handle_client_error(ctx, exc)
+    finally:
+        client.close()
+
+
+def _sampled_ability_usage_cohort(
+    ctx: typer.Context,
+    client: WarcraftLogsClient,
+    scope: CrossReportScope,
     *,
-    zone_id: int,
-    boss_id: int | None,
-    boss_name: str | None,
-    difficulty: int | None,
-    spec_name: str | None,
-    kill_time_min: float | None,
-    kill_time_max: float | None,
-    top: int,
-    report_pages: int,
-    reports_per_page: int,
-    start_time: float | None,
-    end_time: float | None,
-    guild_region: str | None,
-    guild_realm: str | None,
-    guild_name: str | None,
+    ability_id: int,
+    event_limit: int,
 ) -> dict[str, Any]:
-    return {
-        "zone_id": zone_id,
-        "boss_id": boss_id,
-        "boss_name": boss_name,
-        "difficulty": difficulty,
-        "spec_name": spec_name,
-        "kill_time_min": kill_time_min,
-        "kill_time_max": kill_time_max,
-        "top": top,
-        "report_pages": report_pages,
-        "reports_per_page": reports_per_page,
-        "start_time": start_time,
-        "end_time": end_time,
-        "guild_region": guild_region,
-        "guild_realm": guild_realm,
-        "guild_name": guild_name,
-    }
+    """Collect the sampled kill cohort with per-kill ability casts attached, then close the client."""
+    try:
+        _validate_cohort_scope(ctx, client, scope)
+        return _collect_ability_usage_rows(client, scope, ability_id=ability_id, event_limit=event_limit)
+    except WarcraftLogsClientError as exc:
+        _handle_client_error(ctx, exc)
+    finally:
+        client.close()
+
+
+def _ability_usage_query(scope: CrossReportScope, *, ability_id: int) -> dict[str, Any]:
+    """Cross-report scope echo for ability-usage-summary: ability id after the zone, no ``top``."""
+    scoped = asdict(scope)
+    del scoped["top"]
+    return {"zone_id": scoped.pop("zone_id"), "ability_id": ability_id, **scoped}
 
 
 def _require_boss_scope(ctx: typer.Context, *, boss_id: int | None, boss_name: str | None) -> None:
@@ -4606,55 +4792,36 @@ def boss_kills(
     guild_realm: str | None = typer.Option(None, "--guild-realm", help="Optional guild-realm scope for report discovery."),
     guild_name: str | None = typer.Option(None, "--guild-name", help="Optional guild-name scope for report discovery."),
 ) -> None:
+    """Sample recent kills of one boss across reports and summarize them."""
     _require_boss_scope(ctx, boss_id=boss_id, boss_name=boss_name)
+    scope = CrossReportScope(
+        zone_id=zone_id,
+        boss_id=boss_id,
+        boss_name=boss_name,
+        difficulty=difficulty,
+        spec_name=spec_name,
+        kill_time_min=kill_time_min,
+        kill_time_max=kill_time_max,
+        top=top,
+        report_pages=report_pages,
+        reports_per_page=reports_per_page,
+        start_time=start_time,
+        end_time=end_time,
+        guild_region=guild_region,
+        guild_realm=guild_realm,
+        guild_name=guild_name,
+    )
     client = _client(ctx)
-    try:
-        analytics = _collect_boss_kill_rows(
-            client=client,
-            zone_id=zone_id,
-            boss_id=boss_id,
-            boss_name=boss_name,
-            difficulty=difficulty,
-            spec_name=spec_name,
-            kill_time_min=kill_time_min,
-            kill_time_max=kill_time_max,
-            report_pages=report_pages,
-            reports_per_page=reports_per_page,
-            start_time=start_time,
-            end_time=end_time,
-            guild_region=guild_region,
-            guild_realm=guild_realm,
-            guild_name=guild_name,
-        )
-    except WarcraftLogsClientError as exc:
-        _handle_client_error(ctx, exc)
-        return
-    finally:
-        client.close()
+    analytics = _sampled_kill_cohort(ctx, client, scope)
     _emit(
         ctx,
         _boss_kills_payload(
             cache_ttl_seconds=_emitted_finished_report_ttl(client),
+            transport_counts=client.transport_counts,
             kind="boss_kills",
             rows=analytics["rows"],
             sample=analytics["sample"],
-            query=_cross_report_query(
-                zone_id=zone_id,
-                boss_id=boss_id,
-                boss_name=boss_name,
-                difficulty=difficulty,
-                spec_name=spec_name,
-                kill_time_min=kill_time_min,
-                kill_time_max=kill_time_max,
-                top=top,
-                report_pages=report_pages,
-                reports_per_page=reports_per_page,
-                start_time=start_time,
-                end_time=end_time,
-                guild_region=guild_region,
-                guild_realm=guild_realm,
-                guild_name=guild_name,
-            ),
+            query=asdict(scope),
             top=top,
             root_url=client.site.root_url,
         ),
@@ -4685,55 +4852,36 @@ def top_kills(
     guild_realm: str | None = typer.Option(None, "--guild-realm", help="Optional guild-realm scope for report discovery."),
     guild_name: str | None = typer.Option(None, "--guild-name", help="Optional guild-name scope for report discovery."),
 ) -> None:
+    """Sample recent kills of one boss and return the fastest ones."""
     _require_boss_scope(ctx, boss_id=boss_id, boss_name=boss_name)
+    scope = CrossReportScope(
+        zone_id=zone_id,
+        boss_id=boss_id,
+        boss_name=boss_name,
+        difficulty=difficulty,
+        spec_name=spec_name,
+        kill_time_min=kill_time_min,
+        kill_time_max=kill_time_max,
+        top=top,
+        report_pages=report_pages,
+        reports_per_page=reports_per_page,
+        start_time=start_time,
+        end_time=end_time,
+        guild_region=guild_region,
+        guild_realm=guild_realm,
+        guild_name=guild_name,
+    )
     client = _client(ctx)
-    try:
-        analytics = _collect_boss_kill_rows(
-            client=client,
-            zone_id=zone_id,
-            boss_id=boss_id,
-            boss_name=boss_name,
-            difficulty=difficulty,
-            spec_name=spec_name,
-            kill_time_min=kill_time_min,
-            kill_time_max=kill_time_max,
-            report_pages=report_pages,
-            reports_per_page=reports_per_page,
-            start_time=start_time,
-            end_time=end_time,
-            guild_region=guild_region,
-            guild_realm=guild_realm,
-            guild_name=guild_name,
-        )
-    except WarcraftLogsClientError as exc:
-        _handle_client_error(ctx, exc)
-        return
-    finally:
-        client.close()
+    analytics = _sampled_kill_cohort(ctx, client, scope)
     _emit(
         ctx,
         _boss_kills_payload(
             cache_ttl_seconds=_emitted_finished_report_ttl(client),
+            transport_counts=client.transport_counts,
             kind="top_kills",
             rows=analytics["rows"],
             sample=analytics["sample"],
-            query=_cross_report_query(
-                zone_id=zone_id,
-                boss_id=boss_id,
-                boss_name=boss_name,
-                difficulty=difficulty,
-                spec_name=spec_name,
-                kill_time_min=kill_time_min,
-                kill_time_max=kill_time_max,
-                top=top,
-                report_pages=report_pages,
-                reports_per_page=reports_per_page,
-                start_time=start_time,
-                end_time=end_time,
-                guild_region=guild_region,
-                guild_realm=guild_realm,
-                guild_name=guild_name,
-            ),
+            query=asdict(scope),
             top=top,
             root_url=client.site.root_url,
         ),
@@ -4764,55 +4912,36 @@ def spec_kill_samples(
     guild_realm: str | None = typer.Option(None, "--guild-realm", help="Optional guild-realm scope for report discovery."),
     guild_name: str | None = typer.Option(None, "--guild-name", help="Optional guild-name scope for report discovery."),
 ) -> None:
+    """Sample recent kills of one boss that include a given spec."""
     _require_boss_scope(ctx, boss_id=boss_id, boss_name=boss_name)
     _require_spec_scope(ctx, spec_name=spec_name)
+    scope = CrossReportScope(
+        zone_id=zone_id,
+        boss_id=boss_id,
+        boss_name=boss_name,
+        difficulty=difficulty,
+        spec_name=spec_name,
+        kill_time_min=kill_time_min,
+        kill_time_max=kill_time_max,
+        top=top,
+        report_pages=report_pages,
+        reports_per_page=reports_per_page,
+        start_time=start_time,
+        end_time=end_time,
+        guild_region=guild_region,
+        guild_realm=guild_realm,
+        guild_name=guild_name,
+    )
     client = _client(ctx)
-    try:
-        analytics = _collect_boss_kill_rows(
-            client=client,
-            zone_id=zone_id,
-            boss_id=boss_id,
-            boss_name=boss_name,
-            difficulty=difficulty,
-            spec_name=spec_name,
-            kill_time_min=kill_time_min,
-            kill_time_max=kill_time_max,
-            report_pages=report_pages,
-            reports_per_page=reports_per_page,
-            start_time=start_time,
-            end_time=end_time,
-            guild_region=guild_region,
-            guild_realm=guild_realm,
-            guild_name=guild_name,
-        )
-    except WarcraftLogsClientError as exc:
-        _handle_client_error(ctx, exc)
-        return
-    finally:
-        client.close()
+    analytics = _sampled_kill_cohort(ctx, client, scope)
     _emit(
         ctx,
         _spec_filtered_kill_samples_payload(
             cache_ttl_seconds=_emitted_finished_report_ttl(client),
+            transport_counts=client.transport_counts,
             rows=analytics["rows"],
             sample=analytics["sample"],
-            query=_cross_report_query(
-                zone_id=zone_id,
-                boss_id=boss_id,
-                boss_name=boss_name,
-                difficulty=difficulty,
-                spec_name=spec_name,
-                kill_time_min=kill_time_min,
-                kill_time_max=kill_time_max,
-                top=top,
-                report_pages=report_pages,
-                reports_per_page=reports_per_page,
-                start_time=start_time,
-                end_time=end_time,
-                guild_region=guild_region,
-                guild_realm=guild_realm,
-                guild_name=guild_name,
-            ),
+            query=asdict(scope),
             top=top,
             root_url=client.site.root_url,
         ),
@@ -4843,74 +4972,35 @@ def boss_spec_usage(
     guild_realm: str | None = typer.Option(None, "--guild-realm", help="Optional guild-realm scope for report discovery."),
     guild_name: str | None = typer.Option(None, "--guild-name", help="Optional guild-name scope for report discovery."),
 ) -> None:
+    """Count spec usage across a sample of recent kills of one boss."""
     _require_boss_scope(ctx, boss_id=boss_id, boss_name=boss_name)
+    scope = CrossReportScope(
+        zone_id=zone_id,
+        boss_id=boss_id,
+        boss_name=boss_name,
+        difficulty=difficulty,
+        spec_name=spec_name,
+        kill_time_min=kill_time_min,
+        kill_time_max=kill_time_max,
+        top=top,
+        report_pages=report_pages,
+        reports_per_page=reports_per_page,
+        start_time=start_time,
+        end_time=end_time,
+        guild_region=guild_region,
+        guild_realm=guild_realm,
+        guild_name=guild_name,
+    )
     client = _client(ctx)
-    try:
-        analytics = _collect_boss_kill_rows(
-            client=client,
-            zone_id=zone_id,
-            boss_id=boss_id,
-            boss_name=boss_name,
-            difficulty=difficulty,
-            spec_name=spec_name,
-            kill_time_min=kill_time_min,
-            kill_time_max=kill_time_max,
-            report_pages=report_pages,
-            reports_per_page=reports_per_page,
-            start_time=start_time,
-            end_time=end_time,
-            guild_region=guild_region,
-            guild_realm=guild_realm,
-            guild_name=guild_name,
-        )
-        enriched_rows: list[dict[str, Any]] = []
-        for row in analytics["rows"]:
-            report_payload = row.get("report") if isinstance(row.get("report"), dict) else {}
-            fight_payload = row.get("fight") if isinstance(row.get("fight"), dict) else {}
-            code = str(report_payload.get("code") or "")
-            fight_id_value = fight_payload.get("id")
-            encounter_id_value = fight_payload.get("encounter_id")
-            detail_report = client.report_player_details(
-                code=code,
-                allow_unlisted=False,
-                options=ReportPlayerDetailsOptions(
-                    difficulty=int(fight_payload["difficulty"]) if isinstance(fight_payload.get("difficulty"), int) else difficulty,
-                    encounter_id=int(encounter_id_value) if isinstance(encounter_id_value, int) else None,
-                    fight_ids=[int(fight_id_value)] if isinstance(fight_id_value, int) else None,
-                    include_combatant_info=True,
-                    kill_type="Kills",
-                ),
-                ttl_override=client._finished_report_ttl,
-            )
-            enriched_rows.append({**row, "player_details": _all_player_detail_rows(detail_report)})
-    except WarcraftLogsClientError as exc:
-        _handle_client_error(ctx, exc)
-        return
-    finally:
-        client.close()
+    analytics, enriched_rows = _sampled_spec_usage_cohort(ctx, client, scope)
     _emit(
         ctx,
         _boss_spec_usage_payload(
             cache_ttl_seconds=_emitted_finished_report_ttl(client),
+            transport_counts=client.transport_counts,
             rows=enriched_rows,
             sample=analytics["sample"],
-            query=_cross_report_query(
-                zone_id=zone_id,
-                boss_id=boss_id,
-                boss_name=boss_name,
-                difficulty=difficulty,
-                spec_name=spec_name,
-                kill_time_min=kill_time_min,
-                kill_time_max=kill_time_max,
-                top=top,
-                report_pages=report_pages,
-                reports_per_page=reports_per_page,
-                start_time=start_time,
-                end_time=end_time,
-                guild_region=guild_region,
-                guild_realm=guild_realm,
-                guild_name=guild_name,
-            ),
+            query=asdict(scope),
             top=top,
             root_url=client.site.root_url,
         ),
@@ -4944,56 +5034,34 @@ def ability_usage_summary(
     guild_realm: str | None = typer.Option(None, "--guild-realm", help="Optional guild-realm scope for report discovery."),
     guild_name: str | None = typer.Option(None, "--guild-name", help="Optional guild-name scope for report discovery."),
 ) -> None:
+    """Summarize how often one ability is cast across a sample of recent kills."""
     _require_boss_scope(ctx, boss_id=boss_id, boss_name=boss_name)
+    scope = CrossReportScope(
+        zone_id=zone_id,
+        boss_id=boss_id,
+        boss_name=boss_name,
+        difficulty=difficulty,
+        spec_name=spec_name,
+        kill_time_min=kill_time_min,
+        kill_time_max=kill_time_max,
+        report_pages=report_pages,
+        reports_per_page=reports_per_page,
+        start_time=start_time,
+        end_time=end_time,
+        guild_region=guild_region,
+        guild_realm=guild_realm,
+        guild_name=guild_name,
+    )
     client = _client(ctx)
-    try:
-        analytics = _collect_ability_usage_rows(
-            client=client,
-            zone_id=zone_id,
-            boss_id=boss_id,
-            boss_name=boss_name,
-            difficulty=difficulty,
-            spec_name=spec_name,
-            kill_time_min=kill_time_min,
-            kill_time_max=kill_time_max,
-            report_pages=report_pages,
-            reports_per_page=reports_per_page,
-            start_time=start_time,
-            end_time=end_time,
-            guild_region=guild_region,
-            guild_realm=guild_realm,
-            guild_name=guild_name,
-            ability_id=ability_id,
-            event_limit=event_limit,
-        )
-    except WarcraftLogsClientError as exc:
-        _handle_client_error(ctx, exc)
-        return
-    finally:
-        client.close()
+    analytics = _sampled_ability_usage_cohort(ctx, client, scope, ability_id=ability_id, event_limit=event_limit)
     _emit(
         ctx,
         _ability_usage_summary_payload(
             cache_ttl_seconds=_emitted_finished_report_ttl(client),
+            transport_counts=client.transport_counts,
             rows=analytics["rows"],
             sample=analytics["sample"],
-            query={
-                "zone_id": zone_id,
-                "ability_id": ability_id,
-                "boss_id": boss_id,
-                "boss_name": boss_name,
-                "difficulty": difficulty,
-                "spec_name": spec_name,
-                "kill_time_min": kill_time_min,
-                "kill_time_max": kill_time_max,
-                "report_pages": report_pages,
-                "reports_per_page": reports_per_page,
-                "start_time": start_time,
-                "end_time": end_time,
-                "guild_region": guild_region,
-                "guild_realm": guild_realm,
-                "guild_name": guild_name,
-            },
+            query=_ability_usage_query(scope, ability_id=ability_id),
             ability=analytics["ability"],
             preview_limit=preview_limit,
             event_limit=event_limit,
@@ -5026,54 +5094,35 @@ def comp_samples(
     guild_realm: str | None = typer.Option(None, "--guild-realm", help="Optional guild-realm scope for report discovery."),
     guild_name: str | None = typer.Option(None, "--guild-name", help="Optional guild-name scope for report discovery."),
 ) -> None:
+    """Sample raid compositions from recent kills of one boss."""
     _require_boss_scope(ctx, boss_id=boss_id, boss_name=boss_name)
+    scope = CrossReportScope(
+        zone_id=zone_id,
+        boss_id=boss_id,
+        boss_name=boss_name,
+        difficulty=difficulty,
+        spec_name=spec_name,
+        kill_time_min=kill_time_min,
+        kill_time_max=kill_time_max,
+        top=top,
+        report_pages=report_pages,
+        reports_per_page=reports_per_page,
+        start_time=start_time,
+        end_time=end_time,
+        guild_region=guild_region,
+        guild_realm=guild_realm,
+        guild_name=guild_name,
+    )
     client = _client(ctx)
-    try:
-        analytics = _collect_comp_sample_rows(
-            client=client,
-            zone_id=zone_id,
-            boss_id=boss_id,
-            boss_name=boss_name,
-            difficulty=difficulty,
-            spec_name=spec_name,
-            kill_time_min=kill_time_min,
-            kill_time_max=kill_time_max,
-            report_pages=report_pages,
-            reports_per_page=reports_per_page,
-            start_time=start_time,
-            end_time=end_time,
-            guild_region=guild_region,
-            guild_realm=guild_realm,
-            guild_name=guild_name,
-        )
-    except WarcraftLogsClientError as exc:
-        _handle_client_error(ctx, exc)
-        return
-    finally:
-        client.close()
+    analytics = _sampled_comp_cohort(ctx, client, scope)
     _emit(
         ctx,
         _comp_samples_payload(
             cache_ttl_seconds=_emitted_finished_report_ttl(client),
+            transport_counts=client.transport_counts,
             rows=analytics["rows"],
             sample=analytics["sample"],
-            query=_cross_report_query(
-                zone_id=zone_id,
-                boss_id=boss_id,
-                boss_name=boss_name,
-                difficulty=difficulty,
-                spec_name=spec_name,
-                kill_time_min=kill_time_min,
-                kill_time_max=kill_time_max,
-                top=top,
-                report_pages=report_pages,
-                reports_per_page=reports_per_page,
-                start_time=start_time,
-                end_time=end_time,
-                guild_region=guild_region,
-                guild_realm=guild_realm,
-                guild_name=guild_name,
-            ),
+            query=asdict(scope),
             top=top,
             root_url=client.site.root_url,
         ),
@@ -5084,11 +5133,12 @@ def comp_samples(
 @app.command("report-encounter")
 def report_encounter(
     ctx: typer.Context,
-    reference: str,
+    reference: str = typer.Argument(..., help="Warcraft Logs report URL or report code, optionally with a #fight=N fragment."),
     fight_id: int | None = typer.Option(
         None, "--fight-id", help="Override or supply a fight ID when the report reference does not include one."),
     allow_unlisted: bool = typer.Option(False, "--allow-unlisted", help="Allow lookup of unlisted reports."),
 ) -> None:
+    """Show one report fight with its report, fight, and encounter identity."""
     client = _client(ctx)
     try:
         ref, report, fight, encounter = _resolve_encounter_scope(
@@ -5100,7 +5150,6 @@ def report_encounter(
         )
     except WarcraftLogsClientError as exc:
         _handle_client_error(ctx, exc)
-        return
     finally:
         client.close()
     _emit(
@@ -5125,7 +5174,7 @@ def report_encounter(
 @app.command("report-encounter-players")
 def report_encounter_players(
     ctx: typer.Context,
-    reference: str,
+    reference: str = typer.Argument(..., help="Warcraft Logs report URL or report code, optionally with a #fight=N fragment."),
     fight_id: int | None = typer.Option(
         None, "--fight-id", help="Override or supply a fight ID when the report reference does not include one."),
     include_combatant_info: bool | None = typer.Option(
@@ -5136,6 +5185,7 @@ def report_encounter_players(
     translate: bool | None = typer.Option(None, "--translate/--no-translate", help="Optional translation toggle."),
     allow_unlisted: bool = typer.Option(False, "--allow-unlisted", help="Allow lookup of unlisted reports."),
 ) -> None:
+    """List the players in one report fight, by role and spec."""
     client = _client(ctx)
     try:
         ref, report, fight, encounter = _resolve_encounter_scope(
@@ -5149,7 +5199,7 @@ def report_encounter_players(
             code=ref.code,
             allow_unlisted=allow_unlisted,
             options=ReportPlayerDetailsOptions(
-                encounter_id=fight.get("encounterID") if isinstance(fight.get("encounterID"), int) else None,
+                encounter_id=_fight_encounter_id(fight),
                 fight_ids=[int(fight["id"])] if isinstance(fight.get("id"), int) else None,
                 include_combatant_info=include_combatant_info,
                 kill_type=_kill_type_for_fight(fight),
@@ -5158,7 +5208,6 @@ def report_encounter_players(
         )
     except WarcraftLogsClientError as exc:
         _handle_client_error(ctx, exc)
-        return
     finally:
         client.close()
     _emit(
@@ -5188,13 +5237,14 @@ def report_encounter_players(
 @app.command("report-player-talents")
 def report_player_talents(
     ctx: typer.Context,
-    reference: str,
+    reference: str = typer.Argument(..., help="Warcraft Logs report URL or report code, optionally with a #fight=N fragment."),
     actor_id: int = typer.Option(..., "--actor-id", help="Report-local actor ID scoped to the selected fight."),
     fight_id: int | None = typer.Option(
         None, "--fight-id", help="Override or supply a fight ID when the report reference does not include one."),
     allow_unlisted: bool = typer.Option(False, "--allow-unlisted", help="Allow lookup of unlisted reports."),
     out: str | None = typer.Option(None, "--out", help="Optional path to write the scoped talent transport packet JSON."),
 ) -> None:
+    """Emit one player's talent tree from a report fight as a talent transport packet."""
     client = _client(ctx)
     try:
         ref, report, fight, encounter = _resolve_encounter_scope(
@@ -5208,7 +5258,7 @@ def report_player_talents(
             code=ref.code,
             allow_unlisted=allow_unlisted,
             options=ReportPlayerDetailsOptions(
-                encounter_id=fight.get("encounterID") if isinstance(fight.get("encounterID"), int) else None,
+                encounter_id=_fight_encounter_id(fight),
                 fight_ids=[int(fight["id"])] if isinstance(fight.get("id"), int) else None,
                 include_combatant_info=True,
                 kill_type=_kill_type_for_fight(fight),
@@ -5216,7 +5266,6 @@ def report_player_talents(
         )
     except WarcraftLogsClientError as exc:
         _handle_client_error(ctx, exc)
-        return
     finally:
         client.close()
 
@@ -5257,7 +5306,6 @@ def report_player_talents(
         written_packet_path = _write_transport_packet_json(out, transport_packet)
     except WarcraftLogsClientError as exc:
         _handle_client_error(ctx, exc)
-        return
 
     _emit(
         ctx,
@@ -5284,7 +5332,7 @@ def report_player_talents(
 @app.command("report-encounter-casts")
 def report_encounter_casts(
     ctx: typer.Context,
-    reference: str,
+    reference: str = typer.Argument(..., help="Warcraft Logs report URL or report code, optionally with a #fight=N fragment."),
     fight_id: int | None = typer.Option(
         None, "--fight-id", help="Override or supply a fight ID when the report reference does not include one."),
     source_id: int | None = typer.Option(None, "--source-id", help="Optional source actor filter."),
@@ -5299,6 +5347,7 @@ def report_encounter_casts(
     translate: bool | None = typer.Option(None, "--translate/--no-translate", help="Optional translation toggle."),
     allow_unlisted: bool = typer.Option(False, "--allow-unlisted", help="Allow lookup of unlisted reports."),
 ) -> None:
+    """Summarize casts in one report fight, grouped by ability, source, or target."""
     client = _client(ctx)
     try:
         ref, report, fight, encounter = _resolve_encounter_scope(
@@ -5311,26 +5360,29 @@ def report_encounter_casts(
         normalized_hostility_type = _normalize_graphql_enum(hostility_type)
         options, query = _encounter_filter_options(
             ctx,
-            fight=fight,
-            ability_id=ability_id,
-            data_type="Casts",
-            source_id=source_id,
-            target_id=target_id,
-            hostility_type=normalized_hostility_type,
-            translate=translate,
-            limit=limit,
-            window_start_ms=window_start_ms,
-            window_end_ms=window_end_ms,
+            fight,
+            _EncounterFilters(
+                ability_id=ability_id,
+                data_type="Casts",
+                source_id=source_id,
+                target_id=target_id,
+                hostility_type=normalized_hostility_type,
+                translate=translate,
+                limit=limit,
+                window_start_ms=window_start_ms,
+                window_end_ms=window_end_ms,
+            ),
         )
         events_report = client.report_events(
             code=ref.code,
             allow_unlisted=allow_unlisted,
             options=options,
         )
-        master_report = client.report_master_data(code=ref.code, allow_unlisted=allow_unlisted, actor_type="Player")
+        # Unfiltered master data: cast targets are usually NPCs, and a Player-only actor index
+        # leaves every boss and add in `by_target` as an anonymous `actor:<id>` placeholder.
+        master_report = client.report_master_data(code=ref.code, allow_unlisted=allow_unlisted)
     except WarcraftLogsClientError as exc:
         _handle_client_error(ctx, exc)
-        return
     finally:
         client.close()
     _emit(
@@ -5366,7 +5418,7 @@ def report_encounter_casts(
 @app.command("report-encounter-buffs")
 def report_encounter_buffs(
     ctx: typer.Context,
-    reference: str,
+    reference: str = typer.Argument(..., help="Warcraft Logs report URL or report code, optionally with a #fight=N fragment."),
     fight_id: int | None = typer.Option(
         None, "--fight-id", help="Override or supply a fight ID when the report reference does not include one."),
     source_id: int | None = typer.Option(None, "--source-id", help="Optional source actor filter."),
@@ -5382,6 +5434,7 @@ def report_encounter_buffs(
     translate: bool | None = typer.Option(None, "--translate/--no-translate", help="Optional translation toggle."),
     allow_unlisted: bool = typer.Option(False, "--allow-unlisted", help="Allow lookup of unlisted reports."),
 ) -> None:
+    """Summarize buffs applied during one report fight."""
     client = _client(ctx)
     try:
         ref, report, fight, encounter = _resolve_encounter_scope(
@@ -5395,17 +5448,19 @@ def report_encounter_buffs(
         normalized_view_by = _normalize_graphql_enum(view_by)
         options, query = _encounter_filter_options(
             ctx,
-            fight=fight,
-            ability_id=ability_id,
-            data_type="Buffs",
-            source_id=source_id,
-            target_id=target_id,
-            hostility_type=normalized_hostility_type,
-            translate=translate,
-            view_by=normalized_view_by,
-            wipe_cutoff=wipe_cutoff,
-            window_start_ms=window_start_ms,
-            window_end_ms=window_end_ms,
+            fight,
+            _EncounterFilters(
+                ability_id=ability_id,
+                data_type="Buffs",
+                source_id=source_id,
+                target_id=target_id,
+                hostility_type=normalized_hostility_type,
+                translate=translate,
+                view_by=normalized_view_by,
+                wipe_cutoff=wipe_cutoff,
+                window_start_ms=window_start_ms,
+                window_end_ms=window_end_ms,
+            ),
         )
         table_report = client.report_table(code=ref.code, allow_unlisted=allow_unlisted, options=options)
         # Unfiltered actor master data: buff targets (and `--view-by target`) can be pets or NPCs,
@@ -5413,7 +5468,6 @@ def report_encounter_buffs(
         master_report = client.report_master_data(code=ref.code, allow_unlisted=allow_unlisted)
     except WarcraftLogsClientError as exc:
         _handle_client_error(ctx, exc)
-        return
     finally:
         client.close()
     _emit(
@@ -5451,7 +5505,7 @@ def report_encounter_buffs(
 @app.command("report-encounter-aura-summary")
 def report_encounter_aura_summary(
     ctx: typer.Context,
-    reference: str,
+    reference: str = typer.Argument(..., help="Warcraft Logs report URL or report code, optionally with a #fight=N fragment."),
     ability_id: int = typer.Option(..., "--ability-id", help="Required aura ability game ID."),
     fight_id: int | None = typer.Option(
         None, "--fight-id", help="Override or supply a fight ID when the report reference does not include one."),
@@ -5463,8 +5517,10 @@ def report_encounter_aura_summary(
         None, "--window-start-ms", help="Optional encounter-relative start offset in milliseconds."),
     window_end_ms: float | None = typer.Option(None, "--window-end-ms", help="Optional encounter-relative end offset in milliseconds."),
     translate: bool | None = typer.Option(None, "--translate/--no-translate", help="Optional translation toggle."),
+    include_raw: bool = typer.Option(False, "--include-raw", help=_INCLUDE_RAW_HELP),
     allow_unlisted: bool = typer.Option(False, "--allow-unlisted", help="Allow lookup of unlisted reports."),
 ) -> None:
+    """Summarize aura uptime in one report fight, optionally over an explicit window."""
     client = _client(ctx)
     try:
         ref, report, fight, encounter = _resolve_encounter_scope(
@@ -5477,23 +5533,24 @@ def report_encounter_aura_summary(
         normalized_hostility_type = _normalize_graphql_enum(hostility_type)
         options, query = _encounter_filter_options(
             ctx,
-            fight=fight,
-            ability_id=float(ability_id),
-            data_type="Buffs",
-            source_id=source_id,
-            target_id=target_id,
-            hostility_type=normalized_hostility_type,
-            translate=translate,
-            view_by="Source",
-            wipe_cutoff=wipe_cutoff,
-            window_start_ms=window_start_ms,
-            window_end_ms=window_end_ms,
+            fight,
+            _EncounterFilters(
+                ability_id=float(ability_id),
+                data_type="Buffs",
+                source_id=source_id,
+                target_id=target_id,
+                hostility_type=normalized_hostility_type,
+                translate=translate,
+                view_by="Source",
+                wipe_cutoff=wipe_cutoff,
+                window_start_ms=window_start_ms,
+                window_end_ms=window_end_ms,
+            ),
         )
         table_payload = client.report_table(code=ref.code, allow_unlisted=allow_unlisted, options=options)
         master_report = client.report_master_data(code=ref.code, allow_unlisted=allow_unlisted, actor_type="Player")
     except WarcraftLogsClientError as exc:
         _handle_client_error(ctx, exc)
-        return
     finally:
         client.close()
     _emit(
@@ -5517,16 +5574,134 @@ def report_encounter_aura_summary(
                 table_report=table_payload,
                 master_report=master_report,
                 ability_id=ability_id,
+                include_raw=include_raw,
             ),
         },
         client=client,
     )
 
 
+@dataclass(frozen=True, slots=True)
+class _AuraWindow:
+    """One labelled side of an aura comparison, as encounter-relative millisecond offsets."""
+
+    label: str
+    start_ms: float | None
+    end_ms: float | None
+
+
+@dataclass(frozen=True, slots=True)
+class _AuraWindowResult:
+    """A fetched aura window: its label, the echoed slice query, and the summary payload it produced."""
+
+    label: str
+    query: dict[str, Any]
+    payload: dict[str, Any]
+
+
+def _aura_compare_windows(
+    ctx: typer.Context,
+    client: WarcraftLogsClient,
+    *,
+    reference: str,
+    fight_id: int | None,
+    allow_unlisted: bool,
+    ability_id: int,
+    filters: _EncounterFilters,
+    left: _AuraWindow,
+    right: _AuraWindow,
+) -> tuple[_EncounterScope, _AuraWindowResult, _AuraWindowResult]:
+    """Resolve the fight, fetch one aura table per window, and summarize both against shared master data."""
+    try:
+        scope = _resolve_encounter_scope(
+            ctx,
+            client=client,
+            reference=reference,
+            fight_id=fight_id,
+            allow_unlisted=allow_unlisted,
+        )
+        fight = scope[2]
+        left_options, left_query = _encounter_filter_options(
+            ctx, fight, replace(filters, window_start_ms=left.start_ms, window_end_ms=left.end_ms, window_flag="--left-window")
+        )
+        right_options, right_query = _encounter_filter_options(
+            ctx, fight, replace(filters, window_start_ms=right.start_ms, window_end_ms=right.end_ms, window_flag="--right-window")
+        )
+        code = scope[0].code
+        left_table = client.report_table(code=code, allow_unlisted=allow_unlisted, options=left_options)
+        right_table = client.report_table(code=code, allow_unlisted=allow_unlisted, options=right_options)
+        master_report = client.report_master_data(code=code, allow_unlisted=allow_unlisted, actor_type="Player")
+    except WarcraftLogsClientError as exc:
+        _handle_client_error(ctx, exc)
+    finally:
+        client.close()
+
+    def summarize(window: _AuraWindow, query: dict[str, Any], table: dict[str, Any]) -> _AuraWindowResult:
+        return _AuraWindowResult(
+            label=window.label,
+            query=query,
+            payload=_report_encounter_aura_summary_payload(
+                report=scope[1],
+                fight=fight,
+                table_report=table,
+                master_report=master_report,
+                ability_id=ability_id,
+                include_raw=False,
+            ),
+        )
+
+    return scope, summarize(left, left_query, left_table), summarize(right, right_query, right_table)
+
+
+def _aura_compare_payload(
+    *,
+    scope: _EncounterScope,
+    filters: _EncounterFilters,
+    left: _AuraWindowResult,
+    right: _AuraWindowResult,
+    finished_report_ttl: int | None,
+    report_ttl: int | None,
+) -> dict[str, Any]:
+    ref, report, fight, encounter = scope
+    return {
+        "ok": True,
+        "provider": "warcraftlogs",
+        "kind": "report_encounter_aura_compare",
+        "query": {
+            "ability_id": filters.ability_id,
+            "source_id": filters.source_id,
+            "target_id": filters.target_id,
+            "hostility_type": filters.hostility_type,
+            "translate": filters.translate,
+            "wipe_cutoff": filters.wipe_cutoff,
+        },
+        **_encounter_summary_payload(
+            ref=ref,
+            report=report,
+            fight=fight,
+            encounter=encounter,
+            finished_report_ttl=finished_report_ttl,
+            report_ttl=report_ttl,
+        ),
+        "aura": left.payload.get("aura"),
+        "windows": [
+            {"label": window.label, "query": window.query, "aura_summary": window.payload.get("aura_summary")}
+            for window in (left, right)
+        ],
+        "comparison": {
+            "matching_rule": "same_report_same_fight_same_ability_explicit_windows",
+            "rows": _aura_compare_rows(
+                left_rows=_aura_summary_rows(left.payload),
+                right_rows=_aura_summary_rows(right.payload),
+            ),
+        },
+    }
+
+
 @app.command("report-encounter-aura-compare")
 def report_encounter_aura_compare(
     ctx: typer.Context,
-    reference: str,
+    reference: str = typer.Argument(..., help="Warcraft Logs report URL or report code, optionally with a #fight=N fragment."),
     ability_id: int = typer.Option(..., "--ability-id", help="Required aura ability game ID."),
     fight_id: int | None = typer.Option(
         None, "--fight-id", help="Override or supply a fight ID when the report reference does not include one."),
@@ -5547,115 +5722,41 @@ def report_encounter_aura_compare(
     translate: bool | None = typer.Option(None, "--translate/--no-translate", help="Optional translation toggle."),
     allow_unlisted: bool = typer.Option(False, "--allow-unlisted", help="Allow lookup of unlisted reports."),
 ) -> None:
+    """Compare aura uptime between two explicit windows of the same report fight."""
     _require_explicit_window(ctx, name="--left-window", start_ms=left_window_start_ms, end_ms=left_window_end_ms)
     _require_explicit_window(ctx, name="--right-window", start_ms=right_window_start_ms, end_ms=right_window_end_ms)
+    filters = _EncounterFilters(
+        ability_id=float(ability_id),
+        data_type="Buffs",
+        source_id=source_id,
+        target_id=target_id,
+        hostility_type=_normalize_graphql_enum(hostility_type),
+        translate=translate,
+        view_by="Source",
+        wipe_cutoff=wipe_cutoff,
+    )
     client = _client(ctx)
-    try:
-        ref, report, fight, encounter = _resolve_encounter_scope(
-            ctx,
-            client=client,
-            reference=reference,
-            fight_id=fight_id,
-            allow_unlisted=allow_unlisted,
-        )
-        normalized_hostility_type = _normalize_graphql_enum(hostility_type)
-        left_options, left_query = _encounter_filter_options(
-            ctx,
-            fight=fight,
-            ability_id=float(ability_id),
-            data_type="Buffs",
-            source_id=source_id,
-            target_id=target_id,
-            hostility_type=normalized_hostility_type,
-            translate=translate,
-            view_by="Source",
-            wipe_cutoff=wipe_cutoff,
-            window_start_ms=left_window_start_ms,
-            window_end_ms=left_window_end_ms,
-        )
-        right_options, right_query = _encounter_filter_options(
-            ctx,
-            fight=fight,
-            ability_id=float(ability_id),
-            data_type="Buffs",
-            source_id=source_id,
-            target_id=target_id,
-            hostility_type=normalized_hostility_type,
-            translate=translate,
-            view_by="Source",
-            wipe_cutoff=wipe_cutoff,
-            window_start_ms=right_window_start_ms,
-            window_end_ms=right_window_end_ms,
-        )
-        left_table = client.report_table(code=ref.code, allow_unlisted=allow_unlisted, options=left_options)
-        right_table = client.report_table(code=ref.code, allow_unlisted=allow_unlisted, options=right_options)
-        master_report = client.report_master_data(code=ref.code, allow_unlisted=allow_unlisted, actor_type="Player")
-    except WarcraftLogsClientError as exc:
-        _handle_client_error(ctx, exc)
-        return
-    finally:
-        client.close()
-
-    left_payload = _report_encounter_aura_summary_payload(
-        report=report,
-        fight=fight,
-        table_report=left_table,
-        master_report=master_report,
+    scope, left, right = _aura_compare_windows(
+        ctx,
+        client,
+        reference=reference,
+        fight_id=fight_id,
+        allow_unlisted=allow_unlisted,
         ability_id=ability_id,
+        filters=filters,
+        left=_AuraWindow(left_label, left_window_start_ms, left_window_end_ms),
+        right=_AuraWindow(right_label, right_window_start_ms, right_window_end_ms),
     )
-    right_payload = _report_encounter_aura_summary_payload(
-        report=report,
-        fight=fight,
-        table_report=right_table,
-        master_report=master_report,
-        ability_id=ability_id,
-    )
-
     _emit(
         ctx,
-        {
-            "ok": True,
-            "provider": "warcraftlogs",
-            "kind": "report_encounter_aura_compare",
-            "query": {
-                "ability_id": float(ability_id),
-                "source_id": source_id,
-                "target_id": target_id,
-                "hostility_type": normalized_hostility_type,
-                "translate": translate,
-                "wipe_cutoff": wipe_cutoff,
-            },
-            **_encounter_summary_payload(
-                ref=ref,
-                report=report,
-                fight=fight,
-                encounter=encounter,
-                finished_report_ttl=_emitted_finished_report_ttl(client),
-                report_ttl=_emitted_report_ttl(client),
-            ),
-            "aura": left_payload.get("aura"),
-            "windows": [
-                {
-                    "label": left_label,
-                    "query": left_query,
-                    "aura_summary": left_payload.get("aura_summary"),
-                },
-                {
-                    "label": right_label,
-                    "query": right_query,
-                    "aura_summary": right_payload.get("aura_summary"),
-                },
-            ],
-            "comparison": {
-                "matching_rule": "same_report_same_fight_same_ability_explicit_windows",
-                "rows": _aura_compare_rows(
-                    left_rows=(left_payload.get("aura_summary") or {}).get(
-                        "rows") if isinstance(left_payload.get("aura_summary"), dict) else [],
-                    right_rows=(right_payload.get("aura_summary") or {}).get(
-                        "rows") if isinstance(right_payload.get("aura_summary"), dict) else [],
-                ),
-            },
-        },
+        _aura_compare_payload(
+            scope=scope,
+            filters=filters,
+            left=left,
+            right=right,
+            finished_report_ttl=_emitted_finished_report_ttl(client),
+            report_ttl=_emitted_report_ttl(client),
+        ),
         client=client,
     )
 
@@ -5663,7 +5764,7 @@ def report_encounter_aura_compare(
 @app.command("report-encounter-damage-source-summary")
 def report_encounter_damage_source_summary(
     ctx: typer.Context,
-    reference: str,
+    reference: str = typer.Argument(..., help="Warcraft Logs report URL or report code, optionally with a #fight=N fragment."),
     fight_id: int | None = typer.Option(
         None, "--fight-id", help="Override or supply a fight ID when the report reference does not include one."),
     source_id: int | None = typer.Option(None, "--source-id", help="Optional source actor filter."),
@@ -5675,8 +5776,10 @@ def report_encounter_damage_source_summary(
         None, "--window-start-ms", help="Optional encounter-relative start offset in milliseconds."),
     window_end_ms: float | None = typer.Option(None, "--window-end-ms", help="Optional encounter-relative end offset in milliseconds."),
     translate: bool | None = typer.Option(None, "--translate/--no-translate", help="Optional translation toggle."),
+    include_raw: bool = typer.Option(False, "--include-raw", help=_INCLUDE_RAW_HELP),
     allow_unlisted: bool = typer.Option(False, "--allow-unlisted", help="Allow lookup of unlisted reports."),
 ) -> None:
+    """Summarize damage in one report fight by source actor."""
     client = _client(ctx)
     try:
         ref, report, fight, encounter = _resolve_encounter_scope(
@@ -5689,23 +5792,24 @@ def report_encounter_damage_source_summary(
         normalized_hostility_type = _normalize_graphql_enum(hostility_type)
         options, query = _encounter_filter_options(
             ctx,
-            fight=fight,
-            ability_id=ability_id,
-            data_type="DamageDone",
-            source_id=source_id,
-            target_id=target_id,
-            hostility_type=normalized_hostility_type,
-            translate=translate,
-            view_by="Source",
-            wipe_cutoff=wipe_cutoff,
-            window_start_ms=window_start_ms,
-            window_end_ms=window_end_ms,
+            fight,
+            _EncounterFilters(
+                ability_id=ability_id,
+                data_type="DamageDone",
+                source_id=source_id,
+                target_id=target_id,
+                hostility_type=normalized_hostility_type,
+                translate=translate,
+                view_by="Source",
+                wipe_cutoff=wipe_cutoff,
+                window_start_ms=window_start_ms,
+                window_end_ms=window_end_ms,
+            ),
         )
         table_payload = client.report_table(code=ref.code, allow_unlisted=allow_unlisted, options=options)
         master_report = client.report_master_data(code=ref.code, allow_unlisted=allow_unlisted, actor_type="Player")
     except WarcraftLogsClientError as exc:
         _handle_client_error(ctx, exc)
-        return
     finally:
         client.close()
     _emit(
@@ -5723,11 +5827,13 @@ def report_encounter_damage_source_summary(
                 finished_report_ttl=_emitted_finished_report_ttl(client),
                 report_ttl=_emitted_report_ttl(client),
             ),
-            **_report_encounter_damage_source_summary_payload(
+            **_report_encounter_damage_summary_payload(
                 report=report,
                 fight=fight,
                 table_report=table_payload,
                 master_report=master_report,
+                actor_field="source",
+                include_raw=include_raw,
             ),
         },
         client=client,
@@ -5737,7 +5843,7 @@ def report_encounter_damage_source_summary(
 @app.command("report-encounter-damage-target-summary")
 def report_encounter_damage_target_summary(
     ctx: typer.Context,
-    reference: str,
+    reference: str = typer.Argument(..., help="Warcraft Logs report URL or report code, optionally with a #fight=N fragment."),
     fight_id: int | None = typer.Option(
         None, "--fight-id", help="Override or supply a fight ID when the report reference does not include one."),
     source_id: int | None = typer.Option(None, "--source-id", help="Optional source actor filter."),
@@ -5749,8 +5855,10 @@ def report_encounter_damage_target_summary(
         None, "--window-start-ms", help="Optional encounter-relative start offset in milliseconds."),
     window_end_ms: float | None = typer.Option(None, "--window-end-ms", help="Optional encounter-relative end offset in milliseconds."),
     translate: bool | None = typer.Option(None, "--translate/--no-translate", help="Optional translation toggle."),
+    include_raw: bool = typer.Option(False, "--include-raw", help=_INCLUDE_RAW_HELP),
     allow_unlisted: bool = typer.Option(False, "--allow-unlisted", help="Allow lookup of unlisted reports."),
 ) -> None:
+    """Summarize damage in one report fight by target actor."""
     client = _client(ctx)
     try:
         ref, report, fight, encounter = _resolve_encounter_scope(
@@ -5763,23 +5871,24 @@ def report_encounter_damage_target_summary(
         normalized_hostility_type = _normalize_graphql_enum(hostility_type)
         options, query = _encounter_filter_options(
             ctx,
-            fight=fight,
-            ability_id=ability_id,
-            data_type="DamageDone",
-            source_id=source_id,
-            target_id=target_id,
-            hostility_type=normalized_hostility_type,
-            translate=translate,
-            view_by="Target",
-            wipe_cutoff=wipe_cutoff,
-            window_start_ms=window_start_ms,
-            window_end_ms=window_end_ms,
+            fight,
+            _EncounterFilters(
+                ability_id=ability_id,
+                data_type="DamageDone",
+                source_id=source_id,
+                target_id=target_id,
+                hostility_type=normalized_hostility_type,
+                translate=translate,
+                view_by="Target",
+                wipe_cutoff=wipe_cutoff,
+                window_start_ms=window_start_ms,
+                window_end_ms=window_end_ms,
+            ),
         )
         table_payload = client.report_table(code=ref.code, allow_unlisted=allow_unlisted, options=options)
         master_report = client.report_master_data(code=ref.code, allow_unlisted=allow_unlisted)
     except WarcraftLogsClientError as exc:
         _handle_client_error(ctx, exc)
-        return
     finally:
         client.close()
     _emit(
@@ -5797,11 +5906,13 @@ def report_encounter_damage_target_summary(
                 finished_report_ttl=_emitted_finished_report_ttl(client),
                 report_ttl=_emitted_report_ttl(client),
             ),
-            **_report_encounter_damage_target_summary_payload(
+            **_report_encounter_damage_summary_payload(
                 report=report,
                 fight=fight,
                 table_report=table_payload,
                 master_report=master_report,
+                actor_field="target",
+                include_raw=include_raw,
             ),
         },
         client=client,
@@ -5811,7 +5922,7 @@ def report_encounter_damage_target_summary(
 @app.command("report-encounter-damage-breakdown")
 def report_encounter_damage_breakdown(
     ctx: typer.Context,
-    reference: str,
+    reference: str = typer.Argument(..., help="Warcraft Logs report URL or report code, optionally with a #fight=N fragment."),
     fight_id: int | None = typer.Option(
         None, "--fight-id", help="Override or supply a fight ID when the report reference does not include one."),
     source_id: int | None = typer.Option(None, "--source-id", help="Optional source actor filter."),
@@ -5826,6 +5937,7 @@ def report_encounter_damage_breakdown(
     translate: bool | None = typer.Option(None, "--translate/--no-translate", help="Optional translation toggle."),
     allow_unlisted: bool = typer.Option(False, "--allow-unlisted", help="Allow lookup of unlisted reports."),
 ) -> None:
+    """Return the raw damage table for one report fight."""
     client = _client(ctx)
     try:
         ref, report, fight, encounter = _resolve_encounter_scope(
@@ -5839,22 +5951,23 @@ def report_encounter_damage_breakdown(
         normalized_view_by = _normalize_graphql_enum(view_by)
         options, query = _encounter_filter_options(
             ctx,
-            fight=fight,
-            ability_id=ability_id,
-            data_type="DamageDone",
-            source_id=source_id,
-            target_id=target_id,
-            hostility_type=normalized_hostility_type,
-            translate=translate,
-            view_by=normalized_view_by,
-            wipe_cutoff=wipe_cutoff,
-            window_start_ms=window_start_ms,
-            window_end_ms=window_end_ms,
+            fight,
+            _EncounterFilters(
+                ability_id=ability_id,
+                data_type="DamageDone",
+                source_id=source_id,
+                target_id=target_id,
+                hostility_type=normalized_hostility_type,
+                translate=translate,
+                view_by=normalized_view_by,
+                wipe_cutoff=wipe_cutoff,
+                window_start_ms=window_start_ms,
+                window_end_ms=window_end_ms,
+            ),
         )
         payload = client.report_table(code=ref.code, allow_unlisted=allow_unlisted, options=options)
     except WarcraftLogsClientError as exc:
         _handle_client_error(ctx, exc)
-        return
     finally:
         client.close()
     _emit(
@@ -5901,54 +6014,34 @@ def kill_time_distribution(
     guild_name: str | None = typer.Option(None, "--guild-name", help="Optional guild-name scope for report discovery."),
     bucket_seconds: int = typer.Option(30, "--bucket-seconds", min=5, max=600, help="Bucket size in seconds for the returned histogram."),
 ) -> None:
+    """Bucket kill durations across a sample of recent kills of one boss."""
     _require_boss_scope(ctx, boss_id=boss_id, boss_name=boss_name)
+    scope = CrossReportScope(
+        zone_id=zone_id,
+        boss_id=boss_id,
+        boss_name=boss_name,
+        difficulty=difficulty,
+        spec_name=spec_name,
+        kill_time_min=kill_time_min,
+        kill_time_max=kill_time_max,
+        report_pages=report_pages,
+        reports_per_page=reports_per_page,
+        start_time=start_time,
+        end_time=end_time,
+        guild_region=guild_region,
+        guild_realm=guild_realm,
+        guild_name=guild_name,
+    )
     client = _client(ctx)
-    try:
-        analytics = _collect_boss_kill_rows(
-            client=client,
-            zone_id=zone_id,
-            boss_id=boss_id,
-            boss_name=boss_name,
-            difficulty=difficulty,
-            spec_name=spec_name,
-            kill_time_min=kill_time_min,
-            kill_time_max=kill_time_max,
-            report_pages=report_pages,
-            reports_per_page=reports_per_page,
-            start_time=start_time,
-            end_time=end_time,
-            guild_region=guild_region,
-            guild_realm=guild_realm,
-            guild_name=guild_name,
-        )
-    except WarcraftLogsClientError as exc:
-        _handle_client_error(ctx, exc)
-        return
-    finally:
-        client.close()
+    analytics = _sampled_kill_cohort(ctx, client, scope)
     _emit(
         ctx,
         _kill_time_distribution_payload(
             cache_ttl_seconds=_emitted_finished_report_ttl(client),
+            transport_counts=client.transport_counts,
             rows=analytics["rows"],
             sample=analytics["sample"],
-            query=_cross_report_query(
-                zone_id=zone_id,
-                boss_id=boss_id,
-                boss_name=boss_name,
-                difficulty=difficulty,
-                spec_name=spec_name,
-                kill_time_min=kill_time_min,
-                kill_time_max=kill_time_max,
-                top=len(analytics["rows"]),
-                report_pages=report_pages,
-                reports_per_page=reports_per_page,
-                start_time=start_time,
-                end_time=end_time,
-                guild_region=guild_region,
-                guild_realm=guild_realm,
-                guild_name=guild_name,
-            ),
+            query={**asdict(scope), "top": len(analytics["rows"])},
             bucket_seconds=bucket_seconds,
             root_url=client.site.root_url,
         ),
@@ -5959,19 +6052,19 @@ def kill_time_distribution(
 @app.command("report-fights")
 def report_fights(
     ctx: typer.Context,
-    code: str,
+    code: str = typer.Argument(..., help="Warcraft Logs report code."),
     difficulty: int | None = typer.Option(None, "--difficulty", help="Optional difficulty ID filter."),
     allow_unlisted: bool = typer.Option(False, "--allow-unlisted", help="Allow lookup of unlisted reports."),
 ) -> None:
+    """List the fights in one report."""
     client = _client(ctx)
     try:
         payload = client.report_fights(code=code, difficulty=difficulty, allow_unlisted=allow_unlisted)
     except WarcraftLogsClientError as exc:
         _handle_client_error(ctx, exc)
-        return
     finally:
         client.close()
-    fights = payload.get("fights") if isinstance(payload.get("fights"), list) else []
+    fights = list_at(payload, "fights")
     _emit(
         ctx,
         {
@@ -5983,6 +6076,52 @@ def report_fights(
             "fights": [_fight_payload(fight) for fight in fights if isinstance(fight, dict)],
         },
         client=client,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _GraphqlRequest:
+    """A resolved raw-GraphQL invocation: operation text, merged variables, endpoint, and cache budget."""
+
+    operation_name: str | None
+    query: str
+    variables: dict[str, Any]
+    endpoint: str
+    cache_ttl_seconds: int
+
+
+def _run_graphql(ctx: typer.Context, request: _GraphqlRequest) -> None:
+    client = _client(ctx)
+    try:
+        payload, effective_endpoint = client.raw_graphql(
+            operation_name=request.operation_name,
+            query=request.query,
+            variables=request.variables,
+            endpoint=request.endpoint,
+            cache_ttl_seconds=request.cache_ttl_seconds,
+        )
+    except WarcraftLogsClientError as exc:
+        _handle_client_error(ctx, exc)
+    finally:
+        client.close()
+    # ``data`` is the GraphQL result's own ``data`` object (``__schema`` under --introspect), built
+    # directly so no field of it, whatever its alias, becomes an envelope key or is rewritten. Partial
+    # errors go under ``provenance`` for the same reason.
+    data = dict(payload or {})
+    warnings = data.pop(GRAPHQL_WARNINGS_KEY, None)
+    query = {
+        "operation_name": request.operation_name,
+        "variables": request.variables,
+        "endpoint": effective_endpoint,
+        "requested_endpoint": request.endpoint,
+        "cache_ttl_seconds": request.cache_ttl_seconds,
+    }
+    provenance = {"graphql_warnings": warnings} if warnings else {}
+    emit(
+        ctx,
+        success_envelope(
+            provider="warcraftlogs", command="graphql", kind="graphql", data=data, query=query, provenance=provenance
+        ),
     )
 
 
@@ -6012,64 +6151,123 @@ def graphql(
     target_id: int | None = typer.Option(None, "--target-id", help="Inject declared $targetID variables."),
     ability_id: int | None = typer.Option(None, "--ability-id", help="Inject declared $abilityID variables."),
 ) -> None:
+    """Run a raw Warcraft Logs GraphQL query, or introspect the schema with --introspect."""
     query = _load_graphql_query(ctx, query_text, introspect=introspect)
     effective_operation_name = "IntrospectionQuery" if introspect else operation_name
     variables = _parse_graphql_variables_json(ctx, variables_json)
     variables.update(_parse_graphql_var_options(ctx, raw_var))
-    variables = _inject_graphql_scope_helpers(
-        variables,
-        declared_variables=_declared_graphql_variables(query, operation_name=effective_operation_name),
-        report_code=report_code,
-        fight_ids=fight_id,
-        encounter_id=encounter_id,
-        start_time=start_time,
-        end_time=end_time,
-        difficulty=difficulty,
-        zone_id=zone_id,
-        source_id=source_id,
-        target_id=target_id,
-        ability_id=ability_id,
-        allow_unlisted=allow_unlisted,
-    )
-    client = _client(ctx)
-    try:
-        payload, effective_endpoint = client.raw_graphql(
+    _run_graphql(
+        ctx,
+        _GraphqlRequest(
             operation_name=effective_operation_name,
             query=query,
-            variables=variables,
+            variables=_inject_graphql_scope_helpers(
+                variables,
+                declared_variables=_declared_graphql_variables(query, operation_name=effective_operation_name),
+                scope=_GraphqlScope(
+                    report_code=report_code,
+                    fight_ids=fight_id,
+                    encounter_id=encounter_id,
+                    start_time=start_time,
+                    end_time=end_time,
+                    difficulty=difficulty,
+                    zone_id=zone_id,
+                    source_id=source_id,
+                    target_id=target_id,
+                    ability_id=ability_id,
+                    allow_unlisted=allow_unlisted,
+                ),
+            ),
             endpoint=endpoint,
             cache_ttl_seconds=cache_ttl,
+        ),
+    )
+
+
+def _emit_report_events_slice(
+    ctx: typer.Context,
+    *,
+    code: str,
+    allow_unlisted: bool,
+    options: ReportFilterOptions,
+) -> None:
+    """Fetch one raw event slice and emit it with the filter options echoed back as the query."""
+    client = _client(ctx)
+    try:
+        _require_matching_fight(
+            ctx,
+            client,
+            code=code,
+            allow_unlisted=allow_unlisted,
+            fight_ids=options.fight_ids,
+            encounter_id=options.encounter_id,
+            difficulty=options.difficulty,
         )
+        payload = client.report_events(code=code, allow_unlisted=allow_unlisted, options=options)
     except WarcraftLogsClientError as exc:
         _handle_client_error(ctx, exc)
-        return
     finally:
         client.close()
-    data = dict(payload) if isinstance(payload, dict) else payload
-    if isinstance(data, dict):
-        data.pop(GRAPHQL_WARNINGS_KEY, None)
+    result_payload = _report_events_payload(payload)
     emitted: dict[str, Any] = {
         "ok": True,
         "provider": "warcraftlogs",
-        "query": {
-            "operation_name": effective_operation_name,
-            "variables": variables,
-            "endpoint": effective_endpoint,
-            "requested_endpoint": endpoint,
-            "cache_ttl_seconds": cache_ttl,
-        },
+        "query": asdict(options),
+        **result_payload,
     }
-    if introspect:
-        emitted["introspection"] = data.get("__schema") if isinstance(data, dict) else None
-    else:
-        emitted["data"] = data
+    if result_payload.get("events") is None and options.data_type is None:
+        emitted["notes"] = [
+            "events.data is null. Warcraft Logs requires --data-type "
+            "(e.g. casts, damage-done, healing) for non-null event slices."
+        ]
     _emit(ctx, emitted, client=client)
+
+
+def _emit_report_json_slice(
+    ctx: typer.Context,
+    *,
+    code: str,
+    allow_unlisted: bool,
+    options: ReportFilterOptions,
+    field: Literal["table", "graph"],
+) -> None:
+    """Fetch one raw report ``table`` or ``graph`` slice and emit it under the matching payload key."""
+    client = _client(ctx)
+    try:
+        _require_matching_fight(
+            ctx,
+            client,
+            code=code,
+            allow_unlisted=allow_unlisted,
+            fight_ids=options.fight_ids,
+            encounter_id=options.encounter_id,
+            difficulty=options.difficulty,
+        )
+        payload = (
+            client.report_table(code=code, allow_unlisted=allow_unlisted, options=options)
+            if field == "table"
+            else client.report_graph(code=code, allow_unlisted=allow_unlisted, options=options)
+        )
+    except WarcraftLogsClientError as exc:
+        _handle_client_error(ctx, exc)
+    finally:
+        client.close()
+    _emit(
+        ctx,
+        {
+            "ok": True,
+            "provider": "warcraftlogs",
+            "query": asdict(options),
+            **_report_json_payload(payload, field=field),
+        },
+        client=client,
+    )
 
 
 @app.command("report-events")
 def report_events(
     ctx: typer.Context,
-    code: str,
+    code: str = typer.Argument(..., help="Warcraft Logs report code."),
     ability_id: float | None = typer.Option(None, "--ability-id", help="Optional ability game ID filter."),
     data_type: str | None = typer.Option(
         None,
@@ -6093,81 +6291,37 @@ def report_events(
     translate: bool | None = typer.Option(None, "--translate/--no-translate", help="Optional translation toggle."),
     allow_unlisted: bool = typer.Option(False, "--allow-unlisted", help="Allow lookup of unlisted reports."),
 ) -> None:
-    normalized_data_type = _normalize_graphql_enum(data_type)
-    normalized_hostility_type = _normalize_graphql_enum(hostility_type)
-    normalized_kill_type = _normalize_graphql_enum(kill_type)
-    if not any(value is not None for value in (fight_id, encounter_id, start_time, end_time)):
-        _fail(
-            ctx,
-            "missing_scope",
-            "report-events requires a narrowed slice. Provide --fight-id, --encounter-id, --start-time, or --end-time.",
-        )
-        return
-    options = _report_filter_options(
+    """Return raw report events for one fight (--fight-id) or one explicit --start-time/--end-time window."""
+    options = ReportFilterOptions(
         ability_id=ability_id,
-        data_type=normalized_data_type,
+        data_type=_normalize_graphql_enum(data_type),
         difficulty=difficulty,
         encounter_id=encounter_id,
         end_time=end_time,
         fight_ids=fight_id,
         filter_expression=filter_expression,
-        hostility_type=normalized_hostility_type,
-        kill_type=normalized_kill_type,
+        hostility_type=_normalize_graphql_enum(hostility_type),
+        kill_type=_normalize_graphql_enum(kill_type),
         limit=limit,
         source_id=source_id,
         start_time=start_time,
         target_id=target_id,
         translate=translate,
-        view_by=None,
-        wipe_cutoff=None,
     )
-    client = _client(ctx)
-    try:
-        payload = client.report_events(code=code, allow_unlisted=allow_unlisted, options=options)
-    except WarcraftLogsClientError as exc:
-        _handle_client_error(ctx, exc)
-        return
-    finally:
-        client.close()
-    result_payload = _report_events_payload(payload)
-    notes: list[str] = []
-    if result_payload.get("events") is None and normalized_data_type is None:
-        notes.append(
-            "events.data is null. Warcraft Logs requires --data-type "
-            "(e.g. casts, damage-done, healing) for non-null event slices."
-        )
-    emitted: dict[str, Any] = {
-        "ok": True,
-        "provider": "warcraftlogs",
-        "query": _report_filter_query_payload(
-            ability_id=ability_id,
-            data_type=normalized_data_type,
-            difficulty=difficulty,
-            encounter_id=encounter_id,
-            end_time=end_time,
-            fight_ids=fight_id,
-            filter_expression=filter_expression,
-            hostility_type=normalized_hostility_type,
-            kill_type=normalized_kill_type,
-            limit=limit,
-            source_id=source_id,
-            start_time=start_time,
-            target_id=target_id,
-            translate=translate,
-            view_by=None,
-            wipe_cutoff=None,
-        ),
-        **result_payload,
-    }
-    if notes:
-        emitted["notes"] = notes
-    _emit(ctx, emitted, client=client)
+    _require_report_slice(
+        ctx,
+        command="report-events",
+        fight_id=fight_id,
+        start_time=start_time,
+        end_time=end_time,
+    )
+    _emit_report_events_slice(ctx, code=code, allow_unlisted=allow_unlisted, options=options)
 
 
 @app.command("report-table")
 def report_table(
     ctx: typer.Context,
-    code: str,
+    code: str = typer.Argument(..., help="Warcraft Logs report code."),
     ability_id: float | None = typer.Option(None, "--ability-id", help="Optional ability game ID filter."),
     data_type: str | None = typer.Option(None, "--data-type", help="Optional table data type."),
     difficulty: int | None = typer.Option(None, "--difficulty", help="Optional difficulty ID filter."),
@@ -6185,70 +6339,36 @@ def report_table(
     wipe_cutoff: int | None = typer.Option(None, "--wipe-cutoff", help="Optional wipe cutoff."),
     allow_unlisted: bool = typer.Option(False, "--allow-unlisted", help="Allow lookup of unlisted reports."),
 ) -> None:
-    normalized_data_type = _normalize_graphql_enum(data_type)
-    normalized_hostility_type = _normalize_graphql_enum(hostility_type)
-    normalized_kill_type = _normalize_graphql_enum(kill_type)
-    normalized_view_by = _normalize_graphql_enum(view_by)
-    options = _report_filter_options(
-        ability_id=ability_id,
-        data_type=normalized_data_type,
-        difficulty=difficulty,
-        encounter_id=encounter_id,
-        end_time=end_time,
-        fight_ids=fight_id,
-        filter_expression=filter_expression,
-        hostility_type=normalized_hostility_type,
-        kill_type=normalized_kill_type,
-        limit=None,
-        source_id=source_id,
-        start_time=start_time,
-        target_id=target_id,
-        translate=translate,
-        view_by=normalized_view_by,
-        wipe_cutoff=wipe_cutoff,
-    )
-    client = _client(ctx)
-    try:
-        payload = client.report_table(code=code, allow_unlisted=allow_unlisted, options=options)
-    except WarcraftLogsClientError as exc:
-        _handle_client_error(ctx, exc)
-        return
-    finally:
-        client.close()
-    result_payload = _report_json_payload(payload, field="table")
-    _emit(
+    """Return a raw report table for one narrowed slice of a report."""
+    _emit_report_json_slice(
         ctx,
-        {
-            "ok": True,
-            "provider": "warcraftlogs",
-            "query": _report_filter_query_payload(
-                ability_id=ability_id,
-                data_type=normalized_data_type,
-                difficulty=difficulty,
-                encounter_id=encounter_id,
-                end_time=end_time,
-                fight_ids=fight_id,
-                filter_expression=filter_expression,
-                hostility_type=normalized_hostility_type,
-                kill_type=normalized_kill_type,
-                limit=None,
-                source_id=source_id,
-                start_time=start_time,
-                target_id=target_id,
-                translate=translate,
-                view_by=normalized_view_by,
-                wipe_cutoff=wipe_cutoff,
-            ),
-            **result_payload,
-        },
-        client=client,
+        code=code,
+        allow_unlisted=allow_unlisted,
+        options=ReportFilterOptions(
+            ability_id=ability_id,
+            data_type=_normalize_graphql_enum(data_type),
+            difficulty=difficulty,
+            encounter_id=encounter_id,
+            end_time=end_time,
+            fight_ids=fight_id,
+            filter_expression=filter_expression,
+            hostility_type=_normalize_graphql_enum(hostility_type),
+            kill_type=_normalize_graphql_enum(kill_type),
+            source_id=source_id,
+            start_time=start_time,
+            target_id=target_id,
+            translate=translate,
+            view_by=_normalize_graphql_enum(view_by),
+            wipe_cutoff=wipe_cutoff,
+        ),
+        field="table",
     )
 
 
 @app.command("report-graph")
 def report_graph(
     ctx: typer.Context,
-    code: str,
+    code: str = typer.Argument(..., help="Warcraft Logs report code."),
     ability_id: float | None = typer.Option(None, "--ability-id", help="Optional ability game ID filter."),
     data_type: str | None = typer.Option(None, "--data-type", help="Optional graph data type."),
     difficulty: int | None = typer.Option(None, "--difficulty", help="Optional difficulty ID filter."),
@@ -6266,75 +6386,42 @@ def report_graph(
     wipe_cutoff: int | None = typer.Option(None, "--wipe-cutoff", help="Optional wipe cutoff."),
     allow_unlisted: bool = typer.Option(False, "--allow-unlisted", help="Allow lookup of unlisted reports."),
 ) -> None:
-    normalized_data_type = _normalize_graphql_enum(data_type)
-    normalized_hostility_type = _normalize_graphql_enum(hostility_type)
-    normalized_kill_type = _normalize_graphql_enum(kill_type)
-    normalized_view_by = _normalize_graphql_enum(view_by)
-    options = _report_filter_options(
-        ability_id=ability_id,
-        data_type=normalized_data_type,
-        difficulty=difficulty,
-        encounter_id=encounter_id,
-        end_time=end_time,
-        fight_ids=fight_id,
-        filter_expression=filter_expression,
-        hostility_type=normalized_hostility_type,
-        kill_type=normalized_kill_type,
-        limit=None,
-        source_id=source_id,
-        start_time=start_time,
-        target_id=target_id,
-        translate=translate,
-        view_by=normalized_view_by,
-        wipe_cutoff=wipe_cutoff,
-    )
-    client = _client(ctx)
-    try:
-        payload = client.report_graph(code=code, allow_unlisted=allow_unlisted, options=options)
-    except WarcraftLogsClientError as exc:
-        _handle_client_error(ctx, exc)
-        return
-    finally:
-        client.close()
-    result_payload = _report_json_payload(payload, field="graph")
-    _emit(
+    """Return a raw report graph series for one narrowed slice of a report."""
+    _emit_report_json_slice(
         ctx,
-        {
-            "ok": True,
-            "provider": "warcraftlogs",
-            "query": _report_filter_query_payload(
-                ability_id=ability_id,
-                data_type=normalized_data_type,
-                difficulty=difficulty,
-                encounter_id=encounter_id,
-                end_time=end_time,
-                fight_ids=fight_id,
-                filter_expression=filter_expression,
-                hostility_type=normalized_hostility_type,
-                kill_type=normalized_kill_type,
-                limit=None,
-                source_id=source_id,
-                start_time=start_time,
-                target_id=target_id,
-                translate=translate,
-                view_by=normalized_view_by,
-                wipe_cutoff=wipe_cutoff,
-            ),
-            **result_payload,
-        },
-        client=client,
+        code=code,
+        allow_unlisted=allow_unlisted,
+        options=ReportFilterOptions(
+            ability_id=ability_id,
+            data_type=_normalize_graphql_enum(data_type),
+            difficulty=difficulty,
+            encounter_id=encounter_id,
+            end_time=end_time,
+            fight_ids=fight_id,
+            filter_expression=filter_expression,
+            hostility_type=_normalize_graphql_enum(hostility_type),
+            kill_type=_normalize_graphql_enum(kill_type),
+            source_id=source_id,
+            start_time=start_time,
+            target_id=target_id,
+            translate=translate,
+            view_by=_normalize_graphql_enum(view_by),
+            wipe_cutoff=wipe_cutoff,
+        ),
+        field="graph",
     )
 
 
 @app.command("report-master-data")
 def report_master_data(
     ctx: typer.Context,
-    code: str,
+    code: str = typer.Argument(..., help="Warcraft Logs report code."),
     actor_type: str | None = typer.Option(None, "--actor-type", help="Optional actor type filter."),
     actor_sub_type: str | None = typer.Option(None, "--actor-sub-type", help="Optional actor sub-type filter."),
     translate: bool | None = typer.Option(None, "--translate/--no-translate", help="Optional translation toggle."),
     allow_unlisted: bool = typer.Option(False, "--allow-unlisted", help="Allow lookup of unlisted reports."),
 ) -> None:
+    """Return a report's master data: actors and abilities."""
     client = _client(ctx)
     try:
         payload = client.report_master_data(
@@ -6346,7 +6433,6 @@ def report_master_data(
         )
     except WarcraftLogsClientError as exc:
         _handle_client_error(ctx, exc)
-        return
     finally:
         client.close()
     _emit(
@@ -6364,7 +6450,7 @@ def report_master_data(
 @app.command("report-player-details")
 def report_player_details(
     ctx: typer.Context,
-    code: str,
+    code: str = typer.Argument(..., help="Warcraft Logs report code."),
     difficulty: int | None = typer.Option(None, "--difficulty", help="Optional difficulty ID filter."),
     encounter_id: int | None = typer.Option(None, "--encounter-id", help="Optional encounter ID filter."),
     end_time: float | None = typer.Option(None, "--end-time", help="Optional event-range end timestamp."),
@@ -6379,6 +6465,9 @@ def report_player_details(
     translate: bool | None = typer.Option(None, "--translate/--no-translate", help="Optional translation toggle."),
     allow_unlisted: bool = typer.Option(False, "--allow-unlisted", help="Allow lookup of unlisted reports."),
 ) -> None:
+    """Return a report's player details for one fight (--fight-id) or one explicit --start-time/--end-time window."""
+    # Warcraft Logs answers a wider playerDetails query with an empty roster plus a GraphQL
+    # warning, which reads as "this report has no players". Reject it here like report-events does.
     normalized_kill_type = _normalize_graphql_enum(kill_type)
     options = ReportPlayerDetailsOptions(
         difficulty=difficulty,
@@ -6390,34 +6479,60 @@ def report_player_details(
         start_time=start_time,
         translate=translate,
     )
+    query = {
+        "difficulty": difficulty,
+        "encounter_id": encounter_id,
+        "end_time": end_time,
+        "fight_ids": fight_id,
+        "include_combatant_info": include_combatant_info,
+        "kill_type": normalized_kill_type,
+        "start_time": start_time,
+        "translate": translate,
+    }
+    _require_report_slice(
+        ctx,
+        command="report-player-details",
+        fight_id=fight_id,
+        start_time=start_time,
+        end_time=end_time,
+    )
     client = _client(ctx)
     try:
+        _require_matching_fight(
+            ctx,
+            client,
+            code=code,
+            allow_unlisted=allow_unlisted,
+            fight_ids=fight_id,
+            encounter_id=encounter_id,
+            difficulty=difficulty,
+        )
         payload = client.report_player_details(code=code, allow_unlisted=allow_unlisted, options=options)
     except WarcraftLogsClientError as exc:
         _handle_client_error(ctx, exc)
-        return
     finally:
         client.close()
+    details = _report_player_details_payload(
+        payload,
+        report_code=code,
+        fight_id=fight_id[0] if fight_id and len(fight_id) == 1 else None,
+    )
+    # A fight Warcraft Logs actually has always has a roster. An empty one means the slice matched
+    # no fight (an unknown fight ID, a mismatched --encounter-id/--difficulty, an empty window),
+    # which must not read as "this report has no players".
+    if details["player_details"]["counts"]["total"] == 0:
+        _fail(
+            ctx,
+            "not_found",
+            f"Warcraft Logs report {code} has no fight matching {_described_slice(query)}, so the roster is empty.",
+        )
     _emit(
         ctx,
         {
             "ok": True,
             "provider": "warcraftlogs",
-            "query": {
-                "difficulty": difficulty,
-                "encounter_id": encounter_id,
-                "end_time": end_time,
-                "fight_ids": fight_id,
-                "include_combatant_info": include_combatant_info,
-                "kill_type": normalized_kill_type,
-                "start_time": start_time,
-                "translate": translate,
-            },
-            **_report_player_details_payload(
-                payload,
-                report_code=code,
-                fight_id=fight_id[0] if fight_id and len(fight_id) == 1 else None,
-            ),
+            "query": query,
+            **details,
         },
         client=client,
     )
@@ -6426,7 +6541,7 @@ def report_player_details(
 @app.command("report-rankings")
 def report_rankings(
     ctx: typer.Context,
-    code: str,
+    code: str = typer.Argument(..., help="Warcraft Logs report code."),
     compare: str | None = typer.Option(None, "--compare", help="Optional compare mode such as rankings or parses."),
     difficulty: int | None = typer.Option(None, "--difficulty", help="Optional difficulty ID filter."),
     encounter_id: int | None = typer.Option(None, "--encounter-id", help="Optional encounter ID filter."),
@@ -6435,6 +6550,7 @@ def report_rankings(
     timeframe: str | None = typer.Option(None, "--timeframe", help="Optional timeframe such as today or historical."),
     allow_unlisted: bool = typer.Option(False, "--allow-unlisted", help="Allow lookup of unlisted reports."),
 ) -> None:
+    """Return the rankings attached to one report's fights."""
     normalized_compare = _normalize_graphql_enum(compare)
     normalized_timeframe = _normalize_graphql_enum(timeframe)
     options = ReportRankingsOptions(
@@ -6445,12 +6561,28 @@ def report_rankings(
         player_metric=player_metric,
         timeframe=normalized_timeframe,
     )
+    query = {
+        "compare": normalized_compare,
+        "difficulty": difficulty,
+        "encounter_id": encounter_id,
+        "fight_ids": fight_id,
+        "player_metric": player_metric,
+        "timeframe": normalized_timeframe,
+    }
     client = _client(ctx)
     try:
+        _require_matching_fight(
+            ctx,
+            client,
+            code=code,
+            allow_unlisted=allow_unlisted,
+            fight_ids=fight_id,
+            encounter_id=encounter_id,
+            difficulty=difficulty,
+        )
         payload = client.report_rankings(code=code, allow_unlisted=allow_unlisted, options=options)
     except WarcraftLogsClientError as exc:
         _handle_client_error(ctx, exc)
-        return
     finally:
         client.close()
     _emit(
@@ -6458,14 +6590,7 @@ def report_rankings(
         {
             "ok": True,
             "provider": "warcraftlogs",
-            "query": {
-                "compare": normalized_compare,
-                "difficulty": difficulty,
-                "encounter_id": encounter_id,
-                "fight_ids": fight_id,
-                "player_metric": player_metric,
-                "timeframe": normalized_timeframe,
-            },
+            "query": query,
             **_report_rankings_payload(payload),
         },
         client=client,
@@ -6473,4 +6598,5 @@ def report_rankings(
 
 
 def run() -> None:
-    app()
+    """Console-script entry point: never let an exception escape as a traceback."""
+    guarded_run(app, provider="warcraftlogs")

@@ -67,17 +67,3 @@ def realm_slug_variants(value: str) -> list[str]:
 def primary_realm_slug(value: str) -> str:
     variants = realm_slug_variants(value)
     return variants[0] if variants else value.strip().lower()
-
-
-def realm_matches(left: str, right: str) -> bool:
-    left_variants = _realm_match_variants(left)
-    right_variants = _realm_match_variants(right)
-    return bool(left_variants and right_variants and left_variants & right_variants)
-
-
-def _realm_match_variants(value: str) -> set[str]:
-    variants = set(realm_slug_variants(value))
-    parts = slug_parts(value)
-    if len(parts) > 1 and parts[0] in REGION_ALIASES:
-        variants.update(realm_slug_variants(" ".join(parts[1:])))
-    return variants

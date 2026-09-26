@@ -11,8 +11,6 @@ from typing import Any, Protocol
 
 from warcraft_core.paths import provider_cache_root
 
-DEFAULT_CACHE_ROOT = provider_cache_root("wowhead")
-DEFAULT_HTTP_CACHE_DIR = DEFAULT_CACHE_ROOT / "http"
 DEFAULT_CACHE_PREFIX = "wowhead_cli"
 
 
@@ -96,6 +94,8 @@ def load_prefixed_cache_settings_from_env(
     redis_url = os.getenv(redis_url_var)
     if redis_url is not None:
         redis_url = redis_url.strip() or None
+    if enabled and backend == "redis" and redis_url is None:
+        raise ValueError(f"{redis_url_var} is required when {backend_var}=redis.")
 
     defaults = ttl_defaults if ttl_defaults is not None else CacheTTLConfig()
     ttl_values = {
@@ -150,7 +150,7 @@ class FileCacheStore:
             return None
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:  # noqa: BLE001
+        except Exception:
             with suppress(OSError):
                 path.unlink(missing_ok=True)
             return None
@@ -176,7 +176,7 @@ class FileCacheStore:
             }
             temp.write_text(json.dumps(data, separators=(",", ":")), encoding="utf-8")
             temp.replace(path)
-        except Exception:  # noqa: BLE001
+        except Exception:
             return
 
 
@@ -186,7 +186,7 @@ def _build_redis_client(
     import_module_func: Any = importlib.import_module,
 ) -> Any:
     if not redis_url:
-        raise ValueError("WOWHEAD_REDIS_URL is required when WOWHEAD_CACHE_BACKEND=redis.")
+        raise ValueError("A Redis URL is required for the redis cache backend.")
     redis_module = import_module_func("redis")
     client = None
     from_url = getattr(redis_module, "from_url", None)
@@ -220,13 +220,13 @@ class RedisCacheStore:
     def get(self, key: str) -> Any | None:
         try:
             raw = self._client.get(self._redis_key(key))
-        except Exception:  # noqa: BLE001
+        except Exception:
             return None
         if raw in (None, ""):
             return None
         try:
             return json.loads(raw)
-        except Exception:  # noqa: BLE001
+        except Exception:
             return None
 
     def set(self, key: str, payload: Any, *, ttl_seconds: int) -> None:
@@ -236,7 +236,7 @@ class RedisCacheStore:
                 json.dumps(payload, separators=(",", ":")),
                 ex=ttl_seconds,
             )
-        except Exception:  # noqa: BLE001
+        except Exception:
             return
 
 
@@ -273,7 +273,7 @@ def _iter_file_cache_entries(cache_dir: Path) -> list[dict[str, Any]]:
         expires_at: float | None = None
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:  # noqa: BLE001
+        except Exception:
             payload = None
         if isinstance(payload, dict):
             raw_expires_at = payload.get("expires_at")
@@ -426,12 +426,12 @@ def inspect_redis_cache(
             "available": False,
             "count": 0,
             "namespaces": {},
-            "error": "WOWHEAD_REDIS_URL is required when WOWHEAD_CACHE_BACKEND=redis.",
+            "error": "A Redis URL is required for the redis cache backend.",
         }
     try:
         client = _build_redis_client(redis_url, import_module_func=import_module_func)
         keys = _redis_iter_keys(client, f"{prefix}:*")
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         return {
             "kind": "redis",
             "available": False,
@@ -509,3 +509,20 @@ def clear_redis_cache(
         "total": sum(removed_by_namespace.values()),
         "namespaces": dict(sorted(removed_by_namespace.items())),
     }
+
+
+def redacted_redis_url(url: str | None) -> str | None:
+    """The Redis URL without its credentials or query string, for doctor and cache output.
+
+    Agents keep that output in their context and logs, so a password must never reach it. The userinfo
+    ends at the last '@' before the path, as redis-py reads it, so a password holding '@' (or '[')
+    is hidden whole; no URL parser is involved, so no password character can make this raise.
+    """
+    if url is None:
+        return None
+    scheme, sep, rest = url.split("?", 1)[0].partition("://")
+    if not sep:
+        return "***"
+    netloc, slash, path = rest.partition("/")
+    host = netloc.rpartition("@")[2]
+    return f"{scheme}://{'***@' if '@' in netloc else ''}{host}{slash}{path}"

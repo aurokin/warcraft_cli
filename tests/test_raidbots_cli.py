@@ -2,14 +2,18 @@ from __future__ import annotations
 
 import json
 import shlex
+from pathlib import Path
 
 import httpx
 import pytest
 from raidbots_cli.client import InvalidReportReference, resolve_report_id
 from raidbots_cli.main import app
+from raidbots_cli.provider import PROVIDER
 from raidbots_cli.report import _actor_summary, parse_report
 from raidbots_cli.simc_input import classify_simc_input, simc_handoff
 from typer.testing import CliRunner
+from warcraft_core.envelope import envelope_violations
+from warcraft_core.provider import ProviderSurface
 
 runner = CliRunner()
 
@@ -89,6 +93,17 @@ def test_resolve_report_id_handles_bare_id_and_urls() -> None:
         resolve_report_id("")
     with pytest.raises(InvalidReportReference):
         resolve_report_id("not a report")
+
+
+def test_parse_report_quick_sim_keeps_every_actor_of_a_multi_actor_sim() -> None:
+    players = QUICK_SIM_REPORT["sim"]["players"]
+    second = {**players[0], "name": "Secondmage", "collected_data": {"dps": {"mean": 2500000.0}}}
+    report = {**QUICK_SIM_REPORT, "sim": {**QUICK_SIM_REPORT["sim"], "players": [*players, second]}}
+
+    parsed = parse_report(report, report_id="abc")
+
+    assert (parsed["actor"]["name"], parsed["actor_count"]) == ("Frostmage", 2)
+    assert [(row["actor"]["name"], row["metrics"]["dps"]) for row in parsed["other_actors"]] == [("Secondmage", 2500000.0)]
 
 
 def test_parse_report_quick_sim_extracts_actor_and_metrics() -> None:
@@ -223,34 +238,42 @@ def test_doctor_reports_partial_status_and_url_templates() -> None:
     result = runner.invoke(app, ["doctor"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
+    assert not envelope_violations(payload)
     assert payload["provider"] == "raidbots"
-    assert payload["status"] == "partial"
-    assert payload["capabilities"]["search"] == "not_supported"
-    assert payload["capabilities"]["inspect_report"] == "ready"
-    assert payload["url_templates"]["simc_input"].endswith("/simc")
+    assert payload["command"] == "doctor"
+    assert payload["kind"] == "doctor"
+    assert payload["schema_version"] == "1"
+    assert payload["data"]["status"] == "partial"
+    assert payload["data"]["capabilities"]["search"] == "not_supported"
+    assert payload["data"]["capabilities"]["inspect_report"] == "ready"
+    assert payload["data"]["url_templates"]["simc_input"].endswith("/simc")
 
 
 def test_inspect_report_quick_sim_includes_scope_and_citations(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("raidbots_cli.main.RaidbotsClient.report_data", lambda self, report_id: QUICK_SIM_REPORT)
+    monkeypatch.setattr("raidbots_cli.client.RaidbotsClient.report_data", lambda self, report_id: QUICK_SIM_REPORT)
     result = runner.invoke(app, ["inspect-report", "https://www.raidbots.com/simbot/report/abc123"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["report"]["kind"] == "quick_sim"
-    assert payload["scope"] == {"type": "raidbots_report", "kind": "quick_sim"}
-    assert payload["citations"]["data_json_url"] == "https://www.raidbots.com/simbot/report/abc123/data.json"
-    assert payload["freshness"]["cache_ttl_seconds"] == 86400
-    assert payload["freshness"]["from_cache"] is False
-    assert "retrieved_at" in payload["freshness"]
-    assert payload["raw"] == QUICK_SIM_REPORT
+    assert not envelope_violations(payload)
+    assert payload["query"] == "abc123"
+    assert payload["kind"] == "report"
+    assert payload["provenance"]["report_url"].endswith("/report/abc123")
+    assert payload["data"]["report"]["kind"] == "quick_sim"
+    assert payload["data"]["scope"] == {"type": "raidbots_report", "kind": "quick_sim"}
+    assert payload["data"]["citations"]["data_json_url"] == "https://www.raidbots.com/simbot/report/abc123/data.json"
+    assert payload["data"]["freshness"]["cache_ttl_seconds"] == 86400
+    assert payload["data"]["freshness"]["from_cache"] is False
+    assert "retrieved_at" in payload["data"]["freshness"]
+    assert payload["data"]["raw"] == QUICK_SIM_REPORT
 
 
 def test_inspect_report_no_raw_omits_payload(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("raidbots_cli.main.RaidbotsClient.report_data", lambda self, report_id: MULTI_PROFILE_REPORT)
+    monkeypatch.setattr("raidbots_cli.client.RaidbotsClient.report_data", lambda self, report_id: MULTI_PROFILE_REPORT)
     result = runner.invoke(app, ["inspect-report", "def456", "--no-raw"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert "raw" not in payload
-    assert payload["report"]["kind"] == "multi_profile"
+    assert "raw" not in payload["data"]
+    assert payload["data"]["report"]["kind"] == "multi_profile"
 
 
 def test_inspect_report_maps_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -258,11 +281,13 @@ def test_inspect_report_maps_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
         request = httpx.Request("GET", "https://www.raidbots.com/simbot/report/missing/data.json")
         raise httpx.HTTPStatusError("not found", request=request, response=httpx.Response(404, request=request))
 
-    monkeypatch.setattr("raidbots_cli.main.RaidbotsClient.report_data", _raise)
+    monkeypatch.setattr("raidbots_cli.client.RaidbotsClient.report_data", _raise)
     result = runner.invoke(app, ["inspect-report", "missing"])
-    assert result.exit_code == 1
+    assert result.exit_code == 4
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "not_found"
+    assert payload["error"]["details"]["status_code"] == 404
+    assert not envelope_violations(payload)
 
 
 def test_inspect_report_maps_transport_error_to_envelope(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -270,11 +295,13 @@ def test_inspect_report_maps_transport_error_to_envelope(monkeypatch: pytest.Mon
         request = httpx.Request("GET", "https://www.raidbots.com/simbot/report/x/data.json")
         raise httpx.ConnectError("connection refused", request=request)
 
-    monkeypatch.setattr("raidbots_cli.main.RaidbotsClient.report_data", _raise)
+    monkeypatch.setattr("raidbots_cli.client.RaidbotsClient.report_data", _raise)
     result = runner.invoke(app, ["inspect-report", "x"])
-    assert result.exit_code == 1
+    assert result.exit_code == 5
+    assert result.stdout == ""
     payload = json.loads(result.stderr)
-    assert payload["error"]["code"] == "upstream_error"
+    assert payload["error"]["code"] == "network_error"
+    assert not envelope_violations(payload)
 
 
 def test_input_maps_transport_error_to_envelope(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -282,52 +309,70 @@ def test_input_maps_transport_error_to_envelope(monkeypatch: pytest.MonkeyPatch)
         request = httpx.Request("GET", "https://www.raidbots.com/simbot/report/x/simc")
         raise httpx.ReadTimeout("timed out", request=request)
 
-    monkeypatch.setattr("raidbots_cli.main.RaidbotsClient.report_input", _raise)
+    monkeypatch.setattr("raidbots_cli.client.RaidbotsClient.report_input", _raise)
     result = runner.invoke(app, ["input", "x"])
-    assert result.exit_code == 1
+    assert result.exit_code == 5
+    assert result.stdout == ""
     payload = json.loads(result.stderr)
-    assert payload["error"]["code"] == "upstream_error"
+    assert payload["error"]["code"] == "timeout"
+    assert not envelope_violations(payload)
 
 
-def test_inspect_report_rejects_unparseable_reference() -> None:
-    result = runner.invoke(app, ["inspect-report", "not a report"])
+def test_inspect_report_maps_malformed_data_json_to_invalid_report(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _raise(self, report_id):  # noqa: ANN001, ANN202
+        raise ValueError(f"Unexpected Raidbots data.json shape for report {report_id}.")
+
+    monkeypatch.setattr("raidbots_cli.client.RaidbotsClient.report_data", _raise)
+    result = runner.invoke(app, ["inspect-report", "x"])
     assert result.exit_code == 1
+    assert result.stdout == ""
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "invalid_report"
+    assert not envelope_violations(payload)
+
+
+def test_inspect_report_rejects_unparseable_reference_as_a_usage_error() -> None:
+    result = runner.invoke(app, ["inspect-report", "not a report"])
+    assert result.exit_code == 2
+    payload = json.loads(result.stderr)
+    assert payload["error"]["code"] == "invalid_report_ref"
 
 
 def test_input_command_emits_handoff(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        "raidbots_cli.main.RaidbotsClient.report_input",
+        "raidbots_cli.client.RaidbotsClient.report_input",
         lambda self, report_id: 'mage="Main"\nspec=frost\ntalents=CYG\n',
     )
     result = runner.invoke(app, ["input", "abc123"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["report_id"] == "abc123"
-    assert payload["handoff"]["classification"]["sim_type_guess"] == "quick_sim"
-    assert payload["scope"]["sim_type_guess"] == "quick_sim"
-    commands = [entry["command"] for entry in payload["handoff"]["suggested_simc_commands"]]
+    assert not envelope_violations(payload)
+    assert payload["kind"] == "simc_input"
+    assert payload["data"]["report_id"] == "abc123"
+    assert payload["data"]["handoff"]["classification"]["sim_type_guess"] == "quick_sim"
+    assert payload["data"]["scope"]["sim_type_guess"] == "quick_sim"
+    commands = [entry["command"] for entry in payload["data"]["handoff"]["suggested_simc_commands"]]
     assert "simc sim -" in commands
     # decode/describe must carry class+spec so the bare talent code resolves.
     decode = next(cmd for cmd in commands if cmd.startswith("simc decode-build"))
     assert "--actor-class mage" in decode
     assert "--spec frost" in decode
     assert "--talents CYG" in decode
-    assert payload["citations"]["simc_input_url"] == "https://www.raidbots.com/simbot/report/abc123/simc"
+    assert payload["data"]["citations"]["simc_input_url"] == "https://www.raidbots.com/simbot/report/abc123/simc"
 
 
 def test_explain_input_via_text_option() -> None:
     result = runner.invoke(app, ["explain-input", "--text", TOP_GEAR_INPUT])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["scope"]["sim_type_guess"] == "top_gear_or_droptimizer"
-    assert payload["handoff"]["classification"]["profileset_count"] == 2
+    assert not envelope_violations(payload)
+    assert payload["data"]["scope"]["sim_type_guess"] == "top_gear_or_droptimizer"
+    assert payload["data"]["handoff"]["classification"]["profileset_count"] == 2
 
 
 def test_explain_input_requires_content() -> None:
     result = runner.invoke(app, ["explain-input", "--text", "   "])
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "invalid_query"
 
@@ -459,3 +504,107 @@ def test_simc_handoff_omits_decode_without_class_and_spec() -> None:
     handoff = simc_handoff("talents=CYG\ndesired_targets=3\n", classify_simc_input("talents=CYG\ndesired_targets=3\n"))
     commands = [c["command"] for c in handoff["suggested_simc_commands"]]
     assert commands == ["simc sim -"]
+
+
+def test_provider_surface_is_pure_and_matches_doctor_capabilities() -> None:
+    assert isinstance(PROVIDER, ProviderSurface)
+    assert PROVIDER.name == "raidbots"
+    capabilities = PROVIDER.doctor()["data"]["capabilities"]
+    assert capabilities["search"] == "not_supported"
+    assert capabilities["resolve"] == "not_supported"
+    search = PROVIDER.search("thunderfury", limit=3)["data"]
+    assert search["not_supported"] is True
+    # A shell line: a <placeholder> would be read as a redirection.
+    assert search["suggested_command"] == "raidbots inspect-report REPORT_URL_OR_ID"
+    assert PROVIDER.resolve("abc123")["data"]["not_supported"] is True
+
+
+def test_global_output_flags_apply_to_raidbots(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("raidbots_cli.client.RaidbotsClient.report_data", lambda self, report_id: QUICK_SIM_REPORT)
+    result = runner.invoke(app, ["--fields", "data.report.kind", "inspect-report", "abc123", "--no-raw"])
+    assert result.exit_code == 0
+    assert json.loads(result.stdout) == {"data": {"report": {"kind": "quick_sim"}}}
+
+
+def test_explain_input_rejects_both_text_and_file(tmp_path: Path) -> None:
+    path = tmp_path / "profile.simc"
+    path.write_text('mage="Main"\nspec=frost\n', encoding="utf-8")
+    result = runner.invoke(app, ["explain-input", "--text", "mage=\"Main\"", "--file", str(path)])
+    assert result.exit_code == 2
+    assert json.loads(result.stderr)["error"]["code"] == "invalid_query"
+
+
+@pytest.mark.parametrize("command", ["inspect-report", "input"])
+def test_transport_failure_at_the_http_seam_never_escapes_as_a_traceback(
+    monkeypatch: pytest.MonkeyPatch, command: str
+) -> None:
+    # Patch the real transport seam (not the client method) so RaidbotsClient and the retry helper
+    # stay in the stack: a dead network must still produce the envelope on stderr, never a traceback.
+    def _raise(*args: object, **kwargs: object) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=httpx.Request("GET", "https://www.raidbots.com/"))
+
+    monkeypatch.setattr("raidbots_cli.client.request_with_retries", _raise)
+    result = runner.invoke(app, [command, "abc123"])
+    assert result.exit_code == 5
+    assert result.stdout == ""
+    payload = json.loads(result.stderr)
+    assert not envelope_violations(payload)
+    assert payload["error"]["code"] == "network_error"
+    assert payload["provider"] == "raidbots"
+
+
+def test_inspect_report_maps_storage_forbidden_to_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
+    # data.json redirects to a public GCS bucket that answers 403 (not 404) for a report that never
+    # existed or has expired. Raidbots takes no credentials, so 403 can only mean "no such report" —
+    # reporting it as a network failure sent callers looking for an outage instead of a bad id.
+    url = "https://storage.googleapis.com/simbot-reports/reports/gone/data.json"
+
+    def _raise(self, report_id):  # noqa: ANN001, ANN202
+        request = httpx.Request("GET", url)
+        raise httpx.HTTPStatusError("forbidden", request=request, response=httpx.Response(403, request=request))
+
+    monkeypatch.setattr("raidbots_cli.client.RaidbotsClient.report_data", _raise)
+    result = runner.invoke(app, ["inspect-report", "gone"])
+    assert result.exit_code == 4
+    payload = json.loads(result.stderr)
+    assert payload["error"]["code"] == "not_found"
+    assert payload["error"]["details"]["status_code"] == 403
+    assert "expired or is private" in payload["error"]["message"]
+    assert not envelope_violations(payload)
+
+
+@pytest.mark.parametrize("command", ["input", "inspect-report"])
+def test_report_fetches_reject_the_raidbots_web_page(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, command: str
+) -> None:
+    # Raidbots answers HTTP 200 with its single-page app for a report id that is gone, expired or
+    # private. `input` handed that markup back as SimC input; `inspect-report` called it a malformed
+    # report (invalid_report, exit 1). The same missing report must answer not_found on both.
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    page = '<!doctype html>\n<html>\n  <head><title>Raidbots</title></head>\n</html>\n'
+
+    def _fake(client, url, **kwargs):  # noqa: ANN001, ANN202
+        return httpx.Response(200, text=page, request=httpx.Request("GET", url))
+
+    monkeypatch.setattr("raidbots_cli.client.request_with_retries", _fake)
+    result = runner.invoke(app, [command, "gone"])
+    assert result.exit_code == 4
+    assert result.stdout == ""
+    payload = json.loads(result.stderr)
+    assert payload["error"]["code"] == "not_found"
+    assert "expired or is private" in payload["error"]["message"]
+    assert not envelope_violations(payload)
+
+
+def test_report_input_returns_real_simc_text(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    profile = 'mage="Testchar"\nlevel=80\nspec=frost\n'
+
+    def _fake(client, url, **kwargs):  # noqa: ANN001, ANN202
+        return httpx.Response(200, text=profile, request=httpx.Request("GET", url))
+
+    monkeypatch.setattr("raidbots_cli.client.request_with_retries", _fake)
+    result = runner.invoke(app, ["input", "abc123"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["data"]["input"] == profile

@@ -1,5 +1,8 @@
 # Raidbots
 
+**Tier: experimental.** Raidbots is read-only here: the CLI parses shared reports and hands their
+SimC input to local `simc`. It cannot queue or run simulations.
+
 ## Best For
 
 - reading a Raidbots report someone shared (URL or bare report ID)
@@ -19,7 +22,8 @@
 ## Effective Use
 
 - `inspect-report` returns a kind-aware summary:
-  - `quick_sim`: the actor (name/spec/role/class) plus DPS and core metrics
+  - `quick_sim`: the actor (name/spec/role/class) plus DPS and core metrics; a sim with several
+    actors also carries `actor_count` and `other_actors`
   - `multi_profile` (Top Gear / Droptimizer): ranked profileset results by mean; per-actor damage/buff
     detail is not present in these report types, so reason from the ranked rows, not from a single actor
 - pass `--no-raw` to `inspect-report` for large multi-profile reports so you get the summary without the
