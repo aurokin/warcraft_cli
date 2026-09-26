@@ -51,7 +51,9 @@
   dropdown list, one row per entity; `metadata.suggestion_lists` says where each row came from and
   `suggestion_merge` counts the rows per list and the duplicates merged
 - `search <Wowhead entity URL>` answers with that entity alone (`name` null, `follow_up` set); use
-  `entity` for its details
+  `entity` for its details. A guide, news, blue-tracker, tool or listing URL answers with the one
+  command that reads it (`follow_up.command`); `resolve <url>` returns it as `next_command`; any
+  other Wowhead URL fails `invalid_query`
 - follow-up words ("comments", "links", "full") steer `follow_up.command` and are not searched for,
   unless the whole query is a name ("Soul Link")
 - query words match whole words, ignoring words like "the" and "of"; a row whose text holds none of

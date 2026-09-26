@@ -233,6 +233,38 @@ def test_resolve_lands_a_dps_spec_on_its_pve_dps_guide(require, query: str, spec
     assert (page.data["guide"]["slug"], page.data["guide"]["content_family"]) == (expected, "spec_guide"), page.describe()
 
 
+def test_search_ranks_the_spec_a_bare_spec_word_names_above_pages_that_share_the_word(require) -> None:
+    """``search shadow`` once listed the Shadow Enclave delve guide above the Shadow Priest guide."""
+    require(PROVIDER)
+    result = run(BINARY, "search", "shadow", "--limit", "10")
+
+    ids = [row["id"] for row in result.data["results"]]
+    assert ids and ids[0] == "shadow-priest-pve-dps-guide", result.describe()
+    # The journey only proves the ranking while another page still shares the word.
+    assert any("priest" not in slug for slug in ids), result.describe()
+
+
+def test_resolve_answers_a_hub_whose_only_close_rivals_are_its_own_sub_pages(require) -> None:
+    """``resolve "player housing"`` stayed unresolved: its own sub-guides scored just below the hub."""
+    require(PROVIDER)
+    result = run(BINARY, "resolve", "player housing")
+
+    assert result.data["resolved"] is True, result.describe()
+    assert result.data["match"]["id"] == "player-housing-guide", result.describe()
+    # Only meaningful while the hub still has sub-pages close behind it.
+    assert any(row["id"].startswith("player-housing-") for row in result.data["candidates"][1:]), result.describe()
+
+
+def test_resolve_leaves_a_spec_name_two_classes_share_unresolved(require) -> None:
+    """``frost`` is a mage and a death knight spec; resolve once picked one of them at high confidence."""
+    require(PROVIDER)
+    result = run(BINARY, "resolve", "frost")
+
+    assert result.data["resolved"] is False, result.describe()
+    top_two = {row["id"] for row in result.data["candidates"][:2]}
+    assert top_two == {"frost-mage-pve-dps-guide", "frost-death-knight-pve-dps-guide"}, result.describe()
+
+
 def test_guide_returns_attributed_sections_family_navigation_and_a_page_toc(require) -> None:
     require(PROVIDER)
     result = guide_page()

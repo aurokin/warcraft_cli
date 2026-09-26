@@ -239,6 +239,21 @@ def test_search_answers_a_wowhead_url_with_the_entity_it_names(require) -> None:
     assert (entity.data["entity"]["id"], entity.data["entity"]["name"]) == (pins.ITEM_ID, pins.ITEM_NAME), entity.describe()
 
 
+def test_search_answers_a_wowhead_guide_url_with_the_guide_command(require, class_guides: Result) -> None:
+    """A pasted guide URL once went upstream as text and answered ok: true with no results.
+
+    The URL comes from the live guide listing; the page its follow-up fetches is the oracle.
+    """
+    require("wowhead")
+    listed = class_guides.data["results"][0]
+    found = run(BINARY, "search", listed["url"])
+    assert found.data["search_query"] is None, f"the URL was searched upstream\n{found.describe()}"
+    assert [row["url"] for row in found.data["results"]] == [listed["url"]], found.describe()
+    guide = run_follow_up(found.data["results"][0]["follow_up"]["command"])
+    assert guide.data["page"]["canonical_url"] == listed["url"], guide.describe()
+    assert guide.data["page"]["title"], guide.describe()
+
+
 def test_resolve_answers_with_the_faction_a_query_names(require) -> None:
     """``resolve "argent dawn"`` must land on Faction 529, not an item whose name contains the query.
 

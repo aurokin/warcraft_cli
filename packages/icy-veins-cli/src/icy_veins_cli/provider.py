@@ -183,7 +183,7 @@ def resolve_payload(
         search_query=search_query,
         results=results,
         total_count=total_count,
-        resolved=resolve_is_confident(results[0] if results else None, results[1] if len(results) > 1 else None),
+        resolved=resolve_is_confident(results),
         scope_hint=scope_hint,
     )
 

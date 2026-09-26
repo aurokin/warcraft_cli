@@ -148,9 +148,14 @@ match nothing.
 
 A spec query (`frost mage`, `survival hunter guide`) resolves to that spec's
 `...-pve-<role>-guide`. Healer specs also publish a PvE DPS guide; their healing guide ranks first.
-A hunter spec's pets page ranks with its PvP and leveling pages, below the spec guide. `resolve`
-never picks between candidates with the same or nearly the same score, so a spec name that several
-classes share (`frost`, `holy`, `protection`, `restoration`) stays unresolved; add the class.
+A hunter spec's pets page ranks with its PvP and leveling pages, below the spec guide. A query that
+names a spec ranks that spec's guides (`spec_name` in `ranking.match_reasons`) above pages that only
+share the word, so `shadow` lists the Shadow Priest guide before the Shadow Enclave delve guide.
+`resolve` never picks between candidates with the same or nearly the same score, so a spec name that
+several classes share (`frost`, `holy`, `protection`, `restoration`) stays unresolved; add the class.
+The one exception is a query that is a page's exact title (`exact_title`) when every close rival is
+one of that page's own sub-pages: `player housing` resolves to `player-housing-guide` over
+`player-housing-interior-guide`.
 
 Each result carries `metadata.last_updated`, the sitemap's `<lastmod>` date. A page last updated more
 than a year before the newest page in the sitemap loses 10 points and lists `penalty_stale_page` in

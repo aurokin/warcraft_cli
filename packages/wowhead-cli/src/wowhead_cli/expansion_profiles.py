@@ -149,7 +149,8 @@ def build_guide_category_url(profile: ExpansionProfile, category: str) -> str:
 
 def normalize_wowhead_url(raw: str) -> str | None:
     text = raw.strip()
-    if not text:
+    # A URL has no whitespace: "fury guide from www.wowhead.com" is a search, not a URL.
+    if not text or len(text.split()) > 1:
         return None
     if text.startswith("www."):
         text = f"https://{text}"

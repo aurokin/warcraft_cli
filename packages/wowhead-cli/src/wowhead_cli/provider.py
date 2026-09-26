@@ -26,6 +26,7 @@ from wowhead_cli.expansion_profiles import (
     resolve_expansion,
 )
 from wowhead_cli.ranking import (
+    URL_PAGE_COMMANDS,
     command_prefix_for_expansion,
     merge_suggestion_lists,
     normalize_resolve_entity_types,
@@ -36,6 +37,7 @@ from wowhead_cli.ranking import (
     search_ranking_query,
     upstream_rank_bonuses,
     url_entity_result,
+    url_page_result,
 )
 from wowhead_cli.wowhead_client import WowheadClient, search_url
 
@@ -124,6 +126,23 @@ def _validated_query(raw: str) -> str:
     return query
 
 
+def _url_answer(query: str, *, profile: ExpansionProfile) -> dict[str, Any] | None:
+    """The one row a Wowhead URL names, or None for any other query.
+
+    Wowhead's suggestions endpoint matches names, so a Wowhead URL sent there finds nothing; a
+    Wowhead URL naming no entity or page a command reads fails instead of answering empty.
+    """
+    row = url_entity_result(query, expansion=profile) or url_page_result(query, expansion=profile)
+    if row is None and detect_expansion_from_url(query) is not None:
+        commands = ", ".join([*URL_PAGE_COMMANDS.values(), "entity --url", "entity-page --url"])
+        raise ProviderError(
+            "invalid_query",
+            f"{query!r} is not an entity, guide, news, blue-tracker, tool or listing URL. "
+            f"Commands that take a Wowhead URL: {commands}.",
+        )
+    return row
+
+
 def _fetch_ranked(
     client: WowheadClient,
     search_query: str,
@@ -190,11 +209,11 @@ def search(query: str, *, limit: int = 10, expansion: str | None = None, **optio
     query = _validated_query(query)
     selection = select_expansion(expansion, url_hint=query)
     profile = selection.profile
-    url_entity = url_entity_result(query, expansion=profile)
+    url_row = _url_answer(query, profile=profile)
     search_query: str | None = None
     merge: dict[str, Any] | None = None
-    if url_entity is not None:
-        normalized = [url_entity]
+    if url_row is not None:
+        normalized = [url_row]
     else:
         search_query, normalized, merge = _ranked_suggestions(open_client(profile), query, profile=profile)
     returned = normalized[:limit]
@@ -224,15 +243,21 @@ def resolve(
     """Resolve a query to the single most likely Wowhead entity plus the follow-up command to run."""
     del options
     target = _validated_query(target)
-    selection = select_expansion(expansion)
-    profile = selection.profile
+    profile = select_expansion(expansion, url_hint=target).profile
     try:
         selected_entity_types = normalize_resolve_entity_types(list(entity_types))
     except ValueError as exc:
         raise ProviderError("invalid_argument", str(exc)) from exc
-    search_query, ranked, merge = _ranked_suggestions(
-        open_client(profile), target, profile=profile, entity_types=selected_entity_types
-    )
+    url_row = _url_answer(target, profile=profile)
+    search_query: str | None = None
+    merge: dict[str, Any] | None = None
+    if url_row is not None:
+        # A URL names one thing; outside the --entity-type filter it is no answer, not a match.
+        ranked = [url_row] if not selected_entity_types or url_row["entity_type"] in selected_entity_types else []
+    else:
+        search_query, ranked, merge = _ranked_suggestions(
+            open_client(profile), target, profile=profile, entity_types=selected_entity_types
+        )
     answering, trailing = preferred_resolve_candidates(ranked)
     confidence = resolve_confidence(answering, entity_types=selected_entity_types)
     top_candidate = answering[0] if answering else None
@@ -244,7 +269,7 @@ def resolve(
         "query": target,
         "search_query": search_query,
         "expansion": profile.key,
-        "search_url": search_url(search_query, expansion=profile),
+        "search_url": search_url(search_query, expansion=profile) if search_query is not None else None,
         "filters": {"entity_types": list(selected_entity_types)},
         "resolved": next_command is not None,
         "confidence": confidence,

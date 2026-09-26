@@ -72,7 +72,14 @@ whole first, and kept when a row carries exactly that name.
 `search` given a Wowhead entity URL (`https://www.wowhead.com/classic/item=19019/...`) answers with
 that entity alone: one row with its type, id, URL and `follow_up`, `match_reasons: ["url_entity"]`,
 `name: null` (nothing is fetched), and `search_query: null`. Wowhead's suggestions endpoint matches
-names, so it has nothing to say about a URL.
+names, so it has nothing to say about a URL. A guide, news, blue-tracker topic, tool
+(`talent-calc`, `profession-tree-calc`, `dressing-room`, profiler `list`) or listing (`/news`,
+`/blue-tracker`, `/guides/<category>`) URL answers the same way with `match_reasons: ["url_page"]`,
+`id: null`, and a `follow_up.command` that runs the command reading that page. Any other Wowhead
+URL fails `invalid_query` (exit 2) with the commands that take URLs. `resolve` answers every such
+URL with that row as a high-confidence `next_command`, routed to the URL's expansion, unless
+`--entity-type` excludes the URL's type: then nothing resolves. A listing URL runs the listing's
+first page; its query-string state (`?page=`, `?region=`) is not carried over.
 
 A guide updated far (180+ days) behind the freshest guide in the same response carries
 `stale_guide` in `ranking.match_reasons` and sorts after every current row that matches the query

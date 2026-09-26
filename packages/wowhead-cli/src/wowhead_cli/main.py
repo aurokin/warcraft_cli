@@ -3078,10 +3078,11 @@ def resolve(
     ),
 ) -> None:
     """Resolve a name or URL to the single most likely Wowhead entity plus a follow-up command."""
-    cfg = _cfg(ctx)
+    cfg = _apply_url_expansion(ctx, query)
+    explicit = cfg.expansion.key if cfg.expansion_explicit else None
     _emit_surface(
         ctx,
-        lambda: provider.resolve(query, limit=limit, entity_types=entity_type, expansion=cfg.expansion.key),
+        lambda: provider.resolve(query, limit=limit, entity_types=entity_type, expansion=explicit),
     )
 
 

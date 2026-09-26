@@ -33,6 +33,7 @@ from __future__ import annotations
 import json
 import shlex
 from collections import Counter
+from collections.abc import Iterator
 from dataclasses import dataclass
 from functools import cache, lru_cache
 from typing import Any
@@ -288,12 +289,12 @@ class WideCohort:
     sample: dict[str, Any]
 
 
-def _zone_wide_cohort(zone: dict[str, Any], scanned: list[str]) -> WideCohort | None:
-    """The first boss of ``zone`` the pinned guild's newest reports hold a qualifying cohort for."""
+def _guild_boss_cohorts(zone: dict[str, Any], scanned: list[str]) -> Iterator[WideCohort]:
+    """Every boss of ``zone`` as the pinned guild's cohort over its newest reports, noting each in ``scanned``."""
     reports = guild_reports(int(zone["id"]))
     if not reports:
         scanned.append(f"{zone['name']}: no guild reports")
-        return None
+        return
     start, end = _report_window(reports)
     for boss in zone["encounters"]:
         args = (
@@ -313,9 +314,19 @@ def _zone_wide_cohort(zone: dict[str, Any], scanned: list[str]) -> WideCohort | 
         scanned.append(
             f"{zone['name']} / {boss['name']}: {len(kills)} kill(s), {sample['duplicates_removed']} duplicate(s)"
         )
-        if len({row["duration_ms"] for row in kills}) >= 2 and sample["duplicates_removed"] >= 1:
-            return WideCohort(zone=zone, boss=boss, args=args, kills=kills, sample=sample)
-    return None
+        yield WideCohort(zone=zone, boss=boss, args=args, kills=kills, sample=sample)
+
+
+def _zone_wide_cohort(zone: dict[str, Any], scanned: list[str]) -> WideCohort | None:
+    """The first boss of ``zone`` the pinned guild's newest reports hold a qualifying cohort for."""
+    return next(
+        (
+            cohort
+            for cohort in _guild_boss_cohorts(zone, scanned)
+            if len({row["duration_ms"] for row in cohort.kills}) >= 2 and cohort.sample["duplicates_removed"] >= 1
+        ),
+        None,
+    )
 
 
 @lru_cache(maxsize=1)
@@ -1365,17 +1376,24 @@ def test_spec_kill_samples_and_boss_spec_usage_describe_the_cohort(require):
     assert len(keys) == len(set(keys)), usage.describe()
 
 
-def _shared_spec_name_roster(cohort: WideCohort) -> set[tuple[str, str]]:
-    """``(class, spec)`` of the first kill in ``cohort`` whose roster fields one spec name under two classes."""
+@lru_cache(maxsize=1)
+def _shared_spec_name_cohort() -> tuple[WideCohort, set[tuple[str, str]]]:
+    """A guild cohort plus the ``(class, spec)`` roster of a kill in it that fields one spec name under two classes.
+
+    Only such a roster can tell a class-blind count apart. A tier that opened days ago may hold a
+    kill or two without one, so the walk continues through the tiers before it.
+    """
     scanned: list[str] = []
-    for kill in cohort.kills:
-        code, fight_id = _kill_key(kill)
-        roster = _fight_roster(code, fight_id)
-        fielded = {(str(player["type"]), str(entry["spec"])) for player in roster for entry in player.get("specs") or []}
-        if any(count > 1 for count in Counter(spec for _, spec in fielded).values()):
-            return fielded
-        scanned.append(f"{code}#{fight_id}")
-    raise JourneyFailure(f"no kill in the wide cohort fields one spec name under two classes: {scanned}")
+    for zone in raid_zones()[:WIDE_COHORT_ZONES]:
+        for cohort in _guild_boss_cohorts(zone, scanned):
+            for kill in cohort.kills:
+                code, fight_id = _kill_key(kill)
+                roster = _fight_roster(code, fight_id)
+                fielded = {(str(player["type"]), str(entry["spec"])) for player in roster for entry in player.get("specs") or []}
+                if any(count > 1 for count in Counter(spec for _, spec in fielded).values()):
+                    return cohort, fielded
+                scanned.append(f"  {code}#{fight_id}: no spec name under two classes")
+    raise JourneyFailure(f"no guild kill in the {WIDE_COHORT_ZONES} newest raid zones fields one spec name under two classes: {scanned}")
 
 
 def test_boss_spec_usage_counts_a_spec_with_its_class(require):
@@ -1386,10 +1404,10 @@ def test_boss_spec_usage_counts_a_spec_with_its_class(require):
     as a row of the cohort that holds it.
     """
     require("warcraftlogs")
-    cohort = wide_cohort()
+    cohort, fielded = _shared_spec_name_cohort()
     usage = run("warcraftlogs", "boss-spec-usage", *cohort.args, "--top", "40")
     rows = assert_sampling_metadata(usage, expect_rows=True, wide=cohort)["spec_usage"]
-    assert _shared_spec_name_roster(cohort) <= {(row["class_name"], row["spec_name"]) for row in rows}, usage.describe()
+    assert fielded <= {(row["class_name"], row["spec_name"]) for row in rows}, usage.describe()
 
 
 def _anchor_pull_row(rows: list[dict[str, Any]], result: Result) -> dict[str, Any]:

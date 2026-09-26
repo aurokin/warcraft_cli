@@ -73,9 +73,11 @@ output flags, and many commands that used to answer wrong with `ok: true` now an
 - `warcraft-wiki` `search` covers the `API:` and `Event:` namespaces, keeps highlighted sub-words intact and ranks the named article first; blank queries fail locally; `maxlag`/`readonly` are `upstream_error` and `ratelimited` is `rate_limited`.
 - `curseforge addon` reports 401/403 as `auth_failed` (pointing at the numeric-id form) and 404 as `addon_not_found`. `lorrgs comp-ranking` and `spec-ranking` add a note when Lorrgs returns no reports.
 - `icy-veins resolve` no longer answers a spec name several classes share (`frost`) with one class's guide at high confidence, and `icy-veins search "mythic+ season 2"` ranks the current season's guide above past seasons' guides.
+- `icy-veins search shadow` ranks the Shadow Priest guide above the Shadow Enclave delve guide, and `icy-veins resolve "player housing"` resolves to the hub its query names exactly when every close rival is one of the hub's own sub-pages.
 - `doctor` and the Wowhead cache commands never print a Redis password: `wowhead`, `raiderio`, `raidbots` and `warcraft-wiki` printed `redis_url` verbatim, and `icy-veins`/`method` leaked the tail of a password containing `@`.
 - `wowhead talent-calc-packet` with an invalid cache setting fails with `invalid_cache_config` (exit 1); it used to print that error and a success envelope and exit 0.
 - `wowhead talent-calc-packet` no longer reports the input URL as the fetched page when the page fetch fails: `page.canonical_url` is null and `page.fetch_error` names the failure.
+- `wowhead search` and `resolve` given a Wowhead guide, news, blue-tracker, tool or listing URL answer with the one row naming the command that reads it (`follow_up.command`, `next_command`) instead of an empty `ok: true`; any other Wowhead URL fails `invalid_query` (exit 2) naming the commands that take URLs, and `resolve` routes a URL to its expansion (a URL outside `--entity-type` resolves to nothing). Free text that mentions `wowhead.com` is searched as text, not read as a URL.
 
 ### Removed
 

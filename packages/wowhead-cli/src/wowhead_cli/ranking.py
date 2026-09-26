@@ -8,11 +8,20 @@ into ``main``.
 from __future__ import annotations
 
 import re
+import shlex
 from datetime import date
 from typing import Any
+from urllib.parse import urlparse
 
 from wowhead_cli.entity_types import PARSER_ENTITY_TYPES, RESOLVE_ENTITY_TYPES, SEARCH_TYPE_HINTS
-from wowhead_cli.expansion_profiles import ExpansionProfile, parse_entity_from_wowhead_url, resolve_expansion
+from wowhead_cli.expansion_profiles import (
+    ExpansionProfile,
+    is_wowhead_host,
+    normalize_wowhead_url,
+    parse_entity_from_wowhead_url,
+    resolve_expansion,
+)
+from wowhead_cli.page_parser import EXPANSION_PREFIXES
 from wowhead_cli.wowhead_client import entity_url, guide_url, suggestion_entity_type
 
 FOLLOW_UP_COMMENT_TERMS = {"comment", "comments", "discussion", "discussions"}
@@ -421,6 +430,63 @@ def url_entity_result(url: str, *, expansion: ExpansionProfile) -> dict[str, Any
         "alternative_commands": [],
     }
     return row
+
+
+# The command that reads a Wowhead page from its URL, keyed by the page path's first segment
+# ("news" also covers /news=<id>).
+URL_PAGE_COMMANDS = {
+    "guide": "guide",
+    "news": "news-post",
+    "blue-tracker/topic": "blue-topic",
+    "talent-calc": "talent-calc",
+    "profession-tree-calc": "profession-tree",
+    "dressing-room": "dressing-room",
+    "list": "profiler",
+}
+_LOCALE_SEGMENT_RE = re.compile(r"[a-z]{2}(?:-[A-Z]{2})?")
+
+
+def _url_page_command(parts: list[str], url: str) -> tuple[str, str | None] | None:
+    """The command and argument that open the page whose path segments are `parts`, or None."""
+    if parts in (["news"], ["blue-tracker"]):
+        return parts[0], None
+    if parts[0] == "guides" and len(parts) > 1:
+        return "guides", "/".join(parts[1:])
+    head = "/".join(parts[:2]) if parts[0] == "blue-tracker" else parts[0].split("=", 1)[0]
+    command = URL_PAGE_COMMANDS.get(head)
+    return None if command is None else (command, url)
+
+
+def url_page_result(url: str, *, expansion: ExpansionProfile) -> dict[str, Any] | None:
+    """The search answer for a Wowhead guide, news, blue-tracker, tool or listing URL, or None for any other URL.
+
+    Like `url_entity_result` nothing is fetched: the row is the command that reads the page, and its
+    id and name stay null. `/guide=<id>` URLs are entity URLs and never get here.
+    """
+    normalized = normalize_wowhead_url(url)
+    if normalized is None or not is_wowhead_host(urlparse(normalized).hostname or ""):
+        return None
+    parts = [part for part in urlparse(normalized).path.split("/") if part]
+    while parts and (parts[0] in EXPANSION_PREFIXES or _LOCALE_SEGMENT_RE.fullmatch(parts[0])):
+        parts = parts[1:]
+    page = _url_page_command(parts, normalized) if parts else None
+    if page is None:
+        return None
+    surface, argument = page
+    command = f"{command_prefix_for_expansion(expansion)} {surface}"
+    return {
+        "id": None,
+        "name": None,
+        "entity_type": {"guide": "guide", "news-post": "news"}.get(surface),
+        "url": normalized,
+        "ranking": {"score": EXACT_NAME_SCORE, "match_reasons": ["url_page"]},
+        "follow_up": {
+            "recommended_surface": surface,
+            "command": f"{command} {shlex.quote(argument)}" if argument else command,
+            "reason": "url_page",
+            "alternative_commands": [],
+        },
+    }
 
 
 STALE_GUIDE_REASON = "stale_guide"

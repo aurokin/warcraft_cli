@@ -7,6 +7,7 @@ below it (guide-family boosts, slug penalties, resolve confidence) is Icy Veins 
 
 from __future__ import annotations
 
+import re
 from datetime import date, timedelta
 from typing import Any
 
@@ -14,6 +15,7 @@ from warcraft_content.article_discovery import article_candidate, sort_article_c
 from warcraft_content.search import normalize_query, score_article_match, tokenize_query
 
 from icy_veins_cli.client import IcyVeinsClient
+from icy_veins_cli.page_parser import CLASS_HUB_SLUGS
 
 PROVIDER_NAME = "icy-veins"
 QUERY_STRIP_TERMS = ("icy", "veins", "guide", "guides")
@@ -93,6 +95,12 @@ SPECIALIZED_GUIDE_WORDS = frozenset({"leveling", "pvp", "pets"})
 # raids) rank below current ones that match the query as well.
 STALE_AFTER = timedelta(days=365)
 STALE_PENALTY = 10
+# A class/spec guide slug starts ``<spec>-<class>-`` (``shadow-priest-``, ``beast-mastery-hunter-``). A query
+# naming that spec ranks these pages above pages that only share the word (``shadow-enclave-delve-guide``);
+# every class sharing the spec gets the same boost, so ``frost`` stays a near-tie.
+_CLASS_SLUGS = "|".join(slug.removesuffix("-guide") for slug in CLASS_HUB_SLUGS)
+SPEC_GUIDE_SLUG_RE = re.compile(rf"^(?!(?:{_CLASS_SLUGS})-)(?P<spec>[a-z-]+?)-(?:{_CLASS_SLUGS})-")
+SPEC_NAME_BONUS = 6
 SPECIALIZED_FAMILY_RULES: tuple[dict[str, Any], ...] = (
     {"family": "easy_mode", "score": 28, "reason": "family_easy_mode", "all_terms": {"easy", "mode"}},
     {"family": "leveling", "score": 24, "reason": "family_leveling", "all_terms": {"leveling"}},
@@ -325,6 +333,8 @@ def _scored_candidate(row: dict[str, Any], query: str, terms: set[str], *, stale
     if not terms & _singular_words(set(tokenize_query(candidate))):
         return None
     score, reasons = score_slug_match(query, candidate, slug=slug)
+    if normalize_search_query(slug.replace("-", " ")) == query:
+        reasons.append("exact_title")
     family_score, family_reasons = score_family_match(query, content_family=content_family)
     score += family_score
     reasons.extend(family_reasons)
@@ -336,6 +346,11 @@ def _scored_candidate(row: dict[str, Any], query: str, terms: set[str], *, stale
         reasons.append("penalty_stale_page")
     if score <= 0:
         return None
+    # Added after the cut-off, so the spec bonus reorders the rows that match and never admits one.
+    spec_slug = SPEC_GUIDE_SLUG_RE.match(slug)
+    if spec_slug and set(spec_slug["spec"].split("-")) <= set(query.split()):
+        score += SPEC_NAME_BONUS
+        reasons.append("spec_name")
     candidate_row = article_candidate(
         ref=slug,
         name=row["name"],
@@ -371,17 +386,22 @@ def search_results(
     return normalized_query, matches[:limit], len(matches), None
 
 
-def resolve_is_confident(top: dict[str, Any] | None, second: dict[str, Any] | None) -> bool:
+def resolve_is_confident(results: list[dict[str, Any]]) -> bool:
     """Decide whether the top candidate is a good enough match to answer a resolve outright."""
-    if top is None:
+    if not results:
         return False
+    top, *rivals = results
     top_score = top["ranking"]["score"]
-    second_score = second["ranking"]["score"] if second else 0
+    second_score = rivals[0]["ranking"]["score"] if rivals else 0
     top_reasons = set(top["ranking"]["match_reasons"])
     # A tie or a near-tie is never an answer, however high both candidates score: "frost" is a mage
-    # and a death knight spec, and only the off-query slug words tell those guides apart.
+    # and a death knight spec, and only the off-query slug words tell those guides apart. The one
+    # exception is a hub named exactly by the query whose close rivals are all its own sub-pages
+    # ("player housing" over ``player-housing-interior-guide``).
+    hub_prefix = top["id"].removesuffix("guide") if "exact_title" in top_reasons else None
     return (
         top_score >= second_score + 15
         or ("family_easy_mode" in top_reasons and top_score >= second_score + 10 and top_score >= 35)
         or ("intro_guide" in top_reasons and top_score >= second_score + 6 and top_score >= 30)
+        or (hub_prefix is not None and all(row["id"].startswith(hub_prefix) for row in rivals if row["ranking"]["score"] > top_score - 15))
     )

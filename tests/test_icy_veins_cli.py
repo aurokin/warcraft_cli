@@ -509,6 +509,44 @@ def test_icy_veins_resolve_does_not_pick_a_class_for_a_spec_name_two_classes_sha
     assert {row["id"] for row in payload["candidates"][:2]} == {"frost-mage-pve-dps-guide", "frost-death-knight-pve-dps-guide"}
 
 
+def test_icy_veins_search_ranks_a_spec_guide_above_a_page_that_shares_the_spec_word(monkeypatch) -> None:
+    """`search shadow` listed the Shadow Enclave delve guide above the Shadow Priest guide."""
+    slugs = ["shadow-enclave-delve-guide", "shadow-priest-pve-dps-guide", "shadow-priest-pvp-guide"]
+
+    assert _search_ids(monkeypatch, slugs, "shadow")[0] == "shadow-priest-pve-dps-guide"
+
+
+def test_icy_veins_search_spec_bonus_never_admits_a_page_that_misses_the_query(monkeypatch) -> None:
+    """The spec bonus once lifted the old Frost Mage Uldir raid page into `search "frost dk"`."""
+    assert _search_ids(monkeypatch, CAPTURED_SPEC_SLUGS, "frost dk") == []
+
+
+@pytest.mark.parametrize(
+    ("query", "slugs", "resolved"),
+    [
+        (
+            "player housing",
+            ["player-housing-guide", "player-housing-exterior-guide", "player-housing-interior-guide",
+             "player-housing-neighborhoods-guide"],
+            True,
+        ),
+        (
+            "affliction warlock torghast and best anima powers",
+            ["affliction-warlock-torghast-guide-and-best-anima-powers", "affliction-warlock-mists-of-pandaria-remix-guide"],
+            False,
+        ),
+    ],
+    ids=["only-sub-pages", "independent-rival"],
+)
+def test_icy_veins_resolve_answers_an_exact_title_only_over_its_own_sub_pages(
+    monkeypatch, query: str, slugs: list[str], resolved: bool
+) -> None:
+    """`resolve "player housing"` was unresolved: its own sub-guides scored 3 below the hub it names."""
+    payload = _invoke_with_sitemap(monkeypatch, slugs, ["resolve", query])
+
+    assert (payload["resolved"], payload["match"]["id"]) == (resolved, slugs[0])
+
+
 def test_icy_veins_search_ranks_a_hunter_pets_page_with_the_specs_other_specialized_pages(monkeypatch) -> None:
     """The pets page is one part of a hunter spec, like its PvP page; it used to outrank the spec guide."""
     ids = _search_ids(monkeypatch, CAPTURED_SPEC_SLUGS, "survival hunter")
@@ -663,18 +701,18 @@ def test_icy_veins_resolve_command_prefers_easy_mode_when_query_matches(monkeypa
 def test_icy_veins_resolve_confidence_helper_covers_easy_mode_and_intro_paths() -> None:
     easy_mode_top = {"ranking": {"score": 35, "match_reasons": ["family_easy_mode"]}}
     easy_mode_second = {"ranking": {"score": 24, "match_reasons": []}}
-    assert resolve_is_confident(easy_mode_top, easy_mode_second) is True
+    assert resolve_is_confident([easy_mode_top, easy_mode_second]) is True
 
     intro_top = {"ranking": {"score": 30, "match_reasons": ["intro_guide"]}}
     intro_second = {"ranking": {"score": 23, "match_reasons": []}}
-    assert resolve_is_confident(intro_top, intro_second) is True
+    assert resolve_is_confident([intro_top, intro_second]) is True
 
     tied = {"ranking": {"score": 54, "match_reasons": ["intro_guide"]}}
-    assert resolve_is_confident(tied, tied) is False
+    assert resolve_is_confident([tied, tied]) is False
 
     weak_top = {"ranking": {"score": 29, "match_reasons": []}}
     weak_second = {"ranking": {"score": 25, "match_reasons": []}}
-    assert resolve_is_confident(weak_top, weak_second) is False
+    assert resolve_is_confident([weak_top, weak_second]) is False
 
 
 def test_icy_veins_resolve_search_payload_uses_confidence_helper() -> None:
