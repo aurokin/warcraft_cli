@@ -36,7 +36,7 @@ jobs:
       # Attaches to the release for the pushed tag, creating it if `gh release
       # create` has not run yet.
       - name: Attach wheel to the GitHub release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: dist/*.whl
           fail_on_unmatched_files: true
