@@ -59,12 +59,13 @@ jobs:
       - name: Install dependencies
         run: uv sync --frozen --extra dev --extra redis
 
+      # Icy Veins answers GitHub runner IPs with 403 (bot protection), so its journeys run locally only.
       - name: Keyless end-to-end journeys
         env:
           WARCRAFT_E2E_SKIP: raidbots-report
         run: >-
           make test-e2e E2E_ARGS="-rs
-          tests/e2e/test_wowhead.py tests/e2e/test_method.py tests/e2e/test_icy_veins.py
+          tests/e2e/test_wowhead.py tests/e2e/test_method.py
           tests/e2e/test_raiderio.py tests/e2e/test_warcraft_wiki.py tests/e2e/test_lorrgs.py
           tests/e2e/test_raidbots.py"
 

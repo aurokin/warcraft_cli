@@ -173,9 +173,10 @@ Open weaknesses a green run does not rule out, beyond the limits above:
 
 `.github/workflows/live-contracts.yml` runs weekly (Mondays 06:00 UTC) and on demand, with no
 secrets. It runs the keyless journey files (`test_wowhead.py`, `test_method.py`,
-`test_icy_veins.py`, `test_raiderio.py`, `test_warcraft_wiki.py`, `test_lorrgs.py`,
-`test_raidbots.py`, with `WARCRAFT_E2E_SKIP=raidbots-report`) and `make test-canary`, the Wowhead
-parser canary (`tests/test_wowhead_parser_canaries.py`, gated by `WOWHEAD_LIVE_TESTS=1`). The keyed
-providers, SimulationCraft, the wrapper composites, and `test_contract.py` stay local. It never
+`test_raiderio.py`, `test_warcraft_wiki.py`, `test_lorrgs.py`, `test_raidbots.py`, with
+`WARCRAFT_E2E_SKIP=raidbots-report`) and `make test-canary`, the Wowhead parser canary
+(`tests/test_wowhead_parser_canaries.py`, gated by `WOWHEAD_LIVE_TESTS=1`, fetching with the CLI's
+own HTTP client). Icy Veins answers GitHub runner IPs with 403, so `test_icy_veins.py` runs locally
+only, as do the keyed providers, SimulationCraft, the wrapper composites, and `test_contract.py`. It never
 gates a pull request. When a job fails, is cancelled, or is skipped, a scheduled run (or a manual
 run with `open_issue` set) opens or comments on the `live-failure` tracking issue.
