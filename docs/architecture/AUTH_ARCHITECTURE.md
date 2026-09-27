@@ -33,7 +33,9 @@ API keys / static tokens — separate from OAuth; not the current driver.
 
 **Credential discovery order:** repo `.env.local` → `~/.config/warcraft/providers/<provider>.env` → process environment.
 
-**Runtime state (not in `.env`):** `~/.local/state/warcraft/providers/<provider>.json` for tokens, expiry, session metadata.
+`.env.local` discovery (`warcraft_core.env.find_env_file`) walks upward from the working directory but stops at the first directory containing `.git`; without a git ancestor only the working directory is checked. Loaders read their provider's managed keys with `warcraft_core.env.read_env_keys` and never mutate `os.environ`.
+
+**Runtime state (not in `.env`):** `~/.local/state/warcraft/providers/<provider>.json` for tokens, expiry, session metadata. `save_provider_auth_state` writes the file with mode `0600` inside a `0700` directory and re-tightens an existing file on rewrite.
 
 **Status reporting:** `doctor` and provider `auth status` should report credential presence, source, token validity, expiry, active auth mode (redacted).
 

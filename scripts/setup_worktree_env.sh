@@ -2,10 +2,9 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-WORKTREE_ROOT="${WARCRAFT_WORKTREE_ROOT_OVERRIDE:-$ROOT_DIR}"
-WORKTREE_META_DIR="${WARCRAFT_WORKTREE_META_DIR:-$WORKTREE_ROOT/.warcraft}"
-RUNTIME_ROOT="${WARCRAFT_WORKTREE_RUNTIME_DIR_OVERRIDE:-$WORKTREE_META_DIR/runtime}"
-ENV_PATH="${WARCRAFT_WORKTREE_ENV_PATH:-$WORKTREE_META_DIR/worktree-env.sh}"
+WORKTREE_META_DIR="$ROOT_DIR/.warcraft"
+RUNTIME_ROOT="$WORKTREE_META_DIR/runtime"
+ENV_PATH="$WORKTREE_META_DIR/worktree-env.sh"
 
 mkdir -p "$WORKTREE_META_DIR"
 
@@ -15,14 +14,14 @@ cat > "$ENV_PATH" <<EOF
 # This keeps branch-local runtime data and cache inside the worktree while
 # leaving shared config/state in the host-level XDG roots for seamless auth reuse.
 
-export WARCRAFT_WORKTREE_ROOT="$WORKTREE_ROOT"
+export WARCRAFT_WORKTREE_ROOT="$ROOT_DIR"
 export WARCRAFT_WORKTREE_RUNTIME_DIR="$RUNTIME_ROOT"
 
 case ":\${PATH:-}:" in
-  *:"$WORKTREE_ROOT/.venv/bin":*)
+  *:"$ROOT_DIR/.venv/bin":*)
     ;;
   *)
-    export PATH="$WORKTREE_ROOT/.venv/bin:\$PATH"
+    export PATH="$ROOT_DIR/.venv/bin:\$PATH"
     ;;
 esac
 EOF

@@ -1,0 +1,16 @@
+version: 2
+
+updates:
+  # Covers the root pyproject.toml dependency ranges (and uv.lock once
+  # Dependabot's uv support is enabled for this repository).
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5

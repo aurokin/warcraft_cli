@@ -1,123 +1,110 @@
-# Blizzard API CLI
+# Blizzard API CLI (`blizzard`)
 
-## Why Add It
+**Tier: experimental — verified live.** The endpoint hosts, OAuth token URL, and namespace
+strings were confirmed against the live API on 2026-09-13 for the `us`, `eu`, `kr`, and `tw`
+regions (retail and classic Game Data, retail Profile), so `realm`, `item`, and `character` carry
+`provenance.verified: true` there. `cn` stays `verified: false` because its host is unreachable
+from where this repo is tested. `doctor` reports `data.tier: "experimental"`, `live_confirmed`, and
+the verified and unverified regions. The tier stays experimental because the command surface is
+thin, not because the data is suspect. Re-verify with:
 
-`blizzard-api` should exist because it gives us the canonical official source for supported World of Warcraft game data and profile data.
+```bash
+make test-e2e E2E_ARGS="tests/e2e/test_blizzard.py"
+```
 
-That matters because:
-- some lookups should prefer the authoritative source before community mirrors
-- this provider will force us to validate OAuth, region handling, namespace handling, and official-source routing in the monorepo
+## What It Does
 
-## Research Summary
+`blizzard` reads the official Battle.net World of Warcraft Game Data and Profile APIs over OAuth
+client credentials and emits the shared JSON envelope.
 
-Current official signals:
-- Blizzard directs developers to the Battle.net developer portal for API documentation and auth flows
-- World of Warcraft support includes both Game Data and Profile API families
-- OAuth is a first-class requirement, including server-to-server authentication flows
-- the API ecosystem is region- and namespace-aware, which makes it structurally different from guide and ranking sites
+| Command | Behavior |
+|---------|----------|
+| `blizzard doctor` | Reports install state, auth posture, region routing, capability metadata, and the experimental tier. |
+| `blizzard realm <slug>` | Reads `/data/wow/realm/{slug}` from the dynamic Game Data namespace. |
+| `blizzard item <item-id>` | Reads `/data/wow/item/{id}` from the static Game Data namespace. |
+| `blizzard character <realm-slug> <name>` | Reads `/profile/wow/character/{realm}/{name}` from the profile namespace. Retail only. |
 
-## Access Model
+`realm` and `character` also take a realm display name or the other slug spelling (`Mal'Ganis`,
+`mal-ganis`, `Tarren Mill`). Blizzard's slug drops apostrophes and keeps word breaks (`malganis`,
+`tarren-mill`), so the hyphenated spelling is tried first and the joined one only after a 404; a
+realm that exists under neither is `not_found` (exit 4).
+| `blizzard search <query>` | Coming soon. Returns a `kind: "coming_soon"` envelope with exit 0, not an error. |
+| `blizzard resolve <query>` | Coming soon. Returns a `kind: "coming_soon"` envelope with exit 0, not an error. |
 
-This should be treated as an official authenticated API service:
-- authenticate with OAuth
-- call documented Game Data and Profile endpoints
-- model region and namespace explicitly
-- cache within policy and respect the official access model
+`search` and `resolve` accept `--limit` (1-50, default 5); it is ignored until those surfaces ship.
 
-Shared auth direction for this provider is defined in [AUTH_ARCHITECTURE.md](../architecture/AUTH_ARCHITECTURE.md). `blizzard-api` should be the second validation point for the shared OAuth-oriented auth architecture after `warcraftlogs`.
+## Global Flags
 
-## Likely CLI Shape
+Global flags go before the subcommand. They come from the shared CLI scaffolding, so they behave the
+same on every provider binary:
 
-- `blizzard-api doctor`
-- `blizzard-api search "<query>"`
-- `blizzard-api resolve "<query>"`
-- `blizzard-api item <id-or-name>`
-- `blizzard-api spell <id-or-name>`
-- `blizzard-api character <realm> <name>`
-- `blizzard-api realm <slug>`
-- `blizzard-api connected-realm <id>`
-- `blizzard-api auction-house <connected-realm-id>`
+`--pretty`, `--compact`, `--compact-max-chars <n>`, `--fields <dot.path>`, `--fields-strict`,
+`--profile agent|human`.
 
-The first useful slice should stay narrower than that:
-- `doctor`
-- auth verification
-- one game-data lookup
-- one profile lookup
+```bash
+blizzard --pretty doctor
+blizzard --fields data.id,data.name item 19019
+```
 
-## Implemented
+## Routing Flags
 
-The scaffold slice (AUR-390) shipped the package, wrapper registration, and `doctor`. AUR-455 adds
-live OAuth and the first read commands:
+`realm`, `item`, and `character` accept:
 
-- `blizzard doctor` — reports install state, auth posture, the region/routing block, and capability
-  metadata (`game_data` and `profile` are `ready`; `search`/`resolve` stay `coming_soon`).
-- `blizzard realm <slug>` — dynamic Game Data namespace (`/data/wow/realm/{slug}`).
-- `blizzard item <id>` — static Game Data namespace (`/data/wow/item/{id}`).
-- `blizzard character <realm> <name>` — profile namespace (`/profile/wow/character/{realm}/{name}`),
-  retail only.
-- Each command returns `{ok, provider, command, kind, query, provenance, data}` on success and
-  `{ok:false, ..., error:{code, message}}` with a nonzero exit on failure (never a traceback). With
-  no credentials they return `missing_client_credentials`.
-- Region routing: `--region` (default `BLIZZARD_REGION`, else `us`; supports `us`/`eu`/`kr`/`tw`/`cn`,
-  with aliases like `na`). `--game-version retail|classic` (or the `--classic` shorthand) selects the
-  namespace class infix. `--locale` passes through (default `en_US`, not validated).
+| Flag | Behavior |
+|------|----------|
+| `--region`, `-r` | `us`, `eu`, `kr`, `tw`, `cn` (aliases such as `na` normalize). Defaults to `BLIZZARD_REGION`, else `us`. |
+| `--game-version` | `retail` (default) or `classic`. Selects the namespace infix. |
+| `--classic` | Shorthand for `--game-version classic`. Passing both with a conflicting value is rejected. |
+| `--locale` | Passed through to Blizzard. Default `en_US`; not validated. |
 
-  Auth is OAuth client-credentials, discovered in this order (matching `warcraftlogs`):
-  1. repo `.env.local`
-  2. `~/.config/warcraft/providers/blizzard-api.env`
-  3. process environment
+Classic-era and Season of Discovery namespaces (`classic1x`) are rejected rather than guessed at.
+The Profile API has no classic namespace, so `blizzard character --classic` fails with
+`classic_profile_unsupported`. All three routing rejections are usage errors and exit 2.
 
-  Set `BLIZZARD_CLIENT_ID` and `BLIZZARD_CLIENT_SECRET`. The token is fetched once and cached in
-  shared state at `~/.local/state/warcraft/providers/blizzard-api-client-credentials.json`, keyed by
-  `sha256(region, id, secret)` and reused until ~60s before expiry. `doctor` never prints the secret.
-- The wrapper registers `blizzard-api` with `expansion_mode=none`: Blizzard's region/namespace model
-  is not the wrapper's expansion axis, so it stays out of expansion fanout.
+## Auth
 
-> **Pending one-time live confirmation.** The endpoint hosts, OAuth token URL, and namespace strings
-> follow documented Blizzard API conventions but have **not** been confirmed against live endpoints in
-> this repo. `doctor` carries this under `region.verification`, and every command payload carries
-> `provenance.verified: false`. Run
-> `BLIZZARD_LIVE_TESTS=1 pytest -q -m live tests/test_blizzard_api_live.py` with real credentials to
-> confirm them. CN endpoints are especially unconfirmed; classic namespace strings are best-effort.
+OAuth client credentials. Set `BLIZZARD_CLIENT_ID` and `BLIZZARD_CLIENT_SECRET`, discovered in this
+order (matching `warcraftlogs`):
 
-Deferred: shared identity payloads (AUR-458); `search`/`resolve`; classic-era / Season-of-Discovery
-namespaces (`classic1x`); auction-house / connected-realm / spell surfaces; user-auth flows.
+1. repo `.env.local`
+2. `~/.config/warcraft/providers/blizzard-api.env`
+3. process environment
 
-## What Can Reuse Shared Code
+`BLIZZARD_REGION` sets the default region. The token is fetched once and cached in shared state at
+`~/.local/state/warcraft/providers/blizzard-api-client-credentials.json`, keyed by
+`sha256(region, client id, client secret)` and reused until ~60s before expiry. `doctor` reports
+whether credentials and a cached token exist and never prints the secret. Without credentials every
+read command fails with `missing_client_credentials` and exit 3.
 
-- shared HTTP infrastructure
-- cache and TTL infrastructure
-- shared output shaping
-- wrapper provider contract
-- future shared auth/config primitives once those are proven
+## Output
 
-## What Should Stay Service-Specific
+Success payloads are the shared envelope: `{ok, provider, command, kind, schema_version, query,
+provenance, data}`. `data` is the raw Blizzard JSON body; `provenance` carries `region`, `namespace`,
+`namespace_class`, `game_version`, `locale`, `source_url`, `verified` (true for confirmed regions),
+and a `verification_note`.
 
-- OAuth token handling
-- region and namespace rules
-- endpoint models and query builders
-- official API error normalization
+Failures write an error envelope to stderr and exit with the shared codes from
+[ERROR_CONTRACT.md](../foundation/ERROR_CONTRACT.md): 1 generic (`invalid_response`), 2 usage
+(`unsupported_region`, `unsupported_game_version`, `classic_profile_unsupported`), 3 auth
+(`missing_client_credentials`, `auth_failed`), 4 not found, 5 network/upstream (`network_error`,
+`timeout`, `upstream_error`, `rate_limited`). A transport failure never prints a traceback.
 
-Recommended auth posture:
-- reuse shared credential discovery
-- reuse shared token/state persistence helpers once implemented
-- keep Battle.net OAuth, scopes, and namespace/region behavior provider-local
+Flag validation runs before any request, so a bad `--region`/`--game-version` fails offline with
+exit 2 and never spends a round trip.
 
-## What This Service Should Validate
+## Wrapper Integration
 
-- auth/config patterns for official APIs
-- region and namespace handling in shared infrastructure
-- when the wrapper should prefer official Blizzard data over community sources
+The wrapper registers this provider as `blizzard-api` with `expansion_mode="none"`: Blizzard routes
+by region and namespace class, which is not the wrapper's expansion axis, so it stays out of
+expansion fanout. `warcraft --expansion <x> blizzard ...` still runs: the wrapper ignores the
+expansion for this provider (Blizzard's default retail routing applies) and attaches an
+`expansion_advisory` note to the result. Pass `--region`/namespace flags explicitly when you need
+a specific game version.
 
-## Risks
+`blizzard_api_cli.provider.PROVIDER` is the in-process surface (`search`, `resolve`, `doctor`); it
+returns envelopes and never prints.
 
-- auth and namespace complexity is materially higher than our current providers
-- some natural-language searches may not map cleanly to official endpoints without local lookup assistance
-- official API policy constraints should drive cache behavior, not the other way around
+## Not Implemented
 
-## Source Links
-
-- `https://develop.battle.net/`
-- `https://github.com/Blizzard/api-wow-docs`
-- `https://worldofwarcraft.blizzard.com/en-us/news/15336025`
-- [Roadmap](../ROADMAP.md)
+`search`/`resolve` ranking, shared identity payloads, classic-era / Season-of-Discovery namespaces,
+auction-house, connected-realm, and spell surfaces, and user-auth (authorization-code) flows.

@@ -1,0 +1,491 @@
+{
+ "search": "valorstones",
+ "results": [
+  {
+   "type": 17,
+   "id": 3008,
+   "name": "Valorstones",
+   "typeName": "Currency",
+   "icon": "inv_valorstone_base",
+   "pinTitle": "Currency",
+   "pinDescription": "Earned from completing quests, raids, dungeons, battlegrounds, arena matches, radiant echoes, and other activities at max level. Used to upgrade max-level gear.",
+   "pinBreadcrumb": [
+    "Hidden"
+   ],
+   "popularity": 0
+  },
+  {
+   "type": 5,
+   "id": 84914,
+   "name": "Valorstones",
+   "typeName": "Quest",
+   "side": 3,
+   "pinTitle": "Quest",
+   "pinFooterText": "Level: 80",
+   "pinBreadcrumb": [
+    "War Within",
+    "The Ringing Deeps"
+   ],
+   "popularity": 1
+  },
+  {
+   "type": 5,
+   "id": 82378,
+   "name": "Valorstones",
+   "typeName": "Quest",
+   "side": 3,
+   "pinTitle": "Quest",
+   "pinFooterText": "Level: 80",
+   "pinBreadcrumb": [
+    "War Within",
+    "The Ringing Deeps"
+   ],
+   "popularity": 2
+  },
+  {
+   "type": 100,
+   "id": 29539,
+   "name": "Valorstones in The War Within Overview Guide - How to Earn and Spend Valorstones",
+   "typeName": "Guide",
+   "pinImageUrl": "https://wow.zamimg.com/uploads/guide/header/f8a9c34f9013a425f889ccf6b231b30234cd7d31.jpg?maxHeight=80",
+   "pinTitle": "Game Systems",
+   "pinFooterText": "Updated: 2025/08/05",
+   "pinDescription": "This guide is a complete overview of the Valorstones currency in The War Within including what they are, how to earn them, and where to spend them.",
+   "popularity": 3
+  },
+  {
+   "type": 3,
+   "id": 244335,
+   "name": "Old K'aresh Box of Valorstones",
+   "typeName": "Item",
+   "icon": "inv_misc_treasurechest01a",
+   "quality": 0,
+   "pinTitle": "Item",
+   "pinFooterText": "Consumable",
+   "pinDescription": "It is sold by NPCs.",
+   "pinBreadcrumb": [
+    "Consumable"
+   ],
+   "popularity": 4
+  },
+  {
+   "type": 5,
+   "id": 82346,
+   "name": "A Small Bundle of Valorstones",
+   "typeName": "Quest",
+   "side": 3,
+   "pinTitle": "Quest",
+   "pinFooterText": "Level: 80",
+   "pinBreadcrumb": [
+    "War Within",
+    "Isle of Dorn"
+   ],
+   "popularity": 5
+  },
+  {
+   "type": 3,
+   "id": 226257,
+   "name": "Old Delver's Pouch of Valorstones",
+   "typeName": "Item",
+   "icon": "inv_misc_coinbag06",
+   "quality": 0,
+   "pinTitle": "Item",
+   "pinFooterText": "Miscellaneous Item",
+   "pinBreadcrumb": [
+    "Miscellaneous",
+    "Miscellaneous Item"
+   ],
+   "popularity": 6
+  },
+  {
+   "type": 5,
+   "id": 86363,
+   "name": "The Better Part of Valorstones",
+   "typeName": "Quest",
+   "side": 3,
+   "pinTitle": "Quest",
+   "pinFooterText": "Level: 80",
+   "pinDescription": "It's been many months since we arrived in Dornogal and there's still more to learn of Valorstones. It turns out they can be found beyond Azeroth! This discovery opens up entirely new avenues of research.\n\nWith new research comes a need for new supplies. Bring me some, and we'll help upgrade your gear to new heights.",
+   "pinBreadcrumb": [
+    "War Within",
+    "Upgrade System"
+   ],
+   "popularity": 7
+  },
+  {
+   "type": 10,
+   "id": 20488,
+   "name": "Valorstones earned",
+   "typeName": "Achievement",
+   "icon": "trade_engineering",
+   "pinTitle": "Achievement",
+   "pinFooterText": "Points: 0",
+   "pinBreadcrumb": [
+    "Character Achievements",
+    "Legacy"
+   ],
+   "popularity": 8
+  },
+  {
+   "type": 100,
+   "id": 26378,
+   "name": "Gear Item Level Upgrade System for The War Within: Valorstones and Crests",
+   "typeName": "Guide",
+   "pinImageUrl": "https://wow.zamimg.com/uploads/guide/header/f8a9c34f9013a425f889ccf6b231b30234cd7d31.jpg?maxHeight=80",
+   "pinTitle": "Expansion Content",
+   "pinFooterText": "Updated: 2025/09/26",
+   "pinDescription": "Learn about the gear upgrade system for The War Within expansion. This system covers everything about Valorstones and Crests and how to use them to increase the item levels of endgame gear!",
+   "popularity": 15
+  }
+ ],
+ "categories": {
+  "decor": [],
+  "guides": [
+   {
+    "type": 100,
+    "id": 26378,
+    "name": "Gear Item Level Upgrade System for The War Within: Valorstones and Crests",
+    "typeName": "Guide",
+    "pinImageUrl": "https://wow.zamimg.com/uploads/guide/header/f8a9c34f9013a425f889ccf6b231b30234cd7d31.jpg?maxHeight=80",
+    "pinTitle": "Expansion Content",
+    "pinFooterText": "Updated: 2025/09/26",
+    "pinDescription": "Learn about the gear upgrade system for The War Within expansion. This system covers everything about Valorstones and Crests and how to use them to increase the item levels of endgame gear!"
+   },
+   {
+    "type": 100,
+    "id": 29539,
+    "name": "Valorstones in The War Within Overview Guide - How to Earn and Spend Valorstones",
+    "typeName": "Guide",
+    "pinImageUrl": "https://wow.zamimg.com/uploads/guide/header/f8a9c34f9013a425f889ccf6b231b30234cd7d31.jpg?maxHeight=80",
+    "pinTitle": "Game Systems",
+    "pinFooterText": "Updated: 2025/08/05",
+    "pinDescription": "This guide is a complete overview of the Valorstones currency in The War Within including what they are, how to earn them, and where to spend them."
+   }
+  ],
+  "news": [
+   {
+    "type": 162,
+    "id": 380364,
+    "name": "Upgrading Gear on Midnight Beta Now Costs Gold Instead of Valorstones",
+    "typeName": "News Post",
+    "pinImageUrl": "https://wow.zamimg.com/uploads/blog/images/52541-upgrading-gear-on-midnight-beta-now-costs-gold-instead-of-valorstones.png?maxHeight=80",
+    "newsTypeId": 1,
+    "newsTypeName": "Live",
+    "pinTitle": "News",
+    "pinFooterText": "Posted 2026/02/12 by Squishei",
+    "pinDescription": "Upgrading Gear on the Midnight Beta now costs gold in addition to crests."
+   },
+   {
+    "type": 162,
+    "id": 380032,
+    "name": "Valorstones Remain Until Full Midnight Launch",
+    "typeName": "News Post",
+    "pinImageUrl": "https://wow.zamimg.com/uploads/blog/images/52214-valorstones-remain-until-full-midnight-launch.jpg?maxHeight=80",
+    "newsTypeId": 1,
+    "newsTypeName": "Live",
+    "pinTitle": "News",
+    "pinFooterText": "Posted 2026/01/25 by Archimtiros",
+    "pinDescription": "Valorstones are sticking around until the full expansion launches in March, but they can now be transferred between characters!"
+   },
+   {
+    "type": 162,
+    "id": 378685,
+    "name": "Valorstones Removed in Midnight",
+    "typeName": "News Post",
+    "pinImageUrl": "https://wow.zamimg.com/uploads/blog/images/50674-valorstones-removed-in-midnight.jpg?maxHeight=80",
+    "newsTypeId": 3,
+    "newsTypeName": "Midnight",
+    "pinTitle": "News",
+    "pinFooterText": "Posted 2025/10/01 by iMX3",
+    "pinDescription": "With many players expressing grievances with Valorstones in previous expansions, Blizzard has announced that Valorstones will be removed with the Midnight expansion."
+   },
+   {
+    "type": 162,
+    "id": 378677,
+    "name": "Midnight Developer Q&A Liveblog - Valorstones Removed in Midnight",
+    "typeName": "News Post",
+    "pinImageUrl": "https://wow.zamimg.com/uploads/blog/images/50665-midnight-developer-q-a-liveblog.jpg?maxHeight=80",
+    "newsTypeId": 1,
+    "newsTypeName": "Live",
+    "pinTitle": "News",
+    "pinFooterText": "Posted 2025/10/01 by Archimtiros",
+    "pinDescription": "The Midnight Q&A begins now! Follow along with our liveblog as Game Director Ion Hazzikostas, Associate Game Director Paul Kubit, and Design Director Maria Hamilton answer your biggest questions about Midnight."
+   },
+   {
+    "type": 162,
+    "id": 378008,
+    "name": "Last Chance to Funnel Valorstones - Transfer Disabled with Patch 11.2",
+    "typeName": "News Post",
+    "pinImageUrl": "https://wow.zamimg.com/uploads/blog/images/49871-last-chance-to-funnel-valorstones-transfer-disabled-with-patch-11-2.jpg?maxHeight=80",
+    "newsTypeId": 1,
+    "newsTypeName": "Live",
+    "pinTitle": "News",
+    "pinFooterText": "Posted 2025/08/05 by Anshlun",
+    "pinDescription": "With Patch 11.2 launching this week, Blizzard will be disabling the ability to transfer [currency=3008] between characters in the same account. Note that, unlike previous seasons, Valorstones will not reset with the arrival of the new patch."
+   },
+   {
+    "type": 162,
+    "id": 377758,
+    "name": "Valorstones No Longer Reset With New Seasons in Patch 11.2: Ghosts of K'aresh",
+    "typeName": "News Post",
+    "pinImageUrl": "https://wow.zamimg.com/uploads/blog/images/49592-valorstones-no-longer-reset-with-new-seasons-in-patch-11-2-ghosts-of-karesh.jpg?maxHeight=80",
+    "newsTypeId": 2,
+    "newsTypeName": "PTR",
+    "pinTitle": "News",
+    "pinFooterText": "Posted 2025/07/14 by Archimtiros",
+    "pinDescription": "A nice quality of life change revealed in this week's Patch 11.2 PTR Development Notes is that Valorstones will no longer reset at the start of a new season, so start stockpiling now!"
+   },
+   {
+    "type": 162,
+    "id": 376877,
+    "name": "Delver's Bounty Turbo Boost Buffs - More Gilded Crests and Valorstones, Massive Brann Experience",
+    "typeName": "News Post",
+    "pinImageUrl": "https://wow.zamimg.com/uploads/blog/images/48647-delvers-bounty-turbo-boost-buffs-more-gilded-crests-and-valorstones-massive.jpg?maxHeight=80",
+    "newsTypeId": 1,
+    "newsTypeName": "Live",
+    "pinTitle": "News",
+    "pinFooterText": "Posted 2025/05/14 by Neryssa",
+    "pinDescription": "The Hidden Trove rewards from Delver's Bounty maps have received significant buffs in the Turbo Boost event, including more Gilded Crests, a lot of Valorstones, and a Big Wheel of Cheese!"
+   },
+   {
+    "type": 162,
+    "id": 376738,
+    "name": "Turbo Boost: Valorstones Become Warbound-Transferrable at 25% Penalty",
+    "typeName": "News Post",
+    "pinImageUrl": "https://wow.zamimg.com/uploads/blog/images/48470-turbo-boost-valorstones-become-warbound-transferrable-at-25-penalty.png?maxHeight=80",
+    "newsTypeId": 1,
+    "newsTypeName": "Live",
+    "pinTitle": "News",
+    "pinFooterText": "Posted 2025/05/11 by Archimtiros",
+    "pinDescription": "With the Turbo Boost coming on May 13th, Valorstones will become Warbound-transferrable for the remainder of Season Two... though with the premium price of a 25% penalty on the transferred currency."
+   },
+   {
+    "type": 162,
+    "id": 374092,
+    "name": "Last Day to Spend Season 1 Crests and Valorstones Before Reset",
+    "typeName": "News Post",
+    "pinImageUrl": "https://wow.zamimg.com/uploads/blog/images/47241-last-day-to-spend-season-1-crests-and-valorstones-before-reset.png?maxHeight=80",
+    "newsTypeId": 1,
+    "newsTypeName": "Live",
+    "pinTitle": "News",
+    "pinFooterText": "Posted 2025/02/24 by Squishei",
+    "pinDescription": "With Patch 11.1 launching tomorrow, today is the last day to spend your Season 1 Crests and Valorstones before they likely reset!"
+   },
+   {
+    "type": 162,
+    "id": 360554,
+    "name": "C.H.E.T.T. - Earn Valorstones from Tasks around Undermine",
+    "typeName": "News Post",
+    "pinImageUrl": "https://wow.zamimg.com/uploads/blog/images/46518-c-h-e-t-t-earn-valorstones-from-tasks-around-undermine.jpg?maxHeight=80",
+    "newsTypeId": 2,
+    "newsTypeName": "PTR",
+    "pinTitle": "News",
+    "pinFooterText": "Posted 2025/01/14 by iMX3",
+    "pinDescription": "Undermine(d) introduces a neat way for players to earn extra Valorstones with C.H.E.T.T. Here is everything players need to know about this new system."
+   },
+   {
+    "type": 162,
+    "id": 346822,
+    "name": "Rewards for Defeating Zekvir in His Lair - Cosmetics, Valorstones Farm",
+    "typeName": "News Post",
+    "pinImageUrl": "https://wow.zamimg.com/uploads/blog/images/44464-rewards-for-defeating-zekvir-in-his-lair-cosmetics-valorstones-farm.jpg?maxHeight=80",
+    "newsTypeId": 1,
+    "newsTypeName": "Live",
+    "pinTitle": "News",
+    "pinFooterText": "Posted 2024/09/25 by Neryssa",
+    "pinDescription": "With players earning more gear in Season 1 of The War Within, the interest in challenging Zekvir, the final challenge of Delves, is increasing. In this post, we highlight all rewards for killing Zekvir, and even a potential reason to continuously farm him!"
+   },
+   {
+    "type": 162,
+    "id": 346458,
+    "name": "Wax Farming for Valorstones - Prepping for Season 1 Launch",
+    "typeName": "News Post",
+    "pinImageUrl": "https://wow.zamimg.com/uploads/blog/images/44050-wax-farming-for-valorstones-prepping-for-season-1-launch.jpg?maxHeight=80",
+    "newsTypeId": 1,
+    "newsTypeName": "Live",
+    "pinTitle": "News",
+    "pinFooterText": "Posted 2024/09/05 by Squishei",
+    "pinDescription": "Prepare for Season 1 by stocking up on Globs of Wax allowing you to bypass the normal cap of Valorstones!"
+   }
+  ],
+  "tools": [],
+  "database": [
+   {
+    "type": 17,
+    "id": 3008,
+    "name": "Valorstones",
+    "typeName": "Currency",
+    "icon": "inv_valorstone_base",
+    "pinTitle": "Currency",
+    "pinDescription": "Earned from completing quests, raids, dungeons, battlegrounds, arena matches, radiant echoes, and other activities at max level. Used to upgrade max-level gear.",
+    "pinBreadcrumb": [
+     "Hidden"
+    ]
+   },
+   {
+    "type": 3,
+    "id": 244335,
+    "name": "Old K'aresh Box of Valorstones",
+    "typeName": "Item",
+    "icon": "inv_misc_treasurechest01a",
+    "quality": 0,
+    "pinTitle": "Item",
+    "pinFooterText": "Consumable",
+    "pinDescription": "It is sold by NPCs.",
+    "pinBreadcrumb": [
+     "Consumable"
+    ]
+   },
+   {
+    "type": 5,
+    "id": 82346,
+    "name": "A Small Bundle of Valorstones",
+    "typeName": "Quest",
+    "side": 3,
+    "pinTitle": "Quest",
+    "pinFooterText": "Level: 80",
+    "pinBreadcrumb": [
+     "War Within",
+     "Isle of Dorn"
+    ]
+   },
+   {
+    "type": 3,
+    "id": 226257,
+    "name": "Old Delver's Pouch of Valorstones",
+    "typeName": "Item",
+    "icon": "inv_misc_coinbag06",
+    "quality": 0,
+    "pinTitle": "Item",
+    "pinFooterText": "Miscellaneous Item",
+    "pinBreadcrumb": [
+     "Miscellaneous",
+     "Miscellaneous Item"
+    ]
+   },
+   {
+    "type": 5,
+    "id": 84914,
+    "name": "Valorstones",
+    "typeName": "Quest",
+    "side": 3,
+    "pinTitle": "Quest",
+    "pinFooterText": "Level: 80",
+    "pinBreadcrumb": [
+     "War Within",
+     "The Ringing Deeps"
+    ]
+   },
+   {
+    "type": 5,
+    "id": 86363,
+    "name": "The Better Part of Valorstones",
+    "typeName": "Quest",
+    "side": 3,
+    "pinTitle": "Quest",
+    "pinFooterText": "Level: 80",
+    "pinDescription": "It's been many months since we arrived in Dornogal and there's still more to learn of Valorstones. It turns out they can be found beyond Azeroth! This discovery opens up entirely new avenues of research.\n\nWith new research comes a need for new supplies. Bring me some, and we'll help upgrade your gear to new heights.",
+    "pinBreadcrumb": [
+     "War Within",
+     "Upgrade System"
+    ]
+   },
+   {
+    "type": 10,
+    "id": 20488,
+    "name": "Valorstones earned",
+    "typeName": "Achievement",
+    "icon": "trade_engineering",
+    "pinTitle": "Achievement",
+    "pinFooterText": "Points: 0",
+    "pinBreadcrumb": [
+     "Character Achievements",
+     "Legacy"
+    ]
+   },
+   {
+    "type": 17,
+    "id": 3009,
+    "name": "Bonus Valorstones",
+    "typeName": "Currency",
+    "icon": "inv_valorstone_base",
+    "pinTitle": "Currency",
+    "pinDescription": "Bonus Valorstones are awarded when any player in your group increases their Mythic+ Rating.",
+    "pinBreadcrumb": [
+     "Hidden"
+    ]
+   },
+   {
+    "type": 5,
+    "id": 82445,
+    "name": "[DNT] Valorstones Reward",
+    "typeName": "Quest",
+    "side": 0,
+    "pinTitle": "Quest",
+    "pinFooterText": "Level: 80",
+    "pinBreadcrumb": [
+     "War Within",
+     "Hallowfall"
+    ]
+   },
+   {
+    "type": 5,
+    "id": 82392,
+    "name": "[DNT] Valorstones Reward",
+    "typeName": "Quest",
+    "side": 0,
+    "pinTitle": "Quest",
+    "pinFooterText": "Level: 80",
+    "pinBreadcrumb": [
+     "War Within",
+     "Hallowfall"
+    ]
+   },
+   {
+    "type": 5,
+    "id": 82378,
+    "name": "Valorstones",
+    "typeName": "Quest",
+    "side": 3,
+    "pinTitle": "Quest",
+    "pinFooterText": "Level: 80",
+    "pinBreadcrumb": [
+     "War Within",
+     "The Ringing Deeps"
+    ]
+   },
+   {
+    "type": 5,
+    "id": 82386,
+    "name": "[DNT] Valorstones Reward",
+    "typeName": "Quest",
+    "side": 0,
+    "pinTitle": "Quest",
+    "pinFooterText": "Level: 80",
+    "pinBreadcrumb": [
+     "War Within",
+     "Isle of Dorn"
+    ]
+   },
+   {
+    "type": 6,
+    "id": 458611,
+    "name": "Delver's Pouch of Valorstones",
+    "typeName": "Spell",
+    "icon": "trade_engineering",
+    "pinTitle": "Spell",
+    "pinDescription": "Open to gain 50 Valorstones. In the Uncategorized Spells category.",
+    "pinBreadcrumb": [
+     "Uncategorized"
+    ]
+   },
+   {
+    "type": 67,
+    "id": 682,
+    "name": "Obtain Valorstones",
+    "typeName": "Trading Post Activity",
+    "pinTitle": "Trading Post Activity"
+   }
+  ]
+ }
+}

@@ -1,0 +1,5 @@
+0.000 Initializing talents for Enemy 'Fluffy_Pillow'.
+0.000 Enemy 'Fluffy_Pillow' generic initial stats:  Str=0 Agi=0 parry_rating_peError: Initialization error: Player 'p': Hash 'CYEAAAAAAAAAAAAAAAAAAAAAAAAAAAAQz22MzsMMzAAAAAAwoMmhZGbDz2wMbzYMmZYGbsNMAAkZm2mZ2mBAsBYAwYGmBzYMbYZGMMmxgB': Node 81527 is not a choice node but has index selection.
+0.000 Initializing talents for Player 'p'.
+0.000 Player 'p' adding spec talent Wake of Ashes (node=81525 entry=102497 rank=1/1)
+0.000 Player 'p' adding spec talent Blade of Justice (node=81526 entry=102498 rank=1/1)

@@ -16,6 +16,9 @@ def _isolate_blizzard_env(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     # Isolate provider config discovery so doctor tests never read a real
     # ~/.config/warcraft/providers/blizzard-api.env or a repo-level .env.local on the dev machine.
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    # The client-credentials token cache lives under the state root; isolate it too so a token
+    # cached by a live run on the dev machine never leaks into offline expectations.
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("BLIZZARD_CLIENT_ID", raising=False)
     monkeypatch.delenv("BLIZZARD_CLIENT_SECRET", raising=False)
@@ -35,9 +38,9 @@ def test_doctor_reports_scaffold_auth_and_capabilities() -> None:
     payload = json.loads(result.stdout)
     assert payload["ok"] is True
     assert payload["provider"] == "blizzard-api"
-    assert payload["status"] == "partial"
-    assert payload["installed"] is True
-    auth = payload["auth"]
+    assert payload["data"]["status"] == "partial"
+    assert payload["data"]["installed"] is True
+    auth = payload["data"]["auth"]
     assert auth["required"] is True
     assert auth["flow"] == "oauth_client_credentials"
     assert auth["active_mode"] == "client_credentials"
@@ -49,21 +52,24 @@ def test_doctor_reports_scaffold_auth_and_capabilities() -> None:
     # The client-credentials token cache lives under a distinct provider key and is surfaced too.
     assert auth["token_cache_path"].endswith("providers/blizzard-api-client-credentials.json")
     assert auth["token_cache"]["has_access_token"] is False
-    capabilities = payload["capabilities"]
+    capabilities = payload["data"]["capabilities"]
     assert capabilities["doctor"] == "ready"
     assert capabilities["search"] == "coming_soon"
     assert capabilities["resolve"] == "coming_soon"
     assert capabilities["game_data"] == "ready"
     assert capabilities["profile"] == "ready"
-    region = payload["region"]
+    region = payload["data"]["region"]
     assert region["routing"] == "ready"
     assert region["configured"] is None
     assert region["default"] == "us"
     assert region["supported_regions"] == ["us", "eu", "kr", "tw", "cn"]
-    # Routing is honored but the concrete hosts/namespaces are pending one-time live confirmation.
-    assert region["verification"]["retail"] == "pending_live_confirmation"
-    assert "pending one-time live confirmation" in region["verification"]["note"]
-    assert payload["notes"]
+    # Routing is live-confirmed everywhere except CN, whose hosts are unreachable from outside China.
+    assert region["verification"]["retail"] == "live_confirmed"
+    assert region["verification"]["classic"] == "live_confirmed"
+    assert region["verification"]["verified_regions"] == ["eu", "kr", "tw", "us"]
+    assert region["verification"]["unverified_regions"] == ["cn"]
+    assert "CN routing" in region["verification"]["note"]
+    assert payload["data"]["notes"]
 
 
 def test_doctor_surfaces_configured_region(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -71,7 +77,7 @@ def test_doctor_surfaces_configured_region(monkeypatch: pytest.MonkeyPatch) -> N
     result = runner.invoke(app, ["doctor"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["region"]["configured"] == "eu"
+    assert payload["data"]["region"]["configured"] == "eu"
 
 
 def test_load_blizzard_auth_config_reads_env_local(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -133,7 +139,7 @@ def test_doctor_reads_region_from_provider_env_file(tmp_path) -> None:
     result = runner.invoke(app, ["doctor"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["region"]["configured"] == "kr"
+    assert payload["data"]["region"]["configured"] == "kr"
 
 
 def test_doctor_credential_source_is_environment_when_only_process_has_creds(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -146,6 +152,6 @@ def test_doctor_credential_source_is_environment_when_only_process_has_creds(tmp
     result = runner.invoke(app, ["doctor"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["auth"]["configured"] is True
-    assert payload["auth"]["credential_source"] == "environment"
-    assert payload["region"]["configured"] == "tw"
+    assert payload["data"]["auth"]["configured"] is True
+    assert payload["data"]["auth"]["credential_source"] == "environment"
+    assert payload["data"]["region"]["configured"] == "tw"

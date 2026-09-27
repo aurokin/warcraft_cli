@@ -49,6 +49,6 @@ def test_compare_gear_preset_omits_title_field_diff(monkeypatch) -> None:
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["preset"]["key"] == "gear"
-    assert set(payload["comparison"]["fields"]) == {"name", "quality", "icon"}
-    assert "title" not in payload["comparison"]["fields"]
+    assert payload["data"]["preset"]["key"] == "gear"
+    assert set(payload["data"]["comparison"]["fields"]) == {"name", "quality", "icon"}
+    assert "title" not in payload["data"]["comparison"]["fields"]

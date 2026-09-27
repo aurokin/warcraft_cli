@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from statistics import median
 from typing import Any
@@ -26,6 +27,46 @@ def _parse_boundary_timestamp(value: str, *, end_of_day: bool) -> datetime:
     return parsed
 
 
+@dataclass(frozen=True, slots=True)
+class _CommentFilters:
+    """Comment filter inputs resolved once (timestamps parsed, needles lowered) before scanning rows."""
+
+    boundary_from: datetime | None
+    boundary_to: datetime | None
+    min_replies: int | None
+    author_needle: str | None
+    keyword_needles: tuple[str, ...]
+
+
+def _has_enough_replies(row: dict[str, Any], min_replies: int | None) -> bool:
+    if min_replies is None:
+        return True
+    reply_count = row.get("nreplies")
+    return isinstance(reply_count, int) and reply_count >= min_replies
+
+
+def _matches_author(row: dict[str, Any], author_needle: str | None) -> bool:
+    return author_needle is None or author_needle in str(row.get("user") or "").lower()
+
+
+def _within_window(row: dict[str, Any], filters: _CommentFilters) -> bool:
+    if filters.boundary_from is None and filters.boundary_to is None:
+        return True
+    timestamp = _parse_comment_timestamp(row.get("date"))
+    if timestamp is None:
+        return False
+    if filters.boundary_from is not None and timestamp < filters.boundary_from:
+        return False
+    return not (filters.boundary_to is not None and timestamp > filters.boundary_to)
+
+
+def _matches_keywords(row: dict[str, Any], keyword_needles: tuple[str, ...]) -> bool:
+    if not keyword_needles:
+        return True
+    body = str(row.get("body") or "").lower()
+    return all(needle in body for needle in keyword_needles)
+
+
 def filter_raw_comments(
     comments: list[dict[str, Any]],
     *,
@@ -35,42 +76,27 @@ def filter_raw_comments(
     author: str | None = None,
     keywords: tuple[str, ...] = (),
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    boundary_from = _parse_boundary_timestamp(date_from, end_of_day=False) if date_from else None
-    boundary_to = _parse_boundary_timestamp(date_to, end_of_day=True) if date_to else None
-    author_needle = author.strip().lower() if isinstance(author, str) and author.strip() else None
-    keyword_needles = tuple(part.strip().lower() for part in keywords if part.strip())
-
-    filtered: list[dict[str, Any]] = []
-    for row in comments:
-        if min_replies is not None:
-            reply_count = row.get("nreplies")
-            if not isinstance(reply_count, int) or reply_count < min_replies:
-                continue
-
-        if author_needle is not None:
-            user = str(row.get("user") or "").lower()
-            if author_needle not in user:
-                continue
-
-        timestamp = _parse_comment_timestamp(row.get("date"))
-        if boundary_from is not None and (timestamp is None or timestamp < boundary_from):
-            continue
-        if boundary_to is not None and (timestamp is None or timestamp > boundary_to):
-            continue
-
-        if keyword_needles:
-            body = str(row.get("body") or "").lower()
-            if not all(needle in body for needle in keyword_needles):
-                continue
-
-        filtered.append(row)
-
+    filters = _CommentFilters(
+        boundary_from=_parse_boundary_timestamp(date_from, end_of_day=False) if date_from else None,
+        boundary_to=_parse_boundary_timestamp(date_to, end_of_day=True) if date_to else None,
+        min_replies=min_replies,
+        author_needle=author.strip().lower() if isinstance(author, str) and author.strip() else None,
+        keyword_needles=tuple(part.strip().lower() for part in keywords if part.strip()),
+    )
+    filtered = [
+        row
+        for row in comments
+        if _has_enough_replies(row, filters.min_replies)
+        and _matches_author(row, filters.author_needle)
+        and _within_window(row, filters)
+        and _matches_keywords(row, filters.keyword_needles)
+    ]
     return filtered, {
         "date_from": date_from,
         "date_to": date_to,
         "min_replies": min_replies,
         "author": author,
-        "keywords": list(keyword_needles),
+        "keywords": list(filters.keyword_needles),
     }
 
 

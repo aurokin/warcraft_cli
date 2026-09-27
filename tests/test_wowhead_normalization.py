@@ -36,7 +36,7 @@ def test_build_normalized_item_from_tooltip() -> None:
 
 def test_attach_entity_normalization_skips_non_items() -> None:
     payload = {"entity": {"type": "spell", "id": 1}}
-    assert "schema_version" not in attach_entity_normalization(payload, entity_type="spell")
+    assert "normalized" not in attach_entity_normalization(payload, entity_type="spell")
 
 
 def test_entity_command_emits_schema_version_for_items(monkeypatch) -> None:
@@ -51,14 +51,15 @@ def test_entity_command_emits_schema_version_for_items(monkeypatch) -> None:
             "inventoryType": 17,
         },
     )
-    monkeypatch.setattr("wowhead_cli.main._entity_page_needs_fetch", lambda **kwargs: False)
+    monkeypatch.setattr("wowhead_cli.main.entity_page_needs_fetch", lambda **kwargs: False)
 
     result = runner.invoke(app, ["entity", "item", "19019", "--no-include-comments"])
     assert result.exit_code == 0, result.output
     payload = json.loads(result.stdout)
-    assert payload["schema_version"] == ENTITY_PAYLOAD_SCHEMA_VERSION
-    assert payload["normalized"]["item"]["quality"]["value"] == 5
-    assert payload["tooltip"]["quality"] == 5
+    assert payload["schema_version"] == "1"
+    assert payload["data"]["normalized"]["schema_version"] == ENTITY_PAYLOAD_SCHEMA_VERSION
+    assert payload["data"]["normalized"]["item"]["quality"]["value"] == 5
+    assert payload["data"]["tooltip"]["quality"] == 5
 
 
 def test_entity_page_emits_page_backed_normalization(monkeypatch) -> None:
@@ -83,8 +84,9 @@ def test_entity_page_emits_page_backed_normalization(monkeypatch) -> None:
     result = runner.invoke(app, ["entity-page", "item", "19019", "--max-links", "1", "--no-include-gatherer"])
     assert result.exit_code == 0, result.output
     payload = json.loads(result.stdout)
-    assert payload["schema_version"] == ENTITY_PAGE_PAYLOAD_SCHEMA_VERSION
-    assert payload["normalized"]["item"]["name"]["provenance"]["source"] == "page"
+    assert payload["schema_version"] == "1"
+    assert payload["data"]["normalized"]["schema_version"] == ENTITY_PAGE_PAYLOAD_SCHEMA_VERSION
+    assert payload["data"]["normalized"]["item"]["name"]["provenance"]["source"] == "page"
 
 
 def test_cached_entity_payload_preserves_existing_normalization(monkeypatch) -> None:
@@ -92,8 +94,8 @@ def test_cached_entity_payload_preserves_existing_normalization(monkeypatch) -> 
         "expansion": "retail",
         "entity": {"type": "item", "id": 19019, "name": "Thunderfury"},
         "tooltip": {"quality": 5},
-        "schema_version": ENTITY_PAYLOAD_SCHEMA_VERSION,
         "normalized": {
+            "schema_version": ENTITY_PAYLOAD_SCHEMA_VERSION,
             "item": {
                 "page_title": {"value": "Page Title", "provenance": {"source": "page"}},
             }
@@ -112,7 +114,8 @@ def test_cached_entity_payload_preserves_existing_normalization(monkeypatch) -> 
     result = runner.invoke(app, ["entity", "item", "19019", "--no-include-comments"])
     assert result.exit_code == 0, result.output
     payload = json.loads(result.stdout)
-    assert payload["normalized"]["item"]["page_title"]["value"] == "Page Title"
+    assert payload["data"]["normalized"]["item"]["page_title"]["value"] == "Page Title"
+    assert payload["schema_version"] == "1"
 
 
 def test_attach_entity_page_normalization() -> None:
@@ -121,4 +124,4 @@ def test_attach_entity_page_normalization() -> None:
         entity_type="item",
         page={"title": "Foo"},
     )
-    assert payload["schema_version"] == ENTITY_PAGE_PAYLOAD_SCHEMA_VERSION
+    assert payload["normalized"]["schema_version"] == ENTITY_PAGE_PAYLOAD_SCHEMA_VERSION

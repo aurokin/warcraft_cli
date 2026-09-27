@@ -4,6 +4,8 @@ import json
 from unittest.mock import MagicMock
 
 from typer.testing import CliRunner
+from warcraft_core.envelope import REQUIRED_KEYS
+from wowhead_cli import main as main_module
 from wowhead_cli.main import app
 from wowhead_cli.wowhead_client import WowheadClient
 
@@ -48,8 +50,8 @@ def test_wowhead_search_stream_emits_jsonl_header_when_results_empty(monkeypatch
         lambda self, query: {"search": query, "results": []},
     )
     monkeypatch.setattr(
-        "wowhead_cli.main._normalize_search_results",
-        lambda results, *, query, expansion: results,
+        "wowhead_cli.provider.normalize_search_results",
+        lambda results, *, query, expansion, entity_types=(), rank_bonuses=None, literal=False: (results, 0),
     )
 
     result = runner.invoke(app, ["--stream", "search", "thunderfury", "--limit", "10"])
@@ -57,8 +59,8 @@ def test_wowhead_search_stream_emits_jsonl_header_when_results_empty(monkeypatch
     lines = [line for line in result.stdout.splitlines() if line.strip()]
     assert len(lines) == 1
     header = json.loads(lines[0])
-    assert header["stream"] == {"field": "results", "count": 0}
-    assert header["results"] == []
+    assert header["data"]["stream"] == {"field": "results", "count": 0}
+    assert header["data"]["results"] == []
 
 
 def test_wowhead_search_stream_emits_jsonl_header_and_records(monkeypatch) -> None:
@@ -73,8 +75,8 @@ def test_wowhead_search_stream_emits_jsonl_header_and_records(monkeypatch) -> No
         },
     )
     monkeypatch.setattr(
-        "wowhead_cli.main._normalize_search_results",
-        lambda results, *, query, expansion: results,
+        "wowhead_cli.provider.normalize_search_results",
+        lambda results, *, query, expansion, entity_types=(), rank_bonuses=None, literal=False: (results, 0),
     )
 
     result = runner.invoke(app, ["--stream", "search", "thunderfury", "--limit", "10"])
@@ -82,10 +84,26 @@ def test_wowhead_search_stream_emits_jsonl_header_and_records(monkeypatch) -> No
     lines = [line for line in result.stdout.splitlines() if line.strip()]
     assert len(lines) == 3
     header = json.loads(lines[0])
-    assert header["stream"] == {"field": "results", "count": 2}
-    assert header["results"] == []
+    assert set(header) == REQUIRED_KEYS
+    assert header["data"]["stream"] == {"field": "results", "count": 2}
+    assert header["data"]["results"] == []
     record = json.loads(lines[1])
     assert record["record"]["id"] == 1
+
+
+def test_wowhead_stream_refuses_a_malformed_envelope(monkeypatch) -> None:
+    """--stream writes JSONL itself, so it must apply the envelope check warcraft_core.cli.emit applies."""
+    monkeypatch.setattr(
+        "wowhead_cli.wowhead_client.WowheadClient.search_suggestions",
+        lambda self, query: {"search": query, "results": []},
+    )
+    wrap = main_module._with_envelope_keys
+    monkeypatch.setattr(main_module, "_with_envelope_keys", lambda ctx, payload: {**wrap(ctx, payload), "results": []})
+
+    result = runner.invoke(app, ["--stream", "search", "thunderfury"])
+    assert result.stdout == ""
+    assert isinstance(result.exception, TypeError)
+    assert "unexpected key: results" in str(result.exception)
 
 
 def test_wowhead_comments_hydration_uses_concurrency(monkeypatch) -> None:
@@ -121,5 +139,5 @@ def test_wowhead_comments_hydration_uses_concurrency(monkeypatch) -> None:
     )
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["counts"]["hydrated_reply_threads"] == 2
+    assert payload["data"]["counts"]["hydrated_reply_threads"] == 2
     assert call_count["n"] == 2

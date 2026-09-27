@@ -1,0 +1,166 @@
+{
+ "_capture": {
+  "source": "Warcraft Logs GraphQL api/v2 ReportTable (dataType Buffs, viewBy Source, abilityID 390386) for two windows + ReportMasterData (actorType Player)",
+  "report_code": "XFWydYHKJk9n1Rf4",
+  "fight_id": 40,
+  "windows_ms": {
+   "left": [
+    0,
+    60000
+   ],
+   "right": [
+    60000,
+    508203
+   ]
+  },
+  "captured": "2026-09-24",
+  "trimmed": "master data reduced to the one aura source and the aura; the report is private, so the player's name, GUID and server are replaced"
+ },
+ "fight": {
+  "id": 40,
+  "name": "Ula'tek",
+  "encounterID": 3492,
+  "difficulty": 5,
+  "kill": false,
+  "startTime": 15938938,
+  "endTime": 16447141
+ },
+ "left_table_report": {
+  "code": "XFWydYHKJk9n1Rf4",
+  "title": "The Venomous Abyss",
+  "endTime": 1790228252826,
+  "zone": {
+   "id": 53,
+   "name": "The Venomous Abyss"
+  },
+  "table": {
+   "data": {
+    "auras": [
+     {
+      "name": "Augvoker",
+      "id": 8,
+      "guid": 1,
+      "type": "Evoker",
+      "icon": "Evoker-Augmentation",
+      "totalUptime": 8054,
+      "totalUses": 1,
+      "bands": [
+       {
+        "startTime": 15938938,
+        "endTime": 15946992
+       }
+      ]
+     }
+    ],
+    "totalTime": 60000,
+    "useTargets": false,
+    "startTime": 15938938,
+    "endTime": 15998938,
+    "logVersion": 17,
+    "gameVersion": 1
+   }
+  }
+ },
+ "right_table_report": {
+  "code": "XFWydYHKJk9n1Rf4",
+  "title": "The Venomous Abyss",
+  "endTime": 1790228252826,
+  "zone": {
+   "id": 53,
+   "name": "The Venomous Abyss"
+  },
+  "table": {
+   "data": {
+    "auras": [
+     {
+      "name": "Augvoker",
+      "id": 8,
+      "guid": 1,
+      "type": "Evoker",
+      "icon": "Evoker-Augmentation",
+      "totalUptime": 59976,
+      "totalUses": 9,
+      "bands": [
+       {
+        "startTime": 16006484,
+        "endTime": 16009202
+       },
+       {
+        "startTime": 16009202,
+        "endTime": 16021481
+       },
+       {
+        "startTime": 16087490,
+        "endTime": 16089581
+       },
+       {
+        "startTime": 16089581,
+        "endTime": 16102480
+       },
+       {
+        "startTime": 16318566,
+        "endTime": 16320828
+       },
+       {
+        "startTime": 16320829,
+        "endTime": 16332900
+       },
+       {
+        "startTime": 16332900,
+        "endTime": 16333563
+       },
+       {
+        "startTime": 16400069,
+        "endTime": 16402633
+       },
+       {
+        "startTime": 16402633,
+        "endTime": 16415062
+       }
+      ]
+     }
+    ],
+    "totalTime": 448203,
+    "useTargets": false,
+    "startTime": 15998938,
+    "endTime": 16447141,
+    "logVersion": 17,
+    "gameVersion": 1
+   }
+  }
+ },
+ "master_report": {
+  "code": "XFWydYHKJk9n1Rf4",
+  "title": "The Venomous Abyss",
+  "endTime": 1790228252826,
+  "zone": {
+   "id": 53,
+   "name": "The Venomous Abyss"
+  },
+  "masterData": {
+   "logVersion": 17,
+   "gameVersion": 1,
+   "lang": "en",
+   "abilities": [
+    {
+     "gameID": 390386,
+     "icon": "ability_evoker_furyoftheaspects.jpg",
+     "name": "Fury of the Aspects",
+     "type": "64"
+    }
+   ],
+   "actors": [
+    {
+     "gameID": 1,
+     "icon": "Evoker-Augmentation",
+     "id": 8,
+     "name": "Augvoker",
+     "petOwner": null,
+     "server": "Realm",
+     "subType": "Evoker",
+     "type": "Player"
+    }
+   ]
+  }
+ }
+}

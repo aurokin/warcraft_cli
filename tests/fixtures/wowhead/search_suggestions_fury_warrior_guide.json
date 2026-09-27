@@ -1,0 +1,323 @@
+{
+ "search": "fury warrior guide",
+ "results": [
+  {
+   "type": 100,
+   "id": 3087,
+   "name": "Fury Warrior DPS Guide - Midnight",
+   "typeName": "Guide",
+   "pinImageUrl": "https://wow.zamimg.com/images/content/tall-headers/retail/categories/classes-warrior-fury.jpg?maxHeight=80",
+   "pinTitle": "Classes",
+   "pinFooterText": "Updated: 2026/08/20",
+   "pinDescription": "Master your character with the Fury Warrior WoW Midnight guide, learning how to become an outstanding player in PvE content.",
+   "popularity": 0
+  },
+  {
+   "type": 100,
+   "id": 3082,
+   "name": "Fury Warrior Rotation Guide - Midnight",
+   "typeName": "Guide",
+   "pinImageUrl": "https://wow.zamimg.com/images/content/tall-headers/retail/categories/classes-warrior-fury.jpg?maxHeight=80",
+   "pinTitle": "Classes",
+   "pinFooterText": "Updated: 2026/08/12",
+   "pinDescription": "Discover the optimal Fury Warrior PvE Rotation with our interactive rotation tool.",
+   "popularity": 1
+  },
+  {
+   "type": 100,
+   "id": 17733,
+   "name": "Fury Warrior Leveling Guide - Midnight",
+   "typeName": "Guide",
+   "pinImageUrl": "https://wow.zamimg.com/images/content/tall-headers/retail/categories/classes-warrior-fury.jpg?maxHeight=80",
+   "pinTitle": "Classes",
+   "pinFooterText": "Updated: 2026/08/12",
+   "pinDescription": "The best strategies and talent tree builds for quickly leveling your Fury Warrior.",
+   "popularity": 2
+  },
+  {
+   "type": 100,
+   "id": 7242,
+   "name": "Fury Warrior Mythic+ Guide - Midnight Season 2",
+   "typeName": "Guide",
+   "pinImageUrl": "https://wow.zamimg.com/images/content/tall-headers/retail/categories/classes-warrior-fury.jpg?maxHeight=80",
+   "pinTitle": "Classes",
+   "pinFooterText": "Updated: 2026/08/18",
+   "pinDescription": "This Mythic+ guide for Fury Warrior covers everything for Season 1 of Midnight, including the best talent builds and affix tips.",
+   "popularity": 3
+  },
+  {
+   "type": 100,
+   "id": 17726,
+   "name": "Fury Warrior Abilities and Talents Guide  - Midnight",
+   "typeName": "Guide",
+   "pinImageUrl": "https://wow.zamimg.com/images/content/tall-headers/retail/categories/classes-warrior-fury.jpg?maxHeight=80",
+   "pinTitle": "Classes",
+   "pinFooterText": "Updated: 2026/08/12",
+   "pinDescription": "Detailed information about every Fury Warrior ability and talent. Learn how each spell works and how they interact with your spec.",
+   "popularity": 4
+  },
+  {
+   "type": 100,
+   "id": 31608,
+   "name": "Legion Remix Fury Warrior Guide - The War Within 11.2.7",
+   "typeName": "Guide",
+   "pinImageUrl": "https://wow.zamimg.com/images/content/tall-headers/retail/categories/classes-warrior-fury.jpg?maxHeight=80",
+   "pinTitle": "Classes",
+   "pinFooterText": "Updated: 2026/01/18",
+   "pinDescription": "Everything you need to know for your Fury Warrior during Legion Remix. Learn more about the class to maximize your Timerunner potential to face Legion Dungeons and Raids.",
+   "popularity": 5
+  },
+  {
+   "type": 100,
+   "id": 14850,
+   "name": "Fury Warrior Mage Tower DPS Challenge Guide - Agatha - The War Within 11.2.7",
+   "typeName": "Guide",
+   "pinImageUrl": "https://wow.zamimg.com/images/content/tall-headers/retail/categories/classes-warrior-fury.jpg?maxHeight=80",
+   "pinTitle": "Classes",
+   "pinFooterText": "Updated: 2026/01/18",
+   "pinDescription": "Learn how to beat the Mage Tower DPS Challenge on your Fury Warrior with tips and tricks, best gear, talents, and strategies to defeat Agatha.",
+   "popularity": 6
+  },
+  {
+   "type": 100,
+   "id": 5196,
+   "name": "Fury Warrior DPS Starter Guide - Shadowlands 9.2.5",
+   "typeName": "Guide",
+   "pinImageUrl": "https://wow.zamimg.com/images/content/tall-headers/retail/categories/classes-warrior-fury.jpg?maxHeight=80",
+   "pinTitle": "Classes",
+   "pinFooterText": "Updated: 2022/11/28",
+   "pinDescription": "All the basics you need to know to get you started on your level 60 Fury Warrior. Talent suggestions, stat priority, covenant, legendary, and rotation advice. Updated for Dragonflight Patch 10.0",
+   "popularity": 7
+  },
+  {
+   "type": 100,
+   "id": 18470,
+   "name": "Fury Warrior PvP Guide - Dragonflight 10.2.7",
+   "typeName": "Guide",
+   "pinImageUrl": "https://wow.zamimg.com/images/content/tall-headers/retail/categories/classes-warrior-fury.jpg?maxHeight=80",
+   "pinTitle": "Classes",
+   "pinFooterText": "Updated: 2024/07/23",
+   "pinDescription": "Everything you need to know about Fury Warrior PvP in WoW Dragonflight 10.2.7, including talents and gear recommendations.",
+   "popularity": 8
+  },
+  {
+   "type": 100,
+   "id": 5118,
+   "name": "Fury Warrior Legion Mage Tower Legacy Challenge Guide",
+   "typeName": "Guide",
+   "pinImageUrl": "https://wow.zamimg.com/images/content/tall-headers/retail/categories/expansion-content-artifact-weapons.jpg?maxHeight=80",
+   "pinTitle": "Legion - Artifact Weapons",
+   "pinFooterText": "Updated: 2021/12/06",
+   "pinDescription": "Learn how to defeat the Mage Tower Challenge An Impossible Foe, and unlock the Fury artifact appearance, Heyla's Scorn.",
+   "popularity": 9
+  }
+ ],
+ "categories": {
+  "decor": [],
+  "guides": [
+   {
+    "type": 100,
+    "id": 3087,
+    "name": "Fury Warrior DPS Guide - Midnight",
+    "typeName": "Guide",
+    "pinImageUrl": "https://wow.zamimg.com/images/content/tall-headers/retail/categories/classes-warrior-fury.jpg?maxHeight=80",
+    "pinTitle": "Classes",
+    "pinFooterText": "Updated: 2026/08/20",
+    "pinDescription": "Master your character with the Fury Warrior WoW Midnight guide, learning how to become an outstanding player in PvE content."
+   },
+   {
+    "type": 100,
+    "id": 3082,
+    "name": "Fury Warrior Rotation Guide - Midnight",
+    "typeName": "Guide",
+    "pinImageUrl": "https://wow.zamimg.com/images/content/tall-headers/retail/categories/classes-warrior-fury.jpg?maxHeight=80",
+    "pinTitle": "Classes",
+    "pinFooterText": "Updated: 2026/08/12",
+    "pinDescription": "Discover the optimal Fury Warrior PvE Rotation with our interactive rotation tool."
+   },
+   {
+    "type": 100,
+    "id": 17733,
+    "name": "Fury Warrior Leveling Guide - Midnight",
+    "typeName": "Guide",
+    "pinImageUrl": "https://wow.zamimg.com/images/content/tall-headers/retail/categories/classes-warrior-fury.jpg?maxHeight=80",
+    "pinTitle": "Classes",
+    "pinFooterText": "Updated: 2026/08/12",
+    "pinDescription": "The best strategies and talent tree builds for quickly leveling your Fury Warrior."
+   },
+   {
+    "type": 100,
+    "id": 7242,
+    "name": "Fury Warrior Mythic+ Guide - Midnight Season 2",
+    "typeName": "Guide",
+    "pinImageUrl": "https://wow.zamimg.com/images/content/tall-headers/retail/categories/classes-warrior-fury.jpg?maxHeight=80",
+    "pinTitle": "Classes",
+    "pinFooterText": "Updated: 2026/08/18",
+    "pinDescription": "This Mythic+ guide for Fury Warrior covers everything for Season 1 of Midnight, including the best talent builds and affix tips."
+   },
+   {
+    "type": 100,
+    "id": 17726,
+    "name": "Fury Warrior Abilities and Talents Guide  - Midnight",
+    "typeName": "Guide",
+    "pinImageUrl": "https://wow.zamimg.com/images/content/tall-headers/retail/categories/classes-warrior-fury.jpg?maxHeight=80",
+    "pinTitle": "Classes",
+    "pinFooterText": "Updated: 2026/08/12",
+    "pinDescription": "Detailed information about every Fury Warrior ability and talent. Learn how each spell works and how they interact with your spec."
+   },
+   {
+    "type": 100,
+    "id": 33101,
+    "name": "Fury Warrior DPS Basics - Starter Guide for Midnight",
+    "typeName": "Guide",
+    "pinImageUrl": "https://wow.zamimg.com/images/content/tall-headers/retail/categories/classes-warrior-fury.jpg?maxHeight=80",
+    "pinTitle": "Classes",
+    "pinFooterText": "Updated: 2026/08/12",
+    "pinDescription": "All the basics you need to know to get you started on your level 90 Fury Warrior. Talent suggestions, stat priority, and rotation advice."
+   },
+   {
+    "type": 100,
+    "id": 31608,
+    "name": "Legion Remix Fury Warrior Guide - The War Within 11.2.7",
+    "typeName": "Guide",
+    "pinImageUrl": "https://wow.zamimg.com/images/content/tall-headers/retail/categories/classes-warrior-fury.jpg?maxHeight=80",
+    "pinTitle": "Classes",
+    "pinFooterText": "Updated: 2026/01/18",
+    "pinDescription": "Everything you need to know for your Fury Warrior during Legion Remix. Learn more about the class to maximize your Timerunner potential to face Legion Dungeons and Raids."
+   },
+   {
+    "type": 100,
+    "id": 14850,
+    "name": "Fury Warrior Mage Tower DPS Challenge Guide - Agatha - The War Within 11.2.7",
+    "typeName": "Guide",
+    "pinImageUrl": "https://wow.zamimg.com/images/content/tall-headers/retail/categories/classes-warrior-fury.jpg?maxHeight=80",
+    "pinTitle": "Classes",
+    "pinFooterText": "Updated: 2026/01/18",
+    "pinDescription": "Learn how to beat the Mage Tower DPS Challenge on your Fury Warrior with tips and tricks, best gear, talents, and strategies to defeat Agatha."
+   },
+   {
+    "type": 100,
+    "id": 5196,
+    "name": "Fury Warrior DPS Starter Guide - Shadowlands 9.2.5",
+    "typeName": "Guide",
+    "pinImageUrl": "https://wow.zamimg.com/images/content/tall-headers/retail/categories/classes-warrior-fury.jpg?maxHeight=80",
+    "pinTitle": "Classes",
+    "pinFooterText": "Updated: 2022/11/28",
+    "pinDescription": "All the basics you need to know to get you started on your level 60 Fury Warrior. Talent suggestions, stat priority, covenant, legendary, and rotation advice. Updated for Dragonflight Patch 10.0"
+   },
+   {
+    "type": 100,
+    "id": 18470,
+    "name": "Fury Warrior PvP Guide - Dragonflight 10.2.7",
+    "typeName": "Guide",
+    "pinImageUrl": "https://wow.zamimg.com/images/content/tall-headers/retail/categories/classes-warrior-fury.jpg?maxHeight=80",
+    "pinTitle": "Classes",
+    "pinFooterText": "Updated: 2024/07/23",
+    "pinDescription": "Everything you need to know about Fury Warrior PvP in WoW Dragonflight 10.2.7, including talents and gear recommendations."
+   },
+   {
+    "type": 100,
+    "id": 5118,
+    "name": "Fury Warrior Legion Mage Tower Legacy Challenge Guide",
+    "typeName": "Guide",
+    "pinImageUrl": "https://wow.zamimg.com/images/content/tall-headers/retail/categories/expansion-content-artifact-weapons.jpg?maxHeight=80",
+    "pinTitle": "Legion - Artifact Weapons",
+    "pinFooterText": "Updated: 2021/12/06",
+    "pinDescription": "Learn how to defeat the Mage Tower Challenge An Impossible Foe, and unlock the Fury artifact appearance, Heyla's Scorn."
+   },
+   {
+    "type": 100,
+    "id": 10953,
+    "name": "Fury Warrior Shadowlands Leveling Guide & Best Leveling Talent Build 1-60",
+    "typeName": "Guide",
+    "pinImageUrl": "https://wow.zamimg.com/images/content/tall-headers/retail/categories/leveling.jpg?maxHeight=80",
+    "pinTitle": "Leveling",
+    "pinFooterText": "Updated: 2020/10/10",
+    "pinDescription": "Leveling guide for new Warriors looking to specialize themselves in the Fury specialization, covering basic rotations, abilities, talent builds, and tips and tricks while leveling from 1-60."
+   },
+   {
+    "type": 100,
+    "id": 11559,
+    "name": "Venthyr Covenant & Best Soulbinds for Fury Warrior Guide - Shadowlands 9.2.5",
+    "typeName": "Guide",
+    "pinImageUrl": "https://wow.zamimg.com/images/content/tall-headers/retail/categories/classes-warrior-fury.jpg?maxHeight=80",
+    "pinTitle": "Classes",
+    "pinFooterText": "Updated: 2022/11/28",
+    "pinDescription": "Learn everything you need to know for your Venthyr Fury Warrior in Dragonflight. Best Soulbinds, Conduits, Talent Changes, Rotation, and more. Always updated for Dragonflight"
+   },
+   {
+    "type": 100,
+    "id": 7529,
+    "name": "Herald of the Titans Fury Warrior Gearing Guide",
+    "typeName": "Guide",
+    "pinImageUrl": "https://wow.zamimg.com/images/content/tall-headers/retail/categories/achievements.jpg?maxHeight=80",
+    "pinTitle": "Achievements",
+    "pinFooterText": "Updated: 2025/07/05",
+    "pinDescription": "This guide will cover the best gear, consumables, talents, and stat priorities for Fury Warriors looking to gear up for Herald of the Titans."
+   },
+   {
+    "type": 100,
+    "id": 9417,
+    "name": "Fury Warrior Corruption Guide - Shadowlands 9.0.1 Shadowlands 9.0.2",
+    "typeName": "Guide",
+    "pinImageUrl": "https://wow.zamimg.com/images/content/tall-headers/retail/categories/classes-warrior-fury.jpg?maxHeight=80",
+    "pinTitle": "Classes",
+    "pinFooterText": "Updated: 2020/06/29",
+    "pinDescription": "Everything you need to know about Corrupted items and which corruptions to prioritize on your Fury Warrior. Updated for Season 4 of Shadowlands."
+   },
+   {
+    "type": 100,
+    "id": 20016,
+    "name": "Dragonflight Season 2 Fury Warrior Guide",
+    "typeName": "Guide",
+    "pinImageUrl": "https://wow.zamimg.com/images/content/tall-headers/retail/categories/classes-warrior-fury.jpg?maxHeight=80",
+    "pinTitle": "Classes",
+    "pinFooterText": "Updated: 2024/07/23",
+    "pinDescription": "Everything you need to know for your Fury Warrior in Dragonflight Season 2. Be ready for the second Season of Dragonflight with information about the best talent builds and gear from M+ Dungeons and Aberrus raid."
+   },
+   {
+    "type": 100,
+    "id": 24857,
+    "name": "Fury Warrior Leveling Guide - Remix: Mists of Pandaria - The War Within 11.0.2",
+    "typeName": "Guide",
+    "pinImageUrl": "https://wow.zamimg.com/images/content/tall-headers/retail/categories/classes-warrior-fury.jpg?maxHeight=80",
+    "pinTitle": "Classes",
+    "pinFooterText": "Updated: 2024/08/22",
+    "pinDescription": "The best strategies and talent tree builds for quickly leveling your Fury Warrior during Remix: Mists of Pandaria."
+   },
+   {
+    "type": 100,
+    "id": 11553,
+    "name": "Kyrian Covenant & Best Soulbinds for Fury Warrior Guide - Shadowlands 9.2.5",
+    "typeName": "Guide",
+    "pinImageUrl": "https://wow.zamimg.com/images/content/tall-headers/retail/categories/classes-warrior-fury.jpg?maxHeight=80",
+    "pinTitle": "Classes",
+    "pinFooterText": "Updated: 2022/11/28",
+    "pinDescription": "Learn everything you need to know for your Kyrian Fury Warrior in Dragonflight. Best Soulbinds, Conduits, Talent Changes, Rotation, and more. Always updated for Dragonflight"
+   },
+   {
+    "type": 100,
+    "id": 22148,
+    "name": "Dragonflight Season 3 Fury Warrior Guide",
+    "typeName": "Guide",
+    "pinImageUrl": "https://wow.zamimg.com/images/content/tall-headers/retail/categories/classes-warrior-fury.jpg?maxHeight=80",
+    "pinTitle": "Classes",
+    "pinFooterText": "Updated: 2024/07/23",
+    "pinDescription": "Everything you need to know for your Fury Warrior in Dragonflight Season 3. Be ready for the third Season of Dragonflight with information about the best talent builds and gear from M+ Dungeons and Amirdrassil raid."
+   },
+   {
+    "type": 100,
+    "id": 24851,
+    "name": "Fury Warrior Remix: Mists of Pandaria Guide - The War Within 11.0.2",
+    "typeName": "Guide",
+    "pinImageUrl": "https://wow.zamimg.com/images/content/tall-headers/retail/categories/classes-warrior-fury.jpg?maxHeight=80",
+    "pinTitle": "Classes",
+    "pinFooterText": "Updated: 2024/08/22",
+    "pinDescription": "Everything you need to know for your Fury Warrior during Remix: Mists of Pandaria. Learn more about the class to maximize your Timerunner potential to face Pandaria Dungeons and Raids."
+   }
+  ],
+  "news": [],
+  "tools": [],
+  "database": []
+ }
+}

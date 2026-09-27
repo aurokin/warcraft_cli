@@ -1,0 +1,716 @@
+{
+ "_capture": {
+  "source": "Warcraft Logs GraphQL api/v2 ReportEvents (dataType Casts) + ReportMasterData",
+  "report_code": "DZzR9jwYmQA6tbV7",
+  "fight_id": 4,
+  "guild": "Liquid (us/illidan), public guild report",
+  "captured": "2026-09-18",
+  "trimmed": "events limited to a 20s window and 40 rows; master data reduced to the actors and abilities those rows reference"
+ },
+ "report": {
+  "code": "DZzR9jwYmQA6tbV7",
+  "title": "spores",
+  "endTime": 1781643317240,
+  "zone": {
+   "id": 50,
+   "name": "Sporefall"
+  }
+ },
+ "fight": {
+  "id": 4,
+  "name": "Rotmire",
+  "encounterID": 3159,
+  "difficulty": 5,
+  "kill": true,
+  "completeRaid": false,
+  "startTime": 212711,
+  "endTime": 603699,
+  "fightPercentage": 0.01,
+  "bossPercentage": 0.01,
+  "averageItemLevel": 284.5909118652344,
+  "size": 22
+ },
+ "events_report": {
+  "code": "DZzR9jwYmQA6tbV7",
+  "title": "spores",
+  "endTime": 1781643317240,
+  "zone": {
+   "id": 50,
+   "name": "Sporefall"
+  },
+  "events": {
+   "data": [
+    {
+     "timestamp": 212742,
+     "type": "cast",
+     "sourceID": 15,
+     "targetID": -1,
+     "abilityGameID": 1223412,
+     "fight": 4,
+     "fake": true
+    },
+    {
+     "timestamp": 212743,
+     "type": "cast",
+     "sourceID": 36,
+     "targetID": 23,
+     "abilityGameID": 473662,
+     "fight": 4
+    },
+    {
+     "timestamp": 212743,
+     "type": "begincast",
+     "sourceID": 36,
+     "targetID": -1,
+     "abilityGameID": 473662,
+     "fight": 4
+    },
+    {
+     "timestamp": 212778,
+     "type": "cast",
+     "sourceID": 89,
+     "targetID": 23,
+     "abilityGameID": 116,
+     "fight": 4
+    },
+    {
+     "timestamp": 212796,
+     "type": "cast",
+     "sourceID": 48,
+     "targetID": 23,
+     "abilityGameID": 217200,
+     "fight": 4
+    },
+    {
+     "timestamp": 212930,
+     "type": "cast",
+     "sourceID": 9,
+     "targetID": 23,
+     "abilityGameID": 116,
+     "fight": 4
+    },
+    {
+     "timestamp": 212930,
+     "type": "cast",
+     "sourceID": 16,
+     "targetID": 23,
+     "abilityGameID": 355,
+     "fight": 4
+    },
+    {
+     "timestamp": 212930,
+     "type": "cast",
+     "sourceID": 5,
+     "targetID": 23,
+     "abilityGameID": 77575,
+     "fight": 4
+    },
+    {
+     "timestamp": 212941,
+     "type": "cast",
+     "sourceID": 44,
+     "targetID": -1,
+     "abilityGameID": 322118,
+     "fight": 4
+    },
+    {
+     "timestamp": 212971,
+     "type": "cast",
+     "sourceID": 9,
+     "targetID": -1,
+     "abilityGameID": 80353,
+     "fight": 4
+    },
+    {
+     "timestamp": 212971,
+     "type": "cast",
+     "sourceID": 9,
+     "targetID": -1,
+     "abilityGameID": 1236994,
+     "fight": 4
+    },
+    {
+     "timestamp": 212979,
+     "type": "cast",
+     "sourceID": 36,
+     "targetID": -1,
+     "abilityGameID": 1223412,
+     "fight": 4,
+     "fake": true
+    },
+    {
+     "timestamp": 212979,
+     "type": "cast",
+     "sourceID": 36,
+     "targetID": -1,
+     "abilityGameID": 1223412,
+     "fight": 4,
+     "fake": true
+    },
+    {
+     "timestamp": 212979,
+     "type": "cast",
+     "sourceID": 89,
+     "targetID": -1,
+     "abilityGameID": 80353,
+     "fight": 4
+    },
+    {
+     "timestamp": 212997,
+     "type": "cast",
+     "sourceID": 15,
+     "targetID": -1,
+     "abilityGameID": 1223412,
+     "fight": 4,
+     "fake": true
+    },
+    {
+     "timestamp": 213008,
+     "type": "cast",
+     "sourceID": 15,
+     "targetID": 23,
+     "abilityGameID": 473662,
+     "fight": 4
+    },
+    {
+     "timestamp": 213008,
+     "type": "begincast",
+     "sourceID": 15,
+     "targetID": -1,
+     "abilityGameID": 473662,
+     "fight": 4
+    },
+    {
+     "timestamp": 213008,
+     "type": "cast",
+     "sourceID": 19,
+     "targetID": -1,
+     "abilityGameID": 191634,
+     "fight": 4
+    },
+    {
+     "timestamp": 213010,
+     "type": "cast",
+     "sourceID": 26,
+     "targetID": 23,
+     "abilityGameID": 264178,
+     "fight": 4
+    },
+    {
+     "timestamp": 213010,
+     "type": "begincast",
+     "sourceID": 26,
+     "targetID": -1,
+     "abilityGameID": 104316,
+     "fight": 4
+    },
+    {
+     "timestamp": 213010,
+     "type": "cast",
+     "sourceID": 26,
+     "targetID": 23,
+     "abilityGameID": 104316,
+     "fight": 4
+    },
+    {
+     "timestamp": 213029,
+     "type": "cast",
+     "sourceID": 21,
+     "targetID": 21,
+     "abilityGameID": 33763,
+     "fight": 4
+    },
+    {
+     "timestamp": 213099,
+     "type": "cast",
+     "sourceID": 61,
+     "targetID": 23,
+     "abilityGameID": 361469,
+     "fight": 4
+    },
+    {
+     "timestamp": 213130,
+     "type": "cast",
+     "sourceID": 61,
+     "targetID": -1,
+     "abilityGameID": 390386,
+     "fight": 4
+    },
+    {
+     "timestamp": 213143,
+     "type": "cast",
+     "sourceID": 68,
+     "targetID": 23,
+     "abilityGameID": 100,
+     "fight": 4
+    },
+    {
+     "timestamp": 213151,
+     "type": "cast",
+     "sourceID": 9,
+     "targetID": -1,
+     "abilityGameID": 1260459,
+     "fight": 4
+    },
+    {
+     "timestamp": 213159,
+     "type": "cast",
+     "sourceID": 36,
+     "targetID": -1,
+     "abilityGameID": 1223412,
+     "fight": 4,
+     "fake": true
+    },
+    {
+     "timestamp": 213211,
+     "type": "cast",
+     "sourceID": 69,
+     "targetID": 23,
+     "abilityGameID": 47568,
+     "fight": 4
+    },
+    {
+     "timestamp": 213237,
+     "type": "cast",
+     "sourceID": 89,
+     "targetID": -1,
+     "abilityGameID": 1236616,
+     "fight": 4
+    },
+    {
+     "timestamp": 213237,
+     "type": "cast",
+     "sourceID": 89,
+     "targetID": -1,
+     "abilityGameID": 1260459,
+     "fight": 4
+    },
+    {
+     "timestamp": 213237,
+     "type": "cast",
+     "sourceID": 89,
+     "targetID": 23,
+     "abilityGameID": 205021,
+     "fight": 4
+    },
+    {
+     "timestamp": 213237,
+     "type": "cast",
+     "sourceID": 20,
+     "targetID": 23,
+     "abilityGameID": 264178,
+     "fight": 4
+    },
+    {
+     "timestamp": 213267,
+     "type": "cast",
+     "sourceID": 15,
+     "targetID": -1,
+     "abilityGameID": 1223412,
+     "fight": 4,
+     "fake": true
+    },
+    {
+     "timestamp": 213267,
+     "type": "cast",
+     "sourceID": 15,
+     "targetID": -1,
+     "abilityGameID": 1223412,
+     "fight": 4,
+     "fake": true
+    },
+    {
+     "timestamp": 213275,
+     "type": "cast",
+     "sourceID": 19,
+     "targetID": 23,
+     "abilityGameID": 114050,
+     "fight": 4
+    },
+    {
+     "timestamp": 213275,
+     "type": "cast",
+     "sourceID": 19,
+     "targetID": -1,
+     "abilityGameID": 33697,
+     "fight": 4
+    },
+    {
+     "timestamp": 213306,
+     "type": "cast",
+     "sourceID": 16,
+     "targetID": -1,
+     "abilityGameID": 107574,
+     "fight": 4
+    },
+    {
+     "timestamp": 213335,
+     "type": "begincast",
+     "sourceID": 20,
+     "targetID": -1,
+     "abilityGameID": 104316,
+     "fight": 4
+    },
+    {
+     "timestamp": 213335,
+     "type": "cast",
+     "sourceID": 20,
+     "targetID": 23,
+     "abilityGameID": 104316,
+     "fight": 4
+    },
+    {
+     "timestamp": 213336,
+     "type": "cast",
+     "sourceID": 84,
+     "targetID": -1,
+     "abilityGameID": 395152,
+     "fight": 4
+    }
+   ],
+   "nextPageTimestamp": 213337
+  }
+ },
+ "master_report": {
+  "code": "DZzR9jwYmQA6tbV7",
+  "title": "spores",
+  "endTime": 1781643317240,
+  "zone": {
+   "id": 50,
+   "name": "Sporefall"
+  },
+  "masterData": {
+   "logVersion": 17,
+   "gameVersion": 1,
+   "lang": "en",
+   "abilities": [
+    {
+     "gameID": 80353,
+     "icon": "ability_mage_timewarp.jpg",
+     "name": "Time Warp",
+     "type": "64"
+    },
+    {
+     "gameID": 104316,
+     "icon": "spell_warlock_calldreadstalkers.jpg",
+     "name": "Call Dreadstalkers",
+     "type": "32"
+    },
+    {
+     "gameID": 191634,
+     "icon": "ability_thunderking_lightningwhip.jpg",
+     "name": "Stormkeeper",
+     "type": "8"
+    },
+    {
+     "gameID": 264178,
+     "icon": "inv__demonbolt.jpg",
+     "name": "Demonbolt",
+     "type": "36"
+    },
+    {
+     "gameID": 473662,
+     "icon": "inv_12_dh_void_ability_consume.jpg",
+     "name": "Consume",
+     "type": "106"
+    },
+    {
+     "gameID": 217200,
+     "icon": "ability_hunter_barbedshot.jpg",
+     "name": "Barbed Shot",
+     "type": "1"
+    },
+    {
+     "gameID": 1223412,
+     "icon": "spell_shadow_soulgem.jpg",
+     "name": "Soul Fragment",
+     "type": "1"
+    },
+    {
+     "gameID": 116,
+     "icon": "spell_frost_frostbolt02.jpg",
+     "name": "Frostbolt",
+     "type": "16"
+    },
+    {
+     "gameID": 33763,
+     "icon": "inv_misc_herb_felblossom.jpg",
+     "name": "Lifebloom",
+     "type": "8"
+    },
+    {
+     "gameID": 47568,
+     "icon": "inv_sword_62.jpg",
+     "name": "Empower Rune Weapon",
+     "type": "48"
+    },
+    {
+     "gameID": 77575,
+     "icon": "spell_deathvortex.jpg",
+     "name": "Outbreak",
+     "type": "32"
+    },
+    {
+     "gameID": 107574,
+     "icon": "warrior_talent_icon_avatar.jpg",
+     "name": "Avatar",
+     "type": "1"
+    },
+    {
+     "gameID": 395152,
+     "icon": "spell_sarkareth.jpg",
+     "name": "Ebon Might",
+     "type": "12"
+    },
+    {
+     "gameID": 355,
+     "icon": "spell_nature_reincarnation.jpg",
+     "name": "Taunt",
+     "type": "1"
+    },
+    {
+     "gameID": 322118,
+     "icon": "ability_monk_dragonkick.jpg",
+     "name": "Invoke Yu'lon, the Jade Serpent",
+     "type": "8"
+    },
+    {
+     "gameID": 1236994,
+     "icon": "inv_12_profession_alchemy_voidpotion_red.jpg",
+     "name": "Potion of Recklessness",
+     "type": "32"
+    },
+    {
+     "gameID": 361469,
+     "icon": "ability_evoker_livingflame.jpg",
+     "name": "Living Flame",
+     "type": "4"
+    },
+    {
+     "gameID": 390386,
+     "icon": "ability_evoker_furyoftheaspects.jpg",
+     "name": "Fury of the Aspects",
+     "type": "64"
+    },
+    {
+     "gameID": 100,
+     "icon": "ability_warrior_charge.jpg",
+     "name": "Charge",
+     "type": "1"
+    },
+    {
+     "gameID": 1260459,
+     "icon": "inv_12_trinket_raid_voidspire_int1_voiddragoneye.jpg",
+     "name": "Nullsight",
+     "type": "1"
+    },
+    {
+     "gameID": 1236616,
+     "icon": "inv_12_profession_alchemy_lightpotion_yellow.jpg",
+     "name": "Light's Potential",
+     "type": "1"
+    },
+    {
+     "gameID": 205021,
+     "icon": "ability_mage_rayoffrost.jpg",
+     "name": "Ray of Frost",
+     "type": "16"
+    },
+    {
+     "gameID": 114050,
+     "icon": "8026697.jpg",
+     "name": "Ascendance",
+     "type": "4"
+    },
+    {
+     "gameID": 33697,
+     "icon": "racial_orc_berserkerstrength.jpg",
+     "name": "Blood Fury",
+     "type": "1"
+    }
+   ],
+   "actors": [
+    {
+     "gameID": 0,
+     "icon": "Boss",
+     "id": -1,
+     "name": "Environment",
+     "petOwner": null,
+     "server": null,
+     "subType": "Boss",
+     "type": "NPC"
+    },
+    {
+     "gameID": 236573435,
+     "icon": "DeathKnight-Unholy",
+     "id": 5,
+     "name": "Zebradisco",
+     "petOwner": null,
+     "server": "Illidan",
+     "subType": "DeathKnight",
+     "type": "Player"
+    },
+    {
+     "gameID": 234383932,
+     "icon": "Mage-Frost",
+     "id": 9,
+     "name": "Humblefulx",
+     "petOwner": null,
+     "server": "Illidan",
+     "subType": "Mage",
+     "type": "Player"
+    },
+    {
+     "gameID": 231865101,
+     "icon": "DemonHunter-Devourer",
+     "id": 15,
+     "name": "Peepiceek",
+     "petOwner": null,
+     "server": "Illidan",
+     "subType": "DemonHunter",
+     "type": "Player"
+    },
+    {
+     "gameID": 236378674,
+     "icon": "Warrior-Protection",
+     "id": 16,
+     "name": "Splittheg",
+     "petOwner": null,
+     "server": "Sentinels",
+     "subType": "Warrior",
+     "type": "Player"
+    },
+    {
+     "gameID": 225397889,
+     "icon": "Shaman-Elemental",
+     "id": 19,
+     "name": "Impechothand",
+     "petOwner": null,
+     "server": "Illidan",
+     "subType": "Shaman",
+     "type": "Player"
+    },
+    {
+     "gameID": 231810846,
+     "icon": "Warlock-Demonology",
+     "id": 20,
+     "name": "Drenacoskibi",
+     "petOwner": null,
+     "server": "Illidan",
+     "subType": "Warlock",
+     "type": "Player"
+    },
+    {
+     "gameID": 231864792,
+     "icon": "Druid-Restoration",
+     "id": 21,
+     "name": "Nicksdruid",
+     "petOwner": null,
+     "server": "Illidan",
+     "subType": "Druid",
+     "type": "Player"
+    },
+    {
+     "gameID": 238693,
+     "icon": "custom-icon-ability_creature_poison_06.jpg",
+     "id": 23,
+     "name": "Rotmire",
+     "petOwner": null,
+     "server": null,
+     "subType": "Boss",
+     "type": "NPC"
+    },
+    {
+     "gameID": 231816655,
+     "icon": "Warlock-Demonology",
+     "id": 26,
+     "name": "Splatsix",
+     "petOwner": null,
+     "server": "Sentinels",
+     "subType": "Warlock",
+     "type": "Player"
+    },
+    {
+     "gameID": 239303327,
+     "icon": "DemonHunter-Devourer",
+     "id": 36,
+     "name": "Qrypticzz",
+     "petOwner": null,
+     "server": "Mal'Ganis",
+     "subType": "DemonHunter",
+     "type": "Player"
+    },
+    {
+     "gameID": 234382080,
+     "icon": "Monk-Mistweaver",
+     "id": 44,
+     "name": "Boomboomboom",
+     "petOwner": null,
+     "server": "Illidan",
+     "subType": "Monk",
+     "type": "Player"
+    },
+    {
+     "gameID": 226703824,
+     "icon": "Hunter-BeastMastery",
+     "id": 48,
+     "name": "Mallaark",
+     "petOwner": null,
+     "server": "Illidan",
+     "subType": "Hunter",
+     "type": "Player"
+    },
+    {
+     "gameID": 231431775,
+     "icon": "Evoker",
+     "id": 61,
+     "name": "Staravia",
+     "petOwner": null,
+     "server": "Illidan",
+     "subType": "Evoker",
+     "type": "Player"
+    },
+    {
+     "gameID": 236153159,
+     "icon": "Warrior-Fury",
+     "id": 68,
+     "name": "Wallifeboss",
+     "petOwner": null,
+     "server": "Illidan",
+     "subType": "Warrior",
+     "type": "Player"
+    },
+    {
+     "gameID": 233628604,
+     "icon": "DeathKnight-Frost",
+     "id": 69,
+     "name": "Ashinedk",
+     "petOwner": null,
+     "server": "Illidan",
+     "subType": "DeathKnight",
+     "type": "Player"
+    },
+    {
+     "gameID": 232010179,
+     "icon": "Evoker-Augmentation",
+     "id": 84,
+     "name": "Gooptrippin",
+     "petOwner": null,
+     "server": "Illidan",
+     "subType": "Evoker",
+     "type": "Player"
+    },
+    {
+     "gameID": 226416979,
+     "icon": "Mage-Frost",
+     "id": 89,
+     "name": "Infiammato",
+     "petOwner": null,
+     "server": "Illidan",
+     "subType": "Mage",
+     "type": "Player"
+    }
+   ]
+  }
+ }
+}

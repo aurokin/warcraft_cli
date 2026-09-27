@@ -1,0 +1,361 @@
+from __future__ import annotations
+
+import json
+import re
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Annotated, Any
+
+import httpx
+import pytest
+import typer
+from typer.testing import CliRunner
+from warcraft_core.cli import RuntimeConfig, cfg, cfg_as, command_path, configure, emit, fail, guarded_run, install_common_callback
+from warcraft_core.envelope import ENVELOPE_KEYS, error_envelope, success_envelope
+from warcraft_core.provider import ProviderError
+
+runner = CliRunner()
+
+
+def build_app() -> typer.Typer:
+    app = typer.Typer(add_completion=False)
+    install_common_callback(app, provider="dummy")
+
+    @app.command("show")
+    def show(ctx: typer.Context) -> None:
+        emit(ctx, success_envelope(provider="dummy", command="show", kind="show", query="shown", data={"a": {"b": 1}, "long": "word " * 80}))
+
+    @app.command("refuse")
+    def refuse(ctx: typer.Context) -> None:
+        emit(ctx, error_envelope(provider="dummy", command="refuse", code="not_found", message="nothing here"), err=True)
+
+    @app.command("missing")
+    def missing(ctx: typer.Context) -> None:
+        fail(ctx, "not_found", "nothing here", query={"id": 0})
+
+    @app.command("need")
+    def need(ctx: typer.Context, target: str) -> None:
+        emit(ctx, success_envelope(provider="dummy", command="need", kind="need", query=target.upper(), data={"target": target}))
+
+    group = typer.Typer(add_completion=False)
+    app.add_typer(group, name="group")
+
+    @group.command("leaf")
+    def leaf(ctx: typer.Context, pages: int = 1) -> None:
+        emit(ctx, success_envelope(provider="dummy", command=command_path(ctx), kind="leaf", data={"pages": pages}))
+
+    @group.command("sink")
+    def sink(
+        ctx: typer.Context,
+        pages: int = 1,
+        authorization_code: Annotated[str | None, typer.Option("--code")] = None,
+        out: Annotated[Path | None, typer.Option("--out")] = None,
+    ) -> None:
+        fail(ctx, "not_found", "nothing here")
+
+    @group.command("boom")
+    def boom(ctx: typer.Context) -> None:
+        raise ValueError("bad")
+
+    return app
+
+
+def test_fields_projects_payload() -> None:
+    result = runner.invoke(build_app(), ["--fields", "data.a.b", "show"])
+    assert result.exit_code == 0
+    assert json.loads(result.stdout) == {"data": {"a": {"b": 1}}}
+
+
+def test_fields_strict_missing_path_exits_2_with_missing_fields_error() -> None:
+    result = runner.invoke(build_app(), ["--fields", "data.zz", "--fields-strict", "need", "x"])
+    assert result.exit_code == 2
+    error = json.loads(result.stderr)
+    assert error["ok"] is False
+    assert error["provider"] == "dummy"
+    assert error["command"] == "need"
+    assert error["error"]["code"] == "missing_fields"
+    assert error["error"]["details"] == {"missing_fields": ["data.zz"]}
+    # Like every failure, it names the parsed input, not the success payload's normalized query.
+    assert error["query"] == {"target": "x"}
+
+
+def test_compact_truncates_long_strings_and_lists_them_in_provenance() -> None:
+    result = runner.invoke(build_app(), ["--compact", "--compact-max-chars", "50", "show"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert len(payload["data"]["long"]) == 50
+    assert payload["provenance"] == {"compacted_paths": ["data.long"]}
+
+
+def test_compact_marks_a_cut_value_that_fields_keeps() -> None:
+    result = runner.invoke(build_app(), ["--compact", "--compact-max-chars", "50", "--fields", "data.long", "show"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert len(payload["data"]["long"]) == 50
+    assert payload["provenance"] == {"compacted_paths": ["data.long"]}
+
+    result = runner.invoke(build_app(), ["--compact", "--compact-max-chars", "50", "--fields", "data.a", "show"])
+    assert json.loads(result.stdout) == {"data": {"a": {"b": 1}}}
+
+
+@pytest.mark.parametrize("command", ["missing", "refuse"])
+def test_failures_ignore_fields_and_print_the_whole_envelope(command: str) -> None:
+    """``fail()`` and a failure envelope passed to ``emit`` must come out the same way under --fields."""
+    result = runner.invoke(build_app(), ["--fields", "data.a", command])
+    error = json.loads(result.stderr)
+    assert set(error) == ENVELOPE_KEYS
+    assert error["error"]["code"] == "not_found"
+
+
+def test_profile_human_pretty_prints() -> None:
+    result = runner.invoke(build_app(), ["--profile", "human", "show"])
+    assert result.exit_code == 0
+    assert result.stdout.startswith("{\n")
+
+
+def test_fields_reports_a_missing_path_instead_of_returning_an_empty_object() -> None:
+    """``--fields nope`` used to print ``{}`` with exit 0, which reads as "no results"."""
+    result = runner.invoke(build_app(), ["--fields", "nope", "show"])
+    assert result.exit_code == 0
+    assert json.loads(result.stdout) == {"fields_missing": ["nope"]}
+
+
+@pytest.mark.parametrize(
+    ("payload", "problem"),
+    [
+        ({**success_envelope(provider="dummy", command="bad", kind="bad", data={"count": 1}), "count": 1}, "unexpected key: count"),
+        ({"ok": True, "results": []}, "missing key: data"),
+    ],
+)
+def test_emit_refuses_anything_but_an_envelope(payload: dict[str, Any], problem: str) -> None:
+    app = typer.Typer(add_completion=False)
+    install_common_callback(app, provider="dummy")
+
+    @app.command("bad")
+    def bad(ctx: typer.Context) -> None:
+        emit(ctx, payload)
+
+    result = runner.invoke(app, ["bad"])
+
+    assert result.stdout == ""
+    assert isinstance(result.exception, TypeError)
+    assert problem in str(result.exception)
+
+
+def test_fail_uses_exit_code_mapping_and_emits_envelope_on_stderr() -> None:
+    result = runner.invoke(build_app(), ["missing"])
+    assert result.exit_code == 4
+    assert result.stdout == ""
+    error = json.loads(result.stderr)
+    assert error["error"] == {"code": "not_found", "message": "nothing here"}
+    assert error["schema_version"] == "1"
+    assert error["query"] == {"id": 0}
+
+
+def test_fail_echoes_the_parsed_parameters_except_secrets() -> None:
+    argv = ["--pretty", "group", "sink", "--pages", "3", "--code", "oauth-code-123", "--out", "/tmp/x"]
+    result = runner.invoke(build_app(), argv)
+    assert result.exit_code == 4
+    error = json.loads(result.stderr)
+    assert error["command"] == "group sink"
+    assert error["query"] == {"pages": 3, "out": "/tmp/x"}
+    assert "oauth-code-123" not in result.stderr
+
+
+def test_configure_stores_subclass_config_in_ctx() -> None:
+    @dataclass(slots=True)
+    class WowheadConfig(RuntimeConfig):
+        expansion: str = "retail"
+
+    app = typer.Typer(add_completion=False)
+
+    @app.callback()
+    def main(ctx: typer.Context, pretty: bool = typer.Option(False, "--pretty")) -> None:
+        configure(ctx, provider="wowhead", pretty=pretty, config=WowheadConfig(expansion="classic"))
+
+    @app.command("show")
+    def show(ctx: typer.Context) -> None:
+        config = cfg_as(ctx, WowheadConfig)
+        assert cfg(ctx) is config
+        data = {"expansion": config.expansion, "pretty": config.output.pretty}
+        emit(ctx, success_envelope(provider=config.provider, command="show", kind="show", data=data))
+
+    result = runner.invoke(app, ["--pretty", "show"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert (payload["provider"], payload["data"]) == ("wowhead", {"expansion": "classic", "pretty": True})
+
+
+def _run_guarded(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], exc: BaseException) -> tuple[int, dict[str, Any]]:
+    app = typer.Typer(add_completion=False)
+    install_common_callback(app, provider="dummy")
+
+    @app.command("boom")
+    def boom(ctx: typer.Context) -> None:
+        raise exc
+
+    monkeypatch.setattr(sys, "argv", ["dummy", "boom"])
+    with pytest.raises(SystemExit) as exc_info:
+        guarded_run(app, provider="dummy")
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "Traceback" not in captured.err
+    code = exc_info.value.code
+    assert isinstance(code, int)
+    return code, json.loads(captured.err)
+
+
+def _status_error(status: int) -> httpx.HTTPStatusError:
+    request = httpx.Request("GET", "https://example.invalid/x")
+    response = httpx.Response(status, request=request)
+    return httpx.HTTPStatusError(f"status {status}", request=request, response=response)
+
+
+@pytest.mark.parametrize(
+    ("exc", "expected_code", "expected_exit"),
+    [
+        (httpx.ConnectError("refused"), "network_error", 5),
+        (httpx.ReadTimeout("slow"), "timeout", 5),
+        (_status_error(401), "auth_failed", 3),
+        (_status_error(403), "auth_failed", 3),
+        (_status_error(404), "not_found", 4),
+        (_status_error(429), "rate_limited", 5),
+        (_status_error(500), "upstream_error", 5),
+        (ProviderError("auth_required", "login first"), "auth_required", 3),
+        (ValueError("bad"), "internal_error", 1),
+    ],
+)
+def test_guarded_run_maps_exceptions_to_error_envelopes(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    exc: BaseException,
+    expected_code: str,
+    expected_exit: int,
+) -> None:
+    exit_code, payload = _run_guarded(monkeypatch, capsys, exc)
+    assert exit_code == expected_exit
+    assert payload["ok"] is False
+    assert payload["provider"] == "dummy"
+    assert payload["command"] == "boom"
+    assert payload["error"]["code"] == expected_code
+    if isinstance(exc, httpx.HTTPStatusError):
+        assert payload["error"]["details"]["status_code"] == exc.response.status_code
+    if isinstance(exc, ValueError):
+        assert payload["error"]["message"] == "ValueError: bad"
+
+
+def test_guarded_run_names_the_command_when_global_flags_precede_it(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    app = typer.Typer(add_completion=False)
+    install_common_callback(app, provider="dummy")
+
+    @app.command("boom")
+    def boom(ctx: typer.Context) -> None:
+        raise ValueError("bad")
+
+    monkeypatch.setattr(sys, "argv", ["dummy", "--pretty", "--profile", "human", "boom"])
+    with pytest.raises(SystemExit):
+        guarded_run(app, provider="dummy")
+    payload = json.loads(capsys.readouterr().err)
+    assert payload["command"] == "boom"
+
+
+def _run_argv(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], argv: list[str]) -> tuple[int, str, str]:
+    """Drive a binary exactly as its entry point does, with colour forced on.
+
+    Rich styling used to split option names with ANSI escapes; the envelope this asserts on is
+    written by warcraft_core itself, so it must be identical whatever the terminal wants.
+    """
+    monkeypatch.setenv("FORCE_COLOR", "1")
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.setattr(sys, "argv", argv)
+    with pytest.raises(SystemExit) as exit_info:
+        guarded_run(build_app(), provider="dummy")
+    captured = capsys.readouterr()
+    code = exit_info.value.code
+    assert isinstance(code, int)
+    return code, captured.out, captured.err
+
+
+@pytest.mark.parametrize(
+    ("argv", "expected_command", "expected_message"),
+    [
+        (["dummy", "--profile", "bogus", "show"], "show", "Invalid value for --profile: --profile must be one of: agent, human"),
+        (["dummy", "--bogus-flag", "show"], "show", "No such option: --bogus-flag"),
+        (["dummy", "nosuchcommand"], "nosuchcommand", "No such command 'nosuchcommand'."),
+        (["dummy", "need"], "need", "Missing argument 'target'."),
+        (["dummy"], "", "Missing command."),
+        (
+            ["dummy", "group", "leaf", "--pages", "abc"],
+            "group leaf",
+            "Invalid value for '--pages': 'abc' is not a valid int.",
+        ),
+    ],
+    ids=["bad-option-value", "unknown-flag", "unknown-command", "missing-argument", "no-command", "nested-command"],
+)
+def test_guarded_run_renders_usage_errors_as_the_json_envelope(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    argv: list[str],
+    expected_command: str,
+    expected_message: str,
+) -> None:
+    """``command`` must name the subcommand even when the callback never ran: an option value is not one."""
+    exit_code, out, err = _run_argv(monkeypatch, capsys, argv)
+    assert exit_code == 2
+    assert out == ""
+    payload = json.loads(err)
+    assert payload["ok"] is False
+    assert payload["provider"] == "dummy"
+    assert payload["command"] == expected_command
+    assert payload["error"] == {"code": "invalid_argument", "message": expected_message}
+
+
+@pytest.mark.parametrize(
+    ("argv", "expected_exit"),
+    [
+        (["dummy", "group", "leaf"], 0),
+        (["dummy", "group", "sink"], 4),
+        (["dummy", "group", "leaf", "--pages", "abc"], 2),
+        (["dummy", "group", "boom"], 1),
+    ],
+    ids=["success", "fail", "usage-error", "uncaught-exception"],
+)
+def test_a_nested_command_carries_its_full_path_however_the_process_ends(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    argv: list[str],
+    expected_exit: int,
+) -> None:
+    """One rule for ``command``: the full subcommand path, on success and on every failure path.
+
+    The four paths used to disagree -- ``fail`` and the success envelope named the leaf only, and an
+    uncaught exception named the group only -- so an agent could not match a failure to the command
+    it ran.
+    """
+    exit_code, out, err = _run_argv(monkeypatch, capsys, argv)
+    assert exit_code == expected_exit
+    payload = json.loads(out or err)
+    assert payload["command"] == f"group {argv[2]}"
+
+
+def test_guarded_run_keeps_help_as_human_text(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """``--help`` is for humans: it must stay rendered help on stdout, not an error envelope."""
+    exit_code, out, err = _run_argv(monkeypatch, capsys, ["dummy", "--help"])
+    assert exit_code == 0
+    assert err == ""
+    assert "Usage" in re.sub(r"\x1b\[[0-9;]*m", "", out)
+
+
+def test_guarded_run_propagates_the_exit_code_from_fail(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    exit_code, _, err = _run_argv(monkeypatch, capsys, ["dummy", "missing"])
+    assert exit_code == 4
+    assert json.loads(err)["error"]["code"] == "not_found"
+
+
+def test_guarded_run_exits_zero_on_success(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    exit_code, out, _ = _run_argv(monkeypatch, capsys, ["dummy", "show"])
+    assert exit_code == 0
+    assert json.loads(out)["data"]["a"] == {"b": 1}

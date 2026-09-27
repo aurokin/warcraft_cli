@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from simc_cli.branch import (
+    BranchSummary,
     IntentExplanation,
     explain_intent,
     is_helper_decision,
@@ -13,6 +14,22 @@ from simc_cli.branch import (
 )
 from simc_cli.prune import PruneContext
 from simc_cli.sim import FirstCastResult, run_first_casts, summarize_first_casts
+
+
+@dataclass(frozen=True, slots=True)
+class FirstCastOptions:
+    """Optional first-cast timing pass for an analysis packet; targets None means the prune context target count."""
+
+    profile: str | Path | None = None
+    actions: tuple[str, ...] = ()
+    seeds: int = 5
+    max_time: int = 60
+    targets: int | None = None
+    fight_style: str = "Patchwerk"
+
+
+#: Default for packets built without a timing pass: no profile and no actions means no sims are run.
+FIRST_CAST_DISABLED = FirstCastOptions()
 
 
 @dataclass(slots=True)
@@ -39,7 +56,7 @@ class AnalysisPacket:
     intent_lines: list[str]
     explained_intent: IntentExplanation
     first_casts: list[FirstCastPacket]
-    branch_summary: object
+    branch_summary: BranchSummary
 
 
 def build_analysis_packet(
@@ -51,12 +68,7 @@ def build_analysis_packet(
     intent_limit: int = 6,
     explain_limit: int = 8,
     runtime_scan_limit: int = 8,
-    first_cast_profile: str | Path | None = None,
-    first_cast_actions: list[str] | None = None,
-    first_cast_seeds: int = 5,
-    first_cast_max_time: int = 60,
-    first_cast_targets: int | None = None,
-    first_cast_fight_style: str = "Patchwerk",
+    first_cast: FirstCastOptions = FIRST_CAST_DISABLED,
 ) -> AnalysisPacket:
     normalized_path = Path(apl_path).expanduser().resolve()
     summary = summarize_branches(normalized_path, context, start_list=start_list)
@@ -82,12 +94,8 @@ def build_analysis_packet(
         escalation_reasons.append(f"early priorities in {focus_list} depend on runtime-only state")
     first_casts = collect_first_cast_packets(
         paths,
-        first_cast_profile,
-        first_cast_actions or [],
-        first_cast_seeds,
-        first_cast_max_time,
-        first_cast_targets if first_cast_targets is not None else context.targets,
-        first_cast_fight_style,
+        first_cast,
+        targets=first_cast.targets if first_cast.targets is not None else context.targets,
     )
 
     return AnalysisPacket(
@@ -123,20 +131,12 @@ def recommended_next_steps(start_list: str, focus_list: str, has_unresolved_bran
     return steps
 
 
-def collect_first_cast_packets(
-    paths,
-    profile: str | Path | None,
-    actions: list[str],
-    seeds: int,
-    max_time: int,
-    targets: int,
-    fight_style: str,
-) -> list[FirstCastPacket]:
-    if not profile or not actions:
+def collect_first_cast_packets(paths, options: FirstCastOptions, *, targets: int) -> list[FirstCastPacket]:
+    if not options.profile or not options.actions:
         return []
     packets: list[FirstCastPacket] = []
-    for action in actions:
-        results = run_first_casts(paths, profile, action, seeds, max_time, targets, fight_style)
+    for action in options.actions:
+        results = run_first_casts(paths, options.profile, action, options.seeds, options.max_time, targets, options.fight_style)
         summary = summarize_first_casts(results)
         packets.append(
             FirstCastPacket(

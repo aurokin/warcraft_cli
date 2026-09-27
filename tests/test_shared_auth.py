@@ -89,3 +89,23 @@ def test_save_and_delete_provider_auth_state_round_trip(tmp_path: Path) -> None:
     assert saved == state_file
     assert deleted is True
     assert not state_file.exists()
+
+
+def test_save_provider_auth_state_writes_owner_only_file_and_directory(tmp_path: Path) -> None:
+    state_file = tmp_path / "state" / "providers" / "warcraftlogs.json"
+
+    save_provider_auth_state("warcraftlogs", {"access_token": "secret"}, path=state_file)
+
+    assert state_file.stat().st_mode & 0o777 == 0o600
+    assert state_file.parent.stat().st_mode & 0o777 == 0o700
+
+
+def test_save_provider_auth_state_tightens_existing_world_readable_file(tmp_path: Path) -> None:
+    state_file = tmp_path / "warcraftlogs.json"
+    state_file.write_text("{}")
+    state_file.chmod(0o644)
+
+    save_provider_auth_state("warcraftlogs", {"access_token": "secret"}, path=state_file)
+
+    assert state_file.stat().st_mode & 0o777 == 0o600
+    assert json.loads(state_file.read_text()) == {"access_token": "secret"}

@@ -9,8 +9,8 @@ from typing import Any
 
 import httpx
 from warcraft_api.cache import CacheSettings, CacheTTLConfig, build_cache_store, load_prefixed_cache_settings_from_env
-from warcraft_api.http import DEFAULT_RETRY_ATTEMPTS, request_with_retries
-from warcraft_content.paths import provider_cache_root
+from warcraft_api.http import DEFAULT_RETRY_ATTEMPTS, build_client, request_with_retries
+from warcraft_core.paths import provider_cache_root
 
 DEFAULT_BASE_URL = "https://www.raidbots.com"
 DEFAULT_REPORT_PATH_TEMPLATE = "/simbot/report/{id}"
@@ -26,6 +26,25 @@ _BARE_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 class InvalidReportReference(ValueError):
     """Raised when a report URL or ID cannot be parsed into a report ID."""
+
+
+class ReportNotAvailable(LookupError):
+    """Raised when Raidbots answers a report fetch with its web page instead of report content."""
+
+
+def _reject_web_page(text: str, *, report_id: str, url: str) -> None:
+    """Raise when a 200 response carries the Raidbots single-page app instead of report content.
+
+    Raidbots serves that page for a report id that does not exist, has expired, or is private. Both
+    report fetches must treat it the same way, or the same missing report answers `not_found` on one
+    command and a parse failure on the other.
+    """
+    if not text.lstrip()[:64].lower().startswith(("<!doctype html", "<html")):
+        return
+    raise ReportNotAvailable(
+        f"Raidbots returned its web page instead of report content for report {report_id!r}: the "
+        f"report id is wrong, or the report has expired or is private ({url})."
+    )
 
 
 def resolve_report_id(value: str, report_path_template: str = DEFAULT_REPORT_PATH_TEMPLATE) -> str:
@@ -121,7 +140,6 @@ class RaidbotsClient:
         settings, report_ttl = load_raidbots_cache_settings_from_env()
         self._timeout_seconds = timeout_seconds
         self._retry_attempts = max(1, retry_attempts)
-        self._cache_settings = settings
         self._cache_store = build_cache_store(settings) if settings.enabled else None
         self._report_ttl = report_ttl
         self._urls = load_raidbots_urls_from_env()
@@ -153,7 +171,7 @@ class RaidbotsClient:
 
     def _client(self) -> httpx.Client:
         if self._http_client is None:
-            self._http_client = httpx.Client(timeout=self._timeout_seconds, follow_redirects=True)
+            self._http_client = build_client(timeout=self._timeout_seconds)
         return self._http_client
 
     def _cache_key(self, namespace: str, params: dict[str, Any]) -> str:
@@ -181,6 +199,7 @@ class RaidbotsClient:
             return cached
         self._last_from_cache = False
         response = request_with_retries(self._client(), url, retry_attempts=self._retry_attempts)
+        _reject_web_page(response.text, report_id=report_id, url=url)
         payload = response.json()
         if not isinstance(payload, dict):
             raise ValueError(f"Unexpected Raidbots data.json shape for report {report_id}.")
@@ -197,5 +216,7 @@ class RaidbotsClient:
         self._last_from_cache = False
         response = request_with_retries(self._client(), url, retry_attempts=self._retry_attempts)
         text = response.text
+        # Never cache the web page: reject it before the write below.
+        _reject_web_page(text, report_id=report_id, url=url)
         self._write_cache(key, text, ttl_seconds=self._report_ttl)
         return text

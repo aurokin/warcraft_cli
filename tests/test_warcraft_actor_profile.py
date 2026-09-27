@@ -12,7 +12,9 @@ from warcraft_cli.crosswalk import (
     reconcile_class_spec,
     report_actor_names,
 )
+from warcraft_cli.main import ACTOR_PROFILE_MAX_SCOPED_FIGHTS
 from warcraft_cli.main import app as warcraft_app
+from warcraft_core.exit_codes import EXIT_NOT_FOUND
 from warcraft_core.identity import class_spec_identity_payload, report_actor_identity_payload
 
 runner = CliRunner()
@@ -102,12 +104,28 @@ def _raiderio_payload(name: str, actor_class: str, spec: str, *, region: str = "
     }
 
 
+def _provider_result(provider: str, data: dict[str, Any] | None, *, exit_code: int = 0) -> dict[str, Any]:
+    """A ``provider_invoke`` result whose payload is a real envelope: every field lives under ``data``.
+
+    The wrapper reads provider fields from ``data`` only, so a fake that put them anywhere else would
+    keep passing after the product broke.
+    """
+    return {"provider": provider, "exit_code": exit_code, "payload": {"ok": True, "data": data or {}}, "stdout": ""}
+
+
+# Without --fight-id the crosswalk enumerates the report's fights first, because Warcraft Logs only
+# answers a playerDetails query that names a fight list or an explicit time window.
+_WCL_FIGHTS_RESULT: dict[str, Any] = _provider_result("warcraftlogs", {"fights": [{"id": 1}]})
+
+
 def _invoke(wcl_payload: dict[str, Any] | None, raiderio_payload: dict[str, Any] | None, *, raiderio_exit: int = 0):
     def fake(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, Any]:
+        if args[0] == "report-fights":
+            return _WCL_FIGHTS_RESULT
         if args[0] == "report-player-details":
-            return {"provider": "warcraftlogs", "exit_code": 0, "payload": wcl_payload, "stdout": ""}
+            return _provider_result("warcraftlogs", wcl_payload)
         if args[0] == "character":
-            return {"provider": "raiderio", "exit_code": raiderio_exit, "payload": raiderio_payload, "stdout": ""}
+            return _provider_result("raiderio", raiderio_payload, exit_code=raiderio_exit)
         raise AssertionError(f"unexpected provider invocation: {provider} {args}")
 
     return fake
@@ -217,20 +235,31 @@ def test_actor_profile_reconciles_matching_log_and_profile(monkeypatch) -> None:
     payload = json.loads(result.stdout)
     assert payload["ok"] is True
     assert payload["kind"] == "actor_profile_crosswalk"
-    assert "not a canonical" in payload["join_rule"]
+    assert "not a canonical" in payload["data"]["join_rule"]
     assert payload["query"] == {
         "report_code": "ABC123",
         "actor_name": "Roguecane",
         "fight_id": None,
+        # No --fight-id means "the whole report": the query names the fights that were actually read
+        # and how they were chosen.
+        "scoped_fight_ids": [1],
+        "fight_scope": {
+            "rule": "kills_first_then_report_order",
+            "report_fight_count": 1,
+            "kill_fight_count": 0,
+            "scoped_fight_count": 1,
+            "max_scoped_fights": ACTOR_PROFILE_MAX_SCOPED_FIGHTS,
+            "truncated": False,
+        },
         "region": "us",
         "realm": "illidan",
         "name": "Roguecane",
     }
-    wcl_side = payload["sources"]["warcraftlogs"]
+    wcl_side = payload["data"]["sources"]["warcraftlogs"]
     assert wcl_side["role"] == "dps"
     assert wcl_side["class_spec_identity"]["identity"] == {"actor_class": "rogue", "spec": "subtlety"}
-    assert payload["sources"]["raiderio"]["status"] == "ok"
-    assert payload["reconciliation"] == {
+    assert payload["data"]["sources"]["raiderio"]["status"] == "ok"
+    assert payload["data"]["reconciliation"] == {
         "comparable": True,
         "agree": True,
         "class_agree": True,
@@ -247,7 +276,7 @@ def test_actor_profile_flags_class_and_spec_mismatch(monkeypatch) -> None:
     result = runner.invoke(warcraft_app, ["actor-profile", "ABC123", "Roguecane"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    rec = payload["reconciliation"]
+    rec = payload["data"]["reconciliation"]
     assert rec["agree"] is False
     assert set(rec["reasons"]) == {"class_mismatch", "spec_mismatch"}
 
@@ -258,10 +287,12 @@ def test_actor_profile_region_override_drives_lookup(monkeypatch) -> None:
     seen: dict[str, Any] = {}
 
     def fake(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, Any]:
+        if args[0] == "report-fights":
+            return _WCL_FIGHTS_RESULT
         if args[0] == "report-player-details":
-            return {"provider": "warcraftlogs", "exit_code": 0, "payload": wcl, "stdout": ""}
+            return _provider_result("warcraftlogs", wcl)
         seen["character_args"] = args
-        return {"provider": "raiderio", "exit_code": 0, "payload": rio, "stdout": ""}
+        return _provider_result("raiderio", rio)
 
     monkeypatch.setattr("warcraft_cli.main.provider_invoke", fake)
     result = runner.invoke(warcraft_app, ["actor-profile", "ABC123", "Healz", "--region", "eu"])
@@ -269,7 +300,7 @@ def test_actor_profile_region_override_drives_lookup(monkeypatch) -> None:
     payload = json.loads(result.stdout)
     assert seen["character_args"] == ["character", "eu", "tarren-mill", "Healz"]
     assert payload["query"]["region"] == "eu"
-    assert payload["reconciliation"]["agree"] is True
+    assert payload["data"]["reconciliation"]["agree"] is True
 
 
 def test_actor_profile_rejects_ambiguous_actor(monkeypatch) -> None:
@@ -285,7 +316,7 @@ def test_actor_profile_rejects_ambiguous_actor(monkeypatch) -> None:
     assert result.exit_code == 1
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "ambiguous_actor"
-    assert len(payload["error"]["candidates"]) == 2
+    assert len(payload["error"]["details"]["candidates"]) == 2
 
 
 def test_actor_profile_rejects_multi_spec_actor(monkeypatch) -> None:
@@ -310,10 +341,12 @@ def test_actor_profile_forwards_allow_unlisted(monkeypatch) -> None:
     seen: dict[str, Any] = {}
 
     def fake(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, Any]:
+        if args[0] == "report-fights":
+            return _WCL_FIGHTS_RESULT
         if args[0] == "report-player-details":
             seen["wcl_args"] = args
-            return {"provider": "warcraftlogs", "exit_code": 0, "payload": wcl, "stdout": ""}
-        return {"provider": "raiderio", "exit_code": 0, "payload": rio, "stdout": ""}
+            return _provider_result("warcraftlogs", wcl)
+        return _provider_result("raiderio", rio)
 
     monkeypatch.setattr("warcraft_cli.main.provider_invoke", fake)
     result = runner.invoke(warcraft_app, ["actor-profile", "ABC123", "Roguecane", "--allow-unlisted"])
@@ -340,17 +373,19 @@ def test_actor_profile_errors_when_region_unknown(monkeypatch) -> None:
     payload = json.loads(result.stderr)
     assert payload["ok"] is False
     assert payload["error"]["code"] == "actor_region_unknown"
-    assert payload["error"]["missing_field"] == "region"
+    assert payload["error"]["details"]["missing_field"] == "region"
     # The resolved log side is still surfaced for context even though the lookup could not run.
-    assert payload["sources"]["warcraftlogs"]["class_spec_identity"]["identity"]["actor_class"] == "rogue"
+    assert payload["error"]["details"]["sources"]["warcraftlogs"]["class_spec_identity"]["identity"]["actor_class"] == "rogue"
 
 
 def test_actor_profile_errors_when_profile_lookup_fails(monkeypatch) -> None:
     wcl = _wcl_payload({"dps": [_wcl_actor("Roguecane", "Illidan", "us", "Rogue", "Subtlety")]})
 
     def fake(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, Any]:
+        if args[0] == "report-fights":
+            return _WCL_FIGHTS_RESULT
         if args[0] == "report-player-details":
-            return {"provider": "warcraftlogs", "exit_code": 0, "payload": wcl, "stdout": ""}
+            return _provider_result("warcraftlogs", wcl)
         return {
             "provider": "raiderio",
             "exit_code": 1,
@@ -364,7 +399,7 @@ def test_actor_profile_errors_when_profile_lookup_fails(monkeypatch) -> None:
     payload = json.loads(result.stderr)
     assert payload["ok"] is False
     assert payload["error"]["code"] == "profile_lookup_failed"
-    assert payload["error"]["source"]["code"] == "character_not_found"
+    assert payload["error"]["details"]["source"]["code"] == "character_not_found"
 
 
 def test_actor_profile_errors_when_actor_absent(monkeypatch) -> None:
@@ -372,11 +407,13 @@ def test_actor_profile_errors_when_actor_absent(monkeypatch) -> None:
     monkeypatch.setattr("warcraft_cli.main.provider_invoke", _invoke(wcl, None))
 
     result = runner.invoke(warcraft_app, ["actor-profile", "ABC123", "Roguecane"])
-    assert result.exit_code == 1
+    # Not found is exit 4 (ERROR_CONTRACT.md); `fight_scope` says how much of the report was searched.
+    assert result.exit_code == EXIT_NOT_FOUND
     payload = json.loads(result.stderr)
     assert payload["ok"] is False
     assert payload["error"]["code"] == "actor_not_found"
-    assert payload["error"]["available_actors"] == ["Someoneelse"]
+    assert payload["error"]["details"]["available_actors"] == ["Someoneelse"]
+    assert payload["error"]["details"]["fight_scope"]["truncated"] is False
 
 
 def test_actor_profile_errors_when_warcraftlogs_lookup_fails(monkeypatch) -> None:
@@ -393,4 +430,35 @@ def test_actor_profile_errors_when_warcraftlogs_lookup_fails(monkeypatch) -> Non
     assert result.exit_code == 1
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "warcraftlogs_lookup_failed"
-    assert payload["error"]["source"]["code"] == "auth_required"
+    assert payload["error"]["details"]["source"]["code"] == "auth_required"
+
+
+def test_actor_profile_miss_in_a_truncated_fight_scope_says_the_rest_was_not_searched(monkeypatch) -> None:
+    """A miss inside the bounded fight sample is not a miss in the report, and the failure says so."""
+    fight_count = ACTOR_PROFILE_MAX_SCOPED_FIGHTS + 2
+    fights = _provider_result("warcraftlogs", {"fights": [{"id": index} for index in range(1, fight_count + 1)]})
+    wcl = _wcl_payload({"dps": [_wcl_actor("Someoneelse", "Illidan", "us", "Rogue", "Subtlety")]})
+    detail_args: list[list[str]] = []
+
+    def fake(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, Any]:
+        if args[0] == "report-fights":
+            return fights
+        detail_args.append(args)
+        return _provider_result("warcraftlogs", wcl)
+
+    monkeypatch.setattr("warcraft_cli.main.provider_invoke", fake)
+
+    result = runner.invoke(warcraft_app, ["actor-profile", "ABC123", "Roguecane"])
+
+    assert result.exit_code == EXIT_NOT_FOUND
+    error = json.loads(result.stderr)["error"]
+    assert error["code"] == "actor_not_found"
+    assert error["details"]["fight_scope"]["truncated"] is True
+    assert error["details"]["fight_scope"]["scoped_fight_count"] == ACTOR_PROFILE_MAX_SCOPED_FIGHTS
+    assert error["details"]["fight_scope"]["report_fight_count"] == fight_count
+    assert f"{ACTOR_PROFILE_MAX_SCOPED_FIGHTS} of {fight_count} fights" in error["message"]
+    # The roster is read with the scoped fight set, one --fight-id per fight.
+    assert detail_args == [
+        ["report-player-details", "ABC123",
+         *[arg for fight_id in range(1, ACTOR_PROFILE_MAX_SCOPED_FIGHTS + 1) for arg in ("--fight-id", str(fight_id))]]
+    ]

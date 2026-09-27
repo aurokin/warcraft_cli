@@ -167,7 +167,8 @@ class ConditionParser:
     def peek(self) -> str | None:
         if self.index >= len(self.tokens):
             return None
-        return self.tokens[self.index]
+        token: str = self.tokens[self.index]
+        return token
 
     def consume(self, expected: str | None = None) -> str:
         token = self.peek()
@@ -204,12 +205,12 @@ def eval_atom(atom: str, context: PruneContext) -> ConditionOutcome:
     return ConditionOutcome(can_be_true=True, can_be_false=True)
 
 
-def resolve_value(token: str, context: PruneContext) -> int | None:
-    if token.isdigit():
-        return int(token)
-    if token == "active_enemies":
+def resolve_value(atom: str, context: PruneContext) -> int | None:
+    if atom.isdigit():
+        return int(atom)
+    if atom == "active_enemies":
         return context.targets
-    if token.startswith("spell_targets."):
+    if atom.startswith("spell_targets."):
         return context.targets
     return None
 

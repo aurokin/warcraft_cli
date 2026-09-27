@@ -122,6 +122,6 @@ def test_entity_command_can_emit_citation_pack(monkeypatch) -> None:
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert "citation_pack" in payload
-    assert payload["citation_pack"]["source_count"] >= 1
-    assert payload["citation_pack"]["anchors"]
+    assert "citation_pack" in payload["data"]
+    assert payload["data"]["citation_pack"]["source_count"] >= 1
+    assert payload["data"]["citation_pack"]["anchors"]

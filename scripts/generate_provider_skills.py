@@ -108,21 +108,92 @@ PROVIDERS: dict[str, ProviderSkill] = {
             "has already routed you here."
         ),
     ),
-    "wowprogress": ProviderSkill(
-        key="wowprogress",
-        display_name="WowProgress",
+    "warcraftlogs": ProviderSkill(
+        key="warcraftlogs",
+        display_name="Warcraft Logs",
         description=(
-            "Use the local `wowprogress` CLI for rankings, progression, guild profiles, and "
-            "sample-backed analytics when the caller already wants WowProgress."
+            "Use the local `warcraftlogs` CLI for the official Warcraft Logs API: guild progression, "
+            "character identity, report and fight inspection, and world metadata."
         ),
-        short_description="Use the local wowprogress command for rankings, progression, and analytics.",
+        short_description="Use the local warcraftlogs command for official Warcraft Logs API reads.",
         default_prompt=(
-            "Use wowprogress for guild, character, leaderboard, and sampled progression analytics "
-            "when the caller already wants WowProgress or warcraft has already routed you there."
+            "Use warcraftlogs for guild progression, character, report, fight, and world metadata reads "
+            "when the caller wants the official log source or warcraft has already routed you there."
         ),
         intro=(
-            "Use `wowprogress` when the caller already wants WowProgress or when `warcraft` has "
+            "Use `warcraftlogs` when the caller already wants the official Warcraft Logs API or when "
+            "`warcraft` has already routed you here."
+        ),
+    ),
+    "raidbots": ProviderSkill(
+        key="raidbots",
+        display_name="Raidbots",
+        description=(
+            "Use the local `raidbots` CLI to read shared Raidbots reports, unpack what was simulated, "
+            "and bridge a report's SimC input into local `simc` analysis."
+        ),
+        short_description="Use the local raidbots command to read shared Raidbots reports.",
+        default_prompt=(
+            "Use raidbots to inspect a shared Raidbots report URL or id and to hand its SimC input "
+            "to local simc analysis."
+        ),
+        intro=(
+            "Use `raidbots` when the caller already has a Raidbots report or when `warcraft` has "
             "already routed you here."
+        ),
+    ),
+    "lorrgs": ProviderSkill(
+        key="lorrgs",
+        display_name="Lorrgs",
+        description=(
+            "Use the local `lorrgs` CLI for top-parse cooldown timelines, encounter composition rows, "
+            "and Lorrgs spec/boss/spell/zone slugs."
+        ),
+        short_description="Use the local lorrgs command for cooldown timelines and composition rows.",
+        default_prompt=(
+            "Use lorrgs for spec cooldown timelines, composition rankings, and Lorrgs slug metadata "
+            "when the caller wants Lorrgs or warcraft has already routed you there."
+        ),
+        intro=(
+            "Use `lorrgs` when the caller already wants Lorrgs or when `warcraft` has already routed "
+            "you here. Lorrgs is an experimental provider: prefer `warcraftlogs` for authoritative "
+            "report data and treat Lorrgs as prebuilt aggregation on top of it."
+        ),
+    ),
+    "blizzard-api": ProviderSkill(
+        key="blizzard-api",
+        display_name="Blizzard API",
+        description=(
+            "Use the local `blizzard` CLI for official Battle.net Game Data and Profile reads. "
+            "Experimental: the endpoint contracts are not verified against a live account."
+        ),
+        short_description="Use the local blizzard command for official Battle.net API reads (experimental).",
+        default_prompt=(
+            "Use blizzard for realm, item, and character reads from the official Battle.net API, "
+            "treating responses as experimental and unverified."
+        ),
+        intro=(
+            "Use `blizzard` when the caller wants the official Battle.net API or when `warcraft` has "
+            "already routed you here. This provider is experimental and its endpoint contracts are "
+            "unverified: confirm anything load-bearing against a second source."
+        ),
+    ),
+    "curseforge": ProviderSkill(
+        key="curseforge",
+        display_name="CurseForge",
+        description=(
+            "Use the local `curseforge` CLI to look up World of Warcraft addons by slug or mod id: "
+            "metadata, latest files, changelog. Experimental: the endpoint contracts are not verified."
+        ),
+        short_description="Use the local curseforge command for WoW addon lookups (experimental).",
+        default_prompt=(
+            "Use curseforge to look up a World of Warcraft addon by slug or mod id, treating responses "
+            "as experimental and unverified."
+        ),
+        intro=(
+            "Use `curseforge` when the caller wants the packaged addon surface or when `warcraft` has "
+            "already routed you here. This provider is experimental and its endpoint contracts are "
+            "unverified: confirm anything load-bearing against a second source."
         ),
     ),
     "simc": ProviderSkill(

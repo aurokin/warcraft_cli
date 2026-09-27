@@ -3,13 +3,14 @@ from __future__ import annotations
 import hashlib
 import json
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
 import httpx
-from warcraft_api.http import DEFAULT_RETRY_ATTEMPTS, request_with_retries
+from warcraft_api.http import DEFAULT_RETRY_ATTEMPTS, build_client, request_with_retries
 from warcraft_core.auth import load_provider_auth_state, save_provider_auth_state
-from warcraft_core.wow_normalization import normalize_region
+from warcraft_core.wow_normalization import normalize_region, realm_slug_variants
 
 from blizzard_api_cli.auth import BlizzardAuthConfig, load_blizzard_auth_config
 
@@ -34,13 +35,26 @@ DEFAULT_REGION = "us"
 # server-side expiry. Mirrors the warcraftlogs client.
 _TOKEN_SKEW_SECONDS = 60
 
-# Hosts, OAuth token URL, and namespace strings below follow documented Blizzard API conventions
-# and are pending one-time live confirmation (run BLIZZARD_LIVE_TESTS=1). doctor + every command
-# payload carry provenance.verified=false to keep that posture honest.
-_VERIFICATION_NOTE = (
-    "Hosts, OAuth token URL, and namespace strings follow documented Blizzard API conventions and "
-    "are pending one-time live confirmation (run BLIZZARD_LIVE_TESTS=1). CN endpoints are especially "
-    "unconfirmed; classic namespace strings are best-effort."
+# Regions whose API host, OAuth token URL, and namespace strings have been confirmed against live
+# Blizzard endpoints (retail and classic Game Data, retail Profile). CN routes through a different
+# host and OAuth server that is unreachable from outside China, so it stays unconfirmed and its
+# payloads keep provenance.verified=false.
+VERIFIED_REGIONS = frozenset({"us", "eu", "kr", "tw"})
+
+# The one statement of the verification posture. `blizzard --help` (and docs/reference/blizzard.md,
+# generated from it), doctor's notes, and every payload's provenance.verification_note all print
+# these strings, so the region list is derived from VERIFIED_REGIONS instead of re-typed in each
+# place and left to drift out of sync with what provenance.verified actually reports.
+_UNVERIFIED_CN_NOTE = (
+    "CN routing (gateway.battlenet.com.cn + oauth.battlenet.com.cn) follows documented Blizzard API "
+    "conventions and is unconfirmed; those hosts are unreachable from outside China, so CN payloads "
+    "report provenance.verified=false."
+)
+_VERIFIED_NOTE = (
+    "Host, OAuth token URL, and namespace strings are confirmed against live Blizzard endpoints for "
+    f"{'/'.join(region for region in SUPPORTED_REGIONS if region in VERIFIED_REGIONS)} (retail and "
+    "classic Game Data, retail Profile), whose payloads report provenance.verified=true. "
+    + _UNVERIFIED_CN_NOTE
 )
 
 
@@ -95,7 +109,7 @@ def resolve_game_version(*, game_version: str | None, classic: bool) -> str:
     if resolved not in SUPPORTED_GAME_VERSIONS:
         raise BlizzardClientError(
             "unsupported_game_version",
-            f"Blizzard routing supports game versions {SUPPORTED_GAME_VERSIONS}; got {resolved!r}. "
+            f"--game-version must be one of: {', '.join(SUPPORTED_GAME_VERSIONS)}; got {resolved!r}. "
             "Classic-era / Season of Discovery namespaces are deferred pending a live spike.",
         )
     return resolved
@@ -113,7 +127,7 @@ def resolve_routing(
     if region not in SUPPORTED_REGIONS:
         raise BlizzardClientError(
             "unsupported_region",
-            f"Blizzard API supports regions {SUPPORTED_REGIONS}; got {region!r}.",
+            f"--region must be one of: {', '.join(SUPPORTED_REGIONS)}; got {region!r}.",
         )
     resolved_version = resolve_game_version(game_version=game_version, classic=classic)
     if resolved_version == "classic" and namespace_class == "profile":
@@ -157,10 +171,6 @@ class BlizzardClient:
     def configured(self) -> bool:
         return bool(self._client_id and self._client_secret)
 
-    @property
-    def default_region(self) -> str:
-        return self._default_region
-
     def close(self) -> None:
         if self._http_client is not None:
             self._http_client.close()
@@ -168,7 +178,7 @@ class BlizzardClient:
 
     def _client(self) -> httpx.Client:
         if self._http_client is None:
-            self._http_client = httpx.Client(timeout=self._timeout_seconds, follow_redirects=True)
+            self._http_client = build_client(timeout=self._timeout_seconds)
         return self._http_client
 
     def _credential_cache_key(self, region: str) -> str:
@@ -287,6 +297,21 @@ class BlizzardClient:
             "source_url": str(response.request.url),
         }
 
+    def _get_realm_scoped(self, routing: BlizzardRouting, realm: str, path_for: Callable[[str], str]) -> dict[str, Any]:
+        """GET ``path_for(slug)`` for each slug spelling of ``realm``, moving on only on HTTP 404.
+
+        Blizzard slugs drop apostrophes and keep word breaks (``Mal'Ganis`` -> ``malganis``, ``Tarren
+        Mill`` -> ``tarren-mill``), so neither spelling alone covers every realm or every way it is typed.
+        """
+        *earlier, final = realm_slug_variants(realm) or [realm.strip().lower()]
+        for slug in earlier:
+            try:
+                return self._get(routing, path_for(slug))
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code != 404:
+                    raise
+        return self._get(routing, path_for(final))
+
     def fetch_realm(
         self,
         slug: str,
@@ -303,8 +328,7 @@ class BlizzardClient:
             locale=locale,
             namespace_class="dynamic",
         )
-        # Blizzard realm slugs are lowercase (e.g. "illidan", "mal-ganis").
-        return self._get(routing, f"/data/wow/realm/{slug.lower()}")
+        return self._get_realm_scoped(routing, slug, lambda realm_slug: f"/data/wow/realm/{realm_slug}")
 
     def fetch_item(
         self,
@@ -341,8 +365,11 @@ class BlizzardClient:
             locale=locale,
             namespace_class="profile",
         )
-        return self._get(routing, f"/profile/wow/character/{realm.lower()}/{name.lower()}")
+        return self._get_realm_scoped(routing, realm, lambda realm_slug: f"/profile/wow/character/{realm_slug}/{name.lower()}")
 
 
-def verification_note() -> str:
-    return _VERIFICATION_NOTE
+def verification_note(region: str | None = None) -> str:
+    """Verification posture: the CN caveat alone for an unconfirmed region, the full summary otherwise."""
+    if region is not None and region not in VERIFIED_REGIONS:
+        return _UNVERIFIED_CN_NOTE
+    return _VERIFIED_NOTE

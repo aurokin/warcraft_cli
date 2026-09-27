@@ -4,12 +4,13 @@ import json
 from typing import Any
 
 import httpx
-from warcraft_api.http import DEFAULT_RETRY_ATTEMPTS, request_with_retries
+from warcraft_api.http import DEFAULT_RETRY_ATTEMPTS, build_client, request_with_retries
 
-PROVIDER = "lorrgs"
+PROVIDER_NAME = "lorrgs"
 API_HOST = "https://api2.lorrgs.io"
 SITE_HOST = "https://lorrgs.io"
 OPENAPI_URL = f"{API_HOST}/api/openapi.json"
+USER_AGENT = "warcraft-cli/lorrgs"
 
 
 class LorrgsClientError(RuntimeError):
@@ -47,7 +48,7 @@ class LorrgsClient:
 
     def _client(self) -> httpx.Client:
         if self._http_client is None:
-            self._http_client = httpx.Client(timeout=self._timeout_seconds, follow_redirects=True)
+            self._http_client = build_client(timeout=self._timeout_seconds, headers={"User-Agent": USER_AGENT})
         return self._http_client
 
     @staticmethod
@@ -63,7 +64,7 @@ class LorrgsClient:
             self._client(),
             url,
             params=_clean_params(params),
-            headers={"Accept": "application/json", "User-Agent": "warcraft-cli/lorrgs"},
+            headers={"Accept": "application/json"},
             retry_attempts=self._retry_attempts,
         )
         payload = self._decode_json(response)

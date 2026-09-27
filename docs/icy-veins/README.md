@@ -1,307 +1,197 @@
 # Icy Veins CLI
 
-## Goal
+`icy-veins` is a WoW guide/article provider CLI. It discovers guides from the Icy Veins WoW
+sitemap, fetches and parses guide pages, and exports multi-page guide bundles that can be queried
+offline.
 
-Make `icy-veins` a fully functioning, clearly scoped, and well-tested WoW guide/article CLI.
+Tier: **supported**. No auth, no API key.
 
-That means:
-- explicit family support
-- predictable discovery behavior
-- family-aware `guide-full` traversal
-- strong live and recorded-fixture coverage
-- docs that say exactly what is supported and what is not
+## Commands
 
-## Current Status
+| Command | What it does |
+| --- | --- |
+| `icy-veins doctor` | Reports capabilities and the resolved HTTP cache configuration. |
+| `icy-veins search <query>` | Ranks sitemap guides against a free-text query. |
+| `icy-veins resolve <query>` | Picks the single best guide and returns a `next_command`. |
+| `icy-veins guide <guide_ref>` | Fetches one guide page and returns a summary with previews. |
+| `icy-veins guide-full <guide_ref>` | Fetches every page in the guide's family navigation and merges them. |
+| `icy-veins guide-export <guide_ref>` | Writes the full bundle (pages, entities, analysis surfaces) to a directory. |
+| `icy-veins guide-query <bundle> <query>` | Searches an exported bundle without touching the network. |
 
-`icy-veins` is implemented and useful today, but it is not hardened to the same level as `method`.
+`guide_ref` accepts a slug (`mistweaver-monk-pve-healing-guide`) or a full
+`https://www.icy-veins.com/wow/<slug>` URL.
 
-Current command surface:
-- `icy-veins doctor`
-- `icy-veins search`
-- `icy-veins resolve`
-- `icy-veins guide`
-- `icy-veins guide-full`
-- `icy-veins guide-export`
-- `icy-veins guide-query`
+## Flags
 
-Current strengths:
-- live WoW guide fetch works
-- shared article bundle export/load/query works
-- search and resolve work for many common guide queries
-- guide-family navigation and page TOC extraction work on many pages
-- explicit family metadata is now emitted on supported pages
-- supported families are now explicitly defined in the implementation and docs
-- class hubs and role guides now have local-only traversal instead of over-expanding in `guide-full`
-- broad class and role queries now prefer the corresponding class hub or role guide, while specialized families penalize those broad hubs
-- unsupported or bad WoW refs now fail with structured `invalid_guide_ref`
-- unsupported query families like patch notes, class changes, hotfixes, and news now return a `scope_hint` instead of misleading guide matches
-- dedicated Icy Veins live tests now exist
-- recorded real-page fixtures now exist across representative supported and intentionally unsupported WoW page shapes
-- PvP and stat-priority families are now explicitly validated by recorded and live coverage
-- resources, macros/addons, Mythic+ tips, and simulations are now also explicitly validated by recorded and live coverage
-- leveling, builds/talents, rotation, gems/enchants/consumables, and spell-summary pages are now also explicitly validated by recorded and live coverage
-- local bundle export/query works
+Global flags come before the subcommand and are the shared agent-output flags:
+`--pretty`, `--compact`, `--compact-max-chars`, `--fields`, `--fields-strict`, `--profile`.
 
-Current weaknesses:
-- family-aware ranking is still too generic across some supported families
-- recorded-fixture coverage is better now, but still not yet as deep as Method
-- family scope is strong across the main supported families, but still needs more depth around rarer edge-case templates
+Per-command flags:
 
-## Research Summary
+- `search` / `resolve`: `--limit` (1-50, default 5)
+- `guide-export`: `--out <dir>` (defaults to `./icy-veins_exports/guide-<slug>`)
+- `guide-query`: `--limit` (1-50, default 5), `--kind` (repeatable or comma-separated), `--section-title`
 
-Icy Veins offers a much broader WoW surface than just spec guide landing pages.
+`--kind` accepts `sections`, `navigation`, `linked_entities`, `build_references`, and
+`analysis_surfaces`; all five are searched when the flag is omitted. Anything else fails with
+`invalid_argument` (exit 2).
 
-Validated live page families:
-- class hub guides
-- role guides
-- main spec guides
-- easy mode pages
-- leveling guides
-- spec subpages such as builds, rotation, stat priority, gems, gear, spell summary, resources, Mythic+ tips, macros/addons, and simulations
-- raid-specific spec guides
-- expansion/special-mode guides such as The War Within preview pages, Remix pages, and Torghast pages
+## Examples
 
-Observed from the live WoW sitemap:
-- roughly 4,000+ WoW URLs exist under `/wow/`
-- the site contains many old and special-purpose pages that still look guide-like
-- sitemap filtering must remain WoW-specific and family-aware
+```bash
+icy-veins --pretty search "mistweaver monk guide" --limit 5
+icy-veins resolve "fury warrior easy mode"
+icy-veins guide mistweaver-monk-pve-healing-guide
+icy-veins guide-export mistweaver-monk-pve-healing-guide --out ./tmp/mw-monk
+icy-veins guide-query ./tmp/mw-monk "stat priority" --kind analysis_surfaces
+```
 
-Important implementation conclusion:
-- the parser model is broad enough to support more than one Icy Veins guide family
-- the real work is defining supported families and applying the right traversal/ranking rules for each family
+## Output
 
-## Target Scope
+Every command emits the shared envelope (`ok`, `provider`, `command`, `kind`, `schema_version`,
+`query`, `provenance`, `data`, and `error` on failure) and no other top-level key; the payload is in
+`data`.
 
-The CLI should intentionally support these families:
+Exit codes follow `docs/foundation/ERROR_CONTRACT.md`: 1 generic, 2 usage, 4 guide not found,
+5 network/upstream failure. A blank `search` or `resolve` query fails with `invalid_query` (exit 2)
+before any request. A page whose article container no longer matches (an Icy Veins layout change),
+or whose canonical link is not a guide page, fails with `parse_failed` and exit 1 rather than
+returning an empty article with `ok:true`.
 
-- `class_hub`
-  - examples: `monk-guide`, `warrior-guide`
-- `role_guide`
-  - examples: `healing-guide`
-- `spec_guide`
-  - examples: `mistweaver-monk-pve-healing-guide`
-- `easy_mode`
-  - examples: `fury-warrior-pve-dps-easy-mode`
-- `leveling`
-  - examples: `mistweaver-monk-leveling-guide`
-- `pvp`
-  - examples: `mistweaver-monk-pvp-guide`
-- `spec_subpage`
-  - builds/talents
-  - rotation/cooldowns
-  - stat priority
-  - gems/enchants/consumables
-  - gear/best in slot
-  - spell summary
-  - resources
-  - Mythic+ tips
-  - macros/addons
-  - simulations
-- `raid_guide`
-  - examples: `mistweaver-monk-pve-healing-nerub-ar-palace-raid-guide`
-- `expansion_guide`
-  - examples: `mistweaver-monk-the-war-within-pve-guide`
-- `special_event_guide`
-  - examples: Remix and Torghast pages
+`doctor` reports `cache.redis_url` without its credentials or query string
+(`redis://***@host:6379/0`).
 
-The CLI should explicitly reject or deprioritize these until we intentionally support them:
-- patch-analysis pages
-- news-like pages
-- one-off old system pages that are not part of a guide family
+`guide-query` answers a bad bundle path the same way `method guide-query` does: a path that does
+not exist is `not_found` (exit 4), a file is a usage error (exit 2), and a directory that is not a
+readable bundle is `invalid_bundle` (exit 1): no `manifest.json`, a manifest whose `files` lists no
+content file (`pages.jsonl`, `sections.jsonl`, `analysis-surfaces.jsonl`, ...), or a listed file that
+is missing, corrupt, or holds a row with a wrongly typed nested field (a `build_identity` that is not
+an object, `surface_tags` that is not a list). A `wowhead guide-export` bundle is readable; it has sections, navigation,
+linked entities and analysis surfaces, but no pages or build references.
 
-## Command Expectations
+### Build references
 
-### `search`
+`build_references` carries explicit build evidence from the page, never a guess from the slug or
+title. Two reference types are emitted:
 
-`search` should:
-- search only intentionally supported or intentionally recognized families
-- rank family matches appropriately for the query
-- avoid surfacing unsupported/news-like WoW slugs as if they were guides
-- expose enough metadata for the caller to understand the matched family
+| `reference_type` | Source on the page | `url` |
+| --- | --- | --- |
+| `wowhead_talent_calc_url` | an embedded Wowhead talent-calc link | the talent-calc URL |
+| `wow_talent_export` | a published WoW loadout import string (the `Copy` blocks on the talents pages) | the import string itself, because the reference has no link |
 
-### `resolve`
+Both types set `build_code`, so `warcraft guide-builds-simc` collects either one and reports it
+under `summary.identify_success_count`. Decoding needs a class and a spec, and the two types supply
+them differently:
 
-`resolve` should:
-- resolve clearly when the top match is family-appropriate and sufficiently better than alternatives
-- stay conservative for ambiguous queries
-- behave differently for broad class-hub queries vs spec-guide queries vs subpage queries
+- `wowhead_talent_calc_url` always decodes unaided: its URL path names the class and spec.
+- `wow_talent_export` names neither, so `build_identity` stays unknown on the row and SimC has to
+  identify the string itself. It probes every spec in SimC's specialization data, healers included.
 
-### `guide`
+So `simc decode-build --talents <build_code>` returns `ok:true` for an Icy Veins build of any role
+without `--actor-class` or `--spec` (verified against the Fury Warrior talents page: the probe returns
+`warrior`/`fury` with `confidence: high`).
 
-`guide` should:
-- return a valid summary for every supported family
-- fail clearly for unsupported/non-guide WoW pages
-- avoid duplicated headings
-- provide guide family metadata so the caller understands what kind of page they received
+The Icy Veins builds/talents pages publish import strings rather than talent-calc links, so in
+practice the rows you get back are `wow_talent_export`.
 
-### `guide-full`
+### Partial guide bundles
 
-`guide-full` should:
-- walk only the relevant family graph for the current page
-- avoid exploding from a class hub into unrelated class hubs
-- avoid traversing navigational blocks that are clearly site-wide or family-external
-- produce a stable page set for export/query reuse
+`guide-full` and `guide-export` walk every page in the family navigation. A page that cannot be
+fetched or parsed is skipped rather than failing the whole bundle, and it is reported in
+`data.failed_pages` (`{count, items: [{url, section_slug, error: {code, message}}]}`). Content from
+those pages is missing from the merged sections, entities, build references, and analysis surfaces.
 
-### `guide-export` / `guide-query`
+## Supported guide families
 
-These should:
-- keep working across all supported families
-- export enough metadata to tell which family the bundle represents
-- keep family-aware traversal decisions stable in the resulting bundle
+Sitemap discovery and `guide` only accept slugs that classify into a known family. Unclassified WoW
+pages fail with `invalid_guide_ref` (exit 2).
 
-## Known Gaps To Fix
+| Family | Example slug |
+| --- | --- |
+| `class_hub` | `monk-guide` |
+| `role_guide` | `healing-guide` |
+| `spec_guide` | `mistweaver-monk-pve-healing-guide` |
+| `easy_mode` | `fury-warrior-pve-dps-easy-mode` |
+| `leveling` | `mistweaver-monk-leveling-guide` |
+| `pvp` | `mistweaver-monk-pvp-guide` |
+| `spec_builds_talents` | `mistweaver-monk-pve-healing-spec-builds-talents` |
+| `rotation_guide` | `mistweaver-monk-pve-healing-rotation-cooldowns-abilities` |
+| `stat_priority` | `mistweaver-monk-pve-healing-stat-priority` |
+| `gems_enchants_consumables` | `mistweaver-monk-pve-healing-gems-enchants-consumables` |
+| `gear_best_in_slot` | `mistweaver-monk-pve-healing-gear-best-in-slot` |
+| `spell_summary` | `mistweaver-monk-pve-healing-spell-summary` |
+| `resources` | `mistweaver-monk-resources` |
+| `mythic_plus_tips` | `mistweaver-monk-pve-healing-mythic-plus-tips` |
+| `macros_addons` | `mistweaver-monk-pve-healing-macros-addons` |
+| `simulations` | `mistweaver-monk-pve-healing-simulations` |
+| `raid_guide` | `mistweaver-monk-pve-healing-nerub-ar-palace-raid-guide` |
+| `expansion_guide` | `mistweaver-monk-the-war-within-pve-guide` |
+| `special_event_guide` | `mistweaver-monk-mists-of-pandaria-remix-guide` |
 
-1. Family-aware traversal is incomplete.
-- fixed for class hubs and role guides
-- still needs broader review across all supported families
+`guide-full` traversal is family-aware: class hubs and role guides stay on the current page, and
+every other family walks its own navigation block. Only a class hub reads the class dropdown in the
+page header as its navigation; a spec page whose own switcher is missing gets no navigation and
+`guide-full` returns that one page.
 
-2. Headings are duplicated on real pages.
-- fixed for the current heading-container pattern
-- should still stay covered by regression tests as page shapes evolve
+Patch notes, class-change roundups, hotfix posts, and news pages are out of scope. `search` and
+`resolve` detect those query intents and return an empty result set with a `scope_hint` instead of
+misleading guide matches.
 
-3. Unsupported or bad refs fail too late.
-- fixed for unsupported/unclassified WoW slugs and 404 guide fetches
+`search` and `resolve` return a guide only when its name or slug contains the whole query or every
+query word, or when a query word names the guide's family (`talents`, `stats`, `easy mode`, ...). One
+word that no guide contains therefore empties the result: `frost dk` returns nothing. Words match
+whole, so `dh` does not match "headhunters", and a trailing plural `s` is ignored on both sides, so
+`build` keeps the `...-spec-builds-talents` pages. Words such as `a`, `of` and `the` are ignored, and
+`+` reads as `plus`, so `mythic+` finds the "Mythic Plus" pages and the seasonal
+`<expansion>-mythic-season-<n>-guide` pages. There are no class or spec abbreviations: `dk` and `mw`
+match nothing.
 
-4. Discovery/ranking is too generic for some families.
-- `easy mode`, `raid guide`, and special-event pages need continued family-aware ranking refinement instead of only slug text matching.
-- unsupported query intent detection should stay explicit so news-like WoW queries do not silently degrade back into guide matches.
+A spec query (`frost mage`, `survival hunter guide`) resolves to that spec's
+`...-pve-<role>-guide`. Healer specs also publish a PvE DPS guide; their healing guide ranks first.
+A hunter spec's pets page ranks with its PvP and leveling pages, below the spec guide. A query that
+names a spec ranks that spec's guides (`spec_name` in `ranking.match_reasons`) above pages that only
+share the word, so `shadow` lists the Shadow Priest guide before the Shadow Enclave delve guide.
+`resolve` never picks between candidates with the same or nearly the same score, so a spec name that
+several classes share (`frost`, `holy`, `protection`, `restoration`) stays unresolved; add the class.
+The one exception is a query that is a page's exact title (`exact_title`) when every close rival is
+one of that page's own sub-pages: `player housing` resolves to `player-housing-guide` over
+`player-housing-interior-guide`.
 
-5. Documentation is not explicit enough.
-- improved in `docs/USAGE.md`
-- still needs long-term maintenance as family coverage expands
+Each result carries `metadata.last_updated`, the sitemap's `<lastmod>` date. A page last updated more
+than a year before the newest page in the sitemap loses 10 points and lists `penalty_stale_page` in
+`ranking.match_reasons`, so a past season's guide ranks below the current one.
 
-6. Test coverage is not deep enough yet.
-- dedicated live coverage now exists
-- recorded real-page fixture depth is still missing
+## Caching
 
-## Phased Plan
+HTTP responses are cached through `warcraft_api.cache`. Sitemap XML and guide HTML are cached
+separately.
 
-### Phase 1: Correctness And Scope
+| Variable | Default |
+| --- | --- |
+| `ICY_VEINS_CACHE_BACKEND` | `file` (`redis` also supported) |
+| `ICY_VEINS_CACHE_DIR` | `<cache root>/icy-veins/http` |
+| `ICY_VEINS_REDIS_URL` | unset |
+| `ICY_VEINS_REDIS_PREFIX` | `icy_veins_cli` |
+| `ICY_VEINS_SITEMAP_CACHE_TTL_SECONDS` | `86400` |
+| `ICY_VEINS_PAGE_CACHE_TTL_SECONDS` | `3600` |
 
-Status: mostly completed.
+`icy-veins doctor` prints the resolved values.
 
-- introduce explicit Icy Veins family classification
-- add family metadata to discovery and fetch payloads
-- fix heading duplication
-- add structured invalid/unsupported failure behavior for bad WoW refs
-- define how `guide-full` should behave for:
-  - class hubs
-  - role guides
-  - spec-family pages
-  - standalone/special-event pages
+## Tests
 
-### Phase 2: Discovery And Traversal
+- `tests/test_icy_veins_cli.py` - parsing, ranking, command contracts, transport error envelopes
+- `tests/test_icy_veins_recorded_fixtures.py` - captured real pages (pre-redesign and Astro layouts)
+  plus the slug-to-family classification table
+- `tests/e2e/test_icy_veins.py` - live end-to-end journeys, run with `make test-e2e E2E_ARGS="tests/e2e/test_icy_veins.py"`
 
-Status: in progress.
+## Not in scope
 
-- make sitemap discovery family-aware
-- add family-aware ranking boosts and penalties
-- ensure `resolve` handles:
-  - main guide queries
-  - easy mode queries
-  - leveling queries
-  - role/class-hub queries
-  - raid-guide queries
-  - special-event guide queries
-- make `guide-full` traverse only the intended family graph for each family
+Login/premium content, non-WoW Icy Veins games, news ingestion, and patch-analysis pages.
 
-### Phase 3: Coverage And Reliability
-
-Status: started.
-
-- add dedicated Icy Veins live tests
-- add recorded fixtures for representative supported families
-- add recorded fixtures for intentionally unsupported/non-guide WoW pages
-- add regression tests around family-aware `guide-full`
-- add regression tests for ranking and family classification
-
-### Phase 4: Documentation And Polish
-
-- update `docs/USAGE.md` with explicit supported families
-- update this document with the validated support boundary
-- update the root `warcraft` skill guidance so agents know when to choose Icy Veins
-- make sure wrapper discovery/ranking works correctly for Icy Veins family types
-
-## Testing Strategy
-
-### Recorded Fixtures
-
-Add or preserve fixtures for at least:
-- class hub guide
-- role guide
-- main spec guide
-- easy mode page
-- leveling page
-- raid guide
-- expansion guide
-- special-event guide
-- explicitly unsupported/non-guide WoW page
-
-### Live Tests
-
-Add a dedicated Icy live test file covering:
-- search
-- resolve
-- guide
-- guide-full
-- one class hub
-- one role guide
-- one easy mode page
-- one raid guide
-- one special-event guide
-- one intentionally unsupported/non-guide failure path
-
-### Contract Tests
-
-Add regression coverage for:
-- family classification
-- heading dedupe
-- family-aware traversal
-- ranking boosts/penalties by family
-- structured invalid/unsupported errors
-
-## Shared vs Local Code
-
-What can keep using shared code:
-- article bundle export/load/query
-- article discovery payload shaping
-- linked-entity merge for multi-page bundles
-- cache, output, and transport infrastructure
-
-What should stay local to `icy-veins`:
-- sitemap family classification
-- family-aware ranking
-- family-aware traversal rules
-- Icy Veins page parsing
-- Icy Veins-specific invalid/unsupported surface rules
-
-## Quality Gates
-
-`icy-veins` should be considered fully covered when:
-- supported families are explicit in docs
-- unsupported families fail clearly and consistently
-- `guide-full` is family-aware and no longer over-traverses
-- heading duplication is eliminated
-- live coverage exists across representative supported families
-- recorded fixtures exist across representative supported and unsupported families
-- wrapper search/resolve behavior remains aligned with the Icy Veins family model
-
-## Not In Scope Right Now
-
-- login or premium support
-- non-WoW Icy Veins games
-- news ingestion
-- patch-analysis pages as a first-class surface
-
-## Source Links
+## Source links
 
 - `https://www.icy-veins.com/sitemap.xml`
 - `https://www.icy-veins.com/wow/monk-guide`
 - `https://www.icy-veins.com/wow/healing-guide`
-- `https://www.icy-veins.com/wow/fury-warrior-pve-dps-easy-mode`
 - `https://www.icy-veins.com/wow/mistweaver-monk-pve-healing-guide`
-- `https://www.icy-veins.com/wow/mistweaver-monk-pve-healing-nerub-ar-palace-raid-guide`
-- `https://www.icy-veins.com/wow/mistweaver-monk-the-war-within-pve-guide`
-- `https://www.icy-veins.com/wow/mistweaver-monk-mists-of-pandaria-remix-guide`
-- `https://www.icy-veins.com/wow/mistweaver-monk-torghast-guide-and-best-anima-powers`
 - [Roadmap](../ROADMAP.md)

@@ -8,8 +8,10 @@ from typing import Any
 import curseforge_cli.client as client_module
 import httpx
 import pytest
+import typer
 from curseforge_cli.main import app
 from typer.testing import CliRunner
+from warcraft_core.envelope import ENVELOPE_KEYS, REQUIRED_KEYS
 
 runner = CliRunner()
 
@@ -75,8 +77,8 @@ def test_addon_by_slug_envelope_and_provenance(monkeypatch: pytest.MonkeyPatch) 
     assert prov["mod_id"] == 3358
     assert prov["slug"] == "deadly-boss-mods"
     assert prov["resolved_by"] == "slug_search"
-    assert prov["verified"] is False
-    assert "pending one-time live confirmation" in prov["verification_note"]
+    assert prov["verified"] is True
+    assert "confirmed against live CurseForge traffic" in prov["verification_note"]
     assert set(prov["source_urls"]) == {"mod", "search", "changelog"}
     data = payload["data"]
     assert data["metadata"]["id"] == 3358
@@ -108,8 +110,9 @@ def test_missing_api_key_error(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("CURSEFORGE_API_KEY", raising=False)
     _install_recorder(monkeypatch)
     result = runner.invoke(app, ["addon", "deadly-boss-mods"])
-    assert result.exit_code == 1
+    assert result.exit_code == 3
     payload = json.loads(result.stderr)
+    assert set(payload) == ENVELOPE_KEYS
     assert payload["ok"] is False
     assert payload["error"]["code"] == "missing_api_key"
 
@@ -122,7 +125,7 @@ def test_addon_not_found_for_empty_search(monkeypatch: pytest.MonkeyPatch) -> No
 
     monkeypatch.setattr(client_module, "request_with_retries", _fake)
     result = runner.invoke(app, ["addon", "no-such-addon"])
-    assert result.exit_code == 1
+    assert result.exit_code == 4
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "addon_not_found"
 
@@ -135,7 +138,7 @@ def test_addon_not_found_for_mod_404(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(client_module, "request_with_retries", _fake)
     result = runner.invoke(app, ["addon", "999999"])
-    assert result.exit_code == 1
+    assert result.exit_code == 4
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "addon_not_found"
 
@@ -148,20 +151,41 @@ def test_http_status_error_no_traceback(monkeypatch: pytest.MonkeyPatch) -> None
 
     monkeypatch.setattr(client_module, "request_with_retries", _fake)
     result = runner.invoke(app, ["addon", "3358"])
-    assert result.exit_code == 1
+    assert result.exit_code == 3
     payload = json.loads(result.stderr)
-    assert payload["error"]["code"] == "http_error"
+    assert payload["error"]["code"] == "auth_failed"
     assert "403" in payload["error"]["message"]
 
 
+def test_upstream_status_error_is_network_exit_code(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _fake(client: Any, url: str, *, method: str = "GET", **kwargs: Any) -> _FakeResponse:
+        request = httpx.Request("GET", url)
+        response = httpx.Response(500, request=request)
+        raise httpx.HTTPStatusError("Server Error", request=request, response=response)
+
+    monkeypatch.setattr(client_module, "request_with_retries", _fake)
+    result = runner.invoke(app, ["addon", "3358"])
+    assert result.exit_code == 5
+    payload = json.loads(result.stderr)
+    assert payload["error"]["code"] == "upstream_error"
+
+
 def test_network_error_no_traceback(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Offline transport failure through the CliRunner path the wrapper uses: JSON envelope on stderr,
+    # network exit code, no traceback and nothing on stdout.
     def _fake(client: Any, url: str, *, method: str = "GET", **kwargs: Any) -> _FakeResponse:
         raise httpx.ConnectError("connection refused")
 
     monkeypatch.setattr(client_module, "request_with_retries", _fake)
     result = runner.invoke(app, ["addon", "3358"])
-    assert result.exit_code == 1
+    assert result.exit_code == 5
+    assert result.stdout == ""
+    assert not isinstance(result.exception, httpx.HTTPError)
     payload = json.loads(result.stderr)
+    assert payload["ok"] is False
+    assert payload["provider"] == "curseforge"
+    assert payload["command"] == "addon"
+    assert payload["schema_version"] == "1"
     assert payload["error"]["code"] == "network_error"
 
 
@@ -196,7 +220,7 @@ def test_changelog_best_effort_error_marker_on_http_failure(monkeypatch: pytest.
     payload = json.loads(result.stdout)
     changelog = payload["data"]["changelog"]
     assert changelog["file_id"] == 5001
-    assert changelog["error"]["code"] == "http_error"
+    assert changelog["error"]["code"] == "upstream_error"
     assert "changelog" not in payload["provenance"]["source_urls"]
     assert payload["data"]["metadata"]["id"] == 3358
 
@@ -287,7 +311,7 @@ def test_slug_search_requires_exact_match(monkeypatch: pytest.MonkeyPatch) -> No
 
     monkeypatch.setattr(client_module, "request_with_retries", _fake)
     result = runner.invoke(app, ["addon", "deadly-boss-mods"])
-    assert result.exit_code == 1
+    assert result.exit_code == 4
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "addon_not_found"
 
@@ -328,7 +352,7 @@ def test_numeric_id_rejects_non_wow_mod(monkeypatch: pytest.MonkeyPatch) -> None
 
     monkeypatch.setattr(client_module, "request_with_retries", _fake)
     result = runner.invoke(app, ["addon", "12345"])
-    assert result.exit_code == 1
+    assert result.exit_code == 4
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "addon_not_found"
 
@@ -340,11 +364,12 @@ def test_coming_soon_commands_emit_structured_stub(command: str) -> None:
     result = runner.invoke(app, [command, "dbm"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
+    assert set(payload) == REQUIRED_KEYS
     assert payload["ok"] is True
     assert payload["provider"] == "curseforge"
     assert payload["command"] == command
     assert payload["kind"] == "coming_soon"
-    assert payload["coming_soon"] is True
+    assert payload["data"]["coming_soon"] is True
 
 
 def test_numeric_id_missing_gameid_is_invalid_response(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -359,3 +384,62 @@ def test_numeric_id_missing_gameid_is_invalid_response(monkeypatch: pytest.Monke
     assert result.exit_code == 1
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "invalid_response"
+
+
+def test_slug_search_auth_failure_names_the_endpoint_and_the_id_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    # /v1/mods/search is scoped separately from /v1/mods: a key that reads mods fine can still be
+    # rejected for search. The message has to say which endpoint refused and how to get the addon
+    # anyway, or the caller only sees an unactionable "HTTP 403".
+    def _fake(client: Any, url: str, *, method: str = "GET", **kwargs: Any) -> _FakeResponse:
+        if "/v1/mods/search" not in url:
+            return _FakeResponse(_fixture_for_url(url), url)
+        request = httpx.Request("GET", url)
+        response = httpx.Response(403, request=request)
+        raise httpx.HTTPStatusError("Forbidden", request=request, response=response)
+
+    monkeypatch.setattr(client_module, "request_with_retries", _fake)
+    result = runner.invoke(app, ["addon", "deadly-boss-mods"])
+    assert result.exit_code == 3
+    payload = json.loads(result.stderr)
+    assert payload["error"]["code"] == "auth_failed"
+    message = payload["error"]["message"]
+    assert "/v1/mods/search" in message
+    assert "numeric mod id" in message
+    assert "curseforge addon 3358" in message
+
+
+def test_help_doctor_and_payloads_state_one_verification_posture(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`curseforge --help` (and docs/reference/curseforge.md, generated from it), `doctor`, and the
+    addon payload must state the same verification posture, so the help can never call the API
+    surface unverified while the payloads report provenance.verified=true."""
+    _install_recorder(monkeypatch)
+    addon = runner.invoke(app, ["addon", "deadly-boss-mods"])
+    assert addon.exit_code == 0
+    prov = json.loads(addon.stdout)["provenance"]
+    assert prov["verified"] is True
+
+    help_text = typer.main.get_command(app).help or ""
+    assert prov["verification_note"] in help_text
+
+    doctor = runner.invoke(app, ["doctor"])
+    assert doctor.exit_code == 0
+    assert any(prov["verification_note"] in note for note in json.loads(doctor.stdout)["data"]["notes"])
+
+
+def test_changelog_names_the_file_it_covers(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The newest file can be an alpha, so the changelog says which file and release type it is for.
+    mod = _fixture("mod")
+    newest = max(mod["data"]["latestFiles"], key=lambda row: row["fileDate"])
+    newest.update({"displayName": "DBM 11.1.0-3-gabc123", "releaseType": 3})
+
+    def _fake(client: Any, url: str, *, method: str = "GET", **kwargs: Any) -> _FakeResponse:
+        if "/changelog" not in url and "/v1/mods/" in url:
+            return _FakeResponse(mod, url)
+        return _FakeResponse(_fixture_for_url(url), url)
+
+    monkeypatch.setattr(client_module, "request_with_retries", _fake)
+    result = runner.invoke(app, ["addon", "3358"])
+
+    assert result.exit_code == 0, result.output
+    changelog = json.loads(result.stdout)["data"]["changelog"]
+    assert (changelog["file_id"], changelog["display_name"], changelog["release_type"]) == (newest["id"], "DBM 11.1.0-3-gabc123", 3)

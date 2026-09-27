@@ -1,0 +1,1018 @@
+{
+ "rankings": [
+  {
+   "rank": 1,
+   "score": 515.4,
+   "run": {
+    "keystone_team_id": 442418386,
+    "season": "season-mn-2",
+    "status": "finished",
+    "dungeon": {
+     "type": "dungeon",
+     "id": 16091,
+     "name": "Murder Row",
+     "short_name": "MR",
+     "slug": "murder-row",
+     "expansion_id": 11,
+     "icon_url": "/images/wow/icons/large/inv_achievement_dungeon_murderrow.jpg",
+     "patch": "12.0.0",
+     "wowInstanceId": 2813,
+     "map_challenge_mode_id": 587,
+     "keystone_timer_ms": 2040999,
+     "num_bosses": 4,
+     "group_finder_activity_ids": [
+      1749,
+      1750,
+      1751,
+      1950
+     ]
+    },
+    "keystone_run_id": 13240272,
+    "mythic_level": 22,
+    "clear_time_ms": 2019411,
+    "keystone_time_ms": 2040999,
+    "completed_at": "2026-09-17T21:54:20.000Z",
+    "num_chests": 1,
+    "time_remaining_ms": 21588,
+    "logged_run_id": 3904086,
+    "videos": [
+     {
+      "id": 147327,
+      "seasonSlug": "season-mn-2",
+      "createdByUserId": 808559,
+      "videoType": "twitch",
+      "videoId": "2876736285",
+      "startVideoTimeSeconds": 11149,
+      "duration": 12950,
+      "thumbnailUrl": "https://static-cdn.jtvnw.net/cf_vods/d2vi6trrdongqn/83870afc7dd59a5180ce_messerknecht__320404753888_1789668958//thumb/thumb0-%{width}x%{height}.jpg",
+      "character": {
+       "id": 303585249,
+       "persona_id": 31384524,
+       "name": "Messerknecht",
+       "class": {
+        "id": 4,
+        "name": "Rogue",
+        "slug": "rogue"
+       },
+       "race": {
+        "id": 29,
+        "name": "Void Elf",
+        "slug": "void-elf",
+        "faction": "alliance"
+       },
+       "faction": "alliance",
+       "level": 90,
+       "spec": {
+        "id": 259,
+        "name": "Assassination",
+        "slug": "assassination",
+        "class_id": 4,
+        "role": "dps",
+        "is_melee": true,
+        "patch": "1.0.0",
+        "ordinal": 0
+       },
+       "path": "/characters/us/area-52/Messerknecht",
+       "realm": {
+        "id": 264,
+        "connectedRealmId": 136,
+        "wowRealmId": 1566,
+        "wowConnectedRealmId": 3676,
+        "name": "Area 52",
+        "altName": null,
+        "slug": "area-52",
+        "altSlug": "area-52",
+        "locale": "en_US",
+        "isConnected": false,
+        "realmType": "live"
+       },
+       "region": {
+        "name": "United States & Oceania",
+        "slug": "us",
+        "short_name": "US"
+       },
+       "flags": {}
+      }
+     },
+     {
+      "id": 147325,
+      "seasonSlug": "season-mn-2",
+      "createdByUserId": 105194,
+      "videoType": "twitch",
+      "videoId": "2876739527",
+      "startVideoTimeSeconds": 10910,
+      "duration": 12771,
+      "thumbnailUrl": "https://static-cdn.jtvnw.net/cf_vods/d1m7jfoe9zdc1j/8c9e6b13ccf10e6402c2_thdlock_321413849689_1789669197//thumb/thumb0-%{width}x%{height}.jpg",
+      "character": {
+       "id": 308315009,
+       "persona_id": 50682,
+       "name": "Thdlock",
+       "class": {
+        "id": 9,
+        "name": "Warlock",
+        "slug": "warlock"
+       },
+       "race": {
+        "id": 3,
+        "name": "Dwarf",
+        "slug": "dwarf",
+        "faction": "alliance"
+       },
+       "faction": "alliance",
+       "level": 90,
+       "spec": {
+        "id": 266,
+        "name": "Demonology",
+        "slug": "demonology",
+        "class_id": 9,
+        "role": "dps",
+        "is_melee": false,
+        "patch": "1.0.0",
+        "ordinal": 1
+       },
+       "path": "/characters/us/illidan/Thdlock",
+       "realm": {
+        "id": 369,
+        "connectedRealmId": 207,
+        "wowRealmId": 57,
+        "wowConnectedRealmId": 57,
+        "name": "Illidan",
+        "altName": null,
+        "slug": "illidan",
+        "altSlug": "illidan",
+        "locale": "en_US",
+        "isConnected": false,
+        "realmType": "live"
+       },
+       "region": {
+        "name": "United States & Oceania",
+        "slug": "us",
+        "short_name": "US"
+       },
+       "flags": {}
+      }
+     },
+     {
+      "id": 147326,
+      "seasonSlug": "season-mn-2",
+      "createdByUserId": 232382,
+      "videoType": "twitch",
+      "videoId": "2876741829",
+      "startVideoTimeSeconds": 10735,
+      "duration": 12680,
+      "thumbnailUrl": "https://static-cdn.jtvnw.net/cf_vods/d2vi6trrdongqn/b6b6abfc3f08500deae0_ellesmere_gaming_320404817888_1789669372//thumb/thumb0-%{width}x%{height}.jpg",
+      "character": {
+       "id": 307493568,
+       "persona_id": 41797567,
+       "name": "Ellesmére",
+       "class": {
+        "id": 2,
+        "name": "Paladin",
+        "slug": "paladin"
+       },
+       "race": {
+        "id": 3,
+        "name": "Dwarf",
+        "slug": "dwarf",
+        "faction": "alliance"
+       },
+       "faction": "alliance",
+       "level": 90,
+       "spec": {
+        "id": 65,
+        "name": "Holy",
+        "slug": "holy",
+        "class_id": 2,
+        "role": "healer",
+        "is_melee": false,
+        "patch": "1.0.0",
+        "ordinal": 0
+       },
+       "path": "/characters/us/emerald-dream/Ellesmére",
+       "realm": {
+        "id": 334,
+        "connectedRealmId": 185,
+        "wowRealmId": 162,
+        "wowConnectedRealmId": 162,
+        "name": "Emerald Dream",
+        "altName": null,
+        "slug": "emerald-dream",
+        "altSlug": "emerald-dream",
+        "locale": "en_US",
+        "isConnected": false,
+        "realmType": "live"
+       },
+       "region": {
+        "name": "United States & Oceania",
+        "slug": "us",
+        "short_name": "US"
+       },
+       "flags": {}
+      }
+     }
+    ],
+    "weekly_modifiers": [
+     {
+      "id": 10,
+      "icon": "ability_toughness",
+      "name": "Fortified",
+      "slug": "fortified",
+      "description": "Non-boss enemies have 20% more health and inflict up to 20% increased damage."
+     },
+     {
+      "id": 9,
+      "icon": "achievement_boss_archaedas",
+      "name": "Tyrannical",
+      "slug": "tyrannical",
+      "description": "Bosses have 25% more health. Bosses and their minions inflict up to 15% increased damage."
+     },
+     {
+      "id": 147,
+      "icon": "ability_racial_chillofnight",
+      "name": "Xal'atath's Guile",
+      "slug": "xalataths-guile",
+      "description": "Xal'atath betrays players, revoking her bargains while making deaths subtract 15 seconds from time remaining."
+     }
+    ],
+    "num_modifiers_active": 3,
+    "faction": "alliance",
+    "deleted_at": null,
+    "keystone_platoon_id": null,
+    "platoon": null,
+    "roster": [
+     {
+      "character": {
+       "id": 301727023,
+       "persona_id": 57967027,
+       "name": "Happyfulx",
+       "class": {
+        "id": 8,
+        "name": "Mage",
+        "slug": "mage"
+       },
+       "race": {
+        "id": 29,
+        "name": "Void Elf",
+        "slug": "void-elf",
+        "faction": "alliance"
+       },
+       "faction": "alliance",
+       "level": 90,
+       "spec": {
+        "id": 62,
+        "name": "Arcane",
+        "slug": "arcane"
+       },
+       "path": "/characters/us/illidan/Happyfulx",
+       "realm": {
+        "id": 369,
+        "connectedRealmId": 207,
+        "wowRealmId": 57,
+        "wowConnectedRealmId": 57,
+        "name": "Illidan",
+        "altName": null,
+        "slug": "illidan",
+        "altSlug": "illidan",
+        "locale": "en_US",
+        "isConnected": false,
+        "realmType": "live"
+       },
+       "region": {
+        "name": "United States & Oceania",
+        "slug": "us",
+        "short_name": "US"
+       },
+       "stream": null,
+       "recruitmentProfiles": [],
+       "flags": {}
+      },
+      "oldCharacter": null,
+      "isTransfer": false,
+      "isBanned": false,
+      "role": "dps",
+      "loadout": "C4DAAAAAAAAAAAAAAAAAAAAAAYGGLzMzswMDamxAAAwAAmZmmlltZAgYDAAwMzwmlZMzyMGzMzMDLMzMzMDAwAAAMAzMgZAwwMzA"
+     },
+     {
+      "character": {
+       "id": 303585249,
+       "persona_id": 31384524,
+       "name": "Messerknecht",
+       "class": {
+        "id": 4,
+        "name": "Rogue",
+        "slug": "rogue"
+       },
+       "race": {
+        "id": 29,
+        "name": "Void Elf",
+        "slug": "void-elf",
+        "faction": "alliance"
+       },
+       "faction": "alliance",
+       "level": 90,
+       "spec": {
+        "id": 259,
+        "name": "Assassination",
+        "slug": "assassination"
+       },
+       "path": "/characters/us/area-52/Messerknecht",
+       "realm": {
+        "id": 264,
+        "connectedRealmId": 136,
+        "wowRealmId": 1566,
+        "wowConnectedRealmId": 3676,
+        "name": "Area 52",
+        "altName": null,
+        "slug": "area-52",
+        "altSlug": "area-52",
+        "locale": "en_US",
+        "isConnected": false,
+        "realmType": "live"
+       },
+       "region": {
+        "name": "United States & Oceania",
+        "slug": "us",
+        "short_name": "US"
+       },
+       "stream": null,
+       "recruitmentProfiles": [],
+       "flags": {}
+      },
+      "oldCharacter": null,
+      "isTransfer": false,
+      "isBanned": false,
+      "role": "dps",
+      "loadout": "CMQAAAAAAAAAAAAAAAAAAAAAAYmlZmFDGAAAAAYWGsNDAAAAAIbzMzMzMjx2MzMbzsMzMPgZMzYMMzYMALmlBGwSwywEYYxgZGgxYA"
+     },
+     {
+      "character": {
+       "id": 307493568,
+       "persona_id": 41797567,
+       "name": "Ellesmére",
+       "class": {
+        "id": 2,
+        "name": "Paladin",
+        "slug": "paladin"
+       },
+       "race": {
+        "id": 3,
+        "name": "Dwarf",
+        "slug": "dwarf",
+        "faction": "alliance"
+       },
+       "faction": "alliance",
+       "level": 90,
+       "spec": {
+        "id": 65,
+        "name": "Holy",
+        "slug": "holy"
+       },
+       "path": "/characters/us/emerald-dream/Ellesmére",
+       "realm": {
+        "id": 334,
+        "connectedRealmId": 185,
+        "wowRealmId": 162,
+        "wowConnectedRealmId": 162,
+        "name": "Emerald Dream",
+        "altName": null,
+        "slug": "emerald-dream",
+        "altSlug": "emerald-dream",
+        "locale": "en_US",
+        "isConnected": false,
+        "realmType": "live"
+       },
+       "region": {
+        "name": "United States & Oceania",
+        "slug": "us",
+        "short_name": "US"
+       },
+       "stream": null,
+       "recruitmentProfiles": [],
+       "flags": {}
+      },
+      "oldCharacter": null,
+      "isTransfer": false,
+      "isBanned": false,
+      "role": "healer",
+      "loadout": "CEEAAAAAAAAAAAAAAAAAAAAAAAAAALAwAAA2mZmZMjZGLGzMDLDmZxMNxYGzMDjZLDADYYDsxyMmZZ2mZmtGAAQALAwmHwMmxMMDAgZGmxY0A"
+     },
+     {
+      "character": {
+       "id": 308315009,
+       "persona_id": 50682,
+       "name": "Thdlock",
+       "class": {
+        "id": 9,
+        "name": "Warlock",
+        "slug": "warlock"
+       },
+       "race": {
+        "id": 3,
+        "name": "Dwarf",
+        "slug": "dwarf",
+        "faction": "alliance"
+       },
+       "faction": "alliance",
+       "level": 90,
+       "spec": {
+        "id": 266,
+        "name": "Demonology",
+        "slug": "demonology"
+       },
+       "path": "/characters/us/illidan/Thdlock",
+       "realm": {
+        "id": 369,
+        "connectedRealmId": 207,
+        "wowRealmId": 57,
+        "wowConnectedRealmId": 57,
+        "name": "Illidan",
+        "altName": null,
+        "slug": "illidan",
+        "altSlug": "illidan",
+        "locale": "en_US",
+        "isConnected": false,
+        "realmType": "live"
+       },
+       "region": {
+        "name": "United States & Oceania",
+        "slug": "us",
+        "short_name": "US"
+       },
+       "stream": null,
+       "recruitmentProfiles": [],
+       "flags": {}
+      },
+      "oldCharacter": null,
+      "isTransfer": false,
+      "isBanned": false,
+      "role": "dps",
+      "loadout": "CoQAAAAAAAAAAAAAAAAAAAAAAwMMzoZzMz2MzMz2AAAAAAAAGzYYBGYb0CNsYMzYZWmZmxMAwMjZmxMDwYGmZDAAMmZmxwwyMGwA"
+     },
+     {
+      "character": {
+       "id": 308390861,
+       "persona_id": 39043116,
+       "name": "Yodadkt",
+       "class": {
+        "id": 6,
+        "name": "Death Knight",
+        "slug": "death-knight"
+       },
+       "race": {
+        "id": 4,
+        "name": "Night Elf",
+        "slug": "night-elf",
+        "faction": "alliance"
+       },
+       "faction": "alliance",
+       "level": 90,
+       "spec": {
+        "id": 250,
+        "name": "Blood",
+        "slug": "blood"
+       },
+       "path": "/characters/us/area-52/Yodadkt",
+       "realm": {
+        "id": 264,
+        "connectedRealmId": 136,
+        "wowRealmId": 1566,
+        "wowConnectedRealmId": 3676,
+        "name": "Area 52",
+        "altName": null,
+        "slug": "area-52",
+        "altSlug": "area-52",
+        "locale": "en_US",
+        "isConnected": false,
+        "realmType": "live"
+       },
+       "region": {
+        "name": "United States & Oceania",
+        "slug": "us",
+        "short_name": "US"
+       },
+       "stream": null,
+       "recruitmentProfiles": [],
+       "flags": {}
+      },
+      "oldCharacter": null,
+      "isTransfer": false,
+      "isBanned": false,
+      "role": "tank",
+      "loadout": "CoPAAAAAAAAAAAAAAAAAAAAAAwMzyMzwMmZmhZZMz0MLzMjZmBAAAAwMMzMzMjZGDAYmZmZGAAADMwMW0YZDktBsBYGDAAwMDYMA"
+     }
+    ]
+   }
+  },
+  {
+   "rank": 2,
+   "score": 504.2,
+   "run": {
+    "keystone_team_id": 442418386,
+    "season": "season-mn-2",
+    "status": "finished",
+    "dungeon": {
+     "type": "dungeon",
+     "id": 16368,
+     "name": "Den of Nalorakk",
+     "short_name": "DON",
+     "slug": "den-of-nalorakk",
+     "expansion_id": 11,
+     "icon_url": "/images/wow/icons/large/inv_achievement_dungeon_proveyourworth.jpg",
+     "patch": "12.0.0",
+     "wowInstanceId": 2825,
+     "map_challenge_mode_id": 586,
+     "keystone_timer_ms": 1920999,
+     "num_bosses": 3,
+     "group_finder_activity_ids": [
+      1721,
+      1722,
+      1723,
+      1952
+     ]
+    },
+    "keystone_run_id": 13232901,
+    "mythic_level": 21,
+    "clear_time_ms": 1705913,
+    "keystone_time_ms": 1920999,
+    "completed_at": "2026-09-17T21:16:48.000Z",
+    "num_chests": 1,
+    "time_remaining_ms": 215086,
+    "logged_run_id": 3901055,
+    "videos": [
+     {
+      "id": 147293,
+      "seasonSlug": "season-mn-2",
+      "createdByUserId": 808559,
+      "videoType": "twitch",
+      "videoId": "2876736285",
+      "startVideoTimeSeconds": 9151,
+      "duration": 10752,
+      "thumbnailUrl": "https://static-cdn.jtvnw.net/cf_vods/d2vi6trrdongqn/83870afc7dd59a5180ce_messerknecht__320404753888_1789668958//thumb/thumb0-%{width}x%{height}.jpg",
+      "character": {
+       "id": 303585249,
+       "persona_id": 31384524,
+       "name": "Messerknecht",
+       "class": {
+        "id": 4,
+        "name": "Rogue",
+        "slug": "rogue"
+       },
+       "race": {
+        "id": 29,
+        "name": "Void Elf",
+        "slug": "void-elf",
+        "faction": "alliance"
+       },
+       "faction": "alliance",
+       "level": 90,
+       "spec": {
+        "id": 259,
+        "name": "Assassination",
+        "slug": "assassination",
+        "class_id": 4,
+        "role": "dps",
+        "is_melee": true,
+        "patch": "1.0.0",
+        "ordinal": 0
+       },
+       "path": "/characters/us/area-52/Messerknecht",
+       "realm": {
+        "id": 264,
+        "connectedRealmId": 136,
+        "wowRealmId": 1566,
+        "wowConnectedRealmId": 3676,
+        "name": "Area 52",
+        "altName": null,
+        "slug": "area-52",
+        "altSlug": "area-52",
+        "locale": "en_US",
+        "isConnected": false,
+        "realmType": "live"
+       },
+       "region": {
+        "name": "United States & Oceania",
+        "slug": "us",
+        "short_name": "US"
+       },
+       "flags": {}
+      }
+     },
+     {
+      "id": 147291,
+      "seasonSlug": "season-mn-2",
+      "createdByUserId": 105194,
+      "videoType": "twitch",
+      "videoId": "2876739527",
+      "startVideoTimeSeconds": 8912,
+      "duration": 10579,
+      "thumbnailUrl": "https://static-cdn.jtvnw.net/cf_vods/d1m7jfoe9zdc1j/8c9e6b13ccf10e6402c2_thdlock_321413849689_1789669197//thumb/thumb0-%{width}x%{height}.jpg",
+      "character": {
+       "id": 308315009,
+       "persona_id": 50682,
+       "name": "Thdlock",
+       "class": {
+        "id": 9,
+        "name": "Warlock",
+        "slug": "warlock"
+       },
+       "race": {
+        "id": 3,
+        "name": "Dwarf",
+        "slug": "dwarf",
+        "faction": "alliance"
+       },
+       "faction": "alliance",
+       "level": 90,
+       "spec": {
+        "id": 266,
+        "name": "Demonology",
+        "slug": "demonology",
+        "class_id": 9,
+        "role": "dps",
+        "is_melee": false,
+        "patch": "1.0.0",
+        "ordinal": 1
+       },
+       "path": "/characters/us/illidan/Thdlock",
+       "realm": {
+        "id": 369,
+        "connectedRealmId": 207,
+        "wowRealmId": 57,
+        "wowConnectedRealmId": 57,
+        "name": "Illidan",
+        "altName": null,
+        "slug": "illidan",
+        "altSlug": "illidan",
+        "locale": "en_US",
+        "isConnected": false,
+        "realmType": "live"
+       },
+       "region": {
+        "name": "United States & Oceania",
+        "slug": "us",
+        "short_name": "US"
+       },
+       "flags": {}
+      }
+     },
+     {
+      "id": 147292,
+      "seasonSlug": "season-mn-2",
+      "createdByUserId": 232382,
+      "videoType": "twitch",
+      "videoId": "2876741829",
+      "startVideoTimeSeconds": 8737,
+      "duration": 10299,
+      "thumbnailUrl": "https://static-cdn.jtvnw.net/cf_vods/d2vi6trrdongqn/b6b6abfc3f08500deae0_ellesmere_gaming_320404817888_1789669372//thumb/thumb0-%{width}x%{height}.jpg",
+      "character": {
+       "id": 307493568,
+       "persona_id": 41797567,
+       "name": "Ellesmére",
+       "class": {
+        "id": 2,
+        "name": "Paladin",
+        "slug": "paladin"
+       },
+       "race": {
+        "id": 3,
+        "name": "Dwarf",
+        "slug": "dwarf",
+        "faction": "alliance"
+       },
+       "faction": "alliance",
+       "level": 90,
+       "spec": {
+        "id": 65,
+        "name": "Holy",
+        "slug": "holy",
+        "class_id": 2,
+        "role": "healer",
+        "is_melee": false,
+        "patch": "1.0.0",
+        "ordinal": 0
+       },
+       "path": "/characters/us/emerald-dream/Ellesmére",
+       "realm": {
+        "id": 334,
+        "connectedRealmId": 185,
+        "wowRealmId": 162,
+        "wowConnectedRealmId": 162,
+        "name": "Emerald Dream",
+        "altName": null,
+        "slug": "emerald-dream",
+        "altSlug": "emerald-dream",
+        "locale": "en_US",
+        "isConnected": false,
+        "realmType": "live"
+       },
+       "region": {
+        "name": "United States & Oceania",
+        "slug": "us",
+        "short_name": "US"
+       },
+       "flags": {}
+      }
+     }
+    ],
+    "weekly_modifiers": [
+     {
+      "id": 10,
+      "icon": "ability_toughness",
+      "name": "Fortified",
+      "slug": "fortified",
+      "description": "Non-boss enemies have 20% more health and inflict up to 20% increased damage."
+     },
+     {
+      "id": 9,
+      "icon": "achievement_boss_archaedas",
+      "name": "Tyrannical",
+      "slug": "tyrannical",
+      "description": "Bosses have 25% more health. Bosses and their minions inflict up to 15% increased damage."
+     },
+     {
+      "id": 147,
+      "icon": "ability_racial_chillofnight",
+      "name": "Xal'atath's Guile",
+      "slug": "xalataths-guile",
+      "description": "Xal'atath betrays players, revoking her bargains while making deaths subtract 15 seconds from time remaining."
+     }
+    ],
+    "num_modifiers_active": 3,
+    "faction": "alliance",
+    "deleted_at": null,
+    "keystone_platoon_id": null,
+    "platoon": null,
+    "roster": [
+     {
+      "character": {
+       "id": 301727023,
+       "persona_id": 57967027,
+       "name": "Happyfulx",
+       "class": {
+        "id": 8,
+        "name": "Mage",
+        "slug": "mage"
+       },
+       "race": {
+        "id": 29,
+        "name": "Void Elf",
+        "slug": "void-elf",
+        "faction": "alliance"
+       },
+       "faction": "alliance",
+       "level": 90,
+       "spec": {
+        "id": 62,
+        "name": "Arcane",
+        "slug": "arcane"
+       },
+       "path": "/characters/us/illidan/Happyfulx",
+       "realm": {
+        "id": 369,
+        "connectedRealmId": 207,
+        "wowRealmId": 57,
+        "wowConnectedRealmId": 57,
+        "name": "Illidan",
+        "altName": null,
+        "slug": "illidan",
+        "altSlug": "illidan",
+        "locale": "en_US",
+        "isConnected": false,
+        "realmType": "live"
+       },
+       "region": {
+        "name": "United States & Oceania",
+        "slug": "us",
+        "short_name": "US"
+       },
+       "stream": null,
+       "recruitmentProfiles": [],
+       "flags": {}
+      },
+      "oldCharacter": null,
+      "isTransfer": false,
+      "isBanned": false,
+      "role": "dps",
+      "loadout": "C4DAAAAAAAAAAAAAAAAAAAAAAYGGLzMzswMDamxAAAwAAmZmmlltZAgYDAAwMzwmlZMzyMGzMzMDLMzMzMDAwAAAMAzMgZAwwMzA"
+     },
+     {
+      "character": {
+       "id": 303585249,
+       "persona_id": 31384524,
+       "name": "Messerknecht",
+       "class": {
+        "id": 4,
+        "name": "Rogue",
+        "slug": "rogue"
+       },
+       "race": {
+        "id": 29,
+        "name": "Void Elf",
+        "slug": "void-elf",
+        "faction": "alliance"
+       },
+       "faction": "alliance",
+       "level": 90,
+       "spec": {
+        "id": 259,
+        "name": "Assassination",
+        "slug": "assassination"
+       },
+       "path": "/characters/us/area-52/Messerknecht",
+       "realm": {
+        "id": 264,
+        "connectedRealmId": 136,
+        "wowRealmId": 1566,
+        "wowConnectedRealmId": 3676,
+        "name": "Area 52",
+        "altName": null,
+        "slug": "area-52",
+        "altSlug": "area-52",
+        "locale": "en_US",
+        "isConnected": false,
+        "realmType": "live"
+       },
+       "region": {
+        "name": "United States & Oceania",
+        "slug": "us",
+        "short_name": "US"
+       },
+       "stream": null,
+       "recruitmentProfiles": [],
+       "flags": {}
+      },
+      "oldCharacter": null,
+      "isTransfer": false,
+      "isBanned": false,
+      "role": "dps",
+      "loadout": "CMQAAAAAAAAAAAAAAAAAAAAAAYmlZmFDGAAAAAYWGsNDAAAAAIbzMzMzMjx2MzMbzsMzMPgZMzYMMzYMALmlBGwSwywEYYxgZGgxYA"
+     },
+     {
+      "character": {
+       "id": 307493568,
+       "persona_id": 41797567,
+       "name": "Ellesmére",
+       "class": {
+        "id": 2,
+        "name": "Paladin",
+        "slug": "paladin"
+       },
+       "race": {
+        "id": 3,
+        "name": "Dwarf",
+        "slug": "dwarf",
+        "faction": "alliance"
+       },
+       "faction": "alliance",
+       "level": 90,
+       "spec": {
+        "id": 65,
+        "name": "Holy",
+        "slug": "holy"
+       },
+       "path": "/characters/us/emerald-dream/Ellesmére",
+       "realm": {
+        "id": 334,
+        "connectedRealmId": 185,
+        "wowRealmId": 162,
+        "wowConnectedRealmId": 162,
+        "name": "Emerald Dream",
+        "altName": null,
+        "slug": "emerald-dream",
+        "altSlug": "emerald-dream",
+        "locale": "en_US",
+        "isConnected": false,
+        "realmType": "live"
+       },
+       "region": {
+        "name": "United States & Oceania",
+        "slug": "us",
+        "short_name": "US"
+       },
+       "stream": null,
+       "recruitmentProfiles": [],
+       "flags": {}
+      },
+      "oldCharacter": null,
+      "isTransfer": false,
+      "isBanned": false,
+      "role": "healer",
+      "loadout": "CEEAAAAAAAAAAAAAAAAAAAAAAAAAALAwAAA2mZmZMjZGLGzMDLDmZxMNxYGzMDjZLDADYYDsxyMmZZ2mZmtGAAQALAwmHwMmxMMDAgZGmxY0A"
+     },
+     {
+      "character": {
+       "id": 308315009,
+       "persona_id": 50682,
+       "name": "Thdlock",
+       "class": {
+        "id": 9,
+        "name": "Warlock",
+        "slug": "warlock"
+       },
+       "race": {
+        "id": 3,
+        "name": "Dwarf",
+        "slug": "dwarf",
+        "faction": "alliance"
+       },
+       "faction": "alliance",
+       "level": 90,
+       "spec": {
+        "id": 266,
+        "name": "Demonology",
+        "slug": "demonology"
+       },
+       "path": "/characters/us/illidan/Thdlock",
+       "realm": {
+        "id": 369,
+        "connectedRealmId": 207,
+        "wowRealmId": 57,
+        "wowConnectedRealmId": 57,
+        "name": "Illidan",
+        "altName": null,
+        "slug": "illidan",
+        "altSlug": "illidan",
+        "locale": "en_US",
+        "isConnected": false,
+        "realmType": "live"
+       },
+       "region": {
+        "name": "United States & Oceania",
+        "slug": "us",
+        "short_name": "US"
+       },
+       "stream": null,
+       "recruitmentProfiles": [],
+       "flags": {}
+      },
+      "oldCharacter": null,
+      "isTransfer": false,
+      "isBanned": false,
+      "role": "dps",
+      "loadout": "CoQAAAAAAAAAAAAAAAAAAAAAAwMMzoZzMz2MzMz2AAAAAAAAGzYYBGYb0CNsYMzYZWmZmxMAwMjZmxMDwYGmZDAAMmZmxwwyMGwA"
+     },
+     {
+      "character": {
+       "id": 308390861,
+       "persona_id": 39043116,
+       "name": "Yodadkt",
+       "class": {
+        "id": 6,
+        "name": "Death Knight",
+        "slug": "death-knight"
+       },
+       "race": {
+        "id": 4,
+        "name": "Night Elf",
+        "slug": "night-elf",
+        "faction": "alliance"
+       },
+       "faction": "alliance",
+       "level": 90,
+       "spec": {
+        "id": 250,
+        "name": "Blood",
+        "slug": "blood"
+       },
+       "path": "/characters/us/area-52/Yodadkt",
+       "realm": {
+        "id": 264,
+        "connectedRealmId": 136,
+        "wowRealmId": 1566,
+        "wowConnectedRealmId": 3676,
+        "name": "Area 52",
+        "altName": null,
+        "slug": "area-52",
+        "altSlug": "area-52",
+        "locale": "en_US",
+        "isConnected": false,
+        "realmType": "live"
+       },
+       "region": {
+        "name": "United States & Oceania",
+        "slug": "us",
+        "short_name": "US"
+       },
+       "stream": null,
+       "recruitmentProfiles": [],
+       "flags": {}
+      },
+      "oldCharacter": null,
+      "isTransfer": false,
+      "isBanned": false,
+      "role": "tank",
+      "loadout": "CoPAAAAAAAAAAAAAAAAAAAAAAwMzyMzwMmZmhZZMz0MLzMjZmBAAAAwMMzMzMjZGDAYmZmZGAAADMwMW0YZDktBsBYGDAAwMDYMA"
+     }
+    ]
+   }
+  }
+ ],
+ "leaderboard_url": "https://raider.io/mythic-plus-rankings/season-mn-2/all/us/leaderboards-strict",
+ "params": {
+  "dungeon": "all",
+  "page": 0,
+  "region": "us",
+  "access_key": "",
+  "season": "season-mn-2"
+ }
+}

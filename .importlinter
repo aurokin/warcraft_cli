@@ -8,7 +8,6 @@ root_packages =
   icy_veins_cli
   raiderio_cli
   warcraft_wiki_cli
-  wowprogress_cli
   simc_cli
   warcraftlogs_cli
   raidbots_cli
@@ -26,7 +25,6 @@ modules =
   icy_veins_cli
   raiderio_cli
   warcraft_wiki_cli
-  wowprogress_cli
   simc_cli
   warcraftlogs_cli
   raidbots_cli
@@ -39,6 +37,6 @@ name = Shared core layering and wrapper on top
 type = layers
 layers =
   warcraft_cli
-  wowhead_cli | method_cli | icy_veins_cli | raiderio_cli | warcraft_wiki_cli | wowprogress_cli | simc_cli | warcraftlogs_cli | raidbots_cli | blizzard_api_cli | curseforge_cli | lorrgs_cli
+  wowhead_cli | method_cli | icy_veins_cli | raiderio_cli | warcraft_wiki_cli | simc_cli | warcraftlogs_cli | raidbots_cli | blizzard_api_cli | curseforge_cli | lorrgs_cli
   warcraft_api | warcraft_content
   warcraft_core

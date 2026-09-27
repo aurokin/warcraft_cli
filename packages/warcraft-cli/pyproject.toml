@@ -6,7 +6,6 @@ build-backend = "hatchling.build"
 name = "warcraft-cli"
 version = "0.5.0"
 description = "Umbrella Warcraft CLI"
-readme = "../../README.md"
 requires-python = ">=3.12"
 dependencies = [
   "blizzard-api-cli>=0.1.0",
@@ -14,7 +13,6 @@ dependencies = [
   "icy-veins-cli>=0.1.0",
   "lorrgs-cli>=0.1.0",
   "method-cli>=0.1.0",
-  "orjson>=3.10.16,<4.0.0",
   "raidbots-cli>=0.1.0",
   "raiderio-cli>=0.1.0",
   "simc-cli>=0.1.0",
@@ -24,7 +22,6 @@ dependencies = [
   "warcraft-wiki-cli>=0.1.0",
   "warcraftlogs-cli>=0.1.0",
   "wowhead-cli>=0.1.0",
-  "wowprogress-cli>=0.1.0",
 ]
 
 [project.scripts]

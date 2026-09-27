@@ -1,320 +1,338 @@
-# SimulationCraft CLI
+# SimulationCraft CLI (`simc`)
 
-Companion docs in this folder:
-- [IMPLEMENTATION.md](IMPLEMENTATION.md)
-- [MIGRATION_INVENTORY.md](MIGRATION_INVENTORY.md)
+`simc` is the local-tool provider in this repo. It reads a local [SimulationCraft](https://github.com/simulationcraft/simc)
+checkout, decodes talent builds and APLs from it, and — when the binary is built — runs short sims and
+parses their JSON reports. It never talks to a web API.
 
-## Status
+## Requirements
 
-`simc` phase 1 is implemented.
+- a SimulationCraft source checkout for read-only analysis
+- a built `simc` binary inside that checkout (`build/simc`) for `version`, `sim`, `run`, `decode-build`,
+  `modify-build`, `validate-talent-transport`, and the comparison commands
+- `rg` (ripgrep) on `PATH` for `spec-files`, `find-action`, and `trace-action`. Without it those three
+  commands fail with `missing_dependency` and `simc doctor` marks them `unavailable`.
+- `git` and `cmake` for `sync`, `checkout`, and `build`
 
-Current commands:
-- `simc doctor`
-- `simc repo`
-- `simc checkout`
-- `simc version`
-- `simc sim`
-- `simc inspect`
-- `simc spec-files`
-- `simc identify-build`
-- `simc validate-talent-transport`
-- `simc describe-build`
-- `simc decode-build`
-- `simc build-harness`
-- `simc validate-apl`
-- `simc compare-apls`
-- `simc variant-report`
-- `simc verify-clean`
-- `simc apl-lists`
-- `simc apl-graph`
-- `simc apl-talents`
-- `simc find-action`
-- `simc trace-action`
-- `simc apl-prune`
-- `simc apl-branch-trace`
-- `simc apl-intent`
-- `simc apl-intent-explain`
-- `simc priority`
-- `simc inactive-actions`
-- `simc opener`
-- `simc apl-branch-compare`
-- `simc analysis-packet`
-- `simc first-cast`
-- `simc log-actions`
-- `simc compare-builds`
-- `simc modify-build`
-- `simc sync`
-- `simc build`
-- `simc run`
-- `simc search` and `simc resolve` as structured `coming_soon` stubs for wrapper stability
+`simc doctor` reports which of these are present.
 
-The design for later phases was informed by the original `simc_exp` exploration project, which has been migrated into `packages/simc-cli/`.
+## Repo resolution
 
-That exploration proved a substantial second-layer command family on top of a local SimulationCraft checkout:
-- repo and binary health checks
-- build-input decoding
-- APL parsing and graphing
-- branch and priority analysis
-- short-run sim timing helpers
-- combat-log inspection
-- agent-facing analysis packets
+The checkout is resolved in this order:
 
-## Why SimC Is Structurally Important
+1. `--repo-root` on the command line
+2. the `SIMC_REPO_ROOT` environment variable
+3. the explicit root saved with `simc repo --set-root <path>`
+4. the managed checkout under the provider data root, created by `simc checkout`
 
-`simc` is not just another web integration. It is a local-tool and local-repository integration, and the monorepo should be designed with that in mind.
+`simc repo` prints the resolution, `simc doctor` includes it under `repo_resolution`.
 
-If the shared abstractions only work for HTTP services, the structure is too narrow.
+## Global flags
 
-## Research Summary
+Global flags go before the subcommand.
 
-Observed from the official repository and README:
-- SimulationCraft is a local simulator written in C++
-- the command-line binary is `simc`
-- the graphical interface is explicitly described as largely unmaintained
-- the project expects local builds on Linux rather than packaged Linux releases
-- parameter-file and command-line driven execution are first-class workflows
+| Flag | Effect |
+|------|--------|
+| `--repo-root PATH` | Override the local SimulationCraft checkout for this invocation |
+| `--pretty` | Pretty-print JSON. Default output is compact JSON |
+| `--compact` | Truncate long prose strings (tooltip HTML, article text) and list each cut path in `provenance.compacted_paths`; URLs, talent/transport strings, export codes and `*command` values stay whole. |
+| `--compact-max-chars N` | Truncation length for `--compact` (40-10000) |
+| `--fields a.b,c` | Keep only the listed dot paths (repeatable or comma-separated) |
+| `--fields-strict` | Exit 2 with `missing_fields` when a requested path is absent |
+| `--profile agent\|human` | Output presets: compact JSON, pretty JSON |
 
-Observed from the existing `simc_exp` tool:
-- a readonly local checkout is enough for a lot of useful analysis work
-- many high-value questions do not require mutating the repo or running a full sim immediately
-- APL structure, build decoding, and search/trace workflows are agent-useful on their own
-- short local sims are still useful as an escalation path for timing and runtime validation
+```bash
+simc --repo-root ~/src/simc --pretty doctor
+simc --fields data.capabilities doctor
+```
 
-## Access Model
+## Output contract
 
-This should be a local-tool service:
-- readonly local repo inspection
-- optional local repo sync
-- optional managed local checkout/update for users who want the CLI to own the repo lifecycle
-- local build management
-- local binary execution
-- profile, log, and analysis helpers
-- local comparison workflows for guide-derived or user-derived APL variants without touching upstream
+Every command writes one JSON envelope: `ok`, `provider`, `command`, `kind`, `schema_version`, `query`,
+`provenance`, `data`, and `error` on failure, and no other top-level key: the payload lives in `data`.
+Failures go to stderr and use the
+shared exit codes (1 generic, 2 usage, 3 auth, 4 not found, 5 network/upstream) — see
+[../foundation/ERROR_CONTRACT.md](../foundation/ERROR_CONTRACT.md).
 
-The important planning change is that `simc` should not be thought of as only:
-- sync repo
-- build binary
-- run sim
+`simc` has no network surface, so exit 3 and exit 5 do not occur. A missing checkout, a missing binary,
+or a failed SimC run is a structured error, never a traceback.
 
-It should also support a readonly analysis mode against a local SimulationCraft source tree.
+These codes are worth knowing:
 
-Longer term, the repo strategy should support both:
-- explicit repo-path/config driven usage
-- an optional CLI-managed checkout and update workflow
+- `invalid_build` (exit 1) — SimC rejected the talent input. `error.message` is SimC's own error line
+  and `error.details` carries `simc_returncode`, a 20-line `simc_output_preview` (each line clipped to
+  200 characters), and `simc_binary` with the binary's build revision, the checkout HEAD, and
+  `matches_checkout`. A rejected hash is never reported as a partial decode. When the binary is older
+  than its checkout the message says so and names the rebuild command, because a stale binary decodes
+  against older trait data; `simc doctor` reports the same mismatch.
+- `missing_dependency` (exit 1) — ripgrep is not installed.
+- `not_found` (exit 4) — `spec-files`, `find-action`, and `trace-action` were pointed at a directory that
+  is not a SimulationCraft checkout. They report this instead of returning zero hits as a success.
+- `invalid_query` (exit 2) — a build arrived without a class and spec and could not be identified,
+  `decode-build` or `identify-build` was given no build at all, a build-input option was passed with
+  an empty value, or the class or spec names none of SimC's specs (an unknown class, or a pair such as
+  `mage holy`); the message lists the valid values. It is also the answer when `--apl-path` names a
+  spec's APL (for example `monk_brewmaster.simc`) that the build does not decode as: a build is never
+  described against another spec's rotation. Class and spec are read case-insensitively and
+  `Death Knight` or `death_knight` mean `deathknight`. Identification decodes the build once per spec in the checkout's generated
+  specialization data (every playable spec, healers included) and keeps the one it decodes as; an
+  `--actor-class` or `--spec` hint alone narrows the probe to that class's or spec's specs, and the
+  message names what was probed (`decodes as none of the 3 deathknight specs`). When several specs
+  decode it, `error.details.identity.candidates` lists them. Pass `--actor-class` and `--spec` together
+  to skip the probe; a talent hash is still decoded once as that spec, and when it does not decode as
+  it the identity comes back with `confidence: none` and the build commands fail with SimC's own error.
+- `identify_failed` (exit 1) — identification could not probe at all because the checkout has no built
+  binary, a binary that cannot be executed or that crashed (exited on a signal or with an unexpected
+  code) part-way through, no generated specialization data, or no generated trait data; the message
+  names which. A decode never returns the talents of a SimC run that crashed part-way.
+- `unsupported_build_reference` (exit 2) — the build input is a link the CLI cannot turn into talents.
+  `error.details.reference_type` names what it recognized: `wowhead_talent_calc_url` for a talent-calc
+  URL with no build code, `url` for anything else. See "Build references" below for what does decode.
+- `unknown_talent` (exit 2) — an `--enable`/`--disable` value names no talent of the actor's class
+  (`error.details.unknown_talents` lists them), or a `modify-build` `--add`/`--remove` value names no
+  talent the build's spec can take.
 
-## Recommended Phase Shape
+## Build input flags
 
-### Phase 1: Local Tool Foundation
+Commands that act on an exact build accept the same build-input group. Pass whichever form you have;
+the CLI reports which one it used in `source_kind` and `identity`.
 
-Implemented:
+| Flag | Input |
+|------|-------|
+| `--apl-path PATH` | Infer actor class and spec from an APL file |
+| `--profile-path PATH` | A SimC profile that contains build lines |
+| `--build-file PATH` | A plain text file with `talents=` / spec lines |
+| `--build-packet PATH` | A talent transport packet JSON file |
+| `--build-text TEXT` | Inline build text, talent hash, or Wowhead talent-calc URL with a build code |
+| `--talents TEXT` | WoW export string, Wowhead talent-calc URL with build code, or `talents=...` line |
+| `--class-talents` / `--spec-talents` / `--hero-talents` | Split SimC talent strings |
+| `--actor-class` / `--spec` | Explicit class and spec, e.g. `monk` and `mistweaver` |
 
-- `simc doctor`
-- `simc sync`
-- `simc build`
-- `simc version`
-- `simc sim`
-- `simc run <profile-or-file>`
-- `simc inspect <profile-or-result>`
-- `simc spec-files`
-- `simc decode-build`
+Analysis commands additionally take `--enable NAME` and `--disable NAME` (repeatable or comma-separated)
+to force talents on or off on top of the resolved build.
 
-This is the minimal operational layer.
+Passing a build-input option with an empty value is a usage error, not the same as omitting it.
 
-Recent usability improvement:
-- `simc sim` is now the preferred consumer run path
-- it uses explicit fixed presets instead of leaving iteration counts implicit
-- it always returns:
-  - run settings
-  - runtime timing
-  - core metrics
-- default presets:
-  - `quick` -> `1000` iterations
-  - `high-accuracy` -> `5000` iterations
-- `identify-build` and `decode-build` now distinguish between:
-  - bare WoW talent export strings
-  - Wowhead talent-calc URLs with build codes
-  - SimC-native build/profile text
-  - talent transport packet JSON files that carry an exact or validated build transport form
-  and report both `source_kind` and the normalized generated SimC profile used for decode/debug flows
-- raw-only packets are still valid evidence, but they are not accepted as direct build-analysis input; upgrade them through `validate-talent-transport` first
-- `validate-talent-transport` is the reusable cross-integration handoff primitive:
-  - it accepts a raw `talent_transport_packet` via `--build-packet`
-  - or repeated `--talent-row entry_id:node_id:rank` values with explicit class/spec
-  - it resolves rows through local SimC generated trait data
-  - it only emits validated `simc_split_talents` when the reconstructed build round-trips
-- malformed packet files now fail consistently with `invalid_build_packet` across:
-  - `identify-build --build-packet`
-  - `decode-build --build-packet`
-  - `describe-build --build-packet`
-  - `validate-talent-transport --build-packet`
-- `describe-build` now sits above that exact-build layer as the default “what is this build doing?” command
-- it keeps the summary evidence-backed by combining:
-  - resolved build identity
-  - selected vs skipped talents
-  - exact-build ST and AoE priority previews
-  - inactive talent-gated branches
-  - ST vs AoE action deltas
-- exact-build workflows now auto-resolve class/spec when possible:
-  - actor/spec lines and APL paths resolve directly
-  - Wowhead talent-calc URLs with build codes provide class/spec directly from the URL path
-  - standalone exact `wow_talent_export` packets preserve the export string, but packet-supplied class/spec still need corroboration from safer inference or a bounded SimC probe
-  - validated `simc_split_talents` packets stay bound to the class/spec identity they were validated under
-  - talent transport packets preserve provider provenance while still handing the best available exact or validated form into `simc`
-  - bare WoW talent exports are identified by bounded local SimC probes against the installed spec set
-- this removes the old agent failure mode where a valid user talent export was rejected just because the consumer did not already know the engine-facing class/spec labels
+The class and spec an APL file name suggests (`mage_arcane.simc`) only fill what the caller left out.
+With a talent hash they are a guess the hash is decoded against once: when it does not decode as that
+spec the guess is ignored (`ignored apl name: the build does not decode as mage fire`) and the build is
+identified by the probe. The same holds for the class and spec in a Wowhead talent-calc URL path
+(`ignored talent-calc url path: ...`). When the name does not complete a SimC class/spec pair (a renamed copy such as
+`mage_arcane_variant.simc`, or a `warrior_fury.simc` given with `--actor-class mage`) it is ignored and
+`source_notes` says `ignored apl name: ...`; the build is then identified as if no APL were given, and an
+APL view with no talents reads the file with `actor_class` and `spec` null. Such a view then knows no
+class, so `--enable`/`--disable` fail with `unknown_talent` even for a real talent; pass
+`--actor-class` and `--spec`.
 
-### Phase 2: Readonly Source Analysis
+Raw-only transport packets are not accepted as direct build input: upgrade them with
+`simc validate-talent-transport --build-packet <path> --out <path>` first. Malformed packets fail with
+`invalid_build_packet` on every command that reads one.
 
-The first readonly-analysis slice is now implemented.
+## Build references
 
-- `simc apl-lists`
-- `simc apl-graph`
-- `simc apl-talents`
-- `simc find-action`
-- `simc trace-action`
+`--build-text` and `--talents` accept these reference types. Anything else fails with
+`unsupported_build_reference` rather than reaching SimC as if it were a talent hash.
 
-These commands should work against a local checkout without requiring a full sim run.
+| Reference type | Example | Decodes |
+|----------------|---------|---------|
+| `wow_talent_export` | `C4QAAAAAA...` | Yes, once the class and spec are known. Both Method and Icy Veins publish only this type, and the string names no class or spec, so either pass `--actor-class`/`--spec` or let identification probe every spec SimC knows. |
+| `wowhead_talent_calc_url` | `https://www.wowhead.com/talent-calc/monk/mistweaver/<code>` | Yes, unaided: the path names the class and spec, which the hash is decoded against once. A path the hash contradicts is ignored and the probe identifies the build. |
+| Wowhead `/talent-calc/blizzard/<code>` | what `modify-build` publishes as `result.wowhead_url` | Yes, as a `wow_talent_export`: the URL carries the hash but no class or spec. |
+| `wowhead_talent_calc_url` with no build code | `https://www.wowhead.com/talent-calc/monk/mistweaver` | No — `unsupported_build_reference`. |
+| Any other link (guide page, article, addon export site) | `https://www.icy-veins.com/wow/...` | No — `unsupported_build_reference` with `reference_type: "url"`. |
 
-### Phase 3: Runtime-Aware Reasoning
+## Decoded builds
 
-Phase 3 is now implemented:
-- `simc apl-prune`
-- `simc apl-branch-trace`
-- `simc apl-intent`
-- `simc apl-intent-explain`
-- `simc priority`
-- `simc inactive-actions`
-- `simc opener`
-- `simc apl-branch-compare`
-- `simc analysis-packet`
-- `simc first-cast`
-- `simc log-actions`
+`decode-build` and `describe-build` report what SimC actually gave the player, not every line it printed:
 
-This is the agent-analysis layer proven by `simc_exp`.
+- `hero_tree` names the hero tree SimC activated (`activating sub tree` in its debug output). A talent
+  hash grants the keystones of both hero trees and SimC then disables the unselected one, so those
+  talents are moved to `inactive_hero_talents` and are absent from `enabled_talents`. Keeping them there
+  flips APL branches that dispatch on a hero keystone.
+- A tiered node (one node whose ranks are spread over several entries) is reported as one row per entry,
+  each with its own rank. SimC's decode prints a single line per tiered node holding the leftover rank,
+  always `0`, so the CLI runs the build a second time with those entries set to rank `0` and reads the
+  ranks back out of SimC's own overwrite log. Without those ranks the node cannot be re-serialized, and
+  every `modify-build` tree swap dropped it.
+- Talent rows still carry `rank_known`. It is `false`, with `rank: null`, only when the read-back found
+  nothing — for example when the checkout's trait data predates the node. Such a row still counts as
+  enabled, and re-serializing it (a tree swap) will fail with `encode_mismatch` rather than lose it.
 
-### Comparison Workflow
+## Comparing builds
 
-The next important `simc` layer is now implemented as a local comparison workflow:
-- `simc build-harness`
-- `simc validate-apl`
-- `simc compare-apls`
-- `simc variant-report`
-- `simc verify-clean`
+`compare-builds --tree` takes `class`, `spec`, or `hero`; any other value fails with `invalid_argument`
+(exit 2). A `--base` or `--other` that is empty or is no build reference is a usage error. An `--other`
+SimC rejects stays in `comparisons` with its `error`, and `summary` counts the `succeeded` and `failed`
+comparisons; when no `--other` decodes, the command fails with the first rejection instead.
 
-This is the correct answer to conversations where the user wants to draft guide-shaped APL variants, compare them objectively, and keep the upstream SimulationCraft repo untouched.
+## Editing a build
 
-### Talent Comparison and Modification
+`modify-build` routes each `--add`/`--remove` into the tree that owns the talent (SimC resolves talent
+names per tree, so a spec talent passed as a class talent is rejected). A name or entry id must be a
+talent the build's spec can take in the checkout's trait data: another class's talent, another spec's
+tree, or a class-tree talent reserved for another spec (Chi Burst is Brewmaster's) fails with
+`unknown_talent` (exit 2) instead of reaching SimC. A hero talent is checked the way SimC checks it:
+the spec must be offered its hero tree by that tree's selection node, whatever specs the talent row
+itself is tagged with (Augmentation's Chronowarden talents are tagged only for Preservation, yet
+Augmentation can take them; Arcane cannot take Frostfire's). An `--add` value that
+is not `name:rank` or `entry_id:rank` fails with `invalid_argument` (exit 2), and so does a
+`modify-build` with no `--swap-*-tree-from`, `--add` or `--remove`.
 
-- `simc compare-builds`
-- `simc modify-build`
+Healer builds encode like any other. SimC refuses to simulate some healers (Mistweaver and Holy Paladin
+always), so the encoder runs SimC in debug mode, which saves the profile without needing a simulated
+player, and without `allow_experimental_specializations`, which made Holy Priest fail on its stale
+default APL.
 
-This layer enables talent-level diffing and mutation workflows. `compare-builds` diffs talent selections between builds by tree. `modify-build` produces a new WoW talent export string after tree swaps or individual talent adds/removes, using SimC's own encoder.
+After re-encoding, the result is decoded again and compared per tree with the build it was supposed to
+come from: the base build, or the `--swap-*-tree-from` source for a tree that was swapped. If anything
+changed in the active trees that was not asked for, or a requested `--add`/`--remove` is not in the
+export at the requested rank, the command fails with `encode_mismatch` instead of emitting an export:
+`details.unrequested_changes` lists the former and `details.unapplied_edits` the latter (`tree`,
+`talent`, `requested_rank`, `export_rank`). SimC clamps a rank above the talent's maximum and ignores
+a talent it cannot place without any error, so this is the only place either shows. On success the
+payload carries `result.verified: true`: every requested edit landed and nothing else changed in the
+active trees. It does not mean the game will accept the export.
 
-Consumer guidance boundary:
-- default to `1000` iterations for most consumer-facing work
-- only suggest `5000+` when the user explicitly wants higher accuracy
-- thread recommendations should not be hard-coded in consumer guidance
-- if thread tuning matters, the CLI or agent should inspect the current machine before recommending a value
+An `--add` on a choice node whose other entry the build takes fails with `invalid_argument` (exit 2)
+before SimC runs, naming the talent to drop and its entry id: the talent hash holds one entry per choice
+node, so SimC either kept the old choice or dropped it unasked. Pass the `--remove <entry id>` the
+message gives to swap them; it also works when both entries share a name (Fire's two Flamestrikes).
 
-## What Can Reuse Shared Code
+SimC checks neither the game's per-tree point budget nor node prerequisites. When the export spends
+more points in a tree than the base build did (an `--add` on a full build), `result.disclosures` says
+so and warns that the game may refuse to import it.
 
-- output shaping
-- local cache/state directories
-- bundle/report indexing if result storage becomes useful
-- wrapper routing from `warcraft`
-- shared environment/config path handling
+A tree swap drops the base hash and rebuilds every tree from `entry:rank` pairs. That is lossless for a
+tiered node whose per-entry ranks were read back (see "Decoded builds" above); when they were not
+(`rank_known: false`), the swap fails with `encode_mismatch` naming the talent that would have been
+lost rather than emitting an export without it. `--add`/`--remove` keep the base hash and are
+unaffected. A build with no hero tree selected (SimC's own default talents, for one) holds only the
+keystones SimC grants freely, so its hero tree is left out of the rebuild rather than spelled out,
+which would make SimC select a hero tree.
 
-## What This Service Should Validate
+`result.diff_from_base` has a fourth key, `inactive_hero`. SimC regenerates the talent hash whenever it
+is handed a split talent string, and its serializer freely grants the keystone of *every* hero tree, so
+the export can carry a keystone the input hash did not. Those talents are inert (the sim never activates
+that tree) but the export string really does differ, so they are listed under `inactive_hero` and
+`result.disclosures` explains why. An empty `disclosures` means the export matches the base build
+exactly.
 
-`simc` is the test for whether the monorepo abstractions work for local tools as well as network services.
+Validation resolves every raw row against the local SimulationCraft trait data (class, spec, hero, and
+the hero-tree selection node, which is reported under tree `selection` and named after the hero tree),
+re-encodes the build through the SimC binary, and decodes it back. Every entry is compared by rank,
+tiered nodes included: their per-entry ranks are read back as described under "Decoded builds", and a
+node whose ranks cannot be read back fails the comparison. The keystones SimC grants for the hero tree
+the build did not pick are listed under `validation.round_trip.ignored_unselected_hero_entries` and
+ignored. A packet stays `raw_only` with `simc_trait_resolution_incomplete` when the local checkout
+predates a talent or a row repeats an entry (`duplicate_entry`) or has a negative rank
+(`negative_rank`), with `multiple_hero_trees` (`hero_tree_ids`) when the rows span two hero trees,
+or with `simc_round_trip_mismatch` (`expected_entries_by_tree` / `actual_entries_by_tree`) when the
+decoded build differs.
 
-If a shared layer assumes HTTP everywhere, it is the wrong layer.
+## Commands
 
-It should also validate that the repo can support:
-- readonly source-tree analysis
-- optional escalation into binary-backed execution
-- agent-facing reasoning packets that are not tied to HTTP responses or article pages
+| Command | Arguments | What it returns |
+|---------|-----------|-----------------|
+| `analysis-packet` | APL_PATH | Bundle branch, intent, and optional first-cast timing analysis into one payload. |
+| `apl-branch-compare` | APL_PATH | Compare branch dispatch between two builds or target counts on one APL. |
+| `apl-branch-trace` | APL_PATH | Trace action-list dispatch for an exact build from a starting list. |
+| `apl-graph` | APL_PATH | Render the action-list call graph of an APL file as Mermaid text. |
+| `apl-intent` | APL_PATH | Summarize what the focus action list is trying to do for an exact build. |
+| `apl-intent-explain` | APL_PATH | Explain the focus list as setup, helper, burst, and priority buckets. |
+| `apl-lists` | APL_PATH | List the action lists in an APL file with their entries. |
+| `apl-prune` | APL_PATH | Classify APL entries as eligible, dead, or unknown for an exact build. |
+| `apl-talents` | APL_PATH | List the talents an APL file references and the most common actions. |
+| `build` | - | Build the local SimulationCraft binary with cmake. |
+| `build-harness` | - | Write a harness profile for the resolved build with no APL actions. |
+| `checkout` | - | Clone or update the managed SimulationCraft checkout. |
+| `compare-apls` | HARNESS_PATH | Sim a base APL against labelled variants and rank them by DPS. |
+| `compare-builds` | - | Diff a base talent build against one or more other builds, per tree. |
+| `decode-build` | - | Decode a talent build into per-tree talents using the local SimC binary. |
+| `describe-build` | - | Describe a build end to end: talents, priority, and single-target versus AoE differences. |
+| `doctor` | - | Report SimulationCraft repo readiness, binary version, and per-command capabilities. |
+| `find-action` | ACTION | Find an action, buff, or token across APLs, class modules, and spell dumps. |
+| `first-cast` | PROFILE_PATH ACTION | Time the first cast of an action across several short sims. |
+| `identify-build` | - | Resolve class/spec identity for a build without decoding its talents. |
+| `inactive-actions` | APL_PATH | List the APL actions an exact build cannot use. |
+| `inspect` | [TARGET] | Describe the repo, or one file inside it, including any build lines it carries. |
+| `log-actions` | LOG_PATH ACTIONS | Report when actions were first scheduled and performed in a SimC combat log. |
+| `modify-build` | - | Apply talent swaps, additions, and removals to a build and re-encode it. |
+| `opener` | APL_PATH | Preview the early priority for an exact build, flagging runtime-only conditions. |
+| `priority` | APL_PATH | Return the static active priority for an exact build, excluding inactive talent branches. |
+| `repo` | - | Show or change which local SimulationCraft checkout the CLI uses. |
+| `resolve` | QUERY | Return the structured coming-soon stub for free-text resolution. |
+| `run` | PROFILE_PATH | Run a profile through the local SimC binary with raw SimC arguments. |
+| `search` | QUERY | Return the structured coming-soon stub for free-text search. |
+| `sim` | [PROFILE_PATH] | Run a profile through the local SimC binary and summarize the JSON report. |
+| `spec-files` | [QUERY] | List APL and class-module files in the checkout, optionally narrowed by a substring. |
+| `sync` | - | Pull the latest SimulationCraft sources into the local checkout. |
+| `trace-action` | APL_PATH ACTION | Trace one action through an APL file and the surrounding source. |
+| `validate-apl` | HARNESS_PATH APL_PATH | Append an APL to a harness profile and check that SimC parses the result. |
+| `validate-talent-transport` | - | Round-trip raw talent rows through SimulationCraft and report the validated transport forms. |
+| `variant-report` | REPORT_PATH | Summarize a saved compare-apls JSON report. |
+| `verify-clean` | - | Report whether the checkout and built binary are unmodified. |
+| `version` | - | Report the version reported by the local SimC binary. |
 
-## Analysis Boundary
+`apl-branch-compare` takes the right-hand build only from the `--right-*` options once any right-hand
+build source is given (`--right-profile-path`, `--right-build-file`, `--right-build-text`,
+`--right-talents`, or a `--right-*-talents` split string); nothing of the left build carries over. Without
+one, the right side is the left build again with any `--right-actor-class`/`--right-spec` and
+`--right-enable`/`--right-disable` layered on, which compares target counts or talent overrides.
 
-The `simc` analysis layer should stay grounded in observable local evidence.
+`search` and `resolve` are structured `coming_soon` stubs that exit 0. They exist so the `warcraft`
+wrapper can route uniformly; use the direct commands above for discovery.
 
-That means:
-- `analysis-packet` and intent helpers can summarize structure, branches, and runtime samples
-- exact-build views like `priority`, `inactive-actions`, and `opener` should strip inactive talent branches instead of summarizing from shared APL text blindly
-- they can recommend next commands or follow-up investigations
-- they should not drift into authoritative "smart answers" that go beyond what the local source tree or runtime sample actually proves
+Flags, defaults, and value ranges are in [reference/simc.md](../reference/simc.md) and
+`simc <command> --help`.
 
-This is an important boundary for agent trust:
-- analysis metadata is good
-- evidence-backed recommendations are good
-- unsupported synthesis is not
+## Sim presets
 
-## What Should Stay SimC-Specific
+`simc sim` is the preferred consumer run path. It uses fixed presets instead of leaving iteration
+counts implicit, and always returns run settings, runtime timing, and core metrics:
 
-- local source-tree parsing and APL reasoning
-- git sync policy
-- build orchestration
-- binary invocation
-- result/report parsing
-- environment validation
-- talent/build decoding logic that depends on the local SimC binary
+- `--preset quick` (default): 1000 iterations
+- `--preset high-accuracy`: 5000 iterations
 
-## What To Adopt From `simc_exp`
+Individual settings (`--iterations`, `--max-time`, `--threads`, `--targets`, `--fight-style`,
+`--vary-combat-length`) override the preset. Default to `quick` for consumer work and only reach for
+`high-accuracy` when the user asks for it. Do not hard-code thread counts in guidance; inspect the
+machine first.
 
-Strong candidates to migrate into `simc`:
-- build-input normalization and decode helpers
-- repo discovery and validation
-- APL parsing, graphing, and talent-reference extraction
-- action search and trace helpers
-- branch/prune analysis
-- analysis-packet generation
-- short-run `first-cast` timing helpers
-- combat-log action summaries
+## Comparison workflow
 
-What should not be copied blindly:
-- hardcoded repo paths
-- the exact command names if the service-wide CLI surface needs to be simplified
-- assumptions that every analysis path must exist in phase 1
+Draft and compare APL variants without touching the upstream checkout:
 
-## First Useful Slice
+```bash
+simc build-harness --talents "<export>" --out ./tmp/harness.simc
+simc validate-apl ./tmp/harness.simc ./tmp/variant.simc
+simc compare-apls ./tmp/harness.simc --base-apl ./tmp/base.simc --variant "variant=./tmp/variant.simc" --report-out ./tmp/report.json
+simc variant-report ./tmp/report.json
+simc verify-clean --hash-binary
+```
 
-1. `doctor` against a local readonly checkout
-2. `version` and binary detection
-3. `spec-files` and `decode-build`
-4. one controlled `run` path
+`dps`, `dps_error`, and `fight_length` are means over every iteration. `action_counts`, `action_cpm`,
+and `top_action_deltas` are not: SimulationCraft records an action sequence for a single iteration, so
+those describe one fight however many were simulated. The payload says so in `sampling` and repeats
+`action_sequence_iterations: 1` on each summary and comparison. Treat a small CPM delta as noise.
 
-That would give agents immediate value without requiring the full advanced analysis surface on day one.
+## Tests that need the binary
 
-## Risks
+`tests/test_simc_real_binary.py` drives the real SimC binary over its checkout's own stock MID1
+profiles, plus a Mistweaver and a Holy Priest build for the healer encode path. It runs only when
+`WARCRAFT_SIMC_TESTS_REPO` names a SimulationCraft checkout
+(`WARCRAFT_SIMC_TESTS_REPO=~/code/simc pytest tests/test_simc_real_binary.py`); the configured or
+managed checkout is never read. Without the variable it skips with `REAL-BINARY TEST SKIPPED` in the
+skip reason, so it proves nothing on CI; with it but no built binary it fails. The same logic is
+covered everywhere else by `tests/test_simc_build_input.py` and `tests/test_simc_cli.py`, which replay
+captured SimC output.
 
-- local build requirements will vary by platform
-- this integration needs strong environment diagnostics
-- result parsing should not be over-generalized too early
-- readonly source analysis can sprawl if we do not keep phase boundaries clear
-- the analysis layer should not assume one spec or one APL family
+## Analysis boundary
 
-## Why `simc_exp` Matters
+The analysis commands stay inside what the local source tree and runtime samples prove. They summarize
+structure, branches, and sampled timings, and they name the next command worth running. They do not
+synthesize authoritative build advice beyond that evidence.
 
-`simc_exp` is effectively a design probe for the higher-level `simc` CLI.
-
-It shows that a readonly local SimulationCraft source tree can support:
-- structural APL understanding
-- build decoding
-- branch reasoning
-- runtime escalation when needed
-
-Agent-experience boundary:
-- exact-build workflows should make the input handoff explicit
-- a user may paste either a WoW talent export or SimC-native build text
-- the CLI should identify which one it received before downstream APL reasoning begins
-- decode failures should carry enough metadata to debug the generated profile quickly
-
-That is a strong use case for the monorepo because it is a different kind of provider than every site-backed CLI in this repo.
-
-## Source Links
+## Source links
 
 - `https://github.com/simulationcraft/simc`
-- [SimulationCraft migration inventory](MIGRATION_INVENTORY.md)
-- [SimulationCraft implementation plan](IMPLEMENTATION.md)
+- [Error and envelope contract](../foundation/ERROR_CONTRACT.md)
 - [Roadmap](../ROADMAP.md)

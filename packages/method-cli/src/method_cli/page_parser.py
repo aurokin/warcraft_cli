@@ -1,15 +1,23 @@
 from __future__ import annotations
 
 import re
-from html import unescape
 from typing import Any
 from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup, Tag
-from warcraft_core.identity import ability_identity_payload, build_reference_payload
+from warcraft_content.html_sections import clean_text, extract_headings, extract_sections
+from warcraft_core.identity import ability_identity_payload, build_identity_payload, build_reference_payload
 
 METHOD_BASE_URL = "https://www.method.gg"
 SUPPORTED_GUIDE_PATH_RE = re.compile(r"^/guides/(?P<slug>[^/]+)(?:/(?P<section>[^/?#]+))?/?$")
+# Method publishes talent builds as WoW loadout import strings rather than talent-calc links: one
+# ``.df-talent-block`` per build, with the visible build name in ``.talent-title`` and the raw
+# import string in the ``data-talent`` attribute of ``.talent-embed``.
+TALENT_BUILD_SELECTOR = ".df-talent-block"
+TALENT_BUILD_EMBED_SELECTOR = ".talent-embed[data-talent]"
+TALENT_BUILD_TITLE_SELECTOR = ".talent-title"
+# A WoW loadout import string as Blizzard's client generates it: one long run of base64 characters.
+WOW_TALENT_EXPORT_RE = re.compile(r"^[A-Za-z0-9+/]{40,}$")
 CLASS_TOKENS = {
     "death-knight",
     "demon-hunter",
@@ -33,13 +41,6 @@ WOWHEAD_LINK_RE = re.compile(
 )
 
 
-def clean_text(value: str | None) -> str | None:
-    if not isinstance(value, str):
-        return None
-    text = unescape(re.sub(r"\s+", " ", value)).strip()
-    return text or None
-
-
 def guide_ref_parts(guide_ref: str) -> tuple[str, str | None]:
     raw = guide_ref.strip()
     if not raw:
@@ -53,6 +54,16 @@ def guide_ref_parts(guide_ref: str) -> tuple[str, str | None]:
     if not match:
         raise ValueError(f"Unsupported Method guide reference: {guide_ref}")
     return match.group("slug"), match.group("section")
+
+
+def guide_section_from_url(url: str) -> tuple[str, str | None] | None:
+    """``(slug, section)`` for a ``/guides/...`` page, or ``None`` for any other Method URL shape.
+
+    Method's own guide navigation mixes in non-guide links such as the ``/guides`` index, so callers
+    that walk page links need to skip those instead of treating them as guide references.
+    """
+    match = SUPPORTED_GUIDE_PATH_RE.match(urlparse(url).path)
+    return (match.group("slug"), match.group("section")) if match else None
 
 
 def guide_url(slug: str, section_slug: str | None = None) -> str:
@@ -75,15 +86,16 @@ def classify_guide_family(slug: str) -> str:
 
 
 def _meta_content(soup: BeautifulSoup, **attrs: str) -> str | None:
-    tag = soup.find("meta", attrs=attrs)
-    if tag is None:
+    tag = soup.find("meta", attrs=dict(attrs))
+    if not isinstance(tag, Tag):
         return None
-    return clean_text(tag.get("content"))
+    content = tag.get("content")
+    return clean_text(content) if isinstance(content, str) else None
 
 
 def _link_href(soup: BeautifulSoup, **attrs: str) -> str | None:
-    tag = soup.find("link", attrs=attrs)
-    if tag is None:
+    tag = soup.find("link", attrs=dict(attrs))
+    if not isinstance(tag, Tag):
         return None
     href = tag.get("href")
     if not isinstance(href, str):
@@ -108,11 +120,15 @@ def _extract_navigation(soup: BeautifulSoup, *, current_url: str) -> list[dict[s
         if key in seen:
             continue
         seen.add(key)
+        parts = guide_section_from_url(url)
+        if parts is None:
+            # Not a guide page (the /guides index, marketing links): not part of this guide.
+            continue
         path = urlparse(url).path.rstrip("/")
-        _, section_slug = guide_ref_parts(url)
-        parent = anchor.parent if isinstance(anchor.parent, Tag) else None
-        classes = parent.get("class", []) if isinstance(parent, Tag) else []
-        active = "active" in classes or path == current_path
+        section_slug = parts[1]
+        parent = anchor.parent
+        classes = parent.get("class") if isinstance(parent, Tag) else None
+        active = (classes is not None and "active" in classes) or path == current_path
         items.append(
             {
                 "title": title,
@@ -151,84 +167,6 @@ def _clone_article(article: Tag) -> Tag:
     for node in cloned.select("script, style, noscript, .premium-video, .mobile-video-wrap"):
         node.decompose()
     return cloned
-
-
-def _extract_headings(article: Tag) -> list[dict[str, Any]]:
-    headings: list[dict[str, Any]] = []
-    for ordinal, heading in enumerate(article.find_all(re.compile(r"^h[23]$")), start=1):
-        title = clean_text(heading.get_text(" ", strip=True))
-        if not title:
-            continue
-        headings.append(
-            {
-                "title": title,
-                "level": int(heading.name[1]),
-                "ordinal": ordinal,
-            }
-        )
-    return headings
-
-
-def _append_section_content(section: dict[str, Any], node: Any) -> None:
-    if not isinstance(node, Tag):
-        text = clean_text(str(node))
-        if text:
-            section["text_parts"].append(text)
-        return
-    html = str(node).strip()
-    text = clean_text(node.get_text(" ", strip=True))
-    if html:
-        section["html_parts"].append(html)
-    if text:
-        section["text_parts"].append(text)
-
-
-def _extract_sections(article: Tag, *, fallback_title: str) -> list[dict[str, Any]]:
-    sections: list[dict[str, Any]] = []
-    current: dict[str, Any] | None = None
-    ordinal = 0
-    for child in article.children:
-        if not isinstance(child, Tag):
-            continue
-        if child.name in {"h2", "h3"}:
-            title = clean_text(child.get_text(" ", strip=True))
-            if not title:
-                continue
-            ordinal += 1
-            current = {
-                "title": title,
-                "level": int(child.name[1]),
-                "ordinal": ordinal,
-                "html_parts": [],
-                "text_parts": [],
-            }
-            sections.append(current)
-            continue
-        if current is None:
-            ordinal += 1
-            current = {
-                "title": fallback_title,
-                "level": 2,
-                "ordinal": ordinal,
-                "html_parts": [],
-                "text_parts": [],
-            }
-            sections.append(current)
-        _append_section_content(current, child)
-    normalized: list[dict[str, Any]] = []
-    for section in sections:
-        text = clean_text(" ".join(section["text_parts"]))
-        html = "\n".join(section["html_parts"]).strip()
-        normalized.append(
-            {
-                "title": section["title"],
-                "level": section["level"],
-                "ordinal": section["ordinal"],
-                "text": text or "",
-                "html": html,
-            }
-        )
-    return [section for section in normalized if section["text"] or section["html"]]
 
 
 def _extract_linked_entities(article: Tag, *, source_url: str) -> list[dict[str, Any]]:
@@ -281,6 +219,48 @@ def _extract_linked_entities(article: Tag, *, source_url: str) -> list[dict[str,
     return sorted(items.values(), key=lambda row: (row["type"], row["id"]))
 
 
+def _talent_export_reference(code: str, *, label: str | None, source_url: str) -> dict[str, Any]:
+    """One published WoW loadout import string, in the shared build-reference row shape.
+
+    ``url`` carries the import string itself: a ``wow_talent_export`` reference has no link to point
+    at, the string is what identifies it, and it is exactly what ``simc --build-text`` consumes.
+    """
+    return {
+        "kind": "build_reference",
+        "reference_type": "wow_talent_export",
+        "url": code,
+        "label": label,
+        "build_code": code,
+        "source_url": source_url,
+        "build_identity": build_identity_payload(
+            actor_class=None,
+            spec=None,
+            confidence="none",
+            source="guide_talent_export_string",
+            source_notes=(
+                "build code came from a WoW loadout import string published in the guide",
+                "class and spec are not read off this reference; decode the import string to identify them",
+            ),
+        ),
+        "source": {"provider": "method", "source": "guide_talent_export_string"},
+    }
+
+
+def _extract_talent_export_builds(article: Tag, *, source_url: str) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for block in article.select(TALENT_BUILD_SELECTOR):
+        embed = block.select_one(TALENT_BUILD_EMBED_SELECTOR)
+        if not isinstance(embed, Tag):
+            continue
+        code = embed.get("data-talent")
+        if not isinstance(code, str) or not WOW_TALENT_EXPORT_RE.match(code.strip()):
+            continue
+        title_tag = block.select_one(TALENT_BUILD_TITLE_SELECTOR)
+        label = clean_text(title_tag.get_text(" ", strip=True)) if isinstance(title_tag, Tag) else None
+        rows.append(_talent_export_reference(code.strip(), label=label, source_url=source_url))
+    return rows
+
+
 def _extract_build_references(article: Tag, *, source_url: str) -> list[dict[str, Any]]:
     items: dict[str, dict[str, Any]] = {}
     for anchor in article.find_all("a", href=True):
@@ -298,6 +278,8 @@ def _extract_build_references(article: Tag, *, source_url: str) -> list[dict[str
         if payload is None:
             continue
         items[str(payload["url"])] = payload
+    for row in _extract_talent_export_builds(article, source_url=source_url):
+        items.setdefault(str(row["url"]), row)
     return sorted(items.values(), key=lambda row: str(row["url"]))
 
 
@@ -338,8 +320,8 @@ def parse_guide_page(html: str, *, source_url: str) -> dict[str, Any]:
         article = _clone_article(article_tag)
         article_html = "".join(str(child) for child in article.contents).strip()
         article_text = clean_text(article.get_text("\n", strip=True)) or ""
-        headings = _extract_headings(article)
-        sections = _extract_sections(article, fallback_title=display_section_title)
+        headings = extract_headings(article)
+        sections = extract_sections(article, fallback_title=display_section_title)
         linked_entities = _extract_linked_entities(article, source_url=canonical_url)
         build_references = _extract_build_references(article, source_url=canonical_url)
     return {

@@ -1,0 +1,383 @@
+{
+ "search": "thunderfury",
+ "results": [
+  {
+   "type": 6,
+   "id": 27648,
+   "name": "Thunderfury",
+   "typeName": "Spell",
+   "icon": "spell_nature_cyclone",
+   "pinTitle": "Spell",
+   "pinDescription": "In the Uncategorized Spells category.",
+   "pinBreadcrumb": [
+    "Uncategorized"
+   ],
+   "popularity": 0
+  },
+  {
+   "type": 6,
+   "id": 468157,
+   "name": "Thunderfury",
+   "typeName": "Spell",
+   "subtitle": "Season of Discovery - Phase 5",
+   "icon": "spell_nature_cyclone",
+   "pinTitle": "Spell",
+   "pinDescription": "In the Uncategorized Spells category.",
+   "pinBreadcrumb": [
+    "Uncategorized"
+   ],
+   "popularity": 1
+  },
+  {
+   "type": 3,
+   "id": 19019,
+   "name": "Thunderfury, Blessed Blade of the Windseeker",
+   "typeName": "Item",
+   "icon": "inv_sword_39",
+   "quality": 5,
+   "pinTitle": "Item",
+   "pinFooterText": "One-Handed Sword",
+   "pinDescription": "Thunderfury, Blessed Blade of the Windseeker is the legendary sword once wielded by Thunderaan, Prince of Air.",
+   "pinBreadcrumb": [
+    "Weapon",
+    "One-Handed Sword"
+   ],
+   "popularity": 2
+  },
+  {
+   "type": 100,
+   "id": 7671,
+   "name": "Obtaining Thunderfury, Blessed Blade of the Windseeker in WoW Classic",
+   "typeName": "Guide",
+   "pinImageUrl": "https://wow.zamimg.com/images/content/tall-headers/classic/categories/collections.jpg?maxHeight=80",
+   "pinTitle": "Collections",
+   "pinFooterText": "Updated: 2025/03/17",
+   "pinDescription": "A detailed overview on how to acquire the materials needed to craft the legendary sword, Thunderfury, Blessed Blade of the Windseeker in WoW Classic",
+   "popularity": 3
+  },
+  {
+   "type": 3,
+   "id": 230224,
+   "name": "Thunderfury, Blessed Blade of the Windseeker",
+   "typeName": "Item",
+   "subtitle": "Season of Discovery - Phase 5",
+   "icon": "inv_sword_39",
+   "quality": 5,
+   "pinTitle": "Item",
+   "pinFooterText": "One-Handed Sword",
+   "pinDescription": "This legendary one-handed sword has an item level of 80. It is a quest reward.",
+   "pinBreadcrumb": [
+    "Weapon",
+    "One-Handed Sword"
+   ],
+   "popularity": 4
+  },
+  {
+   "type": 5,
+   "id": 7787,
+   "name": "Rise, Thunderfury!",
+   "typeName": "Quest",
+   "side": 3,
+   "pinTitle": "Quest",
+   "pinFooterText": "Level: 60",
+   "pinDescription": "You have defeated the Wind Seeker. Take the dormant blade and force the lying wretch, Demitrian, to use the materials you provided for his betrayal to wake Thunderfury.",
+   "pinBreadcrumb": [
+    "Miscellaneous",
+    "Legendary"
+   ],
+   "popularity": 5
+  },
+  {
+   "type": 100,
+   "id": 27242,
+   "name": "Obtaining Thunderfury in Season of Discovery Phase 5",
+   "typeName": "Guide",
+   "pinImageUrl": "https://wow.zamimg.com/uploads/guide/header/cd1e56cefe949fbc3f57910242f6d28c6072e788.jpg?maxHeight=80",
+   "pinTitle": "Raids - Season of Discovery",
+   "pinFooterText": "Updated: 2024/10/30",
+   "pinDescription": "This page contains everything you need to know about obtaining Thunderfury in Season of Discovery Phase 5, along with any changes made with the Crystal Vale raid.",
+   "popularity": 6
+  },
+  {
+   "type": 5,
+   "id": 85443,
+   "name": "Rise, Thunderfury!",
+   "typeName": "Quest",
+   "subtitle": "Season of Discovery - Phase 5",
+   "side": 3,
+   "pinTitle": "Quest",
+   "pinFooterText": "Level: 60",
+   "pinDescription": "You have defeated the Wind Seeker. Take the dormant blade and force the worshiper, Demitrian, to use the materials you provided to wake Thunderfury.",
+   "pinBreadcrumb": [
+    "Miscellaneous",
+    "Legendary"
+   ],
+   "popularity": 7
+  },
+  {
+   "type": 5,
+   "id": 7561,
+   "name": "Rise, Thunderfury!",
+   "typeName": "Quest",
+   "side": 0,
+   "pinTitle": "Quest",
+   "pinFooterText": "Level: 1",
+   "pinDescription": "You have defeated the Wind Seeker. Take the dormant blade and force the lying wretch, Demitrian, to use the materials you provided for his betrayal to wake Thunderfury.",
+   "pinBreadcrumb": [
+    "Miscellaneous",
+    "Legendary"
+   ],
+   "popularity": 8
+  },
+  {
+   "type": 162,
+   "id": 375994,
+   "name": "How to Complete Your Thunderfury in Phase 3 - WoW Classic Fresh",
+   "typeName": "News Post",
+   "pinImageUrl": "https://wow.zamimg.com/uploads/blog/images/47775-how-to-complete-your-thunderfury-in-phase-3-wow-classic-fresh.jpg?maxHeight=80",
+   "newsTypeId": 8,
+   "newsTypeName": "Classic",
+   "pinTitle": "News",
+   "pinFooterText": "Posted 2025/03/25 by Venom0243",
+   "pinDescription": "Phase 3 of the 20th Anniversary Servers introduces the final steps players will need to take to obtain their [item=19019]!",
+   "popularity": 9
+  }
+ ],
+ "categories": {
+  "decor": [],
+  "guides": [
+   {
+    "type": 100,
+    "id": 7671,
+    "name": "Obtaining Thunderfury, Blessed Blade of the Windseeker in WoW Classic",
+    "typeName": "Guide",
+    "pinImageUrl": "https://wow.zamimg.com/images/content/tall-headers/classic/categories/collections.jpg?maxHeight=80",
+    "pinTitle": "Collections",
+    "pinFooterText": "Updated: 2025/03/17",
+    "pinDescription": "A detailed overview on how to acquire the materials needed to craft the legendary sword, Thunderfury, Blessed Blade of the Windseeker in WoW Classic"
+   },
+   {
+    "type": 100,
+    "id": 27242,
+    "name": "Obtaining Thunderfury in Season of Discovery Phase 5",
+    "typeName": "Guide",
+    "pinImageUrl": "https://wow.zamimg.com/uploads/guide/header/cd1e56cefe949fbc3f57910242f6d28c6072e788.jpg?maxHeight=80",
+    "pinTitle": "Raids - Season of Discovery",
+    "pinFooterText": "Updated: 2024/10/30",
+    "pinDescription": "This page contains everything you need to know about obtaining Thunderfury in Season of Discovery Phase 5, along with any changes made with the Crystal Vale raid."
+   }
+  ],
+  "news": [
+   {
+    "type": 162,
+    "id": 375994,
+    "name": "How to Complete Your Thunderfury in Phase 3 - WoW Classic Fresh",
+    "typeName": "News Post",
+    "pinImageUrl": "https://wow.zamimg.com/uploads/blog/images/47775-how-to-complete-your-thunderfury-in-phase-3-wow-classic-fresh.jpg?maxHeight=80",
+    "newsTypeId": 8,
+    "newsTypeName": "Classic",
+    "pinTitle": "News",
+    "pinFooterText": "Posted 2025/03/25 by Venom0243",
+    "pinDescription": "Phase 3 of the 20th Anniversary Servers introduces the final steps players will need to take to obtain their [item=19019]!"
+   },
+   {
+    "type": 162,
+    "id": 347109,
+    "name": "How to Acquire Thunderfury in Season of Discovery Phase 5",
+    "typeName": "News Post",
+    "pinImageUrl": "https://wow.zamimg.com/uploads/blog/images/44630-how-to-acquire-thunderfury-in-season-of-discovery-phase-5.png?maxHeight=80",
+    "newsTypeId": 8,
+    "newsTypeName": "Classic",
+    "pinTitle": "News",
+    "pinFooterText": "Posted 2024/09/30 by Serenal",
+    "pinDescription": "Season of Discovery Phase 5 has opened the doors to [url guide=26980]Blackwing Lair[/url], and now players will finally be able to get their hands on [item=230224]!"
+   },
+   {
+    "type": 162,
+    "id": 346300,
+    "name": "Possible Thunderfury-Themed Cloak on Season of Discovery PTR",
+    "typeName": "News Post",
+    "pinImageUrl": "https://wow.zamimg.com/uploads/blog/images/43903-possible-thunderfury-themed-cloak-on-season-of-discovery-ptr.jpg?maxHeight=80",
+    "newsTypeId": 8,
+    "newsTypeName": "Classic",
+    "pinTitle": "News",
+    "pinFooterText": "Posted 2024/08/29 by perculia",
+    "pinDescription": "There might be a fun bonus Thunderfury-themed item in store for players in Season of Discovery based on the Patch 1.15.4 PTR!"
+   },
+   {
+    "type": 162,
+    "id": 345045,
+    "name": "Thunderfury Model Size Adjusted on Classic Realms",
+    "typeName": "News Post",
+    "pinImageUrl": "https://wow.zamimg.com/uploads/blog/images/42655-thunderfury-model-size-adjusted-on-classic-realms.jpg?maxHeight=80",
+    "newsTypeId": 8,
+    "newsTypeName": "Classic",
+    "pinTitle": "News",
+    "pinFooterText": "Posted 2024/07/10 by Wowhead",
+    "pinDescription": "With the launch of Season of Discovery Patch 1.15.3, eagle-eyed players have noticed a change to Thunderfury, Blessed Blade of the Windseeker - it's gotten significantly smaller."
+   },
+   {
+    "type": 162,
+    "id": 344308,
+    "name": "Thunderfury Will Not Be Changing in Season of Discovery Phase 4",
+    "typeName": "News Post",
+    "pinImageUrl": "https://wow.zamimg.com/uploads/blog/images/42542-thunderfury-will-not-be-changing-in-season-of-discovery-phase-4.jpg?maxHeight=80",
+    "newsTypeId": 8,
+    "newsTypeName": "Classic",
+    "pinTitle": "News",
+    "pinFooterText": "Posted 2024/07/05 by Wowhead",
+    "pinDescription": "As we prepare for Phase 4 Season of Discovery, it has felt like every item has had some huge changes. So some players were relieved too learn that [item=19019] will not be changed."
+   },
+   {
+    "type": 162,
+    "id": 311271,
+    "name": "WoW Classic Not A Bug List - Thunderfury Can be Equipped by All Sword Classes",
+    "typeName": "News Post",
+    "pinImageUrl": "https://wow.zamimg.com/uploads/blog/images/18544-wow-classic-not-a-bug-list-thunderfury-can-be-equipped-by-all-sword-classes.jpg?maxHeight=80",
+    "newsTypeId": 8,
+    "newsTypeName": "Classic",
+    "pinTitle": "News",
+    "pinFooterText": "Posted 2020/02/19 by perculia",
+    "pinDescription": "Blizzard has updated their \"not a bug\" list for WoW Classic with a clarification concerning the legendary sword [item=19019]."
+   },
+   {
+    "type": 162,
+    "id": 311072,
+    "name": "Thunderfury, Blessed Blade of the Windseeker Available with WoW Classic Blackwing Lair Phase 3",
+    "typeName": "News Post",
+    "pinImageUrl": "https://wow.zamimg.com/uploads/blog/images/18454-thunderfury-blessed-blade-of-the-windseeker-available-with-wow-classic-blackwing.jpg?maxHeight=80",
+    "newsTypeId": 8,
+    "newsTypeName": "Classic",
+    "pinTitle": "News",
+    "pinFooterText": "Posted 2020/02/09 by perculia",
+    "pinDescription": "Did someone say [item=19019]? While players have been able to collect the bindings since WoW Classic launch, [item=19019] will finally be obtainable in Phase 3 of WoW Classic when Blackwing Lair opens."
+   },
+   {
+    "type": 162,
+    "id": 294760,
+    "name": "More NA and EU Classic Realms - Thunderfury, Benediction, Windseeker",
+    "typeName": "News Post",
+    "pinImageUrl": "https://wow.zamimg.com/uploads/blog/images/17040-more-na-and-eu-classic-realms-thunderfury-benediction-windseeker.jpg?maxHeight=80",
+    "newsTypeId": 8,
+    "newsTypeName": "Classic",
+    "pinTitle": "News",
+    "pinFooterText": "Posted 2019/08/27 by Archimtiros",
+    "pinDescription": "Did someone say [item=19019]? Well you'll be right at home on the new servers Thunderfury and Windseeker. Six more Classic realms have been added this afternoon."
+   },
+   {
+    "type": 162,
+    "id": 294590,
+    "name": "Classic WoW Phase Loot Clarifications and Confusion - Thunderfury Bindings Available at Launch",
+    "typeName": "News Post",
+    "pinImageUrl": "https://wow.zamimg.com/uploads/blog/images/16966-classic-wow-phase-loot-clarifications-and-confusion-thunderfury-bindings.jpg?maxHeight=80",
+    "newsTypeId": 8,
+    "newsTypeName": "Classic",
+    "pinTitle": "News",
+    "pinFooterText": "Posted 2019/08/20 by perculia",
+    "pinDescription": "Blizzard has been clarifying how some phase loot works in Classic WoW. While some parts remain unclear, as to preserve an element of exploration, other parts have received more clarifications. For example, Thunderfury Bindings will be available at launch."
+   }
+  ],
+  "tools": [],
+  "database": [
+   {
+    "type": 3,
+    "id": 19019,
+    "name": "Thunderfury, Blessed Blade of the Windseeker",
+    "typeName": "Item",
+    "icon": "inv_sword_39",
+    "quality": 5,
+    "pinTitle": "Item",
+    "pinFooterText": "One-Handed Sword",
+    "pinDescription": "Thunderfury, Blessed Blade of the Windseeker is the legendary sword once wielded by Thunderaan, Prince of Air.",
+    "pinBreadcrumb": [
+     "Weapon",
+     "One-Handed Sword"
+    ]
+   },
+   {
+    "type": 3,
+    "id": 230224,
+    "name": "Thunderfury, Blessed Blade of the Windseeker",
+    "typeName": "Item",
+    "subtitle": "Season of Discovery - Phase 5",
+    "icon": "inv_sword_39",
+    "quality": 5,
+    "pinTitle": "Item",
+    "pinFooterText": "One-Handed Sword",
+    "pinDescription": "This legendary one-handed sword has an item level of 80. It is a quest reward.",
+    "pinBreadcrumb": [
+     "Weapon",
+     "One-Handed Sword"
+    ]
+   },
+   {
+    "type": 5,
+    "id": 7787,
+    "name": "Rise, Thunderfury!",
+    "typeName": "Quest",
+    "side": 3,
+    "pinTitle": "Quest",
+    "pinFooterText": "Level: 60",
+    "pinDescription": "You have defeated the Wind Seeker. Take the dormant blade and force the lying wretch, Demitrian, to use the materials you provided for his betrayal to wake Thunderfury.",
+    "pinBreadcrumb": [
+     "Miscellaneous",
+     "Legendary"
+    ]
+   },
+   {
+    "type": 5,
+    "id": 85443,
+    "name": "Rise, Thunderfury!",
+    "typeName": "Quest",
+    "subtitle": "Season of Discovery - Phase 5",
+    "side": 3,
+    "pinTitle": "Quest",
+    "pinFooterText": "Level: 60",
+    "pinDescription": "You have defeated the Wind Seeker. Take the dormant blade and force the worshiper, Demitrian, to use the materials you provided to wake Thunderfury.",
+    "pinBreadcrumb": [
+     "Miscellaneous",
+     "Legendary"
+    ]
+   },
+   {
+    "type": 6,
+    "id": 27648,
+    "name": "Thunderfury",
+    "typeName": "Spell",
+    "icon": "spell_nature_cyclone",
+    "pinTitle": "Spell",
+    "pinDescription": "In the Uncategorized Spells category.",
+    "pinBreadcrumb": [
+     "Uncategorized"
+    ]
+   },
+   {
+    "type": 5,
+    "id": 7561,
+    "name": "Rise, Thunderfury!",
+    "typeName": "Quest",
+    "side": 0,
+    "pinTitle": "Quest",
+    "pinFooterText": "Level: 1",
+    "pinDescription": "You have defeated the Wind Seeker. Take the dormant blade and force the lying wretch, Demitrian, to use the materials you provided for his betrayal to wake Thunderfury.",
+    "pinBreadcrumb": [
+     "Miscellaneous",
+     "Legendary"
+    ]
+   },
+   {
+    "type": 6,
+    "id": 468157,
+    "name": "Thunderfury",
+    "typeName": "Spell",
+    "subtitle": "Season of Discovery - Phase 5",
+    "icon": "spell_nature_cyclone",
+    "pinTitle": "Spell",
+    "pinDescription": "In the Uncategorized Spells category.",
+    "pinBreadcrumb": [
+     "Uncategorized"
+    ]
+   }
+  ]
+ }
+}

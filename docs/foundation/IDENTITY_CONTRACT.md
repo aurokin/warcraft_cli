@@ -143,7 +143,6 @@ starts or stops emitting a contract.
 | method | – | – | ✓ (embedded spell refs) | – | ✓ (embedded talent-calc refs) |
 | icy-veins | – | – | ✓ (embedded spell refs) | – | ✓ (embedded talent-calc refs) |
 | raidbots | ✓ (`inspect-report` actors) | – | – | – | – |
-| wowprogress | ✓ (`character`) | ✓ (guild encounter rows) | – | – | – |
 | warcraft-wiki | – | – | – | – | – |
 | blizzard-api | – | – | – | – | – |
 
@@ -152,9 +151,6 @@ Notes:
   only when both class and spec resolve, else `none` (search rows are class-only).
 - `raidbots` class/spec comes from the sim report's explicit `class`/`specialization` fields →
   `high` confidence when both present.
-- `wowprogress` class/spec is `normalized` with `confidence: none` — class is parsed from free header
-  text and the spec (when present) is sourced from the SimDPS table; encounter identity is name-only
-  (`encounter_id: null`).
 - `method`/`icy-veins` ability identity is `canonical` (the Wowhead spell id is already in the link);
   it is emitted only on `spell` linked-entity rows, leaving other entity types unchanged.
 - `blizzard-api` emits no identity yet. The Game Data/Profile endpoints shipped (AUR-455), but

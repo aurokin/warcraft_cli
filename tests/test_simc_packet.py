@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from simc_cli.packet import build_analysis_packet
+from simc_cli.packet import FirstCastOptions, build_analysis_packet
 from simc_cli.prune import PruneContext
 
 
@@ -61,8 +61,7 @@ def test_build_analysis_packet_can_include_first_casts(monkeypatch, tmp_path: Pa
         apl_path,
         PruneContext(enabled_talents=set(), disabled_talents=set(), targets=1),
         start_list="st",
-        first_cast_profile=tmp_path / "profile.simc",
-        first_cast_actions=["disintegrate"],
+        first_cast=FirstCastOptions(profile=tmp_path / "profile.simc", actions=("disintegrate",)),
     )
     assert len(packet.first_casts) == 1
     assert packet.first_casts[0].action == "disintegrate"

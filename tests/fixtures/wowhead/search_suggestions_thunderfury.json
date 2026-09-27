@@ -1,0 +1,535 @@
+{
+ "search": "thunderfury",
+ "results": [
+  {
+   "type": 6,
+   "id": 21992,
+   "name": "Thunderfury",
+   "typeName": "Spell",
+   "icon": "spell_nature_cyclone",
+   "pinTitle": "Spell",
+   "pinDescription": "Blasts your enemy with lightning, dealing 1180 Nature damage and then jumping to additional nearby enemies.  Each jump reduces that victim's Nature resistance by 98. Affects 5 targets. Your primary target is also consumed by a cyclone, slowing its attack speed by 20% for 12 sec.",
+   "pinBreadcrumb": [
+    "Item Effect"
+   ],
+   "popularity": 0
+  },
+  {
+   "type": 6,
+   "id": 27648,
+   "name": "Thunderfury",
+   "typeName": "Spell",
+   "icon": "spell_nature_cyclone",
+   "pinTitle": "Spell",
+   "pinDescription": "In the Uncategorized Spells category.",
+   "pinBreadcrumb": [
+    "Uncategorized"
+   ],
+   "popularity": 1
+  },
+  {
+   "type": 3,
+   "id": 19019,
+   "name": "Thunderfury, Blessed Blade of the Windseeker",
+   "typeName": "Item",
+   "icon": "inv_sword_39",
+   "quality": 5,
+   "pinTitle": "Item",
+   "pinFooterText": "One-Handed Sword",
+   "pinDescription": "Thunderfury, Blessed Blade of the Windseeker is the legendary sword once wielded by Thunderaan, Prince of Air.",
+   "pinBreadcrumb": [
+    "Weapon",
+    "One-Handed Sword"
+   ],
+   "popularity": 2
+  },
+  {
+   "type": 5,
+   "id": 7787,
+   "name": "Rise, Thunderfury!",
+   "typeName": "Quest",
+   "side": 3,
+   "pinTitle": "Quest",
+   "pinFooterText": "Level: 30",
+   "pinDescription": "You have defeated the Wind Seeker. Take the dormant blade and force the lying wretch, Demitrian, to use the materials you provided for his betrayal to wake Thunderfury.",
+   "pinBreadcrumb": [
+    "Miscellaneous",
+    "Legendary"
+   ],
+   "popularity": 3
+  },
+  {
+   "type": 3,
+   "id": 128507,
+   "name": "Inflatable Thunderfury, Blessed Blade of the Windseeker",
+   "typeName": "Item",
+   "icon": "inv_sword_39",
+   "quality": 3,
+   "pinTitle": "Item",
+   "pinFooterText": "Miscellaneous Item",
+   "pinDescription": "It is looted and sold by NPCs.",
+   "pinBreadcrumb": [
+    "Miscellaneous",
+    "Miscellaneous Item"
+   ],
+   "popularity": 4
+  },
+  {
+   "type": 3,
+   "id": 139037,
+   "name": "Thunderfury, Blessed Blade of the Windseeker",
+   "typeName": "Item",
+   "icon": "inv_sword_39",
+   "quality": 5,
+   "pinTitle": "Item",
+   "pinDescription": "<b>Thunderfury, Blessed Blade of the Windseeker</b> is a quest item.",
+   "pinBreadcrumb": [
+    "Quest"
+   ],
+   "popularity": 5
+  },
+  {
+   "type": 10,
+   "id": 428,
+   "name": "Thunderfury, Blessed Blade of the Windseeker",
+   "typeName": "Achievement",
+   "icon": "inv_sword_39",
+   "pinTitle": "Achievement",
+   "pinFooterText": "Points: 0",
+   "pinDescription": "Wielder of Thunderfury, Blessed Blade of the Windseeker.",
+   "pinBreadcrumb": [
+    "Feats of Strength",
+    "Raids"
+   ],
+   "popularity": 6
+  },
+  {
+   "type": 3,
+   "id": 137225,
+   "name": "Thunderfury, Blessed Blade of the Windseeker",
+   "typeName": "Item",
+   "icon": "inv_sword_39",
+   "quality": 5,
+   "pinTitle": "Item",
+   "pinFooterText": "One-Handed Sword",
+   "pinDescription": "This legendary one-handed sword has an item level of 29.",
+   "pinBreadcrumb": [
+    "Weapon",
+    "One-Handed Sword"
+   ],
+   "popularity": 7
+  },
+  {
+   "type": 3,
+   "id": 139000,
+   "name": "Damaged Thunderfury",
+   "typeName": "Item",
+   "icon": "inv_sword_39",
+   "quality": 5,
+   "pinTitle": "Item",
+   "pinDescription": "Damaged Thunderfury is a quest item. It is looted.",
+   "pinBreadcrumb": [
+    "Quest"
+   ],
+   "popularity": 8
+  },
+  {
+   "type": 10,
+   "id": 5184,
+   "name": "Thunderfury, Blessed Blade of the Windseeker - Guild Edition",
+   "typeName": "Achievement",
+   "icon": "inv_sword_39",
+   "pinTitle": "Achievement",
+   "pinFooterText": "Points: 10",
+   "pinDescription": "Wielder of Thunderfury, Blessed Blade of the Windseeker.",
+   "pinBreadcrumb": [
+    "Dungeons & Raids"
+   ],
+   "popularity": 9
+  }
+ ],
+ "categories": {
+  "decor": [],
+  "guides": [],
+  "news": [
+   {
+    "type": 162,
+    "id": 375994,
+    "name": "How to Complete Your Thunderfury in Phase 3 - WoW Classic Fresh",
+    "typeName": "News Post",
+    "pinImageUrl": "https://wow.zamimg.com/uploads/blog/images/47775-how-to-complete-your-thunderfury-in-phase-3-wow-classic-fresh.jpg?maxHeight=80",
+    "newsTypeId": 8,
+    "newsTypeName": "Classic",
+    "pinTitle": "News",
+    "pinFooterText": "Posted 2025/03/25 by Venom0243",
+    "pinDescription": "Phase 3 of the 20th Anniversary Servers introduces the final steps players will need to take to obtain their [item=19019]!"
+   },
+   {
+    "type": 162,
+    "id": 347109,
+    "name": "How to Acquire Thunderfury in Season of Discovery Phase 5",
+    "typeName": "News Post",
+    "pinImageUrl": "https://wow.zamimg.com/uploads/blog/images/44630-how-to-acquire-thunderfury-in-season-of-discovery-phase-5.png?maxHeight=80",
+    "newsTypeId": 8,
+    "newsTypeName": "Classic",
+    "pinTitle": "News",
+    "pinFooterText": "Posted 2024/09/30 by Serenal",
+    "pinDescription": "Season of Discovery Phase 5 has opened the doors to [url guide=26980]Blackwing Lair[/url], and now players will finally be able to get their hands on [item=230224]!"
+   },
+   {
+    "type": 162,
+    "id": 346300,
+    "name": "Possible Thunderfury-Themed Cloak on Season of Discovery PTR",
+    "typeName": "News Post",
+    "pinImageUrl": "https://wow.zamimg.com/uploads/blog/images/43903-possible-thunderfury-themed-cloak-on-season-of-discovery-ptr.jpg?maxHeight=80",
+    "newsTypeId": 8,
+    "newsTypeName": "Classic",
+    "pinTitle": "News",
+    "pinFooterText": "Posted 2024/08/29 by perculia",
+    "pinDescription": "There might be a fun bonus Thunderfury-themed item in store for players in Season of Discovery based on the Patch 1.15.4 PTR!"
+   },
+   {
+    "type": 162,
+    "id": 345045,
+    "name": "Thunderfury Model Size Adjusted on Classic Realms",
+    "typeName": "News Post",
+    "pinImageUrl": "https://wow.zamimg.com/uploads/blog/images/42655-thunderfury-model-size-adjusted-on-classic-realms.jpg?maxHeight=80",
+    "newsTypeId": 8,
+    "newsTypeName": "Classic",
+    "pinTitle": "News",
+    "pinFooterText": "Posted 2024/07/10 by Wowhead",
+    "pinDescription": "With the launch of Season of Discovery Patch 1.15.3, eagle-eyed players have noticed a change to Thunderfury, Blessed Blade of the Windseeker - it's gotten significantly smaller."
+   },
+   {
+    "type": 162,
+    "id": 344308,
+    "name": "Thunderfury Will Not Be Changing in Season of Discovery Phase 4",
+    "typeName": "News Post",
+    "pinImageUrl": "https://wow.zamimg.com/uploads/blog/images/42542-thunderfury-will-not-be-changing-in-season-of-discovery-phase-4.jpg?maxHeight=80",
+    "newsTypeId": 8,
+    "newsTypeName": "Classic",
+    "pinTitle": "News",
+    "pinFooterText": "Posted 2024/07/05 by Wowhead",
+    "pinDescription": "As we prepare for Phase 4 Season of Discovery, it has felt like every item has had some huge changes. So some players were relieved too learn that [item=19019] will not be changed."
+   },
+   {
+    "type": 162,
+    "id": 343776,
+    "name": "July 2024 Trading Post Items - Diving Suit, Thunderfury Bow, Terrarium Backpiece",
+    "typeName": "News Post",
+    "pinImageUrl": "https://wow.zamimg.com/uploads/blog/images/42395-july-2024-trading-post-items-diving-suit-thunderfury-bow-terrarium-backpiece.jpg?maxHeight=80",
+    "newsTypeId": 1,
+    "newsTypeName": "Live",
+    "pinTitle": "News",
+    "pinFooterText": "Posted 2024/06/27 by Squishei",
+    "pinDescription": "Blizzard has announced the July 2024 Trading Post which includes new mounts, a Diving Suit transmog and more!"
+   },
+   {
+    "type": 162,
+    "id": 337053,
+    "name": "Did Somebody Say Thunderfury, Blessed Bow of the Windseeker?!",
+    "typeName": "News Post",
+    "pinImageUrl": "https://wow.zamimg.com/uploads/blog/images/38652-did-somebody-say-thunderfury-blessed-bow-of-the-windseeker.jpg?maxHeight=80",
+    "newsTypeId": 2,
+    "newsTypeName": "PTR",
+    "pinTitle": "News",
+    "pinFooterText": "Posted 2024/01/14 by Archimtiros",
+    "pinDescription": "Two new cosmetic bows featuring a very familiar design have been discovered on the Dragonflight Patch 10.2.5 PTR! The blue lightning Blessed Bow of the Windseeker and its alternate red-hued Titan Thunderbow may remind you of a certain legendary weapon..."
+   },
+   {
+    "type": 162,
+    "id": 311271,
+    "name": "WoW Classic Not A Bug List - Thunderfury Can be Equipped by All Sword Classes",
+    "typeName": "News Post",
+    "pinImageUrl": "https://wow.zamimg.com/uploads/blog/images/18544-wow-classic-not-a-bug-list-thunderfury-can-be-equipped-by-all-sword-classes.jpg?maxHeight=80",
+    "newsTypeId": 8,
+    "newsTypeName": "Classic",
+    "pinTitle": "News",
+    "pinFooterText": "Posted 2020/02/19 by perculia",
+    "pinDescription": "Blizzard has updated their \"not a bug\" list for WoW Classic with a clarification concerning the legendary sword [item=19019]."
+   },
+   {
+    "type": 162,
+    "id": 311072,
+    "name": "Thunderfury, Blessed Blade of the Windseeker Available with WoW Classic Blackwing Lair Phase 3",
+    "typeName": "News Post",
+    "pinImageUrl": "https://wow.zamimg.com/uploads/blog/images/18454-thunderfury-blessed-blade-of-the-windseeker-available-with-wow-classic-blackwing.jpg?maxHeight=80",
+    "newsTypeId": 8,
+    "newsTypeName": "Classic",
+    "pinTitle": "News",
+    "pinFooterText": "Posted 2020/02/09 by perculia",
+    "pinDescription": "Did someone say [item=19019]? While players have been able to collect the bindings since WoW Classic launch, [item=19019] will finally be obtainable in Phase 3 of WoW Classic when Blackwing Lair opens."
+   },
+   {
+    "type": 162,
+    "id": 294760,
+    "name": "More NA and EU Classic Realms - Thunderfury, Benediction, Windseeker",
+    "typeName": "News Post",
+    "pinImageUrl": "https://wow.zamimg.com/uploads/blog/images/17040-more-na-and-eu-classic-realms-thunderfury-benediction-windseeker.jpg?maxHeight=80",
+    "newsTypeId": 8,
+    "newsTypeName": "Classic",
+    "pinTitle": "News",
+    "pinFooterText": "Posted 2019/08/27 by Archimtiros",
+    "pinDescription": "Did someone say [item=19019]? Well you'll be right at home on the new servers Thunderfury and Windseeker. Six more Classic realms have been added this afternoon."
+   },
+   {
+    "type": 162,
+    "id": 294590,
+    "name": "Classic WoW Phase Loot Clarifications and Confusion - Thunderfury Bindings Available at Launch",
+    "typeName": "News Post",
+    "pinImageUrl": "https://wow.zamimg.com/uploads/blog/images/16966-classic-wow-phase-loot-clarifications-and-confusion-thunderfury-bindings.jpg?maxHeight=80",
+    "newsTypeId": 8,
+    "newsTypeName": "Classic",
+    "pinTitle": "News",
+    "pinFooterText": "Posted 2019/08/20 by perculia",
+    "pinDescription": "Blizzard has been clarifying how some phase loot works in Classic WoW. While some parts remain unclear, as to preserve an element of exploration, other parts have received more clarifications. For example, Thunderfury Bindings will be available at launch."
+   },
+   {
+    "type": 162,
+    "id": 252400,
+    "name": "Shaman Order Hall Quest to Restore Thunderfury, Cataclysm Timewalking, Black Rook Hold Preview, Toy Box Spotlight",
+    "typeName": "News Post",
+    "pinImageUrl": "https://wow.zamimg.com/uploads/blog/images/9690-shaman-order-hall-quest-to-restore-thunderfury-cataclysm-timewalking-black-rook.png?maxHeight=80",
+    "newsTypeId": 0,
+    "newsTypeName": "None",
+    "pinTitle": "News",
+    "pinFooterText": "Posted 2016/04/13 by perculia",
+    "pinDescription": "Today's Legion video covers restoring Thunderfury for Shaman! We also have a Black Rook Hold dungeon guide by Method, information on Cataclysm Timewalking starting today, and Blizzard's Toy Box preview.[pad]\r\n[center][youtube=47-dhuCzBB8][/center]"
+   },
+   {
+    "type": 162,
+    "id": 249957,
+    "name": "WoW's 11th Anniversary (November 16 - 30): Inflatable Thunderfury and VanCleef Costume",
+    "typeName": "News Post",
+    "newsTypeId": 0,
+    "newsTypeName": "None",
+    "pinTitle": "News",
+    "pinFooterText": "Posted 2015/11/15 by perculia",
+    "pinDescription": "[screenshot id=489698 width=200 size=resized float=right][/screenshot][event=566] runs from November 16 - 30th with new festive gifts! Log in to open [item=128513] in the mail, which contains the following:\r\n\r\n[ul][li][item=128507] which rewards the [achievement=10335] Feat of Strength when used. Put [item=19019] in your off-hand to look like you're dual-wielding them. [b]This was hotfixed to no longer be BoA.[/b][/li]\r\n[li]Bind-on-Account [item=128506] and [item=128505] wand disguises with 5 charges each.[/li]\r\n[li][item=128510]: disguise with 50 charges, not tied to Hallow's End as predicted.[/li]\r\n\r\n[li][item=127987] gives an 11% experience/reputation boost--great for [achievement=10018].[/li] [/ul]\r\n\r\nWoW's 11th Anniversary runs from November 16th through November 30th. Logging in also awards the [achievement=10058] achievement. While not as elaborate as the [url=http://www.wowhead.com/guide=2750/wows-10th-anniversary-november-21-january-13]10th anniversary opening up Molten Core and Tarren Mill vs Southshore[/url], these are some unexpected perks.\r\n\r\nMake sure to also check out our [b][url=http://www.wowhead.com/news=249943/patch-6-2-3-survival-guide]Patch 6.2.3 Survival Guide[/url][/b]--the patch goes live November 17th."
+   },
+   {
+    "type": 162,
+    "id": 248717,
+    "name": "6.2.2 PTR: Build 20395 New Mounts, Pets, Toys, Thunderfury, Hallow's End, and Winter Veil Items",
+    "typeName": "News Post",
+    "pinImageUrl": "https://wow.zamimg.com/uploads/blog/images/7989-6-2-2-ptr-build-20395-new-mounts-pets-toys-thunderfury-hallows-end-and-winter.png?maxHeight=80",
+    "newsTypeId": 0,
+    "newsTypeName": "None",
+    "pinTitle": "News",
+    "pinFooterText": "Posted 2015/08/12 by perculia",
+    "pinDescription": "[db=ptr][img news=7988 width=300 float=right]A new PTR build is here, and we've moved on from 6.2.1 to 6.2.2! This features new Hallow's End and Winter Veil festivities, mounts, pets, toys, and...[achievement=10335]  [item=128507]?\r\n\r\n[quote][b][url=http://ptr.wowhead.com/search?q=date%3A2015-08-12&refresh]Check out the latest database additions, including items![/url][/b][/quote]\r\n\r\n[h2]New Mounts[/h2]\r\n\r\n[ul][li][item=87776], added years ago in Mists of Pandaria's data, is the reward for getting 300 mounts ([url=http://ptr.wowhead.com/achievement=10355/lord-of-the-reins?refresh]Lord of the Reins[/url]). See which WoD mounts you're missing with the [url=http://www.wowhead.com/guides/vanity-collections/warlords-of-draenor-mount-collectors-guide]Warlords of Draenor Mount Guide[/url]![/li]\r\n[li]The Legion's Collector's Edition will have a mount -- [b][item=128425]/[achievement=10320][/b].[/li]\r\n[li]Other new mounts include the [item=128671] from Feast of Winter Veil, the [item=128422] as the latest Shop Mount, and the [item=129923] and [item=129922] from Timewalking.[/li][/ul]\r\n\r\n[center][model npc=43697 img=http://wow.zamimg.com/uploads/blog/images/7986.png][/model] [model npc=64960 img=http://wow.zamimg.com/uploads/blog/images/7992.png][/model]\r\n[model npc=27525 img=http://wow.zamimg.com/uploads/blog/images/7990.png][/model] [model npc=48946 img=http://wow.zamimg.com/uploads/blog/images/7991.png][/model][/center]\r\n\r\n[h2]New Pets[/h2]\r\n[ul][li][b][item=128427]/[achievement=10322][/b] is the pet reward from 2015 BlizzCon. He has cute abilities like [petability=1535].[/li]\r\n[li][b][item=128423]/[achievement=10309][/b] is the pet from the Legacy of the Void Collector's Edition.[/li]\r\n[li][b][npc=95841]/[achievement=10321][/b] is the pet from the Legion Collector's Edition.[/li]\r\n[li][b][item=128424][/b] is a new pet from the in-game shop.[/li]\r\n[li]New Hallow's End pets [npc=97568], [npc=97569], [npc=97324][/li]\r\n[li]New Feast of Winter Veil pet [npc=97229].[/li][/ul]\r\n\r\nCarry your pet on a sled with [item=128776]!\r\n\r\n[h2]Pepe[/h2]\r\nIn [achievement=10365], Pepe now has a scarecrow form in [item=128874]! This achievement is related to Hallow's End.[pad]\r\n[center][model object=28858 img=http://wow.zamimg.com/uploads/blog/images/7998.png][/model][model object=28858 img=http://wow.zamimg.com/uploads/blog/images/7996.png][/model]\r\n[model object=28858 img=http://wow.zamimg.com/uploads/blog/images/7995.png][/model][model object=28858 img=http://wow.zamimg.com/uploads/blog/images/7997.png][/model][/center]\r\n\r\n[h2]New Toys[/h2]\r\n[ul][li][b][item=108632][/b] is the 2015 Winter Veil Toy.[/li]\r\n[li]There is a related achievement to collect 5 toys in the \"Iron Armada\" set.[/li]\r\n[li]The Iron Armada set involves looting [item=108632] and [item=108635] as part of Winter Veil, and [item=108631], [item=108633], and [item=108634] from rares in the eastern area of Tanaan Jungle.[/li]\r\n[li]Collecting 200 toys rewards you with [achievement=10354] and [title=85].[/li]\r\n[li]Toys most likely from Timewalking rewards: [item=129952], [item=129938], [item=129926][/li][/ul]\r\n\r\n[item=127709] and [item=122117] are now classified as toys.\r\n\r\n[h2]Build Highlights[/h2]\r\n[ul][li][currency=1166] new currency to buy new toys, new mounts, and gear that scales up to the character's level at the time of purchase.[/li]\r\n[li]Did someone say....[item=128507]?[/li]\r\n[li]Lots of new [url=http://ptr.wowhead.com/items?filter=minle=640;maxle=640;qu=2;cr=166;crs=6;crv=0#0-3]640 greens[/url]--perhaps they're the lvl 100 boosted gear.[/li]\r\n[li]Strings have been added for the Level 100 Boost coming in Legion. Just getting back to WoW now? Check out our tips for [url=http://www.wowhead.com/guides/new-level-90-player-basics-and-tips]boosted 90[/url] and [url=http://www.wowhead.com/guides/new-level-100-player-basics-and-tips]fresh 100 players[/url].[/li]\r\n[li]New Timewalking rewards, including [url=http://ptr.wowhead.com/items=12?filter=qu=7;cr=166;crs=6;crv=0]reputation tokens for Burning Crusade and Wrath dungeons[/url].[/li]\r\n[li]New legendary catch-up quests [quest=40235].[/li][/ul]"
+   }
+  ],
+  "tools": [],
+  "database": [
+   {
+    "type": 3,
+    "id": 19019,
+    "name": "Thunderfury, Blessed Blade of the Windseeker",
+    "typeName": "Item",
+    "icon": "inv_sword_39",
+    "quality": 5,
+    "pinTitle": "Item",
+    "pinFooterText": "One-Handed Sword",
+    "pinDescription": "Thunderfury, Blessed Blade of the Windseeker is the legendary sword once wielded by Thunderaan, Prince of Air.",
+    "pinBreadcrumb": [
+     "Weapon",
+     "One-Handed Sword"
+    ]
+   },
+   {
+    "type": 5,
+    "id": 7787,
+    "name": "Rise, Thunderfury!",
+    "typeName": "Quest",
+    "side": 3,
+    "pinTitle": "Quest",
+    "pinFooterText": "Level: 30",
+    "pinDescription": "You have defeated the Wind Seeker. Take the dormant blade and force the lying wretch, Demitrian, to use the materials you provided for his betrayal to wake Thunderfury.",
+    "pinBreadcrumb": [
+     "Miscellaneous",
+     "Legendary"
+    ]
+   },
+   {
+    "type": 3,
+    "id": 128507,
+    "name": "Inflatable Thunderfury, Blessed Blade of the Windseeker",
+    "typeName": "Item",
+    "icon": "inv_sword_39",
+    "quality": 3,
+    "pinTitle": "Item",
+    "pinFooterText": "Miscellaneous Item",
+    "pinDescription": "It is looted and sold by NPCs.",
+    "pinBreadcrumb": [
+     "Miscellaneous",
+     "Miscellaneous Item"
+    ]
+   },
+   {
+    "type": 6,
+    "id": 21992,
+    "name": "Thunderfury",
+    "typeName": "Spell",
+    "icon": "spell_nature_cyclone",
+    "pinTitle": "Spell",
+    "pinDescription": "Blasts your enemy with lightning, dealing 1180 Nature damage and then jumping to additional nearby enemies.  Each jump reduces that victim's Nature resistance by 98. Affects 5 targets. Your primary target is also consumed by a cyclone, slowing its attack speed by 20% for 12 sec.",
+    "pinBreadcrumb": [
+     "Item Effect"
+    ]
+   },
+   {
+    "type": 10,
+    "id": 10335,
+    "name": "Did Someone Say...?",
+    "typeName": "Achievement",
+    "icon": "inv_sword_39",
+    "pinTitle": "Achievement",
+    "pinFooterText": "Points: 0",
+    "pinDescription": "Wielded Inflatable Thunderfury, Blessed Blade of the Windseeker.",
+    "pinBreadcrumb": [
+     "Feats of Strength",
+     "Events"
+    ]
+   },
+   {
+    "type": 3,
+    "id": 139037,
+    "name": "Thunderfury, Blessed Blade of the Windseeker",
+    "typeName": "Item",
+    "icon": "inv_sword_39",
+    "quality": 5,
+    "pinTitle": "Item",
+    "pinDescription": "<b>Thunderfury, Blessed Blade of the Windseeker</b> is a quest item.",
+    "pinBreadcrumb": [
+     "Quest"
+    ]
+   },
+   {
+    "type": 10,
+    "id": 428,
+    "name": "Thunderfury, Blessed Blade of the Windseeker",
+    "typeName": "Achievement",
+    "icon": "inv_sword_39",
+    "pinTitle": "Achievement",
+    "pinFooterText": "Points: 0",
+    "pinDescription": "Wielder of Thunderfury, Blessed Blade of the Windseeker.",
+    "pinBreadcrumb": [
+     "Feats of Strength",
+     "Raids"
+    ]
+   },
+   {
+    "type": 3,
+    "id": 137225,
+    "name": "Thunderfury, Blessed Blade of the Windseeker",
+    "typeName": "Item",
+    "icon": "inv_sword_39",
+    "quality": 5,
+    "pinTitle": "Item",
+    "pinFooterText": "One-Handed Sword",
+    "pinDescription": "This legendary one-handed sword has an item level of 29.",
+    "pinBreadcrumb": [
+     "Weapon",
+     "One-Handed Sword"
+    ]
+   },
+   {
+    "type": 3,
+    "id": 139000,
+    "name": "Damaged Thunderfury",
+    "typeName": "Item",
+    "icon": "inv_sword_39",
+    "quality": 5,
+    "pinTitle": "Item",
+    "pinDescription": "Damaged Thunderfury is a quest item. It is looted.",
+    "pinBreadcrumb": [
+     "Quest"
+    ]
+   },
+   {
+    "type": 10,
+    "id": 5184,
+    "name": "Thunderfury, Blessed Blade of the Windseeker - Guild Edition",
+    "typeName": "Achievement",
+    "icon": "inv_sword_39",
+    "pinTitle": "Achievement",
+    "pinFooterText": "Points: 10",
+    "pinDescription": "Wielder of Thunderfury, Blessed Blade of the Windseeker.",
+    "pinBreadcrumb": [
+     "Dungeons & Raids"
+    ]
+   },
+   {
+    "type": 1,
+    "id": 109505,
+    "name": "Thunderfury Found",
+    "typeName": "NPC",
+    "displayName": "Thunderfury Found",
+    "pinTitle": "NPC",
+    "pinDescription": "The location of this NPC is unknown.",
+    "pinBreadcrumb": [
+     "Normal"
+    ]
+   },
+   {
+    "type": 2,
+    "id": 251656,
+    "name": "Damaged Thunderfury",
+    "typeName": "Object",
+    "pinTitle": "Object",
+    "pinBreadcrumb": [
+     "Container"
+    ]
+   },
+   {
+    "type": 6,
+    "id": 190831,
+    "name": "Inflatable Thunderfury",
+    "typeName": "Spell",
+    "icon": "inv_sword_39",
+    "pinTitle": "Spell",
+    "pinDescription": "Equip your Inflatable Thunderfury. In the Item Effects category.",
+    "pinBreadcrumb": [
+     "Item Effect"
+    ]
+   },
+   {
+    "type": 6,
+    "id": 212001,
+    "name": "Throw Thunderfury, Blessed Blade of the Windseeker",
+    "typeName": "Spell",
+    "icon": "inv_sword_39",
+    "pinTitle": "Spell",
+    "pinDescription": "Throws junk at an enemy, inflicting Physical damage. In the NPC Abilities category.",
+    "pinBreadcrumb": [
+     "NPC Abilities"
+    ]
+   },
+   {
+    "type": 6,
+    "id": 27648,
+    "name": "Thunderfury",
+    "typeName": "Spell",
+    "icon": "spell_nature_cyclone",
+    "pinTitle": "Spell",
+    "pinDescription": "In the Uncategorized Spells category.",
+    "pinBreadcrumb": [
+     "Uncategorized"
+    ]
+   },
+   {
+    "type": 6,
+    "id": 347415,
+    "name": "Random Package Visual (Thunderfury)",
+    "typeName": "Spell",
+    "icon": "trade_engineering",
+    "pinTitle": "Spell",
+    "pinDescription": "In the Uncategorized Spells category.",
+    "pinBreadcrumb": [
+     "Uncategorized"
+    ]
+   }
+  ]
+ }
+}

@@ -1,3 +1,14 @@
+"""The Wowhead entity types this CLI understands, and how they map onto Wowhead's own type ids.
+
+``suggestion_type_ids`` are the numeric ``type`` values Wowhead puts on rows of the search
+suggestions endpoint. ``resolve_supported`` therefore only holds for types that endpoint can emit:
+mounts, recipes and battle pets have no suggestion type of their own (they come back as items,
+spells or NPCs), so ``resolve --entity-type`` rejects them instead of filtering every row away.
+
+Types this CLI cannot parse are still listed when Wowhead's ``<type>=<id>`` URL form reaches them
+(``news``, ``event``): a search row nobody can open is worse than one with no follow-up command.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -16,7 +27,7 @@ class WowheadEntityType:
 ENTITY_TYPE_DEFS: tuple[WowheadEntityType, ...] = (
     WowheadEntityType(
         key="achievement",
-        suggestion_type_ids=(7,),
+        suggestion_type_ids=(10,),
         search_hint_terms=("achievement", "achievements"),
         parser_supported=True,
         resolve_supported=True,
@@ -26,7 +37,6 @@ ENTITY_TYPE_DEFS: tuple[WowheadEntityType, ...] = (
         key="battle-pet",
         search_hint_terms=("battle pet", "battle pets"),
         parser_supported=True,
-        resolve_supported=True,
         hydrate_supported=True,
     ),
     WowheadEntityType(
@@ -39,11 +49,17 @@ ENTITY_TYPE_DEFS: tuple[WowheadEntityType, ...] = (
     ),
     WowheadEntityType(
         key="currency",
-        suggestion_type_ids=(111,),
+        suggestion_type_ids=(17,),
         search_hint_terms=("currency", "currencies", "token", "tokens"),
         parser_supported=True,
         resolve_supported=True,
         hydrate_supported=True,
+    ),
+    WowheadEntityType(
+        key="event",
+        suggestion_type_ids=(12,),
+        parser_supported=False,
+        hydrate_supported=False,
     ),
     WowheadEntityType(
         key="faction",
@@ -73,8 +89,13 @@ ENTITY_TYPE_DEFS: tuple[WowheadEntityType, ...] = (
         key="mount",
         search_hint_terms=("mount", "mounts"),
         parser_supported=True,
-        resolve_supported=True,
         hydrate_supported=True,
+    ),
+    WowheadEntityType(
+        key="news",
+        suggestion_type_ids=(162,),
+        parser_supported=False,
+        hydrate_supported=False,
     ),
     WowheadEntityType(
         key="npc",
@@ -112,7 +133,6 @@ ENTITY_TYPE_DEFS: tuple[WowheadEntityType, ...] = (
         key="recipe",
         search_hint_terms=("recipe", "recipes"),
         parser_supported=True,
-        resolve_supported=True,
         hydrate_supported=True,
     ),
     WowheadEntityType(
@@ -133,6 +153,7 @@ ENTITY_TYPE_DEFS: tuple[WowheadEntityType, ...] = (
     ),
     WowheadEntityType(
         key="zone",
+        suggestion_type_ids=(7,),
         search_hint_terms=("zone", "zones"),
         parser_supported=True,
         resolve_supported=True,
@@ -140,7 +161,6 @@ ENTITY_TYPE_DEFS: tuple[WowheadEntityType, ...] = (
     ),
 )
 
-ENTITY_TYPE_BY_KEY = {row.key: row for row in ENTITY_TYPE_DEFS}
 SUGGESTION_TYPE_TO_ENTITY: dict[int, str] = {
     type_id: row.key
     for row in ENTITY_TYPE_DEFS

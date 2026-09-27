@@ -4,13 +4,14 @@ import re
 from typing import Any, Literal
 from urllib.parse import urljoin, urlparse, urlunparse
 
+from warcraft_core.expansions import wowhead_path_prefixes
 from warcraft_core.wow_normalization import normalized_text
 
 IdentityStatus = Literal["unknown", "normalized", "canonical", "inferred", "ambiguous"]
 IdentityConfidence = Literal["none", "low", "medium", "high"]
 TalentTransportStatus = Literal["unknown", "raw_only", "validated", "exact"]
 WOWHEAD_TALENT_CALC_SEGMENT = "talent-calc"
-WOWHEAD_EXPANSION_PREFIXES = frozenset({"classic", "tbc", "wotlk", "cata", "mop-classic", "ptr", "beta", "classic-ptr"})
+WOWHEAD_EXPANSION_PREFIXES = wowhead_path_prefixes()
 WOW_CLASS_SLUGS = frozenset(
     {
         "deathknight",
@@ -497,7 +498,6 @@ def talent_transport_packet_payload(
     validation: dict[str, Any] | None = None,
     scope: dict[str, Any] | None = None,
     provider: str | None = None,
-    candidates: list[tuple[str | None, str | None]] | None = None,
     source_notes: list[str] | tuple[str, ...] | None = None,
 ) -> dict[str, object]:
     cleaned_transport_forms, raw_payload, validation_payload, status = _talent_transport_payload_parts(
@@ -513,7 +513,6 @@ def talent_transport_packet_payload(
             spec=spec,
             confidence=confidence,
             source=source,
-            candidates=candidates,
             source_notes=source_notes,
         ),
         "transport_forms": cleaned_transport_forms,

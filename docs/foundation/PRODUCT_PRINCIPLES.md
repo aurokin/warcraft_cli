@@ -21,6 +21,7 @@ Documentation ownership:
 - Normalization is additive. Raw source content should remain available so agents can still inspect the full guide, article, log slice, or profile detail when needed.
 - If a provider cannot honestly support a workflow, the CLI should fail clearly or narrow the contract instead of faking coverage.
 - Wrapper and provider surfaces should help agents compose cross-provider workflows without erasing source identity.
+- Every binary speaks one JSON envelope, one error/exit-code vocabulary, and one set of global output flags ([ERROR_CONTRACT.md](ERROR_CONTRACT.md)), and every provider declares a support tier (core, supported, experimental) so an agent can tell the product from the experiments before trusting a surface.
 - "Smart answers" are only acceptable when they stay grounded in what the provider contract, local source tree, or sampled data actually proves.
 
 ## Representative Workflows

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
+
+from warcraft_core.provider import ProviderError
 
 
 def _iso_now_utc() -> str:
@@ -39,24 +42,90 @@ def load_json(path: Path) -> dict[str, Any]:
     return value
 
 
-def load_json_or_default(path: Path, default: Any) -> Any:
-    if not path.exists():
-        return default
-    return load_json(path)
-
-
 def load_jsonl(path: Path) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
-    if not path.exists():
-        return rows
     for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line:
+        if not line.strip():
             continue
         value = json.loads(line)
-        if isinstance(value, dict):
-            rows.append(value)
+        if not isinstance(value, dict):
+            raise ValueError(f"Expected a JSON object on every line of {path}")
+        rows.append(value)
     return rows
+
+
+def _failed_page_rows(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Pages the provider could not fetch, from a guide payload or a bundle manifest.
+
+    Both carry the same ``{"count": n, "items": [...]}`` block. An export that lost pages must stay
+    visible to every bundle reader (docs/foundation/SAFE_ANALYTICS_RULES.md), so this never hides a
+    malformed block: it returns the rows it finds and an empty list when there are none.
+    """
+    block = payload.get("failed_pages")
+    if not isinstance(block, dict):
+        return []
+    return [row for row in block.get("items") or [] if isinstance(row, dict)]
+
+
+@dataclass(frozen=True, slots=True)
+class _PageExport:
+    """Per-page HTML files plus the flattened page and section rows written to JSONL."""
+
+    files: list[dict[str, Any]]
+    rows: list[dict[str, Any]]
+    sections: list[dict[str, Any]]
+
+
+def _export_pages(
+    pages: list[dict[str, Any]],
+    *,
+    export_dir: Path,
+    page_resource_key: str,
+    content_key: str,
+) -> _PageExport:
+    """Write one HTML file per page and collect the page/section rows describing them."""
+    export = _PageExport(files=[], rows=[], sections=[])
+    html_dir = export_dir / "pages"
+    for page in pages:
+        page_resource = dict(page[page_resource_key])
+        page_meta = dict(page["page"])
+        article = dict(page[content_key])
+        page_slug = page_resource["section_slug"]
+        html_path = html_dir / f"{page_slug}.html"
+        html_path.parent.mkdir(parents=True, exist_ok=True)
+        html_path.write_text(article["html"], encoding="utf-8")
+        export.files.append(
+            {
+                "section_slug": page_slug,
+                "path": str(html_path.relative_to(export_dir)),
+                "page_url": page_resource["page_url"],
+            }
+        )
+        export.rows.append(
+            {
+                "section_slug": page_slug,
+                "section_title": page_resource["section_title"],
+                "page_url": page_resource["page_url"],
+                "title": page_meta["title"],
+                "description": page_meta.get("description"),
+                "text": article["text"],
+                "heading_count": len(article.get("headings") or []),
+            }
+        )
+        for section in article.get("sections") or []:
+            export.sections.append(
+                {
+                    "page_url": page_resource["page_url"],
+                    "section_slug": page_slug,
+                    "page_title": page_meta["title"],
+                    "title": section["title"],
+                    "level": section["level"],
+                    "ordinal": section["ordinal"],
+                    "text": section["text"],
+                    "html": section["html"],
+                }
+            )
+    return export
 
 
 def write_article_bundle(
@@ -71,53 +140,16 @@ def write_article_bundle(
     resource = dict(full_payload[resource_key])
     normalized_page_resource_key = page_resource_key or resource_key
     navigation = list((full_payload.get("navigation") or {}).get("items") or [])
-    pages = list(full_payload.get("pages") or [])
     linked_entities = list((full_payload.get("linked_entities") or {}).get("items") or [])
     build_references = list((full_payload.get("build_references") or {}).get("items") or [])
     analysis_surfaces = list((full_payload.get("analysis_surfaces") or {}).get("items") or [])
-    sections: list[dict[str, Any]] = []
-    page_rows: list[dict[str, Any]] = []
-    page_files: list[dict[str, Any]] = []
-    html_dir = export_dir / "pages"
-    for page in pages:
-        page_resource = dict(page[normalized_page_resource_key])
-        page_meta = dict(page["page"])
-        article = dict(page[content_key])
-        page_slug = page_resource["section_slug"]
-        html_path = html_dir / f"{page_slug}.html"
-        html_path.parent.mkdir(parents=True, exist_ok=True)
-        html_path.write_text(article["html"], encoding="utf-8")
-        page_files.append(
-            {
-                "section_slug": page_slug,
-                "path": str(html_path.relative_to(export_dir)),
-                "page_url": page_resource["page_url"],
-            }
-        )
-        page_rows.append(
-            {
-                "section_slug": page_slug,
-                "section_title": page_resource["section_title"],
-                "page_url": page_resource["page_url"],
-                "title": page_meta["title"],
-                "description": page_meta.get("description"),
-                "text": article["text"],
-                "heading_count": len(article.get("headings") or []),
-            }
-        )
-        for section in article.get("sections") or []:
-            sections.append(
-                {
-                    "page_url": page_resource["page_url"],
-                    "section_slug": page_slug,
-                    "page_title": page_meta["title"],
-                    "title": section["title"],
-                    "level": section["level"],
-                    "ordinal": section["ordinal"],
-                    "text": section["text"],
-                    "html": section["html"],
-                }
-            )
+    failed_pages = _failed_page_rows(full_payload)
+    pages = _export_pages(
+        list(full_payload.get("pages") or []),
+        export_dir=export_dir,
+        page_resource_key=normalized_page_resource_key,
+        content_key=content_key,
+    )
 
     manifest = {
         "export_version": 1,
@@ -129,9 +161,11 @@ def write_article_bundle(
         "content_key": content_key,
         "output_dir": str(export_dir),
         resource_key: resource,
+        # Kept out of "counts", which describes what the bundle holds; this says what it is missing.
+        "failed_pages": {"count": len(failed_pages), "items": failed_pages},
         "counts": {
-            "pages": len(page_rows),
-            "sections": len(sections),
+            "pages": len(pages.rows),
+            "sections": len(pages.sections),
             "navigation_links": len(navigation),
             "linked_entities": len(linked_entities),
             "build_references": len(build_references),
@@ -152,9 +186,9 @@ def write_article_bundle(
     export_dir.mkdir(parents=True, exist_ok=True)
     _write_json(export_dir / "guide.json", full_payload)
     _write_json(export_dir / "manifest.json", manifest)
-    _write_json(export_dir / "page-files.json", {"pages": page_files})
-    _write_jsonl(export_dir / "pages.jsonl", page_rows)
-    _write_jsonl(export_dir / "sections.jsonl", sections)
+    _write_json(export_dir / "page-files.json", {"pages": pages.files})
+    _write_jsonl(export_dir / "pages.jsonl", pages.rows)
+    _write_jsonl(export_dir / "sections.jsonl", pages.sections)
     _write_jsonl(export_dir / "navigation-links.jsonl", navigation)
     _write_jsonl(export_dir / "linked-entities.jsonl", linked_entities)
     _write_jsonl(export_dir / "build-references.jsonl", build_references)
@@ -162,20 +196,82 @@ def write_article_bundle(
     return manifest
 
 
-def load_article_bundle(export_dir: Path) -> dict[str, Any]:
+class ArticleBundleError(ProviderError, ValueError):
+    """``export_dir`` cannot be read as an article bundle.
+
+    ``not_found`` when the path is not there, ``invalid_argument`` when it is a file, and
+    ``invalid_bundle`` when the directory is not a readable bundle. Also a ``ValueError`` so the
+    per-bundle handlers in ``warcraft_cli`` keep turning one bad bundle into an error row instead of
+    aborting a comparison.
+    """
+
+
+# Bundle row lists and the manifest ``files`` key naming each one. Article providers list all six; a
+# wowhead guide-export lists every one but pages and build references. A manifest that lists none
+# of them is not a bundle, and a listed file that is missing or corrupt makes the bundle unreadable.
+_CONTENT_FILES: Final = {
+    "pages": "pages_jsonl",
+    "sections": "sections_jsonl",
+    "navigation": "navigation_links_jsonl",
+    "linked_entities": "linked_entities_jsonl",
+    "build_references": "build_references_jsonl",
+    "analysis_surfaces": "analysis_surfaces_jsonl",
+}
+
+
+def _object_field(row: dict[str, Any], key: str) -> dict[str, Any]:
+    """``row[key]`` when it is an object, ``{}`` when absent; any other type is a corrupt bundle row."""
+    value = row.get(key)
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(f"{key} is a {type(value).__name__}, not an object")
+    return value
+
+
+def _list_field(row: dict[str, Any], key: str) -> list[Any]:
+    """``row[key]`` when it is a list, ``[]`` when absent; any other type is a corrupt bundle row."""
+    value = row.get(key)
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError(f"{key} is a {type(value).__name__}, not a list")
+    return value
+
+
+def _check_nested_fields(bundle: dict[str, Any]) -> None:
+    """Reject rows whose nested fields the query and compare readers walk into have the wrong type."""
+    for row in bundle["build_references"]:
+        _build_reference_identity(row)
+        _list_field(row, "source_urls")
+    for row in bundle["analysis_surfaces"]:
+        _list_field(row, "surface_tags")
+
+
+def _read_bundle(export_dir: Path) -> dict[str, Any]:
     manifest = load_json(export_dir / "manifest.json")
-    files = manifest.get("files") or {}
-    page_files = load_json_or_default(export_dir / files.get("page_files_json", "page-files.json"), {"pages": []})
-    return {
-        "manifest": manifest,
-        "page_files": list(page_files.get("pages") or []) if isinstance(page_files, dict) else [],
-        "pages": load_jsonl(export_dir / files.get("pages_jsonl", "pages.jsonl")),
-        "sections": load_jsonl(export_dir / files.get("sections_jsonl", "sections.jsonl")),
-        "navigation": load_jsonl(export_dir / files.get("navigation_links_jsonl", "navigation-links.jsonl")),
-        "linked_entities": load_jsonl(export_dir / files.get("linked_entities_jsonl", "linked-entities.jsonl")),
-        "build_references": load_jsonl(export_dir / files.get("build_references_jsonl", "build-references.jsonl")),
-        "analysis_surfaces": load_jsonl(export_dir / files.get("analysis_surfaces_jsonl", "analysis-surfaces.jsonl")),
-    }
+    files = manifest.get("files")
+    if not isinstance(files, dict) or not files.keys() & set(_CONTENT_FILES.values()):
+        raise ValueError("its manifest lists no article content file")
+    bundle: dict[str, Any] = {"manifest": manifest, "failed_pages": _failed_page_rows(manifest)}
+    for name, key in _CONTENT_FILES.items():
+        bundle[name] = load_jsonl(export_dir / files[key]) if key in files else []
+    _check_nested_fields(bundle)
+    return bundle
+
+
+def load_article_bundle(export_dir: Path) -> dict[str, Any]:
+    if not export_dir.exists():
+        raise ArticleBundleError("not_found", f"Bundle directory not found: {export_dir}")
+    if not export_dir.is_dir():
+        raise ArticleBundleError("invalid_argument", f"Bundle path is not a directory: {export_dir}")
+    try:
+        return _read_bundle(export_dir)
+    except (OSError, ValueError, TypeError) as exc:
+        # OSError: no manifest.json (commonly the parent of a bundle) or a listed file is missing.
+        # ValueError: corrupt JSON or JSONL, or a row with a wrongly typed nested field. TypeError: a
+        # manifest entry of the wrong type.
+        raise ArticleBundleError("invalid_bundle", f"Not a readable article bundle, {export_dir}: {exc}") from exc
 
 
 def _query_score(query: str, text: str) -> int:
@@ -194,13 +290,18 @@ def _query_score(query: str, text: str) -> int:
     return score
 
 
+def _section_text(row: dict[str, Any]) -> Any:
+    """Section body: ``text`` in article bundles, ``content_text`` in wowhead guide-exports."""
+    return row.get("text") or row.get("content_text")
+
+
 def _section_haystack(row: dict[str, Any]) -> str:
-    title = str(row.get("title") or "")
-    return f"{title} {row.get('text') or ''}"
+    return f"{row.get('title') or ''} {_section_text(row) or ''}"
 
 
 def _navigation_haystack(row: dict[str, Any]) -> str:
-    return f"{row.get('title') or ''} {row.get('section_slug') or ''}"
+    # Article bundles title their navigation links; wowhead guide-exports label them.
+    return f"{row.get('title') or row.get('label') or ''} {row.get('section_slug') or ''}"
 
 
 def _linked_entity_haystack(row: dict[str, Any]) -> str:
@@ -208,20 +309,9 @@ def _linked_entity_haystack(row: dict[str, Any]) -> str:
 
 
 def _build_reference_haystack(row: dict[str, Any]) -> str:
-    build_identity = row.get("build_identity") or {}
-    class_spec_identity = build_identity.get("class_spec_identity") or {}
-    identity = class_spec_identity.get("identity") or {}
-    return " ".join(
-        part
-        for part in (
-            str(row.get("label") or ""),
-            str(row.get("build_code") or ""),
-            str(row.get("url") or ""),
-            str(identity.get("actor_class") or ""),
-            str(identity.get("spec") or ""),
-        )
-        if part
-    )
+    identity = _build_reference_identity(row)
+    parts = (row.get("label"), identity["build_code"], identity["url"], identity["actor_class"], identity["spec"])
+    return " ".join(str(part) for part in parts if part)
 
 
 def _analysis_surface_haystack(row: dict[str, Any]) -> str:
@@ -261,10 +351,12 @@ def _collect_kind_matches(
     for row in rows:
         if predicate is not None and not predicate(row):
             continue
-        score = _query_score(query, haystack_fn(row))
+        # A match in a title counts twice, so the section named for the question outranks every
+        # section that merely mentions it.
+        score = _query_score(query, haystack_fn(row)) + _query_score(query, str(row.get("title") or ""))
         if score <= 0:
             continue
-        matches.append({"kind": kind, "score": score, **row})
+        matches.append({**row, "kind": kind, "score": score})
     return matches
 
 
@@ -327,8 +419,11 @@ def query_article_bundle(
     for rows in results_by_kind.values():
         top.extend(rows[:limit])
     top.sort(key=lambda row: (-row["score"], row["kind"], str(row.get("title") or row.get("name") or "")))
+    failed_pages = list(bundle.get("failed_pages") or [])
     return {
         "query": query,
+        # A query answered from a partial bundle says so instead of reading as a complete answer.
+        "failed_pages": {"count": len(failed_pages), "items": failed_pages},
         "count": sum(len(rows) for rows in results_by_kind.values()),
         "match_counts": {kind: len(rows) for kind, rows in results_by_kind.items()},
         "matches": {kind: rows[:limit] for kind, rows in results_by_kind.items()},
@@ -339,7 +434,8 @@ def query_article_bundle(
 def _bundle_title(bundle: dict[str, Any]) -> str | None:
     manifest_raw = bundle.get("manifest")
     manifest: dict[str, Any] = manifest_raw if isinstance(manifest_raw, dict) else {}
-    resource_key = manifest.get("resource_key")
+    # A wowhead guide-export manifest has no resource_key; its title is under "page".
+    resource_key = manifest.get("resource_key", "page")
     if isinstance(resource_key, str):
         resource = manifest.get(resource_key)
         if isinstance(resource, dict):
@@ -372,6 +468,8 @@ def _bundle_descriptor(bundle: dict[str, Any], *, path: Path) -> dict[str, Any]:
         "resource_key": manifest.get("resource_key"),
         "exported_at": manifest.get("exported_at"),
         "counts": counts,
+        # A comparison that includes a partial export must not read as complete on both sides.
+        "failed_page_count": len(_failed_page_rows(manifest)),
     }
 
 
@@ -433,18 +531,13 @@ def _section_bundle_entry(bundle_info: dict[str, Any], rows: list[dict[str, Any]
         "page_titles": _unique_strings([row.get("page_title") for row in rows]),
         "section_titles": _unique_strings([row.get("title") for row in rows]),
         "section_slugs": _unique_strings([row.get("section_slug") for row in rows]),
-        "previews": _unique_strings([row.get("text") for row in rows])[:3],
+        "previews": _unique_strings([_section_text(row) for row in rows])[:3],
         "citations": citations[:5],
     }
 
 
 def _build_reference_identity(row: dict[str, Any]) -> dict[str, Any]:
-    build_identity_raw = row.get("build_identity")
-    build_identity: dict[str, Any] = build_identity_raw if isinstance(build_identity_raw, dict) else {}
-    class_spec_identity_value = build_identity.get("class_spec_identity")
-    class_spec_identity = class_spec_identity_value if isinstance(class_spec_identity_value, dict) else {}
-    identity_value = class_spec_identity.get("identity")
-    identity = identity_value if isinstance(identity_value, dict) else {}
+    identity = _object_field(_object_field(_object_field(row, "build_identity"), "class_spec_identity"), "identity")
     actor_class_value = identity.get("actor_class")
     actor_class = actor_class_value if isinstance(actor_class_value, str) else None
     spec_value = identity.get("spec")
@@ -633,6 +726,15 @@ def _build_build_reference_rows(
 def compare_article_bundles(bundle_inputs: list[tuple[Path, dict[str, Any]]]) -> dict[str, Any]:
     if len(bundle_inputs) < 2:
         raise ValueError("compare_article_bundles requires at least two bundles")
+    # Membership is keyed by path, so a bundle given twice would read as disagreeing with itself.
+    resolved = [path.resolve() for path, _bundle in bundle_inputs]
+    duplicates = sorted({str(path) for path in resolved if resolved.count(path) > 1})
+    if duplicates:
+        raise ArticleBundleError(
+            "invalid_argument",
+            f"The same bundle was given more than once: {', '.join(duplicates)}",
+            details={"duplicate_bundles": duplicates},
+        )
 
     bundle_descriptors = [_bundle_descriptor(bundle, path=path) for path, bundle in bundle_inputs]
     bundle_paths = [str(path) for path, _bundle in bundle_inputs]

@@ -1,0 +1,97 @@
+from __future__ import annotations
+
+from typing import Any
+
+import pytest
+from warcraft_core.envelope import (
+    ENVELOPE_KEYS,
+    SCHEMA_VERSION,
+    envelope_violations,
+    error_envelope,
+    success_envelope,
+)
+from warcraft_core.exit_codes import EXIT_AUTH, EXIT_GENERIC, EXIT_NOT_FOUND, exit_code_for
+from warcraft_core.provider import ProviderError, ProviderSurface
+
+
+def test_success_envelope_has_every_required_key_and_no_error() -> None:
+    envelope = success_envelope(provider="wowhead", command="search", kind="search_results", data={"results": []}, query="thunderfury")
+    assert set(envelope) == ENVELOPE_KEYS - {"error"}
+    assert envelope["ok"] is True
+    assert envelope["schema_version"] == SCHEMA_VERSION == "1"
+    assert envelope["provenance"] == {}
+    assert envelope_violations(envelope) == []
+
+
+def test_error_envelope_carries_code_message_and_optional_details() -> None:
+    envelope = error_envelope(provider="wowhead", command="entity", code="not_found", message="no such item", details={"id": 1})
+    assert envelope["ok"] is False
+    assert envelope["data"] == {}
+    assert envelope["error"] == {"code": "not_found", "message": "no such item", "details": {"id": 1}}
+    assert "details" not in error_envelope(provider="p", command="c", code="x", message="y")["error"]
+    assert envelope_violations(envelope) == []
+
+
+def test_envelope_violations_flags_shape_problems() -> None:
+    assert "missing key: schema_version" in envelope_violations({"ok": True})
+    ok_with_error = {**success_envelope(provider="p", command="c", kind="k", data={}), "error": {"code": "x", "message": "y"}}
+    assert envelope_violations(ok_with_error) == ["error must be absent when ok is true"]
+    ok_with_null_error = {**success_envelope(provider="p", command="c", kind="k", data={}), "error": None}
+    assert envelope_violations(ok_with_null_error) == ["error must be absent when ok is true"]
+    bad_data = {**success_envelope(provider="p", command="c", kind="k", data={}), "data": []}
+    assert envelope_violations(bad_data) == ["data must be a dict"]
+    error_missing = {**error_envelope(provider="p", command="c", code="x", message="y"), "error": {"code": "x"}}
+    assert envelope_violations(error_missing) == ["error.message must be a str"]
+    legacy_copy = {**success_envelope(provider="p", command="c", kind="k", data={"count": 1}), "count": 1}
+    assert envelope_violations(legacy_copy) == ["unexpected key: count"]
+
+
+_SUCCESS = success_envelope(provider="p", command="c", kind="k", data={})
+_FAILURE = error_envelope(provider="p", command="c", code="x", message="y")
+
+
+@pytest.mark.parametrize(
+    ("payload", "problem"),
+    [
+        ({**_SUCCESS, "ok": "true"}, "ok must be a bool"),
+        ({**_SUCCESS, "provider": 1}, "provider must be a str"),
+        ({**_SUCCESS, "command": None}, "command must be a str"),
+        ({**_SUCCESS, "kind": ["k"]}, "kind must be a str"),
+        ({**_SUCCESS, "schema_version": "2"}, "schema_version must be '1'"),
+        ({**_SUCCESS, "provenance": None}, "provenance must be a dict"),
+        ({**_FAILURE, "error": None}, "error must be a dict when ok is false"),
+        ({**_FAILURE, "error": {"code": 1, "message": "y"}}, "error.code must be a str"),
+        ({**_FAILURE, "error": {"code": "x", "message": "y", "details": []}}, "error.details must be a dict"),
+    ],
+)
+def test_envelope_violations_flags_each_type_rule(payload: dict[str, Any], problem: str) -> None:
+    assert envelope_violations(payload) == [problem]
+
+
+def test_exit_code_for_maps_known_codes_and_defaults_to_generic() -> None:
+    assert exit_code_for("auth_required") == EXIT_AUTH
+    assert exit_code_for("not_found") == EXIT_NOT_FOUND
+    assert exit_code_for("something_else") == EXIT_GENERIC
+
+
+def test_provider_error_defaults_exit_code_from_code() -> None:
+    assert ProviderError("auth_required", "login first").exit_code == EXIT_AUTH
+    assert ProviderError("auth_required", "login first", exit_code=1).exit_code == 1
+    assert str(ProviderError("x", "boom")) == "boom"
+
+
+def test_provider_surface_is_runtime_checkable() -> None:
+    class Dummy:
+        name = "dummy"
+
+        def search(self, query: str, *, limit: int = 10, **options: object) -> dict[str, object]:
+            return {}
+
+        def resolve(self, target: str, **options: object) -> dict[str, object]:
+            return {}
+
+        def doctor(self, **options: object) -> dict[str, object]:
+            return {}
+
+    assert isinstance(Dummy(), ProviderSurface)
+    assert not isinstance(object(), ProviderSurface)

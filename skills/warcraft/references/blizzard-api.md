@@ -1,5 +1,9 @@
 # Blizzard API
 
+**Tier: experimental.** The command surface is thin. The Battle.net hosts and namespaces are
+confirmed against the live API for `us`, `eu`, `kr`, and `tw` (`provenance.verified: true`);
+`cn` is unverified. Cross-check anything load-bearing against `wowhead` or `warcraftlogs`.
+
 ## Best For
 
 - authoritative World of Warcraft data straight from the official Battle.net API
@@ -13,6 +17,7 @@
 - a realm: `warcraft blizzard realm <slug>` (e.g. `illidan`)
 - an item: `warcraft blizzard item <id>` (e.g. `19019`)
 - a character: `warcraft blizzard character <realm> <name>` (retail only)
+- realms may be a slug or a display name (`malganis`, `Mal'Ganis`, `Tarren Mill`)
 
 ## Auth
 
@@ -28,10 +33,11 @@
 - use `--game-version classic` (or the `--classic` shorthand) for classic namespaces; character
   profiles are retail-only
 - `--locale` passes through (default `en_US`)
+- a bad `--region` or `--game-version` is rejected offline with exit 2 (usage): fix the flag
+  instead of retrying
 - every payload carries `provenance` (region, namespace, namespace class, source URL) and
-  `provenance.verified: false` — the endpoint hosts/namespaces follow documented Blizzard
-  conventions but are pending a one-time live confirmation, so treat results as best-effort
-  until verified
+  `provenance.verified` — `true` for us/eu/kr/tw, `false` for `cn`, whose host could not be
+  reached to confirm it
 - prefer Blizzard for the official record; prefer community providers for analytics, rankings,
   and guide content
 

@@ -52,6 +52,10 @@ GUIDE_HEADING_RE = re.compile(r"""\[(?P<tag>h[1-6])\b[^\]]*\](?P<body>.*?)\[/\1\
 WOWHEAD_URL_TAG_RE = re.compile(
     r"""\[url(?:=(?P<url1>[^\]]+)|\s+guide=(?P<guide_id>\d+))\](?P<label>.*?)\[/url\]""", re.IGNORECASE | re.DOTALL)
 INLINE_TAG_RE = re.compile(r"""\[[^\]]+\]""")
+MARKUP_ENTITY_TOKEN_RE = re.compile(r"""\[(?P<etype>[a-z-]+)=(?P<eid>\d+)[^\]]*\]""")
+# `[build title="..." stats=...]`, `[key-talents="Hero" spells=1,2,3]`, `[build-items bis=1,2 alt=3]`
+MARKUP_BUILD_TAG_RE = re.compile(r"""\[(?P<tag>build|key-talents|build-items)(?P<attrs>[\s=][^\]]*)\]""")
+MARKUP_ATTR_RE = re.compile(r"""(?P<key>[a-z-]*)=(?:"(?P<quoted>[^"]*)"|(?P<bare>[^\s\]]+))""")
 HTML_TAG_RE = re.compile(r"""<[^>]+>""")
 JSON_LD_RE = re.compile(
     r"""<script\b[^>]*\btype=["']application/ld\+json["'][^>]*>(?P<body>.*?)</script>""",
@@ -68,15 +72,24 @@ def canonical_comment_url(page_url: str, comment_id: int) -> str:
     return f"{page_url}#comments:id={comment_id}"
 
 
-def parse_page_metadata(html_text: str, *, fallback_url: str) -> dict[str, str | None]:
+def parse_page_metadata(html_text: str, *, fallback_url: str | None) -> dict[str, str | None]:
     canonical = _first_group(CANONICAL_RE, html_text) or fallback_url
     og_title = _first_group(META_OG_TITLE_RE, html_text)
     description = _first_group(META_DESCRIPTION_RE, html_text)
     return {
-        "canonical_url": unescape(canonical),
+        "canonical_url": unescape(canonical) if canonical else None,
         "title": unescape(og_title) if og_title else None,
         "description": unescape(description) if description else None,
     }
+
+
+PAGE_ERROR_RE = re.compile(r"""<div id=["']inputbox-error["']>(?P<message>.*?)</div>""", re.IGNORECASE | re.DOTALL)
+
+
+def parse_page_error(html_text: str) -> str | None:
+    """The message of Wowhead's error page, which it serves with HTTP 200 (a missing profiler list)."""
+    match = PAGE_ERROR_RE.search(html_text)
+    return unescape(match["message"]).strip() if match else None
 
 
 def parse_page_meta_json(html_text: str) -> dict[str, Any] | None:
@@ -154,72 +167,77 @@ def extract_json_ld(html_text: str) -> dict[str, Any] | list[Any] | None:
     return None
 
 
+MARKUP_CALL_MARKER = "WH.markup.printHtml("
+_PAGE_DATA_MARKER = "WH.getPageData("
+
+
+def _skip_whitespace(text: str, cursor: int) -> int:
+    while cursor < len(text) and text[cursor].isspace():
+        cursor += 1
+    return cursor
+
+
+def _markup_payload_from_page_data(html_text: str, cursor: int) -> tuple[str | None, int] | None:
+    """Resolve ``WH.getPageData("key")`` to the embedded markup string; None when the call is malformed."""
+    cursor = _skip_whitespace(html_text, cursor + len(_PAGE_DATA_MARKER))
+    try:
+        data_key, offset = JSON_DECODER.raw_decode(html_text[cursor:])
+    except json.JSONDecodeError:
+        return None
+    cursor = _skip_whitespace(html_text, cursor + offset)
+    if cursor >= len(html_text) or html_text[cursor] != ")":
+        return None
+    cursor += 1
+    if not isinstance(data_key, str):
+        return None
+    try:
+        parsed = extract_json_script(html_text, f"data.{data_key}")
+    except (ValueError, json.JSONDecodeError):
+        return None
+    return (parsed if isinstance(parsed, str) else None), cursor
+
+
+def _markup_payload_literal(html_text: str, cursor: int) -> tuple[str | None, int] | None:
+    """Read an inline JSON string argument; None when it is not valid JSON."""
+    try:
+        parsed, offset = JSON_DECODER.raw_decode(html_text[cursor:])
+    except json.JSONDecodeError:
+        return None
+    return (parsed if isinstance(parsed, str) else None), cursor + offset
+
+
+def _markup_call_target(html_text: str, cursor: int) -> tuple[Any] | None:
+    """Read the second ``WH.markup.printHtml`` argument, wrapped in a 1-tuple so ``None`` stays a value."""
+    cursor = _skip_whitespace(html_text, cursor)
+    if cursor >= len(html_text) or html_text[cursor] != ",":
+        return None
+    cursor = _skip_whitespace(html_text, cursor + 1)
+    try:
+        found_target, _offset = JSON_DECODER.raw_decode(html_text[cursor:])
+    except json.JSONDecodeError:
+        return None
+    return (found_target,)
+
+
 def extract_markup_by_target(html_text: str, *, target: str) -> str | None:
-    marker = "WH.markup.printHtml("
+    """Return the markup string that ``WH.markup.printHtml`` renders into ``target``, if the page has one."""
     start = 0
     while True:
-        index = html_text.find(marker, start)
+        index = html_text.find(MARKUP_CALL_MARKER, start)
         if index < 0:
             return None
-        cursor = index + len(marker)
-        while cursor < len(html_text) and html_text[cursor].isspace():
-            cursor += 1
-
-        payload: str | None = None
-        if html_text.startswith("WH.getPageData(", cursor):
-            cursor += len("WH.getPageData(")
-            while cursor < len(html_text) and html_text[cursor].isspace():
-                cursor += 1
-            try:
-                data_key, offset = JSON_DECODER.raw_decode(html_text[cursor:])
-            except json.JSONDecodeError:
-                start = index + len(marker)
-                continue
-            cursor += offset
-            while cursor < len(html_text) and html_text[cursor].isspace():
-                cursor += 1
-            if cursor >= len(html_text) or html_text[cursor] != ")":
-                start = index + len(marker)
-                continue
-            cursor += 1
-            if not isinstance(data_key, str):
-                start = index + len(marker)
-                continue
-            try:
-                parsed = extract_json_script(html_text, f"data.{data_key}")
-            except (ValueError, json.JSONDecodeError):
-                start = index + len(marker)
-                continue
-            if isinstance(parsed, str):
-                payload = parsed
+        start = index + len(MARKUP_CALL_MARKER)
+        cursor = _skip_whitespace(html_text, start)
+        if html_text.startswith(_PAGE_DATA_MARKER, cursor):
+            parsed = _markup_payload_from_page_data(html_text, cursor)
         else:
-            try:
-                parsed, offset = JSON_DECODER.raw_decode(html_text[cursor:])
-            except json.JSONDecodeError:
-                start = index + len(marker)
-                continue
-            cursor += offset
-            if isinstance(parsed, str):
-                payload = parsed
-
-        while cursor < len(html_text) and html_text[cursor].isspace():
-            cursor += 1
-        if cursor >= len(html_text) or html_text[cursor] != ",":
-            start = index + len(marker)
+            parsed = _markup_payload_literal(html_text, cursor)
+        if parsed is None:
             continue
-        cursor += 1
-        while cursor < len(html_text) and html_text[cursor].isspace():
-            cursor += 1
-        try:
-            found_target, offset = JSON_DECODER.raw_decode(html_text[cursor:])
-        except json.JSONDecodeError:
-            start = index + len(marker)
-            continue
-        cursor += offset
-        if found_target == target and payload is not None:
+        payload, cursor = parsed
+        found = _markup_call_target(html_text, cursor)
+        if found is not None and found[0] == target and payload is not None:
             return payload
-        start = index + len(marker)
-    return None
 
 
 def extract_guide_sections(markup_text: str) -> list[dict[str, Any]]:
@@ -235,7 +253,46 @@ def extract_guide_sections(markup_text: str) -> list[dict[str, Any]]:
     return sections
 
 
-def extract_guide_section_chunks(markup_text: str) -> list[dict[str, Any]]:
+def entity_names(records: list[dict[str, Any]]) -> dict[tuple[str, int], str]:
+    """Map ``(entity_type, id)`` to the name each linked-entity record carries, for ``guide_markup_text``."""
+    return {
+        (record["entity_type"], record["id"]): record["name"]
+        for record in records
+        if isinstance(record.get("name"), str) and record["name"]
+    }
+
+
+def _render_build_tag(match: re.Match[str], names: dict[tuple[str, int], str]) -> str:
+    """Spell out a build block's title, stat priority, and the talents and items it lists by id."""
+    attrs = {row["key"]: row["quoted"] or row["bare"] or "" for row in MARKUP_ATTR_RE.finditer(match.group("attrs"))}
+    id_type = "spell" if match.group("tag") == "key-talents" else "item"
+    listed = [
+        names[(id_type, int(entity_id))]
+        for key in ("spells", "bis", "alt", "list")
+        for entity_id in re.findall(r"(?:^|,)(\d+)", attrs.get(key, ""))
+        if (id_type, int(entity_id)) in names
+    ]
+    parts = [attrs.get("title", ""), attrs.get("", ""), f"stats {attrs['stats']}" if "stats" in attrs else "", *listed]
+    return " " + ", ".join(part for part in parts if part) + " "
+
+
+def guide_markup_text(markup_text: str, names: dict[tuple[str, int], str]) -> str:
+    """Plain text of guide markup that keeps what its tags name, unlike ``clean_markup_text``.
+
+    ``[spell=184367]`` becomes the entity's name, and build blocks keep their title, stat priority,
+    key talents, and listed items. A token whose entity has no known name is dropped.
+    """
+    text = MARKUP_BUILD_TAG_RE.sub(lambda match: _render_build_tag(match, names), markup_text)
+    text = MARKUP_ENTITY_TOKEN_RE.sub(
+        lambda match: f" {names.get((match.group('etype'), int(match.group('eid'))), '')} ", text
+    )
+    return clean_markup_text(text)
+
+
+def extract_guide_section_chunks(
+    markup_text: str, names: dict[tuple[str, int], str] | None = None
+) -> list[dict[str, Any]]:
+    """Split guide markup at its headings; ``names`` (from ``entity_names``) fills in inline entity tokens."""
     matches = list(GUIDE_HEADING_RE.finditer(markup_text))
     chunks: list[dict[str, Any]] = []
     for index, match in enumerate(matches):
@@ -250,7 +307,7 @@ def extract_guide_section_chunks(markup_text: str) -> list[dict[str, Any]]:
                 "level": int(tag[1]),
                 "title": title,
                 "content_raw": raw_content,
-                "content_text": clean_markup_text(raw_content),
+                "content_text": guide_markup_text(raw_content, names or {}),
             }
         )
     return chunks

@@ -29,8 +29,8 @@ def main() -> int:
     print(f"tooltip_url={build_tooltip_url(profile, 'item', args.item_id)}")
     print(f"entity_url={build_entity_url(profile, 'item', args.item_id)}")
     print(f"comment_replies_url={build_comment_replies_url(profile)}")
-    print("# Capture live JSON/HTML from the URLs above into tests/fixtures/expansion_recorded.json")
-    print("# Then run: pytest -q tests/test_expansion_recorded_fixtures.py tests/test_wowhead_schema_snapshots.py")
+    print("# Compare the URLs above against the routing data in tests/fixtures/expansion_synthetic.json (synthetic, not captured)")
+    print("# Then run: pytest -q tests/test_expansion_synthetic_fixtures.py tests/test_wowhead_schema_snapshots.py")
     return 0
 
 

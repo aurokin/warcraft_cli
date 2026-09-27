@@ -131,3 +131,41 @@ def test_checkout_managed_repo_clones_and_updates(monkeypatch, tmp_path: Path) -
     second = checkout_managed_repo()
     assert second.status == "updated"
     assert calls[1][:4] == ["git", "-C", str(root), "pull"]
+
+
+def test_build_repo_reconfigures_before_building_so_the_binary_revision_follows_the_checkout(
+    monkeypatch, tmp_path: Path
+) -> None:
+    from simc_cli import run as run_module
+
+    _make_repo(tmp_path, with_binary=True)
+    paths = discover_repo(tmp_path)
+    calls: list[list[str]] = []
+
+    def fake_run(command: list[str], *, cwd: Path | None = None) -> run_module.CommandResult:
+        calls.append(command)
+        return run_module.CommandResult(command=command, cwd=cwd, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(run_module, "_run", fake_run)
+    run_module.build_repo(paths, target="simc")
+    assert calls == [
+        ["cmake", "-S", str(paths.root), "-B", str(paths.build_dir)],
+        ["cmake", "--build", str(paths.build_dir), "--target", "simc"],
+    ]
+
+
+def test_build_repo_stops_when_configure_fails(monkeypatch, tmp_path: Path) -> None:
+    from simc_cli import run as run_module
+
+    _make_repo(tmp_path, with_binary=True)
+    paths = discover_repo(tmp_path)
+    calls: list[list[str]] = []
+
+    def fake_run(command: list[str], *, cwd: Path | None = None) -> run_module.CommandResult:
+        calls.append(command)
+        return run_module.CommandResult(command=command, cwd=cwd, returncode=1, stdout="", stderr="no CMakeLists")
+
+    monkeypatch.setattr(run_module, "_run", fake_run)
+    result = run_module.build_repo(paths, target=None)
+    assert result.returncode == 1
+    assert len(calls) == 1

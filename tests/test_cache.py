@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import importlib
 import json
 from pathlib import Path
 
 import pytest
-from wowhead_cli.cache import (
+from warcraft_api.cache import (
     CacheTTLConfig,
     FileCacheStore,
     RedisCacheStore,
@@ -13,6 +14,7 @@ from wowhead_cli.cache import (
     inspect_file_cache,
     inspect_redis_cache,
     load_cache_settings_from_env,
+    redacted_redis_url,
     repair_file_cache,
 )
 from wowhead_cli.wowhead_client import WowheadClient
@@ -21,7 +23,7 @@ from wowhead_cli.wowhead_client import WowheadClient
 def test_file_cache_store_roundtrips_and_expires(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     store = FileCacheStore(tmp_path)
     now = 1000.0
-    monkeypatch.setattr("wowhead_cli.cache.time.time", lambda: now)
+    monkeypatch.setattr("warcraft_api.cache.time.time", lambda: now)
 
     store.set("search_suggestions:abc123", {"query": "thunderfury"}, ttl_seconds=60)
     assert store.get("search_suggestions:abc123") == {"query": "thunderfury"}
@@ -29,7 +31,7 @@ def test_file_cache_store_roundtrips_and_expires(tmp_path: Path, monkeypatch: py
     cache_file = tmp_path / "search_suggestions" / "abc123.json"
     assert cache_file.exists()
 
-    monkeypatch.setattr("wowhead_cli.cache.time.time", lambda: now + 61)
+    monkeypatch.setattr("warcraft_api.cache.time.time", lambda: now + 61)
     assert store.get("search_suggestions:abc123") is None
     assert not cache_file.exists()
 
@@ -75,7 +77,7 @@ def test_inspect_file_cache_summarizes_active_expired_and_invalid_entries(
 ) -> None:
     store = FileCacheStore(tmp_path)
     now = 1000.0
-    monkeypatch.setattr("wowhead_cli.cache.time.time", lambda: now)
+    monkeypatch.setattr("warcraft_api.cache.time.time", lambda: now)
 
     store.set("search_suggestions:active", {"query": "thunderfury"}, ttl_seconds=60)
     store.set("entity_response:expired", {"entity": {"id": 19019}}, ttl_seconds=10)
@@ -83,7 +85,7 @@ def test_inspect_file_cache_summarizes_active_expired_and_invalid_entries(
     invalid_path.parent.mkdir(parents=True)
     invalid_path.write_text("not-json", encoding="utf-8")
 
-    monkeypatch.setattr("wowhead_cli.cache.time.time", lambda: now + 20)
+    monkeypatch.setattr("warcraft_api.cache.time.time", lambda: now + 20)
     summary = inspect_file_cache(tmp_path)
 
     assert summary["totals"] == {"active": 1, "expired": 1, "invalid": 1, "total": 3}
@@ -99,7 +101,7 @@ def test_inspect_file_cache_groups_root_level_hashed_entries_under_legacy_namesp
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     now = 1000.0
-    monkeypatch.setattr("wowhead_cli.cache.time.time", lambda: now + 20)
+    monkeypatch.setattr("warcraft_api.cache.time.time", lambda: now + 20)
     legacy_path = tmp_path / ("a" * 64 + ".json")
     legacy_path.write_text(json.dumps({"expires_at": now + 10, "payload": {}}), encoding="utf-8")
 
@@ -113,7 +115,7 @@ def test_inspect_file_cache_groups_root_level_hashed_entries_under_legacy_namesp
 
 def test_repair_file_cache_prunes_legacy_unscoped_entries(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     now = 1000.0
-    monkeypatch.setattr("wowhead_cli.cache.time.time", lambda: now + 20)
+    monkeypatch.setattr("warcraft_api.cache.time.time", lambda: now + 20)
     legacy_path = tmp_path / ("a" * 64 + ".json")
     legacy_path.write_text(json.dumps({"expires_at": now + 10, "payload": {}}), encoding="utf-8")
     namespaced_path = tmp_path / "search_suggestions" / "active.json"
@@ -145,13 +147,13 @@ def test_clear_file_cache_supports_namespace_and_expired_only(
 ) -> None:
     store = FileCacheStore(tmp_path)
     now = 1000.0
-    monkeypatch.setattr("wowhead_cli.cache.time.time", lambda: now)
+    monkeypatch.setattr("warcraft_api.cache.time.time", lambda: now)
 
     store.set("search_suggestions:active", {"query": "thunderfury"}, ttl_seconds=60)
     store.set("entity_response:expired", {"entity": {"id": 19019}}, ttl_seconds=10)
     store.set("entity_response:active", {"entity": {"id": 19020}}, ttl_seconds=60)
 
-    monkeypatch.setattr("wowhead_cli.cache.time.time", lambda: now + 20)
+    monkeypatch.setattr("warcraft_api.cache.time.time", lambda: now + 20)
     removed = clear_file_cache(tmp_path, namespaces=("entity_response",), expired_only=True)
     assert removed == {"total": 1, "namespaces": {"entity_response": 1}}
 
@@ -373,3 +375,45 @@ def test_entity_response_cache_is_scoped_by_expansion(tmp_path: Path) -> None:
         include_all_comments=False,
         linked_entity_preview_limit=0,
     ) == classic_payload
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("redis://user:FAKEPASS@cache.example:6380/2?password=QUERYPASS", "redis://***@cache.example:6380/2"),
+        ("redis://:FAKE@PASS@cache.example:6380/2", "redis://***@cache.example:6380/2"),
+        ("redis://:FA[KE@PA]SS@cache.example:6380/2", "redis://***@cache.example:6380/2"),
+        ("redis://cache.example:6379/0", "redis://cache.example:6379/0"),
+        ("FAKEPASS@cache.example", "***"),
+        (None, None),
+    ],
+)
+def test_redacted_redis_url_hides_every_credential(url: str | None, expected: str | None) -> None:
+    assert redacted_redis_url(url) == expected
+
+
+@pytest.mark.parametrize(
+    ("env_prefix", "provider_module"),
+    [
+        ("RAIDERIO", "raiderio_cli.provider"),
+        ("RAIDBOTS", "raidbots_cli.provider"),
+        ("WARCRAFT_WIKI", "warcraft_wiki_cli.provider"),
+        ("ICY_VEINS", "icy_veins_cli.provider"),
+        ("METHOD", "method_cli.provider"),
+    ],
+)
+def test_no_provider_doctor_prints_the_redis_password(monkeypatch, env_prefix: str, provider_module: str) -> None:
+    monkeypatch.setenv(f"{env_prefix}_REDIS_URL", "redis://:FAKE@PASS@cache.example:6380/2")
+    provider = importlib.import_module(provider_module).PROVIDER
+    payload = json.dumps(provider.doctor())
+    assert "PASS" not in payload
+    assert "redis://***@cache.example:6380/2" in payload
+
+
+def test_wowhead_cache_settings_never_print_the_redis_password(monkeypatch) -> None:
+    """Feeds wowhead doctor, cache-inspect, cache-repair and cache-clear (doctor itself probes live)."""
+    from wowhead_cli.provider import cache_settings_payload
+
+    monkeypatch.setenv("WOWHEAD_REDIS_URL", "redis://:FAKE@PASS@cache.example:6380/2")
+    payload = cache_settings_payload(load_cache_settings_from_env())
+    assert payload["redis_url"] == "redis://***@cache.example:6380/2"

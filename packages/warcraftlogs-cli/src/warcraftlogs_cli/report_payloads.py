@@ -6,6 +6,8 @@ from typing import Any
 
 from warcraft_core.wow_normalization import normalize_region
 
+from warcraftlogs_cli.sampling_utils import dict_at
+
 
 def region_payload(region: dict[str, Any]) -> dict[str, Any]:
     return {
@@ -17,8 +19,8 @@ def region_payload(region: dict[str, Any]) -> dict[str, Any]:
 
 
 def server_payload(server: dict[str, Any]) -> dict[str, Any]:
-    region = server.get("region") if isinstance(server.get("region"), dict) else {}
-    subregion = server.get("subregion") if isinstance(server.get("subregion"), dict) else {}
+    region = dict_at(server, "region")
+    subregion = dict_at(server, "subregion")
     return {
         "id": server.get("id"),
         "name": server.get("name"),
@@ -47,8 +49,9 @@ def archive_status_payload(value: dict[str, Any] | None) -> dict[str, Any] | Non
 
 
 def report_payload(report: dict[str, Any]) -> dict[str, Any]:
-    zone = report.get("zone") if isinstance(report.get("zone"), dict) else {}
-    guild = report.get("guild") if isinstance(report.get("guild"), dict) else {}
+    zone = dict_at(report, "zone")
+    guild = dict_at(report, "guild")
+    guild_server = dict_at(guild, "server")
     return {
         "code": report.get("code"),
         "title": report.get("title"),
@@ -62,7 +65,7 @@ def report_payload(report: dict[str, Any]) -> dict[str, Any]:
         "guild": {
             "id": guild.get("id"),
             "name": guild.get("name"),
-            "server": server_payload(guild.get("server")) if isinstance(guild.get("server"), dict) else None,
+            "server": server_payload(guild_server) if guild_server else None,
         }
         if guild
         else None,
@@ -70,7 +73,7 @@ def report_payload(report: dict[str, Any]) -> dict[str, Any]:
 
 
 def report_brief_payload(report: dict[str, Any]) -> dict[str, Any]:
-    zone = report.get("zone") if isinstance(report.get("zone"), dict) else {}
+    zone = dict_at(report, "zone")
     return {
         "code": report.get("code"),
         "title": report.get("title"),

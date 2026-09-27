@@ -1,0 +1,604 @@
+<!DOCTYPE html>
+<html lang="en"> <head><meta charset="utf-8"/><meta content="width=device-width, initial-scale=1.0" name="viewport"/><title>Mistweaver Monk Healing Guide - 12.1 - World of Warcraft - Icy Veins</title><link href="https://fonts.googleapis.com" rel="preconnect"/><link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800;&amp;display=swap" rel="stylesheet"/><link href="//static.icy-veins.com/css/core-c291e8e2f065eaba597c52ddb30437a3.css" rel="stylesheet" type="text/css"/><link href="//www.icy-veins.com/feed.atom" rel="alternate" title="Icy Veins - Feed" type="application/atom+xml"/><link href="//static.icy-veins.com/images/common/favicon-high-resolution.png" rel="icon" type="image/png"/><link href="//static.icy-veins.com/images/common/favicon-high-resolution.png" rel="apple-touch-icon-precomposed"/><meta content="This guide contains everything you need to know to be an excellent Mistweaver Monk in WoW 12.1." name="description"/><meta content="ALL" name="robots"/><meta content="Icy Veins 2026" name="author"/><meta content="BBA2E69ADD6BD4A76395B2709092CCA6" name="msvalidate.01"/><meta content="Mistweaver Monk Healing Guide — 12.1" property="og:title"/><meta content="https://www.icy-veins.com/wow/mistweaver-monk-pve-healing-guide" property="og:url"/><meta content="//static.icy-veins.com/images/wow/class-guides/og-image-monk.jpg" property="og:image"/><meta content="This guide contains everything you need to know to be an excellent Mistweaver Monk in WoW 12.1." property="og:description"/><meta content="Icy Veins" property="og:site_name"/><meta content="article" property="og:type"/><meta content="260815523933555" property="fb:app_id"/><meta content="summary_large_image" name="twitter:card"/><meta content="@icyveins" name="twitter:site"/><meta content="Mistweaver Monk Healing Guide — 12.1" name="twitter:title"/><meta content="This guide contains everything you need to know to be an excellent Mistweaver Monk in WoW 12.1." name="twitter:description"/><meta content="//static.icy-veins.com/images/wow/class-guides/og-image-monk.jpg" name="twitter:image"/><link href="https://www.icy-veins.com/wow/mistweaver-monk-pve-healing-guide" rel="canonical"/><script type="application/ld+json">{"@type":"BreadcrumbList","@context":"http://schema.org","itemListElement":[{"item":{"@id":"https://www.icy-veins.com/","name":"Home"},"@type":"ListItem","position":1},{"item":{"@id":"https://www.icy-veins.com/wow/","name":"World of Warcraft"},"@type":"ListItem","position":2},{"item":{"@id":"https://www.icy-veins.com/wow/monk-guide","name":"Monk"},"@type":"ListItem","position":3},{"item":{"@id":"https://www.icy-veins.com/wow/mistweaver-monk-pve-healing-guide","name":"Mistweaver Monk"},"@type":"ListItem","position":4}]}</script><script type="application/ld+json">{"url":"https://www.icy-veins.com/","logo":"//static.icy-veins.com/images/common/icy-veins-logo.png","name":"Icy Veins","@type":"Organization","sameAs":["https://www.facebook.com/icyveinscom","https://twitter.com/icyveins","https://www.youtube.com/user/icyveinscom","https://www.twitch.tv/icyveinscom"],"@context":"https://schema.org/"}</script><script type="application/ld+json">{"url":"https://www.icy-veins.com/wow/mistweaver-monk-pve-healing-guide","name":"Mistweaver Monk Healing Guide - 12.1","@type":"Article","image":{"url":"//static.icy-veins.com/images/wow/class-guides/og-image-monk.jpg","@type":"ImageObject","width":710,"height":600},"author":{"name":"Dhaubbs","@type":"Person"},"@context":"https://schema.org","headline":"Mistweaver Monk Healing Guide - 12.1","publisher":{"logo":{"url":"https://static.icy-veins.com/images/common/icy-veins-icon-social.png","@type":"ImageObject","width":400,"height":400},"name":"Icy Veins","@type":"Organization"},"description":"This guide contains everything you need to know to be an excellent Mistweaver Monk in WoW 12.1.","dateModified":"2026-09-03T00:45:00+00:00","datePublished":"2012-09-13T02:17:00+00:00","mainEntityOfPage":{"@id":"https://www.icy-veins.com/wow/mistweaver-monk-pve-healing-guide","@type":"WebPage"}}</script><script>(function(){const dataLayer = {"page_type":"guides","page_game":"wow","author":"dhaubbs"};
+const isAdFreeSurface = false;
+
+      (function () {
+        // Premium members skip ads. Keep the "icy:premium" literal in sync with
+        // premium-flag.ts. Every sign-in surface resolves the flag before it
+        // navigates — the forms inline (syncPremiumFlag), social sign-in on the
+        // /login/continue interstitial — so the first page after login is already
+        // gated. Only a lookup that fails or outruns its timeout falls back to ads.
+        var isPremium = false;
+        try { isPremium = localStorage.getItem("icy:premium") === "1"; } catch (e) {}
+        if (isPremium) return;
+
+        if (dataLayer) {
+          window.dataLayer = window.dataLayer || [];
+          window.dataLayer.push(dataLayer);
+        }
+        (function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src='https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);})(window,document,'script','dataLayer','GTM-NF9Q7DV');
+
+        // GTM (analytics) stays on for embedded u.gg sessions and for ad-free
+        // surfaces like /download — only the ad stack (Ramp + IAB slots) below
+        // is skipped.
+        if (isAdFreeSurface || window.ivEmbedMode) return;
+
+        var RAMP_BREAKPOINT = 1800;
+        var RAMP_PATH_LARGE = "icy-redesign";
+        var RAMP_PATH_SMALL = "icy-redesign-small";
+        var IAB_BREAKPOINT = 1460;
+
+        window.ramp = window.ramp || {};
+        window.ramp.que = window.ramp.que || [];
+        window.ramp.forcePath = window.innerWidth >= RAMP_BREAKPOINT ? RAMP_PATH_LARGE : RAMP_PATH_SMALL;
+        // console.log("[Ramp] Initial path:", window.ramp.forcePath, "(viewport: " + window.innerWidth + "px)");
+
+        var rampScript = document.createElement("script");
+        rampScript.async = true;
+        rampScript.setAttribute("data-cfasync", "false");
+        rampScript.src = "//cdn.intergient.com/1025267/74951/ramp.js";
+        document.head.appendChild(rampScript);
+
+        var IAB_DEBUG = false; // set to true to enable console logging
+        function iabLog() { if (IAB_DEBUG) console.log.apply(console, ["[IAB]"].concat(Array.from(arguments))); }
+
+        function syncIabSlots() {
+          var shouldHide = window.innerWidth <= IAB_BREAKPOINT;
+          var action = shouldHide ? "hideSlot" : "showAdSlot";
+          var slots = document.querySelectorAll('[id^="standard_iab_rght"], [id^="standard_iab_left"]');
+          iabLog("syncIabSlots — viewport:", window.innerWidth + "px, shouldHide:", shouldHide, "slots found:", slots.length);
+          slots.forEach(function (slot) {
+            iabLog("  →", action, slot.id);
+            window.ramp[action](slot.id);
+          });
+        }
+
+        iabLog("Script init — viewport:", window.innerWidth + "px, IAB_BREAKPOINT:", IAB_BREAKPOINT, "will hide:", window.innerWidth <= IAB_BREAKPOINT);
+
+        // Watch for Ramp to inject IAB slot elements and hide them immediately if the
+        // viewport is narrow — ramp.que fires before slots exist in the DOM on initial load.
+        if (window.innerWidth <= IAB_BREAKPOINT) {
+          iabLog("MutationObserver active — watching for IAB slots");
+          var iabObserver = new MutationObserver(function (mutations) {
+            mutations.forEach(function (mutation) {
+              mutation.addedNodes.forEach(function (node) {
+                if (node.nodeType !== 1) return;
+                // Log every element with an id so we can see what Ramp actually injects
+                if (node.id) iabLog("DOM node added — tag:", node.tagName, "id:", node.id);
+                var withIds = node.querySelectorAll("[id]");
+                withIds.forEach(function (el) { iabLog("  child node — tag:", el.tagName, "id:", el.id); });
+
+                var candidates = [node].concat(Array.from(node.querySelectorAll('[id^="standard_iab_rght"], [id^="standard_iab_left"]')));
+                candidates.forEach(function (el) {
+                  if (el.id && (el.id.indexOf("standard_iab_rght") === 0 || el.id.indexOf("standard_iab_left") === 0)) {
+                    iabLog("Observer caught slot:", el.id, "— queuing hideSlot");
+                    window.ramp.que.push(function () {
+                      iabLog("hideSlot executing for:", el.id);
+                      window.ramp.hideSlot(el.id);
+                    });
+                  }
+                });
+              });
+            });
+          });
+          iabObserver.observe(document.documentElement, { childList: true, subtree: true });
+          setTimeout(function () {
+            iabLog("MutationObserver disconnected (15s timeout)");
+            iabObserver.disconnect();
+          }, 15000);
+        }
+
+        // Fallback: if slots already exist when the Ramp queue drains (e.g. cached pages).
+        window.ramp.que.push(function () {
+          iabLog("ramp.que fallback fired");
+          syncIabSlots();
+        });
+
+        var rampResizeTimer;
+        var rampCurrentPath = window.ramp.forcePath;
+        window.addEventListener("resize", function () {
+          clearTimeout(rampResizeTimer);
+          rampResizeTimer = setTimeout(function () {
+            var newPath = window.innerWidth >= RAMP_BREAKPOINT ? RAMP_PATH_LARGE : RAMP_PATH_SMALL;
+            window.ramp.que.push(function () {
+              if (newPath !== rampCurrentPath) {
+                rampCurrentPath = newPath;
+                window.ramp.changePath(newPath);
+              }
+              syncIabSlots();
+            });
+          }, 200);
+        });
+      })();
+    })();</script>
+<link href="/_astro/link.DyXw07fr.css" rel="stylesheet"/>
+<link href="/_astro/index.DfMOn5QZ.css" rel="stylesheet"/>
+<link href="/_astro/_path_.Db8lKAnG.css" rel="stylesheet"/>
+<link href="/_astro/_path_.BBP9zLBs.css" rel="stylesheet"/>
+<link href="/_astro/_path_.DrTcL5-o.css" rel="stylesheet"/>
+</head> <body> <astro-island client="load" component-export="default" component-url="/_astro/OAuthNotice.CNSvPvfM.js" opts='{"name":"OAuthNotice","value":true}' prefix="r3" props="{}" renderer-url="/_astro/client.DN61zz9I.js" ssr="" uid="wO1Wn"></astro-island>  <main> <div class="faded-bg" style='--faded-bg: url("//static.icy-veins.com/images/common/wow-bg.webp")'></div> <div class="pw-wrapper pw-wrapper--right"> <div class="unit-1" id="top-right"></div> <div class="unit-2" id="bottom-right"></div> </div> <div class="pw-wrapper pw-wrapper--left"> <div class="unit-1" id="top-left"></div> </div> <div class="guide-header-wrapper"> <div class="unit-wide-pw" style="position:relative;z-index:10;"></div> <div class="guide-header" data-astro-cid-ra2dhdlp=""> <div class="guide-header__breadcrumbs" data-astro-cid-ra2dhdlp=""> <a class="guide-header__breadcrumb-link" data-astro-cid-ra2dhdlp="" href="/"> Home </a><span class="guide-header__breadcrumb-separator" data-astro-cid-ra2dhdlp="">/</span><a class="guide-header__breadcrumb-link" data-astro-cid-ra2dhdlp="" href="/wow"> World of Warcraft </a><span class="guide-header__breadcrumb-separator" data-astro-cid-ra2dhdlp="">/</span><a class="guide-header__breadcrumb-link" data-astro-cid-ra2dhdlp="" href="/wow/monk-guide"> Monk </a><span class="guide-header__breadcrumb-separator" data-astro-cid-ra2dhdlp="">/</span><span class="guide-header__breadcrumb-current" data-astro-cid-ra2dhdlp="">Mistweaver Monk</span> <div class="guide-header__expansion-badge" data-astro-cid-ra2dhdlp=""> <span aria-hidden="true" class="guide-header__expansion-icon iv-game-sprite iv-game-sprite--wow-retail" data-astro-cid-ra2dhdlp=""></span> <span data-astro-cid-ra2dhdlp="">12.1</span> </div> </div> <div class="guide-header__content" data-astro-cid-ra2dhdlp="" data-class="monk" style="background: linear-gradient(90deg, rgba(0, 0, 0, 1) 0%, rgba(0, 0, 0, 0.50) 100%), url('//static.icy-veins.com/images/wow/class-guides/og-image-monk.jpg') lightgray center 0% / cover no-repeat;"> <div class="guide-header__class-icon" data-astro-cid-ra2dhdlp=""> <img alt="Monk Crest" data-astro-cid-ra2dhdlp="" src="https://static.bigbrain.gg/icy-veins-redesign/class-icons/monk.webp"/> </div> <div class="guide-header__info" data-astro-cid-ra2dhdlp=""> <h1 class="guide-header__title" data-astro-cid-ra2dhdlp="">Mistweaver Monk Healing Guide — 12.1</h1> <div class="guide-header__selectors" data-astro-cid-ra2dhdlp=""> <div class="dropdown dropdown--plain-icons" data-astro-cid-7r46yz7u=""> <button aria-expanded="false" aria-haspopup="listbox" class="dropdown__trigger" data-astro-cid-7r46yz7u="" type="button"> <span class="dropdown__icon-box dropdown__trigger-icon" data-astro-cid-7r46yz7u=""> <img alt="" class="dropdown__icon-image" data-astro-cid-7r46yz7u="" src="https://static.icy-veins.com/images/wow/class-icons/jiberishui/small/monk.webp"/> </span> <span class="dropdown__trigger-label" data-astro-cid-7r46yz7u="">Monk</span> <svg fill="none" height="24" viewbox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+<path d="M12 16L6 10H18L12 16Z" fill="white"></path>
+</svg> </button> <ul class="dropdown__menu" data-astro-cid-7r46yz7u="" role="listbox"> <li aria-selected="false" class="dropdown__item" data-astro-cid-7r46yz7u="" data-value="death-knight" role="option"> <a class="dropdown__link" data-astro-cid-7r46yz7u="" href="/wow/death-knight-guide"> <span class="dropdown__icon-box dropdown__item-icon" data-astro-cid-7r46yz7u=""> <img alt="" class="dropdown__icon-image" data-astro-cid-7r46yz7u="" src="https://static.icy-veins.com/images/wow/class-icons/jiberishui/small/death-knight.webp"/> </span> <span class="dropdown__item-label" data-astro-cid-7r46yz7u="">Death Knight</span> </a> </li><li aria-selected="false" class="dropdown__item" data-astro-cid-7r46yz7u="" data-value="demon-hunter" role="option"> <a class="dropdown__link" data-astro-cid-7r46yz7u="" href="/wow/demon-hunter-guide"> <span class="dropdown__icon-box dropdown__item-icon" data-astro-cid-7r46yz7u=""> <img alt="" class="dropdown__icon-image" data-astro-cid-7r46yz7u="" src="https://static.icy-veins.com/images/wow/class-icons/jiberishui/small/demon-hunter.webp"/> </span> <span class="dropdown__item-label" data-astro-cid-7r46yz7u="">Demon Hunter</span> </a> </li><li aria-selected="false" class="dropdown__item" data-astro-cid-7r46yz7u="" data-value="druid" role="option"> <a class="dropdown__link" data-astro-cid-7r46yz7u="" href="/wow/druid-guide"> <span class="dropdown__icon-box dropdown__item-icon" data-astro-cid-7r46yz7u=""> <img alt="" class="dropdown__icon-image" data-astro-cid-7r46yz7u="" src="https://static.icy-veins.com/images/wow/class-icons/jiberishui/small/druid.webp"/> </span> <span class="dropdown__item-label" data-astro-cid-7r46yz7u="">Druid</span> </a> </li><li aria-selected="false" class="dropdown__item" data-astro-cid-7r46yz7u="" data-value="evoker" role="option"> <a class="dropdown__link" data-astro-cid-7r46yz7u="" href="/wow/evoker-guide"> <span class="dropdown__icon-box dropdown__item-icon" data-astro-cid-7r46yz7u=""> <img alt="" class="dropdown__icon-image" data-astro-cid-7r46yz7u="" src="https://static.icy-veins.com/images/wow/class-icons/jiberishui/small/evoker.webp"/> </span> <span class="dropdown__item-label" data-astro-cid-7r46yz7u="">Evoker</span> </a> </li><li aria-selected="false" class="dropdown__item" data-astro-cid-7r46yz7u="" data-value="hunter" role="option"> <a class="dropdown__link" data-astro-cid-7r46yz7u="" href="/wow/hunter-guide"> <span class="dropdown__icon-box dropdown__item-icon" data-astro-cid-7r46yz7u=""> <img alt="" class="dropdown__icon-image" data-astro-cid-7r46yz7u="" src="https://static.icy-veins.com/images/wow/class-icons/jiberishui/small/hunter.webp"/> </span> <span class="dropdown__item-label" data-astro-cid-7r46yz7u="">Hunter</span> </a> </li><li aria-selected="false" class="dropdown__item" data-astro-cid-7r46yz7u="" data-value="mage" role="option"> <a class="dropdown__link" data-astro-cid-7r46yz7u="" href="/wow/mage-guide"> <span class="dropdown__icon-box dropdown__item-icon" data-astro-cid-7r46yz7u=""> <img alt="" class="dropdown__icon-image" data-astro-cid-7r46yz7u="" src="https://static.icy-veins.com/images/wow/class-icons/jiberishui/small/mage.webp"/> </span> <span class="dropdown__item-label" data-astro-cid-7r46yz7u="">Mage</span> </a> </li><li aria-selected="true" class="dropdown__item dropdown__item--active" data-astro-cid-7r46yz7u="" data-value="monk" role="option"> <a class="dropdown__link" data-astro-cid-7r46yz7u="" href="/wow/monk-guide"> <span class="dropdown__icon-box dropdown__item-icon" data-astro-cid-7r46yz7u=""> <img alt="" class="dropdown__icon-image" data-astro-cid-7r46yz7u="" src="https://static.icy-veins.com/images/wow/class-icons/jiberishui/small/monk.webp"/> </span> <span class="dropdown__item-label" data-astro-cid-7r46yz7u="">Monk</span> </a> </li><li aria-selected="false" class="dropdown__item" data-astro-cid-7r46yz7u="" data-value="paladin" role="option"> <a class="dropdown__link" data-astro-cid-7r46yz7u="" href="/wow/paladin-guide"> <span class="dropdown__icon-box dropdown__item-icon" data-astro-cid-7r46yz7u=""> <img alt="" class="dropdown__icon-image" data-astro-cid-7r46yz7u="" src="https://static.icy-veins.com/images/wow/class-icons/jiberishui/small/paladin.webp"/> </span> <span class="dropdown__item-label" data-astro-cid-7r46yz7u="">Paladin</span> </a> </li><li aria-selected="false" class="dropdown__item" data-astro-cid-7r46yz7u="" data-value="priest" role="option"> <a class="dropdown__link" data-astro-cid-7r46yz7u="" href="/wow/priest-guide"> <span class="dropdown__icon-box dropdown__item-icon" data-astro-cid-7r46yz7u=""> <img alt="" class="dropdown__icon-image" data-astro-cid-7r46yz7u="" src="https://static.icy-veins.com/images/wow/class-icons/jiberishui/small/priest.webp"/> </span> <span class="dropdown__item-label" data-astro-cid-7r46yz7u="">Priest</span> </a> </li><li aria-selected="false" class="dropdown__item" data-astro-cid-7r46yz7u="" data-value="rogue" role="option"> <a class="dropdown__link" data-astro-cid-7r46yz7u="" href="/wow/rogue-guide"> <span class="dropdown__icon-box dropdown__item-icon" data-astro-cid-7r46yz7u=""> <img alt="" class="dropdown__icon-image" data-astro-cid-7r46yz7u="" src="https://static.icy-veins.com/images/wow/class-icons/jiberishui/small/rogue.webp"/> </span> <span class="dropdown__item-label" data-astro-cid-7r46yz7u="">Rogue</span> </a> </li><li aria-selected="false" class="dropdown__item" data-astro-cid-7r46yz7u="" data-value="shaman" role="option"> <a class="dropdown__link" data-astro-cid-7r46yz7u="" href="/wow/shaman-guide"> <span class="dropdown__icon-box dropdown__item-icon" data-astro-cid-7r46yz7u=""> <img alt="" class="dropdown__icon-image" data-astro-cid-7r46yz7u="" src="https://static.icy-veins.com/images/wow/class-icons/jiberishui/small/shaman.webp"/> </span> <span class="dropdown__item-label" data-astro-cid-7r46yz7u="">Shaman</span> </a> </li><li aria-selected="false" class="dropdown__item" data-astro-cid-7r46yz7u="" data-value="warlock" role="option"> <a class="dropdown__link" data-astro-cid-7r46yz7u="" href="/wow/warlock-guide"> <span class="dropdown__icon-box dropdown__item-icon" data-astro-cid-7r46yz7u=""> <img alt="" class="dropdown__icon-image" data-astro-cid-7r46yz7u="" src="https://static.icy-veins.com/images/wow/class-icons/jiberishui/small/warlock.webp"/> </span> <span class="dropdown__item-label" data-astro-cid-7r46yz7u="">Warlock</span> </a> </li><li aria-selected="false" class="dropdown__item" data-astro-cid-7r46yz7u="" data-value="warrior" role="option"> <a class="dropdown__link" data-astro-cid-7r46yz7u="" href="/wow/warrior-guide"> <span class="dropdown__icon-box dropdown__item-icon" data-astro-cid-7r46yz7u=""> <img alt="" class="dropdown__icon-image" data-astro-cid-7r46yz7u="" src="https://static.icy-veins.com/images/wow/class-icons/jiberishui/small/warrior.webp"/> </span> <span class="dropdown__item-label" data-astro-cid-7r46yz7u="">Warrior</span> </a> </li> </ul> </div> <div class="dropdown dropdown--plain-icons" data-astro-cid-7r46yz7u=""> <button aria-expanded="false" aria-haspopup="listbox" class="dropdown__trigger" data-astro-cid-7r46yz7u="" type="button"> <span class="dropdown__icon-box dropdown__trigger-icon" data-astro-cid-7r46yz7u=""> <img alt="" class="dropdown__icon-image" data-astro-cid-7r46yz7u="" src="//static.bigbrain.gg/icy-veins-redesign/spec-icons/monk-mistweaver.webp"/> </span> <span class="dropdown__trigger-label" data-astro-cid-7r46yz7u="">Mistweaver</span> <svg fill="none" height="24" viewbox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+<path d="M12 16L6 10H18L12 16Z" fill="white"></path>
+</svg> </button> <ul class="dropdown__menu" data-astro-cid-7r46yz7u="" role="listbox"> <li aria-selected="false" class="dropdown__item" data-astro-cid-7r46yz7u="" data-value="brewmaster" role="option"> <a class="dropdown__link" data-astro-cid-7r46yz7u="" href="/wow/brewmaster-monk-pve-tank-guide"> <span class="dropdown__icon-box dropdown__item-icon" data-astro-cid-7r46yz7u=""> <img alt="" class="dropdown__icon-image" data-astro-cid-7r46yz7u="" src="//static.bigbrain.gg/icy-veins-redesign/spec-icons/monk-brewmaster.webp"/> </span> <span class="dropdown__item-label" data-astro-cid-7r46yz7u="">Brewmaster</span> </a> </li><li aria-selected="true" class="dropdown__item dropdown__item--active" data-astro-cid-7r46yz7u="" data-value="mistweaver" role="option"> <a class="dropdown__link" data-astro-cid-7r46yz7u="" href="/wow/mistweaver-monk-pve-healing-guide"> <span class="dropdown__icon-box dropdown__item-icon" data-astro-cid-7r46yz7u=""> <img alt="" class="dropdown__icon-image" data-astro-cid-7r46yz7u="" src="//static.bigbrain.gg/icy-veins-redesign/spec-icons/monk-mistweaver.webp"/> </span> <span class="dropdown__item-label" data-astro-cid-7r46yz7u="">Mistweaver</span> </a> </li><li aria-selected="false" class="dropdown__item" data-astro-cid-7r46yz7u="" data-value="windwalker" role="option"> <a class="dropdown__link" data-astro-cid-7r46yz7u="" href="/wow/windwalker-monk-pve-dps-guide"> <span class="dropdown__icon-box dropdown__item-icon" data-astro-cid-7r46yz7u=""> <img alt="" class="dropdown__icon-image" data-astro-cid-7r46yz7u="" src="//static.bigbrain.gg/icy-veins-redesign/spec-icons/monk-windwalker.webp"/> </span> <span class="dropdown__item-label" data-astro-cid-7r46yz7u="">Windwalker</span> </a> </li> </ul> </div> <div class="dropdown" data-astro-cid-7r46yz7u=""> <button aria-expanded="false" aria-haspopup="listbox" class="dropdown__trigger" data-astro-cid-7r46yz7u="" type="button"> <span class="dropdown__icon-box dropdown__trigger-icon" data-astro-cid-7r46yz7u=""> <i aria-hidden="true" class="dropdown__icon-font ri-book-2-line" data-astro-cid-7r46yz7u=""></i> </span> <span class="dropdown__trigger-label" data-astro-cid-7r46yz7u="">Overview</span> <svg fill="none" height="24" viewbox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+<path d="M12 16L6 10H18L12 16Z" fill="white"></path>
+</svg> </button> <ul class="dropdown__menu" data-astro-cid-7r46yz7u="" role="listbox"> <li aria-selected="true" class="dropdown__item dropdown__item--active" data-astro-cid-7r46yz7u="" data-value="WoWMonkMistweaverIntro" role="option"> <a class="dropdown__link" data-astro-cid-7r46yz7u="" href="/wow/mistweaver-monk-pve-healing-guide"> <span class="dropdown__icon-box dropdown__item-icon" data-astro-cid-7r46yz7u=""> <i aria-hidden="true" class="dropdown__icon-font ri-book-2-line" data-astro-cid-7r46yz7u=""></i> </span> <span class="dropdown__item-label" data-astro-cid-7r46yz7u="">Overview</span> </a> </li><li aria-selected="false" class="dropdown__item" data-astro-cid-7r46yz7u="" data-value="WoWLevelingMonkMistweaver" role="option"> <a class="dropdown__link" data-astro-cid-7r46yz7u="" href="/wow/mistweaver-monk-leveling-guide"> <span class="dropdown__icon-box dropdown__item-icon" data-astro-cid-7r46yz7u=""> <i aria-hidden="true" class="dropdown__icon-font ri-arrow-up-double-line" data-astro-cid-7r46yz7u=""></i> </span> <span class="dropdown__item-label" data-astro-cid-7r46yz7u="">Leveling</span> </a> </li><li aria-selected="false" class="dropdown__item" data-astro-cid-7r46yz7u="" data-value="WoWMonkMistweaverEasy" role="option"> <a class="dropdown__link" data-astro-cid-7r46yz7u="" href="/wow/mistweaver-monk-pve-healing-easy-mode"> <span class="dropdown__icon-box dropdown__item-icon" data-astro-cid-7r46yz7u=""> <i aria-hidden="true" class="dropdown__icon-font ri-target-fill" data-astro-cid-7r46yz7u=""></i> </span> <span class="dropdown__item-label" data-astro-cid-7r46yz7u="">Easy Mode</span> </a> </li><li aria-selected="false" class="dropdown__item" data-astro-cid-7r46yz7u="" data-value="WoWMonkMistweaverTalents" role="option"> <a class="dropdown__link" data-astro-cid-7r46yz7u="" href="/wow/mistweaver-monk-pve-healing-spec-builds-talents"> <span class="dropdown__icon-box dropdown__item-icon" data-astro-cid-7r46yz7u=""> <i aria-hidden="true" class="dropdown__icon-font ri-bar-chart-box-ai-line" data-astro-cid-7r46yz7u=""></i> </span> <span class="dropdown__item-label" data-astro-cid-7r46yz7u="">Talents</span> </a> </li><li aria-selected="false" class="dropdown__item" data-astro-cid-7r46yz7u="" data-value="WoWMonkMistweaverRotation" role="option"> <a class="dropdown__link" data-astro-cid-7r46yz7u="" href="/wow/mistweaver-monk-pve-healing-rotation-cooldowns-abilities"> <span class="dropdown__icon-box dropdown__item-icon" data-astro-cid-7r46yz7u=""> <i aria-hidden="true" class="dropdown__icon-font ri-restart-line" data-astro-cid-7r46yz7u=""></i> </span> <span class="dropdown__item-label" data-astro-cid-7r46yz7u="">Rotation</span> </a> </li><li aria-selected="false" class="dropdown__item" data-astro-cid-7r46yz7u="" data-value="WoWMonkMistweaverGear" role="option"> <a class="dropdown__link" data-astro-cid-7r46yz7u="" href="/wow/mistweaver-monk-pve-healing-gear-best-in-slot"> <span class="dropdown__icon-box dropdown__item-icon" data-astro-cid-7r46yz7u=""> <i aria-hidden="true" class="dropdown__icon-font ri-sword-fill" data-astro-cid-7r46yz7u=""></i> </span> <span class="dropdown__item-label" data-astro-cid-7r46yz7u="">Gear</span> </a> </li><li aria-selected="false" class="dropdown__item" data-astro-cid-7r46yz7u="" data-value="WoWMonkMistweaverStats" role="option"> <a class="dropdown__link" data-astro-cid-7r46yz7u="" href="/wow/mistweaver-monk-pve-healing-stat-priority"> <span class="dropdown__icon-box dropdown__item-icon" data-astro-cid-7r46yz7u=""> <i aria-hidden="true" class="dropdown__icon-font ri-line-chart-line" data-astro-cid-7r46yz7u=""></i> </span> <span class="dropdown__item-label" data-astro-cid-7r46yz7u="">Stats</span> </a> </li><li aria-selected="false" class="dropdown__item" data-astro-cid-7r46yz7u="" data-value="WoWMonkMistweaverEnchants" role="option"> <a class="dropdown__link" data-astro-cid-7r46yz7u="" href="/wow/mistweaver-monk-pve-healing-gems-enchants-consumables"> <span class="dropdown__icon-box dropdown__item-icon" data-astro-cid-7r46yz7u=""> <i aria-hidden="true" class="dropdown__icon-font ri-bard-fill" data-astro-cid-7r46yz7u=""></i> </span> <span class="dropdown__item-label" data-astro-cid-7r46yz7u="">Enchants</span> </a> </li><li aria-selected="false" class="dropdown__item" data-astro-cid-7r46yz7u="" data-value="WoWMonkMistweaverMythic" role="option"> <a class="dropdown__link" data-astro-cid-7r46yz7u="" href="/wow/mistweaver-monk-pve-healing-mythic-plus-tips"> <span class="dropdown__icon-box dropdown__item-icon" data-astro-cid-7r46yz7u=""> <i aria-hidden="true" class="dropdown__icon-font ri-flashlight-line" data-astro-cid-7r46yz7u=""></i> </span> <span class="dropdown__item-label" data-astro-cid-7r46yz7u="">Mythic+</span> </a> </li><li aria-selected="false" class="dropdown__item" data-astro-cid-7r46yz7u="" data-value="WoWMonkMistweaverDPS" role="option"> <a class="dropdown__link" data-astro-cid-7r46yz7u="" href="/wow/mistweaver-monk-pve-dps-guide"> <span class="dropdown__icon-box dropdown__item-icon" data-astro-cid-7r46yz7u=""> <i aria-hidden="true" class="dropdown__icon-font ri-bar-chart-line" data-astro-cid-7r46yz7u=""></i> </span> <span class="dropdown__item-label" data-astro-cid-7r46yz7u="">DPS</span> </a> </li><li aria-selected="false" class="dropdown__item" data-astro-cid-7r46yz7u="" data-value="WoWMonkMistweaverAddons" role="option"> <a class="dropdown__link" data-astro-cid-7r46yz7u="" href="/wow/mistweaver-monk-pve-healing-macros-addons"> <span class="dropdown__icon-box dropdown__item-icon" data-astro-cid-7r46yz7u=""> <i aria-hidden="true" class="dropdown__icon-font ri-list-check-2" data-astro-cid-7r46yz7u=""></i> </span> <span class="dropdown__item-label" data-astro-cid-7r46yz7u="">Macros</span> </a> </li> </ul> </div> </div> <div class="guide-header__updated" data-astro-cid-ra2dhdlp=""> <span class="guide-header__updated-label" data-astro-cid-ra2dhdlp="">Last Updated:</span> <span class="guide-header__updated-date" data-astro-cid-ra2dhdlp="">Sep 3, 2026 - 12:45 AM</span> <span class="guide-header__updated-relative" data-astro-cid-ra2dhdlp="">(10d ago)</span> </div> <div class="guide-header__authors-row" data-astro-cid-ra2dhdlp=""> <div class="guide-header__authors" data-astro-cid-ra2dhdlp=""> <div class="guide-header__author" data-astro-cid-ra2dhdlp=""> <div class="guide-header__author-avatar-wrapper" data-astro-cid-ra2dhdlp=""> <img alt="Dhaubbs" class="guide-header__author-avatar" data-astro-cid-ra2dhdlp="" src="//static.icy-veins.com/images/common/author-icons/dhaubbs.jpg"/> </div> <div class="guide-header__author-info" data-astro-cid-ra2dhdlp=""> <span class="guide-header__author-name" data-astro-cid-ra2dhdlp="">Dhaubbs</span> </div> <div class="guide-header__author-socials" data-astro-cid-ra2dhdlp=""> <a aria-label="Twitch" class="guide-header__social-link" data-astro-cid-ra2dhdlp="" href="https://www.twitch.tv/dhaubbs" target="_blank"> <i class="ri-twitch-fill" data-astro-cid-ra2dhdlp=""></i> </a> <a aria-label="Discord" class="guide-header__social-link" data-astro-cid-ra2dhdlp="" href="https://www.discord.gg/peakofserenity" target="_blank"> <i class="ri-discord-fill" data-astro-cid-ra2dhdlp=""></i> </a> <a aria-label="YouTube" class="guide-header__social-link" data-astro-cid-ra2dhdlp="" href="https://www.youtube.com/channel/UCB4mWBDTMa9OLYesVhLnQ2Q" target="_blank"> <i class="ri-youtube-fill" data-astro-cid-ra2dhdlp=""></i> </a> <a aria-label="Twitter" class="guide-header__social-link" data-astro-cid-ra2dhdlp="" href="https://twitter.com/Dhaubbs" target="_blank"> <i class="ri-twitter-x-fill" data-astro-cid-ra2dhdlp=""></i> </a> </div> </div> </div> <a aria-label="Support Our Writers" class="guide-header__premium" data-astro-cid-ra2dhdlp="" href="/premium"> <i class="ri-hand-coin-fill" data-astro-cid-ra2dhdlp=""></i> <p data-astro-cid-ra2dhdlp="">Support Our Writers</p> </a> </div> </div> </div> </div> </div> <div class="container"> <div class="guide-page-content guide-page-content--wow-retail" style="--class-color: #2AA674; --button-text-color: #FFF;"> <div class="table-of-contents" data-astro-cid-c3vrfssi=""> <nav aria-label="Guide table of contents" data-astro-cid-c3vrfssi=""> <ul data-astro-cid-c3vrfssi=""> <li class="active" data-astro-cid-c3vrfssi=""> <a data-astro-cid-c3vrfssi="" href="/wow/mistweaver-monk-pve-healing-guide"> <i class="ri-book-2-line" data-astro-cid-c3vrfssi=""></i>Overview </a> </li><li data-astro-cid-c3vrfssi=""> <a data-astro-cid-c3vrfssi="" href="/wow/mistweaver-monk-leveling-guide"> <i class="ri-arrow-up-double-line" data-astro-cid-c3vrfssi=""></i>Leveling </a> </li><li data-astro-cid-c3vrfssi=""> <a data-astro-cid-c3vrfssi="" href="/wow/mistweaver-monk-pve-healing-easy-mode"> <i class="ri-target-fill" data-astro-cid-c3vrfssi=""></i>Easy Mode </a> </li><li data-astro-cid-c3vrfssi=""> <a data-astro-cid-c3vrfssi="" href="/wow/mistweaver-monk-pve-healing-spec-builds-talents"> <i class="ri-bar-chart-box-ai-line" data-astro-cid-c3vrfssi=""></i>Talents </a> </li><li data-astro-cid-c3vrfssi=""> <a data-astro-cid-c3vrfssi="" href="/wow/mistweaver-monk-pve-healing-rotation-cooldowns-abilities"> <i class="ri-restart-line" data-astro-cid-c3vrfssi=""></i>Rotation </a> </li><li data-astro-cid-c3vrfssi=""> <a data-astro-cid-c3vrfssi="" href="/wow/mistweaver-monk-pve-healing-gear-best-in-slot"> <i class="ri-sword-fill" data-astro-cid-c3vrfssi=""></i>Gear </a> </li><li data-astro-cid-c3vrfssi=""> <a data-astro-cid-c3vrfssi="" href="/wow/mistweaver-monk-pve-healing-stat-priority"> <i class="ri-line-chart-line" data-astro-cid-c3vrfssi=""></i>Stats </a> </li><li data-astro-cid-c3vrfssi=""> <a data-astro-cid-c3vrfssi="" href="/wow/mistweaver-monk-pve-healing-gems-enchants-consumables"> <i class="ri-bard-fill" data-astro-cid-c3vrfssi=""></i>Enchants </a> </li><li data-astro-cid-c3vrfssi=""> <a data-astro-cid-c3vrfssi="" href="/wow/mistweaver-monk-pve-healing-mythic-plus-tips"> <i class="ri-flashlight-line" data-astro-cid-c3vrfssi=""></i>Mythic+ </a> </li><li data-astro-cid-c3vrfssi=""> <a data-astro-cid-c3vrfssi="" href="/wow/mistweaver-monk-pve-dps-guide"> <i class="ri-bar-chart-line" data-astro-cid-c3vrfssi=""></i>DPS </a> </li><li data-astro-cid-c3vrfssi=""> <a data-astro-cid-c3vrfssi="" href="/wow/mistweaver-monk-pve-healing-macros-addons"> <i class="ri-list-check-2" data-astro-cid-c3vrfssi=""></i>Macros </a> </li> </ul> </nav> </div> <a class="app-banner" data-astro-cid-wu4fi45p="" href="/download" style='--app-banner-art: url("/images/banner/icy-wow-app-banner-image-guides.webp")'> <img alt="Icy Veins" class="app-banner__logo" data-astro-cid-wu4fi45p="" height="43" src="/images/banner/icy-wow-app-banner-logo.webp" width="210"/> <span class="app-banner__copy" data-astro-cid-wu4fi45p=""> <span class="app-banner__title" data-astro-cid-wu4fi45p=""> <img alt="" class="app-banner__icon" data-astro-cid-wu4fi45p="" height="24" src="/images/banner/icy-wow-app-wow-logo.webp" width="24"/>
+NEW! The Icy Veins app is here
+</span> <span class="app-banner__sub" data-astro-cid-wu4fi45p="">
+Try out the WoW Class Codex Addon with the Icy Veins app
+</span> </span> <span class="app-banner__cta" data-astro-cid-wu4fi45p=""> <i aria-hidden="true" class="ri-download-cloud-2-line" data-astro-cid-wu4fi45p=""></i>
+Download App
+</span> </a> <div class="guide-intro"><p>Welcome to our Mistweaver Monk guide for World of Warcraft Patch 12.1.
+Here, you will learn how to heal as a Mistweaver Monk in both raids
+and Mythic+ dungeons. We cover everything from the basics all the way to min-maxing techniques to optimize your output.</p>
+</div> <div class="content-toc" data-astro-cid-5jl6oxyi=""><div class="content-toc__title" data-astro-cid-5jl6oxyi="">Table of Contents</div><div class="content-toc__grid" data-astro-cid-5jl6oxyi=""><a class="content-toc__item" data-astro-cid-5jl6oxyi="" href="#mistweaver-monk-overview">1. Mistweaver Monk Overview</a><a class="content-toc__item" data-astro-cid-5jl6oxyi="" href="#specspec-specclass-in-linkcurrentexpansion">2. Mistweaver Monk in Midnight</a><a class="content-toc__item" data-astro-cid-5jl6oxyi="" href="#basics-of-mistweaver-monk-gameplay">3. Basics of Mistweaver Monk Gameplay</a><a class="content-toc__item" data-astro-cid-5jl6oxyi="" href="#how-to-gear-up-as-a-specspec-specclass">4. How to Gear Up as a Mistweaver Monk</a></div></div> <div class="raider-io-links">
+<div class="raider-io-links__heading">
+<img height="16" src="//static.icy-veins.com/images/common/raiderio-logo.svg"/> <span class="monk">Mistweaver Mythic+ Resources</span>
+</div>
+<div class="raider-io-links__links-wrapper">
+<a href="https://raider.io/specs/mistweaver-monk/talents" target="_blank"><span class="raider-io-links__new">NEW!</span> Top Mistweaver Talent Builds</a>
+<a href="https://raider.io/mythic-plus-spec-rankings/season-mn-2/world/monk/mistweaver" target="_blank">Top Mistweaver Mythic+ Players</a>
+<a href="https://raider.io/stats/mythic-plus-heatmaps?season=season-mn-2&amp;specs=monk--mistweaver" target="_blank">Mistweaver Mythic+ Heatmaps</a>
+<a href="https://raider.io/stats/mythic-plus-group-compositions?season=season-mn-2&amp;specs=monk--mistweaver" target="_blank">Popular Mistweaver Group Comps</a>
+</div>
+</div>
+<div class="heading_container heading_number_2"><span>1.</span> <h2 id="mistweaver-monk-overview">Mistweaver Monk Overview</h2></div>
+<p>The Mistweaver specialization is versatile, and different talent choices can
+allow it to fit a wide range of raid requirements. Mistweavers can,
+therefore, heal both tanks and the raid very well.</p>
+<p>Based on talent choices, Mistweavers can be either unparalleled tank healers
+with strong area of effect throughput or damage-dealing mobile raid healers.</p>
+<div class="performance-overview" data-max="5.0">
+<div class="performance-overview__tabs" role="tablist">
+<button aria-controls="performance-overview-1-panel-0" aria-selected="true" class="performance-overview__tab is-active" data-score="3.5" data-target="performance-overview-1-panel-0" id="performance-overview-1-tab-0" role="tab" type="button">
+<span class="performance-overview__icon performance-overview__icon--map">
+<span class="performance-overview__icon-wheel" data-wheel="wheel:3.5/5"></span>
+<span aria-hidden="true" class="performance-overview__icon-glyph" style="background-image: url('//static.icy-veins.com/images/common/button-icons/map.png');"></span>
+</span>
+<span class="performance-overview__label">Raid</span>
+</button>
+<button aria-controls="performance-overview-1-panel-1" aria-selected="false" class="performance-overview__tab" data-score="4.0" data-target="performance-overview-1-panel-1" id="performance-overview-1-tab-1" role="tab" type="button">
+<span class="performance-overview__icon performance-overview__icon--bard">
+<span class="performance-overview__icon-wheel" data-wheel="wheel:4/5"></span>
+<span aria-hidden="true" class="performance-overview__icon-glyph" style="background-image: url('//static.icy-veins.com/images/common/button-icons/bard.png');"></span>
+</span>
+<span class="performance-overview__label">Mythic+</span>
+</button>
+<button aria-controls="performance-overview-1-panel-2" aria-selected="false" class="performance-overview__tab" data-score="4.0" data-target="performance-overview-1-panel-2" id="performance-overview-1-tab-2" role="tab" type="button">
+<span class="performance-overview__icon performance-overview__icon--wrench">
+<span class="performance-overview__icon-wheel" data-wheel="wheel:4/5"></span>
+<span aria-hidden="true" class="performance-overview__icon-glyph" style="background-image: url('//static.icy-veins.com/images/common/button-icons/wrench.png');"></span>
+</span>
+<span class="performance-overview__label">Utility</span>
+</button>
+<button aria-controls="performance-overview-1-panel-3" aria-selected="false" class="performance-overview__tab" data-score="5.0" data-target="performance-overview-1-panel-3" id="performance-overview-1-tab-3" role="tab" type="button">
+<span class="performance-overview__icon performance-overview__icon--shield">
+<span class="performance-overview__icon-wheel" data-wheel="wheel:5/5"></span>
+<span aria-hidden="true" class="performance-overview__icon-glyph" style="background-image: url('//static.icy-veins.com/images/common/button-icons/shield.png');"></span>
+</span>
+<span class="performance-overview__label">Survivability</span>
+</button>
+<button aria-controls="performance-overview-1-panel-4" aria-selected="false" class="performance-overview__tab" data-score="5.0" data-target="performance-overview-1-panel-4" id="performance-overview-1-tab-4" role="tab" type="button">
+<span class="performance-overview__icon performance-overview__icon--run">
+<span class="performance-overview__icon-wheel" data-wheel="wheel:5/5"></span>
+<span aria-hidden="true" class="performance-overview__icon-glyph" style="background-image: url('//static.icy-veins.com/images/common/button-icons/run.png');"></span>
+</span>
+<span class="performance-overview__label">Mobility</span>
+</button>
+<button aria-controls="performance-overview-1-panel-5" aria-selected="false" class="performance-overview__tab" data-score="4.0" data-target="performance-overview-1-panel-5" id="performance-overview-1-tab-5" role="tab" type="button">
+<span class="performance-overview__icon performance-overview__icon--sword">
+<span class="performance-overview__icon-wheel" data-wheel="wheel:4/5"></span>
+<span aria-hidden="true" class="performance-overview__icon-glyph" style="background-image: url('//static.icy-veins.com/images/common/button-icons/sword.png');"></span>
+</span>
+<span class="performance-overview__label">Damage</span>
+</button>
+</div>
+<div class="performance-overview__panels">
+<div aria-hidden="false" aria-labelledby="performance-overview-1-tab-0" class="performance-overview__panel is-active" data-rating="3.5/5" data-score="3.5" id="performance-overview-1-panel-0" role="tabpanel">
+<div class="performance-overview__panel-body">
+<summary class="performance-header">Requires some tuning</summary>
+Mistweaver Monk is a throughput healer, and as such, lives and dies by its ability
+to top up health bars. Unlike other specs that bring powerful mitigation or utility spells
+to bypass certain mechanics, Mistweaver relies solely on its HPS throughput. Unfortunately,
+12.1 saw several aura nerfs to Mistweaver's throughput, as well as sizable buffs almost every
+other healer spec, making our niche in raid somewhat dubious at the time of writing.
+  </div>
+</div>
+<div aria-hidden="true" aria-labelledby="performance-overview-1-tab-1" class="performance-overview__panel" data-rating="4/5" data-score="4.0" id="performance-overview-1-panel-1" role="tabpanel">
+<div class="performance-overview__panel-body">
+<summary class="performance-header">Middle of the pack</summary>
+Mistweaver Monk is a strong option in Mythic+, in no small part due to our immense
+durability. Mistweavers have a plethora of damage reduction cooldowns and passives that
+allow us to take a substantial amount of punishment without dying. Furthermore, Mistweaver's kit is
+designed around dealing damage, passively increasing your group's total DPS. However, where
+Mistweaver falls short is its lack of meaningful group utility; we do not bring a
+strong group-wide damage reduction like <span class="spell_icon_span"><img alt="Spirit Link Totem Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/spell_shaman_spiritlink.jpg"/> <span class="spell" data-wowhead="spell=98008">Spirit Link Totem</span></span> or <span class="spell_icon_span"><img alt="Power Word: Barrier Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/spell_holy_powerwordbarrier.jpg"/> <span class="spell" data-wowhead="spell=62618">Power Word: Barrier</span></span>,
+nor do we have a battle resurrection or <span class="spell_icon_span"><img alt="Bloodlust Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/spell_nature_bloodlust.jpg"/> <span class="spell" data-wowhead="spell=2825">Bloodlust</span></span>. Equally, our external DR cooldown
+<span class="spell_icon_span"><img alt="Life Cocoon Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/ability_monk_chicocoon.jpg"/> <span class="spell" data-wowhead="spell=116849">Life Cocoon</span></span> provides a flat amount of damage prevention, meaning it scales
+less effectively into higher keys than other healer's cooldowns like <span class="spell_icon_span"><img alt="Ironbark Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/spell_druid_ironbark.jpg"/> <span class="spell" data-wowhead="spell=102342">Ironbark</span></span> or
+<span class="spell_icon_span"><img alt="Pain Suppression Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/spell_holy_painsupression.jpg"/> <span class="spell" data-wowhead="spell=33206">Pain Suppression</span></span>. All that being said though, while a Mistweaver likely won't be used
+in a rank 1 run, they absolutely still excel in bleeding edge keys.
+  </div>
+</div>
+<div aria-hidden="true" aria-labelledby="performance-overview-1-tab-2" class="performance-overview__panel" data-rating="4/5" data-score="4.0" id="performance-overview-1-panel-2" role="tabpanel">
+<div class="performance-overview__panel-body">
+<summary class="performance-header">Niche Utility</summary>
+Utility is Mistweaver Monk's Achilles' heel; while we do have numerous interesting utility
+options, many of them are particularly niche during combat. The obvious stand-outs for us
+are <span class="spell_icon_span"><img alt="Ring of Peace Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/spell_monk_ringofpeace.jpg"/> <span class="spell" data-wowhead="spell=116844">Ring of Peace</span></span>, <span class="spell_icon_span"><img alt="Leg Sweep Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/ability_monk_legsweep.jpg"/> <span class="spell" data-wowhead="spell=119381">Leg Sweep</span></span>, and <span class="spell_icon_span"><img alt="Paralysis Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/ability_monk_paralysis.jpg"/> <span class="spell" data-wowhead="spell=115078">Paralysis</span></span> which give us excellent
+group CC ability in dungeons, however it is extremely rare that a strategy will uniquely
+revolve around any of those abilities in specific; other classes can be brought to do the same
+thing. Our raid cooldown <span class="spell_icon_span"><img alt="Revival Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/spell_monk_revival.jpg"/> <span class="spell" data-wowhead="spell=115310">Revival</span></span> includes a group-wide magic dispel, but given
+the current design philosophy of debuffs often requiring intentionally timed dispels, this
+effect is often a detriment rather than a boon (so much so that Revival as a talent exists
+on a choice node with another talent <span class="spell_icon_span"><img alt="Restoral Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/ability_monk_tigerstyle.jpg"/> <span class="spell" data-wowhead="spell=388615">Restoral</span></span>, which does the exact same thing, just
+with no dispel). Lastly, we bring the debuff <span class="spell_icon_span"><img alt="Mystic Touch Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/ability_monk_sparring.jpg"/> <span class="spell" data-wowhead="spell=8647">Mystic Touch</span></span> as a monk specific raid buff.
+However, the debuff can also be brought by a Windwalker or Brewmaster, and as far buffs go,
+5% physical damage is among the weaker buffs as most damage in WoW is magical.
+  </div>
+</div>
+<div aria-hidden="true" aria-labelledby="performance-overview-1-tab-3" class="performance-overview__panel" data-rating="5/5" data-score="5.0" id="performance-overview-1-panel-3" role="tabpanel">
+<div class="performance-overview__panel-body">
+<summary class="performance-header">Extremely Durable</summary>
+Mistweaver Monk is one of the most durable specs in the game. With talents like <span class="spell_icon_span"><img alt="Dance of the Wind Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/ability_monk_dematerialize.jpg"/> <span class="spell" data-wowhead="spell=414132">Dance of the Wind</span></span>
+making us straight up immune to certain attacks, as well a personal DR cooldown <span class="spell_icon_span"><img alt="Fortifying Brew Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/ability_monk_fortifyingale_new.jpg"/> <span class="spell" data-wowhead="spell=388917">Fortifying Brew</span></span>,
+and a plethora of passive damage reduction talents, it is very hard for a Mistweaver to run out of defensive options.
+  </div>
+</div>
+<div aria-hidden="true" aria-labelledby="performance-overview-1-tab-4" class="performance-overview__panel" data-rating="5/5" data-score="5.0" id="performance-overview-1-panel-4" role="tabpanel">
+<div class="performance-overview__panel-body">
+<summary class="performance-header">Hyper Mobile</summary>
+In terms of mobility few specs can hold a candle to a Monk's toolkit. Between <span class="spell_icon_span"><img alt="Roll Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/ability_monk_roll.jpg"/> <span class="spell" data-wowhead="spell=109132">Roll</span></span>,
+<span class="spell_icon_span"><img alt="Tiger's Lust Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/ability_monk_tigerslust.jpg"/> <span class="spell" data-wowhead="spell=116841">Tiger's Lust</span></span>, <span class="spell_icon_span"><img alt="Transcendence Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/monk_ability_transcendence.jpg"/> <span class="spell" data-wowhead="spell=101643">Transcendence</span></span>, and <span class="spell_icon_span"><img alt="Lighter Than Air Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/ability_monk_ridethewind.jpg"/> <span class="spell" data-wowhead="spell=449582">Lighter Than Air</span></span>, it is almost impossible
+to be caught flat-footed as a Mistweaver.
+  </div>
+</div>
+<div aria-hidden="true" aria-labelledby="performance-overview-1-tab-5" class="performance-overview__panel" data-rating="4/5" data-score="4.0" id="performance-overview-1-panel-5" role="tabpanel">
+<div class="performance-overview__panel-body">
+<summary class="performance-header">Strong Damage</summary>
+Mistweaver is largely designed around dealing damage to a target in order to heal, either
+directly through effects like <span class="spell_icon_span"><img alt="Ancient Teachings Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/inv_misc_book_07.jpg"/> <span class="spell" data-wowhead="spell=388023">Ancient Teachings</span></span> or by buffing our spells like <span class="spell_icon_span"><img alt="Rising Mist Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/ability_monk_effuse.jpg"/> <span class="spell" data-wowhead="spell=274909">Rising Mist</span></span>
+and <span class="spell_icon_span"><img alt="Rushing Wind Kick Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/ability_monk_ridethewind.jpg"/> <span class="spell" data-wowhead="spell=467307">Rushing Wind Kick</span></span>. As such, Mistweavers will passively do more damage than the average healer,
+however with proper play, certain healers can exceed our top end throughput.
+  </div>
+</div>
+</div>
+</div>
+<div class="cta-block__wrapper-new">
+<div class="cta-block__bg" style="background-image: url('//static.icy-veins.com/images/wow/spec-icons/talent-tree-bg/monk/mistweaver.webp')"></div>
+<div class="cta-block__content">
+<div class="cta-block__brand"><img alt="Icy Veins - New to the game? Get started with our Leveling and Easy Mode guides!" src="//static.icy-veins.com/images/common/logo-mobile.png"/></div>
+<img alt="Mistweaver Monk - New to the game? Get started with our Leveling and Easy Mode guides!" class="cta-block__icon" src="//static.icy-veins.com/images/wow/spec-icons/round-with-border/monk/mistweaver.png"/>
+<div class="cta-block__info">
+<div class="cta-block__info-note"><i class="ri-refresh-line"></i>Starter Information</div>
+<div class="cta-block__info-header">Beginner Guides</div>
+<div class="cta-block__info-description">New to the game? Get started with our Leveling and Easy Mode guides!</div>
+</div>
+</div>
+<div class="cta-block__buttons"><a href="//www.icy-veins.com/wow/mistweaver-monk-leveling-guide">Leveling<i class="ri-arrow-right-double-line"></i></a><a href="//www.icy-veins.com/wow/mistweaver-monk-pve-healing-easy-mode">Easy Mode<i class="ri-arrow-right-double-line"></i></a></div>
+</div>
+<div class="image_block">
+<div class="image_block_header">
+<div class="heading_container heading_number_2"><span>2.</span> <h2 id="specspec-specclass-in-linkcurrentexpansion">Mistweaver Monk in Midnight</h2></div>
+<div class="image_block_header_buttons">
+<span id="area_1_button"><strong>Season 2</strong><br/>Changes Overview</span>
+<span id="area_2_button"><strong>Midnight</strong><br/>Changes Overview</span>
+</div>
+</div>
+<div class="image_block_content" id="area_1">
+<div class="heading_container heading_number_3"><span>2.1.</span> <h3 id="midnight-season-2-content-guides">Midnight Season 2 Content Guides</h3></div>
+<p>Midnight Season 2 has arrived, bringing a fresh wave of endgame content
+and new rewards to chase. Be sure to check out our hubs for Raids, Mythic+ and PvP
+below!</p>
+<div class="centered link_buttons_flex_3">
+<span class="link_button">
+<a href="//www.icy-veins.com/wow/venomous-abyss-raid-guide">Season 2 Raids</a>
+</span>
+<span class="link_button">
+<a href="//www.icy-veins.com/wow/midnight-mythic-season-2-guide">Season 2 Mythic+</a>
+</span>
+<span class="link_button">
+<a href="//www.icy-veins.com/wow/midnight-pvp-season-2-guide">Season 2 PvP</a>
+</span>
+</div>
+<div class="heading_container heading_number_3"><span>2.2.</span> <h3 id="patch-12-1-changes">Patch 12.1 Changes</h3></div>
+<p>Season 2 is finally here, and along with the new PvE and PvP endgame content
+that will be available August 18th, Blizzard has released a plethora of changes
+to the open world, player UI, and existing systems.</p>
+<div class="cta-block__wrapper-new">
+<div class="cta-block__bg" style="background-image: url('//static.icy-veins.com/images/iv/podcast-news.jpg')"></div>
+<div class="cta-block__content">
+<div class="cta-block__brand"><img alt="Icy Veins - Check out our 12.1 Patch Hub for all the information you may need on new content,
+new gameplay systems, and more!" src="//static.icy-veins.com/images/common/logo-mobile.png"/></div>
+<div class="cta-block__icon cta-block__icon--placeholder"></div>
+<div class="cta-block__info">
+<div class="cta-block__info-note"><i class="ri-refresh-line"></i>New Patch Content</div>
+<div class="cta-block__info-header">Patch 12.1 Overview</div>
+<div class="cta-block__info-description">Check out our 12.1 Patch Hub for all the information you may need on new content,
+new gameplay systems, and more!</div>
+</div>
+</div>
+<div class="cta-block__buttons"><a href="//www.icy-veins.com/wow/midnight-patch-12-1-guide">Midnight Patch 12.1 Guide<i class="ri-arrow-right-double-line"></i></a></div>
+</div>
+<div class="heading_container heading_number_3"><span>2.3.</span> <h3 id="class-changes">Class Changes</h3></div>
+<p>Prior to the release of Season 2, Mistweaver (among other specs) has received 
+a much welcome tuning pass. The buffs we received are substantial, but it is still
+unclear if they will make up for the deficit we saw during PTR testing.</p>/
+
+<div class="blizz-bluepost">
+<div class="bluepost-header">
+<div class="bluepost-image-wrapper"></div>
+<span class="bluepost-source"><a href="https://us.forums.blizzard.com/en/wow/t/class-tuning-incoming-%E2%80%93-august-18/2336820">Pre-Season Tuning</a></span>
+</div>
+<div class="bluepost-divider"></div>
+<div class="bluepost-content">
+<ul>
+<li>All healing increased by 8%. Does not affect PvP combat.</li>
+<li>Venomous Abyss 4-set bonus has been updated – Activation rate increased by 33%.</li>
+</ul>
+</div>
+</div>
+<div class="heading_container heading_number_4"><span>2.3.1.</span> <h4 id="patch-12-1-launch-changes">Patch 12.1 Launch Changes</h4></div>
+<p>This is a tough patch for Mistweaver. This patch cycle saw us receive a 3% and an 8%
+aura nerf to all our healing, as well as a re-tuning of our DPS-to-Healing mechanics.
+There seems to be an attempt to make Mastery a valuable stat again, however the new interactions
+of a high mastery build + our set bonus were cut down with a 60% nerf to <span class="spell_icon_span"><img alt="Morning Breeze Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/expansionicon_mistsofpandaria.jpg"/> <span class="spell" data-wowhead="spell=1277302">Morning Breeze</span></span>.</p>
+<p>It remains to be seen just how these changes will truly affect Mistweaver once the Raid releases,
+but currently available data from PTR paints a troubling picture.</p>
+<p>In Mythic+ Mistweaver remains decent, though our over reliance on <span class="spell_icon_span"><img alt="Spinning Crane Kick Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/ability_monk_cranekick_new.jpg"/> <span class="spell" data-wowhead="spell=101546">Spinning Crane Kick</span></span>
+has been tamped down through a series of nerfs and bug fixes. While you will still press SCK
+during larger AoE pulls, anything under five mobs will have us returning to <span class="spell_icon_span"><img alt="Tiger Palm Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/ability_monk_tigerpalm.jpg"/> <span class="spell" data-wowhead="spell=100780">Tiger Palm</span></span> and <span class="spell_icon_span"><img alt="Blackout Kick Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/ability_monk_roundhousekick.jpg"/> <span class="spell" data-wowhead="spell=100784">Blackout Kick</span></span>.</p>
+<div class="blizz-bluepost">
+<div class="bluepost-header">
+<div class="bluepost-image-wrapper"></div>
+<span class="bluepost-source"><a href="https://us.forums.blizzard.com/en/wow/t/midnight-curse-of-ulatek-ptr-development-notes/2317811">12.1 Class Tuning</a></span>
+</div>
+<div class="bluepost-divider"></div>
+<div class="bluepost-content">
+<ul>
+<li>New Talent: <span class="spell_icon_span"><img alt="Vital Expenditure Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/ability_monk_soothingmists.jpg"/> <span class="spell" data-wowhead="spell=1299572&amp;domain=ptr">Vital Expenditure</span></span> — <span class="spell_icon_span"><img alt="Soothing Mist Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/ability_monk_soothingmists.jpg"/> <span class="spell" data-wowhead="spell=115175">Soothing Mist</span></span>’s healing is increased by 300%, but its mana cost is increased by 200%. Choice node with <span class="spell_icon_span"><img alt="Dancing Mists Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/ability_monk_serenity.jpg"/> <span class="spell" data-wowhead="spell=388701">Dancing Mists</span></span>.</li>
+<li>All healing reduced by ~10.7%.</li>
+<li>Mastery: Gust of Mist healing increased by 225%.</li>
+<li><span class="spell_icon_span"><img alt="Spinning Crane Kick Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/ability_monk_cranekick_new.jpg"/> <span class="spell" data-wowhead="spell=101546">Spinning Crane Kick</span></span> damage decreased by 6.5%.</li>
+<li><span class="spell_icon_span"><img alt="Way of the Crane Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/monk_stance_redcrane.jpg"/> <span class="spell" data-wowhead="spell=216113">Way of the Crane</span></span> now transfers 280% of damage done (was 340%).</li>
+<li><span class="spell_icon_span"><img alt="Jadefire Teachings Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/inv_misc_book_07.jpg"/> <span class="spell" data-wowhead="spell=467293">Jadefire Teachings</span></span> now increases Ancient Teaching’s transfer amount by 320% (was 270%).</li>
+<li>Resolved an issue that caused Temple Training’s Spinning Crane Kick damage increase to apply to Mistweaver.</li>
+<li><span class="spell_icon_span"><img alt="Morning Breeze Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/expansionicon_mistsofpandaria.jpg"/> <span class="spell" data-wowhead="spell=1277302">Morning Breeze</span></span> effectiveness reduced by 60%.</li>
+</ul>
+</div>
+</div>
+<details><summary class="centered"><img alt="" src="//static.icy-veins.com/images/wow/large_icons/ability_monk_soothingmists.jpg" style="border-radius: 50%;vertical-align:-25%;outline:2px solid #2585e2; margin-right:2px;" width="22"/> Click for Previous Season 1 Hotfixes</summary>
+<div class="heading_container heading_number_3"><span>2.4.</span> <h3 id="patch-12-0-5-changes-for-mistweaver-monk">Patch 12.0.5 changes for Mistweaver Monk</h3></div>
+<p>This patch sees some tuning changes to our throughput to tamp down how powerful
+Mistweaver is in raid, while also adding some nice quality of life changes to our
+Apex and Hero talents. The main change here is a 5% HPS reduction to all our casted heals.
+It should be noted that this does not affect our damage transfer healing, so
+raiders will be more acutely affected than Mythic+ players.</p>
+<p>While 5% is a significant nerf, as of the time of writing, Mistweaver, 
+Discipline Priest, and Preservation Evoker are all massively out performing the rest
+of the other healing specs, and as such, each of them are having their numbers tuned down.</p>
+<p>Ultimately, though this patch will aim to make the under performing healers more competitive,
+Mistweaver will still retain its spot as one of the highest throughput healers
+in raid.</p>
+<div class="blizz-bluepost">
+<div class="bluepost-header">
+<div class="bluepost-image-wrapper"></div>
+<span class="bluepost-source"><a href="https://us.forums.blizzard.com/en/wow/t/1205-ptr-development-notes/2270121/4">12.0.5 Class Tuning</a></span>
+</div>
+<div class="bluepost-divider"></div>
+<div class="bluepost-content">
+<ul>
+<li>All healing reduced by 5%.</li>
+<li><span class="spell_icon_span"><img alt="Sheilun's Gift Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/inv_staff_2h_artifactshaohao_d_01.jpg"/> <span class="spell" data-wowhead="spell=399491">Sheilun's Gift</span></span> healing is increased by 5% per cloud consumed (was 10%).</li>
+<li><span class="spell_icon_span"><img alt="Spiritfont Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/inv_shoulder__inv_leather_raidmonkmythic_s_01.jpg"/> <span class="spell" data-wowhead="spell=1260511">Spiritfont</span></span> now causes <span class="spell_icon_span"><img alt="Enveloping Mist Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/spell_monk_envelopingmist.jpg"/> <span class="spell" data-wowhead="spell=124682">Enveloping Mist</span></span> to be instant cast.</li>
+<li><span class="spell_icon_span"><img alt="Way of the Serpent Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/monk_stance_wiseserpent.jpg"/> <span class="spell" data-wowhead="spell=1243155">Way of the Serpent</span></span> no longer causes <span class="spell_icon_span"><img alt="Soothing Mist Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/ability_monk_soothingmists.jpg"/> <span class="spell" data-wowhead="spell=115175">Soothing Mist</span></span> and
+	  <span class="spell_icon_span"><img alt="Crackling Jade Lightning Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/ability_monk_cracklingjadelightning.jpg"/> <span class="spell" data-wowhead="spell=117952">Crackling Jade Lightning</span></span> to be cast while moving. This is now default behavior.</li>
+<li><span class="spell_icon_span inline_hero_talent" style="color:#67ECAF;"><img alt="" class="spell_icon" src="//static.icy-veins.com/images/wow/tools/hero-talents/conduit-of-the-celestials.webp"/> Conduit of the Celestials</span>:</li>
+<ul>
+<li><span class="spell_icon_span"><img alt="Inner Compass Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/inv_10_dungeonjewelry_explorer_trinket_1compass_color2.jpg"/> <span class="spell" data-wowhead="spell=443571">Inner Compass</span></span> now rotates its stances on an 8 second timer.</li>
+</ul>
+<li><span class="spell_icon_span inline_hero_talent" style="color:#6ED4CD;"><img alt="" class="spell_icon" src="//static.icy-veins.com/images/wow/tools/hero-talents/master-of-harmony.webp"/> Master of Harmony</span>:</li>
+<ul>
+<li><span class="spell_icon_span"><img alt="Harmonic Surge Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/ability_socererking_forcenova.jpg"/> <span class="spell" data-wowhead="spell=1270958">Harmonic Surge</span></span> has been redesigned — Casting
+		  <span class="spell_icon_span"><img alt="Thunder Focus Tea Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/ability_monk_thunderfocustea.jpg"/> <span class="spell" data-wowhead="spell=116680">Thunder Focus Tea</span></span> grants 2 charges of <span class="spell_icon_span"><img alt="Potential Energy Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/spell_magic_managain.jpg"/> <span class="spell" data-wowhead="spell=1271048&amp;domain=beta">Potential Energy</span></span>.
+		  Your next cast of <span class="spell_icon_span"><img alt="Tiger Palm Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/ability_monk_tigerpalm.jpg"/> <span class="spell" data-wowhead="spell=100780">Tiger Palm</span></span> or <span class="spell_icon_span"><img alt="Vivify Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/ability_monk_vivify.jpg"/> <span class="spell" data-wowhead="spell=116670">Vivify</span></span> consumes all charges of
+		  Potential Energy to cause a Harmonic Surge. Harmonic Surge: For each
+		  charge of Potential Energy, deal Nature damage to your target and nearby
+		  enemies, and heal up to 5 allies. Damage and healing increased per
+		  stack of Potential Energy consumed.</li>
+<li><span class="spell_icon_span"><img alt="Potential Energy Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/spell_magic_managain.jpg"/> <span class="spell" data-wowhead="spell=1271048&amp;domain=beta">Potential Energy</span></span> has been redesigned — Casting 
+		  <span class="spell_icon_span"><img alt="Rising Sun Kick Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/ability_monk_risingsunkick.jpg"/> <span class="spell" data-wowhead="spell=107428">Rising Sun Kick</span></span> or <span class="spell_icon_span"><img alt="Rushing Wind Kick Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/ability_monk_ridethewind.jpg"/> <span class="spell" data-wowhead="spell=467307">Rushing Wind Kick</span></span> grants a 
+		  charge of Potential Energy.</li>
+<li><span class="spell_icon_span"><img alt="Coalescence Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/ability_monk_effuse.jpg"/> <span class="spell" data-wowhead="spell=450529">Coalescence</span></span>'s tooltip has been adjusted for clarity,
+		   and it now applies its own distinct periodic healing and damage effect.</li>
+</ul>
+</ul>
+</div>
+</div>
+<div class="heading_container heading_number_3"><span>2.5.</span> <h3 id="midnight-season-1-changes">Midnight Season 1 Changes</h3></div>
+<p>With the release of Midnight's first season, like with most classes, Mistweaver received some tuning.
+These changes are mostly positive and primarily effect our Mythic+ gameplay through increases to
+<span class="spell_icon_span"><img alt="Jadefire Teachings Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/inv_misc_book_07.jpg"/> <span class="spell" data-wowhead="spell=467293">Jadefire Teachings</span></span> and changes to the healing profiles of <span class="spell_icon_span"><img alt="Sheilun's Gift Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/inv_staff_2h_artifactshaohao_d_01.jpg"/> <span class="spell" data-wowhead="spell=399491">Sheilun's Gift</span></span> and <span class="spell_icon_span"><img alt="Way of the Crane Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/monk_stance_redcrane.jpg"/> <span class="spell" data-wowhead="spell=216113">Way of the Crane</span></span>.</p>
+<p>The baseline strength of Sheilun's gift is now higher with its strength becoming weaker at four clouds and beyond.
+This makes spamming it in high damage single target situations much more attractive, while toning down the max strength
+of a fully stacked SG. Similarly, <span class="spell_icon_span"><img alt="Way of the Crane Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/monk_stance_redcrane.jpg"/> <span class="spell" data-wowhead="spell=216113">Way of the Crane</span></span> received a slight reduction in total HPS transfer, however
+it now funnels its healing into a single target, making the talent much more effective at healing tanks during large pulls,
+and about the same at healing group AoE.</p>
+<div class="blizz-bluepost">
+<div class="bluepost-header">
+<div class="bluepost-image-wrapper"></div>
+<span class="bluepost-source"><a href="https://us.forums.blizzard.com/en/wow/t/class-tuning-incoming-march-17/2271691">Midnight Class Tuning</a></span>
+</div>
+<div class="bluepost-divider"></div>
+<div class="bluepost-content">
+<ul>
+<li><span class="spell_icon_span"><img alt="Sheilun's Gift Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/inv_staff_2h_artifactshaohao_d_01.jpg"/> <span class="spell" data-wowhead="spell=399491">Sheilun's Gift</span></span> healing increased by 60%</li>
+<li><span class="spell_icon_span"><img alt="Sheilun's Gift Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/inv_staff_2h_artifactshaohao_d_01.jpg"/> <span class="spell" data-wowhead="spell=399491">Sheilun's Gift</span></span> clouds now increase its healing by 10% per stack (was 33%)</li>
+<li><span class="spell_icon_span"><img alt="Jadefire Teachings Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/inv_misc_book_07.jpg"/> <span class="spell" data-wowhead="spell=467293">Jadefire Teachings</span></span> now increases the transfer rate of Ancient Teachings by 260% (was 200%)</li>
+<li><span class="spell_icon_span"><img alt="Way of the Crane Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/monk_stance_redcrane.jpg"/> <span class="spell" data-wowhead="spell=216113">Way of the Crane</span></span> now transfers 340% of damage onto 1 ally (was 125% onto 3 allies)</li>
+<li><span class="spell_icon_span"><img alt="Jadefire Stomp Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/ability_ardenweald_monk.jpg"/> <span class="spell" data-wowhead="spell=388193&amp;domain=ptr">Jadefire Stomp</span></span> damage now transfers into Ancient Teachings at 20% effectiveness</li>
+<li><span class="spell_icon_span"><img alt="Invigorating Mists Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/ability_monk_vivify.jpg"/> <span class="spell" data-wowhead="spell=274586">Invigorating Mists</span></span> healing increased by 30%</li>
+</ul>
+</div>
+</div>
+</details>
+</div>
+<div class="image_block_content" id="area_2">
+<div class="heading_container heading_number_3"><span>2.6.</span> <h3 id="midnight-for-specspec-specclass">Midnight for Mistweaver Monk</h3></div>
+<p>Mistweaver received a myriad of changes in Midnight, largely aimed at reducing
+the amount of buffs and passive interactions that needed to be maintained in order
+to succeed. The spec plays fairly similarly to how it has in the past, albeit somewhat
+simplified.</p>
+<p>Broadly speaking, the tempo of healing in general has slowed down quite a bit. Power has
+been taken out of our cooldowns and, for Mistweavers in specific, many of our healing
+amplifiers have been nerfed or removed entirely. The core theme and loop of our spec
+remains unchanged though: we're still a melee-dps healer who wants to blanket their
+group in <span class="spell_icon_span"><img alt="Renewing Mist Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/ability_monk_renewingmists.jpg"/> <span class="spell" data-wowhead="spell=115151">Renewing Mist</span></span>.</p>
+<div class="heading_container heading_number_3"><span>2.7.</span> <h3 id="apex-talents">Apex Talents</h3></div>
+<p>Midnight has expanded on the Talent system by introducing Apex Talents; effectively 
+a powerful ability at the end of the class tree that players can opt into starting at level 81.
+For Mistweavers, that ability is <strong>Spiritfont</strong>. You will be able to allocate up to 4
+talents points to increase your Apex Talent's power:</p>
+<ol>
+<li><span class="spell_icon_span"><img alt="Spiritfont Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/inv_shoulder__inv_leather_raidmonkmythic_s_01.jpg"/> <span class="spell" data-wowhead="spell=1260511">Spiritfont</span></span> — Causes your <span class="spell_icon_span"><img alt="Vivify Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/ability_monk_vivify.jpg"/> <span class="spell" data-wowhead="spell=116670">Vivify</span></span> and <span class="spell_icon_span"><img alt="Rising Sun Kick Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/ability_monk_risingsunkick.jpg"/> <span class="spell" data-wowhead="spell=107428">Rising Sun Kick</span></span>
+  to grant you a buff that causes your next <span class="spell_icon_span"><img alt="Enveloping Mist Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/spell_monk_envelopingmist.jpg"/> <span class="spell" data-wowhead="spell=124682">Enveloping Mist</span></span> to channel <span class="spell_icon_span"><img alt="Soothing Mist Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/ability_monk_soothingmists.jpg"/> <span class="spell" data-wowhead="spell=115175">Soothing Mist</span></span>
+  onto up to 5 targets at 20% effectiveness. If a target is at max Health, the Soothing Mist will
+  jump to a new target, or split its healing among the other 4 targets.</li>
+<li><span class="spell_icon_span"><img alt="Spiritfont Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/inv_shoulder__inv_leather_raidmonkmythic_s_01.jpg"/> <span class="spell" data-wowhead="spell=1260677">Spiritfont</span></span> — <span class="spell_icon_span"><img alt="Rising Sun Kick Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/ability_monk_risingsunkick.jpg"/> <span class="spell" data-wowhead="spell=107428">Rising Sun Kick</span></span> damage is increased by 10%/20%
+  and <span class="spell_icon_span"><img alt="Enveloping Mist Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/spell_monk_envelopingmist.jpg"/> <span class="spell" data-wowhead="spell=124682">Enveloping Mist</span></span> healing is increased by 10%/20%. This bonus is increased by 50%
+  while Spirit Font is active.</li>
+<li><span class="spell_icon_span"><img alt="Spiritfont Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/inv_shoulder__inv_leather_raidmonkmythic_s_01.jpg"/> <span class="spell" data-wowhead="spell=1260680">Spiritfont</span></span> — <span class="spell_icon_span"><img alt="Thunder Focus Tea Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/ability_monk_thunderfocustea.jpg"/> <span class="spell" data-wowhead="spell=116680">Thunder Focus Tea</span></span> activates Spirit Font, and applies
+  Chi Cocoons to targeted allies at 30% effectiveness.</li>
+</ol>
+<div class="heading_container heading_number_3"><span>2.8.</span> <h3 id="hero-talent-changes">Hero Talent Changes</h3></div>
+<p><span class="spell_icon_span inline_hero_talent" style="color:#67ECAF;"><img alt="" class="spell_icon" src="//static.icy-veins.com/images/wow/tools/hero-talents/conduit-of-the-celestials.webp"/> Conduit of the Celestials</span> is largely the same, save for a few changed talents.
+<span class="spell_icon_span"><img alt="Chi-Ji's Swiftness Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/inv_shoulder_leather_raidmonkemerald_d_01.jpg"/> <span class="spell" data-wowhead="spell=443566">Chi-Ji's Swiftness</span></span> was moved and in its place we received <span class="spell_icon_span"><img alt="Stampede of the Ancients Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/monk_ability_summonoxstatue.jpg"/> <span class="spell" data-wowhead="spell=1262756">Stampede of the Ancients</span></span>
+which increases the healing of your <span class="spell_icon_span"><img alt="Strength of the Black Ox Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/ability_monk_chargingoxwave.jpg"/> <span class="spell" data-wowhead="spell=443110">Strength of the Black Ox</span></span> shield by 400%.
+Additionally, since Refreshing Jade Wind was removed, the talents that affected
+it have been reworked to provide small passive bonuses to damage/healing.</p>
+<p><span class="spell_icon_span inline_hero_talent" style="color:#6ED4CD;"><img alt="" class="spell_icon" src="//static.icy-veins.com/images/wow/tools/hero-talents/master-of-harmony.webp"/> Master of Harmony</span> functions very similarly, but did get a fairly
+impactful rework to the function of the caption talent <span class="spell_icon_span"><img alt="Coalescence Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/ability_monk_effuse.jpg"/> <span class="spell" data-wowhead="spell=450529">Coalescence</span></span>. Now,
+the healing intensification is capped at 20% additional healing, instead fully withdrawing
+your banked vitality. Additionally, <span class="spell_icon_span"><img alt="Vivify Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/ability_monk_vivify.jpg"/> <span class="spell" data-wowhead="spell=116670">Vivify</span></span> / <span class="spell_icon_span"><img alt="Sheilun's Gift Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/inv_staff_2h_artifactshaohao_d_01.jpg"/> <span class="spell" data-wowhead="spell=399491">Sheilun's Gift</span></span> no longer
+generate vitality and instead will <em>always</em> withdraw vitality, 
+increasing their healing by up to 100%.</p>
+<div class="heading_container heading_number_3"><span>2.9.</span> <h3 id="rotational-changes">Rotational Changes</h3></div>
+<p>Moment to moment gameplay has changed very little, but minutia of the spec has
+been simplified. We still want to achieve a high uptime and spread of <span class="spell_icon_span"><img alt="Renewing Mist Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/ability_monk_renewingmists.jpg"/> <span class="spell" data-wowhead="spell=115151">Renewing Mist</span></span>
+as well as look to set up frequent <span class="spell_icon_span"><img alt="Invoke Yu'lon, the Jade Serpent Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/ability_monk_dragonkick.jpg"/> <span class="spell" data-wowhead="spell=322118">Invoke Yu'lon, the Jade Serpent</span></span> windows. Mana 
+is more sparse even though the raw mana return from <span class="spell_icon_span"><img alt="Mana Tea Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/monk_ability_cherrymanatea.jpg"/> <span class="spell" data-wowhead="spell=197908">Mana Tea</span></span> was buffed,
+it no longer reduces the mana cost of your spells.</p>
+<div class="heading_container heading_number_3"><span>2.10.</span> <h3 id="utility-changes">Utility Changes</h3></div>
+<p>Midnight has brought a massive reduction in defensiveness across the board, and
+Mistweaver is no exception. <span class="spell_icon_span"><img alt="Diffuse Magic Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/spell_monk_diffusemagic.jpg"/> <span class="spell" data-wowhead="spell=1243287">Diffuse Magic</span></span> was reworked and now instead of
+being a damage reduction cooldown, instead causes <span class="spell_icon_span"><img alt="Fortifying Brew Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/ability_monk_fortifyingale_new.jpg"/> <span class="spell" data-wowhead="spell=388917">Fortifying Brew</span></span> to dispel
+a magic effect on you. <span class="spell_icon_span"><img alt="Bounce Back Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/ability_butcher_heavyhanded.jpg"/> <span class="spell" data-wowhead="spell=389577">Bounce Back</span></span> was also removed, which accounted for a substantial
+amount of our durability. That being said, we are still one of the tankiest healers in 
+the game; we retained most of our damage reduction talents and gained a few bonuses
+to the amount of healing we receive.</p>
+</div>
+</div>
+<div class="heading_container heading_number_2"><span>3.</span> <h2 id="basics-of-mistweaver-monk-gameplay">Basics of Mistweaver Monk Gameplay</h2></div>
+<p>Like all healers, a Mistweaver needs to have a solid understanding of their
+spells so that they know which one to use in any given context. Unlike DPS, who
+can follow a rotation or priority queue, Healers are much more contextual.</p>
+<p>Your aim needs to be maximizing efficient casts to squeeze the most healing
+out of your Mana bar. A high uptime and coverage of <span class="spell_icon_span"><img alt="Renewing Mist Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/ability_monk_renewingmists.jpg"/> <span class="spell" data-wowhead="spell=115151">Renewing Mist</span></span> is
+ideal is almost every situation for a Mistweaver as it is the driver for an
+enormous swath of our healing. You should be looking to use your cooldowns such
+as <span class="spell_icon_span"><img alt="Invoke Yu'lon, the Jade Serpent Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/ability_monk_dragonkick.jpg"/> <span class="spell" data-wowhead="spell=322118">Invoke Yu'lon, the Jade Serpent</span></span>, <span class="spell_icon_span"><img alt="Invoke Chi-Ji, the Red Crane Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/inv_pet_cranegod.jpg"/> <span class="spell" data-wowhead="spell=325197">Invoke Chi-Ji, the Red Crane</span></span> and
+<span class="spell_icon_span"><img alt="Revival Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/spell_monk_revival.jpg"/> <span class="spell" data-wowhead="spell=115310">Revival</span></span> as frequently as the fight allows, as these large cooldowns
+generally result in the strongest throughput (and by proxy mana efficiency)
+that our kit has to offer. Lastly, to keep up with your mana consumption, you
+should be mindful to use <span class="spell_icon_span"><img alt="Mana Tea Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/monk_ability_cherrymanatea.jpg"/> <span class="spell" data-wowhead="spell=197908">Mana Tea</span></span> enough as to not overcap your stacks.</p>
+<p>The backbone of Mistweaver Monk can be condensed into the following ideas.</p>
+<ul>
+<li><img alt="" src="//static.icy-veins.com/images/wow/large_icons/ability_monk_renewingmists.jpg" style="border-radius: 50%;vertical-align:-10%;outline:1px solid #F2DD86" width="20"/> <strong style="color:#F2DD86">Renewing Mist is Life</strong><br/> 
+  An enormous swath of Mistweaver's kit revolves around <span class="spell_icon_span"><img alt="Renewing Mist Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/ability_monk_renewingmists.jpg"/> <span class="spell" data-wowhead="spell=115151">Renewing Mist</span></span>.
+  It's a powerful HoT all on its own, and it enables your bread and butter <span class="spell_icon_span"><img alt="Vivify Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/ability_monk_vivify.jpg"/> <span class="spell" data-wowhead="spell=116670">Vivify</span></span>
+  to hit additional targets. Make sure to cast this ability as close to on cooldown
+  as possible to ensure proper coverage on your group.</li>
+<li><img alt="" src="//static.icy-veins.com/images/wow/large_icons/ability_monk_risingsunkick.jpg" style="border-radius: 50%;vertical-align:-10%;outline:1px solid #F2DD86" width="20"/> <strong style="color:#F2DD86">You are a Melee Class</strong><br/>
+  While Mistweaver can cast and do the majority of its rotation from ranged, in 
+  terms of targeting for boss mechanics, the game will treat you as melee. It's important
+  to take advantage of that to leave room for your ranged players. Ability targeting is 
+  more nuanced than that, but <em>generally</em> you will be immune to ranged only
+  mechanics unless they specifically target healers.</li>
+<li><img alt="" src="//static.icy-veins.com/images/wow/large_icons/monk_ability_cherrymanatea.jpg" style="border-radius: 50%;vertical-align:-10%;outline:1px solid #F2DD86" width="20"/> <strong style="color:#F2DD86">Don't Forget Mana Tea!</strong><br/>
+  Mistweavers have active mana regeneration: spending mana generates <span class="spell_icon_span"><img alt="Mana Tea Icon" class="spell_icon" src="//static.icy-veins.com/images/wow/large_icons/monk_ability_cherrymanatea.jpg"/> <span class="spell" data-wowhead="spell=197908">Mana Tea</span></span>
+  stacks and consuming Mana Tea stacks generates mana. However Mana Tea only stacks
+  up to 20 and it is easy to forget to use Mana Tea if you aren't low on mana!
+  Ensuring that you're using Mana Tea before you cap will ensure you don't run 
+  OOM later on.</li>
+</ul>
+<div class="cta-block__wrapper-new">
+<div class="cta-block__bg" style="background-image: url('//static.icy-veins.com/images/wow/spec-icons/talent-tree-bg/monk/mistweaver.webp')"></div>
+<div class="cta-block__content">
+<div class="cta-block__brand"><img alt="Icy Veins - Check out these guides for the most up-to-date Talents and Rotations on Icy Veins!" src="//static.icy-veins.com/images/common/logo-mobile.png"/></div>
+<img alt="Mistweaver Monk - Check out these guides for the most up-to-date Talents and Rotations on Icy Veins!" class="cta-block__icon" src="//static.icy-veins.com/images/wow/spec-icons/round-with-border/monk/mistweaver.png"/>
+<div class="cta-block__info">
+<div class="cta-block__info-note"><i class="ri-refresh-line"></i>Combat Information</div>
+<div class="cta-block__info-header">Talents and Rotations</div>
+<div class="cta-block__info-description">Check out these guides for the most up-to-date Talents and Rotations on Icy Veins!</div>
+</div>
+</div>
+<div class="cta-block__buttons"><a href="//www.icy-veins.com/wow/mistweaver-monk-pve-healing-spec-builds-talents">Talents<i class="ri-arrow-right-double-line"></i></a><a href="//www.icy-veins.com/wow/mistweaver-monk-pve-healing-rotation-cooldowns-abilities">Rotation<i class="ri-arrow-right-double-line"></i></a></div>
+</div>
+<div class="heading_container heading_number_2"><span>4.</span> <h2 id="how-to-gear-up-as-a-specspec-specclass">How to Gear Up as a Mistweaver Monk</h2></div>
+<p>While we always recommend simming yourself for ideal results, we do provide a
+dedicated Mistweaver gearing page. We currently cover recommendations for
+Season One gear to start off on the right foot for the release of endgame
+Midnight content. Once you've picked up some gear, you'll need the appropriate consumables,
+gems, and enchants to go with those new items.</p>
+<div class="cta-block__wrapper-new">
+<div class="cta-block__bg" style="background-image: url('//static.icy-veins.com/images/wow/spec-icons/talent-tree-bg/monk/mistweaver.webp')"></div>
+<div class="cta-block__content">
+<div class="cta-block__brand"><img alt="Icy Veins - Looking for more information on how to gear your character? We have you covered with these two guides!" src="//static.icy-veins.com/images/common/logo-mobile.png"/></div>
+<img alt="Mistweaver Monk - Looking for more information on how to gear your character? We have you covered with these two guides!" class="cta-block__icon" src="//static.icy-veins.com/images/wow/spec-icons/round-with-border/monk/mistweaver.png"/>
+<div class="cta-block__info">
+<div class="cta-block__info-note"><i class="ri-refresh-line"></i>Itemization</div>
+<div class="cta-block__info-header">Gearing and Enchants</div>
+<div class="cta-block__info-description">Looking for more information on how to gear your character? We have you covered with these two guides!</div>
+</div>
+</div>
+<div class="cta-block__buttons"><a href="//www.icy-veins.com/wow/mistweaver-monk-pve-healing-gear-best-in-slot">Gear<i class="ri-arrow-right-double-line"></i></a><a href="//www.icy-veins.com/wow/mistweaver-monk-pve-healing-gems-enchants-consumables">Enchants<i class="ri-arrow-right-double-line"></i></a></div>
+</div>
+<div class="inline-author-block">
+<div class="inline-author-block_header">
+<div class="inline-author-block_avatars">
+<div class="inline-author-block_avatar">
+<img alt="Dhaubbs" src="//static.icy-veins.com/images/common/author-icons/dhaubbs.jpg"/>
+</div>
+</div>
+<div class="inline-author-block_info">
+<div class="inline-author-block_username"><span style="color:#fff;">Dhaubbs</span></div>
+<div class="inline-author-block_role">Guide Author</div>
+</div>
+<div class="inline-author-block_socials">
+<span>Follow Dhaubbs</span>
+<div class="box_title_extra">
+<a href="https://www.discord.gg/peakofserenity" rel="nofollow">
+<span class="box_title_extra_discord"></span>
+</a>
+<a href="https://twitter.com/Dhaubbs" rel="nofollow">
+<span class="box_title_extra_twitter"></span>
+</a>
+<a href="https://www.twitch.tv/dhaubbs" rel="nofollow">
+<span class="box_title_extra_twitch"></span>
+</a>
+<a href="https://www.youtube.com/channel/UCB4mWBDTMa9OLYesVhLnQ2Q" rel="nofollow">
+<span class="box_title_extra_youtube"></span>
+</a>
+</div>
+</div>
+</div>
+<div class="inline-author-block_content">
+<p>This guide has been written by <a href="https://raider.io/characters/us/illidan/Dhaubbsii" rel="nofollow">Dhaubbs</a>,
+        a Mistweaver Monk theorycrafter, and founder of the once World 4th guild <a href="https://x.com/bigdumbgaming" rel="nofollow">Big Dumb Guild (BDG)</a> on Illidan-US.
+        You can follow him on <a href="https://x.com/Dhaubbs" rel="nofollow">Twitter</a>, <a href="https://www.twitch.tv/dhaubbs" rel="nofollow">Twitch</a>, and
+        <a href="https://www.youtube.com/channel/UCB4mWBDTMa9OLYesVhLnQ2Q" rel="nofollow">YouTube</a>.</p>
+</div>
+</div>
+<div class="heading_container heading_number_2"><span>5.</span> <h2 id="changelog">Changelog</h2></div>
+
+<section class="internal-links" data-astro-cid-3qwnrlzf=""><div class="internal-links__block" data-astro-cid-3qwnrlzf=""><h3 class="internal-links__heading" data-astro-cid-3qwnrlzf="">In The Same Category</h3><div class="internal-links__grid" data-astro-cid-3qwnrlzf=""><a class="internal-links__card" data-astro-cid-3qwnrlzf="" href="/wow/mistweaver-monk-pve-healing-stat-priority"><img alt="Mistweaver Monk Stats" class="internal-links__image" data-astro-cid-3qwnrlzf="" loading="lazy" src="//static.icy-veins.com/images/wow/internal-links/mistweaver-monk.jpg"/><span class="internal-links__title" data-astro-cid-3qwnrlzf="">Mistweaver Monk Stats</span></a><a class="internal-links__card" data-astro-cid-3qwnrlzf="" href="/wow/mistweaver-monk-pve-healing-easy-mode"><img alt="Mistweaver Monk Easy Mode" class="internal-links__image" data-astro-cid-3qwnrlzf="" loading="lazy" src="//static.icy-veins.com/images/wow/internal-links/mistweaver-monk.jpg"/><span class="internal-links__title" data-astro-cid-3qwnrlzf="">Mistweaver Monk Easy Mode</span></a><a class="internal-links__card" data-astro-cid-3qwnrlzf="" href="/wow/mistweaver-monk-pve-healing-spec-builds-talents"><img alt="Mistweaver Monk Talents" class="internal-links__image" data-astro-cid-3qwnrlzf="" loading="lazy" src="//static.icy-veins.com/images/wow/internal-links/mistweaver-monk.jpg"/><span class="internal-links__title" data-astro-cid-3qwnrlzf="">Mistweaver Monk Talents</span></a><a class="internal-links__card" data-astro-cid-3qwnrlzf="" href="/wow/mistweaver-monk-pve-healing-gear-best-in-slot"><img alt="Mistweaver Monk Gear" class="internal-links__image" data-astro-cid-3qwnrlzf="" loading="lazy" src="//static.icy-veins.com/images/wow/internal-links/mistweaver-monk.jpg"/><span class="internal-links__title" data-astro-cid-3qwnrlzf="">Mistweaver Monk Gear</span></a><a class="internal-links__card" data-astro-cid-3qwnrlzf="" href="/wow/mistweaver-monk-pve-healing-spell-summary"><img alt="Mistweaver Monk Spell List and Glossary" class="internal-links__image" data-astro-cid-3qwnrlzf="" loading="lazy" src="//static.icy-veins.com/images/wow/internal-links/mistweaver-monk.jpg"/><span class="internal-links__title" data-astro-cid-3qwnrlzf="">Mistweaver Monk Spell List and Glossary</span></a><a class="internal-links__card" data-astro-cid-3qwnrlzf="" href="/wow/mistweaver-monk-pve-healing-rotation-cooldowns-abilities"><img alt="Mistweaver Monk Rotation" class="internal-links__image" data-astro-cid-3qwnrlzf="" loading="lazy" src="//static.icy-veins.com/images/wow/internal-links/mistweaver-monk.jpg"/><span class="internal-links__title" data-astro-cid-3qwnrlzf="">Mistweaver Monk Rotation</span></a></div></div></section> <div class="back-to-top" data-astro-cid-c4zgazz7=""> <button data-astro-cid-c4zgazz7="" id="back-to-top-btn"> <i class="ri-arrow-up-s-line" data-astro-cid-c4zgazz7=""></i> <span data-astro-cid-c4zgazz7="">BACK TO TOP</span> </button> </div> </div> </div> </main>  </body></html> 
