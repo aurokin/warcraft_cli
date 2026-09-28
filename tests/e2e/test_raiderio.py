@@ -16,6 +16,7 @@ that quietly stopped being wired cannot stay green by returning everything.
 from __future__ import annotations
 
 import shlex
+import time
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -733,6 +734,16 @@ def test_raid_leaderboard_returns_ranked_guilds_with_profile_urls(current_raid: 
     _assert_sampled_provenance(result)
 
 
+def _get_past_upstream_blips(client: httpx.Client, url: str, attempts: int = 3) -> httpx.Response:
+    """GET that retries raider.io's own 5xx (a 504 from its edge is an outage, not an answer) like ``run_retrying``."""
+    for attempt in range(1, attempts + 1):
+        response = client.get(url)
+        if response.status_code < 500 or attempt == attempts:
+            return response
+        time.sleep(2.0 * attempt)
+    raise AssertionError("unreachable")
+
+
 def test_the_raid_rankings_citation_resolves_to_a_real_page(current_raid: str) -> None:
     """Fetch the citation instead of re-deriving it: the URL layout is this CLI's own invention.
 
@@ -746,8 +757,8 @@ def test_the_raid_rankings_citation_resolves_to_a_real_page(current_raid: str) -
     citation = result.data["citations"]["leaderboard_urls"][0]
 
     with httpx.Client(timeout=30.0, follow_redirects=True) as client:
-        served = client.get(citation)
-        control = client.get(citation.replace(f"/{current_raid}/", "/no-such-raid-zzz/"))
+        served = _get_past_upstream_blips(client, citation)
+        control = _get_past_upstream_blips(client, citation.replace(f"/{current_raid}/", "/no-such-raid-zzz/"))
     assert served.status_code == 200, f"{citation} -> {served.status_code}"
     assert control.status_code != 200, "an unknown raid must not answer 200, or the check above proves nothing"
 

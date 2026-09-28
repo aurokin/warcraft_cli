@@ -1,6 +1,8 @@
 """Live parser canaries for pinned Wowhead entity pages and the news listing (AUR-359).
 
-``tests/conftest.py`` skips every ``live``-marked test unless ``WOWHEAD_LIVE_TESTS`` is set.
+``tests/conftest.py`` skips every ``live``-marked test unless ``WOWHEAD_LIVE_TESTS`` is set. Pages are
+fetched with the client the CLI itself uses: Wowhead answers httpx's default user agent with 403
+from some networks (GitHub's runners), which would fail the canary for a reason the CLI never meets.
 """
 
 from __future__ import annotations
@@ -9,8 +11,8 @@ import json
 import time
 from datetime import UTC, datetime, timedelta
 
-import httpx
 import pytest
+from warcraft_api.http import build_client
 from wowhead_cli.entity_types import suggestion_entity_type_from_type_id
 from wowhead_cli.expansion_profiles import (
     build_entity_url,
@@ -42,7 +44,7 @@ def _fetch_entity_html(canary: ParserCanary) -> tuple[str, str, float]:
     profile = resolve_expansion(canary.expansion)
     url = build_entity_url(profile, canary.entity_type, canary.entity_id)
     started = time.perf_counter()
-    with httpx.Client(timeout=25.0, follow_redirects=True) as client:
+    with build_client(timeout=25.0) as client:
         response = client.get(url)
         latency_ms = (time.perf_counter() - started) * 1000
         response.raise_for_status()
@@ -73,7 +75,7 @@ def test_live_wowhead_parser_canary_page(canary: ParserCanary) -> None:
 
 
 def _fetch(url: str) -> str:
-    with httpx.Client(timeout=25.0, follow_redirects=True) as client:
+    with build_client(timeout=25.0) as client:
         response = client.get(url)
         response.raise_for_status()
         return response.text
@@ -127,7 +129,7 @@ def test_live_suggestion_type_ids_still_mean_what_the_routing_table_says() -> No
     """A renumbered `type` would mislabel entities and emit wrong follow-up URLs, silently."""
     # Four queries so the check reaches more than the handful of types one query happens to return.
     seen: dict[str, str] = {}
-    with httpx.Client(timeout=25.0, follow_redirects=True) as client:
+    with build_client(timeout=25.0) as client:
         for index, query in enumerate(("thunderfury", "un'goro", "valorstones", "fury warrior guide")):
             if index:
                 time.sleep(3)
