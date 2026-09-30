@@ -10,8 +10,8 @@
   vars are cleared), so no test reads your config, credentials, caches or SimC checkout.
 - Real-binary SimC tests: `WARCRAFT_SIMC_TESTS_REPO=<simc checkout> pytest tests/test_simc_real_binary.py`
   (skipped without it; never reads the configured checkout).
-- Local CI parity: `make check` = lint + typecheck + import boundaries + complexity gate + dead code
-  + `make coverage` (the fast tests with a coverage floor).
+- Local CI parity: `make check` = lockfile check (`uv lock --check`) + lint + typecheck + import
+  boundaries + complexity gate + dead code + `make coverage` (the fast tests with a coverage floor).
 - End-to-end journeys: `make test-e2e` runs `tests/e2e/` through the installed binaries against
   real providers with the keys in `~/.config/warcraft/providers`. Skips are failures unless
   excluded via `WARCRAFT_E2E_SKIP`. See `docs/architecture/E2E_TESTING.md`.
