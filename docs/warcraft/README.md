@@ -43,7 +43,9 @@ warcraft --expansion wotlk resolve "thunderfury"
 per-provider payloads; each brief row keeps the provider's `follow_up.command` as
 `follow_up_command`. `--compact` is the global output flag only, and it truncates long prose strings in
 any payload; the two no longer share a name. `--brief` never hides a provider failure:
-`failed_providers`, `failed_provider_count`, and `answered_provider_count` stay in both shapes.
+`failed_providers`, `failed_provider_count`, and `answered_provider_count` stay in both shapes, and
+so does `provider_warnings` (`[{provider, key, warning}]`, every `*_warning` a provider put in its
+provenance, such as Icy Veins' stale-sitemap warning).
 
 ## Composite commands
 

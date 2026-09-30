@@ -122,7 +122,8 @@ alongside the registry `status`.
 Fanout failure rules:
 - `failed_providers`, `failed_provider_count`, and `answered_provider_count` are always present, in
   both the default and the `--brief` shape, so a dead fanout is never indistinguishable from an
-  empty one
+  empty one; `provider_warnings` likewise lifts every `*_warning` in a provider's provenance out of
+  the per-provider rows `--brief` drops
 - a provider row's `answered` says whether the provider actually looked the query up. An
   explicit-report-only provider (Warcraft Logs) answers free text with a locally built hint and no
   rows, so it is `ok` but not `answered`, and `answered_provider_count` does not count it

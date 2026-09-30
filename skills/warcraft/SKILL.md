@@ -12,6 +12,8 @@ Use `warcraft` first when the caller does not already know which provider they n
 - Source unclear:
   - `warcraft resolve "<query>"`
   - if unresolved: `warcraft search "<query>"`
+  - read `data.failed_providers` and `data.provider_warnings` on both: a provider that failed or
+    warned (for example Icy Veins' stale sitemap) may be missing results
 - Source known:
   - `warcraft <provider> ...`
 - Version-specific request:

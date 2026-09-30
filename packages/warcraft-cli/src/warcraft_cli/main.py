@@ -1785,13 +1785,24 @@ def _unresolved_next_steps(ranked: list[dict[str, Any]], *, resolved: bool) -> d
     }
 
 
+def _provider_warnings(providers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Every ``*_warning`` a provider put in its provenance (Icy Veins' stale-sitemap warning), kept under ``--brief``."""
+    return [
+        {"provider": row.get("provider"), "key": key, "warning": value}
+        for row in providers
+        for key, value in as_dict(as_dict(row.get("payload")).get("provenance")).items()
+        if key.endswith("_warning") and isinstance(value, str) and value
+    ]
+
+
 def _fanout_health(providers: list[dict[str, Any]]) -> dict[str, Any]:
-    """Answered/failed counts plus the failure rows, so partial and total failure are never silent."""
+    """Answered/failed counts, failure rows and provider warnings, so nothing a provider flagged is silent."""
     failed_rows = _failed_provider_rows(providers)
     return {
         "answered_provider_count": sum(1 for row in providers if row["answered"]),
         "failed_provider_count": len(failed_rows),
         "failed_providers": failed_rows,
+        "provider_warnings": _provider_warnings(providers),
     }
 
 

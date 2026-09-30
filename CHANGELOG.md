@@ -85,6 +85,7 @@ output flags, and many commands that used to answer wrong with `ok: true` now an
 
 ### Fixed
 
+- `warcraft search`/`resolve --brief` no longer drop provider warnings such as Icy Veins' stale-sitemap warning: `data.provider_warnings` lists every `*_warning` a provider reported, in both shapes.
 - `icy-veins resolve` answers a spec query with the spec's guide again after Icy Veins added a hero talents page and a Mythic+ page per spec, which tied it (`frost mage`, `fury warrior guide`, `survival hunter guide` came back unresolved).
 - `warcraft talent-packet`, `talent-describe` and `simc validate-talent-transport` reach `validated` for hero-tree builds instead of stopping at `simc_trait_resolution_incomplete`.
 - `warcraft guild` no longer paired an expired raid with another raid's ranks or labelled every failure `guild_not_found`. `guide-compare-query` no longer leaves an empty `manifest.json` behind, and `resolve "fury warrior guide"` selects the current Wowhead guide again.

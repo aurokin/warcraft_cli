@@ -885,6 +885,30 @@ def test_warcraft_search_brief_rows_keep_each_providers_follow_up_command(monkey
     assert rows["method"]["follow_up_command"] == "method guide thunderfury-guide"
 
 
+def test_warcraft_search_and_resolve_keep_provider_warnings_under_brief(monkeypatch) -> None:
+    """`--brief` empties `providers`, so a provider's provenance warning (Icy Veins' stale sitemap) is lifted out."""
+    stale_row = {
+        "slug": "thunderfury-guide",
+        "name": "Thunderfury Guide",
+        "url": "https://www.icy-veins.com/wow/thunderfury-guide",
+        "content_family": None,
+        "sitemap_lastmod": "2020-01-01",
+    }
+    monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.sitemap_guides", lambda self: [stale_row])
+    monkeypatch.setattr("method_cli.main.MethodClient.sitemap_guides", lambda self: [])
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.search", lambda self, *, term, kind=None: {"matches": []})
+    monkeypatch.setattr("warcraft_wiki_cli.main.WarcraftWikiClient.search_articles", lambda self, query, *, limit: (0, []))
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.search_suggestions", lambda self, query: {"search": query, "results": []})
+
+    for command in ("search", "resolve"):
+        result = runner.invoke(warcraft_app, [command, "thunderfury", "--brief"])
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.stdout)["data"]
+        assert data["providers"] == []
+        warnings = {(row["provider"], row["key"]) for row in data["provider_warnings"]}
+        assert warnings == {("icy-veins", "sitemap_warning")}, (command, data["provider_warnings"])
+
+
 def test_warcraft_search_fans_out_across_providers(monkeypatch) -> None:
     def fake_search(self, query: str):  # noqa: ANN001
         return {
