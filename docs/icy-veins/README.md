@@ -182,7 +182,7 @@ separately.
 - `tests/test_icy_veins_cli.py` - parsing, ranking, command contracts, transport error envelopes
 - `tests/test_icy_veins_recorded_fixtures.py` - captured real pages (pre-redesign and Astro layouts)
   plus the slug-to-family classification table
-- `tests/e2e/test_icy_veins.py` - live end-to-end journeys, run with `make test-e2e E2E_ARGS="tests/e2e/test_icy_veins.py"`
+- `tests/e2e/test_icy_veins.py` - live end-to-end journeys, run with `make test-e2e E2E_PATHS="tests/e2e/test_icy_veins.py"`
 
 ## Not in scope
 

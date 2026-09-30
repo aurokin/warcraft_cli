@@ -22,7 +22,7 @@ pytest -q tests/test_wowhead_schema_snapshots.py
 
 ```bash
 make test-canary
-make test-e2e E2E_ARGS="tests/e2e/test_wowhead.py"
+make test-e2e E2E_PATHS="tests/e2e/test_wowhead.py"
 ```
 
 Pinned parser canaries live in `tests/fixtures/wowhead_canaries.py`. Required JSON keys for core commands are in `tests/fixtures/wowhead_output_schemas.py`.

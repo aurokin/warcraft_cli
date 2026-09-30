@@ -73,7 +73,7 @@ filtered result against the exact rows that bound keeps. Not every such flag has
 
 ```bash
 make test-e2e                                   # everything, about ten minutes
-make test-e2e E2E_ARGS="tests/e2e/test_wowhead.py"
+make test-e2e E2E_PATHS="tests/e2e/test_wowhead.py"
 make test-e2e E2E_ARGS="-k cooldown"
 WARCRAFT_E2E_SKIP=curseforge make test-e2e
 ```

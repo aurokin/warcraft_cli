@@ -39,8 +39,11 @@ test-fast:
 # credentials in ~/.config/warcraft/providers. CI runs only the keyless journey files, weekly
 # (.github/workflows/live-contracts.yml). Exclude providers with
 # WARCRAFT_E2E_SKIP=curseforge; pass extra pytest args with E2E_ARGS="-k wowhead".
+# E2E_PATHS narrows the journey files (pytest 9 runs a whole directory even when files inside it are
+# also named, so a file list must replace tests/e2e, not follow it); E2E_ARGS passes pytest options.
+E2E_PATHS ?= tests/e2e
 test-e2e:
-	WARCRAFT_E2E=1 $(PYTEST) -q -m e2e tests/e2e --durations=25 $(E2E_ARGS)
+	WARCRAFT_E2E=1 $(PYTEST) -q -m e2e $(E2E_PATHS) --durations=25 $(E2E_ARGS)
 
 check: lock-check lint typecheck lint-boundaries complexity-gate deadcode coverage
 

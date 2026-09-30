@@ -9,7 +9,7 @@ the verified and unverified regions. The tier stays experimental because the com
 thin, not because the data is suspect. Re-verify with:
 
 ```bash
-make test-e2e E2E_ARGS="tests/e2e/test_blizzard.py"
+make test-e2e E2E_PATHS="tests/e2e/test_blizzard.py"
 ```
 
 ## What It Does
