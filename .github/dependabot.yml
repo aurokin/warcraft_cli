@@ -1,9 +1,9 @@
 version: 2
 
 updates:
-  # Covers the root pyproject.toml dependency ranges (and uv.lock once
-  # Dependabot's uv support is enabled for this repository).
-  - package-ecosystem: "pip"
+  # The uv ecosystem updates pyproject.toml ranges and uv.lock together; the pip ecosystem
+  # changed only pyproject.toml, so CI (uv sync --frozen) kept testing the old versions.
+  - package-ecosystem: "uv"
     directory: "/"
     schedule:
       interval: "weekly"

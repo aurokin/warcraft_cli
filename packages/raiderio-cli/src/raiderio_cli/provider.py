@@ -58,7 +58,7 @@ def raiderio_envelope(*, command: str, kind: str, payload: dict[str, Any]) -> En
     envelope; the rest land in ``data``.
     """
     data = {key: value for key, value in payload.items() if key not in ENVELOPE_KEYS}
-    provenance = {key: payload[key] for key in ("freshness", "citations") if key in payload}
+    provenance: dict[str, Any] = {key: payload[key] for key in ("freshness", "citations") if key in payload}
     return success_envelope(
         provider=PROVIDER_NAME,
         command=command,
