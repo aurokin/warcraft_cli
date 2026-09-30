@@ -32,6 +32,7 @@ from warcraft_content.article_discovery import (
 from warcraft_content.article_provider_cli import (
     build_article_resolve_response,
     build_article_search_response,
+    guide_redirect,
     unsupported_guide_surface_message,
 )
 from warcraft_content.guide_analysis import extract_guide_analysis_surfaces, merge_guide_analysis_surfaces
@@ -250,7 +251,11 @@ def _fetch_guide_page(client: MethodClient, guide_ref: str) -> dict[str, Any]:
     except ValueError as exc:
         raise ProviderError("parse_failed", f"Could not parse the Method guide page for {guide_ref}: {exc}") from exc
     _reject_unsupported_surface(payload)
-    return _require_article_content(payload)
+    payload = _require_article_content(payload)
+    payload["redirect"] = guide_redirect(
+        provider_label="Method", requested=guide_ref_parts(guide_ref)[0], served=payload["guide"]["slug"]
+    )
+    return payload
 
 
 def _preview_block(rows: list[dict[str, Any]], fetch_more_command: str) -> dict[str, Any]:
@@ -269,6 +274,7 @@ def _guide_summary_payload(page_payload: dict[str, Any]) -> dict[str, Any]:
     fetch_more_command = shlex.join(["method", "guide-full", guide["slug"]])
     return {
         "guide": guide,
+        "redirect": page_payload["redirect"],
         "page": dict(page_payload["page"]),
         "navigation": {
             "count": len(navigation),
@@ -363,6 +369,7 @@ def _guide_pages_payload(client: MethodClient, guide_ref: str) -> dict[str, Any]
     analysis_surfaces = merge_guide_analysis_surfaces(pages)
     return {
         "guide": guide,
+        "redirect": initial["redirect"],
         "page": dict(initial["page"]),
         "navigation": {
             "count": len(nav_items),
@@ -429,6 +436,7 @@ def guide_export(guide_ref: str, *, out: Path | None = None) -> Envelope:
     manifest = write_article_bundle(pages_payload, provider=PROVIDER_NAME, export_dir=export_dir)
     payload = {
         "guide": pages_payload["guide"],
+        "redirect": pages_payload["redirect"],
         "counts": manifest["counts"],
         "output_dir": str(export_dir),
         "manifest": manifest,

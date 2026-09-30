@@ -104,6 +104,7 @@ narrower, **experimental** is thin and may change.
 - Use `warcraft guide-compare-query` when you want the wrapper to resolve, export, and compare guide candidates conservatively across supported guide providers.
 - `guide-compare-query` may use a provider search fallback only when the top guide result is clearly decisive; it should not guess across weak or ambiguous guide candidates.
 - `guide-compare-query` should reuse prior orchestrated bundles only through explicit freshness rules like `--max-age-hours` and `--force-refresh`, not through invisible cache-like behavior.
+- A `guide-compare-query` `provider_results` row with a non-null `redirect` means that provider served another guide than the candidate it resolved (a retired page); the comparison uses the served guide.
 - Steer `guide-compare-query` orchestration with:
   - `--provider <name>` repeatable, to restrict the run to `wowhead`, `method`, or `icy-veins`
   - `--out-root <dir>` to choose where the orchestrated bundles are written (default `<XDG data dir>/warcraft/guide_compare/<query-slug>`, never the current directory)

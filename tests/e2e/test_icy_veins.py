@@ -364,10 +364,31 @@ def _first_guide_of_family(query: str, family: str) -> tuple[str, Result]:
         if row["metadata"]["content_family"] != family:
             continue
         guide = run(BINARY, "guide", str(row["id"]))
-        if guide.data["guide"]["slug"] == row["id"]:
+        if guide.data["redirect"] is None:
             return str(row["id"]), guide
-        redirected.append(f"{row['id']} -> {guide.data['guide']['slug']}")
+        redirected.append(f"{row['id']} -> {guide.data['redirect']['served']}")
     raise AssertionError(f"Icy Veins search for {query!r} returned no {family} it still serves: {redirected}\n{result.describe()}")
+
+
+# Retired 2026-09-29: Icy Veins now serves the Mistweaver healing guide for this URL.
+RETIRED_GUIDE = "mistweaver-monk-legion-remix-guide"
+
+
+def test_guide_reports_when_icy_veins_serves_another_guide(require) -> None:
+    """``data.redirect`` is set exactly when the served guide is not the one asked for.
+
+    Checked both ways on a retired page and on a current one, so a product that never reports a
+    redirect, or always does, fails whichever way Icy Veins treats the retired URL later.
+    """
+    require(PROVIDER)
+    for requested in (RETIRED_GUIDE, spec_guide_slug()):
+        result = run(BINARY, "guide", requested)
+        served = result.data["guide"]["slug"]
+        redirect = result.data["redirect"]
+        if served == requested:
+            assert redirect is None, result.describe()
+        else:
+            assert (redirect["requested"], redirect["served"]) == (requested, served), result.describe()
 
 
 @pytest.mark.parametrize(("query", "family", "traversal_scope"), FAMILY_PROBES)

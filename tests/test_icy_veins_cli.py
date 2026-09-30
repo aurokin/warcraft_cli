@@ -1322,3 +1322,19 @@ def test_icy_veins_doctor_never_prints_the_redis_password(monkeypatch, redis_url
 
     assert "PASS" not in result.stdout
     assert json.loads(result.stdout)["data"]["cache"]["redis_url"] == "redis://***@cache.example:6380/2"
+
+
+def test_icy_veins_guide_commands_say_when_the_site_served_another_guide(monkeypatch, tmp_path: Path) -> None:
+    """A retired page redirects (the Legion Remix guide now serves the healing guide); say so, never answer silently."""
+    monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.fetch_guide_page", lambda self, guide_ref: _fake_fetch_guide_page(guide_ref))
+    requested = "mistweaver-monk-legion-remix-guide"
+    for args in (["guide", requested], ["guide-full", requested], ["guide-export", requested, "--out", str(tmp_path / "bundle")]):
+        result = runner.invoke(app, args)
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.stdout)["data"]
+        assert data["redirect"]["requested"] == requested, args
+        assert data["redirect"]["served"] == data["guide"]["slug"] == "mistweaver-monk-pve-healing-guide", args
+        assert "retired" in data["redirect"]["message"], args
+
+    unmoved = runner.invoke(app, ["guide", "mistweaver-monk-pve-healing-guide"])
+    assert json.loads(unmoved.stdout)["data"]["redirect"] is None

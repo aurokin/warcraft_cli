@@ -753,3 +753,18 @@ def test_method_doctor_never_prints_the_redis_password(monkeypatch, redis_url: s
 
     assert "PASS" not in result.stdout
     assert json.loads(result.stdout)["data"]["cache"]["redis_url"] == "redis://***@cache.example:6380/2"
+
+
+def test_method_guide_commands_say_when_the_site_served_another_guide(monkeypatch, tmp_path: Path) -> None:
+    """A guide URL Method redirects elsewhere is reported, never answered as the page asked for."""
+    monkeypatch.setattr("method_cli.main.MethodClient.fetch_guide_page", lambda self, guide_ref: _fake_fetch_guide_page(guide_ref))
+    requested = "mistweaver-monk-remix"
+    for args in (["guide", requested], ["guide-full", requested], ["guide-export", requested, "--out", str(tmp_path / "bundle")]):
+        result = runner.invoke(app, args)
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.stdout)["data"]
+        assert data["redirect"]["requested"] == requested, args
+        assert data["redirect"]["served"] == data["guide"]["slug"] == "mistweaver-monk", args
+
+    unmoved = runner.invoke(app, ["guide", "mistweaver-monk"])
+    assert json.loads(unmoved.stdout)["data"]["redirect"] is None

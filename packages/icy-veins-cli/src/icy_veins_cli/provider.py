@@ -21,7 +21,7 @@ from warcraft_content.article_bundle import (
     write_article_bundle,
 )
 from warcraft_content.article_discovery import merge_article_build_references, merge_article_linked_entities
-from warcraft_content.article_provider_cli import build_article_resolve_response, build_article_search_response
+from warcraft_content.article_provider_cli import build_article_resolve_response, build_article_search_response, guide_redirect
 from warcraft_content.guide_analysis import extract_guide_analysis_surfaces, merge_guide_analysis_surfaces
 from warcraft_core.envelope import Envelope, success_envelope
 from warcraft_core.exit_codes import error_code_for_http_status
@@ -205,6 +205,7 @@ def _guide_summary(page_payload: dict[str, Any]) -> dict[str, Any]:
     fetch_more_command = shlex.join(["icy-veins", "guide-full", guide["slug"]])
     return {
         "guide": guide,
+        "redirect": page_payload["redirect"],
         "page": dict(page_payload["page"]),
         "navigation": {"count": len(navigation), "items": navigation},
         "page_toc": {"count": len(page_toc), "items": page_toc},
@@ -232,7 +233,11 @@ def _fetch_requested_page(client: IcyVeinsClient, guide_ref: str) -> dict[str, A
             page_payload = client.fetch_guide_page(guide_ref)
         except ValueError as exc:
             raise ProviderError("parse_failed", f"Could not parse the Icy Veins guide page for {guide_ref}: {exc}") from exc
-    return _require_article_content(page_payload)
+    page_payload = _require_article_content(page_payload)
+    page_payload["redirect"] = guide_redirect(
+        provider_label="Icy Veins", requested=guide_ref_parts(guide_ref), served=page_payload["guide"]["slug"]
+    )
+    return page_payload
 
 
 def guide(guide_ref: str) -> Envelope:
@@ -318,6 +323,7 @@ def _guide_bundle(client: IcyVeinsClient, guide_ref: str) -> dict[str, Any]:
     analysis_surfaces = merge_guide_analysis_surfaces(pages)
     return {
         "guide": guide_row,
+        "redirect": initial["redirect"],
         "page": dict(initial["page"]),
         "navigation": {"count": len(nav_items), "items": nav_items},
         "pages": [
@@ -365,6 +371,7 @@ def guide_export(guide_ref: str, *, out: Path | None = None) -> Envelope:
         "guide_export",
         {
             "guide": payload["guide"],
+            "redirect": payload["redirect"],
             "output_dir": str(export_dir),
             "counts": manifest["counts"],
             "files": manifest["files"],

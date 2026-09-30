@@ -101,6 +101,11 @@ fetched or parsed is skipped rather than failing the whole bundle, and it is rep
 `data.failed_pages` (`{count, items: [{url, section_slug, error: {code, message}}]}`). Content from
 those pages is missing from the merged sections, entities, build references, and analysis surfaces.
 
+When Icy Veins serves another guide than the one requested (it retires a page by redirecting its URL:
+`mistweaver-monk-legion-remix-guide` serves the healing guide since 2026-09-29), `guide`, `guide-full`
+and `guide-export` set `data.redirect` to `{requested, served, message}`, and everything else in the
+payload describes the served guide. It is `null` when the requested guide was served.
+
 ## Supported guide families
 
 Sitemap discovery and `guide` only accept slugs that classify into a known family. Unclassified WoW

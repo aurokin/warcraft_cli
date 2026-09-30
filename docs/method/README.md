@@ -85,6 +85,10 @@ is skipped rather than failing the whole bundle, and it is reported in `data.fai
 (`{count, items: [{url, section_slug, error: {code, message}}]}`). Content from those pages is
 missing from the merged sections, entities, build references, and analysis surfaces.
 
+When Method serves another guide than the one requested (a redirected URL), `guide`, `guide-full` and
+`guide-export` set `data.redirect` to `{requested, served, message}`, and everything else in the
+payload describes the served guide. It is `null` when the requested guide was served.
+
 `method_cli.provider.PROVIDER` exposes the same `search`, `resolve`, and `doctor` surfaces in
 process, without Typer.
 

@@ -39,3 +39,4 @@
 - tier-list and index-style roots are intentionally excluded
 - a page whose article container no longer matches fails with `parse_failed`; an empty article is never reported as success
 - `guide-full` and `guide-export` skip a navigation page they cannot fetch or parse and list it in `data.failed_pages`
+- when Method serves another guide than the one asked for (a redirected URL), `guide`, `guide-full` and `guide-export` set `data.redirect` to `{requested, served, message}` and everything else describes the served guide; check it before treating the content as the page you asked for. It is `null` otherwise
