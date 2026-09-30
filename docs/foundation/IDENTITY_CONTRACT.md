@@ -97,6 +97,8 @@ Safe shared contract:
 - source kind
 - source notes
 - explicit build-reference packets when a provider page embeds a concrete Wowhead talent-calc URL
+  whose path names a class and one of that class's specs (a classic-era
+  `/classic/talent-calc/<class>/<code>` path names no spec and is not read as one)
 - talent transport packets that preserve raw build evidence plus any exact or validated transport forms
 
 Build identity should usually be `inferred`, `ambiguous`, or `unknown`.

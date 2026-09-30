@@ -57,12 +57,15 @@ filtered result against the exact rows that bound keeps. Not every such flag has
 - **Pins are either permanent or named as regression targets.** Permanent identifiers live in
   `tests/e2e/pins.py` (Thunderfury is item 19019 forever). Report codes, seasons, news slugs, and
   current tier bosses are discovered at run time. Some journeys also pin the exact page a past bug
-  answered wrongly, which can age out: the Wowhead Fury Warrior guide id and achievement 18372 and
-  the three tool-state refs in `test_wowhead.py`, the mistweaver guide refs and monk hero-tree
-  names in `test_wrapper_guides.py`, the Icy Veins mistweaver guide the compact journey in
-  `test_contract.py` reads, and the Icy Veins family probes for The War Within and the Remix event
-  in `test_icy_veins.py`. When upstream retires one, the journey goes red and the pin
-  is updated; it never passes on stale data.
+  answered wrongly, which can age out: the Wowhead Fury Warrior guide id, achievement 18372, the
+  three tool-state refs and the Classic warrior talent-calculator URL in `test_wowhead.py`, the
+  Wowhead item the exact-name resolve journey in `test_wrapper_core.py` names, the mistweaver guide
+  refs and monk hero-tree names in `test_wrapper_guides.py`, the Icy Veins mistweaver guide the
+  compact journey in `test_contract.py` reads, the Icy Veins family probes for The War Within, the
+  Remix event and the Midnight expansion hub in `test_icy_veins.py`, the retired Icy Veins remix
+  guide that `test_icy_veins.py` and `test_wrapper_guides.py` expect to redirect, and the Method
+  spec slugs the shorthand and `frost` journeys in `test_method.py` expect. When upstream retires
+  one, the journey goes red and the pin is updated; it never passes on stale data.
 - **Real caches, isolated.** The session points `XDG_CACHE_HOME` at a temporary directory so
   journeys can assert cache hits without touching `~/.cache`. Config, state, and data roots stay
   real so credentials, saved tokens, guide bundles, and the local SimC checkout resolve exactly
@@ -101,12 +104,13 @@ without printing secrets.
 Every command in `docs/reference/` has at least one journey except the three Warcraft Logs auth
 mutations below, and some commands need an optional input to reach their success path. Six
 commands are deliberately kept off their success path, because a success would change this
-machine:
+machine, and one because no command can find an input that reaches it:
 
 | Command | Coverage and why |
 | --- | --- |
 | `warcraftlogs auth login`, `auth pkce-login`, `auth logout` | no journey at all, not even an error path. Each one rewrites or deletes the saved user token that the private-report journeys depend on, so a success would log you out of your own account mid-run. The read-only `auth status`, `client`, `token`, and `whoami` are covered |
-| `simc sync`, `simc build`, `simc checkout` | error path only. A success would pull, recompile, or clone the SimulationCraft checkout that every other simc journey reads. `build` is reached through its missing-build-dir guard, `sync` through its dirty-worktree and missing-repo guards, `checkout` through a temporary `XDG_DATA_HOME` whose managed root is not a git repo |
+| `simc sync`, `simc build`, `simc checkout` | error path only. A success would pull, recompile, or clone the SimulationCraft checkout that every other simc journey reads. `build` is reached through a missing checkout, `sync` through its dirty-worktree and missing-repo guards, `checkout` through a temporary `XDG_DATA_HOME` whose managed root is not a git repo |
+| `wowhead profiler` | error path only. Profiler lists are user-made and no command lists them, so a live one cannot be discovered at run time; the journey pins a list Wowhead has removed and expects `not_found` with Wowhead's own message. The success path (splitting a list ref into list, region, realm and name) is covered by the fast tests only |
 
 Optional inputs:
 
@@ -121,16 +125,19 @@ Optional inputs:
 
 What a green run does **not** prove:
 
-- **The auth mutations and the SimC update commands never succeed here.** See Coverage.
+- **The auth mutations, the SimC update commands and `wowhead profiler` never succeed here.** See
+  Coverage.
 - **Wowhead's PTR and beta datasets are untested.** Whether a PTR dataset is live is upstream
   state no command can discover, so `--normalize-canonical-to-expansion` and the `ptr` expansion
   profile have no journey; the five classic-era profiles cover expansion routing instead.
-- **Many documented flags have no journey.** About 190 of the roughly 920 option rows in
-  `docs/reference/` appear in no journey, 38 of them on `wowhead`. They include result-shaping
-  filters such as `wowhead guides --updated-after/--updated-before`, `comments --keyword`,
-  `blue-tracker --forum`, `linked-graph --relation`, the Warcraft Logs `--boss-name`,
-  `--source-id`, `--target-id`, `--hostility-type` and `--kill-type` filters, the
-  `encounter-rankings` partition and server filters, and `lorrgs comp-ranking --role`.
+- **Many documented flags have no journey on the command that owns them.** Flag coverage is not
+  counted: a flag string that some journey passes can still be missing from every other command
+  that documents it, so a count of strings found anywhere in `tests/e2e/` overstates coverage.
+  Flags with no journey at all include result-shaping filters such as
+  `wowhead guides --updated-after/--updated-before`, `comments --keyword`, `blue-tracker --forum`,
+  `linked-graph --relation`, the Warcraft Logs `--boss-name`, `--target-id`, `--hostility-type`
+  and `--kill-type` filters, the `encounter-rankings` partition and server filters, and
+  `lorrgs comp-ranking --role`.
 - **Raidbots report parsing is untested against a real report.** The `inspect-report` / `input`
   success path runs only when `WARCRAFT_E2E_RAIDBOTS_REPORT` is set, CI excludes it, and the fast
   tests parse synthetic reports only.
@@ -164,6 +171,10 @@ Open weaknesses a green run does not rule out, beyond the limits above:
   `?realm=` value, so fetching the citation would prove nothing.
 - **Wowhead suggestion type 112** (Companion) has never appeared in a live response, so its label is
   unverified.
+- **Icy Veins search cannot find the current season.** Discovery reads the Icy Veins sitemap, whose
+  newest entry is 2025-10-05, so pages published since are missing from `search` and `resolve`. The
+  `mythic+` journey checks that search says so (`provenance.sitemap_warning` whenever the newest
+  entry is more than 30 days old), not that it finds current pages.
 
 ## CI
 

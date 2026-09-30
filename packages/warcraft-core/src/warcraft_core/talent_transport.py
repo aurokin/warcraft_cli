@@ -5,9 +5,9 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
-from typing import Any, TypeGuard
+from typing import Any
 
-from warcraft_core.identity import normalize_actor_class, normalize_spec_name
+from warcraft_core.identity import is_transport_int, normalize_actor_class, normalize_spec_name
 
 CLASS_ID_BY_ACTOR_CLASS = {
     "warrior": 1,
@@ -61,10 +61,6 @@ CLASS_ENUM_NAME_BY_ACTOR_CLASS = {
     actor_class: actor_class.replace("deathknight", "death_knight").replace("demonhunter", "demon_hunter").upper()
     for actor_class in CLASS_ID_BY_ACTOR_CLASS
 }
-
-
-def _is_transport_int(value: Any) -> TypeGuard[int]:
-    return isinstance(value, int) and not isinstance(value, bool)
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,9 +117,13 @@ class TalentTransportBackend:
 
 
 def tokenize_talent_name(name: str) -> str:
-    text = name.lower().replace("'", "")
-    text = re.sub(r"[^a-z0-9]+", "_", text)
-    return text.strip("_")
+    """Tokenize a talent or hero tree name the way SimC's ``util::tokenize`` does.
+
+    Lowercase, spaces become ``_``, and every character other than a letter, digit, ``_``, ``+``, ``.``
+    or ``%`` is dropped, so "Anti-Magic Zone" is ``antimagic_zone`` and "Shado-Pan" is ``shadopan``.
+    """
+    text = re.sub(r"[^a-z0-9_+.% ]", "", name.strip().lower()).replace(" ", "_")
+    return text.lstrip("_+")
 
 
 def _generated_file(repo_root: Path, relative: str) -> Path:
@@ -279,7 +279,7 @@ def _resolve_transport_rows(
         entry = row.get("entry")
         node_id = row.get("node_id")
         rank = row.get("rank")
-        if not _is_transport_int(entry) or not _is_transport_int(node_id) or not _is_transport_int(rank):
+        if not is_transport_int(entry) or not is_transport_int(node_id) or not is_transport_int(rank):
             unresolved_rows.append({"row": row, "reason": "missing_entry_node_or_rank"})
             continue
         entry_id = int(entry)

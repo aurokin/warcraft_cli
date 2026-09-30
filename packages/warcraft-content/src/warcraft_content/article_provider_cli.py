@@ -58,7 +58,7 @@ def guide_redirect(*, provider_label: str, requested: str, served: str) -> dict[
     the healing guide), and everything else in the payload then describes ``served``, so an agent that
     asked for ``requested`` has to be told rather than left to notice the slug changed.
     """
-    if requested == served:
+    if requested.casefold() == served.casefold():
         return None
     return {
         "requested": requested,

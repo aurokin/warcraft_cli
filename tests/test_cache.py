@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import importlib
 import json
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
+import httpx
 import pytest
+from raiderio_cli.client import RaiderIOClient
 from warcraft_api.cache import (
     CacheTTLConfig,
     FileCacheStore,
@@ -15,8 +19,8 @@ from warcraft_api.cache import (
     inspect_redis_cache,
     load_cache_settings_from_env,
     redacted_redis_url,
-    repair_file_cache,
 )
+from warcraft_wiki_cli.client import WarcraftWikiClient
 from wowhead_cli.wowhead_client import WowheadClient
 
 
@@ -111,34 +115,6 @@ def test_inspect_file_cache_groups_root_level_hashed_entries_under_legacy_namesp
         "legacy_unscoped": {"active": 0, "expired": 1, "invalid": 0, "total": 1}
     }
     assert summary["totals"] == {"active": 0, "expired": 1, "invalid": 0, "total": 1}
-
-
-def test_repair_file_cache_prunes_legacy_unscoped_entries(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    now = 1000.0
-    monkeypatch.setattr("warcraft_api.cache.time.time", lambda: now + 20)
-    legacy_path = tmp_path / ("a" * 64 + ".json")
-    legacy_path.write_text(json.dumps({"expires_at": now + 10, "payload": {}}), encoding="utf-8")
-    namespaced_path = tmp_path / "search_suggestions" / "active.json"
-    namespaced_path.parent.mkdir(parents=True)
-    namespaced_path.write_text(json.dumps({"expires_at": now + 120, "payload": {}}), encoding="utf-8")
-
-    dry_run = repair_file_cache(tmp_path, apply=False, sample_limit=5)
-    assert dry_run == {
-        "mode": "legacy_unscoped",
-        "apply": False,
-        "expired_only": False,
-        "candidates": 1,
-        "removed": 0,
-        "sample_paths": [str(legacy_path)],
-        "truncated": False,
-    }
-    assert legacy_path.exists() is True
-
-    applied = repair_file_cache(tmp_path, apply=True, expired_only=True, sample_limit=5)
-    assert applied["expired_only"] is True
-    assert applied["removed"] == 1
-    assert legacy_path.exists() is False
-    assert namespaced_path.exists() is True
 
 
 def test_clear_file_cache_supports_namespace_and_expired_only(
@@ -321,6 +297,69 @@ def test_entity_response_cache_roundtrips_with_shape_flags(tmp_path: Path) -> No
         linked_entity_preview_limit=0,
     )
     assert changed_shape is None
+    assert (
+        client.get_cached_entity_response(
+            requested_type="item",
+            requested_id=19019,
+            data_env=None,
+            include_comments=False,
+            include_all_comments=True,
+            linked_entity_preview_limit=0,
+        )
+        is None
+    )
+
+
+def _echo_value(request: httpx.Request) -> str | None:
+    params = request.url.params
+    return params.get("q") or params.get("name") or params.get("srsearch")
+
+
+@pytest.mark.parametrize(
+    ("env_prefix", "make_client", "fetch"),
+    [
+        ("WOWHEAD", WowheadClient, lambda client, value: client.search_suggestions(value)["echo"]),
+        (
+            "RAIDERIO",
+            RaiderIOClient,
+            lambda client, value: client.character_profile(region="us", realm="illidan", name=value).payload["echo"],
+        ),
+        ("WARCRAFT_WIKI", WarcraftWikiClient, lambda client, value: client.search_articles(value, limit=5)[1][0]["title"]),
+    ],
+)
+def test_http_cache_keys_include_the_request_params(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    env_prefix: str,
+    make_client: Callable[[], Any],
+    fetch: Callable[[Any, str], str],
+) -> None:
+    """Two requests that differ only in one param must not share a cache entry (file or in-process)."""
+    monkeypatch.setenv(f"{env_prefix}_CACHE_BACKEND", "file")
+    monkeypatch.setenv(f"{env_prefix}_CACHE_DIR", str(tmp_path))
+    requested: list[str | None] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        value = _echo_value(request)
+        requested.append(value)
+        body = {"echo": value, "query": {"searchinfo": {"totalhits": 1}, "search": [{"title": value}]}}
+        return httpx.Response(200, json=body)
+
+    def client_with_transport() -> Any:
+        client = make_client()
+        client._http_client = httpx.Client(transport=httpx.MockTransport(handler))
+        return client
+
+    client = client_with_transport()
+    assert fetch(client, "thunderfury") == "thunderfury"
+    assert fetch(client, "ashkandi") == "ashkandi"
+    assert requested == ["thunderfury", "ashkandi"]
+
+    # A fresh client replays both from the file cache, so the cache was really on above.
+    replay = client_with_transport()
+    assert fetch(replay, "thunderfury") == "thunderfury"
+    assert fetch(replay, "ashkandi") == "ashkandi"
+    assert requested == ["thunderfury", "ashkandi"]
 
 
 def test_entity_response_cache_is_scoped_by_expansion(tmp_path: Path) -> None:
@@ -411,7 +450,7 @@ def test_no_provider_doctor_prints_the_redis_password(monkeypatch, env_prefix: s
 
 
 def test_wowhead_cache_settings_never_print_the_redis_password(monkeypatch) -> None:
-    """Feeds wowhead doctor, cache-inspect, cache-repair and cache-clear (doctor itself probes live)."""
+    """Feeds wowhead doctor, cache-inspect and cache-clear (doctor itself probes live)."""
     from wowhead_cli.provider import cache_settings_payload
 
     monkeypatch.setenv("WOWHEAD_REDIS_URL", "redis://:FAKE@PASS@cache.example:6380/2")

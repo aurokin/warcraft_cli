@@ -11,10 +11,10 @@ It is the concrete companion to:
 ## Distribution Unit
 
 The distribution unit is the root `warcraft` wheel built from the root `pyproject.toml`
-(`make build` / `uv build --wheel`). It carries every package's source and declares all 13 console
+(`make build` / `uv build --wheel`). It carries every package's source and declares all 12 console
 scripts, so one install gives an agent the whole surface.
 
-The 16 package-local `pyproject.toml` files are kept because they encode the dependency graph, not
+The 15 package-local `pyproject.toml` files are kept because they encode the dependency graph, not
 because each one is published:
 
 - `tests/test_warcraft_cli_packaging.py` asserts every package declares the runtime distributions
@@ -49,7 +49,8 @@ Renaming them would break every existing per-package dependency pin for no user-
 
 Tiers are the support level agents should expect; they are declared on each `ProviderRegistration`
 in `packages/warcraft-cli/src/warcraft_cli/providers.py` and surfaced by `warcraft doctor`.
-`blizzard` and `curseforge` are experimental with endpoints that have not been confirmed live.
+`blizzard` and `curseforge` are experimental: their endpoints are confirmed live, but they cover a
+small slice of each API.
 
 ## Per-Package Structure
 
@@ -92,8 +93,9 @@ Additional rules the linter cannot express:
 - Shared packages never import a provider package and never execute a provider binary.
 - `warcraft_core.talent_transport` holds pure parsing and validation only. It takes an injectable
   round-trip executor (`RoundTripExecutor`); `simc_cli.talent_transport` supplies the
-  SimulationCraft-backed one, and `warcraftlogs_cli` uses the pure validation with an optional
-  backend that the wrapper may inject.
+  SimulationCraft-backed one. `warcraftlogs_cli` runs the pure validation with no SimulationCraft
+  backend, so its packets stay `raw_only`; `simc validate-talent-transport` (or `warcraft
+  talent-packet`) adds the validated forms.
 - The wrapper reaches providers in-process through the `PROVIDER` surfaces registered in
   `warcraft_cli.providers`. It does not spawn provider binaries, and no other `warcraft_cli` module
   imports a provider package.

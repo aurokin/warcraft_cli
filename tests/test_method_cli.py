@@ -111,7 +111,11 @@ INTRO_HTML_WITH_FALLBACK_METADATA = """
 
 SITEMAP_XML = """
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <url><loc>https://www.method.gg/guides/mistweaver-monk</loc></url>
+  <url>
+    <loc>https://www.method.gg/guides/mistweaver-monk</loc>
+    <changefreq>monthly</changefreq>
+    <priority>0.4</priority><lastmod>2026-08-13T19:36:00+01:00</lastmod>
+  </url>
   <url><loc>https://www.method.gg/guides/mistweaver-monk/talents</loc></url>
   <url><loc>https://www.method.gg/guides/tier-list</loc></url>
   <url><loc>https://www.method.gg/guides/midnight-alchemy-profession-guide</loc></url>
@@ -142,6 +146,33 @@ PROFESSION_HTML = """
 """
 
 
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [("bm hunter", "beast-mastery-hunter"), ("disc priest", "discipline-priest"), ("mm hunter", "marksmanship-hunter")],
+)
+def test_method_resolve_reads_class_and_spec_shorthand(monkeypatch, query: str, expected: str) -> None:
+    slugs = ("beast-mastery-hunter", "marksmanship-hunter", "discipline-priest", "holy-priest")
+    sitemap = "".join(f"<url><loc>https://www.method.gg/guides/{slug}</loc></url>" for slug in slugs)
+    monkeypatch.setattr("method_cli.main.MethodClient.sitemap_guides", lambda self: parse_sitemap_guides(sitemap))
+    result = runner.invoke(app, ["resolve", query])
+    assert result.exit_code == 0, result.output
+
+    data = json.loads(result.stdout)["data"]
+    assert data["resolved"] is True
+    assert data["match"]["id"] == expected
+
+
+def test_method_search_finds_a_page_titled_with_shorthand(monkeypatch) -> None:
+    # The query "prot" is spelled out as "protection"; a page whose slug says "prot" must still match it.
+    slugs = ("prot-paladin-tips", "holy-paladin")
+    sitemap = "".join(f"<url><loc>https://www.method.gg/guides/{slug}</loc></url>" for slug in slugs)
+    monkeypatch.setattr("method_cli.main.MethodClient.sitemap_guides", lambda self: parse_sitemap_guides(sitemap))
+    result = runner.invoke(app, ["search", "prot paladin tips"])
+    assert result.exit_code == 0, result.output
+
+    assert [row["id"] for row in json.loads(result.stdout)["data"]["results"]] == ["prot-paladin-tips"]
+
+
 def _fake_fetch_guide_page(guide_ref: str) -> dict[str, object]:
     if str(guide_ref).endswith("/talents"):
         return parse_guide_page(TALENTS_HTML, source_url="https://www.method.gg/guides/mistweaver-monk/talents")
@@ -157,10 +188,12 @@ def test_parse_sitemap_guides_filters_intro_pages() -> None:
     guides = parse_sitemap_guides(SITEMAP_XML)
     assert guides == [
         {"slug": "midnight-alchemy-profession-guide", "name": "Midnight Alchemy Profession Guide",
-            "url": "https://www.method.gg/guides/midnight-alchemy-profession-guide"},
-        {"slug": "mistweaver-monk", "name": "Mistweaver Monk", "url": "https://www.method.gg/guides/mistweaver-monk"},
-        {"slug": "restoration-shaman", "name": "Restoration Shaman", "url": "https://www.method.gg/guides/restoration-shaman"},
-        {"slug": "tier-list", "name": "Tier List", "url": "https://www.method.gg/guides/tier-list"},
+            "url": "https://www.method.gg/guides/midnight-alchemy-profession-guide", "sitemap_lastmod": None},
+        {"slug": "mistweaver-monk", "name": "Mistweaver Monk", "url": "https://www.method.gg/guides/mistweaver-monk",
+            "sitemap_lastmod": "2026-08-13"},
+        {"slug": "restoration-shaman", "name": "Restoration Shaman", "url": "https://www.method.gg/guides/restoration-shaman",
+            "sitemap_lastmod": None},
+        {"slug": "tier-list", "name": "Tier List", "url": "https://www.method.gg/guides/tier-list", "sitemap_lastmod": None},
     ]
 
 
@@ -207,7 +240,7 @@ def test_parse_guide_page_supports_metadata_and_article_fallback_selectors() -> 
     )
     assert payload["guide"]["author"] == "Tincell"
     assert payload["guide"]["patch"] == "Patch 12.0.1"
-    assert payload["guide"]["last_updated"] == "Last Updated: 26th Feb, 2026"
+    assert (payload["guide"]["last_updated"], payload["guide"]["last_updated_text"]) == ("2026-02-26", "Last Updated: 26th Feb, 2026")
     assert payload["navigation"][0]["title"] == "Introduction"
     assert payload["article"]["sections"][0]["title"] == "Introduction"
 
@@ -218,7 +251,7 @@ def test_parse_guide_page_normalizes_profession_author_and_family() -> None:
         source_url="https://www.method.gg/guides/midnight-alchemy-profession-guide",
     )
     assert payload["guide"]["author"] == "Roguery"
-    assert payload["guide"]["last_updated"] == "5th March 2026"
+    assert (payload["guide"]["last_updated"], payload["guide"]["last_updated_text"]) == ("2026-03-05", "5th March 2026")
     assert payload["guide"]["content_family"] == "profession_guide"
     assert payload["guide"]["supported_surface"] is True
 
@@ -240,6 +273,7 @@ def test_method_search_command_uses_sitemap_guides(monkeypatch) -> None:
     assert payload["results"][0]["id"] == "mistweaver-monk"
     assert payload["results"][0]["follow_up"]["command"] == "method guide mistweaver-monk"
     assert payload["results"][0]["metadata"]["content_family"] == "class_guide"
+    assert payload["results"][0]["metadata"]["sitemap_lastmod"] == "2026-08-13"
 
 
 def test_method_resolve_command_returns_best_guide(monkeypatch) -> None:
@@ -315,6 +349,8 @@ def test_method_guide_export_and_query(monkeypatch, tmp_path: Path) -> None:
     assert export_result.exit_code == 0
     export_payload = json.loads(export_result.stdout)["data"]
     assert export_payload["counts"]["pages"] == 2
+    # The same guide-export shape as icy-veins: the file list, not a second copy of the whole manifest.
+    assert "manifest" not in export_payload and export_payload["files"]["page_html_dir"] == "pages"
     assert (export_dir / "manifest.json").exists()
     manifest = json.loads((export_dir / "manifest.json").read_text())
     assert datetime.fromisoformat(manifest["exported_at"].replace("Z", "+00:00")).tzinfo is not None
@@ -338,11 +374,16 @@ def test_method_guide_export_and_query(monkeypatch, tmp_path: Path) -> None:
     assert analysis_query_payload["count"] == 1
     assert analysis_query_payload["top"][0]["surface_tags"] == ["builds_talents", "talent_recommendations"]
 
-    section_query = runner.invoke(app, ["guide-query", str(export_dir), "mistweaver",
-                                  "--kind", "sections", "--section-title", "introduction"])
+    # "build" is in both sections; --section-title keeps one, and --limit trims the rows but not the count.
+    unfiltered = json.loads(runner.invoke(app, ["guide-query", str(export_dir), "build", "--kind", "sections", "--limit", "1"]).stdout)["data"]
+    assert (unfiltered["count"], len(unfiltered["top"])) == (2, 1)
+    section_query = runner.invoke(app, ["guide-query", str(export_dir), "build",
+                                  "--kind", "sections", "--section-title", "talents"])
     assert section_query.exit_code == 0
     section_payload = json.loads(section_query.stdout)["data"]
-    assert section_payload["match_counts"]["sections"] >= 1
+    assert [row["title"] for row in section_payload["matches"]["sections"]] == ["Raid Talents"]
+    # The same guide-query shape as icy-veins.
+    assert (section_payload["bundle"], section_payload["guide"]["slug"]) == (str(export_dir), "mistweaver-monk")
 
 
 def test_method_guide_query_answers_each_bad_bundle_path_the_way_icy_veins_does(tmp_path: Path) -> None:
@@ -768,3 +809,64 @@ def test_method_guide_commands_say_when_the_site_served_another_guide(monkeypatc
 
     unmoved = runner.invoke(app, ["guide", "mistweaver-monk"])
     assert json.loads(unmoved.stdout)["data"]["redirect"] is None
+
+
+def test_method_resolve_judges_confidence_on_every_match_not_the_limit(monkeypatch) -> None:
+    """``--limit 1`` used to cut the tied rival off, so ``resolve frost`` answered Frost DK with confidence high."""
+    sitemap = [{"slug": slug, "name": slug.replace("-", " ").title(), "url": f"https://www.method.gg/guides/{slug}"}
+               for slug in ("frost-mage", "frost-death-knight")]
+    monkeypatch.setattr("method_cli.main.MethodClient.sitemap_guides", lambda self: sitemap)
+    payload = json.loads(runner.invoke(app, ["resolve", "frost", "--limit", "1"]).stdout)["data"]
+
+    assert (payload["resolved"], payload["confidence"], payload["count"], len(payload["candidates"])) == (False, "medium", 2, 1)
+
+
+def test_method_search_fails_when_the_sitemap_lists_no_guides_and_does_not_cache_it(monkeypatch, tmp_path: Path) -> None:
+    """A 2xx challenge page used to answer every query with ok:true, count 0, and stay cached for a day."""
+    monkeypatch.setenv("METHOD_CACHE_BACKEND", "file")
+    monkeypatch.setenv("METHOD_CACHE_DIR", str(tmp_path))
+    bodies = ["<html><body>Checking your browser</body></html>", SITEMAP_XML]
+    fetched: list[str] = []
+
+    def fetch_text(self, url: str) -> str:
+        fetched.append(url)
+        return bodies[len(fetched) - 1]
+
+    monkeypatch.setattr("method_cli.client.MethodClient._fetch_text", fetch_text)
+    failed = runner.invoke(app, ["search", "mistweaver monk"])
+
+    assert failed.exit_code == 1
+    assert _error_payload(failed)["error"]["code"] == "parse_failed"
+    assert json.loads(runner.invoke(app, ["search", "mistweaver monk"]).stdout)["data"]["count"] == 1
+    # The good body is cached (no third fetch), so the refetch above means the bad one never was.
+    assert runner.invoke(app, ["search", "mistweaver monk"]).exit_code == 0
+    assert len(fetched) == 2
+
+
+def test_method_guide_full_fails_when_a_class_guide_loses_its_navigation(monkeypatch) -> None:
+    """A renamed navigation used to turn a multi-page class guide into a one-page bundle with ok:true."""
+    drifted = INTRO_HTML.replace("guide-navigation", "guide-nav-moved")
+    monkeypatch.setattr(
+        "method_cli.main.MethodClient.fetch_guide_page",
+        lambda self, guide_ref: parse_guide_page(drifted, source_url="https://www.method.gg/guides/mistweaver-monk"),
+    )
+    result = runner.invoke(app, ["guide-full", "mistweaver-monk"])
+
+    assert result.exit_code == 1
+    assert _error_payload(result)["error"]["code"] == "parse_failed"
+
+
+def test_method_guide_full_reads_a_one_page_article_whose_slug_ends_in_a_class(monkeypatch) -> None:
+    """unlocking-void-elf-demon-hunter is a one-page article; reading it as a class guide failed on its missing navigation."""
+    slug = "unlocking-void-elf-demon-hunter"
+    article = INTRO_HTML.replace("guide-navigation", "no-navigation").replace("guides/mistweaver-monk", f"guides/{slug}")
+    monkeypatch.setattr(
+        "method_cli.main.MethodClient.fetch_guide_page",
+        lambda self, guide_ref: parse_guide_page(article, source_url=f"https://www.method.gg/guides/{slug}"),
+    )
+    result = runner.invoke(app, ["guide-full", slug])
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.stdout)["data"]
+    assert data["guide"]["page_count"] == 1
+    assert data["pages"][0]["guide"]["content_family"] == "article_guide"

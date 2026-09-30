@@ -30,7 +30,7 @@ from warcraft_wiki_cli.client import WIKI_API_URL, WarcraftWikiAPIError, Warcraf
 from warcraft_wiki_cli.page_parser import article_slug, normalize_article_ref
 from warcraft_wiki_cli.search import PROVIDER_NAME, SearchOutcome, is_confident_match, search_results, title_names_query
 
-API_REFERENCE_FAMILIES = frozenset({"api_function", "framework_page", "xml_schema", "cvar", "api_changes"})
+API_REFERENCE_FAMILIES = frozenset({"api_function", "api_enum", "framework_page", "xml_schema", "cvar", "api_changes"})
 EVENT_REFERENCE_FAMILIES = frozenset({"event_reference", "ui_handler", "framework_page"})
 # Exact page titles a typed lookup fetches before it falls back to search, most specific first.
 # "Event:PLAYER_LOGIN" and "API:UnitHealth" are the canonical namespaced titles; the space-separated
@@ -457,9 +457,7 @@ class WarcraftWikiProvider:
         except ValueError as exc:
             raise ProviderError("invalid_cache_config", str(exc)) from exc
         payload = {
-            "provider": PROVIDER_NAME,
             "status": "ready",
-            "command": "doctor",
             "installed": True,
             "language": "python",
             "capabilities": dict(CAPABILITIES),

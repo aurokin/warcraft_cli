@@ -69,6 +69,13 @@ def test_tokenize_talent_name_normalizes_text() -> None:
     assert tokenize_talent_name("Tip the Scales") == "tip_the_scales"
 
 
+def test_tokenize_talent_name_matches_the_hero_tree_tokens_apls_test() -> None:
+    """APLs dispatch on `hero_tree.shadopan` and `hero_tree.felscarred`: SimC drops the hyphen."""
+    assert tokenize_talent_name("Shado-Pan") == "shadopan"
+    assert tokenize_talent_name("Fel-Scarred") == "felscarred"
+    assert tokenize_talent_name("Anti-Magic Zone") == "antimagic_zone"
+
+
 def test_extract_build_spec_from_plain_hash() -> None:
     spec = extract_build_spec_from_text("ABC123")
     assert spec.talents == "ABC123"

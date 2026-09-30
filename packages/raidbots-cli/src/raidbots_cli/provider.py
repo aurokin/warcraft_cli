@@ -17,11 +17,14 @@ from warcraft_core.exit_codes import EXIT_USAGE
 from warcraft_core.provider import ProviderError, ProviderSurface
 
 from raidbots_cli.client import (
+    URL_TEMPLATES,
     InvalidReportReference,
     RaidbotsClient,
     ReportNotAvailable,
+    data_url,
+    input_url,
     load_raidbots_cache_settings_from_env,
-    load_raidbots_urls_from_env,
+    report_url,
     resolve_report_id,
 )
 from raidbots_cli.report import parse_report
@@ -85,9 +88,7 @@ def _client() -> RaidbotsClient:
 
 def _report_id(reference: str) -> str:
     try:
-        # Pass the configured (env-overridable) report path template so URL input parsing
-        # round-trips the report URLs this CLI emits even when the template is overridden.
-        return resolve_report_id(reference, load_raidbots_urls_from_env().report_path_template)
+        return resolve_report_id(reference)
     except InvalidReportReference as exc:
         # A reference that names no report is bad input (exit 2); `invalid_report` is a bad payload.
         raise ProviderError("invalid_report_ref", str(exc), exit_code=EXIT_USAGE) from exc
@@ -103,12 +104,11 @@ def _freshness(client: RaidbotsClient) -> dict[str, Any]:
     }
 
 
-def _citations(client: RaidbotsClient, report_id: str) -> dict[str, Any]:
-    urls = client.urls
+def _citations(report_id: str) -> dict[str, Any]:
     return {
-        "report_url": urls.report_url(report_id),
-        "data_json_url": urls.data_url(report_id),
-        "simc_input_url": urls.input_url(report_id),
+        "report_url": report_url(report_id),
+        "data_json_url": data_url(report_id),
+        "simc_input_url": input_url(report_id),
     }
 
 
@@ -134,19 +134,18 @@ def resolve(target: str, **options: Any) -> Envelope:
 
 
 def doctor(**options: Any) -> Envelope:
-    """Report install status, capabilities, cache configuration, and the resolved URL templates."""
+    """Report install status, capabilities, cache configuration, and the report URL templates."""
     try:
         settings, report_ttl = load_raidbots_cache_settings_from_env()
     except ValueError as exc:
         raise ProviderError("invalid_cache_config", str(exc)) from exc
-    urls = load_raidbots_urls_from_env()
     payload: dict[str, Any] = {
         "status": "partial",
         "installed": True,
         "language": "python",
         "auth": {"required": False, "deferred": True},
         "capabilities": dict(CAPABILITIES),
-        "url_templates": urls.templates(),
+        "url_templates": dict(URL_TEMPLATES),
         "cache": {
             "enabled": settings.enabled,
             "backend": settings.backend,
@@ -175,7 +174,7 @@ def inspect_report(reference: str, *, include_raw: bool = True) -> Envelope:
             # Covers invalid JSON and non-object bodies from report_data as well as parse failures.
             raise ProviderError("invalid_report", str(exc)) from exc
         freshness = _freshness(client)
-        citations = _citations(client, report_id)
+        citations = _citations(report_id)
     payload: dict[str, Any] = {
         "report": report,
         "scope": {"type": "raidbots_report", "kind": report.get("kind")},
@@ -205,7 +204,7 @@ def report_input(reference: str) -> Envelope:
         except ReportNotAvailable as exc:
             raise ProviderError("not_found", str(exc)) from exc
         freshness = _freshness(client)
-        citations = _citations(client, report_id)
+        citations = _citations(report_id)
     classification = classify_simc_input(text)
     payload: dict[str, Any] = {
         "report_id": report_id,

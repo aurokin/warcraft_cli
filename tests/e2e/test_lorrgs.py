@@ -20,6 +20,9 @@ from tests.e2e.harness import EXIT_NOT_FOUND, EXIT_USAGE, Result, run, run_text
 # up so the report journeys always have a real code to work with.
 _SPEC_RANKING_ATTEMPTS = 4
 
+# How many ranked reports the --player journey walks for one Lorrgs has loaded with its players.
+_REPORT_ATTEMPTS = 8
+
 COMP_RANKING_LIMIT = 3
 # How many bosses the comp-ranking journey walks before declaring the surface empty.
 COMP_RANKING_SCAN_LIMIT = 16
@@ -315,6 +318,31 @@ def test_report_overview_user_report_and_fights_share_one_report(catalog: Catalo
 
     selected = run("lorrgs", "user-report-fights", catalog.report_id, "--fight", str(catalog.fight_id))
     assert [fight["fight_id"] for fight in selected.data["fights"]] == [catalog.fight_id]
+
+
+def _fight_with_players(catalog: Catalog) -> tuple[str, int, list[dict[str, Any]]]:
+    """A ranked fight Lorrgs has loaded with at least two players; it answers others with no players at all."""
+    for report in catalog.spec_ranking.data["reports"][:_REPORT_ATTEMPTS]:
+        fight_id = int(report["fights"][0]["fight_id"])
+        loaded = run("lorrgs", "user-report-fights", str(report["report_id"]), "--fight", str(fight_id), expect=None)
+        if not loaded.ok:
+            assert loaded.error_code == "not_found", loaded.describe()
+            continue
+        players = loaded.data["fights"][0]["players"]
+        if len(players) >= 2:
+            return str(report["report_id"]), fight_id, players
+    raise AssertionError(f"none of the first {_REPORT_ATTEMPTS} ranked reports is loaded on Lorrgs with two players")
+
+
+def test_user_report_fights_player_keeps_only_that_player(catalog: Catalog) -> None:
+    """``--player`` goes to Lorrgs as a filter: the fight comes back with that one player and no other."""
+    report_id, fight_id, players = _fight_with_players(catalog)
+    chosen = players[-1]
+
+    narrowed = run("lorrgs", "user-report-fights", report_id, "--fight", str(fight_id), "--player", str(chosen["source_id"]))
+    assert narrowed.payload["query"]["player"] == str(chosen["source_id"]), narrowed.describe()
+    kept = narrowed.data["fights"][0]["players"]
+    assert [(row["source_id"], row["name"]) for row in kept] == [(chosen["source_id"], chosen["name"])], narrowed.describe()
 
 
 def test_a_warcraftlogs_report_url_carries_the_fight_through(catalog: Catalog) -> None:

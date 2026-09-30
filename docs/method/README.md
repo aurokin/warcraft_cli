@@ -17,7 +17,7 @@ Global flags go before the subcommand: `--pretty`, `--compact`, `--compact-max-c
 | `method resolve "<query>"` | the single best guide plus the follow-up command |
 | `method guide <slug-or-url>` | one guide page, with a 10-item preview of linked entities, build references, and analysis surfaces |
 | `method guide-full <slug-or-url>` | every navigation page of the guide, with merged linked entities, build references, and analysis surfaces |
-| `method guide-export <slug-or-url>` | writes a bundle to disk and returns its manifest |
+| `method guide-export <slug-or-url>` | writes a bundle to disk and returns its counts and file list (the same shape as `icy-veins guide-export`) |
 | `method guide-query <bundle> "<query>"` | matches inside an exported bundle; no network access |
 
 Flags, defaults, and ranges are in [reference/method.md](../reference/method.md).
@@ -52,7 +52,17 @@ an object, `surface_tags` that is not a list). A `wowhead guide-export` bundle i
 linked entities and analysis surfaces, but no pages or build references.
 `invalid_guide_ref` means the argument was not a Method guide reference; a page that fetched but
 whose article container no longer matches fails with `parse_failed` (exit 1) instead of returning
-an empty article with `ok:true`.
+an empty article with `ok:true`. So does a sitemap that lists no guide pages (a challenge page or a
+reshaped sitemap; that body is not cached), and `guide-full`/`guide-export` of a `class_guide` whose
+section navigation does not parse, rather than returning a one-page bundle.
+
+`guide-query` answers with kind `guide_query`: the shared match payload plus `bundle` (the path
+queried) and `guide` (the exported guide row), the same shape as `icy-veins guide-query`.
+
+`guide.last_updated` is the page's update date as ISO `YYYY-MM-DD` (`null` when the page's stamp
+cannot be read); the page's own wording (`Last Updated: 11th Aug, 2026`) is in
+`guide.last_updated_text`. Search and resolve rows carry `metadata.sitemap_lastmod`, the sitemap's
+`<lastmod>` date for the page.
 
 ### Build references
 
@@ -95,7 +105,9 @@ process, without Typer.
 ## Supported scope
 
 - root guide pages under `/guides/<slug>` and their section pages under `/guides/<slug>/<section>`
-- content families `class_guide`, `profession_guide`, `delve_guide`, `reputation_guide`, `article_guide`
+- content families `class_guide`, `profession_guide`, `delve_guide`, `reputation_guide`, `article_guide`;
+  `class_guide` is a `<spec>-<class>` slug such as `beast-mastery-hunter`, so a one-page article like
+  `unlocking-void-elf-demon-hunter` is an `article_guide`
 - index-style roots (`tier-list`, `world-of-warcraft`) are excluded from discovery, and requesting
   one directly returns `unsupported_guide_surface`
 - queries whose terms match an excluded root return an empty result set with a `scope_hint`
@@ -104,7 +116,10 @@ process, without Typer.
 Ranking uses the shared article scorer (`warcraft_content.search`) plus a Method-specific boost when
 the query names the content family (professions, delves, renown/reputation). Method titles never
 say "Mythic+" or "Mythic Plus"; its M+ pages talk about "mythic dungeons", so `mythic+`, `m+` and
-`mythic plus` are searched as `mythic dungeon`.
+`mythic plus` are searched as `mythic dungeon`. Class and spec shorthand (`bm hunter`, `disc priest`)
+is spelled out in the query and in page titles alike. `resolve` judges confidence on every ranked match;
+`--limit` only trims the `candidates` shown, so `--limit 1` never makes an ambiguous query look
+resolved.
 
 ## Caching
 

@@ -21,7 +21,6 @@ from warcraft_api.cache import (
     inspect_file_cache,
     inspect_redis_cache,
     load_cache_settings_from_env,
-    repair_file_cache,
 )
 from warcraft_content.guide_analysis import extract_section_chunk_analysis_surfaces
 from warcraft_core.cli import (
@@ -39,7 +38,13 @@ from warcraft_core.cli import (
     guarded_run,
 )
 from warcraft_core.envelope import ENVELOPE_KEYS, SCHEMA_VERSION, Envelope, envelope_violations
-from warcraft_core.identity import build_identity_payload, build_reference_transport_packet_payload, validate_talent_transport_packet
+from warcraft_core.identity import (
+    WOW_CLASS_SLUGS,
+    build_identity_payload,
+    build_reference_transport_packet_payload,
+    normalize_actor_class,
+    validate_talent_transport_packet,
+)
 from warcraft_core.output import DEFAULT_COMPACT_MAX_CHARS, OutputProjectionError, shape_payload, to_json
 from warcraft_core.output import emit as emit_json
 from warcraft_core.provider import ProviderError
@@ -49,6 +54,7 @@ from wowhead_cli.citation_pack import citation_pack_from_compare, citation_pack_
 from wowhead_cli.comments_intelligence import build_comments_intelligence, filter_raw_comments
 from wowhead_cli.compare_presets import ResolvedCompareOptions, resolve_compare_options
 from wowhead_cli.entities import (
+    ENTITY_PAGE_MAX_LINKS,
     build_linked_entity_preview,
     comparison_entity_record,
     comparison_field_diffs,
@@ -56,7 +62,7 @@ from wowhead_cli.entities import (
     dedupe_links,
     entity_comments_payload,
     entity_linked_entities_payload,
-    entity_page_fetch_more_command,
+    entity_page_links,
     entity_page_needs_fetch,
     truncate_text,
     truncated_link_block,
@@ -66,7 +72,9 @@ from wowhead_cli.entity_types import (
     HYDRATABLE_ENTITY_TYPES,
 )
 from wowhead_cli.expansion_profiles import (
+    EXPANSION_PREFIXES,
     ExpansionProfile,
+    detect_expansion_from_ref,
     detect_expansion_from_url,
     expansion_url_policy_issues,
     is_wowhead_host,
@@ -130,6 +138,7 @@ from wowhead_cli.page_parser import (
 from wowhead_cli.provider import cache_settings_payload
 from wowhead_cli.ranking import (
     command_prefix_for_expansion,
+    listing_match_score,
     score_text_match,
 )
 from wowhead_cli.wowhead_client import (
@@ -148,11 +157,6 @@ app = typer.Typer(
     add_completion=False,
     help="Agent-first CLI for querying Wowhead without browser automation.",
 )
-
-EXPANSION_PREFIXES = frozenset(
-    profile.path_prefix for profile in list_profiles() if profile.path_prefix
-)
-
 
 @dataclass(slots=True)
 class WowheadConfig(RuntimeConfig):
@@ -216,7 +220,8 @@ def _upstream(ctx: typer.Context, *, context: str | None = None) -> Iterator[Non
         fail(ctx, exc.code, message, exit_code=exc.exit_code, details=exc.details)
 
 
-def _normalize_cache_namespaces(values: list[str]) -> tuple[str, ...]:
+def _normalize_cache_namespaces(values: list[str], *, known: frozenset[str]) -> tuple[str, ...]:
+    """Dedupe the comma-separated ``--namespace`` values; a name outside ``known`` raises ValueError."""
     normalized: list[str] = []
     seen: set[str] = set()
     for raw in values:
@@ -228,6 +233,9 @@ def _normalize_cache_namespaces(values: list[str]) -> tuple[str, ...]:
                 continue
             seen.add(value)
             normalized.append(value)
+    unknown = [value for value in normalized if value not in known]
+    if unknown:
+        raise ValueError(f"Unknown cache namespace {', '.join(unknown)}. Known: {', '.join(sorted(known))}.")
     return tuple(normalized)
 
 
@@ -371,7 +379,8 @@ def _build_tooltip_from_page_metadata(metadata: dict[str, str | None]) -> tuple[
 
 
 def _apply_url_expansion(ctx: typer.Context, url_hint: str | None) -> WowheadConfig:
-    detected = detect_expansion_from_url(url_hint) if url_hint else None
+    """Adopt the expansion a Wowhead URL or ``classic/...``-style path names (unless --expansion was passed)."""
+    detected = detect_expansion_from_ref(url_hint) if url_hint else None
     return _adopt_expansion(ctx, detected, source="url")
 
 
@@ -798,6 +807,13 @@ def _normalize_tooltip_payload(tooltip: dict[str, Any]) -> tuple[str | None, dic
     return name, tooltip_payload
 
 
+def _entity_page(client: WowheadClient, entity_type: str, entity_id: int) -> tuple[str, dict[str, str | None]]:
+    """Fetch an entity page and its metadata; a failed request raises ``ProviderError``."""
+    with provider.transport_errors():
+        html = client.entity_page_html(entity_type, entity_id)
+    return html, parse_page_metadata(html, fallback_url=entity_url(entity_type, entity_id, expansion=client.expansion))
+
+
 def _fetch_entity_page(
     ctx: typer.Context,
     client: WowheadClient,
@@ -805,10 +821,7 @@ def _fetch_entity_page(
     entity_id: int,
 ) -> tuple[str, dict[str, str | None]]:
     with _upstream(ctx):
-        html = client.entity_page_html(entity_type, entity_id)
-    fallback_url = entity_url(entity_type, entity_id, expansion=client.expansion)
-    metadata = parse_page_metadata(html, fallback_url=fallback_url)
-    return html, metadata
+        return _entity_page(client, entity_type, entity_id)
 
 
 def _resolve_page_fetch_target(
@@ -932,19 +945,34 @@ def _normalize_hydrate_types(values: list[str]) -> tuple[str, ...]:
     return tuple(normalized)
 
 
-def _entity_tooltip(
-    ctx: typer.Context, client: WowheadClient, plan: EntityAccessPlan, *, data_env: int | None
-) -> tuple[dict[str, Any], str | None]:
-    """Fetch the tooltip the access plan points at, mapping transport failures onto the error envelope."""
+def _entity_tooltip(client: WowheadClient, plan: EntityAccessPlan, *, data_env: int | None) -> tuple[dict[str, Any], str | None]:
+    """Fetch the tooltip the access plan points at; a failed or unreadable response raises ``ProviderError``."""
     if plan.tooltip_entity_type is None or plan.tooltip_entity_id is None:
         return {}, None
     try:
-        with _upstream(ctx):
+        with provider.transport_errors():
             if plan.page_from_tooltip_redirect:
                 return client.tooltip_with_metadata(plan.tooltip_entity_type, plan.tooltip_entity_id, data_env=data_env)
             return client.tooltip(plan.tooltip_entity_type, plan.tooltip_entity_id, data_env=data_env), None
     except ValueError as exc:
-        fail(ctx, "parse_error", str(exc))
+        raise ProviderError("parse_error", str(exc)) from exc
+
+
+def _tooltip_and_page_plan(
+    client: WowheadClient, entity_type: str, entity_id: int, *, data_env: int | None = None
+) -> tuple[EntityAccessPlan, dict[str, Any]]:
+    """The entity's tooltip and access plan, with the page target a mount or battle-pet tooltip redirects to.
+
+    A failed or unreadable response raises ``ProviderError``.
+    """
+    plan = _build_entity_access_plan(entity_type, entity_id)
+    tooltip, tooltip_final_url = _entity_tooltip(client, plan, data_env=data_env)
+    if plan.page_from_tooltip_redirect and tooltip_final_url is not None:
+        resolved = _parse_tooltip_final_ref(tooltip_final_url)
+        if resolved is None:
+            raise ProviderError("unexpected_response", f"Could not resolve a page target for {entity_type} {entity_id}.")
+        plan.page_entity_type, plan.page_entity_id = resolved
+    return plan, tooltip
 
 
 def _entity_payload_blocks(
@@ -978,9 +1006,8 @@ def _build_entity_payload(
     include_comments: bool,
     include_all_comments: bool,
     linked_entity_preview_limit: int,
-    top_comment_limit: int = 3,
-    top_comment_chars: int = 320,
 ) -> dict[str, Any]:
+    """Build the ``entity`` payload; a failed Wowhead request raises ``ProviderError`` for the caller to report."""
     cfg = _cfg(ctx)
     cached_payload = client.get_cached_entity_response(
         requested_type=entity_type,
@@ -993,15 +1020,7 @@ def _build_entity_payload(
     if cached_payload is not None:
         return cached_payload
 
-    plan = _build_entity_access_plan(entity_type, entity_id)
-    tooltip, tooltip_final_url = _entity_tooltip(ctx, client, plan, data_env=data_env)
-
-    if plan.page_from_tooltip_redirect and tooltip_final_url is not None:
-        resolved = _parse_tooltip_final_ref(tooltip_final_url)
-        if resolved is None:
-            fail(ctx, "unexpected_response", f"Could not resolve a page target for {entity_type} {entity_id}.")
-        plan.page_entity_type, plan.page_entity_id = resolved
-
+    plan, tooltip = _tooltip_and_page_plan(client, entity_type, entity_id, data_env=data_env)
     canonical = entity_url(plan.page_entity_type, plan.page_entity_id, expansion=cfg.expansion)
     page_url = canonical
     entity_name, tooltip_payload = _normalize_tooltip_payload(tooltip)
@@ -1013,7 +1032,7 @@ def _build_entity_payload(
         linked_entity_preview_limit=linked_entity_preview_limit,
         tooltip_from_page_metadata=plan.tooltip_from_page_metadata,
     ):
-        html, metadata = _fetch_entity_page(ctx, client, plan.page_entity_type, plan.page_entity_id)
+        html, metadata = _entity_page(client, plan.page_entity_type, plan.page_entity_id)
         page_url = metadata["canonical_url"] or canonical
 
     if plan.tooltip_from_page_metadata and metadata is not None:
@@ -1023,8 +1042,6 @@ def _build_entity_payload(
         page_url=page_url,
         include_comments=include_comments,
         include_all_comments=include_all_comments,
-        top_comment_limit=top_comment_limit,
-        top_comment_chars=top_comment_chars,
     )
 
     payload = _entity_payload_blocks(
@@ -1357,7 +1374,7 @@ def _timeline_result_matches(
     normalized_query = query.strip() if isinstance(query, str) else ""
     if not normalized_query:
         return True, 0
-    score = score_text_match(normalized_query, *values)
+    score = listing_match_score(normalized_query, *values)
     return score > 0, score
 
 
@@ -1579,25 +1596,8 @@ def _normalize_blue_tracker_row(row: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
-KNOWN_TALENT_CALC_CLASSES = frozenset(
-    {
-        "deathknight",
-        "death-knight",
-        "demonhunter",
-        "demon-hunter",
-        "druid",
-        "evoker",
-        "hunter",
-        "mage",
-        "monk",
-        "paladin",
-        "priest",
-        "rogue",
-        "shaman",
-        "warlock",
-        "warrior",
-    }
-)
+# A spec path segment (``balance``, ``beast-mastery``); build codes carry digits or capitals.
+_TALENT_CALC_SPEC_RE = re.compile(r"[a-z]+(?:-[a-z]+)*")
 
 
 def _absolute_tool_url(raw: str, *, tool_slug: str) -> str | None:
@@ -1613,37 +1613,13 @@ def _absolute_tool_url(raw: str, *, tool_slug: str) -> str | None:
     return url_candidate
 
 
-def _talent_calc_ref_parts(normalized: str) -> list[str]:
-    parts = normalized.split("/")
-    if parts and parts[-1] == "":
-        parts = parts[:-1]
-    if any(part == "" for part in parts):
-        raise ValueError("talent-calc reference must not include empty path segments.")
-    return parts
-
-
-def _validated_talent_calc_parts(parts: list[str]) -> list[str]:
-    """Validate the class/spec portion of a relative talent-calc ref (expansion prefix already stripped)."""
-    if not parts:
-        raise ValueError("talent-calc reference cannot be empty.")
-    invalid = ValueError("talent-calc reference must be a Wowhead talent-calc path or class/spec ref.")
-    if parts[0] == "talent-calc":
-        if len(parts) not in {3, 4} or parts[1] not in KNOWN_TALENT_CALC_CLASSES:
-            raise invalid
-    elif parts[0] not in KNOWN_TALENT_CALC_CLASSES or len(parts) not in {2, 3}:
-        raise invalid
-    return parts
-
-
 def _expansion_prefixed_talent_calc_url(normalized: str) -> str | None:
-    """Route an expansion-prefixed relative talent-calc ref to its retail tool URL, else None."""
-    raw_parts = _talent_calc_ref_parts(normalized)
-    has_expansion_prefix = bool(raw_parts and raw_parts[0] in EXPANSION_PREFIXES)
-    parts = _validated_talent_calc_parts(raw_parts[1:] if has_expansion_prefix else raw_parts)
-    if not has_expansion_prefix:
+    """Route an expansion-prefixed relative talent-calc ref (``classic/warrior/<code>``) to its tool URL, else None."""
+    prefix, _separator, rest = normalized.partition("/")
+    if prefix not in EXPANSION_PREFIXES:
         return None
-    prefixed_parts = [raw_parts[0], *parts] if parts[0] == "talent-calc" else [raw_parts[0], "talent-calc", *parts]
-    return tool_url("/".join(prefixed_parts), expansion="retail")
+    path = rest if rest == "talent-calc" or rest.startswith("talent-calc/") else f"talent-calc/{rest}"
+    return tool_url(f"{prefix}/{path}", expansion="retail")
 
 
 def _normalize_tool_ref(ref: str, *, tool_slug: str, expansion: ExpansionProfile) -> str:
@@ -1664,26 +1640,31 @@ def _normalize_tool_ref(ref: str, *, tool_slug: str, expansion: ExpansionProfile
 
 
 def _parse_talent_calc_state(state_url: str) -> dict[str, Any]:
-    parsed = urlparse(state_url)
-    raw_parts = parsed.path.split("/")
-    if raw_parts and raw_parts[0] == "":
-        raw_parts = raw_parts[1:]
-    if raw_parts and raw_parts[-1] == "":
-        raw_parts = raw_parts[:-1]
-    if any(part == "" for part in raw_parts):
-        raise ValueError("Talent calculator URL must not include empty path segments.")
-    parts = raw_parts
-    expansion = "retail"
-    if parts and parts[0] in EXPANSION_PREFIXES:
-        expansion = parts[0]
-        parts = parts[1:]
+    """Split a talent-calc URL into expansion, class, spec, and build code.
+
+    Retail-style calculators use ``/talent-calc/<class>/<spec>[/<build-code>]``; classic-era ones
+    have no spec segment, ``/classic/talent-calc/<class>/<build-code>``, so their spec is None.
+    """
+    path = urlparse(state_url).path.strip("/")
+    raw_parts = path.split("/") if path else []
+    if "" in raw_parts:
+        raise ValueError("talent-calc reference must not include empty path segments.")
+    expansion = raw_parts[0] if raw_parts and raw_parts[0] in EXPANSION_PREFIXES else "retail"
+    parts = raw_parts[1:] if expansion != "retail" else raw_parts
     if not parts or parts[0] != "talent-calc":
         raise ValueError("Talent calculator URL must point to /talent-calc.")
-    if len(parts) not in {3, 4}:
-        raise ValueError("Talent calculator URL must use /talent-calc/<class>/<spec>[/<build-code>].")
-    class_slug = parts[1] if len(parts) > 1 else None
-    spec_slug = parts[2] if len(parts) > 2 else None
-    build_code = parts[3] if len(parts) > 3 else None
+    if len(parts) not in {3, 4} or normalize_actor_class(parts[1]) not in WOW_CLASS_SLUGS:
+        raise ValueError(
+            "Talent calculator URL must use /talent-calc/<class>/<spec>[/<build-code>] or "
+            "/talent-calc/<class>/<build-code> with a WoW class."
+        )
+    class_slug, slot, *rest = parts[1:]
+    if _TALENT_CALC_SPEC_RE.fullmatch(slot):
+        spec_slug, build_code = slot, (rest[0] if rest else None)
+    elif not rest:
+        spec_slug, build_code = None, slot
+    else:
+        raise ValueError(f"Talent calculator spec segment {slot!r} is not a spec name.")
     return {
         "expansion": expansion,
         "class_slug": class_slug,
@@ -2665,6 +2646,7 @@ def _hydrate_guide_linked_entities(
     existing_items_by_key = _existing_hydrated_items_by_key(entities_dir)
     selected_types = set(options.hydrate_types)
     hydrated_summary_items: list[dict[str, Any]] = []
+    failed: list[dict[str, Any]] = []
     for row in linked_items:
         if len(hydrated_summary_items) >= options.hydrate_limit:
             break
@@ -2681,15 +2663,20 @@ def _hydrate_guide_linked_entities(
             and entity_path.exists()
             and _is_stored_at_fresh(stored_at, max_age_hours=options.rehydrate_max_age_hours)
         )
-        payload_row, storage_source, stored_at = _load_or_store_hydrated_entity(
-            ctx,
-            client,
-            entity_path=entity_path,
-            entity_type=hydrated_type,
-            entity_id=hydrated_id,
-            stored_at=stored_at,
-            reuse_existing=reuse_existing,
-        )
+        try:
+            payload_row, storage_source, stored_at = _load_or_store_hydrated_entity(
+                ctx,
+                client,
+                entity_path=entity_path,
+                entity_type=hydrated_type,
+                entity_id=hydrated_id,
+                stored_at=stored_at,
+                reuse_existing=reuse_existing,
+            )
+        except ProviderError as exc:
+            # One missing linked entity must not sink the guide export; the manifest lists it instead.
+            failed.append({"entity_type": hydrated_type, "id": hydrated_id, "code": exc.code, "message": exc.message})
+            continue
 
         entity = payload_row.get("entity")
         if not isinstance(entity, dict):
@@ -2706,10 +2693,9 @@ def _hydrate_guide_linked_entities(
             }
         )
 
-    return _write_hydrated_entities_manifest(
-        entities_dir,
-        items=hydrated_summary_items,
-        hydrate_types=options.hydrate_types,
+    return replace(
+        _write_hydrated_entities_manifest(entities_dir, items=hydrated_summary_items, hydrate_types=options.hydrate_types),
+        failed=failed,
     )
 
 
@@ -2979,41 +2965,6 @@ def cache_inspect(
     _emit(ctx, payload)
 
 
-@app.command("cache-repair")
-def cache_repair(
-    ctx: typer.Context,
-    apply: bool = typer.Option(
-        False,
-        "--apply/--dry-run",
-        help="Apply the repair instead of only reporting candidates.",
-    ),
-    expired_only: bool = typer.Option(
-        False,
-        "--expired-only/--all",
-        help="Restrict legacy file-cache repair to expired entries only.",
-    ),
-    sample_limit: int = typer.Option(
-        10,
-        "--sample-limit",
-        min=1,
-        max=100,
-        help="Maximum legacy cache paths to sample in the repair report.",
-    ),
-) -> None:
-    """Report, or with --apply delete, file-cache entries left at the cache root by pre-namespacing versions."""
-    settings = _load_cache_settings_or_fail(ctx)
-    if settings.backend != "file":
-        fail(ctx, "invalid_argument", "cache-repair is currently only supported for file cache backends.")
-    result = repair_file_cache(settings.cache_dir, apply=apply, expired_only=expired_only, sample_limit=sample_limit)
-    payload = {
-        "settings": cache_settings_payload(settings),
-        "repair": result,
-    }
-    if apply:
-        payload["remaining"] = inspect_file_cache(settings.cache_dir)
-    _emit(ctx, payload)
-
-
 @app.command("cache-clear")
 def cache_clear(
     ctx: typer.Context,
@@ -3030,7 +2981,12 @@ def cache_clear(
 ) -> None:
     """Clear cached Wowhead responses for the selected namespaces or for the whole cache."""
     settings = _load_cache_settings_or_fail(ctx)
-    selected_namespaces = _normalize_cache_namespaces(namespace)
+    # Every namespace the client writes has a TTL; `legacy_unscoped` holds pre-namespacing file entries.
+    known = frozenset(cache_settings_payload(settings)["ttls"]) | {"legacy_unscoped"}
+    try:
+        selected_namespaces = _normalize_cache_namespaces(namespace, known=known)
+    except ValueError as exc:
+        fail(ctx, "invalid_argument", str(exc))
     if settings.backend == "file":
         removed = clear_file_cache(
             settings.cache_dir,
@@ -3041,6 +2997,9 @@ def cache_clear(
     else:
         if expired_only:
             fail(ctx, "invalid_argument", "--expired-only is only supported for file cache backends.")
+        probe = inspect_redis_cache(settings.redis_url, prefix=settings.prefix)
+        if not probe["available"]:
+            fail(ctx, "network_error", f"Redis cache is unavailable: {probe['error']}")
         try:
             removed = clear_redis_cache(
                 settings.redis_url,
@@ -3386,7 +3345,7 @@ def news_post(
     ),
 ) -> None:
     """Fetch one Wowhead news article with body markup, related posts, and citations."""
-    cfg = _cfg(ctx)
+    cfg = _apply_url_expansion(ctx, ref)
     try:
         page_url = _normalize_news_post_ref(ref, expansion=cfg.expansion)
     except ValueError as exc:
@@ -3447,7 +3406,7 @@ def blue_topic(
     ),
 ) -> None:
     """Fetch one Wowhead blue-tracker topic with its posts, participants, and citations."""
-    cfg = _cfg(ctx)
+    cfg = _apply_url_expansion(ctx, ref)
     try:
         page_url = _normalize_blue_topic_ref(ref, expansion=cfg.expansion)
     except ValueError as exc:
@@ -3652,6 +3611,8 @@ def talent_calc_packet(
     payload = _base_talent_calc_payload(ctx, ref=ref)
     if not payload["tool"].get("has_build_code"):
         fail(ctx, "invalid_tool_ref", "talent-calc packet refs must include an explicit build code.")
+    if payload["tool"].get("spec_slug") is None:
+        fail(ctx, "invalid_tool_ref", "talent-calc packet refs must name a spec: /talent-calc/<class>/<spec>/<build-code>.")
     payload = _enrich_talent_calc_payload_with_page_data(
         ctx,
         payload,
@@ -3700,7 +3661,7 @@ def profession_tree(
     ),
 ) -> None:
     """Decode a Wowhead profession tree calculator ref into profession and loadout state."""
-    cfg = _cfg(ctx)
+    cfg = _apply_url_expansion(ctx, ref)
     try:
         state_url = _normalize_tool_ref(ref, tool_slug="profession-tree-calc", expansion=cfg.expansion)
         state = _parse_profession_tree_state(state_url)
@@ -3787,7 +3748,7 @@ def profiler(
     ),
 ) -> None:
     """Normalize a Wowhead profiler list ref and report its list, region, realm, and name parts."""
-    cfg = _cfg(ctx)
+    cfg = _apply_url_expansion(ctx, ref)
     try:
         state_url = _normalize_profiler_ref(ref, expansion=cfg.expansion)
         state = _parse_profiler_state(state_url)
@@ -3997,6 +3958,7 @@ def guide(
     ),
 ) -> None:
     """Fetch one Wowhead guide: analysis surfaces, linked entities, comments, and page metadata (sections are in guide-full)."""
+    _apply_url_expansion(ctx, guide_ref)
     _emit(
         ctx,
         _guide_summary_payload(
@@ -4032,6 +3994,7 @@ def guide_full(
     ),
 ) -> None:
     """Fetch one Wowhead guide with every section, comment, and linked entity hydrated."""
+    _apply_url_expansion(ctx, guide_ref)
     payload, _html = _build_guide_full_payload(
         ctx,
         guide_ref=guide_ref,
@@ -4092,6 +4055,7 @@ def guide_export(
     ),
 ) -> None:
     """Export a Wowhead guide bundle (manifest, sections, entities) to a local directory."""
+    _apply_url_expansion(ctx, guide_ref)
     client = _client(ctx)
     selected_hydrate_types: tuple[str, ...] = ()
     if hydrate_linked_entities:
@@ -4596,8 +4560,11 @@ def guide_bundle_refresh(
         _emit(ctx, refreshed_manifest)
         return
 
+    # A guide URL names its expansion; a bare guide id relies on the expansion the export recorded.
     recorded_expansion = manifest.get("expansion")
-    if isinstance(recorded_expansion, str):
+    if detect_expansion_from_ref(recorded_options.guide_ref) is not None:
+        _apply_url_expansion(ctx, recorded_options.guide_ref)
+    elif isinstance(recorded_expansion, str):
         try:
             _adopt_expansion(ctx, resolve_expansion(recorded_expansion), source="bundle")
         except ValueError as exc:
@@ -4617,15 +4584,28 @@ def guide_bundle_refresh(
     _emit(ctx, refreshed_manifest)
 
 
+def _entity_ref_or_fail(ctx: typer.Context, entity_type: str | None, entity_id: int | None, url: str | None) -> tuple[str, int]:
+    """The entity a command reads: the ``--url`` when given (adopting its expansion), else TYPE ID."""
+    if url is not None:
+        _apply_url_expansion(ctx, url)
+        parsed = parse_entity_from_wowhead_url(url)
+        if parsed is None:
+            fail(ctx, "invalid_argument", f"Could not parse entity from URL {url!r}.")
+        return parsed
+    if entity_type is None or entity_id is None:
+        fail(ctx, "invalid_argument", "Pass TYPE ID, or --url with a Wowhead entity URL.")
+    return entity_type, entity_id
+
+
 @app.command("entity")
 def entity(
     ctx: typer.Context,
-    entity_type: str = typer.Argument(..., help="Wowhead entity type. Example: item, quest, npc."),
-    entity_id: int = typer.Argument(..., help="Wowhead entity id."),
+    entity_type: str | None = typer.Argument(None, help="Wowhead entity type. Example: item, quest, npc. Omit with --url."),
+    entity_id: int | None = typer.Argument(None, help="Wowhead entity id. Omit with --url."),
     url: str | None = typer.Option(
         None,
         "--url",
-        help="Wowhead entity page URL. Overrides type/id and auto-selects expansion when --expansion is omitted.",
+        help="Wowhead entity page URL, in place of TYPE ID. Auto-selects expansion when --expansion is omitted.",
     ),
     data_env: int | None = typer.Option(
         None,
@@ -4651,25 +4631,19 @@ def entity(
     ),
 ) -> None:
     """Fetch a Wowhead entity tooltip with optional comments and linked entities."""
-    resolved_type = entity_type
-    resolved_id = entity_id
-    if url is not None:
-        _apply_url_expansion(ctx, url)
-        parsed = parse_entity_from_wowhead_url(url)
-        if parsed is None:
-            fail(ctx, "invalid_argument", f"Could not parse entity from URL {url!r}.")
-        resolved_type, resolved_id = parsed
+    resolved_type, resolved_id = _entity_ref_or_fail(ctx, entity_type, entity_id, url)
     client = _client(ctx)
-    payload = _build_entity_payload(
-        ctx,
-        client,
-        entity_type=resolved_type,
-        entity_id=resolved_id,
-        data_env=data_env,
-        include_comments=include_comments,
-        include_all_comments=include_all_comments,
-        linked_entity_preview_limit=linked_entity_preview_limit,
-    )
+    with _upstream(ctx):
+        payload = _build_entity_payload(
+            ctx,
+            client,
+            entity_type=resolved_type,
+            entity_id=resolved_id,
+            data_env=data_env,
+            include_comments=include_comments,
+            include_all_comments=include_all_comments,
+            linked_entity_preview_limit=linked_entity_preview_limit,
+        )
     _emit(ctx, payload)
 
 
@@ -4697,10 +4671,7 @@ def _entity_page_payload(
         if cfg.normalize_canonical_to_expansion
         else raw_canonical
     )
-    links = extract_linked_entities_from_href(html, source_url=canonical_url)
-    if include_gatherer:
-        links = links + extract_gatherer_entities(html, source_url=canonical_url)
-
+    links = entity_page_links(html, page_url=canonical_url, include_gatherer=include_gatherer)
     deduped = dedupe_links(links, entity_type=plan.page_entity_type, entity_id=plan.page_entity_id)
 
     payload: dict[str, Any] = {
@@ -4743,18 +4714,18 @@ def _entity_page_payload(
 @app.command("entity-page")
 def entity_page(
     ctx: typer.Context,
-    entity_type: str = typer.Argument(..., help="Wowhead entity type. Example: item, quest, npc."),
-    entity_id: int = typer.Argument(..., help="Wowhead entity id."),
+    entity_type: str | None = typer.Argument(None, help="Wowhead entity type. Example: item, quest, npc. Omit with --url."),
+    entity_id: int | None = typer.Argument(None, help="Wowhead entity id. Omit with --url."),
     url: str | None = typer.Option(
         None,
         "--url",
-        help="Wowhead entity page URL. Overrides type/id and auto-selects expansion when --expansion is omitted.",
+        help="Wowhead entity page URL, in place of TYPE ID. Auto-selects expansion when --expansion is omitted.",
     ),
     max_links: int = typer.Option(
         200,
         "--max-links",
         min=1,
-        max=2000,
+        max=ENTITY_PAGE_MAX_LINKS,
         help="Maximum linked entities to return.",
     ),
     include_gatherer: bool = typer.Option(
@@ -4767,14 +4738,7 @@ def entity_page(
 
     Comments are a separate surface: run `wowhead comments TYPE ID`.
     """
-    resolved_type = entity_type
-    resolved_id = entity_id
-    if url is not None:
-        _apply_url_expansion(ctx, url)
-        parsed = parse_entity_from_wowhead_url(url)
-        if parsed is None:
-            fail(ctx, "invalid_argument", f"Could not parse entity from URL {url!r}.")
-        resolved_type, resolved_id = parsed
+    resolved_type, resolved_id = _entity_ref_or_fail(ctx, entity_type, entity_id, url)
     _emit(
         ctx,
         _entity_page_payload(
@@ -4907,17 +4871,18 @@ def _comments_payload(
             "comments": f"{canonical_url}#comments",
         },
     }
-    if options.linked_entity_preview_limit > 0:
-        payload["linked_entities"] = build_linked_entity_preview(
-            extract_linked_entities_from_href(html, source_url=canonical_url)
-            + extract_gatherer_entities(html, source_url=canonical_url),
-            entity_type=plan.page_entity_type,
-            entity_id=plan.page_entity_id,
-            preview_limit=options.linked_entity_preview_limit,
-            fetch_more_command_builder=lambda count: entity_page_fetch_more_command(
-                entity_type, entity_id, count, expansion=cfg.expansion
-            ),
-        )
+    linked_entities = entity_linked_entities_payload(
+        html=html,
+        page_url=canonical_url,
+        page_entity_type=plan.page_entity_type,
+        page_entity_id=plan.page_entity_id,
+        requested_entity_type=entity_type,
+        requested_entity_id=entity_id,
+        linked_entity_preview_limit=options.linked_entity_preview_limit,
+        expansion=cfg.expansion,
+    )
+    if linked_entities is not None:
+        payload["linked_entities"] = linked_entities
     if options.insights:
         payload["intelligence"] = build_comments_intelligence(
             page_url=canonical_url,
@@ -5009,6 +4974,7 @@ def comments(
     """Fetch and rank the comments on a Wowhead entity page."""
     if sort not in {"newest", "oldest", "rating"}:
         fail(ctx, "invalid_argument", "sort must be one of: newest, oldest, rating.")
+    _validated_date_window(ctx, date_from, date_to)
     keyword_values = tuple(part.strip() for raw in keyword or [] for part in raw.split(",") if part.strip())
     _emit(
         ctx,
@@ -5061,14 +5027,6 @@ def _parsed_compare_refs(ctx: typer.Context, entities: list[str]) -> list[tuple[
     return parsed_refs
 
 
-def _compare_tooltip(ctx: typer.Context, client: WowheadClient, *, entity_type: str, entity_id: int, token: str) -> dict[str, Any]:
-    try:
-        with _upstream(ctx, context=token):
-            return client.tooltip(entity_type, entity_id)
-    except ValueError as exc:
-        fail(ctx, "parse_error", f"{token}: {exc}")
-
-
 def _compare_sampled_comments(
     raw_comments: list[dict[str, Any]], *, canonical_url: str, options: ResolvedCompareOptions
 ) -> list[dict[str, Any]]:
@@ -5099,11 +5057,17 @@ def _compare_entity_record(
     options: ResolvedCompareOptions,
 ) -> tuple[str, dict[str, Any], set[tuple[str, int]]]:
     cfg = _cfg(ctx)
-    tooltip = _compare_tooltip(ctx, client, entity_type=entity_type, entity_id=entity_id, token=token)
-    html, metadata = _fetch_entity_page(ctx, client, entity_type, entity_id)
-    raw_canonical = metadata["canonical_url"] or entity_url(entity_type, entity_id, expansion=cfg.expansion)
+    # The same access plan `entity` uses: recipe reads the spell, mount and battle-pet follow the
+    # tooltip redirect, and faction and pet have no tooltip route, so their name comes from the page.
+    with _upstream(ctx, context=token):
+        plan, tooltip = _tooltip_and_page_plan(client, entity_type, entity_id)
+    html, metadata = _fetch_entity_page(ctx, client, plan.page_entity_type, plan.page_entity_id)
+    if plan.tooltip_from_page_metadata:
+        tooltip = {"name": _build_tooltip_from_page_metadata(metadata)[0]}
+    page_type, page_id = plan.page_entity_type, plan.page_entity_id
+    raw_canonical = metadata["canonical_url"] or entity_url(page_type, page_id, expansion=cfg.expansion)
     canonical_url = (
-        _normalize_canonical_entity_url(raw_canonical, expansion=cfg.expansion, entity_type=entity_type, entity_id=entity_id)
+        _normalize_canonical_entity_url(raw_canonical, expansion=cfg.expansion, entity_type=page_type, entity_id=page_id)
         if cfg.normalize_canonical_to_expansion
         else raw_canonical
     )
@@ -5111,10 +5075,6 @@ def _compare_entity_record(
     links = extract_linked_entities_from_href(html, source_url=canonical_url)
     if options.include_gatherer:
         links = links + extract_gatherer_entities(html, source_url=canonical_url)
-    linked_entities = truncated_link_block(
-        dedupe_links(links, entity_type=entity_type, entity_id=entity_id),
-        max_links=options.max_links_per_entity,
-    )
 
     try:
         raw_comments = extract_comments_dataset(html)
@@ -5129,7 +5089,8 @@ def _compare_entity_record(
         canonical_url=canonical_url,
         tooltip=tooltip,
         metadata=metadata,
-        linked_entities=linked_entities,
+        links=dedupe_links(links, entity_type=page_type, entity_id=page_id),
+        max_links=options.max_links_per_entity,
         raw_comments=raw_comments,
         sampled_comments=_compare_sampled_comments(raw_comments, canonical_url=canonical_url, options=options),
     )
@@ -5274,10 +5235,14 @@ def linked_graph(
     """Build a linked-entity graph rooted at one Wowhead entity."""
     cfg = _cfg(ctx)
     client = _client(ctx)
-    root_url = entity_url(entity_type, entity_id, expansion=cfg.expansion)
+    # The root goes through the access plan (recipe reads the spell page, mount and battle-pet follow
+    # the tooltip redirect); linked children are the page types Wowhead itself linked to.
+    plan = _resolve_page_fetch_target(ctx, client, entity_type=entity_type, entity_id=entity_id)
+    root_url = entity_url(plan.page_entity_type, plan.page_entity_id, expansion=cfg.expansion)
+    page_targets = {(entity_type, entity_id): (plan.page_entity_type, plan.page_entity_id)}
 
     def fetch_page(page_type: str, page_id: int) -> tuple[str, dict[str, str | None]]:
-        return _fetch_entity_page(ctx, client, page_type, page_id)
+        return _fetch_entity_page(ctx, client, *page_targets.get((page_type, page_id), (page_type, page_id)))
 
     try:
         payload = build_linked_graph_payload(

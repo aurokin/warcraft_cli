@@ -7,6 +7,7 @@ import httpx
 from warcraft_api.cache import CacheSettings, CacheTTLConfig, build_cache_store, load_prefixed_cache_settings_from_env
 from warcraft_api.http import DEFAULT_RETRY_ATTEMPTS, build_client, request_with_retries
 from warcraft_core.paths import provider_cache_root
+from warcraft_core.provider import ProviderError
 
 from icy_veins_cli.page_parser import guide_ref_parts, guide_url, parse_guide_page, parse_sitemap_guides
 
@@ -20,10 +21,9 @@ def load_icy_veins_cache_settings_from_env() -> tuple[CacheSettings, int, int]:
         env_prefix="ICY_VEINS",
         default_cache_dir=DEFAULT_CACHE_DIR,
         default_redis_prefix="icy_veins_cli",
-        ttl_defaults=CacheTTLConfig(search_suggestions=86400, guide_page_html=3600, page_html=3600),
+        ttl_defaults=CacheTTLConfig(search_suggestions=86400, page_html=3600),
         ttl_env_overrides={
             "search_suggestions": "ICY_VEINS_SITEMAP_CACHE_TTL_SECONDS",
-            "guide_page_html": "ICY_VEINS_PAGE_CACHE_TTL_SECONDS",
             "page_html": "ICY_VEINS_PAGE_CACHE_TTL_SECONDS",
         },
     )
@@ -75,19 +75,38 @@ class IcyVeinsClient:
             return
         self._cache_store.set(key, payload, ttl_seconds=ttl_seconds)
 
+    def _fetch_text(self, url: str) -> str:
+        return request_with_retries(self._client(), url, retry_attempts=self._retry_attempts).text
+
     def _get_text(self, url: str, *, namespace: str, ttl_seconds: int) -> str:
         key = self._cache_key(namespace, url)
         cached = self._read_cache(key)
         if isinstance(cached, str):
             return cached
-        response = request_with_retries(self._client(), url, retry_attempts=self._retry_attempts)
-        text = response.text
+        text = self._fetch_text(url)
         self._write_cache(key, text, ttl_seconds=ttl_seconds)
         return text
 
     def sitemap_guides(self) -> list[dict[str, Any]]:
-        xml_text = self._get_text(ICY_VEINS_SITEMAP_URL, namespace="sitemap", ttl_seconds=self._sitemap_ttl)
-        return parse_sitemap_guides(xml_text)
+        """Every supported guide the sitemap lists; a body that lists none fails as ``parse_failed`` and is not cached.
+
+        A challenge page or a reshaped sitemap still answers 2xx, and ranking an empty list would
+        report "no guide matches" for every query for as long as that body stayed cached.
+        """
+        key = self._cache_key("sitemap", ICY_VEINS_SITEMAP_URL)
+        cached = self._read_cache(key)
+        if isinstance(cached, str) and (guides := parse_sitemap_guides(cached)):
+            return guides
+        text = self._fetch_text(ICY_VEINS_SITEMAP_URL)
+        guides = parse_sitemap_guides(text)
+        if not guides:
+            raise ProviderError(
+                "parse_failed",
+                "The Icy Veins sitemap listed no guide pages; its format has probably changed.",
+                details={"sitemap_url": ICY_VEINS_SITEMAP_URL},
+            )
+        self._write_cache(key, text, ttl_seconds=self._sitemap_ttl)
+        return guides
 
     def guide_page_html(self, guide_ref: str) -> tuple[str, str]:
         slug = guide_ref_parts(guide_ref)

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from wowhead_cli.entities import (
     comparison_entity_record,
     comparison_field_diffs,
@@ -15,6 +16,7 @@ from wowhead_cli.entities import (
 )
 from wowhead_cli.expansion_profiles import resolve_expansion
 from wowhead_cli.main import app
+from wowhead_cli.wowhead_client import WowheadClient
 
 from tests.wowhead_testkit import SAMPLE_PAGE_HTML, runner
 
@@ -121,21 +123,18 @@ def test_comparison_helper_payloads_are_stable() -> None:
         canonical_url="https://www.wowhead.com/item=19019/thunderfury",
         tooltip={"name": "Thunderfury", "quality": 5, "icon": "inv_sword_39"},
         metadata={"title": "Thunderfury", "description": "Legendary sword"},
-        linked_entities={
-            "count": 2,
-            "total": 2,
-            "truncated": False,
-            "items": [
-                {"entity_type": "npc", "id": 12056, "url": "https://www.wowhead.com/npc=12056"},
-                {"entity_type": "quest", "id": 7786, "url": "https://www.wowhead.com/quest=7786"},
-            ],
-        },
+        links=[
+            {"entity_type": "npc", "id": 12056, "url": "https://www.wowhead.com/npc=12056"},
+            {"entity_type": "quest", "id": 7786, "url": "https://www.wowhead.com/quest=7786"},
+        ],
+        max_links=1,
         raw_comments=[{"id": 1}, {"id": 2}],
         sampled_comments=[{"id": 1, "citation_url": "https://www.wowhead.com/item=19019#comments:id=1"}],
     )
     assert record["entity"]["page_url"] == "https://www.wowhead.com/item=19019/thunderfury"
     assert record["comments"]["count"] == 2
-    assert record["linked_entities"]["count"] == 2
+    assert (record["linked_entities"]["count"], record["linked_entities"]["total"]) == (1, 2)
+    # The shared/unique comparison reads every link, not the block --max-links-per-entity cut.
     assert link_set == {("npc", 12056), ("quest", 7786)}
 
     fields = comparison_field_diffs(
@@ -699,32 +698,42 @@ def test_entity_preview_prefers_multi_source_links_over_single_source_peers(monk
 
 
 
-def test_entity_preview_fetch_more_command_scales_with_known_count(monkeypatch) -> None:
-    def fake_tooltip(self, entity_type: str, entity_id: int, data_env=None):  # noqa: ANN001, ANN202
+@pytest.mark.parametrize("command", [["entity", "currency", "3008", "--no-include-comments"], ["comments", "currency", "3008"]])
+@pytest.mark.parametrize(
+    ("link_count", "max_links", "truncated"), [(250, 250, False), (2000, 2000, False), (2100, 2000, True)]
+)
+def test_entity_preview_fetch_more_command_scales_with_known_count(
+    monkeypatch, command: list[str], link_count: int, max_links: int, truncated: bool
+) -> None:
+    def fake_tooltip(self: WowheadClient, entity_type: str, entity_id: int, data_env: int | None = None) -> dict[str, str]:
         return {"name": "Valorstones"}
 
-    links = "\n".join(f'<a href="/item={200000 + idx}">Item {idx}</a>' for idx in range(250))
+    # 50 of the links sit in a relation tab, which entity-page returns too, so both previews count them.
+    links = "\n".join(f'<a href="/item={200000 + idx}">Item {idx}</a>' for idx in range(link_count - 50))
+    npcs = json.dumps([{"id": 100 + idx, "name": f"Npc {idx}"} for idx in range(50)])
     html = f"""
     <html><head>
       <link rel="canonical" href="https://www.wowhead.com/currency=3008/valorstones">
     </head><body>
       {links}
       <script>var lv_comments0 = [];</script>
+      <script>new Listview({{template: 'npc', id: 'npcs', data:{npcs}}});</script>
     </body></html>
     """
 
-    def fake_html(self, entity_type: str, entity_id: int):  # noqa: ANN001
+    def fake_html(self: WowheadClient, entity_type: str, entity_id: int) -> str:
         return html
 
     monkeypatch.setattr("wowhead_cli.main.WowheadClient.tooltip", fake_tooltip)
     monkeypatch.setattr("wowhead_cli.main.WowheadClient.entity_page_html", fake_html)
-    result = runner.invoke(app, ["entity", "currency", "3008", "--no-include-comments"])
-    assert result.exit_code == 0
+    result = runner.invoke(app, command)
+    assert result.exit_code == 0, result.output
 
-    payload = json.loads(result.stdout)
-    assert payload["data"]["linked_entities"]["count"] == 250
-    assert payload["data"]["linked_entities"]["fetch_more_command"] == "wowhead entity-page currency 3008 --max-links 250"
-
+    preview = json.loads(result.stdout)["data"]["linked_entities"]
+    assert preview["count"] == link_count
+    assert preview["fetch_more_command"] == f"wowhead entity-page currency 3008 --max-links {max_links}"
+    # entity-page cannot return more than 2000 links, so the preview says when its command falls short.
+    assert preview["fetch_more_truncated"] is truncated
 
 
 def test_entity_preview_suppresses_low_signal_names(monkeypatch) -> None:
@@ -999,3 +1008,93 @@ def test_compare_reports_the_links_each_entity_budget_cut_off(monkeypatch) -> No
         assert links_block["count"] == len(links_block["items"]) == 10
         assert links_block["total"] == 30
         assert links_block["truncated"] is True
+
+
+def test_compare_and_linked_graph_reach_entities_through_the_same_routes_as_entity(monkeypatch) -> None:
+    calls: list[tuple[str, str, int]] = []
+
+    def fake_tooltip(self: WowheadClient, entity_type: str, entity_id: int, data_env: int | None = None) -> dict[str, str]:
+        calls.append(("tooltip", entity_type, entity_id))
+        return {"name": f"{entity_type} {entity_id}"}
+
+    def fake_tooltip_with_metadata(
+        self: WowheadClient, entity_type: str, entity_id: int, data_env: int | None = None
+    ) -> tuple[dict[str, str], str]:
+        calls.append(("tooltip", entity_type, entity_id))
+        return {"name": "Grand Expedition Yak"}, "https://nether.wowhead.com/tooltip/item/84101?dataEnv=1"
+
+    def fake_page(self: WowheadClient, entity_type: str, entity_id: int) -> str:
+        calls.append(("page", entity_type, entity_id))
+        return '<html><head><meta property="og:title" content="Argent Dawn"></head></html>'
+
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.tooltip", fake_tooltip)
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.tooltip_with_metadata", fake_tooltip_with_metadata)
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.entity_page_html", fake_page)
+
+    compared = runner.invoke(app, ["compare", "faction:529", "recipe:2549", "mount:460", "--comment-sample", "0"])
+    assert compared.exit_code == 0, compared.output
+    # Faction has no tooltip route, recipe reads the spell, and the mount follows its tooltip redirect.
+    assert calls == [
+        ("page", "faction", 529),
+        ("tooltip", "spell", 2549),
+        ("page", "spell", 2549),
+        ("tooltip", "mount", 460),
+        ("page", "item", 84101),
+    ]
+    assert json.loads(compared.stdout)["data"]["entities"][0]["summary"]["name"] == "Argent Dawn"
+
+    calls.clear()
+    graphed = runner.invoke(app, ["linked-graph", "mount", "460"])
+    assert graphed.exit_code == 0, graphed.output
+    assert calls == [("tooltip", "mount", 460), ("page", "item", 84101)]
+
+
+def test_compare_shares_links_beyond_the_per_entity_link_limit(monkeypatch) -> None:
+    pages = {
+        19019: '<a href="/item=1/a">a</a><a href="/item=2/b">b</a><a href="/item=3/c">c</a>',
+        19351: '<a href="/item=3/c">c</a><a href="/item=2/b">b</a><a href="/item=1/a">a</a>',
+    }
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.tooltip", lambda self, entity_type, entity_id, data_env=None: {"name": "x"})
+    monkeypatch.setattr(
+        "wowhead_cli.main.WowheadClient.entity_page_html", lambda self, entity_type, entity_id: f"<html>{pages[entity_id]}</html>"
+    )
+
+    result = runner.invoke(app, ["compare", "item:19019", "item:19351", "--max-links-per-entity", "1", "--comment-sample", "0"])
+
+    assert result.exit_code == 0, result.output
+    linked = json.loads(result.stdout)["data"]["comparison"]["linked_entities"]
+    assert linked["shared_count_total"] == 3
+    assert linked["unique_count_total_by_entity"] == {"item:19019": 0, "item:19351": 0}
+
+
+# Trimmed from the live faction=2653 page (2026-09): its members tab is a Listview with inline data.
+FACTION_LISTVIEW_HTML = """<html><body><script>
+new Listview({
+    data: lv_comments0,
+    id: 'comments',
+    template: 'comment',
+});
+new Listview({
+    template: 'npc',
+    id: 'members',
+    name: WH.TERMS.members,
+    note: "<a href=\\"\\/npcs?filter=3;2653;0\\">Filter these results<\\/a>",
+    extraCols: ['popularity'], sort: ["popularity"], maxPopularity: 543,
+    data:[{"classification":0,"displayName":"Volo the Leg-Breaker","id":226516,"name":"Volo the Leg-Breaker","popularity":13},
+          {"classification":0,"displayName":"Papa Kraz Torquewrench","id":226518,"name":"Papa Kraz Torquewrench"}]
+});
+new Listview({template: 'sound', id: 'sounds', data:[{"id":5,"name":"Hit"}]});
+</script></body></html>"""
+
+
+def test_entity_page_lists_the_entities_in_a_page_relation_tab(monkeypatch) -> None:
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.entity_page_html", lambda self, entity_type, entity_id: FACTION_LISTVIEW_HTML)
+
+    result = runner.invoke(app, ["entity-page", "faction", "2653"])
+
+    assert result.exit_code == 0, result.output
+    items = json.loads(result.stdout)["data"]["linked_entities"]["items"]
+    assert [(row["entity_type"], row["id"], row["source_kind"], row["listview"]) for row in items] == [
+        ("npc", 226516, "listview", "members"),
+        ("npc", 226518, "listview", "members"),
+    ]

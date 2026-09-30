@@ -69,20 +69,14 @@ def provider_error(exc: BlizzardClientError | httpx.HTTPError) -> ProviderError:
 
 
 def _auth_payload(auth: BlizzardAuthConfig) -> dict[str, Any]:
-    state = provider_auth_status(PROVIDER_NAME)
     return {
         "required": True,
         "configured": auth.configured,
-        "client_credentials_configured": auth.configured,
         "flow": "oauth_client_credentials",
         "active_mode": "client_credentials",
         "endpoint_family": "client",
         "credential_source": auth.credential_source,
         "lookup_order": [".env.local", blizzard_provider_env_path(), "environment"],
-        "state": state,
-        "state_path": str(provider_state_path(PROVIDER_NAME)),
-        # The client-credentials flow caches its token under a distinct provider key, so surface that
-        # cache here too — otherwise doctor would report "no token" even after a successful command.
         "token_cache": provider_auth_status(CLIENT_CREDENTIALS_STATE_PROVIDER),
         "token_cache_path": str(provider_state_path(CLIENT_CREDENTIALS_STATE_PROVIDER)),
     }
@@ -134,7 +128,6 @@ def doctor_envelope() -> Envelope:
                 "Game Data (realm, item) and Profile (character) commands ship with live OAuth "
                 "client-credentials auth and region/namespace routing.",
                 verification_note(),
-                "Second OAuth validation point for the shared auth architecture (phase 3, docs/architecture/AUTH_ARCHITECTURE.md).",
             ],
         },
     )

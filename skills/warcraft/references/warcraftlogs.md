@@ -109,8 +109,10 @@ Best fits:
   - `warcraftlogs character us illidan Roguecane`
 - character rankings, when the API allows them:
   - `warcraftlogs character-rankings us illidan Roguecane --zone-id 38 --difficulty 5 --metric dps --size 20`
+  - `--spec-name` takes any spelling (`beast-mastery`, `Beast Mastery`); Warcraft Logs would otherwise ignore it and return another spec's rankings
 - encounter rankings for real boss/class/spec leaderboard queries:
   - `warcraftlogs encounter-rankings --zone-id 46 --boss-id 3180 --difficulty 5 --class-name Druid --spec-name Balance --metric dps --top 10`
+  - `--class-name`/`--spec-name` take any spelling (`death-knight`, `Death Knight`, `beast-mastery`); the CLI sends Warcraft Logs' own `DeathKnight`/`BeastMastery`
 - guild report listing:
   - `warcraftlogs reports --guild-region us --guild-realm illidan --guild-name Liquid --limit 10`
 - report inspection:
@@ -135,13 +137,13 @@ Best fits:
   - `warcraftlogs graphql --query 'query Report($code: String!) { reportData { report(code: $code) { code title } } }' --report-code <code>`
   - `warcraftlogs graphql --query @./query.graphql --variables-json '{"code":"<code>"}' --operation-name Report`
 - sampled cross-report analytics:
-  - `warcraftlogs boss-kills --zone-id 38 --boss-id 3012 --difficulty 5 --top 10`
-  - `warcraftlogs top-kills --zone-id 38 --boss-name Dimensius --difficulty 5 --top 5`
-  - `warcraftlogs spec-kill-samples --zone-id 38 --boss-id 3012 --difficulty 5 --spec-name Balance --top 5`
-  - `warcraftlogs kill-time-distribution --zone-id 38 --boss-id 3012 --difficulty 5 --bucket-seconds 30`
-  - `warcraftlogs boss-spec-usage --zone-id 38 --boss-id 3012 --difficulty 5 --top 10`
-  - `warcraftlogs comp-samples --zone-id 38 --boss-id 3012 --difficulty 5 --top 5`
-  - `warcraftlogs ability-usage-summary --zone-id 38 --boss-id 3012 --difficulty 5 --ability-id 20473 --preview-limit 5`
+  - `warcraftlogs boss-kills --zone-id 53 --boss-id 3429 --difficulty 5 --top 10`
+  - `warcraftlogs top-kills --zone-id 53 --boss-name 'Coiled Altar' --difficulty 5 --top 5`
+  - `warcraftlogs spec-kill-samples --zone-id 53 --boss-id 3429 --difficulty 5 --spec-name Balance --top 5`
+  - `warcraftlogs kill-time-distribution --zone-id 53 --boss-id 3429 --difficulty 5 --bucket-seconds 30`
+  - `warcraftlogs boss-spec-usage --zone-id 53 --boss-id 3429 --difficulty 5 --top 10`
+  - `warcraftlogs comp-samples --zone-id 53 --boss-id 3429 --difficulty 5 --top 5`
+  - `warcraftlogs ability-usage-summary --zone-id 53 --boss-id 3429 --difficulty 5 --ability-id 20473 --preview-limit 5`
 
 ## Notes
 
@@ -172,7 +174,7 @@ Best fits:
   - it returns a scoped `talent_transport_packet` sourced from `combatant_info.talentTree`
   - for normal multi-fight reports, give it `--fight-id` or a report URL that already includes `?fight=<id>` or `#fight=<id>`
   - it only emits a packet when every selected talent-tree row is fully formed, and then keeps normalized raw `entry/node_id/rank` rows from the source tree as evidence
-  - it never validates the build itself: the packet always comes back `transport_status: raw_only` with `validation.reason: simc_backend_unavailable`, because Warcraft Logs does not run SimulationCraft
+  - it never validates the build itself: the packet always comes back `transport_status: raw_only`, with `validation.reason: simc_backend_unavailable` because Warcraft Logs does not run SimulationCraft (or `missing_class_spec_identity` / `unsupported_actor_class` when the actor's class and spec do not resolve)
   - to get validated `simc_split_talents`, write the packet with `--out <path>` and run `simc validate-talent-transport --build-packet <path>`, or use `warcraft talent-packet` which chains both steps
   - in that validated packet the hero-tree selection node is resolved (tree `selection`, named after the hero tree) but never enters the split strings; every entry, including each entry of a tiered node that spreads its ranks over several entries, is compared rank by rank, and an entry whose rank could not be read back fails validation with `simc_round_trip_mismatch`; a talent row that repeats an entry (`reason: duplicate_entry` on the row) or has a negative rank (`reason: negative_rank`) leaves the packet unvalidated with `simc_trait_resolution_incomplete`, and rows from two hero trees leave it unvalidated with `multiple_hero_trees` (`hero_tree_ids`); entries SimC grants from a hero tree this build did not pick are listed under `validation.round_trip.ignored_unselected_hero_entries`
   - malformed or incomplete talent-tree rows fail with `missing_talent_tree` instead of emitting a partial packet
@@ -196,11 +198,11 @@ Best fits:
 - `--spec-name` on sampled commands takes the class too (`'Frost Mage'`, `frost-death-knight`); a bare spec name matches every class with that spec, and when it matched several the payload lists them in `sample.matched_spec_classes` and adds a note
 - `comp-samples` is sampled cross-report analytics too; it returns sampled kill rosters plus additive class-presence and exact class-signature summaries for that filtered cohort
 - `spec-kill-samples` is the participant-cohort sibling of `boss-kills`: it requires `--spec-name`, returns the fastest sampled kills that contained that spec, and reports `sample.truncation_order` so the returned head is never mistaken for a random sample or a spec leaderboard
-- `ability-usage-summary` is sampled cross-report analytics too; it reports explicit cast counts for one requested `--ability-id` across the filtered finished-kill cohort; a kill whose events overflow `--event-limit` is counted in `sample.kills_with_truncated_events_count`, and `usage.total_casts_is_lower_bound` then says the totals are floors
+- `ability-usage-summary` is sampled cross-report analytics too; it reports explicit cast counts for one requested `--ability-id` across the filtered finished-kill cohort; a kill whose events overflow `--event-limit` is counted in `sample.kills_with_truncated_events_count`, and `usage.total_casts_is_lower_bound` then says the totals are floors; it counts player-side casts only, so a boss ability reads zero (use `report-encounter-casts --hostility-type enemies` for boss casts)
 - the sampled commands validate `--zone-id` and `--boss-id`/`--boss-name` against Warcraft Logs world data first, so a typo fails with `not_found` (exit 4) instead of returning an empty cohort
 - the sampled commands collapse one real pull that two raiders both logged into a single kill (same guild, encounter, difficulty and raid size, with wall-clock start and end within 5 s of another report of that pull); the collapse is reported, never silent — `sample.duplicates_removed` counts it, a note states the rule, and the kept kill's `duplicate_reports` cites the folded-in report codes and fight ids; reports without a guild are never collapsed, so a pull logged in two personal reports still counts twice
 - these sampled analytics commands include freshness and citation metadata for the sampled report cohort so agents can preserve trust boundaries when composing follow-up steps; `freshness.sampled_at` is when the command ran, and `freshness.cache_hit_count`/`upstream_request_count`/`served_entirely_from_cache` say whether the cohort was fetched live or replayed from cache
-- those sampled analytics intentionally skip unfinished live reports and surface sample/truncation metadata instead of faking global certainty
+- those sampled analytics include kills from reports still being logged (a finished kill is final; each kill row says `report_finished`) and surface sample/truncation metadata instead of faking global certainty
 - `warcraftlogs auth status` is the first place to check when auth looks wrong; it shows credential source and whether any persisted auth state exists
 - `warcraftlogs auth login --redirect-uri ...` and `warcraftlogs auth pkce-login --redirect-uri ...` are two-step flows:
   - first run prints the authorize URL and saves pending state locally

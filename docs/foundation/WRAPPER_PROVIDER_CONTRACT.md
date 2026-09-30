@@ -122,7 +122,8 @@ alongside the registry `status`.
 Fanout failure rules:
 - `failed_providers`, `failed_provider_count`, and `answered_provider_count` are always present, in
   both the default and the `--brief` shape, so a dead fanout is never indistinguishable from an
-  empty one
+  empty one; `provider_warnings` likewise lifts every `*_warning` in a provider's provenance out of
+  the per-provider rows `--brief` drops
 - a provider row's `answered` says whether the provider actually looked the query up. An
   explicit-report-only provider (Warcraft Logs) answers free text with a locally built hint and no
   rows, so it is `ok` but not `answered`, and `answered_provider_count` does not count it
@@ -270,7 +271,7 @@ Providers whose wrapper `search` surface is stubbed or otherwise not ready shoul
 
 Search result ordering rules:
 - provider-local ranking stays provider-specific
-- the wrapper may apply a thin, tunable cross-provider ranking layer on top of provider-local scores
+- the wrapper may apply a thin cross-provider ranking layer on top of provider-local scores
 - that wrapper layer should be query-aware and use signals like provider family, result kind, and structured query hints
 - that wrapper layer may also use provider-specific boosts for certain intents, such as preferring `raiderio` for character-profile and guild-profile queries
 - wrapper ranking must stay inspectable in output, not hidden behind opaque ordering
@@ -314,8 +315,9 @@ is free text. A bare name carrying none of these and no keyword is *not* a profi
   is supporting reference, however large its local scale. Only a provider's top row can anchor, so a
   same-named row Wowhead ranked lower (the `Thunderfury` proc spells) never jumps ahead of it. An
   anchored page keeps no profile slot.
-  The anchor applies only when the query carries no intent at all, so
-  `character us malganis Aurow` still resolves to the character and not to a spell of the same name.
+  When the query carries intent words, only a title that is exactly the whole query anchors (the item
+  `Guild Tabard` for `guild tabard`: the words are its name), so `character us malganis Aurow` still
+  resolves to the character and not to a spell of the same name.
 - structured profile queries (`guild us illidan Liquid`, `character us malganis Aurow`) keep their
   profile intent boosts and put Raider.IO first.
 
@@ -338,7 +340,7 @@ reserved slot, the candidate total, and how many rows were deferred or withheld
 **Quality — the row's own title.** A row whose title *is* the query (`name_match: "exact"`) or whose
 title starts with it (`"title_prefix"`, as in `Thunderfury, Blessed Blade of the Windseeker`) scores
 above one that merely mentions it somewhere, so between providers an exact item/spell/quest beats a
-partial match and a news post about it. The boosts live in the same tunable policy as every other
+partial match and a news post about it. The boosts live in the same ranking policy as every other
 weight. A guide row the provider itself flagged as superseded (Wowhead's `stale_guide` ranking
 reason) carries `wrapper_ranking.stale_guide: true`, in the `--brief` rows too; the wrapper passes the
 provider's flag on and never computes one of its own.
@@ -347,12 +349,8 @@ Changing any of these rules is a contract change: the model is covered by a tabl
 queries with realistic per-provider score scales in `tests/test_provider_contract.py`, and that
 table — not a single number — is what a change has to keep true.
 
-Ranking policy location:
-- default policy lives in shared code
-- optional local override file: `~/.config/warcraft/wrapper_ranking.json`
-- override files should only tune weights and mappings, not redefine provider contracts
-- an unreadable or malformed override file fails with `invalid_config` (exit 2) naming the file,
-  instead of an `internal_error` from the JSON parser
+The policy is `RANKING_POLICY` in `warcraft_cli/provider_contract.py`. There is no local override
+file, so the same query always ranks the same way.
 
 ## Resolve Rules
 
@@ -373,13 +371,16 @@ Resolve selection rules:
   break an exact tie on the wrapper score, ahead of the incomparable raw provider score
 - the top-ranked match is the answer only when its own provider resolved it and the query's intents
   do not rank that provider's family down (`wrapper_ranking.intent_family_fit` is not negative):
-  a guide query is never answered by Lorrgs spec metadata, a guild query never by a wiki article
+  a guide query is never answered by Lorrgs spec metadata, a guild query never by a wiki article.
+  A match whose title is exactly the query is exempt, because the intent word is part of its name
+  (the item `Guild Tabard`)
 - the wrapper never passes its own `--limit` to a provider's resolve: providers judge confidence
   against their rivals, and a small limit would hide them
 - preserve the chosen provider's `match`, `next_command`, and confidence instead of flattening them
 - when the top-ranked match is not the answer, surface it as `best_unresolved_candidate` (flagged
-  `resolved: false`, with `unresolved_reason`) together with the providers' own
-  `fallback_search_command`s, so the caller always has a next step
+  `resolved: false`, with `unresolved_reason`) together with the own `fallback_search_command`s of
+  the providers that returned a candidate, in ranking order. A provider that found nothing hands
+  over no search, so when no provider found anything `fallback_search_command` is `null`
 
 Debuggability rules:
 - `warcraft search --ranking-debug` should expose compact ranking summaries for the top wrapper candidates

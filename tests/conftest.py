@@ -2,41 +2,11 @@ from __future__ import annotations
 
 import os
 import socket
-import sys
 from collections.abc import Iterator
-from pathlib import Path
 from typing import Any, NoReturn
 
 import httpx
 import pytest
-
-ROOT = Path(__file__).resolve().parents[1]
-PACKAGE_SRC_DIRS = (
-    ROOT / "packages" / "warcraft-core" / "src",
-    ROOT / "packages" / "warcraft-api" / "src",
-    ROOT / "packages" / "warcraft-content" / "src",
-    ROOT / "packages" / "warcraft-cli" / "src",
-    ROOT / "packages" / "wowhead-cli" / "src",
-    ROOT / "packages" / "method-cli" / "src",
-    ROOT / "packages" / "icy-veins-cli" / "src",
-    ROOT / "packages" / "raiderio-cli" / "src",
-    ROOT / "packages" / "warcraft-wiki-cli" / "src",
-    ROOT / "packages" / "simc-cli" / "src",
-    ROOT / "packages" / "warcraftlogs-cli" / "src",
-    ROOT / "packages" / "raidbots-cli" / "src",
-    ROOT / "packages" / "blizzard-api-cli" / "src",
-    ROOT / "packages" / "curseforge-cli" / "src",
-    ROOT / "packages" / "lorrgs-cli" / "src",
-)
-
-TESTS_DIR = str(ROOT / "tests")
-if TESTS_DIR not in sys.path:
-    sys.path.insert(0, TESTS_DIR)
-
-for package_src in reversed(PACKAGE_SRC_DIRS):
-    path_str = str(package_src)
-    if path_str not in sys.path:
-        sys.path.insert(0, path_str)
 
 # Every provider that has a file/redis cache (warcraft_api.cache.load_prefixed_cache_settings_from_env).
 CACHE_ENV_PREFIXES = (

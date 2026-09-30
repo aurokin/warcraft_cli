@@ -48,11 +48,11 @@ Every command emits the shared envelope (`ok`, `provider`, `command`, `kind`, `s
 |---|---|---|
 | `doctor` | `doctor` | `status`, `installed`, `language`, `auth`, `capabilities`, `url_templates`, `cache`, `notes` |
 | `inspect-report` | `report` | `report`, `scope`, `freshness`, `citations`, `raw` (unless `--no-raw`) |
+| `input` | `simc_input` | `report_id`, `input`, `handoff`, `scope`, `freshness`, `citations` |
+| `explain-input` | `simc_input` | `scope`, `handoff` |
 
 A quick-sim `report` carries `actor` and `metrics` for the first actor, plus `actor_count` and
 `other_actors` (each with `actor` and `metrics`) when the sim had more than one.
-| `input` | `simc_input` | `report_id`, `input`, `handoff`, `scope`, `freshness`, `citations` |
-| `explain-input` | `simc_input` | `scope`, `handoff` |
 
 `freshness.from_cache` marks a payload that may be up to `cache_ttl_seconds` old; `retrieved_at` is
 always when this CLI produced the response.
@@ -73,10 +73,8 @@ Failures write the error envelope to stderr. Codes follow
 
 ## Configuration
 
-Report URLs are env-overridable so a live URL change needs no code change (each is `{id}`-templated):
-`RAIDBOTS_BASE_URL`, `RAIDBOTS_REPORT_PATH_TEMPLATE`, `RAIDBOTS_DATA_PATH_TEMPLATE`,
-`RAIDBOTS_INPUT_PATH_TEMPLATE`. The URL host of an input reference is ignored — fetches are always
-rebuilt from the configured base.
+Report fetches always go to `https://www.raidbots.com` (`doctor` lists the `url_templates`). The URL
+host of an input reference is ignored.
 
 Caching uses the shared `RAIDBOTS_CACHE_*` settings; `RAIDBOTS_REPORT_CACHE_TTL_SECONDS` defaults to
 24 hours because completed reports are immutable.

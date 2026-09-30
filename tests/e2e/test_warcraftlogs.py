@@ -66,8 +66,9 @@ SAMPLE_WINDOW_PADDING_MS = 60_000
 SAMPLE_REPORT_PAGES = "1"
 SAMPLE_REPORTS_PER_PAGE = "5"
 
-# Mythic: the difficulty the public leaderboards rank.
+# Mythic: the difficulty the public leaderboards rank; Heroic is killed far more often.
 MYTHIC_DIFFICULTY_ID = 5
+HEROIC_DIFFICULTY_ID = 4
 # How far the public-report walk goes before reporting what it scanned.
 PUBLIC_ANCHOR_BOSS_ATTEMPTS = 3
 PUBLIC_ANCHOR_ROW_ATTEMPTS = 5
@@ -681,6 +682,9 @@ def test_guild_family_reports_the_pinned_guild(require):
     detail = guild.data["guild"]
     assert detail["name"].lower() == pins.GUILD_NAME, guild.describe()
     assert detail["server"]["slug"] == pins.GUILD_REALM, guild.describe()
+    # Players type the realm's display name; Warcraft Logs slugs Mal'Ganis without the apostrophe.
+    by_name = run("warcraftlogs", "guild", pins.GUILD_REGION, pins.GUILD_REALM_DISPLAY, pins.GUILD_NAME)
+    assert by_name.data["guild"]["id"] == detail["id"], by_name.describe()
 
     members = run("warcraftlogs", "guild-members", *GUILD, "--limit", "5")
     roster = members.data["guild_members"]
@@ -772,6 +776,57 @@ def test_encounter_rankings_leaderboard_is_scoped_by_zone_and_boss_options(requi
     assert all(row.get("name") and row.get("class_name") for row in rankings["rows"]), result.describe()
 
 
+# Every healing spec, as Warcraft Logs names class and spec on a ranking row.
+HEALER_SPECS = frozenset(
+    {
+        ("Priest", "Holy"), ("Priest", "Discipline"), ("Paladin", "Holy"), ("Druid", "Restoration"),
+        ("Shaman", "Restoration"), ("Monk", "Mistweaver"), ("Evoker", "Preservation"),
+    }
+)
+
+
+def test_encounter_rankings_class_spec_metric_and_page_reach_warcraft_logs(require):
+    """The leaderboard filters go to Warcraft Logs, whose own row fields prove each one landed.
+
+    Multi-word classes and specs are spelled the way players type them; Warcraft Logs rejected the
+    spaced display names (``Death Knight``, ``Beast Mastery``) the CLI once sent. ``--page 2`` must
+    continue the ranking where page 1 stopped, not repeat it.
+    """
+    require("warcraftlogs")
+    found = anchor()
+    scope = (
+        "encounter-rankings", "--zone-id", str(found.zone["id"]), "--boss-id", str(found.fight["encounter_id"]),
+        "--difficulty", str(found.fight["difficulty"]),
+    )
+
+    first = run("warcraftlogs", *scope, "--top", "100")
+    first_rows = first.data["rankings"]["rows"]
+    assert len({row["class_name"] for row in first_rows}) >= 2, "an unfiltered leaderboard holds more than one class"
+
+    for flags, expected in (
+        (("--class-name", "death-knight"), {"class_name": "DeathKnight"}),
+        (("--class-name", "hunter", "--spec-name", "beast-mastery"), {"class_name": "Hunter", "spec_name": "BeastMastery"}),
+    ):
+        narrowed = run("warcraftlogs", *scope, *flags, "--top", "10")
+        rows = narrowed.data["rankings"]["rows"]
+        assert rows, narrowed.describe()
+        assert all({key: row[key] for key in expected} == expected for row in rows), narrowed.describe()
+
+    healers = run("warcraftlogs", *scope, "--metric", "hps", "--top", "10")
+    healer_rows = healers.data["rankings"]["rows"]
+    assert healer_rows and {(row["class_name"], row["spec_name"]) for row in healer_rows} <= HEALER_SPECS, healers.describe()
+
+    second = run("warcraftlogs", *scope, "--top", "10", "--page", "2")
+    rankings = second.data["rankings"]
+    assert rankings["page"] == 2, second.describe()
+    assert rankings["rows"][0]["rank"] == first.data["rankings"]["page_count"] + 1, second.describe()
+
+    def keys(rows: list[dict[str, Any]]) -> set[tuple[Any, ...]]:
+        return {(row["report_code"], row["fight_id"], row["name"]) for row in rows}
+
+    assert not keys(rankings["rows"]) & keys(first_rows), "page 2 repeats rows from page 1"
+
+
 def test_reports_and_guild_reports_list_the_current_tier(require):
     require("warcraftlogs")
     zone = current_raid_zone()
@@ -789,6 +844,26 @@ def test_reports_and_guild_reports_list_the_current_tier(require):
     assert all(row["guild"]["name"].lower() == pins.GUILD_NAME for row in guild_rows), listing.describe()
     assert listing.data["pagination"]["total"] > 0, listing.describe()
     assert found.report["zone"]["id"] == zone["id"], found.report
+
+
+def test_report_listings_page_forward(require):
+    """``--page`` moves both report listings forward instead of answering page 1 again.
+
+    The guild's own listing barely changes between two reads, so page 2 of two rows must be exactly
+    rows three and four of a four-row first page. The public listing moves with every upload, so only
+    Warcraft Logs' own pagination block can witness its page.
+    """
+    require("warcraftlogs")
+    wide = run("warcraftlogs", "guild-reports", *GUILD, "--limit", "4")
+    paged = run("warcraftlogs", "guild-reports", *GUILD, "--limit", "2", "--page", "2")
+    codes = [row["code"] for row in _rows(wide, "reports")]
+    assert len(codes) == 4, wide.describe()
+    assert [row["code"] for row in _rows(paged, "reports")] == codes[2:], paged.describe()
+    assert paged.data["pagination"]["current_page"] == 2, paged.describe()
+
+    public = run("warcraftlogs", "reports", "--zone-id", str(current_raid_zone()["id"]), "--limit", "3", "--page", "2")
+    assert len(_rows(public, "reports")) == 3, public.describe()
+    assert (public.data["pagination"]["current_page"], public.data["pagination"]["from"]) == (2, 4), public.describe()
 
 
 # --------------------------------------------------------------------------------------------
@@ -1064,10 +1139,14 @@ def test_raw_report_surfaces_return_scoped_slices(require):
     events = run("warcraftlogs", "report-events", found.code, "--fight-id", fight, "--data-type", "casts", "--limit", "5")
     assert events.payload["kind"] == "report_events", events.describe()
     assert events.data["report"]["code"] == found.code, events.describe()
-    # --limit cuts the same time-ordered page short; a wider page proves the cap bit.
+    # --limit cuts the same time-ordered page short; a wider page proves the cap bit. Warcraft Logs
+    # ends a page on a whole timestamp, so events sharing the fifth one's timestamp come along too.
     wider = run("warcraftlogs", "report-events", found.code, "--fight-id", fight, "--data-type", "casts", "--limit", "50")
-    assert len(wider.data["events"]) > 5, wider.describe()
-    assert events.data["events"] == wider.data["events"][:5], events.describe()
+    capped = events.data["events"]
+    assert len(wider.data["events"]) > len(capped) >= 5, wider.describe()
+    assert capped == wider.data["events"][: len(capped)], events.describe()
+    assert {row["timestamp"] for row in capped[4:]} == {capped[4]["timestamp"]}, events.describe()
+    assert events.data["next_page_timestamp"] == wider.data["events"][len(capped)]["timestamp"], events.describe()
     assert {row["type"] for row in events.data["events"]} <= {"cast", "begincast"}, events.describe()
     assert {row["fight"] for row in events.data["events"]} == {found.fight_id}, events.describe()
 
@@ -1146,6 +1225,28 @@ def test_filter_expression_narrows_the_events_a_report_slice_returns(require):
     assert {row["abilityGameID"] for row in events} == {ability_id}, filtered.describe()
     assert {row["fight"] for row in events} == {found.fight_id}, filtered.describe()
     assert filtered.payload["query"]["filter_expression"] == f"ability.id = {ability_id}", filtered.describe()
+
+
+def test_source_id_keeps_only_that_actors_events(require):
+    """``--source-id`` narrows events server-side to one actor; ``cooldown-packet`` trusts it to attribute casts.
+
+    The actor is one the unfiltered page actually shows casting, and ``sourceID`` is Warcraft Logs'
+    own event field, so a filter that stopped reaching the API returns the other raiders' casts too.
+    """
+    require("warcraftlogs")
+    found = anchor()
+    slice_args = (found.code, "--fight-id", str(found.fight_id), "--data-type", "casts", "--limit", "200")
+
+    unfiltered = run("warcraftlogs", "report-events", *slice_args)
+    roster_ids = {int(row["id"]) for row in found.players}
+    casters = Counter(row["sourceID"] for row in unfiltered.data["events"] if row.get("sourceID") in roster_ids)
+    assert len(casters) >= 2, unfiltered.describe()
+    actor = casters.most_common(1)[0][0]
+
+    filtered = run("warcraftlogs", "report-events", *slice_args, "--source-id", str(actor))
+    events = filtered.data["events"]
+    assert events, filtered.describe()
+    assert {row["sourceID"] for row in events} == {actor}, filtered.describe()
 
 
 def test_wipe_cutoff_trims_the_tail_of_a_wipe_pull(require):
@@ -1274,6 +1375,32 @@ def test_boss_kills_and_top_kills_return_the_anchor_kill(require):
     assert top_kills.payload["kind"] == "top_kills", top_kills.describe()
     top = assert_sampling_metadata(top_kills, expect_rows=True)["kills"]
     assert {_kill_key(row) for row in top} == {_kill_key(row) for row in kills}, top_kills.describe()
+
+
+def test_sampled_kills_on_the_current_raid_include_reports_still_being_logged(require):
+    """An unscoped cohort on the current raid finds kills; raid nights still being logged are most of it.
+
+    Sampling once dropped every report that was still receiving uploads, which on the current tier
+    is nearly all of them, and answered ``ok: true`` with no kills. Heroic of the first boss is
+    killed in far more than one of the newest reports. Each kill is held to ``report-fights``.
+    """
+    require("warcraftlogs")
+    zone = current_raid_zone()
+    boss = zone["encounters"][0]
+    result = run(
+        "warcraftlogs", "boss-kills", "--zone-id", str(zone["id"]), "--boss-id", str(boss["id"]),
+        "--difficulty", str(HEROIC_DIFFICULTY_ID), "--top", "3",
+    )
+    sample = result.data["sample"]
+    kills = result.data["kills"]
+    assert kills and sample["filtered_kill_count"] >= len(kills), result.describe()
+    # The cohort is marked live exactly when one of its kills came from a report still being logged.
+    assert result.data["cache_provenance"]["live"] is True, result.describe()
+    assert result.data["cache_provenance"]["source"] == "sampled_reports", result.describe()
+    for row in kills:
+        fights = run("warcraftlogs", "report-fights", row["report"]["code"]).data["fights"]
+        fight = next(fight for fight in fights if fight["id"] == row["fight"]["id"])
+        assert (fight["encounter_id"], fight["difficulty"], fight["kill"]) == (boss["id"], HEROIC_DIFFICULTY_ID, True), fight
 
 
 def _kill_key(row: dict[str, Any]) -> tuple[str, int]:

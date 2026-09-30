@@ -56,10 +56,16 @@ Exit codes follow `docs/foundation/ERROR_CONTRACT.md`: 1 generic, 2 usage, 4 gui
 5 network/upstream failure. A blank `search` or `resolve` query fails with `invalid_query` (exit 2)
 before any request. A page whose article container no longer matches (an Icy Veins layout change),
 or whose canonical link is not a guide page, fails with `parse_failed` and exit 1 rather than
-returning an empty article with `ok:true`.
+returning an empty article with `ok:true`. So does a sitemap that lists no guide pages (a challenge
+page or a reshaped sitemap); that body is not cached. `guide-full` and `guide-export` of a spec guide
+or one of its sub-pages (every family from `spec_guide` to `simulations` in the table below) fail with
+`parse_failed` when the page's switcher does not parse, rather than returning a one-page bundle.
 
 `doctor` reports `cache.redis_url` without its credentials or query string
 (`redis://***@host:6379/0`).
+
+`guide-query` answers with kind `guide_query`: the shared match payload plus `bundle` (the path
+queried) and `guide` (the exported guide row), the same shape as `method guide-query`.
 
 `guide-query` answers a bad bundle path the same way `method guide-query` does: a path that does
 not exist is `not_found` (exit 4), a file is a usage error (exit 2), and a directory that is not a
@@ -115,7 +121,7 @@ pages fail with `invalid_guide_ref` (exit 2).
 | --- | --- |
 | `class_hub` | `monk-guide` |
 | `role_guide` | `healing-guide` |
-| `spec_guide` | `mistweaver-monk-pve-healing-guide` |
+| `spec_guide` | `mistweaver-monk-pve-healing-guide` (only `<spec>-<class>-pve-<role>-guide`) |
 | `easy_mode` | `fury-warrior-pve-dps-easy-mode` |
 | `leveling` | `mistweaver-monk-leveling-guide` |
 | `pvp` | `mistweaver-monk-pvp-guide` |
@@ -130,13 +136,14 @@ pages fail with `invalid_guide_ref` (exit 2).
 | `macros_addons` | `mistweaver-monk-pve-healing-macros-addons` |
 | `simulations` | `mistweaver-monk-pve-healing-simulations` |
 | `raid_guide` | `mistweaver-monk-pve-healing-nerub-ar-palace-raid-guide` |
-| `expansion_guide` | `mistweaver-monk-the-war-within-pve-guide` |
+| `expansion_guide` | `mistweaver-monk-the-war-within-pve-guide`, `midnight-expansion-guide` |
 | `special_event_guide` | `mistweaver-monk-mists-of-pandaria-remix-guide` |
+| `article_guide` | any other `-guide`/`-guides` page: `season-3-mythic-plus-guide`, `frost-mage-hero-talents-pve-guide` |
 
 `guide-full` traversal is family-aware: class hubs and role guides stay on the current page, and
 every other family walks its own navigation block. Only a class hub reads the class dropdown in the
-page header as its navigation; a spec page whose own switcher is missing gets no navigation and
-`guide-full` returns that one page.
+page header as its navigation. A spec page whose own switcher is missing fails as described under
+Output; a page of another family without navigation is walked as that one page.
 
 Patch notes, class-change roundups, hotfix posts, and news pages are out of scope. `search` and
 `resolve` detect those query intents and return an empty result set with a `scope_hint` instead of
@@ -144,27 +151,43 @@ misleading guide matches.
 
 `search` and `resolve` return a guide only when its name or slug contains the whole query or every
 query word, or when a query word names the guide's family (`talents`, `stats`, `easy mode`, ...). One
-word that no guide contains therefore empties the result: `frost dk` returns nothing. Words match
-whole, so `dh` does not match "headhunters", and a trailing plural `s` is ignored on both sides, so
-`build` keeps the `...-spec-builds-talents` pages. Words such as `a`, `of` and `the` are ignored, and
-`+` reads as `plus`, so `mythic+` finds the "Mythic Plus" pages and the seasonal
-`<expansion>-mythic-season-<n>-guide` pages. There are no class or spec abbreviations: `dk` and `mw`
-match nothing.
+word that no guide contains therefore empties the result. Words match whole, so `dh` does not match
+"headhunters", and a trailing plural `s` is ignored on both sides, so `build` keeps the
+`...-spec-builds-talents` pages. Words such as `a`, `of` and `the` are ignored, and `+` reads as
+`plus`, so `mythic+` finds the "Mythic Plus" pages and the seasonal
+`<expansion>-mythic-season-<n>-guide` pages. Class and spec shorthand is spelled out in the query and
+in page titles alike (`ret pally` is `retribution paladin`, `frost dk` is `frost death knight`, `mw`
+is `mistweaver`), so `disc belt` still finds the "Disc Belt Guide".
 
 A spec query (`frost mage`, `survival hunter guide`) resolves to that spec's
 `...-pve-<role>-guide`. Healer specs also publish a PvE DPS guide; their healing guide ranks first.
 A hunter spec's pets page ranks with its PvP, leveling, hero talents and Mythic+ (`-pve-<role>-mythic-plus-guide`) pages, below the spec guide. A query that
 names a spec ranks that spec's guides (`spec_name` in `ranking.match_reasons`) above pages that only
 share the word, so `shadow` lists the Shadow Priest guide before the Shadow Enclave delve guide.
-`resolve` never picks between candidates with the same or nearly the same score, so a spec name that
+`resolve` judges confidence on every ranked match, and `--limit` only trims the `candidates` shown, so
+`--limit 1` never makes an ambiguous query look resolved. It never picks between candidates with the
+same or nearly the same score, so a spec name that
 several classes share (`frost`, `holy`, `protection`, `restoration`) stays unresolved; add the class.
 The one exception is a query that is a page's exact title (`exact_title`) when every close rival is
 one of that page's own sub-pages: `player housing` resolves to `player-housing-guide` over
 `player-housing-interior-guide`.
 
-Each result carries `metadata.last_updated`, the sitemap's `<lastmod>` date. A page last updated more
-than a year before the newest page in the sitemap loses 10 points and lists `penalty_stale_page` in
-`ranking.match_reasons`, so a past season's guide ranks below the current one.
+Only a spec, class or role introduction (`spec_guide`, `class_hub`, `role_guide`) gets the
+`intro_guide` boost; a season hub or any other `article_guide` does not outrank the pages about what
+the query names.
+
+Each result carries `metadata.sitemap_lastmod`, the sitemap's `<lastmod>` date, which is not the
+page's own update date (`icy-veins guide` reports that as `guide.last_updated`). A page whose
+`sitemap_lastmod` is more than a year before the newest one in the sitemap loses 10 points and lists
+`penalty_stale_page` in `ranking.match_reasons`, so a past season's guide ranks below the current one.
+
+`search` and `resolve` put `sitemap_url` and `sitemap_newest_lastmod` in `provenance`. When the newest
+entry is more than 30 days old, `provenance.sitemap_warning` says so: the sitemap has stopped being
+updated and guides published since cannot be found. As of 2026-09-30 the sitemap's newest entry is
+2025-10-05 and Icy Veins publishes no other sitemap (`robots.txt` lists only `/sitemap.xml`;
+`/sitemap-index.xml`, `/sitemap_index.xml` and `/wow/sitemap.xml` are 404), so Midnight-era pages
+such as the current season's raid guides are missing from discovery. Open them by slug or URL with
+`icy-veins guide`.
 
 ## Caching
 

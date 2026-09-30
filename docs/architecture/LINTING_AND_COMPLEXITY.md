@@ -6,11 +6,10 @@ Static quality tooling, what blocks a merge, and what is advisory.
 
 | Target | Purpose | Blocking |
 |--------|---------|----------|
-| `make check` | `lint` + `typecheck` + `lint-boundaries` + `complexity-gate` + `deadcode` + `coverage` — local CI parity | yes |
+| `make check` | `lock-check` + `lint` + `typecheck` + `lint-boundaries` + `complexity-gate` + `deadcode` + `coverage` — local CI parity | yes |
 | `make install` | `uv sync --all-extras` (editable dev environment) | — |
 | `make lint` | Ruff over `packages/`, `tests/`, `scripts/` | yes |
-| `make lint-all` | Alias of `make lint` | yes |
-| `make typecheck` | Mypy over all 16 packages (file list in root `pyproject.toml`) | yes |
+| `make typecheck` | Mypy over all 15 packages (file list in root `pyproject.toml`) | yes |
 | `make lint-boundaries` | `import-linter` package boundaries (`.importlinter`) | yes |
 | `make complexity-gate` | `xenon --max-absolute C packages` — fails on any function graded D or worse | yes |
 | `make deadcode` | `vulture packages scripts --min-confidence 60` (the allowlist is `scripts/vulture_allowlist.py`), ignoring Typer command/callback decorators | yes |
@@ -24,8 +23,6 @@ Static quality tooling, what blocks a merge, and what is advisory.
 | `make test-e2e` | End-to-end journeys against the real providers (network + credentials) | — |
 | `make test-canary` | Live Wowhead parser canary (network) | — |
 | `make pre-commit-install` | Install the local hooks in `.pre-commit-config.yaml` | — |
-| `make benchmark-cache` | Cold vs warm Wowhead search timing | no |
-| `make fixture-refresh-hints` | Prints URLs for refreshing Wowhead fixtures | no |
 
 `make reference`, `make schema`, and `make skills` write generated files. Never hand-edit their
 output. `tests/test_command_reference.py` and `tests/test_warcraft_cli_envelope_schema.py` fail when

@@ -13,6 +13,7 @@ from warcraft_core.envelope import ENVELOPE_KEYS, REQUIRED_KEYS, envelope_violat
 from warcraft_core.provider import ProviderError
 from warcraft_wiki_cli.client import WarcraftWikiAPIError, WarcraftWikiClient
 from warcraft_wiki_cli.main import app as warcraft_wiki_app
+from warcraft_wiki_cli.page_parser import parse_article_page
 from warcraft_wiki_cli.provider import (
     _typed_allowed_families,
     _typed_article_payload,
@@ -213,6 +214,8 @@ def test_warcraft_wiki_doctor_reports_ready_capabilities() -> None:
     assert payload["data"]["capabilities"]["api"] == "ready"
     assert payload["data"]["capabilities"]["event"] == "ready"
     assert payload["data"]["capabilities"]["article_query"] == "ready"
+    # provider and command are envelope fields; data does not repeat them.
+    assert "provider" not in payload["data"] and "command" not in payload["data"]
 
 
 def test_warcraft_wiki_search_and_resolve(monkeypatch) -> None:
@@ -600,6 +603,24 @@ def test_api_payload_prefers_direct_fetch_before_search() -> None:
     assert result["resolved_surface"] == "api"
     assert result["search_queries"] == ["API:CreateFrame", "API CreateFrame", "CreateFrame"]
     assert client.search_calls == []
+
+
+def test_api_returns_an_enum_page_instead_of_not_found() -> None:
+    # Enum pages ("Enum.ItemQuality") classified as general_article, so `api` rejected the exact page.
+    class FakeClient:
+        def fetch_article_page(self, ref: str) -> dict[str, object]:
+            if ref != "Enum.ItemQuality":
+                raise WarcraftWikiAPIError("missingtitle", "The page you specified doesn't exist.")
+            return parse_article_page({"parse": {"title": ref, "text": {"*": "<p>Item quality values.</p>"}}}, source_title=ref)
+
+        def search_articles(self, query: str, limit: int) -> tuple[int, list[dict[str, Any]]]:
+            return 0, []
+
+    result = _typed_article_payload(FakeClient(), "Enum.ItemQuality", surface="api", full=False)
+
+    assert result["article"]["title"] == "Enum.ItemQuality"
+    assert result["article"]["content_family"] == "api_enum"
+    assert result["resolved_from"] == "direct_fetch"
 
 
 def test_event_payload_fetches_the_event_namespace_page_before_searching() -> None:

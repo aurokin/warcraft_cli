@@ -1,34 +1,42 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Literal
+from typing import Any, Literal, TypeGuard
 from urllib.parse import urljoin, urlparse, urlunparse
 
 from warcraft_core.expansions import wowhead_path_prefixes
 from warcraft_core.wow_normalization import normalized_text
 
+# Warcraft Logs report codes are 16 alphanumerics with mixed case and often no digit (JVFTxcKCqrvpaAzD).
+# A code must mix upper and lower case or letters and digits, so a slug such as frostdeathknight or a
+# guild name is never read as a code.
+_WARCRAFTLOGS_REPORT_CODE = re.compile(
+    r"^(?:(?=.*[a-z])(?=.*[A-Z])[A-Za-z0-9]{16}|(?=.*[A-Za-z])(?=.*\d)[A-Za-z0-9]{8,32})$"
+)
+_CAMEL_CASE_NAME = re.compile(r"(?:[A-Z][a-z]+)+")
 IdentityStatus = Literal["unknown", "normalized", "canonical", "inferred", "ambiguous"]
 IdentityConfidence = Literal["none", "low", "medium", "high"]
 TalentTransportStatus = Literal["unknown", "raw_only", "validated", "exact"]
 WOWHEAD_TALENT_CALC_SEGMENT = "talent-calc"
 WOWHEAD_EXPANSION_PREFIXES = wowhead_path_prefixes()
-WOW_CLASS_SLUGS = frozenset(
-    {
-        "deathknight",
-        "demonhunter",
-        "druid",
-        "evoker",
-        "hunter",
-        "mage",
-        "monk",
-        "paladin",
-        "priest",
-        "rogue",
-        "shaman",
-        "warlock",
-        "warrior",
-    }
-)
+# Spec slugs as normalize_spec_name spells Wowhead's talent-calc path segments (beast-mastery ->
+# beast_mastery). A talent-calc path only names a spec when its third segment is one of these.
+WOW_SPECS_BY_CLASS: dict[str, frozenset[str]] = {
+    "deathknight": frozenset({"blood", "frost", "unholy"}),
+    "demonhunter": frozenset({"havoc", "vengeance", "devourer"}),
+    "druid": frozenset({"balance", "feral", "guardian", "restoration"}),
+    "evoker": frozenset({"devastation", "preservation", "augmentation"}),
+    "hunter": frozenset({"beast_mastery", "marksmanship", "survival"}),
+    "mage": frozenset({"arcane", "fire", "frost"}),
+    "monk": frozenset({"brewmaster", "mistweaver", "windwalker"}),
+    "paladin": frozenset({"holy", "protection", "retribution"}),
+    "priest": frozenset({"discipline", "holy", "shadow"}),
+    "rogue": frozenset({"assassination", "outlaw", "subtlety"}),
+    "shaman": frozenset({"elemental", "enhancement", "restoration"}),
+    "warlock": frozenset({"affliction", "demonology", "destruction"}),
+    "warrior": frozenset({"arms", "fury", "protection"}),
+}
+WOW_CLASS_SLUGS = frozenset(WOW_SPECS_BY_CLASS)
 
 
 def _is_wowhead_hostname(hostname: str | None) -> bool:
@@ -56,7 +64,20 @@ def _clean_notes(notes: list[str] | tuple[str, ...] | None) -> list[str]:
     return cleaned
 
 
-def _is_transport_int(value: Any) -> bool:
+def is_warcraftlogs_report_code(code: str, *, from_url: bool = False) -> bool:
+    """Whether ``code`` reads as a Warcraft Logs report code.
+
+    A bare word made of capitalised words (HavocDemonHunter) is a name, not a code. Only bare words
+    are checked: a random code has this shape about once in 1750, and a /reports/<code> URL path
+    (``from_url``) is a code.
+    """
+    if not _WARCRAFTLOGS_REPORT_CODE.fullmatch(code):
+        return False
+    return from_url or not _CAMEL_CASE_NAME.fullmatch(code)
+
+
+def is_transport_int(value: Any) -> TypeGuard[int]:
+    """A talent entry, node id or rank: an int that is not a bool."""
     return isinstance(value, int) and not isinstance(value, bool)
 
 
@@ -132,7 +153,9 @@ def parse_wowhead_talent_calc_ref(ref: str) -> dict[str, str | None] | None:
     actor_class = normalize_actor_class(path_parts[1])
     spec = normalize_spec_name(path_parts[2])
     build_code = path_parts[3] if len(path_parts) > 3 else None
-    if not actor_class or actor_class not in WOW_CLASS_SLUGS or not spec:
+    # A classic-era calculator path (/classic/talent-calc/warrior/<code>) has no spec segment, so a
+    # third segment that is not one of the class's specs is not read as one.
+    if not actor_class or spec not in WOW_SPECS_BY_CLASS.get(actor_class, frozenset()):
         return None
     return {
         "actor_class": actor_class,
@@ -417,7 +440,7 @@ def _validated_class_spec_identity(validation: dict[str, Any]) -> tuple[str | No
 def _is_usable_talent_tree_row(row: Any) -> bool:
     if not isinstance(row, dict):
         return False
-    return all(_is_transport_int(row.get(key)) for key in ("entry", "node_id", "rank"))
+    return all(is_transport_int(row.get(key)) for key in ("entry", "node_id", "rank"))
 
 
 def _has_usable_raw_talent_evidence(raw_evidence: dict[str, Any]) -> bool:

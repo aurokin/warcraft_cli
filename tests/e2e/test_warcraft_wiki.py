@@ -227,7 +227,12 @@ def test_api_commands_resolve_the_pinned_function(require, command: str) -> None
 
 @pytest.mark.parametrize(
     ("query", "expected_title", "expected_family"),
-    [("XML schema", "XML", "xml_schema"), ("World of Warcraft API", "World of Warcraft API", "framework_page")],
+    [
+        ("XML schema", "XML", "xml_schema"),
+        ("World of Warcraft API", "World of Warcraft API", "framework_page"),
+        # Enum pages document the values the functions take; `api` once answered them not_found.
+        ("Enum.ItemQuality", "Enum.ItemQuality", "api_enum"),
+    ],
 )
 def test_api_resolves_the_reference_pages_that_are_not_functions(
     require, query: str, expected_title: str, expected_family: str

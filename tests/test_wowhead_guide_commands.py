@@ -8,6 +8,7 @@ import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 
+import httpx
 from warcraft_content.article_bundle import compare_article_bundles, load_article_bundle
 from wowhead_cli.expansion_profiles import resolve_expansion
 from wowhead_cli.guides import (
@@ -203,6 +204,16 @@ def test_guide_row_matches_filters_and_filtered_rows() -> None:
     assert len(filtered) == 1
     assert filtered[0]["match_score"] > 0
 
+
+
+def test_guide_listing_query_matches_whole_words_and_needs_every_word() -> None:
+    titles = ["Protection Warrior Damage Reduction Guide", "Frost Death Knight Talent Tree", "Frost Mage DPS Guide"]
+    rows = [{"id": index, "title": title, "name": title, "url": f"/guide/{index}"} for index, title in enumerate(titles, 1)]
+    filters = GuideCategoryFilters(authors=(), updated_after=None, updated_before=None, patch_min=None, patch_max=None, sort_by="relevance")
+
+    matched = filtered_guide_category_rows(rows, query_text="frost mage", filters=filters)
+
+    assert [row["id"] for row in matched] == [3]
 
 
 def test_guides_payload_builds_expected_filters_and_facets() -> None:
@@ -507,6 +518,7 @@ def test_guide_export_writes_local_assets(monkeypatch, tmp_path) -> None:
         "limit": 0,
         "hydrated_at": None,
         "source_counts": {},
+        "failed": [],
     }
     assert isinstance(manifest["exported_at"], str)
     assert isinstance(manifest["guide_fetched_at"], str)
@@ -598,6 +610,70 @@ def test_guide_export_hydrates_linked_entities(monkeypatch, tmp_path: Path) -> N
     assert hydrated_spell["entity"]["name"] == "Obliterate"
     assert hydrated_item["entity"]["name"] == "Bellamy's Final Judgement"
 
+
+
+def test_guide_export_lists_a_linked_entity_it_could_not_hydrate_and_keeps_going(monkeypatch, tmp_path: Path) -> None:
+    def fake_tooltip(self: WowheadClient, entity_type: str, entity_id: int, data_env: int | None = None) -> dict[str, str]:
+        if entity_type == "spell":
+            request = httpx.Request("GET", f"https://nether.wowhead.com/tooltip/spell/{entity_id}")
+            raise httpx.HTTPStatusError("missing", request=request, response=httpx.Response(404, request=request))
+        return {"name": "Bellamy's Final Judgement", "tooltip": "<b>Bellamy's Final Judgement</b>"}
+
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.guide_page_html", lambda self, guide_id: SAMPLE_GUIDE_HTML)
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.tooltip", fake_tooltip)
+
+    export_dir = tmp_path / "bundle"
+    result = runner.invoke(
+        app,
+        ["guide-export", "3143", "--out", str(export_dir), "--hydrate-linked-entities", "--hydrate-type", "spell,item"],
+    )
+
+    assert result.exit_code == 0, result.output
+    hydration = json.loads(result.stdout)["data"]["hydration"]
+    assert hydration["failed"] == [
+        {"entity_type": "spell", "id": 49020, "code": "not_found", "message": "Wowhead returned HTTP 404"}
+    ]
+    manifest = json.loads((export_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["counts"]["hydrated_entities"] == 1
+    assert (export_dir / "entities" / "item" / "249277.json").exists()
+
+
+def test_guide_commands_follow_the_expansion_a_guide_url_names(monkeypatch, tmp_path: Path) -> None:
+    fetched: list[tuple[str, str]] = []
+    tooltips: list[tuple[str, str, int]] = []
+
+    def fake_page_html(self: WowheadClient, url: str) -> str:
+        fetched.append((self.expansion.key, url))
+        return SAMPLE_GUIDE_HTML
+
+    def fake_tooltip(self: WowheadClient, entity_type: str, entity_id: int, data_env: int | None = None) -> dict[str, str]:
+        tooltips.append((self.expansion.key, entity_type, entity_id))
+        return {"name": "Obliterate", "tooltip": "<b>Obliterate</b>"}
+
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.page_html", fake_page_html)
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.tooltip", fake_tooltip)
+
+    export = runner.invoke(
+        app,
+        [
+            "guide-export",
+            "https://www.wowhead.com/classic/guide/classes/warrior/fury-dps",
+            "--out",
+            str(tmp_path / "bundle"),
+            "--hydrate-linked-entities",
+            "--hydrate-type",
+            "spell",
+        ],
+    )
+    assert export.exit_code == 0, export.output
+    assert json.loads(export.stdout)["data"]["expansion"] == "classic"
+    assert tooltips == [("classic", "spell", 49020)]
+
+    for command in ("guide", "guide-full"):
+        result = runner.invoke(app, [command, "classic/guide/classes/warrior/fury-dps"])
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.stdout)["data"]["expansion"] == "classic"
+    assert {row[0] for row in fetched} == {"classic"}
 
 
 def test_guide_export_hydration_uses_normalized_entity_cache_before_live_fetch(

@@ -9,8 +9,7 @@ import httpx
 import pytest
 from icy_veins_cli.main import app
 from icy_veins_cli.page_parser import CLASS_HUB_SLUGS, classify_guide_slug, parse_guide_page, parse_sitemap_guides
-from icy_veins_cli.provider import resolve_payload
-from icy_veins_cli.search import NEUTRAL_SLUG_TERMS, resolve_is_confident, score_family_match
+from icy_veins_cli.search import NEUTRAL_SLUG_TERMS, resolve_is_confident, score_family_match, sitemap_provenance
 from typer.testing import CliRunner
 from warcraft_core.envelope import envelope_violations
 
@@ -325,21 +324,21 @@ def test_parse_sitemap_guides_filters_wow_guide_like_pages() -> None:
             "slug": "mistweaver-monk-leveling-guide",
             "name": "Mistweaver Monk Leveling Guide",
             "url": "https://www.icy-veins.com/wow/mistweaver-monk-leveling-guide",
-            "last_updated": None,
+            "sitemap_lastmod": None,
         },
         {
             "content_family": "spec_guide",
             "slug": "mistweaver-monk-pve-healing-guide",
             "name": "Mistweaver Monk PvE Healing Guide",
             "url": "https://www.icy-veins.com/wow/mistweaver-monk-pve-healing-guide",
-            "last_updated": "2026-09-17",
+            "sitemap_lastmod": "2026-09-17",
         },
         {
             "content_family": "stat_priority",
             "slug": "mistweaver-monk-pve-healing-stat-priority",
             "name": "Mistweaver Monk PvE Healing Stat Priority",
             "url": "https://www.icy-veins.com/wow/mistweaver-monk-pve-healing-stat-priority",
-            "last_updated": None,
+            "sitemap_lastmod": None,
         },
     ]
 
@@ -405,6 +404,71 @@ def test_score_family_match_penalizes_broad_hubs_for_specialized_queries() -> No
 
     assert score == -14
     assert reasons == ["penalty_broad_hub"]
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        ("ret pally", "retribution-paladin-pve-dps-guide"),
+        ("bm hunter", "beast-mastery-hunter-pve-dps-guide"),
+        # Frost Mage used to outrank Frost Death Knight, because "dk" matched nothing.
+        ("frost dk rotation", "frost-death-knight-pve-dps-rotation-cooldowns-abilities"),
+    ],
+)
+def test_icy_veins_search_reads_class_and_spec_shorthand(monkeypatch, query: str, expected: str) -> None:
+    slugs = (
+        "retribution-paladin-pve-dps-guide",
+        "beast-mastery-hunter-pve-dps-guide",
+        "frost-mage-pve-dps-rotation-cooldowns-abilities",
+        "frost-death-knight-pve-dps-rotation-cooldowns-abilities",
+    )
+    sitemap = "".join(f"<url><loc>https://www.icy-veins.com/wow/{slug}</loc></url>" for slug in slugs)
+    monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.sitemap_guides", lambda self: parse_sitemap_guides(sitemap))
+    result = runner.invoke(app, ["resolve", query])
+    assert result.exit_code == 0, result.output
+
+    data = json.loads(result.stdout)["data"]
+    assert data["resolved"] is True
+    assert data["match"]["id"] == expected
+
+
+def test_icy_veins_search_finds_a_page_titled_with_shorthand(monkeypatch) -> None:
+    # The query "disc" is spelled out as "discipline"; the real Disc Belt Guide must still match it.
+    slugs = ("disc-belt-guide", "discipline-priest-pve-healing-guide")
+    sitemap = "".join(f"<url><loc>https://www.icy-veins.com/wow/{slug}</loc></url>" for slug in slugs)
+    monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.sitemap_guides", lambda self: parse_sitemap_guides(sitemap))
+    result = runner.invoke(app, ["resolve", "disc belt"])
+    assert result.exit_code == 0, result.output
+
+    data = json.loads(result.stdout)["data"]
+    assert data["resolved"] is True
+    assert data["match"]["id"] == "disc-belt-guide"
+
+
+def test_icy_veins_search_breaks_score_ties_by_newest_sitemap_lastmod(monkeypatch) -> None:
+    # "raid guide" scores these raid guides alike; alphabetical order put the 2024 Blackrock
+    # Depths event raid above the current raid.
+    sitemap = "".join(
+        f"<url><loc>https://www.icy-veins.com/wow/{slug}</loc>{f'<lastmod>{lastmod}</lastmod>' if lastmod else ''}</url>"
+        for slug, lastmod in (
+            ("blackrock-depths-raid-guide", "2024-10-20"),
+            ("sunwell-plateau-raid-guide", None),
+            ("manaforge-omega-raid-guide", "2025-07-20"),
+            ("nerubar-palace-raid-guide", "2025-01-13"),
+        )
+    )
+    monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.sitemap_guides", lambda self: parse_sitemap_guides(sitemap))
+    result = runner.invoke(app, ["search", "raid guide", "--limit", "5"])
+    assert result.exit_code == 0, result.output
+
+    rows = json.loads(result.stdout)["data"]["results"]
+    assert len({row["ranking"]["score"] for row in rows}) == 1
+    assert [row["id"] for row in rows] == [
+        "manaforge-omega-raid-guide",
+        "nerubar-palace-raid-guide",
+        "blackrock-depths-raid-guide",
+        "sunwell-plateau-raid-guide",
+    ]
 
 
 def test_icy_veins_search_command_uses_sitemap_guides(monkeypatch) -> None:
@@ -540,7 +604,7 @@ def test_icy_veins_search_spec_bonus_never_admits_a_page_that_misses_the_query(m
         ),
         (
             "affliction warlock torghast and best anima powers",
-            ["affliction-warlock-torghast-guide-and-best-anima-powers", "affliction-warlock-mists-of-pandaria-remix-guide"],
+            ["affliction-warlock-torghast-guide-and-best-anima-powers", "affliction-warlock-torghast-guide"],
             False,
         ),
     ],
@@ -578,7 +642,7 @@ def test_icy_veins_search_ranks_the_current_mythic_plus_season_above_a_stale_one
     assert result.exit_code == 0
 
     rows = json.loads(result.stdout)["data"]["results"]
-    assert [(row["id"], row["metadata"]["last_updated"]) for row in rows] == [
+    assert [(row["id"], row["metadata"]["sitemap_lastmod"]) for row in rows] == [
         ("midnight-mythic-season-2-guide", "2026-08-05"),
         ("season-3-mythic-plus-guide", "2025-08-01"),
     ]
@@ -723,30 +787,14 @@ def test_icy_veins_resolve_confidence_helper_covers_easy_mode_and_intro_paths() 
     assert resolve_is_confident([weak_top, weak_second]) is False
 
 
-def test_icy_veins_resolve_search_payload_uses_confidence_helper() -> None:
-    payload = resolve_payload(
-        query="fury warrior easy mode",
-        search_query="fury warrior easy mode",
-        results=[
-            {
-                "id": "fury-warrior-pve-dps-easy-mode",
-                "name": "Fury Warrior PvE DPS Easy Mode",
-                "ranking": {"score": 35, "match_reasons": ["family_easy_mode"]},
-                "follow_up": {"command": "icy-veins guide fury-warrior-pve-dps-easy-mode"},
-            },
-            {
-                "id": "warrior-guide",
-                "name": "Warrior Guide",
-                "ranking": {"score": 24, "match_reasons": []},
-                "follow_up": {"command": "icy-veins guide warrior-guide"},
-            },
-        ],
-        total_count=2,
-        scope_hint=None,
-    )
+def test_icy_veins_resolve_judges_confidence_on_every_match_not_the_limit(monkeypatch) -> None:
+    """``--limit 1`` used to cut the near-tied rival off before the confidence rule saw it."""
+    slugs = ["frost-mage-pve-dps-guide", "frost-death-knight-pve-dps-guide"]
+    full = _invoke_with_sitemap(monkeypatch, slugs, ["resolve", "frost dps"])
+    limited = _invoke_with_sitemap(monkeypatch, slugs, ["resolve", "frost dps", "--limit", "1"])
 
-    assert payload["resolved"] is True
-    assert payload["next_command"] == "icy-veins guide fury-warrior-pve-dps-easy-mode"
+    assert (full["resolved"], full["count"], len(full["candidates"])) == (False, 2, 2)
+    assert (limited["resolved"], limited["confidence"], limited["count"], len(limited["candidates"])) == (False, "medium", 2, 1)
 
 
 def test_icy_veins_search_penalizes_broad_hubs_for_specialized_queries(monkeypatch) -> None:
@@ -864,13 +912,19 @@ def test_icy_veins_guide_export_and_query(monkeypatch, tmp_path: Path) -> None:
     assert analysis_query_payload["count"] >= 1
     assert "stat_priority" in analysis_query_payload["top"][0]["surface_tags"]
 
+    # "vivify" is in two sections; --section-title keeps one, and --limit trims the rows but not the count.
+    unfiltered = json.loads(runner.invoke(app, ["guide-query", str(export_dir), "vivify", "--kind", "sections", "--limit", "1"]).stdout)["data"]
+    assert (unfiltered["count"], len(unfiltered["top"])) == (2, 1)
     section_query = runner.invoke(
         app,
-        ["guide-query", str(export_dir), "critical strike", "--kind", "sections", "--section-title", "stat"],
+        ["guide-query", str(export_dir), "vivify", "--kind", "sections", "--section-title", "Leveling"],
     )
     assert section_query.exit_code == 0
-    section_payload = json.loads(section_query.stdout)["data"]
-    assert section_payload["match_counts"]["sections"] >= 1
+    section_payload = json.loads(section_query.stdout)
+    assert section_payload["kind"] == "guide_query"
+    assert (section_payload["data"]["guide"]["slug"], section_payload["data"]["bundle"]) == (
+        "mistweaver-monk-pve-healing-guide", str(export_dir))
+    assert [row["title"] for row in section_payload["data"]["matches"]["sections"]] == ["Leveling"]
 
 
 def test_icy_veins_invalid_guide_ref_fails_structured() -> None:
@@ -1336,5 +1390,77 @@ def test_icy_veins_guide_commands_say_when_the_site_served_another_guide(monkeyp
         assert data["redirect"]["served"] == data["guide"]["slug"] == "mistweaver-monk-pve-healing-guide", args
         assert "retired" in data["redirect"]["message"], args
 
-    unmoved = runner.invoke(app, ["guide", "mistweaver-monk-pve-healing-guide"])
-    assert json.loads(unmoved.stdout)["data"]["redirect"] is None
+    # Slugs are case-insensitive: a mixed-case ref for the served guide is not a retired guide.
+    for ref in ("mistweaver-monk-pve-healing-guide", "Mistweaver-Monk-PvE-Healing-Guide"):
+        unmoved = runner.invoke(app, ["guide", ref])
+        assert json.loads(unmoved.stdout)["data"]["redirect"] is None, ref
+
+
+def test_icy_veins_search_fails_when_the_sitemap_lists_no_guides_and_does_not_cache_it(monkeypatch, tmp_path: Path) -> None:
+    """A 2xx challenge page used to answer every query with ok:true, count 0, and stay cached for a day."""
+    monkeypatch.setenv("ICY_VEINS_CACHE_BACKEND", "file")
+    monkeypatch.setenv("ICY_VEINS_CACHE_DIR", str(tmp_path))
+    bodies = ["<html><body>Checking your browser</body></html>", SITEMAP_XML]
+    fetched: list[str] = []
+
+    def fetch_text(self, url: str) -> str:
+        fetched.append(url)
+        return bodies[len(fetched) - 1]
+
+    monkeypatch.setattr("icy_veins_cli.client.IcyVeinsClient._fetch_text", fetch_text)
+    failed = runner.invoke(app, ["search", "mistweaver monk"])
+
+    assert failed.exit_code == 1
+    assert json.loads(failed.stderr or failed.stdout)["error"]["code"] == "parse_failed"
+    recovered = runner.invoke(app, ["search", "mistweaver monk"])
+    assert recovered.exit_code == 0
+    assert json.loads(recovered.stdout)["data"]["count"] == 3
+    # The good body is cached (no third fetch), so the refetch above means the bad one never was.
+    assert runner.invoke(app, ["search", "mistweaver monk"]).exit_code == 0
+    assert len(fetched) == 2
+
+
+def test_icy_veins_guide_full_fails_when_a_spec_guide_loses_its_page_switcher(monkeypatch) -> None:
+    """A renamed switcher used to turn an 11-page spec guide into a one-page bundle with ok:true."""
+    drifted = INTRO_HTML.replace("toc_page_list", "toc_moved")
+    monkeypatch.setattr(
+        "icy_veins_cli.main.IcyVeinsClient.fetch_guide_page",
+        lambda self, guide_ref: parse_guide_page(drifted, source_url="https://www.icy-veins.com/wow/mistweaver-monk-pve-healing-guide"),
+    )
+    result = runner.invoke(app, ["guide-full", "mistweaver-monk-pve-healing-guide"])
+
+    assert result.exit_code == 1
+    assert json.loads(result.stderr or result.stdout)["error"]["code"] == "parse_failed"
+
+
+def test_icy_veins_classifies_only_pve_role_guides_as_spec_guides() -> None:
+    assert classify_guide_slug("season-3-mythic-plus-guide") == "article_guide"
+    assert classify_guide_slug("world-of-warcraft-midnight-guides") == "article_guide"
+    assert classify_guide_slug("frost-mage-hero-talents-pve-guide") == "article_guide"
+    assert classify_guide_slug("midnight-expansion-guide") == "expansion_guide"
+    assert classify_guide_slug("frost-mage-pve-dps-guide") == "spec_guide"
+
+
+def test_icy_veins_search_gives_the_intro_bonus_only_to_spec_class_and_role_introductions(monkeypatch) -> None:
+    """Every ``-guide`` slug got the spec-intro +16, so a year-old season hub led `search "mythic+"`."""
+    rows = _invoke_with_sitemap(
+        monkeypatch,
+        ["season-3-mythic-plus-guide", "frost-mage-pve-dps-mythic-plus-tips"],
+        ["search", "mythic+"],
+    )["results"]
+
+    assert [row["id"] for row in rows] == ["frost-mage-pve-dps-mythic-plus-tips", "season-3-mythic-plus-guide"]
+    assert "intro_guide" not in rows[1]["ranking"]["match_reasons"]
+
+
+def test_icy_veins_search_warns_when_the_sitemap_has_stopped_being_updated(monkeypatch) -> None:
+    """The sitemap froze at 2025-10-05; search kept answering from it without saying so."""
+    frozen = SITEMAP_XML.replace("2026-09-17T08:00:00+00:00", "2025-10-05")
+    monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.sitemap_guides", lambda self: parse_sitemap_guides(frozen))
+    for command in ("search", "resolve"):
+        provenance = json.loads(runner.invoke(app, [command, "mistweaver monk"]).stdout)["provenance"]
+        assert provenance["sitemap_newest_lastmod"] == "2025-10-05"
+        assert "2025-10-05" in provenance["sitemap_warning"]
+
+    today = datetime.now().date()
+    assert "sitemap_warning" not in sitemap_provenance("https://www.icy-veins.com/sitemap.xml", today.isoformat(), today=today)

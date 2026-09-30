@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 import re
+from datetime import date, datetime
 from typing import Any
 from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup, Tag
 from warcraft_content.html_sections import clean_text, extract_headings, extract_sections
-from warcraft_core.identity import ability_identity_payload, build_identity_payload, build_reference_payload
+from warcraft_core.identity import (
+    WOW_SPECS_BY_CLASS,
+    ability_identity_payload,
+    build_identity_payload,
+    build_reference_payload,
+)
 
 METHOD_BASE_URL = "https://www.method.gg"
 SUPPORTED_GUIDE_PATH_RE = re.compile(r"^/guides/(?P<slug>[^/]+)(?:/(?P<section>[^/?#]+))?/?$")
@@ -18,24 +24,20 @@ TALENT_BUILD_EMBED_SELECTOR = ".talent-embed[data-talent]"
 TALENT_BUILD_TITLE_SELECTOR = ".talent-title"
 # A WoW loadout import string as Blizzard's client generates it: one long run of base64 characters.
 WOW_TALENT_EXPORT_RE = re.compile(r"^[A-Za-z0-9+/]{40,}$")
-CLASS_TOKENS = {
-    "death-knight",
-    "demon-hunter",
-    "demonhunter",
-    "druid",
-    "evoker",
-    "hunter",
-    "mage",
-    "monk",
-    "paladin",
-    "priest",
-    "rogue",
-    "shaman",
-    "warlock",
-    "warrior",
-}
+# Method titles a class guide "<spec>-<class>" (beast-mastery-hunter, frost-death-knight). Other slugs
+# that merely end in a class, such as unlocking-void-elf-demon-hunter, are one-page articles.
+SPEC_GUIDE_SLUGS = frozenset(
+    f"{spec.replace('_', '-')}-{actor_class.replace('deathknight', 'death-knight').replace('demonhunter', 'demon-hunter')}"
+    for actor_class, specs in WOW_SPECS_BY_CLASS.items()
+    for spec in specs
+)
 UNSUPPORTED_ROOT_GUIDE_SLUGS = {"tier-list", "world-of-warcraft"}
 WRITTEN_BY_RE = re.compile(r"^Written by\s+(?P<author>.+?)\s*-\s*(?P<date>\d{1,2}(?:st|nd|rd|th)\s+\w+,?\s+\d{4})$")
+DISPLAY_DATE_RE = re.compile(r"(?P<day>\d{1,2})(?:st|nd|rd|th)?\s+(?P<month>[A-Za-z]{3,}),?\s+(?P<year>\d{4})")
+SITEMAP_URL_RE = re.compile(r"<url>(.*?)</url>", flags=re.DOTALL)
+SITEMAP_LOC_RE = re.compile(r"<loc>([^<]+)</loc>")
+SITEMAP_LASTMOD_RE = re.compile(r"<lastmod>([^<]+)</lastmod>")
+SITEMAP_GUIDE_URL_RE = re.compile(r"^https://www\.method\.gg/guides/(?P<slug>[^/]+)$")
 WOWHEAD_LINK_RE = re.compile(
     r"^(?P<entity_type>achievement|currency|faction|item|mount|npc|object|pet|quest|spell|zone)=(?P<id>\d+)(?:/|$)"
 )
@@ -80,7 +82,7 @@ def classify_guide_family(slug: str) -> str:
         return "delve_guide"
     if slug.endswith("-renown-reputation-guide") or slug.endswith("-reputation-guide"):
         return "reputation_guide"
-    if any(slug.endswith(f"-{token}") for token in CLASS_TOKENS):
+    if slug in SPEC_GUIDE_SLUGS:
         return "class_guide"
     return "article_guide"
 
@@ -293,6 +295,24 @@ def _normalize_author_and_last_updated(author: str | None, last_updated: str | N
     return author, last_updated
 
 
+def _iso_date(value: str) -> str | None:
+    try:
+        return date.fromisoformat(value).isoformat()
+    except ValueError:
+        return None
+
+
+def last_updated_iso(text: str | None) -> str | None:
+    """``2026-08-11`` from Method's ``Last Updated: 11th Aug, 2026`` or ``4th August 2025``; ``None`` when unreadable."""
+    match = DISPLAY_DATE_RE.search(text or "")
+    if match is None:
+        return None
+    try:
+        return datetime.strptime(f"{match['day']} {match['month'][:3]} {match['year']}", "%d %b %Y").date().isoformat()
+    except ValueError:
+        return None
+
+
 def parse_guide_page(html: str, *, source_url: str) -> dict[str, Any]:
     soup = BeautifulSoup(html, "html.parser")
     canonical_url = _link_href(soup, rel="canonical") or source_url
@@ -336,7 +356,9 @@ def parse_guide_page(html: str, *, source_url: str) -> dict[str, Any]:
             "section_slug": section_slug or "introduction",
             "section_title": display_section_title,
             "author": author,
-            "last_updated": last_updated,
+            # ISO, comparable across providers; the page's own wording stays in ``last_updated_text``.
+            "last_updated": last_updated_iso(last_updated),
+            "last_updated_text": last_updated,
             "patch": patch,
             "content_family": content_family,
             "supported_surface": content_family != "unsupported_index",
@@ -354,23 +376,24 @@ def parse_guide_page(html: str, *, source_url: str) -> dict[str, Any]:
 
 
 def parse_sitemap_guides(xml_text: str) -> list[dict[str, Any]]:
-    urls = re.findall(r"<loc>(https://www\.method\.gg/guides/[^<]+)</loc>", xml_text)
     seen: set[str] = set()
     guides: list[dict[str, Any]] = []
-    for url in urls:
-        match = re.match(r"^https://www\.method\.gg/guides/(?P<slug>[^/]+)$", url)
+    for entry in SITEMAP_URL_RE.findall(xml_text):
+        loc = SITEMAP_LOC_RE.search(entry)
+        match = SITEMAP_GUIDE_URL_RE.match(loc.group(1).strip()) if loc else None
         if not match:
             continue
         slug = match.group("slug")
         if slug in seen:
             continue
         seen.add(slug)
-        name = clean_text(slug.replace("-", " ").title()) or slug
+        lastmod = SITEMAP_LASTMOD_RE.search(entry)
         guides.append(
             {
                 "slug": slug,
-                "name": name,
-                "url": url,
+                "name": clean_text(slug.replace("-", " ").title()) or slug,
+                "url": match.group(0),
+                "sitemap_lastmod": _iso_date(lastmod.group(1)[:10]) if lastmod else None,
             }
         )
     guides.sort(key=lambda row: row["name"].lower())

@@ -356,16 +356,18 @@ def test_realm_slug_lowercased(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.parametrize(
-    ("args", "path"),
+    ("args", "path", "tried"),
     [
-        (["realm", "Mal'Ganis"], "/data/wow/realm/{}"),
-        (["realm", "mal-ganis"], "/data/wow/realm/{}"),
-        (["character", "Mal'Ganis", "Aurow"], "/profile/wow/character/{}/aurow"),
+        (["realm", "Mal'Ganis"], "/data/wow/realm/{}", ["malganis"]),
+        (["realm", "mal-ganis"], "/data/wow/realm/{}", ["mal-ganis", "malganis"]),
+        (["character", "Mal'Ganis", "Aurow"], "/profile/wow/character/{}/aurow", ["malganis"]),
     ],
 )
-def test_realm_display_name_finds_the_blizzard_slug(monkeypatch: pytest.MonkeyPatch, args: list[str], path: str) -> None:
-    # Blizzard drops apostrophes ("malganis") but keeps word breaks ("tarren-mill"), so each slug
-    # spelling is tried in turn and only a 404 moves on to the next.
+def test_realm_display_name_finds_the_blizzard_slug(
+    monkeypatch: pytest.MonkeyPatch, args: list[str], path: str, tried: list[str]
+) -> None:
+    # Blizzard drops apostrophes ("malganis") but keeps word breaks ("tarren-mill"), so a hyphenated
+    # spelling is tried as written and only a 404 moves on to the joined one.
     requested: list[str] = []
 
     def _fake(client: Any, url: str, *, method: str = "GET", **kwargs: Any) -> _FakeResponse:
@@ -381,7 +383,7 @@ def test_realm_display_name_finds_the_blizzard_slug(monkeypatch: pytest.MonkeyPa
     result = runner.invoke(app, args)
 
     assert result.exit_code == 0, result.output
-    assert [url.split(".api.blizzard.com")[1] for url in requested] == [path.format("mal-ganis"), path.format("malganis")]
+    assert [url.split(".api.blizzard.com")[1] for url in requested] == [path.format(slug) for slug in tried]
     assert json.loads(result.stdout)["provenance"]["source_url"].endswith(path.format("malganis"))
 
 

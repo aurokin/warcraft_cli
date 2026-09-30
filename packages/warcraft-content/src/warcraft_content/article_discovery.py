@@ -74,7 +74,15 @@ def article_candidate(
 
 
 def sort_article_candidates(candidates: list[dict[str, Any]]) -> None:
-    candidates.sort(key=lambda row: (-int(row["ranking"]["score"]), row["name"], row["id"]))
+    """Best score first; a tie goes to the most recently updated page (undated rows last), then name.
+
+    The date is the ISO ``metadata.sitemap_lastmod`` the Icy Veins and Method rows carry. Stable
+    sorts applied in reverse priority, because the date sorts newest first while name and id sort
+    ascending.
+    """
+    candidates.sort(key=lambda row: (row["name"], row["id"]))
+    candidates.sort(key=lambda row: str(row["metadata"].get("sitemap_lastmod") or ""), reverse=True)
+    candidates.sort(key=lambda row: -int(row["ranking"]["score"]))
 
 
 def article_search_payload(

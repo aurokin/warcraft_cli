@@ -36,6 +36,29 @@ def test_build_linked_graph_depth_one_filters_relations() -> None:
     assert "quest:7786" not in targets
 
 
+def test_build_linked_graph_reports_the_pages_max_fetches_left_unread() -> None:
+    links = "".join(f'<a href="/item={item_id}/x">x</a>' for item_id in range(1, 6))
+    html = f'<html><body><a href="/item=19019/thunderfury">self</a>{links}</body></html>'
+
+    payload = build_linked_graph_payload(
+        root_type="item",
+        root_id=19019,
+        root_url="https://www.wowhead.com/item=19019",
+        fetch_page=lambda entity_type, entity_id: (html, {}),
+        depth=2,
+        relation_filter=set(),
+        node_limit=500,
+        max_fetches=3,
+        include_gatherer=False,
+    )
+
+    # The root and two of its five children were read; the other three children were not.
+    assert payload["sampling"]["pages_fetched"] == 3
+    assert payload["sampling"]["pages_skipped"] == 3
+    assert payload["sampling"]["truncated"] is True
+    assert [edge for edge in payload["graph"]["edges"] if edge["from"] == edge["to"]] == []
+
+
 def test_linked_graph_command_emits_graph_payload(monkeypatch) -> None:
     html = '<html><body><a href="/npc=12056/baron-geddon">Baron</a></body></html>'
 

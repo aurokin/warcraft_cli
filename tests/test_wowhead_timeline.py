@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 from wowhead_cli.main import app
+from wowhead_cli.ranking import listing_match_score
 
 from tests.wowhead_testkit import (
     SAMPLE_BLUE_TOPIC_HTML,
@@ -47,6 +48,35 @@ def test_news_command_filters_by_query_and_date(monkeypatch) -> None:
     assert payload["data"]["facets"]["authors"] == ["Staff"]
     assert payload["data"]["facets"]["types"] == ["News"]
 
+
+
+def test_news_query_matches_whole_words_and_needs_every_word(monkeypatch) -> None:
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.news_page_html", lambda self, *, page=1: SAMPLE_NEWS_HTML)
+
+    def result_ids(query: str) -> list[int]:
+        result = runner.invoke(app, ["news", query, "--pages", "1"])
+        assert result.exit_code == 0, result.output
+        return [row["id"] for row in json.loads(result.stdout)["data"]["results"]]
+
+    assert result_ids("midnight hotfixes") == [380785]
+    # Words match up to a plural ending, in either direction.
+    assert result_ids("hotfix") == [380785]
+    assert result_ids("roundups") == [380700]
+    # "fix" is inside "Hotfixes" and "bugfixes", and "hot" starts "Hotfixes", but neither is that word.
+    assert result_ids("fix") == []
+    assert result_ids("hot") == []
+    # "tuning" matches the other post, but "hotfixes" is not in it.
+    assert result_ids("tuning hotfixes") == []
+
+
+def test_listing_query_word_matches_a_possessive_but_not_a_longer_word() -> None:
+    assert listing_match_score("mage", "Mage's Tower Returns") > 0
+    assert listing_match_score("mage", "Damage Meter Changes") == 0
+    assert listing_match_score("mage", "Magelord Rommath Returns") == 0
+    assert listing_match_score("patch", "Patches Roundup") > 0
+    # "-es" is a plural ending only after a sibilant: "notes" is not "Not", "cap" is not "Capes".
+    assert listing_match_score("notes", "Patch 12.1 Is Not Live Yet") == 0
+    assert listing_match_score("cap", "New Capes in Patch 12.1") == 0
 
 
 def test_news_command_filters_by_author_and_type(monkeypatch) -> None:
@@ -215,6 +245,22 @@ def test_guides_command_sorts_by_rating(monkeypatch) -> None:
     assert payload["data"]["filters"]["sort"] == "rating"
     assert [row["id"] for row in payload["data"]["results"]] == [32000, 33131]
 
+
+
+@pytest.mark.parametrize(
+    ("command", "url", "html"),
+    [
+        ("news-post", "https://www.wowhead.com/classic/news/midnight-hotfixes-380785", SAMPLE_NEWS_POST_HTML),
+        ("blue-topic", "https://www.wowhead.com/classic/blue-tracker/topic/us/class-tuning-1", SAMPLE_BLUE_TOPIC_HTML),
+    ],
+)
+def test_article_commands_report_the_expansion_their_url_names(monkeypatch, command: str, url: str, html: str) -> None:
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.page_html", lambda self, page_url: html)
+
+    result = runner.invoke(app, [command, url])
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout)["data"]["expansion"] == "classic"
 
 
 def test_news_post_command_extracts_markup_and_author(monkeypatch) -> None:

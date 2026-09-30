@@ -4,9 +4,10 @@ from collections import Counter
 from pathlib import Path
 
 import pytest
-from article_provider_testkit import load_fixture_text
 from bs4 import BeautifulSoup
 from icy_veins_cli.page_parser import classify_guide_slug, parse_guide_page
+
+from tests.article_provider_testkit import load_fixture_text
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "icy_veins"
 

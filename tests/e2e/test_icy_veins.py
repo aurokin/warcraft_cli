@@ -51,9 +51,13 @@ FAMILY_PROBES = (
     ("mistweaver monk the war within", "expansion_guide", "family_navigation"),
     ("mistweaver monk spell summary", "spell_summary", "family_navigation"),
     ("mistweaver monk remix", "special_event_guide", "family_navigation"),
+    ("midnight expansion", "expansion_guide", "family_navigation"),
 )
 # A term the pinned healing guide uses throughout, for the offline bundle journeys.
 BUNDLE_QUERY_TERM = "mana"
+# A sitemap whose newest entry is older than this many days has stopped being updated
+# (docs/icy-veins/README.md), so search has to warn that newer guides are missing.
+SITEMAP_STALE_DAYS = 30
 
 
 @cache
@@ -174,22 +178,53 @@ def test_search_outside_the_guide_surface_returns_a_scope_hint(require) -> None:
     assert result.data["scope_hint"]["code"] == "patch_notes"
 
 
+def _assert_ties_list_the_newest_page_first(result: Result) -> None:
+    """Rows with the same score are ordered by the sitemap's ``lastmod``, newest first; they were alphabetical.
+
+    Some tied pair has to carry two different dates, or the order is not being tested at all.
+    """
+    rows = result.data["results"]
+    tied = [
+        (earlier["metadata"]["sitemap_lastmod"], later["metadata"]["sitemap_lastmod"])
+        for earlier, later in zip(rows, rows[1:], strict=False)
+        if earlier["ranking"]["score"] == later["ranking"]["score"]
+    ]
+    assert any(first and second and first != second for first, second in tied), (
+        f"no tied pair with two different sitemap dates, so the tie order cannot be checked\n{result.describe()}"
+    )
+    assert all((first or "") >= (second or "") for first, second in tied), result.describe()
+
+
 def test_search_reads_mythic_plus_the_way_players_write_it(require) -> None:
     """``mythic+`` is how players type it and "Mythic Plus" is how Icy Veins names those pages.
 
-    This exact query once answered ``ok: true`` with no rows.
+    This exact query once answered ``ok: true`` with no rows, and later with a season's guide more
+    than a year old and no word that anything was missing. Search reads the sitemap, which Icy Veins
+    stopped updating in 2025, so it cannot list the current season; it has to say so. The clock is
+    the oracle: a sitemap whose newest entry is more than SITEMAP_STALE_DAYS old carries a warning
+    naming that date, and a fresh one carries none.
     """
     require(PROVIDER)
     result = run(BINARY, "search", "mythic+", "--limit", "5")
 
     rows = result.data["results"]
     assert rows, result.describe()
-    # Newer seasonal slugs drop "plus" (``midnight-mythic-season-2-guide``) and still answer the query.
+    # Seasonal hubs may drop "plus" from the slug (``<expansion>-mythic-season-<n>-guide``).
     assert all("mythic-plus" in row["id"] or "-mythic-season-" in row["id"] for row in rows), result.describe()
-    # The answer is the current season's page, not a guide the site stopped updating a year ago.
-    dates = [date.fromisoformat(row["metadata"]["last_updated"]) for row in rows if row["metadata"]["last_updated"]]
-    top_date = rows[0]["metadata"]["last_updated"]
-    assert top_date and (max(dates) - date.fromisoformat(top_date)).days < 365, result.describe()
+    provenance = result.payload["provenance"]
+    newest = date.fromisoformat(provenance["sitemap_newest_lastmod"])
+    assert all((row["metadata"]["sitemap_lastmod"] or "") <= newest.isoformat() for row in rows), result.describe()
+    stale = (date.today() - newest).days > SITEMAP_STALE_DAYS
+    assert ("sitemap_warning" in provenance) is stale, result.describe()
+    if stale:
+        assert newest.isoformat() in provenance["sitemap_warning"], result.describe()
+
+
+def test_search_breaks_score_ties_toward_the_newest_page(require) -> None:
+    """``raid guide`` scores every raid's guide alike; a 2024 Blackrock Depths page once led them."""
+    require(PROVIDER)
+    result = run(BINARY, "search", "raid guide", "--limit", "10")
+    _assert_ties_list_the_newest_page_first(result)
 
 
 def test_resolve_hands_over_a_next_command_that_returns_the_same_guide(require) -> None:
@@ -288,6 +323,24 @@ def test_resolve_leaves_a_spec_name_two_classes_share_unresolved(require) -> Non
     assert result.data["resolved"] is False, result.describe()
     top_two = {row["id"] for row in result.data["candidates"][:2]}
     assert top_two == {"frost-mage-pve-dps-guide", "frost-death-knight-pve-dps-guide"}, result.describe()
+
+    # --limit only trims the candidates shown: judging confidence on the one row left once resolved
+    # this query at high confidence.
+    narrow = run(BINARY, "resolve", "frost", "--limit", "1")
+    assert (narrow.data["resolved"], narrow.data["confidence"]) == (False, result.data["confidence"]), narrow.describe()
+    assert [row["id"] for row in narrow.data["candidates"]] == [result.data["candidates"][0]["id"]], narrow.describe()
+
+
+@pytest.mark.parametrize(("shorthand", "spelled_out"), [("ret pally", "retribution paladin"), ("resto druid", "restoration druid")])
+def test_resolve_reads_class_and_spec_shorthand(require, shorthand: str, spelled_out: str) -> None:
+    """``ret pally`` once found nothing with ok: true; it has to land where the spelled-out query does."""
+    require(PROVIDER)
+    expected = run(BINARY, "resolve", spelled_out)
+    assert expected.data["resolved"] is True, expected.describe()
+    assert expected.data["match"]["id"].startswith(spelled_out.replace(" ", "-") + "-pve-"), expected.describe()
+    result = run(BINARY, "resolve", shorthand)
+    assert result.data["resolved"] is True, result.describe()
+    assert result.data["match"]["id"] == expected.data["match"]["id"], result.describe()
 
 
 def test_guide_returns_attributed_sections_family_navigation_and_a_page_toc(require) -> None:

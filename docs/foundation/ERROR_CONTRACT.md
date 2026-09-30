@@ -95,9 +95,9 @@ exit codes, and documents them in its provider README: for example `warcraftlogs
 | `0` | Success | |
 | `1` | Generic failure, including uncaught exceptions (`internal_error`) | any code with neither a row below nor a provider-specific mapping |
 | `2` | Usage error: bad flags or arguments | `invalid_query`, `invalid_argument`, `missing_fields`, `invalid_guide_ref`, `invalid_ref`, `invalid_tool_ref` |
-| `3` | Authentication required or rejected | `auth_required`, `auth_failed`, `unauthorized`, `forbidden` |
+| `3` | Authentication required or rejected | `auth_failed` |
 | `4` | Target not found | `not_found` |
-| `5` | Network or upstream failure | `network_error`, `timeout`, `upstream_error`, `rate_limited`, `http_error` |
+| `5` | Network or upstream failure | `network_error`, `timeout`, `upstream_error`, `rate_limited` |
 
 The repo-wide mapping is `warcraft_core.exit_codes.EXIT_CODE_BY_ERROR_CODE`; `exit_code_for(code)`
 resolves it. Provider-specific mappings sit next to the code that raises them and pass an explicit
@@ -154,6 +154,10 @@ A `--fields` path the payload does not have is never dropped in silence. With `-
 is a `missing_fields` error (exit 2); without it the projection carries a `fields_missing` array of
 the paths that did not resolve, so an empty or thin projection is distinguishable from an empty
 result.
+
+A path walks object keys only and stops at a list: `data.results` keeps the whole list, while
+`data.results.name` does not resolve (it lands in `fields_missing`). Select the list and read the
+row fields from it.
 
 `--fields` and `--compact` shape success envelopes only. A failure is always written whole, so its
 `error` and `query` are never projected or cut away.

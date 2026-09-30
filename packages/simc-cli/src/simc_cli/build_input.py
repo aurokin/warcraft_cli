@@ -152,14 +152,14 @@ def bounded_output_preview(output: str) -> list[str]:
     ]
 
 
-def _load_build_packet(path: str) -> tuple[dict[str, Any], str]:
+def load_build_packet(path: str) -> tuple[dict[str, Any], str]:
     resolved = Path(path).expanduser().resolve()
     raw = json.loads(resolved.read_text())
     packet = validate_talent_transport_packet(raw)
     return packet, str(resolved)
 
 
-def _identity_value(packet: dict[str, Any], key: str) -> str | None:
+def packet_identity_value(packet: dict[str, Any], key: str) -> str | None:
     build_identity = packet.get("build_identity")
     if isinstance(build_identity, dict):
         class_spec_identity = build_identity.get("class_spec_identity")
@@ -173,8 +173,8 @@ def _identity_value(packet: dict[str, Any], key: str) -> str | None:
 
 
 def _validated_packet_identity(packet: dict[str, Any]) -> tuple[str | None, str | None]:
-    actor_class = normalize_actor_class(_identity_value(packet, "actor_class"))
-    spec = normalize_spec_name(_identity_value(packet, "spec"))
+    actor_class = normalize_actor_class(packet_identity_value(packet, "actor_class"))
+    spec = normalize_spec_name(packet_identity_value(packet, "spec"))
     validation = packet.get("validation")
     if not isinstance(validation, dict) or validation.get("status") != "validated":
         return None, None
@@ -280,7 +280,7 @@ def _packet_spec_from_split_talents(
 
 
 def extract_build_spec_from_packet(path: str) -> BuildSpec:
-    packet, resolved_path = _load_build_packet(path)
+    packet, resolved_path = load_build_packet(path)
     raw_transport_forms = packet.get("transport_forms")
     transport_forms: dict[str, Any] = raw_transport_forms if isinstance(raw_transport_forms, dict) else {}
     source_notes = [f"build packet: {resolved_path}", "talent transport packet"]

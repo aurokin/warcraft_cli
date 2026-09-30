@@ -48,6 +48,8 @@ authoritative, and use Lorrgs for its prebuilt aggregation.
   candidates tied, so re-ask with a spec slug or boss slug (`frost` matches Mage and Death Knight;
   `salhadaar` matches two encounters), or the top candidate left a recognised word in
   `ranking.unmatched_terms` and would have answered a narrower question than you asked
+- name the difficulty in a `resolve` query (`heroic frost mage chimaerus`) and the handoff carries
+  `--difficulty`; without one, `spec-ranking` answers for mythic
 - a report handoff resolves at `confidence: "medium"` with a `caveat`: nothing checked that Lorrgs
   can serve that report, and it refuses reports Warcraft Logs keeps private
 - use `report-overview` for report metadata from any public Warcraft Logs URL, including one Lorrgs

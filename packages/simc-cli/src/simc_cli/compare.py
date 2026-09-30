@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from warcraft_core.paths import provider_data_root
+from warcraft_core.simc_json2 import dps_error, metric_mean
 
 from simc_cli.build_input import BuildSpec, build_profile_text
 from simc_cli.repo import RepoPaths
@@ -19,7 +20,8 @@ from simc_cli.run import CommandResult, repo_git_status, run_profile
 ACTION_SAMPLE_ITERATIONS = 1
 ACTION_SAMPLE_NOTE = (
     "action_counts, action_cpm and top_action_deltas come from SimC's one recorded action sequence, "
-    "not from an iteration mean; dps, dps_error and fight_length are means over all iterations."
+    "not from an iteration mean; dps and fight_length are means over all iterations, and dps_error is "
+    "SimC's confidence-interval half-width around the mean dps."
 )
 
 
@@ -121,8 +123,7 @@ def compare_apl_variants(
                     "label": label,
                     "profile_path": str(profile_path),
                     "returncode": validation.result.returncode,
-                    "stdout_preview": _preview_lines(validation.result.stdout),
-                    "stderr_preview": _preview_lines(validation.result.stderr),
+                    **output_previews(validation.result.stdout, validation.result.stderr),
                     "valid": validation.result.returncode == 0,
                 }
             )
@@ -182,26 +183,27 @@ def variant_report_payload(report: dict[str, Any]) -> dict[str, Any]:
     base: dict[str, Any] | None = raw_base if isinstance(raw_base, dict) else None
     raw_comparisons = report.get("comparisons")
     comparisons: list[Any] = raw_comparisons if isinstance(raw_comparisons, list) else []
+    base_label = base.get("label") if base else None
+
+    def versus_base(label: Any, field: str) -> float | None:
+        if base and label == base_label:
+            return 0.0
+        row = next((row for row in comparisons if isinstance(row, dict) and row.get("label") == label), {})
+        value = row.get(field)
+        return float(value) if isinstance(value, (int, float)) else None
+
     return {
         "kind": "apl_variant_report",
         "sampling": report.get("sampling"),
-        "base_label": base.get("label") if base else None,
+        "base_label": base_label,
         "best_label": best.get("label") if best else None,
         "best_dps": best.get("dps") if best else None,
         "ranking": [
             {
                 "label": row.get("label"),
                 "dps": row.get("dps"),
-                "delta_vs_base": (
-                    0.0
-                    if base and row.get("label") == base.get("label")
-                    else _comparison_delta_for(row.get("label"), comparisons)
-                ),
-                "percent_vs_base": (
-                    0.0
-                    if base and row.get("label") == base.get("label")
-                    else _comparison_percent_for(row.get("label"), comparisons)
-                ),
+                "delta_vs_base": versus_base(row.get("label"), "dps_delta"),
+                "percent_vs_base": versus_base(row.get("label"), "percent_delta"),
             }
             for row in ranking
         ],
@@ -295,9 +297,9 @@ def _extract_summary(*, label: str, apl_path: Path, profile_path: Path, json_pat
     collected = player.get("collected_data") if isinstance(player, dict) else None
     if not isinstance(collected, dict):
         raise RuntimeError("SimC JSON report did not contain collected_data.")
-    dps = _metric_mean(collected.get("dps"))
-    dps_error = _metric_mean(collected.get("dpse"))
-    fight_length = _metric_mean(collected.get("fight_length"))
+    options = sim.get("options") if isinstance(sim, dict) else None
+    dps = metric_mean(collected.get("dps"))
+    fight_length = metric_mean(collected.get("fight_length"))
     action_counts = _action_counts(collected.get("action_sequence"))
     action_cpm = _action_cpm(action_counts, fight_length)
     return VariantSummary(
@@ -306,21 +308,11 @@ def _extract_summary(*, label: str, apl_path: Path, profile_path: Path, json_pat
         profile_path=profile_path,
         json_path=json_path,
         dps=dps or 0.0,
-        dps_error=dps_error,
+        dps_error=dps_error(collected, options if isinstance(options, dict) else {}),
         fight_length=fight_length,
         action_counts=action_counts,
         action_cpm=action_cpm,
     )
-
-
-def _metric_mean(metric: Any) -> float | None:
-    if isinstance(metric, dict):
-        value = metric.get("mean")
-        if isinstance(value, (int, float)):
-            return float(value)
-    if isinstance(metric, (int, float)):
-        return float(metric)
-    return None
 
 
 def _action_counts(sequence: Any) -> dict[str, int]:
@@ -391,21 +383,19 @@ def _top_action_deltas(base: VariantSummary, current: VariantSummary, *, limit: 
     return rows[:limit]
 
 
-def _comparison_delta_for(label: Any, comparisons: list[Any]) -> float | None:
-    for row in comparisons:
-        if isinstance(row, dict) and row.get("label") == label:
-            value = row.get("dps_delta")
-            return float(value) if isinstance(value, (int, float)) else None
-    return None
+def output_previews(stdout: str, stderr: str) -> dict[str, Any]:
+    """The tail of each stream plus whether it was cut, as every simc payload reports it."""
+    stdout_preview, stdout_truncated = _preview_text(stdout)
+    stderr_preview, stderr_truncated = _preview_text(stderr)
+    return {
+        "stdout_preview": stdout_preview,
+        "stdout_truncated": stdout_truncated,
+        "stderr_preview": stderr_preview,
+        "stderr_truncated": stderr_truncated,
+    }
 
 
-def _comparison_percent_for(label: Any, comparisons: list[Any]) -> float | None:
-    for row in comparisons:
-        if isinstance(row, dict) and row.get("label") == label:
-            value = row.get("percent_delta")
-            return float(value) if isinstance(value, (int, float)) else None
-    return None
-
-
-def _preview_lines(text: str, *, max_lines: int = 20) -> list[str]:
-    return text.splitlines()[:max_lines]
+def _preview_text(text: str, *, max_lines: int = 20) -> tuple[list[str], bool]:
+    """The last ``max_lines`` lines, where SimC, git and cmake put their result or error, and whether any were cut."""
+    lines = text.splitlines()
+    return lines[-max_lines:], len(lines) > max_lines

@@ -59,18 +59,6 @@ Report the cache backend configuration and per-namespace entry counts.
 | `--namespace-limit` | int range | 10 | Maximum namespaces to include in summary mode. |
 | `--hide-zero` | boolean | false | Omit zero-valued count fields from cache stats. |
 
-## wowhead cache-repair
-
-Report, or with --apply delete, file-cache entries left at the cache root by pre-namespacing versions.
-
-**Options**
-
-| Option | Type | Default | Description |
-| --- | --- | --- | --- |
-| `--apply / --dry-run` | boolean | false | Apply the repair instead of only reporting candidates. |
-| `--expired-only / --all` | boolean | false | Restrict legacy file-cache repair to expired entries only. |
-| `--sample-limit` | int range | 10 | Maximum legacy cache paths to sample in the repair report. |
-
 ## wowhead cache-clear
 
 Clear cached Wowhead responses for the selected namespaces or for the whole cache.
@@ -454,14 +442,14 @@ Fetch a Wowhead entity tooltip with optional comments and linked entities.
 
 | Argument | Type | Default | Description |
 | --- | --- | --- | --- |
-| `entity_type` | str | required | Wowhead entity type. Example: item, quest, npc. |
-| `entity_id` | int | required | Wowhead entity id. |
+| `entity_type` | str |  | Wowhead entity type. Example: item, quest, npc. Omit with --url. |
+| `entity_id` | int |  | Wowhead entity id. Omit with --url. |
 
 **Options**
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--url` | str |  | Wowhead entity page URL. Overrides type/id and auto-selects expansion when --expansion is omitted. |
+| `--url` | str |  | Wowhead entity page URL, in place of TYPE ID. Auto-selects expansion when --expansion is omitted. |
 | `--data-env` | int |  | Override Wowhead tooltip dataEnv value. Defaults to selected expansion profile. |
 | `--include-comments / --no-include-comments` | boolean | true | Include page comments in entity output. |
 | `--include-all-comments / --top-comments-only` | boolean | false | Include all parsed comments instead of only a top-rated summary. |
@@ -475,14 +463,14 @@ Fetch a Wowhead entity page with parsed metadata and its linked entities. Commen
 
 | Argument | Type | Default | Description |
 | --- | --- | --- | --- |
-| `entity_type` | str | required | Wowhead entity type. Example: item, quest, npc. |
-| `entity_id` | int | required | Wowhead entity id. |
+| `entity_type` | str |  | Wowhead entity type. Example: item, quest, npc. Omit with --url. |
+| `entity_id` | int |  | Wowhead entity id. Omit with --url. |
 
 **Options**
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--url` | str |  | Wowhead entity page URL. Overrides type/id and auto-selects expansion when --expansion is omitted. |
+| `--url` | str |  | Wowhead entity page URL, in place of TYPE ID. Auto-selects expansion when --expansion is omitted. |
 | `--max-links` | int range | 200 | Maximum linked entities to return. |
 | `--include-gatherer / --no-include-gatherer` | boolean | true | Include linked entities discovered from WH.Gatherer.addData payloads. |
 

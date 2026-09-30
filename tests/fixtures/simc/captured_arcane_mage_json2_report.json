@@ -2,33 +2,36 @@
  "sim": {
   "options": {
    "iterations": 4,
-   "max_time": 30.0
+   "max_time": 30.0,
+   "target_error": 0.0,
+   "confidence_estimator": 1.9599639854090543
   },
   "players": [
    {
-    "name": "p",
+    "name": "MID2_Mage_Arcane_Spellslinger",
     "specialization": "Arcane Mage",
     "collected_data": {
      "dps": {
-      "sum": 255915.23382715604,
+      "sum": 1088555.6137819143,
       "count": 3,
-      "mean": 85305.07794238535,
-      "min": 72913.84440523376,
-      "max": 107200.0727168698
+      "mean": 362851.8712606381,
+      "min": 321289.9605212463,
+      "max": 404357.46447757934,
+      "mean_std_dev": 19579.211947206502
      },
      "dpse": {
-      "sum": 255915.23382715604,
+      "sum": 1088555.6137819143,
       "count": 3,
-      "mean": 85305.07794238535,
-      "min": 72913.84440523376,
-      "max": 107200.0727168698
+      "mean": 362851.8712606381,
+      "min": 321289.9605212463,
+      "max": 404357.46447757934
      },
      "fight_length": {
-      "sum": 92.0,
+      "sum": 93.0,
       "count": 3,
-      "mean": 30.666666666666668,
-      "min": 30.0,
-      "max": 32.0
+      "mean": 31.0,
+      "min": 27.0,
+      "max": 34.5
      },
      "action_sequence": [
       {
@@ -39,148 +42,195 @@
       },
       {
        "time": 0.0,
-       "name": "arcane_surge",
-       "target": "Fluffy_Pillow",
-       "spell_name": "Arcane Surge"
-      },
-      {
-       "time": 1.616,
-       "wait": 0.10200000000000001
-      },
-      {
-       "time": 1.718,
-       "name": "arcane_missiles",
-       "target": "Fluffy_Pillow",
-       "spell_name": "Arcane Missiles"
-      },
-      {
-       "time": 3.315,
-       "name": "arcane_barrage",
-       "target": "Fluffy_Pillow",
-       "spell_name": "Arcane Barrage"
-      },
-      {
-       "time": 3.315,
-       "name": "touch_of_the_magi",
-       "target": "Fluffy_Pillow",
-       "spell_name": "Touch of the Magi"
-      },
-      {
-       "time": 4.2860000000000005,
-       "name": "arcane_missiles",
-       "target": "Fluffy_Pillow",
-       "spell_name": "Arcane Missiles"
-      },
-      {
-       "time": 5.856,
-       "name": "arcane_barrage",
-       "target": "Fluffy_Pillow",
-       "spell_name": "Arcane Barrage"
-      },
-      {
-       "time": 6.828,
-       "name": "arcane_missiles",
-       "target": "Fluffy_Pillow",
-       "spell_name": "Arcane Missiles"
-      },
-      {
-       "time": 8.522,
-       "name": "prismatic_bolt",
-       "target": "Fluffy_Pillow",
-       "spell_name": "Prismatic Bolt"
-      },
-      {
-       "time": 10.137,
-       "name": "arcane_barrage",
-       "target": "Fluffy_Pillow",
-       "spell_name": "Arcane Barrage"
-      },
-      {
-       "time": 11.109,
-       "name": "arcane_missiles",
-       "target": "Fluffy_Pillow",
-       "spell_name": "Arcane Missiles"
-      },
-      {
-       "time": 12.651,
-       "name": "prismatic_bolt",
-       "target": "Fluffy_Pillow",
-       "spell_name": "Prismatic Bolt"
-      },
-      {
-       "time": 14.268,
-       "name": "arcane_barrage",
-       "target": "Fluffy_Pillow",
-       "spell_name": "Arcane Barrage"
-      },
-      {
-       "time": 15.237,
-       "name": "arcane_missiles",
-       "target": "Fluffy_Pillow",
-       "spell_name": "Arcane Missiles"
-      },
-      {
-       "time": 16.73,
-       "name": "arcane_barrage",
-       "target": "Fluffy_Pillow",
-       "spell_name": "Arcane Barrage"
-      },
-      {
-       "time": 17.701,
-       "name": "arcane_missiles",
-       "target": "Fluffy_Pillow",
-       "spell_name": "Arcane Missiles"
-      },
-      {
-       "time": 18.831,
-       "name": "arcane_missiles",
-       "target": "Fluffy_Pillow",
-       "spell_name": "Arcane Missiles"
-      },
-      {
-       "time": 20.655,
-       "name": "prismatic_bolt",
-       "target": "Fluffy_Pillow",
-       "spell_name": "Prismatic Bolt"
-      },
-      {
-       "time": 22.27,
-       "name": "arcane_barrage",
-       "target": "Fluffy_Pillow",
-       "spell_name": "Arcane Barrage"
-      },
-      {
-       "time": 23.242,
-       "name": "arcane_missiles",
-       "target": "Fluffy_Pillow",
-       "spell_name": "Arcane Missiles"
-      },
-      {
-       "time": 24.846,
-       "name": "prismatic_bolt",
-       "target": "Fluffy_Pillow",
-       "spell_name": "Prismatic Bolt"
-      },
-      {
-       "time": 26.462,
-       "name": "arcane_barrage",
-       "target": "Fluffy_Pillow",
-       "spell_name": "Arcane Barrage"
-      },
-      {
-       "time": 27.432000000000002,
-       "name": "arcane_missiles",
-       "target": "Fluffy_Pillow",
-       "spell_name": "Arcane Missiles"
-      },
-      {
-       "time": 28.981,
        "name": "arcane_orb",
        "target": "Fluffy_Pillow",
        "spell_name": "Arcane Orb"
       },
       {
-       "time": 29.953,
+       "time": 0.923,
+       "name": "arcane_surge",
+       "target": "Fluffy_Pillow",
+       "spell_name": "Arcane Surge"
+      },
+      {
+       "time": 2.459,
+       "name": "use_items",
+       "target": "Fluffy_Pillow",
+       "spell_name": ""
+      },
+      {
+       "time": 2.459
+      },
+      {
+       "time": 2.564,
+       "name": "arcane_missiles",
+       "target": "Fluffy_Pillow",
+       "spell_name": "Arcane Missiles"
+      },
+      {
+       "time": 4.2,
+       "name": "arcane_blast",
+       "target": "Fluffy_Pillow",
+       "spell_name": "Arcane Blast"
+      },
+      {
+       "time": 5.144,
+       "name": "arcane_barrage",
+       "target": "Fluffy_Pillow",
+       "spell_name": "Arcane Barrage"
+      },
+      {
+       "time": 5.144,
+       "name": "touch_of_the_magi",
+       "target": "Fluffy_Pillow",
+       "spell_name": "Touch of the Magi"
+      },
+      {
+       "time": 6.046,
+       "name": "arcane_missiles",
+       "target": "Fluffy_Pillow",
+       "spell_name": "Arcane Missiles"
+      },
+      {
+       "time": 7.471,
+       "name": "arcane_barrage",
+       "target": "Fluffy_Pillow",
+       "spell_name": "Arcane Barrage"
+      },
+      {
+       "time": 8.371,
+       "name": "arcane_missiles",
+       "target": "Fluffy_Pillow",
+       "spell_name": "Arcane Missiles"
+      },
+      {
+       "time": 9.874,
+       "name": "arcane_barrage",
+       "target": "Fluffy_Pillow",
+       "spell_name": "Arcane Barrage"
+      },
+      {
+       "time": 10.76,
+       "name": "arcane_orb",
+       "target": "Fluffy_Pillow",
+       "spell_name": "Arcane Orb"
+      },
+      {
+       "time": 11.647,
+       "name": "arcane_blast",
+       "target": "Fluffy_Pillow",
+       "spell_name": "Arcane Blast"
+      },
+      {
+       "time": 12.658,
+       "name": "arcane_blast",
+       "target": "Fluffy_Pillow",
+       "spell_name": "Arcane Blast"
+      },
+      {
+       "time": 13.573,
+       "name": "arcane_barrage",
+       "target": "Fluffy_Pillow",
+       "spell_name": "Arcane Barrage"
+      },
+      {
+       "time": 14.469,
+       "name": "arcane_orb",
+       "target": "Fluffy_Pillow",
+       "spell_name": "Arcane Orb"
+      },
+      {
+       "time": 15.366,
+       "name": "arcane_blast",
+       "target": "Fluffy_Pillow",
+       "spell_name": "Arcane Blast"
+      },
+      {
+       "time": 16.39,
+       "name": "arcane_blast",
+       "target": "Fluffy_Pillow",
+       "spell_name": "Arcane Blast"
+      },
+      {
+       "time": 17.305,
+       "name": "arcane_barrage",
+       "target": "Fluffy_Pillow",
+       "spell_name": "Arcane Barrage"
+      },
+      {
+       "time": 18.226,
+       "name": "prismatic_bolt",
+       "target": "Fluffy_Pillow",
+       "spell_name": "Prismatic Bolt"
+      },
+      {
+       "time": 19.758,
+       "name": "arcane_blast",
+       "target": "Fluffy_Pillow",
+       "spell_name": "Arcane Blast"
+      },
+      {
+       "time": 20.711000000000002,
+       "name": "arcane_blast",
+       "target": "Fluffy_Pillow",
+       "spell_name": "Arcane Blast"
+      },
+      {
+       "time": 21.572,
+       "name": "arcane_blast",
+       "target": "Fluffy_Pillow",
+       "spell_name": "Arcane Blast"
+      },
+      {
+       "time": 22.415,
+       "name": "arcane_barrage",
+       "target": "Fluffy_Pillow",
+       "spell_name": "Arcane Barrage"
+      },
+      {
+       "time": 23.232,
+       "name": "arcane_missiles",
+       "target": "Fluffy_Pillow",
+       "spell_name": "Arcane Missiles"
+      },
+      {
+       "time": 24.593,
+       "name": "prismatic_bolt",
+       "target": "Fluffy_Pillow",
+       "spell_name": "Prismatic Bolt"
+      },
+      {
+       "time": 25.926000000000002,
+       "name": "arcane_barrage",
+       "target": "Fluffy_Pillow",
+       "spell_name": "Arcane Barrage"
+      },
+      {
+       "time": 26.727,
+       "name": "arcane_missiles",
+       "target": "Fluffy_Pillow",
+       "spell_name": "Arcane Missiles"
+      },
+      {
+       "time": 28.056,
+       "name": "prismatic_bolt",
+       "target": "Fluffy_Pillow",
+       "spell_name": "Prismatic Bolt"
+      },
+      {
+       "time": 29.387,
+       "name": "arcane_barrage",
+       "target": "Fluffy_Pillow",
+       "spell_name": "Arcane Barrage"
+      },
+      {
+       "time": 30.187,
+       "name": "arcane_missiles",
+       "target": "Fluffy_Pillow",
+       "spell_name": "Arcane Missiles"
+      },
+      {
+       "time": 30.98,
        "name": "arcane_barrage",
        "target": "Fluffy_Pillow",
        "spell_name": "Arcane Barrage"

@@ -15,7 +15,7 @@
 
 ## Effective Use
 
-- prefer `api` for function, framework, XML schema, CVar, and API-change pages
+- prefer `api` for function, enum (`Enum.ItemQuality`), framework, XML schema, the `Console variables` CVar list, and API-change pages
 - prefer `event` for game events (`PLAYER_LOGIN`, `ENCOUNTER_START`) and UI handlers (`OnKeyDown`)
 - `api` and `event` fail with `not_found` (exit 4) instead of returning an unrelated page
 - use `article` when the query is broader than programming
@@ -24,7 +24,7 @@
 
 ## Strong Families
 
-- API functions
+- API functions and enums
 - game events
 - UI handlers
 - framework pages

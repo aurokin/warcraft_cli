@@ -421,7 +421,7 @@ def test_actor_profile_errors_when_warcraftlogs_lookup_fails(monkeypatch) -> Non
         return {
             "provider": "warcraftlogs",
             "exit_code": 1,
-            "payload": {"ok": False, "error": {"code": "auth_required", "message": "credentials missing"}},
+            "payload": {"ok": False, "error": {"code": "auth_failed", "message": "credentials missing"}},
             "stdout": "",
         }
 
@@ -430,7 +430,7 @@ def test_actor_profile_errors_when_warcraftlogs_lookup_fails(monkeypatch) -> Non
     assert result.exit_code == 1
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "warcraftlogs_lookup_failed"
-    assert payload["error"]["details"]["source"]["code"] == "auth_required"
+    assert payload["error"]["details"]["source"]["code"] == "auth_failed"
 
 
 def test_actor_profile_miss_in_a_truncated_fight_scope_says_the_rest_was_not_searched(monkeypatch) -> None:

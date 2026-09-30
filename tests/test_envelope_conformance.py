@@ -11,11 +11,12 @@ import json
 from typing import Any
 
 import pytest
-from cli_testkit import WARCRAFTLOGS_REPORT_QUERY, apply_provider_stubs, run_binary
 from warcraft_cli.main import app as warcraft_app
 from warcraft_cli.providers import PROVIDERS
 from warcraft_core.envelope import ENVELOPE_KEYS, REQUIRED_KEYS, envelope_violations
 from warcraft_core.identity import build_reference_transport_packet_payload
+
+from tests.cli_testkit import WARCRAFTLOGS_REPORT_QUERY, apply_provider_stubs, run_binary
 
 PROVIDER_IDS = [registration.name for registration in PROVIDERS]
 TIERS = {

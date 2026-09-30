@@ -4,7 +4,7 @@ import re
 from dataclasses import dataclass
 from urllib.parse import quote, urlparse
 
-from warcraft_core.expansions import list_expansions
+from warcraft_core.expansions import list_expansions, wowhead_path_prefixes
 from warcraft_core.expansions import normalize_expansion_key as normalize_expansion_key
 from warcraft_core.expansions import resolve_expansion as resolve_shared_expansion
 
@@ -74,16 +74,17 @@ _PROFILES: tuple[ExpansionProfile, ...] = tuple(
 )
 
 _BY_KEY = {profile.key: profile for profile in _PROFILES}
-_PREFIX_PROFILES: tuple[ExpansionProfile, ...] = tuple(
-    sorted((profile for profile in _PROFILES if profile.path_prefix), key=lambda row: len(row.path_prefix), reverse=True)
-)
+_BY_PATH_PREFIX = {profile.path_prefix: profile for profile in _PROFILES if profile.path_prefix}
+# The first path segment that routes a Wowhead URL to a non-retail site (classic, tbc, ...).
+EXPANSION_PREFIXES = wowhead_path_prefixes()
 
 _LEGACY_HOST_TO_PROFILE: dict[str, ExpansionProfile] = {}
 for _profile in _PROFILES:
     for _host in _profile.legacy_subdomains:
         _LEGACY_HOST_TO_PROFILE[_host] = _profile
 
-_ENTITY_PATH_RE = re.compile(
+# `/<type>=<id>` after any locale or expansion segments (`/classic/de/item=19019/thunderfury`).
+ENTITY_PATH_RE = re.compile(
     r"""^/(?:(?:[a-z]{2}(?:-[A-Z]{2})?|[a-z0-9-]+)/)*(?P<etype>[a-z-]+)=(?P<eid>\d+)""",
 )
 
@@ -173,15 +174,9 @@ def _profile_for_hostname(hostname: str) -> ExpansionProfile | None:
     return None
 
 
-def _profile_for_path_prefix(path: str) -> ExpansionProfile | None:
-    parts = [part for part in path.split("/") if part]
-    if not parts:
-        return _BY_KEY["retail"]
-    head = parts[0]
-    for profile in _PREFIX_PROFILES:
-        if head == profile.path_prefix:
-            return profile
-    return _BY_KEY["retail"]
+def _profile_for_path_prefix(path: str) -> ExpansionProfile:
+    head = next((part for part in path.split("/") if part), "")
+    return _BY_PATH_PREFIX.get(head, _BY_KEY["retail"])
 
 
 def detect_expansion_from_url(raw: str) -> ExpansionProfile | None:
@@ -201,6 +196,15 @@ def detect_expansion_from_url(raw: str) -> ExpansionProfile | None:
     return _profile_for_path_prefix(parsed.path)
 
 
+def detect_expansion_from_ref(raw: str) -> ExpansionProfile | None:
+    """Infer the expansion from a Wowhead URL, or from a relative Wowhead path such as ``classic/guide/...``."""
+    detected = detect_expansion_from_url(raw)
+    if detected is not None:
+        return detected
+    head, separator, _rest = raw.strip().lstrip("/").partition("/")
+    return _BY_PATH_PREFIX.get(head) if separator else None
+
+
 def parse_entity_from_wowhead_url(raw: str) -> tuple[str, int] | None:
     normalized = normalize_wowhead_url(raw)
     if normalized is None:
@@ -208,7 +212,7 @@ def parse_entity_from_wowhead_url(raw: str) -> tuple[str, int] | None:
     parsed = urlparse(normalized)
     if not is_wowhead_host(parsed.hostname or ""):
         return None
-    match = _ENTITY_PATH_RE.match(parsed.path)
+    match = ENTITY_PATH_RE.match(parsed.path)
     if match is None:
         return None
     entity_type = match.group("etype")

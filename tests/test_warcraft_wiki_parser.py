@@ -33,6 +33,7 @@ def test_normalize_article_ref_handles_full_wiki_urls() -> None:
 
 def test_classify_article_family_handles_programming_and_system_titles() -> None:
     assert classify_article_family("API CreateFrame") == "api_function"
+    assert classify_article_family("Enum.ItemQuality") == "api_enum"
     assert classify_article_family("UIHANDLER OnKeyDown") == "ui_handler"
     assert classify_article_family("API change summaries") == "api_changes"
     assert classify_article_family("World of Warcraft API") == "framework_page"

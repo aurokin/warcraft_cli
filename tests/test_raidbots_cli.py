@@ -27,6 +27,7 @@ QUICK_SIM_REPORT = {
             "desired_targets": 1,
             "max_time": 300,
             "threads": 8,
+            "confidence_estimator": 1.96,
             "dbc": {"version_used": "live", "live": {"wow_version": "11.1.0"}},
         },
         "statistics": {"simulation_length": {"count": 9000}},
@@ -40,8 +41,9 @@ QUICK_SIM_REPORT = {
                 "race": "troll",
                 "talents": "CYGAAA",
                 "collected_data": {
-                    "dps": {"mean": 1234567.8, "count": 10000},
-                    "dpse": {"mean": 1230000.0},
+                    # dpse is SimC's effective DPS, not an error term; mean_std_dev is the standard error.
+                    "dps": {"mean": 1234567.8, "count": 10000, "mean_std_dev": 500.0},
+                    "dpse": {"mean": 1234567.8},
                     "dtps": {"mean": 0.0},
                     "hps": {"mean": 0.0},
                     "fight_length": {"mean": 300.0, "count": 10000},
@@ -104,6 +106,8 @@ def test_parse_report_quick_sim_keeps_every_actor_of_a_multi_actor_sim() -> None
 
     assert (parsed["actor"]["name"], parsed["actor_count"]) == ("Frostmage", 2)
     assert [(row["actor"]["name"], row["metrics"]["dps"]) for row in parsed["other_actors"]] == [("Secondmage", 2500000.0)]
+    # Without mean_std_dev (simple sample data) the error is unknown, never a copy of dps.
+    assert parsed["other_actors"][0]["metrics"]["dps_error"] is None
 
 
 def test_parse_report_quick_sim_extracts_actor_and_metrics() -> None:
@@ -120,6 +124,7 @@ def test_parse_report_quick_sim_extracts_actor_and_metrics() -> None:
     assert identity["source"] == {"provider": "raidbots", "source": "simbot_report"}
     assert parsed["actor"]["talents_present"] is True
     assert parsed["metrics"]["dps"] == 1234567.8
+    assert parsed["metrics"]["dps_error"] == pytest.approx(980.0)
     assert parsed["game_version"] == "11.1.0"
     assert parsed["simbot"]["sim_type"] == "quick"
     assert parsed["run_settings"]["iterations_completed"] == 10000
@@ -386,16 +391,6 @@ def test_simc_handoff_shell_quotes_untrusted_talents() -> None:
     tokens = shlex.split(decode)
     assert tokens[tokens.index("--talents") + 1] == malicious
     assert "touch" not in tokens  # the injected command never becomes its own token
-
-
-def test_resolve_report_id_honors_overridden_path_template() -> None:
-    # Under a template override that drops `/report/`, the CLI must round-trip the report URLs
-    # it now emits (doctor/citations), not just bare IDs. The documented `/report/{ID}` surface
-    # still resolves regardless, and a bare ID is always drift-proof.
-    template = "/sim/{id}"
-    assert resolve_report_id("https://www.raidbots.com/sim/abc123XYZ", template) == "abc123XYZ"
-    assert resolve_report_id("abc123XYZ", template) == "abc123XYZ"
-    assert resolve_report_id("https://www.raidbots.com/simbot/report/zzz999", template) == "zzz999"
 
 
 def test_classify_recognizes_space_padded_copy_directive() -> None:

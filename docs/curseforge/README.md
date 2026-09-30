@@ -52,7 +52,7 @@ Resolves one WoW addon and returns its metadata, latest files, and latest change
 ### `curseforge search <query>` and `curseforge resolve <query>`
 
 Not implemented. Both accept `--limit <1-50>` (currently unused) and return a structured
-`kind: coming_soon` envelope with `ok: true`, empty `results`, and a `suggested_command`, so probing
+`kind: coming_soon` envelope with `ok: true`, the query text as `query`, empty `results`, and a `suggested_command`, so probing
 them is a stable contract rather than a Click "no such command" error.
 
 ## Output And Exit Codes
@@ -65,7 +65,7 @@ Every command emits the shared envelope (`ok`, `provider`, `command`, `kind`, `s
 |---|---|
 | `missing_api_key`, `auth_failed` | 3 |
 | `addon_not_found` | 4 |
-| `rate_limited` (429), `upstream_error` (other HTTP errors), `network_error` | 5 |
+| `rate_limited` (429), `upstream_error` (other HTTP errors), `timeout`, `network_error` | 5 |
 | `invalid_response` | 1 |
 
 See [ERROR_CONTRACT.md](../foundation/ERROR_CONTRACT.md) for the shared vocabulary.

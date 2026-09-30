@@ -69,7 +69,8 @@ def matching_specs(actor: dict[str, Any], spec_name: str) -> list[dict[str, Any]
     ]
 
 
-def _player_details_roles(report: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+def player_details_roles(report: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    """Tank, healer and dps rows of a playerDetails response, in that order."""
     details = dict_at(report, "playerDetails")
     data = dict_at(details, "data")
     role_data = dict_at(data, "playerDetails") or data
@@ -81,7 +82,7 @@ def _player_details_roles(report: dict[str, Any]) -> dict[str, list[dict[str, An
 
 def matching_spec_players(report: dict[str, Any], *, spec_name: str) -> list[dict[str, Any]]:
     matches: list[dict[str, Any]] = []
-    for role, rows in _player_details_roles(report).items():
+    for role, rows in player_details_roles(report).items():
         for row in rows:
             specs = matching_specs(row, spec_name)
             if specs:
@@ -248,21 +249,19 @@ def sampled_cross_report_freshness(
     }
 
 
-def sampled_cache_provenance(cache_ttl_seconds: int | None) -> dict[str, Any]:
-    """Cache provenance for a sampled cohort.
+def sampled_cache_provenance(cache_ttl_seconds: int | None, rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Cache provenance for a sampled cohort of kill rows.
 
-    Sampling discovers reports and excludes live ones before scanning, so the
-    cohort is always finished reports cached under the finished-report TTL.
-
-    Caveat: within the short live→finished cache window (see docs/warcraftlogs/CACHING.md),
-    a per-report detail fetch can transiently serve a still-cached live entry. The cohort
-    intent is finished reports; the window is bounded by the short report TTL.
+    Kills are sampled from finished and still-logging reports alike (a kill fight is final once it
+    ends), so the cohort is ``live`` when any kill came from a report still being logged. The client
+    caches a live report under the short report TTL; ``cache_ttl_seconds`` is the finished TTL.
     """
+    live = any(row.get("report_finished") is False for row in rows)
     return {
-        "finished": True,
-        "live": False,
+        "finished": not live,
+        "live": live,
         "cache_ttl_seconds": cache_ttl_seconds,
-        "source": "sampled_finished_reports",
+        "source": "sampled_reports",
     }
 
 
@@ -435,7 +434,7 @@ def _matching_players_for_fight(
 
 def _matching_kill_fights(
     client: WarcraftLogsClient,
-    finished_reports: list[dict[str, Any]],
+    reports: list[dict[str, Any]],
     *,
     boss_id: int | None,
     boss_name: str | None,
@@ -443,10 +442,14 @@ def _matching_kill_fights(
     kill_time_min: float | None,
     kill_time_max: float | None,
 ) -> tuple[list[tuple[dict[str, Any], dict[str, Any]]], int]:
-    """``(report, fight)`` pairs for every kill matching the cohort filters, and the fights scanned."""
+    """``(report, fight)`` pairs for every kill matching the cohort filters, and the fights scanned.
+
+    Reports still being logged are scanned too: a kill fight is final once it has ended, and the
+    listing puts the most recently updated reports first, so skipping them empties the cohort.
+    """
     candidates: list[tuple[dict[str, Any], dict[str, Any]]] = []
     scanned_fight_count = 0
-    for report in finished_reports:
+    for report in reports:
         fights_payload = client.report_fights(
             code=str(report.get("code") or ""),
             difficulty=difficulty,
@@ -477,9 +480,9 @@ class ScannedKills:
     duplicates_removed: int
 
 
-def _scan_finished_reports_for_boss_kills(
+def _scan_reports_for_boss_kills(
     client: WarcraftLogsClient,
-    finished_reports: list[dict[str, Any]],
+    reports: list[dict[str, Any]],
     *,
     boss_id: int | None,
     boss_name: str | None,
@@ -490,7 +493,7 @@ def _scan_finished_reports_for_boss_kills(
 ) -> ScannedKills:
     candidates, scanned_fight_count = _matching_kill_fights(
         client,
-        finished_reports,
+        reports,
         boss_id=boss_id,
         boss_name=boss_name,
         difficulty=difficulty,
@@ -547,11 +550,10 @@ def collect_boss_kill_rows(client: WarcraftLogsClient, scope: CrossReportScope) 
         start_time=scope.start_time,
         end_time=scope.end_time,
     )
-    live_reports = [row for row in report_rows if not report_is_finished(row)]
-    finished_reports = [row for row in report_rows if report_is_finished(row)]
-    scanned = _scan_finished_reports_for_boss_kills(
+    live_report_count = sum(1 for row in report_rows if not report_is_finished(row))
+    scanned = _scan_reports_for_boss_kills(
         client,
-        finished_reports,
+        report_rows,
         boss_id=scope.boss_id,
         boss_name=scope.boss_name,
         difficulty=scope.difficulty,
@@ -561,8 +563,8 @@ def collect_boss_kill_rows(client: WarcraftLogsClient, scope: CrossReportScope) 
     )
     sample: dict[str, Any] = {
         "source_report_count": len(report_rows),
-        "finished_report_count": len(finished_reports),
-        "skipped_live_report_count": len(live_reports),
+        "finished_report_count": len(report_rows) - live_report_count,
+        "live_report_count": live_report_count,
         "scanned_fight_count": scanned.scanned_fight_count,
         # Distinct pulls: a kill logged by several raiders counts once, and duplicates_removed
         # says how many raw fights were collapsed to get there.
@@ -592,8 +594,6 @@ def boss_kills_payload(
     excluded = max(0, len(rows) - len(returned))
     truncated = len(rows) > top
     return {
-        "ok": True,
-        "provider": "warcraftlogs",
         "kind": kind,
         "ranking_basis": "sampled_fastest_kills",
         "matching_rule": "sampled_zone_reports_filtered_by_optional_boss_difficulty_spec_and_kill_time",
@@ -603,7 +603,7 @@ def boss_kills_payload(
             *sampled_dedupe_notes(sample),
         ],
         "freshness": sampled_cross_report_freshness(cache_ttl_seconds, transport_counts=transport_counts),
-        "cache_provenance": sampled_cache_provenance(cache_ttl_seconds),
+        "cache_provenance": sampled_cache_provenance(cache_ttl_seconds, rows),
         "sample_scope": sampled_sample_scope(
             ranking_basis="sampled_fastest_kills",
             query=query,
@@ -661,8 +661,6 @@ def spec_filtered_kill_samples_payload(
             "the cohort are excluded by --top, so the returned subset is not a representative random sample"
         )
     return {
-        "ok": True,
-        "provider": "warcraftlogs",
         "kind": "spec_filtered_kill_samples",
         "cohort": "spec_filtered_participant_kill_cohort",
         "ranking_basis": "spec_filtered_participant_kill_samples",
@@ -670,7 +668,7 @@ def spec_filtered_kill_samples_payload(
         "query": query,
         "notes": notes,
         "freshness": sampled_cross_report_freshness(cache_ttl_seconds, transport_counts=transport_counts),
-        "cache_provenance": sampled_cache_provenance(cache_ttl_seconds),
+        "cache_provenance": sampled_cache_provenance(cache_ttl_seconds, rows),
         "sample_scope": sampled_sample_scope(
             ranking_basis="spec_filtered_participant_kill_samples",
             query=query,
@@ -712,8 +710,6 @@ def kill_time_distribution_payload(
         if isinstance(duration, (int, float))
     ]
     return {
-        "ok": True,
-        "provider": "warcraftlogs",
         "kind": "kill_time_distribution",
         "ranking_basis": "sampled_kill_time_distribution",
         "matching_rule": "sampled_zone_reports_filtered_by_optional_boss_difficulty_spec_and_kill_time",
@@ -723,7 +719,7 @@ def kill_time_distribution_payload(
             *sampled_dedupe_notes(sample),
         ],
         "freshness": sampled_cross_report_freshness(cache_ttl_seconds, transport_counts=transport_counts),
-        "cache_provenance": sampled_cache_provenance(cache_ttl_seconds),
+        "cache_provenance": sampled_cache_provenance(cache_ttl_seconds, rows),
         "sample_scope": sampled_sample_scope(
             ranking_basis="sampled_kill_time_distribution",
             query=query,

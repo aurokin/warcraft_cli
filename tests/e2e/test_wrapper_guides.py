@@ -60,6 +60,11 @@ DPS_SPEC = "fury"
 HEALER_LEGS = {"identify": True, "decode": True, "describe": False}
 # Every monk hero tree, so a label naming a tree none of the codes decode to is still caught.
 MONK_HERO_TREES = ("Master of Harmony", "Conduit of the Celestials", "Shado-Pan")
+# Retired 2026-09-29: Icy Veins serves the Mistweaver healing guide at this slug, and the query
+# below resolves to it there (test_icy_veins.py pins the same page), while Wowhead still serves its
+# own Legion Remix mistweaver guide for the query.
+RETIRED_ICY_VEINS_GUIDE = "mistweaver-monk-legion-remix-guide"
+RETIRED_GUIDE_QUERY = "mistweaver monk legion remix guide"
 
 
 @dataclass(frozen=True)
@@ -356,6 +361,29 @@ def test_guide_compare_query_reuses_fresh_bundles_until_force_refresh(require, o
     ]
 
 
+def test_a_reused_bundle_reports_the_redirect_its_export_saw(require, out_dir: Path) -> None:
+    """Reuse once dropped the redirect, so a retired guide read as the one asked for.
+
+    The query lands Icy Veins on its retired remix guide, which it serves as another guide, and
+    Wowhead on its own remix guide, which it serves as itself: both a set and an empty redirect have
+    to survive reuse.
+    """
+    require("wowhead", "icy-veins")
+    argv = (
+        "guide-compare-query", RETIRED_GUIDE_QUERY, "--provider", "wowhead", "--provider", "icy-veins",
+        "--out-root", str(out_dir),
+    )
+    exported = {row["provider"]: row for row in run("warcraft", *argv, timeout=300).data["provider_results"]}
+    redirect = exported["icy-veins"]["redirect"]
+    assert redirect is not None and redirect["requested"] == RETIRED_ICY_VEINS_GUIDE, exported["icy-veins"]
+    assert exported["wowhead"]["status"] == "exported" and exported["wowhead"]["redirect"] is None, exported["wowhead"]
+
+    reused = run("warcraft", *argv, timeout=300)
+    for row in reused.data["provider_results"]:
+        assert row["status"] == "reused", reused.describe()
+        assert row["redirect"] == exported[row["provider"]]["redirect"], reused.describe()
+
+
 def test_guide_compare_reads_two_exported_bundles(require, orchestration: Orchestration) -> None:
     require("wowhead", "method", "icy-veins")
     left, right = orchestration.bundle("method"), orchestration.bundle("icy-veins")
@@ -562,6 +590,27 @@ def test_guide_compare_query_refuses_to_compare_fewer_than_two_guides(require, o
     for row in details["provider_results"]:
         assert row["status"] == "skipped" and row["reason"] and row["error"] is None, row
     assert list(out_root.iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ("guide-compare-query", GUIDE_QUERY, "--provider", "method"),
+        ("--expansion", "wotlk", "guide-compare-query", GUIDE_QUERY),
+    ],
+)
+def test_guide_compare_query_refuses_flags_that_leave_one_guide_provider(out_dir: Path, argv: tuple[str, ...]) -> None:
+    """One ``--provider``, or an expansion only Wowhead serves, can never reach two guides.
+
+    That is a usage error decided before any provider call: behind a dead proxy with caches off, a
+    run that resolved or exported anyway would fail on the network instead.
+    """
+    result = run(
+        "warcraft", *argv, "--out-root", str(out_dir),
+        env={**dead_proxy_env(), **no_cache_env()}, expect=EXIT_USAGE, error_code="invalid_argument",
+    )
+    assert result.payload["command"] == "guide-compare-query", result.describe()
+    assert list(out_dir.iterdir()) == []
 
 
 def test_guide_compare_query_reports_an_outage_as_the_network_error(out_dir: Path) -> None:

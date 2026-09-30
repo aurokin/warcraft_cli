@@ -17,6 +17,7 @@ from wowhead_cli.ranking import (
     prefix_and_contains_score,
     resolve_confidence,
     search_result_score_and_reasons,
+    search_type_hints,
     term_match_score,
     type_hint_score,
     upstream_rank_bonuses,
@@ -786,3 +787,25 @@ def test_merge_names_each_suggestion_list_once_per_row() -> None:
     assert summary["rows_received"] == 3
     assert summary["duplicates_merged"] == 2
 
+
+
+def test_search_type_hints_match_whole_words_only() -> None:
+    for query in ("conquest", "sethekk halls", "ashbringer reprisal", "mobus", "trumpet of the dead", "spellbreaker", "guideline"):
+        assert search_type_hints(query) == set(), query
+    assert search_type_hints("frost mage guide") == {"guide"}
+    assert search_type_hints("hunter pet taming") == {"pet"}
+
+
+def test_resolve_is_not_confident_in_an_off_type_row_that_holds_only_some_words() -> None:
+    """Scores and reasons from live `wowhead resolve "bm hunter guide"` (2026-09): the database head
+    spell "Summon Hunter Guide" led guide 3159 "Beast Mastery Hunter DPS Guide - Midnight"."""
+    spell = {"entity_type": "spell", "ranking": {"score": 45, "match_reasons": ["some_terms_match", "upstream_database_rank"]}}
+    guide = {
+        "entity_type": "guide",
+        "ranking": {"score": 33, "match_reasons": ["some_terms_match", "type_hint", "upstream_database_rank"]},
+    }
+
+    assert resolve_confidence([spell, guide], entity_types=()) == "medium"
+    # Without a row of the type the query named, the same lead stays confident.
+    untyped_guide = {**guide, "ranking": {"score": 33, "match_reasons": ["some_terms_match"]}}
+    assert resolve_confidence([spell, untyped_guide], entity_types=()) == "high"

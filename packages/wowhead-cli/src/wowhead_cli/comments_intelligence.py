@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from statistics import median
 from typing import Any
 
+from wowhead_cli.listing_filters import parse_date_bound
 from wowhead_cli.page_parser import canonical_comment_url
 
 
@@ -16,15 +17,6 @@ def _parse_comment_timestamp(value: Any) -> datetime | None:
         return datetime.fromisoformat(value)
     except ValueError:
         return None
-
-
-def _parse_boundary_timestamp(value: str, *, end_of_day: bool) -> datetime:
-    parsed = datetime.fromisoformat(value)
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=UTC)
-    if end_of_day and len(value.strip()) <= 10:
-        return parsed.replace(hour=23, minute=59, second=59, microsecond=999999)
-    return parsed
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,8 +69,8 @@ def filter_raw_comments(
     keywords: tuple[str, ...] = (),
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     filters = _CommentFilters(
-        boundary_from=_parse_boundary_timestamp(date_from, end_of_day=False) if date_from else None,
-        boundary_to=_parse_boundary_timestamp(date_to, end_of_day=True) if date_to else None,
+        boundary_from=parse_date_bound(date_from, end_of_day=False),
+        boundary_to=parse_date_bound(date_to, end_of_day=True),
         min_replies=min_replies,
         author_needle=author.strip().lower() if isinstance(author, str) and author.strip() else None,
         keyword_needles=tuple(part.strip().lower() for part in keywords if part.strip()),

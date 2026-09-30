@@ -12,7 +12,7 @@ from urllib.parse import quote
 
 from warcraft_core.provider import ProviderError
 from warcraft_core.shapes import as_dict, as_list
-from warcraft_core.wow_normalization import normalize_region, primary_realm_slug
+from warcraft_core.wow_normalization import primary_realm_slug
 
 from raiderio_cli.client import (
     RAIDERIO_BASE_URL,
@@ -21,10 +21,10 @@ from raiderio_cli.client import (
     RaiderIOClient,
     combined_freshness,
     page_freshness,
+    validated_region,
 )
 
 RAID_DIFFICULTIES = ("normal", "heroic", "mythic")
-RAID_REGIONS = ("world", "us", "eu", "kr", "tw", "cn")
 # Rows per API request. The endpoint accepts up to 200, but a fixed page keeps ``--page`` meaning
 # the same 20-row slice regardless of ``--limit``, matching ``leaderboard mythic-plus``.
 RAID_RANKINGS_PAGE_SIZE = 20
@@ -38,13 +38,11 @@ def validated_raid_scope(*, difficulty: str, region: str, realm: str | None) -> 
     URL need.
     """
     difficulty = difficulty.strip().lower()
-    region = normalize_region(region)
+    region = validated_region(region)
     realm_input = (realm or "").strip()
     realm = primary_realm_slug(realm_input) if realm_input else None
     if difficulty not in RAID_DIFFICULTIES:
         raise ProviderError("invalid_query", f"--difficulty must be one of: {', '.join(RAID_DIFFICULTIES)}")
-    if region not in RAID_REGIONS:
-        raise ProviderError("invalid_query", f"--region must be one of: {', '.join(RAID_REGIONS)}")
     if realm and region == "world":
         raise ProviderError("invalid_query", "--realm requires a standard --region (us, eu, kr, tw, cn), not world")
     return difficulty, region, realm
@@ -57,8 +55,8 @@ def raid_pages_for_limit(limit: int) -> int:
 def raid_rankings_url(*, raid: str, difficulty: str, region: str, realm: str | None) -> str:
     """The raider.io rankings page for a scope (the site's own URL layout).
 
-    The realm is percent-encoded: ``primary_realm_slug`` passes non-ASCII realms (``Ревущий
-    фьорд``) through unchanged, spaces and all, and a citation with a raw space is not a URL.
+    The realm is percent-encoded: ``primary_realm_slug`` keeps non-ASCII letters (``Ревущий фьорд``
+    -> ``ревущий-фьорд``), and a citation with raw non-ASCII text is not a URL.
     """
     url = f"{RAIDERIO_SITE_BASE_URL}/{raid}/rankings/{region}/{difficulty}"
     return f"{url}?realm={quote(realm, safe='')}" if realm else url

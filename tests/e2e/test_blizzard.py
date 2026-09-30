@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from tests.e2e.harness import EXIT_AUTH, EXIT_NOT_FOUND, EXIT_USAGE, Result, dead_proxy_env, no_cache_env, run
 from tests.e2e.pins import CHARACTER_NAME, GUILD_REALM, ITEM_ID, ITEM_NAME, REALM_SLUG
 
@@ -106,6 +108,19 @@ def test_a_realm_display_name_reaches_the_realm_its_slug_names(require) -> None:
     by_name = run("blizzard", "realm", "Mal'Ganis")
     assert by_name.data["slug"] == "malganis", by_name.describe()
     assert by_name.data["id"] == by_slug.data["id"], by_name.describe()
+
+
+@pytest.mark.parametrize("name", ["Festung der Stürme", "Aggra (Português)"])
+def test_an_accented_realm_name_reaches_the_realm_it_names(require, name: str) -> None:
+    """Blizzard keeps accented letters in its realm slugs, so a typed name must reach the API with them.
+
+    Blizzard's own record answers with the realm's display name; a slug that dropped the letter
+    (``festung-der-strme``) is a 404, not this realm.
+    """
+    require("blizzard-api")
+    result = run("blizzard", "realm", name, "--region", "eu")
+    _assert_the_namespace_reached_the_api(result, "dynamic-eu")
+    assert result.data["name"] == name, result.describe()
 
 
 def test_region_and_game_version_change_the_namespace(require) -> None:

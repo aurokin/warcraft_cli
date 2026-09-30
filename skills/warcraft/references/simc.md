@@ -47,8 +47,10 @@
   - skipped capstones or alternate branches
   - ST vs AoE shape changes
   - dispatcher-to-leaf focus changes exposed through `focus_path`
-- use `apl-prune`, `apl-branch-trace`, and `apl-intent` for conservative flow reasoning
-- use `priority` as the default build-scoped priority view
+- use `apl-prune`, `apl-branch-trace`, and `apl-intent` for conservative flow reasoning; a line is `dead` only when the build's talents, ranks, hero tree or target count prove it, so treat `possible` / `unknown` as runtime-dependent, not as inactive
+- use `priority` as the default build-scoped priority view; it follows the build into the list where its rotation lives (`focus_path`) and reports `total` and `truncated`, so raise `--limit` when `truncated` is true instead of calling the list complete
+- a `--list` the APL has no action list of fails with `not_found`, and `error.details.available_lists` names the real ones
+- a relative APL path is read from the current directory when the file is there, otherwise from the SimC checkout
 - use `inactive-actions` when you need to prove a shared APL branch is not active for the current build
 - use `opener` for a static early-action preview, then escalate to `first-cast` if runtime confirmation matters
 - use `analysis-packet` when you want an agent-facing summary instead of assembling outputs manually
@@ -56,14 +58,17 @@
 - use `sim` as the default consumer run path:
   - `simc sim ./profile.simc`
   - `cat ./profile.simc | simc sim -`
-  - it always reports run settings, runtime, and core output metrics
+  - it always reports run settings, runtime, and core output metrics; `metrics.dps_error` is SimC's confidence-interval half-width around mean DPS and `run_settings.target_error_percent` is that error as a percent of DPS, so quote DPS with it
+- `simc run` returns SimC's headline `Player:` / `DPS=` lines under `result_lines`; its output previews are the last 20 lines
+- `sim` and `run` fail with `missing_binary` when the checkout has no built binary; run `simc build`
+- `compare-apls` labels must be unique plain file names (they name the files each variant writes), otherwise it fails with `invalid_query`
 - `compare-apls` ranks variants on mean DPS, but `action_counts`, `action_cpm`, and `top_action_deltas` come from the one iteration SimC records an action sequence for; the payload states this under `sampling`, so present cast-rate differences as a single sampled fight, not as an average
 - `spec-files`, `find-action`, and `trace-action` need ripgrep; without it they fail with `missing_dependency` and `simc doctor` marks them `unavailable`. Pointed at a directory that is not a SimulationCraft checkout they fail with `not_found` (exit 4) rather than reporting zero hits
 - use `compare-builds` to diff talent selections between two or more builds by tree; this is the right tool when the user asks "what changed between these two builds?"
   - `summary.failed` counts the `--other` builds SimC rejected; each keeps its `error` in `comparisons`, so say which comparisons are missing. When none decode the command fails instead
 - use `modify-build` to produce a new talent export string from an existing build:
   - `--swap-class-tree-from` / `--swap-spec-tree-from` / `--swap-hero-tree-from` replace an entire tree from another build
-  - `--add name:rank` and `--remove name` adjust individual talents in any tree; a name or entry id must be a talent the build's spec can take, otherwise it fails with `unknown_talent` (exit 2). A hero talent counts when the spec can select its hero tree. Healer builds can be modified too
+  - `--add name:rank` and `--remove name` adjust individual talents in any tree (names follow SimC's tokens, so "Anti-Magic Zone" works as written); a name or entry id must be a talent the build's spec can take, otherwise it fails with `unknown_talent` (exit 2). A hero talent counts when the spec can select its hero tree. Healer builds can be modified too
   - at least one `--swap-*-tree-from`, `--add` or `--remove` is required; without one the command fails with `invalid_argument` (exit 2)
   - the output includes the new WoW export string, a Wowhead URL, a diff from the base build, and `verified: true`, which means every requested edit is in the export and nothing else changed in the active trees; it does not mean the game will import it
   - when re-encoding changes anything in the active trees that was not requested, or a requested edit is not in the export at the requested rank (SimC silently clamps a rank above the maximum), the command fails with `encode_mismatch` and no export; do not retry, report the listed `unrequested_changes` and `unapplied_edits`. A swapped tree is checked against the build it came from, not the base

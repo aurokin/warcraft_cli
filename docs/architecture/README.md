@@ -5,7 +5,7 @@ Progressive index for repo structure and shared design. Sequencing and near-term
 ## Start Here
 
 - [REPO_STRUCTURE_AND_PACKAGING.md](REPO_STRUCTURE_AND_PACKAGING.md) — monorepo shape, install model, shared package responsibilities, tooling
-- [PACKAGE_LAYOUT.md](PACKAGE_LAYOUT.md) — the 16 packages, console scripts, tiers, dependency direction
+- [PACKAGE_LAYOUT.md](PACKAGE_LAYOUT.md) — the 15 packages, console scripts, tiers, dependency direction
 - [../foundation/ERROR_CONTRACT.md](../foundation/ERROR_CONTRACT.md) — the envelope, exit codes, and global flags every binary shares
 - [../foundation/WRAPPER_PROVIDER_CONTRACT.md](../foundation/WRAPPER_PROVIDER_CONTRACT.md) — required provider surfaces for the wrapper
 - [../reference/README.md](../reference/README.md) — generated per-CLI command reference

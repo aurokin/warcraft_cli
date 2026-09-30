@@ -8,6 +8,7 @@ from warcraft_core.shapes import as_dict, as_list
 
 
 def build_phase_windows(phases: list[Any], duration_ms: int | float | None) -> list[dict[str, Any]]:
+    """One window per phase. Without a fight duration the last window is open-ended (``end_ms`` null)."""
     duration = int(duration_ms) if isinstance(duration_ms, (int, float)) and duration_ms > 0 else None
     # Lorrgs drops the pull phase transition before serializing `phases`; stored markers are
     # transitions into P2/P3/etc., so P2 starts at markers[0], not markers[1].
@@ -18,36 +19,19 @@ def build_phase_windows(phases: list[Any], duration_ms: int | float | None) -> l
             if marker is not None and marker > 0 and (duration is None or marker < duration)
         }
     )
-    boundaries = [0, *markers]
-    if duration is not None:
-        boundaries.append(duration)
-    windows: list[dict[str, Any]] = []
-    for index, start_ms in enumerate(boundaries[:-1], start=1):
-        end_ms = boundaries[index]
-        windows.append(
-            {
-                "phase": index,
-                "label": f"P{index}",
-                "start_ms": start_ms,
-                "end_ms": end_ms,
-                "duration_ms": end_ms - start_ms,
-                "start_source": "pull" if index == 1 else "lorrgs_phase_transition",
-                "end_source": "fight_end" if duration is not None and end_ms == duration else "lorrgs_phase_transition",
-            }
-        )
-    if not windows and duration is not None:
-        windows.append(
-            {
-                "phase": 1,
-                "label": "P1",
-                "start_ms": 0,
-                "end_ms": duration,
-                "duration_ms": duration,
-                "start_source": "pull",
-                "end_source": "fight_end",
-            }
-        )
-    return windows
+    ends: list[int | None] = [*markers, duration]
+    return [
+        {
+            "phase": index,
+            "label": f"P{index}",
+            "start_ms": start_ms,
+            "end_ms": end_ms,
+            "duration_ms": None if end_ms is None else end_ms - start_ms,
+            "start_source": "pull" if index == 1 else "lorrgs_phase_transition",
+            "end_source": "lorrgs_phase_transition" if index <= len(markers) else ("fight_end" if end_ms is not None else "unknown"),
+        }
+        for index, (start_ms, end_ms) in enumerate(zip([0, *markers], ends, strict=True), start=1)
+    ]
 
 
 def selected_phase_window(windows: list[dict[str, Any]], phase: int) -> dict[str, Any] | None:
@@ -81,7 +65,7 @@ def spell_catalog(spell_data: dict[str, Any]) -> dict[int, dict[str, Any]]:
     for key, value in data.items():
         if not isinstance(value, dict):
             continue
-        spell_id = _int_or_none(value.get("spell_id")) or _int_or_none(key)
+        spell_id = int_or_none(value.get("spell_id")) or int_or_none(key)
         if spell_id is None:
             continue
         catalog[spell_id] = {**value, "spell_id": spell_id}
@@ -130,20 +114,20 @@ def normalize_lorrgs_casts(
     for cast in casts:
         if not isinstance(cast, dict):
             continue
-        spell_id = _int_or_none(cast.get("id"))
-        timestamp_ms = _int_or_none(cast.get("ts"))
+        spell_id = int_or_none(cast.get("id"))
+        timestamp_ms = int_or_none(cast.get("ts"))
         if spell_id is None or timestamp_ms is None:
             continue
         if spell_ids is not None and spell_id not in spell_ids:
             continue
-        if window is not None and not _timestamp_in_window(timestamp_ms, window):
+        if window is not None and not timestamp_in_window(timestamp_ms, window):
             continue
         normalized.append(
             {
                 "timestamp_ms": timestamp_ms,
                 "spell": spell_summary(spell_id, catalog=catalog),
-                "cast_number": _int_or_none(cast.get("c")),
-                "duration_ms": _int_or_none(cast.get("d")),
+                "cast_number": int_or_none(cast.get("c")),
+                "duration_ms": int_or_none(cast.get("d")),
             }
         )
     return sorted(normalized, key=lambda row: int(row["timestamp_ms"]))
@@ -155,21 +139,31 @@ def normalize_warcraftlogs_actor_casts(
     fight_start_time_ms: int,
     catalog: dict[int, dict[str, Any]],
     spell_ids: set[int],
+    source_id: int,
     window: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """The actor's tracked cooldown casts from one Warcraft Logs Casts page.
+
+    The page was requested with ``--source-id``, but the rows are checked too: a cast by anyone else
+    is counted in ``other_source_cast_count`` and never attributed to this actor.
+    """
     raw_events = events_payload.get("events")
     events: list[Any] = as_list(raw_events)
     tracked: list[dict[str, Any]] = []
     phase_tracked: list[dict[str, Any]] = []
     by_spell: Counter[int] = Counter()
     phase_by_spell: Counter[int] = Counter()
+    other_source_casts = 0
     for row in events:
         # The Casts data type also returns begincast and empowerstart/empowerend rows; only the
         # `cast` row marks one use of the spell.
         if not isinstance(row, dict) or row.get("type") != "cast":
             continue
-        spell_id = _int_or_none(row.get("abilityGameID"))
-        timestamp = _int_or_none(row.get("timestamp"))
+        if int_or_none(row.get("sourceID")) != source_id:
+            other_source_casts += 1
+            continue
+        spell_id = int_or_none(row.get("abilityGameID"))
+        timestamp = int_or_none(row.get("timestamp"))
         if spell_id is None or timestamp is None or spell_id not in spell_ids:
             continue
         relative_ms = timestamp - fight_start_time_ms
@@ -178,15 +172,16 @@ def normalize_warcraftlogs_actor_casts(
             "report_timestamp_ms": timestamp,
             "spell": spell_summary(spell_id, catalog=catalog),
             "type": row.get("type"),
-            "target_id": _int_or_none(row.get("targetID")),
+            "target_id": int_or_none(row.get("targetID")),
         }
         tracked.append(normalized)
         by_spell[spell_id] += 1
-        if window is not None and _timestamp_in_window(relative_ms, window):
+        if window is not None and timestamp_in_window(relative_ms, window):
             phase_tracked.append(normalized)
             phase_by_spell[spell_id] += 1
     return {
         "raw_event_count": len(events),
+        "other_source_cast_count": other_source_casts,
         "next_page_timestamp": events_payload.get("next_page_timestamp"),
         "tracked_spell_count": len(spell_ids),
         "tracked_cast_count": len(tracked),
@@ -208,11 +203,11 @@ def _sample_for_fight(
     spell_ids: set[int],
 ) -> dict[str, Any] | None:
     """One top-parse comparison row, or ``None`` when the fight has no usable player."""
-    players = _list_or_empty(fight.get("players"))
+    players = as_list(fight.get("players"))
     player = next((row for row in players if isinstance(row, dict)), None)
     if player is None:
         return None
-    windows = build_phase_windows(_list_or_empty(fight.get("phases")), fight.get("duration"))
+    windows = build_phase_windows(as_list(fight.get("phases")), fight.get("duration"))
     window = selected_phase_window(windows, phase)
     raw_boss = fight.get("boss")
     boss: dict[str, Any] = as_dict(raw_boss)
@@ -220,9 +215,9 @@ def _sample_for_fight(
     boss_casts: list[dict[str, Any]] = []
     if window is not None:
         casts = normalize_lorrgs_casts(
-            _list_or_empty(player.get("casts")), catalog=spell_catalog, window=window, spell_ids=spell_ids
+            as_list(player.get("casts")), catalog=spell_catalog, window=window, spell_ids=spell_ids
         )
-        boss_casts = normalize_lorrgs_casts(_list_or_empty(boss.get("casts")), catalog=boss_catalog, window=window)
+        boss_casts = normalize_lorrgs_casts(as_list(boss.get("casts")), catalog=boss_catalog, window=window)
     return {
         "report_id": report.get("report_id"),
         "region": report.get("region"),
@@ -266,7 +261,7 @@ def top_parse_samples(
     if ranking_data is None:
         return {"status": "unavailable", "sample_count": 0, "samples": [], "selected_phase_spell_frequency": []}
     data: dict[str, Any] = as_dict(ranking_data)
-    reports = _list_or_empty(data.get("reports"))
+    reports = as_list(data.get("reports"))
     samples: list[dict[str, Any]] = []
     frequency: Counter[int] = Counter()
     total_casts: Counter[int] = Counter()
@@ -275,7 +270,7 @@ def top_parse_samples(
             break
         if not isinstance(report, dict):
             continue
-        for fight in _list_or_empty(report.get("fights")):
+        for fight in as_list(report.get("fights")):
             if len(samples) >= sample_limit:
                 break
             if not isinstance(fight, dict):
@@ -339,18 +334,19 @@ def _frequency_rows(
 def _phase_marker_ms(row: Any) -> int | None:
     if not isinstance(row, dict):
         return None
-    return _int_or_none(row.get("ts")) or _int_or_none(row.get("timestamp"))
+    return int_or_none(row.get("ts")) or int_or_none(row.get("timestamp"))
 
 
-def _timestamp_in_window(timestamp_ms: int, window: dict[str, Any]) -> bool:
-    start_ms = _int_or_none(window.get("start_ms"))
-    end_ms = _int_or_none(window.get("end_ms"))
-    if start_ms is None or end_ms is None:
+def timestamp_in_window(timestamp_ms: int, window: dict[str, Any]) -> bool:
+    """Whether ``timestamp_ms`` falls in ``[start_ms, end_ms)``; a null ``end_ms`` is open-ended."""
+    start_ms = int_or_none(window.get("start_ms"))
+    end_ms = int_or_none(window.get("end_ms"))
+    if start_ms is None:
         return False
-    return start_ms <= timestamp_ms < end_ms
+    return start_ms <= timestamp_ms and (end_ms is None or timestamp_ms < end_ms)
 
 
-def _int_or_none(value: Any) -> int | None:
+def int_or_none(value: Any) -> int | None:
     if isinstance(value, bool):
         return None
     if isinstance(value, int):
@@ -360,7 +356,3 @@ def _int_or_none(value: Any) -> int | None:
     if isinstance(value, str) and value.strip().lstrip("-").isdigit():
         return int(value)
     return None
-
-
-def _list_or_empty(value: Any) -> list[Any]:
-    return as_list(value)

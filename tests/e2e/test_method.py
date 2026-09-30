@@ -15,7 +15,9 @@ which is what the retired ``tests/test_method_live.py`` pinned by slug.
 from __future__ import annotations
 
 import json
+import re
 import shlex
+from datetime import date
 from functools import cache
 from pathlib import Path
 from typing import Any
@@ -132,6 +134,35 @@ def _exported_sections(bundle: Path) -> dict[tuple[str, int], dict[str, Any]]:
     return {(row["page_url"], row["ordinal"]): row for row in rows}
 
 
+def _assert_last_updated_is_a_date(guide: dict[str, Any]) -> None:
+    """``last_updated`` is the ISO date of the page's own stamp, which stays readable in ``last_updated_text``.
+
+    Method writes the stamp two ways ("Last Updated: 11th Aug, 2026", "4th August 2025"); it was once
+    passed through raw, so freshness could not be compared with the other guide sites.
+    """
+    stamp = date.fromisoformat(guide["last_updated"])
+    # Day, month and year of the stamp, in Method's order: "11th Aug, 2026" or "4th August 2025".
+    written = rf"\b{stamp.day}(?:st|nd|rd|th)?\s+{stamp:%b}[a-z]*,?\s+{stamp.year}\b"
+    assert re.search(written, guide["last_updated_text"]), guide
+
+
+def _assert_ties_list_the_newest_page_first(result: Result) -> None:
+    """Rows with the same score are ordered by the sitemap's ``lastmod``, newest first; they were alphabetical.
+
+    Some tied pair has to carry two different dates, or the order is not being tested at all.
+    """
+    rows = result.data["results"]
+    tied = [
+        (earlier["metadata"]["sitemap_lastmod"], later["metadata"]["sitemap_lastmod"])
+        for earlier, later in zip(rows, rows[1:], strict=False)
+        if earlier["ranking"]["score"] == later["ranking"]["score"]
+    ]
+    assert any(first and second and first != second for first, second in tied), (
+        f"no tied pair with two different sitemap dates, so the tie order cannot be checked\n{result.describe()}"
+    )
+    assert all((first or "") >= (second or "") for first, second in tied), result.describe()
+
+
 def _first_guide_of_family(query: str, family: str) -> str:
     result = run(BINARY, "search", query, "--limit", "5")
     for row in result.data["results"]:
@@ -188,6 +219,13 @@ def test_search_reads_mythic_plus_as_the_mythic_dungeon_pages(require) -> None:
     assert "mythic-dungeon" in rows[0]["id"], result.describe()
 
 
+def test_search_breaks_score_ties_toward_the_newest_page(require) -> None:
+    """``mythic+ dungeons`` scores several seasons' pages alike; a Dragonflight page once led them."""
+    require(PROVIDER)
+    result = run(BINARY, "search", "mythic+ dungeons", "--limit", "10")
+    _assert_ties_list_the_newest_page_first(result)
+
+
 def test_resolve_hands_over_a_next_command_that_returns_the_same_guide(require) -> None:
     require(PROVIDER)
     result = run(BINARY, "resolve", pins.GUIDE_QUERY, "--limit", "5")
@@ -205,6 +243,30 @@ def test_resolve_hands_over_a_next_command_that_returns_the_same_guide(require) 
     assert run(BINARY, *args).data["guide"]["slug"] == guide_slug()
 
 
+def test_resolve_judges_confidence_on_every_match_not_the_limit(require) -> None:
+    """``frost`` is a mage and a death knight spec. ``--limit 1`` once hid the rival and resolved
+    the query at high confidence; the limit may only trim the candidates shown.
+    """
+    require(PROVIDER)
+    wide = run(BINARY, "resolve", "frost", "--limit", "5")
+    assert {row["id"] for row in wide.data["candidates"][:2]} == {"frost-mage", "frost-death-knight"}, wide.describe()
+    assert wide.data["resolved"] is False, wide.describe()
+    narrow = run(BINARY, "resolve", "frost", "--limit", "1")
+    assert (narrow.data["resolved"], narrow.data["confidence"]) == (False, wide.data["confidence"]), narrow.describe()
+    assert [row["id"] for row in narrow.data["candidates"]] == [wide.data["candidates"][0]["id"]], narrow.describe()
+
+
+@pytest.mark.parametrize(("shorthand", "spelled_out"), [("bm hunter", "beast mastery hunter"), ("disc priest", "discipline priest")])
+def test_resolve_reads_class_and_spec_shorthand(require, shorthand: str, spelled_out: str) -> None:
+    """``bm hunter`` once found nothing with ok: true; it has to land where the spelled-out query does."""
+    require(PROVIDER)
+    expected = run(BINARY, "resolve", spelled_out)
+    assert expected.data["resolved"] is True, expected.describe()
+    result = run(BINARY, "resolve", shorthand)
+    assert result.data["resolved"] is True, result.describe()
+    assert result.data["match"]["id"] == expected.data["match"]["id"] == spelled_out.replace(" ", "-"), result.describe()
+
+
 def test_guide_returns_titled_sections_navigation_and_linked_entities(require) -> None:
     require(PROVIDER)
     result = guide_page()
@@ -216,7 +278,7 @@ def test_guide_returns_titled_sections_navigation_and_linked_entities(require) -
     assert guide["section_title"], "the active navigation page has no title"
     assert guide["page_url"] == f"https://www.method.gg/guides/{guide_slug()}"
     assert guide["author"].strip(), "the guide byline is missing"
-    assert guide["last_updated"].strip(), "the guide has no last-updated stamp"
+    _assert_last_updated_is_a_date(guide)
     # Method guides are multi-page: the family navigation is the only way to reach the other pages.
     assert result.data["navigation"]["count"] >= 2
     assert all(item["title"] and item["url"] for item in result.data["navigation"]["items"])
@@ -238,7 +300,7 @@ def test_every_supported_guide_family_parses_with_a_byline(require, query: str, 
     assert guide["content_family"] == family
     assert guide["supported_surface"] is True
     assert guide["author"].strip(), f"{slug} lost its byline"
-    assert guide["last_updated"].strip(), f"{slug} lost its last-updated stamp"
+    _assert_last_updated_is_a_date(guide)
     assert len(result.data["article"]["text"].strip()) > 200, "the article parsed to almost nothing"
     _assert_summary_was_cut_on_its_headings(result)
 

@@ -23,13 +23,13 @@ client credentials and emits the shared JSON envelope.
 | `blizzard realm <slug>` | Reads `/data/wow/realm/{slug}` from the dynamic Game Data namespace. |
 | `blizzard item <item-id>` | Reads `/data/wow/item/{id}` from the static Game Data namespace. |
 | `blizzard character <realm-slug> <name>` | Reads `/profile/wow/character/{realm}/{name}` from the profile namespace. Retail only. |
-
-`realm` and `character` also take a realm display name or the other slug spelling (`Mal'Ganis`,
-`mal-ganis`, `Tarren Mill`). Blizzard's slug drops apostrophes and keeps word breaks (`malganis`,
-`tarren-mill`), so the hyphenated spelling is tried first and the joined one only after a 404; a
-realm that exists under neither is `not_found` (exit 4).
 | `blizzard search <query>` | Coming soon. Returns a `kind: "coming_soon"` envelope with exit 0, not an error. |
 | `blizzard resolve <query>` | Coming soon. Returns a `kind: "coming_soon"` envelope with exit 0, not an error. |
+
+`realm` and `character` also take a realm display name or the other slug spelling (`Mal'Ganis`,
+`mal-ganis`, `Tarren Mill`). Blizzard's slug drops apostrophes, keeps word breaks and keeps accented letters (`malganis`,
+`tarren-mill`, `festung-der-stürme`), so a hyphenated spelling is tried as written and the joined one only after a 404; a
+realm that exists under neither is `not_found` (exit 4).
 
 `search` and `resolve` accept `--limit` (1-50, default 5); it is ignored until those surfaces ship.
 
@@ -70,7 +70,9 @@ order (matching `warcraftlogs`):
 2. `~/.config/warcraft/providers/blizzard-api.env`
 3. process environment
 
-`BLIZZARD_REGION` sets the default region. The token is fetched once and cached in shared state at
+The first source that holds both the ID and the secret supplies the pair; halves from different
+sources are never combined, and `doctor` names that source in `auth.credential_source`.
+`BLIZZARD_REGION` sets the default region and resolves on its own through the same order. The token is fetched once and cached in shared state at
 `~/.local/state/warcraft/providers/blizzard-api-client-credentials.json`, keyed by
 `sha256(region, client id, client secret)` and reused until ~60s before expiry. `doctor` reports
 whether credentials and a cached token exist and never prints the secret. Without credentials every

@@ -18,6 +18,7 @@ top parses are ranked at the fight's own difficulty.
 from __future__ import annotations
 
 import json
+import shlex
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -238,6 +239,8 @@ def test_cooldown_packet_joins_a_report_fight_to_lorrgs_top_parses(require):
     assert cooldowns["tracked_spells"], result.describe()
     casts = cooldowns["player_casts"]
     assert casts["raw_event_count"] >= casts["tracked_cast_count"] >= casts["selected_phase_cast_count"], result.describe()
+    # The events are asked for by --source-id; a cast from anyone else means the filter did not land.
+    assert casts["other_source_cast_count"] == 0, result.describe()
     assert casts["selected_phase_cast_count"] == len(casts["selected_phase_casts"]), result.describe()
     assert casts["selected_phase_casts"], "the ranked player pressed no tracked cooldown in P1"
     for cast in casts["selected_phase_casts"]:
@@ -259,7 +262,9 @@ def test_cooldown_packet_joins_a_report_fight_to_lorrgs_top_parses(require):
         "warcraftlogs_report_fights": "warcraftlogs",
         "warcraftlogs_report_events": "warcraftlogs",
     }
-    assert set(data["sources"]) == set(expected_sources), result.describe()
+    # The Lorrgs roster names the player, so the Warcraft Logs roster is listed but never read.
+    assert set(data["sources"]) == {*expected_sources, "warcraftlogs_report_master_data"}, result.describe()
+    assert data["sources"]["warcraftlogs_report_master_data"]["status"] == "not_requested", result.describe()
     for key, provider in expected_sources.items():
         source = data["sources"][key]
         assert source["status"] == "ok", result.describe()
@@ -374,7 +379,8 @@ def test_cooldown_packet_degrades_when_lorrgs_has_not_cached_the_report(require)
 
     # The Warcraft Logs half is intact: the flags supplied what Lorrgs would have.
     assert result.payload["query"]["report_code"] == found.code, result.describe()
-    # Without the Lorrgs roster the player is named by the flags, and the packet says so.
+    # Without the Lorrgs roster the player is named from the Warcraft Logs report roster, and the
+    # packet says so; deaths come only from Lorrgs, so they are unknown rather than zero.
     identity = {key: data["player"][key] for key in ("name", "source_id", "spec_slug", "class_slug")}
     assert identity == {
         "name": actor["name"],
@@ -382,7 +388,8 @@ def test_cooldown_packet_degrades_when_lorrgs_has_not_cached_the_report(require)
         "spec_slug": spec_slug,
         "class_slug": str(actor["type"]).lower(),
     }, result.describe()
-    assert any("--actor-name" in note for note in data["notes"]), result.describe()
+    assert any("report roster" in note for note in data["notes"]), result.describe()
+    assert data["player"]["deaths"] is None and "player_deaths" in lorrgs["missing"], result.describe()
     assert data["boss"]["boss_slug"] == boss_slug, result.describe()
     casts = data["cooldowns"]["player_casts"]
     assert casts["tracked_cast_count"] > 0, "the degraded packet returned no Warcraft Logs casts"
@@ -392,6 +399,7 @@ def test_cooldown_packet_degrades_when_lorrgs_has_not_cached_the_report(require)
     sources = data["sources"]
     assert sources["lorrgs_user_report_fights"]["status"] == "error", result.describe()
     assert sources["warcraftlogs_report_events"]["status"] == "ok", result.describe()
+    assert sources["warcraftlogs_report_master_data"]["status"] == "ok", result.describe()
     assert sources["lorrgs_spec_spells"]["status"] == "ok", result.describe()
     # The notes describe only what the packet holds: there are no phase windows to explain here.
     assert not any("Phase windows are derived" in note for note in data["notes"]), result.describe()
@@ -485,6 +493,36 @@ def test_cooldown_packet_compares_a_heroic_fight_with_heroic_top_parses(require)
     # A tracked cast is a `cast` event; the Casts data type also returns cast-bar and empower rows.
     tracked = result.data["cooldowns"]["player_casts"]["tracked_casts"]
     assert tracked and {cast["type"] for cast in tracked} == {"cast"}, result.describe()
+
+
+def _first_ranked_fight_difficulty(ranking: Result) -> int:
+    """Warcraft Logs' difficulty for the first fight of a Lorrgs ranking, whose rows carry none of their own."""
+    report = next(row for row in ranking.data["reports"] if row.get("fights"))
+    fight_id = int(report["fights"][0]["fight_id"])
+    fights = run("warcraftlogs", "report-fights", str(report["report_id"])).data["fights"]
+    fight = next(fight for fight in fights if fight["id"] == fight_id)
+    assert fight["kill"] is True, fight
+    return int(fight["difficulty"])
+
+
+def test_lorrgs_resolve_hands_over_the_ranking_at_the_named_difficulty(require):
+    """``lorrgs resolve "heroic <spec> <boss>"`` must hand over the Heroic ranking, not the Mythic default.
+
+    Warcraft Logs is the oracle: the handed-over ranking's first fight is a Heroic kill there, and
+    the same ranking without the word is a Mythic one.
+    """
+    require("warcraftlogs", "lorrgs")
+    target = lorrgs_target()
+    resolved = run("lorrgs", "resolve", f"heroic {target.spec_slug} {target.boss_slug}")
+    assert resolved.data["resolved"] is True, resolved.describe()
+    expected = f"lorrgs spec-ranking {target.spec_slug} {target.boss_slug} --difficulty heroic"
+    assert resolved.data["next_command"] == expected, resolved.describe()
+    binary, *args = shlex.split(expected)
+    heroic = run(binary, *args)
+    assert heroic.data["difficulty"] == "heroic", heroic.describe()
+    assert _first_ranked_fight_difficulty(heroic) == HEROIC_DIFFICULTY_ID, heroic.describe()
+    mythic = run("lorrgs", "spec-ranking", target.spec_slug, target.boss_slug)
+    assert _first_ranked_fight_difficulty(mythic) == MYTHIC_DIFFICULTY_ID, mythic.describe()
 
 
 def test_cooldown_packet_without_the_fallback_flags_names_the_flags_it_needs(require):

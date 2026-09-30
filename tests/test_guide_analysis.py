@@ -114,3 +114,23 @@ def test_extract_section_chunk_analysis_surfaces_uses_section_headings_as_high_c
     assert rows[0]["confidence"] == "high"
     assert rows[0]["source_kind"] == "section_heading"
     assert rows[1]["surface_tags"] == ["gear_best_in_slot", "gear_context"]
+
+
+def test_section_heading_tags_mythic_plus_only_for_mythic_plus_not_the_mythic_raid_difficulty() -> None:
+    rows = extract_section_chunk_analysis_surfaces(
+        provider="wowhead",
+        page_url="https://www.wowhead.com/guide/classes/death-knight/frost/overview-pve-dps",
+        page_title="Frost Death Knight DPS Guide - Midnight",
+        section_chunks=[
+            {"ordinal": 1, "title": "Mythic Raid Tips", "content_text": ""},
+            {"ordinal": 2, "title": "Mythic Queen Ansurek Strategy", "content_text": ""},
+            {"ordinal": 3, "title": "Mythic+ Tips", "content_text": ""},
+            {"ordinal": 4, "title": "M+ Talents", "content_text": ""},
+        ],
+    )
+
+    assert {row["section_title"]: row["surface_tags"] for row in rows} == {
+        "Mythic Raid Tips": ["raid_guide"],
+        "Mythic+ Tips": ["mythic_plus"],
+        "M+ Talents": ["builds_talents", "talent_recommendations", "mythic_plus"],
+    }

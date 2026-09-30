@@ -251,7 +251,7 @@ Show a character's encounter rankings for one zone.
 | `--difficulty` | int |  | Optional difficulty ID. |
 | `--metric` | str |  | Optional ranking metric such as dps, hps, or tankhps. |
 | `--size` | int |  | Optional raid size. |
-| `--spec-name` | str |  | Optional spec slug filter. |
+| `--spec-name` | str |  | Optional spec filter, in any spelling (beast-mastery, Beast Mastery). |
 | `--top` | int range | 5 | Number of top ranking rows to keep in the summary. |
 
 ## warcraftlogs report

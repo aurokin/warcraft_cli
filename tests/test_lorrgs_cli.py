@@ -320,6 +320,14 @@ def test_refusal_status_is_not_reported_as_an_auth_failure(monkeypatch, status: 
     assert payload["error"]["details"] == {"status_code": status, "url": "https://api2.lorrgs.io/api/specs/mage-frost"}
 
 
+def test_unmapped_http_status_is_an_upstream_error(monkeypatch) -> None:
+    _patch_client(monkeypatch)
+    monkeypatch.setattr(FakeLorrgsClient, "spec_status", 503)
+    result = runner.invoke(app, ["spec", "mage-frost"])
+    assert result.exit_code == 5
+    assert json.loads(result.stderr)["error"]["code"] == "upstream_error"
+
+
 def test_search_ranks_the_named_spec_ranking_above_every_weaker_candidate(monkeypatch) -> None:
     # Against Lorrgs' real 43 specs and 100 bosses, "frost mage chimaerus" must put the Frost Mage
     # ranking first; Frost Death Knight matches "frost" too and must not outrank it.
@@ -354,6 +362,22 @@ def test_resolve_promotes_the_unambiguous_spec_ranking_at_high_confidence(monkey
     assert data["match"]["ranking"]["match_level"] == "short_name"
     assert data["match"]["ranking"]["unmatched_terms"] == []
     assert data["next_command"] == "lorrgs spec-ranking mage-frost chimaerus-the-undreamt-god"
+
+
+def test_resolve_carries_a_named_difficulty_into_the_ranking_command(monkeypatch) -> None:
+    # spec-ranking defaults to mythic, so a heroic question must hand back a heroic command, and
+    # comp-ranking (which takes no difficulty) must not be offered as the answer to one.
+    _patch_client(monkeypatch)
+    result = runner.invoke(app, ["resolve", "heroic frost mage chimaerus", "--limit", "10"])
+    data = json.loads(result.stdout)["data"]
+    assert data["resolved"] is True
+    assert data["match"]["difficulty"] == "heroic"
+    assert data["next_command"] == "lorrgs spec-ranking mage-frost chimaerus-the-undreamt-god --difficulty heroic"
+
+    comp = json.loads(runner.invoke(app, ["resolve", "heroic chimaerus", "--limit", "10"]).stdout)["data"]
+    assert comp["resolved"] is False
+    assert comp["results"][0]["kind"] == "comp_ranking"
+    assert comp["results"][0]["ranking"]["unmatched_terms"] == ["heroic"]
 
 
 def test_resolve_refuses_a_word_lorrgs_has_no_answer_for(monkeypatch) -> None:
@@ -572,6 +596,18 @@ def test_user_report_fights_can_take_fight_from_url(monkeypatch) -> None:
     assert (
         "user_report_fights",
         {"report_id": "bG3xDYPqKjLm8XaR", "fight": "22", "player": None, "data_type": "damage-done"},
+    ) in FakeLorrgsClient.calls
+
+
+def test_user_report_fights_passes_the_player_filter_upstream(monkeypatch) -> None:
+    # Lorrgs honours ?player= (checked live: fight 22 of bG3xDYPqKjLm8XaR narrows to the one player).
+    _patch_client(monkeypatch)
+    result = runner.invoke(app, ["user-report-fights", "bG3xDYPqKjLm8XaR", "--fight", "22", "--player", "89.117"])
+    assert result.exit_code == 0
+    assert json.loads(result.stdout)["query"]["player"] == "89.117"
+    assert (
+        "user_report_fights",
+        {"report_id": "bG3xDYPqKjLm8XaR", "fight": "22", "player": "89.117", "data_type": None},
     ) in FakeLorrgsClient.calls
 
 

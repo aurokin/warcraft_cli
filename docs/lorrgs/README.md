@@ -77,6 +77,12 @@ has twice (`frost` is Mage and Death Knight) or an encounter short name it has t
 Fallen-King and Nexus-King) comes back with `resolved: false`, `confidence: "none"`,
 `next_command: null`, and every tied candidate in `results` — narrow the query or pick a slug.
 
+A difficulty word (`mythic`, `heroic`, `normal`, `lfr`) is not matched against specs or bosses; it is
+carried into the ranking handoff instead: `heroic frost mage chimaerus` resolves to
+`lorrgs spec-ranking mage-frost chimaerus-the-undreamt-god --difficulty heroic`. `comp-ranking` takes no
+difficulty, so a heroic, normal, or LFR query lists the difficulty in its `unmatched_terms` and does not
+resolve to it.
+
 A tie between *different* kinds is a preference, not ambiguity, and it is fixed: a bare encounter name
 (`chimaerus`) resolves to `comp-ranking`, because the ranking is the useful surface and the `boss`
 metadata row scored the same only because it was built from the same match.
@@ -108,11 +114,11 @@ cast timeline rows.
 ## Wrapper registration
 
 - Registered with `status = "partial"` and `auth_required = false`.
-- Wrapper capabilities marked ready: `doctor`, `search`, `resolve`, `spec_ranking`, `comp_ranking`,
-  `season`, `current_season`, `metadata`, `report_overview`. `user_report` and `user_report_fights` are
+- The wrapper routes `doctor`, `search`, and `resolve` in-process; every other Lorrgs command runs as
+  direct passthrough: `warcraft lorrgs <command> ...`.
+- `lorrgs doctor` lists per-command capabilities. `user_report` and `user_report_fights` are
   `ready_cached_only`: they answer only for reports Lorrgs has already cached, and a `report-overview`
   call does not make a report readable by `user-report` right away.
-- Every other Lorrgs command runs as direct passthrough: `warcraft lorrgs <command> ...`.
 - `expansion_mode = "fixed"`, `supported_expansions = ["retail"]`, so Lorrgs joins retail wrapper
   search/resolve fanout and is skipped when a fixed non-retail expansion is requested.
 

@@ -27,6 +27,17 @@ DEFAULT_CHARACTER_FIELDS = ",".join(
     )
 )
 DEFAULT_GUILD_FIELDS = ",".join(("raid_progression", "raid_rankings", "members"))
+# The leaderboard scopes Raider.IO accepts for ``--region``; every entry but ``world`` is also a
+# player's home region.
+RAIDERIO_REGIONS = ("world", "us", "eu", "kr", "tw", "cn")
+
+
+def validated_region(value: str, *, flag: str = "--region", allowed: tuple[str, ...] = RAIDERIO_REGIONS) -> str:
+    """Normalize a region alias (``na`` -> ``us``) and reject anything Raider.IO has no scope for, naming what was typed."""
+    region = normalize_region(value)
+    if region not in allowed:
+        raise ProviderError("invalid_query", f"{flag} must be one of: {', '.join(allowed)} (got {value.strip()})")
+    return region
 
 
 def load_raiderio_cache_settings_from_env() -> tuple[CacheSettings, int, int, int, int, int]:
@@ -192,10 +203,6 @@ class RaiderIOClient:
             fields=fields,
         )
 
-    def character_profile_variants(self, *, region: str, realm: str, name: str, fields: str = DEFAULT_CHARACTER_FIELDS) -> dict[str, Any]:
-        """The profile body alone, for the search/resolve probes that report no freshness."""
-        return self.character_profile(region=region, realm=realm, name=name, fields=fields).payload
-
     def guild_profile(self, *, region: str, realm: str, name: str, fields: str = DEFAULT_GUILD_FIELDS) -> FetchedJson:
         """One guild profile plus its fetch time."""
         return self._profile(
@@ -207,10 +214,6 @@ class RaiderIOClient:
             name=name,
             fields=fields,
         )
-
-    def guild_profile_variants(self, *, region: str, realm: str, name: str, fields: str = DEFAULT_GUILD_FIELDS) -> dict[str, Any]:
-        """The profile body alone, for the search/resolve probes that report no freshness."""
-        return self.guild_profile(region=region, realm=realm, name=name, fields=fields).payload
 
     def mythic_plus_runs(
         self,

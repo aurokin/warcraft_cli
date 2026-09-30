@@ -15,16 +15,12 @@ ExitCode = Literal[1, 2, 3, 4, 5]
 # Canonical error-code -> exit-code mapping. Providers keep their existing code strings;
 # anything not listed here exits 1.
 EXIT_CODE_BY_ERROR_CODE: Final[dict[str, ExitCode]] = {
-    "auth_required": EXIT_AUTH,
     "auth_failed": EXIT_AUTH,
-    "unauthorized": EXIT_AUTH,
-    "forbidden": EXIT_AUTH,
     "not_found": EXIT_NOT_FOUND,
     "network_error": EXIT_NETWORK,
     "timeout": EXIT_NETWORK,
     "upstream_error": EXIT_NETWORK,
     "rate_limited": EXIT_NETWORK,
-    "http_error": EXIT_NETWORK,
     "invalid_query": EXIT_USAGE,
     "invalid_argument": EXIT_USAGE,
     "missing_fields": EXIT_USAGE,

@@ -36,6 +36,8 @@ BINARY = "wowhead"
 
 # Class/spec and profession slugs are permanent Wowhead routes.
 TALENT_CALC_SPEC = "druid/balance"
+# A Classic Era warrior build; classic calculators take any build code the tree accepts.
+CLASSIC_TALENT_CALC_URL = "https://www.wowhead.com/classic/talent-calc/warrior/30305001302-05050005525010051"
 PROFESSION_TREE_REF = "alchemy/BCuA"
 # Opaque client-side state: Wowhead only mints these in the browser, so they cannot be discovered
 # from any listing command. The profiler list has since been removed from Wowhead, which is what
@@ -61,6 +63,8 @@ ROUTED_ENTITIES: tuple[tuple[str, int, str], ...] = (
     ("mount", 460, "https://www.wowhead.com/item=84101"),
     ("battle-pet", 39, "https://www.wowhead.com/npc=2671"),
 )
+# Elwynn Forest, a zone since 2004 with its own quests and NPCs.
+ELWYNN_FOREST_ZONE_ID = 12
 # Wowhead's own `typeName` for the numeric suggestion `type` this CLI maps to each entity type.
 # A wrong id in that table mislabels the row and mints a follow-up command for the wrong page.
 SUGGESTION_TYPE_NAMES: dict[str, str] = {
@@ -238,6 +242,14 @@ def test_search_answers_a_wowhead_url_with_the_entity_it_names(require) -> None:
     assert entity.data["expansion"] == "classic", entity.describe()
     assert (entity.data["entity"]["id"], entity.data["entity"]["name"]) == (pins.ITEM_ID, pins.ITEM_NAME), entity.describe()
 
+    # `--url` stands in for TYPE ID, as documented; the positionals were once still required.
+    by_url = run(BINARY, "entity", "--url", f"https://www.wowhead.com/classic/item={pins.ITEM_ID}", "--no-include-comments")
+    assert by_url.data["expansion"] == "classic", by_url.describe()
+    assert (by_url.data["entity"]["type"], by_url.data["entity"]["id"], by_url.data["entity"]["name"]) == (
+        "item", pins.ITEM_ID, pins.ITEM_NAME,
+    ), by_url.describe()
+    assert by_url.data["entity"]["page_url"].startswith(f"https://www.wowhead.com/classic/item={pins.ITEM_ID}"), by_url.describe()
+
 
 def test_search_answers_a_wowhead_guide_url_with_the_guide_command(require, class_guides: Result) -> None:
     """A pasted guide URL once went upstream as text and answered ok: true with no results.
@@ -293,6 +305,20 @@ def test_a_class_guide_query_lists_current_guides_before_retired_ones(require) -
     resolved = run(BINARY, "resolve", FURY_GUIDE_QUERY)
     assert (resolved.data["match"]["id"], resolved.data["confidence"]) == (FURY_GUIDE_ID, "high"), resolved.describe()
     assert resolved.data["next_command"] == f"{BINARY} guide {FURY_GUIDE_ID}", resolved.describe()
+
+
+def test_a_guide_query_is_never_answered_confidently_with_another_type(require) -> None:
+    """``resolve "bm hunter guide"`` once answered the spell "Summon Hunter Guide" with confidence high.
+
+    The query names a guide, and the candidate list holds one; a row of another type that shares
+    only some of the words can lead the list but cannot be the confident answer.
+    """
+    require("wowhead")
+    resolved = run(BINARY, "resolve", "bm hunter guide", "--limit", "10")
+    candidates = resolved.data["candidates"]
+    assert any(row["entity_type"] == "guide" for row in candidates), resolved.describe()
+    match = resolved.data["match"]
+    assert match["entity_type"] == "guide" or resolved.data["confidence"] != "high", resolved.describe()
 
 
 def test_the_database_rank_bonus_goes_only_to_rows_that_name_the_query(require) -> None:
@@ -355,6 +381,7 @@ def test_suggestion_type_ids_label_rows_the_way_wowhead_does(require) -> None:
 def test_entity_routes_a_mount_recipe_and_battle_pet_to_the_page_that_holds_them(require) -> None:
     """Wowhead has no mount/recipe/battle-pet page: those ids must be routed to item/spell/npc pages."""
     require("wowhead")
+    names: dict[str, str] = {}
     for entity_type, entity_id, page_prefix in ROUTED_ENTITIES:
         entity = run(
             BINARY, "entity", entity_type, str(entity_id),
@@ -365,6 +392,31 @@ def test_entity_routes_a_mount_recipe_and_battle_pet_to_the_page_that_holds_them
         assert entity.data["entity"]["page_url"].startswith(page_prefix), entity.describe()
         name = entity.data["entity"]["name"]
         assert name and name in entity.data["tooltip"]["text"], entity.describe()
+        names[f"{entity_type}:{entity_id}"] = name
+
+    # compare reads the same pages `entity` does: it once asked the tooltip route of a faction (which
+    # has none) and the mount and recipe pages Wowhead does not have.
+    compared = run(BINARY, "compare", *names, "--comment-sample", "0", "--max-links-per-entity", "5")
+    by_ref = {row["ref"]: row for row in compared.data["entities"]}
+    assert set(by_ref) == set(names), compared.describe()
+    for entity_type, entity_id, page_prefix in ROUTED_ENTITIES:
+        row = by_ref[f"{entity_type}:{entity_id}"]
+        assert row["entity"]["page_url"].startswith(page_prefix), compared.describe()
+        assert row["summary"]["name"] == names[row["ref"]], compared.describe()
+
+
+def test_entity_page_links_what_the_page_lists_in_its_relation_tabs(require) -> None:
+    """A zone's quests and NPCs live in the page's relation tabs, not in its body links.
+
+    ``entity-page zone 12`` (Elwynn Forest) once reported hundreds of items and none of the zone's
+    quests or NPCs.
+    """
+    require("wowhead")
+    page = run(BINARY, "entity-page", "zone", str(ELWYNN_FOREST_ZONE_ID), "--max-links", "2000")
+    listed = [row for row in page.data["linked_entities"]["items"] if "listview" in (row.get("sources") or [row.get("source_kind")])]
+    listed_types = {row["entity_type"] for row in listed}
+    assert {"quest", "npc"} <= listed_types, page.describe()
+    assert all(row["listview"] for row in listed if row.get("source_kind") == "listview"), page.describe()
 
 
 def test_resolve_rejects_entity_types_the_suggestion_endpoint_cannot_emit(require) -> None:
@@ -489,12 +541,19 @@ def test_comment_filters_keep_exactly_the_rows_that_pass_them(require) -> None:
     assert [row["id"] for row in replied.data["comments"]] == expected_replied
     assert len(expected_replied) < len(rows), "--min-replies 1 kept every comment, so it filtered nothing"
 
+    # A malformed date window is a usage error raised before the page fetch (behind a dead proxy),
+    # not an internal error after it.
+    run(
+        BINARY, "comments", "item", str(pins.ITEM_ID), "--date-from", "2026-13-45",
+        expect=EXIT_USAGE, error_code="invalid_argument", env={**dead_proxy_env(), **no_cache_env()},
+    )
+
 
 def test_compare_diffs_two_legendary_items_field_by_field(require) -> None:
-    """Two Molten Core legendaries: the field diff, and both link caps cutting lists that are long enough to cut.
+    """Two Molten Core legendaries: the field diff, and every link cap cutting lists that are long enough to cut.
 
-    ``--max-links-per-entity`` has to be wide enough that the two pages actually share links, or
-    every shared-link assertion below holds at zero whether or not the cap is wired up.
+    The two pages have to share more than one link, or every shared-link assertion below holds at
+    zero whether or not the caps are wired up.
     """
     require("wowhead")
     other = run(BINARY, "resolve", "sulfuras hand of ragnaros", "--entity-type", "item", "--limit", "3")
@@ -543,6 +602,19 @@ def test_compare_diffs_two_legendary_items_field_by_field(require) -> None:
         assert capped_links["unique_by_entity"][ref] == unique[ref][:1], capped.describe()
         assert capped_links["unique_count_total_by_entity"][ref] == links["unique_count_total_by_entity"][ref]
 
+    # --max-links-per-entity cuts each entity's own link list; the shared/unique split still covers
+    # every link. It once ran on the cut lists, so identical pages reported nothing shared.
+    narrow = run(
+        BINARY, "compare", f"item:{pins.ITEM_ID}", f"item:{other_id}",
+        "--preset", "gear", "--comment-sample", "0", "--max-links-per-entity", "1",
+    )
+    narrow_links = narrow.data["comparison"]["linked_entities"]
+    assert narrow_links["shared_count_total"] == links["shared_count_total"], narrow.describe()
+    assert narrow_links["unique_count_total_by_entity"] == links["unique_count_total_by_entity"], narrow.describe()
+    for row in narrow.data["entities"]:
+        block = row["linked_entities"]
+        assert (block["count"], block["truncated"]) == (1, True) and block["total"] > 1, narrow.describe()
+
 
 def test_linked_graph_walks_out_from_thunderfury(require) -> None:
     require("wowhead")
@@ -557,6 +629,30 @@ def test_linked_graph_walks_out_from_thunderfury(require) -> None:
     assert f"item:{pins.ITEM_ID}" in {node["key"] for node in nodes}, graph.describe()
     assert {node["entity_type"] for node in nodes} - {"item"}, "the graph never left the root type"
     assert graph.data["graph"]["edge_count"] > 0, graph.describe()
+    # Thunderfury's page links to itself; that is not a relation.
+    assert all(edge["from"] != edge["to"] for edge in graph.data["graph"]["edges"]), graph.describe()
+
+
+def test_linked_graph_reports_the_pages_a_fetch_cap_left_unread(require) -> None:
+    """``--depth 2`` has to read every child page the root links, so a ``--max-fetches`` that stops
+    short is a sample and must say so; it once reported ``truncated: false`` after reading one child.
+
+    The depth-1 graph is the oracle for how many child pages depth 2 asks for: every linked node with
+    a page, of which two fetches read the root and one child.
+    """
+    require("wowhead")
+    common = ("linked-graph", "item", str(pins.ITEM_ID), "--limit", "500")
+    shallow = run(BINARY, *common, "--depth", "1", "--max-fetches", "1")
+    assert shallow.data["sampling"]["truncated"] is False, shallow.describe()
+    children = [node for node in shallow.data["graph"]["nodes"] if node["key"] != f"item:{pins.ITEM_ID}" and node.get("url")]
+    assert len(children) > 2, f"the root links too few pages for a fetch cap to cut\n{shallow.describe()}"
+
+    capped = run(BINARY, *common, "--depth", "2", "--max-fetches", "2")
+    sampling = capped.data["sampling"]
+    assert sampling["pages_fetched"] == 2, capped.describe()
+    assert sampling["truncated"] is True, capped.describe()
+    assert sampling["pages_skipped"] == len(children) - 1, capped.describe()
+    assert all(edge["from"] != edge["to"] for edge in capped.data["graph"]["edges"]), capped.describe()
 
 
 def test_guide_listing_leads_to_one_guide_and_its_full_hydration(
@@ -709,6 +805,27 @@ def test_guide_bundle_refresh_rereads_the_dataset_the_bundle_was_exported_from(r
     assert json.loads((bundle_dir / "guide.json").read_text())["page"] == exported_page
 
 
+def test_a_classic_guide_url_is_read_and_exported_as_classic(require, out_dir: Path) -> None:
+    """A classic guide URL names its dataset: ``guide`` and ``guide-export`` adopt it with no ``--expansion``.
+
+    Both once labelled and exported the classic page as retail, and a later refresh kept that label.
+    The URL comes from the classic guide listing; the page's own canonical link is the oracle.
+    """
+    require("wowhead")
+    listed = run(BINARY, "--expansion", "classic", "guides", "classes", "--limit", "1")
+    url = listed.data["results"][0]["url"]
+    assert url.startswith("https://www.wowhead.com/classic/guide/"), listed.describe()
+
+    summary = run(BINARY, "guide", url, "--comment-sample", "0", "--linked-entity-preview-limit", "0")
+    assert summary.data["expansion"] == "classic", summary.describe()
+    assert "/classic/" in summary.data["page"]["canonical_url"], summary.describe()
+
+    bundle_dir = out_dir / "classic-guide"
+    run(BINARY, "guide-export", url, "--out", str(bundle_dir))
+    manifest = json.loads((bundle_dir / "manifest.json").read_text())
+    assert manifest["expansion"] == "classic", manifest
+
+
 def test_news_listing_leads_to_one_news_post(require, news_listing: Result) -> None:
     require("wowhead")
     assert_envelope_data_holds(news_listing, "results", "count", "news_url")
@@ -767,6 +884,69 @@ def test_news_date_window_returns_the_posts_inside_it_and_says_what_it_could_not
     oldest = run(BINARY, "news", "--pages", "2", "--limit", "200", "--date-to", days[0])
     assert {row["id"] for row in oldest.data["results"]} == {row["id"] for row in rows if row["posted_at"][:10] <= days[0]}
     assert 0 < oldest.data["count"] < len(rows), "--date-to returned the whole scan"
+
+
+def test_news_page_starts_the_scan_on_the_page_it_names(require, news_scan: Result) -> None:
+    """``--page 2`` returns the second page of the unfiltered two-page scan, not the first again.
+
+    Both listing pages are in the session cache after the scan, so these reads are exact.
+    """
+    require("wowhead")
+    first = run(BINARY, "news", "--limit", "200")
+    second = run(BINARY, "news", "--page", "2", "--limit", "200")
+    assert second.data["scan"]["page"] == 2, second.describe()
+    first_ids = [row["id"] for row in first.data["results"]]
+    second_ids = [row["id"] for row in second.data["results"]]
+    assert first_ids and second_ids, second.describe()
+    assert not set(first_ids) & set(second_ids), "page 2 repeated rows of page 1"
+    assert first_ids + second_ids == [row["id"] for row in news_scan.data["results"]], second.describe()
+
+
+# Words that longer words contain: a substring or prefix filter would keep "damage" for "mage",
+# "during" for "ring", "classic" for "class" and "warcraft" for "war".
+LISTING_QUERY_WORDS = ("mage", "ring", "class", "war")
+# The listing fields the topic filter reads.
+LISTING_TEXT_FIELDS = ("title", "preview", "body_preview", "author", "topic", "type_name", "forum_area", "forum")
+
+
+def _listing_text(row: dict[str, Any]) -> str:
+    """The row's filtered fields, lowercased, with apostrophes dropped so "Mage's" reads as one word."""
+    return " ".join(str(row.get(name) or "") for name in LISTING_TEXT_FIELDS).lower().replace("'", "").replace("’", "")
+
+
+def _carries_the_word(word: str, text: str) -> bool:
+    """``word`` is a word of ``text`` up to a plural or possessive ending ("Mages", "Mage's"), not part of "Magelord".
+
+    "-es" is a plural ending only after a sibilant ("classes"), so "wares" does not carry "war".
+    """
+    sibilants = ("s", "x", "z", "ch", "sh")
+    return any(
+        token in (word, f"{word}s")
+        or word == f"{token}s"
+        or (token == f"{word}es" and word.endswith(sibilants))
+        or (word == f"{token}es" and token.endswith(sibilants))
+        for token in re.findall(r"\w+", text)
+    )
+
+
+def test_news_topic_query_keeps_the_rows_that_carry_the_word(require, news_scan: Result) -> None:
+    """``news mage`` once returned every post that said "damage" or "image", in page order.
+
+    The query word has to be a word of the row, up to a plural or possessive ending; the expected
+    rows are read off the unfiltered scan, and the word chosen is one that also sits inside longer
+    words there, so a substring or prefix filter would return more.
+    """
+    require("wowhead")
+    texts = [(row["id"], _listing_text(row)) for row in news_scan.data["results"]]
+    for word in LISTING_QUERY_WORDS:
+        expected = [row_id for row_id, text in texts if _carries_the_word(word, text)]
+        inside_only = [row_id for row_id, text in texts if word in text and not _carries_the_word(word, text)]
+        if expected and inside_only:
+            break
+    else:
+        raise AssertionError(f"no word in {LISTING_QUERY_WORDS} both is and hides inside words of the scan")
+    matched = run(BINARY, "news", word, "--pages", "2", "--limit", "200")
+    assert [row["id"] for row in matched.data["results"]] == expected, matched.describe()
 
 
 def test_listing_field_filters_keep_exactly_the_rows_that_carry_that_value(
@@ -869,6 +1049,28 @@ def test_talent_calculator_build_decodes_into_a_transport_packet(require, out_di
     assert emitted["transport_status"] == "exact", packet.describe()
     assert emitted["transport_forms"]["wowhead_talent_calc_url"].endswith(build_code), packet.describe()
     assert json.loads(packet_path.read_text()) == emitted, "--out wrote something other than the packet"
+
+
+def test_a_classic_talent_calculator_url_is_a_class_and_a_build_code_not_a_spec(require) -> None:
+    """Classic-era calculators have no spec segment: ``/classic/talent-calc/<class>/<build-code>``.
+
+    That shape was read as class plus a spec named after the build code, at high confidence. The
+    page Wowhead serves for the URL has to be its Classic talent calculator.
+    """
+    require("wowhead")
+    classic = run(BINARY, "talent-calc", CLASSIC_TALENT_CALC_URL, "--listed-build-limit", "1")
+    tool = classic.data["tool"]
+    assert classic.data["expansion"] == "classic", classic.describe()
+    assert (tool["class_slug"], tool["spec_slug"], tool["build_code"]) == ("warrior", None, CLASSIC_TALENT_CALC_URL.rsplit("/", 1)[1])
+    assert classic.data["build_identity"]["confidence"] != "high", classic.describe()
+    assert classic.data["page"]["canonical_url"] == "https://www.wowhead.com/classic/talent-calc", classic.describe()
+    assert "talent calculator" in (classic.data["page"]["title"] or "").lower(), classic.describe()
+
+    # A path that names no WoW class is a bad reference, refused before any fetch.
+    run(
+        BINARY, "talent-calc", "https://www.wowhead.com/talent-calc/notaclass/notaspec",
+        expect=EXIT_USAGE, error_code="invalid_tool_ref", env={**dead_proxy_env(), **no_cache_env()},
+    )
 
 
 def test_profession_dressing_room_and_profiler_refs_normalize_and_cite(require) -> None:
@@ -997,9 +1199,15 @@ def test_cache_inspect_counts_entries_and_cache_clear_empties_a_namespace(requir
     )
     assert namespace in {row["namespace"] for row in reinspected.data["stats"]["top_namespaces"]}
 
-    repaired = run(BINARY, "cache-repair", "--dry-run")
-    assert repaired.data["repair"]["apply"] is False, repaired.describe()
-    assert repaired.data["repair"]["removed"] == 0, repaired.describe()
+    # The pre-namespacing file entries are their own namespace; this session wrote none, so clearing
+    # the expired ones must leave every live entry in place.
+    legacy = run(BINARY, "cache-clear", "--namespace", "legacy_unscoped", "--expired-only")
+    assert legacy.data["namespaces"] == ["legacy_unscoped"], legacy.describe()
+    assert legacy.data["removed"]["total"] == 0, legacy.describe()
+    assert legacy.data["remaining"]["totals"]["active"] == reinspected.data["stats"]["totals"]["active"], legacy.describe()
+
+    # A misspelled namespace once cleared nothing and answered ok; the clear below proves it touched nothing.
+    run(BINARY, "cache-clear", "--namespace", "search_suggestion", expect=EXIT_USAGE, error_code="invalid_argument")
 
     cleared = run(BINARY, "cache-clear", "--namespace", namespace)
     assert cleared.data["namespaces"] == [namespace], cleared.describe()

@@ -58,9 +58,6 @@ To change it:
 pytest -q tests/test_expansion_synthetic_fixtures.py tests/test_wowhead_schema_snapshots.py
 ```
 
-`make fixture-refresh-hints` prints the live URLs for the pinned profiles. It is a lookup aid for
-checking that the hand-written URLs still resolve; it does not capture anything.
-
 ## Synthetic: Method, Blizzard, and CurseForge
 
 `tests/fixtures/method/*.html` (except `captured_talents_page.html`) are small hand-written pages,
@@ -124,9 +121,10 @@ pytest -q tests/test_wowhead_captured_fixtures.py tests/test_wowhead_tools.py
 
 ## Captured: Raider.IO API responses
 
-`tests/fixtures/raiderio/` holds three raw Raider.IO API responses: a guild profile, the raid
-rankings for that guild's realm, and one Mythic+ leaderboard page. Trim only the lists: the guild
-roster is cut to twelve members and the leaderboard page to its first two runs. Everything else is
+`tests/fixtures/raiderio/` holds four raw Raider.IO API responses: a guild profile, the raid
+rankings for that guild's realm, one Mythic+ leaderboard page, and a character profile. Trim only
+the lists: the guild roster is cut to twelve members, the leaderboard page to its first two runs,
+and the character's recent runs to two. Everything else is
 re-serialized unedited, so every value a test asserts is one Raider.IO sent.
 
 ```bash
@@ -173,7 +171,10 @@ pytest -q tests/test_warcraftlogs_captured_fixtures.py
 
 `tests/fixtures/simc/` holds real SimulationCraft output: `debug=1` decode logs
 (`captured_*_debug.txt`), a `json2` report
-(`captured_arcane_mage_json2_report.json`), and the rows of the checkout's generated
+(`captured_arcane_mage_json2_report.json`, a 4-iteration, 30 s Arcane Mage run,
+trimmed to `sim.options` `iterations`, `max_time`, `target_error` and `confidence_estimator` and to
+`players[0].collected_data` `dps`/`dpse` (sum, count, mean, min, max, mean_std_dev), `fight_length`
+and `action_sequence` rows of `time`, `name`, `target` and `spell_name`), and the rows of the checkout's generated
 `trait_data.inc` and `sc_specialization_data.inc` those captures need. Copy trait and
 specialization rows verbatim from `engine/dbc/generated/` in the checkout the captures came from,
 and add only the rows a test reads.

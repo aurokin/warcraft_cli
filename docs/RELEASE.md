@@ -12,7 +12,7 @@ Internal refactors, doc-only edits, and test-only changes don't need a changelog
 
 1. **Confirm `[Unreleased]` covers what's about to ship.** Skim `git log` since the previous tag and reconcile against the changelog. While you are there, reconcile the docs that carry release-coupled facts:
    - [ROADMAP.md](ROADMAP.md) — tiers, `## Next`, and deferred candidates still true?
-   - `README.md` — the wheel URL in the install block carries a literal version; bump it to the version you are about to tag.
+   - `README.md` — is the install block still true?
 2. **Move `[Unreleased]` content into a new versioned section.**
    - Rename the heading: `## [Unreleased]` → `## [X.Y.Z] - YYYY-MM-DD` (today's date, ISO).
    - Add a fresh empty `## [Unreleased]` block above it with the standard subheads.

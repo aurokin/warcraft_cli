@@ -1,8 +1,9 @@
 """Raider.IO payload builders run against captured API responses, not hand-written stubs.
 
 The JSON under ``tests/fixtures/raiderio/`` was captured from the live Raider.IO API per
-``docs/architecture/FIXTURE_MAINTENANCE.md`` (the guild roster was trimmed to twelve members and the
-Mythic+ leaderboard page to its first two runs; nothing else was edited). Every value asserted here
+``docs/architecture/FIXTURE_MAINTENANCE.md`` (the guild roster was trimmed to twelve members, the
+Mythic+ leaderboard page to its first two runs, and the character's recent runs to two; nothing else
+was edited). Every value asserted here
 is one Raider.IO actually sent, so a normalizer that drifts away from the real response shape fails
 instead of agreeing with its own fixture.
 """
@@ -121,9 +122,9 @@ def _captured_runs_page(monkeypatch) -> None:
     )
 
 
-def test_raiderio_mythic_plus_runs_parses_a_captured_leaderboard_page(monkeypatch) -> None:
+def test_raiderio_leaderboard_parses_a_captured_leaderboard_page(monkeypatch) -> None:
     _captured_runs_page(monkeypatch)
-    result = runner.invoke(raiderio_app, ["mythic-plus-runs", "--region", "us"])
+    result = runner.invoke(raiderio_app, ["leaderboard", "mythic-plus", "--region", "us"])
     assert result.exit_code == 0, result.output
 
     payload = json.loads(result.stdout)
@@ -139,9 +140,44 @@ def test_raiderio_mythic_plus_runs_parses_a_captured_leaderboard_page(monkeypatc
     assert top["dungeon_slug"] == "murder-row"
     assert top["completed_at"] == "2026-09-17T21:54:20.000Z"
     assert top["affixes"] == ["fortified", "tyrannical", "xalataths-guile"]
+    # Timed by 21.6 seconds; logged_run_id is Raider.IO's own id for the logged run, not a Warcraft Logs report code.
+    assert (top["clear_time_ms"], top["keystone_time_ms"], top["num_chests"]) == (2019411, 2040999, 1)
+    assert top["run_id"] == 13240272
+    assert top["logged_run_id"] == 3904086
     assert payload["provenance"]["citations"]["leaderboard_urls"] == [
         "https://raider.io/mythic-plus-rankings/season-mn-2/all/us/leaderboards-strict"
     ]
+
+
+def test_raiderio_character_recent_runs_parse_a_captured_profile(monkeypatch) -> None:
+    profile = _captured("character_profile_us_stormrage_rockystorm.json")
+    monkeypatch.setattr(
+        "raiderio_cli.client.RaiderIOClient.character_profile",
+        lambda self, *, region, realm, name, fields="": FetchedJson(
+            payload=profile,
+            fetched_at="2026-09-30T07:08:00+00:00",
+            cache_hit=False,
+        ),
+    )
+    result = runner.invoke(raiderio_app, ["character", "us", "stormrage", "Rockystorm"])
+    assert result.exit_code == 0, result.output
+
+    mythic_plus = json.loads(result.stdout)["data"]["mythic_plus"]
+    assert mythic_plus["recent_run_count"] == 2
+    # A profile run names its dungeon as a string and calls the timer par_time_ms and the chest count
+    # num_keystone_upgrades; the row reports them under the leaderboard's names.
+    assert mythic_plus["recent_runs"][0] == {
+        "mythic_level": 10,
+        "dungeon": "Murder Row",
+        "short_name": "MR",
+        "completed_at": "2026-09-29T21:26:56.000Z",
+        "score": 335,
+        "num_chests": 3,
+        "clear_time_ms": 807797,
+        "keystone_time_ms": 2040999,
+        "run_id": 16930919,
+        "url": "https://raider.io/mythic-plus-runs/season-mn-2/16930919-10-murder-row",
+    }
 
 
 def test_raiderio_sample_players_parses_captured_roster_entries(monkeypatch) -> None:

@@ -311,12 +311,8 @@ PROVIDERS: tuple[ProviderRegistration, ...] = (
         status="partial",
         description="Official Blizzard Battle.net WoW API provider: doctor + auth, Game Data (realm, item) and Profile (character) reads.",
         auth_required=True,
-        # expansion_mode="none" mirrors simc: Blizzard routes by region + namespace class
-        # (dynamic/static/profile), which is not the wrapper's expansion axis, so there is no honest
-        # expansion to advertise. A side effect (shared with simc) is that `warcraft --expansion <x>
-        # blizzard ...` is rejected by the wrapper passthrough; plain `warcraft blizzard ...` works.
-        # Relaxing expansion-pinned passthrough for none-expansion providers is wrapper-wide policy
-        # (AUR-384/AUR-389), not part of this provider.
+        # Blizzard routes by region + namespace class, not the wrapper's expansion axis. Passthrough
+        # with --expansion runs with an advisory; see docs/architecture/EXPANSION_FILTERING.md.
         expansion_mode="none",
         supported_expansions=(),
         expansion_review_status="reviewed",
@@ -341,11 +337,8 @@ PROVIDERS: tuple[ProviderRegistration, ...] = (
         status="partial",
         description="CurseForge addon provider: doctor + addon lookup (metadata, latest files, changelog) over the public CurseForge API.",
         auth_required=True,
-        # expansion_mode="none" mirrors blizzard-api/simc: addon game-version compatibility lives
-        # inside individual file records, not the wrapper's expansion axis, so there is no honest
-        # expansion to advertise. As with those providers, `warcraft --expansion <x> curseforge ...`
-        # is rejected by the wrapper passthrough (relaxed to passthrough per AUR-384/AUR-389 policy),
-        # while plain `warcraft curseforge ...` works.
+        # Addon game-version compatibility lives in file records, not the wrapper's expansion axis.
+        # Passthrough with --expansion runs with an advisory; see docs/architecture/EXPANSION_FILTERING.md.
         expansion_mode="none",
         supported_expansions=(),
         expansion_review_status="reviewed",
@@ -678,10 +671,11 @@ def _capture_command(app: typer.Typer, args: list[str], *, prog_name: str) -> tu
     text = out.getvalue() + err.getvalue()
     if failure is not None:
         return exit_code, failure, text
-    return exit_code, _first_json_object(out.getvalue()) or _first_json_object(err.getvalue()), text
+    return exit_code, parse_json_object(out.getvalue()) or parse_json_object(err.getvalue()), text
 
 
-def _first_json_object(text: str) -> dict[str, Any] | None:
+def parse_json_object(text: str) -> dict[str, Any] | None:
+    """``text`` as one JSON object, or ``None`` when it is empty, not JSON, or not an object."""
     raw = text.strip()
     if not raw:
         return None

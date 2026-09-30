@@ -15,13 +15,13 @@ from urllib.parse import urlparse
 
 from wowhead_cli.entity_types import PARSER_ENTITY_TYPES, RESOLVE_ENTITY_TYPES, SEARCH_TYPE_HINTS
 from wowhead_cli.expansion_profiles import (
+    EXPANSION_PREFIXES,
     ExpansionProfile,
     is_wowhead_host,
     normalize_wowhead_url,
     parse_entity_from_wowhead_url,
     resolve_expansion,
 )
-from wowhead_cli.page_parser import EXPANSION_PREFIXES
 from wowhead_cli.wowhead_client import entity_url, guide_url, suggestion_entity_type
 
 FOLLOW_UP_COMMENT_TERMS = {"comment", "comments", "discussion", "discussions"}
@@ -89,17 +89,43 @@ def score_text_match(query: str, *values: Any) -> int:
     return score
 
 
+def _same_word(term: str, word: str) -> bool:
+    """Whether two words differ at most by a plural or possessive ending ("hotfix"/"Hotfixes", "mage"/"Mage's").
+
+    "-es" counts only after a sibilant, so "notes" is not "not" and "capes" is not "cap".
+    """
+    short, long = sorted((term, word), key=len)
+    return long in (short, f"{short}s") or (long == f"{short}es" and short.endswith(("s", "x", "z", "ch", "sh")))
+
+
+def listing_match_score(query: str, *values: Any) -> int:
+    """Score a news, blue-tracker or guides listing row: 0 unless every query word is a word in ``values``.
+
+    Otherwise one point per (word, value) hit, plus a bonus when the values hold the query as a phrase.
+    Stopwords count only when the query has nothing else. Words match up to a plural or possessive
+    ending, so "hotfix" matches "Hotfixes" and "mage" matches "Mage's", but "mage" matches neither
+    "Damage" nor "Magelord".
+    """
+    terms = set(match_terms(query)) or word_tokens(query)
+    texts = [value.lower() for value in values if isinstance(value, str) and value.strip()]
+    hits = [{term for term in terms if any(_same_word(term, word) for word in word_tokens(text))} for text in texts]
+    if not terms or not terms <= set().union(*hits):
+        return 0
+    score = sum(len(value_hits) for value_hits in hits)
+    phrase = " ".join(query.lower().split())
+    if re.search(rf"(?<!\w){re.escape(phrase)}(?!\w)", " ".join(texts)):
+        score += max(2, len(terms))
+    return score
+
+
 def search_type_hints(query: str) -> set[str]:
+    """Entity types a query names as whole words ("conquest" does not hint quest)."""
     normalized = " ".join(query.lower().split())
-    if not normalized:
-        return set()
-    hinted: set[str] = set()
-    for entity_type, phrases in SEARCH_TYPE_HINTS.items():
-        for phrase in phrases:
-            if phrase in normalized:
-                hinted.add(entity_type)
-                break
-    return hinted
+    return {
+        entity_type
+        for entity_type, phrases in SEARCH_TYPE_HINTS.items()
+        if any(re.search(rf"(?<!\w){re.escape(phrase)}(?!\w)", normalized) for phrase in phrases)
+    }
 
 
 def search_ranking_query(query: str) -> str:
@@ -696,7 +722,7 @@ def resolve_confidence(candidates: list[dict[str, Any]], *, entity_types: tuple[
     second_score = int(candidates[1].get("ranking", {}).get("score") or 0) if len(candidates) > 1 else 0
     margin = top_score - second_score
     reasons = set(top_ranking.get("match_reasons") or [])
-    high = (
+    high = not _is_off_type_partial_match(candidates) and (
         is_high_confidence_exact_match(reasons, margin=margin, second_score=second_score)
         or is_high_confidence_score(top_score, margin=margin)
         or is_filtered_high_confidence(entity_types, top_score=top_score, margin=margin)
@@ -708,6 +734,23 @@ def resolve_confidence(candidates: list[dict[str, Any]], *, entity_types: tuple[
     if is_medium_confidence_score(top_score, margin=margin):
         return "medium"
     return "low"
+
+
+def _is_off_type_partial_match(candidates: list[dict[str, Any]]) -> bool:
+    """True when the query names a type that a lower row has, and the top row is another type sharing only some words.
+
+    "bm hunter guide": Wowhead's database order lifts the spell "Summon Hunter Guide" above the
+    Beast Mastery guide, but the query asked for a guide and the spell holds only some of its words.
+    """
+    def reasons(row: dict[str, Any]) -> list[str]:
+        return list(row.get("ranking", {}).get("match_reasons") or [])
+
+    top = reasons(candidates[0])
+    return (
+        "some_terms_match" in top
+        and "type_hint" not in top
+        and any("type_hint" in reasons(row) for row in candidates[1:])
+    )
 
 
 def is_high_confidence_exact_match(reasons: set[str], *, margin: int, second_score: int) -> bool:

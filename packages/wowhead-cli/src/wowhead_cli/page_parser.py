@@ -8,7 +8,7 @@ from typing import Any
 from urllib.parse import urljoin, urlparse
 
 from wowhead_cli.entity_types import PARSER_ENTITY_TYPES
-from wowhead_cli.expansion_profiles import list_profiles
+from wowhead_cli.expansion_profiles import ENTITY_PATH_RE, EXPANSION_PREFIXES
 from wowhead_cli.wowhead_client import WOWHEAD_BASE_URL, entity_url
 
 GATHERER_TYPE_TO_ENTITY: dict[int, str] = {
@@ -18,10 +18,6 @@ GATHERER_TYPE_TO_ENTITY: dict[int, str] = {
     5: "quest",
     6: "spell",
 }
-
-EXPANSION_PREFIXES = frozenset(
-    profile.path_prefix for profile in list_profiles() if profile.path_prefix
-)
 
 JSON_DECODER = json.JSONDecoder()
 
@@ -42,9 +38,11 @@ A_TAG_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 HREF_RE = re.compile(r"""href=(["'])(?P<href>.*?)\1""", re.IGNORECASE)
-ENTITY_PATH_RE = re.compile(
-    r"""^/(?:(?:[a-z]{2}(?:-[A-Z]{2})?|[a-z0-9-]+)/)?(?P<etype>[a-z-]+)=(?P<eid>\d+)""",
-)
+# An entity page's relation tabs: `new Listview({template: 'npc', id: 'members', ..., data:[{...}]})`.
+# The header runs up to its inline `data:[` array without crossing into the next Listview.
+LISTVIEW_RE = re.compile(r"""new Listview\(\{(?P<head>(?:(?!new Listview\().){0,4000}?)\bdata:\s*(?=\[)""", re.DOTALL)
+LISTVIEW_TEMPLATE_RE = re.compile(r"""\btemplate:\s*['"](?P<value>[^'"]+)['"]""")
+LISTVIEW_ID_RE = re.compile(r"""\bid:\s*['"](?P<value>[^'"]+)['"]""")
 ASSIGNMENT_RE_TEMPLATE = r"""\bvar\s+{name}\s*="""
 GATHERER_RE = re.compile(r"""WH\.Gatherer\.addData\(\s*(?P<dtype>\d+)\s*,\s*(?P<tree>\d+)\s*,\s*""")
 SCRIPT_ID_TEMPLATE = r"""<script\b[^>]*\bid=["']{script_id}["'][^>]*>(?P<body>.*?)</script>"""
@@ -465,6 +463,43 @@ def extract_gatherer_entities(html_text: str, *, source_url: str) -> list[dict[s
                     "source_url": source_url,
                     "source_kind": "gatherer",
                     "gatherer_data_type": data_type,
+                }
+            )
+    return records
+
+
+def extract_listview_entities(html_text: str, *, source_url: str) -> list[dict[str, Any]]:
+    """Entities an entity page lists in its relation tabs (a zone's NPCs and quests, a faction's members).
+
+    Only tabs whose template is an entity type the CLI reads count (guide tabs included);
+    screenshots, sounds and models do not. A tab whose data is not a JSON array is skipped.
+    """
+    records: list[dict[str, Any]] = []
+    for match in LISTVIEW_RE.finditer(html_text):
+        template = LISTVIEW_TEMPLATE_RE.search(match.group("head"))
+        listview_id = LISTVIEW_ID_RE.search(match.group("head"))
+        if template is None or template.group("value") not in PARSER_ENTITY_TYPES:
+            continue
+        try:
+            rows, _ = JSON_DECODER.raw_decode(html_text, match.end())
+        except json.JSONDecodeError:
+            continue
+        entity_type = template.group("value")
+        for row in rows if isinstance(rows, list) else []:
+            entity_id = row.get("id") if isinstance(row, dict) else None
+            if not isinstance(entity_id, int) or isinstance(entity_id, bool):
+                continue
+            url = _entity_url_for_source_context(source_url=source_url, entity_type=entity_type, entity_id=entity_id)
+            records.append(
+                {
+                    "entity_type": entity_type,
+                    "id": entity_id,
+                    "name": row.get("name") or row.get("displayName"),
+                    "url": url,
+                    "citation_url": url,
+                    "source_url": source_url,
+                    "source_kind": "listview",
+                    "listview": listview_id.group("value") if listview_id else None,
                 }
             )
     return records

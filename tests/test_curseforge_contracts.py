@@ -189,6 +189,29 @@ def test_network_error_no_traceback(monkeypatch: pytest.MonkeyPatch) -> None:
     assert payload["error"]["code"] == "network_error"
 
 
+def test_timeout_is_reported_as_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    # ERROR_CONTRACT maps httpx.TimeoutException to `timeout`; it used to come back as network_error.
+    def _fake(client: Any, url: str, *, method: str = "GET", **kwargs: Any) -> _FakeResponse:
+        raise httpx.ReadTimeout("timed out", request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(client_module, "request_with_retries", _fake)
+    result = runner.invoke(app, ["addon", "3358"])
+    assert result.exit_code == 5
+    assert json.loads(result.stderr)["error"]["code"] == "timeout"
+
+
+def test_changelog_timeout_marker_is_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _fake(client: Any, url: str, *, method: str = "GET", **kwargs: Any) -> _FakeResponse:
+        if "/changelog" in url:
+            raise httpx.ReadTimeout("timed out", request=httpx.Request("GET", url))
+        return _FakeResponse(_fixture_for_url(url), url)
+
+    monkeypatch.setattr(client_module, "request_with_retries", _fake)
+    result = runner.invoke(app, ["addon", "3358"])
+    assert result.exit_code == 0
+    assert json.loads(result.stdout)["data"]["changelog"]["error"]["code"] == "timeout"
+
+
 def test_invalid_json_response_no_traceback(monkeypatch: pytest.MonkeyPatch) -> None:
     class _BadResponse(_FakeResponse):
         def json(self) -> Any:
@@ -369,6 +392,8 @@ def test_coming_soon_commands_emit_structured_stub(command: str) -> None:
     assert payload["provider"] == "curseforge"
     assert payload["command"] == command
     assert payload["kind"] == "coming_soon"
+    # `query` is the query text, as on every other provider's search/resolve envelope.
+    assert payload["query"] == "dbm"
     assert payload["data"]["coming_soon"] is True
 
 

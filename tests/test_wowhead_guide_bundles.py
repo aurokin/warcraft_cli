@@ -155,6 +155,28 @@ def test_guide_bundle_refresh_fetches_from_the_bundle_expansion(monkeypatch, tmp
     assert json.loads((export_dir / "manifest.json").read_text(encoding="utf-8"))["expansion"] == "wotlk"
 
 
+def test_guide_bundle_refresh_follows_the_expansion_its_guide_url_names(monkeypatch, tmp_path: Path) -> None:
+    fetched_from: list[str] = []
+
+    def fake_page_html(self: WowheadClient, url: str) -> str:
+        fetched_from.append(self.expansion.key)
+        return SAMPLE_GUIDE_HTML
+
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.page_html", fake_page_html)
+    export_dir = tmp_path / "guide-export"
+    guide_ref = "https://www.wowhead.com/classic/guide/classes/warrior/fury-dps"
+    assert runner.invoke(app, ["guide-export", guide_ref, "--out", str(export_dir)]).exit_code == 0
+    # A bundle exported before guide URLs set the expansion recorded "retail" for this classic guide.
+    manifest_path = export_dir / "manifest.json"
+    manifest_path.write_text(json.dumps({**json.loads(manifest_path.read_text(encoding="utf-8")), "expansion": "retail"}), encoding="utf-8")
+
+    result = runner.invoke(app, ["guide-bundle-refresh", str(export_dir), "--force"])
+
+    assert result.exit_code == 0, result.output
+    assert fetched_from == ["classic", "classic"]
+    assert json.loads(manifest_path.read_text(encoding="utf-8"))["expansion"] == "classic"
+
+
 def test_guide_bundle_refresh_rehydrates_only_stale_hydrated_entities(
     monkeypatch,
     tmp_path: Path,

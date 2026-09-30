@@ -14,7 +14,7 @@ Repo-wide expectations for respectful provider use, safe logging, and failure re
 | Practice | Guidance |
 | --- | --- |
 | Default posture | Treat provider APIs and HTML endpoints as rate-limited. Back off when responses are slow, empty, or HTTP 429/503. |
-| Caching | Use built-in CLI caches (`wowhead`, `warcraftlogs`, `raiderio`, etc.) when repeating work. Clear or repair caches only when freshness requires it (`cache-clear`, `cache-repair`). |
+| Caching | Use built-in CLI caches (`wowhead`, `warcraftlogs`, `raiderio`, etc.) when repeating work. Clear caches only when freshness requires it (`cache-clear`). |
 | Concurrency | Wowhead `comments --hydrate-missing-replies` exposes `--max-concurrency`; keep values modest (default 4). Avoid unbounded parallel fanout across many CLIs. |
 | Live suites | `make test-e2e` is **operator-triggered**; CI runs only its keyless half and the Wowhead parser canary, weekly. Do not schedule them as high-frequency CI against production without credentials and scope review. |
 | Warcraft Logs | Query `warcraftlogs rate-limit` and inspect `doctor` / auth status before large report-scoped batch jobs. |
@@ -54,9 +54,7 @@ When building automation on top of CLI JSON or shell output:
 | Report codes / private log URLs | May identify players or guilds — redact in public bug reports when not essential. |
 | Raw guide/article HTML in bundles | Evidence artifacts; do not paste large HTML blocks into public issues without reason. |
 
-**Optional future hook:** `WARCRAFT_TELEMETRY=1` may be introduced for opt-in, anonymized failure telemetry. It is **not implemented** in this repo today. Do not set this variable expecting behavior.
-
-For local debugging, prefer `wowhead doctor --no-live` and recorded fixtures (`tests/fixtures/`, schema snapshots) before attaching live tokens to bug reports.
+For local debugging, prefer `wowhead doctor --no-live` and the test fixtures (`tests/fixtures/`, schema snapshots) before attaching live tokens to bug reports.
 
 ## Failure-mode playbook
 
@@ -66,7 +64,7 @@ Use this order when a command regresses or returns empty data.
 
 ```bash
 <provider> doctor
-<provider> doctor --no-live    # when live endpoints are flaky or credentials are missing
+wowhead doctor --no-live       # wowhead and warcraftlogs only: skip the live probe
 ```
 
 Wrapper:

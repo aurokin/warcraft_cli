@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
-from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -12,10 +10,16 @@ from warcraft_api.cache import CacheSettings, CacheTTLConfig, build_cache_store,
 from warcraft_api.http import DEFAULT_RETRY_ATTEMPTS, build_client, request_with_retries
 from warcraft_core.paths import provider_cache_root
 
-DEFAULT_BASE_URL = "https://www.raidbots.com"
-DEFAULT_REPORT_PATH_TEMPLATE = "/simbot/report/{id}"
-DEFAULT_DATA_PATH_TEMPLATE = "/simbot/report/{id}/data.json"
-DEFAULT_INPUT_PATH_TEMPLATE = "/simbot/report/{id}/simc"
+BASE_URL = "https://www.raidbots.com"
+REPORT_PATH_TEMPLATE = "/simbot/report/{id}"
+DATA_PATH_TEMPLATE = "/simbot/report/{id}/data.json"
+INPUT_PATH_TEMPLATE = "/simbot/report/{id}/simc"
+URL_TEMPLATES: dict[str, str] = {
+    "base_url": BASE_URL,
+    "report": BASE_URL + REPORT_PATH_TEMPLATE,
+    "data_json": BASE_URL + DATA_PATH_TEMPLATE,
+    "simc_input": BASE_URL + INPUT_PATH_TEMPLATE,
+}
 DEFAULT_CACHE_DIR = provider_cache_root("raidbots") / "http"
 
 # A report ID is the trailing path segment after `/report/`; accept the same
@@ -47,25 +51,12 @@ def _reject_web_page(text: str, *, report_id: str, url: str) -> None:
     )
 
 
-def resolve_report_id(value: str, report_path_template: str = DEFAULT_REPORT_PATH_TEMPLATE) -> str:
-    # Normalize a report reference to a bare ID. We try, in order: (1) the literal path prefix of
-    # the configured (env-overridable) report path template, so an override also updates URL-INPUT
-    # parsing and the CLI round-trips the report URLs it emits (doctor/citations) under any
-    # template; (2) the documented public `/report/{ID}` surface; (3) a bare ID (always drift-proof).
-    # The URL host is deliberately ignored — fetches rebuild from the configured base (SSRF-safe).
+def resolve_report_id(value: str) -> str:
+    # Accept a `/report/{ID}` URL or a bare ID. The URL host is deliberately ignored: fetches are
+    # always rebuilt from BASE_URL (SSRF-safe).
     candidate = (value or "").strip()
     if not candidate:
         raise InvalidReportReference("Report reference is empty.")
-    # Require a prefix longer than "/": a root-level or empty prefix (e.g. a pathological
-    # "/{id}" template — not how Raidbots structures report URLs) is too ambiguous to anchor on
-    # and would mis-extract the first path segment of ANY URL, so it deliberately falls through
-    # to the /report/{ID} + bare-ID paths below. Real templates carry a specific prefix
-    # (default "/simbot/report/"). Do not relax this guard without restoring that mis-extraction.
-    prefix = report_path_template.split("{id}", 1)[0]
-    if len(prefix) > 1:
-        templated = re.search(re.escape(prefix) + r"([A-Za-z0-9_-]+)", candidate)
-        if templated:
-            return templated.group(1)
     match = _REPORT_ID_RE.search(candidate)
     if match:
         return match.group(1)
@@ -74,47 +65,16 @@ def resolve_report_id(value: str, report_path_template: str = DEFAULT_REPORT_PAT
     raise InvalidReportReference(f"Could not extract a report ID from {value!r}.")
 
 
-@dataclass(frozen=True, slots=True)
-class RaidbotsUrls:
-    """Resolved Raidbots URL templates.
-
-    These mirror the documented public report surface. They are constants so the
-    parser/command contracts are the durable value, but each is env-overridable so
-    a live URL correction needs no code change.
-    """
-
-    base_url: str
-    report_path_template: str
-    data_path_template: str
-    input_path_template: str
-
-    def report_url(self, report_id: str) -> str:
-        return f"{self.base_url}{self.report_path_template.format(id=report_id)}"
-
-    def data_url(self, report_id: str) -> str:
-        return f"{self.base_url}{self.data_path_template.format(id=report_id)}"
-
-    def input_url(self, report_id: str) -> str:
-        return f"{self.base_url}{self.input_path_template.format(id=report_id)}"
-
-    def templates(self) -> dict[str, str]:
-        return {
-            "base_url": self.base_url,
-            "report": f"{self.base_url}{self.report_path_template}",
-            "data_json": f"{self.base_url}{self.data_path_template}",
-            "simc_input": f"{self.base_url}{self.input_path_template}",
-            "note": "Documented Raidbots report surface; may need adjustment if Raidbots changes URLs.",
-        }
+def report_url(report_id: str) -> str:
+    return BASE_URL + REPORT_PATH_TEMPLATE.format(id=report_id)
 
 
-def load_raidbots_urls_from_env() -> RaidbotsUrls:
-    base = (os.getenv("RAIDBOTS_BASE_URL") or DEFAULT_BASE_URL).rstrip("/")
-    return RaidbotsUrls(
-        base_url=base,
-        report_path_template=os.getenv("RAIDBOTS_REPORT_PATH_TEMPLATE") or DEFAULT_REPORT_PATH_TEMPLATE,
-        data_path_template=os.getenv("RAIDBOTS_DATA_PATH_TEMPLATE") or DEFAULT_DATA_PATH_TEMPLATE,
-        input_path_template=os.getenv("RAIDBOTS_INPUT_PATH_TEMPLATE") or DEFAULT_INPUT_PATH_TEMPLATE,
-    )
+def data_url(report_id: str) -> str:
+    return BASE_URL + DATA_PATH_TEMPLATE.format(id=report_id)
+
+
+def input_url(report_id: str) -> str:
+    return BASE_URL + INPUT_PATH_TEMPLATE.format(id=report_id)
 
 
 def load_raidbots_cache_settings_from_env() -> tuple[CacheSettings, int]:
@@ -142,12 +102,7 @@ class RaidbotsClient:
         self._retry_attempts = max(1, retry_attempts)
         self._cache_store = build_cache_store(settings) if settings.enabled else None
         self._report_ttl = report_ttl
-        self._urls = load_raidbots_urls_from_env()
         self._last_from_cache = False
-
-    @property
-    def urls(self) -> RaidbotsUrls:
-        return self._urls
 
     @property
     def report_ttl_seconds(self) -> int:
@@ -189,9 +144,7 @@ class RaidbotsClient:
         self._cache_store.set(key, payload, ttl_seconds=ttl_seconds)
 
     def report_data(self, report_id: str) -> dict[str, Any]:
-        url = self._urls.data_url(report_id)
-        # Key on the resolved URL, not just the ID, so changing the base/path overrides
-        # busts the cache instead of returning data fetched from a different host.
+        url = data_url(report_id)
         key = self._cache_key("report_data", {"url": url})
         cached = self._read_cache(key)
         if isinstance(cached, dict):
@@ -207,7 +160,7 @@ class RaidbotsClient:
         return payload
 
     def report_input(self, report_id: str) -> str:
-        url = self._urls.input_url(report_id)
+        url = input_url(report_id)
         key = self._cache_key("report_input", {"url": url})
         cached = self._read_cache(key)
         if isinstance(cached, str):

@@ -8,8 +8,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from article_provider_testkit import load_fixture_text
 from method_cli.page_parser import parse_guide_page
+
+from tests.article_provider_testkit import load_fixture_text
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "method"
 SOURCE_URL = "https://www.method.gg/guides/mistweaver-monk/talents"

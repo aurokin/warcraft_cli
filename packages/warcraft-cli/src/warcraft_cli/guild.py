@@ -39,13 +39,9 @@ def guild_merge_payload(identity: dict[str, str], *, raiderio: dict[str, Any]) -
     if raiderio.get("status") != "ok":
         # The source error is passed through verbatim so `error.code` and the exit code the command
         # derives from it agree; a synthesized code here would exit 5 while claiming "not found".
-        error = as_dict(raiderio.get("error")) or {
-            "code": "provider_command_failed",
-            "message": "Raider.IO did not return a guild snapshot for that query.",
-        }
         return {
             "ok": False,
-            "error": error,
+            "error": raiderio.get("error"),
             "query": identity,
             "sources": {"raiderio": raiderio},
         }

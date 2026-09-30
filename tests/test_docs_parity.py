@@ -16,28 +16,14 @@ from typing import Any, NamedTuple
 
 import pytest
 import typer
-from cli_testkit import all_cli_apps, subcommands
 from warcraft_cli.providers import PROVIDERS
+
+from tests.cli_testkit import all_cli_apps, subcommands
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CLI_APPS = all_cli_apps()
 PASSTHROUGH_COMMANDS = {registration.command for registration in PROVIDERS}
 
-# Provider docs directory -> binary name; they differ only for blizzard.
-PROVIDER_DOC_DIRS = {
-    "blizzard-api": "blizzard",
-    "curseforge": "curseforge",
-    "icy-veins": "icy-veins",
-    "lorrgs": "lorrgs",
-    "method": "method",
-    "raidbots": "raidbots",
-    "raiderio": "raiderio",
-    "simc": "simc",
-    "warcraft": "warcraft",
-    "warcraft-wiki": "warcraft-wiki",
-    "warcraftlogs": "warcraftlogs",
-    "wowhead": "wowhead",
-}
 SHELL_INFO_STRINGS = frozenset({"", "bash", "sh", "shell", "zsh", "console"})
 # A substitution can supply any subcommand or flag, so lines containing one are not validated.
 SUBSTITUTIONS = ("$(", "<(", "`")
@@ -47,11 +33,10 @@ DISTRIBUTION_NAME_MISUSE = re.compile(r"(?<![\w/.-])wowhead-cli(?![\w/-])")
 
 
 def _doc_files() -> list[Path]:
-    files = [REPO_ROOT / "README.md", REPO_ROOT / "docs" / "USAGE.md", REPO_ROOT / "docs" / "README.md"]
-    for doc_dir in PROVIDER_DOC_DIRS:
-        files.extend(sorted((REPO_ROOT / "docs" / doc_dir).rglob("*.md")))
-    files.extend(sorted((REPO_ROOT / "skills").rglob("*.md")))
-    return [path for path in files if path.exists()]
+    """Every hand-written doc; docs/reference is generated and has its own staleness test."""
+    reference = REPO_ROOT / "docs" / "reference"
+    docs = [path for path in sorted((REPO_ROOT / "docs").rglob("*.md")) if not path.is_relative_to(reference)]
+    return [REPO_ROOT / "README.md", REPO_ROOT / "AGENTS.md", *docs, *sorted((REPO_ROOT / "skills").rglob("*.md"))]
 
 
 DOC_FILES = _doc_files()
@@ -214,7 +199,12 @@ def test_piped_example_is_validated_up_to_the_first_operator(tmp_path: Path) -> 
     ]
 
 
-@pytest.mark.parametrize("doc", DOC_FILES, ids=DOC_IDS)
+# The package table and the naming rule itself name the distribution on purpose.
+DISTRIBUTION_DOCS = {REPO_ROOT / "AGENTS.md", REPO_ROOT / "docs" / "architecture" / "PACKAGE_LAYOUT.md"}
+COMMAND_NAME_DOCS = [doc for doc in DOC_FILES if doc not in DISTRIBUTION_DOCS]
+
+
+@pytest.mark.parametrize("doc", COMMAND_NAME_DOCS, ids=lambda doc: str(doc.relative_to(REPO_ROOT)))
 def test_docs_use_the_binary_name_not_the_distribution_name(doc: Path) -> None:
     """``wowhead-cli`` is the package; ``wowhead`` is the command agents type."""
     offenders = [

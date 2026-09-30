@@ -40,7 +40,8 @@ KEYWORD_RULES: tuple[tuple[tuple[str, ...], list[str]], ...] = (
     (("gear", "best in slot", "bis"), ["gear_best_in_slot", "gear_context"]),
     (("spell summary", "spell list", "spells"), ["spell_summary", "abilities"]),
     (("resources",), ["resources"]),
-    (("mythic plus", "mythic+", "mythic"), ["mythic_plus"]),
+    # Bare "mythic" is also the raid difficulty; only "mythic+"/"m+" (read as "plus") mean Mythic+.
+    (("mythic plus", "m plus"), ["mythic_plus"]),
     (("macros", "addons", "add-ons", "ui"), ["macros_addons"]),
     (("simulation", "simulations", "sim"), ["simulations"]),
     (("leveling",), ["leveling"]),
@@ -72,7 +73,8 @@ def _keyword_tags(*values: str | None) -> tuple[list[str], list[str]]:
         cleaned = _clean_text(value)
         if cleaned is None:
             continue
-        haystack_parts.append(normalized_text(cleaned))
+        # normalized_text drops "+", which would make "Mythic+" and "Mythic" the same words.
+        haystack_parts.append(normalized_text(cleaned.replace("+", " plus ")))
     haystack = " ".join(part for part in haystack_parts if part)
     if not haystack:
         return [], []

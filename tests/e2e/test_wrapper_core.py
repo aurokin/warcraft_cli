@@ -25,9 +25,11 @@ from tests.e2e.harness import EXIT_NETWORK, EXIT_USAGE, REPO_ROOT, Result, dead_
 
 REGION = pins.GUILD_REGION
 REALM = pins.GUILD_REALM_DISPLAY
-REALM_SLUG = "mal-ganis"
+# The slug Blizzard, Raider.IO and Warcraft Logs use for Mal'Ganis: the apostrophe joins the word.
+REALM_SLUG = pins.GUILD_REALM
 GUILD = pins.GUILD_NAME
-GUILD_QUERY = f"guild {REGION} {REALM_SLUG} {GUILD}"
+# The hyphenated spelling people also type for the realm.
+GUILD_QUERY = f"guild {REGION} mal-ganis {GUILD}"
 
 TIERS = {"core", "supported", "experimental"}
 # warcraftlogs is the only other expansion-profiled provider, so wotlk keeps exactly these two.
@@ -356,9 +358,47 @@ def test_resolve_attributes_an_unresolved_answer_to_the_wrapper() -> None:
     assert data["match"] is None
     assert data["next_command"] is None
     assert data["best_unresolved_candidate"] is None
-    # An unresolved resolve still hands the agent a next step rather than a dead end.
-    assert data["fallback_search_commands"], result.describe()
-    assert data["fallback_search_command"] == data["fallback_search_commands"][0]["command"]
+    # No provider found anything, so no provider search is handed over: rerunning one is certain to
+    # come back empty. The fallback once named the first provider in registry order regardless.
+    assert data["fallback_search_commands"] == [], result.describe()
+    assert data["fallback_search_command"] is None, result.describe()
+
+
+@pytest.mark.parametrize("command", ["search", "resolve"])
+def test_a_blank_query_is_refused_before_the_fanout(command: str) -> None:
+    """A blank query once answered ok: true while five providers failed it, and one sent it upstream.
+
+    Behind a dead proxy with caches off, so a wrapper that still fanned out fails on the network instead.
+    """
+    result = run(
+        "warcraft", command, "   ",
+        env={**dead_proxy_env(), **no_cache_env()}, expect=EXIT_USAGE, error_code="invalid_query",
+    )
+    assert result.payload["command"] == command, result.describe()
+
+
+# A Wowhead item whose whole name is intent words ("guild" reads as a guild lookup).
+EXACT_NAME_ITEM = "Guild Tabard"
+
+
+def test_resolve_answers_an_entity_named_exactly_the_query_even_when_its_words_carry_intent(require) -> None:
+    """``resolve "guild tabard"`` once came back unresolved: "guild" ranked every entity answer down.
+
+    Wowhead's own search is the oracle for the item existing under exactly that name.
+    """
+    require("wowhead")
+    searched = run("wowhead", "search", EXACT_NAME_ITEM.lower(), "--limit", "10")
+    items = [row for row in searched.data["results"] if row["entity_type"] == "item" and row["name"] == EXACT_NAME_ITEM]
+    assert items, searched.describe()
+
+    result = run("warcraft", "resolve", EXACT_NAME_ITEM.lower())
+    data = result.data
+    assert data["resolved"] is True, result.describe()
+    assert (data["match"]["provider"], data["match"]["name"]) == ("wowhead", EXACT_NAME_ITEM), result.describe()
+    binary, *args = shlex.split(data["next_command"])
+    entity = run(binary, *args).data["entity"]
+    assert (entity["type"], entity["name"]) == ("item", EXACT_NAME_ITEM), data["next_command"]
+    assert entity["id"] in {row["id"] for row in items}, data["next_command"]
 
 
 def test_resolve_answers_with_the_candidate_search_ranks_first(item_search: Result) -> None:
@@ -470,10 +510,14 @@ def test_expansion_filter_reaches_a_different_provider_profile_than_an_unfiltere
 
 
 def test_expansion_filter_never_resolves_to_an_excluded_provider() -> None:
-    """A guild query under wotlk has no provider that can answer it: unresolved, with a wotlk
-    Wowhead search handed over as the next step.
+    """A guild query under wotlk has no provider that can answer it, so it stays unresolved.
+
+    Wowhead's own wotlk search is the oracle for the hand-over: a search that finds something is
+    handed over still carrying ``--expansion wotlk``, and one certain to come back empty is not
+    handed over at all (Warcraft Logs never matches free text).
     """
-    result = run("warcraft", "--expansion", "wotlk", "resolve", f"guild {REGION} {REALM} {GUILD}", "--limit", "3")
+    query = f"guild {REGION} {REALM} {GUILD}"
+    result = run("warcraft", "--expansion", "wotlk", "resolve", query, "--limit", "3")
     _assert_fanout_answered(result)
     data = result.data
 
@@ -486,12 +530,15 @@ def test_expansion_filter_never_resolves_to_an_excluded_provider() -> None:
     assert data["selected_provider"] is None
     assert result.payload["provider"] == "warcraft"
 
+    search = run("wowhead", "--expansion", "wotlk", "search", query, "--limit", "3")
+    if not search.data["results"]:
+        assert (data["fallback_search_command"], data["fallback_search_commands"]) == (None, []), result.describe()
+        return
     assert [row["provider"] for row in data["fallback_search_commands"]] == ["wowhead"], result.describe()
     binary, *args = shlex.split(data["fallback_search_command"])
     assert (binary, args[:2]) == ("wowhead", ["--expansion", "wotlk"]), data["fallback_search_command"]
     fallback = run(binary, *args)
-    assert fallback.data["expansion"] == "wotlk"
-    assert fallback.data["query"] == f"guild {REGION} {REALM} {GUILD}"
+    assert (fallback.data["expansion"], fallback.data["query"]) == ("wotlk", query), fallback.describe()
 
 
 def _assert_rank_join(raids: list[dict[str, Any]], raiding: dict[str, Any]) -> None:
@@ -534,15 +581,15 @@ def test_guild_returns_one_identity_and_the_ranks_of_every_open_raid(require) ->
     assert set(sources) == {"raiderio"}
     source = sources["raiderio"]
     assert source["status"] == "ok", f"raiderio source failed: {source.get('error')}"
-    # The source keeps its own envelope, so the citation trail survives the wrap.
-    assert source["payload"]["ok"] is True
-    assert source["payload"]["provenance"]["citations"]
+    # The source keeps its provenance, so the citation trail survives the wrap.
+    assert source["provenance"]["citations"], json.dumps(source)[:600]
 
     summary = source["summary"]
     raids = summary["raids"]
     assert summary["raid_count"] == len(raids) >= 1
     assert summary["roster"]["member_count"] >= 1
-    _assert_rank_join(raids, source["payload"]["data"]["raiding"])
+    # Joined against Raider.IO's own answer for the same guild, read directly.
+    _assert_rank_join(raids, run("raiderio", "guild", REGION, REALM_SLUG, GUILD).data["raiding"])
     mythic = [raid for raid in raids if raid["mythic_bosses_killed"]]
     assert mythic, "at least one raid must have mythic progress"
     for raid in mythic:
@@ -553,6 +600,48 @@ def test_guild_returns_one_identity_and_the_ranks_of_every_open_raid(require) ->
     assert open_slugs, catalog.describe()
     missing = open_slugs - {raid["raid_slug"] for raid in raids}
     assert not missing, f"missing open raids {sorted(missing)}"
+
+
+# Long-standing EU realms whose names carry accented letters.
+ACCENTED_EU_REALMS = ("Confrérie du Thorium", "Chants éternels", "Marécage de Zangar", "Festung der Stürme")
+
+
+def _guild_on_an_accented_realm() -> dict[str, Any]:
+    """A guild on one of the accented realms, from Raider.IO's EU leaderboard of an open raid.
+
+    The leaderboard's realm filter covers the whole connected-realm group (Confrérie du Thorium
+    answers with Kirin Tor guilds too), so the row is picked by its own realm name.
+    """
+    catalog = run("raiderio", "raids")
+    open_slugs = sorted(_open_raid_slugs(catalog.data["rows"], region="eu"))
+    assert open_slugs, catalog.describe()
+    for realm in ACCENTED_EU_REALMS:
+        for slug in open_slugs:
+            board = run(
+                "raiderio", "leaderboard", "raids", "--raid", slug, "--difficulty", "normal", "--region", "eu",
+                "--realm", realm, "--limit", "100",
+            )
+            for row in board.data["rows"]:
+                if row["guild"]["realm_name"].casefold() == realm.casefold():
+                    guild: dict[str, Any] = row["guild"]
+                    return guild
+    raise AssertionError(f"no guild on {ACCENTED_EU_REALMS} in the EU normal leaderboards of {open_slugs}")
+
+
+def test_guild_reaches_a_realm_whose_name_has_letters_beyond_ascii(require) -> None:
+    """``Festung der Stürme`` was slugged ``festung-der-st-rme``: every letter beyond ASCII dropped, so no
+    upstream could find a guild on it.
+
+    The realm reaches Raider.IO's leaderboard filter by its display name, and the realm slug Raider.IO
+    reports in the row it returns is the oracle for the slug the wrapper must send.
+    """
+    require("raiderio")
+    guild = _guild_on_an_accented_realm()
+
+    result = run("warcraft", "guild", "eu", guild["realm_name"], guild["name"])
+    assert result.payload["query"] == {"region": "eu", "realm": guild["realm"], "name": guild["name"]}, result.describe()
+    assert result.data["guild"]["name"] == guild["name"], result.describe()
+    assert result.data["sources"]["raiderio"]["status"] == "ok", result.describe()
 
 
 def test_passthrough_returns_the_provider_payload_unchanged(require) -> None:
