@@ -478,6 +478,9 @@ CAPTURED_SPEC_SLUGS = [
     "survival-hunter-leveling-guide",
     "mistweaver-monk-pve-healing-guide", "mistweaver-monk-pve-dps-guide", "mistweaver-monk-pvp-guide",
     "mistweaver-monk-leveling-guide",
+    # Icy Veins added a hero talents page per spec on 2026-09-29; it once tied the spec's own guide.
+    "frost-mage-hero-talents-pve-guide", "survival-hunter-hero-talents-pve-guide",
+    "mistweaver-monk-hero-talents-pve-guide", "survival-hunter-pve-dps-mythic-plus-guide",
 ]
 
 
@@ -502,7 +505,12 @@ def test_icy_veins_resolve_answers_a_spec_query_with_that_specs_guide(monkeypatc
 @pytest.mark.parametrize("query", ["frost", "frost guide"])
 def test_icy_veins_resolve_does_not_pick_a_class_for_a_spec_name_two_classes_share(monkeypatch, query: str) -> None:
     """"frost" resolved to the mage guide at high confidence; the death knight guide was 3 points behind."""
-    slugs = [*CAPTURED_SPEC_SLUGS, "frost-death-knight-pve-dps-guide", "frost-death-knight-pvp-guide"]
+    slugs = [
+        *CAPTURED_SPEC_SLUGS,
+        "frost-death-knight-pve-dps-guide",
+        "frost-death-knight-pvp-guide",
+        "frost-death-knight-hero-talents-pve-guide",
+    ]
     payload = _invoke_with_sitemap(monkeypatch, slugs, ["resolve", query])
 
     assert payload["resolved"] is False
