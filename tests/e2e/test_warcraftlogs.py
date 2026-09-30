@@ -1394,7 +1394,8 @@ def test_sampled_kills_on_the_current_raid_include_reports_still_being_logged(re
     sample = result.data["sample"]
     kills = result.data["kills"]
     assert kills and sample["filtered_kill_count"] >= len(kills), result.describe()
-    assert sample["finished_report_count"] + sample["live_report_count"] == sample["source_report_count"], result.describe()
+    # The cohort is marked live exactly when one of its kills came from a report still being logged.
+    assert result.data["cache_provenance"]["live"] is True, result.describe()
     assert result.data["cache_provenance"]["source"] == "sampled_reports", result.describe()
     for row in kills:
         fights = run("warcraftlogs", "report-fights", row["report"]["code"]).data["fights"]

@@ -87,6 +87,12 @@ TREES = ("class", "spec", "hero")
 # is the bare `[list_name]`. High enough that `simc priority` returns a whole action list.
 TRACE_ACTION_RE = re.compile(r"^L(\d+): (\w+)\s+(.*)$")
 DISPATCH_RE = re.compile(r"^call_action_list -> (\w+)")
+# Lists `priority` steps past to reach the rotation (docs/simc/README.md: helper lists "do not
+# compete"): SimC's generic helper names, and any `*_variables` or `*_helper` list.
+HELPER_LISTS = frozenset({
+    "trinkets", "trinket", "items", "item", "item_actions", "cooldowns", "cds", "ogcd",
+    "racials", "race", "race_actions", "variables", "defensives", "precombat",
+})
 PRIORITY_SCAN_LIMIT = 100  # `simc priority --limit` caps here; the journey APL's start list is far shorter.
 INTENT_SCAN_LIMIT = 50  # `simc apl-intent --limit` caps here; the journey APL's start list is far shorter.
 INTENT_PREFIX_BY_STATUS = {"guaranteed": "always", "possible": "situational"}
@@ -124,6 +130,10 @@ def _dispatch_targets(rows: list[TraceRow], *, dead: bool) -> set[str]:
     """The action lists the traced rows hand off to, split by whether the handoff survived the prune."""
     matches = (DISPATCH_RE.match(row.text) for row in rows if (row.status == "dead") == dead)
     return {match.group(1) for match in matches if match is not None}
+
+
+def _is_helper_list(name: str) -> bool:
+    return name in HELPER_LISTS or name.endswith(("_variables", "_helper"))
 
 
 def _collapse_repeats(rows: Iterable[tuple[str, str, str | None]]) -> list[tuple[str, str, str | None]]:
@@ -1072,7 +1082,7 @@ def test_branch_and_intent_journey(require, checkout: Checkout) -> None:
     # lists (trinkets, racials) it steps past to reach the rotation; nothing else may go missing.
     assert listed == [(row.line_no, row.status) for row in live_rows if (row.line_no, row.status) in listed], trace.describe()
     left_out = [row.text for row in live_rows if (row.line_no, row.status) not in listed]
-    assert all(DISPATCH_RE.match(text) for text in left_out), left_out
+    assert all((match := DISPATCH_RE.match(text)) and _is_helper_list(match.group(1)) for text in left_out), left_out
     dead_lines = {row.line_no for row in start_rows if row.status == "dead"}
     assert dead_lines, f"this build prunes nothing, so the trace's dead marking is unexercised\n{trace.describe()}"
     assert {row["line_no"] for row in priority.data["priority"]["inactive_talent_branches"]} <= dead_lines, trace.describe()

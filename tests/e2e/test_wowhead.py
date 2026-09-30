@@ -637,7 +637,8 @@ def test_linked_graph_reports_the_pages_a_fetch_cap_left_unread(require) -> None
     """``--depth 2`` has to read every child page the root links, so a ``--max-fetches`` that stops
     short is a sample and must say so; it once reported ``truncated: false`` after reading one child.
 
-    The depth-1 graph is the oracle for how many child pages depth 2 asks for.
+    The depth-1 graph is the oracle for how many child pages depth 2 asks for: every linked node with
+    a page, of which two fetches read the root and one child.
     """
     require("wowhead")
     common = ("linked-graph", "item", str(pins.ITEM_ID), "--limit", "500")
@@ -650,7 +651,7 @@ def test_linked_graph_reports_the_pages_a_fetch_cap_left_unread(require) -> None
     sampling = capped.data["sampling"]
     assert sampling["pages_fetched"] == 2, capped.describe()
     assert sampling["truncated"] is True, capped.describe()
-    assert 1 <= sampling["pages_skipped"] <= len(children) - 1, capped.describe()
+    assert sampling["pages_skipped"] == len(children) - 1, capped.describe()
     assert all(edge["from"] != edge["to"] for edge in capped.data["graph"]["edges"]), capped.describe()
 
 
@@ -901,8 +902,9 @@ def test_news_page_starts_the_scan_on_the_page_it_names(require, news_scan: Resu
     assert first_ids + second_ids == [row["id"] for row in news_scan.data["results"]], second.describe()
 
 
-# Words that other words contain: a substring filter would keep "damage" for "mage" and "during" for "ring".
-LISTING_QUERY_WORDS = ("mage", "ring", "war")
+# Words that longer words contain: a substring or prefix filter would keep "damage" for "mage",
+# "during" for "ring", "classic" for "class" and "warcraft" for "war".
+LISTING_QUERY_WORDS = ("mage", "ring", "class", "war")
 # The listing fields the topic filter reads.
 LISTING_TEXT_FIELDS = ("title", "preview", "body_preview", "author", "topic", "type_name", "forum_area", "forum")
 
@@ -912,26 +914,37 @@ def _listing_text(row: dict[str, Any]) -> str:
     return " ".join(str(row.get(name) or "") for name in LISTING_TEXT_FIELDS).lower().replace("'", "").replace("’", "")
 
 
-def _starts_a_word(word: str, text: str) -> bool:
-    return re.search(rf"(?<!\w){re.escape(word)}", text) is not None
+def _carries_the_word(word: str, text: str) -> bool:
+    """``word`` is a word of ``text`` up to a plural or possessive ending ("Mages", "Mage's"), not part of "Magelord".
+
+    "-es" is a plural ending only after a sibilant ("classes"), so "wares" does not carry "war".
+    """
+    sibilants = ("s", "x", "z", "ch", "sh")
+    return any(
+        token in (word, f"{word}s")
+        or word == f"{token}s"
+        or (token == f"{word}es" and word.endswith(sibilants))
+        or (word == f"{token}es" and token.endswith(sibilants))
+        for token in re.findall(r"\w+", text)
+    )
 
 
-def test_news_topic_query_keeps_the_rows_where_the_word_starts_a_word(require, news_scan: Result) -> None:
+def test_news_topic_query_keeps_the_rows_that_carry_the_word(require, news_scan: Result) -> None:
     """``news mage`` once returned every post that said "damage" or "image", in page order.
 
-    The query word has to start a word of the row ("Mages" and "Mage's" count, "Damage" does not);
-    the expected rows are read off the unfiltered scan, and the word chosen is one that also sits
-    inside other words there, so a substring filter would return more.
+    The query word has to be a word of the row, up to a plural or possessive ending; the expected
+    rows are read off the unfiltered scan, and the word chosen is one that also sits inside longer
+    words there, so a substring or prefix filter would return more.
     """
     require("wowhead")
     texts = [(row["id"], _listing_text(row)) for row in news_scan.data["results"]]
     for word in LISTING_QUERY_WORDS:
-        expected = [row_id for row_id, text in texts if _starts_a_word(word, text)]
-        inside_only = [row_id for row_id, text in texts if word in text and not _starts_a_word(word, text)]
+        expected = [row_id for row_id, text in texts if _carries_the_word(word, text)]
+        inside_only = [row_id for row_id, text in texts if word in text and not _carries_the_word(word, text)]
         if expected and inside_only:
             break
     else:
-        raise AssertionError(f"no word in {LISTING_QUERY_WORDS} both starts and hides inside words of the scan")
+        raise AssertionError(f"no word in {LISTING_QUERY_WORDS} both is and hides inside words of the scan")
     matched = run(BINARY, "news", word, "--pages", "2", "--limit", "200")
     assert [row["id"] for row in matched.data["results"]] == expected, matched.describe()
 

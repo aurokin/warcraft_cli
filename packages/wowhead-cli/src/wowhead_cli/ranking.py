@@ -89,16 +89,26 @@ def score_text_match(query: str, *values: Any) -> int:
     return score
 
 
+def _same_word(term: str, word: str) -> bool:
+    """Whether two words differ at most by a plural or possessive ending ("hotfix"/"Hotfixes", "mage"/"Mage's").
+
+    "-es" counts only after a sibilant, so "notes" is not "not" and "capes" is not "cap".
+    """
+    short, long = sorted((term, word), key=len)
+    return long in (short, f"{short}s") or (long == f"{short}es" and short.endswith(("s", "x", "z", "ch", "sh")))
+
+
 def listing_match_score(query: str, *values: Any) -> int:
-    """Score a news, blue-tracker or guides listing row: 0 unless every query word starts a word in ``values``.
+    """Score a news, blue-tracker or guides listing row: 0 unless every query word is a word in ``values``.
 
     Otherwise one point per (word, value) hit, plus a bonus when the values hold the query as a phrase.
-    Stopwords count only when the query has nothing else. A query word must start a value word, so
-    "hotfix" matches "Hotfixes" and "mage" matches "Mage's", while "mage" does not match "Damage".
+    Stopwords count only when the query has nothing else. Words match up to a plural or possessive
+    ending, so "hotfix" matches "Hotfixes" and "mage" matches "Mage's", but "mage" matches neither
+    "Damage" nor "Magelord".
     """
     terms = set(match_terms(query)) or word_tokens(query)
     texts = [value.lower() for value in values if isinstance(value, str) and value.strip()]
-    hits = [{term for term in terms if any(word.startswith(term) for word in word_tokens(text))} for text in texts]
+    hits = [{term for term in terms if any(_same_word(term, word) for word in word_tokens(text))} for text in texts]
     if not terms or not terms <= set().union(*hits):
         return 0
     score = sum(len(value_hits) for value_hits in hits)

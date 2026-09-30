@@ -28,6 +28,9 @@ from wowhead_cli.ranking import (
 )
 from wowhead_cli.wowhead_client import entity_url
 
+# The most links `entity-page --max-links` returns.
+ENTITY_PAGE_MAX_LINKS = 2000
+
 LOW_SIGNAL_LINK_NAMES = frozenset(
     {
         "achievement",
@@ -260,9 +263,10 @@ def entity_page_fetch_more_command(
 ) -> str:
     """The `entity-page` command that returns more of the link list, routed to the active expansion.
 
-    ``--max-links`` stops at 2000, so a page with more links than that still comes back truncated.
+    ``--max-links`` stops at ENTITY_PAGE_MAX_LINKS, so a page with more links than that still comes
+    back truncated; the preview's ``fetch_more_truncated`` says so.
     """
-    max_links = min(max(link_count, 200), 2000)
+    max_links = min(max(link_count, 200), ENTITY_PAGE_MAX_LINKS)
     prefix = command_prefix_for_expansion(expansion)
     return f"{prefix} entity-page {shlex.quote(entity_type)} {entity_id} --max-links {max_links}"
 
@@ -275,7 +279,14 @@ def build_linked_entity_preview(
     preview_limit: int,
     fetch_more_command: str | None = None,
     fetch_more_command_builder: Callable[[int], str] | None = None,
+    fetch_more_limit: int | None = None,
 ) -> dict[str, Any]:
+    """A sample of a page's links with per-type counts and the command that fetches the rest.
+
+    With ``fetch_more_limit`` (the most links that command can return), ``fetch_more_truncated``
+    says whether the page has more links than that.
+    """
+
     def render_fetch_more(count: int) -> str | None:
         if fetch_more_command_builder is not None:
             return fetch_more_command_builder(count)
@@ -297,13 +308,16 @@ def build_linked_entity_preview(
         if not isinstance(link_type, str):
             continue
         counts_by_type[link_type] = counts_by_type.get(link_type, 0) + 1
-    return {
+    preview: dict[str, Any] = {
         "count": len(deduped),
         "counts_by_type": counts_by_type,
         "items": [_summarize_linked_entity(row) for row in preview_items],
         "more_available": len(deduped) > len(preview_items),
         "fetch_more_command": render_fetch_more(len(deduped)),
     }
+    if fetch_more_limit is not None:
+        preview["fetch_more_truncated"] = len(deduped) > fetch_more_limit
+    return preview
 
 
 def entity_page_needs_fetch(
@@ -401,6 +415,7 @@ def entity_linked_entities_payload(
         fetch_more_command_builder=lambda count: entity_page_fetch_more_command(
             requested_entity_type, requested_entity_id, count, expansion=expansion
         ),
+        fetch_more_limit=ENTITY_PAGE_MAX_LINKS,
     )
 
 

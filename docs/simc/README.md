@@ -95,7 +95,9 @@ These codes are worth knowing:
 - `unknown_talent` (exit 2) — an `--enable`/`--disable` value names no talent of the actor's class
   (`error.details.unknown_talents` lists them), or a `modify-build` `--add`/`--remove` value names no
   talent the build's spec can take. Talent names are tokenized the way SimC does it: a hyphen or comma
-  is dropped, so "Anti-Magic Zone" is `antimagic_zone`.
+  is dropped, so "Anti-Magic Zone" is `antimagic_zone`. The underscore spellings older releases printed
+  (`anti_magic_zone`, `invoke_chi_ji_the_red_crane`) are not accepted; use the display name or the
+  token `decode-build` prints now.
 
 The APL analysis commands (`apl-prune`, `apl-branch-trace`, `apl-intent`, `apl-intent-explain`,
 `priority`, `opener`, `inactive-actions`, `apl-branch-compare`, `analysis-packet`, `describe-build`)

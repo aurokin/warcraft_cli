@@ -162,6 +162,17 @@ def test_method_resolve_reads_class_and_spec_shorthand(monkeypatch, query: str, 
     assert data["match"]["id"] == expected
 
 
+def test_method_search_finds_a_page_titled_with_shorthand(monkeypatch) -> None:
+    # The query "prot" is spelled out as "protection"; a page whose slug says "prot" must still match it.
+    slugs = ("prot-paladin-tips", "holy-paladin")
+    sitemap = "".join(f"<url><loc>https://www.method.gg/guides/{slug}</loc></url>" for slug in slugs)
+    monkeypatch.setattr("method_cli.main.MethodClient.sitemap_guides", lambda self: parse_sitemap_guides(sitemap))
+    result = runner.invoke(app, ["search", "prot paladin tips"])
+    assert result.exit_code == 0, result.output
+
+    assert [row["id"] for row in json.loads(result.stdout)["data"]["results"]] == ["prot-paladin-tips"]
+
+
 def _fake_fetch_guide_page(guide_ref: str) -> dict[str, object]:
     if str(guide_ref).endswith("/talents"):
         return parse_guide_page(TALENTS_HTML, source_url="https://www.method.gg/guides/mistweaver-monk/talents")
@@ -843,3 +854,19 @@ def test_method_guide_full_fails_when_a_class_guide_loses_its_navigation(monkeyp
 
     assert result.exit_code == 1
     assert _error_payload(result)["error"]["code"] == "parse_failed"
+
+
+def test_method_guide_full_reads_a_one_page_article_whose_slug_ends_in_a_class(monkeypatch) -> None:
+    """unlocking-void-elf-demon-hunter is a one-page article; reading it as a class guide failed on its missing navigation."""
+    slug = "unlocking-void-elf-demon-hunter"
+    article = INTRO_HTML.replace("guide-navigation", "no-navigation").replace("guides/mistweaver-monk", f"guides/{slug}")
+    monkeypatch.setattr(
+        "method_cli.main.MethodClient.fetch_guide_page",
+        lambda self, guide_ref: parse_guide_page(article, source_url=f"https://www.method.gg/guides/{slug}"),
+    )
+    result = runner.invoke(app, ["guide-full", slug])
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.stdout)["data"]
+    assert data["guide"]["page_count"] == 1
+    assert data["pages"][0]["guide"]["content_family"] == "article_guide"

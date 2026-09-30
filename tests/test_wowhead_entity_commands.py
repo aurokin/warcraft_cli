@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from wowhead_cli.entities import (
     comparison_entity_record,
     comparison_field_diffs,
@@ -697,32 +698,42 @@ def test_entity_preview_prefers_multi_source_links_over_single_source_peers(monk
 
 
 
-def test_entity_preview_fetch_more_command_scales_with_known_count(monkeypatch) -> None:
-    def fake_tooltip(self, entity_type: str, entity_id: int, data_env=None):  # noqa: ANN001, ANN202
+@pytest.mark.parametrize("command", [["entity", "currency", "3008", "--no-include-comments"], ["comments", "currency", "3008"]])
+@pytest.mark.parametrize(
+    ("link_count", "max_links", "truncated"), [(250, 250, False), (2000, 2000, False), (2100, 2000, True)]
+)
+def test_entity_preview_fetch_more_command_scales_with_known_count(
+    monkeypatch, command: list[str], link_count: int, max_links: int, truncated: bool
+) -> None:
+    def fake_tooltip(self: WowheadClient, entity_type: str, entity_id: int, data_env: int | None = None) -> dict[str, str]:
         return {"name": "Valorstones"}
 
-    links = "\n".join(f'<a href="/item={200000 + idx}">Item {idx}</a>' for idx in range(250))
+    # 50 of the links sit in a relation tab, which entity-page returns too, so both previews count them.
+    links = "\n".join(f'<a href="/item={200000 + idx}">Item {idx}</a>' for idx in range(link_count - 50))
+    npcs = json.dumps([{"id": 100 + idx, "name": f"Npc {idx}"} for idx in range(50)])
     html = f"""
     <html><head>
       <link rel="canonical" href="https://www.wowhead.com/currency=3008/valorstones">
     </head><body>
       {links}
       <script>var lv_comments0 = [];</script>
+      <script>new Listview({{template: 'npc', id: 'npcs', data:{npcs}}});</script>
     </body></html>
     """
 
-    def fake_html(self, entity_type: str, entity_id: int):  # noqa: ANN001
+    def fake_html(self: WowheadClient, entity_type: str, entity_id: int) -> str:
         return html
 
     monkeypatch.setattr("wowhead_cli.main.WowheadClient.tooltip", fake_tooltip)
     monkeypatch.setattr("wowhead_cli.main.WowheadClient.entity_page_html", fake_html)
-    result = runner.invoke(app, ["entity", "currency", "3008", "--no-include-comments"])
-    assert result.exit_code == 0
+    result = runner.invoke(app, command)
+    assert result.exit_code == 0, result.output
 
-    payload = json.loads(result.stdout)
-    assert payload["data"]["linked_entities"]["count"] == 250
-    assert payload["data"]["linked_entities"]["fetch_more_command"] == "wowhead entity-page currency 3008 --max-links 250"
-
+    preview = json.loads(result.stdout)["data"]["linked_entities"]
+    assert preview["count"] == link_count
+    assert preview["fetch_more_command"] == f"wowhead entity-page currency 3008 --max-links {max_links}"
+    # entity-page cannot return more than 2000 links, so the preview says when its command falls short.
+    assert preview["fetch_more_truncated"] is truncated
 
 
 def test_entity_preview_suppresses_low_signal_names(monkeypatch) -> None:

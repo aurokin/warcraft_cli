@@ -432,6 +432,19 @@ def test_icy_veins_search_reads_class_and_spec_shorthand(monkeypatch, query: str
     assert data["match"]["id"] == expected
 
 
+def test_icy_veins_search_finds_a_page_titled_with_shorthand(monkeypatch) -> None:
+    # The query "disc" is spelled out as "discipline"; the real Disc Belt Guide must still match it.
+    slugs = ("disc-belt-guide", "discipline-priest-pve-healing-guide")
+    sitemap = "".join(f"<url><loc>https://www.icy-veins.com/wow/{slug}</loc></url>" for slug in slugs)
+    monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.sitemap_guides", lambda self: parse_sitemap_guides(sitemap))
+    result = runner.invoke(app, ["resolve", "disc belt"])
+    assert result.exit_code == 0, result.output
+
+    data = json.loads(result.stdout)["data"]
+    assert data["resolved"] is True
+    assert data["match"]["id"] == "disc-belt-guide"
+
+
 def test_icy_veins_search_breaks_score_ties_by_newest_sitemap_lastmod(monkeypatch) -> None:
     # "raid guide" scores these raid guides alike; alphabetical order put the 2024 Blackrock
     # Depths event raid above the current raid.

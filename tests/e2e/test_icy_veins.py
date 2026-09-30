@@ -55,6 +55,9 @@ FAMILY_PROBES = (
 )
 # A term the pinned healing guide uses throughout, for the offline bundle journeys.
 BUNDLE_QUERY_TERM = "mana"
+# A sitemap whose newest entry is older than this many days has stopped being updated
+# (docs/icy-veins/README.md), so search has to warn that newer guides are missing.
+SITEMAP_STALE_DAYS = 30
 
 
 @cache
@@ -176,19 +179,30 @@ def test_search_outside_the_guide_surface_returns_a_scope_hint(require) -> None:
 
 
 def _assert_ties_list_the_newest_page_first(result: Result) -> None:
-    """Rows with the same score are ordered by the sitemap's ``lastmod``, newest first; they were alphabetical."""
+    """Rows with the same score are ordered by the sitemap's ``lastmod``, newest first; they were alphabetical.
+
+    Some tied pair has to carry two different dates, or the order is not being tested at all.
+    """
     rows = result.data["results"]
-    for earlier, later in zip(rows, rows[1:], strict=False):
-        if earlier["ranking"]["score"] == later["ranking"]["score"]:
-            assert (earlier["metadata"]["sitemap_lastmod"] or "") >= (later["metadata"]["sitemap_lastmod"] or ""), result.describe()
+    tied = [
+        (earlier["metadata"]["sitemap_lastmod"], later["metadata"]["sitemap_lastmod"])
+        for earlier, later in zip(rows, rows[1:], strict=False)
+        if earlier["ranking"]["score"] == later["ranking"]["score"]
+    ]
+    assert any(first and second and first != second for first, second in tied), (
+        f"no tied pair with two different sitemap dates, so the tie order cannot be checked\n{result.describe()}"
+    )
+    assert all((first or "") >= (second or "") for first, second in tied), result.describe()
 
 
 def test_search_reads_mythic_plus_the_way_players_write_it(require) -> None:
     """``mythic+`` is how players type it and "Mythic Plus" is how Icy Veins names those pages.
 
     This exact query once answered ``ok: true`` with no rows, and later with a season's guide more
-    than a year old: search reads the sitemap, and a sitemap that stopped being updated cannot list
-    the current season. The clock is the oracle, not the sitemap's own dates.
+    than a year old and no word that anything was missing. Search reads the sitemap, which Icy Veins
+    stopped updating in 2025, so it cannot list the current season; it has to say so. The clock is
+    the oracle: a sitemap whose newest entry is more than SITEMAP_STALE_DAYS old carries a warning
+    naming that date, and a fresh one carries none.
     """
     require(PROVIDER)
     result = run(BINARY, "search", "mythic+", "--limit", "5")
@@ -197,20 +211,19 @@ def test_search_reads_mythic_plus_the_way_players_write_it(require) -> None:
     assert rows, result.describe()
     # Seasonal hubs may drop "plus" from the slug (``<expansion>-mythic-season-<n>-guide``).
     assert all("mythic-plus" in row["id"] or "-mythic-season-" in row["id"] for row in rows), result.describe()
-    _assert_ties_list_the_newest_page_first(result)
     provenance = result.payload["provenance"]
     newest = date.fromisoformat(provenance["sitemap_newest_lastmod"])
-    assert (date.today() - newest).days <= 30 and "sitemap_warning" not in provenance, (
-        f"the Icy Veins sitemap was last updated {newest}, so the current season's pages cannot be found\n{result.describe()}"
-    )
+    assert all((row["metadata"]["sitemap_lastmod"] or "") <= newest.isoformat() for row in rows), result.describe()
+    stale = (date.today() - newest).days > SITEMAP_STALE_DAYS
+    assert ("sitemap_warning" in provenance) is stale, result.describe()
+    if stale:
+        assert newest.isoformat() in provenance["sitemap_warning"], result.describe()
 
 
 def test_search_breaks_score_ties_toward_the_newest_page(require) -> None:
     """``raid guide`` scores every raid's guide alike; a 2024 Blackrock Depths page once led them."""
     require(PROVIDER)
     result = run(BINARY, "search", "raid guide", "--limit", "10")
-    scores = [row["ranking"]["score"] for row in result.data["results"]]
-    assert len(scores) > len(set(scores)), f"no tied rows, so the tie order cannot be checked\n{result.describe()}"
     _assert_ties_list_the_newest_page_first(result)
 
 

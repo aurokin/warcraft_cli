@@ -233,6 +233,7 @@ Regular `entity`, `guide`, and `comments` responses include a lightweight `linke
 - basic records
 - `counts_by_type`
 - `fetch_more_command`
+- `fetch_more_truncated` (`entity` and `comments`), true when the page has more links than that command can return
 
 Use `--linked-entity-preview-limit 0` on `entity` or `comments` if you want to skip that preview.
 

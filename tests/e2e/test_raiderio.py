@@ -371,7 +371,7 @@ def test_character_recent_runs_restate_the_runs_raider_io_lists() -> None:
     upstream = {row["keystone_run_id"]: row for row in response.json()["mythic_plus_recent_runs"]}
     # A run finished between the two reads can push the oldest one off Raider.IO's list; no more than that.
     matched = [row for row in recent if row["run_id"] in upstream]
-    assert len(matched) >= len(recent) - 1, f"{[row['run_id'] for row in recent]} vs {sorted(upstream)}"
+    assert matched and len(matched) >= len(recent) - 1, f"{[row['run_id'] for row in recent]} vs {sorted(upstream)}"
     for row in matched:
         source = upstream[row["run_id"]]
         assert {key: row[key] for key in RECENT_RUN_FIELDS} == {key: source[field] for key, field in RECENT_RUN_FIELDS.items()}, row

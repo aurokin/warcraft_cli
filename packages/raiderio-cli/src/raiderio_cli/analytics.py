@@ -226,7 +226,7 @@ def sample_leaderboard_runs(client: RaiderIOClient, request: SampleRequest) -> t
     """Read up to ``request.pages`` leaderboard pages, keeping at most ``request.limit`` distinct runs.
 
     Raider.IO pages can overlap (a page may repeat the previous page's last run); a repeat is dropped
-    and counted in ``duplicate_runs_dropped``, so a short sample says why it is short.
+    and counted in ``duplicates_removed``, so a short sample says why it is short.
     """
     seen_run_ids: set[str] = set()
     duplicates = 0
@@ -276,7 +276,7 @@ def sample_leaderboard_runs(client: RaiderIOClient, request: SampleRequest) -> t
         "season": effective_season,
         "pages_requested": request.pages,
         "pages_fetched": len(read_pages),
-        "duplicate_runs_dropped": duplicates,
+        "duplicates_removed": duplicates,
         "cache_ttl_seconds": client.mythic_plus_runs_ttl_seconds,
         "leaderboard_urls": leaderboard_urls,
     }
@@ -474,7 +474,7 @@ def sample_summary(runs: list[dict[str, Any]], *, meta: dict[str, Any]) -> dict[
         "season": meta.get("season"),
         "pages_requested": meta["pages_requested"],
         "pages_fetched": meta["pages_fetched"],
-        "duplicate_runs_dropped": meta["duplicate_runs_dropped"],
+        "duplicates_removed": meta["duplicates_removed"],
         "run_count": len(runs),
         "roster_entry_count": len(roster_entries),
         "unique_player_count": len(unique_players),

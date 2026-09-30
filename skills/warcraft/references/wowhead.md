@@ -32,7 +32,8 @@
 - use `guide-query --kind analysis_surfaces` when you want section-backed guide topics without discarding the underlying guide text
 - use timeline filters like `--author`, `--type`, `--region`, and `--forum` instead of scanning broad result sets manually
 - the `news`, `blue-tracker` and `guides` query keeps a row only when every query word is a whole word
-  in it, so "frost mage" does not match "Frost Death Knight" or "Damage"
+  in it, up to a plural or possessive ending, so "hotfix" matches "Hotfixes" but "frost mage" does not
+  match "Frost Death Knight" or "Damage"
 - use guide filters like `--author`, `--updated-after`, `--patch-min`, and `--sort`
 - use `news-post` and `blue-topic` once you already have a specific URL
 - filter timelines by date with `--date-from` / `--date-to`, and read each row's ISO `posted_at`

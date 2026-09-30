@@ -551,14 +551,15 @@ def _normalize_hard_mode_level_rank_filter(value: str | None) -> str | None:
 
 
 # characterRankings takes Warcraft Logs' own CamelCase slugs ("DeathKnight", "BeastMastery") and
-# answers "Invalid class and spec specified." for the spaced display names (checked live 2026-09-30).
+# answers "Invalid class and spec specified." for the spaced display names, and a character's
+# zoneRankings silently ignores any other spec spelling (both checked live 2026-09-30).
 _WARCRAFTLOGS_CLASS_SLUGS = (
     "DeathKnight", "DemonHunter", "Druid", "Evoker", "Hunter", "Mage", "Monk",
     "Paladin", "Priest", "Rogue", "Shaman", "Warlock", "Warrior",
 )
 _WARCRAFTLOGS_SPEC_SLUGS = (
     "Affliction", "Arcane", "Arms", "Assassination", "Augmentation", "Balance", "BeastMastery", "Blood",
-    "Brewmaster", "Destruction", "Devastation", "Demonology", "Discipline", "Elemental",
+    "Brewmaster", "Destruction", "Devastation", "Devourer", "Demonology", "Discipline", "Elemental",
     "Enhancement", "Feral", "Fire", "Frost", "Fury", "Guardian", "Havoc", "Holy", "Marksmanship",
     "Mistweaver", "Outlaw", "Preservation", "Protection", "Restoration", "Retribution", "Shadow",
     "Subtlety", "Survival", "Unholy", "Vengeance", "Windwalker",
@@ -4342,7 +4343,7 @@ def character_rankings(
     difficulty: int | None = typer.Option(None, "--difficulty", help="Optional difficulty ID."),
     metric: str | None = typer.Option(None, "--metric", help="Optional ranking metric such as dps, hps, or tankhps."),
     size: int | None = typer.Option(None, "--size", help="Optional raid size."),
-    spec_name: str | None = typer.Option(None, "--spec-name", help="Optional spec slug filter."),
+    spec_name: str | None = typer.Option(None, "--spec-name", help="Optional spec filter, in any spelling (beast-mastery, Beast Mastery)."),
     top: int = typer.Option(5, "--top", min=1, max=20, help="Number of top ranking rows to keep in the summary."),
 ) -> None:
     """Show a character's encounter rankings for one zone."""
@@ -4356,7 +4357,7 @@ def character_rankings(
             difficulty=difficulty,
             metric=metric,
             size=size,
-            spec_name=spec_name,
+            spec_name=_warcraftlogs_slug(spec_name, _WARCRAFTLOGS_SPEC_SLUGS),
         )
     except WarcraftLogsClientError as exc:
         _handle_client_error(ctx, exc)

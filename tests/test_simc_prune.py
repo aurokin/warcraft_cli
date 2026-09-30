@@ -117,7 +117,7 @@ def test_arithmetic_follows_simc_precedence_and_operators() -> None:
     """`*` binds tighter than `+`, which binds tighter than SimC's max `<?` and min `>?`; unary minus negates."""
     context = PruneContext(enabled_talents=set(), disabled_talents=set(), targets=3)
 
-    for condition in ("active_enemies=1+1*2", "active_enemies=2+1<?3", "active_enemies=(1<?3)", "active_enemies=(5>?3)", "active_enemies=-1+4"):
+    for condition in ("active_enemies=1+1*2", "active_enemies=2+1<?3", "active_enemies=3<?1+1", "active_enemies=(1<?3)", "active_enemies=(5>?3)", "active_enemies=-1+4"):
         assert _state(condition, context) == "eligible", condition
 
 

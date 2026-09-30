@@ -105,7 +105,9 @@ process, without Typer.
 ## Supported scope
 
 - root guide pages under `/guides/<slug>` and their section pages under `/guides/<slug>/<section>`
-- content families `class_guide`, `profession_guide`, `delve_guide`, `reputation_guide`, `article_guide`
+- content families `class_guide`, `profession_guide`, `delve_guide`, `reputation_guide`, `article_guide`;
+  `class_guide` is a `<spec>-<class>` slug such as `beast-mastery-hunter`, so a one-page article like
+  `unlocking-void-elf-demon-hunter` is an `article_guide`
 - index-style roots (`tier-list`, `world-of-warcraft`) are excluded from discovery, and requesting
   one directly returns `unsupported_guide_surface`
 - queries whose terms match an excluded root return an empty result set with a `scope_hint`
@@ -114,7 +116,8 @@ process, without Typer.
 Ranking uses the shared article scorer (`warcraft_content.search`) plus a Method-specific boost when
 the query names the content family (professions, delves, renown/reputation). Method titles never
 say "Mythic+" or "Mythic Plus"; its M+ pages talk about "mythic dungeons", so `mythic+`, `m+` and
-`mythic plus` are searched as `mythic dungeon`. `resolve` judges confidence on every ranked match;
+`mythic plus` are searched as `mythic dungeon`. Class and spec shorthand (`bm hunter`, `disc priest`)
+is spelled out in the query and in page titles alike. `resolve` judges confidence on every ranked match;
 `--limit` only trims the `candidates` shown, so `--limit 1` never makes an ambiguous query look
 resolved.
 

@@ -109,6 +109,7 @@ Best fits:
   - `warcraftlogs character us illidan Roguecane`
 - character rankings, when the API allows them:
   - `warcraftlogs character-rankings us illidan Roguecane --zone-id 38 --difficulty 5 --metric dps --size 20`
+  - `--spec-name` takes any spelling (`beast-mastery`, `Beast Mastery`); Warcraft Logs would otherwise ignore it and return another spec's rankings
 - encounter rankings for real boss/class/spec leaderboard queries:
   - `warcraftlogs encounter-rankings --zone-id 46 --boss-id 3180 --difficulty 5 --class-name Druid --spec-name Balance --metric dps --top 10`
   - `--class-name`/`--spec-name` take any spelling (`death-knight`, `Death Knight`, `beast-mastery`); the CLI sends Warcraft Logs' own `DeathKnight`/`BeastMastery`

@@ -340,7 +340,8 @@ def sitemap_provenance(sitemap_url: str, newest: str | None, *, today: date) -> 
 def _scored_candidate(row: dict[str, Any], query: str, terms: set[str], *, stale_before: str | None) -> dict[str, Any] | None:
     slug = row["slug"]
     content_family = row.get("content_family")
-    candidate = f"{row['name'].lower()} {slug.replace('-', ' ')}"
+    # Spelled out like the query, so a page titled with shorthand ("Disc Belt Guide") still matches it.
+    candidate = expand_class_spec_aliases(f"{row['name']} {slug.replace('-', ' ')}")
     # Icy Veins drops "plus" from its newer seasonal slugs (``midnight-mythic-season-2-guide``). Adding the
     # "mythic plus season" spelling lets "mythic+ season 2" score them like the older ``-mythic-plus-season-``
     # pages, so only the stale penalty separates seasons, while the page's own title still matches.

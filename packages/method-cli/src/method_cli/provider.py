@@ -174,7 +174,8 @@ def _scored_candidate(row: dict[str, Any], normalized_query: str, terms: set[str
     if content_family == "unsupported_index":
         return None
     name = row["name"]
-    candidate = f"{name.lower()} {slug.replace('-', ' ')}"
+    # Spelled out like the query, so a page titled with shorthand still matches it.
+    candidate = expand_class_spec_aliases(f"{name} {slug.replace('-', ' ')}")
     score, reasons = score_article_match(normalized_query, candidate, weights=MATCH_WEIGHTS)
     family_boost, family_reasons = _family_score_boost(content_family, terms)
     score += family_boost

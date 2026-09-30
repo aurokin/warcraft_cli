@@ -510,10 +510,14 @@ def test_expansion_filter_reaches_a_different_provider_profile_than_an_unfiltere
 
 
 def test_expansion_filter_never_resolves_to_an_excluded_provider() -> None:
-    """A guild query under wotlk has no provider that can answer it: unresolved, and neither wotlk
-    provider found a candidate, so no search that is certain to come back empty is handed over.
+    """A guild query under wotlk has no provider that can answer it, so it stays unresolved.
+
+    Wowhead's own wotlk search is the oracle for the hand-over: a search that finds something is
+    handed over still carrying ``--expansion wotlk``, and one certain to come back empty is not
+    handed over at all (Warcraft Logs never matches free text).
     """
-    result = run("warcraft", "--expansion", "wotlk", "resolve", f"guild {REGION} {REALM} {GUILD}", "--limit", "3")
+    query = f"guild {REGION} {REALM} {GUILD}"
+    result = run("warcraft", "--expansion", "wotlk", "resolve", query, "--limit", "3")
     _assert_fanout_answered(result)
     data = result.data
 
@@ -526,11 +530,15 @@ def test_expansion_filter_never_resolves_to_an_excluded_provider() -> None:
     assert data["selected_provider"] is None
     assert result.payload["provider"] == "warcraft"
 
-    # Only a provider that found a candidate hands over its search; Wowhead's own wotlk answer is the
-    # oracle (Warcraft Logs never matches free text).
-    wowhead = run("wowhead", "--expansion", "wotlk", "resolve", f"guild {REGION} {REALM} {GUILD}", "--limit", "3")
-    expected = [] if wowhead.data["match"] is None else ["wowhead"]
-    assert [row["provider"] for row in data["fallback_search_commands"]] == expected, result.describe()
+    search = run("wowhead", "--expansion", "wotlk", "search", query, "--limit", "3")
+    if not search.data["results"]:
+        assert (data["fallback_search_command"], data["fallback_search_commands"]) == (None, []), result.describe()
+        return
+    assert [row["provider"] for row in data["fallback_search_commands"]] == ["wowhead"], result.describe()
+    binary, *args = shlex.split(data["fallback_search_command"])
+    assert (binary, args[:2]) == ("wowhead", ["--expansion", "wotlk"]), data["fallback_search_command"]
+    fallback = run(binary, *args)
+    assert (fallback.data["expansion"], fallback.data["query"]) == ("wotlk", query), fallback.describe()
 
 
 def _assert_rank_join(raids: list[dict[str, Any]], raiding: dict[str, Any]) -> None:

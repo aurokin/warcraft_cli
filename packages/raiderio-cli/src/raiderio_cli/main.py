@@ -350,7 +350,7 @@ def leaderboard_mythic_plus(
                     "returned_run_count": len(runs),
                     "pages_requested": meta["pages_requested"],
                     "pages_fetched": meta["pages_fetched"],
-                    "duplicate_runs_dropped": meta["duplicate_runs_dropped"],
+                    "duplicates_removed": meta["duplicates_removed"],
                     # False => the provider ran out of ranked runs before --limit (not a silent cap).
                     "limit_reached": len(runs) >= limit,
                 },

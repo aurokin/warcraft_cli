@@ -62,9 +62,10 @@ filtered result against the exact rows that bound keeps. Not every such flag has
   Wowhead item the exact-name resolve journey in `test_wrapper_core.py` names, the mistweaver guide
   refs and monk hero-tree names in `test_wrapper_guides.py`, the Icy Veins mistweaver guide the
   compact journey in `test_contract.py` reads, the Icy Veins family probes for The War Within, the
-  Remix event and the Midnight expansion hub in `test_icy_veins.py`, and the Method spec slugs the
-  shorthand and `frost` journeys in `test_method.py` expect. When upstream retires one, the journey
-  goes red and the pin is updated; it never passes on stale data.
+  Remix event and the Midnight expansion hub in `test_icy_veins.py`, the retired Icy Veins remix
+  guide that `test_icy_veins.py` and `test_wrapper_guides.py` expect to redirect, and the Method
+  spec slugs the shorthand and `frost` journeys in `test_method.py` expect. When upstream retires
+  one, the journey goes red and the pin is updated; it never passes on stale data.
 - **Real caches, isolated.** The session points `XDG_CACHE_HOME` at a temporary directory so
   journeys can assert cache hits without touching `~/.cache`. Config, state, and data roots stay
   real so credentials, saved tokens, guide bundles, and the local SimC checkout resolve exactly
@@ -170,6 +171,10 @@ Open weaknesses a green run does not rule out, beyond the limits above:
   `?realm=` value, so fetching the citation would prove nothing.
 - **Wowhead suggestion type 112** (Companion) has never appeared in a live response, so its label is
   unverified.
+- **Icy Veins search cannot find the current season.** Discovery reads the Icy Veins sitemap, whose
+  newest entry is 2025-10-05, so pages published since are missing from `search` and `resolve`. The
+  `mythic+` journey checks that search says so (`provenance.sitemap_warning` whenever the newest
+  entry is more than 30 days old), not that it finds current pages.
 
 ## CI
 

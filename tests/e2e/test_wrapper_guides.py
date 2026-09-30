@@ -60,6 +60,11 @@ DPS_SPEC = "fury"
 HEALER_LEGS = {"identify": True, "decode": True, "describe": False}
 # Every monk hero tree, so a label naming a tree none of the codes decode to is still caught.
 MONK_HERO_TREES = ("Master of Harmony", "Conduit of the Celestials", "Shado-Pan")
+# Retired 2026-09-29: Icy Veins serves the Mistweaver healing guide at this slug, and the query
+# below resolves to it there (test_icy_veins.py pins the same page), while Wowhead still serves its
+# own Legion Remix mistweaver guide for the query.
+RETIRED_ICY_VEINS_GUIDE = "mistweaver-monk-legion-remix-guide"
+RETIRED_GUIDE_QUERY = "mistweaver monk legion remix guide"
 
 
 @dataclass(frozen=True)
@@ -333,8 +338,7 @@ def test_guide_compare_query_reuses_fresh_bundles_until_force_refresh(require, o
     require("wowhead", "method", "icy-veins")
     result = run("warcraft", "guide-compare-query", GUIDE_QUERY, "--out-root", str(orchestration.out_root), timeout=300)
     reused = [row for row in result.data["provider_results"] if row["status"] == "reused"]
-    exported = {row["provider"]: row for row in orchestration.payload["provider_results"] if row["status"] == "exported"}
-    previous = {provider: row["exported_at"] for provider, row in exported.items()}
+    previous = {row["provider"]: row["exported_at"] for row in orchestration.payload["provider_results"] if row["status"] == "exported"}
     assert {row["provider"] for row in reused} == set(previous), result.describe()
     assert result.data["exported_bundle_count"] == orchestration.payload["exported_bundle_count"]
     for row in reused:
@@ -342,9 +346,6 @@ def test_guide_compare_query_reuses_fresh_bundles_until_force_refresh(require, o
         assert row["freshness"]["reason"] == "within_max_age"
         assert row["freshness"]["age_hours"] <= row["freshness"]["max_age_hours"]
         assert row["exported_at"] == previous[row["provider"]], result.describe()
-        # A reused bundle reports the redirect its export saw; reuse once dropped it, so a retired
-        # guide read as the one asked for.
-        assert row["redirect"] == exported[row["provider"]]["redirect"], result.describe()
 
     refreshed = run(
         "warcraft", "guide-compare-query", GUIDE_QUERY,
@@ -358,6 +359,29 @@ def test_guide_compare_query_reuses_fresh_bundles_until_force_refresh(require, o
     assert [row["bundle_path"] for row in refreshed.data["manifest"]["providers"]] == [
         str(path) for path in orchestration.bundle_paths
     ]
+
+
+def test_a_reused_bundle_reports_the_redirect_its_export_saw(require, out_dir: Path) -> None:
+    """Reuse once dropped the redirect, so a retired guide read as the one asked for.
+
+    The query lands Icy Veins on its retired remix guide, which it serves as another guide, and
+    Wowhead on its own remix guide, which it serves as itself: both a set and an empty redirect have
+    to survive reuse.
+    """
+    require("wowhead", "icy-veins")
+    argv = (
+        "guide-compare-query", RETIRED_GUIDE_QUERY, "--provider", "wowhead", "--provider", "icy-veins",
+        "--out-root", str(out_dir),
+    )
+    exported = {row["provider"]: row for row in run("warcraft", *argv, timeout=300).data["provider_results"]}
+    redirect = exported["icy-veins"]["redirect"]
+    assert redirect is not None and redirect["requested"] == RETIRED_ICY_VEINS_GUIDE, exported["icy-veins"]
+    assert exported["wowhead"]["status"] == "exported" and exported["wowhead"]["redirect"] is None, exported["wowhead"]
+
+    reused = run("warcraft", *argv, timeout=300)
+    for row in reused.data["provider_results"]:
+        assert row["status"] == "reused", reused.describe()
+        assert row["redirect"] == exported[row["provider"]]["redirect"], reused.describe()
 
 
 def test_guide_compare_reads_two_exported_bundles(require, orchestration: Orchestration) -> None:

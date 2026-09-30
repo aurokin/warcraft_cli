@@ -15,6 +15,7 @@ which is what the retired ``tests/test_method_live.py`` pinned by slug.
 from __future__ import annotations
 
 import json
+import re
 import shlex
 from datetime import date
 from functools import cache
@@ -140,16 +141,26 @@ def _assert_last_updated_is_a_date(guide: dict[str, Any]) -> None:
     passed through raw, so freshness could not be compared with the other guide sites.
     """
     stamp = date.fromisoformat(guide["last_updated"])
-    text = guide["last_updated_text"]
-    assert str(stamp.year) in text and str(stamp.day) in text, guide
+    # Day, month and year of the stamp, in Method's order: "11th Aug, 2026" or "4th August 2025".
+    written = rf"\b{stamp.day}(?:st|nd|rd|th)?\s+{stamp:%b}[a-z]*,?\s+{stamp.year}\b"
+    assert re.search(written, guide["last_updated_text"]), guide
 
 
 def _assert_ties_list_the_newest_page_first(result: Result) -> None:
-    """Rows with the same score are ordered by the sitemap's ``lastmod``, newest first; they were alphabetical."""
+    """Rows with the same score are ordered by the sitemap's ``lastmod``, newest first; they were alphabetical.
+
+    Some tied pair has to carry two different dates, or the order is not being tested at all.
+    """
     rows = result.data["results"]
-    for earlier, later in zip(rows, rows[1:], strict=False):
-        if earlier["ranking"]["score"] == later["ranking"]["score"]:
-            assert (earlier["metadata"]["sitemap_lastmod"] or "") >= (later["metadata"]["sitemap_lastmod"] or ""), result.describe()
+    tied = [
+        (earlier["metadata"]["sitemap_lastmod"], later["metadata"]["sitemap_lastmod"])
+        for earlier, later in zip(rows, rows[1:], strict=False)
+        if earlier["ranking"]["score"] == later["ranking"]["score"]
+    ]
+    assert any(first and second and first != second for first, second in tied), (
+        f"no tied pair with two different sitemap dates, so the tie order cannot be checked\n{result.describe()}"
+    )
+    assert all((first or "") >= (second or "") for first, second in tied), result.describe()
 
 
 def _first_guide_of_family(query: str, family: str) -> str:
@@ -212,9 +223,6 @@ def test_search_breaks_score_ties_toward_the_newest_page(require) -> None:
     """``mythic+ dungeons`` scores several seasons' pages alike; a Dragonflight page once led them."""
     require(PROVIDER)
     result = run(BINARY, "search", "mythic+ dungeons", "--limit", "10")
-    rows = result.data["results"]
-    scores = [row["ranking"]["score"] for row in rows]
-    assert len(scores) > len(set(scores)), f"no tied rows, so the tie order cannot be checked\n{result.describe()}"
     _assert_ties_list_the_newest_page_first(result)
 
 

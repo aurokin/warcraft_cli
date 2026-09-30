@@ -54,7 +54,7 @@ Runs are read in 20-run pages starting at `--page`, as many as `--limit` needs (
 `leaderboard mythic-plus`, 100 on the sampled commands). The sampled commands also take `--pages`
 (1-10) to read fewer pages than that; `sample.pages_requested` and `pages_fetched` report what was read.
 Pages can overlap (a page may repeat the previous page's last run); each repeat is kept once and
-counted in `sample.duplicate_runs_dropped`, so a sample one run short of `--limit` says why.
+counted in `sample.duplicates_removed`, so a sample one run short of `--limit` says why.
 
 Filter flags (sampled commands): `--level-min`, `--level-max`, `--score-min`, `--score-max`, and the
 repeatable `--contains-role` (`tank`, `healer`, `dps`), `--contains-class`, `--contains-spec`,

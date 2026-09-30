@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 from wowhead_cli.main import app
+from wowhead_cli.ranking import listing_match_score
 
 from tests.wowhead_testkit import (
     SAMPLE_BLUE_TOPIC_HTML,
@@ -58,12 +59,24 @@ def test_news_query_matches_whole_words_and_needs_every_word(monkeypatch) -> Non
         return [row["id"] for row in json.loads(result.stdout)["data"]["results"]]
 
     assert result_ids("midnight hotfixes") == [380785]
-    # A query word may start a longer word: the singular finds the plural post.
+    # Words match up to a plural ending, in either direction.
     assert result_ids("hotfix") == [380785]
-    # "fix" is inside "Hotfixes" and "bugfixes" but starts no word of either post.
+    assert result_ids("roundups") == [380700]
+    # "fix" is inside "Hotfixes" and "bugfixes", and "hot" starts "Hotfixes", but neither is that word.
     assert result_ids("fix") == []
+    assert result_ids("hot") == []
     # "tuning" matches the other post, but "hotfixes" is not in it.
     assert result_ids("tuning hotfixes") == []
+
+
+def test_listing_query_word_matches_a_possessive_but_not_a_longer_word() -> None:
+    assert listing_match_score("mage", "Mage's Tower Returns") > 0
+    assert listing_match_score("mage", "Damage Meter Changes") == 0
+    assert listing_match_score("mage", "Magelord Rommath Returns") == 0
+    assert listing_match_score("patch", "Patches Roundup") > 0
+    # "-es" is a plural ending only after a sibilant: "notes" is not "Not", "cap" is not "Capes".
+    assert listing_match_score("notes", "Patch 12.1 Is Not Live Yet") == 0
+    assert listing_match_score("cap", "New Capes in Patch 12.1") == 0
 
 
 def test_news_command_filters_by_author_and_type(monkeypatch) -> None:

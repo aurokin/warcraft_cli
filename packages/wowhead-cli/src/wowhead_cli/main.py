@@ -54,6 +54,7 @@ from wowhead_cli.citation_pack import citation_pack_from_compare, citation_pack_
 from wowhead_cli.comments_intelligence import build_comments_intelligence, filter_raw_comments
 from wowhead_cli.compare_presets import ResolvedCompareOptions, resolve_compare_options
 from wowhead_cli.entities import (
+    ENTITY_PAGE_MAX_LINKS,
     build_linked_entity_preview,
     comparison_entity_record,
     comparison_field_diffs,
@@ -61,7 +62,6 @@ from wowhead_cli.entities import (
     dedupe_links,
     entity_comments_payload,
     entity_linked_entities_payload,
-    entity_page_fetch_more_command,
     entity_page_links,
     entity_page_needs_fetch,
     truncate_text,
@@ -4725,7 +4725,7 @@ def entity_page(
         200,
         "--max-links",
         min=1,
-        max=2000,
+        max=ENTITY_PAGE_MAX_LINKS,
         help="Maximum linked entities to return.",
     ),
     include_gatherer: bool = typer.Option(
@@ -4871,17 +4871,18 @@ def _comments_payload(
             "comments": f"{canonical_url}#comments",
         },
     }
-    if options.linked_entity_preview_limit > 0:
-        payload["linked_entities"] = build_linked_entity_preview(
-            extract_linked_entities_from_href(html, source_url=canonical_url)
-            + extract_gatherer_entities(html, source_url=canonical_url),
-            entity_type=plan.page_entity_type,
-            entity_id=plan.page_entity_id,
-            preview_limit=options.linked_entity_preview_limit,
-            fetch_more_command_builder=lambda count: entity_page_fetch_more_command(
-                entity_type, entity_id, count, expansion=cfg.expansion
-            ),
-        )
+    linked_entities = entity_linked_entities_payload(
+        html=html,
+        page_url=canonical_url,
+        page_entity_type=plan.page_entity_type,
+        page_entity_id=plan.page_entity_id,
+        requested_entity_type=entity_type,
+        requested_entity_id=entity_id,
+        linked_entity_preview_limit=options.linked_entity_preview_limit,
+        expansion=cfg.expansion,
+    )
+    if linked_entities is not None:
+        payload["linked_entities"] = linked_entities
     if options.insights:
         payload["intelligence"] = build_comments_intelligence(
             page_url=canonical_url,

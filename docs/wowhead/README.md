@@ -20,7 +20,8 @@ also reports the pre-limit total — `total` for link lists, `total_matches` for
 `news`, `blue-tracker`, `guides`, and `guide-bundle-search` — next to a `truncated` flag. Blocks
 that deliberately return a sample instead (`comments`, the linked-entity preview,
 `analysis_surfaces`) report the full `count` alongside `more_available` / `needs_raw_fetch` and a
-`fetch_more_command`.
+`fetch_more_command`. `entity-page` returns at most 2000 links, so the linked-entity preview's
+`fetch_more_truncated` is true when the page has more links than its `fetch_more_command` can return.
 
 Listing rows expose both what Wowhead rendered and a machine-readable timestamp: `posted` is the
 upstream string (`news` renders "2026/09/18 at 3:30 PM", `blue-tracker` sends
@@ -32,8 +33,9 @@ that was; when a date window is requested and no scanned row carries a readable 
 command fails with `parse_error` instead of returning an empty match set.
 
 The `QUERY` of `news`, `blue-tracker` and `guides` keeps a row only when every query word appears
-in it as a whole word ("mage" does not match "Damage"; "the" and "of" are ignored unless the query
-is nothing else).
+in it as a whole word, up to a plural or possessive ending ("hotfix" matches "Hotfixes" and "mage"
+matches "Mage's", but "mage" does not match "Damage" or "Magelord"; "the" and "of" are ignored unless
+the query is nothing else).
 
 `search` results carry `entity_type` and an openable `url` for every type Wowhead's suggestion
 endpoint labels. News posts also carry a `news-post` follow-up; world events are openable but have

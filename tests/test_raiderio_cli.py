@@ -418,7 +418,7 @@ def test_raiderio_numeric_and_player_sample_helpers() -> None:
         players,
         runs=runs,
         meta={"sampled_at": "2026-03-12T00:00:00+00:00", "season": "season-tww-2", "pages_requested": 1, "pages_fetched": 1,
-              "duplicate_runs_dropped": 0},
+              "duplicates_removed": 0},
         filtering={"contains_class": ["warrior"]},
         player_sampling={"player_limit": 10, "source_player_count": 3,
                          "returned_player_count": 3, "excluded_player_count": 0, "truncated": False},
@@ -1913,6 +1913,7 @@ def test_raiderio_sample_reads_as_many_pages_as_the_limit_needs(
     payload = json.loads(result.stdout)
     assert pages == pages_read
     assert payload["data"]["sample"]["run_count"] == run_count
+    assert payload["data"]["sample"]["duplicates_removed"] == 0
     assert payload["query"]["pages"] == len(pages_read)
 
 
@@ -1939,11 +1940,25 @@ def test_raiderio_sample_counts_a_run_repeated_on_the_next_page_once(monkeypatch
     assert len(run_ids) == 39
     assert run_ids.count(9020) == 1
     # The short sample says why it is short: one repeat was dropped.
-    assert data["sample"]["duplicate_runs_dropped"] == 1
+    assert data["sample"]["duplicates_removed"] == 1
 
-    leaderboard = runner.invoke(raiderio_app, ["leaderboard", "mythic-plus", "--limit", "40"])
-    assert leaderboard.exit_code == 0, leaderboard.output
-    assert json.loads(leaderboard.stdout)["data"]["sample"]["duplicate_runs_dropped"] == 1
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["sample", "mythic-plus-players"],
+        ["distribution", "mythic-plus-runs", "--metric", "mythic_level"],
+        ["distribution", "mythic-plus-players", "--metric", "appearance_count"],
+        ["threshold", "mythic-plus-runs", "--value", "20"],
+        ["leaderboard", "mythic-plus"],
+    ],
+)
+def test_raiderio_every_sampled_payload_reports_the_repeated_run_it_dropped(monkeypatch, args: list[str]) -> None:
+    _record_pages(monkeypatch, lambda page: _twenty_run_page(page, repeat_run_id=9020 if page == 1 else None))
+    result = runner.invoke(raiderio_app, [*args, "--limit", "40"])
+    assert result.exit_code == 0, result.output
+
+    assert json.loads(result.stdout)["data"]["sample"]["duplicates_removed"] == 1
 
 
 def test_raiderio_repeated_contains_class_keeps_a_run_with_any_listed_class() -> None:

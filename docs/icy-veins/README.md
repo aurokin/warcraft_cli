@@ -151,12 +151,13 @@ misleading guide matches.
 
 `search` and `resolve` return a guide only when its name or slug contains the whole query or every
 query word, or when a query word names the guide's family (`talents`, `stats`, `easy mode`, ...). One
-word that no guide contains therefore empties the result: `frost dk` returns nothing. Words match
-whole, so `dh` does not match "headhunters", and a trailing plural `s` is ignored on both sides, so
-`build` keeps the `...-spec-builds-talents` pages. Words such as `a`, `of` and `the` are ignored, and
-`+` reads as `plus`, so `mythic+` finds the "Mythic Plus" pages and the seasonal
-`<expansion>-mythic-season-<n>-guide` pages. There are no class or spec abbreviations: `dk` and `mw`
-match nothing.
+word that no guide contains therefore empties the result. Words match whole, so `dh` does not match
+"headhunters", and a trailing plural `s` is ignored on both sides, so `build` keeps the
+`...-spec-builds-talents` pages. Words such as `a`, `of` and `the` are ignored, and `+` reads as
+`plus`, so `mythic+` finds the "Mythic Plus" pages and the seasonal
+`<expansion>-mythic-season-<n>-guide` pages. Class and spec shorthand is spelled out in the query and
+in page titles alike (`ret pally` is `retribution paladin`, `frost dk` is `frost death knight`, `mw`
+is `mistweaver`), so `disc belt` still finds the "Disc Belt Guide".
 
 A spec query (`frost mage`, `survival hunter guide`) resolves to that spec's
 `...-pve-<role>-guide`. Healer specs also publish a PvE DPS guide; their healing guide ranks first.

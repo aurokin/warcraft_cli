@@ -140,7 +140,7 @@ def test_raiderio_leaderboard_parses_a_captured_leaderboard_page(monkeypatch) ->
     assert top["dungeon_slug"] == "murder-row"
     assert top["completed_at"] == "2026-09-17T21:54:20.000Z"
     assert top["affixes"] == ["fortified", "tyrannical", "xalataths-guile"]
-    # Timed by 21.6 seconds, and logged: logged_run_id is the Warcraft Logs handoff.
+    # Timed by 21.6 seconds; logged_run_id is Raider.IO's own id for the logged run, not a Warcraft Logs report code.
     assert (top["clear_time_ms"], top["keystone_time_ms"], top["num_chests"]) == (2019411, 2040999, 1)
     assert top["run_id"] == 13240272
     assert top["logged_run_id"] == 3904086

@@ -515,7 +515,7 @@ class _FakeWarcraftLogsClient:
         assert difficulty == 5
         assert metric == "dps"
         assert size == 20
-        assert spec_name == "assassination"
+        assert spec_name == "Assassination"
         return {
             "id": 77,
             "canonicalID": 88,
@@ -1175,6 +1175,25 @@ def test_warcraftlogs_client_encounter_rankings_preserves_display_name_filters()
     assert captured["namespace"] == "encounter_rankings"
     assert captured["ttl_seconds"] == 300
     assert captured["variables"] == {"id": 3012, "className": "Hunter", "specName": "Marksmanship"}
+
+
+def test_warcraftlogs_client_sends_the_accented_realm_slug_warcraft_logs_uses() -> None:
+    # Warcraft Logs' own slug for Chants éternels is `chants-éternels` (worldData.server and
+    # character.server, checked live 2026-09-30). Dropping the accent used to send `chants-ternels`.
+    sent: list[dict[str, object]] = []
+    client = _bare_client()
+    client._guild_ttl = 300
+
+    def _fake_graphql(
+        *, operation_name: str, query: str, variables: dict[str, object], namespace: str, ttl_seconds: int
+    ) -> dict[str, object]:
+        sent.append(variables)
+        return {"characterData": {"character": {"name": "Eduarem"}}}
+
+    client._graphql = _fake_graphql
+    client.character(region="eu", realm="Chants éternels", name="Eduarem")
+
+    assert sent[0]["serverSlug"] == "chants-éternels"
 
 
 def test_warcraftlogs_doctor_reports_phase_one_capabilities(monkeypatch) -> None:
@@ -3462,6 +3481,27 @@ def test_warcraftlogs_encounter_rankings_sends_warcraft_logs_class_and_spec_slug
 
     expected_spec = "Frost" if spec_name.lower() == "frost" else "BeastMastery"
     assert sent == [("DeathKnight" if "eath" in class_name else "Hunter", expected_spec)]
+
+
+@pytest.mark.parametrize(("spec_name", "expected"), [("beast-mastery", "BeastMastery"), ("devourer", "Devourer")])
+def test_warcraftlogs_character_rankings_sends_the_warcraft_logs_spec_slug(
+    monkeypatch, spec_name: str, expected: str
+) -> None:
+    # zoneRankings ignores a spec it does not recognise and returns the character's other spec's parses.
+    sent: list[str | None] = []
+
+    class _SpecClient(_FakeWarcraftLogsClient):
+        def character_rankings(self, *, spec_name: str | None = None, **kwargs: object) -> dict[str, object]:
+            sent.append(spec_name)
+            return {"id": 77, "name": "Roguecane", "zoneRankings": {"rankings": []}}
+
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _SpecClient())
+    result = runner.invoke(
+        warcraftlogs_app, ["character-rankings", "eu", "chants-eternels", "Thorggyr", "--spec-name", spec_name]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert sent == [expected]
 
 
 def test_warcraftlogs_encounter_rankings_surfaces_embedded_provider_errors(monkeypatch) -> None:
