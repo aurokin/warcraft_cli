@@ -148,7 +148,7 @@ match nothing.
 
 A spec query (`frost mage`, `survival hunter guide`) resolves to that spec's
 `...-pve-<role>-guide`. Healer specs also publish a PvE DPS guide; their healing guide ranks first.
-A hunter spec's pets page ranks with its PvP and leveling pages, below the spec guide. A query that
+A hunter spec's pets page ranks with its PvP, leveling, hero talents and Mythic+ (`-pve-<role>-mythic-plus-guide`) pages, below the spec guide. A query that
 names a spec ranks that spec's guides (`spec_name` in `ranking.match_reasons`) above pages that only
 share the word, so `shadow` lists the Shadow Priest guide before the Shadow Enclave delve guide.
 `resolve` never picks between candidates with the same or nearly the same score, so a spec name that
@@ -182,7 +182,7 @@ separately.
 - `tests/test_icy_veins_cli.py` - parsing, ranking, command contracts, transport error envelopes
 - `tests/test_icy_veins_recorded_fixtures.py` - captured real pages (pre-redesign and Astro layouts)
   plus the slug-to-family classification table
-- `tests/e2e/test_icy_veins.py` - live end-to-end journeys, run with `make test-e2e E2E_ARGS="tests/e2e/test_icy_veins.py"`
+- `tests/e2e/test_icy_veins.py` - live end-to-end journeys, run with `make test-e2e E2E_PATHS="tests/e2e/test_icy_veins.py"`
 
 ## Not in scope
 

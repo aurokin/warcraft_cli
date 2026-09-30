@@ -91,8 +91,8 @@ warcraft --expansion retail doctor
 | Provider | Fast checks |
 | --- | --- |
 | Wowhead | `pytest -q tests/test_wowhead_schema_snapshots.py tests/test_wowhead_doctor.py` |
-| Wowhead live (opt-in) | `make test-canary`; `make test-e2e E2E_ARGS="tests/e2e/test_wowhead.py"` |
-| Warcraft Logs live (opt-in) | `make test-e2e E2E_ARGS="tests/e2e/test_warcraftlogs.py"` with credentials |
+| Wowhead live (opt-in) | `make test-canary`; `make test-e2e E2E_PATHS="tests/e2e/test_wowhead.py"` |
+| Warcraft Logs live (opt-in) | `make test-e2e E2E_PATHS="tests/e2e/test_warcraftlogs.py"` with credentials |
 | Monorepo CI | `make lint && make typecheck && pytest -q` |
 
 ### 4. Fix or narrow the contract

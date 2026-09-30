@@ -129,7 +129,7 @@ cast timeline rows.
 ## Live tests
 
 ```bash
-make test-e2e E2E_ARGS="tests/e2e/test_lorrgs.py"
+make test-e2e E2E_PATHS="tests/e2e/test_lorrgs.py"
 ```
 
 ## Source links

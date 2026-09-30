@@ -73,7 +73,7 @@ filtered result against the exact rows that bound keeps. Not every such flag has
 
 ```bash
 make test-e2e                                   # everything, about ten minutes
-make test-e2e E2E_ARGS="tests/e2e/test_wowhead.py"
+make test-e2e E2E_PATHS="tests/e2e/test_wowhead.py"
 make test-e2e E2E_ARGS="-k cooldown"
 WARCRAFT_E2E_SKIP=curseforge make test-e2e
 ```
@@ -164,10 +164,6 @@ Open weaknesses a green run does not rule out, beyond the limits above:
   `?realm=` value, so fetching the citation would prove nothing.
 - **Wowhead suggestion type 112** (Companion) has never appeared in a live response, so its label is
   unverified.
-- **`warcraftlogs graphql --introspect` has no success journey.** Warcraft Logs answers any query
-  that selects `__schema.types` with the GraphQL error "Internal server error" on both endpoints
-  (`__schema { queryType }` alone works), so the journey asserts the `graphql_error` exit 1 envelope
-  and a minimal `__schema` query instead. It goes red when upstream answers again.
 
 ## CI
 

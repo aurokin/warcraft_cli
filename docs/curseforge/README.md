@@ -84,7 +84,7 @@ warcraft curseforge addon deadly-boss-mods
 ## Re-verifying
 
 ```
-make test-e2e E2E_ARGS="tests/e2e/test_curseforge.py"
+make test-e2e E2E_PATHS="tests/e2e/test_curseforge.py"
 ```
 
 with a real `CURSEFORGE_API_KEY`. The end-to-end journey covers both resolution paths (numeric id

@@ -62,6 +62,7 @@ output flags, and many commands that used to answer wrong with `ok: true` now an
 
 ### Fixed
 
+- `icy-veins resolve` answers a spec query with the spec's guide again after Icy Veins added a hero talents page and a Mythic+ page per spec, which tied it (`frost mage`, `fury warrior guide`, `survival hunter guide` came back unresolved).
 - `warcraft talent-packet`, `talent-describe` and `simc validate-talent-transport` reach `validated` for hero-tree builds instead of stopping at `simc_trait_resolution_incomplete`.
 - `warcraft guild` no longer paired an expired raid with another raid's ranks or labelled every failure `guild_not_found`. `guide-compare-query` no longer leaves an empty `manifest.json` behind, and `resolve "fury warrior guide"` selects the current Wowhead guide again.
 - `wowhead news --date-from/--date-to` returned nothing for every window, and `blue-tracker` misread its timestamps as UTC; both now fail `parse_error` when no row's time is readable. Zone, achievement and currency suggestions route to the right entity type. `profiler` fetched the wrong page and answered `ok: true` for a missing list. Host checks no longer accept `evilwowhead.com`. Linked entities are no longer truncated silently.

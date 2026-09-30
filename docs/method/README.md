@@ -115,7 +115,7 @@ HTTP responses are cached through `warcraft_api.cache` under the `METHOD` prefix
 - `tests/test_method_cli.py`: parser behavior, command contracts, envelope conformance, transport failures
 - `tests/test_method_synthetic_fixtures.py`: hand-written HTML fixtures in `tests/fixtures/method/`, one per content family
 - `tests/test_method_captured_fixtures.py`: one captured real guide page (`captured_talents_page.html`), which pins the parser against production markup
-- `tests/e2e/test_method.py`: live end-to-end journeys, run with `make test-e2e E2E_ARGS="tests/e2e/test_method.py"`
+- `tests/e2e/test_method.py`: live end-to-end journeys, run with `make test-e2e E2E_PATHS="tests/e2e/test_method.py"`
 
 ## Source Links
 

@@ -233,26 +233,51 @@ def test_resolve_lands_a_dps_spec_on_its_pve_dps_guide(require, query: str, spec
     assert (page.data["guide"]["slug"], page.data["guide"]["content_family"]) == (expected, "spec_guide"), page.describe()
 
 
+# Spec words another Icy Veins page also uses; the site retires those pages (the Shadow Enclave delve
+# guide left the results on 2026-09-29), so the journey uses the first word that still has one.
+SHARED_SPEC_WORDS = (
+    ("shadow", "shadow-priest-pve-dps-guide"),
+    ("fire", "fire-mage-pve-dps-guide"),
+    ("preservation", "preservation-evoker-pve-healing-guide"),
+)
+
+
 def test_search_ranks_the_spec_a_bare_spec_word_names_above_pages_that_share_the_word(require) -> None:
     """``search shadow`` once listed the Shadow Enclave delve guide above the Shadow Priest guide."""
     require(PROVIDER)
-    result = run(BINARY, "search", "shadow", "--limit", "10")
+    tried: list[str] = []
+    for word, spec_guide in SHARED_SPEC_WORDS:
+        result = run(BINARY, "search", word, "--limit", "50")
+        ids = [row["id"] for row in result.data["results"]]
+        spec_prefix = spec_guide.split("-pve-")[0]
+        others = [slug for slug in ids if word in slug.split("-") and not slug.startswith(spec_prefix)]
+        if not others:
+            tried.append(word)
+            continue
+        assert ids[0] == spec_guide, result.describe()
+        return
+    raise AssertionError(f"no spec word still shares its name with another page: {tried}")
 
-    ids = [row["id"] for row in result.data["results"]]
-    assert ids and ids[0] == "shadow-priest-pve-dps-guide", result.describe()
-    # The journey only proves the ranking while another page still shares the word.
-    assert any("priest" not in slug for slug in ids), result.describe()
+
+# Hubs Icy Veins has published with their own sub-guides; the site drops sub-pages over time
+# (``player-housing-*`` went on 2026-09-29), so the journey uses the first that still has them.
+HUBS_WITH_SUB_PAGES = (("horrific visions", "horrific-visions-guide"), ("radiant echoes", "radiant-echoes-guide"), ("player housing", "player-housing-guide"))
 
 
 def test_resolve_answers_a_hub_whose_only_close_rivals_are_its_own_sub_pages(require) -> None:
     """``resolve "player housing"`` stayed unresolved: its own sub-guides scored just below the hub."""
     require(PROVIDER)
-    result = run(BINARY, "resolve", "player housing")
-
-    assert result.data["resolved"] is True, result.describe()
-    assert result.data["match"]["id"] == "player-housing-guide", result.describe()
-    # Only meaningful while the hub still has sub-pages close behind it.
-    assert any(row["id"].startswith("player-housing-") for row in result.data["candidates"][1:]), result.describe()
+    tried: list[str] = []
+    for query, hub in HUBS_WITH_SUB_PAGES:
+        result = run(BINARY, "resolve", query)
+        sub_pages = [row for row in result.data["candidates"][1:] if row["id"].startswith(hub.removesuffix("guide"))]
+        if not sub_pages:
+            tried.append(query)
+            continue
+        assert result.data["resolved"] is True, result.describe()
+        assert result.data["match"]["id"] == hub, result.describe()
+        return
+    raise AssertionError(f"no hub still lists its own sub-pages, so the rule cannot be exercised: {tried}")
 
 
 def test_resolve_leaves_a_spec_name_two_classes_share_unresolved(require) -> None:
@@ -327,20 +352,29 @@ def test_guide_full_walks_the_family_and_publishes_build_references(require) -> 
     assert all(codes) and len(set(codes)) == len(codes) >= 2, result.describe()
 
 
-def _first_guide_of_family(query: str, family: str) -> str:
+def _first_guide_of_family(query: str, family: str) -> tuple[str, Result]:
+    """The first guide of ``family`` search finds that Icy Veins still serves as itself.
+
+    A retired page stays in the sitemap but redirects elsewhere (``mistweaver-monk-legion-remix-guide``
+    serves the healing guide since 2026-09-29), so it is skipped rather than parsed as its family.
+    """
     result = run(BINARY, "search", query, "--limit", "5")
+    redirected: list[str] = []
     for row in result.data["results"]:
-        if row["metadata"]["content_family"] == family:
-            return str(row["id"])
-    raise AssertionError(f"Icy Veins search for {query!r} returned no {family}\n{result.describe()}")
+        if row["metadata"]["content_family"] != family:
+            continue
+        guide = run(BINARY, "guide", str(row["id"]))
+        if guide.data["guide"]["slug"] == row["id"]:
+            return str(row["id"]), guide
+        redirected.append(f"{row['id']} -> {guide.data['guide']['slug']}")
+    raise AssertionError(f"Icy Veins search for {query!r} returned no {family} it still serves: {redirected}\n{result.describe()}")
 
 
 @pytest.mark.parametrize(("query", "family", "traversal_scope"), FAMILY_PROBES)
 def test_every_content_family_classifies_and_parses_with_a_byline(require, query: str, family: str, traversal_scope: str) -> None:
     """A guide from each remaining family, discovered live, has to classify and parse into prose."""
     require(PROVIDER)
-    slug = _first_guide_of_family(query, family)
-    result = run(BINARY, "guide", slug)
+    slug, result = _first_guide_of_family(query, family)
 
     guide = result.data["guide"]
     assert guide["slug"] == slug

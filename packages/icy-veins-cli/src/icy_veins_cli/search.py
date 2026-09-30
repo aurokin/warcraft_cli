@@ -90,7 +90,10 @@ SPECIALIZED_QUERY_TERMS = {
 ROLE_QUERY_TERMS = {"healing", "tank", "dps"}
 # ``-guide`` pages that are one part of a spec rather than the introduction to a topic: they must not
 # outrank the spec's own ``-pve-<role>-guide`` on a bare spec query.
-SPECIALIZED_GUIDE_WORDS = frozenset({"leveling", "pvp", "pets"})
+SPECIALIZED_GUIDE_WORDS = frozenset({"leveling", "pvp", "pets", "hero"})
+# ``<spec>-pve-<role>-mythic-plus-guide`` is part of that spec's ``-pve-<role>-guide``, never its
+# introduction. (Per-raid spec pages carry their own raid-variant penalty.)
+SPEC_SUB_GUIDE_RE = re.compile(r"-pve-(?:dps|healing|tank)-mythic-plus-guide$")
 # Pages the sitemap has not seen updated for a year behind its newest page (past seasons, retired
 # raids) rank below current ones that match the query as well.
 STALE_AFTER = timedelta(days=365)
@@ -295,7 +298,7 @@ def score_slug_match(query: str, candidate: str, *, slug: str) -> tuple[int, lis
     if not query or not candidate:
         return score, reasons
     if slug.endswith("-guide"):
-        if SPECIALIZED_GUIDE_WORDS & set(slug.split("-")):
+        if SPECIALIZED_GUIDE_WORDS & set(slug.split("-")) or SPEC_SUB_GUIDE_RE.search(slug):
             score += 2
             reasons.append("specialized_guide")
         else:

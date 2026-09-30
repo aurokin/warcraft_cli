@@ -64,8 +64,7 @@ jobs:
         env:
           WARCRAFT_E2E_SKIP: raidbots-report
         run: >-
-          make test-e2e E2E_ARGS="-rs
-          tests/e2e/test_wowhead.py tests/e2e/test_method.py
+          make test-e2e E2E_ARGS="-rs" E2E_PATHS="tests/e2e/test_wowhead.py tests/e2e/test_method.py
           tests/e2e/test_raiderio.py tests/e2e/test_warcraft_wiki.py tests/e2e/test_lorrgs.py
           tests/e2e/test_raidbots.py"
 

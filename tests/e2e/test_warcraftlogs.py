@@ -41,7 +41,6 @@ from typing import Any
 from tests.e2e import pins
 from tests.e2e.harness import (
     EXIT_AUTH,
-    EXIT_GENERIC,
     EXIT_NETWORK,
     EXIT_NOT_FOUND,
     EXIT_USAGE,
@@ -1630,23 +1629,19 @@ def test_boss_kills_spec_filter_narrows_the_cohort_to_that_spec(require):
 
 
 def test_graphql_introspect_and_a_typed_query_reach_the_api(require):
-    """Raw GraphQL reaches the API, and ``--introspect`` reports upstream's refusal as a failure.
+    """Raw GraphQL reaches the API, and ``--introspect`` returns the schema.
 
-    Warcraft Logs answers any query that selects ``__schema.types`` with the GraphQL error "Internal
-    server error", on both the client and the user endpoint, while ``__schema { queryType }`` alone
-    works (probed 2026-09-24). So ``--introspect`` cannot succeed today and has to fail as
-    ``graphql_error`` (exit 1), never ``ok: true`` with an empty schema. If upstream starts answering,
-    this fails: assert the returned ``__schema`` again (see docs/architecture/E2E_TESTING.md).
+    Warcraft Logs refused any ``__schema.types`` selection with "Internal server error" from
+    2026-09-24 until 2026-09-29; if that returns, this fails on the introspection call.
     """
     require("warcraftlogs")
     found = anchor()
 
-    introspect = run("warcraftlogs", "graphql", "--introspect", expect=EXIT_GENERIC, error_code="graphql_error")
-    assert introspect.payload["error"]["message"] == "Internal server error", introspect.describe()
-
+    introspect = run("warcraftlogs", "graphql", "--introspect")
     # graphql's data is the GraphQL result itself, so introspection sits under its own __schema.
-    schema = run("warcraftlogs", "graphql", "--query", "{ __schema { queryType { name } } }")
-    assert schema.data["__schema"]["queryType"]["name"] == "Query", schema.describe()
+    schema = introspect.data["__schema"]
+    assert schema["queryType"]["name"] == "Query", introspect.describe()
+    assert len(schema["types"]) > 50, introspect.describe()
 
     query = run(
         "warcraftlogs",
