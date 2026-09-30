@@ -14,7 +14,7 @@ IMPORT_LINTER := $(VENV)/bin/lint-imports
 PRE_COMMIT := $(VENV)/bin/pre-commit
 
 .PHONY: install dev-deploy dev-deploy-no-link worktree-env test test-fast test-e2e test-canary \
-	check lint lint-boundaries lint-all complexity complexity-gate typecheck coverage deadcode \
+	check lock-check lint lint-boundaries lint-all complexity complexity-gate typecheck coverage deadcode \
 	skills reference schema build pre-commit-install benchmark-cache fixture-refresh-hints run release
 
 install:
@@ -42,7 +42,11 @@ test-fast:
 test-e2e:
 	WARCRAFT_E2E=1 $(PYTEST) -q -m e2e tests/e2e --durations=25 $(E2E_ARGS)
 
-check: lint typecheck lint-boundaries complexity-gate deadcode coverage
+check: lock-check lint typecheck lint-boundaries complexity-gate deadcode coverage
+
+# uv.lock must match every pyproject.toml; CI installs with --frozen, which never checks it.
+lock-check:
+	uv lock --check
 
 # The one live test outside tests/e2e: pinned Wowhead pages through the parsers (weekly in CI).
 test-canary:
