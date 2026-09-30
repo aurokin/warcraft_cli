@@ -1009,10 +1009,15 @@ def test_warcraft_guide_compare_query_orchestrates_resolve_export_and_compare(
         return {
             "provider": provider,
             "exit_code": 0,
-            "payload": _envelope({"output_dir": str(export_dir), "guide": payload["guide"]}),
+            "payload": _envelope({"output_dir": str(export_dir), "guide": payload["guide"], "redirect": redirects[provider]}),
             "stdout": "",
         }
 
+    # Icy Veins served another guide than the resolved one (a retired, redirected page).
+    redirects: dict[str, dict[str, str] | None] = {
+        "method": None,
+        "icy-veins": {"requested": "mistweaver-monk-pve-healing-guide", "served": "mistweaver-monk-healing-guide", "message": "moved"},
+    }
     monkeypatch.setattr("warcraft_cli.main.provider_resolve", fake_provider_resolve)
     monkeypatch.setattr("warcraft_cli.main.provider_invoke", fake_provider_invoke)
 
@@ -1043,6 +1048,7 @@ def test_warcraft_guide_compare_query_orchestrates_resolve_export_and_compare(
     assert "comparison_evidence" in payload["data"]["comparison"]
     assert payload["data"]["comparison"]["comparison_evidence"]["compared_bundle_count"] == 2
     assert all(row["status"] == "exported" for row in payload["data"]["provider_results"])
+    assert {row["provider"]: row["redirect"] for row in payload["data"]["provider_results"]} == redirects
     assert {row["candidate"]["selection_source"] for row in payload["data"]["provider_results"]} == {"resolve"}
 
 

@@ -117,7 +117,9 @@ Every command's flags are listed in [docs/reference/warcraft.md](../reference/wa
   with those providers' shared code and exit code (a network outage is `network_error`, exit 5),
   and each `provider_results` row carries its `error`. With `--simc-build-handoff`, a handoff whose
   status is `all_handoffs_failed` fails `simc_handoff_failed` (exit 1) exactly as
-  `guide-builds-simc` does, with the comparison under `error.details`.
+  `guide-builds-simc` does, with the comparison under `error.details`. An exported
+  `provider_results` row carries the provider's `redirect` (non-null when it served another guide
+  than the resolved candidate, such as a retired page).
 - `warcraft talent-packet` / `talent-describe` — build a validated talent transport packet, optionally
   with simc `describe-build` output. Both report the file they wrote as `written_packet_path`.
 - `warcraft guide-builds-simc` — turn explicit build references in exported bundles into a simc packet.

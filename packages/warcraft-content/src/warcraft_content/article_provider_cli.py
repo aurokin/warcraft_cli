@@ -49,3 +49,22 @@ def build_article_resolve_response(
 
 def unsupported_guide_surface_message(*, provider_name: str, slug: str, content_family: str | None) -> str:
     return f"Unsupported {provider_name} guide surface for slug={slug!r} family={content_family!r}."
+
+
+def guide_redirect(*, provider_label: str, requested: str, served: str) -> dict[str, str] | None:
+    """The ``redirect`` block of a guide payload: set when the site served another guide than the one asked for.
+
+    Sites retire a guide by redirecting its URL (Icy Veins sends ``mistweaver-monk-legion-remix-guide`` to
+    the healing guide), and everything else in the payload then describes ``served``, so an agent that
+    asked for ``requested`` has to be told rather than left to notice the slug changed.
+    """
+    if requested == served:
+        return None
+    return {
+        "requested": requested,
+        "served": served,
+        "message": (
+            f"{provider_label} served {served} instead of {requested}, usually because {requested} was retired; "
+            f"everything in this payload describes {served}."
+        ),
+    }

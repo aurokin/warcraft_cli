@@ -2625,6 +2625,8 @@ def _guide_compare_export_row(
         "bundle_path": str(export_dir),
         "freshness": _guide_compare_freshness(exported_at, max_age_hours=max_age_hours),
         "exported_at": exported_at,
+        # Set when the provider served another guide than the candidate (a retired, redirected page).
+        "redirect": as_dict(as_dict(export_result.get("payload")).get("data")).get("redirect"),
         "export": export_result.get("payload"),
     }, (export_dir, bundle)
 
