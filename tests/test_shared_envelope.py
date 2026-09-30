@@ -69,14 +69,14 @@ def test_envelope_violations_flags_each_type_rule(payload: dict[str, Any], probl
 
 
 def test_exit_code_for_maps_known_codes_and_defaults_to_generic() -> None:
-    assert exit_code_for("auth_required") == EXIT_AUTH
+    assert exit_code_for("auth_failed") == EXIT_AUTH
     assert exit_code_for("not_found") == EXIT_NOT_FOUND
     assert exit_code_for("something_else") == EXIT_GENERIC
 
 
 def test_provider_error_defaults_exit_code_from_code() -> None:
-    assert ProviderError("auth_required", "login first").exit_code == EXIT_AUTH
-    assert ProviderError("auth_required", "login first", exit_code=1).exit_code == 1
+    assert ProviderError("auth_failed", "login first").exit_code == EXIT_AUTH
+    assert ProviderError("auth_failed", "login first", exit_code=1).exit_code == 1
     assert str(ProviderError("x", "boom")) == "boom"
 
 

@@ -13,7 +13,7 @@ binary shares, and [docs/reference/](../reference/README.md) for the generated c
 
 ### Monorepo Shape
 
-One repository, 16 package-level projects: three shared libraries, the `warcraft` wrapper, and 12
+One repository, 15 package-level projects: three shared libraries, the `warcraft` wrapper, and 11
 provider CLIs. Each provider package builds from its own source plus the shared packages, and never
 from another provider package.
 

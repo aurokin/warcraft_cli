@@ -12,7 +12,10 @@ import simc_cli.compare as simc_compare
 import simc_cli.main as simc_main
 from simc_cli.build_input import BuildIdentity, BuildResolution, BuildSpec, DecodedTalent, HeroTree, SimcBuildError
 from simc_cli.main import app as simc_app
+from simc_cli.prune import PruneContext
 from simc_cli.repo import RepoPaths
+from simc_cli.report import summarize_sim_report
+from simc_cli.run import CommandResult
 from simc_cli.search import word_bounded_pattern
 from simc_cli.trait_data import parse_trait_table
 from typer.testing import CliRunner
@@ -80,6 +83,11 @@ def _checkout(tmp_path: Path) -> Path:
         (tmp_path / relative).mkdir(parents=True, exist_ok=True)
     (tmp_path / "build" / "simc").write_text("")
     return tmp_path
+
+
+def _checkout_args(tmp_path: Path) -> list[str]:
+    """``--repo-root`` for a checkout stub, so build identification reads its spec table."""
+    return ["--repo-root", str(_checkout(tmp_path / "simc"))]
 
 
 def _stub_binary_banner(monkeypatch, banner: str = "SimulationCraft 1201 (git build midnight 0908ace08c)") -> None:
@@ -1953,12 +1961,11 @@ def test_simc_describe_build_summarizes_st_and_aoe(monkeypatch, tmp_path: Path) 
         inactive_hero_talents=[_talent("hero", "Void Reaver", 6)],
     )
 
-    def _resolve_prune_context(_paths, _apl, _values, targets):
-        context = type("Context", (), {"targets": targets, "enabled_talents": {"void_ray", "world_killer"},
-                       "disabled_talents": set(), "talent_sources": {"void_ray": "spec"}})()
+    def _resolve_prune_context(_paths, _build_spec, _values, targets):
+        context = PruneContext(targets=targets, enabled_talents={"void_ray", "world_killer"}, disabled_talents=set(), talent_sources={"void_ray": "spec"})
         return context, resolution
 
-    monkeypatch.setattr("simc_cli.main._resolve_prune_context", _resolve_prune_context)
+    monkeypatch.setattr("simc_cli.main._prune_context", _resolve_prune_context)
 
     def _describe_target_payload(_resolved, context, *, start_list, priority_limit, inactive_limit):
         if context.targets == 1:
@@ -2076,12 +2083,12 @@ def test_simc_describe_build_accepts_build_packet(monkeypatch, tmp_path: Path) -
             source_notes=['talent transport packet', 'decoded via /tmp/simc'],
         )
 
-    def fake_resolve_prune_context(_paths, _apl, option_values, targets):  # noqa: ANN001
+    def fake_resolve_prune_context(_paths, _build_spec, option_values, targets):  # noqa: ANN001
         assert option_values["build_packet"] == str(packet_path)
-        context = type("Context", (), {"targets": targets, "enabled_talents": {"wrath"}, "disabled_talents": set(), "talent_sources": {}})()
+        context = PruneContext(targets=targets, enabled_talents={"wrath"}, disabled_talents=set(), talent_sources={})
         return context, resolution
 
-    monkeypatch.setattr("simc_cli.main._resolve_prune_context", fake_resolve_prune_context)
+    monkeypatch.setattr("simc_cli.main._prune_context", fake_resolve_prune_context)
     monkeypatch.setattr(
         "simc_cli.main._describe_target_payload",
         lambda _resolved, context, *, start_list, priority_limit, inactive_limit: {
@@ -2154,13 +2161,12 @@ def test_simc_describe_build_uses_validated_split_packet_identity(monkeypatch, t
             source_notes=['talent transport packet', 'decoded via /tmp/simc'],
         )
 
-    def fake_resolve_prune_context(_paths, _apl, option_values, targets):  # noqa: ANN001
+    def fake_resolve_prune_context(_paths, _build_spec, option_values, targets):  # noqa: ANN001
         assert option_values["build_packet"] == str(packet_path)
-        context = type("Context", (), {"targets": targets, "enabled_talents": {
-                       "mind_blast"}, "disabled_talents": set(), "talent_sources": {}})()
+        context = PruneContext(targets=targets, enabled_talents={"mind_blast"}, disabled_talents=set(), talent_sources={})
         return context, resolution
 
-    monkeypatch.setattr("simc_cli.main._resolve_prune_context", fake_resolve_prune_context)
+    monkeypatch.setattr("simc_cli.main._prune_context", fake_resolve_prune_context)
     monkeypatch.setattr(
         "simc_cli.main._describe_target_payload",
         lambda _resolved, context, *, start_list, priority_limit, inactive_limit: {
@@ -2237,12 +2243,12 @@ def test_simc_describe_build_accepts_wow_export_transport_form_from_build_packet
             source_notes=['talent transport packet'],
         )
 
-    def fake_resolve_prune_context(_paths, _apl, option_values, targets):  # noqa: ANN001
+    def fake_resolve_prune_context(_paths, _build_spec, option_values, targets):  # noqa: ANN001
         assert option_values["build_packet"] == str(packet_path)
-        context = type("Context", (), {"targets": targets, "enabled_talents": {"wrath"}, "disabled_talents": set(), "talent_sources": {}})()
+        context = PruneContext(targets=targets, enabled_talents={"wrath"}, disabled_talents=set(), talent_sources={})
         return context, resolution
 
-    monkeypatch.setattr("simc_cli.main._resolve_prune_context", fake_resolve_prune_context)
+    monkeypatch.setattr("simc_cli.main._prune_context", fake_resolve_prune_context)
     monkeypatch.setattr(
         "simc_cli.main._describe_target_payload",
         lambda _resolved, context, *, start_list, priority_limit, inactive_limit: {
@@ -2323,12 +2329,12 @@ def test_simc_describe_build_probes_wow_export_packet_instead_of_trusting_packet
             source_notes=['talent transport packet'],
         )
 
-    def fake_resolve_prune_context(_paths, _apl, option_values, targets):  # noqa: ANN001
+    def fake_resolve_prune_context(_paths, _build_spec, option_values, targets):  # noqa: ANN001
         assert option_values["build_packet"] == str(packet_path)
-        context = type("Context", (), {"targets": targets, "enabled_talents": {"wrath"}, "disabled_talents": set(), "talent_sources": {}})()
+        context = PruneContext(targets=targets, enabled_talents={"wrath"}, disabled_talents=set(), talent_sources={})
         return context, resolution
 
-    monkeypatch.setattr("simc_cli.main._resolve_prune_context", fake_resolve_prune_context)
+    monkeypatch.setattr("simc_cli.main._prune_context", fake_resolve_prune_context)
     monkeypatch.setattr(
         "simc_cli.main._describe_target_payload",
         lambda _resolved, context, *, start_list, priority_limit, inactive_limit: {
@@ -2469,20 +2475,11 @@ def test_simc_describe_build_uses_leaf_focus_and_full_action_diff(monkeypatch, t
             source_notes=['decoded via /tmp/simc'],
         )
 
-    def _resolve_prune_context(_paths, _apl, _values, targets):
-        context = type(
-            "Context",
-            (),
-            {
-                "targets": targets,
-                "enabled_talents": {"void_ray"},
-                "disabled_talents": set(),
-                "talent_sources": {"void_ray": "spec"},
-            },
-        )()
+    def _resolve_prune_context(_paths, _build_spec, _values, targets):
+        context = PruneContext(targets=targets, enabled_talents={"void_ray"}, disabled_talents=set(), talent_sources={"void_ray": "spec"})
         return context, resolution
 
-    monkeypatch.setattr("simc_cli.main._resolve_prune_context", _resolve_prune_context)
+    monkeypatch.setattr("simc_cli.main._prune_context", _resolve_prune_context)
 
     result = runner.invoke(
         simc_app,
@@ -3456,15 +3453,20 @@ def test_simc_build_harness_compare_report_and_verify_clean(monkeypatch, tmp_pat
             "Validation",
             (),
             {
-                "result": type("Result", (), {"returncode": 0, "stdout": "ok\n", "stderr": ""})(),
+                "result": type("Result", (), {"returncode": 0, "stdout": "".join(f"line {n}\n" for n in range(25)), "stderr": ""})(),
             },
         )(),
     )
-    validate_result = runner.invoke(simc_app, ["validate-apl", str(harness_path), str(apl), "--label", "wowhead"])
+    validate_result = runner.invoke(
+        simc_app, [*_checkout_args(tmp_path), "validate-apl", str(harness_path), str(apl), "--label", "wowhead"]
+    )
     assert validate_result.exit_code == 0
     validate_payload = json.loads(validate_result.stdout)
     assert validate_payload["data"]["valid"] is True
     assert validate_payload["data"]["label"] == "wowhead"
+    # The preview keeps the last 20 lines and says the earlier ones were cut.
+    assert validate_payload["data"]["stdout_preview"][0] == "line 5"
+    assert (validate_payload["data"]["stdout_truncated"], validate_payload["data"]["stderr_truncated"]) == (True, False)
 
     # Only the SimC run is stubbed, so the ranking, deltas and sampling disclosure are computed for real.
     dps_by_label = {"base": 100.0, "wowhead": 99.0}
@@ -3479,7 +3481,7 @@ def test_simc_build_harness_compare_report_and_verify_clean(monkeypatch, tmp_pat
     monkeypatch.setattr("simc_cli.compare._simulate_variant", fake_simulate)
     compare_result = runner.invoke(
         simc_app,
-        ["compare-apls", str(harness_path), "--base-apl", str(apl), "--variant",
+        [*_checkout_args(tmp_path), "compare-apls", str(harness_path), "--base-apl", str(apl), "--variant",
          f"wowhead={apl}", "--skip-validate", "--out-dir", str(tmp_path / "compare"),
          "--report-out", str(tmp_path / "report.json")],
     )
@@ -3663,26 +3665,25 @@ def test_simc_apl_prune_branch_trace_and_intent(monkeypatch, tmp_path: Path) -> 
         + "\n"
     )
     monkeypatch.setattr(
-        "simc_cli.main._resolve_prune_context",
-        lambda paths, apl_path, option_values, targets: (
-            type("Context", (), {"enabled_talents": {"mass_disintegrate"}, "disabled_talents": set(),
-                 "targets": targets, "talent_sources": {"mass_disintegrate": "spec"}})(),
+        "simc_cli.main._prune_context",
+        lambda paths, build_spec, option_values, targets: (
+            PruneContext(enabled_talents={"mass_disintegrate"}, disabled_talents=set(), targets=targets, talent_sources={"mass_disintegrate": "spec"}),
             _resolution(actor_class="evoker", spec="devastation"),
         ),
     )
 
-    prune_result = runner.invoke(simc_app, ["apl-prune", str(apl), "--targets", "3"])
+    prune_result = runner.invoke(simc_app, [*_checkout_args(tmp_path), "apl-prune", str(apl), "--targets", "3"])
     assert prune_result.exit_code == 0
     prune_payload = json.loads(prune_result.stdout)
     assert prune_payload["data"]["lists"][0]["items"][0]["state"] == "eligible"
 
-    trace_result = runner.invoke(simc_app, ["apl-branch-trace", str(apl), "--targets", "3"])
+    trace_result = runner.invoke(simc_app, [*_checkout_args(tmp_path), "apl-branch-trace", str(apl), "--targets", "3"])
     assert trace_result.exit_code == 0
     trace_payload = json.loads(trace_result.stdout)
     assert trace_payload["data"]["summary"]["guaranteed_dispatch"] == "aoe"
     assert trace_payload["data"]["trace"][0]["text"] == "[default]"
 
-    intent_result = runner.invoke(simc_app, ["apl-intent", str(apl), "--targets", "1"])
+    intent_result = runner.invoke(simc_app, [*_checkout_args(tmp_path), "apl-intent", str(apl), "--targets", "1"])
     assert intent_result.exit_code == 0
     intent_payload = json.loads(intent_result.stdout)
     assert intent_payload["data"]["focus_list"] == "st"
@@ -3705,36 +3706,27 @@ def test_simc_priority_inactive_actions_and_opener(monkeypatch, tmp_path: Path) 
         + "\n"
     )
     monkeypatch.setattr(
-        "simc_cli.main._resolve_prune_context",
-        lambda paths, apl_path, option_values, targets: (
-            type(
-                "Context",
-                (),
-                {
-                    "enabled_talents": {"void_ray", "predators_wake"},
-                    "disabled_talents": set(),
-                    "targets": targets,
-                    "talent_sources": {"void_ray": "spec", "predators_wake": "spec"},
-                },
-            )(),
+        "simc_cli.main._prune_context",
+        lambda paths, build_spec, option_values, targets: (
+            PruneContext(enabled_talents={"void_ray", "predators_wake"}, disabled_talents=set(), targets=targets, talent_sources={"void_ray": "spec", "predators_wake": "spec"}),
             _resolution(actor_class="demonhunter", spec="devourer"),
         ),
     )
 
-    priority_result = runner.invoke(simc_app, ["priority", str(apl), "--targets", "5"])
+    priority_result = runner.invoke(simc_app, [*_checkout_args(tmp_path), "priority", str(apl), "--targets", "5"])
     assert priority_result.exit_code == 0
     priority_payload = json.loads(priority_result.stdout)
     assert priority_payload["data"]["priority"]["focus_list"] == "aoe"
     assert [row["action"] for row in priority_payload["data"]["priority"]["items"][:2]] == ["void_ray", "reapers_toll"]
     assert priority_payload["data"]["priority"]["inactive_talent_branches"][0]["action"] == "collapsing_star"
 
-    inactive_result = runner.invoke(simc_app, ["inactive-actions", str(apl), "--targets", "5"])
+    inactive_result = runner.invoke(simc_app, [*_checkout_args(tmp_path), "inactive-actions", str(apl), "--targets", "5"])
     assert inactive_result.exit_code == 0
     inactive_payload = json.loads(inactive_result.stdout)
     assert inactive_payload["data"]["inactive_actions"]["count"] == 1
     assert inactive_payload["data"]["inactive_actions"]["items"][0]["action"] == "collapsing_star"
 
-    opener_result = runner.invoke(simc_app, ["opener", str(apl), "--targets", "5", "--limit", "3"])
+    opener_result = runner.invoke(simc_app, [*_checkout_args(tmp_path), "opener", str(apl), "--targets", "5", "--limit", "3"])
     assert opener_result.exit_code == 0
     opener_payload = json.loads(opener_result.stdout)
     assert opener_payload["data"]["opener"]["kind"] == "static_priority_preview"
@@ -3756,35 +3748,26 @@ def test_simc_intent_explain_branch_compare_and_analysis_packet(monkeypatch, tmp
         + "\n"
     )
 
-    def fake_context(paths, apl_path, option_values, targets):  # noqa: ANN001
+    def fake_context(paths, build_spec, option_values, targets):  # noqa: ANN001
         return (
-            type(
-                "Context",
-                (),
-                {
-                    "enabled_talents": {"mass_disintegrate"} if targets == 1 else set(),
-                    "disabled_talents": set(),
-                    "targets": targets,
-                    "talent_sources": {"mass_disintegrate": "spec"},
-                },
-            )(),
+            PruneContext(enabled_talents={"mass_disintegrate"} if targets == 1 else set(), disabled_talents=set(), targets=targets, talent_sources={"mass_disintegrate": "spec"}),
             _resolution(actor_class="evoker", spec="devastation"),
         )
 
-    monkeypatch.setattr("simc_cli.main._resolve_prune_context", fake_context)
+    monkeypatch.setattr("simc_cli.main._prune_context", fake_context)
 
-    explain_result = runner.invoke(simc_app, ["apl-intent-explain", str(apl), "--targets", "1"])
+    explain_result = runner.invoke(simc_app, [*_checkout_args(tmp_path), "apl-intent-explain", str(apl), "--targets", "1"])
     assert explain_result.exit_code == 0
     explain_payload = json.loads(explain_result.stdout)
     assert explain_payload["data"]["explained_intent"]["priorities"]
 
-    compare_result = runner.invoke(simc_app, ["apl-branch-compare", str(apl), "--left-targets", "3", "--right-targets", "1"])
+    compare_result = runner.invoke(simc_app, [*_checkout_args(tmp_path), "apl-branch-compare", str(apl), "--left-targets", "3", "--right-targets", "1"])
     assert compare_result.exit_code == 0
     compare_payload = json.loads(compare_result.stdout)
     assert compare_payload["data"]["comparison"]["dispatch_changed"] is True
     assert compare_payload["data"]["comparison"]["left_focus_intent"]
 
-    packet_result = runner.invoke(simc_app, ["analysis-packet", str(apl), "--targets", "1"])
+    packet_result = runner.invoke(simc_app, [*_checkout_args(tmp_path), "analysis-packet", str(apl), "--targets", "1"])
     assert packet_result.exit_code == 0
     packet_payload = json.loads(packet_result.stdout)
     assert packet_payload["data"]["packet"]["focus_list"] == "st"
@@ -3839,9 +3822,9 @@ def test_simc_analysis_packet_surfaces_runtime_timing_failures(monkeypatch, tmp_
     apl.write_text("actions.st+=/disintegrate\n")
 
     monkeypatch.setattr(
-        "simc_cli.main._resolve_prune_context",
-        lambda paths, apl_path, option_values, targets: (
-            type("Context", (), {"enabled_talents": set(), "disabled_talents": set(), "targets": targets, "talent_sources": {}})(),
+        "simc_cli.main._prune_context",
+        lambda paths, build_spec, option_values, targets: (
+            PruneContext(enabled_talents=set(), disabled_talents=set(), targets=targets, talent_sources={}),
             _resolution(actor_class="evoker", spec="devastation"),
         ),
     )
@@ -3850,8 +3833,11 @@ def test_simc_analysis_packet_surfaces_runtime_timing_failures(monkeypatch, tmp_
     result = runner.invoke(
         simc_app,
         [
+            *_checkout_args(tmp_path),
             "analysis-packet",
             str(apl),
+            "--list",
+            "st",
             "--targets",
             "1",
             "--sim-profile",
@@ -3904,7 +3890,8 @@ def test_simc_sync_skips_dirty_repo(monkeypatch, tmp_path: Path) -> None:
 def test_simc_build_surfaces_success(monkeypatch, tmp_path: Path) -> None:
     repo_root = tmp_path / "simc"
     build_dir = repo_root / "build"
-    build_dir.mkdir(parents=True)
+    repo_root.mkdir()
+    (repo_root / "CMakeLists.txt").write_text("")
     monkeypatch.setattr(
         "simc_cli.main._repo_paths",
         lambda ctx: RepoPaths(
@@ -3949,7 +3936,7 @@ def test_simc_run_surfaces_failure_with_preview(monkeypatch, tmp_path: Path) -> 
         lambda paths: type("VersionInfo", (), {"binary_path": paths.build_simc, "available": True,
                            "version_line": "SimulationCraft 1201", "returncode": 1})(),
     )
-    result = runner.invoke(simc_app, ["run", str(profile)])
+    result = runner.invoke(simc_app, [*_checkout_args(tmp_path), "run", str(profile)])
     assert result.exit_code == 1
     payload = json.loads(result.stderr)
     assert payload["ok"] is False
@@ -3977,6 +3964,7 @@ def test_simc_sim_uses_quick_preset_and_surfaces_run_metadata(monkeypatch, tmp_p
                             "max_time": 300,
                             "vary_combat_length": 0.2,
                             "seed": 12345,
+                            "confidence_estimator": 2.0,
                             "dbc": {
                                 "version_used": "Live",
                                 "Live": {"wow_version": "12.0.1.66263"},
@@ -3997,8 +3985,7 @@ def test_simc_sim_uses_quick_preset_and_surfaces_run_metadata(monkeypatch, tmp_p
                                 "role": "tank",
                                 "collected_data": {
                                     "fight_length": {"mean": 299.37, "count": 1003},
-                                    "dps": {"mean": 18834.4},
-                                    "dpse": {"mean": 37.2},
+                                    "dps": {"mean": 18834.4, "mean_std_dev": 19.0},
                                     "dtps": {"mean": 75769.2},
                                     "hps": {"mean": 2210.9},
                                     "deaths": {"mean": 0.0},
@@ -4018,7 +4005,7 @@ def test_simc_sim_uses_quick_preset_and_surfaces_run_metadata(monkeypatch, tmp_p
         )()
 
     monkeypatch.setattr("simc_cli.main.run_profile", _run)
-    result = runner.invoke(simc_app, ["sim", str(profile)])
+    result = runner.invoke(simc_app, [*_checkout_args(tmp_path), "sim", str(profile)])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["data"]["preset"] == "quick"
@@ -4028,6 +4015,9 @@ def test_simc_sim_uses_quick_preset_and_surfaces_run_metadata(monkeypatch, tmp_p
     assert payload["data"]["run_settings"]["stop_reason"] == "fixed_iterations_completed"
     assert payload["data"]["runtime"]["elapsed_time_seconds"] == 4.33
     assert payload["data"]["metrics"]["dps"] == 18834.4
+    # SimC's DPS error: dps.mean_std_dev * confidence_estimator, and the percentage of mean DPS it is.
+    assert payload["data"]["metrics"]["dps_error"] == 38.0
+    assert payload["data"]["run_settings"]["target_error_percent"] == 0.202
     assert payload["data"]["metrics"]["dtps"] == 75769.2
     assert payload["data"]["metrics"]["fight_length"] == 299.37
     assert payload["data"]["simc_version"] == "SimulationCraft 1201-01"
@@ -4064,7 +4054,6 @@ def test_simc_sim_reads_stdin_and_respects_overrides(monkeypatch, tmp_path: Path
                                 "collected_data": {
                                     "fight_length": {"mean": 180.0, "count": 6003},
                                     "dps": {"mean": 21000.0},
-                                    "dpse": {"mean": 50.0},
                                     "dtps": {"mean": 80000.0},
                                     "hps": {"mean": 2500.0},
                                     "deaths": {"mean": 0.0},
@@ -4086,7 +4075,7 @@ def test_simc_sim_reads_stdin_and_respects_overrides(monkeypatch, tmp_path: Path
     monkeypatch.setattr("simc_cli.main.run_profile", _run)
     result = runner.invoke(
         simc_app,
-        ["sim", "-", "--preset", "high-accuracy", "--iterations", "6000", "--max-time", "180", "--fight-style",
+        [*_checkout_args(tmp_path), "sim", "-", "--preset", "high-accuracy", "--iterations", "6000", "--max-time", "180", "--fight-style",
             "HecticAddCleave", "--targets", "5", "--threads", "4", "--vary-combat-length", "0.1"],
         input='paladin="stdin-example"\n',
     )
@@ -4176,10 +4165,11 @@ def test_simc_describe_build_rejects_a_disable_value_that_names_no_talent(tmp_pa
     assert payload["error"]["details"]["unknown_talents"] == ["Spear Hand Strike"]
 
 
-# The branch-compare APL: Arcane Tempo decides which list the build dispatches to.
+# The branch-compare APL: Arcane Tempo decides which list the build dispatches to. `plain` is
+# runtime-gated, so both builds keep `default` as their focus list and the difference is a focus change.
 TEMPO_APL = (
     "actions=call_action_list,name=tempo,if=talent.arcane_tempo\n"
-    "actions+=/call_action_list,name=plain\n"
+    "actions+=/call_action_list,name=plain,if=mana.pct>50\n"
     "actions.tempo=arcane_blast\n"
     "actions.plain=arcane_missiles\n"
 )
@@ -4251,3 +4241,244 @@ def test_simc_describe_build_reports_talent_gated_and_runtime_rows_from_the_real
         ("presence_of_mind", "talent.presence_of_mind=false")
     ]
     assert [row["action"] for row in single["runtime_sensitive"]] == ["arcane_blast"]
+
+
+def _invoke(tmp_path: Path, *args: str) -> tuple[int, dict[str, Any]]:
+    result = runner.invoke(simc_app, [*_checkout_args(tmp_path), *args])
+    return result.exit_code, json.loads(result.stdout or result.stderr)
+
+
+WINDWALKER_APL = "actions=call_action_list,name=st,if=active_enemies=1\nactions.st=tiger_palm\nactions.st+=/rising_sun_kick\n"
+
+
+@pytest.mark.parametrize(
+    ("build_args", "code"),
+    [
+        (["--talents", "https://example.com/foo"], "unsupported_build_reference"),
+        (["--profile-path", "/nonexistent/profile.simc"], "invalid_query"),
+        (["--talents="], "invalid_query"),
+    ],
+)
+@pytest.mark.parametrize("command", ["priority", "apl-prune", "analysis-packet", "apl-branch-compare"])
+def test_apl_analysis_commands_report_bad_build_input_as_a_usage_error(
+    tmp_path: Path, command: str, build_args: list[str], code: str
+) -> None:
+    """These commands used to report a bad build input as `<command>_failed`, exit 1, while
+    decode-build reported the same input as a usage error."""
+    apl = tmp_path / "monk_windwalker.simc"
+    apl.write_text(WINDWALKER_APL)
+
+    exit_code, payload = _invoke(tmp_path, command, str(apl), *build_args)
+
+    assert (exit_code, payload["error"]["code"]) == (2, code)
+
+
+def test_apl_analysis_rejects_talents_it_cannot_tie_to_a_class_and_spec(monkeypatch, tmp_path: Path) -> None:
+    """Split talents on an APL whose file name names no spec cannot be decoded: a usage error, not priority_failed."""
+    apl = tmp_path / "custom.simc"
+    apl.write_text(WINDWALKER_APL)
+    # Identification found no class or spec for the talents (no binary runs in this test).
+    monkeypatch.setattr(
+        "simc_cli.main.identify_build",
+        lambda _paths, spec, *, apl_path: (
+            spec,
+            BuildIdentity(actor_class=None, spec=None, confidence="none", source="unresolved", candidate_count=0),
+        ),
+    )
+
+    exit_code, payload = _invoke(tmp_path, "priority", str(apl), "--class-talents", "1:1", "--spec-talents", "2:1")
+
+    assert (exit_code, payload["error"]["code"]) == (2, "invalid_query")
+
+
+def test_an_unknown_action_list_is_not_found_instead_of_an_empty_answer(tmp_path: Path) -> None:
+    apl = tmp_path / "monk_windwalker.simc"
+    apl.write_text(WINDWALKER_APL)
+
+    for command in ("priority", "apl-lists", "apl-prune", "apl-branch-trace", "opener", "inactive-actions"):
+        exit_code, payload = _invoke(tmp_path, command, str(apl), "--list", "no_such_list")
+        assert (exit_code, payload["error"]["code"]) == (4, "not_found"), command
+        assert payload["error"]["details"]["available_lists"] == ["default", "st"]
+
+
+def _decoded_as(monkeypatch, resolution: BuildResolution) -> None:
+    monkeypatch.setattr("simc_cli.main.decode_build", lambda _paths, _spec: resolution)
+
+
+def test_apl_views_resolve_hero_tree_and_talent_suffixes_from_the_decoded_build(monkeypatch, tmp_path: Path) -> None:
+    """A Shado-Pan build whose APL tests `hero_tree.shadopan` and `talent.X.enabled`."""
+    _decoded_as(
+        monkeypatch,
+        _resolution(
+            actor_class="monk",
+            spec="brewmaster",
+            talents_by_tree={"class": [], "spec": [_talent("spec", "Press the Advantage", 1)], "hero": [], "selection": []},
+            hero_tree=HeroTree(name="Shado-Pan", id=66),
+        ),
+    )
+    apl = tmp_path / "monk_brewmaster.simc"
+    apl.write_text(
+        "actions=run_action_list,name=shado_pan,if=hero_tree.shadopan&talent.press_the_advantage.enabled\n"
+        "actions+=/run_action_list,name=harmony\n"
+        "actions.shado_pan=keg_smash\n"
+        "actions.harmony=tiger_palm\n"
+    )
+
+    exit_code, payload = _invoke(tmp_path, "apl-prune", str(apl), "--actor-class", "monk", "--spec", "brewmaster", "--list", "default")
+
+    assert exit_code == 0
+    first = payload["data"]["lists"][0]["items"][0]
+    assert (first["state"], first["reason"]) == ("eligible", "hero_tree.shadopan=true; talent.press_the_advantage=true [spec]")
+    # Every APL view reports the build's talents as a list, like priority and describe-build do.
+    assert payload["data"]["build"]["enabled_talents"] == ["press_the_advantage"]
+    assert payload["data"]["build"]["enabled_talent_count"] == 1
+
+
+def test_priority_reports_how_many_active_rows_the_limit_cut(tmp_path: Path) -> None:
+    apl = tmp_path / "monk_windwalker.simc"
+    apl.write_text(WINDWALKER_APL)
+
+    exit_code, payload = _invoke(tmp_path, "priority", str(apl), "--limit", "1")
+
+    assert exit_code == 0
+    priority = payload["data"]["priority"]
+    assert (priority["focus_list"], priority["count"], priority["total"], priority["truncated"]) == ("st", 1, 2, True)
+
+
+def test_a_relative_apl_path_names_the_file_under_the_current_directory(monkeypatch, tmp_path: Path) -> None:
+    """It used to resolve against the SimC checkout, so a file next to the caller was not found."""
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / "my_ww.simc").write_text(WINDWALKER_APL)
+    monkeypatch.chdir(work)
+
+    exit_code, payload = _invoke(tmp_path, "apl-lists", "my_ww.simc")
+
+    assert exit_code == 0
+    assert payload["data"]["apl"]["path"] == str((work / "my_ww.simc").resolve())
+
+
+def test_analysis_packet_refuses_a_first_cast_action_it_cannot_sim(tmp_path: Path) -> None:
+    """With no profile the timing pass was skipped and first_casts came back empty with ok:true."""
+    apl = tmp_path / "monk_windwalker.simc"
+    apl.write_text(WINDWALKER_APL)
+
+    exit_code, payload = _invoke(tmp_path, "analysis-packet", str(apl), "--first-cast-action", "tiger_palm")
+
+    assert (exit_code, payload["error"]["code"]) == (2, "invalid_query")
+
+
+@pytest.mark.parametrize(
+    "variants",
+    [
+        ["base=variant.simc"],
+        ["a=variant.simc", "a=variant.simc"],
+        # base.simc and Base.simc are one file on a case-insensitive file system (macOS).
+        ["Base=variant.simc"],
+        ["../out=variant.simc"],
+    ],
+)
+def test_compare_apls_rejects_labels_that_would_overwrite_a_profile(tmp_path: Path, variants: list[str]) -> None:
+    """Each label names <label>.simc; a repeat silently simulated the wrong APL twice."""
+    harness = tmp_path / "harness.simc"
+    harness.write_text('monk="h"\n')
+    args = ["compare-apls", str(harness), "--base-apl", str(harness)]
+    for variant in variants:
+        args += ["--variant", variant]
+
+    exit_code, payload = _invoke(tmp_path, *args)
+
+    assert (exit_code, payload["error"]["code"]) == (2, "invalid_query")
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        ["sim", "--profile-text", "warrior=x"],
+        ["run", "{profile}"],
+        ["validate-apl", "{profile}", "{profile}"],
+        ["compare-apls", "{profile}", "--base-apl", "{profile}"],
+    ],
+)
+def test_binary_commands_report_a_missing_binary_and_leave_no_temp_files(monkeypatch, tmp_path: Path, command: list[str]) -> None:
+    """sim and run used to crash with internal_error, and sim and validate-apl left temp files behind."""
+    temp = tmp_path / "tmp"
+    temp.mkdir()
+    monkeypatch.setattr("tempfile.tempdir", str(temp))
+    profile = tmp_path / "p.simc"
+    profile.write_text("warrior=x\n")
+
+    result = runner.invoke(simc_app, ["--repo-root", str(tmp_path / "nope"), *(arg.format(profile=profile) for arg in command)])
+
+    assert result.exit_code == 1
+    assert json.loads(result.stderr)["error"]["code"] == "missing_binary"
+    assert list(temp.iterdir()) == []
+
+
+def test_run_returns_the_result_lines_and_the_end_of_the_output(monkeypatch, tmp_path: Path) -> None:
+    """The preview used to be the first 20 lines: the banner and thread-merge chatter, never the result."""
+    stdout = "\n".join(
+        ["SimulationCraft 1210-01", *[f"Merging data from thread-{n} ..." for n in range(20)],
+         "Player: p void_elf mage arcane 90", "  DPS=334694.5 DPS-Error=24099.4/7.20% DPS-Range=96166.0/28.73%",
+         *[f"  detail {n}" for n in range(30)], "text report took 0.0006 seconds."]
+    )
+    monkeypatch.setattr(
+        "simc_cli.main.run_profile",
+        lambda paths, profile_path, simc_args: CommandResult(command=[], cwd=None, returncode=0, stdout=stdout, stderr=""),
+    )
+    monkeypatch.setattr("simc_cli.main.binary_version", lambda _paths: type("V", (), {"version_line": "SimulationCraft 1210-01"})())
+    profile = tmp_path / "p.simc"
+    profile.write_text("mage=p\n")
+
+    exit_code, payload = _invoke(tmp_path, "run", str(profile))
+
+    assert exit_code == 0
+    assert payload["data"]["result_lines"] == [
+        "Player: p void_elf mage arcane 90", "DPS=334694.5 DPS-Error=24099.4/7.20% DPS-Range=96166.0/28.73%"
+    ]
+    assert payload["data"]["stdout_preview"][-1] == "text report took 0.0006 seconds."
+    assert payload["data"]["stdout_truncated"] is True
+
+
+def test_first_cast_removes_its_log_dir_when_a_run_fails(monkeypatch, tmp_path: Path) -> None:
+    temp = tmp_path / "tmp"
+    temp.mkdir()
+    monkeypatch.setattr("tempfile.tempdir", str(temp))
+    monkeypatch.setattr(
+        "simc_cli.sim._run", lambda cmd, cwd: CommandResult(command=cmd, cwd=cwd, returncode=1, stdout="", stderr="Error: bad profile")
+    )
+    repo = _checkout(tmp_path / "simc")
+    profile = tmp_path / "p.simc"
+    profile.write_text("monk=p\n")
+
+    result = runner.invoke(simc_app, ["--repo-root", str(repo), "first-cast", str(profile), "tiger_palm"])
+
+    assert result.exit_code != 0
+    assert list(temp.iterdir()) == []
+
+
+def test_sim_report_error_and_convergence_come_from_the_captured_report() -> None:
+    """dps_error used to be `collected_data.dpse`, which is effective DPS, so target_error_percent was ~100."""
+    summary = summarize_sim_report(json.loads((FIXTURES / "captured_arcane_mage_json2_report.json").read_text()))
+
+    assert summary.metrics["dps_error"] == 38374.55027921543
+    assert summary.run_settings["target_error_percent"] == 10.576
+    assert summary.run_settings["stop_reason"] == "fixed_iterations_completed"
+
+
+@pytest.mark.parametrize(
+    ("iterations_completed", "stop_reason"),
+    [(2000, "target_error_reached"), (10000, "target_error_requested")],
+)
+def test_sim_stop_reason_says_whether_target_error_ended_the_run(iterations_completed: int, stop_reason: str) -> None:
+    summary = summarize_sim_report(
+        {
+            "sim": {
+                "options": {"iterations": 10000, "target_error": 0.1, "confidence_estimator": 1.96},
+                "players": [{"collected_data": {"dps": {"mean": 1000.0, "mean_std_dev": 0.5}, "fight_length": {"count": iterations_completed}}}],
+            }
+        }
+    )
+
+    assert summary.run_settings["stop_reason"] == stop_reason
+    assert summary.run_settings["target_error_percent"] == 0.098

@@ -183,6 +183,16 @@ def test_parse_wowhead_talent_calc_ref_rejects_buried_talent_calc_segments() -> 
     assert parse_wowhead_talent_calc_ref("https://www.wowhead.com/items/talent-calc/druid/balance/ABC123") is None
 
 
+def test_parse_wowhead_talent_calc_ref_only_reads_a_real_spec_from_the_spec_slot() -> None:
+    # Classic-era calculators put the build code where retail puts the spec; reading it as a spec
+    # made simc say a URL that carries a build code had none.
+    assert parse_wowhead_talent_calc_ref("https://www.wowhead.com/classic/talent-calc/warrior/30305001302-05050005525010051") is None
+    assert parse_wowhead_talent_calc_ref("https://www.wowhead.com/talent-calc/warrior/notaspec/ABC123") is None
+    assert parse_wowhead_talent_calc_ref("https://www.wowhead.com/talent-calc/warrior/balance/ABC123") is None
+    parsed = parse_wowhead_talent_calc_ref("https://www.wowhead.com/talent-calc/warrior/fury/ABC123")
+    assert parsed is not None and (parsed["actor_class"], parsed["spec"]) == ("warrior", "fury")
+
+
 def test_parse_wowhead_talent_calc_ref_rejects_empty_or_extra_segments() -> None:
     assert parse_wowhead_talent_calc_ref("https://www.wowhead.com/talent-calc/druid//balance/ABC123") is None
     assert parse_wowhead_talent_calc_ref("https://www.wowhead.com/talent-calc/druid/balance/ABC123/extra") is None

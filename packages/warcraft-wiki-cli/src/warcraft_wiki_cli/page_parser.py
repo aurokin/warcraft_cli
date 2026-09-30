@@ -13,6 +13,7 @@ WIKI_BASE_URL = "https://warcraft.wiki.gg"
 PROGRAMMING_FAMILIES = frozenset(
     {
         "api_function",
+        "api_enum",
         "ui_handler",
         "event_reference",
         "framework_page",
@@ -170,6 +171,9 @@ def _title_pattern_family(normalized: str) -> str | None:
     # namespace; the old titles survive as redirects, so both spellings have to classify the same.
     if normalized.startswith("api ") or normalized.startswith("api:"):
         return "api_function"
+    # Enum pages ("Enum.ItemQuality") document the values the API functions take and return.
+    if normalized.startswith("enum."):
+        return "api_enum"
     if normalized.startswith("uihandler "):
         return "ui_handler"
     # Game events live in the custom "Event:" namespace, one page per event name
@@ -432,7 +436,7 @@ def _signature_text(root: Tag) -> str | None:
     return block.get_text(" ", strip=True) or None
 
 
-def extract_reference_metadata(*, title: str, family: str, text: str, sections: list[dict[str, Any]], root: Tag) -> dict[str, Any]:
+def extract_reference_metadata(*, family: str, text: str, sections: list[dict[str, Any]], root: Tag) -> dict[str, Any]:
     metadata: dict[str, Any] = {"content_family": family}
     section_map = _section_lookup(sections)
     metadata["summary"] = sections[0]["text"] if sections else text[:240]
@@ -503,7 +507,7 @@ def parse_article_page(payload: dict[str, Any], *, source_title: str) -> dict[st
             "headings": headings,
             "sections": sections,
         },
-        "reference": extract_reference_metadata(title=title, family=family, text=text, sections=sections, root=root),
+        "reference": extract_reference_metadata(family=family, text=text, sections=sections, root=root),
         "linked_entities": _extract_linked_entities(root),
         "citations": {
             "page": article_url(title),

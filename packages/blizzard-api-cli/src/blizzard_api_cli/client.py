@@ -14,9 +14,7 @@ from warcraft_core.wow_normalization import normalize_region, realm_slug_variant
 
 from blizzard_api_cli.auth import BlizzardAuthConfig, load_blizzard_auth_config
 
-# Shared-state provider key for the cached client-credentials token. Distinct from the doctor/auth
-# posture provider ("blizzard-api") so the token cache and the credential-discovery state never
-# collide in the same state file.
+# Shared-state provider key for the cached client-credentials token.
 CLIENT_CREDENTIALS_STATE_PROVIDER = "blizzard-api-client-credentials"
 
 # Blizzard API hosts only exist for these regions. normalize_region also recognizes "oc"/"world",

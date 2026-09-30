@@ -4,7 +4,7 @@
 
 - character and guild profile lookup
 - guild raid rankings (world, region, or realm) for a raid and difficulty
-- Mythic+ runs
+- Mythic+ runs (`raiderio leaderboard mythic-plus`)
 - sample-backed Mythic+ analytics
 
 ## Start With
@@ -30,7 +30,9 @@
 - `freshness.fetched_at` is when the data came off the wire and `freshness.cache_hit` says whether it was replayed from cache, so quote the fetch time rather than the time you ran the command
 - use `sample mythic-plus-runs` and `distribution mythic-plus-runs` for analytics questions
 - use `sample mythic-plus-players` and `distribution mythic-plus-players` when you need participant-level slices instead of raw run rows
-- narrow sampled analytics with filters like `--level-min`, `--contains-spec`, and `--player-region` when you need a tighter slice
+- narrow sampled analytics with filters like `--level-min`, `--contains-spec`, and `--player-region` when you need a tighter slice; `--contains-role` takes `tank`, `healer` or `dps`, and an unknown role or region fails with exit 2 instead of returning an empty sample
+- `--limit` sets how many runs a sample reads (in 20-run pages), so raise `--limit` rather than `--pages` for a bigger sample
+- a run was timed when `num_chests` is above 0; `logged_run_id` is a Raider.IO id, not a Warcraft Logs report code
 - spec labels in analytics are class-qualified (`priest-holy`, `paladin-holy`) because spec names repeat across classes; pass `--contains-spec priest-holy` to select one class's spec, since `--contains-class` and `--contains-spec` each match any roster entry on their own
 - use `threshold mythic-plus-runs` for sampled estimates around score or key level targets
 - treat the analytics outputs as sampled leaderboard-derived summaries, not authoritative universal truths

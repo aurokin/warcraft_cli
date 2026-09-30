@@ -18,7 +18,8 @@ from simc_cli.compare import (
 )
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "simc"
-# A real 4-iteration Arcane Mage run, trimmed to the fields compare.py reads.
+# A real 4-iteration, 30-second MID2 Arcane Mage run (SimC 1210-01), trimmed to the fields compare.py
+# and report.py read. SimC printed `DPS=362851.8712606381 DPS-Error=38374.55027921543` for it.
 CAPTURED_REPORT = json.loads((FIXTURES / "captured_arcane_mage_json2_report.json").read_text())
 
 
@@ -35,19 +36,26 @@ def _summary(label: str, *, report: dict[str, object] | None = None) -> VariantS
 def test_extract_summary_reads_the_means_and_counts_the_recorded_action_sequence() -> None:
     summary = _summary("base")
 
-    assert summary.dps == 85305.07794238535
-    assert summary.fight_length == 30.666666666666668
-    # 26 recorded rows, one of which is a `wait` with no action name.
-    assert sum(summary.action_counts.values()) == 25
-    assert summary.action_counts["arcane_missiles"] == 9
+    assert summary.dps == 362851.8712606381
+    assert summary.fight_length == 31.0
+    # 34 recorded rows, one of which is a `wait` with no action name.
+    assert sum(summary.action_counts.values()) == 33
+    assert summary.action_counts["arcane_missiles"] == 6
     assert "wait" not in summary.action_counts
+
+
+def test_extract_summary_reports_the_dps_error_simc_prints_not_effective_dps() -> None:
+    """`collected_data.dpse` is effective DPS; SimC's DPS error is dps.mean_std_dev * confidence_estimator."""
+    summary = _summary("base")
+
+    assert summary.dps_error == 38374.55027921543
 
 
 def test_action_cpm_scales_the_recorded_counts_by_the_mean_fight_length() -> None:
     summary = _summary("base")
 
-    assert summary.action_cpm["arcane_missiles"] == round(9 * 60.0 / 30.666666666666668, 2)
-    assert summary.action_cpm["arcane_missiles"] == 17.61
+    assert summary.action_cpm["arcane_missiles"] == round(6 * 60.0 / 31.0, 2)
+    assert summary.action_cpm["arcane_missiles"] == 11.61
 
 
 def _variant(label: str, dps: float, action_counts: dict[str, int]) -> VariantSummary:
@@ -120,5 +128,10 @@ def test_variant_report_carries_each_variant_delta_and_the_sampling_note() -> No
         "faster": 100.0,
         "base": 0.0,
         "slower": -50.0,
+    }
+    assert {row["label"]: row["percent_vs_base"] for row in summary["ranking"]} == {
+        "faster": 10.0,
+        "base": 0.0,
+        "slower": -5.0,
     }
     assert summary["sampling"]["action_sequence_iterations"] == 1

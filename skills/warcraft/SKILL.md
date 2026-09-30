@@ -23,8 +23,9 @@ Use `warcraft` first when the caller does not already know which provider they n
     listed in `provenance.compacted_paths`
   - `--fields <a.b,c>` keep only these dot paths, rooted at the envelope (`data.results`,
     `data.entity.name`); repeatable. The output is the projection, not an envelope, and a path that
-    did not resolve is listed under `fields_missing` instead of vanishing. A failure envelope is
-    always printed whole
+    did not resolve is listed under `fields_missing` instead of vanishing. A path walks object keys
+    only and stops at a list: `data.results` keeps the whole list, while `data.results.name` does
+    not resolve (it lands in `fields_missing`). A failure envelope is always printed whole
   - `--fields-strict` fail with `missing_fields` (exit 2) instead of listing a path under `fields_missing`
   - `--profile agent|human` presets (`agent` is the default compact JSON, `human` pretty JSON)
   - `wowhead --stream` writes JSON Lines instead of one object (see Output Contract)
@@ -97,14 +98,14 @@ narrower, **experimental** is thin and may change.
 
 - Prefer `resolve` when you want one conservative next command.
 - Prefer `search` when you want to inspect candidates across providers.
-- Prefer `warcraft guild ...` for one guild's Raider.IO snapshot with normalized region/realm/name input; `data.sources.raiderio.summary.raids[]` carries each raid's normal/heroic/mythic world, region, and realm ranks. A rank of `0` means unranked at that difficulty, not first place, and Raider.IO only covers the current expansion.
+- Prefer `warcraft guild ...` for one guild's Raider.IO snapshot with normalized region/realm/name input; `data.sources.raiderio` carries `summary` and `provenance` (use `warcraft raiderio guild` for the raw Raider.IO payload), and `summary.raids[]` carries each raid's normal/heroic/mythic world, region, and realm ranks. A rank of `0` means unranked at that difficulty, not first place, and Raider.IO only covers the current expansion.
 - Use `warcraft actor-profile <report-code> <name>` to hand a Warcraft Logs report actor to their Raider.IO profile. Pass `--fight-id` when you know it; without it the wrapper searches a bounded set of the report's fights (`query.fight_scope`).
 - Preserve provider provenance. `warcraft` is a router, not a source.
 - Use `warcraft guide-compare` when you already have exported guide bundles and want additive cross-provider evidence instead of a synthesized summary.
 - Use `warcraft guide-compare-query` when you want the wrapper to resolve, export, and compare guide candidates conservatively across supported guide providers.
 - `guide-compare-query` may use a provider search fallback only when the top guide result is clearly decisive; it should not guess across weak or ambiguous guide candidates.
 - `guide-compare-query` should reuse prior orchestrated bundles only through explicit freshness rules like `--max-age-hours` and `--force-refresh`, not through invisible cache-like behavior.
-- A `guide-compare-query` `provider_results` row with a non-null `redirect` means that provider served another guide than the candidate it resolved (a retired page); the comparison uses the served guide.
+- A `guide-compare-query` `provider_results` row (exported or reused) with a non-null `redirect` means that provider served another guide than the candidate it resolved (a retired page); the comparison uses the served guide.
 - Steer `guide-compare-query` orchestration with:
   - `--provider <name>` repeatable, to restrict the run to `wowhead`, `method`, or `icy-veins`
   - `--out-root <dir>` to choose where the orchestrated bundles are written (default `<XDG data dir>/warcraft/guide_compare/<query-slug>`, never the current directory)
@@ -128,7 +129,7 @@ narrower, **experimental** is thin and may change.
   - `simc identify-build|decode-build|describe-build|validate-talent-transport --build-packet <path>` fails with `invalid_build_packet` when the packet file is malformed; no other simc command takes `--build-packet`
   - wrapper routing preserves provider `invalid_transport_packet` failures instead of replacing them with a generic wrapper error
 - Add `--simc-build-handoff` when you want the orchestration packet to include explicit guide build refs handed into `simc`; add `--simc-apl-path` when you also want exact-build `describe-build` output.
-- Use `warcraft guide-builds-simc` when you want explicit guide build refs handed into `simc` without inferring claims from guide prose; the handoff packet includes provenance, citations, and source freshness so agents can tell how trustworthy the build inputs are. Branch on `summary.simc_handoff_status`: `ok`, `partial` (a leg worked for some builds), `failed` (a requested leg produced nothing, named in `summary.empty_requested_legs`), or `no_build_references`; when every requested leg produced nothing the command fails with `simc_handoff_failed` (exit 1).
+- Use `warcraft guide-builds-simc` when you want explicit guide build refs handed into `simc` without inferring claims from guide prose; the handoff packet includes provenance, citations, and source freshness so agents can tell how trustworthy the build inputs are. Branch on `summary.simc_handoff_status`: `ok`, `partial` (a leg worked for some builds), `failed` (a requested leg produced nothing, named in `summary.empty_requested_legs`), `no_build_references`, or `all_references_excluded` (build references existed but every one is in `excluded_builds`); when every requested leg produced nothing the command fails with `simc_handoff_failed` (exit 1).
 - Add `--apl-path` when you want the wrapper to include exact-build `simc describe-build` output for those same explicit guide build refs.
 - When `--expansion` matters, trust only the providers the wrapper says are included.
 - Once the provider is known, switch to the provider CLI or the provider reference below.

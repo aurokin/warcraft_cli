@@ -17,9 +17,6 @@ PYEOF
 
 while (($#)); do
   case "$1" in
-    --link-bin)
-      LINK_BIN=true
-      ;;
     --no-link-bin)
       LINK_BIN=false
       ;;

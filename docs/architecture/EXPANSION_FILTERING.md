@@ -26,7 +26,9 @@ When a caller requests a specific game version, the wrapper must not silently mi
 | `simc` | `none` | — | Local analysis versioning differs; proxy relaxes to passthrough (see Phase 4) |
 | `warcraftlogs` | `profiled` | `retail`, classic family, `fresh` | Site-profile routing: retail -> `www`, classic-family -> `classic`, `fresh` -> `fresh` |
 | `raidbots` | `fixed` | `retail` | Report consumption; retail SimC runs |
-| `blizzard-api` | `none` | — | Region/namespace routing deferred; proxy relaxes to passthrough (see Phase 4) |
+| `blizzard-api` | `none` | — | Routes by `--region` and `--game-version` (namespace), not the wrapper's expansion axis; proxy relaxes to passthrough (see Phase 4) |
+| `curseforge` | `none` | — | Game-version compatibility lives in addon file records; proxy relaxes to passthrough (see Phase 4) |
+| `lorrgs` | `fixed` | `retail` | Retail top-parse timelines |
 
 ## Wrapper Behavior (Shipped)
 

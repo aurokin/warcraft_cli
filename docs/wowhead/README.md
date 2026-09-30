@@ -31,6 +31,10 @@ from a date window rather than passed through, and `scan.unparsed_timestamps` re
 that was; when a date window is requested and no scanned row carries a readable timestamp, the
 command fails with `parse_error` instead of returning an empty match set.
 
+The `QUERY` of `news`, `blue-tracker` and `guides` keeps a row only when every query word appears
+in it as a whole word ("mage" does not match "Damage"; "the" and "of" are ignored unless the query
+is nothing else).
+
 `search` results carry `entity_type` and an openable `url` for every type Wowhead's suggestion
 endpoint labels. News posts also carry a `news-post` follow-up; world events are openable but have
 no follow-up command of their own. The one exception is Trading Post activities: Wowhead addresses
@@ -131,9 +135,11 @@ Example:
 wowhead --pretty --expansion classic entity item 19019
 ```
 
-When `--expansion` is omitted, `search` (from its query), `entity` and `entity-page` (from `--url`),
-and `compare` (from its entity refs) auto-detect the profile from a Wowhead URL; the payload reports
-which rule applied in `expansion_source` (`flag`, `url`, or `default`).
+When `--expansion` is omitted, `search` (from its query), `entity` and `entity-page` (from `--url`,
+which takes the place of `TYPE ID`), `compare` (from its entity refs), and the guide, news-post,
+blue-topic and tool commands (from their ref) auto-detect the profile from a Wowhead URL or a
+`classic/...`-style path; the payload reports which rule applied in `expansion_source` (`flag`,
+`url`, or `default`).
 
 ## Commands
 
@@ -152,10 +158,10 @@ Entities:
 | Command | Purpose |
 |---------|---------|
 | `entity TYPE ID` | tooltip payload, optionally with comments and a linked-entity preview; `--include-all-comments` replaces the `comments.top` summary with the full `comments.items` list |
-| `entity-page TYPE ID` | parsed page metadata and linked entities; comments come from `comments` |
+| `entity-page TYPE ID` | parsed page metadata and linked entities; comments come from `comments`. Linked entities cover body links, gatherer records, and the page's relation tabs (a zone's NPCs and quests, a faction's members: `source_kind: "listview"`, tab id in `listview`) |
 | `comments TYPE ID` | ranked comments with filters and optional insight rollups |
-| `compare REF REF ...` | field-by-field diff of two or more entities |
-| `linked-graph TYPE ID` | bounded linked-entity graph rooted at one entity |
+| `compare REF REF ...` | field-by-field diff of two or more entities; `comparison.linked_entities` compares every link each page carries, not the `--max-links-per-entity` cut |
+| `linked-graph TYPE ID` | bounded linked-entity graph rooted at one entity; `sampling.pages_skipped` counts the pages `--max-fetches` or `--limit` left unread, and `sampling.truncated` is true when any were |
 
 Guides:
 
@@ -164,7 +170,7 @@ Guides:
 | `guides CATEGORY` | guide listing for a category with author, patch, and updated-window filters |
 | `guide REF` | one guide: analysis surfaces, linked entities, comments, and page metadata; section bodies come from `guide-full`. An unknown guide id is an upstream 400, reported as exit 5 |
 | `guide-full REF` | the same guide with every section, comment, and link hydrated |
-| `guide-export REF` | write a guide bundle (manifest, sections, entities) to `--out`, or `./wowhead_exports/<guide-slug>/` |
+| `guide-export REF` | write a guide bundle (manifest, sections, entities) to `--out`, or `./wowhead_exports/<guide-slug>/`; a linked entity that cannot be hydrated is listed in `hydration.failed` (`entity_type`, `id`, `code`, `message`) instead of failing the export |
 | `guide-query BUNDLE QUERY` | query one guide bundle for matching sections, links, and comments |
 | `guide-bundle-list` | local bundles with freshness and hydration summaries |
 | `guide-bundle-search QUERY` | find local bundles by title, id, or directory name |
@@ -191,8 +197,8 @@ Tool-state decoders:
 
 | Command | Purpose |
 |---------|---------|
-| `talent-calc REF` | class, spec, and build code from a talent calculator ref |
-| `talent-calc-packet REF` | exact talent transport packet; `--out PATH` writes just the packet. The packet comes from the build code in `REF`, so a failed page fetch still answers, with `page.canonical_url` null and `page.fetch_error` `{code, message}` |
+| `talent-calc REF` | class, spec, and build code from a talent calculator ref; a classic-era `/classic/talent-calc/<class>/<build-code>` ref has no spec, so `spec_slug` is null. An unknown class is `invalid_tool_ref` |
+| `talent-calc-packet REF` | exact talent transport packet from a `<class>/<spec>/<build-code>` ref; `--out PATH` writes just the packet. The packet comes from the build code in `REF`, so a failed page fetch still answers, with `page.canonical_url` null and `page.fetch_error` `{code, message}` |
 | `profession-tree REF` | profession slug and loadout code |
 | `dressing-room REF` | normalized share hash and cited state URL |
 | `profiler REF` | normalized `list=` ref with list, region, realm, and name parts |
@@ -209,8 +215,7 @@ Cache maintenance:
 | Command | Purpose |
 |---------|---------|
 | `cache-inspect` | backend configuration and per-namespace entry counts |
-| `cache-repair` | report, or with `--apply` delete, legacy entries at the file-cache root from before cache namespacing; unreadable entries elsewhere are only counted (use `cache-clear`) |
-| `cache-clear` | clear cached responses for chosen namespaces or all of them |
+| `cache-clear` | clear cached responses for chosen namespaces or all of them; an unknown `--namespace` is a usage error, `--namespace legacy_unscoped` removes file-cache entries from before cache namespacing, and an unreachable Redis is `network_error` (exit 5) |
 
 Run `wowhead <command> --help` for the full flag list of any command.
 

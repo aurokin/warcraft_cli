@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 import statistics
 import tempfile
 from dataclasses import dataclass
@@ -39,10 +40,11 @@ def run_first_casts(
     if not profile_path.exists():
         raise FileNotFoundError(f"Profile not found: {profile_path}")
 
+    # The per-seed logs stay behind for the caller (each result carries its log_path); a failed run
+    # leaves nothing worth keeping, so its directory is removed.
     temp_dir = Path(tempfile.mkdtemp(prefix="simc-cli-"))
     results: list[FirstCastResult] = []
     for seed in range(1, seeds + 1):
-        log_path = temp_dir / f"seed_{seed}.log"
         result = _run(
             [
                 str(simc),
@@ -59,8 +61,10 @@ def run_first_casts(
             cwd=paths.root,
         )
         if result.returncode != 0:
+            shutil.rmtree(temp_dir, ignore_errors=True)
             message = result.stderr.strip() or result.stdout.strip() or "SimulationCraft first-cast run failed."
             raise RuntimeError(message)
+        log_path = temp_dir / f"seed_{seed}.log"
         log_path.write_text(result.stdout)
         results.append(FirstCastResult(seed=seed, time=first_action_time(result.stdout, action), log_path=log_path))
     return results

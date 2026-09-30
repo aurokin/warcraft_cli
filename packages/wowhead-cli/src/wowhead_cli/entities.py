@@ -16,6 +16,7 @@ from wowhead_cli.page_parser import (
     extract_comments_dataset,
     extract_gatherer_entities,
     extract_linked_entities_from_href,
+    extract_listview_entities,
     normalize_comments,
     sort_comments,
 )
@@ -257,7 +258,10 @@ def _summarize_linked_entity(record: dict[str, Any]) -> dict[str, Any]:
 def entity_page_fetch_more_command(
     entity_type: str, entity_id: int, link_count: int, *, expansion: ExpansionProfile
 ) -> str:
-    """The `entity-page` command that returns the full link list, routed to the active expansion."""
+    """The `entity-page` command that returns more of the link list, routed to the active expansion.
+
+    ``--max-links`` stops at 2000, so a page with more links than that still comes back truncated.
+    """
     max_links = min(max(link_count, 200), 2000)
     prefix = command_prefix_for_expansion(expansion)
     return f"{prefix} entity-page {shlex.quote(entity_type)} {entity_id} --max-links {max_links}"
@@ -317,8 +321,8 @@ def entity_comments_payload(
     page_url: str,
     include_comments: bool,
     include_all_comments: bool,
-    top_comment_limit: int,
-    top_comment_chars: int,
+    top_comment_limit: int = 3,
+    top_comment_chars: int = 320,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     if not include_comments or html is None:
         return None, None
@@ -366,6 +370,16 @@ def entity_comments_payload(
     return comments_payload, {"comments": f"{page_url}#comments"}
 
 
+def entity_page_links(html: str, *, page_url: str, include_gatherer: bool = True) -> list[dict[str, Any]]:
+    """Every entity an entity page links: body hrefs, gatherer records, and its relation-tab Listviews."""
+    gatherer = extract_gatherer_entities(html, source_url=page_url) if include_gatherer else []
+    return (
+        extract_linked_entities_from_href(html, source_url=page_url)
+        + gatherer
+        + extract_listview_entities(html, source_url=page_url)
+    )
+
+
 def entity_linked_entities_payload(
     *,
     html: str | None,
@@ -380,7 +394,7 @@ def entity_linked_entities_payload(
     if html is None or linked_entity_preview_limit <= 0:
         return None
     return build_linked_entity_preview(
-        extract_linked_entities_from_href(html, source_url=page_url) + extract_gatherer_entities(html, source_url=page_url),
+        entity_page_links(html, page_url=page_url),
         entity_type=page_entity_type,
         entity_id=page_entity_id,
         preview_limit=linked_entity_preview_limit,
@@ -398,12 +412,18 @@ def comparison_entity_record(
     canonical_url: str,
     tooltip: dict[str, Any],
     metadata: dict[str, str | None],
-    linked_entities: dict[str, Any],
+    links: list[dict[str, Any]],
+    max_links: int,
     raw_comments: list[dict[str, Any]],
     sampled_comments: list[dict[str, Any]],
 ) -> tuple[dict[str, Any], set[tuple[str, int]]]:
+    """One compared entity's record, plus the set of every entity it links to.
+
+    The record's ``linked_entities`` block is cut to ``max_links``; the returned set is not, so the
+    shared/unique comparison covers every link a page carries.
+    """
     link_set: set[tuple[str, int]] = set()
-    for row in linked_entities["items"]:
+    for row in links:
         link_type = row.get("entity_type")
         link_id = row.get("id")
         if isinstance(link_type, str) and isinstance(link_id, int):
@@ -423,7 +443,7 @@ def comparison_entity_record(
                 "title": metadata.get("title"),
                 "description": metadata.get("description"),
             },
-            "linked_entities": linked_entities,
+            "linked_entities": truncated_link_block(links, max_links=max_links),
             "comments": {
                 "count": len(raw_comments),
                 "top": sampled_comments,

@@ -42,26 +42,29 @@ def normalize_name(value: str) -> str:
     return " ".join(value.strip().split())
 
 
+_APOSTROPHES = r"['\u2019]"
+
+
 def slug_parts(value: str) -> list[str]:
-    return [part for part in re.split(r"[^a-z0-9]+", value.strip().lower()) if part]
+    """The lowercased words of a realm name, the way Blizzard and Raider.IO slug it.
+
+    Apostrophes join their word (``Mal'Ganis`` -> ``malganis``) and accented or non-Latin letters
+    are kept (``Festung der Stürme`` -> ``festung``, ``der``, ``stürme``); any other character
+    separates words.
+    """
+    text = re.sub(_APOSTROPHES, "", value.strip().lower())
+    return [part for part in re.split(r"[\W_]+", text) if part]
 
 
 def realm_slug_variants(value: str) -> list[str]:
+    """Every slug spelling of a realm, the upstream one first.
+
+    Then the words run together (``area52``) and the apostrophe read as a word break
+    (``mal-ganis``), a spelling users and older commands still type.
+    """
     parts = slug_parts(value)
-    if not parts:
-        raw = value.strip().lower()
-        return [raw] if raw else []
-    candidates = [
-        "-".join(parts),
-        "".join(parts),
-    ]
-    seen: set[str] = set()
-    normalized: list[str] = []
-    for candidate in candidates:
-        if candidate and candidate not in seen:
-            seen.add(candidate)
-            normalized.append(candidate)
-    return normalized
+    broken = slug_parts(re.sub(_APOSTROPHES, " ", value))
+    return list(dict.fromkeys(slug for slug in ("-".join(parts), "".join(parts), "-".join(broken)) if slug))
 
 
 def primary_realm_slug(value: str) -> str:

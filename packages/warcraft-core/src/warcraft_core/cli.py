@@ -202,13 +202,7 @@ def emit(ctx: typer.Context, payload: Mapping[str, Any], *, err: bool = False) -
     try:
         emit_shaped(dict(payload), config.output, err=err)
     except OutputProjectionError as exc:
-        fail(
-            ctx,
-            "missing_fields",
-            str(exc),
-            exit_code=EXIT_USAGE,
-            details={"missing_fields": list(exc.missing_fields)},
-        )
+        fail(ctx, "missing_fields", str(exc), details={"missing_fields": list(exc.missing_fields)})
 
 
 # Parameters a failure never echoes: an OAuth authorization code, which can be exchanged for a

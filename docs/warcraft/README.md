@@ -20,8 +20,8 @@ Tiers describe how much depth an agent should expect. `warcraft doctor` reports 
 | supported | method | `method` | Guide search, resolve, and guide bundle export. |
 | supported | lorrgs | `lorrgs` | Cooldown timeline rankings and cached report overviews; no auth. |
 | experimental | raidbots | `raidbots` | Public report parsing and SimC input handoff; no search index. |
-| experimental | blizzard-api | `blizzard` | Battle.net Game Data and Profile reads; unverified stub surfaces. |
-| experimental | curseforge | `curseforge` | Addon metadata lookup; unverified stub surfaces. |
+| experimental | blizzard-api | `blizzard` | Battle.net Game Data and Profile reads (verified live); no search/resolve. |
+| experimental | curseforge | `curseforge` | Addon metadata lookup (verified live); no search/resolve. |
 
 ## Global flags
 
@@ -69,9 +69,11 @@ Every command's flags are listed in [docs/reference/warcraft.md](../reference/wa
   ranked exactly as `warcraft search` ranks that provider's top row, and the top-ranked one is the
   answer only when its own provider resolved it and the query's intent does not rank that
   provider's family down (a guide query is never answered by Lorrgs spec metadata, a guild query
-  never by a wiki article). Otherwise `resolved` is `false` and that candidate is
+  never by a wiki article); a match whose title is exactly the query (the item `Guild Tabard`) is
+  exempt. Otherwise `resolved` is `false` and that candidate is
   `best_unresolved_candidate`, with `unresolved_reason` (`provider_did_not_resolve` or
-  `provider_family_ranked_down_by_query_intent`) and the providers' `fallback_search_command`s.
+  `provider_family_ranked_down_by_query_intent`) and the `fallback_search_command`s of the providers
+  that returned a candidate, in ranking order (none when no provider found anything).
   `--limit` only sizes `--ranking-debug`: providers are never asked for fewer candidates, because
   their confidence is judged against the rivals a small limit would hide. The envelope's `provider`
   is `warcraft`; `data.selected_provider` is the match's provider or `null`.
@@ -80,7 +82,8 @@ Every command's flags are listed in [docs/reference/warcraft.md](../reference/wa
   own normal/heroic/mythic world, region, and realm ranks by `raid_slug` (`0` means unranked). There
   is no `active_raid`: Raider.IO orders those rows by slug and carries no raid start/end window, so
   naming one of them "active" would be a guess. Cross-reference `raiderio raids` when you need the
-  currently running tier. The Raider.IO envelope itself is under `sources.raiderio.payload`.
+  currently running tier. The Raider.IO call's provenance is `sources.raiderio.provenance`; the raw
+  envelope is not repeated (`warcraft raiderio guild` returns it).
 - `warcraft actor-profile` — cross-walk a Warcraft Logs report actor to a Raider.IO profile. Warcraft
   Logs only answers a fight-scoped roster query, so without `--fight-id` the wrapper reads the
   report's fight list first and scopes the lookup to a bounded set of fights, kills first.
@@ -91,10 +94,16 @@ Every command's flags are listed in [docs/reference/warcraft.md](../reference/wa
   says the other fights were not searched.
 - `warcraft cooldown-packet` — compose Lorrgs phase windows with Warcraft Logs cast events for
   phase-scoped cooldown analysis. Lorrgs only serves reports it has already cached; for any other
-  report — or when Lorrgs itself is unreachable — pass `--actor-id` and `--spec-slug` and the packet
+  report — or when Lorrgs itself is unreachable — pass `--actor-id` and `--spec-slug` (and, while
+  Lorrgs is down, `--spell-id` for each cooldown; they are then named `spell:<id>`) and the packet
   still returns the Warcraft Logs cast timeline with `lorrgs.status: "unavailable"` and
   `phase.status: "unavailable"`. `lorrgs.message` names the real reason (only a `not_found` is
   reported as "not cached") and `phase.requested` echoes the `--phase` that could not be applied.
+  Without Lorrgs the player's name and class come from the Warcraft Logs report roster, and
+  `player.deaths` is `null` (deaths come only from the Lorrgs timeline). A `--spec-slug` of another
+  class than the player's fails `invalid_query` (exit 2). Casts are counted only for the actor:
+  `cooldowns.player_casts.other_source_cast_count` counts rows from anyone else. When Lorrgs omits a
+  fight's duration, the last phase window has `end_ms: null` (open-ended).
   The top-parse comparison uses `--difficulty` when passed, otherwise the Warcraft Logs fight's own
   difficulty (heroic or mythic, echoed as `query.difficulty`). It needs a Lorrgs boss slug, which
   only a Lorrgs-cached report supplies; for any other report pass `--boss-slug`. When the comparison
@@ -103,7 +112,8 @@ Every command's flags are listed in [docs/reference/warcraft.md](../reference/wa
   `notes` only describe what the packet actually holds, and say when Warcraft Logs truncated the
   cast events or Lorrgs' boss spell names were unavailable. A fight id the Warcraft Logs report does
   not have fails `fight_not_found` (exit 4) with `error.details.available_fight_ids`; an actor
-  missing from the Lorrgs roster fails `actor_id_not_found` / `actor_name_not_found` (exit 4).
+  missing from the Lorrgs or Warcraft Logs roster fails `actor_id_not_found` / `actor_name_not_found`
+  (exit 4).
 - `warcraft guide-compare` — compare two or more already-exported guide bundles.
 - `warcraft guide-compare-query` — resolve a guide query across wowhead, method, and icy-veins,
   export the bundles, and compare them. A provider's guide is its resolved guide, else its search top
@@ -111,23 +121,26 @@ Every command's flags are listed in [docs/reference/warcraft.md](../reference/wa
   it declined (`reason` for the search step, `resolve_reason` for the resolve step; a failed call
   makes the row `status: error`, `reason: provider_failed` with its `error`). It writes
   `manifest.json` only when at least two bundles were exported. Without `--out-root` it writes under
-  `<XDG data dir>/warcraft/guide_compare/<query-slug>`, never into the current directory. Fewer than
+  `<XDG data dir>/warcraft/guide_compare/<query-slug>`, never into the current directory. Flags that
+  leave fewer than two providers (a single `--provider`, or a non-retail `--expansion`, since method
+  and icy-veins are retail-only) fail `invalid_argument` (exit 2) before any provider call. Fewer than
   two bundles fails `insufficient_guides` (exit 1), except when every provider that contributed
   nothing failed outright (resolve/search or `guide-export` returned an error): then the run fails
   with those providers' shared code and exit code (a network outage is `network_error`, exit 5),
   and each `provider_results` row carries its `error`. With `--simc-build-handoff`, a handoff whose
   status is `all_handoffs_failed` fails `simc_handoff_failed` (exit 1) exactly as
-  `guide-builds-simc` does, with the comparison under `error.details`. An exported
+  `guide-builds-simc` does, with the comparison under `error.details`. An exported or reused
   `provider_results` row carries the provider's `redirect` (non-null when it served another guide
-  than the resolved candidate, such as a retired page).
+  than the resolved candidate, such as a retired page); `manifest.json` saves it for reuse.
 - `warcraft talent-packet` / `talent-describe` — build a validated talent transport packet, optionally
   with simc `describe-build` output. Both report the file they wrote as `written_packet_path`.
 - `warcraft guide-builds-simc` — turn explicit build references in exported bundles into a simc packet.
   Each reference is handed to simc in the form its type requires: a `wow_talent_export` string goes
   as `--build-text`, a Wowhead talent-calc URL as a validated transport packet. A reference that can
   go neither way is an `excluded_builds` row naming the reason, not a silently shorter list.
-  `summary.simc_handoff_status` is `ok`, `partial`, `failed`, `no_build_references`, or
-  `all_handoffs_failed`. The requested legs are `identify` plus `decode` (on by default) and
+  `summary.simc_handoff_status` is `ok`, `partial`, `failed`, `no_build_references`,
+  `all_references_excluded` (the bundle had build references but every one is in `excluded_builds`),
+  or `all_handoffs_failed`. The requested legs are `identify` plus `decode` (on by default) and
   `describe` (with `--apl-path`). `all_handoffs_failed` means every requested leg produced nothing:
   it is a `simc_handoff_failed` error envelope (exit 1, `kind: "error"`) whose `provenance` is the
   packet's and whose `error.details` carry the rest of the packet, per-build `failures` included. `failed` means some requested leg produced nothing
@@ -142,14 +155,15 @@ Every command's flags are listed in [docs/reference/warcraft.md](../reference/wa
 Wrapper failures use the shared envelope and exit codes in
 [docs/foundation/ERROR_CONTRACT.md](../foundation/ERROR_CONTRACT.md). Every failure envelope has
 `kind: "error"`. `invalid_argument` (for example `guide-compare` with one bundle, or
-`guide-compare-query --provider` naming an unsupported provider) and Typer usage errors exit 2. `guide-compare` reports a bundle path the way the shared bundle loader
+`guide-compare-query --provider` naming an unsupported provider, or selecting fewer than two
+providers for the expansion) and Typer usage errors exit 2. `guide-compare` reports a bundle path the way the shared bundle loader
 does: `not_found` (exit 4) when it is missing, `invalid_argument` (exit 2) when it is a file, and
 `invalid_bundle` (exit 1) when it is not a readable bundle. `unsupported_provider_expansion` and
 `duplicate_expansion_argument` are argument mismatches and exit 2, as does `invalid_report_ref`
 from `cooldown-packet`. `insufficient_guides`, `simc_handoff_failed` and `providers_failed` exit 1.
 
 Composite commands do not flatten a source failure into exit 1: they exit with the code the contract
-maps the source's error to (`not_found` -> 4, `auth_required` -> 3, `network_error` -> 5).
+maps the source's error to (`not_found` -> 4, `auth_failed` -> 3, `network_error` -> 5).
 `talent-packet` and `talent-describe` re-emit the source's own `error.code`; `actor-profile` and
 `cooldown-packet` name the step that failed (for example `warcraftlogs_lookup_failed`) and carry the
 source's error under `error.details.source`. When every provider in a `search`/`resolve` fanout

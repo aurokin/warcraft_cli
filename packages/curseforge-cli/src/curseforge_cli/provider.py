@@ -81,7 +81,7 @@ def coming_soon_envelope(command: str, query: str) -> Envelope:
         provider=PROVIDER_NAME,
         command=command,
         kind="coming_soon",
-        query={"query": query},
+        query=query,
         data=data,
     )
 

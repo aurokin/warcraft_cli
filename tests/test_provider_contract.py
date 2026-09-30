@@ -1,18 +1,15 @@
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from typing import Any
 
 import pytest
 from warcraft_cli.provider_contract import (
-    _load_wrapper_ranking_policy_cached,
     candidate_score,
     compact_wrapper_candidate,
     confidence_rank,
     decorate_resolve_payload,
     decorate_search_result,
-    load_wrapper_ranking_policy,
     merged_search_page,
     name_match_strength,
     normalized_provider_score,
@@ -23,17 +20,6 @@ from warcraft_cli.provider_contract import (
     search_result_sort_key,
     wrapper_search_ranking,
 )
-from warcraft_core.exit_codes import EXIT_USAGE
-from warcraft_core.provider import ProviderError
-
-
-@pytest.fixture
-def ranking_config_root(tmp_path, monkeypatch):
-    """Point ``config_root()`` at a scratch XDG config dir and return the override file's path."""
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
-    _load_wrapper_ranking_policy_cached.cache_clear()
-    yield tmp_path / "warcraft" / "wrapper_ranking.json"
-    _load_wrapper_ranking_policy_cached.cache_clear()
 
 
 def test_confidence_rank_orders_known_values() -> None:
@@ -139,39 +125,6 @@ def test_provider_kind_boosts_decide_the_order_of_otherwise_identical_candidates
     assert spell["intents"] == []
     assert spell["score"] - achievement["score"] == 6  # provider_kind_boosts["wowhead"]["spell"]
     assert "provider_kind:wowhead:spell:+6" in spell["reasons"]
-
-
-def test_wrapper_ranking_json_override_flips_the_winner(ranking_config_root) -> None:
-    """The documented ~/.config/warcraft/wrapper_ranking.json override changes real ordering."""
-    row_a = {"provider": "wowhead", "name": "X", "kind": "spell", "ranking": {"score": 40}}
-    row_b = {"provider": "wowhead", "name": "X", "kind": "object", "ranking": {"score": 40}}
-    assert wrapper_search_ranking("thunderfury", row_a)["score"] > wrapper_search_ranking("thunderfury", row_b)["score"]
-
-    ranking_config_root.parent.mkdir(parents=True, exist_ok=True)
-    ranking_config_root.write_text(
-        json.dumps({"provider_kind_boosts": {"wowhead": {"object": 50}}}),
-        encoding="utf-8",
-    )
-    _load_wrapper_ranking_policy_cached.cache_clear()
-
-    policy = load_wrapper_ranking_policy()
-    assert policy["provider_kind_boosts"]["wowhead"]["object"] == 50
-    # The override is a deep merge: sibling sections keep their shipped defaults.
-    assert policy["provider_kind_boosts"]["wowhead"]["spell"] == 6
-    assert policy["intent_provider_boosts"]["character_profile"]["raiderio"] == 28
-    assert wrapper_search_ranking("thunderfury", row_b)["score"] > wrapper_search_ranking("thunderfury", row_a)["score"]
-
-
-def test_malformed_ranking_override_fails_as_invalid_config_naming_the_file(ranking_config_root) -> None:
-    ranking_config_root.parent.mkdir(parents=True, exist_ok=True)
-    ranking_config_root.write_text("{ this is not json", encoding="utf-8")
-
-    with pytest.raises(ProviderError) as excinfo:
-        load_wrapper_ranking_policy()
-
-    assert excinfo.value.code == "invalid_config"
-    assert excinfo.value.exit_code == EXIT_USAGE
-    assert str(ranking_config_root) in excinfo.value.message
 
 
 def test_normalized_provider_score_rescales_against_the_provider_own_best_row() -> None:
@@ -365,6 +318,39 @@ def test_resolve_answer_needs_a_family_the_query_intent_does_not_rank_down() -> 
     assert resolve_answer_accepted(guild_article) is False
     assert resolve_answer_accepted(guide) is True
     assert resolve_answer_accepted({**guide, "resolved": False}) is False
+
+
+def test_resolve_answers_with_the_entity_named_exactly_by_a_query_holding_an_intent_word() -> None:
+    """Live `guild tabard`: Wowhead resolved the item, Raider.IO offered a guild named `TABARD`."""
+    item = _resolve_answer("guild tabard", "wowhead", confidence="high", name="Guild Tabard", entity_type="item",
+                           ranking={"score": 48})
+    guild = {**_resolve_answer("guild tabard", "raiderio", confidence="medium", name="TABARD", kind="guild",
+                               ranking={"score": 70}), "resolved": False}
+
+    top = sorted([guild, item], key=resolve_payload_sort_key)[0]
+
+    assert top["match"]["provider"] == "wowhead"
+    assert resolve_answer_accepted(top) is True
+
+
+@pytest.mark.parametrize(
+    ("query", "provider", "name", "entity_type"),
+    [
+        # An intent word inside the entity's own name does not ask for another kind of source.
+        ("guild tabard", "wowhead", "Guild Tabard", "item"),
+        ("scroll of the fight", "wowhead", "Scroll of the Fight", "item"),
+        # SimC words carry no intent while SimC has no search surface to answer them.
+        ("shadow priest apl", "icy-veins", "Shadow Priest DPS Guide", "guide"),
+        ("branch of nordrassil", "wowhead", "Branch of Nordrassil", "item"),
+    ],
+)
+def test_resolve_accepts_a_match_whose_query_words_only_look_like_an_intent(
+    query: str, provider: str, name: str, entity_type: str
+) -> None:
+    answer = _resolve_answer(query, provider, confidence="high", name=name, entity_type=entity_type,
+                             ranking={"score": 60})
+
+    assert resolve_answer_accepted(answer) is True
 
 
 def test_none_expansion_providers_report_no_expansion_support_reason() -> None:

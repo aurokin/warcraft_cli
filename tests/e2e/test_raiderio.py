@@ -20,7 +20,7 @@ import time
 from collections import Counter
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 import httpx
 import pytest
@@ -337,6 +337,47 @@ def test_character_profile_carries_identity_score_and_normalized_class_spec() ->
     assert result.payload["provenance"]["citations"]["profile"].startswith("https://raider.io/characters/")
 
 
+# `character` recent_runs field -> the Raider.IO profile API's own recent-runs field it restates.
+RECENT_RUN_FIELDS = {
+    "dungeon": "dungeon",
+    "short_name": "short_name",
+    "mythic_level": "mythic_level",
+    "completed_at": "completed_at",
+    "clear_time_ms": "clear_time_ms",
+    "keystone_time_ms": "par_time_ms",
+    "num_chests": "num_keystone_upgrades",
+    "score": "score",
+}
+
+
+def test_character_recent_runs_restate_the_runs_raider_io_lists() -> None:
+    """``mythic_plus.recent_runs`` are Raider.IO's own recent runs for the character, field for field.
+
+    The character is the top-ranked run's first player, who has recent runs by definition. The oracle
+    is Raider.IO's public profile API asked directly: every dungeon once came back null because the
+    rows were read with the leaderboard's field names.
+    """
+    board = run_retrying("raiderio", "leaderboard", "mythic-plus", "--region", "us", "--limit", "1")
+    player = _rows(board, "runs")[0]["roster"][0]
+    result = run("raiderio", "character", player["region"], player["realm"], player["name"])
+    recent = result.data["mythic_plus"]["recent_runs"]
+    # recent_run_count is Raider.IO's whole list; recent_runs is its newest few.
+    assert 0 < len(recent) <= result.data["mythic_plus"]["recent_run_count"], result.describe()
+
+    params = {"region": player["region"], "realm": player["realm"], "name": player["name"], "fields": "mythic_plus_recent_runs"}
+    with httpx.Client(timeout=30.0) as client:
+        response = _get_past_upstream_blips(client, f"https://raider.io/api/v1/characters/profile?{urlencode(params)}")
+    assert response.status_code == 200, response.text[:300]
+    upstream = {row["keystone_run_id"]: row for row in response.json()["mythic_plus_recent_runs"]}
+    # A run finished between the two reads can push the oldest one off Raider.IO's list; no more than that.
+    matched = [row for row in recent if row["run_id"] in upstream]
+    assert len(matched) >= len(recent) - 1, f"{[row['run_id'] for row in recent]} vs {sorted(upstream)}"
+    for row in matched:
+        source = upstream[row["run_id"]]
+        assert {key: row[key] for key in RECENT_RUN_FIELDS} == {key: source[field] for key, field in RECENT_RUN_FIELDS.items()}, row
+        assert row["url"].startswith("https://raider.io/mythic-plus-runs/") and str(row["run_id"]) in row["url"], row
+
+
 def test_guild_profile_echoes_the_guild_and_numeric_raid_rankings(cache_root: Path) -> None:
     result = run("raiderio", "guild", REGION, REALM, GUILD)
 
@@ -390,22 +431,44 @@ def test_a_repeated_profile_fetch_is_replayed_and_says_so(tmp_path: Path, comman
     }, "a cache hit must replay the same answer"
 
 
-def test_mythic_plus_runs_echoes_the_resolved_season_and_full_rows(current_season: str) -> None:
-    result = run("raiderio", "mythic-plus-runs", "--region", "us", "--dungeon", "all", "--page", "0")
+def test_leaderboard_mythic_plus_pages_are_contiguous_and_never_overlap(current_season: str) -> None:
+    """``--page`` walks the season's run ranking: the next page starts one rank after the last, with other runs.
 
-    query = result.payload["query"]
-    assert query["resolved_season"] == current_season, "the page must report the season it actually read"
-    assert query["region"] == "us"
-    runs = _rows(result, "runs")
-    assert result.data["count"] == len(runs)
-    top = runs[0]
-    assert top["rank"] == 1
+    A page flag that stopped reaching Raider.IO returns page 0 again, a well-formed and wrong answer;
+    the ranks and run ids Raider.IO puts on each row are what tell the two pages apart.
+    """
+    scope = ("leaderboard", "mythic-plus", "--region", "us", "--dungeon", "all", "--limit", str(RANKING_PAGE_SIZE))
+    first = run_retrying("raiderio", *scope, "--page", "0")
+    second = run_retrying("raiderio", *scope, "--page", "1")
+
+    assert second.payload["query"]["resolved_season"] == current_season, "the page must report the season it actually read"
+    assert second.payload["query"]["page"] == 1, second.describe()
+    first_runs, second_runs = _rows(first, "runs"), _rows(second, "runs")
+    assert [row["rank"] for row in first_runs] == list(range(1, RANKING_PAGE_SIZE + 1)), first.describe()
+    assert [row["rank"] for row in second_runs] == list(range(RANKING_PAGE_SIZE + 1, 2 * RANKING_PAGE_SIZE + 1)), second.describe()
+    assert not {row["run_id"] for row in first_runs} & {row["run_id"] for row in second_runs}, "a run must not appear on two pages"
+    top = second_runs[0]
     assert isinstance(top["score"], (int, float)) and top["score"] > 0
     assert isinstance(top["mythic_level"], int) and top["mythic_level"] > 0
     assert top["dungeon"] and top["affixes"]
     assert len(top["roster"]) == 5
-    _assert_freshness(result)
-    assert result.data["citations"]["leaderboard_urls"], result.describe()
+    _assert_freshness(second)
+
+
+def test_the_dungeon_scope_reaches_raider_io(baseline_sample: Result) -> None:
+    """``--dungeon <slug>`` picks that dungeon's leaderboard, so every row Raider.IO sends back is that dungeon.
+
+    The payload echoes the requested dungeon whatever upstream did, so the rows' own ``dungeon_slug`` is
+    the witness; a dropped parameter returns the all-dungeon ranking under the requested label.
+    """
+    slugs = sorted({row["dungeon_slug"] for row in _rows(baseline_sample, "runs")})
+    assert len(slugs) >= 2, f"the baseline sample holds one dungeon, so a dungeon scope cannot narrow it: {slugs}"
+    slug = slugs[0]
+
+    result = run("raiderio", "sample", "mythic-plus-runs", *SCOPE, "--dungeon", slug)
+    assert {row["dungeon_slug"] for row in _rows(result, "runs")} == {slug}, result.describe()
+    urls = result.data["citations"]["leaderboard_urls"]
+    assert urls and all(f"/{slug}/" in url for url in urls), urls
 
 
 def test_sample_mythic_plus_runs_reports_what_it_read(current_season: str, baseline_sample: Result) -> None:
@@ -488,9 +551,10 @@ def test_the_roster_filters_keep_exactly_the_runs_that_carry_the_value(baseline_
     not, which makes the expected set known exactly. A second class-qualified spec is one whose bare
     spec another class fields on a run without it, so a filter that ignores the class keeps that run;
     its expected set may be empty, which the first class-qualified leg rules out on its own. The
-    other two flags are proved both ways, on a value every run carries (each run on a US leaderboard
-    fields a US player and a tank) and on one none can (no EU player, no made-up role): a filter that
-    dropped everything fails the first leg, one that did nothing fails the second.
+    other two flags keep every run on a value every run carries (each run on a US leaderboard fields
+    a US player and a tank), so a filter that dropped everything fails. ``--player-region eu`` must
+    then keep none, so one that did nothing fails too; every run fields all three roles, so a role
+    that no run carries can only be a made-up one, which is refused as a usage error.
     """
     runs = _rows(baseline_sample, "runs")
     everything = _run_keys(baseline_sample)
@@ -509,16 +573,19 @@ def test_the_roster_filters_keep_exactly_the_runs_that_carry_the_value(baseline_
         assert expected < everything, f"{flag} {value} has to drop at least one run to prove anything"
         assert narrowed.data["sample"]["filtering"]["excluded_run_count"] == len(everything) - len(expected)
 
-    for flag, field, everywhere, nowhere in (("--player-region", "region", "us", "eu"), ("--contains-role", "role", "tank", "healbot")):
+    for flag, field, everywhere in (("--player-region", "region", "us"), ("--contains-role", "role", "tank")):
         assert all(everywhere in _roster_values(row, field) for row in runs), f"a sampled run has no {everywhere} {field}"
         kept = run("raiderio", "sample", "mythic-plus-runs", *SCOPE, flag, everywhere)
         assert _run_keys(kept) == everything, f"{flag} {everywhere} is on every sampled roster\n{kept.describe()}"
         assert kept.data["sample"]["filtering"]["excluded_run_count"] == 0
 
-        assert not any(nowhere in _roster_values(row, field) for row in runs), f"{nowhere} is in the sample after all"
-        empty = run("raiderio", "sample", "mythic-plus-runs", *SCOPE, flag, nowhere)
-        assert empty.data["runs"] == [], f"{flag} {nowhere} matches no sampled roster\n{empty.describe()}"
-        assert empty.data["sample"]["filtering"]["excluded_run_count"] == len(everything)
+    assert not any("eu" in _roster_values(row, "region") for row in runs), "an eu player is in the sample after all"
+    empty = run("raiderio", "sample", "mythic-plus-runs", *SCOPE, "--player-region", "eu")
+    assert empty.data["runs"] == [], f"--player-region eu matches no sampled roster\n{empty.describe()}"
+    assert empty.data["sample"]["filtering"]["excluded_run_count"] == len(everything)
+    # A role that does not exist is a mistake in the command, not a filter that happens to match nothing.
+    rejected = run("raiderio", "sample", "mythic-plus-runs", *SCOPE, "--contains-role", "healbot", expect=EXIT_USAGE, error_code="invalid_query")
+    assert "healbot" in rejected.payload["error"]["message"], rejected.describe()
 
 
 def test_the_affixes_scope_changes_both_the_rows_and_the_citation(baseline_sample: Result) -> None:

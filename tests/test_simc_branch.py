@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from simc_cli.branch import attach_focus_comparison, compare_branch_summaries, explain_intent, summarize_branches, summarize_intent
+from simc_cli.branch import compare_branches, explain_intent, resolve_focus_list, summarize_branches, summarize_intent
+from simc_cli.packet import build_analysis_packet
 from simc_cli.prune import PruneContext
 
 
@@ -36,11 +37,67 @@ def test_compare_branch_summaries_and_focus_comparison(tmp_path: Path) -> None:
     apl = _sample_apl(tmp_path)
     left_context = PruneContext(enabled_talents={"mass_disintegrate"}, disabled_talents=set(), targets=3)
     right_context = PruneContext(enabled_talents=set(), disabled_talents=set(), targets=1)
-    comparison = compare_branch_summaries(
-        summarize_branches(apl, left_context),
-        summarize_branches(apl, right_context),
-    )
-    comparison = attach_focus_comparison(comparison, apl, left_context, right_context)
+    comparison = compare_branches(apl, left_context, right_context)
     assert comparison.dispatch_changed is True
     assert comparison.left_focus_intent
     assert comparison.right_focus_intent == []
+
+
+def test_focus_descends_past_utility_actions_and_helper_lists(tmp_path: Path) -> None:
+    """Retribution's default list is `auto_attack, rebuke, call cooldowns, call generators`; the plain
+    actions used to count as rival rotation rows, so priority stopped at `default`."""
+    apl = tmp_path / "paladin_retribution.simc"
+    apl.write_text(
+        "actions=auto_attack\n"
+        "actions+=/rebuke\n"
+        "actions+=/call_action_list,name=cooldowns\n"
+        "actions+=/call_action_list,name=generators\n"
+        "actions.generators=blade_of_justice\n"
+    )
+
+    focus = resolve_focus_list(apl, PruneContext(enabled_talents=set(), disabled_talents=set(), targets=1))
+
+    assert (focus.focus_list, focus.path, focus.reason) == ("generators", ["default", "generators"], "guaranteed_call_leaf")
+
+
+def test_focus_stays_put_while_two_rotation_lists_can_run(tmp_path: Path) -> None:
+    apl = tmp_path / "monk_windwalker.simc"
+    apl.write_text(
+        "actions=call_action_list,name=default_st,if=active_enemies=1\n"
+        "actions+=/call_action_list,name=fallback\n"
+        "actions.default_st=tiger_palm\n"
+        "actions.fallback=blackout_kick\n"
+    )
+
+    assert resolve_focus_list(apl, PruneContext(enabled_talents=set(), disabled_talents=set(), targets=1)).focus_list == "default"
+
+
+def test_analysis_packet_and_priority_agree_on_a_two_level_focus(tmp_path: Path) -> None:
+    """analysis-packet followed only the run_action_list level and told agents to read `st`, while
+    priority resolved `st_core`."""
+    apl = tmp_path / "two_level.simc"
+    apl.write_text(
+        "actions=run_action_list,name=st,if=active_enemies=1\n"
+        "actions.st=call_action_list,name=st_core\n"
+        "actions.st_core=tiger_palm\n"
+    )
+    context = PruneContext(enabled_talents=set(), disabled_talents=set(), targets=1)
+
+    packet = build_analysis_packet(None, apl, context)
+
+    assert packet.focus_list == resolve_focus_list(apl, context).focus_list == "st_core"
+
+
+def test_focus_stays_on_a_rotation_list_that_ends_by_calling_a_smaller_one(tmp_path: Path) -> None:
+    """Frost's `spellslinger` list is the rotation and falls back to `call movement` at the end."""
+    apl = tmp_path / "mage_frost.simc"
+    apl.write_text(
+        "actions=run_action_list,name=spellslinger\n"
+        "actions.spellslinger=comet_storm\n"
+        "actions.spellslinger+=/frozen_orb\n"
+        "actions.spellslinger+=/frostbolt\n"
+        "actions.spellslinger+=/call_action_list,name=movement\n"
+        "actions.movement=ice_lance\n"
+    )
+
+    assert resolve_focus_list(apl, PruneContext(enabled_talents=set(), disabled_talents=set(), targets=1)).focus_list == "spellslinger"

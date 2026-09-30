@@ -4,56 +4,16 @@ from collections.abc import Mapping
 from typing import Any
 
 from warcraft_core.identity import class_spec_identity_payload
+from warcraft_core.simc_json2 import dps_error, game_version, metric_count, metric_mean, stop_reason
 
 # Raidbots `data.json` is standard SimC `json2` output (top-level `version`/`sim`)
-# with Raidbots metadata added under `simbot`. We cannot import simc_cli (provider
-# CLIs must stay independent), so the small defensive json2 helpers below mirror
-# simc_cli.report rather than reuse it.
+# with Raidbots metadata added under `simbot`, so it reads through the shared json2 helpers.
 
 
 def _nested_dict(container: Mapping[str, Any] | None, key: str) -> dict[str, Any]:
     """Return ``container[key]`` when it is a mapping, else ``{}`` (json2 fields are all optional)."""
     value = container.get(key) if container is not None else None
     return value if isinstance(value, dict) else {}
-
-
-def _metric_mean(metric: Any) -> float | None:
-    if isinstance(metric, dict):
-        value = metric.get("mean")
-        if isinstance(value, (int, float)):
-            return float(value)
-    if isinstance(metric, (int, float)):
-        return float(metric)
-    return None
-
-
-def _metric_count(metric: Any) -> int | None:
-    if isinstance(metric, dict):
-        value = metric.get("count")
-        if isinstance(value, int):
-            return value
-    return None
-
-
-def _stop_reason(*, options: dict[str, Any], iterations_completed: int | None) -> str:
-    target_error = options.get("target_error")
-    iterations_requested = options.get("iterations")
-    if isinstance(target_error, (int, float)) and float(target_error) > 0:
-        if (
-            isinstance(iterations_requested, int)
-            and isinstance(iterations_completed, int)
-            and iterations_completed < iterations_requested
-        ):
-            return "target_error_reached"
-        return "target_error_requested"
-    return "fixed_iterations_completed"
-
-
-def _game_version(options: dict[str, Any]) -> str | None:
-    dbc = _nested_dict(options, "dbc")
-    version_used = dbc.get("version_used")
-    live_info = dbc.get(version_used) if isinstance(version_used, str) and isinstance(dbc.get(version_used), dict) else {}
-    return live_info.get("wow_version") if isinstance(live_info, dict) else None
 
 
 def _actor_summary(player: dict[str, Any]) -> dict[str, Any]:
@@ -83,20 +43,20 @@ def _actor_summary(player: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _quick_sim_metrics(player: dict[str, Any]) -> dict[str, Any]:
+def _quick_sim_metrics(player: dict[str, Any], options: dict[str, Any]) -> dict[str, Any]:
     collected = _nested_dict(player, "collected_data")
     return {
-        "dps": _metric_mean(collected.get("dps")),
-        "dps_error": _metric_mean(collected.get("dpse")),
-        "dtps": _metric_mean(collected.get("dtps")),
-        "hps": _metric_mean(collected.get("hps")),
-        "fight_length": _metric_mean(collected.get("fight_length")),
+        "dps": metric_mean(collected.get("dps")),
+        "dps_error": dps_error(collected, options),
+        "dtps": metric_mean(collected.get("dtps")),
+        "hps": metric_mean(collected.get("hps")),
+        "fight_length": metric_mean(collected.get("fight_length")),
     }
 
 
 def _run_settings(options: dict[str, Any], statistics: dict[str, Any], player: dict[str, Any] | None) -> dict[str, Any]:
     collected = _nested_dict(player, "collected_data")
-    iterations_completed = _metric_count(collected.get("fight_length")) or _metric_count(statistics.get("simulation_length"))
+    iterations_completed = metric_count(collected.get("fight_length")) or metric_count(statistics.get("simulation_length"))
     return {
         "iterations_requested": options.get("iterations"),
         "iterations_completed": iterations_completed,
@@ -105,7 +65,7 @@ def _run_settings(options: dict[str, Any], statistics: dict[str, Any], player: d
         "desired_targets": options.get("desired_targets"),
         "max_time": options.get("max_time"),
         "threads": options.get("threads"),
-        "stop_reason": _stop_reason(options=options, iterations_completed=iterations_completed),
+        "stop_reason": stop_reason(options=options, iterations_completed=iterations_completed),
     }
 
 
@@ -190,7 +150,7 @@ def parse_report(report: dict[str, Any], *, report_id: str) -> dict[str, Any]:
     common: dict[str, Any] = {
         "report_id": report_id,
         "simc_version": str(report.get("version")) if report.get("version") is not None else None,
-        "game_version": _game_version(options),
+        "game_version": game_version(options),
         "simbot": _simbot_metadata(report),
         "run_settings": _run_settings(options, statistics, baseline),
     }
@@ -220,9 +180,11 @@ def parse_report(report: dict[str, Any], *, report_id: str) -> dict[str, Any]:
             {
                 "kind": "quick_sim",
                 "actor": _actor_summary(baseline),
-                "metrics": _quick_sim_metrics(baseline),
+                "metrics": _quick_sim_metrics(baseline, options),
                 "actor_count": 1 + len(others),
-                "other_actors": [{"actor": _actor_summary(player), "metrics": _quick_sim_metrics(player)} for player in others],
+                "other_actors": [
+                    {"actor": _actor_summary(player), "metrics": _quick_sim_metrics(player, options)} for player in others
+                ],
             }
         )
         return common

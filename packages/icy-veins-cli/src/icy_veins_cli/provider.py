@@ -9,6 +9,7 @@ from __future__ import annotations
 import shlex
 from collections.abc import Iterator
 from contextlib import contextmanager
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -27,9 +28,9 @@ from warcraft_core.envelope import Envelope, success_envelope
 from warcraft_core.exit_codes import error_code_for_http_status
 from warcraft_core.provider import ProviderError, ProviderSurface
 
-from icy_veins_cli.client import IcyVeinsClient, guide_ref_parts, load_icy_veins_cache_settings_from_env
-from icy_veins_cli.page_parser import classify_guide_slug, guide_traversal_scope
-from icy_veins_cli.search import PROVIDER_NAME, resolve_is_confident, search_results
+from icy_veins_cli.client import ICY_VEINS_SITEMAP_URL, IcyVeinsClient, guide_ref_parts, load_icy_veins_cache_settings_from_env
+from icy_veins_cli.page_parser import NAVIGATION_REQUIRED_FAMILIES, classify_guide_slug, guide_traversal_scope
+from icy_veins_cli.search import PROVIDER_NAME, SearchOutcome, resolve_is_confident, search_results, sitemap_provenance
 
 BUNDLE_QUERY_KINDS = ("sections", "navigation", "linked_entities", "build_references", "analysis_surfaces")
 _PREVIEW_LIMIT = 10
@@ -96,7 +97,6 @@ def _supported_guide_ref(guide_ref: str) -> tuple[str, str]:
     return slug, content_family
 
 
-
 def _require_query(query: str) -> None:
     if not query.strip():
         raise ProviderError("invalid_query", "Query cannot be empty.")
@@ -136,56 +136,48 @@ def doctor(**options: Any) -> Envelope:
     )
 
 
+def _search_outcome(query: str) -> SearchOutcome:
+    _require_query(query)
+    with _client() as client, transport_errors():
+        return search_results(client, query)
+
+
+def _sitemap_provenance(outcome: SearchOutcome) -> dict[str, Any]:
+    return sitemap_provenance(ICY_VEINS_SITEMAP_URL, outcome.sitemap_newest_lastmod, today=date.today())
+
+
 def search(query: str, *, limit: int = 5, **options: Any) -> Envelope:
     """Rank Icy Veins WoW guides from the sitemap against a free-text query."""
     del options
-    _require_query(query)
-    with _client() as client, transport_errors():
-        normalized_query, results, total_count, scope_hint = search_results(client, query, limit=limit)
+    outcome = _search_outcome(query)
     data = build_article_search_response(
         query=query,
-        search_query=normalized_query,
-        results=results,
-        total_count=total_count,
-        scope_hint=scope_hint,
+        search_query=outcome.normalized_query,
+        results=outcome.matches[:limit],
+        total_count=len(outcome.matches),
+        scope_hint=outcome.scope_hint,
     )
-    return _envelope("search", "search_results", data, query=query)
+    return _envelope("search", "search_results", data, query=query, provenance=_sitemap_provenance(outcome))
 
 
 def resolve(target: str, *, limit: int = 5, **options: Any) -> Envelope:
-    """Resolve a free-text query to the single best Icy Veins guide, with the candidate list attached."""
+    """Resolve a free-text query to the single best Icy Veins guide, with the candidate list attached.
+
+    Confidence is judged on every ranked match: ``--limit`` only trims the candidates shown, so a
+    near-tied rival the limit cuts off still keeps the answer unresolved.
+    """
     del options
-    _require_query(target)
-    with _client() as client, transport_errors():
-        normalized_query, results, total_count, scope_hint = search_results(client, target, limit=limit)
-    data = resolve_payload(
-        query=target,
-        search_query=normalized_query,
-        results=results,
-        total_count=total_count,
-        scope_hint=scope_hint,
-    )
-    return _envelope("resolve", "resolve_match", data, query=target)
-
-
-def resolve_payload(
-    *,
-    query: str,
-    search_query: str,
-    results: list[dict[str, Any]],
-    total_count: int,
-    scope_hint: dict[str, Any] | None,
-) -> dict[str, Any]:
-    """Shape the resolve payload, deciding ``resolved`` with the Icy Veins confidence rule."""
-    return build_article_resolve_response(
+    outcome = _search_outcome(target)
+    data = build_article_resolve_response(
         provider_command=PROVIDER_NAME,
-        query=query,
-        search_query=search_query,
-        results=results,
-        total_count=total_count,
-        resolved=resolve_is_confident(results),
-        scope_hint=scope_hint,
+        query=target,
+        search_query=outcome.normalized_query,
+        results=outcome.matches[:limit],
+        total_count=len(outcome.matches),
+        resolved=resolve_is_confident(outcome.matches),
+        scope_hint=outcome.scope_hint,
     )
+    return _envelope("resolve", "resolve_match", data, query=target, provenance=_sitemap_provenance(outcome))
 
 
 def _preview_block(items: list[dict[str, Any]], *, fetch_more_command: str) -> dict[str, Any]:
@@ -251,13 +243,22 @@ def guide(guide_ref: str) -> Envelope:
 
 
 def _traversal_navigation(initial: dict[str, Any]) -> list[dict[str, Any]]:
-    traversal_scope = guide_traversal_scope(initial["guide"].get("content_family"))
-    nav_items = initial["navigation"] if traversal_scope == "family_navigation" else []
-    return list(nav_items) or [
+    guide_row = initial["guide"]
+    content_family = guide_row.get("content_family")
+    if guide_traversal_scope(content_family) == "family_navigation" and initial["navigation"]:
+        return list(initial["navigation"])
+    if content_family in NAVIGATION_REQUIRED_FAMILIES:
+        # Walking only this page would pass a one-page bundle off as the whole guide.
+        raise ProviderError(
+            "parse_failed",
+            f"No page navigation parsed from {guide_row['page_url']}; the Icy Veins page switcher layout has probably changed.",
+            details={"page_url": guide_row["page_url"]},
+        )
+    return [
         {
-            "title": initial["guide"]["section_title"],
-            "url": initial["guide"]["page_url"],
-            "section_slug": initial["guide"]["section_slug"],
+            "title": guide_row["section_title"],
+            "url": guide_row["page_url"],
+            "section_slug": guide_row["section_slug"],
             "active": True,
             "ordinal": 1,
         }
@@ -395,14 +396,20 @@ def guide_query(
     invalid = sorted(selected_kinds - set(BUNDLE_QUERY_KINDS))
     if invalid:
         raise ProviderError("invalid_argument", f"Unsupported query kinds: {', '.join(invalid)}")
+    loaded = load_article_bundle(bundle.expanduser())
     result = query_article_bundle(
-        load_article_bundle(bundle.expanduser()),
+        loaded,
         query=query,
         limit=limit,
         kinds=selected_kinds,
         section_title_filter=section_title.lower() if section_title else None,
     )
-    return _envelope("guide-query", "bundle_query", {"bundle": str(bundle), **result}, query=query)
+    return _envelope(
+        "guide-query",
+        "guide_query",
+        {"bundle": str(bundle), "guide": loaded["manifest"].get("guide"), **result},
+        query=query,
+    )
 
 
 class IcyVeinsProvider:
@@ -431,7 +438,6 @@ __all__ = [
     "guide_full",
     "guide_query",
     "resolve",
-    "resolve_payload",
     "search",
     "transport_errors",
 ]

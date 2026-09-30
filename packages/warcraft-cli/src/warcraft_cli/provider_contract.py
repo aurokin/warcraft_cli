@@ -1,20 +1,17 @@
 from __future__ import annotations
 
-import json
 import re
 from collections import deque
 from collections.abc import Mapping, Sequence
-from functools import lru_cache
-from pathlib import Path
 from typing import Any
 
-from warcraft_core.exit_codes import EXIT_USAGE
-from warcraft_core.paths import config_root
-from warcraft_core.provider import ProviderError
+from warcraft_core.shapes import as_dict
 
 from warcraft_cli.providers import STALE_GUIDE_REASON
 
-DEFAULT_WRAPPER_RANKING_POLICY: dict[str, Any] = {
+# The wrapper's ranking weights. Changing them is a contract change: the table of realistic queries in
+# tests/test_provider_contract.py is what a change has to keep true.
+RANKING_POLICY: dict[str, Any] = {
     "provider_families": {
         "wowhead": "entity",
         "method": "article",
@@ -23,7 +20,6 @@ DEFAULT_WRAPPER_RANKING_POLICY: dict[str, Any] = {
         "warcraftlogs": "logs",
         "warcraft-wiki": "reference",
         "lorrgs": "logs",
-        "simc": "local_tool",
     },
     # Raider.IO profile regions. `world` is a leaderboard scope, not a region a profile lives in, and
     # counting it made `world boss sha of anger` read as a profile lookup.
@@ -75,30 +71,16 @@ DEFAULT_WRAPPER_RANKING_POLICY: dict[str, Any] = {
             "timeline",
             "timelines",
         ],
-        "simc": [
-            "simc",
-            "simulationcraft",
-            "apl",
-            "action",
-            "actions",
-            "profile",
-            "profiles",
-            "decode-build",
-            "branch",
-            "branches",
-            "trace",
-        ],
     },
     "intent_family_boosts": {
         # Lorrgs and Warcraft Logs describe specs and fights, never a guide.
-        "guide": {"article": 26, "entity": 10, "reference": -6, "profile": -18, "local_tool": -22, "logs": -10},
-        "reference": {"reference": 32, "entity": 8, "article": -10, "profile": -18, "local_tool": -12},
-        "entity": {"entity": 30, "article": -10, "reference": -6, "profile": -16, "local_tool": -18},
-        "guild_profile": {"profile": 30, "article": -14, "reference": -10, "entity": -12, "local_tool": -20},
-        "character_profile": {"profile": 28, "entity": 6, "article": -14, "reference": -10, "local_tool": -18},
-        "log_analysis": {"logs": 40, "profile": -14, "article": -16, "reference": -12, "entity": -10, "local_tool": -12},
-        "structured_profile": {"profile": 34, "article": -16, "reference": -12, "entity": -10, "local_tool": -18},
-        "simc": {"local_tool": 40, "article": -18, "reference": -14, "entity": -14, "profile": -20},
+        "guide": {"article": 26, "entity": 10, "reference": -6, "profile": -18, "logs": -10},
+        "reference": {"reference": 32, "entity": 8, "article": -10, "profile": -18},
+        "entity": {"entity": 30, "article": -10, "reference": -6, "profile": -16},
+        "guild_profile": {"profile": 30, "article": -14, "reference": -10, "entity": -12},
+        "character_profile": {"profile": 28, "entity": 6, "article": -14, "reference": -10},
+        "log_analysis": {"logs": 40, "profile": -14, "article": -16, "reference": -12, "entity": -10},
+        "structured_profile": {"profile": 34, "article": -16, "reference": -12, "entity": -10},
     },
     "intent_provider_boosts": {
         "guild_profile": {"raiderio": 10},
@@ -125,7 +107,6 @@ DEFAULT_WRAPPER_RANKING_POLICY: dict[str, Any] = {
         "character_profile": {"character": 24, "mythic_plus_runs": 12},
         "log_analysis": {"report": 24, "report_encounter": 28, "report_overview": 20, "spec_ranking": 26, "comp_ranking": 20},
         "structured_profile": {"guild": 20, "character": 20},
-        "simc": {"analysis": 16, "apl": 20, "decode_build": 18, "inspect": 12, "run": 10},
     },
     "provider_kind_boosts": {
         "wowhead": {"guide": 4, "item": 4, "npc": 4, "quest": 6, "spell": 6},
@@ -137,7 +118,6 @@ DEFAULT_WRAPPER_RANKING_POLICY: dict[str, Any] = {
         "warcraftlogs": {"report": 12, "report_encounter": 16},
         "warcraft-wiki": {"article": 8},
         "lorrgs": {"report_overview": 10, "spec_ranking": 14, "comp_ranking": 10},
-        "simc": {"analysis": 8, "apl": 10, "decode_build": 10, "inspect": 8, "run": 8},
     },
     # How much a row's own title answering the query is worth, on the shared 0-100 axis.
     "name_match_boosts": {"exact": 25, "title_prefix": 12},
@@ -150,78 +130,6 @@ TYPE_NAME_KIND_MAP = {
     "guild": "guild",
     "leaderboard": "leaderboard",
 }
-
-
-def _wrapper_ranking_config_path() -> Path:
-    return config_root() / "wrapper_ranking.json"
-
-
-def _deep_merge(base: dict[str, Any], override: Mapping[str, Any]) -> dict[str, Any]:
-    merged = dict(base)
-    for key, value in override.items():
-        current = merged.get(key)
-        if isinstance(current, dict) and isinstance(value, Mapping):
-            merged[key] = _deep_merge(current, value)
-        else:
-            merged[key] = value
-    return merged
-
-
-def _lower_frozenset(values: Any) -> frozenset[str]:
-    return frozenset(str(value).lower() for value in list(values or []))
-
-
-def _int_boost_map(section: Any) -> dict[str, dict[str, int]]:
-    return {
-        str(key): {str(inner): int(value) for inner, value in dict(boosts).items()}
-        for key, boosts in dict(section or {}).items()
-    }
-
-
-def _normalize_policy(policy: Mapping[str, Any]) -> dict[str, Any]:
-    """Coerce a merged ranking policy (defaults plus user config) to its canonical value types."""
-    return {
-        "provider_families": {str(key): str(value) for key, value in dict(policy.get("provider_families") or {}).items()},
-        "known_region_terms": _lower_frozenset(policy.get("known_region_terms")),
-        "structured_profile_second_token_blocklist": _lower_frozenset(
-            policy.get("structured_profile_second_token_blocklist")
-        ),
-        "intent_keywords": {
-            str(intent): _lower_frozenset(keywords)
-            for intent, keywords in dict(policy.get("intent_keywords") or {}).items()
-        },
-        "intent_family_boosts": _int_boost_map(policy.get("intent_family_boosts")),
-        "intent_provider_boosts": _int_boost_map(policy.get("intent_provider_boosts")),
-        "intent_kind_boosts": _int_boost_map(policy.get("intent_kind_boosts")),
-        "provider_kind_boosts": _int_boost_map(policy.get("provider_kind_boosts")),
-        "name_match_boosts": {
-            str(key): int(value) for key, value in dict(policy.get("name_match_boosts") or {}).items()
-        },
-    }
-
-
-@lru_cache(maxsize=4)
-def _load_wrapper_ranking_policy_cached(path_text: str) -> dict[str, Any]:
-    merged = dict(DEFAULT_WRAPPER_RANKING_POLICY)
-    config_path = Path(path_text)
-    if config_path.exists():
-        try:
-            payload = json.loads(config_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise ProviderError(
-                "invalid_config",
-                f"Could not read the wrapper ranking override at {config_path}: {exc}",
-                details={"config_path": str(config_path)},
-                exit_code=EXIT_USAGE,
-            ) from exc
-        if isinstance(payload, Mapping):
-            merged = _deep_merge(merged, payload)
-    return _normalize_policy(merged)
-
-
-def load_wrapper_ranking_policy() -> dict[str, Any]:
-    """Default ranking policy, deep-merged with ``<config_root>/wrapper_ranking.json`` when present."""
-    return _load_wrapper_ranking_policy_cached(str(_wrapper_ranking_config_path()))
 
 
 def confidence_rank(value: Any) -> int:
@@ -258,18 +166,14 @@ def _query_tokens(query: str) -> tuple[str, set[str]]:
 
 
 def query_intents(query: str) -> list[str]:
-    policy = load_wrapper_ranking_policy()
     normalized, tokens = _query_tokens(query)
-    intents: set[str] = set()
-    for intent, keywords in policy["intent_keywords"].items():
-        if tokens & keywords:
-            intents.add(intent)
+    intents = {intent for intent, keywords in RANKING_POLICY["intent_keywords"].items() if not tokens.isdisjoint(keywords)}
     ordered_tokens = [token for token in normalized.split() if token]
     # `<region> <realm...> <name>`: realms can be several words (`eu tarren mill Cotti`).
     if (
         len(ordered_tokens) >= 3
-        and ordered_tokens[0] in policy["known_region_terms"]
-        and ordered_tokens[1] not in policy["structured_profile_second_token_blocklist"]
+        and ordered_tokens[0] in RANKING_POLICY["known_region_terms"]
+        and ordered_tokens[1] not in RANKING_POLICY["structured_profile_second_token_blocklist"]
     ):
         intents.add("structured_profile")
     if {"guild", "character"} & tokens:
@@ -380,9 +284,8 @@ def wrapper_search_ranking(
     ``intent_family_fit`` is the sum of the family boosts the query's intents gave the row: below zero,
     the query asked for a different kind of source than this row's provider.
     """
-    policy = load_wrapper_ranking_policy()
     provider = str(row.get("provider") or "").strip()
-    family = policy["provider_families"].get(provider, "unknown")
+    family = RANKING_POLICY["provider_families"].get(provider, "unknown")
     kind = candidate_kind(row)
     raw_score = candidate_score(row)
     if provider_max_score is None:
@@ -394,36 +297,40 @@ def wrapper_search_ranking(
     intents = query_intents(query)
     family_fit = 0
     for intent in intents:
-        family_boost = policy["intent_family_boosts"].get(intent, {}).get(family, 0)
+        family_boost = RANKING_POLICY["intent_family_boosts"].get(intent, {}).get(family, 0)
         if family_boost:
             score += family_boost
             family_fit += family_boost
             reasons.append(f"intent:{intent}:family:{family}:{family_boost:+d}")
-        provider_boost = policy["intent_provider_boosts"].get(intent, {}).get(provider, 0)
+        provider_boost = RANKING_POLICY["intent_provider_boosts"].get(intent, {}).get(provider, 0)
         if provider_boost:
             score += provider_boost
             reasons.append(f"intent:{intent}:provider:{provider}:{provider_boost:+d}")
         if kind:
-            kind_boost = policy["intent_kind_boosts"].get(intent, {}).get(kind, 0)
+            kind_boost = RANKING_POLICY["intent_kind_boosts"].get(intent, {}).get(kind, 0)
             if kind_boost:
                 score += kind_boost
                 reasons.append(f"intent:{intent}:kind:{kind}:{kind_boost:+d}")
     if kind:
-        provider_kind_boost = policy["provider_kind_boosts"].get(provider, {}).get(kind, 0)
+        provider_kind_boost = RANKING_POLICY["provider_kind_boosts"].get(provider, {}).get(kind, 0)
         if provider_kind_boost:
             score += provider_kind_boost
             reasons.append(f"provider_kind:{provider}:{kind}:{provider_kind_boost:+d}")
     name_match = name_match_strength(query, row.get("name"))
-    name_match_boost = policy["name_match_boosts"].get(name_match or "", 0)
+    name_match_boost = RANKING_POLICY["name_match_boosts"].get(name_match or "", 0)
     if name_match_boost:
         score += name_match_boost
         reasons.append(f"name_match:{name_match}:{name_match_boost:+d}")
     off_intent = family == PROFILE_FAMILY and not (set(intents) & PROFILE_INTENTS)
     if off_intent:
         reasons.append("off_intent:profile_row_without_a_profile_query")
-    anchor = provider_top_row and not intents and family == ENTITY_FAMILY and name_match is not None
+    # With intent words in the query only a title that is the whole query anchors: those words are
+    # then part of the entity's name (the item `Guild Tabard`), not a request for another source.
+    anchor = provider_top_row and family == ENTITY_FAMILY and (
+        name_match == "exact" or (not intents and name_match is not None)
+    )
     if anchor:
-        reasons.append("anchor:entity_provider_top_row_named_by_a_bare_query")
+        reasons.append("anchor:entity_provider_top_row_named_by_the_query")
     return {
         "score": score,
         "reasons": reasons,
@@ -536,8 +443,9 @@ def search_result_sort_key(row: Mapping[str, Any]) -> tuple[int, int, int, int, 
 
     Two tiers do the work that per-provider score tuning could not:
 
-    * the *anchor* tier: a bare query that names the entity provider's own top row is answered by
-      that entity first, whatever local scale another provider's description of it happens to use;
+    * the *anchor* tier: a query that names the entity provider's own top row (a bare query, or
+      one whose intent words are part of the exact title) is answered by that entity first,
+      whatever local scale another provider's description of it happens to use;
     * the *off-intent* tier: a profile row cannot outrank rows from families the query actually
       asked for, which is what kept ``thunderfury`` from returning five players named Thunderfury.
     """
@@ -695,8 +603,10 @@ def resolve_answer_accepted(payload: Mapping[str, Any]) -> bool:
 
     Its own provider must have resolved it, and the query's intents must not rank that provider's
     family down: a guide query is not answered by Lorrgs spec metadata, nor a guild query by a wiki
-    article, whatever confidence the provider reported.
+    article, whatever confidence the provider reported. A match whose title is exactly the query is
+    exempt: the intent words are then part of the name (the item `Guild Tabard`), not a request for
+    another kind of source.
     """
-    ranking = payload.get("wrapper_ranking")
-    fit = ranking.get("intent_family_fit") if isinstance(ranking, Mapping) else 0
-    return bool(payload.get("resolved")) and int(fit or 0) >= 0
+    ranking = as_dict(payload.get("wrapper_ranking"))
+    fits_intent = int(ranking.get("intent_family_fit") or 0) >= 0 or ranking.get("name_match") == "exact"
+    return bool(payload.get("resolved")) and fits_intent

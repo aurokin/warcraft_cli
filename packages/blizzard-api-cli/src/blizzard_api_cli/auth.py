@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from pathlib import Path
 
 from warcraft_core.env import find_env_file, read_env_keys
 from warcraft_core.paths import provider_env_path
@@ -21,9 +20,8 @@ class BlizzardAuthConfig:
     client_id: str | None
     client_secret: str | None
     region: str | None
-    # Where the active credential pair came from: a config-file path when both halves resolved from
-    # the same file, "environment" when both came from the process environment, "mixed" when the two
-    # halves came from different sources, or None when unconfigured.
+    # Where the credential pair came from: a config-file path, "environment" for the process
+    # environment, or None when no single source holds both halves.
     credential_source: str | None
 
     @property
@@ -36,39 +34,27 @@ def blizzard_provider_env_path() -> str:
 
 
 def load_blizzard_auth_config(*, start_dir: str | None = None) -> BlizzardAuthConfig:
-    # Discovery precedence (highest wins): repo .env.local > provider env file > process environment,
-    # per docs/architecture/AUTH_ARCHITECTURE.md. Resolve each managed key independently across the
-    # chain (pure reads, no os.environ mutation) so a value is attributed to the source that actually
-    # supplied it -- even when keys are split across layers.
+    """Resolve the credentials from .env.local, then the provider env file, then the process environment.
+
+    A client ID and secret belong to one OAuth client, so the first layer holding both wins and halves
+    from different layers are never combined (as in warcraftlogs). ``BLIZZARD_REGION`` is a separate
+    setting and resolves on its own. Every layer is a pure read; ``os.environ`` is never mutated.
+    """
     local_path = find_env_file(start_dir=start_dir)
-    provider_path = Path(blizzard_provider_env_path())
     # Each layer is (source_label, values); source_label is None for the process environment.
     layers: list[tuple[str | None, dict[str, str]]] = []
     if local_path is not None:
         layers.append((str(local_path), read_env_keys(local_path, MANAGED_ENV_KEYS)))
-    if provider_path.is_file():
-        layers.append((str(provider_path), read_env_keys(provider_path, MANAGED_ENV_KEYS)))
+    provider_path = blizzard_provider_env_path()
+    layers.append((provider_path, read_env_keys(provider_path, MANAGED_ENV_KEYS)))
     layers.append((None, {key: os.environ[key] for key in MANAGED_ENV_KEYS if os.environ.get(key)}))
 
-    def resolve(key: str) -> tuple[str | None, str | None]:
-        for source, values in layers:
-            value = values.get(key)
-            if value is not None and value.strip():
-                return value.strip(), source
-        return None, None
-
-    client_id, id_source = resolve(CLIENT_ID_ENV)
-    client_secret, secret_source = resolve(CLIENT_SECRET_ENV)
-    region, _ = resolve(REGION_ENV)
-    if not (client_id and client_secret):
-        credential_source: str | None = None
-    elif id_source == secret_source:
-        credential_source = id_source if id_source is not None else "environment"
-    else:
-        credential_source = "mixed"
-    return BlizzardAuthConfig(
-        client_id=client_id,
-        client_secret=client_secret,
-        region=region,
-        credential_source=credential_source,
-    )
+    region = next((value for _, values in layers if (value := values.get(REGION_ENV, "").strip())), None)
+    for source, values in layers:
+        client_id = values.get(CLIENT_ID_ENV, "").strip()
+        client_secret = values.get(CLIENT_SECRET_ENV, "").strip()
+        if client_id and client_secret:
+            return BlizzardAuthConfig(
+                client_id=client_id, client_secret=client_secret, region=region, credential_source=source or "environment"
+            )
+    return BlizzardAuthConfig(client_id=None, client_secret=None, region=region, credential_source=None)

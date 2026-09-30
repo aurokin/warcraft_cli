@@ -8,11 +8,12 @@ below it (guide-family boosts, slug penalties, resolve confidence) is Icy Veins 
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Any
 
 from warcraft_content.article_discovery import article_candidate, sort_article_candidates
-from warcraft_content.search import normalize_query, score_article_match, tokenize_query
+from warcraft_content.search import expand_class_spec_aliases, normalize_query, score_article_match, tokenize_query
 
 from icy_veins_cli.client import IcyVeinsClient
 from icy_veins_cli.page_parser import CLASS_HUB_SLUGS
@@ -88,16 +89,17 @@ SPECIALIZED_QUERY_TERMS = {
     "midnight",
 }
 ROLE_QUERY_TERMS = {"healing", "tank", "dps"}
-# ``-guide`` pages that are one part of a spec rather than the introduction to a topic: they must not
-# outrank the spec's own ``-pve-<role>-guide`` on a bare spec query.
-SPECIALIZED_GUIDE_WORDS = frozenset({"leveling", "pvp", "pets", "hero"})
-# ``<spec>-pve-<role>-mythic-plus-guide`` is part of that spec's ``-pve-<role>-guide``, never its
-# introduction. (Per-raid spec pages carry their own raid-variant penalty.)
-SPEC_SUB_GUIDE_RE = re.compile(r"-pve-(?:dps|healing|tank)-mythic-plus-guide$")
+# The introduction to a spec, a class or a role. Every other ``-guide`` page (a spec's leveling, PvP
+# or pets page, a season hub, a dungeon page) is one topic among many and must not outrank the page
+# that introduces what the query names.
+INTRO_FAMILIES = frozenset({"spec_guide", "class_hub", "role_guide"})
 # Pages the sitemap has not seen updated for a year behind its newest page (past seasons, retired
 # raids) rank below current ones that match the query as well.
 STALE_AFTER = timedelta(days=365)
 STALE_PENALTY = 10
+# A sitemap whose newest page is this far behind today has stopped being updated, so pages published
+# since cannot be found; search and resolve say so in their provenance.
+SITEMAP_STALE_AFTER = timedelta(days=30)
 # A class/spec guide slug starts ``<spec>-<class>-`` (``shadow-priest-``, ``beast-mastery-hunter-``). A query
 # naming that spec ranks these pages above pages that only share the word (``shadow-enclave-delve-guide``);
 # every class sharing the spec gets the same boost, so ``frost`` stays a near-tie.
@@ -187,7 +189,7 @@ def normalize_search_query(query: str) -> str:
 
     '+' is spelled out because Icy Veins names its pages "Mythic Plus": ``mythic+`` is ``mythic plus``.
     """
-    return normalize_query(query.replace("+", " plus "), strip_terms=QUERY_STRIP_TERMS)
+    return normalize_query(expand_class_spec_aliases(query).replace("+", " plus "), strip_terms=QUERY_STRIP_TERMS)
 
 
 def query_terms(query: str) -> set[str]:
@@ -292,20 +294,19 @@ def score_family_match(query: str, *, content_family: str | None) -> tuple[int, 
     return score, reasons
 
 
-def score_slug_match(query: str, candidate: str, *, slug: str) -> tuple[int, list[str]]:
+def score_slug_match(query: str, candidate: str, *, slug: str, content_family: str | None) -> tuple[int, list[str]]:
     """Shared article title score plus Icy Veins slug shape signals (intro pages boosted, off-query slug words penalized)."""
     score, reasons = score_article_match(query, candidate)
     if not query or not candidate:
         return score, reasons
-    if slug.endswith("-guide"):
-        if SPECIALIZED_GUIDE_WORDS & set(slug.split("-")) or SPEC_SUB_GUIDE_RE.search(slug):
-            score += 2
-            reasons.append("specialized_guide")
-        else:
-            # Healer specs also publish a secondary ``-pve-dps-guide``; it scores clearly below their
-            # ``-pve-healing-guide`` so a healer query still resolves to the healing guide.
-            score += 10 if slug.endswith("-pve-dps-guide") else 16
-            reasons.append("intro_guide")
+    if content_family in INTRO_FAMILIES:
+        # Healer specs also publish a secondary ``-pve-dps-guide``; it scores clearly below their
+        # ``-pve-healing-guide`` so a healer query still resolves to the healing guide.
+        score += 10 if slug.endswith("-pve-dps-guide") else 16
+        reasons.append("intro_guide")
+    elif slug.endswith("-guide"):
+        score += 2
+        reasons.append("specialized_guide")
     query_words = query.split()
     penalty_terms = [term for term in slug.split("-") if term and term not in query_words and term not in NEUTRAL_SLUG_TERMS]
     if penalty_terms:
@@ -313,13 +314,27 @@ def score_slug_match(query: str, candidate: str, *, slug: str) -> tuple[int, lis
     return score, reasons
 
 
-def _stale_before(rows: list[dict[str, Any]]) -> str | None:
-    """Cut-off date for stale pages: a year before the newest ``last_updated`` in the sitemap.
+def newest_sitemap_lastmod(rows: list[dict[str, Any]]) -> str | None:
+    return max((row["sitemap_lastmod"] for row in rows if row.get("sitemap_lastmod")), default=None)
+
+
+def _stale_before(newest: str | None) -> str | None:
+    """Cut-off date for stale pages: a year before the newest ``sitemap_lastmod`` in the sitemap.
 
     Anchored to the sitemap rather than the clock, so ranking depends only on the data it ranks.
     """
-    newest = max((row["last_updated"] for row in rows if row.get("last_updated")), default=None)
     return (date.fromisoformat(newest) - STALE_AFTER).isoformat() if newest else None
+
+
+def sitemap_provenance(sitemap_url: str, newest: str | None, *, today: date) -> dict[str, Any]:
+    """Where discovery read its guides from, with a warning when the sitemap has stopped being updated."""
+    provenance: dict[str, Any] = {"sitemap_url": sitemap_url, "sitemap_newest_lastmod": newest}
+    if newest and today - date.fromisoformat(newest) > SITEMAP_STALE_AFTER:
+        provenance["sitemap_warning"] = (
+            f"The Icy Veins sitemap was last updated {newest}, so guides published or retitled since then "
+            "are missing from these results; open a known guide directly with `icy-veins guide <slug-or-url>`."
+        )
+    return provenance
 
 
 def _scored_candidate(row: dict[str, Any], query: str, terms: set[str], *, stale_before: str | None) -> dict[str, Any] | None:
@@ -335,7 +350,7 @@ def _scored_candidate(row: dict[str, Any], query: str, terms: set[str], *, stale
     # and a term only counts as a whole word: "dh" is not a match for "headhunters".
     if not terms & _singular_words(set(tokenize_query(candidate))):
         return None
-    score, reasons = score_slug_match(query, candidate, slug=slug)
+    score, reasons = score_slug_match(query, candidate, slug=slug, content_family=content_family)
     if normalize_search_query(slug.replace("-", " ")) == query:
         reasons.append("exact_title")
     family_score, family_reasons = score_family_match(query, content_family=content_family)
@@ -343,8 +358,8 @@ def _scored_candidate(row: dict[str, Any], query: str, terms: set[str], *, stale
     reasons.extend(family_reasons)
     if query and reasons and set(reasons) <= {"intro_guide", "specialized_guide"}:
         return None
-    last_updated = row.get("last_updated")
-    if stale_before and last_updated and last_updated < stale_before:
+    lastmod = row.get("sitemap_lastmod")
+    if stale_before and lastmod and lastmod < stale_before:
         score -= STALE_PENALTY
         reasons.append("penalty_stale_page")
     if score <= 0:
@@ -362,31 +377,37 @@ def _scored_candidate(row: dict[str, Any], query: str, terms: set[str], *, stale
         reasons=reasons,
         provider_command=PROVIDER_NAME,
     )
-    candidate_row["metadata"].update(content_family=content_family, last_updated=last_updated)
+    candidate_row["metadata"].update(content_family=content_family, sitemap_lastmod=lastmod)
     return candidate_row
 
 
-def search_results(
-    client: IcyVeinsClient,
-    query: str,
-    *,
-    limit: int,
-) -> tuple[str, list[dict[str, Any]], int, dict[str, Any] | None]:
-    """Rank sitemap guides against ``query``; returns (normalized query, top matches, total matches, scope hint)."""
+@dataclass(frozen=True, slots=True)
+class SearchOutcome:
+    """Every ranked match, so resolve judges confidence on all of them and only the caller trims to ``--limit``."""
+
+    normalized_query: str
+    matches: list[dict[str, Any]]
+    scope_hint: dict[str, Any] | None = None
+    sitemap_newest_lastmod: str | None = None
+
+
+def search_results(client: IcyVeinsClient, query: str) -> SearchOutcome:
+    """Rank sitemap guides against ``query``."""
     normalized_query = normalize_search_query(query)
     scope_hint = unsupported_scope_hint(normalized_query)
     if scope_hint is not None:
-        return normalized_query, [], 0, scope_hint
+        return SearchOutcome(normalized_query, [], scope_hint)
     terms = _singular_words(query_terms(normalized_query))
     rows = client.sitemap_guides()
-    stale_before = _stale_before(rows)
+    newest = newest_sitemap_lastmod(rows)
+    stale_before = _stale_before(newest)
     matches = [
         candidate
         for candidate in (_scored_candidate(row, normalized_query, terms, stale_before=stale_before) for row in rows)
         if candidate is not None
     ]
     sort_article_candidates(matches)
-    return normalized_query, matches[:limit], len(matches), None
+    return SearchOutcome(normalized_query, matches, None, newest)
 
 
 def resolve_is_confident(results: list[dict[str, Any]]) -> bool:

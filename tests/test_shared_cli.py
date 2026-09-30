@@ -222,7 +222,7 @@ def _status_error(status: int) -> httpx.HTTPStatusError:
         (_status_error(404), "not_found", 4),
         (_status_error(429), "rate_limited", 5),
         (_status_error(500), "upstream_error", 5),
-        (ProviderError("auth_required", "login first"), "auth_required", 3),
+        (ProviderError("auth_failed", "login first"), "auth_failed", 3),
         (ValueError("bad"), "internal_error", 1),
     ],
 )

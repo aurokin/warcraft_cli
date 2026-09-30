@@ -7,17 +7,10 @@ from itertools import product
 from typing import Any
 from urllib.parse import ParseResult, parse_qs, urlparse
 
+from warcraft_core.identity import is_warcraftlogs_report_code
+
 from lorrgs_cli.client import LorrgsClient
 
-# Warcraft Logs report codes are 16 alphanumerics with mixed case and often no digit (JVFTxcKCqrvpaAzD).
-# A code must mix upper and lower case or letters and digits, so a slug such as frostdeathknight or a
-# guild name is never read as a code.
-REPORT_CODE_PATTERN = re.compile(
-    r"^(?:(?=.*[a-z])(?=.*[A-Z])[A-Za-z0-9]{16}|(?=.*[A-Za-z])(?=.*\d)[A-Za-z0-9]{8,32})$"
-)
-# A bare word made of capitalised words (HavocDemonHunter) is a name, not a code. Only bare words are
-# checked: a random code has this shape about once in 1750, and a /reports/<code> URL path is a code.
-CAMEL_CASE_NAME_PATTERN = re.compile(r"(?:[A-Z][a-z]+)+")
 WORD_PATTERN = re.compile(r"[a-z0-9]+")
 STOP_TERMS = frozenset(
     {
@@ -61,6 +54,9 @@ STOP_TERMS = frozenset(
         "rankings",
     }
 )
+# Difficulty words stay out of row matching (they are in STOP_TERMS) but are carried into ranking
+# follow-ups, because spec-ranking defaults to mythic and comp-ranking has no difficulty at all.
+DIFFICULTIES = frozenset({"mythic", "heroic", "normal", "lfr"})
 # Lorrgs path segments that immediately precede a report code ("reports" is the Warcraft Logs form).
 USER_REPORT_PATH_SEGMENTS = frozenset({"user_report", "user_reports"})
 # How precisely a query named one roster row. NAMED means the query spelled the row's slug or full
@@ -98,6 +94,7 @@ class LorrgsRouteReference:
     kind: str
     spec_slug: str | None = None
     boss_slug: str | None = None
+    difficulty: str | None = None
     report: ReportReference | None = None
     source_url: str | None = None
 
@@ -110,7 +107,7 @@ def parse_report_reference(reference: str) -> ReportReference | None:
     parsed = urlparse(text)
     if parsed.scheme and parsed.netloc:
         return _report_reference_from_url(text, parsed)
-    if " " in text or not REPORT_CODE_PATTERN.fullmatch(text) or CAMEL_CASE_NAME_PATTERN.fullmatch(text):
+    if " " in text or not is_warcraftlogs_report_code(text):
         return None
     return ReportReference(code=text)
 
@@ -132,7 +129,7 @@ def _report_code_from_path(parts: list[str]) -> str | None:
     if index is None:
         return None
     code = parts[index + 1] if index + 1 < len(parts) else None
-    if not code or not REPORT_CODE_PATTERN.fullmatch(code):
+    if not code or not is_warcraftlogs_report_code(code, from_url=True):
         return None
     return code
 
@@ -154,7 +151,13 @@ def parse_lorrgs_route(reference: str) -> LorrgsRouteReference | None:
         return None
     parts = [part for part in parsed.path.strip("/").split("/") if part]
     if len(parts) >= 3 and parts[0] == "spec_ranking":
-        return LorrgsRouteReference(kind="spec_ranking", spec_slug=parts[1], boss_slug=parts[2], source_url=text)
+        return LorrgsRouteReference(
+            kind="spec_ranking",
+            spec_slug=parts[1],
+            boss_slug=parts[2],
+            difficulty=_query_value_from_url(parsed.query, "difficulty"),
+            source_url=text,
+        )
     if len(parts) >= 2 and parts[0] == "comp_ranking":
         return LorrgsRouteReference(kind="comp_ranking", boss_slug=parts[1], source_url=text)
     report = parse_report_reference(text)
@@ -211,15 +214,16 @@ def _ranked_candidates(client: LorrgsClient, query: str) -> list[dict[str, Any]]
     # narrower question than the caller asked: "frost chimaerus" -> a boss drops "frost", and "frost
     # mage guide" -> the Frost Mage spec drops "guide", a question Lorrgs has no answer for.
     known_terms = frozenset(query_terms)
+    difficulty = next((word for word in _words(query) if word in DIFFICULTIES), None)
     # Keep every row tied for the strongest match rather than the first one: "frost <boss>" fits Frost
     # Mage and Frost Death Knight equally, so both have to reach the caller as separate candidates.
     top_specs = _best_matches(spec_matches)
     top_bosses = _best_matches(boss_matches)
 
     candidates: list[dict[str, Any]] = [
-        _spec_ranking_candidate(spec, boss, known_terms) for spec, boss in product(top_specs, top_bosses)
+        _spec_ranking_candidate(spec, boss, known_terms, difficulty) for spec, boss in product(top_specs, top_bosses)
     ]
-    candidates.extend(_comp_ranking_candidate(boss, known_terms) for boss in top_bosses)
+    candidates.extend(_comp_ranking_candidate(boss, known_terms, difficulty) for boss in top_bosses)
     candidates.extend(_spec_candidate(spec, known_terms) for spec in top_specs)
     candidates.extend(_boss_candidate(boss, known_terms) for boss in top_bosses)
     candidates = _dedupe_candidates(candidates)
@@ -262,7 +266,7 @@ def _explicit_candidates(query: str) -> list[dict[str, Any]]:
     route = parse_lorrgs_route(query)
     if route is not None:
         if route.kind == "spec_ranking" and route.spec_slug and route.boss_slug:
-            return [_explicit_spec_ranking_candidate(route.spec_slug, route.boss_slug, route.source_url)]
+            return [_explicit_spec_ranking_candidate(route.spec_slug, route.boss_slug, route.difficulty, route.source_url)]
         if route.kind == "comp_ranking" and route.boss_slug:
             return [_explicit_comp_ranking_candidate(route.boss_slug, route.source_url)]
         if route.report is not None:
@@ -330,7 +334,9 @@ def _report_fights_command(ref: ReportReference, quoted_code: str) -> str:
     return command
 
 
-def _explicit_spec_ranking_candidate(spec_slug: str, boss_slug: str, source_url: str | None) -> dict[str, Any]:
+def _explicit_spec_ranking_candidate(
+    spec_slug: str, boss_slug: str, difficulty: str | None, source_url: str | None
+) -> dict[str, Any]:
     return {
         "provider": "lorrgs",
         "kind": "spec_ranking",
@@ -339,8 +345,9 @@ def _explicit_spec_ranking_candidate(spec_slug: str, boss_slug: str, source_url:
         "spec_slug": spec_slug,
         "boss_slug": boss_slug,
         "source_url": source_url,
+        "difficulty": difficulty,
         "ranking": {"score": 99, "confidence": "high", "match_reasons": ["explicit_lorrgs_spec_ranking_url"]},
-        "follow_up": _ranking_follow_up(spec_slug, boss_slug),
+        "follow_up": _ranking_follow_up(spec_slug, boss_slug, difficulty),
     }
 
 
@@ -435,7 +442,9 @@ def _match_reason(role: str, match: RowMatch) -> str:
     return f"{role}_{MATCH_LEVEL_NAMES[match.level]}"
 
 
-def _spec_ranking_candidate(spec_match: RowMatch, boss_match: RowMatch, known_terms: frozenset[str]) -> dict[str, Any]:
+def _spec_ranking_candidate(
+    spec_match: RowMatch, boss_match: RowMatch, known_terms: frozenset[str], difficulty: str | None
+) -> dict[str, Any]:
     spec_slug = _row_slug(spec_match.row)
     boss_slug = _row_slug(boss_match.row)
     return {
@@ -445,24 +454,29 @@ def _spec_ranking_candidate(spec_match: RowMatch, boss_match: RowMatch, known_te
         "name": f"{_row_name(spec_match.row)} on {_row_name(boss_match.row)}",
         "spec_slug": spec_slug,
         "boss_slug": boss_slug,
+        "difficulty": difficulty,
         "ranking": _free_text_ranking(
             (spec_match, boss_match),
             known_terms,
             [_match_reason("spec", spec_match), _match_reason("boss", boss_match)],
         ),
-        "follow_up": _ranking_follow_up(spec_slug, boss_slug),
+        "follow_up": _ranking_follow_up(spec_slug, boss_slug, difficulty),
     }
 
 
-def _comp_ranking_candidate(boss_match: RowMatch, known_terms: frozenset[str]) -> dict[str, Any]:
+def _comp_ranking_candidate(boss_match: RowMatch, known_terms: frozenset[str], difficulty: str | None) -> dict[str, Any]:
     boss_slug = _row_slug(boss_match.row)
+    ranking = _free_text_ranking((boss_match,), known_terms, [_match_reason("boss", boss_match)])
+    if difficulty not in (None, "mythic"):
+        # comp-ranking takes no difficulty, so it cannot answer a heroic/normal/lfr question.
+        ranking["unmatched_terms"] = sorted([*ranking["unmatched_terms"], difficulty])
     return {
         "provider": "lorrgs",
         "kind": "comp_ranking",
         "id": f"comp-ranking:{boss_slug}",
         "name": f"Composition ranking for {_row_name(boss_match.row)}",
         "boss_slug": boss_slug,
-        "ranking": _free_text_ranking((boss_match,), known_terms, [_match_reason("boss", boss_match)]),
+        "ranking": ranking,
         "follow_up": _comp_follow_up(boss_slug),
     }
 
@@ -503,13 +517,11 @@ def _boss_candidate(boss_match: RowMatch, known_terms: frozenset[str]) -> dict[s
     }
 
 
-def _ranking_follow_up(spec_slug: str, boss_slug: str) -> dict[str, str]:
-    return {
-        "provider": "lorrgs",
-        "kind": "spec_ranking",
-        "surface": "spec-ranking",
-        "command": f"lorrgs spec-ranking {shlex.quote(spec_slug)} {shlex.quote(boss_slug)}",
-    }
+def _ranking_follow_up(spec_slug: str, boss_slug: str, difficulty: str | None) -> dict[str, str]:
+    command = f"lorrgs spec-ranking {shlex.quote(spec_slug)} {shlex.quote(boss_slug)}"
+    if difficulty:
+        command += f" --difficulty {shlex.quote(difficulty)}"
+    return {"provider": "lorrgs", "kind": "spec_ranking", "surface": "spec-ranking", "command": command}
 
 
 def _comp_follow_up(boss_slug: str) -> dict[str, str]:

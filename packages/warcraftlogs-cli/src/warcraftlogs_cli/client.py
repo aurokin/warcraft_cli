@@ -1410,7 +1410,6 @@ class WarcraftLogsClient:
         cached = self._cache_store.get(key)
         if cached is not None:
             self._cache_hit_count += 1
-        self._record_warnings(cached)
         return cached
 
     def _read_raw_cache(self, key: str) -> Any:
@@ -1420,14 +1419,7 @@ class WarcraftLogsClient:
         if cached is None:
             return _CACHE_MISS
         self._cache_hit_count += 1
-        self._record_warnings(cached)
         return cached
-
-    def _record_warnings(self, payload: Any) -> None:
-        """Add a response's partial-error warnings to the tally the command reports at emit time."""
-        warnings = payload.get(GRAPHQL_WARNINGS_KEY) if isinstance(payload, dict) else None
-        if isinstance(warnings, list):
-            self._graphql_warnings.extend(warnings)
 
     def _write_cache(self, key: str, payload: Any, *, ttl_seconds: int) -> None:
         # A partial-error response is a transient upstream failure: caching it (for 24h on a finished
@@ -1519,8 +1511,12 @@ class WarcraftLogsClient:
         expires_in = payload.get("expires_in", 3600)
         if not isinstance(token, str) or not token:
             raise WarcraftLogsClientError("auth_failed", "Warcraft Logs token response did not include an access token.")
+        try:
+            expires_seconds = int(expires_in)
+        except (TypeError, ValueError) as exc:
+            raise WarcraftLogsClientError("invalid_response", "Warcraft Logs token response had a non-numeric expires_in.") from exc
         self._access_token = token
-        self._token_expires_at = now + int(expires_in)
+        self._token_expires_at = now + expires_seconds
         self._save_shared_client_token(token=token, expires_at=self._token_expires_at)
         return token
 

@@ -86,24 +86,25 @@ def _query_terms(value: str) -> list[str]:
 def _combined_match_text(name: str, realm: str | None, region: str | None) -> str:
     """The lowercased text a query term has to appear in, including the realm's slug spellings.
 
-    Raider.IO echoes realm display names (``Mal'Ganis``), so without the slug spellings the CLI
-    itself emits (``malganis``, ``mal-ganis``) a query written the way ``next_command`` writes it
-    would lose the all-terms credit and never resolve.
+    Raider.IO echoes realm display names (``Mal'Ganis``), so without the slug spelling the CLI
+    itself emits (``malganis``) a query written the way ``next_command`` writes it would lose the
+    all-terms credit and never resolve.
     """
     parts = [name, realm, region, *(realm_slug_variants(realm) if realm else [])]
     return " ".join(part for part in parts if part).lower()
 
 
 def _all_terms_match(query_terms: list[str], combined: str) -> bool:
-    return bool(query_terms) and all(term in combined for term in query_terms)
+    """Every term appears in ``combined``, a realm term in any slug spelling (``mal-ganis`` finds ``malganis``)."""
+    return bool(query_terms) and all(any(form in combined for form in (term, *realm_slug_variants(term))) for term in query_terms)
 
 
 def _realm_term_matches(query_terms: list[str], realm: str) -> bool:
     """True when a run of query terms names ``realm``, compared through the shared slug variants.
 
     Raider.IO echoes realm display names (``Mal'Ganis``, ``Tarren Mill``), so comparing raw strings
-    term by term misses both the slug spellings the CLI itself emits (``malganis``, ``mal-ganis``)
-    and every realm written as more than one word.
+    term by term misses both the slug spellings (``malganis``, ``mal-ganis``) and every realm
+    written as more than one word.
     """
     realm_variants = set(realm_slug_variants(realm))
     if not realm_variants:
@@ -250,7 +251,7 @@ def candidate_from_character_profile(
         "id": payload.get("id") or payload.get("profile_url") or f"character:{region}:{realm}:{name}",
         "name": name,
         "region": region,
-        "realm": realm.lower() if realm else None,
+        "realm": primary_realm_slug(realm) if realm else None,
         "realm_name": realm,
         "faction": payload.get("faction"),
         "class_name": payload.get("class"),
@@ -293,7 +294,7 @@ def candidate_from_guild_profile(
         "id": payload.get("id") or payload.get("profile_url"),
         "name": name,
         "region": region,
-        "realm": realm.lower() if realm else None,
+        "realm": primary_realm_slug(realm) if realm else None,
         "realm_name": realm,
         "faction": payload.get("faction"),
         "profile_url": payload.get("profile_url"),
@@ -316,9 +317,9 @@ def _probe_one_split(
     candidates: list[dict[str, Any]] = []
     for probe_kind in [kind] if kind else ["character", "guild"]:
         builder = candidate_from_character_profile if probe_kind == "character" else candidate_from_guild_profile
-        fetch = client.character_profile_variants if probe_kind == "character" else client.guild_profile_variants
+        fetch = client.character_profile if probe_kind == "character" else client.guild_profile
         try:
-            payload = fetch(region=probe.region, realm=probe.realm, name=probe.name)
+            payload = fetch(region=probe.region, realm=probe.realm, name=probe.name).payload
         except httpx.HTTPStatusError as exc:
             # 400/404 is "no such character/guild on that realm", which is the normal answer for a
             # split that read the wrong number of realm tokens; anything else is a real failure.

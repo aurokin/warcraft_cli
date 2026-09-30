@@ -729,6 +729,9 @@ class _FakeWarcraftLogsClient:
         }
 
     def report_fights(self, *, code: str, difficulty: int | None = None, allow_unlisted: bool = False, ttl_override: int | None = None) -> dict[str, object]:
+        if code == "live9999":
+            # The listed report still being logged has no boss fight yet.
+            return {"code": code, "endTime": None, "fights": []}
         assert code == "abcd1234"
         self.report_fights_allow_unlisted.append(allow_unlisted)
         fights: list[dict[str, object]] = [
@@ -869,7 +872,7 @@ class _FakeWarcraftLogsClient:
                         "code": "abcd1234",
                         "title": "Manaforge Omega - Liquid",
                         "zone": {"id": 38, "name": "Manaforge Omega"},
-                        "table": {"entries": entries},
+                        "table": {"data": {"entries": entries}},
                     }
                 entries = [
                     {"id": 9, "name": "Auropower", "total": 123456},
@@ -879,7 +882,7 @@ class _FakeWarcraftLogsClient:
                     "code": "abcd1234",
                     "title": "Manaforge Omega - Liquid",
                     "zone": {"id": 38, "name": "Manaforge Omega"},
-                    "table": {"entries": entries},
+                    "table": {"data": {"entries": entries}},
                 }
             if options.data_type == "Buffs":
                 assert options.view_by in {"Source", "Target"}
@@ -920,7 +923,7 @@ class _FakeWarcraftLogsClient:
             "code": "abcd1234",
             "title": "Manaforge Omega - Liquid",
             "zone": {"id": 38, "name": "Manaforge Omega"},
-            "table": {"entries": entries},
+            "table": {"data": {"entries": entries}},
         }
 
     def report_graph(self, *, code: str, allow_unlisted: bool = False, options: ReportFilterOptions) -> dict[str, object]:
@@ -2076,6 +2079,8 @@ def test_warcraftlogs_auth_login_exchanges_code(monkeypatch, tmp_path) -> None:
     saved_state = json.loads(state_file.read_text())
     assert saved_state["auth_mode"] == "authorization_code"
     assert saved_state["access_token"] == "user-token"
+    # Nothing refreshes a user token, so the refresh token Warcraft Logs returns is not kept on disk.
+    assert "refresh_token" not in saved_state
 
 
 def test_warcraftlogs_auth_pkce_login_generates_authorize_url(monkeypatch, tmp_path) -> None:
@@ -2415,7 +2420,7 @@ def test_warcraftlogs_guild_character_and_report_commands(monkeypatch) -> None:
     )
     assert table_result.exit_code == 0
     table_payload = json.loads(table_result.stdout)
-    assert table_payload["data"]["table"]["entries"][0]["name"] == "Auropower"
+    assert table_payload["data"]["table"]["data"]["entries"][0]["name"] == "Auropower"
 
     graph_result = runner.invoke(
         warcraftlogs_app,
@@ -2459,6 +2464,8 @@ def test_warcraftlogs_guild_character_and_report_commands(monkeypatch) -> None:
     assert player_details_payload["data"]["player_details"]["counts"]["total"] == 2
     assert player_details_payload["data"]["player_details"]["roles"]["tanks"][0]["name"] == "Sherway"
     assert player_details_payload["data"]["player_details"]["roles"]["tanks"][0]["identity_contract"]["status"] == "normalized"
+    # The fight names one class and spec for the player, so the identity is high confidence.
+    assert player_details_payload["data"]["player_details"]["roles"]["tanks"][0]["class_spec_identity"]["confidence"] == "high"
 
     rankings_result = runner.invoke(
         warcraftlogs_app,
@@ -2520,7 +2527,7 @@ def test_warcraftlogs_boss_kills_samples_finished_reports_and_filters_by_spec(mo
     assert "not a global spec ranking leaderboard" in payload["data"]["notes"][0]
     assert payload["data"]["sample"]["source_report_count"] == 2
     assert payload["data"]["sample"]["finished_report_count"] == 1
-    assert payload["data"]["sample"]["skipped_live_report_count"] == 1
+    assert payload["data"]["sample"]["live_report_count"] == 1
     assert payload["data"]["sample"]["filtered_kill_count"] == 1
     assert payload["data"]["kills"][0]["fight"]["encounter_id"] == 3012
     assert payload["data"]["kills"][0]["duration_seconds"] == 100.0
@@ -2571,7 +2578,7 @@ def test_warcraftlogs_spec_kill_samples_labels_participant_cohort(monkeypatch) -
         "finished": True,
         "live": False,
         "cache_ttl_seconds": 86400,
-        "source": "sampled_finished_reports",
+        "source": "sampled_reports",
     }
     assert payload["data"]["sample_scope"]["ranking_basis"] == "spec_filtered_participant_kill_samples"
     assert payload["data"]["sample_scope"]["filters"]["spec_name"] == "Retribution"
@@ -2753,6 +2760,113 @@ class _FrostPlayersClient(_FakeWarcraftLogsClient):
 
 
 _BOSS_COHORT_ARGS = ["--zone-id", "38", "--boss-id", "3012", "--difficulty", "5", "--report-pages", "1"]
+
+
+def test_warcraftlogs_shared_client_token_is_reused_only_for_the_same_credentials_and_site(monkeypatch) -> None:
+    monkeypatch.setenv("WARCRAFTLOGS_CLIENT_ID", "client-a")
+    monkeypatch.setenv("WARCRAFTLOGS_CLIENT_SECRET", "secret-a")
+    now = time.time()
+    WarcraftLogsClient()._save_shared_client_token(token="token-a", expires_at=now + 3600)
+
+    assert WarcraftLogsClient()._load_shared_client_token(now=now) == "token-a"
+    # A token minted for another site's OAuth host, or before a credential rotation, is not reused.
+    assert WarcraftLogsClient(site=CLASSIC_PROFILE)._load_shared_client_token(now=now) is None
+    monkeypatch.setenv("WARCRAFTLOGS_CLIENT_SECRET", "secret-b")
+    assert WarcraftLogsClient()._load_shared_client_token(now=now) is None
+
+
+class _TwoKillCohortClient(_DoubleLoggedCohortClient):
+    """Two kills from two guilds: a finished report and one still being logged.
+
+    The finished kill (100 s) fields two Frost Mages and never casts Holy Shock; the live report's
+    kill (250 s), which sorts second, fields one Fire Mage who casts it three times.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        live = _double_logged_report(
+            code="live0002", report_start=0, fights=[_kill_fight(fight_id=1, start=0, end=250_000)]
+        )
+        # Still being logged: the latest event arrived a minute ago.
+        live.update(endTime=int(time.time() * 1000) - 60_000, guild={"id": 6, "name": "Echo"})
+        self.COHORT = [
+            _double_logged_report(
+                code="done0001", report_start=1_000_000, fights=[_kill_fight(fight_id=1, start=100_000, end=200_000)]
+            ),
+            live,
+        ]
+
+    def report_player_details(self, *, code: str, **kwargs: Any) -> dict[str, object]:
+        frost = [{"spec": "Frost", "count": 1}]
+        dps = (
+            [{"name": "Icy", "id": 4, "type": "Mage", "specs": frost}, {"name": "Rime", "id": 5, "type": "Mage", "specs": frost}]
+            if code == "done0001"
+            else [{"name": "Ember", "id": 6, "type": "Mage", "specs": [{"spec": "Fire", "count": 1}]}]
+        )
+        return {"code": code, "playerDetails": {"data": {"tanks": [], "healers": [], "dps": dps}}}
+
+    def report_events(self, *, code: str, allow_unlisted: bool = False, options: ReportFilterOptions) -> dict[str, object]:
+        casts = [{"type": "cast", "timestamp": 120_000 + i, "sourceID": 9, "abilityGameID": 20473} for i in range(3)]
+        return {"code": code, "events": {"data": casts if code == "live0002" else [], "nextPageTimestamp": None}}
+
+
+def test_warcraftlogs_boss_name_cohort_keeps_only_the_resolved_encounter(monkeypatch) -> None:
+    # --boss-name resolves to one encounter; a kill of another encounter whose name contains the
+    # query (from a report that also covers another zone) is not that boss.
+    other = {**_kill_fight(fight_id=2, start=300_000, end=400_000), "encounterID": 3099, "name": "Dimensius Remnant"}
+
+    class _TwoEncounterClient(_DoubleLoggedCohortClient):
+        COHORT = [
+            _double_logged_report(
+                code="both0001", report_start=1_000_000, fights=[_kill_fight(fight_id=1, start=0, end=100_000), other]
+            )
+        ]
+
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _TwoEncounterClient())
+    result = runner.invoke(warcraftlogs_app, ["boss-kills", "--zone-id", "38", "--boss-name", "Dimensius"])
+
+    assert result.exit_code == 0, result.output
+    assert [kill["fight"]["encounter_id"] for kill in json.loads(result.stdout)["data"]["kills"]] == [3012]
+
+
+def _two_kill_cohort(monkeypatch: pytest.MonkeyPatch, *args: str) -> dict[str, Any]:
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _TwoKillCohortClient())
+    result = runner.invoke(warcraftlogs_app, [*args, *_BOSS_COHORT_ARGS])
+    assert result.exit_code == 0, result.output
+    return json.loads(result.stdout)["data"]
+
+
+def test_warcraftlogs_sampling_keeps_kills_from_reports_still_being_logged(monkeypatch) -> None:
+    # The listing puts the most recently updated reports first; dropping every report still being
+    # logged emptied the cohort for the current raid. A kill is final once its fight has ended.
+    data = _two_kill_cohort(monkeypatch, "boss-kills")
+    assert (data["sample"]["finished_report_count"], data["sample"]["live_report_count"]) == (1, 1)
+    assert [(kill["report"]["code"], kill["report_finished"]) for kill in data["kills"]] == [
+        ("done0001", True),
+        ("live0002", False),
+    ]
+    assert (data["cache_provenance"]["live"], data["cache_provenance"]["finished"]) == (True, False)
+
+
+def test_warcraftlogs_boss_spec_usage_counts_a_spec_once_per_kill(monkeypatch) -> None:
+    data = _two_kill_cohort(monkeypatch, "boss-spec-usage")
+    assert data["sample"]["filtered_kill_count"] == 2
+    rows = [(row["spec_name"], row["appearance_count"], row["kill_presence_count"], row["percent_of_kills"]) for row in data["spec_usage"]]
+    # Two Frost Mages in one kill are two appearances but one kill of presence.
+    assert rows == [("Frost", 2, 1, 50.0), ("Fire", 1, 1, 50.0)]
+
+
+def test_warcraftlogs_ability_usage_totals_cover_every_sampled_kill(monkeypatch) -> None:
+    data = _two_kill_cohort(monkeypatch, "ability-usage-summary", "--ability-id", "20473")
+    usage = data["usage"]
+    assert (usage["total_casts"], usage["kills_with_any_usage_count"], usage["kills_with_any_usage_percent"]) == (3, 1, 50.0)
+    assert (usage["casts_per_kill"]["min"], usage["casts_per_kill"]["max"]) == (0.0, 3.0)
+
+
+def test_warcraftlogs_kill_time_distribution_buckets_are_shares_of_the_cohort(monkeypatch) -> None:
+    data = _two_kill_cohort(monkeypatch, "kill-time-distribution", "--bucket-seconds", "60")
+    buckets = [(row["start_seconds"], row["count"], row["percent"]) for row in data["distribution"]["rows"]]
+    assert buckets == [(60, 1, 50.0), (240, 1, 50.0)]
 
 
 @pytest.mark.parametrize(
@@ -3323,6 +3437,31 @@ def test_warcraftlogs_encounter_rankings_derives_page_offset_ranks(monkeypatch) 
     assert payload["data"]["rankings"]["has_more_pages"] is False
     assert payload["data"]["rankings"]["rows"][0]["name"] == "Moonkinthree"
     assert payload["data"]["rankings"]["rows"][0]["rank"] == 101
+
+
+@pytest.mark.parametrize(
+    ("class_name", "spec_name"),
+    [("death-knight", "frost"), ("Death Knight", "Frost"), ("DeathKnight", "frost"), ("hunter", "beast-mastery"), ("Hunter", "BeastMastery")],
+)
+def test_warcraftlogs_encounter_rankings_sends_warcraft_logs_class_and_spec_slugs(
+    monkeypatch, class_name: str, spec_name: str
+) -> None:
+    # Warcraft Logs rejects "Death Knight" and "Beast Mastery" with "Invalid class and spec specified."
+    sent: list[tuple[str | None, str | None]] = []
+
+    class _SlugClient(_FakeWarcraftLogsClient):
+        def encounter_rankings(self, *, encounter_id: int, options: EncounterRankingsOptions) -> dict[str, object]:
+            sent.append((options.class_name, options.spec_name))
+            return {"id": encounter_id, "name": "Dimensius, the All-Devouring", "characterRankings": {"rankings": []}}
+
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _SlugClient())
+    runner.invoke(
+        warcraftlogs_app,
+        ["encounter-rankings", "--zone-id", "38", "--boss-id", "3012", "--class-name", class_name, "--spec-name", spec_name],
+    )
+
+    expected_spec = "Frost" if spec_name.lower() == "frost" else "BeastMastery"
+    assert sent == [("DeathKnight" if "eath" in class_name else "Hunter", expected_spec)]
 
 
 def test_warcraftlogs_encounter_rankings_surfaces_embedded_provider_errors(monkeypatch) -> None:
@@ -4075,6 +4214,17 @@ def test_warcraftlogs_report_encounter_buffs_summarizes_buff_rows(monkeypatch) -
     assert top_row["reported_bands"][0]["startTime"] == 110000
 
 
+def test_warcraftlogs_report_encounter_buffs_view_by_target_labels_rows_target(monkeypatch) -> None:
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _FakeWarcraftLogsClient())
+
+    result = runner.invoke(warcraftlogs_app, ["report-encounter-buffs", "abcd1234", "--fight-id", "1", "--view-by", "target"])
+
+    assert result.exit_code == 0, result.output
+    buffs = json.loads(result.stdout)["data"]["buffs"]
+    assert buffs["view_by"] == "Target"
+    assert all("target" in row and "source" not in row for row in buffs["preview"])
+
+
 def test_warcraftlogs_report_encounter_buffs_honors_preview_limit(monkeypatch) -> None:
     monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _FakeWarcraftLogsClient())
 
@@ -4282,7 +4432,7 @@ def test_warcraftlogs_report_encounter_damage_breakdown_scopes_table_query(monke
     assert payload["kind"] == "report_encounter_damage_breakdown"
     assert payload["query"]["data_type"] == "DamageDone"
     assert payload["query"]["fight_ids"] == [1]
-    assert payload["data"]["table"]["entries"][0]["name"] == "Auropower"
+    assert payload["data"]["table"]["data"]["entries"][0]["name"] == "Auropower"
 
 
 def test_warcraftlogs_report_encounter_damage_source_summary_returns_typed_rows(monkeypatch) -> None:
@@ -4317,46 +4467,6 @@ def test_warcraftlogs_report_encounter_damage_target_summary_returns_typed_rows(
     assert payload["data"]["damage_summary"]["rows"][0]["target"]["name"] == "Dimensius, the All-Devouring"
     assert payload["data"]["damage_summary"]["rows"][0]["reported_total"] == 210000
     assert payload["data"]["damage_summary"]["rows"][0]["target"]["identity_contract"]["status"] == "canonical"
-
-
-def test_warcraftlogs_report_encounter_damage_source_summary_handles_live_wrapped_table_shape(monkeypatch) -> None:
-    """Live WCL responses wrap the table payload as {table: {data: {entries: [...]}}}.
-
-    Older fixtures used {table: {entries: [...]}} (no data wrapper), which is the shape the parser
-    historically accepted. This regression test ensures the wrapped live shape returns rows.
-    """
-
-    class _LiveShapeClient(_FakeWarcraftLogsClient):
-        def report_table(self, *, code: str, allow_unlisted: bool = False, options: ReportFilterOptions) -> dict[str, object]:
-            assert options.data_type == "DamageDone"
-            return {
-                "code": code,
-                "title": "Live Report",
-                "zone": {"id": 46, "name": "VS / DR / MQD"},
-                "table": {
-                    "data": {
-                        "entries": [
-                            {"id": 9, "name": "Auropower", "total": 45791437},
-                            {"id": 1, "name": "Sherway", "total": 34685070},
-                        ],
-                        "totalTime": 380087,
-                        "logVersion": 17,
-                        "gameVersion": 1,
-                    }
-                },
-            }
-
-    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _LiveShapeClient())
-
-    result = runner.invoke(
-        warcraftlogs_app,
-        ["report-encounter-damage-source-summary", "abcd1234", "--fight-id", "1"],
-    )
-    assert result.exit_code == 0
-    payload = json.loads(result.stdout)
-    assert payload["data"]["damage_summary"]["entry_count"] == 2
-    assert payload["data"]["damage_summary"]["rows"][0]["source"]["name"] == "Auropower"
-    assert payload["data"]["damage_summary"]["rows"][0]["reported_total"] == 45791437
 
 
 def test_warcraftlogs_report_encounter_aura_summary_handles_live_auras_shape(monkeypatch) -> None:
@@ -5294,6 +5404,33 @@ def test_warcraftlogs_client_ignores_invalid_shared_public_token_state(monkeypat
         client.close()
 
     assert token_requests == ["https://www.warcraftlogs.com/oauth/token"]
+
+
+def test_warcraftlogs_client_rejects_a_non_numeric_token_lifetime(monkeypatch) -> None:
+    """A token response whose expires_in is not a number is an invalid response, not an internal_error."""
+    monkeypatch.setattr(
+        "warcraftlogs_cli.client.load_warcraftlogs_auth_config",
+        lambda start_dir=None: type(
+            "Auth", (), {"configured": True, "client_id": "client-id", "client_secret": "client-secret", "env_file": None}
+        )(),
+    )
+    monkeypatch.setattr("warcraftlogs_cli.client.load_provider_auth_state", lambda provider: None)
+    monkeypatch.setattr("warcraftlogs_cli.client.save_provider_auth_state", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "warcraftlogs_cli.client.request_with_retries",
+        lambda client, url, *, method="GET", **kwargs: httpx.Response(
+            200, json={"access_token": "public-token", "expires_in": "soon"}, request=httpx.Request(method, url)
+        ),
+    )
+
+    client = WarcraftLogsClient()
+    try:
+        with pytest.raises(WarcraftLogsClientError) as caught:
+            client._token()
+    finally:
+        client.close()
+
+    assert caught.value.code == "invalid_response"
 
 
 def test_warcraftlogs_client_current_user_never_reads_or_writes_the_cache(monkeypatch) -> None:
@@ -7740,6 +7877,51 @@ class _ActorTypeAwareClient(_FakeWarcraftLogsClient):
         if actor_type is not None:
             master_data["actors"] = [row for row in master_data["actors"] if row["type"] == actor_type]
         return {**payload, "masterData": master_data}
+
+
+@pytest.mark.parametrize(
+    ("command", "data_type"),
+    [("report-encounter-damage-source-summary", "DamageDone"), ("report-encounter-aura-summary", "Buffs")],
+)
+def test_warcraftlogs_encounter_summaries_name_npc_sources(monkeypatch, command: str, data_type: str) -> None:
+    # With --hostility-type enemies the sources are NPCs; a players-only master-data fetch named them `actor:<id>`.
+    class _EnemySourceClient(_ActorTypeAwareClient):
+        def report_table(self, *, code: str, allow_unlisted: bool = False, options: ReportFilterOptions) -> dict[str, object]:
+            assert options.data_type == data_type
+            row = {"id": 501, "name": "Dimensius, the All-Devouring", "total": 5, "totalUptime": 5, "totalUses": 1}
+            return {"code": code, "table": {"data": {"entries": [row], "auras": [row]}}}
+
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _EnemySourceClient())
+    args = [command, "abcd1234", "--fight-id", "1", "--hostility-type", "enemies"]
+    result = runner.invoke(warcraftlogs_app, args + (["--ability-id", "20473"] if data_type == "Buffs" else []))
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.stdout)["data"]
+    summary = data.get("damage_summary") or data.get("aura_summary")
+    assert summary["rows"][0]["source"]["name"] == "Dimensius, the All-Devouring"
+
+
+def test_warcraftlogs_aura_compare_names_npc_sources(monkeypatch) -> None:
+    # The compare windows share one master-data fetch; a players-only fetch named NPC sources `actor:<id>`.
+    class _EnemySourceClient(_ActorTypeAwareClient):
+        def report_table(self, *, code: str, allow_unlisted: bool = False, options: ReportFilterOptions) -> dict[str, object]:
+            row = {"id": 501, "name": "Dimensius, the All-Devouring", "total": 5, "totalUptime": 5, "totalUses": 1}
+            return {"code": code, "table": {"data": {"entries": [row], "auras": [row]}}}
+
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _EnemySourceClient())
+    result = runner.invoke(
+        warcraftlogs_app,
+        [
+            "report-encounter-aura-compare", "abcd1234", "--fight-id", "1", "--ability-id", "20473",
+            "--hostility-type", "enemies",
+            "--left-window-start-ms", "10000", "--left-window-end-ms", "50000",
+            "--right-window-start-ms", "50000", "--right-window-end-ms", "90000",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    rows = json.loads(result.stdout)["data"]["comparison"]["rows"]
+    assert [row["source"]["name"] for row in rows] == ["Dimensius, the All-Devouring"]
 
 
 def test_warcraftlogs_report_encounter_casts_names_npc_targets(monkeypatch) -> None:

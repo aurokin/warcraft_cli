@@ -10,23 +10,18 @@ from warcraft_core.provider import ProviderError
 from warcraft_core.shapes import as_dict, as_list
 
 from raiderio_cli.analytics import (
-    SampleRequest,
     analytics_query,
     citations_payload,
     distribution_payload,
     freshness_payload,
-    leaderboard_pages_for_limit,
     limit_player_snapshots,
     load_filtered_runs,
     player_distribution_payload,
     player_sample_summary,
     player_snapshots,
-    ranking_run_summary,
-    resolve_season_input,
-    response_season,
     run_filters,
-    runs_page_provenance,
     sample_leaderboard_runs,
+    sample_request,
     sample_summary,
     threshold_payload,
     validated_metric,
@@ -56,6 +51,28 @@ install_common_callback(app, provider=PROVIDER_NAME)
 RUN_DISTRIBUTION_METRICS = ("mythic_level", "dungeon", "role", "player_region", "class", "spec", "composition", "class_composition")
 PLAYER_DISTRIBUTION_METRICS = ("appearance_count", "top_mythic_level", "class", "spec", "role", "player_region")
 THRESHOLD_METRICS = ("score", "mythic_level")
+
+# Scope and filter options shared by the leaderboard and every sampled Mythic+ command.
+_SEASON = typer.Option("", "--season", help="Season slug, or 'current' (the default) for the Raider.IO current season.")
+_REGION = typer.Option("world", "--region", help="world, us, eu, kr, tw, cn, or an alias such as na.")
+_DUNGEON = typer.Option("all", "--dungeon", help="Dungeon slug or all.")
+_AFFIXES = typer.Option("", "--affixes", help="Affix slug, fortified, tyrannical, current, or all.")
+_PAGE = typer.Option(0, "--page", min=0, help="20-run page of rankings to start from.")
+_PAGES = typer.Option(None, "--pages", min=1, max=10, help="Most 20-run pages to read. Defaults to as many as --limit needs.")
+_SAMPLE_LIMIT = typer.Option(100, "--limit", min=1, max=200, help="Maximum runs to retain in the sample.")
+_PLAYER_LIMIT = typer.Option(100, "--player-limit", min=1, max=500, help="Maximum player snapshots to retain after deduping.")
+_LEVEL_MIN = typer.Option(None, "--level-min", min=0, help="Retain only runs at or above this Mythic+ level.")
+_LEVEL_MAX = typer.Option(None, "--level-max", min=0, help="Retain only runs at or below this Mythic+ level.")
+_SCORE_MIN = typer.Option(None, "--score-min", help="Retain only runs at or above this sampled run score.")
+_SCORE_MAX = typer.Option(None, "--score-max", help="Retain only runs at or below this sampled run score.")
+_CONTAINS_ROLE = typer.Option(
+    None, "--contains-role", help="Retain only runs containing at least one of these roles (tank, healer, dps). Repeatable."
+)
+_CONTAINS_CLASS = typer.Option(None, "--contains-class", help="Retain only runs containing at least one class slug or name. Repeatable.")
+_CONTAINS_SPEC = typer.Option(None, "--contains-spec", help="Retain only runs containing at least one spec slug or name. Repeatable.")
+_PLAYER_REGION = typer.Option(
+    None, "--player-region", help="Retain only runs containing at least one player from the given region. Repeatable."
+)
 
 
 @contextmanager
@@ -107,15 +124,19 @@ def _guild_rankings_summary(rankings: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _recent_run_summary(row: dict[str, Any]) -> dict[str, Any]:
-    dungeon = as_dict(row.get("dungeon"))
+    """One profile run under the leaderboard's field names: the profile calls the timer ``par_time_ms``
+    and the chest count ``num_keystone_upgrades``, and names the dungeon as a plain string."""
     return {
         "mythic_level": row.get("mythic_level"),
-        "dungeon": dungeon.get("name"),
-        "dungeon_slug": dungeon.get("slug"),
+        "dungeon": row.get("dungeon"),
+        "short_name": row.get("short_name"),
         "completed_at": row.get("completed_at"),
-        "num_chests": row.get("num_chests"),
+        "score": row.get("score"),
+        "num_chests": row.get("num_keystone_upgrades"),
         "clear_time_ms": row.get("clear_time_ms"),
-        "keystone_time_ms": row.get("keystone_time_ms"),
+        "keystone_time_ms": row.get("par_time_ms"),
+        "run_id": row.get("keystone_run_id"),
+        "url": row.get("url"),
     }
 
 
@@ -289,79 +310,25 @@ def guild(
     emit(ctx, raiderio_envelope(command=command_path(ctx), kind="guild_profile", payload=payload))
 
 
-@app.command("mythic-plus-runs")
-def mythic_plus_runs(
-    ctx: typer.Context,
-    season: str = typer.Option("", "--season", help="Season slug. Defaults to Raider.IO current default season."),
-    region: str = typer.Option("world", "--region", help="Region slug such as world, us, or eu."),
-    dungeon: str = typer.Option("all", "--dungeon", help="Dungeon slug or all."),
-    affixes: str = typer.Option("", "--affixes", help="Affix slug, fortified, tyrannical, current, or all."),
-    page: int = typer.Option(0, "--page", min=0, help="Page of rankings to request."),
-) -> None:
-    """Return one page of the Mythic+ run leaderboard for a region and dungeon."""
-    with _command_errors(ctx), open_client() as client:
-        fetched = client.mythic_plus_runs(
-            season=resolve_season_input(season),
-            region=region,
-            dungeon=dungeon,
-            affixes=affixes or None,
-            page=page,
-        )
-        provenance = runs_page_provenance(fetched, cache_ttl_seconds=client.mythic_plus_runs_ttl_seconds)
-    payload = fetched.payload
-    rankings = as_list(payload.get("rankings"))
-    served_season = response_season(payload)
-    emit(
-        ctx,
-        raiderio_envelope(
-            command=command_path(ctx),
-            kind="mythic_plus_runs",
-            payload={
-                "query": {
-                    "season": served_season or season or None,
-                    "resolved_season": served_season or resolve_season_input(season),
-                    "region": payload.get("region") or region,
-                    "dungeon": payload.get("dungeon") or dungeon,
-                    "affixes": affixes or None,
-                    "page": page,
-                },
-                "count": len(rankings),
-                "runs": [ranking_run_summary(row) for row in rankings if isinstance(row, dict)],
-                **provenance,
-            },
-        ),
-    )
-
-
 @leaderboard_app.command("mythic-plus")
 def leaderboard_mythic_plus(
     ctx: typer.Context,
-    season: str = typer.Option("", "--season", help="Season slug, or 'current' for the Raider.IO current default season."),
-    region: str = typer.Option("world", "--region", help="Region slug such as world, us, or eu."),
-    dungeon: str = typer.Option("all", "--dungeon", help="Dungeon slug or all."),
-    affixes: str = typer.Option("", "--affixes", help="Affix slug, fortified, tyrannical, current, or all."),
-    page: int = typer.Option(0, "--page", min=0, help="Page of rankings to request."),
+    season: str = _SEASON,
+    region: str = _REGION,
+    dungeon: str = _DUNGEON,
+    affixes: str = _AFFIXES,
+    page: int = _PAGE,
     limit: int = typer.Option(20, "--limit", min=1, max=200, help="Maximum leaderboard rows to return."),
 ) -> None:
     """Return the season-scoped top Mythic+ runs with sampling freshness and citations.
 
-    A thin view over the same sampled-run primitive used by ``sample`` / ``distribution`` --
-    emits the explicit ``resolved_season`` plus sampled freshness and leaderboard citations so
-    the rows are provenance-safe. It fetches as many ranking pages as ``--limit`` requires and
-    reports returned-vs-requested counts so a short provider response is explicit, not a silent cap.
+    Emits the explicit ``resolved_season`` plus sampled freshness and leaderboard citations so the
+    rows are provenance-safe. It fetches as many ranking pages as ``--limit`` requires and reports
+    returned-vs-requested counts so a short provider response is explicit, not a silent cap.
     """
-    pages = leaderboard_pages_for_limit(limit)
     with _command_errors(ctx), open_client() as client:
-        runs, meta = sample_leaderboard_runs(
-            client,
-            season=resolve_season_input(season),
-            region=region,
-            dungeon=dungeon,
-            affixes=affixes or None,
-            page=page,
-            pages=pages,
-            limit=limit,
-        )
+        request = sample_request(season=season, region=region, dungeon=dungeon, affixes=affixes, page=page, pages=None, limit=limit)
+        runs, meta = sample_leaderboard_runs(client, request)
     emit(
         ctx,
         raiderio_envelope(
@@ -370,8 +337,8 @@ def leaderboard_mythic_plus(
             payload={
                 "query": {
                     "season": meta.get("season") or season or None,
-                    "resolved_season": meta.get("season") or resolve_season_input(season),
-                    "region": region,
+                    "resolved_season": meta.get("season") or request.season_param,
+                    "region": request.region,
                     "dungeon": dungeon,
                     "affixes": affixes or None,
                     "page": page,
@@ -383,6 +350,7 @@ def leaderboard_mythic_plus(
                     "returned_run_count": len(runs),
                     "pages_requested": meta["pages_requested"],
                     "pages_fetched": meta["pages_fetched"],
+                    "duplicate_runs_dropped": meta["duplicate_runs_dropped"],
                     # False => the provider ran out of ranked runs before --limit (not a silent cap).
                     "limit_reached": len(runs) >= limit,
                 },
@@ -475,39 +443,29 @@ def raids(
 @sample_app.command("mythic-plus-runs")
 def sample_mythic_plus_runs(
     ctx: typer.Context,
-    season: str = typer.Option("", "--season", help="Season slug. Defaults to Raider.IO current default season."),
-    region: str = typer.Option("world", "--region", help="Region slug such as world, us, or eu."),
-    dungeon: str = typer.Option("all", "--dungeon", help="Dungeon slug or all."),
-    affixes: str = typer.Option("", "--affixes", help="Affix slug, fortified, tyrannical, current, or all."),
-    page: int = typer.Option(0, "--page", min=0, help="Starting page of rankings to request."),
-    pages: int = typer.Option(1, "--pages", min=1, max=10, help="Number of pages to sample."),
-    limit: int = typer.Option(100, "--limit", min=1, max=200, help="Maximum runs to retain in the sample."),
-    level_min: int | None = typer.Option(None, "--level-min", min=0, help="Retain only runs at or above this Mythic+ level."),
-    level_max: int | None = typer.Option(None, "--level-max", min=0, help="Retain only runs at or below this Mythic+ level."),
-    score_min: float | None = typer.Option(None, "--score-min", help="Retain only runs at or above this sampled run score."),
-    score_max: float | None = typer.Option(None, "--score-max", help="Retain only runs at or below this sampled run score."),
-    contains_role: list[str] | None = typer.Option(
-        None, "--contains-role", help="Retain only runs containing at least one roster role. Repeatable."),
-    contains_class: list[str] | None = typer.Option(
-        None, "--contains-class", help="Retain only runs containing at least one class slug or name. Repeatable."),
-    contains_spec: list[str] | None = typer.Option(
-        None, "--contains-spec", help="Retain only runs containing at least one spec slug or name. Repeatable."),
-    player_region: list[str] | None = typer.Option(
-        None, "--player-region", help="Retain only runs containing at least one player from the given region. Repeatable."),
+    season: str = _SEASON,
+    region: str = _REGION,
+    dungeon: str = _DUNGEON,
+    affixes: str = _AFFIXES,
+    page: int = _PAGE,
+    pages: int | None = _PAGES,
+    limit: int = _SAMPLE_LIMIT,
+    level_min: int | None = _LEVEL_MIN,
+    level_max: int | None = _LEVEL_MAX,
+    score_min: float | None = _SCORE_MIN,
+    score_max: float | None = _SCORE_MAX,
+    contains_role: list[str] | None = _CONTAINS_ROLE,
+    contains_class: list[str] | None = _CONTAINS_CLASS,
+    contains_spec: list[str] | None = _CONTAINS_SPEC,
+    player_region: list[str] | None = _PLAYER_REGION,
 ) -> None:
     """Return a filtered sample of Mythic+ leaderboard runs with sampling counts and citations."""
-    request = SampleRequest(season=season, region=region, dungeon=dungeon, affixes=affixes, page=page, pages=pages, limit=limit)
-    filters = run_filters(
-        level_min=level_min,
-        level_max=level_max,
-        score_min=score_min,
-        score_max=score_max,
-        contains_role=contains_role,
-        contains_class=contains_class,
-        contains_spec=contains_spec,
-        player_region=player_region,
-    )
     with _command_errors(ctx), open_client() as client:
+        request = sample_request(season=season, region=region, dungeon=dungeon, affixes=affixes, page=page, pages=pages, limit=limit)
+        filters = run_filters(
+            level_min=level_min, level_max=level_max, score_min=score_min, score_max=score_max, contains_role=contains_role,
+            contains_class=contains_class, contains_spec=contains_spec, player_region=player_region,
+        )
         runs, meta, filtering = load_filtered_runs(client, request, filters)
     emit(
         ctx,
@@ -528,40 +486,30 @@ def sample_mythic_plus_runs(
 @sample_app.command("mythic-plus-players")
 def sample_mythic_plus_players(
     ctx: typer.Context,
-    season: str = typer.Option("", "--season", help="Season slug. Defaults to Raider.IO current default season."),
-    region: str = typer.Option("world", "--region", help="Region slug such as world, us, or eu."),
-    dungeon: str = typer.Option("all", "--dungeon", help="Dungeon slug or all."),
-    affixes: str = typer.Option("", "--affixes", help="Affix slug, fortified, tyrannical, current, or all."),
-    page: int = typer.Option(0, "--page", min=0, help="Starting page of rankings to request."),
-    pages: int = typer.Option(1, "--pages", min=1, max=10, help="Number of pages to sample."),
-    limit: int = typer.Option(100, "--limit", min=1, max=200, help="Maximum runs to retain in the source sample."),
-    player_limit: int = typer.Option(100, "--player-limit", min=1, max=500, help="Maximum player snapshots to retain after deduping."),
-    level_min: int | None = typer.Option(None, "--level-min", min=0, help="Retain only runs at or above this Mythic+ level."),
-    level_max: int | None = typer.Option(None, "--level-max", min=0, help="Retain only runs at or below this Mythic+ level."),
-    score_min: float | None = typer.Option(None, "--score-min", help="Retain only runs at or above this sampled run score."),
-    score_max: float | None = typer.Option(None, "--score-max", help="Retain only runs at or below this sampled run score."),
-    contains_role: list[str] | None = typer.Option(
-        None, "--contains-role", help="Retain only runs containing at least one roster role. Repeatable."),
-    contains_class: list[str] | None = typer.Option(
-        None, "--contains-class", help="Retain only runs containing at least one class slug or name. Repeatable."),
-    contains_spec: list[str] | None = typer.Option(
-        None, "--contains-spec", help="Retain only runs containing at least one spec slug or name. Repeatable."),
-    player_region: list[str] | None = typer.Option(
-        None, "--player-region", help="Retain only runs containing at least one player from the given region. Repeatable."),
+    season: str = _SEASON,
+    region: str = _REGION,
+    dungeon: str = _DUNGEON,
+    affixes: str = _AFFIXES,
+    page: int = _PAGE,
+    pages: int | None = _PAGES,
+    limit: int = _SAMPLE_LIMIT,
+    player_limit: int = _PLAYER_LIMIT,
+    level_min: int | None = _LEVEL_MIN,
+    level_max: int | None = _LEVEL_MAX,
+    score_min: float | None = _SCORE_MIN,
+    score_max: float | None = _SCORE_MAX,
+    contains_role: list[str] | None = _CONTAINS_ROLE,
+    contains_class: list[str] | None = _CONTAINS_CLASS,
+    contains_spec: list[str] | None = _CONTAINS_SPEC,
+    player_region: list[str] | None = _PLAYER_REGION,
 ) -> None:
     """Return deduped player snapshots built from a filtered sample of Mythic+ runs."""
-    request = SampleRequest(season=season, region=region, dungeon=dungeon, affixes=affixes, page=page, pages=pages, limit=limit)
-    filters = run_filters(
-        level_min=level_min,
-        level_max=level_max,
-        score_min=score_min,
-        score_max=score_max,
-        contains_role=contains_role,
-        contains_class=contains_class,
-        contains_spec=contains_spec,
-        player_region=player_region,
-    )
     with _command_errors(ctx), open_client() as client:
+        request = sample_request(season=season, region=region, dungeon=dungeon, affixes=affixes, page=page, pages=pages, limit=limit)
+        filters = run_filters(
+            level_min=level_min, level_max=level_max, score_min=score_min, score_max=score_max, contains_role=contains_role,
+            contains_class=contains_class, contains_spec=contains_spec, player_region=player_region,
+        )
         runs, meta, filtering = load_filtered_runs(client, request, filters)
     players, player_sampling = limit_player_snapshots(player_snapshots(runs), player_limit=player_limit)
     emit(
@@ -588,40 +536,30 @@ def distribution_mythic_plus_runs(
     metric: str = typer.Option(
         "mythic_level", "--metric", help=f"Distribution metric: {', '.join(RUN_DISTRIBUTION_METRICS)}."
     ),
-    season: str = typer.Option("", "--season", help="Season slug. Defaults to Raider.IO current default season."),
-    region: str = typer.Option("world", "--region", help="Region slug such as world, us, or eu."),
-    dungeon: str = typer.Option("all", "--dungeon", help="Dungeon slug or all."),
-    affixes: str = typer.Option("", "--affixes", help="Affix slug, fortified, tyrannical, current, or all."),
-    page: int = typer.Option(0, "--page", min=0, help="Starting page of rankings to request."),
-    pages: int = typer.Option(1, "--pages", min=1, max=10, help="Number of pages to sample."),
-    limit: int = typer.Option(100, "--limit", min=1, max=200, help="Maximum runs to retain in the sample."),
-    level_min: int | None = typer.Option(None, "--level-min", min=0, help="Retain only runs at or above this Mythic+ level."),
-    level_max: int | None = typer.Option(None, "--level-max", min=0, help="Retain only runs at or below this Mythic+ level."),
-    score_min: float | None = typer.Option(None, "--score-min", help="Retain only runs at or above this sampled run score."),
-    score_max: float | None = typer.Option(None, "--score-max", help="Retain only runs at or below this sampled run score."),
-    contains_role: list[str] | None = typer.Option(
-        None, "--contains-role", help="Retain only runs containing at least one roster role. Repeatable."),
-    contains_class: list[str] | None = typer.Option(
-        None, "--contains-class", help="Retain only runs containing at least one class slug or name. Repeatable."),
-    contains_spec: list[str] | None = typer.Option(
-        None, "--contains-spec", help="Retain only runs containing at least one spec slug or name. Repeatable."),
-    player_region: list[str] | None = typer.Option(
-        None, "--player-region", help="Retain only runs containing at least one player from the given region. Repeatable."),
+    season: str = _SEASON,
+    region: str = _REGION,
+    dungeon: str = _DUNGEON,
+    affixes: str = _AFFIXES,
+    page: int = _PAGE,
+    pages: int | None = _PAGES,
+    limit: int = _SAMPLE_LIMIT,
+    level_min: int | None = _LEVEL_MIN,
+    level_max: int | None = _LEVEL_MAX,
+    score_min: float | None = _SCORE_MIN,
+    score_max: float | None = _SCORE_MAX,
+    contains_role: list[str] | None = _CONTAINS_ROLE,
+    contains_class: list[str] | None = _CONTAINS_CLASS,
+    contains_spec: list[str] | None = _CONTAINS_SPEC,
+    player_region: list[str] | None = _PLAYER_REGION,
 ) -> None:
     """Return a run-level distribution of the sampled runs over one --metric."""
-    request = SampleRequest(season=season, region=region, dungeon=dungeon, affixes=affixes, page=page, pages=pages, limit=limit)
-    filters = run_filters(
-        level_min=level_min,
-        level_max=level_max,
-        score_min=score_min,
-        score_max=score_max,
-        contains_role=contains_role,
-        contains_class=contains_class,
-        contains_spec=contains_spec,
-        player_region=player_region,
-    )
     with _command_errors(ctx):
         metric = validated_metric(metric, RUN_DISTRIBUTION_METRICS)
+        request = sample_request(season=season, region=region, dungeon=dungeon, affixes=affixes, page=page, pages=pages, limit=limit)
+        filters = run_filters(
+            level_min=level_min, level_max=level_max, score_min=score_min, score_max=score_max, contains_role=contains_role,
+            contains_class=contains_class, contains_spec=contains_spec, player_region=player_region,
+        )
         with open_client() as client:
             runs, meta, filtering = load_filtered_runs(client, request, filters)
     payload = distribution_payload(metric, runs, meta=meta, query=analytics_query(request, filters, meta=meta))
@@ -635,41 +573,31 @@ def distribution_mythic_plus_players(
     metric: str = typer.Option(
         "appearance_count", "--metric", help=f"Distribution metric: {', '.join(PLAYER_DISTRIBUTION_METRICS)}."
     ),
-    season: str = typer.Option("", "--season", help="Season slug. Defaults to Raider.IO current default season."),
-    region: str = typer.Option("world", "--region", help="Region slug such as world, us, or eu."),
-    dungeon: str = typer.Option("all", "--dungeon", help="Dungeon slug or all."),
-    affixes: str = typer.Option("", "--affixes", help="Affix slug, fortified, tyrannical, current, or all."),
-    page: int = typer.Option(0, "--page", min=0, help="Starting page of rankings to request."),
-    pages: int = typer.Option(1, "--pages", min=1, max=10, help="Number of pages to sample."),
-    limit: int = typer.Option(100, "--limit", min=1, max=200, help="Maximum runs to retain in the source sample."),
-    player_limit: int = typer.Option(100, "--player-limit", min=1, max=500, help="Maximum player snapshots to retain after deduping."),
-    level_min: int | None = typer.Option(None, "--level-min", min=0, help="Retain only runs at or above this Mythic+ level."),
-    level_max: int | None = typer.Option(None, "--level-max", min=0, help="Retain only runs at or below this Mythic+ level."),
-    score_min: float | None = typer.Option(None, "--score-min", help="Retain only runs at or above this sampled run score."),
-    score_max: float | None = typer.Option(None, "--score-max", help="Retain only runs at or below this sampled run score."),
-    contains_role: list[str] | None = typer.Option(
-        None, "--contains-role", help="Retain only runs containing at least one roster role. Repeatable."),
-    contains_class: list[str] | None = typer.Option(
-        None, "--contains-class", help="Retain only runs containing at least one class slug or name. Repeatable."),
-    contains_spec: list[str] | None = typer.Option(
-        None, "--contains-spec", help="Retain only runs containing at least one spec slug or name. Repeatable."),
-    player_region: list[str] | None = typer.Option(
-        None, "--player-region", help="Retain only runs containing at least one player from the given region. Repeatable."),
+    season: str = _SEASON,
+    region: str = _REGION,
+    dungeon: str = _DUNGEON,
+    affixes: str = _AFFIXES,
+    page: int = _PAGE,
+    pages: int | None = _PAGES,
+    limit: int = _SAMPLE_LIMIT,
+    player_limit: int = _PLAYER_LIMIT,
+    level_min: int | None = _LEVEL_MIN,
+    level_max: int | None = _LEVEL_MAX,
+    score_min: float | None = _SCORE_MIN,
+    score_max: float | None = _SCORE_MAX,
+    contains_role: list[str] | None = _CONTAINS_ROLE,
+    contains_class: list[str] | None = _CONTAINS_CLASS,
+    contains_spec: list[str] | None = _CONTAINS_SPEC,
+    player_region: list[str] | None = _PLAYER_REGION,
 ) -> None:
     """Return a player-level distribution of the sampled participants over one --metric."""
-    request = SampleRequest(season=season, region=region, dungeon=dungeon, affixes=affixes, page=page, pages=pages, limit=limit)
-    filters = run_filters(
-        level_min=level_min,
-        level_max=level_max,
-        score_min=score_min,
-        score_max=score_max,
-        contains_role=contains_role,
-        contains_class=contains_class,
-        contains_spec=contains_spec,
-        player_region=player_region,
-    )
     with _command_errors(ctx):
         metric = validated_metric(metric, PLAYER_DISTRIBUTION_METRICS)
+        request = sample_request(season=season, region=region, dungeon=dungeon, affixes=affixes, page=page, pages=pages, limit=limit)
+        filters = run_filters(
+            level_min=level_min, level_max=level_max, score_min=score_min, score_max=score_max, contains_role=contains_role,
+            contains_class=contains_class, contains_spec=contains_spec, player_region=player_region,
+        )
         with open_client() as client:
             runs, meta, filtering = load_filtered_runs(client, request, filters)
     players, player_sampling = limit_player_snapshots(player_snapshots(runs), player_limit=player_limit)
@@ -690,41 +618,31 @@ def threshold_mythic_plus_runs(
     ctx: typer.Context,
     metric: str = typer.Option("score", "--metric", help=f"Threshold metric: {', '.join(THRESHOLD_METRICS)}."),
     value: float = typer.Option(..., "--value", help="Target metric value to estimate around."),
-    season: str = typer.Option("", "--season", help="Season slug. Defaults to Raider.IO current default season."),
-    region: str = typer.Option("world", "--region", help="Region slug such as world, us, or eu."),
-    dungeon: str = typer.Option("all", "--dungeon", help="Dungeon slug or all."),
-    affixes: str = typer.Option("", "--affixes", help="Affix slug, fortified, tyrannical, current, or all."),
-    page: int = typer.Option(0, "--page", min=0, help="Starting page of rankings to request."),
-    pages: int = typer.Option(1, "--pages", min=1, max=10, help="Number of pages to sample."),
-    limit: int = typer.Option(100, "--limit", min=1, max=200, help="Maximum runs to retain in the sample."),
+    season: str = _SEASON,
+    region: str = _REGION,
+    dungeon: str = _DUNGEON,
+    affixes: str = _AFFIXES,
+    page: int = _PAGE,
+    pages: int | None = _PAGES,
+    limit: int = _SAMPLE_LIMIT,
     nearest: int = typer.Option(10, "--nearest", min=1, max=50, help="Number of nearest sampled runs to retain."),
-    level_min: int | None = typer.Option(None, "--level-min", min=0, help="Retain only runs at or above this Mythic+ level."),
-    level_max: int | None = typer.Option(None, "--level-max", min=0, help="Retain only runs at or below this Mythic+ level."),
-    score_min: float | None = typer.Option(None, "--score-min", help="Retain only runs at or above this sampled run score."),
-    score_max: float | None = typer.Option(None, "--score-max", help="Retain only runs at or below this sampled run score."),
-    contains_role: list[str] | None = typer.Option(
-        None, "--contains-role", help="Retain only runs containing at least one roster role. Repeatable."),
-    contains_class: list[str] | None = typer.Option(
-        None, "--contains-class", help="Retain only runs containing at least one class slug or name. Repeatable."),
-    contains_spec: list[str] | None = typer.Option(
-        None, "--contains-spec", help="Retain only runs containing at least one spec slug or name. Repeatable."),
-    player_region: list[str] | None = typer.Option(
-        None, "--player-region", help="Retain only runs containing at least one player from the given region. Repeatable."),
+    level_min: int | None = _LEVEL_MIN,
+    level_max: int | None = _LEVEL_MAX,
+    score_min: float | None = _SCORE_MIN,
+    score_max: float | None = _SCORE_MAX,
+    contains_role: list[str] | None = _CONTAINS_ROLE,
+    contains_class: list[str] | None = _CONTAINS_CLASS,
+    contains_spec: list[str] | None = _CONTAINS_SPEC,
+    player_region: list[str] | None = _PLAYER_REGION,
 ) -> None:
     """Estimate the sampled runs nearest a target score or Mythic+ level."""
-    request = SampleRequest(season=season, region=region, dungeon=dungeon, affixes=affixes, page=page, pages=pages, limit=limit)
-    filters = run_filters(
-        level_min=level_min,
-        level_max=level_max,
-        score_min=score_min,
-        score_max=score_max,
-        contains_role=contains_role,
-        contains_class=contains_class,
-        contains_spec=contains_spec,
-        player_region=player_region,
-    )
     with _command_errors(ctx):
         metric = validated_metric(metric, THRESHOLD_METRICS)
+        request = sample_request(season=season, region=region, dungeon=dungeon, affixes=affixes, page=page, pages=pages, limit=limit)
+        filters = run_filters(
+            level_min=level_min, level_max=level_max, score_min=score_min, score_max=score_max, contains_role=contains_role,
+            contains_class=contains_class, contains_spec=contains_spec, player_region=player_region,
+        )
         with open_client() as client:
             runs, meta, filtering = load_filtered_runs(client, request, filters)
     payload = threshold_payload(

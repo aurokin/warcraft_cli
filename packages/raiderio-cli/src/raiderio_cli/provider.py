@@ -39,7 +39,6 @@ CAPABILITIES = {
     "resolve": "ready",
     "character": "ready",
     "guild": "ready",
-    "mythic_plus_runs": "ready",
     "sample_mythic_plus_runs": "ready",
     "sample_mythic_plus_players": "ready",
     "distribution_mythic_plus_runs": "ready",
@@ -164,6 +163,8 @@ def ranked_candidates(client: RaiderIOClient, query: str, *, kind: str) -> tuple
     never answers with a character, even when nothing of that kind exists.
     """
     normalized_query, type_hint, probes = normalize_structured_query(query)
+    if not normalized_query:
+        raise ProviderError("invalid_query", "Query cannot be empty.")
     explicit_kind = None if kind == "all" else kind
     lookup_kind = explicit_kind or type_hint
     candidates = probe_structured_candidates(

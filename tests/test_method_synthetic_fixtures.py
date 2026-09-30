@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from article_provider_testkit import load_fixture_text
 from method_cli.page_parser import parse_guide_page
+
+from tests.article_provider_testkit import load_fixture_text
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "method"
 
@@ -31,7 +32,7 @@ def test_synthetic_profession_guide_fixture_contract() -> None:
     assert payload["guide"]["content_family"] == "profession_guide"
     assert payload["guide"]["supported_surface"] is True
     assert payload["guide"]["author"] == "Roguery"
-    assert payload["guide"]["last_updated"] == "5th March 2026"
+    assert (payload["guide"]["last_updated"], payload["guide"]["last_updated_text"]) == ("2026-03-05", "5th March 2026")
     assert payload["article"]["sections"][0]["title"] == "Introduction"
 
 
@@ -45,7 +46,7 @@ def test_synthetic_delve_guide_fixture_contract() -> None:
     assert payload["guide"]["content_family"] == "delve_guide"
     assert payload["guide"]["supported_surface"] is True
     assert payload["guide"]["author"] == "Roguery"
-    assert payload["guide"]["last_updated"] == "25th February 2026"
+    assert (payload["guide"]["last_updated"], payload["guide"]["last_updated_text"]) == ("2026-02-25", "25th February 2026")
     assert len(payload["article"]["sections"]) >= 1
 
 
@@ -59,7 +60,7 @@ def test_synthetic_reputation_guide_fixture_contract() -> None:
     assert payload["guide"]["content_family"] == "reputation_guide"
     assert payload["guide"]["supported_surface"] is True
     assert payload["guide"]["author"] == "Roguery"
-    assert payload["guide"]["last_updated"] == "26th February 2026"
+    assert (payload["guide"]["last_updated"], payload["guide"]["last_updated_text"]) == ("2026-02-26", "26th February 2026")
     assert payload["linked_entities"][0]["id"] == 246734
 
 
@@ -73,7 +74,7 @@ def test_synthetic_article_guide_fixture_contract() -> None:
     assert payload["guide"]["content_family"] == "article_guide"
     assert payload["guide"]["supported_surface"] is True
     assert payload["guide"]["author"] == "Tayder"
-    assert payload["guide"]["last_updated"] == "26th February 2026"
+    assert (payload["guide"]["last_updated"], payload["guide"]["last_updated_text"]) == ("2026-02-26", "26th February 2026")
     assert len(payload["article"]["sections"]) >= 1
 
 

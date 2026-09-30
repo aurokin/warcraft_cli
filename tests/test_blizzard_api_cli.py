@@ -48,8 +48,8 @@ def test_doctor_reports_scaffold_auth_and_capabilities() -> None:
     assert isinstance(auth["configured"], bool)
     assert auth["lookup_order"][0] == ".env.local"
     assert auth["lookup_order"][-1] == "environment"
-    assert auth["state_path"].endswith("providers/blizzard-api.json")
-    # The client-credentials token cache lives under a distinct provider key and is surfaced too.
+    # Nothing writes a user-auth state for this provider, so doctor reports only the token cache.
+    assert "state" not in auth and "state_path" not in auth
     assert auth["token_cache_path"].endswith("providers/blizzard-api-client-credentials.json")
     assert auth["token_cache"]["has_access_token"] is False
     capabilities = payload["data"]["capabilities"]
@@ -118,19 +118,25 @@ def test_provider_env_file_overrides_process_credentials(tmp_path, monkeypatch: 
     assert config.credential_source == provider_env
 
 
-def test_credential_source_is_mixed_when_halves_come_from_different_files(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
-    # ID from .env.local, secret from the provider env file -> neither is a single coherent source.
-    monkeypatch.delenv("BLIZZARD_CLIENT_ID", raising=False)
-    monkeypatch.delenv("BLIZZARD_CLIENT_SECRET", raising=False)
+def test_credentials_come_from_the_first_layer_that_holds_both_halves(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # A stale lone ID in .env.local used to be paired with the provider file's secret, so every
+    # request authenticated as a client that does not exist.
+    (tmp_path / ".env.local").write_text("BLIZZARD_CLIENT_ID=stale-id\n")
+    provider_env = _write_provider_env(tmp_path, "BLIZZARD_CLIENT_ID=good-id\nBLIZZARD_CLIENT_SECRET=good-secret\n")
+
+    config = load_blizzard_auth_config(start_dir=str(tmp_path))
+
+    assert (config.client_id, config.client_secret, config.credential_source) == ("good-id", "good-secret", provider_env)
+
+
+def test_halves_split_across_layers_are_not_a_credential_pair(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / ".env.local").write_text("BLIZZARD_CLIENT_ID=local-id\n")
     _write_provider_env(tmp_path, "BLIZZARD_CLIENT_SECRET=provider-secret\n")
 
     config = load_blizzard_auth_config(start_dir=str(tmp_path))
 
-    assert config.client_id == "local-id"
-    assert config.client_secret == "provider-secret"
-    assert config.configured is True
-    assert config.credential_source == "mixed"
+    assert config.configured is False
+    assert config.credential_source is None
 
 
 def test_doctor_reads_region_from_provider_env_file(tmp_path) -> None:

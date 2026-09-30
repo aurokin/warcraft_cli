@@ -6,6 +6,7 @@ import pytest
 from typer.testing import CliRunner
 from wowhead_cli.expansion_profiles import detect_expansion_from_url, parse_entity_from_wowhead_url
 from wowhead_cli.main import app
+from wowhead_cli.page_parser import extract_linked_entities_from_href
 from wowhead_cli.wowhead_client import WowheadClient
 
 runner = CliRunner()
@@ -21,6 +22,13 @@ def test_detect_expansion_from_url_path_and_legacy_subdomain() -> None:
 def test_parse_entity_from_wowhead_url() -> None:
     assert parse_entity_from_wowhead_url("https://www.wowhead.com/wotlk/item=19019/thunderfury") == ("item", 19019)
     assert parse_entity_from_wowhead_url("https://www.wowhead.com/wotlk/fr/item=19019/thunderfury") == ("item", 19019)
+
+
+def test_page_links_read_the_same_entity_paths_as_url_arguments() -> None:
+    links = extract_linked_entities_from_href('<a href="/wotlk/fr/item=19019/thunderfury">x</a>', source_url="https://www.wowhead.com/wotlk/npc=1")
+    assert [(row["entity_type"], row["id"], row["url"]) for row in links] == [
+        ("item", 19019, "https://www.wowhead.com/wotlk/item=19019")
+    ]
 
 
 def test_detect_expansion_rejects_non_wowhead_hosts() -> None:
@@ -212,8 +220,6 @@ def test_entity_url_flag_overrides_type_and_id(monkeypatch) -> None:
         app,
         [
             "entity",
-            "item",
-            "1",
             "--url",
             "https://www.wowhead.com/wotlk/item=19019",
             "--no-include-comments",
@@ -223,6 +229,24 @@ def test_entity_url_flag_overrides_type_and_id(monkeypatch) -> None:
     payload = json.loads(result.stdout)
     assert payload["data"]["expansion"] == "wotlk"
     assert payload["data"]["entity"]["id"] == 19019
+
+
+def test_entity_page_takes_a_url_in_place_of_type_and_id(monkeypatch) -> None:
+    fetched: list[tuple[str, str, int]] = []
+
+    def fake_page(self: WowheadClient, entity_type: str, entity_id: int) -> str:
+        fetched.append((self.expansion.key, entity_type, entity_id))
+        return "<html></html>"
+
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.entity_page_html", fake_page)
+
+    result = runner.invoke(app, ["entity-page", "--url", "https://www.wowhead.com/classic/npc=12056"])
+    assert result.exit_code == 0, result.output
+    assert fetched == [("classic", "npc", 12056)]
+
+    missing = runner.invoke(app, ["entity-page"])
+    assert missing.exit_code == 2
+    assert json.loads(missing.stderr)["error"]["code"] == "invalid_argument"
 
 
 def test_doctor_reports_expansion_url_policy(monkeypatch) -> None:

@@ -65,8 +65,13 @@ These codes are worth knowing:
   than its checkout the message says so and names the rebuild command, because a stale binary decodes
   against older trait data; `simc doctor` reports the same mismatch.
 - `missing_dependency` (exit 1) — ripgrep is not installed.
+- `missing_binary` (exit 1) — `version`, `sim`, `run`, `validate-apl` or `compare-apls` found no `build/simc` in the checkout; run
+  `simc build`. `missing_repo` (exit 1) — `build` or `sync` found no checkout (`build` needs the
+  checkout's `CMakeLists.txt`; cmake creates the build directory itself).
 - `not_found` (exit 4) — `spec-files`, `find-action`, and `trace-action` were pointed at a directory that
-  is not a SimulationCraft checkout. They report this instead of returning zero hits as a success.
+  is not a SimulationCraft checkout. They report this instead of returning zero hits as a success. An
+  APL command also answers `not_found` for an APL file that is not there, and for a `--list` the file
+  has no action list of (`error.details.available_lists` names the ones it has).
 - `invalid_query` (exit 2) — a build arrived without a class and spec and could not be identified,
   `decode-build` or `identify-build` was given no build at all, a build-input option was passed with
   an empty value, or the class or spec names none of SimC's specs (an unknown class, or a pair such as
@@ -89,7 +94,39 @@ These codes are worth knowing:
   URL with no build code, `url` for anything else. See "Build references" below for what does decode.
 - `unknown_talent` (exit 2) — an `--enable`/`--disable` value names no talent of the actor's class
   (`error.details.unknown_talents` lists them), or a `modify-build` `--add`/`--remove` value names no
-  talent the build's spec can take.
+  talent the build's spec can take. Talent names are tokenized the way SimC does it: a hyphen or comma
+  is dropped, so "Anti-Magic Zone" is `antimagic_zone`.
+
+The APL analysis commands (`apl-prune`, `apl-branch-trace`, `apl-intent`, `apl-intent-explain`,
+`priority`, `opener`, `inactive-actions`, `apl-branch-compare`, `analysis-packet`, `describe-build`)
+identify their build exactly as `decode-build` does, so a bad build input fails with the same code and
+exit code there.
+
+## APL analysis
+
+- A relative APL path names the file under the current directory when one is there, and otherwise the
+  file under the checkout (`ActionPriorityLists/default/monk_windwalker.simc`). Profile, harness and
+  report paths are always relative to the current directory.
+- Conditions are read with SimC's operators and precedence. `talent.X`, `talent.X.enabled`,
+  `talent.X.disabled`, `talent.X.rank` and comparisons on them come from the decoded build (a rank is
+  exact only when the decode reported it); `hero_tree.X` comes from the hero tree SimC activated;
+  `active_enemies` and `spell_targets.*` are the target count. Everything else is runtime state. A line
+  is `dead` or `eligible` only when those facts prove it, and a condition the parser cannot read in
+  full is `unknown`, never `dead`.
+- The focus list follows a guaranteed `run_action_list`, then a guaranteed `call_action_list` when it is
+  the only live rotation dispatch and its list holds more live rows than the caller's own actions.
+  Helper lists (cooldowns, trinkets, racials, variables, ...) and utility actions (auto attacks,
+  interrupts, potions, trinkets, racials) do not compete. `focus_path` shows the lists it followed;
+  pass `--list` to start from another list. `apl-intent`, `apl-intent-explain`, `analysis-packet`,
+  `apl-branch-compare`, `priority`, `opener`, `inactive-actions` and `describe-build` use the same focus.
+- Row lists cut by `--limit` say so: `priority` and `opener` report `count`, `total` and `truncated`,
+  `inactive-actions` reports `truncated` beside its total `count`, and `describe-build` reports
+  `active_priority_total`, `active_priority_truncated` and `inactive_talent_branch_total`.
+- Every command's `build` block (`left`/`right` for `apl-branch-compare`) lists `enabled_talents` by
+  token with `enabled_talent_count` beside it.
+- `analysis-packet --first-cast-action` needs `--sim-profile` or `--profile-path` to sim; without one it
+  fails with `invalid_query`. `first-cast` leaves its per-seed logs in a temp directory (each result's
+  `log_path`) and removes the directory when a run fails.
 
 ## Build input flags
 
@@ -293,9 +330,16 @@ counts implicit, and always returns run settings, runtime timing, and core metri
 - `--preset high-accuracy`: 5000 iterations
 
 Individual settings (`--iterations`, `--max-time`, `--threads`, `--targets`, `--fight-style`,
-`--vary-combat-length`) override the preset. Default to `quick` for consumer work and only reach for
-`high-accuracy` when the user asks for it. Do not hard-code thread counts in guidance; inspect the
-machine first.
+`--vary-combat-length`) override the preset. `metrics.dps_error` is SimC's DPS error, the half-width of
+the confidence interval around mean DPS (`dps.mean_std_dev * confidence_estimator` in the json2 report),
+and `run_settings.target_error_percent` is that error as a percentage of mean DPS. Default to `quick`
+for consumer work and only reach for `high-accuracy` when the user asks for it. Do not hard-code thread
+counts in guidance; inspect the machine first.
+
+`simc run` passes raw SimC arguments through. Its `result_lines` holds the `Player:` and `DPS=`/`HPS=`/
+`DTPS=` lines of SimC's text report; `stdout_preview` and `stderr_preview` (also on `sync`, `build`,
+`validate-apl`, the `compare-apls` validations, and the error details of a failed `sim`) are the last
+20 lines, with `stdout_truncated`/`stderr_truncated` set when earlier lines were cut.
 
 ## Comparison workflow
 
@@ -309,7 +353,10 @@ simc variant-report ./tmp/report.json
 simc verify-clean --hash-binary
 ```
 
-`dps`, `dps_error`, and `fight_length` are means over every iteration. `action_counts`, `action_cpm`,
+`dps` and `fight_length` are means over every iteration, and `dps_error` is SimC's confidence-interval
+half-width around that mean. Each label (`--base-label` and every `--variant` label) names the
+`<label>.simc` and `<label>.json` files written for it, so labels must be unique plain file names;
+anything else fails with `invalid_query`. `action_counts`, `action_cpm`,
 and `top_action_deltas` are not: SimulationCraft records an action sequence for a single iteration, so
 those describe one fight however many were simulated. The payload says so in `sampling` and repeats
 `action_sequence_iterations: 1` on each summary and comparison. Treat a small CPM delta as noise.

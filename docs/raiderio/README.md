@@ -34,7 +34,6 @@ raiderio --fields data.results --pretty search "liquid"
 | `resolve` | `QUERY` |
 | `character` | `REGION REALM NAME` |
 | `guild` | `REGION REALM NAME` |
-| `mythic-plus-runs` | |
 | `leaderboard mythic-plus` | |
 | `leaderboard raids` | |
 | `raids` | |
@@ -49,11 +48,18 @@ Flags, defaults, and ranges are in [reference/raiderio.md](../reference/raiderio
 `raids --expansion-id` defaults to 11 (Midnight; 10 is The War Within, 9 Dragonflight).
 
 Scope flags (all Mythic+ commands): `--season` (slug, or empty/`current` for the Raider.IO current
-default season), `--region` (default `world`), `--dungeon` (default `all`), `--affixes`, `--page`.
-Sampled commands add `--pages` (1-10) and `--limit` (1-200).
+default season), `--region` (`world` (default), `us`, `eu`, `kr`, `tw`, `cn`, or an alias such as
+`na`; anything else is `invalid_query`, exit 2), `--dungeon` (default `all`), `--affixes`, `--page`.
+Runs are read in 20-run pages starting at `--page`, as many as `--limit` needs (1-200; default 20 on
+`leaderboard mythic-plus`, 100 on the sampled commands). The sampled commands also take `--pages`
+(1-10) to read fewer pages than that; `sample.pages_requested` and `pages_fetched` report what was read.
+Pages can overlap (a page may repeat the previous page's last run); each repeat is kept once and
+counted in `sample.duplicate_runs_dropped`, so a sample one run short of `--limit` says why.
 
 Filter flags (sampled commands): `--level-min`, `--level-max`, `--score-min`, `--score-max`, and the
-repeatable `--contains-role`, `--contains-class`, `--contains-spec`, `--player-region`. Bounds are
+repeatable `--contains-role` (`tank`, `healer`, `dps`), `--contains-class`, `--contains-spec`,
+`--player-region` (a region or alias other than `world`). An unknown role or region is
+`invalid_query` (exit 2), so an empty sample means no run matched rather than a typo. Bounds are
 inclusive ("at or above" / "at or below"), and a run whose level or score Raider.IO omitted is
 excluded whenever the matching bound is set. Each `--contains-*` flag matches any roster entry on
 its own, so `--contains-class priest --contains-spec holy` also keeps a Holy Paladin + Shadow Priest
@@ -88,9 +94,9 @@ The payload carries `freshness` (`fetched_at`, `cache_hit`, `cache_ttl_seconds`)
 - `query`: `raid`, `difficulty`, `region`, `realm` (`null` unless set), `page`, `limit`.
   `--region` takes the same aliases as the other commands (`na` -> `us`), and `--realm` takes a
   display name or a slug: `Tarren Mill` and `tarren-mill` both scope to the same realm, and the
-  echoed `query.realm` plus the citation URL always carry the slug. Realms with no ASCII slug
-  (`Ревущий фьорд`) are sent as written -- Raider.IO accepts them -- and percent-encoded in the
-  citation URL.
+  echoed `query.realm` plus the citation URL always carry the slug. Non-Latin realms keep their
+  letters in the slug (`Ревущий фьорд` -> `ревущий-фьорд`, which Raider.IO accepts) and are
+  percent-encoded in the citation URL.
 - `count` and `sample` (`requested_limit`, `returned_row_count`, `pages_requested`,
   `pages_fetched`, `limit_reached`). Rankings are read in 20-row pages starting at `--page`, so
   `--limit 50` fetches up to three pages; `limit_reached: false` means the scope ran out of ranked
@@ -136,7 +142,7 @@ raiderio threshold mythic-plus-runs --metric score --value 3000
   them score the same, so the `next_command` a `resolve` emits resolves when it is fed back in.
   `resolve` returns a single `match` plus `next_command` only when the top candidate is confidently
   ahead of every other candidate; `--limit` only trims the `candidates` list, so `--limit 1` never
-  hides a rival. `next_command`, `follow_up.command` and `fallback_search_command` are shell-quoted
+  hides a rival. A blank query is `invalid_query` (exit 2) and sends nothing upstream. `next_command`, `follow_up.command` and `fallback_search_command` are shell-quoted
   (`raiderio guild us illidan 'Liquid Guild'`). Character rows link their raider.io page in
   `profile_url` even though site search sends a path for guilds only. A *leading* `guild`/`character` word is read as a type hint and dropped
   (`guild us malganis gn`); anywhere else the word is part of the name and is kept, because
@@ -148,6 +154,11 @@ raiderio threshold mythic-plus-runs --metric score --value 3000
   HTTP 400 ("Could not find requested ...", "Failed to find realm ..."). A body that is not JSON is
   `upstream_error` (exit 5).
 - Every Mythic+ payload echoes `resolved_season`, so the season a sample actually used is explicit.
+- Leaderboard and sampled run rows carry `clear_time_ms`, `keystone_time_ms` (the dungeon timer) and
+  `num_chests` (0 means not timed), plus `run_id` and `logged_run_id`, Raider.IO's own integer id
+  for a logged run (`null` when there is none; it is not a Warcraft Logs report code). `character` recent runs use the same names: `dungeon` (name),
+  `short_name`, `mythic_level`, `score`, `completed_at`, `clear_time_ms`, `keystone_time_ms`,
+  `num_chests`, `run_id`, and the run's raider.io `url`.
 - Every payload with provenance carries `freshness` and `citations`; those also form the envelope's
   `provenance` block. `freshness.fetched_at` is when the response came off the wire, so a replay
   reports the age of what it replayed and `cache_hit: true` says it is a replay; the data can be up

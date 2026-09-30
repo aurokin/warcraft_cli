@@ -89,7 +89,7 @@ def provider_error(exc: Exception) -> ProviderError:
         return ProviderError(exc.code, exc.message)
     if isinstance(exc, httpx.HTTPStatusError):
         status = exc.response.status_code
-        code = _HTTP_STATUS_CODES.get(status, "http_error")
+        code = _HTTP_STATUS_CODES.get(status, "upstream_error")
         return ProviderError(code, _status_message(exc), details={"status_code": status, "url": str(exc.request.url)})
     if isinstance(exc, httpx.TimeoutException):
         return ProviderError("timeout", f"Lorrgs API request timed out: {exc}.")

@@ -7,7 +7,6 @@ from typing import Any
 import httpx
 import pytest
 import typer
-from cli_testkit import apply_provider_stubs
 from icy_veins_cli.main import app as icy_veins_app
 from icy_veins_cli.page_parser import parse_guide_page as parse_icy_veins_page
 from lorrgs_cli.main import app as lorrgs_app
@@ -21,6 +20,8 @@ from warcraft_content.article_provider_cli import (
     unsupported_guide_surface_message,
 )
 from warcraft_core.envelope import ENVELOPE_KEYS
+
+from tests.cli_testkit import apply_provider_stubs
 
 
 def test_build_article_search_response_includes_scope_hint_when_present() -> None:

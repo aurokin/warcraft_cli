@@ -18,6 +18,7 @@ from warcraft_core.talent_transport import (
     RoundTripResult,
     TalentTransportBackend,
     specialization_ids,
+    tokenize_talent_name,
     validate_talent_tree_transport,
 )
 
@@ -131,3 +132,18 @@ def test_rows_from_one_hero_tree_still_validate(tmp_path: Path) -> None:
 
     assert result["validation"]["status"] == "validated"
     assert result["transport_forms"]["simc_split_talents"]["hero_talents"] == "117176:1"
+
+
+@pytest.mark.parametrize(
+    ("name", "simc_token"),
+    [
+        # SimC's util::tokenize drops hyphens and commas rather than turning them into "_"; the
+        # old "anti_magic_zone" made modify-build --remove "Anti-Magic Zone" an invalid build.
+        ("Anti-Magic Zone", "antimagic_zone"),
+        ("Invoke Chi-Ji, the Red Crane", "invoke_chiji_the_red_crane"),
+        ("Devourer's Bite", "devourers_bite"),
+        ("Tip the Scales", "tip_the_scales"),
+    ],
+)
+def test_tokenize_talent_name_matches_simc_tokens(name: str, simc_token: str) -> None:
+    assert tokenize_talent_name(name) == simc_token

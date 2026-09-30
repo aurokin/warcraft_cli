@@ -49,6 +49,23 @@ def test_news_command_filters_by_query_and_date(monkeypatch) -> None:
 
 
 
+def test_news_query_matches_whole_words_and_needs_every_word(monkeypatch) -> None:
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.news_page_html", lambda self, *, page=1: SAMPLE_NEWS_HTML)
+
+    def result_ids(query: str) -> list[int]:
+        result = runner.invoke(app, ["news", query, "--pages", "1"])
+        assert result.exit_code == 0, result.output
+        return [row["id"] for row in json.loads(result.stdout)["data"]["results"]]
+
+    assert result_ids("midnight hotfixes") == [380785]
+    # A query word may start a longer word: the singular finds the plural post.
+    assert result_ids("hotfix") == [380785]
+    # "fix" is inside "Hotfixes" and "bugfixes" but starts no word of either post.
+    assert result_ids("fix") == []
+    # "tuning" matches the other post, but "hotfixes" is not in it.
+    assert result_ids("tuning hotfixes") == []
+
+
 def test_news_command_filters_by_author_and_type(monkeypatch) -> None:
     def fake_news_page(self, *, page: int = 1):  # noqa: ANN001
         assert page == 1
@@ -215,6 +232,22 @@ def test_guides_command_sorts_by_rating(monkeypatch) -> None:
     assert payload["data"]["filters"]["sort"] == "rating"
     assert [row["id"] for row in payload["data"]["results"]] == [32000, 33131]
 
+
+
+@pytest.mark.parametrize(
+    ("command", "url", "html"),
+    [
+        ("news-post", "https://www.wowhead.com/classic/news/midnight-hotfixes-380785", SAMPLE_NEWS_POST_HTML),
+        ("blue-topic", "https://www.wowhead.com/classic/blue-tracker/topic/us/class-tuning-1", SAMPLE_BLUE_TOPIC_HTML),
+    ],
+)
+def test_article_commands_report_the_expansion_their_url_names(monkeypatch, command: str, url: str, html: str) -> None:
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.page_html", lambda self, page_url: html)
+
+    result = runner.invoke(app, [command, url])
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout)["data"]["expansion"] == "classic"
 
 
 def test_news_post_command_extracts_markup_and_author(monkeypatch) -> None:

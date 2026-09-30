@@ -5,13 +5,13 @@ A monorepo of World of Warcraft data CLIs built for AI agents. The `warcraft` wr
 ## Install
 
 ```bash
-# release wheel — attached to each GitHub release from the first release after the release workflow lands
-pipx install https://github.com/aurokin/warcraft_cli/releases/download/v0.5.0/warcraft-0.5.0-py3-none-any.whl
-uvx --from https://github.com/aurokin/warcraft_cli/releases/download/v0.5.0/warcraft-0.5.0-py3-none-any.whl warcraft doctor
-# from a checkout (editable)
+git clone https://github.com/aurokin/warcraft_cli && cd warcraft_cli
 uv sync --all-extras     # or: make install, or: pip install -e '.[dev,redis]'
 make dev-deploy-no-link  # refresh the checkout-local .venv for branch work
 ```
+
+Releases after v0.5.0 attach a wheel to the GitHub release (`pipx install <wheel-url>`,
+`uvx --from <wheel-url> warcraft doctor`); v0.5.0 and earlier have none.
 
 ## Providers
 

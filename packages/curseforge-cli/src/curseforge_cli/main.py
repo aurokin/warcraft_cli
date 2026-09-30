@@ -3,9 +3,9 @@ from __future__ import annotations
 import httpx
 import typer
 from warcraft_core.cli import emit, fail, guarded_run, install_common_callback
-from warcraft_core.exit_codes import EXIT_AUTH, EXIT_NOT_FOUND, error_code_for_http_status, exit_code_for
+from warcraft_core.exit_codes import EXIT_AUTH, EXIT_NOT_FOUND, exit_code_for
 
-from curseforge_cli.client import CurseForgeClientError, verification_note
+from curseforge_cli.client import CurseForgeClientError, transport_error_code, verification_note
 from curseforge_cli.provider import PROVIDER, PROVIDER_NAME, addon_envelope
 
 app = typer.Typer(
@@ -30,10 +30,9 @@ def _error_detail(exc: CurseForgeClientError | httpx.HTTPError) -> tuple[str, st
     if isinstance(exc, CurseForgeClientError):
         return exc.code, exc.message
     if isinstance(exc, httpx.HTTPStatusError):
-        status = exc.response.status_code
-        return error_code_for_http_status(status), f"CurseForge API returned HTTP {status} for {exc.request.url}."
+        return transport_error_code(exc), f"CurseForge API returned HTTP {exc.response.status_code} for {exc.request.url}."
     # httpx.RequestError (timeouts, connection failures) after retries are exhausted.
-    return "network_error", f"CurseForge API request failed: {exc}."
+    return transport_error_code(exc), f"CurseForge API request failed: {exc}."
 
 
 @app.command("doctor")

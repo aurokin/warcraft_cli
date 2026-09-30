@@ -14,7 +14,7 @@ Tier: supported.
 | `warcraft-wiki resolve <query>` | The single best article plus `resolved`, `confidence`, and `next_command`. |
 | `warcraft-wiki article <title-or-url>` | One article: text, headings, section preview, navigation and linked-entity previews. |
 | `warcraft-wiki article-full <title-or-url>` | The same article with every section and the complete linked-entity list. |
-| `warcraft-wiki api <query>` | The API/framework/CVar/XML reference page a query resolves to, as a summary. |
+| `warcraft-wiki api <query>` | The API function/enum/framework/CVar/XML reference page a query resolves to, as a summary. |
 | `warcraft-wiki api-full <query>` | The same API page with every section. |
 | `warcraft-wiki event <query>` | The game event or UI handler reference page a query resolves to, as a summary. |
 | `warcraft-wiki event-full <query>` | The same event page with every section. |
@@ -59,13 +59,13 @@ the error envelope to stderr; transport failures never print a traceback.
 
 Search ranking, resolution, and extraction all key off a locally classified content family:
 
-- Programming: `api_function`, `ui_handler`, `event_reference`, `framework_page`, `xml_schema`, `cvar`, `api_changes`,
-  `howto_programming`.
+- Programming: `api_function`, `api_enum` (`Enum.*` pages), `ui_handler`, `event_reference`, `framework_page`,
+  `xml_schema`, `cvar`, `api_changes`, `howto_programming`.
 - Reference: `system_reference`, `expansion_reference`, `class_reference`, `profession_reference`, `faction_reference`,
   `zone_reference`, `patch_reference`, `lore_reference`, `guide_reference`.
 - Everything else: `general_article`.
 
-`api` and `api-full` only accept `api_function`, `framework_page`, `xml_schema`, `cvar`, and `api_changes` pages;
+`api` and `api-full` only accept `api_function`, `api_enum`, `framework_page`, `xml_schema`, `cvar`, and `api_changes` pages;
 `event` and `event-full` only accept `event_reference`, `ui_handler`, and `framework_page` pages. Both surfaces fetch
 exact titles before they search: `api` tries `API:<query>` then `API <query>`, `event` tries `Event:<query>` then
 `UIHANDLER <query>`, and both fall back to the bare title. Only if all three miss does the query go to ranked search,

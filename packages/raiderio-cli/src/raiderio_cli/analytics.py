@@ -22,25 +22,43 @@ from warcraft_core.analytics import (
 from warcraft_core.provider import ProviderError
 from warcraft_core.shapes import as_dict, as_list
 
-from raiderio_cli.client import FetchedJson, RaiderIOClient, combined_freshness, page_freshness
+from raiderio_cli.client import RAIDERIO_REGIONS, FetchedJson, RaiderIOClient, combined_freshness, validated_region
 from raiderio_cli.identity import raiderio_class_spec_identity
+
+# The roster roles Raider.IO reports, which are the only values ``--contains-role`` can ever match.
+ROSTER_ROLES = ("tank", "healer", "dps")
 
 
 @dataclass(frozen=True, slots=True)
 class SampleRequest:
-    """Scope and pagination inputs shared by every sampled Mythic+ command."""
+    """Scope and pagination inputs shared by every sampled Mythic+ command; build it with :func:`sample_request`."""
 
     season: str
     region: str
     dungeon: str
     affixes: str
     page: int
-    pages: int = 1
-    limit: int = 100
+    pages: int
+    limit: int
 
     @property
     def season_param(self) -> str | None:
         return resolve_season_input(self.season)
+
+
+def sample_request(
+    *, season: str, region: str, dungeon: str, affixes: str, page: int, pages: int | None, limit: int
+) -> SampleRequest:
+    """Validate the scope flags; ``pages`` defaults to as many 20-run pages as ``limit`` needs."""
+    return SampleRequest(
+        season=season,
+        region=validated_region(region),
+        dungeon=dungeon,
+        affixes=affixes,
+        page=page,
+        pages=pages or leaderboard_pages_for_limit(limit),
+        limit=limit,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,11 +103,26 @@ def run_filters(
         level_max=level_max,
         score_min=score_min,
         score_max=score_max,
-        contains_role=tuple(_normalize_filter_values(contains_role)),
+        contains_role=_known_values(_normalize_filter_values(contains_role), flag="--contains-role", allowed=ROSTER_ROLES),
         contains_class=tuple(_normalize_filter_values(contains_class)),
         contains_spec=tuple(_normalize_filter_values(contains_spec)),
-        player_region=tuple(_normalize_filter_values(player_region)),
+        # A roster player is from one real region, so the `world` scope is not a player region.
+        player_region=tuple(
+            dict.fromkeys(
+                validated_region(value, flag="--player-region", allowed=RAIDERIO_REGIONS[1:])
+                for value in player_region or []
+                if value.strip()
+            )
+        ),
     )
+
+
+def _known_values(values: list[str], *, flag: str, allowed: tuple[str, ...]) -> tuple[str, ...]:
+    """Reject a value no roster can carry, so an empty sample means "no such runs", never a typo."""
+    unknown = [value for value in values if value not in allowed]
+    if unknown:
+        raise ProviderError("invalid_query", f"{flag} must be one of: {', '.join(allowed)} (got {', '.join(unknown)})")
+    return tuple(values)
 
 
 def analytics_query(request: SampleRequest, filters: RunFilters, *, meta: dict[str, Any], **extra: Any) -> dict[str, Any]:
@@ -131,7 +164,8 @@ def ranking_roster_entry(entry: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def ranking_run_summary(row: dict[str, Any]) -> dict[str, Any]:
+def _run_snapshot(row: dict[str, Any]) -> dict[str, Any]:
+    """One leaderboard run; ``logged_run_id`` is Raider.IO's integer id for a logged run, not a Warcraft Logs report code."""
     run = as_dict(row.get("run"))
     dungeon = as_dict(run.get("dungeon"))
     roster = as_list(run.get("roster"))
@@ -144,18 +178,13 @@ def ranking_run_summary(row: dict[str, Any]) -> dict[str, Any]:
         "completed_at": run.get("completed_at"),
         "affixes": [affix.get("slug") for affix in as_list(run.get("weekly_modifiers")) if isinstance(affix, dict)],
         "roster": [ranking_roster_entry(entry) for entry in roster[:5] if isinstance(entry, dict)],
+        "run_id": run.get("keystone_run_id") or run.get("logged_run_id") or run.get("keystone_team_id"),
+        "logged_run_id": run.get("logged_run_id"),
+        "season": run.get("season"),
+        "clear_time_ms": run.get("clear_time_ms"),
+        "keystone_time_ms": run.get("keystone_time_ms"),
+        "num_chests": run.get("num_chests"),
     }
-
-
-def _run_snapshot(row: dict[str, Any]) -> dict[str, Any]:
-    run = as_dict(row.get("run"))
-    snapshot = ranking_run_summary(row)
-    snapshot["run_id"] = run.get("keystone_run_id") or run.get("logged_run_id") or run.get("keystone_team_id")
-    snapshot["season"] = run.get("season")
-    snapshot["clear_time_ms"] = run.get("clear_time_ms")
-    snapshot["keystone_time_ms"] = run.get("keystone_time_ms")
-    snapshot["num_chests"] = run.get("num_chests")
-    return snapshot
 
 
 # Raider.IO returns a fixed 20 runs per page for /mythic-plus/runs. Used to derive how many
@@ -193,30 +222,26 @@ def response_season(payload: dict[str, Any]) -> str | None:
     return str(season) if isinstance(season, str) and season else None
 
 
-def sample_leaderboard_runs(
-    client: RaiderIOClient,
-    *,
-    season: str | None,
-    region: str,
-    dungeon: str,
-    affixes: str | None,
-    page: int,
-    pages: int,
-    limit: int,
-) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+def sample_leaderboard_runs(client: RaiderIOClient, request: SampleRequest) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Read up to ``request.pages`` leaderboard pages, keeping at most ``request.limit`` distinct runs.
+
+    Raider.IO pages can overlap (a page may repeat the previous page's last run); a repeat is dropped
+    and counted in ``duplicate_runs_dropped``, so a short sample says why it is short.
+    """
     seen_run_ids: set[str] = set()
+    duplicates = 0
     runs: list[dict[str, Any]] = []
     leaderboard_urls: list[str] = []
     read_pages: list[FetchedJson] = []
-    effective_season = season
-    for offset in range(pages):
-        current_page = page + offset
+    effective_season = request.season_param
+    limit = request.limit
+    for offset in range(request.pages):
         fetched = client.mythic_plus_runs(
-            season=season,
-            region=region,
-            dungeon=dungeon,
-            affixes=affixes,
-            page=current_page,
+            season=request.season_param,
+            region=request.region,
+            dungeon=request.dungeon,
+            affixes=request.affixes or None,
+            page=request.page + offset,
         )
         payload = fetched.payload
         read_pages.append(fetched)
@@ -235,6 +260,7 @@ def sample_leaderboard_runs(
             snapshot = _run_snapshot(row)
             run_id = str(snapshot.get("run_id") or f"{snapshot.get('rank')}:{snapshot.get('dungeon_slug')}:{snapshot.get('completed_at')}")
             if run_id in seen_run_ids:
+                duplicates += 1
                 continue
             seen_run_ids.add(run_id)
             runs.append(snapshot)
@@ -248,8 +274,9 @@ def sample_leaderboard_runs(
         "fetched_at": fetched_at,
         "cache_hit": cache_hit,
         "season": effective_season,
-        "pages_requested": pages,
+        "pages_requested": request.pages,
         "pages_fetched": len(read_pages),
+        "duplicate_runs_dropped": duplicates,
         "cache_ttl_seconds": client.mythic_plus_runs_ttl_seconds,
         "leaderboard_urls": leaderboard_urls,
     }
@@ -392,16 +419,7 @@ def load_filtered_runs(
     filters: RunFilters,
 ) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Any]]:
     """Sample the Mythic+ run leaderboard for ``request`` and apply ``filters`` to the result."""
-    runs, meta = sample_leaderboard_runs(
-        client,
-        season=request.season_param,
-        region=request.region,
-        dungeon=request.dungeon,
-        affixes=request.affixes or None,
-        page=request.page,
-        pages=request.pages,
-        limit=request.limit,
-    )
+    runs, meta = sample_leaderboard_runs(client, request)
     runs, filtering = _filtered_runs(runs, filters)
     return runs, meta, filtering
 
@@ -456,6 +474,7 @@ def sample_summary(runs: list[dict[str, Any]], *, meta: dict[str, Any]) -> dict[
         "season": meta.get("season"),
         "pages_requested": meta["pages_requested"],
         "pages_fetched": meta["pages_fetched"],
+        "duplicate_runs_dropped": meta["duplicate_runs_dropped"],
         "run_count": len(runs),
         "roster_entry_count": len(roster_entries),
         "unique_player_count": len(unique_players),
@@ -613,20 +632,6 @@ def freshness_payload(meta: dict[str, Any]) -> dict[str, Any]:
         "fetched_at": meta["fetched_at"],
         "cache_hit": meta["cache_hit"],
         "cache_ttl_seconds": meta["cache_ttl_seconds"],
-    }
-
-
-def runs_page_provenance(fetched: FetchedJson, *, cache_ttl_seconds: int) -> dict[str, Any]:
-    """``freshness`` and ``citations`` for the single-page ``mythic-plus-runs`` read.
-
-    Without this the provenance is empty.
-    """
-    leaderboard_url = fetched.payload.get("leaderboard_url")
-    return {
-        "freshness": page_freshness(fetched, cache_ttl_seconds=cache_ttl_seconds),
-        "citations": {
-            "leaderboard_urls": [leaderboard_url] if isinstance(leaderboard_url, str) and leaderboard_url else [],
-        },
     }
 
 

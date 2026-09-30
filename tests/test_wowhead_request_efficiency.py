@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 from unittest.mock import MagicMock
 
 from typer.testing import CliRunner
@@ -42,6 +43,32 @@ def test_wowhead_client_dedupes_session_json_requests(monkeypatch) -> None:
     client.search_suggestions("thunderfury")
     client.close()
     assert len(calls) == 1
+
+
+def test_wowhead_client_cache_keys_carry_the_request_params(monkeypatch, tmp_path) -> None:
+    calls: list[str] = []
+
+    def fake_request(self: WowheadClient, url: str, *, params: dict[str, Any]) -> MagicMock:
+        calls.append(params["q"])
+        response = MagicMock()
+        response.json.return_value = {"search": params["q"], "results": []}
+        return response
+
+    monkeypatch.setattr(WowheadClient, "_request_with_retries", fake_request)
+    with WowheadClient(cache_dir=tmp_path, cache_backend="file") as client:
+        assert [client.search_suggestions(q)["search"] for q in ("thunderfury", "ashkandi")] == ["thunderfury", "ashkandi"]
+    # A second client has no session cache, so these answers come from the file cache.
+    with WowheadClient(cache_dir=tmp_path, cache_backend="file") as client:
+        assert [client.search_suggestions(q)["search"] for q in ("ashkandi", "thunderfury")] == ["ashkandi", "thunderfury"]
+    assert calls == ["thunderfury", "ashkandi"]
+
+
+def test_wowhead_entity_response_cache_keeps_the_all_comments_variant_apart(tmp_path) -> None:
+    options = {"requested_type": "item", "requested_id": 19019, "data_env": None, "include_comments": True, "linked_entity_preview_limit": 5}
+    with WowheadClient(cache_dir=tmp_path, cache_backend="file") as client:
+        client.set_cached_entity_response({"comments": "top"}, include_all_comments=False, **options)
+        assert client.get_cached_entity_response(include_all_comments=True, **options) is None
+        assert client.get_cached_entity_response(include_all_comments=False, **options) == {"comments": "top"}
 
 
 def test_wowhead_search_stream_emits_jsonl_header_when_results_empty(monkeypatch) -> None:

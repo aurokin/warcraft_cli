@@ -8,7 +8,7 @@ into ``main``.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -23,7 +23,7 @@ from wowhead_cli.listing_filters import (
     parse_iso8601_utc,
     text_filter_match,
 )
-from wowhead_cli.ranking import link_source_kinds, preview_type_rank, score_text_match, str_field
+from wowhead_cli.ranking import link_source_kinds, listing_match_score, preview_type_rank, score_text_match, str_field
 from wowhead_cli.wowhead_client import guide_category_url
 
 
@@ -597,7 +597,7 @@ def filtered_guide_category_rows(
         if not guide_row_matches_filters(normalized_row, filters=filters):
             continue
         if query_text is not None:
-            score = score_text_match(
+            score = listing_match_score(
                 query_text,
                 normalized_row.get("title"),
                 normalized_row.get("name"),
@@ -680,6 +680,7 @@ class GuideHydrationResult:
     items: list[dict[str, Any]]
     hydrated_at: str | None
     files_written: dict[str, str]
+    failed: list[dict[str, Any]] = field(default_factory=list)
 
 
 
@@ -802,6 +803,7 @@ def guide_export_manifest(
             "limit": options.hydrate_limit if options.hydrate_linked_entities else 0,
             "hydrated_at": hydration.hydrated_at,
             "source_counts": hydrate_source_counts(hydration.items),
+            "failed": hydration.failed,
         },
         "export_options": {
             "guide_ref": options.guide_ref,

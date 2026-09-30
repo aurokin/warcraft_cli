@@ -333,7 +333,8 @@ def test_guide_compare_query_reuses_fresh_bundles_until_force_refresh(require, o
     require("wowhead", "method", "icy-veins")
     result = run("warcraft", "guide-compare-query", GUIDE_QUERY, "--out-root", str(orchestration.out_root), timeout=300)
     reused = [row for row in result.data["provider_results"] if row["status"] == "reused"]
-    previous = {row["provider"]: row["exported_at"] for row in orchestration.payload["provider_results"] if row["status"] == "exported"}
+    exported = {row["provider"]: row for row in orchestration.payload["provider_results"] if row["status"] == "exported"}
+    previous = {provider: row["exported_at"] for provider, row in exported.items()}
     assert {row["provider"] for row in reused} == set(previous), result.describe()
     assert result.data["exported_bundle_count"] == orchestration.payload["exported_bundle_count"]
     for row in reused:
@@ -341,6 +342,9 @@ def test_guide_compare_query_reuses_fresh_bundles_until_force_refresh(require, o
         assert row["freshness"]["reason"] == "within_max_age"
         assert row["freshness"]["age_hours"] <= row["freshness"]["max_age_hours"]
         assert row["exported_at"] == previous[row["provider"]], result.describe()
+        # A reused bundle reports the redirect its export saw; reuse once dropped it, so a retired
+        # guide read as the one asked for.
+        assert row["redirect"] == exported[row["provider"]]["redirect"], result.describe()
 
     refreshed = run(
         "warcraft", "guide-compare-query", GUIDE_QUERY,
@@ -562,6 +566,27 @@ def test_guide_compare_query_refuses_to_compare_fewer_than_two_guides(require, o
     for row in details["provider_results"]:
         assert row["status"] == "skipped" and row["reason"] and row["error"] is None, row
     assert list(out_root.iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ("guide-compare-query", GUIDE_QUERY, "--provider", "method"),
+        ("--expansion", "wotlk", "guide-compare-query", GUIDE_QUERY),
+    ],
+)
+def test_guide_compare_query_refuses_flags_that_leave_one_guide_provider(out_dir: Path, argv: tuple[str, ...]) -> None:
+    """One ``--provider``, or an expansion only Wowhead serves, can never reach two guides.
+
+    That is a usage error decided before any provider call: behind a dead proxy with caches off, a
+    run that resolved or exported anyway would fail on the network instead.
+    """
+    result = run(
+        "warcraft", *argv, "--out-root", str(out_dir),
+        env={**dead_proxy_env(), **no_cache_env()}, expect=EXIT_USAGE, error_code="invalid_argument",
+    )
+    assert result.payload["command"] == "guide-compare-query", result.describe()
+    assert list(out_dir.iterdir()) == []
 
 
 def test_guide_compare_query_reports_an_outage_as_the_network_error(out_dir: Path) -> None:

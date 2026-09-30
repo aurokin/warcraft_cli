@@ -6,7 +6,6 @@ MYPY := $(VENV)/bin/mypy
 RADON := $(VENV)/bin/radon
 XENON := $(VENV)/bin/xenon
 VULTURE := $(VENV)/bin/vulture
-WOWHEAD := $(VENV)/bin/wowhead
 UV ?= uv
 LINT_PATHS := packages tests scripts
 
@@ -14,8 +13,8 @@ IMPORT_LINTER := $(VENV)/bin/lint-imports
 PRE_COMMIT := $(VENV)/bin/pre-commit
 
 .PHONY: install dev-deploy dev-deploy-no-link worktree-env test test-fast test-e2e test-canary \
-	check lock-check lint lint-boundaries lint-all complexity complexity-gate typecheck coverage deadcode \
-	skills reference schema build pre-commit-install benchmark-cache fixture-refresh-hints run release
+	check lock-check lint lint-boundaries complexity complexity-gate typecheck coverage deadcode \
+	skills reference schema build pre-commit-install release
 
 install:
 	$(UV) sync --all-extras
@@ -61,8 +60,6 @@ lint:
 lint-boundaries:
 	$(IMPORT_LINTER)
 
-lint-all: lint
-
 complexity:
 	$(RADON) cc packages -s -a
 	$(RADON) mi packages -s
@@ -74,10 +71,10 @@ typecheck:
 	$(MYPY)
 
 # The fast suite with coverage. The floor is the total measured in a clean environment (empty HOME,
-# no SimC checkout, as in CI; 91.8% on 2026-09-24) rounded down, so a drop fails; raise it when
+# no SimC checkout, as in CI; 92.7% on 2026-09-30) rounded down, so a drop fails; raise it when
 # coverage rises. -rs lists the skipped tests, such as the opt-in real-binary SimC tests.
 coverage:
-	$(PYTEST) -q -rs -m "not live and not e2e" --cov=packages --cov-report=term-missing --cov-fail-under=91
+	$(PYTEST) -q -rs -m "not live and not e2e" --cov=packages --cov-report=term-missing --cov-fail-under=92
 
 # tests/ is not scanned, so production code only a test uses counts as dead. The allowlist
 # (scripts/vulture_allowlist.py) is picked up with scripts/.
@@ -99,19 +96,6 @@ build:
 pre-commit-install:
 	$(PRE_COMMIT) install
 
-benchmark-cache:
-	$(PYTHON) scripts/benchmark_wowhead_cache.py $(ARGS)
-
-fixture-refresh-hints:
-	$(PYTHON) scripts/fixture_refresh_hints.py $(ARGS)
-
-run:
-	@if [ -z "$(ARGS)" ]; then \
-		echo 'Usage: make run ARGS="search defias"'; \
-		exit 2; \
-	fi
-	$(WOWHEAD) $(ARGS)
-
 release:
 	@if [ -z "$(VERSION)" ]; then \
 		echo 'Usage: make release VERSION=X.Y.Z'; \
@@ -123,10 +107,9 @@ release:
 	@echo "  1. Move [Unreleased] content into [$(VERSION)] - $$(date -u +%Y-%m-%d) in CHANGELOG.md"
 	@echo "  2. Update the compare links at the bottom of CHANGELOG.md"
 	@echo "  3. Refresh uv.lock (uv lock) if dependencies changed, and update docs/ROADMAP.md"
-	@echo "  4. Update the wheel URL version in README.md"
-	@echo "  5. git diff && git add CHANGELOG.md README.md uv.lock pyproject.toml packages/*/pyproject.toml"
-	@echo "  6. git commit -m 'Release v$(VERSION)' && git push"
-	@echo "  7. git tag v$(VERSION) && git push origin v$(VERSION)"
+	@echo "  4. git diff && git add CHANGELOG.md README.md uv.lock pyproject.toml packages/*/pyproject.toml"
+	@echo "  5. git commit -m 'Release v$(VERSION)' && git push"
+	@echo "  6. git tag v$(VERSION) && git push origin v$(VERSION)"
 	@echo "     (the tag push triggers .github/workflows/release.yml, which builds the wheel"
 	@echo "      and attaches it to the GitHub release)"
-	@echo "  8. gh release create v$(VERSION) --notes-file <changelog-section>"
+	@echo "  7. gh release create v$(VERSION) --notes-file <changelog-section>"

@@ -47,10 +47,6 @@ class CurseForgeClient:
         self._retry_attempts = max(1, retry_attempts)
         self._http_client: httpx.Client | None = None
 
-    @property
-    def configured(self) -> bool:
-        return bool(self._api_key)
-
     def close(self) -> None:
         if self._http_client is not None:
             self._http_client.close()
@@ -244,13 +240,19 @@ class CurseForgeClient:
         }
 
 
+def transport_error_code(exc: httpx.HTTPError) -> str:
+    """The ERROR_CONTRACT code for an httpx failure: the status mapping, ``timeout``, or ``network_error``."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        return error_code_for_http_status(exc.response.status_code)
+    return "timeout" if isinstance(exc, httpx.TimeoutException) else "network_error"
+
+
 def _changelog_error(exc: httpx.HTTPError | CurseForgeClientError) -> dict[str, str]:
     if isinstance(exc, CurseForgeClientError):
         return {"code": exc.code, "message": exc.message}
     if isinstance(exc, httpx.HTTPStatusError):
-        status = exc.response.status_code
-        return {"code": error_code_for_http_status(status), "message": f"changelog request returned HTTP {status}."}
-    return {"code": "network_error", "message": f"changelog request failed: {exc}."}
+        return {"code": transport_error_code(exc), "message": f"changelog request returned HTTP {exc.response.status_code}."}
+    return {"code": transport_error_code(exc), "message": f"changelog request failed: {exc}."}
 
 
 def verification_note() -> str:

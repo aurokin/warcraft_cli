@@ -155,3 +155,11 @@ def test_comments_sort_flag_reaches_the_emitted_comment_order(monkeypatch) -> No
         assert result.exit_code == 0, mode
         emitted[mode] = [row["id"] for row in json.loads(result.stdout)["data"]["comments"]]
     assert emitted == {"rating": [2, 3, 1], "oldest": [2, 1, 3], "newest": [3, 1, 2]}
+
+
+def test_comments_rejects_a_bad_date_window_before_fetching_the_page() -> None:
+    # The network guard fails this test if the command fetches anything before validating.
+    for window in (["--date-from", "yesterday"], ["--date-from", "2024-01-01", "--date-to", "2023-01-01"]):
+        result = runner.invoke(app, ["comments", "item", "19019", *window])
+        assert result.exit_code == 2, result.output
+        assert json.loads(result.stderr)["error"]["code"] == "invalid_argument"

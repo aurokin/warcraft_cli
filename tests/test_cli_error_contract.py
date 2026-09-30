@@ -15,9 +15,10 @@ import httpx
 import pytest
 import typer
 import warcraft_api.http
-from cli_testkit import all_cli_apps, run_binary, walk_commands
 from warcraft_core.envelope import envelope_violations
 from warcraft_core.exit_codes import EXIT_NETWORK, exit_code_for
+
+from tests.cli_testkit import all_cli_apps, run_binary, walk_commands
 
 CLI_APPS = all_cli_apps()
 

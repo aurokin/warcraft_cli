@@ -69,9 +69,11 @@ Report-encounter commands and sampled cross-report commands emit a `cache_proven
 ```
 
 - Report-encounter: `source: "report_detail"`, finish state from the resolved report.
-- Sampled cross-report commands: `source: "sampled_finished_reports"`, always
-  `finished: true` — the sampler excludes live reports before scanning, so the cohort is
-  finished reports cached under the finished TTL.
+- Sampled cross-report commands: `source: "sampled_reports"`. The sampler scans reports that are
+  still being logged as well as finished ones, because a kill fight is final once it ends; each kill
+  row carries `report_finished`, and the block says `live: true` when any kill came from a report
+  still being logged (cached under the short report TTL). `sample.live_report_count` and
+  `sample.finished_report_count` split the listed reports.
 
 ### `freshness`
 
@@ -112,8 +114,8 @@ manual clear; finished WoW logs are effectively immutable, so this is acceptable
 
 The cache key is finish-state-agnostic (it does not include `endTime`), so a report fetched
 while **live** is stored under the short report TTL and can still be served from that entry
-for up to that TTL (default 60s) after the report finishes — even by a finished-only workflow
-such as sampled boss analytics. This is the accepted consequence of caching live reports
+for up to that TTL (default 60s) after the report finishes, including by
+sampled boss analytics. This is the accepted consequence of caching live reports
 (rather than no-caching them, for rate-limit relief): the short live TTL bounds the window,
 and once it expires the next fetch sees an `endTime` over two hours old and re-caches under the
 finished TTL. Finished WoW logs are immutable thereafter. To eliminate the window for a specific report,

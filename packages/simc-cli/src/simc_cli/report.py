@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from warcraft_core.simc_json2 import dps_error, game_version, metric_count, metric_mean, stop_reason
+
 
 @dataclass(frozen=True, slots=True)
 class SimReportSummary:
@@ -40,11 +42,11 @@ def summarize_sim_report(report: dict[str, Any]) -> SimReportSummary:
     options = _dict_field(sim, "options")
     stats = _dict_field(sim, "statistics")
     collected = _dict_field(player, "collected_data")
-    iterations_completed = _metric_count(collected.get("fight_length")) or _metric_count(stats.get("simulation_length"))
-    metrics = _metrics_block(collected)
+    iterations_completed = metric_count(collected.get("fight_length")) or metric_count(stats.get("simulation_length"))
+    metrics = _metrics_block(collected, options)
     return SimReportSummary(
         version=_text(report.get("version")),
-        game_version=_game_version(options),
+        game_version=game_version(options),
         player_name=_text(player.get("name")),
         player_spec=_text(player.get("specialization")),
         player_role=_text(player.get("role")),
@@ -64,19 +66,10 @@ def _text(value: Any) -> str | None:
     return str(value) if value is not None else None
 
 
-def _game_version(options: dict[str, Any]) -> str | None:
-    """Read the live client version out of the report's dbc block."""
-    dbc = _dict_field(options, "dbc")
-    version_used = dbc.get("version_used")
-    live_info = _dict_field(dbc, version_used) if isinstance(version_used, str) else {}
-    wow_version = live_info.get("wow_version")
-    return wow_version if isinstance(wow_version, str) else None
-
-
-def _metrics_block(collected: dict[str, Any]) -> dict[str, Any]:
+def _metrics_block(collected: dict[str, Any], options: dict[str, Any]) -> dict[str, Any]:
     keys = ("dps", "dtps", "hps", "deaths", "fight_length", "absorb", "heal")
-    metrics: dict[str, Any] = {key: _metric_mean(collected.get(key)) for key in keys}
-    metrics["dps_error"] = _metric_mean(collected.get("dpse"))
+    metrics: dict[str, Any] = {key: metric_mean(collected.get(key)) for key in keys}
+    metrics["dps_error"] = dps_error(collected, options)
     return metrics
 
 
@@ -103,7 +96,7 @@ def _run_settings_block(options: dict[str, Any], *, iterations_completed: int | 
         "max_time": options.get("max_time"),
         "vary_combat_length": options.get("vary_combat_length"),
         "seed": options.get("seed"),
-        "stop_reason": _stop_reason(options=options, iterations_completed=iterations_completed),
+        "stop_reason": stop_reason(options=options, iterations_completed=iterations_completed),
     }
 
 
@@ -145,31 +138,3 @@ def sim_report_payload(
         "runtime": summary.runtime,
         "metrics": summary.metrics,
     }
-
-
-def _metric_mean(metric: Any) -> float | None:
-    if isinstance(metric, dict):
-        value = metric.get("mean")
-        if isinstance(value, (int, float)):
-            return float(value)
-    if isinstance(metric, (int, float)):
-        return float(metric)
-    return None
-
-
-def _metric_count(metric: Any) -> int | None:
-    if isinstance(metric, dict):
-        value = metric.get("count")
-        if isinstance(value, int):
-            return value
-    return None
-
-
-def _stop_reason(*, options: dict[str, Any], iterations_completed: int | None) -> str:
-    target_error = options.get("target_error")
-    iterations_requested = options.get("iterations")
-    if isinstance(target_error, (int, float)) and float(target_error) > 0:
-        if isinstance(iterations_requested, int) and isinstance(iterations_completed, int) and iterations_completed < iterations_requested:
-            return "target_error_reached"
-        return "target_error_requested"
-    return "fixed_iterations_completed"

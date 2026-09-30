@@ -161,6 +161,8 @@ def write_article_bundle(
         "content_key": content_key,
         "output_dir": str(export_dir),
         resource_key: resource,
+        # Set when the site served another guide than the one asked for, so readers of the bundle see it too.
+        "redirect": full_payload.get("redirect"),
         # Kept out of "counts", which describes what the bundle holds; this says what it is missing.
         "failed_pages": {"count": len(failed_pages), "items": failed_pages},
         "counts": {
@@ -470,6 +472,7 @@ def _bundle_descriptor(bundle: dict[str, Any], *, path: Path) -> dict[str, Any]:
         "counts": counts,
         # A comparison that includes a partial export must not read as complete on both sides.
         "failed_page_count": len(_failed_page_rows(manifest)),
+        "redirect": manifest.get("redirect"),
     }
 
 

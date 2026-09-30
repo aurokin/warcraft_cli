@@ -4,10 +4,11 @@ import json
 from pathlib import Path
 
 import pytest
-from cli_testkit import all_cli_apps
 from typer.testing import CliRunner
 from warcraft_api.cache import FileCacheStore
 from wowhead_cli.main import app
+
+from tests.cli_testkit import all_cli_apps
 
 runner = CliRunner()
 CLI_APPS = all_cli_apps()
@@ -253,36 +254,7 @@ def test_cache_inspect_summary_hides_zero_value_fields(tmp_path: Path, monkeypat
     assert "namespaces" not in payload["data"]["stats"]
 
 
-def test_cache_repair_reports_and_prunes_legacy_unscoped_entries(tmp_path: Path, monkeypatch) -> None:
-    cache_dir = tmp_path / "cache"
-    cache_dir.mkdir(parents=True)
-    now = 1000.0
-    monkeypatch.setenv("WOWHEAD_CACHE_BACKEND", "file")
-    monkeypatch.setenv("WOWHEAD_CACHE_DIR", str(cache_dir))
-    monkeypatch.setattr("warcraft_api.cache.time.time", lambda: now + 20)
-
-    legacy_path = cache_dir / ("a" * 64 + ".json")
-    legacy_path.write_text(json.dumps({"expires_at": now + 10, "payload": {}}), encoding="utf-8")
-
-    dry_run = runner.invoke(app, ["cache-repair"])
-    assert dry_run.exit_code == 0
-    dry_payload = json.loads(dry_run.stdout)
-    assert dry_payload["data"]["repair"]["apply"] is False
-    assert dry_payload["data"]["repair"]["expired_only"] is False
-    assert dry_payload["data"]["repair"]["candidates"] == 1
-    assert dry_payload["data"]["repair"]["removed"] == 0
-    assert legacy_path.exists() is True
-
-    apply_result = runner.invoke(app, ["cache-repair", "--apply"])
-    assert apply_result.exit_code == 0
-    apply_payload = json.loads(apply_result.stdout)
-    assert apply_payload["data"]["repair"]["removed"] == 1
-    assert apply_payload["data"]["repair"]["expired_only"] is False
-    assert apply_payload["data"]["remaining"]["totals"] == {"active": 0, "expired": 0, "invalid": 0, "total": 0}
-    assert legacy_path.exists() is False
-
-
-def test_cache_repair_can_limit_to_expired_legacy_entries(tmp_path: Path, monkeypatch) -> None:
+def test_cache_clear_prunes_legacy_unscoped_entries_by_namespace(tmp_path: Path, monkeypatch) -> None:
     cache_dir = tmp_path / "cache"
     cache_dir.mkdir(parents=True)
     now = 1000.0
@@ -295,13 +267,39 @@ def test_cache_repair_can_limit_to_expired_legacy_entries(tmp_path: Path, monkey
     active_path = cache_dir / ("b" * 64 + ".json")
     active_path.write_text(json.dumps({"expires_at": now + 120, "payload": {}}), encoding="utf-8")
 
-    result = runner.invoke(app, ["cache-repair", "--apply", "--expired-only"])
-    assert result.exit_code == 0
-    payload = json.loads(result.stdout)
-    assert payload["data"]["repair"]["expired_only"] is True
-    assert payload["data"]["repair"]["removed"] == 1
-    assert expired_path.exists() is False
-    assert active_path.exists() is True
+    result = runner.invoke(app, ["cache-clear", "--namespace", "legacy_unscoped", "--expired-only"])
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout)["data"]["removed"] == {"total": 1, "namespaces": {"legacy_unscoped": 1}}
+    assert (expired_path.exists(), active_path.exists()) == (False, True)
+
+
+def test_cache_clear_rejects_a_namespace_the_cache_never_writes(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("WOWHEAD_CACHE_BACKEND", "file")
+    monkeypatch.setenv("WOWHEAD_CACHE_DIR", str(tmp_path / "cache"))
+
+    result = runner.invoke(app, ["cache-clear", "--namespace", "entity_response,typo"])
+
+    assert result.exit_code == 2
+    error = json.loads(result.stderr)["error"]
+    assert error["code"] == "invalid_argument"
+    assert error["message"].startswith("Unknown cache namespace typo. Known: ")
+
+
+def test_cache_clear_fails_as_a_network_error_when_redis_is_unreachable(monkeypatch) -> None:
+    monkeypatch.setenv("WOWHEAD_CACHE_BACKEND", "redis")
+    monkeypatch.setenv("WOWHEAD_REDIS_URL", "redis://127.0.0.1:1/0")
+    monkeypatch.setattr(
+        "wowhead_cli.main.inspect_redis_cache",
+        lambda redis_url, *, prefix, **kwargs: {"kind": "redis", "available": False, "error": "Error 61 connecting to 127.0.0.1:1."},
+    )
+
+    result = runner.invoke(app, ["cache-clear"])
+
+    assert result.exit_code == 5
+    assert json.loads(result.stderr)["error"] == {
+        "code": "network_error",
+        "message": "Redis cache is unavailable: Error 61 connecting to 127.0.0.1:1.",
+    }
 
 
 def test_cache_inspect_can_request_redis_prefix_visibility(monkeypatch) -> None:

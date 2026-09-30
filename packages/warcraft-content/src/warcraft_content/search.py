@@ -23,6 +23,51 @@ def tokenize_query(query: str, *, stop_words: Collection[str] = ()) -> tuple[str
     return tuple(seen)
 
 
+# Community shorthand for classes and specs, spelled the way guide sites title their pages.
+CLASS_SPEC_ALIASES: dict[str, str] = {
+    "dk": "death knight",
+    "bdk": "blood death knight",
+    "fdk": "frost death knight",
+    "udk": "unholy death knight",
+    "dh": "demon hunter",
+    "veng": "vengeance",
+    "bm": "beast mastery",
+    "mm": "marksmanship",
+    "sv": "survival",
+    "pally": "paladin",
+    "pal": "paladin",
+    "ret": "retribution",
+    "prot": "protection",
+    "resto": "restoration",
+    "disc": "discipline",
+    "sp": "shadow priest",
+    "spriest": "shadow priest",
+    "mw": "mistweaver",
+    "ww": "windwalker",
+    "sub": "subtlety",
+    "sin": "assassination",
+    "assa": "assassination",
+    "ele": "elemental",
+    "enh": "enhancement",
+    "enha": "enhancement",
+    "lock": "warlock",
+    "aff": "affliction",
+    "demo": "demonology",
+    "destro": "destruction",
+    "aug": "augmentation",
+    "dev": "devastation",
+    "pres": "preservation",
+    "boomy": "balance",
+    "boomkin": "balance",
+}
+_CLASS_SPEC_ALIAS_RE = re.compile(r"\b(" + "|".join(map(re.escape, CLASS_SPEC_ALIASES)) + r")\b")
+
+
+def expand_class_spec_aliases(query: str) -> str:
+    """Lowercase ``query`` and spell out whole-word class/spec shorthand: ``ret pally`` is ``retribution paladin``."""
+    return _CLASS_SPEC_ALIAS_RE.sub(lambda match: CLASS_SPEC_ALIASES[match.group(1)], query.lower())
+
+
 def normalize_query(query: str, *, strip_terms: Collection[str]) -> str:
     """Lowercase and remove provider/noise words (whole words only); fall back to the raw query when nothing remains."""
     normalized = query.lower()

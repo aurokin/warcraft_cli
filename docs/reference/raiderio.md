@@ -79,20 +79,6 @@ Return a guild profile with raid progression, raid rankings, and a roster previe
 | `realm` | str | required | Realm slug or title. |
 | `name` | str | required | Guild name. |
 
-## raiderio mythic-plus-runs
-
-Return one page of the Mythic+ run leaderboard for a region and dungeon.
-
-**Options**
-
-| Option | Type | Default | Description |
-| --- | --- | --- | --- |
-| `--season` | str |  | Season slug. Defaults to Raider.IO current default season. |
-| `--region` | str | world | Region slug such as world, us, or eu. |
-| `--dungeon` | str | all | Dungeon slug or all. |
-| `--affixes` | str |  | Affix slug, fortified, tyrannical, current, or all. |
-| `--page` | int range | 0 | Page of rankings to request. |
-
 ## raiderio raids
 
 List the raid slugs (and encounter slugs) Raider.IO knows for one expansion. Each row carries the per-region ``starts``/``ends`` timestamps, so the raid a guild is currently progressing is the one whose window covers now.
@@ -115,18 +101,18 @@ Return a filtered sample of Mythic+ leaderboard runs with sampling counts and ci
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--season` | str |  | Season slug. Defaults to Raider.IO current default season. |
-| `--region` | str | world | Region slug such as world, us, or eu. |
+| `--season` | str |  | Season slug, or 'current' (the default) for the Raider.IO current season. |
+| `--region` | str | world | world, us, eu, kr, tw, cn, or an alias such as na. |
 | `--dungeon` | str | all | Dungeon slug or all. |
 | `--affixes` | str |  | Affix slug, fortified, tyrannical, current, or all. |
-| `--page` | int range | 0 | Starting page of rankings to request. |
-| `--pages` | int range | 1 | Number of pages to sample. |
+| `--page` | int range | 0 | 20-run page of rankings to start from. |
+| `--pages` | int range |  | Most 20-run pages to read. Defaults to as many as --limit needs. |
 | `--limit` | int range | 100 | Maximum runs to retain in the sample. |
 | `--level-min` | int range |  | Retain only runs at or above this Mythic+ level. |
 | `--level-max` | int range |  | Retain only runs at or below this Mythic+ level. |
 | `--score-min` | float |  | Retain only runs at or above this sampled run score. |
 | `--score-max` | float |  | Retain only runs at or below this sampled run score. |
-| `--contains-role` | str (repeatable) |  | Retain only runs containing at least one roster role. Repeatable. |
+| `--contains-role` | str (repeatable) |  | Retain only runs containing at least one of these roles (tank, healer, dps). Repeatable. |
 | `--contains-class` | str (repeatable) |  | Retain only runs containing at least one class slug or name. Repeatable. |
 | `--contains-spec` | str (repeatable) |  | Retain only runs containing at least one spec slug or name. Repeatable. |
 | `--player-region` | str (repeatable) |  | Retain only runs containing at least one player from the given region. Repeatable. |
@@ -139,19 +125,19 @@ Return deduped player snapshots built from a filtered sample of Mythic+ runs.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--season` | str |  | Season slug. Defaults to Raider.IO current default season. |
-| `--region` | str | world | Region slug such as world, us, or eu. |
+| `--season` | str |  | Season slug, or 'current' (the default) for the Raider.IO current season. |
+| `--region` | str | world | world, us, eu, kr, tw, cn, or an alias such as na. |
 | `--dungeon` | str | all | Dungeon slug or all. |
 | `--affixes` | str |  | Affix slug, fortified, tyrannical, current, or all. |
-| `--page` | int range | 0 | Starting page of rankings to request. |
-| `--pages` | int range | 1 | Number of pages to sample. |
-| `--limit` | int range | 100 | Maximum runs to retain in the source sample. |
+| `--page` | int range | 0 | 20-run page of rankings to start from. |
+| `--pages` | int range |  | Most 20-run pages to read. Defaults to as many as --limit needs. |
+| `--limit` | int range | 100 | Maximum runs to retain in the sample. |
 | `--player-limit` | int range | 100 | Maximum player snapshots to retain after deduping. |
 | `--level-min` | int range |  | Retain only runs at or above this Mythic+ level. |
 | `--level-max` | int range |  | Retain only runs at or below this Mythic+ level. |
 | `--score-min` | float |  | Retain only runs at or above this sampled run score. |
 | `--score-max` | float |  | Retain only runs at or below this sampled run score. |
-| `--contains-role` | str (repeatable) |  | Retain only runs containing at least one roster role. Repeatable. |
+| `--contains-role` | str (repeatable) |  | Retain only runs containing at least one of these roles (tank, healer, dps). Repeatable. |
 | `--contains-class` | str (repeatable) |  | Retain only runs containing at least one class slug or name. Repeatable. |
 | `--contains-spec` | str (repeatable) |  | Retain only runs containing at least one spec slug or name. Repeatable. |
 | `--player-region` | str (repeatable) |  | Retain only runs containing at least one player from the given region. Repeatable. |
@@ -169,18 +155,18 @@ Return a run-level distribution of the sampled runs over one --metric.
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `--metric` | str | mythic_level | Distribution metric: mythic_level, dungeon, role, player_region, class, spec, composition, class_composition. |
-| `--season` | str |  | Season slug. Defaults to Raider.IO current default season. |
-| `--region` | str | world | Region slug such as world, us, or eu. |
+| `--season` | str |  | Season slug, or 'current' (the default) for the Raider.IO current season. |
+| `--region` | str | world | world, us, eu, kr, tw, cn, or an alias such as na. |
 | `--dungeon` | str | all | Dungeon slug or all. |
 | `--affixes` | str |  | Affix slug, fortified, tyrannical, current, or all. |
-| `--page` | int range | 0 | Starting page of rankings to request. |
-| `--pages` | int range | 1 | Number of pages to sample. |
+| `--page` | int range | 0 | 20-run page of rankings to start from. |
+| `--pages` | int range |  | Most 20-run pages to read. Defaults to as many as --limit needs. |
 | `--limit` | int range | 100 | Maximum runs to retain in the sample. |
 | `--level-min` | int range |  | Retain only runs at or above this Mythic+ level. |
 | `--level-max` | int range |  | Retain only runs at or below this Mythic+ level. |
 | `--score-min` | float |  | Retain only runs at or above this sampled run score. |
 | `--score-max` | float |  | Retain only runs at or below this sampled run score. |
-| `--contains-role` | str (repeatable) |  | Retain only runs containing at least one roster role. Repeatable. |
+| `--contains-role` | str (repeatable) |  | Retain only runs containing at least one of these roles (tank, healer, dps). Repeatable. |
 | `--contains-class` | str (repeatable) |  | Retain only runs containing at least one class slug or name. Repeatable. |
 | `--contains-spec` | str (repeatable) |  | Retain only runs containing at least one spec slug or name. Repeatable. |
 | `--player-region` | str (repeatable) |  | Retain only runs containing at least one player from the given region. Repeatable. |
@@ -194,19 +180,19 @@ Return a player-level distribution of the sampled participants over one --metric
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `--metric` | str | appearance_count | Distribution metric: appearance_count, top_mythic_level, class, spec, role, player_region. |
-| `--season` | str |  | Season slug. Defaults to Raider.IO current default season. |
-| `--region` | str | world | Region slug such as world, us, or eu. |
+| `--season` | str |  | Season slug, or 'current' (the default) for the Raider.IO current season. |
+| `--region` | str | world | world, us, eu, kr, tw, cn, or an alias such as na. |
 | `--dungeon` | str | all | Dungeon slug or all. |
 | `--affixes` | str |  | Affix slug, fortified, tyrannical, current, or all. |
-| `--page` | int range | 0 | Starting page of rankings to request. |
-| `--pages` | int range | 1 | Number of pages to sample. |
-| `--limit` | int range | 100 | Maximum runs to retain in the source sample. |
+| `--page` | int range | 0 | 20-run page of rankings to start from. |
+| `--pages` | int range |  | Most 20-run pages to read. Defaults to as many as --limit needs. |
+| `--limit` | int range | 100 | Maximum runs to retain in the sample. |
 | `--player-limit` | int range | 100 | Maximum player snapshots to retain after deduping. |
 | `--level-min` | int range |  | Retain only runs at or above this Mythic+ level. |
 | `--level-max` | int range |  | Retain only runs at or below this Mythic+ level. |
 | `--score-min` | float |  | Retain only runs at or above this sampled run score. |
 | `--score-max` | float |  | Retain only runs at or below this sampled run score. |
-| `--contains-role` | str (repeatable) |  | Retain only runs containing at least one roster role. Repeatable. |
+| `--contains-role` | str (repeatable) |  | Retain only runs containing at least one of these roles (tank, healer, dps). Repeatable. |
 | `--contains-class` | str (repeatable) |  | Retain only runs containing at least one class slug or name. Repeatable. |
 | `--contains-spec` | str (repeatable) |  | Retain only runs containing at least one spec slug or name. Repeatable. |
 | `--player-region` | str (repeatable) |  | Retain only runs containing at least one player from the given region. Repeatable. |
@@ -225,19 +211,19 @@ Estimate the sampled runs nearest a target score or Mythic+ level.
 | --- | --- | --- | --- |
 | `--metric` | str | score | Threshold metric: score, mythic_level. |
 | `--value` | float | required | Target metric value to estimate around. |
-| `--season` | str |  | Season slug. Defaults to Raider.IO current default season. |
-| `--region` | str | world | Region slug such as world, us, or eu. |
+| `--season` | str |  | Season slug, or 'current' (the default) for the Raider.IO current season. |
+| `--region` | str | world | world, us, eu, kr, tw, cn, or an alias such as na. |
 | `--dungeon` | str | all | Dungeon slug or all. |
 | `--affixes` | str |  | Affix slug, fortified, tyrannical, current, or all. |
-| `--page` | int range | 0 | Starting page of rankings to request. |
-| `--pages` | int range | 1 | Number of pages to sample. |
+| `--page` | int range | 0 | 20-run page of rankings to start from. |
+| `--pages` | int range |  | Most 20-run pages to read. Defaults to as many as --limit needs. |
 | `--limit` | int range | 100 | Maximum runs to retain in the sample. |
 | `--nearest` | int range | 10 | Number of nearest sampled runs to retain. |
 | `--level-min` | int range |  | Retain only runs at or above this Mythic+ level. |
 | `--level-max` | int range |  | Retain only runs at or below this Mythic+ level. |
 | `--score-min` | float |  | Retain only runs at or above this sampled run score. |
 | `--score-max` | float |  | Retain only runs at or below this sampled run score. |
-| `--contains-role` | str (repeatable) |  | Retain only runs containing at least one roster role. Repeatable. |
+| `--contains-role` | str (repeatable) |  | Retain only runs containing at least one of these roles (tank, healer, dps). Repeatable. |
 | `--contains-class` | str (repeatable) |  | Retain only runs containing at least one class slug or name. Repeatable. |
 | `--contains-spec` | str (repeatable) |  | Retain only runs containing at least one spec slug or name. Repeatable. |
 | `--player-region` | str (repeatable) |  | Retain only runs containing at least one player from the given region. Repeatable. |
@@ -248,17 +234,17 @@ Season- and raid-scoped Raider.IO leaderboard views.
 
 ## raiderio leaderboard mythic-plus
 
-Return the season-scoped top Mythic+ runs with sampling freshness and citations. A thin view over the same sampled-run primitive used by ``sample`` / ``distribution`` -- emits the explicit ``resolved_season`` plus sampled freshness and leaderboard citations so the rows are provenance-safe. It fetches as many ranking pages as ``--limit`` requires and reports returned-vs-requested counts so a short provider response is explicit, not a silent cap.
+Return the season-scoped top Mythic+ runs with sampling freshness and citations. Emits the explicit ``resolved_season`` plus sampled freshness and leaderboard citations so the rows are provenance-safe. It fetches as many ranking pages as ``--limit`` requires and reports returned-vs-requested counts so a short provider response is explicit, not a silent cap.
 
 **Options**
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--season` | str |  | Season slug, or 'current' for the Raider.IO current default season. |
-| `--region` | str | world | Region slug such as world, us, or eu. |
+| `--season` | str |  | Season slug, or 'current' (the default) for the Raider.IO current season. |
+| `--region` | str | world | world, us, eu, kr, tw, cn, or an alias such as na. |
 | `--dungeon` | str | all | Dungeon slug or all. |
 | `--affixes` | str |  | Affix slug, fortified, tyrannical, current, or all. |
-| `--page` | int range | 0 | Page of rankings to request. |
+| `--page` | int range | 0 | 20-run page of rankings to start from. |
 | `--limit` | int range | 20 | Maximum leaderboard rows to return. |
 
 ## raiderio leaderboard raids

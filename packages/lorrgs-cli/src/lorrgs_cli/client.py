@@ -28,11 +28,9 @@ class LorrgsClient:
         *,
         timeout_seconds: float = 20.0,
         retry_attempts: int = DEFAULT_RETRY_ATTEMPTS,
-        api_host: str = API_HOST,
     ) -> None:
         self._timeout_seconds = timeout_seconds
         self._retry_attempts = max(1, retry_attempts)
-        self._api_host = api_host.rstrip("/")
         self._http_client: httpx.Client | None = None
 
     def close(self) -> None:
@@ -59,7 +57,7 @@ class LorrgsClient:
             raise LorrgsClientError("invalid_response", "Lorrgs response was not valid JSON.") from exc
 
     def _get(self, path: str, *, params: dict[str, Any] | None = None) -> dict[str, Any]:
-        url = f"{self._api_host}{path}"
+        url = f"{API_HOST}{path}"
         response = request_with_retries(
             self._client(),
             url,

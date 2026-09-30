@@ -179,7 +179,13 @@ whose absolute window cannot be computed is always kept.
 
 `ability-usage-summary` requests at most `--event-limit` cast events per sampled kill. Kills that
 overflow that page are counted in `sample.kills_with_truncated_events_count`, and
-`usage.total_casts_is_lower_bound` then marks every derived total as a floor.
+`usage.total_casts_is_lower_bound` then marks every derived total as a floor. It counts
+player-side casts only, so a boss ability reads zero on every kill; use `report-encounter-casts
+--hostility-type enemies` for boss casts.
+
+Sampled commands scan reports that are still being logged as well as finished ones: a kill fight is
+final once it ends, and the listing puts the most recently updated reports first. Each kill row says
+`report_finished`, and `sample.live_report_count` / `sample.finished_report_count` split the listing.
 
 `--spec-name` filters sampled kills by participant spec before aggregation; it does not turn the
 query into a spec leaderboard. It takes the class too (`'Frost Mage'`), because a bare spec name
@@ -196,7 +202,9 @@ selected `combatant_info.talentTree` row is fully formed; otherwise it fails wit
 JSON; `--allow-unlisted` permits an unlisted report.
 
 Warcraft Logs performs pure structural validation only. It does not run SimulationCraft, so its
-packets are `raw_only` with `validation.reason: simc_backend_unavailable` recorded. Run `simc` to add
+packets are `raw_only` with `validation.reason: simc_backend_unavailable` recorded, or
+`missing_class_spec_identity` / `unsupported_actor_class` when the actor's class and spec do not
+resolve. Run `simc` to add
 validated `simc_split_talents`:
 
 ```bash

@@ -8,6 +8,7 @@ from simc_cli.branch import (
     IntentExplanation,
     explain_intent,
     is_helper_decision,
+    resolve_focus_list,
     summarize_branches,
     summarize_intent,
     summarize_list_decisions,
@@ -72,7 +73,7 @@ def build_analysis_packet(
 ) -> AnalysisPacket:
     normalized_path = Path(apl_path).expanduser().resolve()
     summary = summarize_branches(normalized_path, context, start_list=start_list)
-    focus_list = summary.guaranteed_dispatch or start_list
+    focus_list = resolve_focus_list(normalized_path, context, start_list=start_list).focus_list
     intent_lines = summarize_intent(normalized_path, context, focus_list, limit=intent_limit)
     explained = explain_intent(normalized_path, context, focus_list, limit=explain_limit)
 
@@ -126,8 +127,6 @@ def recommended_next_steps(start_list: str, focus_list: str, has_unresolved_bran
         steps.append("validate timing with first-cast or log-actions before treating priorities as an opener")
     else:
         steps.append(f"use opener on `{focus_list}` for a static early-action preview")
-    if not steps:
-        steps.append("use trace-action for any action-specific implementation questions")
     return steps
 
 

@@ -8,14 +8,14 @@ Shared auth design for official OAuth providers, workflow/session products, and 
 |-------|--------|--------|
 | 1 | XDG/env discovery, shared state paths, auth-status primitives | Shipped (`warcraft_core.auth`, WCL integration) |
 | 2 | `warcraftlogs` user auth (`auth status`, login, PKCE, logout, token persistence) | Shipped |
-| 3 | `blizzard-api` as second OAuth validation (regions, namespaces, scopes) | Shipped (client-credentials token flow + region/namespace routing; endpoint hosts/namespaces pending one-time live confirmation) |
+| 3 | `blizzard-api` as second OAuth validation (regions, namespaces, scopes) | Shipped (client-credentials token flow + region/namespace routing; verified live for us/eu/kr/tw on 2026-09-13) |
 | 4 | `raidbots` session/workflow auth only if product requires it | Deferred |
 
 ## Auth Consumer Classes
 
 ### Official OAuth API providers
 
-Shape the shared design: `warcraftlogs`, future `blizzard-api`.
+Shape the shared design: `warcraftlogs`, `blizzard-api`.
 
 Shared: credential discovery, token persistence, auth status, callback helpers, refresh/expiry.
 

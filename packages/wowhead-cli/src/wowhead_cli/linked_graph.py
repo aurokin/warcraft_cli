@@ -59,6 +59,7 @@ class _GraphState:
     edges: list[dict[str, Any]] = field(default_factory=list)
     seen_edges: set[tuple[str, str, str]] = field(default_factory=set)
     fetch_count: int = 0
+    pages_skipped: int = 0
     truncated: bool = False
 
 
@@ -137,7 +138,7 @@ def _expand_page(
             state.truncated = True
             return
         ref = _link_ref(link, options.relation_filter)
-        if ref is None:
+        if ref is None or _node_key(*ref) == parent_key:
             continue
         link_type, link_id = ref
         _record_link(state, parent_key=parent_key, link=link, link_type=link_type, link_id=link_id)
@@ -173,7 +174,10 @@ def _traverse(state: _GraphState, options: LinkedGraphOptions, *, fetch_page: An
             visited_pages=visited_pages,
         )
         if state.truncated:
-            return
+            break
+    # Every queued page is one the depth asked for; --max-fetches or --node-limit left it unread.
+    state.pages_skipped = len(queue)
+    state.truncated = state.truncated or bool(queue)
 
 
 def _graph_payload(state: _GraphState, options: LinkedGraphOptions, *, root_key: str) -> dict[str, Any]:
@@ -194,6 +198,7 @@ def _graph_payload(state: _GraphState, options: LinkedGraphOptions, *, root_key:
         },
         "sampling": {
             "pages_fetched": state.fetch_count,
+            "pages_skipped": state.pages_skipped,
             "truncated": state.truncated,
             "caveat": "Relations are entity-type edges parsed from href and gatherer links on fetched pages only.",
         },

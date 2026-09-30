@@ -62,6 +62,15 @@ SPECIAL_EVENT_KEYWORDS = (
     "remix-guide",
     "torghast-guide",
 )
+# A spec's own guide is ``<spec>-<class>-pve-<role>-guide``; every other ``-guide`` page (season hubs,
+# dungeon, reputation and event pages) is an ``article_guide``, not a spec guide.
+SPEC_GUIDE_RE = re.compile(r"-pve-(?:dps|healing|tank)-guide$")
+# A spec's per-expansion page (``mistweaver-monk-the-war-within-pve-guide``) and the expansion hub
+# (``midnight-expansion-guide``).
+EXPANSION_GUIDE_SUFFIXES = ("-the-war-within-pve-guide", "-expansion-guide")
+# Families whose pages always carry the spec's page switcher: a page of one of these that parses with
+# no navigation means the switcher markup moved, not that the guide has a single page.
+NAVIGATION_REQUIRED_FAMILIES = frozenset({"spec_guide", *(family for _, family in SUBPAGE_SUFFIX_FAMILIES)})
 
 # Icy Veins rebuilt the WoW guide pages on an Astro layout in 2026: the family switcher moved from
 # ``.toc_page_list`` to ``.table-of-contents``, the on-page contents from ``.toc_page_content_items``
@@ -170,12 +179,14 @@ def classify_guide_slug(slug: str) -> str | None:
             return family
     if normalized.endswith("-raid-guide"):
         return "raid_guide"
-    if normalized.endswith("-the-war-within-pve-guide"):
+    if normalized.endswith(EXPANSION_GUIDE_SUFFIXES):
         return "expansion_guide"
     if any(keyword in normalized for keyword in SPECIAL_EVENT_KEYWORDS):
         return "special_event_guide"
-    if normalized.endswith("-guide"):
+    if SPEC_GUIDE_RE.search(normalized):
         return "spec_guide"
+    if normalized.endswith(("-guide", "-guides")):
+        return "article_guide"
     return None
 
 
@@ -620,7 +631,7 @@ def parse_sitemap_guides(xml_text: str) -> list[dict[str, Any]]:
                 "name": slug_display_name(slug),
                 "url": url,
                 "content_family": content_family,
-                "last_updated": _sitemap_date(lastmod),
+                "sitemap_lastmod": _sitemap_date(lastmod),
             }
         )
     guides.sort(key=lambda row: row["name"].lower())

@@ -23,12 +23,16 @@
 
 ## Effective Use
 
-- prefer `entity` first, then `entity-page` only when you need fuller linked-entity context
+- prefer `entity` first, then `entity-page` only when you need fuller linked-entity context; both
+  include the page's relation tabs (a zone's NPCs and quests, a faction's members) as
+  `source_kind: "listview"` links, and both take `--url <Wowhead entity URL>` in place of `<type> <id>`
 - use `comments` when you need more than the default embedded comment slice
 - use `guides <category>` when the guide family is known but the exact guide is not
 - use `guide-full` or `guide-export` when you need the raw guide body plus additive `analysis_surfaces` for comparison-oriented workflows
 - use `guide-query --kind analysis_surfaces` when you want section-backed guide topics without discarding the underlying guide text
 - use timeline filters like `--author`, `--type`, `--region`, and `--forum` instead of scanning broad result sets manually
+- the `news`, `blue-tracker` and `guides` query keeps a row only when every query word is a whole word
+  in it, so "frost mage" does not match "Frost Death Knight" or "Damage"
 - use guide filters like `--author`, `--updated-after`, `--patch-min`, and `--sort`
 - use `news-post` and `blue-topic` once you already have a specific URL
 - filter timelines by date with `--date-from` / `--date-to`, and read each row's ISO `posted_at`
@@ -45,7 +49,9 @@
   high confidence, so run the `fallback_search_command` when it does not resolve
 - `search` and `resolve` rank on Wowhead's own database and guide ordering first, so the entity a
   query names leads the proc spells and secondary rows that share its name, and a class-guide query
-  resolves to the main current guide (the guide ordering counts only when the query says "guide" or `--entity-type guide` is set);
+  resolves to the main current guide (the guide ordering counts only when the query says "guide" or `--entity-type guide` is set).
+  When the query names a type ("bm hunter guide") and the top row is another type holding only some
+  of its words, `resolve` is not confident and does not resolve; read `candidates`;
   `ranking.match_reasons` carries `upstream_database_rank` on the rows that ordering promoted
 - `search` and `resolve` rank every row Wowhead's suggestion response sent, not just its ten-row
   dropdown list, one row per entity; `metadata.suggestion_lists` says where each row came from and

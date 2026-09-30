@@ -18,6 +18,10 @@ from tests.wowhead_testkit import (
     runner,
 )
 
+TALENT_CALC_SHAPE_ERROR = (
+    "Talent calculator URL must use /talent-calc/<class>/<spec>[/<build-code>] or /talent-calc/<class>/<build-code> with a WoW class."
+)
+
 
 def test_talent_calc_command_decodes_url_and_embedded_builds(monkeypatch) -> None:
     def fake_page_html(self, page_url: str):  # noqa: ANN001
@@ -95,7 +99,7 @@ def test_talent_calc_command_rejects_trailing_extra_segment_ref() -> None:
     assert result.exit_code == 2
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "invalid_tool_ref"
-    assert payload["error"]["message"] == "Talent calculator URL must use /talent-calc/<class>/<spec>[/<build-code>]."
+    assert payload["error"]["message"] == TALENT_CALC_SHAPE_ERROR
 
 
 def test_talent_calc_command_rejects_malformed_non_url_ref() -> None:
@@ -103,7 +107,7 @@ def test_talent_calc_command_rejects_malformed_non_url_ref() -> None:
     assert result.exit_code == 2
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "invalid_tool_ref"
-    assert payload["error"]["message"] == "talent-calc reference must be a Wowhead talent-calc path or class/spec ref."
+    assert payload["error"]["message"] == TALENT_CALC_SHAPE_ERROR
 
 
 def test_talent_calc_command_rejects_nested_talent_calc_non_url_ref() -> None:
@@ -111,7 +115,7 @@ def test_talent_calc_command_rejects_nested_talent_calc_non_url_ref() -> None:
     assert result.exit_code == 2
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "invalid_tool_ref"
-    assert payload["error"]["message"] == "talent-calc reference must be a Wowhead talent-calc path or class/spec ref."
+    assert payload["error"]["message"] == TALENT_CALC_SHAPE_ERROR
 
 
 def test_talent_calc_command_rejects_buried_real_wowhead_path() -> None:
@@ -120,6 +124,29 @@ def test_talent_calc_command_rejects_buried_real_wowhead_path() -> None:
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "invalid_tool_ref"
     assert payload["error"]["message"] == "Talent calculator URL must point to /talent-calc."
+
+
+def test_talent_calc_reads_a_classic_calculator_url_as_class_and_build_code(monkeypatch) -> None:
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.page_html", lambda self, url: SAMPLE_TALENT_CALC_HTML)
+    url = "https://www.wowhead.com/classic/talent-calc/warrior/30305001302-05050005525010051"
+
+    result = runner.invoke(app, ["talent-calc", url])
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.stdout)["data"]
+    assert (data["expansion"], data["tool"]["class_slug"], data["tool"]["spec_slug"]) == ("classic", "warrior", None)
+    assert data["tool"]["build_code"] == "30305001302-05050005525010051"
+    assert data["build_identity"]["confidence"] == "none"
+
+    packet = runner.invoke(app, ["talent-calc-packet", url])
+    assert packet.exit_code == 2
+    assert json.loads(packet.stderr)["error"]["code"] == "invalid_tool_ref"
+
+
+def test_talent_calc_rejects_a_url_that_names_no_wow_class() -> None:
+    for command in ("talent-calc", "talent-calc-packet"):
+        result = runner.invoke(app, [command, "https://www.wowhead.com/talent-calc/foo/bar/ABC123"])
+        assert result.exit_code == 2
+        assert json.loads(result.stderr)["error"] == {"code": "invalid_tool_ref", "message": TALENT_CALC_SHAPE_ERROR}
 
 
 def test_talent_calc_packet_command_emits_exact_transport_packet(monkeypatch) -> None:
@@ -299,7 +326,7 @@ def test_talent_calc_packet_command_rejects_malformed_non_url_ref() -> None:
     assert result.exit_code == 2
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "invalid_tool_ref"
-    assert payload["error"]["message"] == "talent-calc reference must be a Wowhead talent-calc path or class/spec ref."
+    assert payload["error"]["message"] == TALENT_CALC_SHAPE_ERROR
 
 
 def test_talent_calc_packet_command_rejects_nested_talent_calc_non_url_ref() -> None:
@@ -307,7 +334,7 @@ def test_talent_calc_packet_command_rejects_nested_talent_calc_non_url_ref() -> 
     assert result.exit_code == 2
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "invalid_tool_ref"
-    assert payload["error"]["message"] == "talent-calc reference must be a Wowhead talent-calc path or class/spec ref."
+    assert payload["error"]["message"] == TALENT_CALC_SHAPE_ERROR
 
 
 def test_talent_calc_packet_command_rejects_empty_segment_ref() -> None:
@@ -323,7 +350,7 @@ def test_talent_calc_packet_command_rejects_trailing_extra_segment_ref() -> None
     assert result.exit_code == 2
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "invalid_tool_ref"
-    assert payload["error"]["message"] == "Talent calculator URL must use /talent-calc/<class>/<spec>[/<build-code>]."
+    assert payload["error"]["message"] == TALENT_CALC_SHAPE_ERROR
 
 
 def test_talent_calc_packet_command_rejects_buried_real_wowhead_path() -> None:
@@ -402,6 +429,19 @@ def test_dressing_room_reads_a_classic_share_url_from_classic_and_never_cites_it
     assert data["expansion"] == "classic"
     assert data["page"]["canonical_url"] is None
     assert data["page"]["note"] == "The fetched page carries no canonical link."
+
+
+def test_tool_commands_report_the_expansion_their_url_names(monkeypatch) -> None:
+    pages = {"profession-tree": SAMPLE_PROFESSION_TREE_HTML, "profiler": SAMPLE_PROFILER_HTML}
+    urls = {
+        "profession-tree": "https://www.wowhead.com/classic/profession-tree-calc/alchemy/BCuA",
+        "profiler": "https://www.wowhead.com/classic/list?list=97060220/us/illidan/Roguecane",
+    }
+    for command, url in urls.items():
+        monkeypatch.setattr("wowhead_cli.main.WowheadClient.page_html", lambda self, page_url, html=pages[command]: html)
+        result = runner.invoke(app, [command, url])
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.stdout)["data"]["expansion"] == "classic", command
 
 
 def test_profiler_command_normalizes_list_ref(monkeypatch) -> None:

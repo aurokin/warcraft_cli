@@ -8,7 +8,8 @@ from __future__ import annotations
 
 import pytest
 import typer
-from cli_testkit import all_cli_apps, is_argument, walk_commands
+
+from tests.cli_testkit import all_cli_apps, is_argument, walk_commands
 
 CLI_APPS = all_cli_apps()
 

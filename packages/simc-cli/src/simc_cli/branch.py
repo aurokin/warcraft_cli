@@ -7,7 +7,18 @@ from simc_cli.prune import ConditionOutcome, PruneContext, evaluate_condition_ou
 
 LIST_NAME_ALIASES = {
     "trinkets": "trinket helper",
+    "trinket": "trinket helper",
+    "items": "item helper",
+    "item": "item helper",
+    "item_actions": "item helper",
     "cooldowns": "cooldown helper",
+    "cds": "cooldown helper",
+    "ogcd": "off-gcd helper",
+    "racials": "racial helper",
+    "race": "racial helper",
+    "race_actions": "racial helper",
+    "variables": "variable helper",
+    "defensives": "defensive helper",
     "precombat": "precombat setup",
     "math_for_wizards": "build logic helper",
     "illicit_doping": "burst items helper",
@@ -23,6 +34,18 @@ TOKEN_ALIASES = {
     "es": "eternity surge",
     "fb": "fire breath",
 }
+
+# Actions that sit beside a rotation in most lists without being part of it.
+UTILITY_ACTIONS = frozenset({
+    "auto_attack", "auto_shot", "potion", "use_item", "use_items", "invoke_external_buff", "variable",
+    "snapshot_stats", "retarget",
+    # interrupts
+    "rebuke", "counterspell", "kick", "pummel", "mind_freeze", "wind_shear", "skull_bash", "solar_beam",
+    "spear_hand_strike", "disrupt", "muzzle", "counter_shot", "quell", "silence", "spell_lock",
+    # racials
+    "berserking", "blood_fury", "fireblood", "ancestral_call", "arcane_torrent", "lights_judgment",
+    "bag_of_tricks", "arcane_pulse", "haymaker", "rocket_barrage", "thorn_bloom",
+})
 
 ACTION_ROLE_ALIASES = {
     "metamorphosis": "burst",
@@ -195,23 +218,35 @@ def resolve_focus_list(apl_path, context: PruneContext, start_list: str = "defau
             reason = "guaranteed_run_dispatch"
             continue
 
-        decisions = summarize_list_decisions(apl_path, context, current)
-        non_helper_active = [
-            decision
-            for decision in decisions
-            if decision.status != "dead" and not is_helper_decision(decision)
-        ]
-        if len(non_helper_active) == 1:
-            only = non_helper_active[0]
-            if only.action_name == "call_action_list" and only.status == "guaranteed" and only.target_list and only.target_list not in seen:
-                current = only.target_list
-                path.append(current)
-                seen.add(current)
-                reason = "guaranteed_call_leaf"
-                continue
+        target = _single_call_target(apl_path, context, current)
+        if target and target not in seen:
+            current = target
+            path.append(current)
+            seen.add(current)
+            reason = "guaranteed_call_leaf"
+            continue
         break
 
     return FocusResolution(start_list=start_list, focus_list=current, path=path, reason=reason)
+
+
+def _single_call_target(apl_path, context: PruneContext, list_name: str) -> str | None:
+    """The list ``list_name`` always calls when that call holds its rotation, else None.
+
+    The call must be the only live dispatch other than helper lists, and its list must have more live
+    rows than ``list_name`` has live actions of its own. Utility actions (auto attacks, interrupts,
+    potions, trinkets, racials) do not count, so Retribution's `auto_attack, rebuke, call generators`
+    resolves to `generators`, while Frost's sixteen-action `spellslinger` list stays put even though it
+    ends by calling `movement`.
+    """
+    decisions = [decision for decision in summarize_list_decisions(apl_path, context, list_name) if decision.status != "dead"]
+    dispatches = [decision for decision in decisions if decision.target_list and not is_helper_decision(decision)]
+    target = dispatches[0].target_list if len(dispatches) == 1 else None
+    if not target or dispatches[0].action_name != "call_action_list" or dispatches[0].status != "guaranteed":
+        return None
+    own_actions = [decision for decision in decisions if not decision.target_list and decision.action_name not in UTILITY_ACTIONS]
+    target_rows = [decision for decision in summarize_list_decisions(apl_path, context, target) if decision.status != "dead"]
+    return target if len(own_actions) < len(target_rows) else None
 
 
 def summarize_list_decisions(apl_path, context: PruneContext, list_name: str) -> list[ListDecision]:
@@ -310,10 +345,13 @@ def explain_intent(apl_path, context: PruneContext, list_name: str, limit: int =
     )
 
 
-def compare_branch_summaries(left: BranchSummary, right: BranchSummary) -> BranchComparison:
-    targets = sorted(set(left.branch_decisions) | set(right.branch_decisions))
+def compare_branches(apl_path, left_context: PruneContext, right_context: PruneContext, *,
+                     start_list: str = "default", max_changes: int = 8) -> BranchComparison:
+    """Compare dispatch and the resolved focus lists of two builds or target counts on one APL."""
+    left = summarize_branches(apl_path, left_context, start_list=start_list)
+    right = summarize_branches(apl_path, right_context, start_list=start_list)
     decision_changes: list[str] = []
-    for target in targets:
+    for target in sorted(set(left.branch_decisions) | set(right.branch_decisions)):
         left_decision = left.branch_decisions.get(target)
         right_decision = right.branch_decisions.get(target)
         if left_decision and right_decision:
@@ -328,10 +366,27 @@ def compare_branch_summaries(left: BranchSummary, right: BranchSummary) -> Branc
         elif right_decision:
             decision_changes.append(f"{target}: only in right ({right_decision.status})")
 
-    left_focus_list = left.guaranteed_dispatch or left.start_list
-    right_focus_list = right.guaranteed_dispatch or right.start_list
+    left_focus_list = resolve_focus_list(apl_path, left_context, start_list=start_list).focus_list
+    right_focus_list = resolve_focus_list(apl_path, right_context, start_list=start_list).focus_list
+    left_decisions = summarize_list_decisions(apl_path, left_context, left_focus_list)
+    right_decisions = summarize_list_decisions(apl_path, right_context, right_focus_list)
+    focus_changes: list[str] = []
+    if left_focus_list == right_focus_list:
+        right_by_line = {row.line_no: row for row in right_decisions}
+        for left_row in left_decisions:
+            right_row = right_by_line.get(left_row.line_no)
+            if not right_row:
+                continue
+            if left_row.status != right_row.status or left_row.reason != right_row.reason:
+                focus_changes.append(
+                    f"L{left_row.line_no} {left_row.action_label}: {left_row.status} -> {right_row.status}"
+                    f" | left={left_row.reason} | right={right_row.reason}"
+                )
+            if len(focus_changes) >= max_changes:
+                break
+
     return BranchComparison(
-        start_list=left.start_list,
+        start_list=start_list,
         left_dispatch=left.guaranteed_dispatch,
         right_dispatch=right.guaranteed_dispatch,
         dispatch_changed=left.guaranteed_dispatch != right.guaranteed_dispatch,
@@ -339,44 +394,12 @@ def compare_branch_summaries(left: BranchSummary, right: BranchSummary) -> Branc
         left_focus_list=left_focus_list,
         right_focus_list=right_focus_list,
         focus_list_same=left_focus_list == right_focus_list,
-        focus_changes=[],
-        left_focus_preview=[],
-        right_focus_preview=[],
-        left_focus_intent=[],
-        right_focus_intent=[],
+        focus_changes=focus_changes,
+        left_focus_preview=[format_list_decision(decision) for decision in left_decisions[:max_changes]],
+        right_focus_preview=[format_list_decision(decision) for decision in right_decisions[:max_changes]],
+        left_focus_intent=summarize_intent(apl_path, left_context, left_focus_list),
+        right_focus_intent=summarize_intent(apl_path, right_context, right_focus_list),
     )
-
-
-def attach_focus_comparison(comparison: BranchComparison, apl_path, left_context: PruneContext,
-                            right_context: PruneContext, max_changes: int = 8) -> BranchComparison:
-    left_decisions = summarize_list_decisions(apl_path, left_context, comparison.left_focus_list)
-    right_decisions = summarize_list_decisions(apl_path, right_context, comparison.right_focus_list)
-    left_preview = [format_list_decision(decision) for decision in left_decisions[:max_changes]]
-    right_preview = [format_list_decision(decision) for decision in right_decisions[:max_changes]]
-
-    focus_changes: list[str] = []
-    if comparison.focus_list_same:
-        right_by_line = {decision.line_no: decision for decision in right_decisions}
-        for left_decision in left_decisions:
-            right_decision = right_by_line.get(left_decision.line_no)
-            if not right_decision:
-                continue
-            if left_decision.status != right_decision.status or left_decision.reason != right_decision.reason:
-                focus_changes.append(
-                    f"L{left_decision.line_no} {left_decision.action_label}: "
-                    f"{left_decision.status} -> {right_decision.status}"
-                    f" | left={left_decision.reason}"
-                    f" | right={right_decision.reason}"
-                )
-            if len(focus_changes) >= max_changes:
-                break
-
-    comparison.focus_changes = focus_changes
-    comparison.left_focus_preview = left_preview
-    comparison.right_focus_preview = right_preview
-    comparison.left_focus_intent = summarize_intent(apl_path, left_context, comparison.left_focus_list)
-    comparison.right_focus_intent = summarize_intent(apl_path, right_context, comparison.right_focus_list)
-    return comparison
 
 
 def humanize_action_label(label: str) -> str:

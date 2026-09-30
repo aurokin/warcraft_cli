@@ -19,6 +19,8 @@
 - prefer `guide` before `guide-full`
 - Method titles never say "Mythic+": `mythic+`, `m+` and `mythic plus` search for "mythic dungeon" pages
 - expect explicit support boundaries; unsupported families return structured failures or `scope_hint`
+- `guide.last_updated` is an ISO date (the page's wording is in `last_updated_text`); search rows carry `metadata.sitemap_lastmod`
+- `resolve --limit` only trims the candidates shown; confidence is judged on every match
 - `build_references` holds explicit build evidence from the page: embedded Wowhead talent-calc links (`reference_type: wowhead_talent_calc_url`) and published WoW loadout import strings (`reference_type: wow_talent_export`, where `url` is the import string). There is no slug/title-based guide hardlinking
 - current class guides publish import strings on their `/talents` section, so `guide-full` on a class guide is what feeds `guide-builds-simc`
 - `wowhead_talent_calc_url` rows always decode unaided, because the URL path names the class and spec
@@ -37,6 +39,6 @@
 
 - not all Method.gg content is intentionally supported
 - tier-list and index-style roots are intentionally excluded
-- a page whose article container no longer matches fails with `parse_failed`; an empty article is never reported as success
+- a page whose article container no longer matches fails with `parse_failed`; an empty article is never reported as success. So do a sitemap that lists no guides and a class guide whose navigation no longer parses in `guide-full`/`guide-export`
 - `guide-full` and `guide-export` skip a navigation page they cannot fetch or parse and list it in `data.failed_pages`
 - when Method serves another guide than the one asked for (a redirected URL), `guide`, `guide-full` and `guide-export` set `data.redirect` to `{requested, served, message}` and everything else describes the served guide; check it before treating the content as the page you asked for. It is `null` otherwise

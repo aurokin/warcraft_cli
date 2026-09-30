@@ -544,3 +544,18 @@ def test_compare_article_bundles_rejects_the_same_bundle_twice(tmp_path: Path) -
 
     assert exc_info.value.code == "invalid_argument"
     assert exc_info.value.details == {"duplicate_bundles": [str(export_dir.resolve())]}
+
+
+def test_bundle_keeps_the_redirect_for_later_readers(tmp_path: Path) -> None:
+    """A bundle of a retired guide holds the guide the site served; compare over the directory says so."""
+    redirect = {"requested": "mistweaver-monk-remix", "served": "mistweaver-monk", "message": "Method served mistweaver-monk"}
+    method_dir = tmp_path / "method-guide"
+    icy_dir = tmp_path / "icy-guide"
+    manifest = write_article_bundle({**_method_like_payload(), "redirect": redirect}, provider="method", export_dir=method_dir)
+    write_article_bundle(_icy_like_payload(), provider="icy-veins", export_dir=icy_dir)
+
+    assert manifest["redirect"] == redirect
+    comparison = compare_article_bundles(
+        [(method_dir, load_article_bundle(method_dir)), (icy_dir, load_article_bundle(icy_dir))]
+    )
+    assert [bundle["redirect"] for bundle in comparison["bundles"]] == [redirect, None]

@@ -371,37 +371,6 @@ def clear_file_cache(
     }
 
 
-def repair_file_cache(
-    cache_dir: Path,
-    *,
-    apply: bool = False,
-    expired_only: bool = False,
-    sample_limit: int = 10,
-) -> dict[str, Any]:
-    legacy_entries = [
-        entry
-        for entry in _iter_file_cache_entries(cache_dir.expanduser())
-        if entry["namespace"] == "legacy_unscoped" and (not expired_only or entry["status"] == "expired")
-    ]
-    removed = 0
-    if apply:
-        for entry in legacy_entries:
-            try:
-                entry["path"].unlink()
-            except OSError:
-                continue
-            removed += 1
-    return {
-        "mode": "legacy_unscoped",
-        "apply": apply,
-        "expired_only": expired_only,
-        "candidates": len(legacy_entries),
-        "removed": removed,
-        "sample_paths": [str(entry["path"]) for entry in legacy_entries[:sample_limit]],
-        "truncated": len(legacy_entries) > sample_limit,
-    }
-
-
 def _redis_iter_keys(client: Any, pattern: str) -> list[str]:
     scan_iter = getattr(client, "scan_iter", None)
     if callable(scan_iter):

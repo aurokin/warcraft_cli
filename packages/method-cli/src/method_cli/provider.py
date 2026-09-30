@@ -36,7 +36,13 @@ from warcraft_content.article_provider_cli import (
     unsupported_guide_surface_message,
 )
 from warcraft_content.guide_analysis import extract_guide_analysis_surfaces, merge_guide_analysis_surfaces
-from warcraft_content.search import ArticleMatchWeights, normalize_query, score_article_match, tokenize_query
+from warcraft_content.search import (
+    ArticleMatchWeights,
+    expand_class_spec_aliases,
+    normalize_query,
+    score_article_match,
+    tokenize_query,
+)
 from warcraft_core.envelope import Envelope, success_envelope
 from warcraft_core.exit_codes import error_code_for_http_status
 from warcraft_core.provider import ProviderError, ProviderSurface
@@ -139,9 +145,10 @@ def open_client() -> MethodClient:
 
 @dataclass(frozen=True, slots=True)
 class SearchOutcome:
+    """Every ranked match, so resolve judges confidence on all of them and only the caller trims to ``--limit``."""
+
     normalized_query: str
-    results: list[dict[str, Any]]
-    total_count: int
+    matches: list[dict[str, Any]]
     scope_hint: dict[str, str] | None = None
 
 
@@ -182,31 +189,33 @@ def _scored_candidate(row: dict[str, Any], normalized_query: str, terms: set[str
         reasons=reasons,
         provider_command=PROVIDER_NAME,
     )
-    candidate_row["metadata"]["content_family"] = content_family
+    candidate_row["metadata"].update(content_family=content_family, sitemap_lastmod=row.get("sitemap_lastmod"))
     return candidate_row
 
 
-def search_results(client: MethodClient, query: str, *, limit: int) -> SearchOutcome:
-    """Rank the sitemap's supported guide slugs against ``query``."""
-    normalized_query = normalize_query(MYTHIC_PLUS_RE.sub("mythic dungeon", query.lower()), strip_terms=QUERY_NOISE_TERMS)
+def search_results(client: MethodClient, query: str) -> SearchOutcome:
+    """Rank the sitemap's supported guide slugs against ``query``; every match is kept, callers trim to ``--limit``."""
+    normalized_query = normalize_query(
+        MYTHIC_PLUS_RE.sub("mythic dungeon", expand_class_spec_aliases(query)), strip_terms=QUERY_NOISE_TERMS
+    )
     terms = set(tokenize_query(normalized_query))
     scope_hint = _unsupported_scope_hint(terms)
     if scope_hint is not None:
-        return SearchOutcome(normalized_query, [], 0, scope_hint)
+        return SearchOutcome(normalized_query, [], scope_hint)
     matches = [
         candidate
         for candidate in (_scored_candidate(row, normalized_query, terms) for row in client.sitemap_guides())
         if candidate is not None
     ]
     sort_article_candidates(matches)
-    return SearchOutcome(normalized_query, matches[:limit], len(matches))
+    return SearchOutcome(normalized_query, matches)
 
 
-def _search_outcome(query: str, *, limit: int) -> SearchOutcome:
+def _search_outcome(query: str) -> SearchOutcome:
     if not query.strip():
         raise ProviderError("invalid_query", "Query cannot be empty.")
     with open_client() as client, transport_errors():
-        return search_results(client, query, limit=limit)
+        return search_results(client, query)
 
 
 def _reject_unsupported_surface(payload: dict[str, Any]) -> None:
@@ -350,17 +359,31 @@ def _fetch_navigation_pages(
     return pages, failures
 
 
-def _guide_pages_payload(client: MethodClient, guide_ref: str) -> dict[str, Any]:
-    initial = _fetch_guide_page(client, guide_ref)
-    nav_items = initial["navigation"] or [
+def _navigation_items(initial: dict[str, Any]) -> list[dict[str, Any]]:
+    guide = initial["guide"]
+    if initial["navigation"]:
+        return list(initial["navigation"])
+    if guide["content_family"] == "class_guide":
+        # Every class guide has a section switcher; walking only this page would pass one section off as the guide.
+        raise ProviderError(
+            "parse_failed",
+            f"No guide navigation parsed from {guide['page_url']}; the Method navigation layout has probably changed.",
+            details={"page_url": guide["page_url"]},
+        )
+    return [
         {
-            "title": initial["guide"]["section_title"],
-            "url": initial["guide"]["page_url"],
-            "section_slug": initial["guide"]["section_slug"],
+            "title": guide["section_title"],
+            "url": guide["page_url"],
+            "section_slug": guide["section_slug"],
             "active": True,
             "ordinal": 1,
         }
     ]
+
+
+def _guide_pages_payload(client: MethodClient, guide_ref: str) -> dict[str, Any]:
+    initial = _fetch_guide_page(client, guide_ref)
+    nav_items = _navigation_items(initial)
     pages, failed_pages = _fetch_navigation_pages(client, initial, nav_items)
     guide = dict(initial["guide"])
     guide["page_count"] = len(pages)
@@ -439,7 +462,7 @@ def guide_export(guide_ref: str, *, out: Path | None = None) -> Envelope:
         "redirect": pages_payload["redirect"],
         "counts": manifest["counts"],
         "output_dir": str(export_dir),
-        "manifest": manifest,
+        "files": manifest["files"],
         "failed_pages": pages_payload["failed_pages"],
     }
     return _envelope(
@@ -474,8 +497,7 @@ def guide_query(
         kinds=selected_kinds,
         section_title_filter=section_title_filter,
     )
-    payload["guide"] = bundle["manifest"].get("guide")
-    payload["output_dir"] = str(export_dir)
+    payload = {"bundle": bundle_ref, "guide": bundle["manifest"].get("guide"), **payload}
     return _envelope(command="guide-query", kind="guide_query", payload=payload, query=query)
 
 
@@ -494,26 +516,27 @@ class MethodProvider:
     name = PROVIDER_NAME
 
     def search(self, query: str, *, limit: int = 5, **options: Any) -> Envelope:
-        outcome = _search_outcome(query, limit=limit)
+        outcome = _search_outcome(query)
         payload = build_article_search_response(
             query=query,
             search_query=outcome.normalized_query,
-            results=outcome.results,
-            total_count=outcome.total_count,
+            results=outcome.matches[:limit],
+            total_count=len(outcome.matches),
             scope_hint=outcome.scope_hint,
         )
         return _envelope(command="search", kind="search_results", payload=payload, query=query, provenance=SITEMAP_PROVENANCE)
 
     def resolve(self, target: str, **options: Any) -> Envelope:
         limit = int(options.get("limit", 5))
-        outcome = _search_outcome(target, limit=limit)
+        outcome = _search_outcome(target)
         payload = build_article_resolve_response(
             provider_command=PROVIDER_NAME,
             query=target,
             search_query=outcome.normalized_query,
-            results=outcome.results,
-            total_count=outcome.total_count,
-            resolved=_is_confident_match(outcome.results),
+            results=outcome.matches[:limit],
+            total_count=len(outcome.matches),
+            # Judged on every match: ``--limit`` must not hide the near-tied rival that makes it ambiguous.
+            resolved=_is_confident_match(outcome.matches),
             scope_hint=outcome.scope_hint,
         )
         return _envelope(command="resolve", kind="resolve_match", payload=payload, query=target, provenance=SITEMAP_PROVENANCE)
@@ -524,9 +547,7 @@ class MethodProvider:
         except ValueError as exc:
             raise ProviderError("invalid_cache_config", str(exc)) from exc
         payload = {
-            "provider": PROVIDER_NAME,
             "status": "ready",
-            "command": "doctor",
             "installed": True,
             "language": "python",
             "capabilities": {
