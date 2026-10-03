@@ -180,9 +180,7 @@ def build_doctor_payload(
         status = "degraded" if len(failures) < len(probe_results) else "error"
 
     return {
-        "provider": "wowhead",
         "status": status,
-        "command": "doctor",
         "installed": True,
         "language": "python",
         "expansion": profile.key,

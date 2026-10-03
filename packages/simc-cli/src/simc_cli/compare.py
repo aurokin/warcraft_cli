@@ -24,6 +24,18 @@ ACTION_SAMPLE_NOTE = (
     "SimC's confidence-interval half-width around the mean dps."
 )
 
+DEFAULT_GEAR_DISCLOSURE = (
+    "The profile sets load_default_gear=1, so the actor wears SimC's low item level default gear: "
+    "absolute DPS is far below a geared character's, and only comparisons on the same profile are meaningful. "
+    "To sim a build on current-tier gear, copy profiles/<tier>/<Tier>_<Class>_<Spec>.simc and replace its talents= line."
+)
+
+
+def default_gear_disclosures(profile_text: str) -> list[str]:
+    """``[DEFAULT_GEAR_DISCLOSURE]`` when the profile loads SimC's default gear (every harness does), else ``[]``."""
+    loads_default_gear = any(line.strip() == "load_default_gear=1" for line in profile_text.splitlines())
+    return [DEFAULT_GEAR_DISCLOSURE] if loads_default_gear else []
+
 
 @dataclass(slots=True)
 class ValidationResult:

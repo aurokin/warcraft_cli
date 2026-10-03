@@ -143,9 +143,11 @@ def sim_report_payload(
     json_report_path: str | None,
     command: list[str],
     iterations_requested: int | None,
+    disclosures: list[str],
 ) -> dict[str, Any]:
     return {
         "status": "completed",
+        "disclosures": disclosures,
         "preset": preset,
         "input_source": input_source,
         "profile_path": profile_path,

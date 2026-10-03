@@ -220,18 +220,26 @@ def deduplicate_pulls(candidates: Iterable[tuple[dict[str, Any], dict[str, Any]]
     return kept
 
 
-def sampled_dedupe_notes(sample: dict[str, Any]) -> list[str]:
-    """Say so in the payload when sampled kills were collapsed, per SAFE_ANALYTICS_RULES.md."""
+def sampled_cohort_notes(sample: dict[str, Any]) -> list[str]:
+    """Say so in the payload when sampled kills were collapsed or none matched, per SAFE_ANALYTICS_RULES.md."""
+    notes: list[str] = []
     removed = sample.get("duplicates_removed")
-    if not isinstance(removed, int) or removed <= 0:
-        return []
-    return [
-        f"{removed} sampled fight(s) were the same pull logged in more than one report (same guild, encounter, "
-        f"difficulty and raid size, with start and end within {DUPLICATE_PULL_TOLERANCE_MS // 1000}s of another "
-        "report of that pull) "
-        "and were collapsed into one kill; the collapsed report codes are on each kill's duplicate_reports. "
-        "Reports without a guild are never collapsed"
-    ]
+    if isinstance(removed, int) and removed > 0:
+        notes.append(
+            f"{removed} sampled fight(s) were the same pull logged in more than one report (same guild, encounter, "
+            f"difficulty and raid size, with start and end within {DUPLICATE_PULL_TOLERANCE_MS // 1000}s of another "
+            "report of that pull) "
+            "and were collapsed into one kill; the collapsed report codes are on each kill's duplicate_reports. "
+            "Reports without a guild are never collapsed"
+        )
+    if sample.get("matched_boss_kill_count") == 0:
+        notes.append(
+            f"No kill matched in the {sample.get('source_report_count')} sampled reports "
+            f"({sample.get('scanned_fight_count')} fights scanned): the cohort is empty, which says nothing about the "
+            "boss. Raise --report-pages or narrow --start-time/--end-time to reach more kills, or use "
+            "encounter-rankings, which ranks every logged kill, for a late or rarely killed boss"
+        )
+    return notes
 
 
 def sampled_cross_report_freshness(
@@ -607,7 +615,7 @@ def boss_kills_payload(
         "query": query,
         "notes": [
             *sampled_spec_filter_notes(query.get("spec_name") if isinstance(query, dict) else None, sample),
-            *sampled_dedupe_notes(sample),
+            *sampled_cohort_notes(sample),
         ],
         "freshness": sampled_cross_report_freshness(cache_ttl_seconds, transport_counts=transport_counts),
         "cache_provenance": sampled_cache_provenance(cache_ttl_seconds, rows),
@@ -659,7 +667,7 @@ def spec_filtered_kill_samples_payload(
             "rows are sampled kills that contained at least one participant of the requested spec; "
             "this is a participant cohort, not a spec ranking leaderboard"
         ),
-        *sampled_dedupe_notes(sample),
+        *sampled_cohort_notes(sample),
     ]
     if truncated:
         notes.append(
@@ -721,7 +729,7 @@ def kill_time_distribution_payload(
         "query": query,
         "notes": [
             *sampled_spec_filter_notes(query.get("spec_name") if isinstance(query, dict) else None, sample),
-            *sampled_dedupe_notes(sample),
+            *sampled_cohort_notes(sample),
         ],
         "freshness": sampled_cross_report_freshness(cache_ttl_seconds, transport_counts=transport_counts),
         "cache_provenance": sampled_cache_provenance(cache_ttl_seconds, rows),

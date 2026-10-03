@@ -440,8 +440,8 @@ def row_is_off_intent(row: Mapping[str, Any]) -> bool:
     return bool(_wrapper_ranking(row).get("off_intent"))
 
 
-def search_result_sort_key(row: Mapping[str, Any]) -> tuple[int, int, int, int, str, str, str]:
-    """Order between providers' candidate rows: anchor, then on-intent rows, then score.
+def search_result_sort_key(row: Mapping[str, Any]) -> tuple[int, int, int, str, str, str]:
+    """Order between providers' candidate rows: anchor, then on-intent rows, then wrapper score.
 
     Two tiers do the work that per-provider score tuning could not:
 
@@ -450,18 +450,20 @@ def search_result_sort_key(row: Mapping[str, Any]) -> tuple[int, int, int, int, 
       whatever local scale another provider's description of it happens to use;
     * the *off-intent* tier: a profile row cannot outrank rows from families the query actually
       asked for, which is what kept ``thunderfury`` from returning five players named Thunderfury.
+
+    Equal wrapper scores fall through to the provider name, never to the raw provider-local score,
+    which is not comparable across providers.
     """
     wrapper = _wrapper_ranking(row)
     try:
         wrapper_score = int(wrapper.get("score") or 0) if wrapper else candidate_score(row)
     except (TypeError, ValueError):
         wrapper_score = 0
-    score = candidate_score(row)
     provider = str(row.get("provider") or "")
     name = str(row.get("name") or "")
     identifier = str(row.get("id") or "")
     anchor_rank = 0 if wrapper.get("anchor") else 1
-    return (anchor_rank, int(row_is_off_intent(row)), -wrapper_score, -score, provider, name, identifier)
+    return (anchor_rank, int(row_is_off_intent(row)), -wrapper_score, provider, name, identifier)
 
 
 def interleave_provider_rows(rows: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
@@ -584,31 +586,32 @@ def decorate_resolve_payload(query: str, provider: str, payload: Mapping[str, An
     return decorated
 
 
-def resolve_payload_sort_key(payload: Mapping[str, Any]) -> tuple[int, int, int, int, int, int, str, str, str]:
+def resolve_payload_sort_key(payload: Mapping[str, Any]) -> tuple[int, int, int, int, int, str, str, str]:
     """Order between providers' decorated resolve answers: ``search_result_sort_key`` on the match.
 
     ``warcraft resolve`` answers with the row ``warcraft search`` would put first, so a provider's own
     ``resolved``/``confidence`` never lifts a row over a better-ranked one; they only break an exact
-    tie on the wrapper score, ahead of the incomparable raw provider score.
+    tie on the wrapper score, ahead of the provider name.
     """
     match = payload.get("match")
-    anchor, off_intent, wrapper_score, score, provider, name, identifier = search_result_sort_key(
+    anchor, off_intent, wrapper_score, provider, name, identifier = search_result_sort_key(
         match if isinstance(match, Mapping) else {}
     )
     resolved = 1 if payload.get("resolved") else 0
     confidence = confidence_rank(payload.get("confidence"))
-    return (anchor, off_intent, wrapper_score, -resolved, -confidence, score, provider, name, identifier)
+    return (anchor, off_intent, wrapper_score, -resolved, -confidence, provider, name, identifier)
 
 
 def resolve_answer_accepted(payload: Mapping[str, Any]) -> bool:
     """Whether the top-ranked resolve answer is the wrapper's answer.
 
-    Its own provider must have resolved it, and the query's intents must not rank that provider's
-    family down: a guide query is not answered by Lorrgs spec metadata, nor a guild query by a wiki
+    Its own provider must have resolved it at ``high`` confidence (a provider that calls a partial
+    match resolved at ``medium`` does not answer for the wrapper), and the query's intents must not
+    rank that provider's family down: a guide query is not answered by Lorrgs spec metadata, nor a guild query by a wiki
     article, whatever confidence the provider reported. A match whose title is exactly the query is
     exempt: the intent words are then part of the name (the item `Guild Tabard`), not a request for
     another kind of source.
     """
     ranking = as_dict(payload.get("wrapper_ranking"))
     fits_intent = int(ranking.get("intent_family_fit") or 0) >= 0 or ranking.get("name_match") == "exact"
-    return bool(payload.get("resolved")) and fits_intent
+    return bool(payload.get("resolved")) and payload.get("confidence") == "high" and fits_intent

@@ -131,6 +131,10 @@ class GuideSiteClient:
         cached = self._read_cache(self._cache_key("guide_page_html", url))
         return cached if isinstance(cached, str) else None
 
+    def cache_page_html(self, url: str, html: str) -> None:
+        """Store a guide page body fetched outside ``guide_page_html``, so it answers the next read of ``url``."""
+        self._write_cache(self._cache_key("guide_page_html", url), html, ttl_seconds=self._page_ttl)
+
     def guide_page_html(self, guide_ref: str) -> tuple[str, str]:
         url = self._site.page_url(guide_ref)
         html = self._get_text(url, namespace="guide_page_html", ttl_seconds=self._page_ttl)

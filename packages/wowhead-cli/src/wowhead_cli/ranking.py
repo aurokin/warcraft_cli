@@ -141,6 +141,14 @@ def search_ranking_query(query: str) -> str:
     return " ".join(query.lower().split())
 
 
+TYPE_HINT_WORDS = frozenset(phrase for phrases in SEARCH_TYPE_HINTS.values() for phrase in phrases if " " not in phrase)
+
+
+def untyped_search_query(query: str) -> str:
+    """`query` without the words that name an entity type: "hogger npc" is "hogger"."""
+    return " ".join(term for term in query_terms(query) if term not in TYPE_HINT_WORDS)
+
+
 def search_follow_up_kind(query: str) -> str:
     terms = set(query_terms(query))
     if terms & FOLLOW_UP_COMMENT_TERMS:
@@ -234,26 +242,44 @@ def exact_match_score(normalized_query: str, *, name_normalized: str, display_no
     return 0, []
 
 
+def _holds_words(text: str, query: str, *, at_start: bool) -> bool:
+    """Whether `text` holds `query` as whole words, up to a plural ending, and at its start when `at_start`.
+
+    "frost" is a prefix of "Frost Shock" and "valorstone" of "Valorstones", but not of "Frostscale's
+    Mystic Frond"; "frost" is not inside "Winterspring Frostsaber".
+    """
+    start = "^" if at_start else r"(?<!\w)"
+    return bool(query) and re.search(rf"{start}{re.escape(query)}(?:e?s)?(?!\w)", text) is not None
+
+
 def prefix_and_contains_score(normalized_query: str, *, name_normalized: str, display_normalized: str) -> tuple[int, list[str]]:
-    """Score the query as a prefix of the name, or failing that as a phrase inside it.
+    """Score the query as the leading words of the name, or failing that as words inside it.
 
     A title that merely contains the query ("Legion Remix Fury Warrior Guide") never outscores one
     that starts with it, so each contains score sits below both prefix scores.
     """
-    if normalized_query and name_normalized.startswith(normalized_query):
+    if _holds_words(name_normalized, normalized_query, at_start=True):
         return 10, ["name_prefix"]
-    if normalized_query and display_normalized.startswith(normalized_query):
+    if _holds_words(display_normalized, normalized_query, at_start=True):
         return 8, ["display_name_prefix"]
-    if normalized_query and name_normalized and normalized_query in name_normalized:
+    if _holds_words(name_normalized, normalized_query, at_start=False):
         return 6, ["name_contains_query"]
-    if normalized_query and display_normalized and normalized_query in display_normalized:
+    if _holds_words(display_normalized, normalized_query, at_start=False):
         return 4, ["display_name_contains_query"]
     return 0, []
 
 
 def term_match_score(terms: list[str], *, haystacks: list[str]) -> tuple[int, list[str]]:
-    """Score the query terms a row's text holds as whole words: 3 each when it holds all, else 1 each."""
-    matched = len(word_tokens(" ".join(haystacks)).intersection(terms))
+    """Score the query terms a row's text holds as whole words: 3 each when it holds all, else 1 each.
+
+    Words match up to a plural ending, so "spirit beasts" holds every word of "Spirit Beast". A
+    possessive is a different word: "onyxia" does not hold every word of "Onyxia's Lair", so that row
+    cannot close in on the NPC "Onyxia".
+    """
+    text = " ".join(haystacks)
+    words = word_tokens(text)
+    plain_words = {word for word in re.findall(r"[\w'\u2019]+", text.lower()) if word.isalnum()}
+    matched = sum(1 for term in terms if term in words or any(_same_word(term, word) for word in plain_words))
     if not matched:
         return 0, []
     if matched == len(terms):
@@ -593,6 +619,11 @@ def mark_stale_guides(candidates: list[dict[str, Any]]) -> None:
         row["ranking"]["match_reasons"].append(STALE_GUIDE_REASON)
 
 
+# Blizzard tags internal test entries "(DNT)" (do not translate). Wowhead's database lists them, and a
+# name such as "Test Warbound until equipped (DNT)" can match a real query word for word.
+_INTERNAL_ENTRY_RE = re.compile(r"\(dnt\)", re.IGNORECASE)
+
+
 def normalize_search_results(
     results: list[Any],
     *,
@@ -605,10 +636,12 @@ def normalize_search_results(
     """Score and order suggestion rows, dropping the ones whose text matches nothing in the query.
 
     Follow-up words ("comments", "links") steer each row's follow-up command and are left out of the
-    ranking, unless `literal` says the whole query is a name ("Soul Link").
+    ranking, unless `literal` says the whole query is a name ("Soul Link"). Internal "(DNT)" test
+    entries are left out unless the query says "dnt".
     Returns the kept rows and how many rows were dropped for matching nothing.
     """
     selected_entity_types = set(entity_types)
+    keep_internal = "dnt" in word_tokens(query)
     ranking_query = " ".join(query.lower().split()) if literal else search_ranking_query(query)
     intent = "summary" if literal else search_follow_up_kind(query)
     bonuses = rank_bonuses or {}
@@ -618,6 +651,8 @@ def normalize_search_results(
             continue
         entity_type = suggestion_entity_type(row)
         if selected_entity_types and entity_type not in selected_entity_types:
+            continue
+        if not keep_internal and _INTERNAL_ENTRY_RE.search(str_field(row, "name")):
             continue
         entity_id = row.get("id")
         popularity = row.get("popularity")
@@ -714,7 +749,7 @@ def resolve_next_command(candidate: dict[str, Any]) -> str | None:
     return command if isinstance(command, str) and command else None
 
 
-def resolve_confidence(candidates: list[dict[str, Any]], *, entity_types: tuple[str, ...], query: str) -> str:
+def resolve_confidence(candidates: list[dict[str, Any]], *, entity_types: tuple[str, ...]) -> str:
     if not candidates:
         return "none"
     top_ranking = candidates[0].get("ranking", {})
@@ -722,45 +757,22 @@ def resolve_confidence(candidates: list[dict[str, Any]], *, entity_types: tuple[
     second_score = int(candidates[1].get("ranking", {}).get("score") or 0) if len(candidates) > 1 else 0
     margin = top_score - second_score
     reasons = set(top_ranking.get("match_reasons") or [])
-    high = not _is_off_type_partial_match(candidates) and not _misses_a_queried_number(candidates[0], query) and (
+    high = (
         is_high_confidence_exact_match(reasons, margin=margin, second_score=second_score)
         or is_high_confidence_score(top_score, margin=margin)
         or is_filtered_high_confidence(entity_types, top_score=top_score, margin=margin)
     )
     if high:
-        # A guide the response itself shows to be far behind its siblings is never a confident
-        # answer, so `resolve` reports it as a candidate instead of recommending a command for it.
-        return "medium" if STALE_GUIDE_REASON in reasons else "high"
+        # A row missing some of the query's words ("Resilient Keystone 12" for "midnight season 2
+        # mythic+ dungeons") is not a confident answer unless it is of the type the query names, as
+        # "Restoration Druid Healing Guide" is for "resto druid guide". A guide the response itself
+        # shows to be far behind its siblings never is. `resolve` reports either as a candidate
+        # instead of recommending a command for it.
+        partial = "some_terms_match" in reasons and "type_hint" not in reasons
+        return "medium" if partial or STALE_GUIDE_REASON in reasons else "high"
     if is_medium_confidence_score(top_score, margin=margin):
         return "medium"
     return "low"
-
-
-def _is_off_type_partial_match(candidates: list[dict[str, Any]]) -> bool:
-    """True when the query names a type that a lower row has, and the top row is another type sharing only some words.
-
-    "bm hunter guide": Wowhead's database order lifts the spell "Summon Hunter Guide" above the
-    Beast Mastery guide, but the query asked for a guide and the spell holds only some of its words.
-    """
-    def reasons(row: dict[str, Any]) -> list[str]:
-        return list(row.get("ranking", {}).get("match_reasons") or [])
-
-    top = reasons(candidates[0])
-    return (
-        "some_terms_match" in top
-        and "type_hint" not in top
-        and any("type_hint" in reasons(row) for row in candidates[1:])
-    )
-
-
-def _misses_a_queried_number(row: dict[str, Any], query: str) -> bool:
-    """True when the row holds only some of the query's words and not a number the query names.
-
-    "keystone legend season 3": Wowhead's database order lifts "Keystone Legend: Season 2" to the top.
-    """
-    numbers = {token for token in word_tokens(query) if token.isdigit()}
-    reasons = row.get("ranking", {}).get("match_reasons") or []
-    return "some_terms_match" in reasons and bool(numbers - word_tokens(str(row.get("name") or "")))
 
 
 def is_high_confidence_exact_match(reasons: set[str], *, margin: int, second_score: int) -> bool:

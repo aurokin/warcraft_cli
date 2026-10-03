@@ -227,12 +227,15 @@ def filtered_guide_category_rows(
         if not guide_row_matches_filters(normalized_row, filters=filters):
             continue
         if query_text is not None:
+            # The URL slug carries what the title leaves out: a raid's boss guides are titled by boss
+            # alone, but their slugs start with the raid ("venomous-abyss-ulatek-boss-strategy-abilities").
             score = listing_match_score(
                 query_text,
                 normalized_row.get("title"),
                 normalized_row.get("name"),
                 normalized_row.get("author"),
                 normalized_row.get("category_path"),
+                normalized_row["url"].rstrip("/").rsplit("/", 1)[-1].replace("-", " "),
             )
             if score <= 0:
                 continue

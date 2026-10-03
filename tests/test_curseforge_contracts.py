@@ -49,6 +49,8 @@ def _isolate_curseforge_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> 
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("CURSEFORGE_API_KEY", "test-key")
+    # Request-counting tests must reach the fake transport; the cache test turns it back on.
+    monkeypatch.setenv("CURSEFORGE_CACHE_BACKEND", "none")
 
 
 def _install_recorder(monkeypatch: pytest.MonkeyPatch) -> list[str]:
@@ -468,3 +470,16 @@ def test_changelog_names_the_file_it_covers(monkeypatch: pytest.MonkeyPatch) -> 
     assert result.exit_code == 0, result.output
     changelog = json.loads(result.stdout)["data"]["changelog"]
     assert (changelog["file_id"], changelog["display_name"], changelog["release_type"]) == (newest["id"], "DBM 11.1.0-3-gabc123", 3)
+
+
+def test_addon_responses_are_replayed_from_the_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The CurseForge key is rate-limited, and an addon lookup costs up to three requests.
+    monkeypatch.setenv("CURSEFORGE_CACHE_BACKEND", "file")
+    calls = _install_recorder(monkeypatch)
+    first = json.loads(runner.invoke(app, ["addon", "deadly-boss-mods"]).stdout)
+    second = json.loads(runner.invoke(app, ["addon", "deadly-boss-mods"]).stdout)
+    assert len(calls) == 3
+    assert (first["provenance"]["cache_hit"], second["provenance"]["cache_hit"]) == (False, True)
+    assert second["provenance"]["fetched_at"] == first["provenance"]["fetched_at"]
+    assert second["provenance"]["cache_ttl_seconds"] == 3600
+    assert second["data"] == first["data"]

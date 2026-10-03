@@ -51,8 +51,9 @@ from icy_veins_cli.site_index import load_site_index, merge_crawl, save_site_ind
 
 BUNDLE_QUERY_KINDS = ("sections", "navigation", "linked_entities", "build_references", "analysis_surfaces")
 PROVIDER_LABEL = "Icy Veins"
-# Covers the menu pages (about 130), the pages the sitemap lacks that they lead to, and a share of the
-# previous index's other pages; a full replay of the link graph needed about 170-200 requests.
+# Spent on the pages a run has never seen first, then on revisits of the previous index. A full run
+# costs one request per indexed page plus one per new page (243 over the bundled snapshot), so a run
+# over a grown index ends partial and the next run starts with the revisits it deferred.
 DEFAULT_INDEX_MAX_REQUESTS = 250
 
 
@@ -149,7 +150,8 @@ def resolve(target: str, *, limit: int = 5, **options: Any) -> Envelope:
         provider_command=PROVIDER_NAME,
         query=target,
         search_query=outcome.normalized_query,
-        results=outcome.matches[:limit],
+        matches=outcome.matches,
+        limit=limit,
         total_count=len(outcome.matches),
         resolved=resolve_is_confident(outcome.matches),
         scope_hint=outcome.scope_hint,
@@ -295,11 +297,14 @@ def index_refresh(*, max_requests: int = DEFAULT_INDEX_MAX_REQUESTS) -> Envelope
     """Crawl Icy Veins for the pages its frozen sitemap lacks and merge them into the local site index.
 
     The crawl fetches the site menu's pages and follows every link to a page the sitemap does not
-    list, then re-reads the previous index's other pages, oldest first, at one request a second at
-    most. It stops at the first 403, 429 or Cloudflare challenge and at ``max_requests``; either way
-    what it read is merged (the previous rows are all kept) and ``partial`` is true; a blocked run
-    keeps the previous ``refreshed_at`` and writes nothing when it read nothing. A seed page that
-    lists no links fails as ``parse_failed`` and leaves the index untouched.
+    list, skipping the pages the previous index already holds, then re-reads those indexed pages,
+    least recently seen first, at one request a second at most. It stops at the first 403, 429 or
+    Cloudflare challenge (``blocked``), after a few server or transport failures in a row
+    (``unavailable``) and at ``max_requests``; in every case what it read is merged (the previous
+    rows are all kept) and ``partial`` is true. A blocked or unavailable run keeps the previous
+    ``refreshed_at``, and a run that read nothing writes nothing. A seed page that lists no links
+    fails as ``parse_failed`` and leaves the index untouched. Every page read also lands in the page
+    cache.
     """
     previous = load_site_index()
     with _client() as client:
@@ -322,7 +327,7 @@ def index_refresh(*, max_requests: int = DEFAULT_INDEX_MAX_REQUESTS) -> Envelope
     if result.stop_reason == "seed_failed":
         raise _seed_failure(result)
     merged, counts = merge_crawl(previous, result, now=datetime.now(UTC))
-    # A run blocked before it read anything leaves the previous index (local or bundled) as it was.
+    # A run stopped before it read anything leaves the previous index (local or bundled) as it was.
     read_anything = bool(result.pages or result.aliases or result.not_found)
     index_path = str(save_site_index(merged)) if read_anything else previous.path if previous else None
     data = {

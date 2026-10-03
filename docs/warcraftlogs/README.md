@@ -34,7 +34,10 @@ from the callback. `--scope` (repeatable) selects the OAuth scopes: `view-user-p
 `state` or `--redirect-uri` does not match the pending flow is rejected before the code is exchanged.
 
 `doctor` and `auth status` probe live access by default (`rate_limit()` for public access,
-`current_user()` for user access). Pass `--no-live` for local readiness only.
+`current_user()` for user access). Pass `--no-live` for local readiness only. `doctor`'s `status` is
+`ready` when public API access is, and `degraded` otherwise (no client credentials, or a failed
+probe): every data command needs that access, and each capability then names the reason. `doctor` also reports
+`installed`, `language`, and the resolved `cache` configuration (backend, directory, TTLs).
 
 ## Site profiles
 
@@ -77,7 +80,20 @@ code and return a discovery hint for anything else.
 each slug spelling until Warcraft Logs finds the entity. `reports`/`guild-reports`, the sampled
 `--guild-realm` and `encounter-rankings --server-slug` send one slug (`Azjol-Nerub` becomes
 `azjol-nerub`), so pass Warcraft Logs' own slug there (`azjolnerub`, as `server` reports it).
-Warcraft Logs slugs native-script realm names in English, so pass `howling-fjord`, not `Ревущий фьорд`.
+Most native-script realm names are their own Warcraft Logs slug (`아즈샤라`, `血之谷`, `Гордунни`), but
+Warcraft Logs slugs some Russian realms in English (`Ревущий фьорд` is `howling-fjord`, as are
+`Ясеневый лес`, `Борейская тундра`, `Черный Шрам` and `Разувий`). When no spelling of a non-Latin name
+is found, those realm-taking commands read the region's server list (1-3 pages, cached like other
+world data) and retry with the slug whose display name matches. The single-slug flags above do not:
+pass `howling-fjord` there.
+
+Regions are `us`, `eu`, `kr`, `tw` or `cn`, or an alias such as `na`; `oce`/`oceanic` read `us`,
+where Warcraft Logs keeps Oceanic realms (subregion Oceanic). Any other region is `invalid_query`
+(exit 2) before a request, not a `not_found`.
+
+`zones --expansion-id` takes a Warcraft Logs expansion id (`warcraftlogs expansions`; Midnight is 7,
+where Raider.IO numbers it 11). An id Warcraft Logs has no expansion for is `invalid_query` (exit 2)
+naming the valid ids, instead of an empty zone list.
 
 Warcraft Logs answers a filter it does not recognise unfiltered rather than rejecting it, so the
 CLI rejects one locally with `invalid_query` (exit 2): an unknown `encounter-rankings --class-name`,
@@ -192,6 +208,11 @@ start order, so the result does not depend on report listing order, and the earl
 report represents the pull. The collapse is reported, never silent —
 `sample.duplicates_removed` counts it, every sampled command adds a note stating the rule, and the
 kept kill's `duplicate_reports` cites the report codes and fight ids that were folded in.
+
+When no kill matches (`sample.matched_boss_kill_count: 0`), every sampled command adds a note naming
+how many reports and fights were scanned and how to widen the cohort: raise `--report-pages`, narrow
+`--start-time`/`--end-time`, or use `encounter-rankings`, which ranks every logged kill, for a late or
+rarely killed boss. An empty cohort is not evidence about the boss.
 
 Warcraft Logs has no cross-report pull id, and timing alone cannot tell two unrelated personal
 logs apart, so a fight from a report with no guild is never collapsed; neither is a guild upload

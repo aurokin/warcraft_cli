@@ -15,7 +15,7 @@ Pass these before the subcommand: `warcraft --pretty <command> ...`.
 | `--fields` | str (repeatable) |  | Return only selected fields (dot paths). Repeat or pass comma-separated values. |
 | `--fields-strict` | boolean | false | Fail when a requested --fields dot-path is missing from the payload. |
 | `--profile` | str |  | Output profile preset: agent (default compact JSON) or human (pretty JSON). |
-| `--compact-max-chars` | int range | 280 | Maximum string length before --compact truncation adds an ellipsis. |
+| `--compact-max-chars` | int range [40<=x<=10000] | 280 | Maximum string length before --compact truncation adds an ellipsis. |
 | `--expansion` | str |  | Filter wrapper search/resolve to a specific expansion profile. Passed through to expansion-aware providers like wowhead. |
 
 ## warcraft doctor
@@ -40,14 +40,14 @@ Fan out a free-text query to every search-ready provider and rank the merged can
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--limit` | int range | 5 | Results to request from each provider, and the size of the merged result list. |
+| `--limit` | int range [1<=x<=50] | 5 | Results to request from each provider, and the size of the merged result list. |
 | `--brief` | boolean | false | Return a smaller wrapper payload: compact candidate rows and no per-provider payloads. |
 | `--ranking-debug` | boolean | false | Include compact wrapper ranking summaries for the returned candidates. |
 | `--expansion-debug` | boolean | false | Include a compact expansion support snapshot for all providers. |
 
 ## warcraft resolve
 
-Fan out a query to every resolve-ready provider and return the single best match plus its follow-up command. The answer is the candidate `warcraft search` would rank first, and only when its own provider resolved it; otherwise the command reports `resolved: false` with that candidate as `best_unresolved_candidate`.
+Fan out a query to every resolve-ready provider and return the single best match plus its follow-up command. The answer is the candidate `warcraft search` would rank first, and only when its own provider resolved it at `high` confidence; otherwise the command reports `resolved: false` with that candidate as `best_unresolved_candidate`.
 
 **Arguments**
 
@@ -59,7 +59,7 @@ Fan out a query to every resolve-ready provider and return the single best match
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--limit` | int range | 5 | Ranked candidates to list under --ranking-debug. |
+| `--limit` | int range [1<=x<=50] | 5 | Ranked candidates to list under --ranking-debug. |
 | `--brief` | boolean | false | Return a smaller wrapper payload: a compact match summary and no per-provider payloads. |
 | `--ranking-debug` | boolean | false | Include the first --limit providers' matches in ranking order, each with its resolved flag. |
 | `--expansion-debug` | boolean | false | Include a compact expansion support snapshot for all providers. |
@@ -112,13 +112,13 @@ Build an evidence packet for phase-scoped cooldown analysis.
 | `--fight-id` | int |  | Fight id. Defaults to fight=<id> from the URL. |
 | `--actor-id` | int |  | Report-local source/actor id for the player to analyze. |
 | `--actor-name` | str |  | Player name within the selected fight, used when --actor-id is omitted. |
-| `--phase` | int range | required | One-based phase index to analyze, e.g. --phase 2 for P2. |
+| `--phase` | int range [x>=1] | required | One-based phase index to analyze, e.g. --phase 2 for P2. |
 | `--spec-slug` | str |  | Override Lorrgs spec slug, e.g. mage-frost. |
 | `--boss-slug` | str |  | Override Lorrgs boss slug, e.g. lura. |
 | `--difficulty` | str |  | Lorrgs difficulty for the top-parse comparison. Defaults to the Warcraft Logs fight's own difficulty. |
 | `--metric` | str |  | Optional Lorrgs ranking metric, e.g. dps or hps. |
-| `--sample-limit` | int range | 5 | Top-parse samples to include; 0 disables comparison. |
-| `--event-limit` | int range | 5000 | Warcraft Logs cast events to request. |
+| `--sample-limit` | int range [0<=x<=20] | 5 | Top-parse samples to include; 0 disables comparison. |
+| `--event-limit` | int range [1<=x<=10000] | 5000 | Warcraft Logs cast events to request. |
 | `--spell-id` | int (repeatable) |  | Restrict tracked cooldown spell ids. Repeatable. Defaults to Lorrgs query/show spells for the spec. |
 | `--allow-unlisted` | boolean | false | Allow lookup of unlisted Warcraft Logs reports. |
 
@@ -136,7 +136,7 @@ Compare two or more already-exported guide bundles from wowhead, method, or icy-
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--max-age-hours` | int range | 24 | Freshness threshold (hours) for each compared bundle's exported_at. |
+| `--max-age-hours` | int range [1<=x<=720] | 24 | Freshness threshold (hours) for each compared bundle's exported_at. |
 
 ## warcraft guide-compare-query
 
@@ -154,12 +154,12 @@ Resolve a guide query across wowhead, method, and icy-veins, export the bundles,
 | --- | --- | --- | --- |
 | `--provider` | str (repeatable) |  | Restrict orchestration to one or more providers from: wowhead, method, icy-veins. |
 | `--out-root` | directory |  | Directory root where orchestrated guide bundles should be written. Defaults to <data root>/guide_compare/<query-slug>, with the data root `warcraft doctor` reports as paths.data_root; nothing is written to the current directory. |
-| `--max-age-hours` | int range | 24 | Reuse existing orchestrated guide bundles only when they are newer than this many hours. |
+| `--max-age-hours` | int range [1<=x<=720] | 24 | Reuse existing orchestrated guide bundles only when they are newer than this many hours. |
 | `--force-refresh / --no-force-refresh` | boolean | false | Re-export selected guide bundles even when a fresh orchestrated bundle already exists. |
 | `--simc-build-handoff / --no-simc-build-handoff` | boolean | false | Also emit an explicit guide-build-to-simc evidence packet from the exported bundles. |
 | `--simc-apl-path` | str |  | Optional SimC APL path used to add exact-build describe-build output when simc build handoff is enabled. |
 | `--simc-decode / --no-simc-decode` | boolean | true | Also run simc decode-build for each explicit guide build reference when simc build handoff is enabled. |
-| `--simc-build-limit` | int range | 20 | Maximum unique explicit build references to hand off to simc when simc build handoff is enabled. |
+| `--simc-build-limit` | int range [1<=x<=200] | 20 | Maximum unique explicit build references to hand off to simc when simc build handoff is enabled. |
 
 ## warcraft talent-packet
 
@@ -178,7 +178,7 @@ Build a validated talent transport packet from a Wowhead talent-calc or Warcraft
 | `--actor-id` | int |  | Required for Warcraft Logs report sources; report-local actor ID. |
 | `--fight-id` | int |  | Optional explicit fight id for Warcraft Logs report sources. |
 | `--allow-unlisted` | boolean | false | Allow lookup of unlisted Warcraft Logs reports. |
-| `--listed-build-limit` | int range | 10 | Maximum embedded Wowhead listed builds to keep when using a talent-calc ref. |
+| `--listed-build-limit` | int range [1<=x<=100] | 10 | Maximum embedded Wowhead listed builds to keep when using a talent-calc ref. |
 | `--validate / --no-validate` | boolean | true | Upgrade raw packet inputs through simc validation when possible. |
 | `--out` | str |  | Optional path to write the final talent transport packet JSON. |
 
@@ -199,15 +199,15 @@ Build a talent transport packet and add simc describe-build output for the decod
 | `--actor-id` | int |  | Required for Warcraft Logs report sources; report-local actor ID. |
 | `--fight-id` | int |  | Optional explicit fight id for Warcraft Logs report sources. |
 | `--allow-unlisted` | boolean | false | Allow lookup of unlisted Warcraft Logs reports. |
-| `--listed-build-limit` | int range | 10 | Maximum embedded Wowhead listed builds to keep when using a talent-calc ref. |
+| `--listed-build-limit` | int range [1<=x<=100] | 10 | Maximum embedded Wowhead listed builds to keep when using a talent-calc ref. |
 | `--validate / --no-validate` | boolean | true | Upgrade raw packet inputs through simc validation when possible. |
 | `--packet-out` | str |  | Optional path to write the final routed talent transport packet JSON. |
 | `--apl-path` | str |  | Optional SimC APL path. If omitted, simc tries the default APL for the resolved build. |
-| `--targets` | int range | 1 | Primary target count for the base build summary. |
-| `--aoe-targets` | int range | 5 | Secondary target count used for the cleave/AoE comparison view. |
+| `--targets` | int range [x>=1] | 1 | Primary target count for the base build summary. |
+| `--aoe-targets` | int range [x>=2] | 5 | Secondary target count used for the cleave/AoE comparison view. |
 | `--list` | str | default | Starting action list. |
-| `--priority-limit` | int range | 8 | Maximum active priority rows to summarize per target view. |
-| `--inactive-limit` | int range | 8 | Maximum inactive talent-gated actions to summarize per target view. |
+| `--priority-limit` | int range [1<=x<=50] | 8 | Maximum active priority rows to summarize per target view. |
+| `--inactive-limit` | int range [1<=x<=50] | 8 | Maximum inactive talent-gated actions to summarize per target view. |
 
 ## warcraft guide-builds-simc
 
@@ -225,7 +225,7 @@ Turn the explicit build references in exported guide bundles into a simc evidenc
 | --- | --- | --- | --- |
 | `--decode / --no-decode` | boolean | true | Also run simc decode-build for each unique explicit build reference. |
 | `--apl-path` | str |  | Optional SimC APL path used to add exact-build describe-build output for each explicit guide build ref. |
-| `--limit` | int range | 20 | Maximum unique explicit build references to hand off to simc. |
+| `--limit` | int range [1<=x<=200] | 20 | Maximum unique explicit build references to hand off to simc. |
 
 ## Provider passthrough
 

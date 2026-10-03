@@ -10,7 +10,7 @@ from warcraft_core.exit_codes import EXIT_USAGE
 from warcraft_core.provider import ProviderError
 
 from lorrgs_cli.client import PROVIDER_NAME, LorrgsClient
-from lorrgs_cli.provider import call_api, note_empty_ranking
+from lorrgs_cli.provider import call_api, note_empty_ranking, validated_comp_filters, validated_difficulty
 from lorrgs_cli.provider import doctor as provider_doctor
 from lorrgs_cli.provider import resolve as provider_resolve
 from lorrgs_cli.provider import search as provider_search
@@ -205,7 +205,7 @@ def spec_ranking(
     ctx: typer.Context,
     spec_slug: str = typer.Argument(..., help="Lorrgs full spec slug, e.g. mage-frost."),
     boss_slug: str = typer.Argument(..., help="Lorrgs boss slug, e.g. chimaerus-the-undreamt-god."),
-    difficulty: str = typer.Option("mythic", "--difficulty", help="Lorrgs difficulty slug; defaults to mythic."),
+    difficulty: str = typer.Option("mythic", "--difficulty", help="mythic or heroic; defaults to mythic."),
     metric: str | None = typer.Option(None, "--metric", help="Metric override, e.g. dps or hps. Defaults by spec role."),
 ) -> None:
     """Fetch top-parse cooldown timelines for one spec on one encounter."""
@@ -216,7 +216,9 @@ def spec_ranking(
         "spec_ranking",
         query,
         lambda client: note_empty_ranking(
-            client.spec_ranking(spec_slug=spec_slug, boss_slug=boss_slug, difficulty=difficulty, metric=metric),
+            client.spec_ranking(
+                spec_slug=spec_slug, boss_slug=boss_slug, difficulty=validated_difficulty(difficulty), metric=metric
+            ),
             f"{spec_slug} reports for {boss_slug} on {difficulty}",
         ),
     )
@@ -227,7 +229,7 @@ def spec_ranking_info(
     ctx: typer.Context,
     spec_slug: str = typer.Argument(..., help="Lorrgs full spec slug, e.g. mage-frost."),
     boss_slug: str = typer.Argument(..., help="Lorrgs boss slug, e.g. chimaerus-the-undreamt-god."),
-    difficulty: str = typer.Option("mythic", "--difficulty", help="Lorrgs difficulty slug; defaults to mythic."),
+    difficulty: str = typer.Option("mythic", "--difficulty", help="mythic or heroic; defaults to mythic."),
     metric: str | None = typer.Option(None, "--metric", help="Metric override, e.g. dps or hps. Defaults by spec role."),
 ) -> None:
     """Fetch metadata for a spec ranking without the large report timeline list."""
@@ -237,7 +239,9 @@ def spec_ranking_info(
         "spec-ranking-info",
         "spec_ranking_info",
         query,
-        lambda client: client.spec_ranking_info(spec_slug=spec_slug, boss_slug=boss_slug, difficulty=difficulty, metric=metric),
+        lambda client: client.spec_ranking_info(
+            spec_slug=spec_slug, boss_slug=boss_slug, difficulty=validated_difficulty(difficulty), metric=metric
+        ),
     )
 
 
@@ -246,8 +250,14 @@ def comp_ranking(
     ctx: typer.Context,
     boss_slug: str = typer.Argument(..., help="Lorrgs boss slug, e.g. chimaerus-the-undreamt-god."),
     limit: int = typer.Option(20, "--limit", min=1, max=50, help="Maximum report rows to request."),
-    role: list[str] | None = typer.Option(None, "--role", help="Composition role filter expression; repeatable."),
-    spec_filter: list[str] | None = typer.Option(None, "--spec", help="Composition spec filter expression; repeatable."),
+    role: list[str] | None = typer.Option(
+        None,
+        "--role",
+        help="Role count filter <role>.<op>.<n>, role tank/heal/mdps/rdps, op eq/gt/gte/lt/lte, e.g. heal.gte.4; repeatable.",
+    ),
+    spec_filter: list[str] | None = typer.Option(
+        None, "--spec", help="Spec count filter <spec-slug>.<op>.<n>, e.g. mage-frost.gte.1; repeatable."
+    ),
     killtime_min: int = typer.Option(0, "--killtime-min", min=0, help="Minimum kill time in seconds."),
     killtime_max: int = typer.Option(0, "--killtime-max", min=0, help="Maximum kill time in seconds."),
 ) -> None:
@@ -269,8 +279,8 @@ def comp_ranking(
             client.comp_ranking(
                 boss_slug=boss_slug,
                 limit=limit,
-                roles=role,
-                specs=spec_filter,
+                roles=validated_comp_filters(role, flag="--role"),
+                specs=validated_comp_filters(spec_filter, flag="--spec"),
                 killtime_min=killtime_min,
                 killtime_max=killtime_max,
             ),

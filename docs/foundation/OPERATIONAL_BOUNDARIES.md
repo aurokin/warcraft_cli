@@ -80,7 +80,7 @@ warcraft --expansion retail doctor
 | --- | --- | --- |
 | HTTP 4xx/5xx | Endpoint change, auth, or rate limit | Retry once; check `doctor` probes; inspect `warcraftlogs rate-limit` for WCL. |
 | Empty `results` / missing keys | Parser drift or envelope change | Run provider contract tests; compare raw payload vs normalized layer. |
-| `parse_error` / `unexpected_response` | HTML or JSON shape change | Run the Wowhead parser canaries or the provider's end-to-end journey file. |
+| `parse_failed` / `invalid_response` | HTML or JSON shape change | Run the Wowhead parser canaries or the provider's end-to-end journey file. |
 | Auth errors | Expired token or missing scope | `warcraftlogs auth status`; re-run OAuth bootstrap. |
 | Wrong expansion / wrong links | Profile or URL routing bug | `wowhead expansion-detect <url>`; check `expansion_url_policy` in `wowhead doctor`. |
 

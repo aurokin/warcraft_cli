@@ -18,7 +18,8 @@ from warcraft_core.auth import load_provider_auth_state
 from warcraft_core.env import find_env_file, read_env_keys
 from warcraft_core.exit_codes import error_code_for_http_status
 from warcraft_core.paths import provider_cache_root, provider_env_path
-from warcraft_core.wow_normalization import normalize_name, normalize_region, primary_realm_slug, realm_slug_variants
+from warcraft_core.shapes import as_dict, as_list
+from warcraft_core.wow_normalization import normalize_name, primary_realm_slug, profile_region, realm_slug_variants, slug_parts
 
 from warcraftlogs_cli.sampling_utils import report_is_finished
 
@@ -70,6 +71,22 @@ query Expansions {
         id
         name
         frozen
+      }
+    }
+  }
+}
+"""
+
+REGION_SERVERS_QUERY = """
+query RegionServers($id: Int!, $page: Int!) {
+  worldData {
+    region(id: $id) {
+      servers(limit: 100, page: $page) {
+        has_more_pages
+        data {
+          name
+          slug
+        }
       }
     }
   }
@@ -1189,6 +1206,20 @@ class WarcraftLogsClientError(RuntimeError):
         self.message = message
 
 
+WARCRAFTLOGS_REGIONS = ("us", "eu", "kr", "tw", "cn")
+
+
+def validated_region(value: str) -> str:
+    """A region alias as Warcraft Logs names it; anything else is a usage error, not a false not_found.
+
+    Oceanic realms are in Warcraft Logs' US region (subregion Oceanic), so ``oce`` reads ``us``.
+    """
+    region = profile_region(value)
+    if region not in WARCRAFTLOGS_REGIONS:
+        raise WarcraftLogsClientError("invalid_query", f"Region must be one of: {', '.join(WARCRAFTLOGS_REGIONS)} (got {value.strip()!r}).")
+    return region
+
+
 def _request(client: httpx.Client, url: str, **kwargs: Any) -> httpx.Response:
     """``request_with_retries`` with transport and status failures mapped to the shared error vocabulary.
 
@@ -2054,10 +2085,39 @@ class WarcraftLogsClient:
             raise WarcraftLogsClientError("not_found", "Warcraft Logs expansion data was not available.")
         return [expansion for expansion in expansions if isinstance(expansion, dict)]
 
+    def _server_slug_by_name(self, region: str, realm: str) -> str | None:
+        """Warcraft Logs' slug for a realm display name none of its slug spellings found, or ``None``.
+
+        Most native-script names are their own slug (``아즈샤라``, ``Гордунни``), but some Russian realms
+        are slugged in English (``Ревущий фьорд`` is ``howling-fjord``, checked live 2026-10-03), so
+        the region's server list, 1-3 cached pages, maps the name to the slug.
+        """
+        # The raw region rows spell their slug in capitals (`EU`).
+        region_id = next((row.get("id") for row in self.regions() if str(row.get("slug") or "").lower() == region), None)
+        if not isinstance(region_id, int):
+            return None
+        wanted = "".join(slug_parts(realm))
+        for page in range(1, 11):
+            data = self._graphql(
+                operation_name="RegionServers",
+                query=REGION_SERVERS_QUERY,
+                variables={"id": region_id, "page": page},
+                namespace="region_servers",
+                ttl_seconds=self._static_ttl,
+            )
+            servers = as_dict(as_dict(as_dict(data.get("worldData")).get("region")).get("servers"))
+            for row in as_list(servers.get("data")):
+                if isinstance(row, dict) and isinstance(row.get("slug"), str) and "".join(slug_parts(str(row.get("name") or ""))) == wanted:
+                    return str(row["slug"])
+            if not servers.get("has_more_pages"):
+                break
+        return None
+
     def _realm_lookup(
         self,
         realm: str,
         *,
+        region: str,
         operation_name: str,
         query: str,
         namespace: str,
@@ -2071,9 +2131,11 @@ class WarcraftLogsClient:
         Warcraft Logs keeps some realms' word breaks (``tarren-mill``) and runs others together
         (``azjolnerub``: ``azjol-nerub`` is not found, checked live 2026-10-02), so no one spelling of a
         typed realm name finds every realm. An entity that does not exist costs one request per spelling.
+        A non-Latin name no spelling finds is looked up in ``region``'s server list and tried once more.
         """
         slugs = realm_slug_variants(realm) or [realm.strip().lower()]
-        for slug in slugs:
+
+        def entity(slug: str) -> dict[str, Any] | None:
             try:
                 data = self._graphql(
                     operation_name=operation_name,
@@ -2083,23 +2145,30 @@ class WarcraftLogsClient:
                     ttl_seconds=ttl_seconds,
                 )
             except WarcraftLogsClientError as exc:
-                if exc.code != "not_found" or slug == slugs[-1]:
+                if exc.code != "not_found":
                     raise
-                continue
-            parent = data.get(path[0])
-            found = parent.get(path[1]) if isinstance(parent, dict) else None
-            if isinstance(found, dict):
+                return None
+            found = as_dict(data.get(path[0])).get(path[1])
+            return found if isinstance(found, dict) else None
+
+        for slug in slugs:
+            if (found := entity(slug)) is not None:
                 return found
+        listed = None if realm.isascii() else self._server_slug_by_name(region, realm)
+        if listed is not None and listed not in slugs and (found := entity(listed)) is not None:
+            return found
         raise WarcraftLogsClientError("not_found", missing)
 
     def server(self, *, region: str, slug: str) -> dict[str, Any]:
+        region = validated_region(region)
         return self._realm_lookup(
             slug,
+            region=region,
             operation_name="Server",
             query=SERVER_QUERY,
             namespace="server",
             ttl_seconds=self._static_ttl,
-            variables=lambda realm_slug: {"region": normalize_region(region), "slug": realm_slug},
+            variables=lambda realm_slug: {"region": region, "slug": realm_slug},
             path=("worldData", "server"),
             missing=f"Server {slug!r} was not found for region {region!r}.",
         )
@@ -2116,6 +2185,17 @@ class WarcraftLogsClient:
         zones = world_data.get("zones") if isinstance(world_data, dict) else None
         if not isinstance(zones, list):
             raise WarcraftLogsClientError("not_found", "Warcraft Logs zone data was not available.")
+        if not zones and expansion_id is not None:
+            # Warcraft Logs answers an id it has no expansion for with an empty list, which reads as
+            # "this expansion has no zones". Raider.IO numbers expansions differently (Midnight is 11
+            # there, 7 here), so a mixed-up id is the likely cause.
+            known = sorted(row["id"] for row in self.expansions() if isinstance(row.get("id"), int))
+            if expansion_id not in known:
+                raise WarcraftLogsClientError(
+                    "invalid_query",
+                    f"{expansion_id} is not a Warcraft Logs expansion id; `warcraftlogs expansions` lists them "
+                    f"({', '.join(map(str, known))}).",
+                )
         return [zone for zone in zones if isinstance(zone, dict)]
 
     def zone(self, *, zone_id: int) -> dict[str, Any]:
@@ -2154,7 +2234,7 @@ class WarcraftLogsClient:
                 filter=options.filter,
                 page=options.page,
                 partition=options.partition,
-                server_region=normalize_region(options.server_region) if options.server_region else None,
+                server_region=validated_region(options.server_region) if options.server_region else None,
                 server_slug=primary_realm_slug(options.server_slug) if options.server_slug else None,
                 size=options.size,
                 leaderboard=options.leaderboard,
@@ -2182,8 +2262,10 @@ class WarcraftLogsClient:
         return encounter
 
     def guild(self, *, region: str, realm: str, name: str, zone_id: int | None = None) -> dict[str, Any]:
+        region = validated_region(region)
         return self._realm_lookup(
             realm,
+            region=region,
             operation_name="Guild",
             query=GUILD_QUERY,
             namespace="guild",
@@ -2191,7 +2273,7 @@ class WarcraftLogsClient:
             variables=lambda realm_slug: {
                 "name": normalize_name(name),
                 "serverSlug": realm_slug,
-                "serverRegion": normalize_region(region),
+                "serverRegion": region,
                 "zoneId": zone_id,
             },
             path=("guildData", "guild"),
@@ -2208,8 +2290,10 @@ class WarcraftLogsClient:
         size: int | None = None,
         difficulty: int | None = None,
     ) -> dict[str, Any]:
+        region = validated_region(region)
         return self._realm_lookup(
             realm,
+            region=region,
             operation_name="GuildRankings",
             query=GUILD_RANKINGS_QUERY,
             namespace="guild_rankings",
@@ -2217,7 +2301,7 @@ class WarcraftLogsClient:
             variables=lambda realm_slug: {
                 "name": normalize_name(name),
                 "serverSlug": realm_slug,
-                "serverRegion": normalize_region(region),
+                "serverRegion": region,
                 "zoneId": zone_id,
                 "size": size,
                 "difficulty": difficulty,
@@ -2235,8 +2319,10 @@ class WarcraftLogsClient:
         limit: int = 100,
         page: int = 1,
     ) -> dict[str, Any]:
+        region = validated_region(region)
         return self._realm_lookup(
             realm,
+            region=region,
             operation_name="GuildMembers",
             query=GUILD_MEMBERS_QUERY,
             namespace="guild_members",
@@ -2244,7 +2330,7 @@ class WarcraftLogsClient:
             variables=lambda realm_slug: {
                 "name": normalize_name(name),
                 "serverSlug": realm_slug,
-                "serverRegion": normalize_region(region),
+                "serverRegion": region,
                 "limit": limit,
                 "page": page,
             },
@@ -2263,8 +2349,10 @@ class WarcraftLogsClient:
         page: int = 1,
         zone_id: int | None = None,
     ) -> dict[str, Any]:
+        region = validated_region(region)
         return self._realm_lookup(
             realm,
+            region=region,
             operation_name="GuildAttendance",
             query=GUILD_ATTENDANCE_QUERY,
             namespace="guild_attendance",
@@ -2272,7 +2360,7 @@ class WarcraftLogsClient:
             variables=lambda realm_slug: {
                 "name": normalize_name(name),
                 "serverSlug": realm_slug,
-                "serverRegion": normalize_region(region),
+                "serverRegion": region,
                 "guildTagID": guild_tag_id,
                 "limit": limit,
                 "page": page,
@@ -2283,8 +2371,10 @@ class WarcraftLogsClient:
         )
 
     def character(self, *, region: str, realm: str, name: str) -> dict[str, Any]:
+        region = validated_region(region)
         return self._realm_lookup(
             realm,
+            region=region,
             operation_name="Character",
             query=CHARACTER_QUERY,
             namespace="character",
@@ -2292,7 +2382,7 @@ class WarcraftLogsClient:
             variables=lambda realm_slug: {
                 "name": normalize_name(name),
                 "serverSlug": realm_slug,
-                "serverRegion": normalize_region(region),
+                "serverRegion": region,
             },
             path=("characterData", "character"),
             missing=f"Character {name!r} was not found on {region}/{realm}.",
@@ -2310,8 +2400,10 @@ class WarcraftLogsClient:
         size: int | None = None,
         spec_name: str | None = None,
     ) -> dict[str, Any]:
+        region = validated_region(region)
         return self._realm_lookup(
             realm,
+            region=region,
             operation_name="CharacterRankings",
             query=CHARACTER_RANKINGS_QUERY,
             namespace="character_rankings",
@@ -2319,7 +2411,7 @@ class WarcraftLogsClient:
             variables=lambda realm_slug: {
                 "name": normalize_name(name),
                 "serverSlug": realm_slug,
-                "serverRegion": normalize_region(region),
+                "serverRegion": region,
                 "zoneID": zone_id,
                 "difficulty": difficulty,
                 "metric": metric,
@@ -2364,7 +2456,7 @@ class WarcraftLogsClient:
             variables={
                 "guildName": normalize_name(guild_name) if guild_name else None,
                 "guildServerSlug": primary_realm_slug(guild_realm) if guild_realm else None,
-                "guildServerRegion": normalize_region(guild_region) if guild_region else None,
+                "guildServerRegion": validated_region(guild_region) if guild_region else None,
                 "limit": limit,
                 "page": page,
                 "startTime": start_time,

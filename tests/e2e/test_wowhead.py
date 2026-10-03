@@ -289,6 +289,33 @@ def test_resolve_answers_with_the_faction_a_query_names(require) -> None:
     assert entity.data["entity"]["page_url"].startswith("https://www.wowhead.com/faction=529"), entity.describe()
 
 
+def test_a_type_word_in_the_query_still_finds_the_entity(require) -> None:
+    """``search "hogger npc"`` once came back empty: Wowhead matches every word it is sent against names.
+
+    The journey fails if Wowhead starts matching type words itself (the retry would go unused, and
+    ``search_query`` would keep "npc") or if the retry without them stops finding NPC Hogger.
+    """
+    require("wowhead")
+    resolved = run(BINARY, "resolve", "hogger npc", "--limit", "5")
+    assert resolved.data["search_query"] == "hogger", resolved.describe()
+    match = resolved.data["match"]
+    assert (match["entity_type"], match["id"], match["name"]) == ("npc", 448, "Hogger"), resolved.describe()
+    assert resolved.data["next_command"] == f"{BINARY} entity npc 448", resolved.describe()
+
+
+def test_a_spec_shorthand_guide_query_resolves_to_the_guide(require) -> None:
+    """``resolve "resto druid guide"`` must answer with the healer guide although no title says "resto".
+
+    `warcraft guide-compare-query` takes Wowhead's guide only when this resolves.
+    """
+    require("wowhead")
+    resolved = run(BINARY, "resolve", "resto druid guide", "--limit", "5")
+    match = resolved.data["match"]
+    assert match["entity_type"] == "guide" and "Restoration Druid" in match["name"], resolved.describe()
+    assert resolved.data["confidence"] == "high", resolved.describe()
+    assert resolved.data["next_command"] == f"{BINARY} guide {match['id']}", resolved.describe()
+
+
 def test_a_class_guide_query_lists_current_guides_before_retired_ones(require) -> None:
     """``search "fury warrior guide"`` once led with the retired Legion Remix guide.
 
@@ -1073,8 +1100,8 @@ def test_blue_tracker_listing_leads_to_one_blue_topic(require, blue_listing: Res
 
     topics = [row for row in rows if "/blue-tracker/topic/" in row["url"]]
     assert topics, f"no forum topic in the listing\n{blue_listing.describe()}"
-    # The listing's Blizzard news rows are not forum topics; blue-topic used to fetch one and fail
-    # parse_error (exit 1), and news-post read any Wowhead page, an item's included, as an article.
+    # The listing's Blizzard news rows are not forum topics; blue-topic used to fetch one and fail with
+    # a parse error (exit 1), and news-post read any Wowhead page, an item's included, as an article.
     offline = {**dead_proxy_env(), **no_cache_env()}
     blizzard_news = "https://www.wowhead.com/blue-tracker/news/us/hotfixes-october-1-2026-world-of-warcraft-blizzard-news-24296142"
     run(BINARY, "blue-topic", blizzard_news, expect=EXIT_USAGE, error_code="invalid_ref", env=offline)

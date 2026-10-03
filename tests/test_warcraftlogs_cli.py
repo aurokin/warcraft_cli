@@ -1223,6 +1223,9 @@ def test_warcraftlogs_doctor_reports_phase_one_capabilities(monkeypatch) -> None
     payload = json.loads(result.stdout)
     assert payload["provider"] == "warcraftlogs"
     assert payload["data"]["status"] == "ready"
+    # The base keys every provider doctor carries.
+    assert (payload["data"]["installed"], payload["data"]["language"]) == (True, "python")
+    assert payload["data"]["cache"]["ttls"]["finished_report"] == 86400
     assert payload["data"]["site_profile"]["key"] == "retail"
     assert payload["data"]["auth"]["configured"] is True
     assert payload["data"]["auth"]["client_credentials_configured"] is True
@@ -1307,6 +1310,8 @@ def test_warcraftlogs_doctor_reports_saved_user_token_runtime_access(monkeypatch
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
+    # Every data command needs the public API, so a saved user token alone leaves the provider degraded.
+    assert payload["data"]["status"] == "degraded"
     assert payload["data"]["auth"]["configured"] is False
     assert payload["data"]["auth"]["public_api_access"]["ready"] is False
     assert payload["data"]["auth"]["public_api_access"]["mode"] is None
@@ -8195,3 +8200,101 @@ def test_warcraftlogs_provider_site_option_accepts_a_site_key() -> None:
     with pytest.raises(ProviderError) as excinfo:
         site_profile({"site": "not-a-site"})
     assert excinfo.value.code == "invalid_query"
+
+
+def test_warcraftlogs_regions_read_oceania_as_us_and_reject_unknown_regions_before_a_request(monkeypatch) -> None:
+    # `server oce frostmourne` was a false not_found and `server xx illidan` exited 4, not 2.
+    sent: list[dict[str, Any]] = []
+
+    def _graphql(*, variables: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+        sent.append(variables)
+        return {"worldData": {"server": {"slug": variables["slug"]}}}
+
+    client = _bare_client()
+    client._static_ttl = 60
+    monkeypatch.setattr(client, "_graphql", _graphql)
+
+    assert client.server(region="oce", slug="frostmourne") == {"slug": "frostmourne"}
+    assert sent == [{"region": "us", "slug": "frostmourne"}]
+    with pytest.raises(WarcraftLogsClientError) as exc_info:
+        client.character(region="xx", realm="illidan", name="Cotti")
+    assert (exc_info.value.code, len(sent)) == ("invalid_query", 1)
+    assert "'xx'" in exc_info.value.message
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["encounter-rankings", "--zone-id", "46", "--boss-id", "3009", "--server-region", "xx"],
+        ["boss-kills", "--zone-id", "46", "--boss-id", "3009", "--guild-region", "xx", "--guild-realm", "illidan", "--guild-name", "Liquid"],
+        ["reports", "--guild-region", "xx", "--guild-realm", "illidan", "--guild-name", "Liquid"],
+    ],
+)
+def test_warcraftlogs_region_options_are_checked_before_the_encounter_lookup(monkeypatch, argv: list[str]) -> None:
+    # The client checked these regions only after the token and encounter lookup, so a bad region
+    # surfaced as network_error offline or as the encounter's not_found.
+    class _NoRequests:
+        def close(self) -> None:
+            pass
+
+        def __getattr__(self, name: str) -> Any:
+            raise AssertionError(f"client.{name} used before the region was checked")
+
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _NoRequests())
+    result = runner.invoke(warcraftlogs_app, argv)
+    assert result.exit_code == 2, result.output
+    assert json.loads(result.stderr)["error"]["code"] == "invalid_query"
+
+
+def test_warcraftlogs_a_realm_slugged_in_english_is_found_by_its_native_name(monkeypatch) -> None:
+    # Live 2026-10-03: `server eu "Ревущий фьорд"` is not_found under every slug spelling, because
+    # Warcraft Logs slugs that realm `howling-fjord`; the EU server list maps the name to the slug.
+    sent: list[str] = []
+
+    def _graphql(*, operation_name: str, variables: dict[str, Any] | None, **kwargs: Any) -> dict[str, Any]:
+        if operation_name == "Regions":
+            # Live rows spell the slug in capitals.
+            return {"worldData": {"regions": [{"id": 1, "slug": "US"}, {"id": 2, "slug": "EU"}]}}
+        assert variables is not None
+        if operation_name == "RegionServers":
+            assert variables["id"] == 2
+            rows = [{"name": "Aerie Peak", "slug": "aerie-peak"}] if variables["page"] == 1 else [{"name": "Ревущий фьорд", "slug": "howling-fjord"}]
+            return {"worldData": {"region": {"servers": {"has_more_pages": variables["page"] == 1, "data": rows}}}}
+        sent.append(variables["serverSlug"])
+        if variables["serverSlug"] != "howling-fjord":
+            raise WarcraftLogsClientError("not_found", "No character exists for this name/server/region.")
+        return {"characterData": {"character": {"name": "Lerepam"}}}
+
+    client = _bare_client()
+    client._static_ttl = client._guild_ttl = 60
+    monkeypatch.setattr(client, "_graphql", _graphql)
+
+    assert client.character(region="eu", realm="Ревущий фьорд", name="Lerepam") == {"name": "Lerepam"}
+    assert sent == ["ревущий-фьорд", "ревущийфьорд", "howling-fjord"]
+
+
+def test_warcraftlogs_zones_rejects_an_expansion_id_warcraft_logs_does_not_have(monkeypatch) -> None:
+    # Raider.IO's Midnight is 11; Warcraft Logs' is 7, and it answered 11 with an empty ok:true.
+    def _graphql(*, operation_name: str, **kwargs: Any) -> dict[str, Any]:
+        if operation_name == "Expansions":
+            return {"worldData": {"expansions": [{"id": 6, "name": "The War Within"}, {"id": 7, "name": "Midnight"}]}}
+        return {"worldData": {"zones": []}}
+
+    client = _bare_client()
+    client._static_ttl = 60
+    monkeypatch.setattr(client, "_graphql", _graphql)
+
+    assert client.zones(expansion_id=7) == []
+    with pytest.raises(WarcraftLogsClientError) as exc_info:
+        client.zones(expansion_id=11)
+    assert exc_info.value.code == "invalid_query"
+    assert "(6, 7)" in exc_info.value.message
+
+
+def test_warcraftlogs_an_empty_sampled_cohort_says_how_to_widen_it() -> None:
+    from warcraftlogs_cli.boss_kills import sampled_cohort_notes
+
+    notes = sampled_cohort_notes({"source_report_count": 25, "scanned_fight_count": 81, "matched_boss_kill_count": 0, "duplicates_removed": 0})
+    assert len(notes) == 1
+    assert "25 sampled reports" in notes[0] and "--report-pages" in notes[0] and "encounter-rankings" in notes[0]
+    assert sampled_cohort_notes({"matched_boss_kill_count": 3, "duplicates_removed": 0}) == []

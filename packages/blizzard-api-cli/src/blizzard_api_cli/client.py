@@ -1,15 +1,19 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
+from warcraft_api.cache import CacheSettings, CacheTTLConfig, build_cache_store, load_prefixed_cache_settings_from_env
 from warcraft_api.client_credentials import TOKEN_SKEW_SECONDS, ClientTokenCache
 from warcraft_api.http import DEFAULT_RETRY_ATTEMPTS, build_client, request_with_retries
-from warcraft_core.wow_normalization import normalize_region, realm_slug_variants
+from warcraft_core.paths import provider_cache_root
+from warcraft_core.wow_normalization import normalize_region, profile_region, realm_slug_variants, slug_parts
 
 from blizzard_api_cli.auth import BlizzardAuthConfig, load_blizzard_auth_config
 
@@ -49,6 +53,25 @@ _VERIFIED_NOTE = (
     "classic Game Data, retail Profile), whose payloads report provenance.verified=true. "
     + _UNVERIFIED_CN_NOTE
 )
+
+
+def load_blizzard_cache_settings_from_env() -> tuple[CacheSettings, int, int]:
+    """Resolve cache settings plus the static and the dynamic/profile namespace TTLs.
+
+    Static data (items) changes with a patch; realms and character profiles change as people play.
+    """
+    settings = load_prefixed_cache_settings_from_env(
+        env_prefix="BLIZZARD",
+        # Resolved per call, not at import, so the cache root follows HOME/XDG as they are now.
+        default_cache_dir=provider_cache_root("blizzard-api") / "http",
+        default_redis_prefix="blizzard_cli",
+        ttl_defaults=CacheTTLConfig(search_suggestions=86400, entity_response=900),
+        ttl_env_overrides={
+            "search_suggestions": "BLIZZARD_STATIC_CACHE_TTL_SECONDS",
+            "entity_response": "BLIZZARD_DYNAMIC_CACHE_TTL_SECONDS",
+        },
+    )
+    return settings, settings.ttls.search_suggestions, settings.ttls.entity_response
 
 
 class BlizzardClientError(RuntimeError):
@@ -116,11 +139,12 @@ def resolve_routing(
     locale: str | None = None,
     namespace_class: str,
 ) -> BlizzardRouting:
-    region = normalize_region(region_input) if region_input and region_input.strip() else DEFAULT_REGION
+    # Oceanic realms live in Blizzard's US region, so `oce` routes there like on every other provider.
+    region = profile_region(region_input) if region_input and region_input.strip() else DEFAULT_REGION
     if region not in SUPPORTED_REGIONS:
         raise BlizzardClientError(
             "unsupported_region",
-            f"--region must be one of: {', '.join(SUPPORTED_REGIONS)}; got {region!r}.",
+            f"--region must be one of: {', '.join(SUPPORTED_REGIONS)}; got {(region_input or '').strip()!r}.",
         )
     resolved_version = resolve_game_version(game_version=game_version, classic=classic)
     if resolved_version == "classic" and namespace_class == "profile":
@@ -153,6 +177,10 @@ class BlizzardClient:
         self._client_id = auth.client_id or ""
         self._client_secret = auth.client_secret or ""
         self._default_region = normalize_region(auth.region) if auth.region else DEFAULT_REGION
+        settings, static_ttl, dynamic_ttl = load_blizzard_cache_settings_from_env()
+        self._cache_store = build_cache_store(settings) if settings.enabled else None
+        self._static_ttl = static_ttl
+        self._dynamic_ttl = dynamic_ttl
         self._timeout_seconds = timeout_seconds
         self._retry_attempts = max(1, retry_attempts)
         self._http_client: httpx.Client | None = None
@@ -180,12 +208,6 @@ class BlizzardClient:
         # in-memory cache must match the target region before it can be reused.
         if self._access_token and self._token_region == routing.region and now < self._token_expires_at - TOKEN_SKEW_SECONDS:
             return self._access_token
-        if not self.configured:
-            raise BlizzardClientError(
-                "missing_client_credentials",
-                "Blizzard commands need BLIZZARD_CLIENT_ID and BLIZZARD_CLIENT_SECRET. Set them in "
-                ".env.local, the provider env file, or the environment.",
-            )
         token_cache = ClientTokenCache(CLIENT_CREDENTIALS_STATE_PROVIDER, routing.region, self._client_id, self._client_secret)
         cached = token_cache.load(now=now)
         if cached is not None:
@@ -225,41 +247,92 @@ class BlizzardClient:
             raise BlizzardClientError("invalid_response", "Blizzard response was not a JSON object.")
         return payload
 
-    def _get(self, routing: BlizzardRouting, path: str) -> dict[str, Any]:
+    def _get(
+        self, routing: BlizzardRouting, path: str, *, localized: bool = True, ttl_seconds: int | None = None
+    ) -> dict[str, Any]:
+        """GET one API path, replaying a cached answer first; the token never reaches the cache key.
+
+        ``localized=False`` leaves ``locale`` out, so Blizzard answers every localized string as a
+        per-locale dict. The result carries ``fetched_at`` (when it came off the wire, also on a
+        replay), ``cache_hit`` and ``cache_ttl_seconds`` for provenance.
+        """
+        # Checked before the cache too, so every read without credentials fails the same way.
+        if not self.configured:
+            raise BlizzardClientError(
+                "missing_client_credentials",
+                "Blizzard commands need BLIZZARD_CLIENT_ID and BLIZZARD_CLIENT_SECRET. Set them in "
+                ".env.local, the provider env file, or the environment.",
+            )
+        ttl = ttl_seconds if ttl_seconds is not None else (self._static_ttl if routing.namespace_class == "static" else self._dynamic_ttl)
+        params = {"namespace": routing.namespace, **({"locale": routing.locale} if localized else {})}
+        key = f"blizzard:{hashlib.sha256(json.dumps([routing.host, path, params], sort_keys=True).encode()).hexdigest()}"
+        cached = self._cache_store.get(key) if self._cache_store is not None and ttl else None
+        if isinstance(cached, dict) and isinstance(cached.get("fetched_at"), str):
+            return {**cached, "routing": routing, "cache_hit": True, "cache_ttl_seconds": ttl}
         token = self._token(routing)
-        url = f"{routing.host}{path}"
         response = request_with_retries(
             self._client(),
-            url,
+            f"{routing.host}{path}",
             method="GET",
-            params={"namespace": routing.namespace, "locale": routing.locale},
+            params=params,
             headers={"Authorization": f"Bearer {token}"},
             retry_attempts=self._retry_attempts,
         )
-        return {
+        result = {
             "payload": self._decode_json(response),
-            "routing": routing,
             "source_url": str(response.request.url),
+            "fetched_at": datetime.now(UTC).isoformat(),
         }
+        if self._cache_store is not None and ttl:
+            self._cache_store.set(key, result, ttl_seconds=ttl)
+        return {**result, "routing": routing, "cache_hit": False, "cache_ttl_seconds": ttl}
+
+    def _slug_from_realm_index(self, routing: BlizzardRouting, realm: str) -> str | None:
+        """Blizzard's slug for a realm typed in any locale (``Ревущий фьорд``, ``아즈샤라``), or ``None``.
+
+        Slugs are always English, but the unlocalized realm index names every realm in every locale.
+        A name two realms share (the zh_TW ``閃電之刃``) maps to neither. Character lookups route
+        through the profile namespace, which has no index, so this always reads the dynamic one.
+        """
+        index_routing = (
+            routing
+            if routing.namespace_class == "dynamic"
+            else replace(routing, namespace=f"dynamic-{routing.region}", namespace_class="dynamic")
+        )
+        realms = self._get(index_routing, "/data/wow/realm/index", localized=False, ttl_seconds=self._static_ttl)["payload"].get("realms")
+        wanted = "".join(slug_parts(realm))
+        slugs = {
+            row["slug"]
+            for row in (realms if isinstance(realms, list) else [])
+            if isinstance(row, dict)
+            and isinstance(row.get("slug"), str)
+            and isinstance(row.get("name"), dict)
+            and any(isinstance(name, str) and "".join(slug_parts(name)) == wanted for name in row["name"].values())
+        }
+        return slugs.pop() if len(slugs) == 1 else None
 
     def _get_realm_scoped(self, routing: BlizzardRouting, realm: str, path_for: Callable[[str], str]) -> dict[str, Any]:
         """GET ``path_for(slug)`` for each slug spelling of ``realm``, moving on only on HTTP 404.
 
         Blizzard slugs drop apostrophes and keep word breaks (``Mal'Ganis`` -> ``malganis``, ``Tarren
         Mill`` -> ``tarren-mill``), so neither spelling alone covers every realm or every way it is typed.
+        Slugs are English, so a native-script name that no spelling finds is looked up in the realm index.
         """
         variants = realm_slug_variants(realm)
         if not variants:
             # An empty slug would GET the realm index and return it as this realm.
             raise BlizzardClientError("invalid_query", f"Realm {realm!r} has no letters or digits to look up.")
-        *earlier, final = variants
-        for slug in earlier:
+        for slug in variants:
             try:
                 return self._get(routing, path_for(slug))
             except httpx.HTTPStatusError as exc:
-                if exc.response.status_code != 404:
+                if exc.response.status_code != 404 or (slug == variants[-1] and realm.isascii()):
                     raise
-        return self._get(routing, path_for(final))
+                last_miss = exc
+        indexed = self._slug_from_realm_index(routing, realm)
+        if indexed is None or indexed in variants:
+            raise last_miss
+        return self._get(routing, path_for(indexed))
 
     def fetch_realm(
         self,

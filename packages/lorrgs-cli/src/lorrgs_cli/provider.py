@@ -7,14 +7,25 @@ Functions here never print and never raise ``typer.Exit``: they return an ``Enve
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from typing import Any
 
 import httpx
+from warcraft_api.cache import redacted_redis_url
 from warcraft_core.envelope import Envelope, success_envelope
 from warcraft_core.provider import ProviderError, ProviderSurface
 
-from lorrgs_cli.client import API_HOST, OPENAPI_URL, PROVIDER_NAME, SITE_HOST, LorrgsClient, LorrgsClientError
+from lorrgs_cli.client import (
+    API_HOST,
+    DIFFICULTIES,
+    OPENAPI_URL,
+    PROVIDER_NAME,
+    SITE_HOST,
+    LorrgsClient,
+    LorrgsClientError,
+    load_lorrgs_cache_settings_from_env,
+)
 from lorrgs_cli.search import resolve_payload, search_candidates
 
 CAPABILITIES: dict[str, str] = {
@@ -96,7 +107,12 @@ def provider_error(exc: Exception) -> ProviderError:
     return ProviderError("network_error", f"Lorrgs API request failed: {exc}.")
 
 
-def _provenance(source_url: str | None = None) -> dict[str, Any]:
+def _provenance(result: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Shared provenance, plus the source URL and cache freshness of one API answer when given.
+
+    ``fetched_at`` is when the answer came off the wire, so a ``cache_hit`` replay reports the age of
+    the data it replays; it can be up to ``cache_ttl_seconds`` old.
+    """
     provenance: dict[str, Any] = {
         "api_host": API_HOST,
         "site": SITE_HOST,
@@ -104,9 +120,18 @@ def _provenance(source_url: str | None = None) -> dict[str, Any]:
         "upstream_data_sources": ["warcraftlogs", "wowhead_tooltips"],
         "verified": True,
     }
-    if source_url is not None:
-        return {"source_url": source_url, **provenance}
-    return provenance
+    if result is None:
+        return provenance
+    freshness: dict[str, Any] = {key: result[key] for key in ("fetched_at", "cache_hit", "cache_ttl_seconds") if key in result}
+    return {"source_url": result["source_url"], **provenance, **freshness}
+
+
+def open_client() -> LorrgsClient:
+    """Build a cache-configured Lorrgs client, or fail with the cache config error."""
+    try:
+        return LorrgsClient()
+    except ValueError as exc:
+        raise ProviderError("invalid_cache_config", str(exc)) from exc
 
 
 def _envelope_data(kind: str, payload: Any) -> dict[str, Any]:
@@ -119,6 +144,35 @@ def _envelope_data(kind: str, payload: Any) -> dict[str, Any]:
     if isinstance(payload, dict):
         return payload
     return {kind: payload}
+
+
+# Composition filters are `<role or spec>.<op>.<count>`; Lorrgs answers any other spelling (`heal>=4`,
+# `heal.ne.4`) with HTTP 500 rather than a validation error.
+_COMP_FILTER = re.compile(r"[a-z]+(?:-[a-z]+)*\.(?:eq|gt|gte|lt|lte)\.\d+")
+# The `lorrgs roles` codes a composition filter counts. Any other name (the display name "healer",
+# or util/mix/item) is not an error upstream: it silently matches no report.
+COMP_ROLES = ("tank", "heal", "mdps", "rdps")
+
+
+def validated_difficulty(difficulty: str) -> str:
+    """Reject a difficulty Lorrgs does not rank before the request turns it into a 404."""
+    value = difficulty.strip().lower()
+    if value not in DIFFICULTIES:
+        raise ProviderError("invalid_query", f"--difficulty must be one of: {', '.join(DIFFICULTIES)} (got {difficulty!r}).")
+    return value
+
+
+def validated_comp_filters(values: list[str] | None, *, flag: str) -> list[str] | None:
+    """Reject a composition filter Lorrgs cannot parse, naming the syntax it takes."""
+    for value in values or []:
+        if not _COMP_FILTER.fullmatch(value):
+            raise ProviderError(
+                "invalid_query",
+                f"{flag} takes <name>.<op>.<count> with op one of eq, gt, gte, lt, lte, e.g. heal.gte.4 (got {value!r}).",
+            )
+        if flag == "--role" and value.split(".")[0] not in COMP_ROLES:
+            raise ProviderError("invalid_query", f"--role names one of: {', '.join(COMP_ROLES)} (got {value!r}).")
+    return values
 
 
 def note_empty_ranking(result: dict[str, Any], subject: str) -> dict[str, Any]:
@@ -137,7 +191,7 @@ def note_empty_ranking(result: dict[str, Any], subject: str) -> dict[str, Any]:
 
 def call_api(command: str, kind: str, query: dict[str, Any], call: Callable[[LorrgsClient], dict[str, Any]]) -> Envelope:
     """Run one Lorrgs API call and wrap its payload in the success envelope."""
-    with LorrgsClient() as client:
+    with open_client() as client:
         try:
             result = call(client)
         except (LorrgsClientError, httpx.HTTPError) as exc:
@@ -148,13 +202,13 @@ def call_api(command: str, kind: str, query: dict[str, Any], call: Callable[[Lor
         kind=kind,
         data=_envelope_data(kind, result["payload"]),
         query=query,
-        provenance=_provenance(result["source_url"]),
+        provenance=_provenance(result),
     )
 
 
 def search(query: str, *, limit: int = 5, **options: Any) -> Envelope:
     """Rank Lorrgs surfaces for a URL, report reference, or free-text spec/boss query."""
-    with LorrgsClient() as client:
+    with open_client() as client:
         try:
             payload = search_candidates(client, query, limit=limit)
         except (LorrgsClientError, httpx.HTTPError) as exc:
@@ -171,7 +225,7 @@ def search(query: str, *, limit: int = 5, **options: Any) -> Envelope:
 
 def resolve(target: str, *, limit: int = 5, **options: Any) -> Envelope:
     """Resolve a Lorrgs query to a single next command when the top candidate is unambiguous."""
-    with LorrgsClient() as client:
+    with open_client() as client:
         try:
             payload = resolve_payload(client, target, limit=limit)
         except (LorrgsClientError, httpx.HTTPError) as exc:
@@ -188,13 +242,26 @@ def resolve(target: str, *, limit: int = 5, **options: Any) -> Envelope:
 
 def doctor(**options: Any) -> Envelope:
     """Report Lorrgs auth posture, endpoints, and per-surface capability state."""
+    try:
+        settings, static_ttl, ranking_ttl, report_ttl = load_lorrgs_cache_settings_from_env()
+    except ValueError as exc:
+        raise ProviderError("invalid_cache_config", str(exc)) from exc
     payload: dict[str, Any] = {
-        "status": "partial",
+        # Lorrgs takes no credentials, so nothing can leave a surface unconfigured.
+        "status": "ready",
         "installed": True,
         "language": "python",
         "auth": {"required": False, "configured": True, "flow": "none"},
         "endpoints": {"site": SITE_HOST, "api": API_HOST, "openapi": OPENAPI_URL},
         "capabilities": dict(CAPABILITIES),
+        "cache": {
+            "enabled": settings.enabled,
+            "backend": settings.backend,
+            "cache_dir": str(settings.cache_dir),
+            "redis_url": redacted_redis_url(settings.redis_url),
+            "prefix": settings.prefix,
+            "ttls": {"static_metadata": static_ttl, "rankings": ranking_ttl, "loaded_fights": report_ttl},
+        },
         "notes": list(NOTES),
     }
     return success_envelope(provider=PROVIDER_NAME, command="doctor", kind="doctor", data=payload)

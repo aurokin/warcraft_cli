@@ -21,6 +21,7 @@ from typing import Any
 import httpx
 from warcraft_content.article_discovery import article_candidate, sort_article_candidates
 from warcraft_content.search import (
+    MYTHIC_PLUS_RE,
     best_scored,
     expand_class_spec_aliases,
     fold_punctuation,
@@ -211,15 +212,19 @@ SPECIALIZED_FAMILY_RULES: tuple[dict[str, Any], ...] = (
 )
 
 
+def _spell_out_plus(text: str) -> str:
+    return MYTHIC_PLUS_RE.sub(" mythic plus ", text).replace("+", " plus ")
+
+
 def normalize_search_query(query: str) -> str:
     """Drop the provider and 'guide' noise words so ranking sees only the meaningful part of the query.
 
-    '+' is spelled out because Icy Veins names its pages "Mythic Plus": ``mythic+`` is ``mythic plus``.
-    Punctuation is folded the way the slugs fold it, so ``Nerub-ar Palace`` and ``K'aresh`` match
-    ``nerub-ar-palace-raid-guide`` and ``karesh-zone-guide``.
+    Every M+ spelling (``m+``, ``mythic+``) reads as "mythic plus", the words Icy Veins titles its
+    pages with, and any other '+' is spelled out. Punctuation is folded the way the slugs fold it, so
+    ``Nerub-ar Palace`` and ``K'aresh`` match ``nerub-ar-palace-raid-guide`` and ``karesh-zone-guide``.
     """
     return normalize_query(
-        fold_punctuation(expand_class_spec_aliases(query).replace("+", " plus ")), strip_terms=QUERY_STRIP_TERMS
+        fold_punctuation(_spell_out_plus(expand_class_spec_aliases(query))), strip_terms=QUERY_STRIP_TERMS
     )
 
 
@@ -248,15 +253,29 @@ def _score_broad_family_match(content_family: str, *, terms: set[str]) -> tuple[
     return 0, []
 
 
+def _rule_words(rule: dict[str, Any]) -> set[str]:
+    """The query words that can fire ``rule``."""
+    words = set(rule.get("all_terms") or ()) | set(rule.get("any_terms") or ())
+    for phrase in rule.get("phrases") or ():
+        words.update(phrase.split())
+    return words
+
+
 def _specialized_family_rule_matches(
     rule: dict[str, Any],
     *,
     content_family: str,
     terms: set[str],
+    candidate_words: set[str],
     joined: str,
     lowered_query: str,
 ) -> bool:
     if content_family != rule["family"]:
+        return False
+    # A page that matches only the words naming its family is not what the rest of the query asks
+    # for: every spec's M+ tips page holds "mythic plus", none holds "tier list".
+    other_terms = terms - _rule_words(rule) - NEUTRAL_SLUG_TERMS
+    if other_terms and not singular_words(other_terms) & candidate_words:
         return False
     all_terms = rule.get("all_terms")
     if all_terms and not set(all_terms) <= terms:
@@ -268,7 +287,9 @@ def _specialized_family_rule_matches(
     return True
 
 
-def _score_specialized_family_match(query: str, content_family: str, *, terms: set[str], joined: str) -> tuple[int, list[str]]:
+def _score_specialized_family_match(
+    query: str, content_family: str, *, terms: set[str], candidate_words: set[str], joined: str
+) -> tuple[int, list[str]]:
     score = 0
     reasons: list[str] = []
     lowered_query = query.lower()
@@ -277,6 +298,7 @@ def _score_specialized_family_match(query: str, content_family: str, *, terms: s
             rule,
             content_family=content_family,
             terms=terms,
+            candidate_words=candidate_words,
             joined=joined,
             lowered_query=lowered_query,
         ):
@@ -307,8 +329,13 @@ def _score_family_penalties(content_family: str, *, slug: str, terms: set[str], 
     return score, reasons
 
 
-def score_family_match(query: str, *, slug: str, content_family: str | None) -> tuple[int, list[str]]:
-    """Boost or penalize a candidate by how well the query intent matches its Icy Veins guide family."""
+def score_family_match(
+    query: str, *, slug: str, content_family: str | None, candidate_words: set[str]
+) -> tuple[int, list[str]]:
+    """Boost or penalize a candidate by how well the query intent matches its Icy Veins guide family.
+
+    ``candidate_words`` are the singular forms of the words in the candidate's title and slug.
+    """
     if not query or not content_family:
         return 0, []
     terms = query_terms(query)
@@ -317,7 +344,7 @@ def score_family_match(query: str, *, slug: str, content_family: str | None) -> 
     reasons: list[str] = []
     for family_score, family_reasons in (
         _score_broad_family_match(content_family, terms=terms),
-        _score_specialized_family_match(query, content_family, terms=terms, joined=joined),
+        _score_specialized_family_match(query, content_family, terms=terms, candidate_words=candidate_words, joined=joined),
         _score_family_penalties(content_family, slug=slug, terms=terms, joined=joined),
     ):
         score += family_score
@@ -504,21 +531,23 @@ def _scored_candidate(row: dict[str, Any], query: str, terms: set[str], *, stale
     # A site-menu page also matches on its menu title ("Glory Raid Achievement"), and an indexed page
     # on its headline ("Vorasius Raid Guide in The Voidspire for Midnight Season 1").
     title = " ".join(filter(None, (row["name"], row.get("menu_title"), row.get("index_title"))))
-    candidate = fold_punctuation(expand_class_spec_aliases(f"{title} {slug.replace('-', ' ')}"))
-    # Icy Veins drops "plus" from its newer seasonal slugs (``midnight-mythic-season-2-guide``). Adding the
-    # "mythic plus season" spelling lets "mythic+ season 2" score them like the older ``-mythic-plus-season-``
-    # pages, so only the stale penalty separates seasons, while the page's own title still matches.
+    candidate = fold_punctuation(_spell_out_plus(expand_class_spec_aliases(f"{title} {slug.replace('-', ' ')}")))
+    # Icy Veins drops "plus" from its newer seasonal slugs (``midnight-mythic-season-2-guide``) but not from
+    # older ones or from headlines ("Midnight Mythic+ Season 1 Guide"). Leading with the "mythic plus season"
+    # spelling scores every season alike on it, prefix included, so only the stale penalty separates
+    # seasons, while the page's own spelling, kept after it, still matches.
     if "mythic season" in candidate:
-        candidate += " " + candidate.replace("mythic season", "mythic plus season")
+        candidate = candidate.replace("mythic season", "mythic plus season") + " " + candidate
     # Family boosts alone (a class hub for any one-word query) must not surface an unrelated guide,
     # and a term only counts as a whole word: "dh" is not a match for "headhunters".
-    if not terms & singular_words(set(tokenize_query(candidate))):
+    candidate_words = singular_words(set(tokenize_query(candidate)))
+    if not terms & candidate_words:
         return None
     score, reasons = score_slug_match(query, candidate, slug=slug, content_family=content_family)
     # A raid's own guide is also titled by the raid's name alone: "venomous abyss" for ``venomous-abyss-raid-guide``.
     if query in {normalize_search_query(name.replace("-", " ")) for name in (slug, slug.removesuffix("-raid-guide"))}:
         reasons.append("exact_title")
-    family_score, family_reasons = score_family_match(query, slug=slug, content_family=content_family)
+    family_score, family_reasons = score_family_match(query, slug=slug, content_family=content_family, candidate_words=candidate_words)
     score += family_score
     reasons.extend(family_reasons)
     if query and reasons and set(reasons) <= {"intro_guide", "specialized_guide"}:

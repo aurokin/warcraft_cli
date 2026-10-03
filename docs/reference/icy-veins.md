@@ -15,7 +15,7 @@ Pass these before the subcommand: `icy-veins --pretty <command> ...`.
 | `--fields` | str (repeatable) |  | Return only selected fields (dot paths). Repeat or pass comma-separated values. |
 | `--fields-strict` | boolean | false | Fail when a requested --fields dot-path is missing from the payload. |
 | `--profile` | str |  | Output profile preset: agent (default compact JSON) or human (pretty JSON). |
-| `--compact-max-chars` | int range | 280 | Maximum string length before --compact truncation adds an ellipsis. |
+| `--compact-max-chars` | int range [40<=x<=10000] | 280 | Maximum string length before --compact truncation adds an ellipsis. |
 
 ## icy-veins doctor
 
@@ -35,7 +35,7 @@ Rank Icy Veins WoW guides from the sitemap, the site-wide guide menu and the sit
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--limit` | int range | 5 | Maximum results to return. |
+| `--limit` | int range [1<=x<=50] | 5 | Maximum results to return. |
 
 ## icy-veins resolve
 
@@ -51,7 +51,7 @@ Resolve a free-text query to the best Icy Veins guide, with the candidate list a
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--limit` | int range | 5 | Maximum candidates to inspect. |
+| `--limit` | int range [1<=x<=50] | 5 | Maximum candidates to inspect. |
 
 ## icy-veins index-refresh
 
@@ -61,7 +61,7 @@ Crawl Icy Veins (one request a second) for pages its frozen sitemap lacks and me
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--max-requests` | int range | 250 | Most uncached page requests to make; a run that reaches it is partial and the next run resumes. |
+| `--max-requests` | int range [1<=x<=5000] | 250 | Most uncached page requests to make; a run that reaches it is partial and the next run resumes. |
 
 ## icy-veins guide
 
@@ -114,6 +114,6 @@ Search a previously exported guide bundle without touching the network.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--limit` | int range | 5 | Maximum matches to return per kind. |
+| `--limit` | int range [1<=x<=50] | 5 | Maximum matches to return per kind. |
 | `--kind` | str (repeatable) |  | Kinds to search. Repeat or pass comma-separated values from: sections, navigation, linked_entities, build_references, analysis_surfaces. |
 | `--section-title` | str |  | Restrict section matches to a title substring. |

@@ -91,6 +91,7 @@ def article_search_payload(
         "query": query,
         "search_query": search_query,
         "count": total_count,
+        "truncated": total_count > len(results),
         "results": results,
     }
     if scope_hint is not None:
@@ -98,26 +99,41 @@ def article_search_payload(
     return payload
 
 
+def _resolve_confidence(matches: list[dict[str, Any]], *, resolved: bool) -> str:
+    """``high`` for a resolved match; ``low`` when the best matches tie, since nothing tells them apart."""
+    if resolved:
+        return "high"
+    if not matches:
+        return "none"
+    if len(matches) > 1 and matches[0]["ranking"]["score"] == matches[1]["ranking"]["score"]:
+        return "low"
+    return "medium"
+
+
 def article_resolve_payload(
     *,
     provider_command: str,
     query: str,
     search_query: str,
-    results: list[dict[str, Any]],
+    matches: list[dict[str, Any]],
+    limit: int,
     total_count: int,
     resolved: bool,
     scope_hint: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """The ``resolve`` data for every ranked match; ``limit`` trims only the candidates shown, never the confidence."""
+    results = matches[:limit]
     top = results[0] if results else None
     payload: dict[str, Any] = {
         "query": query,
         "search_query": search_query,
         "resolved": resolved,
-        "confidence": "high" if resolved else ("medium" if top else "none"),
+        "confidence": _resolve_confidence(matches, resolved=resolved),
         "match": top if top else None,
         "next_command": top["follow_up"]["command"] if resolved and top else None,
         "fallback_search_command": None if resolved else f"{provider_command} search {shlex.quote(query)}",
         "count": total_count,
+        "truncated": total_count > len(results),
         "candidates": results,
     }
     if scope_hint is not None:

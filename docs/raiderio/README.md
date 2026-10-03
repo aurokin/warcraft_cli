@@ -37,6 +37,8 @@ raiderio --fields data.results --pretty search "liquid"
 | `leaderboard mythic-plus` | |
 | `leaderboard raids` | |
 | `raids` | |
+| `dungeons` | |
+| `affixes` | |
 | `sample mythic-plus-runs` | |
 | `sample mythic-plus-players` | |
 | `distribution mythic-plus-runs` | |
@@ -47,7 +49,19 @@ Flags, defaults, and ranges are in [reference/raiderio.md](../reference/raiderio
 `character` and `guild` (and `resolve "guild oce <realm> <name>"`) look an Oceanic region alias
 (`oce`, `oceanic`) up as `us`, the region Oceanic realms belong to.
 `leaderboard raids --realm` takes a slug or a display name and needs a standard region;
-`raids --expansion-id` defaults to 11 (Midnight; 10 is The War Within, 9 Dragonflight).
+`raids --expansion-id` and `dungeons --expansion-id` default to 11 (Midnight; 10 is The War Within, 9 Dragonflight).
+
+`raiderio affixes [--region us]` returns this week's Mythic+ affixes in one region (kind
+`mythic_plus_affixes`): `title`, `affixes` (`id`, `name`, `description`, `wowhead_url`), and the
+affix leaderboard in `citations.leaderboard`. `--region` takes `us`, `eu`, `kr`, `tw`, `cn` or an
+alias; `world` has no weekly affixes and is `invalid_query`.
+
+`raiderio dungeons` lists the Mythic+ seasons Raider.IO knows for one expansion (kind
+`mythic_plus_dungeons`), newest first: `slug`, `name`, `is_main_season`, per-region `starts`/`ends`,
+and the season's `dungeons` pool (`slug`, `name`, `short_name`, `keystone_timer_seconds`). The
+current pool is the main season whose window covers now, and the dungeon slugs are what `--dungeon`
+takes. An expansion id Raider.IO has no Mythic+ seasons for (12 or 99 today) is `invalid_query`
+(exit 2). Warcraft Logs numbers expansions differently: its Midnight id 7 is Battle for Azeroth here.
 
 Scope flags (all Mythic+ commands): `--season` (slug, or empty/`current` for the Raider.IO current
 default season), `--region` (`world` (default), `us`, `eu`, `kr`, `tw`, `cn`, or an alias such as
@@ -125,8 +139,10 @@ An unknown raid slug is a usage error (exit 2) because Raider.IO rejects it as i
 ```bash
 raiderio doctor
 raiderio search "liquid"
-raiderio resolve "us illidan Cotti"
-raiderio character us illidan Cotti
+raiderio resolve "us illidan Roguecane"
+raiderio character us illidan Roguecane
+raiderio affixes --region eu
+raiderio dungeons
 raiderio guild us illidan Liquid
 raiderio leaderboard mythic-plus --season current --region us --dungeon all --limit 20
 raiderio raids --expansion-id 11
@@ -159,10 +175,18 @@ raiderio threshold mythic-plus-runs --metric score --value 3000
   `upstream_error` (exit 5).
 - `character`'s `guild.region` is the character's region: Raider.IO's guild block has no region of
   its own, and a guild is in the same region as its members.
+- In `character` (`character` and `guild` blocks) and `guild` (`guild` block), `realm` is the
+  realm slug and `realm_name` the display name, as on search and leaderboard rows. The slug is
+  Raider.IO's own, read from `profile_url` (`howling-fjord` for `Ревущий фьорд`); a character's
+  guild on another realm is slugged from its name.
+- `character` reports `mythic_plus.best_runs`, Raider.IO's best run in each dungeon the character
+  has completed this season (`best_run_count` rows; a dungeon not listed has no completed run), and
+  every recent run Raider.IO returns (up to 10) in `recent_runs`, so `recent_run_count` is the
+  length of that list. Both use the run row shape below.
 - Every Mythic+ payload echoes `resolved_season`, so the season a sample actually used is explicit.
 - Leaderboard and sampled run rows carry `clear_time_ms`, `keystone_time_ms` (the dungeon timer) and
   `num_chests` (0 means not timed), plus `run_id` and `logged_run_id`, Raider.IO's own integer id
-  for a logged run (`null` when there is none; it is not a Warcraft Logs report code). `character` recent runs use the same names: `dungeon` (name),
+  for a logged run (`null` when there is none; it is not a Warcraft Logs report code). `character` best and recent runs use the same names: `dungeon` (name),
   `short_name`, `mythic_level`, `score`, `completed_at`, `clear_time_ms`, `keystone_time_ms`,
   `num_chests`, `run_id`, and the run's raider.io `url`.
 - Every payload with provenance carries `freshness` and `citations`; those also form the envelope's
@@ -178,6 +202,12 @@ raiderio threshold mythic-plus-runs --metric score --value 3000
   claims `high` confidence only when both class and spec are known.
 - `raiderio_cli.provider.PROVIDER` exposes `search`, `resolve`, and `doctor` in-process for the
   `warcraft` wrapper; the Typer commands are thin wrappers over it.
+
+- `threshold mythic-plus-runs` reports `threshold.sampled_range` (the sampled `min`/`max` of
+  `--metric`) and `out_of_sample_range`. A `--value` outside that range has no nearby runs, so
+  `estimate` is `null` and `note` says why: leaderboard samples cover only the top of the ladder
+  (often two or three key levels) and keyless paging stops at page 100, so a +10 or a 300 score is
+  not reachable from them.
 
 ## Limits
 

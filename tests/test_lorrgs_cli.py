@@ -176,8 +176,9 @@ def test_doctor_reports_lorrgs_capabilities() -> None:
     payload = json.loads(result.stdout)
     assert payload["ok"] is True
     assert payload["provider"] == "lorrgs"
-    assert payload["data"]["status"] == "partial"
+    assert payload["data"]["status"] == "ready"
     assert payload["data"]["auth"]["required"] is False
+    assert payload["data"]["cache"]["ttls"] == {"static_metadata": 43200, "rankings": 1800, "loaded_fights": 21600}
     assert payload["data"]["capabilities"]["spec_ranking"] == "ready"
     assert payload["data"]["capabilities"]["comp_ranking"] == "ready"
     assert payload["data"]["capabilities"]["search"] == "ready"
@@ -234,9 +235,9 @@ def test_comp_ranking_repeatable_filters(monkeypatch) -> None:
             "--limit",
             "12",
             "--role",
-            "heal>=4",
+            "heal.gte.4",
             "--spec",
-            "mage-frost>=1",
+            "mage-frost.gte.1",
             "--killtime-min",
             "120",
             "--killtime-max",
@@ -245,15 +246,15 @@ def test_comp_ranking_repeatable_filters(monkeypatch) -> None:
     )
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["query"]["roles"] == ["heal>=4"]
-    assert payload["query"]["specs"] == ["mage-frost>=1"]
+    assert payload["query"]["roles"] == ["heal.gte.4"]
+    assert payload["query"]["specs"] == ["mage-frost.gte.1"]
     assert (
         "comp_ranking",
         {
             "boss_slug": "chimaerus-the-undreamt-god",
             "limit": 12,
-            "roles": ["heal>=4"],
-            "specs": ["mage-frost>=1"],
+            "roles": ["heal.gte.4"],
+            "specs": ["mage-frost.gte.1"],
             "killtime_min": 120,
             "killtime_max": 180,
         },
@@ -411,18 +412,19 @@ def test_resolve_reads_an_encounter_whose_name_is_mostly_stop_words(monkeypatch)
     assert data["next_command"] == "lorrgs comp-ranking the-eye-of-the-jailer"
 
 
-def test_resolve_downgrades_an_unrivalled_but_only_partial_match_to_medium(monkeypatch) -> None:
+def test_resolve_does_not_hand_over_an_unrivalled_but_only_partial_match(monkeypatch) -> None:
     # "undreamt" is one word out of "Chimaerus, the Undreamt God" — not the slug, not the short name.
-    # Nothing rivals it, so the handoff is still useful and goes out, but it must say how thin the
-    # match was: there is no strength floor on resolving, so `confidence` is the only honest signal.
+    # Every provider resolves only at high confidence, and `warcraft resolve` trusts `resolved`, so a
+    # partial match ("storm" -> Raszageth the Storm-Eater) stays the match at medium, with no command.
     _patch_client(monkeypatch)
     result = runner.invoke(app, ["resolve", "undreamt", "--limit", "10"])
     assert result.exit_code == 0
     data = json.loads(result.stdout)["data"]
-    assert data["resolved"] is True
+    assert data["resolved"] is False
     assert data["confidence"] == "medium"
     assert data["match"]["ranking"]["match_level"] == "partial"
-    assert data["next_command"] == "lorrgs comp-ranking chimaerus-the-undreamt-god"
+    assert data["match"]["follow_up"]["command"] == "lorrgs comp-ranking chimaerus-the-undreamt-god"
+    assert data["next_command"] is None
 
 
 def test_resolve_refuses_a_candidate_that_drops_a_word_lorrgs_recognised(monkeypatch) -> None:
@@ -509,15 +511,15 @@ def test_current_season_emits_public_season_metadata(monkeypatch) -> None:
 
 
 def test_resolve_matches_warcraftlogs_report_url_without_promising_availability(monkeypatch) -> None:
-    # The reference parses exactly, so the next command is right — but nothing checked that Lorrgs
-    # will serve the report (it answers 401 for a report Warcraft Logs keeps private), so the
-    # handoff must not claim high confidence or an "overview_available" match reason.
+    # The reference parses exactly, so the match's command is right — but nothing checked that Lorrgs
+    # will serve the report (it answers 401 for a report Warcraft Logs keeps private), so the match
+    # stays at medium and, like every medium match, is not resolved.
     _patch_client(monkeypatch)
     url = "https://www.warcraftlogs.com/reports/bG3xDYPqKjLm8XaR?fight=22&type=damage-done"
     result = runner.invoke(app, ["resolve", url])
     assert result.exit_code == 0
     data = json.loads(result.stdout)["data"]
-    assert data["resolved"] is True
+    assert data["resolved"] is False
     assert data["confidence"] == "medium"
     assert data["match"]["kind"] == "report_overview"
     assert data["match"]["report_id"] == "bG3xDYPqKjLm8XaR"
@@ -525,7 +527,8 @@ def test_resolve_matches_warcraftlogs_report_url_without_promising_availability(
     assert data["match"]["report_type"] == "damage-done"
     assert data["match"]["ranking"]["match_reasons"] == ["explicit_report_reference"]
     assert "private" in data["match"]["caveat"]
-    assert data["next_command"] == "lorrgs report-overview bG3xDYPqKjLm8XaR"
+    assert data["next_command"] is None
+    assert data["match"]["follow_up"]["command"] == "lorrgs report-overview bG3xDYPqKjLm8XaR"
     assert data["results"][1]["follow_up"]["command"] == "lorrgs user-report-fights bG3xDYPqKjLm8XaR --fight 22 --type damage-done"
 
 
@@ -626,7 +629,7 @@ def test_warcraft_lorrgs_resolve_routes_warcraftlogs_url_through_wrapper(monkeyp
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["provider"] == "lorrgs"
-    assert payload["data"]["resolved"] is True
+    assert payload["data"]["resolved"] is False
     assert payload["data"]["match"]["kind"] == "report_overview"
 
 
@@ -680,3 +683,83 @@ def test_list_shaped_route_is_keyed_under_its_payload_kind(monkeypatch) -> None:
     payload = json.loads(result.stdout)
     assert not envelope_violations(payload)
     assert payload["data"] == {"zones": zones}
+
+
+def _count_requests(monkeypatch, payload_for_url) -> list[str]:
+    """Answer the shared HTTP seam with ``payload_for_url(url)`` and record every URL requested."""
+    urls: list[str] = []
+
+    def answer(client: object, url: str, **kwargs: object) -> httpx.Response:
+        urls.append(url)
+        return httpx.Response(200, json=payload_for_url(url), request=httpx.Request("GET", url))
+
+    monkeypatch.setattr("lorrgs_cli.client.request_with_retries", answer)
+    return urls
+
+
+def test_static_metadata_is_replayed_from_the_cache_with_its_fetch_time(monkeypatch) -> None:
+    # Wrapper search/resolve read /api/specs and /api/bosses on every query; a warm cache must not.
+    monkeypatch.setenv("LORRGS_CACHE_BACKEND", "file")
+    urls = _count_requests(monkeypatch, lambda url: {"specs": []})
+    first = json.loads(runner.invoke(app, ["specs"]).stdout)["provenance"]
+    second = json.loads(runner.invoke(app, ["specs"]).stdout)["provenance"]
+    assert urls == ["https://api2.lorrgs.io/api/specs"]
+    assert (first["cache_hit"], second["cache_hit"]) == (False, True)
+    assert second["fetched_at"] == first["fetched_at"]
+    assert second["cache_ttl_seconds"] == 43200
+
+
+def test_a_fight_lorrgs_has_not_loaded_is_never_cached(monkeypatch) -> None:
+    # Lorrgs answers a fight it has not loaded yet with no players; replaying that would hide the
+    # fight once Lorrgs loads it.
+    monkeypatch.setenv("LORRGS_CACHE_BACKEND", "file")
+    players: list[dict[str, object]] = []
+    urls = _count_requests(monkeypatch, lambda url: {"fights": [{"fight_id": 4, "players": list(players)}]})
+    argv = ["user-report-fights", "bG3xDYPqKjLm8XaR", "--fight", "4"]
+    runner.invoke(app, argv)
+    players.append({"name": "Cannicus", "source_id": 88})
+    loaded = json.loads(runner.invoke(app, argv).stdout)
+    replayed = json.loads(runner.invoke(app, argv).stdout)
+    assert len(urls) == 2
+    assert loaded["data"]["fights"][0]["players"] == [{"name": "Cannicus", "source_id": 88}]
+    assert replayed["provenance"]["cache_hit"] is True
+
+
+def test_lorrgs_requests_carry_the_shared_user_agent_with_the_contact_url() -> None:
+    from lorrgs_cli.client import LorrgsClient
+    from warcraft_api.http import DEFAULT_USER_AGENT
+
+    with LorrgsClient() as client:
+        assert client._client().headers["User-Agent"] == DEFAULT_USER_AGENT
+
+
+@pytest.mark.parametrize(
+    ("argv", "message"),
+    [
+        (["spec-ranking", "mage-frost", "chimaerus-the-undreamt-god", "--difficulty", "normal"], "--difficulty must be one of"),
+        (["comp-ranking", "chimaerus-the-undreamt-god", "--role", "heal>=4"], "heal.gte.4"),
+        (["comp-ranking", "chimaerus-the-undreamt-god", "--role", "healer.gte.1"], "tank, heal, mdps, rdps"),
+        (["comp-ranking", "chimaerus-the-undreamt-god", "--spec", "mage-frost.ne.1"], "eq, gt, gte, lt, lte"),
+    ],
+)
+def test_values_lorrgs_cannot_answer_are_usage_errors_before_any_request(monkeypatch, argv: list[str], message: str) -> None:
+    # Lorrgs answers an unranked difficulty with 404 "Not found." (exit 4) and a malformed
+    # composition filter with HTTP 500 (exit 5); both are the caller's typo, so exit 2 and say why.
+    urls = _count_requests(monkeypatch, lambda url: {})
+    result = runner.invoke(app, argv)
+    assert result.exit_code == 2
+    payload = json.loads(result.stderr)
+    assert payload["error"]["code"] == "invalid_query"
+    assert message in payload["error"]["message"]
+    assert urls == []
+
+
+def test_search_and_resolve_offer_no_ranking_at_a_difficulty_lorrgs_does_not_rank(monkeypatch) -> None:
+    # `spec-ranking --difficulty normal` exits 2, so neither surface may hand that command over.
+    _patch_client(monkeypatch)
+    search = json.loads(runner.invoke(app, ["search", "normal frost mage chimaerus", "--limit", "10"]).stdout)["data"]
+    assert search["results"]
+    assert all(row["kind"] != "spec_ranking" for row in search["results"])
+    assert all("--difficulty" not in row["follow_up"]["command"] for row in search["results"])
+    data = json.loads(runner.invoke(app, ["resolve", "normal frost mage chimaerus", "--limit", "10"]).stdout)["data"]
+    assert data["resolved"] is False

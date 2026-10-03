@@ -394,7 +394,21 @@ def _handoff_leg(result: Any) -> dict[str, Any] | None:
 
 
 def _handoff_simc_section(simc_results: dict[str, Any | None]) -> dict[str, Any]:
-    return {leg: _handoff_leg(simc_results[leg]) for leg in ("identify", "decode", "describe")}
+    """Each simc leg's outcome. ``identify-build`` exits 0 for a build it could not identify, so an
+    identity naming no single class and spec (confidence ``none`` or ``low``) is a failed leg."""
+    section = {leg: _handoff_leg(simc_results[leg]) for leg in ("identify", "decode", "describe")}
+    identify = section["identify"]
+    identity = provider_payload_data(identify["payload"]).get("identity") if identify else None
+    if identify and identify["ok"] and isinstance(identity, dict):
+        confidence = identity.get("confidence")
+        if confidence in {"none", "low"} or not (identity.get("actor_class") and identity.get("spec")):
+            identify["ok"] = False
+            identify["error"] = {
+                "code": "build_not_identified",
+                "message": f"simc did not identify the build as one class and spec (confidence {confidence}, "
+                f"{identity.get('candidate_count')} candidates).",
+            }
+    return section
 
 
 def _handoff_build_input(
@@ -467,7 +481,7 @@ def _count_simc_handoff_successes(build_rows: list[dict[str, Any]]) -> tuple[int
                 row
                 for row in build_rows
                 if isinstance(((row.get("simc") or {}).get(section_key)), dict)
-                and ((row.get("simc") or {}).get(section_key) or {}).get("exit_code") == 0
+                and ((row.get("simc") or {}).get(section_key) or {}).get("ok")
             ]
         )
 
@@ -1050,14 +1064,28 @@ def _insufficient_guides_error(provider_rows: list[dict[str, Any]]) -> tuple[dic
     return {"code": "insufficient_guides", "message": "Need at least two exported guide bundles to compare."}, EXIT_GENERIC
 
 
-def simc_handoff_failure(summary: Mapping[str, Any]) -> dict[str, Any]:
-    """The error for a simc build handoff whose every requested leg failed for every build."""
+def simc_handoff_failure(handoff: Mapping[str, Any]) -> dict[str, Any]:
+    """The error for a simc build handoff whose every requested leg failed for every build.
+
+    When simc ran but decoded no build as any spec it knows, SimC is healthy and the guide hashes
+    are the suspect, so the message says that instead of pointing at ``simc doctor``.
+    """
+    summary = as_dict(handoff.get("summary"))
+    failure_codes = {
+        failure.get("code") for build in as_list(handoff.get("builds")) for failure in as_list(as_dict(build).get("failures"))
+    }
+    advice = (
+        "no build decodes as a class and spec SimC knows (`build_not_identified`); the guide's talent "
+        "hashes may be newer or older than the SimC checkout."
+        if failure_codes == {"build_not_identified"}
+        else "each build's `failures` names the simc error; check `warcraft simc doctor`."
+    )
     return {
         "code": "simc_handoff_failed",
         "message": (
             f"Every requested simc leg ({', '.join(summary['empty_requested_legs'])}) failed for all "
             f"{summary['returned_build_count']} build references; the packet carries no usable simc "
-            "output. Each build's `failures` names the simc error; check `warcraft simc doctor`."
+            f"output: {advice}"
         ),
     }
 
@@ -1151,7 +1179,7 @@ def guide_compare_query_payload(options: GuideCompareQueryOptions, calls: Provid
     }
     summary = as_dict(as_dict(payload["simc_build_handoff"]).get("summary"))
     if summary.get("simc_handoff_status") == "all_handoffs_failed":
-        return {**payload, "ok": False, "error": simc_handoff_failure(summary)}, EXIT_GENERIC
+        return {**payload, "ok": False, "error": simc_handoff_failure(as_dict(payload["simc_build_handoff"]))}, EXIT_GENERIC
     return payload, 0
 
 

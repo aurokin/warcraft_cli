@@ -316,7 +316,7 @@ def test_a_reference_that_is_not_a_wowhead_page_is_a_usage_error(command: str) -
     ],
 )
 def test_an_article_command_refuses_a_wowhead_url_for_another_page(command: str, url: str) -> None:
-    """news-post used to read an item page as a news article, and blue-topic failed parse_error (exit 1)."""
+    """news-post used to read an item page as a news article, and blue-topic failed with a parse error (exit 1)."""
     result = runner.invoke(app, [command, url])
 
     assert (result.exit_code, json.loads(result.stderr)["error"]["code"]) == (2, "invalid_ref")
@@ -327,7 +327,7 @@ def test_news_post_fails_when_the_page_has_no_article_body(monkeypatch) -> None:
 
     result = runner.invoke(app, ["news-post", "/news/post-1"])
 
-    assert (result.exit_code, json.loads(result.stderr)["error"]["code"]) == (1, "parse_error")
+    assert (result.exit_code, json.loads(result.stderr)["error"]["code"]) == (1, "parse_failed")
 
 
 def test_news_post_notes_that_a_wow_forever_post_has_no_expansion_profile(monkeypatch) -> None:
@@ -391,7 +391,7 @@ def test_news_fails_when_a_date_window_can_read_no_timestamp_at_all(monkeypatch)
     assert result.exit_code == 1
 
     error = json.loads(result.output)["error"]
-    assert error["code"] == "parse_error"
+    assert error["code"] == "parse_failed"
     assert "--date-from" in error["message"]
 
 

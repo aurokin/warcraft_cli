@@ -88,6 +88,15 @@ Best fits:
 - region/realm inputs still benefit from normalized forms:
   - `us`
   - `illidan`
+- regions are `us`, `eu`, `kr`, `tw`, `cn` (or an alias); `oce` reads `us`, and anything else fails
+  with exit 2
+- realm names work in their own script (`아즈샤라`, `Ревущий фьорд`) on `server`, `guild*` and
+  `character*`; the single-slug flags (`--guild-realm`, `encounter-rankings --server-slug`) need
+  the slug `server` reports
+- `zones --expansion-id` takes Warcraft Logs' own expansion ids (`warcraftlogs expansions`; Midnight
+  is 7, not Raider.IO's 11)
+- a sampled command that matched no kill says so in `notes`: widen with `--report-pages` or use
+  `encounter-rankings` for a late or rarely killed boss
 
 ## Good Consumer Workflows
 

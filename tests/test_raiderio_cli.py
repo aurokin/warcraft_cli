@@ -3103,3 +3103,164 @@ def test_raiderio_contains_spec_takes_a_class_qualified_spec(contains_spec: list
         )
     ]
     assert matched == kept
+
+
+def _leaderboard_runs(levels_and_scores: list[tuple[int, float]]) -> Callable[..., dict[str, Any]]:
+    """A one-page leaderboard whose runs carry only the level and score a threshold reads."""
+
+    def fake_runs(self: RaiderIOClient, *, season: str | None, region: str, dungeon: str, affixes: str | None, page: int):
+        rankings = [
+            {
+                "rank": index + 1,
+                "score": score,
+                "run": {
+                    "keystone_run_id": 2000 + index,
+                    "season": "season-mn-2",
+                    "mythic_level": level,
+                    "dungeon": {"name": "Murder Row", "slug": "murder-row"},
+                    "roster": [],
+                },
+            }
+            for index, (level, score) in enumerate(levels_and_scores)
+        ]
+        return {"season": "season-mn-2", "rankings": rankings if page == 0 else []}
+
+    return fake_runs
+
+
+@pytest.mark.parametrize(("metric", "value"), [("mythic_level", "10"), ("score", "300")])
+def test_raiderio_threshold_gives_no_estimate_outside_the_sampled_range(monkeypatch, metric: str, value: str) -> None:
+    # The leaderboard sample is the top of the ladder (+21/+22 here). "A +10 scores about 505" was
+    # the nearest +21s answering a question the sample cannot reach.
+    runs = _leaderboard_runs([(22, 515.4), (21, 504.7), (21, 503.9)])
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.mythic_plus_runs", _as_fetched(runs))
+    result = runner.invoke(raiderio_app, ["threshold", "mythic-plus-runs", "--metric", metric, "--value", value])
+    assert result.exit_code == 0, result.output
+    threshold = json.loads(result.stdout)["data"]["threshold"]
+    assert threshold["out_of_sample_range"] is True
+    assert threshold["estimate"] is None
+    assert threshold["sampled_range"] == ({"min": 21.0, "max": 22.0} if metric == "mythic_level" else {"min": 503.9, "max": 515.4})
+    assert "not reachable" in threshold["note"]
+
+    inside = runner.invoke(raiderio_app, ["threshold", "mythic-plus-runs", "--metric", "mythic_level", "--value", "21"])
+    threshold = json.loads(inside.stdout)["data"]["threshold"]
+    assert (threshold["out_of_sample_range"], threshold["note"]) == (False, None)
+    assert threshold["estimate"]["metric"] == "score"
+
+
+def test_raiderio_character_lists_the_best_run_per_dungeon_and_every_recent_run(monkeypatch) -> None:
+    # "What is X's highest timed Murder Row" needs the best run per dungeon, and recent_run_count used
+    # to count ten runs while recent_runs listed five.
+    def run(dungeon: str, level: int, chests: int) -> dict[str, Any]:
+        return {"dungeon": dungeon, "short_name": dungeon[:2].upper(), "mythic_level": level, "num_keystone_upgrades": chests}
+
+    def fake_profile(self: RaiderIOClient, *, region: str, realm: str, name: str, fields: str = ""):
+        return {
+            "name": "Roguecane",
+            "region": "us",
+            "realm": "Illidan",
+            "profile_url": "https://raider.io/characters/us/illidan/Roguecane",
+            "mythic_plus_best_runs": [run("Murder Row", 13, 1), run("Kings' Rest", 12, 0)],
+            "mythic_plus_recent_runs": [run("Murder Row", 10 + index % 3, 1) for index in range(10)],
+        }
+
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.character_profile", _as_fetched(fake_profile))
+    result = runner.invoke(raiderio_app, ["character", "us", "illidan", "Roguecane"])
+    assert result.exit_code == 0, result.output
+    mythic_plus = json.loads(result.stdout)["data"]["mythic_plus"]
+    assert mythic_plus["best_run_count"] == 2
+    assert [(row["dungeon"], row["mythic_level"], row["num_chests"]) for row in mythic_plus["best_runs"]] == [
+        ("Murder Row", 13, 1),
+        ("Kings' Rest", 12, 0),
+    ]
+    assert mythic_plus["recent_run_count"] == len(mythic_plus["recent_runs"]) == 10
+
+
+def test_raiderio_character_requests_the_best_runs_field() -> None:
+    from raiderio_cli.client import DEFAULT_CHARACTER_FIELDS
+
+    assert "mythic_plus_best_runs" in DEFAULT_CHARACTER_FIELDS.split(",")
+
+
+def test_raiderio_character_name_case_does_not_split_the_cache(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("RAIDERIO_CACHE_BACKEND", "file")  # the suite disables every provider cache
+    monkeypatch.setenv("RAIDERIO_CACHE_DIR", str(tmp_path / "cache"))
+    requests: list[dict[str, Any]] = []
+
+    def fake_request(client: httpx.Client, url: str, *, params: dict[str, Any], retry_attempts: int) -> httpx.Response:
+        requests.append(params)
+        return httpx.Response(200, json={"name": "Ellesmereiv", "region": "us", "realm": "Illidan"}, request=httpx.Request("GET", url))
+
+    monkeypatch.setattr("raiderio_cli.client.request_with_retries", fake_request)
+    assert runner.invoke(raiderio_app, ["character", "us", "illidan", "Ellesmereiv"]).exit_code == 0
+    assert runner.invoke(raiderio_app, ["character", "US", "Illidan", "ellesmereiv"]).exit_code == 0
+    assert [params["name"] for params in requests] == ["Ellesmereiv"]
+
+
+def test_raiderio_affixes_reports_this_weeks_affixes(monkeypatch) -> None:
+    requests: list[dict[str, Any]] = []
+    body = {
+        "region": "us",
+        "title": "Xal'atath's Bargain: Devour, Fortified, Tyrannical, Xal'atath's Guile",
+        "leaderboard_url": "https://raider.io/mythic-plus-affix-rankings/season-mn-2/all/us/leaderboards-strict/x",
+        "affix_details": [{"id": 10, "name": "Fortified", "description": "Non-boss enemies...", "icon": "x", "wowhead_url": "https://wowhead.com/affix=10"}],
+    }
+
+    def fake_request(client: httpx.Client, url: str, *, params: dict[str, Any], retry_attempts: int) -> httpx.Response:
+        requests.append(params)
+        return httpx.Response(200, json=body, request=httpx.Request("GET", url))
+
+    monkeypatch.setattr("raiderio_cli.client.request_with_retries", fake_request)
+    result = runner.invoke(raiderio_app, ["affixes", "--region", "na"])
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert requests == [{"region": "us", "locale": "en"}]
+    assert payload["kind"] == "mythic_plus_affixes"
+    assert payload["data"]["affixes"] == [
+        {"id": 10, "name": "Fortified", "description": "Non-boss enemies...", "wowhead_url": "https://wowhead.com/affix=10"}
+    ]
+    assert payload["provenance"]["citations"]["leaderboard"] == body["leaderboard_url"]
+
+    rejected = runner.invoke(raiderio_app, ["affixes", "--region", "world"])
+    assert rejected.exit_code == 2
+    assert json.loads(rejected.stderr)["error"]["code"] == "invalid_query"
+
+
+def test_raiderio_dungeons_rejects_an_expansion_id_without_seasons(monkeypatch) -> None:
+    # Raider.IO answers an unknown expansion id (12, or 99) with empty lists; an ok:true with no
+    # seasons would read as "no dungeons this expansion".
+    monkeypatch.setattr(
+        "raiderio_cli.client.RaiderIOClient.mythic_plus_static_data",
+        _as_fetched(lambda self, *, expansion_id: {"seasons": [], "dungeons": []}),
+    )
+    result = runner.invoke(raiderio_app, ["dungeons", "--expansion-id", "12"])
+    assert result.exit_code == 2, result.output
+    error = json.loads(result.stderr)["error"]
+    assert error["code"] == "invalid_query"
+    assert "11 = Midnight" in error["message"]
+
+
+def test_raiderio_dungeons_lists_each_seasons_dungeon_pool(monkeypatch) -> None:
+    body = {
+        "seasons": [
+            {
+                "slug": "season-mn-2",
+                "name": "MN Season 2",
+                "is_main_season": True,
+                "starts": {"us": "2026-08-18T15:00:00Z"},
+                "ends": {"us": None},
+                "dungeons": [{"id": 16091, "slug": "murder-row", "name": "Murder Row", "short_name": "MR", "keystone_timer_seconds": 2040}],
+            }
+        ],
+        "dungeons": [],
+    }
+    monkeypatch.setattr(
+        "raiderio_cli.client.RaiderIOClient.mythic_plus_static_data", _as_fetched(lambda self, *, expansion_id: body)
+    )
+    result = runner.invoke(raiderio_app, ["dungeons"])
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.stdout)["data"]
+    assert data["count"] == 1
+    season = data["seasons"][0]
+    assert (season["slug"], season["is_main_season"]) == ("season-mn-2", True)
+    assert season["dungeons"] == [{"slug": "murder-row", "name": "Murder Row", "short_name": "MR", "keystone_timer_seconds": 2040}]

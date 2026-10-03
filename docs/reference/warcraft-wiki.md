@@ -15,7 +15,7 @@ Pass these before the subcommand: `warcraft-wiki --pretty <command> ...`.
 | `--fields` | str (repeatable) |  | Return only selected fields (dot paths). Repeat or pass comma-separated values. |
 | `--fields-strict` | boolean | false | Fail when a requested --fields dot-path is missing from the payload. |
 | `--profile` | str |  | Output profile preset: agent (default compact JSON) or human (pretty JSON). |
-| `--compact-max-chars` | int range | 280 | Maximum string length before --compact truncation adds an ellipsis. |
+| `--compact-max-chars` | int range [40<=x<=10000] | 280 | Maximum string length before --compact truncation adds an ellipsis. |
 
 ## warcraft-wiki doctor
 
@@ -35,7 +35,7 @@ Search Warcraft Wiki articles by free text, ranked by title match and content fa
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--limit` | int range | 5 | Maximum results to return. |
+| `--limit` | int range [1<=x<=50] | 5 | Maximum results to return. |
 
 ## warcraft-wiki resolve
 
@@ -51,7 +51,7 @@ Resolve a free-text query to the best matching wiki article plus the follow-up c
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--limit` | int range | 5 | Maximum candidates to inspect. |
+| `--limit` | int range [1<=x<=50] | 5 | Maximum candidates to inspect. |
 
 ## warcraft-wiki article
 
@@ -144,6 +144,6 @@ Search an exported wiki article bundle on disk without touching the network.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--limit` | int range | 5 | Maximum matches to return per kind. |
+| `--limit` | int range [1<=x<=50] | 5 | Maximum matches to return per kind. |
 | `--kind` | str (repeatable) |  | Restrict search kinds. Repeat or pass comma-separated values from: sections, navigation, linked_entities. |
 | `--section-title` | str |  | Restrict section matches to a title substring. |

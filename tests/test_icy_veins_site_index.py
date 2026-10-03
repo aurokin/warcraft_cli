@@ -308,16 +308,34 @@ def test_index_refresh_stops_at_a_challenge_and_keeps_every_page_of_the_previous
     before["refreshed_at"] = "2026-09-01T00:00:00+00:00"
     local_index_path().write_text(json.dumps(before))
 
-    site[guide_url("midnight-season-2-raid-guide")] = FetchResult(403, challenge=True)
+    site[SITE_MENU_SEED_URL] = iv_page("death-knight-guide", title="Death Knight Guide", menu=("midnight-season-3-raid-guide",))
+    site[guide_url("midnight-season-3-raid-guide")] = FetchResult(403, challenge=True)
     data = _refresh()["data"]
 
     assert (data["partial"], data["stop_reason"]) == (True, "blocked")
-    assert data["blocked"] == {"url": guide_url("midnight-season-2-raid-guide"), "status": 403, "challenge": True}
+    assert data["blocked"] == {"url": guide_url("midnight-season-3-raid-guide"), "status": 403, "challenge": True}
     after = json.loads(local_index_path().read_text())
     assert {row["slug"] for row in after["pages"]} == {row["slug"] for row in before["pages"]}
-    assert after["frontier"][0] == guide_url("midnight-season-2-raid-guide")
+    assert after["frontier"] == [guide_url("midnight-season-3-raid-guide")]
     # A blocked run is not a refresh: the index keeps its age, so its staleness warning stands.
     assert after["refreshed_at"] == before["refreshed_at"]
+
+
+def test_index_refresh_stops_when_the_site_keeps_failing_and_keeps_the_index_age(monkeypatch) -> None:
+    site = _refresh_site()
+    _serve(monkeypatch, site)
+    _refresh()
+    before = json.loads(local_index_path().read_text())
+    before["refreshed_at"] = "2026-09-01T00:00:00+00:00"
+    local_index_path().write_text(json.dumps(before))
+
+    down = [f"down-{index}-raid-guide" for index in range(5)]
+    site[SITE_MENU_SEED_URL] = iv_page("death-knight-guide", title="Death Knight Guide", menu=tuple(down))
+    site.update({guide_url(slug): FetchResult(503) for slug in down})
+    data = _refresh()["data"]
+
+    assert (data["partial"], data["stop_reason"], data["counts"]["fetched"]) == (True, "unavailable", 4)
+    assert json.loads(local_index_path().read_text())["refreshed_at"] == before["refreshed_at"]
 
 
 def test_index_refresh_blocked_before_reading_anything_does_not_copy_the_bundled_snapshot(monkeypatch) -> None:
@@ -395,6 +413,29 @@ def test_index_refresh_paces_at_the_configured_interval_when_it_is_longer(monkey
     monkeypatch.setenv("WARCRAFT_HTTP_MIN_INTERVAL_SECONDS", configured)
 
     assert INDEX_REFRESH_RATE_LIMITER.min_interval_seconds == expected
+
+
+def test_crawl_fetch_caches_the_pages_it_reads(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("ICY_VEINS_CACHE_BACKEND", "file")
+    monkeypatch.setenv("ICY_VEINS_CACHE_DIR", str(tmp_path))
+    calls = _fake_request(monkeypatch, httpx.Response(200, text="<html>page</html>"))
+
+    with IcyVeinsClient() as client:
+        client.crawl_fetch(SITE_MENU_SEED_URL)
+    with IcyVeinsClient() as client:
+        assert client.guide_page_html("death-knight-guide") == (SITE_MENU_SEED_URL, "<html>page</html>")
+        assert client.crawl_fetch(SITE_MENU_SEED_URL).cached is True
+    assert len(calls) == 1
+
+
+def test_crawl_fetch_never_caches_a_challenge(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("ICY_VEINS_CACHE_BACKEND", "file")
+    monkeypatch.setenv("ICY_VEINS_CACHE_DIR", str(tmp_path))
+    _fake_request(monkeypatch, httpx.Response(200, headers={"cf-mitigated": "challenge"}, text="Just a moment..."))
+
+    with IcyVeinsClient() as client:
+        assert client.crawl_fetch(SITE_MENU_SEED_URL).challenge is True
+        assert client.cached_page_html(SITE_MENU_SEED_URL) is None
 
 
 def test_crawl_fetch_serves_a_cached_guide_page_without_a_request(monkeypatch) -> None:
@@ -484,6 +525,21 @@ def test_search_breaks_a_tie_toward_the_newest_published_index_page(monkeypatch)
     ids = [row["id"] for row in _search(monkeypatch, "raid guide")["data"]["results"]]
 
     assert ids.index("sszorak-raid-guide") < ids.index("rotmire-raid-guide") < ids.index("manaforge-omega-raid-guide")
+
+
+@pytest.mark.parametrize("query", ["midnight mythic plus", "midnight m+", "midnight mythic season"])
+def test_resolve_scores_a_seasons_headline_and_slug_spellings_alike(monkeypatch, query: str) -> None:
+    """Season 1's "Mythic+" headline earned the name prefix "plus"-less Season 2 missed, so S1 resolved at high confidence."""
+    season_1 = {**_row("midnight-mythic-season-1-guide", title="Midnight Mythic+ Season 1 Guide", source="page"), "date_published": "2026-02-25"}
+    season_2 = {**_row("midnight-mythic-season-2-guide", title="Midnight Mythic Season 2 Guide"), "date_published": "2026-08-03"}
+    _write_index(season_1, season_2)
+
+    data = _search(monkeypatch, query, command="resolve")["data"]
+
+    top = [(row["id"], row["ranking"]["score"]) for row in data["candidates"][:2]]
+    assert data["resolved"] is False
+    assert [ref for ref, _ in top] == ["midnight-mythic-season-2-guide", "midnight-mythic-season-1-guide"]
+    assert top[0][1] == top[1][1]
 
 
 def test_search_ranks_transmog_pages_only_for_a_transmog_query(monkeypatch) -> None:

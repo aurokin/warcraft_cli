@@ -19,7 +19,7 @@ Pass these before the subcommand: `wowhead --pretty <command> ...`.
 | `--citation-pack` | boolean | false | Attach a deterministic citation_pack with source URLs and per-claim anchors. |
 | `--profile` | str |  | Output profile preset: agent (default compact JSON) or human (pretty JSON). |
 | `--fields-strict` | boolean | false | Fail when a requested --fields dot-path is missing from the payload. |
-| `--compact-max-chars` | int range | 280 | Maximum string length before --compact truncation adds an ellipsis. |
+| `--compact-max-chars` | int range [40<=x<=10000] | 280 | Maximum string length before --compact truncation adds an ellipsis. |
 
 ## wowhead doctor
 
@@ -54,9 +54,9 @@ Report the cache backend configuration and per-namespace entry counts.
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `--show-redis-prefixes` | boolean | false | For Redis backends, include a bounded summary of other prefixes in the same Redis. |
-| `--redis-prefix-limit` | int range | 10 | Maximum number of Redis prefixes to include when --show-redis-prefixes is used. |
+| `--redis-prefix-limit` | int range [1<=x<=100] | 10 | Maximum number of Redis prefixes to include when --show-redis-prefixes is used. |
 | `--summary` | boolean | false | Return a compact cache summary instead of the full namespace listing. |
-| `--namespace-limit` | int range | 10 | Maximum namespaces to include in summary mode. |
+| `--namespace-limit` | int range [1<=x<=100] | 10 | Maximum namespaces to include in summary mode. |
 | `--hide-zero` | boolean | false | Omit zero-valued count fields from cache stats. |
 
 ## wowhead cache-clear
@@ -85,7 +85,7 @@ Resolve a name or URL to the single most likely Wowhead entity plus a follow-up 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `--entity-type` | str (repeatable) |  | Restrict resolution to one or more entity types. Repeat or pass comma-separated values. |
-| `--limit` | int range | 5 | Maximum fallback candidates to return. |
+| `--limit` | int range [1<=x<=20] | 5 | Maximum fallback candidates to return. |
 
 ## wowhead search
 
@@ -101,7 +101,7 @@ Search Wowhead suggestions and return ranked entity candidates.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--limit` | int range | 10 | Maximum number of results to return. |
+| `--limit` | int range [1<=x<=50] | 10 | Maximum number of results to return. |
 
 ## wowhead news
 
@@ -119,9 +119,9 @@ List Wowhead news posts with topic, date-window, and listing-field filters.
 | --- | --- | --- | --- |
 | `--author` | str (repeatable) |  | Restrict matches to one or more author names. Repeat or pass comma-separated values. |
 | `--type` | str (repeatable) |  | Restrict matches to one or more Wowhead news types such as Live or PTR. Repeat or pass comma-separated values. |
-| `--page` | int range | 1 | First Wowhead news page to scan. |
-| `--pages` | int range | 1 | Maximum number of pages to scan for matches. |
-| `--limit` | int range | 20 | Maximum number of matching posts to return from the scanned page window. |
+| `--page` | int range [x>=1] | 1 | First Wowhead news page to scan. |
+| `--pages` | int range [1<=x<=100] | 1 | Maximum number of pages to scan for matches. |
+| `--limit` | int range [1<=x<=200] | 20 | Maximum number of matching posts to return from the scanned page window. |
 | `--date-from` | str |  | Inclusive UTC lower bound. Accepts YYYY-MM-DD or full ISO-8601 timestamps. |
 | `--date-to` | str |  | Inclusive UTC upper bound. Accepts YYYY-MM-DD or full ISO-8601 timestamps. |
 
@@ -142,9 +142,9 @@ List Wowhead blue-tracker posts with topic, date-window, and listing-field filte
 | `--author` | str (repeatable) |  | Restrict matches to one or more blue-post author names. Repeat or pass comma-separated values. |
 | `--region` | str (repeatable) |  | Restrict matches to one or more regions such as us or eu. Repeat or pass comma-separated values. |
 | `--forum` | str (repeatable) |  | Restrict matches to one or more forum names. Repeat or pass comma-separated values. |
-| `--page` | int range | 1 | First Wowhead blue-tracker page to scan. |
-| `--pages` | int range | 1 | Maximum number of pages to scan for matches. |
-| `--limit` | int range | 20 | Maximum number of matching topics to return from the scanned page window. |
+| `--page` | int range [x>=1] | 1 | First Wowhead blue-tracker page to scan. |
+| `--pages` | int range [1<=x<=100] | 1 | Maximum number of pages to scan for matches. |
+| `--limit` | int range [1<=x<=200] | 20 | Maximum number of matching topics to return from the scanned page window. |
 | `--date-from` | str |  | Inclusive UTC lower bound. Accepts YYYY-MM-DD or full ISO-8601 timestamps. |
 | `--date-to` | str |  | Inclusive UTC upper bound. Accepts YYYY-MM-DD or full ISO-8601 timestamps. |
 
@@ -162,7 +162,7 @@ Fetch one Wowhead news article with body markup, related posts, and citations.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--related-limit` | int range | 5 | Maximum related rows to keep from each embedded recent-post bucket. |
+| `--related-limit` | int range [1<=x<=25] | 5 | Maximum related rows to keep from each embedded recent-post bucket. |
 
 ## wowhead blue-topic
 
@@ -192,10 +192,10 @@ List the guides in a Wowhead guide category with author, patch, and updated-wind
 | `--author` | str (repeatable) |  | Restrict matches to one or more guide author names. Repeat or pass comma-separated values. |
 | `--updated-after` | str |  | Inclusive lower bound for guide last-updated timestamps. Accepts YYYY-MM-DD or full ISO-8601 timestamps. |
 | `--updated-before` | str |  | Inclusive upper bound for guide last-updated timestamps. Accepts YYYY-MM-DD or full ISO-8601 timestamps. |
-| `--patch-min` | int range |  | Minimum patch build number to keep. |
-| `--patch-max` | int range |  | Maximum patch build number to keep. |
+| `--patch-min` | int range [x>=0] |  | Minimum patch build number to keep. |
+| `--patch-max` | int range [x>=0] |  | Maximum patch build number to keep. |
 | `--sort` | str | relevance | Sort results by relevance, updated, published, or rating. |
-| `--limit` | int range | 20 | Maximum matching guides to return. |
+| `--limit` | int range [1<=x<=200] | 20 | Maximum matching guides to return. |
 
 ## wowhead talent-calc
 
@@ -211,7 +211,7 @@ Decode a Wowhead talent calculator ref into class, spec, and build state.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--listed-build-limit` | int range | 10 | Maximum embedded listed builds to return when the page exposes them. |
+| `--listed-build-limit` | int range [1<=x<=100] | 10 | Maximum embedded listed builds to return when the page exposes them. |
 
 ## wowhead talent-calc-packet
 
@@ -227,7 +227,7 @@ Emit an exact talent transport packet from a Wowhead talent calculator ref.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--listed-build-limit` | int range | 10 | Maximum embedded listed builds to return when the page exposes them. |
+| `--listed-build-limit` | int range [1<=x<=100] | 10 | Maximum embedded listed builds to return when the page exposes them. |
 | `--out` | str |  | Optional path to write just the exact talent transport packet JSON. |
 
 ## wowhead profession-tree
@@ -274,9 +274,9 @@ Fetch one Wowhead guide: analysis surfaces, linked entities, comments, and page 
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--comment-sample` | int range | 3 | Top comments to include (sorted by rating). |
-| `--comment-chars` | int range | 320 | Maximum characters for each sampled comment body. |
-| `--linked-entity-preview-limit` | int range | 5 | Maximum linked entities to include as a lightweight preview. Set to 0 to disable. |
+| `--comment-sample` | int range [0<=x<=20] | 3 | Top comments to include (sorted by rating). |
+| `--comment-chars` | int range [60<=x<=2000] | 320 | Maximum characters for each sampled comment body. |
+| `--linked-entity-preview-limit` | int range [0<=x<=50] | 5 | Maximum linked entities to include as a lightweight preview. Set to 0 to disable. |
 
 ## wowhead guide-full
 
@@ -292,7 +292,7 @@ Fetch one Wowhead guide with every section, comment, and linked entity hydrated.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--max-links` | int range | 250 | Maximum linked entities to return. |
+| `--max-links` | int range [1<=x<=2000] | 250 | Maximum linked entities to return. |
 | `--include-replies / --no-include-replies` | boolean | false | Include inline replies already present in the embedded comments payload. |
 
 ## wowhead guide-export
@@ -309,12 +309,12 @@ Export a Wowhead guide bundle (manifest, sections, entities) to a local director
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--out` | directory |  | Directory to write exported guide assets into. Defaults to ./wowhead_exports/<guide-slug>/ |
-| `--max-links` | int range | 250 | Maximum linked entities to return. |
+| `--out` | directory |  | Directory to write exported guide assets into. Defaults to ./wowhead_exports/guide-<id>-<title-slug>/ |
+| `--max-links` | int range [1<=x<=2000] | 250 | Maximum linked entities to return. |
 | `--include-replies / --no-include-replies` | boolean | false | Include inline replies already present in the embedded comments payload. |
 | `--hydrate-linked-entities / --no-hydrate-linked-entities` | boolean | false | Hydrate selected linked entities into local entity JSON files using the normalized entity contract. |
 | `--hydrate-type` | str (repeatable) |  | Restrict hydrated linked entity types. Repeat or pass comma-separated values from: achievement, battle-pet, currency, faction, item, mount, npc, object, pet, quest, recipe, spell, transmog-set, zone. Defaults to spell,item,npc when hydration is enabled. |
-| `--hydrate-limit` | int range | 100 | Maximum linked entities to hydrate when --hydrate-linked-entities is enabled. |
+| `--hydrate-limit` | int range [1<=x<=1000] | 100 | Maximum linked entities to hydrate when --hydrate-linked-entities is enabled. |
 
 ## wowhead guide-query
 
@@ -331,7 +331,7 @@ Query one guide for the sections, links, and comments that match a query string.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--limit` | int range | 5 | Maximum matches to return per category and in the flattened top list. |
+| `--limit` | int range [1<=x<=50] | 5 | Maximum matches to return per category and in the flattened top list. |
 | `--kind` | str (repeatable) |  | Restrict search kinds. Repeat or pass comma-separated values from: sections, analysis_surfaces, navigation, linked_entities, gatherer_entities, comments. |
 | `--section-title` | str |  | Restrict section searching to section titles containing this text. |
 | `--linked-source` | str (repeatable) |  | Restrict merged linked-entity matches by provenance. Repeat or pass comma-separated values from: href, gatherer, multi. |
@@ -352,12 +352,12 @@ Query every local guide bundle under a corpus root and rank the matching guides.
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `--root` | directory |  | Root directory containing exported guide bundles. Defaults to ./wowhead_exports/. |
-| `--limit` | int range | 5 | Maximum matches to return in the flattened top list and per bundle top results. |
-| `--bundle-limit` | int range | 5 | Maximum matching bundles to return. |
+| `--limit` | int range [1<=x<=50] | 5 | Maximum matches to return in the flattened top list and per bundle top results. |
+| `--bundle-limit` | int range [1<=x<=50] | 5 | Maximum matching bundles to return. |
 | `--kind` | str (repeatable) |  | Restrict search kinds. Repeat or pass comma-separated values from: sections, analysis_surfaces, navigation, linked_entities, gatherer_entities, comments. |
 | `--section-title` | str |  | Restrict section searching to section titles containing this text. |
 | `--linked-source` | str (repeatable) |  | Restrict merged linked-entity matches by provenance. Repeat or pass comma-separated values from: href, gatherer, multi. |
-| `--max-age-hours` | int range | 24 | Freshness window in hours used for bundle freshness summaries. |
+| `--max-age-hours` | int range [1<=x<=720] | 24 | Freshness window in hours used for bundle freshness summaries. |
 
 ## wowhead guide-bundle-search
 
@@ -374,8 +374,8 @@ Search local guide bundles by title, guide id, or directory name.
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `--root` | directory |  | Root directory containing exported guide bundles. Defaults to ./wowhead_exports/. |
-| `--limit` | int range | 5 | Maximum matching bundles to return. |
-| `--max-age-hours` | int range | 24 | Freshness window in hours used for bundle freshness summaries. |
+| `--limit` | int range [1<=x<=50] | 5 | Maximum matching bundles to return. |
+| `--max-age-hours` | int range [1<=x<=720] | 24 | Freshness window in hours used for bundle freshness summaries. |
 
 ## wowhead guide-bundle-list
 
@@ -386,7 +386,7 @@ List the local guide bundles under a corpus root with freshness and hydration su
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `--root` | directory |  | Root directory containing exported guide bundles. Defaults to ./wowhead_exports/. |
-| `--max-age-hours` | int range | 24 | Freshness window in hours used for the list's bundle and hydration status summaries. |
+| `--max-age-hours` | int range [1<=x<=720] | 24 | Freshness window in hours used for the list's bundle and hydration status summaries. |
 
 ## wowhead guide-bundle-inspect
 
@@ -403,7 +403,7 @@ Inspect one local guide bundle for missing files, stale data, and hydration gaps
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `--root` | directory |  | Root directory used to resolve non-path bundle selectors. Defaults to ./wowhead_exports/. |
-| `--max-age-hours` | int range | 24 | Freshness window in hours used for bundle and hydration freshness summaries. |
+| `--max-age-hours` | int range [1<=x<=720] | 24 | Freshness window in hours used for bundle and hydration freshness summaries. |
 | `--summary` | boolean | false | Return a compact inspection payload focused on freshness and issues. |
 
 ## wowhead guide-bundle-index-rebuild
@@ -431,7 +431,7 @@ Re-export stale local guide bundles using their recorded export options.
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `--root` | directory |  | Root directory used to resolve non-path bundle selectors. Defaults to ./wowhead_exports/. |
-| `--max-age-hours` | int range | 24 | Default freshness window in hours. If omitted, bundles newer than 24 hours are treated as fresh. |
+| `--max-age-hours` | int range [1<=x<=720] | 24 | Default freshness window in hours. If omitted, bundles newer than 24 hours are treated as fresh. |
 | `--force / --no-force` | boolean | false | Refresh even when the bundle is still within the freshness window. |
 
 ## wowhead entity
@@ -453,7 +453,7 @@ Fetch a Wowhead entity tooltip with optional comments and linked entities.
 | `--data-env` | int |  | Override Wowhead tooltip dataEnv value. Defaults to selected expansion profile. |
 | `--include-comments / --no-include-comments` | boolean | true | Include page comments in entity output. |
 | `--include-all-comments / --top-comments-only` | boolean | false | Include all parsed comments instead of only a top-rated summary. |
-| `--linked-entity-preview-limit` | int range | 5 | Maximum linked entities to include as a lightweight preview. Set to 0 to disable. |
+| `--linked-entity-preview-limit` | int range [0<=x<=50] | 5 | Maximum linked entities to include as a lightweight preview. Set to 0 to disable. |
 
 ## wowhead entity-page
 
@@ -471,7 +471,7 @@ Fetch a Wowhead entity page with parsed metadata and its linked entities. Commen
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `--url` | str |  | Wowhead entity page URL, in place of TYPE ID. Auto-selects expansion when --expansion is omitted. |
-| `--max-links` | int range | 200 | Maximum linked entities to return. |
+| `--max-links` | int range [1<=x<=2000] | 200 | Maximum linked entities to return. |
 | `--include-gatherer / --no-include-gatherer` | boolean | true | Include linked entities discovered from WH.Gatherer.addData payloads. |
 
 ## wowhead comments
@@ -489,20 +489,20 @@ Fetch and rank the comments on a Wowhead entity page.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--limit` | int range | 25 | Maximum number of top-level comments to return. |
+| `--limit` | int range [1<=x<=500] | 25 | Maximum number of top-level comments to return. |
 | `--sort` | str | newest | Sort mode for top-level comments: newest \| oldest \| rating. |
 | `--min-rating` | int |  | Filter out comments below this rating. |
 | `--include-replies / --no-include-replies` | boolean | true | Include reply objects for each comment. |
 | `--hydrate-missing-replies / --no-hydrate-missing-replies` | boolean | false | Fetch missing replies via /comment/show-replies when embedded data is incomplete. |
-| `--max-concurrency` | int range | 4 | Maximum parallel reply hydration requests when --hydrate-missing-replies is enabled. |
-| `--linked-entity-preview-limit` | int range | 5 | Maximum linked entities to include as a lightweight preview. Set to 0 to disable. |
+| `--max-concurrency` | int range [1<=x<=16] | 4 | Maximum parallel reply hydration requests when --hydrate-missing-replies is enabled. |
+| `--linked-entity-preview-limit` | int range [0<=x<=50] | 5 | Maximum linked entities to include as a lightweight preview. Set to 0 to disable. |
 | `--date-from` | str |  | Retain comments on or after this ISO date (YYYY-MM-DD or full timestamp). |
 | `--date-to` | str |  | Retain comments on or before this ISO date (YYYY-MM-DD or full timestamp). |
-| `--min-replies` | int range |  | Retain only comments with at least this many replies. |
+| `--min-replies` | int range [x>=0] |  | Retain only comments with at least this many replies. |
 | `--author` | str |  | Retain only comments whose author contains this substring (case-insensitive). |
 | `--keyword` | str (repeatable) |  | Retain only comments whose body contains every keyword. Repeatable or comma-separated. |
 | `--insights` | boolean | false | Attach deterministic comment intelligence (freshness, near-duplicates, cited top insights). |
-| `--insight-limit` | int range | 5 | Maximum insight rows when --insights is enabled. |
+| `--insight-limit` | int range [1<=x<=10] | 5 | Maximum insight rows when --insights is enabled. |
 
 ## wowhead compare
 
@@ -519,11 +519,11 @@ Compare two or more Wowhead entities field by field.
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `--preset` | str |  | Comparison preset: gear, quest, or spell (tunes field diffs, link limits, and comment sampling). |
-| `--max-links-per-entity` | int range |  | Maximum linked entities to parse per entity. |
-| `--max-shared-links` | int range |  | Maximum shared linked entities to include in output. |
-| `--max-unique-links` | int range |  | Maximum unique linked entities to include per compared entity. |
-| `--comment-sample` | int range |  | Top comments to include per entity (sorted by rating). |
-| `--comment-chars` | int range |  | Maximum characters for each sampled comment body. |
+| `--max-links-per-entity` | int range [1<=x<=2000] |  | Maximum linked entities to parse per entity. |
+| `--max-shared-links` | int range [1<=x<=2000] |  | Maximum shared linked entities to include in output. |
+| `--max-unique-links` | int range [1<=x<=5000] |  | Maximum unique linked entities to include per compared entity. |
+| `--comment-sample` | int range [0<=x<=20] |  | Top comments to include per entity (sorted by rating). |
+| `--comment-chars` | int range [60<=x<=2000] |  | Maximum characters for each sampled comment body. |
 | `--include-gatherer / --no-include-gatherer` | boolean |  | Include linked entities from WH.Gatherer.addData payloads. |
 
 ## wowhead linked-graph
@@ -541,8 +541,8 @@ Build a linked-entity graph rooted at one Wowhead entity.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--depth` | int range | 1 | Traversal depth (1 = direct links, 2 = one additional hop). |
+| `--depth` | int range [1<=x<=2] | 1 | Traversal depth (1 = direct links, 2 = one additional hop). |
 | `--relation` | str (repeatable) |  | Retain only edges whose target entity type matches. Repeatable or comma-separated. |
-| `--limit` | int range | 50 | Maximum graph nodes to retain. |
-| `--max-fetches` | int range | 10 | Maximum entity pages to fetch while traversing. |
+| `--limit` | int range [1<=x<=500] | 50 | Maximum graph nodes to retain. |
+| `--max-fetches` | int range [1<=x<=50] | 10 | Maximum entity pages to fetch while traversing. |
 | `--include-gatherer / --no-include-gatherer` | boolean | true | Include gatherer-linked entities when parsing pages. |

@@ -55,6 +55,8 @@ def _isolate_blizzard_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> No
     monkeypatch.setenv("BLIZZARD_CLIENT_ID", "test-id")
     monkeypatch.setenv("BLIZZARD_CLIENT_SECRET", "test-secret")
     monkeypatch.delenv("BLIZZARD_REGION", raising=False)
+    # Request-counting tests must reach the fake transport; the cache tests turn it back on.
+    monkeypatch.setenv("BLIZZARD_CACHE_BACKEND", "none")
 
 
 def _install_recorder(monkeypatch: pytest.MonkeyPatch) -> list[str]:
@@ -190,12 +192,22 @@ def test_help_doctor_and_payloads_state_one_verification_posture(monkeypatch: py
 def test_unsupported_region_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
     # A mistyped --region is a usage error (exit 2) like everywhere else in the repo, and the message
     # lists the accepted values as plain text, not a Python tuple repr.
+    # The message echoes what was typed, not a normalized spelling the caller never wrote.
     _install_recorder(monkeypatch)
-    result = runner.invoke(app, ["realm", "illidan", "--region", "oc"])
+    result = runner.invoke(app, ["realm", "illidan", "--region", "Mars"])
     assert result.exit_code == 2
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "unsupported_region"
-    assert payload["error"]["message"] == "--region must be one of: us, eu, kr, tw, cn; got 'oc'."
+    assert payload["error"]["message"] == "--region must be one of: us, eu, kr, tw, cn; got 'Mars'."
+
+
+@pytest.mark.parametrize("alias", ["oce", "oc", "oceanic"])
+def test_an_oceanic_region_alias_routes_to_us(monkeypatch: pytest.MonkeyPatch, alias: str) -> None:
+    # Oceanic realms live in Blizzard's US region; `oce` used to fail with "got 'oc'".
+    _install_recorder(monkeypatch)
+    result = runner.invoke(app, ["realm", "frostmourne", "--region", alias])
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout)["provenance"]["namespace"] == "dynamic-us"
 
 
 def test_unsupported_game_version_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -442,7 +454,7 @@ def test_in_memory_token_keyed_by_region(monkeypatch: pytest.MonkeyPatch) -> Non
         (["realm", "illidan"], "stdout"),
         (["item", "19019"], "stdout"),
         (["character", "illidan", "Imonthegcd"], "stdout"),
-        (["realm", "illidan", "--region", "oc"], "stderr"),
+        (["realm", "illidan", "--region", "xx"], "stderr"),
     ],
 )
 def test_every_command_emits_a_conforming_envelope(monkeypatch: pytest.MonkeyPatch, args: list[str], stream: str) -> None:
@@ -521,3 +533,80 @@ def test_classic_game_data_routing_is_verified(monkeypatch: pytest.MonkeyPatch) 
     prov = json.loads(result.stdout)["provenance"]
     assert prov["namespace"] == "static-classic-us"
     assert prov["verified"] is True
+
+
+# Synthetic slice of /data/wow/realm/index requested without `locale`: every name is a per-locale dict.
+_REALM_INDEX = {
+    "realms": [
+        {"id": 1, "slug": "howling-fjord", "name": {"en_US": "Howling Fjord", "ru_RU": "Ревущий фьорд"}},
+        {"id": 2, "slug": "lightnings-blade", "name": {"en_US": "Lightning's Blade", "zh_TW": "閃電之刃"}},
+        {"id": 3, "slug": "dethecus", "name": {"en_US": "Dethecus", "zh_TW": "閃電之刃"}},
+    ]
+}
+
+
+def _install_index_recorder(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, dict[str, Any]]]:
+    """Serve the synthetic realm index, 404 every other non-English realm path, and record each GET."""
+    requested: list[tuple[str, dict[str, Any]]] = []
+
+    def _fake(client: Any, url: str, *, method: str = "GET", **kwargs: Any) -> _FakeResponse:
+        if url.endswith("/token"):
+            return _FakeResponse({"access_token": "fake-token", "expires_in": 3600}, url)
+        path = url.split(".api.blizzard.com")[1]
+        requested.append((path, kwargs["params"]))
+        if path == "/data/wow/realm/index":
+            return _FakeResponse(_REALM_INDEX, url)
+        if "howling-fjord" in path:
+            return _FakeResponse(_fixture_for_url(url), url)
+        request = httpx.Request("GET", url)
+        raise httpx.HTTPStatusError("Not Found", request=request, response=httpx.Response(404, request=request))
+
+    monkeypatch.setattr(client_module, "request_with_retries", _fake)
+    return requested
+
+
+@pytest.mark.parametrize(
+    ("args", "found"),
+    [
+        (["realm", "Ревущий фьорд", "--region", "eu"], "/data/wow/realm/howling-fjord"),
+        (["realm", "Ревущийфьорд", "--region", "eu"], "/data/wow/realm/howling-fjord"),
+        (["character", "Ревущий фьорд", "Lerepam", "--region", "eu"], "/profile/wow/character/howling-fjord/lerepam"),
+    ],
+)
+def test_a_realm_typed_in_its_native_script_is_found_through_the_realm_index(
+    monkeypatch: pytest.MonkeyPatch, args: list[str], found: str
+) -> None:
+    # Blizzard slugs are English, so `ревущий-фьорд` is a 404; the unlocalized realm index maps any
+    # locale's name to the slug. Character lookups route through `profile-eu`, which has no index.
+    requested = _install_index_recorder(monkeypatch)
+    result = runner.invoke(app, args)
+    assert result.exit_code == 0, result.output
+    index_params = next(params for path, params in requested if path == "/data/wow/realm/index")
+    assert index_params == {"namespace": "dynamic-eu"}
+    assert requested[-1][0] == found
+
+
+def test_a_native_name_two_realms_share_stays_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
+    _install_index_recorder(monkeypatch)
+    result = runner.invoke(app, ["realm", "閃電之刃", "--region", "tw"])
+    assert result.exit_code == 4
+    assert json.loads(result.stderr)["error"]["code"] == "not_found"
+
+
+def test_an_unknown_english_realm_never_reads_the_index(monkeypatch: pytest.MonkeyPatch) -> None:
+    requested = _install_index_recorder(monkeypatch)
+    result = runner.invoke(app, ["realm", "nowhere", "--region", "eu"])
+    assert result.exit_code == 4
+    assert "/data/wow/realm/index" not in [path for path, _ in requested]
+
+
+def test_responses_are_replayed_from_the_cache_without_a_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BLIZZARD_CACHE_BACKEND", "file")
+    token_calls = _install_recorder(monkeypatch)
+    first = json.loads(runner.invoke(app, ["item", "19019"]).stdout)["provenance"]
+    monkeypatch.setattr(client_module, "request_with_retries", lambda *args, **kwargs: pytest.fail("cache miss"))
+    second = json.loads(runner.invoke(app, ["item", "19019"]).stdout)["provenance"]
+    assert len(token_calls) == 1
+    assert (first["cache_hit"], second["cache_hit"]) == (False, True)
+    assert second["fetched_at"] == first["fetched_at"]
+    assert second["cache_ttl_seconds"] == 86400

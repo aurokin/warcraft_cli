@@ -72,7 +72,9 @@ These codes are worth knowing:
   is not a SimulationCraft checkout. They report this instead of returning zero hits as a success. An
   APL command also answers `not_found` for an APL file that is not there, and for a `--list` the file
   has no action list of (`error.details.available_lists` names the ones it has).
-- `invalid_query` (exit 2) — a build arrived without a class and spec and could not be identified,
+- `invalid_query` (exit 2) — a build arrived without a class and spec and could not be identified
+  by a command that needs one (`identify-build` instead answers `ok: true` with `identity.confidence`
+  `none` or `low`, null `actor_class`/`spec` and a source note naming the specs probed),
   `decode-build` or `identify-build` was given no build at all, a build-input option was passed with
   an empty value, or the class or spec names none of SimC's specs (an unknown class, or a pair such as
   `mage holy`); the message lists the valid values. It is also the answer when `--apl-path` names a
@@ -353,6 +355,13 @@ in `player`/`metrics`, the rest in `other_actors` (each with `player` and `metri
 `actor_count`. A profile that defines profilesets (a Top Gear or Droptimizer input) reports their
 ranked rows in `profilesets` (`metric`, `result_count`, `results` best mean first); otherwise
 `profilesets` is null. An unknown `--preset` or an empty profile fails with `invalid_query` (exit 2).
+
+`disclosures` lists what limits the result. A profile that sets `load_default_gear=1`, as every
+`build-harness` profile does (and `build-harness` says so in its own `disclosures`), wears SimC's low
+item level default gear, so its absolute DPS is far below a geared character's; only comparisons on the
+same profile are meaningful. To sim a guide build on current-tier gear, copy the checkout's
+`profiles/<tier>/<Tier>_<Class>_<Spec>.simc` (for example `profiles/MID2/MID2_Mage_Frost.simc`), replace
+its `talents=` line with the build, and `simc sim` that file.
 
 `simc run` passes raw SimC arguments through. Its `result_lines` holds the `Player:`, `Target:` and
 `Add:` headers of SimC's text report, each followed by that actor's `DPS=`/`HPS=`/`DTPS=`/`TMI=` lines,

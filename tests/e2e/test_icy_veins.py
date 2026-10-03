@@ -278,7 +278,7 @@ def test_index_refresh_crawls_politely_and_merges_into_the_bundled_snapshot(requ
     counts = data["counts"]
 
     assert (data["partial"], data["stop_reason"]) == (True, "max_requests"), result.describe()
-    assert counts["fetched"] == INDEX_REFRESH_REQUESTS and counts["frontier"] > 0, result.describe()
+    assert counts["fetched"] == INDEX_REFRESH_REQUESTS, result.describe()
     assert counts["pages"] >= INDEX_REFRESH_REQUESTS - counts["errors"], result.describe()
     assert data["blocked"] is None, result.describe()
     # One request a second at most: fifteen requests cannot take under fourteen seconds.
@@ -294,6 +294,8 @@ def test_index_refresh_crawls_politely_and_merges_into_the_bundled_snapshot(requ
     assert {row["slug"] for row in bundled["pages"]} <= slugs, "the merge dropped pages of the bundled snapshot"
     assert len(slugs) == counts["total"]
     assert len(stored["frontier"]) == counts["frontier"]
+    # The frontier holds only pages discovered and not fetched: an indexed page waits for its revisit.
+    assert not set(stored["frontier"]) & {row["url"] for row in bundled["pages"]}, result.describe()
     assert "<html" not in index_path.read_text(encoding="utf-8")
     # Every page this run read is stamped with the run's date and carries its headline.
     read_now = [row for row in stored["pages"] if row["last_seen"] == stored["refreshed_at"][:10] and row["status"] == "ok"]

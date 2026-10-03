@@ -13,8 +13,9 @@ from dataclasses import dataclass
 from typing import Any
 
 import pytest
+from lorrgs_cli.provider import COMP_ROLES
 
-from tests.e2e.harness import EXIT_NOT_FOUND, EXIT_USAGE, Result, run, run_text
+from tests.e2e.harness import EXIT_NOT_FOUND, EXIT_USAGE, Result, dead_proxy_env, run, run_text
 
 # Ranked parses exist only for specs people actually play on a fresh tier; walk a few before giving
 # up so the report journeys always have a real code to work with.
@@ -304,6 +305,49 @@ def test_comp_ranking_returns_ranked_comps_and_honours_the_killtime_filter(catal
     raise AssertionError(f"no boss has two ranked comps at least 2s apart in kill time: {scanned}")
 
 
+def test_comp_ranking_role_filter_takes_the_documented_syntax(catalog: Catalog) -> None:
+    """``--role <role>.<op>.<n>`` filters upstream, and any other spelling is a usage error.
+
+    Lorrgs answers ``heal>=4`` with HTTP 500, which used to surface as a retryable exit 5. An
+    impossible bound (99 healers) must empty a populated ranking, so the filter is really applied.
+    """
+    for boss_slug in _comp_ranking_candidates(catalog):
+        unfiltered = run("lorrgs", "comp-ranking", boss_slug, "--limit", str(COMP_RANKING_LIMIT), expect=None)
+        if not unfiltered.ok or not unfiltered.data["reports"]:
+            continue
+        assert _comp_ranking(boss_slug, "--role", "heal.gte.0").data["reports"], unfiltered.describe()
+        impossible = _comp_ranking(boss_slug, "--role", "heal.gte.99")
+        assert impossible.data["reports"] == [], impossible.describe()
+        bad = run("lorrgs", "comp-ranking", boss_slug, "--role", "heal>=4", expect=EXIT_USAGE, error_code="invalid_query")
+        assert "heal.gte.4" in bad.payload["error"]["message"], bad.describe()
+        # Every role code the CLI accepts filters upstream; any other name (the display name
+        # "healer") would silently match nothing, so it is a usage error instead.
+        for role in COMP_ROLES:
+            assert _comp_ranking(boss_slug, "--role", f"{role}.gte.1").data["reports"], role
+        run("lorrgs", "comp-ranking", boss_slug, "--role", "healer.gte.1", expect=EXIT_USAGE, error_code="invalid_query")
+        return
+    raise AssertionError("no boss has a populated comp ranking to filter")
+
+
+def test_static_metadata_is_served_from_the_cache_once_fetched(require) -> None:
+    """A warm cache answers ``specs`` with every connection refused, and says it replayed the data."""
+    require("lorrgs")
+    live = run("lorrgs", "specs")
+    replayed = run("lorrgs", "specs", env=dead_proxy_env())
+    assert replayed.payload["provenance"]["cache_hit"] is True, replayed.describe()
+    assert replayed.payload["provenance"]["fetched_at"] == live.payload["provenance"]["fetched_at"], replayed.describe()
+    assert replayed.data == live.data
+
+
+def test_an_unranked_difficulty_is_a_usage_error(catalog: Catalog) -> None:
+    """Lorrgs ranks Mythic and Heroic only; ``normal`` used to come back as a 404 ``not_found``."""
+    run("lorrgs", "spec-ranking-info", catalog.spec_slug, catalog.boss_slug, "--difficulty", "heroic")
+    run(
+        "lorrgs", "spec-ranking-info", catalog.spec_slug, catalog.boss_slug, "--difficulty", "normal",
+        expect=EXIT_USAGE, error_code="invalid_query",
+    )
+
+
 def test_report_overview_user_report_and_fights_share_one_report(catalog: Catalog) -> None:
     overview = run("lorrgs", "report-overview", catalog.report_id)
     assert overview.data["report_id"] == catalog.report_id
@@ -373,6 +417,8 @@ def test_a_report_code_without_a_digit_is_a_report_reference(require) -> None:
 
     bare = run("lorrgs", "resolve", code)
     assert bare.data["match"]["report_id"] == code, bare.describe()
+    # Nothing checked that Lorrgs will serve the report, so the match stays at medium, unresolved.
+    assert (bare.data["resolved"], bare.data["confidence"], bare.data["next_command"]) == (False, "medium", None), bare.describe()
     for word_query in ("restorationdruid", "RestorationDruid"):
         word = run("lorrgs", "resolve", word_query)
         assert (word.data.get("match") or {}).get("kind") != "report_overview", word.describe()

@@ -69,13 +69,15 @@ Every command's flags are listed in [docs/reference/warcraft.md](../reference/wa
   [WRAPPER_PROVIDER_CONTRACT.md](../foundation/WRAPPER_PROVIDER_CONTRACT.md) for the model.
 - `warcraft resolve` — the single best match plus its follow-up command. Each provider's match is
   ranked exactly as `warcraft search` ranks that provider's top row, and the top-ranked one is the
-  answer only when its own provider resolved it and the query's intent does not rank that
+  answer only when its own provider resolved it at `high` confidence and the query's intent does not rank that
   provider's family down (a guide query is never answered by Lorrgs spec metadata, a guild query
   never by a wiki article); a match whose title is exactly the query (the item `Guild Tabard`) is
-  exempt. Otherwise `resolved` is `false` and that candidate is
-  `best_unresolved_candidate`, with `unresolved_reason` (`provider_did_not_resolve` or
-  `provider_family_ranked_down_by_query_intent`) and the `fallback_search_command`s of the providers
-  that returned a candidate, in ranking order (none when no provider found anything).
+  exempt. Otherwise `resolved` is `false`, that candidate is `data.best_unresolved_candidate`, and
+  the candidate itself carries `unresolved_reason` (`data.best_unresolved_candidate.unresolved_reason`:
+  `provider_did_not_resolve`, `provider_confidence_below_high` or
+  `provider_family_ranked_down_by_query_intent`). `data` also lists the
+  `fallback_search_command`s of the providers that returned a candidate, in ranking order (none when
+  no provider found anything).
   `--limit` only sizes `--ranking-debug`: providers are never asked for fewer candidates, because
   their confidence is judged against the rivals a small limit would hide. The envelope's `provider`
   is `warcraft`; `data.selected_provider` is the match's provider or `null`.
@@ -118,6 +120,15 @@ Every command's flags are listed in [docs/reference/warcraft.md](../reference/wa
   only a Lorrgs-cached report supplies; for any other report pass `--boss-slug`. When the comparison
   does not run, `comparison.reason` says why (`no_boss_slug`, `unranked_difficulty`,
   `lorrgs_spec_ranking_failed`, `disabled_by_sample_limit`) and a note names the flag that fixes it.
+  Lorrgs ranking fights often carry no phase markers. When the encounter has several phases (the
+  player's fight or any top-parse fight shows a phase transition) such a sample gets
+  `phase_available: false` with `phase_unavailable_reason: "top_parse_has_no_phase_markers"` instead
+  of its whole-fight casts; a sample whose markers stop before the phase gets
+  `"phase_not_in_top_parse"`. `sample_fraction` counts only the `phase_sample_count` samples that have
+  the phase, and when none has it `comparison.status` is `no_phase_data` with `reason` set to the
+  samples' shared reason (`no_sample_has_phase` when they differ). `phase_sample_count` is 0 when
+  the comparison did not run. When neither the player's fight nor any top parse has phase markers,
+  each top parse's whole fight stands for P1.
   `notes` only describe what the packet actually holds, and say when Warcraft Logs truncated the
   cast events or Lorrgs' boss spell names were unavailable. A fight id the Warcraft Logs report does
   not have fails `fight_not_found` (exit 4) with `error.details.available_fight_ids`; an actor
@@ -164,7 +175,9 @@ Every command's flags are listed in [docs/reference/warcraft.md](../reference/wa
   or `all_handoffs_failed`. The requested legs are `identify` plus `decode` (on by default) and
   `describe` (with `--apl-path`). `all_handoffs_failed` means every requested leg produced nothing:
   it is a `simc_handoff_failed` error envelope (exit 1, `kind: "error"`) whose `provenance` is the
-  packet's and whose `error.details` carry the rest of the packet, per-build `failures` included. `failed` means some requested leg produced nothing
+  packet's and whose `error.details` carry the rest of the packet, per-build `failures` included. With
+  `--no-decode`, a bundle in which no build is identified fails this way; its message names
+  `build_not_identified` and points at the guide hashes, not at `simc doctor`. `failed` means some requested leg produced nothing
   while another produced output (`summary.empty_requested_legs` names the empty ones); `partial`
   means a leg worked for some builds and not others
   (`summary.partial_requested_legs`). Every build carries its own `failures` with the simc error

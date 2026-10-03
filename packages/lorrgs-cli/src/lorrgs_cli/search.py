@@ -9,6 +9,7 @@ from urllib.parse import ParseResult, parse_qs, urlparse
 
 from warcraft_core.identity import is_warcraftlogs_report_code
 
+from lorrgs_cli.client import DIFFICULTIES as RANKED_DIFFICULTIES
 from lorrgs_cli.client import LorrgsClient
 
 WORD_PATTERN = re.compile(r"[a-z0-9]+")
@@ -181,14 +182,18 @@ def resolve_payload(client: LorrgsClient, query: str, *, limit: int) -> dict[str
     candidates = _ranked_candidates(client, query)
     search = _search_payload(query, candidates, limit=limit)
     best = candidates[0] if candidates else None
-    resolved = _resolved(best, candidates)
+    unambiguous = _resolved(best, candidates)
+    confidence = _confidence(best, resolved=unambiguous)
+    # Like every other provider, resolve only hands over a command at high confidence. A partial
+    # word match or an unverified report reference stays the match, at medium, without a command.
+    resolved = confidence == "high"
     return {
         "provider": "lorrgs",
         "query": query,
         "search_query": search["search_query"],
         "resolved": resolved,
-        "confidence": _confidence(best, resolved=resolved),
-        "match": best if resolved else None,
+        "confidence": confidence,
+        "match": best if unambiguous else None,
         "next_command": _follow_up_command(best) if resolved else None,
         "count": search["count"],
         "results": search["results"],
@@ -220,8 +225,12 @@ def _ranked_candidates(client: LorrgsClient, query: str) -> list[dict[str, Any]]
     top_specs = _best_matches(spec_matches)
     top_bosses = _best_matches(boss_matches)
 
+    # Lorrgs ranks Mythic and Heroic only, so a normal/lfr question has no spec ranking to hand over.
+    ranked = difficulty is None or difficulty in RANKED_DIFFICULTIES
     candidates: list[dict[str, Any]] = [
-        _spec_ranking_candidate(spec, boss, known_terms, difficulty) for spec, boss in product(top_specs, top_bosses)
+        _spec_ranking_candidate(spec, boss, known_terms, difficulty)
+        for spec, boss in product(top_specs, top_bosses)
+        if ranked
     ]
     candidates.extend(_comp_ranking_candidate(boss, known_terms, difficulty) for boss in top_bosses)
     candidates.extend(_spec_candidate(spec, known_terms) for spec in top_specs)

@@ -7,7 +7,6 @@ Nothing here prints or raises ``typer.Exit``: every function returns an envelope
 
 from __future__ import annotations
 
-import re
 import shlex
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,6 +16,7 @@ from warcraft_api.cache import redacted_redis_url
 from warcraft_content.article_bundle import article_export_dir, bundle_query_payload
 from warcraft_content.article_discovery import (
     article_candidate,
+    article_follow_up,
     article_resolve_payload,
     article_search_payload,
     sort_article_candidates,
@@ -32,6 +32,7 @@ from warcraft_content.article_provider_cli import (
     with_analysis_surfaces,
 )
 from warcraft_content.search import (
+    MYTHIC_PLUS_RE,
     ArticleMatchWeights,
     best_scored,
     expand_class_spec_aliases,
@@ -46,16 +47,13 @@ from warcraft_core.envelope import Envelope, success_envelope
 from warcraft_core.provider import ProviderError, ProviderSurface
 
 from method_cli.client import METHOD_SITEMAP_URL, MethodClient, guide_ref_parts, load_method_cache_settings_from_env
-from method_cli.page_parser import UNSUPPORTED_ROOT_GUIDE_SLUGS, classify_guide_family
+from method_cli.page_parser import UNSUPPORTED_ROOT_GUIDE_SLUGS, classify_guide_family, guide_url
 
 PROVIDER_NAME: Final = "method"
 PROVIDER_LABEL: Final = "Method"
 # Method guide titles are short, so an all-terms hit is worth less here than on long article titles.
 MATCH_WEIGHTS: Final = ArticleMatchWeights(all_terms=8)
 QUERY_NOISE_TERMS: Final = ("method", "guide", "guides")
-# Method never writes "Mythic+" or "Mythic Plus": its M+ pages are about "mythic dungeons", so every
-# spelling of M+ reads as "mythic dungeon".
-MYTHIC_PLUS_RE: Final = re.compile(r"\bm(?:ythic)?(?:\s*\+|\s+plus\b)")
 FAMILY_SCORE_BOOST: Final = 12
 FAMILY_QUERY_KEYWORDS: Final[dict[str, frozenset[str]]] = {
     "profession_guide": frozenset(
@@ -79,6 +77,16 @@ FAMILY_QUERY_KEYWORDS: Final[dict[str, frozenset[str]]] = {
     ),
     "delve_guide": frozenset({"delve", "delves"}),
     "reputation_guide": frozenset({"renown", "reputation"}),
+}
+# Words naming a section every Method class guide has (``/guides/<spec>/<section>``), mapped to its slug.
+# A class guide is titled by its spec alone, so ``arcane mage talents`` matched nothing: the word is
+# scored away for class guides and the row's follow-up opens that section.
+SECTION_QUERY_TERMS: Final[dict[str, str]] = {
+    **dict.fromkeys(("talent", "talents", "build", "builds"), "talents"),
+    **dict.fromkeys(("gear", "gearing", "bis"), "gearing"),
+    **dict.fromkeys(("stat", "stats", "race", "races", "consumables", "enchants", "gems"), "stats-races-and-consumables"),
+    **dict.fromkeys(("rotation", "playstyle", "opener", "openers"), "playstyle-and-rotation"),
+    **dict.fromkeys(("interface", "macro", "macros", "ui", "addons"), "interface-and-macros"),
 }
 # (hint code, query terms that must all be present, message) for roots we intentionally exclude from discovery.
 UNSUPPORTED_QUERY_HINTS: Final[tuple[tuple[str, frozenset[str], str], ...]] = (
@@ -180,7 +188,30 @@ def _scored_candidate(row: dict[str, Any], normalized_query: str, terms: set[str
     return candidate_row
 
 
+def _section_candidate(row: dict[str, Any], spelling: str, section: str) -> dict[str, Any] | None:
+    """A class guide matched on ``spelling`` without its section words, following up with that section."""
+    if classify_guide_family(row["slug"]) != "class_guide":
+        return None
+    kept = " ".join(word for word in spelling.split() if word not in SECTION_QUERY_TERMS)
+    candidate = _scored_candidate(row, kept, set(tokenize_query(kept)))
+    if candidate is None:
+        return None
+    ref = f"{row['slug']}/{section}"
+    candidate["ranking"]["match_reasons"].append("section_query")
+    candidate["metadata"]["section_slug"] = section
+    candidate.update(url=guide_url(row["slug"], section), follow_up=article_follow_up(PROVIDER_NAME, ref))
+    return candidate
+
+
+def _query_section(normalized_query: str) -> str | None:
+    """The class-guide section a query names, when it also names something besides sections."""
+    words = normalized_query.split()
+    sections = [SECTION_QUERY_TERMS[word] for word in words if word in SECTION_QUERY_TERMS]
+    return sections[0] if sections and len(sections) < len(words) else None
+
+
 def _normalize_search_query(query: str) -> str:
+    # Method never writes "Mythic+" or "Mythic Plus": its M+ pages are about "mythic dungeons".
     return normalize_query(
         fold_punctuation(MYTHIC_PLUS_RE.sub("mythic dungeon", expand_class_spec_aliases(query))), strip_terms=QUERY_NOISE_TERMS
     )
@@ -193,10 +224,17 @@ def search_results(client: MethodClient, query: str) -> SearchOutcome:
     if scope_hint is not None:
         return SearchOutcome(normalized_query, [], scope_hint)
     spellings = [(spelling, set(tokenize_query(spelling))) for spelling in map(_normalize_search_query, punctuation_spellings(query))]
+    section = _query_section(normalized_query)
     matches = [
         candidate
         for candidate in (
-            best_scored(_scored_candidate(row, spelling, terms) for spelling, terms in spellings) for row in client.sitemap_guides()
+            best_scored(
+                [
+                    *(_scored_candidate(row, spelling, terms) for spelling, terms in spellings),
+                    *(_section_candidate(row, spelling, section) for spelling, _ in spellings if section),
+                ]
+            )
+            for row in client.sitemap_guides()
         )
         if candidate is not None
     ]
@@ -323,7 +361,7 @@ def guide_full(guide_ref: str) -> Envelope:
 
 
 def guide_export(guide_ref: str, *, out: Path | None = None) -> Envelope:
-    """Write every page of a Method guide to a local bundle directory and return its manifest."""
+    """Write every page of a Method guide to a local bundle directory and return its counts and file list."""
     try:
         slug, _section_slug = guide_ref_parts(guide_ref)
     except ValueError as exc:
@@ -381,7 +419,8 @@ class MethodProvider:
             provider_command=PROVIDER_NAME,
             query=target,
             search_query=outcome.normalized_query,
-            results=outcome.matches[:limit],
+            matches=outcome.matches,
+            limit=limit,
             total_count=len(outcome.matches),
             # Judged on every match: ``--limit`` must not hide the near-tied rival that makes it ambiguous.
             resolved=_is_confident_match(outcome.matches),

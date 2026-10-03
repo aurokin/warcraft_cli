@@ -38,7 +38,8 @@ def test_doctor_reports_scaffold_auth_and_capabilities() -> None:
     payload = json.loads(result.stdout)
     assert payload["ok"] is True
     assert payload["provider"] == "blizzard-api"
-    assert payload["data"]["status"] == "partial"
+    # No credentials in the hermetic env: every read is blocked, so the provider is degraded.
+    assert payload["data"]["status"] == "degraded"
     assert payload["data"]["installed"] is True
     auth = payload["data"]["auth"]
     assert auth["required"] is True
@@ -56,8 +57,9 @@ def test_doctor_reports_scaffold_auth_and_capabilities() -> None:
     assert capabilities["doctor"] == "ready"
     assert capabilities["search"] == "coming_soon"
     assert capabilities["resolve"] == "coming_soon"
-    assert capabilities["game_data"] == "ready"
-    assert capabilities["profile"] == "ready"
+    assert capabilities["game_data"] == "requires_client_credentials"
+    assert capabilities["profile"] == "requires_client_credentials"
+    assert payload["data"]["cache"]["ttls"] == {"static": 86400, "dynamic_and_profile": 900}
     region = payload["data"]["region"]
     assert region["routing"] == "ready"
     assert region["configured"] is None
@@ -70,6 +72,14 @@ def test_doctor_reports_scaffold_auth_and_capabilities() -> None:
     assert region["verification"]["unverified_regions"] == ["cn"]
     assert "CN routing" in region["verification"]["note"]
     assert payload["data"]["notes"]
+
+
+def test_doctor_is_ready_once_client_credentials_are_configured(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BLIZZARD_CLIENT_ID", "test-id")
+    monkeypatch.setenv("BLIZZARD_CLIENT_SECRET", "test-secret")
+    data = json.loads(runner.invoke(app, ["doctor"]).stdout)["data"]
+    assert data["status"] == "ready"
+    assert (data["capabilities"]["game_data"], data["capabilities"]["profile"]) == ("ready", "ready")
 
 
 def test_doctor_surfaces_configured_region(monkeypatch: pytest.MonkeyPatch) -> None:

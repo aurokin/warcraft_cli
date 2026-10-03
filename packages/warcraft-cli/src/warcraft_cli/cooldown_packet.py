@@ -201,14 +201,24 @@ def _sample_for_fight(
     spell_catalog: dict[int, dict[str, Any]],
     boss_catalog: dict[int, dict[str, Any]],
     spell_ids: set[int],
+    encounter_has_phases: bool,
 ) -> dict[str, Any] | None:
-    """One top-parse comparison row, or ``None`` when the fight has no usable player."""
+    """One top-parse comparison row, or ``None`` when the fight has no usable player.
+
+    Lorrgs spec-ranking fights often carry no phase markers. Their single whole-fight window only
+    stands for a phase when nothing shows the encounter has several, so on a multi-phase encounter a
+    marker-less top parse gets no window instead of the whole fight's casts.
+    """
     players = as_list(fight.get("players"))
     player = next((row for row in players if isinstance(row, dict)), None)
     if player is None:
         return None
     windows = build_phase_windows(as_list(fight.get("phases")), fight.get("duration"))
-    window = selected_phase_window(windows, phase)
+    no_markers = len(windows) == 1 and encounter_has_phases
+    window = None if no_markers else selected_phase_window(windows, phase)
+    unavailable_reason = None
+    if window is None:
+        unavailable_reason = "top_parse_has_no_phase_markers" if no_markers else "phase_not_in_top_parse"
     raw_boss = fight.get("boss")
     boss: dict[str, Any] = as_dict(raw_boss)
     casts: list[dict[str, Any]] = []
@@ -225,6 +235,7 @@ def _sample_for_fight(
         "duration_ms": fight.get("duration"),
         "phase_window": window,
         "phase_available": window is not None,
+        "phase_unavailable_reason": unavailable_reason,
         "player": {
             "name": player.get("name"),
             "source_id": player.get("source_id"),
@@ -234,6 +245,16 @@ def _sample_for_fight(
         "selected_phase_casts": casts,
         "selected_phase_boss_casts": boss_casts,
     }
+
+
+def _any_fight_has_phase_markers(reports: list[Any]) -> bool:
+    return any(
+        len(build_phase_windows(as_list(fight.get("phases")), fight.get("duration"))) > 1
+        for report in reports
+        if isinstance(report, dict)
+        for fight in as_list(report.get("fights"))
+        if isinstance(fight, dict)
+    )
 
 
 def _record_sample_spells(casts: list[dict[str, Any]], frequency: Counter[int], total_casts: Counter[int]) -> None:
@@ -257,11 +278,25 @@ def top_parse_samples(
     spell_catalog: dict[int, dict[str, Any]],
     boss_catalog: dict[int, dict[str, Any]],
     spell_ids: set[int],
+    player_phase_count: int,
 ) -> dict[str, Any]:
+    """Top-parse samples for the selected phase.
+
+    ``status`` is ``no_phase_data`` when samples were read but none has a window for the phase, and
+    ``sample_fraction`` counts only the samples that have one (``phase_sample_count``). The encounter
+    has several phases when the player's fight or any top-parse fight shows more than one window.
+    """
     if ranking_data is None:
-        return {"status": "unavailable", "sample_count": 0, "samples": [], "selected_phase_spell_frequency": []}
+        return {
+            "status": "unavailable",
+            "sample_count": 0,
+            "phase_sample_count": 0,
+            "samples": [],
+            "selected_phase_spell_frequency": [],
+        }
     data: dict[str, Any] = as_dict(ranking_data)
     reports = as_list(data.get("reports"))
+    encounter_has_phases = player_phase_count > 1 or _any_fight_has_phase_markers(reports)
     samples: list[dict[str, Any]] = []
     frequency: Counter[int] = Counter()
     total_casts: Counter[int] = Counter()
@@ -282,21 +317,24 @@ def top_parse_samples(
                 spell_catalog=spell_catalog,
                 boss_catalog=boss_catalog,
                 spell_ids=spell_ids,
+                encounter_has_phases=encounter_has_phases,
             )
             if sample is None:
                 continue
             _record_sample_spells(sample["selected_phase_casts"], frequency, total_casts)
             samples.append(sample)
+    phase_sample_count = sum(1 for sample in samples if sample["phase_available"])
     return {
-        "status": "ready",
+        "status": "no_phase_data" if samples and not phase_sample_count else "ready",
         "sample_count": len(samples),
+        "phase_sample_count": phase_sample_count,
         "available_report_count": len(reports),
         "samples": samples,
         "selected_phase_spell_frequency": _frequency_rows(
             frequency,
             total_casts=total_casts,
             catalog=spell_catalog,
-            denominator=max(1, len(samples)),
+            denominator=max(1, phase_sample_count),
         ),
     }
 

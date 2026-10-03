@@ -24,6 +24,7 @@ DEFAULT_CHARACTER_FIELDS = ",".join(
         "mythic_plus_scores_by_season:current",
         "mythic_plus_ranks",
         "mythic_plus_recent_runs",
+        "mythic_plus_best_runs",
     )
 )
 DEFAULT_GUILD_FIELDS = ",".join(("raid_progression", "raid_rankings", "members"))
@@ -165,8 +166,11 @@ class RaiderIOClient:
             return
         self._cache_store.set(key, {"fetched_at": fetched.fetched_at, "payload": fetched.payload}, ttl_seconds=ttl_seconds)
 
-    def _get_json(self, url: str, *, params: dict[str, Any], namespace: str, ttl_seconds: int) -> FetchedJson:
-        key = self._cache_key(namespace, params)
+    def _get_json(
+        self, url: str, *, params: dict[str, Any], namespace: str, ttl_seconds: int, key_params: dict[str, Any] | None = None
+    ) -> FetchedJson:
+        """GET one Raider.IO JSON object, cached under ``key_params`` (``params`` when not given)."""
+        key = self._cache_key(namespace, params if key_params is None else key_params)
         cached = self._read_cache(key)
         if cached is not None:
             return cached
@@ -189,7 +193,11 @@ class RaiderIOClient:
         per lookup is enough.
         """
         params = {"region": profile_region(region), "realm": primary_realm_slug(realm), "name": normalize_name(name), "fields": fields}
-        return self._get_json(f"{RAIDERIO_BASE_URL}/{path}", params=params, namespace=namespace, ttl_seconds=ttl_seconds)
+        # Names are case-insensitive upstream, so `Ellesmereiv` and `ellesmereiv` share one cache entry.
+        key_params = {**params, "name": params["name"].lower()}
+        return self._get_json(
+            f"{RAIDERIO_BASE_URL}/{path}", params=params, namespace=namespace, ttl_seconds=ttl_seconds, key_params=key_params
+        )
 
     def character_profile(self, *, region: str, realm: str, name: str, fields: str = DEFAULT_CHARACTER_FIELDS) -> FetchedJson:
         """One character profile plus its fetch time."""
@@ -274,6 +282,24 @@ class RaiderIOClient:
             params={"expansion_id": expansion_id},
             namespace="raid_static_data",
             ttl_seconds=self._static_ttl,
+        )
+
+    def mythic_plus_static_data(self, *, expansion_id: int) -> FetchedJson:
+        """Mythic+ seasons (with their dungeon pools) and dungeons for one expansion."""
+        return self._get_json(
+            f"{RAIDERIO_BASE_URL}/mythic-plus/static-data",
+            params={"expansion_id": expansion_id},
+            namespace="mythic_plus_static_data",
+            ttl_seconds=self._static_ttl,
+        )
+
+    def mythic_plus_affixes(self, *, region: str) -> FetchedJson:
+        """This week's Mythic+ affixes in one region; cached like a leaderboard page, since they rotate weekly."""
+        return self._get_json(
+            f"{RAIDERIO_BASE_URL}/mythic-plus/affixes",
+            params={"region": region, "locale": "en"},
+            namespace="mythic_plus_affixes",
+            ttl_seconds=self._mplus_runs_ttl,
         )
 
     def search(self, *, term: str, kind: str | None = None) -> dict[str, Any]:

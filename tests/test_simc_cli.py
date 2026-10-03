@@ -11,6 +11,7 @@ import pytest
 import simc_cli.compare as simc_compare
 import simc_cli.main as simc_main
 from simc_cli.build_input import BuildIdentity, BuildResolution, BuildSpec, DecodedTalent, HeroTree, SimcBuildError
+from simc_cli.compare import DEFAULT_GEAR_DISCLOSURE
 from simc_cli.main import app as simc_app
 from simc_cli.prune import PruneContext
 from simc_cli.repo import RepoPaths
@@ -3441,6 +3442,8 @@ def test_simc_build_harness_compare_report_and_verify_clean(monkeypatch, tmp_pat
     assert build_payload["kind"] == "build_harness"
     assert build_payload["data"]["path"] == str(harness_path)
     assert harness_path.exists()
+    # The harness wears SimC's default gear, so its absolute DPS is not a real character's.
+    assert build_payload["data"]["disclosures"] == [DEFAULT_GEAR_DISCLOSURE]
 
     apl = tmp_path / "variant.simc"
     apl.write_text("actions=shadow_bolt\n")
@@ -4024,6 +4027,7 @@ def test_simc_sim_uses_quick_preset_and_surfaces_run_metadata(monkeypatch, tmp_p
     assert payload["data"]["simc_version"] == "SimulationCraft 1201-01"
     assert payload["data"]["game_version"] == "12.0.1.66263"
     assert payload["data"]["json_report_path"] is None
+    assert payload["data"]["disclosures"] == []
 
 
 def test_simc_sim_reads_stdin_and_respects_overrides(monkeypatch, tmp_path: Path) -> None:
@@ -4078,10 +4082,11 @@ def test_simc_sim_reads_stdin_and_respects_overrides(monkeypatch, tmp_path: Path
         simc_app,
         [*_checkout_args(tmp_path), "sim", "-", "--preset", "high-accuracy", "--iterations", "6000", "--max-time", "180", "--fight-style",
             "HecticAddCleave", "--targets", "5", "--threads", "4", "--vary-combat-length", "0.1"],
-        input='paladin="stdin-example"\n',
+        input='paladin="stdin-example"\nload_default_gear=1\n',
     )
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
+    assert payload["data"]["disclosures"] == [DEFAULT_GEAR_DISCLOSURE]
     assert payload["data"]["preset"] == "high-accuracy"
     assert payload["data"]["input_source"] == "stdin"
     assert payload["data"]["profile_path"] is None

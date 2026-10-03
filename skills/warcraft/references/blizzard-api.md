@@ -17,7 +17,8 @@ confirmed against the live API for `us`, `eu`, `kr`, and `tw` (`provenance.verif
 - a realm: `warcraft blizzard realm <slug>` (e.g. `illidan`)
 - an item: `warcraft blizzard item <id>` (e.g. `19019`)
 - a character: `warcraft blizzard character <realm> <name>` (retail only)
-- realms may be a slug or a display name (`malganis`, `Mal'Ganis`, `Tarren Mill`)
+- realms may be a slug or a display name (`malganis`, `Mal'Ganis`, `Tarren Mill`), including a
+  native-script name (`Ревущий фьорд`, `아즈샤라`), which is looked up in the realm index
 
 ## Auth
 
@@ -28,8 +29,12 @@ confirmed against the live API for `us`, `eu`, `kr`, and `tw` (`provenance.verif
 
 ## Effective Use
 
-- pick a region with `--region` (`us`/`eu`/`kr`/`tw`/`cn`, plus aliases like `na`); defaults to
-  `BLIZZARD_REGION`, else `us`
+- pick a region with `--region` (`us`/`eu`/`kr`/`tw`/`cn`, plus aliases like `na`; `oce` reads
+  `us`, where Oceanic realms live); defaults to `BLIZZARD_REGION`, else `us`
+- envelopes say `provider: "blizzard-api"`, but the command is `blizzard` (`warcraft blizzard ...`);
+  there is no `warcraft blizzard-api` command
+- `provenance.cache_hit` says the answer was replayed from cache; it can be up to
+  `provenance.cache_ttl_seconds` old (a day for items, 15 minutes for realms and characters)
 - use `--game-version classic` (or the `--classic` shorthand) for classic namespaces; character
   profiles are retail-only
 - `--locale` passes through (default `en_US`)

@@ -92,8 +92,9 @@ title. Two reference types are emitted:
 | `wowhead_talent_calc_url` | an embedded Wowhead talent-calc link | the talent-calc URL |
 | `wow_talent_export` | a published WoW loadout import string (the `Copy` blocks on the talents pages) | the import string itself, because the reference has no link |
 
-Both types set `build_code`, so `warcraft guide-builds-simc` collects either one and reports it
-under `summary.identify_success_count`. Decoding needs a class and a spec, and the two types supply
+Both types set `build_code`, so `warcraft guide-builds-simc` collects either one. It counts the
+build in `summary.identify_success_count` only when simc identifies one class and spec; otherwise the
+identify leg fails `build_not_identified`. Decoding needs a class and a spec, and the two types supply
 them differently:
 
 - `wowhead_talent_calc_url` always decodes unaided: its URL path names the class and spec.
@@ -181,12 +182,16 @@ Patch notes, class-change roundups, hotfix posts, and news pages are out of scop
 misleading guide matches.
 
 `search` and `resolve` return a guide only when its name or slug contains the whole query or every
-query word, or when a query word names the guide's family (`talents`, `stats`, `easy mode`, ...). One
+query word, or when a query word names the guide's family (`talents`, `stats`, `easy mode`, ...). A
+family word ranks a guide only when the guide also matches one of the query's other words (role words
+such as `dps` aside), so `mythic+ tier list` lists the tier lists rather than every spec's Mythic+
+tips page, and `alchemy leveling` the alchemy page rather than every leveling guide. One
 word that no guide contains therefore empties the result. Words match whole, so `dh` does not match
 "headhunters", and a trailing plural `s` or `es` is ignored on both sides, so `build` keeps the
-`...-spec-builds-talents` pages and `boss` the "world bosses" guide. Words such as `a`, `of` and `the` are ignored, and `+` reads as
-`plus`, so `mythic+` finds the "Mythic Plus" pages and the seasonal
-`<expansion>-mythic-season-<n>-guide` pages. Punctuation is folded the way slugs fold it: any
+`...-spec-builds-talents` pages and `boss` the "world bosses" guide. Words such as `a`, `of` and `the` are ignored. Every Mythic+ spelling
+(`m+`, `m plus`, `mythic+`) reads as `mythic plus`, in the query and in page titles alike, so it finds
+the "Mythic Plus" pages, the "Mythic+ ... Tier List" pages and the seasonal
+`<expansion>-mythic-season-<n>-guide` pages; any other `+` reads as `plus`. Punctuation is folded the way slugs fold it: any
 separator other than an apostrophe is a space, and the query is tried with each apostrophe dropped
 and as a space (`K'aresh` is `karesh`, `Zul'Aman` is `zul-aman`). A hyphenated word is also tried
 with its hyphen dropped, so `Nerub-ar Palace` resolves to `nerubar-palace-raid-guide`
@@ -203,6 +208,9 @@ share the word, so `shadow` lists the Shadow Priest guide before the Shadow Encl
 `--limit 1` never makes an ambiguous query look resolved. It never picks between candidates with the
 same or nearly the same score, so a spec name that
 several classes share (`frost`, `holy`, `protection`, `restoration`) stays unresolved; add the class.
+An unresolved `resolve` reports `confidence: "low"` when its top candidates tie on score and
+`"medium"` otherwise. `search` and `resolve` report `count` as every match and `truncated: true` when
+`--limit` cut the list.
 The one exception is a query that is a page's exact title (`exact_title`) when every close rival is
 one of that page's own sub-pages, by slug prefix or by the breadcrumb parent the site index records:
 `player housing` resolves to `player-housing-guide` over `player-housing-interior-guide` and
@@ -268,22 +276,30 @@ The crawl:
 
 - starts at `death-knight-guide`, follows every link in the site-wide menu, and follows any link on a
   fetched page to a `/wow/<slug>` page the sitemap does not list, recursively; a page the sitemap
-  lists is not fetched. It then re-reads the previous index's other pages, least recently seen first.
+  lists is not fetched, and neither is a page the previous index holds, so a capped run spends its
+  requests on pages it has never seen. It then re-reads the previous index's pages, least recently
+  seen first; a link found on a re-read page is followed before the next re-read.
 - waits at least 1 second between requests (longer when `WARCRAFT_HTTP_MIN_INTERVAL_SECONDS` asks) and
-  never retries. A guide page cached by an earlier `guide` call is reused and costs no request.
-- stops at `--max-requests` uncached requests (default 250; a full run measured 241 requests in 4
-  minutes on 2026-10-03). The run is then `partial` with `stop_reason: "max_requests"`, and the
+  never retries. A guide page cached by an earlier `guide` call or crawl is reused and costs no
+  request, and every page the crawl reads is cached for `ICY_VEINS_PAGE_CACHE_TTL_SECONDS`.
+- stops at `--max-requests` uncached requests (default 250; a full run costs one request per indexed
+  page plus one per new page, 243 over the bundled snapshot, about 4 minutes). The run is then `partial` with `stop_reason: "max_requests"`, and the
   pages it found but did not fetch are kept as the index's `frontier`, which the next run fetches
-  first.
+  first. The re-reads it did not reach wait for the next run, which starts with them because they
+  are the least recently seen.
 - stops at the first 403, 429 or Cloudflare challenge (`cf-mitigated: challenge`) with
   `stop_reason: "blocked"` and `data.blocked: {url, status, challenge}`, and does not retry around it.
+- stops after 3 server errors (5xx) or transport failures in a row with `stop_reason: "unavailable"`,
+  keeping the newly found pages among them in the `frontier`; other failures are listed in
+  `data.errors` and the crawl goes on.
 - drops a page that answers 404 from the index and records a 301 as a redirect row naming the new
   slug.
 
 Every run merges into the previous index and never replaces it: a page the crawl did not reach again
 keeps its row, so past-season pages stay findable after current pages stop linking them. What a
-partial or blocked run read is merged too, but a blocked run keeps the index's previous
-`refreshed_at` (so its age warning stands) and writes nothing when it read nothing. A seed page that lists no links (a layout change) fails as
+partial, blocked or unavailable run read is merged too, but a blocked or unavailable run keeps the
+index's previous `refreshed_at` (so its age warning stands), and a run that read nothing writes
+nothing. A seed page that lists no links (a layout change) fails as
 `parse_failed` (exit 1) and leaves the index untouched; an unreachable seed fails as `network_error`
 (exit 5).
 
@@ -303,15 +319,10 @@ The package ships `icy_veins_cli/data/site_index.json`, an index built by a full
 2026-10-03 (243 pages, 147 of them missing from the sitemap). Search and `index-refresh` use it
 until you have a local index, so every user finds the current season's pages without crawling, and
 your first `index-refresh` merges into it. `icy-veins doctor` reports the index in use under
-`site_index`. To regenerate the snapshot from a checkout:
-
-```bash
-tmp=$(mktemp -d)
-XDG_DATA_HOME="$tmp" uv run icy-veins index-refresh
-cp "$tmp/warcraft/icy-veins/site_index.json" packages/icy-veins-cli/src/icy_veins_cli/data/site_index.json
-```
-
-The run starts from the current snapshot, so pages it holds are kept.
+`site_index`. To regenerate the snapshot from a checkout, run `make icy-veins-snapshot`: a live
+`index-refresh --max-requests 400` into a temporary data root that replaces the snapshot only when
+the run was complete, and fails with its `stop_reason` otherwise. The run starts from the current
+snapshot, so pages it holds are kept. Update the page counts above by hand afterwards.
 
 ## Caching
 

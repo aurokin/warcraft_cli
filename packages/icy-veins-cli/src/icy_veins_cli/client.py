@@ -85,7 +85,8 @@ class IcyVeinsClient(GuideSiteClient):
     def crawl_fetch(self, url: str) -> FetchResult:
         """One ``index-refresh`` fetch: a cached guide page when there is one, else a single paced request.
 
-        Never retried, 429 included: a site that has started refusing a crawler is left alone.
+        Never retried, 429 included: a site that has started refusing a crawler is left alone. A page
+        read is cached like ``guide_page_html`` caches it, so search and guide reuse it.
         """
         cached = self.cached_page_html(url)
         if cached is not None:
@@ -96,4 +97,7 @@ class IcyVeinsClient(GuideSiteClient):
             return FetchResult(exc.response.status_code, challenge=_challenged(exc.response))
         except httpx.RequestError as exc:
             return FetchResult(0, error=f"{type(exc).__name__}: {exc}")
-        return FetchResult(response.status_code, response.text, challenge=_challenged(response))
+        challenge = _challenged(response)
+        if response.status_code == 200 and not challenge:
+            self.cache_page_html(url, response.text)
+        return FetchResult(response.status_code, response.text, challenge=challenge)

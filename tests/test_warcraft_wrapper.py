@@ -463,7 +463,7 @@ def test_warcraft_doctor_reports_ready_and_stubbed_providers() -> None:
     assert providers["curseforge"]["auth"]["flow"] == "api_key"
     assert providers["curseforge"]["expansion_support"]["mode"] == "none"
     assert providers["curseforge"]["wrapper_surfaces"]["search"]["status"] == "coming_soon"
-    assert providers["curseforge"]["details"]["data"]["capabilities"]["addon"] == "ready"
+    assert providers["curseforge"]["details"]["data"]["capabilities"]["addon"] == "requires_api_key"
     assert providers["lorrgs"]["status"] == "partial"
     assert providers["lorrgs"]["auth"]["required"] is False
     assert providers["lorrgs"]["expansion_support"]["mode"] == "fixed"
@@ -2746,17 +2746,115 @@ def test_cooldown_packet_combines_lorrgs_phase_data_with_warcraftlogs_casts(monk
     assert [cast["timestamp_ms"] for cast in comparison["samples"][0]["selected_phase_casts"]] == [1500, 2000]
     assert comparison["samples"][0]["phase_available"] is True
     assert comparison["samples"][1]["phase_available"] is False
+    assert comparison["samples"][1]["phase_unavailable_reason"] == "top_parse_has_no_phase_markers"
     assert comparison["samples"][1]["selected_phase_casts"] == []
-    # A spell counts once per sample that cast it; sample_fraction is over the samples taken.
+    # A spell counts once per sample that cast it; sample_fraction is over the samples with the phase.
+    assert comparison["phase_sample_count"] == 1
     assert [
         (row["spell"]["name"], row["sample_count"], row["sample_fraction"], row["total_casts"])
         for row in comparison["selected_phase_spell_frequency"]
-    ] == [("Avatar", 1, 0.5, 2)]
+    ] == [("Avatar", 1, 1.0, 2)]
+    assert any("Some top-parse samples have no window" in note for note in payload["data"]["notes"])
     assert ("lorrgs", ["user-report-fights", "https://www.warcraftlogs.com/reports/abcd1234?fight=22&type=damage-done", "--fight", "22", "--type", "damage-done"]) in calls
     assert ("warcraftlogs", ["report-events", "abcd1234", "--fight-id", "22", "--source-id", "89", "--data-type", "casts", "--limit", "5000"]) in calls
     # No --difficulty: the comparison uses the Warcraft Logs fight's own (5 = mythic).
     assert ("lorrgs", ["spec-ranking", "warrior-protection", "lura", "--difficulty", "mythic"]) in calls
     assert payload["query"]["difficulty"] == "mythic"
+
+
+def test_cooldown_packet_does_not_compare_a_phase_with_a_marker_less_top_parse_fight(monkeypatch) -> None:
+    """The marker-less top parse has one whole-fight window; it is not the player's P1 of a three-phase fight."""
+    monkeypatch.setattr("warcraft_cli.main.provider_invoke", _cooldown_packet_invoke([]))
+
+    result = runner.invoke(warcraft_app, [*_cooldown_packet_args()[:-1], "1", "--sample-limit", "2"])
+
+    assert result.exit_code == 0, result.output
+    samples = json.loads(result.stdout)["data"]["comparison"]["samples"]
+    assert [(sample["phase_available"], sample["phase_unavailable_reason"]) for sample in samples] == [
+        (True, None),
+        (False, "top_parse_has_no_phase_markers"),
+    ]
+    assert samples[1]["phase_window"] is None
+    assert samples[1]["selected_phase_casts"] == []
+
+
+def test_cooldown_packet_says_so_when_no_top_parse_sample_has_the_phase(monkeypatch) -> None:
+    """Lorrgs ranking fights with ``phases: null`` give no P2 window, so the comparison is not ``ready``."""
+    invoke = _cooldown_packet_invoke([])
+
+    def marker_less_ranking(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, object]:
+        response = invoke(provider, args, expansion=expansion)
+        if args[:1] == ["spec-ranking"]:
+            for report in response["payload"]["data"]["reports"]:  # type: ignore[index]
+                for fight in report["fights"]:
+                    fight["phases"] = None
+        return response
+
+    monkeypatch.setattr("warcraft_cli.main.provider_invoke", marker_less_ranking)
+
+    result = runner.invoke(warcraft_app, [*_cooldown_packet_args(), "--sample-limit", "2"])
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.stdout)["data"]
+    comparison = data["comparison"]
+    assert (comparison["status"], comparison["reason"]) == ("no_phase_data", "top_parse_has_no_phase_markers")
+    assert (comparison["sample_count"], comparison["phase_sample_count"]) == (2, 0)
+    assert comparison["selected_phase_spell_frequency"] == []
+    assert any("No top-parse sample has a P2 window" in note for note in data["notes"])
+    assert not any("Top-parse samples are comparison evidence" in note for note in data["notes"])
+
+
+def _cooldown_invoke_with_fights(command: str, phases: list[dict[str, int]]) -> Callable[..., dict[str, object]]:
+    """The cooldown-packet fixture with every fight of one lorrgs ``command`` given ``phases``."""
+    invoke = _cooldown_packet_invoke([])
+
+    def mutated(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, object]:
+        response = invoke(provider, args, expansion=expansion)
+        if provider == "lorrgs" and args[:1] == [command]:
+            data = response["payload"]["data"]  # type: ignore[index]
+            for fight in data.get("fights") or [fight for report in data["reports"] for fight in report["fights"]]:
+                fight["phases"] = phases
+        return response
+
+    return mutated
+
+
+def test_cooldown_packet_names_the_reason_when_top_parses_end_before_the_phase(monkeypatch) -> None:
+    """Top parses with markers but no third window are not called marker-less."""
+    monkeypatch.setattr("warcraft_cli.main.provider_invoke", _cooldown_invoke_with_fights("spec-ranking", [{"ts": 1200}]))
+
+    result = runner.invoke(warcraft_app, [*_cooldown_packet_args()[:-1], "3", "--sample-limit", "2"])
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.stdout)["data"]
+    comparison = data["comparison"]
+    assert (comparison["status"], comparison["reason"]) == ("no_phase_data", "phase_not_in_top_parse")
+    assert not any("often carry no phase markers" in note for note in data["notes"])
+
+
+def test_cooldown_packet_does_not_use_a_marker_less_top_parse_for_a_single_window_player_fight(monkeypatch) -> None:
+    """A P1 wipe has one window, but another top parse shows the encounter has phases, so the
+    marker-less top parse's whole fight is not its P1."""
+    monkeypatch.setattr("warcraft_cli.main.provider_invoke", _cooldown_invoke_with_fights("user-report-fights", []))
+
+    result = runner.invoke(warcraft_app, [*_cooldown_packet_args()[:-1], "1", "--sample-limit", "2"])
+
+    assert result.exit_code == 0, result.output
+    samples = json.loads(result.stdout)["data"]["comparison"]["samples"]
+    assert [(sample["phase_available"], sample["phase_unavailable_reason"]) for sample in samples] == [
+        (True, None),
+        (False, "top_parse_has_no_phase_markers"),
+    ]
+
+
+def test_cooldown_packet_unavailable_comparison_reports_zero_phase_samples(monkeypatch) -> None:
+    monkeypatch.setattr("warcraft_cli.main.provider_invoke", _cooldown_packet_invoke([]))
+
+    result = runner.invoke(warcraft_app, [*_cooldown_packet_args(), "--sample-limit", "0"])
+
+    assert result.exit_code == 0, result.output
+    comparison = json.loads(result.stdout)["data"]["comparison"]
+    assert (comparison["status"], comparison["phase_sample_count"]) == ("unavailable", 0)
 
 
 def _cooldown_packet_args() -> list[str]:
@@ -6159,6 +6257,50 @@ def test_guide_builds_simc_stays_ok_when_one_requested_leg_still_produced_output
     assert summary["simc_handoff_status"] == "failed"
 
 
+def test_guide_builds_simc_does_not_count_an_unidentified_build_as_identified(monkeypatch, tmp_path) -> None:
+    """identify-build exits 0 with confidence none for a hash no spec decodes; that is a failed leg."""
+    bundle = _guide_bundle(tmp_path, build_code="ABC123")
+
+    def unidentified(command: str, build: PacketInput | str, *, describe: DescribeOptions | None = None) -> dict[str, object]:
+        if command == "identify-build":
+            identity = {"actor_class": None, "spec": None, "confidence": "none", "candidate_count": 0}
+            return _simc_result(_envelope({"kind": "identify_build", "identity": identity}))
+        return _simc_result({"ok": True})
+
+    monkeypatch.setattr("warcraft_cli.main.simc_call", unidentified)
+
+    result = runner.invoke(warcraft_app, ["guide-builds-simc", str(bundle)])
+    assert result.exit_code == 0, result.output
+
+    data = json.loads(result.stdout)["data"]
+    assert data["summary"]["identify_success_count"] == 0
+    assert data["summary"]["empty_requested_legs"] == ["identify"]
+    assert data["summary"]["simc_handoff_status"] == "failed"
+    assert [(failure["leg"], failure["code"]) for failure in data["builds"][0]["failures"]] == [
+        ("identify", "build_not_identified")
+    ]
+
+
+def test_guide_builds_simc_blames_the_hashes_when_no_build_is_identified(monkeypatch, tmp_path) -> None:
+    """With only identify requested and no build identified, the run fails, and the error points at
+    the guide hashes rather than at a SimC install that worked."""
+    bundle = _guide_bundle(tmp_path, build_code="ABC123")
+
+    def unidentified(command: str, build: PacketInput | str, *, describe: DescribeOptions | None = None) -> dict[str, object]:
+        identity = {"actor_class": None, "spec": None, "confidence": "none", "candidate_count": 0}
+        return _simc_result(_envelope({"kind": "identify_build", "identity": identity}))
+
+    monkeypatch.setattr("warcraft_cli.main.simc_call", unidentified)
+
+    result = runner.invoke(warcraft_app, ["guide-builds-simc", str(bundle), "--no-decode"])
+
+    assert result.exit_code == 1, result.output
+    error = json.loads(result.stderr)["error"]
+    assert error["code"] == "simc_handoff_failed"
+    assert "build_not_identified" in error["message"]
+    assert "simc doctor" not in error["message"]
+
+
 def test_guide_builds_simc_reports_no_build_references_without_failing(monkeypatch, tmp_path) -> None:
     """An export with nothing to hand off is an explicit empty, not a silent success."""
     bundle = _guide_bundle(tmp_path, build_code=None)
@@ -6989,16 +7131,19 @@ def test_warcraft_resolve_does_not_answer_when_a_better_ranked_candidate_is_unre
         ("wowhead", False), ("warcraft-wiki", True)]
 
 
-def test_warcraft_resolve_reports_the_selected_providers_own_confidence(monkeypatch) -> None:
+def test_warcraft_resolve_does_not_answer_with_a_provider_resolve_at_medium_confidence(monkeypatch) -> None:
+    """Live `lorrgs resolve storm` called a partial boss match resolved at medium; that is not the answer."""
     _stub_resolve_seam(monkeypatch, {
-        "method": {"resolved": True, "confidence": "medium", "match": _match("method", "Mistweaver Monk", "guide", 50),
-                   "next_command": "method guide mistweaver-monk"},
+        "lorrgs": {"resolved": True, "confidence": "medium",
+                   "match": _match("lorrgs", "Composition ranking for Raszageth the Storm-Eater", "comp_ranking", 50),
+                   "next_command": "lorrgs comp-ranking raszageth-the-stormeater"},
     })
 
-    data = json.loads(runner.invoke(warcraft_app, ["resolve", "mistweaver monk guide"]).stdout)["data"]
+    data = json.loads(runner.invoke(warcraft_app, ["resolve", "storm"]).stdout)["data"]
 
-    assert data["selected_provider"] == "method"
-    assert data["confidence"] == "medium"
+    assert (data["resolved"], data["selected_provider"], data["next_command"]) == (False, None, None)
+    assert data["best_unresolved_candidate"]["provider"] == "lorrgs"
+    assert data["best_unresolved_candidate"]["unresolved_reason"] == "provider_confidence_below_high"
 
 
 def test_warcraft_search_forwards_the_requested_limit_to_every_provider(monkeypatch) -> None:

@@ -847,11 +847,11 @@ def _resolve_page_fetch_target(
                 data_env=data_env,
             )
     except ValueError as exc:
-        fail(ctx, "parse_error", str(exc))
+        fail(ctx, "parse_failed", str(exc))
 
     resolved = _parse_tooltip_final_ref(final_url)
     if resolved is None:
-        fail(ctx, "unexpected_response", f"Could not resolve a page target for {entity_type} {entity_id}.")
+        fail(ctx, "invalid_response", f"Could not resolve a page target for {entity_type} {entity_id}.")
     page_entity_type, page_entity_id = resolved
     plan.page_entity_type = page_entity_type
     plan.page_entity_id = page_entity_id
@@ -895,7 +895,7 @@ def _entity_tooltip(client: WowheadClient, plan: EntityAccessPlan, *, data_env: 
                 return client.tooltip_with_metadata(plan.tooltip_entity_type, plan.tooltip_entity_id, data_env=data_env)
             return client.tooltip(plan.tooltip_entity_type, plan.tooltip_entity_id, data_env=data_env), None
     except ValueError as exc:
-        raise ProviderError("parse_error", str(exc)) from exc
+        raise ProviderError("parse_failed", str(exc)) from exc
 
 
 def _tooltip_and_page_plan(
@@ -910,7 +910,7 @@ def _tooltip_and_page_plan(
     if plan.page_from_tooltip_redirect and tooltip_final_url is not None:
         resolved = _parse_tooltip_final_ref(tooltip_final_url)
         if resolved is None:
-            raise ProviderError("unexpected_response", f"Could not resolve a page target for {entity_type} {entity_id}.")
+            raise ProviderError("invalid_response", f"Could not resolve a page target for {entity_type} {entity_id}.")
         plan.page_entity_type, plan.page_entity_id = resolved
     return plan, tooltip
 
@@ -1419,7 +1419,7 @@ def _collect_timeline_pages(
         try:
             rows, extracted_total_pages = extract_page(html)
         except (ValueError, json.JSONDecodeError) as exc:
-            fail(ctx, "parse_error", str(exc))
+            fail(ctx, "parse_failed", str(exc))
 
         if total_pages is None:
             total_pages = extracted_total_pages
@@ -1446,7 +1446,7 @@ def _collect_timeline_pages(
     if (date_from is not None or date_to is not None) and state.parsed_timestamps == 0 and state.unparsed_timestamps:
         fail(
             ctx,
-            "parse_error",
+            "parse_failed",
             f"None of the {state.unparsed_timestamps} scanned Wowhead rows carried a timestamp this "
             "CLI can read, so --date-from/--date-to cannot be applied.",
         )
@@ -3386,7 +3386,7 @@ def news_post(
     canonical_url = absolute_wowhead_url(metadata.get("canonical_url"), fallback=page_url)
     markup = _extract_news_post_markup(html)
     if markup is None:
-        fail(ctx, "parse_error", f"No news article body found at {page_url}.")
+        fail(ctx, "parse_failed", f"No news article body found at {page_url}.")
     sections = extract_guide_sections(markup) if markup else []
     names = entity_names(extract_gatherer_entities(html, source_url=page_url))
     section_chunks = extract_guide_section_chunks(markup, names) if markup else []
@@ -3454,10 +3454,10 @@ def blue_topic(
     try:
         topic_payload = extract_json_script(html, "data.blueTracker.topic")
     except (ValueError, json.JSONDecodeError) as exc:
-        fail(ctx, "parse_error", str(exc))
+        fail(ctx, "parse_failed", str(exc))
     entries = topic_payload.get("entries") if isinstance(topic_payload, dict) else None
     if not isinstance(entries, list):
-        fail(ctx, "unexpected_response", "Missing or invalid blue topic entries payload.")
+        fail(ctx, "invalid_response", "Missing or invalid blue topic entries payload.")
     posts: list[dict[str, Any]] = []
     for row in entries:
         if not isinstance(row, dict):
@@ -3597,7 +3597,7 @@ def guides(
     try:
         rows = extract_listview_data(html, "guides")
     except (ValueError, json.JSONDecodeError) as exc:
-        fail(ctx, "parse_error", str(exc))
+        fail(ctx, "parse_failed", str(exc))
 
     query_text = query.strip() if isinstance(query, str) and query.strip() else None
     normalized_rows = filtered_guide_category_rows(rows, query_text=query_text, filters=filters)
@@ -4065,7 +4065,7 @@ def guide_export(
         dir_okay=True,
         writable=True,
         resolve_path=True,
-        help="Directory to write exported guide assets into. Defaults to ./wowhead_exports/<guide-slug>/",
+        help="Directory to write exported guide assets into. Defaults to ./wowhead_exports/guide-<id>-<title-slug>/",
     ),
     max_links: int = typer.Option(
         250,
@@ -4890,7 +4890,7 @@ def _comments_payload(
     try:
         embedded_comments = extract_comments_dataset(html)
     except ValueError as exc:
-        fail(ctx, "parse_error", str(exc))
+        fail(ctx, "parse_failed", str(exc))
 
     embedded_total = len(embedded_comments)
     filtered_comments, filter_metadata = _selected_comment_rows(embedded_comments, options=options)

@@ -3,11 +3,13 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
+from urllib.parse import unquote, urlparse
 
 import typer
 from warcraft_core.cli import command_path, emit, fail, guarded_run, install_common_callback
 from warcraft_core.provider import ProviderError
 from warcraft_core.shapes import as_dict, as_list
+from warcraft_core.wow_normalization import primary_realm_slug
 
 from raiderio_cli.analytics import (
     analytics_query,
@@ -26,7 +28,7 @@ from raiderio_cli.analytics import (
     threshold_payload,
     validated_metric,
 )
-from raiderio_cli.client import FetchedJson, page_freshness
+from raiderio_cli.client import RAIDERIO_BASE_URL, FetchedJson, page_freshness, validated_region
 from raiderio_cli.identity import raiderio_class_spec_identity
 from raiderio_cli.provider import (
     PROVIDER,
@@ -140,6 +142,19 @@ def _recent_run_summary(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _profile_realm_slug(profile: dict[str, Any]) -> str | None:
+    """Raider.IO's own realm slug, read from ``profile_url`` (``/characters/<region>/<realm>/<name>``).
+
+    Profiles carry only the display name, and slugging that locally is wrong for native-script realms
+    (Raider.IO slugs ``Ревущий фьорд`` as ``howling-fjord``), so the URL is the source of truth.
+    """
+    parts = [part for part in urlparse(str(profile.get("profile_url") or "")).path.split("/") if part]
+    if len(parts) >= 4:
+        return unquote(parts[2])
+    realm = profile.get("realm")
+    return primary_realm_slug(realm) if isinstance(realm, str) and realm.strip() else None
+
+
 def _character_identity(profile: dict[str, Any]) -> dict[str, Any]:
     """Summarize the character's identity block, including the normalized class/spec sibling."""
     class_value = profile.get("class")
@@ -147,7 +162,9 @@ def _character_identity(profile: dict[str, Any]) -> dict[str, Any]:
     return {
         "name": profile.get("name"),
         "region": profile.get("region"),
-        "realm": profile.get("realm"),
+        # `realm` is the slug and `realm_name` the display name, as on search rows.
+        "realm": _profile_realm_slug(profile),
+        "realm_name": profile.get("realm"),
         "race": profile.get("race"),
         "class_name": class_value,
         "active_spec_name": spec_value,
@@ -159,8 +176,9 @@ def _character_identity(profile: dict[str, Any]) -> dict[str, Any]:
 
 
 def _character_mythic_plus(profile: dict[str, Any]) -> dict[str, Any]:
-    """Summarize current-season Mythic+ score, ranks, and the most recent runs."""
-    recent_runs = as_list(profile.get("mythic_plus_recent_runs"))
+    """Summarize current-season Mythic+ score, ranks, the best run per dungeon, and the recent runs."""
+    recent_runs = [_recent_run_summary(row) for row in as_list(profile.get("mythic_plus_recent_runs")) if isinstance(row, dict)]
+    best_runs = [_recent_run_summary(row) for row in as_list(profile.get("mythic_plus_best_runs")) if isinstance(row, dict)]
     scores = as_list(profile.get("mythic_plus_scores_by_season"))
     current = as_dict(scores[0]) if scores else {}
     return {
@@ -168,8 +186,12 @@ def _character_mythic_plus(profile: dict[str, Any]) -> dict[str, Any]:
         "current_score": as_dict(current.get("scores")).get("all"),
         "current_score_color": as_dict(as_dict(current.get("segments")).get("all")).get("color"),
         "ranks": profile.get("mythic_plus_ranks"),
+        # One row per dungeon the character has completed this season (Raider.IO's best run there);
+        # a dungeon missing here has no completed run. `num_chests` 0 means it was not timed.
+        "best_run_count": len(best_runs),
+        "best_runs": best_runs,
         "recent_run_count": len(recent_runs),
-        "recent_runs": [_recent_run_summary(row) for row in recent_runs[:5] if isinstance(row, dict)],
+        "recent_runs": recent_runs,
     }
 
 
@@ -178,12 +200,18 @@ def _character_payload(fetched: FetchedJson, *, cache_ttl_seconds: int) -> dict[
     profile = fetched.payload
     guild = as_dict(profile.get("guild"))
     raid_rows = _raid_progression_summary(as_dict(profile.get("raid_progression")))
+    identity = _character_identity(profile)
+    guild_realm = guild.get("realm")
     return {
-        "character": _character_identity(profile),
-        # Raider.IO's guild block carries no region; a guild is in its member's region.
+        "character": identity,
+        # Raider.IO's guild block carries no region (a guild is in its member's region) and no realm
+        # slug: a guild on the character's realm takes its slug, any other is slugged from its name.
         "guild": {
             "name": guild.get("name"),
-            "realm": guild.get("realm"),
+            "realm": identity["realm"]
+            if guild_realm == profile.get("realm")
+            else (primary_realm_slug(guild_realm) if isinstance(guild_realm, str) else None),
+            "realm_name": guild_realm,
             "region": profile.get("region"),
         }
         if guild
@@ -231,7 +259,8 @@ def _guild_payload(fetched: FetchedJson, *, cache_ttl_seconds: int) -> dict[str,
         "guild": {
             "name": profile.get("name"),
             "region": profile.get("region"),
-            "realm": profile.get("realm"),
+            "realm": _profile_realm_slug(profile),
+            "realm_name": profile.get("realm"),
             "faction": profile.get("faction"),
             "profile_url": profile.get("profile_url"),
             "member_count": len(members),
@@ -439,6 +468,80 @@ def raids(
             static_data, expansion_id=expansion_id, cache_ttl_seconds=client.static_data_ttl_seconds
         )
     emit(ctx, raiderio_envelope(command=command_path(ctx), kind="raid_catalog", payload=payload))
+
+
+@app.command("affixes")
+def affixes(
+    ctx: typer.Context,
+    region: str = typer.Option("us", "--region", help="us, eu, kr, tw, cn, or an alias such as na."),
+) -> None:
+    """Return this week's Mythic+ affixes in one region."""
+    with _command_errors(ctx), open_client() as client:
+        region = validated_region(region, allowed=("us", "eu", "kr", "tw", "cn"))
+        fetched = client.mythic_plus_affixes(region=region)
+        body = fetched.payload
+        payload = {
+            "query": {"region": region},
+            "title": body.get("title"),
+            "affixes": [
+                {key: row.get(key) for key in ("id", "name", "description", "wowhead_url")}
+                for row in as_list(body.get("affix_details"))
+                if isinstance(row, dict)
+            ],
+            "freshness": page_freshness(fetched, cache_ttl_seconds=client.mythic_plus_runs_ttl_seconds),
+            "citations": {
+                "affixes_url": f"{RAIDERIO_BASE_URL}/mythic-plus/affixes?region={region}&locale=en",
+                "leaderboard": body.get("leaderboard_url"),
+            },
+        }
+    emit(ctx, raiderio_envelope(command=command_path(ctx), kind="mythic_plus_affixes", payload=payload))
+
+
+@app.command("dungeons")
+def dungeons(
+    ctx: typer.Context,
+    expansion_id: int = typer.Option(
+        11, "--expansion-id", min=1, help="Expansion id: 11 = Midnight, 10 = The War Within, 9 = Dragonflight."
+    ),
+) -> None:
+    """List the Mythic+ seasons Raider.IO knows for one expansion, each with its dungeon pool and slugs.
+
+    Seasons come newest first, with per-region ``starts``/``ends``: the current pool is the main
+    season whose window covers now. The dungeon slugs are what ``--dungeon`` takes.
+    """
+    with _command_errors(ctx), open_client() as client:
+        fetched = client.mythic_plus_static_data(expansion_id=expansion_id)
+        seasons = [
+            {
+                "slug": season.get("slug"),
+                "name": season.get("name"),
+                "is_main_season": season.get("is_main_season"),
+                "starts": as_dict(season.get("starts")),
+                "ends": as_dict(season.get("ends")),
+                "dungeons": [
+                    {key: dungeon.get(key) for key in ("slug", "name", "short_name", "keystone_timer_seconds")}
+                    for dungeon in as_list(season.get("dungeons"))
+                    if isinstance(dungeon, dict)
+                ],
+            }
+            for season in as_list(fetched.payload.get("seasons"))
+            if isinstance(season, dict)
+        ]
+        if not seasons:
+            # Raider.IO answers an id it has no Mythic+ data for with an empty list, not an error.
+            raise ProviderError(
+                "invalid_query",
+                f"Raider.IO has no Mythic+ seasons for expansion id {expansion_id}. It numbers expansions "
+                "11 = Midnight, 10 = The War Within, 9 = Dragonflight (Warcraft Logs numbers them differently).",
+            )
+        payload = {
+            "query": {"expansion_id": expansion_id},
+            "count": len(seasons),
+            "seasons": seasons,
+            "freshness": page_freshness(fetched, cache_ttl_seconds=client.static_data_ttl_seconds),
+            "citations": {"static_data_url": f"{RAIDERIO_BASE_URL}/mythic-plus/static-data?expansion_id={expansion_id}"},
+        }
+    emit(ctx, raiderio_envelope(command=command_path(ctx), kind="mythic_plus_dungeons", payload=payload))
 
 
 @sample_app.command("mythic-plus-runs")

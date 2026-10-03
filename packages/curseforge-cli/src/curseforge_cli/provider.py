@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from warcraft_api.cache import redacted_redis_url
 from warcraft_core.envelope import Envelope, success_envelope
 from warcraft_core.provider import ProviderSurface
 
@@ -21,7 +22,13 @@ from curseforge_cli.auth import (
     curseforge_provider_env_path,
     load_curseforge_auth_config,
 )
-from curseforge_cli.client import WOW_GAME_ID, CurseForgeClient, verification_note
+from curseforge_cli.client import (
+    WOW_GAME_ID,
+    CurseForgeClient,
+    CurseForgeClientError,
+    load_curseforge_cache_settings_from_env,
+    verification_note,
+)
 
 TIER = "experimental"
 
@@ -37,11 +44,27 @@ def _auth_payload(auth: CurseForgeAuthConfig) -> dict[str, Any]:
     }
 
 
+def _cache_payload() -> dict[str, Any]:
+    try:
+        settings, ttl = load_curseforge_cache_settings_from_env()
+    except ValueError as exc:
+        return {"error": {"code": "invalid_cache_config", "message": str(exc)}}
+    return {
+        "enabled": settings.enabled,
+        "backend": settings.backend,
+        "cache_dir": str(settings.cache_dir),
+        "redis_url": redacted_redis_url(settings.redis_url),
+        "prefix": settings.prefix,
+        "ttls": {"addon": ttl},
+    }
+
+
 def doctor_envelope() -> Envelope:
     """Install state, API-key auth posture, and capability metadata; never raises."""
     auth = load_curseforge_auth_config()
     data: dict[str, Any] = {
-        "status": "partial",
+        # The addon lookup needs the API key, so without one the provider can do nothing useful.
+        "status": "ready" if auth.configured else "degraded",
         "tier": TIER,
         "installed": True,
         "language": "python",
@@ -50,8 +73,9 @@ def doctor_envelope() -> Envelope:
             "doctor": "ready",
             "search": "coming_soon",
             "resolve": "coming_soon",
-            "addon": "ready",
+            "addon": "ready" if auth.configured else "requires_api_key",
         },
+        "cache": _cache_payload(),
         "notes": [
             f"curseforge is an {TIER} provider: the surface is one addon lookup plus doctor, and "
             "search/resolve are stubs. The endpoints it does use are live-confirmed.",
@@ -92,7 +116,10 @@ def addon_envelope(slug_or_id: str) -> Envelope:
     Raises ``CurseForgeClientError`` or ``httpx.HTTPError``; the CLI layer turns those into an
     error envelope with the contract exit code.
     """
-    client = CurseForgeClient()
+    try:
+        client = CurseForgeClient()
+    except ValueError as exc:
+        raise CurseForgeClientError("invalid_cache_config", str(exc)) from exc
     try:
         result = client.fetch_addon(slug_or_id)
     finally:
@@ -108,6 +135,7 @@ def addon_envelope(slug_or_id: str) -> Envelope:
             "slug": result.get("slug"),
             "resolved_by": result["resolved_by"],
             "source_urls": result["source_urls"],
+            **result["freshness"],
             "verified": True,
             "verification_note": verification_note(),
         },

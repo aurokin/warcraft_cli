@@ -1975,6 +1975,40 @@ def test_a_realm_in_any_spelling_reaches_its_warcraft_logs_slug(require):
     assert server.data["server"]["slug"] == "azjolnerub", server.describe()
 
 
+def test_a_russian_realm_name_reaches_its_warcraft_logs_slug(require):
+    """Warcraft Logs slugs some Russian realms in English and keeps others in Cyrillic.
+
+    ``Гордунни`` resolves under its own spelling; ``Ревущий фьорд`` is ``howling-fjord`` and
+    ``Ясеневый лес`` is ``ashenvale``, found only through the EU server list. Each record names the
+    realm the user typed.
+    """
+    require("warcraftlogs")
+    for realm, slug in (("Ревущий фьорд", "howling-fjord"), ("Ясеневый лес", "ashenvale"), ("Гордунни", None)):
+        server = run("warcraftlogs", "server", "eu", realm)
+        assert server.data["server"]["name"] == realm, server.describe()
+        if slug is not None:
+            assert server.data["server"]["slug"] == slug, server.describe()
+
+
+def test_an_oceanic_alias_reads_the_us_region_and_an_unknown_region_is_a_usage_error(require):
+    """Oceanic realms are in Warcraft Logs' US region; ``oce`` used to be a false not_found."""
+    require("warcraftlogs")
+    server = run("warcraftlogs", "server", "oce", "frostmourne")
+    assert server.data["server"]["region"]["slug"].lower() == "us", server.describe()
+    assert server.data["server"]["subregion"]["name"] == "Oceanic", server.describe()
+    offline = {**dead_proxy_env(), **no_cache_env()}
+    run("warcraftlogs", "server", "xx", "illidan", expect=EXIT_USAGE, error_code="invalid_query", env=offline)
+
+
+def test_zones_rejects_an_expansion_id_warcraft_logs_does_not_have(require):
+    """Raider.IO's Midnight is 11; Warcraft Logs' is not, and an empty zone list used to say otherwise."""
+    require("warcraftlogs")
+    ids = {row["id"] for row in _rows(run("warcraftlogs", "expansions"), "expansions")}
+    unknown = max(ids) + 50
+    result = run("warcraftlogs", "zones", "--expansion-id", str(unknown), expect=EXIT_USAGE, error_code="invalid_query")
+    assert "warcraftlogs expansions" in result.payload["error"]["message"], result.describe()
+
+
 def test_a_dead_proxy_is_an_exit_5_envelope_on_stderr(require):
     require("warcraftlogs")
     # A target no other journey touches, so the session cache cannot mask the transport failure.

@@ -42,6 +42,11 @@ authoritative, and use Lorrgs for its prebuilt aggregation.
   `data.phase.selected`, and the player's casts intact. `data.lorrgs.message` names the reason and
   only says "no cached copy" for a `not_found`; a timeout or transport failure says so instead.
   Without both flags there is nothing left to build, so the command fails and names them
+- `cooldown-packet` top-parse samples often lack phase markers: those samples have
+  `phase_available: false` (`phase_unavailable_reason: "top_parse_has_no_phase_markers"`) and are
+  left out of `selected_phase_spell_frequency`; when no sample has the phase,
+  `comparison.status` is `no_phase_data` and `comparison.reason` names why, so there is no
+  top-parse comparison for that phase
 - use `resolve` when you have a Lorrgs URL, Warcraft Logs report URL, report code, or likely
   spec/boss query and want the next command chosen conservatively
 - when `resolve` answers `resolved: false` with `confidence: "none"`, read `results`: either two
@@ -50,8 +55,11 @@ authoritative, and use Lorrgs for its prebuilt aggregation.
   `ranking.unmatched_terms` and would have answered a narrower question than you asked
 - name the difficulty in a `resolve` query (`heroic frost mage chimaerus`) and the handoff carries
   `--difficulty`; without one, `spec-ranking` answers for mythic
-- a report handoff resolves at `confidence: "medium"` with a `caveat`: nothing checked that Lorrgs
-  can serve that report, and it refuses reports Warcraft Logs keeps private
+- `resolve` hands over `next_command` only at `confidence: "high"`. A partial word match (`storm`)
+  or a report reference comes back with `resolved: false`, `confidence: "medium"`, and the candidate
+  in `match`; its `match.follow_up.command` is the command to run if it is what you meant. A report
+  reference carries a `caveat`: nothing checked that Lorrgs can serve that report, and it refuses
+  reports Warcraft Logs keeps private
 - use `report-overview` for report metadata from any public Warcraft Logs URL, including one Lorrgs
   has not cached, without requesting Lorrgs' per-fight/player timeline generation
 - an empty `comp-ranking` or `spec-ranking` (`reports: []`) carries `data.notes`: Lorrgs has no
@@ -61,7 +69,10 @@ authoritative, and use Lorrgs for its prebuilt aggregation.
   as `damage-done`; the CLI also preserves that query parameter automatically from URLs
 - use `spec-spells` and `boss-spells` to interpret spell ids in timeline rows
 - use `comp-ranking` filters (`--role`, `--spec`, `--killtime-min`, `--killtime-max`) when you need
-  a narrower comparison cohort
+  a narrower comparison cohort; `--role` and `--spec` take `<name>.<op>.<n>` with `op` one of `eq`,
+  `gt`, `gte`, `lt`, `lte` (`--role heal.gte.4`, `--spec mage-frost.gte.1`); a role is `tank`, `heal`,
+  `mdps` or `rdps`, and a spec is a slug from `lorrgs specs`
+- Lorrgs ranks Mythic and Heroic only: `--difficulty` takes `mythic` or `heroic`
 - every result preserves `provenance.source_url`; follow that exact URL when you need to verify the
   source payload
 
