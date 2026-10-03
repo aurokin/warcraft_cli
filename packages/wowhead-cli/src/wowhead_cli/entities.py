@@ -292,14 +292,6 @@ def build_linked_entity_preview(
             return fetch_more_command_builder(count)
         return fetch_more_command
 
-    if preview_limit <= 0:
-        return {
-            "count": 0,
-            "counts_by_type": {},
-            "items": [],
-            "more_available": False,
-            "fetch_more_command": render_fetch_more(0),
-        }
     deduped = dedupe_links(links, entity_type=entity_type, entity_id=entity_id)
     preview_items = _select_preview_records(deduped, source_entity_type=entity_type, limit=preview_limit)
     counts_by_type: dict[str, int] = {}

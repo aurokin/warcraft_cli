@@ -10,6 +10,7 @@ from urllib.parse import urljoin, urlparse
 from bs4 import BeautifulSoup, Tag
 from warcraft_content.guide_page import WOWHEAD_LINK_RE, extract_talent_export_builds
 from warcraft_content.html_sections import clean_text, extract_headings, extract_sections
+from warcraft_content.site_crawler import PageLink, PageRead
 from warcraft_core.identity import ability_identity_payload, build_reference_payload
 
 ICY_VEINS_BASE_URL = "https://www.icy-veins.com"
@@ -69,6 +70,28 @@ SPEC_GUIDE_RE = re.compile(r"-pve-(?:dps|healing|tank)-guide$")
 # A spec's per-expansion page (``mistweaver-monk-the-war-within-pve-guide``) and the expansion hub
 # (``midnight-expansion-guide``).
 EXPANSION_GUIDE_SUFFIXES = ("-the-war-within-pve-guide", "-expansion-guide")
+# A spec's PvP sub-pages (``mistweaver-monk-pvp-talents-and-builds``) belong with its ``-pvp-guide``.
+_CLASS_NAMES = "|".join(slug.removesuffix("-guide") for slug in sorted(CLASS_HUB_SLUGS))
+SPEC_PVP_SUBPAGE_RE = re.compile(rf"^[a-z-]+?-(?:{_CLASS_NAMES})-pvp-")
+# A raid boss page: per-difficulty encounter journals, strategy write-ups, ability and loot lists, and
+# the boss guides published inside a raid (``broodtwister-ovi-nax-raid-guide-in-nerub-ar-palace``).
+# The current raid's bosses are ``<boss>-raid-guide`` and classify as raid guides.
+RAID_ENCOUNTER_RE = re.compile(
+    r"-encounter-journal$|-strategy-guide(?:-|$)|-strategy-tactics|-(?:dps|healer|tank)-strategy$|-abilities$"
+    r"|-raid-guide-in-|^raid-guide-|-lfr-guide-|-loot$|-loot-in-"
+)
+# Older raid hubs: ``firelands-raid``, ``aberrus-the-shadowed-crucible-raid-guide-for-dragonflight``,
+# ``fated-castle-nathria-raid-guides-in-shadowlands``.
+RAID_HUB_RE = re.compile(r"-raid$|-raid-guide-for-|-raid-guides-(?:for|in)-")
+DUNGEON_GUIDE_RE = re.compile(r"(?:^|-)dungeons?-guide(?:-tww)?$")
+DELVE_GUIDE_RE = re.compile(r"(?:^|-)delve(?:s|rs)?-.*guide(?:-tww)?$")
+PROFESSION_RE = re.compile(r"^professions(?:-|$)|-profession-")
+# Section hubs (``void-assaults-hub``) and the per-expansion archives (``guides-for-legion``).
+HUB_RE = re.compile(r"-hub$|^guides-for-")
+# Pages of transmog sets and item models (about 650 in the sitemap). They stay findable for a transmog
+# query but rank below everything else (see ``icy_veins_cli.search``); the transmog hubs themselves
+# end in ``-guide``/``-guides`` and stay article guides.
+TRANSMOG_RE = re.compile(r"^transmogrification-|-transmog(?:-|$)")
 # Families whose pages always carry the spec's page switcher: a page of one of these that parses with
 # no navigation means the switcher markup moved, not that the guide has a single page.
 NAVIGATION_REQUIRED_FAMILIES = frozenset({"spec_guide", *(family for _, family in SUBPAGE_SUFFIX_FAMILIES)})
@@ -169,16 +192,22 @@ def classify_guide_slug(slug: str) -> str | None:
         return "class_hub"
     if normalized in ROLE_GUIDE_SLUGS:
         return "role_guide"
+    # Before every class family: a set page names its class (``transmogrification-priest-pvp-...-set``).
+    if TRANSMOG_RE.search(normalized) and not normalized.endswith(("-guide", "-guides")):
+        return "transmog"
     if normalized.endswith("-easy-mode"):
         return "easy_mode"
     if normalized.endswith("-leveling-guide"):
         return "leveling"
-    if "-pvp-guide" in normalized:
+    if "-pvp-guide" in normalized or SPEC_PVP_SUBPAGE_RE.match(normalized):
         return "pvp"
     for suffix, family in SUBPAGE_SUFFIX_FAMILIES:
         if normalized.endswith(suffix):
             return family
-    if normalized.endswith("-raid-guide"):
+    # Before the raid hubs: a strategy page can end in ``-raid`` (``orgozoa-strategy-guide-in-the-eternal-palace-raid``).
+    if RAID_ENCOUNTER_RE.search(normalized):
+        return "raid_encounter"
+    if normalized.endswith("-raid-guide") or RAID_HUB_RE.search(normalized):
         return "raid_guide"
     if normalized.endswith(EXPANSION_GUIDE_SUFFIXES):
         return "expansion_guide"
@@ -186,7 +215,26 @@ def classify_guide_slug(slug: str) -> str | None:
         return "special_event_guide"
     if SPEC_GUIDE_RE.search(normalized):
         return "spec_guide"
-    if normalized.endswith(("-guide", "-guides")):
+    return _classify_topic_slug(normalized)
+
+
+def _classify_topic_slug(normalized: str) -> str | None:
+    """Families of the pages that belong to no class: bosses, dungeons, delves, professions, tier lists, hubs.
+
+    Change analyses (``arcane-mage-patch-9-1-changes-analysis``, ``latest-mage-class-changes``) stay
+    unclassified: they are news-like, the scope ``search`` declines for "class changes".
+    """
+    if DUNGEON_GUIDE_RE.search(normalized):
+        return "dungeon_guide"
+    if DELVE_GUIDE_RE.search(normalized):
+        return "delve_guide"
+    if PROFESSION_RE.search(normalized) and "changes" not in normalized:
+        return "profession"
+    if "tier-list" in normalized:
+        return "tier_list"
+    if HUB_RE.search(normalized):
+        return "hub"
+    if normalized.endswith(("-guide", "-guides", "-to-do-list")):
         return "article_guide"
     return None
 
@@ -223,7 +271,8 @@ def _link_href(soup: BeautifulSoup, *, rel: str) -> str | None:
     return href.strip() or None if href else None
 
 
-def _parse_json_ld_article(soup: BeautifulSoup) -> dict[str, Any] | None:
+def _json_ld_object(soup: BeautifulSoup, schema_type: str) -> dict[str, Any] | None:
+    """The first JSON-LD object of ``schema_type`` ("Article", "BreadcrumbList") on the page."""
     for script in soup.find_all("script", attrs={"type": "application/ld+json"}):
         text = script.string or script.get_text(strip=True)
         if not text:
@@ -238,7 +287,7 @@ def _parse_json_ld_article(soup: BeautifulSoup) -> dict[str, Any] | None:
         elif isinstance(value, list):
             candidates = [row for row in value if isinstance(row, dict)]
         for candidate in candidates:
-            if candidate.get("@type") == "Article":
+            if candidate.get("@type") == schema_type:
                 return candidate
     return None
 
@@ -534,7 +583,7 @@ def parse_guide_page(html: str, *, source_url: str) -> dict[str, Any]:
     canonical_url = urljoin(ICY_VEINS_BASE_URL, _link_href(soup, rel="canonical") or source_url)
     slug = guide_ref_parts(canonical_url)
     content_family = classify_guide_slug(slug)
-    meta = _page_meta(soup, _parse_json_ld_article(soup) or {})
+    meta = _page_meta(soup, _json_ld_object(soup, "Article") or {})
     data_layer = _extract_data_layer(soup)
     navigation = _extract_family_navigation(soup, current_url=canonical_url, content_family=content_family)
     active_nav = next((item for item in navigation if item["active"]), None)
@@ -608,12 +657,17 @@ def parse_site_menu_guides(html: str) -> list[dict[str, Any]]:
     return sorted(guides.values(), key=lambda row: row["name"].lower())
 
 
-def _sitemap_date(lastmod: str) -> str | None:
-    """The ``YYYY-MM-DD`` part of a sitemap ``<lastmod>``, or ``None`` when it is missing or not a date."""
+def _date_part(timestamp: str) -> str | None:
+    """The ``YYYY-MM-DD`` part of a sitemap ``<lastmod>`` or a JSON-LD date, or ``None`` when it is missing or not a date."""
     try:
-        return date.fromisoformat(lastmod[:10]).isoformat()
+        return date.fromisoformat(timestamp[:10]).isoformat()
     except ValueError:
         return None
+
+
+def parse_sitemap_slugs(xml_text: str) -> set[str]:
+    """Every ``/wow/<slug>`` page the sitemap lists, classified or not."""
+    return {slug for url, _ in SITEMAP_ENTRY_RE.findall(xml_text) if (slug := guide_slug_from_url(url)) is not None}
 
 
 def parse_sitemap_guides(xml_text: str) -> list[dict[str, Any]]:
@@ -634,8 +688,55 @@ def parse_sitemap_guides(xml_text: str) -> list[dict[str, Any]]:
                 "name": slug_display_name(slug),
                 "url": url,
                 "content_family": content_family,
-                "sitemap_lastmod": _sitemap_date(lastmod),
+                "sitemap_lastmod": _date_part(lastmod),
             }
         )
     guides.sort(key=lambda row: row["name"].lower())
     return guides
+
+
+def _site_link_slug(href: str | None) -> str | None:
+    """Slug of a link to a ``www.icy-veins.com/wow/<slug>`` page; None for any other link."""
+    if not href:
+        return None
+    url = urljoin(ICY_VEINS_BASE_URL, href)
+    return guide_slug_from_url(url) if urlparse(url).netloc == "www.icy-veins.com" else None
+
+
+def _breadcrumb_parent(soup: BeautifulSoup) -> str | None:
+    """Slug of the hub the page's JSON-LD breadcrumb trail puts it under; None when that is the WoW home page."""
+    trail = (_json_ld_object(soup, "BreadcrumbList") or {}).get("itemListElement")
+    if not isinstance(trail, list) or len(trail) < 2 or not isinstance(trail[-2], dict):
+        return None
+    parent = trail[-2].get("item")
+    return _site_link_slug(parent.get("@id")) if isinstance(parent, dict) else None
+
+
+def read_index_page(url: str, html: str) -> PageRead | None:
+    """One crawled page as a site-index row plus every ``/wow/<slug>`` page it links; None when it is not a WoW page.
+
+    The canonical link is the page's identity, so a renamed page fetched at its old URL reads as the
+    new one. The row keeps the JSON-LD headline (``og:title`` carries markup) and both dates; the
+    page's HTML is not kept. A link in the site-wide menu has the source "menu", any other "page".
+    """
+    del url
+    soup = BeautifulSoup(html, "html.parser")
+    slug = _site_link_slug(_link_href(soup, rel="canonical"))
+    if slug is None:
+        return None
+    article = _json_ld_object(soup, "Article") or {}
+    links: dict[str, PageLink] = {}
+    for source, anchors in (("menu", soup.select(SITE_MENU_LINK_SELECTOR)), ("page", soup.find_all("a", href=True))):
+        for anchor in anchors:
+            link_slug = _site_link_slug(_attribute(anchor, "href"))
+            if link_slug is not None and link_slug != slug:
+                links.setdefault(link_slug, PageLink(guide_url(link_slug), source))
+    row = {
+        "slug": slug,
+        "url": guide_url(slug),
+        "title": clean_text(article.get("headline")),
+        "date_published": _date_part(str(article.get("datePublished") or "")),
+        "date_modified": _date_part(str(article.get("dateModified") or "")),
+        "parent": _breadcrumb_parent(soup),
+    }
+    return PageRead(guide_url(slug), row, tuple(links.values()))

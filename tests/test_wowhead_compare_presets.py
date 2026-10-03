@@ -29,12 +29,12 @@ def test_resolve_compare_options_explicit_flags_override_preset() -> None:
 
 
 def test_compare_gear_preset_omits_title_field_diff(monkeypatch) -> None:
-    def fake_tooltip(self, entity_type: str, entity_id: int, data_env: int = 11):  # noqa: ANN001
+    def fake_tooltip(self, entity_type: str, entity_id: int, data_env: int = 11):
         if entity_id == 19019:
             return {"name": "Thunderfury", "quality": 5, "icon": "inv_sword_39"}
         return {"name": "Maladath", "quality": 4, "icon": "inv_sword_49"}
 
-    def fake_html(self, entity_type: str, entity_id: int):  # noqa: ANN001
+    def fake_html(self, entity_type: str, entity_id: int):
         return """
         <html><head>
           <meta property="og:title" content="Title">

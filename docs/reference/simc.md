@@ -75,7 +75,7 @@ Report the version reported by the local SimC binary.
 
 ## simc inspect
 
-Describe the repo, or one file inside it, including any build lines it carries.
+Describe the repo, or one file or directory, including any build lines a file carries.
 
 **Arguments**
 
@@ -149,8 +149,8 @@ Round-trip raw talent rows through SimulationCraft and report the validated tran
 | --- | --- | --- | --- |
 | `--build-packet` | str |  | Path to a talent transport packet JSON file. |
 | `--talent-row` | str (repeatable) |  | Raw talent row as entry_id:node_id:rank. Repeat as needed. |
-| `--actor-class` | str |  | Actor class such as druid or paladin. |
-| `--spec` | str |  | Spec name such as balance or retribution. |
+| `--actor-class` | str |  | Actor class such as monk or evoker. |
+| `--spec` | str |  | Spec name such as mistweaver. |
 | `--out` | str |  | Optional path to write the upgraded packet JSON when --build-packet is used. |
 
 ## simc build-harness
@@ -165,13 +165,13 @@ Write a harness profile for the resolved build with no APL actions.
 | `--apl-path` | str |  | Optional APL path used to infer actor class and spec. |
 | `--profile-path` | str |  | Optional profile path containing build lines. |
 | `--build-file` | str |  | Optional plain text file with talents/spec lines. |
-| `--build-text` | str |  | Inline build text or talent hash. |
+| `--build-text` | str |  | Inline build text, talent hash, or Wowhead talent-calc URL with build code. |
 | `--talents` | str |  | WoW export, Wowhead talent-calc URL with build code, SimC talents string, or talents=... line. |
 | `--class-talents` | str |  | Split class talents string. |
 | `--spec-talents` | str |  | Split spec talents string. |
 | `--hero-talents` | str |  | Split hero talents string. |
-| `--actor-class` | str |  | Actor class such as warlock. |
-| `--spec` | str |  | Spec name such as demonology. |
+| `--actor-class` | str |  | Actor class such as monk or evoker. |
+| `--spec` | str |  | Spec name such as mistweaver. |
 | `--line` | str (repeatable) |  | Extra profile line. Repeat as needed. |
 
 ## simc validate-apl
@@ -325,7 +325,7 @@ Classify APL entries as eligible, dead, or unknown for an exact build.
 | `--show` | str | all | One of all, eligible, dead, or unknown. |
 | `--profile-path` | str |  | Optional profile path containing build lines. |
 | `--build-file` | str |  | Optional plain text file with talents/spec lines. |
-| `--build-text` | str |  | Inline build text or talent hash. |
+| `--build-text` | str |  | Inline build text, talent hash, or Wowhead talent-calc URL with build code. |
 | `--talents` | str |  | WoW export, Wowhead talent-calc URL with build code, SimC talents string, or talents=... line. |
 | `--class-talents` | str |  | Split class talents string. |
 | `--spec-talents` | str |  | Split spec talents string. |
@@ -354,7 +354,7 @@ Trace action-list dispatch for an exact build from a starting list.
 | `--max-depth` | int range | 6 | Maximum recursive trace depth. |
 | `--profile-path` | str |  | Optional profile path containing build lines. |
 | `--build-file` | str |  | Optional plain text file with talents/spec lines. |
-| `--build-text` | str |  | Inline build text or talent hash. |
+| `--build-text` | str |  | Inline build text, talent hash, or Wowhead talent-calc URL with build code. |
 | `--talents` | str |  | WoW export, Wowhead talent-calc URL with build code, SimC talents string, or talents=... line. |
 | `--class-talents` | str |  | Split class talents string. |
 | `--spec-talents` | str |  | Split spec talents string. |
@@ -383,7 +383,7 @@ Summarize what the focus action list is trying to do for an exact build.
 | `--limit` | int range | 6 | Number of intent lines to return. |
 | `--profile-path` | str |  | Optional profile path containing build lines. |
 | `--build-file` | str |  | Optional plain text file with talents/spec lines. |
-| `--build-text` | str |  | Inline build text or talent hash. |
+| `--build-text` | str |  | Inline build text, talent hash, or Wowhead talent-calc URL with build code. |
 | `--talents` | str |  | WoW export, Wowhead talent-calc URL with build code, SimC talents string, or talents=... line. |
 | `--class-talents` | str |  | Split class talents string. |
 | `--spec-talents` | str |  | Split spec talents string. |
@@ -412,7 +412,7 @@ Explain the focus list as setup, helper, burst, and priority buckets.
 | `--limit` | int range | 8 | Maximum items per bucket. |
 | `--profile-path` | str |  | Optional profile path containing build lines. |
 | `--build-file` | str |  | Optional plain text file with talents/spec lines. |
-| `--build-text` | str |  | Inline build text or talent hash. |
+| `--build-text` | str |  | Inline build text, talent hash, or Wowhead talent-calc URL with build code. |
 | `--talents` | str |  | WoW export, Wowhead talent-calc URL with build code, SimC talents string, or talents=... line. |
 | `--class-talents` | str |  | Split class talents string. |
 | `--spec-talents` | str |  | Split spec talents string. |
@@ -441,7 +441,7 @@ Return the static active priority for an exact build, excluding inactive talent 
 | `--limit` | int range | 12 | Maximum active priority rows to return. |
 | `--profile-path` | str |  | Optional profile path containing build lines. |
 | `--build-file` | str |  | Optional plain text file with talents/spec lines. |
-| `--build-text` | str |  | Inline build text or talent hash. |
+| `--build-text` | str |  | Inline build text, talent hash, or Wowhead talent-calc URL with build code. |
 | `--talents` | str |  | WoW export, Wowhead talent-calc URL with build code, SimC talents string, or talents=... line. |
 | `--class-talents` | str |  | Split class talents string. |
 | `--spec-talents` | str |  | Split spec talents string. |
@@ -498,7 +498,7 @@ List the APL actions an exact build cannot use.
 | `--talent-only / --all-dead` | boolean | true | Only return talent-gated dead actions by default. |
 | `--profile-path` | str |  | Optional profile path containing build lines. |
 | `--build-file` | str |  | Optional plain text file with talents/spec lines. |
-| `--build-text` | str |  | Inline build text or talent hash. |
+| `--build-text` | str |  | Inline build text, talent hash, or Wowhead talent-calc URL with build code. |
 | `--talents` | str |  | WoW export, Wowhead talent-calc URL with build code, SimC talents string, or talents=... line. |
 | `--class-talents` | str |  | Split class talents string. |
 | `--spec-talents` | str |  | Split spec talents string. |
@@ -527,7 +527,7 @@ Preview the early priority for an exact build, flagging runtime-only conditions.
 | `--limit` | int range | 10 | Maximum early actions to return. |
 | `--profile-path` | str |  | Optional profile path containing build lines. |
 | `--build-file` | str |  | Optional plain text file with talents/spec lines. |
-| `--build-text` | str |  | Inline build text or talent hash. |
+| `--build-text` | str |  | Inline build text, talent hash, or Wowhead talent-calc URL with build code. |
 | `--talents` | str |  | WoW export, Wowhead talent-calc URL with build code, SimC talents string, or talents=... line. |
 | `--class-talents` | str |  | Split class talents string. |
 | `--spec-talents` | str |  | Split spec talents string. |
@@ -603,7 +603,7 @@ Bundle branch, intent, and optional first-cast timing analysis into one payload.
 | `--fight-style` | str | Patchwerk | Fight style for first-cast timing sims. |
 | `--profile-path` | str |  | Optional profile path containing build lines. |
 | `--build-file` | str |  | Optional plain text file with talents/spec lines. |
-| `--build-text` | str |  | Inline build text or talent hash. |
+| `--build-text` | str |  | Inline build text, talent hash, or Wowhead talent-calc URL with build code. |
 | `--talents` | str |  | WoW export, Wowhead talent-calc URL with build code, SimC talents string, or talents=... line. |
 | `--class-talents` | str |  | Split class talents string. |
 | `--spec-talents` | str |  | Split spec talents string. |
@@ -699,8 +699,8 @@ Diff a base talent build against one or more other builds, per tree.
 | `--base` | str | required | Base build: WoW export, Wowhead talent-calc URL with build code, or talents=... line. |
 | `--other` | str (repeatable) | required | Build to compare against base. Repeat for multiple builds. |
 | `--tree` | str (repeatable) |  | Limit diff to specific trees (class, spec, hero). Omit for all. |
-| `--actor-class` | str |  | Actor class such as druid. |
-| `--spec` | str |  | Spec name such as balance. |
+| `--actor-class` | str |  | Actor class such as monk or evoker. |
+| `--spec` | str |  | Spec name such as mistweaver. |
 
 ## simc modify-build
 
@@ -716,8 +716,8 @@ Apply talent swaps, additions, and removals to a build and re-encode it.
 | `--swap-hero-tree-from` | str |  | Replace hero tree from this build. |
 | `--add` | str (repeatable) |  | Add or set talent: 'name:rank' or 'entry_id:rank'. Repeat as needed. |
 | `--remove` | str (repeatable) |  | Remove talent by name or entry_id. Repeat as needed. |
-| `--actor-class` | str |  | Actor class such as druid. |
-| `--spec` | str |  | Spec name such as balance. |
+| `--actor-class` | str |  | Actor class such as monk or evoker. |
+| `--spec` | str |  | Spec name such as mistweaver. |
 
 ## simc run
 

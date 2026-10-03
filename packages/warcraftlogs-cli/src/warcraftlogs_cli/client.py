@@ -12,12 +12,13 @@ from urllib.parse import urlencode
 
 import httpx
 from warcraft_api.cache import CacheSettings, CacheTTLConfig, build_cache_store, load_prefixed_cache_settings_from_env
+from warcraft_api.client_credentials import TOKEN_SKEW_SECONDS, ClientTokenCache
 from warcraft_api.http import DEFAULT_RETRY_ATTEMPTS, build_client, request_with_retries
-from warcraft_core.auth import load_provider_auth_state, save_provider_auth_state
+from warcraft_core.auth import load_provider_auth_state
 from warcraft_core.env import find_env_file, read_env_keys
 from warcraft_core.exit_codes import error_code_for_http_status
 from warcraft_core.paths import provider_cache_root, provider_env_path
-from warcraft_core.wow_normalization import normalize_name, normalize_region, primary_realm_slug
+from warcraft_core.wow_normalization import normalize_name, normalize_region, primary_realm_slug, realm_slug_variants
 
 from warcraftlogs_cli.sampling_utils import report_is_finished
 
@@ -1166,10 +1167,15 @@ def _graphql_error_code(message: str) -> str:
     """Classify a GraphQL error by its message so unknown ids and permission denials get contract codes.
 
     Warcraft Logs answers both cases with ``report: null`` plus an error, so the payload shape alone
-    cannot tell "does not exist" (exit 4) from "no permission" (exit 3).
+    cannot tell "does not exist" (exit 4) from "no permission" (exit 3). A rejected enum flag reads
+    'Variable "$dataType" got invalid value ...; Value "Nope" does not exist in "EventDataType" enum.',
+    so it is a usage error before the generic "does not exist" rule; an unknown guild or character
+    reads "No guild exists for this name/server/region."
     """
     lowered = message.lower()
-    if "does not exist" in lowered or "not found" in lowered or "no such" in lowered:
+    if "got invalid value" in lowered:
+        return "invalid_query"
+    if any(marker in lowered for marker in ("does not exist", "not found", "no such", "no guild exists", "no character exists")):
         return "not_found"
     if "permission" in lowered or "not authorized" in lowered or "unauthorized" in lowered:
         return "auth_failed"
@@ -1440,54 +1446,9 @@ class WarcraftLogsClient:
             f"(for example in {self._credential_hint}).",
         )
 
-    def _client_credentials_cache_key(self) -> str:
-        raw = f"{self._site.key}\0{self._client_id}\0{self._client_secret}"
-        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
-
-    def _load_shared_client_token(self, *, now: float) -> str | None:
-        try:
-            payload = load_provider_auth_state(CLIENT_CREDENTIALS_STATE_PROVIDER)
-        except (OSError, json.JSONDecodeError):
-            return None
-        if not isinstance(payload, dict):
-            return None
-        if payload.get("auth_mode") != "client_credentials":
-            return None
-        if payload.get("credential_key") != self._client_credentials_cache_key():
-            return None
-        token = payload.get("access_token")
-        expires_at = payload.get("expires_at")
-        if not isinstance(token, str) or not token.strip():
-            return None
-        if not isinstance(expires_at, (int, float)):
-            return None
-        if now >= float(expires_at) - 60:
-            return None
-        self._access_token = token
-        self._token_expires_at = float(expires_at)
-        return token
-
-    def _save_shared_client_token(self, *, token: str, expires_at: float) -> None:
-        try:
-            save_provider_auth_state(
-                CLIENT_CREDENTIALS_STATE_PROVIDER,
-                {
-                    "access_token": token,
-                    "auth_mode": "client_credentials",
-                    "credential_key": self._client_credentials_cache_key(),
-                    "expires_at": expires_at,
-                    "site": self._site.key,
-                    "token_type": "Bearer",
-                },
-            )
-        except OSError:
-            # Shared token caching is an optimization. Public commands should
-            # still work even if the local state directory is unavailable.
-            return
-
     def _token(self) -> str:
         now = time.time()
-        if self._access_token and now < self._token_expires_at - 60:
+        if self._access_token and now < self._token_expires_at - TOKEN_SKEW_SECONDS:
             return self._access_token
         if not self._has_client_credentials():
             raise WarcraftLogsClientError(
@@ -1495,9 +1456,11 @@ class WarcraftLogsClient:
                 "Public Warcraft Logs commands need WARCRAFTLOGS_CLIENT_ID and WARCRAFTLOGS_CLIENT_SECRET. "
                 f"Set them (for example in {self._credential_hint}).",
             )
-        shared_token = self._load_shared_client_token(now=now)
-        if shared_token is not None:
-            return shared_token
+        token_cache = ClientTokenCache(CLIENT_CREDENTIALS_STATE_PROVIDER, self._site.key, self._client_id, self._client_secret)
+        cached = token_cache.load(now=now)
+        if cached is not None:
+            self._access_token, self._token_expires_at = cached
+            return self._access_token
         response = _request(
             self._client(),
             self._site.oauth_token_url,
@@ -1517,7 +1480,7 @@ class WarcraftLogsClient:
             raise WarcraftLogsClientError("invalid_response", "Warcraft Logs token response had a non-numeric expires_in.") from exc
         self._access_token = token
         self._token_expires_at = now + expires_seconds
-        self._save_shared_client_token(token=token, expires_at=self._token_expires_at)
+        token_cache.save(token=token, expires_at=self._token_expires_at)
         return token
 
     def _user_token(self) -> str:
@@ -2091,19 +2054,55 @@ class WarcraftLogsClient:
             raise WarcraftLogsClientError("not_found", "Warcraft Logs expansion data was not available.")
         return [expansion for expansion in expansions if isinstance(expansion, dict)]
 
+    def _realm_lookup(
+        self,
+        realm: str,
+        *,
+        operation_name: str,
+        query: str,
+        namespace: str,
+        ttl_seconds: int,
+        variables: Callable[[str], dict[str, Any]],
+        path: tuple[str, str],
+        missing: str,
+    ) -> dict[str, Any]:
+        """Run a realm-scoped lookup for each slug spelling of ``realm`` until Warcraft Logs finds the entity.
+
+        Warcraft Logs keeps some realms' word breaks (``tarren-mill``) and runs others together
+        (``azjolnerub``: ``azjol-nerub`` is not found, checked live 2026-10-02), so no one spelling of a
+        typed realm name finds every realm. An entity that does not exist costs one request per spelling.
+        """
+        slugs = realm_slug_variants(realm) or [realm.strip().lower()]
+        for slug in slugs:
+            try:
+                data = self._graphql(
+                    operation_name=operation_name,
+                    query=query,
+                    variables=variables(slug),
+                    namespace=namespace,
+                    ttl_seconds=ttl_seconds,
+                )
+            except WarcraftLogsClientError as exc:
+                if exc.code != "not_found" or slug == slugs[-1]:
+                    raise
+                continue
+            parent = data.get(path[0])
+            found = parent.get(path[1]) if isinstance(parent, dict) else None
+            if isinstance(found, dict):
+                return found
+        raise WarcraftLogsClientError("not_found", missing)
+
     def server(self, *, region: str, slug: str) -> dict[str, Any]:
-        data = self._graphql(
+        return self._realm_lookup(
+            slug,
             operation_name="Server",
             query=SERVER_QUERY,
-            variables={"region": normalize_region(region), "slug": primary_realm_slug(slug)},
             namespace="server",
             ttl_seconds=self._static_ttl,
+            variables=lambda realm_slug: {"region": normalize_region(region), "slug": realm_slug},
+            path=("worldData", "server"),
+            missing=f"Server {slug!r} was not found for region {region!r}.",
         )
-        world_data = data.get("worldData")
-        server = world_data.get("server") if isinstance(world_data, dict) else None
-        if not isinstance(server, dict):
-            raise WarcraftLogsClientError("not_found", f"Server {slug!r} was not found for region {region!r}.")
-        return server
 
     def zones(self, *, expansion_id: int | None = None) -> list[dict[str, Any]]:
         data = self._graphql(
@@ -2183,23 +2182,21 @@ class WarcraftLogsClient:
         return encounter
 
     def guild(self, *, region: str, realm: str, name: str, zone_id: int | None = None) -> dict[str, Any]:
-        data = self._graphql(
+        return self._realm_lookup(
+            realm,
             operation_name="Guild",
             query=GUILD_QUERY,
-            variables={
+            namespace="guild",
+            ttl_seconds=self._guild_ttl,
+            variables=lambda realm_slug: {
                 "name": normalize_name(name),
-                "serverSlug": primary_realm_slug(realm),
+                "serverSlug": realm_slug,
                 "serverRegion": normalize_region(region),
                 "zoneId": zone_id,
             },
-            namespace="guild",
-            ttl_seconds=self._guild_ttl,
+            path=("guildData", "guild"),
+            missing=f"Guild {name!r} was not found on {region}/{realm}.",
         )
-        guild_data = data.get("guildData")
-        guild = guild_data.get("guild") if isinstance(guild_data, dict) else None
-        if not isinstance(guild, dict):
-            raise WarcraftLogsClientError("not_found", f"Guild {name!r} was not found on {region}/{realm}.")
-        return guild
 
     def guild_rankings(
         self,
@@ -2211,25 +2208,23 @@ class WarcraftLogsClient:
         size: int | None = None,
         difficulty: int | None = None,
     ) -> dict[str, Any]:
-        data = self._graphql(
+        return self._realm_lookup(
+            realm,
             operation_name="GuildRankings",
             query=GUILD_RANKINGS_QUERY,
-            variables={
+            namespace="guild_rankings",
+            ttl_seconds=self._guild_ttl,
+            variables=lambda realm_slug: {
                 "name": normalize_name(name),
-                "serverSlug": primary_realm_slug(realm),
+                "serverSlug": realm_slug,
                 "serverRegion": normalize_region(region),
                 "zoneId": zone_id,
                 "size": size,
                 "difficulty": difficulty,
             },
-            namespace="guild_rankings",
-            ttl_seconds=self._guild_ttl,
+            path=("guildData", "guild"),
+            missing=f"Guild {name!r} was not found on {region}/{realm}.",
         )
-        guild_data = data.get("guildData")
-        guild = guild_data.get("guild") if isinstance(guild_data, dict) else None
-        if not isinstance(guild, dict):
-            raise WarcraftLogsClientError("not_found", f"Guild {name!r} was not found on {region}/{realm}.")
-        return guild
 
     def guild_members(
         self,
@@ -2240,24 +2235,22 @@ class WarcraftLogsClient:
         limit: int = 100,
         page: int = 1,
     ) -> dict[str, Any]:
-        data = self._graphql(
+        return self._realm_lookup(
+            realm,
             operation_name="GuildMembers",
             query=GUILD_MEMBERS_QUERY,
-            variables={
+            namespace="guild_members",
+            ttl_seconds=self._guild_ttl,
+            variables=lambda realm_slug: {
                 "name": normalize_name(name),
-                "serverSlug": primary_realm_slug(realm),
+                "serverSlug": realm_slug,
                 "serverRegion": normalize_region(region),
                 "limit": limit,
                 "page": page,
             },
-            namespace="guild_members",
-            ttl_seconds=self._guild_ttl,
+            path=("guildData", "guild"),
+            missing=f"Guild {name!r} was not found on {region}/{realm}.",
         )
-        guild_data = data.get("guildData")
-        guild = guild_data.get("guild") if isinstance(guild_data, dict) else None
-        if not isinstance(guild, dict):
-            raise WarcraftLogsClientError("not_found", f"Guild {name!r} was not found on {region}/{realm}.")
-        return guild
 
     def guild_attendance(
         self,
@@ -2270,44 +2263,40 @@ class WarcraftLogsClient:
         page: int = 1,
         zone_id: int | None = None,
     ) -> dict[str, Any]:
-        data = self._graphql(
+        return self._realm_lookup(
+            realm,
             operation_name="GuildAttendance",
             query=GUILD_ATTENDANCE_QUERY,
-            variables={
+            namespace="guild_attendance",
+            ttl_seconds=self._guild_ttl,
+            variables=lambda realm_slug: {
                 "name": normalize_name(name),
-                "serverSlug": primary_realm_slug(realm),
+                "serverSlug": realm_slug,
                 "serverRegion": normalize_region(region),
                 "guildTagID": guild_tag_id,
                 "limit": limit,
                 "page": page,
                 "zoneID": zone_id,
             },
-            namespace="guild_attendance",
-            ttl_seconds=self._guild_ttl,
+            path=("guildData", "guild"),
+            missing=f"Guild {name!r} was not found on {region}/{realm}.",
         )
-        guild_data = data.get("guildData")
-        guild = guild_data.get("guild") if isinstance(guild_data, dict) else None
-        if not isinstance(guild, dict):
-            raise WarcraftLogsClientError("not_found", f"Guild {name!r} was not found on {region}/{realm}.")
-        return guild
 
     def character(self, *, region: str, realm: str, name: str) -> dict[str, Any]:
-        data = self._graphql(
+        return self._realm_lookup(
+            realm,
             operation_name="Character",
             query=CHARACTER_QUERY,
-            variables={
-                "name": normalize_name(name),
-                "serverSlug": primary_realm_slug(realm),
-                "serverRegion": normalize_region(region),
-            },
             namespace="character",
             ttl_seconds=self._guild_ttl,
+            variables=lambda realm_slug: {
+                "name": normalize_name(name),
+                "serverSlug": realm_slug,
+                "serverRegion": normalize_region(region),
+            },
+            path=("characterData", "character"),
+            missing=f"Character {name!r} was not found on {region}/{realm}.",
         )
-        character_data = data.get("characterData")
-        character = character_data.get("character") if isinstance(character_data, dict) else None
-        if not isinstance(character, dict):
-            raise WarcraftLogsClientError("not_found", f"Character {name!r} was not found on {region}/{realm}.")
-        return character
 
     def character_rankings(
         self,
@@ -2321,12 +2310,15 @@ class WarcraftLogsClient:
         size: int | None = None,
         spec_name: str | None = None,
     ) -> dict[str, Any]:
-        data = self._graphql(
+        return self._realm_lookup(
+            realm,
             operation_name="CharacterRankings",
             query=CHARACTER_RANKINGS_QUERY,
-            variables={
+            namespace="character_rankings",
+            ttl_seconds=self._guild_ttl,
+            variables=lambda realm_slug: {
                 "name": normalize_name(name),
-                "serverSlug": primary_realm_slug(realm),
+                "serverSlug": realm_slug,
                 "serverRegion": normalize_region(region),
                 "zoneID": zone_id,
                 "difficulty": difficulty,
@@ -2334,14 +2326,9 @@ class WarcraftLogsClient:
                 "size": size,
                 "specName": spec_name,
             },
-            namespace="character_rankings",
-            ttl_seconds=self._guild_ttl,
+            path=("characterData", "character"),
+            missing=f"Character {name!r} was not found on {region}/{realm}.",
         )
-        character_data = data.get("characterData")
-        character = character_data.get("character") if isinstance(character_data, dict) else None
-        if not isinstance(character, dict):
-            raise WarcraftLogsClientError("not_found", f"Character {name!r} was not found on {region}/{realm}.")
-        return character
 
     def report(self, *, code: str, allow_unlisted: bool = False) -> dict[str, Any]:
         data = self._graphql(

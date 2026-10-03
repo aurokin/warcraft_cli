@@ -61,7 +61,6 @@ def test_explain_input_classifies_a_quick_sim_profile(require) -> None:
     assert classification["actor_name"] == "E2ETestchar"
     assert classification["spec"] == "frost"
     assert classification["talents_present"] is True
-    assert result.data["handoff"]["ready_to_paste"] == QUICK_SIM_INPUT
     commands = [row["command"] for row in result.data["handoff"]["suggested_simc_commands"]]
     assert "simc sim -" in commands
     assert any(command.startswith("simc decode-build ") for command in commands)
@@ -146,4 +145,6 @@ def test_a_live_report_round_trips_through_inspect_and_input(require, optional) 
     assert text.strip()
     assert not text.lstrip().lower().startswith("<!doctype")
     assert simc_input.data["report_id"] == parsed["report_id"]
-    assert simc_input.data["handoff"]["ready_to_paste"] == text
+    # The SimC input is what gets pasted or piped into `simc sim -`, so --compact keeps it whole.
+    compacted = run("raidbots", "--compact", "input", reference)
+    assert compacted.data["input"] == text, compacted.describe()

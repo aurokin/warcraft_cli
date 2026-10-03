@@ -29,7 +29,9 @@ Global flags come before the subcommand: `--pretty`, `--compact`, `--compact-max
 Command flags:
 
 - `search`, `resolve`: `--limit <1-50>` (default 5).
-- `article-export`: `--out <dir>` (default `./warcraft-wiki_exports/article-<slug>`).
+- `article-export`: `--out <dir>` (default `./warcraft-wiki_exports/article-<slug>`). An `--out` that names an
+  existing file fails with `invalid_argument` (exit 2) before the page is fetched; exporting again into the same
+  directory replaces the bundle's `pages/*.html` and leaves other files alone.
 - `article-query`: `--limit <1-50>`, `--kind sections|navigation|linked_entities` (repeatable or comma-separated,
   defaults to all three), `--section-title <substring>`.
 
@@ -48,19 +50,24 @@ Every payload is a shared envelope: `ok`, `provider`, `command`, `kind`, `schema
 
 Exit codes follow `docs/foundation/ERROR_CONTRACT.md`: 1 generic (unreadable bundle, invalid cache config, a
 MediaWiki error code with no shared meaning, passed through verbatim), 2 usage (including `invalid_argument` for an
-unsupported `article-query --kind` or a bundle path that is a file, and `invalid_query` for a blank `search`/`resolve`
-query, rejected before any request), 3 auth (upstream 401/403), 4 not found (the wiki has no such page, no
+unsupported `article-query --kind`, a bundle path that is a file or an `article-export --out` that is a file, and
+`invalid_query` for a blank query or title on any command that takes one, rejected before any request), 3 auth (upstream 401/403), 4 not found (the wiki has no such page, no
 `api`/`event` page matches the query, or the bundle directory does not exist), 5 network or upstream failure
 (including `rate_limited` for MediaWiki's `ratelimited`, and `upstream_error` for `maxlag`, `readonly`, or a body that
-is not JSON). Failures write
-the error envelope to stderr; transport failures never print a traceback.
+is not JSON). An HTTP failure says `Warcraft Wiki request failed with status <code>` with `details.status_code` and
+`details.url`, the same shape as `icy-veins` and `method`. Failures write the error envelope to stderr; transport
+failures never print a traceback.
+
+`article`, `api` and `event` summaries preview the first 25 navigation items and the first 10 linked entities; both
+blocks carry `count`, `more_available` and a `fetch_more_command` (`warcraft-wiki article-full <title>`) that returns
+them all.
 
 ## Content families
 
 Search ranking, resolution, and extraction all key off a locally classified content family:
 
 - Programming: `api_function`, `api_enum` (`Enum.*` pages), `ui_handler`, `event_reference`, `framework_page`,
-  `xml_schema`, `cvar`, `api_changes`, `howto_programming`.
+  `xml_schema`, `cvar` (the `Console variables` list and every `CVar <name>` page), `api_changes`, `howto_programming`.
 - Reference: `system_reference`, `expansion_reference`, `class_reference`, `profession_reference`, `faction_reference`,
   `zone_reference`, `patch_reference`, `lore_reference`, `guide_reference`.
 - Everything else: `general_article`.
@@ -70,7 +77,8 @@ Search ranking, resolution, and extraction all key off a locally classified cont
 exact titles before they search: `api` tries `API:<query>` then `API <query>`, `event` tries `Event:<query>` then
 `UIHANDLER <query>`, and both fall back to the bare title. Only if all three miss does the query go to ranked search,
 and a query that matches nothing in the allowed families fails with `not_found` (exit 4) rather than returning the
-wrong page. Event names may be written with underscores or spaces (`PLAYER_LOGIN`, `Event:PLAYER LOGIN`).
+wrong page. A CVar name resolves through search to its `CVar <name>` page (`api autoLootDefault`), and
+`api "CVar autoLootDefault"` fetches it directly. Event names may be written with underscores or spaces (`PLAYER_LOGIN`, `Event:PLAYER LOGIN`).
 
 Queries that lead with a family word are rewritten before search (`lore Jaina` -> `jaina`, `class druid` -> `druid`);
 the dropped words come back as `excluded_terms` with `normalization_hint: "excluded_family_hint_terms"`. The query as

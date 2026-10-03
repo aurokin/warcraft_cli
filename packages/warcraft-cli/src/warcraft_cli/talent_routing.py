@@ -17,6 +17,7 @@ from urllib.parse import urlparse
 
 import typer
 from warcraft_core.cli import fail
+from warcraft_core.exit_codes import EXIT_USAGE
 from warcraft_core.expansions import wowhead_path_prefixes
 from warcraft_core.identity import validate_talent_transport_packet
 from warcraft_core.shapes import as_dict
@@ -224,11 +225,11 @@ def _fail_talent_route(
     source: str,
     route: dict[str, Any] | None = None,
     provider_result: dict[str, Any] | None = None,
+    exit_code: int | None = None,
 ) -> NoReturn:
     details: dict[str, Any] = {"source": source}
     if route is not None:
         details["route"] = route
-    exit_code = None
     if provider_result is not None:
         details["provider_result"] = provider_result
         # A failed provider's own exit code covers its provider-specific codes; otherwise map ``code``.
@@ -426,7 +427,7 @@ def _resolve_talent_transport(ctx: typer.Context, request: TalentSource, calls: 
     elif source.strip().lower().endswith(".json") and _looks_like_transport_packet_path_input(source):
         _fail_talent_route(
             ctx,
-            code="invalid_transport_packet",
+            code="not_found",
             message=f"Talent transport packet file was not found: {source}",
             source=source,
         )
@@ -451,7 +452,7 @@ def _resolve_talent_transport(ctx: typer.Context, request: TalentSource, calls: 
     elif _looks_like_transport_packet_path_input(source):
         _fail_talent_route(
             ctx,
-            code="invalid_transport_packet",
+            code="not_found",
             message=f"Talent transport packet file was not found: {source}",
             source=source,
         )
@@ -464,6 +465,7 @@ def _resolve_talent_transport(ctx: typer.Context, request: TalentSource, calls: 
                 "or a local talent transport packet JSON path."
             ),
             source=source,
+            exit_code=EXIT_USAGE,
         )
 
     source_status, upgrade_attempted, packet_changed, upgrade_result, packet = _maybe_upgrade_transport_packet(

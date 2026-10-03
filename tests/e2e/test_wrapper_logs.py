@@ -1,8 +1,8 @@
 """End-to-end journeys for the ``warcraft`` wrapper's log-based composites.
 
 These are the cross-provider handoffs that only exist in the wrapper: a Warcraft Logs fight plus
-Lorrgs top parses (``cooldown-packet``), a Warcraft Logs report actor plus SimulationCraft
-(``talent-packet`` / ``talent-describe``), a Warcraft Logs report actor plus Raider.IO
+Lorrgs top parses (``cooldown-packet``), a Warcraft Logs report actor or a Wowhead calculator build
+plus SimulationCraft (``talent-packet`` / ``talent-describe``), a Warcraft Logs report actor plus Raider.IO
 (``actor-profile``), and the ``warcraft warcraftlogs`` passthrough.
 
 Inputs are discovered at run time and reuse the Warcraft Logs discovery chain in
@@ -24,7 +24,9 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from tests.e2e.harness import EXIT_NOT_FOUND, JourneyFailure, Result, run
+from warcraft_core.identity import normalize_actor_class, normalize_spec_name
+
+from tests.e2e.harness import EXIT_NOT_FOUND, EXIT_USAGE, JourneyFailure, Result, run
 from tests.e2e.test_warcraftlogs import _fight_roster, anchor, current_raid_zone, guild_anchor
 
 # How far discovery walks the Lorrgs ranking before giving up on a cached report.
@@ -263,8 +265,8 @@ def test_cooldown_packet_joins_a_report_fight_to_lorrgs_top_parses(require):
         "warcraftlogs_report_events": "warcraftlogs",
     }
     # The Lorrgs roster names the player, so the Warcraft Logs roster is listed but never read.
-    assert set(data["sources"]) == {*expected_sources, "warcraftlogs_report_master_data"}, result.describe()
-    assert data["sources"]["warcraftlogs_report_master_data"]["status"] == "not_requested", result.describe()
+    assert set(data["sources"]) == {*expected_sources, "warcraftlogs_report_player_details"}, result.describe()
+    assert data["sources"]["warcraftlogs_report_player_details"]["status"] == "not_requested", result.describe()
     for key, provider in expected_sources.items():
         source = data["sources"][key]
         assert source["status"] == "ok", result.describe()
@@ -379,7 +381,7 @@ def test_cooldown_packet_degrades_when_lorrgs_has_not_cached_the_report(require)
 
     # The Warcraft Logs half is intact: the flags supplied what Lorrgs would have.
     assert result.payload["query"]["report_code"] == found.code, result.describe()
-    # Without the Lorrgs roster the player is named from the Warcraft Logs report roster, and the
+    # Without the Lorrgs roster the player is named from the fight's Warcraft Logs roster, and the
     # packet says so; deaths come only from Lorrgs, so they are unknown rather than zero.
     identity = {key: data["player"][key] for key in ("name", "source_id", "spec_slug", "class_slug")}
     assert identity == {
@@ -388,7 +390,7 @@ def test_cooldown_packet_degrades_when_lorrgs_has_not_cached_the_report(require)
         "spec_slug": spec_slug,
         "class_slug": str(actor["type"]).lower(),
     }, result.describe()
-    assert any("report roster" in note for note in data["notes"]), result.describe()
+    assert any("roster of the fight" in note for note in data["notes"]), result.describe()
     assert data["player"]["deaths"] is None and "player_deaths" in lorrgs["missing"], result.describe()
     assert data["boss"]["boss_slug"] == boss_slug, result.describe()
     casts = data["cooldowns"]["player_casts"]
@@ -399,7 +401,7 @@ def test_cooldown_packet_degrades_when_lorrgs_has_not_cached_the_report(require)
     sources = data["sources"]
     assert sources["lorrgs_user_report_fights"]["status"] == "error", result.describe()
     assert sources["warcraftlogs_report_events"]["status"] == "ok", result.describe()
-    assert sources["warcraftlogs_report_master_data"]["status"] == "ok", result.describe()
+    assert sources["warcraftlogs_report_player_details"]["status"] == "ok", result.describe()
     assert sources["lorrgs_spec_spells"]["status"] == "ok", result.describe()
     # The notes describe only what the packet holds: there are no phase windows to explain here.
     assert not any("Phase windows are derived" in note for note in data["notes"]), result.describe()
@@ -545,6 +547,38 @@ def test_cooldown_packet_without_the_fallback_flags_names_the_flags_it_needs(req
     assert result.stdout == ""
 
 
+def test_cooldown_packet_without_lorrgs_checks_the_flags_against_the_fight_roster(require):
+    """On a report Lorrgs never cached the actor comes from flags, so a wrong one must fail, not answer empty.
+
+    The roster offered back is the selected fight's own, the oracle being that fight's
+    ``report-player-details``: a player elsewhere in the report would otherwise pass with no casts.
+    """
+    require("warcraftlogs", "lorrgs")
+    found = guild_anchor()
+    actor, spec_slug = _lorrgs_capable_actor()
+    base = ("cooldown-packet", found.url, "--phase", "1", "--sample-limit", "0")
+
+    unknown = run(
+        "warcraft", *base, "--actor-id", "999999", "--spec-slug", spec_slug,
+        expect=EXIT_NOT_FOUND, error_code="actor_id_not_found",
+    )
+    offered = {row["id"] for row in unknown.payload["error"]["details"]["available_players"]}
+    assert offered == {player["id"] for player in _fight_roster(found.code, found.fight_id)}, unknown.describe()
+
+    other_class = next(slug for slug in sorted(lorrgs_spec_slugs()) if not slug.startswith(f"{str(actor['type']).lower()}-"))
+    run(
+        "warcraft", *base, "--actor-id", str(actor["id"]), "--spec-slug", other_class,
+        expect=EXIT_USAGE, error_code="invalid_query",
+    )
+
+
+def test_wrapper_composites_answer_a_bad_argument_with_exit_2_and_a_missing_packet_with_exit_4():
+    """Errors the caller fixes by changing the command are usage errors, before any provider call."""
+    run("warcraft", "cooldown-packet", "JVFTxcKCqrvpaAzD", "--phase", "1", expect=EXIT_USAGE, error_code="missing_fight")
+    run("warcraft", "talent-packet", "hello", expect=EXIT_USAGE, error_code="unsupported_talent_source")
+    run("warcraft", "talent-describe", "./no-such-packet.json", expect=EXIT_NOT_FOUND, error_code="not_found")
+
+
 def test_talent_packet_routes_a_report_actor_through_simc(require):
     """The composite's whole promise: a log actor becomes a SimC-validated transport packet.
 
@@ -624,9 +658,10 @@ def test_talent_packet_validates_every_class_and_spec_on_the_roster(require):
         result = run("warcraft", "talent-packet", found.url, "--actor-id", str(player["id"]), "--fight-id", str(found.fight_id))
         packet = result.data["talent_transport_packet"]
         identity = packet["build_identity"]["class_spec_identity"]["identity"]
+        # Warcraft Logs spells specs in CamelCase (BeastMastery), the packet as slugs (beast_mastery).
         if packet["transport_status"] != "validated" or (identity["actor_class"], identity["spec"]) != (
-            actor_class.lower(),
-            spec.lower(),
+            normalize_actor_class(actor_class),
+            normalize_spec_name(spec),
         ):
             validation = packet["validation"]
             unresolved = [row["entry"] for row in validation.get("unresolved_entries") or []]
@@ -740,6 +775,58 @@ def test_actor_profile_crosswalks_a_report_actor_to_raider_io(require):
     # reports the spec played in that fight. The class must still agree.
     assert reconciliation["class_agree"] is True, result.describe()
     assert result.data["join_rule"], result.describe()
+
+
+def test_actor_profile_without_a_fight_reads_a_bounded_kills_first_scope(require):
+    """Without --fight-id the crosswalk scopes the roster itself; the report's own fight list is the oracle."""
+    require("warcraftlogs", "raiderio")
+    found = anchor()
+    actor = found.players[0]
+    fights = run("warcraftlogs", "report-fights", found.code).data["fights"]
+    expected = [
+        *[fight["id"] for fight in fights if fight.get("kill") is True],
+        *[fight["id"] for fight in fights if fight.get("kill") is not True],
+    ][:10]
+
+    result = run("warcraft", "actor-profile", found.code, str(actor["name"]))
+    query = result.payload["query"]
+    assert query["scoped_fight_ids"] == expected, result.describe()
+    scope = query["fight_scope"]
+    assert scope["rule"] == "kills_first_then_report_order", result.describe()
+    assert (scope["report_fight_count"], scope["truncated"]) == (len(fights), len(fights) > len(expected)), result.describe()
+
+    scoped = run("warcraft", "actor-profile", found.code, str(actor["name"]), "--fight-id", str(found.fight_id))
+    profile_url = result.data["sources"]["raiderio"]["profile_url"]
+    assert profile_url == scoped.data["sources"]["raiderio"]["profile_url"], result.describe()
+
+
+def test_talent_packet_routes_a_wowhead_build_and_its_packet_file_into_simc(require, out_dir):
+    """A Wowhead calculator build -> ``talent-packet --out`` -> ``talent-describe`` on that file.
+
+    The build is one the calculator page lists for the spec it names, so the packet, and simc's
+    description of it, must stay that spec; the second call goes through the packet-file route.
+    """
+    require("wowhead", "simc")
+    calc = run("wowhead", "talent-calc", "druid/balance", "--listed-build-limit", "3")
+    spec_id = calc.data["tool"]["spec_id"]
+    build = next(row for row in calc.data["listed_builds"]["items"] if row["spec_id"] == spec_id)
+    packet_path = out_dir / "wowhead-talent-packet.json"
+
+    routed = run("warcraft", "talent-packet", f"druid/balance/{build['hash']}", "--out", str(packet_path))
+    assert routed.data["route"] == {"kind": "wowhead_talent_calc", "provider": "wowhead"}, routed.describe()
+    packet = routed.data["talent_transport_packet"]
+    assert packet["transport_status"] == "exact", routed.describe()
+    assert packet["transport_forms"]["wowhead_talent_calc_url"].endswith(build["hash"]), routed.describe()
+    assert routed.data["written_packet_path"] == str(packet_path.resolve()), routed.describe()
+    assert json.loads(packet_path.read_text(encoding="utf-8")) == packet, routed.describe()
+
+    described = run("warcraft", "talent-describe", str(packet_path))
+    route = described.data["route"]
+    assert (route["kind"], route["packet_path"]) == ("packet_file", str(packet_path.resolve())), described.describe()
+    describe_data = described.data["describe_result"]["payload"]["data"]
+    identity = describe_data["identity"]
+    assert (identity["actor_class"], identity["spec"]) == ("druid", "balance"), described.describe()
+    assert describe_data["build_spec"]["transport_packet"]["path"] == str(packet_path.resolve()), described.describe()
 
 
 def test_warcraftlogs_passthrough_matches_the_direct_binary(require):

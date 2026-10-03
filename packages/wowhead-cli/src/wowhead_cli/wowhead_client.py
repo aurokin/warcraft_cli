@@ -3,18 +3,12 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
-from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
 
 import httpx
-from warcraft_api.cache import (
-    CacheSettings,
-    CacheTTLConfig,
-    build_cache_store,
-    load_cache_settings_from_env,
-)
-from warcraft_api.http import DEFAULT_RETRY_ATTEMPTS, build_client, request_with_retries
+from warcraft_api.cache import build_cache_store, load_cache_settings_from_env
+from warcraft_api.http import build_client, request_with_retries
 
 from wowhead_cli.entity_types import suggestion_entity_type_from_type_id
 from wowhead_cli.expansion_profiles import (
@@ -37,73 +31,10 @@ ENTITY_RESPONSE_CACHE_VERSION = 2
 
 
 class WowheadClient:
-    def __init__(
-        self,
-        *,
-        timeout_seconds: float = 20.0,
-        expansion: str | ExpansionProfile | None = None,
-        retry_attempts: int = DEFAULT_RETRY_ATTEMPTS,
-        cache_enabled: bool = True,
-        cache_dir: Path | None = None,
-        cache_backend: str | None = None,
-        cache_prefix: str | None = None,
-        redis_url: str | None = None,
-        cache_ttls: CacheTTLConfig | None = None,
-    ) -> None:
+    def __init__(self, *, expansion: str | ExpansionProfile | None = None) -> None:
         self._http_client: httpx.Client | None = None
         cache_settings = load_cache_settings_from_env()
-        if cache_dir is not None:
-            cache_settings = CacheSettings(
-                enabled=cache_settings.enabled,
-                backend=cache_settings.backend,
-                cache_dir=cache_dir.expanduser(),
-                redis_url=cache_settings.redis_url,
-                prefix=cache_settings.prefix,
-                ttls=cache_settings.ttls,
-            )
-        if cache_backend is not None:
-            normalized_backend = cache_backend.strip().lower()
-            enabled = normalized_backend not in {"none", "off", "disabled"}
-            backend = "file" if not enabled else normalized_backend
-            cache_settings = CacheSettings(
-                enabled=enabled,
-                backend=backend,
-                cache_dir=cache_settings.cache_dir,
-                redis_url=cache_settings.redis_url,
-                prefix=cache_settings.prefix,
-                ttls=cache_settings.ttls,
-            )
-        if cache_prefix is not None:
-            cache_settings = CacheSettings(
-                enabled=cache_settings.enabled,
-                backend=cache_settings.backend,
-                cache_dir=cache_settings.cache_dir,
-                redis_url=cache_settings.redis_url,
-                prefix=cache_prefix,
-                ttls=cache_settings.ttls,
-            )
-        if redis_url is not None:
-            cache_settings = CacheSettings(
-                enabled=cache_settings.enabled,
-                backend=cache_settings.backend,
-                cache_dir=cache_settings.cache_dir,
-                redis_url=redis_url,
-                prefix=cache_settings.prefix,
-                ttls=cache_settings.ttls,
-            )
-        if cache_ttls is not None:
-            cache_settings = CacheSettings(
-                enabled=cache_settings.enabled,
-                backend=cache_settings.backend,
-                cache_dir=cache_settings.cache_dir,
-                redis_url=cache_settings.redis_url,
-                prefix=cache_settings.prefix,
-                ttls=cache_ttls,
-            )
-
-        self._timeout_seconds = timeout_seconds
-        self._retry_attempts = max(1, retry_attempts)
-        self._cache_enabled = cache_enabled and cache_settings.enabled
+        self._cache_enabled = cache_settings.enabled
         self._cache_ttls = cache_settings.ttls
         self._cache_store = build_cache_store(cache_settings) if self._cache_enabled else None
         self._session_json_cache: dict[str, Any] = {}
@@ -127,16 +58,11 @@ class WowheadClient:
 
     def _client(self) -> httpx.Client:
         if self._http_client is None:
-            self._http_client = build_client(timeout=self._timeout_seconds)
+            self._http_client = build_client(timeout=20.0)
         return self._http_client
 
     def _request_with_retries(self, url: str, *, params: dict[str, Any] | None = None) -> httpx.Response:
-        return request_with_retries(
-            self._client(),
-            url,
-            params=params,
-            retry_attempts=self._retry_attempts,
-        )
+        return request_with_retries(self._client(), url, params=params)
 
     def _cache_key(self, namespace: str, url: str, params: dict[str, Any] | None) -> str:
         encoded = urlencode(sorted(params.items()), doseq=True) if params else ""

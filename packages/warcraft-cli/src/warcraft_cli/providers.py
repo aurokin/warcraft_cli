@@ -46,6 +46,7 @@ from warcraft_core.cli import command_path_from_args, error_envelope_for
 from warcraft_core.envelope import ENVELOPE_KEYS, SCHEMA_VERSION, Envelope, error_envelope
 from warcraft_core.exit_codes import EXIT_GENERIC, EXIT_NETWORK, EXIT_USAGE, exit_code_for
 from warcraft_core.expansions import list_expansions, resolve_expansion, warcraftlogs_site_for_expansion
+from warcraft_core.output import to_json
 from warcraft_core.paths import cache_root, config_root, data_root, state_root, worktree_runtime_details
 from warcraft_core.provider import ProviderSurface
 from warcraft_core.shapes import as_dict
@@ -666,8 +667,8 @@ def provider_resolve(provider: str, query: str, *, limit: int = 5, expansion: st
     return {"provider": provider, "exit_code": code, "payload": payload}
 
 
-def _capture_command(app: typer.Typer, args: list[str], *, prog_name: str) -> tuple[int, dict[str, Any] | None, str]:
-    """Run a provider Typer app in-process, capturing its exit code, JSON payload, and raw output."""
+def _capture_command(app: typer.Typer, args: list[str], *, prog_name: str) -> tuple[int, dict[str, Any] | None]:
+    """Run a provider Typer app in-process, capturing its exit code and JSON payload."""
     command = typer.main.get_command(app)
     out, err = io.StringIO(), io.StringIO()
     exit_code = 0
@@ -684,10 +685,9 @@ def _capture_command(app: typer.Typer, args: list[str], *, prog_name: str) -> tu
         # labelled with the subcommand path, exactly as the provider's own binary would label it.
         envelope, exit_code = error_envelope_for(prog_name, command_path_from_args(app, args), exc)
         failure = dict(envelope)
-    text = out.getvalue() + err.getvalue()
     if failure is not None:
-        return exit_code, failure, text
-    return exit_code, parse_json_object(out.getvalue()) or parse_json_object(err.getvalue()), text
+        return exit_code, failure
+    return exit_code, parse_json_object(out.getvalue()) or parse_json_object(err.getvalue())
 
 
 def parse_json_object(text: str) -> dict[str, Any] | None:
@@ -713,6 +713,13 @@ def invoke_provider_command(app: typer.Typer, *, args: list[str], prog_name: str
     except SystemExit as exc:
         code = exc.code if isinstance(exc.code, int) else 1
         raise typer.Exit(code) from exc
+    except typer.Abort:
+        raise
+    except Exception as exc:
+        # A usage error escapes non-standalone mode; label it as the provider's own binary does.
+        envelope, code = error_envelope_for(prog_name, command_path_from_args(app, args), exc)
+        typer.echo(to_json(envelope, pretty=False), err=True)
+        raise typer.Exit(code) from exc
     if isinstance(exit_code, int) and exit_code != 0:
         raise typer.Exit(exit_code)
 
@@ -721,15 +728,10 @@ def provider_invoke(provider: str, args: list[str], *, expansion: str | None = N
     registration = get_provider(provider)
     unsupported = _unsupported_expansion_result(registration, expansion, command=" ".join(args[:1]))
     if unsupported is not None:
-        return {**unsupported, "stdout": ""}
+        return unsupported
     normalized_args = [*provider_expansion_args(registration, expansion), *args]
-    code, payload, stdout = _capture_command(registration.app, normalized_args, prog_name=registration.command)
-    return {
-        "provider": provider,
-        "exit_code": code,
-        "payload": payload,
-        "stdout": stdout,
-    }
+    code, payload = _capture_command(registration.app, normalized_args, prog_name=registration.command)
+    return {"provider": provider, "exit_code": code, "payload": payload}
 
 
 SimcCommand = Literal["identify-build", "decode-build", "describe-build", "validate-talent-transport"]
@@ -851,7 +853,6 @@ def provider_doctor(provider: str, *, requested_expansion: str | None = None) ->
         "tier": registration.tier,
         # The provider package imported, so the surface is always reachable in-process.
         "installed": True,
-        "invocation_mode": "python_entrypoint",
         "auth": auth_details
         or {
             "required": registration.auth_required,
@@ -879,7 +880,6 @@ def global_doctor_payload(*, requested_expansion: str | None = None) -> dict[str
     return {
         "wrapper": {
             "provider_count": len(PROVIDERS),
-            "python_first": True,
             "tiers": provider_tiers(),
             "requested_expansion": requested_expansion,
             "expansion_filter_active": requested_expansion is not None,

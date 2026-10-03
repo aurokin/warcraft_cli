@@ -133,6 +133,10 @@ Fanout failure rules:
   (exit 5) if every provider failed upstream, otherwise `providers_failed` (exit 1): a crash or a bad
   argument must not read as "retry later". The rows, each with the provider's `exit_code`, are under
   `error.details.failed_providers`
+- when no provider answered and none failed, no included provider searched the query (an expansion
+  filter left only explicit-report-only providers, or none), so the wrapper fails
+  `no_searching_provider` (exit 2) with `requested_expansion`, `included_providers` and
+  `excluded_providers` in `error.details` instead of an ok:true empty page
 
 Composite failure rules:
 - a composite command exits with the code the contract maps its failing source's error to. The

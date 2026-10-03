@@ -12,7 +12,7 @@ from warcraft_api.cache import CacheSettings, CacheTTLConfig, build_cache_store,
 from warcraft_api.http import DEFAULT_RETRY_ATTEMPTS, build_client, request_with_retries
 from warcraft_core.paths import provider_cache_root
 from warcraft_core.provider import ProviderError
-from warcraft_core.wow_normalization import normalize_name, normalize_region, primary_realm_slug
+from warcraft_core.wow_normalization import normalize_name, normalize_region, primary_realm_slug, profile_region
 
 RAIDERIO_BASE_URL = "https://raider.io/api/v1"
 RAIDERIO_SITE_BASE_URL = "https://raider.io"
@@ -188,7 +188,7 @@ class RaiderIOClient:
         Mal'Ganis) and answers an unknown realm with HTTP 400 "Failed to find realm", so one request
         per lookup is enough.
         """
-        params = {"region": normalize_region(region), "realm": primary_realm_slug(realm), "name": normalize_name(name), "fields": fields}
+        params = {"region": profile_region(region), "realm": primary_realm_slug(realm), "name": normalize_name(name), "fields": fields}
         return self._get_json(f"{RAIDERIO_BASE_URL}/{path}", params=params, namespace=namespace, ttl_seconds=ttl_seconds)
 
     def character_profile(self, *, region: str, realm: str, name: str, fields: str = DEFAULT_CHARACTER_FIELDS) -> FetchedJson:

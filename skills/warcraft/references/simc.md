@@ -33,7 +33,7 @@
   - a Wowhead `/talent-calc/blizzard/<hash>` URL, which is what `modify-build` publishes
   - SimC-native build/profile text
   `identify-build`, `describe-build`, and `decode-build` report `source_kind`, resolved class/spec, and the normalized generated profile so you can verify the handoff before reasoning from it
-- any other link (a guide page, an article, an addon export site) fails with `unsupported_build_reference` (exit 2) naming what it recognized under `error.details.reference_type`; do not retry it as a talent string
+- any other link (a guide page, an article, an addon export site) fails with `unsupported_build_reference` (exit 2) naming what it recognized under `error.details.reference_type`; do not retry it as a talent string. A Classic-era Wowhead calculator build (`/classic/`, `/cata/`, `/mop-classic/` ...) fails the same way with `wowhead_talent_calc_url_non_retail`: SimC decodes retail builds only (retail `/ptr/` and `/beta/` calculator URLs decode normally)
 - for exact-build commands, `--talents` is now safe for the same common consumer inputs as `--build-text`, including bare WoW exports and Wowhead talent-calc URLs with build codes
 - a build read against another spec's APL (`--apl-path monk_brewmaster.simc` for a mistweaver build) fails with `invalid_query` instead of describing the wrong rotation
 - a talent string SimC rejects fails with `invalid_build` and SimC's own error line; it is never reported as a partial build. The envelope names the binary that rejected it under `error.details.simc_binary`, and when that binary is older than the checkout the message says so and asks for a rebuild; `simc doctor` reports the same mismatch under `repo.build_issues`
@@ -59,11 +59,13 @@
   - `simc sim ./profile.simc`
   - `cat ./profile.simc | simc sim -`
   - it always reports run settings, runtime, and core output metrics; `metrics.dps_error` is SimC's confidence-interval half-width around mean DPS and `run_settings.target_error_percent` is that error as a percent of DPS, so quote DPS with it
-- `simc run` returns SimC's headline `Player:` / `DPS=` lines under `result_lines`; its output previews are the last 20 lines
+  - a profile with several actors reports the rest under `other_actors` (`actor_count` is the total), and a profile with profilesets (Top Gear / Droptimizer input) reports their ranked rows under `profilesets`
+- `simc run` returns SimC's headline lines under `result_lines`: each `Player:` / `Target:` header followed by its `DPS=` / `DTPS=` lines, so a `DTPS=` under `Target:` is the target's; its output previews are the last 20 lines
 - `sim` and `run` fail with `missing_binary` when the checkout has no built binary; run `simc build`
 - `compare-apls` labels must be unique plain file names (they name the files each variant writes), otherwise it fails with `invalid_query`
 - `compare-apls` ranks variants on mean DPS, but `action_counts`, `action_cpm`, and `top_action_deltas` come from the one iteration SimC records an action sequence for; the payload states this under `sampling`, so present cast-rate differences as a single sampled fight, not as an average
 - `spec-files`, `find-action`, and `trace-action` need ripgrep; without it they fail with `missing_dependency` and `simc doctor` marks them `unavailable`. Pointed at a directory that is not a SimulationCraft checkout they fail with `not_found` (exit 4) rather than reporting zero hits
+- `find-action` finds a spell in the spell dumps by token (`rising_sun_kick`) or display name (`"Rising Sun Kick"`); `--class` narrows the class-module and spell-dump hits to that class (the APL buckets still search every class) and fails with `invalid_query` for an unknown class
 - use `compare-builds` to diff talent selections between two or more builds by tree; this is the right tool when the user asks "what changed between these two builds?"
   - `summary.failed` counts the `--other` builds SimC rejected; each keeps its `error` in `comparisons`, so say which comparisons are missing. When none decode the command fails instead
 - use `modify-build` to produce a new talent export string from an existing build:

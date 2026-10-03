@@ -475,7 +475,6 @@ TOKEN_STATE_KEYS = frozenset(
         "pending_auth_mode",
         "has_pending_state",
         "has_access_token",
-        "has_refresh_token",
         "expires_at",
         "expired",
     }
@@ -604,7 +603,6 @@ def test_auth_client_and_token_describe_the_oauth_setup(require):
     # A saved user token is what `auth whoami` reads, so the token surface must report the same one.
     assert token["endpoint_family"] == "user", token_result.describe()
     assert token["state"]["has_access_token"] is True, token_result.describe()
-    assert isinstance(token["state"]["has_refresh_token"], bool), token_result.describe()
     granted = token["scopes"]["granted"]
     assert isinstance(granted, list) and granted, token_result.describe()
     assert_no_credential_values(token["state"])
@@ -676,6 +674,22 @@ def test_search_and_resolve_accept_a_report_url_and_a_bare_code(require):
     for word_query in ("frostdeathknight", "FrostDeathKnight"):
         word = run("warcraftlogs", "resolve", word_query)
         assert not (word.data.get("match") or {}).get("report_reference"), word.describe()
+
+
+def test_a_classic_report_url_selects_the_classic_site(require):
+    """A report code only exists on its own site, so a classic URL has to carry ``--site classic``."""
+    require("warcraftlogs")
+    listing = run("warcraftlogs", "--site", "classic", "reports", "--limit", "1")
+    code = str(_rows(listing, "reports")[0]["code"])
+    url = f"https://classic.warcraftlogs.com/reports/{code}"
+
+    resolved = run("warcraftlogs", "resolve", url)
+    assert resolved.data["next_command"] == f"warcraftlogs --site classic report {code}", resolved.describe()
+    binary, *args = shlex.split(resolved.data["next_command"])
+    assert run(binary, *args).data["report"]["code"] == code
+
+    mismatch = run("warcraftlogs", "report-encounter", f"{url}#fight=1", expect=EXIT_USAGE, error_code="invalid_query")
+    assert "--site classic" in mismatch.payload["error"]["message"], mismatch.describe()
 
 
 def test_guild_family_reports_the_pinned_guild(require):
@@ -803,7 +817,9 @@ def test_encounter_rankings_class_spec_metric_and_page_reach_warcraft_logs(requi
         "--difficulty", str(found.fight["difficulty"]),
     )
 
-    first = run("warcraftlogs", *scope, "--top", "100")
+    # Both pages skip the cache: an earlier test's page 1 can be minutes older than a fresh page 2,
+    # and a live leaderboard shifts rows across the page boundary in that time.
+    first = run("warcraftlogs", *scope, "--top", "100", env=no_cache_env())
     first_rows = first.data["rankings"]["rows"]
     assert len({row["class_name"] for row in first_rows}) >= 2, "an unfiltered leaderboard holds more than one class"
 
@@ -820,7 +836,7 @@ def test_encounter_rankings_class_spec_metric_and_page_reach_warcraft_logs(requi
     healer_rows = healers.data["rankings"]["rows"]
     assert healer_rows and {(row["class_name"], row["spec_name"]) for row in healer_rows} <= HEALER_SPECS, healers.describe()
 
-    second = run("warcraftlogs", *scope, "--top", "10", "--page", "2")
+    second = run("warcraftlogs", *scope, "--top", "10", "--page", "2", env=no_cache_env())
     rankings = second.data["rankings"]
     assert rankings["page"] == 2, second.describe()
     assert rankings["rows"][0]["rank"] == first.data["rankings"]["page_count"] + 1, second.describe()
@@ -1925,6 +1941,38 @@ def test_a_fight_scope_that_matches_nothing_is_not_found_not_an_empty_slice(requ
         result = run("warcraftlogs", command, found.code, *scope, *extra, expect=EXIT_NOT_FOUND, error_code="not_found")
         assert result.payload["error"]["details"]["missing_fight_ids"] == [999999], result.describe()
         assert found.code in result.payload["error"]["message"], result.describe()
+
+
+def test_input_warcraft_logs_would_answer_unfiltered_is_a_usage_error(require):
+    """Warcraft Logs ignores an unknown class, a partial guild scope, or a window past the fight.
+
+    Each used to come back ``ok: true`` with unfiltered rows or an empty slice; a schema-rejected enum
+    value came back as ``not_found``.
+    """
+    require("warcraftlogs")
+    found = anchor()
+    zone, boss = str(found.zone["id"]), str(found.fight["encounter_id"])
+    for args in (
+        ("encounter-rankings", "--zone-id", zone, "--boss-id", boss, "--class-name", "nopeclass"),
+        ("reports", "--guild-name", pins.GUILD_NAME, "--limit", "1"),
+        ("boss-kills", "--zone-id", zone, "--boss-id", boss, "--spec-name", "frsot"),
+        ("report-events", found.code, "--fight-id", str(found.fight_id), "--data-type", "nope"),
+        (
+            "report-events", found.code, "--fight-id", str(found.fight_id), "--data-type", "casts",
+            "--start-time", str(int(found.fight["end_time"]) + 60_000), "--end-time", str(int(found.fight["end_time"]) + 120_000),
+        ),
+    ):
+        result = run("warcraftlogs", *args, expect=EXIT_USAGE, error_code="invalid_query")
+        assert result.stdout == "", result.describe()
+
+    run("warcraftlogs", "guild-reports", *GUILD[:2], "zzqqnopeguild", expect=EXIT_NOT_FOUND, error_code="not_found")
+
+
+def test_a_realm_in_any_spelling_reaches_its_warcraft_logs_slug(require):
+    require("warcraftlogs")
+    # Warcraft Logs' slug runs this realm's words together; the hyphenated spelling is the one users type.
+    server = run("warcraftlogs", "server", "us", "Azjol-Nerub")
+    assert server.data["server"]["slug"] == "azjolnerub", server.describe()
 
 
 def test_a_dead_proxy_is_an_exit_5_envelope_on_stderr(require):

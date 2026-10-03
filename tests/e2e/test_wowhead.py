@@ -36,6 +36,7 @@ BINARY = "wowhead"
 
 # Class/spec and profession slugs are permanent Wowhead routes.
 TALENT_CALC_SPEC = "druid/balance"
+BALANCE_SPEC_ID = 102
 # A Classic Era warrior build; classic calculators take any build code the tree accepts.
 CLASSIC_TALENT_CALC_URL = "https://www.wowhead.com/classic/talent-calc/warrior/30305001302-05050005525010051"
 PROFESSION_TREE_REF = "alchemy/BCuA"
@@ -44,6 +45,8 @@ PROFESSION_TREE_REF = "alchemy/BCuA"
 # its journey pins.
 DRESSING_ROOM_REF = "#fz8zz0zb89c8mM8YB8mN8X18mO8ub8mP8uD"
 PROFILER_REF = "97060220/us/illidan/Roguecane"
+# A WoW Forever news post, the shape `news` lists under /forever/news/; news posts stay up.
+FOREVER_NEWS_URL = "https://www.wowhead.com/forever/news/ghost-wolf-appearance-temporary-until-fixes-are-in-for-wow-forever-383241"
 
 # `wowhead expansions` lists these; every one routes real Wowhead paths for a classic-era item.
 CLASSIC_EXPANSIONS = ("classic", "tbc", "wotlk", "cata", "mop-classic")
@@ -65,6 +68,8 @@ ROUTED_ENTITIES: tuple[tuple[str, int, str], ...] = (
 )
 # Elwynn Forest, a zone since 2004 with its own quests and NPCs.
 ELWYNN_FOREST_ZONE_ID = 12
+# Isle of Dorn, The War Within's first zone: its page links more than entity-page's 2000-link cap.
+ISLE_OF_DORN_ZONE_ID = 14717
 # Wowhead's own `typeName` for the numeric suggestion `type` this CLI maps to each entity type.
 # A wrong id in that table mislabels the row and mints a follow-up command for the wrong page.
 SUGGESTION_TYPE_NAMES: dict[str, str] = {
@@ -418,6 +423,11 @@ def test_entity_page_links_what_the_page_lists_in_its_relation_tabs(require) -> 
     assert {"quest", "npc"} <= listed_types, page.describe()
     assert all(row["listview"] for row in listed if row.get("source_kind") == "listview"), page.describe()
 
+    # Isle of Dorn links more entities than entity-page can return, and the entity preview says so.
+    dorn = run(BINARY, "entity", "zone", str(ISLE_OF_DORN_ZONE_ID), "--no-include-comments")
+    preview = dorn.data["linked_entities"]
+    assert preview["count"] > 2000 and preview["fetch_more_truncated"] is True, dorn.describe()
+
 
 def test_resolve_rejects_entity_types_the_suggestion_endpoint_cannot_emit(require) -> None:
     """``resolve`` answers with a database entity, so a type no suggestion row carries is a usage error.
@@ -633,6 +643,25 @@ def test_linked_graph_walks_out_from_thunderfury(require) -> None:
     assert all(edge["from"] != edge["to"] for edge in graph.data["graph"]["edges"]), graph.describe()
 
 
+def test_linked_graph_follows_a_zones_relation_tabs(require) -> None:
+    """A zone lists its quests in a relation tab, not in body links; the graph once found two of Elwynn's."""
+    require("wowhead")
+    graph = run(
+        BINARY, "linked-graph", "zone", str(ELWYNN_FOREST_ZONE_ID),
+        "--relation", "quest", "--limit", "500", "--max-fetches", "1",
+    )
+    assert graph.data["root"]["name"] == "Elwynn Forest", graph.describe()
+    quests = [node for node in graph.data["graph"]["nodes"] if node["entity_type"] == "quest"]
+    assert len(quests) > 50, graph.describe()
+    assert "listview" in {edge["source_kind"] for edge in graph.data["graph"]["edges"]}, graph.describe()
+
+    # A misspelt relation used to filter every edge away and answer ok with an empty graph.
+    run(
+        BINARY, "linked-graph", "item", str(pins.ITEM_ID), "--relation", "npcs",
+        expect=EXIT_USAGE, error_code="invalid_argument", env={**dead_proxy_env(), **no_cache_env()},
+    )
+
+
 def test_linked_graph_reports_the_pages_a_fetch_cap_left_unread(require) -> None:
     """``--depth 2`` has to read every child page the root links, so a ``--max-fetches`` that stops
     short is a sample and must say so; it once reported ``truncated: false`` after reading one child.
@@ -781,6 +810,10 @@ def test_guide_export_writes_a_bundle_the_bundle_commands_can_query(
     corpus = run(BINARY, "guide-bundle-query", "guide", "--root", str(out_dir), "--limit", "3")
     assert corpus.data["searched_bundle_count"] == 1, corpus.describe()
     assert [row["guide_id"] for row in corpus.data["bundles"]] == [guide_id], corpus.describe()
+    # The guide-query match shape: counts per kind, and top rows that name their kind, score and bundle.
+    assert corpus.data["counts"]["build_references"] == 0, corpus.describe()
+    assert corpus.data["top"], corpus.describe()
+    assert all(row["kind"] and row["score"] > 0 and row["bundle"]["guide_id"] == guide_id for row in corpus.data["top"])
 
     inspected = run(BINARY, "guide-bundle-inspect", str(guide_id), "--root", str(out_dir))
     assert inspected.data["guide"]["id"] == guide_id, inspected.describe()
@@ -795,6 +828,26 @@ def test_guide_export_writes_a_bundle_the_bundle_commands_can_query(
     assert refreshed.data["guide"]["id"] == guide_id, refreshed.describe()
     assert refreshed.data["refresh"] == {"updated": True, "reason": "forced", "max_age_hours": 24}
     assert refreshed.data["exported_at"] >= exported.data["exported_at"], refreshed.describe()
+
+
+def test_guide_export_hydrates_linked_entities_and_a_plain_reexport_drops_them(
+    require, guide_id: int, out_dir: Path
+) -> None:
+    """A re-export without hydration once kept the old entities manifest, so inspect flagged the fresh bundle."""
+    require("wowhead")
+    bundle_dir = out_dir / "hydrated"
+    hydrated = run(
+        BINARY, "guide-export", str(guide_id), "--out", str(bundle_dir), "--max-links", "25",
+        "--hydrate-linked-entities", "--hydrate-type", "spell,item", "--hydrate-limit", "2",
+    )
+    hydration = hydrated.data["hydration"]
+    assert sum(hydration["source_counts"].values()) == hydrated.data["counts"]["hydrated_entities"] == 2, hydrated.describe()
+    entities_manifest = json.loads((bundle_dir / "entities" / "manifest.json").read_text())
+    assert all((bundle_dir / row["path"]).is_file() for row in entities_manifest["items"]), entities_manifest
+
+    run(BINARY, "guide-export", str(guide_id), "--out", str(bundle_dir), "--max-links", "25")
+    inspected = run(BINARY, "guide-bundle-inspect", str(bundle_dir))
+    assert inspected.data["issues"] == [], inspected.describe()
 
 
 def test_guide_bundle_refresh_rereads_the_dataset_the_bundle_was_exported_from(require, out_dir: Path) -> None:
@@ -1020,6 +1073,13 @@ def test_blue_tracker_listing_leads_to_one_blue_topic(require, blue_listing: Res
 
     topics = [row for row in rows if "/blue-tracker/topic/" in row["url"]]
     assert topics, f"no forum topic in the listing\n{blue_listing.describe()}"
+    # The listing's Blizzard news rows are not forum topics; blue-topic used to fetch one and fail
+    # parse_error (exit 1), and news-post read any Wowhead page, an item's included, as an article.
+    offline = {**dead_proxy_env(), **no_cache_env()}
+    blizzard_news = "https://www.wowhead.com/blue-tracker/news/us/hotfixes-october-1-2026-world-of-warcraft-blizzard-news-24296142"
+    run(BINARY, "blue-topic", blizzard_news, expect=EXIT_USAGE, error_code="invalid_ref", env=offline)
+    item_url = f"https://www.wowhead.com/item={pins.ITEM_ID}"
+    run(BINARY, "news-post", item_url, expect=EXIT_USAGE, error_code="invalid_ref", env=offline)
     topic = run(BINARY, "blue-topic", topics[0]["url"])
     assert_envelope_data_holds(topic, "topic", "posts", "summary")
     assert topic.data["topic"]["page_url"] == topics[0]["url"], topic.describe()
@@ -1039,8 +1099,11 @@ def test_talent_calculator_build_decodes_into_a_transport_packet(require, out_di
     assert spec.data["tool"]["has_build_code"] is False, spec.describe()
     identity = spec.data["build_identity"]["class_spec_identity"]["identity"]
     assert identity == {"actor_class": "druid", "spec": "balance"}, spec.describe()
+    assert spec.data["tool"]["spec_id"] == BALANCE_SPEC_ID, spec.describe()
     builds = spec.data["listed_builds"]
     assert builds["count"] >= len(builds["items"]) > 0, "the talent-calc page listed no builds"
+    # The page embeds every spec's listed builds; a Windwalker build used to come back first here.
+    assert {row["spec_id"] for row in builds["items"]} == {BALANCE_SPEC_ID}, spec.describe()
     build_code = builds["items"][0]["hash"]
     assert build_code, spec.describe()
 
@@ -1061,6 +1124,12 @@ def test_talent_calculator_build_decodes_into_a_transport_packet(require, out_di
     assert emitted["transport_forms"]["wowhead_talent_calc_url"].endswith(build_code), packet.describe()
     assert json.loads(packet_path.read_text()) == emitted, "--out wrote something other than the packet"
 
+    # A build code is a loadout string whose header names its spec, so it cannot be relabelled.
+    run(
+        BINARY, "talent-calc-packet", f"druid/feral/{build_code}",
+        expect=EXIT_USAGE, error_code="invalid_tool_ref", env={**dead_proxy_env(), **no_cache_env()},
+    )
+
 
 def test_a_classic_talent_calculator_url_is_a_class_and_a_build_code_not_a_spec(require) -> None:
     """Classic-era calculators have no spec segment: ``/classic/talent-calc/<class>/<build-code>``.
@@ -1077,11 +1146,12 @@ def test_a_classic_talent_calculator_url_is_a_class_and_a_build_code_not_a_spec(
     assert classic.data["page"]["canonical_url"] == "https://www.wowhead.com/classic/talent-calc", classic.describe()
     assert "talent calculator" in (classic.data["page"]["title"] or "").lower(), classic.describe()
 
-    # A path that names no WoW class is a bad reference, refused before any fetch.
-    run(
-        BINARY, "talent-calc", "https://www.wowhead.com/talent-calc/notaclass/notaspec",
-        expect=EXIT_USAGE, error_code="invalid_tool_ref", env={**dead_proxy_env(), **no_cache_env()},
-    )
+    # A path that names no WoW class, or a spec of another class, is a bad reference, refused before any fetch.
+    for bad_ref in ("https://www.wowhead.com/talent-calc/notaclass/notaspec", "paladin/frost"):
+        run(
+            BINARY, "talent-calc", bad_ref,
+            expect=EXIT_USAGE, error_code="invalid_tool_ref", env={**dead_proxy_env(), **no_cache_env()},
+        )
 
 
 def test_profession_dressing_room_and_profiler_refs_normalize_and_cite(require) -> None:
@@ -1117,6 +1187,14 @@ def test_profession_dressing_room_and_profiler_refs_normalize_and_cite(require) 
     error = profiler.payload["error"]
     assert error["details"]["url"] == f"https://www.wowhead.com/list?list={PROFILER_REF}", profiler.describe()
     assert "This list doesn't exist or has been removed." in error["message"], profiler.describe()
+
+    # Wowhead's own "Default Lists", and the canonical /list=<id>/<slug> URL it reports, which once exited 2.
+    default_lists = run(BINARY, "profiler", "1")
+    canonical = default_lists.data["page"]["canonical_url"]
+    assert canonical == "https://www.wowhead.com/list=1/default-lists", default_lists.describe()
+    by_url = run(BINARY, "profiler", canonical)
+    assert by_url.data["tool"]["list_id"] == "1", by_url.describe()
+    assert by_url.data["page"]["canonical_url"] == canonical, by_url.describe()
 
 
 def test_global_output_flags_reshape_the_same_entity_payload(require) -> None:
@@ -1225,6 +1303,46 @@ def test_cache_inspect_counts_entries_and_cache_clear_empties_a_namespace(requir
     assert cleared.data["removed"]["total"] == 1, cleared.describe()
     assert cleared.data["remaining"]["namespaces"].get(namespace, {}).get("active", 0) == 0, cleared.describe()
     assert cleared.data["remaining"]["totals"]["active"] > 0, "clearing one namespace emptied the cache"
+
+
+def test_a_wow_forever_url_is_not_read_as_retail(require) -> None:
+    """Wowhead's /forever/ section is another game; its item page was answered with retail data."""
+    require("wowhead")
+    forever_item = f"https://www.wowhead.com/forever/item={pins.ITEM_ID}"
+    detected = run(BINARY, "expansion-detect", forever_item)
+    assert detected.data["detected_expansion"] is None, detected.describe()
+    run(
+        BINARY, "entity", "--url", forever_item,
+        expect=EXIT_USAGE, error_code="invalid_argument", env={**dead_proxy_env(), **no_cache_env()},
+    )
+
+    # The Forever news rows `news` emits route to news-post, which says it could not infer an expansion.
+    searched = run(BINARY, "search", FOREVER_NEWS_URL)
+    assert searched.data["results"][0]["follow_up"]["command"] == f"wowhead news-post {FOREVER_NEWS_URL}", searched.describe()
+    post = run(BINARY, "news-post", FOREVER_NEWS_URL)
+    assert "ghost wolf" in (post.data["page"]["title"] or "").lower(), post.describe()
+    assert post.data["notes"] == [f"Could not infer expansion from URL {FOREVER_NEWS_URL!r}."], post.describe()
+
+
+def test_an_unknown_guide_category_is_not_found(require) -> None:
+    """Wowhead redirects /guides/class to its whole guide index, once answered ok as category `class`."""
+    require("wowhead")
+    run(BINARY, "guides", "class", expect=EXIT_NOT_FOUND, error_code="not_found")
+
+
+def test_an_unknown_guide_id_is_not_found(require) -> None:
+    """Wowhead answers an unknown /guide=<id> with HTTP 400; it exited 5, which agents retry."""
+    require("wowhead")
+    missing = run(BINARY, "guide", "99999999", expect=EXIT_NOT_FOUND, error_code="not_found")
+    assert missing.payload["error"]["details"]["status_code"] == 400, missing.describe()
+
+
+def test_resolve_does_not_answer_a_season_query_with_another_season(require) -> None:
+    """Wowhead's database order puts "Keystone Legend: Season 2" first for "season 3"; it was resolved at high confidence."""
+    require("wowhead")
+    resolved = run(BINARY, "resolve", "keystone legend season 3")
+    match = resolved.data["match"] or {}
+    assert resolved.data["resolved"] is False or "3" in (match.get("name") or "").split(), resolved.describe()
 
 
 def test_unknown_item_id_is_a_not_found_envelope(require) -> None:

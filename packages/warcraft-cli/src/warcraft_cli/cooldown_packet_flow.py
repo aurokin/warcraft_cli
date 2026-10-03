@@ -280,6 +280,7 @@ def _resolve_reference(ctx: typer.Context, request: CooldownRequest, state: Cool
             code="missing_fight",
             message="Pass --fight-id or provide a report URL containing fight=<id>.",
             query={**state.query, "report_code": parsed_ref.code},
+            exit_code=EXIT_USAGE,
         )
     state.report_code = parsed_ref.code
     state.fight_id = resolved_fight_id
@@ -389,6 +390,18 @@ def _load_lorrgs_fight(ctx: typer.Context, request: CooldownRequest, state: Cool
             exit_code=EXIT_NOT_FOUND,
         )
         return
+    if not _available_lorrgs_players(fight):
+        _degrade_without_lorrgs(
+            ctx,
+            request,
+            state,
+            code="lorrgs_fight_has_no_players",
+            message="Lorrgs cached this fight without its players, so phase markers are unavailable.",
+            advice=_LORRGS_FALLBACK_ADVICE,
+            source=None,
+            exit_code=EXIT_NOT_FOUND,
+        )
+        return
     state.lorrgs_fight = fight
 
 
@@ -397,14 +410,14 @@ def _select_player_without_lorrgs(
 ) -> None:
     """Take the actor and spec from the flags ``_degrade_without_lorrgs`` already required.
 
-    The actor's name and class come from the Warcraft Logs report roster, so an --actor-id the
-    report does not have fails instead of returning an empty cast list.
+    The actor's name and class come from the Warcraft Logs roster of the selected fight, so an
+    --actor-id that fight does not have fails instead of returning an empty cast list.
     """
     state.actor_id = int(request.actor_id or 0)
     state.spec_slug = str(request.spec_slug or "")
     state.boss_slug = request.boss_slug
     state.query.update({"actor_id": state.actor_id, "spec_slug": state.spec_slug, "boss_slug": state.boss_slug})
-    state.roster_args = ["report-master-data", state.report_code, "--actor-type", "Player"]
+    state.roster_args = ["report-player-details", state.report_code, "--fight-id", str(state.fight_id)]
     if request.allow_unlisted:
         state.roster_args.append("--allow-unlisted")
     state.roster_result = _cooldown_provider_payload(
@@ -415,21 +428,25 @@ def _select_player_without_lorrgs(
         expansion=request.expansion,
         query=state.query,
         error_code="warcraftlogs_roster_failed",
-        error_message="Warcraft Logs report roster lookup failed.",
+        error_message="Warcraft Logs fight roster lookup failed.",
     )
-    actors = [row for row in as_list(as_dict(_data_of(state.roster_result).get("master_data")).get("actors")) if isinstance(row, dict)]
+    roles = as_dict(as_dict(_data_of(state.roster_result).get("player_details")).get("roles"))
+    actors = [row for role in ("tanks", "healers", "dps") for row in as_list(roles.get(role)) if isinstance(row, dict)]
     actor = next((row for row in actors if int_or_none(row.get("id")) == state.actor_id), None)
     if actor is None:
         _fail_cooldown_packet(
             ctx,
             code="actor_id_not_found",
-            message=f"Warcraft Logs report {state.report_code} has no player with source id {state.actor_id}.",
+            message=(
+                f"Fight {state.fight_id} of Warcraft Logs report {state.report_code} has no player with "
+                f"source id {state.actor_id}."
+            ),
             query=state.query,
-            details={"available_players": [{key: row.get(key) for key in ("id", "name", "sub_type")} for row in actors]},
+            details={"available_players": [{key: row.get(key) for key in ("id", "name", "type")} for row in actors]},
             exit_code=EXIT_NOT_FOUND,
         )
-    sub_type = actor.get("sub_type")
-    state.player = {"name": actor.get("name"), "class_slug": sub_type.lower() if isinstance(sub_type, str) else None}
+    actor_type = actor.get("type")
+    state.player = {"name": actor.get("name"), "class_slug": actor_type.lower() if isinstance(actor_type, str) else None}
 
 
 def _require_spec_of_player_class(ctx: typer.Context, state: CooldownState) -> None:
@@ -449,6 +466,7 @@ def _require_spec_of_player_class(ctx: typer.Context, state: CooldownState) -> N
 
 def _select_player(ctx: typer.Context, request: CooldownRequest, state: CooldownState, fetch: ProviderFetch) -> None:
     if state.lorrgs_unavailable is not None:
+        _load_warcraftlogs_fight(ctx, request, state, fetch)
         _select_player_without_lorrgs(ctx, request, state, fetch)
         _require_spec_of_player_class(ctx, state)
         return
@@ -457,13 +475,14 @@ def _select_player(ctx: typer.Context, request: CooldownRequest, state: Cooldown
     )
     if player is None:
         code = player_error or "actor_not_found"
+        exit_code = EXIT_NOT_FOUND if code.endswith("_not_found") else EXIT_USAGE if code == "missing_actor" else EXIT_GENERIC
         _fail_cooldown_packet(
             ctx,
             code=code,
             message="Could not resolve the selected player in the Lorrgs fight payload.",
             query=state.query,
             details={"available_players": _available_lorrgs_players(state.lorrgs_fight)},
-            exit_code=EXIT_NOT_FOUND if code.endswith("_not_found") else EXIT_GENERIC,
+            exit_code=exit_code,
         )
     resolved_actor_id = int_or_none(player.get("source_id"))
     if resolved_actor_id is None:
@@ -559,7 +578,8 @@ def _load_spell_catalogs(ctx: typer.Context, request: CooldownRequest, state: Co
     state.boss_catalog = spell_catalog(_data_of(state.boss_spells_result))
 
 
-def _load_warcraftlogs_casts(ctx: typer.Context, request: CooldownRequest, state: CooldownState, fetch: ProviderFetch) -> None:
+def _load_warcraftlogs_fight(ctx: typer.Context, request: CooldownRequest, state: CooldownState, fetch: ProviderFetch) -> None:
+    """Find the fight in the Warcraft Logs report before its roster or casts, so a fight it lacks fails ``fight_not_found``."""
     state.wcl_fights_args = ["report-fights", state.report_code]
     if request.allow_unlisted:
         state.wcl_fights_args.append("--allow-unlisted")
@@ -598,6 +618,11 @@ def _load_warcraftlogs_casts(ctx: typer.Context, request: CooldownRequest, state
             details={"fight": state.wcl_fight},
         )
     state.fight_start_time_ms = fight_start_time_ms
+
+
+def _load_warcraftlogs_casts(ctx: typer.Context, request: CooldownRequest, state: CooldownState, fetch: ProviderFetch) -> None:
+    if state.wcl_fight is None:
+        _load_warcraftlogs_fight(ctx, request, state, fetch)
     state.events_args = [
         "report-events",
         state.report_code,
@@ -624,7 +649,7 @@ def _load_warcraftlogs_casts(ctx: typer.Context, request: CooldownRequest, state
     )
     state.player_casts = normalize_warcraftlogs_actor_casts(
         _data_of(state.events_result),
-        fight_start_time_ms=fight_start_time_ms,
+        fight_start_time_ms=state.fight_start_time_ms,
         catalog=state.cooldown_catalog,
         spell_ids=state.tracked_ids,
         source_id=state.actor_id,
@@ -715,7 +740,7 @@ def _source_refs(state: CooldownState) -> dict[str, Any]:
             state.wcl_fights_result, command="warcraftlogs", args=state.wcl_fights_args
         ),
         "warcraftlogs_report_events": _provider_source(state.events_result, command="warcraftlogs", args=state.events_args),
-        "warcraftlogs_report_master_data": _provider_source(
+        "warcraftlogs_report_player_details": _provider_source(
             state.roster_result, command="warcraftlogs", args=state.roster_args
         ),
         "lorrgs_spec_ranking": _provider_source(state.ranking_result, command="lorrgs", args=state.ranking_args or []),
@@ -753,8 +778,8 @@ def _notes(state: CooldownState, lorrgs_player_casts: list[Any]) -> list[str]:
             "section is empty. See the lorrgs section for the reason."
         )
         notes.append(
-            "Without the Lorrgs roster the player's name and class come from the Warcraft Logs report "
-            "roster, and player.deaths is null: deaths come only from the Lorrgs timeline."
+            "Without the Lorrgs roster the player's name and class come from the Warcraft Logs roster "
+            "of the fight, and player.deaths is null: deaths come only from the Lorrgs timeline."
         )
     elif not lorrgs_player_casts:
         notes.append(

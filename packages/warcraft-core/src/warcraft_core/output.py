@@ -86,7 +86,7 @@ def resolve_output_options(
 
 # Key under ``provenance`` listing the dot paths --compact shortened, so a cut value is never read as whole.
 COMPACTED_PATHS_KEY = "compacted_paths"
-_COMMAND_KEY_SUFFIXES = ("command", "commands")
+_VERBATIM_KEY_SUFFIXES = ("command", "commands", "input")
 
 
 def compact_value(value: Any, *, max_chars: int, cut: list[str], path: str = "", verbatim: bool = False) -> Any:
@@ -94,7 +94,7 @@ def compact_value(value: Any, *, max_chars: int, cut: list[str], path: str = "",
 
     Values another tool consumes verbatim are never cut: strings without a space or tab (URLs, talent
     and transport strings, export codes, ids, and line-per-token text such as a generated SimC
-    profile) and anything under a ``*command`` / ``*commands`` key.
+    profile) and anything under a ``*command`` / ``*commands`` / ``*input`` key, such as SimC input to paste.
     """
     if isinstance(value, str):
         if verbatim or len(value) <= max_chars or not (" " in value or "\t" in value):
@@ -113,7 +113,7 @@ def compact_value(value: Any, *, max_chars: int, cut: list[str], path: str = "",
                 max_chars=max_chars,
                 cut=cut,
                 path=f"{path}.{key}" if path else str(key),
-                verbatim=verbatim or str(key).endswith(_COMMAND_KEY_SUFFIXES),
+                verbatim=verbatim or str(key).endswith(_VERBATIM_KEY_SUFFIXES),
             )
             for key, item in value.items()
         }

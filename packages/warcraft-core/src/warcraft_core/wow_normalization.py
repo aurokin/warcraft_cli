@@ -33,6 +33,15 @@ def normalize_region(value: str) -> str:
     return token
 
 
+def profile_region(value: str) -> str:
+    """The region a character or guild profile lives in: ``normalize_region``, with Oceania read as ``us``.
+
+    Oceanic realms are in Blizzard's and Raider.IO's US region, and no profile API has an ``oc`` one.
+    """
+    region = normalize_region(value)
+    return "us" if region == "oc" else region
+
+
 def normalized_text(value: str) -> str:
     parts = [part for part in re.split(r"[^a-z0-9]+", value.strip().lower()) if part]
     return " ".join(parts)

@@ -110,7 +110,7 @@ def _provider_result(provider: str, data: dict[str, Any] | None, *, exit_code: i
     The wrapper reads provider fields from ``data`` only, so a fake that put them anywhere else would
     keep passing after the product broke.
     """
-    return {"provider": provider, "exit_code": exit_code, "payload": {"ok": True, "data": data or {}}, "stdout": ""}
+    return {"provider": provider, "exit_code": exit_code, "payload": {"ok": True, "data": data or {}}}
 
 
 # Without --fight-id the crosswalk enumerates the report's fights first, because Warcraft Logs only
@@ -390,7 +390,6 @@ def test_actor_profile_errors_when_profile_lookup_fails(monkeypatch) -> None:
             "provider": "raiderio",
             "exit_code": 1,
             "payload": {"ok": False, "error": {"code": "character_not_found"}},
-            "stdout": "",
         }
 
     monkeypatch.setattr("warcraft_cli.main.provider_invoke", fake)
@@ -422,7 +421,6 @@ def test_actor_profile_errors_when_warcraftlogs_lookup_fails(monkeypatch) -> Non
             "provider": "warcraftlogs",
             "exit_code": 1,
             "payload": {"ok": False, "error": {"code": "auth_failed", "message": "credentials missing"}},
-            "stdout": "",
         }
 
     monkeypatch.setattr("warcraft_cli.main.provider_invoke", fake)

@@ -53,6 +53,13 @@ def test_query_intents_detect_structured_profile_and_reference() -> None:
     assert "structured_profile" in query_intents("us illidan liquid")
 
 
+def test_a_namespaced_api_name_carries_no_entity_intent() -> None:
+    # C_Spell.GetSpellInfo is a wiki API page; reading `spell` out of it ranked that answer down.
+    assert "entity" not in query_intents("C_Spell.GetSpellInfo")
+    assert "entity" not in query_intents("C_Item.GetItemInfo")
+    assert "entity" in query_intents("spell thunderfury")
+
+
 def test_world_is_not_a_profile_region() -> None:
     # `world` is a leaderboard scope, not a region a character or guild lives in.
     assert "structured_profile" not in query_intents("world boss sha of anger")

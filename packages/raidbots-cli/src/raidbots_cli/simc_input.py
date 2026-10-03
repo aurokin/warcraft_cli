@@ -153,7 +153,7 @@ _SIM_TYPE_EXPLANATIONS = {
 
 
 def simc_handoff(text: str, classification: dict[str, Any]) -> dict[str, Any]:
-    """Build a ready-to-paste handoff: the SimC input plus suggested local `simc` commands.
+    """Build the local handoff for SimC input: what Raidbots would do with it and suggested `simc` commands.
 
     No simc import: the commands are strings for the agent / wrapper to run.
     """
@@ -161,7 +161,7 @@ def simc_handoff(text: str, classification: dict[str, Any]) -> dict[str, Any]:
         {
             "purpose": "Run the full profile locally instead of on the Raidbots cloud.",
             "command": "simc sim -",
-            "stdin": "the SimC input above",
+            "stdin": "the SimC input (data.input from `raidbots input`, or the text given to explain-input)",
         }
     ]
     talents = _talents_value(text)
@@ -200,7 +200,6 @@ def simc_handoff(text: str, classification: dict[str, Any]) -> dict[str, Any]:
         )
 
     return {
-        "ready_to_paste": text,
         "classification": classification,
         "raidbots_behavior": _SIM_TYPE_EXPLANATIONS.get(
             classification.get("sim_type_guess", "advanced"),
@@ -209,6 +208,6 @@ def simc_handoff(text: str, classification: dict[str, Any]) -> dict[str, Any]:
         "suggested_simc_commands": commands,
         "note": (
             "raidbots does not run SimC; these commands run locally (directly or via the warcraft wrapper). "
-            "To execute on the Raidbots cloud, paste the input above into raidbots.com."
+            "To execute on the Raidbots cloud, paste the SimC input into raidbots.com."
         ),
     }

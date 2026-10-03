@@ -146,21 +146,6 @@ def test_merge_article_linked_entities_dedupes_and_preserves_source_urls() -> No
     ]
 
 
-def test_merge_article_linked_entities_supports_custom_page_key() -> None:
-    pages = [
-        {
-            "article_meta": {"page_url": "https://warcraft.wiki.gg/wiki/World_of_Warcraft_API"},
-            "linked_entities": [
-                {"type": "wiki_article", "id": "UIOBJECT_Frame", "name": "UIOBJECT Frame", "url": "https://warcraft.wiki.gg/wiki/UIOBJECT_Frame"},
-            ],
-        }
-    ]
-
-    merged = merge_article_linked_entities(pages, page_key="article_meta")
-
-    assert merged[0]["source_urls"] == ["https://warcraft.wiki.gg/wiki/World_of_Warcraft_API"]
-
-
 def test_merge_article_build_references_dedupes_and_preserves_source_urls() -> None:
     pages = [
         {

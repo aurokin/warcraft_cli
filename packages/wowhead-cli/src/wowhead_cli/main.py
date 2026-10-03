@@ -44,11 +44,13 @@ from warcraft_core.identity import (
     build_identity_payload,
     build_reference_transport_packet_payload,
     normalize_actor_class,
+    normalize_spec_name,
     validate_talent_transport_packet,
 )
 from warcraft_core.output import DEFAULT_COMPACT_MAX_CHARS, OutputProjectionError, shape_payload, to_json
 from warcraft_core.output import emit as emit_json
 from warcraft_core.provider import ProviderError
+from warcraft_core.timestamps import iso_now_utc, parse_iso8601_utc
 
 from wowhead_cli import provider
 from wowhead_cli.citation_pack import citation_pack_from_compare, citation_pack_from_entity
@@ -71,6 +73,7 @@ from wowhead_cli.entities import (
 from wowhead_cli.entity_types import (
     DEFAULT_HYDRATE_ENTITY_TYPES,
     HYDRATABLE_ENTITY_TYPES,
+    PARSER_ENTITY_TYPES,
 )
 from wowhead_cli.expansion_profiles import (
     EXPANSION_PREFIXES,
@@ -93,14 +96,13 @@ from wowhead_cli.guides import (
     guides_payload,
     hydrate_source_counts,
     infer_guide_export_options,
-    iso_now_utc,
     read_json_file,
     read_jsonl_file,
     validated_guides_filters,
     write_guide_export_assets,
     write_json_file,
 )
-from wowhead_cli.linked_graph import build_linked_graph_payload, normalize_relation_option
+from wowhead_cli.linked_graph import build_linked_graph_payload
 from wowhead_cli.listing_filters import (
     absolute_wowhead_url,
     clean_htmlish_text,
@@ -108,7 +110,6 @@ from wowhead_cli.listing_filters import (
     limited_result_block,
     normalize_text_filters,
     parse_date_bound,
-    parse_iso8601_utc,
     parse_listing_timestamp,
     text_filter_match,
 )
@@ -139,6 +140,8 @@ from wowhead_cli.ranking import (
     command_prefix_for_expansion,
     listing_match_score,
     score_text_match,
+    split_choices,
+    url_page_result,
 )
 from wowhead_cli.wowhead_client import (
     WOWHEAD_BASE_URL,
@@ -424,7 +427,7 @@ def _parse_entity_ref_token(token: str) -> tuple[str, int]:
         raise ValueError(f"Invalid entity id in {token!r}.") from exc
     if entity_id <= 0:
         raise ValueError(f"Entity id must be positive in {token!r}.")
-    return entity_type, entity_id
+    return entity_type.lower(), entity_id
 
 
 def _parse_guide_id_token(token: str) -> int | None:
@@ -879,66 +882,7 @@ def _normalize_canonical_entity_url(
 
 # The bundle kinds guide-query and guide-bundle-query search; a wowhead guide-export has no build references.
 GUIDE_QUERY_KINDS = ("sections", "analysis_surfaces", "navigation", "linked_entities", "gatherer_entities", "comments")
-
-
-def _normalize_query_kinds(values: list[str]) -> tuple[str, ...]:
-    allowed = set(GUIDE_QUERY_KINDS)
-    normalized: list[str] = []
-    seen: set[str] = set()
-    for raw in values:
-        for candidate in raw.split(","):
-            value = candidate.strip().lower()
-            if not value:
-                continue
-            if value not in allowed:
-                raise ValueError(
-                    f"Unsupported query kind {value!r}. Expected one of: {', '.join(sorted(allowed))}."
-                )
-            if value in seen:
-                continue
-            seen.add(value)
-            normalized.append(value)
-    return tuple(normalized)
-
-
-def _normalize_link_source_filters(values: list[str]) -> tuple[str, ...]:
-    allowed = {"href", "gatherer", "multi"}
-    normalized: list[str] = []
-    seen: set[str] = set()
-    for raw in values:
-        for candidate in raw.split(","):
-            value = candidate.strip().lower()
-            if not value:
-                continue
-            if value not in allowed:
-                raise ValueError(
-                    f"Unsupported linked source filter {value!r}. Expected one of: {', '.join(sorted(allowed))}."
-                )
-            if value in seen:
-                continue
-            seen.add(value)
-            normalized.append(value)
-    return tuple(normalized)
-
-
-def _normalize_hydrate_types(values: list[str]) -> tuple[str, ...]:
-    normalized: list[str] = []
-    seen: set[str] = set()
-    raw_values = values or list(DEFAULT_HYDRATE_ENTITY_TYPES)
-    for raw in raw_values:
-        for candidate in raw.split(","):
-            value = candidate.strip().lower()
-            if not value:
-                continue
-            if value not in HYDRATABLE_ENTITY_TYPES:
-                raise ValueError(
-                    f"Unsupported hydrate entity type {value!r}. Expected one of: {', '.join(sorted(HYDRATABLE_ENTITY_TYPES))}."
-                )
-            if value in seen:
-                continue
-            seen.add(value)
-            normalized.append(value)
-    return tuple(normalized)
+LINK_SOURCE_FILTERS = ("href", "gatherer", "multi")
 
 
 def _entity_tooltip(client: WowheadClient, plan: EntityAccessPlan, *, data_env: int | None) -> tuple[dict[str, Any], str | None]:
@@ -1139,9 +1083,18 @@ def _fetch_guide_page(
     except ValueError as exc:
         fail(ctx, "invalid_argument", str(exc))
 
-    with _upstream(ctx):
-        default_lookup = guide_url(guide_id, expansion=client.expansion) if guide_id is not None else None
-        html = client.guide_page_html(guide_id) if guide_id is not None and lookup_url == default_lookup else client.page_html(lookup_url)
+    default_lookup = guide_url(guide_id, expansion=client.expansion) if guide_id is not None else None
+    try:
+        with provider.transport_errors():
+            if guide_id is not None and lookup_url == default_lookup:
+                html = client.guide_page_html(guide_id)
+            else:
+                html = client.page_html(lookup_url)
+    except ProviderError as exc:
+        # Wowhead answers an unknown /guide=<id> with HTTP 400, not 404.
+        if guide_id is not None and (exc.details or {}).get("status_code") == 400:
+            fail(ctx, "not_found", f"Wowhead has no guide {guide_id}.", details=exc.details)
+        fail(ctx, exc.code, exc.message, exit_code=exc.exit_code, details=exc.details)
 
     metadata = parse_page_metadata(html, fallback_url=lookup_url)
     canonical_url = metadata["canonical_url"] or lookup_url
@@ -1317,6 +1270,9 @@ def _build_guide_full_payload(
             "comments": f"{canonical_url}#comments",
         },
     }
+    policy_notes = _expansion_policy_notes(cfg, canonical_url)
+    if policy_notes:
+        payload["notes"] = policy_notes
     page_meta = _page_meta_block(parse_page_meta_json(html))
     if page_meta is not None:
         payload["page_meta"] = page_meta
@@ -1594,6 +1550,28 @@ def _normalize_blue_tracker_row(row: dict[str, Any]) -> dict[str, Any] | None:
 
 # A spec path segment (``balance``, ``beast-mastery``); build codes carry digits or capitals.
 _TALENT_CALC_SPEC_RE = re.compile(r"[a-z]+(?:-[a-z]+)*")
+# Blizzard specialization ids by class and spec, spelled as in warcraft_core's WOW_SPECS_BY_CLASS.
+# Wowhead's listed builds carry one as ``spec``, and a retail build code's loadout header encodes one.
+_WOW_SPEC_IDS: dict[tuple[str, str], int] = {
+    ("deathknight", "blood"): 250, ("deathknight", "frost"): 251, ("deathknight", "unholy"): 252,
+    ("demonhunter", "havoc"): 577, ("demonhunter", "vengeance"): 581, ("demonhunter", "devourer"): 1480,
+    ("druid", "balance"): 102, ("druid", "feral"): 103, ("druid", "guardian"): 104, ("druid", "restoration"): 105,
+    ("evoker", "devastation"): 1467, ("evoker", "preservation"): 1468, ("evoker", "augmentation"): 1473,
+    ("hunter", "beast_mastery"): 253, ("hunter", "marksmanship"): 254, ("hunter", "survival"): 255,
+    ("mage", "arcane"): 62, ("mage", "fire"): 63, ("mage", "frost"): 64,
+    ("monk", "brewmaster"): 268, ("monk", "windwalker"): 269, ("monk", "mistweaver"): 270,
+    ("paladin", "holy"): 65, ("paladin", "protection"): 66, ("paladin", "retribution"): 70,
+    ("priest", "discipline"): 256, ("priest", "holy"): 257, ("priest", "shadow"): 258,
+    ("rogue", "assassination"): 259, ("rogue", "outlaw"): 260, ("rogue", "subtlety"): 261,
+    ("shaman", "elemental"): 262, ("shaman", "enhancement"): 263, ("shaman", "restoration"): 264,
+    ("warlock", "affliction"): 265, ("warlock", "demonology"): 266, ("warlock", "destruction"): 267,
+    ("warrior", "arms"): 71, ("warrior", "fury"): 72, ("warrior", "protection"): 73,
+}
+_WOW_SPEC_BY_ID = {spec_id: class_spec for class_spec, spec_id in _WOW_SPEC_IDS.items()}
+# Calculators that use the retail spec names and loadout strings above; classic ones have their own
+# (MoP Classic names rogue's second spec ``combat``), so their spec is not checked and has no id.
+_RETAIL_TALENT_CALC_EXPANSIONS = frozenset({"retail", "ptr", "beta"})
+_LOADOUT_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 
 
 def _absolute_tool_url(raw: str, *, tool_slug: str) -> str | None:
@@ -1655,8 +1633,11 @@ def _parse_talent_calc_state(state_url: str) -> dict[str, Any]:
             "/talent-calc/<class>/<build-code> with a WoW class."
         )
     class_slug, slot, *rest = parts[1:]
+    spec_id: int | None = None
     if _TALENT_CALC_SPEC_RE.fullmatch(slot):
         spec_slug, build_code = slot, (rest[0] if rest else None)
+        if expansion in _RETAIL_TALENT_CALC_EXPANSIONS:
+            spec_id = _talent_calc_spec_id(class_slug, spec_slug, build_code)
     elif not rest:
         spec_slug, build_code = None, slot
     else:
@@ -1665,13 +1646,41 @@ def _parse_talent_calc_state(state_url: str) -> dict[str, Any]:
         "expansion": expansion,
         "class_slug": class_slug,
         "spec_slug": spec_slug,
+        "spec_id": spec_id,
         "build_code": build_code,
         "path_segments": parts[1:],
         "has_build_code": build_code is not None,
     }
 
 
-def _extract_talent_calc_listed_builds(html: str, *, limit: int) -> dict[str, Any] | None:
+def _loadout_spec_id(build_code: str) -> int | None:
+    """The spec id in a Blizzard loadout string's header, an 8-bit version then a 16-bit spec id.
+
+    The string packs 6 bits per character, least significant first, so the first four characters
+    hold the header. Returns None for a code that is not a known spec's loadout string.
+    """
+    header = build_code[:4]
+    if len(header) < 4 or any(char not in _LOADOUT_ALPHABET for char in header):
+        return None
+    bits = sum(_LOADOUT_ALPHABET.index(char) << (6 * index) for index, char in enumerate(header))
+    spec_id = bits >> 8
+    return spec_id if spec_id in _WOW_SPEC_BY_ID else None
+
+
+def _talent_calc_spec_id(class_slug: str, spec_slug: str, build_code: str | None) -> int:
+    """The spec id a talent-calc path names; raises when the spec is not the class's or the build code is another spec's."""
+    spec_id = _WOW_SPEC_IDS.get((normalize_actor_class(class_slug) or "", normalize_spec_name(spec_slug) or ""))
+    if spec_id is None:
+        raise ValueError(f"Talent calculator spec {spec_slug!r} is not a {class_slug} spec.")
+    encoded = _loadout_spec_id(build_code) if build_code else None
+    if encoded is not None and encoded != spec_id:
+        encoded_class, encoded_spec = _WOW_SPEC_BY_ID[encoded]
+        raise ValueError(f"Build code is a {encoded_class}/{encoded_spec} loadout, not {class_slug}/{spec_slug}.")
+    return spec_id
+
+
+def _extract_talent_calc_listed_builds(html: str, *, spec_id: int, limit: int) -> dict[str, Any] | None:
+    """The builds Wowhead lists for ``spec_id``; the page embeds every spec's builds in one block."""
     try:
         payload = extract_json_script(html, "data.wow.talentCalcDragonflight.live.talentBuilds")
     except (ValueError, json.JSONDecodeError):
@@ -1680,7 +1689,7 @@ def _extract_talent_calc_listed_builds(html: str, *, limit: int) -> dict[str, An
         return None
     rows: list[dict[str, Any]] = []
     for raw_id, raw_row in payload.items():
-        if not isinstance(raw_row, dict):
+        if not isinstance(raw_row, dict) or raw_row.get("spec") != spec_id:
             continue
         row_id = raw_row.get("id")
         if not isinstance(row_id, int):
@@ -1771,7 +1780,8 @@ def _enrich_talent_calc_payload_with_page_data(
         "description": metadata.get("description"),
         "canonical_url": page_url,
     }
-    listed_builds = _extract_talent_calc_listed_builds(html, limit=listed_build_limit)
+    spec_id = payload["tool"]["spec_id"]
+    listed_builds = None if spec_id is None else _extract_talent_calc_listed_builds(html, spec_id=spec_id, limit=listed_build_limit)
     if listed_builds is not None:
         enriched_payload["listed_builds"] = listed_builds
     return enriched_payload
@@ -1861,9 +1871,12 @@ def _parse_profiler_state(state_url: str) -> dict[str, Any]:
     parts = [part for part in parsed.path.split("/") if part]
     if parts and parts[0] in EXPANSION_PREFIXES:
         parts = parts[1:]
-    if not parts or parts[0] != "list":
+    if not parts or parts[0].split("=", 1)[0] != "list":
         raise ValueError("Profiler URL must point to /list.")
     list_param = None
+    if parts[0].startswith("list="):
+        # Wowhead's canonical form: /list=<id>/<name-slug>, or /list=<id>/<region>/<realm>/<name>.
+        list_param = "/".join([parts[0].split("=", 1)[1], *(parts[1:] if len(parts) == 4 else [])])
     for candidate in (parsed.query or "").split("&"):
         if candidate.startswith("list="):
             list_param = candidate.split("=", 1)[1]
@@ -1880,6 +1893,12 @@ def _parse_profiler_state(state_url: str) -> dict[str, Any]:
     }
 
 
+def _url_page_surface(url: str) -> str | None:
+    """The command that reads the Wowhead page at ``url`` (``news-post``, ``blue-topic``, ...), or None."""
+    row = url_page_result(url, expansion=resolve_expansion(None))
+    return row["follow_up"]["recommended_surface"] if row is not None else None
+
+
 def _normalize_news_post_ref(ref: str, *, expansion: ExpansionProfile) -> str:
     raw = ref.strip()
     if not raw:
@@ -1888,6 +1907,8 @@ def _normalize_news_post_ref(ref: str, *, expansion: ExpansionProfile) -> str:
     if parsed.scheme and parsed.netloc:
         if not is_wowhead_host(parsed.hostname or ""):
             raise ValueError("news post URL must point to wowhead.com.")
+        if _url_page_surface(raw) != "news-post":
+            raise ValueError("news post URL must point to a Wowhead /news/... or /news=<id> article.")
         return raw
     normalized = raw.lstrip("/")
     if normalized.startswith("news/"):
@@ -1957,6 +1978,8 @@ def _normalize_blue_topic_ref(ref: str, *, expansion: ExpansionProfile) -> str:
     if parsed.scheme and parsed.netloc:
         if not is_wowhead_host(parsed.hostname or ""):
             raise ValueError("blue topic URL must point to wowhead.com.")
+        if _url_page_surface(raw) != "blue-topic":
+            raise ValueError("blue topic URL must point to a Wowhead /blue-tracker/topic/... page.")
         return raw
     normalized = raw.lstrip("/")
     if normalized.startswith("blue-tracker/topic/"):
@@ -2246,6 +2269,18 @@ def _scan_guide_bundle_rows(root: Path) -> list[dict[str, Any]]:
         corpora.append(_bundle_index_row(child, manifest))
     corpora.sort(key=lambda row: ((row.get("title") or "").lower(), row["path"]))
     return corpora
+
+
+def _holds_foreign_index(root: Path) -> bool:
+    """Whether ``root/index.json`` is some other file than a bundle index, which writing one would destroy."""
+    index_path = _guide_bundle_index_path(root)
+    if not index_path.exists():
+        return False
+    try:
+        payload = read_json_file(index_path)
+    except (OSError, json.JSONDecodeError):
+        return True
+    return not (isinstance(payload, dict) and "index_version" in payload)
 
 
 def _write_guide_bundle_index(root: Path) -> None:
@@ -2595,6 +2630,8 @@ def _write_hydrated_entities_manifest(
     hydrate_types: tuple[str, ...],
 ) -> GuideHydrationResult:
     if not items:
+        # A manifest left by an earlier export into this directory would no longer describe this bundle.
+        (entities_dir / "manifest.json").unlink(missing_ok=True)
         return GuideHydrationResult(items=items, hydrated_at=None, files_written={})
     counts_by_type: dict[str, int] = {}
     for row in items:
@@ -2629,10 +2666,10 @@ def _hydrate_guide_linked_entities(
     linked_items: list[Any],
     options: GuideExportOptions,
 ) -> GuideHydrationResult:
-    if not options.hydrate_linked_entities or not isinstance(linked_items, list):
-        return GuideHydrationResult(items=[], hydrated_at=None, files_written={})
-
     entities_dir = export_dir / "entities"
+    if not options.hydrate_linked_entities or not isinstance(linked_items, list):
+        return _write_hydrated_entities_manifest(entities_dir, items=[], hydrate_types=options.hydrate_types)
+
     existing_items_by_key = _existing_hydrated_items_by_key(entities_dir)
     selected_types = set(options.hydrate_types)
     hydrated_summary_items: list[dict[str, Any]] = []
@@ -2726,7 +2763,9 @@ def _write_guide_export_bundle(
     write_json_file(manifest_path, manifest)
     manifest["files"]["manifest_json"] = manifest_path.name
     write_json_file(manifest_path, manifest)
-    _write_guide_bundle_index(export_dir.parent)
+    # `--out` can be any directory; only guide-bundle-index-rebuild may replace a parent index.json that is not ours.
+    if not _holds_foreign_index(export_dir.parent):
+        _write_guide_bundle_index(export_dir.parent)
     return manifest
 
 
@@ -3345,7 +3384,9 @@ def news_post(
         html = client.page_html(page_url)
     metadata = parse_page_metadata(html, fallback_url=page_url)
     canonical_url = absolute_wowhead_url(metadata.get("canonical_url"), fallback=page_url)
-    markup = _extract_news_post_markup(html) or ""
+    markup = _extract_news_post_markup(html)
+    if markup is None:
+        fail(ctx, "parse_error", f"No news article body found at {page_url}.")
     sections = extract_guide_sections(markup) if markup else []
     names = entity_names(extract_gatherer_entities(html, source_url=page_url))
     section_chunks = extract_guide_section_chunks(markup, names) if markup else []
@@ -3384,6 +3425,10 @@ def news_post(
         payload["author"] = author_embed
     if recent_posts is not None:
         payload["related"] = recent_posts
+    # A WoW Forever post has no expansion profile here, so `expansion` is only the default.
+    policy_notes = _expansion_policy_notes(cfg, page_url)
+    if policy_notes:
+        payload["notes"] = policy_notes
     _emit(ctx, payload)
 
 
@@ -3540,6 +3585,14 @@ def guides(
         fail(ctx, "invalid_argument", str(exc))
     with _upstream(ctx):
         html = client.guide_category_page_html(normalized_category)
+    # Wowhead redirects an unknown category (/guides/class) to its whole guide index.
+    guides_index_url = f"{cfg.expansion.wowhead_base}/guides"
+    if (parse_page_metadata(html, fallback_url=None).get("canonical_url") or "").rstrip("/") == guides_index_url:
+        fail(
+            ctx,
+            "not_found",
+            f"Wowhead has no guide category {normalized_category!r}; it served its guide index ({guides_index_url}).",
+        )
 
     try:
         rows = extract_listview_data(html, "guides")
@@ -3912,6 +3965,10 @@ def _guide_summary_payload(
             "comments": f"{canonical_url}#comments",
         },
     }
+    # Wowhead serves the retail guide for a /classic/guide=<id> lookup; say so instead of labelling it classic.
+    policy_notes = _expansion_policy_notes(cfg, canonical_url)
+    if policy_notes:
+        payload["notes"] = policy_notes
     page_meta = _page_meta_block(parse_page_meta_json(html))
     if page_meta is not None:
         payload["page_meta"] = page_meta
@@ -4050,7 +4107,9 @@ def guide_export(
     selected_hydrate_types: tuple[str, ...] = ()
     if hydrate_linked_entities:
         try:
-            selected_hydrate_types = _normalize_hydrate_types(hydrate_type)
+            selected_hydrate_types = split_choices(
+                hydrate_type or list(DEFAULT_HYDRATE_ENTITY_TYPES), allowed=HYDRATABLE_ENTITY_TYPES, label="hydrate entity type"
+            )
         except ValueError as exc:
             fail(ctx, "invalid_argument", str(exc))
     if out is None:
@@ -4129,11 +4188,11 @@ def guide_query(
     except ValueError as exc:
         fail(ctx, "invalid_bundle", str(exc))
     try:
-        selected_kinds = _normalize_query_kinds(kind)
+        selected_kinds = split_choices(kind, allowed=GUIDE_QUERY_KINDS, label="query kind")
     except ValueError as exc:
         fail(ctx, "invalid_argument", str(exc))
     try:
-        selected_link_sources = _normalize_link_source_filters(linked_source)
+        selected_link_sources = split_choices(linked_source, allowed=LINK_SOURCE_FILTERS, label="linked source filter")
     except ValueError as exc:
         fail(ctx, "invalid_argument", str(exc))
 
@@ -4287,8 +4346,8 @@ def guide_bundle_query(
     resolved_root = (root or guide_export_root()).expanduser()
     bundles = _discover_guide_corpora(resolved_root, max_age_hours=max_age_hours)
     try:
-        selected_kinds = _normalize_query_kinds(kind)
-        selected_link_sources = _normalize_link_source_filters(linked_source)
+        selected_kinds = split_choices(kind, allowed=GUIDE_QUERY_KINDS, label="query kind")
+        selected_link_sources = split_choices(linked_source, allowed=LINK_SOURCE_FILTERS, label="linked source filter")
     except ValueError as exc:
         fail(ctx, "invalid_argument", str(exc))
 
@@ -4587,7 +4646,7 @@ def _entity_ref_or_fail(ctx: typer.Context, entity_type: str | None, entity_id: 
         return parsed
     if entity_type is None or entity_id is None:
         fail(ctx, "invalid_argument", "Pass TYPE ID, or --url with a Wowhead entity URL.")
-    return entity_type, entity_id
+    return entity_type.lower(), entity_id
 
 
 @app.command("entity")
@@ -5226,6 +5285,7 @@ def linked_graph(
 ) -> None:
     """Build a linked-entity graph rooted at one Wowhead entity."""
     cfg = _cfg(ctx)
+    entity_type = entity_type.lower()
     client = _client(ctx)
     # The root goes through the access plan (recipe reads the spell page, mount and battle-pet follow
     # the tooltip redirect); linked children are the page types Wowhead itself linked to.
@@ -5243,7 +5303,7 @@ def linked_graph(
             root_url=root_url,
             fetch_page=fetch_page,
             depth=depth,
-            relation_filter=normalize_relation_option(relation),
+            relation_filter=set(split_choices(relation, allowed=PARSER_ENTITY_TYPES, label="relation")),
             node_limit=limit,
             max_fetches=max_fetches,
             include_gatherer=include_gatherer,

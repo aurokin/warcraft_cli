@@ -30,8 +30,9 @@ SimC input to local `simc`. It cannot queue or run simulations.
   full `data.json` payload
 - every report response carries `freshness`, `citations` (report/data/input URLs), and `scope` so you can
   cite the source and tell how fresh it is
-- use `input` when you want to continue the analysis locally: it returns the SimC input plus suggested
-  `simc` commands (run the full profile with `simc sim -`, or decode/describe the talents)
+- use `input` when you want to continue the analysis locally: it returns the SimC input (`data.input`,
+  never shortened by `--compact`) plus suggested `simc` commands (run the full profile with `simc sim -`,
+  which also ranks Top Gear profilesets, or decode/describe the talents)
 - use `explain-input` when the user pastes a `/simc` addon block and asks "what would Raidbots do with this?"
   — it classifies the sim type (quick sim vs Top Gear/Droptimizer vs advanced) entirely offline
 

@@ -103,10 +103,10 @@ def test_citation_pack_from_compare_merges_entities_and_comparison() -> None:
 
 
 def test_entity_command_can_emit_citation_pack(monkeypatch) -> None:
-    def fake_tooltip(self, entity_type: str, entity_id: int, data_env=None):  # noqa: ANN001, ANN202
+    def fake_tooltip(self, entity_type: str, entity_id: int, data_env=None):
         return {"name": "Thunderfury", "quality": 5}
 
-    def fake_html(self, entity_type: str, entity_id: int):  # noqa: ANN001
+    def fake_html(self, entity_type: str, entity_id: int):
         return """
         <html><head>
           <link rel="canonical" href="https://www.wowhead.com/item=19019/thunderfury">

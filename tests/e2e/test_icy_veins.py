@@ -58,6 +58,8 @@ BUNDLE_QUERY_TERM = "mana"
 # A sitemap whose newest entry is older than this many days has stopped being updated
 # (docs/icy-veins/README.md), so search has to warn that newer guides are missing.
 SITEMAP_STALE_DAYS = 30
+# A capped index-refresh run: enough to prove the crawl, its pacing and the merge in about 15 seconds.
+INDEX_REFRESH_REQUESTS = 15
 
 
 @cache
@@ -179,8 +181,11 @@ def test_search_outside_the_guide_surface_returns_a_scope_hint(require) -> None:
 
 
 def _recency(row: dict[str, Any]) -> str | None:
-    """A row's ``sitemap_lastmod``; a page found through the live site menu has none and counts as newest."""
-    return "9999-12-31" if row["metadata"]["source"] == "site_menu" else row["metadata"]["sitemap_lastmod"]
+    """A row's ``sitemap_lastmod``; a site-menu page counts as newest and a site-index page is dated by its publication."""
+    metadata = row["metadata"]
+    if metadata["source"] == "site_menu":
+        return "9999-12-31"
+    return metadata["sitemap_lastmod"] or metadata["date_published"]
 
 
 def _assert_ties_list_the_newest_page_first(result: Result) -> None:
@@ -256,6 +261,75 @@ def test_search_finds_a_current_page_the_stale_sitemap_lacks_through_the_site_me
     page = run(BINARY, "guide", row["id"])
     assert page.data["guide"]["slug"] == row["id"], page.describe()
     assert page.data["article"]["section_count"] >= 1, page.describe()
+
+
+@pytest.fixture(scope="module")
+def refreshed_index(tmp_path_factory: pytest.TempPathFactory) -> tuple[dict[str, str], Result]:
+    """One capped ``index-refresh`` into a private data root: it never touches your index."""
+    env = {"XDG_DATA_HOME": str(tmp_path_factory.mktemp("icy-veins-data"))}
+    return env, run(BINARY, "index-refresh", "--max-requests", str(INDEX_REFRESH_REQUESTS), env=env, timeout=120)
+
+
+def test_index_refresh_crawls_politely_and_merges_into_the_bundled_snapshot(require, refreshed_index) -> None:
+    """A capped run is partial, paced at one request a second, and keeps every page the snapshot it merged into had."""
+    require(PROVIDER)
+    env, result = refreshed_index
+    data = result.data
+    counts = data["counts"]
+
+    assert (data["partial"], data["stop_reason"]) == (True, "max_requests"), result.describe()
+    assert counts["fetched"] == INDEX_REFRESH_REQUESTS and counts["frontier"] > 0, result.describe()
+    assert counts["pages"] >= INDEX_REFRESH_REQUESTS - counts["errors"], result.describe()
+    assert data["blocked"] is None, result.describe()
+    # One request a second at most: fifteen requests cannot take under fourteen seconds.
+    assert result.seconds >= counts["fetched"] - 1, result.describe()
+    previous = data["previous_index"]
+    assert previous is not None and previous["bundled"] is True, result.describe()
+
+    index_path = Path(env["XDG_DATA_HOME"]) / "warcraft" / "icy-veins" / "site_index.json"
+    assert data["index_path"] == str(index_path)
+    stored = json.loads(index_path.read_text(encoding="utf-8"))
+    bundled = json.loads(Path(previous["path"]).read_text(encoding="utf-8"))
+    slugs = {row["slug"] for row in stored["pages"]}
+    assert {row["slug"] for row in bundled["pages"]} <= slugs, "the merge dropped pages of the bundled snapshot"
+    assert len(slugs) == counts["total"]
+    assert len(stored["frontier"]) == counts["frontier"]
+    assert "<html" not in index_path.read_text(encoding="utf-8")
+    # Every page this run read is stamped with the run's date and carries its headline.
+    read_now = [row for row in stored["pages"] if row["last_seen"] == stored["refreshed_at"][:10] and row["status"] == "ok"]
+    assert len(read_now) >= counts["pages"] and all(row["title"] for row in read_now), result.describe()
+
+
+def test_search_ranks_a_boss_page_only_the_site_index_knows(require, refreshed_index) -> None:
+    """The frozen sitemap lacks the current raids' boss pages and the menu links only the raid; the index has them."""
+    require(PROVIDER)
+    env, refresh = refreshed_index
+    stored = json.loads(Path(refresh.data["index_path"]).read_text(encoding="utf-8"))
+    raid_guides = {row["slug"] for row in stored["pages"] if row["slug"].endswith("-raid-guide")}
+    bosses = [row for row in stored["pages"] if row["slug"] in raid_guides and row["parent"] in raid_guides]
+    assert bosses, "the index holds no boss page under a raid guide"
+    tried: list[str] = []
+    for boss in sorted(bosses, key=lambda row: row["date_published"] or "", reverse=True)[:3]:
+        query = boss["slug"].removesuffix("-raid-guide").replace("-", " ")
+        result = run(BINARY, "search", query, "--limit", "5", env=env)
+        provenance = result.payload["provenance"]
+        if "site_index_path" not in provenance:
+            # A current sitemap lists every page, so the index is not read at all.
+            assert "sitemap_warning" not in provenance, result.describe()
+            return
+        assert provenance["site_index_path"] == refresh.data["index_path"], result.describe()
+        top = result.data["results"][0] if result.data["results"] else None
+        if top is None or top["metadata"]["source"] != "site_index":
+            tried.append(f"{query} -> {top and top['id']}")
+            continue
+        assert top["id"] == boss["slug"], result.describe()
+        assert top["name"] == boss["title"], result.describe()
+        assert (top["metadata"]["content_family"], top["metadata"]["parent"]) == ("raid_encounter", boss["parent"]), result.describe()
+        assert top["metadata"]["date_published"] == boss["date_published"], result.describe()
+        page = run(BINARY, "guide", top["id"])
+        assert page.data["guide"]["slug"] == top["id"], page.describe()
+        return
+    raise AssertionError(f"no indexed boss page ranked first as a site_index row: {tried}")
 
 
 def test_resolve_hands_over_a_next_command_that_returns_the_same_guide(require) -> None:
@@ -372,6 +446,23 @@ def test_resolve_reads_class_and_spec_shorthand(require, shorthand: str, spelled
     result = run(BINARY, "resolve", shorthand)
     assert result.data["resolved"] is True, result.describe()
     assert result.data["match"]["id"] == expected.data["match"]["id"], result.describe()
+
+
+@pytest.mark.parametrize(
+    ("query", "slug"),
+    [
+        ("Nerub-ar Palace", "nerubar-palace-raid-guide"),
+        ("Ara-Kara, City of Echoes", "ara-kara-city-of-echoes-dungeon-guide"),
+        # Plain "Zul'Aman" is also a Midnight zone guide now, so the dungeon is named as one.
+        ("Zul'Aman heroic", "zul-aman-heroic-dungeon-guide"),
+    ],
+)
+def test_resolve_answers_official_names_spelled_with_punctuation(require, query: str, slug: str) -> None:
+    """The query kept its hyphens and commas while slugs fold them, so official names resolved to nothing."""
+    require(PROVIDER)
+    result = run(BINARY, "resolve", query)
+    assert result.data["resolved"] is True, result.describe()
+    assert result.data["match"]["id"] == slug, result.describe()
 
 
 def test_guide_returns_attributed_sections_family_navigation_and_a_page_toc(require) -> None:
@@ -611,7 +702,10 @@ def test_guide_query_rejects_a_bundle_path_that_is_missing_or_not_a_bundle(requi
 
     not_a_directory = out_dir / "icy-veins-bundle.txt"
     not_a_directory.write_text("not a bundle", encoding="utf-8")
-    run(BINARY, "guide-query", str(not_a_directory), "mana", expect=EXIT_USAGE, error_code="invalid_argument")
+    # Typer once answered this one itself, with a Click message and the query dropped.
+    as_file = run(BINARY, "guide-query", str(not_a_directory), "mana", expect=EXIT_USAGE, error_code="invalid_argument")
+    assert as_file.payload["error"]["message"].startswith("Bundle path is not a directory"), as_file.describe()
+    assert as_file.payload["query"], as_file.describe()
 
     # A directory with a manifest but no pages file (a wowhead guide-export bundle looks like this)
     # used to load as an empty bundle and answer ok:true with zero matches.
@@ -623,6 +717,14 @@ def test_guide_query_rejects_a_bundle_path_that_is_missing_or_not_a_bundle(requi
     # An unsupported --kind is a bad flag: the usage code every provider gives that mistake, raised
     # before the bundle is read (so this one is not reported as the invalid bundle it also is).
     run(BINARY, "guide-query", str(not_a_bundle), "mana", "--kind", "bogus", expect=EXIT_USAGE, error_code="invalid_argument")
+
+
+def test_guide_export_rejects_an_out_path_that_is_a_file(require, out_dir: Path) -> None:
+    """``--out`` naming a file once fetched every page, then failed as internal_error."""
+    require(PROVIDER)
+    target = out_dir / "icy-veins-bundle-out.txt"
+    target.write_text("not a bundle", encoding="utf-8")
+    run(BINARY, "guide-export", spec_guide_slug(), "--out", str(target), expect=EXIT_USAGE, error_code="invalid_argument")
 
 
 @pytest.mark.parametrize("command", ["guide", "guide-full", "guide-export"])

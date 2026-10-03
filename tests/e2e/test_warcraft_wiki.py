@@ -232,6 +232,8 @@ def test_api_commands_resolve_the_pinned_function(require, command: str) -> None
         ("World of Warcraft API", "World of Warcraft API", "framework_page"),
         # Enum pages document the values the functions take; `api` once answered them not_found.
         ("Enum.ItemQuality", "Enum.ItemQuality", "api_enum"),
+        # One page per console variable; `api` once answered every CVar name not_found.
+        ("autoLootDefault", "CVar autoLootDefault", "cvar"),
     ],
 )
 def test_api_resolves_the_reference_pages_that_are_not_functions(
@@ -464,3 +466,18 @@ def test_missing_argument_is_a_usage_error(require) -> None:
     assert result.payload["provider"] == PROVIDER, result.describe()
     assert result.payload["command"] == "article", result.describe()
     assert result.payload["error"]["message"], result.describe()
+
+
+@pytest.mark.parametrize("command", ["api", "event", "article", "article-full", "article-export"])
+def test_a_blank_query_is_a_usage_error(require, command: str) -> None:
+    """A blank ``api`` query once answered ok:true with the framework page, and a blank title exited 4."""
+    require(PROVIDER)
+    run(BINARY, command, "   ", expect=EXIT_USAGE, error_code="invalid_query")
+
+
+def test_article_export_rejects_an_out_path_that_is_a_file(require, out_dir: Path) -> None:
+    """``--out`` naming a file once fetched the page, then failed as internal_error."""
+    require(PROVIDER)
+    target = out_dir / "wiki-bundle.txt"
+    target.write_text("not a bundle", encoding="utf-8")
+    run(BINARY, "article-export", pins.WIKI_LORE_QUERY, "--out", str(target), expect=EXIT_USAGE, error_code="invalid_argument")

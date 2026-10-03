@@ -32,6 +32,12 @@ def _site_menu_lists_nothing_new(monkeypatch) -> None:
     """Search reads the site menu once the sitemap is stale; a test that needs menu pages stubs it itself."""
     monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.site_menu_guides", lambda self: [])
 
+
+@pytest.fixture(autouse=True)
+def _no_site_index(monkeypatch) -> None:
+    """A stale sitemap also reads the site index (the bundled snapshot here); tests/test_icy_veins_site_index.py covers it."""
+    monkeypatch.setattr("icy_veins_cli.search.load_site_index", lambda: None)
+
 INTRO_HTML = """
 <html>
   <head>
@@ -1623,3 +1629,48 @@ def test_icy_veins_search_skips_the_site_menu_while_the_sitemap_is_current(monke
 
     assert {row["metadata"]["source"] for row in payload["data"]["results"]} == {"sitemap"}
     assert "site_menu_url" not in payload["provenance"]
+
+
+PUNCTUATED_NAME_SITEMAP_XML = """
+<urlset>
+  <url><loc>https://www.icy-veins.com/wow/nerubar-palace-raid-guide</loc><lastmod>2025-10-05</lastmod></url>
+  <url><loc>https://www.icy-veins.com/wow/marksmanship-hunter-pve-dps-nerub-ar-palace-raid-guide</loc><lastmod>2025-10-05</lastmod></url>
+  <url><loc>https://www.icy-veins.com/wow/ara-kara-city-of-echoes-dungeon-guide</loc><lastmod>2025-10-05</lastmod></url>
+  <url><loc>https://www.icy-veins.com/wow/karesh-zone-guide</loc><lastmod>2025-10-05</lastmod></url>
+  <url><loc>https://www.icy-veins.com/wow/zul-aman-heroic-dungeon-guide</loc><lastmod>2025-10-05</lastmod></url>
+</urlset>
+"""
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        ("Nerub-ar Palace", "nerubar-palace-raid-guide"),
+        ("Ara-Kara, City of Echoes", "ara-kara-city-of-echoes-dungeon-guide"),
+        ("ara-kara", "ara-kara-city-of-echoes-dungeon-guide"),
+        ("K'aresh", "karesh-zone-guide"),
+        ("Zul'Aman", "zul-aman-heroic-dungeon-guide"),
+    ],
+)
+def test_icy_veins_resolve_answers_in_game_names_spelled_with_punctuation(monkeypatch, query: str, expected: str) -> None:
+    """The query kept its hyphens and apostrophes while the slugs fold them, so official names resolved to nothing."""
+    monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.sitemap_guides", lambda self: parse_sitemap_guides(PUNCTUATED_NAME_SITEMAP_XML))
+
+    resolved = json.loads(runner.invoke(app, ["resolve", query]).stdout)["data"]
+
+    assert resolved["resolved"] is True
+    assert resolved["match"]["id"] == expected
+
+
+def test_icy_veins_guide_query_answers_a_file_path_itself_with_the_query(tmp_path: Path) -> None:
+    """Typer's file_okay=False answered first, with a Click message and query null."""
+    target = tmp_path / "notabundle.txt"
+    target.write_text("x", encoding="utf-8")
+
+    result = runner.invoke(app, ["guide-query", str(target), "mana"])
+
+    assert result.exit_code == 2, result.output
+    payload = json.loads(result.stderr)
+    assert payload["error"]["code"] == "invalid_argument"
+    assert payload["error"]["message"].startswith("Bundle path is not a directory")
+    assert payload["query"] is not None

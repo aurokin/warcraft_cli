@@ -32,7 +32,7 @@ happens outside pytest.
 | `tests/fixtures/wowhead_canaries.py` | pinned live entities | `test_wowhead_parser_canaries.py` (live, `make test-canary`) |
 | `tests/fixtures/wowhead/` | captured | `test_wowhead_captured_fixtures.py`, `test_wowhead_tools.py` |
 | `tests/fixtures/method/*.html` | synthetic, plus one captured page | `test_method_synthetic_fixtures.py`, `test_method_captured_fixtures.py` |
-| `tests/fixtures/icy_veins/*.html` | captured | `test_icy_veins_recorded_fixtures.py`, `test_icy_veins_cli.py` |
+| `tests/fixtures/icy_veins/*.html` | captured | `test_icy_veins_recorded_fixtures.py`, `test_icy_veins_cli.py`, `test_icy_veins_site_index.py` |
 | `tests/fixtures/raiderio/` | captured | `test_raiderio_captured_fixtures.py` |
 | `tests/fixtures/warcraft_wiki/` | captured | `test_warcraft_wiki_parser.py`, `test_warcraft_wiki_cli.py` |
 | `tests/fixtures/lorrgs/` | captured | `test_lorrgs_cli.py` |

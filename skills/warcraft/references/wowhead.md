@@ -38,7 +38,13 @@
   in it, up to a plural or possessive ending, so "hotfix" matches "Hotfixes" but "frost mage" does not
   match "Frost Death Knight" or "Damage"
 - use guide filters like `--author`, `--updated-after`, `--patch-min`, and `--sort`
-- use `news-post` and `blue-topic` once you already have a specific URL
+- use `news-post` and `blue-topic` once you already have a specific URL; `news-post` takes only
+  `/news/...` or `/news=<id>` pages and `blue-topic` only `/blue-tracker/topic/...` pages, so the
+  `/blue-tracker/news/...` rows of `blue-tracker` feed neither
+- a `/forever/` (WoW Forever) URL names no expansion this CLI reads: `entity --url` refuses it, and
+  `news-post` reads a Forever post with a `notes` entry saying the expansion could not be inferred
+- a news date window far in the past needs enough `--pages` to reach it; `scan.stop_reason: null`
+  means `--pages` ran out before the scan got there
 - filter timelines by date with `--date-from` / `--date-to`, and read each row's ISO `posted_at`
   rather than the rendered `posted` string; rows Wowhead timestamps in a form the CLI cannot read
   are left out of the window and counted in `scan.unparsed_timestamps`
@@ -55,7 +61,8 @@
   query names leads the proc spells and secondary rows that share its name, and a class-guide query
   resolves to the main current guide (the guide ordering counts only when the query says "guide" or `--entity-type guide` is set).
   When the query names a type ("bm hunter guide") and the top row is another type holding only some
-  of its words, `resolve` is not confident and does not resolve; read `candidates`;
+  of its words, `resolve` is not confident and does not resolve; read `candidates`. The same holds
+  when the top row lacks a number the query names ("season 3" against "Season 2");
   `ranking.match_reasons` carries `upstream_database_rank` on the rows that ordering promoted
 - `search` and `resolve` rank every row Wowhead's suggestion response sent, not just its ten-row
   dropdown list, one row per entity; `metadata.suggestion_lists` says where each row came from and
@@ -81,5 +88,8 @@
 - database-family browse/filter pages are intentionally deferred
 - `dressing-room` and `profiler` are state inspectors, not full decoders; `profiler` fails with
   `not_found` when Wowhead says the list does not exist
+- on a retail, PTR or beta ref, `talent-calc` rejects a spec that is not the class's and a build
+  code whose loadout header names another spec (`invalid_tool_ref`); classic calculators keep their
+  own spec names (MoP Classic rogue `combat`); `listed_builds` are the ref's spec's builds only
 - do not assume Wowhead tool URLs expose enough stable state for deep reverse-engineering
 - treat Wowhead `analysis_surfaces` as an additive page-level layer extracted from trusted section structure, not as a replacement for the raw guide page

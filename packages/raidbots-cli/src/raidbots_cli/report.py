@@ -4,7 +4,15 @@ from collections.abc import Mapping
 from typing import Any
 
 from warcraft_core.identity import class_spec_identity_payload
-from warcraft_core.simc_json2 import dps_error, game_version, metric_count, metric_mean, stop_reason
+from warcraft_core.simc_json2 import (
+    dps_error,
+    game_version,
+    metric_count,
+    metric_mean,
+    profileset_metric,
+    profileset_result_rows,
+    stop_reason,
+)
 
 # Raidbots `data.json` is standard SimC `json2` output (top-level `version`/`sim`)
 # with Raidbots metadata added under `simbot`, so it reads through the shared json2 helpers.
@@ -58,63 +66,14 @@ def _run_settings(options: dict[str, Any], statistics: dict[str, Any], player: d
     collected = _nested_dict(player, "collected_data")
     iterations_completed = metric_count(collected.get("fight_length")) or metric_count(statistics.get("simulation_length"))
     return {
-        "iterations_requested": options.get("iterations"),
         "iterations_completed": iterations_completed,
         "target_error": options.get("target_error"),
         "fight_style": options.get("fight_style"),
         "desired_targets": options.get("desired_targets"),
         "max_time": options.get("max_time"),
         "threads": options.get("threads"),
-        "stop_reason": stop_reason(options=options, iterations_completed=iterations_completed),
+        "stop_reason": stop_reason(options),
     }
-
-
-def _profileset_result_rows(profilesets: Any) -> list[dict[str, Any]]:
-    if isinstance(profilesets, dict):
-        if isinstance(profilesets.get("results"), list):
-            rows = profilesets["results"]
-        else:
-            # Fallback for a name->row mapping with no explicit `results` list. `metric` and
-            # other non-row scalar entries are filtered out by the isinstance(row, dict) guard.
-            rows = [
-                {"name": name, **row} if "name" not in row else row
-                for name, row in profilesets.items()
-                if isinstance(row, dict)
-            ]
-    elif isinstance(profilesets, list):
-        rows = profilesets
-    else:
-        rows = None
-    if not isinstance(rows, list):
-        return []
-    parsed: list[dict[str, Any]] = []
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        mean = row.get("mean")
-        parsed.append(
-            {
-                "name": str(row.get("name")) if row.get("name") is not None else None,
-                "mean": float(mean) if isinstance(mean, (int, float)) else None,
-                "min": float(row["min"]) if isinstance(row.get("min"), (int, float)) else None,
-                "max": float(row["max"]) if isinstance(row.get("max"), (int, float)) else None,
-                "median": float(row["median"]) if isinstance(row.get("median"), (int, float)) else None,
-                "stddev": float(row["stddev"]) if isinstance(row.get("stddev"), (int, float)) else None,
-            }
-        )
-    parsed.sort(key=lambda item: (item.get("mean") is None, -(item.get("mean") or 0.0), item.get("name") or ""))
-    return parsed
-
-
-def _profileset_metric(profilesets: Any) -> str | None:
-    if not isinstance(profilesets, dict):
-        return None
-    metric = profilesets.get("metric")
-    if isinstance(metric, list) and metric:
-        return str(metric[0])
-    if isinstance(metric, str) and metric.strip():
-        return metric.strip()
-    return None
 
 
 def _has_profilesets(profilesets: Any) -> bool:
@@ -159,13 +118,13 @@ def parse_report(report: dict[str, Any], *, report_id: str) -> dict[str, Any]:
         # Multi-profile sim (Top Gear / Droptimizer). players[0] is the baseline
         # profile, NOT a chosen "user actor"; per-actor damage/buff data is stripped,
         # so the meaningful output is the ranked profileset result rows.
-        rows = _profileset_result_rows(profilesets)
+        rows = profileset_result_rows(profilesets)
         common.update(
             {
                 "kind": "multi_profile",
                 "baseline_actor": _actor_summary(baseline) if baseline is not None else None,
                 "profilesets": {
-                    "metric": _profileset_metric(profilesets),
+                    "metric": profileset_metric(profilesets),
                     "result_count": len(rows),
                     "results": rows,
                 },

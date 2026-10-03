@@ -3,12 +3,12 @@ from __future__ import annotations
 from typing import Any
 
 from warcraft_core.shapes import as_dict, as_list
-from warcraft_core.wow_normalization import normalize_name, normalize_region, primary_realm_slug
+from warcraft_core.wow_normalization import normalize_name, primary_realm_slug, profile_region
 
 
 def normalized_identity(region: str, realm: str, name: str) -> dict[str, str]:
     return {
-        "region": normalize_region(region),
+        "region": profile_region(region),
         "realm": primary_realm_slug(realm),
         "name": normalize_name(name),
     }

@@ -257,6 +257,8 @@ def test_site_menu_fixture_lists_current_guides_by_slug_with_their_menu_titles()
     # The "NEW!" badge is not part of the title, and a hub's own entry names it rather than "View all".
     assert rows["midnight-patch-12-1-guide"]["menu_title"] == "Patch 12.1 Hub"
     assert rows["midnight-season-2-guide"]["menu_title"] == "Season 2 Overview"
-    # Tier lists, profession pages and the talent calculator are not supported guide families.
+    # Profession pages, tier lists and hubs have families of their own; the talent calculator is a tool, not a guide.
     assert all(classify_guide_slug(slug) is not None for slug in rows)
-    assert "professions-alchemy" not in rows
+    assert (rows["professions-alchemy"]["content_family"], rows["mythic-dps-tier-list"]["content_family"]) == ("profession", "tier_list")
+    assert rows["void-assaults-hub"]["content_family"] == "hub"
+    assert "midnight-talent-calculator" not in rows

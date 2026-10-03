@@ -198,7 +198,7 @@ def test_write_guide_export_assets_and_manifest_helpers(tmp_path: Path) -> None:
 def test_guide_command_supports_id_lookup(monkeypatch) -> None:
     calls = []
 
-    def fake_guide_page_html(self, guide_id: int):  # noqa: ANN001
+    def fake_guide_page_html(self, guide_id: int):
         calls.append(guide_id)
         return SAMPLE_GUIDE_HTML
 
@@ -270,10 +270,36 @@ def test_guide_full_merges_gatherer_records_even_when_href_links_fill_the_limit(
     assert links["truncated"] is True
 
 
+def test_guide_commands_note_that_the_served_guide_is_not_the_requested_expansions(monkeypatch) -> None:
+    """Wowhead answers /wotlk/guide=3143 with the retail guide; that used to be labelled wotlk with no note."""
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.guide_page_html", lambda self, guide_id: SAMPLE_GUIDE_HTML)
+    expected = ["URL targets expansion 'retail' but selected profile is 'wotlk'."]
+
+    for command in ("guide", "guide-full"):
+        result = runner.invoke(app, ["--expansion", "wotlk", command, "3143"])
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.stdout)["data"]["notes"] == expected
+
+
+def test_an_unknown_guide_id_is_not_found_not_an_upstream_failure(monkeypatch) -> None:
+    """Wowhead answers /guide=<unknown id> with HTTP 400; that exited 5, which agents retry."""
+
+    def bad_request(self: WowheadClient, guide_id: int) -> str:
+        request = httpx.Request("GET", f"https://www.wowhead.com/guide={guide_id}")
+        raise httpx.HTTPStatusError("bad request", request=request, response=httpx.Response(400, request=request))
+
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.guide_page_html", bad_request)
+
+    result = runner.invoke(app, ["guide", "99999999"])
+
+    assert result.exit_code == 4
+    assert json.loads(result.stderr)["error"]["code"] == "not_found"
+
+
 def test_guide_command_supports_full_wowhead_url(monkeypatch) -> None:
     calls = []
 
-    def fake_page_html(self, page_url: str):  # noqa: ANN001
+    def fake_page_html(self, page_url: str):
         calls.append(page_url)
         return SAMPLE_GUIDE_HTML
 
@@ -310,7 +336,7 @@ def test_guide_command_rejects_non_wowhead_url() -> None:
 
 
 def test_guide_full_returns_rich_payload(monkeypatch) -> None:
-    def fake_guide_page_html(self, guide_id: int):  # noqa: ANN001
+    def fake_guide_page_html(self, guide_id: int):
         assert guide_id == 3143
         return SAMPLE_GUIDE_HTML
 
@@ -342,7 +368,7 @@ def test_guide_full_returns_rich_payload(monkeypatch) -> None:
 
 
 def test_guide_and_guide_full_share_linked_entity_count(monkeypatch) -> None:
-    def fake_guide_page_html(self, guide_id: int):  # noqa: ANN001
+    def fake_guide_page_html(self, guide_id: int):
         assert guide_id == 3143
         return SAMPLE_GUIDE_HTML
 
@@ -360,7 +386,7 @@ def test_guide_and_guide_full_share_linked_entity_count(monkeypatch) -> None:
 
 
 def test_guide_export_writes_local_assets(monkeypatch, tmp_path) -> None:
-    def fake_guide_page_html(self, guide_id: int):  # noqa: ANN001
+    def fake_guide_page_html(self, guide_id: int):
         assert guide_id == 3143
         return SAMPLE_GUIDE_HTML
 
@@ -449,11 +475,11 @@ def test_guide_export_writes_local_assets(monkeypatch, tmp_path) -> None:
 
 
 def test_guide_export_hydrates_linked_entities(monkeypatch, tmp_path: Path) -> None:
-    def fake_guide_page_html(self, guide_id: int):  # noqa: ANN001
+    def fake_guide_page_html(self, guide_id: int):
         assert guide_id == 3143
         return SAMPLE_GUIDE_HTML
 
-    def fake_tooltip(self, entity_type: str, entity_id: int, data_env=None):  # noqa: ANN001, ANN202
+    def fake_tooltip(self, entity_type: str, entity_id: int, data_env=None):
         if (entity_type, entity_id) == ("spell", 49020):
             return {
                 "name": "Obliterate",
@@ -509,6 +535,36 @@ def test_guide_export_hydrates_linked_entities(monkeypatch, tmp_path: Path) -> N
     assert hydrated_spell["entity"]["name"] == "Obliterate"
     assert hydrated_item["entity"]["name"] == "Bellamy's Final Judgement"
 
+
+
+def test_guide_export_leaves_an_unrelated_index_json_in_the_parent_alone(monkeypatch, tmp_path: Path) -> None:
+    """`--out ./frost` used to replace ./index.json, whatever it was, with the bundle index."""
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.guide_page_html", lambda self, guide_id: SAMPLE_GUIDE_HTML)
+    user_file = tmp_path / "index.json"
+    user_file.write_text('{"my": "unrelated data"}', encoding="utf-8")
+
+    result = runner.invoke(app, ["guide-export", "3143", "--out", str(tmp_path / "frost")])
+    assert result.exit_code == 0, result.output
+    assert json.loads(user_file.read_text(encoding="utf-8")) == {"my": "unrelated data"}
+
+
+def test_guide_export_without_hydration_drops_the_entities_manifest_of_an_earlier_export(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """The earlier export's entities/manifest.json made guide-bundle-inspect flag the fresh export."""
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.guide_page_html", lambda self, guide_id: SAMPLE_GUIDE_HTML)
+    export_dir = tmp_path / "guide-export"
+    entities_manifest = export_dir / "entities" / "manifest.json"
+    entities_manifest.parent.mkdir(parents=True)
+    entities_manifest.write_text('{"count": 5, "items": []}', encoding="utf-8")
+
+    result = runner.invoke(app, ["guide-export", "3143", "--out", str(export_dir)])
+    assert result.exit_code == 0, result.output
+    assert not entities_manifest.exists()
+
+    inspected = runner.invoke(app, ["guide-bundle-inspect", str(export_dir)])
+    assert inspected.exit_code == 0, inspected.output
+    assert json.loads(inspected.stdout)["data"]["issues"] == []
 
 
 def test_guide_export_lists_a_linked_entity_it_could_not_hydrate_and_keeps_going(monkeypatch, tmp_path: Path) -> None:
@@ -582,17 +638,17 @@ def test_guide_export_hydration_uses_normalized_entity_cache_before_live_fetch(
     monkeypatch.setenv("WOWHEAD_CACHE_BACKEND", "file")
     monkeypatch.setenv("WOWHEAD_CACHE_DIR", str(tmp_path / "cache"))
 
-    def fake_guide_page_html(self, guide_id: int):  # noqa: ANN001
+    def fake_guide_page_html(self, guide_id: int):
         assert guide_id == 3143
         return SAMPLE_GUIDE_HTML
 
-    def fail_tooltip(self, entity_type: str, entity_id: int, data_env=None):  # noqa: ANN001, ANN202
+    def fail_tooltip(self, entity_type: str, entity_id: int, data_env=None):
         raise AssertionError(f"tooltip should not be used when normalized cache is prepopulated: {(entity_type, entity_id)}")
 
     monkeypatch.setattr("wowhead_cli.main.WowheadClient.guide_page_html", fake_guide_page_html)
     monkeypatch.setattr("wowhead_cli.main.WowheadClient.tooltip", fail_tooltip)
 
-    cache_client = WowheadClient(cache_dir=tmp_path / "cache", cache_backend="file")
+    cache_client = WowheadClient()
     cache_client.set_cached_entity_response(
         {
             "expansion": "retail",
@@ -675,13 +731,13 @@ def test_guide_export_hydration_provenance_can_mix_cache_and_live_fetch(
     monkeypatch.setenv("WOWHEAD_CACHE_BACKEND", "file")
     monkeypatch.setenv("WOWHEAD_CACHE_DIR", str(tmp_path / "cache"))
 
-    def fake_guide_page_html(self, guide_id: int):  # noqa: ANN001
+    def fake_guide_page_html(self, guide_id: int):
         assert guide_id == 3143
         return SAMPLE_GUIDE_HTML
 
     tooltip_calls: dict[tuple[str, int], int] = {}
 
-    def fake_tooltip(self, entity_type: str, entity_id: int, data_env=None):  # noqa: ANN001, ANN202
+    def fake_tooltip(self, entity_type: str, entity_id: int, data_env=None):
         key = (entity_type, entity_id)
         tooltip_calls[key] = tooltip_calls.get(key, 0) + 1
         if key == ("item", 249277):
@@ -694,7 +750,7 @@ def test_guide_export_hydration_provenance_can_mix_cache_and_live_fetch(
     monkeypatch.setattr("wowhead_cli.main.WowheadClient.guide_page_html", fake_guide_page_html)
     monkeypatch.setattr("wowhead_cli.main.WowheadClient.tooltip", fake_tooltip)
 
-    cache_client = WowheadClient(cache_dir=tmp_path / "cache", cache_backend="file")
+    cache_client = WowheadClient()
     cache_client.set_cached_entity_response(
         {
             "expansion": "retail",
@@ -760,7 +816,7 @@ def test_guide_export_hydration_provenance_can_mix_cache_and_live_fetch(
 
 
 def test_guide_query_reads_exported_assets(monkeypatch, tmp_path) -> None:
-    def fake_guide_page_html(self, guide_id: int):  # noqa: ANN001
+    def fake_guide_page_html(self, guide_id: int):
         assert guide_id == 3143
         return SAMPLE_GUIDE_HTML
 

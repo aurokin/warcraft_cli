@@ -44,6 +44,8 @@ raiderio --fields data.results --pretty search "liquid"
 | `threshold mythic-plus-runs` | |
 
 Flags, defaults, and ranges are in [reference/raiderio.md](../reference/raiderio.md).
+`character` and `guild` (and `resolve "guild oce <realm> <name>"`) look an Oceanic region alias
+(`oce`, `oceanic`) up as `us`, the region Oceanic realms belong to.
 `leaderboard raids --realm` takes a slug or a display name and needs a standard region;
 `raids --expansion-id` defaults to 11 (Midnight; 10 is The War Within, 9 Dragonflight).
 
@@ -58,8 +60,10 @@ counted in `sample.duplicates_removed`, so a sample one run short of `--limit` s
 
 Filter flags (sampled commands): `--level-min`, `--level-max`, `--score-min`, `--score-max`, and the
 repeatable `--contains-role` (`tank`, `healer`, `dps`), `--contains-class`, `--contains-spec`,
-`--player-region` (a region or alias other than `world`). An unknown role or region is
-`invalid_query` (exit 2), so an empty sample means no run matched rather than a typo. Bounds are
+`--player-region` (a region or alias other than `world`). An unknown role, class, spec or region
+is `invalid_query` (exit 2), so an empty sample means no run matched rather than a typo. Classes and
+specs are Raider.IO slugs (`death-knight`, `beast-mastery`; `Death Knight` works too), and a
+class-qualified spec must belong to that class. Bounds are
 inclusive ("at or above" / "at or below"), and a run whose level or score Raider.IO omitted is
 excluded whenever the matching bound is set. Each `--contains-*` flag matches any roster entry on
 its own, so `--contains-class priest --contains-spec holy` also keeps a Holy Paladin + Shadow Priest
@@ -153,6 +157,8 @@ raiderio threshold mythic-plus-runs --metric score --value 3000
 - An unknown character, guild, or realm is `not_found` (exit 4): Raider.IO answers all three with
   HTTP 400 ("Could not find requested ...", "Failed to find realm ..."). A body that is not JSON is
   `upstream_error` (exit 5).
+- `character`'s `guild.region` is the character's region: Raider.IO's guild block has no region of
+  its own, and a guild is in the same region as its members.
 - Every Mythic+ payload echoes `resolved_season`, so the season a sample actually used is explicit.
 - Leaderboard and sampled run rows carry `clear_time_ms`, `keystone_time_ms` (the dungeon timer) and
   `num_chests` (0 means not timed), plus `run_id` and `logged_run_id`, Raider.IO's own integer id

@@ -13,7 +13,7 @@ from urllib.parse import quote
 
 import httpx
 from warcraft_core.shapes import as_dict
-from warcraft_core.wow_normalization import normalize_name, normalize_region, primary_realm_slug, realm_slug_variants
+from warcraft_core.wow_normalization import normalize_name, primary_realm_slug, profile_region, realm_slug_variants
 
 from raiderio_cli.client import RaiderIOClient
 from raiderio_cli.identity import raiderio_class_spec_identity
@@ -67,7 +67,7 @@ def normalize_structured_query(query: str) -> tuple[str, str | None, list[Struct
     tokens = [token for token in normalized_query.strip().split() if token]
     if len(tokens) < 3:
         return normalized_query, type_hint, []
-    region = normalize_region(tokens[0])
+    region = profile_region(tokens[0])
     if region not in STRUCTURED_REGIONS:
         return normalized_query, type_hint, []
     probes: list[StructuredProbe] = []
@@ -153,10 +153,12 @@ def _entity_match_score(
     elif lowered_query in name_lower:
         score += weights.contains
         reasons.append("name_contains_query")
-    if _all_terms_match(query_terms, combined):
+    # A region alias (``oce``, ``na``) names the region the profile lives in, not text in the row.
+    region_terms = {term for term in query_terms if region and profile_region(term) == region.lower()}
+    if _all_terms_match([term for term in query_terms if term not in region_terms], combined):
         score += weights.all_terms
         reasons.append("all_terms_match")
-    if region and any(term == region.lower() for term in query_terms):
+    if region_terms:
         score += weights.region
         reasons.append("region_match")
     if realm and _realm_term_matches(query_terms, realm):

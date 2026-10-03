@@ -39,10 +39,10 @@ def doctor(ctx: typer.Context) -> None:
 @app.command("search")
 def search(
     ctx: typer.Context,
-    query: str = typer.Argument(..., help="Query text to match against Icy Veins WoW guide slugs."),
+    query: str = typer.Argument(..., help="Query text to match against Icy Veins WoW guide slugs and page titles."),
     limit: int = typer.Option(5, "--limit", min=1, max=50, help="Maximum results to return."),
 ) -> None:
-    """Rank Icy Veins WoW guides from the sitemap and the site-wide guide menu against a free-text query."""
+    """Rank Icy Veins WoW guides from the sitemap, the site-wide guide menu and the site index against a free-text query."""
     _emit_surface(ctx, lambda: provider.search(query, limit=limit))
 
 
@@ -54,6 +54,21 @@ def resolve(
 ) -> None:
     """Resolve a free-text query to the best Icy Veins guide, with the candidate list attached."""
     _emit_surface(ctx, lambda: provider.resolve(query, limit=limit))
+
+
+@app.command("index-refresh")
+def index_refresh(
+    ctx: typer.Context,
+    max_requests: int = typer.Option(
+        provider.DEFAULT_INDEX_MAX_REQUESTS,
+        "--max-requests",
+        min=1,
+        max=5000,
+        help="Most uncached page requests to make; a run that reaches it is partial and the next run resumes.",
+    ),
+) -> None:
+    """Crawl Icy Veins (one request a second) for pages its frozen sitemap lacks and merge them into the local site index."""
+    _emit_surface(ctx, lambda: provider.index_refresh(max_requests=max_requests))
 
 
 @app.command("guide")
@@ -89,10 +104,8 @@ def guide_query(
     ctx: typer.Context,
     bundle: Path = typer.Argument(
         ...,
-        # Not ``exists=True``: a missing bundle is a not_found answer from the provider (exit 4), the
-        # same one ``method guide-query`` gives, rather than a Typer usage error.
-        file_okay=False,
-        dir_okay=True,
+        # No ``exists=True`` or ``file_okay=False``: a missing bundle or a file is answered by the provider
+        # (not_found, invalid_argument), the same answer ``method guide-query`` gives, with the query echoed.
         help="Directory produced by 'icy-veins guide-export'.",
     ),
     query: str = typer.Argument(..., help="Query text to match against the exported article bundle."),

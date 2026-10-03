@@ -3,24 +3,24 @@ from __future__ import annotations
 import json
 from collections.abc import Collection
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Final
 
 from warcraft_core.provider import ProviderError
+from warcraft_core.shapes import unique_strings
+from warcraft_core.timestamps import iso_now_utc
 
 
-def _iso_now_utc() -> str:
-    return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+def article_export_dir(out: Path | None, *, provider: str, ref_slug: str, prefix: str = "guide") -> Path:
+    """Where an export writes: ``out``, or ``./<provider>_exports/<prefix>-<ref_slug>`` by default.
 
-
-def default_article_export_root(provider: str, *, cwd: Path | None = None) -> Path:
-    base = cwd if cwd is not None else Path.cwd()
-    return base / f"{provider}_exports"
-
-
-def default_article_export_dir(provider: str, ref_slug: str, *, prefix: str = "guide", cwd: Path | None = None) -> Path:
-    return default_article_export_root(provider, cwd=cwd) / f"{prefix}-{ref_slug}"
+    Checked before anything is fetched, so an ``--out`` naming a file fails at once as a bad argument
+    instead of after the whole guide has been downloaded.
+    """
+    export_dir = out.expanduser() if out is not None else Path.cwd() / f"{provider}_exports" / f"{prefix}-{ref_slug}"
+    if export_dir.exists() and not export_dir.is_dir():
+        raise ProviderError("invalid_argument", f"Export path is not a directory: {export_dir}")
+    return export_dir
 
 
 def _write_json(path: Path, payload: Any) -> None:
@@ -82,15 +82,20 @@ def _export_pages(
     *,
     export_dir: Path,
     page_resource_key: str,
-    content_key: str,
 ) -> _PageExport:
-    """Write one HTML file per page and collect the page/section rows describing them."""
+    """Write one HTML file per page and collect the page/section rows describing them.
+
+    Page files left by an earlier export into the same directory are removed first, so ``pages/``
+    holds exactly the pages ``page-files.json`` lists. Only the bundle's own ``.html`` files go.
+    """
     export = _PageExport(files=[], rows=[], sections=[])
     html_dir = export_dir / "pages"
+    for stale in html_dir.glob("*.html"):
+        stale.unlink()
     for page in pages:
         page_resource = dict(page[page_resource_key])
         page_meta = dict(page["page"])
-        article = dict(page[content_key])
+        article = dict(page["article"])
         page_slug = page_resource["section_slug"]
         html_path = html_dir / f"{page_slug}.html"
         html_path.parent.mkdir(parents=True, exist_ok=True)
@@ -136,7 +141,6 @@ def write_article_bundle(
     export_dir: Path,
     resource_key: str = "guide",
     page_resource_key: str | None = None,
-    content_key: str = "article",
 ) -> dict[str, Any]:
     resource = dict(full_payload[resource_key])
     normalized_page_resource_key = page_resource_key or resource_key
@@ -149,17 +153,16 @@ def write_article_bundle(
         list(full_payload.get("pages") or []),
         export_dir=export_dir,
         page_resource_key=normalized_page_resource_key,
-        content_key=content_key,
     )
 
     manifest = {
         "export_version": 1,
         "provider": provider,
         # Freshness anchor for downstream wrapper handoff/compare metadata (AUR-386).
-        "exported_at": _iso_now_utc(),
+        "exported_at": iso_now_utc(),
         "resource_key": resource_key,
         "page_resource_key": normalized_page_resource_key,
-        "content_key": content_key,
+        "content_key": "article",
         "output_dir": str(export_dir),
         resource_key: resource,
         # Set when the site served another guide than the one asked for, so readers of the bundle see it too.
@@ -480,6 +483,26 @@ def query_article_bundle(
     }
 
 
+def bundle_query_payload(
+    bundle_ref: str | Path,
+    query: str,
+    *,
+    limit: int,
+    kinds: Collection[str] | None,
+    allowed_kinds: Collection[str],
+    section_title: str | None,
+) -> dict[str, Any]:
+    """``guide-query``/``article-query`` data: the bundle searched, the resource it holds, and its matches; no network."""
+    selected_kinds = set(kinds or allowed_kinds)
+    invalid = sorted(selected_kinds - set(allowed_kinds))
+    if invalid:
+        raise ProviderError("invalid_argument", f"Unsupported query kinds: {', '.join(invalid)}")
+    bundle = load_article_bundle(Path(bundle_ref).expanduser())
+    result = query_article_bundle(bundle, query=query, limit=limit, kinds=selected_kinds, section_title_filter=section_title)
+    resource_key = str(bundle["manifest"].get("resource_key") or "guide")
+    return {"bundle": str(bundle_ref), resource_key: bundle["manifest"].get(resource_key), **result}
+
+
 def _bundle_title(bundle: dict[str, Any]) -> str | None:
     manifest_raw = bundle.get("manifest")
     manifest: dict[str, Any] = manifest_raw if isinstance(manifest_raw, dict) else {}
@@ -523,20 +546,6 @@ def _bundle_descriptor(bundle: dict[str, Any], *, path: Path) -> dict[str, Any]:
     }
 
 
-def _unique_strings(values: list[Any]) -> list[str]:
-    seen: set[str] = set()
-    rows: list[str] = []
-    for value in values:
-        if not isinstance(value, str):
-            continue
-        normalized = value.strip()
-        if not normalized or normalized in seen:
-            continue
-        seen.add(normalized)
-        rows.append(normalized)
-    return rows
-
-
 def _surface_bundle_entry(bundle_info: dict[str, Any], rows: list[dict[str, Any]]) -> dict[str, Any]:
     citations = [row.get("citation") for row in rows if isinstance(row.get("citation"), dict)]
     return {
@@ -544,12 +553,12 @@ def _surface_bundle_entry(bundle_info: dict[str, Any], rows: list[dict[str, Any]
         "path": bundle_info["path"],
         "title": bundle_info.get("title"),
         "entry_count": len(rows),
-        "page_urls": _unique_strings([row.get("page_url") for row in rows]),
-        "section_titles": _unique_strings([row.get("section_title") for row in rows]),
-        "content_families": _unique_strings([row.get("content_family") for row in rows]),
-        "source_kinds": _unique_strings([row.get("source_kind") for row in rows]),
-        "confidences": _unique_strings([row.get("confidence") for row in rows]),
-        "previews": _unique_strings([row.get("text_preview") for row in rows])[:3],
+        "page_urls": unique_strings([row.get("page_url") for row in rows]),
+        "section_titles": unique_strings([row.get("section_title") for row in rows]),
+        "content_families": unique_strings([row.get("content_family") for row in rows]),
+        "source_kinds": unique_strings([row.get("source_kind") for row in rows]),
+        "confidences": unique_strings([row.get("confidence") for row in rows]),
+        "previews": unique_strings([row.get("text_preview") for row in rows])[:3],
         "citations": citations[:5],
     }
 
@@ -577,11 +586,11 @@ def _section_bundle_entry(bundle_info: dict[str, Any], rows: list[dict[str, Any]
         "path": bundle_info["path"],
         "title": bundle_info.get("title"),
         "entry_count": len(rows),
-        "page_urls": _unique_strings([row.get("page_url") for row in rows]),
-        "page_titles": _unique_strings([row.get("page_title") for row in rows]),
-        "section_titles": _unique_strings([row.get("title") for row in rows]),
-        "section_slugs": _unique_strings([row.get("section_slug") for row in rows]),
-        "previews": _unique_strings([_section_text(row) for row in rows])[:3],
+        "page_urls": unique_strings([row.get("page_url") for row in rows]),
+        "page_titles": unique_strings([row.get("page_title") for row in rows]),
+        "section_titles": unique_strings([row.get("title") for row in rows]),
+        "section_slugs": unique_strings([row.get("section_slug") for row in rows]),
+        "previews": unique_strings([_section_text(row) for row in rows])[:3],
         "citations": citations[:5],
     }
 
@@ -613,7 +622,7 @@ def _build_reference_key(row: dict[str, Any]) -> tuple[str, str, str, str]:
 
 
 def _build_bundle_entry(bundle_info: dict[str, Any], rows: list[dict[str, Any]]) -> dict[str, Any]:
-    labels = _unique_strings([row.get("label") for row in rows])
+    labels = unique_strings([row.get("label") for row in rows])
     source_urls: list[str] = []
     for row in rows:
         for source_url in row.get("source_urls") or []:
@@ -624,9 +633,9 @@ def _build_bundle_entry(bundle_info: dict[str, Any], rows: list[dict[str, Any]])
         "title": bundle_info.get("title"),
         "entry_count": len(rows),
         "labels": labels,
-        "source_urls": _unique_strings(source_urls),
-        "reference_types": _unique_strings([row.get("reference_type") for row in rows]),
-        "urls": _unique_strings([row.get("url") for row in rows]),
+        "source_urls": unique_strings(source_urls),
+        "reference_types": unique_strings([row.get("reference_type") for row in rows]),
+        "urls": unique_strings([row.get("url") for row in rows]),
     }
 
 
@@ -718,7 +727,7 @@ def _build_section_evidence_rows(
     for title_key, bundle_rows in sorted(section_evidence.items()):
         members = set(bundle_rows)
         membership[title_key] = members
-        title_variants = _unique_strings(
+        title_variants = unique_strings(
             [
                 row.get("title")
                 for rows_for_bundle in bundle_rows.values()

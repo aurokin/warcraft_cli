@@ -330,6 +330,10 @@ def test_character_profile_carries_identity_score_and_normalized_class_spec() ->
     assert identity["confidence"] == "high"
     assert identity["identity"]["actor_class"] == character["class_name"].lower()
 
+    # Raider.IO's guild block has no region; the guild is in its member's region.
+    if result.data["guild"] is not None:
+        assert result.data["guild"]["region"] == REGION, result.describe()
+
     mythic_plus = result.data["mythic_plus"]
     assert isinstance(mythic_plus["current_score"], (int, float))
     assert isinstance(mythic_plus["ranks"]["overall"]["world"], int)
@@ -586,6 +590,10 @@ def test_the_roster_filters_keep_exactly_the_runs_that_carry_the_value(baseline_
     # A role that does not exist is a mistake in the command, not a filter that happens to match nothing.
     rejected = run("raiderio", "sample", "mythic-plus-runs", *SCOPE, "--contains-role", "healbot", expect=EXIT_USAGE, error_code="invalid_query")
     assert "healbot" in rejected.payload["error"]["message"], rejected.describe()
+    # So is a misspelled class or spec, or a spec on a class that does not have it.
+    for flag, typo in (("--contains-class", "deathknigt"), ("--contains-spec", "nopespec"), ("--contains-spec", "rogue-holy")):
+        typoed = run("raiderio", "sample", "mythic-plus-runs", *SCOPE, flag, typo, expect=EXIT_USAGE, error_code="invalid_query")
+        assert typo in typoed.payload["error"]["message"], typoed.describe()
 
 
 def test_the_affixes_scope_changes_both_the_rows_and_the_citation(baseline_sample: Result) -> None:

@@ -103,10 +103,10 @@ def test_cached_entity_payload_preserves_existing_normalization(monkeypatch) -> 
     }
 
     class FakeClient:
-        def get_cached_entity_response(self, **kwargs):  # noqa: ANN003
+        def get_cached_entity_response(self, **kwargs):
             return cached
 
-        def set_cached_entity_response(self, *args, **kwargs):  # noqa: ANN003
+        def set_cached_entity_response(self, *args, **kwargs):
             return None
 
     monkeypatch.setattr("wowhead_cli.main._client", lambda ctx: FakeClient())

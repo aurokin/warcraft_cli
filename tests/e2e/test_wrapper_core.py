@@ -13,6 +13,7 @@ the provider payloads it was built from rather than only for shape.
 from __future__ import annotations
 
 import json
+import re
 import shlex
 from collections import Counter
 from datetime import UTC, datetime
@@ -273,6 +274,22 @@ def test_search_brief_and_debug_flags_reshape_the_same_candidates(item_search: R
     assert len(snapshot) == data["provider_count"]
 
 
+def test_search_brief_keeps_every_provider_warning_the_full_payload_carries(item_search: Result, brief_item_search: Result) -> None:
+    """``--brief`` drops the provider payloads, so a provider's ``*_warning`` must survive in ``provider_warnings``.
+
+    The full search's own provider rows are the oracle for which warnings exist.
+    """
+    expected = sorted(
+        (row["provider"], key, value)
+        for row in item_search.data["providers"]
+        for key, value in ((row.get("payload") or {}).get("provenance") or {}).items()
+        if key.endswith("_warning") and isinstance(value, str) and value
+    )
+    for result in (item_search, brief_item_search):
+        warnings = sorted((row["provider"], row["key"], row["warning"]) for row in result.data["provider_warnings"])
+        assert warnings == expected, result.describe()
+
+
 def test_search_follow_up_command_returns_the_same_entity(item_search: Result) -> None:
     """Every row hands back a runnable command, and the item's command must reach that item."""
     rows = item_search.data["results"]
@@ -362,6 +379,35 @@ def test_resolve_attributes_an_unresolved_answer_to_the_wrapper() -> None:
     # come back empty. The fallback once named the first provider in registry order regardless.
     assert data["fallback_search_commands"] == [], result.describe()
     assert data["fallback_search_command"] is None, result.describe()
+
+
+@pytest.mark.parametrize("command", ["search", "resolve"])
+def test_a_fanout_no_included_provider_searches_is_a_usage_error(command: str) -> None:
+    """``--expansion fresh`` leaves only Warcraft Logs, which matches report references, so free text reaches nobody."""
+    result = run("warcraft", "--expansion", "fresh", command, ITEM_QUERY, expect=EXIT_USAGE, error_code="no_searching_provider")
+    details = result.payload["error"]["details"]
+    assert details["included_providers"] == sorted(REPORT_ONLY_PROVIDERS), result.describe()
+    assert all(row["expansion_support"]["exclusion_reason"] for row in details["excluded_providers"]), result.describe()
+
+
+def test_resolve_answers_a_namespaced_api_name_with_its_wiki_page(require) -> None:
+    """``C_Spell.GetSpellInfo`` once read as a spell lookup and ranked the wiki's API page down."""
+    require("warcraft-wiki")
+    result = run("warcraft", "resolve", "C_Spell.GetSpellInfo")
+    data = result.data
+    assert data["resolved"] is True, result.describe()
+    assert data["selected_provider"] == "warcraft-wiki", result.describe()
+    assert "GetSpellInfo" in data["match"]["name"], result.describe()
+
+
+def test_resolve_never_answers_a_season_query_with_another_season(require) -> None:
+    """``mythic+ season 3`` was answered by the Season 2 achievement at high confidence."""
+    require("wowhead")
+    for query in ("mythic+ season 3", "keystone legend season 3"):
+        result = run("warcraft", "resolve", query)
+        match = result.data["match"] or {}
+        seasons = set(re.findall(r"season (\d+)", str(match.get("name") or "").lower()))
+        assert seasons <= {"3"}, result.describe()
 
 
 @pytest.mark.parametrize("command", ["search", "resolve"])
@@ -659,6 +705,14 @@ def test_passthrough_returns_the_provider_payload_unchanged(require) -> None:
     assert through_wrapper.data == direct.data
     assert through_wrapper.payload["command"] == direct.payload["command"]
     assert through_wrapper.payload["kind"] == direct.payload["kind"]
+
+
+def test_passthrough_usage_error_is_the_providers_own_envelope() -> None:
+    """A Click usage error inside the provider is labelled with the provider and subcommand, as its binary does."""
+    through_wrapper = run("warcraft", "raiderio", "search", expect=EXIT_USAGE, error_code="invalid_argument")
+    direct = run("raiderio", "search", expect=EXIT_USAGE, error_code="invalid_argument")
+    assert through_wrapper.payload == direct.payload, through_wrapper.describe()
+    assert (through_wrapper.payload["provider"], through_wrapper.payload["command"]) == ("raiderio", "search")
 
 
 def test_passthrough_preserves_the_provider_exit_code(require) -> None:

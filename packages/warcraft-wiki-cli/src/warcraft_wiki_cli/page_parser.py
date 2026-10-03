@@ -176,6 +176,9 @@ def _title_pattern_family(normalized: str) -> str | None:
         return "api_enum"
     if normalized.startswith("uihandler "):
         return "ui_handler"
+    # One page per console variable ("CVar autoLootDefault"); "Console variables" is their list.
+    if normalized.startswith("cvar "):
+        return "cvar"
     # Game events live in the custom "Event:" namespace, one page per event name
     # ("Event:PLAYER LOGIN"); the bare event name survives as a main-namespace redirect.
     if normalized.startswith("event:"):

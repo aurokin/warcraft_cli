@@ -153,7 +153,7 @@ Resolve a guide query across wowhead, method, and icy-veins, export the bundles,
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `--provider` | str (repeatable) |  | Restrict orchestration to one or more providers from: wowhead, method, icy-veins. |
-| `--out-root` | directory |  | Directory root where orchestrated guide bundles should be written. Defaults to <XDG data dir>/warcraft/guide_compare/<query-slug>; nothing is written to the current directory. |
+| `--out-root` | directory |  | Directory root where orchestrated guide bundles should be written. Defaults to <data root>/guide_compare/<query-slug>, with the data root `warcraft doctor` reports as paths.data_root; nothing is written to the current directory. |
 | `--max-age-hours` | int range | 24 | Reuse existing orchestrated guide bundles only when they are newer than this many hours. |
 | `--force-refresh / --no-force-refresh` | boolean | false | Re-export selected guide bundles even when a fresh orchestrated bundle already exists. |
 | `--simc-build-handoff / --no-simc-build-handoff` | boolean | false | Also emit an explicit guide-build-to-simc evidence packet from the exported bundles. |

@@ -21,7 +21,7 @@ Use `warcraft` first when the caller does not already know which provider they n
 - Global flags (every binary, always before the subcommand):
   - `--pretty` pretty-print JSON; default output is compact JSON
   - `--compact` truncate long prose strings, with `--compact-max-chars <n>` to set the cut; URLs,
-    talent/transport strings, export codes and `*command` values stay whole, and every cut path is
+    talent/transport strings, export codes and `*command`/`*input` values stay whole, and every cut path is
     listed in `provenance.compacted_paths`
   - `--fields <a.b,c>` keep only these dot paths, rooted at the envelope (`data.results`,
     `data.entity.name`); repeatable. The output is the projection, not an envelope, and a path that
@@ -100,7 +100,7 @@ narrower, **experimental** is thin and may change.
 
 - Prefer `resolve` when you want one conservative next command.
 - Prefer `search` when you want to inspect candidates across providers.
-- Prefer `warcraft guild ...` for one guild's Raider.IO snapshot with normalized region/realm/name input; `data.sources.raiderio` carries `summary` and `provenance` (use `warcraft raiderio guild` for the raw Raider.IO payload), and `summary.raids[]` carries each raid's normal/heroic/mythic world, region, and realm ranks. A rank of `0` means unranked at that difficulty, not first place, and Raider.IO only covers the current expansion.
+- Prefer `warcraft guild ...` for one guild's Raider.IO snapshot with normalized region/realm/name input (Oceanic realms are in region `us`; `oce` is read as `us`); `data.sources.raiderio` carries `summary` and `provenance` (use `warcraft raiderio guild` for the raw Raider.IO payload), and `summary.raids[]` carries each raid's normal/heroic/mythic world, region, and realm ranks. A rank of `0` means unranked at that difficulty, not first place, and Raider.IO only covers the current expansion.
 - Use `warcraft actor-profile <report-code> <name>` to hand a Warcraft Logs report actor to their Raider.IO profile. Pass `--fight-id` when you know it; without it the wrapper searches a bounded set of the report's fights (`query.fight_scope`).
 - Preserve provider provenance. `warcraft` is a router, not a source.
 - Use `warcraft guide-compare` when you already have exported guide bundles and want additive cross-provider evidence instead of a synthesized summary.
@@ -110,7 +110,7 @@ narrower, **experimental** is thin and may change.
 - A `guide-compare-query` `provider_results` row (exported or reused) with a non-null `redirect` means that provider served another guide than the candidate it resolved (a retired page); the comparison uses the served guide.
 - Steer `guide-compare-query` orchestration with:
   - `--provider <name>` repeatable, to restrict the run to `wowhead`, `method`, or `icy-veins`
-  - `--out-root <dir>` to choose where the orchestrated bundles are written (default `<XDG data dir>/warcraft/guide_compare/<query-slug>`, never the current directory)
+  - `--out-root <dir>` to choose where the orchestrated bundles are written (default `<data root>/guide_compare/<query-slug>`, the `paths.data_root` that `warcraft doctor` reports, never the current directory)
   - `--max-age-hours <n>` (1-720, default 24) and `--force-refresh` for bundle reuse
   - `--simc-build-handoff` plus `--simc-apl-path <apl>`, `--simc-decode` / `--no-simc-decode`, and `--simc-build-limit <n>` (1-200, default 20) for the SimC handoff
   - example: `warcraft guide-compare-query "<guide query>" --provider wowhead --provider icy-veins --out-root ./tmp/guide-compare`

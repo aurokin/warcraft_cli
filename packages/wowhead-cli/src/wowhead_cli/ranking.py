@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 import shlex
+from collections.abc import Collection
 from datetime import date
 from typing import Any
 from urllib.parse import urlparse
@@ -16,6 +17,7 @@ from urllib.parse import urlparse
 from wowhead_cli.entity_types import PARSER_ENTITY_TYPES, RESOLVE_ENTITY_TYPES, SEARCH_TYPE_HINTS
 from wowhead_cli.expansion_profiles import (
     EXPANSION_PREFIXES,
+    UNPROFILED_PATH_PREFIXES,
     ExpansionProfile,
     is_wowhead_host,
     normalize_wowhead_url,
@@ -401,21 +403,19 @@ def search_result_score_and_reasons(
     return score, unique_reasons
 
 
-def normalize_resolve_entity_types(values: list[str]) -> tuple[str, ...]:
+def split_choices(values: list[str] | None, *, allowed: Collection[str], label: str) -> tuple[str, ...]:
+    """Split a repeatable, comma-separated option into lower-cased values, deduped in order.
+
+    A value outside ``allowed`` raises ValueError naming ``label`` and the allowed values.
+    """
     normalized: list[str] = []
-    seen: set[str] = set()
-    for raw in values:
+    for raw in values or []:
         for candidate in raw.split(","):
             value = candidate.strip().lower()
-            if not value:
+            if not value or value in normalized:
                 continue
-            if value not in RESOLVE_ENTITY_TYPES:
-                raise ValueError(
-                    f"Unsupported resolve entity type {value!r}. Expected one of: {', '.join(sorted(RESOLVE_ENTITY_TYPES))}."
-                )
-            if value in seen:
-                continue
-            seen.add(value)
+            if value not in allowed:
+                raise ValueError(f"Unsupported {label} {value!r}. Expected one of: {', '.join(sorted(allowed))}.")
             normalized.append(value)
     return tuple(normalized)
 
@@ -493,7 +493,7 @@ def url_page_result(url: str, *, expansion: ExpansionProfile) -> dict[str, Any] 
     if normalized is None or not is_wowhead_host(urlparse(normalized).hostname or ""):
         return None
     parts = [part for part in urlparse(normalized).path.split("/") if part]
-    while parts and (parts[0] in EXPANSION_PREFIXES or _LOCALE_SEGMENT_RE.fullmatch(parts[0])):
+    while parts and (parts[0] in EXPANSION_PREFIXES | UNPROFILED_PATH_PREFIXES or _LOCALE_SEGMENT_RE.fullmatch(parts[0])):
         parts = parts[1:]
     page = _url_page_command(parts, normalized) if parts else None
     if page is None:
@@ -714,7 +714,7 @@ def resolve_next_command(candidate: dict[str, Any]) -> str | None:
     return command if isinstance(command, str) and command else None
 
 
-def resolve_confidence(candidates: list[dict[str, Any]], *, entity_types: tuple[str, ...]) -> str:
+def resolve_confidence(candidates: list[dict[str, Any]], *, entity_types: tuple[str, ...], query: str) -> str:
     if not candidates:
         return "none"
     top_ranking = candidates[0].get("ranking", {})
@@ -722,7 +722,7 @@ def resolve_confidence(candidates: list[dict[str, Any]], *, entity_types: tuple[
     second_score = int(candidates[1].get("ranking", {}).get("score") or 0) if len(candidates) > 1 else 0
     margin = top_score - second_score
     reasons = set(top_ranking.get("match_reasons") or [])
-    high = not _is_off_type_partial_match(candidates) and (
+    high = not _is_off_type_partial_match(candidates) and not _misses_a_queried_number(candidates[0], query) and (
         is_high_confidence_exact_match(reasons, margin=margin, second_score=second_score)
         or is_high_confidence_score(top_score, margin=margin)
         or is_filtered_high_confidence(entity_types, top_score=top_score, margin=margin)
@@ -751,6 +751,16 @@ def _is_off_type_partial_match(candidates: list[dict[str, Any]]) -> bool:
         and "type_hint" not in top
         and any("type_hint" in reasons(row) for row in candidates[1:])
     )
+
+
+def _misses_a_queried_number(row: dict[str, Any], query: str) -> bool:
+    """True when the row holds only some of the query's words and not a number the query names.
+
+    "keystone legend season 3": Wowhead's database order lifts "Keystone Legend: Season 2" to the top.
+    """
+    numbers = {token for token in word_tokens(query) if token.isdigit()}
+    reasons = row.get("ranking", {}).get("match_reasons") or []
+    return "some_terms_match" in reasons and bool(numbers - word_tokens(str(row.get("name") or "")))
 
 
 def is_high_confidence_exact_match(reasons: set[str], *, margin: int, second_score: int) -> bool:

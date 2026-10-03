@@ -5,20 +5,29 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from warcraft_core.simc_json2 import dps_error, game_version, metric_count, metric_mean, stop_reason
+from warcraft_core.simc_json2 import (
+    dps_error,
+    game_version,
+    metric_count,
+    metric_mean,
+    profileset_metric,
+    profileset_result_rows,
+    stop_reason,
+)
 
 
 @dataclass(frozen=True, slots=True)
 class SimReportSummary:
     version: str | None
     game_version: str | None
-    player_name: str | None
-    player_spec: str | None
-    player_role: str | None
+    player: dict[str, Any]
     iterations_completed: int | None
     run_settings: dict[str, Any]
     runtime: dict[str, Any]
     metrics: dict[str, Any]
+    # Every actor after players[0], and the ranked profileset rows when the profile defined any.
+    other_actors: list[dict[str, Any]]
+    profilesets: dict[str, Any] | None
 
 
 def load_sim_report(path: str | Path) -> dict[str, Any]:
@@ -47,14 +56,29 @@ def summarize_sim_report(report: dict[str, Any]) -> SimReportSummary:
     return SimReportSummary(
         version=_text(report.get("version")),
         game_version=game_version(options),
-        player_name=_text(player.get("name")),
-        player_spec=_text(player.get("specialization")),
-        player_role=_text(player.get("role")),
+        player=_player_block(player),
         iterations_completed=iterations_completed,
         run_settings=_run_settings_block(options, iterations_completed=iterations_completed, metrics=metrics),
         runtime=_runtime_block(stats),
         metrics=metrics,
+        other_actors=[
+            {"player": _player_block(other), "metrics": _metrics_block(_dict_field(other, "collected_data"), options)}
+            for other in players[1:]
+            if isinstance(other, dict)
+        ],
+        profilesets=_profilesets_block(sim.get("profilesets")),
     )
+
+
+def _player_block(player: dict[str, Any]) -> dict[str, Any]:
+    return {"name": _text(player.get("name")), "spec": _text(player.get("specialization")), "role": _text(player.get("role"))}
+
+
+def _profilesets_block(profilesets: Any) -> dict[str, Any] | None:
+    if not isinstance(profilesets, (dict, list)):
+        return None
+    rows = profileset_result_rows(profilesets)
+    return {"metric": profileset_metric(profilesets), "result_count": len(rows), "results": rows}
 
 
 def _dict_field(source: dict[str, Any], key: str) -> dict[str, Any]:
@@ -86,7 +110,6 @@ def _target_error_percent(*, metrics: dict[str, Any], iterations_completed: int 
 
 def _run_settings_block(options: dict[str, Any], *, iterations_completed: int | None, metrics: dict[str, Any]) -> dict[str, Any]:
     return {
-        "iterations_requested": options.get("iterations"),
         "iterations_completed": iterations_completed,
         "target_error_requested": options.get("target_error"),
         "target_error_percent": _target_error_percent(metrics=metrics, iterations_completed=iterations_completed),
@@ -96,7 +119,7 @@ def _run_settings_block(options: dict[str, Any], *, iterations_completed: int | 
         "max_time": options.get("max_time"),
         "vary_combat_length": options.get("vary_combat_length"),
         "seed": options.get("seed"),
-        "stop_reason": stop_reason(options=options, iterations_completed=iterations_completed),
+        "stop_reason": stop_reason(options),
     }
 
 
@@ -119,6 +142,7 @@ def sim_report_payload(
     input_source: str,
     json_report_path: str | None,
     command: list[str],
+    iterations_requested: int | None,
 ) -> dict[str, Any]:
     return {
         "status": "completed",
@@ -129,12 +153,12 @@ def sim_report_payload(
         "command": command,
         "simc_version": summary.version,
         "game_version": summary.game_version,
-        "player": {
-            "name": summary.player_name,
-            "spec": summary.player_spec,
-            "role": summary.player_role,
-        },
-        "run_settings": summary.run_settings,
+        "player": summary.player,
+        # Not json2's `options.iterations`: SimC rewrites it to the work done (iterations + threads - 1).
+        "run_settings": {"iterations_requested": iterations_requested, **summary.run_settings},
         "runtime": summary.runtime,
         "metrics": summary.metrics,
+        "actor_count": 1 + len(summary.other_actors),
+        "other_actors": summary.other_actors,
+        "profilesets": summary.profilesets,
     }

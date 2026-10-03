@@ -285,6 +285,8 @@ def test_doctor_reports_a_ready_checkout_and_needs_no_network(require, checkout:
     assert data["auth"] == {"required": False, "deferred": False}
     assert data["capabilities"]["decode_build"] == "ready"
     assert data["capabilities"]["search"] == "coming_soon"
+    assert data["dependencies"]["ripgrep"]["available"] is True, result.describe()
+    assert data["dependencies"]["simc_binary"]["available"] is True, result.describe()
     assert data["repo"]["root"] == str(checkout.root)
     binary = data["repo"]["binary"]
     assert binary["available"] is True
@@ -963,6 +965,8 @@ def test_apl_structure_journey(require, checkout: Checkout) -> None:
 
     single = run("simc", "apl-lists", str(checkout.apl), "--list", "default")
     assert [entry["list_name"] for entry in single.data["lists"]] == ["default"]
+    unknown = run("simc", "apl-lists", str(checkout.apl), "--list", "no_such_list", expect=EXIT_NOT_FOUND, error_code="not_found")
+    assert set(unknown.payload["error"]["details"]["available_lists"]) == list_names, unknown.describe()
 
     graph = run("simc", "apl-graph", str(checkout.apl))
     assert graph.data["graph"]["format"] == "mermaid"
@@ -993,12 +997,20 @@ def test_find_and_trace_an_action_across_the_checkout(require, checkout: Checkou
     # prove the flag bites. Hits across files come back in ripgrep's thread order, so which five is not pinned.
     wide = run("simc", "find-action", action, "--class", ACTOR_CLASS, "--limit", "200")
     for name, bucket in found.data["buckets"].items():
-        every_hit = wide.data["buckets"][name]["items"]
-        assert bucket["count"] == len(every_hit), wide.describe()
-        assert len(bucket["items"]) == min(5, len(every_hit)), found.describe()
-        assert all(item in every_hit for item in bucket["items"]), found.describe()
-        assert bucket["truncated"] is (len(every_hit) > 5), found.describe()
+        wide_bucket = wide.data["buckets"][name]
+        assert bucket["count"] == wide_bucket["count"], wide.describe()
+        assert len(bucket["items"]) == min(5, bucket["count"]), found.describe()
+        assert bucket["truncated"] is (bucket["count"] > 5), found.describe()
+        if not wide_bucket["truncated"]:
+            assert all(item in wide_bucket["items"] for item in bucket["items"]), found.describe()
     assert any(bucket["truncated"] for bucket in found.data["buckets"].values()), wide.describe()
+    # --class keeps the class's own files: the monk modules and monk.txt / monk_ptr.txt.
+    for name in ("class_modules", "spell_dump"):
+        paths = {item["relative_to_repo"] for item in wide.data["buckets"][name]["items"]}
+        assert paths and all("monk" in path for path in paths), wide.describe()
+    # The dumps spell the display name (`Name : Rising Sun Kick`), which the token and the name itself both find.
+    display = run("simc", "find-action", "Rising Sun Kick", "--class", ACTOR_CLASS, "--limit", "5")
+    assert 0 < display.data["buckets"]["spell_dump"]["count"] <= wide.data["buckets"]["spell_dump"]["count"], display.describe()
 
     traced = run("simc", "trace-action", str(checkout.apl), action, "--class", ACTOR_CLASS, "--limit", "3")
     assert traced.data["action"] == action
@@ -1023,6 +1035,12 @@ def test_exact_build_priority_journey(require, checkout: Checkout) -> None:
     assert all(row["status"] in {"guaranteed", "possible"} for row in rows)
     assert all(row["action"] and row["text"] for row in rows)
     assert priority.data["priority"]["focus_list"] == "default"
+    every_row = run("simc", "priority", str(checkout.apl), *build_args, "--limit", str(PRIORITY_SCAN_LIMIT))
+    total = len(every_row.data["priority"]["items"])
+    assert total > 2 and every_row.data["priority"]["truncated"] is False, every_row.describe()
+    capped = run("simc", "priority", str(checkout.apl), *build_args, "--limit", "2")
+    assert (capped.data["priority"]["count"], capped.data["priority"]["total"], capped.data["priority"]["truncated"]) == (2, total, True)
+    assert capped.data["priority"]["items"] == every_row.data["priority"]["items"][:2], capped.describe()
 
     opener = run("simc", "opener", str(checkout.apl), *build_args, "--limit", "5")
     assert opener.data["opener"]["kind"] == "static_priority_preview"
@@ -1241,6 +1259,7 @@ def test_sim_run_and_log_analysis_chain(require, checkout: Checkout, out_dir: Pa
     assert data["player"]["spec"].lower().startswith(SPEC)
     assert data["run_settings"]["iterations_requested"] == 50
     assert data["run_settings"]["threads"] == 1
+    assert (data["actor_count"], data["other_actors"], data["profilesets"]) == (1, [], None), simmed.describe()
     assert data["run_settings"]["max_time"] == 60
     assert data["metrics"]["dps"] > 0
     # SimC's DPS error is the confidence half-width it prints as DPS-Error: the mean's standard error
@@ -1267,7 +1286,7 @@ def test_sim_run_and_log_analysis_chain(require, checkout: Checkout, out_dir: Pa
         "--iterations",
         "20",
         "--threads",
-        "1",
+        "2",
         "--max-time",
         "30",
         "--fight-style",
@@ -1280,9 +1299,25 @@ def test_sim_run_and_log_analysis_chain(require, checkout: Checkout, out_dir: Pa
     )
     assert inline.data["input_source"] == "profile_text"
     assert inline.data["metrics"]["dps"] > 0
+    # SimC's own options.iterations would read 20 + threads - 1 here; the request is what was asked for.
+    assert inline.data["run_settings"]["iterations_requested"] == 20, inline.describe()
     settings = inline.data["run_settings"]
     assert (settings["fight_style"], settings["desired_targets"], settings["vary_combat_length"]) == ("LightMovement", 3, 0.0), inline.describe()
     assert data["run_settings"]["desired_targets"] == 1, simmed.describe()
+
+    # Without output= the text report is on stdout; result_lines keeps each actor's header above its metrics.
+    run_json = out_dir / "run.json"
+    plain = run(
+        "simc", "run", str(checkout.profile), "--arg", "iterations=20", "--arg", "threads=1", "--arg", "max_time=60",
+        "--arg", f"json2={run_json}", timeout=300,
+    )
+    lines = plain.data["result_lines"]
+    assert lines[0].startswith("Player: ") and lines[1].startswith("DPS="), plain.describe()
+    run_report = json.loads(run_json.read_text(encoding="utf-8"))
+    run_dps = run_report["sim"]["players"][0]["collected_data"]["dps"]["mean"]
+    assert float(lines[1].split()[0].removeprefix("DPS=")) == pytest.approx(run_dps), plain.describe()
+    dtps_index = next(index for index, line in enumerate(lines) if line.startswith("DTPS="))
+    assert lines[dtps_index - 1].startswith("Target: "), plain.describe()
 
     combat_log = out_dir / "combat.txt"
     ran = run(
@@ -1632,6 +1667,11 @@ def test_usage_errors_exit_2_with_an_error_envelope(require, checkout: Checkout)
         expect=EXIT_USAGE, error_code="unsupported_build_reference",
     )
     assert not_a_build.payload["error"]["details"]["reference_type"] == "url", not_a_build.describe()
+    classic = run(
+        "simc", "decode-build", "--talents", "https://www.wowhead.com/mop-classic/talent-calc/mage/frost/213221",
+        expect=EXIT_USAGE, error_code="unsupported_build_reference",
+    )
+    assert classic.payload["error"]["details"]["reference_type"] == "wowhead_talent_calc_url_non_retail", classic.describe()
     # A class and spec with no talents is not a build, so there is nothing to decode.
     run("simc", "decode-build", "--actor-class", ACTOR_CLASS, "--spec", SPEC, expect=EXIT_USAGE, error_code="invalid_query")
     # A class and spec that do not go together are the caller's mistake, named with the valid specs.
@@ -1647,6 +1687,10 @@ def test_usage_errors_exit_2_with_an_error_envelope(require, checkout: Checkout)
     )
     assert "name:rank" in bad_add.payload["error"]["message"], bad_add.describe()
     run("simc", "repo", "--set-root", "/tmp", "--clear-root", expect=EXIT_USAGE, error_code="invalid_query")
+    unknown_class = run("simc", "find-action", "tiger_palm", "--class", "nonsense", expect=EXIT_USAGE, error_code="invalid_query")
+    assert ACTOR_CLASS in unknown_class.payload["error"]["message"], unknown_class.describe()
+    run("simc", "sim", str(checkout.profile), "--preset", "fast", expect=EXIT_USAGE, error_code="invalid_query")
+    run("simc", "inspect", str(checkout.root / "build" / "simc"), expect=EXIT_USAGE, error_code="invalid_query")
 
 
 def test_sync_refuses_a_dirty_worktree_instead_of_pulling(require, out_dir: Path) -> None:
@@ -1682,3 +1726,29 @@ def test_checkout_reports_a_failed_managed_update(require, out_dir: Path) -> Non
         error_code="checkout_failed",
     )
     assert "not a git repository" in result.payload["error"]["message"]
+
+
+def test_raidbots_explain_input_handoff_commands_run_against_simc(require, checkout: Checkout, out_dir: Path) -> None:
+    """Each suggested `simc` command must be one simc accepts, and `simc sim -` must keep the profileset ranking."""
+    require("raidbots")
+    stock = checkout.root / "profiles" / "MID1" / "MID1_Death_Knight_Frost.simc"
+    assert stock.is_file(), f"stock profile missing: {stock}"
+    text = stock.read_text(encoding="utf-8") + '\nprofileset."orc"+=race=orc\nprofileset."no_potion"+=potion=disabled\n'
+    path = out_dir / "top_gear.simc"
+    path.write_text(text, encoding="utf-8")
+
+    explained = run("raidbots", "explain-input", "--file", str(path))
+    assert explained.data["scope"]["sim_type_guess"] == "top_gear_or_droptimizer"
+    rows = explained.data["handoff"]["suggested_simc_commands"]
+    assert {shlex.split(row["command"])[1] for row in rows} == {"sim", "decode-build", "describe-build"}, explained.describe()
+    for row in rows:
+        argv = shlex.split(row["command"])
+        assert argv[0] == "simc", explained.describe()
+        if argv[1] == "sim":
+            simmed = run("simc", *argv[1:], "--iterations", "20", "--threads", "1", "--max-time", "60", stdin=text, timeout=300)
+            ranked = simmed.data["profilesets"]
+            assert ranked["result_count"] == 2, simmed.describe()
+            assert {result["name"] for result in ranked["results"]} == {"orc", "no_potion"}
+        else:
+            ran = run("simc", *argv[1:])
+            assert (ran.data["build"] if argv[1] == "describe-build" else ran.data["decoded"])["enabled_talents"], ran.describe()

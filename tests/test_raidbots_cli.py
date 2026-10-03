@@ -366,6 +366,19 @@ def test_input_command_emits_handoff(monkeypatch: pytest.MonkeyPatch) -> None:
     assert payload["data"]["citations"]["simc_input_url"] == "https://www.raidbots.com/simbot/report/abc123/simc"
 
 
+def test_compact_input_keeps_the_simc_input_whole(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Addon exports carry `# ...` comment lines, so --compact cut `data.input` to 280 characters as if it were prose."""
+    addon_export = "# SimC Addon 12.0.1\n# Requires SimulationCraft 1201\n" + 'mage="Main"\nspec=frost\ntalents=CYG\n' + "# bag item\n" * 60
+    monkeypatch.setattr("raidbots_cli.client.RaidbotsClient.report_input", lambda self, report_id: addon_export)
+
+    result = runner.invoke(app, ["--compact", "input", "abc123"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["data"]["input"] == addon_export
+    assert "compacted_paths" not in payload["provenance"]
+
+
 def test_explain_input_via_text_option() -> None:
     result = runner.invoke(app, ["explain-input", "--text", TOP_GEAR_INPUT])
     assert result.exit_code == 0

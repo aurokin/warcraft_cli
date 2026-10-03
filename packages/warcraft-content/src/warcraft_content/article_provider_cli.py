@@ -1,4 +1,4 @@
-"""Response builders and page helpers shared by the article providers' pure surfaces (Icy Veins, Method)."""
+"""Payload builders and page helpers shared by the guide providers' pure surfaces (Icy Veins, Method)."""
 
 from __future__ import annotations
 
@@ -11,56 +11,11 @@ import httpx
 from warcraft_core.exit_codes import error_code_for_http_status
 from warcraft_core.provider import ProviderError
 
-from warcraft_content.article_discovery import article_resolve_payload, article_search_payload
-from warcraft_content.guide_analysis import extract_guide_analysis_surfaces
+from warcraft_content.article_bundle import write_article_bundle
+from warcraft_content.article_discovery import merge_article_build_references, merge_article_linked_entities
+from warcraft_content.guide_analysis import extract_guide_analysis_surfaces, merge_guide_analysis_surfaces
 
 PREVIEW_LIMIT = 10
-
-
-def build_article_search_response(
-    *,
-    query: str,
-    search_query: str,
-    results: list[dict[str, Any]],
-    total_count: int,
-    scope_hint: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    payload = article_search_payload(
-        query=query,
-        search_query=search_query,
-        results=results,
-        total_count=total_count,
-    )
-    if scope_hint is not None:
-        payload["scope_hint"] = scope_hint
-    return payload
-
-
-def build_article_resolve_response(
-    *,
-    provider_command: str,
-    query: str,
-    search_query: str,
-    results: list[dict[str, Any]],
-    total_count: int,
-    resolved: bool,
-    scope_hint: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    payload = article_resolve_payload(
-        provider_command=provider_command,
-        query=query,
-        search_query=search_query,
-        results=results,
-        total_count=total_count,
-        resolved=resolved,
-    )
-    if scope_hint is not None:
-        payload["scope_hint"] = scope_hint
-    return payload
-
-
-def unsupported_guide_surface_message(*, provider_name: str, slug: str, content_family: str | None) -> str:
-    return f"Unsupported {provider_name} guide surface for slug={slug!r} family={content_family!r}."
 
 
 def guide_redirect(*, provider_label: str, requested: str, served: str) -> dict[str, str] | None:
@@ -173,6 +128,67 @@ def fetch_navigation_pages(
     if initial_url not in seen:
         pages.insert(0, with_analysis_surfaces(initial, provider=provider))
     return pages, failures
+
+
+def guide_bundle_payload(
+    initial: dict[str, Any],
+    nav_items: list[dict[str, Any]],
+    *,
+    fetch_page: Callable[[str], dict[str, Any]],
+    provider: str,
+    provider_label: str,
+    extra_page_keys: tuple[str, ...] = (),
+) -> dict[str, Any]:
+    """``guide-full`` data: every navigation page of a guide plus its merged entities, build references and analysis surfaces.
+
+    ``initial`` is the requested page, already fetched and checked; ``extra_page_keys`` names the
+    provider's own per-page blocks to keep (Icy Veins' ``page_toc``).
+    """
+    pages, failed_pages = fetch_navigation_pages(
+        initial, nav_items, fetch_page=fetch_page, provider=provider, provider_label=provider_label
+    )
+    guide = dict(initial["guide"])
+    guide["page_count"] = len(pages)
+    linked_entities = merge_article_linked_entities(pages)
+    build_references = merge_article_build_references(pages)
+    analysis_surfaces = merge_guide_analysis_surfaces(pages)
+    return {
+        "guide": guide,
+        "redirect": initial["redirect"],
+        "page": dict(initial["page"]),
+        "navigation": {"count": len(nav_items), "items": nav_items},
+        "pages": [
+            {
+                "guide": page["guide"],
+                "page": page["page"],
+                **{key: page[key] for key in extra_page_keys},
+                "article": page["article"],
+                "build_references": page.get("build_references") or [],
+                "analysis_surfaces": page.get("analysis_surfaces") or [],
+            }
+            for page in pages
+        ],
+        "linked_entities": {"count": len(linked_entities), "items": linked_entities},
+        "build_references": {"count": len(build_references), "items": build_references},
+        "analysis_surfaces": {"count": len(analysis_surfaces), "items": analysis_surfaces},
+        # Navigation pages that could not be fetched or parsed; their content is missing from every
+        # merged block above.
+        "failed_pages": {"count": len(failed_pages), "items": failed_pages},
+        "citations": {"page": guide["page_url"], "pages": [page["guide"]["page_url"] for page in pages]},
+    }
+
+
+def guide_export_payload(bundle: dict[str, Any], *, provider: str, export_dir: Path) -> dict[str, Any]:
+    """Write a ``guide_bundle_payload`` to ``export_dir`` and return the ``guide-export`` data describing it."""
+    manifest = write_article_bundle(bundle, provider=provider, export_dir=export_dir)
+    return {
+        "guide": bundle["guide"],
+        "redirect": bundle["redirect"],
+        "output_dir": str(export_dir),
+        "counts": manifest["counts"],
+        "files": manifest["files"],
+        "failed_pages": bundle["failed_pages"],
+    }
 
 
 class CacheSettingsView(Protocol):

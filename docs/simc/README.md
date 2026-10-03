@@ -34,7 +34,7 @@ Global flags go before the subcommand.
 |------|--------|
 | `--repo-root PATH` | Override the local SimulationCraft checkout for this invocation |
 | `--pretty` | Pretty-print JSON. Default output is compact JSON |
-| `--compact` | Truncate long prose strings (tooltip HTML, article text) and list each cut path in `provenance.compacted_paths`; URLs, talent/transport strings, export codes and `*command` values stay whole. |
+| `--compact` | Truncate long prose strings (tooltip HTML, article text) and list each cut path in `provenance.compacted_paths`; URLs, talent/transport strings, export codes and `*command`/`*input` values stay whole. |
 | `--compact-max-chars N` | Truncation length for `--compact` (40-10000) |
 | `--fields a.b,c` | Keep only the listed dot paths (repeatable or comma-separated) |
 | `--fields-strict` | Exit 2 with `missing_fields` when a requested path is absent |
@@ -91,7 +91,8 @@ These codes are worth knowing:
   names which. A decode never returns the talents of a SimC run that crashed part-way.
 - `unsupported_build_reference` (exit 2) — the build input is a link the CLI cannot turn into talents.
   `error.details.reference_type` names what it recognized: `wowhead_talent_calc_url` for a talent-calc
-  URL with no build code, `url` for anything else. See "Build references" below for what does decode.
+  URL with no build code, `wowhead_talent_calc_url_non_retail` for a Classic-era calculator build,
+  `url` for anything else. See "Build references" below for what does decode.
 - `unknown_talent` (exit 2) — an `--enable`/`--disable` value names no talent of the actor's class
   (`error.details.unknown_talents` lists them), or a `modify-build` `--add`/`--remove` value names no
   talent the build's spec can take. Talent names are tokenized the way SimC does it: a hyphen or comma
@@ -128,7 +129,8 @@ exit code there.
   token with `enabled_talent_count` beside it.
 - `analysis-packet --first-cast-action` needs `--sim-profile` or `--profile-path` to sim; without one it
   fails with `invalid_query`. `first-cast` leaves its per-seed logs in a temp directory (each result's
-  `log_path`) and removes the directory when a run fails.
+  `log_path`) and removes the directory when a run fails. `validate-apl` without `--out-dir` writes its
+  merged profile to a temp directory (`profile_path`) and leaves it there for you to read or delete.
 
 ## Build input flags
 
@@ -174,9 +176,10 @@ Raw-only transport packets are not accepted as direct build input: upgrade them 
 | Reference type | Example | Decodes |
 |----------------|---------|---------|
 | `wow_talent_export` | `C4QAAAAAA...` | Yes, once the class and spec are known. Both Method and Icy Veins publish only this type, and the string names no class or spec, so either pass `--actor-class`/`--spec` or let identification probe every spec SimC knows. |
-| `wowhead_talent_calc_url` | `https://www.wowhead.com/talent-calc/monk/mistweaver/<code>` | Yes, unaided: the path names the class and spec, which the hash is decoded against once. A path the hash contradicts is ignored and the probe identifies the build. |
+| `wowhead_talent_calc_url` | `https://www.wowhead.com/talent-calc/monk/mistweaver/<code>` | Yes, unaided: the path names the class and spec, which the hash is decoded against once. A path the hash contradicts is ignored and the probe identifies the build. Retail PTR and Beta calculators (`/ptr/`, `/beta/`) count as this type. |
 | Wowhead `/talent-calc/blizzard/<code>` | what `modify-build` publishes as `result.wowhead_url` | Yes, as a `wow_talent_export`: the URL carries the hash but no class or spec. |
 | `wowhead_talent_calc_url` with no build code | `https://www.wowhead.com/talent-calc/monk/mistweaver` | No — `unsupported_build_reference`. |
+| Classic-era Wowhead calculator (`/classic/`, `/cata/`, `/mop-classic/`, ...) | `https://www.wowhead.com/mop-classic/talent-calc/mage/frost/<code>` | No — `unsupported_build_reference` with `reference_type: "wowhead_talent_calc_url_non_retail"`: SimulationCraft decodes retail builds only. |
 | Any other link (guide page, article, addon export site) | `https://www.icy-veins.com/wow/...` | No — `unsupported_build_reference` with `reference_type: "url"`. |
 
 ## Decoded builds
@@ -292,7 +295,7 @@ decoded build differs.
 | `first-cast` | PROFILE_PATH ACTION | Time the first cast of an action across several short sims. |
 | `identify-build` | - | Resolve class/spec identity for a build without decoding its talents. |
 | `inactive-actions` | APL_PATH | List the APL actions an exact build cannot use. |
-| `inspect` | [TARGET] | Describe the repo, or one file inside it, including any build lines it carries. |
+| `inspect` | [TARGET] | Describe the repo, or one file or directory, including any build lines a file carries. |
 | `log-actions` | LOG_PATH ACTIONS | Report when actions were first scheduled and performed in a SimC combat log. |
 | `modify-build` | - | Apply talent swaps, additions, and removals to a build and re-encode it. |
 | `opener` | APL_PATH | Preview the early priority for an exact build, flagging runtime-only conditions. |
@@ -310,6 +313,12 @@ decoded build differs.
 | `variant-report` | REPORT_PATH | Summarize a saved compare-apls JSON report. |
 | `verify-clean` | - | Report whether the checkout and built binary are unmodified. |
 | `version` | - | Report the version reported by the local SimC binary. |
+
+`find-action` and `trace-action` search the spell dumps case-insensitively and read `_` as a space
+there, so a token (`rising_sun_kick`) and a display name (`"Rising Sun Kick"`) both find
+`Name : Rising Sun Kick`. `--class` takes any spelling of a class (`deathknight`, `"Death Knight"`)
+and keeps that class's own module files and spell dumps; an unknown class fails with `invalid_query`
+and lists the valid ones. `inspect` on a file that is not text fails with `invalid_query`.
 
 `apl-branch-compare` takes the right-hand build only from the `--right-*` options once any right-hand
 build source is given (`--right-profile-path`, `--right-build-file`, `--right-build-text`,
@@ -338,8 +347,16 @@ and `run_settings.target_error_percent` is that error as a percentage of mean DP
 for consumer work and only reach for `high-accuracy` when the user asks for it. Do not hard-code thread
 counts in guidance; inspect the machine first.
 
-`simc run` passes raw SimC arguments through. Its `result_lines` holds the `Player:` and `DPS=`/`HPS=`/
-`DTPS=` lines of SimC's text report; `stdout_preview` and `stderr_preview` (also on `sync`, `build`,
+`run_settings.iterations_requested` is the count the CLI asked SimC for. SimC splits the iterations
+across threads, so `iterations_completed` can come out a little lower or higher. A profile with several actors reports the first
+in `player`/`metrics`, the rest in `other_actors` (each with `player` and `metrics`), and the total in
+`actor_count`. A profile that defines profilesets (a Top Gear or Droptimizer input) reports their
+ranked rows in `profilesets` (`metric`, `result_count`, `results` best mean first); otherwise
+`profilesets` is null. An unknown `--preset` or an empty profile fails with `invalid_query` (exit 2).
+
+`simc run` passes raw SimC arguments through. Its `result_lines` holds the `Player:`, `Target:` and
+`Add:` headers of SimC's text report, each followed by that actor's `DPS=`/`HPS=`/`DTPS=`/`TMI=` lines,
+so a target's `DTPS=` line sits under its `Target:` header; `stdout_preview` and `stderr_preview` (also on `sync`, `build`,
 `validate-apl`, the `compare-apls` validations, and the error details of a failed `sim`) are the last
 20 lines, with `stdout_truncated`/`stderr_truncated` set when earlier lines were cut.
 

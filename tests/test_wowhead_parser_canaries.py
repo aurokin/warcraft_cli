@@ -13,13 +13,14 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from warcraft_api.http import build_client
+from warcraft_core.timestamps import parse_iso8601_utc
 from wowhead_cli.entity_types import suggestion_entity_type_from_type_id
 from wowhead_cli.expansion_profiles import (
     build_entity_url,
     build_search_suggestions_url,
     resolve_expansion,
 )
-from wowhead_cli.listing_filters import parse_date_bound, parse_iso8601_utc
+from wowhead_cli.listing_filters import parse_date_bound
 from wowhead_cli.main import _extract_news_page_data, _normalize_news_row, app
 from wowhead_cli.page_parser import (
     extract_comments_dataset,

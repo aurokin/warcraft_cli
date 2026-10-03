@@ -13,6 +13,8 @@ from typing import Any
 from urllib.parse import urljoin
 from zoneinfo import ZoneInfo
 
+from warcraft_core.timestamps import parse_iso8601_utc
+
 from wowhead_cli.page_parser import clean_markup_text
 from wowhead_cli.wowhead_client import WOWHEAD_BASE_URL
 
@@ -52,17 +54,6 @@ def parse_listing_timestamp(value: Any) -> datetime | None:
         return None
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=WOWHEAD_DISPLAY_TIMEZONE)
-    return parsed.astimezone(UTC)
-
-
-def parse_iso8601_utc(value: Any) -> datetime | None:
-    if not isinstance(value, str) or not value.strip():
-        return None
-    parsed = _parse_iso8601(value.strip())
-    if parsed is None:
-        return None
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=UTC)
     return parsed.astimezone(UTC)
 
 

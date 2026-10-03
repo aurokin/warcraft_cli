@@ -35,6 +35,16 @@ def test_detect_expansion_rejects_non_wowhead_hosts() -> None:
     assert detect_expansion_from_url("https://evilwowhead.com/item=19019") is None
 
 
+def test_a_wow_forever_url_names_no_expansion_or_entity() -> None:
+    """Wowhead's /forever/ section is another game; its pages used to be read as retail."""
+    assert detect_expansion_from_url("https://www.wowhead.com/forever/item=19019") is None
+    assert parse_entity_from_wowhead_url("https://www.wowhead.com/forever/item=19019") is None
+
+    result = runner.invoke(app, ["entity", "--url", "https://www.wowhead.com/forever/item=19019"])
+    assert result.exit_code == 2
+    assert json.loads(result.stderr)["error"]["code"] == "invalid_argument"
+
+
 def test_compare_rejects_mixed_expansion_urls(monkeypatch) -> None:
     monkeypatch.setattr("wowhead_cli.main.WowheadClient.tooltip", lambda *args, **kwargs: {"name": "A"})
     monkeypatch.setattr(
@@ -60,7 +70,7 @@ def test_compare_routes_off_a_url_in_any_argument_position(monkeypatch) -> None:
     """A bare `<type>:<id>` ref first must not strip the expansion a later URL names."""
     calls: list[str] = []
 
-    def fake_tooltip(self, entity_type: str, entity_id: int, data_env=None):  # noqa: ANN001, ANN202
+    def fake_tooltip(self, entity_type: str, entity_id: int, data_env=None):
         calls.append(f"{self.expansion.key}:{entity_type}:{entity_id}")
         return {"name": f"{entity_type} {entity_id}"}
 
@@ -127,6 +137,10 @@ def test_search_answers_the_entity_a_url_names_without_searching_upstream(monkey
         ),
         ("https://www.wowhead.com/wotlk/guides/classes", "wowhead --expansion wotlk guides classes"),
         ("https://www.wowhead.com/news?page=2", "wowhead news"),
+        (
+            "https://www.wowhead.com/forever/news/ghost-wolf-383241",
+            "wowhead news-post https://www.wowhead.com/forever/news/ghost-wolf-383241",
+        ),
     ],
 )
 def test_search_and_resolve_answer_a_page_url_with_the_command_that_reads_it(monkeypatch, url: str, command: str) -> None:

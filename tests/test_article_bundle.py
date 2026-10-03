@@ -7,12 +7,14 @@ from typing import Any
 import pytest
 from warcraft_content.article_bundle import (
     ArticleBundleError,
+    article_export_dir,
     compare_article_bundles,
-    default_article_export_dir,
     load_article_bundle,
+    load_json,
     query_article_bundle,
     write_article_bundle,
 )
+from warcraft_core.provider import ProviderError
 
 
 def _method_like_payload() -> dict[str, object]:
@@ -320,9 +322,36 @@ def _wowhead_like_payload() -> dict[str, object]:
     }
 
 
-def test_default_article_export_dir_uses_provider_root() -> None:
-    path = default_article_export_dir("method", "mistweaver-monk", cwd=Path("/tmp/example"))
-    assert path == Path("/tmp/example/method_exports/guide-mistweaver-monk")
+def test_article_export_dir_defaults_under_the_provider_root() -> None:
+    path = article_export_dir(None, provider="method", ref_slug="mistweaver-monk")
+    assert path == Path.cwd() / "method_exports" / "guide-mistweaver-monk"
+
+
+def test_article_export_dir_rejects_a_file_before_anything_is_fetched(tmp_path: Path) -> None:
+    """``--out`` naming a file failed as internal_error only after the whole guide was fetched."""
+    target = tmp_path / "notabundle.txt"
+    target.write_text("x", encoding="utf-8")
+
+    with pytest.raises(ProviderError) as excinfo:
+        article_export_dir(target, provider="method", ref_slug="frost-mage")
+
+    assert excinfo.value.code == "invalid_argument"
+
+
+def test_write_article_bundle_removes_page_files_of_an_earlier_export(tmp_path: Path) -> None:
+    """Re-exporting into one directory left the previous guide's page HTML in pages/."""
+    export_dir = tmp_path / "bundle"
+    stale = export_dir / "pages" / "gearing.html"
+    stale.parent.mkdir(parents=True)
+    stale.write_text("<p>old</p>", encoding="utf-8")
+    keep = export_dir / "notes.txt"
+    keep.write_text("mine", encoding="utf-8")
+
+    write_article_bundle(_method_like_payload(), provider="method", export_dir=export_dir)
+
+    listed = {Path(row["path"]).name for row in load_json(export_dir / "page-files.json")["pages"]}
+    assert {path.name for path in (export_dir / "pages").iterdir()} == listed
+    assert keep.read_text(encoding="utf-8") == "mine"
 
 
 def test_write_and_query_article_bundle_for_method_shape(tmp_path: Path) -> None:

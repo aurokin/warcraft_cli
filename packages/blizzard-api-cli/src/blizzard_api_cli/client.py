@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import time
 from collections.abc import Callable
@@ -8,8 +7,8 @@ from dataclasses import dataclass
 from typing import Any
 
 import httpx
+from warcraft_api.client_credentials import TOKEN_SKEW_SECONDS, ClientTokenCache
 from warcraft_api.http import DEFAULT_RETRY_ATTEMPTS, build_client, request_with_retries
-from warcraft_core.auth import load_provider_auth_state, save_provider_auth_state
 from warcraft_core.wow_normalization import normalize_region, realm_slug_variants
 
 from blizzard_api_cli.auth import BlizzardAuthConfig, load_blizzard_auth_config
@@ -28,10 +27,6 @@ SUPPORTED_GAME_VERSIONS = ("retail", "classic")
 
 DEFAULT_LOCALE = "en_US"
 DEFAULT_REGION = "us"
-
-# Token-expiry safety skew (seconds): refresh slightly early so an in-flight request never races a
-# server-side expiry. Mirrors the warcraftlogs client.
-_TOKEN_SKEW_SECONDS = 60
 
 # Regions whose API host, OAuth token URL, and namespace strings have been confirmed against live
 # Blizzard endpoints (retail and classic Game Data, retail Profile). CN routes through a different
@@ -179,62 +174,11 @@ class BlizzardClient:
             self._http_client = build_client(timeout=self._timeout_seconds)
         return self._http_client
 
-    def _credential_cache_key(self, region: str) -> str:
-        raw = f"{region}\0{self._client_id}\0{self._client_secret}"
-        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
-
-    def _load_shared_client_token(self, *, region: str, now: float) -> str | None:
-        try:
-            payload = load_provider_auth_state(CLIENT_CREDENTIALS_STATE_PROVIDER)
-        except (OSError, json.JSONDecodeError):
-            return None
-        if not isinstance(payload, dict):
-            return None
-        if payload.get("auth_mode") != "client_credentials":
-            return None
-        if payload.get("credential_key") != self._credential_cache_key(region):
-            return None
-        token = payload.get("access_token")
-        expires_at = payload.get("expires_at")
-        if not isinstance(token, str) or not token.strip():
-            return None
-        if not isinstance(expires_at, (int, float)):
-            return None
-        if now >= float(expires_at) - _TOKEN_SKEW_SECONDS:
-            return None
-        self._access_token = token
-        self._token_region = region
-        self._token_expires_at = float(expires_at)
-        return token
-
-    def _save_shared_client_token(self, *, region: str, token: str, expires_at: float) -> None:
-        # Single-entry shared cache (one JSON object per provider-state path), mirroring the
-        # warcraftlogs client. Alternating regions/credentials across separate processes re-fetches
-        # the token on each switch; that is a deliberate non-goal here (a token fetch is cheap and
-        # tokens are long-lived). The credential_key still guards against serving a stale token for
-        # the wrong region/credentials. A multi-entry keyed cache is intentionally not built.
-        try:
-            save_provider_auth_state(
-                CLIENT_CREDENTIALS_STATE_PROVIDER,
-                {
-                    "access_token": token,
-                    "auth_mode": "client_credentials",
-                    "credential_key": self._credential_cache_key(region),
-                    "expires_at": expires_at,
-                    "region": region,
-                    "token_type": "Bearer",
-                },
-            )
-        except OSError:
-            # Shared token caching is an optimization; commands still work without a writable
-            # state directory.
-            return
-
     def _token(self, routing: BlizzardRouting) -> str:
         now = time.time()
         # Tokens are region-scoped (CN uses a different OAuth host from us/eu/kr/tw), so the
         # in-memory cache must match the target region before it can be reused.
-        if self._access_token and self._token_region == routing.region and now < self._token_expires_at - _TOKEN_SKEW_SECONDS:
+        if self._access_token and self._token_region == routing.region and now < self._token_expires_at - TOKEN_SKEW_SECONDS:
             return self._access_token
         if not self.configured:
             raise BlizzardClientError(
@@ -242,9 +186,12 @@ class BlizzardClient:
                 "Blizzard commands need BLIZZARD_CLIENT_ID and BLIZZARD_CLIENT_SECRET. Set them in "
                 ".env.local, the provider env file, or the environment.",
             )
-        shared_token = self._load_shared_client_token(region=routing.region, now=now)
-        if shared_token is not None:
-            return shared_token
+        token_cache = ClientTokenCache(CLIENT_CREDENTIALS_STATE_PROVIDER, routing.region, self._client_id, self._client_secret)
+        cached = token_cache.load(now=now)
+        if cached is not None:
+            self._access_token, self._token_expires_at = cached
+            self._token_region = routing.region
+            return self._access_token
         response = request_with_retries(
             self._client(),
             routing.oauth_token_url,
@@ -265,7 +212,7 @@ class BlizzardClient:
         self._access_token = token
         self._token_region = routing.region
         self._token_expires_at = now + expires_seconds
-        self._save_shared_client_token(region=routing.region, token=token, expires_at=self._token_expires_at)
+        token_cache.save(token=token, expires_at=self._token_expires_at)
         return token
 
     @staticmethod
@@ -301,7 +248,11 @@ class BlizzardClient:
         Blizzard slugs drop apostrophes and keep word breaks (``Mal'Ganis`` -> ``malganis``, ``Tarren
         Mill`` -> ``tarren-mill``), so neither spelling alone covers every realm or every way it is typed.
         """
-        *earlier, final = realm_slug_variants(realm) or [realm.strip().lower()]
+        variants = realm_slug_variants(realm)
+        if not variants:
+            # An empty slug would GET the realm index and return it as this realm.
+            raise BlizzardClientError("invalid_query", f"Realm {realm!r} has no letters or digits to look up.")
+        *earlier, final = variants
         for slug in earlier:
             try:
                 return self._get(routing, path_for(slug))
@@ -356,6 +307,8 @@ class BlizzardClient:
         classic: bool = False,
         locale: str | None = None,
     ) -> dict[str, Any]:
+        if not name.strip():
+            raise BlizzardClientError("invalid_query", "Character name must not be blank.")
         routing = resolve_routing(
             region_input=region or self._default_region,
             game_version=game_version,

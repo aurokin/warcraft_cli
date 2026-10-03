@@ -10,7 +10,6 @@ import httpx
 import pytest
 from raiderio_cli.client import RaiderIOClient
 from warcraft_api.cache import (
-    CacheTTLConfig,
     FileCacheStore,
     RedisCacheStore,
     clear_file_cache,
@@ -254,8 +253,9 @@ def test_load_cache_settings_from_env_uses_shared_xdg_default(monkeypatch: pytes
     assert settings.cache_dir == (tmp_path / "cache" / "warcraft" / "wowhead" / "http")
 
 
-def test_wowhead_client_uses_updated_default_cache_ttls() -> None:
-    client = WowheadClient(cache_enabled=False, cache_ttls=CacheTTLConfig())
+def test_wowhead_client_uses_updated_default_cache_ttls(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("WOWHEAD_CACHE_BACKEND", "none")
+    client = WowheadClient()
     assert client._cache_ttls.search_suggestions == 900
     assert client._cache_ttls.tooltip_meta == 3600
     assert client._cache_ttls.entity_page_html == 3600
@@ -264,8 +264,10 @@ def test_wowhead_client_uses_updated_default_cache_ttls() -> None:
     assert client._cache_ttls.entity_response == 3600
 
 
-def test_entity_response_cache_roundtrips_with_shape_flags(tmp_path: Path) -> None:
-    client = WowheadClient(cache_dir=tmp_path, cache_backend="file")
+def test_entity_response_cache_roundtrips_with_shape_flags(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("WOWHEAD_CACHE_BACKEND", "file")
+    monkeypatch.setenv("WOWHEAD_CACHE_DIR", str(tmp_path))
+    client = WowheadClient()
     payload = {"entity": {"type": "item", "id": 19019, "name": "Thunderfury"}}
 
     client.set_cached_entity_response(
@@ -362,9 +364,11 @@ def test_http_cache_keys_include_the_request_params(
     assert requested == ["thunderfury", "ashkandi"]
 
 
-def test_entity_response_cache_is_scoped_by_expansion(tmp_path: Path) -> None:
-    retail_client = WowheadClient(cache_dir=tmp_path, cache_backend="file", expansion="retail")
-    classic_client = WowheadClient(cache_dir=tmp_path, cache_backend="file", expansion="classic")
+def test_entity_response_cache_is_scoped_by_expansion(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("WOWHEAD_CACHE_BACKEND", "file")
+    monkeypatch.setenv("WOWHEAD_CACHE_DIR", str(tmp_path))
+    retail_client = WowheadClient(expansion="retail")
+    classic_client = WowheadClient(expansion="classic")
 
     retail_payload = {"expansion": "retail", "entity": {"type": "item", "id": 19019, "name": "Thunderfury"}}
     classic_payload = {"expansion": "classic", "entity": {"type": "item", "id": 19019, "name": "Thunderfury"}}
