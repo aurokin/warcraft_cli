@@ -4,17 +4,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
 
-from wowhead_cli.page_parser import extract_gatherer_entities, extract_linked_entities_from_href
-
-
-def _normalize_relation_filter(values: list[str] | None) -> set[str]:
-    normalized: set[str] = set()
-    for raw in values or []:
-        for part in raw.split(","):
-            slug = part.strip().lower().replace(" ", "-")
-            if slug:
-                normalized.add(slug)
-    return normalized
+from wowhead_cli.entities import entity_page_links
 
 
 def _node_key(entity_type: str, entity_id: int) -> str:
@@ -69,13 +59,6 @@ _QueueItem = tuple[str, int, str, int]
 def _optional_str(link: dict[str, Any], key: str) -> str | None:
     value = link.get(key)
     return value if isinstance(value, str) else None
-
-
-def _page_links(html: str, *, page_url: str, include_gatherer: bool) -> list[dict[str, Any]]:
-    links = extract_linked_entities_from_href(html, source_url=page_url)
-    if include_gatherer:
-        links = links + extract_gatherer_entities(html, source_url=page_url)
-    return links
 
 
 def _link_ref(link: dict[str, Any], relation_filter: set[str]) -> tuple[str, int] | None:
@@ -133,7 +116,7 @@ def _expand_page(
     queue: deque[_QueueItem],
     visited_pages: set[tuple[str, int]],
 ) -> None:
-    for link in _page_links(html, page_url=page_url, include_gatherer=options.include_gatherer):
+    for link in entity_page_links(html, page_url=page_url, include_gatherer=options.include_gatherer):
         if len(state.nodes) >= options.node_limit:
             state.truncated = True
             return
@@ -161,8 +144,10 @@ def _traverse(state: _GraphState, options: LinkedGraphOptions, *, fetch_page: An
         entity_type, entity_id, page_url, current_depth = queue.popleft()
         if current_depth >= options.depth:
             continue
-        html, _metadata = fetch_page(entity_type, entity_id)
+        html, metadata = fetch_page(entity_type, entity_id)
         state.fetch_count += 1
+        node = state.nodes[_node_key(entity_type, entity_id)]
+        node["name"] = node["name"] or metadata.get("title")
         _expand_page(
             state,
             options,
@@ -200,7 +185,7 @@ def _graph_payload(state: _GraphState, options: LinkedGraphOptions, *, root_key:
             "pages_fetched": state.fetch_count,
             "pages_skipped": state.pages_skipped,
             "truncated": state.truncated,
-            "caveat": "Relations are entity-type edges parsed from href and gatherer links on fetched pages only.",
+            "caveat": "Relations are entity-type edges parsed from href, gatherer and relation-tab (Listview) links on fetched pages only.",
         },
     }
 
@@ -232,7 +217,3 @@ def build_linked_graph_payload(
     state.nodes[root_key] = _summarize_node(root_type, root_id, url=root_url, name=None)
     _traverse(state, options, fetch_page=fetch_page, root=(root_type, root_id, root_url, 0))
     return _graph_payload(state, options, root_key=root_key)
-
-
-def normalize_relation_option(values: list[str] | None) -> set[str]:
-    return _normalize_relation_filter(values)

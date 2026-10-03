@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from warcraft_api.client_credentials import ClientTokenCache
 from warcraft_core.auth import delete_provider_auth_state, load_provider_auth_state, provider_auth_status, save_provider_auth_state
 from warcraft_core.paths import provider_env_path, provider_state_path
 
@@ -49,7 +50,6 @@ def test_provider_auth_status_reports_token_state(monkeypatch, tmp_path: Path) -
     assert payload["valid_json"] is True
     assert payload["auth_mode"] == "authorization_code"
     assert payload["has_access_token"] is True
-    assert payload["has_refresh_token"] is True
     assert payload["expires_at"] == 1500.0
     assert payload["expired"] is False
 
@@ -109,3 +109,15 @@ def test_save_provider_auth_state_tightens_existing_world_readable_file(tmp_path
 
     assert state_file.stat().st_mode & 0o777 == 0o600
     assert json.loads(state_file.read_text()) == {"access_token": "secret"}
+
+
+def test_client_token_cache_serves_a_token_only_for_its_scope_and_credentials() -> None:
+    cache = ClientTokenCache("warcraftlogs-client-credentials", "retail", "client-a", "secret-a")
+    cache.save(token="token-a", expires_at=1000.0 + 3600)
+
+    assert cache.load(now=1000.0) == ("token-a", 4600.0)
+    # A token minted by another site's or region's OAuth host, or before a credential rotation, is not reused.
+    assert ClientTokenCache("warcraftlogs-client-credentials", "classic", "client-a", "secret-a").load(now=1000.0) is None
+    assert ClientTokenCache("warcraftlogs-client-credentials", "retail", "client-a", "secret-b").load(now=1000.0) is None
+    # Nor is one about to expire.
+    assert cache.load(now=4600.0 - 30) is None

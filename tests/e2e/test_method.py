@@ -8,7 +8,7 @@ The content assertions are the point of this file. Method's guide template moved
 the parser answered with an empty article and ``ok: true``; so a guide has to come back with a
 byline, a last-updated stamp, sections that carry real prose, and build references that
 ``warcraft guide-builds-simc`` can hand to SimulationCraft. Each supported content family
-(class, profession, reputation, article) is discovered at run time and held to the same bar,
+(class, profession, delve, reputation, article) is discovered at run time and held to the same bar,
 which is what the retired ``tests/test_method_live.py`` pinned by slug.
 """
 
@@ -46,6 +46,7 @@ UNSUPPORTED_SURFACE_SLUG = "tier-list"
 FAMILY_PROBES = (
     ("alchemy profession", "profession_guide"),
     ("renown reputation", "reputation_guide"),
+    ("delve", "delve_guide"),
     ("dungeon locations", "article_guide"),
 )
 # A term that appears in the pinned mistweaver guide's prose, used to prove an exported bundle
@@ -224,6 +225,27 @@ def test_search_breaks_score_ties_toward_the_newest_page(require) -> None:
     require(PROVIDER)
     result = run(BINARY, "search", "mythic+ dungeons", "--limit", "10")
     _assert_ties_list_the_newest_page_first(result)
+
+
+def test_search_matches_query_words_as_whole_words(require) -> None:
+    """``mage`` once tied the class guides with "damage" and "plumage" pages."""
+    require(PROVIDER)
+    result = run(BINARY, "search", "mage", "--limit", "50")
+    ids = [row["id"] for row in result.data["results"]]
+    assert ids, result.describe()
+    assert all("mage" in row_id.split("-") for row_id in ids), result.describe()
+
+
+def test_search_folds_the_punctuation_of_in_game_names(require) -> None:
+    """Hyphens and apostrophes stayed in the query while slugs fold them: ``k'aresh`` found nothing."""
+    require(PROVIDER)
+    result = run(BINARY, "search", "k'aresh", "--limit", "5")
+    ids = [row["id"] for row in result.data["results"]]
+    assert ids and all("karesh" in row_id.split("-") for row_id in ids), result.describe()
+    # Method slugs other apostrophes as a hyphen: Zul'Aman is ``zul-aman``.
+    result = run(BINARY, "search", "zul'aman", "--limit", "5")
+    ids = [row["id"] for row in result.data["results"]]
+    assert ids and all("zul-aman" in row_id for row_id in ids), result.describe()
 
 
 def test_resolve_hands_over_a_next_command_that_returns_the_same_guide(require) -> None:
@@ -449,6 +471,14 @@ def test_guide_query_rejects_a_bundle_path_that_is_missing_or_not_a_bundle(requi
     # An unsupported --kind is a bad flag: the usage code every provider gives that mistake, raised
     # before the bundle is read (so this one is not reported as the invalid bundle it also is).
     run(BINARY, "guide-query", str(not_a_bundle), "mana", "--kind", "bogus", expect=EXIT_USAGE, error_code="invalid_argument")
+
+
+def test_guide_export_rejects_an_out_path_that_is_a_file(require, out_dir: Path) -> None:
+    """``--out`` naming a file once fetched every page, then failed as internal_error."""
+    require(PROVIDER)
+    target = out_dir / "method-bundle.txt"
+    target.write_text("not a bundle", encoding="utf-8")
+    run(BINARY, "guide-export", guide_slug(), "--out", str(target), expect=EXIT_USAGE, error_code="invalid_argument")
 
 
 @pytest.mark.parametrize("command", ["guide", "guide-full", "guide-export"])

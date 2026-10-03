@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 from wowhead_cli.entities import (
+    build_linked_entity_preview,
     comparison_entity_record,
     comparison_field_diffs,
     comparison_linked_entities_summary,
@@ -22,7 +23,7 @@ from tests.wowhead_testkit import SAMPLE_PAGE_HTML, runner
 
 
 def test_entity_page_command_returns_links_with_citations(monkeypatch) -> None:
-    def fake_html(self, entity_type: str, entity_id: int):  # noqa: ANN001
+    def fake_html(self, entity_type: str, entity_id: int):
         return SAMPLE_PAGE_HTML
 
     monkeypatch.setattr("wowhead_cli.main.WowheadClient.entity_page_html", fake_html)
@@ -40,8 +41,22 @@ def test_entity_page_command_returns_links_with_citations(monkeypatch) -> None:
 
 
 
+def test_entity_page_lower_cases_the_entity_type(monkeypatch) -> None:
+    requested: list[str] = []
+
+    def fake_html(self, entity_type: str, entity_id: int):
+        requested.append(entity_type)
+        return SAMPLE_PAGE_HTML
+
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.entity_page_html", fake_html)
+    result = runner.invoke(app, ["entity-page", "ITEM", "19019", "--max-links", "1"])
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout)["data"]["entity"]["type"] == "item"
+    assert requested == ["item"]
+
+
 def test_comments_command_returns_comment_citations(monkeypatch) -> None:
-    def fake_html(self, entity_type: str, entity_id: int):  # noqa: ANN001
+    def fake_html(self, entity_type: str, entity_id: int):
         return SAMPLE_PAGE_HTML
 
     monkeypatch.setattr("wowhead_cli.main.WowheadClient.entity_page_html", fake_html)
@@ -59,12 +74,12 @@ def test_comments_command_returns_comment_citations(monkeypatch) -> None:
 
 
 def test_compare_command_returns_overlap_and_unique_links(monkeypatch) -> None:
-    def fake_tooltip(self, entity_type: str, entity_id: int, data_env: int = 11):  # noqa: ANN001
+    def fake_tooltip(self, entity_type: str, entity_id: int, data_env: int = 11):
         if entity_id == 19019:
             return {"name": "Thunderfury", "quality": 5, "icon": "inv_sword_39"}
         return {"name": "Maladath", "quality": 4, "icon": "inv_sword_49"}
 
-    def fake_html(self, entity_type: str, entity_id: int):  # noqa: ANN001
+    def fake_html(self, entity_type: str, entity_id: int):
         if entity_id == 19019:
             return """
             <html><head>
@@ -190,6 +205,19 @@ def test_entity_page_needs_fetch_and_comments_payload_helpers() -> None:
 
 
 
+def test_a_zero_preview_limit_still_counts_every_linked_entity() -> None:
+    """guide --linked-entity-preview-limit 0 used to report count 0 beside non-zero source counts."""
+    links = [
+        {"entity_type": "npc", "id": 1, "name": "A", "url": "https://www.wowhead.com/npc=1"},
+        {"entity_type": "spell", "id": 2, "name": "B", "url": "https://www.wowhead.com/spell=2"},
+    ]
+
+    preview = build_linked_entity_preview(links, entity_type="item", entity_id=19019, preview_limit=0)
+
+    assert (preview["count"], preview["counts_by_type"], preview["items"]) == (2, {"npc": 1, "spell": 1}, [])
+    assert preview["more_available"] is True
+
+
 def test_entity_linked_entities_payload_helper_builds_preview() -> None:
     payload = entity_linked_entities_payload(
         html=SAMPLE_PAGE_HTML,
@@ -210,11 +238,11 @@ def test_entity_linked_entities_payload_helper_builds_preview() -> None:
 def test_entity_respects_expansion_flag(monkeypatch) -> None:
     calls = []
 
-    def fake_tooltip(self, entity_type: str, entity_id: int, data_env=None):  # noqa: ANN001, ANN202
+    def fake_tooltip(self, entity_type: str, entity_id: int, data_env=None):
         calls.append((self.expansion.key, data_env))
         return {"name": "Thunderfury"}
 
-    def fake_html(self, entity_type: str, entity_id: int):  # noqa: ANN001
+    def fake_html(self, entity_type: str, entity_id: int):
         return SAMPLE_PAGE_HTML
 
     monkeypatch.setattr("wowhead_cli.main.WowheadClient.tooltip", fake_tooltip)
@@ -250,10 +278,10 @@ def test_entity_faction_uses_page_metadata_tooltip_fallback(monkeypatch) -> None
     </head><body><script>var lv_comments0 = [];</script></body></html>
     """
 
-    def fail_tooltip(self, entity_type: str, entity_id: int, data_env=None):  # noqa: ANN001, ANN202
+    def fail_tooltip(self, entity_type: str, entity_id: int, data_env=None):
         raise AssertionError("tooltip should not be called for faction fallback")
 
-    def fake_html(self, entity_type: str, entity_id: int):  # noqa: ANN001
+    def fake_html(self, entity_type: str, entity_id: int):
         assert (entity_type, entity_id) == ("faction", 529)
         return html
 
@@ -277,11 +305,11 @@ def test_entity_faction_uses_page_metadata_tooltip_fallback(monkeypatch) -> None
 def test_entity_recipe_routes_through_spell_tooltip(monkeypatch) -> None:
     tooltip_calls = []
 
-    def fake_tooltip(self, entity_type: str, entity_id: int, data_env=None):  # noqa: ANN001, ANN202
+    def fake_tooltip(self, entity_type: str, entity_id: int, data_env=None):
         tooltip_calls.append((entity_type, entity_id, data_env))
         return {"name": "Seasoned Wolf Kabob", "tooltip": "<b>Seasoned Wolf Kabob</b>"}
 
-    def fail_html(self, entity_type: str, entity_id: int):  # noqa: ANN001
+    def fail_html(self, entity_type: str, entity_id: int):
         raise AssertionError("entity page should not be fetched")
 
     monkeypatch.setattr("wowhead_cli.main.WowheadClient.tooltip", fake_tooltip)
@@ -313,7 +341,7 @@ def test_entity_page_merges_multi_source_linked_entities(monkeypatch) -> None:
     </body></html>
     """
 
-    def fake_html(self, entity_type: str, entity_id: int):  # noqa: ANN001
+    def fake_html(self, entity_type: str, entity_id: int):
         return html
 
     monkeypatch.setattr("wowhead_cli.main.WowheadClient.entity_page_html", fake_html)
@@ -331,10 +359,10 @@ def test_entity_page_merges_multi_source_linked_entities(monkeypatch) -> None:
 def test_entity_supports_excluding_comments(monkeypatch) -> None:
     page_calls = []
 
-    def fake_tooltip(self, entity_type: str, entity_id: int, data_env=None):  # noqa: ANN001, ANN202
+    def fake_tooltip(self, entity_type: str, entity_id: int, data_env=None):
         return {"name": "Thunderfury"}
 
-    def fake_html(self, entity_type: str, entity_id: int):  # noqa: ANN001
+    def fake_html(self, entity_type: str, entity_id: int):
         page_calls.append((entity_type, entity_id))
         return SAMPLE_PAGE_HTML
 
@@ -355,10 +383,10 @@ def test_entity_supports_excluding_comments(monkeypatch) -> None:
 def test_entity_includes_linked_entity_preview_without_comments(monkeypatch) -> None:
     page_calls = []
 
-    def fake_tooltip(self, entity_type: str, entity_id: int, data_env=None):  # noqa: ANN001, ANN202
+    def fake_tooltip(self, entity_type: str, entity_id: int, data_env=None):
         return {"name": "Thunderfury"}
 
-    def fake_html(self, entity_type: str, entity_id: int):  # noqa: ANN001
+    def fake_html(self, entity_type: str, entity_id: int):
         page_calls.append((entity_type, entity_id))
         return SAMPLE_PAGE_HTML
 
@@ -378,10 +406,10 @@ def test_entity_includes_linked_entity_preview_without_comments(monkeypatch) -> 
 
 
 def test_entity_supports_include_all_comments(monkeypatch) -> None:
-    def fake_tooltip(self, entity_type: str, entity_id: int, data_env=None):  # noqa: ANN001, ANN202
+    def fake_tooltip(self, entity_type: str, entity_id: int, data_env=None):
         return {"name": "Thunderfury"}
 
-    def fake_html(self, entity_type: str, entity_id: int):  # noqa: ANN001
+    def fake_html(self, entity_type: str, entity_id: int):
         return SAMPLE_PAGE_HTML
 
     monkeypatch.setattr("wowhead_cli.main.WowheadClient.tooltip", fake_tooltip)
@@ -400,7 +428,7 @@ def test_entity_supports_include_all_comments(monkeypatch) -> None:
 
 
 def test_entity_marks_partial_comments_when_more_than_top_limit(monkeypatch) -> None:
-    def fake_tooltip(self, entity_type: str, entity_id: int, data_env=None):  # noqa: ANN001, ANN202
+    def fake_tooltip(self, entity_type: str, entity_id: int, data_env=None):
         return {"name": "Thunderfury"}
 
     html = """
@@ -414,7 +442,7 @@ def test_entity_marks_partial_comments_when_more_than_top_limit(monkeypatch) -> 
     </script></body></html>
     """
 
-    def fake_html(self, entity_type: str, entity_id: int):  # noqa: ANN001
+    def fake_html(self, entity_type: str, entity_id: int):
         return html
 
     monkeypatch.setattr("wowhead_cli.main.WowheadClient.tooltip", fake_tooltip)
@@ -431,10 +459,10 @@ def test_entity_marks_partial_comments_when_more_than_top_limit(monkeypatch) -> 
 
 
 def test_entity_normalizes_tooltip_name_and_html(monkeypatch) -> None:
-    def fake_tooltip(self, entity_type: str, entity_id: int, data_env=None):  # noqa: ANN001, ANN202
+    def fake_tooltip(self, entity_type: str, entity_id: int, data_env=None):
         return {"name": "Thunderfury", "tooltip": "<b>Legendary</b> weapon", "quality": 5}
 
-    def fake_html(self, entity_type: str, entity_id: int):  # noqa: ANN001
+    def fake_html(self, entity_type: str, entity_id: int):
         return "<html><body><script>var lv_comments0 = [];</script></body></html>"
 
     monkeypatch.setattr("wowhead_cli.main.WowheadClient.tooltip", fake_tooltip)
@@ -454,7 +482,7 @@ def test_entity_normalizes_tooltip_name_and_html(monkeypatch) -> None:
 
 
 def test_entity_cleans_spell_tooltip_artifacts_and_builds_summary(monkeypatch) -> None:
-    def fake_tooltip(self, entity_type: str, entity_id: int, data_env=None):  # noqa: ANN001, ANN202
+    def fake_tooltip(self, entity_type: str, entity_id: int, data_env=None):
         return {
             "name": "Obliterate",
             "tooltip": (
@@ -465,7 +493,7 @@ def test_entity_cleans_spell_tooltip_artifacts_and_builds_summary(monkeypatch) -
             ),
         }
 
-    def fake_html(self, entity_type: str, entity_id: int):  # noqa: ANN001
+    def fake_html(self, entity_type: str, entity_id: int):
         return "<html><body><script>var lv_comments0 = [];</script></body></html>"
 
     monkeypatch.setattr("wowhead_cli.main.WowheadClient.tooltip", fake_tooltip)
@@ -480,7 +508,7 @@ def test_entity_cleans_spell_tooltip_artifacts_and_builds_summary(monkeypatch) -
 
 
 def test_entity_item_summary_prefers_effect_text_over_item_metadata(monkeypatch) -> None:
-    def fake_tooltip(self, entity_type: str, entity_id: int, data_env=None):  # noqa: ANN001, ANN202
+    def fake_tooltip(self, entity_type: str, entity_id: int, data_env=None):
         return {
             "name": "Thunderfury",
             "tooltip": (
@@ -489,7 +517,7 @@ def test_entity_item_summary_prefers_effect_text_over_item_metadata(monkeypatch)
             ),
         }
 
-    def fake_html(self, entity_type: str, entity_id: int):  # noqa: ANN001
+    def fake_html(self, entity_type: str, entity_id: int):
         return "<html><body><script>var lv_comments0 = [];</script></body></html>"
 
     monkeypatch.setattr("wowhead_cli.main.WowheadClient.tooltip", fake_tooltip)
@@ -505,7 +533,7 @@ def test_entity_item_summary_prefers_effect_text_over_item_metadata(monkeypatch)
 def test_entity_mount_summary_prefers_use_text_over_mount_metadata(monkeypatch) -> None:
     # Mount pages resolve through the tooltip redirect, so the entity command calls
     # tooltip_with_metadata (not tooltip) and needs the final tooltip URL.
-    def fake_tooltip_with_metadata(self, entity_type: str, entity_id: int, data_env=None):  # noqa: ANN001, ANN202
+    def fake_tooltip_with_metadata(self, entity_type: str, entity_id: int, data_env=None):
         payload = {
             "name": "Grand Expedition Yak",
             "tooltip": (
@@ -515,7 +543,7 @@ def test_entity_mount_summary_prefers_use_text_over_mount_metadata(monkeypatch) 
         }
         return payload, f"https://nether.wowhead.com/tooltip/{entity_type}/{entity_id}?dataEnv=1"
 
-    def fake_html(self, entity_type: str, entity_id: int):  # noqa: ANN001
+    def fake_html(self, entity_type: str, entity_id: int):
         return "<html><body><script>var lv_comments0 = [];</script></body></html>"
 
     monkeypatch.setattr("wowhead_cli.main.WowheadClient.tooltip_with_metadata", fake_tooltip_with_metadata)
@@ -529,7 +557,7 @@ def test_entity_mount_summary_prefers_use_text_over_mount_metadata(monkeypatch) 
 
 
 def test_entity_item_tooltip_text_formats_money_and_stat_spacing(monkeypatch) -> None:
-    def fake_tooltip(self, entity_type: str, entity_id: int, data_env=None):  # noqa: ANN001, ANN202
+    def fake_tooltip(self, entity_type: str, entity_id: int, data_env=None):
         return {
             "name": "Maladath",
             "tooltip": (
@@ -538,7 +566,7 @@ def test_entity_item_tooltip_text_formats_money_and_stat_spacing(monkeypatch) ->
             ),
         }
 
-    def fake_html(self, entity_type: str, entity_id: int):  # noqa: ANN001
+    def fake_html(self, entity_type: str, entity_id: int):
         return "<html><body><script>var lv_comments0 = [];</script></body></html>"
 
     monkeypatch.setattr("wowhead_cli.main.WowheadClient.tooltip", fake_tooltip)
@@ -552,7 +580,7 @@ def test_entity_item_tooltip_text_formats_money_and_stat_spacing(monkeypatch) ->
 
 
 def test_entity_item_style_tooltip_text_drops_flavor_quotes_and_normalizes_parenthetical_level(monkeypatch) -> None:
-    def fake_tooltip(self, entity_type: str, entity_id: int, data_env=None):  # noqa: ANN001, ANN202
+    def fake_tooltip(self, entity_type: str, entity_id: int, data_env=None):
         return {
             "name": "Grand Expedition Yak",
             "tooltip": (
@@ -563,7 +591,7 @@ def test_entity_item_style_tooltip_text_drops_flavor_quotes_and_normalizes_paren
             ),
         }
 
-    def fake_html(self, entity_type: str, entity_id: int):  # noqa: ANN001
+    def fake_html(self, entity_type: str, entity_id: int):
         return "<html><body><script>var lv_comments0 = [];</script></body></html>"
 
     monkeypatch.setattr("wowhead_cli.main.WowheadClient.tooltip", fake_tooltip)
@@ -579,7 +607,7 @@ def test_entity_item_style_tooltip_text_drops_flavor_quotes_and_normalizes_paren
 
 
 def test_entity_tooltip_summary_strips_leading_entity_name(monkeypatch) -> None:
-    def fake_tooltip(self, entity_type: str, entity_id: int, data_env=None):  # noqa: ANN001, ANN202
+    def fake_tooltip(self, entity_type: str, entity_id: int, data_env=None):
         return {
             "name": "Fairbreeze Favors",
             "tooltip": (
@@ -588,7 +616,7 @@ def test_entity_tooltip_summary_strips_leading_entity_name(monkeypatch) -> None:
             ),
         }
 
-    def fake_html(self, entity_type: str, entity_id: int):  # noqa: ANN001
+    def fake_html(self, entity_type: str, entity_id: int):
         return "<html><body><script>var lv_comments0 = [];</script></body></html>"
 
     monkeypatch.setattr("wowhead_cli.main.WowheadClient.tooltip", fake_tooltip)
@@ -610,14 +638,14 @@ def test_entity_uses_normalized_entity_cache_between_invocations(
     monkeypatch.setenv("WOWHEAD_CACHE_DIR", str(tmp_path / "cache"))
     calls = {"tooltip": 0}
 
-    def fake_tooltip(self, entity_type: str, entity_id: int, data_env=None):  # noqa: ANN001, ANN202
+    def fake_tooltip(self, entity_type: str, entity_id: int, data_env=None):
         calls["tooltip"] += 1
         return {
             "name": "Thunderfury",
             "tooltip": "<table><tr><td><b>Thunderfury</b><br>Legendary weapon</td></tr></table>",
         }
 
-    def fake_html(self, entity_type: str, entity_id: int):  # noqa: ANN001
+    def fake_html(self, entity_type: str, entity_id: int):
         raise AssertionError("entity_page_html should not be used when comments and preview are disabled")
 
     monkeypatch.setattr("wowhead_cli.main.WowheadClient.tooltip", fake_tooltip)
@@ -635,7 +663,7 @@ def test_entity_uses_normalized_entity_cache_between_invocations(
 
 
 def test_entity_preview_prefers_gatherer_name_when_href_label_missing(monkeypatch) -> None:
-    def fake_tooltip(self, entity_type: str, entity_id: int, data_env=None):  # noqa: ANN001, ANN202
+    def fake_tooltip(self, entity_type: str, entity_id: int, data_env=None):
         return {"name": "Thunderfury"}
 
     html = """
@@ -650,7 +678,7 @@ def test_entity_preview_prefers_gatherer_name_when_href_label_missing(monkeypatc
     </body></html>
     """
 
-    def fake_html(self, entity_type: str, entity_id: int):  # noqa: ANN001
+    def fake_html(self, entity_type: str, entity_id: int):
         return html
 
     monkeypatch.setattr("wowhead_cli.main.WowheadClient.tooltip", fake_tooltip)
@@ -669,7 +697,7 @@ def test_entity_preview_prefers_gatherer_name_when_href_label_missing(monkeypatc
 
 
 def test_entity_preview_prefers_multi_source_links_over_single_source_peers(monkeypatch) -> None:
-    def fake_tooltip(self, entity_type: str, entity_id: int, data_env=None):  # noqa: ANN001, ANN202
+    def fake_tooltip(self, entity_type: str, entity_id: int, data_env=None):
         return {"name": "Thunderfury"}
 
     html = """
@@ -685,7 +713,7 @@ def test_entity_preview_prefers_multi_source_links_over_single_source_peers(monk
     </body></html>
     """
 
-    def fake_html(self, entity_type: str, entity_id: int):  # noqa: ANN001
+    def fake_html(self, entity_type: str, entity_id: int):
         return html
 
     monkeypatch.setattr("wowhead_cli.main.WowheadClient.tooltip", fake_tooltip)
@@ -737,7 +765,7 @@ def test_entity_preview_fetch_more_command_scales_with_known_count(
 
 
 def test_entity_preview_suppresses_low_signal_names(monkeypatch) -> None:
-    def fake_tooltip(self, entity_type: str, entity_id: int, data_env=None):  # noqa: ANN001, ANN202
+    def fake_tooltip(self, entity_type: str, entity_id: int, data_env=None):
         return {"name": "Hogger"}
 
     html = """
@@ -751,7 +779,7 @@ def test_entity_preview_suppresses_low_signal_names(monkeypatch) -> None:
     </body></html>
     """
 
-    def fake_html(self, entity_type: str, entity_id: int):  # noqa: ANN001
+    def fake_html(self, entity_type: str, entity_id: int):
         return html
 
     monkeypatch.setattr("wowhead_cli.main.WowheadClient.tooltip", fake_tooltip)
@@ -771,7 +799,7 @@ def test_entity_preview_suppresses_low_signal_names(monkeypatch) -> None:
 
 
 def test_entity_preview_prefers_diverse_high_value_types(monkeypatch) -> None:
-    def fake_tooltip(self, entity_type: str, entity_id: int, data_env=None):  # noqa: ANN001, ANN202
+    def fake_tooltip(self, entity_type: str, entity_id: int, data_env=None):
         return {"name": "Test Item"}
 
     html = """
@@ -787,7 +815,7 @@ def test_entity_preview_prefers_diverse_high_value_types(monkeypatch) -> None:
     </body></html>
     """
 
-    def fake_html(self, entity_type: str, entity_id: int):  # noqa: ANN001
+    def fake_html(self, entity_type: str, entity_id: int):
         return html
 
     monkeypatch.setattr("wowhead_cli.main.WowheadClient.tooltip", fake_tooltip)
@@ -801,7 +829,7 @@ def test_entity_preview_prefers_diverse_high_value_types(monkeypatch) -> None:
 
 
 def test_currency_preview_demotes_items_below_more_actionable_types(monkeypatch) -> None:
-    def fake_tooltip(self, entity_type: str, entity_id: int, data_env=None):  # noqa: ANN001, ANN202
+    def fake_tooltip(self, entity_type: str, entity_id: int, data_env=None):
         return {"name": "Valorstones"}
 
     html = """
@@ -818,7 +846,7 @@ def test_currency_preview_demotes_items_below_more_actionable_types(monkeypatch)
     </body></html>
     """
 
-    def fake_html(self, entity_type: str, entity_id: int):  # noqa: ANN001
+    def fake_html(self, entity_type: str, entity_id: int):
         return html
 
     monkeypatch.setattr("wowhead_cli.main.WowheadClient.tooltip", fake_tooltip)
@@ -832,10 +860,10 @@ def test_currency_preview_demotes_items_below_more_actionable_types(monkeypatch)
 
 
 def test_compare_respects_expansion_flag_for_generated_urls(monkeypatch) -> None:
-    def fake_tooltip(self, entity_type: str, entity_id: int, data_env=None):  # noqa: ANN001, ANN202
+    def fake_tooltip(self, entity_type: str, entity_id: int, data_env=None):
         return {"name": f"Item {entity_id}", "quality": 1, "icon": "inv_misc_questionmark"}
 
-    def fake_html(self, entity_type: str, entity_id: int):  # noqa: ANN001
+    def fake_html(self, entity_type: str, entity_id: int):
         if entity_id == 1:
             return """
             <html><body>
@@ -882,7 +910,7 @@ def test_canonical_normalization_flag_for_entity_page(monkeypatch) -> None:
     </body></html>
     """
 
-    def fake_html(self, entity_type: str, entity_id: int):  # noqa: ANN001
+    def fake_html(self, entity_type: str, entity_id: int):
         return html
 
     monkeypatch.setattr("wowhead_cli.main.WowheadClient.entity_page_html", fake_html)
@@ -924,7 +952,7 @@ def test_canonical_normalization_flag_for_comments_citations(monkeypatch) -> Non
     </body></html>
     """
 
-    def fake_html(self, entity_type: str, entity_id: int):  # noqa: ANN001
+    def fake_html(self, entity_type: str, entity_id: int):
         return html
 
     monkeypatch.setattr("wowhead_cli.main.WowheadClient.entity_page_html", fake_html)

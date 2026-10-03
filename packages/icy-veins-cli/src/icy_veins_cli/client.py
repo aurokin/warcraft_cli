@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from typing import Any
 
+import httpx
 from warcraft_api.cache import CacheSettings, CacheTTLConfig, build_cache_store, load_prefixed_cache_settings_from_env
-from warcraft_api.http import DEFAULT_RETRY_ATTEMPTS, build_client, request_with_retries
+from warcraft_api.http import DEFAULT_RATE_LIMITER, DEFAULT_RETRY_ATTEMPTS, HostRateLimiter, build_client, request_with_retries
 from warcraft_content.site_client import GuideSite, GuideSiteClient
+from warcraft_content.site_crawler import FetchResult
 from warcraft_core.paths import provider_cache_root
 from warcraft_core.provider import ProviderError
 
@@ -23,6 +25,23 @@ ICY_VEINS_SITE = GuideSite(
     page_url=lambda guide_ref: guide_url(guide_ref_parts(guide_ref)),
     parse_page=parse_guide_page,
 )
+# ``index-refresh`` requests a couple of hundred uncached pages from an origin the CDN does not cache,
+# so it waits at least this long between requests, or WARCRAFT_HTTP_MIN_INTERVAL_SECONDS when that is longer.
+INDEX_REFRESH_MIN_INTERVAL_SECONDS = 1.0
+
+
+class _IndexRefreshRateLimiter(HostRateLimiter):
+    @property
+    def min_interval_seconds(self) -> float:
+        return max(INDEX_REFRESH_MIN_INTERVAL_SECONDS, DEFAULT_RATE_LIMITER.min_interval_seconds)
+
+
+INDEX_REFRESH_RATE_LIMITER = _IndexRefreshRateLimiter()
+
+
+def _challenged(response: httpx.Response) -> bool:
+    """Cloudflare marks a bot challenge with ``cf-mitigated: challenge``, whatever the status code."""
+    return str(response.headers.get("cf-mitigated", "")).lower() == "challenge"
 
 
 def load_icy_veins_cache_settings_from_env() -> tuple[CacheSettings, int, int]:
@@ -62,3 +81,19 @@ class IcyVeinsClient(GuideSiteClient):
                 details={"page_url": SITE_MENU_SEED_URL},
             )
         return guides
+
+    def crawl_fetch(self, url: str) -> FetchResult:
+        """One ``index-refresh`` fetch: a cached guide page when there is one, else a single paced request.
+
+        Never retried, 429 included: a site that has started refusing a crawler is left alone.
+        """
+        cached = self.cached_page_html(url)
+        if cached is not None:
+            return FetchResult(200, cached, cached=True)
+        try:
+            response = request_with_retries(self._client(), url, retry_attempts=1, rate_limiter=INDEX_REFRESH_RATE_LIMITER)
+        except httpx.HTTPStatusError as exc:
+            return FetchResult(exc.response.status_code, challenge=_challenged(exc.response))
+        except httpx.RequestError as exc:
+            return FetchResult(0, error=f"{type(exc).__name__}: {exc}")
+        return FetchResult(response.status_code, response.text, challenge=_challenged(response))

@@ -21,7 +21,7 @@ Workspace command behavior:
 - `make check` runs lint, typecheck, import boundaries, the complexity gate, dead-code detection, and the fast test suite with its coverage floor
 - `make test-e2e` runs the end-to-end journeys through the installed binaries against the real providers ([E2E_TESTING.md](architecture/E2E_TESTING.md)); `make test-canary` runs the live Wowhead parser canary (`WOWHEAD_LIVE_TESTS=1`)
 - `make reference` regenerates `docs/reference/`; `make skills` regenerates the generated provider subskills. Neither output is hand-edited
-- `make dev-deploy-no-link` refreshes the checkout-local editable environment without rewriting host-level command wrappers; `make worktree-env` regenerates `.warcraft/worktree-env.sh`, and `source .warcraft/worktree-env.sh` activates worktree-local `PATH`, data, and cache roots
+- `make dev-deploy-no-link` refreshes the checkout-local editable environment without rewriting host-level command wrappers; a checkout install already keeps its data and cache under the checkout's `.warcraft/runtime`; `make worktree-env` regenerates `.warcraft/worktree-env.sh`, and `source .warcraft/worktree-env.sh` adds the worktree's binaries to `PATH` and pins `WARCRAFT_WORKTREE_ROOT` to it
 - `WARCRAFT_ALLOW_LINK_BIN=1 make dev-deploy` is a deliberate exception that repoints `~/.local/bin` at the current checkout
 
 ## Global Flags
@@ -32,7 +32,7 @@ These flags exist on every binary — the `warcraft` wrapper and all eleven prov
 | Flag | Effect |
 |------|--------|
 | `--pretty` | Pretty-print JSON. Default output is compact JSON for machine consumption. |
-| `--compact` | Truncate long prose strings (tooltip HTML, article text) and list each cut path in `provenance.compacted_paths`; URLs, talent/transport strings, export codes and `*command` values stay whole. |
+| `--compact` | Truncate long prose strings (tooltip HTML, article text) and list each cut path in `provenance.compacted_paths`; URLs, talent/transport strings, export codes and `*command`/`*input` values stay whole. |
 | `--compact-max-chars` | Truncation length for `--compact` (default `280`). |
 | `--fields` | Keep only the listed dot paths; repeatable or comma-separated. |
 | `--fields-strict` | Fail when a requested `--fields` path is missing (`missing_fields`, exit 2). Without it, missing paths are listed in the projected payload under `fields_missing`, so a thin projection is never mistaken for an empty result. |
@@ -100,7 +100,7 @@ warcraft simc analysis-packet <simc-root>/ActionPriorityLists/default/monk_mistw
 - Use `warcraft <provider> ...` when you already know which service you need.
 - Use `warcraft --expansion <profile>` when the game version matters and you do not want silent cross-version mixing.
 - `method` is a guide provider with sitemap-backed search, resolve, export, and local query.
-- `icy-veins` is a guide provider with sitemap-backed search, resolve, export, and local query.
+- `icy-veins` is a guide provider with sitemap-, site-menu- and site-index-backed search, resolve, export, and local query; `icy-veins index-refresh` refreshes the site index (see [icy-veins/README.md](icy-veins/README.md#site-index)).
 - `raiderio` is an API provider for direct character, guild, and Mythic+ runs lookups.
 - `raiderio` includes real search and conservative resolve on top of the live site search surface.
 - `warcraft-wiki` is a reference provider with MediaWiki-backed search, resolve, typed `api` / `event` lookups, article export, and local query.
@@ -117,9 +117,11 @@ warcraft simc analysis-packet <simc-root>/ActionPriorityLists/default/monk_mistw
   - the top-parse comparison needs a Lorrgs boss slug, which only a Lorrgs-cached report supplies; for any other report pass `--boss-slug`. When the comparison does not run, `comparison.reason` names why and a note names the flag that fixes it
   - Lorrgs only serves reports it has already cached. For any other report — or when Lorrgs itself is unreachable — pass `--actor-id` and `--spec-slug` and the command degrades instead of failing: the packet still carries the Warcraft Logs cast timeline, with `lorrgs.status: "unavailable"` and `phase.status: "unavailable"`. `lorrgs.message` names the real reason (only a `not_found` is reported as "not cached"; a timeout or transport failure says so) and `lorrgs.source` keeps the provider's own error
   - in that degraded mode there are no phase windows, so `--phase` cannot be applied: `phase.requested` echoes the phase you asked for, `phase.selected` is `null`, `cooldowns.player_casts` covers the whole fight, and `notes` says so. Without `--actor-id` and `--spec-slug` the command fails instead, naming the Lorrgs error and the two flags; while Lorrgs itself is down, also pass `--spell-id` for each cooldown (named `spell:<id>` without Lorrgs metadata)
-  - in degraded mode the player's name and class come from the Warcraft Logs report roster (`report-master-data`), an `--actor-id` the report lacks fails `actor_id_not_found`, and `player.deaths` is `null` because deaths come only from the Lorrgs timeline
+  - Lorrgs can also cache a fight without its players; the command then degrades the same way (`lorrgs.reason: "lorrgs_fight_has_no_players"`) or, without `--actor-id` and `--spec-slug`, fails with that code (exit 4)
+  - in degraded mode the player's name and class come from the Warcraft Logs roster of the selected fight (`report-player-details --fight-id`), an `--actor-id` that fight lacks fails `actor_id_not_found` (exit 4) even when the player is elsewhere in the report, and `player.deaths` is `null` because deaths come only from the Lorrgs timeline
+  - a missing fight (`missing_fight`) or a missing actor selection (`missing_actor`) is a usage error (exit 2)
   - a `--spec-slug` of another class than the player's fails `invalid_query` (exit 2) instead of comparing the wrong spec
-- `warcraft guild` normalizes region/realm/name input and returns the Raider.IO guild snapshot (identity, raid progression, roster preview, citations) as `sources.raiderio.summary`, with the call's provenance as `sources.raiderio.provenance`; `warcraft raiderio guild` returns the raw Raider.IO envelope. There is no `active_raid`: `sources.raiderio.summary.raids[]` carries every raid Raider.IO returned, each joined to its own ranks by `raid_slug`. Raider.IO orders those rows by slug and carries no raid start/end window, so naming one "active" would be a guess — cross-reference `raiderio raids`, whose rows carry per-region `starts`/`ends`, when you need the currently running tier.
+- `warcraft guild` normalizes region/realm/name input (an Oceanic region alias such as `oce` is looked up as `us`, the region Oceanic realms belong to; `actor-profile --region` does the same) and returns the Raider.IO guild snapshot (identity, raid progression, roster preview, citations) as `sources.raiderio.summary`, with the call's provenance as `sources.raiderio.provenance`; `warcraft raiderio guild` returns the raw Raider.IO envelope. There is no `active_raid`: `sources.raiderio.summary.raids[]` carries every raid Raider.IO returned, each joined to its own ranks by `raid_slug`. Raider.IO orders those rows by slug and carries no raid start/end window, so naming one "active" would be a guess — cross-reference `raiderio raids`, whose rows carry per-region `starts`/`ends`, when you need the currently running tier.
 - `warcraft guide-compare` compares exported guide bundles across providers using raw section evidence, additive `analysis_surfaces`, and explicit `build_references`, while preserving provider provenance and source citations instead of flattening the guides into one fake summary
 - `guide-compare` also emits a top-level `freshness` rollup and a `comparison_evidence` block (compared bundle count, providers, matching rules, and per-bundle freshness from each bundle's `exported_at`); `--max-age-hours` (default `24`) sets the per-bundle freshness threshold. Method/Icy Veins/Warcraft Wiki bundles carry an `exported_at` timestamp in their manifest; older bundles without it degrade to `stale`/`missing_exported_at` rather than failing
 - `warcraft guide-compare-query` conservatively resolves one guide per supported provider, exports those bundles locally, and then runs the same comparison packet over the exported evidence
@@ -135,7 +137,8 @@ warcraft simc analysis-packet <simc-root>/ActionPriorityLists/default/monk_mistw
 - `warcraft talent-packet` is the wrapper-level packet router:
   - explicit Wowhead talent-calc refs with build codes route to `wowhead talent-calc-packet`
   - explicit Warcraft Logs report refs with `--actor-id` route to `warcraftlogs report-player-talents`, but you still need encounter scope via `--fight-id` or a report ref already scoped to one fight; those packets can then auto-upgrade through `simc`
-  - existing packet JSON files can be re-emitted or upgraded without choosing a provider first
+  - existing packet JSON files can be re-emitted or upgraded without choosing a provider first; a packet path that does not exist fails `not_found` (exit 4), and a source that is none of the three fails `unsupported_talent_source` (exit 2)
+  - `producer_result` and `upgrade_result` carry the provider's `exit_code` and parsed envelope (`payload`), not its raw output a second time
 - `warcraft talent-describe` reuses that same routing contract, then hands the final packet to `simc describe-build`
   - use `--packet-out <path>` when you want to keep the final routed packet that was described, including any validation upgrade
   - use `--apl-path <apl>` when you want to pin the SimC APL instead of relying on default APL inference
@@ -155,6 +158,7 @@ warcraft simc analysis-packet <simc-root>/ActionPriorityLists/default/monk_mistw
 - wrapper `search` and `resolve` fan out only to providers whose wrapper routing surfaces are currently ready; stubbed surfaces such as `simc` remain visible in `warcraft doctor` and excluded-provider metadata instead of appearing as active wrapper candidates
 - the merged `warcraft search` list interleaves the providers' own lists using a wrapper ranking layer that combines provider score, query intent, provider family, and result kind; it never reorders two rows from the same provider, because a provider's own order is its ranking
 - flattened wrapper results include `wrapper_ranking` so agents can inspect why a provider/result surfaced first
+- when no included provider searches the query (for example `--expansion fresh`, which leaves only Warcraft Logs and its explicit report references), `search` and `resolve` fail `no_searching_provider` (exit 2) with the included and excluded providers in `error.details`, instead of an empty page
 - `warcraft resolve` ranks each provider's match exactly as `warcraft search` ranks that provider's top row, and answers with the top-ranked one only when its own provider resolved it and the query's intent does not rank its family down (or its title is exactly the query); otherwise it reports `resolved: false` with that candidate as `best_unresolved_candidate`. Its `--limit` only sizes `--ranking-debug`
 - `warcraft search --brief` and `warcraft resolve --brief` shrink candidate rows to the wrapper decision surface and drop the per-provider payloads; `--compact` is the global output flag only (before the subcommand) and truncates long prose strings in any payload. The two no longer share a name: `--compact` after the subcommand is a usage error (exit 2)
 - `--brief` never hides a provider failure: `failed_providers`, `failed_provider_count`, and `answered_provider_count` stay in both shapes

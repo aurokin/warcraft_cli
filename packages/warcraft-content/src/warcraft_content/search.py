@@ -8,8 +8,9 @@ exact/prefix/contains/all-terms title score).
 from __future__ import annotations
 
 import re
-from collections.abc import Collection
+from collections.abc import Collection, Iterable
 from dataclasses import dataclass
+from typing import Any
 
 DEFAULT_TOKEN_RE = re.compile(r"[a-z0-9+]+")
 
@@ -21,6 +22,50 @@ def tokenize_query(query: str, *, stop_words: Collection[str] = ()) -> tuple[str
         if term not in stop_words:
             seen.setdefault(term, None)
     return tuple(seen)
+
+
+def singular_words(words: set[str]) -> set[str]:
+    """``words`` plus each one without a plural 's' or 'es', so two sets meet on a shared singular.
+
+    ``build`` keeps the ``...-spec-builds-talents`` pages, ``delves`` the delve guides and ``boss`` the
+    ``...-raid-bosses-...`` pages.
+    """
+    singulars = set(words)
+    for word in words:
+        if len(word) > 3 and word.endswith("s"):
+            singulars.add(word[:-1])
+            if len(word) > 4 and word.endswith("es"):
+                singulars.add(word[:-2])
+    return singulars
+
+
+_APOSTROPHE_RE = re.compile(r"['\u2019]")
+_SEPARATOR_RE = re.compile(r"[^a-z0-9+]+")
+
+
+def fold_punctuation(text: str) -> str:
+    """Lowercase, drop apostrophes and turn every other separator into a space.
+
+    Guide sites slug page titles this way (``Nerub-ar Palace`` is ``nerub-ar-palace``, ``K'aresh`` is
+    ``karesh``), so a query and a title folded alike match on their words. Wiki titles keep their
+    punctuation (``Patch 12.1.0/API changes``), so only the guide-site rankers fold.
+    """
+    return _SEPARATOR_RE.sub(" ", _APOSTROPHE_RE.sub("", text.lower())).strip()
+
+
+def punctuation_spellings(query: str) -> tuple[str, ...]:
+    """``query`` as typed, with its hyphens dropped, and with its apostrophes turned into spaces.
+
+    Guide sites slug punctuation both ways: Icy Veins has ``nerubar-palace-raid-guide`` and
+    ``...-nerub-ar-palace-raid-guide``, and ``K'aresh`` is ``karesh`` while ``Zul'Aman`` is ``zul-aman``.
+    The rankers score every spelling and keep each page's best.
+    """
+    return tuple(dict.fromkeys((query, query.replace("-", ""), _APOSTROPHE_RE.sub(" ", query))))
+
+
+def best_scored(candidates: Iterable[dict[str, Any] | None]) -> dict[str, Any] | None:
+    """The highest-scoring candidate row (first on a tie), or None when no spelling matched."""
+    return max(filter(None, candidates), key=lambda row: int(row["ranking"]["score"]), default=None)
 
 
 # Community shorthand for classes and specs, spelled the way guide sites title their pages.

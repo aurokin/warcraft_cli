@@ -58,6 +58,7 @@ from warcraft_core.wow_normalization import normalize_region
 
 from warcraftlogs_cli.boss_kills import (
     CrossReportScope,
+    is_retail_spec_name,
     player_details_roles,
 )
 from warcraftlogs_cli.boss_kills import (
@@ -88,6 +89,8 @@ from warcraftlogs_cli.boss_kills import (
     spec_filtered_kill_samples_payload as _spec_filtered_kill_samples_payload,
 )
 from warcraftlogs_cli.client import (
+    CLASSIC_PROFILE,
+    FRESH_PROFILE,
     GRAPHQL_WARNINGS_KEY,
     RETAIL_PROFILE,
     EncounterRankingsOptions,
@@ -270,6 +273,8 @@ class ReportReference:
     code: str
     fight_id: int | None
     source_url: str | None = None
+    # The site a report URL's host names; None for a bare code or a host that names no known site.
+    site: WarcraftLogsSiteProfile | None = None
 
 
 def _cfg(ctx: typer.Context) -> RuntimeConfig:
@@ -566,14 +571,23 @@ _WARCRAFTLOGS_SPEC_SLUGS = (
 )
 
 
-def _warcraftlogs_slug(value: str | None, slugs: tuple[str, ...]) -> str | None:
+def _warcraftlogs_slug(
+    ctx: typer.Context, value: str | None, slugs: tuple[str, ...], *, flag: str, strict: bool = True
+) -> str | None:
     """Map any spelling ("death-knight", "Death Knight", "deathknight") to the Warcraft Logs slug.
 
-    An unrecognised value is passed through trimmed, so Warcraft Logs answers for it.
+    Warcraft Logs answers an unknown class name or character-ranking spec unfiltered instead of
+    rejecting it, so an unrecognised value fails ``invalid_query``. ``strict=False`` passes it through
+    trimmed, for a value Warcraft Logs rejects itself or a list that does not cover the selected site.
     """
     text = (value or "").strip()
+    if not text:
+        return None
     key = re.sub(r"[^a-z]", "", text.lower())
-    return next((slug for slug in slugs if slug.lower() == key), text or None)
+    slug = next((slug for slug in slugs if slug.lower() == key), None)
+    if slug is None and strict:
+        _fail(ctx, "invalid_query", f"Unknown {flag} {text!r}; expected one of: {', '.join(slugs)}.")
+    return slug or text
 
 
 def _client(ctx: typer.Context) -> WarcraftLogsClient:
@@ -1355,6 +1369,17 @@ def _report_discovery_hint(query: str, *, site: WarcraftLogsSiteProfile) -> dict
     }
 
 
+def _url_site_profile(hostname: str | None) -> WarcraftLogsSiteProfile | None:
+    """The site profile a report URL's host belongs to: a report code only exists on its own site."""
+    labels = (hostname or "").split(".")
+    if labels[-2:] != ["warcraftlogs", "com"]:
+        return None
+    subdomains = labels[:-2]
+    if subdomains in ([], ["www"]):
+        return RETAIL_PROFILE
+    return next((profile for profile in (CLASSIC_PROFILE, FRESH_PROFILE) if profile.key in subdomains), None)
+
+
 def _parse_report_reference(reference: str, *, explicit_fight_id: int | None) -> ReportReference:
     text = reference.strip()
     if not text:
@@ -1379,7 +1404,7 @@ def _parse_report_reference(reference: str, *, explicit_fight_id: int | None) ->
             except ValueError:
                 parsed_fight_id = None
     fight_id = explicit_fight_id if explicit_fight_id is not None else parsed_fight_id
-    return ReportReference(code=code, fight_id=fight_id, source_url=source_url)
+    return ReportReference(code=code, fight_id=fight_id, source_url=source_url, site=_url_site_profile(parsed.hostname))
 
 
 def _explicit_report_reference(query: str) -> ReportReference | None:
@@ -1397,7 +1422,8 @@ def _explicit_report_reference(query: str) -> ReportReference | None:
 
 def _report_discovery_candidate(ref: ReportReference, *, site: WarcraftLogsSiteProfile) -> dict[str, Any]:
     quoted_reference = shlex.quote(ref.code)
-    command_prefix = _warcraftlogs_command_prefix(site)
+    # A report URL names its own site, which the follow-up command has to select.
+    command_prefix = _warcraftlogs_command_prefix(ref.site or site)
     if ref.fight_id is None:
         kind = "report"
         next_command = f"{command_prefix} report {quoted_reference}"
@@ -1499,6 +1525,13 @@ def _resolve_encounter_scope(
         ref = _parse_report_reference(reference, explicit_fight_id=fight_id)
     except ValueError as exc:
         _fail(ctx, "invalid_query", str(exc))
+    if ref.site is not None and ref.site.key != client.site.key:
+        _fail(
+            ctx,
+            "invalid_query",
+            f"{reference!r} is a {ref.site.label} Warcraft Logs report, but the selected site is {client.site.key!r}. "
+            f"Re-run with `{_warcraftlogs_command_prefix(ref.site)} ...`.",
+        )
     report = client.report(code=ref.code, allow_unlisted=allow_unlisted)
     fights_report = client.report_fights(code=ref.code, difficulty=None, allow_unlisted=allow_unlisted)
     fights = list_at(fights_report, "fights")
@@ -1729,8 +1762,10 @@ def _require_matching_fight(
     fight_ids: list[int] | None,
     encounter_id: int | None,
     difficulty: int | None,
+    start_time: float | None = None,
+    end_time: float | None = None,
 ) -> None:
-    """Reject a fight-scoped request naming a fight the report does not have.
+    """Reject a fight-scoped request naming a fight the report does not have, or an empty window.
 
     Warcraft Logs answers an unknown ``--fight-id``, an ``--encounter-id`` the report never
     pulled, or a ``--difficulty`` those fights were not on with an empty or null slice and HTTP
@@ -1738,26 +1773,46 @@ def _require_matching_fight(
     ID has to exist and match the other filters: one missing ID fails the request and is named in
     ``error.details.missing_fight_ids``, instead of the answer silently covering only the others.
     Requests that name no fight at all are left alone: a report-wide slice is a legitimate query,
-    and an empty answer to one is a real answer.
+    and an empty answer to one is a real answer. An inverted window, or one starting after every
+    selected fight ended, is answered with an empty slice too, so both are ``invalid_query``.
     """
+    _require_ordered_window(ctx, start_time=start_time, end_time=end_time)
     if not fight_ids and encounter_id is None and difficulty is None:
         return
     fights_report = client.report_fights(code=code, difficulty=difficulty, allow_unlisted=allow_unlisted)
-    matching_ids = {
-        row.get("id")
+    matching = [
+        row
         for row in list_at(fights_report, "fights")
         if isinstance(row, dict) and (encounter_id is None or row.get("encounterID") == encounter_id)
-    }
+    ]
+    matching_ids = {row.get("id") for row in matching}
     missing = [fight_id for fight_id in fight_ids or [] if fight_id not in matching_ids]
-    if matching_ids and not missing:
-        return
-    scope = {"fight_ids": missing or None, "encounter_id": encounter_id, "difficulty": difficulty}
-    _fail(
-        ctx,
-        "not_found",
-        f"Warcraft Logs report {code} has no fight matching {_described_slice(scope)}.",
-        details={"missing_fight_ids": missing} if missing else None,
-    )
+    if not matching_ids or missing:
+        scope = {"fight_ids": missing or None, "encounter_id": encounter_id, "difficulty": difficulty}
+        _fail(
+            ctx,
+            "not_found",
+            f"Warcraft Logs report {code} has no fight matching {_described_slice(scope)}.",
+            details={"missing_fight_ids": missing} if missing else None,
+        )
+    _require_window_before_fights_end(ctx, matching, fight_ids=fight_ids, start_time=start_time)
+
+
+def _require_ordered_window(ctx: typer.Context, *, start_time: float | None, end_time: float | None) -> None:
+    if start_time is not None and end_time is not None and start_time > end_time:
+        _fail(ctx, "invalid_query", "--start-time must not be after --end-time.")
+
+
+def _require_window_before_fights_end(
+    ctx: typer.Context, fights: list[dict[str, Any]], *, fight_ids: list[int] | None, start_time: float | None
+) -> None:
+    fight_ends = [
+        row["endTime"]
+        for row in fights
+        if (not fight_ids or row.get("id") in fight_ids) and isinstance(row.get("endTime"), (int, float))
+    ]
+    if start_time is not None and fight_ends and start_time > max(fight_ends):
+        _fail(ctx, "invalid_query", f"--start-time {start_time:.0f} is after the selected fights end at {max(fight_ends):.0f}.")
 
 
 def _described_slice(query: dict[str, Any]) -> str:
@@ -2592,7 +2647,6 @@ def _boss_spec_usage_payload(
             "returned_spec_count": len(returned),
             "excluded_spec_count": max(0, len(normalized_rows) - len(returned)),
             "truncated": len(normalized_rows) > top,
-            "stable_source_only": True,
         },
         "count": len(returned),
         "spec_usage": returned,
@@ -2811,7 +2865,6 @@ def _comp_samples_payload(
             "sampled_player_count": sampled_player_count,
             "distinct_class_count": len(normalized_class_rows),
             "distinct_class_signature_count": len(normalized_signatures),
-            "stable_source_only": True,
         },
         "class_presence": normalized_class_rows,
         "composition_signatures": normalized_signatures[: min(10, len(normalized_signatures))],
@@ -2991,7 +3044,6 @@ def _ability_usage_summary_payload(
             "excluded_preview_kill_count": max(0, len(rows) - len(preview)),
             "preview_truncated": len(rows) > preview_limit,
             "kills_with_truncated_events_count": truncated_kill_count,
-            "stable_source_only": True,
         },
         "ability": ability,
         "usage": {
@@ -4172,8 +4224,9 @@ def encounter_rankings(
                 filter=filter_text,
                 include_combatant_info=include_combatant_info,
                 include_other_players=include_other_players,
-                class_name=_warcraftlogs_slug(class_name, _WARCRAFTLOGS_CLASS_SLUGS),
-                spec_name=_warcraftlogs_slug(spec_name, _WARCRAFTLOGS_SPEC_SLUGS),
+                class_name=_warcraftlogs_slug(ctx, class_name, _WARCRAFTLOGS_CLASS_SLUGS, flag="--class-name"),
+                # Warcraft Logs rejects an unknown spec here itself ("Invalid class and spec specified.").
+                spec_name=_warcraftlogs_slug(ctx, spec_name, _WARCRAFTLOGS_SPEC_SLUGS, flag="--spec-name", strict=False),
             ),
         ),
     )
@@ -4347,6 +4400,9 @@ def character_rankings(
     top: int = typer.Option(5, "--top", min=1, max=20, help="Number of top ranking rows to keep in the summary."),
 ) -> None:
     """Show a character's encounter rankings for one zone."""
+    # The spec list is retail's; a classic site has specs it lacks (Combat), so only retail is checked.
+    retail = _cfg(ctx).site_profile.key == RETAIL_PROFILE.key
+    spec_slug = _warcraftlogs_slug(ctx, spec_name, _WARCRAFTLOGS_SPEC_SLUGS, flag="--spec-name", strict=retail)
     client = _client(ctx)
     try:
         payload = client.character_rankings(
@@ -4357,7 +4413,7 @@ def character_rankings(
             difficulty=difficulty,
             metric=metric,
             size=size,
-            spec_name=_warcraftlogs_slug(spec_name, _WARCRAFTLOGS_SPEC_SLUGS),
+            spec_name=spec_slug,
         )
     except WarcraftLogsClientError as exc:
         _handle_client_error(ctx, exc)
@@ -4420,6 +4476,7 @@ def reports(
     game_zone_id: int | None = typer.Option(None, "--game-zone-id", help="Optional game zone filter."),
 ) -> None:
     """List reports for a guild, optionally narrowed by zone and time window."""
+    _require_complete_guild_scope(ctx, guild_region=guild_region, guild_realm=guild_realm, guild_name=guild_name)
     client = _client(ctx)
     try:
         payload = client.reports(
@@ -4514,13 +4571,20 @@ def guild_reports(
 
 
 def _validate_cohort_scope(ctx: typer.Context, client: WarcraftLogsClient, scope: CrossReportScope) -> CrossReportScope:
-    """Resolve the zone/boss filter to one encounter id, failing on one Warcraft Logs does not know.
+    """Reject a partial guild scope or unknown spec, and resolve the zone/boss filter to one encounter id.
 
     Without this an unknown zone id or misspelled boss name scans an empty cohort and returns
     ``ok: true`` with ``count: 0``, which is indistinguishable from "nobody killed it recently".
     The scan then matches fights on that encounter id alone, so a loose ``--boss-name`` cannot pull
     in another encounter whose name merely contains it.
     """
+    _require_complete_guild_scope(
+        ctx, guild_region=scope.guild_region, guild_realm=scope.guild_realm, guild_name=scope.guild_name
+    )
+    # A misspelled spec matches no player and reads as "nobody played it". Only retail is checked:
+    # a classic site has specs the retail list lacks (Combat).
+    if scope.spec_name and client.site.key == RETAIL_PROFILE.key and not is_retail_spec_name(scope.spec_name):
+        _fail(ctx, "invalid_query", f"Unknown --spec-name {scope.spec_name!r}; name a spec (Frost) or a class and spec (Frost Mage).")
     encounter = _resolve_encounter(ctx, client=client, zone_id=scope.zone_id, boss_id=scope.boss_id, boss_name=scope.boss_name)
     return replace(scope, boss_id=encounter["id"], boss_name=None)
 
@@ -4592,6 +4656,15 @@ def _ability_usage_query(scope: CrossReportScope, *, ability_id: int) -> dict[st
     scoped = asdict(scope)
     del scoped["top"]
     return {"zone_id": scoped.pop("zone_id"), "ability_id": ability_id, **scoped}
+
+
+def _require_complete_guild_scope(
+    ctx: typer.Context, *, guild_region: str | None, guild_realm: str | None, guild_name: str | None
+) -> None:
+    """Warcraft Logs drops a guild filter missing any of its three parts and answers with every guild's reports."""
+    given = [value for value in (guild_region, guild_realm, guild_name) if value]
+    if given and len(given) < 3:
+        _fail(ctx, "invalid_query", "Pass --guild-region, --guild-realm and --guild-name together, or none of them.")
 
 
 def _require_boss_scope(ctx: typer.Context, *, boss_id: int | None, boss_name: str | None) -> None:
@@ -5894,6 +5967,8 @@ def _emit_report_events_slice(
             fight_ids=options.fight_ids,
             encounter_id=options.encounter_id,
             difficulty=options.difficulty,
+            start_time=options.start_time,
+            end_time=options.end_time,
         )
         payload = client.report_events(code=code, allow_unlisted=allow_unlisted, options=options)
     except WarcraftLogsClientError as exc:
@@ -5932,6 +6007,8 @@ def _emit_report_json_slice(
             fight_ids=options.fight_ids,
             encounter_id=options.encounter_id,
             difficulty=options.difficulty,
+            start_time=options.start_time,
+            end_time=options.end_time,
         )
         payload = (
             client.report_table(code=code, allow_unlisted=allow_unlisted, options=options)
@@ -6192,6 +6269,8 @@ def report_player_details(
             fight_ids=fight_id,
             encounter_id=encounter_id,
             difficulty=difficulty,
+            start_time=start_time,
+            end_time=end_time,
         )
         payload = client.report_player_details(code=code, allow_unlisted=allow_unlisted, options=options)
     except WarcraftLogsClientError as exc:

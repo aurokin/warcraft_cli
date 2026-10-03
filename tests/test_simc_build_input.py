@@ -207,6 +207,22 @@ def test_load_build_spec_extracts_class_and_spec_from_talents_url() -> None:
     assert spec.source_kind == "wowhead_talent_calc_url"
 
 
+@pytest.mark.parametrize("prefix", ["ptr", "beta"])
+def test_load_build_spec_accepts_retail_ptr_and_beta_talent_calc_urls(prefix: str) -> None:
+    """The Classic-era refusal must not catch Wowhead's retail PTR and Beta calculators."""
+    spec = load_build_spec(
+        profile_path=None,
+        build_file=None,
+        build_text=None,
+        talents=TalentStrings(talents=f"https://www.wowhead.com/{prefix}/talent-calc/death-knight/frost/ABC123"),
+        actor_class=None,
+        spec_name=None,
+    )
+
+    assert (spec.actor_class, spec.spec, spec.talents) == ("deathknight", "frost", "ABC123")
+    assert spec.source_kind == "wowhead_talent_calc_url"
+
+
 def test_load_build_spec_extracts_exact_transport_form_from_packet(tmp_path: Path) -> None:
     packet_path = tmp_path / "build-packet.json"
     packet_path.write_text(
@@ -579,7 +595,8 @@ def test_load_build_spec_extracts_wow_export_transport_form_from_packet(tmp_path
     assert "class/spec metadata came from packet contents and was not independently validated" in spec.source_notes
 
 
-def test_identify_build_downgrades_wow_export_packet_metadata_confidence(tmp_path: Path) -> None:
+def test_identify_build_trusts_a_pair_its_talent_hash_decoded_as(tmp_path: Path) -> None:
+    """The pair was confirmed by decoding the hash as it, so naming it must not lower the confidence an unaided probe reports."""
     repo = _repo(tmp_path)
     build_spec = BuildSpec(
         actor_class="priest",
@@ -595,7 +612,7 @@ def test_identify_build_downgrades_wow_export_packet_metadata_confidence(tmp_pat
     assert identified.actor_class == "priest"
     assert identified.spec == "shadow"
     assert identity.source == "wow_talent_export"
-    assert identity.confidence == "medium"
+    assert identity.confidence == "high"
 
 
 def test_parse_wowhead_talent_calc_ref_rejects_nested_talent_calc_segments() -> None:
@@ -665,6 +682,18 @@ def test_identify_build_drops_an_apl_name_guess_that_names_no_simc_spec(
     assert (identified.actor_class, identified.spec) == ("mage", "arcane")
     assert identity.source == "simc_probe"
     assert f"ignored apl name: {apl_name} does not complete a SimC class/spec pair" in identity.source_notes
+
+
+def test_identify_build_trusts_an_apl_name_guess_its_talent_hash_decoded_as(tmp_path: Path) -> None:
+    """The file name is only a guess until the hash decodes as it; after that it is as sure as a probe."""
+    repo = _repo(tmp_path)
+    build_spec = BuildSpec(talents="HASH", source_kind="wow_talent_export")
+
+    with patch("simc_cli.build_input.decode_build", return_value=type("Resolution", (), {"enabled_talents": {"arcane_blast"}})()):
+        identified, identity = identify_build(repo, build_spec, apl_path=tmp_path / "mage_arcane.simc")
+
+    assert (identified.actor_class, identified.spec) == ("mage", "arcane")
+    assert (identity.source, identity.confidence) == ("apl_path", "high")
 
 
 def test_load_build_spec_rejects_conflicting_exact_transport_forms(tmp_path: Path) -> None:

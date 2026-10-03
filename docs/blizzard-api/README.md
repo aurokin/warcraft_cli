@@ -29,7 +29,9 @@ client credentials and emits the shared JSON envelope.
 `realm` and `character` also take a realm display name or the other slug spelling (`Mal'Ganis`,
 `mal-ganis`, `Tarren Mill`). Blizzard's slug drops apostrophes, keeps word breaks and keeps accented letters (`malganis`,
 `tarren-mill`, `festung-der-stürme`), so a hyphenated spelling is tried as written and the joined one only after a 404; a
-realm that exists under neither is `not_found` (exit 4).
+realm that exists under neither is `not_found` (exit 4). Blizzard slugs native-script realm names in
+English, so pass `howling-fjord`, not `Ревущий фьорд`. A realm with no letters or digits, or a
+blank character name, is `invalid_query` (exit 2) and sends no request.
 
 `search` and `resolve` accept `--limit` (1-50, default 5); it is ignored until those surfaces ship.
 

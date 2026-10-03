@@ -23,13 +23,13 @@ Report Icy Veins capabilities and the resolved HTTP cache configuration.
 
 ## icy-veins search
 
-Rank Icy Veins WoW guides from the sitemap and the site-wide guide menu against a free-text query.
+Rank Icy Veins WoW guides from the sitemap, the site-wide guide menu and the site index against a free-text query.
 
 **Arguments**
 
 | Argument | Type | Default | Description |
 | --- | --- | --- | --- |
-| `query` | str | required | Query text to match against Icy Veins WoW guide slugs. |
+| `query` | str | required | Query text to match against Icy Veins WoW guide slugs and page titles. |
 
 **Options**
 
@@ -52,6 +52,16 @@ Resolve a free-text query to the best Icy Veins guide, with the candidate list a
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `--limit` | int range | 5 | Maximum candidates to inspect. |
+
+## icy-veins index-refresh
+
+Crawl Icy Veins (one request a second) for pages its frozen sitemap lacks and merge them into the local site index.
+
+**Options**
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--max-requests` | int range | 250 | Most uncached page requests to make; a run that reaches it is partial and the next run resumes. |
 
 ## icy-veins guide
 
@@ -97,7 +107,7 @@ Search a previously exported guide bundle without touching the network.
 
 | Argument | Type | Default | Description |
 | --- | --- | --- | --- |
-| `bundle` | directory | required | Directory produced by 'icy-veins guide-export'. |
+| `bundle` | path | required | Directory produced by 'icy-veins guide-export'. |
 | `query` | str | required | Query text to match against the exported article bundle. |
 
 **Options**

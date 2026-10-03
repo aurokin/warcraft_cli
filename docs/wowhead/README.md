@@ -30,7 +30,10 @@ upstream string (`news` renders "2026/09/18 at 3:30 PM", `blue-tracker` sends
 offset, so `posted_at` is shifted accordingly. A row whose timestamp cannot be parsed is excluded
 from a date window rather than passed through, and `scan.unparsed_timestamps` reports how many rows
 that was; when a date window is requested and no scanned row carries a readable timestamp, the
-command fails with `parse_error` instead of returning an empty match set.
+command fails with `parse_error` instead of returning an empty match set. The listing is read
+newest first, so a window far in the past needs enough `--pages` (or a later `--page`) to reach it.
+`scan.stop_reason` says why the scan stopped: `date_from_reached`, `last_page_reached`,
+`empty_page`, or null when `--pages` ran out first, in which case older rows were never read.
 
 The `QUERY` of `news`, `blue-tracker` and `guides` keeps a row only when every query word appears
 in it as a whole word, up to a plural or possessive ending ("hotfix" matches "Hotfixes" and "mage"
@@ -99,6 +102,9 @@ They become the `match` only when the response holds no entity, or when the arti
 best entity by more than an exact name match is worth, which is how a query that names a headline
 word for word still resolves to that news post. `search` ranks them on score alone.
 
+A top row holding only some query words is never a high-confidence answer when it lacks a number
+the query names: "keystone legend season 3" does not resolve to "Keystone Legend: Season 2".
+
 Failures print an error envelope on stderr and exit with the shared code:
 
 | Exit | Meaning |
@@ -121,7 +127,7 @@ Global flags go before the subcommand.
 | Flag | Effect |
 |------|--------|
 | `--pretty` | pretty-print JSON instead of the compact default |
-| `--compact` | truncate long prose strings (URLs, talent strings and `*command` values stay whole; cut paths are listed in `provenance.compacted_paths`) |
+| `--compact` | truncate long prose strings (URLs, talent strings and `*command`/`*input` values stay whole; cut paths are listed in `provenance.compacted_paths`) |
 | `--compact-max-chars N` | truncation threshold for `--compact` (default 280) |
 | `--fields a.b,c` | project only the named dot-paths |
 | `--fields-strict` | fail with exit 2 when a requested `--fields` path is missing |
@@ -140,8 +146,13 @@ wowhead --pretty --expansion classic entity item 19019
 When `--expansion` is omitted, `search` (from its query), `entity` and `entity-page` (from `--url`,
 which takes the place of `TYPE ID`), `compare` (from its entity refs), and the guide, news-post,
 blue-topic and tool commands (from their ref) auto-detect the profile from a Wowhead URL or a
-`classic/...`-style path; the payload reports which rule applied in `expansion_source` (`flag`,
-`url`, or `default`).
+`classic/...`-style path. `search`, `entity` and `entity-page` report which rule applied in
+`expansion_source` (`flag`, `url`, or `default`). A URL under Wowhead's `/forever/` section (WoW
+Forever) names no expansion profile: `expansion-detect` reports `detected_expansion: null`, an
+entity URL there is not read (`entity --url` fails `invalid_argument`), and `news-post` reads a
+Forever post with a note in `notes` that its expansion could not be inferred. `guide`, `guide-full`
+and `news-post` add the same kind of note when the page Wowhead served belongs to another
+expansion than the one selected (Wowhead answers `/classic/guide=<id>` with a retail guide).
 
 ## Commands
 
@@ -163,16 +174,16 @@ Entities:
 | `entity-page TYPE ID` | parsed page metadata and linked entities; comments come from `comments`. Linked entities cover body links, gatherer records, and the page's relation tabs (a zone's NPCs and quests, a faction's members: `source_kind: "listview"`, tab id in `listview`) |
 | `comments TYPE ID` | ranked comments with filters and optional insight rollups |
 | `compare REF REF ...` | field-by-field diff of two or more entities; `comparison.linked_entities` compares every link each page carries (the links `entity-page` reports, relation tabs included), not the `--max-links-per-entity` cut |
-| `linked-graph TYPE ID` | bounded linked-entity graph rooted at one entity; `sampling.pages_skipped` counts the pages `--max-fetches` or `--limit` left unread, and `sampling.truncated` is true when any were |
+| `linked-graph TYPE ID` | bounded linked-entity graph rooted at one entity, following the links `entity-page` reports (relation tabs included, `source_kind: "listview"`); a node's `name` falls back to its page title once fetched. `--relation` takes entity types and rejects any other value. `sampling.pages_skipped` counts the pages `--max-fetches` or `--limit` left unread, and `sampling.truncated` is true when any were or `--limit` cut the nodes |
 
 Guides:
 
 | Command | Purpose |
 |---------|---------|
-| `guides CATEGORY` | guide listing for a category with author, patch, and updated-window filters |
-| `guide REF` | one guide: analysis surfaces, linked entities, comments, and page metadata; section bodies come from `guide-full`. An unknown guide id is an upstream 400, reported as exit 5 |
+| `guides CATEGORY` | guide listing for a category with author, patch, and updated-window filters; a category Wowhead does not have (it serves its whole guide index instead) is `not_found` |
+| `guide REF` | one guide: analysis surfaces, linked entities, comments, and page metadata; section bodies come from `guide-full`. An unknown guide id (Wowhead answers HTTP 400) is `not_found`, exit 4 |
 | `guide-full REF` | the same guide with every section, comment, and link hydrated |
-| `guide-export REF` | write a guide bundle (manifest, sections, entities) to `--out`, or `./wowhead_exports/<guide-slug>/`; a linked entity that cannot be hydrated is listed in `hydration.failed` (`entity_type`, `id`, `code`, `message`) instead of failing the export |
+| `guide-export REF` | write a guide bundle (manifest, sections, entities) to `--out`, or `./wowhead_exports/guide-<id>-<slug>/`; the root `index.json` next to the bundle is written only when it is absent or already a bundle index; an export that hydrates nothing removes an earlier `entities/manifest.json`; a linked entity that cannot be hydrated is listed in `hydration.failed` (`entity_type`, `id`, `code`, `message`) instead of failing the export |
 | `guide-query BUNDLE QUERY` | query one guide bundle for matching sections, links, and comments; answers with the `icy-veins`/`method` guide-query payload (`count`, `match_counts`, `matches`, `top`, `failed_pages`) plus `bundle`, `guide`, and `page` |
 | `guide-bundle-list` | local bundles with freshness and hydration summaries |
 | `guide-bundle-search QUERY` | find local bundles by title, id, or directory name |
@@ -191,19 +202,19 @@ Timeline surfaces:
 | Command | Purpose |
 |---------|---------|
 | `news [QUERY]` | news listing with topic, date-window, author, and type filters; rows may carry expansion-scoped URLs such as `/forever/news/<slug>-<id>`, which `news-post` accepts |
-| `news-post REF` | one news article with body markup, related posts, and citations |
+| `news-post REF` | one news article with body markup, related posts, and citations; a URL must be a `/news/...` or `/news=<id>` page (`invalid_ref` otherwise), and a page with no article body is `parse_error` |
 | `blue-tracker [QUERY]` | blue-post listing with topic, date-window, author, region, and forum filters; rows mix `/blue-tracker/topic/...` and `/blue-tracker/news/...` shapes, and only topic rows feed `blue-topic` |
-| `blue-topic REF` | one blue-tracker topic with posts, participants, and citations |
+| `blue-topic REF` | one blue-tracker topic with posts, participants, and citations; a URL other than `/blue-tracker/topic/...` is `invalid_ref` |
 
 Tool-state decoders:
 
 | Command | Purpose |
 |---------|---------|
-| `talent-calc REF` | class, spec, and build code from a talent calculator ref; a classic-era `/classic/talent-calc/<class>/<build-code>` ref has no spec, so `spec_slug` is null. An unknown class is `invalid_tool_ref` |
+| `talent-calc REF` | class, spec (`tool.spec_id` is its Blizzard spec id), and build code from a talent calculator ref; a classic-era `/classic/talent-calc/<class>/<build-code>` ref has no spec, so `spec_slug` and `spec_id` are null. An unknown class is `invalid_tool_ref`; so, on a retail, PTR or beta ref, is a spec of another class (`paladin/frost`) or a build code whose loadout header names another spec. A classic calculator's spec is not checked (MoP Classic's rogue `combat` is valid) and its `spec_id` is null. `listed_builds` holds only the ref's spec's builds (the page embeds every spec's), and is absent for a ref with no spec |
 | `talent-calc-packet REF` | exact talent transport packet from a `<class>/<spec>/<build-code>` ref; `--out PATH` writes just the packet. The packet comes from the build code in `REF`, so a failed page fetch still answers, with `page.canonical_url` null and `page.fetch_error` `{code, message}` |
 | `profession-tree REF` | profession slug and loadout code |
 | `dressing-room REF` | normalized share hash and cited state URL |
-| `profiler REF` | normalized `list=` ref with list, region, realm, and name parts |
+| `profiler REF` | normalized `list=` ref with list, region, realm, and name parts; takes Wowhead's canonical `/list=<id>/<slug>` and `/list=<id>/<region>/<realm>/<name>` URLs as well as `/list?list=...` |
 
 `dressing-room` and `profiler` are state inspectors: they normalize and cite the ref, they do not
 decode the opaque client-side payload behind it. `profiler` fetches the list page for the ref and
@@ -240,8 +251,11 @@ wowhead guide-query ./tmp/guides/guide-2113 "talent build"
 Scan a topic across a date window:
 
 ```bash
-wowhead news "class tuning" --date-from 2025-01-01 --date-to 2025-03-01 --pages 3
+wowhead news "class tuning" --date-from 2026-09-01 --pages 40
 ```
+
+Check that `scan.stop_reason` is `date_from_reached`; null means `--pages` ran out before the
+window's start, so raise `--pages` (or start from a later `--page`).
 
 ## Cache
 

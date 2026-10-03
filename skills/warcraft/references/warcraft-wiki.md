@@ -15,7 +15,7 @@
 
 ## Effective Use
 
-- prefer `api` for function, enum (`Enum.ItemQuality`), framework, XML schema, the `Console variables` CVar list, and API-change pages
+- prefer `api` for function, enum (`Enum.ItemQuality`), framework, XML schema, CVar (`api autoLootDefault` returns the `CVar autoLootDefault` page; `Console variables` is the list), and API-change pages
 - prefer `event` for game events (`PLAYER_LOGIN`, `ENCOUNTER_START`) and UI handlers (`OnKeyDown`)
 - `api` and `event` fail with `not_found` (exit 4) instead of returning an unrelated page
 - use `article` when the query is broader than programming

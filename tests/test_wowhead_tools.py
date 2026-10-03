@@ -6,7 +6,8 @@ import json
 from pathlib import Path
 
 import httpx
-from wowhead_cli.main import app
+from warcraft_core.identity import WOW_SPECS_BY_CLASS
+from wowhead_cli.main import _WOW_SPEC_IDS, app
 from wowhead_cli.wowhead_client import WowheadClient
 
 from tests.wowhead_testkit import (
@@ -24,7 +25,7 @@ TALENT_CALC_SHAPE_ERROR = (
 
 
 def test_talent_calc_command_decodes_url_and_embedded_builds(monkeypatch) -> None:
-    def fake_page_html(self, page_url: str):  # noqa: ANN001
+    def fake_page_html(self, page_url: str):
         assert page_url.endswith("/talent-calc/druid/balance/ABC123")
         return SAMPLE_TALENT_CALC_HTML
 
@@ -43,7 +44,7 @@ def test_talent_calc_command_decodes_url_and_embedded_builds(monkeypatch) -> Non
 
 
 def test_talent_calc_command_supports_expansion_prefixed_relative_ref(monkeypatch) -> None:
-    def fake_page_html(self, page_url: str):  # noqa: ANN001
+    def fake_page_html(self, page_url: str):
         assert page_url.endswith("/cata/talent-calc/hunter/beast-mastery/XYZ987")
         return SAMPLE_TALENT_CALC_HTML
 
@@ -59,7 +60,7 @@ def test_talent_calc_command_supports_expansion_prefixed_relative_ref(monkeypatc
 
 
 def test_talent_calc_command_supports_expansion_prefixed_class_spec_ref(monkeypatch) -> None:
-    def fake_page_html(self, page_url: str):  # noqa: ANN001
+    def fake_page_html(self, page_url: str):
         assert page_url.endswith("/classic/talent-calc/druid/balance/ABC123")
         return SAMPLE_TALENT_CALC_HTML
 
@@ -75,7 +76,7 @@ def test_talent_calc_command_supports_expansion_prefixed_class_spec_ref(monkeypa
 
 
 def test_talent_calc_command_supports_scheme_less_wowhead_ref(monkeypatch) -> None:
-    def fake_page_html(self, page_url: str):  # noqa: ANN001
+    def fake_page_html(self, page_url: str):
         assert page_url == "https://wowhead.com/talent-calc/druid/balance/ABC123"
         return SAMPLE_TALENT_CALC_HTML
 
@@ -149,8 +150,64 @@ def test_talent_calc_rejects_a_url_that_names_no_wow_class() -> None:
         assert json.loads(result.stderr)["error"] == {"code": "invalid_tool_ref", "message": TALENT_CALC_SHAPE_ERROR}
 
 
+def test_talent_calc_lists_only_the_requested_specs_builds(monkeypatch) -> None:
+    """Wowhead embeds every spec's listed builds on each talent-calc page; only the ref's spec answers."""
+    two_spec_html = SAMPLE_TALENT_CALC_HTML.replace(
+        '"118": {"id": 118, "isListed": true, "name": "Mythic+", "spec": 102, "hash": "BBB222"}',
+        '"118": {"id": 118, "isListed": true, "name": "Mythic+", "spec": 102, "hash": "BBB222"},\n'
+        '        "119": {"id": 119, "isListed": true, "name": "(12.0.5) Leveling - Shado-Pan", "spec": 269, "hash": "C0QA"}',
+    )
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.page_html", lambda self, url: two_spec_html)
+
+    result = runner.invoke(app, ["talent-calc", "druid/balance"])
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.stdout)["data"]
+    assert data["tool"]["spec_id"] == 102
+    assert data["listed_builds"]["count"] == 2
+    assert {row["spec_id"] for row in data["listed_builds"]["items"]} == {102}
+
+
+def test_talent_calc_rejects_a_spec_that_is_not_the_classes() -> None:
+    for command in ("talent-calc", "talent-calc-packet"):
+        result = runner.invoke(app, [command, "paladin/frost/CYGAAAAAAAA"])
+        assert result.exit_code == 2
+        assert json.loads(result.stderr)["error"] == {
+            "code": "invalid_tool_ref",
+            "message": "Talent calculator spec 'frost' is not a paladin spec.",
+        }
+
+
+def test_talent_calc_accepts_a_classic_calculators_own_spec_name(monkeypatch) -> None:
+    """MoP Classic calls rogue's second spec ``combat``; the retail spec table does not apply there."""
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.page_html", lambda self, url: SAMPLE_TALENT_CALC_HTML)
+    result = runner.invoke(app, ["talent-calc", "https://www.wowhead.com/mop-classic/talent-calc/rogue/combat"])
+    assert result.exit_code == 0, result.output
+    tool = json.loads(result.stdout)["data"]["tool"]
+    assert (tool["expansion"], tool["spec_slug"], tool["spec_id"]) == ("mop-classic", "combat", None)
+
+
+def test_talent_calc_rejects_a_build_code_whose_loadout_header_is_another_spec(monkeypatch) -> None:
+    """C0QA... is a Windwalker loadout (spec 269); it used to come back as an exact druid/balance packet."""
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.page_html", lambda self, url: SAMPLE_TALENT_CALC_HTML)
+    for command in ("talent-calc", "talent-calc-packet"):
+        result = runner.invoke(app, [command, "druid/balance/C0QAAAAAAAAAAAAAAAAAAAA"])
+        assert result.exit_code == 2
+        assert json.loads(result.stderr)["error"] == {
+            "code": "invalid_tool_ref",
+            "message": "Build code is a monk/windwalker loadout, not druid/balance.",
+        }
+
+    balance = runner.invoke(app, ["talent-calc-packet", "druid/balance/CYGAAAAAAAAAAAAAAAAAAAA"])
+    assert balance.exit_code == 0, balance.output
+    assert json.loads(balance.stdout)["data"]["talent_transport_packet"]["transport_status"] == "exact"
+
+
+def test_talent_calc_spec_ids_cover_every_shared_class_spec() -> None:
+    assert set(_WOW_SPEC_IDS) == {(actor_class, spec) for actor_class, specs in WOW_SPECS_BY_CLASS.items() for spec in specs}
+
+
 def test_talent_calc_packet_command_emits_exact_transport_packet(monkeypatch) -> None:
-    def fake_page_html(self, page_url: str):  # noqa: ANN001
+    def fake_page_html(self, page_url: str):
         assert page_url.endswith("/talent-calc/druid/balance/ABC123")
         return SAMPLE_TALENT_CALC_HTML
 
@@ -175,7 +232,7 @@ def test_talent_calc_packet_command_emits_exact_transport_packet(monkeypatch) ->
 
 
 def test_talent_calc_packet_command_supports_expansion_prefixed_relative_ref(monkeypatch) -> None:
-    def fake_page_html(self, page_url: str):  # noqa: ANN001
+    def fake_page_html(self, page_url: str):
         assert page_url.endswith("/cata/talent-calc/hunter/beast-mastery/XYZ987")
         return SAMPLE_TALENT_CALC_HTML
 
@@ -193,7 +250,7 @@ def test_talent_calc_packet_command_supports_expansion_prefixed_relative_ref(mon
 
 
 def test_talent_calc_packet_command_supports_expansion_prefixed_class_spec_ref(monkeypatch) -> None:
-    def fake_page_html(self, page_url: str):  # noqa: ANN001
+    def fake_page_html(self, page_url: str):
         assert page_url.endswith("/classic/talent-calc/druid/balance/ABC123")
         return SAMPLE_TALENT_CALC_HTML
 
@@ -211,7 +268,7 @@ def test_talent_calc_packet_command_supports_expansion_prefixed_class_spec_ref(m
 
 
 def test_talent_calc_packet_command_supports_scheme_less_wowhead_ref(monkeypatch) -> None:
-    def fake_page_html(self, page_url: str):  # noqa: ANN001
+    def fake_page_html(self, page_url: str):
         assert page_url == "https://wowhead.com/talent-calc/druid/balance/ABC123"
         return SAMPLE_TALENT_CALC_HTML
 
@@ -229,7 +286,7 @@ def test_talent_calc_packet_command_supports_scheme_less_wowhead_ref(monkeypatch
 def test_talent_calc_packet_command_can_write_exact_transport_packet(monkeypatch, tmp_path: Path) -> None:
     out_path = tmp_path / "balance-packet.json"
 
-    def fake_page_html(self, page_url: str):  # noqa: ANN001
+    def fake_page_html(self, page_url: str):
         assert page_url.endswith("/talent-calc/druid/balance/ABC123")
         return SAMPLE_TALENT_CALC_HTML
 
@@ -245,7 +302,7 @@ def test_talent_calc_packet_command_can_write_exact_transport_packet(monkeypatch
 
 
 def test_talent_calc_packet_command_does_not_require_page_fetch_for_exact_ref(monkeypatch) -> None:
-    def fake_page_html(self, page_url: str):  # noqa: ANN001
+    def fake_page_html(self, page_url: str):
         raise httpx.ConnectError("network down", request=httpx.Request("GET", page_url))
 
     monkeypatch.setattr("wowhead_cli.main.WowheadClient.page_html", fake_page_html)
@@ -265,7 +322,7 @@ def test_talent_calc_packet_command_does_not_require_page_fetch_for_exact_ref(mo
 def test_talent_calc_packet_command_falls_back_on_http_status_error(monkeypatch, tmp_path: Path) -> None:
     out_path = tmp_path / "exact-packet.json"
 
-    def fake_page_html(self, page_url: str):  # noqa: ANN001
+    def fake_page_html(self, page_url: str):
         request = httpx.Request("GET", page_url)
         response = httpx.Response(503, request=request)
         raise httpx.HTTPStatusError("service unavailable", request=request, response=response)
@@ -289,7 +346,7 @@ def test_talent_calc_packet_command_normalizes_write_failure(monkeypatch, tmp_pa
     out_dir = tmp_path / "out-dir"
     out_dir.mkdir()
 
-    def fake_page_html(self, page_url: str):  # noqa: ANN001
+    def fake_page_html(self, page_url: str):
         assert page_url.endswith("/talent-calc/druid/balance/ABC123")
         return SAMPLE_TALENT_CALC_HTML
 
@@ -301,7 +358,7 @@ def test_talent_calc_packet_command_normalizes_write_failure(monkeypatch, tmp_pa
 
 
 def test_talent_calc_packet_command_rejects_ref_without_build_code(monkeypatch) -> None:
-    def fake_page_html(self, page_url: str):  # noqa: ANN001
+    def fake_page_html(self, page_url: str):
         assert page_url.endswith("/talent-calc/druid/balance")
         return SAMPLE_TALENT_CALC_HTML.replace("/talent-calc/druid/balance/ABC123", "/talent-calc/druid/balance")
 
@@ -362,7 +419,7 @@ def test_talent_calc_packet_command_rejects_buried_real_wowhead_path() -> None:
 
 
 def test_talent_calc_packet_command_rejects_invalid_transport_packet(monkeypatch) -> None:
-    def fake_page_html(self, page_url: str):  # noqa: ANN001
+    def fake_page_html(self, page_url: str):
         assert page_url.endswith("/talent-calc/druid/balance/ABC123")
         return SAMPLE_TALENT_CALC_HTML
 
@@ -387,7 +444,7 @@ def test_talent_calc_packet_command_rejects_invalid_transport_packet(monkeypatch
 
 
 def test_profession_tree_command_decodes_url(monkeypatch) -> None:
-    def fake_page_html(self, page_url: str):  # noqa: ANN001
+    def fake_page_html(self, page_url: str):
         assert page_url.endswith("/profession-tree-calc/alchemy/BCuA")
         return SAMPLE_PROFESSION_TREE_HTML
 
@@ -401,7 +458,7 @@ def test_profession_tree_command_decodes_url(monkeypatch) -> None:
 
 
 def test_dressing_room_command_normalizes_hash_ref(monkeypatch) -> None:
-    def fake_page_html(self, page_url: str):  # noqa: ANN001
+    def fake_page_html(self, page_url: str):
         assert page_url == "https://www.wowhead.com/dressing-room"
         return SAMPLE_DRESSING_ROOM_HTML
 
@@ -445,7 +502,7 @@ def test_tool_commands_report_the_expansion_their_url_names(monkeypatch) -> None
 
 
 def test_profiler_command_normalizes_list_ref(monkeypatch) -> None:
-    def fake_page_html(self, page_url: str):  # noqa: ANN001
+    def fake_page_html(self, page_url: str):
         assert page_url == "https://www.wowhead.com/list?list=97060220/us/illidan/Roguecane"
         return SAMPLE_PROFILER_HTML
 
@@ -457,6 +514,20 @@ def test_profiler_command_normalizes_list_ref(monkeypatch) -> None:
     assert payload["data"]["tool"]["region_slug"] == "us"
     assert payload["data"]["tool"]["realm_slug"] == "illidan"
     assert payload["data"]["tool"]["character_name"] == "Roguecane"
+
+
+def test_profiler_reads_wowheads_canonical_list_path(monkeypatch) -> None:
+    """`profiler 1` reports https://www.wowhead.com/list=1/default-lists as canonical; that URL used to exit 2."""
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.page_html", lambda self, page_url: SAMPLE_PROFILER_HTML)
+
+    named = runner.invoke(app, ["profiler", "https://www.wowhead.com/list=1/default-lists"])
+    assert named.exit_code == 0, named.output
+    assert json.loads(named.stdout)["data"]["tool"]["list_parts"] == ["1"]
+
+    character = runner.invoke(app, ["profiler", "https://www.wowhead.com/list=5961/us/illidan/Roguecane"])
+    assert character.exit_code == 0, character.output
+    tool = json.loads(character.stdout)["data"]["tool"]
+    assert (tool["list_id"], tool["region_slug"], tool["realm_slug"], tool["character_name"]) == ("5961", "us", "illidan", "Roguecane")
 
 
 def test_profiler_fails_not_found_when_wowhead_serves_its_missing_list_page(monkeypatch) -> None:

@@ -40,7 +40,7 @@ def test_expansions_command_exposes_profiles() -> None:
 
 
 def test_search_respects_expansion_flag(monkeypatch) -> None:
-    def fake_search(self, query: str):  # noqa: ANN001
+    def fake_search(self, query: str):
         return {
             "search": query,
             "results": [
@@ -59,7 +59,7 @@ def test_search_respects_expansion_flag(monkeypatch) -> None:
 
 
 def test_search_guide_result_includes_guide_url(monkeypatch) -> None:
-    def fake_search(self, query: str):  # noqa: ANN001
+    def fake_search(self, query: str):
         return {
             "search": query,
             "results": [
@@ -78,7 +78,7 @@ def test_search_guide_result_includes_guide_url(monkeypatch) -> None:
 
 
 def test_search_faction_result_includes_faction_url(monkeypatch) -> None:
-    def fake_search(self, query: str):  # noqa: ANN001
+    def fake_search(self, query: str):
         return {
             "search": query,
             "results": [
@@ -97,7 +97,7 @@ def test_search_faction_result_includes_faction_url(monkeypatch) -> None:
 
 
 def test_search_reranks_exact_name_match_ahead_of_noisy_popular_result(monkeypatch) -> None:
-    def fake_search(self, query: str):  # noqa: ANN001
+    def fake_search(self, query: str):
         return {
             "search": query,
             "results": [
@@ -130,7 +130,7 @@ def test_search_reranks_exact_name_match_ahead_of_noisy_popular_result(monkeypat
 
 
 def test_search_type_hint_promotes_guides_for_guide_queries(monkeypatch) -> None:
-    def fake_search(self, query: str):  # noqa: ANN001
+    def fake_search(self, query: str):
         return {
             "search": query,
             "results": [
@@ -162,7 +162,7 @@ def test_search_type_hint_promotes_guides_for_guide_queries(monkeypatch) -> None
 
 
 def test_search_pet_result_includes_pet_url(monkeypatch) -> None:
-    def fake_search(self, query: str):  # noqa: ANN001
+    def fake_search(self, query: str):
         return {
             "search": query,
             "results": [
@@ -181,7 +181,7 @@ def test_search_pet_result_includes_pet_url(monkeypatch) -> None:
 
 
 def test_resolve_returns_high_confidence_match_and_next_command(monkeypatch) -> None:
-    def fake_search(self, query: str):  # noqa: ANN001
+    def fake_search(self, query: str):
         return {
             "search": query,
             "results": [
@@ -205,7 +205,7 @@ def test_resolve_returns_high_confidence_match_and_next_command(monkeypatch) -> 
 
 
 def test_resolve_falls_back_to_search_when_query_is_ambiguous(monkeypatch) -> None:
-    def fake_search(self, query: str):  # noqa: ANN001
+    def fake_search(self, query: str):
         return {
             "search": query,
             "results": [
@@ -229,7 +229,7 @@ def test_resolve_falls_back_to_search_when_query_is_ambiguous(monkeypatch) -> No
 
 
 def test_resolve_entity_type_filter_can_make_guide_resolution_confident(monkeypatch) -> None:
-    def fake_search(self, query: str):  # noqa: ANN001
+    def fake_search(self, query: str):
         return {
             "search": query,
             "results": [
@@ -258,7 +258,7 @@ def test_resolve_entity_type_filter_can_make_guide_resolution_confident(monkeypa
 
 
 def test_search_results_include_follow_up_guidance(monkeypatch) -> None:
-    def fake_search(self, query: str):  # noqa: ANN001
+    def fake_search(self, query: str):
         assert query == "thunderfury"
         return {
             "search": query,
@@ -426,8 +426,8 @@ def test_resolve_confidence_never_calls_a_stale_guide_high() -> None:
     """An exact name with a clear margin is high confidence, unless the guide is marked stale."""
     fresh = {"ranking": {"score": 40, "match_reasons": ["exact_name"]}}
     stale = {"ranking": {"score": 40, "match_reasons": ["exact_name", STALE_GUIDE_REASON]}}
-    assert resolve_confidence([fresh], entity_types=()) == "high"
-    assert resolve_confidence([stale], entity_types=()) == "medium"
+    assert resolve_confidence([fresh], entity_types=(), query="") == "high"
+    assert resolve_confidence([stale], entity_types=(), query="") == "medium"
 
 
 
@@ -473,7 +473,7 @@ def test_a_name_made_of_follow_up_words_is_searched_as_a_name(monkeypatch) -> No
 
 
 def test_resolve_comment_intent_uses_comment_surface_without_hurting_match_quality(monkeypatch) -> None:
-    def fake_search(self, query: str):  # noqa: ANN001
+    def fake_search(self, query: str):
         if query == "fairbreeze favors comments":  # Wowhead matches names, so the text with the follow-up word finds nothing
             return {"search": query, "results": []}
         assert query == "fairbreeze favors"
@@ -499,7 +499,7 @@ def test_resolve_comment_intent_uses_comment_surface_without_hurting_match_quali
 
 
 def test_resolve_relation_intent_uses_entity_page_surface(monkeypatch) -> None:
-    def fake_search(self, query: str):  # noqa: ANN001
+    def fake_search(self, query: str):
         if query == "thunderfury links":  # Wowhead matches names, so the text with the follow-up word finds nothing
             return {"search": query, "results": []}
         assert query == "thunderfury"
@@ -525,7 +525,7 @@ def test_resolve_relation_intent_uses_entity_page_surface(monkeypatch) -> None:
 
 
 def test_resolve_guide_relation_intent_uses_guide_full(monkeypatch) -> None:
-    def fake_search(self, query: str):  # noqa: ANN001
+    def fake_search(self, query: str):
         return {
             "search": query,
             "results": [
@@ -562,11 +562,11 @@ def test_entity_page_mount_resolves_underlying_item_page(monkeypatch) -> None:
     </head><body><a href="/npc=62809/grand-expedition-yak">Yak</a></body></html>
     """
 
-    def fake_tooltip_with_metadata(self, entity_type: str, entity_id: int, data_env=None):  # noqa: ANN001, ANN202
+    def fake_tooltip_with_metadata(self, entity_type: str, entity_id: int, data_env=None):
         assert (entity_type, entity_id) == ("mount", 460)
         return {"name": "Reins of the Grand Expedition Yak"}, "https://nether.wowhead.com/tooltip/item/84101?dataEnv=1"
 
-    def fake_html(self, entity_type: str, entity_id: int):  # noqa: ANN001
+    def fake_html(self, entity_type: str, entity_id: int):
         page_calls.append((entity_type, entity_id))
         return html
 
@@ -599,11 +599,11 @@ def test_comments_battle_pet_resolves_underlying_npc_page(monkeypatch) -> None:
     </body></html>
     """
 
-    def fake_tooltip_with_metadata(self, entity_type: str, entity_id: int, data_env=None):  # noqa: ANN001, ANN202
+    def fake_tooltip_with_metadata(self, entity_type: str, entity_id: int, data_env=None):
         assert (entity_type, entity_id) == ("battle-pet", 39)
         return {"name": "Mechanical Squirrel"}, "https://nether.wowhead.com/tooltip/npc/2671?dataEnv=1"
 
-    def fake_html(self, entity_type: str, entity_id: int):  # noqa: ANN001
+    def fake_html(self, entity_type: str, entity_id: int):
         page_calls.append((entity_type, entity_id))
         return html
 
@@ -641,7 +641,7 @@ def test_resolve_rejects_entity_types_wowhead_suggestions_cannot_label() -> None
 
 
 def test_search_and_resolve_reject_a_blank_query_before_calling_wowhead(monkeypatch) -> None:
-    def explode(self, query: str):  # noqa: ANN001
+    def explode(self, query: str):
         raise AssertionError("a blank query must not reach Wowhead")
 
     monkeypatch.setattr("wowhead_cli.main.WowheadClient.search_suggestions", explode)
@@ -654,7 +654,7 @@ def test_search_and_resolve_reject_a_blank_query_before_calling_wowhead(monkeypa
 
 
 def test_search_reports_how_many_matches_the_limit_cut_off(monkeypatch) -> None:
-    def fake_search(self, query: str):  # noqa: ANN001
+    def fake_search(self, query: str):
         return {
             "search": query,
             "results": [
@@ -683,7 +683,7 @@ def test_search_reports_how_many_matches_the_limit_cut_off(monkeypatch) -> None:
 def test_resolve_recommends_news_post_when_the_best_match_is_a_news_row(monkeypatch) -> None:
     """A news row is routable, so `resolve` may answer with one and hand back `news-post`."""
 
-    def fake_search(self, query: str):  # noqa: ANN001
+    def fake_search(self, query: str):
         return {
             "search": query,
             "results": [
@@ -712,7 +712,7 @@ def test_resolve_answers_with_the_entity_when_a_news_headline_matches_the_text_b
 
     item = {"type": 3, "id": 19019, "name": "Thunderfury, Blessed Blade of the Windseeker", "typeName": "Item"}
 
-    def fake_search(self, query: str):  # noqa: ANN001
+    def fake_search(self, query: str):
         return {
             "search": query,
             "results": [
@@ -744,7 +744,7 @@ def test_resolve_answers_with_the_entity_when_a_news_headline_matches_the_text_b
 def test_resolve_answers_with_the_news_post_a_query_names_outright(monkeypatch) -> None:
     """The entity preference is score-aware: a headline the query names beats a stray entity."""
 
-    def fake_search(self, query: str):  # noqa: ANN001
+    def fake_search(self, query: str):
         return {
             "search": query,
             "results": [
@@ -805,7 +805,25 @@ def test_resolve_is_not_confident_in_an_off_type_row_that_holds_only_some_words(
         "ranking": {"score": 33, "match_reasons": ["some_terms_match", "type_hint", "upstream_database_rank"]},
     }
 
-    assert resolve_confidence([spell, guide], entity_types=()) == "medium"
+    assert resolve_confidence([spell, guide], entity_types=(), query="") == "medium"
     # Without a row of the type the query named, the same lead stays confident.
     untyped_guide = {**guide, "ranking": {"score": 33, "match_reasons": ["some_terms_match"]}}
-    assert resolve_confidence([spell, untyped_guide], entity_types=()) == "high"
+    assert resolve_confidence([spell, untyped_guide], entity_types=(), query="") == "high"
+
+
+def test_resolve_is_not_confident_in_a_row_that_lacks_the_number_the_query_names() -> None:
+    """Scores and reasons from live `wowhead resolve "keystone legend season 3"` (2026-10): the database
+    head "Midnight Keystone Legend: Season 2" was resolved at high confidence."""
+    season_2 = {
+        "name": "Midnight Keystone Legend: Season 2",
+        "entity_type": "achievement",
+        "ranking": {"score": 46, "match_reasons": ["some_terms_match", "upstream_database_rank"]},
+    }
+    season_1 = {
+        "name": "Midnight Keystone Legend: Season 1",
+        "entity_type": "achievement",
+        "ranking": {"score": 32, "match_reasons": ["some_terms_match", "upstream_database_rank"]},
+    }
+
+    assert resolve_confidence([season_2, season_1], entity_types=(), query="keystone legend season 3") == "medium"
+    assert resolve_confidence([season_2, season_1], entity_types=(), query="keystone legend season 2") == "high"

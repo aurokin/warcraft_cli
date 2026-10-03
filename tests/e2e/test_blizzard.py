@@ -196,6 +196,10 @@ def test_bad_routing_flags_are_usage_errors_refused_before_the_network(require) 
     )
     assert "retail-only" in profile.payload["error"]["message"]
 
+    # A blank realm would fetch the realm index as if it were a realm.
+    for args in (("realm", " "), ("character", " ", CHARACTER_NAME), ("character", GUILD_REALM, " ")):
+        run("blizzard", *args, expect=EXIT_USAGE, error_code="invalid_query", env=offline)
+
     # A value Click itself rejects takes the same exit code through the shared envelope.
     bad_id = run("blizzard", "item", "not-an-item-id", expect=EXIT_USAGE, error_code="invalid_argument", env=offline)
     assert "item_id" in bad_id.payload["error"]["message"]

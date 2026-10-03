@@ -13,6 +13,7 @@ import typer
 from typer.testing import CliRunner
 from warcraft_core.cli import RuntimeConfig, cfg, cfg_as, command_path, configure, emit, fail, guarded_run, install_common_callback
 from warcraft_core.envelope import ENVELOPE_KEYS, error_envelope, success_envelope
+from warcraft_core.output import compact_value
 from warcraft_core.provider import ProviderError
 
 runner = CliRunner()
@@ -97,6 +98,15 @@ def test_compact_marks_a_cut_value_that_fields_keeps() -> None:
 
     result = runner.invoke(build_app(), ["--compact", "--compact-max-chars", "50", "--fields", "data.a", "show"])
     assert json.loads(result.stdout) == {"data": {"a": {"b": 1}}}
+
+
+def test_compact_keeps_simc_input_whole() -> None:
+    """An addon export carries `# ...` comment lines, so as prose it was cut to 280 characters and no longer pasted."""
+    simc_input = '# SimC Addon 12.0\n# Checksum: abc\ndeathknight="Example"\nspec=frost\n' * 20
+    cut: list[str] = []
+
+    assert compact_value({"data": {"input": simc_input}}, max_chars=280, cut=cut) == {"data": {"input": simc_input}}
+    assert cut == []
 
 
 @pytest.mark.parametrize("command", ["missing", "refuse"])

@@ -100,7 +100,7 @@ from simc_cli.repo import (
 )
 from simc_cli.report import load_sim_report, sim_report_payload, summarize_sim_report
 from simc_cli.run import binary_provenance, binary_version, build_repo, repo_git_status, run_profile, sync_repo
-from simc_cli.search import MissingRipgrepError, find_action, spec_file_search
+from simc_cli.search import MissingRipgrepError, UnknownClassError, find_action, spec_file_search
 from simc_cli.sim import first_action_hits, run_first_casts, summarize_first_casts
 from simc_cli.talent_transport import validate_talent_tree_transport
 from simc_cli.trait_data import (
@@ -165,10 +165,29 @@ def _repo_resolution(ctx: typer.Context):
     return resolve_repo_root(_cfg(ctx).repo_root)
 
 
-# The per-player headline lines of SimC's text report (`Player: ...`, `  DPS=... DPS-Error=...`).
-RESULT_LINE_RE = re.compile(r"^(Player: |\s+(DPS|HPS|DTPS|TMI)=)")
+# The per-actor headline lines of SimC's text report (`Player: ...`, `  DPS=... DPS-Error=...`), with the
+# `Target:`/`Add:` headers so a target's DTPS line is not read as the player's.
+RESULT_LINE_RE = re.compile(r"^(Player: |Target: |Add: |\s+(DPS|HPS|DTPS|TMI)=)")
 # A compare-apls or validate-apl label names the <label>.simc and <label>.json files it writes.
 LABEL_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]*")
+
+# The build-input flag group every exact-build command takes; one declaration keeps the help text in step.
+AplPathOption = Annotated[str | None, typer.Option("--apl-path", help="Optional APL path used to infer actor class and spec.")]
+ProfilePathOption = Annotated[str | None, typer.Option("--profile-path", help="Optional profile path containing build lines.")]
+BuildFileOption = Annotated[str | None, typer.Option("--build-file", help="Optional plain text file with talents/spec lines.")]
+BuildPacketOption = Annotated[str | None, typer.Option("--build-packet", help="Path to a talent transport packet JSON file.")]
+BuildTextOption = Annotated[
+    str | None, typer.Option("--build-text", help="Inline build text, talent hash, or Wowhead talent-calc URL with build code.")
+]
+TalentsOption = Annotated[
+    str | None,
+    typer.Option("--talents", help="WoW export, Wowhead talent-calc URL with build code, SimC talents string, or talents=... line."),
+]
+ClassTalentsOption = Annotated[str | None, typer.Option("--class-talents", help="Split class talents string.")]
+SpecTalentsOption = Annotated[str | None, typer.Option("--spec-talents", help="Split spec talents string.")]
+HeroTalentsOption = Annotated[str | None, typer.Option("--hero-talents", help="Split hero talents string.")]
+ActorClassOption = Annotated[str | None, typer.Option("--actor-class", help="Actor class such as monk or evoker.")]
+SpecOption = Annotated[str | None, typer.Option("--spec", help="Spec name such as mistweaver.")]
 
 
 def _require_binary(ctx: typer.Context, paths: RepoPaths) -> None:
@@ -842,7 +861,7 @@ def inspect(
     ctx: typer.Context,
     target: str | None = typer.Argument(None, help="Optional file path to inspect. If omitted, inspect the repo."),
 ) -> None:
-    """Describe the repo, or one file inside it, including any build lines it carries."""
+    """Describe the repo, or one file or directory, including any build lines a file carries."""
     paths = _repo_paths(ctx)
     if target is None:
         _emit(ctx, {"inspect": "repo", "repo": repo_payload(paths)})
@@ -859,7 +878,10 @@ def inspect(
         },
     }
     if resolved.is_file():
-        text = resolved.read_text()
+        try:
+            text = resolved.read_text()
+        except UnicodeDecodeError:
+            fail(ctx, "invalid_query", f"Inspect target is not a text file: {resolved}")
         inferred_class, inferred_spec = infer_actor_and_spec_from_apl(resolved)
         payload["target"].update(
             {
@@ -1037,19 +1059,17 @@ def _decode_build(ctx: typer.Context, *, apl_path: str | None, option_values: di
 @app.command("decode-build")
 def decode_build_command(
     ctx: typer.Context,
-    apl_path: str | None = typer.Option(None, "--apl-path", help="Optional APL path used to infer actor class and spec."),
-    profile_path: str | None = typer.Option(None, "--profile-path", help="Optional profile path containing build lines."),
-    build_file: str | None = typer.Option(None, "--build-file", help="Optional plain text file with talents/spec lines."),
-    build_packet: str | None = typer.Option(None, "--build-packet", help="Path to a talent transport packet JSON file."),
-    build_text: str | None = typer.Option(
-        None, "--build-text", help="Inline build text, talent hash, or Wowhead talent-calc URL with build code."),
-    talents: str | None = typer.Option(
-        None, "--talents", help="WoW export, Wowhead talent-calc URL with build code, SimC talents string, or talents=... line."),
-    class_talents: str | None = typer.Option(None, "--class-talents", help="Split class talents string."),
-    spec_talents: str | None = typer.Option(None, "--spec-talents", help="Split spec talents string."),
-    hero_talents: str | None = typer.Option(None, "--hero-talents", help="Split hero talents string."),
-    actor_class: str | None = typer.Option(None, "--actor-class", help="Actor class such as monk or evoker."),
-    spec_name: str | None = typer.Option(None, "--spec", help="Spec name such as mistweaver."),
+    apl_path: AplPathOption = None,
+    profile_path: ProfilePathOption = None,
+    build_file: BuildFileOption = None,
+    build_packet: BuildPacketOption = None,
+    build_text: BuildTextOption = None,
+    talents: TalentsOption = None,
+    class_talents: ClassTalentsOption = None,
+    spec_talents: SpecTalentsOption = None,
+    hero_talents: HeroTalentsOption = None,
+    actor_class: ActorClassOption = None,
+    spec_name: SpecOption = None,
 ) -> None:
     """Decode a talent build into per-tree talents using the local SimC binary."""
     option_values = _build_option_values(
@@ -1087,19 +1107,17 @@ def _identify_build(ctx: typer.Context, *, apl_path: str | None, option_values: 
 @app.command("identify-build")
 def identify_build_command(
     ctx: typer.Context,
-    apl_path: str | None = typer.Option(None, "--apl-path", help="Optional APL path used to infer actor class and spec."),
-    profile_path: str | None = typer.Option(None, "--profile-path", help="Optional profile path containing build lines."),
-    build_file: str | None = typer.Option(None, "--build-file", help="Optional plain text file with talents/spec lines."),
-    build_packet: str | None = typer.Option(None, "--build-packet", help="Path to a talent transport packet JSON file."),
-    build_text: str | None = typer.Option(
-        None, "--build-text", help="Inline build text, talent hash, or Wowhead talent-calc URL with build code."),
-    talents: str | None = typer.Option(
-        None, "--talents", help="WoW export, Wowhead talent-calc URL with build code, SimC talents string, or talents=... line."),
-    class_talents: str | None = typer.Option(None, "--class-talents", help="Split class talents string."),
-    spec_talents: str | None = typer.Option(None, "--spec-talents", help="Split spec talents string."),
-    hero_talents: str | None = typer.Option(None, "--hero-talents", help="Split hero talents string."),
-    actor_class: str | None = typer.Option(None, "--actor-class", help="Actor class such as monk or evoker."),
-    spec_name: str | None = typer.Option(None, "--spec", help="Spec name such as mistweaver."),
+    apl_path: AplPathOption = None,
+    profile_path: ProfilePathOption = None,
+    build_file: BuildFileOption = None,
+    build_packet: BuildPacketOption = None,
+    build_text: BuildTextOption = None,
+    talents: TalentsOption = None,
+    class_talents: ClassTalentsOption = None,
+    spec_talents: SpecTalentsOption = None,
+    hero_talents: HeroTalentsOption = None,
+    actor_class: ActorClassOption = None,
+    spec_name: SpecOption = None,
 ) -> None:
     """Resolve class/spec identity for a build without decoding its talents."""
     option_values = _build_option_values(
@@ -1264,10 +1282,10 @@ def validate_transport_packet_payload(packet: PacketInput) -> dict[str, Any]:
 @app.command("validate-talent-transport")
 def validate_talent_transport_command(
     ctx: typer.Context,
-    build_packet: str | None = typer.Option(None, "--build-packet", help="Path to a talent transport packet JSON file."),
+    build_packet: BuildPacketOption = None,
     talent_row: list[str] = typer.Option([], "--talent-row", help="Raw talent row as entry_id:node_id:rank. Repeat as needed."),
-    actor_class: str | None = typer.Option(None, "--actor-class", help="Actor class such as druid or paladin."),
-    spec_name: str | None = typer.Option(None, "--spec", help="Spec name such as balance or retribution."),
+    actor_class: ActorClassOption = None,
+    spec_name: SpecOption = None,
     out: str | None = typer.Option(None, "--out", help="Optional path to write the upgraded packet JSON when --build-packet is used."),
 ) -> None:
     """Round-trip raw talent rows through SimulationCraft and report the validated transport forms."""
@@ -1322,17 +1340,16 @@ def _build_harness(
 def build_harness_command(
     ctx: typer.Context,
     out: str | None = typer.Option(None, "--out", help="Output harness profile path."),
-    apl_path: str | None = typer.Option(None, "--apl-path", help="Optional APL path used to infer actor class and spec."),
-    profile_path: str | None = typer.Option(None, "--profile-path", help="Optional profile path containing build lines."),
-    build_file: str | None = typer.Option(None, "--build-file", help="Optional plain text file with talents/spec lines."),
-    build_text: str | None = typer.Option(None, "--build-text", help="Inline build text or talent hash."),
-    talents: str | None = typer.Option(
-        None, "--talents", help="WoW export, Wowhead talent-calc URL with build code, SimC talents string, or talents=... line."),
-    class_talents: str | None = typer.Option(None, "--class-talents", help="Split class talents string."),
-    spec_talents: str | None = typer.Option(None, "--spec-talents", help="Split spec talents string."),
-    hero_talents: str | None = typer.Option(None, "--hero-talents", help="Split hero talents string."),
-    actor_class: str | None = typer.Option(None, "--actor-class", help="Actor class such as warlock."),
-    spec_name: str | None = typer.Option(None, "--spec", help="Spec name such as demonology."),
+    apl_path: AplPathOption = None,
+    profile_path: ProfilePathOption = None,
+    build_file: BuildFileOption = None,
+    build_text: BuildTextOption = None,
+    talents: TalentsOption = None,
+    class_talents: ClassTalentsOption = None,
+    spec_talents: SpecTalentsOption = None,
+    hero_talents: HeroTalentsOption = None,
+    actor_class: ActorClassOption = None,
+    spec_name: SpecOption = None,
     line: list[str] = typer.Option([], "--line", help="Extra profile line. Repeat as needed."),
 ) -> None:
     """Write a harness profile for the resolved build with no APL actions."""
@@ -1562,6 +1579,8 @@ def find_action_command(
         results = find_action(paths, action, wow_class)
     except MissingRipgrepError as exc:
         fail(ctx, "missing_dependency", str(exc))
+    except UnknownClassError as exc:
+        fail(ctx, "invalid_query", str(exc))
     buckets: dict[str, Any] = {}
     total = 0
     for bucket, hits in results.items():
@@ -1600,6 +1619,8 @@ def trace_action_command(
         search_hits = find_action(paths, action, wow_class)
     except MissingRipgrepError as exc:
         fail(ctx, "missing_dependency", str(exc))
+    except UnknownClassError as exc:
+        fail(ctx, "invalid_query", str(exc))
     buckets: dict[str, Any] = {}
     total = 0
     for bucket, hits in search_hits.items():
@@ -1699,16 +1720,15 @@ def apl_prune_command(
     targets: int = typer.Option(1, "--targets", min=1, help="Active target count."),
     list_name: str | None = typer.Option(None, "--list", help="Only return one action list."),
     show: str = typer.Option("all", "--show", help="One of all, eligible, dead, or unknown."),
-    profile_path: str | None = typer.Option(None, "--profile-path", help="Optional profile path containing build lines."),
-    build_file: str | None = typer.Option(None, "--build-file", help="Optional plain text file with talents/spec lines."),
-    build_text: str | None = typer.Option(None, "--build-text", help="Inline build text or talent hash."),
-    talents: str | None = typer.Option(
-        None, "--talents", help="WoW export, Wowhead talent-calc URL with build code, SimC talents string, or talents=... line."),
-    class_talents: str | None = typer.Option(None, "--class-talents", help="Split class talents string."),
-    spec_talents: str | None = typer.Option(None, "--spec-talents", help="Split spec talents string."),
-    hero_talents: str | None = typer.Option(None, "--hero-talents", help="Split hero talents string."),
-    actor_class: str | None = typer.Option(None, "--actor-class", help="Actor class such as monk or evoker."),
-    spec_name: str | None = typer.Option(None, "--spec", help="Spec name such as mistweaver."),
+    profile_path: ProfilePathOption = None,
+    build_file: BuildFileOption = None,
+    build_text: BuildTextOption = None,
+    talents: TalentsOption = None,
+    class_talents: ClassTalentsOption = None,
+    spec_talents: SpecTalentsOption = None,
+    hero_talents: HeroTalentsOption = None,
+    actor_class: ActorClassOption = None,
+    spec_name: SpecOption = None,
     enable: list[str] = typer.Option([], "--enable", help="Enabled talent names. Repeat or pass comma-separated values."),
     disable: list[str] = typer.Option([], "--disable", help="Disabled talent names. Repeat or pass comma-separated values."),
 ) -> None:
@@ -1753,16 +1773,15 @@ def apl_branch_trace_command(
     targets: int = typer.Option(1, "--targets", min=1, help="Active target count."),
     list_name: str = typer.Option("default", "--list", help="Starting action list."),
     max_depth: int = typer.Option(6, "--max-depth", min=1, max=20, help="Maximum recursive trace depth."),
-    profile_path: str | None = typer.Option(None, "--profile-path", help="Optional profile path containing build lines."),
-    build_file: str | None = typer.Option(None, "--build-file", help="Optional plain text file with talents/spec lines."),
-    build_text: str | None = typer.Option(None, "--build-text", help="Inline build text or talent hash."),
-    talents: str | None = typer.Option(
-        None, "--talents", help="WoW export, Wowhead talent-calc URL with build code, SimC talents string, or talents=... line."),
-    class_talents: str | None = typer.Option(None, "--class-talents", help="Split class talents string."),
-    spec_talents: str | None = typer.Option(None, "--spec-talents", help="Split spec talents string."),
-    hero_talents: str | None = typer.Option(None, "--hero-talents", help="Split hero talents string."),
-    actor_class: str | None = typer.Option(None, "--actor-class", help="Actor class such as monk or evoker."),
-    spec_name: str | None = typer.Option(None, "--spec", help="Spec name such as mistweaver."),
+    profile_path: ProfilePathOption = None,
+    build_file: BuildFileOption = None,
+    build_text: BuildTextOption = None,
+    talents: TalentsOption = None,
+    class_talents: ClassTalentsOption = None,
+    spec_talents: SpecTalentsOption = None,
+    hero_talents: HeroTalentsOption = None,
+    actor_class: ActorClassOption = None,
+    spec_name: SpecOption = None,
     enable: list[str] = typer.Option([], "--enable", help="Enabled talent names. Repeat or pass comma-separated values."),
     disable: list[str] = typer.Option([], "--disable", help="Disabled talent names. Repeat or pass comma-separated values."),
 ) -> None:
@@ -1814,16 +1833,15 @@ def apl_intent_command(
     targets: int = typer.Option(1, "--targets", min=1, help="Active target count."),
     list_name: str = typer.Option("default", "--list", help="Starting action list."),
     limit: int = typer.Option(6, "--limit", min=1, max=50, help="Number of intent lines to return."),
-    profile_path: str | None = typer.Option(None, "--profile-path", help="Optional profile path containing build lines."),
-    build_file: str | None = typer.Option(None, "--build-file", help="Optional plain text file with talents/spec lines."),
-    build_text: str | None = typer.Option(None, "--build-text", help="Inline build text or talent hash."),
-    talents: str | None = typer.Option(
-        None, "--talents", help="WoW export, Wowhead talent-calc URL with build code, SimC talents string, or talents=... line."),
-    class_talents: str | None = typer.Option(None, "--class-talents", help="Split class talents string."),
-    spec_talents: str | None = typer.Option(None, "--spec-talents", help="Split spec talents string."),
-    hero_talents: str | None = typer.Option(None, "--hero-talents", help="Split hero talents string."),
-    actor_class: str | None = typer.Option(None, "--actor-class", help="Actor class such as monk or evoker."),
-    spec_name: str | None = typer.Option(None, "--spec", help="Spec name such as mistweaver."),
+    profile_path: ProfilePathOption = None,
+    build_file: BuildFileOption = None,
+    build_text: BuildTextOption = None,
+    talents: TalentsOption = None,
+    class_talents: ClassTalentsOption = None,
+    spec_talents: SpecTalentsOption = None,
+    hero_talents: HeroTalentsOption = None,
+    actor_class: ActorClassOption = None,
+    spec_name: SpecOption = None,
     enable: list[str] = typer.Option([], "--enable", help="Enabled talent names. Repeat or pass comma-separated values."),
     disable: list[str] = typer.Option([], "--disable", help="Disabled talent names. Repeat or pass comma-separated values."),
 ) -> None:
@@ -1874,16 +1892,15 @@ def apl_intent_explain_command(
     targets: int = typer.Option(1, "--targets", min=1, help="Active target count."),
     list_name: str = typer.Option("default", "--list", help="Starting action list."),
     limit: int = typer.Option(8, "--limit", min=1, max=50, help="Maximum items per bucket."),
-    profile_path: str | None = typer.Option(None, "--profile-path", help="Optional profile path containing build lines."),
-    build_file: str | None = typer.Option(None, "--build-file", help="Optional plain text file with talents/spec lines."),
-    build_text: str | None = typer.Option(None, "--build-text", help="Inline build text or talent hash."),
-    talents: str | None = typer.Option(
-        None, "--talents", help="WoW export, Wowhead talent-calc URL with build code, SimC talents string, or talents=... line."),
-    class_talents: str | None = typer.Option(None, "--class-talents", help="Split class talents string."),
-    spec_talents: str | None = typer.Option(None, "--spec-talents", help="Split spec talents string."),
-    hero_talents: str | None = typer.Option(None, "--hero-talents", help="Split hero talents string."),
-    actor_class: str | None = typer.Option(None, "--actor-class", help="Actor class such as monk or evoker."),
-    spec_name: str | None = typer.Option(None, "--spec", help="Spec name such as mistweaver."),
+    profile_path: ProfilePathOption = None,
+    build_file: BuildFileOption = None,
+    build_text: BuildTextOption = None,
+    talents: TalentsOption = None,
+    class_talents: ClassTalentsOption = None,
+    spec_talents: SpecTalentsOption = None,
+    hero_talents: HeroTalentsOption = None,
+    actor_class: ActorClassOption = None,
+    spec_name: SpecOption = None,
     enable: list[str] = typer.Option([], "--enable", help="Enabled talent names. Repeat or pass comma-separated values."),
     disable: list[str] = typer.Option([], "--disable", help="Disabled talent names. Repeat or pass comma-separated values."),
 ) -> None:
@@ -1945,16 +1962,15 @@ def priority_command(
     targets: int = typer.Option(1, "--targets", min=1, help="Active target count."),
     list_name: str = typer.Option("default", "--list", help="Starting action list."),
     limit: int = typer.Option(12, "--limit", min=1, max=100, help="Maximum active priority rows to return."),
-    profile_path: str | None = typer.Option(None, "--profile-path", help="Optional profile path containing build lines."),
-    build_file: str | None = typer.Option(None, "--build-file", help="Optional plain text file with talents/spec lines."),
-    build_text: str | None = typer.Option(None, "--build-text", help="Inline build text or talent hash."),
-    talents: str | None = typer.Option(
-        None, "--talents", help="WoW export, Wowhead talent-calc URL with build code, SimC talents string, or talents=... line."),
-    class_talents: str | None = typer.Option(None, "--class-talents", help="Split class talents string."),
-    spec_talents: str | None = typer.Option(None, "--spec-talents", help="Split spec talents string."),
-    hero_talents: str | None = typer.Option(None, "--hero-talents", help="Split hero talents string."),
-    actor_class: str | None = typer.Option(None, "--actor-class", help="Actor class such as monk or evoker."),
-    spec_name: str | None = typer.Option(None, "--spec", help="Spec name such as mistweaver."),
+    profile_path: ProfilePathOption = None,
+    build_file: BuildFileOption = None,
+    build_text: BuildTextOption = None,
+    talents: TalentsOption = None,
+    class_talents: ClassTalentsOption = None,
+    spec_talents: SpecTalentsOption = None,
+    hero_talents: HeroTalentsOption = None,
+    actor_class: ActorClassOption = None,
+    spec_name: SpecOption = None,
     enable: list[str] = typer.Option([], "--enable", help="Enabled talent names. Repeat or pass comma-separated values."),
     disable: list[str] = typer.Option([], "--disable", help="Disabled talent names. Repeat or pass comma-separated values."),
 ) -> None:
@@ -2045,18 +2061,16 @@ def describe_build_command(
                                        help="Maximum active priority rows to summarize per target view."),
     inactive_limit: int = typer.Option(8, "--inactive-limit", min=1, max=50,
                                        help="Maximum inactive talent-gated actions to summarize per target view."),
-    profile_path: str | None = typer.Option(None, "--profile-path", help="Optional profile path containing build lines."),
-    build_file: str | None = typer.Option(None, "--build-file", help="Optional plain text file with talents/spec lines."),
-    build_packet: str | None = typer.Option(None, "--build-packet", help="Path to a talent transport packet JSON file."),
-    build_text: str | None = typer.Option(
-        None, "--build-text", help="Inline build text, talent hash, or Wowhead talent-calc URL with build code."),
-    talents: str | None = typer.Option(
-        None, "--talents", help="WoW export, Wowhead talent-calc URL with build code, SimC talents string, or talents=... line."),
-    class_talents: str | None = typer.Option(None, "--class-talents", help="Split class talents string."),
-    spec_talents: str | None = typer.Option(None, "--spec-talents", help="Split spec talents string."),
-    hero_talents: str | None = typer.Option(None, "--hero-talents", help="Split hero talents string."),
-    actor_class: str | None = typer.Option(None, "--actor-class", help="Actor class such as monk or evoker."),
-    spec_name: str | None = typer.Option(None, "--spec", help="Spec name such as mistweaver."),
+    profile_path: ProfilePathOption = None,
+    build_file: BuildFileOption = None,
+    build_packet: BuildPacketOption = None,
+    build_text: BuildTextOption = None,
+    talents: TalentsOption = None,
+    class_talents: ClassTalentsOption = None,
+    spec_talents: SpecTalentsOption = None,
+    hero_talents: HeroTalentsOption = None,
+    actor_class: ActorClassOption = None,
+    spec_name: SpecOption = None,
     enable: list[str] = typer.Option([], "--enable", help="Enabled talent names. Repeat or pass comma-separated values."),
     disable: list[str] = typer.Option([], "--disable", help="Disabled talent names. Repeat or pass comma-separated values."),
 ) -> None:
@@ -2117,16 +2131,15 @@ def inactive_actions_command(
     list_name: str = typer.Option("default", "--list", help="Starting action list."),
     limit: int = typer.Option(20, "--limit", min=1, max=200, help="Maximum inactive rows to return."),
     talent_only: bool = typer.Option(True, "--talent-only/--all-dead", help="Only return talent-gated dead actions by default."),
-    profile_path: str | None = typer.Option(None, "--profile-path", help="Optional profile path containing build lines."),
-    build_file: str | None = typer.Option(None, "--build-file", help="Optional plain text file with talents/spec lines."),
-    build_text: str | None = typer.Option(None, "--build-text", help="Inline build text or talent hash."),
-    talents: str | None = typer.Option(
-        None, "--talents", help="WoW export, Wowhead talent-calc URL with build code, SimC talents string, or talents=... line."),
-    class_talents: str | None = typer.Option(None, "--class-talents", help="Split class talents string."),
-    spec_talents: str | None = typer.Option(None, "--spec-talents", help="Split spec talents string."),
-    hero_talents: str | None = typer.Option(None, "--hero-talents", help="Split hero talents string."),
-    actor_class: str | None = typer.Option(None, "--actor-class", help="Actor class such as monk or evoker."),
-    spec_name: str | None = typer.Option(None, "--spec", help="Spec name such as mistweaver."),
+    profile_path: ProfilePathOption = None,
+    build_file: BuildFileOption = None,
+    build_text: BuildTextOption = None,
+    talents: TalentsOption = None,
+    class_talents: ClassTalentsOption = None,
+    spec_talents: SpecTalentsOption = None,
+    hero_talents: HeroTalentsOption = None,
+    actor_class: ActorClassOption = None,
+    spec_name: SpecOption = None,
     enable: list[str] = typer.Option([], "--enable", help="Enabled talent names. Repeat or pass comma-separated values."),
     disable: list[str] = typer.Option([], "--disable", help="Disabled talent names. Repeat or pass comma-separated values."),
 ) -> None:
@@ -2196,16 +2209,15 @@ def opener_command(
     targets: int = typer.Option(1, "--targets", min=1, help="Active target count."),
     list_name: str = typer.Option("default", "--list", help="Starting action list."),
     limit: int = typer.Option(10, "--limit", min=1, max=50, help="Maximum early actions to return."),
-    profile_path: str | None = typer.Option(None, "--profile-path", help="Optional profile path containing build lines."),
-    build_file: str | None = typer.Option(None, "--build-file", help="Optional plain text file with talents/spec lines."),
-    build_text: str | None = typer.Option(None, "--build-text", help="Inline build text or talent hash."),
-    talents: str | None = typer.Option(
-        None, "--talents", help="WoW export, Wowhead talent-calc URL with build code, SimC talents string, or talents=... line."),
-    class_talents: str | None = typer.Option(None, "--class-talents", help="Split class talents string."),
-    spec_talents: str | None = typer.Option(None, "--spec-talents", help="Split spec talents string."),
-    hero_talents: str | None = typer.Option(None, "--hero-talents", help="Split hero talents string."),
-    actor_class: str | None = typer.Option(None, "--actor-class", help="Actor class such as monk or evoker."),
-    spec_name: str | None = typer.Option(None, "--spec", help="Spec name such as mistweaver."),
+    profile_path: ProfilePathOption = None,
+    build_file: BuildFileOption = None,
+    build_text: BuildTextOption = None,
+    talents: TalentsOption = None,
+    class_talents: ClassTalentsOption = None,
+    spec_talents: SpecTalentsOption = None,
+    hero_talents: HeroTalentsOption = None,
+    actor_class: ActorClassOption = None,
+    spec_name: SpecOption = None,
     enable: list[str] = typer.Option([], "--enable", help="Enabled talent names. Repeat or pass comma-separated values."),
     disable: list[str] = typer.Option([], "--disable", help="Disabled talent names. Repeat or pass comma-separated values."),
 ) -> None:
@@ -2428,16 +2440,15 @@ def analysis_packet_command(
     seeds: int = typer.Option(5, "--seeds", min=1, max=100, help="Number of timing samples per first-cast action."),
     max_time: int = typer.Option(60, "--max-time", min=1, max=10000, help="Fight length for first-cast timing sims."),
     fight_style: str = typer.Option("Patchwerk", "--fight-style", help="Fight style for first-cast timing sims."),
-    profile_path: str | None = typer.Option(None, "--profile-path", help="Optional profile path containing build lines."),
-    build_file: str | None = typer.Option(None, "--build-file", help="Optional plain text file with talents/spec lines."),
-    build_text: str | None = typer.Option(None, "--build-text", help="Inline build text or talent hash."),
-    talents: str | None = typer.Option(
-        None, "--talents", help="WoW export, Wowhead talent-calc URL with build code, SimC talents string, or talents=... line."),
-    class_talents: str | None = typer.Option(None, "--class-talents", help="Split class talents string."),
-    spec_talents: str | None = typer.Option(None, "--spec-talents", help="Split spec talents string."),
-    hero_talents: str | None = typer.Option(None, "--hero-talents", help="Split hero talents string."),
-    actor_class: str | None = typer.Option(None, "--actor-class", help="Actor class such as monk or evoker."),
-    spec_name: str | None = typer.Option(None, "--spec", help="Spec name such as mistweaver."),
+    profile_path: ProfilePathOption = None,
+    build_file: BuildFileOption = None,
+    build_text: BuildTextOption = None,
+    talents: TalentsOption = None,
+    class_talents: ClassTalentsOption = None,
+    spec_talents: SpecTalentsOption = None,
+    hero_talents: HeroTalentsOption = None,
+    actor_class: ActorClassOption = None,
+    spec_name: SpecOption = None,
     enable: list[str] = typer.Option([], "--enable", help="Enabled talent names. Repeat or pass comma-separated values."),
     disable: list[str] = typer.Option([], "--disable", help="Disabled talent names. Repeat or pass comma-separated values."),
 ) -> None:
@@ -2642,7 +2653,7 @@ def _sim_profile_input(ctx: typer.Context, *, profile_path: str | None, profile_
     if profile_path is None or profile_path == "-":
         stdin_text = sys.stdin.read()
         if not stdin_text.strip():
-            fail(ctx, "missing_profile", "Provide a profile path, --profile-text, or pipe a profile into stdin.")
+            fail(ctx, "invalid_query", "Provide a profile path, --profile-text, or pipe a profile into stdin.")
         written = _write_temp_profile(source_name="simc-stdin", text=stdin_text)
         return _SimProfileInput(path=written, source="stdin", cleanup_paths=[written])
     resolved = Path(profile_path).expanduser().resolve()
@@ -2697,7 +2708,7 @@ def _sim(
     overrides: _SimOverrides,
 ) -> None:
     if preset not in {"quick", "high-accuracy"}:
-        fail(ctx, "invalid_preset", f"Unsupported sim preset: {preset}")
+        fail(ctx, "invalid_query", f"Unsupported sim preset: {preset}")
     paths = _repo_paths(ctx)
     default_iterations, default_max_time = _sim_preset_settings(preset=preset)
     overrides.iterations = overrides.iterations or default_iterations
@@ -2746,6 +2757,7 @@ def _run_sim(
             input_source=profile.source,
             json_report_path=str(json_path) if json_out is not None else None,
             command=result.command,
+            iterations_requested=overrides.iterations,
         ),
     )
 
@@ -2850,8 +2862,8 @@ def compare_builds_command(
     base: str = typer.Option(..., "--base", help="Base build: WoW export, Wowhead talent-calc URL with build code, or talents=... line."),
     other: list[str] = typer.Option(..., "--other", help="Build to compare against base. Repeat for multiple builds."),
     tree: list[str] = typer.Option([], "--tree", help="Limit diff to specific trees (class, spec, hero). Omit for all."),
-    actor_class: str | None = typer.Option(None, "--actor-class", help="Actor class such as druid."),
-    spec_name: str | None = typer.Option(None, "--spec", help="Spec name such as balance."),
+    actor_class: ActorClassOption = None,
+    spec_name: SpecOption = None,
 ) -> None:
     """Diff a base talent build against one or more other builds, per tree."""
     unknown_trees = sorted(set(tree) - set(ACTIVE_TREES))
@@ -3390,8 +3402,8 @@ def modify_build_command(
     ),
     add: list[str] = typer.Option([], "--add", help="Add or set talent: 'name:rank' or 'entry_id:rank'. Repeat as needed."),
     remove: list[str] = typer.Option([], "--remove", help="Remove talent by name or entry_id. Repeat as needed."),
-    actor_class: str | None = typer.Option(None, "--actor-class", help="Actor class such as druid."),
-    spec_name: str | None = typer.Option(None, "--spec", help="Spec name such as balance."),
+    actor_class: ActorClassOption = None,
+    spec_name: SpecOption = None,
 ) -> None:
     """Apply talent swaps, additions, and removals to a build and re-encode it."""
     _modify_build(

@@ -40,6 +40,7 @@ def test_classify_article_family_handles_programming_and_system_titles() -> None
     assert classify_article_family("Widget API") == "framework_page"
     assert classify_article_family("Create a WoW AddOn in 15 Minutes") == "howto_programming"
     assert classify_article_family("XML schema") == "xml_schema"
+    assert classify_article_family("CVar autoLootDefault") == "cvar"
     assert classify_article_family("Patch 2.2.0/API changes") == "api_changes"
     assert classify_article_family("Renown") == "system_reference"
     assert classify_article_family("Druid") == "class_reference"

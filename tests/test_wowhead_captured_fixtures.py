@@ -47,7 +47,7 @@ CAPTURED_SUGGESTION_FILES = (
 )
 
 
-def _stub_news(monkeypatch) -> None:  # noqa: ANN001
+def _stub_news(monkeypatch) -> None:
     monkeypatch.setattr(
         "wowhead_cli.main.WowheadClient.news_page_html",
         lambda self, *, page=1: CAPTURED_NEWS_LISTING,
@@ -96,7 +96,7 @@ def test_news_count_describes_the_returned_rows_not_the_pre_limit_match_set(monk
     assert data["truncated"] is True
 
 
-def _stub_blue_tracker(monkeypatch) -> None:  # noqa: ANN001
+def _stub_blue_tracker(monkeypatch) -> None:
     monkeypatch.setattr(
         "wowhead_cli.main.WowheadClient.blue_tracker_page_html",
         lambda self, *, page=1: CAPTURED_BLUE_TRACKER_LISTING,

@@ -79,7 +79,11 @@ Every command's flags are listed in [docs/reference/warcraft.md](../reference/wa
   `--limit` only sizes `--ranking-debug`: providers are never asked for fewer candidates, because
   their confidence is judged against the rivals a small limit would hide. The envelope's `provider`
   is `warcraft`; `data.selected_provider` is the match's provider or `null`.
-- `warcraft guild` — one guild identity's Raider.IO snapshot, with citations.
+- When no included provider searches the query (`--expansion fresh` leaves only Warcraft Logs, which
+  matches only explicit report references), `search` and `resolve` fail `no_searching_provider`
+  (exit 2) with the included and excluded providers in `error.details`.
+- `warcraft guild` — one guild identity's Raider.IO snapshot, with citations. An Oceanic region
+  alias (`oce`, `oceanic`) is looked up as `us`, the region Oceanic realms belong to.
   `sources.raiderio.summary.raids[]` reports every raid Raider.IO returned, progression joined to its
   own normal/heroic/mythic world, region, and realm ranks by `raid_slug` (`0` means unranked). There
   is no `active_raid`: Raider.IO orders those rows by slug and carries no raid start/end window, so
@@ -101,8 +105,11 @@ Every command's flags are listed in [docs/reference/warcraft.md](../reference/wa
   still returns the Warcraft Logs cast timeline with `lorrgs.status: "unavailable"` and
   `phase.status: "unavailable"`. `lorrgs.message` names the real reason (only a `not_found` is
   reported as "not cached") and `phase.requested` echoes the `--phase` that could not be applied.
-  Without Lorrgs the player's name and class come from the Warcraft Logs report roster, and
-  `player.deaths` is `null` (deaths come only from the Lorrgs timeline). A `--spec-slug` of another
+  A fight Lorrgs cached without its players degrades the same way (`lorrgs.reason:
+  "lorrgs_fight_has_no_players"`). Without Lorrgs the player's name and class come from the Warcraft
+  Logs roster of the selected fight, so an `--actor-id` that fight lacks fails `actor_id_not_found`
+  (exit 4) even when the player is elsewhere in the report, and `player.deaths` is `null` (deaths
+  come only from the Lorrgs timeline). A `--spec-slug` of another
   class than the player's fails `invalid_query` (exit 2). Casts are counted only for the actor:
   `cooldowns.player_casts.other_source_cast_count` counts rows from anyone else. When Lorrgs omits a
   fight's duration, the last phase window has `end_ms: null` (open-ended).
@@ -123,7 +130,9 @@ Every command's flags are listed in [docs/reference/warcraft.md](../reference/wa
   it declined (`reason` for the search step, `resolve_reason` for the resolve step; a failed call
   makes the row `status: error`, `reason: provider_failed` with its `error`). It writes
   `manifest.json` only when at least two bundles were exported. Without `--out-root` it writes under
-  `<XDG data dir>/warcraft/guide_compare/<query-slug>`, never into the current directory. Flags that
+  `<data root>/guide_compare/<query-slug>` (the `paths.data_root` that `warcraft doctor` reports: the
+  checkout's `.warcraft/runtime/data` for a checkout install, `<XDG data dir>/warcraft` for a wheel),
+  never into the current directory. Flags that
   leave fewer than two providers (a single `--provider`, or a non-retail `--expansion`, since method
   and icy-veins are retail-only) fail `invalid_argument` (exit 2) before any provider call. Fewer than
   two bundles fails `insufficient_guides` (exit 1), except when every provider that contributed
@@ -136,6 +145,8 @@ Every command's flags are listed in [docs/reference/warcraft.md](../reference/wa
   than the resolved candidate, such as a retired page); `manifest.json` saves it for reuse.
 - `warcraft talent-packet` / `talent-describe` — build a validated talent transport packet, optionally
   with simc `describe-build` output. Both report the file they wrote as `written_packet_path`.
+  `producer_result` and `upgrade_result` are `{provider, exit_code, payload}`, the provider's parsed
+  envelope only.
   simc reads the packet in memory, so its output cites a packet file only when one holds that
   packet: `describe_result`'s `build_spec.transport_packet.path` (and its `build packet:` source
   note) is the `--packet-out` file or an unchanged packet-file source, and is absent otherwise
@@ -169,8 +180,10 @@ Wrapper failures use the shared envelope and exit codes in
 providers for the expansion) and Typer usage errors exit 2. `guide-compare` reports a bundle path the way the shared bundle loader
 does: `not_found` (exit 4) when it is missing, `invalid_argument` (exit 2) when it is a file, and
 `invalid_bundle` (exit 1) when it is not a readable bundle. `unsupported_provider_expansion` and
-`duplicate_expansion_argument` are argument mismatches and exit 2, as does `invalid_report_ref`
-from `cooldown-packet`. `insufficient_guides`, `simc_handoff_failed` and `providers_failed` exit 1.
+`duplicate_expansion_argument` are argument mismatches and exit 2, as do `invalid_report_ref`,
+`missing_fight` and `missing_actor` from `cooldown-packet`, `unsupported_talent_source` from
+`talent-packet`/`talent-describe`, and `no_searching_provider` from `search`/`resolve`. A
+`talent-packet`/`talent-describe` packet path that does not exist fails `not_found` (exit 4). `insufficient_guides`, `simc_handoff_failed` and `providers_failed` exit 1.
 
 Composite commands do not flatten a source failure into exit 1: they exit with the code the contract
 maps the source's error to (`not_found` -> 4, `auth_failed` -> 3, `network_error` -> 5).
@@ -190,8 +203,9 @@ sibling of `code`/`message`.
 - It does not impose one universal data model across article sites, APIs, and local tools.
 - It does not host parsers, API schemas, SimC execution, or provider-specific ranking logic.
 - It does not route through stubbed provider surfaces as if they were production search or resolve.
-- It does not run provider binaries: providers are called in-process through their `PROVIDER` surface,
-  and passthrough invokes the provider's Typer app directly.
+- It does not run provider binaries: `search`, `resolve` and `doctor` call each provider's in-process
+  `PROVIDER` surface, the simc build steps call `simc_cli` functions, and the other composites and
+  passthrough run the provider's Typer app in-process (composites capture its JSON output).
 
 ## Source links
 

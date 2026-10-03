@@ -14,36 +14,32 @@ from pathlib import Path
 from typing import Any, Final
 
 from warcraft_api.cache import redacted_redis_url
-from warcraft_content.article_bundle import (
-    default_article_export_dir,
-    load_article_bundle,
-    query_article_bundle,
-    write_article_bundle,
-)
+from warcraft_content.article_bundle import article_export_dir, bundle_query_payload
 from warcraft_content.article_discovery import (
     article_candidate,
-    merge_article_build_references,
-    merge_article_linked_entities,
+    article_resolve_payload,
+    article_search_payload,
     sort_article_candidates,
 )
 from warcraft_content.article_provider_cli import (
     article_doctor_payload,
-    build_article_resolve_response,
-    build_article_search_response,
-    fetch_navigation_pages,
+    guide_bundle_payload,
+    guide_export_payload,
     guide_redirect,
     preview_block,
     require_article_content,
     transport_errors,
-    unsupported_guide_surface_message,
     with_analysis_surfaces,
 )
-from warcraft_content.guide_analysis import merge_guide_analysis_surfaces
 from warcraft_content.search import (
     ArticleMatchWeights,
+    best_scored,
     expand_class_spec_aliases,
+    fold_punctuation,
     normalize_query,
+    punctuation_spellings,
     score_article_match,
+    singular_words,
     tokenize_query,
 )
 from warcraft_core.envelope import Envelope, success_envelope
@@ -163,6 +159,9 @@ def _scored_candidate(row: dict[str, Any], normalized_query: str, terms: set[str
     name = row["name"]
     # Spelled out like the query, so a page titled with shorthand still matches it.
     candidate = expand_class_spec_aliases(f"{name} {slug.replace('-', ' ')}")
+    # A term only counts as a whole word: "mage" is not a match for "damage", nor "lore" for "lorewalking".
+    if not singular_words(terms) & singular_words(set(tokenize_query(candidate))):
+        return None
     score, reasons = score_article_match(normalized_query, candidate, weights=MATCH_WEIGHTS)
     family_boost, family_reasons = _family_score_boost(content_family, terms)
     score += family_boost
@@ -181,18 +180,24 @@ def _scored_candidate(row: dict[str, Any], normalized_query: str, terms: set[str
     return candidate_row
 
 
+def _normalize_search_query(query: str) -> str:
+    return normalize_query(
+        fold_punctuation(MYTHIC_PLUS_RE.sub("mythic dungeon", expand_class_spec_aliases(query))), strip_terms=QUERY_NOISE_TERMS
+    )
+
+
 def search_results(client: MethodClient, query: str) -> SearchOutcome:
     """Rank the sitemap's supported guide slugs against ``query``; every match is kept, callers trim to ``--limit``."""
-    normalized_query = normalize_query(
-        MYTHIC_PLUS_RE.sub("mythic dungeon", expand_class_spec_aliases(query)), strip_terms=QUERY_NOISE_TERMS
-    )
-    terms = set(tokenize_query(normalized_query))
-    scope_hint = _unsupported_scope_hint(terms)
+    normalized_query = _normalize_search_query(query)
+    scope_hint = _unsupported_scope_hint(set(tokenize_query(normalized_query)))
     if scope_hint is not None:
         return SearchOutcome(normalized_query, [], scope_hint)
+    spellings = [(spelling, set(tokenize_query(spelling))) for spelling in map(_normalize_search_query, punctuation_spellings(query))]
     matches = [
         candidate
-        for candidate in (_scored_candidate(row, normalized_query, terms) for row in client.sitemap_guides())
+        for candidate in (
+            best_scored(_scored_candidate(row, spelling, terms) for spelling, terms in spellings) for row in client.sitemap_guides()
+        )
         if candidate is not None
     ]
     sort_article_candidates(matches)
@@ -209,13 +214,10 @@ def _search_outcome(query: str) -> SearchOutcome:
 def _reject_unsupported_surface(payload: dict[str, Any]) -> None:
     if payload["guide"].get("supported_surface") is not False:
         return
+    guide = payload["guide"]
     raise ProviderError(
         "unsupported_guide_surface",
-        unsupported_guide_surface_message(
-            provider_name="Method",
-            slug=payload["guide"]["slug"],
-            content_family=payload["guide"].get("content_family"),
-        ),
+        f"Unsupported Method guide surface for slug={guide['slug']!r} family={guide.get('content_family')!r}.",
     )
 
 
@@ -297,56 +299,13 @@ def _navigation_items(initial: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _guide_pages_payload(client: MethodClient, guide_ref: str) -> dict[str, Any]:
     initial = _fetch_guide_page(client, guide_ref)
-    nav_items = _navigation_items(initial)
-    pages, failed_pages = fetch_navigation_pages(
-        initial, nav_items, fetch_page=client.fetch_guide_page, provider=PROVIDER_NAME, provider_label=PROVIDER_LABEL
+    return guide_bundle_payload(
+        initial,
+        _navigation_items(initial),
+        fetch_page=client.fetch_guide_page,
+        provider=PROVIDER_NAME,
+        provider_label=PROVIDER_LABEL,
     )
-    guide = dict(initial["guide"])
-    guide["page_count"] = len(pages)
-    linked_entities = merge_article_linked_entities(pages)
-    build_references = merge_article_build_references(pages)
-    analysis_surfaces = merge_guide_analysis_surfaces(pages)
-    return {
-        "guide": guide,
-        "redirect": initial["redirect"],
-        "page": dict(initial["page"]),
-        "navigation": {
-            "count": len(nav_items),
-            "items": nav_items,
-        },
-        "pages": [
-            {
-                "guide": page["guide"],
-                "page": page["page"],
-                "article": page["article"],
-                "build_references": page.get("build_references") or [],
-                "analysis_surfaces": page.get("analysis_surfaces") or [],
-            }
-            for page in pages
-        ],
-        "linked_entities": {
-            "count": len(linked_entities),
-            "items": linked_entities,
-        },
-        "build_references": {
-            "count": len(build_references),
-            "items": build_references,
-        },
-        "analysis_surfaces": {
-            "count": len(analysis_surfaces),
-            "items": analysis_surfaces,
-        },
-        # Navigation pages that could not be fetched or parsed; their content is missing from every
-        # merged block above.
-        "failed_pages": {
-            "count": len(failed_pages),
-            "items": failed_pages,
-        },
-        "citations": {
-            "page": guide["page_url"],
-            "pages": [page["guide"]["page_url"] for page in pages],
-        },
-    }
 
 
 def guide(guide_ref: str) -> Envelope:
@@ -369,25 +328,11 @@ def guide_export(guide_ref: str, *, out: Path | None = None) -> Envelope:
         slug, _section_slug = guide_ref_parts(guide_ref)
     except ValueError as exc:
         raise ProviderError("invalid_guide_ref", str(exc)) from exc
-    export_dir = out.expanduser() if out is not None else default_article_export_dir(PROVIDER_NAME, slug)
+    export_dir = article_export_dir(out, provider=PROVIDER_NAME, ref_slug=slug)
     with open_client() as client, transport_errors(PROVIDER_LABEL):
-        pages_payload = _guide_pages_payload(client, guide_ref)
-    manifest = write_article_bundle(pages_payload, provider=PROVIDER_NAME, export_dir=export_dir)
-    payload = {
-        "guide": pages_payload["guide"],
-        "redirect": pages_payload["redirect"],
-        "counts": manifest["counts"],
-        "output_dir": str(export_dir),
-        "files": manifest["files"],
-        "failed_pages": pages_payload["failed_pages"],
-    }
-    return _envelope(
-        command="guide-export",
-        kind="guide_export",
-        payload=payload,
-        query=guide_ref,
-        provenance=pages_payload["citations"],
-    )
+        bundle = _guide_pages_payload(client, guide_ref)
+    payload = guide_export_payload(bundle, provider=PROVIDER_NAME, export_dir=export_dir)
+    return _envelope(command="guide-export", kind="guide_export", payload=payload, query=guide_ref, provenance=bundle["citations"])
 
 
 def guide_query(
@@ -399,23 +344,10 @@ def guide_query(
     section_title: str | None = None,
 ) -> Envelope:
     """Search an exported Method bundle on disk; no network access."""
-    export_dir = Path(bundle_ref).expanduser()
-    selected_kinds = set(kinds) if kinds else set(GUIDE_QUERY_KINDS)
-    invalid = sorted(selected_kinds - GUIDE_QUERY_KINDS)
-    if invalid:
-        raise ProviderError("invalid_argument", f"Unsupported query kinds: {', '.join(invalid)}")
-    section_title_filter = section_title.strip().lower() if section_title and section_title.strip() else None
-    bundle = load_article_bundle(export_dir)
-    payload = query_article_bundle(
-        bundle,
-        query=query,
-        limit=limit,
-        kinds=selected_kinds,
-        section_title_filter=section_title_filter,
+    payload = bundle_query_payload(
+        bundle_ref, query, limit=limit, kinds=kinds, allowed_kinds=GUIDE_QUERY_KINDS, section_title=section_title
     )
-    payload = {"bundle": bundle_ref, "guide": bundle["manifest"].get("guide"), **payload}
     return _envelope(command="guide-query", kind="guide_query", payload=payload, query=query)
-
 
 
 def _is_confident_match(results: list[dict[str, Any]]) -> bool:
@@ -423,7 +355,7 @@ def _is_confident_match(results: list[dict[str, Any]]) -> bool:
         return False
     top_score = int(results[0]["ranking"]["score"])
     second_score = int(results[1]["ranking"]["score"]) if len(results) > 1 else 0
-    return top_score >= 50 or top_score >= second_score + 15
+    return top_score >= second_score + 15
 
 
 class MethodProvider:
@@ -433,7 +365,7 @@ class MethodProvider:
 
     def search(self, query: str, *, limit: int = 5, **options: Any) -> Envelope:
         outcome = _search_outcome(query)
-        payload = build_article_search_response(
+        payload = article_search_payload(
             query=query,
             search_query=outcome.normalized_query,
             results=outcome.matches[:limit],
@@ -445,7 +377,7 @@ class MethodProvider:
     def resolve(self, target: str, **options: Any) -> Envelope:
         limit = int(options.get("limit", 5))
         outcome = _search_outcome(target)
-        payload = build_article_resolve_response(
+        payload = article_resolve_payload(
             provider_command=PROVIDER_NAME,
             query=target,
             search_query=outcome.normalized_query,

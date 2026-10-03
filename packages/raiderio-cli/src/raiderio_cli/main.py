@@ -180,10 +180,11 @@ def _character_payload(fetched: FetchedJson, *, cache_ttl_seconds: int) -> dict[
     raid_rows = _raid_progression_summary(as_dict(profile.get("raid_progression")))
     return {
         "character": _character_identity(profile),
+        # Raider.IO's guild block carries no region; a guild is in its member's region.
         "guild": {
             "name": guild.get("name"),
             "realm": guild.get("realm"),
-            "region": guild.get("region"),
+            "region": profile.get("region"),
         }
         if guild
         else None,

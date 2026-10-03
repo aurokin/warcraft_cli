@@ -20,7 +20,7 @@ from tests.wowhead_testkit import (
 
 
 def test_news_command_filters_by_query_and_date(monkeypatch) -> None:
-    def fake_news_page(self, *, page: int = 1):  # noqa: ANN001
+    def fake_news_page(self, *, page: int = 1):
         assert page == 1
         return SAMPLE_NEWS_HTML
 
@@ -80,7 +80,7 @@ def test_listing_query_word_matches_a_possessive_but_not_a_longer_word() -> None
 
 
 def test_news_command_filters_by_author_and_type(monkeypatch) -> None:
-    def fake_news_page(self, *, page: int = 1):  # noqa: ANN001
+    def fake_news_page(self, *, page: int = 1):
         assert page == 1
         return SAMPLE_NEWS_HTML
 
@@ -109,7 +109,7 @@ def test_news_command_filters_by_author_and_type(monkeypatch) -> None:
 
 
 def test_blue_tracker_command_filters_by_topic_and_date(monkeypatch) -> None:
-    def fake_blue_page(self, *, page: int = 1):  # noqa: ANN001
+    def fake_blue_page(self, *, page: int = 1):
         assert page == 1
         return SAMPLE_BLUE_TRACKER_HTML
 
@@ -141,7 +141,7 @@ def test_blue_tracker_command_filters_by_topic_and_date(monkeypatch) -> None:
 
 
 def test_blue_tracker_command_filters_by_author_region_and_forum(monkeypatch) -> None:
-    def fake_blue_page(self, *, page: int = 1):  # noqa: ANN001
+    def fake_blue_page(self, *, page: int = 1):
         assert page == 1
         return SAMPLE_BLUE_TRACKER_HTML
 
@@ -189,7 +189,7 @@ def test_blue_tracker_command_rejects_invalid_date_range(monkeypatch) -> None:
 
 
 def test_guides_command_returns_category_rows(monkeypatch) -> None:
-    def fake_guides_page(self, category: str):  # noqa: ANN001
+    def fake_guides_page(self, category: str):
         assert category == "classes"
         return SAMPLE_GUIDE_CATEGORY_HTML
 
@@ -206,7 +206,7 @@ def test_guides_command_returns_category_rows(monkeypatch) -> None:
 
 
 def test_guides_command_filters_by_author_and_patch(monkeypatch) -> None:
-    def fake_guides_page(self, category: str):  # noqa: ANN001
+    def fake_guides_page(self, category: str):
         assert category == "classes"
         return SAMPLE_GUIDE_CATEGORY_HTML
 
@@ -234,7 +234,7 @@ def test_guides_command_filters_by_author_and_patch(monkeypatch) -> None:
 
 
 def test_guides_command_sorts_by_rating(monkeypatch) -> None:
-    def fake_guides_page(self, category: str):  # noqa: ANN001
+    def fake_guides_page(self, category: str):
         assert category == "classes"
         return SAMPLE_GUIDE_CATEGORY_HTML
 
@@ -264,7 +264,7 @@ def test_article_commands_report_the_expansion_their_url_names(monkeypatch, comm
 
 
 def test_news_post_command_extracts_markup_and_author(monkeypatch) -> None:
-    def fake_page_html(self, page_url: str):  # noqa: ANN001
+    def fake_page_html(self, page_url: str):
         assert page_url == "https://www.wowhead.com/news/midnight-hotfixes-380785"
         return SAMPLE_NEWS_POST_HTML
 
@@ -282,7 +282,7 @@ def test_news_post_command_extracts_markup_and_author(monkeypatch) -> None:
 
 
 def test_blue_topic_command_extracts_posts(monkeypatch) -> None:
-    def fake_page_html(self, page_url: str):  # noqa: ANN001
+    def fake_page_html(self, page_url: str):
         assert page_url == "https://www.wowhead.com/blue-tracker/topic/eu/class-tuning-incoming-18-march-610948"
         return SAMPLE_BLUE_TOPIC_HTML
 
@@ -305,6 +305,39 @@ def test_a_reference_that_is_not_a_wowhead_page_is_a_usage_error(command: str) -
     result = runner.invoke(app, [command, "https://example.com/news/some-post"])
 
     assert (result.exit_code, json.loads(result.stderr)["error"]["code"]) == (2, "invalid_ref")
+
+
+@pytest.mark.parametrize(
+    ("command", "url"),
+    [
+        ("news-post", "https://www.wowhead.com/item=19019"),
+        ("news-post", "https://www.wowhead.com/blue-tracker/news/us/hotfixes-october-1-2026-24296142"),
+        ("blue-topic", "https://www.wowhead.com/blue-tracker/news/us/hotfixes-october-1-2026-24296142"),
+    ],
+)
+def test_an_article_command_refuses_a_wowhead_url_for_another_page(command: str, url: str) -> None:
+    """news-post used to read an item page as a news article, and blue-topic failed parse_error (exit 1)."""
+    result = runner.invoke(app, [command, url])
+
+    assert (result.exit_code, json.loads(result.stderr)["error"]["code"]) == (2, "invalid_ref")
+
+
+def test_news_post_fails_when_the_page_has_no_article_body(monkeypatch) -> None:
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.page_html", lambda self, url: "<html><head><title>x</title></head></html>")
+
+    result = runner.invoke(app, ["news-post", "/news/post-1"])
+
+    assert (result.exit_code, json.loads(result.stderr)["error"]["code"]) == (1, "parse_error")
+
+
+def test_news_post_notes_that_a_wow_forever_post_has_no_expansion_profile(monkeypatch) -> None:
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.page_html", lambda self, url: SAMPLE_NEWS_POST_HTML)
+    url = "https://www.wowhead.com/forever/news/ghost-wolf-383241"
+
+    result = runner.invoke(app, ["news-post", url])
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout)["data"]["notes"] == [f"Could not infer expansion from URL {url!r}."]
 
 
 def _news_html(*posts: dict[str, Any]) -> str:
@@ -381,7 +414,8 @@ def _news_post_html(*recent: dict[str, Any]) -> str:
     return (
         '<html><head><link rel="canonical" href="https://www.wowhead.com/news/post-1">'
         '<script type="application/json" id="data.WH.News.recentPosts">'
-        f"{json.dumps(payload)}</script></head><body></body></html>"
+        f"{json.dumps(payload)}</script></head>"
+        '<body><script>WH.markup.printHtml("Post body.", "news-post");</script></body></html>'
     )
 
 
@@ -402,6 +436,19 @@ def test_news_post_reports_the_related_rows_its_limit_cut_off(monkeypatch) -> No
     assert news["total"] == 3
     assert news["truncated"] is True
     assert [row["title"] for row in news["items"]] == ["Roundup A", "Roundup B"]
+
+
+def test_guides_fails_not_found_when_wowhead_serves_its_index_for_an_unknown_category(monkeypatch) -> None:
+    """Wowhead redirects /guides/class to /guides; that used to answer ok with every site guide labelled `class`."""
+    index_html = SAMPLE_GUIDE_CATEGORY_HTML.replace(
+        "<html>", '<html><head><link rel="canonical" href="https://www.wowhead.com/guides"></head>', 1
+    )
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.guide_category_page_html", lambda self, category: index_html)
+
+    result = runner.invoke(app, ["guides", "class"])
+
+    assert result.exit_code == 4
+    assert json.loads(result.stderr)["error"]["code"] == "not_found"
 
 
 def test_guides_count_describes_the_returned_rows_not_the_pre_limit_match_set(monkeypatch) -> None:

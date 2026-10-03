@@ -43,3 +43,31 @@ def test_guide_site_client_caches_sitemap_and_pages_with_their_own_ttls() -> Non
 
     assert store.writes == {"sitemap": 86400, "guide_page_html": 900}
     assert fetched == ["https://example.test/sitemap.xml", "https://example.test/a-guide"]
+
+
+def test_guide_site_client_hands_out_the_cached_sitemap_body_and_cached_pages_without_fetching() -> None:
+    """``index-refresh`` reads every sitemap slug from the body, and reuses guide pages a ``guide`` call cached."""
+    store = _RecordingStore()
+    fetched: list[str] = []
+
+    def get_text(_client: httpx.Client, url: str) -> str:
+        fetched.append(url)
+        return f"body of {url}"
+
+    site = GuideSite(
+        label="Example",
+        sitemap_url="https://example.test/sitemap.xml",
+        parse_sitemap=lambda text: [{"slug": "a-guide"}],
+        page_url=lambda ref: f"https://example.test/{ref}",
+        parse_page=lambda html, *, source_url: {"html": html},
+    )
+    with GuideSiteClient(
+        site, cache_store=store, sitemap_ttl=86400, page_ttl=900, build_http_client=httpx.Client, get_text=get_text
+    ) as client:
+        assert client.cached_page_html("https://example.test/a-guide") is None
+        client.guide_page_html("a-guide")
+        assert client.sitemap_text() == "body of https://example.test/sitemap.xml"
+        assert client.sitemap_guides() == [{"slug": "a-guide"}]
+        assert client.cached_page_html("https://example.test/a-guide") == "body of https://example.test/a-guide"
+
+    assert fetched == ["https://example.test/a-guide", "https://example.test/sitemap.xml"]

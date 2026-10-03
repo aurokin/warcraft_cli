@@ -162,7 +162,10 @@ def test_raiderio_character_recent_runs_parse_a_captured_profile(monkeypatch) ->
     result = runner.invoke(raiderio_app, ["character", "us", "stormrage", "Rockystorm"])
     assert result.exit_code == 0, result.output
 
-    mythic_plus = json.loads(result.stdout)["data"]["mythic_plus"]
+    data = json.loads(result.stdout)["data"]
+    # The captured guild block has no region of its own.
+    assert data["guild"] == {"name": "comma", "realm": "Sargeras", "region": "us"}
+    mythic_plus = data["mythic_plus"]
     assert mythic_plus["recent_run_count"] == 2
     # A profile run names its dungeon as a string and calls the timer par_time_ms and the chest count
     # num_keystone_upgrades; the row reports them under the leaderboard's names.

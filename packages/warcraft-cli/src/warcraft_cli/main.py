@@ -429,6 +429,13 @@ def _emit_fanout(ctx: typer.Context, payload: dict[str, Any]) -> None:
         error = {"code": code, "message": message, "details": {"failed_providers": failed_rows}}
         _emit(ctx, {"ok": False, "query": payload["query"], "error": error}, err=True)
         raise typer.Exit(exit_code)
+    if not payload["answered_provider_count"]:
+        # Only explicit-report providers (or none) were included, so nobody looked the text up.
+        message = "No included provider searches this query; see error.details for the providers excluded and why."
+        details = {key: payload[key] for key in ("requested_expansion", "included_providers", "excluded_providers")}
+        error = {"code": "no_searching_provider", "message": message, "details": details}
+        _emit(ctx, {"ok": False, "query": payload["query"], "error": error}, err=True)
+        raise typer.Exit(EXIT_USAGE)
     _emit(ctx, payload)
 
 
@@ -776,8 +783,8 @@ def guide_compare_query(
         resolve_path=True,
         help=(
             "Directory root where orchestrated guide bundles should be written. "
-            "Defaults to <XDG data dir>/warcraft/guide_compare/<query-slug>; nothing is written to "
-            "the current directory."
+            "Defaults to <data root>/guide_compare/<query-slug>, with the data root `warcraft doctor` "
+            "reports as paths.data_root; nothing is written to the current directory."
         ),
     ),
     max_age_hours: int = typer.Option(

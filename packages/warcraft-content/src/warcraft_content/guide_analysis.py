@@ -203,10 +203,10 @@ def extract_section_chunk_analysis_surfaces(
     return rows
 
 
-def merge_guide_analysis_surfaces(pages: list[dict[str, Any]], *, page_key: str = "guide") -> list[dict[str, Any]]:
+def merge_guide_analysis_surfaces(pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     merged: dict[tuple[str, tuple[str, ...]], dict[str, Any]] = {}
     for page in pages:
-        page_url = str((page.get(page_key) or {}).get("page_url") or "")
+        page_url = str((page.get("guide") or {}).get("page_url") or "")
         for row in page.get("analysis_surfaces") or []:
             key = (page_url, tuple(str(tag) for tag in row.get("surface_tags") or []))
             record = merged.get(key)

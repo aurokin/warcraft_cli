@@ -42,7 +42,10 @@ Error codes and their exit codes: `network_error`/`timeout`/`upstream_error` exi
 exits 4, `auth_failed` exits 3, and the Method-specific errors `unsupported_guide_surface`,
 `invalid_bundle`, and `invalid_cache_config` exit 1; an argument that is not a Method guide reference
 is `invalid_guide_ref` (exit 2), an unsupported `--kind` is `invalid_argument` (exit 2), and a blank
-`search` or `resolve` query is `invalid_query` (exit 2), rejected before any request.
+`search` or `resolve` query is `invalid_query` (exit 2), rejected before any request. A
+`guide-export --out` that names an existing file is `invalid_argument` (exit 2), rejected before any
+request; exporting again into the same directory replaces the bundle's `pages/*.html`, so `pages/`
+holds only the pages `page-files.json` lists, and other files in the directory are left alone.
 `guide-query` answers a bad bundle path the same way `icy-veins guide-query` does: a path that does
 not exist is `not_found` (exit 4), a file is `invalid_argument` (exit 2), and a directory that is not
 a readable bundle is `invalid_bundle` (exit 1): no `manifest.json`, a manifest whose `files` lists no
@@ -117,7 +120,14 @@ Ranking uses the shared article scorer (`warcraft_content.search`) plus a Method
 the query names the content family (professions, delves, renown/reputation). Method titles never
 say "Mythic+" or "Mythic Plus"; its M+ pages talk about "mythic dungeons", so `mythic+`, `m+` and
 `mythic plus` are searched as `mythic dungeon`. Class and spec shorthand (`bm hunter`, `disc priest`)
-is spelled out in the query and in page titles alike. `resolve` judges confidence on every ranked match;
+is spelled out in the query and in page titles alike. Query words match whole words of the guide's
+slug, ignoring a trailing plural `s` or `es`, so `mage` does not list "damage" or "plumage" pages,
+`lore` does not match "lorewalking" or "explore", and `boss` keeps the "raid bosses" pages.
+Punctuation is folded the way slugs fold it: any separator other than an apostrophe is a space, and
+because Method slugs an apostrophe either way, the query is tried with each apostrophe dropped and as
+a space (`k'aresh` finds `karesh-...`, `zul'aman` finds `zul-aman-...` and `kriegval's rest` finds
+`kriegval-s-rest-delve-guide`). A hyphenated word is also tried with its hyphen dropped, so
+`nerub-ar palace` finds `nerubar-palace-raid-location-and-item-levels`. `resolve` judges confidence on every ranked match;
 `--limit` only trims the `candidates` shown, so `--limit 1` never makes an ambiguous query look
 resolved.
 

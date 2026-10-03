@@ -406,6 +406,8 @@ def test_score_wiki_match_caps_the_upstream_rank_baseline() -> None:
         ("lore", "lore", []),
         # "wiki" is provider noise: stripped by the shared normalizer, never reported as excluded.
         ("wiki createframe", "createframe", []),
+        # Wiki titles keep their punctuation; only the guide-site rankers fold it into spaces.
+        ("Patch 12.1.0/API changes", "patch 12.1.0/api changes", []),
     ],
 )
 def test_normalize_wiki_query_drops_only_leading_family_hints(query: str, expected_query: str, expected_excluded: list[str]) -> None:
@@ -1353,7 +1355,7 @@ def test_search_keeps_a_family_word_that_titles_a_page(
     assert data["results"][0]["id"] == titles[0]
 
 
-@pytest.mark.parametrize("command", ["search", "resolve"])
+@pytest.mark.parametrize("command", ["search", "resolve", "api", "api-full", "event", "article", "article-full", "article-export"])
 @pytest.mark.parametrize("query", ["", "   "])
 def test_blank_query_is_a_usage_error_without_a_request(monkeypatch, command: str, query: str) -> None:
     transport = _CapturedTransport({})
@@ -1385,6 +1387,32 @@ def test_upstream_failures_exit_with_the_network_code(monkeypatch, response: htt
 
     assert result.exit_code == 5, result.output
     assert json.loads(result.stderr)["error"]["code"] == code
+
+
+def test_http_failures_carry_the_shared_one_line_message(monkeypatch) -> None:
+    """The wiki passed httpx's multi-line text through, unlike the other article providers."""
+
+    def fake_request(client: Any, url: str, *, params: dict[str, Any], retry_attempts: int) -> httpx.Response:
+        raise httpx.HTTPStatusError("boom", request=httpx.Request("GET", url), response=httpx.Response(503))
+
+    monkeypatch.setattr("warcraft_wiki_cli.client.request_with_retries", fake_request)
+    error = json.loads(runner.invoke(warcraft_wiki_app, ["search", "jaina"]).stderr)["error"]
+
+    assert error["message"] == "Warcraft Wiki request failed with status 503"
+
+
+def test_article_navigation_preview_says_when_it_was_cut(monkeypatch) -> None:
+    """Navigation was cut to 25 items with no more_available or fetch_more_command, unlike linked_entities."""
+    page = _page_payload()
+    items = [{"title": f"Section {n}", "url": f"https://warcraft.wiki.gg/wiki/X#S{n}", "section_slug": f"S{n}", "active": True, "ordinal": n}
+             for n in range(1, 31)]
+    page["navigation"] = {"count": len(items), "items": items}
+    monkeypatch.setattr("warcraft_wiki_cli.main.WarcraftWikiClient.fetch_article_page", lambda self, article_ref: page)
+
+    navigation = json.loads(runner.invoke(warcraft_wiki_app, ["article", "anything"]).stdout)["data"]["navigation"]
+
+    assert (navigation["count"], len(navigation["items"]), navigation["more_available"]) == (30, 25, True)
+    assert navigation["fetch_more_command"] == "warcraft-wiki article-full 'World of Warcraft API'"
 
 
 def test_article_fetch_more_command_survives_the_shell(monkeypatch) -> None:

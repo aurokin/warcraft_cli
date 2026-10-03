@@ -141,6 +141,9 @@ def test_build_identity_contract_never_claims_canonical_status() -> None:
 def test_actor_class_and_spec_normalizers_stay_small_and_predictable() -> None:
     assert normalize_actor_class("Demon Hunter") == "demonhunter"
     assert normalize_spec_name("Beast Mastery") == "beast_mastery"
+    # Warcraft Logs spells the spec BeastMastery; every source has to reach the same identity.
+    assert normalize_spec_name("BeastMastery") == normalize_spec_name("beast-mastery") == "beast_mastery"
+    assert normalize_spec_name("HUNTER_BEAST_MASTERY") == "hunter_beast_mastery"
 
 
 def test_parse_wowhead_talent_calc_ref_supports_prefixed_paths_and_relative_urls() -> None:

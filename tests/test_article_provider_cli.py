@@ -14,56 +14,10 @@ from method_cli.main import app as method_app
 from method_cli.page_parser import parse_guide_page as parse_method_page
 from raidbots_cli.main import app as raidbots_app
 from typer.testing import CliRunner
-from warcraft_content.article_provider_cli import (
-    build_article_resolve_response,
-    build_article_search_response,
-    unsupported_guide_surface_message,
-)
+from warcraft_content.site_crawler import FetchResult
 from warcraft_core.envelope import ENVELOPE_KEYS
 
 from tests.cli_testkit import apply_provider_stubs
-
-
-def test_build_article_search_response_includes_scope_hint_when_present() -> None:
-    payload = build_article_search_response(
-        query="patch notes",
-        search_query="patch notes",
-        results=[],
-        total_count=0,
-        scope_hint={"code": "patch_notes", "message": "out of scope"},
-    )
-
-    assert payload["count"] == 0
-    assert payload["results"] == []
-    assert payload["scope_hint"]["code"] == "patch_notes"
-
-
-def test_build_article_resolve_response_includes_scope_hint_when_present() -> None:
-    payload = build_article_resolve_response(
-        provider_command="icy-veins",
-        query="latest class changes",
-        search_query="latest class changes",
-        results=[],
-        total_count=0,
-        resolved=False,
-        scope_hint={"code": "class_changes", "message": "out of scope"},
-    )
-
-    assert payload["resolved"] is False
-    assert payload["count"] == 0
-    assert payload["scope_hint"]["code"] == "class_changes"
-    assert payload["fallback_search_command"] == "icy-veins search 'latest class changes'"
-
-
-def test_unsupported_guide_surface_message_is_provider_specific() -> None:
-    message = unsupported_guide_surface_message(
-        provider_name="Method",
-        slug="tier-list",
-        content_family="unsupported_index",
-    )
-
-    assert message == "Unsupported Method guide surface for slug='tier-list' family='unsupported_index'."
-
 
 _FIXTURES = Path(__file__).parent / "fixtures"
 _APPS: dict[str, typer.Typer] = {
@@ -124,6 +78,7 @@ _OFFLINE_ARGV: dict[str, dict[str, list[str]]] = {
         "explain-input": ["explain-input", "--text", _SIMC_INPUT],
     },
 }
+_OFFLINE_ARGV["icy-veins"]["index-refresh"] = ["index-refresh", "--max-requests", "1"]
 
 
 def _guide_page_stub(binary: str) -> Any:
@@ -144,6 +99,10 @@ def _stub_network(binary: str, monkeypatch: pytest.MonkeyPatch) -> None:
     if binary in ("icy-veins", "method"):
         client = "icy_veins_cli.client.IcyVeinsClient" if binary == "icy-veins" else "method_cli.client.MethodClient"
         monkeypatch.setattr(f"{client}.fetch_guide_page", _guide_page_stub(binary))
+    if binary == "icy-veins":
+        menu = (_FIXTURES / "icy_veins" / "site_menu_class_hub.html").read_text(encoding="utf-8")
+        monkeypatch.setattr("icy_veins_cli.client.IcyVeinsClient.sitemap_text", lambda self: "")
+        monkeypatch.setattr("icy_veins_cli.client.IcyVeinsClient.crawl_fetch", lambda self, url: FetchResult(200, menu))
     if binary == "lorrgs":
         monkeypatch.setattr("lorrgs_cli.client.request_with_retries", _lorrgs_json)
     if binary == "raidbots":

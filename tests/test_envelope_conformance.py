@@ -133,7 +133,6 @@ def _offline_provider_result(provider: str, *args: Any, **kwargs: Any) -> dict[s
             "data": {},
             "error": {"code": "network_error", "message": "ConnectError: offline"},
         },
-        "stdout": "",
     }
 
 
@@ -232,7 +231,6 @@ def _answering_provider_invoke(provider: str, args: list[str], **kwargs: Any) ->
         "provider": provider,
         "exit_code": 0,
         "payload": {"ok": True, "provider": provider, "command": args[0], "data": bodies.get(args[0], {})},
-        "stdout": "",
     }
 
 

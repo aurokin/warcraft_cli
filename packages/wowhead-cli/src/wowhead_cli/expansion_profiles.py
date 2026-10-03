@@ -77,6 +77,9 @@ _BY_KEY = {profile.key: profile for profile in _PROFILES}
 _BY_PATH_PREFIX = {profile.path_prefix: profile for profile in _PROFILES if profile.path_prefix}
 # The first path segment that routes a Wowhead URL to a non-retail site (classic, tbc, ...).
 EXPANSION_PREFIXES = wowhead_path_prefixes()
+# Wowhead sections for another game with no expansion profile here (WoW Forever): a URL under one
+# names no expansion this CLI reads, rather than retail.
+UNPROFILED_PATH_PREFIXES = frozenset({"forever"})
 
 _LEGACY_HOST_TO_PROFILE: dict[str, ExpansionProfile] = {}
 for _profile in _PROFILES:
@@ -174,9 +177,16 @@ def _profile_for_hostname(hostname: str) -> ExpansionProfile | None:
     return None
 
 
-def _profile_for_path_prefix(path: str) -> ExpansionProfile:
+def _profile_for_path_prefix(path: str) -> ExpansionProfile | None:
     head = next((part for part in path.split("/") if part), "")
+    if head in UNPROFILED_PATH_PREFIXES:
+        return None
     return _BY_PATH_PREFIX.get(head, _BY_KEY["retail"])
+
+
+def is_wowhead_url(raw: str) -> bool:
+    normalized = normalize_wowhead_url(raw)
+    return normalized is not None and is_wowhead_host(urlparse(normalized).hostname or "")
 
 
 def detect_expansion_from_url(raw: str) -> ExpansionProfile | None:
@@ -210,7 +220,7 @@ def parse_entity_from_wowhead_url(raw: str) -> tuple[str, int] | None:
     if normalized is None:
         return None
     parsed = urlparse(normalized)
-    if not is_wowhead_host(parsed.hostname or ""):
+    if not is_wowhead_host(parsed.hostname or "") or _profile_for_path_prefix(parsed.path) is None:
         return None
     match = ENTITY_PATH_RE.match(parsed.path)
     if match is None:

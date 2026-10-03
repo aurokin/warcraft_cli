@@ -52,6 +52,10 @@ warcraftlogs --site classic auth client
 warcraftlogs --site fresh expansions
 ```
 
+A report code exists only on its own site. A report URL names the site by its host, so `resolve`
+and `search` put that site's `--site` in the follow-up command, and the `report-encounter*`
+commands fail with `invalid_query` (exit 2) when the URL's site is not the selected `--site`.
+
 The `warcraft` wrapper maps its expansion vocabulary to these profiles: `retail` -> `retail`;
 `classic`, `tbc`, `wotlk`, `cata`, `mop-classic` -> `classic`; `fresh` -> `fresh`. `ptr`, `beta`,
 and `classic-ptr` are rejected rather than coerced.
@@ -67,6 +71,20 @@ Discovery and health:
 
 `search` and `resolve` are explicit-report-only: they match a Warcraft Logs report URL or report
 code and return a discovery hint for anything else.
+
+`server`, `guild`, `guild-rankings`, `guild-members`, `guild-attendance`, `character` and
+`character-rankings` take a realm in any spelling (`Azjol-Nerub`, `azjolnerub`, `Mal'Ganis`) and try
+each slug spelling until Warcraft Logs finds the entity. `reports`/`guild-reports`, the sampled
+`--guild-realm` and `encounter-rankings --server-slug` send one slug (`Azjol-Nerub` becomes
+`azjol-nerub`), so pass Warcraft Logs' own slug there (`azjolnerub`, as `server` reports it).
+Warcraft Logs slugs native-script realm names in English, so pass `howling-fjord`, not `Ревущий фьорд`.
+
+Warcraft Logs answers a filter it does not recognise unfiltered rather than rejecting it, so the
+CLI rejects one locally with `invalid_query` (exit 2): an unknown `encounter-rankings --class-name`,
+an unknown `character-rankings --spec-name` on the retail site, and a `--guild-name`,
+`--guild-region` or `--guild-realm` given without the other two on `reports` and the sampled
+commands. The spec list is retail's, so `--site classic` and `--site fresh` pass a spec through
+(Combat exists there).
 
 Auth: `auth status`, `auth client`, `auth token`, `auth login`, `auth pkce-login`, `auth whoami`,
 `auth logout`.
@@ -93,7 +111,9 @@ A well-formed slice that matches no fight — an unknown `--fight-id`, an `--enc
 alone, and `error.details.missing_fight_ids` names the ones that did not match. A request that names no fight
 at all (a window, or the whole report) is left alone: an empty answer to it is a real answer.
 `report-player-details` additionally fails when its window matches no fight, because a fight
-Warcraft Logs has always returns a roster.
+Warcraft Logs has always returns a roster. A `--start-time` after `--end-time`, or one after every
+selected fight ended, is `invalid_query` (exit 2) on `report-events`, `report-table`,
+`report-graph`, and `report-player-details`.
 
 Encounter analytics (one report, one fight): `report-encounter`, `report-encounter-players`,
 `report-player-talents`, `report-encounter-casts`, `report-encounter-buffs`,
@@ -137,7 +157,8 @@ code and the global output flags are never echoed. `auth` subcommands are
 labelled by their full path (`"command": "auth status"`) on success and failure alike.
 
 Rejected input exits `2`: `missing_boss`, `missing_query`, `missing_scope`, `missing_spec`,
-`invalid_query`, `invalid_variables`, `ambiguous_boss`, `boss_scope_mismatch`, and the OAuth
+`invalid_query` (including a flag value Warcraft Logs' GraphQL schema rejects, such as
+`--data-type nope` or `--metric nope`), `invalid_variables`, `ambiguous_boss`, `boss_scope_mismatch`, and the OAuth
 callback mismatches `missing_state`, `state_mismatch`, `redirect_uri_mismatch`. Auth problems exit
 `3`, including `site_profile_mismatch` when the saved user token belongs to another `--site`.
 Malformed upstream or local data exits `1`: `missing_talent_tree`, `invalid_response`,
@@ -189,7 +210,9 @@ final once it ends, and the listing puts the most recently updated reports first
 
 `--spec-name` filters sampled kills by participant spec before aggregation; it does not turn the
 query into a spec leaderboard. It takes the class too (`'Frost Mage'`), because a bare spec name
-matches every class with that spec (see `SCOPING.md`); `boss-spec-usage` rows are keyed by class and
+matches every class with that spec (see `SCOPING.md`). On the retail site a name that is no spec,
+or a class with no such spec (`'Frost Rogue'`), is `invalid_query` (exit 2) instead of an empty
+cohort; `boss-spec-usage` rows are keyed by class and
 spec for the same reason. `spec-kill-samples` requires `--spec-name` and returns an explicit
 participant cohort. For leaderboard questions use `encounter-rankings`.
 

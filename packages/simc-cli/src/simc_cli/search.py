@@ -6,9 +6,16 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from warcraft_core.identity import normalize_actor_class
+from warcraft_core.talent_transport import CLASS_ENUM_NAME_BY_ACTOR_CLASS
+
 from simc_cli.repo import RepoPaths
 
 RIPGREP = "rg"
+
+
+class UnknownClassError(ValueError):
+    """A --class filter that names no WoW class."""
 
 
 class MissingRipgrepError(RuntimeError):
@@ -78,13 +85,16 @@ def _rg_files(needle: str, base: Path, pattern: str) -> list[Path]:
     return sorted(Path(line) for line in stdout.splitlines() if line.strip())
 
 
-def _run_rg(pattern: str, paths: list[Path]) -> list[SearchHit]:
+def _run_rg(pattern: str, paths: list[Path], *flags: str) -> list[SearchHit]:
     existing = [str(path) for path in paths if path.exists()]
     if not existing:
         return []
-    stdout = _rg(["-n", "--no-heading", pattern, *existing])
+    stdout = _rg([*flags, "-n", "--no-heading", pattern, *existing])
     hits: list[SearchHit] = []
-    for line in stdout.splitlines():
+    # ripgrep ends lines on \n only; the spell dumps also hold bare \r, which splitlines() would split on.
+    for line in stdout.split("\n"):
+        if not line:
+            continue
         file_name, line_no, text = line.split(":", 2)
         hits.append(SearchHit(path=Path(file_name), line_no=int(line_no), text=text))
     return hits
@@ -116,6 +126,15 @@ def spec_file_search(paths: RepoPaths, query: str | None) -> dict[str, list[Path
     return results
 
 
+def _names_class(path: Path, root: Path, module_name: str) -> bool:
+    """Whether a class-module path belongs to the class: ``sc_death_knight.cpp``, ``monk/sc_stagger.cpp``, ``apl/mage.cpp``."""
+    for part in path.relative_to(root).with_suffix("").parts:
+        name = part.removeprefix("sc_").removeprefix("apl_")
+        if name == module_name or name.startswith(f"{module_name}_"):
+            return True
+    return False
+
+
 def find_action(paths: RepoPaths, action: str, wow_class: str | None = None) -> dict[str, list[SearchHit]]:
     search_roots: dict[str, list[Path]] = {
         "apl_default": [paths.apl_default],
@@ -124,12 +143,16 @@ def find_action(paths: RepoPaths, action: str, wow_class: str | None = None) -> 
         "spell_dump": [paths.spell_dump],
     }
     if wow_class:
-        lowered = wow_class.lower()
-        class_modules = [path for path in paths.class_modules.rglob("*") if path.is_file() and lowered in path.name.lower()]
-        spell_dump = [path for path in paths.spell_dump.glob("*.txt") if lowered in path.name.lower()]
-        if class_modules:
-            search_roots["class_modules"] = class_modules
-        if spell_dump:
-            search_roots["spell_dump"] = spell_dump
+        actor_class = normalize_actor_class(wow_class)
+        if actor_class not in CLASS_ENUM_NAME_BY_ACTOR_CLASS:
+            raise UnknownClassError(f"Unknown class '{wow_class}'. Valid classes: {', '.join(sorted(CLASS_ENUM_NAME_BY_ACTOR_CLASS))}.")
+        module_name = CLASS_ENUM_NAME_BY_ACTOR_CLASS[actor_class].lower()
+        search_roots["class_modules"] = sorted(
+            path for path in paths.class_modules.rglob("*") if path.is_file() and _names_class(path, paths.class_modules, module_name)
+        )
+        search_roots["spell_dump"] = [paths.spell_dump / f"{actor_class}.txt", paths.spell_dump / f"{actor_class}_ptr.txt"]
     pattern = word_bounded_pattern(action)
-    return {name: _run_rg(pattern, roots) for name, roots in search_roots.items()}
+    hits = {name: _run_rg(pattern, roots) for name, roots in search_roots.items() if name != "spell_dump"}
+    # The dumps name spells in display form (`Name : Howling Blast`), so a token query matches them too.
+    hits["spell_dump"] = _run_rg(pattern.replace("_", "[_ ]"), search_roots["spell_dump"], "-i")
+    return hits

@@ -51,6 +51,10 @@ Every command emits the shared envelope (`ok`, `provider`, `command`, `kind`, `s
 | `input` | `simc_input` | `report_id`, `input`, `handoff`, `scope`, `freshness`, `citations` |
 | `explain-input` | `simc_input` | `scope`, `handoff` |
 
+`input` carries the report's SimC input once, in `data.input`; `explain-input` does not echo the text
+back. `--compact` never shortens a `*input` value, so the input stays whole for `simc sim -` or
+raidbots.com. The handoff's `suggested_simc_commands` name what to run with it.
+
 A quick-sim `report` carries `actor` and `metrics` for the first actor, plus `actor_count` and
 `other_actors` (each with `actor` and `metrics`) when the sim had more than one.
 

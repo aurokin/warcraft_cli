@@ -21,7 +21,8 @@ from warcraft_core.cli import fail
 from warcraft_core.exit_codes import EXIT_GENERIC, EXIT_USAGE
 from warcraft_core.identity import build_reference_transport_packet_payload, parse_wowhead_talent_calc_ref
 from warcraft_core.paths import data_root
-from warcraft_core.shapes import as_dict, as_list
+from warcraft_core.shapes import as_dict, as_list, unique_strings
+from warcraft_core.timestamps import iso_now_utc, parse_iso8601_utc
 
 from warcraft_cli.provider_contract import candidate_score
 from warcraft_cli.providers import (
@@ -56,7 +57,7 @@ def _slugify_path_fragment(value: str) -> str:
 
 
 def default_guide_compare_query_root(query: str) -> Path:
-    """Where exported bundles land without ``--out-root``: the XDG data dir, never the caller's CWD."""
+    """Where exported bundles land without ``--out-root``: the data root, never the caller's CWD."""
     return data_root() / "guide_compare" / _slugify_path_fragment(query)
 
 
@@ -64,27 +65,8 @@ def _guide_compare_manifest_path(root: Path) -> Path:
     return root / "manifest.json"
 
 
-def _iso_now_utc() -> str:
-    return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-
-
-def _parse_iso8601_utc(value: Any) -> datetime | None:
-    if not isinstance(value, str) or not value.strip():
-        return None
-    raw = value.strip()
-    if raw.endswith("Z"):
-        raw = raw[:-1] + "+00:00"
-    try:
-        parsed = datetime.fromisoformat(raw)
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=UTC)
-    return parsed.astimezone(UTC)
-
-
 def _guide_compare_freshness(exported_at: Any, *, max_age_hours: int) -> dict[str, Any]:
-    parsed = _parse_iso8601_utc(exported_at)
+    parsed = parse_iso8601_utc(exported_at)
     if parsed is None:
         return {"status": "stale", "reason": "missing_exported_at", "age_hours": None, "max_age_hours": max_age_hours}
     age_hours = round((datetime.now(UTC) - parsed).total_seconds() / 3600, 2)
@@ -95,7 +77,7 @@ def _guide_compare_freshness(exported_at: Any, *, max_age_hours: int) -> dict[st
 
 def _guide_build_handoff_freshness(source_kind: str, source_manifest: dict[str, Any] | None) -> dict[str, Any]:
     updated_at = source_manifest.get("updated_at") if isinstance(source_manifest, dict) else None
-    parsed_updated_at = _parse_iso8601_utc(updated_at)
+    parsed_updated_at = parse_iso8601_utc(updated_at)
     if source_kind == "orchestration_root":
         if parsed_updated_at is None:
             return {
@@ -111,7 +93,7 @@ def _guide_build_handoff_freshness(source_kind: str, source_manifest: dict[str, 
             "cache_ttl_seconds": None,
         }
     exported_at = source_manifest.get("exported_at") if isinstance(source_manifest, dict) else None
-    parsed_exported_at = _parse_iso8601_utc(exported_at)
+    parsed_exported_at = parse_iso8601_utc(exported_at)
     if parsed_exported_at is None:
         return {
             "status": "unknown",
@@ -236,7 +218,7 @@ def _write_guide_compare_manifest(
         )
     payload = {
         "kind": "guide_compare_orchestration_manifest",
-        "updated_at": _iso_now_utc(),
+        "updated_at": iso_now_utc(),
         "query": query,
         "requested_expansion": requested_expansion,
         "max_age_hours": max_age_hours,
@@ -313,20 +295,6 @@ def _collect_build_reference_handoff_rows(
     return sorted(grouped.values(), key=lambda row: str(((row.get("reference") or {}).get("url")) or ""))
 
 
-def _unique_non_empty_strings(values: list[Any]) -> list[str]:
-    seen: set[str] = set()
-    rows: list[str] = []
-    for value in values:
-        if not isinstance(value, str):
-            continue
-        text = value.strip()
-        if not text or text in seen:
-            continue
-        seen.add(text)
-        rows.append(text)
-    return rows
-
-
 def _resolve_handoff_build_code(reference: dict[str, Any], build_url: str) -> str | None:
     build_code = reference.get("build_code")
     parsed_ref = parse_wowhead_talent_calc_ref(build_url)
@@ -347,7 +315,7 @@ def _build_handoff_transport_packet(
         provider="warcraft",
         source="guide_build_reference_handoff",
         label=normalized_reference.get("label") if isinstance(normalized_reference.get("label"), str) else None,
-        source_urls=_unique_non_empty_strings(
+        source_urls=unique_strings(
             [
                 url
                 for source_row in sources
@@ -394,13 +362,13 @@ def _handoff_evidence_section(sources: list[Any]) -> dict[str, Any]:
                 if isinstance(provider, str) and provider
             }
         ),
-        "providers": _unique_non_empty_strings(
+        "providers": unique_strings(
             [source_row.get("provider") for source_row in sources if isinstance(source_row, dict)]
         ),
-        "bundle_paths": _unique_non_empty_strings(
+        "bundle_paths": unique_strings(
             [source_row.get("bundle_path") for source_row in sources if isinstance(source_row, dict)]
         ),
-        "source_urls": _unique_non_empty_strings(
+        "source_urls": unique_strings(
             [
                 url
                 for source_row in sources
@@ -564,10 +532,10 @@ def _handoff_citations(
 ) -> dict[str, Any]:
     return {
         "bundle_paths": [str(path) for path, _bundle in bundle_inputs],
-        "build_reference_urls": _unique_non_empty_strings(
+        "build_reference_urls": unique_strings(
             [((row.get("reference") or {}).get("url")) for row in selected_rows if isinstance(row, dict)]
         ),
-        "source_urls": _unique_non_empty_strings(
+        "source_urls": unique_strings(
             [
                 url
                 for row in selected_rows
@@ -948,7 +916,7 @@ def _guide_compare_export_row(
 
     # exported_at comes from the manifest the provider's guide-export just stamped, so the
     # orchestration row, the reuse check, and _guide_comparison_packet share one timestamp (they
-    # cannot disagree on freshness). The `or _iso_now_utc()` is an unreachable safety net, NOT a
+    # cannot disagree on freshness). The `or iso_now_utc()` is an unreachable safety net, NOT a
     # freshness fabricator: every guide-compare provider stamps exported_at on export (wowhead via
     # _guide_export_manifest, method/icy-veins via write_article_bundle), and this branch runs only
     # after guide-export above re-wrote the bundle now — so "now" would reflect a real just-happened
@@ -957,7 +925,7 @@ def _guide_compare_export_row(
     # re-export (re-stamping a real anchor). So a bundle lacking a real anchor cannot be stamped here
     # and then treated as freshly exported on a later run.
     bundle_manifest = as_dict(bundle.get("manifest"))
-    exported_at = bundle_manifest.get("exported_at") or _iso_now_utc()
+    exported_at = bundle_manifest.get("exported_at") or iso_now_utc()
     return {
         "provider": provider_name,
         "status": "exported",

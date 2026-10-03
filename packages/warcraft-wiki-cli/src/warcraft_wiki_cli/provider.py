@@ -13,17 +13,12 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-import httpx
 from warcraft_api.cache import redacted_redis_url
-from warcraft_content.article_bundle import (
-    default_article_export_dir,
-    load_article_bundle,
-    query_article_bundle,
-    write_article_bundle,
-)
+from warcraft_content.article_bundle import article_export_dir, bundle_query_payload, write_article_bundle
 from warcraft_content.article_discovery import article_resolve_payload, article_search_payload
+from warcraft_content.article_provider_cli import preview_block
+from warcraft_content.article_provider_cli import transport_errors as http_transport_errors
 from warcraft_core.envelope import Envelope, success_envelope
-from warcraft_core.exit_codes import error_code_for_http_status
 from warcraft_core.provider import ProviderError, ProviderSurface
 
 from warcraft_wiki_cli.client import WIKI_API_URL, WarcraftWikiAPIError, WarcraftWikiClient, load_warcraft_wiki_cache_settings_from_env
@@ -83,19 +78,18 @@ def _envelope(
 
 @contextmanager
 def transport_errors() -> Iterator[None]:
-    """Translate wiki API and httpx transport failures into ProviderError so no command leaks a traceback."""
-    try:
-        yield
-    except WarcraftWikiAPIError as exc:
-        raise ProviderError(_API_ERROR_CODES.get(exc.code, exc.code), exc.message) from exc
-    except httpx.TimeoutException as exc:
-        raise ProviderError("timeout", str(exc) or "Warcraft Wiki request timed out") from exc
-    except httpx.HTTPStatusError as exc:
-        status = exc.response.status_code
-        details = {"status_code": status, "url": str(exc.request.url)}
-        raise ProviderError(error_code_for_http_status(status), str(exc), details=details) from exc
-    except httpx.RequestError as exc:
-        raise ProviderError("network_error", f"{type(exc).__name__}: {exc}", details={"url": str(exc.request.url)}) from exc
+    """Translate wiki API errors, and httpx failures the way the other article providers do, into ProviderError."""
+    with http_transport_errors("Warcraft Wiki"):
+        try:
+            yield
+        except WarcraftWikiAPIError as exc:
+            raise ProviderError(_API_ERROR_CODES.get(exc.code, exc.code), exc.message) from exc
+
+
+def _require_query(query: str) -> None:
+    """A blank title must not reach the wiki: ``API:`` alone redirects to the framework page, ``""`` is a bad title."""
+    if not query.strip():
+        raise ProviderError("invalid_query", "Query cannot be empty.")
 
 
 def open_client() -> WarcraftWikiClient:
@@ -125,6 +119,7 @@ def _article_summary(page_payload: dict[str, Any]) -> dict[str, Any]:
     content = dict(page_payload["article_content"])
     reference = dict(page_payload.get("reference") or {})
     linked_entities = list(page_payload["linked_entities"])
+    fetch_more_command = shlex.join(["warcraft-wiki", "article-full", article["title"]])
     return {
         "article": article,
         "page": page,
@@ -132,6 +127,8 @@ def _article_summary(page_payload: dict[str, Any]) -> dict[str, Any]:
         "navigation": {
             "count": len(navigation),
             "items": navigation[:25],
+            "more_available": len(navigation) > 25,
+            "fetch_more_command": fetch_more_command,
         },
         "content": {
             "text": content["text"],
@@ -146,12 +143,7 @@ def _article_summary(page_payload: dict[str, Any]) -> dict[str, Any]:
                 for section in content["sections"][:10]
             ],
         },
-        "linked_entities": {
-            "count": len(linked_entities),
-            "items": linked_entities[:10],
-            "more_available": len(linked_entities) > 10,
-            "fetch_more_command": shlex.join(["warcraft-wiki", "article-full", article["title"]]),
-        },
+        "linked_entities": preview_block(linked_entities, fetch_more_command=fetch_more_command),
         "citations": {
             "page": article["page_url"],
         },
@@ -338,6 +330,7 @@ def _typed_article_payload(
 
 def article(article_ref: str, *, full: bool = False) -> Envelope:
     """One wiki article: a summary with previews, or every extracted section when ``full``."""
+    _require_query(article_ref)
     with open_client() as client, transport_errors():
         initial = client.fetch_article_page(article_ref)
     payload = _article_payload_from_initial(initial) if full else _article_summary(initial)
@@ -347,6 +340,7 @@ def article(article_ref: str, *, full: bool = False) -> Envelope:
 
 def typed_reference(query: str, *, surface: str, full: bool = False) -> Envelope:
     """Resolve ``query`` to an API or event reference page and return it; ``surface`` is "api" or "event"."""
+    _require_query(query)
     with open_client() as client, transport_errors():
         payload = _typed_article_payload(client, query, surface=surface, full=full)
     command = f"{surface}-full" if full else surface
@@ -355,9 +349,10 @@ def typed_reference(query: str, *, surface: str, full: bool = False) -> Envelope
 
 def article_export(article_ref: str, *, out: Path | None = None) -> Envelope:
     """Write a wiki article bundle to disk and return the manifest."""
-    article_title = normalize_article_ref(article_ref)
-    default_dir = default_article_export_dir(PROVIDER_NAME, article_slug(article_title), prefix="article")
-    export_dir = out.expanduser() if out is not None else default_dir
+    _require_query(article_ref)
+    export_dir = article_export_dir(
+        out, provider=PROVIDER_NAME, ref_slug=article_slug(normalize_article_ref(article_ref)), prefix="article"
+    )
     with open_client() as client, transport_errors():
         initial = client.fetch_article_page(article_ref)
     page_payload = _article_payload_from_initial(initial)
@@ -393,24 +388,11 @@ def article_query(
     section_title: str | None = None,
 ) -> Envelope:
     """Search an exported wiki article bundle on disk."""
-    selected_kinds = set(kinds) if kinds else set(ARTICLE_QUERY_KINDS)
-    invalid = sorted(selected_kinds - ARTICLE_QUERY_KINDS)
-    if invalid:
-        raise ProviderError("invalid_argument", f"Unsupported query kinds: {', '.join(invalid)}")
-    bundle_payload = load_article_bundle(Path(bundle_ref).expanduser())
-    result = query_article_bundle(
-        bundle_payload,
-        query=query,
-        limit=limit,
-        kinds=selected_kinds,
-        section_title_filter=section_title.lower() if section_title else None,
-    )
-    resource_key = str(bundle_payload["manifest"].get("resource_key") or "guide")
     payload = {
         "provider": PROVIDER_NAME,
-        resource_key: bundle_payload["manifest"].get(resource_key),
-        "bundle": str(bundle_ref),
-        **result,
+        **bundle_query_payload(
+            bundle_ref, query, limit=limit, kinds=kinds, allowed_kinds=ARTICLE_QUERY_KINDS, section_title=section_title
+        ),
     }
     return _envelope(command="article-query", kind="article_query", payload=payload, query=query)
 

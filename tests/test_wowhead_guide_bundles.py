@@ -75,11 +75,11 @@ def test_guide_bundle_refresh_updates_stale_bundle_and_reuses_manifest_settings(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    def fake_guide_page_html(self, guide_id: int):  # noqa: ANN001
+    def fake_guide_page_html(self, guide_id: int):
         assert guide_id == 3143
         return SAMPLE_GUIDE_HTML
 
-    def fake_tooltip(self, entity_type: str, entity_id: int, data_env=None):  # noqa: ANN001, ANN202
+    def fake_tooltip(self, entity_type: str, entity_id: int, data_env=None):
         if (entity_type, entity_id) == ("spell", 49020):
             return {
                 "name": "Obliterate",
@@ -183,11 +183,11 @@ def test_guide_bundle_refresh_rehydrates_only_stale_hydrated_entities(
 ) -> None:
     tooltip_calls: dict[tuple[str, int], int] = {}
 
-    def fake_guide_page_html(self, guide_id: int):  # noqa: ANN001
+    def fake_guide_page_html(self, guide_id: int):
         assert guide_id == 3143
         return SAMPLE_GUIDE_HTML
 
-    def fake_tooltip(self, entity_type: str, entity_id: int, data_env=None):  # noqa: ANN001, ANN202
+    def fake_tooltip(self, entity_type: str, entity_id: int, data_env=None):
         key = (entity_type, entity_id)
         tooltip_calls[key] = tooltip_calls.get(key, 0) + 1
         if key == ("spell", 49020):
@@ -462,7 +462,7 @@ def test_guide_bundle_list_uses_root_index_when_available(monkeypatch, tmp_path:
         encoding="utf-8",
     )
 
-    def fail_scan(root_path: Path) -> list[dict[str, object]]:  # noqa: ANN202
+    def fail_scan(root_path: Path) -> list[dict[str, object]]:
         raise AssertionError(f"scan should not be used when a valid index exists: {root_path}")
 
     monkeypatch.setattr("wowhead_cli.main._scan_guide_bundle_rows", fail_scan)
@@ -601,7 +601,7 @@ def test_guide_bundle_search_uses_root_index_when_available(monkeypatch, tmp_pat
         encoding="utf-8",
     )
 
-    def fail_scan(root_path: Path) -> list[dict[str, object]]:  # noqa: ANN202
+    def fail_scan(root_path: Path) -> list[dict[str, object]]:
         raise AssertionError(f"scan should not be used when a valid index exists: {root_path}")
 
     monkeypatch.setattr("wowhead_cli.main._scan_guide_bundle_rows", fail_scan)
@@ -803,7 +803,7 @@ def test_guide_bundle_query_uses_filters_and_root_index(monkeypatch, tmp_path: P
         encoding="utf-8",
     )
 
-    def fail_scan(root_path: Path) -> list[dict[str, object]]:  # noqa: ANN202
+    def fail_scan(root_path: Path) -> list[dict[str, object]]:
         raise AssertionError(f"scan should not be used when a valid index exists: {root_path}")
 
     monkeypatch.setattr("wowhead_cli.main._scan_guide_bundle_rows", fail_scan)

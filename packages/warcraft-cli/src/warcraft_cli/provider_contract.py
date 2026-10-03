@@ -157,7 +157,9 @@ def candidate_score(candidate: Mapping[str, Any] | None) -> int:
 
 def _query_tokens(query: str) -> tuple[str, set[str]]:
     normalized = query.strip().lower()
-    tokens = set(re.findall(r"[a-z0-9+]+", normalized))
+    # An identifier such as C_Spell.GetSpellInfo names an API, so its parts are no entity keywords.
+    words = (word for word in normalized.split() if "_" not in word)
+    tokens = {token for word in words for token in re.findall(r"[a-z0-9+]+", word)}
     if "m+" in normalized:
         tokens.add("m+")
     if "mythic+" in normalized:

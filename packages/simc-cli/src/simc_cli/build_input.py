@@ -12,6 +12,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from warcraft_core.identity import (
+    WOWHEAD_EXPANSION_PREFIXES,
     IdentityConfidence,
     normalize_actor_class,
     normalize_spec_name,
@@ -399,9 +400,25 @@ def wowhead_blizzard_build_code(ref: str) -> str | None:
     return tail[1] if len(tail) == 2 and tail[0] == BLIZZARD_CALC_SEGMENT else None
 
 
+# Wowhead's /ptr/ and /beta/ calculators are retail builds SimC decodes; every other prefix is Classic-era.
+CLASSIC_WOWHEAD_PREFIXES = WOWHEAD_EXPANSION_PREFIXES - {"ptr", "beta"}
+
+
+def _refuse_non_retail_talent_calc(url: str) -> None:
+    """Refuse a Classic-era Wowhead calculator build (``/mop-classic/talent-calc/...``): retail SimC cannot decode it."""
+    segments = _url_path_segments(url) or []
+    if segments[:1] and segments[0] in CLASSIC_WOWHEAD_PREFIXES and TALENT_CALC_SEGMENT in segments:
+        raise UnsupportedBuildReference(
+            f"Cannot decode this build reference: {url} is a {segments[0]} talent calculator build. "
+            "SimulationCraft decodes retail builds only.",
+            reference_type="wowhead_talent_calc_url_non_retail",
+        )
+
+
 def reject_unsupported_build_reference(ref: str) -> None:
     """Refuse a URL that is no build reference instead of handing it to SimC as if it were a hash."""
-    if _url_path_segments(ref) is None or _raw_wowhead_talent_calc_ref(ref) is not None:
+    _refuse_non_retail_talent_calc(ref)
+    if _url_path_segments(ref) is None or parse_shared_wowhead_talent_calc_ref(ref) is not None:
         return
     raise UnsupportedBuildReference(
         f"Cannot decode this build reference: {ref}. simc decodes a WoW talent export string, a "
@@ -411,14 +428,11 @@ def reject_unsupported_build_reference(ref: str) -> None:
     )
 
 
-def _raw_wowhead_talent_calc_ref(ref: str) -> dict[str, str | None] | None:
-    return parse_shared_wowhead_talent_calc_ref(ref)
-
-
 def _ensure_exact_wowhead_talent_calc_ref(ref: str) -> dict[str, str | None] | None:
-    parsed = _raw_wowhead_talent_calc_ref(ref)
+    parsed = parse_shared_wowhead_talent_calc_ref(ref)
     if parsed is None:
         return None
+    _refuse_non_retail_talent_calc(str(parsed["reference_url"]))
     if not parsed["build_code"]:
         raise UnsupportedBuildReference(
             f"Wowhead talent-calc URL carries no build code: {ref}. Copy the URL with the build code "
@@ -451,7 +465,7 @@ def detect_build_text_source_kind(text: str) -> str | None:
     if not non_empty_lines:
         return None
     if len(non_empty_lines) == 1:
-        shared_ref = _raw_wowhead_talent_calc_ref(non_empty_lines[0])
+        shared_ref = parse_shared_wowhead_talent_calc_ref(non_empty_lines[0])
         if shared_ref is not None:
             return "wowhead_talent_calc_url"
         if wowhead_blizzard_build_code(non_empty_lines[0]):
@@ -674,7 +688,7 @@ def detect_talents_option_source_kind(*, talents: TalentStrings) -> str | None:
     if not talents.talents:
         return None
     stripped = talents.talents.strip()
-    if _raw_wowhead_talent_calc_ref(stripped) is not None:
+    if parse_shared_wowhead_talent_calc_ref(stripped) is not None:
         return "wowhead_talent_calc_url"
     if stripped.startswith("talents="):
         return "simc_profile"
@@ -787,19 +801,20 @@ def _guessed_from_apl(build_spec: BuildSpec) -> bool:
 
 
 def _direct_build_identity(build_spec: BuildSpec) -> tuple[BuildSpec, BuildIdentity]:
+    """The identity of a class/spec pair that came with the build.
+
+    Reached once a talent hash has decoded as the pair (see ``_unconfirmed_identity``) or when there is
+    no hash to probe; split talents are trusted as given. Only a pair read off an APL file name with no
+    hash to confirm it stays a medium-confidence guess.
+    """
     source = "direct"
     confidence: IdentityConfidence = "high"
     if _guessed_from_apl(build_spec):
-        # Class and spec came from an APL file name, not from the build data itself.
         source = "apl_path"
-        confidence = "medium"
-    elif build_spec.source_kind == "wowhead_talent_calc_url":
-        source = "wowhead_talent_calc_url"
-    elif build_spec.source_kind == "simc_split_talents":
-        source = "simc_split_talents"
-    elif build_spec.source_kind == "wow_talent_export":
-        source = "wow_talent_export"
-        confidence = "medium"
+        if not build_spec.talents:
+            confidence = "medium"
+    elif build_spec.source_kind in {"wowhead_talent_calc_url", "simc_split_talents", "wow_talent_export"}:
+        source = build_spec.source_kind
     return (
         build_spec,
         BuildIdentity(
@@ -918,7 +933,7 @@ def _unconfirmed_identity(repo: RepoPaths, build_spec: BuildSpec, caller_spec: B
         # another spec's rotation with ok:true.
         raise UnknownClassSpecError(
             f"The build does not decode as {' '.join(pair)}, the spec of the APL it is read against. "
-            "Pass the APL for the build's own spec, or omit --apl-path to use its default APL."
+            "Pass the APL for the build's own spec."
         )
     if build_spec.source_kind != "wowhead_talent_calc_url":
         return build_spec

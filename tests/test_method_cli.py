@@ -907,3 +907,71 @@ def test_method_guide_full_reads_a_one_page_article_whose_slug_ends_in_a_class(m
     data = json.loads(result.stdout)["data"]
     assert data["guide"]["page_count"] == 1
     assert data["pages"][0]["guide"]["content_family"] == "article_guide"
+
+
+PUNCTUATED_NAME_SITEMAP_XML = """
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>https://www.method.gg/guides/nerubar-palace-raid-location-and-item-levels</loc></url>
+  <url><loc>https://www.method.gg/guides/karesh-trust-renown-guide</loc></url>
+  <url><loc>https://www.method.gg/guides/kriegval-s-rest-delve-guide</loc></url>
+  <url><loc>https://www.method.gg/guides/frost-mage</loc></url>
+  <url><loc>https://www.method.gg/guides/zul-aman-skyriding-glyph-locations</loc></url>
+</urlset>
+"""
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        ("nerub-ar palace", "nerubar-palace-raid-location-and-item-levels"),
+        ("zul'aman", "zul-aman-skyriding-glyph-locations"),
+        ("k'aresh", "karesh-trust-renown-guide"),
+        ("kriegval's rest", "kriegval-s-rest-delve-guide"),
+        ("frost-mage", "frost-mage"),
+    ],
+)
+def test_method_search_matches_names_spelled_with_punctuation(monkeypatch, query: str, expected: str) -> None:
+    """Hyphens and apostrophes stayed in the query while the slugs fold them, so these found nothing."""
+    monkeypatch.setattr("method_cli.main.MethodClient.sitemap_guides", lambda self: parse_sitemap_guides(PUNCTUATED_NAME_SITEMAP_XML))
+
+    ids = [row["id"] for row in json.loads(runner.invoke(app, ["search", query]).stdout)["data"]["results"]]
+
+    assert ids == [expected]
+
+
+WHOLE_WORD_SITEMAP_XML = """
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>https://www.method.gg/guides/frost-mage</loc></url>
+  <url><loc>https://www.method.gg/guides/poison-the-ultimate-damage-mechanic-in-warcraft-rumble</loc></url>
+  <url><loc>https://www.method.gg/guides/lorewalking-overview-and-rewards</loc></url>
+  <url><loc>https://www.method.gg/guides/explore-eversong-woods</loc></url>
+  <url><loc>https://www.method.gg/guides/karesh-reputation-lore-object-locations</loc></url>
+  <url><loc>https://www.method.gg/guides/gear-item-level-from-raid-bosses-and-mythic-dungeons</loc></url>
+</urlset>
+"""
+
+
+def test_method_search_matches_query_terms_as_whole_words(monkeypatch) -> None:
+    """"mage" tied with a "damage" page, and `resolve lore` answered "lorewalking" with high confidence."""
+    monkeypatch.setattr("method_cli.main.MethodClient.sitemap_guides", lambda self: parse_sitemap_guides(WHOLE_WORD_SITEMAP_XML))
+
+    mage = json.loads(runner.invoke(app, ["search", "mage"]).stdout)["data"]
+    lore = json.loads(runner.invoke(app, ["resolve", "lore"]).stdout)["data"]
+    boss = json.loads(runner.invoke(app, ["search", "boss"]).stdout)["data"]
+
+    assert [row["id"] for row in mage["results"]] == ["frost-mage"]
+    assert [row["id"] for row in lore["candidates"]] == ["karesh-reputation-lore-object-locations"]
+    # Whole words still meet on an "-es" plural.
+    assert [row["id"] for row in boss["results"]] == ["gear-item-level-from-raid-bosses-and-mythic-dungeons"]
+
+
+def test_method_guide_export_rejects_an_out_file_before_fetching(monkeypatch, tmp_path: Path) -> None:
+    """``--out`` naming a file fetched every page, then failed as internal_error."""
+    monkeypatch.setattr("method_cli.client.request_with_retries", _connect_error)
+    target = tmp_path / "notabundle.txt"
+    target.write_text("x", encoding="utf-8")
+
+    result = runner.invoke(app, ["guide-export", "frost-mage", "--out", str(target)])
+
+    assert result.exit_code == 2, result.output
+    assert json.loads(result.stderr)["error"]["code"] == "invalid_argument"

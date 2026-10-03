@@ -9,39 +9,51 @@ from __future__ import annotations
 import shlex
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
 from warcraft_api.cache import redacted_redis_url
-from warcraft_content.article_bundle import (
-    default_article_export_dir,
-    load_article_bundle,
-    query_article_bundle,
-    write_article_bundle,
-)
-from warcraft_content.article_discovery import merge_article_build_references, merge_article_linked_entities
+from warcraft_content.article_bundle import article_export_dir, bundle_query_payload
+from warcraft_content.article_discovery import article_resolve_payload, article_search_payload
 from warcraft_content.article_provider_cli import (
     article_doctor_payload,
-    build_article_resolve_response,
-    build_article_search_response,
-    fetch_navigation_pages,
+    guide_bundle_payload,
+    guide_export_payload,
     guide_redirect,
     preview_block,
     require_article_content,
     transport_errors,
     with_analysis_surfaces,
 )
-from warcraft_content.guide_analysis import merge_guide_analysis_surfaces
+from warcraft_content.site_crawler import CrawlResult, PageLink, crawl
 from warcraft_core.envelope import Envelope, success_envelope
+from warcraft_core.exit_codes import error_code_for_http_status
 from warcraft_core.provider import ProviderError, ProviderSurface
 
-from icy_veins_cli.client import ICY_VEINS_SITEMAP_URL, IcyVeinsClient, guide_ref_parts, load_icy_veins_cache_settings_from_env
-from icy_veins_cli.page_parser import NAVIGATION_REQUIRED_FAMILIES, classify_guide_slug, guide_traversal_scope
+from icy_veins_cli.client import (
+    ICY_VEINS_SITEMAP_URL,
+    INDEX_REFRESH_RATE_LIMITER,
+    SITE_MENU_SEED_URL,
+    IcyVeinsClient,
+    guide_ref_parts,
+    load_icy_veins_cache_settings_from_env,
+)
+from icy_veins_cli.page_parser import (
+    NAVIGATION_REQUIRED_FAMILIES,
+    classify_guide_slug,
+    guide_traversal_scope,
+    parse_sitemap_slugs,
+    read_index_page,
+)
 from icy_veins_cli.search import PROVIDER_NAME, SearchOutcome, resolve_is_confident, search_results, sitemap_provenance
+from icy_veins_cli.site_index import load_site_index, merge_crawl, save_site_index
 
 BUNDLE_QUERY_KINDS = ("sections", "navigation", "linked_entities", "build_references", "analysis_surfaces")
 PROVIDER_LABEL = "Icy Veins"
+# Covers the menu pages (about 130), the pages the sitemap lacks that they lead to, and a share of the
+# previous index's other pages; a full replay of the link graph needed about 170-200 requests.
+DEFAULT_INDEX_MAX_REQUESTS = 250
 
 
 def _envelope(command: str, kind: str, data: dict[str, Any], *, query: Any = None, provenance: dict[str, Any] | None = None) -> Envelope:
@@ -84,6 +96,13 @@ def doctor(**options: Any) -> Envelope:
     data = article_doctor_payload(
         settings, redis_url=redacted_redis_url(settings.redis_url), sitemap_ttl=sitemap_ttl, page_ttl=page_ttl
     )
+    data["capabilities"]["index_refresh"] = "ready"
+    site_index = load_site_index()
+    data["site_index"] = (
+        {"path": site_index.path, "bundled": site_index.bundled, "refreshed_at": site_index.refreshed_at, "pages": len(site_index.pages)}
+        if site_index is not None
+        else None
+    )
     return _envelope("doctor", "doctor", data)
 
 
@@ -95,15 +114,20 @@ def _search_outcome(query: str) -> SearchOutcome:
 
 def _sitemap_provenance(outcome: SearchOutcome) -> dict[str, Any]:
     return sitemap_provenance(
-        ICY_VEINS_SITEMAP_URL, outcome.sitemap_newest_lastmod, today=date.today(), site_menu_warning=outcome.site_menu_warning
+        ICY_VEINS_SITEMAP_URL,
+        outcome.sitemap_newest_lastmod,
+        today=date.today(),
+        site_menu_warning=outcome.site_menu_warning,
+        site_index=outcome.site_index,
+        index_gap=outcome.index_gap,
     )
 
 
 def search(query: str, *, limit: int = 5, **options: Any) -> Envelope:
-    """Rank Icy Veins WoW guides from the sitemap and the site-wide guide menu against a free-text query."""
+    """Rank Icy Veins WoW guides from the sitemap, the site-wide guide menu and the site index against a free-text query."""
     del options
     outcome = _search_outcome(query)
-    data = build_article_search_response(
+    data = article_search_payload(
         query=query,
         search_query=outcome.normalized_query,
         results=outcome.matches[:limit],
@@ -121,7 +145,7 @@ def resolve(target: str, *, limit: int = 5, **options: Any) -> Envelope:
     """
     del options
     outcome = _search_outcome(target)
-    data = build_article_resolve_response(
+    data = article_resolve_payload(
         provider_command=PROVIDER_NAME,
         query=target,
         search_query=outcome.normalized_query,
@@ -210,43 +234,16 @@ def _traversal_navigation(initial: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _guide_bundle(client: IcyVeinsClient, guide_ref: str) -> dict[str, Any]:
     initial = _fetch_requested_page(client, guide_ref)
-    nav_items = _traversal_navigation(initial)
-    pages, failed_pages = fetch_navigation_pages(
-        initial, nav_items, fetch_page=client.fetch_guide_page, provider=PROVIDER_NAME, provider_label=PROVIDER_LABEL
+    payload = guide_bundle_payload(
+        initial,
+        _traversal_navigation(initial),
+        fetch_page=client.fetch_guide_page,
+        provider=PROVIDER_NAME,
+        provider_label=PROVIDER_LABEL,
+        extra_page_keys=("page_toc",),
     )
-    guide_row = dict(initial["guide"])
-    guide_row["page_count"] = len(pages)
-    linked_entities = merge_article_linked_entities(pages)
-    build_references = merge_article_build_references(pages)
-    analysis_surfaces = merge_guide_analysis_surfaces(pages)
-    return {
-        "guide": guide_row,
-        "redirect": initial["redirect"],
-        "page": dict(initial["page"]),
-        "navigation": {"count": len(nav_items), "items": nav_items},
-        "pages": [
-            {
-                "guide": page["guide"],
-                "page": page["page"],
-                "page_toc": page["page_toc"],
-                "article": page["article"],
-                "build_references": page.get("build_references") or [],
-                "analysis_surfaces": page.get("analysis_surfaces") or [],
-            }
-            for page in pages
-        ],
-        "linked_entities": {"count": len(linked_entities), "items": linked_entities},
-        "build_references": {"count": len(build_references), "items": build_references},
-        "analysis_surfaces": {"count": len(analysis_surfaces), "items": analysis_surfaces},
-        # Family pages that could not be fetched or parsed; their content is missing from every
-        # merged block above.
-        "failed_pages": {"count": len(failed_pages), "items": failed_pages},
-        "citations": {
-            "page": guide_row["page_url"],
-            "comments": (initial.get("citations") or {}).get("comments"),
-            "pages": [page["guide"]["page_url"] for page in pages],
-        },
-    }
+    payload["citations"]["comments"] = (initial.get("citations") or {}).get("comments")
+    return payload
 
 
 def guide_full(guide_ref: str) -> Envelope:
@@ -260,24 +257,11 @@ def guide_full(guide_ref: str) -> Envelope:
 def guide_export(guide_ref: str, *, out: Path | None = None) -> Envelope:
     """Write the full guide bundle (pages, entities, analysis surfaces) to a local export directory."""
     slug, _ = _supported_guide_ref(guide_ref)
-    export_dir = out.expanduser() if out is not None else default_article_export_dir(PROVIDER_NAME, slug)
+    export_dir = article_export_dir(out, provider=PROVIDER_NAME, ref_slug=slug)
     with _client() as client:
-        payload = _guide_bundle(client, guide_ref)
-    manifest = write_article_bundle(payload, provider=PROVIDER_NAME, export_dir=export_dir)
-    return _envelope(
-        "guide-export",
-        "guide_export",
-        {
-            "guide": payload["guide"],
-            "redirect": payload["redirect"],
-            "output_dir": str(export_dir),
-            "counts": manifest["counts"],
-            "files": manifest["files"],
-            "failed_pages": payload["failed_pages"],
-        },
-        query=guide_ref,
-        provenance=payload["citations"],
-    )
+        bundle = _guide_bundle(client, guide_ref)
+    data = guide_export_payload(bundle, provider=PROVIDER_NAME, export_dir=export_dir)
+    return _envelope("guide-export", "guide_export", data, query=guide_ref, provenance=bundle["citations"])
 
 
 def guide_query(
@@ -289,24 +273,84 @@ def guide_query(
     section_title: str | None = None,
 ) -> Envelope:
     """Search a previously exported guide bundle without touching the network."""
-    selected_kinds = set(kinds or BUNDLE_QUERY_KINDS)
-    invalid = sorted(selected_kinds - set(BUNDLE_QUERY_KINDS))
-    if invalid:
-        raise ProviderError("invalid_argument", f"Unsupported query kinds: {', '.join(invalid)}")
-    loaded = load_article_bundle(bundle.expanduser())
-    result = query_article_bundle(
-        loaded,
-        query=query,
-        limit=limit,
-        kinds=selected_kinds,
-        section_title_filter=section_title.lower() if section_title else None,
+    data = bundle_query_payload(
+        bundle, query, limit=limit, kinds=kinds, allowed_kinds=BUNDLE_QUERY_KINDS, section_title=section_title
     )
-    return _envelope(
-        "guide-query",
-        "guide_query",
-        {"bundle": str(bundle), "guide": loaded["manifest"].get("guide"), **result},
-        query=query,
+    return _envelope("guide-query", "guide_query", data, query=query)
+
+
+def _seed_failure(result: CrawlResult) -> ProviderError:
+    """Why the crawl could not read its first page (the site-menu seed), as the error ``index-refresh`` exits with."""
+    status = result.errors[0]["status"] if result.errors else 404
+    code = "parse_failed" if status == 200 else "network_error" if status == 0 else error_code_for_http_status(status)
+    message = (
+        f"The Icy Veins page {SITE_MENU_SEED_URL} listed no guide links; its layout has probably changed."
+        if code == "parse_failed"
+        else f"Could not read the Icy Veins page {SITE_MENU_SEED_URL} the index crawl starts from."
     )
+    return ProviderError(code, message, details={"page_url": SITE_MENU_SEED_URL, "errors": result.errors})
+
+
+def index_refresh(*, max_requests: int = DEFAULT_INDEX_MAX_REQUESTS) -> Envelope:
+    """Crawl Icy Veins for the pages its frozen sitemap lacks and merge them into the local site index.
+
+    The crawl fetches the site menu's pages and follows every link to a page the sitemap does not
+    list, then re-reads the previous index's other pages, oldest first, at one request a second at
+    most. It stops at the first 403, 429 or Cloudflare challenge and at ``max_requests``; either way
+    what it read is merged (the previous rows are all kept) and ``partial`` is true; a blocked run
+    keeps the previous ``refreshed_at`` and writes nothing when it read nothing. A seed page that
+    lists no links fails as ``parse_failed`` and leaves the index untouched.
+    """
+    previous = load_site_index()
+    with _client() as client:
+        with transport_errors(PROVIDER_LABEL):
+            sitemap_slugs = parse_sitemap_slugs(client.sitemap_text())
+
+        def should_expand(link: PageLink) -> bool:
+            return link.source == "menu" or guide_ref_parts(link.url) not in sitemap_slugs
+
+        indexed = [row for row in (previous.pages.values() if previous else ()) if row["status"] == "ok"]
+        revisit = sorted(indexed, key=lambda row: row["last_seen"])
+        result = crawl(
+            [SITE_MENU_SEED_URL, *(previous.frontier if previous else ())],
+            fetch=client.crawl_fetch,
+            read_page=read_index_page,
+            should_expand=should_expand,
+            max_requests=max_requests,
+            revisit=[row["url"] for row in revisit],
+        )
+    if result.stop_reason == "seed_failed":
+        raise _seed_failure(result)
+    merged, counts = merge_crawl(previous, result, now=datetime.now(UTC))
+    # A run blocked before it read anything leaves the previous index (local or bundled) as it was.
+    read_anything = bool(result.pages or result.aliases or result.not_found)
+    index_path = str(save_site_index(merged)) if read_anything else previous.path if previous else None
+    data = {
+        "index_path": index_path,
+        "partial": result.partial,
+        "stop_reason": result.stop_reason,
+        "counts": {
+            "fetched": result.requests,
+            "cached": result.cached,
+            "pages": len(result.pages),
+            "new": len(counts.new),
+            "aliases": len(result.aliases),
+            "dropped": len(counts.dropped),
+            "errors": len(result.errors),
+            "frontier": len(result.frontier),
+            "total": len(merged.pages),
+        },
+        "new_pages": counts.new,
+        "blocked": result.blocked,
+        "errors": result.errors,
+        "previous_index": {"path": previous.path, "bundled": previous.bundled, "refreshed_at": previous.refreshed_at} if previous else None,
+    }
+    provenance = {
+        "seed_url": SITE_MENU_SEED_URL,
+        "sitemap_url": ICY_VEINS_SITEMAP_URL,
+        "min_interval_seconds": INDEX_REFRESH_RATE_LIMITER.min_interval_seconds,
+    }
+    return _envelope("index-refresh", "index_refresh", data, query={"max_requests": max_requests}, provenance=provenance)
 
 
 class IcyVeinsProvider:
@@ -334,6 +378,7 @@ __all__ = [
     "guide_export",
     "guide_full",
     "guide_query",
+    "index_refresh",
     "resolve",
     "search",
 ]

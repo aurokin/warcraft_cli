@@ -97,17 +97,12 @@ class GuideSiteClient:
         self._write_cache(key, text, ttl_seconds=ttl_seconds)
         return text
 
-    def sitemap_guides(self) -> list[dict[str, Any]]:
-        """Every supported guide the sitemap lists; a body that lists none fails as ``parse_failed`` and is not cached.
-
-        A challenge page or a reshaped sitemap still answers 2xx, and ranking an empty list would
-        report "no guide matches" for every query for as long as that body stayed cached.
-        """
+    def _sitemap(self) -> tuple[str, list[dict[str, Any]]]:
         sitemap_url = self._site.sitemap_url
         key = self._cache_key("sitemap", sitemap_url)
         cached = self._read_cache(key)
         if isinstance(cached, str) and (guides := self._site.parse_sitemap(cached)):
-            return guides
+            return cached, guides
         text = self._fetch_text(sitemap_url)
         guides = self._site.parse_sitemap(text)
         if not guides:
@@ -117,7 +112,24 @@ class GuideSiteClient:
                 details={"sitemap_url": sitemap_url},
             )
         self._write_cache(key, text, ttl_seconds=self._sitemap_ttl)
-        return guides
+        return text, guides
+
+    def sitemap_guides(self) -> list[dict[str, Any]]:
+        """Every supported guide the sitemap lists; a body that lists none fails as ``parse_failed`` and is not cached.
+
+        A challenge page or a reshaped sitemap still answers 2xx, and ranking an empty list would
+        report "no guide matches" for every query for as long as that body stayed cached.
+        """
+        return self._sitemap()[1]
+
+    def sitemap_text(self) -> str:
+        """The sitemap body ``sitemap_guides`` ranks, for callers that need the pages it does not classify."""
+        return self._sitemap()[0]
+
+    def cached_page_html(self, url: str) -> str | None:
+        """The guide page body ``guide_page_html`` cached for ``url``, without making a request."""
+        cached = self._read_cache(self._cache_key("guide_page_html", url))
+        return cached if isinstance(cached, str) else None
 
     def guide_page_html(self, guide_ref: str) -> tuple[str, str]:
         url = self._site.page_url(guide_ref)

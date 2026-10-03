@@ -52,9 +52,10 @@ It does not:
 - reimplement a provider surface
 
 Composition is a legitimate wrapper responsibility; a second implementation of a provider is not.
-The wrapper reaches providers through the in-process `PROVIDER` surfaces registered in
-`warcraft_cli.providers`. It never spawns a provider binary and never drives one through a Typer
-test runner.
+The wrapper reaches providers in-process through `warcraft_cli.providers`: `search`, `resolve` and
+`doctor` call the registered `PROVIDER` surfaces, the simc build steps call `simc_cli` functions, and
+the other composites run the provider's Typer app with its output captured and parsed. It never
+spawns a provider binary and never drives one through a Typer test runner.
 
 ### Backward Compatibility
 

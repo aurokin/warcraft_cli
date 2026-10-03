@@ -1,8 +1,8 @@
 # Icy Veins CLI
 
 `icy-veins` is a WoW guide/article provider CLI. It discovers guides from the Icy Veins WoW
-sitemap and the site-wide guide menu, fetches and parses guide pages, and exports multi-page guide
-bundles that can be queried offline.
+sitemap, the site-wide guide menu and a site index that `icy-veins index-refresh` builds by crawling,
+fetches and parses guide pages, and exports multi-page guide bundles that can be queried offline.
 
 Tier: **supported**. No auth, no API key.
 
@@ -11,12 +11,13 @@ Tier: **supported**. No auth, no API key.
 | Command | What it does |
 | --- | --- |
 | `icy-veins doctor` | Reports capabilities and the resolved HTTP cache configuration. |
-| `icy-veins search <query>` | Ranks sitemap and site-menu guides against a free-text query. |
+| `icy-veins search <query>` | Ranks sitemap, site-menu and site-index guides against a free-text query. |
 | `icy-veins resolve <query>` | Picks the single best guide and returns a `next_command`. |
 | `icy-veins guide <guide_ref>` | Fetches one guide page and returns a summary with previews. |
 | `icy-veins guide-full <guide_ref>` | Fetches every page in the guide's family navigation and merges them. |
 | `icy-veins guide-export <guide_ref>` | Writes the full bundle (pages, entities, analysis surfaces) to a directory. |
 | `icy-veins guide-query <bundle> <query>` | Searches an exported bundle without touching the network. |
+| `icy-veins index-refresh` | Crawls the site for pages the frozen sitemap lacks and merges them into the local site index. |
 
 `guide_ref` accepts a slug (`mistweaver-monk-pve-healing-guide`) or a full
 `https://www.icy-veins.com/wow/<slug>` URL.
@@ -29,8 +30,12 @@ Global flags come before the subcommand and are the shared agent-output flags:
 Per-command flags:
 
 - `search` / `resolve`: `--limit` (1-50, default 5)
-- `guide-export`: `--out <dir>` (defaults to `./icy-veins_exports/guide-<slug>`)
+- `guide-export`: `--out <dir>` (defaults to `./icy-veins_exports/guide-<slug>`). An `--out` that
+  names an existing file fails with `invalid_argument` (exit 2) before anything is fetched. Exporting
+  again into the same directory replaces the bundle's `pages/*.html`, so `pages/` holds only the pages
+  `page-files.json` lists; other files in the directory are left alone.
 - `guide-query`: `--limit` (1-50, default 5), `--kind` (repeatable or comma-separated), `--section-title`
+- `index-refresh`: `--max-requests` (1-5000, default 250), the most uncached page requests the run makes
 
 `--kind` accepts `sections`, `navigation`, `linked_entities`, `build_references`, and
 `analysis_surfaces`; all five are searched when the flag is omitted. Anything else fails with
@@ -44,6 +49,8 @@ icy-veins resolve "fury warrior easy mode"
 icy-veins guide mistweaver-monk-pve-healing-guide
 icy-veins guide-export mistweaver-monk-pve-healing-guide --out ./tmp/mw-monk
 icy-veins guide-query ./tmp/mw-monk "stat priority" --kind analysis_surfaces
+icy-veins index-refresh
+icy-veins search voidspire
 ```
 
 ## Output
@@ -67,8 +74,8 @@ or one of its sub-pages (every family from `spec_guide` to `simulations` in the 
 `guide-query` answers with kind `guide_query`: the shared match payload plus `bundle` (the path
 queried) and `guide` (the exported guide row), the same shape as `method guide-query`.
 
-`guide-query` answers a bad bundle path the same way `method guide-query` does: a path that does
-not exist is `not_found` (exit 4), a file is a usage error (exit 2), and a directory that is not a
+`guide-query` answers a bad bundle path the same way `method guide-query` does, echoing the query: a
+path that does not exist is `not_found` (exit 4), a file is `invalid_argument` (exit 2), and a directory that is not a
 readable bundle is `invalid_bundle` (exit 1): no `manifest.json`, a manifest whose `files` lists no
 content file (`pages.jsonl`, `sections.jsonl`, `analysis-surfaces.jsonl`, ...), or a listed file that
 is missing, corrupt, or holds a row with a wrongly typed nested field (a `build_identity` that is not
@@ -115,7 +122,10 @@ payload describes the served guide. It is `null` when the requested guide was se
 ## Supported guide families
 
 Sitemap discovery and `guide` only accept slugs that classify into a known family. Unclassified WoW
-pages fail with `invalid_guide_ref` (exit 2).
+pages fail with `invalid_guide_ref` (exit 2). `guide-full` and `guide-export` still include every
+page the guide's own navigation links, so a bundle can carry a page with `content_family: null`
+(the Frost Mage switcher links `frost-mage-cosmetics`); read it from the bundle, because
+`icy-veins guide` refuses its slug.
 
 | Family | Example slug |
 | --- | --- |
@@ -135,10 +145,31 @@ pages fail with `invalid_guide_ref` (exit 2).
 | `mythic_plus_tips` | `mistweaver-monk-pve-healing-mythic-plus-tips` |
 | `macros_addons` | `mistweaver-monk-pve-healing-macros-addons` |
 | `simulations` | `mistweaver-monk-pve-healing-simulations` |
-| `raid_guide` | `mistweaver-monk-pve-healing-nerub-ar-palace-raid-guide` |
+| `pvp` | also a spec's PvP sub-pages: `mistweaver-monk-pvp-talents-and-builds` |
+| `raid_guide` | `mistweaver-monk-pve-healing-nerub-ar-palace-raid-guide`, `venomous-abyss-raid-guide`, `firelands-raid` |
+| `raid_encounter` | boss pages: `drest-agath-normal-encounter-journal`, `al-akir-healer-strategy`, `broodtwister-ovi-nax-raid-guide-in-nerub-ar-palace` |
+| `dungeon_guide` | `ara-kara-city-of-echoes-dungeon-guide`, `dungeons-guide` |
+| `delve_guide` | `the-sinkhole-delve-guide`, `brann-bronzebeard-delve-companion-guide`, `delves-guide` |
+| `profession` | `professions`, `professions-alchemy`, `professions-mining-leveling` |
+| `tier_list` | `mythic-dps-tier-list`, `pvp-dps-tier-list`, `tier-lists` |
+| `hub` | `void-assaults-hub`, `midnight-mounts-hub`, `guides-for-legion` |
 | `expansion_guide` | `mistweaver-monk-the-war-within-pve-guide`, `midnight-expansion-guide` |
 | `special_event_guide` | `mistweaver-monk-mists-of-pandaria-remix-guide` |
-| `article_guide` | any other `-guide`/`-guides` page: `season-3-mythic-plus-guide`, `frost-mage-hero-talents-pve-guide` |
+| `article_guide` | any other `-guide`/`-guides` page (`season-3-mythic-plus-guide`, `frost-mage-hero-talents-pve-guide`) and `weekly-to-do-list` |
+| `transmog` | transmog set and item-model pages: `transmogrification-mage-cloth-chest-item-model-list` (the transmog hubs ending in `-guide`/`-guides` are `article_guide`) |
+
+The current raid's boss pages are slugged like the raid's own guide (`vorasius-raid-guide`), so they
+classify as `raid_guide`; `search` labels such a page `raid_encounter` when the site index records a
+raid guide as its breadcrumb parent, so boss pages do not take the raid-guide boost. `icy-veins guide`
+classifies by slug alone and reports them as `raid_guide`.
+
+A `transmog` page loses 30 points (`penalty_transmog`) unless the query says `transmog` or
+`transmogrification`, so the 650 set and model pages, which name a class, never crowd out a class or
+spec guide. Change analyses (`arcane-mage-patch-9-1-changes-analysis`, `latest-mage-class-changes`),
+tool pages (`midnight-talent-calculator`) and news stay unclassified.
+
+A query word naming a dungeon or delve (`dungeon`, `delves`) boosts `dungeon_guide` or `delve_guide`
+pages by 18, like `raid` does for `raid_guide`.
 
 `guide-full` traversal is family-aware: class hubs and role guides stay on the current page, and
 every other family walks its own navigation block. Only a class hub reads the class dropdown in the
@@ -152,10 +183,14 @@ misleading guide matches.
 `search` and `resolve` return a guide only when its name or slug contains the whole query or every
 query word, or when a query word names the guide's family (`talents`, `stats`, `easy mode`, ...). One
 word that no guide contains therefore empties the result. Words match whole, so `dh` does not match
-"headhunters", and a trailing plural `s` is ignored on both sides, so `build` keeps the
-`...-spec-builds-talents` pages. Words such as `a`, `of` and `the` are ignored, and `+` reads as
+"headhunters", and a trailing plural `s` or `es` is ignored on both sides, so `build` keeps the
+`...-spec-builds-talents` pages and `boss` the "world bosses" guide. Words such as `a`, `of` and `the` are ignored, and `+` reads as
 `plus`, so `mythic+` finds the "Mythic Plus" pages and the seasonal
-`<expansion>-mythic-season-<n>-guide` pages. Class and spec shorthand is spelled out in the query and
+`<expansion>-mythic-season-<n>-guide` pages. Punctuation is folded the way slugs fold it: any
+separator other than an apostrophe is a space, and the query is tried with each apostrophe dropped
+and as a space (`K'aresh` is `karesh`, `Zul'Aman` is `zul-aman`). A hyphenated word is also tried
+with its hyphen dropped, so `Nerub-ar Palace` resolves to `nerubar-palace-raid-guide`
+and `Ara-Kara, City of Echoes` to `ara-kara-city-of-echoes-dungeon-guide`. Class and spec shorthand is spelled out in the query and
 in page titles alike (`ret pally` is `retribution paladin`, `frost dk` is `frost death knight`, `mw`
 is `mistweaver`), so `disc belt` still finds the "Disc Belt Guide".
 
@@ -169,8 +204,9 @@ share the word, so `shadow` lists the Shadow Priest guide before the Shadow Encl
 same or nearly the same score, so a spec name that
 several classes share (`frost`, `holy`, `protection`, `restoration`) stays unresolved; add the class.
 The one exception is a query that is a page's exact title (`exact_title`) when every close rival is
-one of that page's own sub-pages: `player housing` resolves to `player-housing-guide` over
-`player-housing-interior-guide`.
+one of that page's own sub-pages, by slug prefix or by the breadcrumb parent the site index records:
+`player housing` resolves to `player-housing-guide` over `player-housing-interior-guide` and
+`housing-decor-guide`.
 
 Only a spec, class or role introduction (`spec_guide`, `class_hub`, `role_guide`) gets the
 `intro_guide` boost; a season hub or any other `article_guide` does not outrank the pages about what
@@ -189,19 +225,93 @@ answers scripted clients with a Cloudflare 403.
 
 A stale sitemap makes `search` and `resolve` also read the site-wide guide menu (`nav.iv-subnav`)
 that every guide page carries, from one class hub (`provenance.site_menu_url`, cached like any
-guide page). The menu links the current season's pages (raid, Mythic+, PvP and season hubs, new
-specs), and every supported page it links that the sitemap lacks joins the candidates, ranked by the
-same scoring. Every result says where it came from in `metadata.source`: `sitemap` or `site_menu`.
-A `site_menu` row has `sitemap_lastmod: null`, `name` built from its slug like a sitemap row and
-`metadata.menu_title` with the menu's own wording (`Mythic+ Season 2`), which it also matches on; it
-never takes the stale penalty and wins a score tie as the newest page would. `provenance.sitemap_warning`
-then says that pages published since the sitemap's date are found only through the menu, which lists
-current pages only: a past season's page missing from the sitemap (the Season 1 raid) is still not
-found, so open it by slug or URL with `icy-veins guide`.
+guide page), and the site index (see [Site index](#site-index)). The menu links the current season's
+pages (raid, Mythic+, PvP and season hubs, new specs); the index lists every page an `index-refresh`
+crawl has found, past seasons included (the Season 1 raid and its bosses, dungeons, delves, renamed
+pages). Search reads the index file only and never crawls. Every result says where it came from in
+`metadata.source`, first match wins: `sitemap`, then `site_menu`, then `site_index`.
+
+- A `site_menu` row has `sitemap_lastmod: null`, `name` built from its slug like a sitemap row and
+  `metadata.menu_title` with the menu's own wording (`Mythic+ Season 2`), which it also matches on.
+- A `site_index` row is named by the page's headline (`Vorasius Raid Guide in The Voidspire for
+  Midnight Season 1`) and has `sitemap_lastmod: null`.
+- Any row the index knows, whatever its source, also matches on the index headline, so `voidspire`
+  finds that raid's boss pages, and carries `metadata.date_published` (the page's JSON-LD
+  `datePublished`) and `metadata.parent` (the slug of its breadcrumb parent). Both are `null` for a
+  page the index does not hold.
+- A renamed page's old slug (a 301 the crawl recorded) is dropped when its new slug is listed, so the
+  page is ranked once.
+
+Neither menu nor index rows take the stale penalty. Score ties go to the newest page: a `site_menu`
+page first, then by `sitemap_lastmod` or, for a `site_index` page, `date_published`.
+`date_modified` is not used: Icy Veins re-saved most pages on 2026-05-19, so it dates nothing.
+
+`provenance.sitemap_warning` then says where pages published since the sitemap's date come from.
+When the index in use is the snapshot bundled with the release, or there is none, the warning says
+so and suggests `icy-veins index-refresh`. `provenance.site_index_path` and
+`provenance.site_index_refreshed_at` name the index read. `provenance.site_index_warning` is set when
+your local index was refreshed more than 7 days ago, or when the live menu links pages the index
+lacks (it names them); run `icy-veins index-refresh`.
 
 When the menu cannot be read (a block page, or markup that no longer lists any guide), search still
-answers from the sitemap alone, with `provenance.site_menu_warning` saying why and
-`provenance.sitemap_warning` saying that newer guides are missing.
+answers from the sitemap and the index, with `provenance.site_menu_warning` saying why and
+`provenance.sitemap_warning` saying that newer guides are missing unless the index lists them.
+
+## Site index
+
+`icy-veins index-refresh [--max-requests N]` crawls icy-veins.com for the pages its sitemap lacks and
+merges what it reads into a JSON index at `<data root>/icy-veins/site_index.json` (durable data, not
+the TTL cache; `<data root>` is `$XDG_DATA_HOME/warcraft`, `~/.local/share/warcraft` by default, and
+the checkout's `.warcraft/runtime/data` when run from a worktree).
+
+The crawl:
+
+- starts at `death-knight-guide`, follows every link in the site-wide menu, and follows any link on a
+  fetched page to a `/wow/<slug>` page the sitemap does not list, recursively; a page the sitemap
+  lists is not fetched. It then re-reads the previous index's other pages, least recently seen first.
+- waits at least 1 second between requests (longer when `WARCRAFT_HTTP_MIN_INTERVAL_SECONDS` asks) and
+  never retries. A guide page cached by an earlier `guide` call is reused and costs no request.
+- stops at `--max-requests` uncached requests (default 250; a full run measured 241 requests in 4
+  minutes on 2026-10-03). The run is then `partial` with `stop_reason: "max_requests"`, and the
+  pages it found but did not fetch are kept as the index's `frontier`, which the next run fetches
+  first.
+- stops at the first 403, 429 or Cloudflare challenge (`cf-mitigated: challenge`) with
+  `stop_reason: "blocked"` and `data.blocked: {url, status, challenge}`, and does not retry around it.
+- drops a page that answers 404 from the index and records a 301 as a redirect row naming the new
+  slug.
+
+Every run merges into the previous index and never replaces it: a page the crawl did not reach again
+keeps its row, so past-season pages stay findable after current pages stop linking them. What a
+partial or blocked run read is merged too, but a blocked run keeps the index's previous
+`refreshed_at` (so its age warning stands) and writes nothing when it read nothing. A seed page that lists no links (a layout change) fails as
+`parse_failed` (exit 1) and leaves the index untouched; an unreachable seed fails as `network_error`
+(exit 5).
+
+Each row holds `slug`, `url`, `title` (the JSON-LD headline), `date_published`, `date_modified`,
+`parent` (breadcrumb parent slug), `source` (how the crawl first found it: `seed`, `menu`, `page` or
+`revisit`), `first_seen`, `last_seen`, `status` (`ok` or `redirect`) and `redirect_to`. No HTML is
+stored. The file is written atomically.
+
+`data` reports `index_path`, `partial`, `stop_reason`, `counts` (`fetched` requests, `cached` pages,
+`pages` read, `new` pages, `aliases`, `dropped` 404s, `errors`, `frontier`, `total` rows),
+`new_pages`, `blocked`, `errors` and `previous_index` (the index merged into). Run it weekly and at a
+patch or season start.
+
+### Bundled snapshot
+
+The package ships `icy_veins_cli/data/site_index.json`, an index built by a full live run on
+2026-10-03 (243 pages, 147 of them missing from the sitemap). Search and `index-refresh` use it
+until you have a local index, so every user finds the current season's pages without crawling, and
+your first `index-refresh` merges into it. `icy-veins doctor` reports the index in use under
+`site_index`. To regenerate the snapshot from a checkout:
+
+```bash
+tmp=$(mktemp -d)
+XDG_DATA_HOME="$tmp" uv run icy-veins index-refresh
+cp "$tmp/warcraft/icy-veins/site_index.json" packages/icy-veins-cli/src/icy_veins_cli/data/site_index.json
+```
+
+The run starts from the current snapshot, so pages it holds are kept.
 
 ## Caching
 
@@ -217,13 +327,17 @@ separately.
 | `ICY_VEINS_SITEMAP_CACHE_TTL_SECONDS` | `86400` |
 | `ICY_VEINS_PAGE_CACHE_TTL_SECONDS` | `3600` |
 
-`icy-veins doctor` prints the resolved values.
+`icy-veins doctor` prints the resolved values. The site index is not cached data; see
+[Site index](#site-index).
 
 ## Tests
 
 - `tests/test_icy_veins_cli.py` - parsing, ranking, command contracts, transport error envelopes
 - `tests/test_icy_veins_recorded_fixtures.py` - captured real pages (pre-redesign and Astro layouts,
   and a class hub carrying the site-wide guide menu) plus the slug-to-family classification table
+- `tests/test_icy_veins_site_index.py` - index page reading over captured raid, dungeon and boss pages,
+  the new families, `index-refresh` (policy, cap, block, merge, failures) and search over a synthetic index
+- `tests/test_warcraft_content_site_crawler.py` - the pure crawler over synthetic URL-to-HTML maps
 - `tests/e2e/test_icy_veins.py` - live end-to-end journeys, run with `make test-e2e E2E_PATHS="tests/e2e/test_icy_veins.py"`
 
 ## Not in scope

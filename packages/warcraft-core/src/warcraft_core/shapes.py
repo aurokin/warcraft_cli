@@ -18,3 +18,8 @@ def as_dict(value: Any) -> dict[str, Any]:
 def as_list(value: Any) -> list[Any]:
     """Return ``value`` when it is a JSON array, otherwise an empty array."""
     return value if isinstance(value, list) else []
+
+
+def unique_strings(values: list[Any]) -> list[str]:
+    """The non-blank strings in ``values``, stripped, each once, in first-seen order."""
+    return list(dict.fromkeys(text for value in values if isinstance(value, str) and (text := value.strip())))

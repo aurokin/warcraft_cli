@@ -20,21 +20,23 @@ from warcraft_core.exit_codes import error_code_for_http_status
 from warcraft_core.provider import ProviderError
 
 from wowhead_cli.doctor import build_doctor_payload
+from wowhead_cli.entity_types import RESOLVE_ENTITY_TYPES
 from wowhead_cli.expansion_profiles import (
     ExpansionProfile,
     detect_expansion_from_url,
+    is_wowhead_url,
     resolve_expansion,
 )
 from wowhead_cli.ranking import (
     URL_PAGE_COMMANDS,
     command_prefix_for_expansion,
     merge_suggestion_lists,
-    normalize_resolve_entity_types,
     normalize_search_results,
     preferred_resolve_candidates,
     resolve_confidence,
     resolve_next_command,
     search_ranking_query,
+    split_choices,
     upstream_rank_bonuses,
     url_entity_result,
     url_page_result,
@@ -133,7 +135,7 @@ def _url_answer(query: str, *, profile: ExpansionProfile) -> dict[str, Any] | No
     Wowhead URL naming no entity or page a command reads fails instead of answering empty.
     """
     row = url_entity_result(query, expansion=profile) or url_page_result(query, expansion=profile)
-    if row is None and detect_expansion_from_url(query) is not None:
+    if row is None and is_wowhead_url(query):
         commands = ", ".join([*URL_PAGE_COMMANDS.values(), "entity --url", "entity-page --url"])
         raise ProviderError(
             "invalid_query",
@@ -245,7 +247,7 @@ def resolve(
     target = _validated_query(target)
     profile = select_expansion(expansion, url_hint=target).profile
     try:
-        selected_entity_types = normalize_resolve_entity_types(list(entity_types))
+        selected_entity_types = split_choices(list(entity_types), allowed=RESOLVE_ENTITY_TYPES, label="resolve entity type")
     except ValueError as exc:
         raise ProviderError("invalid_argument", str(exc)) from exc
     url_row = _url_answer(target, profile=profile)
@@ -259,7 +261,7 @@ def resolve(
             open_client(profile), target, profile=profile, entity_types=selected_entity_types
         )
     answering, trailing = preferred_resolve_candidates(ranked)
-    confidence = resolve_confidence(answering, entity_types=selected_entity_types)
+    confidence = resolve_confidence(answering, entity_types=selected_entity_types, query=target)
     top_candidate = answering[0] if answering else None
     candidates = answering + trailing
     returned = candidates[:limit]

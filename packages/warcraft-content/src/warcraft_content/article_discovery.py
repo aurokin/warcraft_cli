@@ -10,21 +10,15 @@ def article_follow_up(
     ref: str,
     *,
     surface: str = "guide",
-    full_surface: str | None = None,
-    export_surface: str | None = None,
-    reason: str | None = None,
 ) -> dict[str, Any]:
-    normalized_full_surface = full_surface or f"{surface}-full"
-    normalized_export_surface = export_surface or f"{surface}-export"
-    normalized_reason = reason or f"{surface}_summary"
     quoted_ref = shlex.quote(ref)
     return {
         "recommended_surface": surface,
         "command": f"{provider_command} {surface} {quoted_ref}",
-        "reason": normalized_reason,
+        "reason": f"{surface}_summary",
         "alternative_commands": [
-            f"{provider_command} {normalized_full_surface} {quoted_ref}",
-            f"{provider_command} {normalized_export_surface} {quoted_ref}",
+            f"{provider_command} {surface}-full {quoted_ref}",
+            f"{provider_command} {surface}-export {quoted_ref}",
         ],
     }
 
@@ -91,13 +85,17 @@ def article_search_payload(
     search_query: str,
     results: list[dict[str, Any]],
     total_count: int,
+    scope_hint: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    return {
+    payload: dict[str, Any] = {
         "query": query,
         "search_query": search_query,
         "count": total_count,
         "results": results,
     }
+    if scope_hint is not None:
+        payload["scope_hint"] = scope_hint
+    return payload
 
 
 def article_resolve_payload(
@@ -108,9 +106,10 @@ def article_resolve_payload(
     results: list[dict[str, Any]],
     total_count: int,
     resolved: bool,
+    scope_hint: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     top = results[0] if results else None
-    return {
+    payload: dict[str, Any] = {
         "query": query,
         "search_query": search_query,
         "resolved": resolved,
@@ -121,9 +120,12 @@ def article_resolve_payload(
         "count": total_count,
         "candidates": results,
     }
+    if scope_hint is not None:
+        payload["scope_hint"] = scope_hint
+    return payload
 
 
-def merge_article_linked_entities(pages: list[dict[str, Any]], *, page_key: str = "guide") -> list[dict[str, Any]]:
+def merge_article_linked_entities(pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Fold per-page linked entities into one row per entity, keeping every key the pages carried.
 
     Provider-specific keys such as ``ability_identity`` survive the merge, so ``guide-full`` and
@@ -131,7 +133,7 @@ def merge_article_linked_entities(pages: list[dict[str, Any]], *, page_key: str 
     """
     merged: dict[tuple[str, str], dict[str, Any]] = {}
     for page in pages:
-        page_url = page[page_key]["page_url"]
+        page_url = page["guide"]["page_url"]
         for row in page["linked_entities"]:
             key = (str(row["type"]), str(row["id"]))
             record = merged.get(key)
@@ -146,10 +148,10 @@ def merge_article_linked_entities(pages: list[dict[str, Any]], *, page_key: str 
     return sorted(merged.values(), key=lambda row: (str(row["type"]), str(row["id"])))
 
 
-def merge_article_build_references(pages: list[dict[str, Any]], *, page_key: str = "guide") -> list[dict[str, Any]]:
+def merge_article_build_references(pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     merged: dict[str, dict[str, Any]] = {}
     for page in pages:
-        page_url = page[page_key]["page_url"]
+        page_url = page["guide"]["page_url"]
         for row in page.get("build_references") or []:
             reference_url = str(row["url"])
             record = merged.get(reference_url)

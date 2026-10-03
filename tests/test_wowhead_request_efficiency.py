@@ -14,13 +14,14 @@ runner = CliRunner()
 
 
 def test_wowhead_client_get_json_returns_deepcopy_from_session_cache(monkeypatch) -> None:
-    def fake_request(self, url: str, *, params=None):  # noqa: ANN001
+    def fake_request(self, url: str, *, params=None):
         response = MagicMock()
         response.json.return_value = {"search": "x", "results": [{"id": 1}]}
         return response
 
     monkeypatch.setattr(WowheadClient, "_request_with_retries", fake_request)
-    client = WowheadClient(cache_enabled=False)
+    monkeypatch.setenv("WOWHEAD_CACHE_BACKEND", "none")
+    client = WowheadClient()
     first = client._get_json("https://example.test/search", cache_namespace="json")
     first["results"][0]["id"] = 99
     second = client._get_json("https://example.test/search", cache_namespace="json")
@@ -31,14 +32,15 @@ def test_wowhead_client_get_json_returns_deepcopy_from_session_cache(monkeypatch
 def test_wowhead_client_dedupes_session_json_requests(monkeypatch) -> None:
     calls: list[str] = []
 
-    def fake_request(self, url: str, *, params=None):  # noqa: ANN001
+    def fake_request(self, url: str, *, params=None):
         calls.append(url)
         response = MagicMock()
         response.json.return_value = {"search": "x", "results": []}
         return response
 
     monkeypatch.setattr(WowheadClient, "_request_with_retries", fake_request)
-    client = WowheadClient(cache_enabled=False)
+    monkeypatch.setenv("WOWHEAD_CACHE_BACKEND", "none")
+    client = WowheadClient()
     client.search_suggestions("thunderfury")
     client.search_suggestions("thunderfury")
     client.close()
@@ -55,17 +57,21 @@ def test_wowhead_client_cache_keys_carry_the_request_params(monkeypatch, tmp_pat
         return response
 
     monkeypatch.setattr(WowheadClient, "_request_with_retries", fake_request)
-    with WowheadClient(cache_dir=tmp_path, cache_backend="file") as client:
+    monkeypatch.setenv("WOWHEAD_CACHE_BACKEND", "file")
+    monkeypatch.setenv("WOWHEAD_CACHE_DIR", str(tmp_path))
+    with WowheadClient() as client:
         assert [client.search_suggestions(q)["search"] for q in ("thunderfury", "ashkandi")] == ["thunderfury", "ashkandi"]
     # A second client has no session cache, so these answers come from the file cache.
-    with WowheadClient(cache_dir=tmp_path, cache_backend="file") as client:
+    with WowheadClient() as client:
         assert [client.search_suggestions(q)["search"] for q in ("ashkandi", "thunderfury")] == ["ashkandi", "thunderfury"]
     assert calls == ["thunderfury", "ashkandi"]
 
 
-def test_wowhead_entity_response_cache_keeps_the_all_comments_variant_apart(tmp_path) -> None:
+def test_wowhead_entity_response_cache_keeps_the_all_comments_variant_apart(monkeypatch, tmp_path) -> None:
     options = {"requested_type": "item", "requested_id": 19019, "data_env": None, "include_comments": True, "linked_entity_preview_limit": 5}
-    with WowheadClient(cache_dir=tmp_path, cache_backend="file") as client:
+    monkeypatch.setenv("WOWHEAD_CACHE_BACKEND", "file")
+    monkeypatch.setenv("WOWHEAD_CACHE_DIR", str(tmp_path))
+    with WowheadClient() as client:
         client.set_cached_entity_response({"comments": "top"}, include_all_comments=False, **options)
         assert client.get_cached_entity_response(include_all_comments=True, **options) is None
         assert client.get_cached_entity_response(include_all_comments=False, **options) == {"comments": "top"}
@@ -136,7 +142,7 @@ def test_wowhead_stream_refuses_a_malformed_envelope(monkeypatch) -> None:
 def test_wowhead_comments_hydration_uses_concurrency(monkeypatch) -> None:
     call_count = {"n": 0}
 
-    def fake_replies(self, comment_id: int):  # noqa: ANN001
+    def fake_replies(self, comment_id: int):
         call_count["n"] += 1
         return [{"id": comment_id * 10}]
 

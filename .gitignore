@@ -1,7 +1,3 @@
-research/wowhead-clis/
-research/warcraftlogs-docs/
-research/warcraftlogs-docs-classic/
-research/warcraftlogs-docs-fresh/
 .env.local
 .playwright-cli/
 .generated-skills/

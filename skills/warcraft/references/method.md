@@ -19,6 +19,7 @@
 - prefer `guide` before `guide-full`
 - Method titles never say "Mythic+": `mythic+`, `m+` and `mythic plus` search for "mythic dungeon" pages
 - class and spec shorthand works in queries (`bm hunter`, `disc priest`, `frost dk`)
+- query words match whole slug words (`mage` does not match "damage"); names with hyphens or apostrophes work as typed (`k'aresh`, `zul'aman`, `kriegval's rest`, `nerub-ar palace`)
 - expect explicit support boundaries; unsupported families return structured failures or `scope_hint`
 - `guide.last_updated` is an ISO date (the page's wording is in `last_updated_text`); search rows carry `metadata.sitemap_lastmod`
 - `resolve --limit` only trims the candidates shown; confidence is judged on every match

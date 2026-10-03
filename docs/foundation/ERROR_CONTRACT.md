@@ -84,9 +84,11 @@ exit codes, and documents them in its provider README: for example `warcraftlogs
 `4` for `addon_not_found`, `blizzard` exits `2` for `unsupported_region`,
 `unsupported_game_version`, and `classic_profile_unsupported`, `lorrgs` exits `2` for
 `invalid_report_ref` and `missing_fight`, `raidbots` exits `2` for `invalid_report_ref`, and
-`warcraft` exits `2` for `unsupported_provider_expansion`, `duplicate_expansion_argument`, and
-`invalid_report_ref`, and `4` for `cooldown-packet`'s `fight_not_found`, `actor_id_not_found`,
-`actor_name_not_found`, and `lorrgs_fight_not_found`.
+`warcraft` exits `2` for `unsupported_provider_expansion`, `duplicate_expansion_argument`,
+`invalid_report_ref`, `no_searching_provider`, `unsupported_talent_source`, and `cooldown-packet`'s
+`missing_fight` and `missing_actor`, and `4` for `cooldown-packet`'s `fight_not_found`,
+`actor_id_not_found`, `actor_name_not_found`, `lorrgs_fight_not_found`, and
+`lorrgs_fight_has_no_players`.
 
 ## Exit codes
 
@@ -144,7 +146,7 @@ These flags exist on every binary and go before the subcommand:
 | Flag | Effect |
 | --- | --- |
 | `--pretty` | Pretty-print JSON. Default output is compact JSON. |
-| `--compact` | Truncate long prose strings (default 280 chars, adds `...`) and list each cut dot path in `provenance.compacted_paths`. Strings without a space or tab (URLs, talent and transport strings, export codes, ids, a generated SimC profile) and `*command`/`*commands` values are never cut. With `--fields`, `provenance.compacted_paths` lists the cut paths the projection kept. |
+| `--compact` | Truncate long prose strings (default 280 chars, adds `...`) and list each cut dot path in `provenance.compacted_paths`. Strings without a space or tab (URLs, talent and transport strings, export codes, ids, a generated SimC profile) and `*command`/`*commands`/`*input` values are never cut. With `--fields`, `provenance.compacted_paths` lists the cut paths the projection kept. |
 | `--compact-max-chars N` | Truncation length for `--compact` (40-10000) |
 | `--fields a.b,c` | Keep only the listed dot paths (repeatable or comma-separated) |
 | `--fields-strict` | Exit 2 with `missing_fields` when a requested path is absent |

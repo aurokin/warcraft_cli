@@ -19,6 +19,7 @@ from warcraft_core.analytics import (
     numeric_distribution,
     numeric_summary,
 )
+from warcraft_core.identity import WOW_SPECS_BY_CLASS
 from warcraft_core.provider import ProviderError
 from warcraft_core.shapes import as_dict, as_list
 
@@ -27,6 +28,20 @@ from raiderio_cli.identity import raiderio_class_spec_identity
 
 # The roster roles Raider.IO reports, which are the only values ``--contains-role`` can ever match.
 ROSTER_ROLES = ("tank", "healer", "dps")
+# Raider.IO's class and spec slugs: the shared class/spec table, hyphenated (death-knight, beast-mastery).
+_RAIDERIO_CLASS_SLUGS = {"deathknight": "death-knight", "demonhunter": "demon-hunter"}
+_SPECS_BY_RAIDERIO_CLASS = {
+    _RAIDERIO_CLASS_SLUGS.get(actor_class, actor_class): [spec.replace("_", "-") for spec in specs]
+    for actor_class, specs in WOW_SPECS_BY_CLASS.items()
+}
+ROSTER_CLASSES = tuple(sorted(_SPECS_BY_RAIDERIO_CLASS))
+# ``--contains-spec`` takes a bare spec (holy) or a class-qualified one (priest-holy).
+ROSTER_SPECS = tuple(
+    sorted(
+        {spec for specs in _SPECS_BY_RAIDERIO_CLASS.values() for spec in specs}
+        | {f"{actor_class}-{spec}" for actor_class, specs in _SPECS_BY_RAIDERIO_CLASS.items() for spec in specs}
+    )
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,8 +119,8 @@ def run_filters(
         score_min=score_min,
         score_max=score_max,
         contains_role=_known_values(_normalize_filter_values(contains_role), flag="--contains-role", allowed=ROSTER_ROLES),
-        contains_class=tuple(_normalize_filter_values(contains_class)),
-        contains_spec=tuple(_normalize_filter_values(contains_spec)),
+        contains_class=_known_values(_normalize_filter_values(contains_class), flag="--contains-class", allowed=ROSTER_CLASSES),
+        contains_spec=_known_values(_normalize_filter_values(contains_spec), flag="--contains-spec", allowed=ROSTER_SPECS),
         # A roster player is from one real region, so the `world` scope is not a player region.
         player_region=tuple(
             dict.fromkeys(

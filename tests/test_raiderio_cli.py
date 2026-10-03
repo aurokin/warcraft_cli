@@ -670,7 +670,7 @@ def test_raiderio_character_summary(monkeypatch) -> None:
             "faction": "horde",
             "profile_url": "https://raider.io/characters/us/illidan/Roguecane",
             "thumbnail_url": "https://example.test/thumb.jpg",
-            "guild": {"name": "Liquid", "realm": "Illidan", "region": "us"},
+            "guild": {"name": "Liquid", "realm": "Illidan"},
             "raid_progression": {
                 "tier-mn-1": {
                     "summary": "3/8H",
@@ -1997,6 +1997,10 @@ def test_raiderio_region_aliases_reach_the_api_and_the_player_filter_normalized(
     ("args", "flag"),
     [
         (["sample", "mythic-plus-runs", "--contains-role", "healers"], "--contains-role"),
+        (["distribution", "mythic-plus-runs", "--metric", "class", "--contains-class", "deathknigt"], "--contains-class"),
+        (["sample", "mythic-plus-runs", "--contains-spec", "nopespec"], "--contains-spec"),
+        # A spec slug on another class names no roster player.
+        (["sample", "mythic-plus-runs", "--contains-spec", "rogue-holy"], "--contains-spec"),
         (["distribution", "mythic-plus-players", "--player-region", "mars"], "--player-region"),
         (["threshold", "mythic-plus-runs", "--value", "20", "--player-region", "world"], "--player-region"),
         (["leaderboard", "mythic-plus", "--region", "mars"], "--region"),
@@ -3030,6 +3034,23 @@ def test_raiderio_unknown_realm_is_not_found_after_one_request(monkeypatch) -> N
     assert result.exit_code == 4, result.output
     assert json.loads(result.stderr)["error"]["code"] == "not_found"
     assert [params["realm"] for params in requests] == ["malganis"]
+
+
+def test_raiderio_oceanic_profiles_are_looked_up_in_us(monkeypatch) -> None:
+    # Captured live: Raider.IO answers region=oc with HTTP 400 "Invalid request query input"; Oceanic realms are in us.
+    requests: list[dict[str, Any]] = []
+
+    def fake_request(client: httpx.Client, url: str, *, params: dict[str, Any], retry_attempts: int) -> httpx.Response:
+        requests.append(params)
+        return httpx.Response(200, json={"name": "Vesper", "region": "us", "realm": "Frostmourne"}, request=httpx.Request("GET", url))
+
+    monkeypatch.setattr("raiderio_cli.client.request_with_retries", fake_request)
+    runner.invoke(raiderio_app, ["guild", "oce", "frostmourne", "Vesper"])
+    resolved = json.loads(runner.invoke(raiderio_app, ["resolve", "guild oce frostmourne Vesper"]).stdout)["data"]
+
+    assert [params["region"] for params in requests] == ["us", "us"]
+    # `oce` names the guild's region, so it counts toward the match like `us` would.
+    assert (resolved["resolved"], resolved["next_command"]) == (True, "raiderio guild us frostmourne Vesper")
 
 
 def _roster_run(run_id: int, *members: tuple[str, str, str]) -> dict[str, Any]:

@@ -104,6 +104,8 @@ def normalize_spec_name(value: str | None) -> str | None:
     text = _clean_text(value)
     if text is None:
         return None
+    # Warcraft Logs spells Beast Mastery as BeastMastery, so a lower-to-upper case change splits words.
+    text = re.sub(r"(?<=[a-z])(?=[A-Z])", "_", text)
     normalized = re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_")
     return normalized or None
 

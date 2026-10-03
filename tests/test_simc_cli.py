@@ -16,7 +16,7 @@ from simc_cli.prune import PruneContext
 from simc_cli.repo import RepoPaths
 from simc_cli.report import summarize_sim_report
 from simc_cli.run import CommandResult
-from simc_cli.search import word_bounded_pattern
+from simc_cli.search import find_action, word_bounded_pattern
 from simc_cli.trait_data import parse_trait_table
 from typer.testing import CliRunner
 from warcraft_core.envelope import ENVELOPE_KEYS
@@ -3956,7 +3956,8 @@ def test_simc_sim_uses_quick_preset_and_surfaces_run_metadata(monkeypatch, tmp_p
                     "version": "SimulationCraft 1201-01",
                     "sim": {
                         "options": {
-                            "iterations": 1000,
+                            # SimC rewrites the requested 1000 to the work done: iterations + threads - 1.
+                            "iterations": 1011,
                             "target_error": 0,
                             "threads": 12,
                             "fight_style": "Patchwerk",
@@ -4420,7 +4421,8 @@ def test_run_returns_the_result_lines_and_the_end_of_the_output(monkeypatch, tmp
     stdout = "\n".join(
         ["SimulationCraft 1210-01", *[f"Merging data from thread-{n} ..." for n in range(20)],
          "Player: p void_elf mage arcane 90", "  DPS=334694.5 DPS-Error=24099.4/7.20% DPS-Range=96166.0/28.73%",
-         *[f"  detail {n}" for n in range(30)], "text report took 0.0006 seconds."]
+         *[f"  detail {n}" for n in range(30)], "Target: Fluffy_Pillow humanoid tank_dummy unknown 93",
+         "  DTPS=334694.5 DTPS-Error=24099.4/7.20% DTPS-Range=96166.0/28.73%", "text report took 0.0006 seconds."]
     )
     monkeypatch.setattr(
         "simc_cli.main.run_profile",
@@ -4433,8 +4435,10 @@ def test_run_returns_the_result_lines_and_the_end_of_the_output(monkeypatch, tmp
     exit_code, payload = _invoke(tmp_path, "run", str(profile))
 
     assert exit_code == 0
+    # The target's DTPS line keeps its Target: header; without it the list read as the player's damage taken.
     assert payload["data"]["result_lines"] == [
-        "Player: p void_elf mage arcane 90", "DPS=334694.5 DPS-Error=24099.4/7.20% DPS-Range=96166.0/28.73%"
+        "Player: p void_elf mage arcane 90", "DPS=334694.5 DPS-Error=24099.4/7.20% DPS-Range=96166.0/28.73%",
+        "Target: Fluffy_Pillow humanoid tank_dummy unknown 93", "DTPS=334694.5 DTPS-Error=24099.4/7.20% DTPS-Range=96166.0/28.73%",
     ]
     assert payload["data"]["stdout_preview"][-1] == "text report took 0.0006 seconds."
     assert payload["data"]["stdout_truncated"] is True
@@ -4466,19 +4470,181 @@ def test_sim_report_error_and_convergence_come_from_the_captured_report() -> Non
     assert summary.run_settings["stop_reason"] == "fixed_iterations_completed"
 
 
-@pytest.mark.parametrize(
-    ("iterations_completed", "stop_reason"),
-    [(2000, "target_error_reached"), (10000, "target_error_requested")],
-)
-def test_sim_stop_reason_says_whether_target_error_ended_the_run(iterations_completed: int, stop_reason: str) -> None:
+def test_sim_stop_reason_does_not_claim_the_target_error_ended_the_run() -> None:
+    """SimC writes options.iterations as the count it ran (403 for 400 requested on 4 threads, 399
+    completed), so comparing it with the completed count read every target-error run as stopped early."""
     summary = summarize_sim_report(
         {
             "sim": {
-                "options": {"iterations": 10000, "target_error": 0.1, "confidence_estimator": 1.96},
-                "players": [{"collected_data": {"dps": {"mean": 1000.0, "mean_std_dev": 0.5}, "fight_length": {"count": iterations_completed}}}],
+                "options": {"iterations": 403, "target_error": 0.1, "confidence_estimator": 1.96},
+                "players": [{"collected_data": {"dps": {"mean": 1000.0, "mean_std_dev": 0.5}, "fight_length": {"count": 399}}}],
             }
         }
     )
 
-    assert summary.run_settings["stop_reason"] == stop_reason
+    assert summary.run_settings["stop_reason"] == "target_error_requested"
     assert summary.run_settings["target_error_percent"] == 0.098
+
+
+def _fake_ripgrep(monkeypatch, stdout_for: dict[str, str] | None = None) -> list[list[str]]:
+    """Record each ripgrep argv; a call searching a path named in ``stdout_for`` prints that output."""
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **_kwargs):  # noqa: ANN001, ANN003
+        argv = [str(part) for part in cmd]
+        calls.append(argv)
+        stdout = "".join(out for path, out in (stdout_for or {}).items() if path in argv)
+        return subprocess.CompletedProcess(cmd, 0 if stdout else 1, stdout=stdout, stderr="")
+
+    monkeypatch.setattr("simc_cli.search.shutil.which", lambda _name: "/usr/bin/rg")
+    monkeypatch.setattr("simc_cli.search.subprocess.run", fake_run)
+    return calls
+
+
+def test_find_action_reads_spell_dump_lines_that_hold_a_bare_carriage_return(monkeypatch, tmp_path: Path) -> None:
+    """The dumps mix CRLF and CR line ends; splitting ripgrep's output on \\r crashed with internal_error."""
+    repo_root = _checkout(tmp_path)
+    dump = repo_root / "SpellDataDump" / "mage.txt"
+    dump.write_text("")
+    _fake_ripgrep(monkeypatch, {str(dump): f"{dump}:7:Name : Frostbolt (id=116)\rSchool : Frost\n{dump}:9:Frostbolt\r\n"})
+
+    result = runner.invoke(simc_app, ["--repo-root", str(repo_root), "find-action", "Frostbolt", "--class", "mage"])
+
+    assert result.exit_code == 0
+    spell_dump = json.loads(result.stdout)["data"]["buckets"]["spell_dump"]
+    assert [item["line_no"] for item in spell_dump["items"]] == [7, 9]
+
+
+def test_find_action_matches_a_token_against_the_spell_dump_display_name(monkeypatch, tmp_path: Path) -> None:
+    """The dumps spell `Name : Howling Blast`, so the token query `howling_blast` never hit them."""
+    calls = _fake_ripgrep(monkeypatch)
+
+    exit_code, _payload = _invoke(tmp_path, "find-action", "howling_blast")
+
+    assert exit_code == 0
+    dump_call = next(argv for argv in calls if argv[-1].endswith("SpellDataDump"))
+    assert "-i" in dump_call
+    pattern = dump_call[dump_call.index("--no-heading") + 1]
+    assert re.search(pattern, "Name : Howling Blast (id=49184)", re.IGNORECASE) is not None
+
+
+def test_find_action_class_filter_matches_whole_class_names(monkeypatch, tmp_path: Path) -> None:
+    """`hunter` used to pull in Demon Hunter files, and `deathknight` matched no module and searched all of them."""
+    repo_root = _checkout(tmp_path)
+    modules = repo_root / "engine" / "class_modules"
+    for relative in ("sc_hunter.cpp", "sc_demon_hunter.cpp", "sc_death_knight.cpp", "apl/apl_death_knight.cpp", "monk/sc_stagger.cpp"):
+        (modules / relative).parent.mkdir(parents=True, exist_ok=True)
+        (modules / relative).write_text("")
+    for name in ("hunter.txt", "demonhunter.txt", "deathknight.txt", "deathknight_ptr.txt"):
+        (repo_root / "SpellDataDump" / name).write_text("")
+    calls = _fake_ripgrep(monkeypatch)
+    paths = RepoPaths(
+        root=repo_root,
+        apl_default=repo_root / "ActionPriorityLists" / "default",
+        apl_assisted=repo_root / "ActionPriorityLists" / "assisted_combat",
+        class_modules=modules,
+        spell_dump=repo_root / "SpellDataDump",
+        build_dir=repo_root / "build",
+        build_simc=repo_root / "build" / "simc",
+    )
+
+    def searched(wow_class: str) -> set[str]:
+        calls.clear()
+        find_action(paths, "x", wow_class)
+        return {Path(arg).relative_to(repo_root).as_posix() for argv in calls[2:] for arg in argv if arg.startswith(str(repo_root))}
+
+    assert searched("hunter") == {"engine/class_modules/sc_hunter.cpp", "SpellDataDump/hunter.txt"}
+    assert searched("Death Knight") == {
+        "engine/class_modules/apl/apl_death_knight.cpp",
+        "engine/class_modules/sc_death_knight.cpp",
+        "SpellDataDump/deathknight.txt",
+        "SpellDataDump/deathknight_ptr.txt",
+    }
+    assert searched("monk") == {"engine/class_modules/monk/sc_stagger.cpp"}
+
+
+def test_find_action_rejects_an_unknown_class(monkeypatch, tmp_path: Path) -> None:
+    """An unknown --class used to fall back to every file and answer ok:true."""
+    _fake_ripgrep(monkeypatch)
+
+    exit_code, payload = _invoke(tmp_path, "find-action", "x", "--class", "nonsense")
+
+    assert exit_code == 2
+    assert payload["error"]["code"] == "invalid_query"
+    assert "deathknight" in payload["error"]["message"]
+
+
+def _sim_json2(players: list[dict[str, Any]], **sim: Any) -> dict[str, Any]:
+    return {"version": "SimulationCraft 1201-01", "sim": {"options": {"iterations": 10, "target_error": 0}, "players": players, **sim}}
+
+
+def _stub_sim_run(monkeypatch, report: dict[str, Any]) -> None:
+    def _run(paths, profile_path, simc_args):
+        json_path = Path(next(arg.split("=", 1)[1] for arg in simc_args if arg.startswith("json2=")))
+        json_path.write_text(json.dumps(report))
+        return CommandResult(command=[], cwd=None, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("simc_cli.main.run_profile", _run)
+
+
+def test_simc_sim_reports_every_actor_and_the_ranked_profilesets(monkeypatch, tmp_path: Path) -> None:
+    """Only players[0] was reported, so a Top Gear profile lost its ranking and a second actor vanished."""
+    profile = tmp_path / "p.simc"
+    profile.write_text("deathknight=a\n")
+    _stub_sim_run(
+        monkeypatch,
+        _sim_json2(
+            [
+                {"name": "a", "specialization": "Frost Death Knight", "collected_data": {"dps": {"mean": 150.0}}},
+                {"name": "b", "specialization": "Unholy Death Knight", "collected_data": {"dps": {"mean": 130.0}}},
+            ],
+            profilesets={"metric": ["Damage per Second"], "results": [{"name": "np", "mean": 140.0}, {"name": "orc", "mean": 152.0}]},
+        ),
+    )
+
+    exit_code, payload = _invoke(tmp_path, "sim", str(profile), "--iterations", "10")
+
+    assert exit_code == 0
+    data = payload["data"]
+    assert data["actor_count"] == 2
+    assert [(row["player"]["name"], row["metrics"]["dps"]) for row in data["other_actors"]] == [("b", 130.0)]
+    assert data["profilesets"]["metric"] == "Damage per Second"
+    assert [(row["name"], row["mean"]) for row in data["profilesets"]["results"]] == [("orc", 152.0), ("np", 140.0)]
+
+
+@pytest.mark.parametrize(("args", "stdin"), [(["sim", "--preset", "fast", "-"], "mage=a\n"), (["sim", "-"], "  \n")])
+def test_simc_sim_bad_input_is_a_usage_error(monkeypatch, tmp_path: Path, args: list[str], stdin: str) -> None:
+    """An unknown preset and an empty profile exited 1 with codes no doc named."""
+    result = runner.invoke(simc_app, [*_checkout_args(tmp_path), *args], input=stdin)
+
+    assert result.exit_code == 2
+    assert json.loads(result.stderr)["error"]["code"] == "invalid_query"
+
+
+def test_simc_inspect_rejects_a_binary_file(tmp_path: Path) -> None:
+    """Inspecting build/simc crashed with internal_error: UnicodeDecodeError."""
+    binary = tmp_path / "simc-binary"
+    binary.write_bytes(b"\xcf\xfa\xed\xfe\x00")
+
+    exit_code, payload = _invoke(tmp_path, "inspect", str(binary))
+
+    assert exit_code == 2
+    assert payload["error"]["code"] == "invalid_query"
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://www.wowhead.com/mop-classic/talent-calc/mage/frost/213221",
+        "https://www.wowhead.com/cata/talent-calc/rogue/combat/abc123",
+        "wowhead.com/classic/talent-calc/mage/frost/CYQAAA",
+    ],
+)
+@pytest.mark.parametrize("flag", ["--talents", "--build-text"])
+def test_decode_build_refuses_a_classic_era_talent_calc_build(tmp_path: Path, url: str, flag: str) -> None:
+    """These were read as retail paths: the probe told the caller to pass a class and spec that could never help."""
+    exit_code, payload = _invoke(tmp_path, "decode-build", flag, url)
+
+    assert (exit_code, payload["error"]["code"]) == (2, "unsupported_build_reference")
+    assert payload["error"]["details"]["reference_type"] == "wowhead_talent_calc_url_non_retail"
+    assert "retail builds only" in payload["error"]["message"]

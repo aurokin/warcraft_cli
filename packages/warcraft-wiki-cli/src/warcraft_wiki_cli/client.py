@@ -42,16 +42,9 @@ def load_warcraft_wiki_cache_settings_from_env() -> tuple[CacheSettings, int, in
 
 
 class WarcraftWikiClient:
-    def __init__(
-        self,
-        *,
-        timeout_seconds: float = 20.0,
-        retry_attempts: int = DEFAULT_RETRY_ATTEMPTS,
-    ) -> None:
+    def __init__(self) -> None:
         self._http_client: httpx.Client | None = None
         settings, search_ttl, page_ttl = load_warcraft_wiki_cache_settings_from_env()
-        self._timeout_seconds = timeout_seconds
-        self._retry_attempts = max(1, retry_attempts)
         self._cache_store = build_cache_store(settings) if settings.enabled else None
         self._search_ttl = search_ttl
         self._page_ttl = page_ttl
@@ -69,7 +62,7 @@ class WarcraftWikiClient:
 
     def _client(self) -> httpx.Client:
         if self._http_client is None:
-            self._http_client = build_client(timeout=self._timeout_seconds)
+            self._http_client = build_client(timeout=20.0)
         return self._http_client
 
     def _cache_key(self, namespace: str, params: dict[str, Any]) -> str:
@@ -91,7 +84,7 @@ class WarcraftWikiClient:
         cached = self._read_cache(key)
         if isinstance(cached, dict):
             return cached
-        response = request_with_retries(self._client(), WIKI_API_URL, params=params, retry_attempts=self._retry_attempts)
+        response = request_with_retries(self._client(), WIKI_API_URL, params=params, retry_attempts=DEFAULT_RETRY_ATTEMPTS)
         try:
             payload = response.json()
         except ValueError:

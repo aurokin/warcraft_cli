@@ -5,7 +5,6 @@ from __future__ import annotations
 import re
 import time
 from collections.abc import Mapping
-from datetime import UTC, datetime
 from typing import Any
 
 
@@ -23,10 +22,6 @@ def list_at(source: Mapping[str, Any], key: str) -> list[Any]:
     """Return ``source[key]`` when it is a JSON array, else an empty list."""
     value = source.get(key)
     return value if isinstance(value, list) else []
-
-
-def utc_now_z() -> str:
-    return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def normalize_match_text(value: str | None) -> str:

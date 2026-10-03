@@ -34,7 +34,7 @@ HEALTHY_ENTITY_HTML = """
 """
 
 
-def _mock_transport_client(handler):  # noqa: ANN001, ANN202
+def _mock_transport_client(handler):
     """Give `doctor` an httpx client whose responses come from `handler`, with no socket involved."""
     return lambda timeout=None: httpx.Client(transport=httpx.MockTransport(handler))
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from warcraft_core.shapes import as_dict, as_list
-from warcraft_core.wow_normalization import normalize_name, normalize_region, primary_realm_slug
+from warcraft_core.wow_normalization import normalize_name, primary_realm_slug, profile_region
 
 
 def find_report_actors(player_details_payload: dict[str, Any], actor_name: str) -> list[dict[str, Any]]:
@@ -115,7 +115,7 @@ def actor_lookup_identity(actor: dict[str, Any], *, region_override: str | None 
     return {
         "ok": True,
         "identity": {
-            "region": normalize_region(raw_region),
+            "region": profile_region(raw_region),
             "realm": primary_realm_slug(server),
             "name": normalize_name(name),
         },

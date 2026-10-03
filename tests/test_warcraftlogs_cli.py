@@ -13,7 +13,9 @@ import httpx
 import pytest
 import typer
 from typer.testing import CliRunner
+from warcraft_core.auth import load_provider_auth_state
 from warcraft_core.envelope import ENVELOPE_KEYS
+from warcraft_core.paths import provider_state_path
 from warcraftlogs_cli.client import (
     CLASSIC_PROFILE,
     FRESH_PROFILE,
@@ -1211,7 +1213,6 @@ def test_warcraftlogs_doctor_reports_phase_one_capabilities(monkeypatch) -> None
             "valid_json": False,
             "auth_mode": None,
             "has_access_token": False,
-            "has_refresh_token": False,
             "expires_at": None,
             "expired": None,
         },
@@ -1266,7 +1267,6 @@ def test_warcraftlogs_doctor_uses_selected_site_profile(monkeypatch) -> None:
             "valid_json": False,
             "auth_mode": None,
             "has_access_token": False,
-            "has_refresh_token": False,
             "expires_at": None,
             "expired": None,
         },
@@ -1298,7 +1298,6 @@ def test_warcraftlogs_doctor_reports_saved_user_token_runtime_access(monkeypatch
             "pending_auth_mode": None,
             "has_pending_state": False,
             "has_access_token": True,
-            "has_refresh_token": True,
             "expires_at": 1500.0,
             "expired": False,
         },
@@ -1337,7 +1336,6 @@ def test_warcraftlogs_doctor_requires_client_credentials_for_user_auth_bootstrap
             "pending_auth_mode": None,
             "has_pending_state": False,
             "has_access_token": False,
-            "has_refresh_token": False,
             "expires_at": None,
             "expired": None,
         },
@@ -1366,7 +1364,6 @@ def test_warcraftlogs_doctor_can_skip_live_probes(monkeypatch) -> None:
             "valid_json": False,
             "auth_mode": None,
             "has_access_token": False,
-            "has_refresh_token": False,
             "expires_at": None,
             "expired": None,
         },
@@ -1397,7 +1394,6 @@ def test_warcraftlogs_doctor_live_probe_uses_uncached_public_helper(monkeypatch)
             "valid_json": False,
             "auth_mode": None,
             "has_access_token": False,
-            "has_refresh_token": False,
             "expires_at": None,
             "expired": None,
         },
@@ -1438,7 +1434,6 @@ def test_warcraftlogs_doctor_reports_live_public_auth_failure(monkeypatch) -> No
             "valid_json": False,
             "auth_mode": None,
             "has_access_token": False,
-            "has_refresh_token": False,
             "expires_at": None,
             "expired": None,
         },
@@ -1476,7 +1471,6 @@ def test_warcraftlogs_doctor_reports_invalid_runtime_config(monkeypatch) -> None
             "pending_auth_mode": None,
             "has_pending_state": False,
             "has_access_token": False,
-            "has_refresh_token": False,
             "expires_at": None,
             "expired": None,
         },
@@ -1516,7 +1510,6 @@ def test_warcraftlogs_doctor_reports_invalid_runtime_config_for_saved_user_token
             "valid_json": True,
             "auth_mode": "pkce",
             "has_access_token": True,
-            "has_refresh_token": True,
             "expires_at": 1500.0,
             "expired": False,
         },
@@ -1553,7 +1546,6 @@ def test_warcraftlogs_doctor_prioritizes_invalid_runtime_config_without_credenti
             "pending_auth_mode": None,
             "has_pending_state": False,
             "has_access_token": False,
-            "has_refresh_token": False,
             "expires_at": None,
             "expired": None,
         },
@@ -1677,7 +1669,6 @@ def test_warcraftlogs_auth_status_reports_shared_state_summary(monkeypatch) -> N
             "valid_json": True,
             "auth_mode": "authorization_code",
             "has_access_token": True,
-            "has_refresh_token": True,
             "expires_at": 1500.0,
             "expired": False,
         },
@@ -1768,7 +1759,6 @@ def test_warcraftlogs_auth_status_reports_grants_blocked_without_client_credenti
             "valid_json": True,
             "auth_mode": "pkce",
             "has_access_token": True,
-            "has_refresh_token": True,
             "expires_at": 1500.0,
             "expired": False,
         },
@@ -1800,7 +1790,6 @@ def test_warcraftlogs_auth_status_can_skip_live_probes(monkeypatch) -> None:
             "valid_json": True,
             "auth_mode": "pkce",
             "has_access_token": True,
-            "has_refresh_token": True,
             "expires_at": 1500.0,
             "expired": False,
         },
@@ -1832,7 +1821,6 @@ def test_warcraftlogs_auth_status_live_probe_calls_the_user_endpoint(monkeypatch
             "valid_json": True,
             "auth_mode": "pkce",
             "has_access_token": True,
-            "has_refresh_token": True,
             "expires_at": 1500.0,
             "expired": False,
         },
@@ -1874,7 +1862,6 @@ def test_warcraftlogs_auth_status_reports_live_user_auth_failure(monkeypatch) ->
             "valid_json": True,
             "auth_mode": "pkce",
             "has_access_token": True,
-            "has_refresh_token": True,
             "expires_at": 1500.0,
             "expired": False,
         },
@@ -1909,7 +1896,6 @@ def test_warcraftlogs_auth_status_reports_invalid_runtime_config(monkeypatch) ->
             "valid_json": True,
             "auth_mode": "pkce",
             "has_access_token": True,
-            "has_refresh_token": True,
             "expires_at": 1500.0,
             "expired": False,
         },
@@ -1951,7 +1937,6 @@ def test_warcraftlogs_auth_status_prioritizes_invalid_runtime_config_without_cre
             "valid_json": False,
             "auth_mode": None,
             "has_access_token": False,
-            "has_refresh_token": False,
             "expires_at": None,
             "expired": None,
         },
@@ -2002,7 +1987,6 @@ def test_warcraftlogs_auth_token_reports_state_summary(monkeypatch) -> None:
             "pending_auth_mode": None,
             "has_pending_state": False,
             "has_access_token": True,
-            "has_refresh_token": True,
             "expires_at": 1500.0,
             "expired": False,
         },
@@ -2014,7 +1998,6 @@ def test_warcraftlogs_auth_token_reports_state_summary(monkeypatch) -> None:
     payload = json.loads(result.stdout)
     assert payload["data"]["token"]["active_mode"] == "pkce"
     assert payload["data"]["token"]["endpoint_family"] == "user"
-    assert payload["data"]["token"]["state"]["has_refresh_token"] is True
 
 
 def test_warcraftlogs_auth_login_generates_authorize_url(monkeypatch, tmp_path) -> None:
@@ -2591,7 +2574,6 @@ def test_warcraftlogs_spec_kill_samples_labels_participant_cohort(monkeypatch) -
     assert payload["data"]["sample"]["excluded_kill_count"] == 0
     assert payload["data"]["sample"]["truncated"] is False
     assert payload["data"]["sample"]["truncation_order"] == "fastest_kill_duration_ascending"
-    assert payload["data"]["sample"]["stable_source_only"] is True
     assert payload["data"]["freshness"]["cache_ttl_seconds"] == 86400
     assert payload["data"]["cache_provenance"] == {
         "finished": True,
@@ -2779,19 +2761,6 @@ class _FrostPlayersClient(_FakeWarcraftLogsClient):
 
 
 _BOSS_COHORT_ARGS = ["--zone-id", "38", "--boss-id", "3012", "--difficulty", "5", "--report-pages", "1"]
-
-
-def test_warcraftlogs_shared_client_token_is_reused_only_for_the_same_credentials_and_site(monkeypatch) -> None:
-    monkeypatch.setenv("WARCRAFTLOGS_CLIENT_ID", "client-a")
-    monkeypatch.setenv("WARCRAFTLOGS_CLIENT_SECRET", "secret-a")
-    now = time.time()
-    WarcraftLogsClient()._save_shared_client_token(token="token-a", expires_at=now + 3600)
-
-    assert WarcraftLogsClient()._load_shared_client_token(now=now) == "token-a"
-    # A token minted for another site's OAuth host, or before a credential rotation, is not reused.
-    assert WarcraftLogsClient(site=CLASSIC_PROFILE)._load_shared_client_token(now=now) is None
-    monkeypatch.setenv("WARCRAFTLOGS_CLIENT_SECRET", "secret-b")
-    assert WarcraftLogsClient()._load_shared_client_token(now=now) is None
 
 
 class _TwoKillCohortClient(_DoubleLoggedCohortClient):
@@ -3504,6 +3473,41 @@ def test_warcraftlogs_character_rankings_sends_the_warcraft_logs_spec_slug(
     assert sent == [expected]
 
 
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["encounter-rankings", "--zone-id", "38", "--boss-id", "3012", "--class-name", "nopeclass"],
+        ["character-rankings", "us", "malganis", "Aurow", "--spec-name", "nopespec"],
+        ["boss-kills", *_BOSS_COHORT_ARGS, "--spec-name", "frsot"],
+        ["boss-kills", *_BOSS_COHORT_ARGS, "--spec-name", "Frost Rogue"],
+    ],
+)
+def test_warcraftlogs_rejects_an_unknown_class_or_spec_that_warcraft_logs_would_ignore(monkeypatch, args: list[str]) -> None:
+    # Live 2026-10-02: an unknown --class-name returned the unfiltered rankings with ok:true, and a
+    # misspelled sampled --spec-name an empty cohort.
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _FrostPlayersClient())
+
+    result = runner.invoke(warcraftlogs_app, args)
+
+    assert result.exit_code == 2, result.output
+    assert json.loads(result.stderr)["error"]["code"] == "invalid_query"
+
+
+def test_warcraftlogs_classic_site_passes_a_spec_the_retail_list_lacks(monkeypatch) -> None:
+    sent: list[str | None] = []
+
+    class _SpecClient(_FakeWarcraftLogsClient):
+        def character_rankings(self, *, spec_name: str | None = None, **kwargs: object) -> dict[str, object]:
+            sent.append(spec_name)
+            return {"id": 77, "name": "Roguecane", "zoneRankings": {"rankings": []}}
+
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _SpecClient(site=CLASSIC_PROFILE))
+    result = runner.invoke(warcraftlogs_app, ["--site", "classic", "character-rankings", "us", "faerlina", "Roguecane", "--spec-name", "Combat"])
+
+    assert result.exit_code == 0, result.output
+    assert sent == ["Combat"]
+
+
 def test_warcraftlogs_encounter_rankings_surfaces_embedded_provider_errors(monkeypatch) -> None:
     class _RankingErrorClient(_FakeWarcraftLogsClient):
         def encounter_rankings(self, *, encounter_id: int, options: EncounterRankingsOptions) -> dict[str, object]:
@@ -3725,6 +3729,43 @@ def test_warcraftlogs_report_encounter_accepts_report_url(monkeypatch) -> None:
     assert payload["data"]["encounter_identity"]["status"] == "canonical"
     assert payload["data"]["encounter_identity"]["identity"]["encounter_id"] == 3012
     assert payload["data"]["stability"]["cache_safe"] is True
+
+
+def test_warcraftlogs_report_url_on_another_site_names_the_site_to_select(monkeypatch) -> None:
+    # A classic report code does not exist on retail, which Warcraft Logs answers "This report does not exist."
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _FakeWarcraftLogsClient())
+    url = "https://classic.warcraftlogs.com/reports/abcd1234#fight=1"
+
+    result = runner.invoke(warcraftlogs_app, ["report-encounter", url])
+
+    assert result.exit_code == 2
+    assert "warcraftlogs --site classic" in json.loads(result.stderr)["error"]["message"]
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _FakeWarcraftLogsClient(site=CLASSIC_PROFILE))
+    assert runner.invoke(warcraftlogs_app, ["--site", "classic", "report-encounter", url]).exit_code == 0
+
+
+def test_warcraftlogs_resolve_selects_the_site_a_report_url_names() -> None:
+    result = runner.invoke(warcraftlogs_app, ["resolve", "https://classic.warcraftlogs.com/reports/bjM3GWmgdwJ2fx1t"])
+
+    assert json.loads(result.stdout)["data"]["next_command"] == "warcraftlogs --site classic report bjM3GWmgdwJ2fx1t"
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["reports", "--guild-name", "gn"],
+        ["reports", "--guild-region", "us", "--guild-realm", "malganis"],
+        ["boss-kills", *_BOSS_COHORT_ARGS, "--guild-name", "gn"],
+    ],
+)
+def test_warcraftlogs_rejects_a_partial_guild_scope(monkeypatch, args: list[str]) -> None:
+    # Live 2026-10-02: Warcraft Logs drops a guild filter missing a part and answers every guild's reports.
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _FakeWarcraftLogsClient())
+
+    result = runner.invoke(warcraftlogs_app, args)
+
+    assert result.exit_code == 2, result.output
+    assert json.loads(result.stderr)["error"]["code"] == "invalid_query"
 
 
 def test_warcraftlogs_report_encounter_requires_explicit_fight_scope(monkeypatch) -> None:
@@ -5349,17 +5390,6 @@ def test_warcraftlogs_client_reuses_shared_public_token_across_instances(monkeyp
         )(),
     )
 
-    saved_state: dict[str, dict[str, object]] = {}
-
-    monkeypatch.setattr(
-        "warcraftlogs_cli.client.load_provider_auth_state",
-        lambda provider: saved_state.get(provider),
-    )
-    monkeypatch.setattr(
-        "warcraftlogs_cli.client.save_provider_auth_state",
-        lambda provider, payload, path=None: saved_state.setdefault(provider, dict(payload)) and Path("/tmp/shared-token.json"),
-    )
-
     token_requests: list[str] = []
 
     def _fake_request(
@@ -5392,7 +5422,7 @@ def test_warcraftlogs_client_reuses_shared_public_token_across_instances(monkeyp
         second.close()
 
     assert token_requests == ["https://www.warcraftlogs.com/oauth/token"]
-    assert saved_state["warcraftlogs-client-credentials"]["auth_mode"] == "client_credentials"
+    assert (load_provider_auth_state("warcraftlogs-client-credentials") or {})["auth_mode"] == "client_credentials"
 
 
 def test_warcraftlogs_client_ignores_invalid_shared_public_token_state(monkeypatch) -> None:
@@ -5409,11 +5439,9 @@ def test_warcraftlogs_client_ignores_invalid_shared_public_token_state(monkeypat
             },
         )(),
     )
-    monkeypatch.setattr(
-        "warcraftlogs_cli.client.load_provider_auth_state",
-        lambda provider: (_ for _ in ()).throw(json.JSONDecodeError("bad json", "{", 1)),
-    )
-    monkeypatch.setattr("warcraftlogs_cli.client.save_provider_auth_state", lambda *args, **kwargs: None)
+    state_path = provider_state_path("warcraftlogs-client-credentials")
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text("{")
 
     token_requests: list[str] = []
 
@@ -5454,8 +5482,6 @@ def test_warcraftlogs_client_rejects_a_non_numeric_token_lifetime(monkeypatch) -
             "Auth", (), {"configured": True, "client_id": "client-id", "client_secret": "client-secret", "env_file": None}
         )(),
     )
-    monkeypatch.setattr("warcraftlogs_cli.client.load_provider_auth_state", lambda provider: None)
-    monkeypatch.setattr("warcraftlogs_cli.client.save_provider_auth_state", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         "warcraftlogs_cli.client.request_with_retries",
         lambda client, url, *, method="GET", **kwargs: httpx.Response(
@@ -5551,9 +5577,6 @@ def test_warcraftlogs_client_live_public_probe_does_not_write_shared_cache(monke
             },
         )(),
     )
-    # The token exchange must neither read nor overwrite the developer's shared token slot.
-    monkeypatch.setattr("warcraftlogs_cli.client.load_provider_auth_state", lambda provider: None)
-    monkeypatch.setattr("warcraftlogs_cli.client.save_provider_auth_state", lambda *args, **kwargs: None)
 
     def _fake_request(
         client: WarcraftLogsClient,
@@ -6186,10 +6209,36 @@ def test_warcraftlogs_client_raw_graphql_raises_when_errors_and_data_null(monkey
     assert "permission denied" in exc_info.value.message
 
 
+def test_warcraftlogs_realm_lookups_try_each_slug_spelling(monkeypatch) -> None:
+    # Live 2026-10-02: `server us Azjol-Nerub` was not_found because Warcraft Logs' slug is azjolnerub,
+    # and an unknown guild on a misspelled realm is a GraphQL error, not a null.
+    sent: list[str] = []
+
+    def _graphql(*, variables: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+        slug = variables.get("slug") or variables["serverSlug"]
+        sent.append(slug)
+        if slug == "azjol-nerub" and "slug" in variables:
+            return {"worldData": {"server": None}}
+        if slug == "azjol-nerub":
+            raise WarcraftLogsClientError("not_found", "No guild exists for this name/server/region.")
+        return {"worldData": {"server": {"slug": slug}}, "guildData": {"guild": {"name": "gn"}}}
+
+    client = _bare_client()
+    client._static_ttl = client._guild_ttl = 60
+    monkeypatch.setattr(client, "_graphql", _graphql)
+
+    assert client.server(region="us", slug="Azjol-Nerub") == {"slug": "azjolnerub"}
+    assert client.guild(region="us", realm="Azjol-Nerub", name="gn") == {"name": "gn"}
+    assert sent == ["azjol-nerub", "azjolnerub", "azjol-nerub", "azjolnerub"]
+
+
 @pytest.mark.parametrize(
     ("message", "expected_code"),
     [
         ("This report does not exist.", "not_found"),
+        ("No guild exists for this name/server/region.", "not_found"),
+        # Live 2026-10-02: a bad enum flag also says "does not exist", but it is the caller's typo.
+        ('Variable "$dataType" got invalid value "Nope"; Value "Nope" does not exist in "EventDataType" enum.', "invalid_query"),
         ("You do not have permission to view this report.", "auth_failed"),
         ("Internal server error", "graphql_error"),
     ],
@@ -7693,6 +7742,38 @@ def test_warcraftlogs_report_slices_reject_any_fight_the_report_does_not_have(
     # The request is echoed as parsed, so the rejected slice is machine-readable.
     requested = [int(value) for flag, value in zip(args, args[1:], strict=False) if flag == "--fight-id"]
     assert envelope["query"]["fight_id"] == requested
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        # Fight 1 ends at 200000.
+        ["report-events", "abcd1234", "--data-type", "casts", "--fight-id", "1", "--start-time", "250000", "--end-time", "300000"],
+        ["report-player-details", "abcd1234", "--fight-id", "1", "--start-time", "250000", "--end-time", "300000"],
+        ["report-table", "abcd1234", "--start-time", "100", "--end-time", "50"],
+    ],
+)
+def test_warcraftlogs_report_slices_reject_a_window_that_cannot_hold_events(monkeypatch: pytest.MonkeyPatch, args: list[str]) -> None:
+    # Warcraft Logs answers an inverted window, or one starting after the fight ended, with an empty slice.
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _FakeWarcraftLogsClient())
+
+    result = runner.invoke(warcraftlogs_app, args)
+
+    assert result.exit_code == 2, result.output
+    assert json.loads(result.stderr)["error"]["code"] == "invalid_query"
+
+
+def test_warcraftlogs_window_error_names_the_exact_bound(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Report-relative times pass a million ms within minutes; the retry bound must not be rounded.
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _FakeWarcraftLogsClient())
+
+    result = runner.invoke(
+        warcraftlogs_app,
+        ["report-events", "abcd1234", "--data-type", "casts", "--fight-id", "1", "--start-time", "12345678"],
+    )
+
+    assert result.exit_code == 2, result.output
+    assert json.loads(result.stderr)["error"]["message"] == "--start-time 12345678 is after the selected fights end at 200000."
 
 
 def test_warcraftlogs_report_wide_slice_costs_no_fight_lookup(monkeypatch: pytest.MonkeyPatch) -> None:

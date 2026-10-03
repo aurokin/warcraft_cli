@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+from warcraft_core.timestamps import iso_now_utc, parse_iso8601_utc
 
 from wowhead_cli.entity_types import DEFAULT_HYDRATE_ENTITY_TYPES
 from wowhead_cli.expansion_profiles import ExpansionProfile
@@ -20,7 +22,6 @@ from wowhead_cli.listing_filters import (
     limited_result_block,
     normalize_text_filters,
     parse_date_bound,
-    parse_iso8601_utc,
     text_filter_match,
 )
 from wowhead_cli.ranking import listing_match_score
@@ -88,10 +89,6 @@ def read_jsonl_file(path: Path) -> list[Any]:
             continue
         rows.append(json.loads(line))
     return rows
-
-
-def iso_now_utc() -> str:
-    return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def hydrate_source_counts(rows: list[dict[str, Any]]) -> dict[str, int]:

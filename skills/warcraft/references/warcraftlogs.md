@@ -67,6 +67,8 @@ Best fits:
 ## Current Boundaries
 
 - site profile selection is explicit: `warcraftlogs --site retail|classic|fresh ...`
+- a report code only exists on its own site: `resolve`/`search` on a `classic.` or `fresh.` report URL return a follow-up command with that `--site`, and the `report-encounter*` commands fail with `invalid_query` (exit 2) when the URL's site is not the selected `--site`
+- `server`, `guild*` (except `guild-reports`), `character` and `character-rankings` take a realm in any spelling (`Azjol-Nerub`, `azjolnerub`, `Mal'Ganis`) and try each slug spelling; `reports`/`guild-reports`, `--guild-realm` and `encounter-rankings --server-slug` send one slug, so pass the slug `server` reports (`azjolnerub`)
 - public OAuth client credentials are the default auth mode
 - manual user-auth groundwork now exists for authorization-code and PKCE exchange, plus saved user-token verification via `warcraftlogs auth whoami`
 - current surface works both standalone and through the root `warcraft` wrapper, but wrapper discovery is still intentionally narrow
@@ -109,12 +111,13 @@ Best fits:
   - `warcraftlogs character us illidan Roguecane`
 - character rankings, when the API allows them:
   - `warcraftlogs character-rankings us illidan Roguecane --zone-id 38 --difficulty 5 --metric dps --size 20`
-  - `--spec-name` takes any spelling (`beast-mastery`, `Beast Mastery`); Warcraft Logs would otherwise ignore it and return another spec's rankings
+  - `--spec-name` takes any spelling (`beast-mastery`, `Beast Mastery`); Warcraft Logs would otherwise ignore it and return another spec's rankings, so on the retail site an unknown spec is `invalid_query` (exit 2); `--site classic`/`fresh` pass it through (Combat exists there)
 - encounter rankings for real boss/class/spec leaderboard queries:
   - `warcraftlogs encounter-rankings --zone-id 46 --boss-id 3180 --difficulty 5 --class-name Druid --spec-name Balance --metric dps --top 10`
-  - `--class-name`/`--spec-name` take any spelling (`death-knight`, `Death Knight`, `beast-mastery`); the CLI sends Warcraft Logs' own `DeathKnight`/`BeastMastery`
+  - `--class-name`/`--spec-name` take any spelling (`death-knight`, `Death Knight`, `beast-mastery`); the CLI sends Warcraft Logs' own `DeathKnight`/`BeastMastery`, and an unknown `--class-name` is `invalid_query` (exit 2) because Warcraft Logs would answer it unfiltered
 - guild report listing:
   - `warcraftlogs reports --guild-region us --guild-realm illidan --guild-name Liquid --limit 10`
+  - pass all three guild flags or none, here and on the sampled commands; a partial guild scope is `invalid_query` (exit 2) because Warcraft Logs drops it and lists every guild's reports
 - report inspection:
   - `warcraftlogs report <code>`
   - `warcraftlogs report-fights <code> --difficulty 5`
@@ -189,13 +192,15 @@ Best fits:
 - `report-events` and `report-player-details` accept exactly the slice shapes Warcraft Logs answers: `--fight-id`, or both `--start-time` and `--end-time`; anything wider (including `--encounter-id` on its own, which filters a slice but does not define one) fails with `missing_scope` (exit 2) instead of returning an empty result
 - `report-events`, `report-table`, `report-graph`, `report-rankings`, and `report-player-details` fail with `not_found` (exit 4) when a slice names a fight the report does not have — an unknown `--fight-id`, or an `--encounter-id`/`--difficulty` the report never pulled; the rejected slice is echoed in the failure envelope's `query`, and a request that names no fight at all is left alone because an empty answer to it is a real answer
 - `report-player-details` additionally fails with `not_found` when its `--start-time`/`--end-time` window matches no fight, because a fight Warcraft Logs actually has always returns a roster, so an empty one means the slice missed rather than that the report has no players
+- a `--start-time` after `--end-time`, or after every selected fight ended, is `invalid_query` (exit 2) on `report-events`, `report-table`, `report-graph`, and `report-player-details`
+- a flag value Warcraft Logs' schema rejects (`--data-type nope`, `--view-by nope`, `--metric nope`) is `invalid_query` (exit 2); an unknown guild is `not_found` (exit 4)
 - `report-events` can still return `events: null` for some valid report slices; use it as a typed event-query surface, not a guarantee of non-empty data
 - `report-rankings` can legitimately return zero rows for a valid public report slice
 - `encounter-rankings` is the ranking surface to use when the user means boss/class/spec leaderboard results like "top Balance parses on Vanguard"
 - `boss-kills`, `top-kills`, and `kill-time-distribution` are sampled cross-report analytics, not a promise that the CLI searched every possible public report
 - `boss-kills` and `top-kills` do accept `--spec-name`, but on those sampled commands the filter means "keep sampled kills whose participants included that spec", not "return spec rankings"
 - `boss-spec-usage` is also sampled cross-report analytics; it reports spec presence within the filtered finished-kill cohort, not a site-wide meta snapshot; each row is one `class_name` + `spec_name` + `role`, so Frost Mage and Frost Death Knight are counted apart
-- `--spec-name` on sampled commands takes the class too (`'Frost Mage'`, `frost-death-knight`); a bare spec name matches every class with that spec, and when it matched several the payload lists them in `sample.matched_spec_classes` and adds a note
+- `--spec-name` on sampled commands takes the class too (`'Frost Mage'`, `frost-death-knight`); a bare spec name matches every class with that spec, and when it matched several the payload lists them in `sample.matched_spec_classes` and adds a note; on the retail site a name that is no spec, or a class without that spec (`'Frost Rogue'`), is `invalid_query` (exit 2) instead of an empty cohort
 - `comp-samples` is sampled cross-report analytics too; it returns sampled kill rosters plus additive class-presence and exact class-signature summaries for that filtered cohort
 - `spec-kill-samples` is the participant-cohort sibling of `boss-kills`: it requires `--spec-name`, returns the fastest sampled kills that contained that spec, and reports `sample.truncation_order` so the returned head is never mistaken for a random sample or a spec leaderboard
 - `ability-usage-summary` is sampled cross-report analytics too; it reports explicit cast counts for one requested `--ability-id` across the filtered finished-kill cohort; a kill whose events overflow `--event-limit` is counted in `sample.kills_with_truncated_events_count`, and `usage.total_casts_is_lower_bound` then says the totals are floors; it counts player-side casts only, so a boss ability reads zero (use `report-encounter-casts --hostility-type enemies` for boss casts)

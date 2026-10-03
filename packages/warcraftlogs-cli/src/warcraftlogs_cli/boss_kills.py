@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from warcraft_core.analytics import numeric_summary
+from warcraft_core.identity import WOW_SPECS_BY_CLASS
+from warcraft_core.timestamps import iso_now_utc
 
 from warcraftlogs_cli.client import ReportPlayerDetailsOptions, WarcraftLogsClient
 from warcraftlogs_cli.report_payloads import fight_payload, report_brief_payload, report_payload, report_url
@@ -18,7 +20,6 @@ from warcraftlogs_cli.sampling_utils import (
     normalize_match_text,
     report_is_finished,
     sampled_spec_filter_notes,
-    utc_now_z,
 )
 
 
@@ -56,6 +57,12 @@ def _spec_spellings(actor_class: str, spec: str) -> set[str]:
         return set()
     class_text = normalize_match_text(actor_class)
     return {spec_text, spec_text + class_text, class_text + spec_text}
+
+
+def is_retail_spec_name(spec_name: str) -> bool:
+    """Whether ``spec_name`` names a retail spec in a spelling :func:`matching_specs` accepts."""
+    wanted = normalize_match_text(spec_name)
+    return any(wanted in _spec_spellings(actor_class, spec) for actor_class, specs in WOW_SPECS_BY_CLASS.items() for spec in specs)
 
 
 def matching_specs(actor: dict[str, Any], spec_name: str) -> list[dict[str, Any]]:
@@ -241,7 +248,7 @@ def sampled_cross_report_freshness(
     upstream_request_count = transport_counts.get("upstream_request_count", 0)
     cache_hit_count = transport_counts.get("cache_hit_count", 0)
     return {
-        "sampled_at": utc_now_z(),
+        "sampled_at": iso_now_utc(),
         "cache_ttl_seconds": cache_ttl_seconds,
         "cache_hit_count": cache_hit_count,
         "upstream_request_count": upstream_request_count,
@@ -618,7 +625,6 @@ def boss_kills_payload(
             "returned_kill_count": len(returned),
             "excluded_kill_count": excluded,
             "truncated": truncated,
-            "stable_source_only": True,
         },
         "count": len(returned),
         "kills": returned,
@@ -687,7 +693,6 @@ def spec_filtered_kill_samples_payload(
             "excluded_kill_count": max(0, len(rows) - len(returned)),
             "truncated": truncated,
             "truncation_order": "fastest_kill_duration_ascending",
-            "stable_source_only": True,
         },
         "count": len(returned),
         "kills": returned,
@@ -731,7 +736,6 @@ def kill_time_distribution_payload(
         "sample": {
             **sample,
             "filtered_kill_count": len(rows),
-            "stable_source_only": True,
         },
         "distribution": {
             "unit": "seconds",
