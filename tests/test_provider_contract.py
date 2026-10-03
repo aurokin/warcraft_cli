@@ -45,6 +45,18 @@ def test_search_result_sort_key_prefers_higher_scores() -> None:
     assert rows[0]["provider"] == "wowhead"
 
 
+def test_equal_wrapper_scores_fall_through_to_provider_name_not_raw_provider_score() -> None:
+    # Raw provider-local scores are not comparable across providers, so they never break a tie.
+    method = {"provider": "method", "name": "Frost Mage", "id": "frost-mage",
+              "ranking": {"score": 90}, "wrapper_ranking": {"score": 120}}
+    icy_veins = {"provider": "icy-veins", "name": "Frost Mage Guide", "id": "frost-mage-pve-dps-guide",
+                 "ranking": {"score": 40}, "wrapper_ranking": {"score": 120}}
+
+    assert sorted([method, icy_veins], key=search_result_sort_key)[0] is icy_veins
+    answers = [{"resolved": True, "confidence": "high", "match": row} for row in (method, icy_veins)]
+    assert sorted(answers, key=resolve_payload_sort_key)[0]["match"] is icy_veins
+
+
 def test_query_intents_detect_structured_profile_and_reference() -> None:
     assert "structured_profile" in query_intents("guild us illidan Liquid")
     assert "guild_profile" in query_intents("guild us illidan Liquid")

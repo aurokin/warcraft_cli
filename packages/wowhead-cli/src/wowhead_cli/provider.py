@@ -36,7 +36,9 @@ from wowhead_cli.ranking import (
     resolve_confidence,
     resolve_next_command,
     search_ranking_query,
+    search_type_hints,
     split_choices,
+    untyped_search_query,
     upstream_rank_bonuses,
     url_entity_result,
     url_page_result,
@@ -163,9 +165,9 @@ def _fetch_ranked(
         try:
             response = client.search_suggestions(search_query)
         except ValueError as exc:
-            raise ProviderError("parse_error", str(exc)) from exc
+            raise ProviderError("parse_failed", str(exc)) from exc
     if not isinstance(response.get("results"), list):
-        raise ProviderError("unexpected_response", "Missing or invalid 'results' payload from Wowhead.")
+        raise ProviderError("invalid_response", "Missing or invalid 'results' payload from Wowhead.")
     rows, merge = merge_suggestion_lists(response)
     ranked, unmatched = normalize_search_results(
         rows,
@@ -190,6 +192,10 @@ def _ranked_suggestions(
     Follow-up words ("thunderfury comments") are dropped from the upstream text. When the query has
     any, the whole text is tried first, and kept when a row is named exactly that: "Soul Link" and
     "Body and Soul" are spells, not "soul" plus a follow-up word.
+
+    Wowhead matches every word against row names, so a type word ("hogger npc") finds nothing unless
+    the names hold it, as guide titles hold "guide". When no row has a type the query names, the
+    text is sent again without its type words, and that answer is kept when it has such a row.
     """
     literal_query = " ".join(query.lower().split())
     stripped_query = search_ranking_query(query)
@@ -202,6 +208,14 @@ def _ranked_suggestions(
     ranked, merge = _fetch_ranked(
         client, stripped_query, query=query, profile=profile, entity_types=entity_types, literal=False
     )
+    hinted = search_type_hints(query)
+    untyped_query = untyped_search_query(stripped_query)
+    if hinted and untyped_query not in ("", stripped_query) and not any(row["entity_type"] in hinted for row in ranked):
+        untyped_ranked, untyped_merge = _fetch_ranked(
+            client, untyped_query, query=query, profile=profile, entity_types=entity_types, literal=False
+        )
+        if any(row["entity_type"] in hinted for row in untyped_ranked):
+            return untyped_query, untyped_ranked, untyped_merge
     return stripped_query, ranked, merge
 
 
@@ -261,7 +275,7 @@ def resolve(
             open_client(profile), target, profile=profile, entity_types=selected_entity_types
         )
     answering, trailing = preferred_resolve_candidates(ranked)
-    confidence = resolve_confidence(answering, entity_types=selected_entity_types, query=target)
+    confidence = resolve_confidence(answering, entity_types=selected_entity_types)
     top_candidate = answering[0] if answering else None
     candidates = answering + trailing
     returned = candidates[:limit]

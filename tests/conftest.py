@@ -10,7 +10,10 @@ import pytest
 
 # Every provider that has a file/redis cache (warcraft_api.cache.load_prefixed_cache_settings_from_env).
 CACHE_ENV_PREFIXES = (
+    "BLIZZARD",
+    "CURSEFORGE",
     "ICY_VEINS",
+    "LORRGS",
     "METHOD",
     "RAIDBOTS",
     "RAIDERIO",

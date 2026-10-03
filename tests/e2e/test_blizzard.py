@@ -48,6 +48,8 @@ def test_doctor_reports_configured_credentials_and_live_routing(require) -> None
     assert capabilities["game_data"] == "ready"
     assert capabilities["profile"] == "ready"
     assert capabilities["search"] == "coming_soon"
+    # With credentials every read is usable, so the provider is ready, not "partial".
+    assert result.data["status"] == "ready", result.describe()
 
 
 def test_realm_read_uses_the_dynamic_namespace(require) -> None:
@@ -123,6 +125,34 @@ def test_an_accented_realm_name_reaches_the_realm_it_names(require, name: str) -
     assert result.data["name"] == name, result.describe()
 
 
+@pytest.mark.parametrize(("name", "region", "slug"), [("Ревущий фьорд", "eu", "howling-fjord"), ("아즈샤라", "kr", "azshara")])
+def test_a_realm_typed_in_its_native_script_reaches_its_english_slug(require, name: str, region: str, slug: str) -> None:
+    """Blizzard slugs every realm in English; the realm index maps the native name to that slug."""
+    require("blizzard-api")
+    result = run("blizzard", "realm", name, "--region", region)
+    assert result.data["slug"] == slug, result.describe()
+    localized = run("blizzard", "realm", slug, "--region", region, "--locale", "ru_RU" if region == "eu" else "ko_KR")
+    assert localized.data["name"] == name, localized.describe()
+
+
+def test_an_oceanic_region_alias_reads_the_us_region(require) -> None:
+    """Oceanic realms live in Blizzard's US region; ``--region oce`` used to fail with "got 'oc'"."""
+    require("blizzard-api")
+    result = run("blizzard", "realm", "frostmourne", "--region", "oce")
+    _assert_the_namespace_reached_the_api(result, "dynamic-us")
+    assert result.data["slug"] == "frostmourne", result.describe()
+
+
+def test_a_cached_read_is_replayed_without_the_network(require) -> None:
+    """Static data is cached: the second read succeeds with every connection refused, and says so."""
+    require("blizzard-api")
+    live = run("blizzard", "item", str(ITEM_ID))
+    replayed = run("blizzard", "item", str(ITEM_ID), env=dead_proxy_env())
+    assert replayed.payload["provenance"]["cache_hit"] is True, replayed.describe()
+    assert replayed.payload["provenance"]["fetched_at"] == live.payload["provenance"]["fetched_at"]
+    assert replayed.data == live.data
+
+
 def test_region_and_game_version_change_the_namespace(require) -> None:
     require("blizzard-api")
     european = run("blizzard", "item", str(ITEM_ID), "--region", "eu")
@@ -175,8 +205,9 @@ def test_bad_routing_flags_are_usage_errors_refused_before_the_network(require) 
     require("blizzard-api")
     offline = {**dead_proxy_env(), **no_cache_env()}
 
-    region = run("blizzard", "item", str(ITEM_ID), "--region", "oc", expect=EXIT_USAGE, error_code="unsupported_region", env=offline)
-    assert "'oc'" in region.payload["error"]["message"]
+    # The message names what was typed, not a normalized spelling of it.
+    region = run("blizzard", "item", str(ITEM_ID), "--region", "Mars", expect=EXIT_USAGE, error_code="unsupported_region", env=offline)
+    assert "'Mars'" in region.payload["error"]["message"]
 
     version = run(
         "blizzard", "item", str(ITEM_ID), "--game-version", "bogus",

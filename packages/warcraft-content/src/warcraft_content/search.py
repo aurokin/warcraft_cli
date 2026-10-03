@@ -115,6 +115,11 @@ def expand_class_spec_aliases(query: str) -> str:
     return _CLASS_SPEC_ALIAS_RE.sub(lambda match: CLASS_SPEC_ALIASES[match.group(1)], query.lower())
 
 
+# Every spelling of Mythic+: ``m+``, ``m plus``, ``mythic+``, ``mythic plus``. Each provider substitutes
+# the words its own pages use.
+MYTHIC_PLUS_RE = re.compile(r"\bm(?:ythic)?(?:\s*\+|\s+plus\b)")
+
+
 def normalize_query(query: str, *, strip_terms: Collection[str]) -> str:
     """Lowercase and remove provider/noise words (whole words only); fall back to the raw query when nothing remains."""
     normalized = query.lower()

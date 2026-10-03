@@ -16,6 +16,7 @@ def test_wowhead_doctor_no_live_reports_cache_and_skipped_probes(monkeypatch) ->
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["provider"] == "wowhead"
+    assert "provider" not in payload["data"] and "command" not in payload["data"]
     assert payload["data"]["status"] == "ready"
     assert payload["data"]["expansion"] == "retail"
     assert payload["data"]["endpoints"]["search_suggestions"]["skipped"] is True

@@ -30,7 +30,7 @@ upstream string (`news` renders "2026/09/18 at 3:30 PM", `blue-tracker` sends
 offset, so `posted_at` is shifted accordingly. A row whose timestamp cannot be parsed is excluded
 from a date window rather than passed through, and `scan.unparsed_timestamps` reports how many rows
 that was; when a date window is requested and no scanned row carries a readable timestamp, the
-command fails with `parse_error` instead of returning an empty match set. The listing is read
+command fails with `parse_failed` instead of returning an empty match set. The listing is read
 newest first, so a window far in the past needs enough `--pages` (or a later `--page`) to reach it.
 `scan.stop_reason` says why the scan stopped: `date_from_reached`, `last_page_reached`,
 `empty_page`, or null when `--pages` ran out first, in which case older rows were never read.
@@ -38,7 +38,8 @@ newest first, so a window far in the past needs enough `--pages` (or a later `--
 The `QUERY` of `news`, `blue-tracker` and `guides` keeps a row only when every query word appears
 in it as a whole word, up to a plural or possessive ending ("hotfix" matches "Hotfixes" and "mage"
 matches "Mage's", but "mage" does not match "Damage" or "Magelord"; "the" and "of" are ignored unless
-the query is nothing else).
+the query is nothing else). A `guides` row's text includes its URL slug, so `guides raids "venomous
+abyss"` keeps the raid's boss guides, whose titles name only the boss.
 
 `search` results carry `entity_type` and an openable `url` for every type Wowhead's suggestion
 endpoint labels. News posts also carry a `news-post` follow-up; world events are openable but have
@@ -56,8 +57,10 @@ duplicates the merge removed. A merged row whose text holds no query word (no
 `suggestion_merge.unmatched_rows_dropped` counts those rows; `total_matches` counts the rows kept.
 A row holding only some query words stays, with `some_terms_match`, and scores less for each word it
 lacks; Wowhead's own ordering bonus (below) can still rank it above a row that holds them all. The
-row's type name (`typeName`) counts as row text, so a type word such as "npc" in the query keeps
-every NPC row as a partial match.
+row's type name (`typeName`) counts as row text, so "hogger npc" holds every word of NPC "Hogger".
+Words match up to a plural ending ("spirit beasts" holds "Spirit Beast"), but not a possessive
+("onyxia" does not hold every word of "Onyxia's Lair"). Internal test entries
+Blizzard tags "(DNT)" are left out unless the query says "dnt".
 
 Ranking starts from Wowhead's own ordering. `categories.database` and `categories.guides` are
 ordered by relevance, and `search` and `resolve` score the leading rows of each up
@@ -67,16 +70,24 @@ current guide rather than the five others that share its words. The guides order
 the caller asks for a guide ("guide" or "guides" in the query, or `--entity-type guide`), so it cannot narrow the lead of the entity an
 entity query names. Text evidence (exact name,
 prefix, term coverage, type hints) decides the rest. Query words match whole words only, and
-"the", "of", "a", "an", "and", "in", "on", "for" and "to" are not matched at all. The rank bonus
-needs a query word in the row's own name, or a name that starts with or contains the query
-("valorstone" and "Valorstones"): Wowhead also ranks rows on text the suggestion never shows, and
-those get no bonus. A name that merely contains the query scores below one that starts
-with it. Each row's `follow_up.command` is the command to run next.
+"the", "of", "a", "an", "and", "in", "on", "for" and "to" are not matched at all. A name starts
+with or contains the query only on word boundaries, up to a plural ending: "valorstone" starts
+"Valorstones", but "shadow" does not start "Shadowfeather Shawl" and "frost" is not inside
+"Frostsaber". The rank bonus needs a query word in the row's own name, or a name that starts with
+or contains the query: Wowhead also ranks rows on text the suggestion never shows, and those get no
+bonus. A name that merely contains the query scores below one that starts with it. Each row's
+`follow_up.command` is the command to run next.
 
 Follow-up words in a query ("comments", "links", "full", "related", ...) pick the follow-up command
 (`comments`, `entity-page`) and are left out of the text sent to Wowhead, which `search_query`
 reports. A query that is itself a name made of such words ("Soul Link", "Body and Soul") is sent
 whole first, and kept when a row carries exactly that name.
+
+Wowhead matches every word it is sent against row names, so a type word ("hogger npc", "thunderfury
+item") finds nothing unless the names hold it, as guide titles hold "guide". When no returned row has
+a type the query names, the query is sent again without its type words (`search_query` "hogger"),
+and that answer is kept when it holds a row of the named type. Type words still score
+(`type_hint`).
 
 `search` given a Wowhead entity URL (`https://www.wowhead.com/classic/item=19019/...`) answers with
 that entity alone: one row with its type, id, URL and `follow_up`, `match_reasons: ["url_entity"]`,
@@ -102,8 +113,11 @@ They become the `match` only when the response holds no entity, or when the arti
 best entity by more than an exact name match is worth, which is how a query that names a headline
 word for word still resolves to that news post. `search` ranks them on score alone.
 
-A top row holding only some query words is never a high-confidence answer when it lacks a number
-the query names: "keystone legend season 3" does not resolve to "Keystone Legend: Season 2".
+A top row holding only some query words (`some_terms_match`) is a high-confidence answer only when
+it is of a type the query names (`type_hint`); otherwise `resolve` reports it as a `medium` candidate
+with no `next_command`. "keystone legend season 3" does not resolve to "Keystone Legend: Season 2",
+nor "midnight season 2 mythic+ dungeons" to "Midnight Season 2: Resilient Keystone 12", but "resto
+druid guide" resolves to "Restoration Druid Healer Guide" and "hogger mob" to NPC "Hogger".
 
 Failures print an error envelope on stderr and exit with the shared code:
 
@@ -202,7 +216,7 @@ Timeline surfaces:
 | Command | Purpose |
 |---------|---------|
 | `news [QUERY]` | news listing with topic, date-window, author, and type filters; rows may carry expansion-scoped URLs such as `/forever/news/<slug>-<id>`, which `news-post` accepts |
-| `news-post REF` | one news article with body markup, related posts, and citations; a URL must be a `/news/...` or `/news=<id>` page (`invalid_ref` otherwise), and a page with no article body is `parse_error` |
+| `news-post REF` | one news article with body markup, related posts, and citations; a URL must be a `/news/...` or `/news=<id>` page (`invalid_ref` otherwise), and a page with no article body is `parse_failed` |
 | `blue-tracker [QUERY]` | blue-post listing with topic, date-window, author, region, and forum filters; rows mix `/blue-tracker/topic/...` and `/blue-tracker/news/...` shapes, and only topic rows feed `blue-topic` |
 | `blue-topic REF` | one blue-tracker topic with posts, participants, and citations; a URL other than `/blue-tracker/topic/...` is `invalid_ref` |
 
@@ -210,7 +224,7 @@ Tool-state decoders:
 
 | Command | Purpose |
 |---------|---------|
-| `talent-calc REF` | class, spec (`tool.spec_id` is its Blizzard spec id), and build code from a talent calculator ref; a classic-era `/classic/talent-calc/<class>/<build-code>` ref has no spec, so `spec_slug` and `spec_id` are null. An unknown class is `invalid_tool_ref`; so, on a retail, PTR or beta ref, is a spec of another class (`paladin/frost`) or a build code whose loadout header names another spec. A classic calculator's spec is not checked (MoP Classic's rogue `combat` is valid) and its `spec_id` is null. `listed_builds` holds only the ref's spec's builds (the page embeds every spec's), and is absent for a ref with no spec |
+| `talent-calc REF` | class, spec (`tool.spec_id` is its Blizzard spec id), and build code from a talent calculator ref; a classic-era `/classic/talent-calc/<class>/<build-code>` ref has no spec, so `spec_slug` and `spec_id` are null. An unknown class is `invalid_tool_ref`; so, on a retail, PTR or beta ref, is a spec of another class (`paladin/frost`) or a build code whose loadout header names another spec. A classic calculator's spec is not checked (MoP Classic's rogue `combat` is valid) and its `spec_id` is null. `listed_builds` holds only the ref's spec's builds (the page embeds every spec's), and is absent for a classic calculator ref and for a ref with no spec, since both have a null `spec_id` |
 | `talent-calc-packet REF` | exact talent transport packet from a `<class>/<spec>/<build-code>` ref; `--out PATH` writes just the packet. The packet comes from the build code in `REF`, so a failed page fetch still answers, with `page.canonical_url` null and `page.fetch_error` `{code, message}` |
 | `profession-tree REF` | profession slug and loadout code |
 | `dressing-room REF` | normalized share hash and cited state URL |
@@ -244,8 +258,8 @@ wowhead entity item 19019
 Export a guide once, query it repeatedly offline:
 
 ```bash
-wowhead guide-export 2113 --out ./tmp/guides/guide-2113
-wowhead guide-query ./tmp/guides/guide-2113 "talent build"
+wowhead guide-export 3143 --out ./tmp/guides/guide-3143
+wowhead guide-query ./tmp/guides/guide-3143 "talent build"
 ```
 
 Scan a topic across a date window:

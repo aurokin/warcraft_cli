@@ -77,8 +77,9 @@ title. Two reference types are emitted:
 | `wowhead_talent_calc_url` | an embedded Wowhead talent-calc link | the talent-calc URL |
 | `wow_talent_export` | a published WoW loadout import string (the talent blocks on `/talents` pages) | the import string itself, because the reference has no link |
 
-Both types set `build_code`, so `warcraft guide-builds-simc` collects either one and reports it
-under `summary.identify_success_count`. Decoding needs a class and a spec, and the two types supply
+Both types set `build_code`, so `warcraft guide-builds-simc` collects either one. It counts the
+build in `summary.identify_success_count` only when simc identifies one class and spec; otherwise the
+identify leg fails `build_not_identified`. Decoding needs a class and a spec, and the two types supply
 them differently:
 
 - `wowhead_talent_calc_url` always decodes unaided: its URL path names the class and spec.
@@ -107,7 +108,9 @@ process, without Typer.
 
 ## Supported scope
 
-- root guide pages under `/guides/<slug>` and their section pages under `/guides/<slug>/<section>`
+- root guide pages under `/guides/<slug>` and their section pages under `/guides/<slug>/<section>`;
+  a slug is lowercase letters, digits and hyphens (`Frost-Mage` reads as `frost-mage`), and any other
+  reference fails `invalid_guide_ref` (exit 2) before a request
 - content families `class_guide`, `profession_guide`, `delve_guide`, `reputation_guide`, `article_guide`;
   `class_guide` is a `<spec>-<class>` slug such as `beast-mastery-hunter`, so a one-page article like
   `unlocking-void-elf-demon-hunter` is an `article_guide`
@@ -127,9 +130,22 @@ Punctuation is folded the way slugs fold it: any separator other than an apostro
 because Method slugs an apostrophe either way, the query is tried with each apostrophe dropped and as
 a space (`k'aresh` finds `karesh-...`, `zul'aman` finds `zul-aman-...` and `kriegval's rest` finds
 `kriegval-s-rest-delve-guide`). A hyphenated word is also tried with its hyphen dropped, so
-`nerub-ar palace` finds `nerubar-palace-raid-location-and-item-levels`. `resolve` judges confidence on every ranked match;
+`nerub-ar palace` finds `nerubar-palace-raid-location-and-item-levels`.
+
+Every class guide has the same sections (`talents`, `gearing`, `stats-races-and-consumables`,
+`playstyle-and-rotation`, `interface-and-macros`), but its title names only the spec. A query that
+names a spec and a section word (`talent`/`build`, `gear`/`bis`, `stats`/`races`/`consumables`/
+`enchants`/`gems`, `rotation`/`playstyle`/`opener`, `macros`/`interface`/`ui`/`addons`) therefore
+scores class guides without the section word, and the class guide's row points at the section:
+`url` and `follow_up.command` (`method guide arcane-mage/talents`) name it, `metadata.section_slug`
+holds it, and `ranking.match_reasons` lists `section_query`. Other guides are scored on the whole
+query.
+
+`resolve` judges confidence on every ranked match;
 `--limit` only trims the `candidates` shown, so `--limit 1` never makes an ambiguous query look
-resolved.
+resolved. An unresolved `resolve` reports `confidence: "low"` when its top candidates tie on score and
+`"medium"` otherwise. `search` and `resolve` report `count` as every match and `truncated: true` when
+`--limit` cut the list.
 
 ## Caching
 

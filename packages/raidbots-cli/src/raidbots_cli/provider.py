@@ -140,7 +140,7 @@ def doctor(**options: Any) -> Envelope:
     except ValueError as exc:
         raise ProviderError("invalid_cache_config", str(exc)) from exc
     payload: dict[str, Any] = {
-        "status": "partial",
+        "status": "ready",
         "installed": True,
         "language": "python",
         "auth": {"required": False, "deferred": True},

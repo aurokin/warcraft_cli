@@ -43,7 +43,9 @@ def test_raiderio_guild_payload_parses_a_captured_guild_profile(monkeypatch) -> 
     assert data["guild"] == {
         "name": "gn",
         "region": "us",
-        "realm": "Mal'Ganis",
+        # The slug comes from profile_url: Raider.IO slugs Mal'Ganis as malganis.
+        "realm": "malganis",
+        "realm_name": "Mal'Ganis",
         "faction": "horde",
         "profile_url": "https://raider.io/guilds/us/malganis/gn",
         "member_count": 12,
@@ -163,8 +165,9 @@ def test_raiderio_character_recent_runs_parse_a_captured_profile(monkeypatch) ->
     assert result.exit_code == 0, result.output
 
     data = json.loads(result.stdout)["data"]
-    # The captured guild block has no region of its own.
-    assert data["guild"] == {"name": "comma", "realm": "Sargeras", "region": "us"}
+    # The captured guild block has no region or realm slug of its own; realm is the slug, as on search rows.
+    assert data["guild"] == {"name": "comma", "realm": "sargeras", "realm_name": "Sargeras", "region": "us"}
+    assert (data["character"]["realm"], data["character"]["realm_name"]) == ("stormrage", "Stormrage")
     mythic_plus = data["mythic_plus"]
     assert mythic_plus["recent_run_count"] == 2
     # A profile run names its dungeon as a string and calls the timer par_time_ms and the chest count

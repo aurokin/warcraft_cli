@@ -19,7 +19,7 @@ client credentials and emits the shared JSON envelope.
 
 | Command | Behavior |
 |---------|----------|
-| `blizzard doctor` | Reports install state, auth posture, region routing, capability metadata, and the experimental tier. |
+| `blizzard doctor` | Reports install state, auth posture, region routing, capability metadata, cache configuration, and the experimental tier. `status` is `ready` with client credentials and `degraded` without them, when `game_data` and `profile` read `requires_client_credentials`. |
 | `blizzard realm <slug>` | Reads `/data/wow/realm/{slug}` from the dynamic Game Data namespace. |
 | `blizzard item <item-id>` | Reads `/data/wow/item/{id}` from the static Game Data namespace. |
 | `blizzard character <realm-slug> <name>` | Reads `/profile/wow/character/{realm}/{name}` from the profile namespace. Retail only. |
@@ -30,7 +30,10 @@ client credentials and emits the shared JSON envelope.
 `mal-ganis`, `Tarren Mill`). Blizzard's slug drops apostrophes, keeps word breaks and keeps accented letters (`malganis`,
 `tarren-mill`, `festung-der-stürme`), so a hyphenated spelling is tried as written and the joined one only after a 404; a
 realm that exists under neither is `not_found` (exit 4). Blizzard slugs native-script realm names in
-English, so pass `howling-fjord`, not `Ревущий фьорд`. A realm with no letters or digits, or a
+English (`Ревущий фьорд` is `howling-fjord`, `아즈샤라` is `azshara`), so when a name with
+non-Latin letters misses, the CLI reads the region's realm index once (cached for a day), which
+names every realm in every locale, and retries with the matching slug. A name two realms share
+(the zh_TW `閃電之刃`) stays `not_found`. A realm with no letters or digits, or a
 blank character name, is `invalid_query` (exit 2) and sends no request.
 
 `search` and `resolve` accept `--limit` (1-50, default 5); it is ignored until those surfaces ship.
@@ -54,7 +57,7 @@ blizzard --fields data.id,data.name item 19019
 
 | Flag | Behavior |
 |------|----------|
-| `--region`, `-r` | `us`, `eu`, `kr`, `tw`, `cn` (aliases such as `na` normalize). Defaults to `BLIZZARD_REGION`, else `us`. |
+| `--region`, `-r` | `us`, `eu`, `kr`, `tw`, `cn` (aliases such as `na` normalize; `oce`/`oceanic` route to `us`, where Oceanic realms live). Defaults to `BLIZZARD_REGION`, else `us`. |
 | `--game-version` | `retail` (default) or `classic`. Selects the namespace infix. |
 | `--classic` | Shorthand for `--game-version classic`. Passing both with a conflicting value is rejected. |
 | `--locale` | Passed through to Blizzard. Default `en_US`; not validated. |
@@ -84,8 +87,22 @@ read command fails with `missing_client_credentials` and exit 3.
 
 Success payloads are the shared envelope: `{ok, provider, command, kind, schema_version, query,
 provenance, data}`. `data` is the raw Blizzard JSON body; `provenance` carries `region`, `namespace`,
-`namespace_class`, `game_version`, `locale`, `source_url`, `verified` (true for confirmed regions),
-and a `verification_note`.
+`namespace_class`, `game_version`, `locale`, `source_url`, `fetched_at`, `cache_hit`,
+`cache_ttl_seconds`, `verified` (true for confirmed regions), and a `verification_note`.
+
+The envelope's `provider` is `blizzard-api`, the provider id the wrapper registry, `warcraft doctor`
+tiers and this doc set use. The binary and the wrapper subcommand are `blizzard`
+(`warcraft blizzard realm illidan`); `warcraft blizzard-api ...` is not a command. It is the only
+provider whose id differs from its binary name.
+
+## Caching
+
+Responses are cached on disk under the XDG cache root (`blizzard-api/http`), keyed on host, path,
+namespace and locale, never on the token: the static namespace (items) for 24 hours, the dynamic and
+profile namespaces (realms, characters) for 15 minutes. A replay sends no request at all, not even
+for a token, but still needs the credentials configured. Override with `BLIZZARD_STATIC_CACHE_TTL_SECONDS`, `BLIZZARD_DYNAMIC_CACHE_TTL_SECONDS`,
+`BLIZZARD_CACHE_DIR`, or `BLIZZARD_CACHE_BACKEND=file|redis|none` (Redis takes `BLIZZARD_REDIS_URL`
+and `BLIZZARD_REDIS_PREFIX`).
 
 Failures write an error envelope to stderr and exit with the shared codes from
 [ERROR_CONTRACT.md](../foundation/ERROR_CONTRACT.md): 1 generic (`invalid_response`), 2 usage

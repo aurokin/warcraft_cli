@@ -365,8 +365,8 @@ def test_character_recent_runs_restate_the_runs_raider_io_lists() -> None:
     player = _rows(board, "runs")[0]["roster"][0]
     result = run("raiderio", "character", player["region"], player["realm"], player["name"])
     recent = result.data["mythic_plus"]["recent_runs"]
-    # recent_run_count is Raider.IO's whole list; recent_runs is its newest few.
-    assert 0 < len(recent) <= result.data["mythic_plus"]["recent_run_count"], result.describe()
+    # recent_runs is Raider.IO's whole list, so its length is the count reported next to it.
+    assert 0 < len(recent) == result.data["mythic_plus"]["recent_run_count"], result.describe()
 
     params = {"region": player["region"], "realm": player["realm"], "name": player["name"], "fields": "mythic_plus_recent_runs"}
     with httpx.Client(timeout=30.0) as client:
@@ -380,6 +380,57 @@ def test_character_recent_runs_restate_the_runs_raider_io_lists() -> None:
         source = upstream[row["run_id"]]
         assert {key: row[key] for key in RECENT_RUN_FIELDS} == {key: source[field] for key, field in RECENT_RUN_FIELDS.items()}, row
         assert row["url"].startswith("https://raider.io/mythic-plus-runs/") and str(row["run_id"]) in row["url"], row
+
+
+def test_character_best_runs_restate_raider_ios_best_run_per_dungeon() -> None:
+    """``mythic_plus.best_runs`` answers "what is X's best key in each dungeon", from Raider.IO's own list.
+
+    The character is the top-ranked run's first player, who has best runs by definition, and the
+    oracle is the public profile API's ``mythic_plus_best_runs`` asked directly.
+    """
+    board = run_retrying("raiderio", "leaderboard", "mythic-plus", "--region", "us", "--limit", "1")
+    player = _rows(board, "runs")[0]["roster"][0]
+    result = run("raiderio", "character", player["region"], player["realm"], player["name"])
+    best = result.data["mythic_plus"]["best_runs"]
+    assert best and result.data["mythic_plus"]["best_run_count"] == len(best), result.describe()
+
+    params = {"region": player["region"], "realm": player["realm"], "name": player["name"], "fields": "mythic_plus_best_runs"}
+    with httpx.Client(timeout=30.0) as client:
+        response = _get_past_upstream_blips(client, f"https://raider.io/api/v1/characters/profile?{urlencode(params)}")
+    assert response.status_code == 200, response.text[:300]
+    upstream = {row["dungeon"]: row for row in response.json()["mythic_plus_best_runs"]}
+    # One row per dungeon, and a best run can only improve between the two reads.
+    assert len({row["dungeon"] for row in best}) == len(best), result.describe()
+    for row in best:
+        assert row["mythic_level"] <= upstream[row["dungeon"]]["mythic_level"], (row, upstream[row["dungeon"]])
+    # The slug is Raider.IO's own, the one its profile URL uses.
+    character = result.data["character"]
+    assert f"/{character['realm']}/" in character["profile_url"], result.describe()
+
+
+def test_affixes_names_this_weeks_affixes() -> None:
+    """The affix rows are the ones Raider.IO's own title for the week lists, in its order."""
+    result = run("raiderio", "affixes", "--region", "eu")
+    assert result.payload["kind"] == "mythic_plus_affixes"
+    affixes = _rows(result, "affixes")
+    assert ", ".join(row["name"] for row in affixes) == result.data["title"], result.describe()
+    assert all(isinstance(row["id"], int) and row["description"] for row in affixes), result.describe()
+    _assert_freshness(result)
+    run("raiderio", "affixes", "--region", "world", expect=EXIT_USAGE, error_code="invalid_query")
+
+
+def test_dungeons_lists_the_pool_the_leaderboard_runs_come_from(current_season: str, baseline_sample: Result) -> None:
+    """The current season is in the catalog, and every sampled leaderboard dungeon is in its pool."""
+    result = run("raiderio", "dungeons")
+    assert result.payload["kind"] == "mythic_plus_dungeons"
+    seasons = {row["slug"]: row for row in _rows(result, "seasons")}
+    assert current_season in seasons, result.describe()
+    pool = {row["slug"] for row in seasons[current_season]["dungeons"]}
+    sampled = {row["dungeon_slug"] for row in _rows(baseline_sample, "runs")}
+    assert sampled and sampled <= pool, (sampled, pool)
+    _assert_freshness(result)
+    # Raider.IO answers an expansion id it has no Mythic+ data for with empty lists, not an error.
+    run("raiderio", "dungeons", "--expansion-id", "99", expect=EXIT_USAGE, error_code="invalid_query")
 
 
 def test_guild_profile_echoes_the_guild_and_numeric_raid_rankings(cache_root: Path) -> None:
@@ -747,6 +798,16 @@ def test_threshold_mythic_plus_runs_estimates_around_a_target(metric: str, estim
     assert (estimate["count"], estimate["min"], estimate["max"]) == (len(neighbours), min(neighbours), max(neighbours))
     assert threshold["caveat"].strip(), "a derived estimate must carry its caveat"
     _assert_sampled_provenance(result)
+
+
+def test_threshold_gives_no_estimate_for_a_target_the_sample_cannot_reach(baseline_sample: Result) -> None:
+    """A leaderboard sample is the top of the ladder, so a +2 has no nearby runs and no estimate."""
+    result = run("raiderio", "threshold", "mythic-plus-runs", "--metric", "mythic_level", "--value", "2", *SCOPE)
+    threshold = result.data["threshold"]
+    levels = [row["mythic_level"] for row in _rows(baseline_sample, "runs")]
+    assert threshold["sampled_range"] == {"min": min(levels), "max": max(levels)}, result.describe()
+    assert (threshold["out_of_sample_range"], threshold["estimate"]) == (True, None), result.describe()
+    assert threshold["note"], result.describe()
 
 
 def test_leaderboard_mythic_plus_reports_returned_versus_requested(current_season: str) -> None:

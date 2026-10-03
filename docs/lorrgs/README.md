@@ -22,7 +22,7 @@ lorrgs --fields data.specs specs
 
 | Command | What it returns |
 |---------|-----------------|
-| `doctor` | Auth posture (none required), endpoints, and per-surface capability state. |
+| `doctor` | Auth posture (none required), endpoints, per-surface capability state, and the cache configuration. |
 | `search <query> [--limit N]` | Ranked Lorrgs candidates with `follow_up.command` values. `--limit` defaults to 5, max 50. |
 | `resolve <query> [--limit N]` | Conservative single-command handoff: `resolved`, `confidence`, `match`, `next_command`. |
 | `roles`, `classes`, `specs`, `zones`, `bosses`, `trinkets` | Static Lorrgs metadata collections. |
@@ -32,9 +32,9 @@ lorrgs --fields data.specs specs
 | `boss <boss-slug>`, `boss-spells <boss-slug>` | Encounter metadata and tracked boss abilities. |
 | `spell <spell-id>` | Lorrgs metadata for one spell id. |
 | `season <season-slug>`, `current-season` | Season-to-raid partition metadata. `season` defaults to `current`. |
-| `spec-ranking <spec-slug> <boss-slug> [--difficulty mythic] [--metric dps]` | Top-parse cooldown timelines: reports, fights, players, boss casts, phases, cast timestamps. When Lorrgs returns `reports: []`, `data.notes` says the upstream ranking is empty, which is not evidence the spec is unplayed on that boss. |
-| `spec-ranking-info <spec-slug> <boss-slug> [--difficulty mythic] [--metric dps]` | Ranking metadata without the large report list. |
-| `comp-ranking <boss-slug> [--limit N] [--role EXPR]... [--spec EXPR]... [--killtime-min S] [--killtime-max S]` | Top composition rows for an encounter. `--role`/`--spec` are repeatable filter expressions such as `heal>=4`. When Lorrgs returns `reports: []`, `data.notes` says the upstream ranking is empty for that boss and those filters. |
+| `spec-ranking <spec-slug> <boss-slug> [--difficulty mythic\|heroic] [--metric dps]` | Top-parse cooldown timelines: reports, fights, players, boss casts, phases, cast timestamps. When Lorrgs returns `reports: []`, `data.notes` says the upstream ranking is empty, which is not evidence the spec is unplayed on that boss. |
+| `spec-ranking-info <spec-slug> <boss-slug> [--difficulty mythic\|heroic] [--metric dps]` | Ranking metadata without the large report list. Lorrgs ranks Mythic and Heroic only, so any other `--difficulty` is a usage error (exit 2). |
+| `comp-ranking <boss-slug> [--limit N] [--role EXPR]... [--spec EXPR]... [--killtime-min S] [--killtime-max S]` | Top composition rows for an encounter. `--role`/`--spec` are repeatable count filters `<name>.<op>.<n>` with `op` one of `eq`, `gt`, `gte`, `lt`, `lte`: `--role heal.gte.4`, `--spec mage-frost.gte.1`. `--role` names a role code, `tank`, `heal`, `mdps` or `rdps` (not the display name `Healer`); `--spec` names a spec slug from `lorrgs specs`. Any other spelling (`heal>=4`) or role is a usage error (exit 2) before the request, because Lorrgs answers the first with HTTP 500 and silently matches nothing for the second. When Lorrgs returns `reports: []`, `data.notes` says the upstream ranking is empty for that boss and those filters. |
 | `report-overview <report-ref> [--refresh/--no-refresh]` | Lorrgs report overview metadata for any public Warcraft Logs report; Lorrgs loads one it has not seen on demand, and `--refresh` asks it to reload one it has. Does not queue per-fight timeline work. |
 | `user-report <report-ref>` | Already-cached Lorrgs user report overview. |
 | `user-report-fights <report-ref> [--fight IDS] [--player IDS] [--type TYPE]` | Selected cached fights. `--fight` and `--type` default to the values parsed from a report URL. |
@@ -53,22 +53,37 @@ both flags it fails and names them.
 Every command emits one JSON envelope: `ok`, `provider`, `command`, `kind`, `schema_version`, `query`,
 `provenance`, `data`, and `error` when `ok` is false, and no other top-level key. The payload is in `data`.
 
-`provenance` carries the exact API `source_url`, `api_host`, the site URL, and upstream source posture
-(`warcraftlogs` data, Wowhead tooltips).
+`provenance` carries the exact API `source_url`, `api_host`, the site URL, upstream source posture
+(`warcraftlogs` data, Wowhead tooltips), and the answer's freshness: `fetched_at` (when it came off the
+wire, also on a replay), `cache_hit`, and `cache_ttl_seconds`.
+
+## Caching
+
+Responses are cached on disk under the XDG cache root (`lorrgs/http`). Static metadata (roles,
+classes, specs, spells, zones, bosses, seasons, trinkets) keeps 12 hours, `spec-ranking`,
+`spec-ranking-info` and `comp-ranking` 30 minutes, and `user-report-fights` 6 hours, but only for a
+fight Lorrgs has loaded (one with players). `report-overview` and `user-report` are never cached.
+Override with `LORRGS_STATIC_CACHE_TTL_SECONDS`, `LORRGS_RANKING_CACHE_TTL_SECONDS`,
+`LORRGS_REPORT_CACHE_TTL_SECONDS`, `LORRGS_CACHE_DIR`, or `LORRGS_CACHE_BACKEND=file|redis|none`
+(Redis takes `LORRGS_REDIS_URL` and `LORRGS_REDIS_PREFIX`).
 
 Failures write the envelope to stderr and exit with the shared codes from
 [docs/foundation/ERROR_CONTRACT.md](../foundation/ERROR_CONTRACT.md): 1 generic, 2 usage (bad
-flags, an unparseable report reference, a missing `--fight`, or a Lorrgs 422), 4 not found
+flags, an unparseable report reference, a missing `--fight`, a `--difficulty` Lorrgs does not rank,
+a malformed `--role`/`--spec` filter or unknown `--role` name, or a Lorrgs 422), 4 not found
 (Lorrgs 404, which `user-report` also returns for a report Lorrgs has not loaded yet, and Lorrgs 401/403
 — it takes no credentials, so a refusal means Warcraft Logs keeps the report private, never an auth
 problem), 5 network, timeout, rate limit, or other upstream failure. No Lorrgs command exits 3.
 
 ## How search and resolve rank
 
-`search` ranks spec/boss candidates. `resolve` promotes the top one when two things hold: it accounts
-for every query word except filler (`the`, `of`, `on`, `cooldowns`, `top`, ...), and no equally well matched candidate of the same kind names a
-different spec or encounter. There is no minimum strength — a query that matched only partially still
-resolves if it is unrivalled, and says so with `confidence: "medium"` and `match.ranking.match_level`.
+`search` ranks spec/boss candidates. `resolve` promotes the top one when three things hold: it accounts
+for every query word except filler (`the`, `of`, `on`, `cooldowns`, `top`, ...), no equally well matched candidate of the same kind names a
+different spec or encounter, and it is a high-confidence match. A query that named a row only by some of
+its words (`storm` for Raszageth the Storm-Eater) is unrivalled but thin: it comes back with
+`resolved: false`, `confidence: "medium"`, the candidate in `match` (see `match.ranking.match_level` and
+`match.follow_up.command`), and `next_command: null`. Like every provider, Lorrgs only resolves at
+`confidence: "high"`.
 
 A word the top candidate ignores blocks the handoff: `fire mage paladin` leaves `paladin` in
 `unmatched_terms`, so it returns `resolved: false` rather than answering the narrower Fire Mage
@@ -81,7 +96,8 @@ A difficulty word (`mythic`, `heroic`, `normal`, `lfr`) is not matched against s
 carried into the ranking handoff instead: `heroic frost mage chimaerus` resolves to
 `lorrgs spec-ranking mage-frost chimaerus-the-undreamt-god --difficulty heroic`. `comp-ranking` takes no
 difficulty, so a heroic, normal, or LFR query lists the difficulty in its `unmatched_terms` and does not
-resolve to it.
+resolve to it. Lorrgs ranks no Normal or LFR, so neither `search` nor `resolve` offers a
+`spec-ranking` candidate for a normal or LFR query.
 
 A tie between *different* kinds is a preference, not ambiguity, and it is fixed: a bare encounter name
 (`chimaerus`) resolves to `comp-ranking`, because the ranking is the useful surface and the `boss`
@@ -90,9 +106,10 @@ metadata row scored the same only because it was built from the same match.
 `--limit` only trims what is printed: `resolve` judges ambiguity over every candidate, and its payload
 carries `count` plus `truncated` so a caller can tell that rivals were cut from `results`.
 
-A report reference resolves to `lorrgs report-overview <code>` at `confidence: "medium"` with a
-`caveat`: the reference parsed exactly, but nothing verified that Lorrgs will serve it (Lorrgs loads
-any public report, but refuses reports Warcraft Logs keeps private).
+A report reference comes back as the `match` (`follow_up.command` is `lorrgs report-overview <code>`)
+at `confidence: "medium"` with a `caveat`, and `resolved: false`: the reference parsed exactly, but
+nothing verified that Lorrgs will serve it (Lorrgs loads any public report, but refuses reports Warcraft
+Logs keeps private). Run `report-overview` on it directly.
 
 ## Examples
 
@@ -105,7 +122,7 @@ warcraft cooldown-packet "https://www.warcraftlogs.com/reports/bG3xDYPqKjLm8XaR?
 warcraft lorrgs current-season
 warcraft lorrgs spec-ranking-info mage-frost chimaerus-the-undreamt-god
 warcraft lorrgs spec-ranking mage-frost chimaerus-the-undreamt-god
-warcraft lorrgs comp-ranking chimaerus-the-undreamt-god --limit 10 --role "heal>=4"
+warcraft lorrgs comp-ranking chimaerus-the-undreamt-god --limit 10 --role heal.gte.4
 ```
 
 Use `spec-ranking-info` when you only need freshness/status metadata, and `spec-ranking` when you need the

@@ -239,7 +239,7 @@ def test_classify_simc_input_falls_back_to_advanced() -> None:
     assert classification["actor_class"] is None
 
 
-def test_doctor_reports_partial_status_and_url_templates() -> None:
+def test_doctor_reports_ready_status_and_url_templates() -> None:
     result = runner.invoke(app, ["doctor"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
@@ -248,7 +248,7 @@ def test_doctor_reports_partial_status_and_url_templates() -> None:
     assert payload["command"] == "doctor"
     assert payload["kind"] == "doctor"
     assert payload["schema_version"] == "1"
-    assert payload["data"]["status"] == "partial"
+    assert payload["data"]["status"] == "ready"
     assert payload["data"]["capabilities"]["search"] == "not_supported"
     assert payload["data"]["capabilities"]["inspect_report"] == "ready"
     assert payload["data"]["url_templates"]["simc_input"].endswith("/simc")

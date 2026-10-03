@@ -1091,6 +1091,8 @@ def test_identify_build_returns_none_when_probe_finds_no_matches(tmp_path: Path)
     assert identified.spec is None
     assert identity.confidence == "none"
     assert identity.candidate_count == 0
+    # identify-build answers ok:true here, so the note is what says how far the probe looked.
+    assert identity.source_notes[-1] == "decodes as none of the 2 specs SimulationCraft knows"
 
 
 def test_identify_build_reports_ambiguous_probe_matches(tmp_path: Path) -> None:
@@ -1111,6 +1113,7 @@ def test_identify_build_reports_ambiguous_probe_matches(tmp_path: Path) -> None:
     assert identified.spec is None
     assert identity.confidence == "low"
     assert identity.candidates == [("demonhunter", "devourer"), ("monk", "mistweaver")]
+    assert identity.source_notes[-1] == "decodes as 2 of the 2 specs SimulationCraft knows"
 
 
 def test_identify_build_does_not_echo_unverified_packet_identity_when_probe_fails(tmp_path: Path) -> None:

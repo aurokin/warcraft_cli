@@ -15,6 +15,7 @@ from typing import Any, Literal, NoReturn
 from urllib.parse import parse_qs, urlparse
 
 import typer
+from warcraft_api.cache import redacted_redis_url
 from warcraft_core.analytics import numeric_summary
 from warcraft_core.auth import (
     delete_provider_auth_state,
@@ -54,7 +55,7 @@ from warcraft_core.identity import (
 from warcraft_core.output import DEFAULT_COMPACT_MAX_CHARS
 from warcraft_core.paths import provider_state_path
 from warcraft_core.talent_transport import validate_talent_tree_transport
-from warcraft_core.wow_normalization import normalize_region
+from warcraft_core.wow_normalization import profile_region
 
 from warcraftlogs_cli.boss_kills import (
     CrossReportScope,
@@ -74,13 +75,13 @@ from warcraftlogs_cli.boss_kills import (
     sampled_cache_provenance as _sampled_cache_provenance,
 )
 from warcraftlogs_cli.boss_kills import (
+    sampled_cohort_notes as _sampled_cohort_notes,
+)
+from warcraftlogs_cli.boss_kills import (
     sampled_cross_report_citations as _sampled_cross_report_citations,
 )
 from warcraftlogs_cli.boss_kills import (
     sampled_cross_report_freshness as _sampled_cross_report_freshness,
-)
-from warcraftlogs_cli.boss_kills import (
-    sampled_dedupe_notes as _sampled_dedupe_notes,
 )
 from warcraftlogs_cli.boss_kills import (
     sampled_sample_scope as _sampled_sample_scope,
@@ -101,8 +102,10 @@ from warcraftlogs_cli.client import (
     WarcraftLogsClientError,
     WarcraftLogsSiteProfile,
     load_warcraftlogs_auth_config,
+    load_warcraftlogs_cache_settings_from_env,
     resolve_site_profile,
     saved_user_token_site_key,
+    validated_region,
     warcraftlogs_provider_env_path,
 )
 from warcraftlogs_cli.provider import doctor as provider_doctor
@@ -970,6 +973,22 @@ def _public_capability_status(public_api_access: dict[str, Any]) -> str:
     )
 
 
+def _doctor_cache_payload() -> dict[str, Any]:
+    """The resolved cache configuration, the block every provider doctor carries."""
+    try:
+        settings, guild_ttl, static_ttl, report_ttl, finished_report_ttl = load_warcraftlogs_cache_settings_from_env()
+    except ValueError as exc:
+        return {"error": {"code": "invalid_cache_config", "message": str(exc)}}
+    return {
+        "enabled": settings.enabled,
+        "backend": settings.backend,
+        "cache_dir": str(settings.cache_dir),
+        "redis_url": redacted_redis_url(settings.redis_url),
+        "prefix": settings.prefix,
+        "ttls": {"guild": guild_ttl, "static": static_ttl, "reports": report_ttl, "finished_report": finished_report_ttl},
+    }
+
+
 def _doctor_payload(*, live: bool, site: WarcraftLogsSiteProfile) -> dict[str, Any]:
     auth = load_warcraftlogs_auth_config()
     credential_source = auth.env_file if auth.env_file is not None else ("environment" if auth.configured else None)
@@ -988,7 +1007,11 @@ def _doctor_payload(*, live: bool, site: WarcraftLogsSiteProfile) -> dict[str, A
         site=site,
     )
     return {
-        "status": "ready",
+        # Every data command needs the public API, so without it the provider is degraded.
+        "status": "ready" if public_api_access["ready"] else "degraded",
+        "installed": True,
+        "language": "python",
+        "cache": _doctor_cache_payload(),
         "site_profile": _site_profile_payload(site),
         "auth": {
             "required": True,
@@ -2627,7 +2650,7 @@ def _boss_spec_usage_payload(
         "query": query,
         "notes": [
             *_sampled_spec_filter_notes(query.get("spec_name") if isinstance(query, dict) else None, sample),
-            *_sampled_dedupe_notes(sample),
+            *_sampled_cohort_notes(sample),
         ],
         "freshness": _sampled_cross_report_freshness(cache_ttl_seconds, transport_counts=transport_counts),
         "cache_provenance": _sampled_cache_provenance(cache_ttl_seconds, rows),
@@ -2844,7 +2867,7 @@ def _comp_samples_payload(
         "query": query,
         "notes": [
             *_sampled_spec_filter_notes(query.get("spec_name") if isinstance(query, dict) else None, sample),
-            *_sampled_dedupe_notes(sample),
+            *_sampled_cohort_notes(sample),
         ],
         "freshness": _sampled_cross_report_freshness(cache_ttl_seconds, transport_counts=transport_counts),
         "cache_provenance": _sampled_cache_provenance(cache_ttl_seconds, rows),
@@ -3024,7 +3047,7 @@ def _ability_usage_summary_payload(
         "query": scoped_query,
         "notes": [
             *_sampled_spec_filter_notes(query.get("spec_name") if isinstance(query, dict) else None, sample),
-            *_sampled_dedupe_notes(sample),
+            *_sampled_cohort_notes(sample),
             *_event_limit_truncation_notes(truncated_kill_count, event_limit=event_limit),
         ],
         "freshness": _sampled_cross_report_freshness(cache_ttl_seconds, transport_counts=transport_counts),
@@ -4122,7 +4145,7 @@ def _encounter_rankings_query(request: _EncounterRankingsRequest, encounter: dic
         "page": options.page,
         "partition": options.partition,
         "size": options.size,
-        "server_region": normalize_region(request.server_region) if request.server_region else None,
+        "server_region": profile_region(request.server_region) if request.server_region else None,
         "server_slug": options.server_slug,
         "leaderboard": options.leaderboard,
         "hard_mode_level": options.hard_mode_level,
@@ -4134,6 +4157,8 @@ def _encounter_rankings_query(request: _EncounterRankingsRequest, encounter: dic
 
 
 def _run_encounter_rankings(ctx: typer.Context, request: _EncounterRankingsRequest) -> None:
+    if request.server_region:
+        _check_region(ctx, request.server_region)
     client = _client(ctx)
     try:
         encounter_payload = _resolve_encounter(
@@ -4661,10 +4686,22 @@ def _ability_usage_query(scope: CrossReportScope, *, ability_id: int) -> dict[st
 def _require_complete_guild_scope(
     ctx: typer.Context, *, guild_region: str | None, guild_realm: str | None, guild_name: str | None
 ) -> None:
-    """Warcraft Logs drops a guild filter missing any of its three parts and answers with every guild's reports."""
+    """Warcraft Logs drops a guild filter missing any of its three parts and answers with every guild's reports.
+
+    The region is checked here too, so a typo is a usage error before the first request.
+    """
     given = [value for value in (guild_region, guild_realm, guild_name) if value]
     if given and len(given) < 3:
         _fail(ctx, "invalid_query", "Pass --guild-region, --guild-realm and --guild-name together, or none of them.")
+    if guild_region:
+        _check_region(ctx, guild_region)
+
+
+def _check_region(ctx: typer.Context, region: str) -> None:
+    try:
+        validated_region(region)
+    except WarcraftLogsClientError as exc:
+        _handle_client_error(ctx, exc)
 
 
 def _require_boss_scope(ctx: typer.Context, *, boss_id: int | None, boss_name: str | None) -> None:

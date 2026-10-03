@@ -36,7 +36,8 @@
 - use timeline filters like `--author`, `--type`, `--region`, and `--forum` instead of scanning broad result sets manually
 - the `news`, `blue-tracker` and `guides` query keeps a row only when every query word is a whole word
   in it, up to a plural or possessive ending, so "hotfix" matches "Hotfixes" but "frost mage" does not
-  match "Frost Death Knight" or "Damage"
+  match "Frost Death Knight" or "Damage"; a `guides` row's URL slug counts as its text, so a raid
+  name finds that raid's boss guides
 - use guide filters like `--author`, `--updated-after`, `--patch-min`, and `--sort`
 - use `news-post` and `blue-topic` once you already have a specific URL; `news-post` takes only
   `/news/...` or `/news=<id>` pages and `blue-topic` only `/blue-tracker/topic/...` pages, so the
@@ -76,8 +77,13 @@
 - query words match whole words, ignoring words like "the" and "of"; a row whose text holds none of
   the query words is not returned, and `suggestion_merge.unmatched_rows_dropped` counts those rows.
   A row holding only some of them stays (`some_terms_match`) and scores less for the words it lacks,
-  but Wowhead's own ordering bonus can still rank it above a row holding them all. A row's type name
-  counts as its text, so a type word such as "npc" in the query keeps every NPC row
+  but Wowhead's own ordering bonus can still rank it above a row holding them all, and `resolve`
+  answers with such a row at high confidence only when it is of a type the query names ("resto druid
+  guide" resolves to the Restoration Druid guide). A row's type name counts as its text, so
+  "hogger npc" holds every word of NPC "Hogger"; when Wowhead returns no row of a type the query
+  names, the query is sent again without its type words (`search_query` says which text was used).
+  A name starts with or contains the query only on whole words ("shadow" does not match
+  "Shadowfeather"). Internal "(DNT)" test entries are left out
 - `resolve` answers with a database entity: news posts and world events sit behind every entity in
   `candidates` and become the `match` only when the response holds no entity, or when the article
   outscores the best entity by a wide margin (a query that names a headline word for word); use
@@ -90,6 +96,7 @@
   `not_found` when Wowhead says the list does not exist
 - on a retail, PTR or beta ref, `talent-calc` rejects a spec that is not the class's and a build
   code whose loadout header names another spec (`invalid_tool_ref`); classic calculators keep their
-  own spec names (MoP Classic rogue `combat`); `listed_builds` are the ref's spec's builds only
+  own spec names (MoP Classic rogue `combat`); `listed_builds` are the ref's spec's builds only,
+  and are absent for classic calculator refs
 - do not assume Wowhead tool URLs expose enough stable state for deep reverse-engineering
 - treat Wowhead `analysis_surfaces` as an additive page-level layer extracted from trusted section structure, not as a replacement for the raw guide page

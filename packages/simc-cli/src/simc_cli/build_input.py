@@ -1016,7 +1016,7 @@ def identify_build(
             source="simc_probe",
             candidate_count=len(matches),
             candidates=matches,
-            source_notes=build_spec.source_notes[:],
+            source_notes=[*build_spec.source_notes, f"decodes as {len(matches) or 'none'} of {probe_scope}"],
             probe_scope=probe_scope,
         ),
     )

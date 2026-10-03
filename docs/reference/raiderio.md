@@ -15,7 +15,7 @@ Pass these before the subcommand: `raiderio --pretty <command> ...`.
 | `--fields` | str (repeatable) |  | Return only selected fields (dot paths). Repeat or pass comma-separated values. |
 | `--fields-strict` | boolean | false | Fail when a requested --fields dot-path is missing from the payload. |
 | `--profile` | str |  | Output profile preset: agent (default compact JSON) or human (pretty JSON). |
-| `--compact-max-chars` | int range | 280 | Maximum string length before --compact truncation adds an ellipsis. |
+| `--compact-max-chars` | int range [40<=x<=10000] | 280 | Maximum string length before --compact truncation adds an ellipsis. |
 
 ## raiderio doctor
 
@@ -35,7 +35,7 @@ Rank Raider.IO character and guild candidates for a free-text query.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--limit` | int range | 5 | Maximum results to return. |
+| `--limit` | int range [1<=x<=50] | 5 | Maximum results to return. |
 | `--kind` | str | all | Optional result kind: all, character, or guild. |
 
 ## raiderio resolve
@@ -52,7 +52,7 @@ Resolve a free-text query to one Raider.IO entity plus the follow-up command to 
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--limit` | int range | 5 | Maximum candidates to return. |
+| `--limit` | int range [1<=x<=50] | 5 | Maximum candidates to return. |
 | `--kind` | str | all | Optional result kind: all, character, or guild. |
 
 ## raiderio character
@@ -87,7 +87,27 @@ List the raid slugs (and encounter slugs) Raider.IO knows for one expansion. Eac
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--expansion-id` | int range | 11 | Expansion id: 11 = Midnight, 10 = The War Within, 9 = Dragonflight. |
+| `--expansion-id` | int range [x>=1] | 11 | Expansion id: 11 = Midnight, 10 = The War Within, 9 = Dragonflight. |
+
+## raiderio affixes
+
+Return this week's Mythic+ affixes in one region.
+
+**Options**
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--region` | str | us | us, eu, kr, tw, cn, or an alias such as na. |
+
+## raiderio dungeons
+
+List the Mythic+ seasons Raider.IO knows for one expansion, each with its dungeon pool and slugs. Seasons come newest first, with per-region ``starts``/``ends``: the current pool is the main season whose window covers now. The dungeon slugs are what ``--dungeon`` takes.
+
+**Options**
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--expansion-id` | int range [x>=1] | 11 | Expansion id: 11 = Midnight, 10 = The War Within, 9 = Dragonflight. |
 
 ## raiderio sample
 
@@ -105,11 +125,11 @@ Return a filtered sample of Mythic+ leaderboard runs with sampling counts and ci
 | `--region` | str | world | world, us, eu, kr, tw, cn, or an alias such as na. |
 | `--dungeon` | str | all | Dungeon slug or all. |
 | `--affixes` | str |  | Affix slug, fortified, tyrannical, current, or all. |
-| `--page` | int range | 0 | 20-run page of rankings to start from. |
-| `--pages` | int range |  | Most 20-run pages to read. Defaults to as many as --limit needs. |
-| `--limit` | int range | 100 | Maximum runs to retain in the sample. |
-| `--level-min` | int range |  | Retain only runs at or above this Mythic+ level. |
-| `--level-max` | int range |  | Retain only runs at or below this Mythic+ level. |
+| `--page` | int range [x>=0] | 0 | 20-run page of rankings to start from. |
+| `--pages` | int range [1<=x<=10] |  | Most 20-run pages to read. Defaults to as many as --limit needs. |
+| `--limit` | int range [1<=x<=200] | 100 | Maximum runs to retain in the sample. |
+| `--level-min` | int range [x>=0] |  | Retain only runs at or above this Mythic+ level. |
+| `--level-max` | int range [x>=0] |  | Retain only runs at or below this Mythic+ level. |
 | `--score-min` | float |  | Retain only runs at or above this sampled run score. |
 | `--score-max` | float |  | Retain only runs at or below this sampled run score. |
 | `--contains-role` | str (repeatable) |  | Retain only runs containing at least one of these roles (tank, healer, dps). Repeatable. |
@@ -129,12 +149,12 @@ Return deduped player snapshots built from a filtered sample of Mythic+ runs.
 | `--region` | str | world | world, us, eu, kr, tw, cn, or an alias such as na. |
 | `--dungeon` | str | all | Dungeon slug or all. |
 | `--affixes` | str |  | Affix slug, fortified, tyrannical, current, or all. |
-| `--page` | int range | 0 | 20-run page of rankings to start from. |
-| `--pages` | int range |  | Most 20-run pages to read. Defaults to as many as --limit needs. |
-| `--limit` | int range | 100 | Maximum runs to retain in the sample. |
-| `--player-limit` | int range | 100 | Maximum player snapshots to retain after deduping. |
-| `--level-min` | int range |  | Retain only runs at or above this Mythic+ level. |
-| `--level-max` | int range |  | Retain only runs at or below this Mythic+ level. |
+| `--page` | int range [x>=0] | 0 | 20-run page of rankings to start from. |
+| `--pages` | int range [1<=x<=10] |  | Most 20-run pages to read. Defaults to as many as --limit needs. |
+| `--limit` | int range [1<=x<=200] | 100 | Maximum runs to retain in the sample. |
+| `--player-limit` | int range [1<=x<=500] | 100 | Maximum player snapshots to retain after deduping. |
+| `--level-min` | int range [x>=0] |  | Retain only runs at or above this Mythic+ level. |
+| `--level-max` | int range [x>=0] |  | Retain only runs at or below this Mythic+ level. |
 | `--score-min` | float |  | Retain only runs at or above this sampled run score. |
 | `--score-max` | float |  | Retain only runs at or below this sampled run score. |
 | `--contains-role` | str (repeatable) |  | Retain only runs containing at least one of these roles (tank, healer, dps). Repeatable. |
@@ -159,11 +179,11 @@ Return a run-level distribution of the sampled runs over one --metric.
 | `--region` | str | world | world, us, eu, kr, tw, cn, or an alias such as na. |
 | `--dungeon` | str | all | Dungeon slug or all. |
 | `--affixes` | str |  | Affix slug, fortified, tyrannical, current, or all. |
-| `--page` | int range | 0 | 20-run page of rankings to start from. |
-| `--pages` | int range |  | Most 20-run pages to read. Defaults to as many as --limit needs. |
-| `--limit` | int range | 100 | Maximum runs to retain in the sample. |
-| `--level-min` | int range |  | Retain only runs at or above this Mythic+ level. |
-| `--level-max` | int range |  | Retain only runs at or below this Mythic+ level. |
+| `--page` | int range [x>=0] | 0 | 20-run page of rankings to start from. |
+| `--pages` | int range [1<=x<=10] |  | Most 20-run pages to read. Defaults to as many as --limit needs. |
+| `--limit` | int range [1<=x<=200] | 100 | Maximum runs to retain in the sample. |
+| `--level-min` | int range [x>=0] |  | Retain only runs at or above this Mythic+ level. |
+| `--level-max` | int range [x>=0] |  | Retain only runs at or below this Mythic+ level. |
 | `--score-min` | float |  | Retain only runs at or above this sampled run score. |
 | `--score-max` | float |  | Retain only runs at or below this sampled run score. |
 | `--contains-role` | str (repeatable) |  | Retain only runs containing at least one of these roles (tank, healer, dps). Repeatable. |
@@ -184,12 +204,12 @@ Return a player-level distribution of the sampled participants over one --metric
 | `--region` | str | world | world, us, eu, kr, tw, cn, or an alias such as na. |
 | `--dungeon` | str | all | Dungeon slug or all. |
 | `--affixes` | str |  | Affix slug, fortified, tyrannical, current, or all. |
-| `--page` | int range | 0 | 20-run page of rankings to start from. |
-| `--pages` | int range |  | Most 20-run pages to read. Defaults to as many as --limit needs. |
-| `--limit` | int range | 100 | Maximum runs to retain in the sample. |
-| `--player-limit` | int range | 100 | Maximum player snapshots to retain after deduping. |
-| `--level-min` | int range |  | Retain only runs at or above this Mythic+ level. |
-| `--level-max` | int range |  | Retain only runs at or below this Mythic+ level. |
+| `--page` | int range [x>=0] | 0 | 20-run page of rankings to start from. |
+| `--pages` | int range [1<=x<=10] |  | Most 20-run pages to read. Defaults to as many as --limit needs. |
+| `--limit` | int range [1<=x<=200] | 100 | Maximum runs to retain in the sample. |
+| `--player-limit` | int range [1<=x<=500] | 100 | Maximum player snapshots to retain after deduping. |
+| `--level-min` | int range [x>=0] |  | Retain only runs at or above this Mythic+ level. |
+| `--level-max` | int range [x>=0] |  | Retain only runs at or below this Mythic+ level. |
 | `--score-min` | float |  | Retain only runs at or above this sampled run score. |
 | `--score-max` | float |  | Retain only runs at or below this sampled run score. |
 | `--contains-role` | str (repeatable) |  | Retain only runs containing at least one of these roles (tank, healer, dps). Repeatable. |
@@ -215,12 +235,12 @@ Estimate the sampled runs nearest a target score or Mythic+ level.
 | `--region` | str | world | world, us, eu, kr, tw, cn, or an alias such as na. |
 | `--dungeon` | str | all | Dungeon slug or all. |
 | `--affixes` | str |  | Affix slug, fortified, tyrannical, current, or all. |
-| `--page` | int range | 0 | 20-run page of rankings to start from. |
-| `--pages` | int range |  | Most 20-run pages to read. Defaults to as many as --limit needs. |
-| `--limit` | int range | 100 | Maximum runs to retain in the sample. |
-| `--nearest` | int range | 10 | Number of nearest sampled runs to retain. |
-| `--level-min` | int range |  | Retain only runs at or above this Mythic+ level. |
-| `--level-max` | int range |  | Retain only runs at or below this Mythic+ level. |
+| `--page` | int range [x>=0] | 0 | 20-run page of rankings to start from. |
+| `--pages` | int range [1<=x<=10] |  | Most 20-run pages to read. Defaults to as many as --limit needs. |
+| `--limit` | int range [1<=x<=200] | 100 | Maximum runs to retain in the sample. |
+| `--nearest` | int range [1<=x<=50] | 10 | Number of nearest sampled runs to retain. |
+| `--level-min` | int range [x>=0] |  | Retain only runs at or above this Mythic+ level. |
+| `--level-max` | int range [x>=0] |  | Retain only runs at or below this Mythic+ level. |
 | `--score-min` | float |  | Retain only runs at or above this sampled run score. |
 | `--score-max` | float |  | Retain only runs at or below this sampled run score. |
 | `--contains-role` | str (repeatable) |  | Retain only runs containing at least one of these roles (tank, healer, dps). Repeatable. |
@@ -244,8 +264,8 @@ Return the season-scoped top Mythic+ runs with sampling freshness and citations.
 | `--region` | str | world | world, us, eu, kr, tw, cn, or an alias such as na. |
 | `--dungeon` | str | all | Dungeon slug or all. |
 | `--affixes` | str |  | Affix slug, fortified, tyrannical, current, or all. |
-| `--page` | int range | 0 | 20-run page of rankings to start from. |
-| `--limit` | int range | 20 | Maximum leaderboard rows to return. |
+| `--page` | int range [x>=0] | 0 | 20-run page of rankings to start from. |
+| `--limit` | int range [1<=x<=200] | 20 | Maximum leaderboard rows to return. |
 
 ## raiderio leaderboard raids
 
@@ -259,5 +279,5 @@ Return the guild raid rankings for one raid and difficulty with freshness and ci
 | `--difficulty` | str | mythic | normal, heroic, or mythic. |
 | `--region` | str | world | world, us, eu, kr, tw, cn, or an alias such as na. |
 | `--realm` | str |  | Realm slug or display name to narrow to (requires a standard --region). |
-| `--page` | int range | 0 | 20-row page of rankings to start from. |
-| `--limit` | int range | 20 | Maximum guild rows to return. |
+| `--page` | int range [x>=0] | 0 | 20-row page of rankings to start from. |
+| `--limit` | int range [1<=x<=200] | 20 | Maximum guild rows to return. |

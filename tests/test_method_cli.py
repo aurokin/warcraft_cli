@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import json
-import shlex
 from datetime import datetime
 from pathlib import Path
 
 import httpx
 import pytest
+from method_cli.client import METHOD_SITE
 from method_cli.main import app
 from method_cli.page_parser import classify_guide_family, parse_guide_page, parse_sitemap_guides
 from method_cli.provider import PROVIDER
@@ -801,17 +801,59 @@ def test_method_rejects_a_blank_query_without_fetching(monkeypatch, args: list[s
     assert json.loads(result.stderr)["error"]["code"] == "invalid_query"
 
 
-def test_method_guide_quotes_the_slug_in_its_fetch_more_command(monkeypatch) -> None:
-    html = INTRO_HTML.replace("guides/mistweaver-monk\"", "guides/mistweaver-monk's\"")
-    monkeypatch.setattr(
-        "method_cli.main.MethodClient.fetch_guide_page",
-        lambda self, guide_ref: parse_guide_page(html, source_url="https://www.method.gg/guides/mistweaver-monk"),
-    )
-    result = runner.invoke(app, ["guide", "mistweaver-monk"])
-    assert result.exit_code == 0
+def test_method_guide_rejects_a_malformed_ref_before_any_request() -> None:
+    # It used to fetch https://www.method.gg/guides/not%20a%20slug!! and fail not_found (exit 4).
+    result = runner.invoke(app, ["guide", "not a slug!!"])
 
-    command = json.loads(result.stdout)["data"]["linked_entities"]["fetch_more_command"]
-    assert shlex.split(command) == ["method", "guide-full", "mistweaver-monk's"]
+    assert result.exit_code == 2
+    assert _error_payload(result)["error"]["code"] == "invalid_guide_ref"
+
+
+def test_method_guide_ref_is_case_insensitive(monkeypatch) -> None:
+    # ``Frost-Mage`` kept its case and was labelled article_guide instead of class_guide.
+    requested: list[str] = []
+
+    def fetch(self, guide_ref: str) -> dict[str, object]:
+        requested.append(METHOD_SITE.page_url(guide_ref))
+        return _fake_fetch_guide_page(guide_ref)
+
+    monkeypatch.setattr("method_cli.main.MethodClient.fetch_guide_page", fetch)
+    result = runner.invoke(app, ["guide", "Mistweaver-Monk"])
+    assert result.exit_code == 0, result.output
+
+    assert requested == ["https://www.method.gg/guides/mistweaver-monk"]
+    assert json.loads(result.stdout)["data"]["redirect"] is None
+
+
+@pytest.mark.parametrize(
+    ("query", "section"),
+    [
+        ("mistweaver monk talents", "talents"),
+        ("mw monk rotation", "playstyle-and-rotation"),
+        ("mistweaver monk stats", "stats-races-and-consumables"),
+        ("mistweaver monk bis", "gearing"),
+        ("mistweaver monk macros", "interface-and-macros"),
+    ],
+)
+def test_method_resolve_opens_the_class_guide_section_a_query_names(monkeypatch, query: str, section: str) -> None:
+    # "<spec> talents" matched no row at all: class guides are titled by their spec alone.
+    monkeypatch.setattr("method_cli.main.MethodClient.sitemap_guides", lambda self: parse_sitemap_guides(SITEMAP_XML))
+    result = runner.invoke(app, ["resolve", query])
+    assert result.exit_code == 0, result.output
+
+    data = json.loads(result.stdout)["data"]
+    assert data["resolved"] is True
+    assert data["match"]["id"] == "mistweaver-monk"
+    assert data["match"]["url"] == f"https://www.method.gg/guides/mistweaver-monk/{section}"
+    assert data["next_command"] == f"method guide mistweaver-monk/{section}"
+
+
+def test_method_section_words_alone_stay_an_ordinary_search(monkeypatch) -> None:
+    monkeypatch.setattr("method_cli.main.MethodClient.sitemap_guides", lambda self: parse_sitemap_guides(SITEMAP_XML))
+    result = runner.invoke(app, ["search", "talents"])
+    assert result.exit_code == 0, result.output
+
+    assert json.loads(result.stdout)["data"]["results"] == []
 
 
 @pytest.mark.parametrize(
@@ -855,7 +897,9 @@ def test_method_resolve_judges_confidence_on_every_match_not_the_limit(monkeypat
     monkeypatch.setattr("method_cli.main.MethodClient.sitemap_guides", lambda self: sitemap)
     payload = json.loads(runner.invoke(app, ["resolve", "frost", "--limit", "1"]).stdout)["data"]
 
-    assert (payload["resolved"], payload["confidence"], payload["count"], len(payload["candidates"])) == (False, "medium", 2, 1)
+    # A tie: "low", whatever the limit hides.
+    assert (payload["resolved"], payload["confidence"], payload["count"], len(payload["candidates"])) == (False, "low", 2, 1)
+    assert payload["truncated"] is True
 
 
 def test_method_search_fails_when_the_sitemap_lists_no_guides_and_does_not_cache_it(monkeypatch, tmp_path: Path) -> None:

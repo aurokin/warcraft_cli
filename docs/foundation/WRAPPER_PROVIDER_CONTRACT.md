@@ -328,7 +328,8 @@ is free text. A bare name carrying none of these and no keyword is *not* a profi
 **Order — a provider's own order is its ranking.** The wrapper never reorders two rows from the same
 provider. It interleaves the providers' lists (`interleave_provider_rows`): at every step the best of
 the providers' next rows, by the anchor tier, the off-intent tier and then the normalized wrapper
-score (`search_result_sort_key`), takes the next place. Boosts therefore decide only *between*
+score (`search_result_sort_key`, ties then by provider name, never by raw provider score), takes
+the next place. Boosts therefore decide only *between*
 providers; within one provider, a row the provider ranked lower stays lower.
 
 **Diversity — no provider fills the page.** After interleaving, the page is built with a per-provider cap
@@ -372,8 +373,10 @@ Resolve selection rules:
   provider's top row (normalized against the provider's own candidates, anchor and off-intent tiers,
   intent boosts), and the top-ranked match is the only candidate for the answer
 - provider-reported `resolved` and confidence never lift a match over a better-ranked one; they only
-  break an exact tie on the wrapper score, ahead of the incomparable raw provider score
-- the top-ranked match is the answer only when its own provider resolved it and the query's intents
+  break an exact tie on the wrapper score, ahead of the provider name; the raw provider score, which
+  is not comparable across providers, never breaks a tie
+- the top-ranked match is the answer only when its own provider resolved it at `high` confidence
+  (a provider `resolved: true` at `medium` is `unresolved_reason: "provider_confidence_below_high"`) and the query's intents
   do not rank that provider's family down (`wrapper_ranking.intent_family_fit` is not negative):
   a guide query is never answered by Lorrgs spec metadata, a guild query never by a wiki article.
   A match whose title is exactly the query is exempt, because the intent word is part of its name

@@ -294,6 +294,7 @@ def _run_argv(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str
     [
         (["dummy", "--profile", "bogus", "show"], "show", "Invalid value for --profile: --profile must be one of: agent, human"),
         (["dummy", "--bogus-flag", "show"], "show", "No such option: --bogus-flag"),
+        (["dummy", "--region", "kr", "show"], "show", "No such option: --region"),
         (["dummy", "nosuchcommand"], "nosuchcommand", "No such command 'nosuchcommand'."),
         (["dummy", "need"], "need", "Missing argument 'target'."),
         (["dummy"], "", "Missing command."),
@@ -303,7 +304,15 @@ def _run_argv(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str
             "Invalid value for '--pages': 'abc' is not a valid int.",
         ),
     ],
-    ids=["bad-option-value", "unknown-flag", "unknown-command", "missing-argument", "no-command", "nested-command"],
+    ids=[
+        "bad-option-value",
+        "unknown-flag",
+        "misplaced-option-with-value",
+        "unknown-command",
+        "missing-argument",
+        "no-command",
+        "nested-command",
+    ],
 )
 def test_guarded_run_renders_usage_errors_as_the_json_envelope(
     monkeypatch: pytest.MonkeyPatch,

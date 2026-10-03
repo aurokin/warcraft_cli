@@ -2,8 +2,8 @@
 
 The provider supplies how a URL is fetched (its cache, pacing and HTTP client), how a page is read
 (its identity, its index row and the links on it) and which links are worth following. This module
-owns the walk and the rules that keep it polite: a request cap, a full stop at the first bot block,
-and never a retry.
+owns the walk and the rules that keep it polite: a request cap, a full stop at the first bot block or
+when the site keeps failing, and never a retry.
 """
 
 from __future__ import annotations
@@ -16,6 +16,8 @@ from typing import Any
 # A site answers a crawler it has had enough of with one of these, or with a challenge page.
 BLOCKED_STATUSES = frozenset({403, 429})
 GONE_STATUSES = frozenset({404, 410})
+# Server errors (5xx) or transport failures in a row after which the site is treated as down.
+UNAVAILABLE_AFTER = 3
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,7 +70,7 @@ class CrawlResult:
     errors: list[dict[str, Any]] = field(default_factory=list)
     requests: int = 0
     cached: int = 0
-    # None for a complete run; "blocked", "max_requests" or "seed_failed" for a partial one.
+    # None for a complete run; "blocked", "unavailable", "max_requests" or "seed_failed" for a partial one.
     stop_reason: str | None = None
     blocked: dict[str, Any] | None = None
     # Discovered URLs not fetched yet, for the next run to start from.
@@ -90,35 +92,41 @@ def crawl(
 ) -> CrawlResult:
     """Fetch ``seeds`` and every link ``should_expand`` accepts, breadth first, then ``revisit``.
 
-    Discovery comes before revisits, so a capped run spends its requests on pages it has never seen.
-    The first seed anchors the crawl: when it cannot be read, or reads with no links at all, the
-    reader no longer understands the site and the run stops as ``seed_failed``. A 403, a 429 or a
-    challenge stops the run at once (``blocked``) and nothing is retried; 404s are reported in
-    ``not_found``; any other failure is recorded in ``errors`` and the walk goes on. ``read_page``
-    returning None means the body is not one of the site's pages (a link that lands outside the
-    indexed section); that is an error, not a block, so ``fetch`` must flag a challenge served as 200
-    (``FetchResult.challenge``) for the run to stop on it.
+    ``revisit`` holds the pages a previous run indexed. Discovery never fetches them, even where a
+    page links them, so a capped run spends its requests on pages it has never seen first; they
+    are then revisited in the given order, and a link found on a revisited page is discovered
+    before the next revisit. The first seed anchors the crawl: when it cannot be read, or reads
+    with no links at all, the reader no longer understands the site and the run stops as
+    ``seed_failed``. A 403, a 429 or a challenge stops the run at once (``blocked``) and nothing is
+    retried; ``UNAVAILABLE_AFTER`` 5xx or transport failures in a row stop it as ``unavailable``;
+    404s are reported in ``not_found``; any other failure is recorded in ``errors`` and the walk
+    goes on. The URL a run stopped on stays in ``frontier``, with the rest of the failure streak for
+    an ``unavailable`` stop, unless it was a revisit, which the next run revisits anyway.
+    ``read_page`` returning None means the body is not one of the site's pages (a link that lands
+    outside the indexed section); that is an error, not a block, so ``fetch``
+    must flag a challenge served as 200 (``FetchResult.challenge``) for the run to stop on it.
     """
     result = CrawlResult()
     queue: deque[tuple[str, str]] = deque((url, "seed") for url in dict.fromkeys(seeds))
-    # Queued or fetched; a revisit that discovery already fetched is skipped.
+    # Queued, fetched or indexed: a link to any of them is not discovery.
     seen = {url for url, _ in queue}
-    revisits = deque(url for url in revisit if url not in seen)
+    revisits = deque(url for url in dict.fromkeys(revisit) if url not in seen)
+    seen.update(revisits)
+    # Fetched, or served as another URL's redirect target: a revisit of either is skipped.
+    done: set[str] = set()
+    # The URLs fetched since the last success, all 5xx or transport failures.
+    streak: list[tuple[str, str]] = []
     first_seed = seeds[0] if seeds else None
-    while (item := _next_url(queue, revisits, seen)) is not None:
+    while (item := _next_url(queue, revisits, done)) is not None:
         url, source = item
         if result.requests >= max_requests:
-            result.stop_reason = "max_requests"
-            queue.appendleft(item)
+            _stop(result, "max_requests", [item], queue)
             break
-        page = _fetch_page(url, fetch, read_page, result)
-        if result.stop_reason == "blocked":
-            queue.appendleft(item)
-            break
-        if url == first_seed and (page is None or not page.links):
-            if page is not None:
-                result.errors.append({"url": url, "status": 200, "error": "the page listed no links"})
-            result.stop_reason = "seed_failed"
+        fetched, page = _fetch_page(url, fetch, read_page, result)
+        done.add(url)
+        streak = [*streak, item] if fetched.status == 0 or fetched.status >= 500 else []
+        if (reason := _stop_reason(url, page, result, first_seed=first_seed, failures=len(streak))) is not None:
+            _stop(result, reason, streak if reason == "unavailable" else [item], queue)
             break
         if page is None:
             continue
@@ -126,6 +134,7 @@ def crawl(
         if page.url != url:
             result.aliases[url] = page.url
             seen.add(page.url)
+            done.add(page.url)
         for link in page.links:
             if link.url not in seen and should_expand(link):
                 seen.add(link.url)
@@ -134,17 +143,36 @@ def crawl(
     return result
 
 
-def _next_url(queue: deque[tuple[str, str]], revisits: deque[str], seen: set[str]) -> tuple[str, str] | None:
+def _stop_reason(url: str, page: PageRead | None, result: CrawlResult, *, first_seed: str | None, failures: int) -> str | None:
+    """Why the run must stop after fetching ``url``, or None to go on."""
+    if result.stop_reason == "blocked":
+        return "blocked"
+    if url == first_seed and (page is None or not page.links):
+        if page is not None:
+            result.errors.append({"url": url, "status": 200, "error": "the page listed no links"})
+        return "seed_failed"
+    return "unavailable" if failures >= UNAVAILABLE_AFTER else None
+
+
+def _stop(result: CrawlResult, reason: str, items: list[tuple[str, str]], queue: deque[tuple[str, str]]) -> None:
+    """End the run for ``reason``, keeping the discovered URLs it stopped on, in order, for the next run."""
+    result.stop_reason = reason
+    if reason != "seed_failed":
+        queue.extendleft(reversed([item for item in items if item[1] != "revisit"]))
+
+
+def _next_url(queue: deque[tuple[str, str]], revisits: deque[str], done: set[str]) -> tuple[str, str] | None:
     """The next discovered URL, else the next revisit nothing has fetched yet, else None."""
     while not queue and revisits:
-        if (url := revisits.popleft()) not in seen:
-            seen.add(url)
+        if (url := revisits.popleft()) not in done:
             return url, "revisit"
     return queue.popleft() if queue else None
 
 
-def _fetch_page(url: str, fetch: Callable[[str], FetchResult], read_page: PageReader, result: CrawlResult) -> PageRead | None:
-    """Fetch and read one URL, counting the request; a block sets ``result.stop_reason`` and returns None."""
+def _fetch_page(
+    url: str, fetch: Callable[[str], FetchResult], read_page: PageReader, result: CrawlResult
+) -> tuple[FetchResult, PageRead | None]:
+    """Fetch and read one URL, counting the request; a block sets ``result.stop_reason`` and reads no page."""
     fetched = fetch(url)
     if fetched.cached:
         result.cached += 1
@@ -153,8 +181,8 @@ def _fetch_page(url: str, fetch: Callable[[str], FetchResult], read_page: PageRe
     if fetched.challenge or fetched.status in BLOCKED_STATUSES:
         result.stop_reason = "blocked"
         result.blocked = {"url": url, "status": fetched.status, "challenge": fetched.challenge}
-        return None
-    return _read(url, fetched, read_page, result)
+        return fetched, None
+    return fetched, _read(url, fetched, read_page, result)
 
 
 def _read(url: str, fetched: FetchResult, read_page: PageReader, result: CrawlResult) -> PageRead | None:

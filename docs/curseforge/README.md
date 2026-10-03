@@ -29,8 +29,9 @@ Every command accepts the shared output flags, which go **before** the subcomman
 ### `curseforge doctor`
 
 Reports install state, API-key auth posture (`api_key` flow, `CURSEFORGE_API_KEY`, credential source
-and lookup order), the `experimental` tier, and capability metadata: `doctor` and `addon` are
-`ready`, `search` and `resolve` are `coming_soon`.
+and lookup order), the `experimental` tier, the cache configuration, and capability metadata:
+`doctor` is `ready`, `addon` is `ready` with a key and `requires_api_key` without one, and `search`
+and `resolve` are `coming_soon`. `status` is `ready` with a key and `degraded` without one.
 
 ### `curseforge addon <slug-or-id>`
 
@@ -46,8 +47,13 @@ Resolves one WoW addon and returns its metadata, latest files, and latest change
   files. Otherwise it is an object keyed by `file_id` carrying `body` (changelog HTML, or `null`
   when that file exposes no notes) plus `source_url`, or an explicit `{file_id, error}` marker when
   that one request fails. Every form also carries `display_name` and `release_type`. Detect empty notes via `changelog.body`, not `changelog is null`.
-- `provenance` carries `game_id`, `mod_id`, `slug`, `resolved_by`, `source_urls`, `verified: true`,
-  and `verification_note`.
+- `provenance` carries `game_id`, `mod_id`, `slug`, `resolved_by`, `source_urls`, `fetched_at`
+  (the oldest of the lookup's responses, also on a replay), `cache_hit` (any response replayed),
+  `cache_ttl_seconds`, `verified: true`, and `verification_note`.
+- Responses are cached on disk under the XDG cache root (`curseforge/http`) for an hour, keyed on
+  path and query, never on the key, because the API key is rate-limited. Override with
+  `CURSEFORGE_CACHE_TTL_SECONDS`, `CURSEFORGE_CACHE_DIR`, or `CURSEFORGE_CACHE_BACKEND=file|redis|none`
+  (Redis takes `CURSEFORGE_REDIS_URL` and `CURSEFORGE_REDIS_PREFIX`).
 
 ### `curseforge search <query>` and `curseforge resolve <query>`
 

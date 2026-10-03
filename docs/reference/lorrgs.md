@@ -15,7 +15,7 @@ Pass these before the subcommand: `lorrgs --pretty <command> ...`.
 | `--fields` | str (repeatable) |  | Return only selected fields (dot paths). Repeat or pass comma-separated values. |
 | `--fields-strict` | boolean | false | Fail when a requested --fields dot-path is missing from the payload. |
 | `--profile` | str |  | Output profile preset: agent (default compact JSON) or human (pretty JSON). |
-| `--compact-max-chars` | int range | 280 | Maximum string length before --compact truncation adds an ellipsis. |
+| `--compact-max-chars` | int range [40<=x<=10000] | 280 | Maximum string length before --compact truncation adds an ellipsis. |
 
 ## lorrgs doctor
 
@@ -47,7 +47,7 @@ Search Lorrgs by explicit URL/ref or by spec/boss terms.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--limit` | int range | 5 | Maximum results to return. |
+| `--limit` | int range [1<=x<=50] | 5 | Maximum results to return. |
 
 ## lorrgs resolve
 
@@ -63,7 +63,7 @@ Resolve a Lorrgs query conservatively: an ambiguous query resolves to nothing, n
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--limit` | int range | 5 | Maximum candidates to list; ambiguity is judged over all of them. |
+| `--limit` | int range [1<=x<=50] | 5 | Maximum candidates to list; ambiguity is judged over all of them. |
 
 ## lorrgs spec
 
@@ -176,7 +176,7 @@ Fetch top-parse cooldown timelines for one spec on one encounter.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--difficulty` | str | mythic | Lorrgs difficulty slug; defaults to mythic. |
+| `--difficulty` | str | mythic | mythic or heroic; defaults to mythic. |
 | `--metric` | str |  | Metric override, e.g. dps or hps. Defaults by spec role. |
 
 ## lorrgs spec-ranking-info
@@ -194,7 +194,7 @@ Fetch metadata for a spec ranking without the large report timeline list.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--difficulty` | str | mythic | Lorrgs difficulty slug; defaults to mythic. |
+| `--difficulty` | str | mythic | mythic or heroic; defaults to mythic. |
 | `--metric` | str |  | Metric override, e.g. dps or hps. Defaults by spec role. |
 
 ## lorrgs comp-ranking
@@ -211,11 +211,11 @@ Fetch top composition ranking rows for an encounter.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--limit` | int range | 20 | Maximum report rows to request. |
-| `--role` | str (repeatable) |  | Composition role filter expression; repeatable. |
-| `--spec` | str (repeatable) |  | Composition spec filter expression; repeatable. |
-| `--killtime-min` | int range | 0 | Minimum kill time in seconds. |
-| `--killtime-max` | int range | 0 | Maximum kill time in seconds. |
+| `--limit` | int range [1<=x<=50] | 20 | Maximum report rows to request. |
+| `--role` | str (repeatable) |  | Role count filter <role>.<op>.<n>, role tank/heal/mdps/rdps, op eq/gt/gte/lt/lte, e.g. heal.gte.4; repeatable. |
+| `--spec` | str (repeatable) |  | Spec count filter <spec-slug>.<op>.<n>, e.g. mage-frost.gte.1; repeatable. |
+| `--killtime-min` | int range [x>=0] | 0 | Minimum kill time in seconds. |
+| `--killtime-max` | int range [x>=0] | 0 | Maximum kill time in seconds. |
 
 ## lorrgs user-report
 

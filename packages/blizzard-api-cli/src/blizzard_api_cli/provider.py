@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import httpx
+from warcraft_api.cache import redacted_redis_url
 from warcraft_core.auth import provider_auth_status
 from warcraft_core.envelope import Envelope, success_envelope
 from warcraft_core.exit_codes import EXIT_AUTH, EXIT_USAGE, error_code_for_http_status
@@ -32,6 +33,7 @@ from blizzard_api_cli.client import (
     VERIFIED_REGIONS,
     BlizzardClient,
     BlizzardClientError,
+    load_blizzard_cache_settings_from_env,
     verification_note,
 )
 
@@ -101,15 +103,32 @@ def _region_payload(auth: BlizzardAuthConfig) -> dict[str, Any]:
     }
 
 
+def _cache_payload() -> dict[str, Any]:
+    try:
+        settings, static_ttl, dynamic_ttl = load_blizzard_cache_settings_from_env()
+    except ValueError as exc:
+        return {"error": {"code": "invalid_cache_config", "message": str(exc)}}
+    return {
+        "enabled": settings.enabled,
+        "backend": settings.backend,
+        "cache_dir": str(settings.cache_dir),
+        "redis_url": redacted_redis_url(settings.redis_url),
+        "prefix": settings.prefix,
+        "ttls": {"static": static_ttl, "dynamic_and_profile": dynamic_ttl},
+    }
+
+
 def doctor_envelope() -> Envelope:
     """Install state, auth posture, region routing, and capability metadata for this provider."""
     auth = load_blizzard_auth_config()
+    # Every read needs client credentials, so without them the reads are blocked, not ready.
+    reads = "ready" if auth.configured else "requires_client_credentials"
     return success_envelope(
         provider=PROVIDER_NAME,
         command="doctor",
         kind="doctor",
         data={
-            "status": "partial",
+            "status": "ready" if auth.configured else "degraded",
             "tier": TIER,
             "installed": True,
             "language": "python",
@@ -119,9 +138,10 @@ def doctor_envelope() -> Envelope:
                 "doctor": "ready",
                 "search": "coming_soon",
                 "resolve": "coming_soon",
-                "game_data": "ready",
-                "profile": "ready",
+                "game_data": reads,
+                "profile": reads,
             },
+            "cache": _cache_payload(),
             "notes": [
                 "Experimental tier: the read surface is small (realm, item, character) and "
                 "search/resolve are stubs.",
@@ -163,7 +183,10 @@ def fetch(
     call: Callable[[BlizzardClient], dict[str, Any]],
 ) -> Envelope:
     """Run one Game Data / Profile read and wrap the result in the shared success envelope."""
-    client = BlizzardClient()
+    try:
+        client = BlizzardClient()
+    except ValueError as exc:
+        raise ProviderError("invalid_cache_config", str(exc)) from exc
     try:
         result = call(client)
     except (BlizzardClientError, httpx.HTTPError) as exc:
@@ -183,6 +206,10 @@ def fetch(
             "game_version": routing.game_version,
             "locale": routing.locale,
             "source_url": result["source_url"],
+            # When the answer came off the wire (also on a replay) and how stale a replay may be.
+            "fetched_at": result["fetched_at"],
+            "cache_hit": result["cache_hit"],
+            "cache_ttl_seconds": result["cache_ttl_seconds"],
             "verified": routing.region in VERIFIED_REGIONS,
             "verification_note": verification_note(routing.region),
         },

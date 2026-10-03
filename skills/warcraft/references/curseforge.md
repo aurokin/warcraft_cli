@@ -37,6 +37,8 @@ against the live API; `provenance.verified` is `true`.
 - every payload carries `provenance` (mod id, slug, resolved-by, source URLs) and
   `provenance.verified: true` — host, auth, search, lookup, and changelog endpoints are confirmed
   live; keys without search access can only resolve numeric mod ids (`curseforge addon 3358`)
+- lookups are cached for an hour: `provenance.cache_hit` says the answer was replayed and
+  `provenance.fetched_at` when it came off the wire
 
 ## Boundaries
 

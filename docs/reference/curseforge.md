@@ -15,7 +15,7 @@ Pass these before the subcommand: `curseforge --pretty <command> ...`.
 | `--fields` | str (repeatable) |  | Return only selected fields (dot paths). Repeat or pass comma-separated values. |
 | `--fields-strict` | boolean | false | Fail when a requested --fields dot-path is missing from the payload. |
 | `--profile` | str |  | Output profile preset: agent (default compact JSON) or human (pretty JSON). |
-| `--compact-max-chars` | int range | 280 | Maximum string length before --compact truncation adds an ellipsis. |
+| `--compact-max-chars` | int range [40<=x<=10000] | 280 | Maximum string length before --compact truncation adds an ellipsis. |
 
 ## curseforge doctor
 
@@ -45,7 +45,7 @@ Coming soon: structured addon discovery search is not implemented yet.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--limit` | int range | 5 | Unused until curseforge search ships. |
+| `--limit` | int range [1<=x<=50] | 5 | Unused until curseforge search ships. |
 
 ## curseforge resolve
 
@@ -61,4 +61,4 @@ Coming soon: conservative single-addon resolution is not implemented yet.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--limit` | int range | 5 | Unused until curseforge resolve ships. |
+| `--limit` | int range [1<=x<=50] | 5 | Unused until curseforge resolve ships. |

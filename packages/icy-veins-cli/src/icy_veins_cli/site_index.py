@@ -105,8 +105,9 @@ def merge_crawl(previous: SiteIndex | None, result: CrawlResult, *, now: datetim
     """``previous`` updated with what ``result`` read: pages it never saw again are kept as they were.
 
     A fetched page refreshes its row and keeps its ``first_seen`` and discovery ``source``; a 301
-    becomes a redirect row naming the new slug; a 404 removes the row. A blocked run keeps the
-    previous ``refreshed_at``: it did not finish a refresh, so the index's age warnings stand.
+    becomes a redirect row naming the new slug; a 404 removes the row. A run that was blocked or
+    found the site down keeps the previous ``refreshed_at``: it did not finish a refresh, so the
+    index's age warnings stand.
     """
     today = now.date().isoformat()
     pages = {slug: dict(row) for slug, row in (previous.pages if previous else {}).items()}
@@ -131,6 +132,7 @@ def merge_crawl(previous: SiteIndex | None, result: CrawlResult, *, now: datetim
         alias = {"slug": slug, "url": requested, **dict.fromkeys(PAGE_FIELDS), "status": "redirect", "redirect_to": guide_ref_parts(served)}
         upsert(slug, alias, sources[requested])
     dropped = [slug for slug in map(guide_ref_parts, result.not_found) if pages.pop(slug, None) is not None]
-    refreshed_at = previous.refreshed_at if previous and result.stop_reason == "blocked" else now.isoformat(timespec="seconds")
+    stopped_early = result.stop_reason in {"blocked", "unavailable"}
+    refreshed_at = previous.refreshed_at if previous and stopped_early else now.isoformat(timespec="seconds")
     merged = SiteIndex(pages, refreshed_at, result.frontier)
     return merged, MergeCounts([slug for slug in new if pages[slug]["status"] == "ok"], dropped)

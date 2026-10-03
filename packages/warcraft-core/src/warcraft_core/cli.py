@@ -123,7 +123,10 @@ def command_path(ctx: typer.Context) -> str:
 def _next_command_name(command: TyperGroup, args: list[str]) -> tuple[str, list[str]]:
     """The first of ``args`` that names a subcommand of ``command``, plus the arguments after it.
 
-    Option values are not command names: for ``--profile human show`` the answer is ``show``.
+    Option values are not command names: for ``--profile human show`` the answer is ``show``. The
+    value of an option the group does not know cannot be told apart from a name, so a later argument
+    that names a real subcommand wins over an earlier unknown one (``--region kr realm X`` is
+    ``realm``); with no real subcommand the first name is reported, because it is what was typed.
     """
     value_options = {
         spelling
@@ -131,6 +134,7 @@ def _next_command_name(command: TyperGroup, args: list[str]) -> tuple[str, list[
         if isinstance(param, TyperOption) and not param.is_flag and param.nargs == 1
         for spelling in (*param.opts, *param.secondary_opts)
     }
+    names: list[int] = []
     skip_next = False
     for index, arg in enumerate(args):
         if skip_next:
@@ -139,7 +143,11 @@ def _next_command_name(command: TyperGroup, args: list[str]) -> tuple[str, list[
         if arg.startswith("-"):
             skip_next = arg in value_options
             continue
-        return arg, args[index + 1 :]
+        if arg in command.commands:
+            return arg, args[index + 1 :]
+        names.append(index)
+    if names:
+        return args[names[0]], args[names[0] + 1 :]
     return "", []
 
 

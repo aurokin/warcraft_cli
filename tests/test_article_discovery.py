@@ -103,7 +103,8 @@ def test_article_search_and_resolve_payloads_keep_contract_shape() -> None:
         provider_command="method",
         query="mistweaver monk guide",
         search_query="mistweaver monk",
-        results=rows,
+        matches=rows,
+        limit=5,
         total_count=1,
         resolved=True,
     )
@@ -194,10 +195,40 @@ def test_merge_article_build_references_dedupes_and_preserves_source_urls() -> N
     ]
 
 
+def _guide_row(ref: str, score: int) -> dict:
+    return article_candidate(ref=ref, name=ref, url=f"https://example.test/{ref}", score=score, reasons=[], provider_command="method")
+
+
+def test_article_payloads_flag_a_list_the_limit_cut() -> None:
+    rows = [_guide_row("a", 30), _guide_row("b", 20)]
+
+    cut = article_search_payload(query="q", search_query="q", results=rows, total_count=7)
+    whole = article_resolve_payload(
+        provider_command="method", query="q", search_query="q", matches=rows, limit=5, total_count=2, resolved=False
+    )
+
+    assert (cut["count"], cut["truncated"]) == (7, True)
+    assert (whole["count"], whole["truncated"]) == (2, False)
+
+
+def test_article_resolve_reports_low_confidence_for_a_tie_the_limit_hides() -> None:
+    def confidence(*scores: int, limit: int = 5) -> str:
+        rows = [_guide_row(f"guide-{index}", score) for index, score in enumerate(scores)]
+        payload = article_resolve_payload(
+            provider_command="method", query="q", search_query="q", matches=rows, limit=limit, total_count=len(rows), resolved=False
+        )
+        return str(payload["confidence"])
+
+    assert confidence(9, 9, 9) == "low"
+    assert confidence(9, 9, limit=1) == "low"
+    assert confidence(20, 9) == "medium"
+    assert confidence() == "none"
+
+
 def test_article_resolve_fallback_search_command_is_valid_shell() -> None:
     query = """kil'jaeden "raid" $HOME guide"""
     payload = article_resolve_payload(
-        provider_command="warcraft-wiki", query=query, search_query=query, results=[], total_count=0, resolved=False
+        provider_command="warcraft-wiki", query=query, search_query=query, matches=[], limit=5, total_count=0, resolved=False
     )
 
     assert shlex.split(payload["fallback_search_command"]) == ["warcraft-wiki", "search", query]

@@ -14,7 +14,7 @@ PRE_COMMIT := $(VENV)/bin/pre-commit
 
 .PHONY: install dev-deploy dev-deploy-no-link worktree-env test test-fast test-e2e test-canary \
 	check lock-check lint lint-boundaries complexity complexity-gate typecheck coverage deadcode \
-	skills reference schema build pre-commit-install release
+	skills reference schema icy-veins-snapshot build pre-commit-install release
 
 install:
 	$(UV) sync --all-extras
@@ -89,6 +89,14 @@ reference:
 
 schema:
 	$(PYTHON) -c "import pathlib; from warcraft_cli.schema import envelope_schema_document; pathlib.Path('schemas/envelope.schema.json').write_text(envelope_schema_document())"
+
+# Rebuilds the bundled Icy Veins site index from a live crawl (several minutes at one request a second);
+# not part of `make check`. A partial run leaves the snapshot untouched and fails.
+icy-veins-snapshot:
+	tmp=$$(mktemp -d) && \
+	XDG_DATA_HOME="$$tmp" $(UV) run icy-veins index-refresh --max-requests 400 > "$$tmp/run.json" && \
+	$(PYTHON) -c 'import json, shutil, sys; data = json.load(open(sys.argv[1]))["data"]; print(json.dumps(data["counts"])); data["partial"] and sys.exit("partial run (stop_reason=%s); the snapshot was not updated" % data["stop_reason"]); shutil.copy(data["index_path"], sys.argv[2])' \
+		"$$tmp/run.json" packages/icy-veins-cli/src/icy_veins_cli/data/site_index.json
 
 build:
 	$(UV) build --wheel

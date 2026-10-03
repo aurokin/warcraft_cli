@@ -348,7 +348,7 @@ def typed_reference(query: str, *, surface: str, full: bool = False) -> Envelope
 
 
 def article_export(article_ref: str, *, out: Path | None = None) -> Envelope:
-    """Write a wiki article bundle to disk and return the manifest."""
+    """Write a wiki article bundle to disk and return its counts and file list (the full manifest stays on disk)."""
     _require_query(article_ref)
     export_dir = article_export_dir(
         out, provider=PROVIDER_NAME, ref_slug=article_slug(normalize_article_ref(article_ref)), prefix="article"
@@ -422,7 +422,8 @@ class WarcraftWikiProvider:
                 provider_command=PROVIDER_NAME,
                 query=target,
                 search_query=outcome.normalized_query,
-                results=outcome.results[:limit],
+                matches=outcome.results,
+                limit=limit,
                 total_count=outcome.total_count,
                 # Judged on every ranked row: trimming to --limit first would hide the rivals. The top
                 # title must also name the query, the typed surfaces' floor: ``all_terms_match`` fires

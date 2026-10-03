@@ -124,11 +124,46 @@ def test_crawl_fails_a_seed_it_cannot_read_or_that_lists_no_links(seed: str | Fe
 
 
 def test_crawl_revisits_known_pages_only_after_discovery_and_records_other_errors() -> None:
-    site = Site({"/seed": page("/new"), "/new": page(), "/old-1": FetchResult(500), "/old-2": page()})
+    # The seed links the indexed /old-2 too; it waits for its revisit, so the new page comes first.
+    site = Site({"/seed": page("/old-2", "/new"), "/new": page(), "/old-1": FetchResult(500), "/old-2": page()})
 
-    result = run(site, revisit=("/old-1", "/old-2", "/new"))
+    result = run(site, revisit=("/old-1", "/old-2"))
 
     assert site.fetched == ["/seed", "/new", "/old-1", "/old-2"]
     assert [crawled.source for crawled in result.pages] == ["seed", "page", "revisit"]
     assert result.errors == [{"url": f"{SITE}/old-1", "status": 500, "error": "HTTP 500"}]
     assert result.stop_reason is None
+
+
+def test_crawl_spends_a_capped_run_on_new_pages_before_indexed_ones() -> None:
+    # Indexed pages used to be re-fetched as discovery wherever the menu linked them, so the cap ran
+    # out before the new page; a revisit the cap stopped on stays out of the frontier.
+    site = Site({"/seed": page(menu=("/old-1", "/old-2", "/new")), "/new": page(), "/old-1": page(), "/old-2": page()})
+
+    result = run(site, max_requests=3, revisit=("/old-1", "/old-2"))
+
+    assert site.fetched == ["/seed", "/new", "/old-1"]
+    assert result.stop_reason == "max_requests"
+    assert result.frontier == []
+
+
+def test_crawl_stops_when_the_site_keeps_failing() -> None:
+    down = {f"/page-{index}": FetchResult(503) if index % 2 else FetchResult(0, error="ConnectTimeout") for index in range(10)}
+    site = Site({"/seed": page(*down), **down})
+
+    result = run(site)
+
+    assert site.fetched == ["/seed", "/page-0", "/page-1", "/page-2"]
+    assert result.stop_reason == "unavailable"
+    assert result.partial is True
+    assert result.frontier[:4] == [f"{SITE}/page-{index}" for index in range(4)]
+    assert len(result.errors) == 3
+
+
+def test_crawl_goes_on_after_a_failure_that_is_not_a_streak() -> None:
+    site = Site({"/seed": page("/a", "/b", "/c", "/d"), "/a": FetchResult(500), "/b": FetchResult(502), "/c": page(), "/d": FetchResult(500)})
+
+    result = run(site)
+
+    assert result.stop_reason is None
+    assert site.fetched == ["/seed", "/a", "/b", "/c", "/d"]

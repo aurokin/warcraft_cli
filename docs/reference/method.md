@@ -15,7 +15,7 @@ Pass these before the subcommand: `method --pretty <command> ...`.
 | `--fields` | str (repeatable) |  | Return only selected fields (dot paths). Repeat or pass comma-separated values. |
 | `--fields-strict` | boolean | false | Fail when a requested --fields dot-path is missing from the payload. |
 | `--profile` | str |  | Output profile preset: agent (default compact JSON) or human (pretty JSON). |
-| `--compact-max-chars` | int range | 280 | Maximum string length before --compact truncation adds an ellipsis. |
+| `--compact-max-chars` | int range [40<=x<=10000] | 280 | Maximum string length before --compact truncation adds an ellipsis. |
 
 ## method doctor
 
@@ -35,7 +35,7 @@ Search the supported Method.gg guide families by free text.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--limit` | int range | 5 | Maximum results to return. |
+| `--limit` | int range [1<=x<=50] | 5 | Maximum results to return. |
 
 ## method resolve
 
@@ -51,7 +51,7 @@ Resolve a free-text query to the best matching Method guide plus the follow-up c
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--limit` | int range | 5 | Maximum candidates to inspect. |
+| `--limit` | int range [1<=x<=50] | 5 | Maximum candidates to inspect. |
 
 ## method guide
 
@@ -104,6 +104,6 @@ Search an exported Method bundle on disk without touching the network.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--limit` | int range | 5 | Maximum matches to return. |
+| `--limit` | int range [1<=x<=50] | 5 | Maximum matches to return. |
 | `--kind` | str (repeatable) |  | Restrict search kinds. Repeat or pass comma-separated values from: sections, navigation, linked_entities, build_references, analysis_surfaces. |
 | `--section-title` | str |  | Restrict section searching to section titles containing this text. |

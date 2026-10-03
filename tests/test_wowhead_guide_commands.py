@@ -115,6 +115,18 @@ def test_guide_listing_query_matches_whole_words_and_needs_every_word() -> None:
     assert [row["id"] for row in matched] == [3]
 
 
+def test_guide_listing_query_matches_the_url_slug() -> None:
+    """Live `wowhead guides raids "venomous abyss"` (2026-10) missed the raid's boss guides, titled by boss alone."""
+    rows = [
+        {"id": 1, "title": "Ula'tek Raid Boss Guide", "name": "Ula'tek Raid Boss Guide",
+         "url": "https://www.wowhead.com/guide/raids/venomous-abyss-ulatek-boss-strategy-abilities"},
+        {"id": 2, "title": "Other Boss Guide", "name": "Other Boss Guide", "url": "/guide/raids/other-raid-boss"},
+    ]
+    filters = GuideCategoryFilters(authors=(), updated_after=None, updated_before=None, patch_min=None, patch_max=None, sort_by="relevance")
+
+    assert [row["id"] for row in filtered_guide_category_rows(rows, query_text="venomous abyss", filters=filters)] == [1]
+
+
 def test_guides_payload_builds_expected_filters_and_facets() -> None:
     payload = guides_payload(
         expansion=resolve_expansion(None),

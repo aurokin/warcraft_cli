@@ -727,8 +727,21 @@ def _load_ranking_comparison(ctx: typer.Context, request: CooldownRequest, state
         spell_catalog=state.cooldown_catalog,
         boss_catalog=state.boss_catalog,
         spell_ids=state.tracked_ids,
+        player_phase_count=len(state.phase_windows),
     )
-    state.comparison["reason"] = None if ranking_payload is not None else state.comparison_reason
+    if state.comparison["status"] == "no_phase_data":
+        reasons = {sample["phase_unavailable_reason"] for sample in state.comparison["samples"]}
+        state.comparison_reason = reasons.pop() if len(reasons) == 1 else "no_sample_has_phase"
+        hint = (
+            "; Lorrgs ranking fights often carry no phase markers"
+            if state.comparison_reason == "top_parse_has_no_phase_markers"
+            else ""
+        )
+        state.comparison_note = (
+            f"No top-parse sample has a P{request.phase} window (see comparison.samples[].phase_unavailable_reason"
+            f"{hint}), so no top-parse casts were compared for this phase."
+        )
+    state.comparison["reason"] = None if state.comparison["status"] == "ready" else state.comparison_reason
 
 
 def _source_refs(state: CooldownState) -> dict[str, Any]:
@@ -771,6 +784,11 @@ def _notes(state: CooldownState, lorrgs_player_casts: list[Any]) -> list[str]:
         )
     if state.comparison.get("status") == "ready":
         notes.append("Top-parse samples are comparison evidence, not universal cooldown recommendations.")
+        if state.comparison["phase_sample_count"] < state.comparison["sample_count"]:
+            notes.append(
+                "Some top-parse samples have no window for this phase and are left out of "
+                "selected_phase_spell_frequency; see comparison.samples[].phase_unavailable_reason."
+            )
     if state.lorrgs_unavailable is not None:
         notes.append(
             "Lorrgs did not supply this report, so there are no phase windows: the requested --phase "

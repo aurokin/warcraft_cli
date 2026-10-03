@@ -11,7 +11,7 @@ from warcraft_content.html_sections import clean_text, extract_headings, extract
 from warcraft_core.identity import WOW_SPECS_BY_CLASS, ability_identity_payload, build_reference_payload
 
 METHOD_BASE_URL = "https://www.method.gg"
-SUPPORTED_GUIDE_PATH_RE = re.compile(r"^/guides/(?P<slug>[^/]+)(?:/(?P<section>[^/?#]+))?/?$")
+SUPPORTED_GUIDE_PATH_RE = re.compile(r"^/guides/(?P<slug>[a-z0-9-]+)(?:/(?P<section>[^/?#]+))?/?$")
 # Method publishes talent builds as WoW loadout import strings rather than talent-calc links: one
 # ``.df-talent-block`` per build, with the visible build name in ``.talent-title`` and the raw
 # import string in the ``data-talent`` attribute of ``.talent-embed``.
@@ -43,7 +43,9 @@ def guide_ref_parts(guide_ref: str) -> tuple[str, str | None]:
         path = parsed.path
     else:
         path = raw if raw.startswith("/") else f"/guides/{raw}"
-    match = SUPPORTED_GUIDE_PATH_RE.match(path)
+    # Method slugs are lowercase: ``Frost-Mage`` is ``frost-mage``, and a slug of any other characters
+    # is a malformed reference, rejected before any request.
+    match = SUPPORTED_GUIDE_PATH_RE.match(path.lower())
     if not match:
         raise ValueError(f"Unsupported Method guide reference: {guide_ref}")
     return match.group("slug"), match.group("section")

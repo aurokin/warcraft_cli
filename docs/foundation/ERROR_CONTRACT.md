@@ -95,7 +95,7 @@ exit codes, and documents them in its provider README: for example `warcraftlogs
 | Exit | Meaning | Error codes mapped to it |
 | --- | --- | --- |
 | `0` | Success | |
-| `1` | Generic failure, including uncaught exceptions (`internal_error`) | any code with neither a row below nor a provider-specific mapping |
+| `1` | Generic failure, including uncaught exceptions (`internal_error`) | `parse_failed` (a page or payload layout that no longer parses), `invalid_response` (a malformed JSON body), and any code with neither a row below nor a provider-specific mapping |
 | `2` | Usage error: bad flags or arguments | `invalid_query`, `invalid_argument`, `missing_fields`, `invalid_guide_ref`, `invalid_ref`, `invalid_tool_ref` |
 | `3` | Authentication required or rejected | `auth_failed` |
 | `4` | Target not found | `not_found` |
@@ -137,7 +137,9 @@ The value of a global flag is never the label (`warcraft --profile bogus schema`
 `"command": "schema"`), and the label is empty only when no subcommand was named at all. When the
 failure happens before any command body runs, the path is resolved from the command line against
 the app's own command tree, so an unknown subcommand is still reported by the name the caller
-typed.
+typed. The value of a subcommand option placed before the subcommand is not the label either: a
+later argument that names a real subcommand wins (`blizzard --region kr realm X` reports
+`"command": "realm"`).
 
 ## Global output flags
 

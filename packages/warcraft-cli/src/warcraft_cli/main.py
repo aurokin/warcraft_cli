@@ -380,9 +380,12 @@ def _unresolved_next_steps(ranked: list[dict[str, Any]], *, resolved: bool) -> d
     best = compact_resolve_match(top)
     if best is not None and top is not None:
         best["resolved"] = False
-        best["unresolved_reason"] = (
-            "provider_family_ranked_down_by_query_intent" if top.get("resolved") else "provider_did_not_resolve"
-        )
+        if not top.get("resolved"):
+            best["unresolved_reason"] = "provider_did_not_resolve"
+        elif top.get("confidence") != "high":
+            best["unresolved_reason"] = "provider_confidence_below_high"
+        else:
+            best["unresolved_reason"] = "provider_family_ranked_down_by_query_intent"
     return {
         "fallback_search_command": fallbacks[0]["command"] if fallbacks else None,
         "fallback_search_commands": fallbacks,
@@ -592,7 +595,7 @@ def resolve(
     """Fan out a query to every resolve-ready provider and return the single best match plus its follow-up command.
 
     The answer is the candidate `warcraft search` would rank first, and only when its own provider
-    resolved it; otherwise the command reports `resolved: false` with that candidate as
+    resolved it at `high` confidence; otherwise the command reports `resolved: false` with that candidate as
     `best_unresolved_candidate`.
     """
     _require_query(ctx, query)
@@ -1012,7 +1015,7 @@ def guide_builds_simc(
     if payload["summary"]["simc_handoff_status"] == "all_handoffs_failed":
         # The packet's provenance stays the envelope's; the rest of it, per-build failure codes
         # included, becomes `error.details`.
-        _emit(ctx, {**payload, "ok": False, "error": simc_handoff_failure(payload["summary"])}, err=True)
+        _emit(ctx, {**payload, "ok": False, "error": simc_handoff_failure(payload)}, err=True)
         raise typer.Exit(EXIT_GENERIC)
     _emit(ctx, payload)
 

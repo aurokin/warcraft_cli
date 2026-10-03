@@ -413,8 +413,13 @@ def test_classify_guide_slug_distinguishes_supported_families() -> None:
 
 
 def test_score_family_match_boosts_broad_and_specialized_families() -> None:
-    class_score, class_reasons = score_family_match("monk", slug="monk-guide", content_family="class_hub")
-    easy_score, easy_reasons = score_family_match("fury warrior easy mode", slug="fury-warrior-easy-mode", content_family="easy_mode")
+    class_score, class_reasons = score_family_match("monk", slug="monk-guide", content_family="class_hub", candidate_words={"monk"})
+    easy_score, easy_reasons = score_family_match(
+        "fury warrior easy mode",
+        slug="fury-warrior-easy-mode",
+        content_family="easy_mode",
+        candidate_words={"fury", "warrior", "easy", "mode"},
+    )
 
     assert class_score == 18
     assert class_reasons == ["family_class_hub"]
@@ -423,7 +428,7 @@ def test_score_family_match_boosts_broad_and_specialized_families() -> None:
 
 
 def test_score_family_match_penalizes_broad_hubs_for_specialized_queries() -> None:
-    score, reasons = score_family_match("monk leveling", slug="monk-guide", content_family="class_hub")
+    score, reasons = score_family_match("monk leveling", slug="monk-guide", content_family="class_hub", candidate_words={"monk"})
 
     assert score == -14
     assert reasons == ["penalty_broad_hub"]
@@ -453,6 +458,44 @@ def test_icy_veins_search_reads_class_and_spec_shorthand(monkeypatch, query: str
     data = json.loads(result.stdout)["data"]
     assert data["resolved"] is True
     assert data["match"]["id"] == expected
+
+
+@pytest.mark.parametrize("query", ["frost mage m+", "frost mage m plus", "frost mage mythic+"])
+def test_icy_veins_reads_every_mythic_plus_spelling(monkeypatch, query: str) -> None:
+    # "m+" used to read as "m plus" and left the right page unresolved.
+    slugs = ("frost-mage-pve-dps-mythic-plus-tips", "fire-mage-pve-dps-mythic-plus-tips", "frost-mage-pve-dps-guide")
+    sitemap = "".join(f"<url><loc>https://www.icy-veins.com/wow/{slug}</loc></url>" for slug in slugs)
+    monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.sitemap_guides", lambda self: parse_sitemap_guides(sitemap))
+    result = runner.invoke(app, ["resolve", query])
+    assert result.exit_code == 0, result.output
+
+    data = json.loads(result.stdout)["data"]
+    assert data["search_query"] == "frost mage mythic plus"
+    assert data["resolved"] is True
+    assert data["match"]["id"] == "frost-mage-pve-dps-mythic-plus-tips"
+
+
+def test_icy_veins_family_boost_needs_a_match_beyond_the_family_words(monkeypatch) -> None:
+    # Every spec's M+ tips page took the M+ family boost for "mythic+ tier list" and hid the tier list,
+    # whose "Mythic+" title did not match "plus"; every leveling guide outranked the alchemy page.
+    rows = [
+        {"slug": slug, "name": name, "url": f"https://www.icy-veins.com/wow/{slug}", "content_family": classify_guide_slug(slug)}
+        for slug, name in (
+            ("affliction-warlock-pve-dps-mythic-plus-tips", "Affliction Warlock Mythic+ Tips"),
+            ("arcane-mage-pve-dps-mythic-plus-tips", "Arcane Mage Mythic+ Tips"),
+            ("mythic-dps-tier-list", "Mythic+ DPS Tier List"),
+            ("midnight-leveling-guide", "Midnight Leveling Guide"),
+            ("monk-leveling-guide", "Monk Leveling Guide"),
+            ("professions-alchemy-leveling", "Alchemy Leveling Guide"),
+        )
+    ]
+    monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.sitemap_guides", lambda self: rows)
+
+    tier = json.loads(runner.invoke(app, ["search", "mythic+ tier list"]).stdout)["data"]
+    alchemy = json.loads(runner.invoke(app, ["search", "alchemy leveling"]).stdout)["data"]
+
+    assert [row["id"] for row in tier["results"]] == ["mythic-dps-tier-list"]
+    assert [row["id"] for row in alchemy["results"]] == ["professions-alchemy-leveling"]
 
 
 def test_icy_veins_search_finds_a_page_titled_with_shorthand(monkeypatch) -> None:

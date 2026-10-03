@@ -15,7 +15,7 @@ Pass these before the subcommand: `simc --pretty <command> ...`.
 | `--fields` | str (repeatable) |  | Return only selected fields (dot paths). Repeat or pass comma-separated values. |
 | `--fields-strict` | boolean | false | Fail when a requested --fields dot-path is missing from the payload. |
 | `--profile` | str |  | Output profile preset: agent (default compact JSON) or human (pretty JSON). |
-| `--compact-max-chars` | int range | 280 | Maximum string length before --compact truncation adds an ellipsis. |
+| `--compact-max-chars` | int range [40<=x<=10000] | 280 | Maximum string length before --compact truncation adds an ellipsis. |
 | `--repo-root` | str |  | Override the local SimulationCraft checkout path. |
 
 ## simc doctor
@@ -51,7 +51,7 @@ Return the structured coming-soon stub for free-text search.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--limit` | int range | 5 | Unused in phase 1. |
+| `--limit` | int range [1<=x<=50] | 5 | Unused in phase 1. |
 
 ## simc resolve
 
@@ -67,7 +67,7 @@ Return the structured coming-soon stub for free-text resolution.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--limit` | int range | 5 | Unused in phase 1. |
+| `--limit` | int range [1<=x<=50] | 5 | Unused in phase 1. |
 
 ## simc version
 
@@ -97,7 +97,7 @@ List APL and class-module files in the checkout, optionally narrowed by a substr
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--limit` | int range | 25 | Maximum file rows to return per category. |
+| `--limit` | int range [1<=x<=200] | 25 | Maximum file rows to return per category. |
 
 ## simc decode-build
 
@@ -209,8 +209,8 @@ Sim a base APL against labelled variants and rank them by DPS.
 | `--base-apl` | str | required | Base APL path. |
 | `--base-label` | str | base | Label for the base APL. |
 | `--variant` | str (repeatable) |  | Variant in label=path form. Repeat as needed. |
-| `--iterations` | int range | 250 | Iterations per variant. |
-| `--threads` | int range | 1 | Threads per variant. |
+| `--iterations` | int range [x>=1] | 250 | Iterations per variant. |
+| `--threads` | int range [x>=1] | 1 | Threads per variant. |
 | `--out-dir` | str |  | Optional directory for generated profiles and JSON reports. |
 | `--validate-first / --skip-validate` | boolean | true | Validate each generated profile before the full comparison. |
 | `--report-out` | str |  | Optional path to save the structured comparison JSON. |
@@ -286,7 +286,7 @@ Find an action, buff, or token across APLs, class modules, and spell dumps.
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `--class` | str |  | Optional class name to narrow code and spell dumps. |
-| `--limit` | int range | 25 | Maximum hits to return per bucket. |
+| `--limit` | int range [1<=x<=200] | 25 | Maximum hits to return per bucket. |
 
 ## simc trace-action
 
@@ -304,7 +304,7 @@ Trace one action through an APL file and the surrounding source.
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `--class` | str |  | Optional class name to narrow code and spell dumps. |
-| `--limit` | int range | 25 | Maximum non-APL hits to return per bucket. |
+| `--limit` | int range [1<=x<=200] | 25 | Maximum non-APL hits to return per bucket. |
 
 ## simc apl-prune
 
@@ -320,7 +320,7 @@ Classify APL entries as eligible, dead, or unknown for an exact build.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--targets` | int range | 1 | Active target count. |
+| `--targets` | int range [x>=1] | 1 | Active target count. |
 | `--list` | str |  | Only return one action list. |
 | `--show` | str | all | One of all, eligible, dead, or unknown. |
 | `--profile-path` | str |  | Optional profile path containing build lines. |
@@ -349,9 +349,9 @@ Trace action-list dispatch for an exact build from a starting list.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--targets` | int range | 1 | Active target count. |
+| `--targets` | int range [x>=1] | 1 | Active target count. |
 | `--list` | str | default | Starting action list. |
-| `--max-depth` | int range | 6 | Maximum recursive trace depth. |
+| `--max-depth` | int range [1<=x<=20] | 6 | Maximum recursive trace depth. |
 | `--profile-path` | str |  | Optional profile path containing build lines. |
 | `--build-file` | str |  | Optional plain text file with talents/spec lines. |
 | `--build-text` | str |  | Inline build text, talent hash, or Wowhead talent-calc URL with build code. |
@@ -378,9 +378,9 @@ Summarize what the focus action list is trying to do for an exact build.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--targets` | int range | 1 | Active target count. |
+| `--targets` | int range [x>=1] | 1 | Active target count. |
 | `--list` | str | default | Starting action list. |
-| `--limit` | int range | 6 | Number of intent lines to return. |
+| `--limit` | int range [1<=x<=50] | 6 | Number of intent lines to return. |
 | `--profile-path` | str |  | Optional profile path containing build lines. |
 | `--build-file` | str |  | Optional plain text file with talents/spec lines. |
 | `--build-text` | str |  | Inline build text, talent hash, or Wowhead talent-calc URL with build code. |
@@ -407,9 +407,9 @@ Explain the focus list as setup, helper, burst, and priority buckets.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--targets` | int range | 1 | Active target count. |
+| `--targets` | int range [x>=1] | 1 | Active target count. |
 | `--list` | str | default | Starting action list. |
-| `--limit` | int range | 8 | Maximum items per bucket. |
+| `--limit` | int range [1<=x<=50] | 8 | Maximum items per bucket. |
 | `--profile-path` | str |  | Optional profile path containing build lines. |
 | `--build-file` | str |  | Optional plain text file with talents/spec lines. |
 | `--build-text` | str |  | Inline build text, talent hash, or Wowhead talent-calc URL with build code. |
@@ -436,9 +436,9 @@ Return the static active priority for an exact build, excluding inactive talent 
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--targets` | int range | 1 | Active target count. |
+| `--targets` | int range [x>=1] | 1 | Active target count. |
 | `--list` | str | default | Starting action list. |
-| `--limit` | int range | 12 | Maximum active priority rows to return. |
+| `--limit` | int range [1<=x<=100] | 12 | Maximum active priority rows to return. |
 | `--profile-path` | str |  | Optional profile path containing build lines. |
 | `--build-file` | str |  | Optional plain text file with talents/spec lines. |
 | `--build-text` | str |  | Inline build text, talent hash, or Wowhead talent-calc URL with build code. |
@@ -460,11 +460,11 @@ Describe a build end to end: talents, priority, and single-target versus AoE dif
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `--apl-path` | str |  | Optional APL path. If omitted, the CLI tries the default spec APL for the resolved build. |
-| `--targets` | int range | 1 | Primary target count for the base build summary. |
-| `--aoe-targets` | int range | 5 | Secondary target count used for the cleave/AoE comparison view. |
+| `--targets` | int range [x>=1] | 1 | Primary target count for the base build summary. |
+| `--aoe-targets` | int range [x>=2] | 5 | Secondary target count used for the cleave/AoE comparison view. |
 | `--list` | str | default | Starting action list. |
-| `--priority-limit` | int range | 8 | Maximum active priority rows to summarize per target view. |
-| `--inactive-limit` | int range | 8 | Maximum inactive talent-gated actions to summarize per target view. |
+| `--priority-limit` | int range [1<=x<=50] | 8 | Maximum active priority rows to summarize per target view. |
+| `--inactive-limit` | int range [1<=x<=50] | 8 | Maximum inactive talent-gated actions to summarize per target view. |
 | `--profile-path` | str |  | Optional profile path containing build lines. |
 | `--build-file` | str |  | Optional plain text file with talents/spec lines. |
 | `--build-packet` | str |  | Path to a talent transport packet JSON file. |
@@ -492,9 +492,9 @@ List the APL actions an exact build cannot use.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--targets` | int range | 1 | Active target count. |
+| `--targets` | int range [x>=1] | 1 | Active target count. |
 | `--list` | str | default | Starting action list. |
-| `--limit` | int range | 20 | Maximum inactive rows to return. |
+| `--limit` | int range [1<=x<=200] | 20 | Maximum inactive rows to return. |
 | `--talent-only / --all-dead` | boolean | true | Only return talent-gated dead actions by default. |
 | `--profile-path` | str |  | Optional profile path containing build lines. |
 | `--build-file` | str |  | Optional plain text file with talents/spec lines. |
@@ -522,9 +522,9 @@ Preview the early priority for an exact build, flagging runtime-only conditions.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--targets` | int range | 1 | Active target count. |
+| `--targets` | int range [x>=1] | 1 | Active target count. |
 | `--list` | str | default | Starting action list. |
-| `--limit` | int range | 10 | Maximum early actions to return. |
+| `--limit` | int range [1<=x<=50] | 10 | Maximum early actions to return. |
 | `--profile-path` | str |  | Optional profile path containing build lines. |
 | `--build-file` | str |  | Optional plain text file with talents/spec lines. |
 | `--build-text` | str |  | Inline build text, talent hash, or Wowhead talent-calc URL with build code. |
@@ -551,8 +551,8 @@ Compare branch dispatch between two builds or target counts on one APL.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--left-targets` | int range | 1 | Target count for the left context. |
-| `--right-targets` | int range | 1 | Target count for the right context. |
+| `--left-targets` | int range [x>=1] | 1 | Target count for the left context. |
+| `--right-targets` | int range [x>=1] | 1 | Target count for the right context. |
 | `--list` | str | default | Starting action list. |
 | `--profile-path` | str |  | Optional left profile path containing build lines. |
 | `--build-file` | str |  | Optional left build file. |
@@ -591,15 +591,15 @@ Bundle branch, intent, and optional first-cast timing analysis into one payload.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--targets` | int range | 1 | Active target count. |
+| `--targets` | int range [x>=1] | 1 | Active target count. |
 | `--list` | str | default | Starting action list. |
-| `--intent-limit` | int range | 6 | Number of intent lines to return. |
-| `--explain-limit` | int range | 8 | Maximum items per explanation bucket. |
-| `--runtime-scan-limit` | int range | 8 | How many early runtime-sensitive lines to report. |
+| `--intent-limit` | int range [1<=x<=50] | 6 | Number of intent lines to return. |
+| `--explain-limit` | int range [1<=x<=50] | 8 | Maximum items per explanation bucket. |
+| `--runtime-scan-limit` | int range [1<=x<=50] | 8 | How many early runtime-sensitive lines to report. |
 | `--sim-profile` | str |  | Optional profile path used for first-cast timing checks. |
 | `--first-cast-action` | str (repeatable) |  | Action name to time with short sims. Repeat as needed. |
-| `--seeds` | int range | 5 | Number of timing samples per first-cast action. |
-| `--max-time` | int range | 60 | Fight length for first-cast timing sims. |
+| `--seeds` | int range [1<=x<=100] | 5 | Number of timing samples per first-cast action. |
+| `--max-time` | int range [1<=x<=10000] | 60 | Fight length for first-cast timing sims. |
 | `--fight-style` | str | Patchwerk | Fight style for first-cast timing sims. |
 | `--profile-path` | str |  | Optional profile path containing build lines. |
 | `--build-file` | str |  | Optional plain text file with talents/spec lines. |
@@ -628,9 +628,9 @@ Time the first cast of an action across several short sims.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--seeds` | int range | 5 | Number of timing samples. |
-| `--max-time` | int range | 60 | Fight length for each short sim. |
-| `--targets` | int range | 1 | Active target count. |
+| `--seeds` | int range [1<=x<=100] | 5 | Number of timing samples. |
+| `--max-time` | int range [1<=x<=10000] | 60 | Fight length for each short sim. |
+| `--targets` | int range [x>=1] | 1 | Active target count. |
 | `--fight-style` | str | Patchwerk | Fight style for the short sims. |
 
 ## simc log-actions
@@ -679,12 +679,12 @@ Run a profile through the local SimC binary and summarize the JSON report.
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `--preset` | str | quick | Run preset: quick or high-accuracy. |
-| `--iterations` | int range |  | Override the preset iteration count. |
-| `--max-time` | int range |  | Override max fight length in seconds. |
+| `--iterations` | int range [x>=1] |  | Override the preset iteration count. |
+| `--max-time` | int range [x>=1] |  | Override max fight length in seconds. |
 | `--fight-style` | str |  | Optional fight style override. |
-| `--threads` | int range |  | Optional thread override. Leave unset to use SimC defaults. |
-| `--targets` | int range |  | Optional desired target count override. |
-| `--vary-combat-length` | float range |  | Optional combat length variance override. |
+| `--threads` | int range [x>=1] |  | Optional thread override. Leave unset to use SimC defaults. |
+| `--targets` | int range [x>=1] |  | Optional desired target count override. |
+| `--vary-combat-length` | float range [x>=0.0] |  | Optional combat length variance override. |
 | `--profile-text` | str |  | Inline SimulationCraft profile text. |
 | `--json-out` | str |  | Optional path for the raw SimC JSON report. |
 

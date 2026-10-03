@@ -815,8 +815,20 @@ def threshold_payload(metric: str, target: float, runs: list[dict[str, Any]], *,
         estimate_metric = "score"
         estimate_values = [float(row["run"]["score"]) for row in nearest if isinstance(row["run"].get("score"), (int, float))]
         caveat = "This estimates sampled run scores near a target Mythic+ level."
+    # The sample is the top of the leaderboard, so a target outside the sampled range (a +10 when the
+    # sample is +21 to +22) has no nearby runs, and the nearest ones would answer a different question.
+    sampled = [float(value) for run in runs if isinstance(value := run.get(metric), (int, float))]
+    sampled_range = {"min": min(sampled), "max": max(sampled)} if sampled else None
+    out_of_range = sampled_range is not None and not sampled_range["min"] <= target <= sampled_range["max"]
+    note = (
+        f"The target {target:g} is outside the sampled {metric} range {sampled_range['min']:g}-{sampled_range['max']:g}, "
+        "so there is no estimate. Leaderboard samples cover only the top of the ladder, and keyless paging stops "
+        "at page 100, so a target well below the top is not reachable from them."
+        if out_of_range and sampled_range is not None
+        else None
+    )
     estimate: dict[str, Any] | None = None
-    if estimate_values:
+    if estimate_values and not out_of_range:
         sorted_values = sorted(estimate_values)
         estimate = {
             "metric": estimate_metric,
@@ -843,7 +855,10 @@ def threshold_payload(metric: str, target: float, runs: list[dict[str, Any]], *,
                 }
                 for row in nearest
             ],
+            "sampled_range": sampled_range,
+            "out_of_sample_range": out_of_range,
             "estimate": estimate,
+            "note": note,
             "caveat": caveat,
         },
         "freshness": freshness_payload(meta),

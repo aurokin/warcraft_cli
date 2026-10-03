@@ -80,6 +80,7 @@ from simc_cli.build_input import (
 from simc_cli.compare import (
     build_variant_profile,
     compare_apl_variants,
+    default_gear_disclosures,
     output_previews,
     validate_profile_file,
     variant_report_payload,
@@ -1332,6 +1333,7 @@ def _build_harness(
             "build_spec": _serialize_build_spec(build_spec),
             "identity": _serialize_build_identity(identity),
             "extra_lines": line,
+            "disclosures": default_gear_disclosures(target.read_text()),
         },
     )
 
@@ -2758,6 +2760,7 @@ def _run_sim(
             json_report_path=str(json_path) if json_out is not None else None,
             command=result.command,
             iterations_requested=overrides.iterations,
+            disclosures=default_gear_disclosures(profile.path.read_text()),
         ),
     )
 

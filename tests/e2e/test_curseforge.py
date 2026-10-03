@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from tests.e2e.harness import EXIT_AUTH, EXIT_NOT_FOUND, EXIT_USAGE, Result, run
+from tests.e2e.harness import EXIT_AUTH, EXIT_NOT_FOUND, EXIT_USAGE, Result, dead_proxy_env, run
 from tests.e2e.pins import CURSEFORGE_ADDON_ID, CURSEFORGE_ADDON_SLUG
 
 
@@ -47,6 +47,18 @@ def test_doctor_reports_the_api_key_and_capabilities(require) -> None:
     assert capabilities["addon"] == "ready"
     assert capabilities["search"] == "coming_soon"
     assert capabilities["resolve"] == "coming_soon"
+    # With the key the one lookup is usable, so the provider is ready, not "partial".
+    assert result.data["status"] == "ready", result.describe()
+
+
+def test_a_cached_addon_lookup_is_replayed_without_the_network(require) -> None:
+    """The rate-limited key is spent once: the second lookup succeeds with every connection refused."""
+    require("curseforge")
+    live = run("curseforge", "addon", CURSEFORGE_ADDON_ID)
+    replayed = run("curseforge", "addon", CURSEFORGE_ADDON_ID, env=dead_proxy_env())
+    assert replayed.payload["provenance"]["cache_hit"] is True, replayed.describe()
+    assert replayed.payload["provenance"]["fetched_at"] == live.payload["provenance"]["fetched_at"]
+    assert replayed.data == live.data
 
 
 def test_addon_by_numeric_mod_id(require) -> None:

@@ -47,6 +47,8 @@ CAPABILITIES = {
     "mythic_plus_leaderboard": "ready",
     "raid_leaderboard": "ready",
     "raid_catalog": "ready",
+    "mythic_plus_affixes": "ready",
+    "mythic_plus_dungeons": "ready",
 }
 
 

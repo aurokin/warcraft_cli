@@ -16,7 +16,7 @@ Pass these before the subcommand: `warcraftlogs --pretty <command> ...`.
 | `--fields` | str (repeatable) |  | Return only selected fields (dot paths). Repeat or pass comma-separated values. |
 | `--fields-strict` | boolean | false | Fail when a requested --fields dot-path is missing from the payload. |
 | `--profile` | str |  | Output profile preset: agent (default compact JSON) or human (pretty JSON). |
-| `--compact-max-chars` | int range | 280 | Maximum string length before --compact truncation adds an ellipsis. |
+| `--compact-max-chars` | int range [40<=x<=10000] | 280 | Maximum string length before --compact truncation adds an ellipsis. |
 
 ## warcraftlogs search
 
@@ -32,7 +32,7 @@ Match an explicit Warcraft Logs report URL or code; free text returns a discover
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--limit` | int range | 5 | Accepted for wrapper compatibility; explicit report discovery returns at most one result. |
+| `--limit` | int range [1<=x<=50] | 5 | Accepted for wrapper compatibility; explicit report discovery returns at most one result. |
 
 ## warcraftlogs resolve
 
@@ -48,7 +48,7 @@ Resolve an explicit Warcraft Logs report URL or code to a single report referenc
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--limit` | int range | 5 | Accepted for wrapper compatibility; explicit report resolution returns at most one match. |
+| `--limit` | int range [1<=x<=50] | 5 | Accepted for wrapper compatibility; explicit report resolution returns at most one match. |
 
 ## warcraftlogs doctor
 
@@ -129,7 +129,7 @@ Rank characters on one encounter, filtered by class, spec, difficulty, and serve
 | `--class-name` | str |  | Optional class slug or class name filter. |
 | `--spec-name` | str |  | Optional spec slug or spec name filter. |
 | `--metric` | str |  | Optional ranking metric such as dps, hps, or bossdps. |
-| `--page` | int range |  | Optional rankings page number. |
+| `--page` | int range [x>=1] |  | Optional rankings page number. |
 | `--partition` | int |  | Optional Warcraft Logs partition filter. |
 | `--size` | int |  | Optional raid size filter. |
 | `--server-region` | str |  | Optional server region filter. |
@@ -139,7 +139,7 @@ Rank characters on one encounter, filtered by class, spec, difficulty, and serve
 | `--filter` | str |  | Optional Warcraft Logs advanced encounter ranking filter string. |
 | `--include-combatant-info / --no-include-combatant-info` | boolean |  | Optional combatant info toggle. |
 | `--include-other-players / --no-include-other-players` | boolean |  | Optional toggle for other players in the clear. |
-| `--top` | int range | 10 | Maximum returned ranking rows after normalization. |
+| `--top` | int range [1<=x<=100] | 10 | Maximum returned ranking rows after normalization. |
 
 ## warcraftlogs guild
 
@@ -195,8 +195,8 @@ List a guild's roster.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--limit` | int range | 100 | Roster rows per page. |
-| `--page` | int range | 1 | Page number. |
+| `--limit` | int range [1<=x<=100] | 100 | Roster rows per page. |
+| `--page` | int range [x>=1] | 1 | Page number. |
 
 ## warcraftlogs guild-attendance
 
@@ -215,8 +215,8 @@ Show a guild's raid attendance by report.
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `--guild-tag-id` | int |  | Optional guild tag filter. |
-| `--limit` | int range | 16 | Attendance rows per page. |
-| `--page` | int range | 1 | Page number. |
+| `--limit` | int range [1<=x<=25] | 16 | Attendance rows per page. |
+| `--page` | int range [x>=1] | 1 | Page number. |
 | `--zone-id` | int |  | Optional zone filter. |
 
 ## warcraftlogs character
@@ -252,7 +252,7 @@ Show a character's encounter rankings for one zone.
 | `--metric` | str |  | Optional ranking metric such as dps, hps, or tankhps. |
 | `--size` | int |  | Optional raid size. |
 | `--spec-name` | str |  | Optional spec filter, in any spelling (beast-mastery, Beast Mastery). |
-| `--top` | int range | 5 | Number of top ranking rows to keep in the summary. |
+| `--top` | int range [1<=x<=20] | 5 | Number of top ranking rows to keep in the summary. |
 
 ## warcraftlogs report
 
@@ -281,8 +281,8 @@ List reports for a guild, optionally narrowed by zone and time window.
 | `--guild-region` | str |  | Optional guild region for guild-scoped report queries. |
 | `--guild-realm` | str |  | Optional guild realm for guild-scoped report queries. |
 | `--guild-name` | str |  | Optional guild name for guild-scoped report queries. |
-| `--limit` | int range | 25 | Reports per page. |
-| `--page` | int range | 1 | Page number. |
+| `--limit` | int range [1<=x<=100] | 25 | Reports per page. |
+| `--page` | int range [x>=1] | 1 | Page number. |
 | `--start-time` | float |  | Optional report-range start time in milliseconds. |
 | `--end-time` | float |  | Optional report-range end time in milliseconds. |
 | `--zone-id` | int |  | Optional Warcraft Logs zone filter. |
@@ -304,8 +304,8 @@ List a guild's reports by region, realm, and name.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--limit` | int range | 25 | Reports per page. |
-| `--page` | int range | 1 | Page number. |
+| `--limit` | int range [1<=x<=100] | 25 | Reports per page. |
+| `--page` | int range [x>=1] | 1 | Page number. |
 | `--start-time` | float |  | Optional report-range start time in milliseconds. |
 | `--end-time` | float |  | Optional report-range end time in milliseconds. |
 | `--zone-id` | int |  | Optional Warcraft Logs zone filter. |
@@ -326,9 +326,9 @@ Sample recent kills of one boss across reports and summarize them.
 | `--spec-name` | str |  | Optional sampled participant spec filter applied before ranking sampled kills. |
 | `--kill-time-min` | float |  | Optional minimum kill time in seconds. |
 | `--kill-time-max` | float |  | Optional maximum kill time in seconds. |
-| `--top` | int range | 10 | Maximum returned kill rows after ranking. |
-| `--report-pages` | int range | 1 | How many report-list pages to sample. |
-| `--reports-per-page` | int range | 25 | Reports to fetch per sampled page. |
+| `--top` | int range [1<=x<=100] | 10 | Maximum returned kill rows after ranking. |
+| `--report-pages` | int range [1<=x<=10] | 1 | How many report-list pages to sample. |
+| `--reports-per-page` | int range [1<=x<=100] | 25 | Reports to fetch per sampled page. |
 | `--start-time` | float |  | Optional report-range start time in milliseconds. |
 | `--end-time` | float |  | Optional report-range end time in milliseconds. |
 | `--guild-region` | str |  | Optional guild-region scope for report discovery. |
@@ -350,9 +350,9 @@ Sample recent kills of one boss and return the fastest ones.
 | `--spec-name` | str |  | Optional sampled participant spec filter applied before ranking sampled kills. |
 | `--kill-time-min` | float |  | Optional minimum kill time in seconds. |
 | `--kill-time-max` | float |  | Optional maximum kill time in seconds. |
-| `--top` | int range | 10 | Maximum returned kill rows after ranking. |
-| `--report-pages` | int range | 1 | How many report-list pages to sample. |
-| `--reports-per-page` | int range | 25 | Reports to fetch per sampled page. |
+| `--top` | int range [1<=x<=100] | 10 | Maximum returned kill rows after ranking. |
+| `--report-pages` | int range [1<=x<=10] | 1 | How many report-list pages to sample. |
+| `--reports-per-page` | int range [1<=x<=100] | 25 | Reports to fetch per sampled page. |
 | `--start-time` | float |  | Optional report-range start time in milliseconds. |
 | `--end-time` | float |  | Optional report-range end time in milliseconds. |
 | `--guild-region` | str |  | Optional guild-region scope for report discovery. |
@@ -374,9 +374,9 @@ Sample recent kills of one boss that include a given spec.
 | `--difficulty` | int |  | Optional difficulty ID filter. |
 | `--kill-time-min` | float |  | Optional minimum kill time in seconds. |
 | `--kill-time-max` | float |  | Optional maximum kill time in seconds. |
-| `--top` | int range | 10 | Maximum returned kill rows after ranking. |
-| `--report-pages` | int range | 1 | How many report-list pages to sample. |
-| `--reports-per-page` | int range | 25 | Reports to fetch per sampled page. |
+| `--top` | int range [1<=x<=100] | 10 | Maximum returned kill rows after ranking. |
+| `--report-pages` | int range [1<=x<=10] | 1 | How many report-list pages to sample. |
+| `--reports-per-page` | int range [1<=x<=100] | 25 | Reports to fetch per sampled page. |
 | `--start-time` | float |  | Optional report-range start time in milliseconds. |
 | `--end-time` | float |  | Optional report-range end time in milliseconds. |
 | `--guild-region` | str |  | Optional guild-region scope for report discovery. |
@@ -398,9 +398,9 @@ Count spec usage across a sample of recent kills of one boss.
 | `--spec-name` | str |  | Optional sampled participant spec filter applied before aggregation. |
 | `--kill-time-min` | float |  | Optional minimum kill time in seconds. |
 | `--kill-time-max` | float |  | Optional maximum kill time in seconds. |
-| `--top` | int range | 10 | Maximum returned spec rows after ranking. |
-| `--report-pages` | int range | 1 | How many report-list pages to sample. |
-| `--reports-per-page` | int range | 25 | Reports to fetch per sampled page. |
+| `--top` | int range [1<=x<=100] | 10 | Maximum returned spec rows after ranking. |
+| `--report-pages` | int range [1<=x<=10] | 1 | How many report-list pages to sample. |
+| `--reports-per-page` | int range [1<=x<=100] | 25 | Reports to fetch per sampled page. |
 | `--start-time` | float |  | Optional report-range start time in milliseconds. |
 | `--end-time` | float |  | Optional report-range end time in milliseconds. |
 | `--guild-region` | str |  | Optional guild-region scope for report discovery. |
@@ -423,10 +423,10 @@ Summarize how often one ability is cast across a sample of recent kills.
 | `--spec-name` | str |  | Optional sampled participant spec filter applied before aggregation. |
 | `--kill-time-min` | float |  | Optional minimum kill time in seconds. |
 | `--kill-time-max` | float |  | Optional maximum kill time in seconds. |
-| `--preview-limit` | int range | 10 | Maximum sampled kill rows to include in the preview payload. |
-| `--event-limit` | int range | 200 | Maximum cast events to request per sampled kill. |
-| `--report-pages` | int range | 1 | How many report-list pages to sample. |
-| `--reports-per-page` | int range | 25 | Reports to fetch per sampled page. |
+| `--preview-limit` | int range [1<=x<=100] | 10 | Maximum sampled kill rows to include in the preview payload. |
+| `--event-limit` | int range [1<=x<=5000] | 200 | Maximum cast events to request per sampled kill. |
+| `--report-pages` | int range [1<=x<=10] | 1 | How many report-list pages to sample. |
+| `--reports-per-page` | int range [1<=x<=100] | 25 | Reports to fetch per sampled page. |
 | `--start-time` | float |  | Optional report-range start time in milliseconds. |
 | `--end-time` | float |  | Optional report-range end time in milliseconds. |
 | `--guild-region` | str |  | Optional guild-region scope for report discovery. |
@@ -448,9 +448,9 @@ Sample raid compositions from recent kills of one boss.
 | `--spec-name` | str |  | Optional sampled participant spec filter applied before aggregation. |
 | `--kill-time-min` | float |  | Optional minimum kill time in seconds. |
 | `--kill-time-max` | float |  | Optional maximum kill time in seconds. |
-| `--top` | int range | 10 | Maximum returned sampled kill rows after ranking. |
-| `--report-pages` | int range | 1 | How many report-list pages to sample. |
-| `--reports-per-page` | int range | 25 | Reports to fetch per sampled page. |
+| `--top` | int range [1<=x<=100] | 10 | Maximum returned sampled kill rows after ranking. |
+| `--report-pages` | int range [1<=x<=10] | 1 | How many report-list pages to sample. |
+| `--reports-per-page` | int range [1<=x<=100] | 25 | Reports to fetch per sampled page. |
 | `--start-time` | float |  | Optional report-range start time in milliseconds. |
 | `--end-time` | float |  | Optional report-range end time in milliseconds. |
 | `--guild-region` | str |  | Optional guild-region scope for report discovery. |
@@ -531,8 +531,8 @@ Summarize casts in one report fight, grouped by ability, source, or target.
 | `--target-id` | int |  | Optional target actor filter. |
 | `--ability-id` | float |  | Optional ability game ID filter. |
 | `--hostility-type` | str |  | Optional hostility filter. |
-| `--limit` | int range | 200 | Maximum cast events to request from Warcraft Logs. |
-| `--preview-limit` | int range | 20 | Maximum preview cast rows to return. |
+| `--limit` | int range [1<=x<=10000] | 200 | Maximum cast events to request from Warcraft Logs. |
+| `--preview-limit` | int range [1<=x<=200] | 20 | Maximum preview cast rows to return. |
 | `--window-start-ms` | float |  | Optional encounter-relative start offset in milliseconds. |
 | `--window-end-ms` | float |  | Optional encounter-relative end offset in milliseconds. |
 | `--translate / --no-translate` | boolean |  | Optional translation toggle. |
@@ -559,7 +559,7 @@ Summarize buffs applied during one report fight.
 | `--hostility-type` | str |  | Optional hostility filter. |
 | `--view-by` | str | source | Optional table view grouping. |
 | `--wipe-cutoff` | int |  | Optional wipe cutoff. |
-| `--preview-limit` | int range | 20 | Maximum preview buff rows to return. |
+| `--preview-limit` | int range [1<=x<=200] | 20 | Maximum preview buff rows to return. |
 | `--window-start-ms` | float |  | Optional encounter-relative start offset in milliseconds. |
 | `--window-end-ms` | float |  | Optional encounter-relative end offset in milliseconds. |
 | `--translate / --no-translate` | boolean |  | Optional translation toggle. |
@@ -713,14 +713,14 @@ Bucket kill durations across a sample of recent kills of one boss.
 | `--spec-name` | str |  | Optional sampled participant spec filter applied before aggregation. |
 | `--kill-time-min` | float |  | Optional minimum kill time in seconds. |
 | `--kill-time-max` | float |  | Optional maximum kill time in seconds. |
-| `--report-pages` | int range | 1 | How many report-list pages to sample. |
-| `--reports-per-page` | int range | 25 | Reports to fetch per sampled page. |
+| `--report-pages` | int range [1<=x<=10] | 1 | How many report-list pages to sample. |
+| `--reports-per-page` | int range [1<=x<=100] | 25 | Reports to fetch per sampled page. |
 | `--start-time` | float |  | Optional report-range start time in milliseconds. |
 | `--end-time` | float |  | Optional report-range end time in milliseconds. |
 | `--guild-region` | str |  | Optional guild-region scope for report discovery. |
 | `--guild-realm` | str |  | Optional guild-realm scope for report discovery. |
 | `--guild-name` | str |  | Optional guild-name scope for report discovery. |
-| `--bucket-seconds` | int range | 30 | Bucket size in seconds for the returned histogram. |
+| `--bucket-seconds` | int range [5<=x<=600] | 30 | Bucket size in seconds for the returned histogram. |
 
 ## warcraftlogs report-fights
 
@@ -752,7 +752,7 @@ Run a raw Warcraft Logs GraphQL query, or introspect the schema with --introspec
 | `--variables-json` | str |  | JSON object of GraphQL variables. |
 | `--operation-name` | str |  | Optional GraphQL operation name. |
 | `--endpoint` | str | auto | Endpoint family: auto, client, or user. |
-| `--cache-ttl` | int range | 0 | Opt-in cache TTL in seconds. Defaults to 0/off. |
+| `--cache-ttl` | int range [x>=0] | 0 | Opt-in cache TTL in seconds. Defaults to 0/off. |
 | `--introspect` | boolean | false | Run a GraphQL introspection query. |
 | `--allow-unlisted` | boolean | false | Inject allowUnlisted=true when the query declares $allowUnlisted. |
 | `--report-code` | str |  | Inject report code into declared $code variables. |
@@ -789,7 +789,7 @@ Return raw report events for one fight (--fight-id) or one explicit --start-time
 | `--filter-expression` | str |  | Optional Warcraft Logs filter expression. |
 | `--hostility-type` | str |  | Optional hostility filter. |
 | `--kill-type` | str |  | Optional kill filter. |
-| `--limit` | int range |  | Optional page event limit. |
+| `--limit` | int range [1<=x<=10000] |  | Optional page event limit. |
 | `--source-id` | int |  | Optional source actor ID filter. |
 | `--start-time` | float |  | Optional event-range start timestamp. |
 | `--target-id` | int |  | Optional target actor ID filter. |

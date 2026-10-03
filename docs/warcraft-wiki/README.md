@@ -18,7 +18,7 @@ Tier: supported.
 | `warcraft-wiki api-full <query>` | The same API page with every section. |
 | `warcraft-wiki event <query>` | The game event or UI handler reference page a query resolves to, as a summary. |
 | `warcraft-wiki event-full <query>` | The same event page with every section. |
-| `warcraft-wiki article-export <title-or-url>` | Writes an article bundle to disk and returns the manifest. |
+| `warcraft-wiki article-export <title-or-url>` | Writes an article bundle to disk and returns the article, the output directory, and the bundle's counts and file list; the full manifest is the bundle's `manifest.json`. |
 | `warcraft-wiki article-query <bundle> <query>` | Searches an exported bundle offline. |
 
 ## Flags
@@ -109,6 +109,10 @@ that only mentions every word (`Liquid guild us illidan` -> `Team Liquid`) is ne
 every fetched row, and `--limit` only trims `candidates`, so `--limit 1` never hides a fetched rival. The
 fetch is MediaWiki's top `max(25, 5 x --limit)` results, so a `--limit` above 5 reads more rows and can
 find a rival further down.
+
+`search` and `resolve` report `count` as MediaWiki's total hit count and `truncated: true` when the
+rows returned are fewer than that. An unresolved `resolve` reports `confidence: "low"` when its top
+candidates tie on score and `"medium"` otherwise.
 
 The `api`/`event` search fallback adds an absolute floor on top of that: the candidate's own title has to spell the
 query out. Every word of the query must match a whole word of the title or a whole camel-case component of one, and

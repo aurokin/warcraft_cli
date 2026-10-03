@@ -298,21 +298,30 @@ def test_exact_match_score_prefers_exact_name_over_display_name() -> None:
 
 def test_prefix_and_contains_score_pins_every_branch_weight() -> None:
     assert prefix_and_contains_score(
-        "create", name_normalized="createframe", display_normalized="api createframe"
+        "create", name_normalized="create frame", display_normalized="api create frame"
     ) == (10, ["name_prefix"])
     assert prefix_and_contains_score(
-        "api", name_normalized="createframe", display_normalized="api createframe"
+        "api", name_normalized="create frame", display_normalized="api create frame"
     ) == (8, ["display_name_prefix"])
     # A mid-name hit scores below either prefix hit: "Legion Remix Fury Warrior Guide" merely
     # contains "fury warrior guide", it is not named by it.
     assert prefix_and_contains_score(
-        "frame", name_normalized="createframe", display_normalized="widget"
+        "frame", name_normalized="create frame", display_normalized="widget"
     ) == (6, ["name_contains_query"])
     assert prefix_and_contains_score(
-        "frame", name_normalized="widget", display_normalized="api createframe"
+        "frame", name_normalized="widget", display_normalized="api create frame"
     ) == (4, ["display_name_contains_query"])
     assert prefix_and_contains_score("gone", name_normalized="widget", display_normalized="api") == (0, [])
 
+
+def test_prefix_and_contains_score_needs_whole_words() -> None:
+    """Live `wowhead resolve shadow` (2026-10) answered "Shadowfeather Shawl" at high confidence on a raw prefix."""
+    for name in ("shadowfeather shawl", "reins of the winterspring frostsaber"):
+        for query in ("shadow", "frost"):
+            assert prefix_and_contains_score(query, name_normalized=name, display_normalized="") == (0, []), (query, name)
+    # A plural or possessive ending still counts as the same word.
+    assert prefix_and_contains_score("valorstone", name_normalized="valorstones", display_normalized="") == (10, ["name_prefix"])
+    assert prefix_and_contains_score("mage", name_normalized="the mage's staff", display_normalized="") == (6, ["name_contains_query"])
 
 
 def test_term_match_score_credits_every_term_and_partial_matches_less() -> None:
@@ -320,6 +329,14 @@ def test_term_match_score_credits_every_term_and_partial_matches_less() -> None:
     assert term_match_score(["api", "world"], haystacks=haystacks) == (6, ["all_terms_match"])
     assert term_match_score(["api", "dragonflight", "world"], haystacks=haystacks) == (2, ["some_terms_match"])
     assert term_match_score(["dragonflight"], haystacks=haystacks) == (0, [])
+
+
+def test_term_match_score_matches_plurals_but_not_possessives() -> None:
+    """Live `wowhead resolve onyxia` (2026-10): NPC "Onyxia" scored 58 and zone "Onyxia's Lair" 53. Counting
+    "Onyxia's" as "onyxia" gave the zone all_terms_match (+3), a margin under 4, and nothing resolved."""
+    assert term_match_score(["beasts", "spirit"], haystacks=["spirit beast"]) == (6, ["all_terms_match"])
+    assert term_match_score(["onyxia"], haystacks=["onyxia's lair"]) == (0, [])
+    assert term_match_score(["onyxias"], haystacks=["onyxia's lair"]) == (3, ["all_terms_match"])
 
 
 
@@ -426,8 +443,8 @@ def test_resolve_confidence_never_calls_a_stale_guide_high() -> None:
     """An exact name with a clear margin is high confidence, unless the guide is marked stale."""
     fresh = {"ranking": {"score": 40, "match_reasons": ["exact_name"]}}
     stale = {"ranking": {"score": 40, "match_reasons": ["exact_name", STALE_GUIDE_REASON]}}
-    assert resolve_confidence([fresh], entity_types=(), query="") == "high"
-    assert resolve_confidence([stale], entity_types=(), query="") == "medium"
+    assert resolve_confidence([fresh], entity_types=()) == "high"
+    assert resolve_confidence([stale], entity_types=()) == "medium"
 
 
 
@@ -708,7 +725,7 @@ def test_resolve_recommends_news_post_when_the_best_match_is_a_news_row(monkeypa
 
 
 def test_resolve_answers_with_the_entity_when_a_news_headline_matches_the_text_better(monkeypatch) -> None:
-    """A headline matches the query text better than the item it covers; the item is still the answer."""
+    """A headline matches the query text better than the item it covers; the item still ranks first."""
 
     item = {"type": 3, "id": 19019, "name": "Thunderfury, Blessed Blade of the Windseeker", "typeName": "Item"}
 
@@ -729,7 +746,8 @@ def test_resolve_answers_with_the_entity_when_a_news_headline_matches_the_text_b
     data = json.loads(result.stdout)["data"]
     assert data["match"]["entity_type"] == "item"
     assert data["match"]["id"] == 19019
-    assert data["next_command"] == "wowhead entity item 19019"
+    # The item holds only one of the query's words, so it is a candidate, not a confident answer.
+    assert data["confidence"] == "medium"
     # The news row is ranked behind the entity, not dropped: it keeps its score and its follow-up.
     news_candidate = data["candidates"][-1]
     assert news_candidate["entity_type"] == "news"
@@ -796,34 +814,70 @@ def test_search_type_hints_match_whole_words_only() -> None:
     assert search_type_hints("hunter pet taming") == {"pet"}
 
 
-def test_resolve_is_not_confident_in_an_off_type_row_that_holds_only_some_words() -> None:
-    """Scores and reasons from live `wowhead resolve "bm hunter guide"` (2026-09): the database head
-    spell "Summon Hunter Guide" led guide 3159 "Beast Mastery Hunter DPS Guide - Midnight"."""
-    spell = {"entity_type": "spell", "ranking": {"score": 45, "match_reasons": ["some_terms_match", "upstream_database_rank"]}}
-    guide = {
-        "entity_type": "guide",
-        "ranking": {"score": 33, "match_reasons": ["some_terms_match", "type_hint", "upstream_database_rank"]},
+def test_resolve_is_not_confident_in_a_row_that_holds_only_some_of_the_query_words() -> None:
+    """Scores and reasons from live Wowhead queries (2026-09/10). "bm hunter guide": the database head
+    spell "Summon Hunter Guide" led guide 3159. "midnight season 2 mythic+ dungeons": "Midnight Season 2:
+    Resilient Keystone 12" led by 14 points without "mythic" or "dungeons"."""
+    spell = {"ranking": {"score": 45, "match_reasons": ["some_terms_match", "upstream_database_rank"]}}
+    guide = {"ranking": {"score": 33, "match_reasons": ["some_terms_match", "type_hint", "upstream_database_rank"]}}
+    keystone = {"ranking": {"score": 46, "match_reasons": ["some_terms_match", "upstream_database_rank"]}}
+    runner_up = {"ranking": {"score": 32, "match_reasons": ["some_terms_match", "upstream_database_rank"]}}
+
+    assert resolve_confidence([spell, guide], entity_types=()) == "medium"
+    assert resolve_confidence([keystone, runner_up], entity_types=()) == "medium"
+    # The same lead is confident when the top row holds every query word.
+    whole = {"ranking": {"score": 46, "match_reasons": ["all_terms_match", "upstream_database_rank"]}}
+    assert resolve_confidence([whole, runner_up], entity_types=()) == "high"
+    # Or when it is of the type the query names: live "resto druid guide" (2026-10), where "resto"
+    # is in no title, led "Restoration Druid Healer Guide" 33 to 26.
+    healer_guide = {"ranking": {"score": 33, "match_reasons": ["some_terms_match", "type_hint", "upstream_database_rank"]}}
+    rotation_guide = {"ranking": {"score": 26, "match_reasons": ["some_terms_match", "type_hint", "upstream_database_rank"]}}
+    assert resolve_confidence([healer_guide, rotation_guide], entity_types=()) == "high"
+
+
+def test_a_type_word_wowhead_cannot_match_is_dropped_from_the_upstream_text(monkeypatch) -> None:
+    """Live `wowhead search "hogger npc"` (2026-10) got no rows: Wowhead matches every word against names."""
+    calls: list[str] = []
+    upstream = {
+        "hogger npc": [],
+        "hogger": [
+            {"type": 3, "id": 1, "name": "Hogger's Trusty Club", "typeName": "Item"},
+            {"type": 1, "id": 448, "name": "Hogger", "typeName": "NPC"},
+        ],
+        "frost mage guide": [{"type": 100, "id": 3047, "name": "Frost Mage DPS Guide - Midnight", "typeName": "Guide"}],
     }
 
-    assert resolve_confidence([spell, guide], entity_types=(), query="") == "medium"
-    # Without a row of the type the query named, the same lead stays confident.
-    untyped_guide = {**guide, "ranking": {"score": 33, "match_reasons": ["some_terms_match"]}}
-    assert resolve_confidence([spell, untyped_guide], entity_types=(), query="") == "high"
+    def fake_search(self, query: str):
+        calls.append(query)
+        rows = upstream[query]
+        return {"search": query, "results": rows, "categories": {"database": rows[::-1]}}
+
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.search_suggestions", fake_search)
+    resolved = json.loads(runner.invoke(app, ["resolve", "hogger npc"]).stdout)["data"]
+    assert calls == ["hogger npc", "hogger"]
+    assert resolved["search_query"] == "hogger"
+    assert resolved["next_command"] == "wowhead entity npc 448"
+
+    # Guide titles hold "guide", so a row of the named type comes back and the text is sent once.
+    calls.clear()
+    found = json.loads(runner.invoke(app, ["search", "frost mage guide"]).stdout)["data"]
+    assert calls == ["frost mage guide"]
+    assert found["search_query"] == "frost mage guide"
 
 
-def test_resolve_is_not_confident_in_a_row_that_lacks_the_number_the_query_names() -> None:
-    """Scores and reasons from live `wowhead resolve "keystone legend season 3"` (2026-10): the database
-    head "Midnight Keystone Legend: Season 2" was resolved at high confidence."""
-    season_2 = {
-        "name": "Midnight Keystone Legend: Season 2",
-        "entity_type": "achievement",
-        "ranking": {"score": 46, "match_reasons": ["some_terms_match", "upstream_database_rank"]},
-    }
-    season_1 = {
-        "name": "Midnight Keystone Legend: Season 1",
-        "entity_type": "achievement",
-        "ranking": {"score": 32, "match_reasons": ["some_terms_match", "upstream_database_rank"]},
-    }
+def test_search_leaves_out_internal_dnt_test_entries(monkeypatch) -> None:
+    """Live `warcraft resolve "warbound until equipped"` (2026-10) answered "Test Warbound until equipped (DNT)"."""
+    rows = [
+        {"type": 3, "id": 213097, "name": "Test Warbound until equipped (DNT)", "typeName": "Item"},
+        {"type": 3, "id": 2, "name": "Warbound Until Equipped Cloak", "typeName": "Item"},
+    ]
+    monkeypatch.setattr(
+        "wowhead_cli.main.WowheadClient.search_suggestions",
+        lambda self, query: {"search": query, "results": rows},
+    )
 
-    assert resolve_confidence([season_2, season_1], entity_types=(), query="keystone legend season 3") == "medium"
-    assert resolve_confidence([season_2, season_1], entity_types=(), query="keystone legend season 2") == "high"
+    found = json.loads(runner.invoke(app, ["search", "warbound until equipped"]).stdout)["data"]
+    assert [row["id"] for row in found["results"]] == [2]
+    # A query that asks for the test entries still gets them.
+    asked = json.loads(runner.invoke(app, ["search", "warbound until equipped dnt"]).stdout)["data"]
+    assert 213097 in [row["id"] for row in asked["results"]]
