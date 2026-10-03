@@ -29,6 +29,7 @@ from warcraft_cli.cooldown_packet import (
     timestamp_in_window,
     top_parse_samples,
     tracked_spell_ids,
+    warcraftlogs_phase_windows,
 )
 from warcraft_cli.providers import (
     ProviderFetch,
@@ -216,6 +217,11 @@ class CooldownState:
     lorrgs_phases: list[Any] = field(default_factory=list)
     phase_windows: list[dict[str, Any]] = field(default_factory=list)
     selected_window: dict[str, Any] | None = None
+    # Which provider the phase windows came from: "lorrgs", "warcraftlogs", or None without windows.
+    phase_source: str | None = None
+    # The Warcraft Logs phase transitions, read only when Lorrgs could not supply the fight.
+    wcl_phases_args: list[str] = field(default_factory=list)
+    wcl_phases_result: dict[str, Any] | None = None
     # Set when the cached Lorrgs user report is missing: the packet keeps its Warcraft Logs half.
     lorrgs_unavailable: dict[str, Any] | None = None
     # The Warcraft Logs roster, read only when Lorrgs could not name the player.
@@ -528,20 +534,48 @@ def _select_player(ctx: typer.Context, request: CooldownRequest, state: Cooldown
     _require_spec_of_player_class(ctx, state)
 
 
-def _select_phase(ctx: typer.Context, request: CooldownRequest, state: CooldownState) -> None:
+# The fight's phase transitions and the encounters' phase names, the Warcraft Logs source of phase
+# windows when Lorrgs has no copy of the report. `report-fights` does not carry them.
+_WARCRAFTLOGS_PHASES_QUERY = (
+    "query CooldownPacketPhases($code: String!, $fightIDs: [Int], $allowUnlisted: Boolean) {"
+    " reportData { report(code: $code, allowUnlisted: $allowUnlisted) {"
+    " phases { encounterID phases { id name } }"
+    " fights(fightIDs: $fightIDs) { id encounterID startTime endTime phaseTransitions { id startTime } } } } }"
+)
+
+
+def _load_warcraftlogs_phases(request: CooldownRequest, state: CooldownState, fetch: ProviderFetch) -> None:
+    """Phase windows from the Warcraft Logs fight, when it has phase transitions; a failed lookup only
+    leaves the phase unavailable, as it was before the lookup."""
+    state.wcl_phases_args = [
+        "graphql", "--query", _WARCRAFTLOGS_PHASES_QUERY, "--report-code", state.report_code, "--fight-id", str(state.fight_id),
+    ]
+    if request.allow_unlisted:
+        state.wcl_phases_args.append("--allow-unlisted")
+    state.wcl_phases_result = fetch("warcraftlogs", state.wcl_phases_args, expansion=request.expansion)
+    if state.wcl_phases_result.get("status") == "ok":
+        report = as_dict(as_dict(_data_of(state.wcl_phases_result).get("reportData")).get("report"))
+        state.phase_windows = warcraftlogs_phase_windows(report, state.fight_id)
+
+
+def _select_phase(ctx: typer.Context, request: CooldownRequest, state: CooldownState, fetch: ProviderFetch) -> None:
     if state.lorrgs_unavailable is not None:
-        # No phase markers exist without Lorrgs; `phase.status` says so and the cast sections fall
-        # back to the whole fight rather than silently reporting an empty phase.
-        return
-    raw_phases = state.lorrgs_fight.get("phases")
-    state.lorrgs_phases = as_list(raw_phases)
-    state.phase_windows = build_phase_windows(state.lorrgs_phases, state.lorrgs_fight.get("duration"))
+        _load_warcraftlogs_phases(request, state, fetch)
+        if not state.phase_windows:
+            # No phase markers from either provider; `phase.status` says so and the cast sections
+            # fall back to the whole fight rather than silently reporting an empty phase.
+            return
+        state.phase_source = "warcraftlogs"
+    else:
+        state.phase_source = "lorrgs"
+        state.lorrgs_phases = as_list(state.lorrgs_fight.get("phases"))
+        state.phase_windows = build_phase_windows(state.lorrgs_phases, state.lorrgs_fight.get("duration"))
     window = selected_phase_window(state.phase_windows, request.phase)
     if window is None:
         _fail_cooldown_packet(
             ctx,
             code="phase_not_found",
-            message="The selected phase index is not present in the Lorrgs phase markers.",
+            message=f"The selected phase index is not present in the {state.phase_source} phase markers.",
             query=state.query,
             details={"phase_windows": state.phase_windows, "raw_phase_markers": raw_phase_markers(state.lorrgs_phases)},
         )
@@ -765,6 +799,9 @@ def _source_refs(state: CooldownState) -> dict[str, Any]:
         "warcraftlogs_report_player_details": _provider_source(
             state.roster_result, command="warcraftlogs", args=state.roster_args
         ),
+        "warcraftlogs_phase_transitions": _provider_source(
+            state.wcl_phases_result, command="warcraftlogs", args=state.wcl_phases_args
+        ),
         "lorrgs_spec_ranking": _provider_source(state.ranking_result, command="lorrgs", args=state.ranking_args or []),
     }
 
@@ -778,7 +815,13 @@ def _lorrgs_section(state: CooldownState) -> dict[str, Any]:
         "reason": state.lorrgs_unavailable["code"],
         "message": state.lorrgs_unavailable["message"],
         "source": state.lorrgs_unavailable["source"],
-        "missing": ["phase_windows", "boss_casts", "lorrgs_cached_player_timeline", "player_deaths", "fight_metadata"],
+        "missing": [
+            *([] if state.phase_windows else ["phase_windows"]),
+            "boss_casts",
+            "lorrgs_cached_player_timeline",
+            "player_deaths",
+            "fight_metadata",
+        ],
     }
 
 
@@ -787,9 +830,13 @@ def _notes(state: CooldownState, lorrgs_player_casts: list[Any]) -> list[str]:
     notes = [
         "Player casts come from Warcraft Logs cast events so cached Lorrgs user reports do not need per-player timeline generation.",
     ]
-    if state.selected_window is not None:
+    if state.phase_source == "lorrgs":
+        notes.append("Phase windows are derived from Lorrgs phase transition markers; labels are one-based P1/P2/etc.")
+    elif state.phase_source == "warcraftlogs":
         notes.append(
-            "Phase windows are derived from Lorrgs/Warcraft Logs phase transition markers; labels are one-based P1/P2/etc."
+            "Lorrgs did not supply this report, so phase windows come from the Warcraft Logs fight's phase "
+            "transitions; labels are one-based P1/P2/etc. in order, and each window's phase_id and name are "
+            "the encounter phase it is."
         )
     if state.comparison.get("status") == "ready":
         notes.append("Top-parse samples are comparison evidence, not universal cooldown recommendations.")
@@ -799,11 +846,12 @@ def _notes(state: CooldownState, lorrgs_player_casts: list[Any]) -> list[str]:
                 "selected_phase_spell_frequency; see comparison.samples[].phase_unavailable_reason."
             )
     if state.lorrgs_unavailable is not None:
-        notes.append(
-            "Lorrgs did not supply this report, so there are no phase windows: the requested --phase "
-            "was not applied, cooldowns.player_casts covers the whole fight and every selected-phase "
-            "section is empty. See the lorrgs section for the reason."
-        )
+        if state.selected_window is None:
+            notes.append(
+                "Neither Lorrgs nor the Warcraft Logs fight supplied phase markers, so the requested --phase "
+                "was not applied, cooldowns.player_casts covers the whole fight and every selected-phase "
+                "section is empty. See the lorrgs section for the reason."
+            )
         notes.append(
             "Without the Lorrgs roster the player's name and class come from the Warcraft Logs roster "
             "of the fight, and player.deaths is null: deaths come only from the Lorrgs timeline."
@@ -850,7 +898,10 @@ def _packet_payload(state: CooldownState) -> dict[str, Any]:
         "lorrgs": _lorrgs_section(state),
         "phase": {
             "status": "unavailable" if state.selected_window is None else "ready",
-            "unavailable_reason": state.lorrgs_unavailable["code"] if state.lorrgs_unavailable else None,
+            "source": state.phase_source,
+            "unavailable_reason": state.lorrgs_unavailable["code"]
+            if state.lorrgs_unavailable and state.selected_window is None
+            else None,
             # `requested` is the --phase the caller asked for; `selected` is null when no phase
             # markers existed, which is the only case where the request went unapplied.
             "requested": state.query.get("phase"),
@@ -911,7 +962,7 @@ def emit_cooldown_packet(ctx: typer.Context, request: CooldownRequest, *, fetch:
     _resolve_reference(ctx, request, state)
     _load_lorrgs_fight(ctx, request, state, fetch)
     _select_player(ctx, request, state, fetch)
-    _select_phase(ctx, request, state)
+    _select_phase(ctx, request, state, fetch)
     _load_spell_catalogs(ctx, request, state, fetch)
     _load_warcraftlogs_casts(ctx, request, state, fetch)
     _load_ranking_comparison(ctx, request, state, fetch)

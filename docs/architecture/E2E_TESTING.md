@@ -67,9 +67,13 @@ filtered result against the exact rows that bound keeps. Not every such flag has
   spec slugs the shorthand and `frost` journeys in `test_method.py` expect. When upstream retires
   one, the journey goes red and the pin is updated; it never passes on stale data.
 - **Real caches, isolated.** The session points `XDG_CACHE_HOME` at a temporary directory so
-  journeys can assert cache hits without touching `~/.cache`. Config, state, and data roots stay
-  real so credentials, saved tokens, guide bundles, and the local SimC checkout resolve exactly
-  as they do for you.
+  journeys can assert cache hits without touching `~/.cache`, and `XDG_DATA_HOME` at another, so
+  no machine state such as an Icy Veins site index from a local `index-refresh` changes an answer.
+  The harness also drops a shell-exported `WARCRAFT_HTTP_MIN_INTERVAL_SECONDS` and every
+  `<PROVIDER>_CACHE_BACKEND`/`<PROVIDER>_CACHE_DIR`, which would undo the pacing or the isolated
+  cache. Config and state roots stay real so credentials, saved tokens, and the SimC checkout
+  configured with `simc repo --set-root` resolve exactly as they do for you; a
+  managed checkout under the data root is not visible to the session.
 - **Read-only against your accounts.** Journeys never log in, log out, rotate tokens, or upload.
 
 ## Running

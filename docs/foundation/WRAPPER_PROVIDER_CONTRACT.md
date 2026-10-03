@@ -79,10 +79,15 @@ Shared shape: the envelope `kind` is `resolve_match`; `data` carries `search_que
 `candidates`, `count`, `total_matches` and `truncated`, the last three meaning what they mean for
 `search`. `resolved` is true exactly when `confidence` is `high`, and only then is `next_command` set
 (to `match.follow_up.command`). `match` is the top candidate whenever there is one, resolved or not.
+An unresolved answer with a `match` carries the provider's `fallback_search_command`; one with no
+match carries `null`, since the same search would come back empty. Warcraft Logs also leaves it
+`null` on an unresolved bare report code: it matches only explicit report references, so its search
+adds nothing.
 
 One-word rule: when the provider's `search_query` (after its own hint, type and follow-up
 stripping) is one plain alphabetic word, a `high` answer stands only if that word names the match,
-by its whole name or its head before the first `,` or `:` (`warcraft_core.discovery.single_word_named`),
+by its whole name or its head before the first `,` or `:` (`warcraft_core.discovery.title_match`, which
+the wrapper's `name_match` ranking also uses),
 or the provider declares the row an identity match (a `single_word_identity` callable passed to
 `resolve_data`; each provider keeps its own rules, there is no shared reason vocabulary). Otherwise
 `resolve_data` lowers the answer to `medium` and adds `confidence_cap: {"rule": "single_word_query",
@@ -117,7 +122,8 @@ defines:
 
 ```python
 class ProviderSurface(Protocol):
-    name: str
+    @property
+    def name(self) -> str: ...  # read-only, so frozen dataclasses satisfy it
     def search(self, query: str, *, limit: int = 10, **options) -> Envelope: ...
     def resolve(self, target: str, **options) -> Envelope: ...
     def doctor(self, **options) -> Envelope: ...
@@ -252,6 +258,7 @@ Current examples:
 - `method` -> `retail`
 - `icy-veins` -> `retail`
 - `raiderio` -> `retail`
+- `warcraft-wiki` -> `retail`
 - `lorrgs` -> `retail`
 - `raidbots` -> `retail`
 
@@ -421,10 +428,14 @@ unresolved) and the query's intents
 - the wrapper never passes its own `--limit` to a provider's resolve: providers judge confidence
   against their rivals, and a small limit would hide them
 - preserve the chosen provider's `match`, `next_command`, and confidence instead of flattening them
-- when there is no answer, surface the top-ranked match, `low` ones included, as `best_unresolved_candidate` (flagged
-  `resolved: false`, with `unresolved_reason`) together with the own `fallback_search_command`s of
-  the providers that returned a candidate, in ranking order. A provider that found nothing hands
-  over no search, so when no provider found anything `fallback_search_command` is `null`
+- when there is no answer, surface the top-ranked match that is not `low` (a `low` one only when
+  every match is `low`) as `best_unresolved_candidate` (flagged `resolved: false`, with
+  `unresolved_reason`), so the hint names the match that blocked the answer, together with the own
+  `fallback_search_command`s of the providers that returned a candidate, in ranking order with the
+  `low` matches last. A provider that found nothing hands over no search, so when no provider found
+  anything `fallback_search_command` is `null`. Every lower match its provider resolved is listed in
+  `provider_resolved_candidates` with its `next_command`: a resolved answer has no fallback search,
+  so without that list an answer a better-ranked `medium` match blocked would be unreachable
 
 Debuggability rules:
 - `warcraft search --ranking-debug` should expose compact ranking summaries for the top wrapper candidates

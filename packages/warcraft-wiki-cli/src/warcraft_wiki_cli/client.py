@@ -93,7 +93,7 @@ class WarcraftWikiClient:
             raise WarcraftWikiAPIError("upstream_error", "Warcraft Wiki API did not answer with a JSON object.")
         if isinstance(payload.get("error"), dict):
             error = payload["error"]
-            raise WarcraftWikiAPIError(str(error.get("code") or "api_error"), str(error.get("info") or "Warcraft Wiki API error."))
+            raise WarcraftWikiAPIError(str(error.get("code") or ""), str(error.get("info") or "Warcraft Wiki API error."))
         self._write_cache(key, payload, ttl_seconds=ttl_seconds)
         return payload
 

@@ -753,6 +753,13 @@ def test_a_one_word_resolve_is_high_only_for_a_guide_the_word_names(require) -> 
         assert result.data["confidence"] != "high", result.describe()
 
 
+def test_a_one_word_zone_name_resolves_to_its_zone_guide(require) -> None:
+    """The docs' example of a place page a single word names; ``k'aresh``, the earlier example, has a close rival page."""
+    require(PROVIDER)
+    result = run(BINARY, "resolve", "harandar")
+    assert (result.data["confidence"], result.data["match"]["id"]) == ("high", "harandar-zone-guide"), result.describe()
+
+
 def test_a_spec_word_only_one_class_has_still_resolves_to_that_spec_guide(require) -> None:
     """The one-word rule keeps a spec word only one class has (``shadow``) on that spec's guide."""
     require(PROVIDER)

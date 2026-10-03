@@ -51,7 +51,7 @@ Resolve a free-text query to the best matching wiki article plus the follow-up c
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--limit` | int range [1<=x<=50] | 5 | Maximum candidates to inspect. |
+| `--limit` | int range [1<=x<=50] | 5 | Maximum candidates to list; ambiguity is judged over every hit fetched (5 x limit, at least 25). |
 
 ## warcraft-wiki article
 

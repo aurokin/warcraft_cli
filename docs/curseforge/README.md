@@ -40,9 +40,13 @@ Resolves one WoW addon and returns its metadata, latest files, and latest change
 - A numeric argument is a mod id, validated to be a WoW project via `gameId`. Anything else is a
   `gameId=1` slug search whose result is matched to the exact slug client-side, so an ignored or
   renamed server-side filter can never bind the wrong mod.
-- `data.metadata` is the raw CurseForge mod record, `data.latest_files` is its `latestFiles`, and
-  `data.changelog` covers the newest file by date, which can be an alpha or beta: its `display_name`
-  and `release_type` (1 release, 2 beta, 3 alpha) say which file the notes belong to.
+- `data.metadata` is the raw CurseForge mod record. `data.latest_files` is its `latestFiles` sorted
+  newest first by `fileDate`; CurseForge's own order (kept in `metadata.latestFiles`) can put
+  years-old betas first. The list mixes game flavors and release types (`releaseType` 1 release,
+  2 beta, 3 alpha), so the current stable version is the first row with `releaseType` 1 for the
+  flavor you want (`gameVersions`), not row 0.
+- `data.changelog` covers the newest file by date, which can be an alpha or beta: its `display_name`
+  and `release_type` say which file the notes belong to.
 - Changelog is best-effort and never fails the lookup. Top-level `null` means the addon has no
   files. Otherwise it is an object keyed by `file_id` carrying `body` (changelog HTML, or `null`
   when that file exposes no notes) plus `source_url`, or an explicit `{file_id, error}` marker when

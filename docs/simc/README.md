@@ -71,8 +71,12 @@ These codes are worth knowing:
 - `not_found` (exit 4) — `spec-files`, `find-action`, and `trace-action` were pointed at a directory that
   is not a SimulationCraft checkout. They report this instead of returning zero hits as a success. An
   APL command also answers `not_found` for an APL file that is not there, and for a `--list` the file
-  has no action list of (`error.details.available_lists` names the ones it has).
-- `invalid_query` (exit 2) — a build arrived without a class and spec and could not be identified
+  has no action list of (`error.details.available_lists` names the ones it has). `sim` and `run`
+  answer `not_found` for a profile path that is not a file (a directory included).
+- `invalid_query` (exit 2) — `sim` or `run` was given a profile SimC found nothing to sim in (an empty
+  file, or text with no actor: SimC prints `Nothing to sim!`, which `error.details.stdout_preview`
+  keeps), or `sim` was told to read stdin while stdin is a terminal (pipe the profile, or pass a path
+  or `--profile-text`); a build arrived without a class and spec and could not be identified
   by a command that needs one (`identify-build` instead answers `ok: true` with `identity.confidence`
   `none` or `low`, null `actor_class`/`spec` and a source note naming the specs probed),
   `decode-build` or `identify-build` was given no build at all, a build-input option was passed with
@@ -124,9 +128,11 @@ exit code there.
   interrupts, potions, trinkets, racials) do not compete. `focus_path` shows the lists it followed;
   pass `--list` to start from another list. `apl-intent`, `apl-intent-explain`, `analysis-packet`,
   `apl-branch-compare`, `priority`, `opener`, `inactive-actions` and `describe-build` use the same focus.
-- Row lists cut by `--limit` say so: `priority` and `opener` report `count`, `total` and `truncated`,
-  `inactive-actions` reports `truncated` beside its total `count`, and `describe-build` reports
-  `active_priority_total`, `active_priority_truncated` and `inactive_talent_branch_total`.
+- Row lists cut by `--limit` say so: `priority` and `opener` report `count` (rows returned), `total`
+  and `truncated`; `describe-build` reports `active_priority_total`, `active_priority_truncated` and
+  `inactive_talent_branch_total`. In `inactive-actions`, in each `spec-files` category and in each
+  `find-action` / `trace-action` bucket, `count` is the total before the cut, beside `truncated`
+  (and the shown `items` for the latter three), so read the list's length for the rows returned.
 - Every command's `build` block (`left`/`right` for `apl-branch-compare`) lists `enabled_talents` by
   token with `enabled_talent_count` beside it.
 - `analysis-packet --first-cast-action` needs `--sim-profile` or `--profile-path` to sim; without one it

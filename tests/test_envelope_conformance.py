@@ -16,9 +16,11 @@ from warcraft_cli.providers import PROVIDERS
 from warcraft_core.envelope import ENVELOPE_KEYS, REQUIRED_KEYS, envelope_violations
 from warcraft_core.identity import build_reference_transport_packet_payload
 
-from tests.cli_testkit import WARCRAFTLOGS_REPORT_QUERY, apply_provider_stubs, run_binary
+from tests.cli_testkit import apply_provider_stubs, run_binary
+from tests.discovery_contract import resolve_data_violations, search_data_violations
 
 PROVIDER_IDS = [registration.name for registration in PROVIDERS]
+SURFACES = ("search", "resolve")
 TIERS = {
     "core": {"wowhead", "warcraftlogs", "simc"},
     "supported": {"raiderio", "warcraft-wiki", "icy-veins", "method", "lorrgs"},
@@ -31,11 +33,6 @@ def assert_envelope(payload: Any, *, context: str) -> None:
     assert not problems, f"{context}: {problems}"
 
 
-def _surface_query(name: str) -> str:
-    # Warcraft Logs only resolves explicit report references; free text returns a discovery hint.
-    return WARCRAFTLOGS_REPORT_QUERY if name == "warcraftlogs" else "thunderfury"
-
-
 @pytest.mark.parametrize("registration", PROVIDERS, ids=PROVIDER_IDS)
 def test_doctor_returns_a_conforming_envelope(registration: Any) -> None:
     """``envelope["provider"]`` is the registry ``name``, which differs from the binary for blizzard-api."""
@@ -46,52 +43,32 @@ def test_doctor_returns_a_conforming_envelope(registration: Any) -> None:
     assert payload["ok"] is True
 
 
-@pytest.mark.parametrize("registration", PROVIDERS, ids=PROVIDER_IDS)
-@pytest.mark.parametrize("surface", ["search", "resolve"])
-def test_ready_surfaces_return_a_conforming_envelope_offline(
+@pytest.mark.parametrize(
+    ("registration", "surface"),
+    [pytest.param(registration, surface, id=f"{registration.name}-{surface}") for registration in PROVIDERS for surface in SURFACES],
+)
+def test_every_surface_answers_an_empty_upstream_with_a_conforming_envelope(
     registration: Any, surface: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    if not registration.wrapper_capabilities.get(surface, "").startswith("ready"):
-        pytest.skip(f"{registration.name} {surface} is {registration.wrapper_capabilities.get(surface)!r}, not ready")
+    """Ready, explicit-report-only or stubbed, a search/resolve that found nothing still answers ``ok: true``
+    in the shared shape (``tests/test_discovery_contract.py`` checks the populated answers).
+
+    An empty resolve hands over no ``fallback_search_command``: the same search would come back empty.
+    """
     apply_provider_stubs(registration.name, monkeypatch)
-    query = _surface_query(registration.name)
-    payload = registration.surface.search(query, limit=3) if surface == "search" else registration.surface.resolve(query)
+    call = registration.surface.search if surface == "search" else registration.surface.resolve
+    payload = call("zzqx nonsense qqq", limit=3)
 
     context = f"{registration.name} {surface}"
     assert_envelope(payload, context=context)
     assert payload["ok"] is True
     assert payload["command"] == surface
     data = payload["data"]
-    if surface == "search":
-        assert isinstance(data["results"], list), f"{context}: data.results must be a list"
-        assert isinstance(data["count"], int), f"{context}: data.count must be an int"
-    else:
-        assert isinstance(data["resolved"], bool), f"{context}: data.resolved must be a bool"
-
-
-@pytest.mark.parametrize("registration", PROVIDERS, ids=PROVIDER_IDS)
-@pytest.mark.parametrize("surface", ["search", "resolve"])
-def test_stubbed_surfaces_return_a_flagged_success_envelope(registration: Any, surface: str) -> None:
-    """A surface that is not built yet answers with ``ok: true`` plus an explicit flag under ``data``, never an error."""
-    capability = registration.wrapper_capabilities.get(surface)
-    if capability not in {"coming_soon", "not_supported"}:
-        pytest.skip(f"{registration.name} {surface} is {capability!r}")
-    query = "probe-query"
-    payload = registration.surface.search(query, limit=1) if surface == "search" else registration.surface.resolve(query)
-
-    context = f"{registration.name} {surface}"
-    assert_envelope(payload, context=context)
-    assert payload["ok"] is True
-    assert payload["data"].get(capability) is True, f"{context}: data.{capability} must be True"
-    assert payload["data"].get("suggested_command"), f"{context}: tell the agent what to run instead"
-
-
-def test_every_search_and_resolve_capability_is_covered_by_one_of_the_surface_tests() -> None:
-    """A missing or new capability value would be skipped by both surface tests above."""
-    covered = {"ready", "ready_explicit_report_only", "coming_soon", "not_supported"}
-    for registration in PROVIDERS:
-        for surface in ("search", "resolve"):
-            assert registration.wrapper_capabilities.get(surface) in covered, f"{registration.name} {surface}"
+    violations = search_data_violations if surface == "search" else resolve_data_violations
+    assert violations(data, provider=registration.name) == []
+    assert (data["results"] if surface == "search" else data["candidates"]) == []
+    if surface == "resolve":
+        assert (data["confidence"], data["fallback_search_command"]) == ("none", None)
 
 
 def test_every_provider_is_assigned_to_exactly_one_tier() -> None:

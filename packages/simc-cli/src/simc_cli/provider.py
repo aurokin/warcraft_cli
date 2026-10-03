@@ -11,7 +11,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Literal
 
-from warcraft_core.discovery import RESOLVE_KIND, SEARCH_KIND, stub_data
+from warcraft_core.discovery import stub_envelope
 from warcraft_core.envelope import ENVELOPE_KEYS, Envelope, success_envelope
 from warcraft_core.provider import ProviderSurface
 
@@ -151,11 +151,14 @@ def repo_payload(paths: RepoPaths) -> dict[str, Any]:
 
 def _coming_soon_envelope(surface: Literal["search", "resolve"], query: str, suggested_command: str) -> Envelope:
     """Structured stub for the discovery surfaces simc does not implement yet."""
-    data = stub_data(
-        surface=surface, flag="coming_soon", search_query=query, message=COMING_SOON_MESSAGE, suggested_command=suggested_command
+    return stub_envelope(
+        provider=PROVIDER_NAME,
+        surface=surface,
+        flag="coming_soon",
+        query=query,
+        message=COMING_SOON_MESSAGE,
+        suggested_command=suggested_command,
     )
-    kind = SEARCH_KIND if surface == "search" else RESOLVE_KIND
-    return success_envelope(provider=PROVIDER_NAME, command=surface, kind=kind, data=data, query=query)
 
 
 def _example_apl_path(paths: RepoPaths) -> Path | None:

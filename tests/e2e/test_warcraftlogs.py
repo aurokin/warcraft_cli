@@ -837,6 +837,11 @@ def test_encounter_rankings_class_spec_metric_and_page_reach_warcraft_logs(requi
     for flags, expected in (
         (("--class-name", "death-knight"), {"class_name": "DeathKnight"}),
         (("--class-name", "hunter", "--spec-name", "beast-mastery"), {"class_name": "Hunter", "spec_name": "BeastMastery"}),
+        # Shorthand and another provider's slug name the same filter.
+        (("--class-name", "dk"), {"class_name": "DeathKnight"}),
+        (("--class-name", "hunter", "--spec-name", "bm"), {"class_name": "Hunter", "spec_name": "BeastMastery"}),
+        # A spec spelling that names its class needs no --class-name.
+        (("--spec-name", "bm hunter"), {"class_name": "Hunter", "spec_name": "BeastMastery"}),
     ):
         narrowed = run("warcraftlogs", *scope, *flags, "--top", "10")
         rows = narrowed.data["rankings"]["rows"]
@@ -966,6 +971,10 @@ def test_report_and_report_fights_echo_the_discovered_report(require):
     filtered = run("warcraftlogs", "report-fights", found.code, "--difficulty", str(found.fight["difficulty"]))
     filtered_rows = _rows(filtered, "fights")
     assert {row["difficulty"] for row in filtered_rows} == {found.fight["difficulty"]}, filtered.describe()
+
+    # A report URL names the same report as its bare code.
+    by_url = run("warcraftlogs", "report", found.url)
+    assert by_url.data["report"]["code"] == found.code, by_url.describe()
 
 
 def test_report_encounter_family_describes_the_discovered_kill(require):
@@ -1182,6 +1191,9 @@ def test_raw_report_surfaces_return_scoped_slices(require):
     assert events.data["next_page_timestamp"] == wider.data["events"][len(capped)]["timestamp"], events.describe()
     assert {row["type"] for row in events.data["events"]} <= {"cast", "begincast"}, events.describe()
     assert {row["fight"] for row in events.data["events"]} == {found.fight_id}, events.describe()
+    # A report URL's #fight=N scopes the slice like --fight-id.
+    by_url = run("warcraftlogs", "report-events", found.url, "--data-type", "casts", "--limit", "5")
+    assert by_url.data["events"] == capped, by_url.describe()
 
     roster = {row["name"] for row in found.players}
     table = run("warcraftlogs", "report-table", found.code, "--data-type", "damage-done", "--fight-id", fight)

@@ -17,7 +17,6 @@ def test_expansion_keys_keep_wowhead_order_then_fresh() -> None:
 
 def test_resolve_expansion_accepts_aliases_and_defaults_to_retail() -> None:
     assert resolve_expansion(None).key == "retail"
-    assert resolve_expansion("  ").key == "retail"
     assert resolve_expansion("Wrath").key == "wotlk"
     assert resolve_expansion("mop_classic").key == "mop-classic"
     assert resolve_expansion("anniversary").key == "fresh"
@@ -25,9 +24,10 @@ def test_resolve_expansion_accepts_aliases_and_defaults_to_retail() -> None:
     assert normalize_expansion_key(" Classic_PTR ") == "classic-ptr"
 
 
-def test_resolve_expansion_rejects_unknown_values_listing_all_keys() -> None:
-    with pytest.raises(ValueError, match=r"Unknown expansion 'bogus'\. Supported: retail, classic, .*, fresh$"):
-        resolve_expansion("bogus")
+@pytest.mark.parametrize("value", ["bogus", "", "  "])
+def test_resolve_expansion_rejects_unknown_values_listing_all_keys(value: str) -> None:
+    with pytest.raises(ValueError, match=rf"Unknown expansion '{value}'\. Supported: retail, classic, .*, fresh$"):
+        resolve_expansion(value)
 
 
 def test_warcraftlogs_site_mapping() -> None:

@@ -395,6 +395,34 @@ def test_explain_input_requires_content() -> None:
     assert payload["error"]["code"] == "invalid_query"
 
 
+@pytest.mark.parametrize("text", ["hello world, this is not simc", "\U0001f525"])
+def test_explain_input_rejects_text_with_no_simc_line(text: str) -> None:
+    """Any text used to come back as an Advanced Sim with a `simc sim -` suggestion."""
+    result = runner.invoke(app, ["explain-input", "--text", text])
+
+    assert result.exit_code == 2
+    assert json.loads(result.stderr)["error"]["code"] == "invalid_query"
+
+
+def test_explain_input_does_not_wait_on_a_terminal(monkeypatch) -> None:
+    """With no --text or --file and a terminal on stdin, explain-input waited forever for input."""
+    import raidbots_cli.main as raidbots_main
+
+    class Terminal:
+        def isatty(self) -> bool:
+            return True
+
+        def read(self) -> str:
+            raise AssertionError("read a terminal")
+
+    monkeypatch.setattr(raidbots_main, "sys", type("Sys", (), {"stdin": Terminal()})())
+
+    result = runner.invoke(app, ["explain-input"])
+
+    assert result.exit_code == 2
+    assert json.loads(result.stderr)["error"]["code"] == "invalid_query"
+
+
 def test_simc_handoff_shell_quotes_untrusted_talents() -> None:
     malicious = "x'; touch /tmp/pwned; '"
     text = f'mage="Main"\nspec=frost\ntalents={malicious}\n'

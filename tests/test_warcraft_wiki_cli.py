@@ -1413,6 +1413,54 @@ def test_upstream_failures_exit_with_the_network_code(monkeypatch, response: htt
     assert json.loads(result.stderr)["error"]["code"] == code
 
 
+@pytest.mark.parametrize(
+    ("command", "mediawiki_code"),
+    [
+        (["search", "jaina " * 60], "cirrussearch-query-too-long"),
+        (["article", "Special:Random"], "pagecannotexist"),
+        (["article", "a|b"], "invalidtitle"),
+    ],
+)
+def test_a_title_or_query_the_wiki_can_never_accept_is_a_usage_error(monkeypatch, command: list[str], mediawiki_code: str) -> None:
+    """These came back as the raw MediaWiki code with exit 1, or as not_found for a bad title."""
+    monkeypatch.setattr(
+        "warcraft_wiki_cli.client.request_with_retries",
+        _CapturedTransport({"error": {"code": mediawiki_code, "info": "The wiki rejected it."}}),
+    )
+
+    result = runner.invoke(warcraft_wiki_app, command)
+
+    assert result.exit_code == 2, result.output
+    assert json.loads(result.stderr)["error"]["code"] == "invalid_query"
+
+
+def test_an_unknown_mediawiki_error_code_is_api_error_with_the_raw_code_in_details(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "warcraft_wiki_cli.client.request_with_retries",
+        _CapturedTransport({"error": {"code": "internal_api_error_DBQueryError", "info": "A database query error has occurred."}}),
+    )
+
+    result = runner.invoke(warcraft_wiki_app, ["search", "jaina"])
+
+    assert result.exit_code == 1, result.output
+    error = json.loads(result.stderr)["error"]
+    assert (error["code"], error["details"]) == ("api_error", {"mediawiki_code": "internal_api_error_DBQueryError"})
+
+
+def test_a_mediawiki_error_with_no_code_is_api_error_without_a_made_up_code(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "warcraft_wiki_cli.client.request_with_retries",
+        _CapturedTransport({"error": {"info": "Something went wrong."}}),
+    )
+
+    result = runner.invoke(warcraft_wiki_app, ["search", "jaina"])
+
+    assert result.exit_code == 1, result.output
+    error = json.loads(result.stderr)["error"]
+    assert error["code"] == "api_error"
+    assert "mediawiki_code" not in (error.get("details") or {})
+
+
 def test_http_failures_carry_the_shared_one_line_message(monkeypatch) -> None:
     """The wiki passed httpx's multi-line text through, unlike the other article providers."""
 

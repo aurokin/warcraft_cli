@@ -86,6 +86,12 @@ ENTITY_TYPE_DEFS: tuple[WowheadEntityType, ...] = (
         hydrate_supported=True,
     ),
     WowheadEntityType(
+        key="item-set",
+        suggestion_type_ids=(4,),
+        parser_supported=True,
+        resolve_supported=True,
+    ),
+    WowheadEntityType(
         key="mount",
         search_hint_terms=("mount", "mounts"),
         parser_supported=True,

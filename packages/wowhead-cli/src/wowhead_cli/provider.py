@@ -277,7 +277,7 @@ def resolve(
         search_query=search_query,
         ranked=answering + trailing,
         limit=limit,
-        confidence=resolve_confidence(answering, entity_types=selected_entity_types),
+        confidence=resolve_confidence(answering, query=target, entity_types=selected_entity_types),
         fallback_search_command=f"{command_prefix_for_expansion(profile)} search {shlex.quote(target)}",
         single_word_identity=names_single_word,
         query=target,

@@ -21,10 +21,11 @@ from warcraft_core.output import (
     DEFAULT_COMPACT_MAX_CHARS,
     OutputOptions,
     OutputProjectionError,
-    emit_shaped,
     resolve_output_options,
+    shape_payload,
     to_json,
 )
+from warcraft_core.output import emit as emit_json
 from warcraft_core.provider import ProviderError
 
 
@@ -203,22 +204,27 @@ def install_common_callback(app: typer.Typer, *, provider: str) -> None:
         )
 
 
-def emit(ctx: typer.Context, payload: Mapping[str, Any], *, err: bool = False) -> None:
-    """Write ``payload`` with the global output flags applied.
+def shaped_envelope(ctx: typer.Context, payload: Mapping[str, Any]) -> dict[str, Any]:
+    """``payload`` checked, given its cache provenance and shaped by the global output flags, unwritten.
 
     ``payload`` must be a conforming envelope (``envelope_violations``): a key outside the envelope,
     a missing key or a mistyped one is a programming error and raises ``TypeError`` instead of
     reaching the caller, so a command that regresses the contract fails its tests. A success
-    envelope gains ``provenance.cache`` when the command built a cache store.
+    envelope gains ``provenance.cache`` when the command built a cache store. A ``--fields-strict``
+    path the payload lacks fails the command with ``missing_fields``.
     """
     problems = envelope_violations(payload)
     if problems:
         raise TypeError(f"refusing to emit a malformed envelope: {'; '.join(problems)}")
-    config = cfg(ctx)
     try:
-        emit_shaped(with_cache_provenance(payload, current_cache_ledger()), config.output, err=err)
+        return shape_payload(with_cache_provenance(payload, current_cache_ledger()), cfg(ctx).output)
     except OutputProjectionError as exc:
         fail(ctx, "missing_fields", str(exc), details={"missing_fields": list(exc.missing_fields)})
+
+
+def emit(ctx: typer.Context, payload: Mapping[str, Any], *, err: bool = False) -> None:
+    """Write ``payload`` with the global output flags applied (see ``shaped_envelope``)."""
+    emit_json(shaped_envelope(ctx, payload), pretty=cfg(ctx).output.pretty, err=err)
 
 
 # Parameters a failure never echoes: an OAuth authorization code, which can be exchanged for a

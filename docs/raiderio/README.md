@@ -165,6 +165,7 @@ raiderio threshold mythic-plus-runs --metric score --value 3000
   `resolve` always puts the top candidate in `match`, but is `resolved` (with `confidence: "high"`
   and a `next_command`) only when that candidate is confidently ahead of every other one;
   otherwise `confidence` is `medium` or `low` and `fallback_search_command` names the search to run.
+  When nothing matched, `match` and `fallback_search_command` are null and `confidence` is `none`.
   A one-word query (after a leading `guild`/`character` hint) resolves only to a profile named
   exactly that word; any other top row stays the `match` at `medium` with
   `confidence_cap: {"rule": "single_word_query", "from": "high"}`.

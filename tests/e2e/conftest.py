@@ -3,7 +3,8 @@
 Policy: a provider that cannot be exercised is a failure, not a skip, unless it is named in
 ``WARCRAFT_E2E_SKIP`` (comma-separated provider names, plus ``redis``). Caches are real but
 isolated to a per-session directory so journeys can assert cache hits without touching
-``~/.cache``; config, state, and data roots stay real so credentials, saved tokens, and the local
+``~/.cache``, and the data root is a per-session directory too, so no locally written index is
+read; config and state roots stay real so credentials, saved tokens, and the configured
 SimulationCraft checkout resolve exactly as they do for you.
 """
 
@@ -38,13 +39,16 @@ def _skip_list() -> frozenset[str]:
 
 @pytest.fixture(scope="session", autouse=True)
 def e2e_session_env() -> Iterator[dict[str, str]]:
-    """Point every binary at an isolated cache root for the whole session."""
-    with tempfile.TemporaryDirectory(prefix="warcraft-e2e-cache-") as cache_root:
-        env = {
-            "XDG_CACHE_HOME": cache_root,
-            # Politeness stays on (per-host interval); nothing here should need to be faster.
-        }
-        env.pop("WARCRAFT_HTTP_MIN_INTERVAL_SECONDS", None)
+    """Point every binary at isolated cache and data roots for the whole session.
+
+    The data root holds machine state a journey must not read, such as an Icy Veins site index a
+    local ``index-refresh`` wrote; the SimC checkout resolves from the config root.
+    """
+    with (
+        tempfile.TemporaryDirectory(prefix="warcraft-e2e-cache-") as cache_root,
+        tempfile.TemporaryDirectory(prefix="warcraft-e2e-data-") as data_root,
+    ):
+        env = {"XDG_CACHE_HOME": cache_root, "XDG_DATA_HOME": data_root}
         harness.SESSION_ENV.clear()
         harness.SESSION_ENV.update(env)
         yield env

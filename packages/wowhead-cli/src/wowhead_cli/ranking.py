@@ -536,6 +536,14 @@ URL_PAGE_COMMANDS = {
 _LOCALE_SEGMENT_RE = re.compile(r"[a-z]{2}(?:-[A-Z]{2})?")
 
 
+def page_path_parts(path: str) -> list[str]:
+    """The segments of a Wowhead path after any leading expansion and locale prefixes (`classic/de/guide=3143`)."""
+    parts = [part for part in path.split("/") if part]
+    while parts and (parts[0] in EXPANSION_PREFIXES | UNPROFILED_PATH_PREFIXES or _LOCALE_SEGMENT_RE.fullmatch(parts[0])):
+        parts = parts[1:]
+    return parts
+
+
 def _url_page_command(parts: list[str], url: str) -> tuple[str, str | None] | None:
     """The command and argument that open the page whose path segments are `parts`, or None."""
     if parts in (["news"], ["blue-tracker"]):
@@ -556,9 +564,7 @@ def url_page_result(url: str, *, expansion: ExpansionProfile) -> dict[str, Any] 
     normalized = normalize_wowhead_url(url)
     if normalized is None or not is_wowhead_host(urlparse(normalized).hostname or ""):
         return None
-    parts = [part for part in urlparse(normalized).path.split("/") if part]
-    while parts and (parts[0] in EXPANSION_PREFIXES | UNPROFILED_PATH_PREFIXES or _LOCALE_SEGMENT_RE.fullmatch(parts[0])):
-        parts = parts[1:]
+    parts = page_path_parts(urlparse(normalized).path)
     page = _url_page_command(parts, normalized) if parts else None
     if page is None:
         return None
@@ -756,9 +762,7 @@ ARTICLE_OVER_ENTITY_MARGIN = EXACT_NAME_SCORE
 
 def top_candidate_score(candidates: list[dict[str, Any]]) -> int:
     """The ranking score of the leading candidate, or 0 when the group is empty."""
-    if not candidates:
-        return 0
-    return int(candidates[0].get("ranking", {}).get("score") or 0)
+    return int(candidates[0]["ranking"]["score"]) if candidates else 0
 
 
 def preferred_resolve_candidates(
@@ -778,14 +782,22 @@ def preferred_resolve_candidates(
     return articles, entities
 
 
-def resolve_confidence(candidates: list[dict[str, Any]], *, entity_types: tuple[str, ...]) -> ResolveConfidence:
+def lacks_query_number(query: str, row: Mapping[str, Any]) -> bool:
+    """Whether the row's names miss a number the query names ("season 3", "tier 2")."""
+    names = word_tokens(f"{row.get('name') or ''} {(row.get('metadata') or {}).get('display_name') or ''}")
+    return any(term.isdigit() and term not in names for term in match_terms(query))
+
+
+def resolve_confidence(
+    candidates: list[dict[str, Any]], *, query: str, entity_types: tuple[str, ...]
+) -> ResolveConfidence:
     if not candidates:
         return "none"
-    top_ranking = candidates[0].get("ranking", {})
-    top_score = int(top_ranking.get("score") or 0)
-    second_score = int(candidates[1].get("ranking", {}).get("score") or 0) if len(candidates) > 1 else 0
+    top_ranking = candidates[0]["ranking"]
+    top_score = int(top_ranking["score"])
+    second_score = int(candidates[1]["ranking"]["score"]) if len(candidates) > 1 else 0
     margin = top_score - second_score
-    reasons = set(top_ranking.get("match_reasons") or [])
+    reasons = set(top_ranking["match_reasons"])
     high = (
         is_high_confidence_exact_match(reasons, margin=margin, second_score=second_score)
         or is_high_confidence_score(top_score, margin=margin)
@@ -794,10 +806,14 @@ def resolve_confidence(candidates: list[dict[str, Any]], *, entity_types: tuple[
     if high:
         # A row missing some of the query's words ("Resilient Keystone 12" for "midnight season 2
         # mythic+ dungeons") is not a confident answer unless it is of the type the query names, as
-        # "Restoration Druid Healing Guide" is for "resto druid guide". A guide the response itself
-        # shows to be far behind its siblings never is, nor a row with no command to run (a world
-        # event). `resolve` reports any of those as a candidate instead of recommending a command.
-        partial = "some_terms_match" in reasons and "type_hint" not in reasons
+        # "Restoration Druid Healing Guide" is for "resto druid guide", and even then not when a
+        # missing word is a number ("Season 2" for "keystone legend season 3 achievement"). A guide
+        # the response itself shows to be far behind its siblings never is, nor a row with no command
+        # to run (a world event). `resolve` reports any of those as a candidate instead of
+        # recommending a command.
+        partial = "some_terms_match" in reasons and (
+            "type_hint" not in reasons or lacks_query_number(query, candidates[0])
+        )
         commandless = candidates[0]["follow_up"]["command"] is None
         return "medium" if partial or commandless or STALE_GUIDE_REASON in reasons else "high"
     if is_medium_confidence_score(top_score, margin=margin):

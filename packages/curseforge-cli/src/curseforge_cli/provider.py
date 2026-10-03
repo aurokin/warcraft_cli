@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from warcraft_api.cache import redacted_redis_url
-from warcraft_core.discovery import RESOLVE_KIND, SEARCH_KIND, stub_data
+from warcraft_core.discovery import stub_envelope
 from warcraft_core.envelope import Envelope, success_envelope
 from warcraft_core.provider import ProviderSurface
 
@@ -91,22 +91,16 @@ def doctor_envelope() -> Envelope:
 
 def coming_soon_envelope(command: Literal["search", "resolve"], query: str) -> Envelope:
     """Structured stub for an advertised-but-unimplemented surface, so probing it is not a Click error."""
-    data = stub_data(
+    return stub_envelope(
+        provider=PROVIDER_NAME,
         surface=command,
         flag="coming_soon",
-        search_query=query,
+        query=query,
         message=(
             f"curseforge {command} is not implemented yet; addon lookup by slug or mod id is the "
             "first slice. Use `curseforge addon <slug-or-id>`."
         ),
         suggested_command="curseforge addon deadly-boss-mods",
-    )
-    return success_envelope(
-        provider=PROVIDER_NAME,
-        command=command,
-        kind=SEARCH_KIND if command == "search" else RESOLVE_KIND,
-        query=query,
-        data=data,
     )
 
 

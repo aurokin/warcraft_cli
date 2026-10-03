@@ -99,6 +99,24 @@ def test_search_faction_result_includes_faction_url(monkeypatch) -> None:
 
 
 
+def test_search_item_set_result_opens_with_entity_item_set(monkeypatch) -> None:
+    """Wowhead labels tier sets type 4, "Item Set" (live `battlegear of wrath`, 2026-10)."""
+
+    def fake_search(self, query: str):
+        return {
+            "search": query,
+            "results": [{"type": 4, "id": 218, "name": "Battlegear of Wrath", "typeName": "Item Set"}],
+        }
+
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.search_suggestions", fake_search)
+    result = runner.invoke(app, ["search", "battlegear of wrath", "--limit", "1"])
+    assert result.exit_code == 0
+
+    row = json.loads(result.stdout)["data"]["results"][0]
+    assert row["url"] == "https://www.wowhead.com/item-set=218"
+    assert row["follow_up"]["command"] == "wowhead entity item-set 218"
+
+
 def test_search_reranks_exact_name_match_ahead_of_noisy_popular_result(monkeypatch) -> None:
     def fake_search(self, query: str):
         return {
@@ -446,14 +464,14 @@ def test_resolve_confidence_never_calls_a_stale_guide_high() -> None:
     """An exact name with a clear margin is high confidence, unless the guide is marked stale."""
     fresh = {"ranking": {"score": 40, "match_reasons": ["exact_name"]}, "follow_up": OPENABLE}
     stale = {"ranking": {"score": 40, "match_reasons": ["exact_name", STALE_GUIDE_REASON]}, "follow_up": OPENABLE}
-    assert resolve_confidence([fresh], entity_types=()) == "high"
-    assert resolve_confidence([stale], entity_types=()) == "medium"
+    assert resolve_confidence([fresh], query="", entity_types=()) == "high"
+    assert resolve_confidence([stale], query="", entity_types=()) == "medium"
 
 
 def test_resolve_confidence_never_calls_a_row_without_a_command_high() -> None:
     """A world event matched exactly has no command to recommend, so it stays a medium candidate."""
     event = {"ranking": {"score": 40, "match_reasons": ["exact_name"]}, "follow_up": {"command": None, "surface": "none"}}
-    assert resolve_confidence([event], entity_types=()) == "medium"
+    assert resolve_confidence([event], query="", entity_types=()) == "medium"
 
 
 
@@ -832,16 +850,35 @@ def test_resolve_is_not_confident_in_a_row_that_holds_only_some_of_the_query_wor
     keystone = {"ranking": {"score": 46, "match_reasons": ["some_terms_match", "upstream_database_rank"]}, "follow_up": OPENABLE}
     runner_up = {"ranking": {"score": 32, "match_reasons": ["some_terms_match", "upstream_database_rank"]}, "follow_up": OPENABLE}
 
-    assert resolve_confidence([spell, guide], entity_types=()) == "medium"
-    assert resolve_confidence([keystone, runner_up], entity_types=()) == "medium"
+    assert resolve_confidence([spell, guide], query="", entity_types=()) == "medium"
+    assert resolve_confidence([keystone, runner_up], query="", entity_types=()) == "medium"
     # The same lead is confident when the top row holds every query word.
     whole = {"ranking": {"score": 46, "match_reasons": ["all_terms_match", "upstream_database_rank"]}, "follow_up": OPENABLE}
-    assert resolve_confidence([whole, runner_up], entity_types=()) == "high"
+    assert resolve_confidence([whole, runner_up], query="", entity_types=()) == "high"
     # Or when it is of the type the query names: live "resto druid guide" (2026-10), where "resto"
     # is in no title, led "Restoration Druid Healer Guide" 33 to 26.
     healer_guide = {"ranking": {"score": 33, "match_reasons": ["some_terms_match", "type_hint", "upstream_database_rank"]}, "follow_up": OPENABLE}
     rotation_guide = {"ranking": {"score": 26, "match_reasons": ["some_terms_match", "type_hint", "upstream_database_rank"]}, "follow_up": OPENABLE}
-    assert resolve_confidence([healer_guide, rotation_guide], entity_types=()) == "high"
+    assert resolve_confidence([healer_guide, rotation_guide], query="", entity_types=()) == "high"
+
+
+def test_resolve_is_not_confident_in_a_typed_row_that_lacks_a_number_the_query_names() -> None:
+    """Names, scores and reasons from live Wowhead resolves (2026-10): the type word gave each top row
+    `type_hint`, which used to excuse the missing season or tier number."""
+    reasons = ["some_terms_match", "type_hint", "upstream_database_rank"]
+
+    def row(name: str, score: int) -> dict:
+        return {"name": name, "ranking": {"score": score, "match_reasons": reasons}, "follow_up": OPENABLE}
+
+    season_2 = [row("Midnight Keystone Legend: Season 2", 56), row("Midnight Keystone Legend: Season 1", 42)]
+    lfr_tier = [
+        row("Sepulcher of the First Ones LFR Warrior Tier", 55),
+        row("Sepulcher of the First Ones Heroic Warrior Tier Lookalike", 41),
+    ]
+    assert resolve_confidence(season_2, query="keystone legend season 3 achievement", entity_types=()) == "medium"
+    assert resolve_confidence(lfr_tier, query="tier 2 warrior transmog", entity_types=()) == "medium"
+    # The number the row does hold keeps the type-hinted answer confident.
+    assert resolve_confidence(season_2, query="keystone legend season 2 achievement", entity_types=()) == "high"
 
 
 def test_a_type_word_wowhead_cannot_match_is_dropped_from_the_upstream_text(monkeypatch) -> None:

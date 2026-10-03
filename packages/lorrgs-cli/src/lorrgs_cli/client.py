@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from collections.abc import Callable
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 from warcraft_api.cache import CacheSettings, CacheTTLConfig, build_cache_store, load_prefixed_cache_settings_from_env
@@ -52,6 +54,22 @@ class LorrgsClientError(RuntimeError):
         super().__init__(message)
         self.code = code
         self.message = message
+
+
+def _segment(value: str) -> str:
+    """``value`` as one URL path segment. Lorrgs decodes ``%2F`` before routing, so quoting alone
+    does not stop ``spec ../../api/zones`` answering the zone list as a spec: a slash or a dot
+    segment is refused before any request, and the rest is quoted (``?``, ``#``, spaces)."""
+    if value in {"", ".", ".."} or "/" in value or "\\" in value:
+        raise LorrgsClientError("invalid_query", f"{value!r} is not a Lorrgs slug or report code.")
+    return quote(value, safe="")
+
+
+def _zone_segment(zone_id: float) -> str:
+    """A zone id as Lorrgs writes it (``53.1``, ``38``); nan or inf would request ``/api/zones/nan``."""
+    if not math.isfinite(zone_id):
+        raise LorrgsClientError("invalid_query", f"Zone id {zone_id} is not a finite number.")
+    return f"{zone_id:g}"
 
 
 class LorrgsClient:
@@ -133,31 +151,31 @@ class LorrgsClient:
         return self._get("/api/specs", ttl_seconds=self._static_ttl)
 
     def spec(self, spec_slug: str) -> dict[str, Any]:
-        return self._get(f"/api/specs/{spec_slug}", ttl_seconds=self._static_ttl)
+        return self._get(f"/api/specs/{_segment(spec_slug)}", ttl_seconds=self._static_ttl)
 
     def spec_spells(self, spec_slug: str) -> dict[str, Any]:
-        return self._get(f"/api/specs/{spec_slug}/spells", ttl_seconds=self._static_ttl)
+        return self._get(f"/api/specs/{_segment(spec_slug)}/spells", ttl_seconds=self._static_ttl)
 
     def zones(self) -> dict[str, Any]:
         return self._get("/api/zones", ttl_seconds=self._static_ttl)
 
     def season(self, season_slug: str = "current") -> dict[str, Any]:
-        return self._get(f"/api/seasons/{season_slug}", ttl_seconds=self._static_ttl)
+        return self._get(f"/api/seasons/{_segment(season_slug)}", ttl_seconds=self._static_ttl)
 
     def zone(self, zone_id: float) -> dict[str, Any]:
-        return self._get(f"/api/zones/{zone_id:g}", ttl_seconds=self._static_ttl)
+        return self._get(f"/api/zones/{_zone_segment(zone_id)}", ttl_seconds=self._static_ttl)
 
     def zone_bosses(self, zone_id: float) -> dict[str, Any]:
-        return self._get(f"/api/zones/{zone_id:g}/bosses", ttl_seconds=self._static_ttl)
+        return self._get(f"/api/zones/{_zone_segment(zone_id)}/bosses", ttl_seconds=self._static_ttl)
 
     def bosses(self) -> dict[str, Any]:
         return self._get("/api/bosses", ttl_seconds=self._static_ttl)
 
     def boss(self, boss_slug: str) -> dict[str, Any]:
-        return self._get(f"/api/bosses/{boss_slug}", ttl_seconds=self._static_ttl)
+        return self._get(f"/api/bosses/{_segment(boss_slug)}", ttl_seconds=self._static_ttl)
 
     def boss_spells(self, boss_slug: str) -> dict[str, Any]:
-        return self._get(f"/api/bosses/{boss_slug}/spells", ttl_seconds=self._static_ttl)
+        return self._get(f"/api/bosses/{_segment(boss_slug)}/spells", ttl_seconds=self._static_ttl)
 
     def spell(self, spell_id: int) -> dict[str, Any]:
         return self._get(f"/api/spells/{spell_id}", ttl_seconds=self._static_ttl)
@@ -174,7 +192,7 @@ class LorrgsClient:
         metric: str | None = None,
     ) -> dict[str, Any]:
         return self._get(
-            f"/api/spec_ranking/{spec_slug}/{boss_slug}",
+            f"/api/spec_ranking/{_segment(spec_slug)}/{_segment(boss_slug)}",
             params={"difficulty": difficulty, "metric": metric},
             ttl_seconds=self._ranking_ttl,
         )
@@ -188,7 +206,7 @@ class LorrgsClient:
         metric: str | None = None,
     ) -> dict[str, Any]:
         return self._get(
-            f"/api/spec_ranking/{spec_slug}/{boss_slug}/info",
+            f"/api/spec_ranking/{_segment(spec_slug)}/{_segment(boss_slug)}/info",
             params={"difficulty": difficulty, "metric": metric},
             ttl_seconds=self._ranking_ttl,
         )
@@ -204,7 +222,7 @@ class LorrgsClient:
         killtime_max: int = 0,
     ) -> dict[str, Any]:
         return self._get(
-            f"/api/comp_ranking/{boss_slug}",
+            f"/api/comp_ranking/{_segment(boss_slug)}",
             params={
                 "limit": limit,
                 "role": roles or None,
@@ -216,10 +234,10 @@ class LorrgsClient:
         )
 
     def user_report(self, report_id: str) -> dict[str, Any]:
-        return self._get(f"/api/user_reports/{report_id}")
+        return self._get(f"/api/user_reports/{_segment(report_id)}")
 
     def report_overview(self, report_id: str, *, refresh: bool = False) -> dict[str, Any]:
-        return self._get(f"/api/user_reports/{report_id}/load_overview", params={"refresh": refresh})
+        return self._get(f"/api/user_reports/{_segment(report_id)}/load_overview", params={"refresh": refresh})
 
     def user_report_fights(
         self,
@@ -230,7 +248,7 @@ class LorrgsClient:
         data_type: str | None = None,
     ) -> dict[str, Any]:
         return self._get(
-            f"/api/user_reports/{report_id}/fights",
+            f"/api/user_reports/{_segment(report_id)}/fights",
             params={"fight": fight, "player": player, "type": data_type},
             ttl_seconds=self._report_ttl,
             cacheable=_fights_loaded,

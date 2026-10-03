@@ -12,25 +12,12 @@ from warcraft_content.guide_page import WOWHEAD_LINK_RE, extract_talent_export_b
 from warcraft_content.html_sections import clean_text, extract_headings, extract_sections
 from warcraft_content.site_crawler import PageLink, PageRead
 from warcraft_core.identity import ability_identity_payload, build_reference_payload
+from warcraft_core.wow_specs import WOW_CLASS_NAMES, raiderio_class_slug
 
 ICY_VEINS_BASE_URL = "https://www.icy-veins.com"
 GUIDE_PATH_RE = re.compile(r"^/wow/(?P<slug>[^/?#]+)/?$")
 SITEMAP_ENTRY_RE = re.compile(r"<loc>(https://www\.icy-veins\.com/wow/[^<]+)</loc>\s*(?:<lastmod>([^<]*)</lastmod>)?")
-CLASS_HUB_SLUGS = {
-    "death-knight-guide",
-    "demon-hunter-guide",
-    "druid-guide",
-    "evoker-guide",
-    "hunter-guide",
-    "mage-guide",
-    "monk-guide",
-    "paladin-guide",
-    "priest-guide",
-    "rogue-guide",
-    "shaman-guide",
-    "warlock-guide",
-    "warrior-guide",
-}
+CLASS_HUB_SLUGS = frozenset(f"{raiderio_class_slug(class_key)}-guide" for class_key in WOW_CLASS_NAMES)
 ROLE_GUIDE_SLUGS = {
     "healing-guide",
 }

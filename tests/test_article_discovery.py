@@ -57,7 +57,7 @@ def test_article_candidate_builds_shared_shape() -> None:
     assert (row["kind"], row["id"]) == ("guide", "mistweaver-monk")
     assert row["ranking"]["score"] == 33
     assert row["follow_up"]["command"] == "method guide mistweaver-monk"
-    assert row["metadata"] == {"slug": "mistweaver-monk"}
+    assert row["metadata"] == {}
 
 
 def test_sort_article_candidates_orders_by_score_then_name() -> None:
@@ -83,6 +83,27 @@ def test_sort_article_candidates_orders_by_score_then_name() -> None:
     sort_article_candidates(rows)
 
     assert rows[0]["id"] == "a"
+
+
+def test_sort_article_candidates_breaks_score_ties_by_newest_lastmod_then_name_then_id() -> None:
+    """Method's sitemap rows usually carry no lastmod, so name decides which tied row is the match."""
+
+    def row(ref: str, name: str, lastmod: str | None = None) -> dict:
+        return article_candidate(
+            ref=ref,
+            name=name,
+            url=f"https://example.invalid/{ref}",
+            score=20,
+            reasons=["name_contains_query"],
+            provider="method",
+            metadata={"sitemap_lastmod": lastmod},
+        )
+
+    rows = [row("c", "Zeta Guide"), row("b2", "Alpha Guide"), row("dated", "Omega Guide", "2026-01-01"), row("b1", "Alpha Guide")]
+
+    sort_article_candidates(rows)
+
+    assert [candidate["id"] for candidate in rows] == ["dated", "b1", "b2", "c"]
 
 
 def test_article_search_and_resolve_payloads_keep_contract_shape() -> None:
@@ -227,8 +248,9 @@ def test_article_resolve_reports_low_confidence_for_a_tie_the_limit_hides() -> N
 
 def test_article_resolve_fallback_search_command_is_valid_shell() -> None:
     query = """kil'jaeden "raid" $HOME guide"""
+    match = article_candidate(ref="Kil'jaeden", name="Kil'jaeden", url="https://example.invalid/k", score=20, reasons=[], provider="warcraft-wiki")
     payload = article_resolve_payload(
-        provider_command="warcraft-wiki", query=query, search_query=query, matches=[], limit=5, resolved=False
+        provider_command="warcraft-wiki", query=query, search_query=query, matches=[match], limit=5, resolved=False
     )
 
     assert shlex.split(payload["fallback_search_command"]) == ["warcraft-wiki", "search", query]

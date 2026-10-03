@@ -102,11 +102,11 @@ narrower, **experimental** is thin and may change.
 
 - Prefer `resolve` when you want one conservative next command.
 - Prefer `search` when you want to inspect candidates across providers.
-- In every provider `search` / `resolve` payload (`warcraft <provider> search|resolve`), `count` is the rows returned, `total_matches` is every match the provider knows of (`null` on a `coming_soon` stub) and `truncated` says more exist. A provider `resolve` is `resolved` only at `high` confidence; an unresolved answer still names its top row in `match`, with `fallback_search_command` beside it.
+- In every provider `search` / `resolve` payload (`warcraft <provider> search|resolve`), `count` is the rows returned, `total_matches` is every match the provider knows of (`null` on a `coming_soon` stub) and `truncated` says more exist. A provider `resolve` is `resolved` only at `high` confidence; an unresolved answer still names its top row in `match`, with `fallback_search_command` beside it (`null` when nothing matched, and always `null` from Warcraft Logs, which matches only explicit report references).
 - A one-word query (`shadow`, `illidan`) resolves at `high` only when the word names the top match: its whole name, its head before a `,` or `:` (`thunderfury` for "Thunderfury, Blessed Blade of the Windseeker"), or a provider identity such as an exact wiki title, an expansion alias, or a spec word only one class has naming that spec's guide. Anything else comes back `medium` with `data.confidence_cap: {"rule": "single_word_query", "from": "high"}`, even when it is right ("Illidan Stormrage"): check `match` and run its `follow_up.command` yourself, or add a word.
-- An unresolved `warcraft resolve` has `match: null`: read `data.best_unresolved_candidate` (its `unresolved_reason`, `single_word_query_not_named_exactly` for the one-word rule, and `follow_up_command`) together with `data.fallback_search_command`. `warcraft search` keeps each provider's total in `data.merge_policy.provider_total_matches` (`null` for a stub or for a provider listed in `failed_providers`).
+- An unresolved `warcraft resolve` has `match: null`: read `data.best_unresolved_candidate` (its `unresolved_reason`, `single_word_query_not_named_exactly` for the one-word rule, and `follow_up_command`) together with `data.fallback_search_command`, and check `data.provider_resolved_candidates`: a provider answer resolved at `high` that a better-ranked unresolved match kept from being the answer, each with its `next_command`. `warcraft search` keeps each provider's total in `data.merge_policy.provider_total_matches` (`null` for a stub or for a provider listed in `failed_providers`).
 - Prefer `warcraft guild ...` for one guild's Raider.IO snapshot with normalized region/realm/name input (Oceanic realms are in region `us`; `oce` is read as `us`); `data.sources.raiderio` carries `summary` and `provenance` (use `warcraft raiderio guild` for the raw Raider.IO payload), and `summary.raids[]` carries each raid's normal/heroic/mythic world, region, and realm ranks. A rank of `0` means unranked at that difficulty, not first place, and Raider.IO only covers the current expansion.
-- Use `warcraft actor-profile <report-code> <name>` to hand a Warcraft Logs report actor to their Raider.IO profile. Pass `--fight-id` when you know it; without it the wrapper searches a bounded set of the report's fights (`query.fight_scope`).
+- Use `warcraft actor-profile <report-code-or-url> <name>` to hand a Warcraft Logs report actor to their Raider.IO profile. Pass `--fight-id` when you know it; without it the wrapper searches a bounded set of the report's fights (`query.fight_scope`).
 - Preserve provider provenance. `warcraft` is a router, not a source.
 - Use `warcraft guide-compare` when you already have exported guide bundles and want additive cross-provider evidence instead of a synthesized summary.
 - Use `warcraft guide-compare-query` when you want the wrapper to resolve, export, and compare guide candidates conservatively across supported guide providers.
@@ -125,7 +125,8 @@ narrower, **experimental** is thin and may change.
   cooldowns in P2"; it joins Lorrgs phase/spell/top-parse context with exact Warcraft Logs cast
   events for the selected actor and keeps both sources visible. For a report Lorrgs cannot serve,
   pass `--actor-id` and `--spec-slug` to get the Warcraft Logs half with
-  `data.lorrgs.status: "unavailable"`; without both flags the command fails naming them.
+  `data.lorrgs.status: "unavailable"` and phase windows from the Warcraft Logs fight
+  (`data.phase.source` names where they came from); without both flags the command fails naming them.
 - Typical packet flow:
   - `warcraftlogs report-player-talents <report> --fight-id <id> --actor-id <id> --out ./tmp/actor-packet.json`
   - `simc validate-talent-transport --build-packet ./tmp/actor-packet.json --out ./tmp/actor-packet-validated.json`

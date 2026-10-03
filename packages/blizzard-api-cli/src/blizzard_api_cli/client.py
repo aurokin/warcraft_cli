@@ -6,6 +6,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 from warcraft_api.cache import CacheSettings, CacheTTLConfig, build_cache_store, load_prefixed_cache_settings_from_env
@@ -374,7 +375,8 @@ class BlizzardClient:
         classic: bool = False,
         locale: str | None = None,
     ) -> dict[str, Any]:
-        if not name.strip():
+        # A name of only dots would be a dot segment that climbs the path, and must not be blank.
+        if not name.strip(" ."):
             raise BlizzardClientError("invalid_query", "Character name must not be blank.")
         routing = resolve_routing(
             region_input=region or self._default_region,
@@ -383,7 +385,9 @@ class BlizzardClient:
             locale=locale,
             namespace_class="profile",
         )
-        return self._get_realm_scoped(routing, realm, lambda realm_slug: f"/profile/wow/character/{realm_slug}/{name.lower()}")
+        # Quoted so a slash, ? or # in the name cannot reach another endpoint with the bearer token.
+        character = quote(name.lower(), safe="")
+        return self._get_realm_scoped(routing, realm, lambda realm_slug: f"/profile/wow/character/{realm_slug}/{character}")
 
 
 def verification_note(region: str | None = None) -> str:

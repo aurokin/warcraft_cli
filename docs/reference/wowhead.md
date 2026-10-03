@@ -85,7 +85,7 @@ Resolve a name or URL to the single most likely Wowhead entity plus a follow-up 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `--entity-type` | str (repeatable) |  | Restrict resolution to one or more entity types. Repeat or pass comma-separated values. |
-| `--limit` | int range [1<=x<=20] | 5 | Maximum fallback candidates to return. |
+| `--limit` | int range [1<=x<=20] | 5 | Maximum candidates to list; confidence is judged over all of them. |
 
 ## wowhead search
 
@@ -443,7 +443,7 @@ Fetch a Wowhead entity tooltip with optional comments and linked entities.
 | Argument | Type | Default | Description |
 | --- | --- | --- | --- |
 | `entity_type` | str |  | Wowhead entity type. Example: item, quest, npc. Omit with --url. |
-| `entity_id` | int |  | Wowhead entity id. Omit with --url. |
+| `entity_id` | int range [x>=1] |  | Wowhead entity id. Omit with --url. |
 
 **Options**
 
@@ -464,7 +464,7 @@ Fetch a Wowhead entity page with parsed metadata and its linked entities. Commen
 | Argument | Type | Default | Description |
 | --- | --- | --- | --- |
 | `entity_type` | str |  | Wowhead entity type. Example: item, quest, npc. Omit with --url. |
-| `entity_id` | int |  | Wowhead entity id. Omit with --url. |
+| `entity_id` | int range [x>=1] |  | Wowhead entity id. Omit with --url. |
 
 **Options**
 
@@ -483,7 +483,7 @@ Fetch and rank the comments on a Wowhead entity page.
 | Argument | Type | Default | Description |
 | --- | --- | --- | --- |
 | `entity_type` | str | required | Wowhead entity type. Example: item, quest, npc. |
-| `entity_id` | int | required | Wowhead entity id. |
+| `entity_id` | int range [x>=1] | required | Wowhead entity id. |
 
 **Options**
 
@@ -535,7 +535,7 @@ Build a linked-entity graph rooted at one Wowhead entity.
 | Argument | Type | Default | Description |
 | --- | --- | --- | --- |
 | `entity_type` | str | required | Root Wowhead entity type. Example: item, quest, npc. |
-| `entity_id` | int | required | Root Wowhead entity id. |
+| `entity_id` | int range [x>=1] | required | Root Wowhead entity id. |
 
 **Options**
 

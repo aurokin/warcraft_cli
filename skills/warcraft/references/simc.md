@@ -62,6 +62,7 @@
   - a profile with several actors reports the rest under `other_actors` (`actor_count` is the total), and a profile with profilesets (Top Gear / Droptimizer input) reports their ranked rows under `profilesets`
 - `simc run` returns SimC's headline lines under `result_lines`: each `Player:` / `Target:` header followed by its `DPS=` / `DTPS=` lines, so a `DTPS=` under `Target:` is the target's; its output previews are the last 20 lines
 - `sim` and `run` fail with `missing_binary` when the checkout has no built binary; run `simc build`
+- `sim` and `run` fail `invalid_query` (exit 2) on a profile SimC finds nothing to sim in (an empty file or no actor line) and `not_found` (exit 4) on a path that is not a file
 - `compare-apls` labels must be unique plain file names (they name the files each variant writes), otherwise it fails with `invalid_query`
 - `compare-apls` ranks variants on mean DPS, but `action_counts`, `action_cpm`, and `top_action_deltas` come from the one iteration SimC records an action sequence for; the payload states this under `sampling`, so present cast-rate differences as a single sampled fight, not as an average
 - `spec-files`, `find-action`, and `trace-action` need ripgrep; without it they fail with `missing_dependency` and `simc doctor` marks them `unavailable`. Pointed at a directory that is not a SimulationCraft checkout they fail with `not_found` (exit 4) rather than reporting zero hits

@@ -16,6 +16,8 @@ from typer.testing import CliRunner
 from warcraft_core.auth import load_provider_auth_state
 from warcraft_core.envelope import ENVELOPE_KEYS
 from warcraft_core.paths import provider_state_path
+from warcraft_core.provider import ProviderError
+from warcraftlogs_cli.boss_kills import matching_specs
 from warcraftlogs_cli.client import (
     CLASSIC_PROFILE,
     FRESH_PROFILE,
@@ -35,6 +37,7 @@ from warcraftlogs_cli.client import (
     resolve_site_profile,
 )
 from warcraftlogs_cli.main import app as warcraftlogs_app
+from warcraftlogs_cli.provider import PROVIDER
 
 
 def _build_jwt_with_scopes(scopes: list[str]) -> str:
@@ -1598,6 +1601,8 @@ def test_warcraftlogs_search_matches_explicit_report_reference() -> None:
         # A random code can look like capitalised words; in a report URL it is still the code.
         ("https://www.warcraftlogs.com/reports/QwErTyUiOpAsDfGh#fight=3", "report_encounter"),
         ("https://www.warcraftlogs.com/reports/JVFTxcKCqrvpaAzD?fight=4&type=damage-done", "report_encounter"),
+        # Localized hosts are real Warcraft Logs hosts.
+        ("https://de.warcraftlogs.com/reports/JVFTxcKCqrvpaAzD", "report"),
     ],
 )
 def test_warcraftlogs_search_and_resolve_accept_real_report_codes(reference: str, kind: str) -> None:
@@ -1615,6 +1620,73 @@ def test_warcraftlogs_resolve_does_not_read_a_sixteen_character_word_as_a_report
     # Real 16-character codes mix upper and lower case; a spec slug of that length is not a report.
     assert json.loads(runner.invoke(warcraftlogs_app, ["search", word]).stdout)["data"]["count"] == 0
     assert json.loads(runner.invoke(warcraftlogs_app, ["resolve", word]).stdout)["data"]["resolved"] is False
+
+
+@pytest.mark.parametrize(
+    ("command", "url"),
+    [
+        ("report", "https://www.warcraftlogs.com/reports/abcd1234#fight=1"),
+        ("report-fights", "https://www.warcraftlogs.com/reports/abcd1234#fight=1"),
+        ("report", "https://de.warcraftlogs.com/reports/abcd1234"),
+    ],
+)
+def test_warcraftlogs_report_commands_take_a_report_url(monkeypatch, command: str, url: str) -> None:
+    # A URL used to go to Warcraft Logs verbatim as the code and answer not_found for a report that exists.
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _FakeWarcraftLogsClient())
+
+    result = runner.invoke(warcraftlogs_app, [command, url])
+
+    assert result.exit_code == 0, result.output
+
+
+@pytest.mark.parametrize(("extra", "expected"), [([], [2]), (["--fight-id", "3"], [3])])
+def test_warcraftlogs_report_events_scopes_to_the_fight_a_report_url_names(monkeypatch, extra: list[str], expected: list[int]) -> None:
+    # `report-events '<url>#fight=2'` used to drop the fight and fail missing_scope; an explicit --fight-id still wins.
+    sent: list[list[int] | None] = []
+
+    class _EventsClient(_FakeWarcraftLogsClient):
+        def report_events(self, *, code: str, allow_unlisted: bool = False, options: ReportFilterOptions) -> dict[str, object]:
+            sent.append(options.fight_ids)
+            return {"code": code, "events": {"data": [], "nextPageTimestamp": None}}
+
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _EventsClient())
+    runner.invoke(
+        warcraftlogs_app,
+        ["report-events", "https://www.warcraftlogs.com/reports/abcd1234#fight=2", "--data-type", "casts", *extra],
+    )
+
+    assert sent == [expected]
+
+
+@pytest.mark.parametrize(
+    "reference",
+    ["", "  ", "\U0001f642", "https://www.warcraftlogs.com.evil.com/reports/abcd1234", "https://classic.warcraftlogs.com/reports/abcd1234"],
+)
+def test_warcraftlogs_report_rejects_a_reference_that_is_not_a_report_on_the_selected_site(monkeypatch, reference: str) -> None:
+    def no_client(ctx: object) -> None:
+        raise AssertionError("no request may be made")
+
+    monkeypatch.setattr("warcraftlogs_cli.main._client", no_client)
+
+    result = runner.invoke(warcraftlogs_app, ["report", reference])
+
+    assert result.exit_code == 2, result.output
+    assert json.loads(result.stderr)["error"]["code"] == "invalid_query"
+
+
+def test_warcraftlogs_resolve_does_not_resolve_a_report_url_on_a_foreign_host() -> None:
+    result = runner.invoke(warcraftlogs_app, ["resolve", "https://www.warcraftlogs.com.evil.com/reports/JVFTxcKCqrvpaAzD#fight=1"])
+
+    assert json.loads(result.stdout)["data"]["resolved"] is False
+
+
+@pytest.mark.parametrize("query", ["", "  "])
+def test_warcraftlogs_search_and_resolve_reject_an_empty_query(query: str) -> None:
+    # An unset shell variable used to answer ok with the discovery hint, unlike every other provider.
+    for surface in (PROVIDER.search, PROVIDER.resolve):
+        with pytest.raises(ProviderError) as raised:
+            surface(query)
+        assert raised.value.code == "invalid_query"
 
 
 def test_warcraftlogs_search_includes_selected_site_in_follow_up() -> None:
@@ -2870,7 +2942,13 @@ def test_warcraftlogs_kill_time_distribution_buckets_are_shares_of_the_cohort(mo
 
 @pytest.mark.parametrize(
     ("spec_name", "matched", "ambiguous"),
-    [("Frost", ["Icy", "Rime"], True), ("Frost Mage", ["Icy"], False), ("frost-death-knight", ["Rime"], False)],
+    [
+        ("Frost", ["Icy", "Rime"], True),
+        ("Frost Mage", ["Icy"], False),
+        ("frost-death-knight", ["Rime"], False),
+        ("deathknight-frost", ["Rime"], False),
+        ("fdk", ["Rime"], False),
+    ],
 )
 def test_warcraftlogs_spec_filter_takes_class_and_spec_and_flags_a_bare_spec_on_two_classes(
     monkeypatch, spec_name: str, matched: list[str], ambiguous: bool
@@ -2883,6 +2961,12 @@ def test_warcraftlogs_spec_filter_takes_class_and_spec_and_flags_a_bare_spec_on_
     data = json.loads(result.stdout)["data"]
     assert [player["name"] for player in data["kills"][0]["matching_players"]] == matched
     assert any("more than one class (DeathKnight, Mage)" in note for note in data["notes"]) is ambiguous
+
+
+@pytest.mark.parametrize(("spec_name", "matched"), [("Combat", True), ("combat-rogue", True), ("bm", False), ("Assassination", False)])
+def test_warcraftlogs_spec_filter_matches_a_classic_spec_the_retail_table_lacks(spec_name: str, matched: bool) -> None:
+    rogue = {"type": "Rogue", "specs": [{"spec": "Combat"}]}
+    assert bool(matching_specs(rogue, spec_name)) is matched
 
 
 def test_warcraftlogs_boss_spec_usage_counts_same_named_specs_of_different_classes_apart(monkeypatch) -> None:
@@ -3440,7 +3524,16 @@ def test_warcraftlogs_encounter_rankings_derives_page_offset_ranks(monkeypatch) 
 
 @pytest.mark.parametrize(
     ("class_name", "spec_name"),
-    [("death-knight", "frost"), ("Death Knight", "Frost"), ("DeathKnight", "frost"), ("hunter", "beast-mastery"), ("Hunter", "BeastMastery")],
+    [
+        ("death-knight", "frost"),
+        ("Death Knight", "Frost"),
+        ("DeathKnight", "frost"),
+        ("dk", "frost"),
+        ("hunter", "beast-mastery"),
+        ("Hunter", "BeastMastery"),
+        ("hunter", "bm"),
+        ("hunter", "hunter-beastmastery"),
+    ],
 )
 def test_warcraftlogs_encounter_rankings_sends_warcraft_logs_class_and_spec_slugs(
     monkeypatch, class_name: str, spec_name: str
@@ -3460,10 +3553,55 @@ def test_warcraftlogs_encounter_rankings_sends_warcraft_logs_class_and_spec_slug
     )
 
     expected_spec = "Frost" if spec_name.lower() == "frost" else "BeastMastery"
-    assert sent == [("DeathKnight" if "eath" in class_name else "Hunter", expected_spec)]
+    assert sent == [("Hunter" if class_name.lower() == "hunter" else "DeathKnight", expected_spec)]
 
 
-@pytest.mark.parametrize(("spec_name", "expected"), [("beast-mastery", "BeastMastery"), ("devourer", "Devourer")])
+@pytest.mark.parametrize(
+    ("spec_name", "expected"),
+    [
+        ("bm hunter", ("Hunter", "BeastMastery")),
+        ("hunter-beastmastery", ("Hunter", "BeastMastery")),
+        ("fdk", ("DeathKnight", "Frost")),
+        # A bare spec several classes share names no class; Warcraft Logs then asks for one itself.
+        ("frost", (None, "Frost")),
+    ],
+)
+def test_warcraftlogs_encounter_rankings_takes_the_class_a_spec_spelling_names(
+    monkeypatch, spec_name: str, expected: tuple[str | None, str]
+) -> None:
+    # Warcraft Logs needs a className with a specName: `--spec-name 'bm hunter'` alone answered
+    # "Invalid class and spec specified." (live 2026-10-03).
+    sent: list[tuple[str | None, str | None]] = []
+
+    class _SlugClient(_FakeWarcraftLogsClient):
+        def encounter_rankings(self, *, encounter_id: int, options: EncounterRankingsOptions) -> dict[str, object]:
+            sent.append((options.class_name, options.spec_name))
+            return {"id": encounter_id, "name": "Dimensius, the All-Devouring", "characterRankings": {"rankings": []}}
+
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _SlugClient())
+    runner.invoke(warcraftlogs_app, ["encounter-rankings", "--zone-id", "38", "--boss-id", "3012", "--spec-name", spec_name])
+
+    assert sent == [expected]
+
+
+def test_warcraftlogs_encounter_rankings_rejects_a_spec_of_another_class_before_any_request(monkeypatch) -> None:
+    def no_client(ctx: object) -> None:
+        raise AssertionError("no request may be made")
+
+    monkeypatch.setattr("warcraftlogs_cli.main._client", no_client)
+    result = runner.invoke(
+        warcraftlogs_app,
+        ["encounter-rankings", "--zone-id", "38", "--boss-id", "3012", "--class-name", "mage", "--spec-name", "bm hunter"],
+    )
+
+    assert result.exit_code == 2, result.output
+    assert json.loads(result.stderr)["error"]["code"] == "invalid_query"
+
+
+@pytest.mark.parametrize(
+    ("spec_name", "expected"),
+    [("beast-mastery", "BeastMastery"), ("devourer", "Devourer"), ("bm hunter", "BeastMastery"), ("ret", "Retribution")],
+)
 def test_warcraftlogs_character_rankings_sends_the_warcraft_logs_spec_slug(
     monkeypatch, spec_name: str, expected: str
 ) -> None:
@@ -5005,6 +5143,26 @@ def test_warcraftlogs_graphql_loads_query_from_stdin(monkeypatch) -> None:
 
     assert result.exit_code == 0
     assert captured["query"] == "query FromStdin { rateLimitData { pointsResetIn } }"
+
+
+@pytest.mark.parametrize("source", ["stdin", "file"])
+def test_warcraftlogs_graphql_rejects_a_query_that_is_not_utf8(tmp_path, source: str) -> None:
+    query_file = tmp_path / "bad.graphql"
+    query_file.write_bytes(b"query \xff { x }")
+    query = "-" if source == "stdin" else f"@{query_file}"
+
+    result = runner.invoke(warcraftlogs_app, ["graphql", "--query", query], input=b"query \xff { x }")
+
+    assert result.exit_code == 2, result.output
+    assert json.loads(result.stderr)["error"]["code"] == "invalid_query"
+
+
+@pytest.mark.parametrize("value", ["nan", "inf", "1e400"])
+def test_warcraftlogs_float_options_reject_values_json_cannot_carry(value: str) -> None:
+    result = runner.invoke(warcraftlogs_app, ["reports", "--start-time", value, "--guild-region", "us"])
+
+    assert result.exit_code == 2, result.output
+    assert "is not a finite number" in result.output
 
 
 def test_warcraftlogs_graphql_introspection_uses_named_operation(monkeypatch) -> None:

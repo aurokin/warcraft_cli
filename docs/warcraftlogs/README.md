@@ -56,8 +56,16 @@ warcraftlogs --site fresh expansions
 ```
 
 A report code exists only on its own site. A report URL names the site by its host, so `resolve`
-and `search` put that site's `--site` in the follow-up command, and the `report-encounter*`
-commands fail with `invalid_query` (exit 2) when the URL's site is not the selected `--site`.
+and `search` put that site's `--site` in the follow-up command, and the report commands fail with
+`invalid_query` (exit 2) when the URL's site is not the selected `--site`.
+
+Every report command (`report`, `report-fights`, `report-events`, the `report-encounter*` family and
+the rest) takes a report URL or a bare report code. A URL's `#fight=N` or `?fight=N` scopes the
+commands that take `--fight-id` when the flag is absent; an explicit `--fight-id` wins. Localized hosts (`de.warcraftlogs.com`,
+`ko.classic.warcraftlogs.com`) work; when the host names no site (`de.`), the selected `--site`
+applies. An empty or malformed reference, or a URL whose host is not `warcraftlogs.com` or one of
+its subdomains, is `invalid_query` (exit 2) before any request; `search` and
+`resolve` reject an empty query the same way.
 
 The `warcraft` wrapper maps its expansion vocabulary to these profiles: `retail` -> `retail`;
 `classic`, `tbc`, `wotlk`, `cata`, `mop-classic` -> `classic`; `fresh` -> `fresh`. `ptr`, `beta`,
@@ -104,7 +112,13 @@ CLI rejects one locally with `invalid_query` (exit 2): an unknown `encounter-ran
 an unknown `character-rankings --spec-name` on the retail site, and a `--guild-name`,
 `--guild-region` or `--guild-realm` given without the other two on `reports` and the sampled
 commands. The spec list is retail's, so `--site classic` and `--site fresh` pass a spec through
-(Combat exists there).
+(Combat exists there). `--class-name` and `--spec-name` read any provider's spelling and the shared
+shorthand (`Death Knight`, `death-knight`, `dk`; `Beast Mastery`, `hunter-beastmastery`, `bm`,
+`bm hunter`) and send Warcraft Logs' own `DeathKnight`/`BeastMastery`. Warcraft Logs needs a class
+with a spec on `encounter-rankings`, so a spec spelling that names one class (`bm hunter`, `fdk`,
+`ret`) supplies it when `--class-name` is absent; a bare `frost` still needs `--class-name`, and a
+`--spec-name` of another class than `--class-name` is `invalid_query` (exit 2). Float flags (`--start-time`,
+`--ability-id`, `--kill-time-min` and the rest) reject `nan` and `inf` as `invalid_argument` (exit 2).
 
 Auth: `auth status`, `auth client`, `auth token`, `auth login`, `auth pkce-login`, `auth whoami`,
 `auth logout`.
@@ -234,7 +248,7 @@ final once it ends, and the listing puts the most recently updated reports first
 `report_finished`, and `sample.live_report_count` / `sample.finished_report_count` split the listing.
 
 `--spec-name` filters sampled kills by participant spec before aggregation; it does not turn the
-query into a spec leaderboard. It takes the class too (`'Frost Mage'`), because a bare spec name
+query into a spec leaderboard. It takes the class too (`'Frost Mage'`, `deathknight-frost`, `fdk`), because a bare spec name
 matches every class with that spec (see `SCOPING.md`). On the retail site a name that is no spec,
 or a class with no such spec (`'Frost Rogue'`), is `invalid_query` (exit 2) instead of an empty
 cohort; `boss-spec-usage` rows are keyed by class and

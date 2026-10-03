@@ -50,7 +50,7 @@ def search(
 def resolve(
     ctx: typer.Context,
     query: str = typer.Argument(..., help="Free-text query to resolve to a single Icy Veins guide."),
-    limit: int = typer.Option(5, "--limit", min=1, max=50, help="Maximum candidates to inspect."),
+    limit: int = typer.Option(5, "--limit", min=1, max=50, help="Maximum candidates to list; ambiguity is judged over all of them."),
 ) -> None:
     """Resolve a free-text query to the best Icy Veins guide, with the candidate list attached."""
     _emit_surface(ctx, lambda: provider.resolve(query, limit=limit))

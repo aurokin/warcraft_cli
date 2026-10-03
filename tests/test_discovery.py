@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from warcraft_core.discovery import discovery_row, plain_word, resolve_data, search_data, single_word_named, stub_data
+from warcraft_core.discovery import discovery_row, plain_word, resolve_data, search_data, single_word_named, stub_envelope
 
 from tests.discovery_contract import resolve_data_violations, search_data_violations
 
@@ -91,8 +91,13 @@ def test_resolve_data_rejects_answers_that_break_the_invariants() -> None:
 
 
 @pytest.mark.parametrize("surface", ["search", "resolve"])
-def test_stub_data_is_an_empty_flagged_answer_with_an_unknown_total(surface: Any) -> None:
-    data = stub_data(surface=surface, flag="coming_soon", search_query="probe", message="Not yet.", suggested_command="probe item 1")
+def test_stub_envelope_is_an_empty_flagged_answer_with_an_unknown_total(surface: Any) -> None:
+    envelope = stub_envelope(
+        provider="probe", surface=surface, flag="coming_soon", query="probe", message="Not yet.", suggested_command="probe item 1"
+    )
+    data = envelope["data"]
+
+    assert (envelope["command"], envelope["kind"]) == (surface, "search_results" if surface == "search" else "resolve_match")
 
     rows = data["results"] if surface == "search" else data["candidates"]
     assert rows == [] and data["count"] == 0

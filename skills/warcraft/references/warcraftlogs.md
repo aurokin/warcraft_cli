@@ -5,7 +5,7 @@ Use `warcraftlogs` when the user needs official Warcraft Logs API data instead o
 Best fits:
 - guild progression from the official source
 - character identity lookups on the log platform
-- report and fight inspection by report code
+- report and fight inspection by report code or report URL
 - world metadata like regions, servers, zones, and encounters
 
 ## Start Here
@@ -67,6 +67,8 @@ Best fits:
 ## Current Boundaries
 
 - site profile selection is explicit: `warcraftlogs --site retail|classic|fresh ...`
+- every report command takes a report URL (localized hosts such as `de.warcraftlogs.com` included) or a bare report code; anything else (empty, a non-Warcraft Logs host) is `invalid_query` (exit 2) before a request
+- a URL's `#fight=N` scopes `report-events`, `report-table`, `report-graph`, `report-player-details` and `report-rankings` when `--fight-id` is absent; an explicit `--fight-id` wins
 - a report code only exists on its own site: `resolve`/`search` on a `classic.` or `fresh.` report URL return a follow-up command with that `--site`, and the `report-encounter*` commands fail with `invalid_query` (exit 2) when the URL's site is not the selected `--site`
 - `server`, `guild*` (except `guild-reports`), `character` and `character-rankings` take a realm in any spelling (`Azjol-Nerub`, `azjolnerub`, `Mal'Ganis`) and try each slug spelling; `reports`/`guild-reports`, `--guild-realm` and `encounter-rankings --server-slug` send one slug, so pass the slug `server` reports (`azjolnerub`)
 - public OAuth client credentials are the default auth mode
@@ -121,10 +123,11 @@ Best fits:
   - `warcraftlogs character us illidan Roguecane`
 - character rankings, when the API allows them:
   - `warcraftlogs character-rankings us illidan Roguecane --zone-id 38 --difficulty 5 --metric dps --size 20`
-  - `--spec-name` takes any spelling (`beast-mastery`, `Beast Mastery`); Warcraft Logs would otherwise ignore it and return another spec's rankings, so on the retail site an unknown spec is `invalid_query` (exit 2); `--site classic`/`fresh` pass it through (Combat exists there)
+  - `--spec-name` takes any provider's spelling or shorthand (`Beast Mastery`, `beast-mastery`, `hunter-beastmastery`, `bm`, `bm hunter`); Warcraft Logs would otherwise ignore it and return another spec's rankings, so on the retail site an unknown spec is `invalid_query` (exit 2); `--site classic`/`fresh` pass it through (Combat exists there)
 - encounter rankings for real boss/class/spec leaderboard queries:
   - `warcraftlogs encounter-rankings --zone-id 46 --boss-id 3180 --difficulty 5 --class-name Druid --spec-name Balance --metric dps --top 10`
-  - `--class-name`/`--spec-name` take any spelling (`death-knight`, `Death Knight`, `beast-mastery`); the CLI sends Warcraft Logs' own `DeathKnight`/`BeastMastery`, and an unknown `--class-name` is `invalid_query` (exit 2) because Warcraft Logs would answer it unfiltered
+  - `--class-name`/`--spec-name` take any provider's spelling or shorthand (`death-knight`, `Death Knight`, `dk`, `beast-mastery`, `bm`); the CLI sends Warcraft Logs' own `DeathKnight`/`BeastMastery`, and an unknown `--class-name` is `invalid_query` (exit 2) because Warcraft Logs would answer it unfiltered
+  - Warcraft Logs needs a class with a spec here: a spec spelling that names one class (`bm hunter`, `fdk`, `ret`) supplies it, a bare `frost` or `holy` needs `--class-name`, and a spec of another class than `--class-name` is `invalid_query` (exit 2)
 - guild report listing:
   - `warcraftlogs reports --guild-region us --guild-realm illidan --guild-name Liquid --limit 10`
   - pass all three guild flags or none, here and on the sampled commands; a partial guild scope is `invalid_query` (exit 2) because Warcraft Logs drops it and lists every guild's reports
@@ -210,7 +213,7 @@ Best fits:
 - `boss-kills`, `top-kills`, and `kill-time-distribution` are sampled cross-report analytics, not a promise that the CLI searched every possible public report
 - `boss-kills` and `top-kills` do accept `--spec-name`, but on those sampled commands the filter means "keep sampled kills whose participants included that spec", not "return spec rankings"
 - `boss-spec-usage` is also sampled cross-report analytics; it reports spec presence within the filtered finished-kill cohort, not a site-wide meta snapshot; each row is one `class_name` + `spec_name` + `role`, so Frost Mage and Frost Death Knight are counted apart
-- `--spec-name` on sampled commands takes the class too (`'Frost Mage'`, `frost-death-knight`); a bare spec name matches every class with that spec, and when it matched several the payload lists them in `sample.matched_spec_classes` and adds a note; on the retail site a name that is no spec, or a class without that spec (`'Frost Rogue'`), is `invalid_query` (exit 2) instead of an empty cohort
+- `--spec-name` on sampled commands takes the class too (`'Frost Mage'`, `frost-death-knight`, `deathknight-frost`, `fdk`); a bare spec name matches every class with that spec, and when it matched several the payload lists them in `sample.matched_spec_classes` and adds a note; on the retail site a name that is no spec, or a class without that spec (`'Frost Rogue'`), is `invalid_query` (exit 2) instead of an empty cohort
 - `comp-samples` is sampled cross-report analytics too; it returns sampled kill rosters plus additive class-presence and exact class-signature summaries for that filtered cohort
 - `spec-kill-samples` is the participant-cohort sibling of `boss-kills`: it requires `--spec-name`, returns the fastest sampled kills that contained that spec, and reports `sample.truncation_order` so the returned head is never mistaken for a random sample or a spec leaderboard
 - `ability-usage-summary` is sampled cross-report analytics too; it reports explicit cast counts for one requested `--ability-id` across the filtered finished-kill cohort; a kill whose events overflow `--event-limit` is counted in `sample.kills_with_truncated_events_count`, and `usage.total_casts_is_lower_bound` then says the totals are floors; it counts player-side casts only, so a boss ability reads zero (use `report-encounter-casts --hostility-type enemies` for boss casts)

@@ -238,7 +238,7 @@ def _ranked_candidates(client: LorrgsClient, query: str) -> list[dict[str, Any]]
     candidates.extend(_spec_candidate(spec, known_terms) for spec in top_specs)
     candidates.extend(_boss_candidate(boss, known_terms) for boss in top_bosses)
     candidates = _dedupe_candidates(candidates)
-    candidates.sort(key=lambda row: (-_score(row), KIND_ORDER.get(str(row.get("kind")), 9), str(row.get("name") or "")))
+    candidates.sort(key=lambda row: (-row["ranking"]["score"], KIND_ORDER.get(str(row.get("kind")), 9), str(row.get("name") or "")))
     return candidates
 
 
@@ -582,16 +582,6 @@ def _suggested_commands() -> list[str]:
     ]
 
 
-def _score(candidate: dict[str, Any] | None) -> int:
-    ranking = candidate.get("ranking") if isinstance(candidate, dict) else None
-    if not isinstance(ranking, dict):
-        return 0
-    try:
-        return int(ranking.get("score") or 0)
-    except (TypeError, ValueError):
-        return 0
-
-
 def _unambiguous(best: dict[str, Any], results: list[dict[str, Any]]) -> bool:
     """The top candidate resolves only when it accounts for the whole query and has no equal rival.
 
@@ -600,8 +590,7 @@ def _unambiguous(best: dict[str, Any], results: list[dict[str, Any]]) -> bool:
     Two candidates of one kind that matched equally well but name different entities are the real
     ambiguity ("frost <boss>" is Frost Mage and Frost Death Knight), and those must not be guessed.
     """
-    ranking = best.get("ranking")
-    if isinstance(ranking, dict) and ranking.get("unmatched_terms"):
+    if best["ranking"].get("unmatched_terms"):
         return False
     strength = _match_strength(best)
     entities = _entities(best)
@@ -613,9 +602,7 @@ def _unambiguous(best: dict[str, Any], results: list[dict[str, Any]]) -> bool:
 
 
 def _match_strength(candidate: dict[str, Any]) -> tuple[str, tuple[str, ...]]:
-    ranking = candidate.get("ranking")
-    if not isinstance(ranking, dict):
-        return "", ()
+    ranking = candidate["ranking"]
     return str(ranking.get("match_level") or ""), tuple(ranking.get("matched_terms") or ())
 
 

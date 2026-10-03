@@ -4449,6 +4449,30 @@ def test_run_returns_the_result_lines_and_the_end_of_the_output(monkeypatch, tmp
     assert payload["data"]["stdout_truncated"] is True
 
 
+@pytest.mark.parametrize("command", ["run", "sim"])
+def test_a_profile_simc_finds_nothing_to_sim_in_is_a_usage_error(monkeypatch, tmp_path: Path, command: str) -> None:
+    """SimC exits 0 on an empty profile after printing `Nothing to sim!`; `run` called that completed."""
+    banner = "Nothing to sim! SimulationCraft 1210-01 for World of Warcraft 12.1.0.69933 Live\n"
+    monkeypatch.setattr(
+        "simc_cli.main.run_profile",
+        lambda paths, profile_path, simc_args: CommandResult(command=[], cwd=None, returncode=0, stdout=banner, stderr=""),
+    )
+    monkeypatch.setattr("simc_cli.main.binary_version", lambda _paths: type("V", (), {"version_line": "SimulationCraft 1210-01"})())
+    profile = tmp_path / "empty.simc"
+    profile.write_text("")
+
+    exit_code, payload = _invoke(tmp_path, command, str(profile))
+
+    assert (exit_code, payload["error"]["code"]) == (2, "invalid_query")
+
+
+@pytest.mark.parametrize("command", ["run", "sim"])
+def test_a_directory_is_no_profile(tmp_path: Path, command: str) -> None:
+    exit_code, payload = _invoke(tmp_path, command, str(tmp_path))
+
+    assert (exit_code, payload["error"]["code"]) == (4, "not_found")
+
+
 def test_first_cast_removes_its_log_dir_when_a_run_fails(monkeypatch, tmp_path: Path) -> None:
     temp = tmp_path / "tmp"
     temp.mkdir()
@@ -4624,6 +4648,23 @@ def test_simc_sim_bad_input_is_a_usage_error(monkeypatch, tmp_path: Path, args: 
 
     assert result.exit_code == 2
     assert json.loads(result.stderr)["error"]["code"] == "invalid_query"
+
+
+def test_simc_sim_does_not_wait_on_a_terminal_for_a_profile(monkeypatch, tmp_path: Path) -> None:
+    """With no profile and a terminal on stdin, `simc sim` waited forever for input nobody typed."""
+
+    class Terminal:
+        def isatty(self) -> bool:
+            return True
+
+        def read(self) -> str:
+            raise AssertionError("read a terminal")
+
+    monkeypatch.setattr(simc_main, "sys", type("Sys", (), {"stdin": Terminal()})())
+
+    exit_code, payload = _invoke(tmp_path, "sim")
+
+    assert (exit_code, payload["error"]["code"]) == (2, "invalid_query")
 
 
 def test_simc_inspect_rejects_a_binary_file(tmp_path: Path) -> None:

@@ -48,10 +48,12 @@ warcraft-wiki article-query ./tmp/wiki-createframe "arguments" --kind sections
 Every payload is a shared envelope: `ok`, `provider`, `command`, `kind`, `schema_version`, `query`, `provenance`,
 `data`, and `error` on failure, and nothing else at the top level: every payload field is under `data`.
 
-Exit codes follow `docs/foundation/ERROR_CONTRACT.md`: 1 generic (unreadable bundle, invalid cache config, a
-MediaWiki error code with no shared meaning, passed through verbatim), 2 usage (including `invalid_argument` for an
-unsupported `article-query --kind`, a bundle path that is a file or an `article-export --out` that is a file, and
-`invalid_query` for a blank query or title on any command that takes one, rejected before any request), 3 auth (upstream 401/403), 4 not found (the wiki has no such page, no
+Exit codes follow `docs/foundation/ERROR_CONTRACT.md`: 1 generic (unreadable bundle, invalid cache config, and
+`api_error` for a MediaWiki error code with no shared meaning, with the raw code, when the wiki sent one, in `error.details.mediawiki_code`),
+2 usage (including `invalid_argument` for an unsupported `article-query --kind`, a bundle path that is a file or an
+`article-export --out` that is a file, and `invalid_query` for a blank query or title on any command that takes one,
+rejected before any request, or one the wiki can never accept: a title with a character titles cannot hold (`a|b`),
+a `Special:` page, or a search longer than 300 characters), 3 auth (upstream 401/403), 4 not found (the wiki has no such page, no
 `api`/`event` page matches the query, or the bundle directory does not exist), 5 network or upstream failure
 (including `rate_limited` for MediaWiki's `ratelimited`, and `upstream_error` for `maxlag`, `readonly`, or a body that
 is not JSON). An HTTP failure says `Warcraft Wiki request failed with status <code>` with `details.status_code` and

@@ -264,9 +264,12 @@ def test_cooldown_packet_joins_a_report_fight_to_lorrgs_top_parses(require):
         "warcraftlogs_report_fights": "warcraftlogs",
         "warcraftlogs_report_events": "warcraftlogs",
     }
-    # The Lorrgs roster names the player, so the Warcraft Logs roster is listed but never read.
-    assert set(data["sources"]) == {*expected_sources, "warcraftlogs_report_player_details"}, result.describe()
-    assert data["sources"]["warcraftlogs_report_player_details"]["status"] == "not_requested", result.describe()
+    # The Lorrgs roster names the player and Lorrgs supplies the phases, so the Warcraft Logs roster
+    # and phase transitions are listed but never read.
+    unread = {"warcraftlogs_report_player_details", "warcraftlogs_phase_transitions"}
+    assert set(data["sources"]) == {*expected_sources, *unread}, result.describe()
+    assert {data["sources"][key]["status"] for key in unread} == {"not_requested"}, result.describe()
+    assert data["phase"]["source"] == "lorrgs", result.describe()
     for key, provider in expected_sources.items():
         source = data["sources"][key]
         assert source["status"] == "ok", result.describe()
@@ -368,16 +371,20 @@ def test_cooldown_packet_degrades_when_lorrgs_has_not_cached_the_report(require)
     assert lorrgs["status"] == "unavailable", result.describe()
     assert lorrgs["reason"] == "lorrgs_fight_lookup_failed", result.describe()
     assert lorrgs["source"]["code"] == "not_found", result.describe()
-    assert "phase_windows" in lorrgs["missing"], result.describe()
 
-    # The phase the caller asked for was not applied, and the packet says so rather than showing
-    # an empty P1 window.
+    # Without Lorrgs the phases come from the Warcraft Logs fight's transitions; a fight without any
+    # leaves the phase unapplied, and the packet says so rather than showing an empty P1 window.
     phase = data["phase"]
-    assert phase["status"] == "unavailable", result.describe()
     assert phase["requested"] == 1, result.describe()
-    assert phase["selected"] is None, result.describe()
-    assert phase["windows"] == [], result.describe()
-    assert any("no phase windows" in note for note in data["notes"]), result.describe()
+    assert data["sources"]["warcraftlogs_phase_transitions"]["status"] == "ok", result.describe()
+    if phase["windows"]:
+        assert (phase["status"], phase["source"]) == ("ready", "warcraftlogs"), result.describe()
+        assert phase["selected"] == phase["windows"][0] and phase["selected"]["label"] == "P1", result.describe()
+        assert "phase_windows" not in lorrgs["missing"], result.describe()
+    else:
+        assert (phase["status"], phase["source"], phase["selected"]) == ("unavailable", None, None), result.describe()
+        assert "phase_windows" in lorrgs["missing"], result.describe()
+        assert any("--phase was not applied" in note for note in data["notes"]), result.describe()
 
     # The Warcraft Logs half is intact: the flags supplied what Lorrgs would have.
     assert result.payload["query"]["report_code"] == found.code, result.describe()
@@ -396,14 +403,15 @@ def test_cooldown_packet_degrades_when_lorrgs_has_not_cached_the_report(require)
     casts = data["cooldowns"]["player_casts"]
     assert casts["tracked_cast_count"] > 0, "the degraded packet returned no Warcraft Logs casts"
     assert casts["tracked_cast_count"] == len(casts["tracked_casts"]), result.describe()
-    assert casts["selected_phase_casts"] == [], result.describe()
+    if not phase["windows"]:
+        assert casts["selected_phase_casts"] == [], result.describe()
 
     sources = data["sources"]
     assert sources["lorrgs_user_report_fights"]["status"] == "error", result.describe()
     assert sources["warcraftlogs_report_events"]["status"] == "ok", result.describe()
     assert sources["warcraftlogs_report_player_details"]["status"] == "ok", result.describe()
     assert sources["lorrgs_spec_spells"]["status"] == "ok", result.describe()
-    # The notes describe only what the packet holds: there are no phase windows to explain here.
+    # The notes describe only what the packet holds: no Lorrgs phase windows to explain here.
     assert not any("Phase windows are derived" in note for note in data["notes"]), result.describe()
     # --boss-slug stands in for the boss Lorrgs would have named, so the top parses are still compared,
     # unless the kill is on a difficulty Lorrgs does not rank (it ranks Heroic and Mythic only).

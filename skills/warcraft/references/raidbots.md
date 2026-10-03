@@ -34,7 +34,8 @@ SimC input to local `simc`. It cannot queue or run simulations.
   never shortened by `--compact`) plus suggested `simc` commands (run the full profile with `simc sim -`,
   which also ranks Top Gear profilesets, or decode/describe the talents)
 - use `explain-input` when the user pastes a `/simc` addon block and asks "what would Raidbots do with this?"
-  — it classifies the sim type (quick sim vs Top Gear/Droptimizer vs advanced) entirely offline
+  — it classifies the sim type (quick sim vs Top Gear/Droptimizer vs advanced) entirely offline; text
+  with no SimC `key=value` line fails `invalid_query` instead of being classified as advanced
 
 ## Boundaries
 

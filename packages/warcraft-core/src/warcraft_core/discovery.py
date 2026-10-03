@@ -7,7 +7,9 @@ keys beside that core.
 
 ``count`` is always the length of the list beside it, ``total_matches`` is how many matches the
 provider knows exist, and ``truncated`` says there are more than the list holds. A resolve answer is
-``resolved`` exactly when its confidence is ``high``, and only then carries a ``next_command``.
+``resolved`` exactly when its confidence is ``high``, and only then carries a ``next_command``; an
+unresolved answer with a ``match`` carries the provider's ``fallback_search_command``, and one with no
+match carries none, since that search would come back just as empty.
 
 A one-word query is answered at ``high`` only by a row that word names (see ``resolve_data``).
 """
@@ -17,6 +19,8 @@ from __future__ import annotations
 import re
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Final, Literal
+
+from warcraft_core.envelope import Envelope, success_envelope
 
 SEARCH_KIND: Final = "search_results"
 RESOLVE_KIND: Final = "resolve_match"
@@ -44,14 +48,25 @@ def _folded(text: str) -> str:
     return " ".join(re.sub(r"['\u2019]", "", text.casefold()).split())
 
 
-def single_word_named(word: str, name: str) -> bool:
-    """Whether ``word`` names ``name``: the whole name, or its head before the first ',' or ':'.
+def title_match(query: str, name: str) -> Literal["exact", "title_prefix"] | None:
+    """Whether ``query`` names ``name``: the whole name (``exact``), its head before the first ',' or
+    ':' (``title_prefix``), or neither.
 
-    Apostrophes and case are ignored, so "karesh" names "K'aresh". "illidan" does not name
-    "Illidan Stormrage", nor "shadow" "In the Catalyst's Shadow".
+    Apostrophes, case and spacing are ignored, so "karesh" names "K'aresh". "illidan" does not name
+    "Illidan Stormrage", nor "shadow" "In the Catalyst's Shadow". The providers' one-word rule and
+    the wrapper's ranking both use this one test.
     """
-    folded = _folded(word)
-    return bool(folded) and folded in {_folded(name), _folded(_TITLE_HEAD_SEPARATOR.split(name, maxsplit=1)[0])}
+    folded = _folded(query)
+    if not folded:
+        return None
+    if folded == _folded(name):
+        return "exact"
+    return "title_prefix" if folded == _folded(_TITLE_HEAD_SEPARATOR.split(name, maxsplit=1)[0]) else None
+
+
+def single_word_named(word: str, name: str) -> bool:
+    """Whether ``word`` names ``name`` (``title_match``)."""
+    return title_match(word, name) is not None
 
 
 def _single_word_capped(
@@ -161,7 +176,7 @@ def resolve_data(
         "confidence": confidence,
         "match": match,
         "next_command": next_command,
-        "fallback_search_command": None if resolved else fallback_search_command,
+        "fallback_search_command": None if resolved or match is None else fallback_search_command,
         "count": page["count"],
         "total_matches": page["total_matches"],
         "truncated": page["truncated"],
@@ -169,20 +184,28 @@ def resolve_data(
     }
 
 
-def stub_data(
+def stub_envelope(
     *,
+    provider: str,
     surface: Literal["search", "resolve"],
     flag: Literal["coming_soon", "not_supported"],
-    search_query: str | None,
+    query: str,
     message: str,
     suggested_command: str,
-) -> dict[str, Any]:
-    """The empty ``search``/``resolve`` data of a surface a provider does not offer, flagged as such.
+) -> Envelope:
+    """The ``search``/``resolve`` envelope of a surface a provider does not offer: empty data, flagged as such.
 
+    A caller probing the advertised surface gets this instead of Click's "No such command".
     ``total_matches`` is null: the provider cannot know how many matches exist.
     """
     if surface == "search":
-        data = search_data(search_query=search_query, ranked=[], limit=0)
+        data = search_data(search_query=query, ranked=[], limit=0)
     else:
-        data = resolve_data(search_query=search_query, ranked=[], limit=0, confidence="none", fallback_search_command=None)
-    return {**data, "total_matches": None, flag: True, "message": message, "suggested_command": suggested_command}
+        data = resolve_data(search_query=query, ranked=[], limit=0, confidence="none", fallback_search_command=None)
+    return success_envelope(
+        provider=provider,
+        command=surface,
+        kind=SEARCH_KIND if surface == "search" else RESOLVE_KIND,
+        query=query,
+        data={**data, "total_matches": None, flag: True, "message": message, "suggested_command": suggested_command},
+    )

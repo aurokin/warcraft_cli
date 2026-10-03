@@ -6,6 +6,7 @@ import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pytest
 from wowhead_cli.main import app
 from wowhead_cli.wowhead_client import WowheadClient
 
@@ -1017,3 +1018,25 @@ def test_guide_bundle_search_reports_the_matches_its_limit_cut_off(tmp_path: Pat
     assert data["count"] == len(data["matches"]) == 2
     assert data["total_matches"] == 3
     assert data["truncated"] is True
+
+
+def test_guide_bundle_list_skips_a_sibling_whose_manifest_is_not_utf8(tmp_path: Path) -> None:
+    root = tmp_path / "wowhead_exports"
+    write_bundle_fixture(root, dir_name="guide-3143-frost", guide_id=3143, title="Frost Death Knight DPS Guide")
+    (root / "corrupt").mkdir()
+    (root / "corrupt" / "manifest.json").write_bytes(b"\xff\xfe\xff")
+
+    result = runner.invoke(app, ["guide-bundle-list", "--root", str(root)])
+    assert result.exit_code == 0, result.output
+    assert [row["guide_id"] for row in json.loads(result.stdout)["data"]["bundles"]] == [3143]
+
+
+@pytest.mark.parametrize("command", ["guide-query", "guide-bundle-query", "guide-bundle-search"])
+def test_guide_bundle_queries_refuse_a_blank_query(tmp_path: Path, command: str) -> None:
+    root = tmp_path / "wowhead_exports"
+    bundle_dir = write_bundle_fixture(root, dir_name="guide-3143-frost", guide_id=3143, title="Frost Death Knight DPS Guide")
+    target = [str(bundle_dir), "  "] if command == "guide-query" else ["  ", "--root", str(root)]
+
+    result = runner.invoke(app, [command, *target])
+    assert result.exit_code == 2, result.output
+    assert json.loads(result.stderr)["error"] == {"code": "invalid_query", "message": "Query cannot be empty."}

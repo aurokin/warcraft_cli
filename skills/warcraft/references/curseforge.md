@@ -26,6 +26,9 @@ against the live API; `provenance.verified` is `true`.
 
 - `addon` returns `data.metadata` (the raw mod record), `data.latest_files`, and `data.changelog`
   for the newest file in one call
+- `data.latest_files` is newest first by `fileDate` and mixes game flavors and release types: for
+  "the current version", take the first row with `releaseType` 1 (release; 2 beta, 3 alpha) whose
+  `gameVersions` match the flavor asked about, not row 0
 - a numeric argument is treated as a mod id and validated to be a WoW project; a non-numeric
   argument is matched to the exact addon slug, so a near-miss returns `addon_not_found` rather than
   the wrong addon

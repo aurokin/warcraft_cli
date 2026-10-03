@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
+import pytest
 from warcraft_content.article_bundle import compare_article_bundles, load_article_bundle
 from wowhead_cli.expansion_profiles import resolve_expansion
 from wowhead_cli.guides import (
@@ -326,6 +327,48 @@ def test_guide_command_supports_full_wowhead_url(monkeypatch) -> None:
     assert payload["data"]["guide"]["lookup_url"] == guide_url
     assert payload["data"]["comments"]["top"] == []
 
+
+
+@pytest.mark.parametrize(
+    "ref",
+    [
+        "https://www.wowhead.com/",
+        "https://www.wowhead.com/items",
+        "https://www.wowhead.com/item=19019",
+        "classic/item=19019",
+        # Category listings belong to `guides`.
+        "https://www.wowhead.com/guides/classes",
+        "guides/raids",
+    ],
+)
+def test_guide_command_refuses_a_wowhead_page_that_is_not_a_guide(monkeypatch, ref: str) -> None:
+    def no_request(self, *args, **kwargs):
+        raise AssertionError("a non-guide ref must not be fetched")
+
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.page_html", no_request)
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.guide_page_html", no_request)
+    result = runner.invoke(app, ["guide", ref])
+
+    assert result.exit_code == 2, result.output
+    assert json.loads(result.stderr)["error"]["code"] == "invalid_argument"
+
+
+@pytest.mark.parametrize(
+    "ref",
+    [
+        "https://www.wowhead.com/classic/guide/classes/warrior/fury-dps",
+        "guide/classes/warrior/fury-dps",
+        "wotlk/guide/raids",
+        "https://www.wowhead.com/de/guide/classes/death-knight/frost/overview-pve-dps",
+        "https://www.wowhead.com/classic/de/guide=3143",
+    ],
+)
+def test_guide_command_accepts_every_guide_path_form(monkeypatch, ref: str) -> None:
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.page_html", lambda self, page_url: SAMPLE_GUIDE_HTML)
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.guide_page_html", lambda self, guide_id: SAMPLE_GUIDE_HTML)
+    result = runner.invoke(app, ["guide", ref, "--comment-sample", "0"])
+
+    assert result.exit_code == 0, result.output
 
 
 def test_guide_follow_up_commands_quote_the_guide_ref(monkeypatch) -> None:

@@ -42,10 +42,13 @@ authoritative, and use Lorrgs for its prebuilt aggregation.
   while Warcraft Logs supplies exact player cast events
 - `cooldown-packet` needs Lorrgs to have cached the report, which most guild and private reports
   are not. Pass `--actor-id` and `--spec-slug` and it still returns the Warcraft Logs half with
-  `data.lorrgs.status: "unavailable"`, `data.phase.status: "unavailable"`, a null
-  `data.phase.selected`, and the player's casts intact. `data.lorrgs.message` names the reason and
-  only says "no cached copy" for a `not_found`; a timeout or transport failure says so instead.
-  Without both flags there is nothing left to build, so the command fails and names them
+  `data.lorrgs.status: "unavailable"` and the player's casts intact. Phase windows then come from
+  the Warcraft Logs fight's phase transitions (`data.phase.source: "warcraftlogs"`): windows are
+  numbered P1, P2, ... in order as on the Lorrgs path, each with the encounter
+  phase's `phase_id` and `name`. A fight without phase transitions leaves
+  `data.phase.status: "unavailable"` and a null `data.phase.selected`. `data.lorrgs.message` names
+  the reason and only says "no cached copy" for a `not_found`; a timeout or transport failure says
+  so instead. Without both flags there is nothing left to build, so the command fails and names them
 - `cooldown-packet` top-parse samples often lack phase markers: those samples have
   `phase_available: false` (`phase_unavailable_reason: "top_parse_has_no_phase_markers"`) and are
   left out of `selected_phase_spell_frequency`; when no sample has the phase,

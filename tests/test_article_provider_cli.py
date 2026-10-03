@@ -16,6 +16,7 @@ from raidbots_cli.main import app as raidbots_app
 from typer.testing import CliRunner
 from warcraft_content.site_crawler import FetchResult
 from warcraft_core.envelope import ENVELOPE_KEYS
+from warcraft_wiki_cli.main import app as warcraft_wiki_app
 
 from tests.cli_testkit import apply_provider_stubs
 
@@ -137,6 +138,18 @@ def test_every_command_emits_only_the_envelope_keys(
     payload = json.loads(result.stdout)
     assert (payload["ok"], payload["command"]) == (True, command)
     assert set(payload) == ENVELOPE_KEYS - {"error"}
+
+
+@pytest.mark.parametrize(
+    ("app", "command"),
+    [(icy_veins_app, "guide-query"), (method_app, "guide-query"), (warcraft_wiki_app, "article-query")],
+)
+def test_bundle_query_rejects_a_blank_query_before_reading_the_bundle(app: typer.Typer, command: str) -> None:
+    failure = CliRunner().invoke(app, [command, "/nonexistent/bundle", "  "])
+
+    assert failure.exit_code == 2
+    error = json.loads(failure.stderr)["error"]
+    assert (error["code"], error["message"]) == ("invalid_query", "Query cannot be empty.")
 
 
 @pytest.mark.parametrize(

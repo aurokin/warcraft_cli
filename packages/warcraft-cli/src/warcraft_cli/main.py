@@ -374,23 +374,33 @@ def _unresolved_reason(top: dict[str, Any]) -> str:
     return "provider_did_not_resolve"
 
 
-def _unresolved_next_steps(ranked: list[dict[str, Any]], *, resolved: bool) -> dict[str, Any]:
+def _unresolved_next_steps(candidates: list[dict[str, Any]], *, resolved: bool) -> dict[str, Any]:
     """What an agent should do next when the top-ranked candidate is not a resolved answer.
 
     Providers that decline to resolve still report a best candidate and their own
     ``fallback_search_command``; without these the wrapper's resolve is a dead end even when a
-    provider clearly found the thing. ``ranked`` holds only the providers that returned a match, in
-    ranking order, so a provider that found nothing never hands over a search certain to come back
-    empty. ``best_unresolved_candidate`` is the top-ranked candidate and names why it is not the answer.
+    provider clearly found the thing. ``candidates`` holds only the providers that returned a match,
+    so a provider that found nothing never hands over a search certain to come back empty. They are
+    in ranking order with the matches their provider rated ``low`` moved to the end: the wrapper
+    skipped those guesses for the answer, so ``best_unresolved_candidate`` (which names why it is not
+    the answer) and the first fallback search come from the match that blocked it, and a low guess
+    leads only when every match is low. A match its provider resolved but a better-ranked unresolved
+    match blocked is listed in ``provider_resolved_candidates`` with its ``next_command``, because a
+    resolved answer has no fallback search.
     """
     if resolved:
-        return {"fallback_search_command": None, "fallback_search_commands": [], "best_unresolved_candidate": None}
+        return {
+            "fallback_search_command": None,
+            "fallback_search_commands": [],
+            "best_unresolved_candidate": None,
+            "provider_resolved_candidates": [],
+        }
     fallbacks = [
         {"provider": as_dict(row.get("match")).get("provider"), "command": command}
-        for row in ranked
+        for row in candidates
         if isinstance(command := row.get("fallback_search_command"), str) and command.strip()
     ]
-    top = ranked[0] if ranked else None
+    top = candidates[0] if candidates else None
     best = compact_resolve_match(top)
     if best is not None and top is not None:
         best["resolved"] = False
@@ -399,6 +409,7 @@ def _unresolved_next_steps(ranked: list[dict[str, Any]], *, resolved: bool) -> d
         "fallback_search_command": fallbacks[0]["command"] if fallbacks else None,
         "fallback_search_commands": fallbacks,
         "best_unresolved_candidate": best,
+        "provider_resolved_candidates": [compact_resolve_match(row) for row in candidates[1:] if row.get("resolved")],
     }
 
 
@@ -607,7 +618,8 @@ def resolve(
 
     The answer is the candidate `warcraft search` would rank first, skipping any its own provider
     rated `low`, and only when that provider resolved it at `high` confidence; otherwise the command
-    reports `resolved: false` with the top-ranked candidate as `best_unresolved_candidate`.
+    reports `resolved: false` with the top-ranked remaining candidate as `best_unresolved_candidate`
+    and lists any lower match a provider resolved under `provider_resolved_candidates`.
     """
     _require_query(ctx, query)
     requested_expansion = _requested_expansion(ctx)
@@ -642,6 +654,7 @@ def resolve(
     # A match its own provider rated low (a tie it could not break, a weak guess) never stands in
     # front of another provider's answer; a medium one still does: it found something unconfirmed.
     contenders = [row for row in ranked if confidence_rank(row.get("confidence")) > confidence_rank("low")]
+    skipped = [row for row in ranked if row not in contenders]
     top = contenders[0] if contenders else None
     best = top if top is not None and resolve_answer_accepted(top) else None
     match = compact_resolve_match(best) if brief else as_dict(best).get("match")
@@ -660,7 +673,7 @@ def resolve(
         "next_command": as_dict(best).get("next_command"),
         "confidence": as_dict(best).get("confidence"),
         **_fanout_health(providers),
-        **_unresolved_next_steps(ranked, resolved=best is not None),
+        **_unresolved_next_steps([*contenders, *skipped], resolved=best is not None),
         "providers": [] if brief else providers,
     }
     if ranking_debug:
@@ -696,9 +709,11 @@ def guild(
 @app.command("actor-profile")
 def actor_profile(
     ctx: typer.Context,
-    code: str = typer.Argument(..., help="Warcraft Logs report code."),
+    code: str = typer.Argument(..., help="Warcraft Logs report URL or report code."),
     name: str = typer.Argument(..., help="Character (actor) name within the report."),
-    fight_id: int | None = typer.Option(None, "--fight-id", help="Narrow to one fight (makes the log actor identity canonical)."),
+    fight_id: int | None = typer.Option(
+        None, "--fight-id", help="Narrow to one fight (makes the log actor identity canonical). Defaults to fight=<id> from the URL."
+    ),
     region: str | None = typer.Option(None, "--region", help="Override the actor region for the Raider.IO lookup."),
     allow_unlisted: bool = typer.Option(False, "--allow-unlisted", help="Allow lookup of unlisted Warcraft Logs reports."),
 ) -> None:

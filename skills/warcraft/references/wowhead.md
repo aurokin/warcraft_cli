@@ -26,6 +26,13 @@
 - prefer `entity` first, then `entity-page` only when you need fuller linked-entity context; both
   include the page's relation tabs (a zone's NPCs and quests, a faction's members) as
   `source_kind: "listview"` links, and both take `--url <Wowhead entity URL>` in place of `<type> <id>`
+  (not both)
+- tier sets ("battlegear of wrath") come back as `item-set` rows; open one with `entity item-set <id>`
+- `tooltip.text` spells out money units (`87s 50c`) and names a currency cost (`Cost: 180 Darkmoon
+  Prize Ticket`), so quote prices from it as written
+- `guide` takes a guide id or a `/guide/...` or `guide=<id>` URL (locale URLs such as `/de/guide/...`
+  too); any other Wowhead page is `invalid_argument`, and a `/guides/<category>` listing is read
+  with `guides <category>`
 - use `comments` when you need more than the default embedded comment slice
 - use `guides <category>` when the guide family is known but the exact guide is not
 - use `guide-full` or `guide-export` when you need the raw guide body plus additive `analysis_surfaces` for comparison-oriented workflows
@@ -51,8 +58,8 @@
   are left out of the window and counted in `scan.unparsed_timestamps`
 - `resolve --entity-type` covers the types Wowhead's suggestion endpoint labels; mounts, recipes,
   and battle pets are not among them and come back as items, spells, or NPCs
-- read `count` as the rows you were given and `total_matches` / `total` as what the limit cut off;
-  raise `--limit` when `truncated` is true
+- read `count` as the rows you were given and `total_matches` / `total` as every match before the
+  limit; raise `--limit` when `truncated` is true
 - guides far older than the freshest guide in the same response carry `stale_guide` in
   `ranking.match_reasons` and are listed after every current row that matches the query as closely;
   a retired guide leads only when it matches more closely than every current row (its exact title,

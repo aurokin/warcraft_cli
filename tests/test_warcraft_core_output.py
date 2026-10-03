@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 from warcraft_core.output import (
     OutputProjectionError,
@@ -7,6 +9,7 @@ from warcraft_core.output import (
     filter_payload_fields,
     normalize_field_paths,
     resolve_output_options,
+    to_json,
 )
 
 
@@ -74,3 +77,11 @@ def test_resolve_output_options_rejects_a_profile_outside_the_presets(profile: s
     """The message enumerates every accepted preset, so it must not name one the CLI no longer has."""
     with pytest.raises(ValueError, match=r"^--profile must be one of: agent, human$"):
         resolve_output_options(profile=profile)
+
+
+@pytest.mark.parametrize("pretty", [False, True])
+def test_to_json_writes_an_integer_beyond_64_bits(pretty: bool) -> None:
+    """A query echoes the parsed parameters, so a 20-digit id must not turn the answer into an internal error."""
+    payload = {"ok": False, "query": {"entity_id": 99999999999999999999}, "error": {"code": "not_found"}}
+
+    assert json.loads(to_json(payload, pretty=pretty)) == payload

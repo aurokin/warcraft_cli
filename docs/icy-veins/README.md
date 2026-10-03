@@ -60,8 +60,8 @@ Every command emits the shared envelope (`ok`, `provider`, `command`, `kind`, `s
 `data`.
 
 Exit codes follow `docs/foundation/ERROR_CONTRACT.md`: 1 generic, 2 usage, 4 guide not found,
-5 network/upstream failure. A blank `search` or `resolve` query fails with `invalid_query` (exit 2)
-before any request. A page whose article container no longer matches (an Icy Veins layout change),
+5 network/upstream failure. A blank `search`, `resolve` or `guide-query` query fails with
+`invalid_query` (exit 2) before any request. A page whose article container no longer matches (an Icy Veins layout change),
 or whose canonical link is not a guide page, fails with `parse_failed` and exit 1 rather than
 returning an empty article with `ok:true`. So does a sitemap that lists no guide pages (a challenge
 page or a reshaped sitemap); that body is not cached. `guide-full` and `guide-export` of a spec guide
@@ -209,10 +209,12 @@ share the word, so `shadow` lists the Shadow Priest guide before the Shadow Encl
 same or nearly the same score, so a spec name that
 several classes share (`frost`, `holy`, `protection`, `restoration`) stays unresolved; add the class.
 A one-word query resolves only to a page that word names: the page it titles (`druid` for
-`Druid Guide`, a raid titled by its name), the zone, dungeon or delve page for it (`k'aresh` for
-`karesh-zone-guide`), or the spec guide of a spec word only one class has (`shadow`). Any other top
+`Druid Guide`, a raid titled by its name), the zone, dungeon or delve page for it (`harandar` for
+`harandar-zone-guide`), or the spec guide of a spec word only one class has (`shadow`). Any other top
 page (`thunderfury` for the Thunderfury transmog guide, `legion` for the Legion Remix guide) stays the
 `match` at `confidence: "medium"` with `confidence_cap: {"rule": "single_word_query", "from": "high"}`.
+A page the word names still needs a clear lead: `k'aresh` names `karesh-zone-guide`, but
+`karesh-trust-renown-guide` scores close behind it, so it stays unresolved at `medium`.
 An unresolved `resolve` reports `confidence: "low"` when its top candidates tie on score and
 `"medium"` otherwise. `search` and `resolve` report `count` as the rows returned, `total_matches` as
 every match, and `truncated: true` when `--limit` cut the list. Every row carries `provider`,
@@ -307,7 +309,10 @@ partial, blocked or unavailable run read is merged too, but a blocked or unavail
 index's previous `refreshed_at` (so its age warning stands), and a run that read nothing writes
 nothing. A seed page that lists no links (a layout change) fails as
 `parse_failed` (exit 1) and leaves the index untouched; an unreachable seed fails as `network_error`
-(exit 5).
+(exit 5). A data directory the index cannot be written to (`XDG_DATA_HOME` pointing at a file, say)
+fails as `invalid_data_dir` (exit 1) with the index path in `error.details.path` before the crawl
+fetches anything. A write that fails after the crawl (a full disk) fails the same way; the pages the
+run read are in the page cache, so a rerun with a usable directory does not fetch them again.
 
 Each row holds `slug`, `url`, `title` (the JSON-LD headline), `date_published`, `date_modified`,
 `parent` (breadcrumb parent slug), `source` (how the crawl first found it: `seed`, `menu`, `page` or

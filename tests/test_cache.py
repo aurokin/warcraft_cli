@@ -56,6 +56,21 @@ def test_file_cache_lookups_are_recorded_with_the_hit_age_from_the_entry_mtime(t
     assert (block["oldest_hit_age_seconds"], block["oldest_hit_ttl_seconds"]) == (120, 600)
 
 
+def test_a_truncated_cache_entry_is_a_miss_and_is_deleted(tmp_path: Path) -> None:
+    """A half-written entry must not fail every command that reads it until the cache is cleared by hand."""
+    entry = tmp_path / "search_suggestions" / "abc123.json"
+    entry.parent.mkdir(parents=True)
+    entry.write_text('{"expires_at":', encoding="utf-8")
+
+    with cache_ledger() as ledger:
+        assert FileCacheStore(tmp_path).get("search_suggestions:abc123") is None
+
+    assert not entry.exists()
+    block = ledger.provenance()
+    assert block is not None
+    assert (block["lookups"], block["hits"]) == (1, 0)
+
+
 def test_redis_cache_store_uses_prefix_and_roundtrips() -> None:
     class FakeRedisClient:
         def __init__(self) -> None:

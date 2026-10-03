@@ -92,7 +92,9 @@ def test_realm_command_envelope_and_provenance(monkeypatch: pytest.MonkeyPatch) 
     assert payload["data"]["slug"] == "illidan"
 
 
-@pytest.mark.parametrize("args", [["realm", ""], ["realm", " "], ["character", "", "Imonthegcd"], ["character", "illidan", " "]])
+@pytest.mark.parametrize(
+    "args", [["realm", ""], ["realm", " "], ["character", "", "Imonthegcd"], ["character", "illidan", " "], ["character", "illidan", ".."]]
+)
 def test_blank_realm_or_name_is_a_usage_error_without_a_request(monkeypatch: pytest.MonkeyPatch, args: list[str]) -> None:
     # Live 2026-10-02: `blizzard realm ""` fetched /data/wow/realm/, the realm index, as a realm.
     token_calls = _install_recorder(monkeypatch)
@@ -100,6 +102,24 @@ def test_blank_realm_or_name_is_a_usage_error_without_a_request(monkeypatch: pyt
     assert result.exit_code == 2, result.output
     assert json.loads(result.stderr)["error"]["code"] == "invalid_query"
     assert token_calls == []
+
+
+def test_character_name_stays_one_path_segment(monkeypatch: pytest.MonkeyPatch) -> None:
+    # `character illidan x/../../../../data/wow/realm/illidan` used to request the realm endpoint.
+    requested: list[str] = []
+
+    def _fake(client: Any, url: str, *, method: str = "GET", **kwargs: Any) -> _FakeResponse:
+        if url.endswith("/token"):
+            return _FakeResponse({"access_token": "fake-token", "expires_in": 3600}, url)
+        requested.append(url)
+        return _FakeResponse(_fixture_for_url(url), url)
+
+    monkeypatch.setattr(client_module, "request_with_retries", _fake)
+    runner.invoke(app, ["character", "illidan", "x/../../../../data/wow/realm/illidan"])
+
+    assert [url.split(".api.blizzard.com")[1] for url in requested] == [
+        "/profile/wow/character/illidan/x%2F..%2F..%2F..%2F..%2Fdata%2Fwow%2Frealm%2Fillidan"
+    ]
 
 
 def test_item_command_uses_static_namespace(monkeypatch: pytest.MonkeyPatch) -> None:

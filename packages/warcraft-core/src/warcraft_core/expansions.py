@@ -55,7 +55,9 @@ def normalize_expansion_key(value: str) -> str:
 
 
 def resolve_expansion(value: str | None) -> Expansion:
-    if value is None or value.strip() == "":
+    """The named expansion, or retail when none is named. A blank name is unknown, not retail:
+    ``--expansion ""`` would otherwise switch on retail filtering the caller never asked for."""
+    if value is None:
         return _BY_KEY["retail"]
     key = _ALIAS_TO_KEY.get(normalize_expansion_key(value))
     if key is None:

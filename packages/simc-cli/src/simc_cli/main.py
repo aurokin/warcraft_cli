@@ -100,7 +100,15 @@ from simc_cli.repo import (
     validate_repo,
 )
 from simc_cli.report import load_sim_report, sim_report_payload, summarize_sim_report
-from simc_cli.run import binary_provenance, binary_version, build_repo, repo_git_status, run_profile, sync_repo
+from simc_cli.run import (
+    CommandResult,
+    binary_provenance,
+    binary_version,
+    build_repo,
+    repo_git_status,
+    run_profile,
+    sync_repo,
+)
 from simc_cli.search import MissingRipgrepError, UnknownClassError, find_action, spec_file_search
 from simc_cli.sim import first_action_hits, run_first_casts, summarize_first_casts
 from simc_cli.talent_transport import validate_talent_tree_transport
@@ -2653,14 +2661,17 @@ def _sim_profile_input(ctx: typer.Context, *, profile_path: str | None, profile_
         written = _write_temp_profile(source_name="simc-profile-text", text=profile_text)
         return _SimProfileInput(path=written, source="profile_text", cleanup_paths=[written])
     if profile_path is None or profile_path == "-":
+        if sys.stdin.isatty():
+            # Reading a terminal would wait for input nobody is going to type.
+            fail(ctx, "invalid_query", "Provide a profile path, --profile-text, or pipe a profile into stdin.")
         stdin_text = sys.stdin.read()
         if not stdin_text.strip():
             fail(ctx, "invalid_query", "Provide a profile path, --profile-text, or pipe a profile into stdin.")
         written = _write_temp_profile(source_name="simc-stdin", text=stdin_text)
         return _SimProfileInput(path=written, source="stdin", cleanup_paths=[written])
     resolved = Path(profile_path).expanduser().resolve()
-    if not resolved.exists():
-        fail(ctx, "not_found", f"Profile not found: {resolved}")
+    if not resolved.is_file():
+        fail(ctx, "not_found", f"Profile file not found: {resolved}")
     return _SimProfileInput(path=resolved, source="file", cleanup_paths=[])
 
 
@@ -2723,12 +2734,24 @@ def _sim(
         _unlink_all(profile.cleanup_paths)
 
 
+def _fail_if_nothing_to_sim(ctx: typer.Context, result: CommandResult, previews: dict[str, Any]) -> None:
+    """SimC exits 0 on a profile with no actor (an empty file) after printing ``Nothing to sim!``."""
+    if result.stdout.lstrip().startswith("Nothing to sim!"):
+        fail(
+            ctx,
+            "invalid_query",
+            "SimulationCraft found nothing to sim: the profile defines no actor.",
+            details={"command": result.command, **previews},
+        )
+
+
 def _run_sim(
     ctx: typer.Context, paths: RepoPaths, profile: _SimProfileInput, *, preset: str, json_out: str | None, overrides: _SimOverrides
 ) -> None:
     json_path = _sim_json_report_path(json_out, profile.cleanup_paths)
     result = run_profile(paths, profile.path, simc_args=_sim_engine_args(overrides, json_path=json_path))
     previews = output_previews(result.stdout, result.stderr)
+    _fail_if_nothing_to_sim(ctx, result, previews)
     if result.returncode != 0:
         fail(
             ctx,
@@ -3433,12 +3456,13 @@ def run_command(
     """Run a profile through the local SimC binary with raw SimC arguments."""
     paths = _repo_paths(ctx)
     resolved = Path(profile_path).expanduser().resolve()
-    if not resolved.exists():
-        fail(ctx, "not_found", f"Profile not found: {resolved}")
+    if not resolved.is_file():
+        fail(ctx, "not_found", f"Profile file not found: {resolved}")
     _require_binary(ctx, paths)
     result = run_profile(paths, resolved, simc_args=list(simc_arg))
     previews = output_previews(result.stdout, result.stderr)
     version_line = binary_version(paths).version_line
+    _fail_if_nothing_to_sim(ctx, result, previews)
     if result.returncode != 0:
         fail(
             ctx,

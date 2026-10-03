@@ -4,27 +4,14 @@ import re
 import shlex
 from typing import Any
 
+from warcraft_core.identity import normalize_actor_class
+from warcraft_core.wow_specs import WOW_CLASS_NAMES
+
 # Local-only classification of SimulationCraft addon / profile text. raidbots must
 # not import simc_cli (provider independence), so the suggested local commands below
 # are emitted as plain strings for the agent / wrapper to run.
 
-_WOW_CLASSES = frozenset(
-    {
-        "deathknight",
-        "demonhunter",
-        "druid",
-        "evoker",
-        "hunter",
-        "mage",
-        "monk",
-        "paladin",
-        "priest",
-        "rogue",
-        "shaman",
-        "warlock",
-        "warrior",
-    }
-)
+_WOW_CLASSES = frozenset(WOW_CLASS_NAMES)
 
 _ACTOR_RE = re.compile(r"^([a-z_]+)\s*=\s*\"?([^\"\n]+)\"?\s*$")
 _PROFILESET_RE = re.compile(r'^profileset\.(?:"([^"]+)"|([^+=\s]+))')
@@ -64,19 +51,13 @@ def _scalar_assignments(lines: list[str]) -> dict[str, str]:
     return values
 
 
-def _normalize_class_token(value: str) -> str:
-    # SimC accepts both the addon/profile actor form (`deathknight`) and the documented
-    # manual-creation keyword form (`death_knight`); collapse to the canonical no-underscore
-    # form so either is recognized. Mirrors simc-cli's _normalize_actor_class.
-    return re.sub(r"[^a-z0-9]", "", value.lower())
-
-
 def _find_actor(lines: list[str]) -> tuple[str | None, str | None]:
     for line in lines:
         match = _ACTOR_RE.match(line)
         if not match:
             continue
-        actor_class = _normalize_class_token(match.group(1))
+        # SimC takes both `deathknight` and `death_knight`; either normalizes to the class key.
+        actor_class = normalize_actor_class(match.group(1))
         if actor_class in _WOW_CLASSES:
             return actor_class, match.group(2).strip()
     return None, None
@@ -89,6 +70,11 @@ def _profileset_names(lines: list[str]) -> set[str]:
         if match:
             names.add(match.group(1) or match.group(2))
     return names
+
+
+def looks_like_simc_input(text: str) -> bool:
+    """Whether the text has at least one SimC ``key=value`` line; prose or binary has none."""
+    return any("=" in line for line in _iter_clean_lines(text))
 
 
 def classify_simc_input(text: str) -> dict[str, Any]:

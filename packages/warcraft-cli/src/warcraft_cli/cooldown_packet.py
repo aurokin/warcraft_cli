@@ -41,6 +41,59 @@ def selected_phase_window(windows: list[dict[str, Any]], phase: int) -> dict[str
     return None
 
 
+def _encounter_phase_names(report: dict[str, Any], encounter_id: Any) -> dict[int | None, Any]:
+    return {
+        int_or_none(phase.get("id")): phase.get("name")
+        for encounter in as_list(report.get("phases"))
+        if isinstance(encounter, dict) and encounter.get("encounterID") == encounter_id
+        for phase in as_list(encounter.get("phases"))
+        if isinstance(phase, dict)
+    }
+
+
+def _phase_visits(fight: dict[str, Any], fight_start: int) -> list[tuple[int, int]]:
+    """``(ms from the pull, phase id)`` of each phase transition, in time order."""
+    return sorted(
+        (max(0, timestamp - fight_start), phase)
+        for row in as_list(fight.get("phaseTransitions"))
+        if isinstance(row, dict)
+        and (phase := int_or_none(row.get("id"))) is not None
+        and (timestamp := int_or_none(row.get("startTime"))) is not None
+    )
+
+
+def warcraftlogs_phase_windows(report: dict[str, Any], fight_id: int) -> list[dict[str, Any]]:
+    """One window per phase transition of a Warcraft Logs fight, in ms from the pull.
+
+    ``report`` is the GraphQL ``report`` object with ``phases`` (the encounters' phase names) and
+    ``fights`` (``startTime``, ``endTime``, ``phaseTransitions``). Windows are numbered in order like
+    the Lorrgs ones, so ``--phase`` and the top-parse comparison mean the same window on either path;
+    ``phase_id`` and ``name`` are the encounter phase each window is (1, 2, 1, 2, 1 on a returning boss).
+    """
+    fight = next((row for row in as_list(report.get("fights")) if isinstance(row, dict) and row.get("id") == fight_id), {})
+    start, end = int_or_none(fight.get("startTime")), int_or_none(fight.get("endTime"))
+    visits = [] if start is None else _phase_visits(fight, start)
+    if start is None or not visits:
+        return []
+    names = _encounter_phase_names(report, fight.get("encounterID"))
+    ends: list[int | None] = [visit_start for visit_start, _ in visits[1:]]
+    ends.append(None if end is None else end - start)
+    return [
+        {
+            "phase": index,
+            "label": f"P{index}",
+            "phase_id": phase,
+            "name": names.get(phase),
+            "start_ms": start_ms,
+            "end_ms": end_ms,
+            "duration_ms": None if end_ms is None else end_ms - start_ms,
+            "start_source": "warcraftlogs_phase_transition",
+            "end_source": "warcraftlogs_phase_transition" if index < len(visits) else ("fight_end" if end_ms is not None else "unknown"),
+        }
+        for index, ((start_ms, phase), end_ms) in enumerate(zip(visits, ends, strict=True), start=1)
+    ]
+
+
 def raw_phase_markers(phases: list[Any]) -> list[dict[str, Any]]:
     markers: list[dict[str, Any]] = []
     for index, row in enumerate(phases, start=1):

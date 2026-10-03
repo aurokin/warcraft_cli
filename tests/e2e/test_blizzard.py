@@ -151,6 +151,8 @@ def test_a_cached_read_is_replayed_without_the_network(require) -> None:
     cache = replayed.payload["provenance"]["cache"]
     assert cache["all_hits"] is True, replayed.describe()
     assert cache["oldest_hit_age_seconds"] >= 0, replayed.describe()
+    # An item is static-namespace data, kept for a day (dynamic data is kept for 15 minutes).
+    assert cache["oldest_hit_ttl_seconds"] == 86400, replayed.describe()
     assert replayed.data == live.data
 
 
