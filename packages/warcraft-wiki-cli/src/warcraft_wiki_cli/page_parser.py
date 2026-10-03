@@ -5,6 +5,7 @@ from typing import Any
 from urllib.parse import quote, unquote, urljoin, urlparse
 
 from bs4 import BeautifulSoup, Comment, NavigableString, Tag
+from warcraft_core.wow_specs import WOW_CLASS_NAMES
 
 WIKI_BASE_URL = "https://warcraft.wiki.gg"
 
@@ -104,21 +105,7 @@ EXPANSION_REFERENCE_TITLES = {
     "world of warcraft: midnight",
 }
 
-CLASS_REFERENCE_TITLES = {
-    "death knight",
-    "demon hunter",
-    "druid",
-    "evoker",
-    "hunter",
-    "mage",
-    "monk",
-    "paladin",
-    "priest",
-    "rogue",
-    "shaman",
-    "warlock",
-    "warrior",
-}
+CLASS_REFERENCE_TITLES = frozenset(name.lower() for name in WOW_CLASS_NAMES.values())
 
 
 def normalize_article_ref(article_ref: str) -> str:

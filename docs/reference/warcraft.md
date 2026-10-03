@@ -47,7 +47,7 @@ Fan out a free-text query to every search-ready provider and rank the merged can
 
 ## warcraft resolve
 
-Fan out a query to every resolve-ready provider and return the single best match plus its follow-up command. The answer is the candidate `warcraft search` would rank first, skipping any its own provider rated `low`, and only when that provider resolved it at `high` confidence; otherwise the command reports `resolved: false` with the top-ranked candidate as `best_unresolved_candidate`.
+Fan out a query to every resolve-ready provider and return the single best match plus its follow-up command. The answer is the candidate `warcraft search` would rank first, skipping any its own provider rated `low`, and only when that provider resolved it at `high` confidence; otherwise the command reports `resolved: false` with the top-ranked remaining candidate as `best_unresolved_candidate` and lists any lower match a provider resolved under `provider_resolved_candidates`.
 
 **Arguments**
 
@@ -84,14 +84,14 @@ Cross-walk a Warcraft Logs report actor to a Raider.IO profile (log actor -> pro
 
 | Argument | Type | Default | Description |
 | --- | --- | --- | --- |
-| `code` | str | required | Warcraft Logs report code. |
+| `code` | str | required | Warcraft Logs report URL or report code. |
 | `name` | str | required | Character (actor) name within the report. |
 
 **Options**
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--fight-id` | int |  | Narrow to one fight (makes the log actor identity canonical). |
+| `--fight-id` | int |  | Narrow to one fight (makes the log actor identity canonical). Defaults to fight=<id> from the URL. |
 | `--region` | str |  | Override the actor region for the Raider.IO lookup. |
 | `--allow-unlisted` | boolean | false | Allow lookup of unlisted Warcraft Logs reports. |
 

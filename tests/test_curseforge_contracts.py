@@ -84,7 +84,9 @@ def test_addon_by_slug_envelope_and_provenance(monkeypatch: pytest.MonkeyPatch) 
     assert set(prov["source_urls"]) == {"mod", "search", "changelog"}
     data = payload["data"]
     assert data["metadata"]["id"] == 3358
-    assert len(data["latest_files"]) == 2
+    # CurseForge lists the older file first; latest_files is newest first, the raw order stays in metadata.
+    assert [row["id"] for row in data["latest_files"]] == [5001, 4900]
+    assert [row["id"] for row in data["metadata"]["latestFiles"]] == [4900, 5001]
     assert data["changelog"]["file_id"] == 5001
     assert "11.1.0" in data["changelog"]["body"]
 

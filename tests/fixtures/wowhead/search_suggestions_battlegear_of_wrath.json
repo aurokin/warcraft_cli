@@ -1,0 +1,338 @@
+{
+ "search": "battlegear of wrath",
+ "results": [
+  {
+   "type": 4,
+   "id": 218,
+   "name": "Battlegear of Wrath",
+   "typeName": "Item Set",
+   "quality": 4,
+   "pinTitle": "Item Set",
+   "pinDescription": "Battlegear of Wrath is the Tier 2 Raid Set. It contains 8 pieces. Has set bonuses at 3, 5, and 8 pieces.",
+   "pinBreadcrumb": [
+    "Plate"
+   ],
+   "popularity": 0
+  },
+  {
+   "type": 101,
+   "id": 686,
+   "name": "Battlegear of Wrath",
+   "typeName": "Transmog Set",
+   "icon": "inv_chest_plate16",
+   "pinTitle": "Transmog Set",
+   "pinBreadcrumb": [
+    "Plate"
+   ],
+   "popularity": 1
+  },
+  {
+   "type": 101,
+   "id": 403,
+   "name": "Battlegear of Wrath (Recolor)",
+   "typeName": "Transmog Set",
+   "icon": "inv_chest_plate07",
+   "pinTitle": "Transmog Set",
+   "pinBreadcrumb": [
+    "Plate"
+   ],
+   "popularity": 2
+  },
+  {
+   "type": 3,
+   "id": 228197,
+   "name": "Ensemble: Eternal Battlegear of Wrath",
+   "typeName": "Item",
+   "icon": "inv_helmet_71",
+   "quality": 4,
+   "pinTitle": "Item",
+   "pinFooterText": "Consumable",
+   "pinDescription": "It is sold by NPCs.",
+   "pinBreadcrumb": [
+    "Consumable"
+   ],
+   "popularity": 3
+  },
+  {
+   "type": 101,
+   "id": 2032,
+   "name": "Battlegear of Iron Wrath (Normal Recolor)",
+   "typeName": "Transmog Set",
+   "icon": "inv_plate_raidwarrior_p_01chest",
+   "pinTitle": "Transmog Set",
+   "pinBreadcrumb": [
+    "Plate"
+   ],
+   "popularity": 4
+  },
+  {
+   "type": 6,
+   "id": 461369,
+   "name": "Ensemble: Eternal Battlegear of Wrath",
+   "typeName": "Spell",
+   "icon": "inv_helmet_71",
+   "pinTitle": "Spell",
+   "pinDescription": "Acquire the Eternal Battlegear of Wrath for your Warrior characters. In the Item Effects category.",
+   "pinBreadcrumb": [
+    "Item Effect"
+   ],
+   "popularity": 5
+  },
+  {
+   "type": 4,
+   "id": 1258,
+   "name": "Battlegear of Iron Wrath",
+   "typeName": "Item Set",
+   "quality": 4,
+   "pinTitle": "Item Set",
+   "pinDescription": "Battlegear of Iron Wrath is the Tier 18 Raid Set. It contains 5 pieces. Has set bonuses at 2 and 4 pieces.",
+   "pinBreadcrumb": [
+    "Plate"
+   ],
+   "popularity": 6
+  },
+  {
+   "type": 101,
+   "id": 2034,
+   "name": "Battlegear of Iron Wrath (Mythic Recolor)",
+   "typeName": "Transmog Set",
+   "icon": "inv_plate_raidwarrior_p_01chest",
+   "pinTitle": "Transmog Set",
+   "pinBreadcrumb": [
+    "Plate"
+   ],
+   "popularity": 7
+  },
+  {
+   "type": 101,
+   "id": 2033,
+   "name": "Battlegear of Iron Wrath (Heroic Recolor)",
+   "typeName": "Transmog Set",
+   "icon": "inv_plate_raidwarrior_p_01chest",
+   "pinTitle": "Transmog Set",
+   "pinBreadcrumb": [
+    "Plate"
+   ],
+   "popularity": 8
+  },
+  {
+   "type": 5,
+   "id": 46041,
+   "name": "Battlegear of Iron Wrath",
+   "typeName": "Quest",
+   "side": 3,
+   "pinTitle": "Quest",
+   "pinFooterText": "Level: 1",
+   "pinBreadcrumb": [
+    "Uncategorized"
+   ],
+   "popularity": 9
+  }
+ ],
+ "categories": {
+  "decor": [],
+  "guides": [],
+  "news": [],
+  "tools": [],
+  "database": [
+   {
+    "type": 4,
+    "id": 218,
+    "name": "Battlegear of Wrath",
+    "typeName": "Item Set",
+    "quality": 4,
+    "pinTitle": "Item Set",
+    "pinDescription": "Battlegear of Wrath is the Tier 2 Raid Set. It contains 8 pieces. Has set bonuses at 3, 5, and 8 pieces.",
+    "pinBreadcrumb": [
+     "Plate"
+    ]
+   },
+   {
+    "type": 101,
+    "id": 403,
+    "name": "Battlegear of Wrath (Recolor)",
+    "typeName": "Transmog Set",
+    "icon": "inv_chest_plate07",
+    "pinTitle": "Transmog Set",
+    "pinBreadcrumb": [
+     "Plate"
+    ]
+   },
+   {
+    "type": 3,
+    "id": 228197,
+    "name": "Ensemble: Eternal Battlegear of Wrath",
+    "typeName": "Item",
+    "icon": "inv_helmet_71",
+    "quality": 4,
+    "pinTitle": "Item",
+    "pinFooterText": "Consumable",
+    "pinDescription": "It is sold by NPCs.",
+    "pinBreadcrumb": [
+     "Consumable"
+    ]
+   },
+   {
+    "type": 101,
+    "id": 686,
+    "name": "Battlegear of Wrath",
+    "typeName": "Transmog Set",
+    "icon": "inv_chest_plate16",
+    "pinTitle": "Transmog Set",
+    "pinBreadcrumb": [
+     "Plate"
+    ]
+   },
+   {
+    "type": 101,
+    "id": 2032,
+    "name": "Battlegear of Iron Wrath (Normal Recolor)",
+    "typeName": "Transmog Set",
+    "icon": "inv_plate_raidwarrior_p_01chest",
+    "pinTitle": "Transmog Set",
+    "pinBreadcrumb": [
+     "Plate"
+    ]
+   },
+   {
+    "type": 6,
+    "id": 461369,
+    "name": "Ensemble: Eternal Battlegear of Wrath",
+    "typeName": "Spell",
+    "icon": "inv_helmet_71",
+    "pinTitle": "Spell",
+    "pinDescription": "Acquire the Eternal Battlegear of Wrath for your Warrior characters. In the Item Effects category.",
+    "pinBreadcrumb": [
+     "Item Effect"
+    ]
+   },
+   {
+    "type": 4,
+    "id": 1258,
+    "name": "Battlegear of Iron Wrath",
+    "typeName": "Item Set",
+    "quality": 4,
+    "pinTitle": "Item Set",
+    "pinDescription": "Battlegear of Iron Wrath is the Tier 18 Raid Set. It contains 5 pieces. Has set bonuses at 2 and 4 pieces.",
+    "pinBreadcrumb": [
+     "Plate"
+    ]
+   },
+   {
+    "type": 101,
+    "id": 2033,
+    "name": "Battlegear of Iron Wrath (Heroic Recolor)",
+    "typeName": "Transmog Set",
+    "icon": "inv_plate_raidwarrior_p_01chest",
+    "pinTitle": "Transmog Set",
+    "pinBreadcrumb": [
+     "Plate"
+    ]
+   },
+   {
+    "type": 101,
+    "id": 2034,
+    "name": "Battlegear of Iron Wrath (Mythic Recolor)",
+    "typeName": "Transmog Set",
+    "icon": "inv_plate_raidwarrior_p_01chest",
+    "pinTitle": "Transmog Set",
+    "pinBreadcrumb": [
+     "Plate"
+    ]
+   },
+   {
+    "type": 5,
+    "id": 46041,
+    "name": "Battlegear of Iron Wrath",
+    "typeName": "Quest",
+    "side": 3,
+    "pinTitle": "Quest",
+    "pinFooterText": "Level: 1",
+    "pinBreadcrumb": [
+     "Uncategorized"
+    ]
+   },
+   {
+    "type": 5,
+    "id": 46040,
+    "name": "Battlegear of Iron Wrath",
+    "typeName": "Quest",
+    "side": 3,
+    "pinTitle": "Quest",
+    "pinFooterText": "Level: 1",
+    "pinBreadcrumb": [
+     "Uncategorized"
+    ]
+   },
+   {
+    "type": 101,
+    "id": 2035,
+    "name": "Battlegear of Iron Wrath (Normal Lookalike)",
+    "typeName": "Transmog Set",
+    "icon": "inv_plate_raidwarrior_p_01chest",
+    "pinTitle": "Transmog Set",
+    "pinBreadcrumb": [
+     "Plate"
+    ]
+   },
+   {
+    "type": 101,
+    "id": 2037,
+    "name": "Battlegear of Iron Wrath (Mythic Lookalike)",
+    "typeName": "Transmog Set",
+    "icon": "inv_plate_raidwarrior_p_01chest",
+    "pinTitle": "Transmog Set",
+    "pinBreadcrumb": [
+     "Plate"
+    ]
+   },
+   {
+    "type": 6,
+    "id": 223705,
+    "name": "Battlegear of Wrath Set",
+    "typeName": "Spell",
+    "icon": "trade_engineering",
+    "pinTitle": "Spell",
+    "pinDescription": "In the Uncategorized Spells category.",
+    "pinBreadcrumb": [
+     "Uncategorized"
+    ]
+   },
+   {
+    "type": 5,
+    "id": 46042,
+    "name": "Battlegear of Iron Wrath",
+    "typeName": "Quest",
+    "side": 3,
+    "pinTitle": "Quest",
+    "pinFooterText": "Level: 1",
+    "pinBreadcrumb": [
+     "Uncategorized"
+    ]
+   },
+   {
+    "type": 101,
+    "id": 2036,
+    "name": "Battlegear of Iron Wrath (Heroic Lookalike)",
+    "typeName": "Transmog Set",
+    "icon": "inv_plate_raidwarrior_p_01chest",
+    "pinTitle": "Transmog Set",
+    "pinBreadcrumb": [
+     "Plate"
+    ]
+   },
+   {
+    "type": 1,
+    "id": 112356,
+    "name": "Battlegear of Wrath Set",
+    "typeName": "NPC",
+    "displayName": "Battlegear of Wrath Set",
+    "pinTitle": "NPC",
+    "pinDescription": "The location of this NPC is unknown.",
+    "pinBreadcrumb": [
+     "Normal"
+    ]
+   }
+  ]
+ }
+}

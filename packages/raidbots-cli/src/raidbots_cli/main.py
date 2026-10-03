@@ -60,6 +60,9 @@ def _explain_input_text(ctx: typer.Context, text: str | None, file: str | None) 
     if text is not None:
         return text
     if file is None:
+        if sys.stdin.isatty():
+            # Reading a terminal would wait for input nobody is going to type.
+            fail(ctx, "invalid_query", "No SimC input provided (use --text, --file, or stdin).")
         return sys.stdin.read()
     try:
         return Path(file).expanduser().read_text(encoding="utf-8")

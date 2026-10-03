@@ -19,7 +19,7 @@ import typer
 from warcraft_core.cli import fail
 from warcraft_core.exit_codes import EXIT_USAGE
 from warcraft_core.expansions import wowhead_path_prefixes
-from warcraft_core.identity import validate_talent_transport_packet
+from warcraft_core.identity import is_warcraftlogs_report_code, validate_talent_transport_packet
 from warcraft_core.shapes import as_dict
 from warcraft_core.wow_specs import WOW_CLASS_NAMES, raiderio_class_slug
 
@@ -72,12 +72,9 @@ def _looks_like_wowhead_talent_calc_reference(value: str) -> bool:
 
 
 def _looks_like_warcraftlogs_report_reference(value: str) -> bool:
+    """A Warcraft Logs report URL, or a bare word the providers read as a report code (not a name)."""
     text = value.strip()
-    if not text:
-        return False
-    if "warcraftlogs.com/reports/" in text:
-        return True
-    return 8 <= len(text) <= 32 and text.isalnum() and any(ch.isalpha() for ch in text)
+    return "warcraftlogs.com/reports/" in text or is_warcraftlogs_report_code(text)
 
 
 def _normalize_warcraftlogs_report_reference(value: str) -> str:

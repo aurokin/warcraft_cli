@@ -893,17 +893,17 @@ def test_warcraft_doctor_reports_explicit_runtime_dir_without_worktree_root(monk
     monkeypatch.delenv("XDG_DATA_HOME")
     monkeypatch.delenv("XDG_CACHE_HOME")
     monkeypatch.setenv("WARCRAFT_WORKTREE_RUNTIME_DIR", str(tmp_path / "runtime"))
+    monkeypatch.setattr("warcraft_core.paths.worktree_root", lambda: None)
 
     result = runner.invoke(warcraft_app, ["doctor"])
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    expected_worktree_root = str(Path(__file__).resolve().parent.parent)
     assert payload["data"]["paths"]["data_root"] == str((tmp_path / "runtime" / "data").resolve())
     assert payload["data"]["paths"]["cache_root"] == str((tmp_path / "runtime" / "cache").resolve())
     assert payload["data"]["paths"]["worktree_runtime"] == {
         "active": True,
-        "worktree_root": expected_worktree_root,
+        "worktree_root": None,
         "runtime_root": str((tmp_path / "runtime").resolve()),
         "isolated_roots": ["data", "cache"],
         "shared_roots": ["config", "state"],
@@ -2537,6 +2537,8 @@ def _cooldown_packet_invoke(
 
     def fake_provider_invoke(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, object]:
         calls.append((provider, args))
+        if provider == "warcraftlogs" and args[:1] == ["graphql"]:
+            return {"provider": provider, "exit_code": 0, "payload": _wcl_phases(None)}
         if provider == "lorrgs" and args[:1] == ["user-report-fights"]:
             return {
                 "provider": provider,
@@ -3646,6 +3648,7 @@ def test_warcraft_talent_packet_routes_scheme_less_warcraftlogs_report_ref(monke
 
 
 def test_warcraft_talent_packet_routes_alpha_only_warcraftlogs_report_code(monkeypatch) -> None:
+    """A real report code can be letters only: 16 of them, mixing upper and lower case."""
     calls: list[tuple[str, list[str], str | None]] = []
 
     def fake_provider_invoke(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, object]:
@@ -3663,7 +3666,7 @@ def test_warcraft_talent_packet_routes_alpha_only_warcraftlogs_report_code(monke
                     "transport_forms": {},
                     "raw_evidence": {"talent_tree_entries": [{"entry": 103324, "node_id": 82244, "rank": 1}]},
                     "validation": {"status": "not_validated"},
-                    "scope": {"type": "report_fight_actor", "report_code": "abcdefgh", "fight_id": 1, "actor_id": 9},
+                    "scope": {"type": "report_fight_actor", "report_code": "JVFTxcKCqrvpaAzD", "fight_id": 1, "actor_id": 9},
                 },
             }),
         }
@@ -3672,13 +3675,13 @@ def test_warcraft_talent_packet_routes_alpha_only_warcraftlogs_report_code(monke
 
     result = runner.invoke(
         warcraft_app,
-        ["talent-packet", "abcdefgh", "--actor-id", "9", "--fight-id", "1", "--no-validate"],
+        ["talent-packet", "JVFTxcKCqrvpaAzD", "--actor-id", "9", "--fight-id", "1", "--no-validate"],
     )
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["data"]["route"]["provider"] == "warcraftlogs"
     assert calls == [
-        ("warcraftlogs", ["report-player-talents", "abcdefgh", "--actor-id", "9", "--fight-id", "1"], None)
+        ("warcraftlogs", ["report-player-talents", "JVFTxcKCqrvpaAzD", "--actor-id", "9", "--fight-id", "1"], None)
     ]
 
 
@@ -4535,6 +4538,20 @@ def test_warcraft_talent_describe_route_failures_are_error_kind() -> None:
     assert payload["error"]["code"] == "unsupported_talent_source"
 
 
+
+
+def test_warcraft_talent_packet_reads_a_camel_case_name_as_no_report_code(monkeypatch) -> None:
+    """With --actor-id, a bare word routes to Warcraft Logs only when the providers read it as a report code."""
+
+    def no_call(*args: object, **kwargs: object) -> dict[str, object]:
+        raise AssertionError("a name was sent to Warcraft Logs as a report code")
+
+    monkeypatch.setattr("warcraft_cli.main.provider_invoke", no_call)
+
+    result = runner.invoke(warcraft_app, ["talent-packet", "HavocDemonHunter", "--actor-id", "1", "--no-validate"])
+
+    assert result.exit_code == 2
+    assert json.loads(result.stderr)["error"]["code"] == "unsupported_talent_source"
 
 
 def test_warcraft_talent_describe_rejects_empty_segment_wowhead_ref(tmp_path: Path) -> None:
@@ -6590,11 +6607,20 @@ _WCL_EVENTS = _envelope({
 })
 
 
-def _uncached_lorrgs_invoke(calls: list[tuple[str, list[str]]]):
+def _wcl_phases(phase_transitions: list[dict[str, int]] | None) -> dict[str, Any]:
+    """The `warcraftlogs graphql` answer for fight 22's phase transitions (null: a fight without phases)."""
+    fight = {"id": 22, "encounterID": 7, "startTime": 1000, "endTime": 9000, "phaseTransitions": phase_transitions}
+    phases = [{"encounterID": 7, "phases": [{"id": 1, "name": "Lura"}, {"id": 2, "name": "Void Rift"}]}]
+    return _envelope({"reportData": {"report": {"phases": phases, "fights": [fight]}}})
+
+
+def _uncached_lorrgs_invoke(calls: list[tuple[str, list[str]]], phase_transitions: list[dict[str, int]] | None = None):
     """Lorrgs 404s the user report (the normal case) but still serves its static spec metadata."""
 
     def fake_provider_invoke(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, object]:
         calls.append((provider, args))
+        if provider == "warcraftlogs" and args[0] == "graphql":
+            return {"provider": provider, "exit_code": 0, "payload": _wcl_phases(phase_transitions)}
         if provider == "lorrgs" and args[0] == "user-report-fights":
             return {
                 "provider": provider,
@@ -6670,7 +6696,8 @@ def test_cooldown_packet_degrades_to_the_warcraftlogs_half_when_lorrgs_has_no_ca
     assert data["player"]["deaths"] is None
     assert "player_deaths" in data["lorrgs"]["missing"]
     assert any("player.deaths is null" in note for note in data["notes"])
-    assert any("no phase windows" in note for note in data["notes"])
+    assert any("--phase was not applied" in note for note in data["notes"])
+    assert data["phase"]["source"] is None
     assert ("warcraftlogs", ["report-events", "abcd1234", "--fight-id", "22", "--source-id", "89",
                             "--data-type", "casts", "--limit", "5000"]) in calls
     # The actor is checked against the fight's roster, not the whole report's.
@@ -6678,6 +6705,56 @@ def test_cooldown_packet_degrades_to_the_warcraftlogs_half_when_lorrgs_has_no_ca
     assert data["sources"]["lorrgs_user_report_fights"]["command"] == (
         "warcraft lorrgs user-report-fights abcd1234 --fight 22"
     )
+
+
+@pytest.mark.parametrize(("phase", "selected_casts"), [("2", 1), ("3", 0), ("4", 1)])
+def test_cooldown_packet_without_lorrgs_takes_phase_windows_from_warcraftlogs(monkeypatch, phase: str, selected_casts: int) -> None:
+    """Lorrgs 404s most reports; the Warcraft Logs fight's phase transitions still scope the casts.
+    Windows are numbered in order like Lorrgs ones, so encounter phase 2's two visits are P2 and P4,
+    and each holds one of the casts (1.5 s and 5 s after the pull)."""
+    transitions = [{"id": 1, "startTime": 1000}, {"id": 2, "startTime": 2000}, {"id": 1, "startTime": 3000},
+                   {"id": 2, "startTime": 5500}, {"id": 1, "startTime": 7000}]
+    calls: list[tuple[str, list[str]]] = []
+    monkeypatch.setattr("warcraft_cli.main.provider_invoke", _uncached_lorrgs_invoke(calls, transitions))
+
+    result = runner.invoke(warcraft_app, [
+        "cooldown-packet", "abcd1234", "--fight-id", "22", "--actor-id", "89", "--spec-slug", "warrior-protection",
+        "--phase", phase,
+    ])
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.stdout)["data"]
+    assert (data["phase"]["status"], data["phase"]["source"], data["phase"]["unavailable_reason"]) == ("ready", "warcraftlogs", None)
+    assert [(row["label"], row["phase_id"], row["start_ms"], row["end_ms"]) for row in data["phase"]["windows"]] == [
+        ("P1", 1, 0, 1000), ("P2", 2, 1000, 2000), ("P3", 1, 2000, 4500), ("P4", 2, 4500, 6000), ("P5", 1, 6000, 8000)]
+    assert data["phase"]["selected"]["name"] == ("Lura" if phase == "3" else "Void Rift")
+    assert data["cooldowns"]["player_casts"]["selected_phase_cast_count"] == selected_casts
+    assert "phase_windows" not in data["lorrgs"]["missing"]
+    assert any("phase windows come from the Warcraft Logs fight" in note for note in data["notes"])
+    assert data["sources"]["warcraftlogs_phase_transitions"]["status"] == "ok"
+    assert [args[:1] + args[3:] for provider, args in calls if args[0] == "graphql"] == [
+        ["graphql", "--report-code", "abcd1234", "--fight-id", "22"]]
+
+
+def test_cooldown_packet_keeps_the_whole_fight_when_the_warcraftlogs_phase_lookup_fails(monkeypatch) -> None:
+    uncached = _uncached_lorrgs_invoke([])
+
+    def invoke(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, object]:
+        if args[0] == "graphql":
+            return {"provider": provider, "exit_code": 5, "payload": {"ok": False, "error": {"code": "network_error", "message": "x"}}}
+        return uncached(provider, args, expansion=expansion)
+
+    monkeypatch.setattr("warcraft_cli.main.provider_invoke", invoke)
+
+    result = runner.invoke(warcraft_app, [
+        "cooldown-packet", "abcd1234", "--fight-id", "22", "--actor-id", "89", "--spec-slug", "warrior-protection", "--phase", "2",
+    ])
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.stdout)["data"]
+    assert (data["phase"]["status"], data["phase"]["unavailable_reason"]) == ("unavailable", "lorrgs_fight_lookup_failed")
+    assert data["sources"]["warcraftlogs_phase_transitions"]["error"]["code"] == "network_error"
+    assert data["cooldowns"]["player_casts"]["tracked_cast_count"] == 2
 
 
 @pytest.mark.parametrize(
@@ -6886,6 +6963,31 @@ def test_actor_profile_without_fight_id_scopes_player_details_to_the_report_figh
     }
 
 
+def test_actor_profile_reads_the_code_and_fight_from_a_report_url(monkeypatch) -> None:
+    seen: dict[str, list[str]] = {}
+    monkeypatch.setattr("warcraft_cli.main.provider_invoke", _actor_profile_invoke(seen, [{"id": 3}]))
+
+    result = runner.invoke(
+        warcraft_app, ["actor-profile", "https://www.warcraftlogs.com/reports/abcd1234EFGH5678#fight=9", "Someone"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "report-fights" not in seen
+    assert seen["report-player-details"] == ["report-player-details", "abcd1234EFGH5678", "--fight-id", "9"]
+
+
+@pytest.mark.parametrize(
+    "reference", ["", "  ", "https://www.warcraftlogs.com.evil.com/reports/abcd1234EFGH5678", "https://www.warcraftlogs.com/", "ab/cd"]
+)
+def test_actor_profile_rejects_a_reference_that_names_no_report_before_any_request(monkeypatch, reference: str) -> None:
+    monkeypatch.setattr("warcraft_cli.main.provider_invoke", lambda *args, **kwargs: pytest.fail("no request expected"))
+
+    result = runner.invoke(warcraft_app, ["actor-profile", reference, "Someone"])
+
+    assert result.exit_code == 2, result.output
+    assert json.loads(result.stderr)["error"]["code"] == "invalid_query"
+
+
 def test_actor_profile_scopes_a_long_report_to_its_kills_and_says_so(monkeypatch) -> None:
     """A wipe night must not become fifty --fight-id flags, and the cut must be reported."""
     seen: dict[str, list[str]] = {}
@@ -7053,6 +7155,8 @@ def _failing_lorrgs_invoke(error: dict[str, object], exit_code: int):
     def fake_provider_invoke(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, object]:
         if provider == "lorrgs":
             return {"provider": provider, "exit_code": exit_code, "payload": {"ok": False, "error": error}}
+        if provider == "warcraftlogs" and args[0] == "graphql":
+            return {"provider": provider, "exit_code": 0, "payload": _wcl_phases(None)}
         if provider == "warcraftlogs" and args[0] == "report-player-details":
             return {"provider": provider, "exit_code": 0, "payload": _WCL_ROSTER}
         if provider == "warcraftlogs" and args[0] == "report-fights":
@@ -7221,6 +7325,31 @@ def test_warcraft_resolve_never_lets_a_low_confidence_guess_block_another_provid
     assert alone["best_unresolved_candidate"]["provider"] == "lorrgs"
     assert alone["best_unresolved_candidate"]["unresolved_reason"] == "provider_did_not_resolve"
     assert alone["fallback_search_command"] == "lorrgs search 'frost ulgrax'"
+
+
+def test_warcraft_resolve_hints_skip_a_low_guess_and_name_a_blocked_resolved_answer(monkeypatch) -> None:
+    """Live `affliction warlock arena`: Lorrgs' low spec row ranks first, the wiki's medium row second,
+    and Icy Veins' arena page, resolved at high, third. The hints start at the wiki row, which blocked
+    the answer, and the Icy Veins page stays one command away."""
+    _stub_resolve_seam(monkeypatch, {
+        "lorrgs": {"resolved": False, "confidence": "low", "fallback_search_command": "lorrgs search 'affliction warlock arena'",
+                   "match": _match("lorrgs", "Affliction Warlock", "spec", 99)},
+        "warcraft-wiki": {"resolved": False, "confidence": "medium",
+                          "fallback_search_command": "warcraft-wiki search 'affliction warlock arena'",
+                          "match": _match("warcraft-wiki", "Brutal Gladiator's Felshroud", "article", 30)},
+        "icy-veins": {"resolved": True, "confidence": "high", "next_command": "icy-veins guide affliction-warlock-pvp-arena",
+                      "match": _match("icy-veins", "Affliction Warlock PvP Best Arena Compositions", "guide", 16)},
+    })
+
+    data = json.loads(runner.invoke(warcraft_app, ["resolve", "affliction warlock arena", "--ranking-debug"]).stdout)["data"]
+
+    assert [row["provider"] for row in data["ranking_debug"]] == ["lorrgs", "warcraft-wiki", "icy-veins"]
+    assert data["resolved"] is False
+    assert data["best_unresolved_candidate"]["provider"] == "warcraft-wiki"
+    assert [row["provider"] for row in data["fallback_search_commands"]] == ["warcraft-wiki", "lorrgs"]
+    assert data["fallback_search_command"] == "warcraft-wiki search 'affliction warlock arena'"
+    assert [(row["provider"], row["next_command"]) for row in data["provider_resolved_candidates"]] == [
+        ("icy-veins", "icy-veins guide affliction-warlock-pvp-arena")]
 
 
 def test_warcraft_resolve_does_not_answer_with_a_provider_match_at_medium_confidence(monkeypatch) -> None:
@@ -7781,3 +7910,11 @@ def test_warcraft_resolve_names_the_single_word_cap_when_it_is_why_the_best_cand
 
     assert (data["resolved"], data["next_command"]) == (False, None)
     assert data["best_unresolved_candidate"]["unresolved_reason"] == "single_word_query_not_named_exactly"
+
+
+def test_wrapper_name_match_folds_apostrophes_as_the_providers_one_word_rule_does() -> None:
+    """The providers' one-word rule let "karesh" name "K'aresh" while the wrapper's ranking did not."""
+    from warcraft_cli.provider_contract import name_match_strength
+
+    assert name_match_strength("karesh", "K'aresh") == "exact"
+    assert name_match_strength("ashes of alar", "Ashes of Al'ar: Reborn") == "title_prefix"

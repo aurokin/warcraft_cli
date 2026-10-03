@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field, replace
 from typing import Any, Literal
 
@@ -194,15 +195,21 @@ def shape_payload(payload: dict[str, Any], options: OutputOptions) -> dict[str, 
 
 
 def to_json(payload: Any, *, pretty: bool) -> str:
+    """The payload as JSON; the stdlib encoder takes over for what orjson refuses.
+
+    orjson rejects an integer beyond 64 bits, and a query echoes the parsed parameters, so
+    ``wowhead entity item 99999999999999999999`` would otherwise turn its 404 into an internal error.
+    """
     option = 0
     if pretty:
         option |= orjson.OPT_INDENT_2 | orjson.OPT_SORT_KEYS
-    return orjson.dumps(payload, option=option).decode("utf-8")
+    try:
+        return orjson.dumps(payload, option=option).decode("utf-8")
+    except TypeError:
+        if pretty:
+            return json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True, default=str)
+        return json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str)
 
 
 def emit(payload: Any, *, pretty: bool, err: bool = False) -> None:
     typer.echo(to_json(payload, pretty=pretty), err=err)
-
-
-def emit_shaped(payload: dict[str, Any], options: OutputOptions, *, err: bool = False) -> None:
-    emit(shape_payload(payload, options), pretty=options.pretty, err=err)

@@ -670,23 +670,18 @@ def normalize_guide_compare_providers(values: list[str]) -> tuple[str, ...]:
     return tuple(deduped)
 
 
-def _resolved_guide_match(provider: str, payload: dict[str, Any] | None) -> tuple[dict[str, Any] | None, str | None]:
-    if not isinstance(payload, dict):
-        return None, "missing_payload"
+def _resolved_guide_match(provider: str, payload: dict[str, Any]) -> tuple[dict[str, Any] | None, str | None]:
+    """The provider's resolved guide. A resolved answer always carries a shared-shape ``match``, whose
+    ``id`` is the ref the provider's guide-export takes."""
     if not payload.get("resolved"):
         return None, "provider_did_not_resolve_query"
-    match = payload.get("match")
-    if not isinstance(match, dict):
-        return None, "missing_resolved_match"
+    match = payload["match"]
     kind = match.get("kind")
     if kind != "guide":
         return None, f"resolved_non_guide:{kind}"
-    ref = _guide_ref(match)
-    if ref is None:
-        return None, "resolved_guide_missing_ref"
     return {
         "provider": provider,
-        "ref": ref,
+        "ref": str(match["id"]),
         "name": match.get("name"),
         "url": match.get("url"),
         "confidence": payload.get("confidence"),
@@ -701,19 +696,14 @@ _SEARCH_FALLBACK_MIN_MARGIN = 25
 _SEARCH_FALLBACK_MIN_SINGLE_SCORE = 70
 
 
-def _top_guide_result(payload: dict[str, Any] | None) -> tuple[list[dict[str, Any]] | None, str | None]:
-    """The search result rows, only when the top row is a usable guide candidate."""
-    if not isinstance(payload, dict):
-        return None, "missing_search_payload"
+def _top_guide_result(payload: dict[str, Any]) -> tuple[list[dict[str, Any]] | None, str | None]:
+    """The search result rows, only when the top row is a guide."""
     results = payload.get("results")
-    if not isinstance(results, list) or not results:
+    if not results:
         return None, "provider_search_returned_no_results"
-    top = results[0]
-    if not isinstance(top, dict):
-        return None, "invalid_search_top_candidate"
-    if top.get("kind") != "guide":
-        return None, f"search_top_non_guide:{top.get('kind')}"
-    return [row for row in results if isinstance(row, dict)], None
+    if results[0].get("kind") != "guide":
+        return None, f"search_top_non_guide:{results[0].get('kind')}"
+    return results, None
 
 
 def _search_scores(results: list[dict[str, Any]]) -> tuple[int, int | None]:
@@ -731,17 +721,9 @@ def _search_fallback_rejection(top_score: int, second_score: int | None) -> str 
     return None
 
 
-def _guide_ref(row: dict[str, Any]) -> str | None:
-    """The ref a guide provider's guide-export takes: the row's ``id``, else its ``metadata.slug``."""
-    raw_ref = row.get("id")
-    if raw_ref is None:
-        raw_ref = as_dict(row.get("metadata")).get("slug")
-    return None if raw_ref is None else str(raw_ref)
-
-
 def _search_fallback_guide_match(
     provider: str,
-    payload: dict[str, Any] | None,
+    payload: dict[str, Any],
 ) -> tuple[dict[str, Any] | None, str | None]:
     results, reason = _top_guide_result(payload)
     if results is None:
@@ -751,17 +733,13 @@ def _search_fallback_guide_match(
     rejection = _search_fallback_rejection(top_score, second_score)
     if rejection is not None:
         return None, rejection
-    ref = _guide_ref(top)
-    if ref is None:
-        return None, "search_guide_missing_ref"
-    follow_up = top.get("follow_up")
     return {
         "provider": provider,
-        "ref": ref,
+        "ref": str(top["id"]),
         "name": top.get("name"),
         "url": top.get("url"),
         "confidence": "medium",
-        "next_command": follow_up.get("command") if isinstance(follow_up, dict) else None,
+        "next_command": top["follow_up"]["command"],
         "selection_source": "search_fallback",
         "search_ranking": top.get("ranking"),
         "selection_contract": {
@@ -785,8 +763,8 @@ def _resolve_guide_compare_candidate(
     """The provider's guide for ``query``: its resolved guide, else a decisive search top hit.
 
     Returns ``(candidate, decline)``; ``decline`` is the provider row when there is no candidate,
-    naming why each step declined. Neither call gets a --limit: the resolve confidence and the
-    search margin both need the rivals a small limit would hide.
+    naming why each step declined. Both calls take each provider's default limit; the search margin
+    reads only the top two rows.
     """
     resolved = calls.resolve(provider_name, query, expansion=expansion)
     candidate, resolve_reason = _resolved_guide_match(provider_name, provider_payload_data(resolved.get("payload")))

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from warcraft_core.identity import is_transport_int, normalize_actor_class, normalize_spec_name
+from warcraft_core.wow_specs import WOW_CLASS_NAMES
 
 CLASS_ID_BY_ACTOR_CLASS = {
     "warrior": 1,
@@ -58,8 +59,7 @@ TRAIT_ROW_RE = re.compile(
 HERO_TREE_ROW_RE = re.compile(r'\{\s*(?P<hero_tree_id>\d+),\s*"(?P<name>[^"]+)",\s*\d+\s*\},?')
 
 CLASS_ENUM_NAME_BY_ACTOR_CLASS = {
-    actor_class: actor_class.replace("deathknight", "death_knight").replace("demonhunter", "demon_hunter").upper()
-    for actor_class in CLASS_ID_BY_ACTOR_CLASS
+    actor_class: WOW_CLASS_NAMES[actor_class].upper().replace(" ", "_") for actor_class in CLASS_ID_BY_ACTOR_CLASS
 }
 
 

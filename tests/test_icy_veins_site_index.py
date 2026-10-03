@@ -213,6 +213,20 @@ def test_load_falls_back_to_the_bundled_snapshot_when_the_local_index_is_missing
     local_index_path().write_text("{not json", encoding="utf-8")
     assert load_site_index().bundled is True
 
+    # A local index in another format (an older or newer release's) is not read either.
+    local_index_path().write_text(json.dumps({"format": 2, "pages": [_row("a-guide", title="A")]}), encoding="utf-8")
+    assert load_site_index().bundled is True
+
+
+def test_load_keeps_only_the_well_formed_rows_of_a_local_index() -> None:
+    local_index_path().parent.mkdir(parents=True)
+    pages = [_row("a-guide", title="A"), "not-a-row", {"title": "No slug"}, {"slug": 7}]
+    local_index_path().write_text(json.dumps({"format": site_index.INDEX_FORMAT, "pages": pages}), encoding="utf-8")
+
+    loaded = load_site_index()
+
+    assert loaded is not None and not loaded.bundled and list(loaded.pages) == ["a-guide"]
+
 
 # ---------------------------------------------------------------------------------------------------
 # index-refresh
@@ -372,6 +386,59 @@ def test_index_refresh_reports_an_unreachable_seed_as_a_network_error(monkeypatc
     assert result.exit_code == 5, result.output
     assert json.loads(result.stderr)["error"]["code"] == "network_error"
     assert not local_index_path().exists()
+
+
+def test_index_refresh_revisits_the_least_recently_seen_pages_first_and_never_a_redirect(monkeypatch) -> None:
+    """A capped run must reach the stalest pages; re-reading the freshest ones would leave the rest stale for good."""
+    rows = {
+        "fresh-guide": _row("fresh-guide", title="Fresh", last_seen="2026-09-20"),
+        "oldest-guide": _row("oldest-guide", title="Oldest", last_seen="2026-08-01"),
+        "older-guide": _row("older-guide", title="Older", last_seen="2026-09-03"),
+        "renamed-guide": {**_row("renamed-guide", title=None, last_seen="2026-07-01"), "status": "redirect", "redirect_to": "older-guide"},
+    }
+    site: dict[str, str | FetchResult] = {SITE_MENU_SEED_URL: iv_page("death-knight-guide", title="Death Knight Guide", menu=("fresh-guide",))}
+    site.update({row["url"]: iv_page(slug, title=str(row["title"])) for slug, row in rows.items() if row["status"] == "ok"})
+    fetched = _serve(monkeypatch, site)
+    _write_index(*rows.values())
+
+    data = _refresh("--max-requests", "3")["data"]
+
+    assert fetched == [SITE_MENU_SEED_URL, guide_url("oldest-guide"), guide_url("older-guide")]
+    assert (data["partial"], data["stop_reason"]) == (True, "max_requests")
+
+
+def test_index_refresh_names_a_data_directory_it_cannot_write(monkeypatch, tmp_path: Path) -> None:
+    """A regular file where the data directory belongs crashed the run as internal_error NotADirectoryError.
+
+    It fails before the crawl: a default run would otherwise fetch for minutes before learning this.
+    """
+    data_home = tmp_path / "data-home"
+    data_home.write_text("not a directory", encoding="utf-8")
+    monkeypatch.setenv("XDG_DATA_HOME", str(data_home))
+    fetched = _serve(monkeypatch, _refresh_site())
+
+    result = runner.invoke(app, ["index-refresh", "--max-requests", "1"])
+
+    assert result.exit_code == 1, result.output
+    error = json.loads(result.stderr)["error"]
+    assert error["code"] == "invalid_data_dir"
+    assert error["details"]["path"] == str(local_index_path())
+    assert fetched == []
+
+
+def test_index_refresh_names_a_data_directory_that_fails_at_save_time(monkeypatch) -> None:
+    """A write that fails after the crawl (a full disk) is still invalid_data_dir, not internal_error."""
+    _serve(monkeypatch, _refresh_site())
+
+    def disk_full(_index: object) -> Path:
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr("icy_veins_cli.provider.save_site_index", disk_full)
+
+    result = runner.invoke(app, ["index-refresh", "--max-requests", "1"])
+
+    assert result.exit_code == 1, result.output
+    assert json.loads(result.stderr)["error"]["code"] == "invalid_data_dir"
 
 
 def _fake_request(monkeypatch, response: httpx.Response | Exception) -> list[dict]:
@@ -581,13 +648,18 @@ def test_search_without_a_local_index_says_where_its_pages_come_from(monkeypatch
 
 def test_search_names_the_bundled_snapshot_until_the_user_refreshes(monkeypatch) -> None:
     bundled = load_site_index()
+    assert bundled is not None and bundled.refreshed_at
+    # Long past a week after the snapshot: its age is told in sitemap_warning, never as the local index's age warning.
+    later = datetime.fromisoformat(bundled.refreshed_at).date() + timedelta(days=30)
+    monkeypatch.setattr("icy_veins_cli.provider.date", type("FixedDate", (date,), {"today": classmethod(lambda cls: later)}))
     monkeypatch.setattr(IcyVeinsClient, "sitemap_guides", lambda self: parse_sitemap_guides(FROZEN_SITEMAP_XML))
     monkeypatch.setattr(IcyVeinsClient, "site_menu_guides", lambda self: [])
 
     provenance = json.loads(runner.invoke(app, ["search", "frost mage"]).stdout)["provenance"]
 
-    assert bundled is not None and provenance["site_index_path"] == bundled.path
+    assert provenance["site_index_path"] == bundled.path
     assert f"snapshot bundled with this release (refreshed {bundled.refreshed_at})" in provenance["sitemap_warning"]
+    assert "site_index_warning" not in provenance
 
 
 def test_search_does_not_read_the_index_while_the_sitemap_is_current(monkeypatch) -> None:

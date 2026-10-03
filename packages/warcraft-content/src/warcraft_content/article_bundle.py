@@ -492,7 +492,12 @@ def bundle_query_payload(
     allowed_kinds: Collection[str],
     section_title: str | None,
 ) -> dict[str, Any]:
-    """``guide-query``/``article-query`` data: the bundle searched, the resource it holds, and its matches; no network."""
+    """``guide-query``/``article-query`` data: the bundle searched, the resource it holds, and its matches; no network.
+
+    A blank query is ``invalid_query``: it would match nothing and read as "the guide doesn't say".
+    """
+    if not query.strip():
+        raise ProviderError("invalid_query", "Query cannot be empty.")
     selected_kinds = set(kinds or allowed_kinds)
     invalid = sorted(selected_kinds - set(allowed_kinds))
     if invalid:

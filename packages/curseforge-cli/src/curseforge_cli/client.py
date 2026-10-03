@@ -175,22 +175,12 @@ class CurseForgeClient:
             raise CurseForgeClientError("invalid_response", "CurseForge search result had no integer mod id.")
         return mod_id, "slug_search", search["source_url"]
 
-    @staticmethod
-    def _newest_file(latest_files: list[Any]) -> dict[str, Any] | None:
-        candidates = [f for f in latest_files if isinstance(f, dict) and isinstance(f.get("id"), int)]
-        if not candidates:
-            return None
-        # Newest by file date, then by id as a stable tiebreak. fileDate is an ISO-8601 string, which
-        # sorts lexicographically in chronological order.
-        return max(candidates, key=lambda f: (str(f.get("fileDate") or ""), f["id"]))
-
-    def _fetch_latest_changelog(self, mod_id: int, latest_files: list[Any]) -> dict[str, Any] | None:
-        newest = self._newest_file(latest_files)
+    def _fetch_latest_changelog(self, mod_id: int, latest_files: list[dict[str, Any]]) -> dict[str, Any] | None:
+        """The changelog of the newest file; ``latest_files`` is newest first."""
+        newest = next((f for f in latest_files if isinstance(f.get("id"), int)), None)
         if newest is None:
             return None
-        file_id = newest.get("id")
-        if not isinstance(file_id, int):
-            return None
+        file_id = newest["id"]
         # The newest file can be an alpha or beta (releaseType 3 / 2), so say which file the notes cover.
         file_ref = {"file_id": file_id, "display_name": newest.get("displayName"), "release_type": newest.get("releaseType")}
         try:
@@ -246,7 +236,13 @@ class CurseForgeClient:
                 f"CurseForge mod {mod_id} is not a World of Warcraft addon (gameId={game_id}).",
             )
         raw_files = metadata.get("latestFiles")
-        latest_files: list[Any] = raw_files if isinstance(raw_files, list) else []
+        # CurseForge lists latestFiles in no useful order (years-old betas first), so newest first by
+        # file date, then id. fileDate is an ISO-8601 string, which sorts chronologically.
+        latest_files = sorted(
+            (f for f in raw_files if isinstance(f, dict)) if isinstance(raw_files, list) else (),
+            key=lambda f: (str(f.get("fileDate") or ""), f["id"] if isinstance(f.get("id"), int) else 0),
+            reverse=True,
+        )
         changelog = self._fetch_latest_changelog(mod_id, latest_files)
         source_urls: dict[str, str] = {"mod": mod_result["source_url"]}
         if search_url is not None:

@@ -12,7 +12,7 @@ from typing import Any, Final, Literal
 
 import httpx
 from warcraft_api.cache import redacted_redis_url
-from warcraft_core.discovery import RESOLVE_KIND, SEARCH_KIND, stub_data
+from warcraft_core.discovery import stub_envelope
 from warcraft_core.envelope import Envelope, success_envelope
 from warcraft_core.exit_codes import EXIT_USAGE
 from warcraft_core.provider import ProviderError, ProviderSurface
@@ -29,7 +29,7 @@ from raidbots_cli.client import (
     resolve_report_id,
 )
 from raidbots_cli.report import parse_report
-from raidbots_cli.simc_input import classify_simc_input, simc_handoff
+from raidbots_cli.simc_input import classify_simc_input, looks_like_simc_input, simc_handoff
 
 PROVIDER_NAME: Final = "raidbots"
 
@@ -114,11 +114,14 @@ def _citations(report_id: str) -> dict[str, Any]:
 
 
 def _not_supported(command: Literal["search", "resolve"], query: str) -> Envelope:
-    payload = stub_data(
-        surface=command, flag="not_supported", search_query=query, message=NOT_SUPPORTED_MESSAGE, suggested_command=SUGGESTED_COMMAND
+    return stub_envelope(
+        provider=PROVIDER_NAME,
+        surface=command,
+        flag="not_supported",
+        query=query,
+        message=NOT_SUPPORTED_MESSAGE,
+        suggested_command=SUGGESTED_COMMAND,
     )
-    kind = SEARCH_KIND if command == "search" else RESOLVE_KIND
-    return success_envelope(provider=PROVIDER_NAME, command=command, kind=kind, data=payload, query=query)
 
 
 def search(query: str, *, limit: int = 10, **options: Any) -> Envelope:
@@ -226,6 +229,8 @@ def explain_input(text: str) -> Envelope:
     """Classify SimC addon/profile text locally and explain the local `simc` handoff. No network."""
     if not text.strip():
         raise ProviderError("invalid_query", "No SimC input provided (use --text, --file, or stdin).")
+    if not looks_like_simc_input(text):
+        raise ProviderError("invalid_query", "Not SimC input: no `key=value` line found (pass SimC addon or profile text).")
     classification = classify_simc_input(text)
     payload: dict[str, Any] = {
         "scope": {"type": "raidbots_simc_input", "sim_type_guess": classification["sim_type_guess"]},

@@ -346,6 +346,8 @@ def test_static_metadata_is_served_from_the_cache_once_fetched(require) -> None:
     cache = replayed.payload["provenance"]["cache"]
     assert cache["all_hits"] is True, replayed.describe()
     assert cache["oldest_hit_age_seconds"] >= 0, replayed.describe()
+    # Lorrgs metadata is kept for 12 hours.
+    assert cache["oldest_hit_ttl_seconds"] == 43200, replayed.describe()
     assert replayed.data == live.data
 
 

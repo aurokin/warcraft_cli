@@ -118,9 +118,18 @@ def binary_path(binary: str) -> Path:
     return path
 
 
+def _inherited_env() -> dict[str, str]:
+    """Your environment minus what would undo the session's setup: a shell-exported zero pacing
+    interval, or a provider cache backend or directory that bypasses the isolated cache root."""
+    dropped = {"WARCRAFT_HTTP_MIN_INTERVAL_SECONDS"} | {
+        f"{prefix}_{suffix}" for prefix in CACHE_ENV_PREFIXES for suffix in ("CACHE_BACKEND", "CACHE_DIR")
+    }
+    return {key: value for key, value in os.environ.items() if key not in dropped}
+
+
 def run_raw(binary: str, *args: str, timeout: float = DEFAULT_TIMEOUT_SECONDS, env: dict[str, str] | None = None, stdin: str | None = None) -> Result:
     """Execute a binary and capture both streams without asserting anything."""
-    merged_env = {**os.environ, **SESSION_ENV, **(env or {})}
+    merged_env = {**_inherited_env(), **SESSION_ENV, **(env or {})}
     _pace(binary)
     started = time.monotonic()
     completed = subprocess.run(  # noqa: S603 — argv list, never a shell string

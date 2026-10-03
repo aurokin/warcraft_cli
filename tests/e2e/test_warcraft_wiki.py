@@ -479,6 +479,13 @@ def test_a_blank_query_is_a_usage_error(require, command: str) -> None:
     run(BINARY, command, "   ", expect=EXIT_USAGE, error_code="invalid_query")
 
 
+@pytest.mark.parametrize(("command", "query"), [("search", "jaina " * 60), ("article", "Special:Random"), ("article", "a|b")])
+def test_a_query_the_wiki_can_never_accept_is_a_usage_error(require, command: str, query: str) -> None:
+    """These exited 1 with the raw MediaWiki code (``cirrussearch-query-too-long``, ``pagecannotexist``) or 4 for a bad title."""
+    require(PROVIDER)
+    run(BINARY, command, query, expect=EXIT_USAGE, error_code="invalid_query")
+
+
 def test_article_export_rejects_an_out_path_that_is_a_file(require, out_dir: Path) -> None:
     """``--out`` naming a file once fetched the page, then failed as internal_error."""
     require(PROVIDER)

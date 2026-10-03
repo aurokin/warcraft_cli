@@ -71,7 +71,7 @@ Failures write the error envelope to stderr. Codes follow
 | `invalid_report_ref` | 2 | The reference is not a report URL or ID. Checked before any network call. |
 | `invalid_report` | 1 | The report payload is not SimC json2. |
 | `invalid_cache_config` | 1 | `RAIDBOTS_CACHE_*` environment values are unusable. |
-| `invalid_query` | 2 | Bad `explain-input` flags, empty SimC text, or upstream HTTP 400. |
+| `invalid_query` | 2 | Bad `explain-input` flags, empty SimC text, text with no SimC `key=value` line, no `--text`/`--file` while stdin is a terminal, or upstream HTTP 400. |
 | `not_found` | 4 | No readable report: upstream HTTP 404, HTTP 403 from the report storage bucket, or an HTTP 200 that carries the Raidbots web page instead of report content (wrong, expired, or private report). Raidbots takes no credentials, so 403 never means bad credentials. |
 | `network_error`, `timeout`, `rate_limited`, `upstream_error` | 5 | Transport failure, HTTP 429, or any other upstream status. |
 

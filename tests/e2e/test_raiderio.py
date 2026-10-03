@@ -324,6 +324,18 @@ def test_resolve_stays_unresolved_for_a_nonsense_query() -> None:
     result = run("raiderio", "resolve", "zzqqxx nonsense query 8471")
 
     assert result.data["resolved"] is False
+    assert result.data["confidence"] == "none"
+    assert result.data["next_command"] is None
+    # Nothing matched, so the same search would come back empty: no fallback is handed over.
+    assert result.data["fallback_search_command"] is None
+
+
+def test_resolve_hands_over_its_search_when_a_name_matches_several_guilds() -> None:
+    # Many guilds on many realms are called Liquid, so the name alone cannot pick one.
+    result = run("raiderio", "resolve", "liquid")
+
+    assert result.data["resolved"] is False
+    assert result.data["match"]["name"].lower() == "liquid", result.describe()
     assert result.data["next_command"] is None
     assert result.data["fallback_search_command"].startswith("raiderio search ")
 

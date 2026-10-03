@@ -44,6 +44,7 @@ CAPTURED_SUGGESTION_FILES = (
     "search_suggestions_argent_dawn.json",
     "search_suggestions_judgement_armor.json",
     "search_suggestions_spirit_beast.json",
+    "search_suggestions_battlegear_of_wrath.json",
 )
 
 
@@ -274,8 +275,8 @@ def test_suggestion_type_ids_derive_the_entity_type_wowhead_labels_the_row() -> 
             seen[row["typeName"]] = derived
 
     assert seen == SUGGESTION_TYPE_NAME_TO_ENTITY
-    # `companion` (112) is the one routed id no captured suggestion response has produced; every
-    # other type this repo routes on is checked above against Wowhead's own label for the row.
+    # `companion` (112) is the routed id no captured suggestion response has produced; every other
+    # type this repo routes on is checked above against Wowhead's own label for the row.
     assert set(SUGGESTION_TYPE_TO_ENTITY.values()) - set(seen.values()) == {"companion"}
 
 

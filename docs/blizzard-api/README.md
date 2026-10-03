@@ -34,7 +34,8 @@ English (`Ревущий фьорд` is `howling-fjord`, `아즈샤라` is `azsh
 non-Latin letters misses, the CLI reads the region's realm index once (cached for a day), which
 names every realm in every locale, and retries with the matching slug. A name two realms share
 (the zh_TW `閃電之刃`) stays `not_found`. A realm with no letters or digits, or a
-blank character name, is `invalid_query` (exit 2) and sends no request.
+blank character name (or one of only dots), is `invalid_query` (exit 2) and sends no request. The
+character name is sent as one URL path segment, so a `/`, `?` or `#` in it cannot reach another endpoint.
 
 `search` and `resolve` accept `--limit` (1-50, default 5); it is ignored until those surfaces ship.
 

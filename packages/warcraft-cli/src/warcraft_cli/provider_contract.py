@@ -5,6 +5,7 @@ from collections import deque
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from warcraft_core.discovery import title_match
 from warcraft_core.shapes import as_dict
 
 from warcraft_cli.providers import STALE_GUIDE_REASON
@@ -140,10 +141,7 @@ def candidate_score(candidate: Mapping[str, Any] | None) -> int:
     ranking = candidate.get("ranking")
     if not isinstance(ranking, Mapping):
         return 0
-    try:
-        return int(ranking.get("score") or 0)
-    except (TypeError, ValueError):
-        return 0
+    return int(ranking.get("score") or 0)
 
 
 def _query_tokens(query: str) -> tuple[str, set[str]]:
@@ -188,11 +186,6 @@ PROFILE_INTENTS = frozenset({"character_profile", "guild_profile", "structured_p
 # them is answered by that entity first; every other family describes or lists it.
 ENTITY_FAMILY = "entity"
 
-# Punctuation that separates a title's head from its qualifier: "Thunderfury, Blessed Blade of the
-# Windseeker", "Un'Goro Crater: Reclamation".
-_TITLE_HEAD_SEPARATORS = re.compile(r"[,:]")
-
-
 def normalized_provider_score(score: int, *, provider_max_score: int) -> int:
     """Rescale one provider-local score onto the shared 0-100 axis using that provider's own best row.
 
@@ -212,26 +205,15 @@ def normalized_provider_score(score: int, *, provider_max_score: int) -> int:
     return round(100 * min(score, provider_max_score) / divisor)
 
 
-def _normalized_title(value: Any) -> str:
-    return " ".join(str(value or "").strip().lower().split())
-
-
 def name_match_strength(query: str, name: Any) -> str | None:
     """Whether the row's own title *is* what was asked for: the whole title, its head, or neither.
 
     Providers score rows on their own scales, so the merged list needs one comparable signal for
     "this row is the thing". Wowhead's item ``Thunderfury, Blessed Blade of the Windseeker`` and its
     news post ``Possible Thunderfury-Themed Cloak on the PTR`` both merely contain ``thunderfury``;
-    only the item's title starts with it.
+    only the item's title starts with it. The test is the providers' own (``title_match``).
     """
-    normalized_query = _normalized_title(query)
-    normalized_name = _normalized_title(name)
-    if not normalized_query or not normalized_name:
-        return None
-    if normalized_name == normalized_query:
-        return "exact"
-    head = _normalized_title(_TITLE_HEAD_SEPARATORS.split(normalized_name, maxsplit=1)[0])
-    return "title_prefix" if head == normalized_query else None
+    return title_match(query, str(name or ""))
 
 
 def _provider_flagged_stale(row: Mapping[str, Any]) -> bool:
@@ -408,10 +390,7 @@ def search_result_sort_key(row: Mapping[str, Any]) -> tuple[int, int, int, str, 
     which is not comparable across providers.
     """
     wrapper = _wrapper_ranking(row)
-    try:
-        wrapper_score = int(wrapper.get("score") or 0) if wrapper else candidate_score(row)
-    except (TypeError, ValueError):
-        wrapper_score = 0
+    wrapper_score = int(wrapper.get("score") or 0) if wrapper else candidate_score(row)
     provider = str(row.get("provider") or "")
     name = str(row.get("name") or "")
     identifier = str(row.get("id") or "")

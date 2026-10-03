@@ -126,6 +126,15 @@ def test_talent_calc_command_rejects_buried_real_wowhead_path() -> None:
     assert payload["error"]["message"] == "Talent calculator URL must point to /talent-calc."
 
 
+def test_talent_calc_packet_rejects_a_build_code_with_characters_no_build_code_uses() -> None:
+    result = runner.invoke(app, ["talent-calc-packet", "https://www.wowhead.com/talent-calc/mage/frost/garbage!!!"])
+    assert result.exit_code == 2
+    assert json.loads(result.stderr)["error"] == {
+        "code": "invalid_tool_ref",
+        "message": "Talent calculator build code 'garbage!!!' holds characters no build code uses.",
+    }
+
+
 def test_talent_calc_reads_a_classic_calculator_url_as_class_and_build_code(monkeypatch) -> None:
     monkeypatch.setattr("wowhead_cli.main.WowheadClient.page_html", lambda self, url: SAMPLE_TALENT_CALC_HTML)
     url = "https://www.wowhead.com/classic/talent-calc/warrior/30305001302-05050005525010051"

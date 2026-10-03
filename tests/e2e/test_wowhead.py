@@ -1406,11 +1406,53 @@ def test_an_unknown_guide_id_is_not_found(require) -> None:
 
 
 def test_resolve_does_not_answer_a_season_query_with_another_season(require) -> None:
-    """Wowhead's database order puts "Keystone Legend: Season 2" first for "season 3"; it was resolved at high confidence."""
+    """Wowhead's database order puts "Keystone Legend: Season 2" first for "season 3"; it was resolved at
+    high confidence, and still was once a type word ("achievement", "transmog") gave the row `type_hint`."""
     require("wowhead")
-    resolved = run(BINARY, "resolve", "keystone legend season 3")
-    match = resolved.data["match"] or {}
-    assert resolved.data["resolved"] is False or "3" in (match.get("name") or "").split(), resolved.describe()
+    for query, number in (
+        ("keystone legend season 3", "3"),
+        ("keystone legend season 3 achievement", "3"),
+        ("tier 2 warrior transmog", "2"),
+    ):
+        resolved = run(BINARY, "resolve", query)
+        match = resolved.data["match"] or {}
+        assert resolved.data["resolved"] is False or number in re.findall(r"\w+", match.get("name") or ""), resolved.describe()
+
+
+def test_entity_tooltip_text_reads_money_units_from_the_markup(require) -> None:
+    """Linen Cloth sells for copper and the Darkmoon Dancing Bear costs prize tickets; the text called
+    both gold ("13g", "Cost: 180g"), reading units by position. The tooltip's own markup is the oracle."""
+    require("wowhead")
+    options = ("--no-include-comments", "--linked-entity-preview-limit", "0")
+    linen = run(BINARY, "entity", "item", "2589", *options)
+    spans = re.findall(r'class="money(gold|silver|copper)">([^<]*)<', linen.data["tooltip"]["html"])
+    assert spans, linen.describe()
+    price = " ".join(f"{amount}{unit[0]}" for unit, amount in spans)
+    assert f"Sell Price: {price}" in linen.data["tooltip"]["text"], linen.describe()
+
+    bear = run(BINARY, "entity", "item", "73766", *options)
+    currency = re.search(r'Cost: </span>(\d+)<a href="[^"]*/currency=\d+[^"]*" aria-label="([^"]+)"', bear.data["tooltip"]["html"])
+    assert currency is not None, bear.describe()
+    assert f"Cost: {currency.group(1)} {currency.group(2)}" in bear.data["tooltip"]["text"], bear.describe()
+
+
+def test_search_opens_a_tier_set_with_entity_item_set(require) -> None:
+    """Item sets (suggestion type 4) came back with no URL and no follow-up command."""
+    require("wowhead")
+    found = run(BINARY, "search", "battlegear of wrath")
+    row = next((row for row in found.data["results"] if row["type_name"] == "Item Set"), None)
+    assert row is not None, found.describe()
+    assert row["follow_up"]["command"] == f"wowhead entity item-set {row['id']}", found.describe()
+    entity = run_follow_up(row["follow_up"]["command"])
+    assert entity.data["entity"]["name"] == row["name"], entity.describe()
+
+
+def test_guide_refuses_a_wowhead_page_that_is_not_a_guide(require) -> None:
+    """`guide` answered the home page, a listing, and an item page as kind=guide."""
+    require("wowhead")
+    offline = {**dead_proxy_env(), **no_cache_env()}
+    for ref in ("https://www.wowhead.com/", "https://www.wowhead.com/items", f"https://www.wowhead.com/item={pins.ITEM_ID}"):
+        run(BINARY, "guide", ref, expect=EXIT_USAGE, error_code="invalid_argument", env=offline)
 
 
 def test_unknown_item_id_is_a_not_found_envelope(require) -> None:

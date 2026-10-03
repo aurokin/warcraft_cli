@@ -25,7 +25,6 @@ from warcraft_api.cache import (
 )
 from warcraft_content.article_bundle import load_article_bundle, query_article_bundle
 from warcraft_content.guide_analysis import extract_section_chunk_analysis_surfaces
-from warcraft_core.cache_ledger import current_cache_ledger, with_cache_provenance
 from warcraft_core.cli import (
     CompactMaxCharsOption,
     CompactOption,
@@ -39,8 +38,9 @@ from warcraft_core.cli import (
     emit,
     fail,
     guarded_run,
+    shaped_envelope,
 )
-from warcraft_core.envelope import ENVELOPE_KEYS, SCHEMA_VERSION, Envelope, envelope_violations
+from warcraft_core.envelope import ENVELOPE_KEYS, SCHEMA_VERSION, Envelope
 from warcraft_core.identity import (
     WOW_CLASS_SLUGS,
     build_identity_payload,
@@ -49,7 +49,7 @@ from warcraft_core.identity import (
     normalize_spec_name,
     validate_talent_transport_packet,
 )
-from warcraft_core.output import DEFAULT_COMPACT_MAX_CHARS, OutputProjectionError, shape_payload, to_json
+from warcraft_core.output import DEFAULT_COMPACT_MAX_CHARS, to_json
 from warcraft_core.output import emit as emit_json
 from warcraft_core.provider import ProviderError
 from warcraft_core.timestamps import iso_now_utc, parse_iso8601_utc
@@ -142,6 +142,7 @@ from wowhead_cli.provider import cache_settings_payload
 from wowhead_cli.ranking import (
     command_prefix_for_expansion,
     listing_match_score,
+    page_path_parts,
     score_text_match,
     split_choices,
     url_page_result,
@@ -422,8 +423,8 @@ def _parse_entity_ref_token(token: str) -> tuple[str, int]:
     if ":" not in token:
         raise ValueError(f"Invalid entity reference {token!r}. Expected <type>:<id> or a Wowhead entity URL.")
     entity_type, entity_id_raw = token.split(":", 1)
-    if not entity_type:
-        raise ValueError(f"Invalid entity reference {token!r}. Missing type.")
+    if ENTITY_TYPE_RE.fullmatch(entity_type.lower()) is None:
+        raise ValueError(f"Invalid entity type in {token!r}. Example: item:19019.")
     try:
         entity_id = int(entity_id_raw)
     except ValueError as exc:
@@ -465,6 +466,15 @@ def _extract_guide_id_from_path(path: str) -> int | None:
     return None
 
 
+def _is_guide_path(path: str) -> bool:
+    """Whether a Wowhead path names a guide (``guide=<id>`` or ``guide/...``) after any expansion and locale prefixes.
+
+    ``guides/...`` is a category listing, which the ``guides`` command reads.
+    """
+    segments = page_path_parts(path)
+    return bool(segments) and (segments[0] == "guide" or segments[0].startswith("guide="))
+
+
 def _resolve_guide_lookup_input(
     token: str,
     *,
@@ -483,8 +493,8 @@ def _resolve_guide_lookup_input(
         host = (parsed.hostname or "").lower()
         if host != "wowhead.com" and not host.endswith(".wowhead.com"):
             raise ValueError("Guide URL must point to wowhead.com.")
-        if not parsed.path:
-            raise ValueError("Guide URL is missing a path.")
+        if not _is_guide_path(parsed.path):
+            raise ValueError(f"{raw!r} is not a Wowhead guide URL; expected a /guide/... or guide=<id> path.")
         guide_id = _extract_guide_id_from_path(parsed.path)
         return raw, guide_id
 
@@ -496,6 +506,8 @@ def _resolve_guide_lookup_input(
     if relative_id is not None:
         return guide_url(relative_id, expansion=expansion), relative_id
 
+    if not _is_guide_path(normalized):
+        raise ValueError(f"{raw!r} is not a Wowhead guide path; expected guide/... or guide=<id>.")
     root_segment = normalized.split("/", 1)[0]
     lookup_url = f"{WOWHEAD_BASE_URL}/{normalized}" if root_segment in EXPANSION_PREFIXES else f"{expansion.wowhead_base}/{normalized}"
     guide_id = _extract_guide_id_from_path(f"/{normalized}")
@@ -587,15 +599,7 @@ def _emit(ctx: typer.Context, payload: dict[str, Any], *, err: bool = False) -> 
     if not cfg.stream:
         emit(ctx, payload, err=err)
         return
-    # The JSONL path bypasses warcraft_core.cli.emit, so it applies the same envelope check itself.
-    problems = envelope_violations(payload)
-    if problems:
-        raise TypeError(f"refusing to emit a malformed envelope: {'; '.join(problems)}")
-    try:
-        rendered = shape_payload(with_cache_provenance(payload, current_cache_ledger()), cfg.output)
-    except OutputProjectionError as exc:
-        fail(ctx, "missing_fields", str(exc), details={"missing_fields": list(exc.missing_fields)})
-    _emit_jsonl(ctx, rendered, err=err)
+    _emit_jsonl(ctx, shaped_envelope(ctx, payload), err=err)
 
 
 def _emit_surface(ctx: typer.Context, build: Callable[[], Envelope]) -> None:
@@ -660,7 +664,11 @@ FLAVOR_QUOTE_RE = re.compile(r'''\s*"[^"]{20,}"''')
 PAREN_OPEN_SPACE_RE = re.compile(r"""\(\s+""")
 PAREN_CLOSE_SPACE_RE = re.compile(r"""\s+\)""")
 PLUS_STAT_RE = re.compile(r"""(?<!\S)\+\s+(\d)""")
-MONEY_LABEL_RE = re.compile(r"""(?P<label>Sell Price:|Cost:)\s+(?P<amount>\d[\d,]*(?:\s+\d[\d,]*){0,2})""")
+MONEY_SPAN_RE = re.compile(r"""<span class="money(?P<unit>gold|silver|copper)">(?P<amount>[^<]*)</span>""")
+CURRENCY_LINK_RE = re.compile(
+    r"""<a\b[^>]*\bhref="[^"]*/currency=\d+[^"]*"[^>]*\baria-label="(?P<name>[^"]+)"[^>]*>.*?</a>""",
+    re.DOTALL,
+)
 TOOLTIP_SUMMARY_MARKERS = (
     "Use:",
     "Chance on hit:",
@@ -693,13 +701,13 @@ TOOLTIP_METADATA_TERMS = (
 SENTENCE_END_RE = re.compile(r"""[.?!](?:\s|$)""")
 
 
-def _format_money_amount(amount: str) -> str:
-    parts = amount.split()
-    if len(parts) == 1:
-        return f"{parts[0]}g"
-    suffixes = ("g", "s", "c")
-    formatted = [f"{part}{suffixes[index]}" for index, part in enumerate(parts[: len(suffixes)])]
-    return " ".join(formatted)
+def _label_tooltip_money(html: str) -> str:
+    """Spell out the units Wowhead marks only in markup: money spans and currency icon links.
+
+    Flattening the HTML drops both, so ``87 50`` silver/copper or a ``180`` ticket cost would read as bare numbers.
+    """
+    html = MONEY_SPAN_RE.sub(lambda match: f"{match.group('amount')}{match.group('unit')[0]}", html)
+    return CURRENCY_LINK_RE.sub(lambda match: f" {match.group('name')}", html)
 
 
 def _clean_tooltip_text(text: str) -> str:
@@ -709,7 +717,6 @@ def _clean_tooltip_text(text: str) -> str:
     cleaned = PAREN_OPEN_SPACE_RE.sub("(", cleaned)
     cleaned = PAREN_CLOSE_SPACE_RE.sub(")", cleaned)
     cleaned = PLUS_STAT_RE.sub(r"+\1", cleaned)
-    cleaned = MONEY_LABEL_RE.sub(lambda match: f"{match.group('label')} {_format_money_amount(match.group('amount'))}", cleaned)
     cleaned = cleaned.replace(" .", ".").replace(" ,", ",")
     cleaned = " ".join(cleaned.split())
     while True:
@@ -800,7 +807,7 @@ def _normalize_tooltip_payload(tooltip: dict[str, Any]) -> tuple[str | None, dic
 
     if isinstance(tooltip_html, str):
         tooltip_payload["html"] = tooltip_html
-        tooltip_text = _clean_tooltip_text(clean_markup_text(tooltip_html))
+        tooltip_text = _clean_tooltip_text(clean_markup_text(_label_tooltip_money(tooltip_html)))
         tooltip_payload["text"] = tooltip_text
         tooltip_summary = _build_tooltip_summary(tooltip_text, entity_name=name)
         if tooltip_summary:
@@ -964,7 +971,8 @@ def _build_entity_payload(
         linked_entity_preview_limit=linked_entity_preview_limit,
     )
     if cached_payload is not None:
-        return cached_payload
+        # The cache key leaves out how this run picked its expansion, so report this run's.
+        return {**cached_payload, "expansion_source": cfg.expansion_source}
 
     plan, tooltip = _tooltip_and_page_plan(client, entity_type, entity_id, data_env=data_env)
     canonical = entity_url(plan.page_entity_type, plan.page_entity_id, expansion=cfg.expansion)
@@ -1556,6 +1564,8 @@ def _normalize_blue_tracker_row(row: dict[str, Any]) -> dict[str, Any] | None:
 
 # A spec path segment (``balance``, ``beast-mastery``); build codes carry digits or capitals.
 _TALENT_CALC_SPEC_RE = re.compile(r"[a-z]+(?:-[a-z]+)*")
+# Retail build codes are Blizzard loadout strings (base64 letters, digits, ``+``); classic ones are digits and ``-``.
+_TALENT_CALC_BUILD_CODE_RE = re.compile(r"[A-Za-z0-9+_-]+")
 # Blizzard specialization ids by class and spec key. Wowhead's listed builds carry one as ``spec``, and
 # a retail build code's loadout header encodes one.
 _WOW_SPEC_IDS: dict[tuple[str, str], int] = {(spec.class_key, spec.key): spec.spec_id for spec in WOW_SPECS}
@@ -1634,6 +1644,8 @@ def _parse_talent_calc_state(state_url: str) -> dict[str, Any]:
         spec_slug, build_code = None, slot
     else:
         raise ValueError(f"Talent calculator spec segment {slot!r} is not a spec name.")
+    if build_code is not None and _TALENT_CALC_BUILD_CODE_RE.fullmatch(build_code) is None:
+        raise ValueError(f"Talent calculator build code {build_code!r} holds characters no build code uses.")
     return {
         "expansion": expansion,
         "class_slug": class_slug,
@@ -2254,7 +2266,7 @@ def _scan_guide_bundle_rows(root: Path) -> list[dict[str, Any]]:
             continue
         try:
             manifest = read_json_file(manifest_path)
-        except (OSError, json.JSONDecodeError):
+        except (OSError, ValueError):
             continue
         if not isinstance(manifest, dict):
             continue
@@ -2270,7 +2282,7 @@ def _holds_foreign_index(root: Path) -> bool:
         return False
     try:
         payload = read_json_file(index_path)
-    except (OSError, json.JSONDecodeError):
+    except (OSError, ValueError):
         return True
     return not (isinstance(payload, dict) and "index_version" in payload)
 
@@ -2294,7 +2306,7 @@ def _load_guide_bundle_index(root: Path) -> list[dict[str, Any]] | None:
         return None
     try:
         payload = read_json_file(index_path)
-    except (OSError, json.JSONDecodeError):
+    except (OSError, ValueError):
         return None
     if not isinstance(payload, dict):
         return None
@@ -2366,7 +2378,7 @@ def _load_bundle_entities_manifest(export_dir: Path) -> dict[str, Any] | None:
         return None
     try:
         payload = read_json_file(path)
-    except (OSError, json.JSONDecodeError):
+    except (OSError, ValueError):
         return None
     return payload if isinstance(payload, dict) else None
 
@@ -3054,7 +3066,7 @@ def resolve(
         "--limit",
         min=1,
         max=20,
-        help="Maximum fallback candidates to return.",
+        help="Maximum candidates to list; confidence is judged over all of them.",
     ),
 ) -> None:
     """Resolve a name or URL to the single most likely Wowhead entity plus a follow-up command."""
@@ -4131,6 +4143,12 @@ def guide_export(
     _emit(ctx, manifest)
 
 
+def _require_query(ctx: typer.Context, query: str) -> None:
+    """Refuse a blank bundle query, which would match nothing and read as "the guide doesn't say"."""
+    if not query.strip():
+        fail(ctx, "invalid_query", "Query cannot be empty.")
+
+
 @app.command("guide-query")
 def guide_query(
     ctx: typer.Context,
@@ -4174,6 +4192,7 @@ def guide_query(
     ),
 ) -> None:
     """Query one guide for the sections, links, and comments that match a query string."""
+    _require_query(ctx, query)
     try:
         export_dir = _resolve_corpus_ref(bundle_ref, root=root)
         bundle = load_article_bundle(export_dir)
@@ -4335,6 +4354,7 @@ def guide_bundle_query(
     ),
 ) -> None:
     """Query every local guide bundle under a corpus root and rank the matching guides."""
+    _require_query(ctx, query)
     resolved_root = (root or guide_export_root()).expanduser()
     bundles = _discover_guide_corpora(resolved_root, max_age_hours=max_age_hours)
     try:
@@ -4403,9 +4423,8 @@ def guide_bundle_search(
     ),
 ) -> None:
     """Search local guide bundles by title, guide id, or directory name."""
+    _require_query(ctx, query)
     normalized_query = " ".join(query.split())
-    if not normalized_query:
-        fail(ctx, "invalid_argument", "query cannot be empty.")
 
     resolved_root = (root or guide_export_root()).expanduser()
     bundles = _discover_guide_corpora(resolved_root, max_age_hours=max_age_hours)
@@ -4628,9 +4647,22 @@ def guide_bundle_refresh(
     _emit(ctx, refreshed_manifest)
 
 
+ENTITY_TYPE_RE = re.compile(r"""[a-z][a-z-]*""")
+
+
+def _entity_type_or_fail(ctx: typer.Context, entity_type: str) -> str:
+    """TYPE lower-cased; it goes into URL paths, so anything but letters and hyphens is refused."""
+    lowered = entity_type.lower()
+    if ENTITY_TYPE_RE.fullmatch(lowered) is None:
+        fail(ctx, "invalid_argument", f"Entity type {entity_type!r} is not a Wowhead type. Example: item, quest, npc.")
+    return lowered
+
+
 def _entity_ref_or_fail(ctx: typer.Context, entity_type: str | None, entity_id: int | None, url: str | None) -> tuple[str, int]:
     """The entity a command reads: the ``--url`` when given (adopting its expansion), else TYPE ID."""
     if url is not None:
+        if entity_type is not None or entity_id is not None:
+            fail(ctx, "invalid_argument", "Pass TYPE ID or --url, not both.")
         _apply_url_expansion(ctx, url)
         parsed = parse_entity_from_wowhead_url(url)
         if parsed is None:
@@ -4638,14 +4670,14 @@ def _entity_ref_or_fail(ctx: typer.Context, entity_type: str | None, entity_id: 
         return parsed
     if entity_type is None or entity_id is None:
         fail(ctx, "invalid_argument", "Pass TYPE ID, or --url with a Wowhead entity URL.")
-    return entity_type.lower(), entity_id
+    return _entity_type_or_fail(ctx, entity_type), entity_id
 
 
 @app.command("entity")
 def entity(
     ctx: typer.Context,
     entity_type: str | None = typer.Argument(None, help="Wowhead entity type. Example: item, quest, npc. Omit with --url."),
-    entity_id: int | None = typer.Argument(None, help="Wowhead entity id. Omit with --url."),
+    entity_id: int | None = typer.Argument(None, min=1, help="Wowhead entity id. Omit with --url."),
     url: str | None = typer.Option(
         None,
         "--url",
@@ -4759,7 +4791,7 @@ def _entity_page_payload(
 def entity_page(
     ctx: typer.Context,
     entity_type: str | None = typer.Argument(None, help="Wowhead entity type. Example: item, quest, npc. Omit with --url."),
-    entity_id: int | None = typer.Argument(None, help="Wowhead entity id. Omit with --url."),
+    entity_id: int | None = typer.Argument(None, min=1, help="Wowhead entity id. Omit with --url."),
     url: str | None = typer.Option(
         None,
         "--url",
@@ -4999,7 +5031,7 @@ CommentsInsightLimitOption = Annotated[
 def comments(
     ctx: typer.Context,
     entity_type: str = typer.Argument(..., help="Wowhead entity type. Example: item, quest, npc."),
-    entity_id: int = typer.Argument(..., help="Wowhead entity id."),
+    entity_id: int = typer.Argument(..., min=1, help="Wowhead entity id."),
     limit: CommentsLimitOption = 25,
     sort: CommentsSortOption = "newest",
     min_rating: CommentsMinRatingOption = None,
@@ -5024,7 +5056,7 @@ def comments(
         ctx,
         _comments_payload(
             ctx,
-            entity_type=entity_type,
+            entity_type=_entity_type_or_fail(ctx, entity_type),
             entity_id=entity_id,
             options=CommentsQueryOptions(
                 limit=limit,
@@ -5260,7 +5292,7 @@ def compare(
 def linked_graph(
     ctx: typer.Context,
     entity_type: str = typer.Argument(..., help="Root Wowhead entity type. Example: item, quest, npc."),
-    entity_id: int = typer.Argument(..., help="Root Wowhead entity id."),
+    entity_id: int = typer.Argument(..., min=1, help="Root Wowhead entity id."),
     depth: int = typer.Option(1, "--depth", min=1, max=2, help="Traversal depth (1 = direct links, 2 = one additional hop)."),
     relation: list[str] | None = typer.Option(
         None,
@@ -5277,7 +5309,7 @@ def linked_graph(
 ) -> None:
     """Build a linked-entity graph rooted at one Wowhead entity."""
     cfg = _cfg(ctx)
-    entity_type = entity_type.lower()
+    entity_type = _entity_type_or_fail(ctx, entity_type)
     client = _client(ctx)
     # The root goes through the access plan (recipe reads the spell page, mount and battle-pet follow
     # the tooltip redirect); linked children are the page types Wowhead itself linked to.

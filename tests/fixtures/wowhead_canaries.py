@@ -42,5 +42,6 @@ SUGGESTION_TYPE_NAME_TO_ENTITY: dict[str, str] = {
     "Currency": "currency",
     "Guide": "guide",
     "Transmog Set": "transmog-set",
+    "Item Set": "item-set",
     "News Post": "news",
 }

@@ -51,7 +51,7 @@ Resolve a free-text query to the best Icy Veins guide, with the candidate list a
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--limit` | int range [1<=x<=50] | 5 | Maximum candidates to inspect. |
+| `--limit` | int range [1<=x<=50] | 5 | Maximum candidates to list; ambiguity is judged over all of them. |
 
 ## icy-veins index-refresh
 

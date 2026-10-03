@@ -7,8 +7,8 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from warcraft_core.analytics import numeric_summary
-from warcraft_core.identity import WOW_SPECS_BY_CLASS
 from warcraft_core.timestamps import iso_now_utc
+from warcraft_core.wow_specs import WOW_CLASS_NAMES, WowSpec, lookup_spec
 
 from warcraftlogs_cli.client import ReportPlayerDetailsOptions, WarcraftLogsClient
 from warcraftlogs_cli.report_payloads import fight_payload, report_brief_payload, report_payload, report_url
@@ -50,30 +50,28 @@ class CrossReportScope:
     guild_name: str | None = None
 
 
-def _spec_spellings(actor_class: str, spec: str) -> set[str]:
-    """How a --spec-name may name this spec: bare ("Frost") or with its class in either order ("Frost Mage")."""
-    spec_text = normalize_match_text(spec)
-    if not spec_text:
-        return set()
-    class_text = normalize_match_text(actor_class)
-    return {spec_text, spec_text + class_text, class_text + spec_text}
-
-
-def is_retail_spec_name(spec_name: str) -> bool:
-    """Whether ``spec_name`` names a retail spec in a spelling :func:`matching_specs` accepts."""
-    wanted = normalize_match_text(spec_name)
-    return any(wanted in _spec_spellings(actor_class, spec) for actor_class, specs in WOW_SPECS_BY_CLASS.items() for spec in specs)
+def retail_specs_named(text: str) -> set[WowSpec]:
+    """Every retail spec ``text`` names in any provider's spelling or shorthand (Frost Mage, bm, hunter-beastmastery):
+    one, or each class's for a bare spec several classes share (Frost)."""
+    return {spec for class_key in WOW_CLASS_NAMES if (spec := lookup_spec(text, class_hint=class_key))}
 
 
 def matching_specs(actor: dict[str, Any], spec_name: str) -> list[dict[str, Any]]:
-    """The actor's spec rows that ``spec_name`` names; the actor's ``type`` is its class."""
-    wanted = normalize_match_text(spec_name)
+    """The actor's spec rows that ``spec_name`` names; the actor's ``type`` is its class.
+
+    A ``spec_name`` outside the retail table (a classic site's Combat) matches a row's spec by name,
+    bare or with its class in either order (Combat Rogue).
+    """
+    wanted = retail_specs_named(spec_name)
     actor_class = str(actor.get("type") or "")
-    return [
-        spec
-        for spec in list_at(actor, "specs")
-        if isinstance(spec, dict) and wanted in _spec_spellings(actor_class, str(spec.get("spec") or ""))
-    ]
+
+    def names(row_spec: str) -> bool:
+        if wanted:
+            return lookup_spec(row_spec, class_hint=actor_class) in wanted
+        spec_text, class_text = normalize_match_text(row_spec), normalize_match_text(actor_class)
+        return bool(spec_text) and normalize_match_text(spec_name) in {spec_text, spec_text + class_text, class_text + spec_text}
+
+    return [spec for spec in list_at(actor, "specs") if isinstance(spec, dict) and names(str(spec.get("spec") or ""))]
 
 
 def player_details_roles(report: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:

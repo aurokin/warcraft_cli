@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import math
 import re
 import secrets
 import shlex
@@ -57,12 +58,12 @@ from warcraft_core.output import DEFAULT_COMPACT_MAX_CHARS
 from warcraft_core.paths import provider_state_path
 from warcraft_core.talent_transport import validate_talent_tree_transport
 from warcraft_core.wow_normalization import profile_region
-from warcraft_core.wow_specs import WOW_CLASS_NAMES, WOW_SPECS, warcraftlogs_class_slug
+from warcraft_core.wow_specs import WOW_CLASS_NAMES, lookup_class, warcraftlogs_class_slug
 
 from warcraftlogs_cli.boss_kills import (
     CrossReportScope,
-    is_retail_spec_name,
     player_details_roles,
+    retail_specs_named,
 )
 from warcraftlogs_cli.boss_kills import (
     boss_kills_payload as _boss_kills_payload,
@@ -358,13 +359,32 @@ def _fail(ctx: typer.Context, code: str, message: str, *, details: dict[str, Any
     fail(ctx, code, message, exit_code=exit_code, details=details)
 
 
+def _finite_float(value: str) -> float:
+    """A float option's value; nan and inf fail as usage errors instead of breaking the JSON request and envelope."""
+    try:
+        number = float(value)
+    except ValueError:
+        number = math.nan
+    if not math.isfinite(number):
+        raise typer.BadParameter(f"{value!r} is not a finite number.")
+    return number
+
+
+def _float_option(*param_decls: str, help: str) -> Any:
+    """An optional float flag that rejects nan and inf."""
+    return typer.Option(None, *param_decls, help=help, parser=_finite_float, metavar="FLOAT")
+
+
 def _load_graphql_query(ctx: typer.Context, query: str | None, *, introspect: bool) -> str:
     if introspect:
         return WARCRAFTLOGS_INTROSPECTION_QUERY
     if query is None or not query.strip():
         _fail(ctx, "missing_query", "warcraftlogs graphql requires --query unless --introspect is set.")
     if query == "-":
-        loaded = sys.stdin.read()
+        try:
+            loaded = sys.stdin.buffer.read().decode("utf-8")
+        except UnicodeDecodeError as exc:
+            _fail(ctx, "invalid_query", f"GraphQL query on stdin is not UTF-8 text: {exc}")
     elif query.startswith("@"):
         path_text = query[1:]
         if not path_text:
@@ -372,7 +392,7 @@ def _load_graphql_query(ctx: typer.Context, query: str | None, *, introspect: bo
         path = Path(path_text).expanduser()
         try:
             loaded = path.read_text(encoding="utf-8")
-        except OSError as exc:
+        except (OSError, UnicodeDecodeError) as exc:
             _fail(ctx, "invalid_query", f"Could not read GraphQL query file {str(path)!r}: {exc}")
     else:
         loaded = query
@@ -563,27 +583,55 @@ def _normalize_hard_mode_level_rank_filter(value: str | None) -> str | None:
 # characterRankings takes Warcraft Logs' own CamelCase slugs ("DeathKnight", "BeastMastery") and
 # answers "Invalid class and spec specified." for the spaced display names, and a character's
 # zoneRankings silently ignores any other spec spelling (both checked live 2026-09-30).
-_WARCRAFTLOGS_CLASS_SLUGS = tuple(warcraftlogs_class_slug(class_key) for class_key in WOW_CLASS_NAMES)
-_WARCRAFTLOGS_SPEC_SLUGS = tuple(sorted({spec.warcraftlogs_spec_slug for spec in WOW_SPECS}))
+def _warcraftlogs_class_slug(ctx: typer.Context, value: str | None) -> str | None:
+    """The Warcraft Logs class slug for any provider's class spelling ("death-knight", "Death Knight", "dk").
 
-
-def _warcraftlogs_slug(
-    ctx: typer.Context, value: str | None, slugs: tuple[str, ...], *, flag: str, strict: bool = True
-) -> str | None:
-    """Map any spelling ("death-knight", "Death Knight", "deathknight") to the Warcraft Logs slug.
-
-    Warcraft Logs answers an unknown class name or character-ranking spec unfiltered instead of
-    rejecting it, so an unrecognised value fails ``invalid_query``. ``strict=False`` passes it through
-    trimmed, for a value Warcraft Logs rejects itself or a list that does not cover the selected site.
+    Warcraft Logs answers an unknown class name unfiltered instead of rejecting it, so one fails ``invalid_query``.
     """
     text = (value or "").strip()
     if not text:
         return None
-    key = re.sub(r"[^a-z]", "", text.lower())
-    slug = next((slug for slug in slugs if slug.lower() == key), None)
-    if slug is None and strict:
-        _fail(ctx, "invalid_query", f"Unknown {flag} {text!r}; expected one of: {', '.join(slugs)}.")
-    return slug or text
+    class_key = lookup_class(text)
+    if class_key is None:
+        classes = ", ".join(warcraftlogs_class_slug(key) for key in WOW_CLASS_NAMES)
+        _fail(ctx, "invalid_query", f"Unknown --class-name {text!r}; expected one of: {classes}.")
+    return warcraftlogs_class_slug(class_key)
+
+
+_SPEC_NAME_HINT = "name a spec (Frost), a class and spec (Frost Mage) or shorthand (bm)."
+
+
+def _warcraftlogs_spec_slug(ctx: typer.Context, value: str | None, *, strict: bool) -> str | None:
+    """The Warcraft Logs spec slug for any provider's spec spelling ("beast-mastery", "bm hunter", "hunter-beastmastery").
+
+    An unrecognised value fails ``invalid_query`` when ``strict``; otherwise it passes through trimmed,
+    for a value Warcraft Logs rejects itself or a site whose specs the retail table does not cover.
+    """
+    text = (value or "").strip()
+    if not text:
+        return None
+    # Each spec a spelling names shares one slug: a bare "Frost" is the Death Knight's and the Mage's.
+    slugs = {spec.warcraftlogs_spec_slug for spec in retail_specs_named(text)}
+    if not slugs and strict:
+        _fail(ctx, "invalid_query", f"Unknown --spec-name {text!r}; {_SPEC_NAME_HINT}")
+    return slugs.pop() if slugs else text
+
+
+def _ranking_class_and_spec(ctx: typer.Context, class_name: str | None, spec_name: str | None) -> tuple[str | None, str | None]:
+    """The class and spec slugs for encounterRankings, which needs a className with a specName.
+
+    A spec spelling that names one class (bm hunter, fdk, ret) supplies the class when ``--class-name`` is absent,
+    and one that names a different class than ``--class-name`` fails ``invalid_query``.
+    """
+    class_slug = _warcraftlogs_class_slug(ctx, class_name)
+    spec_slug = _warcraftlogs_spec_slug(ctx, spec_name, strict=False)
+    named = {warcraftlogs_class_slug(spec.class_key) for spec in retail_specs_named((spec_name or "").strip())}
+    if len(named) == 1:
+        (spec_class,) = named
+        if class_slug is not None and class_slug != spec_class:
+            _fail(ctx, "invalid_query", f"--spec-name {spec_name!r} is a {spec_class} spec, but --class-name is {class_name!r}.")
+        class_slug = spec_class
+    return class_slug, spec_slug
 
 
 def _client(ctx: typer.Context) -> WarcraftLogsClient:
@@ -1396,6 +1444,9 @@ def _parse_report_reference(reference: str, *, explicit_fight_id: int | None) ->
     parsed = urlparse(text)
     parsed_fight_id: int | None = None
     if parsed.scheme and parsed.netloc:
+        # Any warcraftlogs.com host (de., ko.classic., vanilla., ...); site detection is separate.
+        if (parsed.hostname or "").split(".")[-2:] != ["warcraftlogs", "com"]:
+            raise ValueError("Report URL must point to warcraftlogs.com or one of its subdomains.")
         source_url = text
         parts = [part for part in parsed.path.strip("/").split("/") if part]
         try:
@@ -1410,8 +1461,33 @@ def _parse_report_reference(reference: str, *, explicit_fight_id: int | None) ->
                 parsed_fight_id = int(fight_values[0])
             except ValueError:
                 parsed_fight_id = None
+    if not re.fullmatch(r"[A-Za-z0-9]+", code):
+        raise ValueError(f"{text!r} is not a Warcraft Logs report code or report URL.")
     fight_id = explicit_fight_id if explicit_fight_id is not None else parsed_fight_id
     return ReportReference(code=code, fight_id=fight_id, source_url=source_url, site=_url_site_profile(parsed.hostname))
+
+
+def _report_reference(ctx: typer.Context, reference: str, *, fight_id: int | None = None) -> ReportReference:
+    """A report URL or bare report code on the selected site; anything else fails ``invalid_query`` before a request."""
+    site = _cfg(ctx).site_profile
+    try:
+        ref = _parse_report_reference(reference, explicit_fight_id=fight_id)
+    except ValueError as exc:
+        _fail(ctx, "invalid_query", str(exc))
+    if ref.site is not None and ref.site.key != site.key:
+        _fail(
+            ctx,
+            "invalid_query",
+            f"{reference!r} is a {ref.site.label} Warcraft Logs report, but the selected site is {site.key!r}. "
+            f"Re-run with `{_warcraftlogs_command_prefix(ref.site)} ...`.",
+        )
+    return ref
+
+
+def _report_code_and_fights(ctx: typer.Context, reference: str, fight_ids: list[int] | None) -> tuple[str, list[int] | None]:
+    """A report command's code and fights: a URL's ``#fight=N`` scopes it when ``--fight-id`` is absent."""
+    ref = _report_reference(ctx, reference)
+    return ref.code, fight_ids or ([ref.fight_id] if ref.fight_id is not None else None)
 
 
 def _explicit_report_reference(query: str) -> ReportReference | None:
@@ -1511,17 +1587,7 @@ def _resolve_encounter_scope(
     fight_id: int | None,
     allow_unlisted: bool,
 ) -> _EncounterScope:
-    try:
-        ref = _parse_report_reference(reference, explicit_fight_id=fight_id)
-    except ValueError as exc:
-        _fail(ctx, "invalid_query", str(exc))
-    if ref.site is not None and ref.site.key != client.site.key:
-        _fail(
-            ctx,
-            "invalid_query",
-            f"{reference!r} is a {ref.site.label} Warcraft Logs report, but the selected site is {client.site.key!r}. "
-            f"Re-run with `{_warcraftlogs_command_prefix(ref.site)} ...`.",
-        )
+    ref = _report_reference(ctx, reference, fight_id=fight_id)
     report = client.report(code=ref.code, allow_unlisted=allow_unlisted)
     fights_report = client.report_fights(code=ref.code, difficulty=None, allow_unlisted=allow_unlisted)
     fights = list_at(fights_report, "fights")
@@ -3506,8 +3572,7 @@ def main(
 def search(
     ctx: typer.Context,
     query: str = typer.Argument(..., help="Explicit Warcraft Logs report URL or report code."),
-    limit: int = typer.Option(5, "--limit", min=1, max=50,
-                              help="Accepted for wrapper compatibility; explicit report discovery returns at most one result."),
+    limit: int = typer.Option(5, "--limit", min=1, max=50, help="Maximum rows to return; an explicit reference yields at most one."),
 ) -> None:
     """Match an explicit Warcraft Logs report URL or code; free text returns a discovery hint."""
     emit(ctx, provider_search(query, limit=limit, site=_cfg(ctx).site_profile))
@@ -3517,8 +3582,7 @@ def search(
 def resolve(
     ctx: typer.Context,
     query: str = typer.Argument(..., help="Explicit Warcraft Logs report URL or report code."),
-    limit: int = typer.Option(5, "--limit", min=1, max=50,
-                              help="Accepted for wrapper compatibility; explicit report resolution returns at most one match."),
+    limit: int = typer.Option(5, "--limit", min=1, max=50, help="Maximum candidates to list; an explicit reference yields at most one."),
 ) -> None:
     """Resolve an explicit Warcraft Logs report URL or code to a single report reference."""
     del limit
@@ -4168,8 +4232,8 @@ def encounter_rankings(
     boss_name: str | None = typer.Option(None, "--boss-name", help="Encounter name to resolve within the selected zone."),
     bracket: int | None = typer.Option(None, "--bracket", help="Optional Warcraft Logs bracket filter."),
     difficulty: int | None = typer.Option(None, "--difficulty", help="Optional difficulty ID filter."),
-    class_name: str | None = typer.Option(None, "--class-name", help="Optional class slug or class name filter."),
-    spec_name: str | None = typer.Option(None, "--spec-name", help="Optional spec slug or spec name filter."),
+    class_name: str | None = typer.Option(None, "--class-name", help="Optional class filter (Death Knight, death-knight, dk)."),
+    spec_name: str | None = typer.Option(None, "--spec-name", help="Optional spec filter (Beast Mastery, beast-mastery, bm)."),
     metric: str | None = typer.Option(None, "--metric", help="Optional ranking metric such as dps, hps, or bossdps."),
     page: int | None = typer.Option(None, "--page", min=1, help="Optional rankings page number."),
     partition: int | None = typer.Option(None, "--partition", help="Optional Warcraft Logs partition filter."),
@@ -4192,6 +4256,7 @@ def encounter_rankings(
     top: int = typer.Option(10, "--top", min=1, max=100, help="Maximum returned ranking rows after normalization."),
 ) -> None:
     """Rank characters on one encounter, filtered by class, spec, difficulty, and server."""
+    class_slug, spec_slug = _ranking_class_and_spec(ctx, class_name, spec_name)
     _run_encounter_rankings(
         ctx,
         _EncounterRankingsRequest(
@@ -4216,9 +4281,9 @@ def encounter_rankings(
                 filter=filter_text,
                 include_combatant_info=include_combatant_info,
                 include_other_players=include_other_players,
-                class_name=_warcraftlogs_slug(ctx, class_name, _WARCRAFTLOGS_CLASS_SLUGS, flag="--class-name"),
+                class_name=class_slug,
                 # Warcraft Logs rejects an unknown spec here itself ("Invalid class and spec specified.").
-                spec_name=_warcraftlogs_slug(ctx, spec_name, _WARCRAFTLOGS_SPEC_SLUGS, flag="--spec-name", strict=False),
+                spec_name=spec_slug,
             ),
         ),
     )
@@ -4388,13 +4453,13 @@ def character_rankings(
     difficulty: int | None = typer.Option(None, "--difficulty", help="Optional difficulty ID."),
     metric: str | None = typer.Option(None, "--metric", help="Optional ranking metric such as dps, hps, or tankhps."),
     size: int | None = typer.Option(None, "--size", help="Optional raid size."),
-    spec_name: str | None = typer.Option(None, "--spec-name", help="Optional spec filter, in any spelling (beast-mastery, Beast Mastery)."),
+    spec_name: str | None = typer.Option(None, "--spec-name", help="Optional spec filter (Beast Mastery, beast-mastery, bm)."),
     top: int = typer.Option(5, "--top", min=1, max=20, help="Number of top ranking rows to keep in the summary."),
 ) -> None:
     """Show a character's encounter rankings for one zone."""
     # The spec list is retail's; a classic site has specs it lacks (Combat), so only retail is checked.
     retail = _cfg(ctx).site_profile.key == RETAIL_PROFILE.key
-    spec_slug = _warcraftlogs_slug(ctx, spec_name, _WARCRAFTLOGS_SPEC_SLUGS, flag="--spec-name", strict=retail)
+    spec_slug = _warcraftlogs_spec_slug(ctx, spec_name, strict=retail)
     client = _client(ctx)
     try:
         payload = client.character_rankings(
@@ -4434,10 +4499,11 @@ def character_rankings(
 @app.command("report")
 def report(
     ctx: typer.Context,
-    code: str = typer.Argument(..., help="Warcraft Logs report code."),
+    code: str = typer.Argument(..., help="Warcraft Logs report URL or report code."),
     allow_unlisted: bool = typer.Option(False, "--allow-unlisted", help="Allow lookup of unlisted reports."),
 ) -> None:
     """Show one report's metadata, zone, and owning guild."""
+    code = _report_reference(ctx, code).code
     client = _client(ctx)
     try:
         payload = client.report(code=code, allow_unlisted=allow_unlisted)
@@ -4462,8 +4528,8 @@ def reports(
     guild_name: str | None = typer.Option(None, "--guild-name", help="Optional guild name for guild-scoped report queries."),
     limit: int = typer.Option(25, "--limit", min=1, max=100, help="Reports per page."),
     page: int = typer.Option(1, "--page", min=1, help="Page number."),
-    start_time: float | None = typer.Option(None, "--start-time", help="Optional report-range start time in milliseconds."),
-    end_time: float | None = typer.Option(None, "--end-time", help="Optional report-range end time in milliseconds."),
+    start_time: float | None = _float_option("--start-time", help="Optional report-range start time in milliseconds."),
+    end_time: float | None = _float_option("--end-time", help="Optional report-range end time in milliseconds."),
     zone_id: int | None = typer.Option(None, "--zone-id", help="Optional Warcraft Logs zone filter."),
     game_zone_id: int | None = typer.Option(None, "--game-zone-id", help="Optional game zone filter."),
 ) -> None:
@@ -4516,8 +4582,8 @@ def guild_reports(
     name: str = typer.Argument(..., help="Guild name."),
     limit: int = typer.Option(25, "--limit", min=1, max=100, help="Reports per page."),
     page: int = typer.Option(1, "--page", min=1, help="Page number."),
-    start_time: float | None = typer.Option(None, "--start-time", help="Optional report-range start time in milliseconds."),
-    end_time: float | None = typer.Option(None, "--end-time", help="Optional report-range end time in milliseconds."),
+    start_time: float | None = _float_option("--start-time", help="Optional report-range start time in milliseconds."),
+    end_time: float | None = _float_option("--end-time", help="Optional report-range end time in milliseconds."),
     zone_id: int | None = typer.Option(None, "--zone-id", help="Optional Warcraft Logs zone filter."),
     game_zone_id: int | None = typer.Option(None, "--game-zone-id", help="Optional game zone filter."),
 ) -> None:
@@ -4575,8 +4641,8 @@ def _validate_cohort_scope(ctx: typer.Context, client: WarcraftLogsClient, scope
     )
     # A misspelled spec matches no player and reads as "nobody played it". Only retail is checked:
     # a classic site has specs the retail list lacks (Combat).
-    if scope.spec_name and client.site.key == RETAIL_PROFILE.key and not is_retail_spec_name(scope.spec_name):
-        _fail(ctx, "invalid_query", f"Unknown --spec-name {scope.spec_name!r}; name a spec (Frost) or a class and spec (Frost Mage).")
+    if scope.spec_name and client.site.key == RETAIL_PROFILE.key and not retail_specs_named(scope.spec_name):
+        _fail(ctx, "invalid_query", f"Unknown --spec-name {scope.spec_name!r}; {_SPEC_NAME_HINT}")
     encounter = _resolve_encounter(ctx, client=client, zone_id=scope.zone_id, boss_id=scope.boss_id, boss_name=scope.boss_name)
     return replace(scope, boss_id=encounter["id"], boss_name=None)
 
@@ -4695,13 +4761,13 @@ def _fastest_kills_command(kind: str, summary: str) -> Callable[..., None]:
             "--spec-name",
             help="Optional sampled participant spec filter applied before ranking sampled kills.",
         ),
-        kill_time_min: float | None = typer.Option(None, "--kill-time-min", help="Optional minimum kill time in seconds."),
-        kill_time_max: float | None = typer.Option(None, "--kill-time-max", help="Optional maximum kill time in seconds."),
+        kill_time_min: float | None = _float_option("--kill-time-min", help="Optional minimum kill time in seconds."),
+        kill_time_max: float | None = _float_option("--kill-time-max", help="Optional maximum kill time in seconds."),
         top: int = typer.Option(10, "--top", min=1, max=100, help="Maximum returned kill rows after ranking."),
         report_pages: int = typer.Option(1, "--report-pages", min=1, max=10, help="How many report-list pages to sample."),
         reports_per_page: int = typer.Option(25, "--reports-per-page", min=1, max=100, help="Reports to fetch per sampled page."),
-        start_time: float | None = typer.Option(None, "--start-time", help="Optional report-range start time in milliseconds."),
-        end_time: float | None = typer.Option(None, "--end-time", help="Optional report-range end time in milliseconds."),
+        start_time: float | None = _float_option("--start-time", help="Optional report-range start time in milliseconds."),
+        end_time: float | None = _float_option("--end-time", help="Optional report-range end time in milliseconds."),
         guild_region: str | None = typer.Option(None, "--guild-region", help="Optional guild-region scope for report discovery."),
         guild_realm: str | None = typer.Option(None, "--guild-realm", help="Optional guild-realm scope for report discovery."),
         guild_name: str | None = typer.Option(None, "--guild-name", help="Optional guild-name scope for report discovery."),
@@ -4763,13 +4829,13 @@ def spec_kill_samples(
     boss_id: int | None = typer.Option(None, "--boss-id", help="Encounter ID to match."),
     boss_name: str | None = typer.Option(None, "--boss-name", help="Boss name to match within sampled fights."),
     difficulty: int | None = typer.Option(None, "--difficulty", help="Optional difficulty ID filter."),
-    kill_time_min: float | None = typer.Option(None, "--kill-time-min", help="Optional minimum kill time in seconds."),
-    kill_time_max: float | None = typer.Option(None, "--kill-time-max", help="Optional maximum kill time in seconds."),
+    kill_time_min: float | None = _float_option("--kill-time-min", help="Optional minimum kill time in seconds."),
+    kill_time_max: float | None = _float_option("--kill-time-max", help="Optional maximum kill time in seconds."),
     top: int = typer.Option(10, "--top", min=1, max=100, help="Maximum returned kill rows after ranking."),
     report_pages: int = typer.Option(1, "--report-pages", min=1, max=10, help="How many report-list pages to sample."),
     reports_per_page: int = typer.Option(25, "--reports-per-page", min=1, max=100, help="Reports to fetch per sampled page."),
-    start_time: float | None = typer.Option(None, "--start-time", help="Optional report-range start time in milliseconds."),
-    end_time: float | None = typer.Option(None, "--end-time", help="Optional report-range end time in milliseconds."),
+    start_time: float | None = _float_option("--start-time", help="Optional report-range start time in milliseconds."),
+    end_time: float | None = _float_option("--end-time", help="Optional report-range end time in milliseconds."),
     guild_region: str | None = typer.Option(None, "--guild-region", help="Optional guild-region scope for report discovery."),
     guild_realm: str | None = typer.Option(None, "--guild-realm", help="Optional guild-realm scope for report discovery."),
     guild_name: str | None = typer.Option(None, "--guild-name", help="Optional guild-name scope for report discovery."),
@@ -4823,13 +4889,13 @@ def boss_spec_usage(
         "--spec-name",
         help="Optional sampled participant spec filter applied before aggregation.",
     ),
-    kill_time_min: float | None = typer.Option(None, "--kill-time-min", help="Optional minimum kill time in seconds."),
-    kill_time_max: float | None = typer.Option(None, "--kill-time-max", help="Optional maximum kill time in seconds."),
+    kill_time_min: float | None = _float_option("--kill-time-min", help="Optional minimum kill time in seconds."),
+    kill_time_max: float | None = _float_option("--kill-time-max", help="Optional maximum kill time in seconds."),
     top: int = typer.Option(10, "--top", min=1, max=100, help="Maximum returned spec rows after ranking."),
     report_pages: int = typer.Option(1, "--report-pages", min=1, max=10, help="How many report-list pages to sample."),
     reports_per_page: int = typer.Option(25, "--reports-per-page", min=1, max=100, help="Reports to fetch per sampled page."),
-    start_time: float | None = typer.Option(None, "--start-time", help="Optional report-range start time in milliseconds."),
-    end_time: float | None = typer.Option(None, "--end-time", help="Optional report-range end time in milliseconds."),
+    start_time: float | None = _float_option("--start-time", help="Optional report-range start time in milliseconds."),
+    end_time: float | None = _float_option("--end-time", help="Optional report-range end time in milliseconds."),
     guild_region: str | None = typer.Option(None, "--guild-region", help="Optional guild-region scope for report discovery."),
     guild_realm: str | None = typer.Option(None, "--guild-realm", help="Optional guild-realm scope for report discovery."),
     guild_name: str | None = typer.Option(None, "--guild-name", help="Optional guild-name scope for report discovery."),
@@ -4883,15 +4949,15 @@ def ability_usage_summary(
         "--spec-name",
         help="Optional sampled participant spec filter applied before aggregation.",
     ),
-    kill_time_min: float | None = typer.Option(None, "--kill-time-min", help="Optional minimum kill time in seconds."),
-    kill_time_max: float | None = typer.Option(None, "--kill-time-max", help="Optional maximum kill time in seconds."),
+    kill_time_min: float | None = _float_option("--kill-time-min", help="Optional minimum kill time in seconds."),
+    kill_time_max: float | None = _float_option("--kill-time-max", help="Optional maximum kill time in seconds."),
     preview_limit: int = typer.Option(10, "--preview-limit", min=1, max=100,
                                       help="Maximum sampled kill rows to include in the preview payload."),
     event_limit: int = typer.Option(200, "--event-limit", min=1, max=5000, help="Maximum cast events to request per sampled kill."),
     report_pages: int = typer.Option(1, "--report-pages", min=1, max=10, help="How many report-list pages to sample."),
     reports_per_page: int = typer.Option(25, "--reports-per-page", min=1, max=100, help="Reports to fetch per sampled page."),
-    start_time: float | None = typer.Option(None, "--start-time", help="Optional report-range start time in milliseconds."),
-    end_time: float | None = typer.Option(None, "--end-time", help="Optional report-range end time in milliseconds."),
+    start_time: float | None = _float_option("--start-time", help="Optional report-range start time in milliseconds."),
+    end_time: float | None = _float_option("--end-time", help="Optional report-range end time in milliseconds."),
     guild_region: str | None = typer.Option(None, "--guild-region", help="Optional guild-region scope for report discovery."),
     guild_realm: str | None = typer.Option(None, "--guild-realm", help="Optional guild-realm scope for report discovery."),
     guild_name: str | None = typer.Option(None, "--guild-name", help="Optional guild-name scope for report discovery."),
@@ -4945,13 +5011,13 @@ def comp_samples(
         "--spec-name",
         help="Optional sampled participant spec filter applied before aggregation.",
     ),
-    kill_time_min: float | None = typer.Option(None, "--kill-time-min", help="Optional minimum kill time in seconds."),
-    kill_time_max: float | None = typer.Option(None, "--kill-time-max", help="Optional maximum kill time in seconds."),
+    kill_time_min: float | None = _float_option("--kill-time-min", help="Optional minimum kill time in seconds."),
+    kill_time_max: float | None = _float_option("--kill-time-max", help="Optional maximum kill time in seconds."),
     top: int = typer.Option(10, "--top", min=1, max=100, help="Maximum returned sampled kill rows after ranking."),
     report_pages: int = typer.Option(1, "--report-pages", min=1, max=10, help="How many report-list pages to sample."),
     reports_per_page: int = typer.Option(25, "--reports-per-page", min=1, max=100, help="Reports to fetch per sampled page."),
-    start_time: float | None = typer.Option(None, "--start-time", help="Optional report-range start time in milliseconds."),
-    end_time: float | None = typer.Option(None, "--end-time", help="Optional report-range end time in milliseconds."),
+    start_time: float | None = _float_option("--start-time", help="Optional report-range start time in milliseconds."),
+    end_time: float | None = _float_option("--end-time", help="Optional report-range end time in milliseconds."),
     guild_region: str | None = typer.Option(None, "--guild-region", help="Optional guild-region scope for report discovery."),
     guild_realm: str | None = typer.Option(None, "--guild-realm", help="Optional guild-realm scope for report discovery."),
     guild_name: str | None = typer.Option(None, "--guild-name", help="Optional guild-name scope for report discovery."),
@@ -5193,13 +5259,12 @@ def report_encounter_casts(
         None, "--fight-id", help="Override or supply a fight ID when the report reference does not include one."),
     source_id: int | None = typer.Option(None, "--source-id", help="Optional source actor filter."),
     target_id: int | None = typer.Option(None, "--target-id", help="Optional target actor filter."),
-    ability_id: float | None = typer.Option(None, "--ability-id", help="Optional ability game ID filter."),
+    ability_id: float | None = _float_option("--ability-id", help="Optional ability game ID filter."),
     hostility_type: str | None = typer.Option(None, "--hostility-type", help="Optional hostility filter."),
     limit: int = typer.Option(200, "--limit", min=1, max=10000, help="Maximum cast events to request from Warcraft Logs."),
     preview_limit: int = typer.Option(20, "--preview-limit", min=1, max=200, help="Maximum preview cast rows to return."),
-    window_start_ms: float | None = typer.Option(
-        None, "--window-start-ms", help="Optional encounter-relative start offset in milliseconds."),
-    window_end_ms: float | None = typer.Option(None, "--window-end-ms", help="Optional encounter-relative end offset in milliseconds."),
+    window_start_ms: float | None = _float_option("--window-start-ms", help="Optional encounter-relative start offset in milliseconds."),
+    window_end_ms: float | None = _float_option("--window-end-ms", help="Optional encounter-relative end offset in milliseconds."),
     translate: bool | None = typer.Option(None, "--translate/--no-translate", help="Optional translation toggle."),
     allow_unlisted: bool = typer.Option(False, "--allow-unlisted", help="Allow lookup of unlisted reports."),
 ) -> None:
@@ -5277,14 +5342,13 @@ def report_encounter_buffs(
         None, "--fight-id", help="Override or supply a fight ID when the report reference does not include one."),
     source_id: int | None = typer.Option(None, "--source-id", help="Optional source actor filter."),
     target_id: int | None = typer.Option(None, "--target-id", help="Optional target actor filter."),
-    ability_id: float | None = typer.Option(None, "--ability-id", help="Optional ability game ID filter."),
+    ability_id: float | None = _float_option("--ability-id", help="Optional ability game ID filter."),
     hostility_type: str | None = typer.Option(None, "--hostility-type", help="Optional hostility filter."),
     view_by: str | None = typer.Option("source", "--view-by", help="Optional table view grouping."),
     wipe_cutoff: int | None = typer.Option(None, "--wipe-cutoff", help="Optional wipe cutoff."),
     preview_limit: int = typer.Option(20, "--preview-limit", min=1, max=200, help="Maximum preview buff rows to return."),
-    window_start_ms: float | None = typer.Option(
-        None, "--window-start-ms", help="Optional encounter-relative start offset in milliseconds."),
-    window_end_ms: float | None = typer.Option(None, "--window-end-ms", help="Optional encounter-relative end offset in milliseconds."),
+    window_start_ms: float | None = _float_option("--window-start-ms", help="Optional encounter-relative start offset in milliseconds."),
+    window_end_ms: float | None = _float_option("--window-end-ms", help="Optional encounter-relative end offset in milliseconds."),
     translate: bool | None = typer.Option(None, "--translate/--no-translate", help="Optional translation toggle."),
     allow_unlisted: bool = typer.Option(False, "--allow-unlisted", help="Allow lookup of unlisted reports."),
 ) -> None:
@@ -5363,9 +5427,8 @@ def report_encounter_aura_summary(
     target_id: int | None = typer.Option(None, "--target-id", help="Optional target actor filter."),
     hostility_type: str | None = typer.Option(None, "--hostility-type", help="Optional hostility filter."),
     wipe_cutoff: int | None = typer.Option(None, "--wipe-cutoff", help="Optional wipe cutoff."),
-    window_start_ms: float | None = typer.Option(
-        None, "--window-start-ms", help="Optional encounter-relative start offset in milliseconds."),
-    window_end_ms: float | None = typer.Option(None, "--window-end-ms", help="Optional encounter-relative end offset in milliseconds."),
+    window_start_ms: float | None = _float_option("--window-start-ms", help="Optional encounter-relative start offset in milliseconds."),
+    window_end_ms: float | None = _float_option("--window-end-ms", help="Optional encounter-relative end offset in milliseconds."),
     translate: bool | None = typer.Option(None, "--translate/--no-translate", help="Optional translation toggle."),
     include_raw: bool = typer.Option(False, "--include-raw", help=_INCLUDE_RAW_HELP),
     allow_unlisted: bool = typer.Option(False, "--allow-unlisted", help="Allow lookup of unlisted reports."),
@@ -5551,14 +5614,18 @@ def report_encounter_aura_compare(
     ability_id: int = typer.Option(..., "--ability-id", help="Required aura ability game ID."),
     fight_id: int | None = typer.Option(
         None, "--fight-id", help="Override or supply a fight ID when the report reference does not include one."),
-    left_window_start_ms: float | None = typer.Option(
-        None, "--left-window-start-ms", help="Encounter-relative start offset for the left comparison window."),
-    left_window_end_ms: float | None = typer.Option(
-        None, "--left-window-end-ms", help="Encounter-relative end offset for the left comparison window."),
-    right_window_start_ms: float | None = typer.Option(
-        None, "--right-window-start-ms", help="Encounter-relative start offset for the right comparison window."),
-    right_window_end_ms: float | None = typer.Option(
-        None, "--right-window-end-ms", help="Encounter-relative end offset for the right comparison window."),
+    left_window_start_ms: float | None = _float_option(
+        "--left-window-start-ms", help="Encounter-relative start offset for the left comparison window."
+    ),
+    left_window_end_ms: float | None = _float_option(
+        "--left-window-end-ms", help="Encounter-relative end offset for the left comparison window."
+    ),
+    right_window_start_ms: float | None = _float_option(
+        "--right-window-start-ms", help="Encounter-relative start offset for the right comparison window."
+    ),
+    right_window_end_ms: float | None = _float_option(
+        "--right-window-end-ms", help="Encounter-relative end offset for the right comparison window."
+    ),
     left_label: str = typer.Option("left", "--left-label", help="Label for the left comparison window."),
     right_label: str = typer.Option("right", "--right-label", help="Label for the right comparison window."),
     source_id: int | None = typer.Option(None, "--source-id", help="Optional source actor filter applied to both windows."),
@@ -5617,12 +5684,13 @@ def _damage_summary_command(actor_field: Literal["source", "target"]) -> Callabl
             None, "--fight-id", help="Override or supply a fight ID when the report reference does not include one."),
         source_id: int | None = typer.Option(None, "--source-id", help="Optional source actor filter."),
         target_id: int | None = typer.Option(None, "--target-id", help="Optional target actor filter."),
-        ability_id: float | None = typer.Option(None, "--ability-id", help="Optional ability game ID filter."),
+        ability_id: float | None = _float_option("--ability-id", help="Optional ability game ID filter."),
         hostility_type: str | None = typer.Option(None, "--hostility-type", help="Optional hostility filter."),
         wipe_cutoff: int | None = typer.Option(None, "--wipe-cutoff", help="Optional wipe cutoff."),
-        window_start_ms: float | None = typer.Option(
-            None, "--window-start-ms", help="Optional encounter-relative start offset in milliseconds."),
-        window_end_ms: float | None = typer.Option(None, "--window-end-ms", help="Optional encounter-relative end offset in milliseconds."),
+        window_start_ms: float | None = _float_option(
+            "--window-start-ms", help="Optional encounter-relative start offset in milliseconds."
+        ),
+        window_end_ms: float | None = _float_option("--window-end-ms", help="Optional encounter-relative end offset in milliseconds."),
         translate: bool | None = typer.Option(None, "--translate/--no-translate", help="Optional translation toggle."),
         include_raw: bool = typer.Option(False, "--include-raw", help=_INCLUDE_RAW_HELP),
         allow_unlisted: bool = typer.Option(False, "--allow-unlisted", help="Allow lookup of unlisted reports."),
@@ -5700,13 +5768,12 @@ def report_encounter_damage_breakdown(
         None, "--fight-id", help="Override or supply a fight ID when the report reference does not include one."),
     source_id: int | None = typer.Option(None, "--source-id", help="Optional source actor filter."),
     target_id: int | None = typer.Option(None, "--target-id", help="Optional target actor filter."),
-    ability_id: float | None = typer.Option(None, "--ability-id", help="Optional ability game ID filter."),
+    ability_id: float | None = _float_option("--ability-id", help="Optional ability game ID filter."),
     hostility_type: str | None = typer.Option(None, "--hostility-type", help="Optional hostility filter."),
     view_by: str | None = typer.Option("source", "--view-by", help="Optional table view grouping."),
     wipe_cutoff: int | None = typer.Option(None, "--wipe-cutoff", help="Optional wipe cutoff."),
-    window_start_ms: float | None = typer.Option(
-        None, "--window-start-ms", help="Optional encounter-relative start offset in milliseconds."),
-    window_end_ms: float | None = typer.Option(None, "--window-end-ms", help="Optional encounter-relative end offset in milliseconds."),
+    window_start_ms: float | None = _float_option("--window-start-ms", help="Optional encounter-relative start offset in milliseconds."),
+    window_end_ms: float | None = _float_option("--window-end-ms", help="Optional encounter-relative end offset in milliseconds."),
     translate: bool | None = typer.Option(None, "--translate/--no-translate", help="Optional translation toggle."),
     allow_unlisted: bool = typer.Option(False, "--allow-unlisted", help="Allow lookup of unlisted reports."),
 ) -> None:
@@ -5774,12 +5841,12 @@ def kill_time_distribution(
         "--spec-name",
         help="Optional sampled participant spec filter applied before aggregation.",
     ),
-    kill_time_min: float | None = typer.Option(None, "--kill-time-min", help="Optional minimum kill time in seconds."),
-    kill_time_max: float | None = typer.Option(None, "--kill-time-max", help="Optional maximum kill time in seconds."),
+    kill_time_min: float | None = _float_option("--kill-time-min", help="Optional minimum kill time in seconds."),
+    kill_time_max: float | None = _float_option("--kill-time-max", help="Optional maximum kill time in seconds."),
     report_pages: int = typer.Option(1, "--report-pages", min=1, max=10, help="How many report-list pages to sample."),
     reports_per_page: int = typer.Option(25, "--reports-per-page", min=1, max=100, help="Reports to fetch per sampled page."),
-    start_time: float | None = typer.Option(None, "--start-time", help="Optional report-range start time in milliseconds."),
-    end_time: float | None = typer.Option(None, "--end-time", help="Optional report-range end time in milliseconds."),
+    start_time: float | None = _float_option("--start-time", help="Optional report-range start time in milliseconds."),
+    end_time: float | None = _float_option("--end-time", help="Optional report-range end time in milliseconds."),
     guild_region: str | None = typer.Option(None, "--guild-region", help="Optional guild-region scope for report discovery."),
     guild_realm: str | None = typer.Option(None, "--guild-realm", help="Optional guild-realm scope for report discovery."),
     guild_name: str | None = typer.Option(None, "--guild-name", help="Optional guild-name scope for report discovery."),
@@ -5823,11 +5890,12 @@ def kill_time_distribution(
 @app.command("report-fights")
 def report_fights(
     ctx: typer.Context,
-    code: str = typer.Argument(..., help="Warcraft Logs report code."),
+    code: str = typer.Argument(..., help="Warcraft Logs report URL or report code."),
     difficulty: int | None = typer.Option(None, "--difficulty", help="Optional difficulty ID filter."),
     allow_unlisted: bool = typer.Option(False, "--allow-unlisted", help="Allow lookup of unlisted reports."),
 ) -> None:
     """List the fights in one report."""
+    code = _report_reference(ctx, code).code
     client = _client(ctx)
     try:
         payload = client.report_fights(code=code, difficulty=difficulty, allow_unlisted=allow_unlisted)
@@ -5912,8 +5980,8 @@ def graphql(
     report_code: str | None = typer.Option(None, "--report-code", help="Inject report code into declared $code variables."),
     fight_id: list[int] | None = FIGHT_ID_OPTION,
     encounter_id: int | None = typer.Option(None, "--encounter-id", help="Inject declared $encounterID variables."),
-    start_time: float | None = typer.Option(None, "--start-time", help="Inject declared $startTime variables."),
-    end_time: float | None = typer.Option(None, "--end-time", help="Inject declared $endTime variables."),
+    start_time: float | None = _float_option("--start-time", help="Inject declared $startTime variables."),
+    end_time: float | None = _float_option("--end-time", help="Inject declared $endTime variables."),
     difficulty: int | None = typer.Option(None, "--difficulty", help="Inject declared $difficulty variables."),
     zone_id: int | None = typer.Option(None, "--zone-id", help="Inject declared $zoneID variables."),
     source_id: int | None = typer.Option(None, "--source-id", help="Inject declared $sourceID variables."),
@@ -6036,8 +6104,8 @@ def _emit_report_json_slice(
 @app.command("report-events")
 def report_events(
     ctx: typer.Context,
-    code: str = typer.Argument(..., help="Warcraft Logs report code."),
-    ability_id: float | None = typer.Option(None, "--ability-id", help="Optional ability game ID filter."),
+    code: str = typer.Argument(..., help="Warcraft Logs report URL or report code."),
+    ability_id: float | None = _float_option("--ability-id", help="Optional ability game ID filter."),
     data_type: str | None = typer.Option(
         None,
         "--data-type",
@@ -6048,19 +6116,20 @@ def report_events(
     ),
     difficulty: int | None = typer.Option(None, "--difficulty", help="Optional difficulty ID filter."),
     encounter_id: int | None = typer.Option(None, "--encounter-id", help="Optional encounter ID filter."),
-    end_time: float | None = typer.Option(None, "--end-time", help="Optional event-range end timestamp."),
+    end_time: float | None = _float_option("--end-time", help="Optional event-range end timestamp."),
     fight_id: list[int] | None = FIGHT_ID_OPTION,
     filter_expression: str | None = typer.Option(None, "--filter-expression", help="Optional Warcraft Logs filter expression."),
     hostility_type: str | None = typer.Option(None, "--hostility-type", help="Optional hostility filter."),
     kill_type: str | None = typer.Option(None, "--kill-type", help="Optional kill filter."),
     limit: int | None = typer.Option(None, "--limit", min=1, max=10000, help="Optional page event limit."),
     source_id: int | None = typer.Option(None, "--source-id", help="Optional source actor ID filter."),
-    start_time: float | None = typer.Option(None, "--start-time", help="Optional event-range start timestamp."),
+    start_time: float | None = _float_option("--start-time", help="Optional event-range start timestamp."),
     target_id: int | None = typer.Option(None, "--target-id", help="Optional target actor ID filter."),
     translate: bool | None = typer.Option(None, "--translate/--no-translate", help="Optional translation toggle."),
     allow_unlisted: bool = typer.Option(False, "--allow-unlisted", help="Allow lookup of unlisted reports."),
 ) -> None:
     """Return raw report events for one fight (--fight-id) or one explicit --start-time/--end-time window."""
+    code, fight_id = _report_code_and_fights(ctx, code, fight_id)
     options = ReportFilterOptions(
         ability_id=ability_id,
         data_type=_normalize_graphql_enum(data_type),
@@ -6090,18 +6159,18 @@ def report_events(
 @app.command("report-table")
 def report_table(
     ctx: typer.Context,
-    code: str = typer.Argument(..., help="Warcraft Logs report code."),
-    ability_id: float | None = typer.Option(None, "--ability-id", help="Optional ability game ID filter."),
+    code: str = typer.Argument(..., help="Warcraft Logs report URL or report code."),
+    ability_id: float | None = _float_option("--ability-id", help="Optional ability game ID filter."),
     data_type: str | None = typer.Option(None, "--data-type", help="Optional table data type."),
     difficulty: int | None = typer.Option(None, "--difficulty", help="Optional difficulty ID filter."),
     encounter_id: int | None = typer.Option(None, "--encounter-id", help="Optional encounter ID filter."),
-    end_time: float | None = typer.Option(None, "--end-time", help="Optional event-range end timestamp."),
+    end_time: float | None = _float_option("--end-time", help="Optional event-range end timestamp."),
     fight_id: list[int] | None = FIGHT_ID_OPTION,
     filter_expression: str | None = typer.Option(None, "--filter-expression", help="Optional Warcraft Logs filter expression."),
     hostility_type: str | None = typer.Option(None, "--hostility-type", help="Optional hostility filter."),
     kill_type: str | None = typer.Option(None, "--kill-type", help="Optional kill filter."),
     source_id: int | None = typer.Option(None, "--source-id", help="Optional source actor ID filter."),
-    start_time: float | None = typer.Option(None, "--start-time", help="Optional event-range start timestamp."),
+    start_time: float | None = _float_option("--start-time", help="Optional event-range start timestamp."),
     target_id: int | None = typer.Option(None, "--target-id", help="Optional target actor ID filter."),
     translate: bool | None = typer.Option(None, "--translate/--no-translate", help="Optional translation toggle."),
     view_by: str | None = typer.Option(None, "--view-by", help="Optional view grouping."),
@@ -6109,6 +6178,7 @@ def report_table(
     allow_unlisted: bool = typer.Option(False, "--allow-unlisted", help="Allow lookup of unlisted reports."),
 ) -> None:
     """Return a raw report table for one narrowed slice of a report."""
+    code, fight_id = _report_code_and_fights(ctx, code, fight_id)
     _emit_report_json_slice(
         ctx,
         code=code,
@@ -6137,18 +6207,18 @@ def report_table(
 @app.command("report-graph")
 def report_graph(
     ctx: typer.Context,
-    code: str = typer.Argument(..., help="Warcraft Logs report code."),
-    ability_id: float | None = typer.Option(None, "--ability-id", help="Optional ability game ID filter."),
+    code: str = typer.Argument(..., help="Warcraft Logs report URL or report code."),
+    ability_id: float | None = _float_option("--ability-id", help="Optional ability game ID filter."),
     data_type: str | None = typer.Option(None, "--data-type", help="Optional graph data type."),
     difficulty: int | None = typer.Option(None, "--difficulty", help="Optional difficulty ID filter."),
     encounter_id: int | None = typer.Option(None, "--encounter-id", help="Optional encounter ID filter."),
-    end_time: float | None = typer.Option(None, "--end-time", help="Optional event-range end timestamp."),
+    end_time: float | None = _float_option("--end-time", help="Optional event-range end timestamp."),
     fight_id: list[int] | None = FIGHT_ID_OPTION,
     filter_expression: str | None = typer.Option(None, "--filter-expression", help="Optional Warcraft Logs filter expression."),
     hostility_type: str | None = typer.Option(None, "--hostility-type", help="Optional hostility filter."),
     kill_type: str | None = typer.Option(None, "--kill-type", help="Optional kill filter."),
     source_id: int | None = typer.Option(None, "--source-id", help="Optional source actor ID filter."),
-    start_time: float | None = typer.Option(None, "--start-time", help="Optional event-range start timestamp."),
+    start_time: float | None = _float_option("--start-time", help="Optional event-range start timestamp."),
     target_id: int | None = typer.Option(None, "--target-id", help="Optional target actor ID filter."),
     translate: bool | None = typer.Option(None, "--translate/--no-translate", help="Optional translation toggle."),
     view_by: str | None = typer.Option(None, "--view-by", help="Optional view grouping."),
@@ -6156,6 +6226,7 @@ def report_graph(
     allow_unlisted: bool = typer.Option(False, "--allow-unlisted", help="Allow lookup of unlisted reports."),
 ) -> None:
     """Return a raw report graph series for one narrowed slice of a report."""
+    code, fight_id = _report_code_and_fights(ctx, code, fight_id)
     _emit_report_json_slice(
         ctx,
         code=code,
@@ -6184,13 +6255,14 @@ def report_graph(
 @app.command("report-master-data")
 def report_master_data(
     ctx: typer.Context,
-    code: str = typer.Argument(..., help="Warcraft Logs report code."),
+    code: str = typer.Argument(..., help="Warcraft Logs report URL or report code."),
     actor_type: str | None = typer.Option(None, "--actor-type", help="Optional actor type filter."),
     actor_sub_type: str | None = typer.Option(None, "--actor-sub-type", help="Optional actor sub-type filter."),
     translate: bool | None = typer.Option(None, "--translate/--no-translate", help="Optional translation toggle."),
     allow_unlisted: bool = typer.Option(False, "--allow-unlisted", help="Allow lookup of unlisted reports."),
 ) -> None:
     """Return a report's master data: actors and abilities."""
+    code = _report_reference(ctx, code).code
     client = _client(ctx)
     try:
         payload = client.report_master_data(
@@ -6217,10 +6289,10 @@ def report_master_data(
 @app.command("report-player-details")
 def report_player_details(
     ctx: typer.Context,
-    code: str = typer.Argument(..., help="Warcraft Logs report code."),
+    code: str = typer.Argument(..., help="Warcraft Logs report URL or report code."),
     difficulty: int | None = typer.Option(None, "--difficulty", help="Optional difficulty ID filter."),
     encounter_id: int | None = typer.Option(None, "--encounter-id", help="Optional encounter ID filter."),
-    end_time: float | None = typer.Option(None, "--end-time", help="Optional event-range end timestamp."),
+    end_time: float | None = _float_option("--end-time", help="Optional event-range end timestamp."),
     fight_id: list[int] | None = FIGHT_ID_OPTION,
     include_combatant_info: bool | None = typer.Option(
         None,
@@ -6228,11 +6300,12 @@ def report_player_details(
         help="Optional combatant detail toggle.",
     ),
     kill_type: str | None = typer.Option(None, "--kill-type", help="Optional kill filter."),
-    start_time: float | None = typer.Option(None, "--start-time", help="Optional event-range start timestamp."),
+    start_time: float | None = _float_option("--start-time", help="Optional event-range start timestamp."),
     translate: bool | None = typer.Option(None, "--translate/--no-translate", help="Optional translation toggle."),
     allow_unlisted: bool = typer.Option(False, "--allow-unlisted", help="Allow lookup of unlisted reports."),
 ) -> None:
     """Return a report's player details for one fight (--fight-id) or one explicit --start-time/--end-time window."""
+    code, fight_id = _report_code_and_fights(ctx, code, fight_id)
     # Warcraft Logs answers a wider playerDetails query with an empty roster plus a GraphQL
     # warning, which reads as "this report has no players". Reject it here like report-events does.
     normalized_kill_type = _normalize_graphql_enum(kill_type)
@@ -6308,7 +6381,7 @@ def report_player_details(
 @app.command("report-rankings")
 def report_rankings(
     ctx: typer.Context,
-    code: str = typer.Argument(..., help="Warcraft Logs report code."),
+    code: str = typer.Argument(..., help="Warcraft Logs report URL or report code."),
     compare: str | None = typer.Option(None, "--compare", help="Optional compare mode such as rankings or parses."),
     difficulty: int | None = typer.Option(None, "--difficulty", help="Optional difficulty ID filter."),
     encounter_id: int | None = typer.Option(None, "--encounter-id", help="Optional encounter ID filter."),
@@ -6318,6 +6391,7 @@ def report_rankings(
     allow_unlisted: bool = typer.Option(False, "--allow-unlisted", help="Allow lookup of unlisted reports."),
 ) -> None:
     """Return the rankings attached to one report's fights."""
+    code, fight_id = _report_code_and_fights(ctx, code, fight_id)
     normalized_compare = _normalize_graphql_enum(compare)
     normalized_timeframe = _normalize_graphql_enum(timeframe)
     options = ReportRankingsOptions(

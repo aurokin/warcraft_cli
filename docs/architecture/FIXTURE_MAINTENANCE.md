@@ -100,7 +100,7 @@ pytest -q tests/test_icy_veins_cli.py tests/test_icy_veins_recorded_fixtures.py 
 
 `tests/fixtures/wowhead/` holds five HTML pages (item 19019, guide 283, Fury Warrior guide 3087, the
 news listing, the blue-tracker listing), the "list doesn't exist or has been removed" page `wowhead profiler` fails
-on, and nine search-suggestion JSON responses (`search_suggestions_<query>.json`; each file's
+on, and ten search-suggestion JSON responses (`search_suggestions_<query>.json`; each file's
 `search` field is the query it was captured for, for example `spirit beast`, singular).
 
 - The suggestion JSON is stored exactly as served. The ranking tests read its `categories` lists as

@@ -8,7 +8,8 @@ from urllib.parse import urljoin, urlparse
 from bs4 import BeautifulSoup, Tag
 from warcraft_content.guide_page import WOWHEAD_LINK_RE, extract_talent_export_builds
 from warcraft_content.html_sections import clean_text, extract_headings, extract_sections
-from warcraft_core.identity import WOW_SPECS_BY_CLASS, ability_identity_payload, build_reference_payload
+from warcraft_core.identity import ability_identity_payload, build_reference_payload
+from warcraft_core.wow_specs import WOW_SPECS, raiderio_class_slug
 
 METHOD_BASE_URL = "https://www.method.gg"
 SUPPORTED_GUIDE_PATH_RE = re.compile(r"^/guides/(?P<slug>[a-z0-9-]+)(?:/(?P<section>[^/?#]+))?/?$")
@@ -20,11 +21,7 @@ TALENT_BUILD_EMBED_SELECTOR = ".talent-embed[data-talent]"
 TALENT_BUILD_TITLE_SELECTOR = ".talent-title"
 # Method titles a class guide "<spec>-<class>" (beast-mastery-hunter, frost-death-knight). Other slugs
 # that merely end in a class, such as unlocking-void-elf-demon-hunter, are one-page articles.
-SPEC_GUIDE_SLUGS = frozenset(
-    f"{spec.replace('_', '-')}-{actor_class.replace('deathknight', 'death-knight').replace('demonhunter', 'demon-hunter')}"
-    for actor_class, specs in WOW_SPECS_BY_CLASS.items()
-    for spec in specs
-)
+SPEC_GUIDE_SLUGS = frozenset(f"{spec.raiderio_spec_slug}-{raiderio_class_slug(spec.class_key)}" for spec in WOW_SPECS)
 UNSUPPORTED_ROOT_GUIDE_SLUGS = {"tier-list", "world-of-warcraft"}
 WRITTEN_BY_RE = re.compile(r"^Written by\s+(?P<author>.+?)\s*-\s*(?P<date>\d{1,2}(?:st|nd|rd|th)\s+\w+,?\s+\d{4})$")
 DISPLAY_DATE_RE = re.compile(r"(?P<day>\d{1,2})(?:st|nd|rd|th)?\s+(?P<month>[A-Za-z]{3,}),?\s+(?P<year>\d{4})")

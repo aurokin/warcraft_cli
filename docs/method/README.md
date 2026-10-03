@@ -42,7 +42,7 @@ Error codes and their exit codes: `network_error`/`timeout`/`upstream_error` exi
 exits 4, `auth_failed` exits 3, and the Method-specific errors `unsupported_guide_surface`,
 `invalid_bundle`, and `invalid_cache_config` exit 1; an argument that is not a Method guide reference
 is `invalid_guide_ref` (exit 2), an unsupported `--kind` is `invalid_argument` (exit 2), and a blank
-`search` or `resolve` query is `invalid_query` (exit 2), rejected before any request. A
+`search`, `resolve` or `guide-query` query is `invalid_query` (exit 2), rejected before any request. A
 `guide-export --out` that names an existing file is `invalid_argument` (exit 2), rejected before any
 request; exporting again into the same directory replaces the bundle's `pages/*.html`, so `pages/`
 holds only the pages `page-files.json` lists, and other files in the directory are left alone.

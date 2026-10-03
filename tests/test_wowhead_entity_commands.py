@@ -556,13 +556,25 @@ def test_entity_mount_summary_prefers_use_text_over_mount_metadata(monkeypatch) 
 
 
 
-def test_entity_item_tooltip_text_formats_money_and_stat_spacing(monkeypatch) -> None:
+@pytest.mark.parametrize(
+    ("price_html", "price_text"),
+    [
+        # Synthetic markup in Wowhead's shape: the span class, not the position, names the denomination.
+        ('<span class="moneysilver">87</span> <span class="moneycopper">50</span>', "87s 50c"),
+        ('<span class="moneycopper">13</span>', "13c"),
+        (
+            '<span class="moneygold">4</span> <span class="moneysilver">2</span> <span class="moneycopper">63</span>',
+            "4g 2s 63c",
+        ),
+    ],
+)
+def test_entity_item_tooltip_text_reads_money_units_from_spans(monkeypatch, price_html: str, price_text: str) -> None:
     def fake_tooltip(self, entity_type: str, entity_id: int, data_env=None):
         return {
             "name": "Maladath",
             "tooltip": (
                 "<table><tr><td><b>Maladath</b><br>+ 4 Parry<br>+ 2 Haste<br>"
-                "Sell Price: 86 98</td></tr></table>"
+                f'<div class="whtt-sellprice">Sell Price: {price_html}</div></td></tr></table>'
             ),
         }
 
@@ -575,8 +587,30 @@ def test_entity_item_tooltip_text_formats_money_and_stat_spacing(monkeypatch) ->
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["data"]["tooltip"]["text"] == "Maladath +4 Parry +2 Haste Sell Price: 86g 98s"
+    assert payload["data"]["tooltip"]["text"] == f"Maladath +4 Parry +2 Haste Sell Price: {price_text}"
 
+
+def test_entity_item_tooltip_text_names_the_currency_of_a_cost(monkeypatch) -> None:
+    def fake_tooltip(self, entity_type: str, entity_id: int, data_env=None):
+        return {
+            "name": "Darkmoon Dancing Bear",
+            "tooltip": (
+                '<table><tr><td><b>Darkmoon Dancing Bear</b><br><span style="color: #FFD200">Cost: </span>180'
+                '<a href="/currency=515/darkmoon-prize-ticket" aria-label="Darkmoon Prize Ticket">'
+                '<span class="iconmedium"><ins></ins><del></del></span></a><br /></td></tr></table>'
+            ),
+        }
+
+    def fake_html(self, entity_type: str, entity_id: int):
+        return "<html><body><script>var lv_comments0 = [];</script></body></html>"
+
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.tooltip", fake_tooltip)
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.entity_page_html", fake_html)
+    result = runner.invoke(app, ["entity", "item", "73766"])
+    assert result.exit_code == 0
+
+    payload = json.loads(result.stdout)
+    assert payload["data"]["tooltip"]["text"] == "Darkmoon Dancing Bear Cost: 180 Darkmoon Prize Ticket"
 
 
 def test_entity_item_style_tooltip_text_drops_flavor_quotes_and_normalizes_parenthetical_level(monkeypatch) -> None:
@@ -585,9 +619,9 @@ def test_entity_item_style_tooltip_text_drops_flavor_quotes_and_normalizes_paren
             "name": "Grand Expedition Yak",
             "tooltip": (
                 "<table><tr><td><b>Grand Expedition Yak</b><br>Requires level 1 to 90 ( 90)<br>"
-                "Sell Price: 30,000<br>"
+                '<div class="whtt-sellprice">Sell Price: <span class="moneygold">30,000</span></div><br>'
                 "\"These beasts of burden are known to carry over five times their own weight.\"<br>"
-                "Vendor: Uncle Bigpocket<br>Cost: 120000</td></tr></table>"
+                'Vendor: Uncle Bigpocket<br>Cost: <span class="moneygold">120000</span></td></tr></table>'
             ),
         }
 
@@ -661,6 +695,51 @@ def test_entity_uses_normalized_entity_cache_between_invocations(
     first_payload, second_payload = json.loads(first.stdout), json.loads(second.stdout)
     assert first_payload["data"] == second_payload["data"]
     assert (first_payload["provenance"]["cache"]["hit"], second_payload["provenance"]["cache"]["hit"]) == (False, True)
+
+
+def test_entity_cache_hit_reports_how_this_run_picked_its_expansion(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("WOWHEAD_CACHE_BACKEND", "file")
+    monkeypatch.setenv("WOWHEAD_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setattr(
+        "wowhead_cli.main.WowheadClient.tooltip",
+        lambda self, entity_type, entity_id, data_env=None: {"name": "Thunderfury", "tooltip": "<b>Thunderfury</b>"},
+    )
+    options = ["--no-include-comments", "--linked-entity-preview-limit", "0"]
+
+    first = runner.invoke(app, ["--expansion", "tbc", "entity", "item", "19019", *options])
+    second = runner.invoke(app, ["entity", "--url", "https://www.wowhead.com/tbc/item=19019", *options])
+
+    assert first.exit_code == 0 and second.exit_code == 0, second.output
+    second_payload = json.loads(second.stdout)
+    assert second_payload["provenance"]["cache"]["hit"] is True
+    assert (json.loads(first.stdout)["data"]["expansion_source"], second_payload["data"]["expansion_source"]) == ("flag", "url")
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["entity", "../tooltip/item", "19019"],
+        ["entity", "item?x=1#", "19019"],
+        ["comments", "item/../spell", "1"],
+        ["linked-graph", "../item", "1"],
+        ["entity-page", "item", "0"],
+        ["comments", "item", "0"],
+        ["linked-graph", "item", "0"],
+        ["entity", "--url", "https://www.wowhead.com/item=19019", "spell", "1"],
+        ["entity-page", "--url", "https://www.wowhead.com/item=19019", "npc", "1"],
+        ["compare", "../tooltip/item:19019", "item:19019"],
+    ],
+)
+def test_entity_commands_refuse_a_bad_type_a_zero_id_or_both_url_and_type_id(monkeypatch, args: list[str]) -> None:
+    def no_request(self, *call_args, **call_kwargs):
+        raise AssertionError("a refused reference must not reach Wowhead")
+
+    for name in ("tooltip", "tooltip_with_metadata", "entity_page_html", "page_html"):
+        monkeypatch.setattr(f"wowhead_cli.main.WowheadClient.{name}", no_request)
+    result = runner.invoke(app, args)
+
+    # A usage error (exit 2) before any request; a zero id is refused by the argument's own range.
+    assert result.exit_code == 2, result.output
 
 
 

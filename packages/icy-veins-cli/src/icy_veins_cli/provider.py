@@ -55,7 +55,7 @@ from icy_veins_cli.search import (
     search_results,
     sitemap_provenance,
 )
-from icy_veins_cli.site_index import load_site_index, merge_crawl, save_site_index
+from icy_veins_cli.site_index import load_site_index, local_index_path, merge_crawl, save_site_index
 
 BUNDLE_QUERY_KINDS = ("sections", "navigation", "linked_entities", "build_references", "analysis_surfaces")
 PROVIDER_LABEL = "Icy Veins"
@@ -301,6 +301,20 @@ def _seed_failure(result: CrawlResult) -> ProviderError:
     return ProviderError(code, message, details={"page_url": SITE_MENU_SEED_URL, "errors": result.errors})
 
 
+@contextmanager
+def _data_dir_errors() -> Iterator[None]:
+    """Fail as ``invalid_data_dir`` when the data directory cannot hold the site index."""
+    try:
+        yield
+    except OSError as exc:
+        path = local_index_path()
+        raise ProviderError(
+            "invalid_data_dir",
+            f"Could not write the Icy Veins site index to {path}: {exc.strerror or exc}. Check XDG_DATA_HOME.",
+            details={"path": str(path)},
+        ) from exc
+
+
 def index_refresh(*, max_requests: int = DEFAULT_INDEX_MAX_REQUESTS) -> Envelope:
     """Crawl Icy Veins for the pages its frozen sitemap lacks and merge them into the local site index.
 
@@ -315,6 +329,9 @@ def index_refresh(*, max_requests: int = DEFAULT_INDEX_MAX_REQUESTS) -> Envelope
     cache.
     """
     previous = load_site_index()
+    # Fail before the crawl, not minutes later at save time, when the data directory is unusable.
+    with _data_dir_errors():
+        local_index_path().parent.mkdir(parents=True, exist_ok=True)
     with _client() as client:
         with transport_errors(PROVIDER_LABEL):
             sitemap_slugs = parse_sitemap_slugs(client.sitemap_text())
@@ -337,7 +354,10 @@ def index_refresh(*, max_requests: int = DEFAULT_INDEX_MAX_REQUESTS) -> Envelope
     merged, counts = merge_crawl(previous, result, now=datetime.now(UTC))
     # A run stopped before it read anything leaves the previous index (local or bundled) as it was.
     read_anything = bool(result.pages or result.aliases or result.not_found)
-    index_path = str(save_site_index(merged)) if read_anything else previous.path if previous else None
+    index_path = previous.path if previous else None
+    if read_anything:
+        with _data_dir_errors():
+            index_path = str(save_site_index(merged))
     data = {
         "index_path": index_path,
         "partial": result.partial,

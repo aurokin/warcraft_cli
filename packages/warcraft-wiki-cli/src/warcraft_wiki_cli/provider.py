@@ -55,14 +55,20 @@ CAPABILITIES = {
     "article_export": "ready",
     "article_query": "ready",
 }
-# MediaWiki error codes with a shared meaning: the page does not exist, or the wiki is throttling or
-# briefly unwritable. Any other code passes through verbatim and exits 1.
+# MediaWiki error codes with a shared meaning: the page does not exist; the title or query is one the
+# wiki can never accept (a character titles cannot hold, a Special: page, a search over 300
+# characters); or the wiki is throttling or briefly unwritable. ``upstream_error`` is the client's own
+# code for a body that is not JSON. Any other code is ``api_error`` (exit 1) with the raw MediaWiki
+# code in ``details.mediawiki_code``, since MediaWiki codes are not the snake_case the contract promises.
 _API_ERROR_CODES = {
     "missingtitle": "not_found",
-    "invalidtitle": "not_found",
+    "invalidtitle": "invalid_query",
+    "pagecannotexist": "invalid_query",
+    "cirrussearch-query-too-long": "invalid_query",
     "ratelimited": "rate_limited",
     "maxlag": "upstream_error",
     "readonly": "upstream_error",
+    "upstream_error": "upstream_error",
 }
 
 
@@ -91,7 +97,12 @@ def transport_errors() -> Iterator[None]:
         try:
             yield
         except WarcraftWikiAPIError as exc:
-            raise ProviderError(_API_ERROR_CODES.get(exc.code, exc.code), exc.message) from exc
+            code = _API_ERROR_CODES.get(exc.code)
+            if code is None:
+                # An error object with no code carries no MediaWiki code to report.
+                details = {"mediawiki_code": exc.code} if exc.code else None
+                raise ProviderError("api_error", exc.message, details=details) from exc
+            raise ProviderError(code, exc.message) from exc
 
 
 def _require_query(query: str) -> None:

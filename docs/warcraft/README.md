@@ -76,15 +76,17 @@ Every command's flags are listed in [docs/reference/warcraft.md](../reference/wa
   resolved it (at `high` confidence) and the query's intent does not rank that
   provider's family down (a guide query is never answered by Lorrgs spec metadata, a guild query
   never by a wiki article); a match whose title is exactly the query (the item `Guild Tabard`) is
-  exempt. Otherwise `resolved` is `false`, the top-ranked candidate is `data.best_unresolved_candidate`, and
-  the candidate itself carries `unresolved_reason` (`data.best_unresolved_candidate.unresolved_reason`:
+  exempt. Otherwise `resolved` is `false`, the top-ranked remaining candidate (a `low` match only when
+  every match is `low`) is `data.best_unresolved_candidate`, and the candidate itself carries
+  `unresolved_reason` (`data.best_unresolved_candidate.unresolved_reason`:
   `provider_did_not_resolve`, `provider_family_ranked_down_by_query_intent`, or
   `single_word_query_not_named_exactly` when its provider capped a one-word query's answer at `medium`
-  because the word does not name it, as its `confidence_cap` says). The reason describes that
-  candidate, which can be a skipped `low` match rather than the one that blocked the answer;
-  `--ranking-debug` lists every match with its `resolved` flag. `data` also lists the
-  `fallback_search_command`s of the providers that returned a candidate, in ranking order (none when
-  no provider found anything).
+  because the word does not name it, as its `confidence_cap` says). Any lower match its provider
+  resolved is in `data.provider_resolved_candidates` with its `next_command`, so an answer a
+  better-ranked `medium` match blocked stays one command away; `--ranking-debug` lists every match
+  with its `resolved` flag. `data` also lists the `fallback_search_command`s of the providers that
+  returned a candidate, in ranking order with the `low` matches last (none when no provider found
+  anything).
   `--limit` only sizes `--ranking-debug`: providers are never asked for fewer candidates, because
   their confidence is judged against the rivals a small limit would hide. The envelope's `provider`
   is `warcraft`; `data.selected_provider` is the match's provider or `null`.
@@ -99,7 +101,10 @@ Every command's flags are listed in [docs/reference/warcraft.md](../reference/wa
   naming one of them "active" would be a guess. Cross-reference `raiderio raids` when you need the
   currently running tier. The Raider.IO call's provenance is `sources.raiderio.provenance`; the raw
   envelope is not repeated (`warcraft raiderio guild` returns it).
-- `warcraft actor-profile` — cross-walk a Warcraft Logs report actor to a Raider.IO profile. Warcraft
+- `warcraft actor-profile` — cross-walk a Warcraft Logs report actor to a Raider.IO profile. The report
+  is a report URL or a bare code, read by the `warcraftlogs` rule: a URL's `fight=<id>` scopes the
+  lookup when `--fight-id` is absent, and a blank or non-alphanumeric code or a URL on a host other
+  than warcraftlogs.com fails `invalid_query` (exit 2) before any request. Warcraft
   Logs only answers a fight-scoped roster query, so without `--fight-id` the wrapper reads the
   report's fight list first and scopes the lookup to a bounded set of fights, kills first.
   `query.scoped_fight_ids` names the fights that were actually read and `query.fight_scope` reports
@@ -111,9 +116,16 @@ Every command's flags are listed in [docs/reference/warcraft.md](../reference/wa
   phase-scoped cooldown analysis. Lorrgs only serves reports it has already cached; for any other
   report — or when Lorrgs itself is unreachable — pass `--actor-id` and `--spec-slug` (and, while
   Lorrgs is down, `--spell-id` for each cooldown; they are then named `spell:<id>`) and the packet
-  still returns the Warcraft Logs cast timeline with `lorrgs.status: "unavailable"` and
-  `phase.status: "unavailable"`. `lorrgs.message` names the real reason (only a `not_found` is
-  reported as "not cached") and `phase.requested` echoes the `--phase` that could not be applied.
+  still returns the Warcraft Logs cast timeline with `lorrgs.status: "unavailable"`.
+  `lorrgs.message` names the real reason (only a `not_found` is reported as "not cached"). The phase
+  windows then come from the Warcraft Logs fight's phase transitions (`phase.source:
+  "warcraftlogs"`; `"lorrgs"` when Lorrgs served the fight): windows are numbered P1, P2, ... in
+  order as on the Lorrgs path, so `--phase` and the top-parse comparison pick the same window, and
+  each window carries the encounter phase's `phase_id` and `name` (a boss that returns to phase 1
+  has P1 and P3 both with `phase_id` 1). A fight with no
+  phase transitions, or a failed lookup (`sources.warcraftlogs_phase_transitions.error`), leaves
+  `phase.status: "unavailable"`, `phase.selected` null, and `phase.requested` echoing the `--phase`
+  that could not be applied.
   A fight Lorrgs cached without its players degrades the same way (`lorrgs.reason:
   "lorrgs_fight_has_no_players"`). Without Lorrgs the player's name and class come from the Warcraft
   Logs roster of the selected fight, so an `--actor-id` that fight lacks fails `actor_id_not_found`
@@ -165,6 +177,9 @@ Every command's flags are listed in [docs/reference/warcraft.md](../reference/wa
   than the resolved candidate, such as a retired page); `manifest.json` saves it for reuse.
 - `warcraft talent-packet` / `talent-describe` — build a validated talent transport packet, optionally
   with simc `describe-build` output. Both report the file they wrote as `written_packet_path`.
+  With `--actor-id`, a bare word is read as a Warcraft Logs report code by the providers' own rule
+  (16 mixed-case letters and digits, or 8 to 32 with a digit), so a name such as `HavocDemonHunter`
+  fails `unsupported_talent_source` (exit 2) instead of reaching Warcraft Logs.
   `producer_result` and `upgrade_result` are `{provider, exit_code, payload}`, the provider's parsed
   envelope only.
   simc reads the packet in memory, so its output cites a packet file only when one holds that

@@ -48,11 +48,18 @@ pseudo-specs work this way). When Lorrgs answers not_found for such a value on a
 `error.details.suggestions` lists the closest Lorrgs spec slugs (and is absent when none is close).
 Lorrgs does not reject an unknown `--spec` filter name: `comp-ranking` returns `reports: []` with exit 0.
 `--fight` and `--player` take dot-separated id lists (`2.4.15`).
+Every slug and report code is sent as one URL path segment. A slug or report code containing `/`
+or `\`, a slug of `.` or `..`, and a `zone`/`zone-bosses` id of `nan` or `inf` are `invalid_query`
+(exit 2) before a request, so none can reach another Lorrgs route (Lorrgs zone ids can be
+fractional: `53.1`). `search` and
+`resolve` reject an empty query as `invalid_query` (exit 2).
 
 The wrapper adds `warcraft cooldown-packet <report-url> --actor-id <source-id> --phase <n>`, which joins
 cached Lorrgs phase/spell/top-parse context with Warcraft Logs actor cast events. Lorrgs only serves
 reports it has already cached; for any other report add `--spec-slug <spec>` (any provider's spelling) and the command
-degrades to the Warcraft Logs half with `data.lorrgs.status: "unavailable"` and no phase windows. Without
+degrades to the Warcraft Logs half with `data.lorrgs.status: "unavailable"`. Its phase windows then come
+from the Warcraft Logs fight's phase transitions (`data.phase.source: "warcraftlogs"`); a fight without
+transitions has none. Without
 both flags it fails and names them.
 
 ## Output contract
@@ -117,8 +124,8 @@ metadata row scored the same only because it was built from the same match.
 
 `--limit` only trims what is printed: `resolve` judges ambiguity over every candidate. In `search` and
 `resolve`, `count` is the rows in `results`/`candidates`, `total_matches` is every ranked candidate, and
-`truncated` says rivals were cut. An unresolved answer carries `fallback_search_command`
-(`lorrgs search '<query>'`). Spec-ranking and comp-ranking rows carry the Lorrgs page they render in
+`truncated` says rivals were cut. An unresolved answer with a `match` carries `fallback_search_command`
+(`lorrgs search '<query>'`); it is null when nothing matched. Spec-ranking and comp-ranking rows carry the Lorrgs page they render in
 `url`; a report row built from a `lorrgs.io/user_report/...` URL carries that URL, and spec, boss and
 other report rows have `url: null`.
 

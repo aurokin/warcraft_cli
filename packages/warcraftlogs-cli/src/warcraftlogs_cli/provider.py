@@ -44,6 +44,8 @@ def search(query: str, *, limit: int = 10, **options: Any) -> Envelope:
     """Match an explicit Warcraft Logs report URL or code; free text returns a discovery hint."""
     from warcraftlogs_cli.main import _explicit_report_reference, _report_search_payload
 
+    if not query.strip():
+        raise ProviderError("invalid_query", "Query cannot be empty.")
     site = site_profile(options)
     data = _report_search_payload(query, ref=_explicit_report_reference(query), site=site, limit=limit)
     return success_envelope(provider=PROVIDER_NAME, command="search", kind=SEARCH_KIND, data=data, query=query)
@@ -53,6 +55,8 @@ def resolve(target: str, **options: Any) -> Envelope:
     """Resolve an explicit Warcraft Logs report URL or code to a single report reference."""
     from warcraftlogs_cli.main import _explicit_report_reference, _report_resolve_payload
 
+    if not target.strip():
+        raise ProviderError("invalid_query", "Query cannot be empty.")
     site = site_profile(options)
     data = _report_resolve_payload(target, ref=_explicit_report_reference(target), site=site)
     return success_envelope(provider=PROVIDER_NAME, command="resolve", kind=RESOLVE_KIND, data=data, query=target)

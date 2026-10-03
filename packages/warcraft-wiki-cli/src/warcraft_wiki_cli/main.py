@@ -50,7 +50,9 @@ def search(
 def resolve(
     ctx: typer.Context,
     query: str = typer.Argument(..., help="Free-text query to resolve to the single best Warcraft Wiki article."),
-    limit: int = typer.Option(5, "--limit", min=1, max=50, help="Maximum candidates to inspect."),
+    limit: int = typer.Option(
+        5, "--limit", min=1, max=50, help="Maximum candidates to list; ambiguity is judged over every hit fetched (5 x limit, at least 25)."
+    ),
 ) -> None:
     """Resolve a free-text query to the best matching wiki article plus the follow-up command."""
     _emit_or_fail(ctx, lambda: PROVIDER.resolve(query, limit=limit))

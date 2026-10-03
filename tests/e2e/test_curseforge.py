@@ -27,8 +27,12 @@ def _assert_addon_payload(result: Result) -> None:
 
     changelog = result.data["changelog"]
     assert "error" not in changelog, result.describe()
+    # latest_files is newest first (CurseForge's own order can lead with years-old betas).
+    dates = [row["fileDate"] for row in latest_files]
+    assert dates == sorted(dates, reverse=True), result.describe()
     # The newest file can be an alpha or beta, so the changelog names the file its notes cover.
-    newest = {row["id"]: row for row in latest_files}[changelog["file_id"]]
+    newest = latest_files[0]
+    assert changelog["file_id"] == newest["id"], result.describe()
     assert (changelog["display_name"], changelog["release_type"]) == (newest["displayName"], newest["releaseType"]), result.describe()
     assert changelog["source_url"].endswith("/changelog")
 
@@ -59,6 +63,8 @@ def test_a_cached_addon_lookup_is_replayed_without_the_network(require) -> None:
     cache = replayed.payload["provenance"]["cache"]
     assert cache["all_hits"] is True, replayed.describe()
     assert cache["oldest_hit_age_seconds"] >= 0, replayed.describe()
+    # An addon lookup is kept for an hour.
+    assert cache["oldest_hit_ttl_seconds"] == 3600, replayed.describe()
     assert replayed.data == live.data
 
 

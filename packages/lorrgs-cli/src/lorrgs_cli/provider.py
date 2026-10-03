@@ -244,6 +244,8 @@ def call_spec_api(
 
 def search(query: str, *, limit: int = 5, **options: Any) -> Envelope:
     """Rank Lorrgs surfaces for a URL, report reference, or free-text spec/boss query."""
+    if not query.strip():
+        raise ProviderError("invalid_query", "Query cannot be empty.")
     with open_client() as client:
         try:
             payload = search_candidates(client, query, limit=limit)
@@ -261,6 +263,8 @@ def search(query: str, *, limit: int = 5, **options: Any) -> Envelope:
 
 def resolve(target: str, *, limit: int = 5, **options: Any) -> Envelope:
     """Resolve a Lorrgs query to a single next command when the top candidate is unambiguous."""
+    if not target.strip():
+        raise ProviderError("invalid_query", "Query cannot be empty.")
     with open_client() as client:
         try:
             payload = resolve_payload(client, target, limit=limit)

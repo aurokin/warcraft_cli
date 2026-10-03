@@ -736,6 +736,49 @@ def _count_requests(monkeypatch, payload_for_url) -> list[str]:
     return urls
 
 
+def test_a_slug_stays_one_path_segment(monkeypatch) -> None:
+    urls = _count_requests(monkeypatch, lambda url: {})
+    runner.invoke(app, ["boss", "x?y#z w"])
+    assert urls == ["https://api2.lorrgs.io/api/bosses/x%3Fy%23z%20w"]
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        # Lorrgs decodes %2F before routing: `spec ../../api/zones` answered the zone list as a spec.
+        ["spec", "../../api/zones"],
+        ["boss", "x/../y"],
+        ["boss-spells", "x\\spells"],
+        ["boss", ".."],
+        ["spec-ranking", "mage-frost", "."],
+    ],
+)
+def test_a_slug_that_could_leave_its_segment_is_a_usage_error_before_any_request(monkeypatch, argv: list[str]) -> None:
+    urls = _count_requests(monkeypatch, lambda url: {})
+    result = runner.invoke(app, argv)
+    assert (result.exit_code, json.loads(result.stderr)["error"]["code"], urls) == (2, "invalid_query", [])
+
+
+@pytest.mark.parametrize("argv", [["search", ""], ["resolve", "  "]])
+def test_an_empty_query_is_a_usage_error(argv: list[str]) -> None:
+    result = runner.invoke(app, argv)
+    assert (result.exit_code, json.loads(result.stderr)["error"]["code"]) == (2, "invalid_query")
+
+
+@pytest.mark.parametrize("zone_id", ["nan", "inf", "1e400"])
+def test_a_zone_id_that_is_no_number_is_a_usage_error_before_any_request(monkeypatch, zone_id: str) -> None:
+    # `zone nan` used to request /api/zones/nan.
+    urls = _count_requests(monkeypatch, lambda url: {})
+    result = runner.invoke(app, ["zone", zone_id])
+    assert (result.exit_code, json.loads(result.stderr)["error"]["code"], urls) == (2, "invalid_query", [])
+
+
+def test_a_fractional_zone_id_is_sent_as_lorrgs_writes_it(monkeypatch) -> None:
+    urls = _count_requests(monkeypatch, lambda url: {})
+    runner.invoke(app, ["zone-bosses", "53.1"])
+    assert urls == ["https://api2.lorrgs.io/api/zones/53.1/bosses"]
+
+
 def test_static_metadata_is_replayed_from_the_cache(monkeypatch) -> None:
     # Wrapper search/resolve read /api/specs and /api/bosses on every query; a warm cache must not.
     monkeypatch.setenv("LORRGS_CACHE_BACKEND", "file")

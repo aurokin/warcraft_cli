@@ -3035,9 +3035,26 @@ def test_raiderio_guild_next_command_survives_the_shell(monkeypatch) -> None:
 
 
 def test_raiderio_fallback_search_command_round_trips_a_quoted_query(monkeypatch) -> None:
-    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.search", lambda self, *, term, kind=None: {"matches": []})
+    # Two guilds of that name on two realms: the resolve has a match but stays unresolved, so it hands over its search.
+    guilds = [
+        {
+            "type": "guild",
+            "name": 'the "best" guild',
+            "data": {
+                "id": index,
+                "name": 'the "best" guild',
+                "displayName": 'the "best" guild',
+                "region": {"slug": "us", "name": "United States & Oceania"},
+                "realm": {"slug": realm, "name": realm.title()},
+                "path": f"/guilds/us/{realm}/best",
+            },
+        }
+        for index, realm in enumerate(("illidan", "gnomeregan"), start=1)
+    ]
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.search", lambda self, *, term, kind=None: {"matches": guilds})
     data = json.loads(runner.invoke(raiderio_app, ["resolve", 'the "best" guild']).stdout)["data"]
 
+    assert data["resolved"] is False
     assert shlex.split(data["fallback_search_command"]) == ["raiderio", "search", 'the "best" guild']
 
 

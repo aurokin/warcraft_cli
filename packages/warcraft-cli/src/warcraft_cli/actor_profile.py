@@ -7,11 +7,13 @@ to a Raider.IO character. Provider calls arrive as an injected ``fetch`` callabl
 
 from __future__ import annotations
 
+import re
 from typing import Any, NoReturn
+from urllib.parse import urlparse
 
 import typer
 from warcraft_core.cli import fail
-from warcraft_core.exit_codes import EXIT_GENERIC, EXIT_NOT_FOUND
+from warcraft_core.exit_codes import EXIT_GENERIC, EXIT_NOT_FOUND, EXIT_USAGE
 from warcraft_core.shapes import as_dict, as_list
 
 from warcraft_cli.crosswalk import (
@@ -22,7 +24,7 @@ from warcraft_cli.crosswalk import (
     reconcile_class_spec,
     report_actor_names,
 )
-from warcraft_cli.providers import ProviderFetch, provider_payload_data, source_exit_code
+from warcraft_cli.providers import ProviderFetch, parse_lorrgs_report_reference, provider_payload_data, source_exit_code
 
 _ACTOR_PROFILE_JOIN_RULE = "soft match on region + realm + character name; not a canonical cross-provider actor id"
 
@@ -254,6 +256,30 @@ def _actor_profile_character(
     return as_dict(provider_payload_data(profile_result.get("payload")).get("character"))
 
 
+def _report_code_and_fight(ctx: typer.Context, reference: str, *, name: str, fight_id: int | None) -> tuple[str, int | None]:
+    """The report code a Warcraft Logs report URL or bare code names, and the URL's fight when ``--fight-id`` is absent.
+
+    The same rule ``warcraftlogs`` report commands apply: a URL on a host other than warcraftlogs.com
+    or its subdomains, a URL with no report code, and a blank or non-alphanumeric code are
+    ``invalid_query`` before any request.
+    """
+    text = reference.strip()
+    parsed = urlparse(text)
+    if parsed.scheme and parsed.netloc:
+        ref = parse_lorrgs_report_reference(text) if (parsed.hostname or "").split(".")[-2:] == ["warcraftlogs", "com"] else None
+        if ref is not None:
+            return ref.code, fight_id if fight_id is not None else ref.fight_id
+    elif re.fullmatch(r"[A-Za-z0-9]+", text):
+        return text, fight_id
+    _fail_actor_profile(
+        ctx,
+        query={"report_code": reference, "actor_name": name, "fight_id": fight_id},
+        code="invalid_query",
+        message=f"{reference!r} is not a Warcraft Logs report code or a warcraftlogs.com report URL.",
+        exit_code=EXIT_USAGE,
+    )
+
+
 def actor_profile_payload(
     ctx: typer.Context,
     *,
@@ -266,6 +292,7 @@ def actor_profile_payload(
     fetch: ProviderFetch,
 ) -> dict[str, Any]:
     """Cross-walk a Warcraft Logs report actor to a Raider.IO profile, failing on any break in the join."""
+    code, fight_id = _report_code_and_fight(ctx, code, name=name, fight_id=fight_id)
     query: dict[str, Any] = {"report_code": code, "actor_name": name, "fight_id": fight_id}
     scoped_fight_ids, fight_scope = (
         ([fight_id], {"rule": "explicit_fight_id", "scoped_fight_count": 1, "truncated": False})

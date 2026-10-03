@@ -68,8 +68,9 @@ spellings back, plus guide-site order (`beast-mastery-hunter`), display names (`
 and the shorthand in `CLASS_SPEC_ALIASES` (`bm hunter`, `bdk`). A bare spec several classes share
 (`frost`, `holy`, `protection`, `restoration`) names no spec unless `class_hint` picks one; no two specs
 share any other spelling. Provider flags that take a spec (Lorrgs spec routes, Raider.IO
-`--contains-spec`/`--contains-class`, `warcraft cooldown-packet --spec-slug`) translate through this
-lookup and leave text it does not recognize as typed. The table is retail only; classic sites keep their
+`--contains-spec`/`--contains-class`, Warcraft Logs `--class-name`/`--spec-name` and its sampled spec
+filter, `warcraft cooldown-packet --spec-slug`) translate through this lookup and leave text it does
+not recognize as typed. The table is retail only; classic sites keep their
 own permissive handling.
 
 ### Encounter
@@ -178,7 +179,7 @@ Notes:
 End-to-end cross-provider handoffs that ship today, where one provider's output feeds another's
 input or lookup:
 
-- **Guide → SimC build:** `warcraft guide-builds-simc` (and `guide-compare --simc-build-handoff`)
+- **Guide → SimC build:** `warcraft guide-builds-simc` (and `guide-compare-query --simc-build-handoff`)
   extracts build references from content-provider guides and produces talent transport packets that
   `simc` consumes.
 - **Log actor → profile:** `warcraft actor-profile <report-code> <actor-name>` resolves a Warcraft

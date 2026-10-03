@@ -18,6 +18,7 @@
 - prefer `api` for function, enum (`Enum.ItemQuality`), framework, XML schema, CVar (`api autoLootDefault` returns the `CVar autoLootDefault` page; `Console variables` is the list), and API-change pages
 - prefer `event` for game events (`PLAYER_LOGIN`, `ENCOUNTER_START`) and UI handlers (`OnKeyDown`)
 - `api` and `event` fail with `not_found` (exit 4) instead of returning an unrelated page
+- a title the wiki can never hold (`a|b`, a `Special:` page) or a search longer than 300 characters fails with `invalid_query` (exit 2), so fix the query rather than retrying; any other wiki-side refusal is `api_error` with the wiki's own code in `error.details.mediawiki_code`
 - use `article` when the query is broader than programming
 - `search` and `resolve` report `count` as the rows returned, `total_matches` as MediaWiki's total hit count, and `truncated: true` when more pages matched than came back; an unresolved `resolve` says `confidence: "low"` when its top candidates tie
 - a one-word query resolves only to the page that word names: its exact title, its `API`/`Event` page (`CreateFrame`, or `SetPoint` for `API:ScriptRegionResizing SetPoint`), or its expansion (`legion`); a longer title (`illidan` gives "Illidan Stormrage") comes back `medium` with `confidence_cap`, so check `match` and open it with `match.follow_up.command`

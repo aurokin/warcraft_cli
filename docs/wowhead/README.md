@@ -118,10 +118,12 @@ best entity by more than an exact name match is worth, which is how a query that
 word for word still resolves to that news post. `search` ranks them on score alone.
 
 A top row holding only some query words (`some_terms_match`) is a high-confidence answer only when
-it is of a type the query names (`type_hint`); otherwise `resolve` reports it as a `medium` candidate
-with no `next_command`. "keystone legend season 3" does not resolve to "Keystone Legend: Season 2",
-nor "midnight season 2 mythic+ dungeons" to "Midnight Season 2: Resilient Keystone 12", but "resto
-druid guide" resolves to "Restoration Druid Healer Guide" and "hogger mob" to NPC "Hogger".
+it is of a type the query names (`type_hint`) and its name holds every number the query names;
+otherwise `resolve` reports it as a `medium` candidate with no `next_command`. "keystone legend
+season 3" does not resolve to "Keystone Legend: Season 2", even with "achievement" added, nor "tier 2
+warrior transmog" to "Sepulcher of the First Ones LFR Warrior Tier", nor "midnight season 2 mythic+
+dungeons" to "Midnight Season 2: Resilient Keystone 12", but "resto druid guide" resolves to
+"Restoration Druid Healer Guide" and "hogger mob" to NPC "Hogger".
 
 A one-word `search_query` resolves at high only to a row that word names: its name or display name
 whole or up to a plural ending (`valorstone` for "Valorstones"), or its name's head before the first
@@ -196,22 +198,28 @@ Entities:
 
 | Command | Purpose |
 |---------|---------|
-| `entity TYPE ID` | tooltip payload, optionally with comments and a linked-entity preview; `--include-all-comments` replaces the `comments.top` summary with the full `comments.items` list |
+| `entity TYPE ID` | tooltip payload, optionally with comments and a linked-entity preview; `--include-all-comments` replaces the `comments.top` summary with the full `comments.items` list. `tooltip.text` spells out the units Wowhead marks in the tooltip markup: `87s 50c` for a silver and copper sell price, `Cost: 180 Darkmoon Prize Ticket` for a currency cost |
 | `entity-page TYPE ID` | parsed page metadata and linked entities; comments come from `comments`. Linked entities cover body links, gatherer records, and the page's relation tabs (a zone's NPCs and quests, a faction's members: `source_kind: "listview"`, tab id in `listview`) |
 | `comments TYPE ID` | ranked comments with filters and optional insight rollups |
 | `compare REF REF ...` | field-by-field diff of two or more entities; `comparison.linked_entities` compares every link each page carries (the links `entity-page` reports, relation tabs included), not the `--max-links-per-entity` cut |
 | `linked-graph TYPE ID` | bounded linked-entity graph rooted at one entity, following the links `entity-page` reports (relation tabs included, `source_kind: "listview"`); a node's `name` falls back to its page title once fetched. `--relation` takes entity types and rejects any other value. `sampling.pages_skipped` counts the pages `--max-fetches` or `--limit` left unread, and `sampling.truncated` is true when any were or `--limit` cut the nodes |
+
+`TYPE`, like the type in a `compare` `<type>:<id>` ref, is letters and hyphens (`item`, `item-set`,
+`battle-pet`) and `ID` is at least 1; anything else is `invalid_argument`, exit 2, before any request. `entity` and `entity-page` take `TYPE ID` or
+`--url`, and passing both is `invalid_argument`. Item sets (tier sets such as "Battlegear of Wrath")
+come back from `search` and `resolve` as `entity_type: "item-set"` with `wowhead entity item-set <id>`
+as the follow-up, and `resolve --entity-type item-set` keeps only them.
 
 Guides:
 
 | Command | Purpose |
 |---------|---------|
 | `guides CATEGORY` | guide listing for a category with author, patch, and updated-window filters; a category Wowhead does not have (it serves its whole guide index instead) is `not_found` |
-| `guide REF` | one guide: analysis surfaces, linked entities, comments, and page metadata; section bodies come from `guide-full`. An unknown guide id (Wowhead answers HTTP 400) is `not_found`, exit 4 |
+| `guide REF` | one guide: analysis surfaces, linked entities, comments, and page metadata; section bodies come from `guide-full`. `REF` is a guide id, or a Wowhead URL or path whose path, after any expansion and locale prefix (`/de/guide/...`), starts `guide/` or `guide=<id>`; any other page (the home page, `/items`, `/item=19019`, a `/guides/<category>` listing, which `guides` reads) is `invalid_argument`, exit 2. An unknown guide id (Wowhead answers HTTP 400) is `not_found`, exit 4 |
 | `guide-full REF` | the same guide with every section, comment, and link hydrated |
 | `guide-export REF` | write a guide bundle (manifest, sections, entities) to `--out`, or `./wowhead_exports/guide-<id>-<slug>/`; the root `index.json` next to the bundle is written only when it is absent or already a bundle index; an export that hydrates nothing removes an earlier `entities/manifest.json`; a linked entity that cannot be hydrated is listed in `hydration.failed` (`entity_type`, `id`, `code`, `message`) instead of failing the export |
-| `guide-query BUNDLE QUERY` | query one guide bundle for matching sections, links, and comments; answers with the `icy-veins`/`method` guide-query payload (`count`, `match_counts`, `matches`, `top`, `failed_pages`) plus `bundle`, `guide`, and `page` |
-| `guide-bundle-list` | local bundles with freshness and hydration summaries |
+| `guide-query BUNDLE QUERY` | query one guide bundle for matching sections, links, and comments; answers with the `icy-veins`/`method` guide-query payload (`count`, `match_counts`, `matches`, `top`, `failed_pages`) plus `bundle`, `guide`, and `page`. A blank `QUERY` is `invalid_query`, exit 2, here and in `guide-bundle-search` and `guide-bundle-query` |
+| `guide-bundle-list` | local bundles with freshness and hydration summaries; a sibling directory whose `manifest.json` cannot be read or decoded is skipped |
 | `guide-bundle-search QUERY` | find local bundles by title, id, or directory name |
 | `guide-bundle-query QUERY` | rank matches across every local bundle, scored by the same engine as `guide-query` |
 | `guide-bundle-inspect REF` | missing files, stale data, and hydration gaps for one bundle |
@@ -236,7 +244,7 @@ Tool-state decoders:
 
 | Command | Purpose |
 |---------|---------|
-| `talent-calc REF` | class, spec (`tool.spec_id` is its Blizzard spec id), and build code from a talent calculator ref; a classic-era `/classic/talent-calc/<class>/<build-code>` ref has no spec, so `spec_slug` and `spec_id` are null. An unknown class is `invalid_tool_ref`; so, on a retail, PTR or beta ref, is a spec of another class (`paladin/frost`) or a build code whose loadout header names another spec. A classic calculator's spec is not checked (MoP Classic's rogue `combat` is valid) and its `spec_id` is null. `listed_builds` holds only the ref's spec's builds (the page embeds every spec's), and is absent for a classic calculator ref and for a ref with no spec, since both have a null `spec_id` |
+| `talent-calc REF` | class, spec (`tool.spec_id` is its Blizzard spec id), and build code from a talent calculator ref; a classic-era `/classic/talent-calc/<class>/<build-code>` ref has no spec, so `spec_slug` and `spec_id` are null. An unknown class is `invalid_tool_ref`, as is a build code with a character outside letters, digits, `+`, `-` and `_`; so, on a retail, PTR or beta ref, is a spec of another class (`paladin/frost`) or a build code whose loadout header names another spec. A classic calculator's spec is not checked (MoP Classic's rogue `combat` is valid) and its `spec_id` is null. `listed_builds` holds only the ref's spec's builds (the page embeds every spec's), and is absent for a classic calculator ref and for a ref with no spec, since both have a null `spec_id` |
 | `talent-calc-packet REF` | exact talent transport packet from a `<class>/<spec>/<build-code>` ref; `--out PATH` writes just the packet. The packet comes from the build code in `REF`, so a failed page fetch still answers, with `page.canonical_url` null and `page.fetch_error` `{code, message}` |
 | `profession-tree REF` | profession slug and loadout code |
 | `dressing-room REF` | normalized share hash and cited state URL |

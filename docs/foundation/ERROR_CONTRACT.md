@@ -54,8 +54,11 @@ fails with `internal_error` (exit 1) rather than printing it.
 
 ```json
 {"ok": false, "provider": "wowhead", "command": "entity", "kind": "error", "schema_version": "1",
- "query": null, "provenance": {}, "data": {},
- "error": {"code": "not_found", "message": "No item with id 0", "details": {"status_code": 404, "url": "https://..."}}}
+ "query": {"entity_type": "item", "entity_id": 999999999, "url": null, "data_env": null, "include_comments": true,
+           "include_all_comments": false, "linked_entity_preview_limit": 5},
+ "provenance": {}, "data": {},
+ "error": {"code": "not_found", "message": "Wowhead returned HTTP 404",
+           "details": {"status_code": 404, "url": "https://nether.wowhead.com/tooltip/item/999999999?dataEnv=1"}}}
 ```
 
 `code` is a stable snake_case identifier for programs; `message` is for humans; `details` is

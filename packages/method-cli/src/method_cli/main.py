@@ -47,7 +47,7 @@ def search(
 def resolve(
     ctx: typer.Context,
     query: str = typer.Argument(..., help="Free-text query to resolve to the single best Method guide."),
-    limit: int = typer.Option(5, "--limit", min=1, max=50, help="Maximum candidates to inspect."),
+    limit: int = typer.Option(5, "--limit", min=1, max=50, help="Maximum candidates to list; ambiguity is judged over all of them."),
 ) -> None:
     """Resolve a free-text query to the best matching Method guide plus the follow-up command."""
     _emit_or_fail(ctx, lambda: PROVIDER.resolve(query, limit=limit))

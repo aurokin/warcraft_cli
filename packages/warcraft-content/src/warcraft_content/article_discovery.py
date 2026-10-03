@@ -27,11 +27,10 @@ def article_follow_up(
 
 @dataclass(frozen=True, slots=True)
 class ArticleKind:
-    """How a provider labels its articles: the follow-up surface, the row kind, and the metadata key that carries ``ref``."""
+    """How a provider labels its articles: the follow-up surface and the row kind."""
 
     surface: str = "guide"
     kind: str = "guide"
-    metadata_key: str = "slug"
 
 
 GUIDE_KIND = ArticleKind()
@@ -61,7 +60,7 @@ def article_candidate(
         command=follow_up.pop("command"),
         surface=follow_up.pop("surface"),
         follow_up_extra=follow_up,
-        metadata={kind.metadata_key: ref, **(metadata or {})},
+        metadata=dict(metadata or {}),
     )
 
 
