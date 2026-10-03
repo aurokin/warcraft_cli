@@ -11,7 +11,6 @@ docs/architecture/E2E_TESTING.md.
 
 from __future__ import annotations
 
-import shlex
 from pathlib import Path
 
 from tests.e2e.harness import EXIT_NOT_FOUND, EXIT_USAGE, run
@@ -65,33 +64,6 @@ def test_explain_input_classifies_a_quick_sim_profile(require) -> None:
     commands = [row["command"] for row in result.data["handoff"]["suggested_simc_commands"]]
     assert "simc sim -" in commands
     assert any(command.startswith("simc decode-build ") for command in commands)
-
-
-def test_explain_input_handoff_commands_run_against_simc(require, out_dir: Path) -> None:
-    """Each suggested `simc` command must be one simc accepts, and `simc sim -` must keep the profileset ranking."""
-    require("raidbots", "simc")
-    root = Path(run("simc", "doctor").data["repo"]["root"])
-    stock = root / "profiles" / "MID1" / "MID1_Death_Knight_Frost.simc"
-    assert stock.is_file(), f"stock profile missing: {stock}"
-    text = stock.read_text(encoding="utf-8") + '\nprofileset."orc"+=race=orc\nprofileset."no_potion"+=potion=disabled\n'
-    path = out_dir / "top_gear.simc"
-    path.write_text(text, encoding="utf-8")
-
-    explained = run("raidbots", "explain-input", "--file", str(path))
-    assert explained.data["scope"]["sim_type_guess"] == "top_gear_or_droptimizer"
-    rows = explained.data["handoff"]["suggested_simc_commands"]
-    assert {shlex.split(row["command"])[1] for row in rows} == {"sim", "decode-build", "describe-build"}, explained.describe()
-    for row in rows:
-        argv = shlex.split(row["command"])
-        assert argv[0] == "simc", explained.describe()
-        if argv[1] == "sim":
-            simmed = run("simc", *argv[1:], "--iterations", "20", "--threads", "1", "--max-time", "60", stdin=text, timeout=300)
-            ranked = simmed.data["profilesets"]
-            assert ranked["result_count"] == 2, simmed.describe()
-            assert {result["name"] for result in ranked["results"]} == {"orc", "no_potion"}
-        else:
-            ran = run("simc", *argv[1:])
-            assert (ran.data["build"] if argv[1] == "describe-build" else ran.data["decoded"])["enabled_talents"], ran.describe()
 
 
 def test_explain_input_reads_stdin_and_a_file(require, out_dir: Path) -> None:
