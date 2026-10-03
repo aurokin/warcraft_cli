@@ -200,6 +200,72 @@ def test_guide_query_reads_a_wowhead_guide_exports_section_text_and_link_labels(
     assert talents["match_counts"]["navigation"] == 1
 
 
+def test_guide_query_reports_comment_and_gatherer_kinds_only_for_a_bundle_that_has_them(tmp_path: Path) -> None:
+    """wowhead guide-query moved onto this engine; icy-veins and method answers must not grow its kinds."""
+    kinds = {"sections", "comments", "gatherer_entities"}
+    wowhead = query_article_bundle(
+        load_article_bundle(_wowhead_guide_export(tmp_path / "wowhead")),
+        query="vivify", limit=5, kinds=kinds, section_title_filter=None,
+    )
+    method = query_article_bundle(
+        load_article_bundle(_export(tmp_path, "method", failed=False)),
+        query="vivify", limit=5, kinds=kinds, section_title_filter=None,
+    )
+
+    base = {"sections", "navigation", "linked_entities", "build_references", "analysis_surfaces"}
+    assert set(wowhead["match_counts"]) == base | {"comments", "gatherer_entities"}
+    assert set(method["match_counts"]) == set(method["matches"]) == base
+
+
+def test_guide_query_filters_linked_entities_by_source_and_lists_a_gathered_entity_once_in_top() -> None:
+    obliterate = {"entity_type": "spell", "id": 49020, "name": "Obliterate", "sources": ["gatherer", "href"]}
+    strike = {"entity_type": "spell", "id": 222, "name": "Obliterate Strike", "sources": ["href"]}
+    bundle = {
+        "sections": [], "navigation": [], "build_references": [], "analysis_surfaces": [], "comments": [],
+        "linked_entities": [obliterate, strike],
+        "gatherer_entities": [{"entity_type": "spell", "id": 49020, "name": "Obliterate"}],
+    }
+    kinds = {"linked_entities", "gatherer_entities"}
+
+    multi = query_article_bundle(bundle, query="obliterate", limit=5, kinds=kinds, section_title_filter=None, linked_sources=("multi",))
+    unfiltered = query_article_bundle(bundle, query="obliterate", limit=5, kinds=kinds, section_title_filter=None)
+
+    assert [row["id"] for row in multi["matches"]["linked_entities"]] == [49020]
+    assert (unfiltered["match_counts"]["linked_entities"], unfiltered["match_counts"]["gatherer_entities"]) == (2, 1)
+    assert [(row["kind"], row["id"]) for row in unfiltered["top"]] == [("linked_entity", 49020), ("linked_entity", 222)]
+
+
+
+def _wowhead_rows(**rows: list[dict[str, Any]]) -> dict[str, Any]:
+    empty = ("sections", "navigation", "linked_entities", "build_references", "analysis_surfaces", "comments", "gatherer_entities")
+    return {**{name: [] for name in empty}, **rows}
+
+
+def test_guide_query_finds_a_wowhead_navigation_link_by_the_topic_in_its_url() -> None:
+    """wowhead link labels are short ("Abilities"); the topic words live in the URL, which the query skipped."""
+    link = {"label": "Abilities", "url": "https://www.wowhead.com/guide/classes/death-knight/frost/abilities-talents-pve-dps"}
+
+    result = query_article_bundle(
+        _wowhead_rows(navigation=[link]), query="talents", limit=5, kinds={"navigation"}, section_title_filter=None
+    )
+
+    assert [row["label"] for row in result["matches"]["navigation"]] == ["Abilities"]
+
+
+def test_guide_query_ranks_the_entity_named_for_the_query_above_sections_that_mention_it() -> None:
+    """Only a ``title`` earned the name bonus, so a section mentioning Pillar of Frost outranked the spell itself."""
+    bundle = _wowhead_rows(
+        sections=[{"title": "Cooldowns", "content_text": "Use Pillar of Frost with Empower Rune Weapon."}],
+        linked_entities=[{"entity_type": "spell", "id": 51271, "name": "Pillar of Frost", "sources": ["href"]}],
+    )
+
+    result = query_article_bundle(
+        bundle, query="pillar of frost", limit=5, kinds={"sections", "linked_entities"}, section_title_filter=None
+    )
+
+    assert [row["kind"] for row in result["top"]] == ["linked_entity", "section"]
+    assert result["top"][0]["score"] > result["top"][1]["score"]
+
 FAILED_PAGE = {
     "url": "https://example.invalid/talents",
     "section_slug": "talents",

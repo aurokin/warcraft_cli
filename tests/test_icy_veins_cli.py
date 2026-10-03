@@ -7,13 +7,30 @@ from pathlib import Path
 
 import httpx
 import pytest
+from icy_veins_cli.client import ICY_VEINS_SITEMAP_URL, SITE_MENU_SEED_URL, IcyVeinsClient
 from icy_veins_cli.main import app
-from icy_veins_cli.page_parser import CLASS_HUB_SLUGS, classify_guide_slug, parse_guide_page, parse_sitemap_guides
+from icy_veins_cli.page_parser import (
+    CLASS_HUB_SLUGS,
+    classify_guide_slug,
+    parse_guide_page,
+    parse_site_menu_guides,
+    parse_sitemap_guides,
+)
 from icy_veins_cli.search import NEUTRAL_SLUG_TERMS, resolve_is_confident, score_family_match, sitemap_provenance
 from typer.testing import CliRunner
 from warcraft_core.envelope import envelope_violations
+from warcraft_core.provider import ProviderError
+
+from tests.article_provider_testkit import load_fixture_text
 
 runner = CliRunner()
+_REAL_SITE_MENU_GUIDES = IcyVeinsClient.site_menu_guides
+
+
+@pytest.fixture(autouse=True)
+def _site_menu_lists_nothing_new(monkeypatch) -> None:
+    """Search reads the site menu once the sitemap is stale; a test that needs menu pages stubs it itself."""
+    monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.site_menu_guides", lambda self: [])
 
 INTRO_HTML = """
 <html>
@@ -390,8 +407,8 @@ def test_classify_guide_slug_distinguishes_supported_families() -> None:
 
 
 def test_score_family_match_boosts_broad_and_specialized_families() -> None:
-    class_score, class_reasons = score_family_match("monk", content_family="class_hub")
-    easy_score, easy_reasons = score_family_match("fury warrior easy mode", content_family="easy_mode")
+    class_score, class_reasons = score_family_match("monk", slug="monk-guide", content_family="class_hub")
+    easy_score, easy_reasons = score_family_match("fury warrior easy mode", slug="fury-warrior-easy-mode", content_family="easy_mode")
 
     assert class_score == 18
     assert class_reasons == ["family_class_hub"]
@@ -400,7 +417,7 @@ def test_score_family_match_boosts_broad_and_specialized_families() -> None:
 
 
 def test_score_family_match_penalizes_broad_hubs_for_specialized_queries() -> None:
-    score, reasons = score_family_match("monk leveling", content_family="class_hub")
+    score, reasons = score_family_match("monk leveling", slug="monk-guide", content_family="class_hub")
 
     assert score == -14
     assert reasons == ["penalty_broad_hub"]
@@ -1464,3 +1481,145 @@ def test_icy_veins_search_warns_when_the_sitemap_has_stopped_being_updated(monke
 
     today = datetime.now().date()
     assert "sitemap_warning" not in sitemap_provenance("https://www.icy-veins.com/sitemap.xml", today.isoformat(), today=today)
+
+
+FROZEN_RAID_SITEMAP_XML = """
+<urlset>
+  <url><loc>https://www.icy-veins.com/wow/blackrock-depths-raid-guide</loc><lastmod>2024-10-20</lastmod></url>
+  <url><loc>https://www.icy-veins.com/wow/manaforge-omega-raid-guide</loc><lastmod>2025-10-05</lastmod></url>
+  <url><loc>https://www.icy-veins.com/wow/death-knight-guide</loc><lastmod>2025-10-05</lastmod></url>
+</urlset>
+"""
+
+
+def _site_menu_rows() -> list[dict]:
+    return parse_site_menu_guides(load_fixture_text(Path(__file__).parent / "fixtures" / "icy_veins", "site_menu_class_hub.html"))
+
+
+def test_icy_veins_search_finds_current_pages_the_frozen_sitemap_lacks_through_the_site_menu(monkeypatch) -> None:
+    """The sitemap froze at 2025-10-05, so the current raid was missing from every search."""
+    monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.sitemap_guides", lambda self: parse_sitemap_guides(FROZEN_RAID_SITEMAP_XML))
+    monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.site_menu_guides", lambda self: _site_menu_rows())
+
+    payload = json.loads(runner.invoke(app, ["search", "raid guide", "--limit", "10"]).stdout)
+    rows = payload["data"]["results"]
+    sources = {row["id"]: row["metadata"]["source"] for row in rows}
+    # Scored like the sitemap raid guides; a page the live menu links wins their tie as the newest would.
+    assert [row["id"] for row in rows[:3]] == ["venomous-abyss-raid-guide", "manaforge-omega-raid-guide", "blackrock-depths-raid-guide"]
+    assert len({row["ranking"]["score"] for row in rows[:3]}) == 1
+    assert sources["venomous-abyss-raid-guide"] == "site_menu"
+    assert sources["manaforge-omega-raid-guide"] == "sitemap"
+    assert rows[0]["metadata"]["sitemap_lastmod"] is None
+    assert "penalty_stale_page" not in rows[0]["ranking"]["match_reasons"]
+    provenance = payload["provenance"]
+    assert provenance["site_menu_url"] == "https://www.icy-veins.com/wow/death-knight-guide"
+    assert "site_menu" in provenance["sitemap_warning"]
+    assert "site_menu_warning" not in provenance
+
+    resolved = json.loads(runner.invoke(app, ["resolve", "venomous abyss raid"]).stdout)["data"]
+    assert resolved["resolved"] is True
+    assert resolved["match"]["id"] == "venomous-abyss-raid-guide"
+
+
+def test_icy_veins_resolve_answers_a_raids_name_with_that_raids_guide(monkeypatch) -> None:
+    """The raid-variant penalty meant for spec raid pages used to rank the raid's own guide below its meta-achievement page."""
+    monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.sitemap_guides", lambda self: parse_sitemap_guides(FROZEN_RAID_SITEMAP_XML))
+    monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.site_menu_guides", lambda self: _site_menu_rows())
+
+    resolved = json.loads(runner.invoke(app, ["resolve", "venomous abyss"]).stdout)["data"]
+
+    assert resolved["resolved"] is True
+    assert resolved["match"]["id"] == "venomous-abyss-raid-guide"
+    assert "penalty_raid_variant" not in resolved["match"]["ranking"]["match_reasons"]
+
+
+def test_icy_veins_search_does_not_list_a_menu_page_twice_when_the_sitemap_has_it(monkeypatch) -> None:
+    monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.sitemap_guides", lambda self: parse_sitemap_guides(FROZEN_RAID_SITEMAP_XML))
+    monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.site_menu_guides", lambda self: _site_menu_rows())
+
+    rows = json.loads(runner.invoke(app, ["search", "death knight", "--limit", "50"]).stdout)["data"]["results"]
+
+    hubs = [row for row in rows if row["id"] == "death-knight-guide"]
+    assert [row["metadata"]["source"] for row in hubs] == ["sitemap"]
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        httpx.HTTPStatusError(
+            "403",
+            request=httpx.Request("GET", "https://www.icy-veins.com/wow/death-knight-guide"),
+            response=httpx.Response(403, request=httpx.Request("GET", "https://www.icy-veins.com/wow/death-knight-guide")),
+        ),
+        ProviderError("parse_failed", "The Icy Veins guide menu listed no guide pages."),
+    ],
+    ids=["blocked", "menu_moved"],
+)
+def test_icy_veins_search_falls_back_to_the_sitemap_when_the_site_menu_cannot_be_read(monkeypatch, failure: Exception) -> None:
+    def unreadable(self):
+        raise failure
+
+    monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.sitemap_guides", lambda self: parse_sitemap_guides(FROZEN_RAID_SITEMAP_XML))
+    monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.site_menu_guides", unreadable)
+
+    result = runner.invoke(app, ["search", "raid guide"])
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert {row["metadata"]["source"] for row in payload["data"]["results"]} == {"sitemap"}
+    assert "could not be read" in payload["provenance"]["site_menu_warning"]
+    assert "missing from these results" in payload["provenance"]["sitemap_warning"]
+
+
+@pytest.mark.parametrize(
+    ("seed_status", "seed_html"),
+    [
+        (200, None),
+        (200, "<html><body><main>No menu here</main></body></html>"),
+        (403, "<html><body>Just a moment...</body></html>"),
+    ],
+    ids=["menu", "menu_moved", "blocked"],
+)
+def test_icy_veins_search_reads_the_site_menu_from_the_seed_page_over_http(
+    monkeypatch, seed_status: int, seed_html: str | None
+) -> None:
+    """Drives the real seed fetch and menu parse; only the HTTP call is faked. ``None`` serves the captured hub page."""
+    monkeypatch.setattr(IcyVeinsClient, "site_menu_guides", _REAL_SITE_MENU_GUIDES)
+    menu_found = seed_html is None
+    if seed_html is None:
+        seed_html = load_fixture_text(Path(__file__).parent / "fixtures" / "icy_veins", "site_menu_class_hub.html")
+    bodies = {ICY_VEINS_SITEMAP_URL: (200, FROZEN_RAID_SITEMAP_XML), SITE_MENU_SEED_URL: (seed_status, seed_html)}
+
+    def fake_request(_client, url: str, **_kwargs) -> httpx.Response:
+        status, body = bodies[url]
+        response = httpx.Response(status, text=body, request=httpx.Request("GET", url))
+        response.raise_for_status()
+        return response
+
+    monkeypatch.setattr("icy_veins_cli.client.request_with_retries", fake_request)
+    result = runner.invoke(app, ["search", "raid guide", "--limit", "10"])
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    sources = {row["id"]: row["metadata"]["source"] for row in payload["data"]["results"]}
+    assert payload["provenance"]["site_menu_url"] == SITE_MENU_SEED_URL
+    if menu_found:
+        assert sources["venomous-abyss-raid-guide"] == "site_menu"
+        assert "site_menu_warning" not in payload["provenance"]
+    else:
+        assert set(sources.values()) == {"sitemap"}
+        assert "could not be read" in payload["provenance"]["site_menu_warning"]
+
+
+def test_icy_veins_search_skips_the_site_menu_while_the_sitemap_is_current(monkeypatch) -> None:
+    def must_not_read(self):
+        raise AssertionError("a current sitemap lists every page")
+
+    current = FROZEN_RAID_SITEMAP_XML.replace("2025-10-05", datetime.now().date().isoformat())
+    monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.sitemap_guides", lambda self: parse_sitemap_guides(current))
+    monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.site_menu_guides", must_not_read)
+
+    payload = json.loads(runner.invoke(app, ["search", "raid guide"]).stdout)
+
+    assert {row["metadata"]["source"] for row in payload["data"]["results"]} == {"sitemap"}
+    assert "site_menu_url" not in payload["provenance"]

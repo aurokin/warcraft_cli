@@ -254,6 +254,10 @@ def anchor() -> Anchor:
             detail = run("warcraftlogs", "report", code).data["report"]
             if detail.get("visibility") != "public" or not detail.get("guild"):
                 continue
+            # A report that logged more Mythic+ runs than raid pulls is filed under the Mythic+ zone,
+            # so the zone-scoped cohorts and listings would never see it.
+            if (detail.get("zone") or {}).get("id") != zone["id"]:
+                continue
             fights = run("warcraftlogs", "report-fights", code).data["fights"]
             fight = next((row for row in fights if row.get("id") == fight_id and row.get("kill")), None)
             if fight is None:

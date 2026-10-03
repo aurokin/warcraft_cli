@@ -13,7 +13,6 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-import httpx
 from warcraft_api.cache import redacted_redis_url
 from warcraft_content.article_bundle import (
     default_article_export_dir,
@@ -22,10 +21,19 @@ from warcraft_content.article_bundle import (
     write_article_bundle,
 )
 from warcraft_content.article_discovery import merge_article_build_references, merge_article_linked_entities
-from warcraft_content.article_provider_cli import build_article_resolve_response, build_article_search_response, guide_redirect
-from warcraft_content.guide_analysis import extract_guide_analysis_surfaces, merge_guide_analysis_surfaces
+from warcraft_content.article_provider_cli import (
+    article_doctor_payload,
+    build_article_resolve_response,
+    build_article_search_response,
+    fetch_navigation_pages,
+    guide_redirect,
+    preview_block,
+    require_article_content,
+    transport_errors,
+    with_analysis_surfaces,
+)
+from warcraft_content.guide_analysis import merge_guide_analysis_surfaces
 from warcraft_core.envelope import Envelope, success_envelope
-from warcraft_core.exit_codes import error_code_for_http_status
 from warcraft_core.provider import ProviderError, ProviderSurface
 
 from icy_veins_cli.client import ICY_VEINS_SITEMAP_URL, IcyVeinsClient, guide_ref_parts, load_icy_veins_cache_settings_from_env
@@ -33,25 +41,7 @@ from icy_veins_cli.page_parser import NAVIGATION_REQUIRED_FAMILIES, classify_gui
 from icy_veins_cli.search import PROVIDER_NAME, SearchOutcome, resolve_is_confident, search_results, sitemap_provenance
 
 BUNDLE_QUERY_KINDS = ("sections", "navigation", "linked_entities", "build_references", "analysis_surfaces")
-_PREVIEW_LIMIT = 10
-
-
-@contextmanager
-def transport_errors(*, missing_message: str | None = None) -> Iterator[None]:
-    """Translate httpx transport failures into ``ProviderError`` so callers get an envelope, never a traceback."""
-    try:
-        yield
-    except httpx.HTTPStatusError as exc:
-        status = exc.response.status_code
-        details = {"status_code": status, "url": str(exc.request.url)}
-        code = error_code_for_http_status(status)
-        if code == "not_found":
-            raise ProviderError(code, missing_message or str(exc), details=details) from exc
-        raise ProviderError(code, f"Icy Veins request failed with status {status}", details=details) from exc
-    except httpx.TimeoutException as exc:
-        raise ProviderError("timeout", f"{type(exc).__name__}: {exc}") from exc
-    except httpx.RequestError as exc:
-        raise ProviderError("network_error", f"{type(exc).__name__}: {exc}") from exc
+PROVIDER_LABEL = "Icy Veins"
 
 
 def _envelope(command: str, kind: str, data: dict[str, Any], *, query: Any = None, provenance: dict[str, Any] | None = None) -> Envelope:
@@ -66,24 +56,6 @@ def _client() -> Iterator[IcyVeinsClient]:
         raise ProviderError("invalid_cache_config", str(exc)) from exc
     with client:
         yield client
-
-
-def _require_article_content(page_payload: dict[str, Any]) -> dict[str, Any]:
-    """Reject a page whose article container did not parse.
-
-    Icy Veins rebuilds its guide layout periodically. When the article selectors stop matching, the
-    parser produces an article with no body and no sections; returning that as a success would look
-    like an empty guide instead of a broken parser.
-    """
-    article = page_payload["article"]
-    if article["sections"] or article["text"]:
-        return page_payload
-    page_url = page_payload["guide"]["page_url"]
-    raise ProviderError(
-        "parse_failed",
-        f"No article content parsed from {page_url}; the Icy Veins page layout has probably changed.",
-        details={"page_url": page_url},
-    )
 
 
 def _supported_guide_ref(guide_ref: str) -> tuple[str, str]:
@@ -109,45 +81,26 @@ def doctor(**options: Any) -> Envelope:
         settings, sitemap_ttl, page_ttl = load_icy_veins_cache_settings_from_env()
     except ValueError as exc:
         raise ProviderError("invalid_cache_config", str(exc)) from exc
-    return _envelope(
-        "doctor",
-        "doctor",
-        {
-            "status": "ready",
-            "installed": True,
-            "language": "python",
-            "capabilities": {
-                "search": "ready",
-                "resolve": "ready",
-                "guide": "ready",
-                "guide_full": "ready",
-                "guide_export": "ready",
-                "guide_query": "ready",
-            },
-            "cache": {
-                "enabled": settings.enabled,
-                "backend": settings.backend,
-                "cache_dir": str(settings.cache_dir),
-                "redis_url": redacted_redis_url(settings.redis_url),
-                "prefix": settings.prefix,
-                "ttls": {"sitemap": sitemap_ttl, "page_html": page_ttl},
-            },
-        },
+    data = article_doctor_payload(
+        settings, redis_url=redacted_redis_url(settings.redis_url), sitemap_ttl=sitemap_ttl, page_ttl=page_ttl
     )
+    return _envelope("doctor", "doctor", data)
 
 
 def _search_outcome(query: str) -> SearchOutcome:
     _require_query(query)
-    with _client() as client, transport_errors():
-        return search_results(client, query)
+    with _client() as client, transport_errors(PROVIDER_LABEL):
+        return search_results(client, query, today=date.today())
 
 
 def _sitemap_provenance(outcome: SearchOutcome) -> dict[str, Any]:
-    return sitemap_provenance(ICY_VEINS_SITEMAP_URL, outcome.sitemap_newest_lastmod, today=date.today())
+    return sitemap_provenance(
+        ICY_VEINS_SITEMAP_URL, outcome.sitemap_newest_lastmod, today=date.today(), site_menu_warning=outcome.site_menu_warning
+    )
 
 
 def search(query: str, *, limit: int = 5, **options: Any) -> Envelope:
-    """Rank Icy Veins WoW guides from the sitemap against a free-text query."""
+    """Rank Icy Veins WoW guides from the sitemap and the site-wide guide menu against a free-text query."""
     del options
     outcome = _search_outcome(query)
     data = build_article_search_response(
@@ -180,15 +133,6 @@ def resolve(target: str, *, limit: int = 5, **options: Any) -> Envelope:
     return _envelope("resolve", "resolve_match", data, query=target, provenance=_sitemap_provenance(outcome))
 
 
-def _preview_block(items: list[dict[str, Any]], *, fetch_more_command: str) -> dict[str, Any]:
-    return {
-        "count": len(items),
-        "items": items[:_PREVIEW_LIMIT],
-        "more_available": len(items) > _PREVIEW_LIMIT,
-        "fetch_more_command": fetch_more_command,
-    }
-
-
 def _guide_summary(page_payload: dict[str, Any]) -> dict[str, Any]:
     guide = dict(page_payload["guide"])
     navigation = list(page_payload["navigation"])
@@ -211,23 +155,23 @@ def _guide_summary(page_payload: dict[str, Any]) -> dict[str, Any]:
                 for section in article["sections"][:5]
             ],
         },
-        "linked_entities": _preview_block(list(page_payload["linked_entities"]), fetch_more_command=fetch_more_command),
-        "build_references": _preview_block(list(page_payload.get("build_references") or []), fetch_more_command=fetch_more_command),
-        "analysis_surfaces": _preview_block(list(page_payload.get("analysis_surfaces") or []), fetch_more_command=fetch_more_command),
+        "linked_entities": preview_block(list(page_payload["linked_entities"]), fetch_more_command=fetch_more_command),
+        "build_references": preview_block(list(page_payload.get("build_references") or []), fetch_more_command=fetch_more_command),
+        "analysis_surfaces": preview_block(list(page_payload.get("analysis_surfaces") or []), fetch_more_command=fetch_more_command),
         "citations": dict(page_payload.get("citations") or {}),
     }
 
 
 def _fetch_requested_page(client: IcyVeinsClient, guide_ref: str) -> dict[str, Any]:
     """Fetch and parse the page the caller asked for; the ref is already validated, so a failure here is the page's."""
-    with transport_errors(missing_message=f"Guide not found: {guide_ref}"):
+    with transport_errors(PROVIDER_LABEL, missing_message=f"Guide not found: {guide_ref}"):
         try:
             page_payload = client.fetch_guide_page(guide_ref)
         except ValueError as exc:
             raise ProviderError("parse_failed", f"Could not parse the Icy Veins guide page for {guide_ref}: {exc}") from exc
-    page_payload = _require_article_content(page_payload)
+    page_payload = require_article_content(page_payload, provider_label=PROVIDER_LABEL)
     page_payload["redirect"] = guide_redirect(
-        provider_label="Icy Veins", requested=guide_ref_parts(guide_ref), served=page_payload["guide"]["slug"]
+        provider_label=PROVIDER_LABEL, requested=guide_ref_parts(guide_ref), served=page_payload["guide"]["slug"]
     )
     return page_payload
 
@@ -237,8 +181,7 @@ def guide(guide_ref: str) -> Envelope:
     _supported_guide_ref(guide_ref)
     with _client() as client:
         page_payload = _fetch_requested_page(client, guide_ref)
-    page_payload["analysis_surfaces"] = extract_guide_analysis_surfaces(page_payload, provider=PROVIDER_NAME)
-    summary = _guide_summary(page_payload)
+    summary = _guide_summary(with_analysis_surfaces(page_payload, provider=PROVIDER_NAME))
     return _envelope("guide", "guide", summary, query=guide_ref, provenance=summary["citations"])
 
 
@@ -265,58 +208,12 @@ def _traversal_navigation(initial: dict[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
-def _with_analysis_surfaces(page_payload: dict[str, Any]) -> dict[str, Any]:
-    page_payload["analysis_surfaces"] = extract_guide_analysis_surfaces(page_payload, provider=PROVIDER_NAME)
-    return page_payload
-
-
-def _fetch_family_page(client: IcyVeinsClient, page_url: str) -> dict[str, Any]:
-    with transport_errors(missing_message=f"Guide page not found: {page_url}"):
-        page_payload = client.fetch_guide_page(page_url)
-    return _with_analysis_surfaces(_require_article_content(page_payload))
-
-
-def _failed_page_row(item: dict[str, Any], *, code: str, message: str) -> dict[str, Any]:
-    return {"url": item["url"], "section_slug": item.get("section_slug"), "error": {"code": code, "message": message}}
-
-
-def _fetch_family_pages(
-    client: IcyVeinsClient,
-    initial: dict[str, Any],
-    nav_items: list[dict[str, Any]],
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Fetch every family page, keeping the pages that parsed and recording the ones that did not.
-
-    One unreachable or unparsable sibling page must not cost the caller the whole bundle, so each
-    failure becomes a row in the returned list and the bundle reports it.
-    """
-    initial_url = initial["guide"]["page_url"]
-    pages: list[dict[str, Any]] = []
-    failures: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for item in nav_items:
-        page_url = item["url"]
-        if page_url in seen:
-            continue
-        seen.add(page_url)
-        if page_url == initial_url:
-            pages.append(_with_analysis_surfaces(initial))
-            continue
-        try:
-            pages.append(_fetch_family_page(client, page_url))
-        except ProviderError as exc:
-            failures.append(_failed_page_row(item, code=exc.code, message=exc.message))
-        except ValueError as exc:
-            failures.append(_failed_page_row(item, code="parse_failed", message=str(exc)))
-    if initial_url not in seen:
-        pages.insert(0, _with_analysis_surfaces(initial))
-    return pages, failures
-
-
 def _guide_bundle(client: IcyVeinsClient, guide_ref: str) -> dict[str, Any]:
     initial = _fetch_requested_page(client, guide_ref)
     nav_items = _traversal_navigation(initial)
-    pages, failed_pages = _fetch_family_pages(client, initial, nav_items)
+    pages, failed_pages = fetch_navigation_pages(
+        initial, nav_items, fetch_page=client.fetch_guide_page, provider=PROVIDER_NAME, provider_label=PROVIDER_LABEL
+    )
     guide_row = dict(initial["guide"])
     guide_row["page_count"] = len(pages)
     linked_entities = merge_article_linked_entities(pages)
@@ -439,5 +336,4 @@ __all__ = [
     "guide_query",
     "resolve",
     "search",
-    "transport_errors",
 ]

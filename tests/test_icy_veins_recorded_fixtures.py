@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 from bs4 import BeautifulSoup
-from icy_veins_cli.page_parser import classify_guide_slug, parse_guide_page
+from icy_veins_cli.page_parser import classify_guide_slug, parse_guide_page, parse_site_menu_guides
 
 from tests.article_provider_testkit import load_fixture_text
 
@@ -239,3 +239,24 @@ def test_recorded_fixtures_stay_small() -> None:
     oversized = {path.name: path.stat().st_size for path in FIXTURE_DIR.glob("*.html") if path.stat().st_size > 100_000}
 
     assert oversized == {}
+
+
+def test_site_menu_fixture_lists_current_guides_by_slug_with_their_menu_titles() -> None:
+    """Every guide page carries the site-wide guide menu; it links current pages the frozen sitemap lacks."""
+    rows = {row["slug"]: row for row in parse_site_menu_guides(load_fixture_text(FIXTURE_DIR, "site_menu_class_hub.html"))}
+
+    raid = rows["venomous-abyss-raid-guide"]
+    assert raid == {
+        "slug": "venomous-abyss-raid-guide",
+        "name": "Venomous Abyss Raid Guide",
+        "url": "https://www.icy-veins.com/wow/venomous-abyss-raid-guide",
+        "content_family": "raid_guide",
+        "sitemap_lastmod": None,
+        "menu_title": "Venomous Abyss Raid",
+    }
+    # The "NEW!" badge is not part of the title, and a hub's own entry names it rather than "View all".
+    assert rows["midnight-patch-12-1-guide"]["menu_title"] == "Patch 12.1 Hub"
+    assert rows["midnight-season-2-guide"]["menu_title"] == "Season 2 Overview"
+    # Tier lists, profession pages and the talent calculator are not supported guide families.
+    assert all(classify_guide_slug(slug) is not None for slug in rows)
+    assert "professions-alchemy" not in rows

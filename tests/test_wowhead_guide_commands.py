@@ -16,15 +16,8 @@ from wowhead_cli.guides import (
     GuideExportOptions,
     GuideHydrationResult,
     filtered_guide_category_rows,
-    guide_comment_matches,
     guide_export_manifest,
-    guide_gatherer_matches,
-    guide_linked_entity_matches,
-    guide_navigation_matches,
-    guide_query_match_sort_key,
-    guide_query_top_matches,
     guide_row_matches_filters,
-    guide_section_matches,
     guides_payload,
     validated_guides_filters,
     write_guide_export_assets,
@@ -33,100 +26,6 @@ from wowhead_cli.main import app
 from wowhead_cli.wowhead_client import WowheadClient
 
 from tests.wowhead_testkit import SAMPLE_GUIDE_HTML, runner
-
-
-def test_guide_section_matches_applies_section_title_filter() -> None:
-    matches = guide_section_matches(
-        sections=[
-            {"title": "Frost Death Knight Overview", "content_text": "Welcome to the guide.", "ordinal": 1, "level": 2},
-            {"title": "BiS Gear", "content_text": "Use high item level gear.", "ordinal": 2, "level": 2},
-        ],
-        query="welcome",
-        section_title_filter="overview",
-    )
-
-    assert len(matches) == 1
-    assert matches[0]["title"] == "Frost Death Knight Overview"
-
-
-
-def test_guide_linked_entity_matches_respects_source_filter() -> None:
-    matches = guide_linked_entity_matches(
-        linked_entities=[
-            {
-                "entity_type": "item",
-                "id": 249277,
-                "name": "Bellamy's Final Judgement",
-                "url": "https://www.wowhead.com/item=249277",
-                "citation_url": "https://www.wowhead.com/guide=3143",
-                "sources": ["href", "gatherer"],
-            },
-            {
-                "entity_type": "spell",
-                "id": 49020,
-                "name": "Obliterate",
-                "url": "https://www.wowhead.com/spell=49020",
-                "citation_url": "https://www.wowhead.com/guide=3143",
-                "sources": ["href"],
-            },
-        ],
-        query="bellamy",
-        selected_link_sources=("multi",),
-    )
-
-    assert len(matches) == 1
-    assert matches[0]["name"] == "Bellamy's Final Judgement"
-    assert matches[0]["sources"] == ["gatherer", "href"]
-
-
-
-def test_guide_navigation_gatherer_and_comment_matches_build_expected_shapes() -> None:
-    navigation_matches = guide_navigation_matches(
-        navigation_links=[{"label": "BiS Gear", "url": "https://www.wowhead.com/guide/bis", "source_url": None}],
-        query="bis",
-        page_url="https://www.wowhead.com/guide=3143",
-    )
-    assert navigation_matches[0]["kind"] == "navigation"
-    assert navigation_matches[0]["citation_url"] == "https://www.wowhead.com/guide=3143"
-
-    gatherer_matches = guide_gatherer_matches(
-        gatherer_entities=[
-            {
-                "entity_type": "item",
-                "id": 249277,
-                "name": "Bellamy's Final Judgement",
-                "url": "https://www.wowhead.com/item=249277",
-                "citation_url": "https://www.wowhead.com/guide=3143",
-            }
-        ],
-        query="bellamy",
-    )
-    assert gatherer_matches[0]["kind"] == "gatherer_entity"
-
-    comment_matches = guide_comment_matches(
-        comments=[{"id": 91, "user": "A", "body": "Solid guide", "citation_url": "https://www.wowhead.com/guide=3143#comments"}],
-        query="solid",
-    )
-    assert comment_matches[0]["kind"] == "comment"
-    assert comment_matches[0]["user"] == "A"
-
-
-
-def test_guide_query_top_matches_dedupes_entity_results_across_groups() -> None:
-    top = guide_query_top_matches(
-        match_groups=[
-            [],
-            [],
-            [{"kind": "linked_entity", "score": 50, "entity_type": "spell", "id": 49020, "name": "Obliterate"}],
-            [{"kind": "gatherer_entity", "score": 48, "entity_type": "spell", "id": 49020, "name": "Obliterate"}],
-            [],
-        ],
-        limit=5,
-    )
-
-    assert len(top) == 1
-    assert top[0]["kind"] == "linked_entity"
-
 
 
 def test_validated_guides_filters_normalizes_and_rejects_invalid_ranges() -> None:
@@ -874,8 +773,11 @@ def test_guide_query_reads_exported_assets(monkeypatch, tmp_path) -> None:
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["data"]["counts"]["gatherer_entities"] >= 1
-    assert payload["data"]["counts"]["analysis_surfaces"] == 0
+    assert payload["data"]["bundle"] == str(export_dir)
+    assert payload["data"]["failed_pages"] == {"count": 0, "items": []}
+    assert payload["data"]["match_counts"]["gatherer_entities"] >= 1
+    assert payload["data"]["match_counts"]["analysis_surfaces"] == 0
+    assert payload["data"]["match_counts"]["build_references"] == 0
     assert payload["data"]["matches"]["gatherer_entities"][0]["name"] == "Bellamy's Final Judgement"
     assert payload["data"]["top"][0]["kind"] == "linked_entity"
     assert payload["data"]["top"][0]["name"] == "Bellamy's Final Judgement"
@@ -884,7 +786,7 @@ def test_guide_query_reads_exported_assets(monkeypatch, tmp_path) -> None:
     result = runner.invoke(app, ["guide-query", str(export_dir), "obliterate", "--limit", "3"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["data"]["counts"]["linked_entities"] >= 1
+    assert payload["data"]["match_counts"]["linked_entities"] >= 1
     assert payload["data"]["matches"]["linked_entities"][0]["entity_type"] == "spell"
     assert payload["data"]["matches"]["linked_entities"][0]["name"] == "Obliterate"
     assert payload["data"]["top"][0]["kind"] == "linked_entity"
@@ -899,12 +801,12 @@ def test_guide_query_reads_exported_assets(monkeypatch, tmp_path) -> None:
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["data"]["matches"]["sections"][0]["title"] == "Frost Death Knight Overview"
-    assert "Welcome to the guide." in payload["data"]["matches"]["sections"][0]["preview"]
+    assert "Welcome to the guide." in payload["data"]["matches"]["sections"][0]["content_text"]
 
     result = runner.invoke(app, ["guide-query", str(export_dir), "overview", "--kind", "analysis_surfaces"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["data"]["counts"]["analysis_surfaces"] >= 1
+    assert payload["data"]["match_counts"]["analysis_surfaces"] >= 1
     assert payload["data"]["matches"]["analysis_surfaces"][0]["surface_tags"] == ["overview"]
 
     result = runner.invoke(
@@ -913,20 +815,15 @@ def test_guide_query_reads_exported_assets(monkeypatch, tmp_path) -> None:
     )
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["data"]["filters"] == {
-        "kinds": ["sections"],
-        "section_title": "overview",
-        "linked_sources": [],
-    }
-    assert payload["data"]["counts"]["sections"] == 1
-    assert payload["data"]["counts"]["comments"] == 0
+    assert payload["data"]["match_counts"]["sections"] == 1
+    assert payload["data"]["match_counts"]["comments"] == 0
     assert payload["data"]["matches"]["sections"][0]["title"] == "Frost Death Knight Overview"
 
     result = runner.invoke(app, ["guide-query", str(export_dir), "solid", "--kind", "comments"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["data"]["counts"]["comments"] == 1
-    assert payload["data"]["counts"]["sections"] == 0
+    assert payload["data"]["match_counts"]["comments"] == 1
+    assert payload["data"]["match_counts"]["sections"] == 0
     assert payload["data"]["matches"]["comments"][0]["user"] == "A"
 
     root = tmp_path / "wowhead_exports"
@@ -937,7 +834,7 @@ def test_guide_query_reads_exported_assets(monkeypatch, tmp_path) -> None:
     result = runner.invoke(app, ["guide-query", "3143", "obliterate", "--root", str(root)])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["data"]["output_dir"] == str(selector_dir)
+    assert payload["data"]["bundle"] == str(selector_dir)
     assert payload["data"]["matches"]["linked_entities"][0]["name"] == "Obliterate"
 
     result = runner.invoke(
@@ -946,8 +843,7 @@ def test_guide_query_reads_exported_assets(monkeypatch, tmp_path) -> None:
     )
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["data"]["filters"]["linked_sources"] == ["multi"]
-    assert payload["data"]["counts"]["linked_entities"] == 1
+    assert payload["data"]["match_counts"]["linked_entities"] == 1
     assert payload["data"]["matches"]["linked_entities"][0]["name"] == "Bellamy's Final Judgement"
     assert payload["data"]["matches"]["linked_entities"][0]["sources"] == ["gatherer", "href"]
 
@@ -957,13 +853,12 @@ def test_guide_query_reads_exported_assets(monkeypatch, tmp_path) -> None:
     )
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["data"]["filters"]["linked_sources"] == ["href"]
-    assert payload["data"]["matches"]["linked_entities"][0]["name"] == "Obliterate"
+    assert [row["name"] for row in payload["data"]["matches"]["linked_entities"]] == ["Obliterate"]
 
     result = runner.invoke(app, ["guide-query", selector_dir.name, "solid", "--root", str(root), "--kind", "comments"])
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["data"]["output_dir"] == str(selector_dir)
+    assert payload["data"]["bundle"] == str(selector_dir)
     assert payload["data"]["matches"]["comments"][0]["user"] == "A"
 
     missing_dir = tmp_path / "missing-corpus"
@@ -974,18 +869,3 @@ def test_guide_query_reads_exported_assets(monkeypatch, tmp_path) -> None:
     result = runner.invoke(app, ["guide-query", str(selector_dir), "anything", "--linked-source", "bad-source"])
     assert result.exit_code != 0
     assert "Unsupported linked source filter" in result.output
-
-
-
-
-def test_guide_query_match_sort_key_ranks_non_entity_rows_by_score_then_kind() -> None:
-    """Sections, comments and navigation rows share one branch; score must beat kind priority."""
-    rows = [
-        {"kind": "comment", "score": 9, "ordinal": 1},
-        {"kind": "section", "score": 9, "ordinal": 2},
-        {"kind": "section", "score": 12, "ordinal": 3},
-        {"kind": "navigation", "score": 12, "ordinal": 4},
-        {"kind": "section", "score": 12, "ordinal": 1},
-    ]
-    ordered = [row["ordinal"] for row in sorted(rows, key=guide_query_match_sort_key)]
-    assert ordered == [1, 3, 4, 2, 1]

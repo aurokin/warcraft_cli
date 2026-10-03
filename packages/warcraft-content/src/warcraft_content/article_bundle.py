@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Collection
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -220,6 +221,13 @@ _CONTENT_FILES: Final = {
     "analysis_surfaces": "analysis_surfaces_jsonl",
 }
 
+# Row lists only a wowhead guide-export writes. They are read only when the manifest lists them, so a
+# bundle without them has no such key and a query does not report those kinds for it.
+_EXTRA_CONTENT_FILES: Final = {
+    "gatherer_entities": "gatherer_entities_jsonl",
+    "comments": "comments_jsonl",
+}
+
 
 def _object_field(row: dict[str, Any], key: str) -> dict[str, Any]:
     """``row[key]`` when it is an object, ``{}`` when absent; any other type is a corrupt bundle row."""
@@ -258,6 +266,9 @@ def _read_bundle(export_dir: Path) -> dict[str, Any]:
     bundle: dict[str, Any] = {"manifest": manifest, "failed_pages": _failed_page_rows(manifest)}
     for name, key in _CONTENT_FILES.items():
         bundle[name] = load_jsonl(export_dir / files[key]) if key in files else []
+    for name, key in _EXTRA_CONTENT_FILES.items():
+        if key in files:
+            bundle[name] = load_jsonl(export_dir / files[key])
     _check_nested_fields(bundle)
     return bundle
 
@@ -292,6 +303,11 @@ def _query_score(query: str, text: str) -> int:
     return score
 
 
+def _row_name(row: dict[str, Any]) -> Any:
+    """What a row is called: a section's or link's ``title``, an entity's ``name``, a wowhead link's ``label``."""
+    return row.get("title") or row.get("name") or row.get("label")
+
+
 def _section_text(row: dict[str, Any]) -> Any:
     """Section body: ``text`` in article bundles, ``content_text`` in wowhead guide-exports."""
     return row.get("text") or row.get("content_text")
@@ -302,12 +318,22 @@ def _section_haystack(row: dict[str, Any]) -> str:
 
 
 def _navigation_haystack(row: dict[str, Any]) -> str:
-    # Article bundles title their navigation links; wowhead guide-exports label them.
-    return f"{row.get('title') or row.get('label') or ''} {row.get('section_slug') or ''}"
+    # Article bundles title their navigation links and give their slug; wowhead guide-exports label
+    # them with a short name and keep the topic words in the link URL.
+    return f"{_row_name(row) or ''} {row.get('section_slug') or row.get('url') or ''}"
+
+
+def _entity_type(row: dict[str, Any]) -> Any:
+    """Entity type: ``type`` in article bundles, ``entity_type`` in wowhead guide-exports."""
+    return row.get("type") or row.get("entity_type")
 
 
 def _linked_entity_haystack(row: dict[str, Any]) -> str:
-    return f"{row.get('name') or ''} {row.get('type') or ''} {row.get('id') or ''}"
+    return f"{row.get('name') or ''} {_entity_type(row) or ''} {row.get('id') or ''}"
+
+
+def _comment_haystack(row: dict[str, Any]) -> str:
+    return f"{row.get('user') or ''} {row.get('body') or ''}"
 
 
 def _build_reference_haystack(row: dict[str, Any]) -> str:
@@ -341,6 +367,21 @@ def _section_title_predicate(normalized_filter: str | None):
     return predicate
 
 
+def _linked_source_predicate(linked_sources: Collection[str]):
+    """Keep linked entities found by any of ``linked_sources``; ``multi`` keeps those found by more than one.
+
+    Only wowhead guide-exports tag their linked entities with ``sources`` (``href``, ``gatherer``).
+    """
+    if not linked_sources:
+        return None
+
+    def predicate(row: dict[str, Any]) -> bool:
+        sources = {value for value in row.get("sources") or [] if isinstance(value, str)}
+        return bool(sources & set(linked_sources)) or ("multi" in linked_sources and len(sources) > 1)
+
+    return predicate
+
+
 def _collect_kind_matches(
     rows: list[dict[str, Any]],
     *,
@@ -353,13 +394,42 @@ def _collect_kind_matches(
     for row in rows:
         if predicate is not None and not predicate(row):
             continue
-        # A match in a title counts twice, so the section named for the question outranks every
-        # section that merely mentions it.
-        score = _query_score(query, haystack_fn(row)) + _query_score(query, str(row.get("title") or ""))
+        # A match in a row's name counts twice, so the section or entity named for the question
+        # outranks every row that merely mentions it.
+        score = _query_score(query, haystack_fn(row)) + _query_score(query, str(_row_name(row) or ""))
         if score <= 0:
             continue
         matches.append({**row, "kind": kind, "score": score})
     return matches
+
+
+# Each searchable row list: the kind its matches carry and the text a query is scored against.
+_QUERY_KINDS: Final = {
+    "sections": ("section", _section_haystack),
+    "navigation": ("navigation", _navigation_haystack),
+    "linked_entities": ("linked_entity", _linked_entity_haystack),
+    "build_references": ("build_reference", _build_reference_haystack),
+    "analysis_surfaces": ("analysis_surface", _analysis_surface_haystack),
+}
+
+# Searched, and reported, only for a bundle that carries them (see ``_EXTRA_CONTENT_FILES``).
+_EXTRA_QUERY_KINDS: Final = {
+    "gatherer_entities": ("gatherer_entity", _linked_entity_haystack),
+    "comments": ("comment", _comment_haystack),
+}
+
+
+def _top_matches(results_by_kind: dict[str, list[dict[str, Any]]], *, limit: int) -> list[dict[str, Any]]:
+    # A wowhead gatherer record is usually also one of the guide's linked entities; the top list
+    # shows that entity once, as the linked entity, which also says where it was found.
+    linked = {(_entity_type(row), row.get("id")) for row in results_by_kind["linked_entities"]}
+    top: list[dict[str, Any]] = []
+    for kind, rows in results_by_kind.items():
+        if kind == "gatherer_entities":
+            rows = [row for row in rows if (_entity_type(row), row.get("id")) not in linked]
+        top.extend(rows[:limit])
+    top.sort(key=lambda row: (-row["score"], row["kind"], str(_row_name(row) or "")))
+    return top[:limit]
 
 
 def query_article_bundle(
@@ -369,58 +439,35 @@ def query_article_bundle(
     limit: int,
     kinds: set[str],
     section_title_filter: str | None,
+    linked_sources: Collection[str] = (),
 ) -> dict[str, Any]:
+    """Search a loaded bundle's rows of each kind in ``kinds`` for ``query``.
+
+    ``match_counts`` and ``matches`` name every kind the bundle can hold, so a kind left out of
+    ``kinds`` reads as zero matches. ``linked_sources`` narrows linked entities by where a wowhead
+    guide-export found them.
+    """
     normalized_query = query.lower().strip()
     normalized_section_title_filter = section_title_filter.lower().strip() if section_title_filter else None
-    results_by_kind: dict[str, list[dict[str, Any]]] = {
-        "sections": [],
-        "navigation": [],
-        "linked_entities": [],
-        "build_references": [],
-        "analysis_surfaces": [],
+    predicates = {
+        "sections": _section_title_predicate(normalized_section_title_filter),
+        "linked_entities": _linked_source_predicate(linked_sources),
     }
-    if "sections" in kinds:
-        results_by_kind["sections"] = _collect_kind_matches(
-            bundle["sections"],
-            kind="section",
+    searchable = {**_QUERY_KINDS, **{name: spec for name, spec in _EXTRA_QUERY_KINDS.items() if name in bundle}}
+    results_by_kind: dict[str, list[dict[str, Any]]] = {
+        name: _collect_kind_matches(
+            bundle[name],
+            kind=kind,
             query=normalized_query,
-            haystack_fn=_section_haystack,
-            predicate=_section_title_predicate(normalized_section_title_filter),
+            haystack_fn=haystack_fn,
+            predicate=predicates.get(name),
         )
-    if "navigation" in kinds:
-        results_by_kind["navigation"] = _collect_kind_matches(
-            bundle["navigation"],
-            kind="navigation",
-            query=normalized_query,
-            haystack_fn=_navigation_haystack,
-        )
-    if "linked_entities" in kinds:
-        results_by_kind["linked_entities"] = _collect_kind_matches(
-            bundle["linked_entities"],
-            kind="linked_entity",
-            query=normalized_query,
-            haystack_fn=_linked_entity_haystack,
-        )
-    if "build_references" in kinds:
-        results_by_kind["build_references"] = _collect_kind_matches(
-            bundle["build_references"],
-            kind="build_reference",
-            query=normalized_query,
-            haystack_fn=_build_reference_haystack,
-        )
-    if "analysis_surfaces" in kinds:
-        results_by_kind["analysis_surfaces"] = _collect_kind_matches(
-            bundle["analysis_surfaces"],
-            kind="analysis_surface",
-            query=normalized_query,
-            haystack_fn=_analysis_surface_haystack,
-        )
+        if name in kinds
+        else []
+        for name, (kind, haystack_fn) in searchable.items()
+    }
     for rows in results_by_kind.values():
-        rows.sort(key=lambda row: (-row["score"], str(row.get("title") or row.get("name") or "")))
-    top: list[dict[str, Any]] = []
-    for rows in results_by_kind.values():
-        top.extend(rows[:limit])
-    top.sort(key=lambda row: (-row["score"], row["kind"], str(row.get("title") or row.get("name") or "")))
+        rows.sort(key=lambda row: (-row["score"], str(_row_name(row) or "")))
     failed_pages = list(bundle.get("failed_pages") or [])
     return {
         "query": query,
@@ -429,7 +476,7 @@ def query_article_bundle(
         "count": sum(len(rows) for rows in results_by_kind.values()),
         "match_counts": {kind: len(rows) for kind, rows in results_by_kind.items()},
         "matches": {kind: rows[:limit] for kind, rows in results_by_kind.items()},
-        "top": top[:limit],
+        "top": _top_matches(results_by_kind, limit=limit),
     }
 
 

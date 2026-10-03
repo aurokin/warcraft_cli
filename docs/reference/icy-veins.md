@@ -23,7 +23,7 @@ Report Icy Veins capabilities and the resolved HTTP cache configuration.
 
 ## icy-veins search
 
-Rank Icy Veins WoW guides from the sitemap against a free-text query.
+Rank Icy Veins WoW guides from the sitemap and the site-wide guide menu against a free-text query.
 
 **Arguments**
 

@@ -29,7 +29,10 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 PROVIDER_STUBS: dict[str, tuple[tuple[str, Any], ...]] = {
     "wowhead": (("wowhead_cli.wowhead_client.WowheadClient.search_suggestions", lambda self, query: {"search": query, "results": []}),),
     "method": (("method_cli.client.MethodClient.sitemap_guides", lambda self: []),),
-    "icy-veins": (("icy_veins_cli.client.IcyVeinsClient.sitemap_guides", lambda self: []),),
+    "icy-veins": (
+        ("icy_veins_cli.client.IcyVeinsClient.sitemap_guides", lambda self: []),
+        ("icy_veins_cli.client.IcyVeinsClient.site_menu_guides", lambda self: []),
+    ),
     "raiderio": (("raiderio_cli.client.RaiderIOClient.search", lambda self, *, term, kind=None: {"matches": []}),),
     "warcraft-wiki": (("warcraft_wiki_cli.client.WarcraftWikiClient.search_articles", lambda self, query, *, limit: (0, [])),),
     "lorrgs": (

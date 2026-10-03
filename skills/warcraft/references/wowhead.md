@@ -30,6 +30,9 @@
 - use `guides <category>` when the guide family is known but the exact guide is not
 - use `guide-full` or `guide-export` when you need the raw guide body plus additive `analysis_surfaces` for comparison-oriented workflows
 - use `guide-query --kind analysis_surfaces` when you want section-backed guide topics without discarding the underlying guide text
+- `guide-query` answers like `icy-veins guide-query` and `method guide-query`: per-kind `match_counts` and
+  `matches` (whole bundle rows plus `kind` and `score`), a flattened `top`, and `failed_pages`;
+  `--linked-source href|gatherer|multi` narrows linked entities by where the page linked them
 - use timeline filters like `--author`, `--type`, `--region`, and `--forum` instead of scanning broad result sets manually
 - the `news`, `blue-tracker` and `guides` query keeps a row only when every query word is a whole word
   in it, up to a plural or possessive ending, so "hotfix" matches "Hotfixes" but "frost mage" does not

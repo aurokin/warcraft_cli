@@ -697,6 +697,9 @@ def test_talent_describe_adds_simc_priority_output_for_the_report_build(require,
     assert build["hero_tree"] == {"name": selection["hero_tree"], "id": selection["hero_tree_id"]}, result.describe()
     assert describe_payload["data"]["identity"]["actor_class"] == packet["validation"]["actor_class"], result.describe()
     assert describe_payload["data"]["apl"]["path"] == str(apl_path), result.describe()
+    # simc read the packet in memory: the only file it cites is the one --packet-out wrote.
+    assert describe_payload["data"]["build_spec"]["transport_packet"]["path"] == str(packet_out.resolve())
+    assert result.data["upgrade_result"]["payload"]["data"]["input"]["build_packet"] is None, result.describe()
     assert describe_payload["data"]["single_target"]["active_priority"], result.describe()
 
     # The written packet is a complete input on its own.

@@ -8,17 +8,13 @@ from typing import Any
 from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup, Tag
+from warcraft_content.guide_page import WOWHEAD_LINK_RE, extract_talent_export_builds
 from warcraft_content.html_sections import clean_text, extract_headings, extract_sections
-from warcraft_core.identity import ability_identity_payload, build_identity_payload, build_reference_payload
+from warcraft_core.identity import ability_identity_payload, build_reference_payload
 
 ICY_VEINS_BASE_URL = "https://www.icy-veins.com"
 GUIDE_PATH_RE = re.compile(r"^/wow/(?P<slug>[^/?#]+)/?$")
 SITEMAP_ENTRY_RE = re.compile(r"<loc>(https://www\.icy-veins\.com/wow/[^<]+)</loc>\s*(?:<lastmod>([^<]*)</lastmod>)?")
-WOWHEAD_LINK_RE = re.compile(
-    r"^(?P<entity_type>achievement|currency|faction|item|mount|npc|object|pet|quest|spell|zone)=(?P<id>\d+)(?:/|$)"
-)
-# A WoW loadout import string as Blizzard's client generates it: one long run of base64 characters.
-WOW_TALENT_EXPORT_RE = re.compile(r"^[A-Za-z0-9+/]{40,}$")
 CLASS_HUB_SLUGS = {
     "death-knight-guide",
     "demon-hunter-guide",
@@ -62,6 +58,11 @@ SPECIAL_EVENT_KEYWORDS = (
     "remix-guide",
     "torghast-guide",
 )
+# The site-wide guide menu every WoW guide page carries. It links the current season's pages, which
+# the sitemap (frozen since 2025-10-05) does not list. Its "View all" links repeat a section's hub
+# under a generic title, so a hub's own entry names it.
+SITE_MENU_LINK_SELECTOR = 'nav.iv-subnav a[href*="/wow/"]'
+SITE_MENU_VIEW_ALL_CLASS = "iv-subnav__view-all"
 # A spec's own guide is ``<spec>-<class>-pve-<role>-guide``; every other ``-guide`` page (season hubs,
 # dungeon, reputation and event pages) is an ``article_guide``, not a spec guide.
 SPEC_GUIDE_RE = re.compile(r"-pve-(?:dps|healing|tank)-guide$")
@@ -409,46 +410,9 @@ def _extract_linked_entities(article: Tag, *, source_url: str) -> list[dict[str,
     return sorted(items.values(), key=lambda row: (row["type"], str(row["id"])))
 
 
-def _talent_export_reference(code: str, *, label: str | None, source_url: str) -> dict[str, Any]:
-    """One published WoW loadout import string, in the shared build-reference row shape.
-
-    ``url`` carries the import string itself: a ``wow_talent_export`` reference has no link to point
-    at, the string is what identifies it, and it is exactly what ``simc --build-text`` consumes.
-    """
-    return {
-        "kind": "build_reference",
-        "reference_type": "wow_talent_export",
-        "url": code,
-        "label": label,
-        "build_code": code,
-        "source_url": source_url,
-        "build_identity": build_identity_payload(
-            actor_class=None,
-            spec=None,
-            confidence="none",
-            source="guide_talent_export_string",
-            source_notes=(
-                "build code came from a WoW loadout import string published in the guide",
-                "class and spec are not read off this reference; decode the import string to identify them",
-            ),
-        ),
-        "source": {"provider": "icy-veins", "source": "guide_talent_export_string"},
-    }
-
-
-def _extract_talent_export_builds(article: Tag, *, source_url: str) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    for block in article.select(TALENT_EXPORT_SELECTOR):
-        code_tag = block.select_one(TALENT_EXPORT_CODE_SELECTOR)
-        if not isinstance(code_tag, Tag):
-            continue
-        code = code_tag.get_text(strip=True)
-        if not WOW_TALENT_EXPORT_RE.match(code):
-            continue
-        title_tag = block.select_one(TALENT_EXPORT_TITLE_SELECTOR)
-        label = clean_text(title_tag.get_text(" ", strip=True)) if isinstance(title_tag, Tag) else None
-        rows.append(_talent_export_reference(code, label=label, source_url=source_url))
-    return rows
+def _talent_export_code(block: Tag) -> str | None:
+    code_tag = block.select_one(TALENT_EXPORT_CODE_SELECTOR)
+    return code_tag.get_text(strip=True) if isinstance(code_tag, Tag) else None
 
 
 def _extract_build_references(article: Tag, *, source_url: str) -> list[dict[str, Any]]:
@@ -468,7 +432,14 @@ def _extract_build_references(article: Tag, *, source_url: str) -> list[dict[str
         if payload is None:
             continue
         items[str(payload["url"])] = payload
-    for row in _extract_talent_export_builds(article, source_url=source_url):
+    for row in extract_talent_export_builds(
+        article,
+        source_url=source_url,
+        provider="icy-veins",
+        block_selector=TALENT_EXPORT_SELECTOR,
+        title_selector=TALENT_EXPORT_TITLE_SELECTOR,
+        read_code=_talent_export_code,
+    ):
         items.setdefault(str(row["url"]), row)
     return sorted(items.values(), key=lambda row: str(row["url"]))
 
@@ -603,6 +574,38 @@ def parse_guide_page(html: str, *, source_url: str) -> dict[str, Any]:
             "comments": _comments_url(soup, canonical_url=canonical_url),
         },
     }
+
+
+def _menu_link_title(anchor: Tag) -> str | None:
+    """The link's own text, without child badges such as "NEW!"."""
+    own_text = clean_text(" ".join(anchor.find_all(string=True, recursive=False)))
+    return own_text or clean_text(anchor.get_text(" ", strip=True))
+
+
+def parse_site_menu_guides(html: str) -> list[dict[str, Any]]:
+    """Every supported guide the site-wide menu links, in the sitemap row shape with no ``sitemap_lastmod``.
+
+    ``menu_title`` keeps the menu's wording ("Mythic+ Season 2"), which only makes sense inside its
+    menu section, so ``name`` is built from the slug like a sitemap row's.
+    """
+    anchors = BeautifulSoup(html, "html.parser").select(SITE_MENU_LINK_SELECTOR)
+    # Stable sort: a hub's own entry wins over the "View all" link to the same page.
+    anchors.sort(key=lambda anchor: SITE_MENU_VIEW_ALL_CLASS in (anchor.get("class") or []))
+    guides: dict[str, dict[str, Any]] = {}
+    for anchor in anchors:
+        href = _attribute(anchor, "href")
+        slug = guide_slug_from_url(urljoin(ICY_VEINS_BASE_URL, href)) if href else None
+        if slug is None or slug in guides or (content_family := classify_guide_slug(slug)) is None:
+            continue
+        guides[slug] = {
+            "slug": slug,
+            "name": slug_display_name(slug),
+            "url": guide_url(slug),
+            "content_family": content_family,
+            "sitemap_lastmod": None,
+            "menu_title": _menu_link_title(anchor),
+        }
+    return sorted(guides.values(), key=lambda row: row["name"].lower())
 
 
 def _sitemap_date(lastmod: str) -> str | None:

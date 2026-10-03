@@ -678,6 +678,7 @@ def test_guide_bundle_query_returns_cross_bundle_matches(tmp_path: Path) -> None
         "analysis_surfaces": 0,
         "navigation": 0,
         "linked_entities": 1,
+        "build_references": 0,
         "gatherer_entities": 0,
         "comments": 0,
     }
@@ -689,6 +690,11 @@ def test_guide_bundle_query_returns_cross_bundle_matches(tmp_path: Path) -> None
     )
     assert payload["data"]["top"][0]["kind"] == "linked_entity"
     assert payload["data"]["top"][0]["bundle"]["guide_id"] == 3143
+
+    no_match = runner.invoke(app, ["guide-bundle-query", "zzqqxx", "--root", str(root)])
+    assert no_match.exit_code == 0
+    # Zero matches still name every kind, so a reader of counts["sections"] gets 0, not a KeyError.
+    assert json.loads(no_match.stdout)["data"]["counts"] == dict.fromkeys(payload["data"]["counts"], 0)
 
 
 
@@ -825,6 +831,7 @@ def test_guide_bundle_query_uses_filters_and_root_index(monkeypatch, tmp_path: P
         "analysis_surfaces": 0,
         "navigation": 0,
         "linked_entities": 1,
+        "build_references": 0,
         "gatherer_entities": 0,
         "comments": 0,
     }

@@ -509,7 +509,23 @@ def test_method_guide_upstream_404_returns_not_found_envelope(monkeypatch) -> No
     assert result.exit_code == 4, result.output
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "not_found"
+    assert payload["error"]["message"] == "Guide not found: mistweaver-monk"
     assert payload["error"]["details"]["status_code"] == 404
+
+
+def test_method_upstream_error_status_names_the_site_not_the_httpx_exception(monkeypatch) -> None:
+    """Method used to put httpx's multi-line exception text (with an MDN link) in error.message."""
+
+    def _unavailable(*_args, **_kwargs):
+        request = httpx.Request("GET", "https://www.method.gg/guides/mistweaver-monk")
+        raise httpx.HTTPStatusError("503", request=request, response=httpx.Response(503, request=request))
+
+    monkeypatch.setattr("method_cli.client.request_with_retries", _unavailable)
+    result = runner.invoke(app, ["guide", "mistweaver-monk"])
+
+    error = json.loads(result.stderr)["error"]
+    assert error["message"] == "Method request failed with status 503"
+    assert error["details"]["status_code"] == 503
 
 
 @pytest.mark.parametrize(
@@ -753,6 +769,27 @@ def test_method_search_reads_every_mythic_plus_spelling_as_mythic_dungeons(monke
 
     ids = [row["id"] for row in json.loads(result.stdout)["data"]["results"]]
     assert ids == ["wow-midnight-season-2-mythic-dungeon-rotation"]
+
+
+AUGMENT_SITEMAP_XML = """
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>https://www.method.gg/guides/how-to-obtain-the-ethereal-augment-rune-permanent-augment-rune</loc></url>
+  <url><loc>https://www.method.gg/guides/augmentation-evoker</loc></url>
+</urlset>
+"""
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [("aug rune", "how-to-obtain-the-ethereal-augment-rune-permanent-augment-rune"), ("aug evoker", "augmentation-evoker")],
+)
+def test_method_search_reads_aug_as_augmentation_except_in_aug_rune(monkeypatch, query: str, expected: str) -> None:
+    """`aug rune` was spelled out as "augmentation rune", which no augment rune page contains, and found nothing."""
+    monkeypatch.setattr("method_cli.main.MethodClient.sitemap_guides", lambda self: parse_sitemap_guides(AUGMENT_SITEMAP_XML))
+    result = runner.invoke(app, ["search", query])
+    assert result.exit_code == 0
+
+    assert [row["id"] for row in json.loads(result.stdout)["data"]["results"]] == [expected]
 
 
 @pytest.mark.parametrize("args", [["search", ""], ["resolve", "   "]], ids=["search", "resolve"])

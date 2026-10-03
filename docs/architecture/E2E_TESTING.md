@@ -171,10 +171,13 @@ Open weaknesses a green run does not rule out, beyond the limits above:
   `?realm=` value, so fetching the citation would prove nothing.
 - **Wowhead suggestion type 112** (Companion) has never appeared in a live response, so its label is
   unverified.
-- **Icy Veins search cannot find the current season.** Discovery reads the Icy Veins sitemap, whose
-  newest entry is 2025-10-05, so pages published since are missing from `search` and `resolve`. The
-  `mythic+` journey checks that search says so (`provenance.sitemap_warning` whenever the newest
-  entry is more than 30 days old), not that it finds current pages.
+- **Icy Veins search cannot find past-season pages missing from the sitemap.** Discovery reads the
+  Icy Veins sitemap, whose newest entry is 2025-10-05. While it is more than 30 days old, `search`
+  and `resolve` also read the site-wide guide menu, which lists current pages only, so a page
+  published since and already rotated out of the menu stays undiscoverable. The `mythic+` journey
+  checks that search says so (`provenance.sitemap_warning`), and
+  `test_search_finds_a_current_page_the_stale_sitemap_lacks_through_the_site_menu` checks that a
+  current raid guide missing from the sitemap is found through the menu.
 
 ## CI
 

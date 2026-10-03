@@ -1,4 +1,8 @@
-"""Icy Veins sitemap ranking: query normalization plus family-aware boosts and penalties.
+"""Icy Veins guide ranking: query normalization plus family-aware boosts and penalties.
+
+Candidates are the sitemap's guides plus, once the sitemap has stopped being updated (it froze in
+2025), the pages the site-wide guide menu links that the sitemap lacks: the menu is then the only way
+to find current pages.
 
 Query tokenization and the exact/prefix/contains/all-terms title score come from
 ``warcraft_content.search`` so they cannot drift from the other article providers; everything
@@ -12,10 +16,12 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Any
 
+import httpx
 from warcraft_content.article_discovery import article_candidate, sort_article_candidates
 from warcraft_content.search import expand_class_spec_aliases, normalize_query, score_article_match, tokenize_query
+from warcraft_core.provider import ProviderError
 
-from icy_veins_cli.client import IcyVeinsClient
+from icy_veins_cli.client import SITE_MENU_SEED_URL, IcyVeinsClient
 from icy_veins_cli.page_parser import CLASS_HUB_SLUGS
 
 PROVIDER_NAME = "icy-veins"
@@ -98,7 +104,8 @@ INTRO_FAMILIES = frozenset({"spec_guide", "class_hub", "role_guide"})
 STALE_AFTER = timedelta(days=365)
 STALE_PENALTY = 10
 # A sitemap whose newest page is this far behind today has stopped being updated, so pages published
-# since cannot be found; search and resolve say so in their provenance.
+# since are missing from it: search and resolve then also read the site menu and say so in their
+# provenance.
 SITEMAP_STALE_AFTER = timedelta(days=30)
 # A class/spec guide slug starts ``<spec>-<class>-`` (``shadow-priest-``, ``beast-mastery-hunter-``). A query
 # naming that spec ranks these pages above pages that only share the word (``shadow-enclave-delve-guide``);
@@ -259,13 +266,15 @@ def _score_specialized_family_match(query: str, content_family: str, *, terms: s
     return score, reasons
 
 
-def _score_family_penalties(content_family: str, *, terms: set[str], joined: str) -> tuple[int, list[str]]:
+def _score_family_penalties(content_family: str, *, slug: str, terms: set[str], joined: str) -> tuple[int, list[str]]:
     score = 0
     reasons: list[str] = []
     if content_family in {"class_hub", "role_guide"} and (terms & SPECIALIZED_QUERY_TERMS):
         score -= 14
         reasons.append("penalty_broad_hub")
-    if content_family == "raid_guide" and "raid" not in terms:
+    # Only a spec's raid variant (``frost-mage-pve-dps-<raid>-raid-guide``) yields to the spec guide; a raid's
+    # own guide is what a query naming that raid wants.
+    if content_family == "raid_guide" and "raid" not in terms and SPEC_GUIDE_SLUG_RE.match(slug):
         score -= 12
         reasons.append("penalty_raid_variant")
     if content_family in {"expansion_guide", "special_event_guide"} and not (
@@ -276,7 +285,7 @@ def _score_family_penalties(content_family: str, *, terms: set[str], joined: str
     return score, reasons
 
 
-def score_family_match(query: str, *, content_family: str | None) -> tuple[int, list[str]]:
+def score_family_match(query: str, *, slug: str, content_family: str | None) -> tuple[int, list[str]]:
     """Boost or penalize a candidate by how well the query intent matches its Icy Veins guide family."""
     if not query or not content_family:
         return 0, []
@@ -287,7 +296,7 @@ def score_family_match(query: str, *, content_family: str | None) -> tuple[int, 
     for family_score, family_reasons in (
         _score_broad_family_match(content_family, terms=terms),
         _score_specialized_family_match(query, content_family, terms=terms, joined=joined),
-        _score_family_penalties(content_family, terms=terms, joined=joined),
+        _score_family_penalties(content_family, slug=slug, terms=terms, joined=joined),
     ):
         score += family_score
         reasons.extend(family_reasons)
@@ -326,22 +335,64 @@ def _stale_before(newest: str | None) -> str | None:
     return (date.fromisoformat(newest) - STALE_AFTER).isoformat() if newest else None
 
 
-def sitemap_provenance(sitemap_url: str, newest: str | None, *, today: date) -> dict[str, Any]:
-    """Where discovery read its guides from, with a warning when the sitemap has stopped being updated."""
+def sitemap_is_stale(newest: str | None, *, today: date) -> bool:
+    return newest is not None and today - date.fromisoformat(newest) > SITEMAP_STALE_AFTER
+
+
+def sitemap_provenance(
+    sitemap_url: str, newest: str | None, *, today: date, site_menu_warning: str | None = None
+) -> dict[str, Any]:
+    """Where discovery read its guides from, with a warning when the sitemap has stopped being updated.
+
+    A stale sitemap is when search also reads the site menu; ``site_menu_warning`` is set when that
+    menu could not be read, so the results come from the sitemap alone.
+    """
     provenance: dict[str, Any] = {"sitemap_url": sitemap_url, "sitemap_newest_lastmod": newest}
-    if newest and today - date.fromisoformat(newest) > SITEMAP_STALE_AFTER:
-        provenance["sitemap_warning"] = (
-            f"The Icy Veins sitemap was last updated {newest}, so guides published or retitled since then "
-            "are missing from these results; open a known guide directly with `icy-veins guide <slug-or-url>`."
-        )
+    if sitemap_is_stale(newest, today=today):
+        provenance["site_menu_url"] = SITE_MENU_SEED_URL
+        if site_menu_warning is None:
+            provenance["sitemap_warning"] = (
+                f"The Icy Veins sitemap was last updated {newest}; guides published since then are found only when "
+                'the site-wide guide menu links them (results with metadata.source "site_menu"), and that menu lists '
+                "current pages only. Open any other guide directly with `icy-veins guide <slug-or-url>`."
+            )
+        else:
+            provenance["sitemap_warning"] = (
+                f"The Icy Veins sitemap was last updated {newest}, so guides published or retitled since then "
+                "are missing from these results; open a known guide directly with `icy-veins guide <slug-or-url>`."
+            )
+            provenance["site_menu_warning"] = site_menu_warning
     return provenance
+
+
+def _add_site_menu_rows(client: IcyVeinsClient, rows: list[dict[str, Any]]) -> str | None:
+    """Append the site-menu pages ``rows`` lacks; return a warning instead when the menu cannot be read.
+
+    A menu that cannot be read must not fail search: the sitemap rows are still ranked.
+    """
+    try:
+        menu_rows = client.site_menu_guides()
+    except httpx.HTTPStatusError as exc:
+        reason = f"HTTP {exc.response.status_code}"
+    except (ProviderError, httpx.HTTPError) as exc:
+        reason = str(exc) or type(exc).__name__
+    else:
+        listed = {row["slug"] for row in rows}
+        rows.extend({**row, "source": "site_menu"} for row in menu_rows if row["slug"] not in listed)
+        return None
+    return (
+        f"The Icy Veins guide menu on {SITE_MENU_SEED_URL} could not be read ({reason}), so guides missing from "
+        "the sitemap are missing from these results."
+    )
 
 
 def _scored_candidate(row: dict[str, Any], query: str, terms: set[str], *, stale_before: str | None) -> dict[str, Any] | None:
     slug = row["slug"]
     content_family = row.get("content_family")
     # Spelled out like the query, so a page titled with shorthand ("Disc Belt Guide") still matches it.
-    candidate = expand_class_spec_aliases(f"{row['name']} {slug.replace('-', ' ')}")
+    # A site-menu page also matches on its menu title ("Glory Raid Achievement").
+    title = " ".join(filter(None, (row["name"], row.get("menu_title"))))
+    candidate = expand_class_spec_aliases(f"{title} {slug.replace('-', ' ')}")
     # Icy Veins drops "plus" from its newer seasonal slugs (``midnight-mythic-season-2-guide``). Adding the
     # "mythic plus season" spelling lets "mythic+ season 2" score them like the older ``-mythic-plus-season-``
     # pages, so only the stale penalty separates seasons, while the page's own title still matches.
@@ -352,14 +403,16 @@ def _scored_candidate(row: dict[str, Any], query: str, terms: set[str], *, stale
     if not terms & _singular_words(set(tokenize_query(candidate))):
         return None
     score, reasons = score_slug_match(query, candidate, slug=slug, content_family=content_family)
-    if normalize_search_query(slug.replace("-", " ")) == query:
+    # A raid's own guide is also titled by the raid's name alone: "venomous abyss" for ``venomous-abyss-raid-guide``.
+    if query in {normalize_search_query(name.replace("-", " ")) for name in (slug, slug.removesuffix("-raid-guide"))}:
         reasons.append("exact_title")
-    family_score, family_reasons = score_family_match(query, content_family=content_family)
+    family_score, family_reasons = score_family_match(query, slug=slug, content_family=content_family)
     score += family_score
     reasons.extend(family_reasons)
     if query and reasons and set(reasons) <= {"intro_guide", "specialized_guide"}:
         return None
     lastmod = row.get("sitemap_lastmod")
+    # A site-menu page has no lastmod and is never stale: the live menu links only current pages.
     if stale_before and lastmod and lastmod < stale_before:
         score -= STALE_PENALTY
         reasons.append("penalty_stale_page")
@@ -378,7 +431,7 @@ def _scored_candidate(row: dict[str, Any], query: str, terms: set[str], *, stale
         reasons=reasons,
         provider_command=PROVIDER_NAME,
     )
-    candidate_row["metadata"].update(content_family=content_family, sitemap_lastmod=lastmod)
+    candidate_row["metadata"].update(content_family=content_family, sitemap_lastmod=lastmod, source=row["source"])
     return candidate_row
 
 
@@ -390,17 +443,21 @@ class SearchOutcome:
     matches: list[dict[str, Any]]
     scope_hint: dict[str, Any] | None = None
     sitemap_newest_lastmod: str | None = None
+    site_menu_warning: str | None = None
 
 
-def search_results(client: IcyVeinsClient, query: str) -> SearchOutcome:
-    """Rank sitemap guides against ``query``."""
+def search_results(client: IcyVeinsClient, query: str, *, today: date) -> SearchOutcome:
+    """Rank the sitemap guides, plus the site-menu ones when the sitemap is stale, against ``query``."""
     normalized_query = normalize_search_query(query)
     scope_hint = unsupported_scope_hint(normalized_query)
     if scope_hint is not None:
         return SearchOutcome(normalized_query, [], scope_hint)
     terms = _singular_words(query_terms(normalized_query))
-    rows = client.sitemap_guides()
-    newest = newest_sitemap_lastmod(rows)
+    sitemap_rows = client.sitemap_guides()
+    # Anchored to the sitemap's own dates: site-menu rows have none.
+    newest = newest_sitemap_lastmod(sitemap_rows)
+    rows = [{**row, "source": "sitemap"} for row in sitemap_rows]
+    site_menu_warning = _add_site_menu_rows(client, rows) if sitemap_is_stale(newest, today=today) else None
     stale_before = _stale_before(newest)
     matches = [
         candidate
@@ -408,7 +465,9 @@ def search_results(client: IcyVeinsClient, query: str) -> SearchOutcome:
         if candidate is not None
     ]
     sort_article_candidates(matches)
-    return SearchOutcome(normalized_query, matches, None, newest)
+    # Undated rows lose score ties there; a site-menu page wins them instead, as the newest page would.
+    matches.sort(key=lambda row: (-int(row["ranking"]["score"]), row["metadata"]["source"] != "site_menu"))
+    return SearchOutcome(normalized_query, matches, None, newest, site_menu_warning)
 
 
 def resolve_is_confident(results: list[dict[str, Any]]) -> bool:

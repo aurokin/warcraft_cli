@@ -6,13 +6,9 @@ from typing import Any
 from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup, Tag
+from warcraft_content.guide_page import WOWHEAD_LINK_RE, extract_talent_export_builds
 from warcraft_content.html_sections import clean_text, extract_headings, extract_sections
-from warcraft_core.identity import (
-    WOW_SPECS_BY_CLASS,
-    ability_identity_payload,
-    build_identity_payload,
-    build_reference_payload,
-)
+from warcraft_core.identity import WOW_SPECS_BY_CLASS, ability_identity_payload, build_reference_payload
 
 METHOD_BASE_URL = "https://www.method.gg"
 SUPPORTED_GUIDE_PATH_RE = re.compile(r"^/guides/(?P<slug>[^/]+)(?:/(?P<section>[^/?#]+))?/?$")
@@ -22,8 +18,6 @@ SUPPORTED_GUIDE_PATH_RE = re.compile(r"^/guides/(?P<slug>[^/]+)(?:/(?P<section>[
 TALENT_BUILD_SELECTOR = ".df-talent-block"
 TALENT_BUILD_EMBED_SELECTOR = ".talent-embed[data-talent]"
 TALENT_BUILD_TITLE_SELECTOR = ".talent-title"
-# A WoW loadout import string as Blizzard's client generates it: one long run of base64 characters.
-WOW_TALENT_EXPORT_RE = re.compile(r"^[A-Za-z0-9+/]{40,}$")
 # Method titles a class guide "<spec>-<class>" (beast-mastery-hunter, frost-death-knight). Other slugs
 # that merely end in a class, such as unlocking-void-elf-demon-hunter, are one-page articles.
 SPEC_GUIDE_SLUGS = frozenset(
@@ -38,9 +32,6 @@ SITEMAP_URL_RE = re.compile(r"<url>(.*?)</url>", flags=re.DOTALL)
 SITEMAP_LOC_RE = re.compile(r"<loc>([^<]+)</loc>")
 SITEMAP_LASTMOD_RE = re.compile(r"<lastmod>([^<]+)</lastmod>")
 SITEMAP_GUIDE_URL_RE = re.compile(r"^https://www\.method\.gg/guides/(?P<slug>[^/]+)$")
-WOWHEAD_LINK_RE = re.compile(
-    r"^(?P<entity_type>achievement|currency|faction|item|mount|npc|object|pet|quest|spell|zone)=(?P<id>\d+)(?:/|$)"
-)
 
 
 def guide_ref_parts(guide_ref: str) -> tuple[str, str | None]:
@@ -221,46 +212,10 @@ def _extract_linked_entities(article: Tag, *, source_url: str) -> list[dict[str,
     return sorted(items.values(), key=lambda row: (row["type"], row["id"]))
 
 
-def _talent_export_reference(code: str, *, label: str | None, source_url: str) -> dict[str, Any]:
-    """One published WoW loadout import string, in the shared build-reference row shape.
-
-    ``url`` carries the import string itself: a ``wow_talent_export`` reference has no link to point
-    at, the string is what identifies it, and it is exactly what ``simc --build-text`` consumes.
-    """
-    return {
-        "kind": "build_reference",
-        "reference_type": "wow_talent_export",
-        "url": code,
-        "label": label,
-        "build_code": code,
-        "source_url": source_url,
-        "build_identity": build_identity_payload(
-            actor_class=None,
-            spec=None,
-            confidence="none",
-            source="guide_talent_export_string",
-            source_notes=(
-                "build code came from a WoW loadout import string published in the guide",
-                "class and spec are not read off this reference; decode the import string to identify them",
-            ),
-        ),
-        "source": {"provider": "method", "source": "guide_talent_export_string"},
-    }
-
-
-def _extract_talent_export_builds(article: Tag, *, source_url: str) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    for block in article.select(TALENT_BUILD_SELECTOR):
-        embed = block.select_one(TALENT_BUILD_EMBED_SELECTOR)
-        if not isinstance(embed, Tag):
-            continue
-        code = embed.get("data-talent")
-        if not isinstance(code, str) or not WOW_TALENT_EXPORT_RE.match(code.strip()):
-            continue
-        title_tag = block.select_one(TALENT_BUILD_TITLE_SELECTOR)
-        label = clean_text(title_tag.get_text(" ", strip=True)) if isinstance(title_tag, Tag) else None
-        rows.append(_talent_export_reference(code.strip(), label=label, source_url=source_url))
-    return rows
+def _talent_export_code(block: Tag) -> str | None:
+    embed = block.select_one(TALENT_BUILD_EMBED_SELECTOR)
+    code = embed.get("data-talent") if isinstance(embed, Tag) else None
+    return code.strip() if isinstance(code, str) else None
 
 
 def _extract_build_references(article: Tag, *, source_url: str) -> list[dict[str, Any]]:
@@ -280,7 +235,14 @@ def _extract_build_references(article: Tag, *, source_url: str) -> list[dict[str
         if payload is None:
             continue
         items[str(payload["url"])] = payload
-    for row in _extract_talent_export_builds(article, source_url=source_url):
+    for row in extract_talent_export_builds(
+        article,
+        source_url=source_url,
+        provider="method",
+        block_selector=TALENT_BUILD_SELECTOR,
+        title_selector=TALENT_BUILD_TITLE_SELECTOR,
+        read_code=_talent_export_code,
+    ):
         items.setdefault(str(row["url"]), row)
     return sorted(items.values(), key=lambda row: str(row["url"]))
 
