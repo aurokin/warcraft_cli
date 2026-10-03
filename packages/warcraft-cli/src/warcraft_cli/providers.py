@@ -42,6 +42,7 @@ from simc_cli.main import (
 from simc_cli.main import app as simc_app
 from simc_cli.provider import PROVIDER as simc_provider
 from simc_cli.provider import simc_envelope
+from warcraft_core.cache_ledger import cache_ledger, with_cache_provenance
 from warcraft_core.cli import command_path_from_args, error_envelope_for
 from warcraft_core.envelope import ENVELOPE_KEYS, SCHEMA_VERSION, Envelope, error_envelope
 from warcraft_core.exit_codes import EXIT_GENERIC, EXIT_NETWORK, EXIT_USAGE, exit_code_for
@@ -628,14 +629,17 @@ def _call_surface(
 ) -> tuple[int, dict[str, Any]]:
     """Run one pure surface call, returning ``(exit_code, envelope)`` and never raising.
 
-    A raised failure echoes ``query``, the input the wrapper handed the surface.
+    A raised failure echoes ``query``, the input the wrapper handed the surface. The call runs in
+    its own cache ledger, so a success envelope carries this provider's own ``provenance.cache``
+    while the wrapper's ledger still receives the counts.
     """
-    try:
-        envelope = call()
-    except Exception as exc:
-        failure, exit_code = error_envelope_for(provider, command, exc)
-        return exit_code, {**failure, "query": query}
-    payload = dict(envelope)
+    with cache_ledger() as ledger:
+        try:
+            envelope = call()
+        except Exception as exc:
+            failure, exit_code = error_envelope_for(provider, command, exc)
+            return exit_code, {**failure, "query": query}
+    payload = with_cache_provenance(envelope, ledger)
     if payload.get("ok") is False:
         error = payload.get("error")
         code = error.get("code") if isinstance(error, dict) else None

@@ -61,8 +61,8 @@ Every command emits one JSON envelope: `ok`, `provider`, `command`, `kind`, `sch
 `provenance`, `data`, and `error` when `ok` is false, and no other top-level key. The payload is in `data`.
 
 `provenance` carries the exact API `source_url`, `api_host`, the site URL, upstream source posture
-(`warcraftlogs` data, Wowhead tooltips), and the answer's freshness: `fetched_at` (when it came off the
-wire, also on a replay), `cache_hit`, and `cache_ttl_seconds`.
+(`warcraftlogs` data, Wowhead tooltips), and the shared `cache` block (whether the answer was replayed
+from the cache, and how old the replay is; see [USAGE.md](../USAGE.md#reading-cache-state-provenancecache)).
 
 ## Caching
 

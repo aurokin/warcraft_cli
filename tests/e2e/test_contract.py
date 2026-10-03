@@ -53,8 +53,8 @@ NETWORK_COMMAND: dict[str, tuple[str, ...]] = {
     "curseforge": ("addon", CURSEFORGE_ADDON_ID),
 }
 
-# Providers with a file-backed HTTP cache and a cheap repeatable read. lorrgs is deliberately absent:
-# its client talks straight to the API with no cache store, so there is no hit to observe.
+# Providers with a file-backed HTTP cache and a cheap repeatable read. Lorrgs, Blizzard and
+# CurseForge also cache; their own e2e files assert the replay through provenance.cache.
 CACHED_READ: dict[str, tuple[str, ...]] = {
     "raiderio": ("character", GUILD_REGION, GUILD_REALM, CHARACTER_NAME),
     "warcraft-wiki": ("article", WIKI_API_FUNCTION),
@@ -327,6 +327,8 @@ def test_a_repeated_read_is_served_from_the_isolated_cache(binary: str, require,
         assert hits == (False, True), second.describe()
     # A miss would also rewrite the entry; identical mtimes and sizes mean nothing was re-fetched.
     assert _cache_snapshot(provider_cache) == after_first, second.describe()
+    cache_state = (first.payload["provenance"]["cache"]["hit"], second.payload["provenance"]["cache"]["all_hits"])
+    assert cache_state == (False, True), second.describe()
 
 
 def test_wowhead_cache_inspect_reports_the_isolated_root(require, cache_root: Path) -> None:

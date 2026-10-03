@@ -206,10 +206,6 @@ def fetch(
             "game_version": routing.game_version,
             "locale": routing.locale,
             "source_url": result["source_url"],
-            # When the answer came off the wire (also on a replay) and how stale a replay may be.
-            "fetched_at": result["fetched_at"],
-            "cache_hit": result["cache_hit"],
-            "cache_ttl_seconds": result["cache_ttl_seconds"],
             "verified": routing.region in VERIFIED_REGIONS,
             "verification_note": verification_note(routing.region),
         },

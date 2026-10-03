@@ -343,8 +343,9 @@ def test_static_metadata_is_served_from_the_cache_once_fetched(require) -> None:
     require("lorrgs")
     live = run("lorrgs", "specs")
     replayed = run("lorrgs", "specs", env=dead_proxy_env())
-    assert replayed.payload["provenance"]["cache_hit"] is True, replayed.describe()
-    assert replayed.payload["provenance"]["fetched_at"] == live.payload["provenance"]["fetched_at"], replayed.describe()
+    cache = replayed.payload["provenance"]["cache"]
+    assert cache["all_hits"] is True, replayed.describe()
+    assert cache["oldest_hit_age_seconds"] >= 0, replayed.describe()
     assert replayed.data == live.data
 
 

@@ -14,6 +14,7 @@ import httpx
 import typer
 from typer.core import TyperGroup, TyperOption
 
+from warcraft_core.cache_ledger import cache_ledger, current_cache_ledger, with_cache_provenance
 from warcraft_core.envelope import Envelope, envelope_violations, error_envelope
 from warcraft_core.exit_codes import EXIT_GENERIC, EXIT_NETWORK, EXIT_USAGE, error_code_for_http_status, exit_code_for
 from warcraft_core.output import (
@@ -84,7 +85,12 @@ def configure(
     compact_max_chars: int = DEFAULT_COMPACT_MAX_CHARS,
     config: RuntimeConfig | None = None,
 ) -> RuntimeConfig:
-    """Resolve the shared output flags into ``config`` (or a fresh RuntimeConfig) and store it in ``ctx.obj``."""
+    """Resolve the shared output flags into ``config`` (or a fresh RuntimeConfig) and store it in ``ctx.obj``.
+
+    Also opens this invocation's cache ledger (``warcraft_core.cache_ledger``) for the life of
+    ``ctx``, so ``emit`` can report the command's cache lookups whether the app runs as the
+    installed binary, under a test runner, or in-process inside the ``warcraft`` wrapper.
+    """
     try:
         output = resolve_output_options(
             profile=profile,
@@ -100,6 +106,7 @@ def configure(
     resolved.provider = provider
     resolved.output = output
     ctx.obj = resolved
+    ctx.with_resource(cache_ledger())
     return resolved
 
 
@@ -201,14 +208,15 @@ def emit(ctx: typer.Context, payload: Mapping[str, Any], *, err: bool = False) -
 
     ``payload`` must be a conforming envelope (``envelope_violations``): a key outside the envelope,
     a missing key or a mistyped one is a programming error and raises ``TypeError`` instead of
-    reaching the caller, so a command that regresses the contract fails its tests.
+    reaching the caller, so a command that regresses the contract fails its tests. A success
+    envelope gains ``provenance.cache`` when the command built a cache store.
     """
     problems = envelope_violations(payload)
     if problems:
         raise TypeError(f"refusing to emit a malformed envelope: {'; '.join(problems)}")
     config = cfg(ctx)
     try:
-        emit_shaped(dict(payload), config.output, err=err)
+        emit_shaped(with_cache_provenance(payload, current_cache_ledger()), config.output, err=err)
     except OutputProjectionError as exc:
         fail(ctx, "missing_fields", str(exc), details={"missing_fields": list(exc.missing_fields)})
 

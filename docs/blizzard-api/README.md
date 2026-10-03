@@ -87,8 +87,9 @@ read command fails with `missing_client_credentials` and exit 3.
 
 Success payloads are the shared envelope: `{ok, provider, command, kind, schema_version, query,
 provenance, data}`. `data` is the raw Blizzard JSON body; `provenance` carries `region`, `namespace`,
-`namespace_class`, `game_version`, `locale`, `source_url`, `fetched_at`, `cache_hit`,
-`cache_ttl_seconds`, `verified` (true for confirmed regions), and a `verification_note`.
+`namespace_class`, `game_version`, `locale`, `source_url`, `verified` (true for confirmed regions), a
+`verification_note`, and the shared `cache` block (see
+[USAGE.md](../USAGE.md#reading-cache-state-provenancecache)).
 
 The envelope's `provider` is `blizzard-api`, the provider id the wrapper registry, `warcraft doctor`
 tiers and this doc set use. The binary and the wrapper subcommand are `blizzard`

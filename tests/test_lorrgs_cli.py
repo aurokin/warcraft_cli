@@ -736,16 +736,15 @@ def _count_requests(monkeypatch, payload_for_url) -> list[str]:
     return urls
 
 
-def test_static_metadata_is_replayed_from_the_cache_with_its_fetch_time(monkeypatch) -> None:
+def test_static_metadata_is_replayed_from_the_cache(monkeypatch) -> None:
     # Wrapper search/resolve read /api/specs and /api/bosses on every query; a warm cache must not.
     monkeypatch.setenv("LORRGS_CACHE_BACKEND", "file")
     urls = _count_requests(monkeypatch, lambda url: {"specs": []})
     first = json.loads(runner.invoke(app, ["specs"]).stdout)["provenance"]
     second = json.loads(runner.invoke(app, ["specs"]).stdout)["provenance"]
     assert urls == ["https://api2.lorrgs.io/api/specs"]
-    assert (first["cache_hit"], second["cache_hit"]) == (False, True)
-    assert second["fetched_at"] == first["fetched_at"]
-    assert second["cache_ttl_seconds"] == 43200
+    assert (first["cache"]["hit"], second["cache"]["hit"]) == (False, True)
+    assert second["cache"]["oldest_hit_ttl_seconds"] == 43200
 
 
 def test_a_fight_lorrgs_has_not_loaded_is_never_cached(monkeypatch) -> None:
@@ -761,7 +760,7 @@ def test_a_fight_lorrgs_has_not_loaded_is_never_cached(monkeypatch) -> None:
     replayed = json.loads(runner.invoke(app, argv).stdout)
     assert len(urls) == 2
     assert loaded["data"]["fights"][0]["players"] == [{"name": "Cannicus", "source_id": 88}]
-    assert replayed["provenance"]["cache_hit"] is True
+    assert replayed["provenance"]["cache"]["hit"] is True
 
 
 def test_lorrgs_requests_carry_the_shared_user_agent_with_the_contact_url() -> None:

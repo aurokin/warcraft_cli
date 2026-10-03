@@ -47,9 +47,9 @@ Resolves one WoW addon and returns its metadata, latest files, and latest change
   files. Otherwise it is an object keyed by `file_id` carrying `body` (changelog HTML, or `null`
   when that file exposes no notes) plus `source_url`, or an explicit `{file_id, error}` marker when
   that one request fails. Every form also carries `display_name` and `release_type`. Detect empty notes via `changelog.body`, not `changelog is null`.
-- `provenance` carries `game_id`, `mod_id`, `slug`, `resolved_by`, `source_urls`, `fetched_at`
-  (the oldest of the lookup's responses, also on a replay), `cache_hit` (any response replayed),
-  `cache_ttl_seconds`, `verified: true`, and `verification_note`.
+- `provenance` carries `game_id`, `mod_id`, `slug`, `resolved_by`, `source_urls`, `verified: true`,
+  `verification_note`, and the shared `cache` block over the lookup's responses (see
+  [USAGE.md](../USAGE.md#reading-cache-state-provenancecache)).
 - Responses are cached on disk under the XDG cache root (`curseforge/http`) for an hour, keyed on
   path and query, never on the key, because the API key is rate-limited. Override with
   `CURSEFORGE_CACHE_TTL_SECONDS`, `CURSEFORGE_CACHE_DIR`, or `CURSEFORGE_CACHE_BACKEND=file|redis|none`

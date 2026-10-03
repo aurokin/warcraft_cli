@@ -52,7 +52,9 @@ Use `warcraft` first when the caller does not already know which provider they n
 Every binary emits one JSON object, the envelope: `ok`, `provider`, `command`, `kind`,
 `schema_version`, `query`, `provenance`, and `data`, plus `error` on failure. Nothing else sits at
 the top level; a binary refuses to print anything else and fails with `internal_error` instead.
-Read the payload from `data`.
+Read the payload from `data`. `provenance.cache` tells you whether the answer was replayed from the
+local cache: `hit` (any lookup was), `all_hits` (nothing came off the wire) and
+`oldest_hit_age_seconds`; with `--fields` request it explicitly, and treat its absence as unknown.
 
 On failure the object goes to stderr with `ok: false`, `data: {}`, `query` echoing the parameters
 the command parsed (`null` when it failed before parsing them), and

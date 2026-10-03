@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import os
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,7 @@ from warcraft_api.cache import (
     load_cache_settings_from_env,
     redacted_redis_url,
 )
+from warcraft_core.cache_ledger import cache_ledger
 from warcraft_wiki_cli.client import WarcraftWikiClient
 from wowhead_cli.wowhead_client import WowheadClient
 
@@ -37,6 +39,21 @@ def test_file_cache_store_roundtrips_and_expires(tmp_path: Path, monkeypatch: py
     monkeypatch.setattr("warcraft_api.cache.time.time", lambda: now + 61)
     assert store.get("search_suggestions:abc123") is None
     assert not cache_file.exists()
+
+
+def test_file_cache_lookups_are_recorded_with_the_hit_age_from_the_entry_mtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("warcraft_api.cache.time.time", lambda: 1000.0)
+    with cache_ledger() as ledger:
+        store = FileCacheStore(tmp_path)
+        assert store.get("search_suggestions:abc123") is None
+        store.set("search_suggestions:abc123", {"query": "thunderfury"}, ttl_seconds=600)
+        os.utime(tmp_path / "search_suggestions" / "abc123.json", (1000.0, 1000.0))
+        monkeypatch.setattr("warcraft_api.cache.time.time", lambda: 1120.5)
+        assert store.get("search_suggestions:abc123") == {"query": "thunderfury"}
+    block = ledger.provenance()
+    assert block is not None
+    assert (block["backend"], block["lookups"], block["hits"], block["all_hits"]) == ("file", 2, 1, False)
+    assert (block["oldest_hit_age_seconds"], block["oldest_hit_ttl_seconds"]) == (120, 600)
 
 
 def test_redis_cache_store_uses_prefix_and_roundtrips() -> None:
@@ -71,7 +88,19 @@ def test_redis_cache_store_uses_prefix_and_roundtrips() -> None:
     assert fake_client.set_calls == [
         ("wowhead_cli:entity:abc123", json.dumps({"entity": {"id": 19019}}, separators=(",", ":")), 3600)
     ]
-    assert store.get("entity:abc123") == {"entity": {"id": 19019}}
+    with cache_ledger() as ledger:
+        assert store.get("entity:abc123") == {"entity": {"id": 19019}}
+        assert store.get("entity:missing") is None
+    # Redis keeps no store time, so a hit is counted without an age.
+    assert ledger.provenance() == {
+        "backend": "redis",
+        "lookups": 2,
+        "hits": 1,
+        "hit": True,
+        "all_hits": False,
+        "oldest_hit_age_seconds": None,
+        "oldest_hit_ttl_seconds": None,
+    }
 
 
 def test_inspect_file_cache_summarizes_active_expired_and_invalid_entries(

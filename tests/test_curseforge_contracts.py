@@ -479,7 +479,6 @@ def test_addon_responses_are_replayed_from_the_cache(monkeypatch: pytest.MonkeyP
     first = json.loads(runner.invoke(app, ["addon", "deadly-boss-mods"]).stdout)
     second = json.loads(runner.invoke(app, ["addon", "deadly-boss-mods"]).stdout)
     assert len(calls) == 3
-    assert (first["provenance"]["cache_hit"], second["provenance"]["cache_hit"]) == (False, True)
-    assert second["provenance"]["fetched_at"] == first["provenance"]["fetched_at"]
-    assert second["provenance"]["cache_ttl_seconds"] == 3600
+    assert (first["provenance"]["cache"]["hit"], second["provenance"]["cache"]["all_hits"]) == (False, True)
+    assert second["provenance"]["cache"]["oldest_hit_ttl_seconds"] == 3600
     assert second["data"] == first["data"]

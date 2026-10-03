@@ -607,6 +607,5 @@ def test_responses_are_replayed_from_the_cache_without_a_token(monkeypatch: pyte
     monkeypatch.setattr(client_module, "request_with_retries", lambda *args, **kwargs: pytest.fail("cache miss"))
     second = json.loads(runner.invoke(app, ["item", "19019"]).stdout)["provenance"]
     assert len(token_calls) == 1
-    assert (first["cache_hit"], second["cache_hit"]) == (False, True)
-    assert second["fetched_at"] == first["fetched_at"]
-    assert second["cache_ttl_seconds"] == 86400
+    assert (first["cache"]["hit"], second["cache"]["hit"]) == (False, True)
+    assert second["cache"]["oldest_hit_ttl_seconds"] == 86400

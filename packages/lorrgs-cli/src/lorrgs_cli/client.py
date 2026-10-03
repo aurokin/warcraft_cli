@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Callable
-from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -105,15 +104,13 @@ class LorrgsClient:
         """GET one Lorrgs route, replaying a cached answer when ``ttl_seconds`` allows one.
 
         ``cacheable`` vetoes storing an answer that is not final yet (a fight Lorrgs has not loaded).
-        The result carries ``fetched_at`` (when it came off the wire, also on a replay), ``cache_hit``
-        and ``cache_ttl_seconds`` for provenance.
         """
         cleaned = _clean_params(params)
         key = f"lorrgs:{hashlib.sha256(json.dumps([path, cleaned], sort_keys=True).encode()).hexdigest()}"
         if ttl_seconds and self._cache_store is not None:
             cached = self._cache_store.get(key)
-            if isinstance(cached, dict) and isinstance(cached.get("fetched_at"), str):
-                return {**cached, "cache_hit": True, "cache_ttl_seconds": ttl_seconds}
+            if isinstance(cached, dict) and "payload" in cached:
+                return cached
         response = request_with_retries(
             self._client(),
             f"{API_HOST}{path}",
@@ -121,14 +118,10 @@ class LorrgsClient:
             headers={"Accept": "application/json"},
             retry_attempts=self._retry_attempts,
         )
-        result = {
-            "payload": self._decode_json(response),
-            "source_url": str(response.request.url),
-            "fetched_at": datetime.now(UTC).isoformat(),
-        }
+        result = {"payload": self._decode_json(response), "source_url": str(response.request.url)}
         if ttl_seconds and self._cache_store is not None and (cacheable is None or cacheable(result["payload"])):
             self._cache_store.set(key, result, ttl_seconds=ttl_seconds)
-        return {**result, "cache_hit": False, "cache_ttl_seconds": ttl_seconds}
+        return result
 
     def roles(self) -> dict[str, Any]:
         return self._get("/api/roles", ttl_seconds=self._static_ttl)

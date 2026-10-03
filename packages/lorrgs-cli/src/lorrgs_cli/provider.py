@@ -110,11 +110,7 @@ def provider_error(exc: Exception) -> ProviderError:
 
 
 def _provenance(result: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Shared provenance, plus the source URL and cache freshness of one API answer when given.
-
-    ``fetched_at`` is when the answer came off the wire, so a ``cache_hit`` replay reports the age of
-    the data it replays; it can be up to ``cache_ttl_seconds`` old.
-    """
+    """Shared provenance, plus the source URL of one API answer when given."""
     provenance: dict[str, Any] = {
         "api_host": API_HOST,
         "site": SITE_HOST,
@@ -124,8 +120,7 @@ def _provenance(result: dict[str, Any] | None = None) -> dict[str, Any]:
     }
     if result is None:
         return provenance
-    freshness: dict[str, Any] = {key: result[key] for key in ("fetched_at", "cache_hit", "cache_ttl_seconds") if key in result}
-    return {"source_url": result["source_url"], **provenance, **freshness}
+    return {"source_url": result["source_url"], **provenance}
 
 
 def open_client() -> LorrgsClient:

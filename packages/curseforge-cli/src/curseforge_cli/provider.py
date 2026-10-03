@@ -135,7 +135,6 @@ def addon_envelope(slug_or_id: str) -> Envelope:
             "slug": result.get("slug"),
             "resolved_by": result["resolved_by"],
             "source_urls": result["source_urls"],
-            **result["freshness"],
             "verified": True,
             "verification_note": verification_note(),
         },

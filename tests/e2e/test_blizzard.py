@@ -148,8 +148,9 @@ def test_a_cached_read_is_replayed_without_the_network(require) -> None:
     require("blizzard-api")
     live = run("blizzard", "item", str(ITEM_ID))
     replayed = run("blizzard", "item", str(ITEM_ID), env=dead_proxy_env())
-    assert replayed.payload["provenance"]["cache_hit"] is True, replayed.describe()
-    assert replayed.payload["provenance"]["fetched_at"] == live.payload["provenance"]["fetched_at"]
+    cache = replayed.payload["provenance"]["cache"]
+    assert cache["all_hits"] is True, replayed.describe()
+    assert cache["oldest_hit_age_seconds"] >= 0, replayed.describe()
     assert replayed.data == live.data
 
 
