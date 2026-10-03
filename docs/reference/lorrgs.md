@@ -73,7 +73,7 @@ Fetch metadata for one Lorrgs spec.
 
 | Argument | Type | Default | Description |
 | --- | --- | --- | --- |
-| `spec_slug` | str | required | Lorrgs full spec slug, e.g. mage-frost. |
+| `spec_slug` | str | required | Lorrgs spec slug, e.g. mage-frost; any provider's spelling (frost-mage, Frost Mage, BeastMastery) is translated. |
 
 ## lorrgs spec-spells
 
@@ -83,7 +83,7 @@ Fetch the tracked cooldown spells for one spec.
 
 | Argument | Type | Default | Description |
 | --- | --- | --- | --- |
-| `spec_slug` | str | required | Lorrgs full spec slug, e.g. mage-frost. |
+| `spec_slug` | str | required | Lorrgs spec slug, e.g. mage-frost; any provider's spelling (frost-mage, Frost Mage, BeastMastery) is translated. |
 
 ## lorrgs zones
 
@@ -169,7 +169,7 @@ Fetch top-parse cooldown timelines for one spec on one encounter.
 
 | Argument | Type | Default | Description |
 | --- | --- | --- | --- |
-| `spec_slug` | str | required | Lorrgs full spec slug, e.g. mage-frost. |
+| `spec_slug` | str | required | Lorrgs spec slug, e.g. mage-frost; any provider's spelling (frost-mage, Frost Mage, BeastMastery) is translated. |
 | `boss_slug` | str | required | Lorrgs boss slug, e.g. chimaerus-the-undreamt-god. |
 
 **Options**
@@ -187,7 +187,7 @@ Fetch metadata for a spec ranking without the large report timeline list.
 
 | Argument | Type | Default | Description |
 | --- | --- | --- | --- |
-| `spec_slug` | str | required | Lorrgs full spec slug, e.g. mage-frost. |
+| `spec_slug` | str | required | Lorrgs spec slug, e.g. mage-frost; any provider's spelling (frost-mage, Frost Mage, BeastMastery) is translated. |
 | `boss_slug` | str | required | Lorrgs boss slug, e.g. chimaerus-the-undreamt-god. |
 
 **Options**
@@ -213,7 +213,7 @@ Fetch top composition ranking rows for an encounter.
 | --- | --- | --- | --- |
 | `--limit` | int range [1<=x<=50] | 20 | Maximum report rows to request. |
 | `--role` | str (repeatable) |  | Role count filter <role>.<op>.<n>, role tank/heal/mdps/rdps, op eq/gt/gte/lt/lte, e.g. heal.gte.4; repeatable. |
-| `--spec` | str (repeatable) |  | Spec count filter <spec-slug>.<op>.<n>, e.g. mage-frost.gte.1; repeatable. |
+| `--spec` | str (repeatable) |  | Spec count filter <spec>.<op>.<n>, e.g. mage-frost.gte.1; any provider's spec spelling works; repeatable. |
 | `--killtime-min` | int range [x>=0] | 0 | Minimum kill time in seconds. |
 | `--killtime-max` | int range [x>=0] | 0 | Maximum kill time in seconds. |
 

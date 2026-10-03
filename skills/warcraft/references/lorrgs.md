@@ -19,11 +19,15 @@ authoritative, and use Lorrgs for its prebuilt aggregation.
 - player phase cooldown packet:
   `warcraft cooldown-packet <warcraftlogs-report-url> --actor-id <source-id> --phase 2`
   (Lorrgs only serves reports it has already cached; for any other report add
-  `--spec-slug <lorrgs-spec-slug>`). For a report Lorrgs has not cached, also pass
+  `--spec-slug <spec>`, which takes any provider's spelling: `frost-death-knight`, `BeastMastery`, `balance-druid`). For a report Lorrgs has not cached, also pass
   `--boss-slug <slug>` (see `warcraft lorrgs bosses`) or the top-parse comparison is skipped with
   `comparison.reason: no_boss_slug`.
 - current season raids: `warcraft lorrgs current-season`
-- spec slugs: `warcraft lorrgs specs`
+- spec slugs: `warcraft lorrgs specs`; `spec`, `spec-spells`, `spec-ranking`, `spec-ranking-info` and
+  `comp-ranking --spec` also take other spellings (`balance-druid`, `Frost Death Knight`, `BeastMastery`)
+  and send the Lorrgs slug. An unknown spec on `spec`, `spec-spells`, `spec-ranking` or `spec-ranking-info`
+  stays `not_found` (exit 4) with the closest Lorrgs slugs in `error.details.suggestions`; an unknown
+  `comp-ranking --spec` name is not an error upstream and returns `reports: []`
 - boss slugs: `warcraft lorrgs bosses`
 - cooldown timelines: `warcraft lorrgs spec-ranking mage-frost chimaerus-the-undreamt-god`
 - lightweight ranking metadata: `warcraft lorrgs spec-ranking-info mage-frost chimaerus-the-undreamt-god`

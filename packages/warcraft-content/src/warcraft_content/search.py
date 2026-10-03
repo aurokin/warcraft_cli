@@ -12,6 +12,8 @@ from collections.abc import Collection, Iterable
 from dataclasses import dataclass
 from typing import Any
 
+from warcraft_core.wow_specs import CLASS_SPEC_ALIASES
+
 DEFAULT_TOKEN_RE = re.compile(r"[a-z0-9+]+")
 
 
@@ -68,43 +70,6 @@ def best_scored(candidates: Iterable[dict[str, Any] | None]) -> dict[str, Any] |
     return max(filter(None, candidates), key=lambda row: int(row["ranking"]["score"]), default=None)
 
 
-# Community shorthand for classes and specs, spelled the way guide sites title their pages.
-CLASS_SPEC_ALIASES: dict[str, str] = {
-    "dk": "death knight",
-    "bdk": "blood death knight",
-    "fdk": "frost death knight",
-    "udk": "unholy death knight",
-    "dh": "demon hunter",
-    "veng": "vengeance",
-    "bm": "beast mastery",
-    "mm": "marksmanship",
-    "sv": "survival",
-    "pally": "paladin",
-    "pal": "paladin",
-    "ret": "retribution",
-    "prot": "protection",
-    "resto": "restoration",
-    "disc": "discipline",
-    "sp": "shadow priest",
-    "spriest": "shadow priest",
-    "mw": "mistweaver",
-    "ww": "windwalker",
-    "sub": "subtlety",
-    "sin": "assassination",
-    "assa": "assassination",
-    "ele": "elemental",
-    "enh": "enhancement",
-    "enha": "enhancement",
-    "lock": "warlock",
-    "aff": "affliction",
-    "demo": "demonology",
-    "destro": "destruction",
-    "aug": "augmentation",
-    "dev": "devastation",
-    "pres": "preservation",
-    "boomy": "balance",
-    "boomkin": "balance",
-}
 # "aug rune" is an Augment Rune, not an Augmentation Evoker: spelling it out left Method's augment rune
 # pages unmatched, so shorthand followed by "rune" stays as typed.
 _CLASS_SPEC_ALIAS_RE = re.compile(r"\b(" + "|".join(map(re.escape, CLASS_SPEC_ALIASES)) + r")\b(?!\s+runes?\b)")

@@ -728,7 +728,11 @@ def cooldown_packet(
         help="Player name within the selected fight, used when --actor-id is omitted.",
     ),
     phase: int = typer.Option(..., "--phase", min=1, help="One-based phase index to analyze, e.g. --phase 2 for P2."),
-    spec_slug: str | None = typer.Option(None, "--spec-slug", help="Override Lorrgs spec slug, e.g. mage-frost."),
+    spec_slug: str | None = typer.Option(
+        None,
+        "--spec-slug",
+        help="Override the Lorrgs spec slug, e.g. mage-frost; any provider's spelling (frost-mage, Frost Mage) is translated.",
+    ),
     boss_slug: str | None = typer.Option(None, "--boss-slug", help="Override Lorrgs boss slug, e.g. lura."),
     difficulty: str | None = typer.Option(
         None,

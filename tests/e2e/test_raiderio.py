@@ -657,6 +657,17 @@ def test_the_roster_filters_keep_exactly_the_runs_that_carry_the_value(baseline_
         assert typo in typoed.payload["error"]["message"], typoed.describe()
 
 
+def test_contains_spec_takes_another_providers_spelling(baseline_sample: Result) -> None:
+    """``BeastMastery`` (the Warcraft Logs spelling) used to be refused; it filters as ``hunter-beast-mastery``."""
+    runs = _rows(baseline_sample, "runs")
+    expected = {_run_key(row) for row in runs if "hunter-beast-mastery" in _roster_values(row, "class_spec")}
+
+    result = run("raiderio", "sample", "mythic-plus-runs", *SCOPE, "--contains-spec", "BeastMastery")
+    assert result.payload["query"]["filters"]["contains_spec"] == ["hunter-beast-mastery"], result.describe()
+    # A top-20 sample may field no Beast Mastery hunter, so the kept set can be empty; it must still be exact.
+    assert {_run_key(row) for row in result.data["runs"]} == expected, result.describe()
+
+
 def test_the_affixes_scope_changes_both_the_rows_and_the_citation(baseline_sample: Result) -> None:
     """``--affixes`` picks a different Raider.IO leaderboard, so it must show up in every row."""
     affix = sorted({affix for row in _rows(baseline_sample, "runs") for affix in row["affixes"]})[0]

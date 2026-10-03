@@ -51,6 +51,7 @@ from warcraft_core.output import DEFAULT_COMPACT_MAX_CHARS, OutputProjectionErro
 from warcraft_core.output import emit as emit_json
 from warcraft_core.provider import ProviderError
 from warcraft_core.timestamps import iso_now_utc, parse_iso8601_utc
+from warcraft_core.wow_specs import WOW_SPECS
 
 from wowhead_cli import provider
 from wowhead_cli.citation_pack import citation_pack_from_compare, citation_pack_from_entity
@@ -1550,23 +1551,9 @@ def _normalize_blue_tracker_row(row: dict[str, Any]) -> dict[str, Any] | None:
 
 # A spec path segment (``balance``, ``beast-mastery``); build codes carry digits or capitals.
 _TALENT_CALC_SPEC_RE = re.compile(r"[a-z]+(?:-[a-z]+)*")
-# Blizzard specialization ids by class and spec, spelled as in warcraft_core's WOW_SPECS_BY_CLASS.
-# Wowhead's listed builds carry one as ``spec``, and a retail build code's loadout header encodes one.
-_WOW_SPEC_IDS: dict[tuple[str, str], int] = {
-    ("deathknight", "blood"): 250, ("deathknight", "frost"): 251, ("deathknight", "unholy"): 252,
-    ("demonhunter", "havoc"): 577, ("demonhunter", "vengeance"): 581, ("demonhunter", "devourer"): 1480,
-    ("druid", "balance"): 102, ("druid", "feral"): 103, ("druid", "guardian"): 104, ("druid", "restoration"): 105,
-    ("evoker", "devastation"): 1467, ("evoker", "preservation"): 1468, ("evoker", "augmentation"): 1473,
-    ("hunter", "beast_mastery"): 253, ("hunter", "marksmanship"): 254, ("hunter", "survival"): 255,
-    ("mage", "arcane"): 62, ("mage", "fire"): 63, ("mage", "frost"): 64,
-    ("monk", "brewmaster"): 268, ("monk", "windwalker"): 269, ("monk", "mistweaver"): 270,
-    ("paladin", "holy"): 65, ("paladin", "protection"): 66, ("paladin", "retribution"): 70,
-    ("priest", "discipline"): 256, ("priest", "holy"): 257, ("priest", "shadow"): 258,
-    ("rogue", "assassination"): 259, ("rogue", "outlaw"): 260, ("rogue", "subtlety"): 261,
-    ("shaman", "elemental"): 262, ("shaman", "enhancement"): 263, ("shaman", "restoration"): 264,
-    ("warlock", "affliction"): 265, ("warlock", "demonology"): 266, ("warlock", "destruction"): 267,
-    ("warrior", "arms"): 71, ("warrior", "fury"): 72, ("warrior", "protection"): 73,
-}
+# Blizzard specialization ids by class and spec key. Wowhead's listed builds carry one as ``spec``, and
+# a retail build code's loadout header encodes one.
+_WOW_SPEC_IDS: dict[tuple[str, str], int] = {(spec.class_key, spec.key): spec.spec_id for spec in WOW_SPECS}
 _WOW_SPEC_BY_ID = {spec_id: class_spec for class_spec, spec_id in _WOW_SPEC_IDS.items()}
 # Calculators that use the retail spec names and loadout strings above; classic ones have their own
 # (MoP Classic names rogue's second spec ``combat``), so their spec is not checked and has no id.

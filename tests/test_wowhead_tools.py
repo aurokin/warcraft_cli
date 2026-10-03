@@ -6,8 +6,7 @@ import json
 from pathlib import Path
 
 import httpx
-from warcraft_core.identity import WOW_SPECS_BY_CLASS
-from wowhead_cli.main import _WOW_SPEC_IDS, app
+from wowhead_cli.main import app
 from wowhead_cli.wowhead_client import WowheadClient
 
 from tests.wowhead_testkit import (
@@ -200,10 +199,6 @@ def test_talent_calc_rejects_a_build_code_whose_loadout_header_is_another_spec(m
     balance = runner.invoke(app, ["talent-calc-packet", "druid/balance/CYGAAAAAAAAAAAAAAAAAAAA"])
     assert balance.exit_code == 0, balance.output
     assert json.loads(balance.stdout)["data"]["talent_transport_packet"]["transport_status"] == "exact"
-
-
-def test_talent_calc_spec_ids_cover_every_shared_class_spec() -> None:
-    assert set(_WOW_SPEC_IDS) == {(actor_class, spec) for actor_class, specs in WOW_SPECS_BY_CLASS.items() for spec in specs}
 
 
 def test_talent_calc_packet_command_emits_exact_transport_packet(monkeypatch) -> None:

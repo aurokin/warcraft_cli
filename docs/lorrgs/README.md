@@ -34,17 +34,24 @@ lorrgs --fields data.specs specs
 | `season <season-slug>`, `current-season` | Season-to-raid partition metadata. `season` defaults to `current`. |
 | `spec-ranking <spec-slug> <boss-slug> [--difficulty mythic\|heroic] [--metric dps]` | Top-parse cooldown timelines: reports, fights, players, boss casts, phases, cast timestamps. When Lorrgs returns `reports: []`, `data.notes` says the upstream ranking is empty, which is not evidence the spec is unplayed on that boss. |
 | `spec-ranking-info <spec-slug> <boss-slug> [--difficulty mythic\|heroic] [--metric dps]` | Ranking metadata without the large report list. Lorrgs ranks Mythic and Heroic only, so any other `--difficulty` is a usage error (exit 2). |
-| `comp-ranking <boss-slug> [--limit N] [--role EXPR]... [--spec EXPR]... [--killtime-min S] [--killtime-max S]` | Top composition rows for an encounter. `--role`/`--spec` are repeatable count filters `<name>.<op>.<n>` with `op` one of `eq`, `gt`, `gte`, `lt`, `lte`: `--role heal.gte.4`, `--spec mage-frost.gte.1`. `--role` names a role code, `tank`, `heal`, `mdps` or `rdps` (not the display name `Healer`); `--spec` names a spec slug from `lorrgs specs`. Any other spelling (`heal>=4`) or role is a usage error (exit 2) before the request, because Lorrgs answers the first with HTTP 500 and silently matches nothing for the second. When Lorrgs returns `reports: []`, `data.notes` says the upstream ranking is empty for that boss and those filters. |
+| `comp-ranking <boss-slug> [--limit N] [--role EXPR]... [--spec EXPR]... [--killtime-min S] [--killtime-max S]` | Top composition rows for an encounter. `--role`/`--spec` are repeatable count filters `<name>.<op>.<n>` with `op` one of `eq`, `gt`, `gte`, `lt`, `lte`: `--role heal.gte.4`, `--spec mage-frost.gte.1`. `--role` names a role code, `tank`, `heal`, `mdps` or `rdps` (not the display name `Healer`); `--spec` names a spec slug from `lorrgs specs` or any other spelling of one (see `<spec-slug>` below). Any other spelling (`heal>=4`) or role is a usage error (exit 2) before the request, because Lorrgs answers the first with HTTP 500 and silently matches nothing for the second. When Lorrgs returns `reports: []`, `data.notes` says the upstream ranking is empty for that boss and those filters. |
 | `report-overview <report-ref> [--refresh/--no-refresh]` | Lorrgs report overview metadata for any public Warcraft Logs report; Lorrgs loads one it has not seen on demand, and `--refresh` asks it to reload one it has. Does not queue per-fight timeline work. |
 | `user-report <report-ref>` | Already-cached Lorrgs user report overview. |
 | `user-report-fights <report-ref> [--fight IDS] [--player IDS] [--type TYPE]` | Selected cached fights. `--fight` and `--type` default to the values parsed from a report URL. |
 
 `<report-ref>` is a Warcraft Logs report URL, a Lorrgs `user_report(s)` URL, or a bare 16-character report code (letters and digits, mixed case; it need not contain a digit).
+`<spec-slug>` and the `--spec` filter name take any provider's spelling of a spec and send Lorrgs its
+own slug: `balance-druid`, `Balance Druid`, `BeastMastery`, `death-knight-frost` and `bm hunter` become
+`druid-balance`, `hunter-beastmastery` and `deathknight-frost`, and `query.spec_slug` echoes the slug sent.
+A bare spec several classes share (`frost`) and anything else go to Lorrgs as typed (its `other-*`
+pseudo-specs work this way). When Lorrgs answers not_found for such a value on a spec route,
+`error.details.suggestions` lists the closest Lorrgs spec slugs (and is absent when none is close).
+Lorrgs does not reject an unknown `--spec` filter name: `comp-ranking` returns `reports: []` with exit 0.
 `--fight` and `--player` take dot-separated id lists (`2.4.15`).
 
 The wrapper adds `warcraft cooldown-packet <report-url> --actor-id <source-id> --phase <n>`, which joins
 cached Lorrgs phase/spell/top-parse context with Warcraft Logs actor cast events. Lorrgs only serves
-reports it has already cached; for any other report add `--spec-slug <lorrgs-spec-slug>` and the command
+reports it has already cached; for any other report add `--spec-slug <spec>` (any provider's spelling) and the command
 degrades to the Warcraft Logs half with `data.lorrgs.status: "unavailable"` and no phase windows. Without
 both flags it fails and names them.
 

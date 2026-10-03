@@ -802,3 +802,62 @@ def test_search_and_resolve_offer_no_ranking_at_a_difficulty_lorrgs_does_not_ran
     assert all("--difficulty" not in row["follow_up"]["command"] for row in search["results"])
     data = json.loads(runner.invoke(app, ["resolve", "normal frost mage chimaerus", "--limit", "10"]).stdout)["data"]
     assert data["resolved"] is False
+
+
+# Three spellings each of three specs: Warcraft Logs/Raider.IO/identity keys, guide-site slugs and
+# display names, and community shorthand.
+_SPEC_SPELLINGS = [
+    ("BeastMastery", "hunter-beastmastery"),
+    ("beast-mastery-hunter", "hunter-beastmastery"),
+    ("bm hunter", "hunter-beastmastery"),
+    ("death-knight-frost", "deathknight-frost"),
+    ("frost-death-knight", "deathknight-frost"),
+    ("Frost Death Knight", "deathknight-frost"),
+    ("balance-druid", "druid-balance"),
+    ("Balance Druid", "druid-balance"),
+    ("boomkin", "druid-balance"),
+]
+
+
+@pytest.mark.parametrize("command", ["spec-ranking", "spec-ranking-info"])
+@pytest.mark.parametrize(("spelling", "slug"), _SPEC_SPELLINGS)
+def test_spec_routes_send_any_providers_spelling_as_the_lorrgs_slug(monkeypatch, command: str, spelling: str, slug: str) -> None:
+    _patch_client(monkeypatch)
+    result = runner.invoke(app, [command, spelling, "chimaerus-the-undreamt-god"])
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout)["query"]["spec_slug"] == slug
+    assert FakeLorrgsClient.calls[0][1]["spec_slug"] == slug
+
+
+@pytest.mark.parametrize(("spelling", "slug"), _SPEC_SPELLINGS)
+def test_comp_ranking_spec_filter_takes_any_providers_spelling(monkeypatch, spelling: str, slug: str) -> None:
+    _patch_client(monkeypatch)
+    result = runner.invoke(app, ["comp-ranking", "chimaerus-the-undreamt-god", "--spec", f"{spelling}.gte.1"])
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout)["query"]["specs"] == [f"{slug}.gte.1"]
+    assert FakeLorrgsClient.calls[0][1]["specs"] == [f"{slug}.gte.1"]
+
+
+def test_an_unknown_spec_stays_upstream_not_found_with_close_lorrgs_slugs(monkeypatch) -> None:
+    _patch_client(monkeypatch)
+    monkeypatch.setattr(FakeLorrgsClient, "spec_status", 404)
+    known = runner.invoke(app, ["spec", "balance-druid"])
+    typo = runner.invoke(app, ["spec", "druid-balanse"])
+    shared = runner.invoke(app, ["spec", "frost"])
+    unlike = runner.invoke(app, ["spec", "zzzz"])
+
+    assert [result.exit_code for result in (known, typo, shared, unlike)] == [4, 4, 4, 4]
+    assert [call for call in FakeLorrgsClient.calls if call[0] == "spec"] == [
+        ("spec", {"spec_slug": "druid-balance"}),
+        ("spec", {"spec_slug": "druid-balanse"}),
+        ("spec", {"spec_slug": "frost"}),
+        ("spec", {"spec_slug": "zzzz"}),
+    ]
+    # A spec the table knows was sent as Lorrgs spells it, so its not_found has nothing to suggest.
+    assert "suggestions" not in json.loads(known.stderr)["error"]["details"]
+    assert json.loads(typo.stderr)["error"]["details"]["suggestions"][0] == "druid-balance"
+    assert json.loads(shared.stderr)["error"]["details"]["suggestions"] == ["deathknight-frost", "mage-frost"]
+    # Nothing is close to it, so there is no empty suggestions list to read as "no such spec exists".
+    assert "suggestions" not in json.loads(unlike.stderr)["error"]["details"]

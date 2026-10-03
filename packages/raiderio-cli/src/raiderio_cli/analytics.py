@@ -19,29 +19,19 @@ from warcraft_core.analytics import (
     numeric_distribution,
     numeric_summary,
 )
-from warcraft_core.identity import WOW_SPECS_BY_CLASS
 from warcraft_core.provider import ProviderError
 from warcraft_core.shapes import as_dict, as_list
+from warcraft_core.wow_specs import WOW_SPECS, lookup_class, lookup_spec, raiderio_class_slug
 
 from raiderio_cli.client import RAIDERIO_REGIONS, FetchedJson, RaiderIOClient, combined_freshness, validated_region
 from raiderio_cli.identity import raiderio_class_spec_identity
 
 # The roster roles Raider.IO reports, which are the only values ``--contains-role`` can ever match.
 ROSTER_ROLES = ("tank", "healer", "dps")
-# Raider.IO's class and spec slugs: the shared class/spec table, hyphenated (death-knight, beast-mastery).
-_RAIDERIO_CLASS_SLUGS = {"deathknight": "death-knight", "demonhunter": "demon-hunter"}
-_SPECS_BY_RAIDERIO_CLASS = {
-    _RAIDERIO_CLASS_SLUGS.get(actor_class, actor_class): [spec.replace("_", "-") for spec in specs]
-    for actor_class, specs in WOW_SPECS_BY_CLASS.items()
-}
-ROSTER_CLASSES = tuple(sorted(_SPECS_BY_RAIDERIO_CLASS))
-# ``--contains-spec`` takes a bare spec (holy) or a class-qualified one (priest-holy).
-ROSTER_SPECS = tuple(
-    sorted(
-        {spec for specs in _SPECS_BY_RAIDERIO_CLASS.values() for spec in specs}
-        | {f"{actor_class}-{spec}" for actor_class, specs in _SPECS_BY_RAIDERIO_CLASS.items() for spec in specs}
-    )
-)
+# Raider.IO's class and spec slugs (death-knight, beast-mastery). ``--contains-spec`` takes a bare spec
+# (holy) or a class-qualified one (priest-holy).
+ROSTER_CLASSES = tuple(sorted({raiderio_class_slug(spec.class_key) for spec in WOW_SPECS}))
+ROSTER_SPECS = tuple(sorted({spec.raiderio_spec_slug for spec in WOW_SPECS} | {spec.raiderio_slug for spec in WOW_SPECS}))
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,8 +109,12 @@ def run_filters(
         score_min=score_min,
         score_max=score_max,
         contains_role=_known_values(_normalize_filter_values(contains_role), flag="--contains-role", allowed=ROSTER_ROLES),
-        contains_class=_known_values(_normalize_filter_values(contains_class), flag="--contains-class", allowed=ROSTER_CLASSES),
-        contains_spec=_known_values(_normalize_filter_values(contains_spec), flag="--contains-spec", allowed=ROSTER_SPECS),
+        contains_class=_known_values(
+            list(map(_roster_class_slug, _normalize_filter_values(contains_class))), flag="--contains-class", allowed=ROSTER_CLASSES
+        ),
+        contains_spec=_known_values(
+            list(map(_roster_spec_slug, _normalize_filter_values(contains_spec))), flag="--contains-spec", allowed=ROSTER_SPECS
+        ),
         # A roster player is from one real region, so the `world` scope is not a player region.
         player_region=tuple(
             dict.fromkeys(
@@ -132,12 +126,29 @@ def run_filters(
     )
 
 
+def _roster_class_slug(value: str) -> str:
+    """Raider.IO's class slug for any provider's class spelling (deathknight, DeathKnight, dk); else ``value``."""
+    if value in ROSTER_CLASSES:
+        return value
+    class_key = lookup_class(value)
+    return raiderio_class_slug(class_key) if class_key else value
+
+
+def _roster_spec_slug(value: str) -> str:
+    """Raider.IO's own spec slugs as given; any other provider's spelling of one spec (deathknight-frost,
+    beastmastery, balance-druid, bm-hunter) as its class-qualified Raider.IO slug; else ``value``."""
+    if value in ROSTER_SPECS:
+        return value
+    spec = lookup_spec(value)
+    return spec.raiderio_slug if spec else value
+
+
 def _known_values(values: list[str], *, flag: str, allowed: tuple[str, ...]) -> tuple[str, ...]:
     """Reject a value no roster can carry, so an empty sample means "no such runs", never a typo."""
     unknown = [value for value in values if value not in allowed]
     if unknown:
         raise ProviderError("invalid_query", f"{flag} must be one of: {', '.join(allowed)} (got {', '.join(unknown)})")
-    return tuple(values)
+    return tuple(dict.fromkeys(values))
 
 
 def analytics_query(request: SampleRequest, filters: RunFilters, *, meta: dict[str, Any], **extra: Any) -> dict[str, Any]:
