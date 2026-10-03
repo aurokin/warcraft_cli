@@ -5,12 +5,13 @@ import shlex
 from dataclasses import dataclass
 from itertools import product
 from typing import Any
-from urllib.parse import ParseResult, parse_qs, urlparse
+from urllib.parse import ParseResult, parse_qs, quote, urlparse
 
+from warcraft_core.discovery import ResolveConfidence, discovery_row, resolve_data, search_data
 from warcraft_core.identity import is_warcraftlogs_report_code
 
 from lorrgs_cli.client import DIFFICULTIES as RANKED_DIFFICULTIES
-from lorrgs_cli.client import LorrgsClient
+from lorrgs_cli.client import SITE_HOST, LorrgsClient
 
 WORD_PATTERN = re.compile(r"[a-z0-9]+")
 STOP_TERMS = frozenset(
@@ -67,6 +68,8 @@ NAMED, SHORT_NAME, PARTIAL = 2, 1, 0
 MATCH_LEVEL_NAMES = {NAMED: "named", SHORT_NAME: "short_name", PARTIAL: "partial"}
 # Ties are broken by surface usefulness: a ranking beats the bare entity it was built from.
 KIND_ORDER = {"spec_ranking": 0, "comp_ranking": 1, "spec": 2, "boss": 3}
+# Rows built from a parsed report reference: nothing checked that Lorrgs can serve the report.
+REPORT_KINDS = frozenset({"report_overview", "user_report_fights"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -169,7 +172,14 @@ def parse_lorrgs_route(reference: str) -> LorrgsRouteReference | None:
 
 def search_candidates(client: LorrgsClient, query: str, *, limit: int) -> dict[str, Any]:
     """Rank every Lorrgs surface the query can reach and keep the best ``limit`` of them."""
-    return _search_payload(query, _ranked_candidates(client, query), limit=limit)
+    return search_data(
+        search_query=_normalize_query(query),
+        ranked=_ranked_candidates(client, query),
+        limit=limit,
+        query=query,
+        supported_inputs=_supported_inputs(),
+        suggested_commands=_suggested_commands(),
+    )
 
 
 def resolve_payload(client: LorrgsClient, query: str, *, limit: int) -> dict[str, Any]:
@@ -180,27 +190,16 @@ def resolve_payload(client: LorrgsClient, query: str, *, limit: int) -> dict[str
     unrivalled answer, which is exactly the silent wrong resolution the limit must not create.
     """
     candidates = _ranked_candidates(client, query)
-    search = _search_payload(query, candidates, limit=limit)
-    best = candidates[0] if candidates else None
-    unambiguous = _resolved(best, candidates)
-    confidence = _confidence(best, resolved=unambiguous)
-    # Like every other provider, resolve only hands over a command at high confidence. A partial
-    # word match or an unverified report reference stays the match, at medium, without a command.
-    resolved = confidence == "high"
-    return {
-        "provider": "lorrgs",
-        "query": query,
-        "search_query": search["search_query"],
-        "resolved": resolved,
-        "confidence": confidence,
-        "match": best if unambiguous else None,
-        "next_command": _follow_up_command(best) if resolved else None,
-        "count": search["count"],
-        "results": search["results"],
-        "truncated": search["truncated"],
-        "supported_inputs": _supported_inputs(),
-        "suggested_commands": _suggested_commands(),
-    }
+    return resolve_data(
+        search_query=_normalize_query(query),
+        ranked=candidates,
+        limit=limit,
+        confidence=_confidence(candidates),
+        fallback_search_command=shlex.join(["lorrgs", "search", query]),
+        query=query,
+        supported_inputs=_supported_inputs(),
+        suggested_commands=_suggested_commands(),
+    )
 
 
 def _ranked_candidates(client: LorrgsClient, query: str) -> list[dict[str, Any]]:
@@ -279,60 +278,53 @@ def _explicit_candidates(query: str) -> list[dict[str, Any]]:
         if route.kind == "comp_ranking" and route.boss_slug:
             return [_explicit_comp_ranking_candidate(route.boss_slug, route.source_url)]
         if route.report is not None:
-            return _report_candidates(route.report)
+            return _report_candidates(route.report, url=route.source_url)
     report = parse_report_reference(query)
     if report is not None:
         return _report_candidates(report)
     return []
 
 
-def _report_candidates(ref: ReportReference) -> list[dict[str, Any]]:
+def _report_candidates(ref: ReportReference, *, url: str | None = None) -> list[dict[str, Any]]:
+    """Report rows; ``url`` is the Lorrgs page the caller passed, since a bare code or a Warcraft Logs URL names none."""
     quoted = shlex.quote(ref.code)
-    overview = {
-        "provider": "lorrgs",
-        "kind": "report_overview",
-        "id": f"report:{ref.code}",
-        "name": f"Lorrgs report overview {ref.code}",
-        "report_id": ref.code,
-        "fight_id": ref.fight_id,
-        "report_type": ref.report_type,
-        "source_url": ref.source_url,
+    overview = discovery_row(
+        provider="lorrgs",
+        kind="report_overview",
+        id=f"report:{ref.code}",
+        name=f"Lorrgs report overview {ref.code}",
+        url=url,
         # The reference parsed cleanly, but nothing here checked that Lorrgs can serve this report:
         # load_overview loads any public report on demand, yet answers 401 for one Warcraft Logs
         # keeps private and 404 for a code that does not exist, so the handoff stays at medium.
-        "ranking": {"score": 88, "confidence": "medium", "match_reasons": ["explicit_report_reference"]},
-        "follow_up": {
-            "provider": "lorrgs",
-            "kind": "report_overview",
-            "surface": "report-overview",
-            "command": f"lorrgs report-overview {quoted}",
-        },
-        "caveat": "Availability is unverified: Lorrgs loads any public report, but refuses reports Warcraft Logs keeps private.",
-    }
+        score=88,
+        match_reasons=["explicit_report_reference"],
+        command=f"lorrgs report-overview {quoted}",
+        surface="report-overview",
+        report_id=ref.code,
+        fight_id=ref.fight_id,
+        report_type=ref.report_type,
+        source_url=ref.source_url,
+        caveat="Availability is unverified: Lorrgs loads any public report, but refuses reports Warcraft Logs keeps private.",
+    )
     if ref.fight_id is None:
         return [overview]
-    fight = {
-        "provider": "lorrgs",
-        "kind": "user_report_fights",
-        "id": f"report:{ref.code}:fight:{ref.fight_id}",
-        "name": f"Lorrgs cached fight {ref.fight_id} for report {ref.code}",
-        "report_id": ref.code,
-        "fight_id": ref.fight_id,
-        "report_type": ref.report_type,
-        "source_url": ref.source_url,
-        "ranking": {
-            "score": 68,
-            "confidence": "medium",
-            "match_reasons": ["explicit_report_reference", "fight_scope_present"],
-        },
-        "follow_up": {
-            "provider": "lorrgs",
-            "kind": "user_report_fights",
-            "surface": "user-report-fights",
-            "command": _report_fights_command(ref, quoted),
-        },
-        "caveat": "Requires the selected fight to already be loaded/cached by Lorrgs.",
-    }
+    fight = discovery_row(
+        provider="lorrgs",
+        kind="user_report_fights",
+        id=f"report:{ref.code}:fight:{ref.fight_id}",
+        name=f"Lorrgs cached fight {ref.fight_id} for report {ref.code}",
+        url=url,
+        score=68,
+        match_reasons=["explicit_report_reference", "fight_scope_present"],
+        command=_report_fights_command(ref, quoted),
+        surface="user-report-fights",
+        report_id=ref.code,
+        fight_id=ref.fight_id,
+        report_type=ref.report_type,
+        source_url=ref.source_url,
+        caveat="Requires the selected fight to already be loaded/cached by Lorrgs.",
+    )
     return [overview, fight]
 
 
@@ -346,31 +338,23 @@ def _report_fights_command(ref: ReportReference, quoted_code: str) -> str:
 def _explicit_spec_ranking_candidate(
     spec_slug: str, boss_slug: str, difficulty: str | None, source_url: str | None
 ) -> dict[str, Any]:
-    return {
-        "provider": "lorrgs",
-        "kind": "spec_ranking",
-        "id": f"spec-ranking:{spec_slug}:{boss_slug}",
-        "name": f"Lorrgs {spec_slug} on {boss_slug}",
-        "spec_slug": spec_slug,
-        "boss_slug": boss_slug,
-        "source_url": source_url,
-        "difficulty": difficulty,
-        "ranking": {"score": 99, "confidence": "high", "match_reasons": ["explicit_lorrgs_spec_ranking_url"]},
-        "follow_up": _ranking_follow_up(spec_slug, boss_slug, difficulty),
-    }
+    return _spec_ranking_row(
+        spec_slug,
+        boss_slug,
+        difficulty,
+        name=f"Lorrgs {spec_slug} on {boss_slug}",
+        ranking={"score": 99, "match_reasons": ["explicit_lorrgs_spec_ranking_url"]},
+        source_url=source_url,
+    )
 
 
 def _explicit_comp_ranking_candidate(boss_slug: str, source_url: str | None) -> dict[str, Any]:
-    return {
-        "provider": "lorrgs",
-        "kind": "comp_ranking",
-        "id": f"comp-ranking:{boss_slug}",
-        "name": f"Lorrgs composition ranking for {boss_slug}",
-        "boss_slug": boss_slug,
-        "source_url": source_url,
-        "ranking": {"score": 96, "confidence": "high", "match_reasons": ["explicit_lorrgs_comp_ranking_url"]},
-        "follow_up": _comp_follow_up(boss_slug),
-    }
+    return _comp_ranking_row(
+        boss_slug,
+        name=f"Lorrgs composition ranking for {boss_slug}",
+        ranking={"score": 96, "match_reasons": ["explicit_lorrgs_comp_ranking_url"]},
+        source_url=source_url,
+    )
 
 
 def _match_rows(rows: list[Any], query_terms: set[str]) -> list[RowMatch]:
@@ -429,7 +413,6 @@ def _free_text_ranking(matches: tuple[RowMatch, ...], known_terms: frozenset[str
     coverage = len(covered) / len(known_terms) if known_terms else 0.0
     return {
         "score": 24 + round(70 * coverage) + level,
-        "confidence": "medium" if level == PARTIAL else "high",
         "match_level": MATCH_LEVEL_NAMES[level],
         "matched_terms": sorted(covered),
         "unmatched_terms": sorted(known_terms - covered),
@@ -454,23 +437,17 @@ def _match_reason(role: str, match: RowMatch) -> str:
 def _spec_ranking_candidate(
     spec_match: RowMatch, boss_match: RowMatch, known_terms: frozenset[str], difficulty: str | None
 ) -> dict[str, Any]:
-    spec_slug = _row_slug(spec_match.row)
-    boss_slug = _row_slug(boss_match.row)
-    return {
-        "provider": "lorrgs",
-        "kind": "spec_ranking",
-        "id": f"spec-ranking:{spec_slug}:{boss_slug}",
-        "name": f"{_row_name(spec_match.row)} on {_row_name(boss_match.row)}",
-        "spec_slug": spec_slug,
-        "boss_slug": boss_slug,
-        "difficulty": difficulty,
-        "ranking": _free_text_ranking(
+    return _spec_ranking_row(
+        _row_slug(spec_match.row),
+        _row_slug(boss_match.row),
+        difficulty,
+        name=f"{_row_name(spec_match.row)} on {_row_name(boss_match.row)}",
+        ranking=_free_text_ranking(
             (spec_match, boss_match),
             known_terms,
             [_match_reason("spec", spec_match), _match_reason("boss", boss_match)],
         ),
-        "follow_up": _ranking_follow_up(spec_slug, boss_slug, difficulty),
-    }
+    )
 
 
 def _comp_ranking_candidate(boss_match: RowMatch, known_terms: frozenset[str], difficulty: str | None) -> dict[str, Any]:
@@ -479,67 +456,97 @@ def _comp_ranking_candidate(boss_match: RowMatch, known_terms: frozenset[str], d
     if difficulty not in (None, "mythic"):
         # comp-ranking takes no difficulty, so it cannot answer a heroic/normal/lfr question.
         ranking["unmatched_terms"] = sorted([*ranking["unmatched_terms"], difficulty])
-    return {
-        "provider": "lorrgs",
-        "kind": "comp_ranking",
-        "id": f"comp-ranking:{boss_slug}",
-        "name": f"Composition ranking for {_row_name(boss_match.row)}",
-        "boss_slug": boss_slug,
-        "ranking": ranking,
-        "follow_up": _comp_follow_up(boss_slug),
-    }
+    return _comp_ranking_row(boss_slug, name=f"Composition ranking for {_row_name(boss_match.row)}", ranking=ranking)
 
 
 def _spec_candidate(spec_match: RowMatch, known_terms: frozenset[str]) -> dict[str, Any]:
     spec_slug = _row_slug(spec_match.row)
-    return {
-        "provider": "lorrgs",
-        "kind": "spec",
-        "id": f"spec:{spec_slug}",
-        "name": _row_name(spec_match.row),
-        "spec_slug": spec_slug,
-        "ranking": _free_text_ranking((spec_match,), known_terms, [_match_reason("spec", spec_match)]),
-        "follow_up": {
-            "provider": "lorrgs",
-            "kind": "spec",
-            "surface": "spec",
-            "command": f"lorrgs spec {shlex.quote(spec_slug)}",
-        },
-    }
+    return _row(
+        "spec",
+        f"spec:{spec_slug}",
+        name=_row_name(spec_match.row),
+        url=None,
+        ranking=_free_text_ranking((spec_match,), known_terms, [_match_reason("spec", spec_match)]),
+        command=f"lorrgs spec {shlex.quote(spec_slug)}",
+        surface="spec",
+        spec_slug=spec_slug,
+    )
 
 
 def _boss_candidate(boss_match: RowMatch, known_terms: frozenset[str]) -> dict[str, Any]:
     boss_slug = _row_slug(boss_match.row)
-    return {
-        "provider": "lorrgs",
-        "kind": "boss",
-        "id": f"boss:{boss_slug}",
-        "name": _row_name(boss_match.row),
-        "boss_slug": boss_slug,
-        "ranking": _free_text_ranking((boss_match,), known_terms, [_match_reason("boss", boss_match)]),
-        "follow_up": {
-            "provider": "lorrgs",
-            "kind": "boss",
-            "surface": "boss",
-            "command": f"lorrgs boss {shlex.quote(boss_slug)}",
-        },
-    }
+    return _row(
+        "boss",
+        f"boss:{boss_slug}",
+        name=_row_name(boss_match.row),
+        url=None,
+        ranking=_free_text_ranking((boss_match,), known_terms, [_match_reason("boss", boss_match)]),
+        command=f"lorrgs boss {shlex.quote(boss_slug)}",
+        surface="boss",
+        boss_slug=boss_slug,
+    )
 
 
-def _ranking_follow_up(spec_slug: str, boss_slug: str, difficulty: str | None) -> dict[str, str]:
+def _spec_ranking_row(
+    spec_slug: str, boss_slug: str, difficulty: str | None, *, name: str, ranking: dict[str, Any], source_url: str | None = None
+) -> dict[str, Any]:
+    """A ``lorrgs spec-ranking`` candidate, whose ``url`` is the Lorrgs page that ranking renders."""
     command = f"lorrgs spec-ranking {shlex.quote(spec_slug)} {shlex.quote(boss_slug)}"
+    url = f"{SITE_HOST}/spec_ranking/{quote(spec_slug)}/{quote(boss_slug)}"
     if difficulty:
         command += f" --difficulty {shlex.quote(difficulty)}"
-    return {"provider": "lorrgs", "kind": "spec_ranking", "surface": "spec-ranking", "command": command}
+        url += f"?difficulty={quote(difficulty)}"
+    extra = {"source_url": source_url} if source_url else {}
+    return _row(
+        "spec_ranking",
+        f"spec-ranking:{spec_slug}:{boss_slug}",
+        name=name,
+        url=url,
+        ranking=ranking,
+        command=command,
+        surface="spec-ranking",
+        spec_slug=spec_slug,
+        boss_slug=boss_slug,
+        difficulty=difficulty,
+        **extra,
+    )
 
 
-def _comp_follow_up(boss_slug: str) -> dict[str, str]:
-    return {
-        "provider": "lorrgs",
-        "kind": "comp_ranking",
-        "surface": "comp-ranking",
-        "command": f"lorrgs comp-ranking {shlex.quote(boss_slug)}",
-    }
+def _comp_ranking_row(boss_slug: str, *, name: str, ranking: dict[str, Any], source_url: str | None = None) -> dict[str, Any]:
+    """A ``lorrgs comp-ranking`` candidate, whose ``url`` is the Lorrgs page that ranking renders."""
+    extra = {"source_url": source_url} if source_url else {}
+    return _row(
+        "comp_ranking",
+        f"comp-ranking:{boss_slug}",
+        name=name,
+        url=f"{SITE_HOST}/comp_ranking/{quote(boss_slug)}",
+        ranking=ranking,
+        command=f"lorrgs comp-ranking {shlex.quote(boss_slug)}",
+        surface="comp-ranking",
+        boss_slug=boss_slug,
+        **extra,
+    )
+
+
+def _row(
+    kind: str, row_id: str, *, name: str, url: str | None, ranking: dict[str, Any], command: str, surface: str, **extra: Any
+) -> dict[str, Any]:
+    """A free-text or ranking-URL candidate: ``ranking`` carries Lorrgs' own match detail beside the core."""
+    score, reasons = ranking["score"], ranking["match_reasons"]
+    ranking_extra = {key: value for key, value in ranking.items() if key not in {"score", "match_reasons"}}
+    return discovery_row(
+        provider="lorrgs",
+        kind=kind,
+        id=row_id,
+        name=name,
+        url=url,
+        score=score,
+        match_reasons=reasons,
+        command=command,
+        surface=surface,
+        ranking_extra=ranking_extra,
+        **extra,
+    )
 
 
 def _dedupe_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -552,19 +559,6 @@ def _dedupe_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]
         seen.add(key)
         deduped.append(candidate)
     return deduped
-
-
-def _search_payload(query: str, candidates: list[dict[str, Any]], *, limit: int) -> dict[str, Any]:
-    return {
-        "provider": "lorrgs",
-        "query": query,
-        "search_query": _normalize_query(query),
-        "count": len(candidates),
-        "results": candidates[:limit],
-        "truncated": len(candidates) > limit,
-        "supported_inputs": _supported_inputs(),
-        "suggested_commands": _suggested_commands(),
-    }
 
 
 def _supported_inputs() -> list[str]:
@@ -595,15 +589,7 @@ def _score(candidate: dict[str, Any] | None) -> int:
         return 0
 
 
-def _follow_up_command(candidate: dict[str, Any] | None) -> str | None:
-    follow_up = candidate.get("follow_up") if isinstance(candidate, dict) else None
-    if not isinstance(follow_up, dict):
-        return None
-    command = follow_up.get("command")
-    return command if isinstance(command, str) and command else None
-
-
-def _resolved(best: dict[str, Any] | None, results: list[dict[str, Any]]) -> bool:
+def _unambiguous(best: dict[str, Any], results: list[dict[str, Any]]) -> bool:
     """The top candidate resolves only when it accounts for the whole query and has no equal rival.
 
     The rival check is per kind and per strength: the runner-up is normally the comp ranking or the
@@ -611,8 +597,6 @@ def _resolved(best: dict[str, Any] | None, results: list[dict[str, Any]]) -> boo
     Two candidates of one kind that matched equally well but name different entities are the real
     ambiguity ("frost <boss>" is Frost Mage and Frost Death Knight), and those must not be guessed.
     """
-    if best is None:
-        return False
     ranking = best.get("ranking")
     if isinstance(ranking, dict) and ranking.get("unmatched_terms"):
         return False
@@ -636,10 +620,17 @@ def _entities(candidate: dict[str, Any]) -> tuple[str, ...]:
     return tuple(str(candidate.get(key) or "") for key in ("spec_slug", "boss_slug", "report_id"))
 
 
-def _confidence(best: dict[str, Any] | None, *, resolved: bool) -> str:
-    """Resolve confidence is the matched candidate's own: it knows why it was only a partial match."""
-    if not resolved or best is None:
+def _confidence(candidates: list[dict[str, Any]]) -> ResolveConfidence:
+    """Like every other provider, resolve only hands over a command at high confidence.
+
+    A partial word match or an unverified report reference stays the match at medium, and an
+    ambiguous top row (a tie, or one that left query words out) stays the match at low.
+    """
+    if not candidates:
         return "none"
-    ranking = best.get("ranking")
-    confidence = ranking.get("confidence") if isinstance(ranking, dict) else None
-    return confidence if confidence in {"high", "medium"} else "medium"
+    best = candidates[0]
+    if not _unambiguous(best, candidates):
+        return "low"
+    if best.get("kind") in REPORT_KINDS or best["ranking"].get("match_level") == MATCH_LEVEL_NAMES[PARTIAL]:
+        return "medium"
+    return "high"

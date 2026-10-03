@@ -22,6 +22,7 @@ from typing import Any
 
 import pytest
 
+from tests.discovery_contract import resolve_data_violations, search_data_violations
 from tests.e2e import pins
 from tests.e2e.harness import (
     EXIT_GENERIC,
@@ -160,12 +161,13 @@ def test_search_ranks_real_guides_from_the_sitemap(require) -> None:
     require(PROVIDER)
     result = guide_search()
 
+    assert search_data_violations(result.data, provider=PROVIDER) == [], result.describe()
     assert result.data["count"] >= 1
     rows = result.data["results"]
     assert rows == sorted(rows, key=lambda row: -row["ranking"]["score"]), "results must be ranked best first"
     assert rows[0]["id"] == spec_guide_slug(), "a spec query must rank that spec's guide first"
     for row in rows:
-        assert row["entity_type"] == "guide"
+        assert row["kind"] == "guide"
         assert row["metadata"]["content_family"], "search returned a row without a content family"
         assert row["url"] == f"https://www.icy-veins.com/wow/{row['id']}"
         assert row["follow_up"]["command"] == f"{BINARY} guide {row['id']}"
@@ -338,6 +340,7 @@ def test_resolve_hands_over_a_next_command_that_returns_the_same_guide(require) 
     require(PROVIDER)
     result = run(BINARY, "resolve", pins.GUIDE_QUERY, "--limit", "5")
 
+    assert resolve_data_violations(result.data, provider=PROVIDER) == [], result.describe()
     assert result.data["resolved"] is True
     assert result.data["confidence"] == "high"
     match = result.data["match"]

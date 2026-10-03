@@ -123,15 +123,6 @@ RANKING_POLICY: dict[str, Any] = {
     "name_match_boosts": {"exact": 25, "title_prefix": 12},
 }
 
-TYPE_NAME_KIND_MAP = {
-    "article": "article",
-    "guide": "guide",
-    "character": "character",
-    "guild": "guild",
-    "leaderboard": "leaderboard",
-}
-
-
 def confidence_rank(value: Any) -> int:
     normalized = str(value or "").strip().lower()
     if normalized == "high":
@@ -181,26 +172,6 @@ def query_intents(query: str) -> list[str]:
     if {"guild", "character"} & tokens:
         intents.add("structured_profile")
     return sorted(intents)
-
-
-def candidate_kind(candidate: Mapping[str, Any] | None) -> str | None:
-    if not isinstance(candidate, Mapping):
-        return None
-    for key in ("kind", "entity_type"):
-        value = candidate.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip().lower().replace(" ", "_")
-    follow_up = candidate.get("follow_up")
-    if isinstance(follow_up, Mapping):
-        for key in ("surface", "recommended_surface"):
-            value = follow_up.get(key)
-            if isinstance(value, str) and value.strip():
-                return value.strip().lower().replace(" ", "_")
-    type_name = candidate.get("type_name")
-    if isinstance(type_name, str):
-        normalized = type_name.strip().lower()
-        return TYPE_NAME_KIND_MAP.get(normalized, normalized.replace(" ", "_")) if normalized else None
-    return None
 
 
 # The provider-local score a best row has to reach before it is treated as a full-strength match.
@@ -288,7 +259,7 @@ def wrapper_search_ranking(
     """
     provider = str(row.get("provider") or "").strip()
     family = RANKING_POLICY["provider_families"].get(provider, "unknown")
-    kind = candidate_kind(row)
+    kind = row.get("kind")
     raw_score = candidate_score(row)
     if provider_max_score is None:
         score = raw_score
@@ -350,16 +321,7 @@ def wrapper_search_ranking(
 
 
 def compact_wrapper_candidate(candidate: Mapping[str, Any]) -> dict[str, Any]:
-    compact: dict[str, Any] = {
-        "provider": candidate.get("provider"),
-        "kind": candidate_kind(candidate),
-        "name": candidate.get("name"),
-        "id": candidate.get("id"),
-    }
-    for key in ("entity_type", "type_name", "profile_url", "url", "next_command", "confidence"):
-        value = candidate.get(key)
-        if value is not None:
-            compact[key] = value
+    compact: dict[str, Any] = {key: candidate.get(key) for key in ("provider", "kind", "name", "id", "url")}
     follow_up = candidate.get("follow_up")
     if isinstance(follow_up, Mapping) and follow_up.get("command"):
         compact["follow_up_command"] = follow_up.get("command")
@@ -409,20 +371,11 @@ def decorate_search_result(
     provider_max_score: int | None = None,
     provider_top_row: bool = False,
 ) -> dict[str, Any]:
-    """One merged-list row: the provider's own row plus its wrapper ranking and normalized ``kind``.
-
-    Providers name a row's type differently (``kind``, ``entity_type``, ``type_name``), so the merged
-    list carries the normalized ``kind`` the ranking itself used. Without it the compact ``--brief``
-    row would report a field the full row does not have.
-    """
+    """One merged-list row: the provider's own row plus its wrapper ranking."""
     ranking = wrapper_search_ranking(
         query, row, provider_max_score=provider_max_score, provider_top_row=provider_top_row
     )
-    decorated = dict(row)
-    decorated["wrapper_ranking"] = ranking
-    if ranking["kind"] is not None:
-        decorated.setdefault("kind", ranking["kind"])
-    return decorated
+    return {**row, "wrapper_ranking": ranking}
 
 
 def provider_max_candidate_score(rows: Sequence[Mapping[str, Any]]) -> int:
@@ -568,7 +521,7 @@ def merged_search_page(
     }
 
 
-def decorate_resolve_payload(query: str, provider: str, payload: Mapping[str, Any]) -> dict[str, Any]:
+def decorate_resolve_payload(query: str, payload: Mapping[str, Any]) -> dict[str, Any]:
     """One provider's resolve answer, its match ranked exactly as ``warcraft search`` ranks that
     provider's top row: normalized against the provider's own candidates, and able to anchor."""
     decorated = dict(payload)
@@ -577,7 +530,7 @@ def decorate_resolve_payload(query: str, provider: str, payload: Mapping[str, An
         rows = [match, *(row for row in payload.get("candidates") or [] if isinstance(row, Mapping))]
         decorated_match = decorate_search_result(
             query,
-            {"provider": provider, **dict(match)},
+            match,
             provider_max_score=provider_max_candidate_score(rows),
             provider_top_row=True,
         )
@@ -605,13 +558,12 @@ def resolve_payload_sort_key(payload: Mapping[str, Any]) -> tuple[int, int, int,
 def resolve_answer_accepted(payload: Mapping[str, Any]) -> bool:
     """Whether the top-ranked resolve answer is the wrapper's answer.
 
-    Its own provider must have resolved it at ``high`` confidence (a provider that calls a partial
-    match resolved at ``medium`` does not answer for the wrapper), and the query's intents must not
-    rank that provider's family down: a guide query is not answered by Lorrgs spec metadata, nor a guild query by a wiki
-    article, whatever confidence the provider reported. A match whose title is exactly the query is
+    Its own provider must have resolved it (every provider resolves only at ``high`` confidence),
+    and the query's intents must not rank that provider's family down: a guide query is not answered
+    by Lorrgs spec metadata, nor a guild query by a wiki article. A match whose title is exactly the query is
     exempt: the intent words are then part of the name (the item `Guild Tabard`), not a request for
     another kind of source.
     """
     ranking = as_dict(payload.get("wrapper_ranking"))
     fits_intent = int(ranking.get("intent_family_fit") or 0) >= 0 or ranking.get("name_match") == "exact"
-    return bool(payload.get("resolved")) and payload.get("confidence") == "high" and fits_intent
+    return bool(payload.get("resolved")) and fits_intent

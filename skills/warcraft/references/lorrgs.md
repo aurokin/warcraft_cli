@@ -49,8 +49,8 @@ authoritative, and use Lorrgs for its prebuilt aggregation.
   top-parse comparison for that phase
 - use `resolve` when you have a Lorrgs URL, Warcraft Logs report URL, report code, or likely
   spec/boss query and want the next command chosen conservatively
-- when `resolve` answers `resolved: false` with `confidence: "none"`, read `results`: either two
-  candidates tied, so re-ask with a spec slug or boss slug (`frost` matches Mage and Death Knight;
+- when `resolve` answers `resolved: false` with `confidence: "low"`, read `candidates`: either two
+  candidates tied (`match` is only the first of them), so re-ask with a spec slug or boss slug (`frost` matches Mage and Death Knight;
   `salhadaar` matches two encounters), or the top candidate left a recognised word in
   `ranking.unmatched_terms` and would have answered a narrower question than you asked
 - name the difficulty in a `resolve` query (`heroic frost mage chimaerus`) and the handoff carries

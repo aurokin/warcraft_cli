@@ -100,7 +100,11 @@ def _assert_merged_page(result: Result) -> list[dict[str, Any]]:
     assert tiers == sorted(tiers), _page_ids(rows)
     policy = data["merge_policy"]
     assert policy["provider_row_counts"] == dict(Counter(row["provider"] for row in rows))
-    assert policy["candidate_row_count"] == data["count"]
+    assert data["count"] == len(rows)
+    # Each provider's own total survives the merge, and is never below the rows it returned.
+    totals = policy["provider_total_matches"]
+    assert totals == {name: row["payload"]["data"]["total_matches"] for name, row in _provider_rows(result).items()}
+    assert all(totals[name] >= len(provider_rows) for name, provider_rows in by_provider.items()), json.dumps(totals)
     return rows
 
 
@@ -167,10 +171,11 @@ def test_search_fans_out_to_every_included_provider(item_search: Result) -> None
     # journey exists to report, so a structured error row is not an acceptable outcome.
     assert pins.ITEM_ID in [row["id"] for row in by_provider["wowhead"]], item_search.describe()
 
-    # `count` is the merged candidate total and `truncated` reports whether --limit cut the list.
-    assert data["count"] == sum(len(results) for results in by_provider.values())
-    assert len(data["results"]) == int(ITEM_LIMIT)
-    assert data["truncated"] is (data["count"] > len(data["results"]))
+    # `count` is the page's length; `truncated` reports whether --limit cut the merged candidates.
+    candidates = data["merge_policy"]["candidate_row_count"]
+    assert candidates == sum(len(results) for results in by_provider.values())
+    assert data["count"] == len(data["results"]) == int(ITEM_LIMIT)
+    assert data["truncated"] is (candidates > data["count"])
     _assert_merged_page(item_search)
     for row in data["results"]:
         assert row["name"], row
@@ -353,7 +358,7 @@ def _assert_guild_resolved_by_raiderio(result: Result) -> None:
     assert result.payload["provider"] == "warcraft"
     assert data["match"]["provider"] == "raiderio"
     assert data["match"]["name"] == GUILD
-    profile_url = data["match"]["profile_url"]
+    profile_url = data["match"]["url"]
     assert profile_url.startswith(f"https://raider.io/guilds/{REGION}/"), profile_url
 
     binary, *args = shlex.split(data["next_command"])

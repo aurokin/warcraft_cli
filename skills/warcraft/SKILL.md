@@ -100,6 +100,8 @@ narrower, **experimental** is thin and may change.
 
 - Prefer `resolve` when you want one conservative next command.
 - Prefer `search` when you want to inspect candidates across providers.
+- In every provider `search` / `resolve` payload (`warcraft <provider> search|resolve`), `count` is the rows returned, `total_matches` is every match the provider knows of (`null` on a `coming_soon` stub) and `truncated` says more exist. A provider `resolve` is `resolved` only at `high` confidence; an unresolved answer still names its top row in `match`, with `fallback_search_command` beside it.
+- An unresolved `warcraft resolve` has `match: null`: read `data.best_unresolved_candidate` (its `unresolved_reason` and `follow_up_command`) together with `data.fallback_search_command`. `warcraft search` keeps each provider's total in `data.merge_policy.provider_total_matches` (`null` for a stub or for a provider listed in `failed_providers`).
 - Prefer `warcraft guild ...` for one guild's Raider.IO snapshot with normalized region/realm/name input (Oceanic realms are in region `us`; `oce` is read as `us`); `data.sources.raiderio` carries `summary` and `provenance` (use `warcraft raiderio guild` for the raw Raider.IO payload), and `summary.raids[]` carries each raid's normal/heroic/mythic world, region, and realm ranks. A rank of `0` means unranked at that difficulty, not first place, and Raider.IO only covers the current expansion.
 - Use `warcraft actor-profile <report-code> <name>` to hand a Warcraft Logs report actor to their Raider.IO profile. Pass `--fight-id` when you know it; without it the wrapper searches a bounded set of the report's fights (`query.fight_scope`).
 - Preserve provider provenance. `warcraft` is a router, not a source.

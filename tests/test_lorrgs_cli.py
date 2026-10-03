@@ -341,10 +341,11 @@ def test_search_ranks_the_named_spec_ranking_above_every_weaker_candidate(monkey
     assert results[0]["spec_slug"] == "mage-frost"
     assert results[0]["boss_slug"] == "chimaerus-the-undreamt-god"
     assert results[0]["follow_up"]["command"] == "lorrgs spec-ranking mage-frost chimaerus-the-undreamt-god"
+    assert results[0]["url"] == "https://lorrgs.io/spec_ranking/mage-frost/chimaerus-the-undreamt-god"
     scores = [row["ranking"]["score"] for row in results]
     assert scores == sorted(scores, reverse=True)
     assert all(score < scores[0] for score in scores[1:])
-    assert data["count"] == len(results)
+    assert data["count"] == data["total_matches"] == len(results)
     assert data["truncated"] is False
 
 
@@ -374,11 +375,12 @@ def test_resolve_carries_a_named_difficulty_into_the_ranking_command(monkeypatch
     assert data["resolved"] is True
     assert data["match"]["difficulty"] == "heroic"
     assert data["next_command"] == "lorrgs spec-ranking mage-frost chimaerus-the-undreamt-god --difficulty heroic"
+    assert data["match"]["url"] == "https://lorrgs.io/spec_ranking/mage-frost/chimaerus-the-undreamt-god?difficulty=heroic"
 
     comp = json.loads(runner.invoke(app, ["resolve", "heroic chimaerus", "--limit", "10"]).stdout)["data"]
     assert comp["resolved"] is False
-    assert comp["results"][0]["kind"] == "comp_ranking"
-    assert comp["results"][0]["ranking"]["unmatched_terms"] == ["heroic"]
+    assert comp["candidates"][0]["kind"] == "comp_ranking"
+    assert comp["candidates"][0]["ranking"]["unmatched_terms"] == ["heroic"]
 
 
 def test_resolve_refuses_a_word_lorrgs_has_no_answer_for(monkeypatch) -> None:
@@ -389,7 +391,7 @@ def test_resolve_refuses_a_word_lorrgs_has_no_answer_for(monkeypatch) -> None:
     data = json.loads(result.stdout)["data"]
     assert data["resolved"] is False
     assert data["next_command"] is None
-    assert data["results"][0]["ranking"]["unmatched_terms"] == ["guide"]
+    assert data["candidates"][0]["ranking"]["unmatched_terms"] == ["guide"]
 
     # Filler words are not a question of their own.
     result = runner.invoke(app, ["resolve", "frost mage on chimaerus", "--limit", "10"])
@@ -436,9 +438,10 @@ def test_resolve_refuses_a_candidate_that_drops_a_word_lorrgs_recognised(monkeyp
     assert result.exit_code == 0
     data = json.loads(result.stdout)["data"]
     assert data["resolved"] is False
-    assert data["confidence"] == "none"
+    assert data["confidence"] == "low"
     assert data["next_command"] is None
-    assert data["results"][0]["ranking"]["unmatched_terms"] == ["paladin"]
+    assert data["match"] == data["candidates"][0]
+    assert data["match"]["ranking"]["unmatched_terms"] == ["paladin"]
 
 
 def test_bare_encounter_name_resolves_to_the_composition_ranking_not_the_boss_row(monkeypatch) -> None:
@@ -451,23 +454,25 @@ def test_bare_encounter_name_resolves_to_the_composition_ranking_not_the_boss_ro
     data = json.loads(result.stdout)["data"]
     assert data["resolved"] is True
     assert data["next_command"] == "lorrgs comp-ranking chimaerus-the-undreamt-god"
-    kinds = [row["kind"] for row in data["results"]]
+    kinds = [row["kind"] for row in data["candidates"]]
     assert kinds[:2] == ["comp_ranking", "boss"]
-    assert data["results"][0]["ranking"]["score"] == data["results"][1]["ranking"]["score"]
+    assert data["candidates"][0]["ranking"]["score"] == data["candidates"][1]["ranking"]["score"]
 
 
 def test_resolve_refuses_to_pick_between_two_specs_that_share_a_name(monkeypatch) -> None:
     # "frost <boss>" fits Frost Mage and Frost Death Knight equally well. Resolving it to one of them
     # answered a question nobody asked; the tie must surface as both candidates and no next command.
+    # The top row stays the match at low confidence, with a search to run instead.
     _patch_client(monkeypatch)
     result = runner.invoke(app, ["resolve", "frost chimaerus", "--limit", "10"])
     assert result.exit_code == 0
     data = json.loads(result.stdout)["data"]
     assert data["resolved"] is False
-    assert data["confidence"] == "none"
-    assert data["match"] is None
+    assert data["confidence"] == "low"
+    assert data["match"] == data["candidates"][0]
     assert data["next_command"] is None
-    tied = {row["spec_slug"] for row in data["results"] if row["kind"] == "spec_ranking"}
+    assert data["fallback_search_command"] == "lorrgs search 'frost chimaerus'"
+    tied = {row["spec_slug"] for row in data["candidates"] if row["kind"] == "spec_ranking"}
     assert tied == {"mage-frost", "deathknight-frost"}
 
 
@@ -480,12 +485,12 @@ def test_resolve_refuses_to_pick_between_two_bosses_that_share_a_short_name(monk
     data = json.loads(result.stdout)["data"]
     assert data["resolved"] is False
     assert data["next_command"] is None
-    tied = {row["boss_slug"] for row in data["results"] if row["kind"] == "spec_ranking"}
+    tied = {row["boss_slug"] for row in data["candidates"] if row["kind"] == "spec_ranking"}
     assert tied == {"fallenking-salhadaar", "nexusking-salhadaar"}
 
 
 def test_resolve_limit_cannot_hide_the_rival_that_makes_a_query_ambiguous(monkeypatch) -> None:
-    # `--limit 1` keeps one candidate in `results`, and judging ambiguity from that slice made the
+    # `--limit 1` keeps one row in `candidates`, and judging ambiguity from that slice made the
     # tie invisible: the same ambiguous query resolved to Frost Death Knight at high confidence.
     # The verdict comes from every candidate, and the payload says the list was truncated.
     _patch_client(monkeypatch)
@@ -494,8 +499,8 @@ def test_resolve_limit_cannot_hide_the_rival_that_makes_a_query_ambiguous(monkey
     data = json.loads(result.stdout)["data"]
     assert data["resolved"] is False
     assert data["next_command"] is None
-    assert len(data["results"]) == 1
-    assert data["count"] > 1
+    assert len(data["candidates"]) == data["count"] == 1
+    assert data["total_matches"] > 1
     assert data["truncated"] is True
 
 
@@ -529,7 +534,18 @@ def test_resolve_matches_warcraftlogs_report_url_without_promising_availability(
     assert "private" in data["match"]["caveat"]
     assert data["next_command"] is None
     assert data["match"]["follow_up"]["command"] == "lorrgs report-overview bG3xDYPqKjLm8XaR"
-    assert data["results"][1]["follow_up"]["command"] == "lorrgs user-report-fights bG3xDYPqKjLm8XaR --fight 22 --type damage-done"
+    assert data["candidates"][1]["follow_up"]["command"] == "lorrgs user-report-fights bG3xDYPqKjLm8XaR --fight 22 --type damage-done"
+    # A Warcraft Logs URL names no Lorrgs page.
+    assert data["match"]["url"] is None
+
+
+def test_resolve_report_row_links_the_lorrgs_page_it_was_given(monkeypatch) -> None:
+    _patch_client(monkeypatch)
+    url = "https://lorrgs.io/user_report/bG3xDYPqKjLm8XaR"
+    data = json.loads(runner.invoke(app, ["resolve", url]).stdout)["data"]
+
+    assert data["match"]["kind"] == "report_overview"
+    assert data["match"]["url"] == url
 
 
 def test_report_overview_accepts_warcraftlogs_url(monkeypatch) -> None:

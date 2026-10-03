@@ -51,7 +51,7 @@ Search Lorrgs by explicit URL/ref or by spec/boss terms.
 
 ## lorrgs resolve
 
-Resolve a Lorrgs query conservatively: an ambiguous query resolves to nothing, not a guess.
+Resolve a Lorrgs query conservatively: an ambiguous query stays unresolved, its top row a low-confidence match.
 
 **Arguments**
 

@@ -42,8 +42,10 @@ the query is nothing else). A `guides` row's text includes its URL slug, so `gui
 abyss"` keeps the raid's boss guides, whose titles name only the boss.
 
 `search` results carry `entity_type` and an openable `url` for every type Wowhead's suggestion
-endpoint labels. News posts also carry a `news-post` follow-up; world events are openable but have
-no follow-up command of their own. The one exception is Trading Post activities: Wowhead addresses
+endpoint labels, plus `provider` and `kind` (the entity type in snake case: `transmog_set`). News
+posts also carry a `news-post` follow-up; world events are openable but have no follow-up command of
+their own (`follow_up: {"command": null, "surface": "none"}`), so `resolve` never answers one with
+high confidence. The one exception is Trading Post activities: Wowhead addresses
 them only by slug, so those rows come back with a null `url`.
 
 A suggestion response carries two overlapping row lists: the flat `results` list (the dropdown's
@@ -76,7 +78,8 @@ with or contains the query only on word boundaries, up to a plural ending: "valo
 "Frostsaber". The rank bonus needs a query word in the row's own name, or a name that starts with
 or contains the query: Wowhead also ranks rows on text the suggestion never shows, and those get no
 bonus. A name that merely contains the query scores below one that starts with it. Each row's
-`follow_up.command` is the command to run next.
+`follow_up.command` is the command to run next and `follow_up.surface` the command it runs
+(`entity`, `entity-page`, `comments`, `guide`, `guide-full`, `news-post`).
 
 Follow-up words in a query ("comments", "links", "full", "related", ...) pick the follow-up command
 (`comments`, `entity-page`) and are left out of the text sent to Wowhead, which `search_query`
@@ -91,11 +94,12 @@ and that answer is kept when it holds a row of the named type. Type words still 
 
 `search` given a Wowhead entity URL (`https://www.wowhead.com/classic/item=19019/...`) answers with
 that entity alone: one row with its type, id, URL and `follow_up`, `match_reasons: ["url_entity"]`,
-`name: null` (nothing is fetched), and `search_query: null`. Wowhead's suggestions endpoint matches
+the URL as its `name` (nothing is fetched), and `search_query: null`. Wowhead's suggestions endpoint matches
 names, so it has nothing to say about a URL. A guide, news, blue-tracker topic, tool
 (`talent-calc`, `profession-tree-calc`, `dressing-room`, profiler `list`) or listing (`/news`,
 `/blue-tracker`, `/guides/<category>`) URL answers the same way with `match_reasons: ["url_page"]`,
-`id: null`, and a `follow_up.command` that runs the command reading that page. Any other Wowhead
+the URL as its `id` and `name`, `kind` the page's type (`guide`, `news`) or the command that reads it
+(`blue_topic`, `talent_calc`), and a `follow_up.command` that runs the command reading that page. Any other Wowhead
 URL fails `invalid_query` (exit 2) with the commands that take URLs. `resolve` answers every such
 URL with that row as a high-confidence `next_command`, routed to the URL's expansion, unless
 `--entity-type` excludes the URL's type: then nothing resolves. A listing URL runs the listing's

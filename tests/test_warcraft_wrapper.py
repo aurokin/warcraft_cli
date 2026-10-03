@@ -588,6 +588,32 @@ def test_warcraft_resolve_never_fabricates_a_warcraftlogs_match_for_non_report_q
     assert payload["data"]["resolved"] is False
 
 
+def test_warcraft_resolve_hands_over_a_bare_report_code_even_when_every_searcher_failed(monkeypatch) -> None:
+    """A bare code is a medium match, not a resolve: it is still an answer, never "No provider answered"."""
+    import warcraft_cli.main as wrapper_main
+
+    real_resolve = wrapper_main.provider_resolve
+
+    def outage_except_wcl(provider: str, query: str, **kwargs: Any) -> dict[str, Any]:
+        if provider == "warcraftlogs":
+            return real_resolve(provider, query, **kwargs)
+        envelope = {"ok": False, "provider": provider, "command": "resolve", "kind": "error", "data": {},
+                    "error": {"code": "network_error", "message": f"{provider} down"}}
+        return {"provider": provider, "exit_code": 5, "payload": envelope}
+
+    monkeypatch.setattr("warcraft_cli.main.provider_resolve", outage_except_wcl)
+
+    result = runner.invoke(warcraft_app, ["resolve", "JVFTxcKCqrvpaAzD", "--brief"])
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.stdout)["data"]
+    assert (data["resolved"], data["next_command"], data["answered_provider_count"]) == (False, None, 1)
+    best = data["best_unresolved_candidate"]
+    assert (best["provider"], best["confidence"]) == ("warcraftlogs", "medium")
+    assert best["unresolved_reason"] == "provider_did_not_resolve"
+    assert best["follow_up_command"].startswith("warcraftlogs report JVFTxcKCqrvpaAzD")
+
+
 def test_warcraft_doctor_reports_expansion_filtering_state() -> None:
     result = runner.invoke(warcraft_app, ["--expansion", "wotlk", "doctor"])
     assert result.exit_code == 0
@@ -1057,7 +1083,7 @@ def test_warcraft_guide_compare_query_orchestrates_resolve_export_and_compare(
                 "match": {
                     "id": ref,
                     "name": name,
-                    "entity_type": "guide",
+                    "kind": "guide",
                     "url": f"https://example.test/{ref}",
                 },
                 "next_command": f"{provider} guide {ref}",
@@ -1147,7 +1173,7 @@ def test_warcraft_guide_compare_query_uses_conservative_search_fallback(
                     "match": {
                         "id": "mistweaver-monk",
                         "name": "Method Mistweaver Monk Guide",
-                        "entity_type": "guide",
+                        "kind": "guide",
                         "url": "https://example.test/method/mistweaver-monk",
                     },
                     "next_command": "method guide mistweaver-monk",
@@ -1174,7 +1200,7 @@ def test_warcraft_guide_compare_query_uses_conservative_search_fallback(
                         {
                             "id": "mistweaver-monk-pve-healing-guide",
                             "name": "Icy Veins Mistweaver Monk Guide",
-                            "entity_type": "guide",
+                            "kind": "guide",
                             "url": "https://example.test/icy-veins/mistweaver-monk-pve-healing-guide",
                             "ranking": {"score": 72},
                             "follow_up": {"command": "icy-veins guide mistweaver-monk-pve-healing-guide"},
@@ -1182,7 +1208,7 @@ def test_warcraft_guide_compare_query_uses_conservative_search_fallback(
                         {
                             "id": "mistweaver-monk-pvp-guide",
                             "name": "Icy Veins Mistweaver Monk PvP Guide",
-                            "entity_type": "guide",
+                            "kind": "guide",
                             "url": "https://example.test/icy-veins/mistweaver-monk-pvp-guide",
                             "ranking": {"score": 41},
                         },
@@ -1251,7 +1277,7 @@ def test_warcraft_guide_compare_query_skips_weak_search_fallback(
                     "match": {
                         "id": "mistweaver-monk",
                         "name": "Method Mistweaver Monk Guide",
-                        "entity_type": "guide",
+                        "kind": "guide",
                         "url": "https://example.test/method/mistweaver-monk",
                     },
                     "next_command": "method guide mistweaver-monk",
@@ -1278,14 +1304,14 @@ def test_warcraft_guide_compare_query_skips_weak_search_fallback(
                         {
                             "id": "mistweaver-monk-pve-healing-guide",
                             "name": "Icy Veins Mistweaver Monk Guide",
-                            "entity_type": "guide",
+                            "kind": "guide",
                             "url": "https://example.test/icy-veins/mistweaver-monk-pve-healing-guide",
                             "ranking": {"score": 58},
                         },
                         {
                             "id": "mistweaver-monk-pvp-guide",
                             "name": "Icy Veins Mistweaver Monk PvP Guide",
-                            "entity_type": "guide",
+                            "kind": "guide",
                             "url": "https://example.test/icy-veins/mistweaver-monk-pvp-guide",
                             "ranking": {"score": 42},
                         },
@@ -1358,7 +1384,7 @@ def test_warcraft_guide_compare_query_reuses_fresh_orchestrated_bundles(
                 "match": {
                     "id": ref,
                     "name": name,
-                    "entity_type": "guide",
+                    "kind": "guide",
                     "url": f"https://example.test/{ref}",
                 },
                 "next_command": f"{provider} guide {ref}",
@@ -1426,7 +1452,7 @@ def test_warcraft_guide_compare_query_refreshes_stale_orchestrated_bundles(
                 "match": {
                     "id": ref,
                     "name": name,
-                    "entity_type": "guide",
+                    "kind": "guide",
                     "url": f"https://example.test/{ref}",
                 },
                 "next_command": f"{provider} guide {ref}",
@@ -1512,7 +1538,7 @@ def test_warcraft_guide_compare_query_can_include_simc_build_handoff(
                 "match": {
                     "id": ref,
                     "name": name,
-                    "entity_type": "guide",
+                    "kind": "guide",
                     "url": f"https://example.test/{provider}/{ref}",
                 },
                 "next_command": f"{provider} guide {ref}",
@@ -1894,7 +1920,7 @@ def test_warcraft_guide_compare_query_fails_when_too_few_guides_export(
                     "match": {
                         "id": "mistweaver-monk",
                         "name": "Method Mistweaver Monk Guide",
-                        "entity_type": "guide",
+                        "kind": "guide",
                         "url": "https://example.test/method/mistweaver-monk",
                     },
                     "next_command": "method guide mistweaver-monk",
@@ -1920,14 +1946,14 @@ def test_warcraft_guide_compare_query_fails_when_too_few_guides_export(
                     {
                         "id": "mistweaver-monk-pve-healing-guide",
                         "name": "Icy Veins Mistweaver Monk Guide",
-                        "entity_type": "guide",
+                        "kind": "guide",
                         "url": "https://example.test/icy-veins/mistweaver-monk-pve-healing-guide",
                         "ranking": {"score": 25},
                     },
                     {
                         "id": "mistweaver-monk-pvp-guide",
                         "name": "Icy Veins Mistweaver Monk PvP Guide",
-                        "entity_type": "guide",
+                        "kind": "guide",
                         "url": "https://example.test/icy-veins/mistweaver-monk-pvp-guide",
                         "ranking": {"score": 22},
                     },
@@ -5939,7 +5965,7 @@ def test_warcraft_resolve_surfaces_the_provider_fallback_and_best_unresolved_can
             "data": {
                 "resolved": False,
                 "confidence": "low",
-                "match": {"id": 230224, "name": "Thunderfury", "kind": "item", "ranking": {"score": 48}},
+                "match": {"provider": "wowhead", "id": 230224, "name": "Thunderfury", "kind": "item", "ranking": {"score": 48}},
                 "fallback_search_command": "wowhead search 'thunderfury'",
             },
         }
@@ -5984,7 +6010,7 @@ def test_warcraft_resolve_hands_over_no_fallback_from_a_provider_that_found_noth
         if provider in {"wowhead", "warcraft-wiki"}:
             data["fallback_search_command"] = f"{provider} search 'ashes of al'ar'"
         if provider == "warcraft-wiki":
-            data.update(confidence="medium", match={"id": "Al'ar", "name": "Al'ar", "entity_type": "article",
+            data.update(confidence="medium", match={"provider": provider, "id": "Al'ar", "name": "Al'ar", "kind": "article",
                                                     "ranking": {"score": 60}})
         return {"provider": provider, "exit_code": 0, "payload": _envelope(data)}
 
@@ -6890,25 +6916,24 @@ def test_actor_profile_fails_not_found_when_the_report_has_no_fights(monkeypatch
 # scale runs to 154 for its best row while Wowhead's exact zone match tops out at 47.
 _UNGORO_ROWS: dict[str, list[dict[str, object]]] = {
     "warcraft-wiki": [
-        {"id": 1, "name": "Un'Goro Crater", "entity_type": "article", "ranking": {"score": 154}},
-        {"id": 2, "name": "Un'Goro Crater (Classic)", "entity_type": "article", "ranking": {"score": 94}},
-        {"id": 3, "name": "Ravasaur", "entity_type": "article", "ranking": {"score": 60}},
-        {"id": 4, "name": "Diemetradon", "entity_type": "article", "ranking": {"score": 58}},
+        {"provider": "warcraft-wiki", "id": 1, "name": "Un'Goro Crater", "kind": "article", "ranking": {"score": 154}},
+        {"provider": "warcraft-wiki", "id": 2, "name": "Un'Goro Crater (Classic)", "kind": "article", "ranking": {"score": 94}},
+        {"provider": "warcraft-wiki", "id": 3, "name": "Ravasaur", "kind": "article", "ranking": {"score": 60}},
+        {"provider": "warcraft-wiki", "id": 4, "name": "Diemetradon", "kind": "article", "ranking": {"score": 58}},
     ],
     "wowhead": [
-        {"id": 490, "name": "Un'Goro Crater", "kind": "zone", "ranking": {"score": 47}},
-        {"id": 491, "name": "Un'Goro Crater Fishing", "kind": "quest", "ranking": {"score": 12}},
+        {"provider": "wowhead", "id": 490, "name": "Un'Goro Crater", "kind": "zone", "ranking": {"score": 47}},
+        {"provider": "wowhead", "id": 491, "name": "Un'Goro Crater Fishing", "kind": "quest", "ranking": {"score": 12}},
     ],
 }
 
 
 def _ungoro_provider_search(provider: str, query: str, *, limit: int = 5, expansion: str | None = None) -> dict[str, object]:
     rows = _UNGORO_ROWS.get(provider, [])
-    return {
-        "provider": provider,
-        "exit_code": 0,
-        "payload": _envelope({"ok": True, "provider": provider, "results": rows, "count": len(rows)}),
-    }
+    # The wiki reports MediaWiki's own hit count, far above the rows it returns.
+    total = 1934 if provider == "warcraft-wiki" else len(rows)
+    data = {"results": rows, "count": len(rows), "total_matches": total, "truncated": total > len(rows)}
+    return {"provider": provider, "exit_code": 0, "payload": _envelope({"ok": True, "provider": provider, **data})}
 
 
 def test_warcraft_search_normalizes_provider_scales_before_merging(monkeypatch) -> None:
@@ -6935,18 +6960,21 @@ def test_warcraft_search_normalizes_provider_scales_before_merging(monkeypatch) 
     assert data["results"][0]["wrapper_ranking"]["provider_max_score"] == 47
 
 
-def test_warcraft_search_reports_whether_limit_cut_the_merged_list(monkeypatch) -> None:
-    """`count` is the merged total and `truncated` says whether `--limit` dropped rows from it."""
+def test_warcraft_search_counts_the_page_and_keeps_each_providers_total_under_brief(monkeypatch) -> None:
+    """`count` is the merged page's length, `truncated` says whether `--limit` dropped merged rows,
+    and each provider's own `total_matches` survives `--brief` in the merge policy."""
     monkeypatch.setattr("warcraft_cli.main.provider_search", _ungoro_provider_search)
 
-    cut = json.loads(runner.invoke(warcraft_app, ["search", "un'goro crater", "--limit", "5"]).stdout)["data"]
-    assert cut["count"] == 6
-    assert len(cut["results"]) == 5
+    cut = json.loads(runner.invoke(warcraft_app, ["search", "un'goro crater", "--limit", "5", "--brief"]).stdout)["data"]
+    assert cut["count"] == len(cut["results"]) == 5
     assert cut["truncated"] is True
+    assert cut["merge_policy"]["candidate_row_count"] == 6
+    totals = cut["merge_policy"]["provider_total_matches"]
+    assert (totals["warcraft-wiki"], totals["wowhead"], totals["method"]) == (1934, 2, 0)
+    assert set(totals) == set(cut["included_providers"])
 
     whole = json.loads(runner.invoke(warcraft_app, ["search", "un'goro crater", "--limit", "10"]).stdout)["data"]
-    assert whole["count"] == 6
-    assert len(whole["results"]) == 6
+    assert whole["count"] == len(whole["results"]) == 6
     assert whole["truncated"] is False
 
 
@@ -7047,7 +7075,7 @@ def test_cooldown_packet_hard_failure_message_matches_the_lorrgs_error(monkeypat
 
 
 def _match(provider: str, name: str, kind: str, score: int) -> dict[str, Any]:
-    return {"id": f"{provider}:{name}", "name": name, "entity_type": kind, "ranking": {"score": score}}
+    return {"provider": provider, "kind": kind, "id": f"{provider}:{name}", "name": name, "ranking": {"score": score}}
 
 
 def _stub_resolve_seam(monkeypatch, answers: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
@@ -7115,9 +7143,9 @@ def test_warcraft_resolve_never_answers_a_guide_query_with_lorrgs_spec_metadata(
 
 
 def test_warcraft_resolve_does_not_answer_when_a_better_ranked_candidate_is_unresolved(monkeypatch) -> None:
-    """The top-ranked row decides; a lower row's 'high' does not stand in for it."""
+    """The top-ranked row decides; a lower row's 'high' does not stand in for a medium match above it."""
     _stub_resolve_seam(monkeypatch, {
-        "wowhead": {"resolved": False, "confidence": "low", "match": _match("wowhead", "Thunderfury", "item", 48)},
+        "wowhead": {"resolved": False, "confidence": "medium", "match": _match("wowhead", "Thunderfury", "item", 48)},
         "warcraft-wiki": {"resolved": True, "confidence": "high", "match": _match("warcraft-wiki", "Thunderfury lore", "article", 60),
                           "next_command": "warcraft-wiki article Thunderfury"},
     })
@@ -7131,19 +7159,44 @@ def test_warcraft_resolve_does_not_answer_when_a_better_ranked_candidate_is_unre
         ("wowhead", False), ("warcraft-wiki", True)]
 
 
-def test_warcraft_resolve_does_not_answer_with_a_provider_resolve_at_medium_confidence(monkeypatch) -> None:
-    """Live `lorrgs resolve storm` called a partial boss match resolved at medium; that is not the answer."""
+def test_warcraft_resolve_never_lets_a_low_confidence_guess_block_another_providers_answer(monkeypatch) -> None:
+    """Lorrgs reports a tie it could not break as its top row at `low`; ranked first, it is skipped."""
+    lorrgs = {"resolved": False, "confidence": "low", "fallback_search_command": "lorrgs search 'frost ulgrax'",
+              "match": _match("lorrgs", "Frost Death Knight on Ulgrax the Devourer", "spec_ranking", 99)}
     _stub_resolve_seam(monkeypatch, {
-        "lorrgs": {"resolved": True, "confidence": "medium",
-                   "match": _match("lorrgs", "Composition ranking for Raszageth the Storm-Eater", "comp_ranking", 50),
-                   "next_command": "lorrgs comp-ranking raszageth-the-stormeater"},
+        "lorrgs": lorrgs,
+        "warcraft-wiki": {"resolved": True, "confidence": "high", "match": _match("warcraft-wiki", "Ulgrax", "article", 60),
+                          "next_command": "warcraft-wiki article Ulgrax"},
+    })
+
+    data = json.loads(runner.invoke(warcraft_app, ["resolve", "frost ulgrax", "--ranking-debug"]).stdout)["data"]
+
+    assert [row["provider"] for row in data["ranking_debug"]] == ["lorrgs", "warcraft-wiki"]
+    assert (data["resolved"], data["selected_provider"]) == (True, "warcraft-wiki")
+    assert data["next_command"] == "warcraft-wiki article Ulgrax"
+    assert data["best_unresolved_candidate"] is None
+
+    _stub_resolve_seam(monkeypatch, {"lorrgs": lorrgs})
+    alone = json.loads(runner.invoke(warcraft_app, ["resolve", "frost ulgrax"]).stdout)["data"]
+    assert (alone["resolved"], alone["next_command"]) == (False, None)
+    assert alone["best_unresolved_candidate"]["provider"] == "lorrgs"
+    assert alone["best_unresolved_candidate"]["unresolved_reason"] == "provider_did_not_resolve"
+    assert alone["fallback_search_command"] == "lorrgs search 'frost ulgrax'"
+
+
+def test_warcraft_resolve_does_not_answer_with_a_provider_match_at_medium_confidence(monkeypatch) -> None:
+    """Live `lorrgs resolve storm` found a partial boss match at medium; that is not the answer."""
+    _stub_resolve_seam(monkeypatch, {
+        "lorrgs": {"resolved": False, "confidence": "medium",
+                   "match": _match("lorrgs", "Composition ranking for Raszageth the Storm-Eater", "comp_ranking", 50)},
     })
 
     data = json.loads(runner.invoke(warcraft_app, ["resolve", "storm"]).stdout)["data"]
 
     assert (data["resolved"], data["selected_provider"], data["next_command"]) == (False, None, None)
     assert data["best_unresolved_candidate"]["provider"] == "lorrgs"
-    assert data["best_unresolved_candidate"]["unresolved_reason"] == "provider_confidence_below_high"
+    assert data["best_unresolved_candidate"]["confidence"] == "medium"
+    assert data["best_unresolved_candidate"]["unresolved_reason"] == "provider_did_not_resolve"
 
 
 def test_warcraft_search_forwards_the_requested_limit_to_every_provider(monkeypatch) -> None:
@@ -7222,7 +7275,7 @@ def _guide_seam(monkeypatch, *, resolve: dict[str, Any], search: list[dict[str, 
 
 
 def _guide_row(slug: str, score: int, kind: str = "guide") -> dict[str, Any]:
-    return {"id": slug, "name": slug, "entity_type": kind, "url": f"https://example.test/{slug}",
+    return {"provider": "method", "kind": kind, "id": slug, "name": slug, "url": f"https://example.test/{slug}",
             "ranking": {"score": score}, "follow_up": {"command": f"method guide {slug}"}}
 
 

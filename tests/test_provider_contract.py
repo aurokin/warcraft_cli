@@ -20,6 +20,7 @@ from warcraft_cli.provider_contract import (
     search_result_sort_key,
     wrapper_search_ranking,
 )
+from warcraft_core.discovery import discovery_row
 
 
 def test_confidence_rank_orders_known_values() -> None:
@@ -90,7 +91,7 @@ def test_wrapper_search_ranking_boosts_reference_provider_for_api_queries() -> N
         {
             "provider": "warcraft-wiki",
             "name": "World of Warcraft API",
-            "entity_type": "article",
+            "kind": "article",
             "ranking": {"score": 18},
         },
     )
@@ -99,7 +100,7 @@ def test_wrapper_search_ranking_boosts_reference_provider_for_api_queries() -> N
         {
             "provider": "method",
             "name": "API Guide",
-            "entity_type": "guide",
+            "kind": "guide",
             "ranking": {"score": 24},
         },
     )
@@ -112,7 +113,7 @@ def test_search_result_sort_key_prefers_wrapper_ranking_when_present() -> None:
     rows = [
         decorate_search_result(
             "guild us illidan Liquid",
-            {"provider": "method", "name": "Liquid Guide", "entity_type": "guide", "ranking": {"score": 40}},
+            {"provider": "method", "name": "Liquid Guide", "kind": "guide", "ranking": {"score": 40}},
         ),
         decorate_search_result(
             "guild us illidan Liquid",
@@ -186,7 +187,7 @@ def test_normalization_keeps_a_small_scale_provider_ahead_of_a_large_scale_one()
     )
     wiki_filler = decorate_search_result(
         "un'goro crater",
-        {"provider": "warcraft-wiki", "name": "Diemetradon", "entity_type": "article", "ranking": {"score": 58}},
+        {"provider": "warcraft-wiki", "name": "Diemetradon", "kind": "article", "ranking": {"score": 58}},
         provider_max_score=154,
     )
 
@@ -212,7 +213,7 @@ def test_wrapper_search_ranking_prefers_raiderio_for_character_profile_queries()
         {
             "provider": "method",
             "name": "Roguecane",
-            "entity_type": "guide",
+            "kind": "guide",
             "ranking": {"score": 80},
         },
     )
@@ -237,7 +238,7 @@ def test_wrapper_search_ranking_prefers_raiderio_for_guild_profile_queries() -> 
         {
             "provider": "method",
             "name": "Liquid Guide",
-            "entity_type": "guide",
+            "kind": "guide",
             "ranking": {"score": 80},
         },
     )
@@ -246,26 +247,18 @@ def test_wrapper_search_ranking_prefers_raiderio_for_guild_profile_queries() -> 
     assert any(reason.startswith("intent:guild_profile:provider:raiderio:+") for reason in raiderio["reasons"])
 
 
-def test_compact_wrapper_candidate_keeps_ranking_and_follow_up() -> None:
-    compact = compact_wrapper_candidate(
-        {
-            "provider": "raiderio",
-            "kind": "guild",
-            "name": "Liquid",
-            "id": "guild:1",
-            "follow_up": {"command": "raiderio guild us illidan Liquid"},
-            "wrapper_ranking": {
-                "score": 88,
-                "reasons": ["provider_score:20"],
-                "intents": ["guild_profile"],
-                "provider_family": "profile",
-            },
-        }
+def test_compact_wrapper_candidate_keeps_the_row_core_ranking_and_follow_up() -> None:
+    row = discovery_row(
+        provider="raiderio", kind="guild", id="guild:1", name="Liquid", url="https://raider.io/guilds/us/illidan/Liquid",
+        score=20, match_reasons=["exact"], command="raiderio guild us illidan Liquid", surface="guild",
+        realm="Illidan",
     )
+    compact = compact_wrapper_candidate(decorate_search_result("guild us illidan Liquid", row))
 
-    assert compact["provider"] == "raiderio"
+    assert set(compact) == {"provider", "kind", "name", "id", "url", "follow_up_command", "wrapper_ranking"}
+    assert compact["url"] == "https://raider.io/guilds/us/illidan/Liquid"
     assert compact["follow_up_command"] == "raiderio guild us illidan Liquid"
-    assert compact["wrapper_ranking"]["score"] == 88
+    assert compact["wrapper_ranking"]["provider_family"] == "profile"
 
 
 def test_compact_wrapper_candidate_keeps_provider_expansion_support() -> None:
@@ -294,23 +287,25 @@ def test_compact_wrapper_candidate_keeps_provider_expansion_support() -> None:
 
 
 def _resolve_answer(query: str, provider: str, *, confidence: str, **match: Any) -> dict[str, Any]:
-    return decorate_resolve_payload(query, provider, {"resolved": True, "confidence": confidence, "match": match})
+    return decorate_resolve_payload(
+        query, {"resolved": True, "confidence": confidence, "match": {"provider": provider, **match}}
+    )
 
 
 def test_resolve_ranks_answers_as_search_does_and_confidence_only_breaks_exact_ties() -> None:
     # Live scales from the `un'goro crater` fanout: the wiki's 116 must not beat Wowhead's 89.
     zone = _resolve_answer("un'goro crater", "wowhead", confidence="high", name="Un'Goro Crater",
-                           entity_type="zone", ranking={"score": 89})
+                           kind="zone", ranking={"score": 89})
     article = _resolve_answer("un'goro crater", "warcraft-wiki", confidence="high", name="Un'Goro Crater",
-                              entity_type="article", ranking={"score": 116})
+                              kind="article", ranking={"score": 116})
     assert [row["match"]["provider"] for row in sorted([article, zone], key=resolve_payload_sort_key)] == [
         "wowhead", "warcraft-wiki"]
 
     # Same family, same normalized score, same boosts: only the provider's confidence differs.
     medium = _resolve_answer("mistweaver monk guide", "icy-veins", confidence="medium", name="MW",
-                             entity_type="guide", ranking={"score": 90})
+                             kind="guide", ranking={"score": 90})
     high = _resolve_answer("mistweaver monk guide", "method", confidence="high", name="MW",
-                           entity_type="guide", ranking={"score": 90})
+                           kind="guide", ranking={"score": 90})
     assert medium["wrapper_ranking"]["score"] == high["wrapper_ranking"]["score"]
     assert [row["match"]["provider"] for row in sorted([medium, high], key=resolve_payload_sort_key)] == [
         "method", "icy-veins"]
@@ -318,9 +313,9 @@ def test_resolve_ranks_answers_as_search_does_and_confidence_only_breaks_exact_t
 
 def test_resolve_match_is_normalized_against_the_providers_own_candidates() -> None:
     """A match the provider scored below one of its own candidates is not that provider's best row."""
-    match = {"name": "Onyxia", "entity_type": "npc", "ranking": {"score": 60}}
-    rival = {"name": "Onyxia's Lair", "entity_type": "zone", "ranking": {"score": 120}}
-    decorated = decorate_resolve_payload("onyxia", "wowhead", {"resolved": True, "match": match, "candidates": [match, rival]})
+    match = {"name": "Onyxia", "kind": "npc", "ranking": {"score": 60}}
+    rival = {"name": "Onyxia's Lair", "kind": "zone", "ranking": {"score": 120}}
+    decorated = decorate_resolve_payload("onyxia", {"resolved": True, "match": match, "candidates": [match, rival]})
 
     assert decorated["wrapper_ranking"]["provider_max_score"] == 120
 
@@ -329,9 +324,9 @@ def test_resolve_answer_needs_a_family_the_query_intent_does_not_rank_down() -> 
     spec = _resolve_answer("frost mage guide", "lorrgs", confidence="high", name="Frost Mage", kind="spec",
                            ranking={"score": 96})
     guild_article = _resolve_answer("Liquid guild us illidan", "warcraft-wiki", confidence="high",
-                                    name="Team Liquid", entity_type="article", ranking={"score": 24})
+                                    name="Team Liquid", kind="article", ranking={"score": 24})
     guide = _resolve_answer("frost mage guide", "method", confidence="high", name="Frost Mage",
-                            entity_type="guide", ranking={"score": 33})
+                            kind="guide", ranking={"score": 33})
 
     assert resolve_answer_accepted(spec) is False
     assert resolve_answer_accepted(guild_article) is False
@@ -341,7 +336,7 @@ def test_resolve_answer_needs_a_family_the_query_intent_does_not_rank_down() -> 
 
 def test_resolve_answers_with_the_entity_named_exactly_by_a_query_holding_an_intent_word() -> None:
     """Live `guild tabard`: Wowhead resolved the item, Raider.IO offered a guild named `TABARD`."""
-    item = _resolve_answer("guild tabard", "wowhead", confidence="high", name="Guild Tabard", entity_type="item",
+    item = _resolve_answer("guild tabard", "wowhead", confidence="high", name="Guild Tabard", kind="item",
                            ranking={"score": 48})
     guild = {**_resolve_answer("guild tabard", "raiderio", confidence="medium", name="TABARD", kind="guild",
                                ranking={"score": 70}), "resolved": False}
@@ -353,7 +348,7 @@ def test_resolve_answers_with_the_entity_named_exactly_by_a_query_holding_an_int
 
 
 @pytest.mark.parametrize(
-    ("query", "provider", "name", "entity_type"),
+    ("query", "provider", "name", "kind"),
     [
         # An intent word inside the entity's own name does not ask for another kind of source.
         ("guild tabard", "wowhead", "Guild Tabard", "item"),
@@ -364,9 +359,9 @@ def test_resolve_answers_with_the_entity_named_exactly_by_a_query_holding_an_int
     ],
 )
 def test_resolve_accepts_a_match_whose_query_words_only_look_like_an_intent(
-    query: str, provider: str, name: str, entity_type: str
+    query: str, provider: str, name: str, kind: str
 ) -> None:
-    answer = _resolve_answer(query, provider, confidence="high", name=name, entity_type=entity_type,
+    answer = _resolve_answer(query, provider, confidence="high", name=name, kind=kind,
                              ranking={"score": 60})
 
     assert resolve_answer_accepted(answer) is True
@@ -450,17 +445,17 @@ MERGE_CASES = [
         query="thunderfury",
         provider_rows={
             "wowhead": [
-                {"id": 21992, "name": "Thunderfury", "entity_type": "spell", "ranking": {"score": 50}},
+                {"id": 21992, "name": "Thunderfury", "kind": "spell", "ranking": {"score": 50}},
                 {
                     "id": 19019,
                     "name": "Thunderfury, Blessed Blade of the Windseeker",
-                    "entity_type": "item",
+                    "kind": "item",
                     "ranking": {"score": 24},
                 },
                 {
                     "id": 346300,
                     "name": "Possible Thunderfury-Themed Cloak on Season of Discovery PTR",
-                    "entity_type": "news",
+                    "kind": "news",
                     "ranking": {"score": 20},
                 },
             ],
@@ -468,10 +463,10 @@ MERGE_CASES = [
                 {
                     "id": "Thunderfury, Blessed Blade of the Windseeker",
                     "name": "Thunderfury, Blessed Blade of the Windseeker",
-                    "entity_type": "article",
+                    "kind": "article",
                     "ranking": {"score": 108},
                 },
-                {"id": "Diemetradon", "name": "Diemetradon", "entity_type": "article", "ranking": {"score": 58}},
+                {"id": "Diemetradon", "name": "Diemetradon", "kind": "article", "ranking": {"score": 58}},
             ],
             "raiderio": _raiderio_characters("Thunderfury", 20),
         },
@@ -484,11 +479,11 @@ MERGE_CASES = [
         query="rejuvenation",
         provider_rows={
             "wowhead": [
-                {"id": 774, "name": "Rejuvenation", "entity_type": "spell", "ranking": {"score": 50}},
-                {"id": 4611, "name": "Rejuvenation Potion", "entity_type": "item", "ranking": {"score": 24}},
+                {"id": 774, "name": "Rejuvenation", "kind": "spell", "ranking": {"score": 50}},
+                {"id": 4611, "name": "Rejuvenation Potion", "kind": "item", "ranking": {"score": 24}},
             ],
             "warcraft-wiki": [
-                {"id": "Rejuvenation", "name": "Rejuvenation", "entity_type": "article", "ranking": {"score": 106}},
+                {"id": "Rejuvenation", "name": "Rejuvenation", "kind": "article", "ranking": {"score": 106}},
             ],
             "raiderio": _raiderio_characters("Rejuvenation", 6),
         },
@@ -500,14 +495,14 @@ MERGE_CASES = [
         query="the missing diplomat",
         provider_rows={
             "wowhead": [
-                {"id": 1324, "name": "The Missing Diplomat", "entity_type": "quest", "ranking": {"score": 47}},
-                {"id": 1339, "name": "The Missing Diplomat (part 2)", "entity_type": "quest", "ranking": {"score": 20}},
+                {"id": 1324, "name": "The Missing Diplomat", "kind": "quest", "ranking": {"score": 47}},
+                {"id": 1339, "name": "The Missing Diplomat (part 2)", "kind": "quest", "ranking": {"score": 20}},
             ],
             "warcraft-wiki": [
                 {
                     "id": "The Missing Diplomat",
                     "name": "The Missing Diplomat",
-                    "entity_type": "article",
+                    "kind": "article",
                     "ranking": {"score": 96},
                 },
             ],
@@ -519,11 +514,11 @@ MERGE_CASES = [
         name="zone_by_exact_name",
         query="un'goro crater",
         provider_rows={
-            "wowhead": [{"id": 490, "name": "Un'Goro Crater", "entity_type": "zone", "ranking": {"score": 47}}],
+            "wowhead": [{"id": 490, "name": "Un'Goro Crater", "kind": "zone", "ranking": {"score": 47}}],
             "warcraft-wiki": [
-                {"id": "Un'Goro Crater", "name": "Un'Goro Crater", "entity_type": "article", "ranking": {"score": 118}},
-                {"id": "Diemetradon", "name": "Diemetradon", "entity_type": "article", "ranking": {"score": 58}},
-                {"id": "Devilsaur", "name": "Devilsaur", "entity_type": "article", "ranking": {"score": 54}},
+                {"id": "Un'Goro Crater", "name": "Un'Goro Crater", "kind": "article", "ranking": {"score": 118}},
+                {"id": "Diemetradon", "name": "Diemetradon", "kind": "article", "ranking": {"score": 58}},
+                {"id": "Devilsaur", "name": "Devilsaur", "kind": "article", "ranking": {"score": 54}},
             ],
         },
         expected_top_family="entity",
@@ -538,13 +533,13 @@ MERGE_CASES = [
                 {
                     "id": "mistweaver-monk-pve-healing-guide",
                     "name": "Mistweaver Monk Healing Guide",
-                    "entity_type": "guide",
+                    "kind": "guide",
                     "ranking": {"score": 150},
                 },
                 {
                     "id": "mistweaver-monk-pve-healing-rotation",
                     "name": "Mistweaver Monk Rotation",
-                    "entity_type": "guide",
+                    "kind": "guide",
                     "ranking": {"score": 125},
                 },
             ],
@@ -552,12 +547,12 @@ MERGE_CASES = [
                 {
                     "id": "mistweaver-monk-guide",
                     "name": "Mistweaver Monk Guide",
-                    "entity_type": "guide",
+                    "kind": "guide",
                     "ranking": {"score": 132},
                 },
             ],
             "wowhead": [
-                {"id": 116680, "name": "Thunder Focus Tea", "entity_type": "spell", "ranking": {"score": 24}},
+                {"id": 116680, "name": "Thunder Focus Tea", "kind": "spell", "ranking": {"score": 24}},
             ],
             "raiderio": _raiderio_characters("Mistweaver", 4),
         },
@@ -569,11 +564,11 @@ MERGE_CASES = [
         query="wow api GetSpellInfo",
         provider_rows={
             "warcraft-wiki": [
-                {"id": "API GetSpellInfo", "name": "API GetSpellInfo", "entity_type": "article", "ranking": {"score": 116}},
-                {"id": "World of Warcraft API", "name": "World of Warcraft API", "entity_type": "article", "ranking": {"score": 74}},
+                {"id": "API GetSpellInfo", "name": "API GetSpellInfo", "kind": "article", "ranking": {"score": 116}},
+                {"id": "World of Warcraft API", "name": "World of Warcraft API", "kind": "article", "ranking": {"score": 74}},
             ],
             "wowhead": [
-                {"id": 585, "name": "Smite", "entity_type": "spell", "ranking": {"score": 17}},
+                {"id": 585, "name": "Smite", "kind": "spell", "ranking": {"score": 17}},
             ],
         },
         expected_top_family="reference",
@@ -584,13 +579,13 @@ MERGE_CASES = [
         query="war of the ancients lore",
         provider_rows={
             "warcraft-wiki": [
-                {"id": "War of the Ancients", "name": "War of the Ancients", "entity_type": "article", "ranking": {"score": 110}},
+                {"id": "War of the Ancients", "name": "War of the Ancients", "kind": "article", "ranking": {"score": 110}},
             ],
             "wowhead": [
-                {"id": 24501, "name": "War of the Ancients Tabard", "entity_type": "item", "ranking": {"score": 21}},
+                {"id": 24501, "name": "War of the Ancients Tabard", "kind": "item", "ranking": {"score": 21}},
             ],
             "icy-veins": [
-                {"id": "wow-lore-hub", "name": "WoW Lore Hub", "entity_type": "guide", "ranking": {"score": 44}},
+                {"id": "wow-lore-hub", "name": "WoW Lore Hub", "kind": "guide", "ranking": {"score": 44}},
             ],
         },
         expected_top_family="reference",
@@ -604,10 +599,10 @@ MERGE_CASES = [
                 {"id": "guild:us:illidan:liquid", "name": "Liquid", "kind": "guild", "ranking": {"score": 70}},
             ],
             "warcraft-wiki": [
-                {"id": "Complexity Limit", "name": "Complexity Limit", "entity_type": "article", "ranking": {"score": 92}},
+                {"id": "Complexity Limit", "name": "Complexity Limit", "kind": "article", "ranking": {"score": 92}},
             ],
             "wowhead": [
-                {"id": 20852, "name": "Liquid Fire", "entity_type": "item", "ranking": {"score": 18}},
+                {"id": 20852, "name": "Liquid Fire", "kind": "item", "ranking": {"score": 18}},
             ],
         },
         expected_top_family="profile",
@@ -621,7 +616,7 @@ MERGE_CASES = [
                 {"id": "character:us:malganis:aurow", "name": "Aurow", "kind": "character", "ranking": {"score": 70}},
             ],
             "warcraft-wiki": [
-                {"id": "Mal'Ganis", "name": "Mal'Ganis", "entity_type": "article", "ranking": {"score": 88}},
+                {"id": "Mal'Ganis", "name": "Mal'Ganis", "kind": "article", "ranking": {"score": 88}},
             ],
         },
         expected_top_family="profile",
@@ -634,12 +629,12 @@ MERGE_CASES = [
             "raiderio": _raiderio_characters("Aurow", 8),
             # The wiki's full-text search answers almost any name with fuzzy rows.
             "warcraft-wiki": [
-                {"id": f"Aurora {index}", "name": f"Aurora {index}", "entity_type": "article",
+                {"id": f"Aurora {index}", "name": f"Aurora {index}", "kind": "article",
                  "ranking": {"score": 42 - index}}
                 for index in range(5)
             ],
             "wowhead": [
-                {"id": 90000 + index, "name": f"Aurowhatever {index}", "entity_type": "item",
+                {"id": 90000 + index, "name": f"Aurowhatever {index}", "kind": "item",
                  "ranking": {"score": 17 - index}}
                 for index in range(5)
             ],
@@ -657,10 +652,10 @@ MERGE_CASES = [
                 {"id": "lorrgs:comp_ranking:lura", "name": "Lura comp ranking", "kind": "comp_ranking", "ranking": {"score": 96}},
             ],
             "wowhead": [
-                {"id": 234899, "name": "Lura, the Bloodsoaked", "entity_type": "npc", "ranking": {"score": 44}},
+                {"id": 234899, "name": "Lura, the Bloodsoaked", "kind": "npc", "ranking": {"score": 44}},
             ],
             "warcraft-wiki": [
-                {"id": "Lura", "name": "Lura", "entity_type": "article", "ranking": {"score": 98}},
+                {"id": "Lura", "name": "Lura", "kind": "article", "ranking": {"score": 98}},
             ],
         },
         expected_top_family="logs",
@@ -672,13 +667,13 @@ MERGE_CASES = [
         provider_rows={
             # simc's search surface is a deferred stub, so it contributes no rows for its own terms.
             "warcraft-wiki": [
-                {"id": "SimulationCraft", "name": "SimulationCraft", "entity_type": "article", "ranking": {"score": 104}},
+                {"id": "SimulationCraft", "name": "SimulationCraft", "kind": "article", "ranking": {"score": 104}},
             ],
             "icy-veins": [
                 {
                     "id": "mistweaver-monk-pve-healing-guide",
                     "name": "Mistweaver Monk Healing Guide",
-                    "entity_type": "guide",
+                    "kind": "guide",
                     "ranking": {"score": 150},
                 },
             ],
@@ -732,7 +727,7 @@ def test_off_intent_profile_rows_are_a_minority_even_when_they_are_ranked_well()
         decorate_search_result(
             "thunderfury",
             {"provider": "wowhead", "id": 19019, "name": "Thunderfury, Blessed Blade of the Windseeker",
-             "entity_type": "item", "ranking": {"score": 24}},
+             "kind": "item", "ranking": {"score": 24}},
             provider_max_score=24,
         ),
     ]
@@ -755,7 +750,7 @@ def test_an_on_intent_provider_overflow_is_deferred_and_then_fills_the_page() ->
                 "provider": "icy-veins",
                 "id": f"guide-{index}",
                 "name": f"Mistweaver Monk Guide {index}",
-                "entity_type": "guide",
+                "kind": "guide",
                 "ranking": {"score": 150 - index},
             },
             provider_max_score=150,
@@ -778,7 +773,7 @@ def test_merged_page_keeps_merge_order_and_gives_off_intent_rows_one_slot_at_mos
             decorate_search_result(
                 "thunderfury",
                 {"provider": "wowhead", "id": index, "name": f"Thunderfury Replica {index}",
-                 "entity_type": "item", "ranking": {"score": 50 - index}},
+                 "kind": "item", "ranking": {"score": 50 - index}},
                 provider_max_score=50,
             )
             for index in range(10)
@@ -786,7 +781,7 @@ def test_merged_page_keeps_merge_order_and_gives_off_intent_rows_one_slot_at_mos
         decorate_search_result(
             "thunderfury",
             {"provider": "warcraft-wiki", "id": "Diemetradon", "name": "Diemetradon",
-             "entity_type": "article", "ranking": {"score": 20}},
+             "kind": "article", "ranking": {"score": 20}},
             provider_max_score=20,
         ),
         *[
@@ -813,9 +808,9 @@ def test_the_merge_never_reorders_one_providers_rows() -> None:
             "thunderfury",
             {
                 "wowhead": [
-                    {"id": 346300, "name": "Possible Thunderfury-Themed Cloak on the PTR", "entity_type": "news",
+                    {"id": 346300, "name": "Possible Thunderfury-Themed Cloak on the PTR", "kind": "news",
                      "ranking": {"score": 26}},
-                    {"id": 19019, "name": "Thunderfury, Blessed Blade of the Windseeker", "entity_type": "item",
+                    {"id": 19019, "name": "Thunderfury, Blessed Blade of the Windseeker", "kind": "item",
                      "ranking": {"score": 22}},
                 ],
             },
@@ -839,17 +834,17 @@ def test_the_entity_providers_top_row_anchors_a_bare_query_even_under_a_title_pr
             "thunderfury",
             {
                 "wowhead": [
-                    {"id": 19019, "name": "Thunderfury, Blessed Blade of the Windseeker", "entity_type": "item",
+                    {"id": 19019, "name": "Thunderfury, Blessed Blade of the Windseeker", "kind": "item",
                      "ranking": {"score": 56}},
-                    {"id": 7787, "name": "Rise, Thunderfury!", "entity_type": "quest", "ranking": {"score": 46}},
-                    {"id": 21992, "name": "Thunderfury", "entity_type": "spell", "ranking": {"score": 44}},
-                    {"id": 27648, "name": "Thunderfury", "entity_type": "spell", "ranking": {"score": 44}},
+                    {"id": 7787, "name": "Rise, Thunderfury!", "kind": "quest", "ranking": {"score": 46}},
+                    {"id": 21992, "name": "Thunderfury", "kind": "spell", "ranking": {"score": 44}},
+                    {"id": 27648, "name": "Thunderfury", "kind": "spell", "ranking": {"score": 44}},
                 ],
                 "warcraft-wiki": [
                     {"id": "Thunderfury, Blessed Blade of the Windseeker",
-                     "name": "Thunderfury, Blessed Blade of the Windseeker", "entity_type": "article",
+                     "name": "Thunderfury, Blessed Blade of the Windseeker", "kind": "article",
                      "ranking": {"score": 66}},
-                    {"id": "Rise, Thunderfury!", "name": "Rise, Thunderfury!", "entity_type": "article",
+                    {"id": "Rise, Thunderfury!", "name": "Rise, Thunderfury!", "kind": "article",
                      "ranking": {"score": 36}},
                 ],
             },
@@ -867,11 +862,11 @@ def test_an_exact_name_profile_slot_is_kept_only_for_an_exact_first_profile_row(
     """The reserved slot is for the character a bare name names, not for any profile row."""
     fillers = {
         "warcraft-wiki": [
-            {"id": f"Aurora {index}", "name": f"Aurora {index}", "entity_type": "article", "ranking": {"score": 42 - index}}
+            {"id": f"Aurora {index}", "name": f"Aurora {index}", "kind": "article", "ranking": {"score": 42 - index}}
             for index in range(5)
         ],
         "wowhead": [
-            {"id": 90000 + index, "name": f"Aurowhatever {index}", "entity_type": "item", "ranking": {"score": 17 - index}}
+            {"id": 90000 + index, "name": f"Aurowhatever {index}", "kind": "item", "ranking": {"score": 17 - index}}
             for index in range(5)
         ],
     }
@@ -899,9 +894,9 @@ def test_a_stale_guide_flag_from_the_provider_reaches_the_merged_and_brief_rows(
         "fury warrior guide",
         {
             "wowhead": [
-                {"id": 3087, "name": "Fury Warrior Guide", "entity_type": "guide",
+                {"id": 3087, "name": "Fury Warrior Guide", "kind": "guide",
                  "ranking": {"score": 40, "match_reasons": ["name_prefix"]}},
-                {"id": 23867, "name": "Fury Warrior DF Season 4 Guide", "entity_type": "guide",
+                {"id": 23867, "name": "Fury Warrior DF Season 4 Guide", "kind": "guide",
                  "ranking": {"score": 30, "match_reasons": ["name_contains_query", "stale_guide"]}},
             ],
         },
@@ -917,22 +912,3 @@ def test_name_match_strength_separates_a_title_from_a_mention() -> None:
     assert name_match_strength("thunderfury", "Thunderfury, Blessed Blade of the Windseeker") == "title_prefix"
     assert name_match_strength("thunderfury", "Possible Thunderfury-Themed Cloak on the PTR") is None
     assert name_match_strength("", "Thunderfury") is None
-
-
-def test_merged_rows_carry_the_normalized_kind_the_compact_row_reports() -> None:
-    """`--brief` must not invent a field the full row lacks: providers name the type differently."""
-    wowhead_row = decorate_search_result(
-        "thunderfury",
-        {"provider": "wowhead", "id": 19019, "name": "Thunderfury", "entity_type": "item", "ranking": {"score": 40}},
-        provider_max_score=40,
-    )
-
-    assert wowhead_row["kind"] == "item"
-    compact = compact_wrapper_candidate(wowhead_row)
-    assert set(compact) - {"follow_up_command"} <= set(wowhead_row)
-    # A provider that already names its own kind keeps it verbatim.
-    raiderio_row = decorate_search_result(
-        "character us illidan Roguecane",
-        {"provider": "raiderio", "id": "c:1", "name": "Roguecane", "kind": "character", "ranking": {"score": 70}},
-    )
-    assert raiderio_row["kind"] == "character"

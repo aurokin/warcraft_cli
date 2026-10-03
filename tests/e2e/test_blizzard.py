@@ -182,9 +182,10 @@ def test_search_and_resolve_are_structured_coming_soon_stubs(require) -> None:
     require("blizzard-api")
     for command in ("search", "resolve"):
         result = run("blizzard", command, "thunderfury")
-        assert result.payload["kind"] == "coming_soon"
+        assert result.payload["kind"] == ("search_results" if command == "search" else "resolve_match")
         assert result.data["coming_soon"] is True
-        assert result.data["results"] == []
+        assert result.data["results" if command == "search" else "candidates"] == []
+        assert (result.data["count"], result.data["total_matches"], result.data["truncated"]) == (0, None, False)
         assert result.data["suggested_command"].startswith("blizzard ")
         assert f"blizzard {command} is not implemented yet" in result.data["message"]
 

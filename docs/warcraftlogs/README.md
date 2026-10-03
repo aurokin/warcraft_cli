@@ -73,7 +73,11 @@ Discovery and health:
 `search`, `resolve`, `doctor`, `rate-limit`.
 
 `search` and `resolve` are explicit-report-only: they match a Warcraft Logs report URL or report
-code and return a discovery hint for anything else.
+code and return a discovery hint for anything else. Free text is never sent to Warcraft Logs, so its
+`total_matches: 0` counts report references in the query, not reports. The one matched row carries the report `url` and
+`report_reference` (`code`, `fight_id`, `source_url`). A report URL resolves at `high` confidence. A bare
+code is judged by its shape alone, so `resolve` answers it at `medium` confidence with `resolved: false`
+and `next_command: null`; its command is still in `match.follow_up.command`.
 
 `server`, `guild`, `guild-rankings`, `guild-members`, `guild-attendance`, `character` and
 `character-rankings` take a realm in any spelling (`Azjol-Nerub`, `azjolnerub`, `Mal'Ganis`) and try

@@ -9,6 +9,8 @@ from wowhead_cli.main import app
 from wowhead_cli.page_parser import extract_linked_entities_from_href
 from wowhead_cli.wowhead_client import WowheadClient
 
+from tests.discovery_contract import row_violations
+
 runner = CliRunner()
 
 
@@ -115,6 +117,9 @@ def test_search_answers_the_entity_a_url_names_without_searching_upstream(monkey
     row = data["results"][0]
     assert (row["entity_type"], row["id"], row["url"]) == ("item", 19019, "https://www.wowhead.com/wotlk/item=19019")
     assert row["follow_up"]["command"] == "wowhead --expansion wotlk entity item 19019"
+    # Nothing is fetched, so the URL stands in for the name.
+    assert row["name"] == row["url"]
+    assert row_violations(row, provider="wowhead") == []
 
     mount = runner.invoke(app, ["search", "https://www.wowhead.com/mount=2"])
     assert json.loads(mount.stdout)["data"]["results"][0]["follow_up"]["command"] == "wowhead entity mount 2"
@@ -154,6 +159,7 @@ def test_search_and_resolve_answer_a_page_url_with_the_command_that_reads_it(mon
     data = json.loads(searched.stdout)["data"]
     assert data["count"] == 1
     assert data["results"][0]["follow_up"]["command"] == command
+    assert row_violations(data["results"][0], provider="wowhead") == []
 
     resolved = runner.invoke(app, ["resolve", url])
     assert resolved.exit_code == 0, resolved.output

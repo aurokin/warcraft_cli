@@ -72,6 +72,7 @@ Best fits:
 - public OAuth client credentials are the default auth mode
 - manual user-auth groundwork now exists for authorization-code and PKCE exchange, plus saved user-token verification via `warcraftlogs auth whoami`
 - current surface works both standalone and through the root `warcraft` wrapper, but wrapper discovery is still intentionally narrow
+- `resolve` on a report URL is `resolved: true` with a `next_command`; on a bare report code it is `confidence: medium`, `resolved: false` and `next_command: null`, because the code is only judged by its shape. Run `match.follow_up.command` once you know the code is a report
 - commands use typed payloads when available, with `graphql` as a raw official API escape hatch for explicitly scoped queries
 
 ## Inputs

@@ -26,6 +26,9 @@ from wowhead_cli.ranking import (
 
 from tests.wowhead_testkit import runner
 
+# The follow-up of a row resolve can recommend; the confidence policy reads only its command.
+OPENABLE = {"command": "wowhead entity spell 1", "surface": "entity"}
+
 
 def test_expansions_command_exposes_profiles() -> None:
     result = runner.invoke(app, ["expansions"])
@@ -274,7 +277,7 @@ def test_search_results_include_follow_up_guidance(monkeypatch) -> None:
     payload = json.loads(result.stdout)
     assert payload["data"]["search_query"] == "thunderfury"
     assert payload["data"]["results"][0]["follow_up"] == {
-        "recommended_surface": "entity",
+        "surface": "entity",
         "command": "wowhead entity item 19019",
         "reason": "entity_summary",
         "alternative_commands": [
@@ -441,10 +444,16 @@ def test_resolve_confidence_policy_helpers_cover_exact_filtered_and_medium_cases
 
 def test_resolve_confidence_never_calls_a_stale_guide_high() -> None:
     """An exact name with a clear margin is high confidence, unless the guide is marked stale."""
-    fresh = {"ranking": {"score": 40, "match_reasons": ["exact_name"]}}
-    stale = {"ranking": {"score": 40, "match_reasons": ["exact_name", STALE_GUIDE_REASON]}}
+    fresh = {"ranking": {"score": 40, "match_reasons": ["exact_name"]}, "follow_up": OPENABLE}
+    stale = {"ranking": {"score": 40, "match_reasons": ["exact_name", STALE_GUIDE_REASON]}, "follow_up": OPENABLE}
     assert resolve_confidence([fresh], entity_types=()) == "high"
     assert resolve_confidence([stale], entity_types=()) == "medium"
+
+
+def test_resolve_confidence_never_calls_a_row_without_a_command_high() -> None:
+    """A world event matched exactly has no command to recommend, so it stays a medium candidate."""
+    event = {"ranking": {"score": 40, "match_reasons": ["exact_name"]}, "follow_up": {"command": None, "surface": "none"}}
+    assert resolve_confidence([event], entity_types=()) == "medium"
 
 
 
@@ -486,7 +495,7 @@ def test_a_name_made_of_follow_up_words_is_searched_as_a_name(monkeypatch) -> No
     assert resolved["next_command"] == "wowhead entity spell 108415"
 
     found = json.loads(runner.invoke(app, ["search", "Soul Link"]).stdout)["data"]
-    assert found["results"][0]["follow_up"]["recommended_surface"] == "entity"
+    assert found["results"][0]["follow_up"]["surface"] == "entity"
 
 
 def test_resolve_comment_intent_uses_comment_surface_without_hurting_match_quality(monkeypatch) -> None:
@@ -510,7 +519,7 @@ def test_resolve_comment_intent_uses_comment_surface_without_hurting_match_quali
     assert payload["data"]["resolved"] is True
     assert payload["data"]["confidence"] == "high"
     assert payload["data"]["match"]["entity_type"] == "quest"
-    assert payload["data"]["match"]["follow_up"]["recommended_surface"] == "comments"
+    assert payload["data"]["match"]["follow_up"]["surface"] == "comments"
     assert payload["data"]["next_command"] == "wowhead comments quest 86739"
 
 
@@ -536,7 +545,7 @@ def test_resolve_relation_intent_uses_entity_page_surface(monkeypatch) -> None:
     assert payload["data"]["resolved"] is True
     assert payload["data"]["confidence"] == "high"
     assert payload["data"]["match"]["entity_type"] == "item"
-    assert payload["data"]["match"]["follow_up"]["recommended_surface"] == "entity-page"
+    assert payload["data"]["match"]["follow_up"]["surface"] == "entity-page"
     assert payload["data"]["next_command"] == "wowhead entity-page item 19019"
 
 
@@ -564,7 +573,7 @@ def test_resolve_guide_relation_intent_uses_guide_full(monkeypatch) -> None:
     payload = json.loads(result.stdout)
     assert payload["data"]["resolved"] is True
     assert payload["data"]["match"]["entity_type"] == "guide"
-    assert payload["data"]["match"]["follow_up"]["recommended_surface"] == "guide-full"
+    assert payload["data"]["match"]["follow_up"]["surface"] == "guide-full"
     assert payload["data"]["next_command"] == "wowhead guide-full 3143"
 
 
@@ -755,7 +764,7 @@ def test_resolve_answers_with_the_entity_when_a_news_headline_matches_the_text_b
     match_score = data["match"]["ranking"]["score"]
     # It leads the item on text, but by less than an exact name match is worth.
     assert 0 < news_score - match_score < ARTICLE_OVER_ENTITY_MARGIN
-    assert news_candidate["follow_up"]["recommended_surface"] == "news-post"
+    assert news_candidate["follow_up"]["surface"] == "news-post"
     assert data["count"] == data["total_matches"] == 2
 
 
@@ -818,20 +827,20 @@ def test_resolve_is_not_confident_in_a_row_that_holds_only_some_of_the_query_wor
     """Scores and reasons from live Wowhead queries (2026-09/10). "bm hunter guide": the database head
     spell "Summon Hunter Guide" led guide 3159. "midnight season 2 mythic+ dungeons": "Midnight Season 2:
     Resilient Keystone 12" led by 14 points without "mythic" or "dungeons"."""
-    spell = {"ranking": {"score": 45, "match_reasons": ["some_terms_match", "upstream_database_rank"]}}
-    guide = {"ranking": {"score": 33, "match_reasons": ["some_terms_match", "type_hint", "upstream_database_rank"]}}
-    keystone = {"ranking": {"score": 46, "match_reasons": ["some_terms_match", "upstream_database_rank"]}}
-    runner_up = {"ranking": {"score": 32, "match_reasons": ["some_terms_match", "upstream_database_rank"]}}
+    spell = {"ranking": {"score": 45, "match_reasons": ["some_terms_match", "upstream_database_rank"]}, "follow_up": OPENABLE}
+    guide = {"ranking": {"score": 33, "match_reasons": ["some_terms_match", "type_hint", "upstream_database_rank"]}, "follow_up": OPENABLE}
+    keystone = {"ranking": {"score": 46, "match_reasons": ["some_terms_match", "upstream_database_rank"]}, "follow_up": OPENABLE}
+    runner_up = {"ranking": {"score": 32, "match_reasons": ["some_terms_match", "upstream_database_rank"]}, "follow_up": OPENABLE}
 
     assert resolve_confidence([spell, guide], entity_types=()) == "medium"
     assert resolve_confidence([keystone, runner_up], entity_types=()) == "medium"
     # The same lead is confident when the top row holds every query word.
-    whole = {"ranking": {"score": 46, "match_reasons": ["all_terms_match", "upstream_database_rank"]}}
+    whole = {"ranking": {"score": 46, "match_reasons": ["all_terms_match", "upstream_database_rank"]}, "follow_up": OPENABLE}
     assert resolve_confidence([whole, runner_up], entity_types=()) == "high"
     # Or when it is of the type the query names: live "resto druid guide" (2026-10), where "resto"
     # is in no title, led "Restoration Druid Healer Guide" 33 to 26.
-    healer_guide = {"ranking": {"score": 33, "match_reasons": ["some_terms_match", "type_hint", "upstream_database_rank"]}}
-    rotation_guide = {"ranking": {"score": 26, "match_reasons": ["some_terms_match", "type_hint", "upstream_database_rank"]}}
+    healer_guide = {"ranking": {"score": 33, "match_reasons": ["some_terms_match", "type_hint", "upstream_database_rank"]}, "follow_up": OPENABLE}
+    rotation_guide = {"ranking": {"score": 26, "match_reasons": ["some_terms_match", "type_hint", "upstream_database_rank"]}, "follow_up": OPENABLE}
     assert resolve_confidence([healer_guide, rotation_guide], entity_types=()) == "high"
 
 

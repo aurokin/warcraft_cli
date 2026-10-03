@@ -43,6 +43,7 @@ from warcraft_content.search import (
     singular_words,
     tokenize_query,
 )
+from warcraft_core.discovery import RESOLVE_KIND, SEARCH_KIND
 from warcraft_core.envelope import Envelope, success_envelope
 from warcraft_core.provider import ProviderError, ProviderSurface
 
@@ -182,7 +183,7 @@ def _scored_candidate(row: dict[str, Any], normalized_query: str, terms: set[str
         url=row["url"],
         score=score,
         reasons=reasons,
-        provider_command=PROVIDER_NAME,
+        provider=PROVIDER_NAME,
     )
     candidate_row["metadata"].update(content_family=content_family, sitemap_lastmod=row.get("sitemap_lastmod"))
     return candidate_row
@@ -406,11 +407,11 @@ class MethodProvider:
         payload = article_search_payload(
             query=query,
             search_query=outcome.normalized_query,
-            results=outcome.matches[:limit],
-            total_count=len(outcome.matches),
+            matches=outcome.matches,
+            limit=limit,
             scope_hint=outcome.scope_hint,
         )
-        return _envelope(command="search", kind="search_results", payload=payload, query=query, provenance=SITEMAP_PROVENANCE)
+        return _envelope(command="search", kind=SEARCH_KIND, payload=payload, query=query, provenance=SITEMAP_PROVENANCE)
 
     def resolve(self, target: str, **options: Any) -> Envelope:
         limit = int(options.get("limit", 5))
@@ -421,12 +422,11 @@ class MethodProvider:
             search_query=outcome.normalized_query,
             matches=outcome.matches,
             limit=limit,
-            total_count=len(outcome.matches),
             # Judged on every match: ``--limit`` must not hide the near-tied rival that makes it ambiguous.
             resolved=_is_confident_match(outcome.matches),
             scope_hint=outcome.scope_hint,
         )
-        return _envelope(command="resolve", kind="resolve_match", payload=payload, query=target, provenance=SITEMAP_PROVENANCE)
+        return _envelope(command="resolve", kind=RESOLVE_KIND, payload=payload, query=target, provenance=SITEMAP_PROVENANCE)
 
     def doctor(self, **options: Any) -> Envelope:
         try:

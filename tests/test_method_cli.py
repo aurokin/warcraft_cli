@@ -898,8 +898,10 @@ def test_method_resolve_judges_confidence_on_every_match_not_the_limit(monkeypat
     payload = json.loads(runner.invoke(app, ["resolve", "frost", "--limit", "1"]).stdout)["data"]
 
     # A tie: "low", whatever the limit hides.
-    assert (payload["resolved"], payload["confidence"], payload["count"], len(payload["candidates"])) == (False, "low", 2, 1)
+    assert (payload["resolved"], payload["confidence"], payload["count"], payload["total_matches"]) == (False, "low", 1, 2)
     assert payload["truncated"] is True
+    # Unresolved, the top row is still the match.
+    assert payload["match"] == payload["candidates"][0]
 
 
 def test_method_search_fails_when_the_sitemap_lists_no_guides_and_does_not_cache_it(monkeypatch, tmp_path: Path) -> None:

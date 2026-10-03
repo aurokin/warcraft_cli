@@ -15,17 +15,16 @@ from typing import Any
 
 import httpx
 from warcraft_api.cache import redacted_redis_url
+from warcraft_core.discovery import RESOLVE_KIND, SEARCH_KIND, resolve_data, search_data
 from warcraft_core.envelope import ENVELOPE_KEYS, Envelope, error_envelope, success_envelope
 from warcraft_core.provider import ProviderError, ProviderSurface
-from warcraft_core.shapes import as_dict, as_list
+from warcraft_core.shapes import as_list
 
 from raiderio_cli.candidates import (
-    candidate_ranking_score,
     dedupe_search_candidates,
     normalize_structured_query,
     probe_structured_candidates,
-    resolve_candidate_is_confident,
-    resolve_confidence_label,
+    resolve_confidence,
     search_result_candidates,
     sorted_search_candidates,
 )
@@ -122,40 +121,6 @@ def validated_kind(kind: str) -> str:
     return kind
 
 
-def _resolve_payload(query: str, ranked: list[dict[str, Any]], *, limit: int) -> dict[str, Any]:
-    """Judge confidence on every ranked candidate; ``limit`` only trims the ``candidates`` shown.
-
-    Truncating first would hide the rivals: ``--limit 1`` leaves one row, which always looks unique.
-    """
-    fallback = shlex.join(["raiderio", "search", query])
-    if not ranked:
-        return {
-            "provider": "raiderio",
-            "query": query,
-            "search_query": query,
-            "resolved": False,
-            "confidence": "none",
-            "match": None,
-            "next_command": None,
-            "fallback_search_command": fallback,
-            "candidates": [],
-        }
-    best = ranked[0]
-    follow_up = as_dict(best.get("follow_up"))
-    resolved = bool(follow_up.get("command")) and resolve_candidate_is_confident(ranked)
-    return {
-        "provider": "raiderio",
-        "query": query,
-        "search_query": query,
-        "resolved": resolved,
-        "confidence": resolve_confidence_label(candidate_ranking_score(best), resolved=resolved),
-        "match": best,
-        "next_command": follow_up.get("command") if resolved else None,
-        "fallback_search_command": None if resolved else fallback,
-        "candidates": ranked[:limit],
-    }
-
-
 def ranked_candidates(client: RaiderIOClient, query: str, *, kind: str) -> tuple[str, list[dict[str, Any]]]:
     """Every deduplicated Raider.IO character and guild match for a free-text query, best first.
 
@@ -224,26 +189,24 @@ class RaiderIOProvider:
         kind = validated_kind(str(options.get("kind", "all")))
         with transport_errors(), open_client() as client:
             search_query, ranked = ranked_candidates(client, query, kind=kind)
-        payload = {
-            "provider": "raiderio",
-            "query": search_query,
-            "search_query": search_query,
-            "count": len(ranked),
-            "results": ranked[:limit],
-            "truncated": len(ranked) > limit,
-        }
-        return raiderio_envelope(command="search", kind="search_results", payload=payload)
+        payload = search_data(search_query=search_query, ranked=ranked, limit=limit, query=search_query)
+        return raiderio_envelope(command="search", kind=SEARCH_KIND, payload=payload)
 
     def resolve(self, target: str, **options: Any) -> Envelope:
         limit = int(options.get("limit", 5))
         kind = validated_kind(str(options.get("kind", "all")))
         with transport_errors(), open_client() as client:
             search_query, ranked = ranked_candidates(client, target, kind=kind)
-        return raiderio_envelope(
-            command="resolve",
-            kind="resolve_match",
-            payload=_resolve_payload(search_query, ranked, limit=limit),
+        # Confidence is judged on every ranked row: ``--limit 1`` would otherwise hide the rivals.
+        payload = resolve_data(
+            search_query=search_query,
+            ranked=ranked,
+            limit=limit,
+            confidence=resolve_confidence(ranked),
+            fallback_search_command=shlex.join(["raiderio", "search", search_query]),
+            query=search_query,
         )
+        return raiderio_envelope(command="resolve", kind=RESOLVE_KIND, payload=payload)
 
     def doctor(self, **options: Any) -> Envelope:
         try:

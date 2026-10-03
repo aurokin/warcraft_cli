@@ -58,8 +58,9 @@ Resolves one WoW addon and returns its metadata, latest files, and latest change
 ### `curseforge search <query>` and `curseforge resolve <query>`
 
 Not implemented. Both accept `--limit <1-50>` (currently unused) and return a structured
-`kind: coming_soon` envelope with `ok: true`, the query text as `query`, empty `results`, and a `suggested_command`, so probing
-them is a stable contract rather than a Click "no such command" error.
+`kind: search_results` / `kind: resolve_match` envelope with `ok: true`, `coming_soon: true`, the query text as
+`query`, empty `results` (search) or `candidates` (resolve), `total_matches: null`, and a `suggested_command`, so
+probing them is a stable contract rather than a Click "no such command" error.
 
 ## Output And Exit Codes
 

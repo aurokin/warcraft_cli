@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from warcraft_core.discovery import RESOLVE_KIND, SEARCH_KIND
 from warcraft_core.envelope import ENVELOPE_KEYS, Envelope, success_envelope
 from warcraft_core.provider import ProviderError, ProviderSurface
 
@@ -41,14 +42,11 @@ def payload_body(payload: dict[str, Any]) -> dict[str, Any]:
 
 def search(query: str, *, limit: int = 10, **options: Any) -> Envelope:
     """Match an explicit Warcraft Logs report URL or code; free text returns a discovery hint."""
-    del limit  # Explicit report discovery returns at most one result.
     from warcraftlogs_cli.main import _explicit_report_reference, _report_search_payload
 
     site = site_profile(options)
-    payload = _report_search_payload(query, ref=_explicit_report_reference(query), site=site)
-    return success_envelope(
-        provider=PROVIDER_NAME, command="search", kind="search_results", data=payload_body(payload), query=query
-    )
+    data = _report_search_payload(query, ref=_explicit_report_reference(query), site=site, limit=limit)
+    return success_envelope(provider=PROVIDER_NAME, command="search", kind=SEARCH_KIND, data=data, query=query)
 
 
 def resolve(target: str, **options: Any) -> Envelope:
@@ -56,10 +54,8 @@ def resolve(target: str, **options: Any) -> Envelope:
     from warcraftlogs_cli.main import _explicit_report_reference, _report_resolve_payload
 
     site = site_profile(options)
-    payload = _report_resolve_payload(target, ref=_explicit_report_reference(target), site=site)
-    return success_envelope(
-        provider=PROVIDER_NAME, command="resolve", kind="resolution", data=payload_body(payload), query=target
-    )
+    data = _report_resolve_payload(target, ref=_explicit_report_reference(target), site=site)
+    return success_envelope(provider=PROVIDER_NAME, command="resolve", kind=RESOLVE_KIND, data=data, query=target)
 
 
 def doctor(**options: Any) -> Envelope:

@@ -14,6 +14,8 @@ from datetime import date
 from typing import Any
 from urllib.parse import urlparse
 
+from warcraft_core.discovery import ResolveConfidence, discovery_row
+
 from wowhead_cli.entity_types import PARSER_ENTITY_TYPES, RESOLVE_ENTITY_TYPES, SEARCH_TYPE_HINTS
 from wowhead_cli.expansion_profiles import (
     EXPANSION_PREFIXES,
@@ -25,6 +27,8 @@ from wowhead_cli.expansion_profiles import (
     resolve_expansion,
 )
 from wowhead_cli.wowhead_client import entity_url, guide_url, suggestion_entity_type
+
+PROVIDER_NAME = "wowhead"
 
 FOLLOW_UP_COMMENT_TERMS = {"comment", "comments", "discussion", "discussions"}
 
@@ -158,10 +162,8 @@ def search_follow_up_kind(query: str) -> str:
     return "summary"
 
 
-def search_follow_up(candidate: dict[str, Any], *, intent: str, expansion: ExpansionProfile) -> dict[str, Any] | None:
+def search_follow_up(entity_type: str | None, entity_id: Any, *, intent: str, expansion: ExpansionProfile) -> dict[str, Any] | None:
     """The command that opens a search row, steered by the query's intent from ``search_follow_up_kind``."""
-    entity_type = candidate.get("entity_type")
-    entity_id = candidate.get("id")
     if not isinstance(entity_type, str) or not isinstance(entity_id, int):
         return None
 
@@ -170,20 +172,20 @@ def search_follow_up(candidate: dict[str, Any], *, intent: str, expansion: Expan
         guide_command = f"{prefix} guide {entity_id}"
         guide_full_command = f"{prefix} guide-full {entity_id}"
         recommended_command = guide_command
-        recommended_surface = "guide"
+        surface = "guide"
         reason = "guide_summary"
         alternatives = [guide_full_command]
         if intent == "relations":
             recommended_command = guide_full_command
-            recommended_surface = "guide-full"
+            surface = "guide-full"
             reason = "guide_relation_intent"
             alternatives = [guide_command]
         elif intent == "comments":
             reason = "guide_comment_intent"
             alternatives = [guide_full_command]
         return {
-            "recommended_surface": recommended_surface,
             "command": recommended_command,
+            "surface": surface,
             "reason": reason,
             "alternative_commands": alternatives,
         }
@@ -191,8 +193,8 @@ def search_follow_up(candidate: dict[str, Any], *, intent: str, expansion: Expan
     if entity_type == "news":
         # `news-post` takes a URL, and Wowhead resolves the short /news=<id> form to the article.
         return {
-            "recommended_surface": "news-post",
             "command": f"{prefix} news-post {entity_url('news', entity_id, expansion=expansion)}",
+            "surface": "news-post",
             "reason": "news_post_summary",
             "alternative_commands": [],
         }
@@ -204,22 +206,22 @@ def search_follow_up(candidate: dict[str, Any], *, intent: str, expansion: Expan
     entity_page_command = f"{prefix} entity-page {entity_type} {entity_id}"
     comments_command = f"{prefix} comments {entity_type} {entity_id}"
     recommended_command = entity_command
-    recommended_surface = "entity"
+    surface = "entity"
     reason = "entity_summary"
     alternatives = [entity_page_command, comments_command]
     if intent == "relations":
         recommended_command = entity_page_command
-        recommended_surface = "entity-page"
+        surface = "entity-page"
         reason = "entity_relation_intent"
         alternatives = [entity_command, comments_command]
     elif intent == "comments":
         recommended_command = comments_command
-        recommended_surface = "comments"
+        surface = "comments"
         reason = "entity_comment_intent"
         alternatives = [entity_command, entity_page_command]
     return {
-        "recommended_surface": recommended_surface,
         "command": recommended_command,
+        "surface": surface,
         "reason": reason,
         "alternative_commands": alternatives,
     }
@@ -446,6 +448,39 @@ def split_choices(values: list[str] | None, *, allowed: Collection[str], label: 
     return tuple(normalized)
 
 
+# The follow-up of a row no command opens (a world event, a companion, a type this CLI does not map).
+# Its ``url`` still opens it in a browser.
+NO_FOLLOW_UP: dict[str, Any] = {"command": None, "surface": "none"}
+
+
+def search_row(
+    *,
+    kind: str,
+    id: Any,
+    name: Any,
+    url: str | None,
+    score: int,
+    match_reasons: list[str],
+    follow_up: dict[str, Any] | None,
+    **extra: Any,
+) -> dict[str, Any]:
+    """One search/resolve row in the shared shape; ``kind`` is snake-cased (``transmog-set`` -> ``transmog_set``)."""
+    follow_up_extra = dict(follow_up or NO_FOLLOW_UP)
+    return discovery_row(
+        provider=PROVIDER_NAME,
+        kind=re.sub(r"[^a-z0-9]+", "_", kind.lower()).strip("_"),
+        id=id,
+        name=name,
+        url=url,
+        score=score,
+        match_reasons=match_reasons,
+        command=follow_up_extra.pop("command"),
+        surface=follow_up_extra.pop("surface"),
+        follow_up_extra=follow_up_extra,
+        **extra,
+    )
+
+
 def search_result_url(*, entity_type: str | None, entity_id: int | None, expansion: ExpansionProfile) -> str | None:
     if not isinstance(entity_id, int):
         return None
@@ -461,27 +496,30 @@ def url_entity_result(url: str, *, expansion: ExpansionProfile) -> dict[str, Any
 
     Wowhead's suggestions endpoint matches names, so neither the URL nor its type and id find
     anything there. The URL already identifies the entity, so the answer is that entity and the
-    command that opens it; its name stays null because nothing was fetched.
+    command that opens it. Nothing is fetched, so the entity's URL stands in for its name.
     """
     entity = parse_entity_from_wowhead_url(url)
     if entity is None:
         return None
     entity_type, entity_id = entity
-    row: dict[str, Any] = {
-        "id": entity_id,
-        "name": None,
-        "entity_type": entity_type,
-        "url": search_result_url(entity_type=entity_type, entity_id=entity_id, expansion=expansion),
-        "ranking": {"score": EXACT_NAME_SCORE, "match_reasons": ["url_entity"]},
-    }
+    entity_page_url = search_result_url(entity_type=entity_type, entity_id=entity_id, expansion=expansion)
     # Types `resolve` never returns (mount, recipe, ...) still open with `entity`.
-    row["follow_up"] = search_follow_up(row, intent="summary", expansion=expansion) or {
-        "recommended_surface": "entity",
+    follow_up = search_follow_up(entity_type, entity_id, intent="summary", expansion=expansion) or {
         "command": f"{command_prefix_for_expansion(expansion)} entity {entity_type} {entity_id}",
+        "surface": "entity",
         "reason": "entity_summary",
         "alternative_commands": [],
     }
-    return row
+    return search_row(
+        kind=entity_type,
+        id=entity_id,
+        name=entity_page_url or url,
+        url=entity_page_url,
+        score=EXACT_NAME_SCORE,
+        match_reasons=["url_entity"],
+        follow_up=follow_up,
+        entity_type=entity_type,
+    )
 
 
 # The command that reads a Wowhead page from its URL, keyed by the page path's first segment
@@ -512,8 +550,8 @@ def _url_page_command(parts: list[str], url: str) -> tuple[str, str | None] | No
 def url_page_result(url: str, *, expansion: ExpansionProfile) -> dict[str, Any] | None:
     """The search answer for a Wowhead guide, news, blue-tracker, tool or listing URL, or None for any other URL.
 
-    Like `url_entity_result` nothing is fetched: the row is the command that reads the page, and its
-    id and name stay null. `/guide=<id>` URLs are entity URLs and never get here.
+    Like `url_entity_result` nothing is fetched: the row is the command that reads the page, and the
+    page's URL stands in for its id and name. `/guide=<id>` URLs are entity URLs and never get here.
     """
     normalized = normalize_wowhead_url(url)
     if normalized is None or not is_wowhead_host(urlparse(normalized).hostname or ""):
@@ -526,19 +564,22 @@ def url_page_result(url: str, *, expansion: ExpansionProfile) -> dict[str, Any] 
         return None
     surface, argument = page
     command = f"{command_prefix_for_expansion(expansion)} {surface}"
-    return {
-        "id": None,
-        "name": None,
-        "entity_type": {"guide": "guide", "news-post": "news"}.get(surface),
-        "url": normalized,
-        "ranking": {"score": EXACT_NAME_SCORE, "match_reasons": ["url_page"]},
-        "follow_up": {
-            "recommended_surface": surface,
+    entity_type = {"guide": "guide", "news-post": "news"}.get(surface)
+    return search_row(
+        kind=entity_type or surface,
+        id=normalized,
+        name=normalized,
+        url=normalized,
+        score=EXACT_NAME_SCORE,
+        match_reasons=["url_page"],
+        follow_up={
             "command": f"{command} {shlex.quote(argument)}" if argument else command,
+            "surface": surface,
             "reason": "url_page",
             "alternative_commands": [],
         },
-    }
+        entity_type=entity_type,
+    )
 
 
 STALE_GUIDE_REASON = "stale_guide"
@@ -664,22 +705,22 @@ def normalize_search_results(
             ranking_query=ranking_query,
             rank_bonus=bonuses.get(key) if key is not None else None,
         )
-        candidate = {
-            "id": entity_id,
-            "name": row.get("name"),
-            "type_id": row.get("type"),
-            "type_name": row.get("typeName"),
-            "entity_type": entity_type,
-            "url": search_result_url(
+        candidate = search_row(
+            kind=entity_type or str_field(row, "typeName") or "unknown",
+            id=entity_id,
+            name=row.get("name"),
+            url=search_result_url(
                 entity_type=entity_type,
                 entity_id=entity_id if isinstance(entity_id, int) else None,
                 expansion=expansion,
             ),
-            "ranking": {
-                "score": search_score,
-                "match_reasons": match_reasons,
-            },
-            "metadata": {
+            score=search_score,
+            match_reasons=match_reasons,
+            follow_up=search_follow_up(entity_type, entity_id, intent=intent, expansion=expansion),
+            type_id=row.get("type"),
+            type_name=row.get("typeName"),
+            entity_type=entity_type,
+            metadata={
                 # Only `results` rows carry the ordinal; a row that came from `categories` has none.
                 "popularity": popularity if isinstance(popularity, int) else None,
                 "suggestion_lists": row.get("suggestion_lists"),
@@ -691,11 +732,8 @@ def normalize_search_results(
             },
             # The source index is the tiebreak: `results` rows first, in Wowhead's `popularity`
             # order, then the category-only rows in the order Wowhead listed them.
-            "_sort": (-search_score, index),
-        }
-        follow_up = search_follow_up(candidate, intent=intent, expansion=expansion)
-        if follow_up is not None:
-            candidate["follow_up"] = follow_up
+            _sort=(-search_score, index),
+        )
         normalized.append(candidate)
     mark_stale_guides(normalized)
     matched = order_search_rows([row for row in normalized if match_strength(row) > 0])
@@ -740,16 +778,7 @@ def preferred_resolve_candidates(
     return articles, entities
 
 
-def resolve_next_command(candidate: dict[str, Any]) -> str | None:
-    """The command `resolve` recommends, read off the follow-up block `normalize_search_results` attached."""
-    follow_up = candidate.get("follow_up")
-    if not isinstance(follow_up, dict):
-        return None
-    command = follow_up.get("command")
-    return command if isinstance(command, str) and command else None
-
-
-def resolve_confidence(candidates: list[dict[str, Any]], *, entity_types: tuple[str, ...]) -> str:
+def resolve_confidence(candidates: list[dict[str, Any]], *, entity_types: tuple[str, ...]) -> ResolveConfidence:
     if not candidates:
         return "none"
     top_ranking = candidates[0].get("ranking", {})
@@ -766,10 +795,11 @@ def resolve_confidence(candidates: list[dict[str, Any]], *, entity_types: tuple[
         # A row missing some of the query's words ("Resilient Keystone 12" for "midnight season 2
         # mythic+ dungeons") is not a confident answer unless it is of the type the query names, as
         # "Restoration Druid Healing Guide" is for "resto druid guide". A guide the response itself
-        # shows to be far behind its siblings never is. `resolve` reports either as a candidate
-        # instead of recommending a command for it.
+        # shows to be far behind its siblings never is, nor a row with no command to run (a world
+        # event). `resolve` reports any of those as a candidate instead of recommending a command.
         partial = "some_terms_match" in reasons and "type_hint" not in reasons
-        return "medium" if partial or STALE_GUIDE_REASON in reasons else "high"
+        commandless = candidates[0]["follow_up"]["command"] is None
+        return "medium" if partial or commandless or STALE_GUIDE_REASON in reasons else "high"
     if is_medium_confidence_score(top_score, margin=margin):
         return "medium"
     return "low"

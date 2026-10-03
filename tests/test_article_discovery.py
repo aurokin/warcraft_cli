@@ -12,13 +12,15 @@ from warcraft_content.article_discovery import (
     sort_article_candidates,
 )
 
+from tests.discovery_contract import resolve_data_violations, row_violations, search_data_violations
+
 
 def test_article_follow_up_uses_provider_command() -> None:
     follow_up = article_follow_up("method", "mistweaver-monk")
 
     assert follow_up == {
-        "recommended_surface": "guide",
         "command": "method guide mistweaver-monk",
+        "surface": "guide",
         "reason": "guide_summary",
         "alternative_commands": [
             "method guide-full mistweaver-monk",
@@ -31,8 +33,8 @@ def test_article_follow_up_supports_article_surfaces_and_quotes() -> None:
     follow_up = article_follow_up("warcraft-wiki", "World of Warcraft API", surface="article")
 
     assert follow_up == {
-        "recommended_surface": "article",
         "command": "warcraft-wiki article 'World of Warcraft API'",
+        "surface": "article",
         "reason": "article_summary",
         "alternative_commands": [
             "warcraft-wiki article-full 'World of Warcraft API'",
@@ -48,12 +50,14 @@ def test_article_candidate_builds_shared_shape() -> None:
         url="https://www.method.gg/guides/mistweaver-monk",
         score=33,
         reasons=["exact_name", "all_terms_match"],
-        provider_command="method",
+        provider="method",
     )
 
-    assert row["id"] == "mistweaver-monk"
+    assert row_violations(row, provider="method") == []
+    assert (row["kind"], row["id"]) == ("guide", "mistweaver-monk")
     assert row["ranking"]["score"] == 33
     assert row["follow_up"]["command"] == "method guide mistweaver-monk"
+    assert row["metadata"] == {"slug": "mistweaver-monk"}
 
 
 def test_sort_article_candidates_orders_by_score_then_name() -> None:
@@ -64,7 +68,7 @@ def test_sort_article_candidates_orders_by_score_then_name() -> None:
             url="https://example.invalid/b",
             score=10,
             reasons=["name_contains_query"],
-            provider_command="method",
+            provider="method",
         ),
         article_candidate(
             ref="a",
@@ -72,7 +76,7 @@ def test_sort_article_candidates_orders_by_score_then_name() -> None:
             url="https://example.invalid/a",
             score=30,
             reasons=["name_contains_query"],
-            provider_command="method",
+            provider="method",
         ),
     ]
 
@@ -89,23 +93,17 @@ def test_article_search_and_resolve_payloads_keep_contract_shape() -> None:
             url="https://www.method.gg/guides/mistweaver-monk",
             score=33,
             reasons=["exact_name"],
-            provider_command="method",
+            provider="method",
         )
     ]
 
-    search_payload = article_search_payload(
-        query="mistweaver monk guide",
-        search_query="mistweaver monk",
-        results=rows,
-        total_count=1,
-    )
+    search_payload = article_search_payload(query="mistweaver monk guide", search_query="mistweaver monk", matches=rows, limit=5)
     resolve_payload = article_resolve_payload(
         provider_command="method",
         query="mistweaver monk guide",
         search_query="mistweaver monk",
         matches=rows,
         limit=5,
-        total_count=1,
         resolved=True,
     )
 
@@ -113,6 +111,8 @@ def test_article_search_and_resolve_payloads_keep_contract_shape() -> None:
     assert resolve_payload["resolved"] is True
     assert resolve_payload["next_command"] == "method guide mistweaver-monk"
     assert resolve_payload["confidence"] == "high"
+    assert search_data_violations(search_payload, provider="method") == []
+    assert resolve_data_violations(resolve_payload, provider="method") == []
 
 
 def test_merge_article_linked_entities_dedupes_and_preserves_source_urls() -> None:
@@ -196,26 +196,26 @@ def test_merge_article_build_references_dedupes_and_preserves_source_urls() -> N
 
 
 def _guide_row(ref: str, score: int) -> dict:
-    return article_candidate(ref=ref, name=ref, url=f"https://example.test/{ref}", score=score, reasons=[], provider_command="method")
+    return article_candidate(ref=ref, name=ref, url=f"https://example.test/{ref}", score=score, reasons=[], provider="method")
 
 
-def test_article_payloads_flag_a_list_the_limit_cut() -> None:
+def test_article_payloads_count_the_rows_shown_and_total_every_match() -> None:
     rows = [_guide_row("a", 30), _guide_row("b", 20)]
 
-    cut = article_search_payload(query="q", search_query="q", results=rows, total_count=7)
-    whole = article_resolve_payload(
-        provider_command="method", query="q", search_query="q", matches=rows, limit=5, total_count=2, resolved=False
-    )
+    cut = article_search_payload(query="q", search_query="q", matches=rows, limit=1)
+    upstream = article_search_payload(query="q", search_query="q", matches=rows, limit=5, total_matches=7)
+    whole = article_resolve_payload(provider_command="method", query="q", search_query="q", matches=rows, limit=5, resolved=False)
 
-    assert (cut["count"], cut["truncated"]) == (7, True)
-    assert (whole["count"], whole["truncated"]) == (2, False)
+    assert (cut["count"], cut["total_matches"], cut["truncated"]) == (1, 2, True)
+    assert (upstream["count"], upstream["total_matches"], upstream["truncated"]) == (2, 7, True)
+    assert (whole["count"], whole["total_matches"], whole["truncated"]) == (2, 2, False)
 
 
 def test_article_resolve_reports_low_confidence_for_a_tie_the_limit_hides() -> None:
     def confidence(*scores: int, limit: int = 5) -> str:
         rows = [_guide_row(f"guide-{index}", score) for index, score in enumerate(scores)]
         payload = article_resolve_payload(
-            provider_command="method", query="q", search_query="q", matches=rows, limit=limit, total_count=len(rows), resolved=False
+            provider_command="method", query="q", search_query="q", matches=rows, limit=limit, resolved=False
         )
         return str(payload["confidence"])
 
@@ -228,7 +228,7 @@ def test_article_resolve_reports_low_confidence_for_a_tie_the_limit_hides() -> N
 def test_article_resolve_fallback_search_command_is_valid_shell() -> None:
     query = """kil'jaeden "raid" $HOME guide"""
     payload = article_resolve_payload(
-        provider_command="warcraft-wiki", query=query, search_query=query, matches=[], limit=5, total_count=0, resolved=False
+        provider_command="warcraft-wiki", query=query, search_query=query, matches=[], limit=5, resolved=False
     )
 
     assert shlex.split(payload["fallback_search_command"]) == ["warcraft-wiki", "search", query]

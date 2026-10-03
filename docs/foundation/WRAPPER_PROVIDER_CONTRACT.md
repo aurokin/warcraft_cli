@@ -53,7 +53,16 @@ Purpose:
 Minimum behavior:
 - accept a query string
 - return a structured result list
-- return `coming_soon` if not implemented yet
+- return a `coming_soon` (or `not_supported`) stub if not implemented yet: the same shape with an
+  empty list, the flag set in `data`, and `message` / `suggested_command`
+
+Shared shape (`warcraft_core.discovery` builds it, `tests/test_discovery_contract.py` holds every
+provider to it): the envelope `kind` is `search_results`; `data` carries `search_query`, `results`,
+`count` (the rows in `results`), `total_matches` (every match the provider knows of: the upstream's
+own hit count where it reports one, `null` only on a stub) and `truncated` (more matches exist than
+`results` holds). Every row carries `provider`, `kind`, `id`, `name`, `url` (`null` when the row has
+no page), `ranking {score, match_reasons}` and `follow_up {command, surface}`, plus the provider's own
+keys. A row nothing can open has `follow_up.command: null` and `follow_up.surface: "none"`.
 
 ### `resolve`
 
@@ -63,7 +72,13 @@ Purpose:
 Minimum behavior:
 - accept a query string
 - return either a candidate resolution or a structured unresolved response
-- return `coming_soon` if not implemented yet
+- return a `coming_soon` (or `not_supported`) stub if not implemented yet, with `confidence: "none"`
+
+Shared shape: the envelope `kind` is `resolve_match`; `data` carries `search_query`, `resolved`,
+`confidence` (`high`, `medium`, `low` or `none`), `match`, `next_command`, `fallback_search_command`,
+`candidates`, `count`, `total_matches` and `truncated`, the last three meaning what they mean for
+`search`. `resolved` is true exactly when `confidence` is `high`, and only then is `next_command` set
+(to `match.follow_up.command`). `match` is the top candidate whenever there is one, resolved or not.
 
 Important boundary:
 - wrapper `search`, `resolve`, and follow-up guidance are routing aids
@@ -126,7 +141,8 @@ Fanout failure rules:
   the per-provider rows `--brief` drops
 - a provider row's `answered` says whether the provider actually looked the query up. An
   explicit-report-only provider (Warcraft Logs) answers free text with a locally built hint and no
-  rows, so it is `ok` but not `answered`, and `answered_provider_count` does not count it
+  rows, so it is `ok` but not `answered`, and `answered_provider_count` does not count it; a report
+  reference it matched (search rows, or a resolve `match` even when unresolved) is an answer
 - when no provider answered and at least one failed, the wrapper emits an error envelope whose
   `error.code` and exit code are the failed providers' shared ones, so a total outage exits 5
   instead of returning an ok:true empty page. When they disagree the code is `upstream_error`
@@ -293,7 +309,11 @@ Search result ordering rules:
   evidence here, because a floor set above a provider's real ceiling would silently demote that
   provider in every merged list
 - the wrapper should not invent a fake universal content model beyond that thin ranking/orchestration layer
-- `count` is the merged candidate total and `truncated` reports whether `--limit` cut the list
+- `count` is the rows on the merged page, `truncated` reports whether `--limit` cut the merged
+  candidates (`merge_policy.candidate_row_count`), and `merge_policy.provider_total_matches` keeps
+  each provider's own `total_matches` (also under `--brief`); a provider in `failed_providers` is
+  `null` there, like a stub
+- merged rows are the providers' own rows, `provider` and `kind` included, plus `wrapper_ranking`
 
 ### The merged page: intent, order, diversity, quality
 
@@ -371,12 +391,14 @@ Providers whose wrapper `resolve` surface is stubbed or otherwise not ready shou
 Resolve selection rules:
 - `warcraft resolve` and `warcraft search` agree: each provider's match is ranked as search ranks that
   provider's top row (normalized against the provider's own candidates, anchor and off-intent tiers,
-  intent boosts), and the top-ranked match is the only candidate for the answer
+  intent boosts), and the top-ranked match is the only candidate for the answer, except that a match
+  its own provider rated `low` is skipped: a tie a provider could not break never blocks another
+  provider's answer, while a `medium` match (something found but not confirmed) still does
 - provider-reported `resolved` and confidence never lift a match over a better-ranked one; they only
   break an exact tie on the wrapper score, ahead of the provider name; the raw provider score, which
   is not comparable across providers, never breaks a tie
-- the top-ranked match is the answer only when its own provider resolved it at `high` confidence
-  (a provider `resolved: true` at `medium` is `unresolved_reason: "provider_confidence_below_high"`) and the query's intents
+- the top-ranked match is the answer only when its own provider resolved it (every provider resolves
+  only at `high` confidence; otherwise `unresolved_reason: "provider_did_not_resolve"`) and the query's intents
   do not rank that provider's family down (`wrapper_ranking.intent_family_fit` is not negative):
   a guide query is never answered by Lorrgs spec metadata, a guild query never by a wiki article.
   A match whose title is exactly the query is exempt, because the intent word is part of its name
@@ -384,7 +406,7 @@ Resolve selection rules:
 - the wrapper never passes its own `--limit` to a provider's resolve: providers judge confidence
   against their rivals, and a small limit would hide them
 - preserve the chosen provider's `match`, `next_command`, and confidence instead of flattening them
-- when the top-ranked match is not the answer, surface it as `best_unresolved_candidate` (flagged
+- when there is no answer, surface the top-ranked match, `low` ones included, as `best_unresolved_candidate` (flagged
   `resolved: false`, with `unresolved_reason`) together with the own `fallback_search_command`s of
   the providers that returned a candidate, in ranking order. A provider that found nothing hands
   over no search, so when no provider found anything `fallback_search_command` is `null`

@@ -58,24 +58,29 @@ Every command's flags are listed in [docs/reference/warcraft.md](../reference/wa
   Each provider's scores are rescaled against that provider's own best row before the merge, so a
   provider with a larger local score scale cannot take every slot; the divisor has a floor, so a
   provider whose best row is weak does not get a full score for topping its own empty field.
-  `count` is the merged candidate total and `truncated` says whether `--limit` cut it. The merged
+  `count` is the rows on the page and `truncated` says whether `--limit` cut the merged candidates;
+  `merge_policy.provider_total_matches` keeps each provider's own `total_matches` (`null` for a stub or
+  a provider in `failed_providers`). The merged
   page interleaves the providers' own lists without ever reordering two rows from one provider,
   leads with Wowhead's top row when a bare query names it, applies a per-provider cap, ranks rows
   from a family the query did not ask for (a player profile for a bare item name) below the rest,
   and keeps one slot for a character or guild named exactly the query when no entity anchors the
   page; `merge_policy` reports the caps, the reserved slot and the rows they deferred or withheld,
-  and each row carries the normalized `kind` the ranking used. A guide the provider flagged as
+  and each row is the provider's own row (its `provider`, `kind`, `url`, `ranking` and `follow_up`)
+  plus `wrapper_ranking`. A guide the provider flagged as
   superseded carries `wrapper_ranking.stale_guide: true`. See
   [WRAPPER_PROVIDER_CONTRACT.md](../foundation/WRAPPER_PROVIDER_CONTRACT.md) for the model.
 - `warcraft resolve` — the single best match plus its follow-up command. Each provider's match is
-  ranked exactly as `warcraft search` ranks that provider's top row, and the top-ranked one is the
-  answer only when its own provider resolved it at `high` confidence and the query's intent does not rank that
+  ranked exactly as `warcraft search` ranks that provider's top row, matches their own provider rated
+  `low` are skipped, and the top-ranked remaining one is the answer only when its own provider
+  resolved it (at `high` confidence) and the query's intent does not rank that
   provider's family down (a guide query is never answered by Lorrgs spec metadata, a guild query
   never by a wiki article); a match whose title is exactly the query (the item `Guild Tabard`) is
-  exempt. Otherwise `resolved` is `false`, that candidate is `data.best_unresolved_candidate`, and
+  exempt. Otherwise `resolved` is `false`, the top-ranked candidate is `data.best_unresolved_candidate`, and
   the candidate itself carries `unresolved_reason` (`data.best_unresolved_candidate.unresolved_reason`:
-  `provider_did_not_resolve`, `provider_confidence_below_high` or
-  `provider_family_ranked_down_by_query_intent`). `data` also lists the
+  `provider_did_not_resolve` or `provider_family_ranked_down_by_query_intent`). The reason describes that
+  candidate, which can be a skipped `low` match rather than the one that blocked the answer;
+  `--ranking-debug` lists every match with its `resolved` flag. `data` also lists the
   `fallback_search_command`s of the providers that returned a candidate, in ranking order (none when
   no provider found anything).
   `--limit` only sizes `--ranking-debug`: providers are never asked for fewer candidates, because

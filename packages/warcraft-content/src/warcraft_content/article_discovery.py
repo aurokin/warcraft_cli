@@ -4,6 +4,8 @@ import shlex
 from dataclasses import dataclass
 from typing import Any
 
+from warcraft_core.discovery import ResolveConfidence, discovery_row, resolve_data, search_data
+
 
 def article_follow_up(
     provider_command: str,
@@ -13,8 +15,8 @@ def article_follow_up(
 ) -> dict[str, Any]:
     quoted_ref = shlex.quote(ref)
     return {
-        "recommended_surface": surface,
         "command": f"{provider_command} {surface} {quoted_ref}",
+        "surface": surface,
         "reason": f"{surface}_summary",
         "alternative_commands": [
             f"{provider_command} {surface}-full {quoted_ref}",
@@ -25,11 +27,10 @@ def article_follow_up(
 
 @dataclass(frozen=True, slots=True)
 class ArticleKind:
-    """How a provider labels its articles: the follow-up surface, display/entity type, and the metadata key that carries ``ref``."""
+    """How a provider labels its articles: the follow-up surface, the row kind, and the metadata key that carries ``ref``."""
 
     surface: str = "guide"
-    type_name: str = "Guide"
-    entity_type: str = "guide"
+    kind: str = "guide"
     metadata_key: str = "slug"
 
 
@@ -43,28 +44,25 @@ def article_candidate(
     url: str,
     score: int,
     reasons: list[str],
-    provider_command: str,
+    provider: str,
     kind: ArticleKind = GUIDE_KIND,
     metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    payload_metadata = {
-        kind.metadata_key: ref,
-    }
-    if metadata:
-        payload_metadata.update(metadata)
-    return {
-        "id": ref,
-        "name": name,
-        "type_name": kind.type_name,
-        "entity_type": kind.entity_type,
-        "url": url,
-        "ranking": {
-            "score": score,
-            "match_reasons": reasons,
-        },
-        "metadata": payload_metadata,
-        "follow_up": article_follow_up(provider_command, ref, surface=kind.surface),
-    }
+    """One article row; ``provider`` is the provider name, which is also the binary its follow-up commands run."""
+    follow_up = article_follow_up(provider, ref, surface=kind.surface)
+    return discovery_row(
+        provider=provider,
+        kind=kind.kind,
+        id=ref,
+        name=name,
+        url=url,
+        score=score,
+        match_reasons=reasons,
+        command=follow_up.pop("command"),
+        surface=follow_up.pop("surface"),
+        follow_up_extra=follow_up,
+        metadata={kind.metadata_key: ref, **(metadata or {})},
+    )
 
 
 def sort_article_candidates(candidates: list[dict[str, Any]]) -> None:
@@ -79,27 +77,26 @@ def sort_article_candidates(candidates: list[dict[str, Any]]) -> None:
     candidates.sort(key=lambda row: -int(row["ranking"]["score"]))
 
 
+def _payload_extra(query: str, scope_hint: dict[str, Any] | None) -> dict[str, Any]:
+    return {"query": query} if scope_hint is None else {"query": query, "scope_hint": scope_hint}
+
+
 def article_search_payload(
     *,
     query: str,
     search_query: str,
-    results: list[dict[str, Any]],
-    total_count: int,
+    matches: list[dict[str, Any]],
+    limit: int,
+    total_matches: int | None = None,
     scope_hint: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    payload: dict[str, Any] = {
-        "query": query,
-        "search_query": search_query,
-        "count": total_count,
-        "truncated": total_count > len(results),
-        "results": results,
-    }
-    if scope_hint is not None:
-        payload["scope_hint"] = scope_hint
-    return payload
+    """The ``search`` data for every ranked match; ``total_matches`` defaults to their number."""
+    return search_data(
+        search_query=search_query, ranked=matches, limit=limit, total_matches=total_matches, **_payload_extra(query, scope_hint)
+    )
 
 
-def _resolve_confidence(matches: list[dict[str, Any]], *, resolved: bool) -> str:
+def _resolve_confidence(matches: list[dict[str, Any]], *, resolved: bool) -> ResolveConfidence:
     """``high`` for a resolved match; ``low`` when the best matches tie, since nothing tells them apart."""
     if resolved:
         return "high"
@@ -117,28 +114,20 @@ def article_resolve_payload(
     search_query: str,
     matches: list[dict[str, Any]],
     limit: int,
-    total_count: int,
     resolved: bool,
+    total_matches: int | None = None,
     scope_hint: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """The ``resolve`` data for every ranked match; ``limit`` trims only the candidates shown, never the confidence."""
-    results = matches[:limit]
-    top = results[0] if results else None
-    payload: dict[str, Any] = {
-        "query": query,
-        "search_query": search_query,
-        "resolved": resolved,
-        "confidence": _resolve_confidence(matches, resolved=resolved),
-        "match": top if top else None,
-        "next_command": top["follow_up"]["command"] if resolved and top else None,
-        "fallback_search_command": None if resolved else f"{provider_command} search {shlex.quote(query)}",
-        "count": total_count,
-        "truncated": total_count > len(results),
-        "candidates": results,
-    }
-    if scope_hint is not None:
-        payload["scope_hint"] = scope_hint
-    return payload
+    return resolve_data(
+        search_query=search_query,
+        ranked=matches,
+        limit=limit,
+        confidence=_resolve_confidence(matches, resolved=resolved),
+        fallback_search_command=f"{provider_command} search {shlex.quote(query)}",
+        total_matches=total_matches,
+        **_payload_extra(query, scope_hint),
+    )
 
 
 def merge_article_linked_entities(pages: list[dict[str, Any]]) -> list[dict[str, Any]]:

@@ -678,9 +678,9 @@ def _resolved_guide_match(provider: str, payload: dict[str, Any] | None) -> tupl
     match = payload.get("match")
     if not isinstance(match, dict):
         return None, "missing_resolved_match"
-    entity_type = match.get("entity_type")
-    if entity_type != "guide":
-        return None, f"resolved_non_guide:{entity_type}"
+    kind = match.get("kind")
+    if kind != "guide":
+        return None, f"resolved_non_guide:{kind}"
     ref = _guide_ref(match)
     if ref is None:
         return None, "resolved_guide_missing_ref"
@@ -711,8 +711,8 @@ def _top_guide_result(payload: dict[str, Any] | None) -> tuple[list[dict[str, An
     top = results[0]
     if not isinstance(top, dict):
         return None, "invalid_search_top_candidate"
-    if top.get("entity_type") != "guide":
-        return None, f"search_top_non_guide:{top.get('entity_type')}"
+    if top.get("kind") != "guide":
+        return None, f"search_top_non_guide:{top.get('kind')}"
     return [row for row in results if isinstance(row, dict)], None
 
 

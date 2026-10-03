@@ -18,6 +18,7 @@ from typing import Any
 
 import pytest
 
+from tests.discovery_contract import resolve_data_violations, search_data_violations
 from tests.e2e import pins
 from tests.e2e.harness import (
     EXIT_NETWORK,
@@ -190,6 +191,7 @@ def test_search_resolve_and_entity_agree_on_thunderfury(require, thunderfury_sea
     assert_envelope_data_holds(thunderfury_search, "results", "count", "search_url")
     rows = thunderfury_search.data["results"]
     assert thunderfury_search.data["count"] == len(rows) > 0, thunderfury_search.describe()
+    assert search_data_violations(thunderfury_search.data, provider="wowhead") == [], thunderfury_search.describe()
     assert all(isinstance(row["id"], int) and row["name"] for row in rows)
     # Several Wowhead items are named after Thunderfury (a replica, a quest copy); the search has to
     # carry the real one, under its real name.
@@ -206,6 +208,7 @@ def test_search_resolve_and_entity_agree_on_thunderfury(require, thunderfury_sea
     assert (match["id"], match["name"]) == (pins.ITEM_ID, pins.ITEM_NAME), resolved.describe()
     assert resolved.data["confidence"] == "high", resolved.describe()
     assert resolved.data["filters"]["entity_types"] == ["item"], resolved.describe()
+    assert resolve_data_violations(resolved.data, provider="wowhead") == [], resolved.describe()
 
     entity = run(BINARY, "entity", "item", str(pins.ITEM_ID))
     assert_envelope_data_holds(entity, "entity", "tooltip", "normalized")
@@ -1271,7 +1274,7 @@ def test_a_classic_search_follow_up_keeps_the_agent_on_the_classic_dataset(requi
     require("wowhead")
     found = run(BINARY, "--expansion", "classic", "search", pins.ITEM_SEARCH_QUERY, "--limit", "10")
     assert found.data["expansion"] == "classic", found.describe()
-    entities = [row for row in found.data["results"] if (row.get("follow_up") or {}).get("recommended_surface") == "entity"]
+    entities = [row for row in found.data["results"] if row["follow_up"]["surface"] == "entity"]
     assert entities, f"the classic search offered no entity to follow up on\n{found.describe()}"
     row = entities[0]
     assert row["url"].startswith("https://www.wowhead.com/classic/"), found.describe()

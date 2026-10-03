@@ -110,8 +110,10 @@ every fetched row, and `--limit` only trims `candidates`, so `--limit 1` never h
 fetch is MediaWiki's top `max(25, 5 x --limit)` results, so a `--limit` above 5 reads more rows and can
 find a rival further down.
 
-`search` and `resolve` report `count` as MediaWiki's total hit count and `truncated: true` when the
-rows returned are fewer than that. An unresolved `resolve` reports `confidence: "low"` when its top
+`search` and `resolve` report `count` as the rows returned, `total_matches` as MediaWiki's total hit
+count (never fewer than the rows returned), and `truncated: true` when more pages matched than came
+back. Every row carries `provider`, `kind: "article"`, `id` (the page title), `name`, `url`, `ranking`
+and `follow_up` (`command`, `surface`). An unresolved `resolve` reports `confidence: "low"` when its top
 candidates tie on score and `"medium"` otherwise.
 
 The `api`/`event` search fallback adds an absolute floor on top of that: the candidate's own title has to spell the
@@ -122,7 +124,8 @@ names `UIHANDLER OnKeyDown`). Letters that merely occur inside a longer name are
 name `API UnitHealthMax`, and `is` does not name `API UnitIsPlayer`. `all_terms_match` also fires on MediaWiki's
 snippet, so without the floor a page that merely mentions the query in its body — `UIHANDLER OnEvent` for
 `PLAYER_LOGIN` — could be returned as the answer. Rows that fail the floor are reported under
-`error.details.candidates` instead, and the command exits 4.
+`error.details.candidates` instead, and the command exits 4. A page found this way carries `data.resolution`
+(`resolved`, `match`, `candidates`, `count` = the candidates listed, `total_matches`, `truncated`).
 
 ## Caching
 

@@ -12,6 +12,7 @@ from typing import Any
 from urllib.parse import quote
 
 import httpx
+from warcraft_core.discovery import ResolveConfidence, discovery_row
 from warcraft_core.shapes import as_dict
 from warcraft_core.wow_normalization import normalize_name, primary_realm_slug, profile_region, realm_slug_variants
 
@@ -190,19 +191,9 @@ def match_reasons(
     )
 
 
-def _follow_up_for_match(kind: str, region: str | None, realm: str | None, name: str) -> dict[str, Any]:
+def _follow_up_command(kind: str, region: str | None, realm: str | None, name: str) -> str | None:
     """The ``raiderio character|guild`` command for a match, shell-quoted: guild names have spaces."""
-    base = {
-        "provider": "raiderio",
-        "kind": kind,
-    }
-    if kind in {"character", "guild"} and region and realm:
-        return {**base, "surface": kind, "command": shlex.join(["raiderio", kind, region, realm, name])}
-    return {
-        **base,
-        "surface": None,
-        "command": None,
-    }
+    return shlex.join(["raiderio", kind, region, realm, name]) if region and realm else None
 
 
 def _structured_match_reasons(
@@ -247,27 +238,26 @@ def candidate_from_character_profile(
         region=region,
         realm=realm,
     )
-    return {
-        "provider": "raiderio",
-        "kind": "character",
-        "id": payload.get("id") or payload.get("profile_url") or f"character:{region}:{realm}:{name}",
-        "name": name,
-        "region": region,
-        "realm": primary_realm_slug(realm) if realm else None,
-        "realm_name": realm,
-        "faction": payload.get("faction"),
-        "class_name": payload.get("class"),
-        "active_spec_name": payload.get("active_spec_name"),
-        "class_spec_identity": raiderio_class_spec_identity(
+    return discovery_row(
+        provider="raiderio",
+        kind="character",
+        id=payload.get("id") or payload.get("profile_url") or f"character:{region}:{realm}:{name}",
+        name=name,
+        url=payload.get("profile_url"),
+        score=score,
+        match_reasons=reasons,
+        command=_follow_up_command("character", query_region, query_realm, query_name),
+        surface="character",
+        region=region,
+        realm=primary_realm_slug(realm) if realm else None,
+        realm_name=realm,
+        faction=payload.get("faction"),
+        class_name=payload.get("class"),
+        active_spec_name=payload.get("active_spec_name"),
+        class_spec_identity=raiderio_class_spec_identity(
             payload.get("class"), payload.get("active_spec_name"), source="resolve_character_profile"
         ),
-        "profile_url": payload.get("profile_url"),
-        "ranking": {
-            "score": score,
-            "match_reasons": reasons,
-        },
-        "follow_up": _follow_up_for_match("character", query_region, query_realm, query_name),
-    }
+    )
 
 
 def candidate_from_guild_profile(
@@ -290,22 +280,21 @@ def candidate_from_guild_profile(
         region=region,
         realm=realm,
     )
-    return {
-        "provider": "raiderio",
-        "kind": "guild",
-        "id": payload.get("id") or payload.get("profile_url"),
-        "name": name,
-        "region": region,
-        "realm": primary_realm_slug(realm) if realm else None,
-        "realm_name": realm,
-        "faction": payload.get("faction"),
-        "profile_url": payload.get("profile_url"),
-        "ranking": {
-            "score": score,
-            "match_reasons": reasons,
-        },
-        "follow_up": _follow_up_for_match("guild", query_region, query_realm, query_name),
-    }
+    return discovery_row(
+        provider="raiderio",
+        kind="guild",
+        id=payload.get("id") or payload.get("profile_url") or f"guild:{region}:{realm}:{name}",
+        name=name,
+        url=payload.get("profile_url"),
+        score=score,
+        match_reasons=reasons,
+        command=_follow_up_command("guild", query_region, query_realm, query_name),
+        surface="guild",
+        region=region,
+        realm=primary_realm_slug(realm) if realm else None,
+        realm_name=realm,
+        faction=payload.get("faction"),
+    )
 
 
 def _probe_one_split(
@@ -380,30 +369,31 @@ def search_result_candidate(row: dict[str, Any], *, query: str, type_hint: str |
         realm=realm,
     )
     path = data.get("path")
-    profile_url = f"https://raider.io{path}" if isinstance(path, str) and path.startswith("/") else None
+    url = f"https://raider.io{path}" if isinstance(path, str) and path.startswith("/") else None
     # Site search sends ``path`` for guild rows only; a character's page lives at a fixed layout.
-    if profile_url is None and kind == "character" and region and realm and name:
-        profile_url = f"https://raider.io/characters/{region}/{realm}/{quote(name)}"
-    candidate: dict[str, Any] = {
-        "provider": "raiderio",
-        "kind": kind,
-        "id": data.get("id"),
-        "name": name,
-        "region": region,
-        "region_name": region_row.get("name"),
-        "realm": realm,
-        "realm_name": realm_row.get("name"),
-        "faction": data.get("faction"),
-        "class_name": class_row.get("name"),
-        "class_slug": class_row.get("slug"),
-        "profile_url": profile_url,
-        "path": path,
-        "ranking": {
-            "score": score,
-            "match_reasons": reasons,
-        },
-        "follow_up": _follow_up_for_match(kind, region, realm, name),
-    }
+    if url is None and kind == "character" and region and realm and name:
+        url = f"https://raider.io/characters/{region}/{realm}/{quote(name)}"
+    command = _follow_up_command(kind, region, realm, name)
+    candidate = discovery_row(
+        provider="raiderio",
+        kind=kind,
+        id=data.get("id") or f"{kind}:{region}:{realm}:{name}",
+        name=name,
+        url=url,
+        score=score,
+        match_reasons=reasons,
+        command=command,
+        # "none", as on every provider, so filtering rows on their surface never picks one nothing can open.
+        surface=kind if command else "none",
+        region=region,
+        region_name=region_row.get("name"),
+        realm=realm,
+        realm_name=realm_row.get("name"),
+        faction=data.get("faction"),
+        class_name=class_row.get("name"),
+        class_slug=class_row.get("slug"),
+        path=path,
+    )
     # Guild candidates have no actor class/spec, so identity is character-only (class-only here:
     # search rows expose class but not spec).
     if kind == "character":
@@ -457,15 +447,12 @@ def sorted_search_candidates(results: list[dict[str, Any]]) -> list[dict[str, An
     )
 
 
-def resolve_candidate_is_confident(top: list[dict[str, Any]]) -> bool:
-    best_score = candidate_ranking_score(top[0])
-    second_score = candidate_ranking_score(top[1]) if len(top) > 1 else 0
-    return best_score >= 45 and (len(top) == 1 or best_score - second_score >= 15)
-
-
-def resolve_confidence_label(best_score: int, *, resolved: bool) -> str:
-    if resolved:
+def resolve_confidence(ranked: list[dict[str, Any]]) -> ResolveConfidence:
+    """High only for a strong top row with a command and a clear lead over the runner-up."""
+    if not ranked:
+        return "none"
+    best_score = candidate_ranking_score(ranked[0])
+    second_score = candidate_ranking_score(ranked[1]) if len(ranked) > 1 else 0
+    if ranked[0]["follow_up"]["command"] and best_score >= 45 and (len(ranked) == 1 or best_score - second_score >= 15):
         return "high"
-    if best_score >= 30:
-        return "medium"
-    return "low"
+    return "medium" if best_score >= 30 else "low"
