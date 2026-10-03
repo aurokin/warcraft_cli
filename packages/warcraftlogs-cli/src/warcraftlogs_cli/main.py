@@ -57,6 +57,7 @@ from warcraft_core.output import DEFAULT_COMPACT_MAX_CHARS
 from warcraft_core.paths import provider_state_path
 from warcraft_core.talent_transport import validate_talent_tree_transport
 from warcraft_core.wow_normalization import profile_region
+from warcraft_core.wow_specs import WOW_CLASS_NAMES, WOW_SPECS, warcraftlogs_class_slug
 
 from warcraftlogs_cli.boss_kills import (
     CrossReportScope,
@@ -562,17 +563,8 @@ def _normalize_hard_mode_level_rank_filter(value: str | None) -> str | None:
 # characterRankings takes Warcraft Logs' own CamelCase slugs ("DeathKnight", "BeastMastery") and
 # answers "Invalid class and spec specified." for the spaced display names, and a character's
 # zoneRankings silently ignores any other spec spelling (both checked live 2026-09-30).
-_WARCRAFTLOGS_CLASS_SLUGS = (
-    "DeathKnight", "DemonHunter", "Druid", "Evoker", "Hunter", "Mage", "Monk",
-    "Paladin", "Priest", "Rogue", "Shaman", "Warlock", "Warrior",
-)
-_WARCRAFTLOGS_SPEC_SLUGS = (
-    "Affliction", "Arcane", "Arms", "Assassination", "Augmentation", "Balance", "BeastMastery", "Blood",
-    "Brewmaster", "Destruction", "Devastation", "Devourer", "Demonology", "Discipline", "Elemental",
-    "Enhancement", "Feral", "Fire", "Frost", "Fury", "Guardian", "Havoc", "Holy", "Marksmanship",
-    "Mistweaver", "Outlaw", "Preservation", "Protection", "Restoration", "Retribution", "Shadow",
-    "Subtlety", "Survival", "Unholy", "Vengeance", "Windwalker",
-)
+_WARCRAFTLOGS_CLASS_SLUGS = tuple(warcraftlogs_class_slug(class_key) for class_key in WOW_CLASS_NAMES)
+_WARCRAFTLOGS_SPEC_SLUGS = tuple(sorted({spec.warcraftlogs_spec_slug for spec in WOW_SPECS}))
 
 
 def _warcraftlogs_slug(

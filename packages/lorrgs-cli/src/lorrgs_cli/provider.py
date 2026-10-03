@@ -16,6 +16,7 @@ from warcraft_api.cache import redacted_redis_url
 from warcraft_core.discovery import RESOLVE_KIND, SEARCH_KIND
 from warcraft_core.envelope import Envelope, success_envelope
 from warcraft_core.provider import ProviderError, ProviderSurface
+from warcraft_core.wow_specs import close_specs, lookup_spec
 
 from lorrgs_cli.client import (
     API_HOST,
@@ -176,6 +177,23 @@ def validated_comp_filters(values: list[str] | None, *, flag: str) -> list[str] 
     return values
 
 
+def lorrgs_spec_slug(text: str) -> str:
+    """The Lorrgs slug for any provider's spelling of a spec (balance-druid -> druid-balance).
+
+    Text that names no one spec (other-trinkets, a typo, a bare shared spec like frost) is kept as
+    typed, so Lorrgs still answers it: a page for its own pseudo-specs, a 404 otherwise.
+    """
+    spec = lookup_spec(text)
+    return spec.lorrgs_slug if spec else text
+
+
+def lorrgs_comp_spec_filters(values: list[str] | None) -> list[str] | None:
+    """``--spec`` composition filters with the spec spelled as Lorrgs does (BeastMastery.gte.1 -> hunter-beastmastery.gte.1)."""
+    if not values:
+        return values
+    return [lorrgs_spec_slug(name) + dot + rest for name, dot, rest in (value.partition(".") for value in values)]
+
+
 def note_empty_ranking(result: dict[str, Any], subject: str) -> dict[str, Any]:
     """Say so when Lorrgs answers a ranking with no reports, so ``[]`` is not read as an answer.
 
@@ -205,6 +223,28 @@ def call_api(command: str, kind: str, query: dict[str, Any], call: Callable[[Lor
         query=query,
         provenance=_provenance(result),
     )
+
+
+def call_spec_api(
+    command: str,
+    kind: str,
+    spec_text: str,
+    query: dict[str, Any],
+    call: Callable[[LorrgsClient, str], dict[str, Any]],
+) -> Envelope:
+    """Run a spec route with ``spec_text`` spelled as Lorrgs does; ``query.spec_slug`` echoes the slug sent.
+
+    When the text names no spec and Lorrgs answers not_found, ``details.suggestions`` lists the
+    closest Lorrgs spec slugs, if any are close.
+    """
+    slug = lorrgs_spec_slug(spec_text)
+    try:
+        return call_api(command, kind, {**query, "spec_slug": slug}, lambda client: call(client, slug))
+    except ProviderError as exc:
+        suggestions = [spec.lorrgs_slug for spec in close_specs(spec_text)] if lookup_spec(spec_text) is None else []
+        if exc.code == "not_found" and suggestions:
+            exc.details = {**(exc.details or {}), "suggestions": suggestions}
+        raise
 
 
 def search(query: str, *, limit: int = 5, **options: Any) -> Envelope:

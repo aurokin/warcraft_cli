@@ -32,7 +32,7 @@
 - `freshness.fetched_at` is when the data came off the wire and `freshness.cache_hit` says whether it was replayed from cache, so quote the fetch time rather than the time you ran the command
 - use `sample mythic-plus-runs` and `distribution mythic-plus-runs` for analytics questions
 - use `sample mythic-plus-players` and `distribution mythic-plus-players` when you need participant-level slices instead of raw run rows
-- narrow sampled analytics with filters like `--level-min`, `--contains-spec`, and `--player-region` when you need a tighter slice; `--contains-role` takes `tank`, `healer` or `dps`, `--contains-class`/`--contains-spec` take Raider.IO slugs (`death-knight`, `beast-mastery`, `priest-holy`), and an unknown role, class, spec or region fails with exit 2 instead of returning an empty sample
+- narrow sampled analytics with filters like `--level-min`, `--contains-spec`, and `--player-region` when you need a tighter slice; `--contains-role` takes `tank`, `healer` or `dps`, `--contains-class`/`--contains-spec` take Raider.IO slugs (`death-knight`, `beast-mastery`, `priest-holy`) or any other provider's spelling (`DeathKnight`, `BeastMastery`, `deathknight-frost`, `balance-druid`), and an unknown role, class, spec or region fails with exit 2 instead of returning an empty sample
 - `--limit` sets how many runs a sample reads (in 20-run pages), so raise `--limit` rather than `--pages` for a bigger sample
 - a character's best key per dungeon this season is `mythic_plus.best_runs` on `raiderio character` (one row per completed dungeon, `num_chests` 0 = not timed); `recent_runs` lists every recent run Raider.IO returns
 - in `character` and `guild` payloads `realm` is the slug and `realm_name` the display name, as in search rows

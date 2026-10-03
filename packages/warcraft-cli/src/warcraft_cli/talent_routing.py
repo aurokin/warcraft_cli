@@ -21,6 +21,7 @@ from warcraft_core.exit_codes import EXIT_USAGE
 from warcraft_core.expansions import wowhead_path_prefixes
 from warcraft_core.identity import validate_talent_transport_packet
 from warcraft_core.shapes import as_dict
+from warcraft_core.wow_specs import WOW_CLASS_NAMES, raiderio_class_slug
 
 from warcraft_cli.providers import (
     DescribeOptions,
@@ -32,26 +33,8 @@ from warcraft_cli.providers import (
     provider_payload_data,
 )
 
-# Wowhead class path segments that precede /talent-calc in a bare (non-URL) reference.
-_WOWHEAD_CLASS_SLUGS = frozenset(
-    {
-        "deathknight",
-        "death-knight",
-        "demonhunter",
-        "demon-hunter",
-        "druid",
-        "evoker",
-        "hunter",
-        "mage",
-        "monk",
-        "paladin",
-        "priest",
-        "rogue",
-        "shaman",
-        "warlock",
-        "warrior",
-    }
-)
+# Wowhead class path segments that precede /talent-calc in a bare (non-URL) reference: deathknight or death-knight.
+_WOWHEAD_CLASS_SLUGS = frozenset(WOW_CLASS_NAMES) | {raiderio_class_slug(class_key) for class_key in WOW_CLASS_NAMES}
 # Expansion path prefixes Wowhead puts in front of a talent-calc path.
 _WOWHEAD_EXPANSION_PREFIXES = wowhead_path_prefixes()
 

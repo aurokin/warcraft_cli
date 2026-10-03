@@ -14,6 +14,7 @@ import typer
 from warcraft_core.cli import emit, fail
 from warcraft_core.exit_codes import EXIT_GENERIC, EXIT_NOT_FOUND, EXIT_USAGE
 from warcraft_core.shapes import as_dict, as_list
+from warcraft_core.wow_specs import lookup_spec
 
 from warcraft_cli.cooldown_packet import (
     build_phase_windows,
@@ -450,8 +451,16 @@ def _select_player_without_lorrgs(
 
 
 def _require_spec_of_player_class(ctx: typer.Context, state: CooldownState) -> None:
-    """Reject a --spec-slug of another class than the player's: it would compare the wrong spec."""
+    """Spell the spec as Lorrgs does, then reject a --spec-slug of another class than the player's.
+
+    --spec-slug takes any provider's spelling (frost-death-knight, DeathKnight-Frost, bdk), and a bare
+    spec several classes share (frost) takes the player's class. A spec of another class would compare
+    the wrong spec, so it fails.
+    """
     player_class = state.player.get("class_slug") or _spec_class_slug(str(state.player.get("spec_slug") or ""))
+    spec = lookup_spec(state.spec_slug, class_hint=player_class if isinstance(player_class, str) else None)
+    if spec is not None:
+        state.spec_slug = state.query["spec_slug"] = spec.lorrgs_slug
     spec_class = _spec_class_slug(state.spec_slug)
     if isinstance(player_class, str) and spec_class is not None and spec_class != player_class:
         _fail_cooldown_packet(

@@ -76,8 +76,10 @@ Filter flags (sampled commands): `--level-min`, `--level-max`, `--score-min`, `-
 repeatable `--contains-role` (`tank`, `healer`, `dps`), `--contains-class`, `--contains-spec`,
 `--player-region` (a region or alias other than `world`). An unknown role, class, spec or region
 is `invalid_query` (exit 2), so an empty sample means no run matched rather than a typo. Classes and
-specs are Raider.IO slugs (`death-knight`, `beast-mastery`; `Death Knight` works too), and a
-class-qualified spec must belong to that class. Bounds are
+specs are Raider.IO slugs (`death-knight`, `beast-mastery`), and any other provider's spelling works
+too (`deathknight`, `DeathKnight`, `dk`; `BeastMastery`, `deathknight-frost`, `balance-druid`,
+`Frost Death Knight`, `bm hunter`): a spelling that names one spec is echoed as its class-qualified
+Raider.IO slug (`hunter-beast-mastery`). A class-qualified spec must belong to that class. Bounds are
 inclusive ("at or above" / "at or below"), and a run whose level or score Raider.IO omitted is
 excluded whenever the matching bound is set. Each `--contains-*` flag matches any roster entry on
 its own, so `--contains-class priest --contains-spec holy` also keeps a Holy Paladin + Shadow Priest

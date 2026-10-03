@@ -10,7 +10,14 @@ from warcraft_core.exit_codes import EXIT_USAGE
 from warcraft_core.provider import ProviderError
 
 from lorrgs_cli.client import PROVIDER_NAME, LorrgsClient
-from lorrgs_cli.provider import call_api, note_empty_ranking, validated_comp_filters, validated_difficulty
+from lorrgs_cli.provider import (
+    call_api,
+    call_spec_api,
+    lorrgs_comp_spec_filters,
+    note_empty_ranking,
+    validated_comp_filters,
+    validated_difficulty,
+)
 from lorrgs_cli.provider import doctor as provider_doctor
 from lorrgs_cli.provider import resolve as provider_resolve
 from lorrgs_cli.provider import search as provider_search
@@ -18,6 +25,8 @@ from lorrgs_cli.search import parse_report_reference
 
 app = typer.Typer(add_completion=False, help="Lorrgs cooldown timeline and composition ranking CLI.")
 install_common_callback(app, provider=PROVIDER_NAME)
+
+_SPEC_HELP = "Lorrgs spec slug, e.g. mage-frost; any provider's spelling (frost-mage, Frost Mage, BeastMastery) is translated."
 
 
 def _emit_surface(ctx: typer.Context, build: Callable[[], Envelope]) -> None:
@@ -98,21 +107,24 @@ def resolve(
 @app.command("spec")
 def spec(
     ctx: typer.Context,
-    spec_slug: str = typer.Argument(..., help="Lorrgs full spec slug, e.g. mage-frost."),
+    spec_slug: str = typer.Argument(..., help=_SPEC_HELP),
 ) -> None:
     """Fetch metadata for one Lorrgs spec."""
-    query = {"spec_slug": spec_slug}
-    _run_command(ctx, "spec", "spec", query, lambda client: client.spec(spec_slug))
+    _emit_surface(ctx, lambda: call_spec_api("spec", "spec", spec_slug, {"spec_slug": spec_slug}, lambda client, slug: client.spec(slug)))
 
 
 @app.command("spec-spells")
 def spec_spells(
     ctx: typer.Context,
-    spec_slug: str = typer.Argument(..., help="Lorrgs full spec slug, e.g. mage-frost."),
+    spec_slug: str = typer.Argument(..., help=_SPEC_HELP),
 ) -> None:
     """Fetch the tracked cooldown spells for one spec."""
-    query = {"spec_slug": spec_slug}
-    _run_command(ctx, "spec-spells", "spec_spells", query, lambda client: client.spec_spells(spec_slug))
+    _emit_surface(
+        ctx,
+        lambda: call_spec_api(
+            "spec-spells", "spec_spells", spec_slug, {"spec_slug": spec_slug}, lambda client, slug: client.spec_spells(slug)
+        ),
+    )
 
 
 @app.command("zones")
@@ -203,23 +215,26 @@ def trinkets(ctx: typer.Context) -> None:
 @app.command("spec-ranking")
 def spec_ranking(
     ctx: typer.Context,
-    spec_slug: str = typer.Argument(..., help="Lorrgs full spec slug, e.g. mage-frost."),
+    spec_slug: str = typer.Argument(..., help=_SPEC_HELP),
     boss_slug: str = typer.Argument(..., help="Lorrgs boss slug, e.g. chimaerus-the-undreamt-god."),
     difficulty: str = typer.Option("mythic", "--difficulty", help="mythic or heroic; defaults to mythic."),
     metric: str | None = typer.Option(None, "--metric", help="Metric override, e.g. dps or hps. Defaults by spec role."),
 ) -> None:
     """Fetch top-parse cooldown timelines for one spec on one encounter."""
     query = {"spec_slug": spec_slug, "boss_slug": boss_slug, "difficulty": difficulty, "metric": metric}
-    _run_command(
+    _emit_surface(
         ctx,
-        "spec-ranking",
-        "spec_ranking",
-        query,
-        lambda client: note_empty_ranking(
-            client.spec_ranking(
-                spec_slug=spec_slug, boss_slug=boss_slug, difficulty=validated_difficulty(difficulty), metric=metric
+        lambda: call_spec_api(
+            "spec-ranking",
+            "spec_ranking",
+            spec_slug,
+            query,
+            lambda client, slug: note_empty_ranking(
+                client.spec_ranking(
+                    spec_slug=slug, boss_slug=boss_slug, difficulty=validated_difficulty(difficulty), metric=metric
+                ),
+                f"{slug} reports for {boss_slug} on {difficulty}",
             ),
-            f"{spec_slug} reports for {boss_slug} on {difficulty}",
         ),
     )
 
@@ -227,20 +242,23 @@ def spec_ranking(
 @app.command("spec-ranking-info")
 def spec_ranking_info(
     ctx: typer.Context,
-    spec_slug: str = typer.Argument(..., help="Lorrgs full spec slug, e.g. mage-frost."),
+    spec_slug: str = typer.Argument(..., help=_SPEC_HELP),
     boss_slug: str = typer.Argument(..., help="Lorrgs boss slug, e.g. chimaerus-the-undreamt-god."),
     difficulty: str = typer.Option("mythic", "--difficulty", help="mythic or heroic; defaults to mythic."),
     metric: str | None = typer.Option(None, "--metric", help="Metric override, e.g. dps or hps. Defaults by spec role."),
 ) -> None:
     """Fetch metadata for a spec ranking without the large report timeline list."""
     query = {"spec_slug": spec_slug, "boss_slug": boss_slug, "difficulty": difficulty, "metric": metric}
-    _run_command(
+    _emit_surface(
         ctx,
-        "spec-ranking-info",
-        "spec_ranking_info",
-        query,
-        lambda client: client.spec_ranking_info(
-            spec_slug=spec_slug, boss_slug=boss_slug, difficulty=validated_difficulty(difficulty), metric=metric
+        lambda: call_spec_api(
+            "spec-ranking-info",
+            "spec_ranking_info",
+            spec_slug,
+            query,
+            lambda client, slug: client.spec_ranking_info(
+                spec_slug=slug, boss_slug=boss_slug, difficulty=validated_difficulty(difficulty), metric=metric
+            ),
         ),
     )
 
@@ -256,12 +274,15 @@ def comp_ranking(
         help="Role count filter <role>.<op>.<n>, role tank/heal/mdps/rdps, op eq/gt/gte/lt/lte, e.g. heal.gte.4; repeatable.",
     ),
     spec_filter: list[str] | None = typer.Option(
-        None, "--spec", help="Spec count filter <spec-slug>.<op>.<n>, e.g. mage-frost.gte.1; repeatable."
+        None,
+        "--spec",
+        help="Spec count filter <spec>.<op>.<n>, e.g. mage-frost.gte.1; any provider's spec spelling works; repeatable.",
     ),
     killtime_min: int = typer.Option(0, "--killtime-min", min=0, help="Minimum kill time in seconds."),
     killtime_max: int = typer.Option(0, "--killtime-max", min=0, help="Maximum kill time in seconds."),
 ) -> None:
     """Fetch top composition ranking rows for an encounter."""
+    spec_filter = lorrgs_comp_spec_filters(spec_filter)
     query = {
         "boss_slug": boss_slug,
         "limit": limit,

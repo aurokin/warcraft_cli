@@ -6,6 +6,7 @@ from urllib.parse import urljoin, urlparse, urlunparse
 
 from warcraft_core.expansions import wowhead_path_prefixes
 from warcraft_core.wow_normalization import normalized_text
+from warcraft_core.wow_specs import WOW_CLASS_NAMES, WOW_SPECS
 
 # Warcraft Logs report codes are 16 alphanumerics with mixed case and often no digit (JVFTxcKCqrvpaAzD).
 # A code must mix upper and lower case or letters and digits, so a slug such as frostdeathknight or a
@@ -22,19 +23,7 @@ WOWHEAD_EXPANSION_PREFIXES = wowhead_path_prefixes()
 # Spec slugs as normalize_spec_name spells Wowhead's talent-calc path segments (beast-mastery ->
 # beast_mastery). A talent-calc path only names a spec when its third segment is one of these.
 WOW_SPECS_BY_CLASS: dict[str, frozenset[str]] = {
-    "deathknight": frozenset({"blood", "frost", "unholy"}),
-    "demonhunter": frozenset({"havoc", "vengeance", "devourer"}),
-    "druid": frozenset({"balance", "feral", "guardian", "restoration"}),
-    "evoker": frozenset({"devastation", "preservation", "augmentation"}),
-    "hunter": frozenset({"beast_mastery", "marksmanship", "survival"}),
-    "mage": frozenset({"arcane", "fire", "frost"}),
-    "monk": frozenset({"brewmaster", "mistweaver", "windwalker"}),
-    "paladin": frozenset({"holy", "protection", "retribution"}),
-    "priest": frozenset({"discipline", "holy", "shadow"}),
-    "rogue": frozenset({"assassination", "outlaw", "subtlety"}),
-    "shaman": frozenset({"elemental", "enhancement", "restoration"}),
-    "warlock": frozenset({"affliction", "demonology", "destruction"}),
-    "warrior": frozenset({"arms", "fury", "protection"}),
+    class_key: frozenset(spec.key for spec in WOW_SPECS if spec.class_key == class_key) for class_key in WOW_CLASS_NAMES
 }
 WOW_CLASS_SLUGS = frozenset(WOW_SPECS_BY_CLASS)
 

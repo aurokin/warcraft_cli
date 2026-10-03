@@ -3289,3 +3289,77 @@ def test_raiderio_dungeons_lists_each_seasons_dungeon_pool(monkeypatch) -> None:
     season = data["seasons"][0]
     assert (season["slug"], season["is_main_season"]) == ("season-mn-2", True)
     assert season["dungeons"] == [{"slug": "murder-row", "name": "Murder Row", "short_name": "MR", "keystone_timer_seconds": 2040}]
+
+
+def _three_spec_page(page: int) -> dict[str, Any]:
+    """One leaderboard page whose three runs each carry one player: a BM hunter, a Frost DK, a Balance druid."""
+    members = [("Hunter", "hunter", "Beast Mastery", "beast-mastery"), ("Death Knight", "death-knight", "Frost", "frost"), ("Druid", "druid", "Balance", "balance")]
+    rankings = [
+        {
+            "rank": index + 1,
+            "score": 500.0 - index,
+            "run": {
+                "keystone_run_id": 7000 + index,
+                "mythic_level": 20,
+                "dungeon": {"name": "Murder Row", "slug": "murder-row"},
+                "roster": [
+                    {
+                        "character": {
+                            "name": f"P{index}",
+                            "realm": {"slug": "r"},
+                            "region": {"slug": "us"},
+                            "class": {"name": class_name, "slug": class_slug},
+                            "spec": {"name": spec_name, "slug": spec_slug},
+                        },
+                        "role": "dps",
+                    }
+                ],
+            },
+        }
+        for index, (class_name, class_slug, spec_name, spec_slug) in enumerate(members)
+    ]
+    return {"season": "season-mn-2", "leaderboard_url": f"https://raider.io/runs/{page}", "rankings": rankings}
+
+
+@pytest.mark.parametrize(
+    ("spelling", "slug", "run_id"),
+    [
+        ("BeastMastery", "hunter-beast-mastery", 7000),
+        ("beast-mastery-hunter", "hunter-beast-mastery", 7000),
+        ("bm hunter", "hunter-beast-mastery", 7000),
+        ("deathknight-frost", "death-knight-frost", 7001),
+        ("frost-death-knight", "death-knight-frost", 7001),
+        ("Frost Death Knight", "death-knight-frost", 7001),
+        ("balance-druid", "druid-balance", 7002),
+        ("Balance Druid", "druid-balance", 7002),
+        ("boomkin", "druid-balance", 7002),
+    ],
+)
+def test_raiderio_contains_spec_takes_any_providers_spelling(monkeypatch, spelling: str, slug: str, run_id: int) -> None:
+    _record_pages(monkeypatch, _three_spec_page)
+    result = runner.invoke(raiderio_app, ["sample", "mythic-plus-runs", "--limit", "3", "--contains-spec", spelling])
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert payload["query"]["filters"]["contains_spec"] == [slug]
+    assert [run["run_id"] for run in payload["data"]["runs"]] == [run_id]
+
+
+@pytest.mark.parametrize(
+    ("spelling", "slug", "run_id"),
+    [
+        ("Hunter", "hunter", 7000),
+        ("deathknight", "death-knight", 7001),
+        ("DeathKnight", "death-knight", 7001),
+        ("dk", "death-knight", 7001),
+        ("Druid", "druid", 7002),
+    ],
+)
+def test_raiderio_contains_class_takes_any_providers_spelling(monkeypatch, spelling: str, slug: str, run_id: int) -> None:
+    _record_pages(monkeypatch, _three_spec_page)
+    result = runner.invoke(raiderio_app, ["sample", "mythic-plus-runs", "--limit", "3", "--contains-class", spelling])
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert payload["query"]["filters"]["contains_class"] == [slug]
+    assert [run["run_id"] for run in payload["data"]["runs"]] == [run_id]

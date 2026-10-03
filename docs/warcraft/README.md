@@ -118,7 +118,9 @@ Every command's flags are listed in [docs/reference/warcraft.md](../reference/wa
   "lorrgs_fight_has_no_players"`). Without Lorrgs the player's name and class come from the Warcraft
   Logs roster of the selected fight, so an `--actor-id` that fight lacks fails `actor_id_not_found`
   (exit 4) even when the player is elsewhere in the report, and `player.deaths` is `null` (deaths
-  come only from the Lorrgs timeline). A `--spec-slug` of another
+  come only from the Lorrgs timeline). `--spec-slug` takes any provider's spelling
+  (`frost-death-knight`, `BeastMastery`, `balance-druid`) and becomes the Lorrgs slug in `query.spec_slug`;
+  a bare spec two classes share (`frost`) takes the player's class. A `--spec-slug` of another
   class than the player's fails `invalid_query` (exit 2). Casts are counted only for the actor:
   `cooldowns.player_casts.other_source_cast_count` counts rows from anyone else. When Lorrgs omits a
   fight's duration, the last phase window has `end_ms: null` (open-ended).

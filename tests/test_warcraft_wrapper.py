@@ -2921,6 +2921,45 @@ def test_cooldown_packet_reads_the_spec_slug_case_insensitively(monkeypatch) -> 
     assert ("lorrgs", ["spec-ranking", "warrior-protection", "lura", "--difficulty", "mythic"]) in calls
 
 
+@pytest.mark.parametrize(
+    ("spelling", "player_class", "slug"),
+    [
+        ("BeastMastery", "hunter", "hunter-beastmastery"),
+        ("beast-mastery-hunter", "hunter", "hunter-beastmastery"),
+        ("bm hunter", "hunter", "hunter-beastmastery"),
+        ("death-knight-frost", "deathknight", "deathknight-frost"),
+        ("Frost Death Knight", "deathknight", "deathknight-frost"),
+        # A bare spec two classes share takes the player's class.
+        ("frost", "deathknight", "deathknight-frost"),
+        ("balance-druid", "druid", "druid-balance"),
+        ("Balance Druid", "druid", "druid-balance"),
+        ("boomkin", "druid", "druid-balance"),
+    ],
+)
+def test_cooldown_packet_takes_any_providers_spec_spelling(monkeypatch, spelling: str, player_class: str, slug: str) -> None:
+    """--spec-slug frost-death-knight used to fail as a "frost" class spec, and Frost Death Knight as a Lorrgs 404."""
+    calls: list[tuple[str, list[str]]] = []
+    # The fake fight's player is a Protection Warrior; here it plays ``player_class`` and ``slug``.
+    invoke = _cooldown_packet_invoke([])
+
+    def fake_provider_invoke(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, object]:
+        calls.append((provider, args))
+        result = invoke(provider, ["warrior-protection" if arg == slug else arg for arg in args], expansion=expansion)
+        if args[:1] == ["user-report-fights"]:
+            result["payload"]["data"]["fights"][0]["players"][0]["class_slug"] = player_class
+        return result
+
+    monkeypatch.setattr("warcraft_cli.main.provider_invoke", fake_provider_invoke)
+
+    result = runner.invoke(warcraft_app, [*_cooldown_packet_args(), "--spec-slug", spelling])
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert (payload["query"]["spec_slug"], payload["data"]["player"]["spec_slug"]) == (slug, slug)
+    assert ("lorrgs", ["spec-spells", slug]) in calls
+    assert ("lorrgs", ["spec-ranking", slug, "lura", "--difficulty", "mythic"]) in calls
+
+
 def test_cooldown_packet_compares_top_parses_at_the_fights_own_difficulty(monkeypatch) -> None:
     """A heroic kill is compared with heroic top parses, not with a mythic default."""
     calls: list[tuple[str, list[str]]] = []

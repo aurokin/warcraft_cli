@@ -142,6 +142,15 @@ def test_specs_index_and_one_spec_agree(catalog: Catalog) -> None:
     assert spec.data["spells"], spec.describe()
 
 
+def test_spec_takes_a_guide_site_spelling_and_sends_the_lorrgs_slug(require) -> None:
+    """``balance-druid`` (the guide-site order) used to go upstream as typed and come back not_found."""
+    require("lorrgs")
+    spec = run("lorrgs", "spec", "balance-druid")
+    assert spec.payload["query"]["spec_slug"] == "druid-balance", spec.describe()
+    # Blizzard's Balance spec id, and the druid class.
+    assert (spec.data["id"], spec.data["wow_class"]["name"]) == (102, "Druid"), spec.describe()
+
+
 def test_spec_spells_feeds_the_spell_lookup(catalog: Catalog) -> None:
     spells = run("lorrgs", "spec-spells", catalog.spec_slug)
     # Keyed by spell id as a string; every row repeats the id as an int.
@@ -487,6 +496,9 @@ def test_unknown_spec_and_boss_are_not_found(require) -> None:
     require("lorrgs")
     spec = run("lorrgs", "spec", "no-such-spec-slug", expect=EXIT_NOT_FOUND, error_code="not_found")
     assert spec.payload["error"]["details"]["status_code"] == 404
+    # A near miss names the Lorrgs slugs it was close to.
+    typo = run("lorrgs", "spec", "druid-balanse", expect=EXIT_NOT_FOUND, error_code="not_found")
+    assert typo.payload["error"]["details"]["suggestions"][0] == "druid-balance", typo.describe()
 
     boss = run("lorrgs", "boss", "no-such-boss-slug", expect=EXIT_NOT_FOUND, error_code="not_found")
     assert "no-such-boss-slug" in boss.payload["error"]["details"]["url"]

@@ -113,7 +113,7 @@ Build an evidence packet for phase-scoped cooldown analysis.
 | `--actor-id` | int |  | Report-local source/actor id for the player to analyze. |
 | `--actor-name` | str |  | Player name within the selected fight, used when --actor-id is omitted. |
 | `--phase` | int range [x>=1] | required | One-based phase index to analyze, e.g. --phase 2 for P2. |
-| `--spec-slug` | str |  | Override Lorrgs spec slug, e.g. mage-frost. |
+| `--spec-slug` | str |  | Override the Lorrgs spec slug, e.g. mage-frost; any provider's spelling (frost-mage, Frost Mage) is translated. |
 | `--boss-slug` | str |  | Override Lorrgs boss slug, e.g. lura. |
 | `--difficulty` | str |  | Lorrgs difficulty for the top-parse comparison. Defaults to the Warcraft Logs fight's own difficulty. |
 | `--metric` | str |  | Optional Lorrgs ranking metric, e.g. dps or hps. |

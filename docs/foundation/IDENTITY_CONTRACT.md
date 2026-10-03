@@ -58,6 +58,20 @@ Safe shared contract:
 `canonical` is only valid when the source gives an explicit class/spec pair in a stable domain.
 For many workflows, especially build identification, class/spec should remain `inferred` instead of `canonical`.
 
+The retail class/spec table lives in
+[packages/warcraft-core/src/warcraft_core/wow_specs.py](../../packages/warcraft-core/src/warcraft_core/wow_specs.py):
+`WOW_SPECS` (class key, spec key, Blizzard spec id) and `WOW_CLASS_NAMES`. Keys are the normalized
+values identity payloads emit (`deathknight`, `beast_mastery`). Each spec renders the slug a provider
+takes (`lorrgs_slug` `hunter-beastmastery`, `raiderio_slug` `hunter-beast-mastery`,
+`warcraftlogs_spec_slug` `BeastMastery`), and `lookup_spec(text, class_hint=None)` reads any of those
+spellings back, plus guide-site order (`beast-mastery-hunter`), display names (`Beast Mastery Hunter`)
+and the shorthand in `CLASS_SPEC_ALIASES` (`bm hunter`, `bdk`). A bare spec several classes share
+(`frost`, `holy`, `protection`, `restoration`) names no spec unless `class_hint` picks one; no two specs
+share any other spelling. Provider flags that take a spec (Lorrgs spec routes, Raider.IO
+`--contains-spec`/`--contains-class`, `warcraft cooldown-packet --spec-slug`) translate through this
+lookup and leave text it does not recognize as typed. The table is retail only; classic sites keep their
+own permissive handling.
+
 ### Encounter
 
 Safe shared contract:
