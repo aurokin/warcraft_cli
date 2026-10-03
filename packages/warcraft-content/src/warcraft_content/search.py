@@ -60,7 +60,9 @@ CLASS_SPEC_ALIASES: dict[str, str] = {
     "boomy": "balance",
     "boomkin": "balance",
 }
-_CLASS_SPEC_ALIAS_RE = re.compile(r"\b(" + "|".join(map(re.escape, CLASS_SPEC_ALIASES)) + r")\b")
+# "aug rune" is an Augment Rune, not an Augmentation Evoker: spelling it out left Method's augment rune
+# pages unmatched, so shorthand followed by "rune" stays as typed.
+_CLASS_SPEC_ALIAS_RE = re.compile(r"\b(" + "|".join(map(re.escape, CLASS_SPEC_ALIASES)) + r")\b(?!\s+runes?\b)")
 
 
 def expand_class_spec_aliases(query: str) -> str:

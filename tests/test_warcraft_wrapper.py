@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import dataclasses
 import json
 from collections.abc import Callable
 from pathlib import Path
@@ -15,11 +16,11 @@ from raiderio_cli.client import FetchedJson
 from simc_cli.build_input import BuildIdentity, BuildResolution, BuildSpec
 from simc_cli.prune import PruneContext
 from typer.testing import CliRunner
+from warcraft_cli.actor_profile import ACTOR_PROFILE_MAX_SCOPED_FIGHTS
 from warcraft_cli.cooldown_packet import normalize_warcraftlogs_actor_casts
 from warcraft_cli.guild import guild_rank_rows
-from warcraft_cli.main import ACTOR_PROFILE_MAX_SCOPED_FIGHTS
 from warcraft_cli.main import app as warcraft_app
-from warcraft_cli.providers import PROVIDERS, get_provider
+from warcraft_cli.providers import PROVIDERS, DescribeOptions, PacketInput, get_provider
 from warcraft_content.article_bundle import write_article_bundle
 from warcraft_core.cli import error_envelope_for
 from warcraft_core.envelope import ENVELOPE_KEYS, REQUIRED_KEYS, envelope_violations
@@ -113,19 +114,28 @@ def _disable_wowhead_page_fetch(monkeypatch) -> None:  # noqa: ANN001
     monkeypatch.setattr("wowhead_cli.main.WowheadClient.page_html", fake_page_html)
 
 
-def _simc_build_input_summary(args: list[str]) -> dict[str, object]:
-    summary: dict[str, object] = {"command": args[0], "args": args}
-    if "--build-packet" in args:
-        packet = json.loads(Path(args[args.index("--build-packet") + 1]).read_text())
-        transport_forms = packet.get("transport_forms") if isinstance(packet.get("transport_forms"), dict) else {}
+def _simc_call_summary(
+    command: str, build: PacketInput | str, describe: DescribeOptions | None = None
+) -> dict[str, object]:
+    """What one in-process ``simc_call`` was handed: the command, the build form, and the describe view."""
+    summary: dict[str, object] = {"command": command, "describe": describe}
+    if isinstance(build, PacketInput):
+        transport_forms = build.packet.get("transport_forms") if isinstance(build.packet.get("transport_forms"), dict) else {}
         summary["build_input"] = "packet"
-        summary["packet_transport_status"] = packet["transport_status"]
+        summary["packet"] = build.packet
+        summary["packet_path"] = build.path
+        summary["packet_transport_status"] = build.packet["transport_status"]
         summary["packet_transport_url"] = transport_forms.get("wowhead_talent_calc_url")
         summary["packet_transport_form_keys"] = sorted(transport_forms)
-    elif "--build-text" in args:
+    else:
         summary["build_input"] = "text"
-        summary["build_text"] = args[args.index("--build-text") + 1]
+        summary["build_text"] = build
     return summary
+
+
+def _simc_result(payload: dict[str, object], *, exit_code: int = 0) -> dict[str, object]:
+    """A ``simc_call`` result: what the in-process simc command returned."""
+    return {"provider": "simc", "exit_code": exit_code, "payload": payload}
 
 
 class _EndToEndWarcraftLogsClient:
@@ -234,8 +244,9 @@ def _patch_simc_describe_pipeline(
     # The doubles are simc's own dataclasses, not look-alike objects: a field simc adds or renames
     # then fails these tests instead of silently producing a half-built describe payload.
     def fake_loader(_paths, **kwargs):  # noqa: ANN001
-        build_packet = kwargs["build_packet"]
-        assert isinstance(build_packet, str) and build_packet
+        # The wrapper hands simc the packet in memory, never a --build-packet file.
+        packet = kwargs["packet"]
+        assert isinstance(packet, PacketInput) and kwargs["build_packet"] is None
         split = transport_form == "simc_split_talents"
         return (
             BuildSpec(
@@ -248,7 +259,7 @@ def _patch_simc_describe_pipeline(
                 source_notes=["talent transport packet"],
                 transport_form=transport_form,
                 transport_status=transport_status,
-                transport_source=build_packet,
+                transport_source=packet.path,
             ),
             BuildIdentity(
                 actor_class="druid",
@@ -274,7 +285,7 @@ def _patch_simc_describe_pipeline(
     )
 
     def fake_prune_context(_paths, _build_spec, option_values, targets):  # noqa: ANN001
-        assert isinstance(option_values["build_packet"], str)
+        assert isinstance(option_values["packet"], PacketInput)
         context = PruneContext(enabled_talents={"moonkin_form"}, disabled_talents=set(), targets=targets, talent_sources={})
         return context, resolution
 
@@ -895,6 +906,7 @@ def test_warcraft_search_and_resolve_keep_provider_warnings_under_brief(monkeypa
         "sitemap_lastmod": "2020-01-01",
     }
     monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.sitemap_guides", lambda self: [stale_row])
+    monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.site_menu_guides", lambda self: [])
     monkeypatch.setattr("method_cli.main.MethodClient.sitemap_guides", lambda self: [])
     monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.search", lambda self, *, term, kind=None: {"matches": []})
     monkeypatch.setattr("warcraft_wiki_cli.main.WarcraftWikiClient.search_articles", lambda self, query, *, limit: (0, []))
@@ -1503,7 +1515,7 @@ def test_warcraft_guide_compare_query_can_include_simc_build_handoff(
         }
 
     def fake_provider_invoke(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, object]:
-        invoke_calls.append({"provider": provider, **(_simc_build_input_summary(args) if provider == "simc" else {"args": args})})
+        invoke_calls.append({"provider": provider, "args": args})
         if provider in {"method", "wowhead"}:
             export_dir = Path(args[3])
             payload = _comparison_payload(
@@ -1521,15 +1533,15 @@ def test_warcraft_guide_compare_query_can_include_simc_build_handoff(
                 "payload": _envelope({"output_dir": str(export_dir), "guide": payload["guide"]}),
                 "stdout": "",
             }
-        return {
-            "provider": provider,
-            "exit_code": 0,
-            "payload": {"provider": "simc", "kind": args[0]},
-            "stdout": "",
-        }
+        raise AssertionError(f"unexpected provider call: {provider} {args}")
+
+    def fake_simc_call(command: str, build: PacketInput | str, *, describe: DescribeOptions | None = None) -> dict[str, object]:
+        invoke_calls.append({"provider": "simc", **_simc_call_summary(command, build, describe)})
+        return _simc_result({"provider": "simc", "kind": command})
 
     monkeypatch.setattr("warcraft_cli.main.provider_resolve", fake_provider_resolve)
     monkeypatch.setattr("warcraft_cli.main.provider_invoke", fake_provider_invoke)
+    monkeypatch.setattr("warcraft_cli.main.simc_call", fake_simc_call)
 
     result = runner.invoke(
         warcraft_app,
@@ -1578,7 +1590,7 @@ def test_warcraft_guide_compare_query_can_include_simc_build_handoff(
     assert invoke_calls[3]["build_input"] == "packet"
     assert invoke_calls[4]["command"] == "describe-build"
     assert invoke_calls[4]["build_input"] == "packet"
-    assert invoke_calls[4]["args"][1:3] == ["--apl-path", str(apl_path)]
+    assert invoke_calls[4]["describe"] == DescribeOptions(apl_path=str(apl_path))
 
 
 def test_warcraft_guide_builds_simc_reads_bundle_build_refs(monkeypatch, tmp_path: Path) -> None:
@@ -1598,22 +1610,16 @@ def test_warcraft_guide_builds_simc_reads_bundle_build_refs(monkeypatch, tmp_pat
 
     invoke_calls: list[dict[str, object]] = []
 
-    def fake_provider_invoke(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, object]:
-        assert provider == "simc"
-        assert args[0] in {"identify-build", "decode-build"}
-        invoke_calls.append(_simc_build_input_summary(args))
-        return {
-            "provider": provider,
-            "exit_code": 0,
-            "payload": _envelope({
-                "provider": "simc",
-                "kind": "identify_build" if args[0] == "identify-build" else "decode_build",
-                "build_spec": {"talents": "ABC123", "actor_class": "monk", "spec": "mistweaver"},
-            }),
-            "stdout": "",
-        }
+    def fake_simc_call(command: str, build: PacketInput | str, *, describe: DescribeOptions | None = None) -> dict[str, object]:
+        assert command in {"identify-build", "decode-build"}
+        invoke_calls.append(_simc_call_summary(command, build, describe))
+        return _simc_result(_envelope({
+            "provider": "simc",
+            "kind": "identify_build" if command == "identify-build" else "decode_build",
+            "build_spec": {"talents": "ABC123", "actor_class": "monk", "spec": "mistweaver"},
+        }))
 
-    monkeypatch.setattr("warcraft_cli.main.provider_invoke", fake_provider_invoke)
+    monkeypatch.setattr("warcraft_cli.main.simc_call", fake_simc_call)
 
     result = runner.invoke(warcraft_app, ["guide-builds-simc", str(bundle_dir)])
     assert result.exit_code == 0
@@ -1646,6 +1652,8 @@ def test_warcraft_guide_builds_simc_reads_bundle_build_refs(monkeypatch, tmp_pat
     assert len(invoke_calls) == 2
     assert invoke_calls[0]["command"] == "identify-build"
     assert invoke_calls[0]["build_input"] == "packet"
+    # The packet reaches simc in memory: it names no file, so no temp path can surface in the output.
+    assert invoke_calls[0]["packet_path"] is None
     assert invoke_calls[0]["packet_transport_status"] == "exact"
     assert invoke_calls[0]["packet_transport_url"] == "https://www.wowhead.com/talent-calc/monk/mistweaver/ABC123"
     assert invoke_calls[1]["command"] == "decode-build"
@@ -1712,16 +1720,11 @@ def test_warcraft_guide_builds_simc_reads_orchestration_root_and_dedupes_builds(
 
     invoke_calls: list[dict[str, object]] = []
 
-    def fake_provider_invoke(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, object]:
-        invoke_calls.append(_simc_build_input_summary(args))
-        return {
-            "provider": provider,
-            "exit_code": 0,
-            "payload": {"provider": "simc", "kind": args[0]},
-            "stdout": "",
-        }
+    def fake_simc_call(command: str, build: PacketInput | str, *, describe: DescribeOptions | None = None) -> dict[str, object]:
+        invoke_calls.append(_simc_call_summary(command, build, describe))
+        return _simc_result({"provider": "simc", "kind": command})
 
-    monkeypatch.setattr("warcraft_cli.main.provider_invoke", fake_provider_invoke)
+    monkeypatch.setattr("warcraft_cli.main.simc_call", fake_simc_call)
 
     result = runner.invoke(warcraft_app, ["guide-builds-simc", str(root), "--no-decode"])
     assert result.exit_code == 0
@@ -1768,16 +1771,11 @@ def test_warcraft_guide_builds_simc_can_include_describe_build_with_apl(
 
     invoke_calls: list[dict[str, object]] = []
 
-    def fake_provider_invoke(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, object]:
-        invoke_calls.append(_simc_build_input_summary(args))
-        return {
-            "provider": provider,
-            "exit_code": 0,
-            "payload": {"provider": "simc", "kind": args[0]},
-            "stdout": "",
-        }
+    def fake_simc_call(command: str, build: PacketInput | str, *, describe: DescribeOptions | None = None) -> dict[str, object]:
+        invoke_calls.append(_simc_call_summary(command, build, describe))
+        return _simc_result({"provider": "simc", "kind": command})
 
-    monkeypatch.setattr("warcraft_cli.main.provider_invoke", fake_provider_invoke)
+    monkeypatch.setattr("warcraft_cli.main.simc_call", fake_simc_call)
 
     result = runner.invoke(
         warcraft_app,
@@ -1797,62 +1795,7 @@ def test_warcraft_guide_builds_simc_can_include_describe_build_with_apl(
     assert invoke_calls[1]["build_input"] == "packet"
     assert invoke_calls[2]["command"] == "describe-build"
     assert invoke_calls[2]["build_input"] == "packet"
-    assert invoke_calls[2]["args"][1:3] == ["--apl-path", str(apl_path)]
-
-
-def test_warcraft_guide_builds_simc_hides_deleted_temp_packet_paths(monkeypatch, tmp_path: Path) -> None:
-    bundle_dir = tmp_path / "method-guide"
-    apl_path = tmp_path / "monk_mistweaver.simc"
-    apl_path.write_text("actions=spinning_crane_kick\n", encoding="utf-8")
-    write_article_bundle(
-        _comparison_payload(
-            provider="method",
-            slug="mistweaver-monk",
-            page_url="https://www.method.gg/guides/mistweaver-monk/talents",
-            page_title="Method Talents",
-            analysis_tags=["builds_talents", "talent_recommendations"],
-            build_code="ABC123",
-        ),
-        provider="method",
-        export_dir=bundle_dir,
-    )
-
-    def fake_provider_invoke(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, object]:
-        assert provider == "simc"
-        packet_path = args[args.index("--build-packet") + 1]
-        return {
-            "provider": provider,
-            "exit_code": 0,
-            "payload": _envelope({
-                "provider": "simc",
-                "kind": args[0],
-                "build_spec": {
-                    "source_notes": [f"build packet: {packet_path}", "talent transport packet"],
-                    "transport_packet": {
-                        "path": packet_path,
-                        "transport_form": "wowhead_talent_calc_url",
-                        "transport_status": "exact",
-                    }
-                },
-            }),
-            "stdout": "",
-        }
-
-    monkeypatch.setattr("warcraft_cli.main.provider_invoke", fake_provider_invoke)
-
-    result = runner.invoke(
-        warcraft_app,
-        ["guide-builds-simc", str(bundle_dir), "--apl-path", str(apl_path)],
-    )
-    assert result.exit_code == 0
-    payload = json.loads(result.stdout)
-    simc_payloads = payload["data"]["builds"][0]["simc"]
-    assert "path" not in simc_payloads["identify"]["payload"]["data"]["build_spec"]["transport_packet"]
-    assert "path" not in simc_payloads["decode"]["payload"]["data"]["build_spec"]["transport_packet"]
-    assert "path" not in simc_payloads["describe"]["payload"]["data"]["build_spec"]["transport_packet"]
-    assert simc_payloads["identify"]["payload"]["data"]["build_spec"]["source_notes"] == ["talent transport packet"]
-    assert simc_payloads["decode"]["payload"]["data"]["build_spec"]["source_notes"] == ["talent transport packet"]
-    assert simc_payloads["describe"]["payload"]["data"]["build_spec"]["source_notes"] == ["talent transport packet"]
+    assert invoke_calls[2]["describe"] == DescribeOptions(apl_path=str(apl_path))
 
 
 def test_warcraft_guide_builds_simc_skips_buildless_talent_calc_refs(monkeypatch, tmp_path: Path) -> None:
@@ -1908,22 +1851,16 @@ def test_warcraft_guide_builds_simc_backfills_build_code_from_explicit_url(monke
 
     invoke_calls: list[dict[str, object]] = []
 
-    def fake_provider_invoke(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, object]:
-        assert provider == "simc"
-        assert args[0] in {"identify-build", "decode-build"}
-        invoke_calls.append(_simc_build_input_summary(args))
-        return {
-            "provider": provider,
-            "exit_code": 0,
-            "payload": _envelope({
-                "provider": "simc",
-                "kind": "identify_build" if args[0] == "identify-build" else "decode_build",
-                "build_spec": {"talents": "ABC123", "actor_class": "monk", "spec": "mistweaver"},
-            }),
-            "stdout": "",
-        }
+    def fake_simc_call(command: str, build: PacketInput | str, *, describe: DescribeOptions | None = None) -> dict[str, object]:
+        assert command in {"identify-build", "decode-build"}
+        invoke_calls.append(_simc_call_summary(command, build, describe))
+        return _simc_result(_envelope({
+            "provider": "simc",
+            "kind": "identify_build" if command == "identify-build" else "decode_build",
+            "build_spec": {"talents": "ABC123", "actor_class": "monk", "spec": "mistweaver"},
+        }))
 
-    monkeypatch.setattr("warcraft_cli.main.provider_invoke", fake_provider_invoke)
+    monkeypatch.setattr("warcraft_cli.main.simc_call", fake_simc_call)
 
     result = runner.invoke(warcraft_app, ["guide-builds-simc", str(bundle_dir)])
     assert result.exit_code == 0
@@ -3607,33 +3544,33 @@ def test_warcraft_talent_packet_routes_warcraftlogs_and_upgrades(monkeypatch) ->
                 }),
                 "stdout": "",
             }
-        packet = json.loads(Path(args[2]).read_text())
-        assert provider == "simc"
-        assert args[:2] == ["validate-talent-transport", "--build-packet"]
-        assert packet["transport_status"] == "raw_only"
-        return {
-            "provider": provider,
-            "exit_code": 0,
-            "payload": _envelope({
-                "provider": provider,
-                "kind": "validate_talent_transport",
-                "input": {"source": "build_packet", "build_packet": args[2]},
-                "updated_packet": {
-                    **packet,
-                    "transport_status": "validated",
-                    "transport_forms": {"simc_split_talents": {"class_talents": "103324:1"}},
-                    "validation": {
-                        "status": "validated",
-                        "source": "simc_trait_data_round_trip",
-                        "actor_class": "druid",
-                        "spec": "balance",
-                    },
+        raise AssertionError(f"unexpected provider call: {provider} {args}")
+
+    simc_calls: list[dict[str, object]] = []
+
+    def fake_simc_call(command: str, build: PacketInput | str, *, describe: DescribeOptions | None = None) -> dict[str, object]:
+        simc_calls.append(_simc_call_summary(command, build, describe))
+        assert isinstance(build, PacketInput)
+        assert build.packet["transport_status"] == "raw_only"
+        return _simc_result(_envelope({
+            "provider": "simc",
+            "kind": "validate_talent_transport",
+            "input": {"source": "build_packet", "build_packet": build.path},
+            "updated_packet": {
+                **build.packet,
+                "transport_status": "validated",
+                "transport_forms": {"simc_split_talents": {"class_talents": "103324:1"}},
+                "validation": {
+                    "status": "validated",
+                    "source": "simc_trait_data_round_trip",
+                    "actor_class": "druid",
+                    "spec": "balance",
                 },
-            }),
-            "stdout": "",
-        }
+            },
+        }))
 
     monkeypatch.setattr("warcraft_cli.main.provider_invoke", fake_provider_invoke)
+    monkeypatch.setattr("warcraft_cli.main.simc_call", fake_simc_call)
 
     result = runner.invoke(warcraft_app, ["talent-packet", "abcd1234", "--fight-id", "1", "--actor-id", "9"])
     assert result.exit_code == 0
@@ -3650,10 +3587,10 @@ def test_warcraft_talent_packet_routes_warcraftlogs_and_upgrades(monkeypatch) ->
     assert payload["data"]["upgraded"] is True
     assert payload["data"]["talent_transport_packet"]["transport_status"] == "validated"
     assert payload["data"]["talent_transport_packet"]["transport_forms"]["simc_split_talents"]["class_talents"] == "103324:1"
-    assert "build_packet" not in payload["data"]["upgrade_result"]["payload"]["data"]["input"]
-    assert calls[0] == ("warcraftlogs", ["report-player-talents", "abcd1234", "--actor-id", "9", "--fight-id", "1"])
-    assert calls[1][0] == "simc"
-    assert calls[1][1][:2] == ["validate-talent-transport", "--build-packet"]
+    # The routed packet reached simc in memory, so the upgrade names no packet file.
+    assert payload["data"]["upgrade_result"]["payload"]["data"]["input"]["build_packet"] is None
+    assert calls == [("warcraftlogs", ["report-player-talents", "abcd1234", "--actor-id", "9", "--fight-id", "1"])]
+    assert [(row["command"], row["packet_path"]) for row in simc_calls] == [("validate-talent-transport", None)]
 
 
 def test_warcraft_talent_packet_preserves_missing_talent_tree_for_non_dict_rows(monkeypatch) -> None:
@@ -3705,31 +3642,26 @@ def test_warcraft_talent_packet_upgrades_packet_file_and_writes_output(monkeypat
         )
     )
 
-    def fake_provider_invoke(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, object]:
-        packet = json.loads(Path(args[2]).read_text())
-        assert provider == "simc"
-        assert packet["transport_status"] == "raw_only"
-        return {
-            "provider": provider,
-            "exit_code": 0,
-            "payload": _envelope({
-                "input": {"source": "build_packet", "build_packet": args[2]},
-                "updated_packet": {
-                    **packet,
-                    "transport_status": "validated",
-                    "transport_forms": {"simc_split_talents": {"class_talents": "103324:1"}},
-                    "validation": {
-                        "status": "validated",
-                        "source": "simc_trait_data_round_trip",
-                        "actor_class": "druid",
-                        "spec": "balance",
-                    },
-                }
-            }),
-            "stdout": "",
-        }
+    def fake_simc_call(command: str, build: PacketInput | str, *, describe: DescribeOptions | None = None) -> dict[str, object]:
+        assert command == "validate-talent-transport"
+        assert isinstance(build, PacketInput)
+        assert build.packet["transport_status"] == "raw_only"
+        return _simc_result(_envelope({
+            "input": {"source": "build_packet", "build_packet": build.path},
+            "updated_packet": {
+                **build.packet,
+                "transport_status": "validated",
+                "transport_forms": {"simc_split_talents": {"class_talents": "103324:1"}},
+                "validation": {
+                    "status": "validated",
+                    "source": "simc_trait_data_round_trip",
+                    "actor_class": "druid",
+                    "spec": "balance",
+                },
+            }
+        }))
 
-    monkeypatch.setattr("warcraft_cli.main.provider_invoke", fake_provider_invoke)
+    monkeypatch.setattr("warcraft_cli.main.simc_call", fake_simc_call)
 
     result = runner.invoke(warcraft_app, ["talent-packet", str(packet_path), "--out", str(out_path)])
     assert result.exit_code == 0
@@ -3737,7 +3669,8 @@ def test_warcraft_talent_packet_upgrades_packet_file_and_writes_output(monkeypat
     assert payload["data"]["route"] == {"kind": "packet_file", "provider": None, "packet_path": str(packet_path.resolve())}
     assert payload["data"]["written_packet_path"] == str(out_path.resolve())
     assert payload["data"]["talent_transport_packet"]["transport_status"] == "validated"
-    assert "build_packet" not in payload["data"]["upgrade_result"]["payload"]["data"]["input"]
+    # simc validated exactly the packet file's content, so the upgrade cites that file.
+    assert payload["data"]["upgrade_result"]["payload"]["data"]["input"]["build_packet"] == str(packet_path.resolve())
     written = json.loads(out_path.read_text())
     assert written["transport_status"] == "validated"
 
@@ -4138,10 +4071,9 @@ def test_warcraft_talent_packet_rejects_invalid_upgraded_packet(monkeypatch, tmp
         )
     )
 
-    def fake_provider_invoke(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, object]:
-        assert provider == "simc"
+    def fake_simc_call(command: str, build: PacketInput | str, *, describe: DescribeOptions | None = None) -> dict[str, object]:
         return {
-            "provider": provider,
+            "provider": "simc",
             "exit_code": 0,
             "payload": _envelope({
                 "updated_packet": {
@@ -4154,10 +4086,9 @@ def test_warcraft_talent_packet_rejects_invalid_upgraded_packet(monkeypatch, tmp
                     "scope": {},
                 }
             }),
-            "stdout": "",
         }
 
-    monkeypatch.setattr("warcraft_cli.main.provider_invoke", fake_provider_invoke)
+    monkeypatch.setattr("warcraft_cli.main.simc_call", fake_simc_call)
 
     result = runner.invoke(warcraft_app, ["talent-packet", str(packet_path)])
     assert result.exit_code == 1
@@ -4182,10 +4113,9 @@ def test_warcraft_talent_packet_reports_upgrade_failure(monkeypatch, tmp_path: P
         )
     )
 
-    def fake_provider_invoke(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, object]:
-        assert provider == "simc"
+    def fake_simc_call(command: str, build: PacketInput | str, *, describe: DescribeOptions | None = None) -> dict[str, object]:
         return {
-            "provider": provider,
+            "provider": "simc",
             "exit_code": 1,
             "payload": {
                 "ok": False,
@@ -4194,10 +4124,9 @@ def test_warcraft_talent_packet_reports_upgrade_failure(monkeypatch, tmp_path: P
                     "message": "Build packet did not contain a validated transport form.",
                 },
             },
-            "stdout": "",
         }
 
-    monkeypatch.setattr("warcraft_cli.main.provider_invoke", fake_provider_invoke)
+    monkeypatch.setattr("warcraft_cli.main.simc_call", fake_simc_call)
 
     result = runner.invoke(warcraft_app, ["talent-packet", str(packet_path)])
     assert result.exit_code == 1
@@ -4227,10 +4156,9 @@ def test_warcraft_talent_packet_preserves_upgrade_failure_with_malformed_updated
         )
     )
 
-    def fake_provider_invoke(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, object]:
-        assert provider == "simc"
+    def fake_simc_call(command: str, build: PacketInput | str, *, describe: DescribeOptions | None = None) -> dict[str, object]:
         return {
-            "provider": provider,
+            "provider": "simc",
             "exit_code": 1,
             "payload": _envelope({
                 "ok": False,
@@ -4248,10 +4176,9 @@ def test_warcraft_talent_packet_preserves_upgrade_failure_with_malformed_updated
                     "scope": {},
                 },
             }),
-            "stdout": "",
         }
 
-    monkeypatch.setattr("warcraft_cli.main.provider_invoke", fake_provider_invoke)
+    monkeypatch.setattr("warcraft_cli.main.simc_call", fake_simc_call)
 
     result = runner.invoke(warcraft_app, ["talent-packet", str(packet_path)])
     assert result.exit_code == 1
@@ -4280,19 +4207,17 @@ def test_warcraft_talent_packet_rejects_successful_validate_without_updated_pack
         )
     )
 
-    def fake_provider_invoke(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, object]:
-        assert provider == "simc"
+    def fake_simc_call(command: str, build: PacketInput | str, *, describe: DescribeOptions | None = None) -> dict[str, object]:
         return {
-            "provider": provider,
+            "provider": "simc",
             "exit_code": 0,
             "payload": {
-                "provider": provider,
+                "provider": "simc",
                 "kind": "validate_talent_transport",
             },
-            "stdout": "",
         }
 
-    monkeypatch.setattr("warcraft_cli.main.provider_invoke", fake_provider_invoke)
+    monkeypatch.setattr("warcraft_cli.main.simc_call", fake_simc_call)
 
     result = runner.invoke(warcraft_app, ["talent-packet", str(packet_path)])
     assert result.exit_code == 1
@@ -4325,10 +4250,9 @@ def test_warcraft_talent_describe_reports_simc_failure(monkeypatch, tmp_path: Pa
         )
     )
 
-    def fake_provider_invoke(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, object]:
-        assert provider == "simc"
+    def fake_simc_call(command: str, build: PacketInput | str, *, describe: DescribeOptions | None = None) -> dict[str, object]:
         return {
-            "provider": provider,
+            "provider": "simc",
             "exit_code": 1,
             "payload": {
                 "ok": False,
@@ -4337,10 +4261,9 @@ def test_warcraft_talent_describe_reports_simc_failure(monkeypatch, tmp_path: Pa
                     "message": "APL path did not exist.",
                 },
             },
-            "stdout": "",
         }
 
-    monkeypatch.setattr("warcraft_cli.main.provider_invoke", fake_provider_invoke)
+    monkeypatch.setattr("warcraft_cli.main.simc_call", fake_simc_call)
 
     result = runner.invoke(
         warcraft_app,
@@ -4378,19 +4301,14 @@ def test_warcraft_talent_describe_preserves_ok_false_simc_failure(monkeypatch, t
     )
 
     monkeypatch.setattr(
-        "warcraft_cli.main.provider_invoke",
-        lambda provider, args, *, expansion=None: {
-            "provider": provider,
-            "exit_code": 0,
-            "payload": {
-                "ok": False,
-                "error": {
-                    "code": "describe_build_failed",
-                    "message": "Unable to resolve build against the supplied APL.",
-                },
+        "warcraft_cli.main.simc_call",
+        lambda command, build, *, describe=None: _simc_result({
+            "ok": False,
+            "error": {
+                "code": "describe_build_failed",
+                "message": "Unable to resolve build against the supplied APL.",
             },
-            "stdout": "",
-        },
+        }),
     )
 
     result = runner.invoke(
@@ -4429,19 +4347,10 @@ def test_warcraft_talent_describe_does_not_write_packet_out_on_failure(monkeypat
     )
 
     monkeypatch.setattr(
-        "warcraft_cli.main.provider_invoke",
-        lambda provider, args, *, expansion=None: {
-            "provider": provider,
-            "exit_code": 1,
-            "payload": {
-                "ok": False,
-                "error": {
-                    "code": "apl_not_found",
-                    "message": "APL path did not exist.",
-                },
-            },
-            "stdout": "",
-        },
+        "warcraft_cli.main.simc_call",
+        lambda command, build, *, describe=None: _simc_result(
+            {"ok": False, "error": {"code": "apl_not_found", "message": "APL path did not exist."}}, exit_code=1
+        ),
     )
 
     result = runner.invoke(
@@ -4568,20 +4477,14 @@ def test_warcraft_talent_describe_routes_wowhead_ref_to_simc(monkeypatch) -> Non
                 }),
                 "stdout": "",
             }
-        assert provider == "simc"
-        simc_calls.append(_simc_build_input_summary(args))
-        return {
-            "provider": provider,
-            "exit_code": 0,
-            "payload": _envelope({
-                "provider": provider,
-                "kind": "describe_build",
-                "summary": {"active_action_count": 5},
-            }),
-            "stdout": "",
-        }
+        raise AssertionError(f"unexpected provider call: {provider} {args}")
+
+    def fake_simc_call(command: str, build: PacketInput | str, *, describe: DescribeOptions | None = None) -> dict[str, object]:
+        simc_calls.append(_simc_call_summary(command, build, describe))
+        return _simc_result(_envelope({"provider": "simc", "kind": "describe_build", "summary": {"active_action_count": 5}}))
 
     monkeypatch.setattr("warcraft_cli.main.provider_invoke", fake_provider_invoke)
+    monkeypatch.setattr("warcraft_cli.main.simc_call", fake_simc_call)
 
     result = runner.invoke(
         warcraft_app,
@@ -4601,68 +4504,9 @@ def test_warcraft_talent_describe_routes_wowhead_ref_to_simc(monkeypatch) -> Non
     assert simc_calls[0]["command"] == "describe-build"
     assert simc_calls[0]["packet_transport_status"] == "exact"
     assert simc_calls[0]["packet_transport_url"] == "https://www.wowhead.com/talent-calc/druid/balance/ABC123"
-    assert simc_calls[0]["args"][:4] == ["describe-build", "--targets", "1", "--aoe-targets"]
-    assert "--apl-path" in simc_calls[0]["args"]
-
-
-def test_warcraft_talent_describe_hides_deleted_temp_packet_source_notes(monkeypatch, tmp_path: Path) -> None:
-    apl_path = tmp_path / "druid_balance.simc"
-    apl_path.write_text("actions=wrath\n")
-
-    def fake_provider_invoke(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, object]:
-        if provider == "wowhead":
-            return {
-                "provider": provider,
-                "exit_code": 0,
-                "payload": _envelope({
-                    "provider": provider,
-                    "kind": "talent_calc_packet",
-                    "talent_transport_packet": {
-                        "kind": "talent_transport_packet",
-                        "transport_status": "exact",
-                        "transport_forms": {
-                            "wowhead_talent_calc_url": "https://www.wowhead.com/talent-calc/druid/balance/ABC123",
-                        },
-                        "build_identity": {
-                            "class_spec_identity": {"identity": {"actor_class": "druid", "spec": "balance"}},
-                        },
-                        "raw_evidence": {"reference_url": "https://www.wowhead.com/talent-calc/druid/balance/ABC123"},
-                        "validation": {},
-                        "scope": {"type": "wowhead_talent_calc", "expansion": "retail"},
-                    },
-                }),
-                "stdout": "",
-            }
-        assert provider == "simc"
-        packet_path = args[args.index("--build-packet") + 1]
-        return {
-            "provider": provider,
-            "exit_code": 0,
-            "payload": _envelope({
-                "provider": provider,
-                "kind": "describe_build",
-                "build_spec": {
-                    "source_notes": [f"build packet: {packet_path}", "talent transport packet"],
-                    "transport_packet": {
-                        "path": packet_path,
-                        "transport_form": "wowhead_talent_calc_url",
-                        "transport_status": "exact",
-                    },
-                },
-            }),
-            "stdout": "",
-        }
-
-    monkeypatch.setattr("warcraft_cli.main.provider_invoke", fake_provider_invoke)
-
-    result = runner.invoke(
-        warcraft_app,
-        ["talent-describe", "druid/balance/ABC123", "--apl-path", str(apl_path)],
-    )
-    assert result.exit_code == 0
-    build_spec = json.loads(result.stdout)["data"]["describe_result"]["payload"]["data"]["build_spec"]
-    assert "path" not in build_spec["transport_packet"]
-    assert build_spec["source_notes"] == ["talent transport packet"]
+    # A routed packet never touched disk, so simc is told it has no file to cite.
+    assert simc_calls[0]["packet_path"] is None
+    assert simc_calls[0]["describe"] == DescribeOptions(apl_path="/tmp/druid_balance.simc")
 
 
 def test_warcraft_talent_describe_passes_wowhead_listed_build_limit(monkeypatch) -> None:
@@ -4693,18 +4537,15 @@ def test_warcraft_talent_describe_passes_wowhead_listed_build_limit(monkeypatch)
                 }),
                 "stdout": "",
             }
-        return {
-            "provider": provider,
-            "exit_code": 0,
-            "payload": _envelope({
-                "provider": provider,
-                "kind": "describe_build",
-                "summary": {"active_action_count": 3},
-            }),
-            "stdout": "",
-        }
+        raise AssertionError(f"unexpected provider call: {provider} {args}")
 
     monkeypatch.setattr("warcraft_cli.main.provider_invoke", fake_provider_invoke)
+    monkeypatch.setattr(
+        "warcraft_cli.main.simc_call",
+        lambda command, build, *, describe=None: _simc_result(
+            _envelope({"provider": "simc", "kind": "describe_build", "summary": {"active_action_count": 3}})
+        ),
+    )
 
     result = runner.invoke(
         warcraft_app,
@@ -4742,18 +4583,15 @@ def test_warcraft_talent_describe_passes_expansion_to_wowhead_route(monkeypatch)
                 }),
                 "stdout": "",
             }
-        return {
-            "provider": provider,
-            "exit_code": 0,
-            "payload": _envelope({
-                "provider": provider,
-                "kind": "describe_build",
-                "summary": {"active_action_count": 3},
-            }),
-            "stdout": "",
-        }
+        raise AssertionError(f"unexpected provider call: {provider} {args}")
 
     monkeypatch.setattr("warcraft_cli.main.provider_invoke", fake_provider_invoke)
+    monkeypatch.setattr(
+        "warcraft_cli.main.simc_call",
+        lambda command, build, *, describe=None: _simc_result(
+            _envelope({"provider": "simc", "kind": "describe_build", "summary": {"active_action_count": 3}})
+        ),
+    )
 
     result = runner.invoke(
         warcraft_app,
@@ -4793,18 +4631,15 @@ def test_warcraft_talent_describe_passes_allow_unlisted_and_expansion(monkeypatc
                 }),
                 "stdout": "",
             }
-        return {
-            "provider": provider,
-            "exit_code": 0,
-            "payload": _envelope({
-                "provider": provider,
-                "kind": "describe_build",
-                "summary": {"active_action_count": 6},
-            }),
-            "stdout": "",
-        }
+        raise AssertionError(f"unexpected provider call: {provider} {args}")
 
     monkeypatch.setattr("warcraft_cli.main.provider_invoke", fake_provider_invoke)
+    monkeypatch.setattr(
+        "warcraft_cli.main.simc_call",
+        lambda command, build, *, describe=None: _simc_result(
+            _envelope({"provider": "simc", "kind": "describe_build", "summary": {"active_action_count": 6}})
+        ),
+    )
 
     result = runner.invoke(
         warcraft_app,
@@ -4818,7 +4653,6 @@ def test_warcraft_talent_describe_passes_allow_unlisted_and_expansion(monkeypatc
         ["report-player-talents", "abcd1234", "--actor-id", "9", "--fight-id", "1", "--allow-unlisted"],
         "retail",
     )
-    assert provider_calls[1][2] == "retail"
 
 
 
@@ -4844,21 +4678,19 @@ def test_warcraft_talent_describe_uses_packet_file_and_can_write_output(monkeypa
     )
     simc_calls: list[dict[str, object]] = []
 
-    def fake_provider_invoke(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, object]:
-        assert provider == "simc"
-        simc_calls.append(_simc_build_input_summary(args))
+    def fake_simc_call(command: str, build: PacketInput | str, *, describe: DescribeOptions | None = None) -> dict[str, object]:
+        simc_calls.append(_simc_call_summary(command, build, describe))
         return {
-            "provider": provider,
+            "provider": "simc",
             "exit_code": 0,
             "payload": _envelope({
-                "provider": provider,
+                "provider": "simc",
                 "kind": "describe_build",
                 "summary": {"active_action_count": 4},
             }),
-            "stdout": "",
         }
 
-    monkeypatch.setattr("warcraft_cli.main.provider_invoke", fake_provider_invoke)
+    monkeypatch.setattr("warcraft_cli.main.simc_call", fake_simc_call)
 
     result = runner.invoke(
         warcraft_app,
@@ -4873,6 +4705,37 @@ def test_warcraft_talent_describe_uses_packet_file_and_can_write_output(monkeypa
     assert simc_calls[0]["packet_transport_status"] == "exact"
     written = json.loads(out_path.read_text())
     assert written["transport_status"] == "exact"
+
+
+def test_warcraft_talent_describe_treats_blank_apl_path_as_none(monkeypatch, tmp_path: Path) -> None:
+    packet_path = tmp_path / "exact-packet.json"
+    packet_path.write_text(
+        json.dumps(
+            {
+                "kind": "talent_transport_packet",
+                "transport_status": "exact",
+                "transport_forms": {"wowhead_talent_calc_url": "https://www.wowhead.com/talent-calc/druid/balance/ABC123"},
+                "build_identity": {"class_spec_identity": {"identity": {"actor_class": "druid", "spec": "balance"}}},
+                "raw_evidence": {},
+                "validation": {},
+                "scope": {"type": "wowhead_talent_calc", "expansion": "retail"},
+            }
+        )
+    )
+    simc_calls: list[dict[str, object]] = []
+
+    def fake_simc_call(command: str, build: PacketInput | str, *, describe: DescribeOptions | None = None) -> dict[str, object]:
+        simc_calls.append(_simc_call_summary(command, build, describe))
+        return _simc_result(_envelope({"provider": "simc", "kind": "describe_build"}))
+
+    monkeypatch.setattr("warcraft_cli.main.simc_call", fake_simc_call)
+
+    result = runner.invoke(warcraft_app, ["talent-describe", str(packet_path), "--apl-path", "  "])
+
+    assert result.exit_code == 0, result.stdout
+    describe = simc_calls[0]["describe"]
+    assert isinstance(describe, DescribeOptions)
+    assert describe.apl_path is None
 
 
 def test_warcraft_talent_describe_skips_auto_upgrade_for_unknown_packet_file(monkeypatch, tmp_path: Path) -> None:
@@ -4897,22 +4760,20 @@ def test_warcraft_talent_describe_skips_auto_upgrade_for_unknown_packet_file(mon
     packet_path.write_text(json.dumps(packet))
     simc_calls: list[dict[str, object]] = []
 
-    def fake_provider_invoke(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, object]:
-        assert provider == "simc"
-        simc_calls.append(_simc_build_input_summary(args))
-        assert args[0] == "describe-build"
+    def fake_simc_call(command: str, build: PacketInput | str, *, describe: DescribeOptions | None = None) -> dict[str, object]:
+        simc_calls.append(_simc_call_summary(command, build, describe))
+        assert command == "describe-build"
         return {
-            "provider": provider,
+            "provider": "simc",
             "exit_code": 0,
             "payload": _envelope({
-                "provider": provider,
+                "provider": "simc",
                 "kind": "describe_build",
                 "summary": {"active_action_count": 4},
             }),
-            "stdout": "",
         }
 
-    monkeypatch.setattr("warcraft_cli.main.provider_invoke", fake_provider_invoke)
+    monkeypatch.setattr("warcraft_cli.main.simc_call", fake_simc_call)
 
     result = runner.invoke(
         warcraft_app,
@@ -5126,7 +4987,9 @@ def test_warcraft_talent_describe_packet_out_changes_after_validation_upgrade(mo
     assert direct_packet["transport_status"] == "raw_only"
     assert wrapper_packet["transport_status"] == "validated"
     assert wrapper_packet["transport_forms"]["simc_split_talents"]["spec_talents"] == "109839:1"
-    assert "build_packet" not in wrapper_payload["data"]["upgrade_result"]["payload"]["data"]["input"]
+    # The routed packet reached simc in memory; only the --packet-out file is cited, once written.
+    assert wrapper_payload["data"]["upgrade_result"]["payload"]["data"]["input"]["build_packet"] is None
+    assert "stdout" not in wrapper_payload["data"]["upgrade_result"]
     assert wrapper_payload["data"]["describe_result"]["payload"]["data"]["build_spec"]["transport_packet"]["path"] == str(wrapper_path.resolve())
 
 
@@ -5800,37 +5663,6 @@ def test_warcraft_passthrough_forwards_output_flags(monkeypatch) -> None:
     assert json.loads(projected.stdout) == {"query": "defias"}
 
 
-
-def test_normalize_simc_transport_packet_path_points_build_spec_at_the_stable_packet() -> None:
-    from warcraft_cli.main import _normalize_simc_transport_packet_path
-
-    build_spec = {
-        "transport_packet": {"path": "/tmp/gone.json", "form": "simc_split_talents"},
-        "source_notes": ["build packet: /tmp/gone.json", "talent transport packet"],
-    }
-    result = {"ok": True, "payload": {"ok": True, "data": {"build_spec": build_spec, "other": 1}}}
-
-    stable = _normalize_simc_transport_packet_path(result, stable_packet_path="/stable/packet.json")["payload"]["data"]
-    assert stable["build_spec"]["transport_packet"]["path"] == "/stable/packet.json"
-    assert stable["build_spec"]["source_notes"] == ["build packet: /stable/packet.json", "talent transport packet"]
-    assert stable["other"] == 1
-
-    dropped = _normalize_simc_transport_packet_path(result, stable_packet_path=None)["payload"]["data"]
-    assert "path" not in dropped["build_spec"]["transport_packet"]
-    assert dropped["build_spec"]["source_notes"] == ["talent transport packet"]
-
-
-def test_normalize_upgrade_result_drops_the_deleted_build_packet_path() -> None:
-    from warcraft_cli.main import _normalize_upgrade_result_build_packet_path
-
-    upgrade_result = {
-        "ok": True,
-        "payload": {"ok": True, "data": {"input": {"build_packet": "/tmp/gone.json", "apl": "x"}, "other": 1}},
-    }
-    normalized = _normalize_upgrade_result_build_packet_path(upgrade_result, stable_packet_path=None)
-    assert normalized["payload"]["data"] == {"input": {"apl": "x"}, "other": 1}
-
-
 # `talent-packet` and `talent-describe` share `_resolve_talent_transport`, so every route rejection
 # is the same code path with a different payload `kind`. One parametrized pair pins that, instead of
 # a copy of each rejection test per command.
@@ -6183,22 +6015,22 @@ def test_guide_builds_simc_hands_each_reference_to_simc_in_the_form_its_type_req
             },
         ],
     )
-    identify_args: list[list[str]] = []
+    identify_calls: list[dict[str, object]] = []
 
-    def fake_simc(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, object]:
-        if args[0] == "identify-build":
-            identify_args.append(args)
-        return {"provider": provider, "exit_code": 0, "payload": {"ok": True}, "stdout": ""}
+    def fake_simc(command: str, build: PacketInput | str, *, describe: DescribeOptions | None = None) -> dict[str, object]:
+        if command == "identify-build":
+            identify_calls.append(_simc_call_summary(command, build, describe))
+        return _simc_result({"ok": True})
 
-    monkeypatch.setattr("warcraft_cli.main.provider_invoke", fake_simc)
+    monkeypatch.setattr("warcraft_cli.main.simc_call", fake_simc)
 
     result = runner.invoke(warcraft_app, ["guide-builds-simc", str(bundle)])
     assert result.exit_code == 0, result.output
 
-    export_args = next(args for args in identify_args if args[1] == "--build-text")
-    assert export_args[2].startswith("CEQAAAAA"), "the import string itself is the build input"
-    packet_args = next(args for args in identify_args if args[1] == "--build-packet")
-    assert packet_args[2].endswith(".json")
+    export_call = next(row for row in identify_calls if row["build_input"] == "text")
+    assert str(export_call["build_text"]).startswith("CEQAAAAA"), "the import string itself is the build input"
+    packet_call = next(row for row in identify_calls if row["build_input"] == "packet")
+    assert packet_call["packet_transport_url"] == "https://www.wowhead.com/talent-calc/monk/mistweaver/ABC123"
     assert json.loads(result.stdout)["data"]["summary"]["identify_success_count"] == 2
 
 
@@ -6218,12 +6050,7 @@ def test_guide_builds_simc_names_the_references_it_could_not_hand_over(monkeypat
         ],
     )
 
-    monkeypatch.setattr(
-        "warcraft_cli.main.provider_invoke",
-        lambda provider, args, *, expansion=None: {
-            "provider": provider, "exit_code": 0, "payload": {"ok": True}, "stdout": "",
-        },
-    )
+    monkeypatch.setattr("warcraft_cli.main.simc_call", lambda command, build, *, describe=None: _simc_result({"ok": True}))
 
     result = runner.invoke(warcraft_app, ["guide-builds-simc", str(bundle)])
     assert result.exit_code == 0, result.output
@@ -6258,12 +6085,7 @@ def test_guide_builds_simc_reports_the_pages_the_export_never_fetched(monkeypatc
         redirect=REDIRECT,
     )
 
-    monkeypatch.setattr(
-        "warcraft_cli.main.provider_invoke",
-        lambda provider, args, *, expansion=None: {
-            "provider": provider, "exit_code": 0, "payload": {"ok": True}, "stdout": "",
-        },
-    )
+    monkeypatch.setattr("warcraft_cli.main.simc_call", lambda command, build, *, describe=None: _simc_result({"ok": True}))
 
     result = runner.invoke(warcraft_app, ["guide-builds-simc", str(bundle)])
     assert result.exit_code == 0, result.output
@@ -6280,16 +6102,10 @@ def test_guide_builds_simc_fails_when_every_simc_handoff_failed(monkeypatch, tmp
     """A packet with zero usable simc output is a failure, not a success with empty counters."""
     bundle = _guide_bundle(tmp_path, build_code="ABC123")
 
-    def failing_simc(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, object]:
-        assert provider == "simc"
-        return {
-            "provider": provider,
-            "exit_code": 5,
-            "payload": {"ok": False, "error": {"code": "network_error", "message": "no simc repo"}},
-            "stdout": "",
-        }
+    def failing_simc(command: str, build: PacketInput | str, *, describe: DescribeOptions | None = None) -> dict[str, object]:
+        return _simc_result({"ok": False, "error": {"code": "network_error", "message": "no simc repo"}}, exit_code=5)
 
-    monkeypatch.setattr("warcraft_cli.main.provider_invoke", failing_simc)
+    monkeypatch.setattr("warcraft_cli.main.simc_call", failing_simc)
 
     result = runner.invoke(warcraft_app, ["guide-builds-simc", str(bundle)])
 
@@ -6317,17 +6133,12 @@ def test_guide_builds_simc_stays_ok_when_one_requested_leg_still_produced_output
     """Mixed legs are not a total failure: decode output is usable even when identify failed."""
     bundle = _guide_bundle(tmp_path, build_code="ABC123")
 
-    def identify_fails(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, object]:
-        if args[0] == "identify-build":
-            return {
-                "provider": provider,
-                "exit_code": 1,
-                "payload": {"ok": False, "error": {"code": "unsupported_build", "message": "no probe"}},
-                "stdout": "",
-            }
-        return {"provider": provider, "exit_code": 0, "payload": {"ok": True}, "stdout": ""}
+    def identify_fails(command: str, build: PacketInput | str, *, describe: DescribeOptions | None = None) -> dict[str, object]:
+        if command == "identify-build":
+            return _simc_result({"ok": False, "error": {"code": "unsupported_build", "message": "no probe"}}, exit_code=1)
+        return _simc_result({"ok": True})
 
-    monkeypatch.setattr("warcraft_cli.main.provider_invoke", identify_fails)
+    monkeypatch.setattr("warcraft_cli.main.simc_call", identify_fails)
 
     result = runner.invoke(warcraft_app, ["guide-builds-simc", str(bundle), "--decode"])
     assert result.exit_code == 0, result.output
@@ -6358,17 +6169,12 @@ def test_guide_builds_simc_fails_when_a_requested_leg_produced_nothing(monkeypat
     """
     bundle = _guide_bundle(tmp_path, build_code="ABC123")
 
-    def half_working_simc(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, object]:
-        if args[0] == "decode-build":
-            return {
-                "provider": provider,
-                "exit_code": 2,
-                "payload": {"ok": False, "error": {"code": "invalid_query", "message": "no class/spec"}},
-                "stdout": "",
-            }
-        return {"provider": provider, "exit_code": 0, "payload": {"ok": True}, "stdout": ""}
+    def half_working_simc(command: str, build: PacketInput | str, *, describe: DescribeOptions | None = None) -> dict[str, object]:
+        if command == "decode-build":
+            return _simc_result({"ok": False, "error": {"code": "invalid_query", "message": "no class/spec"}}, exit_code=2)
+        return _simc_result({"ok": True})
 
-    monkeypatch.setattr("warcraft_cli.main.provider_invoke", half_working_simc)
+    monkeypatch.setattr("warcraft_cli.main.simc_call", half_working_simc)
 
     result = runner.invoke(warcraft_app, ["guide-builds-simc", str(bundle), "--decode"])
     assert result.exit_code == 0, result.output
@@ -6389,12 +6195,7 @@ def test_guide_builds_simc_is_ok_when_the_requested_legs_all_produced_something(
     """A leg nobody asked for (`--apl-path` describe) cannot make the handoff `partial`."""
     bundle = _guide_bundle(tmp_path, build_code="ABC123")
 
-    monkeypatch.setattr(
-        "warcraft_cli.main.provider_invoke",
-        lambda provider, args, *, expansion=None: {
-            "provider": provider, "exit_code": 0, "payload": {"ok": True}, "stdout": "",
-        },
-    )
+    monkeypatch.setattr("warcraft_cli.main.simc_call", lambda command, build, *, describe=None: _simc_result({"ok": True}))
 
     result = runner.invoke(warcraft_app, ["guide-builds-simc", str(bundle)])
     assert result.exit_code == 0, result.output
@@ -6497,7 +6298,7 @@ def test_warcraft_guild_expansion_mismatch_surfaces_the_registry_guard(monkeypat
 
 def test_transport_packet_upgraded_when_only_the_status_rank_improves() -> None:
     """A raw_only -> validated upgrade counts even when the transport-form set is unchanged."""
-    from warcraft_cli.main import _transport_packet_upgraded
+    from warcraft_cli.talent_routing import _transport_packet_upgraded
 
     forms = {"simc_split_talents": {"class_talents": "1:1"}}
     previous = {"transport_status": "raw_only", "transport_forms": forms}
@@ -6509,14 +6310,14 @@ def test_transport_packet_upgraded_when_only_the_status_rank_improves() -> None:
 
 def test_guide_compare_query_default_out_root_is_the_xdg_data_dir(monkeypatch, tmp_path) -> None:
     """Without --out-root the orchestration root is the XDG data dir, never the caller's CWD."""
-    from warcraft_cli.main import _default_guide_compare_query_root
+    from warcraft_cli.guide_compare import default_guide_compare_query_root
 
     workdir = tmp_path / "cwd"
     workdir.mkdir()
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
     monkeypatch.chdir(workdir)
 
-    root = _default_guide_compare_query_root("Balance Druid guide")
+    root = default_guide_compare_query_root("Balance Druid guide")
 
     assert root == tmp_path / "data" / "warcraft" / "guide_compare" / "balance-druid-guide"
     assert workdir not in root.parents
@@ -6524,7 +6325,7 @@ def test_guide_compare_query_default_out_root_is_the_xdg_data_dir(monkeypatch, t
 
 def test_guide_compare_reuse_of_a_corrupt_bundle_becomes_an_error_row(tmp_path) -> None:
     """A manifest row pointing at an unreadable bundle must not be reused as if it loaded."""
-    from warcraft_cli.main import _guide_compare_reuse_row
+    from warcraft_cli.guide_compare import _guide_compare_reuse_row
 
     export_dir = tmp_path / "method"
     export_dir.mkdir()
@@ -7216,12 +7017,13 @@ def _guide_row(slug: str, score: int, kind: str = "guide") -> dict[str, Any]:
 
 
 def test_guide_compare_query_does_not_accept_an_unresolved_match(monkeypatch) -> None:
-    from warcraft_cli.main import _resolve_guide_compare_candidate
+    from warcraft_cli.guide_compare import _resolve_guide_compare_candidate
+    from warcraft_cli.main import _provider_calls
 
     _guide_seam(monkeypatch, resolve={"resolved": False, "confidence": "medium", "match": _guide_row("weak-guess", 40)},
                 search=[_guide_row("decisive-guide", 90)])
 
-    candidate, decline = _resolve_guide_compare_candidate("method", "mw guide", expansion=None)
+    candidate, decline = _resolve_guide_compare_candidate("method", "mw guide", expansion=None, calls=_provider_calls())
 
     assert candidate is not None and candidate["ref"] == "decisive-guide"
     assert candidate["selection_source"] == "search_fallback"
@@ -7243,11 +7045,12 @@ def test_guide_compare_query_does_not_accept_an_unresolved_match(monkeypatch) ->
 def test_guide_compare_query_declines_each_unusable_selection(
     monkeypatch, resolve: dict[str, Any], search: list[dict[str, Any]], reason: str, resolve_reason: str
 ) -> None:
-    from warcraft_cli.main import _resolve_guide_compare_candidate
+    from warcraft_cli.guide_compare import _resolve_guide_compare_candidate
+    from warcraft_cli.main import _provider_calls
 
     _guide_seam(monkeypatch, resolve=resolve, search=search)
 
-    candidate, decline = _resolve_guide_compare_candidate("method", "q", expansion=None)
+    candidate, decline = _resolve_guide_compare_candidate("method", "q", expansion=None, calls=_provider_calls())
 
     assert candidate is None
     assert (decline["status"], decline["reason"], decline["resolve_reason"]) == ("skipped", reason, resolve_reason)
@@ -7274,7 +7077,8 @@ def test_guide_compare_query_total_provider_outage_is_a_network_failure(monkeypa
 
 
 def test_guide_compare_query_reports_a_resolve_outage_that_search_could_not_make_up_for(monkeypatch) -> None:
-    from warcraft_cli.main import _resolve_guide_compare_candidate
+    from warcraft_cli.guide_compare import _resolve_guide_compare_candidate
+    from warcraft_cli.main import _provider_calls
 
     monkeypatch.setattr("warcraft_cli.main.provider_resolve", lambda provider, query, **kwargs: _network_failure(provider, "resolve"))
     monkeypatch.setattr(
@@ -7282,7 +7086,7 @@ def test_guide_compare_query_reports_a_resolve_outage_that_search_could_not_make
         lambda provider, query, **kwargs: {"provider": provider, "exit_code": 0, "payload": _envelope({"results": []})},
     )
 
-    candidate, decline = _resolve_guide_compare_candidate("icy-veins", "mw guide", expansion=None)
+    candidate, decline = _resolve_guide_compare_candidate("icy-veins", "mw guide", expansion=None, calls=_provider_calls())
 
     assert candidate is None
     assert (decline["status"], decline["reason"], decline["resolve_reason"]) == ("error", "provider_failed", "provider_failed")
@@ -7365,17 +7169,16 @@ def test_guide_builds_simc_reports_partial_when_a_leg_worked_for_some_builds(mon
         for code in ("ABC123", "DEF456")
     ]
     bundle = _bundle_with_references(tmp_path, references)
-    decodes: list[list[str]] = []
+    decodes: list[PacketInput | str] = []
 
-    def second_decode_fails(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, object]:
-        if args[0] == "decode-build":
-            decodes.append(args)
+    def second_decode_fails(command: str, build: PacketInput | str, *, describe: DescribeOptions | None = None) -> dict[str, object]:
+        if command == "decode-build":
+            decodes.append(build)
             if len(decodes) == 2:
-                return {"provider": provider, "exit_code": 2, "stdout": "",
-                        "payload": {"ok": False, "error": {"code": "invalid_query", "message": "bad build"}}}
-        return {"provider": provider, "exit_code": 0, "payload": {"ok": True}, "stdout": ""}
+                return _simc_result({"ok": False, "error": {"code": "invalid_query", "message": "bad build"}}, exit_code=2)
+        return _simc_result({"ok": True})
 
-    monkeypatch.setattr("warcraft_cli.main.provider_invoke", second_decode_fails)
+    monkeypatch.setattr("warcraft_cli.main.simc_call", second_decode_fails)
 
     result = runner.invoke(warcraft_app, ["guide-builds-simc", str(bundle)])
     assert result.exit_code == 0, result.output
@@ -7555,6 +7358,30 @@ def test_captured_system_exit_keeps_its_code() -> None:
     assert (exit_code, payload) == (3, None)
 
 
+def test_simc_call_failure_is_an_envelope_echoing_the_inputs_it_was_handed(tmp_path) -> None:
+    """An in-process simc failure reads like the CLI's: a simc envelope, its exit code, and the inputs as query."""
+    from warcraft_cli.providers import simc_call
+
+    packet = {
+        "kind": "talent_transport_packet",
+        "transport_status": "exact",
+        "transport_forms": {"wowhead_talent_calc_url": "https://www.wowhead.com/talent-calc/druid/balance/ABC123"},
+        "build_identity": {"class_spec_identity": {"identity": {"actor_class": "druid", "spec": "balance"}}},
+        "raw_evidence": {"reference_url": "https://www.wowhead.com/talent-calc/druid/balance/ABC123"},
+        "validation": {},
+        "scope": {},
+    }
+    missing_apl = str(tmp_path / "missing.simc")
+
+    result = simc_call("describe-build", PacketInput(packet), describe=DescribeOptions(apl_path=missing_apl))
+
+    assert result["exit_code"] == 4
+    payload = result["payload"]
+    assert envelope_violations(payload) == []
+    assert (payload["provider"], payload["command"], payload["error"]["code"]) == ("simc", "describe-build", "not_found")
+    assert payload["query"] == {"build_packet": None, **dataclasses.asdict(DescribeOptions(apl_path=missing_apl))}
+
+
 def _parse_with_the_real_provider_cli(provider: str, args: list[str]) -> None:
     """Parse ``args`` exactly as ``provider``'s own CLI would, raising on any usage error."""
     group = typer.main.get_command(get_provider(provider).app)
@@ -7569,18 +7396,19 @@ def test_composite_argv_parses_with_the_real_provider_clis(monkeypatch, tmp_path
     monkeypatch.setattr("warcraft_cli.main.provider_invoke", _cooldown_packet_invoke(calls))
     assert runner.invoke(warcraft_app, [*_cooldown_packet_args(), "--metric", "hps"]).exit_code == 0
 
-    def export_and_simc(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, Any]:
+    def export(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, Any]:
         calls.append((provider, args))
-        if provider != "simc":
-            write_article_bundle(
-                _comparison_payload(provider=provider, slug=args[1], page_url=f"https://example.test/{provider}",
-                                    page_title="g", analysis_tags=["builds_talents"], build_code="ABC123"),
-                provider=provider, export_dir=Path(args[3]),
-            )
+        write_article_bundle(
+            _comparison_payload(provider=provider, slug=args[1], page_url=f"https://example.test/{provider}",
+                                page_title="g", analysis_tags=["builds_talents"], build_code="ABC123"),
+            provider=provider, export_dir=Path(args[3]),
+        )
         return {"provider": provider, "exit_code": 0, "payload": _envelope({}), "stdout": ""}
 
     _guide_seam(monkeypatch, resolve={"resolved": True, "confidence": "high", "match": _guide_row("mw", 90)}, search=[])
-    monkeypatch.setattr("warcraft_cli.main.provider_invoke", export_and_simc)
+    monkeypatch.setattr("warcraft_cli.main.provider_invoke", export)
+    # simc runs in-process from typed arguments, so it has no argv to parse.
+    monkeypatch.setattr("warcraft_cli.main.simc_call", lambda command, build, *, describe=None: _simc_result({"ok": True}))
     result = runner.invoke(warcraft_app, [
         "guide-compare-query", "mistweaver monk guide", "--provider", "method", "--provider", "icy-veins",
         "--out-root", str(tmp_path / "o"), "--simc-build-handoff",
@@ -7589,7 +7417,7 @@ def test_composite_argv_parses_with_the_real_provider_clis(monkeypatch, tmp_path
 
     assert {(provider, args[0]) for provider, args in calls} >= {
         ("lorrgs", "user-report-fights"), ("lorrgs", "spec-ranking"), ("warcraftlogs", "report-events"),
-        ("method", "guide-export"), ("simc", "identify-build"), ("simc", "decode-build"),
+        ("method", "guide-export"),
     }
     for provider, args in calls:
         _parse_with_the_real_provider_cli(provider, args)

@@ -8,6 +8,7 @@ import re
 import shlex
 import sys
 import tempfile
+from collections.abc import Callable
 from dataclasses import astuple, dataclass
 from pathlib import Path
 from typing import Annotated, Any, NoReturn
@@ -28,8 +29,14 @@ from warcraft_core.cli import (
     guarded_run,
 )
 from warcraft_core.exit_codes import EXIT_USAGE
-from warcraft_core.identity import build_identity_payload, is_transport_int, refresh_talent_transport_packet
+from warcraft_core.identity import (
+    build_identity_payload,
+    is_transport_int,
+    refresh_talent_transport_packet,
+    validate_talent_transport_packet,
+)
 from warcraft_core.output import DEFAULT_COMPACT_MAX_CHARS
+from warcraft_core.provider import ProviderError
 from warcraft_core.talent_transport import CLASS_ID_BY_ACTOR_CLASS, specialization_ids, tokenize_talent_name
 
 from simc_cli.apl import action_counts, group_entries, mermaid_graph, parse_apl, talent_refs, trace_action_entries
@@ -51,6 +58,7 @@ from simc_cli.build_input import (
     BuildResolution,
     BuildSpec,
     DecodedTalent,
+    PacketInput,
     SimcBuildError,
     TalentStrings,
     TreeDiff,
@@ -123,6 +131,20 @@ def _emit(ctx: typer.Context, payload: dict[str, Any]) -> None:
     emit(ctx, simc_envelope(ctx.info_name or "", payload))
 
 
+def _fail_with(ctx: typer.Context, exc: ProviderError) -> NoReturn:
+    """Emit a failure a pure helper raised, echoing the command's parsed flags like any other ``fail``."""
+    fail(ctx, exc.code, exc.message, exit_code=exc.exit_code, details=exc.details)
+
+
+def _emit_or_fail(ctx: typer.Context, build: Callable[[], dict[str, Any]]) -> None:
+    """Emit the payload ``build`` returns, or the ``ProviderError`` it raises."""
+    try:
+        payload = build()
+    except ProviderError as exc:
+        _fail_with(ctx, exc)
+    _emit(ctx, payload)
+
+
 def _write_packet_json_or_fail(ctx: typer.Context, *, out: str | None, packet: dict[str, Any]) -> str | None:
     if not out:
         return None
@@ -167,7 +189,8 @@ def _serialize_build_spec(spec: BuildSpec) -> dict[str, Any]:
     }
     if spec.transport_source or spec.transport_form or spec.transport_status:
         payload["transport_packet"] = {
-            "path": spec.transport_source,
+            # A packet handed over in memory (``PacketInput`` without a path) has no file to name.
+            **({"path": spec.transport_source} if spec.transport_source else {}),
             "transport_form": spec.transport_form,
             "transport_status": spec.transport_status,
         }
@@ -271,12 +294,14 @@ def _build_option_values(
     enable: list[str] | None = None,
     disable: list[str] | None = None,
     build_packet: str | None = None,
+    packet: PacketInput | None = None,
 ) -> dict[str, Any]:
     """Pack the shared build-input flag group so wide commands can hand it to one plain function."""
     return {
         "profile_path": profile_path,
         "build_file": build_file,
         "build_packet": build_packet,
+        "packet": packet,
         "build_text": build_text,
         "talents": talents,
         "actor_class": actor_class,
@@ -299,25 +324,24 @@ def _require_checkout(ctx: typer.Context, paths: RepoPaths) -> None:
         )
 
 
-def _require_apl_path(ctx: typer.Context, paths: RepoPaths, apl_path: str | None) -> None:
+def _require_apl_path(paths: RepoPaths, apl_path: str | None) -> None:
     """Reject an --apl-path that does not exist: its file stem otherwise invents a class and spec."""
     if apl_path is not None:
-        _apl_or_fail(ctx, paths, apl_path)
+        _apl_or_raise(paths, apl_path)
 
 
-def _apl_or_fail(ctx: typer.Context, paths: RepoPaths, apl_path: str, *, list_name: str | None = None) -> Path:
-    """Resolve an APL file, failing ``not_found`` when it or the requested action list is not there.
+def _apl_or_raise(paths: RepoPaths, apl_path: str, *, list_name: str | None = None) -> Path:
+    """Resolve an APL file, raising ``not_found`` when it or the requested action list is not there.
 
     An unknown list would otherwise read as a list with no actions.
     """
     resolved = _resolve_path(paths, apl_path)
     if not resolved.exists():
-        fail(ctx, "not_found", f"APL file not found: {resolved}")
+        raise ProviderError("not_found", f"APL file not found: {resolved}")
     if list_name is not None:
         lists = sorted(group_entries(parse_apl(resolved)))
         if list_name not in lists:
-            fail(
-                ctx,
+            raise ProviderError(
                 "not_found",
                 f"Action list '{list_name}' is not in {resolved.name}. Its lists are: {', '.join(lists)}.",
                 details={"available_lists": lists},
@@ -325,10 +349,36 @@ def _apl_or_fail(ctx: typer.Context, paths: RepoPaths, apl_path: str, *, list_na
     return resolved
 
 
+def _apl_or_fail(ctx: typer.Context, paths: RepoPaths, apl_path: str, *, list_name: str | None = None) -> Path:
+    try:
+        return _apl_or_raise(paths, apl_path, list_name=list_name)
+    except ProviderError as exc:
+        _fail_with(ctx, exc)
+
+
+def _identified_build_or_raise(
+    paths: RepoPaths, *, apl_path: str | None, option_values: dict[str, Any]
+) -> tuple[BuildSpec, BuildIdentity]:
+    _require_apl_path(paths, apl_path)
+    return _load_identified_build_spec_or_raise(
+        paths,
+        apl_path=apl_path,
+        profile_path=option_values["profile_path"],
+        build_file=option_values["build_file"],
+        build_packet=option_values["build_packet"],
+        packet=option_values["packet"],
+        build_text=option_values["build_text"],
+        talents=option_values["talents"],
+        actor_class=option_values["actor_class"],
+        spec_name=option_values["spec_name"],
+    )
+
+
 def _identified_build_or_fail(
     ctx: typer.Context, paths: RepoPaths, *, apl_path: str | None, option_values: dict[str, Any]
 ) -> tuple[BuildSpec, BuildIdentity]:
-    _require_apl_path(ctx, paths, apl_path)
+    if apl_path is not None:
+        _apl_or_fail(ctx, paths, apl_path)
     return _load_identified_build_spec_or_fail(
         ctx,
         paths,
@@ -432,17 +482,60 @@ def _load_identified_build_spec(
     actor_class: str | None,
     spec_name: str | None,
     build_packet: str | None = None,
+    packet: PacketInput | None = None,
 ) -> tuple[BuildSpec, BuildIdentity]:
     unresolved_spec = load_build_spec(
         profile_path=profile_path,
         build_file=build_file,
         build_packet=build_packet,
+        packet=packet,
         build_text=build_text,
         talents=talents,
         actor_class=actor_class,
         spec_name=spec_name,
     )
     return identify_build(paths, unresolved_spec, apl_path=apl_path)
+
+
+def _load_identified_build_spec_or_raise(
+    paths: RepoPaths,
+    *,
+    apl_path: str | Path | None,
+    profile_path: str | None,
+    build_file: str | None,
+    build_text: str | None,
+    talents: TalentStrings,
+    actor_class: str | None,
+    spec_name: str | None,
+    build_packet: str | None = None,
+    packet: PacketInput | None = None,
+) -> tuple[BuildSpec, BuildIdentity]:
+    try:
+        return _load_identified_build_spec(
+            paths,
+            apl_path=apl_path,
+            profile_path=profile_path,
+            build_file=build_file,
+            build_packet=build_packet,
+            packet=packet,
+            build_text=build_text,
+            talents=talents,
+            actor_class=actor_class,
+            spec_name=spec_name,
+        )
+    except SimcNotReadyError as exc:
+        # The checkout, not the caller's input, is what failed; this is not a usage error.
+        raise ProviderError("identify_failed", str(exc)) from exc
+    except UnsupportedBuildReference as exc:
+        raise ProviderError(
+            "unsupported_build_reference",
+            str(exc),
+            exit_code=EXIT_USAGE,
+            details={"reference_type": exc.reference_type},
+        ) from exc
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        code = "invalid_build_packet" if build_packet or packet is not None else "invalid_query"
+        raise ProviderError(code, str(exc)) from exc
 
 
 def _load_identified_build_spec_or_fail(
@@ -459,7 +552,7 @@ def _load_identified_build_spec_or_fail(
     build_packet: str | None = None,
 ) -> tuple[BuildSpec, BuildIdentity]:
     try:
-        return _load_identified_build_spec(
+        return _load_identified_build_spec_or_raise(
             paths,
             apl_path=apl_path,
             profile_path=profile_path,
@@ -470,24 +563,15 @@ def _load_identified_build_spec_or_fail(
             actor_class=actor_class,
             spec_name=spec_name,
         )
-    except SimcNotReadyError as exc:
-        # The checkout, not the caller's input, is what failed; this is not a usage error.
-        fail(ctx, "identify_failed", str(exc))
-    except UnsupportedBuildReference as exc:
-        fail(
-            ctx,
-            "unsupported_build_reference",
-            str(exc),
-            exit_code=EXIT_USAGE,
-            details={"reference_type": exc.reference_type},
-        )
-    except (OSError, ValueError, json.JSONDecodeError) as exc:
-        if build_packet:
-            fail(ctx, "invalid_build_packet", str(exc))
-        fail(ctx, "invalid_query", str(exc))
+    except ProviderError as exc:
+        _fail_with(ctx, exc)
 
 
 def _fail_unidentified_build(ctx: typer.Context, *, purpose: str, build_spec: BuildSpec, identity: BuildIdentity) -> NoReturn:
+    _fail_with(ctx, _unidentified_build_error(purpose=purpose, build_spec=build_spec, identity=identity))
+
+
+def _unidentified_build_error(*, purpose: str, build_spec: BuildSpec, identity: BuildIdentity) -> ProviderError:
     """Ask for an explicit class and spec when decoding the build as every candidate spec found no single match."""
     if identity.source == "missing_build_data":
         reason = "no talent build was supplied"
@@ -496,8 +580,7 @@ def _fail_unidentified_build(ctx: typer.Context, *, purpose: str, build_spec: Bu
         reason = f"it decodes as {len(identity.candidates)} specs ({found})"
     else:
         reason = f"it decodes as none of {identity.probe_scope}"
-    fail(
-        ctx,
+    return ProviderError(
         "invalid_query",
         f"Could not determine actor class and spec for {purpose}: {reason}. Pass --actor-class and --spec.",
         details={"build_spec": _serialize_build_spec(build_spec), "identity": _serialize_build_identity(identity)},
@@ -863,6 +946,12 @@ def _decoded_payload(resolution: BuildResolution) -> dict[str, Any]:
 def _fail_build_error(
     ctx: typer.Context, exc: Exception, *, code: str, prefix: str = "", details: dict[str, Any] | None = None
 ) -> NoReturn:
+    _fail_with(ctx, _build_error(_repo_paths(ctx), exc, code=code, prefix=prefix, details=details))
+
+
+def _build_error(
+    paths: RepoPaths, exc: Exception, *, code: str, prefix: str = "", details: dict[str, Any] | None = None
+) -> ProviderError:
     """Report SimC's rejection of a build as ``invalid_build`` carrying only its error line.
 
     SimC is run with ``debug=1``, so its raw output is tens of thousands of lines; only the ``Error:``
@@ -872,11 +961,11 @@ def _fail_build_error(
     extra = dict(details or {})
     if isinstance(exc, UnknownTalentError):
         # A bad --enable/--disable value is the caller's typo, not SimC rejecting the build.
-        fail(ctx, "unknown_talent", str(exc), exit_code=EXIT_USAGE, details={"unknown_talents": exc.values})
+        return ProviderError("unknown_talent", str(exc), exit_code=EXIT_USAGE, details={"unknown_talents": exc.values})
     if isinstance(exc, UnknownClassSpecError):
-        fail(ctx, "invalid_query", str(exc))
+        return ProviderError("invalid_query", str(exc))
     if isinstance(exc, SimcBuildError):
-        provenance = binary_provenance(_repo_paths(ctx))
+        provenance = binary_provenance(paths)
         extra["simc_returncode"] = exc.returncode
         extra["simc_output_preview"] = exc.output_preview
         extra["simc_binary"] = {
@@ -885,14 +974,14 @@ def _fail_build_error(
             "matches_checkout": provenance.matches_checkout,
         }
         hint = provenance.stale_hint
-        fail(ctx, "invalid_build", f"{prefix}{exc}{f' {hint}' if hint else ''}", details=extra or None)
-    fail(ctx, code, f"{prefix}{exc}", details=extra or None)
+        return ProviderError("invalid_build", f"{prefix}{exc}{f' {hint}' if hint else ''}", details=extra or None)
+    return ProviderError(code, f"{prefix}{exc}", details=extra or None)
 
 
-def _decode_or_fail(
-    ctx: typer.Context, paths: RepoPaths, build_spec: BuildSpec, *, identity: BuildIdentity | None = None, prefix: str = ""
+def _decode_or_raise(
+    paths: RepoPaths, build_spec: BuildSpec, *, identity: BuildIdentity | None = None, prefix: str = ""
 ) -> BuildResolution:
-    """Decode a build, turning SimC's rejection into an ``invalid_build`` envelope with its own message."""
+    """Decode a build, turning SimC's rejection into an ``invalid_build`` failure with its own message."""
     try:
         return decode_build(paths, build_spec)
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
@@ -901,30 +990,48 @@ def _decode_or_fail(
             details["identity"] = _serialize_build_identity(identity)
         with contextlib.suppress(ValueError):
             details["generated_profile"] = build_profile_text(build_spec)
-        _fail_build_error(ctx, exc, code="decode_failed", prefix=prefix, details=details)
+        raise _build_error(paths, exc, code="decode_failed", prefix=prefix, details=details) from exc
 
 
-def _decode_build(ctx: typer.Context, *, apl_path: str | None, option_values: dict[str, Any]) -> None:
-    paths = _repo_paths(ctx)
-    build_spec, identity = _identified_build_or_fail(ctx, paths, apl_path=apl_path, option_values=option_values)
+def _decode_build_payload(paths: RepoPaths, *, apl_path: str | None, option_values: dict[str, Any]) -> dict[str, Any]:
+    build_spec, identity = _identified_build_or_raise(paths, apl_path=apl_path, option_values=option_values)
     if not has_talent_data(build_spec):
-        fail(
-            ctx,
+        raise ProviderError(
             "invalid_query",
             "No talent build was supplied to decode. Pass --talents, --build-text, --build-file, --build-packet, "
             "--profile-path, or --class-talents/--spec-talents/--hero-talents.",
         )
     if not build_spec.actor_class or not build_spec.spec:
-        _fail_unidentified_build(ctx, purpose="build decoding", build_spec=build_spec, identity=identity)
-    resolution = _decode_or_fail(ctx, paths, build_spec, identity=identity)
-    _emit(
-        ctx,
-        {
-            "build_spec": _serialize_build_spec(build_spec),
-            "identity": _serialize_build_identity(identity),
-            "decoded": _decoded_payload(resolution),
-        },
+        raise _unidentified_build_error(purpose="build decoding", build_spec=build_spec, identity=identity)
+    resolution = _decode_or_raise(paths, build_spec, identity=identity)
+    return {
+        "build_spec": _serialize_build_spec(build_spec),
+        "identity": _serialize_build_identity(identity),
+        "decoded": _decoded_payload(resolution),
+    }
+
+
+def _in_memory_build_option_values(build: PacketInput | str) -> dict[str, Any]:
+    """The build-input options for one build handed over in memory: a packet, or build text such as a talent hash."""
+    packet, build_text = (build, None) if isinstance(build, PacketInput) else (None, build)
+    return _build_option_values(
+        profile_path=None,
+        build_file=None,
+        build_text=build_text,
+        talents=TalentStrings(),
+        actor_class=None,
+        spec_name=None,
+        packet=packet,
     )
+
+
+def decode_build_payload(build: PacketInput | str) -> dict[str, Any]:
+    """What ``simc decode-build`` reports for one in-memory build. Raises ``ProviderError`` instead of exiting."""
+    return _decode_build_payload(discover_repo(), apl_path=None, option_values=_in_memory_build_option_values(build))
+
+
+def _decode_build(ctx: typer.Context, *, apl_path: str | None, option_values: dict[str, Any]) -> None:
+    _emit_or_fail(ctx, lambda: _decode_build_payload(_repo_paths(ctx), apl_path=apl_path, option_values=option_values))
 
 
 @app.command("decode-build")
@@ -953,24 +1060,28 @@ def decode_build_command(
     _decode_build(ctx, apl_path=apl_path, option_values=option_values)
 
 
-def _identify_build(ctx: typer.Context, *, apl_path: str | None, option_values: dict[str, Any]) -> None:
-    paths = _repo_paths(ctx)
-    build_spec, identity = _identified_build_or_fail(ctx, paths, apl_path=apl_path, option_values=option_values)
+def _identify_build_payload(paths: RepoPaths, *, apl_path: str | None, option_values: dict[str, Any]) -> dict[str, Any]:
+    build_spec, identity = _identified_build_or_raise(paths, apl_path=apl_path, option_values=option_values)
     if identity.source == "missing_build_data":
-        fail(
-            ctx,
+        raise ProviderError(
             "invalid_query",
             "No build was supplied to identify. Pass --talents, --build-text, --build-file, --build-packet, "
             "--profile-path, --apl-path, --class-talents/--spec-talents/--hero-talents, or --actor-class with --spec.",
         )
-    _emit(
-        ctx,
-        {
-            "kind": "identify_build",
-            "build_spec": _serialize_build_spec(build_spec),
-            "identity": _serialize_build_identity(identity),
-        },
-    )
+    return {
+        "kind": "identify_build",
+        "build_spec": _serialize_build_spec(build_spec),
+        "identity": _serialize_build_identity(identity),
+    }
+
+
+def identify_build_payload(build: PacketInput | str) -> dict[str, Any]:
+    """What ``simc identify-build`` reports for one in-memory build. Raises ``ProviderError`` instead of exiting."""
+    return _identify_build_payload(discover_repo(), apl_path=None, option_values=_in_memory_build_option_values(build))
+
+
+def _identify_build(ctx: typer.Context, *, apl_path: str | None, option_values: dict[str, Any]) -> None:
+    _emit_or_fail(ctx, lambda: _identify_build_payload(_repo_paths(ctx), apl_path=apl_path, option_values=option_values))
 
 
 @app.command("identify-build")
@@ -1012,11 +1123,9 @@ class _TransportInput:
     packet_transport_status: str | None = None
 
 
-def _packet_transport_input(ctx: typer.Context, build_packet: str, actor_class: str | None, spec_name: str | None) -> _TransportInput:
-    try:
-        packet, resolved_packet_path = load_build_packet(build_packet)
-    except (OSError, ValueError, json.JSONDecodeError) as exc:
-        fail(ctx, "invalid_build_packet", str(exc))
+def _packet_transport_input(
+    packet: dict[str, Any], packet_path: str | None, actor_class: str | None, spec_name: str | None
+) -> _TransportInput:
     transport_status = packet.get("transport_status")
     return _TransportInput(
         source="build_packet",
@@ -1024,9 +1133,24 @@ def _packet_transport_input(ctx: typer.Context, build_packet: str, actor_class: 
         actor_class=actor_class if actor_class is not None else packet_identity_value(packet, "actor_class"),
         spec=spec_name if spec_name is not None else packet_identity_value(packet, "spec"),
         packet=packet,
-        packet_path=resolved_packet_path,
+        packet_path=packet_path,
         packet_transport_status=transport_status if isinstance(transport_status, str) else None,
     )
+
+
+def _checked_transport_input(resolved: _TransportInput) -> _TransportInput:
+    """Raise unless the input has talent rows and a class/spec identity to validate them against."""
+    if not resolved.rows:
+        raise ProviderError("invalid_query", "No raw talent rows were available to validate.")
+    if not resolved.actor_class or not resolved.spec:
+        raise ProviderError(
+            "invalid_query",
+            (
+                "Validate-talent-transport requires class/spec identity. "
+                "Provide --actor-class and --spec, or use a build packet with packet identity."
+            ),
+        )
+    return resolved
 
 
 def _transport_input_or_fail(
@@ -1038,29 +1162,24 @@ def _transport_input_or_fail(
     spec_name: str | None,
 ) -> _TransportInput:
     if build_packet:
-        resolved = _packet_transport_input(ctx, build_packet, actor_class, spec_name)
+        try:
+            packet, resolved_packet_path = load_build_packet(build_packet)
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            fail(ctx, "invalid_build_packet", str(exc))
+        resolved = _packet_transport_input(packet, resolved_packet_path, actor_class, spec_name)
     else:
         try:
             rows = [_parse_talent_row(value) for value in talent_row]
         except ValueError as exc:
             fail(ctx, "invalid_talent_row", str(exc))
         resolved = _TransportInput(source="talent_rows", rows=rows, actor_class=actor_class, spec=spec_name)
-    if not resolved.rows:
-        fail(ctx, "invalid_query", "No raw talent rows were available to validate.")
-    if not resolved.actor_class or not resolved.spec:
-        fail(
-            ctx,
-            "invalid_query",
-            (
-                "Validate-talent-transport requires class/spec identity. "
-                "Provide --actor-class and --spec, or use a build packet with packet identity."
-            ),
-        )
-    return resolved
+    try:
+        return _checked_transport_input(resolved)
+    except ProviderError as exc:
+        _fail_with(ctx, exc)
 
 
 def _refreshed_transport_packet(
-    ctx: typer.Context,
     *,
     packet: dict[str, Any],
     resolved: _TransportInput,
@@ -1083,7 +1202,63 @@ def _refreshed_transport_packet(
             build_identity=identity,
         )
     except ValueError as exc:
-        fail(ctx, "invalid_build_packet", str(exc))
+        raise ProviderError("invalid_build_packet", str(exc)) from exc
+
+
+def _validate_talent_transport_payload(resolved: _TransportInput, *, repo_root: str | None) -> dict[str, Any]:
+    """Round-trip the input's talent rows through SimC; ``written_packet_path`` is left for ``--out`` to fill."""
+    result = validate_talent_tree_transport(
+        actor_class=resolved.actor_class,
+        spec=resolved.spec,
+        talent_tree_rows=resolved.rows,
+        repo_root=repo_root,
+    )
+    raw_forms = result.get("transport_forms")
+    transport_forms: dict[str, Any] = raw_forms if isinstance(raw_forms, dict) else {}
+    raw_validation = result.get("validation")
+    validation: dict[str, Any] = raw_validation if isinstance(raw_validation, dict) else {}
+    transport_status = "validated" if transport_forms.get("simc_split_talents") else "raw_only"
+    updated_packet: dict[str, Any] | None = None
+    if resolved.packet is not None:
+        updated_packet = _refreshed_transport_packet(
+            packet=resolved.packet,
+            resolved=resolved,
+            transport_forms=transport_forms,
+            validation=validation,
+        )
+        packet_status = updated_packet.get("transport_status")
+        transport_status = packet_status if isinstance(packet_status, str) else transport_status
+    return {
+        "kind": "validate_talent_transport",
+        "input": {
+            "source": resolved.source,
+            "build_packet": resolved.packet_path,
+            "packet_transport_status": resolved.packet_transport_status,
+            "actor_class": resolved.actor_class,
+            "spec": resolved.spec,
+            "talent_row_count": len(resolved.rows),
+        },
+        "raw_talent_tree_entries": resolved.rows,
+        "transport_status": transport_status,
+        "transport_forms": transport_forms,
+        "validation": validation,
+        "updated_packet": updated_packet,
+        "written_packet_path": None,
+    }
+
+
+def validate_transport_packet_payload(packet: PacketInput) -> dict[str, Any]:
+    """What ``simc validate-talent-transport --build-packet`` reports for an in-memory packet.
+
+    ``input.build_packet`` is ``packet.path``, so it is null for a packet that never touched disk.
+    Raises ``ProviderError`` instead of exiting.
+    """
+    try:
+        validated = validate_talent_transport_packet(packet.packet)
+    except ValueError as exc:
+        raise ProviderError("invalid_build_packet", str(exc)) from exc
+    resolved = _checked_transport_input(_packet_transport_input(validated, packet.path, None, None))
+    return _validate_talent_transport_payload(resolved, repo_root=None)
 
 
 @app.command("validate-talent-transport")
@@ -1106,50 +1281,13 @@ def validate_talent_transport_command(
     resolved = _transport_input_or_fail(
         ctx, build_packet=build_packet, talent_row=talent_row, actor_class=actor_class, spec_name=spec_name
     )
-    result = validate_talent_tree_transport(
-        actor_class=resolved.actor_class,
-        spec=resolved.spec,
-        talent_tree_rows=resolved.rows,
-        repo_root=_cfg(ctx).repo_root,
-    )
-    raw_forms = result.get("transport_forms")
-    transport_forms: dict[str, Any] = raw_forms if isinstance(raw_forms, dict) else {}
-    raw_validation = result.get("validation")
-    validation: dict[str, Any] = raw_validation if isinstance(raw_validation, dict) else {}
-    transport_status = "validated" if transport_forms.get("simc_split_talents") else "raw_only"
-    updated_packet: dict[str, Any] | None = None
-    written_packet_path: str | None = None
-    if resolved.packet is not None:
-        updated_packet = _refreshed_transport_packet(
-            ctx,
-            packet=resolved.packet,
-            resolved=resolved,
-            transport_forms=transport_forms,
-            validation=validation,
-        )
-        packet_status = updated_packet.get("transport_status")
-        transport_status = packet_status if isinstance(packet_status, str) else transport_status
-        written_packet_path = _write_packet_json_or_fail(ctx, out=out, packet=updated_packet)
-    _emit(
-        ctx,
-        {
-            "kind": "validate_talent_transport",
-            "input": {
-                "source": resolved.source,
-                "build_packet": resolved.packet_path,
-                "packet_transport_status": resolved.packet_transport_status,
-                "actor_class": resolved.actor_class,
-                "spec": resolved.spec,
-                "talent_row_count": len(resolved.rows),
-            },
-            "raw_talent_tree_entries": resolved.rows,
-            "transport_status": transport_status,
-            "transport_forms": transport_forms,
-            "validation": validation,
-            "updated_packet": updated_packet,
-            "written_packet_path": written_packet_path,
-        },
-    )
+    try:
+        payload = _validate_talent_transport_payload(resolved, repo_root=_cfg(ctx).repo_root)
+    except ProviderError as exc:
+        _fail_with(ctx, exc)
+    if payload["updated_packet"] is not None:
+        payload["written_packet_path"] = _write_packet_json_or_fail(ctx, out=out, packet=payload["updated_packet"])
+    _emit(ctx, payload)
 
 
 def _build_harness(
@@ -1829,68 +1967,70 @@ def priority_command(
     _priority(ctx, apl_path=apl_path, targets=targets, list_name=list_name, limit=limit, option_values=option_values)
 
 
-def _describe_build(
-    ctx: typer.Context,
-    *,
-    apl_path: str | None,
-    targets: int,
-    aoe_targets: int,
-    list_name: str,
-    priority_limit: int,
-    inactive_limit: int,
-    option_values: dict[str, Any],
-) -> None:
-    paths = _repo_paths(ctx)
-    build_spec, identity = _identified_build_or_fail(ctx, paths, apl_path=apl_path, option_values=option_values)
+@dataclass(frozen=True, slots=True)
+class DescribeOptions:
+    """The APL view ``describe-build`` reports; the defaults are the command's own flag defaults."""
+
+    apl_path: str | None = None
+    targets: int = 1
+    aoe_targets: int = 5
+    list_name: str = "default"
+    priority_limit: int = 8
+    inactive_limit: int = 8
+
+
+def _describe_build_payload(paths: RepoPaths, options: DescribeOptions, option_values: dict[str, Any]) -> dict[str, Any]:
+    build_spec, identity = _identified_build_or_raise(paths, apl_path=options.apl_path, option_values=option_values)
     if not build_spec.actor_class or not build_spec.spec:
-        _fail_unidentified_build(ctx, purpose="build description", build_spec=build_spec, identity=identity)
-    resolved = _resolve_path(paths, apl_path) if apl_path else _infer_default_apl_path(
+        raise _unidentified_build_error(purpose="build description", build_spec=build_spec, identity=identity)
+    resolved = _resolve_path(paths, options.apl_path) if options.apl_path else _infer_default_apl_path(
         paths, actor_class=build_spec.actor_class, spec=build_spec.spec)
     if not resolved:
-        fail(
-            ctx,
+        raise ProviderError(
             "not_found",
             "Could not locate an APL file for the resolved build. Pass --apl-path explicitly.",
             details={"build_spec": _serialize_build_spec(build_spec), "identity": _serialize_build_identity(identity)},
         )
-    _apl_or_fail(ctx, paths, str(resolved), list_name=list_name)
+    _apl_or_raise(paths, str(resolved), list_name=options.list_name)
     try:
-        primary_context, resolution = _prune_context(paths, build_spec, option_values, targets)
+        primary_context, resolution = _prune_context(paths, build_spec, option_values, options.targets)
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
-        _fail_build_error(ctx, exc, code="describe_build_failed")
-    aoe_context = dataclasses.replace(primary_context, targets=aoe_targets)
-    primary = _describe_target_payload(resolved, primary_context, start_list=list_name,
-                                       priority_limit=priority_limit, inactive_limit=inactive_limit)
-    aoe = _describe_target_payload(resolved, aoe_context, start_list=list_name,
-                                   priority_limit=priority_limit, inactive_limit=inactive_limit)
+        raise _build_error(paths, exc, code="describe_build_failed") from exc
+    aoe_context = dataclasses.replace(primary_context, targets=options.aoe_targets)
+    primary = _describe_target_payload(resolved, primary_context, start_list=options.list_name,
+                                       priority_limit=options.priority_limit, inactive_limit=options.inactive_limit)
+    aoe = _describe_target_payload(resolved, aoe_context, start_list=options.list_name,
+                                   priority_limit=options.priority_limit, inactive_limit=options.inactive_limit)
     primary_actions = list(dict.fromkeys(primary.get("active_action_names") or _action_names(primary["active_priority"])))
     aoe_actions = list(dict.fromkeys(aoe.get("active_action_names") or _action_names(aoe["active_priority"])))
-    _emit(
-        ctx,
-        {
-            "kind": "describe_build",
-            "apl": _apl_payload(paths, resolved),
-            "build_spec": _serialize_build_spec(build_spec),
-            "identity": _serialize_build_identity(identity),
-            "build": {
-                "actor_class": resolution.actor_class,
-                "spec": resolution.spec,
-                "source_kind": resolution.source_kind,
-                "enabled_talents": sorted(resolution.enabled_talents),
-                **_hero_tree_payload(resolution),
-                "talents_by_tree": _talent_tree_payload(resolution),
-                "source_notes": resolution.source_notes,
-            },
-            "single_target": primary,
-            "multi_target": aoe,
-            "comparison": {
-                "primary_targets": targets,
-                "aoe_targets": aoe_targets,
-                "new_active_actions_in_aoe": [action for action in aoe_actions if action not in primary_actions],
-                "missing_active_actions_in_aoe": [action for action in primary_actions if action not in aoe_actions],
-            },
+    return {
+        "kind": "describe_build",
+        "apl": _apl_payload(paths, resolved),
+        "build_spec": _serialize_build_spec(build_spec),
+        "identity": _serialize_build_identity(identity),
+        "build": {
+            "actor_class": resolution.actor_class,
+            "spec": resolution.spec,
+            "source_kind": resolution.source_kind,
+            "enabled_talents": sorted(resolution.enabled_talents),
+            **_hero_tree_payload(resolution),
+            "talents_by_tree": _talent_tree_payload(resolution),
+            "source_notes": resolution.source_notes,
         },
-    )
+        "single_target": primary,
+        "multi_target": aoe,
+        "comparison": {
+            "primary_targets": options.targets,
+            "aoe_targets": options.aoe_targets,
+            "new_active_actions_in_aoe": [action for action in aoe_actions if action not in primary_actions],
+            "missing_active_actions_in_aoe": [action for action in primary_actions if action not in aoe_actions],
+        },
+    }
+
+
+def describe_build_payload(build: PacketInput | str, options: DescribeOptions) -> dict[str, Any]:
+    """What ``simc describe-build`` reports for one in-memory build. Raises ``ProviderError`` instead of exiting."""
+    return _describe_build_payload(discover_repo(), options, _in_memory_build_option_values(build))
 
 
 @app.command("describe-build")
@@ -1926,16 +2066,15 @@ def describe_build_command(
         talents=TalentStrings(talents=talents, class_talents=class_talents, spec_talents=spec_talents, hero_talents=hero_talents),
         actor_class=actor_class, spec_name=spec_name, enable=enable, disable=disable,
     )
-    _describe_build(
-        ctx,
+    options = DescribeOptions(
         apl_path=apl_path,
         targets=targets,
         aoe_targets=aoe_targets,
         list_name=list_name,
         priority_limit=priority_limit,
         inactive_limit=inactive_limit,
-        option_values=option_values,
     )
+    _emit_or_fail(ctx, lambda: _describe_build_payload(_repo_paths(ctx), options, option_values))
 
 
 def _inactive_actions(

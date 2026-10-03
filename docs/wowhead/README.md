@@ -162,7 +162,7 @@ Entities:
 | `entity TYPE ID` | tooltip payload, optionally with comments and a linked-entity preview; `--include-all-comments` replaces the `comments.top` summary with the full `comments.items` list |
 | `entity-page TYPE ID` | parsed page metadata and linked entities; comments come from `comments`. Linked entities cover body links, gatherer records, and the page's relation tabs (a zone's NPCs and quests, a faction's members: `source_kind: "listview"`, tab id in `listview`) |
 | `comments TYPE ID` | ranked comments with filters and optional insight rollups |
-| `compare REF REF ...` | field-by-field diff of two or more entities; `comparison.linked_entities` compares every link each page carries, not the `--max-links-per-entity` cut |
+| `compare REF REF ...` | field-by-field diff of two or more entities; `comparison.linked_entities` compares every link each page carries (the links `entity-page` reports, relation tabs included), not the `--max-links-per-entity` cut |
 | `linked-graph TYPE ID` | bounded linked-entity graph rooted at one entity; `sampling.pages_skipped` counts the pages `--max-fetches` or `--limit` left unread, and `sampling.truncated` is true when any were |
 
 Guides:
@@ -173,10 +173,10 @@ Guides:
 | `guide REF` | one guide: analysis surfaces, linked entities, comments, and page metadata; section bodies come from `guide-full`. An unknown guide id is an upstream 400, reported as exit 5 |
 | `guide-full REF` | the same guide with every section, comment, and link hydrated |
 | `guide-export REF` | write a guide bundle (manifest, sections, entities) to `--out`, or `./wowhead_exports/<guide-slug>/`; a linked entity that cannot be hydrated is listed in `hydration.failed` (`entity_type`, `id`, `code`, `message`) instead of failing the export |
-| `guide-query BUNDLE QUERY` | query one guide bundle for matching sections, links, and comments |
+| `guide-query BUNDLE QUERY` | query one guide bundle for matching sections, links, and comments; answers with the `icy-veins`/`method` guide-query payload (`count`, `match_counts`, `matches`, `top`, `failed_pages`) plus `bundle`, `guide`, and `page` |
 | `guide-bundle-list` | local bundles with freshness and hydration summaries |
 | `guide-bundle-search QUERY` | find local bundles by title, id, or directory name |
-| `guide-bundle-query QUERY` | rank matches across every local bundle |
+| `guide-bundle-query QUERY` | rank matches across every local bundle, scored by the same engine as `guide-query` |
 | `guide-bundle-inspect REF` | missing files, stale data, and hydration gaps for one bundle |
 | `guide-bundle-index-rebuild` | rebuild the corpus index from bundles on disk |
 | `guide-bundle-refresh REF` | re-export stale bundles using their recorded export options and expansion (`--expansion` overrides it) |

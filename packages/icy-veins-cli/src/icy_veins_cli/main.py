@@ -42,7 +42,7 @@ def search(
     query: str = typer.Argument(..., help="Query text to match against Icy Veins WoW guide slugs."),
     limit: int = typer.Option(5, "--limit", min=1, max=50, help="Maximum results to return."),
 ) -> None:
-    """Rank Icy Veins WoW guides from the sitemap against a free-text query."""
+    """Rank Icy Veins WoW guides from the sitemap and the site-wide guide menu against a free-text query."""
     _emit_surface(ctx, lambda: provider.search(query, limit=limit))
 
 

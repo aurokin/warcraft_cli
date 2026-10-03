@@ -1,8 +1,8 @@
 # Icy Veins CLI
 
 `icy-veins` is a WoW guide/article provider CLI. It discovers guides from the Icy Veins WoW
-sitemap, fetches and parses guide pages, and exports multi-page guide bundles that can be queried
-offline.
+sitemap and the site-wide guide menu, fetches and parses guide pages, and exports multi-page guide
+bundles that can be queried offline.
 
 Tier: **supported**. No auth, no API key.
 
@@ -11,7 +11,7 @@ Tier: **supported**. No auth, no API key.
 | Command | What it does |
 | --- | --- |
 | `icy-veins doctor` | Reports capabilities and the resolved HTTP cache configuration. |
-| `icy-veins search <query>` | Ranks sitemap guides against a free-text query. |
+| `icy-veins search <query>` | Ranks sitemap and site-menu guides against a free-text query. |
 | `icy-veins resolve <query>` | Picks the single best guide and returns a `next_command`. |
 | `icy-veins guide <guide_ref>` | Fetches one guide page and returns a summary with previews. |
 | `icy-veins guide-full <guide_ref>` | Fetches every page in the guide's family navigation and merges them. |
@@ -182,12 +182,26 @@ page's own update date (`icy-veins guide` reports that as `guide.last_updated`).
 `penalty_stale_page` in `ranking.match_reasons`, so a past season's guide ranks below the current one.
 
 `search` and `resolve` put `sitemap_url` and `sitemap_newest_lastmod` in `provenance`. When the newest
-entry is more than 30 days old, `provenance.sitemap_warning` says so: the sitemap has stopped being
-updated and guides published since cannot be found. As of 2026-09-30 the sitemap's newest entry is
-2025-10-05 and Icy Veins publishes no other sitemap (`robots.txt` lists only `/sitemap.xml`;
-`/sitemap-index.xml`, `/sitemap_index.xml` and `/wow/sitemap.xml` are 404), so Midnight-era pages
-such as the current season's raid guides are missing from discovery. Open them by slug or URL with
-`icy-veins guide`.
+entry is more than 30 days old, the sitemap has stopped being updated: as of 2026-10-02 its newest
+entry is 2025-10-05 and Icy Veins publishes no other sitemap (`robots.txt` lists only `/sitemap.xml`;
+`/sitemap-index.xml`, `/sitemap_index.xml` and `/wow/sitemap.xml` are 404), and the `/wow/` hub
+answers scripted clients with a Cloudflare 403.
+
+A stale sitemap makes `search` and `resolve` also read the site-wide guide menu (`nav.iv-subnav`)
+that every guide page carries, from one class hub (`provenance.site_menu_url`, cached like any
+guide page). The menu links the current season's pages (raid, Mythic+, PvP and season hubs, new
+specs), and every supported page it links that the sitemap lacks joins the candidates, ranked by the
+same scoring. Every result says where it came from in `metadata.source`: `sitemap` or `site_menu`.
+A `site_menu` row has `sitemap_lastmod: null`, `name` built from its slug like a sitemap row and
+`metadata.menu_title` with the menu's own wording (`Mythic+ Season 2`), which it also matches on; it
+never takes the stale penalty and wins a score tie as the newest page would. `provenance.sitemap_warning`
+then says that pages published since the sitemap's date are found only through the menu, which lists
+current pages only: a past season's page missing from the sitemap (the Season 1 raid) is still not
+found, so open it by slug or URL with `icy-veins guide`.
+
+When the menu cannot be read (a block page, or markup that no longer lists any guide), search still
+answers from the sitemap alone, with `provenance.site_menu_warning` saying why and
+`provenance.sitemap_warning` saying that newer guides are missing.
 
 ## Caching
 
@@ -208,8 +222,8 @@ separately.
 ## Tests
 
 - `tests/test_icy_veins_cli.py` - parsing, ranking, command contracts, transport error envelopes
-- `tests/test_icy_veins_recorded_fixtures.py` - captured real pages (pre-redesign and Astro layouts)
-  plus the slug-to-family classification table
+- `tests/test_icy_veins_recorded_fixtures.py` - captured real pages (pre-redesign and Astro layouts,
+  and a class hub carrying the site-wide guide menu) plus the slug-to-family classification table
 - `tests/e2e/test_icy_veins.py` - live end-to-end journeys, run with `make test-e2e E2E_PATHS="tests/e2e/test_icy_veins.py"`
 
 ## Not in scope
@@ -219,6 +233,7 @@ Login/premium content, non-WoW Icy Veins games, news ingestion, and patch-analys
 ## Source links
 
 - `https://www.icy-veins.com/sitemap.xml`
+- `https://www.icy-veins.com/wow/death-knight-guide` (site-menu source)
 - `https://www.icy-veins.com/wow/monk-guide`
 - `https://www.icy-veins.com/wow/healing-guide`
 - `https://www.icy-veins.com/wow/mistweaver-monk-pve-healing-guide`

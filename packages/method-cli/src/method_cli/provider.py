@@ -9,13 +9,10 @@ from __future__ import annotations
 
 import re
 import shlex
-from collections.abc import Iterator
-from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final
 
-import httpx
 from warcraft_api.cache import redacted_redis_url
 from warcraft_content.article_bundle import (
     default_article_export_dir,
@@ -30,12 +27,18 @@ from warcraft_content.article_discovery import (
     sort_article_candidates,
 )
 from warcraft_content.article_provider_cli import (
+    article_doctor_payload,
     build_article_resolve_response,
     build_article_search_response,
+    fetch_navigation_pages,
     guide_redirect,
+    preview_block,
+    require_article_content,
+    transport_errors,
     unsupported_guide_surface_message,
+    with_analysis_surfaces,
 )
-from warcraft_content.guide_analysis import extract_guide_analysis_surfaces, merge_guide_analysis_surfaces
+from warcraft_content.guide_analysis import merge_guide_analysis_surfaces
 from warcraft_content.search import (
     ArticleMatchWeights,
     expand_class_spec_aliases,
@@ -44,13 +47,13 @@ from warcraft_content.search import (
     tokenize_query,
 )
 from warcraft_core.envelope import Envelope, success_envelope
-from warcraft_core.exit_codes import error_code_for_http_status
 from warcraft_core.provider import ProviderError, ProviderSurface
 
 from method_cli.client import METHOD_SITEMAP_URL, MethodClient, guide_ref_parts, load_method_cache_settings_from_env
 from method_cli.page_parser import UNSUPPORTED_ROOT_GUIDE_SLUGS, classify_guide_family
 
 PROVIDER_NAME: Final = "method"
+PROVIDER_LABEL: Final = "Method"
 # Method guide titles are short, so an all-terms hit is worth less here than on long article titles.
 MATCH_WEIGHTS: Final = ArticleMatchWeights(all_terms=8)
 QUERY_NOISE_TERMS: Final = ("method", "guide", "guides")
@@ -107,7 +110,6 @@ SUPPORTED_SCOPE: Final[dict[str, Any]] = {
 }
 GUIDE_QUERY_KINDS: Final = frozenset({"sections", "navigation", "linked_entities", "build_references", "analysis_surfaces"})
 SITEMAP_PROVENANCE: Final[dict[str, Any]] = {"sitemap_url": METHOD_SITEMAP_URL}
-PREVIEW_LIMIT: Final = 10
 
 
 def _envelope(
@@ -119,21 +121,6 @@ def _envelope(
     provenance: dict[str, Any] | None = None,
 ) -> Envelope:
     return success_envelope(provider=PROVIDER_NAME, command=command, kind=kind, data=payload, query=query, provenance=provenance)
-
-
-@contextmanager
-def transport_errors() -> Iterator[None]:
-    """Translate httpx transport failures into ProviderError so no caller sees a traceback."""
-    try:
-        yield
-    except httpx.TimeoutException as exc:
-        raise ProviderError("timeout", str(exc) or "Method request timed out") from exc
-    except httpx.HTTPStatusError as exc:
-        status = exc.response.status_code
-        details = {"status_code": status, "url": str(exc.request.url)}
-        raise ProviderError(error_code_for_http_status(status), str(exc), details=details) from exc
-    except httpx.RequestError as exc:
-        raise ProviderError("network_error", f"{type(exc).__name__}: {exc}", details={"url": str(exc.request.url)}) from exc
 
 
 def open_client() -> MethodClient:
@@ -215,7 +202,7 @@ def search_results(client: MethodClient, query: str) -> SearchOutcome:
 def _search_outcome(query: str) -> SearchOutcome:
     if not query.strip():
         raise ProviderError("invalid_query", "Query cannot be empty.")
-    with open_client() as client, transport_errors():
+    with open_client() as client, transport_errors(PROVIDER_LABEL):
         return search_results(client, query)
 
 
@@ -232,49 +219,23 @@ def _reject_unsupported_surface(payload: dict[str, Any]) -> None:
     )
 
 
-def _require_article_content(payload: dict[str, Any]) -> dict[str, Any]:
-    """Reject a page whose article container did not parse.
-
-    When Method changes its guide template the article selectors stop matching and the parser
-    produces an article with no body and no sections; returning that as a success would look like an
-    empty guide instead of a broken parser.
-    """
-    article = payload["article"]
-    if article["sections"] or article["text"]:
-        return payload
-    page_url = payload["guide"]["page_url"]
-    raise ProviderError(
-        "parse_failed",
-        f"No article content parsed from {page_url}; the Method page layout has probably changed.",
-        details={"page_url": page_url},
-    )
-
-
 def _fetch_guide_page(client: MethodClient, guide_ref: str) -> dict[str, Any]:
     try:
         guide_ref_parts(guide_ref)
     except ValueError as exc:
         raise ProviderError("invalid_guide_ref", str(exc)) from exc
     # Anything that fails past this point is a page problem, not a bad argument.
-    try:
-        payload = client.fetch_guide_page(guide_ref)
-    except ValueError as exc:
-        raise ProviderError("parse_failed", f"Could not parse the Method guide page for {guide_ref}: {exc}") from exc
+    with transport_errors(PROVIDER_LABEL, missing_message=f"Guide not found: {guide_ref}"):
+        try:
+            payload = client.fetch_guide_page(guide_ref)
+        except ValueError as exc:
+            raise ProviderError("parse_failed", f"Could not parse the Method guide page for {guide_ref}: {exc}") from exc
     _reject_unsupported_surface(payload)
-    payload = _require_article_content(payload)
+    payload = require_article_content(payload, provider_label=PROVIDER_LABEL)
     payload["redirect"] = guide_redirect(
-        provider_label="Method", requested=guide_ref_parts(guide_ref)[0], served=payload["guide"]["slug"]
+        provider_label=PROVIDER_LABEL, requested=guide_ref_parts(guide_ref)[0], served=payload["guide"]["slug"]
     )
     return payload
-
-
-def _preview_block(rows: list[dict[str, Any]], fetch_more_command: str) -> dict[str, Any]:
-    return {
-        "count": len(rows),
-        "items": rows[:PREVIEW_LIMIT],
-        "more_available": len(rows) > PREVIEW_LIMIT,
-        "fetch_more_command": fetch_more_command,
-    }
 
 
 def _guide_summary_payload(page_payload: dict[str, Any]) -> dict[str, Any]:
@@ -303,61 +264,13 @@ def _guide_summary_payload(page_payload: dict[str, Any]) -> dict[str, Any]:
                 for section in article["sections"][:5]
             ],
         },
-        "linked_entities": _preview_block(list(page_payload["linked_entities"]), fetch_more_command),
-        "build_references": _preview_block(list(page_payload.get("build_references") or []), fetch_more_command),
-        "analysis_surfaces": _preview_block(list(page_payload.get("analysis_surfaces") or []), fetch_more_command),
+        "linked_entities": preview_block(list(page_payload["linked_entities"]), fetch_more_command=fetch_more_command),
+        "build_references": preview_block(list(page_payload.get("build_references") or []), fetch_more_command=fetch_more_command),
+        "analysis_surfaces": preview_block(list(page_payload.get("analysis_surfaces") or []), fetch_more_command=fetch_more_command),
         "citations": {
             "page": guide["page_url"],
         },
     }
-
-
-def _with_analysis_surfaces(page_payload: dict[str, Any]) -> dict[str, Any]:
-    page_payload["analysis_surfaces"] = extract_guide_analysis_surfaces(page_payload, provider=PROVIDER_NAME)
-    return page_payload
-
-
-def _fetch_navigation_page(client: MethodClient, page_url: str) -> dict[str, Any]:
-    with transport_errors():
-        page_payload = client.fetch_guide_page(page_url)
-    return _with_analysis_surfaces(_require_article_content(page_payload))
-
-
-def _failed_page_row(item: dict[str, Any], *, code: str, message: str) -> dict[str, Any]:
-    return {"url": item["url"], "section_slug": item.get("section_slug"), "error": {"code": code, "message": message}}
-
-
-def _fetch_navigation_pages(
-    client: MethodClient,
-    initial: dict[str, Any],
-    nav_items: list[dict[str, Any]],
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Fetch every navigation page, keeping the pages that parsed and recording the ones that did not.
-
-    One unreachable or unparsable sibling page must not cost the caller the whole bundle, so each
-    failure becomes a row in the returned list and the bundle reports it.
-    """
-    initial_url = initial["guide"]["page_url"]
-    pages: list[dict[str, Any]] = []
-    failures: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for item in nav_items:
-        page_url = item["url"]
-        if page_url in seen:
-            continue
-        seen.add(page_url)
-        if page_url == initial_url:
-            pages.append(_with_analysis_surfaces(initial))
-            continue
-        try:
-            pages.append(_fetch_navigation_page(client, page_url))
-        except ProviderError as exc:
-            failures.append(_failed_page_row(item, code=exc.code, message=exc.message))
-        except ValueError as exc:
-            failures.append(_failed_page_row(item, code="parse_failed", message=str(exc)))
-    if initial_url not in seen:
-        pages.insert(0, _with_analysis_surfaces(initial))
-    return pages, failures
 
 
 def _navigation_items(initial: dict[str, Any]) -> list[dict[str, Any]]:
@@ -385,7 +298,9 @@ def _navigation_items(initial: dict[str, Any]) -> list[dict[str, Any]]:
 def _guide_pages_payload(client: MethodClient, guide_ref: str) -> dict[str, Any]:
     initial = _fetch_guide_page(client, guide_ref)
     nav_items = _navigation_items(initial)
-    pages, failed_pages = _fetch_navigation_pages(client, initial, nav_items)
+    pages, failed_pages = fetch_navigation_pages(
+        initial, nav_items, fetch_page=client.fetch_guide_page, provider=PROVIDER_NAME, provider_label=PROVIDER_LABEL
+    )
     guide = dict(initial["guide"])
     guide["page_count"] = len(pages)
     linked_entities = merge_article_linked_entities(pages)
@@ -436,14 +351,14 @@ def _guide_pages_payload(client: MethodClient, guide_ref: str) -> dict[str, Any]
 
 def guide(guide_ref: str) -> Envelope:
     """One Method guide page plus a preview of its linked entities, build references, and analysis surfaces."""
-    with open_client() as client, transport_errors():
-        payload = _guide_summary_payload(_with_analysis_surfaces(_fetch_guide_page(client, guide_ref)))
+    with open_client() as client, transport_errors(PROVIDER_LABEL):
+        payload = _guide_summary_payload(with_analysis_surfaces(_fetch_guide_page(client, guide_ref), provider=PROVIDER_NAME))
     return _envelope(command="guide", kind="guide", payload=payload, query=guide_ref, provenance=payload["citations"])
 
 
 def guide_full(guide_ref: str) -> Envelope:
     """Every navigation page of a Method guide with merged linked entities, build references, and analysis surfaces."""
-    with open_client() as client, transport_errors():
+    with open_client() as client, transport_errors(PROVIDER_LABEL):
         payload = _guide_pages_payload(client, guide_ref)
     return _envelope(command="guide-full", kind="guide_full", payload=payload, query=guide_ref, provenance=payload["citations"])
 
@@ -455,7 +370,7 @@ def guide_export(guide_ref: str, *, out: Path | None = None) -> Envelope:
     except ValueError as exc:
         raise ProviderError("invalid_guide_ref", str(exc)) from exc
     export_dir = out.expanduser() if out is not None else default_article_export_dir(PROVIDER_NAME, slug)
-    with open_client() as client, transport_errors():
+    with open_client() as client, transport_errors(PROVIDER_LABEL):
         pages_payload = _guide_pages_payload(client, guide_ref)
     manifest = write_article_bundle(pages_payload, provider=PROVIDER_NAME, export_dir=export_dir)
     payload = {
@@ -547,31 +462,13 @@ class MethodProvider:
             settings, sitemap_ttl, page_ttl = load_method_cache_settings_from_env()
         except ValueError as exc:
             raise ProviderError("invalid_cache_config", str(exc)) from exc
-        payload = {
-            "status": "ready",
-            "installed": True,
-            "language": "python",
-            "capabilities": {
-                "search": "ready",
-                "resolve": "ready",
-                "guide": "ready",
-                "guide_full": "ready",
-                "guide_export": "ready",
-                "guide_query": "ready",
-            },
-            "supported_scope": SUPPORTED_SCOPE,
-            "cache": {
-                "enabled": settings.enabled,
-                "backend": settings.backend,
-                "cache_dir": str(settings.cache_dir),
-                "redis_url": redacted_redis_url(settings.redis_url),
-                "prefix": settings.prefix,
-                "ttls": {
-                    "sitemap": sitemap_ttl,
-                    "page_html": page_ttl,
-                },
-            },
-        }
+        payload = article_doctor_payload(
+            settings,
+            redis_url=redacted_redis_url(settings.redis_url),
+            sitemap_ttl=sitemap_ttl,
+            page_ttl=page_ttl,
+            supported_scope=SUPPORTED_SCOPE,
+        )
         return _envelope(command="doctor", kind="doctor", payload=payload)
 
 

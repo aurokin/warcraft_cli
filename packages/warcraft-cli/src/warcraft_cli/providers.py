@@ -12,8 +12,8 @@ import io
 import json
 from collections.abc import Callable, Mapping
 from contextlib import redirect_stderr, redirect_stdout
-from dataclasses import dataclass, field
-from typing import Any, Literal
+from dataclasses import asdict, dataclass, field
+from typing import Any, Literal, Protocol
 
 import typer
 from blizzard_api_cli.main import app as blizzard_app
@@ -31,11 +31,20 @@ from raidbots_cli.main import app as raidbots_app
 from raidbots_cli.provider import PROVIDER as raidbots_provider
 from raiderio_cli.main import app as raiderio_app
 from raiderio_cli.provider import PROVIDER as raiderio_provider
+from simc_cli.build_input import PacketInput
+from simc_cli.main import (
+    DescribeOptions,
+    decode_build_payload,
+    describe_build_payload,
+    identify_build_payload,
+    validate_transport_packet_payload,
+)
 from simc_cli.main import app as simc_app
 from simc_cli.provider import PROVIDER as simc_provider
+from simc_cli.provider import simc_envelope
 from warcraft_core.cli import command_path_from_args, error_envelope_for
-from warcraft_core.envelope import ENVELOPE_KEYS, SCHEMA_VERSION, error_envelope
-from warcraft_core.exit_codes import EXIT_GENERIC, EXIT_USAGE, exit_code_for
+from warcraft_core.envelope import ENVELOPE_KEYS, SCHEMA_VERSION, Envelope, error_envelope
+from warcraft_core.exit_codes import EXIT_GENERIC, EXIT_NETWORK, EXIT_USAGE, exit_code_for
 from warcraft_core.expansions import list_expansions, resolve_expansion, warcraftlogs_site_for_expansion
 from warcraft_core.paths import cache_root, config_root, data_root, state_root, worktree_runtime_details
 from warcraft_core.provider import ProviderSurface
@@ -52,9 +61,14 @@ __all__ = [
     "PROVIDERS",
     "STALE_GUIDE_REASON",
     "wrapper_envelope",
+    "DescribeOptions",
+    "PacketInput",
+    "ProviderCalls",
+    "ProviderFetch",
     "ProviderRegistration",
     "expansion_filtered_providers",
     "expansion_support_snapshot",
+    "failed_call",
     "get_provider",
     "global_doctor_payload",
     "invoke_provider_command",
@@ -74,6 +88,8 @@ __all__ = [
     "provider_surface_status",
     "provider_surface_support",
     "resolve_wrapper_expansion_key",
+    "shared_failure",
+    "simc_call",
     "surface_filtered_providers",
     "warcraftlogs_site_for_expansion",
 ]
@@ -607,7 +623,7 @@ def provider_payload_data(payload: Mapping[str, Any] | None) -> dict[str, Any]:
 
 
 def _call_surface(
-    provider: str, command: str, call: Callable[[], Mapping[str, Any]], *, query: str | None = None
+    provider: str, command: str, call: Callable[[], Mapping[str, Any]], *, query: Any = None
 ) -> tuple[int, dict[str, Any]]:
     """Run one pure surface call, returning ``(exit_code, envelope)`` and never raising.
 
@@ -714,6 +730,108 @@ def provider_invoke(provider: str, args: list[str], *, expansion: str | None = N
         "payload": payload,
         "stdout": stdout,
     }
+
+
+SimcCommand = Literal["identify-build", "decode-build", "describe-build", "validate-talent-transport"]
+
+
+def _simc_payload(command: SimcCommand, build: PacketInput | str, describe: DescribeOptions | None) -> dict[str, Any]:
+    if command == "identify-build":
+        return identify_build_payload(build)
+    if command == "decode-build":
+        return decode_build_payload(build)
+    if command == "describe-build":
+        return describe_build_payload(build, describe or DescribeOptions())
+    if isinstance(build, str):
+        raise TypeError("simc validate-talent-transport reads a talent transport packet, not build text")
+    return validate_transport_packet_payload(build)
+
+
+def simc_call(command: SimcCommand, build: PacketInput | str, *, describe: DescribeOptions | None = None) -> dict[str, Any]:
+    """Run one simc build command in-process on a build held in memory: a packet, or build text.
+
+    Returns ``provider_invoke``'s ``{provider, exit_code, payload}`` with the envelope the simc command
+    prints. Nothing is written to disk, so the payload cites ``build.path`` for a packet and no file
+    when that is ``None``. A failure echoes these inputs as its ``query``.
+    """
+    query: dict[str, Any] = {"build_packet": build.path} if isinstance(build, PacketInput) else {"build_text": build}
+    if describe is not None:
+        query.update(asdict(describe))
+
+    def run() -> Envelope:
+        return simc_envelope(command, _simc_payload(command, build, describe))
+
+    code, payload = _call_surface("simc", command, run, query=query)
+    return {"provider": "simc", "exit_code": code, "payload": payload}
+
+
+class ProviderFetch(Protocol):
+    """Runs one provider command and returns ``{provider, status, payload, error?, exit_code}``."""
+
+    def __call__(self, provider: str, args: list[str], *, expansion: str | None) -> dict[str, Any]: ...
+
+
+class ProviderInvoke(Protocol):
+    """``provider_invoke``: one provider command, as ``{provider, exit_code, payload}``."""
+
+    def __call__(self, provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, Any]: ...
+
+
+class ProviderLookup(Protocol):
+    """``provider_search`` / ``provider_resolve``: one free-text lookup, as ``{provider, exit_code, payload}``."""
+
+    def __call__(self, provider: str, query: str, *, limit: int = 5, expansion: str | None = None) -> dict[str, Any]: ...
+
+
+class SimcCall(Protocol):
+    """``simc_call``: one in-process simc build command."""
+
+    def __call__(
+        self, command: SimcCommand, build: PacketInput | str, *, describe: DescribeOptions | None = None
+    ) -> dict[str, Any]: ...
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderCalls:
+    """The provider seams a composite command runs through.
+
+    ``warcraft_cli.main`` builds this from its own module globals at call time, so a test that
+    replaces ``warcraft_cli.main.provider_invoke`` (or ``simc_call``) reaches every feature module.
+    """
+
+    invoke: ProviderInvoke
+    resolve: ProviderLookup
+    search: ProviderLookup
+    simc: SimcCall
+
+
+def failed_call(result: Mapping[str, Any]) -> tuple[dict[str, Any], int] | None:
+    """The provider's error (always with a ``code`` and ``message``) and exit code; ``None`` on success."""
+    payload = as_dict(result.get("payload"))
+    exit_code = result.get("exit_code")
+    if exit_code == 0 and payload.get("ok") is not False:
+        return None
+    error = as_dict(payload.get("error"))
+    message = error.get("message") or f"{result.get('provider') or 'The provider'} exited {exit_code}."
+    failure = {**error, "code": error.get("code") or "provider_failed", "message": message}
+    return failure, source_exit_code({"exit_code": exit_code, "error": failure})
+
+
+def shared_failure(failed_rows: list[dict[str, Any]]) -> tuple[str, int]:
+    """``(error.code, exit code)`` for a command that failed because every provider it needed failed.
+
+    Agreeing providers lend their own code and exit code. Disagreeing ones that all failed upstream
+    (exit 5) are ``upstream_error``; any other mix is ``providers_failed``, exit 1, because a
+    deterministic crash or a bad argument must not read as "retry later".
+    """
+    codes = {row.get("code") for row in failed_rows}
+    exit_codes = {row.get("exit_code") for row in failed_rows}
+    exit_code = exit_codes.pop() if len(exit_codes) == 1 else EXIT_GENERIC
+    if not isinstance(exit_code, int) or exit_code == 0:
+        exit_code = EXIT_GENERIC
+    if len(codes) == 1 and isinstance(code := next(iter(codes)), str):
+        return code, exit_code
+    return ("upstream_error" if exit_code == EXIT_NETWORK else "providers_failed"), exit_code
 
 
 def provider_doctor(provider: str, *, requested_expansion: str | None = None) -> dict[str, Any]:

@@ -755,9 +755,20 @@ def test_guide_export_writes_a_bundle_the_bundle_commands_can_query(
     assert (out_dir / "index.json").is_file(), "the corpus index was not written next to the bundle"
 
     query = run(BINARY, "guide-query", str(bundle_dir), "guide", "--limit", "3", "--kind", "sections")
-    assert_envelope_data_holds(query, "guide", "matches")
+    # The match payload icy-veins and method guide-query answer with.
+    assert_envelope_data_holds(query, "bundle", "guide", "count", "match_counts", "matches", "top", "failed_pages")
     assert query.data["guide"]["id"] == guide_id, query.describe()
     assert query.data["matches"]["sections"], query.describe()
+    assert query.data["failed_pages"] == {"count": 0, "items": []}, query.describe()
+    assert {row["kind"] for row in query.data["top"]} == {"section"}, query.describe()
+    # A linked entity's own name finds it, and the source filter keeps only links the body made.
+    entity = next(row for row in linked if "href" in (row.get("sources") or []))
+    links = run(
+        BINARY, "guide-query", str(bundle_dir), entity["name"], "--kind", "linked_entities", "--linked-source", "href"
+    )
+    assert entity["id"] in [row["id"] for row in links.data["matches"]["linked_entities"]], links.describe()
+    assert all("href" in row["sources"] for row in links.data["matches"]["linked_entities"]), links.describe()
+    assert links.data["match_counts"]["sections"] == 0, links.describe()
 
     listed = run(BINARY, "guide-bundle-list", "--root", str(out_dir))
     assert_envelope_data_holds(listed, "bundles", "count")

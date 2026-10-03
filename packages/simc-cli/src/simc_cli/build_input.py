@@ -152,11 +152,28 @@ def bounded_output_preview(output: str) -> list[str]:
     ]
 
 
+@dataclass(frozen=True, slots=True)
+class PacketInput:
+    """A talent transport packet handed over in memory instead of through ``--build-packet``.
+
+    ``path`` names the file that holds exactly this packet, when one does; it is evidence the output
+    cites, never a file this module reads.
+    """
+
+    packet: dict[str, Any]
+    path: str | None = None
+
+
 def load_build_packet(path: str) -> tuple[dict[str, Any], str]:
     resolved = Path(path).expanduser().resolve()
     raw = json.loads(resolved.read_text())
     packet = validate_talent_transport_packet(raw)
     return packet, str(resolved)
+
+
+def _packet_label(packet_path: str | None) -> str:
+    """How an error message names the packet: its file, or that it never had one."""
+    return packet_path or "in-memory packet"
 
 
 def packet_identity_value(packet: dict[str, Any], key: str) -> str | None:
@@ -190,14 +207,14 @@ def _packet_spec_from_wowhead_ref(
     transport_forms: dict[str, Any],
     source_notes: list[str],
     transport_status_text: str | None,
-    resolved_path: str,
+    packet_path: str | None,
 ) -> BuildSpec | None:
     wowhead_ref = transport_forms.get("wowhead_talent_calc_url")
     if not (isinstance(wowhead_ref, str) and wowhead_ref.strip()):
         return None
     parsed = parse_wowhead_talent_calc_ref(wowhead_ref)
     if parsed is None or not parsed.talents:
-        raise ValueError(f"Invalid wowhead_talent_calc_url transport form in build packet: {resolved_path}")
+        raise ValueError(f"Invalid wowhead_talent_calc_url transport form in build packet: {_packet_label(packet_path)}")
     source_notes.append("transport form: wowhead_talent_calc_url")
     return BuildSpec(
         actor_class=parsed.actor_class,
@@ -207,7 +224,7 @@ def _packet_spec_from_wowhead_ref(
         source_notes=source_notes,
         transport_form="wowhead_talent_calc_url",
         transport_status=transport_status_text,
-        transport_source=resolved_path,
+        transport_source=packet_path,
     )
 
 
@@ -215,7 +232,7 @@ def _packet_spec_from_wow_export(
     transport_forms: dict[str, Any],
     source_notes: list[str],
     transport_status_text: str | None,
-    resolved_path: str,
+    packet_path: str | None,
 ) -> BuildSpec | None:
     wow_export = transport_forms.get("wow_talent_export")
     if not (isinstance(wow_export, str) and wow_export.strip()):
@@ -234,7 +251,7 @@ def _packet_spec_from_wow_export(
         source_notes=source_notes,
         transport_form="wow_talent_export",
         transport_status=transport_status_text,
-        transport_source=resolved_path,
+        transport_source=packet_path,
     )
 
 
@@ -243,7 +260,7 @@ def _packet_spec_from_split_talents(
     packet: dict[str, Any],
     source_notes: list[str],
     transport_status_text: str | None,
-    resolved_path: str,
+    packet_path: str | None,
 ) -> BuildSpec | None:
     split = transport_forms.get("simc_split_talents")
     if not isinstance(split, dict):
@@ -256,7 +273,7 @@ def _packet_spec_from_split_talents(
     packet_actor_class, packet_spec = _validated_packet_identity(packet)
     if transport_status_text != "validated" or not (packet_actor_class and packet_spec):
         raise ValueError(
-            f"simc_split_talents transport form requires a validated packet identity: {resolved_path}. "
+            f"simc_split_talents transport form requires a validated packet identity: {_packet_label(packet_path)}. "
             "Run simc validate-talent-transport first for raw_only packets."
         )
     source_notes.extend(
@@ -275,15 +292,20 @@ def _packet_spec_from_split_talents(
         source_notes=source_notes,
         transport_form="simc_split_talents",
         transport_status=transport_status_text,
-        transport_source=resolved_path,
+        transport_source=packet_path,
     )
 
 
 def extract_build_spec_from_packet(path: str) -> BuildSpec:
     packet, resolved_path = load_build_packet(path)
+    return build_spec_from_packet(packet, resolved_path)
+
+
+def build_spec_from_packet(packet: dict[str, Any], packet_path: str | None) -> BuildSpec:
+    """The build a validated talent transport packet carries; ``packet_path`` is the file it came from, if any."""
     raw_transport_forms = packet.get("transport_forms")
     transport_forms: dict[str, Any] = raw_transport_forms if isinstance(raw_transport_forms, dict) else {}
-    source_notes = [f"build packet: {resolved_path}", "talent transport packet"]
+    source_notes = [*([f"build packet: {packet_path}"] if packet_path else []), "talent transport packet"]
     source = packet.get("source")
     if isinstance(source, dict):
         provider = source.get("provider")
@@ -295,18 +317,18 @@ def extract_build_spec_from_packet(path: str) -> BuildSpec:
     transport_status = packet.get("transport_status")
     transport_status_text = transport_status.strip() if isinstance(transport_status, str) and transport_status.strip() else None
 
-    spec = _packet_spec_from_wowhead_ref(transport_forms, source_notes, transport_status_text, resolved_path)
+    spec = _packet_spec_from_wowhead_ref(transport_forms, source_notes, transport_status_text, packet_path)
     if spec is not None:
         return spec
-    spec = _packet_spec_from_wow_export(transport_forms, source_notes, transport_status_text, resolved_path)
+    spec = _packet_spec_from_wow_export(transport_forms, source_notes, transport_status_text, packet_path)
     if spec is not None:
         return spec
-    spec = _packet_spec_from_split_talents(transport_forms, packet, source_notes, transport_status_text, resolved_path)
+    spec = _packet_spec_from_split_talents(transport_forms, packet, source_notes, transport_status_text, packet_path)
     if spec is not None:
         return spec
 
     raise ValueError(
-        f"Build packet does not include a supported transport form for simc analysis: {resolved_path}. "
+        f"Build packet does not include a supported transport form for simc analysis: {_packet_label(packet_path)}. "
         "Run simc validate-talent-transport first for raw_only packets."
     )
 
@@ -679,7 +701,9 @@ def load_build_spec(
     actor_class: str | None,
     spec_name: str | None,
     build_packet: str | None = None,
+    packet: PacketInput | None = None,
 ) -> BuildSpec:
+    """Merge every build-input option into one spec; ``packet`` is ``build_packet`` already in memory."""
     _reject_blank_build_options(
         {
             "--profile-path": profile_path,
@@ -694,7 +718,7 @@ def load_build_spec(
             "--spec": spec_name,
         }
     )
-    if build_packet and any(
+    if (build_packet or packet is not None) and any(
         value
         for value in (
             profile_path,
@@ -743,6 +767,8 @@ def load_build_spec(
     from_build_packet = BuildSpec()
     if build_packet:
         from_build_packet = extract_build_spec_from_packet(build_packet)
+    elif packet is not None:
+        from_build_packet = build_spec_from_packet(validate_talent_transport_packet(packet.packet), packet.path)
 
     from_build_text = BuildSpec()
     if build_text:

@@ -1098,3 +1098,18 @@ def test_entity_page_lists_the_entities_in_a_page_relation_tab(monkeypatch) -> N
         ("npc", 226516, "listview", "members"),
         ("npc", 226518, "listview", "members"),
     ]
+
+
+def test_compare_counts_the_entities_in_each_page_relation_tab(monkeypatch) -> None:
+    """compare read only body links and gatherer records, so two factions' members never showed up as shared."""
+    pages = {2653: FACTION_LISTVIEW_HTML, 2654: "<html></html>"}
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.entity_page_html", lambda self, entity_type, entity_id: pages[entity_id])
+
+    result = runner.invoke(app, ["compare", "faction:2653", "faction:2654", "--comment-sample", "0"])
+
+    assert result.exit_code == 0, result.output
+    linked = json.loads(result.stdout)["data"]["comparison"]["linked_entities"]
+    assert [(row["entity_type"], row["id"]) for row in linked["unique_by_entity"]["faction:2653"]] == [
+        ("npc", 226516),
+        ("npc", 226518),
+    ]

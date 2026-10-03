@@ -4,6 +4,7 @@ import json
 from typing import Any
 
 from typer.testing import CliRunner
+from warcraft_cli.actor_profile import ACTOR_PROFILE_MAX_SCOPED_FIGHTS
 from warcraft_cli.crosswalk import (
     actor_lookup_identity,
     actor_spec_ambiguous,
@@ -12,7 +13,6 @@ from warcraft_cli.crosswalk import (
     reconcile_class_spec,
     report_actor_names,
 )
-from warcraft_cli.main import ACTOR_PROFILE_MAX_SCOPED_FIGHTS
 from warcraft_cli.main import app as warcraft_app
 from warcraft_core.exit_codes import EXIT_NOT_FOUND
 from warcraft_core.identity import class_spec_identity_payload, report_actor_identity_payload

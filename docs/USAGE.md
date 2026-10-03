@@ -325,7 +325,16 @@ It accepts either:
 
 Results can be narrowed by match kind, section title, and linked-entity source (`href`, `gatherer`, or `multi`).
 
+It answers with the same match payload as `icy-veins guide-query` and `method guide-query`: `count`,
+`match_counts` and `matches` per kind (each match is the bundle row plus `kind` and `score`), a
+flattened `top` list, and `failed_pages`, alongside the `bundle` path and the exported `guide` and
+`page`. Wowhead bundles also report `gatherer_entities` and `comments` matches; they never hold
+build references, so `build_references` is always 0.
+
 The flattened `top` list prefers merged linked-entity rows over duplicate raw gatherer rows for the same entity.
+A query word in a row's name (a section title, an entity name, a link label) counts twice, so the row
+named for the query outranks rows that merely mention it. Navigation links also match on the words in
+their URL, since Wowhead labels them briefly ("Abilities" for the abilities-and-talents page).
 
 ## Compare
 

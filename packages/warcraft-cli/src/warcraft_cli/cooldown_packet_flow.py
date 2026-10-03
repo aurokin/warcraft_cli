@@ -8,7 +8,7 @@ single seam (``warcraft_cli.main._provider_payload_result``) and this module nev
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, NoReturn, Protocol
+from typing import Any, NoReturn
 
 import typer
 from warcraft_core.cli import emit, fail
@@ -30,17 +30,12 @@ from warcraft_cli.cooldown_packet import (
     tracked_spell_ids,
 )
 from warcraft_cli.providers import (
+    ProviderFetch,
     parse_lorrgs_report_reference,
     provider_payload_data,
     source_exit_code,
     wrapper_envelope,
 )
-
-
-class ProviderFetch(Protocol):
-    """Runs one provider command and returns ``{provider, status, payload, error?, exit_code}``."""
-
-    def __call__(self, provider: str, args: list[str], *, expansion: str | None) -> dict[str, Any]: ...
 
 
 def _fail_cooldown_packet(

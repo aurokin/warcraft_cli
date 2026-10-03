@@ -22,6 +22,7 @@ from warcraft_api.cache import (
     inspect_redis_cache,
     load_cache_settings_from_env,
 )
+from warcraft_content.article_bundle import load_article_bundle, query_article_bundle
 from warcraft_content.guide_analysis import extract_section_chunk_analysis_surfaces
 from warcraft_core.cli import (
     CompactMaxCharsOption,
@@ -89,8 +90,6 @@ from wowhead_cli.guides import (
     filtered_guide_category_rows,
     guide_export_manifest,
     guide_export_root,
-    guide_query_match_sort_key,
-    guide_query_payload,
     guides_payload,
     hydrate_source_counts,
     infer_guide_export_options,
@@ -878,15 +877,12 @@ def _normalize_canonical_entity_url(
     return base
 
 
+# The bundle kinds guide-query and guide-bundle-query search; a wowhead guide-export has no build references.
+GUIDE_QUERY_KINDS = ("sections", "analysis_surfaces", "navigation", "linked_entities", "gatherer_entities", "comments")
+
+
 def _normalize_query_kinds(values: list[str]) -> tuple[str, ...]:
-    allowed = {
-        "sections",
-        "analysis_surfaces",
-        "navigation",
-        "linked_entities",
-        "gatherer_entities",
-        "comments",
-    }
+    allowed = set(GUIDE_QUERY_KINDS)
     normalized: list[str] = []
     seen: set[str] = set()
     for raw in values:
@@ -2194,10 +2190,6 @@ def _guide_bundle_query_command(row: dict[str, Any], *, query: str, root: Path) 
     return f"wowhead guide-query {selector} {quoted_query} --root {quoted_root}"
 
 
-def _guide_bundle_match_total(match_counts: dict[str, Any]) -> int:
-    return sum(value for value in match_counts.values() if isinstance(value, int))
-
-
 def _guide_bundle_meta(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "path": row.get("path"),
@@ -2217,14 +2209,12 @@ def _bundle_query_result(
     result: dict[str, Any],
     root: Path,
 ) -> dict[str, Any] | None:
-    match_counts = result["counts"]
-    match_count = _guide_bundle_match_total(match_counts)
-    if match_count <= 0:
+    if result["count"] <= 0:
         return None
     return {
         **dict(row),
-        "match_count": match_count,
-        "match_counts": match_counts,
+        "match_count": result["count"],
+        "match_counts": result["match_counts"],
         "best_score": max((int(item.get("score") or 0) for item in result["top"]), default=0),
         "top": result["top"],
         "suggested_query_command": _guide_bundle_query_command(row, query=query, root=root),
@@ -4135,8 +4125,8 @@ def guide_query(
     """Query one guide for the sections, links, and comments that match a query string."""
     try:
         export_dir = _resolve_corpus_ref(bundle_ref, root=root)
-        corpus = _load_guide_export(export_dir)
-    except (ValueError, json.JSONDecodeError) as exc:
+        bundle = load_article_bundle(export_dir)
+    except ValueError as exc:
         fail(ctx, "invalid_bundle", str(exc))
     try:
         selected_kinds = _normalize_query_kinds(kind)
@@ -4147,31 +4137,44 @@ def guide_query(
     except ValueError as exc:
         fail(ctx, "invalid_argument", str(exc))
 
-    section_title_filter = section_title.strip().lower() if isinstance(section_title, str) and section_title.strip() else None
+    options = GuideBundleQueryOptions(
+        query=query,
+        limit=limit,
+        selected_kinds=selected_kinds,
+        section_title_filter=section_title,
+        selected_link_sources=selected_link_sources,
+    )
+    manifest = bundle["manifest"]
     payload = {
-        "query": query,
-        **guide_query_payload(
-            export_dir=export_dir,
-            corpus=corpus,
-            query=query,
-            selected_kinds=selected_kinds,
-            section_title_filter=section_title_filter,
-            selected_link_sources=selected_link_sources,
-            limit=limit,
-        ),
+        "bundle": str(export_dir),
+        "guide": manifest.get("guide"),
+        "page": manifest.get("page"),
+        **_query_guide_bundle(bundle, options),
     }
     _emit(ctx, payload)
 
 
 @dataclass(frozen=True, slots=True)
 class GuideBundleQueryOptions:
-    """Filters applied to every local bundle by ``wowhead guide-bundle-query``."""
+    """Filters ``wowhead guide-query`` applies to one bundle and ``guide-bundle-query`` to every bundle."""
 
     query: str
     limit: int
     selected_kinds: tuple[str, ...]
     section_title_filter: str | None
     selected_link_sources: tuple[str, ...]
+
+
+def _query_guide_bundle(bundle: dict[str, Any], options: GuideBundleQueryOptions) -> dict[str, Any]:
+    """Search one guide-export with the engine that answers ``icy-veins`` and ``method`` guide-query."""
+    return query_article_bundle(
+        bundle,
+        query=options.query,
+        limit=options.limit,
+        kinds=set(options.selected_kinds or GUIDE_QUERY_KINDS),
+        section_title_filter=options.section_title_filter,
+        linked_sources=options.selected_link_sources,
+    )
 
 
 @dataclass(slots=True)
@@ -4189,37 +4192,22 @@ def _guide_bundle_query_matches(
     root: Path,
     options: GuideBundleQueryOptions,
 ) -> GuideBundleQueryMatches:
-    aggregate_counts = {
-        "sections": 0,
-        "analysis_surfaces": 0,
-        "navigation": 0,
-        "linked_entities": 0,
-        "gatherer_entities": 0,
-        "comments": 0,
-    }
+    # Seeded so a query that matches nothing still reports every kind, as each bundle's match_counts does.
+    aggregate_counts = dict.fromkeys((*GUIDE_QUERY_KINDS, "build_references"), 0)
     matched_bundles: list[dict[str, Any]] = []
     top_matches: list[dict[str, Any]] = []
 
     for bundle in bundles:
         export_dir = Path(bundle["path"])
         try:
-            corpus = _load_guide_export(export_dir)
-        except (ValueError, json.JSONDecodeError):
+            result = _query_guide_bundle(load_article_bundle(export_dir), options)
+        except ValueError:
             continue
-        result = guide_query_payload(
-            export_dir=export_dir,
-            corpus=corpus,
-            query=options.query,
-            selected_kinds=options.selected_kinds,
-            section_title_filter=options.section_title_filter,
-            selected_link_sources=options.selected_link_sources,
-            limit=options.limit,
-        )
         bundle_result = _bundle_query_result(bundle, query=options.query, result=result, root=root)
         if bundle_result is None:
             continue
-        for key in aggregate_counts:
-            aggregate_counts[key] += int(bundle_result["match_counts"].get(key) or 0)
+        for key, value in result["match_counts"].items():
+            aggregate_counts[key] = aggregate_counts.get(key, 0) + value
         matched_bundles.append(bundle_result)
         top_matches.extend(_bundle_query_top_matches(bundle, result["top"]))
 
@@ -4232,8 +4220,13 @@ def _guide_bundle_query_matches(
         )
     )
     top_matches.sort(
-        key=lambda row: guide_query_match_sort_key(row)
-        + ((row.get("bundle") or {}).get("title") or "", (row.get("bundle") or {}).get("path") or "")
+        key=lambda row: (
+            -row["score"],
+            row["kind"],
+            str(row.get("title") or row.get("name") or ""),
+            row["bundle"].get("title") or "",
+            row["bundle"].get("path") or "",
+        )
     )
     return GuideBundleQueryMatches(bundles=matched_bundles, top=top_matches, counts=aggregate_counts)
 
@@ -5072,9 +5065,8 @@ def _compare_entity_record(
         else raw_canonical
     )
 
-    links = extract_linked_entities_from_href(html, source_url=canonical_url)
-    if options.include_gatherer:
-        links = links + extract_gatherer_entities(html, source_url=canonical_url)
+    # The links entity-page reports, relation-tab Listviews included, so the shared and unique sets cover them.
+    links = entity_page_links(html, page_url=canonical_url, include_gatherer=options.include_gatherer)
 
     try:
         raw_comments = extract_comments_dataset(html)

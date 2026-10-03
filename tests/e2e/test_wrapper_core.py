@@ -486,7 +486,12 @@ def test_expansion_filter_narrows_search_and_explains_every_exclusion() -> None:
     assert (wowhead["expansion"], wowhead["expansion_source"]) == ("wotlk", "flag"), json.dumps(wowhead)[:400]
     page = _assert_merged_page(result)
     assert all(row["provider"] == "wowhead" and "/wotlk/" in row["url"] for row in page), json.dumps(page)[:600]
-    _assert_item_leads(page)
+    # Wowhead's wotlk suggestions rank a Thunderfury proc spell above the item, so the page leads
+    # with Wowhead's own first row rather than the item, and still carries the item.
+    top = page[0]
+    assert (top["id"], top["name"]) == (wowhead["results"][0]["id"], wowhead["results"][0]["name"]), _page_ids(page)
+    assert top["wrapper_ranking"]["anchor"] is True, json.dumps(top["wrapper_ranking"])
+    assert any(row["id"] == pins.ITEM_ID for row in page), _page_ids(page)
 
 
 def test_expansion_filter_reaches_a_different_provider_profile_than_an_unfiltered_search(item_search: Result) -> None:

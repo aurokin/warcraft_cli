@@ -178,6 +178,11 @@ def test_search_outside_the_guide_surface_returns_a_scope_hint(require) -> None:
     assert result.data["scope_hint"]["code"] == "patch_notes"
 
 
+def _recency(row: dict[str, Any]) -> str | None:
+    """A row's ``sitemap_lastmod``; a page found through the live site menu has none and counts as newest."""
+    return "9999-12-31" if row["metadata"]["source"] == "site_menu" else row["metadata"]["sitemap_lastmod"]
+
+
 def _assert_ties_list_the_newest_page_first(result: Result) -> None:
     """Rows with the same score are ordered by the sitemap's ``lastmod``, newest first; they were alphabetical.
 
@@ -185,7 +190,7 @@ def _assert_ties_list_the_newest_page_first(result: Result) -> None:
     """
     rows = result.data["results"]
     tied = [
-        (earlier["metadata"]["sitemap_lastmod"], later["metadata"]["sitemap_lastmod"])
+        (_recency(earlier), _recency(later))
         for earlier, later in zip(rows, rows[1:], strict=False)
         if earlier["ranking"]["score"] == later["ranking"]["score"]
     ]
@@ -200,8 +205,7 @@ def test_search_reads_mythic_plus_the_way_players_write_it(require) -> None:
 
     This exact query once answered ``ok: true`` with no rows, and later with a season's guide more
     than a year old and no word that anything was missing. Search reads the sitemap, which Icy Veins
-    stopped updating in 2025, so it cannot list the current season; it has to say so. The clock is
-    the oracle: a sitemap whose newest entry is more than SITEMAP_STALE_DAYS old carries a warning
+    stopped updating in 2025, so it has to say so. The clock is the oracle: a sitemap whose newest entry is more than SITEMAP_STALE_DAYS old carries a warning
     naming that date, and a fresh one carries none.
     """
     require(PROVIDER)
@@ -225,6 +229,33 @@ def test_search_breaks_score_ties_toward_the_newest_page(require) -> None:
     require(PROVIDER)
     result = run(BINARY, "search", "raid guide", "--limit", "10")
     _assert_ties_list_the_newest_page_first(result)
+
+
+def test_search_finds_a_current_page_the_stale_sitemap_lacks_through_the_site_menu(require) -> None:
+    """The sitemap froze at 2025-10-05, so the current season's raid guide was missing from every search.
+
+    Every season's raid has a ``-raid-guide`` page in the site-wide menu, so ``raid guide`` keeps
+    finding one as raids rotate. While the sitemap is stale, a row the menu contributed is by
+    construction a page the sitemap does not list, and it has to open with ``icy-veins guide``. A
+    sitemap that is current again lists every page, so the menu is not read at all.
+    """
+    require(PROVIDER)
+    result = run(BINARY, "search", "raid guide", "--limit", "50")
+
+    provenance = result.payload["provenance"]
+    menu_rows = [row for row in result.data["results"] if row["metadata"]["source"] == "site_menu"]
+    stale = (date.today() - date.fromisoformat(provenance["sitemap_newest_lastmod"])).days > SITEMAP_STALE_DAYS
+    assert ("site_menu_url" in provenance) is stale, result.describe()
+    if not stale:
+        assert menu_rows == [], result.describe()
+        return
+    assert "site_menu_warning" not in provenance, result.describe()
+    assert menu_rows, f"the site menu added no page the stale sitemap lacks\n{result.describe()}"
+    row = menu_rows[0]
+    assert row["metadata"]["sitemap_lastmod"] is None
+    page = run(BINARY, "guide", row["id"])
+    assert page.data["guide"]["slug"] == row["id"], page.describe()
+    assert page.data["article"]["section_count"] >= 1, page.describe()
 
 
 def test_resolve_hands_over_a_next_command_that_returns_the_same_guide(require) -> None:

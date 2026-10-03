@@ -136,9 +136,17 @@ Every command's flags are listed in [docs/reference/warcraft.md](../reference/wa
   than the resolved candidate, such as a retired page); `manifest.json` saves it for reuse.
 - `warcraft talent-packet` / `talent-describe` — build a validated talent transport packet, optionally
   with simc `describe-build` output. Both report the file they wrote as `written_packet_path`.
+  simc reads the packet in memory, so its output cites a packet file only when one holds that
+  packet: `describe_result`'s `build_spec.transport_packet.path` (and its `build packet:` source
+  note) is the `--packet-out` file or an unchanged packet-file source, and is absent otherwise
+  (`--packet-out` is written after describe succeeds, so a `transport_packet_write_failed` error's
+  `provider_result` names the path that could not be written);
+  `upgrade_result.payload.data.input.build_packet` is the packet file the source was read from, or
+  `null` for a routed packet.
 - `warcraft guide-builds-simc` — turn explicit build references in exported bundles into a simc packet.
   Each reference is handed to simc in the form its type requires: a `wow_talent_export` string goes
-  as `--build-text`, a Wowhead talent-calc URL as a validated transport packet. A reference that can
+  as `--build-text`, a Wowhead talent-calc URL as a validated transport packet held in memory (its
+  simc payloads cite no packet file). A reference that can
   go neither way is an `excluded_builds` row naming the reason, not a silently shorter list.
   `summary.simc_handoff_status` is `ok`, `partial`, `failed`, `no_build_references`,
   `all_references_excluded` (the bundle had build references but every one is in `excluded_builds`),
