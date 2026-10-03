@@ -208,6 +208,11 @@ share the word, so `shadow` lists the Shadow Priest guide before the Shadow Encl
 `--limit 1` never makes an ambiguous query look resolved. It never picks between candidates with the
 same or nearly the same score, so a spec name that
 several classes share (`frost`, `holy`, `protection`, `restoration`) stays unresolved; add the class.
+A one-word query resolves only to a page that word names: the page it titles (`druid` for
+`Druid Guide`, a raid titled by its name), the zone, dungeon or delve page for it (`k'aresh` for
+`karesh-zone-guide`), or the spec guide of a spec word only one class has (`shadow`). Any other top
+page (`thunderfury` for the Thunderfury transmog guide, `legion` for the Legion Remix guide) stays the
+`match` at `confidence: "medium"` with `confidence_cap: {"rule": "single_word_query", "from": "high"}`.
 An unresolved `resolve` reports `confidence: "low"` when its top candidates tie on score and
 `"medium"` otherwise. `search` and `resolve` report `count` as the rows returned, `total_matches` as
 every match, and `truncated: true` when `--limit` cut the list. Every row carries `provider`,

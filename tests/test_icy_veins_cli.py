@@ -1705,6 +1705,35 @@ def test_icy_veins_resolve_answers_in_game_names_spelled_with_punctuation(monkey
     assert resolved["match"]["id"] == expected
 
 
+ONE_WORD_SITEMAP_XML = """
+<urlset>
+  <url><loc>https://www.icy-veins.com/wow/thunderfury-legendary-weapon-transmogrification-guide</loc><lastmod>2025-10-05</lastmod></url>
+  <url><loc>https://www.icy-veins.com/wow/shadow-priest-pve-dps-guide</loc><lastmod>2025-10-05</lastmod></url>
+  <url><loc>https://www.icy-veins.com/wow/shadow-priest-leveling-guide</loc><lastmod>2025-10-05</lastmod></url>
+</urlset>
+"""
+
+
+def test_icy_veins_resolve_caps_a_one_word_query_whose_word_does_not_name_the_page(monkeypatch) -> None:
+    """Live `icy-veins resolve thunderfury` (2026-10) answered the transmog page at high."""
+    monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.sitemap_guides", lambda self: parse_sitemap_guides(ONE_WORD_SITEMAP_XML))
+
+    data = json.loads(runner.invoke(app, ["resolve", "thunderfury"]).stdout)["data"]
+
+    assert data["match"]["id"] == "thunderfury-legendary-weapon-transmogrification-guide"
+    assert (data["confidence"], data["resolved"], data["next_command"]) == ("medium", False, None)
+    assert data["confidence_cap"] == {"rule": "single_word_query", "from": "high"}
+
+
+def test_icy_veins_resolve_keeps_a_unique_spec_word_on_its_spec_guide(monkeypatch) -> None:
+    monkeypatch.setattr("icy_veins_cli.main.IcyVeinsClient.sitemap_guides", lambda self: parse_sitemap_guides(ONE_WORD_SITEMAP_XML))
+
+    data = json.loads(runner.invoke(app, ["resolve", "shadow"]).stdout)["data"]
+
+    assert (data["confidence"], data["next_command"]) == ("high", "icy-veins guide shadow-priest-pve-dps-guide")
+    assert "confidence_cap" not in data
+
+
 def test_icy_veins_guide_query_answers_a_file_path_itself_with_the_query(tmp_path: Path) -> None:
     """Typer's file_okay=False answered first, with a Click message and query null."""
     target = tmp_path / "notabundle.txt"

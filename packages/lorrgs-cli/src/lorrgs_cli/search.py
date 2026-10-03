@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import re
 import shlex
+from collections.abc import Mapping
 from dataclasses import dataclass
 from itertools import product
 from typing import Any
 from urllib.parse import ParseResult, parse_qs, quote, urlparse
 
-from warcraft_core.discovery import ResolveConfidence, discovery_row, resolve_data, search_data
-from warcraft_core.identity import is_warcraftlogs_report_code
+from warcraft_core.discovery import ResolveConfidence, discovery_row, resolve_data, search_data, single_word_named
+from warcraft_core.identity import is_warcraftlogs_report_code, unique_spec_class
 
 from lorrgs_cli.client import DIFFICULTIES as RANKED_DIFFICULTIES
 from lorrgs_cli.client import SITE_HOST, LorrgsClient
@@ -66,6 +67,7 @@ USER_REPORT_PATH_SEGMENTS = frozenset({"user_report", "user_reports"})
 # is two specs, "Salhadaar" two encounters); PARTIAL means some words overlapped and nothing more.
 NAMED, SHORT_NAME, PARTIAL = 2, 1, 0
 MATCH_LEVEL_NAMES = {NAMED: "named", SHORT_NAME: "short_name", PARTIAL: "partial"}
+COMP_RANKING_NAME_PREFIX = "Composition ranking for "
 # Ties are broken by surface usefulness: a ranking beats the bare entity it was built from.
 KIND_ORDER = {"spec_ranking": 0, "comp_ranking": 1, "spec": 2, "boss": 3}
 # Rows built from a parsed report reference: nothing checked that Lorrgs can serve the report.
@@ -196,6 +198,7 @@ def resolve_payload(client: LorrgsClient, query: str, *, limit: int) -> dict[str
         limit=limit,
         confidence=_confidence(candidates),
         fallback_search_command=shlex.join(["lorrgs", "search", query]),
+        single_word_identity=_names_single_word,
         query=query,
         supported_inputs=_supported_inputs(),
         suggested_commands=_suggested_commands(),
@@ -456,7 +459,7 @@ def _comp_ranking_candidate(boss_match: RowMatch, known_terms: frozenset[str], d
     if difficulty not in (None, "mythic"):
         # comp-ranking takes no difficulty, so it cannot answer a heroic/normal/lfr question.
         ranking["unmatched_terms"] = sorted([*ranking["unmatched_terms"], difficulty])
-    return _comp_ranking_row(boss_slug, name=f"Composition ranking for {_row_name(boss_match.row)}", ranking=ranking)
+    return _comp_ranking_row(boss_slug, name=f"{COMP_RANKING_NAME_PREFIX}{_row_name(boss_match.row)}", ranking=ranking)
 
 
 def _spec_candidate(spec_match: RowMatch, known_terms: frozenset[str]) -> dict[str, Any]:
@@ -618,6 +621,20 @@ def _match_strength(candidate: dict[str, Any]) -> tuple[str, tuple[str, ...]]:
 
 def _entities(candidate: dict[str, Any]) -> tuple[str, ...]:
     return tuple(str(candidate.get(key) or "") for key in ("spec_slug", "boss_slug", "report_id"))
+
+
+def _names_single_word(word: str, row: Mapping[str, Any]) -> bool:
+    """Lorrgs' own answer to a one-word query: a spec word only one class has, or the boss's own name.
+
+    "shadow" names the Shadow Priest spec; a shared spec word ("frost") never resolves. A boss is
+    named by its whole name or its head before ',' or before an epithet Lorrgs writes without the
+    in-game comma ("chimaerus" -> "Chimaerus the Undreamt God"), so "anduin" does not name
+    "Anduin Wrynn" nor "jailer" "The Jailer, Zovaal".
+    """
+    if row["kind"] == "spec":
+        return unique_spec_class(word) is not None
+    boss = str(row["name"]).removeprefix(COMP_RANKING_NAME_PREFIX)
+    return row["kind"] in {"boss", "comp_ranking"} and single_word_named(word, boss.split(" the ", 1)[0])
 
 
 def _confidence(candidates: list[dict[str, Any]]) -> ResolveConfidence:

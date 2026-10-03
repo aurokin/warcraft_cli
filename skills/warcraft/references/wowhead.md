@@ -58,6 +58,9 @@
   a retired guide leads only when it matches more closely than every current row (its exact title,
   say). `resolve` never answers one with
   high confidence, so run the `fallback_search_command` when it does not resolve
+- a one-word query resolves only to a row that word names whole (a plural counts) or by its head
+  before a `,` (`thunderfury`); a row that merely contains the word (`shadow` gives the quest "In the
+  Catalyst's Shadow") comes back `medium` with `confidence_cap`, so add the entity type or a word
 - `search` and `resolve` rank on Wowhead's own database and guide ordering first, so the entity a
   query names leads the proc spells and secondary rows that share its name, and a class-guide query
   resolves to the main current guide (the guide ordering counts only when the query says "guide" or `--entity-type guide` is set).

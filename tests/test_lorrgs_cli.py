@@ -414,6 +414,29 @@ def test_resolve_reads_an_encounter_whose_name_is_mostly_stop_words(monkeypatch)
     assert data["next_command"] == "lorrgs comp-ranking the-eye-of-the-jailer"
 
 
+@pytest.mark.parametrize(
+    ("query", "command"),
+    [("shadow", "lorrgs spec priest-shadow"), ("dimensius", "lorrgs comp-ranking dimensius-the-alldevouring")],
+)
+def test_resolve_keeps_a_one_word_query_that_is_a_unique_spec_or_a_boss_name(monkeypatch, query: str, command: str) -> None:
+    # "Shadow Priest" is not named by the word, but only one class has a Shadow spec; "Dimensius" is
+    # the head of "Dimensius, the All-Devouring". The one-word cap leaves both high.
+    _patch_client(monkeypatch)
+    data = json.loads(runner.invoke(app, ["resolve", query]).stdout)["data"]
+    assert (data["confidence"], data["next_command"]) == ("high", command)
+    assert "confidence_cap" not in data
+
+
+@pytest.mark.parametrize(("query", "boss"), [("ansurek", "Queen Ansurek"), ("jailer", "The Jailer, Zovaal")])
+def test_resolve_caps_a_one_word_boss_short_name_that_does_not_name_the_boss(monkeypatch, query: str, boss: str) -> None:
+    # Live `lorrgs resolve ansurek` (2026-10) answered the "Queen Ansurek" comp ranking at high: the
+    # same trade as "illidan" for "Illidan Stormrage", so it drops to medium.
+    _patch_client(monkeypatch)
+    data = json.loads(runner.invoke(app, ["resolve", query]).stdout)["data"]
+    assert (data["match"]["name"], data["confidence"], data["resolved"]) == (f"Composition ranking for {boss}", "medium", False)
+    assert data["confidence_cap"] == {"rule": "single_word_query", "from": "high"}
+
+
 def test_resolve_does_not_hand_over_an_unrivalled_but_only_partial_match(monkeypatch) -> None:
     # "undreamt" is one word out of "Chimaerus, the Undreamt God" — not the slug, not the short name.
     # Every provider resolves only at high confidence, and `warcraft resolve` trusts `resolved`, so a

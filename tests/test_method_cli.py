@@ -1021,3 +1021,31 @@ def test_method_guide_export_rejects_an_out_file_before_fetching(monkeypatch, tm
 
     assert result.exit_code == 2, result.output
     assert json.loads(result.stderr)["error"]["code"] == "invalid_argument"
+
+
+ONE_WORD_SITEMAP_XML = """
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>https://www.method.gg/guides/how-the-tome-of-lights-devotion-works</loc></url>
+  <url><loc>https://www.method.gg/guides/shadow-priest</loc></url>
+</urlset>
+"""
+
+
+def test_method_resolve_caps_a_one_word_query_whose_word_does_not_name_the_guide(monkeypatch) -> None:
+    """Live `method resolve light` (2026-10) answered "How The Tome Of Lights Devotion Works" at high."""
+    monkeypatch.setattr("method_cli.main.MethodClient.sitemap_guides", lambda self: parse_sitemap_guides(ONE_WORD_SITEMAP_XML))
+
+    data = json.loads(runner.invoke(app, ["resolve", "light"]).stdout)["data"]
+
+    assert data["match"]["id"] == "how-the-tome-of-lights-devotion-works"
+    assert (data["confidence"], data["resolved"], data["next_command"]) == ("medium", False, None)
+    assert data["confidence_cap"] == {"rule": "single_word_query", "from": "high"}
+
+
+def test_method_resolve_keeps_a_unique_spec_word_on_its_spec_guide(monkeypatch) -> None:
+    monkeypatch.setattr("method_cli.main.MethodClient.sitemap_guides", lambda self: parse_sitemap_guides(ONE_WORD_SITEMAP_XML))
+
+    data = json.loads(runner.invoke(app, ["resolve", "shadow"]).stdout)["data"]
+
+    assert (data["confidence"], data["next_command"]) == ("high", "method guide shadow-priest")
+    assert "confidence_cap" not in data

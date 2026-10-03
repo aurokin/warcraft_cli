@@ -9,12 +9,12 @@ from __future__ import annotations
 
 import re
 import shlex
-from collections.abc import Collection
+from collections.abc import Collection, Mapping
 from datetime import date
 from typing import Any
 from urllib.parse import urlparse
 
-from warcraft_core.discovery import ResolveConfidence, discovery_row
+from warcraft_core.discovery import ResolveConfidence, discovery_row, single_word_named
 
 from wowhead_cli.entity_types import PARSER_ENTITY_TYPES, RESOLVE_ENTITY_TYPES, SEARCH_TYPE_HINTS
 from wowhead_cli.expansion_profiles import (
@@ -803,6 +803,13 @@ def resolve_confidence(candidates: list[dict[str, Any]], *, entity_types: tuple[
     if is_medium_confidence_score(top_score, margin=margin):
         return "medium"
     return "low"
+
+
+def names_single_word(word: str, row: Mapping[str, Any]) -> bool:
+    """Wowhead's own answer to a one-word query beyond the row's name: its display name, or either
+    name up to the plural ending ranking already tolerates ("valorstone" names "Valorstones")."""
+    names = (str(row.get("name") or ""), str((row.get("metadata") or {}).get("display_name") or ""))
+    return any(name and (single_word_named(word, name) or _same_word(word, name.lower().strip())) for name in names)
 
 
 def is_high_confidence_exact_match(reasons: set[str], *, margin: int, second_score: int) -> bool:

@@ -1447,3 +1447,49 @@ def test_article_fetch_more_command_survives_the_shell(monkeypatch) -> None:
     data = json.loads(runner.invoke(warcraft_wiki_app, ["article", "anything"]).stdout)["data"]
 
     assert shlex.split(data["linked_entities"]["fetch_more_command"]) == ["warcraft-wiki", "article-full", title]
+
+
+def test_resolve_caps_a_one_word_query_whose_word_does_not_name_the_title(monkeypatch) -> None:
+    """Live `warcraft-wiki resolve illidan` (2026-10) answered "Illidan Stormrage" at high: a trade the rule accepts."""
+    rows = _search_rows("Illidan Stormrage", "Black Temple")
+    monkeypatch.setattr("warcraft_wiki_cli.main.WarcraftWikiClient.search_articles", lambda self, query, limit: (2, rows))
+
+    data = json.loads(runner.invoke(warcraft_wiki_app, ["resolve", "illidan"]).stdout)["data"]
+
+    assert data["match"]["name"] == "Illidan Stormrage"
+    assert (data["confidence"], data["resolved"], data["next_command"]) == ("medium", False, None)
+    assert data["confidence_cap"] == {"rule": "single_word_query", "from": "high"}
+
+
+@pytest.mark.parametrize(
+    ("query", "titles", "command"),
+    [
+        ("legion", ("World of Warcraft: Legion", "Legion Remix"), "warcraft-wiki article 'World of Warcraft: Legion'"),
+        ("CreateFrame", ("API CreateFrame", "Widget API"), "warcraft-wiki article 'API CreateFrame'"),
+        # Live 2026-10: a widget method's page is titled "API:<Widget> <Method>", which ``exact_api_title`` misses.
+        (
+            "SetPoint",
+            ("API:ScriptRegionResizing SetPoint", "API:ScriptRegion SetCollapsesLayout"),
+            "warcraft-wiki article 'API:ScriptRegionResizing SetPoint'",
+        ),
+    ],
+)
+def test_resolve_keeps_the_page_a_one_word_query_names_by_alias_or_api_title(monkeypatch, query: str, titles: tuple[str, ...], command: str) -> None:
+    monkeypatch.setattr("warcraft_wiki_cli.main.WarcraftWikiClient.search_articles", lambda self, q, limit: (2, _search_rows(*titles)))
+
+    data = json.loads(runner.invoke(warcraft_wiki_app, ["resolve", query]).stdout)["data"]
+
+    assert (data["confidence"], data["next_command"]) == ("high", command)
+    assert "confidence_cap" not in data
+
+
+def test_resolve_caps_a_one_word_query_whose_exact_title_only_matches_without_punctuation(monkeypatch) -> None:
+    """Live `warcraft-wiki resolve mythic` (2026-10) answered "Mythic+" at high: the difficulty is not the keystone mode."""
+    rows = _search_rows("Mythic+", "Instance difficulty")
+    monkeypatch.setattr("warcraft_wiki_cli.main.WarcraftWikiClient.search_articles", lambda self, query, limit: (2, rows))
+
+    data = json.loads(runner.invoke(warcraft_wiki_app, ["resolve", "mythic"]).stdout)["data"]
+
+    assert "exact_title" in data["match"]["ranking"]["match_reasons"]
+    assert (data["match"]["name"], data["confidence"], data["resolved"]) == ("Mythic+", "medium", False)
+    assert data["confidence_cap"] == {"rule": "single_word_query", "from": "high"}

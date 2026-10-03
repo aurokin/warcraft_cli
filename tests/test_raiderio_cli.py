@@ -568,6 +568,21 @@ def test_raiderio_resolve_stays_unresolved_for_ambiguous_match_set(monkeypatch) 
     assert payload["data"]["fallback_search_command"] == "raiderio search Liquid"
 
 
+def test_raiderio_resolve_caps_a_one_word_query_whose_word_does_not_name_the_profile(monkeypatch) -> None:
+    # "guild" is the type hint, so the query is the one word "Liquid": a lone guild named
+    # "In the Liquid" holds it and clears the score bar, but the word does not name it.
+    monkeypatch.setattr(
+        "raiderio_cli.client.RaiderIOClient.search",
+        lambda self, *, term, kind=None: {"matches": [_search_row("guild", "In the Liquid")]},
+    )
+
+    data = json.loads(runner.invoke(raiderio_app, ["resolve", "guild Liquid"]).stdout)["data"]
+
+    assert data["match"]["name"] == "In the Liquid"
+    assert (data["confidence"], data["resolved"], data["next_command"]) == ("medium", False, None)
+    assert data["confidence_cap"] == {"rule": "single_word_query", "from": "high"}
+
+
 def _search_row(kind: str, name: str) -> dict[str, Any]:
     return {
         "type": kind,

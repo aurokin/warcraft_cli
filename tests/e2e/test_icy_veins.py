@@ -32,6 +32,7 @@ from tests.e2e.harness import (
     Result,
     dead_proxy_env,
     run,
+    word_names,
 )
 
 BINARY = "icy-veins"
@@ -736,3 +737,24 @@ def test_guide_export_rejects_an_out_path_that_is_a_file(require, out_dir: Path)
 def test_every_guide_command_rejects_an_empty_reference(require, command: str) -> None:
     require(PROVIDER)
     run(BINARY, command, "   ", expect=EXIT_USAGE, error_code="invalid_guide_ref")
+
+
+def test_a_one_word_resolve_is_high_only_for_a_guide_the_word_names(require) -> None:
+    """Resolve once answered the transmog page "Thunderfury Legendary Weapon Transmogrification Guide"
+    for ``thunderfury`` at high (2026-10).
+
+    Guides come and go, so the oracle is the top row itself: when the word does not name it (a page
+    titled "<word> Guide" counts), the answer is at most medium.
+    """
+    require(PROVIDER)
+    result = run(BINARY, "resolve", "thunderfury")
+    match = result.data["match"]
+    if match is not None and not word_names("thunderfury", match["name"], match["name"].removesuffix(" Guide")):
+        assert result.data["confidence"] != "high", result.describe()
+
+
+def test_a_spec_word_only_one_class_has_still_resolves_to_that_spec_guide(require) -> None:
+    """The one-word rule keeps a spec word only one class has (``shadow``) on that spec's guide."""
+    require(PROVIDER)
+    result = run(BINARY, "resolve", "shadow")
+    assert (result.data["confidence"], result.data["match"]["id"]) == ("high", "shadow-priest-pve-dps-guide"), result.describe()

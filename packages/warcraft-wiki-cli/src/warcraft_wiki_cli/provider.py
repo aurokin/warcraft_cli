@@ -24,7 +24,14 @@ from warcraft_core.provider import ProviderError, ProviderSurface
 
 from warcraft_wiki_cli.client import WIKI_API_URL, WarcraftWikiAPIError, WarcraftWikiClient, load_warcraft_wiki_cache_settings_from_env
 from warcraft_wiki_cli.page_parser import article_slug, normalize_article_ref
-from warcraft_wiki_cli.search import PROVIDER_NAME, SearchOutcome, is_confident_match, search_results, title_names_query
+from warcraft_wiki_cli.search import (
+    PROVIDER_NAME,
+    SearchOutcome,
+    is_confident_match,
+    names_single_word,
+    search_results,
+    title_names_query,
+)
 
 API_REFERENCE_FAMILIES = frozenset({"api_function", "api_enum", "framework_page", "xml_schema", "cvar", "api_changes"})
 EVENT_REFERENCE_FAMILIES = frozenset({"event_reference", "ui_handler", "framework_page"})
@@ -434,6 +441,7 @@ class WarcraftWikiProvider:
                 # title must also name the query, the typed surfaces' floor: ``all_terms_match`` fires
                 # on the snippet, so "Liquid guild us illidan" alone would resolve to "Team Liquid".
                 resolved=is_confident_match(outcome.results) and title_names_query(str(outcome.results[0]["name"]), target),
+                single_word_identity=names_single_word,
             ),
             outcome,
         )

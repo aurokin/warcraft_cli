@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import time
 from dataclasses import dataclass, field
@@ -243,3 +244,17 @@ CACHE_ENV_PREFIXES = (
 def no_cache_env() -> dict[str, str]:
     """Disable every provider cache so a call must reach the network (or fail trying)."""
     return {f"{prefix}_CACHE_BACKEND": "none" for prefix in CACHE_ENV_PREFIXES}
+
+
+def word_names(word: str, *names: Any) -> bool:
+    """The oracle the one-word resolve pins hold a live answer to, written apart from the code under test.
+
+    ``word`` names a row when it is one of ``names`` whole (up to a plural ending), or the head of one
+    before its first ',' or ':'. It is looser than any provider, so a pin built on it only fails when a
+    provider answers ``high`` with a row the word plainly does not name.
+    """
+    folded = word.casefold()
+    for name in (str(name).casefold().strip() for name in names if name):
+        if name in {folded, f"{folded}s", f"{folded}es"} or re.split(r"[,:]", name, maxsplit=1)[0].strip() == folded:
+            return True
+    return False

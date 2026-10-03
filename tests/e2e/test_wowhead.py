@@ -31,6 +31,7 @@ from tests.e2e.harness import (
     run,
     run_raw,
     stream_records,
+    word_names,
 )
 
 BINARY = "wowhead"
@@ -184,6 +185,30 @@ def test_expansions_list_backs_expansion_detect_on_real_urls(require) -> None:
         assert detected.data["detected_expansion"] == key, detected.describe()
         assert detected.data["entity"] == {"type": "item", "id": pins.ITEM_ID}, detected.describe()
         assert detected.data["matches_selected_expansion"] is (key == "retail"), detected.describe()
+
+
+@pytest.mark.parametrize("word", ["shadow", "fire", "light"])
+def test_a_one_word_resolve_is_high_only_for_a_row_the_word_names(require, word: str) -> None:
+    """``resolve shadow`` answered "In the Catalyst's Shadow" at high (2026-10) on Wowhead's rank alone.
+
+    Upstream rows drift, so the oracle is the top row itself: when the word does not name it, the
+    answer is at most medium and says why.
+    """
+    require("wowhead")
+    result = run(BINARY, "resolve", word)
+    data = result.data
+    assert resolve_data_violations(data, provider="wowhead") == [], result.describe()
+    match = data["match"]
+    if match is not None and not word_names(word, match["name"], match["metadata"].get("display_name")):
+        assert data["confidence"] != "high", result.describe()
+        assert data.get("confidence_cap") in (None, {"rule": "single_word_query", "from": "high"}), result.describe()
+
+
+def test_a_wowhead_url_resolves_at_high_whatever_its_shape(require) -> None:
+    """A URL names one entity outright, so the one-word rule never touches it."""
+    require("wowhead")
+    result = run(BINARY, "resolve", f"https://www.wowhead.com/item={pins.ITEM_ID}")
+    assert (result.data["confidence"], result.data["next_command"]) == ("high", f"wowhead entity item {pins.ITEM_ID}"), result.describe()
 
 
 def test_search_resolve_and_entity_agree_on_thunderfury(require, thunderfury_search: Result) -> None:
