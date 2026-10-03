@@ -15,7 +15,7 @@ from typing import Any
 import pytest
 from lorrgs_cli.provider import COMP_ROLES
 
-from tests.e2e.harness import EXIT_NOT_FOUND, EXIT_USAGE, Result, dead_proxy_env, run, run_text
+from tests.e2e.harness import EXIT_NOT_FOUND, EXIT_USAGE, Result, dead_proxy_env, run, run_text, word_names
 
 # Ranked parses exist only for specs people actually play on a fresh tier; walk a few before giving
 # up so the report journeys always have a real code to work with.
@@ -422,6 +422,22 @@ def test_a_report_code_without_a_digit_is_a_report_reference(require) -> None:
     for word_query in ("restorationdruid", "RestorationDruid"):
         word = run("lorrgs", "resolve", word_query)
         assert (word.data.get("match") or {}).get("kind") != "report_overview", word.describe()
+
+
+def test_a_spec_short_name_only_one_class_has_still_resolves_to_that_spec(require) -> None:
+    """The one-word rule leaves ``shadow`` high: it is the Shadow Priest's own Lorrgs name, not a guess."""
+    require("lorrgs")
+    result = run("lorrgs", "resolve", "shadow")
+    assert (result.data["confidence"], result.data["next_command"]) == ("high", "lorrgs spec priest-shadow"), result.describe()
+
+
+def test_a_boss_short_name_that_does_not_name_the_boss_is_not_high(require) -> None:
+    """``sylvanas`` resolved to the "Sylvanas Windrunner" comp ranking at high (2026-10): the "illidan" trade, so medium."""
+    require("lorrgs")
+    result = run("lorrgs", "resolve", "sylvanas")
+    match = result.data["match"]
+    if match is not None and not word_names("sylvanas", match["name"].removeprefix("Composition ranking for ")):
+        assert result.data["confidence"] != "high", result.describe()
 
 
 def test_a_guide_question_does_not_resolve_to_spec_metadata(require) -> None:

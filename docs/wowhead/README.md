@@ -123,6 +123,14 @@ with no `next_command`. "keystone legend season 3" does not resolve to "Keystone
 nor "midnight season 2 mythic+ dungeons" to "Midnight Season 2: Resilient Keystone 12", but "resto
 druid guide" resolves to "Restoration Druid Healer Guide" and "hogger mob" to NPC "Hogger".
 
+A one-word `search_query` resolves at high only to a row that word names: its name or display name
+whole or up to a plural ending (`valorstone` for "Valorstones"), or its name's head before the first
+`,` or `:` (`thunderfury` for "Thunderfury, Blessed Blade of the Windseeker"). Wowhead's own ranking
+often puts a row that merely contains the word first (`shadow` for the quest "In the Catalyst's
+Shadow"); that row stays the `match` at `medium` with `confidence_cap: {"rule": "single_word_query",
+"from": "high"}`, and so does a correct row the word does not name in full (`illidan` for "Illidan
+Stormrage"). A URL is never capped.
+
 Failures print an error envelope on stderr and exit with the shared code:
 
 | Exit | Meaning |

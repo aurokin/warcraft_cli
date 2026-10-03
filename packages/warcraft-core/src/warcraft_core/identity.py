@@ -39,6 +39,12 @@ WOW_SPECS_BY_CLASS: dict[str, frozenset[str]] = {
 WOW_CLASS_SLUGS = frozenset(WOW_SPECS_BY_CLASS)
 
 
+def unique_spec_class(word: str) -> str | None:
+    """The one class whose spec ``word`` names ("shadow" -> "priest"); ``None`` for a shared spec ("frost") or no spec."""
+    classes = [actor_class for actor_class, specs in WOW_SPECS_BY_CLASS.items() if word in specs]
+    return classes[0] if len(classes) == 1 else None
+
+
 def _is_wowhead_hostname(hostname: str | None) -> bool:
     if not isinstance(hostname, str):
         return False

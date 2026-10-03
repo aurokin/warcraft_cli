@@ -22,7 +22,7 @@ from typing import Any
 import pytest
 
 from tests.e2e import pins
-from tests.e2e.harness import EXIT_NETWORK, EXIT_USAGE, REPO_ROOT, Result, dead_proxy_env, no_cache_env, run, run_raw
+from tests.e2e.harness import EXIT_NETWORK, EXIT_USAGE, REPO_ROOT, Result, dead_proxy_env, no_cache_env, run, run_raw, word_names
 
 REGION = pins.GUILD_REGION
 REALM = pins.GUILD_REALM_DISPLAY
@@ -403,6 +403,26 @@ def test_resolve_answers_a_namespaced_api_name_with_its_wiki_page(require) -> No
     assert data["resolved"] is True, result.describe()
     assert data["selected_provider"] == "warcraft-wiki", result.describe()
     assert "GetSpellInfo" in data["match"]["name"], result.describe()
+
+
+@pytest.mark.parametrize("word", ["shadow", "illidan"])
+def test_resolve_never_answers_a_one_word_query_with_a_row_the_word_does_not_name(require, word: str) -> None:
+    """``illidan`` resolved to "Illidan Stormrage" at high (2026-10); providers now cap such answers at medium.
+
+    The oracle is the answer itself: a resolved match is named by the word, or is the guide of the one
+    spec it names (``shadow``); an unresolved one whose provider applied the cap says so.
+    """
+    require("wowhead", "warcraft-wiki")
+    result = run("warcraft", "resolve", word)
+    data = result.data
+    if data["resolved"]:
+        name = data["match"]["name"]
+        assert word_names(word, name) or name.startswith("Shadow Priest"), result.describe()
+        return
+    best = data["best_unresolved_candidate"]
+    payloads = {row["provider"]: (row["payload"] or {}).get("data") or {} for row in data["providers"]}
+    if best is not None and "confidence_cap" in payloads[best["provider"]]:
+        assert best["unresolved_reason"] == "single_word_query_not_named_exactly", result.describe()
 
 
 def test_resolve_never_answers_a_season_query_with_another_season(require) -> None:

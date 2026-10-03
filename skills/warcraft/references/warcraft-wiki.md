@@ -20,6 +20,7 @@
 - `api` and `event` fail with `not_found` (exit 4) instead of returning an unrelated page
 - use `article` when the query is broader than programming
 - `search` and `resolve` report `count` as the rows returned, `total_matches` as MediaWiki's total hit count, and `truncated: true` when more pages matched than came back; an unresolved `resolve` says `confidence: "low"` when its top candidates tie
+- a one-word query resolves only to the page that word names: its exact title, its `API`/`Event` page (`CreateFrame`, or `SetPoint` for `API:ScriptRegionResizing SetPoint`), or its expansion (`legion`); a longer title (`illidan` gives "Illidan Stormrage") comes back `medium` with `confidence_cap`, so check `match` and open it with `match.follow_up.command`
 - use `reference` metadata on article responses instead of parsing the full body first; on `api`/`event` pages `reference.arguments` holds the arguments (an event's "Payload"), and `reference.signature` is the introduction's code block or `null`
 - `reference.summary` is the page's opening text, which can start with a "For the ..., see ..." hatnote or infobox text on lore and API pages; read `content.text` when the summary looks like navigation
 

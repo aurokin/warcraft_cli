@@ -10,11 +10,13 @@ weights. Only the query tokenization and the provider-noise stripping are shared
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
 from warcraft_content.article_discovery import ArticleKind, article_candidate, sort_article_candidates
 from warcraft_content.search import normalize_query, tokenize_query
+from warcraft_core.discovery import plain_word
 from warcraft_core.provider import ProviderError
 
 from warcraft_wiki_cli.client import WarcraftWikiClient
@@ -62,6 +64,16 @@ QUERY_COVERAGE_REASONS = frozenset(
         "expansion_alias_match",
     }
 )
+
+# Reasons that make a row the page a one-word query names even when its title is longer: the
+# ``API``/``UIHANDLER``/``Event`` page of that name, and the expansion an alias names
+# ("legion" -> "World of Warcraft: Legion").
+SINGLE_WORD_IDENTITY_REASONS = frozenset(
+    {"exact_api_title", "exact_handler_title", "exact_event_title", "expansion_alias_match"}
+)
+# The function an API page documents is its title's last segment: the method in
+# "API:ScriptRegionResizing SetPoint", the function in "API:C AuctionHouse.GetItemSearchResultInfo".
+_API_TITLE_SEGMENT_RE = re.compile(r"[\s.]")
 
 # Leading words that name an article family rather than the subject ("lore Jaina" -> "jaina").
 # ``search_results`` keeps them when a page is titled with the whole query ("class hall").
@@ -380,6 +392,23 @@ def title_names_query(title: str, query: str) -> bool:
         for index, span in spans:
             covered[index].update(span)
     return any(len(marks) == len(word.text) for word, marks in zip(words, covered, strict=True))
+
+
+def names_single_word(word: str, row: Mapping[str, Any]) -> bool:
+    """The wiki's own answer to a one-word query, beyond a title the word names.
+
+    A ``SINGLE_WORD_IDENTITY_REASONS`` reason, an ``exact_title`` that is itself one plain word
+    ("Al'Akir" for "al-akir", but not "Mythic+" for "mythic"), or the API page of the function or
+    widget method the word is ("setpoint" -> "API:ScriptRegionResizing SetPoint").
+    """
+    reasons = row["ranking"]["match_reasons"]
+    title = str(row["name"])
+    api_page = row["metadata"].get("content_family") == "api_function" and title.startswith(("API:", "API "))
+    return (
+        bool(SINGLE_WORD_IDENTITY_REASONS.intersection(reasons))
+        or ("exact_title" in reasons and plain_word(title) is not None)
+        or (api_page and _API_TITLE_SEGMENT_RE.split(title)[-1].casefold() == word)
+    )
 
 
 def _covers_query(row: dict[str, Any]) -> bool:

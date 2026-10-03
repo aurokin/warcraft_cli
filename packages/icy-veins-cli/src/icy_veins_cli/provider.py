@@ -47,7 +47,14 @@ from icy_veins_cli.page_parser import (
     parse_sitemap_slugs,
     read_index_page,
 )
-from icy_veins_cli.search import PROVIDER_NAME, SearchOutcome, resolve_is_confident, search_results, sitemap_provenance
+from icy_veins_cli.search import (
+    PROVIDER_NAME,
+    SearchOutcome,
+    names_single_word,
+    resolve_is_confident,
+    search_results,
+    sitemap_provenance,
+)
 from icy_veins_cli.site_index import load_site_index, merge_crawl, save_site_index
 
 BUNDLE_QUERY_KINDS = ("sections", "navigation", "linked_entities", "build_references", "analysis_surfaces")
@@ -155,6 +162,7 @@ def resolve(target: str, *, limit: int = 5, **options: Any) -> Envelope:
         limit=limit,
         resolved=resolve_is_confident(outcome.matches),
         scope_hint=outcome.scope_hint,
+        single_word_identity=names_single_word,
     )
     return _envelope("resolve", RESOLVE_KIND, data, query=target, provenance=_sitemap_provenance(outcome))
 

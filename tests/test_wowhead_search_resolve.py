@@ -890,3 +890,31 @@ def test_search_leaves_out_internal_dnt_test_entries(monkeypatch) -> None:
     # A query that asks for the test entries still gets them.
     asked = json.loads(runner.invoke(app, ["search", "warbound until equipped dnt"]).stdout)["data"]
     assert 213097 in [row["id"] for row in asked["results"]]
+
+
+def _database_head_response(name: str) -> dict:
+    """A response whose `categories.database` head (the upstream rank bonus) is ``name``, plus a weak rival."""
+    head = {"type": 5, "id": 97945, "name": name, "typeName": "Quest", "popularity": 1}
+    rival = {"type": 3, "id": 2, "name": "Unrelated Band", "typeName": "Item", "popularity": 2}
+    return {"results": [head, rival], "categories": {"database": [head]}}
+
+
+def test_resolve_caps_a_one_word_query_whose_word_does_not_name_the_top_row(monkeypatch) -> None:
+    """Live `wowhead resolve shadow` (2026-10) answered "In the Catalyst's Shadow" at high on Wowhead's rank alone."""
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.search_suggestions", lambda self, query: _database_head_response("In the Catalyst's Shadow"))
+
+    data = json.loads(runner.invoke(app, ["resolve", "shadow"]).stdout)["data"]
+
+    assert data["match"]["name"] == "In the Catalyst's Shadow"
+    assert (data["confidence"], data["resolved"], data["next_command"]) == ("medium", False, None)
+    assert data["confidence_cap"] == {"rule": "single_word_query", "from": "high"}
+    assert data["fallback_search_command"] == "wowhead search shadow"
+
+
+def test_resolve_keeps_a_one_word_answer_the_word_names_up_to_a_plural(monkeypatch) -> None:
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.search_suggestions", lambda self, query: _database_head_response("Valorstones"))
+
+    data = json.loads(runner.invoke(app, ["resolve", "valorstone"]).stdout)["data"]
+
+    assert (data["confidence"], data["next_command"]) == ("high", "wowhead entity quest 97945")
+    assert "confidence_cap" not in data

@@ -144,7 +144,10 @@ query.
 `resolve` judges confidence on every ranked match;
 `--limit` only trims the `candidates` shown, so `--limit 1` never makes an ambiguous query look
 resolved. An unresolved `resolve` reports `confidence: "low"` when its top candidates tie on score and
-`"medium"` otherwise. `search` and `resolve` report `count` as the rows returned, `total_matches` as
+`"medium"` otherwise. A one-word query resolves only to a guide that word names, by its whole title,
+the title's head before a `,` or `:`, or as a spec word only one class has (`shadow` for
+`shadow-priest`); any other top guide (`void` for "Void Assaults Escalation Overview") stays the `match` at
+`"medium"` with `confidence_cap: {"rule": "single_word_query", "from": "high"}`. `search` and `resolve` report `count` as the rows returned, `total_matches` as
 every match, and `truncated: true` when `--limit` cut the list. Every row carries `provider`,
 `kind: "guide"`, `id` (the slug), `name`, `url`, `ranking` and `follow_up` (`command`, `surface`).
 

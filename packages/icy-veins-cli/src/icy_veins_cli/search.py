@@ -14,6 +14,7 @@ below it (guide-family boosts, slug penalties, resolve confidence) is Icy Veins 
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any
@@ -31,6 +32,7 @@ from warcraft_content.search import (
     singular_words,
     tokenize_query,
 )
+from warcraft_core.identity import unique_spec_class
 from warcraft_core.provider import ProviderError
 
 from icy_veins_cli.client import SITE_MENU_SEED_URL, IcyVeinsClient
@@ -645,6 +647,24 @@ def search_results(client: IcyVeinsClient, query: str, *, today: date) -> Search
     matches.sort(key=_recency, reverse=True)
     matches.sort(key=lambda row: -int(row["ranking"]["score"]))
     return SearchOutcome(normalized_query, matches, None, newest, site_menu_warning, site_index, index_gap)
+
+
+# The slug endings of a page about one place, beside the raid guides ``exact_title`` covers:
+# ``karesh-zone-guide`` is the Icy Veins page for K'aresh.
+PLACE_GUIDE_SUFFIXES = ("zoneguide", "dungeonguide", "heroicdungeonguide", "delveguide")
+
+
+def names_single_word(word: str, row: Mapping[str, Any]) -> bool:
+    """Icy Veins' own answer to a one-word query: the page titled by it, a place's page, or a unique spec's guide.
+
+    ``exact_title`` is the page whose slug, guide words stripped, is the word ("druid" for
+    ``druid-guide``). A spec word only one class has ("shadow") names that spec's guide; a shared
+    one ("frost") names none.
+    """
+    reasons = row["ranking"]["match_reasons"]
+    place_page = str(row["id"]).replace("-", "") in {f"{word}{suffix}" for suffix in PLACE_GUIDE_SUFFIXES}
+    spec_guide = row["metadata"].get("content_family") == "spec_guide" and "spec_name" in reasons
+    return "exact_title" in reasons or place_page or (spec_guide and unique_spec_class(word) is not None)
 
 
 def resolve_is_confident(results: list[dict[str, Any]]) -> bool:

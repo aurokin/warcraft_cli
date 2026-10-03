@@ -7729,3 +7729,16 @@ def test_guide_compare_rejects_the_same_bundle_twice_with_a_usage_envelope(tmp_p
     assert error["error"]["code"] == "invalid_argument"
     assert error["query"]["bundles"]
 
+
+
+def test_warcraft_resolve_names_the_single_word_cap_when_it_is_why_the_best_candidate_was_not_accepted(monkeypatch) -> None:
+    """Live `warcraft resolve illidan` (2026-10): the providers capped "Illidan Stormrage" at medium; the wrapper reads their rule."""
+    _stub_resolve_seam(monkeypatch, {
+        "warcraft-wiki": {"resolved": False, "confidence": "medium", "confidence_cap": {"rule": "single_word_query", "from": "high"},
+                          "match": _match("warcraft-wiki", "Illidan Stormrage", "article", 60)},
+    })
+
+    data = json.loads(runner.invoke(warcraft_app, ["resolve", "illidan"]).stdout)["data"]
+
+    assert (data["resolved"], data["next_command"]) == (False, None)
+    assert data["best_unresolved_candidate"]["unresolved_reason"] == "single_word_query_not_named_exactly"

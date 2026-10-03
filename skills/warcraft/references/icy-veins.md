@@ -22,6 +22,7 @@
 - a spec query such as `frost mage` or `survival hunter` resolves to that spec's PvE guide; healer specs resolve to their healing guide; a spec name several classes share (`frost`, `holy`) stays unresolved, so name the class; a query that is a page's exact title (`player housing`) resolves to that page when its only close rivals are its own sub-pages
 - every result carries `metadata.sitemap_lastmod`, the sitemap's date for the page (not the page's own `guide.last_updated`); a page a year behind the newest one is marked `penalty_stale_page` and ranked lower
 - `resolve --limit` only trims the candidates shown; confidence is judged on every match. An unresolved `resolve` reports `confidence: "low"` when its top candidates tie on score (nothing tells them apart) and `"medium"` otherwise
+- a one-word query resolves only to a page that word names: the page it titles (`druid`), the zone, dungeon or delve page for it (`k'aresh`), or the spec guide of a spec word only one class has (`shadow`); any other top page (`thunderfury` gives the transmog guide) comes back `medium` with `confidence_cap`, so add a word
 - `search` and `resolve` report `count` as the rows returned, `total_matches` as every match, and `truncated: true` when `--limit` cut the list
 - for narrow subpage questions, search terms like `easy mode`, `rotation`, `stat priority`, or `mythic+ tips` work well
 - a subpage family word ranks a page only when the page also matches the rest of the query: `mythic+ tier list` finds the tier lists, not every spec's M+ tips page

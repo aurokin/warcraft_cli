@@ -29,6 +29,7 @@ from tests.e2e.harness import (
     dead_proxy_env,
     run,
     run_raw,
+    word_names,
 )
 
 BINARY = "warcraft-wiki"
@@ -484,3 +485,27 @@ def test_article_export_rejects_an_out_path_that_is_a_file(require, out_dir: Pat
     target = out_dir / "wiki-bundle.txt"
     target.write_text("not a bundle", encoding="utf-8")
     run(BINARY, "article-export", pins.WIKI_LORE_QUERY, "--out", str(target), expect=EXIT_USAGE, error_code="invalid_argument")
+
+
+def test_a_one_word_resolve_is_high_only_for_a_page_the_word_names(require) -> None:
+    """``illidan`` resolved to "Illidan Stormrage" at high (2026-10). Under the one-word rule that
+    answer is medium: the trade the rule accepts, since the word names no page title exactly.
+
+    The oracle is the top row itself, so the pin holds if the wiki ever gains an "Illidan" page.
+    """
+    require(PROVIDER)
+    result = run(BINARY, "resolve", "illidan")
+    match = result.data["match"]
+    assert match is not None, result.describe()
+    if not word_names("illidan", match["name"]):
+        assert result.data["confidence"] != "high", result.describe()
+
+
+def test_a_widget_method_resolves_to_its_api_page(require) -> None:
+    """``SetPoint`` is an API identifier whose page is "API:<Widget> SetPoint", so the one-word rule leaves it high."""
+    require(PROVIDER)
+    result = run(BINARY, "resolve", "SetPoint")
+    match = result.data["match"]
+    assert match is not None, result.describe()
+    assert match["name"].startswith("API:") and match["name"].endswith(" SetPoint"), result.describe()
+    assert result.data["confidence"] == "high", result.describe()

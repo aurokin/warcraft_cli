@@ -8,6 +8,7 @@ Nothing here prints or raises ``typer.Exit``: every function returns an envelope
 from __future__ import annotations
 
 import shlex
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final
@@ -45,6 +46,7 @@ from warcraft_content.search import (
 )
 from warcraft_core.discovery import RESOLVE_KIND, SEARCH_KIND
 from warcraft_core.envelope import Envelope, success_envelope
+from warcraft_core.identity import unique_spec_class
 from warcraft_core.provider import ProviderError, ProviderSurface
 
 from method_cli.client import METHOD_SITEMAP_URL, MethodClient, guide_ref_parts, load_method_cache_settings_from_env
@@ -397,6 +399,12 @@ def _is_confident_match(results: list[dict[str, Any]]) -> bool:
     return top_score >= second_score + 15
 
 
+def _names_single_word(word: str, row: Mapping[str, Any]) -> bool:
+    """Method's own answer to a one-word query: a spec word only one class has names that spec's guide ("shadow" -> ``shadow-priest``)."""
+    actor_class = unique_spec_class(word)
+    return actor_class is not None and str(row["id"]).replace("-", "") == f"{word}{actor_class}"
+
+
 class MethodProvider:
     """Sitemap-backed discovery over the supported Method.gg guide families."""
 
@@ -425,6 +433,7 @@ class MethodProvider:
             # Judged on every match: ``--limit`` must not hide the near-tied rival that makes it ambiguous.
             resolved=_is_confident_match(outcome.matches),
             scope_hint=outcome.scope_hint,
+            single_word_identity=_names_single_word,
         )
         return _envelope(command="resolve", kind=RESOLVE_KIND, payload=payload, query=target, provenance=SITEMAP_PROVENANCE)
 
