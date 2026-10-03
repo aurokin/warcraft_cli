@@ -114,7 +114,12 @@ find a rival further down.
 count (never fewer than the rows returned), and `truncated: true` when more pages matched than came
 back. Every row carries `provider`, `kind: "article"`, `id` (the page title), `name`, `url`, `ranking`
 and `follow_up` (`command`, `surface`). An unresolved `resolve` reports `confidence: "low"` when its top
-candidates tie on score and `"medium"` otherwise.
+candidates tie on score and `"medium"` otherwise. A one-word query (after the family hint is dropped)
+resolves only to a page that word names: an exact title that is itself one word (`druid`; `mythic`
+does not resolve to `Mythic+`), its `API`/`UIHANDLER`/`Event` page (`CreateFrame` for `API:CreateFrame`),
+the `API` page of that widget method (`SetPoint` for `API:ScriptRegionResizing SetPoint`), an expansion alias (`legion` for `World of Warcraft: Legion`), or
+a title whose head before a `,` or `:` is the word. Any other page (`illidan` for "Illidan Stormrage")
+stays the `match` at `"medium"` with `confidence_cap: {"rule": "single_word_query", "from": "high"}`.
 
 The `api`/`event` search fallback adds an absolute floor on top of that: the candidate's own title has to spell the
 query out. Every word of the query must match a whole word of the title or a whole camel-case component of one, and

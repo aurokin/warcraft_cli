@@ -80,6 +80,17 @@ Shared shape: the envelope `kind` is `resolve_match`; `data` carries `search_que
 `search`. `resolved` is true exactly when `confidence` is `high`, and only then is `next_command` set
 (to `match.follow_up.command`). `match` is the top candidate whenever there is one, resolved or not.
 
+One-word rule: when the provider's `search_query` (after its own hint, type and follow-up
+stripping) is one plain alphabetic word, a `high` answer stands only if that word names the match,
+by its whole name or its head before the first `,` or `:` (`warcraft_core.discovery.single_word_named`),
+or the provider declares the row an identity match (a `single_word_identity` callable passed to
+`resolve_data`; each provider keeps its own rules, there is no shared reason vocabulary). Otherwise
+`resolve_data` lowers the answer to `medium` and adds `confidence_cap: {"rule": "single_word_query",
+"from": "high"}`. A token with digits, `/`, `:`, `.` or `_` is never a plain word, so URLs, numeric ids
+and dotted or namespaced identifiers are never capped. Letters-only tokens are plain words, including
+report codes (`JVFTxcKCqrvpaAzD`), API names (`SetPoint`) and hyphenated slugs (`mage-frost`): they stay
+`high` only through the provider's identity rule or because the provider never answers them at `high`.
+
 Important boundary:
 - wrapper `search`, `resolve`, and follow-up guidance are routing aids
 - they should help agents choose the right provider and next command
@@ -398,7 +409,11 @@ Resolve selection rules:
   break an exact tie on the wrapper score, ahead of the provider name; the raw provider score, which
   is not comparable across providers, never breaks a tie
 - the top-ranked match is the answer only when its own provider resolved it (every provider resolves
-  only at `high` confidence; otherwise `unresolved_reason: "provider_did_not_resolve"`) and the query's intents
+  only at `high` confidence; otherwise `unresolved_reason: "provider_did_not_resolve"`, or
+  `"single_word_query_not_named_exactly"` when the provider's `confidence_cap.rule` is
+  `single_word_query`; the wrapper reads that rule and never recomputes it. A capped row still ranks
+where its score puts it, so it can sit above another provider's resolved answer and leave the wrapper
+unresolved) and the query's intents
   do not rank that provider's family down (`wrapper_ranking.intent_family_fit` is not negative):
   a guide query is never answered by Lorrgs spec metadata, a guild query never by a wiki article.
   A match whose title is exactly the query is exempt, because the intent word is part of its name

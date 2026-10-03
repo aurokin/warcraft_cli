@@ -78,7 +78,9 @@ Every command's flags are listed in [docs/reference/warcraft.md](../reference/wa
   never by a wiki article); a match whose title is exactly the query (the item `Guild Tabard`) is
   exempt. Otherwise `resolved` is `false`, the top-ranked candidate is `data.best_unresolved_candidate`, and
   the candidate itself carries `unresolved_reason` (`data.best_unresolved_candidate.unresolved_reason`:
-  `provider_did_not_resolve` or `provider_family_ranked_down_by_query_intent`). The reason describes that
+  `provider_did_not_resolve`, `provider_family_ranked_down_by_query_intent`, or
+  `single_word_query_not_named_exactly` when its provider capped a one-word query's answer at `medium`
+  because the word does not name it, as its `confidence_cap` says). The reason describes that
   candidate, which can be a skipped `low` match rather than the one that blocked the answer;
   `--ranking-debug` lists every match with its `resolved` flag. `data` also lists the
   `fallback_search_command`s of the providers that returned a candidate, in ranking order (none when

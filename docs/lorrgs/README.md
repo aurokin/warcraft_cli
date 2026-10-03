@@ -83,7 +83,11 @@ different spec or encounter, and it is a high-confidence match. A query that nam
 its words (`storm` for Raszageth the Storm-Eater) is unrivalled but thin: it comes back with
 `resolved: false`, `confidence: "medium"`, the candidate in `match` (see `match.ranking.match_level` and
 `match.follow_up.command`), and `next_command: null`. Like every provider, Lorrgs only resolves at
-`confidence: "high"`.
+`confidence: "high"`. Under the shared one-word rule, a one-word query keeps its high answer when it
+is a spec word only one class has (`shadow` for Shadow Priest), or when it names the boss whole or by
+its head before a `,` or an epithet (`dimensius`, `chimaerus` for Chimaerus the Undreamt God). Any
+other boss short name (`ansurek` for Queen Ansurek, `jailer` for The Jailer, Zovaal, `anduin` for
+Anduin Wrynn) comes back `medium` with `confidence_cap: {"rule": "single_word_query", "from": "high"}`.
 
 A word the top candidate ignores blocks the handoff: `fire mage paladin` leaves `paladin` in
 `unmatched_terms`, so it returns `resolved: false` rather than answering the narrower Fire Mage

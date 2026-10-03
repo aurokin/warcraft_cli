@@ -13,8 +13,16 @@ from warcraft_core.identity import (
     refresh_talent_transport_packet,
     report_actor_identity_payload,
     talent_transport_packet_payload,
+    unique_spec_class,
     validate_talent_transport_packet,
 )
+
+
+def test_unique_spec_class_names_the_one_class_a_spec_word_belongs_to() -> None:
+    assert unique_spec_class("shadow") == "priest"
+    assert unique_spec_class("feral") == "druid"
+    # Shared by two classes, or no spec at all.
+    assert [unique_spec_class(word) for word in ("frost", "holy", "restoration", "druid")] == [None, None, None, None]
 
 
 def test_class_spec_identity_distinguishes_normalized_inferred_and_ambiguous() -> None:

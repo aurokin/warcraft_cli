@@ -34,6 +34,7 @@ from tests.e2e.harness import (
     Result,
     dead_proxy_env,
     run,
+    word_names,
 )
 
 BINARY = "method"
@@ -492,3 +493,24 @@ def test_guide_export_rejects_an_out_path_that_is_a_file(require, out_dir: Path)
 def test_every_guide_command_rejects_an_empty_reference(require, command: str) -> None:
     require(PROVIDER)
     run(BINARY, command, "   ", expect=EXIT_USAGE, error_code="invalid_guide_ref")
+
+
+@pytest.mark.parametrize("word", ["void", "light", "dragon"])
+def test_a_one_word_resolve_is_high_only_for_a_guide_the_word_names(require, word: str) -> None:
+    """Resolve once answered "Void Assaults Escalation Overview..." for ``void`` at high (2026-10).
+
+    Guides come and go, so the oracle is the top row itself: when the word does not name it, the
+    answer is at most medium.
+    """
+    require(PROVIDER)
+    result = run(BINARY, "resolve", word)
+    match = result.data["match"]
+    if match is not None and not word_names(word, match["name"]):
+        assert result.data["confidence"] != "high", result.describe()
+
+
+def test_a_spec_word_only_one_class_has_still_resolves_to_that_spec_guide(require) -> None:
+    """The one-word rule keeps a spec word only one class has (``shadow``) on that spec's guide."""
+    require(PROVIDER)
+    result = run(BINARY, "resolve", "shadow")
+    assert (result.data["confidence"], result.data["match"]["id"]) == ("high", "shadow-priest"), result.describe()

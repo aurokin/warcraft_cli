@@ -4,7 +4,7 @@ import shlex
 from dataclasses import dataclass
 from typing import Any
 
-from warcraft_core.discovery import ResolveConfidence, discovery_row, resolve_data, search_data
+from warcraft_core.discovery import ResolveConfidence, SingleWordIdentity, discovery_row, resolve_data, search_data
 
 
 def article_follow_up(
@@ -117,8 +117,12 @@ def article_resolve_payload(
     resolved: bool,
     total_matches: int | None = None,
     scope_hint: dict[str, Any] | None = None,
+    single_word_identity: SingleWordIdentity | None = None,
 ) -> dict[str, Any]:
-    """The ``resolve`` data for every ranked match; ``limit`` trims only the candidates shown, never the confidence."""
+    """The ``resolve`` data for every ranked match; ``limit`` trims only the candidates shown, never the confidence.
+
+    ``single_word_identity`` is the provider's own test for a one-word query (see ``resolve_data``).
+    """
     return resolve_data(
         search_query=search_query,
         ranked=matches,
@@ -126,6 +130,7 @@ def article_resolve_payload(
         confidence=_resolve_confidence(matches, resolved=resolved),
         fallback_search_command=f"{provider_command} search {shlex.quote(query)}",
         total_matches=total_matches,
+        single_word_identity=single_word_identity,
         **_payload_extra(query, scope_hint),
     )
 

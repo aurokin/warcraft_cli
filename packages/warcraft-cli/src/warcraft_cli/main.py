@@ -361,6 +361,19 @@ def _failed_provider_rows(providers: list[dict[str, Any]]) -> list[dict[str, Any
     return rows
 
 
+def _unresolved_reason(top: dict[str, Any]) -> str:
+    """Why the top-ranked resolve answer is not the wrapper's answer, read from its provider's payload.
+
+    A provider that capped a one-word query's answer at ``medium`` says so in ``confidence_cap``; the
+    wrapper reports that rule rather than recomputing it.
+    """
+    if top.get("resolved"):
+        return "provider_family_ranked_down_by_query_intent"
+    if as_dict(top.get("confidence_cap")).get("rule") == "single_word_query":
+        return "single_word_query_not_named_exactly"
+    return "provider_did_not_resolve"
+
+
 def _unresolved_next_steps(ranked: list[dict[str, Any]], *, resolved: bool) -> dict[str, Any]:
     """What an agent should do next when the top-ranked candidate is not a resolved answer.
 
@@ -381,9 +394,7 @@ def _unresolved_next_steps(ranked: list[dict[str, Any]], *, resolved: bool) -> d
     best = compact_resolve_match(top)
     if best is not None and top is not None:
         best["resolved"] = False
-        best["unresolved_reason"] = (
-            "provider_family_ranked_down_by_query_intent" if top.get("resolved") else "provider_did_not_resolve"
-        )
+        best["unresolved_reason"] = _unresolved_reason(top)
     return {
         "fallback_search_command": fallbacks[0]["command"] if fallbacks else None,
         "fallback_search_commands": fallbacks,
