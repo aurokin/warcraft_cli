@@ -1583,6 +1583,8 @@ def test_warcraftlogs_search_matches_explicit_report_reference() -> None:
     assert payload["data"]["results"][0]["report_reference"]["code"] == "abcd1234"
     assert payload["data"]["results"][0]["report_reference"]["fight_id"] == 3
     assert payload["data"]["results"][0]["follow_up"]["command"] == "warcraftlogs report-encounter abcd1234 --fight-id 3"
+    assert payload["data"]["results"][0]["url"] == "https://www.warcraftlogs.com/reports/abcd1234#fight=3"
+    assert (payload["data"]["total_matches"], payload["data"]["truncated"]) == (1, False)
 
 
 # Real report codes are 16 letters and digits, and many carry no digit at all.
@@ -1603,7 +1605,8 @@ def test_warcraftlogs_search_and_resolve_accept_real_report_codes(reference: str
     search = json.loads(runner.invoke(warcraftlogs_app, ["search", reference]).stdout)["data"]
     assert [(row["kind"], row["report_reference"]["code"]) for row in search["results"]] == [(kind, code)]
     resolve = json.loads(runner.invoke(warcraftlogs_app, ["resolve", reference]).stdout)["data"]
-    assert resolve["resolved"] is True
+    # Only a URL is certain; a bare code is matched by its shape and stays unresolved.
+    assert resolve["resolved"] is reference.startswith("https://")
     assert resolve["match"]["report_reference"]["code"] == code
 
 
@@ -1644,10 +1647,13 @@ def test_warcraftlogs_resolve_matches_bare_report_code() -> None:
 
     payload = json.loads(result.stdout)
     assert payload["provider"] == "warcraftlogs"
-    assert payload["data"]["resolved"] is True
+    # Only high confidence resolves, so the bare code's command waits on the match instead of next_command.
+    assert payload["data"]["resolved"] is False
     assert payload["data"]["confidence"] == "medium"
+    assert payload["data"]["next_command"] is None
     assert payload["data"]["match"]["kind"] == "report"
-    assert payload["data"]["next_command"] == "warcraftlogs report abcd1234"
+    assert payload["data"]["match"]["follow_up"]["command"] == "warcraftlogs report abcd1234"
+    assert payload["data"]["candidates"] == [payload["data"]["match"]]
 
 
 def test_warcraftlogs_resolve_includes_selected_site_in_next_command() -> None:
@@ -7414,7 +7420,7 @@ def test_warcraftlogs_provider_surface_returns_conforming_envelopes() -> None:
 
     resolve_envelope = PROVIDER.resolve("abcd1234")
     assert envelope_violations(resolve_envelope) == []
-    assert resolve_envelope["data"]["resolved"] is True
+    assert resolve_envelope["data"]["confidence"] == "medium"
 
     doctor_envelope = PROVIDER.doctor(live=False)
     assert envelope_violations(doctor_envelope) == []

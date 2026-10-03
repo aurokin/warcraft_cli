@@ -18,7 +18,7 @@ envelope with that collection emptied and `data.stream: {"field", "count"}` nami
 | `ok` | bool | `true` on success, `false` on failure |
 | `provider` | string | Binary/provider name (`wowhead`, `warcraftlogs`, `warcraft`, ...) |
 | `command` | string | Full subcommand path that produced the payload (`search`, `entity`, `distribution mythic-plus-runs`, ...) |
-| `kind` | string | Payload kind inside `data` (`search_results`, `entity`, `doctor`, `error`, ...) |
+| `kind` | string | Payload kind inside `data` (`search_results`, `resolve_match`, `entity`, `doctor`, `error`, ...) |
 | `schema_version` | string | Envelope schema version. Currently `"1"`. |
 | `query` | string, object, or null | On success, the normalized input when the command reports one, otherwise `null` (many commands that take a report, build or file answer with `null` here and describe their input inside `data`); on failure, see [Error object](#error-object) |
 | `provenance` | object | Source URLs, fetch timestamps, cache state, upstream warnings about the source (for example `warcraftlogs graphql`'s `graphql_warnings`), and `compacted_paths` under `--compact`. `{}` when the command reports none; some commands keep their source URLs in `data` instead (for example `wowhead entity`'s `data.entity.page_url` and `data.citations`). |

@@ -144,8 +144,9 @@ query.
 `resolve` judges confidence on every ranked match;
 `--limit` only trims the `candidates` shown, so `--limit 1` never makes an ambiguous query look
 resolved. An unresolved `resolve` reports `confidence: "low"` when its top candidates tie on score and
-`"medium"` otherwise. `search` and `resolve` report `count` as every match and `truncated: true` when
-`--limit` cut the list.
+`"medium"` otherwise. `search` and `resolve` report `count` as the rows returned, `total_matches` as
+every match, and `truncated: true` when `--limit` cut the list. Every row carries `provider`,
+`kind: "guide"`, `id` (the slug), `name`, `url`, `ranking` and `follow_up` (`command`, `surface`).
 
 ## Caching
 

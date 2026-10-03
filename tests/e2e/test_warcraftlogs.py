@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import json
 import shlex
+import time
 from collections import Counter
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -65,6 +66,10 @@ DISCOVERY_REPORT_LIMIT = 10
 SAMPLE_WINDOW_PADDING_MS = 60_000
 SAMPLE_REPORT_PAGES = "1"
 SAMPLE_REPORTS_PER_PAGE = "5"
+
+# A report counts as finished once its last event is this old (ms); a raid night still being logged
+# is not, and the newest ranked kill can come from one.
+FINISHED_REPORT_QUIET_MS = 2 * 60 * 60 * 1000
 
 # Mythic: the difficulty the public leaderboards rank; Heroic is killed far more often.
 MYTHIC_DIFFICULTY_ID = 5
@@ -646,12 +651,14 @@ def test_search_and_resolve_accept_a_report_url_and_a_bare_code(require):
         assert search.payload["kind"] == "search_results", search.describe()
         results = _rows(search, "results")
         assert results[0]["report_reference"]["code"] == found.code, search.describe()
+        assert (search.data["count"], search.data["total_matches"], search.data["truncated"]) == (1, 1, False), search.describe()
 
     from_url = run("warcraftlogs", "resolve", found.url)
-    assert from_url.payload["kind"] == "resolution", from_url.describe()
+    assert from_url.payload["kind"] == "resolve_match", from_url.describe()
     assert from_url.data["resolved"] is True, from_url.describe()
     match = from_url.data["match"]
     assert match["report_reference"]["code"] == found.code, from_url.describe()
+    assert match["url"] == f"https://www.warcraftlogs.com/reports/{found.code}#fight={found.fight_id}", from_url.describe()
     assert match["report_reference"]["fight_id"] == found.fight_id, from_url.describe()
     assert str(found.fight_id) in from_url.data["next_command"], from_url.describe()
     # next_command is handed to an agent to run as written, so it has to run and read that fight.
@@ -663,8 +670,11 @@ def test_search_and_resolve_accept_a_report_url_and_a_bare_code(require):
     query_form = run("warcraftlogs", "resolve", f"https://www.warcraftlogs.com/reports/{found.code}?fight={found.fight_id}")
     assert query_form.data["match"]["report_reference"]["fight_id"] == found.fight_id, query_form.describe()
 
+    # A bare code is matched by its shape alone: medium confidence, unresolved, its command on the match.
     from_code = run("warcraftlogs", "resolve", found.code)
     assert from_code.data["match"]["report_reference"]["code"] == found.code, from_code.describe()
+    assert (from_code.data["resolved"], from_code.data["confidence"], from_code.data["next_command"]) == (False, "medium", None), from_code.describe()
+    assert from_code.data["match"]["follow_up"]["command"] == f"warcraftlogs report {found.code}", from_code.describe()
 
     # Report codes are 16 letters and digits, and some have no digit at all; parsing one needs no
     # network. A 16-letter word is still a word, not a report.
@@ -685,6 +695,7 @@ def test_a_classic_report_url_selects_the_classic_site(require):
 
     resolved = run("warcraftlogs", "resolve", url)
     assert resolved.data["next_command"] == f"warcraftlogs --site classic report {code}", resolved.describe()
+    assert resolved.data["match"]["url"] == url, resolved.describe()
     binary, *args = shlex.split(resolved.data["next_command"])
     assert run(binary, *args).data["report"]["code"] == code
 
@@ -968,7 +979,9 @@ def test_report_encounter_family_describes_the_discovered_kill(require):
     assert encounter.data["fight"]["kill"] is True, encounter.describe()
     assert encounter.data["encounter"]["name"] == found.fight["name"], encounter.describe()
     assert encounter.data["encounter_identity"]["status"] == "canonical", encounter.describe()
-    assert encounter.data["stability"]["report_finished"] is True, encounter.describe()
+    finished = time.time() * 1000 - encounter.data["report"]["end_time"] >= FINISHED_REPORT_QUIET_MS
+    assert encounter.data["stability"]["report_finished"] is finished, encounter.describe()
+    assert encounter.data["stability"]["live"] is not finished, encounter.describe()
 
     players = run("warcraftlogs", "report-encounter-players", found.code, "--fight-id", str(found.fight_id))
     details = players.data["player_details"]

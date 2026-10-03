@@ -24,7 +24,7 @@ lorrgs --fields data.specs specs
 |---------|-----------------|
 | `doctor` | Auth posture (none required), endpoints, per-surface capability state, and the cache configuration. |
 | `search <query> [--limit N]` | Ranked Lorrgs candidates with `follow_up.command` values. `--limit` defaults to 5, max 50. |
-| `resolve <query> [--limit N]` | Conservative single-command handoff: `resolved`, `confidence`, `match`, `next_command`. |
+| `resolve <query> [--limit N]` | Conservative single-command handoff: `resolved`, `confidence`, `match`, `next_command`, `fallback_search_command`, `candidates`. |
 | `roles`, `classes`, `specs`, `zones`, `bosses`, `trinkets` | Static Lorrgs metadata collections. |
 | `spec <spec-slug>` | Metadata for one spec. |
 | `spec-spells <spec-slug>` | Tracked cooldown spells for one spec. |
@@ -89,8 +89,9 @@ A word the top candidate ignores blocks the handoff: `fire mage paladin` leaves 
 `unmatched_terms`, so it returns `resolved: false` rather than answering the narrower Fire Mage
 question, and `frost mage guide` leaves `guide` (Lorrgs has no guides). Every row tied for the best score is emitted, so a query that names a spec Lorrgs
 has twice (`frost` is Mage and Death Knight) or an encounter short name it has twice (`salhadaar` is
-Fallen-King and Nexus-King) comes back with `resolved: false`, `confidence: "none"`,
-`next_command: null`, and every tied candidate in `results` — narrow the query or pick a slug.
+Fallen-King and Nexus-King) comes back with `resolved: false`, `confidence: "low"`,
+`next_command: null`, the first tied row in `match`, and every tied candidate in `candidates` — narrow
+the query or pick a slug. A query with a word left over is `low` the same way.
 
 A difficulty word (`mythic`, `heroic`, `normal`, `lfr`) is not matched against specs or bosses; it is
 carried into the ranking handoff instead: `heroic frost mage chimaerus` resolves to
@@ -103,8 +104,12 @@ A tie between *different* kinds is a preference, not ambiguity, and it is fixed:
 (`chimaerus`) resolves to `comp-ranking`, because the ranking is the useful surface and the `boss`
 metadata row scored the same only because it was built from the same match.
 
-`--limit` only trims what is printed: `resolve` judges ambiguity over every candidate, and its payload
-carries `count` plus `truncated` so a caller can tell that rivals were cut from `results`.
+`--limit` only trims what is printed: `resolve` judges ambiguity over every candidate. In `search` and
+`resolve`, `count` is the rows in `results`/`candidates`, `total_matches` is every ranked candidate, and
+`truncated` says rivals were cut. An unresolved answer carries `fallback_search_command`
+(`lorrgs search '<query>'`). Spec-ranking and comp-ranking rows carry the Lorrgs page they render in
+`url`; a report row built from a `lorrgs.io/user_report/...` URL carries that URL, and spec, boss and
+other report rows have `url: null`.
 
 A report reference comes back as the `match` (`follow_up.command` is `lorrgs report-overview <code>`)
 at `confidence: "medium"` with a `caveat`, and `resolved: false`: the reference parsed exactly, but

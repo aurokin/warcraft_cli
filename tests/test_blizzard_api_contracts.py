@@ -229,7 +229,7 @@ def test_coming_soon_commands_emit_structured_stub(command: str) -> None:
     assert payload["ok"] is True
     assert payload["provider"] == "blizzard-api"
     assert payload["command"] == command
-    assert payload["kind"] == "coming_soon"
+    assert payload["kind"] == ("search_results" if command == "search" else "resolve_match")
     assert payload["data"]["coming_soon"] is True
 
 

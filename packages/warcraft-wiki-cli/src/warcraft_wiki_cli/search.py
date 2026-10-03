@@ -21,7 +21,7 @@ from warcraft_wiki_cli.client import WarcraftWikiClient
 from warcraft_wiki_cli.page_parser import PROGRAMMING_FAMILIES, classify_article_family
 
 PROVIDER_NAME = "warcraft-wiki"
-WIKI_ARTICLE_KIND = ArticleKind(surface="article", type_name="Article", entity_type="article", metadata_key="title")
+WIKI_ARTICLE_KIND = ArticleKind(surface="article", kind="article", metadata_key="title")
 
 # MediaWiki full-text rank is a real signal, but we cannot see why a row matched (the snippet is
 # truncated), so it stays small enough that it can never outweigh an actual title match.
@@ -296,13 +296,14 @@ def _ranked_matches(client: WarcraftWikiClient, original_query: str, search_quer
                 url=row["url"],
                 score=score,
                 reasons=reasons,
-                provider_command=PROVIDER_NAME,
+                provider=PROVIDER_NAME,
                 kind=WIKI_ARTICLE_KIND,
                 metadata={"title": title, "content_family": family},
             )
         )
     sort_article_candidates(matches)
-    return total_count, matches
+    # Never below the rows it returned: MediaWiki leaves the count out when ``searchinfo`` is missing.
+    return max(total_count, len(matches)), matches
 
 
 def search_results(client: WarcraftWikiClient, query: str, *, limit: int) -> SearchOutcome:

@@ -18,6 +18,7 @@ from warcraft_content.article_bundle import article_export_dir, bundle_query_pay
 from warcraft_content.article_discovery import article_resolve_payload, article_search_payload
 from warcraft_content.article_provider_cli import preview_block
 from warcraft_content.article_provider_cli import transport_errors as http_transport_errors
+from warcraft_core.discovery import RESOLVE_KIND, SEARCH_KIND
 from warcraft_core.envelope import Envelope, success_envelope
 from warcraft_core.provider import ProviderError, ProviderSurface
 
@@ -323,7 +324,10 @@ def _typed_article_payload(
             "resolved": True,
             "match": top,
             "candidates": results,
-            "count": total_count,
+            "count": len(results),
+            # Each fallback query reports its own MediaWiki total; the merged rows can outnumber the largest.
+            "total_matches": max(total_count, len(results)),
+            "truncated": total_count > len(results),
         },
     )
 
@@ -408,12 +412,13 @@ class WarcraftWikiProvider:
             article_search_payload(
                 query=query,
                 search_query=outcome.normalized_query,
-                results=outcome.results[:limit],
-                total_count=outcome.total_count,
+                matches=outcome.results,
+                limit=limit,
+                total_matches=outcome.total_count,
             ),
             outcome,
         )
-        return _envelope(command="search", kind="search_results", payload=payload, query=query, provenance=API_PROVENANCE)
+        return _envelope(command="search", kind=SEARCH_KIND, payload=payload, query=query, provenance=API_PROVENANCE)
 
     def resolve(self, target: str, *, limit: int = 5, **options: Any) -> Envelope:
         outcome = _search_outcome(target, limit=limit)
@@ -424,7 +429,7 @@ class WarcraftWikiProvider:
                 search_query=outcome.normalized_query,
                 matches=outcome.results,
                 limit=limit,
-                total_count=outcome.total_count,
+                total_matches=outcome.total_count,
                 # Judged on every ranked row: trimming to --limit first would hide the rivals. The top
                 # title must also name the query, the typed surfaces' floor: ``all_terms_match`` fires
                 # on the snippet, so "Liquid guild us illidan" alone would resolve to "Team Liquid".
@@ -432,7 +437,7 @@ class WarcraftWikiProvider:
             ),
             outcome,
         )
-        return _envelope(command="resolve", kind="resolve_match", payload=payload, query=target, provenance=API_PROVENANCE)
+        return _envelope(command="resolve", kind=RESOLVE_KIND, payload=payload, query=target, provenance=API_PROVENANCE)
 
     def doctor(self, **options: Any) -> Envelope:
         try:

@@ -40,6 +40,7 @@ from warcraft_core.cli import (
 from warcraft_core.cli import (
     RuntimeConfig as BaseRuntimeConfig,
 )
+from warcraft_core.discovery import ResolveConfidence, discovery_row, resolve_data, search_data
 from warcraft_core.envelope import success_envelope
 from warcraft_core.exit_codes import EXIT_AUTH, EXIT_USAGE, exit_code_for
 from warcraft_core.identity import (
@@ -1363,19 +1364,10 @@ def _warcraftlogs_command_prefix(site: WarcraftLogsSiteProfile) -> str:
     return f"warcraftlogs --site {shlex.quote(site.key)}"
 
 
-def _report_discovery_hint(query: str, *, site: WarcraftLogsSiteProfile) -> dict[str, Any]:
+def _report_discovery_hint(site: WarcraftLogsSiteProfile) -> dict[str, Any]:
+    """What a free-text search or resolve answers with: discovery only takes explicit report references."""
     command_prefix = _warcraftlogs_command_prefix(site)
     return {
-        "provider": "warcraftlogs",
-        "query": query,
-        "search_query": query,
-        "count": 0,
-        "results": [],
-        "resolved": False,
-        "confidence": "none",
-        "match": None,
-        "next_command": None,
-        "fallback_search_command": None,
         "message": (
             "Warcraft Logs discovery is intentionally narrow for now. "
             "Use an explicit report URL or a bare report code."
@@ -1445,8 +1437,9 @@ def _explicit_report_reference(query: str) -> ReportReference | None:
 
 def _report_discovery_candidate(ref: ReportReference, *, site: WarcraftLogsSiteProfile) -> dict[str, Any]:
     quoted_reference = shlex.quote(ref.code)
-    # A report URL names its own site, which the follow-up command has to select.
-    command_prefix = _warcraftlogs_command_prefix(ref.site or site)
+    # A report URL names its own site, which the follow-up command and the report URL have to use.
+    report_site = ref.site or site
+    command_prefix = _warcraftlogs_command_prefix(report_site)
     if ref.fight_id is None:
         kind = "report"
         next_command = f"{command_prefix} report {quoted_reference}"
@@ -1457,66 +1450,48 @@ def _report_discovery_candidate(ref: ReportReference, *, site: WarcraftLogsSiteP
         next_command = f"{command_prefix} report-encounter {quoted_reference} --fight-id {ref.fight_id}"
         score = 96
         reasons = ["explicit_report_reference", "fight_scope_present"]
-    return {
-        "provider": "warcraftlogs",
-        "kind": kind,
-        "id": f"warcraftlogs:{kind}:{ref.code}:{ref.fight_id or ''}",
-        "name": f"Warcraft Logs report {ref.code}",
-        "report_reference": _report_reference_payload(ref),
-        "ranking": {"score": score, "match_reasons": reasons},
-        "follow_up": {
-            "provider": "warcraftlogs",
-            "kind": kind,
-            "surface": kind,
-            "command": next_command,
-        },
-    }
+    return discovery_row(
+        provider="warcraftlogs",
+        kind=kind,
+        id=f"warcraftlogs:{kind}:{ref.code}:{ref.fight_id or ''}",
+        name=f"Warcraft Logs report {ref.code}",
+        url=_report_url(ref.code, fight_id=ref.fight_id, root_url=report_site.root_url),
+        score=score,
+        match_reasons=reasons,
+        command=next_command,
+        surface=kind,
+        report_reference=_report_reference_payload(ref),
+    )
 
 
-def _report_search_payload(query: str, *, ref: ReportReference | None, site: WarcraftLogsSiteProfile) -> dict[str, Any]:
+def _report_search_payload(query: str, *, ref: ReportReference | None, site: WarcraftLogsSiteProfile, limit: int) -> dict[str, Any]:
     if ref is None:
-        return _report_discovery_hint(query, site=site)
-    candidate = _report_discovery_candidate(ref, site=site)
-    return {
-        "provider": "warcraftlogs",
-        "query": query,
-        "search_query": query,
-        "count": 1,
-        "results": [candidate],
-        "truncated": False,
-        "discovery_scope": "explicit_report_reference",
-        "message": "Matched an explicit Warcraft Logs report reference.",
-    }
+        return search_data(search_query=query, ranked=[], limit=limit, **_report_discovery_hint(site))
+    return search_data(
+        search_query=query,
+        ranked=[_report_discovery_candidate(ref, site=site)],
+        limit=limit,
+        discovery_scope="explicit_report_reference",
+        message="Matched an explicit Warcraft Logs report reference.",
+    )
 
 
 def _report_resolve_payload(query: str, *, ref: ReportReference | None, site: WarcraftLogsSiteProfile) -> dict[str, Any]:
     if ref is None:
-        hint = _report_discovery_hint(query, site=site)
-        return {
-            "provider": "warcraftlogs",
-            "query": query,
-            "search_query": query,
-            "resolved": False,
-            "confidence": "none",
-            "match": None,
-            "next_command": None,
-            "fallback_search_command": None,
-            "message": hint["message"],
-            "supported_inputs": hint["supported_inputs"],
-            "suggested_commands": hint["suggested_commands"],
-        }
-    candidate = _report_discovery_candidate(ref, site=site)
-    follow_up = candidate["follow_up"]
-    return {
-        "provider": "warcraftlogs",
-        "query": query,
-        "search_query": query,
-        "resolved": True,
-        "confidence": "high" if ref.fight_id is not None or ref.source_url is not None else "medium",
-        "match": candidate,
-        "next_command": follow_up["command"],
-        "fallback_search_command": None,
-    }
+        return resolve_data(
+            search_query=query, ranked=[], limit=1, confidence="none", fallback_search_command=None, **_report_discovery_hint(site)
+        )
+    # A URL or a fight ID makes the reference certain. A bare code is only judged by its shape, so it
+    # stays unresolved and its command waits in match.follow_up.command.
+    confidence: ResolveConfidence = "high" if ref.fight_id is not None or ref.source_url is not None else "medium"
+    # Free-text search adds nothing here, so there is no fallback search to offer.
+    return resolve_data(
+        search_query=query,
+        ranked=[_report_discovery_candidate(ref, site=site)],
+        limit=1,
+        confidence=confidence,
+        fallback_search_command=None,
+    )
 
 
 def _fight_encounter_id(fight: dict[str, Any]) -> int | None:

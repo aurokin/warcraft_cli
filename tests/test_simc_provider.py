@@ -20,8 +20,8 @@ runner = CliRunner()
     ("args", "kind"),
     [
         (["doctor"], "doctor"),
-        (["search", "mistweaver"], "search"),
-        (["resolve", "mistweaver"], "resolve"),
+        (["search", "mistweaver"], "search_results"),
+        (["resolve", "mistweaver"], "resolve_match"),
         (["repo"], "repo"),
     ],
 )

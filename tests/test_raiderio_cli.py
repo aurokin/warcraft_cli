@@ -24,8 +24,7 @@ from raiderio_cli.candidates import (
     candidate_from_guild_profile,
     dedupe_search_candidates,
     match_reasons,
-    resolve_candidate_is_confident,
-    resolve_confidence_label,
+    resolve_confidence,
     search_result_candidate,
 )
 from raiderio_cli.client import FetchedJson, RaiderIOClient
@@ -177,7 +176,7 @@ def test_raiderio_search_result_candidate_builds_profile_shape() -> None:
     )
     assert candidate is not None
     assert candidate["kind"] == "guild"
-    assert candidate["profile_url"] == "https://raider.io/guilds/us/illidan/Liquid"
+    assert candidate["url"] == "https://raider.io/guilds/us/illidan/Liquid"
     assert "type_hint" in candidate["ranking"]["match_reasons"]
 
 
@@ -216,13 +215,16 @@ def test_raiderio_match_reasons_helper_tracks_exact_and_hints() -> None:
     assert "type_hint" in reasons
 
 
-def test_raiderio_resolve_confidence_helpers() -> None:
-    assert resolve_candidate_is_confident([{"ranking": {"score": 45}}]) is True
-    assert resolve_candidate_is_confident([{"ranking": {"score": 44}}, {"ranking": {"score": 10}}]) is False
-    assert resolve_candidate_is_confident([{"ranking": {"score": 50}}, {"ranking": {"score": 40}}]) is False
-    assert resolve_confidence_label(45, resolved=True) == "high"
-    assert resolve_confidence_label(30, resolved=False) == "medium"
-    assert resolve_confidence_label(20, resolved=False) == "low"
+def test_raiderio_resolve_confidence_needs_a_strong_clear_lead_and_a_command() -> None:
+    def row(score: int, command: str | None = "raiderio guild us illidan Liquid") -> dict[str, Any]:
+        return {"ranking": {"score": score}, "follow_up": {"command": command}}
+
+    assert resolve_confidence([]) == "none"
+    assert resolve_confidence([row(45)]) == "high"
+    assert resolve_confidence([row(45, command=None)]) == "medium"
+    assert resolve_confidence([row(44), row(10)]) == "medium"
+    assert resolve_confidence([row(50), row(40)]) == "medium"
+    assert resolve_confidence([row(20)]) == "low"
 
 
 def test_raiderio_ranking_roster_entry_builds_profile_summary() -> None:
@@ -3003,7 +3005,15 @@ def test_raiderio_search_character_row_links_its_profile_page() -> None:
     candidate = search_result_candidate(_character_row("area-52"), query="Cotti", type_hint=None)
 
     assert candidate is not None
-    assert candidate["profile_url"] == "https://raider.io/characters/us/area-52/Cotti"
+    assert candidate["url"] == "https://raider.io/characters/us/area-52/Cotti"
+
+
+def test_raiderio_search_row_without_a_realm_has_no_follow_up_surface() -> None:
+    # Without a realm no command can open the character, so filtering rows on surface must skip it.
+    candidate = search_result_candidate(_character_row(""), query="Cotti", type_hint=None)
+
+    assert candidate is not None
+    assert candidate["follow_up"] == {"command": None, "surface": "none"}
 
 
 def test_raiderio_non_json_body_is_an_upstream_error(monkeypatch) -> None:

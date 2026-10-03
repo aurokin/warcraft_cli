@@ -571,7 +571,7 @@ def _scored_candidate(row: dict[str, Any], query: str, terms: set[str], *, stale
         url=row["url"],
         score=score,
         reasons=reasons,
-        provider_command=PROVIDER_NAME,
+        provider=PROVIDER_NAME,
     )
     candidate_row["metadata"].update(
         content_family=content_family,

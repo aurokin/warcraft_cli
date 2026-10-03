@@ -9,6 +9,7 @@ from __future__ import annotations
 import contextlib
 import importlib
 import io
+import json
 import sys
 import tomllib
 from collections.abc import Iterator
@@ -19,7 +20,10 @@ from typing import Any, NamedTuple
 import pytest
 import typer
 import warcraft_cli.main
+from icy_veins_cli.page_parser import parse_site_menu_guides as parse_icy_veins_menu
+from method_cli.page_parser import parse_sitemap_guides as parse_method_sitemap
 from warcraft_cli.providers import PROVIDERS
+from warcraft_wiki_cli.page_parser import parse_search_results as parse_wiki_search
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -43,6 +47,74 @@ PROVIDER_STUBS: dict[str, tuple[tuple[str, Any], ...]] = {
 
 # An explicit report reference keeps the Warcraft Logs surfaces on their offline parsing path.
 WARCRAFTLOGS_REPORT_QUERY = "https://www.warcraftlogs.com/reports/abcd1234EFGH5678#fight=3"
+
+FIXTURES = REPO_ROOT / "tests" / "fixtures"
+
+
+def _fixture_json(name: str) -> Any:
+    return json.loads((FIXTURES / name).read_text(encoding="utf-8"))
+
+
+def _raiderio_guild(row_id: int, realm: str) -> dict[str, Any]:
+    region = {"slug": "us", "name": "United States & Oceania"}
+    data = {"id": row_id, "name": "Liquid", "displayName": "Liquid", "faction": "horde", "region": region}
+    return {"type": "guild", "name": "Liquid", "data": {**data, "realm": {"slug": realm, "name": realm.title()}, "path": f"/guilds/us/{realm}/Liquid"}}
+
+
+_METHOD_SITEMAP_XML = """<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>https://www.method.gg/guides/mistweaver-monk</loc></url>
+  <url><loc>https://www.method.gg/guides/windwalker-monk</loc></url>
+  <url><loc>https://www.method.gg/guides/brewmaster-monk</loc></url>
+  <url><loc>https://www.method.gg/guides/restoration-shaman</loc></url>
+</urlset>"""
+
+
+class DiscoveryStub(NamedTuple):
+    """A query plus the client seams that answer it offline with several rows (captured where one exists)."""
+
+    query: str
+    seams: tuple[tuple[str, Any], ...] = ()
+
+
+# Populated counterparts of PROVIDER_STUBS for the discovery contract test. Providers whose search
+# and resolve are stubs need no seams; Warcraft Logs answers only an explicit report reference.
+DISCOVERY_STUBS: dict[str, DiscoveryStub] = {
+    "wowhead": DiscoveryStub(
+        "thunderfury",
+        (("wowhead_cli.wowhead_client.WowheadClient.search_suggestions", lambda self, query: _fixture_json("wowhead/search_suggestions_thunderfury.json")),),
+    ),
+    "method": DiscoveryStub(
+        "monk",
+        (("method_cli.client.MethodClient.sitemap_guides", lambda self: parse_method_sitemap(_METHOD_SITEMAP_XML)),),
+    ),
+    "icy-veins": DiscoveryStub(
+        "mage",
+        (
+            ("icy_veins_cli.client.IcyVeinsClient.sitemap_guides", lambda self: parse_icy_veins_menu((FIXTURES / "icy_veins/site_menu_class_hub.html").read_text(encoding="utf-8"))),
+            ("icy_veins_cli.client.IcyVeinsClient.site_menu_guides", lambda self: []),
+        ),
+    ),
+    "warcraft-wiki": DiscoveryStub(
+        "sha of anger",
+        (("warcraft_wiki_cli.client.WarcraftWikiClient.search_articles", lambda self, query, *, limit: parse_wiki_search(_fixture_json("warcraft_wiki/search_world_boss_sha_of_anger.json"))),),
+    ),
+    "raiderio": DiscoveryStub(
+        "Liquid",
+        (("raiderio_cli.client.RaiderIOClient.search", lambda self, *, term, kind=None: {"matches": [_raiderio_guild(1, "illidan"), _raiderio_guild(2, "gnomeregan"), _raiderio_guild(3, "stormrage")]}),),
+    ),
+    "lorrgs": DiscoveryStub(
+        "mage",
+        (
+            ("lorrgs_cli.client.LorrgsClient.specs", lambda self: {"payload": _fixture_json("lorrgs/specs.json"), "source_url": "https://api.lorrgs.io/api/spec"}),
+            ("lorrgs_cli.client.LorrgsClient.bosses", lambda self: {"payload": _fixture_json("lorrgs/bosses.json"), "source_url": "https://api.lorrgs.io/api/boss"}),
+        ),
+    ),
+    "warcraftlogs": DiscoveryStub(WARCRAFTLOGS_REPORT_QUERY),
+    "simc": DiscoveryStub("probe-query"),
+    "raidbots": DiscoveryStub("probe-query"),
+    "blizzard-api": DiscoveryStub("probe-query"),
+    "curseforge": DiscoveryStub("probe-query"),
+}
 
 
 def all_cli_apps() -> dict[str, typer.Typer]:

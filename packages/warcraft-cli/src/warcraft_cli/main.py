@@ -42,6 +42,7 @@ from warcraft_cli.guild import guild_merge_payload, normalized_identity, raideri
 from warcraft_cli.provider_contract import (
     compact_resolve_match,
     compact_wrapper_candidate,
+    confidence_rank,
     decorate_resolve_payload,
     decorate_search_result,
     merged_search_page,
@@ -339,7 +340,7 @@ def _provider_answered(registration: ProviderRegistration, surface: str, provide
     if provider_surface_status(registration, surface) != "ready_explicit_report_only":
         return True
     data = provider_payload_data(provider_row.get("payload"))
-    return bool(as_list(data.get("results")) or data.get("resolved"))
+    return bool(as_list(data.get("results")) or data.get("match"))
 
 
 def _failed_provider_rows(providers: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -380,12 +381,9 @@ def _unresolved_next_steps(ranked: list[dict[str, Any]], *, resolved: bool) -> d
     best = compact_resolve_match(top)
     if best is not None and top is not None:
         best["resolved"] = False
-        if not top.get("resolved"):
-            best["unresolved_reason"] = "provider_did_not_resolve"
-        elif top.get("confidence") != "high":
-            best["unresolved_reason"] = "provider_confidence_below_high"
-        else:
-            best["unresolved_reason"] = "provider_family_ranked_down_by_query_intent"
+        best["unresolved_reason"] = (
+            "provider_family_ranked_down_by_query_intent" if top.get("resolved") else "provider_did_not_resolve"
+        )
     return {
         "fallback_search_command": fallbacks[0]["command"] if fallbacks else None,
         "fallback_search_commands": fallbacks,
@@ -537,7 +535,6 @@ def search(
                     decorate_search_result(
                         query,
                         {
-                            "provider": registration.name,
                             "provider_expansion": provider_expansion_support(
                                 registration,
                                 requested_expansion=requested_expansion,
@@ -549,6 +546,9 @@ def search(
                     )
                 )
     ranked, merge_policy = merged_search_page(flattened, limit=limit)
+    merge_policy["provider_total_matches"] = {
+        row["provider"]: provider_payload_data(row["payload"]).get("total_matches") for row in providers
+    }
     top = [compact_wrapper_candidate(row) for row in ranked] if brief else ranked
     payload: dict[str, Any] = {
         "query": query,
@@ -561,7 +561,7 @@ def search(
         "excluded_provider_count": len(excluded_providers),
         **_fanout_health(providers),
         "providers": [] if brief else providers,
-        "count": len(flattened),
+        "count": len(top),
         "truncated": len(flattened) > len(top),
         "merge_policy": merge_policy,
         "results": top,
@@ -594,9 +594,9 @@ def resolve(
 ) -> None:
     """Fan out a query to every resolve-ready provider and return the single best match plus its follow-up command.
 
-    The answer is the candidate `warcraft search` would rank first, and only when its own provider
-    resolved it at `high` confidence; otherwise the command reports `resolved: false` with that candidate as
-    `best_unresolved_candidate`.
+    The answer is the candidate `warcraft search` would rank first, skipping any its own provider
+    rated `low`, and only when that provider resolved it at `high` confidence; otherwise the command
+    reports `resolved: false` with the top-ranked candidate as `best_unresolved_candidate`.
     """
     _require_query(ctx, query)
     requested_expansion = _requested_expansion(ctx)
@@ -626,9 +626,12 @@ def resolve(
         providers.append(provider_row)
         resolve_data = provider_payload_data(provider_payload)
         if isinstance(resolve_data.get("match"), dict):
-            ranked.append(decorate_resolve_payload(query, registration.name, resolve_data))
+            ranked.append(decorate_resolve_payload(query, resolve_data))
     ranked.sort(key=resolve_payload_sort_key)
-    top = ranked[0] if ranked else None
+    # A match its own provider rated low (a tie it could not break, a weak guess) never stands in
+    # front of another provider's answer; a medium one still does: it found something unconfirmed.
+    contenders = [row for row in ranked if confidence_rank(row.get("confidence")) > confidence_rank("low")]
+    top = contenders[0] if contenders else None
     best = top if top is not None and resolve_answer_accepted(top) else None
     match = compact_resolve_match(best) if brief else as_dict(best).get("match")
     payload: dict[str, Any] = {

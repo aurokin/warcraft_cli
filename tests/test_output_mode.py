@@ -79,7 +79,7 @@ def test_search_results_include_follow_up_metadata(monkeypatch) -> None:
     assert result.exit_code == 0
 
     payload = json.loads(result.stdout)
-    assert payload["data"]["results"][0]["follow_up"]["recommended_surface"] == "entity"
+    assert payload["data"]["results"][0]["follow_up"]["surface"] == "entity"
     assert payload["data"]["results"][0]["follow_up"]["command"] == "wowhead entity item 19019"
 
 

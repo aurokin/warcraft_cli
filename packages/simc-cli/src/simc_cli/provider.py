@@ -9,8 +9,9 @@ from __future__ import annotations
 import shlex
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
+from warcraft_core.discovery import RESOLVE_KIND, SEARCH_KIND, stub_data
 from warcraft_core.envelope import ENVELOPE_KEYS, Envelope, success_envelope
 from warcraft_core.provider import ProviderSurface
 
@@ -148,23 +149,13 @@ def repo_payload(paths: RepoPaths) -> dict[str, Any]:
     }
 
 
-def coming_soon_payload(*, query: str, suggested_command: str) -> dict[str, Any]:
+def _coming_soon_envelope(surface: Literal["search", "resolve"], query: str, suggested_command: str) -> Envelope:
     """Structured stub for the discovery surfaces simc does not implement yet."""
-    return {
-        "query": query,
-        "search_query": query,
-        "count": 0,
-        "results": [],
-        "candidates": [],
-        "resolved": False,
-        "confidence": "none",
-        "match": None,
-        "next_command": None,
-        "fallback_search_command": None,
-        "coming_soon": True,
-        "message": COMING_SOON_MESSAGE,
-        "suggested_command": suggested_command,
-    }
+    data = stub_data(
+        surface=surface, flag="coming_soon", search_query=query, message=COMING_SOON_MESSAGE, suggested_command=suggested_command
+    )
+    kind = SEARCH_KIND if surface == "search" else RESOLVE_KIND
+    return success_envelope(provider=PROVIDER_NAME, command=surface, kind=kind, data=data, query=query)
 
 
 def _example_apl_path(paths: RepoPaths) -> Path | None:
@@ -175,7 +166,7 @@ def _example_apl_path(paths: RepoPaths) -> Path | None:
 def search(query: str, *, limit: int = 10, repo_root: str | Path | None = None, **options: Any) -> Envelope:
     """Free-text search is deferred; return the coming-soon stub instead of guessing."""
     del limit, repo_root, options
-    return simc_envelope("search", coming_soon_payload(query=query, suggested_command="simc spec-files monk"))
+    return _coming_soon_envelope("search", query, "simc spec-files monk")
 
 
 def resolve(target: str, *, repo_root: str | Path | None = None, **options: Any) -> Envelope:
@@ -183,8 +174,7 @@ def resolve(target: str, *, repo_root: str | Path | None = None, **options: Any)
     del options
     example_apl = _example_apl_path(discover_repo(repo_root))
     suggested = shlex.join(["simc", "apl-lists", str(example_apl)]) if example_apl else "simc spec-files monk"
-    payload = coming_soon_payload(query=target, suggested_command=suggested)
-    return simc_envelope("resolve", payload)
+    return _coming_soon_envelope("resolve", target, suggested)
 
 
 def doctor(*, repo_root: str | Path | None = None, **options: Any) -> Envelope:

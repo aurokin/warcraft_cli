@@ -328,8 +328,9 @@ build source is given (`--right-profile-path`, `--right-build-file`, `--right-bu
 one, the right side is the left build again with any `--right-actor-class`/`--right-spec` and
 `--right-enable`/`--right-disable` layered on, which compares target counts or talent overrides.
 
-`search` and `resolve` are structured `coming_soon` stubs that exit 0. They exist so the `warcraft`
-wrapper can route uniformly; use the direct commands above for discovery.
+`search` and `resolve` are structured stubs that exit 0: `kind: search_results` / `kind: resolve_match`
+envelopes with `coming_soon: true`, no rows, `total_matches: null` and a `suggested_command`. They exist so
+the `warcraft` wrapper can route uniformly; use the direct commands above for discovery.
 
 Flags, defaults, and value ranges are in [reference/simc.md](../reference/simc.md) and
 `simc <command> --help`.

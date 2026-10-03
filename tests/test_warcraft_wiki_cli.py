@@ -234,7 +234,7 @@ def test_warcraft_wiki_search_and_resolve(monkeypatch) -> None:
     search_result = runner.invoke(warcraft_wiki_app, ["search", "world of warcraft api"])
     assert search_result.exit_code == 0
     search_payload = json.loads(search_result.stdout)["data"]
-    assert search_payload["results"][0]["entity_type"] == "article"
+    assert search_payload["results"][0]["kind"] == "article"
     assert search_payload["results"][0]["metadata"]["content_family"] == "framework_page"
 
     resolve_result = runner.invoke(warcraft_wiki_app, ["resolve", "world of warcraft api"])
@@ -242,6 +242,20 @@ def test_warcraft_wiki_search_and_resolve(monkeypatch) -> None:
     resolve_payload = json.loads(resolve_result.stdout)["data"]
     assert resolve_payload["resolved"] is True
     assert resolve_payload["next_command"] == "warcraft-wiki article 'World of Warcraft API'"
+
+
+@pytest.mark.parametrize(("total_hits", "total_matches"), [(1934, 1934), (0, 2)])
+def test_search_totals_the_upstream_hits_never_below_the_rows_returned(monkeypatch, total_hits: int, total_matches: int) -> None:
+    """``count`` is the rows shown; ``total_matches`` is MediaWiki's hit count, or the rows when it reports none."""
+    rows = [
+        {"title": "API", "pageid": 1, "snippet": "", "url": "https://warcraft.wiki.gg/wiki/API"},
+        {"title": "API changes", "pageid": 2, "snippet": "", "url": "https://warcraft.wiki.gg/wiki/API_changes"},
+    ]
+    monkeypatch.setattr("warcraft_wiki_cli.main.WarcraftWikiClient.search_articles", lambda self, query, limit: (total_hits, rows))
+
+    data = json.loads(runner.invoke(warcraft_wiki_app, ["search", "api", "--limit", "1"]).stdout)["data"]
+
+    assert (data["count"], data["total_matches"], data["truncated"]) == (1, total_matches, True)
 
 
 def test_search_articles_requests_the_event_namespace_and_parses_the_captured_response(monkeypatch) -> None:
@@ -654,8 +668,9 @@ def test_event_payload_fetches_the_event_namespace_page_before_searching() -> No
 class _SearchFallbackClient:
     """No direct title hits, so the typed surface has to fall back to ranked search."""
 
-    def __init__(self, fetched_page: dict[str, object]) -> None:
+    def __init__(self, fetched_page: dict[str, object], *, total_hits: int = 2) -> None:
         self._fetched_page = fetched_page
+        self._total_hits = total_hits
         self.fetched: list[str] = []
 
     def fetch_article_page(self, ref: str) -> dict[str, object]:
@@ -665,7 +680,7 @@ class _SearchFallbackClient:
         return self._fetched_page
 
     def search_articles(self, query: str, limit: int) -> tuple[int, list[dict[str, Any]]]:
-        return 2, [
+        return self._total_hits, [
             {
                 "title": "UIHANDLER OnKeyDown",
                 "pageid": 1,
@@ -697,6 +712,15 @@ def test_event_payload_falls_back_to_the_candidate_that_covers_the_query() -> No
     runner_up = result["resolution"]["candidates"][1]
     assert runner_up["id"] == "UIHANDLER OnEvent"
     assert runner_up["ranking"]["match_reasons"] == ["upstream_rank_2", "intent_programming", "family_ui_handler"]
+
+
+def test_event_resolution_counts_its_candidates_beside_the_mediawiki_total() -> None:
+    client = _SearchFallbackClient(_ui_handler_payload(), total_hits=40)
+
+    resolution = _typed_article_payload(client, "key down handler", surface="event", full=False)["resolution"]
+
+    assert (resolution["count"], resolution["total_matches"], resolution["truncated"]) == (2, 40, True)
+    assert resolution["count"] == len(resolution["candidates"])
 
 
 class _UnrelatedRowsClient:

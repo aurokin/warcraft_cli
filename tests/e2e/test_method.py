@@ -24,6 +24,7 @@ from typing import Any
 
 import pytest
 
+from tests.discovery_contract import resolve_data_violations, search_data_violations
 from tests.e2e import pins
 from tests.e2e.harness import (
     EXIT_GENERIC,
@@ -189,6 +190,7 @@ def test_search_finds_a_real_guide_and_names_the_follow_up(require) -> None:
     require(PROVIDER)
     result = guide_search()
 
+    assert search_data_violations(result.data, provider=PROVIDER) == [], result.describe()
     assert result.data["count"] >= 1
     # The query names a surface ("guide"); the search term it was reduced to must not.
     assert result.data["search_query"] == f"{pins.GUIDE_SPEC} {pins.GUIDE_CLASS}"
@@ -196,7 +198,7 @@ def test_search_finds_a_real_guide_and_names_the_follow_up(require) -> None:
     assert rows == sorted(rows, key=lambda row: -row["ranking"]["score"]), "results must be ranked best first"
     first = rows[0]
     assert first["id"] == guide_slug(), "a spec query must rank that spec's class guide first"
-    assert first["entity_type"] == "guide"
+    assert first["kind"] == "guide"
     assert first["url"] == f"https://www.method.gg/guides/{first['id']}"
     assert first["follow_up"]["command"] == f"{BINARY} guide {first['id']}"
     assert result.payload["provenance"]["sitemap_url"].endswith("sitemap.xml")
@@ -252,6 +254,7 @@ def test_resolve_hands_over_a_next_command_that_returns_the_same_guide(require) 
     require(PROVIDER)
     result = run(BINARY, "resolve", pins.GUIDE_QUERY, "--limit", "5")
 
+    assert resolve_data_violations(result.data, provider=PROVIDER) == [], result.describe()
     assert result.data["resolved"] is True
     assert result.data["confidence"] == "high"
     assert result.data["match"]["id"] == guide_slug(), "resolve must land on the pinned spec's guide"
@@ -276,6 +279,10 @@ def test_resolve_judges_confidence_on_every_match_not_the_limit(require) -> None
     narrow = run(BINARY, "resolve", "frost", "--limit", "1")
     assert (narrow.data["resolved"], narrow.data["confidence"]) == (False, wide.data["confidence"]), narrow.describe()
     assert [row["id"] for row in narrow.data["candidates"]] == [wide.data["candidates"][0]["id"]], narrow.describe()
+    # Unresolved, the top row is still the match; count is the one row shown, total_matches every match.
+    assert narrow.data["match"] == narrow.data["candidates"][0], narrow.describe()
+    assert (narrow.data["count"], narrow.data["total_matches"]) == (1, wide.data["total_matches"]), narrow.describe()
+    assert resolve_data_violations(narrow.data, provider=PROVIDER) == [], narrow.describe()
 
 
 @pytest.mark.parametrize(("shorthand", "spelled_out"), [("bm hunter", "beast mastery hunter"), ("disc priest", "discipline priest")])

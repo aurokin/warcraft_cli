@@ -1896,7 +1896,7 @@ def _parse_profiler_state(state_url: str) -> dict[str, Any]:
 def _url_page_surface(url: str) -> str | None:
     """The command that reads the Wowhead page at ``url`` (``news-post``, ``blue-topic``, ...), or None."""
     row = url_page_result(url, expansion=resolve_expansion(None))
-    return row["follow_up"]["recommended_surface"] if row is not None else None
+    return row["follow_up"]["surface"] if row is not None else None
 
 
 def _normalize_news_post_ref(ref: str, *, expansion: ExpansionProfile) -> str:

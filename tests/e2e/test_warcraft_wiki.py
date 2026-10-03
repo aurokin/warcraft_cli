@@ -19,6 +19,7 @@ from typing import Any
 
 import pytest
 
+from tests.discovery_contract import resolve_data_violations, search_data_violations
 from tests.e2e import pins
 from tests.e2e.harness import (
     EXIT_NETWORK,
@@ -119,9 +120,10 @@ def test_search_puts_the_api_page_at_the_top_for_an_api_query(require) -> None:
     result = api_search()
 
     results = result.data["results"]
-    # `count` is how many pages matched upstream; the rows are what `--limit` returned.
-    assert len(results) == 5, result.describe()
-    assert result.data["count"] >= len(results), result.describe()
+    # `count` is the rows `--limit` returned; `total_matches` is how many pages matched upstream.
+    assert result.data["count"] == len(results) == 5, result.describe()
+    assert result.data["total_matches"] > 5 and result.data["truncated"] is True, result.describe()
+    assert search_data_violations(result.data, provider=PROVIDER) == [], result.describe()
     first = results[0]
     assert first["id"] == API_PAGE_TITLE, result.describe()
     assert first["metadata"]["content_family"] == "api_function"
@@ -145,6 +147,7 @@ def test_resolve_strips_the_family_hint_and_its_article_command_returns_that_pag
     require(PROVIDER)
     resolved = run(BINARY, "resolve", f"{hint} {name}", "--limit", "10")
 
+    assert resolve_data_violations(resolved.data, provider=PROVIDER) == [], resolved.describe()
     assert resolved.data["search_query"] == name
     assert resolved.data["excluded_terms"] == [hint]
     assert resolved.data["resolved"] is True

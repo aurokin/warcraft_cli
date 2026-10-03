@@ -27,6 +27,7 @@ from warcraft_content.article_provider_cli import (
     with_analysis_surfaces,
 )
 from warcraft_content.site_crawler import CrawlResult, PageLink, crawl
+from warcraft_core.discovery import RESOLVE_KIND, SEARCH_KIND
 from warcraft_core.envelope import Envelope, success_envelope
 from warcraft_core.exit_codes import error_code_for_http_status
 from warcraft_core.provider import ProviderError, ProviderSurface
@@ -131,11 +132,11 @@ def search(query: str, *, limit: int = 5, **options: Any) -> Envelope:
     data = article_search_payload(
         query=query,
         search_query=outcome.normalized_query,
-        results=outcome.matches[:limit],
-        total_count=len(outcome.matches),
+        matches=outcome.matches,
+        limit=limit,
         scope_hint=outcome.scope_hint,
     )
-    return _envelope("search", "search_results", data, query=query, provenance=_sitemap_provenance(outcome))
+    return _envelope("search", SEARCH_KIND, data, query=query, provenance=_sitemap_provenance(outcome))
 
 
 def resolve(target: str, *, limit: int = 5, **options: Any) -> Envelope:
@@ -152,11 +153,10 @@ def resolve(target: str, *, limit: int = 5, **options: Any) -> Envelope:
         search_query=outcome.normalized_query,
         matches=outcome.matches,
         limit=limit,
-        total_count=len(outcome.matches),
         resolved=resolve_is_confident(outcome.matches),
         scope_hint=outcome.scope_hint,
     )
-    return _envelope("resolve", "resolve_match", data, query=target, provenance=_sitemap_provenance(outcome))
+    return _envelope("resolve", RESOLVE_KIND, data, query=target, provenance=_sitemap_provenance(outcome))
 
 
 def _guide_summary(page_payload: dict[str, Any]) -> dict[str, Any]:

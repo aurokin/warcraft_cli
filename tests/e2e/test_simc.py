@@ -394,9 +394,10 @@ def test_search_and_resolve_are_structured_coming_soon_stubs(require) -> None:
     require("simc")
     for command in ("search", "resolve"):
         result = run("simc", command, "mistweaver monk")
+        assert result.payload["kind"] == ("search_results" if command == "search" else "resolve_match")
         assert result.data["coming_soon"] is True
-        assert result.data["resolved"] is False
-        assert result.data["results"] == []
+        assert result.data["results" if command == "search" else "candidates"] == []
+        assert (result.data["count"], result.data["total_matches"], result.data["truncated"]) == (0, None, False)
         # The suggestion is the stub's whole answer, so it has to run against this checkout as written.
         binary, *args = shlex.split(result.data["suggested_command"])
         assert binary == "simc", result.describe()

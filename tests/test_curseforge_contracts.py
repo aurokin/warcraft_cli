@@ -393,7 +393,7 @@ def test_coming_soon_commands_emit_structured_stub(command: str) -> None:
     assert payload["ok"] is True
     assert payload["provider"] == "curseforge"
     assert payload["command"] == command
-    assert payload["kind"] == "coming_soon"
+    assert payload["kind"] == ("search_results" if command == "search" else "resolve_match")
     # `query` is the query text, as on every other provider's search/resolve envelope.
     assert payload["query"] == "dbm"
     assert payload["data"]["coming_soon"] is True

@@ -160,11 +160,14 @@ raiderio threshold mythic-plus-runs --metric score --value 3000
   to three words is handled (`eu tarren mill Cotti`, `us area 52 Roguecane`), and the realm may be
   spelled as a display name or as either slug form (`mal'ganis`, `mal-ganis`, `malganis`) -- all of
   them score the same, so the `next_command` a `resolve` emits resolves when it is fed back in.
-  `resolve` returns a single `match` plus `next_command` only when the top candidate is confidently
-  ahead of every other candidate; `--limit` only trims the `candidates` list, so `--limit 1` never
-  hides a rival. A blank query is `invalid_query` (exit 2) and sends nothing upstream. `next_command`, `follow_up.command` and `fallback_search_command` are shell-quoted
-  (`raiderio guild us illidan 'Liquid Guild'`). Character rows link their raider.io page in
-  `profile_url` even though site search sends a path for guilds only. A *leading* `guild`/`character` word is read as a type hint and dropped
+  `resolve` always puts the top candidate in `match`, but is `resolved` (with `confidence: "high"`
+  and a `next_command`) only when that candidate is confidently ahead of every other one;
+  otherwise `confidence` is `medium` or `low` and `fallback_search_command` names the search to run.
+  `--limit` only trims the `candidates` list, so `--limit 1` never hides a rival. In both payloads
+  `count` is the rows in the list, `total_matches` is every deduplicated match, and `truncated`
+  says `--limit` cut some. A blank query is `invalid_query` (exit 2) and sends nothing upstream. `next_command`, `follow_up.command` and `fallback_search_command` are shell-quoted
+  (`raiderio guild us illidan 'Liquid Guild'`). Every row links its raider.io page in `url`;
+  character rows build it even though site search sends a path for guilds only. A *leading* `guild`/`character` word is read as a type hint and dropped
   (`guild us malganis gn`); anywhere else the word is part of the name and is kept, because
   entities are named after it (Raider.IO has a guild called `Liquid Guild`). That word only narrows
   the lookups and adds to the score. An explicit `--kind character|guild` wins over it and filters

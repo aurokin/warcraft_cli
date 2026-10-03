@@ -209,8 +209,9 @@ share the word, so `shadow` lists the Shadow Priest guide before the Shadow Encl
 same or nearly the same score, so a spec name that
 several classes share (`frost`, `holy`, `protection`, `restoration`) stays unresolved; add the class.
 An unresolved `resolve` reports `confidence: "low"` when its top candidates tie on score and
-`"medium"` otherwise. `search` and `resolve` report `count` as every match and `truncated: true` when
-`--limit` cut the list.
+`"medium"` otherwise. `search` and `resolve` report `count` as the rows returned, `total_matches` as
+every match, and `truncated: true` when `--limit` cut the list. Every row carries `provider`,
+`kind: "guide"`, `id` (the slug), `name`, `url`, `ranking` and `follow_up` (`command`, `surface`).
 The one exception is a query that is a page's exact title (`exact_title`) when every close rival is
 one of that page's own sub-pages, by slug prefix or by the breadcrumb parent the site index records:
 `player housing` resolves to `player-housing-guide` over `player-housing-interior-guide` and

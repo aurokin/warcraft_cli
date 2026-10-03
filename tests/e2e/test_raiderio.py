@@ -240,9 +240,19 @@ def test_search_ranks_the_pinned_guild_from_a_structured_probe() -> None:
     assert top["name"] == GUILD
     assert top["region"] == REGION
     assert "mal" in str(top["realm"]).lower() and "ganis" in str(top["realm"]).lower()
-    assert top["profile_url"].startswith("https://raider.io/guilds/")
+    assert top["url"].startswith("https://raider.io/guilds/")
     assert "structured_probe" in top["ranking"]["match_reasons"]
     assert top["follow_up"]["command"] == shlex.join(["raiderio", "guild", REGION, REALM, GUILD])
+
+
+def test_search_count_is_the_page_and_total_matches_every_ranked_row() -> None:
+    """``count`` is the rows shown; ``total_matches`` is every match, so ``truncated`` says more exist."""
+    for surface, list_key in (("search", "results"), ("resolve", "candidates")):
+        result = run("raiderio", surface, GUILD, "--limit", "2")
+        rows = _rows(result, list_key)
+        assert result.data["count"] == len(rows) == 2, result.describe()
+        assert result.data["total_matches"] > 2, result.describe()
+        assert result.data["truncated"] is True, result.describe()
 
 
 def test_search_kind_filter_drops_the_other_entity_type() -> None:
@@ -264,8 +274,8 @@ def test_search_kind_filter_drops_the_other_entity_type() -> None:
     assert all(row["kind"] == "character" for row in rows), characters.describe()
     assert rows[0]["name"] == CHARACTER
     # Site search sends no path for characters; the row still has to link the character's page.
-    assert rows[0]["profile_url"].startswith(f"https://raider.io/characters/{REGION}/"), characters.describe()
-    assert rows[0]["profile_url"].endswith(f"/{CHARACTER}"), characters.describe()
+    assert rows[0]["url"].startswith(f"https://raider.io/characters/{REGION}/"), characters.describe()
+    assert rows[0]["url"].endswith(f"/{CHARACTER}"), characters.describe()
     without_characters = run("raiderio", "search", character_query, "--kind", "guild", "--limit", "5")
     assert not any(row["kind"] == "character" for row in without_characters.data["results"]), without_characters.describe()
 

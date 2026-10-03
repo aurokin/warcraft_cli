@@ -308,8 +308,9 @@ def test_search_routes_a_real_world_event_suggestion_to_an_openable_url(monkeypa
     assert event_row["entity_type"] == "event"
     # Confirmed live: this redirects to /event=644/ungoro-madness.
     assert event_row["url"] == "https://www.wowhead.com/event=644"
+    assert event_row["kind"] == "event"
     # An event has no follow-up command, which is not the same thing as being unopenable.
-    assert "follow_up" not in event_row
+    assert event_row["follow_up"] == {"command": None, "surface": "none"}
 
 
 def test_the_only_rows_left_without_a_url_are_ones_an_id_cannot_address() -> None:

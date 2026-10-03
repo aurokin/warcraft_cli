@@ -437,6 +437,11 @@ def test_a_guide_question_does_not_resolve_to_spec_metadata(require) -> None:
     guide = run("lorrgs", "resolve", "frost mage guide")
     assert guide.data["resolved"] is False, guide.describe()
     assert guide.data["next_command"] is None, guide.describe()
+    # The narrower answer stays visible as the match, at low confidence, with a search to run instead.
+    assert guide.data["confidence"] == "low", guide.describe()
+    assert guide.data["match"] == guide.data["candidates"][0], guide.describe()
+    assert guide.data["match"]["spec_slug"] == "mage-frost", guide.describe()
+    assert guide.data["fallback_search_command"] == "lorrgs search 'frost mage guide'", guide.describe()
 
 
 def test_search_ranks_the_spec_ranking_surface_first(catalog: Catalog) -> None:
@@ -448,6 +453,9 @@ def test_search_ranks_the_spec_ranking_surface_first(catalog: Catalog) -> None:
     assert top["spec_slug"] == catalog.spec_slug
     assert top["boss_slug"] == catalog.boss_slug
     assert top["follow_up"]["command"] == f"lorrgs spec-ranking {catalog.spec_slug} {catalog.boss_slug}"
+    assert top["url"] == f"https://lorrgs.io/spec_ranking/{catalog.spec_slug}/{catalog.boss_slug}"
+    assert result.data["count"] == len(results) <= result.data["total_matches"], result.describe()
+    assert result.data["truncated"] is (result.data["total_matches"] > len(results)), result.describe()
 
 
 def test_resolve_turns_a_lorrgs_url_into_the_next_command(catalog: Catalog) -> None:
@@ -456,6 +464,7 @@ def test_resolve_turns_a_lorrgs_url_into_the_next_command(catalog: Catalog) -> N
     assert result.data["resolved"] is True
     assert result.data["confidence"] == "high"
     assert result.data["next_command"] == f"lorrgs spec-ranking {catalog.spec_slug} {catalog.boss_slug}"
+    assert result.data["match"]["url"] == url, result.describe()
 
 
 def test_unknown_spec_and_boss_are_not_found(require) -> None:

@@ -8,10 +8,11 @@ call ``PROVIDER`` in-process.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any, Final
+from typing import Any, Final, Literal
 
 import httpx
 from warcraft_api.cache import redacted_redis_url
+from warcraft_core.discovery import RESOLVE_KIND, SEARCH_KIND, stub_data
 from warcraft_core.envelope import Envelope, success_envelope
 from warcraft_core.exit_codes import EXIT_USAGE
 from warcraft_core.provider import ProviderError, ProviderSurface
@@ -112,25 +113,22 @@ def _citations(report_id: str) -> dict[str, Any]:
     }
 
 
-def _not_supported(command: str, kind: str, query: str) -> Envelope:
-    payload: dict[str, Any] = {
-        "results": [],
-        "count": 0,
-        "not_supported": True,
-        "message": NOT_SUPPORTED_MESSAGE,
-        "suggested_command": SUGGESTED_COMMAND,
-    }
+def _not_supported(command: Literal["search", "resolve"], query: str) -> Envelope:
+    payload = stub_data(
+        surface=command, flag="not_supported", search_query=query, message=NOT_SUPPORTED_MESSAGE, suggested_command=SUGGESTED_COMMAND
+    )
+    kind = SEARCH_KIND if command == "search" else RESOLVE_KIND
     return success_envelope(provider=PROVIDER_NAME, command=command, kind=kind, data=payload, query=query)
 
 
 def search(query: str, *, limit: int = 10, **options: Any) -> Envelope:
     """Return the structured not-supported stub: Raidbots has no searchable report index."""
-    return _not_supported("search", "search_results", query)
+    return _not_supported("search", query)
 
 
 def resolve(target: str, **options: Any) -> Envelope:
     """Return the structured not-supported stub: Raidbots resolves nothing but a known report ID."""
-    return _not_supported("resolve", "resolve_match", target)
+    return _not_supported("resolve", target)
 
 
 def doctor(**options: Any) -> Envelope:

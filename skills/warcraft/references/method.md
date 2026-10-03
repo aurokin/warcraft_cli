@@ -24,7 +24,7 @@
 - expect explicit support boundaries; unsupported families return structured failures or `scope_hint`
 - `guide.last_updated` is an ISO date (the page's wording is in `last_updated_text`); search rows carry `metadata.sitemap_lastmod`
 - `resolve --limit` only trims the candidates shown; confidence is judged on every match. An unresolved `resolve` reports `confidence: "low"` when its top candidates tie on score and `"medium"` otherwise
-- `search` and `resolve` report `count` as every match and `truncated: true` when `--limit` cut the list
+- `search` and `resolve` report `count` as the rows returned, `total_matches` as every match, and `truncated: true` when `--limit` cut the list
 - guide references are lowercase slugs (`Frost-Mage` reads as `frost-mage`); anything else fails `invalid_guide_ref` (exit 2) before a request
 - `build_references` holds explicit build evidence from the page: embedded Wowhead talent-calc links (`reference_type: wowhead_talent_calc_url`) and published WoW loadout import strings (`reference_type: wow_talent_export`, where `url` is the import string). There is no slug/title-based guide hardlinking
 - current class guides publish import strings on their `/talents` section, so `guide-full` on a class guide is what feeds `guide-builds-simc`

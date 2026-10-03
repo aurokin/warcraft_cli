@@ -15,6 +15,7 @@ from typing import Any
 
 import httpx
 from warcraft_api.cache import CacheSettings, load_cache_settings_from_env, redacted_redis_url
+from warcraft_core.discovery import RESOLVE_KIND, SEARCH_KIND, resolve_data, search_data
 from warcraft_core.envelope import Envelope, success_envelope
 from warcraft_core.exit_codes import error_code_for_http_status
 from warcraft_core.provider import ProviderError
@@ -28,13 +29,13 @@ from wowhead_cli.expansion_profiles import (
     resolve_expansion,
 )
 from wowhead_cli.ranking import (
+    PROVIDER_NAME,
     URL_PAGE_COMMANDS,
     command_prefix_for_expansion,
     merge_suggestion_lists,
     normalize_search_results,
     preferred_resolve_candidates,
     resolve_confidence,
-    resolve_next_command,
     search_ranking_query,
     search_type_hints,
     split_choices,
@@ -44,8 +45,6 @@ from wowhead_cli.ranking import (
     url_page_result,
 )
 from wowhead_cli.wowhead_client import WowheadClient, search_url
-
-PROVIDER_NAME = "wowhead"
 
 
 @dataclass(frozen=True, slots=True)
@@ -232,20 +231,17 @@ def search(query: str, *, limit: int = 10, expansion: str | None = None, **optio
         normalized = [url_row]
     else:
         search_query, normalized, merge = _ranked_suggestions(open_client(profile), query, profile=profile)
-    returned = normalized[:limit]
-    data: dict[str, Any] = {
-        "query": query,
-        "search_query": search_query,
-        "expansion": profile.key,
-        "expansion_source": selection.source,
-        "search_url": search_url(search_query, expansion=profile) if search_query is not None else None,
-        "count": len(returned),
-        "total_matches": len(normalized),
-        "truncated": len(normalized) > len(returned),
-        "suggestion_merge": merge,
-        "results": returned,
-    }
-    return envelope("search", "search_results", data, query=query)
+    data = search_data(
+        search_query=search_query,
+        ranked=normalized,
+        limit=limit,
+        query=query,
+        expansion=profile.key,
+        expansion_source=selection.source,
+        search_url=search_url(search_query, expansion=profile) if search_query is not None else None,
+        suggestion_merge=merge,
+    )
+    return envelope("search", SEARCH_KIND, data, query=query)
 
 
 def resolve(
@@ -275,30 +271,20 @@ def resolve(
             open_client(profile), target, profile=profile, entity_types=selected_entity_types
         )
     answering, trailing = preferred_resolve_candidates(ranked)
-    confidence = resolve_confidence(answering, entity_types=selected_entity_types)
-    top_candidate = answering[0] if answering else None
-    candidates = answering + trailing
-    returned = candidates[:limit]
-    next_command = resolve_next_command(top_candidate) if top_candidate is not None and confidence == "high" else None
-    search_command = f"{command_prefix_for_expansion(profile)} search {shlex.quote(target)}"
-    data: dict[str, Any] = {
-        "query": target,
-        "search_query": search_query,
-        "expansion": profile.key,
-        "search_url": search_url(search_query, expansion=profile) if search_query is not None else None,
-        "filters": {"entity_types": list(selected_entity_types)},
-        "resolved": next_command is not None,
-        "confidence": confidence,
-        "match": top_candidate,
-        "next_command": next_command,
-        "fallback_search_command": None if next_command is not None else search_command,
-        "count": len(returned),
-        "total_matches": len(candidates),
-        "truncated": len(candidates) > len(returned),
-        "suggestion_merge": merge,
-        "candidates": returned,
-    }
-    return envelope("resolve", "resolve_match", data, query=target)
+    # The answering group leads, so the match is its top row whatever the confidence.
+    data = resolve_data(
+        search_query=search_query,
+        ranked=answering + trailing,
+        limit=limit,
+        confidence=resolve_confidence(answering, entity_types=selected_entity_types),
+        fallback_search_command=f"{command_prefix_for_expansion(profile)} search {shlex.quote(target)}",
+        query=target,
+        expansion=profile.key,
+        search_url=search_url(search_query, expansion=profile) if search_query is not None else None,
+        filters={"entity_types": list(selected_entity_types)},
+        suggestion_merge=merge,
+    )
+    return envelope("resolve", RESOLVE_KIND, data, query=target)
 
 
 def doctor(*, live: bool = True, expansion: str | None = None, **options: Any) -> Envelope:

@@ -13,6 +13,7 @@ from typing import Any
 
 import httpx
 from warcraft_api.cache import redacted_redis_url
+from warcraft_core.discovery import RESOLVE_KIND, SEARCH_KIND
 from warcraft_core.envelope import Envelope, success_envelope
 from warcraft_core.provider import ProviderError, ProviderSurface
 
@@ -216,7 +217,7 @@ def search(query: str, *, limit: int = 5, **options: Any) -> Envelope:
     return success_envelope(
         provider=PROVIDER_NAME,
         command="search",
-        kind="search_results",
+        kind=SEARCH_KIND,
         data=payload,
         query=query,
         provenance=_provenance(),
@@ -233,7 +234,7 @@ def resolve(target: str, *, limit: int = 5, **options: Any) -> Envelope:
     return success_envelope(
         provider=PROVIDER_NAME,
         command="resolve",
-        kind="resolution",
+        kind=RESOLVE_KIND,
         data=payload,
         query=target,
         provenance=_provenance(),

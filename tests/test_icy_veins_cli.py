@@ -859,8 +859,8 @@ def test_icy_veins_resolve_judges_confidence_on_every_match_not_the_limit(monkey
     full = _invoke_with_sitemap(monkeypatch, slugs, ["resolve", "frost dps"])
     limited = _invoke_with_sitemap(monkeypatch, slugs, ["resolve", "frost dps", "--limit", "1"])
 
-    assert (full["resolved"], full["count"], len(full["candidates"])) == (False, 2, 2)
-    assert (limited["resolved"], limited["confidence"], limited["count"], len(limited["candidates"])) == (False, "medium", 2, 1)
+    assert (full["resolved"], full["count"], full["total_matches"]) == (False, 2, 2)
+    assert (limited["resolved"], limited["confidence"], limited["count"], limited["total_matches"]) == (False, "medium", 1, 2)
 
 
 def test_icy_veins_search_penalizes_broad_hubs_for_specialized_queries(monkeypatch) -> None:

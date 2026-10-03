@@ -23,8 +23,8 @@ client credentials and emits the shared JSON envelope.
 | `blizzard realm <slug>` | Reads `/data/wow/realm/{slug}` from the dynamic Game Data namespace. |
 | `blizzard item <item-id>` | Reads `/data/wow/item/{id}` from the static Game Data namespace. |
 | `blizzard character <realm-slug> <name>` | Reads `/profile/wow/character/{realm}/{name}` from the profile namespace. Retail only. |
-| `blizzard search <query>` | Coming soon. Returns a `kind: "coming_soon"` envelope with exit 0, not an error. |
-| `blizzard resolve <query>` | Coming soon. Returns a `kind: "coming_soon"` envelope with exit 0, not an error. |
+| `blizzard search <query>` | Coming soon. Returns a `kind: "search_results"` envelope with `coming_soon: true`, no rows and exit 0, not an error. |
+| `blizzard resolve <query>` | Coming soon. Returns a `kind: "resolve_match"` envelope with `coming_soon: true`, `confidence: "none"`, no candidates and exit 0, not an error. |
 
 `realm` and `character` also take a realm display name or the other slug spelling (`Mal'Ganis`,
 `mal-ganis`, `Tarren Mill`). Blizzard's slug drops apostrophes, keeps word breaks and keeps accented letters (`malganis`,

@@ -9,11 +9,12 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 from warcraft_api.cache import redacted_redis_url
 from warcraft_core.auth import provider_auth_status
+from warcraft_core.discovery import RESOLVE_KIND, SEARCH_KIND, stub_data
 from warcraft_core.envelope import Envelope, success_envelope
 from warcraft_core.exit_codes import EXIT_AUTH, EXIT_USAGE, error_code_for_http_status
 from warcraft_core.paths import provider_state_path
@@ -153,26 +154,25 @@ def doctor_envelope() -> Envelope:
     )
 
 
-def coming_soon_envelope(command: str, query: str) -> Envelope:
+def coming_soon_envelope(command: Literal["search", "resolve"], query: str) -> Envelope:
     """Structured stub for the surfaces doctor advertises as coming_soon (search, resolve)."""
     # A caller probing the advertised surface gets a JSON envelope with an explicit coming_soon flag
     # instead of Click's generic "No such command" error.
     return success_envelope(
         provider=PROVIDER_NAME,
         command=command,
-        kind="coming_soon",
+        kind=SEARCH_KIND if command == "search" else RESOLVE_KIND,
         query=query,
-        data={
-            "coming_soon": True,
-            "results": [],
-            "resolved": False,
-            "match": None,
-            "message": (
+        data=stub_data(
+            surface=command,
+            flag="coming_soon",
+            search_query=query,
+            message=(
                 f"blizzard {command} is not implemented yet; use the explicit Game Data / Profile reads. "
                 "Try `blizzard realm <slug>`, `blizzard item <id>`, or `blizzard character <realm> <name>`."
             ),
-            "suggested_command": "blizzard realm illidan",
-        },
+            suggested_command="blizzard realm illidan",
+        ),
     )
 
 
