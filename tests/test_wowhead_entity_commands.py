@@ -658,7 +658,9 @@ def test_entity_uses_normalized_entity_cache_between_invocations(
     assert second.exit_code == 0
 
     assert calls["tooltip"] == 1
-    assert json.loads(first.stdout) == json.loads(second.stdout)
+    first_payload, second_payload = json.loads(first.stdout), json.loads(second.stdout)
+    assert first_payload["data"] == second_payload["data"]
+    assert (first_payload["provenance"]["cache"]["hit"], second_payload["provenance"]["cache"]["hit"]) == (False, True)
 
 
 

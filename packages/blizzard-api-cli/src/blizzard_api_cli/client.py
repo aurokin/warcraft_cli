@@ -5,7 +5,6 @@ import json
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -253,8 +252,7 @@ class BlizzardClient:
         """GET one API path, replaying a cached answer first; the token never reaches the cache key.
 
         ``localized=False`` leaves ``locale`` out, so Blizzard answers every localized string as a
-        per-locale dict. The result carries ``fetched_at`` (when it came off the wire, also on a
-        replay), ``cache_hit`` and ``cache_ttl_seconds`` for provenance.
+        per-locale dict.
         """
         # Checked before the cache too, so every read without credentials fails the same way.
         if not self.configured:
@@ -267,8 +265,8 @@ class BlizzardClient:
         params = {"namespace": routing.namespace, **({"locale": routing.locale} if localized else {})}
         key = f"blizzard:{hashlib.sha256(json.dumps([routing.host, path, params], sort_keys=True).encode()).hexdigest()}"
         cached = self._cache_store.get(key) if self._cache_store is not None and ttl else None
-        if isinstance(cached, dict) and isinstance(cached.get("fetched_at"), str):
-            return {**cached, "routing": routing, "cache_hit": True, "cache_ttl_seconds": ttl}
+        if isinstance(cached, dict) and "payload" in cached:
+            return {**cached, "routing": routing}
         token = self._token(routing)
         response = request_with_retries(
             self._client(),
@@ -278,14 +276,10 @@ class BlizzardClient:
             headers={"Authorization": f"Bearer {token}"},
             retry_attempts=self._retry_attempts,
         )
-        result = {
-            "payload": self._decode_json(response),
-            "source_url": str(response.request.url),
-            "fetched_at": datetime.now(UTC).isoformat(),
-        }
+        result = {"payload": self._decode_json(response), "source_url": str(response.request.url)}
         if self._cache_store is not None and ttl:
             self._cache_store.set(key, result, ttl_seconds=ttl)
-        return {**result, "routing": routing, "cache_hit": False, "cache_ttl_seconds": ttl}
+        return {**result, "routing": routing}
 
     def _slug_from_realm_index(self, routing: BlizzardRouting, realm: str) -> str | None:
         """Blizzard's slug for a realm typed in any locale (``Ревущий фьорд``, ``아즈샤라``), or ``None``.

@@ -170,6 +170,19 @@ def test_doctor_reports_live_endpoints_and_the_isolated_cache(require, cache_roo
     assert all(probe["skipped"] is True for probe in offline.data["endpoints"].values()), offline.describe()
 
 
+def test_a_repeated_search_says_it_was_answered_from_the_cache(require, tmp_path: Path) -> None:
+    """``provenance.cache`` calls a cold search a miss and the same search a moment later a hit."""
+    require("wowhead")
+    # A cache root of its own, so the first search is a miss whatever the session already fetched.
+    cache_env = {"XDG_CACHE_HOME": str(tmp_path / "cache")}
+    first = run(BINARY, "search", pins.ITEM_SEARCH_QUERY, env=cache_env)
+    second = run(BINARY, "search", pins.ITEM_SEARCH_QUERY, env={**cache_env, **dead_proxy_env()})
+    assert first.payload["provenance"]["cache"]["hit"] is False, first.describe()
+    cache = second.payload["provenance"]["cache"]
+    assert (cache["backend"], cache["hit"], cache["all_hits"]) == ("file", True, True), second.describe()
+    assert 0 <= cache["oldest_hit_age_seconds"] <= cache["oldest_hit_ttl_seconds"], second.describe()
+
+
 def test_expansions_list_backs_expansion_detect_on_real_urls(require) -> None:
     require("wowhead")
     listed = run(BINARY, "expansions")

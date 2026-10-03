@@ -33,8 +33,8 @@ confirmed against the live API for `us`, `eu`, `kr`, and `tw` (`provenance.verif
   `us`, where Oceanic realms live); defaults to `BLIZZARD_REGION`, else `us`
 - envelopes say `provider: "blizzard-api"`, but the command is `blizzard` (`warcraft blizzard ...`);
   there is no `warcraft blizzard-api` command
-- `provenance.cache_hit` says the answer was replayed from cache; it can be up to
-  `provenance.cache_ttl_seconds` old (a day for items, 15 minutes for realms and characters)
+- `provenance.cache.hit` says the answer was replayed from cache; it can be up to
+  `provenance.cache.oldest_hit_ttl_seconds` old (a day for items, 15 minutes for realms and characters)
 - use `--game-version classic` (or the `--classic` shorthand) for classic namespaces; character
   profiles are retail-only
 - `--locale` passes through (default `en_US`)

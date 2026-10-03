@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import shlex
 import sys
@@ -41,7 +42,9 @@ from raiderio_cli.main import (
 )
 from raiderio_cli.provider import PROVIDER
 from typer.testing import CliRunner
+from warcraft_api.cache import FileCacheStore
 from warcraft_core.analytics import numeric_summary
+from warcraft_core.cache_ledger import cache_ledger
 from warcraft_core.envelope import ENVELOPE_KEYS, REQUIRED_KEYS, envelope_violations
 from warcraft_core.provider import ProviderSurface
 
@@ -2875,6 +2878,29 @@ def test_raiderio_client_treats_a_cache_entry_without_a_fetch_time_as_a_miss(mon
     assert fetched.cache_hit is False
     _assert_read_just_now(fetched.fetched_at)
     assert store.writes == [{"fetched_at": fetched.fetched_at, "payload": body}]
+
+
+def test_raiderio_release_0_5_0_cache_entry_is_a_miss_in_provenance_cache(monkeypatch, tmp_path) -> None:
+    # 0.5.0 stored the bare body under `namespace:sha256({namespace, params})`. The client refetches
+    # such an entry, so the store must not report it as a hit (provenance.cache.all_hits would claim
+    # nothing came off the wire).
+    body = {"raids": [{"slug": "sporefall"}]}
+    params = {"expansion_id": 11}
+    legacy_raw = json.dumps({"namespace": "raid_static_data", "params": params}, sort_keys=True, separators=(",", ":"))
+    FileCacheStore(tmp_path / "cache").set(
+        f"raid_static_data:{hashlib.sha256(legacy_raw.encode('utf-8')).hexdigest()}", body, ttl_seconds=3600
+    )
+    monkeypatch.setenv("RAIDERIO_CACHE_BACKEND", "file")  # the suite disables every provider cache
+    monkeypatch.setenv("RAIDERIO_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setattr(
+        "raiderio_cli.client.request_with_retries",
+        lambda client, url, *, params, retry_attempts: httpx.Response(200, json=body, request=httpx.Request("GET", url)),
+    )
+    with cache_ledger() as ledger, RaiderIOClient() as client:
+        fetched = client.raid_static_data(expansion_id=11)
+
+    assert fetched.cache_hit is False
+    assert (ledger.lookups, ledger.hits) == (1, 0)
 
 
 def _stub_every_read(monkeypatch) -> None:

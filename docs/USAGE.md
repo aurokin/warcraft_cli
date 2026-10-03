@@ -356,6 +356,34 @@ Generated overlap and unique linked-entity rows use a single canonical `url`.
 
 ## Cache
 
+### Reading cache state: `provenance.cache`
+
+Every binary's success envelope carries `provenance.cache` when the command built a cache store,
+even if it made no lookups:
+
+```json
+"cache": {"backend": "file", "lookups": 3, "hits": 1, "hit": true, "all_hits": false,
+          "oldest_hit_age_seconds": 312, "oldest_hit_ttl_seconds": 900}
+```
+
+- `hit` is true when any lookup was answered from the cache; `all_hits` when every lookup was, so
+  nothing came off the wire.
+- `oldest_hit_age_seconds` is the age of the oldest entry replayed, and `oldest_hit_ttl_seconds` how
+  old that entry may get before it expires. Both are null without a hit, and with the Redis backend,
+  which records no store time.
+- `warcraft` reports the aggregate over every provider it called; each embedded provider envelope
+  carries its own block wherever the command embeds it (for example `data.providers[].payload`, or
+  `data.provider_results[].export` in `guide-compare-query`). `backend` is `mixed` when those
+  providers used different backends.
+- A missing block says nothing: the cache is disabled, or the command never built a store.
+  `--fields` drops it unless asked for (`--fields provenance.cache`), and with `--fields-strict` a
+  missing block fails `missing_fields` (exit 2). A caller of a provider's Python `PROVIDER` surface
+  gets one only inside a `warcraft_core.cache_ledger.cache_ledger()` block.
+- Provider-specific freshness blocks (Raider.IO `freshness`, Warcraft Logs `freshness` and
+  `cache_provenance`, Raidbots `freshness`) stay alongside it.
+
+### Configuration
+
 Transport caching is configurable through env vars. Useful defaults:
 
 ```bash

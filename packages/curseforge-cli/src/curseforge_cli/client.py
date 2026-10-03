@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -63,8 +62,6 @@ class CurseForgeClient:
         settings, ttl = load_curseforge_cache_settings_from_env()
         self._cache_store = build_cache_store(settings) if settings.enabled else None
         self._ttl = ttl
-        # (fetched_at, cache_hit) of every response read, for the payload's freshness.
-        self._reads: list[tuple[str, bool]] = []
         self._timeout_seconds = timeout_seconds
         self._retry_attempts = max(1, retry_attempts)
         self._http_client: httpx.Client | None = None
@@ -105,8 +102,7 @@ class CurseForgeClient:
         self._require_key()
         key = f"curseforge:{hashlib.sha256(json.dumps([path, params], sort_keys=True).encode()).hexdigest()}"
         cached = self._cache_store.get(key) if self._cache_store is not None else None
-        if isinstance(cached, dict) and isinstance(cached.get("fetched_at"), str):
-            self._reads.append((cached["fetched_at"], True))
+        if isinstance(cached, dict) and "payload" in cached:
             return cached
         url = f"{API_HOST}{path}"
         response = request_with_retries(
@@ -117,11 +113,9 @@ class CurseForgeClient:
             headers=self._headers(),
             retry_attempts=self._retry_attempts,
         )
-        fetched_at = datetime.now(UTC).isoformat()
-        result = {"payload": self._decode_json(response), "source_url": str(response.request.url), "fetched_at": fetched_at}
+        result = {"payload": self._decode_json(response), "source_url": str(response.request.url)}
         if self._cache_store is not None:
             self._cache_store.set(key, result, ttl_seconds=self._ttl)
-        self._reads.append((fetched_at, False))
         return result
 
     @staticmethod
@@ -261,12 +255,6 @@ class CurseForgeClient:
             source_urls["changelog"] = changelog["source_url"]
         slug = metadata.get("slug")
         return {
-            # The oldest read is how stale the addon view can be; cache_hit says any part was replayed.
-            "freshness": {
-                "fetched_at": min(fetched_at for fetched_at, _ in self._reads),
-                "cache_hit": any(hit for _, hit in self._reads),
-                "cache_ttl_seconds": self._ttl,
-            },
             "mod_id": mod_id,
             "slug": slug if isinstance(slug, str) else None,
             "resolved_by": resolved_by,

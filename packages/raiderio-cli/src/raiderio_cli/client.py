@@ -147,7 +147,12 @@ class RaiderIOClient:
         return self._http_client
 
     def _cache_key(self, namespace: str, params: dict[str, Any]) -> str:
-        raw = json.dumps({"namespace": namespace, "params": params}, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        # `entry` names the stored shape ({fetched_at, payload}). Releases up to 0.5.0 stored the bare
+        # body under the same key without it, so their entries, which this client must refetch, are
+        # misses in the store rather than hits in provenance.cache.
+        raw = json.dumps(
+            {"entry": "fetched", "namespace": namespace, "params": params}, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
         return f"{namespace}:{hashlib.sha256(raw).hexdigest()}"
 
     def _read_cache(self, key: str) -> FetchedJson | None:

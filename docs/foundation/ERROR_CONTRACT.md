@@ -21,7 +21,7 @@ envelope with that collection emptied and `data.stream: {"field", "count"}` nami
 | `kind` | string | Payload kind inside `data` (`search_results`, `resolve_match`, `entity`, `doctor`, `error`, ...) |
 | `schema_version` | string | Envelope schema version. Currently `"1"`. |
 | `query` | string, object, or null | On success, the normalized input when the command reports one, otherwise `null` (many commands that take a report, build or file answer with `null` here and describe their input inside `data`); on failure, see [Error object](#error-object) |
-| `provenance` | object | Source URLs, fetch timestamps, cache state, upstream warnings about the source (for example `warcraftlogs graphql`'s `graphql_warnings`), and `compacted_paths` under `--compact`. `{}` when the command reports none; some commands keep their source URLs in `data` instead (for example `wowhead entity`'s `data.entity.page_url` and `data.citations`). |
+| `provenance` | object | Source URLs, fetch timestamps, upstream warnings about the source (for example `warcraftlogs graphql`'s `graphql_warnings`), `compacted_paths` under `--compact`, and on success `cache` (`{backend, lookups, hits, hit, all_hits, oldest_hit_age_seconds, oldest_hit_ttl_seconds}`) whenever the command built a cache store; see [USAGE.md](../USAGE.md#reading-cache-state-provenancecache). A missing `cache` means nothing, and `--fields` keeps it only when asked for. `{}` when the command reports none; some commands keep their source URLs in `data` instead (for example `wowhead entity`'s `data.entity.page_url` and `data.citations`). |
 | `data` | object | Provider payload. `{}` on failure. |
 | `error` | object | Present only when `ok` is `false`: `{"code": str, "message": str, "details"?: object}` |
 

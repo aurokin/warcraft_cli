@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextvars
 import json
 import math
 import re
@@ -24,6 +25,7 @@ from warcraft_api.cache import (
 )
 from warcraft_content.article_bundle import load_article_bundle, query_article_bundle
 from warcraft_content.guide_analysis import extract_section_chunk_analysis_surfaces
+from warcraft_core.cache_ledger import current_cache_ledger, with_cache_provenance
 from warcraft_core.cli import (
     CompactMaxCharsOption,
     CompactOption,
@@ -590,7 +592,7 @@ def _emit(ctx: typer.Context, payload: dict[str, Any], *, err: bool = False) -> 
     if problems:
         raise TypeError(f"refusing to emit a malformed envelope: {'; '.join(problems)}")
     try:
-        rendered = shape_payload(payload, cfg.output)
+        rendered = shape_payload(with_cache_provenance(payload, current_cache_ledger()), cfg.output)
     except OutputProjectionError as exc:
         fail(ctx, "missing_fields", str(exc), details={"missing_fields": list(exc.missing_fields)})
     _emit_jsonl(ctx, rendered, err=err)
@@ -640,8 +642,11 @@ def _hydrate_missing_comment_replies(
         except httpx.HTTPError:
             return row, None
 
+    # Each task runs in a copy of this thread's context so its cache lookups reach the command's ledger.
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        for row, replies in pool.map(_fetch, pending):
+        futures = [pool.submit(contextvars.copy_context().run, _fetch, item) for item in pending]
+        for future in futures:
+            row, replies = future.result()
             if replies is None:
                 continue
             row["replies"] = replies

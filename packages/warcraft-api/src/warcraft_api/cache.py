@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
+from warcraft_core.cache_ledger import record_cache_lookup, record_cache_store
 from warcraft_core.paths import provider_cache_root
 
 DEFAULT_CACHE_PREFIX = "wowhead_cli"
@@ -137,6 +138,7 @@ def load_cache_settings_from_env() -> CacheSettings:
 class FileCacheStore:
     def __init__(self, cache_dir: Path) -> None:
         self._cache_dir = cache_dir.expanduser()
+        record_cache_store("file")
 
     def _path_for_key(self, key: str) -> Path:
         parts = [part for part in key.split(":") if part]
@@ -145,11 +147,32 @@ class FileCacheStore:
         return self._cache_dir.joinpath(*parts).with_suffix(".json")
 
     def get(self, key: str) -> Any | None:
-        path = self._path_for_key(key)
+        """The live payload under ``key``, recorded in the cache ledger as a hit or a miss.
+
+        A hit's age comes from the entry file's mtime: ``set`` replaces the file atomically, so the
+        mtime is when the entry was stored, and its TTL is ``expires_at`` minus that time.
+        """
+        entry = self._read(self._path_for_key(key))
+        if entry is None or entry[0] is None:
+            record_cache_lookup("file", hit=False)
+            return None
+        payload, stored_at, expires_at = entry
+        record_cache_lookup(
+            "file",
+            hit=True,
+            age_seconds=max(0, int(time.time() - stored_at)),
+            ttl_seconds=max(0, round(expires_at - stored_at)),
+        )
+        return payload
+
+    @staticmethod
+    def _read(path: Path) -> tuple[Any, float, float] | None:
+        """``(payload, mtime, expires_at)`` of a live entry, or ``None`` for a missing, broken or expired one."""
         if not path.exists():
             return None
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
+            stored_at = path.stat().st_mtime
         except Exception:
             with suppress(OSError):
                 path.unlink(missing_ok=True)
@@ -163,7 +186,7 @@ class FileCacheStore:
             with suppress(OSError):
                 path.unlink(missing_ok=True)
             return None
-        return data.get("payload")
+        return data.get("payload"), stored_at, float(expires_at)
 
     def set(self, key: str, payload: Any, *, ttl_seconds: int) -> None:
         try:
@@ -213,11 +236,18 @@ class RedisCacheStore:
     ) -> None:
         self._client = _build_redis_client(redis_url, import_module_func=import_module_func)
         self._prefix = prefix
+        record_cache_store("redis")
 
     def _redis_key(self, key: str) -> str:
         return f"{self._prefix}:{key}"
 
     def get(self, key: str) -> Any | None:
+        """The payload under ``key``, recorded in the cache ledger; Redis keeps no store time, so a hit has no age."""
+        payload = self._read(key)
+        record_cache_lookup("redis", hit=payload is not None)
+        return payload
+
+    def _read(self, key: str) -> Any | None:
         try:
             raw = self._client.get(self._redis_key(key))
         except Exception:

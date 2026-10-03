@@ -16,3 +16,4 @@ tb
 
 # TypedDict keys: callers read them by subscript, which vulture cannot see.
 schema_version
+all_hits
